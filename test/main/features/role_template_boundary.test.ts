@@ -148,10 +148,16 @@ describe('role-template boundary › M3 三元组不再跨 renderer / IPC 往返
   });
 
   it('skills-bindings.js 只回传 { fieldRef }，不再 JSON.parse 落点', () => {
-    const bindings = stripComments(read('src/renderer/modules/skills-bindings.js'));
-    expect(bindings).toContain('{ fieldRef }');
-    expect(bindings).not.toContain('decodeURIComponent(encoded)');
-    expect(bindings).not.toContain('target.groupId');
+    // M3：renderer 不解析 opaque 落点。落点选择功能已随认知资产前端重建删除
+    //（skills-bindings.js 只剩技能静态绑定），等价断言迁到 cognition-assets/
+    // core.js 的 adoptCandidate：字段全部显式命名传递（sourceRefs），整个
+    // 模块不再出现 JSON.parse / decodeURIComponent。
+    const core = stripComments(read('src/renderer/modules/cognition-assets/core.js'));
+    expect(core).toContain("'recall.candidates.update'");
+    expect(core).toContain('sourceRefs');
+    expect(core).not.toContain('JSON.parse');
+    expect(core).not.toContain('decodeURIComponent(encoded)');
+    expect(core).not.toContain('target.groupId');
   });
 
   it('IPC 层不再逐字段校验 PO 内部结构', () => {

@@ -164,6 +164,41 @@ export function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
   return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
     || /(thinking|reasoner|qwq)/.test(modelId);
 }
+
+/** DeepSeek 官方直连域名判定（纯函数，供测试）。
+ *  域名后允许直接结尾：官方文档的 base_url 示例就是裸域名
+ *  （https://api.deepseek.com），存储侧 normalizeBaseUrl 又会剥掉尾斜杠——
+ *  强制匹配 `/` 会让主流填法永远判 false，官方直连排除失效。 */
+export function _isDeepSeekOfficialBaseUrl(url: unknown): boolean {
+  return /^https:\/\/(?:[a-z0-9-]+\.)*deepseek\.com(?:\/|$)/i.test(String(url || ""));
+}
+
+/** 本轮是否流向 DeepSeek 官方直连端点（自定义 provider 指向
+ *  api.deepseek.com）。V4 系模型开推理（带 effort 档位）时正文通道为空
+ *  ——中间叙述全部写进 reasoning_content，界面表现为「AI 不说话只调
+ *  工具」。中转端点（commandcode 等）收到同样的 reasoning_effort 仍照常
+ *  写正文，所以升档兜底必须按端点区分：官方直连的 auto 回合不升 low
+ *  ——不传档位时 pi-ai 的 deepseek thinkingFormat 发
+ *  thinking:{type:"disabled"}，正文恢复「边说边做」；用户显式选档仍然
+ *  生效（思考模式下正文为空是该模型的固有行为）。内置 'deepseek'
+ *  provider 不在此列（其 defaultReasoning:'low' 是 V4 服务端 400 规避的
+ *  有意设计，见 external-providers.ts 注释）。 */
+export function _targetsDeepSeekOfficialApi(uid: unknown, providerId: unknown): boolean {
+  const pid = String(providerId || "").trim();
+  const u = String(uid || "").trim();
+  if (!pid || !u) return false;
+  try {
+    // 同步读取加密存储（无网络）。延迟 require 避免 bus 模块加载早期拉起
+    // auth/paths 整链。
+    const runtime = require("../../model/core-agent/custom_provider_runtime") as
+      typeof import("../../model/core-agent/custom_provider_runtime");
+    if (!runtime.isCustomProviderId(pid)) return false;
+    const cp = runtime.findCustomProvider(u, pid);
+    return !!cp && _isDeepSeekOfficialBaseUrl(cp.baseUrl);
+  } catch {
+    return false;
+  }
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -4814,6 +4849,10 @@ async function runActorTurnBody(
   // explicitly grants assets per dispatch via the tools' `ability_assets`
   // field, and only those render here. CLI agents never consume this path.
   let recallCitations: RecallPromptCitation[] = [];
+  // 画像通道注入清单（committed 投影路径才会携带）：收尾时逐条落
+  // InjectionReceipt（channel='profile_memory'）——「这轮带了哪些背景记忆」
+  // 从此可查（此前画像注入零收据，审计黑洞）。
+  let recallProfileMemory: Array<{ id: string; source: string; version: string }> = [];
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
@@ -4863,6 +4902,7 @@ async function runActorTurnBody(
         if (recallContext.promptBlock) {
           systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
           recallCitations = recallContext.citations;
+          recallProfileMemory = recallContext.profileMemoryEntries ?? [];
         }
         // PRD 3.6 Transfer Verified 闭环：投影资产真实注入时在同一处落
         // ContextReuseReceipt（key=turn-<turnId>），并登记到本次运行的
@@ -5721,7 +5761,8 @@ async function runActorTurnBody(
       // 用户未显式选 off 时，对已知 reasoning 模型按 'low' 发起——思考流
       // 可达渲染层；显式 off 仍彻底关闭。模型名识别不出 reasoning 特征
       // 时不强行注入（避免给不认识的服务盲发参数，保持方案 C 约定）。
-      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)) {
+      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)
+        && !_targetsDeepSeekOfficialApi(uid, item.execConfig?.provider)) {
         turnThinkingLevel = "low";
       }
       // Effective model override priority: per-task override > agent
@@ -5732,6 +5773,30 @@ async function runActorTurnBody(
         : turnAgentSpec?.default_model
           ? { ...turnAgentSpec.default_model }
           : undefined;
+      // 多模态降级提示（2026-09-13）：回合带图但实际执行模型（任务级覆盖
+      // 优先于界面选择）不支持视觉时，图片内容块会被 provider 层按
+      // input modality 丢弃，模型只能靠文件路径 + OCR 读图。此前零提示，
+      // 用户看到 OCR 误以为系统坏了。只说明原因，不改变行为——不支持
+      // 视觉的模型不发图是正确语义。
+      if (turnImages.length && turnModelOverride) {
+        const { recognizeModelById } = await import("../../model/model_id_recognition");
+        const bareModelId = String(turnModelOverride.model).split("/").pop() || String(turnModelOverride.model);
+        const recognized = recognizeModelById(bareModelId);
+        const visionCapable = recognized?.vision === true
+          || (recognized == null && /vision|vl/i.test(bareModelId));
+        if (!visionCapable) {
+          appendProcessItem(processItems, {
+            type: "event",
+            event: {
+              stream: "attachment",
+              data: {
+                phase: "vision-degraded",
+                note: `当前执行模型 ${turnModelOverride.model} 不支持视觉输入，图片以文件路径交给模型（可用 OCR 读取）`,
+              },
+            },
+          });
+        }
+      }
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -6862,6 +6927,22 @@ async function runActorTurnBody(
         messageId: persistedMsg.id,
         boundary: 'real',
         status: 'injected',
+        channel: 'projection',
+      })));
+    }
+    // 画像通道收据（2026-09-13）：只落 InjectionReceipt（channel 区分），
+    // 不写 usage-records——usage 流水按「资产被使用」记账，画像不是资产，
+    // 混入会让资产使用统计失真。审计「这轮带了什么」以收据流为准。
+    if (recallProfileMemory.length) {
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(recallProfileMemory.map((entry) => recordInjectionReceipt(uid, {
+        assetId: entry.id,
+        assetVersion: entry.version,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'injected',
+        channel: 'profile_memory',
       })));
     }
     if (dispatchedUsage.length) {
@@ -6888,6 +6969,7 @@ async function runActorTurnBody(
         messageId: persistedMsg.id,
         boundary: 'real',
         status: 'dispatched',
+        channel: 'projection',
       })));
     }
     await registerFinalOutputResources(outcome.produced || []);

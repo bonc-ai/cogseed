@@ -436,4 +436,43 @@ describe('Recall terminal transfer proof handler', () => {
     expect(await proofs.listTransferProofs('user-a')).toEqual([]);
   });
 
+  it('accepts turn-level auto projections via reuse_turn_ids and advances maturity (T2.3)', async () => {
+    // 实机病灶：自动投影 proj-auto-* 的 taskRunId=turnId，永远 ≠ 终态事件的
+    // run 级 logicalRunId——注入 26 次、零升档。放宽语义：turn 出现在
+    // reuse_turn_ids（真实落过回执的轮次）即视为本 run 拥有该投影。
+    const turnId = 'tx-auto-1';
+    const { asset, projection } = await confirmedProjection(turnId);
+    const { terminalProof, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const targetSessionId = 'gmember-cid-a-agent-a';
+    await receipts.prepareReceipt('user-a', {
+      executionId: `turn-${turnId}`, targetSessionId,
+      reusedRefs: [asset.id], omittedRefs: [],
+      permissionMode: 'read-only', allowedScopes: ['cognition:projection'], boundary: 'real',
+    }, { sessionId: targetSessionId });
+
+    const result = await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-auto-1', user_id: 'user-a', conversation_id: 'cid-auto',
+      status: 'completed' as const,
+      projection_id: projection.id,
+      logical_run_id: 'run-auto-1',
+      reuse_turn_ids: [turnId],
+      started_at_ms: 1, finished_at_ms: 2,
+    });
+    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded', receiptId: expect.any(String) } });
+    expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('transfer_validated');
+
+    // 安全边界不变：投影的 turn 不在 reuse_turn_ids（跨 run）仍拒绝。
+    const other = await confirmedProjection('tx-foreign');
+    const rejected = await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-auto-2', user_id: 'user-a', conversation_id: 'cid-auto',
+      status: 'completed' as const,
+      projection_id: other.projection.id,
+      logical_run_id: 'run-auto-2',
+      reuse_turn_ids: [turnId],
+      started_at_ms: 1, finished_at_ms: 2,
+    });
+    expect(rejected).toEqual({ handled: false, reason: 'no_confirmed_projection' });
+  });
+
 });

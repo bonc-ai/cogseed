@@ -20,16 +20,24 @@
 
 import {
   createCustomProviderEntry,
+  CUSTOM_PROVIDER_MODEL_CAPABILITIES,
+  CUSTOM_PROVIDER_MODEL_INPUTS,
   DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
   loadCustomProviders,
   MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   MAX_CUSTOM_PROVIDER_MAX_TOKENS,
   MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH,
+  MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS,
   MAX_CUSTOM_PROVIDER_MODELS,
+  MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH,
+  MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS,
+  MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH,
   mutateCustomProviders,
   type CustomProvider,
   type CustomProviderModel,
+  type CustomProviderModelCapability,
+  type CustomProviderModelInput,
 } from './auth';
 import { publicContextWindowFor, publicModelAbilitiesFor } from '../model/public_model_catalog';
 import { createLogger } from '../logger';
@@ -111,7 +119,11 @@ function normalizeModel(
 ): CustomProviderModel {
   const value = typeof raw === 'string' ? { id: raw } : raw;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model must be an object or string id');
-  const candidate = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown };
+  const candidate = value as {
+    id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
+    input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+    enabled?: unknown;
+  };
   if (typeof candidate.id !== 'string') throw new Error('model id required');
   const id = candidate.id.trim();
   if (!id) throw new Error('model id required');
@@ -121,7 +133,10 @@ function normalizeModel(
   // Window fallback chain: explicit value → catalog (known model) → default
   // guess. The catalog beat-out prevents importer rows (CC Switch hints carry
   // only ids) from silently carrying a wrong 128K default for models whose
-  // real window is public knowledge.
+  // real window is public knowledge. The final "default guess" for ids the
+  // catalog does not know is the decimal 1M/384K caliber — product decision
+  // 2026-09-14 (rationale sits on the constants in features/auth.ts); verified
+  // ids belong in public_model_catalog, not in a stricter runtime guess.
   const contextWindow = normalizePositiveSafeInteger(
     candidate.contextWindow,
     'contextWindow',
@@ -130,20 +145,116 @@ function normalizeModel(
       ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
     MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   );
-  // Vision has NO guessed default: explicit > fallback > catalog, else
-  // undefined (= unknown; consumers treat unknown as pass-through).
+  // 输入类型（2026-09-13 统一模型配置表单）：显式声明时 text 恒入、白名单
+  // 校验、去重；vision 由 input 派生（含 image ⇔ true），保证新旧两个字段
+  // 单一口径。未声明 input 时 vision 走原链（显式 > fallback > 目录），
+  // 保持旧数据与旧调用方行为不变。
+  const input = normalizeModelInputs(candidate.input);
   const rawVision = candidate.vision;
-  const vision = typeof rawVision === 'boolean'
-    ? rawVision
-    : (typeof fallback?.vision === 'boolean' ? fallback.vision : publicModelAbilitiesFor(id).vision);
+  const vision = input
+    ? input.includes('image')
+    : (typeof rawVision === 'boolean'
+      ? rawVision
+      : (typeof fallback?.vision === 'boolean' ? fallback.vision : publicModelAbilitiesFor(id).vision));
   const maxTokens = normalizePositiveSafeInteger(
     candidate.maxTokens,
     'maxTokens',
-    fallback?.maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+    // 兜底链与 contextWindow 对称：显式 → 既有值(fallback) → 目录预设 →
+    // 保守默认。目录预设（2026-09-13 起登记 V4/V4.1 的 384K 输出）让
+    // 已知模型不再被兜到 8192。
+    fallback?.maxTokens ?? publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
     MAX_CUSTOM_PROVIDER_MAX_TOKENS,
   );
   if (maxTokens > contextWindow) throw new Error('maxTokens must not exceed contextWindow');
-  return { id, contextWindow, maxTokens, ...(vision !== undefined ? { vision } : {}) };
+  const capabilities = normalizeModelCapabilities(candidate.capabilities);
+  const reasoningLevels = normalizeReasoningLevels(candidate.reasoningLevels);
+  const reasoningParamsMap = normalizeReasoningParamsMap(candidate.reasoningParamsMap);
+  // 模型级开关（2026-09-14）：调用方**未提供**时保留旧值（部分更新语义，
+  // 否则改窗口会把开关重置成启用）；显式 false 才落字段，true 视为清除。
+  const enabled = candidate.enabled === undefined
+    ? fallback?.enabled
+    : (candidate.enabled === false ? false : undefined);
+  return {
+    id,
+    contextWindow,
+    maxTokens,
+    ...(vision !== undefined ? { vision } : {}),
+    ...(input !== undefined && input.length ? { input } : {}),
+    ...(capabilities !== undefined && capabilities.length ? { capabilities } : {}),
+    // 空数组必须落库（不能按 falsy 丢弃）：「显式清空推理等级」是合法配置
+    // （运行时据此不发 thinking 参数），与「未提供=未声明」语义不同。
+    ...(reasoningLevels !== undefined ? { reasoningLevels } : {}),
+    ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
+    ...(enabled === false ? { enabled: false } : {}),
+  };
+}
+
+/** 输入类型白名单校验（写入侧严格）：非数组/非法项直接抛错——UI 保存
+ *  路径的输入必须可信；读路径的宽容解析在 auth.ts。 */
+function normalizeModelInputs(value: unknown): CustomProviderModelInput[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('input must be an array');
+  const out: CustomProviderModelInput[] = ['text'];
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new Error('invalid input type');
+    const token = raw.trim().toLowerCase() as CustomProviderModelInput;
+    if (!CUSTOM_PROVIDER_MODEL_INPUTS.includes(token)) throw new Error(`invalid input type: ${raw}`);
+    if (!out.includes(token)) out.push(token);
+  }
+  return out;
+}
+
+function normalizeModelCapabilities(value: unknown): CustomProviderModelCapability[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('capabilities must be an array');
+  const out: CustomProviderModelCapability[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new Error('invalid capability');
+    const token = raw.trim().toLowerCase() as CustomProviderModelCapability;
+    if (!CUSTOM_PROVIDER_MODEL_CAPABILITIES.includes(token)) throw new Error(`invalid capability: ${raw}`);
+    if (!out.includes(token)) out.push(token);
+  }
+  return out.length ? out : undefined;
+}
+
+function normalizeReasoningLevels(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('reasoningLevels must be an array');
+  if (value.length > MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS) {
+    throw new Error(`reasoningLevels must contain at most ${MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS} items`);
+  }
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new Error('invalid reasoning level');
+    const token = raw.replace(/\s+/g, ' ').trim();
+    if (!token) throw new Error('reasoning level required');
+    if (token.length > MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH) {
+      throw new Error(`reasoning level must be at most ${MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH} characters`);
+    }
+    if (!out.includes(token)) out.push(token);
+  }
+  // 数组输入原样返回（含空数组=显式清空，运行时据此不发 thinking 参数）。
+  return out;
+}
+
+function normalizeReasoningParamsMap(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('reasoningParamsMap must be an object');
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS) {
+    throw new Error(`reasoningParamsMap must contain at most ${MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS} keys`);
+  }
+  if (!entries.length) return undefined;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error('reasoningParamsMap must be JSON-serializable');
+  }
+  if (serialized.length > MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH) {
+    throw new Error(`reasoningParamsMap must be at most ${MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH} characters`);
+  }
+  return Object.fromEntries(entries);
 }
 
 function normalizeModels(models: unknown): CustomProviderModel[] {
@@ -415,6 +526,34 @@ export function updateCustomProviderModel(
   let model: CustomProviderModel;
   try { model = normalizeModel(input, previous); }
   catch (error) { return { ok: false, error: (error as Error).message }; }
+  // 部分更新语义（2026-09-14 保存链定稿）：调用方**未提供**（undefined）的
+  // 高级字段保留旧值——导入/草稿等只带基础字段的调用方不会抹掉高级配置；
+  // **显式空数组/空对象 = 用户清空**（统一表单取消勾选、删空等级行、清空
+  // 参数映射都是这个形态），照写不误。
+  // 早期版本把"空"也当成"未提供"来保数据，那是为绕开渲染层模型投影丢字段
+  // 造成的假清空（模型行投影把 input/等级/能力压掉 → 表单只能按空态保存）。
+  // 投影修好后真凶消失，这里回归标准部分更新语义：否则用户永远清不掉已配
+  // 的高级选项（取消勾选→保存→重进又回来了，与"存不上"是同一类表象）。
+  const raw = (input || {}) as {
+    input?: unknown; vision?: unknown;
+    reasoningLevels?: unknown; capabilities?: unknown; reasoningParamsMap?: unknown;
+  };
+  if (raw.reasoningLevels === undefined && previous.reasoningLevels?.length) {
+    model.reasoningLevels = previous.reasoningLevels;
+  }
+  if (raw.capabilities === undefined && previous.capabilities?.length) {
+    model.capabilities = previous.capabilities;
+  }
+  if (raw.reasoningParamsMap === undefined && previous.reasoningParamsMap
+    && Object.keys(previous.reasoningParamsMap).length) {
+    model.reasoningParamsMap = previous.reasoningParamsMap;
+  }
+  // 输入类型同理：未声明 input/vision 的调用方不该把已声明的多模态能力
+  // 降级成"只剩文本"（显式声明 vision 的调用方除外，避免两个字段打架）。
+  if (raw.input === undefined && raw.vision === undefined
+    && Array.isArray(previous.input) && previous.input.length) {
+    model.input = previous.input;
+  }
   if (model.id !== previousId && provider.models.some((candidate) => candidate.id === model.id)) {
     return { ok: false, error: 'model already exists' };
   }
@@ -434,6 +573,53 @@ export function updateCustomProviderModel(
     }
   });
   return { ok: true, model };
+}
+
+/**
+ * 模型级启用开关（2026-09-14 参考图行内开关）。
+ *
+ * S2 语义：关闭 = 从模型选择器隐藏（auth.listModels 过滤）+ 阻止新绑定
+ * （isCustomProviderModelAllowed → 条目校验失败）+ 已绑定条目按既有
+ * "不可用即跳过、兜底到下一条"机制处理；**模型配置与绑定条目都保留**，
+ * 随时拨回即恢复（与"删除模型"分工：删除会连带清理绑定条目）。
+ *
+ * 存储：只写 `enabled:false`，开启时删除该字段（缺省=启用）。
+ */
+export function setCustomProviderModelEnabled(
+  userId: string,
+  id: string,
+  modelId: string,
+  enabled: boolean,
+): { ok: true; model: CustomProviderModel } | { ok: false; error: string } {
+  let providerId: string;
+  let targetModelId: string;
+  try {
+    providerId = normalizeProviderId(id);
+    targetModelId = normalizeModel({ id: modelId }).id;
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  if (typeof enabled !== 'boolean') return { ok: false, error: 'enabled must be boolean' };
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+  const stored = provider.models.find((candidate) => candidate.id === targetModelId);
+  if (!stored) return { ok: false, error: 'model not found' };
+  let updated: CustomProviderModel = stored;
+  mutateCustomProviders(userId, ({ customProviders }) => {
+    const target = customProviders.find((candidate) => candidate.id === providerId);
+    const model = target?.models.find((candidate) => candidate.id === targetModelId);
+    if (!target || !model) throw new Error('custom provider model not found during enable update');
+    if (enabled) delete model.enabled;
+    else model.enabled = false;
+    target.updatedAt = Date.now();
+    updated = { ...model };
+  });
+  log.info('custom provider model enabled state changed', {
+    provider: providerId,
+    model: targetModelId,
+    enabled,
+  });
+  return { ok: true, model: updated };
 }
 
 export function removeCustomProviderModel(
@@ -489,6 +675,53 @@ export async function testCustomProviderModel(
   });
 }
 
+/** 服务字段名 → 我方 token 的别名表（模态）。OpenRouter / vLLM / 各家中转站
+ *  的写法不统一：'file' 是它们的 PDF，'image_url' 是图片输入。表里没有的原样
+ *  按下面的白名单过滤。 */
+const DECLARED_INPUT_ALIASES: Record<string, string> = {
+  text: 'text',
+  image: 'image',
+  image_url: 'image',
+  vision: 'image',
+  video: 'video',
+  pdf: 'pdf',
+  file: 'pdf',
+  document: 'pdf',
+};
+
+/** 服务字段名 → 我方能力 token。只认"服务真的声明了"的写法，不做猜测：
+ *  structured_outputs / response_format / json_schema 都是"支持结构化输出"的
+ *  公开说法；web_search_options / native_web_search 是"原生联网"。 */
+const DECLARED_CAPABILITY_ALIASES: Record<string, string> = {
+  structured_output: 'structured_output',
+  structured_outputs: 'structured_output',
+  response_format: 'structured_output',
+  json_schema: 'structured_output',
+  web_search: 'native_web_search',
+  web_search_options: 'native_web_search',
+  native_web_search: 'native_web_search',
+  system_message: 'system_message',
+  developer_role: 'system_message',
+};
+
+/** 把服务声明的 token 列表收敛到我方白名单（去重、丢未知、保持出现顺序）。
+ *  返回 undefined 表示"服务没说"——调用方据此保留兜底链，而不是写死一个空数组。 */
+function pickDeclaredTokens(
+  raw: unknown,
+  allowed: readonly string[],
+  aliases: Record<string, string>,
+): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    const token = String(item ?? '').trim().toLowerCase();
+    const mapped = aliases[token] || token;
+    if (!allowed.includes(mapped) || out.includes(mapped)) continue;
+    out.push(mapped);
+  }
+  return out.length ? out : undefined;
+}
+
 /** First positive safe integer among the candidate metadata fields. */
 function pickPositive(...values: unknown[]): number | undefined {
   for (const value of values) {
@@ -509,10 +742,30 @@ function pickPositive(...values: unknown[]): number | undefined {
  * user picks what to add. The API key comes from the provider's stored
  * config (never a literal) and is excluded from every error message.
  */
+export interface FetchedCustomProviderModel {
+  id: string;
+  name?: string;
+  /** 上下文窗口（输入侧预算）。 */
+  contextWindow?: number;
+  /** 单次回复的最大输出 token。 */
+  maxTokens?: number;
+  /** 输入模态（text/image/video/pdf）——服务声明优先，缺失时由目录补；
+   *  入库即成为"配置驱动调用"的输入类型。vision 是它的派生布尔值（含 image）。 */
+  input?: string[];
+  /** 模型能力（structured_output / native_web_search / system_message）：
+   *  服务声明的 supported_parameters 等字段映射而来，运行时映射到 pi-ai 的
+   *  compat 开关。 */
+  capabilities?: string[];
+  /** 是否支持深度思考（推理档位）。 */
+  reasoning?: boolean;
+  /** input 是否含 image 的派生值（列表 UI 的视觉徽标/预填用）。 */
+  vision?: boolean;
+}
+
 export async function fetchCustomProviderModels(
   userId: string,
   id: string,
-): Promise<{ ok: true; models: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> } | { ok: false; error: string }> {
+): Promise<{ ok: true; models: FetchedCustomProviderModel[] } | { ok: false; error: string }> {
   let providerId: string;
   try {
     providerId = normalizeProviderId(id);
@@ -572,7 +825,7 @@ export async function fetchCustomProviderModels(
       : null;
     if (!Array.isArray(rows)) return { ok: false, error: 'unexpected response shape' };
 
-    const out: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> = [];
+    const out: FetchedCustomProviderModel[] = [];
     for (const row of rows.slice(0, 500)) {
       if (!row || typeof row !== 'object') continue;
       const record = row as Record<string, unknown>;
@@ -587,8 +840,9 @@ export async function fetchCustomProviderModels(
       if (out.some((existing) => existing.id === rawId)) continue;
       // 非标准扩展字段（A 层——能拿尽拿）：vLLM 的 max_model_len、
       // OpenRouter 的 context_length / top_provider.max_completion_tokens /
-      // supported_parameters / architecture.input_modalities。没有标准的
-      // 保证，字段存在才取，否则留给识别模块（B 层）补。
+      // supported_parameters（推理 + 能力）/ architecture.input_modalities
+      // （输入模态）。标准 /models 只保证 id，这些字段存在才取；拿不到的
+      // 留给识别模块（B 层）按内置目录补，两边都不写死猜测值。
       const contextWindow = pickPositive(record.max_model_len, record.context_length, record.max_context_tokens, record.context_window);
       const rawTop = record.top_provider as Record<string, unknown> | undefined;
       const maxTokens = pickPositive(record.max_completion_tokens, record.max_output_tokens, rawTop?.max_completion_tokens);
@@ -599,16 +853,32 @@ export async function fetchCustomProviderModels(
         ? params.some((p) => p === 'reasoning' || p === 'reasoning_effort')
         : undefined;
       const arch = record.architecture as Record<string, unknown> | undefined;
-      const modalities = (Array.isArray(arch?.input_modalities) ? arch?.input_modalities
-        : Array.isArray(record.input_modalities) ? record.input_modalities : []) as unknown[];
-      const vision = modalities.length
-        ? modalities.some((m) => typeof m === 'string' && m.toLowerCase().includes('image'))
+      const modalities = Array.isArray(arch?.input_modalities) ? arch?.input_modalities
+        : Array.isArray(record.input_modalities) ? record.input_modalities : undefined;
+      // 输入模态：拿全（text/image/video/pdf），vision 只是它的派生布尔值——
+      // 这样视频、PDF 这类非"图片"的多模态能力也能随导入进配置（此前只留一个
+      // vision 布尔值，video/pdf 直接丢失）。text 恒支持，服务只列了 image 时
+      // 补齐 text（与 normalizeModel 的"text 恒在"同口径）。
+      const declaredInput = pickDeclaredTokens(modalities, CUSTOM_PROVIDER_MODEL_INPUTS, DECLARED_INPUT_ALIASES);
+      const input = declaredInput
+        ? (declaredInput.includes('text') ? declaredInput : ['text', ...declaredInput])
         : undefined;
+      // 服务显式声明了模态但没有任何已知图片模态（如纯 ['audio']）＝明确
+      // 不支持图片：vision 落 false，不给 B 层识别器把它兜回 true 的机会
+      // （否则服务诚实声明的模态信息反被家族规则覆盖，2026-09-14）。
+      const vision = input
+        ? input.includes('image')
+        : (Array.isArray(modalities) && modalities.length ? false : undefined);
+      // 能力：supported_parameters（OpenRouter 系）与显式 capabilities 两处都看。
+      const declaredCapabilities = pickDeclaredTokens(params, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES)
+        || pickDeclaredTokens(record.capabilities, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES);
       out.push({
         id: rawId,
         ...(name && name !== rawId ? { name } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(input ? { input } : {}),
+        ...(declaredCapabilities ? { capabilities: declaredCapabilities } : {}),
         ...(reasoning !== undefined ? { reasoning } : {}),
         ...(vision !== undefined ? { vision } : {}),
       });
@@ -624,6 +894,12 @@ export async function fetchCustomProviderModels(
         if (item.contextWindow === undefined && recognized.contextWindow !== undefined) item.contextWindow = recognized.contextWindow;
         if (item.maxTokens === undefined && recognized.maxTokens !== undefined) item.maxTokens = recognized.maxTokens;
         if (item.reasoning === undefined && recognized.reasoning !== undefined) item.reasoning = recognized.reasoning;
+        // 模态来自目录时同样补齐 vision 派生值（input 是单一事实源）。
+        if (item.input === undefined && recognized.input !== undefined) {
+          const input = recognized.input.includes('text') ? [...recognized.input] : ['text', ...recognized.input];
+          item.input = input;
+          item.vision = input.includes('image');
+        }
         if (item.vision === undefined && recognized.vision !== undefined) item.vision = recognized.vision;
       }
     } catch { /* recognition is best-effort enrichment */ }

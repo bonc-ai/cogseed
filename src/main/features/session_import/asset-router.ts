@@ -36,6 +36,7 @@
 import { createHash } from 'node:crypto';
 
 import { saveRecallCandidate, type RecallCandidateAction, type RecallCandidateRisk } from '../recall/candidate-service';
+import { normalizeAssetScopeValue } from '../recall/scope-policy';
 import { readClaudeSessionTranscript } from '../local_agents/claude_sessions';
 import { listClaudeDesktopSessions } from '../local_agents/claude_desktop_sessions';
 import { parseClaudeTranscript, parseWorkbuddyTranscript, type NormalizedTranscript } from './transcript-normalize';
@@ -332,7 +333,11 @@ async function routeCandidate(
       summary: candidate.note?.trim() || undefined,
       uncertainty: candidate.uncertainty?.trim() || undefined,
       suggestedType: candidate.suggestedType,
-      suggestedScope: candidate.suggestedScope?.trim() || 'personal',
+      // scope 归一（A 轨道）：历史缺省 'personal' 是自由文本词形 → 'general'；
+      // 有值时尽力归一，归不了的保留原文。
+      suggestedScope: (candidate.suggestedScope?.trim())
+        ? (normalizeAssetScopeValue(candidate.suggestedScope) ?? candidate.suggestedScope.trim())
+        : 'general',
       ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
       ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
       ...(action && CANDIDATE_ACTIONS.has(action) ? { suggestedAction: action } : {}),

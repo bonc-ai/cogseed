@@ -287,7 +287,11 @@ describe('Recall cognition workspace layout', () => {
     expect(recallLocalCss).toMatch(/\.skills-cognition-main\s*\{[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*scroll;[^}]*overscroll-behavior:\s*auto;/s);
     expect(recallLocalCss).toMatch(/\.skills-cognition-page\s*\{[^}]*min-height:\s*100%;[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
     expect(recallLocalCss).toContain('#skills-cognition-assets { overflow: visible; }');
-    expect(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8')).toContain('Find scrollable');
+    // 2026-09-14 认知资产前端重建：主滚动容器改为 #ca-root 内的 .ca-scroll
+    //（views.js render 产出，路由切换时 core.js 将其 scrollTop 归零）；
+    //「Find scrollable」边缘滚动转发随旧 skills-bindings 认知段删除。
+    const views = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
+    expect(views).toContain('id="ca-scroll"');
   });
 
 
@@ -456,12 +460,15 @@ describe('Recall cognition workspace layout', () => {
   });
 
   it('资产更新在无绑定控件时不传 ontologyRefs（不清空既有绑定）', () => {
-    const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
-    // 控件不存在 = undefined = 不改动；传空数组会把用户已有的绑定抹掉。
-    expect(bindings).toContain('const ontologyRefs = ontologySelect');
-    expect(bindings).toContain("...(ontologyRefs !== undefined ? { ontologyRefs } : {})");
-    // 分组按需取，且读失败不阻断编辑
-    expect(bindings).toContain("window.cogseed.invoke('personalOntology.groups.list').catch(() => null)");
+    // 资产编辑器（含本体绑定控件）已随认知资产前端重建删除：新实现
+    //（cognition-assets/*）没有资产编辑表单，也不再有 ontologyRefs 的读写
+    // 路径——「无控件时误传空数组清空既有绑定」的入口不复存在。守卫：
+    // 新模块不再携带 ontologyRefs 载荷。
+    const dir = path.join(__dirname, '../../src/renderer/modules/cognition-assets');
+    for (const file of ['core.js', 'views.js', 'app.js']) {
+      const source = fs.readFileSync(path.join(dir, file), 'utf8');
+      expect(source, `${file} must not carry ontologyRefs`).not.toContain('ontologyRefs');
+    }
   });
 
   it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {
