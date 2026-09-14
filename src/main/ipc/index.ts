@@ -1190,6 +1190,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 确认卡片专用通道（2026-09-14 Bug3）：幂等 + 直达总线，绕过渲染层发送队列。
+  'groupChat.sendConfirm': async ({ cid, artifactId, op, payload }, ctx) => {
+    return groupChat.sendConfirmAndMark({
+      userId: ctx.userId,
+      cid,
+      artifactId,
+      op: typeof op === 'string' ? op : String(op ?? ''),
+      payload,
+    });
+  },
+
   // ── Conversation aside: read-only side thread (see features/conversation_aside) ──
   // Never touches the main transcript or the group-chat bus. Business logic
   // stays in the feature; these handlers only validate and delegate.
@@ -6192,7 +6203,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       log.info(`sendStream closed cid=${cid} relayed=${relayCount} process=${processCount} sendDone=${sendDone} cancelled=${cancelled}`);
@@ -6305,7 +6324,15 @@ const streamHandlers: Record<string, StreamHandler> = {
             }
           }
           if (cancelled) break;
-          await new Promise<void>((resolve) => { wake = resolve; });
+          // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
         }
       } finally {
         log.info(`groupEvents closed cid=${cid} relayed=${relayCount} process=${processCount} cancelled=${cancelled}`);
@@ -6340,7 +6367,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       try { unsub(); } catch { /* ignore */ }
@@ -6369,7 +6404,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       try { unsub(); } catch { /* ignore */ }

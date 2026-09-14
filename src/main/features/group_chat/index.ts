@@ -1617,6 +1617,83 @@ export async function* streamEvents(
   }
 }
 
+// ── Artifact confirm cards (2026-09-14, Bug3 修复) ───────────────────────
+// 确认卡片走专用幂等通道：不经渲染层 FIFO 队列（避免 busy 标记死锁），
+// 主进程直达总线发送；发送成功后才在消息体 artifacts[] 上落
+// confirm_state（失败可重试，历史重渲染按状态回放只读卡）。
+
+export interface SendConfirmInput {
+  userId: string;
+  cid: string;
+  artifactId: string;
+  op: string;
+  payload: unknown;
+}
+
+export interface SendConfirmResult {
+  ok: boolean;
+  code?: 'ALREADY_CONFIRMED';
+  error?: string;
+  confirm_state?: 'confirmed';
+  confirmed_at?: string;
+}
+
+export async function sendConfirmAndMark(input: SendConfirmInput): Promise<SendConfirmResult> {
+  const { userId, cid, artifactId, op, payload } = input;
+  if (!safeId(cid) || !safeId(artifactId)) return { ok: false, error: 'invalid cid/artifactId' };
+
+  const file = mainJsonlFile(userId, cid);
+  const all = await readJsonl<GroupMessage>(file, 100_000);
+  // 按行索引定位（消息行可能没有 id 字段——历史/合成数据），
+  // 写回时再按 artifactId 复核，防并发追加导致行位移。
+  let ownerIdx = -1;
+  let artIdx = -1;
+  for (let i = 0; i < all.length; i++) {
+    const m = all[i];
+    if (!m || !Array.isArray(m.artifacts)) continue;
+    const j = m.artifacts.findIndex((a) => a && a.id === artifactId);
+    if (j >= 0) { ownerIdx = i; artIdx = j; break; }
+  }
+  if (ownerIdx < 0 || artIdx < 0) return { ok: false, error: 'artifact not found' };
+  const ownerMsg = all[ownerIdx];
+  const art = ownerMsg.artifacts![artIdx];
+  if (art.confirm_state === 'confirmed') {
+    return { ok: false, code: 'ALREADY_CONFIRMED', error: '该确认卡片已提交过' };
+  }
+
+  // 编码与渲染层 encodeArtifactResult 同构；agent_id 决定回路由
+  const agentId = String(art.agent_id || '').trim();
+  const routeToAgent = agentId && agentId !== 'commander';
+  const mention = routeToAgent ? `@${agentId} ` : '';
+  let json = '';
+  try { json = JSON.stringify({ action: 'plugin-confirm', op, payload }); } catch { json = '"<unserialisable>"'; }
+  const title = String(art.title || 'Interactive app');
+  const text = `${mention}Result from "${title}"\n\n<artifact-result artifact_id="${artifactId}" agent_id="${agentId}">\n${json}\n</artifact-result>`;
+
+  const sendRes = await send({
+    userId,
+    cid,
+    text,
+    ...(routeToAgent ? { recipient_agent_id: agentId, recipient_origin: 'user_selection' as const } : {}),
+  });
+  if (!sendRes.ok) return { ok: false, error: sendRes.error || 'send failed' };
+
+  // 成功后才落标记（先标记后发送会让失败永久拒重试——WIP 缺陷修正）
+  const r = await rewriteJsonlLine<GroupMessage>(file, ownerIdx, (rec) => {
+    if (!rec || !Array.isArray(rec.artifacts)) return null;
+    const j = rec.artifacts.findIndex((a) => a && a.id === artifactId);
+    if (j < 0) return null;
+    const arts = rec.artifacts.map((a, i) =>
+      i === j ? { ...a, confirm_state: 'confirmed' as const, confirm_op: op, confirmed_at: nowIso() } : a);
+    return { ...rec, artifacts: arts };
+  });
+  if (r.ok === false) {
+    log.warn(`confirm mark failed user=${userId} cid=${cid} artifactId=${artifactId}: ${r.error}`);
+  }
+  log.info(`artifact-confirmed user=${userId} cid=${cid} artifactId=${artifactId} op=${op}`);
+  return { ok: true, confirm_state: 'confirmed', confirmed_at: nowIso() };
+}
+
 // ── Form submission ──────────────────────────────────────────────────────
 
 export interface MarkFormSubmittedInput {

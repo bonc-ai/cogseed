@@ -2340,13 +2340,23 @@ export function esticogseedTextTokens(s: string): number {
   return Math.ceil(cjk * 1.5 + other / 4);
 }
 
-/** Merge token usage objects. */
-export function mergeUsage(a: Usage, b: Partial<Usage>): Usage {
+/** Merge token usage objects. 任一入参缺失按 0 处理（旧数据无 usage 块时不得抛）。 */
+export function mergeUsage(a: Usage = ZERO_USAGE, b: Partial<Usage> = {}): Usage {
+  const left = a ?? ZERO_USAGE;
+  const right = b ?? {};
   return {
-    inputTokens: a.inputTokens + (b.inputTokens ?? 0),
-    outputTokens: a.outputTokens + (b.outputTokens ?? 0),
-    cacheReadTokens: (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0),
-    cacheWriteTokens: (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0),
-    totalTokens: a.totalTokens + (b.totalTokens ?? 0),
+    inputTokens: (left.inputTokens ?? 0) + (right.inputTokens ?? 0),
+    outputTokens: (left.outputTokens ?? 0) + (right.outputTokens ?? 0),
+    cacheReadTokens: (left.cacheReadTokens ?? 0) + (right.cacheReadTokens ?? 0),
+    cacheWriteTokens: (left.cacheWriteTokens ?? 0) + (right.cacheWriteTokens ?? 0),
+    totalTokens: (left.totalTokens ?? 0) + (right.totalTokens ?? 0),
   };
 }
+
+const ZERO_USAGE: Usage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  totalTokens: 0,
+};
