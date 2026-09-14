@@ -29,6 +29,10 @@ export interface RecognizedModelInfo {
   maxTokens?: number;
   reasoning?: boolean;
   vision?: boolean;
+  /** Input modalities the catalog declares (always includes 'text'). Only
+   *  catalog hits carry it — family rules infer capability flags, never
+   *  modality lists. */
+  input?: Array<'text' | 'image'>;
 }
 
 type CatalogRow = { contextWindow?: number; maxTokens?: number; reasoning?: boolean; input?: Array<'text' | 'image'> };
@@ -166,6 +170,9 @@ function fromCatalogRow(row: CatalogRow, source: 'catalog' | 'family'): Recogniz
     maxTokens: row.maxTokens,
     reasoning: row.reasoning,
     vision: row.input ? row.input.includes('image') : undefined,
+    // 目录登记的模态原样带出：调用方（远端清单、运行时）据此落库/构造
+    // model.input，vision 只是它的派生值。
+    input: row.input,
   };
 }
 

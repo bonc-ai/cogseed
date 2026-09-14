@@ -17088,6 +17088,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   white-space: nowrap;
 }
 .settings-custom-provider-detail-header-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+/* 弹窗头部右侧动作区（拉取模型列表的「全选/取消全选」）：标题占满剩余宽度，
+   动作区固定在右上角，与 .modal-header 的 flex 契约一致。 */
+.settings-custom-provider-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .settings-custom-provider-detail-subtitle { margin: 6px 0 0; font-size: var(--font-size-2); color: var(--muted); line-height: 1.5; }
 .settings-custom-provider-detail-fields { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
 .settings-custom-provider-field { display: flex; flex-direction: column; gap: 2px; }

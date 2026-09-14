@@ -788,6 +788,10 @@ function _settingsSetCustomProviderModalView(kind, provider = null, model = null
     model: model || null,
     busyActionKey: preserveSession ? (current?.busyActionKey || null) : null,
   };
+  // 头部右侧动作区归"当前视图"所有：切视图先清空，否则上一个视图的按钮会残留
+  // （目前只有拉取模型列表视图放「全选/取消全选」）。
+  const headActions = document.getElementById('settings-custom-provider-modal-head-actions');
+  if (headActions) headActions.innerHTML = '';
   return generation;
 }
 
@@ -974,7 +978,12 @@ function _settingsNormalizeCustomProviderModel(input) {
   // 输入类型三态：调用方**显式提供**（统一表单，含文本勾选）才落 input 字段
   // 并派生 vision；未提供（供应商新增的模型草稿行 / 旧调用方）保持不声明，
   // 让 vision 走目录识别链——否则会把「未知」误标成「明确不支持图片」。
+  // 声明标记逐字段判定（2026-09-14）：表单路径三个字段一起给；远端导入路径
+  // 可能只拿到能力（服务声明的 structured_output 等）而没有输入类型——把能力
+  // 绑在 declaredInput 上会让"只拿到能力"的模型静默丢掉能力。
   const declaredInput = Array.isArray(input?.inputTypes);
+  const declaredCapabilities = Array.isArray(input?.capabilities);
+  const declaredLevels = Array.isArray(input?.reasoningLevels);
   const inputTypes = declaredInput ? ['text'] : [];
   for (const raw of declaredInput ? input.inputTypes : []) {
     const token = String(raw || '').trim().toLowerCase();
@@ -1015,13 +1024,12 @@ function _settingsNormalizeCustomProviderModel(input) {
       contextWindow,
       maxTokens,
       ...(declaredInput ? { input: inputTypes } : {}),
-      // 表单路径（declaredInput）显式携带能力/等级/参数映射——空数组、空对象
-      // 表示用户清空，与"未提供"（草稿行等旧调用方，后端保留旧值）区分开。
-      // 参数映射以前只在有内容时才带字段，清空因此不可表达（后端按"未提供"
-      // 保留旧值）——现在表单路径固定携带，空即清。
-      ...(declaredInput ? { capabilities } : {}),
-      ...(declaredInput ? { reasoningLevels } : {}),
-      ...(declaredInput
+      // 显式携带能力/等级/参数映射——空数组、空对象表示调用方清空，与"未提供"
+      // （草稿行等旧调用方，后端保留旧值）区分开。参数映射以前只在有内容时才带
+      // 字段，清空因此不可表达（后端按"未提供"保留旧值）——现在固定携带，空即清。
+      ...(declaredCapabilities ? { capabilities } : {}),
+      ...(declaredLevels ? { reasoningLevels } : {}),
+      ...(declaredLevels
         ? { reasoningParamsMap: reasoningParamsMap || {} }
         : (reasoningParamsMap ? { reasoningParamsMap } : {})),
     },
@@ -1807,8 +1815,11 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
 }
 
 /** 远端模型发现视图：打开即向服务发起 list-models 请求，结果按勾选导入。
- *  已在本地的模型标记「已存在」不可重复勾选；导入走 customProviders.model.add
- *  逐个落库（窗口/输出上限用默认值，可在导入后按需编辑）。 */
+ *  已在本地的模型标记「已存在」不可重复勾选；头部有「全选/取消全选」一次切换
+ *  全部可选行。导入走 customProviders.model.add 逐个落库，服务/目录给出的元数据
+ *  （窗口、输出上限、输入模态、能力）随导入写入模型配置——运行时按配置驱动调用；
+ *  服务既没给、目录也不认识的字段保持"未声明"，由目录/识别器兜底（不写死默认值，
+ *  否则等于把"未知"标成"不支持"）。 */
 async function _settingsOpenCustomProviderFetchModels(provider) {
   const overlay = document.getElementById('settings-custom-provider-modal');
   const title = document.getElementById('settings-custom-provider-modal-title');
@@ -1849,6 +1860,10 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
     <div class="settings-custom-provider-fetch-list" id="settings-custom-provider-fetch-list"></div>
   `;
   const listEl = body.querySelector('#settings-custom-provider-fetch-list');
+  // 勾选框收进数组：全选与导入都按这个数组驱动，不用 :checked / :not(:disabled)
+  // 这类选择器（真实 DOM 与 renderer 测试 harness 的公共选择器子集只到
+  // 类/ID/标签/name）。
+  const selectableInputs = [];
   for (const row of rows) {
     const isExisting = existing.has(row.id);
     const rowEl = document.createElement('label');
@@ -1860,12 +1875,30 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
       row.contextWindow ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(row.contextWindow) }))}</span>` : '',
     ].filter(Boolean).join('');
     rowEl.innerHTML = `
-      <input type="checkbox" value="${escapeHtml(row.id)}" ${isExisting ? 'disabled' : 'checked'} />
+      <input type="checkbox" class="settings-custom-provider-fetch-box" value="${escapeHtml(row.id)}" ${isExisting ? 'disabled' : 'checked'} />
       <span class="settings-custom-provider-fetch-name">${escapeHtml(row.name ? `${row.name} (${row.id})` : row.id)}</span>
       ${badges}
       ${isExisting ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.fetch_models_existing'))}</span>` : ''}
     `;
     listEl.appendChild(rowEl);
+    const box = rowEl.querySelector('.settings-custom-provider-fetch-box');
+    if (box && !isExisting) selectableInputs.push(box);
+  }
+
+  // 头部右侧「全选/取消全选」：一次切换全部可选行（已存在的行禁用、不参与）。
+  // 标签随状态切换；导入按钮的计数也随之实时更新——此前计数只在渲染时算一次，
+  // 用户取消勾选后数字就与选项对不上了。
+  const headActions = document.getElementById('settings-custom-provider-modal-head-actions');
+  let selectAllButton = null;
+  if (headActions && typeof window.uiButton === 'function') {
+    headActions.innerHTML = window.uiButton({
+      label: t('settings.custom_providers.select_all'),
+      role: 'secondary',
+      size: 'sm',
+      className: 'settings-custom-provider-select-all',
+      attrs: { 'aria-pressed': 'false' },
+    });
+    selectAllButton = headActions.querySelector('button');
   }
 
   actions.innerHTML = '';
@@ -1876,18 +1909,19 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
   actions.appendChild(cancelButton);
   const importButton = document.createElement('button');
   importButton.className = 'btn btn-primary';
-  importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: selectable.length });
   importButton.disabled = selectable.length === 0;
   importButton.addEventListener('click', async () => {
     if (importButton.disabled) return;
-    const picked = [...listEl.querySelectorAll('input[type=checkbox]:checked:not(:disabled)')]
+    const picked = selectableInputs
+      .filter((input) => input.checked)
       .map((input) => input.value)
       .filter((id) => !existing.has(id));
     if (!picked.length) return;
     importButton.disabled = true;
     // 服务/目录给出的元数据（A/B 层）随导入落库；窗口值没给时保持默认，
-    // 用户可在导入后的编辑表单里改。reasoning/vision 不入库——运行时按
-    // 同一识别逻辑动态判定，与 UI 标注天然一致。
+    // 用户可在导入后的编辑表单里改。推理（reasoning）不入库——模型配置里没有
+    // 这个字段，运行时按同一识别逻辑动态判定；视觉则通过输入模态落库
+    // （image → vision），与配置驱动调用同口径。
     const metaById = new Map((res.models || []).map((row) => [row.id, row]));
     let imported = 0;
     let firstError = '';
@@ -1897,7 +1931,23 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
       // 默认输出上限钳到窗口内，避免导入失败。
       const contextWindow = meta.contextWindow || _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW;
       const maxTokens = meta.maxTokens || Math.min(_CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS, contextWindow);
-      const normalized = _settingsNormalizeCustomProviderModel({ id, contextWindow, maxTokens });
+      // 服务/目录给的元数据随导入落库（"配置驱动调用"）：窗口、输出上限、输入
+      // 类型（多模态）、能力（结构化输出 / 原生联网 / 系统消息）。输入类型只在
+      // 服务真的声明了模态时才落库——凭空写 ['text'] 会把"未知"标成"不支持
+      // 图片"，反而挡掉目录与识别器的视觉兜底。
+      const declaredInput = Array.isArray(meta.input)
+        ? meta.input.filter((token) => _MODEL_FORM_INPUT_TYPES.includes(token))
+        : [];
+      const declaredCapabilities = Array.isArray(meta.capabilities)
+        ? meta.capabilities.filter((token) => _MODEL_FORM_CAPABILITIES.includes(token))
+        : [];
+      const normalized = _settingsNormalizeCustomProviderModel({
+        id,
+        contextWindow,
+        maxTokens,
+        ...(declaredInput.length ? { inputTypes: declaredInput } : {}),
+        ...(declaredCapabilities.length ? { capabilities: declaredCapabilities } : {}),
+      });
       if (!normalized.ok) { if (!firstError) firstError = `${id}: ${normalized.error}`; continue; }
       const added = await _settingsCallCustomProvider('customProviders.model.add', {
         providerId: provider.id,
@@ -1913,6 +1963,30 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
     else if (imported > 0) _settingsCustomProviderModalStatus('', t('settings.custom_providers.fetch_models_done', { count: imported }));
   });
   actions.appendChild(importButton);
+
+  const syncSelection = () => {
+    const picked = selectableInputs.filter((input) => input.checked).length;
+    importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: picked });
+    importButton.disabled = picked === 0;
+    if (!selectAllButton) return;
+    const allSelected = selectableInputs.length > 0 && picked === selectableInputs.length;
+    selectAllButton.setAttribute('aria-pressed', allSelected ? 'true' : 'false');
+    const label = selectAllButton.querySelector('.ui-button__label');
+    if (label) {
+      label.textContent = t(allSelected
+        ? 'settings.custom_providers.deselect_all'
+        : 'settings.custom_providers.select_all');
+    }
+  };
+  for (const input of selectableInputs) input.addEventListener('change', syncSelection);
+  if (selectAllButton) {
+    selectAllButton.addEventListener('click', () => {
+      const allSelected = selectableInputs.length > 0 && selectableInputs.every((input) => input.checked);
+      for (const input of selectableInputs) input.checked = !allSelected;
+      syncSelection();
+    });
+  }
+  syncSelection();
 }
 
 async function _settingsSetCustomProviderEnabled(provider, enabled) {  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
@@ -2148,7 +2222,21 @@ function _settingsApplyModelFormState(body, state) {
   }
 }
 
-/** 智能配置：按模型 ID 从供应商远端清单预填窗口/输出/输入类型。
+/** 模型表单里的勾选项：按 name 找、再按 value 过滤。
+ *  属性选择器 input[name="x"][value="y"] 是真实 DOM 才有的能力，renderer 测试
+ *  harness 只支持到 name 那一层——统一走这里，两边的行为才一致。 */
+function _settingsModelFormCheckbox(body, name, value) {
+  const boxes = body && typeof body.querySelectorAll === 'function'
+    ? body.querySelectorAll('input[name="' + name + '"]')
+    : [];
+  for (const box of boxes) {
+    const actual = typeof box.getAttribute === 'function' ? box.getAttribute('value') : box.value;
+    if (String(actual == null ? '' : actual) === value) return box;
+  }
+  return null;
+}
+
+/** 智能配置：按模型 ID 从供应商远端清单预填窗口/输出/输入模态/能力。
  *  只填空缺、不覆盖用户输入；拉取失败静默（便利功能不阻断手动填写）。 */
 async function _settingsSmartFillModelForm(provider, body) {
   const idInput = body.querySelector('#settings-custom-provider-model-edit-id');
@@ -2172,9 +2260,18 @@ async function _settingsSmartFillModelForm(provider, body) {
   if (outputInput && (!outputInput.value || Number(outputInput.value) === _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS) && Number.isSafeInteger(hit.maxTokens)) {
     outputInput.value = String(hit.maxTokens);
   }
-  if (hit.vision === true) {
-    const imageBox = body.querySelector('input[name="settings-model-form-input"][value="image"]');
-    if (imageBox && !imageBox.checked) imageBox.checked = true;
+  // 输入模态：服务/目录给了 input 数组就按它勾（含 video/pdf）；只给了 vision
+  // 布尔值时退化成图片一项。能力同理（结构化输出 / 原生联网 / 系统消息）。
+  const modalities = Array.isArray(hit.input) && hit.input.length
+    ? hit.input
+    : (hit.vision === true ? ['image'] : []);
+  for (const token of modalities) {
+    const box = _settingsModelFormCheckbox(body, 'settings-model-form-input', token);
+    if (box && !box.checked) box.checked = true;
+  }
+  for (const token of Array.isArray(hit.capabilities) ? hit.capabilities : []) {
+    const box = _settingsModelFormCheckbox(body, 'settings-model-form-capability', token);
+    if (box && !box.checked) box.checked = true;
   }
   _settingsCustomProviderModalStatus('ok', t('settings.custom_providers.smart_config_applied', { model: modelId }));
 }

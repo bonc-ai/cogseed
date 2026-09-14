@@ -5150,6 +5150,8 @@
   "settings.custom_providers.fetch_models_hint": "Marque os modelos a adicionar (os existentes não podem ser repetidos). Metadados como a janela de contexto são preenchidos automaticamente: primeiro os campos extras do serviço, depois o catálogo interno; o que continuar desconhecido usa padrões editáveis após a importação.",
   "settings.custom_providers.fetch_models_existing": "existente",
   "settings.custom_providers.fetch_models_import": "Importar selecionados ({count})",
+  "settings.custom_providers.select_all": "Selecionar tudo",
+  "settings.custom_providers.deselect_all": "Desmarcar tudo",
   "settings.custom_providers.fetch_models_done": "{count} modelos importados",
   "settings.custom_providers.fetch_models_partial": "Importação parcial ({ok}); falha: {error}",
   "exec_config.cli_model_note": "O modelo é definido pela configuração do próprio \"{cli}\"; o CogSeed ainda não pode escolher um.",

@@ -1585,6 +1585,10 @@
     <div class="modal modal-standard settings-custom-provider-modal" role="dialog" aria-modal="true" aria-labelledby="settings-custom-provider-modal-title">
       <div class="modal-header">
         <h3 class="modal-title" id="settings-custom-provider-modal-title">Model provider</h3>
+        <!-- 头部右侧动作区：由当前视图填充（拉取模型列表的「全选/取消全选」）。
+             切换视图时由 _settingsSetCustomProviderModalView 清空，避免上一个
+             视图的按钮残留。 -->
+        <div class="settings-custom-provider-head-actions" id="settings-custom-provider-modal-head-actions"></div>
       </div>
       <div class="modal-body" id="settings-custom-provider-modal-body"></div>
       <div class="form-msg" id="settings-custom-provider-modal-status"></div>

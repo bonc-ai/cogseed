@@ -5150,6 +5150,8 @@
   "settings.custom_providers.fetch_models_hint": "追加するモデルにチェック（既存のものは再追加不可）。コンテキスト幅などのメタデータは自動補完されます：サービスの拡張フィールドを優先し、不足分は内蔵カタログで照合、それでも不明なものは既定値で登録され後から編集できます。",
   "settings.custom_providers.fetch_models_existing": "既存",
   "settings.custom_providers.fetch_models_import": "選択をインポート（{count}）",
+  "settings.custom_providers.select_all": "すべて選択",
+  "settings.custom_providers.deselect_all": "選択を解除",
   "settings.custom_providers.fetch_models_done": "{count} 個のモデルをインポートしました",
   "settings.custom_providers.fetch_models_partial": "一部のみインポート（{ok} 個）、失敗：{error}",
   "exec_config.cli_model_note": "モデルは「{cli}」自身の構成で決まり、CogSeed からは指定できません。",

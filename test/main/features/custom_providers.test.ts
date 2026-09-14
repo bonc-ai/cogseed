@@ -499,6 +499,51 @@ describe('custom providers › fetchCustomProviderModels', () => {
     expect(failed.error).not.toContain('gk-live');
   });
 
+  it('maps declared input modalities and capabilities into the fetched rows', async () => {
+    // /models 只保证 id；能拿尽拿的扩展字段（OpenRouter 等）要落进结果，运行时
+    // 才能"配置驱动调用"：input 模态参与多模态判定，capabilities 映射 compat。
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Meta Relay', protocol: 'openai', baseUrl: 'https://meta.example/v1', apiKey: 'sk-meta',
+    });
+    if (!added.ok) throw new Error(added.error);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonBody({
+      data: [
+        {
+          id: 'relay-multimodal',
+          context_length: 200000,
+          top_provider: { max_completion_tokens: 64000 },
+          supported_parameters: ['reasoning', 'structured_outputs', 'web_search_options', 'temperature'],
+          architecture: { input_modalities: ['text', 'image', 'video', 'audio'] },
+        },
+        // 只声明能力、没有模态：能力仍要落库（不能因为缺 input 就丢）。
+        { id: 'relay-capability-only', capabilities: ['structured_output', 'unknown-capability'] },
+        // 'file' 是 OpenRouter 口径的 PDF；文本模态由我们补齐。
+        { id: 'relay-file-only', architecture: { input_modalities: ['file'] } },
+      ],
+    })));
+
+    const res = await providers.fetchCustomProviderModels(UID, added.id);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.models).toEqual([
+      {
+        id: 'relay-multimodal',
+        contextWindow: 200000,
+        maxTokens: 64000,
+        input: ['text', 'image', 'video'],
+        capabilities: ['structured_output', 'native_web_search'],
+        reasoning: true,
+        vision: true,
+      },
+      { id: 'relay-capability-only', capabilities: ['structured_output'] },
+      // 显式声明了模态就必须诚实表态：没有 image 就是 vision false，
+      // 不能再让目录/识别器的视觉兜底把它翻过来。
+      { id: 'relay-file-only', input: ['text', 'pdf'], vision: false },
+    ]);
+  });
+
   it('fails fast for unknown providers without issuing any request', async () => {
     const providers = await import('../../../src/main/features/custom_providers');
     const fetchSpy = vi.fn();

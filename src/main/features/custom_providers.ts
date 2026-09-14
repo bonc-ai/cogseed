@@ -672,6 +672,53 @@ export async function testCustomProviderModel(
   });
 }
 
+/** 服务字段名 → 我方 token 的别名表（模态）。OpenRouter / vLLM / 各家中转站
+ *  的写法不统一：'file' 是它们的 PDF，'image_url' 是图片输入。表里没有的原样
+ *  按下面的白名单过滤。 */
+const DECLARED_INPUT_ALIASES: Record<string, string> = {
+  text: 'text',
+  image: 'image',
+  image_url: 'image',
+  vision: 'image',
+  video: 'video',
+  pdf: 'pdf',
+  file: 'pdf',
+  document: 'pdf',
+};
+
+/** 服务字段名 → 我方能力 token。只认"服务真的声明了"的写法，不做猜测：
+ *  structured_outputs / response_format / json_schema 都是"支持结构化输出"的
+ *  公开说法；web_search_options / native_web_search 是"原生联网"。 */
+const DECLARED_CAPABILITY_ALIASES: Record<string, string> = {
+  structured_output: 'structured_output',
+  structured_outputs: 'structured_output',
+  response_format: 'structured_output',
+  json_schema: 'structured_output',
+  web_search: 'native_web_search',
+  web_search_options: 'native_web_search',
+  native_web_search: 'native_web_search',
+  system_message: 'system_message',
+  developer_role: 'system_message',
+};
+
+/** 把服务声明的 token 列表收敛到我方白名单（去重、丢未知、保持出现顺序）。
+ *  返回 undefined 表示"服务没说"——调用方据此保留兜底链，而不是写死一个空数组。 */
+function pickDeclaredTokens(
+  raw: unknown,
+  allowed: readonly string[],
+  aliases: Record<string, string>,
+): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    const token = String(item ?? '').trim().toLowerCase();
+    const mapped = aliases[token] || token;
+    if (!allowed.includes(mapped) || out.includes(mapped)) continue;
+    out.push(mapped);
+  }
+  return out.length ? out : undefined;
+}
+
 /** First positive safe integer among the candidate metadata fields. */
 function pickPositive(...values: unknown[]): number | undefined {
   for (const value of values) {
@@ -692,10 +739,30 @@ function pickPositive(...values: unknown[]): number | undefined {
  * user picks what to add. The API key comes from the provider's stored
  * config (never a literal) and is excluded from every error message.
  */
+export interface FetchedCustomProviderModel {
+  id: string;
+  name?: string;
+  /** 上下文窗口（输入侧预算）。 */
+  contextWindow?: number;
+  /** 单次回复的最大输出 token。 */
+  maxTokens?: number;
+  /** 输入模态（text/image/video/pdf）——服务声明优先，缺失时由目录补；
+   *  入库即成为"配置驱动调用"的输入类型。vision 是它的派生布尔值（含 image）。 */
+  input?: string[];
+  /** 模型能力（structured_output / native_web_search / system_message）：
+   *  服务声明的 supported_parameters 等字段映射而来，运行时映射到 pi-ai 的
+   *  compat 开关。 */
+  capabilities?: string[];
+  /** 是否支持深度思考（推理档位）。 */
+  reasoning?: boolean;
+  /** input 是否含 image 的派生值（列表 UI 的视觉徽标/预填用）。 */
+  vision?: boolean;
+}
+
 export async function fetchCustomProviderModels(
   userId: string,
   id: string,
-): Promise<{ ok: true; models: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> } | { ok: false; error: string }> {
+): Promise<{ ok: true; models: FetchedCustomProviderModel[] } | { ok: false; error: string }> {
   let providerId: string;
   try {
     providerId = normalizeProviderId(id);
@@ -755,7 +822,7 @@ export async function fetchCustomProviderModels(
       : null;
     if (!Array.isArray(rows)) return { ok: false, error: 'unexpected response shape' };
 
-    const out: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> = [];
+    const out: FetchedCustomProviderModel[] = [];
     for (const row of rows.slice(0, 500)) {
       if (!row || typeof row !== 'object') continue;
       const record = row as Record<string, unknown>;
@@ -770,8 +837,9 @@ export async function fetchCustomProviderModels(
       if (out.some((existing) => existing.id === rawId)) continue;
       // 非标准扩展字段（A 层——能拿尽拿）：vLLM 的 max_model_len、
       // OpenRouter 的 context_length / top_provider.max_completion_tokens /
-      // supported_parameters / architecture.input_modalities。没有标准的
-      // 保证，字段存在才取，否则留给识别模块（B 层）补。
+      // supported_parameters（推理 + 能力）/ architecture.input_modalities
+      // （输入模态）。标准 /models 只保证 id，这些字段存在才取；拿不到的
+      // 留给识别模块（B 层）按内置目录补，两边都不写死猜测值。
       const contextWindow = pickPositive(record.max_model_len, record.context_length, record.max_context_tokens, record.context_window);
       const rawTop = record.top_provider as Record<string, unknown> | undefined;
       const maxTokens = pickPositive(record.max_completion_tokens, record.max_output_tokens, rawTop?.max_completion_tokens);
@@ -782,16 +850,27 @@ export async function fetchCustomProviderModels(
         ? params.some((p) => p === 'reasoning' || p === 'reasoning_effort')
         : undefined;
       const arch = record.architecture as Record<string, unknown> | undefined;
-      const modalities = (Array.isArray(arch?.input_modalities) ? arch?.input_modalities
-        : Array.isArray(record.input_modalities) ? record.input_modalities : []) as unknown[];
-      const vision = modalities.length
-        ? modalities.some((m) => typeof m === 'string' && m.toLowerCase().includes('image'))
+      const modalities = Array.isArray(arch?.input_modalities) ? arch?.input_modalities
+        : Array.isArray(record.input_modalities) ? record.input_modalities : undefined;
+      // 输入模态：拿全（text/image/video/pdf），vision 只是它的派生布尔值——
+      // 这样视频、PDF 这类非"图片"的多模态能力也能随导入进配置（此前只留一个
+      // vision 布尔值，video/pdf 直接丢失）。text 恒支持，服务只列了 image 时
+      // 补齐 text（与 normalizeModel 的"text 恒在"同口径）。
+      const declaredInput = pickDeclaredTokens(modalities, CUSTOM_PROVIDER_MODEL_INPUTS, DECLARED_INPUT_ALIASES);
+      const input = declaredInput
+        ? (declaredInput.includes('text') ? declaredInput : ['text', ...declaredInput])
         : undefined;
+      const vision = input ? input.includes('image') : undefined;
+      // 能力：supported_parameters（OpenRouter 系）与显式 capabilities 两处都看。
+      const declaredCapabilities = pickDeclaredTokens(params, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES)
+        || pickDeclaredTokens(record.capabilities, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES);
       out.push({
         id: rawId,
         ...(name && name !== rawId ? { name } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(input ? { input } : {}),
+        ...(declaredCapabilities ? { capabilities: declaredCapabilities } : {}),
         ...(reasoning !== undefined ? { reasoning } : {}),
         ...(vision !== undefined ? { vision } : {}),
       });
@@ -807,6 +886,12 @@ export async function fetchCustomProviderModels(
         if (item.contextWindow === undefined && recognized.contextWindow !== undefined) item.contextWindow = recognized.contextWindow;
         if (item.maxTokens === undefined && recognized.maxTokens !== undefined) item.maxTokens = recognized.maxTokens;
         if (item.reasoning === undefined && recognized.reasoning !== undefined) item.reasoning = recognized.reasoning;
+        // 模态来自目录时同样补齐 vision 派生值（input 是单一事实源）。
+        if (item.input === undefined && recognized.input !== undefined) {
+          const input = recognized.input.includes('text') ? [...recognized.input] : ['text', ...recognized.input];
+          item.input = input;
+          item.vision = input.includes('image');
+        }
         if (item.vision === undefined && recognized.vision !== undefined) item.vision = recognized.vision;
       }
     } catch { /* recognition is best-effort enrichment */ }

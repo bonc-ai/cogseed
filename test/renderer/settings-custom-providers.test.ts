@@ -188,6 +188,9 @@ class FakeElement {
       // 属性，textarea 的初始值来自元素文本而不是 value 属性。缺这两条，harness
       // 永远看不到「已保存的高级配置真的渲染进了表单」，回显缺陷测不出来。
       if (/(?:^|\s)checked(?:\s|$)/.test(attrs)) child.checked = true;
+      // 同理：裸 disabled 属性（"已存在"的行）要反映成 .disabled，否则
+      // "不可勾选/不参与全选"的断言看不到真实状态。
+      if (/(?:^|\s)disabled(?:\s|$)/.test(attrs)) child.disabled = true;
       if (match[1].toLowerCase() === 'textarea') {
         const close = value.indexOf('</textarea>', token.lastIndex);
         if (close >= 0) {
@@ -258,6 +261,7 @@ function buildHarness() {
     'settings-custom-provider-modal-body',
     'settings-custom-provider-modal-actions',
     'settings-custom-provider-modal-status',
+    'settings-custom-provider-modal-head-actions',
     'settings-custom-provider-name',
     'settings-custom-provider-protocol',
     'settings-custom-provider-base-url',
@@ -301,6 +305,27 @@ function buildHarness() {
     if (channel === 'customProviders.update') return { ok: true, provider: { id: payload?.id || 'cp-1' } };
     if (channel === 'customProviders.remove') return { ok: true };
     if (channel === 'customProviders.setEnabled') return { ok: true, enabled: payload?.enabled };
+    if (channel === 'customProviders.fetchModels') {
+      return {
+        ok: true,
+        models: [
+          {
+            id: 'relay-a',
+            contextWindow: 200000,
+            maxTokens: 64000,
+            input: ['text', 'image', 'video'],
+            capabilities: ['structured_output'],
+            reasoning: true,
+            vision: true,
+          },
+          // 服务只声明了能力、没有模态：能力仍必须落库（此前能力被绑在
+          // "声明了输入类型"上，这种模型的能力会被静默丢掉）。
+          { id: 'relay-b', capabilities: ['native_web_search'] },
+          // 已在本地：禁用、不参与全选，也不导入。
+          { id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 },
+        ],
+      };
+    }
     if (channel === 'customProviders.model.add') return { ok: true, model: payload?.model };
     if (channel === 'customProviders.model.update') return { ok: true, model: payload?.model };
     if (channel === 'customProviders.model.remove') return { ok: true, removed: true };
@@ -407,7 +432,9 @@ function buildHarness() {
       + hint + '</div>';
   };
   windowObj.showContextMenu = vi.fn();
-  windowObj.uiButton = (options: any) => `<button type="button" class="btn ui-button ${String(options?.className || '')}" data-label="${String(options?.label || '')}">${String(options?.label || '')}</button>`;
+  // ui-button.js 真实产物带 .ui-button__label 标签（拉取列表的全选按钮靠它换
+  // 文案），桩必须同形，否则"标签随状态切换"在 harness 里永远测不到。
+  windowObj.uiButton = (options: any) => `<button type="button" class="btn ui-button ${String(options?.className || '')}" data-label="${String(options?.label || '')}"><span class="ui-button__label">${String(options?.label || '')}</span></button>`;
   windowObj.uiIconButton = (options: any) => `<button type="button" class="ui-icon-button" data-label="${String(options?.label || '')}"></button>`;
   vm.createContext(context);
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8'), context, { filename: 'settings.js' });
@@ -469,6 +496,10 @@ describe('settings model providers surface', () => {
       'settings.custom_providers.disable',
       'settings.custom_providers.error_duplicate_model',
       'settings.picker.error_provider_disabled',
+      // 拉取列表头部的全选动作（2026-09-14）：四语缺一就会退回代码里的中文兜底。
+      'settings.custom_providers.select_all',
+      'settings.custom_providers.deselect_all',
+      'settings.custom_providers.fetch_models_import',
     ];
     for (const { language, locale } of customProviderLocaleFiles) {
       for (const key of requiredKeys) expect(locale[key], `${language}: ${key}`).toBeTruthy();
@@ -916,6 +947,89 @@ describe('settings model providers surface', () => {
     addIdInput.value = 'gpt-4.1-mini';
     await addIdInput.dispatch('blur');
     expect(fetchCalls()).toHaveLength(1);
+  });
+
+  it('拉取模型列表：头部「全选/取消全选」一次切换可选行，导入计数同步（2026-09-14）', async () => {
+    const { context, registry } = buildHarness();
+    const g = context as any;
+    const provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{ id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 }],
+    };
+    g._settingsOpenCustomProviderModal(provider);
+    await g._settingsOpenCustomProviderFetchModels(provider);
+
+    const head = registry.get('settings-custom-provider-modal-head-actions')!;
+    const toggle = head.querySelector('.settings-custom-provider-select-all') as any;
+    expect(toggle).toBeTruthy();
+    const label = () => toggle.querySelector('.ui-button__label').textContent;
+    const list = registry.get('settings-custom-provider-fetch-list')!;
+    const boxes = list.querySelectorAll('.settings-custom-provider-fetch-box') as any[];
+    const actions = registry.get('settings-custom-provider-modal-actions')!;
+    const importButton = actions.children[1] as any;
+    // 第三行已在本地：不勾选、禁用（harness 对缺失的 checked 属性给 undefined，
+    // 浏览器给 false——统一按"是否真的选中"比）。
+    expect(boxes.map((box) => box.checked === true)).toEqual([true, true, false]);
+    expect(boxes[2].disabled).toBe(true);
+    // 渲染时默认全部可选行都勾上 → 按钮此刻的动作是"取消全选"。
+    expect(label()).toBe('settings.custom_providers.deselect_all');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(importButton.textContent).toContain('"count":2');
+    expect(importButton.disabled).toBe(false);
+
+    // 手动取消一个：计数与按钮动作立刻跟上（此前计数只在渲染时算一次，
+    // 取消勾选后数字会与选项对不上）。
+    boxes[1].checked = false;
+    await boxes[1].dispatch('change');
+    expect(importButton.textContent).toContain('"count":1');
+    expect(label()).toBe('settings.custom_providers.select_all');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    // 全选：两行都选中（已存在的行不参与），标签切到「取消全选」。
+    await toggle.click();
+    expect(boxes.map((box) => box.checked === true)).toEqual([true, true, false]);
+    expect(label()).toBe('settings.custom_providers.deselect_all');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(importButton.textContent).toContain('"count":2');
+
+    // 再点一次：全部取消，导入按钮禁用，标签回到「全选」。
+    await toggle.click();
+    expect(boxes.map((box) => box.checked === true)).toEqual([false, false, false]);
+    expect(label()).toBe('settings.custom_providers.select_all');
+    expect(importButton.textContent).toContain('"count":0');
+    expect(importButton.disabled).toBe(true);
+  });
+
+  it('拉取模型列表：导入把服务声明的模态与能力一起落库（2026-09-14）', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const g = context as any;
+    const provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{ id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 }],
+    };
+    g._settingsOpenCustomProviderModal(provider);
+    await g._settingsOpenCustomProviderFetchModels(provider);
+    const importButton = registry.get('settings-custom-provider-modal-actions')!.children[1] as any;
+    await importButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const added = invoke.mock.calls
+      .filter(([channel]: any[]) => channel === 'customProviders.model.add')
+      .map(([, payload]: any[]) => payload.model);
+    expect(added).toEqual([
+      {
+        id: 'relay-a',
+        contextWindow: 200000,
+        maxTokens: 64000,
+        input: ['text', 'image', 'video'],
+        capabilities: ['structured_output'],
+      },
+      // 没有模态声明时不写 input（"未知"不能写成"不支持图片"，否则挡掉目录兜底），
+      // 但能力照样落库。
+      { id: 'relay-b', contextWindow: 1000000, maxTokens: 384000, capabilities: ['native_web_search'] },
+    ]);
   });
 
   it('prevents duplicate model tests and renders the backend duration field', async () => {
