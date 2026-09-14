@@ -612,7 +612,7 @@
 
   const MANAGE_TABS = [
     ['sources', 'cognition.tab_sources', '来源健康'],
-    ['organize', 'cognition.capture_activity_title', '自动整理'],
+    ['organize', 'cognition.capture_activity_title', '整理方式'],
   ];
 
   function viewManage(route) {
@@ -753,7 +753,7 @@
       ? NS.vocabulary.recordTitle(capture)
       : String(capture.conversationTitle || capture.title || capture.id || ''));
     return `${hero(
-      T('cognition.tab_manage', '设置与管理'), T('cognition.capture_activity_title', '自动整理'),
+      T('cognition.tab_manage', '设置与管理'), T('cognition.capture_activity_title', '整理方式'),
       T('cognition.capture_activity_hint', '自动发现值得留存的内容；只有需要你判断时才打扰你。'),
       statsRow([
         [Number((S.captureCounts && S.captureCounts.review) || 0), T('cognition.capture_metric_review', '待确认')],

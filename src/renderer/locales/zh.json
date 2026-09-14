@@ -3009,7 +3009,7 @@
   "cognition.back_to_sources": "返回管理来源",
   "common.handle": "处理",
   "cognition.capture_eyebrow": "CAPTURE ACTIVITY",
-  "cognition.capture_activity_title": "自动整理",
+  "cognition.capture_activity_title": "整理方式",
   "cognition.capture_tasks_filter_empty": "当前筛选下没有整理记录",
   "cognition.capture_tasks_filter_empty_hint": "换一个筛选，或回到「全部」查看所有整理记录。",
   "cognition.capture_mode_smart": "任务结束后发现",

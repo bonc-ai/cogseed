@@ -2830,7 +2830,7 @@
   "cognition.back_to_sources": "ソース管理に戻る",
   "common.handle": "対処",
   "cognition.capture_eyebrow": "CAPTURE ACTIVITY",
-  "cognition.capture_activity_title": "自動整理",
+  "cognition.capture_activity_title": "整理の方法",
   "cognition.capture_tasks_filter_empty": "このフィルターに整理記録はありません",
   "cognition.capture_tasks_filter_empty_hint": "別のフィルターに切り替えるか、「すべて」で全記録を確認してください。",
   "cognition.capture_mode_smart": "タスク終了後に検出",

@@ -2830,7 +2830,7 @@
   "cognition.back_to_sources": "Voltar a Fontes",
   "common.handle": "Resolver",
   "cognition.capture_eyebrow": "CAPTURE ACTIVITY",
-  "cognition.capture_activity_title": "Organização automática",
+  "cognition.capture_activity_title": "Organização",
   "cognition.capture_tasks_filter_empty": "Sem registros de organização neste filtro",
   "cognition.capture_tasks_filter_empty_hint": "Tente outro filtro ou volte a Todos para ver todos os registros.",
   "cognition.capture_mode_smart": "Descobrir após a tarefa",
