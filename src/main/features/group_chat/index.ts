@@ -181,11 +181,15 @@ export async function runtimeStatus(
     let backendTurns: Array<{ actor: string; turn_id: string; started_at_ms: number }> = [];
     try {
       const { listCogSeedTasks } = await import('../cogseed_backend/task-store');
+      const { isCogSeedTaskExecutingStatus } = await import('../cogseed_backend/lifecycle');
       const tasks = await listCogSeedTasks(userId);
+      // 只认「执行中」（created/queued/running）。此前按"非终态"黑名单过滤，
+      // 把 `waiting_user`（已停止、等用户回话）也算作活跃，导致会话
+      // processing 恒为 true：发送按钮卡在停止态、后续消息被排队
+      // （2026-09-11 claude spawn 失败后实机复现）。
       const active = (Array.isArray(tasks) ? tasks : []).filter((t) => (
         t && t.conversationId === cid
-        && t.status !== 'completed' && t.status !== 'failed'
-        && t.status !== 'cancelled' && t.status !== 'recoverable'
+        && isCogSeedTaskExecutingStatus(t.status)
       ));
       backendActive = active.length > 0;
       backendAgents = Array.from(new Set(

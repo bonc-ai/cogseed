@@ -38,6 +38,7 @@ const watchedStartInput = new Map<string, { binPath?: string; alias?: string; br
 const restartCounts = new Map<string, number>();
 const WATCHDOG_RESTART_DELAY_MS = Number(process.env.COGSEED_P3394_WATCHDOG_DELAY_MS || 5_000);
 const WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3;
+const GATEWAY_SHUTDOWN_GRACE_MS = 3_000;
 /** 已排队的自动重启定时器（key 为 cli）。detachWatch / stop 必须取消它，
  *  否则「删除 agent → 网关 crash 时排队的 timer 到点复活网关 → hello →
  *  投影重建同名 agent → 再次创建同名被拒」——重启必须尊重主动停止。 */
@@ -105,6 +106,34 @@ function watchGateway(cli: string, child: ChildProcess, input: { binPath?: strin
     // 网关进程没了，模型扫描缓存随之失效（新进程=新账号状态可能不同清单）。
     gatewayModelsCache.delete(cli);
     scheduleRestart(cli, input);
+  });
+}
+
+/** Ask a live managed gateway to close its runtimes and listener itself.
+ *  Resolves false when IPC cannot be delivered or the child misses the
+ *  bounded grace period, allowing callers to retain process-tree fallback. */
+function requestGatewayShutdown(child: ChildProcess): Promise<boolean> {
+  if (!child.connected) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (closed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('close', onClose);
+      resolve(closed);
+    };
+    const onClose = () => finish(true);
+    const timer = setTimeout(() => finish(false), GATEWAY_SHUTDOWN_GRACE_MS);
+    timer.unref?.();
+    child.once('close', onClose);
+    try {
+      child.send({ type: 'p3394-shutdown' }, (error) => {
+        if (error) finish(false);
+      });
+    } catch {
+      finish(false);
+    }
   });
 }
 
@@ -380,7 +409,7 @@ async function doStartExternalGateway(input: {
     // (~/.local/bin, /opt/homebrew/bin, ...) so the gateway's own children
     // (bare preset commands like `codebuddy`) resolve like in a terminal.
     const childEnv = buildCliSpawnEnv(scriptPath, env);
-    child = spawn(process.execPath, [scriptPath], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, [scriptPath], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let errLog = '';
     let outLog = '';
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -408,7 +437,7 @@ async function doStartExternalGateway(input: {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
     if (!registered) {
-      killProcessTree(child, 'SIGTERM');
+      await killProcessTree(child, 'SIGTERM');
       const detail = [outLog.trim(), errLog.trim(), 'exit=' + String(child.exitCode)].filter(Boolean).join(' | ').slice(-1500);
       return { ok: false, error: 'p3394_gateway_registration_timeout' + (detail ? ': ' + detail : '') };
     }
@@ -429,7 +458,7 @@ async function doStartExternalGateway(input: {
     watchGateway(cli, child, { binPath: input.binPath, alias, bridgeInfo: input.bridgeInfo });
     return { ok: true, value: { ...record, running: true } };
   } catch (error) {
-    if (child && child.exitCode === null) killProcessTree(child, 'SIGTERM');
+    if (child && child.exitCode === null) await killProcessTree(child, 'SIGTERM');
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -574,8 +603,12 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
   const key = String(cli || '').trim();
   const record = listExternalGateways().find((g) => g.cli === key);
   if (!record) return { ok: true, value: null };
+  const child = watched.get(key);
   detachWatch(key);
-  killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+  const gracefullyClosed = child?.connected ? await requestGatewayShutdown(child) : false;
+  if (!gracefullyClosed) {
+    await killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+  }
   // 确认进程退出：SIGTERM 后短暂等待，仍存活则 SIGKILL 兜底——否则僵尸
   // 网关会继续 hello/心跳，删除 agent 后触发投影重建同名 agent。
   if (pidAlive(record.pid)) {
@@ -584,7 +617,7 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     if (pidAlive(record.pid)) {
-      killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGKILL');
+      await killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGKILL');
       await new Promise((resolve) => setTimeout(resolve, 200));
       log.warn('P3394 external gateway SIGKILL fallback', { cli: key, pid: record.pid });
     }
@@ -605,11 +638,19 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
  * still removes the matching record.
  */
 export async function stopAllExternalGateways(): Promise<void> {
+  const terminations = [];
   for (const record of listExternalGateways()) {
     if (!record.running) continue;
+    const child = watched.get(record.cli);
     detachWatch(record.cli);
-    killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+    const terminateTree = () => killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+    if (!child?.connected) {
+      terminations.push(terminateTree());
+      continue;
+    }
+    terminations.push(requestGatewayShutdown(child).then((closed) => closed ? undefined : terminateTree()));
   }
+  await Promise.all(terminations);
   // 清空守护表（连同没有存活记录的 cli）。
   for (const cli of [...watched.keys()]) detachWatch(cli);
 }

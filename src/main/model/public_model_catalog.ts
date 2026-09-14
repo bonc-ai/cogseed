@@ -65,11 +65,15 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'MiniMax-M2.7', name: 'MiniMax 2.7' },
   ],
   deepseek: [
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    // 窗口与视觉口径来源：产品确认（2026-08-27），deepseek-v4-pro/flash 文本版
-    // 无权威数字故不标 —— 目录只收确凿数据，不猜。
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
+    // 窗口口径 2026-09-11 更新（产品负责人确认）：V4 文本系列与此前已确认
+    // 1M 的 v4-flash-vision-exp 共用 1M 窗口——原先"文本版无权威数字故不标"
+    // 的保守口径作废；v4.1 是 V4 的迭代版本（用户实际配置的 id 形态
+    // `deepseek/deepseek-v4.1-flash`），同族同窗口，一并登记。
     { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
+    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1_048_576 },
+    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_048_576 },
   ],
   doubao: [
     { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },

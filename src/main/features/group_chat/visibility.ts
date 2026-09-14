@@ -97,6 +97,14 @@ export interface GroupMessageMetrics {
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
+    /** 最后一次调用的 prompt 侧用量（2026-09-11）：当前上下文占用的权威
+     *  口径；上方字段为整轮累加（消耗口径，每步重发的历史被求和）。 */
+    lastCallUsage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+    };
     /** CLI 自报成本（美元，claude 的 total_cost_usd 等）。比单价表估算准，
      *  渲染层优先消费；缺省时回退价格表估算。 */
     costUsd?: number;
