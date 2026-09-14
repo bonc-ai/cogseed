@@ -118,22 +118,36 @@ export function buildCustomProviderModel(
   const api = apiForProtocol(cp.protocol);
   const metadata = buildCustomProviderModelMeta(cp, modelId);
   const headers = customProviderHeaders(cp.baseUrl, cp.id);
-  // 配置 → 调用映射（2026-09-13 全面对齐，子安口径"配置驱动调用"）：
-  //   input（输入类型）   配置勾选 > 目录登记 > 识别器，图片直传模型
-  //   reasoning（推理）   配置声明了推理等级 > 识别器——没配等级的模型
-  //                      不带 reasoning_effort（选了档位也不会盲发参数）
-  //   capabilities        system_message → compat.supportsDeveloperRole、
-  //                      structured_output → compat.supportsStrictMode；
+  // 配置 → 调用映射（2026-09-13 全面对齐，子安口径"配置驱动调用"；层级化
+  // 语义 2026-09-14 修正：配置字段存在即定音，缺失才走兜底）：
+  //   input（输入类型）   配置勾选 > 目录登记 > 识别器。显式只勾文本
+  //                      （input:['text']，存储层落库 vision:false）不会被
+  //                      目录/识别器翻回图片——否则"配置驱动调用"名不副实。
+  //   reasoning（推理）   推理等级/参数映射字段存在（含显式空=用户清空过）
+  //                      即按配置定音；字段缺失才回退识别器。没配等级的
+  //                      模型不带 reasoning_effort（选了档位也不会盲发参数）。
+  //   capabilities        structured_output → compat.supportsStrictMode（当前
+  //                      在 openai-completions 通道为留档声明，不改变请求）；
+  //                      system_message 为声明留档，不再映射
+  //                      supportsDeveloperRole——那会在推理模型上把 system
+  //                      消息改发 developer role，对多数第三方中转是 400
+  //                      风险，与「支持系统消息」的勾选语义相反；
   //                      native_web_search 按 api 注入（openai-responses），
   //                      openai-completions 通道声明留档不生效
   //   reasoningParamsMap  高级参数映射：落库+校验+展示；运行时注入接线
   //                      留待后续（pi-ai 的 thinkingLevel 已覆盖常规档位）
   const stored = cp.models.find((candidate) => candidate.id === modelId);
-  const acceptsImage = (Array.isArray(stored?.input) && stored!.input!.includes('image'))
-    || publicModelAbilitiesFor(modelId).vision === true
-    || recognition?.vision === true;
-  const declaredReasoning = (Array.isArray(stored?.reasoningLevels) && stored!.reasoningLevels!.length > 0)
-    || (stored?.reasoningParamsMap && Object.keys(stored!.reasoningParamsMap!).length > 0);
+  const storedInput = Array.isArray(stored?.input) ? stored!.input! : undefined;
+  const acceptsImage = storedInput != null
+    ? storedInput.includes('image')
+    : (publicModelAbilitiesFor(modelId).vision === true || recognition?.vision === true);
+  // 「存在即定音」与 updateCustomProviderModel 的部分更新语义对齐：未提供=
+  // 未声明（回退兜底），显式空数组/空对象=用户清空（不盲发参数）。
+  const reasoningConfigured = Array.isArray(stored?.reasoningLevels) || stored?.reasoningParamsMap !== undefined;
+  const reasoningOn = reasoningConfigured
+    ? ((Array.isArray(stored?.reasoningLevels) ? stored!.reasoningLevels!.length > 0 : false)
+      || Boolean(stored?.reasoningParamsMap && Object.keys(stored!.reasoningParamsMap!).length > 0))
+    : recognition?.reasoning === true;
   const capabilities = Array.isArray(stored?.capabilities) ? stored!.capabilities! : [];
   const model: Model<Api> = {
     id: modelId,
@@ -144,18 +158,10 @@ export function buildCustomProviderModel(
     provider: customProviderId(cp.id) as any,
     baseUrl: cp.baseUrl,
     ...(headers ? { headers } : {}),
-    // 方案 C（参数真透传）：reasoning 按配置声明优先（统一表单「推理等
-    // 级」），未声明回退识别器；识别不出（未知模型）保持关闭，不给不认
-    // 识的服务盲发参数。
-    reasoning: declaredReasoning === true || recognition?.reasoning === true,
+    reasoning: reasoningOn,
     input: acceptsImage ? ['text', 'image'] : ['text'],
-    ...(capabilities.includes('system_message') || capabilities.includes('structured_output')
-      ? {
-        compat: {
-          ...(capabilities.includes('system_message') ? { supportsDeveloperRole: true } : {}),
-          ...(capabilities.includes('structured_output') ? { supportsStrictMode: true } : {}),
-        },
-      }
+    ...(capabilities.includes('structured_output')
+      ? { compat: { supportsStrictMode: true } }
       : {}),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: metadata.contextWindow,

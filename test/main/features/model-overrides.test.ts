@@ -125,4 +125,25 @@ describe('内置预设的本地覆盖（窗口 / 最大输出）', () => {
     expect(list.models.find((entry) => entry.id === 'deepseek-flash'))
       .toMatchObject({ contextWindow: 1000000, maxTokens: 384000 });
   });
+
+  it('覆盖进入 rotating 候选 cap（pi-ai 内置路径，2026-09-14 修复）', async () => {
+    // rotating 层的 paramsFor 会用候选自己的 cap 无条件覆盖请求参数；此前
+    // pi-ai 分支取目录原值（不套 override），预设详情写下的输出上限被抹掉
+    // ——external 路径恰好被上面的用例覆盖到，这条钉住 pi-ai 路径。
+    const overrides = await import('../../../src/main/features/model_overrides');
+    overrides.installModelOverrideResolver();
+    const { rotatingCandidateMaxTokens } = await import('../../../src/main/model/core-agent/runner');
+
+    const resolved = { model: { id: 'claude-test-model', contextWindow: 200000, maxTokens: 8192 } };
+    // 未覆盖：目录原值直通
+    expect(rotatingCandidateMaxTokens('u', 'anthropic', 'claude-test-model', false, resolved, undefined))
+      .toBe(8192);
+    // 覆盖输出上限：rotating 候选 cap 跟随（设置页显示与实际请求一致）
+    overrides.setModelOverride(UID, 'anthropic', 'claude-test-model', { maxTokens: 100000 }, { contextWindow: 200000, maxTokens: 8192 });
+    expect(rotatingCandidateMaxTokens(UID, 'anthropic', 'claude-test-model', false, resolved, undefined))
+      .toBe(100000);
+    // resolvedModel 缺失（未知模型）：只剩 {id}，override 仍生效；未覆盖时 undefined
+    expect(rotatingCandidateMaxTokens(UID, 'anthropic', 'claude-test-model', false, null, undefined))
+      .toBe(100000);
+  });
 });

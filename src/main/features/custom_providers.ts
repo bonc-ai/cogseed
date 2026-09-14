@@ -179,9 +179,11 @@ function normalizeModel(
     contextWindow,
     maxTokens,
     ...(vision !== undefined ? { vision } : {}),
-    ...(input ? { input } : {}),
-    ...(capabilities ? { capabilities } : {}),
-    ...(reasoningLevels ? { reasoningLevels } : {}),
+    ...(input !== undefined && input.length ? { input } : {}),
+    ...(capabilities !== undefined && capabilities.length ? { capabilities } : {}),
+    // 空数组必须落库（不能按 falsy 丢弃）：「显式清空推理等级」是合法配置
+    // （运行时据此不发 thinking 参数），与「未提供=未声明」语义不同。
+    ...(reasoningLevels !== undefined ? { reasoningLevels } : {}),
     ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
     ...(enabled === false ? { enabled: false } : {}),
   };
@@ -231,7 +233,8 @@ function normalizeReasoningLevels(value: unknown): string[] | undefined {
     }
     if (!out.includes(token)) out.push(token);
   }
-  return out.length ? out : undefined;
+  // 数组输入原样返回（含空数组=显式清空，运行时据此不发 thinking 参数）。
+  return out;
 }
 
 function normalizeReasoningParamsMap(value: unknown): Record<string, unknown> | undefined {

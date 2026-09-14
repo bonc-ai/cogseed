@@ -109,11 +109,13 @@ describe('custom provider model persistence (真实磁盘回路)', () => {
     if (!emptied.ok) return;
     expect(emptied.model.input).toEqual(['text']);
     expect(emptied.model.vision).toBe(false);
-    expect(emptied.model.reasoningLevels).toBeUndefined();
+    // 显式清空的落地形态是空数组（2026-09-14 与运行时「配置字段存在即定音」
+    // 对齐：空数组=声明"不支持"，undefined=未声明回退兜底）。
+    expect(emptied.model.reasoningLevels).toEqual([]);
     expect(emptied.model.capabilities).toBeUndefined();
     expect(emptied.model.reasoningParamsMap).toBeUndefined();
     const cleared = providers.listCustomProviders(UID)[0].models.find((m) => m.id === 'rich-model');
-    expect(cleared?.reasoningLevels).toBeUndefined();
+    expect(cleared?.reasoningLevels).toEqual([]);
     expect(cleared?.capabilities).toBeUndefined();
     expect(cleared?.input).toEqual(['text']);
   });

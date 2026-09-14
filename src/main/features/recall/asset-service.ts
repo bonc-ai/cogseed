@@ -750,10 +750,11 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
  *
  *  只改写 normalizeAssetScopeValue 能归一的；词表值原样跳过（幂等）。
  *  不设 confirmed-投影冻结豁免（首版设了，实机验证推翻）：自动投影
- *  （proj-auto-*）永不过期且每轮重建，豁免窗口永远不打开——而版本递增
- *  走 append-only 快照，旧投影冻结的版本号仍能读到对应快照、注入内容
- *  不受影响（buildPromptContextForProjections 仅在快照缺失且 live 版本
- *  漂移时才跳过），因此迁移对被引用资产同样安全。 */
+ *  （proj-auto-*）永不过期且每轮重建，豁免窗口永远不打开。版本递增对
+ *  committed 投影并不"天然安全"——committed 校验器在读快照前就强校验
+ *  版本号，因此迁移在 bump 后必须同步刷新仍存活 confirmed 投影的
+ *  assetVersions（refreshCommittedProjectionAssetVersion，2026-09-14 补），
+ *  否则 requirement 存续期内每回合注入整体失败且无回退。 */
 export async function migrateLegacyFreeTextScopes(userId: string): Promise<number> {
   const { normalizeAssetScopeValue, isRecallScopeTerm } = await import('./scope-policy');
   let migrated = 0;
@@ -774,6 +775,13 @@ export async function migrateLegacyFreeTextScopes(userId: string): Promise<numbe
       });
       const migratedAsset = await readAbilityAsset(userId, asset.id);
       if (migratedAsset) {
+        // committed 投影冻结了旧版本号：必须同步刷新（动态 import 避免
+        // asset-service ↔ context-projection 静态循环依赖）。
+        const { refreshCommittedProjectionAssetVersion } = await import('./context-projection');
+        const refreshed = await refreshCommittedProjectionAssetVersion(userId, asset.id, String(migratedAsset.version));
+        if (refreshed > 0) {
+          log.info(`scope migration refreshed committed projections assetId=${asset.id} count=${refreshed}`);
+        }
         await appendVersion(userId, migratedAsset, {
           reason: `legacy free-text scope "${scope}" → controlled term "${normalized}" (2026-09-13 scope enumeration)`,
           actor: 'system',

@@ -1346,6 +1346,28 @@ async function buildExternalProvider(userId: string | null, providerId: string, 
  * and clear any prior cooldown on that profile (the key just proved it
  * works — don't keep skipping it).
  */
+/** rotating 候选的输出上限：external 候选走适配器（内部已套「预设详情」
+ *  覆盖）；pi-ai 内置候选必须同样套覆盖——rotating 层的 paramsFor 会用该
+ *  cap 无条件覆盖主回合参数，不套时目录原值会把用户在设置页写下的输出
+ *  上限抹掉（2026-09-14 修复：此前恰好只有 external 路径被测试覆盖到）。
+ *  导出供回归测试（同 bus.ts::_isDeepSeekOfficialBaseUrl 先例）。 */
+export function rotatingCandidateMaxTokens(
+  userId: string,
+  candProviderId: string,
+  candModelId: string,
+  isExternal: boolean,
+  resolvedModel: { model?: { id: string; contextWindow?: number; maxTokens?: number } } | null,
+  choiceMaxOutputTokens: number | undefined,
+): number | undefined {
+  if (isExternal) {
+    return buildExternalProviderModel(userId, candProviderId, candModelId, choiceMaxOutputTokens)?.maxTokens;
+  }
+  return applyModelAbilityOverride(candProviderId, {
+    id: candModelId,
+    ...(resolvedModel?.model ?? {}),
+  }).maxTokens;
+}
+
 async function buildRotatingProvider(
   mod: CA,
   userId: string | null,
@@ -1364,9 +1386,9 @@ async function buildRotatingProvider(
     // knows the primary's cap; carrying it to a fallback with a lower cap
     // makes that provider reject or truncate the request.
     const resolvedModel = isExternal ? null : resolveConfiguredPiModel(mod, candProviderId, candModelId);
-    const candMaxOutputTokens = isExternal
-      ? buildExternalProviderModel(userId, candProviderId, candModelId, choice.maxOutputTokens)?.maxTokens
-      : resolvedModel?.model.maxTokens;
+    const candMaxOutputTokens = rotatingCandidateMaxTokens(
+      userId, candProviderId, candModelId, isExternal, resolvedModel, choice.maxOutputTokens,
+    );
     return {
       profileId: choice.profileId,
       providerId: candProviderId,

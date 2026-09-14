@@ -1535,7 +1535,9 @@ if (!gotLock) {
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     // A 轨道（2026-09-13 scope 枚举化）：存量自由文本 scope（"用户全局画像"）
     // 归一为受控词表——否则自动投影永远 scope_mismatch，确认资产在正式通道
-    // 失效。幂等；被未过期 confirmed 投影引用的资产跳过。
+    // 失效。幂等；迁移会同步刷新仍存活 committed 投影的版本快照（2026-09-14
+    // 补——此前"跳过被引用资产"的说法与实现相反，committed 校验器的版本
+    // 强校验会让注入整体失败）。
     registerDeferred('recall:migrate-legacy-scopes', async () => {
       const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
       await migrateLegacyFreeTextScopes(users.getActiveUserId());

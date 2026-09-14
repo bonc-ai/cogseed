@@ -694,7 +694,9 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
       ...(modelEnabled === false ? { enabled: false } : {}),
       ...(input ? { input } : {}),
       ...(capabilities ? { capabilities } : {}),
-      ...(reasoningLevels ? { reasoningLevels } : {}),
+      // 空数组=用户显式清空推理等级（合法配置，运行时据此不发 thinking
+      // 参数），不能按 falsy 丢弃——与写入侧 normalizeModel 口径一致。
+      ...(reasoningLevels !== undefined ? { reasoningLevels } : {}),
       ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
     });
     if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
@@ -739,7 +741,9 @@ function parseCustomProviderReasoningLevels(value: unknown): string[] | undefine
     out.push(token);
     if (out.length >= MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS) break;
   }
-  return out.length ? out : undefined;
+  // 数组输入原样返回（含空数组=显式清空）；只有非数组才视为未声明——
+  // 与写侧 normalizeModel 的「显式空=清空、未提供=未声明」口径一致。
+  return out;
 }
 
 function parseCustomProviderReasoningMap(value: unknown): Record<string, unknown> | undefined {

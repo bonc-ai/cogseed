@@ -760,6 +760,36 @@ export function validateCommittedProjectionAssetVersions(
   return validateFrozenProjectionAssets(userId, projection, true);
 }
 
+/** 系统级版本递增（如 scope 词表迁移 bump version）后，同步刷新仍存活
+ *  committed 投影冻结的 assetVersions。committed 校验器在读快照之前就强
+ *  校验 `expected[assetId] !== asset.version → throw`，不刷新的话迁移会让
+ *  requirement 存续期内每回合注入整体失败（projection_asset_version_changed）
+ *  且无任何回退——旧实现的安全论证引用的是非 committed 路径的宽容跳过，
+ *  论证对象错了（2026-09-14 修复）。只动版本号快照，注入内容仍按投影
+ *  确认时冻结的语句；返回刷新的投影条数。 */
+export async function refreshCommittedProjectionAssetVersion(
+  userId: string,
+  assetId: string,
+  newVersion: string,
+): Promise<number> {
+  let refreshed = 0;
+  const projections = await listContextProjections(userId, { limit: 100 });
+  for (const projection of projections) {
+    if (!isCommittedProjection(projection)) continue;
+    if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) continue;
+    if (!Array.isArray(projection.assetIds) || !projection.assetIds.includes(assetId)) continue;
+    if (projection.assetVersions && projection.assetVersions[assetId] === newVersion) continue;
+    await updateRecallJsonRecord(userId, 'projections', projection.id, (raw) => {
+      const current = asProjection(raw);
+      if (!current.assetVersions || current.assetVersions[assetId] === newVersion) return current;
+      current.assetVersions = { ...current.assetVersions, [assetId]: newVersion };
+      return current;
+    });
+    refreshed += 1;
+  }
+  return refreshed;
+}
+
 
 export async function deferContextProjection(userId: string, projectionId: string, note?: string): Promise<ContextProjectionRecord> {
   const updated = await updateRecallJsonRecord(userId, 'projections', projectionId, (raw) => {
