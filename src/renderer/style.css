@@ -9839,11 +9839,18 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    See modules/chat-artifact.js. Understated chrome (a title bar + reload)
    so it reads as an inline panel, not a separate window. */
 .chat-artifact-host { margin-top: 10px; }
+/* 确认卡片布局（2026-09-14 评审定稿 v3，对齐大厂主流惯例）：
+   卡片随消息内容走——气泡拉伸铺满消息块，卡片 100% 铺满气泡、
+   左缘与助手输出首行文字左缘对齐（margin 0，不居中、不溢出消息列）。
+   ChatGPT/Claude 等主流产品的内嵌卡片均为此模式。 */
+.chat-message.assistant .chat-bubble:has(.chat-artifact-host) {
+  align-self: stretch;
+  width: 100%;
+}
 .chat-artifact-card {
-  /* 宽度与助手气泡一致（2026-09-14 Bug3 修复）：占满气泡内容宽，
-     不再按比例收窄居中——与 .delete-confirm-card 的 80% 基准同口径。 */
   width: 100%;
   max-width: 100%;
+  margin: 0;
   min-width: 280px;
   border: 1px solid var(--border);
   border-radius: 10px;

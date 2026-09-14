@@ -26,12 +26,19 @@
   // Bug2（2026-09-14）：字段键名展示映射——技术键名换成中文标签，
   // 挑战名（challengeTitle）与 ID 分开呈现，不再只露一串裸 ID。
   var FIELD_LABELS = {
+    '提交身份': '提交身份',
+    'studentId': '学号',
     'challengeTitle': '挑战名称',
     'challengeId': '挑战 ID',
     'projectTitle': '项目标题',
     'githubRepoUrl': 'GitHub 仓库',
-    'studentId': '学号',
-    '提交身份': '提交身份'
+    'aarText': 'AAR 自述',
+    'selfEvaluation': '自评',
+    'projectSummary': '项目摘要',
+    'isPublic': '是否公开',
+    'workdir': '工作目录',
+    'requiredDelivery': '必交交付物',
+    'cohort': '班级'
   };
 
   function esc(s) {
