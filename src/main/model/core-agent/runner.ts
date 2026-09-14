@@ -98,6 +98,7 @@ import {
   isCustomProviderId,
 } from './custom_provider_runtime';
 import { EXTERNAL_API_PROVIDERS, resolveConfiguredPiModel } from '../provider_catalog';
+import { applyModelAbilityOverride, modelAbilityOverrideFor } from '../model_ability_overrides';
 import { readDisabledSets } from '../../features/component_enabled';
 import { nativeSearchToolForApi, nativeSearchToolName } from './native-search-tools';
 import { hasAnySearchProfile } from '../../features/search_auth';
@@ -127,7 +128,8 @@ function buildExternalProviderModel(userId: string | null, providerId: string, m
     case 'moonshot':
       return buildMoonshotModel(modelId);
     case 'deepseek':
-      return buildDeepSeekModel(modelId);
+      // 本地覆盖（设置页「预设详情」）优先于预设：窗口/输出是运行时预算的来源。
+      return buildDeepSeekModel(modelId, modelAbilityOverrideFor('deepseek', modelId));
     case 'doubao':
       return buildDoubaoModel(modelId);
     case 'openai-compatible':
@@ -1140,7 +1142,14 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     const model = (EXTERNAL_API_PROVIDERS.includes(choice.provider) || isCustomProviderId(choice.provider))
       ? buildExternalProviderModel(uid, choice.provider, choice.model, choice.maxOutputTokens)
       : resolveConfiguredPiModel(mod, choice.provider, choice.model)?.model;
-    const entry = modelCatalogEntryFromModel(model);
+    // pi-ai 目录模型同样吃本地覆盖（窗口/输出），否则设置页改了窗口、运行时仍按
+    // 目录值预算（2026-09-14 预设详情功能的运行时半环）。
+    const overridden = applyModelAbilityOverride(choice.provider, {
+      id: choice.model,
+      ...(typeof model?.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model?.maxTokens === 'number' ? { maxTokens: model.maxTokens } : {}),
+    });
+    const entry = modelCatalogEntryFromModel(overridden);
     if (entry) modelCatalog[choice.model] = { provider: choice.provider, model: choice.model, ...entry };
   }
   const config: CoreAgentConfig = mod.createConfig({
@@ -1303,7 +1312,11 @@ async function buildExternalProvider(userId: string | null, providerId: string, 
     case 'moonshot':
       return await createMoonshotProvider({ apiKey, modelId });
     case 'deepseek':
-      return await createDeepSeekProvider({ apiKey, modelId });
+      return await createDeepSeekProvider({
+        apiKey,
+        modelId,
+        override: modelAbilityOverrideFor('deepseek', modelId),
+      });
     case 'doubao':
       return await createDoubaoProvider({ apiKey, modelId });
     case 'openai-compatible':

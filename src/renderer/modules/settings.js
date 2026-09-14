@@ -1425,6 +1425,15 @@ function _settingsRerenderCustomProviderModalForI18n() {
     return;
   }
 
+  if (view.kind === 'preset-detail' && provider) {
+    // 预设详情属于内置 provider（不在 customProviders 里）：用条目回填标题，
+    // 数据每次重开都重新拉（覆盖值可能刚被别处改过）。
+    const entry = (_settingsState.entries || []).find((item) => item.provider === view.providerId)
+      || { provider: view.providerId, providerLabel: provider.name || view.providerId };
+    _settingsOpenPresetDetail(entry);
+    return;
+  }
+
   if (view.kind === 'model-form' && provider) {
     const body = document.getElementById('settings-custom-provider-modal-body');
     // 重渲染前取整份表单状态：高级配置（输入类型/能力/推理等级/参数映射）
@@ -3001,6 +3010,220 @@ function _settingsRenderEntries() {
   });
 }
 
+// ── 内置预设详情 + 本地覆盖（窗口 / 最大输出）─────────────────────────────
+// 内置 provider 的模型清单来自产品预设（或 Server 目录），用户既看不到也改不了；
+// 而运行时预算（上下文压缩阈值、max_tokens）就挂在这些数字上。这个面板把「预设值
+// vs 生效值」摊开，并允许按模型写本地覆盖（cloud/config/model-overrides.json）。
+// 覆盖只影响本机生效值，不改预设、不改 Server 配置。
+
+function _settingsFormatAbilityPair(windowValue, outputValue) {
+  return t('settings.preset.value_pair', {
+    window: _settingsFormatTokenLimit(windowValue) || '—',
+    output: _settingsFormatTokenLimit(outputValue) || '—',
+  });
+}
+
+async function _settingsOpenPresetDetail(entry) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  if (!overlay || !title || !body || !actions || !entry?.provider) return;
+  const provider = { id: entry.provider, name: entry.providerLabel || entry.provider };
+  _settingsSetCustomProviderModalView('preset-detail', provider, null, false);
+  title.textContent = `${entry.providerLabel || entry.provider} · ${t('settings.preset.title')}`;
+  body.innerHTML = `<p class="settings-custom-provider-modal-subtitle">${escapeHtml(t('settings.preset.subtitle'))}</p>`
+    + `<div class="settings-preset-list" id="settings-preset-list"><div class="settings-empty">${escapeHtml(t('common.loading'))}</div></div>`;
+  actions.innerHTML = '';
+  const closeButton = document.createElement('button');
+  closeButton.className = 'btn';
+  closeButton.textContent = t('common.close');
+  closeButton.addEventListener('click', () => _settingsCloseModal(overlay));
+  actions.appendChild(closeButton);
+  _settingsCustomProviderModalStatus('', '');
+  if (!overlay.classList.contains('open')) _settingsOpenModal(overlay);
+  await _settingsRenderPresetDetail(entry);
+}
+
+async function _settingsRenderPresetDetail(entry) {
+  const listEl = document.getElementById('settings-preset-list');
+  if (!listEl) return;
+  const res = await _settingsCallCustomProvider('modelOverrides.list', { provider: entry.provider });
+  // 面板可能已被关掉/换页：只在还停在预设详情时写 DOM。
+  if (!listEl.isConnected) return;
+  if (!res || res.ok === false) {
+    listEl.innerHTML = '';
+    const error = document.createElement('div');
+    error.className = 'settings-empty';
+    error.textContent = (res && res.error) || t('settings.preset.load_failed');
+    listEl.appendChild(error);
+    return;
+  }
+  const models = Array.isArray(res.models) ? res.models : [];
+  const caps = res.caps || {};
+  listEl.innerHTML = '';
+  if (!models.length) {
+    const empty = document.createElement('div');
+    empty.className = 'settings-empty';
+    empty.textContent = t('settings.preset.empty');
+    listEl.appendChild(empty);
+    return;
+  }
+  for (const model of models) listEl.appendChild(_settingsPresetModelRow(entry, model, caps));
+}
+
+function _settingsPresetModelRow(entry, model, caps) {
+  const row = document.createElement('div');
+  row.className = 'settings-preset-row' + (model.overridden ? ' is-overridden' : '');
+  row.dataset.modelId = model.id;
+
+  const head = document.createElement('div');
+  head.className = 'settings-preset-row-head';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'settings-preset-row-name';
+  const strong = document.createElement('strong');
+  strong.textContent = model.name || model.id;
+  const idEl = document.createElement('span');
+  idEl.className = 'settings-preset-row-id';
+  idEl.textContent = model.id;
+  nameEl.appendChild(strong);
+  nameEl.appendChild(idEl);
+  head.appendChild(nameEl);
+
+  const values = document.createElement('div');
+  values.className = 'settings-preset-row-values';
+  const presetEl = document.createElement('span');
+  presetEl.className = 'settings-preset-value';
+  presetEl.textContent = `${t('settings.preset.column_preset')} ${_settingsFormatAbilityPair(model.preset?.contextWindow, model.preset?.maxTokens)}`;
+  values.appendChild(presetEl);
+  if (model.overridden) {
+    const effectiveEl = document.createElement('span');
+    effectiveEl.className = 'settings-preset-value is-effective';
+    effectiveEl.textContent = `${t('settings.preset.column_effective')} ${_settingsFormatAbilityPair(model.effective?.contextWindow, model.effective?.maxTokens)}`;
+    values.appendChild(effectiveEl);
+    const badge = document.createElement('span');
+    badge.className = 'settings-preset-badge';
+    badge.textContent = t('settings.preset.overridden');
+    values.appendChild(badge);
+  }
+  head.appendChild(values);
+  row.appendChild(head);
+
+  const rowActions = document.createElement('div');
+  rowActions.className = 'settings-preset-row-actions';
+  rowActions.appendChild(_settingsCustomProviderActionButton(
+    'settings',
+    model.overridden ? t('settings.preset.edit') : t('settings.preset.override'),
+    'btn btn-sm',
+    () => _settingsTogglePresetEditor(row, entry, model, caps),
+  ));
+  if (model.overridden) {
+    rowActions.appendChild(_settingsCustomProviderActionButton(
+      'refresh',
+      t('settings.preset.reset'),
+      'btn btn-sm',
+      () => _settingsResetPresetOverride(entry, model),
+    ));
+  }
+  row.appendChild(rowActions);
+  return row;
+}
+
+function _settingsTogglePresetEditor(row, entry, model, caps) {
+  const existing = row.querySelector('.settings-preset-editor');
+  if (existing) { existing.remove(); return; }
+  const editor = document.createElement('div');
+  editor.className = 'settings-preset-editor';
+  const windowId = `settings-preset-window-${model.id}`;
+  const outputId = `settings-preset-output-${model.id}`;
+  const maxWindow = Number(caps.contextWindow) || _CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW;
+  const maxOutput = Number(caps.maxTokens) || _CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS;
+  editor.innerHTML = '<div class="settings-preset-editor-fields">'
+    + window.uiField({
+      id: windowId,
+      label: t('settings.preset.context_window'),
+      hint: t('settings.preset.caps_hint', { max: String(maxWindow) }),
+      control: {
+        kind: 'input',
+        type: 'number',
+        value: model.effective?.contextWindow == null ? '' : String(model.effective.contextWindow),
+        attrs: { min: '1', max: String(maxWindow), step: '1' },
+      },
+    })
+    + window.uiField({
+      id: outputId,
+      label: t('settings.preset.max_tokens'),
+      hint: t('settings.preset.caps_hint', { max: String(maxOutput) }),
+      control: {
+        kind: 'input',
+        type: 'number',
+        value: model.effective?.maxTokens == null ? '' : String(model.effective.maxTokens),
+        attrs: { min: '1', max: String(maxOutput), step: '1' },
+      },
+    })
+    + '</div>'
+    + `<div class="settings-preset-editor-error form-msg"></div>`
+    + `<div class="settings-preset-editor-actions">`
+    + window.uiButton({ label: t('common.save'), role: 'primary', size: 'sm', className: 'settings-preset-save' })
+    + window.uiButton({ label: t('common.cancel'), role: 'secondary', size: 'sm', className: 'settings-preset-cancel' })
+    + window.uiButton({ label: t('settings.preset.reset'), role: 'ghost', size: 'sm', className: 'settings-preset-reset' })
+    + '</div>';
+  row.appendChild(editor);
+  const errorEl = editor.querySelector('.settings-preset-editor-error');
+  const setError = (text) => { if (errorEl) errorEl.textContent = text || ''; };
+  editor.querySelector('.settings-preset-cancel')?.addEventListener('click', () => editor.remove());
+  editor.querySelector('.settings-preset-reset')?.addEventListener('click', () => _settingsResetPresetOverride(entry, model));
+  editor.querySelector('.settings-preset-save')?.addEventListener('click', async () => {
+    // 按 DOM 顺序取两个输入（模型 id 可能含 '/' 或 '.'，不做 id 选择器拼接）。
+    const inputs = Array.from(editor.querySelectorAll('.ui-input'));
+    const rawWindow = String(inputs[0]?.value || '').trim();
+    const rawOutput = String(inputs[1]?.value || '').trim();
+    const parsedWindow = rawWindow ? Number(rawWindow) : null;
+    const parsedOutput = rawOutput ? Number(rawOutput) : null;
+    if (parsedWindow !== null && (!Number.isSafeInteger(parsedWindow) || parsedWindow <= 0 || parsedWindow > maxWindow)) {
+      setError(t('settings.preset.error_window', { max: String(maxWindow) }));
+      return;
+    }
+    if (parsedOutput !== null && (!Number.isSafeInteger(parsedOutput) || parsedOutput <= 0 || parsedOutput > maxOutput)) {
+      setError(t('settings.preset.error_output', { max: String(maxOutput) }));
+      return;
+    }
+    const effectiveWindow = parsedWindow ?? model.preset?.contextWindow;
+    const effectiveOutput = parsedOutput ?? model.preset?.maxTokens;
+    if (Number.isFinite(effectiveWindow) && Number.isFinite(effectiveOutput) && effectiveOutput > effectiveWindow) {
+      setError(t('settings.preset.error_order'));
+      return;
+    }
+    setError('');
+    const saved = await _settingsCallCustomProvider('modelOverrides.set', {
+      provider: entry.provider,
+      model: model.id,
+      contextWindow: parsedWindow,
+      maxTokens: parsedOutput,
+    });
+    if (!saved || saved.ok === false) {
+      setError((saved && saved.error) || t('settings.preset.save_failed'));
+      return;
+    }
+    _settingsCustomProviderModalStatus('ok', t('settings.preset.saved'));
+    await _settingsReload();
+    const refreshed = _settingsState.entries.find((e) => e.entryId === entry.entryId) || entry;
+    await _settingsRenderPresetDetail(refreshed);
+  });
+}
+
+async function _settingsResetPresetOverride(entry, model) {
+  const res = await _settingsCallCustomProvider('modelOverrides.clear', { provider: entry.provider, model: model.id });
+  if (!res || res.ok === false) {
+    _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.preset.save_failed'));
+    return;
+  }
+  _settingsCustomProviderModalStatus('ok', t('settings.preset.reset_done'));
+  await _settingsReload();
+  const refreshed = _settingsState.entries.find((e) => e.entryId === entry.entryId) || entry;
+  await _settingsRenderPresetDetail(refreshed);
+}
+
 function _settingsEntryModelState(entry, list) {
   const unavailable = entry.modelAvailable === false;
   return {
@@ -3184,6 +3407,16 @@ function _settingsRenderEntryRow(entry, idx) {
         () => _settingsOpenCustomProviderDetails(customProvider),
       ));
     }
+  } else {
+    // 内置预设行此前没有入口（只有自定义供应商有齿轮），预设的模型参数既看不到
+    // 也改不了——2026-09-14 排查 DeepSeek 直连时正是卡在这里。齿轮打开「预设
+    // 详情」：每个模型一行，展示预设值/生效值，并允许本地覆盖窗口与最大输出。
+    actions.appendChild(_settingsCustomProviderActionButton(
+      'settings',
+      t('settings.preset.manage'),
+      'icon-btn settings-entry-preset-manage',
+      () => _settingsOpenPresetDetail(entry),
+    ));
   }
 
   const testBtn = document.createElement('button');

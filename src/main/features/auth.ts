@@ -65,6 +65,7 @@ import { safeId } from '../storage';
 import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
+import { resolveModelOverride } from './model_overrides';
 import {
   CATALOG,
   FEATURED_API_PROVIDERS,
@@ -1337,7 +1338,9 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
     }
     return out;
   };
-  const curated = curatedModelsFor(id);
+  // 本地覆盖（设置页「预设详情」）优先于预设：模型下拉/上下文分母读的就是这里，
+  // 设置页改了窗口而列表还显示预设值会立刻造成"界面与运行时两套数"。
+  const curated = applyModelOverrides(id, curatedModelsFor(id));
   if (curated.length) return { models: await annotate(allowed(curated)) };
   try {
     const mod = await ca();
@@ -1521,6 +1524,25 @@ export interface EntryView {
   modelAvailable?: false;
   createdAt: number;
   lastUsed: number;
+}
+
+/** 用户本地覆盖（features/model_overrides）叠加到预设条目上，覆盖字段优先。 */
+function applyModelOverrides<T extends { id: string; contextWindow?: number; maxTokens?: number }>(
+  providerId: string,
+  models: T[],
+): T[] {
+  let uid = '';
+  try { uid = getActiveUserId(); } catch { return models; }
+  if (!uid) return models;
+  return models.map((model) => {
+    const override = resolveModelOverride(uid, providerId, model.id);
+    if (!override) return model;
+    return {
+      ...model,
+      ...(typeof override.contextWindow === 'number' ? { contextWindow: override.contextWindow } : {}),
+      ...(typeof override.maxTokens === 'number' ? { maxTokens: override.maxTokens } : {}),
+    };
+  });
 }
 
 function entryToView(e: Entry, store: ProfilesFile, modelNameLookup: (p: string, m: string) => string): EntryView {
@@ -2868,7 +2890,15 @@ export async function testAuthorizationDraft(
       if (EXTERNAL_API_PROVIDERS.includes(providerId)) {
         const ext = await import('../model/core-agent/external-providers');
         if (providerId === 'moonshot') provider = await ext.createMoonshotProvider({ apiKey, modelId: model });
-        else if (providerId === 'deepseek') provider = await ext.createDeepSeekProvider({ apiKey, modelId: model });
+        else if (providerId === 'deepseek') {
+          provider = await ext.createDeepSeekProvider({
+            apiKey,
+            modelId: model,
+            override: (() => {
+              try { return resolveModelOverride(getActiveUserId(), 'deepseek', model); } catch { return null; }
+            })(),
+          });
+        }
         else if (providerId === 'doubao') provider = await ext.createDoubaoProvider({ apiKey, modelId: model });
         else if (providerId === 'openai-compatible') {
           provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: input.baseUrl || '', modelId: model });
@@ -2946,7 +2976,13 @@ export async function testConnection(
       } else if (pid === 'deepseek') {
         // Default probe = V4 Flash (cheaper than Pro; fine for a 1-token ping).
         probeModel = probeModel || 'deepseek-v4-flash';
-        provider = await ext.createDeepSeekProvider({ apiKey, modelId: probeModel });
+        provider = await ext.createDeepSeekProvider({
+          apiKey,
+          modelId: probeModel,
+          override: (() => {
+            try { return resolveModelOverride(getActiveUserId(), 'deepseek', probeModel); } catch { return null; }
+          })(),
+        });
       } else if (pid === 'doubao') {
         // Default probe = Seed 2.0 Lite (cheaper than Pro).
         probeModel = probeModel || 'doubao-seed-2-0-lite-260215';

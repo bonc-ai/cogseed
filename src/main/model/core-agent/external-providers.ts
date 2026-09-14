@@ -205,7 +205,11 @@ function deepseekReasonsById(modelId: string): boolean {
   return /^deepseek-v4([.-]|$)/.test(id) || /^deepseek-flash$/.test(id) || /reasoner/.test(id);
 }
 
-export function buildDeepSeekModel(modelId: string): Model<'openai-completions'> {
+export function buildDeepSeekModel(
+  modelId: string,
+  /** 用户本地覆盖（设置页「预设详情」）：窗口/输出以覆盖为准，预设兜底。 */
+  override?: { contextWindow?: number; maxTokens?: number } | null,
+): Model<'openai-completions'> {
   const curated = curatedModelsFor('deepseek').find((m) => m.id === modelId);
   // 单一口径（2026-09-14）：窗口/输出/多模态一律读公共预设（含未上架别名），
   // 适配器不再自带第二张表——此前 v4-flash-vision-exp 等未登记 id 会静默
@@ -226,21 +230,23 @@ export function buildDeepSeekModel(modelId: string): Model<'openai-completions'>
     // 多模态输入被结构性降级为 OCR。
     input: abilities.vision === true || DEEPSEEK_VISION_HINT.test(modelId) ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: abilities.contextWindow ?? DEEPSEEK_FALLBACK_CONTEXT_WINDOW,
-    maxTokens: abilities.maxTokens ?? DEEPSEEK_FALLBACK_MAX_TOKENS,
+    contextWindow: override?.contextWindow ?? abilities.contextWindow ?? DEEPSEEK_FALLBACK_CONTEXT_WINDOW,
+    maxTokens: override?.maxTokens ?? abilities.maxTokens ?? DEEPSEEK_FALLBACK_MAX_TOKENS,
   };
 }
 
 export interface CreateDeepSeekProviderConfig {
   apiKey: string;
   modelId: string;
+  /** 用户本地覆盖（窗口/输出），透传给 buildDeepSeekModel。 */
+  override?: { contextWindow?: number; maxTokens?: number } | null;
 }
 
 export async function createDeepSeekProvider(config: CreateDeepSeekProviderConfig): Promise<LLMProvider> {
   if (!config.apiKey) throw new Error('deepseek: apiKey required');
   if (!config.modelId) throw new Error('deepseek: modelId required');
   const mod = await ca();
-  const model = buildDeepSeekModel(config.modelId);
+  const model = buildDeepSeekModel(config.modelId, config.override);
   return mod.createPiProvider({
     provider: 'deepseek',
     apiKey: config.apiKey,

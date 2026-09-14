@@ -192,6 +192,12 @@ class FakeElement {
   getBoundingClientRect() {
     return { top: 0, bottom: 20, left: 0, right: 100, width: 100, height: 20 };
   }
+
+  // 面板渲染有"元素已被移除就不再写 DOM"的守卫（避免异步回来写进已关闭的弹窗）；
+  // harness 需要如实建模"挂在父节点上 = 仍在文档里"。
+  get isConnected() {
+    return this.parentElement !== null;
+  }
 }
 
 function buildHarness() {
@@ -268,6 +274,16 @@ function buildHarness() {
       };
     }
     if (channel === 'customProviders.ccswitch.sync') return { ok: true, syncedIds: payload?.externalIds || [] };
+    if (channel === 'modelOverrides.list') {
+      return {
+        ok: true,
+        provider: payload?.provider,
+        caps: { contextWindow: 16777216, maxTokens: 1048576 },
+        models: [{ id: 'deepseek-flash', name: 'DeepSeek Flash', preset: { contextWindow: 1000000, maxTokens: 384000 }, effective: { contextWindow: 1000000, maxTokens: 384000 }, overridden: false }],
+      };
+    }
+    if (channel === 'modelOverrides.set') return { ok: true, override: { contextWindow: payload?.contextWindow, maxTokens: payload?.maxTokens } };
+    if (channel === 'modelOverrides.clear') return { ok: true, cleared: true };
     return { ok: true };
   });
 
@@ -337,6 +353,15 @@ function buildHarness() {
     uiAlert: vi.fn(async () => undefined),
     _aiSelectMount: aiSelectMount,
   };
+  // 共享表单/按钮工厂的真实实现由 ui-form.js / ui-button.js 提供（经典脚本）；
+  // VM 里只装最小等价桩：字段要带出可寻址的输入，按钮要带出可点标签。
+  windowObj.uiField = (options: any) => {
+    const control = options?.control || {};
+    return '<div class="ui-field"><span class="ui-field__label">' + String(options?.label || '') + '</span>'
+      + `<input id="${String(options?.id || '')}" class="form-input ui-input" value="${control.value == null ? '' : String(control.value)}" /></div>`;
+  };
+  windowObj.uiButton = (options: any) => `<button type="button" class="btn ui-button ${String(options?.className || '')}" data-label="${String(options?.label || '')}">${String(options?.label || '')}</button>`;
+  windowObj.uiIconButton = (options: any) => `<button type="button" class="ui-icon-button" data-label="${String(options?.label || '')}"></button>`;
   vm.createContext(context);
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8'), context, { filename: 'settings.js' });
   return { context, registry, invoke, windowObj, documentListeners, aiSelectMount };
@@ -1020,6 +1045,85 @@ describe('settings model providers surface', () => {
     await manageButton!.click();
     expect(registry.get('settings-custom-provider-modal')!.classList.contains('open')).toBe(true);
     expect(registry.get('settings-custom-provider-modal-title')!.textContent).toBe('Disabled Relay');
+  });
+
+  it('gives built-in preset rows a settings entry and writes a local window/output override', async () => {
+    const { context, registry, invoke } = buildHarness();
+    context.__entries = [{
+      entryId: 'e-ds', provider: 'deepseek', providerLabel: 'DeepSeek', providerKind: 'builtin',
+      model: 'deepseek-flash', modelName: 'DeepSeek Flash',
+      profileId: 'deepseek:dp', profileLabel: 'dp', profileType: 'api_key',
+    }];
+    vm.runInContext('_settingsState.entries = __entries; _settingsRenderEntries();', context);
+
+    // 内置行此前没有齿轮（预设不可见不可改）：现在必须有，且指向预设详情。
+    const entryRow = registry.get('settings-entries')!.children[0];
+    const presetGear = entryRow.querySelectorAll('.icon-btn')
+      .find((button) => button.className.includes('settings-entry-preset-manage'));
+    expect(presetGear).toBeTruthy();
+
+    await presetGear!.click();
+    expect(invoke).toHaveBeenCalledWith('modelOverrides.list', { provider: 'deepseek' });
+    const list = registry.get('settings-preset-list')!;
+    expect(list.children).toHaveLength(1);
+    const presetRow = list.children[0];
+    expect(presetRow.querySelector('.settings-preset-row-id')!.textContent).toBe('deepseek-flash');
+    expect(presetRow.querySelector('.settings-preset-value')!.textContent)
+      .toContain('settings.preset.column_preset');
+    expect(presetRow.classList.contains('is-overridden')).toBe(false);
+
+    // 行内覆盖：打开编辑器（字段带出当前生效值）→ 改窗口 → 保存
+    const row = list.children[0];
+    const overrideButton = row.querySelectorAll('.btn')[0];
+    await overrideButton.click();
+    const editor = row.querySelector('.settings-preset-editor');
+    expect(editor).toBeTruthy();
+    const inputs = editor!.querySelectorAll('.ui-input');
+    expect(inputs.map((input) => input.value)).toEqual(['1000000', '384000']);
+
+    inputs[0].value = '512000';
+    inputs[1].value = '';
+    const saveButton = editor!.querySelector('.settings-preset-save');
+    expect(saveButton).toBeTruthy();
+    await saveButton!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const call = invoke.mock.calls.find(([channel]) => channel === 'modelOverrides.set');
+    expect(call).toBeTruthy();
+    expect(call![1]).toEqual({ provider: 'deepseek', model: 'deepseek-flash', contextWindow: 512000, maxTokens: null });
+    // 保存后刷新条目状态（列表/上下文分母跟着变）
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'auth.listEntries').length).toBeGreaterThan(0);
+  });
+
+  it('refuses an out-of-range or inverted override before hitting IPC', async () => {
+    const { context, registry, invoke } = buildHarness();
+    context.__entries = [{
+      entryId: 'e-ds', provider: 'deepseek', providerLabel: 'DeepSeek', providerKind: 'builtin',
+      model: 'deepseek-flash', modelName: 'DeepSeek Flash', profileId: 'deepseek:dp', profileLabel: 'dp', profileType: 'api_key',
+    }];
+    vm.runInContext('_settingsState.entries = __entries; _settingsRenderEntries();', context);
+    await registry.get('settings-entries')!.children[0].querySelectorAll('.icon-btn')
+      .find((button) => button.className.includes('settings-entry-preset-manage'))!.click();
+    const row = registry.get('settings-preset-list')!.children[0];
+    await row.querySelectorAll('.btn')[0].click();
+    const editor = row.querySelector('.settings-preset-editor')!;
+    const inputs = editor.querySelectorAll('.ui-input');
+    const saveButton = () => editor.querySelector('.settings-preset-save')!;
+
+    inputs[0].value = '0';
+    await saveButton().click();
+    expect(invoke.mock.calls.some(([channel]) => channel === 'modelOverrides.set')).toBe(false);
+
+    inputs[0].value = '1000000';
+    inputs[1].value = '2000000';   // 超过最大输出上限
+    await saveButton().click();
+    expect(invoke.mock.calls.some(([channel]) => channel === 'modelOverrides.set')).toBe(false);
+
+    inputs[0].value = '256000';
+    inputs[1].value = '384000';    // 输出 > 窗口
+    await saveButton().click();
+    expect(invoke.mock.calls.some(([channel]) => channel === 'modelOverrides.set')).toBe(false);
+    expect(editor.querySelector('.settings-preset-editor-error')!.textContent).toBe('settings.preset.error_order');
   });
 
   it('reloads includeUnavailable entries after reordering instead of trusting the filtered response', async () => {

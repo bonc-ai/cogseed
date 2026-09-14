@@ -1446,6 +1446,12 @@ if (!gotLock) {
     registerImmediate('p3394:bridge', () => {
       void maybeStartP3394Bridge().then((handle) => { p3394AppBridge = handle; });
     }, 'serial');
+    // 模型窗口/输出的用户本地覆盖：把存储层解析器装进模型层（runner 只问
+    // "这个 (provider, model) 被覆盖了吗"，不自己读用户数据）。
+    registerImmediate('model-overrides:resolver', async () => {
+      const { installModelOverrideResolver } = await import('./features/model_overrides');
+      installModelOverrideResolver();
+    }, 'serial');
     registerImmediate('skills:version-recovery', async () => {
       const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
       const result = await recoverSkillVersionMutations(users.getActiveUserId());

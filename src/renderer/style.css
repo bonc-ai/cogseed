@@ -17034,6 +17034,93 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--danger);
   font-size: 13px;
 }
+/* 内置预设详情（2026-09-14）：预设行齿轮打开的面板——每个模型一行展示
+   预设值/生效值，支持本地覆盖窗口与最大输出（只改本机生效值，不动预设）。 */
+.settings-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.settings-preset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.settings-preset-row.is-overridden { border-color: var(--primary-soft, var(--primary)); }
+.settings-preset-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.settings-preset-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-preset-row-name strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-preset-row-id {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-preset-row-values {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.settings-preset-value.is-effective { color: var(--text); }
+.settings-preset-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.settings-preset-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-preset-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+.settings-preset-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.settings-preset-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
 .settings-custom-provider-detail-model-row {
   display: flex;
   align-items: center;

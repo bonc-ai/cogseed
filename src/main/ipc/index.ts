@@ -108,6 +108,8 @@ import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
 import * as customProviders from '../features/custom_providers';
+import * as modelOverrides from '../features/model_overrides';
+import { curatedModelsFor } from '../model/provider_catalog';
 import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
 import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
@@ -4959,6 +4961,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
     return customProviders.setCustomProviderEnabled(ctx.userId, id, args.enabled);
   },
+  // ── 内置预设的本地覆盖（设置页「预设详情」）──
+  // 窗口/输出的用户级覆盖：只改本机生效值（运行时预算 + 模型下拉），不动预设。
+  'modelOverrides.list': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const presetModels = curatedModelsFor(provider);
+    return {
+      ok: true,
+      provider,
+      models: modelOverrides.describeModelAbilityOverrides(ctx.userId, provider, presetModels),
+      caps: {
+        contextWindow: modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW,
+        maxTokens: modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS,
+      },
+    };
+  },
+  'modelOverrides.set': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const model = boundedText(args?.model, 'model', 200);
+    const presetModels = curatedModelsFor(provider);
+    const presetEntry = presetModels.find((entry) => entry.id === model);
+    const preset = {
+      ...(typeof presetEntry?.contextWindow === 'number' ? { contextWindow: presetEntry.contextWindow } : {}),
+      ...(typeof presetEntry?.maxTokens === 'number' ? { maxTokens: presetEntry.maxTokens } : {}),
+    };
+    const toPatch = (value: unknown, max: number): number | null | undefined => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > max) {
+        throw new Error('override value must be a positive safe integer within range');
+      }
+      return value as number;
+    };
+    return modelOverrides.setModelOverride(
+      ctx.userId,
+      provider,
+      model,
+      {
+        contextWindow: toPatch(args?.contextWindow, modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW),
+        maxTokens: toPatch(args?.maxTokens, modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS),
+      },
+      {
+        ...(typeof preset.contextWindow === 'number' ? { contextWindow: preset.contextWindow } : {}),
+        ...(typeof preset.maxTokens === 'number' ? { maxTokens: preset.maxTokens } : {}),
+      },
+    );
+  },
+  'modelOverrides.clear': async (args, ctx) => modelOverrides.clearModelOverride(
+    ctx.userId,
+    boundedText(args?.provider, 'provider', 120),
+    boundedText(args?.model, 'model', 200),
+  ),
   'customProviders.model.add': async (args, ctx) => customProviders.addCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),

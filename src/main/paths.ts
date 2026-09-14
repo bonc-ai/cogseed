@@ -496,6 +496,10 @@ export const userComponentEnabledFile = (uid: string) => path.join(userCloudConf
 // user's account-level safety posture, unlike granted-roots which contain
 // machine-specific absolute paths and stay local-only.
 export const userPermissionsFile = (uid: string) => path.join(userCloudConfigDir(uid), 'permissions.json');
+// Per-user local overrides for built-in provider presets (model window / max
+// output). Synced like the other cloud config: a window cap is a property of
+// the user's account, not of this machine. Schema in features/model_overrides.ts.
+export const userModelOverridesFile = (uid: string) => path.join(userCloudConfigDir(uid), 'model-overrides.json');
 
 // Packaged builtin resources. Source files ship with the app under
 // `resources/builtin/` (extraResources in packaged builds); startup/login
