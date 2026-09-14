@@ -795,7 +795,7 @@ function _settingsSetCustomProviderModalView(kind, provider = null, model = null
   return generation;
 }
 
-function _settingsIsCustomProviderModalViewActive(generation, providerId = null) {
+function _settingsIsCustomProviderModalViewActive(generation, providerId = null, viewKind = null) {
   const overlay = document.getElementById('settings-custom-provider-modal');
   const view = _settingsState.customProviderModalView;
   return !!(
@@ -803,6 +803,7 @@ function _settingsIsCustomProviderModalViewActive(generation, providerId = null)
     && view
     && view.generation === generation
     && (!providerId || view.providerId === providerId)
+    && (!viewKind || view.kind === viewKind)
   );
 }
 
@@ -1468,16 +1469,27 @@ function _settingsSetCustomProviderFieldMessage(input, text) {
   el.className = 'form-msg settings-custom-provider-field-msg' + (text ? ' error' : '');
 }
 
-/** 部分更新提交：只带变更字段；成功后就地重画详情卡（名称/掩码/开关态跟着换新）。 */
+/** 部分更新提交：只带变更字段；成功后就地重画详情卡（名称/掩码/开关态跟着换新）。
+ *  ① generation 在发起前捕获、且只认 details 视图：IPC 在途期间用户切到
+ *    模型表单/拉取列表（generation 已递增或 kind 已变）时不得重画，否则
+ *    正填一半的表单会被整个顶掉（此前返回后才取当前 generation，恒等于
+ *    view.generation，校验形同虚设）。② 焦点已移到弹窗内下一个可编辑
+ *    字段时跳过整卡重画——重建 body 会把未提交的输入连同焦点一起抹掉；
+ *    数据已 reload，下一次 blur 提交或视图切换自然带上新值。 */
 async function _settingsCommitCustomProviderPatch(provider, patch) {
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
   const res = await _settingsCallCustomProvider('customProviders.update', { id: provider.id, ...patch });
   if (!res || !res.ok) {
     return { ok: false, error: (res && res.error) || t('settings.custom_providers.save_failed') };
   }
   await _settingsReload();
   const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id) || provider;
-  const generation = _settingsState.customProviderModalView?.generation || 0;
-  if (_settingsIsCustomProviderModalViewActive(generation, provider.id)) {
+  const activeEl = document.activeElement;
+  const focusEditing = activeEl
+    && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')
+    && !activeEl.disabled
+    && document.getElementById('settings-custom-provider-modal')?.contains(activeEl);
+  if (!focusEditing && _settingsIsCustomProviderModalViewActive(viewGeneration, provider.id, 'details')) {
     _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
   }
   _settingsSetStatus('settings-picker-status', 'ok', t('settings.custom_providers.update_ok'));
@@ -1489,6 +1501,7 @@ function _settingsWireCustomProviderField(body, inputId, options) {
   const input = body.querySelector('#' + inputId) || document.getElementById(inputId);
   if (!input) return null;
   const original = String(input.value ?? '');
+  input.dataset.escResets = '1';
   const commit = async () => {
     const value = String(input.value ?? '').trim();
     const problem = options.validate ? options.validate(value) : '';
@@ -1555,6 +1568,7 @@ function _settingsCustomProviderModelToggle(provider, model) {
         if (!confirmed) { input.checked = true; return; }
       }
     }
+    const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
     input.disabled = true;
     const res = await _settingsCallCustomProvider('customProviders.model.setEnabled', {
       providerId: provider.id,
@@ -1573,8 +1587,9 @@ function _settingsCustomProviderModelToggle(provider, model) {
     ));
     await _settingsReload();
     const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id) || provider;
-    const generation = _settingsState.customProviderModalView?.generation || 0;
-    if (_settingsIsCustomProviderModalViewActive(generation, provider.id)) {
+    // 同 _settingsCommitCustomProviderPatch：发起前捕获 generation，只认
+    // details 视图，防 IPC 在途切视图被顶。
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id, 'details')) {
       _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
     }
   });
@@ -2213,6 +2228,9 @@ function _settingsReadModelForm(body) {
     id: body.querySelector('#settings-custom-provider-model-edit-id')?.value,
     contextWindow: Number(body.querySelector('#settings-custom-provider-model-edit-context')?.value),
     maxTokens: Number(body.querySelector('#settings-custom-provider-model-edit-output')?.value),
+    // smart 开关也入 state：i18n 重渲染整块重建 DOM，开关不在 state 里会被
+    // 复位为默认开——用户明确关掉后会再触发被关闭的远端拉取。
+    smart: body.querySelector('#settings-model-form-smart')?.checked !== false,
     inputTypes: checkedValues('settings-model-form-input'),
     capabilities: checkedValues('settings-model-form-capability'),
     reasoningLevels: Array.from(body.querySelectorAll('.settings-level-row__input')).map((el) => el.value),
@@ -2242,6 +2260,8 @@ function _settingsApplyModelFormState(body, state) {
   };
   applyChecked('settings-model-form-input', state.inputTypes);
   applyChecked('settings-model-form-capability', state.capabilities);
+  const smartToggle = body.querySelector('#settings-model-form-smart');
+  if (smartToggle && typeof state.smart === 'boolean') smartToggle.checked = state.smart;
   const levelList = body.querySelector('#settings-model-form-levels');
   if (levelList) {
     levelList.innerHTML = '';
@@ -3175,7 +3195,15 @@ function _settingsShowApiKeyForm(provider, modelId) {
 function _settingsOpenModal(overlay) {
   if (overlay.classList.contains('open')) return;
   overlay.classList.add('open');
-  const onKey = (e) => { if (e.key === 'Escape') _settingsCloseModal(overlay, onKey); };
+  // Esc 分层：焦点在「Esc=还原字段」的输入框（data-esc-resets）上时让给
+  // 字段自己的处理器（还原后 blur）——本监听在 capture 阶段先于字段执行，
+  // 不豁免的话一次 Esc 会把整个弹窗关掉，字段还原永远不可达。第二次 Esc
+  // （焦点已离开输入框）才关弹窗，与 context-menu 的菜单/弹窗分层同语义。
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (e.target && e.target.dataset && e.target.dataset.escResets === '1') return;
+    _settingsCloseModal(overlay, onKey);
+  };
   overlay._onKey = onKey;
   document.addEventListener('keydown', onKey, true);
 }

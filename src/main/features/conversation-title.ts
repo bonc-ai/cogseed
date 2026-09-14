@@ -17,6 +17,7 @@ import { hasConfiguredModel } from './auth';
 const log = createLogger('conversation-title');
 
 const TITLE_MAX_CHARS = 24;
+const TITLE_MAX_CHARS_LATIN = 48;
 const MIN_SOURCE_CHARS = 6;
 
 const SYSTEM_PROMPT = [
@@ -28,13 +29,37 @@ const SYSTEM_PROMPT = [
   '- 只输出标题本身：不要引号、不要句末标点、不要任何解释。',
 ].join('\n');
 
+/** 截断上限按内容密度区分：CJK / emoji 为主体（占比 ≥ 1/3）时信息密度高，
+ *  维持 24；拉丁词为主体时放宽到 48——系统提示要求英文"不超过 8 个词"，
+ *  常态就有 30-45 个字符，硬截 24 会把 "Understanding React Server
+ *  Components" 砍成 "Understanding React Serv"（腰斩在词中间，中文用户
+ *  无感、英文界面必现）。 */
+function titleLimitFor(text: string): number {
+  const dense = (text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|\p{Extended_Pictographic}/gu) || []).length;
+  return dense * 3 >= text.length ? TITLE_MAX_CHARS : TITLE_MAX_CHARS_LATIN;
+}
+
+/** 按码点截断（slice 按 UTF-16 码元会把 emoji/扩展字符的代理对劈成乱码）；
+ *  拉丁超限时回退到最后一个完整词，不截在词中间。 */
+function truncateTitle(text: string, limit: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= limit) return text;
+  let out = chars.slice(0, limit).join('');
+  if (limit === TITLE_MAX_CHARS_LATIN) {
+    const cut = out.lastIndexOf(' ');
+    if (cut >= Math.floor(limit / 2)) out = out.slice(0, cut);
+  }
+  return out;
+}
+
 /** 清洗模型输出：去引号/换行/尾标点，按上限截断。空串由调用方兜底。 */
 export function sanitizeGeneratedTitle(raw: string): string {
   let text = String(raw || '').replace(/\s+/g, ' ').trim();
   text = text.replace(/^["'“”‘’「」《]+/, '').replace(/["'“”‘’「」《]+$/, '');
   text = text.replace(/[。.!！?？,，;；:：]+$/, '').trim();
   if (!text) return '';
-  return text.length > TITLE_MAX_CHARS ? text.slice(0, TITLE_MAX_CHARS) : text;
+  const limit = titleLimitFor(text);
+  return text.length > limit ? truncateTitle(text, limit) : text;
 }
 
 /** 首条消息太短（无信息量，如 "hi"）时不值得调模型。 */

@@ -25,6 +25,35 @@ describe('sanitizeGeneratedTitle', () => {
     expect(sanitizeGeneratedTitle(long)).toHaveLength(24);
   });
 
+  it('英文按词截断不腰斩（2026-09-14：8 词常态超 24 字符）', () => {
+    // 系统提示允许英文 8 个词（≈30-45 字符），此前硬截 24 会把单词砍半。
+    const english = 'Understanding React Server Components Deeply';
+    expect(sanitizeGeneratedTitle(english)).toBe('Understanding React Server Components Deeply');
+    const longer = 'Understanding React Server Components And Their Rendering Pipeline';
+    const got = sanitizeGeneratedTitle(longer);
+    // 超过拉丁上限 48：截到最后一个完整词，不以半个词或空格结尾。
+    expect(got.length).toBeLessThanOrEqual(48);
+    expect(got.endsWith(' ')).toBe(false);
+    expect(longer.startsWith(got)).toBe(true);
+  });
+
+  it('emoji 按码点截断不劈代理对', () => {
+    // 60 个 emoji：按 UTF-16 码元截 24 会劈出孤立代理对（乱码）。
+    const emoji = '🚀'.repeat(60);
+    const got = sanitizeGeneratedTitle(emoji);
+    expect(Array.from(got)).toHaveLength(24);
+    for (const ch of Array.from(got)) expect(ch).toBe('🚀');
+  });
+
+  it('中英混排按内容密度选上限', () => {
+    // CJK 占比高（≥1/3）维持 24；拉丁为主体放宽 48 并按词截断。
+    expect(sanitizeGeneratedTitle('给会话起名 about React components')).toBe('给会话起名 about React components');
+    const mixedLong = '深'.repeat(12) + ' word '.repeat(20);
+    const got = sanitizeGeneratedTitle(mixedLong);
+    expect(got.length).toBeLessThanOrEqual(48);
+    expect(got.endsWith(' ')).toBe(false);
+  });
+
   it('空输出返回空串', () => {
     expect(sanitizeGeneratedTitle('')).toBe('');
     expect(sanitizeGeneratedTitle('   ')).toBe('');

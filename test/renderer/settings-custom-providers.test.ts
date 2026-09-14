@@ -823,6 +823,7 @@ describe('settings model providers surface', () => {
       id: 'deepseek/deepseek-v4.1-flash',
       contextWindow: 1000000,
       maxTokens: 384000,
+      smart: true,
       inputTypes: ['text', 'image', 'video', 'pdf'],
       capabilities: ['structured_output'],
       reasoningLevels: ['low', 'medium', 'high'],
