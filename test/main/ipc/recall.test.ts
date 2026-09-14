@@ -128,6 +128,12 @@ const kstarTraceMock = vi.hoisted(() => ({
 const kstarFailuresMock = vi.hoisted(() => ({
   listKstarFailures: vi.fn(async () => []),
 }));
+const kstarRunEvidenceMock = vi.hoisted(() => ({
+  readKstarRunEvidence: vi.fn(async (_uid: string, input: { taskId: string; taskRunId: string }) => ({
+    ...input,
+    gaps: [],
+  })),
+}));
 const kstarClosureMock = vi.hoisted(() => ({
   confirmKstarReview: vi.fn(async () => ({ episode: {}, review: {} })),
 }));
@@ -202,6 +208,7 @@ vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
 vi.mock('../../../src/main/features/kstar/trace', () => kstarTraceMock);
 vi.mock('../../../src/main/features/kstar/failure-service', () => kstarFailuresMock);
+vi.mock('../../../src/main/features/kstar/run-evidence', () => kstarRunEvidenceMock);
 vi.mock('../../../src/main/features/kstar/projection-decision-service', () => projectionDecisionMock);
 vi.mock('../../../src/main/features/kstar/task-closure', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/features/kstar/task-closure')>()),
@@ -506,6 +513,43 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('kstar.review.read', { episodeId: 'kse-episode-a' }))
       .resolves.toMatchObject({ ok: true, review: { reviewState: 'needs_confirmation' } });
     expect(kstarReviewServiceMock.readKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a');
+  });
+
+  it('routes KSTAR run evidence reads through the active user boundary', async () => {
+    await expect(call('kstar.runEvidence.read', { taskId: 'task-a', taskRunId: 'run-a' }))
+      .resolves.toMatchObject({
+        ok: true,
+        evidence: { taskId: 'task-a', taskRunId: 'run-a', gaps: [] },
+      });
+    expect(kstarRunEvidenceMock.readKstarRunEvidence).toHaveBeenCalledWith(UID, {
+      taskId: 'task-a',
+      taskRunId: 'run-a',
+    });
+  });
+
+  it('rejects malformed KSTAR run evidence references before the feature call', async () => {
+    const malformed = [
+      {},
+      { taskId: 'task-a' },
+      { taskRunId: 'run-a' },
+      { taskId: 42, taskRunId: 'run-a' },
+      { taskId: 'task-a', taskRunId: 42 },
+      { taskId: '../bad', taskRunId: 'run-a' },
+      { taskId: 'task-a', taskRunId: '../bad' },
+    ];
+
+    for (const payload of malformed) {
+      await expect(call('kstar.runEvidence.read', payload))
+        .resolves.toMatchObject({ ok: false, error: 'invalid kstar run evidence input' });
+    }
+    expect(kstarRunEvidenceMock.readKstarRunEvidence).not.toHaveBeenCalled();
+  });
+
+  it('returns recoverable KSTAR run evidence feature errors', async () => {
+    kstarRunEvidenceMock.readKstarRunEvidence.mockRejectedValueOnce(new Error('evidence unavailable'));
+
+    await expect(call('kstar.runEvidence.read', { taskId: 'task-a', taskRunId: 'run-a' }))
+      .resolves.toMatchObject({ ok: false, error: 'evidence unavailable' });
   });
 
   it('rejects malformed source and capture inputs before feature calls', async () => {
