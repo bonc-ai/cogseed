@@ -5076,5 +5076,8 @@
   "kb.transcriptCorrect.delete_arrow": "(remover)",
   "kb.transcriptCorrect.close_panel": "Ocultar correção",
   "kb.transcriptCorrect.unavailable": "Correção de transcrição indisponível",
-  "kb.transcriptCorrect.close": "Fechar"
+  "kb.transcriptCorrect.close": "Fechar",
+  "kb.transcriptCorrect.group_high": "{count} de alto risco · confirme cada",
+  "kb.transcriptCorrect.group_other": "Outros {count}",
+  "kb.transcriptCorrect.group_other_collapsed": "Outros {count} (recolhido)"
 }

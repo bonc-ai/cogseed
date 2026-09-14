@@ -34,6 +34,9 @@
   function viewerBodyHtml() {
     return [
       '<div class="anchored-source-viewer">',
+      // 左列：工具栏 + 正文；右列：纠错面板（打开时才出现）。
+      // 拆成 main 包装层是为了让"并排"成立——否则 aside 会堆到正文下方。
+      '<div class="anchored-source-main">',
       '<div class="anchored-source-toolbar">',
       '<div class="anchored-source-meta" data-anchor-view-meta></div>',
       '<div class="anchored-source-actions" data-anchor-view-actions></div>',
@@ -42,6 +45,7 @@
       '<div class="anchored-source-status" data-anchor-view-status></div>',
       '<pre class="anchored-source-text" data-anchor-view-text></pre>',
       '<div class="anchored-source-note" data-anchor-view-note hidden></div>',
+      '</div>',
       '</div>',
       '<aside class="anchored-source-correct" data-anchor-view-correct hidden></aside>',
       '</div>',

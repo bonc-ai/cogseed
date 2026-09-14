@@ -76,6 +76,17 @@
     return { total: (rows || []).length, selected, spans, pendingHigh };
   }
 
+  /** 分组：高危优先展示，其余归入可折叠组（视觉噪声主要来自低风险条目）。 */
+  function splitByRisk(rows) {
+    const high = [];
+    const other = [];
+    for (const row of rows || []) {
+      if (row.riskLevel === 'high') high.push(row);
+      else other.push(row);
+    }
+    return { high, other };
+  }
+
   /** apply 结果的展示摘要。 */
   function applySummary(result) {
     const retention = Number.isFinite(Number(result?.retention)) ? Number(result.retention) : 1;
@@ -109,13 +120,15 @@
     return [
       '<div class="kb-atc">',
       '  <div class="kb-atc__head">',
-      '    <div class="kb-atc__title" data-atc-title></div>',
-      '    <div class="kb-atc__meta" data-atc-meta></div>',
+      '    <div class="kb-atc__head-main">',
+      '      <div class="kb-atc__title" data-atc-title></div>',
+      '      <div class="kb-atc__meta" data-atc-meta></div>',
+      '    </div>',
       '    <div class="kb-atc__head-actions" data-atc-head-actions></div>',
       '  </div>',
       '  <div class="kb-atc__status" data-atc-status hidden></div>',
-      '  <div class="kb-atc__body" data-atc-body></div>',
       '  <div class="kb-atc__summary" data-atc-summary hidden></div>',
+      '  <div class="kb-atc__body" data-atc-body></div>',
       '  <div class="kb-atc__actions" data-atc-actions></div>',
       '  <details class="kb-atc__add" data-atc-add>',
       '    <summary data-atc-add-summary></summary>',
@@ -136,6 +149,7 @@
       runId: '',
       cleanedText: '',
       error: '',
+      collapsedOther: false,
     };
 
     container.classList.add('kb-atc-host');
@@ -174,18 +188,17 @@
         });
       }
       if (actions) {
+        // 次级操作贴着标题行右侧，避免单独占一行（视觉反馈：纵向留白更省）。
         actions.innerHTML = button({
           label: state.scanned
             ? t('kb.transcriptCorrect.rescan', '重新扫描')
             : t('kb.transcriptCorrect.scan', '扫描'),
-          icon: 'clipboard-list',
-          role: 'secondary',
+          role: 'ghost',
           size: 'sm',
           disabled: state.busy,
           attrs: { 'data-atc-action': 'scan' },
         }) + button({
           label: t('kb.transcriptCorrect.add_entry', '新增词条'),
-          icon: 'document-pencil',
           role: 'ghost',
           size: 'sm',
           disabled: state.busy,
@@ -194,6 +207,7 @@
       }
     }
 
+    /** 一行候选：原文（弱）→ 建议（强）·风险标签·命中次数（右对齐）。 */
     function rowElement(row) {
       const el = document.createElement('div');
       el.className = 'kb-atc__row';
@@ -215,25 +229,33 @@
       const correct = document.createElement('span');
       correct.className = 'kb-atc__correct';
       correct.textContent = row.action === 'delete' ? '' : row.correct;
-      const badge = document.createElement('span');
-      badge.className = 'kb-atc__badge';
-      badge.textContent = t(`kb.transcriptCorrect.${riskKey(row.riskLevel)}`, row.riskLevel === 'high' ? '高危' : row.riskLevel === 'medium' ? '谨慎' : '低风险');
+      main.append(wrong, arrow, correct);
+
+      if (row.riskLevel !== 'low') {
+        const badge = document.createElement('span');
+        badge.className = 'kb-atc__badge';
+        badge.textContent = t(`kb.transcriptCorrect.${riskKey(row.riskLevel)}`, row.riskLevel === 'high' ? '高危' : '谨慎');
+        main.appendChild(badge);
+      }
+
       const count = document.createElement('span');
       count.className = 'kb-atc__count';
       count.textContent = `×${row.count}`;
-      main.append(wrong, arrow, correct, badge, count);
 
       const actions = document.createElement('div');
       actions.className = 'kb-atc__row-actions';
       const isAccepted = state.accepted.has(row.entryRef);
       const isIgnored = state.ignored.has(row.entryRef);
+      // 高危行用纯文字按钮（hover 才出底色），把横向空间让给内容。
+      const acceptRole = isAccepted ? 'primary' : (row.riskLevel === 'high' ? 'ghost' : 'secondary');
       actions.innerHTML = [
         button({
           label: isAccepted
             ? t('kb.transcriptCorrect.accepted', '已接受')
             : t('kb.transcriptCorrect.accept', '接受'),
-          role: isAccepted ? 'primary' : 'secondary',
+          role: acceptRole,
           size: 'sm',
+          className: 'kb-atc__btn',
           disabled: state.busy || isIgnored,
           attrs: { 'data-atc-accept': row.entryRef },
         }),
@@ -241,13 +263,37 @@
           label: t('kb.transcriptCorrect.ignore', '忽略'),
           role: 'ghost',
           size: 'sm',
+          className: 'kb-atc__btn',
           disabled: state.busy || isAccepted,
           attrs: { 'data-atc-ignore': row.entryRef },
         }),
       ].join('');
 
-      el.append(main, actions);
+      el.append(main, count, actions);
       return el;
+    }
+
+    function groupHeaderElement(label, tone) {
+      const el = document.createElement('div');
+      el.className = 'kb-atc__group';
+      if (tone) el.dataset.tone = tone;
+      el.textContent = label;
+      return el;
+    }
+
+    /** 折叠组头：用按钮而非裸控件，便于键盘与样式统一。 */
+    function groupToggleElement(label, collapsed) {
+      const host = document.createElement('div');
+      host.className = 'kb-atc__group kb-atc__group--toggle';
+      host.innerHTML = button({
+        label,
+        icon: collapsed ? 'chevron-right' : 'chevron-down',
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-atc__group-btn',
+        attrs: { 'data-atc-action': 'toggle-other' },
+      });
+      return host;
     }
 
     function renderBody() {
@@ -267,7 +313,7 @@
             kind: 'actionable',
             title: t('kb.transcriptCorrect.idle_title', '扫描这份逐字稿里需要纠正的词'),
             description: t('kb.transcriptCorrect.idle_desc', '只会替换你词表里确认过的词；原文不会被改动。'),
-            action: { label: t('kb.transcriptCorrect.scan', '扫描'), icon: 'clipboard-list', attrs: { 'data-atc-action': 'scan' } },
+            action: { label: t('kb.transcriptCorrect.scan', '扫描'), attrs: { 'data-atc-action': 'scan' } },
           })
           : '';
         return;
@@ -282,7 +328,26 @@
           : '';
         return;
       }
-      for (const row of state.rows) body.appendChild(rowElement(row));
+
+      const { high, other } = splitByRisk(state.rows);
+      if (high.length) {
+        body.appendChild(groupHeaderElement(
+          t('kb.transcriptCorrect.group_high', '高危 {count} 条 · 逐条确认', { count: high.length }),
+          'high',
+        ));
+        for (const row of high) body.appendChild(rowElement(row));
+      }
+      if (other.length) {
+        body.appendChild(groupToggleElement(
+          state.collapsedOther
+            ? t('kb.transcriptCorrect.group_other_collapsed', '其余 {count} 条（已折叠）', { count: other.length })
+            : t('kb.transcriptCorrect.group_other', '其余 {count} 条', { count: other.length }),
+          state.collapsedOther,
+        ));
+        if (!state.collapsedOther) {
+          for (const row of other) body.appendChild(rowElement(row));
+        }
+      }
     }
 
     function renderSummary() {
@@ -440,6 +505,7 @@
         state.ignored = new Set();
         state.apply = null;
         state.cleanedText = '';
+        state.collapsedOther = false;
         const stats = summarizeRows(state.rows, state.accepted);
         setStatus(stats.total === 0
           ? ''
@@ -595,6 +661,7 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'scan') void runScan();
+      else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
       else if (kind === 'apply') void runApply();
       else if (kind === 'preview') openTextModal(t('kb.transcriptCorrect.preview_title', '清理版预览'), state.cleanedText);
       else if (kind === 'save') void runSave();
@@ -627,11 +694,11 @@
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）
-    __test: { groupCandidates, summarizeRows, applySummary, cleanedFileName, riskKey },
+    __test: { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, riskKey },
   };
 
   root.KbTranscriptCorrect = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { groupCandidates, summarizeRows, applySummary, cleanedFileName, riskKey };
+    module.exports = { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, riskKey };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

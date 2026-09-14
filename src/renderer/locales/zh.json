@@ -6981,5 +6981,8 @@
   "kb.transcriptCorrect.delete_arrow": "（删除）",
   "kb.transcriptCorrect.close_panel": "收起纠错",
   "kb.transcriptCorrect.unavailable": "转写纠错面板暂时不可用",
-  "kb.transcriptCorrect.close": "关闭"
+  "kb.transcriptCorrect.close": "关闭",
+  "kb.transcriptCorrect.group_high": "高危 {count} 条 · 逐条确认",
+  "kb.transcriptCorrect.group_other": "其余 {count} 条",
+  "kb.transcriptCorrect.group_other_collapsed": "其余 {count} 条（已折叠）"
 }
