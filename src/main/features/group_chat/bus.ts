@@ -165,9 +165,12 @@ export function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
     || /(thinking|reasoner|qwq)/.test(modelId);
 }
 
-/** DeepSeek 官方直连域名判定（纯函数，供测试）。 */
+/** DeepSeek 官方直连域名判定（纯函数，供测试）。
+ *  域名后允许直接结尾：官方文档的 base_url 示例就是裸域名
+ *  （https://api.deepseek.com），存储侧 normalizeBaseUrl 又会剥掉尾斜杠——
+ *  强制匹配 `/` 会让主流填法永远判 false，官方直连排除失效。 */
 export function _isDeepSeekOfficialBaseUrl(url: unknown): boolean {
-  return /^https:\/\/(?:[a-z0-9-]+\.)*deepseek\.com\//i.test(String(url || ""));
+  return /^https:\/\/(?:[a-z0-9-]+\.)*deepseek\.com(?:\/|$)/i.test(String(url || ""));
 }
 
 /** 本轮是否流向 DeepSeek 官方直连端点（自定义 provider 指向

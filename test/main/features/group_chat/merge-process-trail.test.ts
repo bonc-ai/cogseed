@@ -282,7 +282,10 @@ describe('_modelSupportsThinkingByDefault 收紧（PR209 评审 M8）', () => {
 describe('DeepSeek 官方直连端点排除（auto 不升 low）', () => {
   it('官方域名判定：api.deepseek.com 及子域命中，中转/官方 anthropic 路径不命中', () => {
     expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com/v1')).toBe(true);
-    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com')).toBe(false); // 无路径分隔符（带尾斜杠才算端点 URL）
+    // 裸域名也是官方端点（官方文档 base_url 示例形态；存储侧会剥尾斜杠。
+    // 2026-09-14 修正：此前强制 `/` 让主流填法永远判 false、排除失效）。
+    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com')).toBe(true);
+    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com/')).toBe(true);
     expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com/anthropic')).toBe(true);
     expect(_isDeepSeekOfficialBaseUrl('https://api.commandcode.ai/provider/v1')).toBe(false);
     expect(_isDeepSeekOfficialBaseUrl('https://opencode.ai/zen/go/v1')).toBe(false);

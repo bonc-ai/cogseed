@@ -360,6 +360,14 @@
       ignored: T('cognition.candidate_status_ignored', '已忽略'),
     }[String(c.status || '')] || String(c.status || ''));
     const attention = [];
+    // 高优待办（cognition.inbox：敏感级未分级、规则缺边界、来源失效、Skill
+    // 待更新等）：旧 UI 有整页 inbox，重建后只在候选列表里看不到这类治理
+    // 待办——收进「需要处理」区（title/detail 后端已是用户可读文案）。
+    const inboxItems = (Array.isArray(S.inboxItems) ? S.inboxItems : []).slice(0, 5);
+    for (const item of inboxItems) {
+      const navigable = Boolean(item.assetId || item.candidateId);
+      attention.push(`<div class="ca-attention-row"${navigable ? ` data-act="inbox-go" data-id="${esc(item.id)}" ${roleBtn()}` : ''}><span>${esc(item.title || '')}${item.detail ? ` · ${esc(item.detail)}` : ''}</span>${navigable ? '<b>›</b>' : ''}</div>`);
+    }
     if (stats.sourceIssues) {
       attention.push(`<div class="ca-attention-row" data-act="go-sources" ${roleBtn()}><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
     }
@@ -513,8 +521,10 @@
     }
     const wherePhrase = (cid) => {
       const name = cid ? convNames.get(String(cid)) : '';
+      // name 不在此处 esc：proofSentence 的返回值整体过 esc（T() 只做占位
+      // 替换），内层再转义会把 & < > 显示成实体（双重转义）。
       return name
-        ? T('cognition.proof_where_named', '对话《{name}》里', { name: esc(name) })
+        ? T('cognition.proof_where_named', '对话《{name}》里', { name })
         : T('cognition.proof_where_generic', '一次对话里');
     };
     /** 事件整句化（用户要求：一句话说明在什么时间、哪个对话里被怎么用）。 */
@@ -557,9 +567,14 @@
         const refs = proof.refs || {};
         const isOpen = String(route.proofEventId) === String(proof.id);
         const transferProofId = String(refs.transferProofId || '');
+        const kind = String(proof.kind || '');
         let ratingHtml = '';
         if (isOpen) {
-          if (transferProofId) {
+          // 评价闸门（对齐后端 E_RECALL_* 口径）：只有「被实际使用」
+          // （usage_recorded）且留下迁移证明的事件才可评——此前只看
+          // transferProofId 字段存在就渲染按钮，投影/降级行点了必吃后端
+          // 报错（旧实现的闸门随 skills.js 瘦身丢失，2026-09-14 恢复）。
+          if (kind === 'usage_recorded' && transferProofId) {
             ratingHtml = `<div class="ca-rating"><strong>${esc(T('cognition.proof_rate_question', '这次用得怎么样？'))}</strong>
               <div class="ca-actions">${PROOF_FEEDBACKS.map(([value, key, fb]) => btn(T(key, fb), 'proof-rate', { id: transferProofId, data: { feedback: value, proof: proof.id } })).join('')}</div>
               <div class="ca-note-zone">
@@ -671,7 +686,7 @@
       return `<div class="ca-card ca-source-card">
         <div class="ca-line">
           <div><div class="ca-row-title">${esc(T(key, fb))}</div><div class="ca-sub">${esc(descFb ? T(descKey, descFb) : '')}</div></div>
-          <div class="ca-right">${chip(`${list.length} · ${esc(T('cognition.sources_visible', '可见'))}`, list.length ? 'green' : '')}</div>
+          <div class="ca-right">${chip(`${list.length} · ${T('cognition.sources_visible', '可见')}`, list.length ? 'green' : '')}</div>
         </div>
         ${list.slice(0, 8).map((item) => `
           <div class="ca-row is-flat">

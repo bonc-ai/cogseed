@@ -2115,7 +2115,9 @@ export async function completeAuthorization(
           models: orderedModels.map((id) => existingModelMetadata.get(id) || ({
             id,
             contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
-            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+            // 目录登记过输出上限的模型跟随预设（与 fetch 导入路径同口径，
+            // 2026-09-14：此前手动填 id 一律写死 384K，绕过了目录优先）。
+            maxTokens: publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
           })),
           source: input.source,
           ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
@@ -2130,7 +2132,7 @@ export async function completeAuthorization(
           models: orderedModels.map((id) => ({
             id,
             contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
-            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+            maxTokens: publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
           })),
           enabled: true,
           source: input.source,

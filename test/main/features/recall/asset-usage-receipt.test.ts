@@ -61,6 +61,39 @@ describe('asset usage receipts', () => {
     expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 
+  it('negative feedback overrides an earlier applied receipt; reads return the latest per id (2026-09-14)', async () => {
+    // KSTAR 收账先写 applied，用户随后点踩写 contradicted——此前被同键幂等
+    // 去重静默吞掉（「点踩进治理」失效）；现在 contradicted 可覆盖，读取侧
+    // 同 id 取末条，消费方不双计。
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const injection = await injections.recordInjectionReceipt('user-b', {
+      taskRunId: 'run-b', projectionId: 'proj-b', assetId: 'asset-b', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-b',
+    });
+    const base = {
+      taskRunId: 'run-b', projectionId: 'proj-b', assetId: 'asset-b', assetVersion: '1',
+      injectionReceiptId: injection.id,
+      evidenceKind: 'agent_action' as const,
+      evidenceRefs: [{ kind: 'conversation' as const, id: 'conv-b', title: 'user negative feedback' }],
+      boundary: 'real' as const,
+    };
+    const applied = await usage.recordAssetUsageReceipt('user-b', { ...base, status: 'applied' });
+    expect(applied.status).toBe('applied');
+
+    const contradicted = await usage.recordAssetUsageReceipt('user-b', { ...base, status: 'contradicted' });
+    expect(contradicted.status).toBe('contradicted');
+
+    const listed = await usage.listAssetUsageReceipts('user-b', 'run-b');
+    expect(listed).toHaveLength(1);
+    expect(listed[0].status).toBe('contradicted');
+
+    // 幂等方向不变：已是 contradicted 再写 contradicted 仍返回同状态、list 仍一条。
+    const again = await usage.recordAssetUsageReceipt('user-b', { ...base, status: 'contradicted' });
+    expect(again.status).toBe('contradicted');
+    expect(await usage.listAssetUsageReceipts('user-b', 'run-b')).toHaveLength(1);
+  });
+
   it.each([
     ['task run', { taskRunId: 'run-other' }],
     ['projection', { projectionId: 'proj-other' }],

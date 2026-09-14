@@ -863,7 +863,12 @@ export async function fetchCustomProviderModels(
       const input = declaredInput
         ? (declaredInput.includes('text') ? declaredInput : ['text', ...declaredInput])
         : undefined;
-      const vision = input ? input.includes('image') : undefined;
+      // 服务显式声明了模态但没有任何已知图片模态（如纯 ['audio']）＝明确
+      // 不支持图片：vision 落 false，不给 B 层识别器把它兜回 true 的机会
+      // （否则服务诚实声明的模态信息反被家族规则覆盖，2026-09-14）。
+      const vision = input
+        ? input.includes('image')
+        : (Array.isArray(modalities) && modalities.length ? false : undefined);
       // 能力：supported_parameters（OpenRouter 系）与显式 capabilities 两处都看。
       const declaredCapabilities = pickDeclaredTokens(params, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES)
         || pickDeclaredTokens(record.capabilities, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES);

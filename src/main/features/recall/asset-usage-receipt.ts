@@ -160,7 +160,17 @@ export async function recordAssetUsageReceipt(
   const streamPath = recallJsonlPath(userId, 'asset-usage-receipts', 'events');
   return fileEditLock(streamPath).runExclusive(async () => {
     const existing = (await listAssetUsageReceipts(userId)).find((item) => item.id === id);
-    if (existing) return existing;
+    if (existing) {
+      // 负反馈覆盖（2026-09-14）：KSTAR 收账先写过 applied/usage_unknown 的
+      // 同键收据，用户随后点踩的 contradicted 会被幂等去重静默吞掉——
+      // 「点踩进治理」在 KSTAR 路径失效。contradicted 是用户明确否定，
+      // 语义高于先前的自动记账，允许 append 覆盖（读取侧同 id 取末条）。
+      if (input.status === 'contradicted' && existing.status !== 'contradicted') {
+        await appendRecallJsonlRecord(userId, 'asset-usage-receipts', 'events', record);
+        return record;
+      }
+      return existing;
+    }
     await appendRecallJsonlRecord(userId, 'asset-usage-receipts', 'events', record);
     return record;
   });
@@ -172,5 +182,9 @@ export async function listAssetUsageReceipts(userId: string, taskRunId?: string)
   }
   const records = (await listRecallJsonlRecords(userId, 'asset-usage-receipts', 'events', 0))
     .map((record) => asAssetUsageReceipt(userId, record));
-  return records.filter((record) => taskRunId === undefined || record.taskRunId === taskRunId);
+  // 同 id 多条（负反馈覆盖 append 的产物）取末条：JSONL 顺序即写入顺序，
+  // 消费方（run-evidence / task-closure / trace）只见最终状态，不双计。
+  const latest = new Map<string, AssetUsageReceipt>();
+  for (const record of records) latest.set(record.id, record);
+  return [...latest.values()].filter((record) => taskRunId === undefined || record.taskRunId === taskRunId);
 }

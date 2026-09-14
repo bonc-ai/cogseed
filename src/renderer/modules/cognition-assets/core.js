@@ -28,7 +28,9 @@
       if (typeof window.t === 'function') text = window.t(key, vars);
     } catch (_) { /* locale 未就绪时退回 key */ }
     if (!text || text === key) text = fallback != null ? fallback : key;
-    else if (vars) {
+    if (vars) {
+      // 命中 locale 与回退两条路径都做占位替换：回退文案同样带 {n} 占位，
+      // 不替换的话缺键语言下数字会原样显示成 "{n}"。
       for (const [k, v] of Object.entries(vars)) text = text.replace(`{${k}}`, String(v));
     }
     return text;

@@ -124,7 +124,10 @@ const TOUR_STEPS = [
       const visible = !!panel && panel.offsetParent !== null;
       if (!visible) return document.getElementById('recall-btn');
       return (
-        document.querySelector('#panel-recall [data-ability-asset-id]:not(.is-selected)')
+        // 新认知资产页的资产行是 data-go-asset（旧 UI 的 data-ability-asset-id
+        // 已随 skills.js 瘦身消失，2026-09-14 补上新选择器）。
+        document.querySelector('#panel-recall [data-go-asset]')
+        || document.querySelector('#panel-recall [data-ability-asset-id]:not(.is-selected)')
         || document.querySelector('#panel-recall [data-ability-asset-id]')
       );
     },
@@ -268,7 +271,7 @@ function _setupTourListeners() {
       _checkStepComplete();
       return;
     }
-    if (node.closest('#panel-recall [data-ability-asset-id]')) {
+    if (node.closest('#panel-recall [data-go-asset], #panel-recall [data-ability-asset-id]')) {
       _tourState.assetDetailViewed = true;
       _checkStepComplete();
     }

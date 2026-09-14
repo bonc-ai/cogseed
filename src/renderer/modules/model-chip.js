@@ -598,6 +598,9 @@ function _renderExecConfigMenu(menu, anchor) {
   menu.dataset.view = 'exec';
   void _prefetchReasoningForEntries().then((changed) => {
     if (changed && menu.isConnected && menu.dataset.view === 'exec') {
+      // 重画会 menu.innerHTML='' 重建行：悬停打开的飞出层绑在旧行上，
+      // mouseleave 永不触发——先收掉，否则飞出层悬空残留到外部点击。
+      _closeFlyouts();
       _renderExecConfigMenu(menu, anchor);
       _positionModelMenu(menu, anchor);
     }
@@ -740,6 +743,17 @@ function _renderProviderRows(menu, anchor, target, cfg) {
     item.addEventListener('mouseenter', () => _scheduleFlyoutOpen(open));
     item.addEventListener('mouseleave', _scheduleFlyoutClose);
     item.addEventListener('focus', openPinned);
+    // 键盘路径的关闭：悬停有 mouseleave，focus 打开的 pinned 飞出层此前
+    // 没有 blur 对应——Tab 离开后飞出层钉住残留。焦点转入自家飞出层
+    // （沿级联下钻）不关；转到别处则解除 pin 并收起。
+    item.addEventListener('blur', () => {
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (active && _inFlyout(active)) return;
+        if (active && menu.contains(active) && active !== item) return;
+        _closeFlyouts();
+      }, 0);
+    });
     item.addEventListener('click', (e) => { e.stopPropagation(); openPinned(); });
     item.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') {
