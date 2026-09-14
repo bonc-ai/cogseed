@@ -6981,5 +6981,8 @@
   "kb.transcriptCorrect.delete_arrow": "(remove)",
   "kb.transcriptCorrect.close_panel": "Hide correction",
   "kb.transcriptCorrect.unavailable": "Transcript correction is unavailable",
-  "kb.transcriptCorrect.close": "Close"
+  "kb.transcriptCorrect.close": "Close",
+  "kb.transcriptCorrect.group_high": "{count} high-risk · confirm each",
+  "kb.transcriptCorrect.group_other": "{count} others",
+  "kb.transcriptCorrect.group_other_collapsed": "{count} others (collapsed)"
 }

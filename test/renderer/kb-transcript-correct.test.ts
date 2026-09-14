@@ -18,6 +18,7 @@ const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'u
 const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as {
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
+  splitByRisk: (rows: Array<{ riskLevel: string }>) => { high: unknown[]; other: unknown[] };
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, runId: string) => string;
   riskKey: (l: string) => string;
@@ -66,6 +67,23 @@ describe('选择汇总', () => {
 
   it('空选择/空候选不报错', () => {
     expect(panel.summarizeRows([], [])).toEqual({ total: 0, selected: 0, spans: 0, pendingHigh: 0 });
+  });
+});
+
+describe('高风险优先分组', () => {
+  it('高危与其余分开，避免低风险条目把高危淹掉', () => {
+    const rows = [
+      { entryRef: 'a', wrong: 'coxy', correct: 'Cogseed', riskLevel: 'low', action: 'replace', count: 47, spans: [] },
+      { entryRef: 'b', wrong: 'model', correct: 'Moodle', riskLevel: 'high', action: 'replace', count: 6, spans: [] },
+      { entryRef: 'c', wrong: '健全', correct: '鉴权', riskLevel: 'medium', action: 'replace', count: 3, spans: [] },
+    ];
+    const { high, other } = panel.splitByRisk(rows);
+    expect(high.map((r: any) => r.entryRef)).toEqual(['b']);
+    expect(other.map((r: any) => r.entryRef)).toEqual(['a', 'c']);
+  });
+
+  it('空值与混合输入安全', () => {
+    expect(panel.splitByRisk([])).toEqual({ high: [], other: [] });
   });
 });
 
@@ -127,6 +145,7 @@ describe('locale 覆盖', () => {
     'add_entry', 'wrong', 'correct', 'kind', 'add', 'added', 'add_failed', 'need_both', 'reject_digits',
     'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
     'delete_arrow', 'close_panel', 'unavailable', 'close',
+    'group_high', 'group_other', 'group_other_collapsed',
   ];
 
   for (const lang of locales) {
@@ -176,6 +195,50 @@ describe('源码契约', () => {
 
   it('高危候选不默认进清理版：只有 low 风险行默认勾选', () => {
     expect(source).toContain("row.riskLevel === 'low'");
+  });
+});
+
+
+describe('视觉规范契约（来自使用侧反馈）', () => {
+  const css = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
+
+  it('条目不用卡片外框：只有底部分隔线 + 零圆角 + 透明底', () => {
+    const rule = css.match(/\.kb-atc__row \{[^}]*\}/)?.[0] || '';
+    expect(rule).toContain('border-bottom: 1px solid var(--line-default)');
+    expect(rule).toContain('border-radius: 0');
+    expect(rule).toContain('background: transparent');
+  });
+
+  it('hover 才给底色，且高危只做左侧强调而非整卡染色', () => {
+    expect(css).toMatch(/\.kb-atc__row:hover \{[^}]*background: var\(--surface-raised\)/);
+    const high = css.match(/\.kb-atc__row\[data-risk="high"\] \{[^}]*\}/)?.[0] || '';
+    expect(high).toContain('border-left: 2px solid var(--color-warning)');
+    expect(high).not.toContain('background: var(--color-warning-soft)');
+  });
+
+  it('弹窗底色不用纯白，正文纸张用白', () => {
+    expect(css).toMatch(/\.anchored-source-modal\.ui-modal \{[^}]*background: var\(--surface-subtle\)/);
+    expect(css).toMatch(/\.anchored-source-viewer \.anchored-source-body \{[^}]*background: var\(--surface-raised\)/);
+  });
+
+  it('候选列表是唯一滚动区，且滚动条更细', () => {
+    expect(css).toMatch(/\.kb-atc__body::-webkit-scrollbar \{\s*width: 6px;/);
+  });
+
+  it('窄屏改为纵向堆叠（在媒体查询里覆盖行布局）', () => {
+    const narrow = css.slice(css.indexOf('@media (max-width: 720px)'));
+    expect(narrow).toContain('.anchored-source-modal .anchored-source-viewer {');
+    expect(narrow).toContain('flex-direction: column;');
+  });
+});
+
+describe('面板 DOM 契约', () => {
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('折叠动作与分组标题存在，且低风险不渲染风险标签', () => {
+    expect(source).toContain("data-atc-action': 'toggle-other'");
+    expect(source).toContain('kb-atc__group');
+    expect(source).toMatch(/if \(row\.riskLevel !== 'low'\)/);
   });
 });
 
