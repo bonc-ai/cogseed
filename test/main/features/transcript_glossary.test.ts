@@ -1,0 +1,257 @@
+/**
+ * transcript_glossary — 词表模型/归一化/风险分级/迁移/台账
+ *
+ * 重点覆盖（对齐 AGENTS「测业务不变量、恢复路径、文本陷阱」）：
+ *   - 全角/大小写归一化后仍能 1:1 定位（否则扫描器 span 会整体错位）；
+ *   - 高危短词分级（真实事故：`for`/`model`/`cloud` 这类合法英文词被全局替换）；
+ *   - 纯数字变体 / 单姓敬称拒绝入册（真实事故：姓氏变体被当全局规则）；
+ *   - v1→v2 迁移（老方案文件不能被读成空表）；
+ *   - uid 不匹配、JSON 损坏时的降级路径；
+ *   - 台账只追加（改写台账 = 审计失效）。
+ */
+
+import { describe, it, expect, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import {
+  deriveRiskLevel,
+  defaultBoundary,
+  entryId,
+  exportGlossary,
+  findEntry,
+  foldText,
+  importGlossary,
+  isPureDigits,
+  isSingleSurnameHonorific,
+  listEntries,
+  loadGlossary,
+  markVerified,
+  migrateGlossaryV1ToV2,
+  recordReplacement,
+  saveGlossary,
+  setEntryStatus,
+  deleteEntry,
+  upsertEntry,
+} from '../../../src/main/features/transcript_glossary';
+import { userTranscriptGlossaryFile } from '../../../src/main/paths';
+
+let uid = '';
+beforeEach(() => {
+  uid = `u_glossary_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+});
+
+describe('归一化与索引对齐', () => {
+  it('折叠后长度与原串一致（span 定位的前提）', () => {
+    for (const text of ['ｃｏｘｙ', 'COXY', 'Cogseed 与 K star', '　　全角空格ＡＢ１２']) {
+      expect(foldText(text).length).toBe(text.length);
+    }
+  });
+
+  it('全角/大小写折叠后等价', () => {
+    expect(foldText('ＣＯＸＹ')).toBe('coxy');
+    expect(foldText('CoXy')).toBe('coxy');
+  });
+});
+
+describe('风险分级', () => {
+  it('高危短词与介词级 token → high', () => {
+    for (const wrong of ['for', 'model', 'contact', 'redmi', 'cloud']) {
+      expect(deriveRiskLevel({ wrong, correct: 'X', action: 'replace' })).toBe('high');
+    }
+  });
+
+  it('生造产品词 → low', () => {
+    expect(deriveRiskLevel({ wrong: 'coxy', correct: 'Cogseed', action: 'replace' })).toBe('low');
+    expect(deriveRiskLevel({ wrong: '雷蒙德', correct: 'Raymond', action: 'replace' })).toBe('low');
+  });
+
+  it('单姓敬称 / 纯数字 / 显式 partial → high 或拒绝', () => {
+    expect(deriveRiskLevel({ wrong: '朱老师', correct: '朱明', action: 'replace' })).toBe('high');
+    expect(isSingleSurnameHonorific('王总')).toBe(true);
+    expect(isSingleSurnameHonorific('王总工')).toBe(false);
+    expect(isPureDigits('20231080000006')).toBe(true);
+    expect(isPureDigits('k42')).toBe(false);
+    expect(deriveRiskLevel({ wrong: 'Coco', correct: 'Cogseed', action: 'replace', partial: true })).toBe('high');
+  });
+
+  it('同 wrong 多 correct → high（禁止静默全局替换）', () => {
+    expect(deriveRiskLevel(
+      { wrong: 'kstar', correct: 'KSTAR', action: 'replace' },
+      { otherCorrects: ['K-Star'] },
+    )).toBe('high');
+  });
+
+  it('删除类（口癖）不按短词升级', () => {
+    expect(deriveRiskLevel({ wrong: '啊', correct: '', action: 'delete' })).toBe('low');
+  });
+
+  it('边界模式按形态推导', () => {
+    expect(defaultBoundary('coxy', 'replace')).toBe('word');
+    expect(defaultBoundary('K 星', 'replace')).toBe('substring');
+    expect(defaultBoundary('啊', 'delete')).toBe('substring');
+  });
+});
+
+describe('CRUD 与不变量', () => {
+  it('新增 → 列表可见，同 wrong+correct 幂等更新且保留 freq/createdAt', () => {
+    const first = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', kind: 'product' });
+    expect(first.created).toBe(true);
+    expect(first.entry?.riskLevel).toBe('low');
+
+    recordReplacement(uid, [first.entry!.id], { docId: 'doc1', runId: 'run_a' });
+    const before = findEntry(uid, first.entry!.id)!;
+    expect(before.freq).toBe(1);
+
+    const second = upsertEntry(uid, { wrong: 'COXY', correct: 'Cogseed' });
+    expect(second.created).toBe(false);
+    expect(second.entry?.id).toBe(first.entry?.id);
+    expect(second.entry?.freq).toBe(1);
+    expect(second.entry?.createdAt).toBe(before.createdAt);
+    expect(listEntries(uid)).toHaveLength(1);
+  });
+
+  it('纯数字变体拒绝入册', () => {
+    const res = upsertEntry(uid, { wrong: '20231080000006', correct: '某学号' });
+    expect(res.entry).toBeNull();
+    expect(res.skippedReason).toBe('pure_digit_variant');
+    expect(listEntries(uid)).toHaveLength(0);
+  });
+
+  it('manual 词条默认全局；meeting_accept 默认只在本次文档生效', () => {
+    const manual = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    expect(manual.entry?.scope.global).toBe(true);
+
+    const meeting = upsertEntry(uid, {
+      wrong: '雷蒙德', correct: 'Raymond', source: 'meeting_accept',
+      scope: { docIds: ['doc-2026-09-05'], scenarioTags: [], global: false },
+    });
+    expect(meeting.entry?.scope.global).toBe(false);
+    expect(meeting.entry?.scope.docIds).toEqual(['doc-2026-09-05']);
+  });
+
+  it('状态切换 / 删除 / 标记复核时间', () => {
+    const e = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    expect(setEntryStatus(uid, e.id, 'paused')?.status).toBe('paused');
+    expect(listEntries(uid, { status: 'active' })).toHaveLength(0);
+    expect(markVerified(uid, e.id, 123)?.lastVerifiedAt).toBe(123);
+    expect(deleteEntry(uid, e.id)).toBe(true);
+    expect(deleteEntry(uid, e.id)).toBe(false);
+  });
+
+  it('台账只追加：两次替换留两条记录，freq 累加', () => {
+    const e = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    recordReplacement(uid, [e.id], { docId: 'doc1', runId: 'run_a' });
+    recordReplacement(uid, [e.id], { docId: 'doc1', runId: 'run_b' });
+    const after = findEntry(uid, e.id)!;
+    expect(after.replacedIn.map((r) => r.runId)).toEqual(['run_a', 'run_b']);
+    expect(after.freq).toBe(2);
+  });
+
+  it('不存在的词条 id 不影响其它词条', () => {
+    const e = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    recordReplacement(uid, ['g_missing'], { docId: 'd', runId: 'r' });
+    expect(findEntry(uid, e.id)?.freq).toBe(0);
+  });
+});
+
+describe('迁移与降级', () => {
+  it('v1 文件 → v2（补作用域/风险/台账，且落盘为 v2）', () => {
+    const v1 = {
+      version: 1,
+      entries: [
+        { id: 'g_old', wrong: 'coxy', correct: 'CogSeed', kind: 'product', scenarioTags: ['组会'], freq: 3, source: 'manual', status: 'active', ownerScope: 'personal', createdAt: 1, updatedAt: 2 },
+        { id: 'g_bad' },
+      ],
+      meta: { lastReconcileAt: 9 },
+    };
+    fs.mkdirSync(require('node:path').dirname(userTranscriptGlossaryFile(uid)), { recursive: true });
+    fs.writeFileSync(userTranscriptGlossaryFile(uid), JSON.stringify(v1), 'utf8');
+
+    const loaded = loadGlossary(uid);
+    expect(loaded.version).toBe(2);
+    expect(loaded.entries).toHaveLength(1);
+    expect(loaded.entries[0].action).toBe('replace');
+    expect(loaded.entries[0].scope.global).toBe(true);
+    expect(loaded.entries[0].scope.scenarioTags).toEqual(['组会']);
+    expect(loaded.entries[0].replacedIn).toEqual([]);
+    expect(loaded.meta.lastReconcileAt).toBe(9);
+    expect(JSON.parse(fs.readFileSync(userTranscriptGlossaryFile(uid), 'utf8')).version).toBe(2);
+  });
+
+  it('纯函数迁移不依赖磁盘', () => {
+    const migrated = migrateGlossaryV1ToV2({ entries: [{ wrong: 'a', correct: 'b', scenarioTags: ['部分语境'] }] }, 'u1');
+    expect(migrated.entries[0].riskLevel).toBe('high');
+    expect(migrated.uid).toBe('u1');
+  });
+
+  it('uid 不匹配的文件被忽略（防拷错目录把别人的词表当自己的）', () => {
+    const foreign = { version: 2, uid: 'u_someone_else', entries: [], meta: { lastReconcileAt: 0, ownerNote: '' } };
+    fs.mkdirSync(require('node:path').dirname(userTranscriptGlossaryFile(uid)), { recursive: true });
+    fs.writeFileSync(userTranscriptGlossaryFile(uid), JSON.stringify(foreign), 'utf8');
+    expect(loadGlossary(uid).entries).toHaveLength(0);
+  });
+
+  it('JSON 损坏 → 降级空表且不抛错', () => {
+    fs.mkdirSync(require('node:path').dirname(userTranscriptGlossaryFile(uid)), { recursive: true });
+    fs.writeFileSync(userTranscriptGlossaryFile(uid), '{not json', 'utf8');
+    expect(() => loadGlossary(uid)).not.toThrow();
+    expect(loadGlossary(uid).entries).toHaveLength(0);
+  });
+
+  it('落盘字段被手工改坏时逐字段收敛', () => {
+    fs.mkdirSync(require('node:path').dirname(userTranscriptGlossaryFile(uid)), { recursive: true });
+    fs.writeFileSync(userTranscriptGlossaryFile(uid), JSON.stringify({
+      version: 2, uid,
+      entries: [{ wrong: 'coxy', correct: 'Cogseed', kind: 'nonsense', riskLevel: 'whatever', scope: { global: 'yes' }, contextDeny: ['ok', 42, ''] }],
+      meta: {},
+    }), 'utf8');
+    const entry = listEntries(uid)[0];
+    expect(entry.kind).toBe('term');
+    expect(entry.riskLevel).toBe('low');
+    expect(entry.scope.global).toBe(false);
+    expect(entry.contextDeny).toEqual(['ok']);
+  });
+});
+
+describe('导入导出', () => {
+  it('导出默认剔除人名类；includePeople 才导出', () => {
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    upsertEntry(uid, { wrong: '张旗康', correct: '张启康', kind: 'people' });
+    expect(exportGlossary(uid).entries).toHaveLength(1);
+    expect(exportGlossary(uid, { includePeople: true }).entries).toHaveLength(2);
+  });
+
+  it('merge 导入保留既有词条；replace 模式先清空', () => {
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    const bundle = { version: 2, entries: [{ wrong: '雷蒙德', correct: 'Raymond', kind: 'product' }] };
+    expect(importGlossary(uid, bundle).imported).toBe(1);
+    expect(listEntries(uid)).toHaveLength(2);
+    expect(importGlossary(uid, bundle, { mode: 'replace' }).imported).toBe(1);
+    expect(listEntries(uid)).toHaveLength(1);
+    expect(listEntries(uid)[0].wrong).toBe('雷蒙德');
+  });
+
+  it('非法 payload 抛错而不是静默清空', () => {
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    expect(() => importGlossary(uid, { entries: 'nope' })).toThrow();
+    expect(listEntries(uid)).toHaveLength(1);
+  });
+});
+
+describe('entryId', () => {
+  it('同 wrong+correct 稳定；correct 不同则不同（同形多解可并存）', () => {
+    expect(entryId('coxy', 'Cogseed')).toBe(entryId('COXY', 'cogseed'));
+    expect(entryId('kstar', 'KSTAR')).not.toBe(entryId('kstar', 'K-Star'));
+  });
+
+  it('保存时截断超量词条（上限保护）', () => {
+    const file = loadGlossary(uid);
+    file.entries = Array.from({ length: 2100 }, (_, i) => ({
+      id: `g_${i}`, wrong: `w${i}`, correct: `c${i}`, action: 'replace' as const, kind: 'term' as const,
+      riskLevel: 'low' as const, boundary: 'word' as const, contextDeny: [], scope: { docIds: [], scenarioTags: [], global: true },
+      freq: 0, source: 'manual' as const, status: 'active' as const, ownerScope: 'personal' as const,
+      replacedIn: [], createdBy: 'manual' as const, createdAt: 1, updatedAt: 1, lastVerifiedAt: 1,
+    }));
+    saveGlossary(uid, file);
+    expect(loadGlossary(uid).entries.length).toBe(2000);
+  });
+});
