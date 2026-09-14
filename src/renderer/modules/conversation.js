@@ -8357,9 +8357,16 @@ async function loadConversationHistory(cid, opts = {}) {
     }
     // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
     // appendChatMessage 里的刷新查不到已挂载消息，插入完成后统一刷一次
-    // 会话统计行（Task 8）。
-    _refreshSessionStats();
-    _mountCollaborationStatusCard(container, convMeta.collaboration || null);
+    // 会话统计行（Task 8）。统计/协作卡属聚合侧功能：失败降级隐藏，不拖垮历史加载。
+    try {
+      _refreshSessionStats();
+      _mountCollaborationStatusCard(container, convMeta.collaboration || null);
+    } catch (err) {
+      _convLog.warn('session stats/collaboration card refresh failed, hiding', {
+        cid,
+        error: err && err.message,
+      });
+    }
     _setLoadEarlierHistory(container, cid, data.next_cursor);
     const searchTargetRevealed = opts.searchTarget
       ? _revealConversationHistorySearchTarget(cid, opts.searchTarget)
@@ -8622,8 +8629,13 @@ async function _recoverPolledVisibleMessages(cid, rawMessages) {
     // runtime settles, normal history reconciliation either removes the row as
     // superseded by the final message or renders it when it was genuine.
     if (_shouldDeferInterruptedHistoryRecord(cid, gm)) continue;
-    const legacy = _groupMsgToLegacy(gm);
-    const bubble = appendChatMessage(legacy, true, { cid, archive: true });
+    let bubble = null;
+    try {
+      const legacy = _groupMsgToLegacy(gm);
+      bubble = appendChatMessage(legacy, true, { cid, archive: true });
+    } catch (err) {
+      _convLog.warn('interruption replay render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+    }
     if (bubble) bubble.dataset.fromActor = String(gm.from || '');
     changed = true;
   }
@@ -8663,7 +8675,13 @@ function _claimPersistedUserMessage(cid, gm) {
 function _renderOrClaimPersistedUserMessage(cid, gm, opts = {}) {
   if (!cid || cid !== currentCid || !gm || gm.from !== 'user') return false;
   if (_claimPersistedUserMessage(cid, gm)) return true;
-  const bubble = appendChatMessage(_groupMsgToLegacy(gm), opts.autoScroll !== false, { cid, archive: true });
+  let bubble = null;
+  try {
+    bubble = appendChatMessage(_groupMsgToLegacy(gm), opts.autoScroll !== false, { cid, archive: true });
+  } catch (err) {
+    _convLog.warn('persisted user message render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+    return false;
+  }
   if (!bubble) return false;
   bubble.dataset.fromActor = 'user';
   if (gm.id) bubble.dataset.msgId = String(gm.id);
@@ -14585,6 +14603,10 @@ function _finishStreamingMsg(cid) {
   // failures are safe here: the backend task is cancelled/terminal by then,
   // so the re-check finds nothing to re-establish.
   _scheduleBackendRunRediscovery(cid);
+  // 状态自愈兜底（2026-09-14 Bug3 修复）：turn 结束信号与 UI 状态机竞态
+  // 可能残留 busy 标记 → 队列永远停在"待发送"。延迟 1.2s 再跑一次保险丝
+  // （_healStaleGroupBusy 自带活跃控制器守卫，幂等）。
+  setTimeout(() => _healStaleGroupBusy(cid), 1200);
 }
 
 // One-shot re-check that re-establishes the running placeholder for a
@@ -14999,7 +15021,22 @@ function createChatController(config) {
         historyEl.innerHTML = `<div class="empty">${escapeHtml(t('chat.empty'))}</div>`;
       } else {
         historyEl.innerHTML = '';
-        history.forEach((msg, idx) => _appendHistoryMessage(msg, false, id, idx));
+        // 单条坏消息只丢自己（与 loadConversationHistory 主路径同款隔离），
+        // 不能让一条异常记录把整个历史区炸成"加载失败"。
+        let renderFailures = 0;
+        history.forEach((msg, idx) => {
+          try {
+            _appendHistoryMessage(msg, false, id, idx);
+          } catch (err) {
+            renderFailures += 1;
+            _convLog.warn('scene history message render failed, skipping', {
+              cid: id,
+              msg_id: msg && msg._msg_id,
+              error: err && err.message,
+            });
+          }
+        });
+        if (renderFailures > 0) _convLog.warn('scene history render skipped broken messages', { cid: id, count: renderFailures });
       }
       _scrollToBottomNoAnim(historyEl);
       if (features.queue) renderQueue();
@@ -15988,8 +16025,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       if (ph && ph.parentElement) {
         _finalizeActorPlaceholder(ph, gm, cid, archive);
       } else {
-        const legacy = _groupMsgToLegacy(gm);
-        const bubble = appendChatMessage(legacy, true, { cid, archive });
+        let bubble = null;
+        try {
+          const legacy = _groupMsgToLegacy(gm);
+          bubble = appendChatMessage(legacy, true, { cid, archive });
+        } catch (err) {
+          _convLog.warn('live fallback render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+        }
         if (bubble) bubble.dataset.fromActor = String(gm.from || '');
         // Cache-refresh parity with `_mountCreatedAgentChip`: the placeholder
         // path goes through it (which calls loadAgents/loadSkills(true)),
@@ -16019,8 +16061,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —
       // append a new bubble alongside, leave the streaming placeholder alive
       // for the rest of the actor's turn.
-      const legacy = _groupMsgToLegacy(gm);
-      const bubble = appendChatMessage(legacy, true, { cid, archive });
+      let bubble = null;
+      try {
+        const legacy = _groupMsgToLegacy(gm);
+        bubble = appendChatMessage(legacy, true, { cid, archive });
+      } catch (err) {
+        _convLog.warn('mid-turn side-effect render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+      }
       if (bubble) bubble.dataset.fromActor = String(gm.from || '');
     }
     // (Removed pre-seed-recipient-placeholder logic.) Earlier I pre-created

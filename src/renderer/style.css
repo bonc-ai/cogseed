@@ -9839,15 +9839,38 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    See modules/chat-artifact.js. Understated chrome (a title bar + reload)
    so it reads as an inline panel, not a separate window. */
 .chat-artifact-host { margin-top: 10px; }
+/* 确认卡片布局（2026-09-14 评审定稿 v3，对齐大厂主流惯例）：
+   卡片随消息内容走——气泡拉伸铺满消息块，卡片 100% 铺满气泡、
+   左缘与助手输出首行文字左缘对齐（margin 0，不居中、不溢出消息列）。
+   ChatGPT/Claude 等主流产品的内嵌卡片均为此模式。 */
+.chat-message.assistant .chat-bubble:has(.chat-artifact-host) {
+  align-self: stretch;
+  width: 100%;
+}
 .chat-artifact-card {
-  width: 40cqw;
+  width: 100%;
   max-width: 100%;
+  margin: 0;
   min-width: 280px;
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
   background: var(--bg);
 }
+/* 确认态只读回放（Bug3）：已确认/已取消时 iframe 禁用交互并降饱和 */
+.chat-artifact-card.is-confirmed .chat-artifact-frame,
+.chat-artifact-card.is-cancelled .chat-artifact-frame {
+  pointer-events: none;
+  opacity: 0.72;
+}
+.chat-artifact-confirm-badge {
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  color: #64748b;
+}
+.chat-artifact-card.is-confirmed .chat-artifact-confirm-badge { color: #16a34a; }
+.chat-artifact-card.is-confirm-failed .chat-artifact-confirm-badge { color: #dc2626; }
 .chat-artifact-header {
   display: flex;
   align-items: center;
