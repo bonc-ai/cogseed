@@ -23,6 +23,16 @@
     'publish-challenge': '发布挑战',
     'submit-review': '教师终审'
   };
+  // Bug2（2026-09-14）：字段键名展示映射——技术键名换成中文标签，
+  // 挑战名（challengeTitle）与 ID 分开呈现，不再只露一串裸 ID。
+  var FIELD_LABELS = {
+    'challengeTitle': '挑战名称',
+    'challengeId': '挑战 ID',
+    'projectTitle': '项目标题',
+    'githubRepoUrl': 'GitHub 仓库',
+    'studentId': '学号',
+    '提交身份': '提交身份'
+  };
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -56,9 +66,24 @@
     var rows = Object.keys(q.payload).map(function (k) {
       var v = q.payload[k];
       if (v && typeof v === 'object') v = JSON.stringify(v);
-      return '<div class="ed-kv"><span class="ed-kv-label">' + esc(k) + '</span><span>' + esc(v) + '</span></div>';
+      return '<div class="ed-kv"><span class="ed-kv-label">' + esc(FIELD_LABELS[k] || k) + '</span><span>' + esc(v) + '</span></div>';
     }).join('');
+    // A2-2（2026-09-07）：提交类操作必须明示身份；缺失时醒目警告（不阻断，但提示风险）
+    var identityWarn = '';
+    if (q.op === 'submit-project') {
+      var hasIdentity = !!q.payload && !!(q.payload['提交身份'] || q.payload.studentId || q.payload['student_id']);
+      if (!hasIdentity) {
+        identityWarn = '<div class="ed-error-box" style="margin-bottom:8px">⚠ 摘要未标明提交身份（学号）——请回到对话，要求智能体在摘要中补充「提交身份」后再确认。</div>';
+      }
+      // Bug2（2026-09-14）：挑战必须同时呈现名称（challengeTitle）；缺失仅警示，
+      // 仍显示 challengeId（不静默隐藏，避免把 ID 误当名称）。
+      var hasTitle = !!q.payload && !!(q.payload.challengeTitle || q.payload['挑战名称']);
+      if (!hasTitle) {
+        identityWarn += '<div class="ed-error-box" style="margin-bottom:8px">⚠ 摘要未标明挑战名称（challengeTitle）——请回到对话，要求智能体补充挑战名称后再确认。</div>';
+      }
+    }
     body.innerHTML =
+      identityWarn +
       '<div class="ed-confirm-op"><span class="ed-chip">' + esc(title) + '</span></div>' +
       '<div class="ed-confirm-rows">' + rows + '</div>' +
       '<p class="ed-confirm-hint">确认后，对话里的智能体将把以上内容写入平台。写错了点「取消」，在对话里让它改。</p>';
