@@ -361,14 +361,10 @@
       ignored: T('cognition.candidate_status_ignored', '已忽略'),
     }[String(c.status || '')] || String(c.status || ''));
     const attention = [];
-    // 高优待办（cognition.inbox：敏感级未分级、规则缺边界、来源失效、Skill
-    // 待更新等）：旧 UI 有整页 inbox，重建后只在候选列表里看不到这类治理
-    // 待办——收进「需要处理」区（title/detail 后端已是用户可读文案）。
-    const inboxItems = (Array.isArray(S.inboxItems) ? S.inboxItems : []).slice(0, 5);
-    for (const item of inboxItems) {
-      const navigable = Boolean(item.assetId || item.candidateId);
-      attention.push(`<div class="ca-attention-row"${navigable ? ` data-act="inbox-go" data-id="${esc(item.id)}" ${roleBtn()}` : ''}><span>${esc(item.title || '')}${item.detail ? ` · ${esc(item.detail)}` : ''}</span>${navigable ? '<b>›</b>' : ''}</div>`);
-    }
+    // 注：治理待办（cognition.inbox：未分级 / 规则缺边界 / 分类冲突等）曾在此
+    // 列出，但新 UI 尚无资产分级与边界编辑入口——报了警却无处处理，只会
+    // 制造焦虑（2026-09-14 撤下）。等治理动作入口恢复后，连同每类的动作
+    // 指引一起重上。此处只保留有明确处理出口的两条。
     if (stats.sourceIssues) {
       attention.push(`<div class="ca-attention-row" data-act="go-sources" ${roleBtn()}><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
     }

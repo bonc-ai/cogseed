@@ -119,8 +119,6 @@
     captureCounts: {},
     captureSettings: null,
     sources: [],
-    teaching: [],
-    inboxItems: [],
     experiences: [],
     experienceTotal: 0,
     tree: null,
@@ -156,14 +154,16 @@
   const LOADERS = {
     async snapshot() {
       store.errors = [];
-      const [assets, candidates, captures, settings, sources, teaching, inbox, experiences] = await Promise.all([
+      // 注：cognition.inbox.list（治理待办：未分级/规则缺边界等）与
+      // recall.teaching.list 的拉取在 2026-09-14 撤下——治理待办在新 UI 尚无
+      // 处理出口（分级/边界编辑入口），报了也无处处理；等动作入口恢复后
+      // 连同动作指引一起重上。渠道契约本身未变，随时可接回。
+      const [assets, candidates, captures, settings, sources, experiences] = await Promise.all([
         api.soft('recall.assets.list', {}, {}),
         api.soft('recall.candidates.list', {}, {}),
         api.soft('recall.captures.list', { limit: 40 }, {}),
         api.soft('recall.captures.settings.get', {}, {}),
         api.soft('recall.sources.list', {}, {}),
-        api.soft('recall.teaching.list', {}, {}),
-        api.soft('cognition.inbox.list', {}, {}),
         api.soft('kstar.experiences.list', {}, {}),
       ]);
       store.assets = toArr(assets, ['assets', 'items']);
@@ -172,8 +172,6 @@
       store.captureCounts = (captures && captures.counts) || {};
       store.captureSettings = (settings && settings.settings) || settings || null;
       store.sources = toArr(sources, ['groups', 'sources']);
-      store.teaching = toArr(teaching, ['signals', 'items']);
-      store.inboxItems = toArr(inbox, ['items']);
       // 提炼出的经验（KSTAR review 里 lesson 非空的记录，含沉淀状态）；失败不阻塞主快照。
       store.experiences = toArr(experiences, ['experiences', 'items']);
       store.experienceTotal = Number((experiences && experiences.total) || store.experiences.length) || 0;

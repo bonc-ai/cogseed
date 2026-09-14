@@ -89,12 +89,6 @@
           case 'go-sources': router.go({ name: 'manage', manageTab: 'sources' }); break;
           case 'go-organize': router.go({ name: 'manage', manageTab: 'organize' }); break;
           case 'open-candidate': router.go({ name: 'review', candidateId: id }); break;
-          case 'inbox-go': {
-            const item = (S.inboxItems || []).find((row) => String(row.id) === String(id));
-            if (item && item.assetId) router.go({ name: 'overview', assetId: item.assetId });
-            else if (item && item.candidateId) router.go({ name: 'review', candidateId: item.candidateId });
-            break;
-          }
           case 'open-ontology': await NS.openPersonalOntology(); break;
           case 'open-asset': router.go({ name: 'overview', assetId: id }); break;
           case 'open-overview': router.go({ name: 'overview' }); break;
