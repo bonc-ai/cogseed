@@ -141,7 +141,22 @@
         { label: '取消', role: 'secondary' },
         { label: '创建自动化任务', role: 'primary' },
       ],
-    });
+    })
+      // 2026-09-14 新增契约：整卡都必填时不逐条标"必填/选填"（供应商详情卡）。
+      // required 语义仍在控件上，去掉的只是每个字段的标注文案。
+      + specimen(
+        'B / 整卡必填：不逐条标注',
+        'showRequirement: false —— 控件仍带 required，标签行不再出现必填/选填',
+        uiForm({
+          ariaLabel: '供应商详情示例',
+          columns: 2,
+          fields: [
+            { html: uiField({ id: 'gallery-quiet-name', label: '名称', required: true, showRequirement: false, control: { kind: 'input', value: 'command' } }) },
+            { html: uiField({ id: 'gallery-quiet-format', label: 'API 格式', required: true, showRequirement: false, control: { kind: 'select', value: 'openai', options: [{ value: 'openai', label: 'Chat Completions' }, { value: 'anthropic', label: 'Anthropic Messages' }] } }) },
+            { wide: true, html: uiField({ id: 'gallery-quiet-key', label: 'API Key', showRequirement: false, hint: '留空表示不修改；输入新值即替换。', control: { kind: 'input', type: 'password', value: '' } }) },
+          ],
+        }),
+      );
     hydrateUiFormSelects(byId('form-composition-specimen'));
   }
 

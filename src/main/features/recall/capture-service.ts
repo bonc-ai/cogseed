@@ -11,6 +11,7 @@ import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../au
 import * as chats from '../chats';
 import type { ReviewDecision } from '../cognition/review-decision';
 import { getRecallCandidateCapabilities, recallCandidateError } from './candidate-capabilities';
+import { normalizeAssetScopeValue } from './scope-policy';
 import type { PersonalProfileSyncResult, PersonalProfileTarget } from './personal-profile-sync';
 import {
   run as runCliAgent,
@@ -731,7 +732,10 @@ function parseOneCandidate(rawCandidate: unknown, validLabels: Set<string>): Par
     ...(uncertainty ? { uncertainty } : {}),
     suggestedType: parseCandidateType(candidate.suggestedType),
       ...parseCandidateBoundaries(candidate),
-    suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
+    // scope 归一（A 轨道 · 2026-09-13）：LLM 自由文本（"用户全局画像"等）
+    // 尽力归一词表；归不了的保留原文——匹配层 token 软匹配兜底，不硬拒。
+    suggestedScope: normalizeAssetScopeValue(String(candidate.suggestedScope || ''))
+      ?? boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
     ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
     actionProvided,
     ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
@@ -767,8 +771,12 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates.',
+    // scope 枚举约束（A 轨道）：自由文本 scope（"用户全局画像"）在自动投影
+    // 里永远匹配不上任务词，用户确认的资产会全部失配。general=跨对话/跨
+    // 空间的用户级事实；其余四个是任务类型词。空间限定交给 workspace-ref。
+    'suggestedScope must be one of the five controlled terms: "general" (applies across all conversations and spaces — identity, durable preferences), or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes like "用户全局画像" — use "general" instead.',
     // 空返回也要说明白为什么。没有这句，实机上「这次没抽出来」在系统里没有
     // 任何解释，用户无法判断是抽对了还是抽漏了。
     'When nothing is durable enough, return {"candidates":[],"reason":"one short sentence, in the language of the conversation, saying what was missing"}.',
@@ -843,8 +851,9 @@ async function extractCaptureViaCli(
   const prompt =
     `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
     `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
-    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
+    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
     `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
+    `suggestedScope must be one of the five controlled terms: "general" (across all conversations and spaces — identity, durable preferences) or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes.\n` +
     `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
     `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
     `Write candidate text in the same language as the conversation.\n\n` +

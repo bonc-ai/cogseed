@@ -108,4 +108,28 @@ describe('recall search_ability_assets tool', () => {
     expect(empty.isError).not.toBe(true);
     expect(empty.content).toContain('认知资产池共 0 条');
   });
+
+  it('searches profile memory with an explicit source label (T1.3 画像进池)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const profileFile = paths.userProfileFile(TEST_UID);
+    fs.mkdirSync(path.dirname(profileFile), { recursive: true });
+    fs.writeFileSync(profileFile, '用户是本程序的开发人员，技术问题按内部排查口径处理。', 'utf8');
+
+    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallTools({ userId: TEST_UID });
+
+    const result = await tool.execute({ query: '开发人员' }, {} as never);
+    expect(result.isError).not.toBe(true);
+    // 画像可被检索到，且带来源与等级标注——LLM 必须能区分记忆与经验。
+    expect(result.content).toContain('用户是本程序的开发人员');
+    expect(result.content).toMatch(/\[asset:onto-/);
+    expect(result.content).toContain('来源:画像记忆(user_profile)，未经确认，仅供参考');
+    expect(result.content).toContain('画像记忆 1');
+    // spaceId 过滤把画像排除（记忆无空间归属）。
+    const filtered = await tool.execute({ query: '开发人员', spaceId: 'sp_a' }, {} as never);
+    expect(filtered.content).not.toContain('用户是本程序的开发人员');
+    // scope 精确过滤：画像 scope=general，按值参与过滤。
+    const scopeKept = await tool.execute({ query: '开发人员', scope: 'general' }, {} as never);
+    expect(scopeKept.content).toContain('用户是本程序的开发人员');
+  });
 });

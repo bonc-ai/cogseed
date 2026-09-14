@@ -278,4 +278,26 @@ describe('Recall cognition source catalog', () => {
     await expect(retryCognitionSource('user-a', 'execution_evaluation', 'exec-failed'))
       .rejects.toThrow(/not supported/i);
   });
+
+  it('cancelled execution is a normal termination, not a failure (2026-09-14)', async () => {
+    // 用户主动取消的执行记录此前被算 failed——"待我处理"会永驻一条无从处理的
+    // 假警报（实机出现 [failed] execution_cancelled）。
+    mocks.listExecutions.mockResolvedValue([{
+      executionId: 'exec-cancelled',
+      uid: 'user-a',
+      kind: 'core-agent',
+      sessionId: 'gconv-conv-a',
+      conversationId: 'conv-a',
+      status: 'cancelled',
+      boundary: 'real',
+      permissionMode: 'default',
+      artifactIds: [],
+      startedAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:02:00.000Z',
+    }]);
+
+    const [group] = await listCognitionSources('user-a', { kinds: ['execution_evaluation'] });
+    expect(group.items[0].status).toBe('ready');
+    expect(group.status).toBe('ready');
+  });
 });
