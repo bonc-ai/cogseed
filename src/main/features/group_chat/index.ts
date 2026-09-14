@@ -263,7 +263,8 @@ import * as marketplace from '../marketplace';
 
 const log = createLogger('group_chat.facade');
 
-function mainJsonlFile(uid: string, cid: string): string {
+/** 主 jsonl 文件路径（confirm-cards.ts 等子模块共用）。 */
+export function mainJsonlFile(uid: string, cid: string): string {
   return conversationMessageFile(uid, cid);
 }
 

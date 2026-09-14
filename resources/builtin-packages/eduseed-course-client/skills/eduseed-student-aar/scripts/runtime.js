@@ -17208,6 +17208,18 @@ async function dispatch(client, config2, command, p) {
       const result = await getChallenge(client, id);
       return { ...base, ...result };
     }
+        // [2026-09-14 Bug2] 挑战目录名清洗（与 nseap-mcp 源 sanitizeDirSegment 同构；源重建时随 bundle 再生成）
+    function __sanitizeDirSeg(t) {
+      const raw = String(t ?? "").normalize("NFC");
+      const parts = raw.split(/[\\/:*?"<>|\u0000-\u001f\u007f]+/).map((seg) => seg.replace(/^\.+/, "").replace(/[. ]+$/g, "").trim()).filter((seg) => seg.length > 0);
+      const joined = parts.join(" ").replace(/\s+/g, " ").trim();
+      return Array.from(joined).slice(0, 120).join("");
+    }
+    function __challengeDirName(title, id, suffix) {
+      const seg = __sanitizeDirSeg(title);
+      const shortId = String(id ?? "").slice(-6);
+      return seg ? `挑战_${seg}_${shortId}_${suffix}` : `挑战_${shortId}_${suffix}`;
+    }
     // ---- G3 正文全文（2026-09-08）----
     case "get-challenge-content": {
       const id = str(p.challengeId) ?? str(p.value);
@@ -17216,7 +17228,9 @@ async function dispatch(client, config2, command, p) {
       const workdir = str(p.workdir);
       if (result.ok && workdir) {
         try {
-          const dir = (0, import_node_path3.join)(workdir, `\u6311\u6218${id}_\u6B63\u6587`);
+          let __dirTitle = "";
+try { const __c = await getChallenge(client, id); __dirTitle = __c.ok && __c.challenge && __c.challenge.title ? __c.challenge.title : ""; } catch {}
+const dir = (0, import_node_path3.join)(workdir, __challengeDirName(__dirTitle, id, "正文"));
           (0, import_node_fs3.mkdirSync)(dir, { recursive: true });
           (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(dir, "CHALLENGE.md"), result.content.markdown, "utf8");
           (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(dir, "challenge.yaml"), result.content.yaml, "utf8");
@@ -17241,7 +17255,7 @@ async function dispatch(client, config2, command, p) {
         listMaterials(client, id)
       ]);
       if (!card.ok) return { ...base, ...card };
-      const targetDir = (0, import_node_path3.join)(workdir, `\u6311\u6218${id}_\u5B8C\u6574\u8D44\u6599`);
+      const targetDir = (0, import_node_path3.join)(workdir, __challengeDirName(card.challenge && card.challenge.title ? card.challenge.title : "", id, "完整资料"));
       (0, import_node_fs3.mkdirSync)(targetDir, { recursive: true });
       const files = [];
       const add = (rel, data) => {
@@ -17309,7 +17323,9 @@ async function dispatch(client, config2, command, p) {
       if (!id || !workdir) {
         return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "challengeId \u4E0E workdir \u5FC5\u586B" } };
       }
-      const targetDir = (0, import_node_path3.join)(workdir, `\u6311\u6218${id}_\u6750\u6599`);
+      let __dirTitle = "";
+try { const __c = await getChallenge(client, id); __dirTitle = __c.ok && __c.challenge && __c.challenge.title ? __c.challenge.title : ""; } catch {}
+const targetDir = (0, import_node_path3.join)(workdir, __challengeDirName(__dirTitle, id, "材料"));
       try {
         const names = [];
         let junkSkipped = 0;
