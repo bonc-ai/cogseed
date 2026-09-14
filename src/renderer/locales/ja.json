@@ -5076,5 +5076,8 @@
   "kb.transcriptCorrect.delete_arrow": "（削除）",
   "kb.transcriptCorrect.close_panel": "校正を閉じる",
   "kb.transcriptCorrect.unavailable": "文字起こし校正を利用できません",
-  "kb.transcriptCorrect.close": "閉じる"
+  "kb.transcriptCorrect.close": "閉じる",
+  "kb.transcriptCorrect.group_high": "高リスク {count} 件 · 個別確認",
+  "kb.transcriptCorrect.group_other": "その他 {count} 件",
+  "kb.transcriptCorrect.group_other_collapsed": "その他 {count} 件（折りたたみ）"
 }
