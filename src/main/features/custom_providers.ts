@@ -513,6 +513,24 @@ export function updateCustomProviderModel(
   let model: CustomProviderModel;
   try { model = normalizeModel(input, previous); }
   catch (error) { return { ok: false, error: (error as Error).message }; }
+  // 部分更新语义（2026-09-14 保存失效根治）：调用方**未提供**的高级字段
+  // 保留旧值——自动保存/UI 状态重放只带基础字段（id/窗口/输出/input）时，
+  // 不再把已配置的推理等级/能力/参数映射抹掉（实机：boot 后 ~30s 一条
+  // 快照 update 反复清掉用户配置，表象即"保存后重进变回旧值"）。显式提供
+  // 空数组（用户清空）不在此列——normalize 后无字段即清空，语义不变。
+  const raw = (input || {}) as {
+    reasoningLevels?: unknown; capabilities?: unknown; reasoningParamsMap?: unknown;
+  };
+  if (raw.reasoningLevels === undefined && previous.reasoningLevels?.length) {
+    model.reasoningLevels = previous.reasoningLevels;
+  }
+  if (raw.capabilities === undefined && previous.capabilities?.length) {
+    model.capabilities = previous.capabilities;
+  }
+  if (raw.reasoningParamsMap === undefined && previous.reasoningParamsMap
+    && Object.keys(previous.reasoningParamsMap).length) {
+    model.reasoningParamsMap = previous.reasoningParamsMap;
+  }
   if (model.id !== previousId && provider.models.some((candidate) => candidate.id === model.id)) {
     return { ok: false, error: 'model already exists' };
   }

@@ -1005,8 +1005,10 @@ function _settingsNormalizeCustomProviderModel(input) {
       contextWindow,
       maxTokens,
       ...(declaredInput ? { input: inputTypes } : {}),
-      ...(capabilities.length ? { capabilities } : {}),
-      ...(reasoningLevels.length ? { reasoningLevels } : {}),
+      // 表单路径（declaredInput）显式携带能力/等级——空数组表示用户清空，
+      // 与"未提供"（草稿行等旧调用方，后端保留旧值）区分开。
+      ...(declaredInput ? { capabilities } : {}),
+      ...(declaredInput ? { reasoningLevels } : {}),
       ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
     },
   };
