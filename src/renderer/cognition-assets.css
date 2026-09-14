@@ -41,24 +41,10 @@
 
 /* ── 页头（标题行已移除：侧栏已高亮「认知资产」，独立标题是冗余；
      刷新按钮并入 tab 行右侧） ─────────────────────────────── */
-.ca-iconbtn {
-  width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--ca-line);
-  background: var(--ca-card); color: var(--ca-ink2); cursor: pointer; font-size: 14px;
-}
-.ca-iconbtn:hover { background: var(--color-ca-hover); }
-/* 页头刷新按钮：图标+文字（纯图标 ⟳ 用户认不出用途，实测反馈）。 */
-.ca-refresh-btn {
-  display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px;
-  border: 1px solid var(--ca-line); border-radius: 8px; background: var(--ca-card);
-  cursor: pointer; font: inherit; font-size: 12px; color: var(--ca-ink2);
-}
-.ca-refresh-btn:hover { border-color: var(--ca-green-line); color: var(--ca-green-d); }
 
 /* ── 四个主标签 ───────────────────────────────────────────── */
 /* ── 页头 tab（紧凑横排：标题 + 一句说明，下划线选中态） ───────────── */
 .ca-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--ca-line); }
-/* 刷新按钮停靠 tab 行右端（原页头行删除后的归宿）。 */
-.ca-tabs .ca-refresh-btn { margin-left: auto; align-self: center; }
 .ca-tab {
   display: flex; align-items: baseline; gap: 6px; padding: 7px 13px 8px;
   border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
@@ -107,7 +93,6 @@
 .ca-kv .ca-v { font-size: var(--font-size-3); margin-top: 2px; }
 .ca-content-text { color: var(--ca-ink2); font-size: var(--font-size-3); margin-top: 8px; white-space: pre-wrap; }
 .ca-sect { border-top: 1px solid var(--ca-line); margin-top: 16px; padding-top: 14px; }
-.ca-sect h4 { font-size: 13px; margin-bottom: 4px; }
 .ca-sect p { color: var(--ca-ink2); font-size: var(--font-size-3); max-width: 640px; }
 .ca-footnote { color: var(--ca-ink3); font-size: 12px; margin-top: 14px; }
 .ca-section-head { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; }
@@ -256,7 +241,7 @@
 .ca-more-copy strong { display: block; font-size: var(--font-size-3); font-weight: 600; }
 .ca-more-copy span { display: block; font-size: var(--font-size-2); color: var(--ca-ink3); margin-top: 1px; }
 /* 写操作进行中：按钮禁用+变淡（重画后自然消失） */
-.ca-btn.is-pending, .ca-iconbtn.is-pending, .ca-more-toggle.is-pending { opacity: .55; pointer-events: none; }
+.ca-btn.is-pending, .ca-more-toggle.is-pending { opacity: .55; pointer-events: none; }
 
 /* ── 候选 ─────────────────────────────────────────────────── */
 .ca-candidate .ca-content-text { color: var(--ca-ink2); }
@@ -269,12 +254,6 @@
 .ca-warn + .ca-field,
 .ca-line + .ca-field { margin-top: 10px; }
 .ca-field > span { color: var(--ca-ink2); font-size: var(--font-size-3); text-align: right; padding-top: 8px; }
-.ca-input {
-  border: 1px solid var(--ca-line); border-radius: 8px; padding: 7px 11px; font-size: var(--font-size-3);
-  font-family: inherit; background: var(--color-ca-paper); color: var(--ca-ink); width: 100%;
-}
-.ca-input:focus { outline: none; border-color: var(--ca-green-line); background: var(--color-white); }
-.ca-textarea { min-height: 96px; resize: vertical; line-height: 1.65; }
 
 /* ── 证明 ─────────────────────────────────────────────────── */
 .ca-proof-list { margin-top: 6px; }
@@ -287,13 +266,9 @@
 .ca-proof-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ca-green); margin-top: 6px; flex: 0 0 auto; }
 .ca-proof-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ca-proof-body strong { font-size: 13px; }
-.ca-proof-summary { color: var(--ca-ink2); font-size: var(--font-size-2); }
-.ca-proof-meta { color: var(--ca-ink3); font-size: var(--font-size-2); }
-.ca-proof-event time { margin-left: auto; color: var(--ca-ink3); font-size: var(--font-size-2); white-space: nowrap; }
 .ca-rating { padding: 0 2px 14px 18px; }
 .ca-rating strong { font-size: var(--font-size-3); }
 .ca-note-zone { margin-top: 10px; }
-.ca-detail-refs { color: var(--ca-ink3); font-size: 12px; margin-top: 8px; }
 
 /* ── 设置与管理 ───────────────────────────────────────────── */
 .ca-subnav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -303,14 +278,6 @@
 }
 .ca-pill:hover { border-color: var(--color-ca-green-line-2); }
 .ca-pill.is-on { background: var(--ca-green-bg); border-color: var(--ca-green-line); color: var(--color-ca-green-text-deep); font-weight: 600; }
-.ca-split { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 14px; align-items: start; }
-.ca-vlist { margin-top: 12px; }
-.ca-vrow {
-  display: flex; align-items: center; gap: 9px; border: 1px solid var(--ca-line);
-  border-radius: var(--radius-3); padding: 11px 12px; cursor: pointer;
-}
-.ca-vrow + .ca-vrow { margin-top: 8px; }
-.ca-vrow.is-on { border-color: var(--ca-green-line); background: var(--ca-green-bg); }
 .ca-flow {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   background: var(--color-ca-paper); border: 1px solid var(--ca-line); border-radius: 12px;
@@ -318,12 +285,6 @@
 }
 .ca-flow b { color: var(--ca-ink); font-weight: 600; }
 .ca-flow i { color: var(--color-ca-ink-faint); font-style: normal; }
-.ca-whenwrap { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.ca-whenwrap .ca-card + .ca-card { margin-top: 0; }
-.ca-whencard.is-on { border-color: var(--ca-green-line); background: var(--ca-green-bg); }
-.ca-whencard .ca-sub { margin-top: 6px; min-height: 34px; }
-.ca-setrow { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-.ca-setrow .ca-actions { margin-top: 0; margin-left: auto; }
 .ca-source-card .ca-line { align-items: center; }
 
 /* ── 空态与加载 ───────────────────────────────────────────── */
@@ -336,11 +297,6 @@
 .ca-loading { text-align: center; color: var(--ca-ink3); padding: 40px; }
 
 /* ── 窄窗 ─────────────────────────────────────────────────── */
-@media (max-width: 1080px) {
-  .ca-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ca-split { grid-template-columns: minmax(0, 1fr); }
-  .ca-whenwrap { grid-template-columns: minmax(0, 1fr); }
-}
 
 /* ── 共享控件工厂适配（uiButton / uiInput / uiTextarea 落位） ──────────
    本页按钮与输入走共享工厂（shared-ui-adoption-guard 约束：新模块零裸控件），
@@ -373,12 +329,6 @@
 .ca-app .ui-button.ca-more-toggle::after { content: ' ▾'; font-size: var(--font-size-1); }
 .ca-app .ui-button.ca-more-toggle.is-open::after { content: ' ▴'; }
 .ca-app .ui-button.ca-more-toggle:hover { background: none; color: var(--ca-ink); }
-.ca-app .ui-button.ca-refresh-btn {
-  display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
-  border: 1px solid var(--ca-line); background: none; color: var(--ca-ink2);
-  font-size: var(--font-size-2); cursor: pointer; font-weight: 400;
-}
-.ca-app .ui-button.ca-refresh-btn:hover { border-color: var(--ca-green-line); color: var(--ca-green-d); background: none; }
 /* 筛选 chip 按钮 / 管理 pill */
 .ca-app .ui-button.ca-chip-btn {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
@@ -406,7 +356,6 @@
 .ca-app .ca-chip-opt:hover { filter: brightness(.97); }
 /* 复合行控件 div 化后补 cursor（.ca-proof-head 原生 button 时代自带） */
 .ca-app .ca-proof-head { cursor: pointer; }
-.ca-app .ca-attention-row.is-static { cursor: default; }
 
 /* 树干主体 = 个人本体（2026-09-14 布局调整）：关于我类资产归属于本体内部，
    不再单列为枝叶；干块带副行计数（关于我 N），样式与分类块同族。 */
