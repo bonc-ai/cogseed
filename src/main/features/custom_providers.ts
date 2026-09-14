@@ -132,7 +132,10 @@ function normalizeModel(
   // Window fallback chain: explicit value → catalog (known model) → default
   // guess. The catalog beat-out prevents importer rows (CC Switch hints carry
   // only ids) from silently carrying a wrong 128K default for models whose
-  // real window is public knowledge.
+  // real window is public knowledge. The final "default guess" for ids the
+  // catalog does not know is the decimal 1M/384K caliber — product decision
+  // 2026-09-14 (rationale sits on the constants in features/auth.ts); verified
+  // ids belong in public_model_catalog, not in a stricter runtime guess.
   const contextWindow = normalizePositiveSafeInteger(
     candidate.contextWindow,
     'contextWindow',

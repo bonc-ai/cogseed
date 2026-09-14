@@ -263,6 +263,16 @@ export interface TtsProfile {
 // 模型配置默认值口径（2026-09-13 产品口径，十进制）：新建/未声明模型的
 // 上下文窗口默认 1M（1000000）、最大输出默认 384K（384000）。此前为
 // 保守值 131072/8192——所有配置入口统一引用本常量，避免各处默认漂移。
+//
+// 2026-09-14 复核后确认继续沿用（产品负责人明确定调）：**目录里查不到的
+// 自定义模型 id 仍套这两个默认值**，不改成"提示未确认、要求手填"。
+// 理由与边界：
+//   - 目录（public_model_catalog）已是"已验证 id"的登记处：厂商实测确认的
+//     id 应当登记进目录，届时走目录值；默认值只服务"还没登记的新 id"。
+//   - 未知 id 兜大（1M/384K）比兜小（128K/8K）更符合实际——兜小会静默压低
+//     上下文预算与 max_tokens（v4-flash-vision-exp 就吃过这个亏）。
+//   - 代价：万一厂商真实窗口更小，界面分母会偏乐观。用户可在「模型配置」
+//     编辑里显式填窗口/输出覆盖掉默认值（自定义供应商表单接受显式值）。
 export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 1000000;
 export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 384000;
 export const MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW = 16_777_216;
