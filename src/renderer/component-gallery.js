@@ -69,7 +69,7 @@
     const stateLabels = ['默认', '悬停', '按下', '焦点', '禁用', '加载'];
     const rows = [];
     for (const role of roles) {
-      for (const size of ['md', 'sm']) {
+      for (const size of ['lg', 'md', 'sm']) {
         rows.push(`<tr><td>${role.id} / ${size}</td>${states.map((state) => `<td><div class="gallery-matrix__control">${buttonForState(role, size, state)}</div></td>`).join('')}</tr>`);
       }
     }
@@ -81,7 +81,9 @@
     const labels = ['默认', '悬停', '按下', '焦点', '禁用'];
     const cases = [
       { label: '更多操作', icon: 'more-horizontal', variant: 'plain' },
+      { label: '导入内容', icon: 'upload', variant: 'plain' },
       { label: '关闭弹窗', icon: 'x', variant: 'plain' },
+      { label: '删除记忆', icon: 'bookmark', variant: 'plain' },
       { label: '删除任务', icon: 'trash-2', variant: 'danger' },
     ];
     const rows = cases.map((item) => `<tr><td>${item.label}</td>${states.map((state) => `<td><div class="gallery-matrix__control">${uiIconButton({
@@ -90,6 +92,38 @@
       attrs: state === 'hover' || state === 'active' || state === 'focus' ? { 'data-preview-state': state } : {},
     })}</div></td>`).join('')}</tr>`).join('');
     byId('icon-button-matrix').innerHTML = `<table class="gallery-matrix"><thead><tr><th>可读名称</th>${labels.map((label) => `<th>${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderSegmentedControls() {
+    const cases = [
+      {
+        label: '基础筛选', note: '默认 · 选中 · 悬停 · 键盘焦点',
+        html: uiSegmentedControl({
+          ariaLabel: '资产范围',
+          value: 'all',
+          attrs: { 'data-gallery-segmented': '' },
+          items: [
+            { value: 'all', label: '全部' },
+            { value: 'mine', label: '我负责' },
+            { value: 'archived', label: '已归档' },
+          ],
+        }),
+      },
+      {
+        label: '带数量', note: '数量跟随标签，不渲染徽标气泡',
+        html: uiSegmentedControl({
+          ariaLabel: '证明记录筛选',
+          value: 'used',
+          attrs: { 'data-gallery-segmented': '' },
+          items: [
+            { value: 'all', label: '全部', count: 24 },
+            { value: 'used', label: '已引用', count: 8 },
+            { value: 'verified', label: '效果已验证', count: 3 },
+          ],
+        }),
+      },
+    ];
+    byId('segmented-control-specimens').innerHTML = cases.map((item) => specimen(item.label, item.note, item.html)).join('');
   }
 
   function renderFormControls() {
@@ -274,6 +308,13 @@
   }
 
   function wireInteractions() {
+    document.querySelectorAll('[data-gallery-segmented]').forEach((group) => {
+      group.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button || !group.contains(button)) return;
+        group.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', item === button ? 'true' : 'false'));
+      });
+    });
     document.addEventListener('click', (event) => {
       const modalTrigger = event.target.closest('[data-modal-demo]');
       if (modalTrigger) {
@@ -314,6 +355,7 @@
   renderPageHeaders();
   renderButtons();
   renderIconButtons();
+  renderSegmentedControls();
   renderFormControls();
   renderEmptyStates();
   renderModalLaunchers();

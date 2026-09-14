@@ -179,11 +179,14 @@ function _createWorkspaceChip(target) {
   chip.dataset.wsTarget = target;
   chip.title = t('workspace.chip_title', '点击选择工作空间');
   const prefix = t('workspace.chip_label', '工作空间：');
+  const spaceIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('layout-grid', 'workspace-chip-icon')
+    : '';
   const chevronIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
     ? window.uiIconHtml('chevron-down', 'workspace-chip-chevron')
     : '';
   chip.innerHTML =
-    `<span class="workspace-chip-prefix">${escapeHtml(prefix)}</span>` +
+    spaceIcon + `<span class="workspace-chip-prefix">${escapeHtml(prefix)}</span>` +
     '<span class="workspace-chip-label"></span>' +
     chevronIcon;
   chip.addEventListener('click', (e) => {

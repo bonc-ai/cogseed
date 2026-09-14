@@ -12,6 +12,7 @@ function loadFactories() {
   for (const file of [
     'src/renderer/modules/icons.js',
     'src/renderer/modules/ui-button.js',
+    'src/renderer/modules/ui-segmented-control.js',
     'src/renderer/modules/ui-form.js',
     'src/renderer/modules/ui-empty.js',
     'src/renderer/modules/ui-page-header.js',
@@ -30,6 +31,9 @@ describe('first-version renderer components', () => {
     expect(primary).toContain('ui-button--sm');
     expect(primary).toContain('&lt;创建&gt;');
     expect(primary).toContain('is-plus');
+
+    const large = uiButton({ label: '继续', role: 'primary', size: 'lg' });
+    expect(large).toContain('ui-button--lg');
 
     const fallback = uiButton({ label: '保存', role: 'invented', size: 'xl' });
     expect(fallback).toContain('ui-button--secondary');
@@ -50,6 +54,24 @@ describe('first-version renderer components', () => {
 
     expect(() => uiIconButton({ icon: 'x' })).toThrow(/accessible label/);
     expect(uiIconButton({ icon: 'x', label: '关闭弹窗' })).toContain('aria-label="关闭弹窗"');
+  });
+
+  it('renders SegmentedControl as pressed native buttons with inline counts', () => {
+    const { uiSegmentedControl } = loadFactories();
+    const html = uiSegmentedControl({
+      ariaLabel: '证明记录筛选',
+      value: 'used',
+      items: [
+        { value: 'all', label: '全部', count: 12 },
+        { value: 'used', label: '已引用', count: 4, attrs: { 'data-filter': 'used' } },
+      ],
+    });
+
+    expect(html).toContain('class="ui-segmented-control" role="group" aria-label="证明记录筛选"');
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain('aria-pressed="true" data-filter="used"');
+    expect(html).toContain('class="ui-segmented-control__count">4</span>');
+    expect(() => uiSegmentedControl({ items: ['全部'] })).toThrow(/accessible label/);
   });
 
   it('enforces the three EmptyState contracts and one-action boundary', () => {
@@ -99,7 +121,7 @@ describe('first-version renderer components', () => {
   });
 
   it('renders Input, Textarea, and the unified AiSelect host from one field contract', () => {
-    const { uiField, hydrateUiFormSelects } = loadFactories();
+    const { uiField, uiSelect, hydrateUiFormSelects } = loadFactories();
 
     const input = uiField({
       id: 'task-name',
@@ -112,9 +134,16 @@ describe('first-version renderer components', () => {
     expect(input).toContain('aria-describedby="task-name-hint"');
     expect(input).toContain('&lt;输入名称&gt;');
     expect(input).toContain('>必填<');
+    expect(loadFactories().uiInput({ id: 'search', className: 'asset-search' })).toContain('ui-input asset-search');
+    expect(loadFactories().uiInput({ id: 'title', attrs: { title: '双击修改标题' } }))
+      .toContain('title="双击修改标题"');
 
     const textarea = uiField({ id: 'task-content', label: '任务内容', control: { kind: 'textarea' } });
     expect(textarea).toContain('ui-textarea');
+    expect(loadFactories().uiTextarea({ id: 'details', className: 'space-details', attrs: { rows: 4, spellcheck: 'false' } }))
+      .toContain('ui-textarea space-details');
+    expect(loadFactories().uiTextarea({ id: 'details', attrs: { rows: 4, spellcheck: 'false' } }))
+      .toContain('rows="4" spellcheck="false"');
 
     const select = uiField({
       id: 'frequency',
@@ -125,6 +154,7 @@ describe('first-version renderer components', () => {
     expect(select).toContain('data-ui-select-config');
     expect(select).toContain('frequency-label');
     expect(select).not.toContain('<select');
+    expect(uiSelect({ id: 'sort', ariaLabel: '排序方式', options: [] })).toContain('&quot;ariaLabel&quot;:&quot;排序方式&quot;');
     expect(typeof hydrateUiFormSelects).toBe('function');
   });
 
@@ -153,7 +183,11 @@ describe('component gallery integration contract', () => {
   const index = read('src/renderer/index.html');
   const gallery = read('src/renderer/component-gallery.html');
   const css = read('src/renderer/ui-components.css');
+  const rendererCss = read('src/renderer/style.css');
+  const workspaceCss = read('src/renderer/workspace.css');
+  const recallCss = read('src/renderer/recall-local.css');
   const modal = read('src/renderer/modules/ui-modal.js');
+  const tokens = read('src/renderer/tokens.css');
 
   it('loads tokens before legacy styles and shared component CSS after them', () => {
     expect(index.indexOf('./tokens.css')).toBeLessThan(index.indexOf('./style.css'));
@@ -165,6 +199,7 @@ describe('component gallery integration contract', () => {
       './tokens.css',
       './ui-components.css',
       './modules/ui-button.js',
+      './modules/ui-segmented-control.js',
       './modules/ui-form.js',
       './modules/ui-empty.js',
       './modules/ui-page-header.js',
@@ -172,6 +207,62 @@ describe('component gallery integration contract', () => {
     ]) {
       expect(gallery).toContain(asset);
     }
+  });
+
+  it('maps the open-source design system into production tokens and shared chrome', () => {
+    expect(tokens).toContain('--layout-sidebar-width: 280px;');
+    expect(tokens).toContain('--layout-titlebar-height: 52px;');
+    expect(tokens).toContain('--control-height-sm: 28px;');
+    expect(tokens).toContain('--control-height: 32px;');
+    expect(tokens).toContain('--control-height-lg: 36px;');
+    expect(tokens).toContain('--icon-size: 16px;');
+    expect(tokens).toContain('--font-size-body: 15px;');
+    expect(tokens).toContain('--font-size-heading: 22px;');
+    expect(tokens).toContain('--radius-xs: 4px;');
+    expect(tokens).toContain('--radius-window: 14px;');
+    expect(tokens).toContain('--line-subtle: var(--color-line-subtle);');
+    expect(tokens).toContain('--color-accent-gradient: linear-gradient(135deg, #0A7A55, #086545);');
+    expect(css).toContain('height: var(--control-height);');
+    expect(css).toContain('.ui-button--lg { height: var(--control-height-lg); }');
+    expect(css).toContain('.ui-segmented-control > button[aria-pressed="true"]');
+    expect(css).toContain('min-height: var(--layout-titlebar-height);');
+    expect(css).toContain('border-radius: var(--radius-dialog);');
+  });
+
+  it('documents the production mapping instead of the retired spike contract', () => {
+    const galleryCss = read('src/renderer/component-gallery.css');
+
+    expect(gallery).toContain('OPEN SOURCE DESIGN SYSTEM / PRODUCTION MAPPING');
+    expect(gallery).toContain('4 个角色 × 3 个尺寸 × 6 个可核对状态');
+    expect(gallery).toContain('id="segmented-controls"');
+    expect(gallery).toContain('正文基线 15px');
+    expect(gallery).toContain('4/7/8/9/11/12/14/∞');
+    expect(gallery).not.toContain('首版范围');
+    expect(gallery).not.toContain('UX Quality Spike');
+    expect(galleryCss).toContain('grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);');
+    expect(galleryCss).toContain('.gallery-radius-scale .rw { border-radius: var(--radius-window); }');
+  });
+
+  it('integrates the open-source shell into real high-frequency pages', () => {
+    expect(rendererCss).toContain('font-family: var(--font-sans);');
+    expect(rendererCss).toContain('min-height: var(--row-height-nav);');
+    expect(rendererCss).toContain('max-width: var(--layout-thread-home-width);');
+    expect(rendererCss).toContain('flex: 0 0 var(--layout-settings-nav-width);');
+    expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');
+    expect(rendererCss).toContain('box-shadow: var(--shadow-composer), 0 0 0 3px var(--color-focus-halo);');
+    expect(rendererCss).toContain('.auto-row:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }');
+    expect(rendererCss).toContain('.skill-card.is-menu-open');
+    expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');
+    expect(workspaceCss).toContain('--ws-accent: var(--color-brand);');
+    expect(workspaceCss).toContain('background: var(--surface-app);');
+    expect(workspaceCss).toContain('border-radius: var(--radius-card); background: var(--ws-surface);');
+    expect(workspaceCss).toContain('max-width: var(--layout-card-grid-width);');
+    expect(recallCss).toContain('background: var(--surface-app);');
+    expect(recallCss).toContain('border-bottom-color: var(--color-ink);');
+    expect(recallCss).toContain('max-width: var(--layout-card-grid-width);');
+    expect(rendererCss).toContain('flex: 0 0 var(--layout-info-panel-width);');
+    expect(rendererCss).toContain('calc((100% - var(--layout-thread-width)) / 2)');
+    expect(rendererCss).toContain('#panel-conversation .chat-message.user > .chat-bubble');
   });
 
   it('lets PageHeader own every gallery action appearance', () => {

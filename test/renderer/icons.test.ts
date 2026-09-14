@@ -23,6 +23,38 @@ describe('icons.js', () => {
     expect(html).not.toContain('M12 11v5');
   });
 
+  it('renders the upload action instead of the info fallback', () => {
+    const { uiIconHtml } = loadIcons();
+    const upload = uiIconHtml('upload', 'kb-toolbar-icon');
+    const info = uiIconHtml('info', 'kb-toolbar-icon');
+
+    expect(upload).toContain('is-upload');
+    expect(upload).toContain('M12 3v12');
+    expect(upload).not.toBe(info);
+  });
+
+  it('renders both onboarding navigation arrows through the shared registry', () => {
+    const { uiIconHtml } = loadIcons();
+    const left = uiIconHtml('arrow-left', 'ui-button__icon');
+    const right = uiIconHtml('arrow-right', 'ui-button__icon');
+
+    expect(left).toContain('is-arrow-left');
+    expect(left).toContain('M19 12H5');
+    expect(right).toContain('is-arrow-right');
+    expect(left).not.toBe(right);
+  });
+
+  it('renders the knowledge-workbench actions without falling back to info', () => {
+    const { uiIconHtml } = loadIcons();
+    const info = uiIconHtml('info', 'kb-mm-icon');
+
+    for (const name of ['minus', 'download', 'history']) {
+      const html = uiIconHtml(name, 'kb-mm-icon');
+      expect(html).toContain(`is-${name}`);
+      expect(html).not.toBe(info);
+    }
+  });
+
   it('routes Library file extensions to distinct SVG icon families', () => {
     const { fileKindForName, fileKindIconHtml } = loadIcons();
 

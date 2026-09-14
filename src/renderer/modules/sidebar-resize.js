@@ -15,7 +15,7 @@
   const STORAGE_KEY = 'cogseed:sidebar-width';
   const MIN_WIDTH = 180;
   const MAX_WIDTH = 480;
-  const DEFAULT_WIDTH = 260;
+  const DEFAULT_WIDTH = 280;
 
   function clamp(n) {
     if (!Number.isFinite(n)) return DEFAULT_WIDTH;

@@ -10,6 +10,7 @@
 //      Rows are drag-reorderable.
 
 const _settingsLog = createLogger('settings');
+let _settingsCustomProviderModelDraftId = 0;
 
 let _settingsState = {
   providers: [],      // from auth.listProviders  [{id, label, supportsApiKey, supportsOAuth, profiles, ...}]
@@ -861,14 +862,30 @@ function _settingsIconHtml(name, className = 'ui-icon') {
     : '';
 }
 
+function _settingsElementFromSharedMarkup(markup) {
+  const host = document.createElement('div');
+  host.innerHTML = markup;
+  return host.children[0] || null;
+}
+
 function _settingsCustomProviderActionButton(icon, label, className, onClick) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = className;
-  button.title = label;
-  button.setAttribute('aria-label', label);
   const iconOnly = String(className || '').split(/\s+/).includes('icon-btn');
-  button.innerHTML = `${_settingsIconHtml(icon, 'ui-icon settings-custom-provider-action-icon')}${iconOnly ? '' : `<span>${escapeHtml(label)}</span>`}`;
+  const danger = String(className || '').split(/\s+/).includes('danger');
+  const button = _settingsElementFromSharedMarkup(iconOnly
+    ? uiIconButton({
+      label,
+      icon,
+      variant: danger ? 'danger' : 'plain',
+      className,
+    })
+    : uiButton({
+      label,
+      icon,
+      role: danger ? 'danger' : 'secondary',
+      size: String(className || '').split(/\s+/).includes('btn-sm') ? 'sm' : 'md',
+      className,
+    }));
+  if (!button) throw new Error('Failed to create shared settings action button');
   button.addEventListener('click', async (event) => {
     if (button.disabled) return;
     _settingsSetCustomProviderButtonBusy(button, true);
@@ -977,22 +994,25 @@ function _settingsAppendCustomProviderModelDraft(container, model = null) {
 
   // Minimal editing: one model name per row. Context window / max output
   // fall back to the provider defaults when not supplied.
-  const idInput = document.createElement('input');
-  idInput.type = 'text';
-  idInput.className = 'form-input settings-custom-provider-model-id';
-  idInput.value = normalized.id || '';
-  idInput.placeholder = t('settings.custom_providers.model_id_placeholder');
-  idInput.setAttribute('aria-label', t('settings.custom_providers.model_id'));
-  idInput.autocomplete = 'off';
-  idInput.spellcheck = false;
-  row.appendChild(idInput);
-
-  const removeButton = document.createElement('button');
-  removeButton.type = 'button';
-  removeButton.className = 'settings-custom-provider-model-draft-remove';
-  removeButton.title = t('settings.custom_providers.remove_model');
-  removeButton.setAttribute('aria-label', removeButton.title);
-  removeButton.innerHTML = _settingsIconHtml('x', 'ui-icon');
+  row.innerHTML = `${uiInput({
+    id: `settings-custom-provider-model-draft-${++_settingsCustomProviderModelDraftId}`,
+    className: 'settings-custom-provider-model-id',
+    value: normalized.id || '',
+    placeholder: t('settings.custom_providers.model_id_placeholder'),
+    attrs: {
+      'aria-label': t('settings.custom_providers.model_id'),
+      autocomplete: 'off',
+      spellcheck: 'false',
+    },
+  })}${uiIconButton({
+    label: t('settings.custom_providers.remove_model'),
+    icon: 'x',
+    variant: 'danger',
+    className: 'settings-custom-provider-model-draft-remove',
+  })}`;
+  const idInput = row.querySelector('.settings-custom-provider-model-id');
+  const removeButton = row.querySelector('.settings-custom-provider-model-draft-remove');
+  if (!idInput || !removeButton) return null;
   removeButton.addEventListener('click', () => {
     if (container.children.length === 1) {
       idInput.value = '';
@@ -1001,8 +1021,6 @@ function _settingsAppendCustomProviderModelDraft(container, model = null) {
     }
     row.remove();
   });
-  row.appendChild(removeButton);
-
   container.appendChild(row);
   return row;
 }
@@ -1109,8 +1127,8 @@ function _settingsRenderRecycle() {
           <div class="settings-recycle-meta">${escapeHtml(_settingsRecycleMeta(b))}</div>
         </div>
         <div class="settings-recycle-actions">
-          <button type="button" class="btn btn-sm" data-recycle-action="restore" data-recycle-id="${escapeHtml(id)}">恢复</button>
-          <button type="button" class="btn btn-sm" data-recycle-action="delete" data-recycle-id="${escapeHtml(id)}">彻底删除</button>
+          ${uiButton({ label: '恢复', size: 'sm', attrs: { 'data-recycle-action': 'restore', 'data-recycle-id': id } })}
+          ${uiButton({ label: '彻底删除', role: 'danger', size: 'sm', attrs: { 'data-recycle-action': 'delete', 'data-recycle-id': id } })}
         </div>
       </div>
     </div>`;
@@ -1215,11 +1233,11 @@ function _settingsOpenCustomProviderModal(provider = null, options = {}) {
   title.textContent = editing ? t('settings.custom_providers.edit_title') : t('settings.custom_providers.add_title');
   body.innerHTML = `
     <p class="settings-custom-provider-modal-subtitle">${escapeHtml(editing ? t('settings.custom_providers.edit_subtitle') : t('settings.custom_providers.add_subtitle'))}</p>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.name'))}</label><input id="settings-custom-provider-name" type="text" class="form-input" autocomplete="off" spellcheck="false" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.base_url'))}</label><input id="settings-custom-provider-base-url" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>
-    <div class="form-row settings-custom-provider-secret-row"><label>${escapeHtml(t('settings.custom_providers.api_key'))}</label><div class="settings-custom-provider-secret-input"><input id="settings-custom-provider-api-key" type="password" class="form-input" autocomplete="new-password" spellcheck="false" placeholder="sk-..." /><button type="button" id="settings-custom-provider-api-key-toggle" class="icon-btn" title="${escapeHtml(t('settings.custom_providers.toggle_key_visibility'))}" aria-label="${escapeHtml(t('settings.custom_providers.toggle_key_visibility'))}">${_settingsIconHtml('eye', 'ui-icon')}</button></div></div>
+    <div class="form-row"><label for="settings-custom-provider-name">${escapeHtml(t('settings.custom_providers.name'))}</label>${uiInput({ id: 'settings-custom-provider-name', attrs: { autocomplete: 'off', spellcheck: 'false' } })}</div>
+    <div class="form-row"><label for="settings-custom-provider-base-url">${escapeHtml(t('settings.custom_providers.base_url'))}</label>${uiInput({ id: 'settings-custom-provider-base-url', type: 'url', placeholder: 'https://api.example.com/v1', attrs: { autocomplete: 'off', spellcheck: 'false' } })}</div>
+    <div class="form-row settings-custom-provider-secret-row"><label for="settings-custom-provider-api-key">${escapeHtml(t('settings.custom_providers.api_key'))}</label><div class="settings-custom-provider-secret-input">${uiInput({ id: 'settings-custom-provider-api-key', type: 'password', placeholder: 'sk-...', attrs: { autocomplete: 'new-password', spellcheck: 'false' } })}${uiIconButton({ label: t('settings.custom_providers.toggle_key_visibility'), icon: 'eye', className: 'icon-btn', attrs: { id: 'settings-custom-provider-api-key-toggle' } })}</div></div>
     <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.api_format'))}</label><div class="ai-select" id="settings-custom-provider-protocol"></div></div>
-    ${editing ? '' : `<div class="form-row settings-custom-provider-model-editor"><label>${escapeHtml(t('settings.custom_providers.models'))}</label><div id="settings-custom-provider-model-list" class="settings-custom-provider-model-list"></div><button type="button" class="btn settings-custom-provider-add-model" id="settings-custom-provider-add-model">${_settingsIconHtml('plus', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.add_model'))}</span></button></div>`}
+    ${editing ? '' : `<div class="form-row settings-custom-provider-model-editor"><label>${escapeHtml(t('settings.custom_providers.models'))}</label><div id="settings-custom-provider-model-list" class="settings-custom-provider-model-list"></div>${uiButton({ label: t('settings.custom_providers.add_model'), icon: 'plus', className: 'settings-custom-provider-add-model', attrs: { id: 'settings-custom-provider-add-model' } })}</div>`}
   `;
   const nameInput = body.querySelector('#settings-custom-provider-name') || document.getElementById('settings-custom-provider-name');
   const protocolEl = body.querySelector('#settings-custom-provider-protocol') || document.getElementById('settings-custom-provider-protocol');
@@ -1257,14 +1275,14 @@ function _settingsOpenCustomProviderModal(provider = null, options = {}) {
     });
   }
   actions.innerHTML = '';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn';
-  cancelBtn.textContent = t('common.cancel');
+  const cancelBtn = _settingsElementFromSharedMarkup(uiButton({ label: t('common.cancel') }));
+  const saveBtn = _settingsElementFromSharedMarkup(uiButton({
+    label: t('settings.save'),
+    role: 'primary',
+    attrs: { 'data-custom-provider-action-key': 'provider-save' },
+  }));
+  if (!cancelBtn || !saveBtn) return;
   cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
-  const saveBtn = document.createElement('button');
-  saveBtn.className = 'btn btn-primary';
-  saveBtn.textContent = t('settings.save');
-  saveBtn.dataset.customProviderActionKey = 'provider-save';
   _settingsSetCustomProviderButtonBusy(saveBtn, _settingsState.customProviderModalView?.busyActionKey === 'provider-save');
   saveBtn.addEventListener('click', async () => {
     if (saveBtn.disabled) return;
@@ -1390,7 +1408,7 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
       <div><dt>${escapeHtml(t('settings.custom_providers.api_key'))}</dt><dd class="account-mask">${escapeHtml(provider.apiKeyMasked || t('settings.custom_providers.api_key_missing'))}</dd></div>
     </dl>
     <div class="settings-custom-provider-detail-models">
-      <div class="settings-custom-provider-detail-models-head"><h4>${escapeHtml(t('settings.custom_providers.models'))}</h4><button type="button" class="btn" id="settings-custom-provider-detail-add-model">${_settingsIconHtml('plus', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.add_model'))}</span></button></div>
+      <div class="settings-custom-provider-detail-models-head"><h4>${escapeHtml(t('settings.custom_providers.models'))}</h4>${uiButton({ label: t('settings.custom_providers.add_model'), icon: 'plus', attrs: { id: 'settings-custom-provider-detail-add-model' } })}</div>
       <div id="settings-custom-provider-detail-model-list" class="settings-custom-provider-detail-model-list"></div>
     </div>
   `;
@@ -1435,17 +1453,17 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   const addModelButton = body.querySelector('#settings-custom-provider-detail-add-model') || document.getElementById('settings-custom-provider-detail-add-model');
   addModelButton?.addEventListener('click', () => _settingsOpenCustomProviderModelEditor(provider));
   // 远端模型发现：调服务自己的 list-models 端点拉全量清单，勾选导入。
-  const fetchModelsButton = document.createElement('button');
-  fetchModelsButton.type = 'button';
-  fetchModelsButton.className = 'btn';
-  fetchModelsButton.innerHTML = `${_settingsIconHtml('refresh', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.fetch_models'))}</span>`;
+  const fetchModelsButton = _settingsElementFromSharedMarkup(uiButton({
+    label: t('settings.custom_providers.fetch_models'),
+    icon: 'refresh',
+  }));
+  if (!fetchModelsButton) return;
   fetchModelsButton.addEventListener('click', () => _settingsOpenCustomProviderFetchModels(provider));
   addModelButton?.parentNode?.appendChild(fetchModelsButton);
 
   actions.innerHTML = '';
-  const closeButton = document.createElement('button');
-  closeButton.className = 'btn';
-  closeButton.textContent = t('common.close');
+  const closeButton = _settingsElementFromSharedMarkup(uiButton({ label: t('common.close') }));
+  if (!closeButton) return;
   closeButton.addEventListener('click', () => _settingsCloseModal(overlay));
   actions.appendChild(closeButton);
   _settingsCustomProviderModalStatus('', '');
@@ -1480,9 +1498,8 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
         ${_settingsIconHtml('warning', 'ui-icon')}
         <span>${escapeHtml(t('settings.custom_providers.fetch_models_failed', { error: (res && res.error) || '' }))}</span>
       </div>`;
-    const closeButton = document.createElement('button');
-    closeButton.className = 'btn';
-    closeButton.textContent = t('common.close');
+    const closeButton = _settingsElementFromSharedMarkup(uiButton({ label: t('common.close') }));
+    if (!closeButton) return;
     closeButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
     actions.appendChild(closeButton);
     return;
@@ -1515,15 +1532,15 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
   }
 
   actions.innerHTML = '';
-  const cancelButton = document.createElement('button');
-  cancelButton.className = 'btn';
-  cancelButton.textContent = t('common.cancel');
+  const cancelButton = _settingsElementFromSharedMarkup(uiButton({ label: t('common.cancel') }));
+  const importButton = _settingsElementFromSharedMarkup(uiButton({
+    label: t('settings.custom_providers.fetch_models_import', { count: selectable.length }),
+    role: 'primary',
+    disabled: selectable.length === 0,
+  }));
+  if (!cancelButton || !importButton) return;
   cancelButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
   actions.appendChild(cancelButton);
-  const importButton = document.createElement('button');
-  importButton.className = 'btn btn-primary';
-  importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: selectable.length });
-  importButton.disabled = selectable.length === 0;
   importButton.addEventListener('click', async () => {
     if (importButton.disabled) return;
     const picked = [...listEl.querySelectorAll('input[type=checkbox]:checked:not(:disabled)')]
@@ -1623,19 +1640,19 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
   title.textContent = editing ? t('settings.custom_providers.edit_model') : t('settings.custom_providers.add_model');
   body.innerHTML = `
     <p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.model_id'))}</label><input id="settings-custom-provider-model-edit-id" type="text" class="form-input" autocomplete="off" spellcheck="false" value="${escapeHtml(current.id)}" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.context_window'))}</label><input id="settings-custom-provider-model-edit-context" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW}" step="1" class="form-input" value="${escapeHtml(String(current.contextWindow))}" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.max_tokens'))}</label><input id="settings-custom-provider-model-edit-output" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS}" step="1" class="form-input" value="${escapeHtml(String(current.maxTokens))}" /></div>
+    <div class="form-row"><label for="settings-custom-provider-model-edit-id">${escapeHtml(t('settings.custom_providers.model_id'))}</label>${uiInput({ id: 'settings-custom-provider-model-edit-id', value: current.id, attrs: { autocomplete: 'off', spellcheck: 'false' } })}</div>
+    <div class="form-row"><label for="settings-custom-provider-model-edit-context">${escapeHtml(t('settings.custom_providers.context_window'))}</label>${uiInput({ id: 'settings-custom-provider-model-edit-context', type: 'number', value: String(current.contextWindow), attrs: { min: '1', max: String(_CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW), step: '1' } })}</div>
+    <div class="form-row"><label for="settings-custom-provider-model-edit-output">${escapeHtml(t('settings.custom_providers.max_tokens'))}</label>${uiInput({ id: 'settings-custom-provider-model-edit-output', type: 'number', value: String(current.maxTokens), attrs: { min: '1', max: String(_CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS), step: '1' } })}</div>
   `;
   actions.innerHTML = '';
-  const cancelButton = document.createElement('button');
-  cancelButton.className = 'btn';
-  cancelButton.textContent = t('common.cancel');
+  const cancelButton = _settingsElementFromSharedMarkup(uiButton({ label: t('common.cancel') }));
+  const saveButton = _settingsElementFromSharedMarkup(uiButton({
+    label: t('common.save'),
+    role: 'primary',
+    attrs: { 'data-custom-provider-action-key': 'model-save' },
+  }));
+  if (!cancelButton || !saveButton) return;
   cancelButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
-  const saveButton = document.createElement('button');
-  saveButton.className = 'btn btn-primary';
-  saveButton.textContent = t('common.save');
-  saveButton.dataset.customProviderActionKey = 'model-save';
   _settingsSetCustomProviderButtonBusy(saveButton, _settingsState.customProviderModalView?.busyActionKey === 'model-save');
   saveButton.addEventListener('click', async () => {
     if (saveButton.disabled) return;
@@ -1839,9 +1856,8 @@ function _settingsCcswitchRenderProviderList() {
   }
 
   actions.innerHTML = '';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn';
-  cancelBtn.textContent = t('common.close');
+  const cancelBtn = _settingsElementFromSharedMarkup(uiButton({ label: t('common.close') }));
+  if (!cancelBtn) return;
   cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
   actions.appendChild(cancelBtn);
 }
@@ -1857,10 +1873,13 @@ function _settingsCcswitchRenderProviderDetail(provider) {
   status.textContent = '';
   status.className = 'form-msg';
 
-  const backBtn = document.createElement('button');
-  backBtn.className = 'settings-ccswitch-back-btn';
-  backBtn.type = 'button';
-  backBtn.innerHTML = `${(typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') ? window.uiIconHtml('chevron-left', 'ui-icon settings-ccswitch-back-icon') : '‹ '}<span>${escapeHtml(t('settings.ccswitch.back'))}</span>`;
+  const backBtn = _settingsElementFromSharedMarkup(uiButton({
+    label: t('settings.ccswitch.back'),
+    icon: 'chevron-left',
+    role: 'ghost',
+    className: 'settings-ccswitch-back-btn',
+  }));
+  if (!backBtn) return;
   backBtn.addEventListener('click', () => {
     _settingsState.ccswitchPreviewSelectedProvider = null;
     _settingsState.ccswitchPreviewSelectedModels = [];
@@ -1928,15 +1947,18 @@ function _settingsCcswitchRenderProviderDetail(provider) {
   }
 
   actions.innerHTML = '';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn';
-  cancelBtn.textContent = t('common.close');
+  const cancelBtn = _settingsElementFromSharedMarkup(uiButton({ label: t('common.close') }));
+  if (!cancelBtn) return;
   cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
   actions.appendChild(cancelBtn);
   if (models.length) {
-    const addBtn = document.createElement('button');
-    addBtn.className = 'btn btn-primary';
-    addBtn.id = 'settings-ccswitch-preview-sync-btn';
+    const addBtn = _settingsElementFromSharedMarkup(uiButton({
+      label: t('settings.ccswitch.add_models_with_count', { count: '0' }),
+      role: 'primary',
+      disabled: true,
+      attrs: { id: 'settings-ccswitch-preview-sync-btn' },
+    }));
+    if (!addBtn) return;
     addBtn.addEventListener('click', async () => {
       if (addBtn.disabled) return;
       const modelIds = _settingsState.ccswitchPreviewSelectedModels;
@@ -2006,7 +2028,10 @@ function _settingsSyncCcswitchPreviewUi() {
   const addBtn = actions.querySelector('#settings-ccswitch-preview-sync-btn');
   if (addBtn) {
     addBtn.disabled = selected === 0;
-    addBtn.textContent = t('settings.ccswitch.add_models_with_count', { count: String(selected) });
+    addBtn.classList.toggle('is-disabled', selected === 0);
+    const label = addBtn.querySelector('.ui-button__label');
+    if (label) label.textContent = t('settings.ccswitch.add_models_with_count', { count: String(selected) });
+    else addBtn.textContent = t('settings.ccswitch.add_models_with_count', { count: String(selected) });
   }
 }
 
@@ -2302,9 +2327,8 @@ function _settingsChooseAccountMethod(provider, modelId) {
       </div>
     `;
     actions.innerHTML = '';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn';
-    cancelBtn.textContent = t('common.cancel');
+    const cancelBtn = _settingsElementFromSharedMarkup(uiButton({ label: t('common.cancel') }));
+    if (!cancelBtn) return;
     cancelBtn.onclick = () => _settingsCloseModal(overlay);
     actions.appendChild(cancelBtn);
 
@@ -2345,24 +2369,24 @@ function _settingsShowApiKeyForm(provider, modelId) {
     : '';
   const manualModelHtml = provider.manualModel ? `
     <div class="form-row">
-      <label>${escapeHtml(t('settings.modal.base_url'))}</label>
-      <input type="text" class="api-base-url-input form-input" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
+      <label for="settings-api-base-url-input">${escapeHtml(t('settings.modal.base_url'))}</label>
+      ${uiInput({ id: 'settings-api-base-url-input', type: 'url', className: 'api-base-url-input', placeholder: 'https://api.example.com/v1', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
     </div>
     <div class="form-row">
-      <label>${escapeHtml(t('settings.modal.model_id'))}</label>
-      <input type="text" class="api-model-input form-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
+      <label for="settings-api-model-input">${escapeHtml(t('settings.modal.model_id'))}</label>
+      ${uiInput({ id: 'settings-api-model-input', className: 'api-model-input', placeholder: 'gpt-4o-mini', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
     </div>
   ` : '';
   body.innerHTML = `
     ${subNoteHtml}
     <div class="form-row">
-      <label>${escapeHtml(t('settings.modal.label'))}</label>
-      <input type="text" class="api-label-input form-input" placeholder="${escapeHtml(t('settings.modal.label_placeholder'))}" autocomplete="off" spellcheck="false" />
+      <label for="settings-api-label-input">${escapeHtml(t('settings.modal.label'))}</label>
+      ${uiInput({ id: 'settings-api-label-input', className: 'api-label-input', placeholder: t('settings.modal.label_placeholder'), attrs: { autocomplete: 'off', spellcheck: 'false' } })}
     </div>
     ${manualModelHtml}
     <div class="form-row">
-      <label>API Key</label>
-      <input type="text" class="api-key-input form-input" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+      <label for="settings-api-key-input">API Key</label>
+      ${uiInput({ id: 'settings-api-key-input', type: 'password', className: 'api-key-input', placeholder: 'sk-…', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
     </div>
     ${docsHtml}
     <div class="form-msg"></div>
@@ -2375,14 +2399,10 @@ function _settingsShowApiKeyForm(provider, modelId) {
   const modelInput = body.querySelector('.api-model-input');
   const msg        = body.querySelector('.form-msg');
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn';
-  cancelBtn.textContent = t('common.cancel');
+  const cancelBtn = _settingsElementFromSharedMarkup(uiButton({ label: t('common.cancel') }));
+  const saveBtn = _settingsElementFromSharedMarkup(uiButton({ label: t('settings.save'), role: 'primary' }));
+  if (!cancelBtn || !saveBtn) return;
   cancelBtn.onclick = () => _settingsCloseModal(overlay);
-
-  const saveBtn = document.createElement('button');
-  saveBtn.className = 'btn btn-primary';
-  saveBtn.textContent = t('settings.save');
   const save = async () => {
     const label  = (labelInput.value || '').trim();
     const apiKey = (keyInput.value || '').trim();
@@ -2568,14 +2588,14 @@ function _oauthFlowRender(provider, status, closeFlow) {
       <div class="oauth-flow-stage">${escapeHtml(topHint)}</div>
       <div class="oauth-flow-hint">${escapeHtml(subHint)}</div>
       <div class="oauth-flow-actions">
-        <button class="btn oauth-open-btn">${escapeHtml(t('settings.oauth.reopen'))}</button>
-        <button class="btn oauth-copy-btn">${escapeHtml(t('settings.oauth.copy_link'))}</button>
+        ${uiButton({ label: t('settings.oauth.reopen'), className: 'oauth-open-btn' })}
+        ${uiButton({ label: t('settings.oauth.copy_link'), className: 'oauth-copy-btn' })}
       </div>
       ${(!usesCallbackServer && instructions) ? `<div class="oauth-flow-tip oauth-flow-tip-multiline">${escapeHtml(instructions)}</div>` : ''}
       ${usesCallbackServer ? `
       <div class="oauth-manual-row">
-        <input type="text" class="oauth-manual-input form-input" placeholder="${escapeHtml(t('settings.oauth.manual_placeholder'))}" autocomplete="off" spellcheck="false" />
-        <button class="btn oauth-manual-submit-btn">${escapeHtml(t('settings.oauth.submit'))}</button>
+        ${uiInput({ id: 'settings-oauth-manual-input', className: 'oauth-manual-input', placeholder: t('settings.oauth.manual_placeholder'), attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+        ${uiButton({ label: t('settings.oauth.submit'), className: 'oauth-manual-submit-btn' })}
       </div>` : ''}
     `;
     body.querySelector('.oauth-open-btn').onclick = () => {
@@ -2608,10 +2628,10 @@ function _oauthFlowRender(provider, status, closeFlow) {
     body.innerHTML = `
       <div class="oauth-flow-stage">${escapeHtml(msg)}</div>
       <div class="form-row">
-        <input type="text" class="oauth-input form-input" placeholder="${escapeHtml(placeholder)}" autocomplete="off" spellcheck="false" />
+        ${uiInput({ id: 'settings-oauth-input', className: 'oauth-input', placeholder, attrs: { autocomplete: 'off', spellcheck: 'false' } })}
       </div>
       <div class="oauth-flow-actions">
-        <button class="btn btn-primary oauth-submit-btn">${escapeHtml(t('settings.oauth.submit'))}</button>
+        ${uiButton({ label: t('settings.oauth.submit'), role: 'primary', className: 'oauth-submit-btn' })}
       </div>
     `;
     const input = body.querySelector('.oauth-input');
@@ -2777,10 +2797,17 @@ function _settingsRenderEntryRow(entry, idx) {
     const capsule = document.createElement('div');
     capsule.className = 'entry-api-key-capsule';
     capsule.setAttribute('draggable', 'false');
-    capsule.innerHTML = `
-      <input class="entry-api-key-input" type="password" value="${STAR_MASK}" autocomplete="off" spellcheck="false" />
-      <button type="button" class="entry-api-key-toggle" title="${escapeHtml(t('settings.entries.api_key_show'))}" aria-label="${escapeHtml(t('settings.entries.api_key_show'))}">${_settingsIconHtml('eye', 'ui-icon')}</button>
-    `;
+    capsule.innerHTML = `${uiInput({
+      id: `settings-entry-api-key-${entry.entryId}`,
+      type: 'password',
+      className: 'entry-api-key-input',
+      value: STAR_MASK,
+      attrs: { autocomplete: 'off', spellcheck: 'false' },
+    })}${uiIconButton({
+      label: t('settings.entries.api_key_show'),
+      icon: 'eye',
+      className: 'entry-api-key-toggle',
+    })}`;
     meta.appendChild(capsule);
 
     const input = capsule.querySelector('.entry-api-key-input');
@@ -2873,15 +2900,20 @@ function _settingsRenderEntryRow(entry, idx) {
     }
   }
 
-  const testBtn = document.createElement('button');
-  testBtn.className = 'icon-btn';
-  testBtn.textContent = t('settings.entries.test');
+  const testBtn = _settingsElementFromSharedMarkup(uiButton({
+    label: t('settings.entries.test'),
+    size: 'sm',
+    className: 'icon-btn',
+  }));
+  const delBtn = _settingsElementFromSharedMarkup(uiButton({
+    label: t('common.delete'),
+    role: 'danger',
+    size: 'sm',
+    className: 'icon-btn danger',
+  }));
+  if (!testBtn || !delBtn) return row;
   testBtn.onclick = () => _settingsTestEntry(entry, status);
   actions.appendChild(testBtn);
-
-  const delBtn = document.createElement('button');
-  delBtn.className = 'icon-btn danger';
-  delBtn.textContent = t('common.delete');
   delBtn.onclick = () => _settingsRemoveEntry(entry);
   actions.appendChild(delBtn);
 
@@ -3145,9 +3177,12 @@ function _settingsRenderSearchEntries() {
 
     const actions = document.createElement('div');
     actions.className = 'entry-actions';
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn btn-sm btn-danger';
-    delBtn.textContent = t('settings.delete');
+    const delBtn = _settingsElementFromSharedMarkup(uiButton({
+      label: t('settings.delete'),
+      role: 'danger',
+      size: 'sm',
+    }));
+    if (!delBtn) return;
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.search.confirm_delete', { provider: _searchProviderLabel(p.provider) }));
       if (!ok) return;
@@ -3278,9 +3313,12 @@ function _settingsRenderImageEntries() {
 
     const actions = document.createElement('div');
     actions.className = 'entry-actions';
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn btn-sm btn-danger';
-    delBtn.textContent = t('settings.delete');
+    const delBtn = _settingsElementFromSharedMarkup(uiButton({
+      label: t('settings.delete'),
+      role: 'danger',
+      size: 'sm',
+    }));
+    if (!delBtn) return;
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.image.confirm_delete', { provider: _imageProviderLabel(p.provider, p.model) }));
       if (!ok) return;
@@ -3457,9 +3495,12 @@ function _settingsRenderTtsEntries() {
 
     const actions = document.createElement('div');
     actions.className = 'entry-actions';
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn btn-sm btn-danger';
-    delBtn.textContent = t('settings.delete');
+    const delBtn = _settingsElementFromSharedMarkup(uiButton({
+      label: t('settings.delete'),
+      role: 'danger',
+      size: 'sm',
+    }));
+    if (!delBtn) return;
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.tts.confirm_delete', { provider: _ttsProviderLabel(p.provider) }));
       if (!ok) return;

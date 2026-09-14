@@ -4,7 +4,7 @@
   'use strict';
 
   const BUTTON_ROLES = new Set(['primary', 'secondary', 'danger', 'ghost']);
-  const BUTTON_SIZES = new Set(['md', 'sm']);
+  const BUTTON_SIZES = new Set(['md', 'sm', 'lg']);
   const ICON_VARIANTS = new Set(['plain', 'danger']);
 
   function escapeText(value) {

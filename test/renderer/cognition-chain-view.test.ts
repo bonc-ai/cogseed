@@ -155,7 +155,7 @@ describe('跨作用域确认入口', () => {
 
   it('确认按钮就在履历里——用户在哪看到「等你确认」就在哪能点', () => {
     const src = readSrc('modules/skills.js');
-    expect(src).toContain('data-recall-cross-scope=');
+    expect(src).toContain("'data-recall-cross-scope': assetId");
     expect(src).toContain("entry.reason === 'needs_confirmation'");
   });
 

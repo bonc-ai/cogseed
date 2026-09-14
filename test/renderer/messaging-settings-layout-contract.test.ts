@@ -91,10 +91,12 @@ describe('messaging connection-management layout contract', () => {
       rendererHtml.indexOf('</header>', rendererHtml.indexOf('<header class="touchpoint-connections-header">')),
     );
 
-    expect(header).toContain('class="btn touchpoint-back-button"');
+    expect(header).toContain('touchpoint-back-button');
+    expect(header).toContain('ui-button--secondary');
     expect(header).toContain('data-ui-icon="chevron-left"');
     expect(header).toContain('data-i18n="common.back"');
     expect(header).not.toContain('data-ui-icon="arrow-left"');
+    expect(header).not.toContain('touchpoint_settings.connections.open_overview');
   });
 
   it('edits the channel-bridge sender allowlist per instance', () => {

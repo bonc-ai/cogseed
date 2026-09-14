@@ -126,7 +126,7 @@ function _memRenderInto(host) {
   host.innerHTML = `
     <div class="memory-detail-header">
       <div class="memory-detail-title-row">
-        <button type="button" class="btn btn-sm memory-back-btn" data-mem-action="back">${escapeHtml(t('common.back'))}</button>
+        ${uiButton({ label: t('common.back'), size: 'sm', className: 'memory-back-btn', attrs: { 'data-mem-action': 'back' } })}
         <div class="memory-detail-main">
           <div class="memory-detail-name-row">
             <h1 class="memory-detail-title">${escapeHtml(t('memory.title'))}</h1>
@@ -135,8 +135,8 @@ function _memRenderInto(host) {
           <p class="memory-detail-desc">${escapeHtml(t('memory.page_desc'))}</p>
         </div>
         <div class="memory-detail-actions">
-          <button type="button" class="btn btn-sm" data-mem-action="open-export">${_memIc('external')}<span>${escapeHtml(t('memory.export'))}</span></button>
-          <button type="button" class="btn btn-sm btn-primary" data-mem-action="open-import">${_memIc('plus')}<span>${escapeHtml(t('memory.import'))}</span></button>
+          ${uiButton({ label: t('memory.export'), icon: 'external', size: 'sm', attrs: { 'data-mem-action': 'open-export' } })}
+          ${uiButton({ label: t('memory.import'), icon: 'plus', role: 'primary', size: 'sm', attrs: { 'data-mem-action': 'open-import' } })}
         </div>
       </div>
     </div>
@@ -182,7 +182,7 @@ function _memRenderSection(scope, data) {
         <span class="memory-section-file">${escapeHtml(fileName)} · ${t('memory.count', { n: entries.length })}</span>
         <span class="memory-flex"></span>
         ${_memRenderUsage(usage)}
-        <button type="button" class="memory-icon-btn" data-mem-action="add" data-mem-target="${escapeHtml(target)}" title="${escapeHtml(t('memory.add_entry'))}">${_memIc('plus')}</button>
+        ${uiIconButton({ label: t('memory.add_entry'), icon: 'plus', className: 'memory-icon-btn', attrs: { 'data-mem-action': 'add', 'data-mem-target': target } })}
       </div>
       <p class="memory-section-sub">${escapeHtml(scope.sub)}</p>
       ${rows.join('')}
@@ -209,8 +209,8 @@ function _memRenderEntry(target, text, idx) {
       <div class="memory-entry-text">${escapeHtml(text)}</div>
       <div class="memory-entry-foot">
         <span class="memory-flex"></span>
-        <button type="button" class="memory-icon-btn" data-mem-action="edit" data-mem-target="${escapeHtml(target)}" data-mem-idx="${idx}" title="${escapeHtml(t('memory.edit'))}">${_memIc('edit-pencil')}</button>
-        <button type="button" class="memory-icon-btn is-muted" data-mem-action="delete" data-mem-target="${escapeHtml(target)}" data-mem-idx="${idx}" title="${escapeHtml(t('memory.delete'))}">${_memIc('x')}</button>
+        ${uiIconButton({ label: t('memory.edit'), icon: 'edit-pencil', className: 'memory-icon-btn', attrs: { 'data-mem-action': 'edit', 'data-mem-target': target, 'data-mem-idx': idx } })}
+        ${uiIconButton({ label: t('memory.delete'), icon: 'x', variant: 'danger', className: 'memory-icon-btn is-muted', attrs: { 'data-mem-action': 'delete', 'data-mem-target': target, 'data-mem-idx': idx } })}
       </div>
     </div>
   `;
@@ -220,13 +220,13 @@ function _memRenderEditor(target, text) {
   const usage = (_memData[target] && _memData[target].usage) || { current: 0, limit: 0 };
   return `
     <div class="memory-entry is-editing" data-mem-editor="${escapeHtml(target)}">
-      <textarea class="memory-entry-textarea" rows="3">${escapeHtml(text)}</textarea>
+      ${uiTextarea({ id: `memory-entry-editor-${target}`, className: 'memory-entry-textarea', value: text, attrs: { rows: '3' } })}
       <div class="memory-entry-foot">
         <span class="memory-entry-charcount" data-mem-charcount>${(text || '').length}</span>
         <span class="memory-entry-charlimit muted"> / ${usage.limit || 0}</span>
         <span class="memory-flex"></span>
-        <button type="button" class="btn btn-sm" data-mem-action="cancel-edit">${escapeHtml(t('memory.cancel'))}</button>
-        <button type="button" class="btn btn-sm btn-primary" data-mem-action="save-edit" data-mem-target="${escapeHtml(target)}">${escapeHtml(t('memory.save'))}</button>
+        ${uiButton({ label: t('memory.cancel'), size: 'sm', attrs: { 'data-mem-action': 'cancel-edit' } })}
+        ${uiButton({ label: t('memory.save'), role: 'primary', size: 'sm', attrs: { 'data-mem-action': 'save-edit', 'data-mem-target': target } })}
       </div>
     </div>
   `;
@@ -256,7 +256,7 @@ function _memRenderGroupsSection() {
         <h2 class="memory-section-title">${escapeHtml(t('memory.groups_title'))}</h2>
         <span class="memory-section-file">${t('memory.count', { n: plainGroups.length })}</span>
         <span class="memory-flex"></span>
-        <button type="button" class="memory-icon-btn" data-mem-group-action="create" title="${escapeHtml(t('memory.groups_create'))}">${_memIc('plus')}</button>
+        ${uiIconButton({ label: t('memory.groups_create'), icon: 'plus', className: 'memory-icon-btn', attrs: { 'data-mem-group-action': 'create' } })}
       </div>
       <p class="memory-section-sub">${escapeHtml(t('memory.groups_sub'))}</p>
       ${!plainGroups.length ? `<div class="memory-empty muted">${escapeHtml(t('memory.groups_empty'))}</div>` : rows}
@@ -278,8 +278,8 @@ function _memRenderGroupRow(g) {
       </div>
       <div class="memory-entry-foot">
         <span class="memory-flex"></span>
-        <button type="button" class="memory-icon-btn" data-mem-group-action="rename" data-mem-group-id="${escapeHtml(g.group_id)}" title="${escapeHtml(t('memory.groups_rename'))}">${_memIc('edit-pencil')}</button>
-        <button type="button" class="memory-icon-btn is-muted" data-mem-group-action="delete" data-mem-group-id="${escapeHtml(g.group_id)}" title="${escapeHtml(t('memory.groups_delete'))}">${_memIc('x')}</button>
+        ${uiIconButton({ label: t('memory.groups_rename'), icon: 'edit-pencil', className: 'memory-icon-btn', attrs: { 'data-mem-group-action': 'rename', 'data-mem-group-id': g.group_id } })}
+        ${uiIconButton({ label: t('memory.groups_delete'), icon: 'x', variant: 'danger', className: 'memory-icon-btn is-muted', attrs: { 'data-mem-group-action': 'delete', 'data-mem-group-id': g.group_id } })}
       </div>
     </div>
   `;
@@ -287,7 +287,7 @@ function _memRenderGroupRow(g) {
 
 function _memRenderGroupRawView(ed) {
   const content = ed.loaded ? ed.content : '';
-  return `<textarea class="memory-entry-textarea memory-group-editor-textarea" rows="10" data-mem-group-content>${escapeHtml(content)}</textarea>`;
+  return uiTextarea({ id: 'memory-group-editor-content', className: 'memory-entry-textarea memory-group-editor-textarea', value: content, attrs: { rows: '10', 'data-mem-group-content': '' } });
 }
 
 /** 普通分组编辑器：纯文本 textarea。
@@ -304,8 +304,8 @@ function _memRenderGroupEditor() {
       <div class="memory-entry-foot">
         <span class="memory-entry-charcount">${ed.loaded ? (ed.content || '').length : 0}</span>
         <span class="memory-flex"></span>
-        <button type="button" class="btn btn-sm" data-mem-group-action="close-edit">${escapeHtml(t('memory.cancel'))}</button>
-        <button type="button" class="btn btn-sm btn-primary" data-mem-group-action="save-content" data-mem-group-id="${escapeHtml(ed.groupId)}" ${ed.loaded ? '' : 'disabled'}>${escapeHtml(t('memory.save'))}</button>
+        ${uiButton({ label: t('memory.cancel'), size: 'sm', attrs: { 'data-mem-group-action': 'close-edit' } })}
+        ${uiButton({ label: t('memory.save'), role: 'primary', size: 'sm', disabled: !ed.loaded, attrs: { 'data-mem-group-action': 'save-content', 'data-mem-group-id': ed.groupId } })}
       </div>
     </div>
   `;
@@ -649,7 +649,7 @@ function _memModalHeader(title, step, sub) {
         </div>
         ${sub ? `<p class="memory-modal-sub">${escapeHtml(sub)}</p>` : ''}
       </div>
-      <button type="button" class="modal-close-btn" data-mem-action="modal-close" title="${escapeHtml(t('common.close'))}" aria-label="${escapeHtml(t('common.close'))}">${_memIc('x', 'modal-close-icon')}</button>
+      ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn', attrs: { 'data-mem-action': 'modal-close' } })}
     </div>
   `;
 }
@@ -663,18 +663,25 @@ function _memOpenImport(mode) {
     ${_memModalHeader(t('memory.import_title'), '1 / 2', t('memory.import_step1_sub'))}
     <div class="memory-modal-body">
       <div class="memory-import-tabs">
-        <button type="button" class="memory-tab is-active" data-mem-import-tab="paste">${escapeHtml(t('memory.import_paste'))}</button>
-        <button type="button" class="memory-tab" data-mem-import-tab="file">${escapeHtml(t('memory.import_file'))}</button>
+        ${uiSegmentedControl({
+          ariaLabel: t('memory.import_title'),
+          value: 'paste',
+          className: 'memory-import-tabs-control',
+          items: [
+            { label: t('memory.import_paste'), value: 'paste', attrs: { 'data-mem-import-tab': 'paste' } },
+            { label: t('memory.import_file'), value: 'file', attrs: { 'data-mem-import-tab': 'file' } },
+          ],
+        })}
         <span class="memory-flex"></span>
         <span class="memory-import-formats muted">${escapeHtml(t('memory.import_formats'))}</span>
       </div>
-      <textarea class="memory-import-textarea" id="memory-import-text" placeholder="${escapeHtml(t('memory.import_placeholder'))}"></textarea>
+      ${uiTextarea({ id: 'memory-import-text', className: 'memory-import-textarea', placeholder: t('memory.import_placeholder') })}
     </div>
     <div class="memory-modal-foot">
       <span class="memory-import-stat muted" id="memory-import-stat"></span>
       <span class="memory-flex"></span>
-      <button type="button" class="btn btn-sm" data-mem-action="modal-close">${escapeHtml(t('memory.cancel'))}</button>
-      <button type="button" class="btn btn-sm btn-primary" id="memory-import-parse-btn">${escapeHtml(t('memory.parse'))}</button>
+      ${uiButton({ label: t('memory.cancel'), size: 'sm', attrs: { 'data-mem-action': 'modal-close' } })}
+      ${uiButton({ label: t('memory.parse'), role: 'primary', size: 'sm', attrs: { id: 'memory-import-parse-btn' } })}
     </div>
   `);
 
@@ -691,7 +698,10 @@ function _memOpenImport(mode) {
   host.querySelectorAll('[data-mem-import-tab]').forEach((tab) => {
     tab.addEventListener('click', () => {
       const which = tab.getAttribute('data-mem-import-tab');
-      host.querySelectorAll('[data-mem-import-tab]').forEach((tt) => tt.classList.toggle('is-active', tt === tab));
+      host.querySelectorAll('[data-mem-import-tab]').forEach((tt) => {
+        tt.classList.toggle('is-active', tt === tab);
+        tt.setAttribute('aria-pressed', tt === tab ? 'true' : 'false');
+      });
       if (which === 'file') _memPickImportFile(ta, updateStat);
       else ta.focus();
     });
@@ -760,8 +770,8 @@ function _memOpenImportReview() {
     <div class="memory-modal-foot">
       <span class="memory-import-stat" id="memory-merge-summary"></span>
       <span class="memory-flex"></span>
-      <button type="button" class="btn btn-sm" id="memory-review-back">${escapeHtml(t('memory.back'))}</button>
-      <button type="button" class="btn btn-sm btn-primary" id="memory-review-merge"><span id="memory-merge-label"></span></button>
+      ${uiButton({ label: t('memory.back'), size: 'sm', attrs: { id: 'memory-review-back' } })}
+      ${uiButton({ label: t('memory.merge_action', { n: 0 }), role: 'primary', size: 'sm', attrs: { id: 'memory-review-merge' } })}
     </div>
   `);
 
@@ -778,10 +788,15 @@ function _memRenderImportRow(it, i) {
       <div class="memory-import-row-body">
         <div class="memory-import-row-text">${escapeHtml(it.text)}</div>
         <div class="memory-import-row-meta">
-          <div class="memory-seg" role="group">
-            <button type="button" class="memory-seg-opt${it.target === 'user' ? ' is-active' : ''}" data-mem-action="set-target" data-mem-row="${i}" data-mem-target="user">${escapeHtml(t('memory.kind_group_user'))}</button>
-            <button type="button" class="memory-seg-opt${it.target === 'shared' ? ' is-active' : ''}" data-mem-action="set-target" data-mem-row="${i}" data-mem-target="shared">${escapeHtml(t('memory.kind_group_shared'))}</button>
-          </div>
+          ${uiSegmentedControl({
+            ariaLabel: t('memory.review_title'),
+            value: it.target,
+            className: 'memory-seg',
+            items: [
+              { label: t('memory.kind_group_user'), value: 'user', attrs: { 'data-mem-action': 'set-target', 'data-mem-row': i, 'data-mem-target': 'user' } },
+              { label: t('memory.kind_group_shared'), value: 'shared', attrs: { 'data-mem-action': 'set-target', 'data-mem-row': i, 'data-mem-target': 'shared' } },
+            ],
+          })}
           ${kindLabel ? `<span class="memory-kind-pill">${escapeHtml(kindLabel)}</span>` : ''}
           ${threatLabel ? `<span class="memory-threat-pill">${escapeHtml(threatLabel)}</span>` : ''}
         </div>
@@ -819,11 +834,14 @@ function _memUpdateMergeSummary(host) {
   const nUser = kept.filter((it) => it.target === 'user').length;
   const nShared = kept.filter((it) => it.target === 'shared').length;
   const summary = host.querySelector('#memory-merge-summary');
-  const label = host.querySelector('#memory-merge-label');
-  if (summary) summary.textContent = t('memory.merge_summary', { user: nUser, memory: nShared });
-  if (label) label.textContent = ' ' + t('memory.merge_action', { n: kept.length });
   const mergeBtn = host.querySelector('#memory-review-merge');
-  if (mergeBtn) mergeBtn.disabled = kept.length === 0;
+  const label = mergeBtn && mergeBtn.querySelector('.ui-button__label');
+  if (summary) summary.textContent = t('memory.merge_summary', { user: nUser, memory: nShared });
+  if (label) label.textContent = t('memory.merge_action', { n: kept.length });
+  if (mergeBtn) {
+    mergeBtn.disabled = kept.length === 0;
+    mergeBtn.classList.toggle('is-disabled', kept.length === 0);
+  }
 }
 
 async function _memDoMerge() {
@@ -869,8 +887,8 @@ async function _memOpenExport() {
           </div>
           <div class="memory-export-sub">${t('memory.count', { n: (f && f.count) || 0 })} · ${_memFmtSize((f && f.size) || 0)}</div>
         </div>
-        <button type="button" class="btn btn-sm" data-mem-action="copy" data-mem-target="${escapeHtml(scopeKey)}"><span>${escapeHtml(t('memory.copy_content'))}</span></button>
-        <button type="button" class="btn btn-sm" data-mem-action="reveal" data-mem-target="${escapeHtml(scopeKey)}"><span>${escapeHtml(t('memory.reveal_file'))}</span></button>
+        ${uiButton({ label: t('memory.copy_content'), size: 'sm', attrs: { 'data-mem-action': 'copy', 'data-mem-target': scopeKey } })}
+        ${uiButton({ label: t('memory.reveal_file'), size: 'sm', attrs: { 'data-mem-action': 'reveal', 'data-mem-target': scopeKey } })}
       </div>
     `;
   };

@@ -45,11 +45,11 @@
       <div class="sidebar-actions">
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
-        <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span><span class="sidebar-btn-chip kb-new-chip" data-i18n="sidebar.kb_new">新</span></button>
         <button class="sidebar-btn" id="run-center-btn" hidden aria-hidden="true"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行与协作</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
-        <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
+        <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
+        <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">智能体 / 技能 / 连接</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
@@ -77,13 +77,16 @@
     <main class="main-content">
       <div class="main-top-actions">
         <div class="model-guard-slot" id="model-guard-slot"></div>
-        <button type="button" class="new-chat-external-agent-btn" id="new-chat-external-agent-btn">
-          <span data-ui-icon="terminal" data-ui-icon-class="new-chat-external-agent-icon"></span>
-          <span class="new-chat-external-agent-label">
-            <span data-i18n="new_chat.external_agent_entry">Connect Codex, Claude Code &amp; other AI coding tools</span>
-            <span data-ui-icon="arrow-right" data-ui-icon-class="new-chat-external-agent-arrow"></span>
-          </span>
-        </button>
+        <div class="new-chat-home-actions">
+          <div class="new-chat-secondary-actions" id="new-chat-secondary-actions"></div>
+          <button type="button" class="new-chat-external-agent-btn" id="new-chat-external-agent-btn">
+            <span data-ui-icon="terminal" data-ui-icon-class="new-chat-external-agent-icon"></span>
+            <span class="new-chat-external-agent-label">
+              <span data-i18n="new_chat.external_agent_entry">Connect Codex, Claude Code &amp; other AI coding tools</span>
+              <span data-ui-icon="arrow-right" data-ui-icon-class="new-chat-external-agent-arrow"></span>
+            </span>
+          </button>
+        </div>
       </div>
       <!-- New Chat Landing — empty state per PC/docs/design/PATTERNS.md
            (Surface B). 720px centered column: time-of-day greeting +
@@ -154,8 +157,8 @@
           <!-- Quick-scenario chip row. Each chip pre-fills the textarea with
                its template (per PC/docs/design/README §Surface B) and moves
                the caret to the first [...] placeholder. Wired by
-               _initEmptyStateScenarios() in conversation.js. Single-line
-               WorkBuddy-style row: horizontal scroll, fold toggle on the right. -->
+               _initEmptyStateScenarios() in conversation.js. The shared home
+               composition distributes the seven actions across the thread width. -->
           <div class="new-chat-scenarios-wrap" id="new-chat-scenarios-wrap">
             <div class="new-chat-scenarios" id="new-chat-scenarios">
             <button type="button" class="new-chat-scenario-chip is-space-builder" data-scenario="space_builder">
@@ -185,12 +188,6 @@
             <button type="button" class="new-chat-scenario-chip" data-scenario="rnd">
               <span data-ui-icon="code" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
-            </button>
-            <!-- T4 目标模式：描述目标 → commander 拆解子任务计划 → 用户
-                 确认 → 逐项派发（KStar 目标追踪 + plan rail + wake 审批）。 -->
-            <button type="button" class="new-chat-scenario-chip" data-scenario="goal">
-              <span data-ui-icon="target" data-ui-icon-class="new-chat-scenario-icon"></span>
-              <span class="new-chat-scenario-label" data-i18n="new_chat.quick.goal">Goal mode</span>
             </button>
             </div>
           </div>
@@ -475,20 +472,16 @@
             <div class="skills-cognition-tabs-row">
             <div class="skills-cognition-tab-group" role="presentation">
               <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-assets" data-cognition-page="assets">
-                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="archive"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.my_assets">我的认知树</strong><small data-i18n="cognition.my_assets_desc">先看我拥有什么</small></span>
+                <span class="skills-cognition-tab-label" data-i18n="cognition.my_assets">我的认知树</span>
               </button>
               <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-inbox" tabindex="-1" data-cognition-page="inbox">
-                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="clipboard-list"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.inbox">待我处理</strong><small data-i18n="cognition.inbox_desc">只处理需要你判断与确认的事项</small></span>
+                <span class="skills-cognition-tab-label" data-i18n="cognition.inbox">待我处理</span>
               </button>
               <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs">
-                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="shield-check"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.proofs">复用与证明</strong><small data-i18n="cognition.proofs_desc">看在哪里用、是否有效</small></span>
+                <span class="skills-cognition-tab-label" data-i18n="cognition.proofs">复用与证明</span>
               </button>
               <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
-                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="list-ordered"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.governance">版本与治理</strong><small data-i18n="cognition.governance_desc">查看版本变化并控制资产状态</small></span>
+                <span class="skills-cognition-tab-label" data-i18n="cognition.governance">版本与治理</span>
               </button>
             </div>
               <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
@@ -683,19 +676,17 @@
              渲染入口见 connections.js::_renderConnectionsPageHeader。 -->
         <div id="connections-page-header"></div>
         <div class="connections-container">
-          <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="连接">
-            <button type="button" class="connections-tab" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
-            <button type="button" class="connections-tab is-active" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
-            <button type="button" class="connections-tab" data-connections-tab="plugins" data-i18n="connections.tab.plugins">插件</button>
-            <button type="button" class="connections-tab" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
-            <button type="button" class="connections-tab" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
-            <button type="button" class="connections-tab" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">触点</button>
-            <button type="button" class="connections-tab" data-connections-tab="models" data-i18n="connections.tab.models">模型与额度</button>
+          <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="智能体 / 技能 / 连接">
+            <button type="button" class="connections-tab is-active" role="tab" aria-selected="true" data-connections-tab="agents" data-i18n="connections.tab.agents">智能体</button>
+            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
+            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
+            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">IM</button>
           </div>
           <div class="connections-body">
 
             <!-- Agent → AI 团队面板整体内嵌 -->
-            <div class="connections-tab-pane" id="connections-pane-agents" data-connections-pane="agents" hidden>
+            <div class="connections-tab-pane" id="connections-pane-agents" data-connections-pane="agents">
               <!-- AI 团队（#panel-agents）整体内嵌：保留 id，渲染函数照常工作。 -->
       <section class="panel connections-embedded-panel" id="panel-agents">
         <!-- Grid view (default) -->
@@ -705,16 +696,20 @@
               <span class="agents-grid-title" data-i18n="agents.title">AI Team</span>
               <span class="agents-grid-subtitle" data-i18n="agents.subtitle">Every member is an agent — @ it, form squads, assign tasks.</span>
             </div>
-            <div class="header-actions">
-              <button class="btn btn-sm" id="create-agent-btn" data-i18n="agents.create_btn">+ Create</button>
-              <button class="btn btn-sm" id="agents-more-btn" data-i18n="agents.more_btn">More</button>
-            </div>
           </div>
           <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="agent" style="display:none"></div>
-          <!-- Category chip strip — mirrors `.marketplace-categories` above the
-               grid. Chips are injected by renderAgentsGrid() from the same
-               `_mpCategoriesCache` that drives the marketplace strip. -->
-          <div class="marketplace-categories agents-categories" id="agents-categories"></div>
+          <div class="agents-resource-toolbar">
+            <!-- Category controls and search are rendered by agents.js through
+                 the shared segmented/button/form primitives. -->
+            <div class="marketplace-categories agents-categories" id="agents-categories"></div>
+            <div class="agents-resource-toolbar-controls">
+              <div class="agents-search-field" id="agents-search-field"></div>
+              <div class="header-actions">
+                <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="create-agent-btn" data-i18n="agents.create_btn">+ Create</button>
+                <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="agents-more-btn" data-i18n="agents.more_btn">More</button>
+              </div>
+            </div>
+          </div>
           <div class="agents-grid-scroll">
             <div class="agents-grid" id="agents-grid"></div>
             <div class="agents-empty" id="agents-empty" data-i18n="agents.empty">No agents yet</div>
@@ -838,40 +833,39 @@
             </div>
 
             <!-- MCP与工具 → 真嵌入原 connectors 网格 -->
-            <div class="connections-tab-pane" id="connections-pane-mcp" data-connections-pane="mcp">
-              <div class="connectors-grid-view" id="connectors-grid-view">
-                <div class="connectors-page-header">
-                  <div class="connectors-page-header-main">
-                    <div class="connectors-page-header-title-row">
-                      <h1 class="connectors-page-header-title" data-i18n="connectors.title">Connectors</h1>
+            <div class="connections-tab-pane" id="connections-pane-mcp" data-connections-pane="mcp" hidden>
+              <div class="connections-tools-shell">
+                <div class="connections-tools-switcher" id="connections-tools-switcher" role="tablist" data-i18n-aria-label="connections.tab.mcp" aria-label="MCP与工具"></div>
+                <div class="connections-tools-view" data-connections-tools-view="mcp">
+                  <div class="connectors-grid-view" id="connectors-grid-view">
+                    <div class="connectors-page-header">
+                      <h1 class="connectors-page-header-title ui-visually-hidden" data-i18n="connectors.title">Connectors</h1>
+                      <div class="connectors-search-field" id="connectors-search-field"></div>
+                      <div class="connectors-page-header-actions" id="connectors-page-header-actions"></div>
+                    </div>
+                    <div class="connectors-grid-scroll">
+                      <div class="connectors-group" id="connectors-group-connected" style="display:none">
+                        <div class="connectors-group-label-row">
+                          <span class="connectors-group-label" data-i18n="connectors.group.connected">Connected</span>
+                          <span class="connectors-group-count" id="connectors-group-connected-count"></span>
+                        </div>
+                        <div class="connectors-grid" id="connectors-grid-connected"></div>
+                      </div>
+                      <div class="connectors-group" id="connectors-group-available" style="display:none">
+                        <div class="connectors-group-label-row">
+                          <span class="connectors-group-label" data-i18n="connectors.group.available">Available</span>
+                          <span class="connectors-group-count" id="connectors-group-available-count"></span>
+                        </div>
+                        <div class="connectors-grid" id="connectors-grid-available"></div>
+                      </div>
+                      <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
                     </div>
                   </div>
-                  <button class="btn btn-sm connectors-page-header-action" id="connectors-add-custom-btn" data-i18n="connectors.action.add_custom">Add MCP server</button>
                 </div>
-                <div class="connectors-grid-scroll">
-                  <div class="connectors-group" id="connectors-group-connected" style="display:none">
-                    <div class="connectors-group-label-row">
-                      <span class="connectors-group-label" data-i18n="connectors.group.connected">Connected</span>
-                      <span class="connectors-group-count" id="connectors-group-connected-count"></span>
-                    </div>
-                    <div class="connectors-grid" id="connectors-grid-connected"></div>
-                  </div>
-                  <div class="connectors-group" id="connectors-group-available" style="display:none">
-                    <div class="connectors-group-label-row">
-                      <span class="connectors-group-label" data-i18n="connectors.group.available">Available</span>
-                      <span class="connectors-group-count" id="connectors-group-available-count"></span>
-                    </div>
-                    <div class="connectors-grid" id="connectors-grid-available"></div>
-                  </div>
-                  <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
+                <div class="connections-tools-view" data-connections-tools-view="plugins" hidden>
+                  <div class="plugins-root" id="plugins-root"></div>
                 </div>
               </div>
-            </div>
-
-            <!-- 插件 → 插件中心（安装/启停/更新/移除 + 插件自带工作台 iframe）。
-                 壳在此，列表与工作台由 plugins.js 懒加载渲染到 #plugins-root。 -->
-            <div class="connections-tab-pane" id="connections-pane-plugins" data-connections-pane="plugins" hidden>
-              <div class="plugins-root" id="plugins-root"></div>
             </div>
 
             <!-- 数据源 → 入口卡跳转到资料库面板 -->
@@ -885,14 +879,18 @@
                 <div class="skills-grid-view" id="skills-grid-view">
                   <div class="skills-grid-header">
                     <span data-i18n="skills.title">Skills</span>
-                    <div class="header-actions">
-                      <button class="btn btn-sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
-                      <button class="btn btn-sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
-                    </div>
                   </div>
                   <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="skill" style="display:none"></div>
-                  <!-- Category chip strip — see the parallel comment on agents-categories. -->
-                  <div class="marketplace-categories skills-categories" id="skills-categories"></div>
+                  <div class="skills-resource-toolbar">
+                    <div class="marketplace-categories skills-categories" id="skills-categories"></div>
+                    <div class="skills-resource-toolbar-controls">
+                      <div class="skills-search-field" id="skills-search-field"></div>
+                      <div class="header-actions">
+                        <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
+                        <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
+                      </div>
+                    </div>
+                  </div>
                   <div class="skills-grid-scroll">
                     <div class="skills-grid" id="skills-grid"></div>
                     <div class="skills-empty" id="skills-empty" data-i18n="skills.empty">No skills yet</div>
@@ -1037,7 +1035,7 @@
       </section>
             </div>
 
-            <!-- 触点 → 入口卡跳转到设置 > 消息平台 -->
+            <!-- IM：消息渠道、机器人实例、身份绑定与消息行为。 -->
             <div class="connections-tab-pane" id="connections-pane-touchpoints" data-connections-pane="touchpoints" hidden>
               <!-- 触点（飞书等）整体迁入：原设置 messaging pane 的内容原样搬移。 -->
               <div class="touchpoint-settings-shell" aria-live="polite">
@@ -1046,33 +1044,18 @@
                 </div>
                 <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
                   <header class="touchpoint-connections-header">
-                    <button class="btn touchpoint-back-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
-                      <span data-ui-icon="chevron-left" data-ui-icon-class="touchpoint-connections-back-icon"></span>
-                      <span data-i18n="common.back">返回</span>
-                    </button>
                     <div>
                       <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
-                      <p data-i18n="touchpoint_settings.connections.detail">机器人实例、扫码绑定与消息行为</p>
                     </div>
+                    <button class="btn ui-button ui-button--secondary ui-button--sm touchpoint-back-button" type="button" data-touchpoint-action="overview.open" data-i18n-title="common.back" data-i18n-aria-label="common.back" title="返回" aria-label="返回">
+                      <span data-ui-icon="chevron-left" data-ui-icon-class="ui-button__icon"></span>
+                      <span class="ui-button__label" data-i18n="common.back">返回</span>
+                    </button>
                   </header>
                   <div class="messaging-settings-shell" id="messaging-settings-shell">
                     <div class="messaging-page" id="messaging-page"></div>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <!-- 模型与额度 → 入口卡跳转到设置 > Model Providers -->
-            <div class="connections-tab-pane" id="connections-pane-models" data-connections-pane="models" hidden>
-              <div class="cognition-subentry-list">
-                <button type="button" class="cognition-entry-card" data-connections-subentry="models">
-                  <span class="cognition-entry-icon" data-ui-icon="cpu"></span>
-                  <span class="cognition-entry-body">
-                    <span class="cognition-entry-title" data-i18n="connections.models_entry_title">模型与额度</span>
-                    <span class="cognition-entry-desc" data-i18n="connections.models_entry_desc">配置模型提供方、授权与额度。</span>
-                  </span>
-                  <span class="cognition-entry-chevron" data-ui-icon="chevron-right"></span>
-                </button>
               </div>
             </div>
 
@@ -1167,7 +1150,7 @@
                   <div class="settings-group-sub" data-i18n="settings.contexts.sub">管理可供模型引用的资料库内容。</div>
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-sm" id="settings-contexts-open-btn" type="button" data-i18n="settings.contexts.open">打开资料库</button>
+                  <button class="btn ui-button ui-button--secondary ui-button--sm" id="settings-contexts-open-btn" type="button"><span class="ui-button__label" data-i18n="settings.contexts.open">打开资料库</span></button>
                 </div>
               </div>
 
@@ -1177,7 +1160,7 @@
                   <div class="settings-group-sub" data-i18n="settings.data_root.sub">All conversations, agents, skills, and Library content live under this directory. Click the path to open it in the OS file manager.</div>
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-sm" id="settings-data-root-btn" type="button" title="" data-i18n-title="settings.data_root.open_tooltip"><span id="settings-data-root-path" class="muted"></span></button>
+                  <button class="btn ui-button ui-button--secondary ui-button--sm" id="settings-data-root-btn" type="button" title="" data-i18n-title="settings.data_root.open_tooltip"><span id="settings-data-root-path" class="ui-button__label muted"></span></button>
                 </div>
               </div>
 
@@ -1232,7 +1215,7 @@
                 </div>
                 <div class="settings-row settings-task-notification-permission" id="settings-task-notification-permission" role="status" aria-live="polite" hidden>
                   <span class="settings-task-notification-permission-text" data-i18n="settings.task_notifications.permission_disabled">系统已关闭 CogSeed 的通知权限。请前往系统设置开启，否则无法收到任务进度提醒。</span>
-                  <button type="button" class="btn btn-sm" id="settings-task-notification-open-settings" data-i18n="settings.task_notifications.open_settings">打开系统设置</button>
+                  <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="settings-task-notification-open-settings"><span class="ui-button__label" data-i18n="settings.task_notifications.open_settings">打开系统设置</span></button>
                 </div>
               </div>
 
@@ -1293,7 +1276,7 @@
                   <div class="settings-group-sub" id="settings-auth-profiles-recovery-message"></div>
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-primary" id="settings-auth-profiles-reset" data-i18n="settings.auth_recovery.reset">Reset model authorization</button>
+                  <button class="btn ui-button ui-button--primary ui-button--md" id="settings-auth-profiles-reset" type="button"><span class="ui-button__label" data-i18n="settings.auth_recovery.reset">Reset model authorization</span></button>
                   <span class="settings-status" id="settings-auth-profiles-reset-status"></span>
                 </div>
               </div>
@@ -1315,7 +1298,7 @@
                 </div>
                 <div class="settings-row settings-model-auth-actions">
                   <span class="settings-model-auth-label-spacer" aria-hidden="true"></span>
-                  <button class="btn btn-primary" id="settings-add-entry-btn"><span data-i18n="settings.add_account">Add account</span></button>
+                  <button class="btn ui-button ui-button--primary ui-button--md" id="settings-add-entry-btn" type="button"><span class="ui-button__label" data-i18n="settings.add_account">Add account</span></button>
                   <span class="settings-status" id="settings-picker-status"></span>
                 </div>
                 <div class="settings-group-subsection settings-configured-models" id="settings-configured-models">
@@ -1365,7 +1348,7 @@
                   <div class="ai-select" id="settings-commander-backend-select"></div>
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-primary" id="settings-commander-backend-save" data-i18n="settings.save">Save</button>
+                  <button class="btn ui-button ui-button--primary ui-button--md" id="settings-commander-backend-save" type="button"><span class="ui-button__label" data-i18n="settings.save">Save</span></button>
                   <span class="settings-status" id="settings-commander-backend-status"></span>
                 </div>
                 <div class="settings-row">
@@ -1384,10 +1367,10 @@
                 </div>
                 <div class="settings-row">
                   <label data-i18n="settings.search.api_key">API Key</label>
-                  <input type="text" class="form-input" id="settings-search-key-input" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-search-key-input" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-primary" id="settings-search-add-btn" data-i18n="settings.search.add">+ Add search key</button>
+                  <button class="btn ui-button ui-button--primary ui-button--md" id="settings-search-add-btn" type="button"><span class="ui-button__label" data-i18n="settings.search.add">+ Add search key</span></button>
                   <span class="settings-status" id="settings-search-status"></span>
                 </div>
                 <div class="settings-entries" id="settings-search-entries">
@@ -1406,10 +1389,10 @@
                 </div>
                 <div class="settings-row">
                   <label data-i18n="settings.image.api_key">API Key</label>
-                  <input type="text" class="form-input" id="settings-image-key-input" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-image-key-input" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-primary" id="settings-image-add-btn" data-i18n="settings.image.add">+ Add image key</button>
+                  <button class="btn ui-button ui-button--primary ui-button--md" id="settings-image-add-btn" type="button"><span class="ui-button__label" data-i18n="settings.image.add">+ Add image key</span></button>
                   <span class="settings-status" id="settings-image-status"></span>
                 </div>
                 <div class="settings-entries" id="settings-image-entries">
@@ -1427,26 +1410,26 @@
                 </div>
                 <div class="settings-row" id="settings-tts-key-row">
                   <label data-i18n="settings.tts.api_key">API Key</label>
-                  <input type="text" class="form-input" id="settings-tts-key-input" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-tts-key-input" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row tts-row-voice" hidden>
                   <label data-i18n="settings.tts.voice">Voice</label>
-                  <input type="text" class="form-input" id="settings-tts-voice-input" placeholder="alloy / zh_female_..._bigtts" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-tts-voice-input" placeholder="alloy / zh_female_..._bigtts" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row tts-row-base" hidden>
                   <label data-i18n="settings.tts.base_url">Base URL</label>
-                  <input type="text" class="form-input" id="settings-tts-base-input" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-tts-base-input" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row tts-row-model" hidden>
                   <label data-i18n="settings.tts.model">Model</label>
-                  <input type="text" class="form-input" id="settings-tts-model-input" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-tts-model-input" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row tts-row-doubao-res" hidden>
                   <label><span data-i18n="settings.tts.doubao_resource">Resource ID</span> <span class="form-hint" data-i18n="settings.tts.doubao_resource_hint">Auto-detected from the voice; set only to override.</span></label>
-                  <input type="text" class="form-input" id="settings-tts-doubao-resource" placeholder="auto (seed-tts-2.0 / 1.0 / icl-2.0)" autocomplete="off" spellcheck="false" />
+                  <input type="text" class="form-input ui-control ui-input" id="settings-tts-doubao-resource" placeholder="auto (seed-tts-2.0 / 1.0 / icl-2.0)" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-primary" id="settings-tts-add-btn" data-i18n="settings.tts.add">+ Add speech key</button>
+                  <button class="btn ui-button ui-button--primary ui-button--md" id="settings-tts-add-btn" type="button"><span class="ui-button__label" data-i18n="settings.tts.add">+ Add speech key</span></button>
                   <span class="settings-status" id="settings-tts-status"></span>
                 </div>
                 <div class="settings-entries" id="settings-tts-entries">
@@ -1484,7 +1467,7 @@
                   <div class="settings-group-sub" data-i18n="settings.usage.connections_link_sub">模型配置与授权已移至「连接」。</div>
                 </div>
                 <div class="settings-row">
-                  <button class="btn btn-sm" type="button" id="settings-usage-open-connections" data-i18n="settings.usage.open_connections">前往连接</button>
+                  <button class="btn ui-button ui-button--secondary ui-button--sm" type="button" id="settings-usage-open-connections"><span class="ui-button__label" data-i18n="settings.usage.open_connections">前往连接</span></button>
                 </div>
               </div>
             </div>
@@ -1499,7 +1482,7 @@
                     <span class="muted" id="updater-current-version"></span>
                   </div>
                   <div class="settings-about-actions">
-                    <button class="btn btn-sm" id="updater-check-btn" type="button" data-i18n="settings.updates.check">检查更新</button>
+                    <button class="btn ui-button ui-button--secondary ui-button--sm" id="updater-check-btn" type="button"><span class="ui-button__label" data-i18n="settings.updates.check">检查更新</span></button>
                     <a class="btn btn-sm btn-plain" href="https://cogseed-open.bonc.com.cn/#view=changelog" target="_blank" rel="noopener noreferrer" data-i18n="settings.updates.view_intro">版本介绍</a>
                   </div>
                 </div>
@@ -1508,13 +1491,13 @@
                     <span id="updater-status-text" class="settings-updater-status"></span>
                   </div>
                   <div class="settings-row settings-updater-row" id="updater-actions-row" hidden>
-                    <button class="btn btn-sm" id="updater-download-btn" type="button" data-i18n="settings.updates.download">下载更新</button>
-                    <button class="btn btn-sm btn-plain" id="updater-open-btn" type="button" data-i18n="settings.updates.open_installer">打开安装包</button>
-                    <button class="btn btn-sm btn-plain" id="updater-skip-btn" type="button" data-i18n="settings.updates.skip">跳过此版本</button>
+                    <button class="btn ui-button ui-button--primary ui-button--sm" id="updater-download-btn" type="button"><span class="ui-button__label" data-i18n="settings.updates.download">下载更新</span></button>
+                    <button class="btn ui-button ui-button--secondary ui-button--sm" id="updater-open-btn" type="button"><span class="ui-button__label" data-i18n="settings.updates.open_installer">打开安装包</span></button>
+                    <button class="btn ui-button ui-button--ghost ui-button--sm" id="updater-skip-btn" type="button"><span class="ui-button__label" data-i18n="settings.updates.skip">跳过此版本</span></button>
                   </div>
                   <div class="settings-row settings-updater-row" id="updater-auto-row" hidden>
                     <span id="updater-auto-text" class="settings-updater-status"></span>
-                    <button class="btn btn-sm" id="updater-auto-install-btn" type="button" hidden data-i18n="settings.updates.auto.install">重启并安装</button>
+                    <button class="btn ui-button ui-button--primary ui-button--sm" id="updater-auto-install-btn" type="button" hidden><span class="ui-button__label" data-i18n="settings.updates.auto.install">重启并安装</span></button>
                   </div>
                   <div class="settings-row settings-updater-row" id="updater-progress-row" hidden>
                     <div class="updater-progress-track"><div class="updater-progress-bar" id="updater-progress-bar"></div></div>
@@ -1954,6 +1937,7 @@
   <script src="./modules/chat-lightbox.js"></script>
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>
   <script src="./modules/wake-approvals.js"></script>

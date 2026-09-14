@@ -66,14 +66,14 @@ describe('conversation produced chips', () => {
     expect(source).toContain('(body || bubble).appendChild(node)');
     expect(source).toContain('<div class="chat-msg-produced-item${invalid ?');
     expect(source).toContain('class="chat-msg-produced-main"');
-    expect(source).toContain('class="chat-msg-produced-open-btn btn btn-sm"');
+    expect(source).toContain("className: 'chat-msg-produced-open-btn'");
     expect(source).toContain('chat-msg-produced-path');
     expect(source).toContain('chat-msg-produced-badge');
     expect(source).toContain('data-produced-status');
     expect(source).toContain('data-result-status');
     expect(source).toContain('chat-msg-produced-validation');
     expect(source).toContain('results: message.produced_results');
-    expect(source).toContain('class="chat-msg-produced-menu-btn"');
+    expect(source).toContain("className: 'chat-msg-produced-menu-btn'");
     expect(styleSource).toContain('.chat-msg-produced {');
     expect(styleSource).toContain('.chat-msg-produced-open-btn {');
     expect(styleSource).toContain('.chat-msg-produced-path {');
@@ -110,7 +110,7 @@ describe('conversation produced chips', () => {
     expect(source).toContain("const canReveal = !invalid || fallbacks.includes('reveal')");
     expect(source).toContain("validation.preview !== 'available'");
     expect(source).toContain("data-open-external=\"1\"");
-    expect(source).toContain("${canReveal ? `<button type=\"button\" class=\"chat-msg-produced-menu-btn\"");
+    expect(source).toContain("canReveal ? uiIconButton({ label: moreHint, icon: 'more-horizontal'");
   });
 
   it('dedupes same-basename chips to the more specific final path', () => {

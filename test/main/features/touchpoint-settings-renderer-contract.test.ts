@@ -17,7 +17,8 @@ describe('touchpoint settings renderer contract', () => {
     expect(source).toContain('async function showConnections(options)');
     expect(source).toContain("if (action === 'connection.manage') { await showConnections(); return; }");
     expect(source).toContain("if (action === 'connection.connect') { await showConnections({ startFeishuQr: true }); return; }");
-    expect(source).toContain("if (action === 'connections.back') { showOverview(); return; }");
+    expect(source).toContain("if (action === 'overview.open') { showOverview(); return; }");
+    expect(source).toContain('await showConnections();');
   });
 
   it('settings loads the unified touchpoint surface instead of both legacy centers', () => {

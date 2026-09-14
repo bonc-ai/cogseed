@@ -18,7 +18,7 @@
   function renderAttrs(attrs) {
     const safe = [];
     for (const [key, rawValue] of Object.entries(attrs || {})) {
-      if (!/^(name|autocomplete|inputmode|min|max|minlength|maxlength|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
+      if (!/^(name|title|autocomplete|inputmode|min|max|minlength|maxlength|rows|spellcheck|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
       if (rawValue == null || rawValue === false) continue;
       safe.push(`${key}="${escapeText(rawValue === true ? '' : rawValue)}"`);
     }
@@ -41,14 +41,16 @@
     const id = String(value.id || '').trim();
     if (!id) throw new TypeError('uiInput requires an id');
     const type = INPUT_TYPES.has(value.type) ? value.type : 'text';
-    return `<input class="form-input ui-control ui-input" id="${escapeText(id)}" type="${type}"${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+    const classes = ['form-input', 'ui-control', 'ui-input', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="${type}"${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
   }
 
   function uiTextarea(options) {
     const value = options || {};
     const id = String(value.id || '').trim();
     if (!id) throw new TypeError('uiTextarea requires an id');
-    return `<textarea class="form-input ui-control ui-textarea" id="${escapeText(id)}"${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)}>${escapeText(value.value)}</textarea>`;
+    const classes = ['form-input', 'ui-control', 'ui-textarea', value.className || ''].filter(Boolean).join(' ');
+    return `<textarea class="${escapeText(classes)}" id="${escapeText(id)}"${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)}>${escapeText(value.value)}</textarea>`;
   }
 
   function uiSelect(options) {
@@ -65,6 +67,7 @@
         ...(option.iconName ? { iconName: String(option.iconName) } : {}),
       })),
       labelId: value.labelId || '',
+      ariaLabel: value.ariaLabel || '',
       describedBy: value.describedBy || '',
       disabled: Boolean(value.disabled),
       invalid: Boolean(value.invalid),
@@ -109,6 +112,7 @@
       if (valueLabel && host.id) valueLabel.id = `${host.id}-selected-value`;
       const labelledBy = [config.labelId, valueLabel && valueLabel.id].filter(Boolean).join(' ');
       if (labelledBy) trigger.setAttribute('aria-labelledby', labelledBy);
+      if (config.ariaLabel) trigger.setAttribute('aria-label', config.ariaLabel);
       if (config.describedBy) trigger.setAttribute('aria-describedby', config.describedBy);
       if (config.required) trigger.setAttribute('aria-required', 'true');
       if (config.invalid) trigger.setAttribute('aria-invalid', 'true');

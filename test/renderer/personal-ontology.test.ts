@@ -42,10 +42,14 @@ function loadPersonalOntology(invoke: any) {
       ? 'profile sync warning'
       : key,
     uiToast,
-    window: { cogseed: { invoke }, uiIconHtml: () => '' },
+    cogseed: { invoke },
   };
-  sandbox.window.window = sandbox.window;
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  for (const file of ['modules/icons.js', 'modules/ui-button.js', 'modules/ui-form.js', 'modules/ui-empty.js']) {
+    vm.runInContext(readFileSync(resolve(root, 'src/renderer', file), 'utf8'), sandbox, { filename: file });
+  }
   vm.runInContext(ontology, sandbox, { filename: 'personal-ontology.js' });
   return { sandbox, uiToast, elements };
 }

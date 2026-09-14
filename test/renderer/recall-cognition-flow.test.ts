@@ -11,6 +11,12 @@ const CAPS = (status: string, risk?: 'low' | 'medium' | 'high') =>
 const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf8');
 const bindingsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf8');
 
+function installSharedUi(context: vm.Context) {
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-segmented-control.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8'), context, { filename: file });
+  }
+}
+
 function extractFunction(source: string, name: string): string {
   const marker = `function ${name}`;
   const start = source.indexOf(marker);
@@ -43,6 +49,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function cognitionTreeSvg(html: string): string {
+  const start = html.indexOf('<svg class="cognition-tree-svg');
+  return start < 0 ? '' : html.slice(start, html.indexOf('</svg>', start));
+}
+
 function loadSkillsRenderer() {
   const labels: Record<string, string> = {
     'cognition.source_conversation': '会话',
@@ -70,6 +81,7 @@ function loadSkillsRenderer() {
   context.global = context;
   context.globalThis = context;
   vm.createContext(context);
+  installSharedUi(context);
   vm.runInContext(skillsSource, context, { filename: 'skills.js' });
   return context;
 }
@@ -473,7 +485,8 @@ describe('Recall cognition renderer flow', () => {
     context.renderSkillsCognitionCaptures();
 
     expect(host.innerHTML).toContain('已开启 · 夜间 · 自动入库');
-    expect(host.innerHTML).toContain('data-recall-capture-settings-toggle aria-expanded="false"');
+    expect(host.innerHTML).toContain('data-recall-capture-settings-toggle');
+    expect(host.innerHTML).toContain('aria-expanded="false"');
     expect(host.innerHTML).toContain('class="recall-capture-control-expanded" hidden');
     expect(host.innerHTML).toContain('data-recall-capture-enabled');
     expect(host.innerHTML).toContain('data-recall-capture-policy="nightly"');
@@ -503,7 +516,8 @@ describe('Recall cognition renderer flow', () => {
 
     vm.runInContext(`_skillsCognitionState.captureSettingsExpanded = true;`, context);
     context.renderSkillsCognitionCaptures();
-    expect(host.innerHTML).toContain('data-recall-capture-settings-toggle aria-expanded="true"');
+    expect(host.innerHTML).toContain('data-recall-capture-settings-toggle');
+    expect(host.innerHTML).toContain('aria-expanded="true"');
     expect(host.innerHTML).not.toContain('class="recall-capture-control-expanded" hidden');
   });
 
@@ -3773,12 +3787,19 @@ describe('认知树 SVG 可视化', () => {
     return { context, host };
   }
 
-  it('按大叶验证占比着色，并保留完整分类卡作为可点列表', () => {
+  it('按大叶验证占比着色，并以一体化工作台保留完整可点分支列表', () => {
     const { context, host } = treeContext(NODES);
 
     context.renderSkillsCognitionTree();
 
     expect(host.innerHTML).toContain('cognition-tree-svg');
+    expect(host.innerHTML).toContain('cognition-tree-top');
+    expect(host.innerHTML).toContain('cognition-tree-stage');
+    expect(host.innerHTML).toContain('cognition-tree-growth');
+    expect(host.innerHTML).toContain('cognition-tree-branch-grid');
+    // 树页不再把同一组真实数据拆成 Hero 和横向 KPI。
+    expect(host.innerHTML).not.toContain('cognition-task-hero');
+    expect(host.innerHTML).not.toContain('cognition-task-metrics');
     // 大叶按该类已验证占比分三档：rule（1 深 1 浅）→ 中档；personal（transfer
     // 尚未效果验证）→ 浅档；模板与技能方法没有资产 → 空枝。
     expect(host.innerHTML).toContain('is-ratio-mixed');
@@ -3796,8 +3817,9 @@ describe('认知树 SVG 可视化', () => {
 
     expect(host.innerHTML).toContain('你的认知种子已经准备好');
     expect(host.innerHTML).toContain('选择历史会话');
-    // 树页 metrics 如实显示 0，不假装有成长。
-    expect(host.innerHTML).toContain('正式资产');
+    // 空态也使用紧凑页面标题，不再渲染旧 Hero。
+    expect(host.innerHTML).toContain('cognition-tree-page-state');
+    expect(host.innerHTML).not.toContain('cognition-task-hero');
   });
 
   /**
@@ -3816,7 +3838,7 @@ describe('认知树 SVG 可视化', () => {
 
     context.renderSkillsCognitionTree();
 
-    const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
+    const svg = cognitionTreeSvg(host.innerHTML);
     // 两个候选按类别归到 rule / personal 两条枝上，画成芽点。
     expect(svg).toContain('cognition-tree-svg-bud');
     // 芽点可点进「待我处理」。
@@ -3840,7 +3862,8 @@ describe('认知树 SVG 可视化', () => {
     context.renderSkillsCognitionTree();
 
     // 一条已验证资产、零条待验证——芽不进这两个数。
-    expect(host.innerHTML).toContain('1 项能力已在真实任务中复用并留下有效证据；0 项已确认但仍待验证。');
+    expect(host.innerHTML).toContain('已确认，待验证</span><b>0</b>');
+    expect(host.innerHTML).toContain('已验证资产</span><b>1</b>');
     // 候选没有 maturity/status/version，绝不能作为可点资产出现。
     expect(host.innerHTML).not.toContain('data-cognition-open-asset="cand-1"');
     expect(host.innerHTML).not.toContain('待确认的一条');
@@ -3877,12 +3900,14 @@ describe('认知树 SVG 可视化', () => {
     const leafButtons = host.innerHTML.match(/data-cognition-open-asset="/g) || [];
     expect(leafButtons.length).toBe(2);
     // rule 这一枝是 2 条资产，不是 2 + 2 条候选。
-    expect(host.innerHTML).toContain('规则与偏好</strong><b>2</b>');
+    expect(host.innerHTML).toContain('规则与偏好 <span>2</span>');
     // 成熟度分档只看资产：a-1 已验证、a-2 待验证。候选进来会把 light 顶到 3。
-    expect(host.innerHTML).toContain('1 项能力已在真实任务中复用并留下有效证据；1 项已确认但仍待验证。');
+    expect(host.innerHTML).toContain('已确认，待验证</span><b>1</b>');
+    expect(host.innerHTML).toContain('已验证资产</span><b>1</b>');
     // 芽 = 3，全部来自 recallCandidates。
-    expect(host.innerHTML).toContain('待确认的芽</strong><b>3</b>');
-    const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
+    expect(host.innerHTML).toContain('cognition-tree-growth-pending');
+    expect(host.innerHTML).toContain('待确认的芽</span><strong>3</strong>');
+    const svg = cognitionTreeSvg(host.innerHTML);
     expect(svg).toContain('cognition-tree-svg-bud');
     expect(svg).toContain('待确认：候选摘要甲');
     // 候选节点的 label 一次都不该露面——露面就说明树节点被当成了渲染源，
@@ -3901,7 +3926,7 @@ describe('认知树 SVG 可视化', () => {
 
     context.renderSkillsCognitionTree();
 
-    const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
+    const svg = cognitionTreeSvg(host.innerHTML);
     // 大叶只画类别与已验证占比，不画版本。
     expect(svg).not.toContain('v2.0.0');
     expect(svg).not.toContain('v1.2.0');
@@ -3918,7 +3943,7 @@ describe('认知树 SVG 可视化', () => {
 
     context.renderSkillsCognitionTree();
 
-    const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
+    const svg = cognitionTreeSvg(host.innerHTML);
     for (const label of ['关于我', '规则与偏好', '模板与范例', '技能与方法']) {
       expect(svg).toContain(label);
     }
@@ -3944,7 +3969,7 @@ describe('认知树 SVG 可视化', () => {
 
     context.renderSkillsCognitionTree();
 
-    const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
+    const svg = cognitionTreeSvg(host.innerHTML);
     // 大叶 = 类别：13 条合成一片叶，无已验证 → 浅档，数量如实写在大叶上。
     expect(svg).toContain('is-ratio-none');
     expect(svg).toContain('规则偏好 · 13');

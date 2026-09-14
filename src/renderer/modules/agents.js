@@ -20,6 +20,7 @@ let _agentsCache = null;
 // avatars. The Agents tab upgrades it to the complete listing on first entry.
 let _agentsCacheIsSummary = false;
 let _agentsLoadInFlight = null;
+let _agentsSearchQuery = '';
 let _selectedAgent = null; // { id, name, source }
 let _agentEditing = false;
 let _agentFieldSaveTimer = null;
@@ -693,11 +694,59 @@ function renderAgentsList(agents) { renderAgentsGrid(_withCommanderAgent(agents)
 // re-renders within a session; defaults to All on each load.
 let _agentsActiveCategory = '';
 
+function _ensureAgentsSearchControl() {
+  const host = document.getElementById('agents-search-field');
+  if (!host) return;
+  let input = host.querySelector('#agents-search-input');
+  if (!input) {
+    if (typeof window.uiInput !== 'function') throw new Error('agents require uiInput');
+    host.innerHTML = `${_agentUiIconHtml('search', 'agents-search-icon')}${window.uiInput({
+      id: 'agents-search-input',
+      type: 'search',
+      value: _agentsSearchQuery,
+      placeholder: t('agents.search_placeholder'),
+      attrs: { autocomplete: 'off', spellcheck: 'false' },
+    })}`;
+    if (typeof hydrateUiIcons === 'function') hydrateUiIcons(host);
+    input = host.querySelector('#agents-search-input');
+  }
+  if (!input || input.dataset.agentsSearchBound === 'true') return;
+  input.dataset.agentsSearchBound = 'true';
+  input.addEventListener('input', () => {
+    _agentsSearchQuery = input.value || '';
+    if (_agentsCache) renderAgentsList(_agentsCache);
+  });
+}
+
+function _renderAgentsEmptyState(emptyEl, noMatch) {
+  if (!emptyEl) return;
+  if (typeof window.uiEmptyState !== 'function') throw new Error('agents require uiEmptyState');
+  emptyEl.innerHTML = window.uiEmptyState(noMatch ? {
+    kind: 'actionable',
+    icon: 'search',
+    title: t('agents.no_match'),
+    hint: t('agents.no_match_hint'),
+    action: { label: t('common.clear'), role: 'secondary', attrs: { 'data-agents-clear-search': true } },
+  } : {
+    kind: 'quiet',
+    title: t('agents.empty'),
+  });
+  emptyEl.style.display = '';
+  emptyEl.querySelector('[data-agents-clear-search]')?.addEventListener('click', () => {
+    _agentsSearchQuery = '';
+    _agentsActiveCategory = '';
+    const input = document.getElementById('agents-search-input');
+    if (input) input.value = '';
+    if (_agentsCache) renderAgentsList(_agentsCache);
+  });
+}
+
 function renderAgentsGrid(agents) {
   const emptyEl = document.getElementById('agents-empty');
   const chipsHost = document.getElementById('agents-categories');
   const gridEl = document.getElementById('agents-grid');
   if (!gridEl) return;
+  _ensureAgentsSearchControl();
 
   if (!agents.length) {
     if (chipsHost) chipsHost.innerHTML = '';
@@ -705,16 +754,15 @@ function renderAgentsGrid(agents) {
     gridEl.innerHTML = '';
     if (emptyEl) {
       if (typeof _mpUpdateInstallingEmptyStates === 'function') _mpUpdateInstallingEmptyStates();
-      else emptyEl.textContent = t('agents.empty');
-      emptyEl.style.display = '';
+      else _renderAgentsEmptyState(emptyEl, false);
     }
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';
 
-  const useTitle = escapeHtml(t('agents.use_tooltip'));
-  const useLabel = escapeHtml(t('agents.use'));
-  const moreTitle = escapeHtml(t('agents.more_actions'));
+  const useTitle = t('agents.use_tooltip');
+  const useLabel = t('agents.use');
+  const moreTitle = t('agents.more_actions');
   const lang = getLang();
   const customChipLabel = t('agents.custom_group');
   const baseGroupLabel = (() => {
@@ -728,6 +776,10 @@ function renderAgentsGrid(agents) {
   const allLabel = (() => {
     const raw = t('marketplace.all');
     return (raw && raw !== 'marketplace.all') ? raw : 'All';
+  })();
+  const commanderGroupLabel = (() => {
+    const raw = t('agents.commander_group');
+    return (raw && raw !== 'agents.commander_group') ? raw : 'Main agent';
   })();
 
   // Build the chip strip from the marketplace category cache. Missing categories
@@ -787,9 +839,19 @@ function renderAgentsGrid(agents) {
   }
 
   const filtered = agents.filter((a) => {
-    if (_agentsActiveCategory === '') return true;
-    return _effectiveCategoryCode(a && a.category, knownCodes) === _agentsActiveCategory;
+    if (_agentsActiveCategory !== '' && _effectiveCategoryCode(a && a.category, knownCodes) !== _agentsActiveCategory) return false;
+    const query = _agentsSearchQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return `${a?.name || ''} ${_agentSummary(a, lang)}`.toLocaleLowerCase().includes(query);
   });
+
+  if (!filtered.length) {
+    gridEl.classList.remove('is-sectioned');
+    gridEl.innerHTML = '';
+    _renderAgentsEmptyState(emptyEl, true);
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
 
   const cardHtml = (a) => {
     const enabled = a.enabled !== false;
@@ -805,7 +867,12 @@ function renderAgentsGrid(agents) {
     const descText = desc || t('agents.placeholder_unset');
     const agentName = a.name || t('agents.unnamed');
     const openLabel = `${t('agents.manage_tooltip')}: ${agentName}`;
-    const moreBtn = (isMock || isCommander) ? '' : `<button type="button" class="agent-card-more" data-agent-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
+    const moreBtn = (isMock || isCommander || typeof uiIconButton !== 'function') ? '' : uiIconButton({
+      label: moreTitle,
+      icon: 'more-horizontal',
+      className: 'agent-card-more',
+      attrs: { 'data-agent-more': true },
+    });
     const avatarHtml = renderAvatarHtml(a.icon, a.color, {
       size: 32,
       seed: a.agent_id,
@@ -838,9 +905,14 @@ function renderAgentsGrid(agents) {
           ${_agentDeliveryChip(deliveryCount)}
           ${_agentExplicitCountChip(_agentLabel('agents.card_memory_count', '{n} 记忆', '{n} memory', '{n} 記憶'), memoryCount)}
           ${_agentExplicitCountChip(_agentLabel('agents.card_skill_count', '{n} 技能', '{n} skills', '{n} スキル'), skillCount)}
-          <button type="button" class="agent-card-use" data-agent-use title="${useTitle}" aria-label="${useTitle}" ${enabled && !isMock ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>
-            ${useLabel}
-          </button>
+          ${typeof uiButton === 'function' ? uiButton({
+            label: useLabel,
+            role: 'primary',
+            size: 'sm',
+            className: 'agent-card-use',
+            disabled: !(enabled && !isMock),
+            attrs: { 'data-agent-use': true, title: useTitle },
+          }) : ''}
         </div>
       </div>
     `;
@@ -856,16 +928,11 @@ function renderAgentsGrid(agents) {
     else if (_isExternalCliAgent(a)) groups.base.push(a);
     else groups.custom.push(a);
   }
-  const sectionHtml = (label, list, opts = {}) => {
+  const sectionHtml = (label, list) => {
     if (!list.length) return '';
-    const headHtml = opts.hideHead ? '' : `
-        <div class="agents-source-section-head">
-          <span>${escapeHtml(label)}</span>
-          <span class="agents-source-section-count">${list.length}</span>
-        </div>`;
     return `
       <section class="agents-source-section">
-        ${headHtml}
+        <div class="agents-source-section-head">${escapeHtml(label)} · ${list.length}</div>
         <div class="agents-source-section-grid">
           ${list.map(cardHtml).join('')}
         </div>
@@ -873,7 +940,7 @@ function renderAgentsGrid(agents) {
     `;
   };
   gridEl.classList.add('is-sectioned');
-  gridEl.innerHTML = sectionHtml('', groups.commander, { hideHead: true })
+  gridEl.innerHTML = sectionHtml(commanderGroupLabel, groups.commander)
     + sectionHtml(baseGroupLabel, groups.base)
     + sectionHtml(customChipLabel, groups.custom)
     + sectionHtml(marketplaceGroupLabel, groups.marketplace);
@@ -1295,13 +1362,8 @@ function _agentProfileChipHtml(text, extraClass) {
 }
 
 function _agentDetailListIconHtml(kind) {
-  if (kind === 'memory') {
-    return '<svg viewBox="0 0 24 24" fill="none"><path d="M7 4.5h10a1.5 1.5 0 0 1 1.5 1.5v14l-6.5-3.6L5.5 20V6A1.5 1.5 0 0 1 7 4.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
-  }
-  if (kind === 'standard') {
-    return '<svg viewBox="0 0 24 24" fill="none"><path d="m5 12 4.2 4.2L19 6.8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  }
-  return '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  const iconName = kind === 'memory' ? 'bookmark' : (kind === 'standard' ? 'check-circle' : 'target');
+  return typeof uiIconHtml === 'function' ? uiIconHtml(iconName, 'ui-icon') : '';
 }
 
 function _agentMemoryListItemHtml(text, editable) {
@@ -1314,7 +1376,12 @@ function _agentMemoryListItemHtml(text, editable) {
       ${editable
         ? `<button type="button" class="agents-detail-list-text is-action" data-agent-memory-edit="${escapeHtml(text)}" title="${escapeHtml(editTitle)}">${escapeHtml(text)}</button>`
         : `<span class="agents-detail-list-text">${escapeHtml(text)}</span>`}
-      ${editable ? `<button type="button" class="agents-memory-chip-remove" data-agent-memory-remove="${escapeHtml(text)}" title="${escapeHtml(removeTitle)}" aria-label="${escapeHtml(removeTitle)}">×</button>` : ''}
+      ${editable && typeof uiIconButton === 'function' ? uiIconButton({
+        label: removeTitle,
+        icon: 'x',
+        className: 'agents-memory-chip-remove',
+        attrs: { 'data-agent-memory-remove': text },
+      }) : ''}
     </div>
   `;
 }
@@ -1328,7 +1395,12 @@ function _agentEditableListItemHtml(text, index, key) {
     <div class="agents-detail-list-item">
       <span class="agents-detail-list-icon is-${escapeHtml(iconKind)}" aria-hidden="true">${_agentDetailListIconHtml(iconKind)}</span>
       <button type="button" class="agents-detail-list-text is-action" data-agent-list-edit="${escapeHtml(key)}" data-agent-list-index="${index}" title="${escapeHtml(editTitle)}">${escapeHtml(text)}</button>
-      <button type="button" class="agents-memory-chip-remove" data-agent-list-remove="${escapeHtml(key)}" data-agent-list-index="${index}" title="${escapeHtml(removeTitle)}" aria-label="${escapeHtml(removeTitle)}">×</button>
+      ${typeof uiIconButton === 'function' ? uiIconButton({
+        label: removeTitle,
+        icon: 'x',
+        className: 'agents-memory-chip-remove',
+        attrs: { 'data-agent-list-remove': key, 'data-agent-list-index': index },
+      }) : ''}
     </div>
   `;
 }
@@ -1486,12 +1558,16 @@ function _mountAgentListAddButton(section, agent, key, tags, editing) {
   if (!title) return;
   title.querySelector('[data-agent-list-add]')?.remove();
   if (!editing || !_canEditAgentDefinition(agent)) return;
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'agents-memory-add';
-  btn.dataset.agentListAdd = key;
-  btn.textContent = _agentLabel('agents.tag_add', '添加', 'Add', '追加');
-  title.appendChild(btn);
+  if (typeof uiButton !== 'function') return;
+  title.insertAdjacentHTML('beforeend', uiButton({
+    label: _agentLabel('agents.tag_add', '添加', 'Add', '追加'),
+    role: 'ghost',
+    size: 'sm',
+    className: 'agents-memory-add',
+    attrs: { 'data-agent-list-add': key },
+  }));
+  const btn = title.querySelector(`[data-agent-list-add="${CSS.escape(key)}"]`);
+  if (!btn) return;
   btn.addEventListener('click', async (e) => {
     e.preventDefault();
     const next = await _promptAgentTextListValue(key, '');
@@ -1566,13 +1642,14 @@ function _renderAgentDetailMemory(agent, editing = false) {
   section.style.display = (memoryTags.length || canEditMemory) ? '' : 'none';
   section.querySelector('[data-agent-memory-add]')?.remove();
   const title = section.querySelector('.agents-detail-label');
-  if (title && canEditMemory) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'agents-memory-add';
-    btn.dataset.agentMemoryAdd = '';
-    btn.textContent = _agentLabel('agents.memory_add', '添加', 'Add', '追加');
-    title.appendChild(btn);
+  if (title && canEditMemory && typeof uiButton === 'function') {
+    title.insertAdjacentHTML('beforeend', uiButton({
+      label: _agentLabel('agents.memory_add', '添加', 'Add', '追加'),
+      role: 'ghost',
+      size: 'sm',
+      className: 'agents-memory-add',
+      attrs: { 'data-agent-memory-add': true },
+    }));
   }
   host.innerHTML = memoryTags.map((tag) => _agentMemoryListItemHtml(tag, canEditMemory)).join('');
   if (canEditMemory) _wireAgentMemoryControls(section, agent);
@@ -2396,8 +2473,22 @@ async function _renderAgentDetailProjectDir(agent) {  const section = document.g
           <div class="agent-project-dir-mode">${escapeHtml(status)}</div>
         </div>
         <div class="agent-project-dir-actions">
-          <button type="button" class="btn btn-sm" data-act="pick" ${canEdit ? '' : 'disabled'}>${escapeHtml(t('input.dir.change'))}</button>
-          ${mode === 'custom' ? `<button type="button" class="btn btn-sm" data-act="reset" ${canEdit ? '' : 'disabled'}>${escapeHtml(t('agents.project_dir_use_workspace'))}</button>` : ''}
+          ${typeof uiButton === 'function' ? uiButton({
+            label: t('input.dir.change'),
+            role: 'secondary',
+            size: 'sm',
+            icon: 'folder-open',
+            disabled: !canEdit,
+            attrs: { 'data-act': 'pick' },
+          }) : ''}
+          ${mode === 'custom' && typeof uiButton === 'function' ? uiButton({
+            label: t('agents.project_dir_use_workspace'),
+            role: 'ghost',
+            size: 'sm',
+            icon: 'undo',
+            disabled: !canEdit,
+            attrs: { 'data-act': 'reset' },
+          }) : ''}
         </div>
       </div>`;
     const pickBtn = slot.querySelector('[data-act="pick"]');
@@ -2812,7 +2903,13 @@ async function _renderExternalPanelPeers() {
   slot.innerHTML = `
     <div class="agents-ext-peers-empty agents-ext-peers-moved">
       <span>${escapeHtml(t('agents.peers.moved'))}</span>
-      <button type="button" class="btn btn-sm" id="agent-ext-peers-open-dashboard">${escapeHtml(t('agents.peers.open_dashboard'))}</button>
+      ${typeof uiButton === 'function' ? uiButton({
+        label: t('agents.peers.open_dashboard'),
+        role: 'secondary',
+        size: 'sm',
+        iconEnd: 'arrow-right',
+        attrs: { id: 'agent-ext-peers-open-dashboard' },
+      }) : ''}
     </div>`;
   const openBtn = slot.querySelector('#agent-ext-peers-open-dashboard');
   if (openBtn) {
@@ -4592,8 +4689,18 @@ function _renderTaskRefChips(el, refs, cid) {
     <span class="chat-taskref-chip ${r.kind === 'asset' ? 'is-asset' : 'is-artifact'}">
       <em>${r.kind === 'asset' ? escapeHtml(t('agent_picker.ref_asset')) : escapeHtml(t('agent_picker.ref_artifact'))}</em>
       <span title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
-      <button type="button" class="chat-taskref-remove" data-cid="${escapeHtml(cid || '')}" data-index="${i}"
-        data-kind="${escapeHtml(r.kind || '')}" data-key="${escapeHtml(_sameTaskRefKey(r))}" aria-label="${escapeHtml(t('agent_picker.ref_remove'))}">×</button>
+      ${typeof uiIconButton === 'function' ? uiIconButton({
+        label: t('agent_picker.ref_remove'),
+        icon: 'x',
+        variant: 'danger',
+        className: 'chat-taskref-remove',
+        attrs: {
+          'data-cid': cid || '',
+          'data-index': i,
+          'data-kind': r.kind || '',
+          'data-key': _sameTaskRefKey(r),
+        },
+      }) : ''}
     </span>`).join('');
   el.querySelectorAll('.chat-taskref-remove').forEach((btn) => {
     btn.addEventListener('click', async (e) => {

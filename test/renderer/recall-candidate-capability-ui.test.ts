@@ -13,6 +13,12 @@ import * as vm from 'node:vm';
 const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf8');
 const bindingsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf8');
 
+function installSharedUi(context: vm.Context) {
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-segmented-control.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8'), context, { filename: file });
+  }
+}
+
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}`);
   if (start < 0) throw new Error(`missing ${name}`);
@@ -48,6 +54,7 @@ function loadSkillsRenderer() {
   context.global = context;
   context.globalThis = context;
   vm.createContext(context);
+  installSharedUi(context);
   vm.runInContext(skillsSource, context, { filename: 'skills.js' });
   return context;
 }
@@ -113,7 +120,7 @@ describe('recall candidate pool renders from capability, not raw status', () => 
     expect(html).toContain('data-recall-candidate-select="c-weak-1"');
     expect(html).not.toContain('data-recall-candidate-select="c-weak-high"');
     // 一键入库按钮不带 disabled。
-    expect(html).toMatch(/data-recall-candidate-promote-all\s*>/);
+    expect(html).toMatch(/data-recall-candidate-promote-all(?:="")?\s*>/);
   });
 
   it('states the real reason a candidate cannot be batch-selected', () => {

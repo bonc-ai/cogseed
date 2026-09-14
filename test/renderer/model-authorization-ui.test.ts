@@ -195,6 +195,7 @@ function loadInteractiveHarness() {
   });
   const windowObj: any = {
     cogseed: { invoke },
+    uiIconHtml: (name: string) => `<i data-icon="${name}"></i>`,
     addEventListener(type: string, handler: (...args: any[]) => unknown) { const list = windowListeners.get(type) || []; list.push(handler); windowListeners.set(type, list); },
   };
   const refreshModelGuard = vi.fn(async () => true);
@@ -211,6 +212,11 @@ function loadInteractiveHarness() {
     setTimeout, clearTimeout,
   };
   vm.createContext(context);
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-button.js'), 'utf8'), context, { filename: 'ui-button.js' });
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
+  context.uiButton = windowObj.uiButton;
+  context.uiIconButton = windowObj.uiIconButton;
+  context.uiInput = windowObj.uiInput;
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8'), context, { filename: 'model-authorization.js' });
   return { context, registry, invoke, discoverResolvers, windowListeners, refreshModelGuard };
 }
@@ -526,7 +532,8 @@ describe('model authorization interactive wizard', () => {
 
     expect(registry.get('model-authorization-body')!.innerHTML)
       .toContain('settings.model_authorization.model_list_empty');
-    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('complete" disabled');
+    expect(registry.get('model-authorization-actions')!.innerHTML)
+      .toMatch(/<button[^>]*disabled[^>]*data-model-auth-action="complete"/);
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-empty-model-result');
   });
 

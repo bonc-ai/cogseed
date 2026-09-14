@@ -97,6 +97,9 @@ function loadConversationRenderer() {
   };
   context.window.window = context.window;
   vm.createContext(context);
+  const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
+  const uiFormSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-form.js'), 'utf8');
+  vm.runInContext(`${uiButtonSource}\n${uiFormSource}\nthis.uiButton = window.uiButton; this.uiIconButton = window.uiIconButton; this.uiInput = window.uiInput;`, context);
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
   vm.runInContext(source, context);
   return context;
@@ -416,7 +419,7 @@ describe('conversation sidebar task row actions', () => {
       title: 'Editable task',
     });
 
-    expect(html).toContain('class="conv-item-title-input"');
+    expect(html).toContain('ui-input conv-item-title-input');
     expect(html).toContain('data-conv-rename-cid="c1"');
     expect(html).not.toContain('class="conv-item-title" title="Editable task"');
   });

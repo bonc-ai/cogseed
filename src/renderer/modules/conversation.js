@@ -1924,40 +1924,63 @@ async function _scenarioApplyAgent(config) {
 // when available (otherwise commander handles it), and moves the caret to
 // the first `[...]` placeholder so the user keeps typing the specific
 // question, not editing scaffolding.
+async function _applyEmptyStateScenario(id) {
+  // 空间模式：不填模板，直接创建 space_builder 会话并打开。
+  if (id === 'space_builder') {
+    await _startSpaceBuilderConversation();
+    return;
+  }
+  const config = _SCENARIO_CONFIGS[id];
+  const key = config && config.templateKey;
+  const raw = key ? t(key) : '';
+  const tmpl = (raw && raw !== key) ? raw : (_SCENARIO_TEMPLATES_FALLBACK_EN[id] || '');
+  if (!tmpl) return;
+  const applied = await _scenarioApplyAgent(config);
+  if (!applied) return;
+  const input = document.getElementById('new-chat-input');
+  if (!input) return;
+  input.value = tmpl;
+  input.focus();
+  const m = tmpl.match(/\[[^\]]*\]/);
+  if (m && typeof m.index === 'number') {
+    input.setSelectionRange(m.index, m.index + m[0].length);
+  } else {
+    input.setSelectionRange(tmpl.length, tmpl.length);
+  }
+  try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+}
+
+let _emptyStateSecondaryActionsI18nBound = false;
+function _renderEmptyStateSecondaryActions() {
+  const root = document.getElementById('new-chat-secondary-actions');
+  if (!root || typeof uiButton !== 'function') return;
+  root.innerHTML = uiButton({
+    label: t('new_chat.quick.goal'),
+    role: 'ghost',
+    size: 'sm',
+    icon: 'target',
+    className: 'new-chat-goal-mode-btn',
+    attrs: { id: 'new-chat-goal-mode-btn' },
+  });
+  root.querySelector('#new-chat-goal-mode-btn')?.addEventListener('click', () => {
+    void _applyEmptyStateScenario('goal');
+  });
+  if (!_emptyStateSecondaryActionsI18nBound) {
+    _emptyStateSecondaryActionsI18nBound = true;
+    window.addEventListener('i18n-change', _renderEmptyStateSecondaryActions);
+  }
+}
+
 function _initEmptyStateScenarios() {
   const row = document.getElementById('new-chat-scenarios');
   if (!row || row.dataset.bound === '1') return;
   row.dataset.bound = '1';
   row.querySelectorAll('.new-chat-scenario-chip').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const id = btn.dataset.scenario || '';
-      // 空间模式：不填模板，直接创建 space_builder 会话并打开。
-      if (id === 'space_builder') {
-        await _startSpaceBuilderConversation();
-        return;
-      }
-      const config = _SCENARIO_CONFIGS[id];
-      const key = config && config.templateKey;
-      const raw = key ? t(key) : '';
-      const tmpl = (raw && raw !== key) ? raw : (_SCENARIO_TEMPLATES_FALLBACK_EN[id] || '');
-      if (!tmpl) return;
-      const applied = await _scenarioApplyAgent(config);
-      if (!applied) return;
-      const input = document.getElementById('new-chat-input');
-      if (!input) return;
-      input.value = tmpl;
-      input.focus();
-      // Caret on the first `[...]` placeholder so the user types directly
-      // into the slot. autoGrow recomputes height after value change.
-      const m = tmpl.match(/\[[^\]]*\]/);
-      if (m && typeof m.index === 'number') {
-        input.setSelectionRange(m.index, m.index + m[0].length);
-      } else {
-        input.setSelectionRange(tmpl.length, tmpl.length);
-      }
-      try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+      await _applyEmptyStateScenario(btn.dataset.scenario || '');
     });
   });
+  _renderEmptyStateSecondaryActions();
   _initContinueWorkChip();
   _initScenariosFold();
 }
@@ -2121,7 +2144,13 @@ function _renderSpaceDraftButtonHtml(draft) {
     </div>
     ${outcome ? `<div class="space-draft-goal">${escapeHtml(outcome)}</div>` : ''}
     ${rowsHtml}
-    <button type="button" class="btn btn-sm btn-primary space-draft-create-btn" data-space-draft-create>${escapeHtml(t('new_chat.space_draft_create', '创建空间'))}</button>
+    ${uiButton({
+      label: t('new_chat.space_draft_create', '创建空间'),
+      role: 'primary',
+      size: 'sm',
+      className: 'space-draft-create-btn',
+      attrs: { 'data-space-draft-create': '' },
+    })}
   </div>`;
 }
 
@@ -2159,15 +2188,22 @@ function _renderWelcomeCarryHtml(carry, resumeJson) {
     <div class="welcome-carry-head">
       <b>${escapeHtml(t('chat.welcome_carry_title', '准备携带'))}</b>
       <span>${summary}</span>
-      <button type="button" class="inline-link welcome-carry-toggle" data-welcome-carry-toggle>
-        ${escapeHtml(t('chat.welcome_carry_view_evidence', '查看依据'))}
-      </button>
+      ${uiButton({
+        label: t('chat.welcome_carry_view_evidence', '查看依据'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'inline-link welcome-carry-toggle',
+        attrs: { 'data-welcome-carry-toggle': '' },
+      })}
     </div>
     <div class="welcome-carry-scope">${escapeHtml(t('chat.welcome_carry_scope', '只对目标任务生效'))}</div>
     <div class="welcome-carry-actions">
-      <button type="button" class="btn btn-primary welcome-carry-continue" data-welcome-continue>
-        ${escapeHtml(t('chat.welcome_continue', '带着这些继续'))}
-      </button>
+      ${uiButton({
+        label: t('chat.welcome_continue', '带着这些继续'),
+        role: 'primary',
+        className: 'welcome-carry-continue',
+        attrs: { 'data-welcome-continue': '' },
+      })}
     </div>
   </div>`;
 }
@@ -3054,7 +3090,7 @@ function _renderAgentStatusPanelHtml(snapshot) {
       <div class="agent-status-popover-title">${escapeHtml(_agentStatusLabel('chat.agent_status.title', 'Agent status'))}</div>
       <div class="agent-status-popover-summary">${escapeHtml(summary)}</div>
     </div>
-    <button type="button" class="agent-status-close" data-agent-status-close aria-label="${escapeHtml(_agentStatusLabel('common.close', 'Close'))}">×</button>
+    ${uiIconButton({ label: _agentStatusLabel('common.close', 'Close'), icon: 'x', className: 'agent-status-close', attrs: { 'data-agent-status-close': '' } })}
   </div>
   <div class="agent-status-source">${escapeHtml(source)}</div>
   <div class="agent-status-list">${rows || `<div class="agent-status-empty">${escapeHtml(empty)}</div>`}</div>`;
@@ -4490,11 +4526,11 @@ function _renderMessageAttachmentsHtml(names, cid) {
     }
     if (kind === 'video' && cid) {
       const url = _chatMediaUrl(cid, n);
-      const floatingTitle = escapeHtml(_chatVideoFloatingTitle());
+      const floatingTitle = _chatVideoFloatingTitle();
       return `<span class="chat-msg-attach is-video" data-attach-name="${label}" data-attach-cid="${escapeHtml(cid)}" title="${label}">
         <span class="chat-msg-attach-video-shell" data-chat-video-playback-surface="attachment_bubble">
           <video class="chat-msg-attach-video" width="320" height="180" controls controlslist="nodownload nofullscreen noremoteplayback" disablepictureinpicture disableremoteplayback playsinline preload="metadata" src="${url}" data-monitor-resource="chat-attachment-video"></video>
-          <button type="button" class="chat-msg-attach-video-float" data-attach-video-open="1" aria-label="${floatingTitle}" title="${floatingTitle}">${_uiIconHtml('maximize', 'ui-icon chat-msg-attach-video-float-svg')}</button>
+          ${uiIconButton({ label: floatingTitle, icon: 'maximize', className: 'chat-msg-attach-video-float', attrs: { 'data-attach-video-open': '1' } })}
         </span>
         <span class="chat-msg-attach-label">${label}</span>
       </span>`;
@@ -4670,8 +4706,8 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
           ${validationLine ? `<span class="chat-msg-produced-validation is-${escapeHtml(validationStatus)}">${escapeHtml(validationLine)}</span>` : `<span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>`}
         </span>
       </button>
-      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}"${canOpen ? '' : ' disabled'}>${escapeHtml(resolvedOpenLabel)}</button>
-      ${canReveal ? `<button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>` : ''}
+      ${uiButton({ label: resolvedOpenLabel, size: 'sm', className: 'chat-msg-produced-open-btn', disabled: !canOpen, attrs: { title: openTitle } })}
+      ${canReveal ? uiIconButton({ label: moreHint, icon: 'more-horizontal', className: 'chat-msg-produced-menu-btn' }) : ''}
     </div>`;
   });
   return `<div class="chat-msg-produced is-${escapeHtml(outputStatus)}" data-produced-status="${escapeHtml(outputStatus)}">${items.join('')}</div>`;
@@ -4798,7 +4834,7 @@ function _renderTeachingReceiptsHtml(receipts) {
     const revokeKey = 'chat.teaching.revoke';
     const revokeValue = typeof t === 'function' ? t(revokeKey) : revokeKey;
     const revoke = revokeValue && revokeValue !== revokeKey ? revokeValue : '撤销';
-    return `<section class="chat-teaching-receipt${revoked ? ' is-revoked' : ''}" data-teaching-receipt-id="${escapeHtml(receipt.id || '')}"><div><strong>${escapeHtml(receipt.summary || '')}</strong><span>${escapeHtml(_teachingReceiptScopeLabel(receipt.scope))} · ${escapeHtml(status)}</span></div>${revoked ? '' : `<button type="button" class="btn btn-xs" data-chat-teaching-revoke="${escapeHtml(receipt.id || '')}">${escapeHtml(revoke)}</button>`}</section>`;
+    return `<section class="chat-teaching-receipt${revoked ? ' is-revoked' : ''}" data-teaching-receipt-id="${escapeHtml(receipt.id || '')}"><div><strong>${escapeHtml(receipt.summary || '')}</strong><span>${escapeHtml(_teachingReceiptScopeLabel(receipt.scope))} · ${escapeHtml(status)}</span></div>${revoked ? '' : uiButton({ label: revoke, size: 'sm', attrs: { 'data-chat-teaching-revoke': receipt.id || '' } })}</section>`;
   }).join('')}</div>`;
 }
 
@@ -4863,7 +4899,7 @@ function _renderRecallCitationsHtml(citations) {
     const scope = _recallCitationScopeLabel(citation.scope);
     const meta = [type, scope].filter(Boolean).join(' · ');
     return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
-  }).join('')}</div><div class="chat-recall-feedback-actions"><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="positive" title="${escapeHtml(helpful)}">${_uiIconHtml('thumbs-up', 'ui-icon')}<span>${escapeHtml(helpful)}</span></button><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="negative" title="${escapeHtml(improve)}">${_uiIconHtml('thumbs-down', 'ui-icon')}<span>${escapeHtml(improve)}</span></button></div></section>`;
+  }).join('')}</div><div class="chat-recall-feedback-actions">${uiButton({ label: helpful, role: 'ghost', size: 'sm', icon: 'thumbs-up', className: 'chat-recall-feedback-btn', attrs: { 'data-recall-feedback': 'positive', title: helpful } })}${uiButton({ label: improve, role: 'ghost', size: 'sm', icon: 'thumbs-down', className: 'chat-recall-feedback-btn', attrs: { 'data-recall-feedback': 'negative', title: improve } })}</div></section>`;
 }
 
 function _hydrateRecallCitations(messageEl, cid, messageId) {
@@ -5638,9 +5674,13 @@ function _renderConversationTimeBucketList(items, itemOpts = {}) {
     }
     for (const c of bucketItems) parts.push(_renderConversationSidebarItem(c, itemOpts));
     if (loadMoreBuckets[b]) {
-      parts.push(`<button type="button" class="conversation-list-load-more" data-conv-bucket-more="1"
-        data-conv-bucket="${escapeHtml(b)}" data-conv-bucket-scope="${escapeHtml(scope)}">
-        ${escapeHtml(t('sidebar.load_more_conversations'))}</button>`);
+      parts.push(uiButton({
+        label: t('sidebar.load_more_conversations'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'conversation-list-load-more',
+        attrs: { 'data-conv-bucket-more': '1', 'data-conv-bucket': b, 'data-conv-bucket-scope': scope },
+      }));
     }
   }
   return parts.join('');
@@ -5764,8 +5804,12 @@ function _renderConversationSidebarItem(c, opts = {}) {
     ? `<span class="conv-item-auto-icon" title="${escapeHtml(t('auto.title'))}" aria-label="${escapeHtml(t('auto.title'))}">${_uiIconHtml('clock', 'conv-item-auto-icon-svg') || ''}</span>`
     : '';
   const titleNode = editing
-    ? `<input type="text" class="conv-item-title-input" data-conv-rename-cid="${cid}"
-              value="${title}" autocomplete="off" spellcheck="false" />`
+    ? uiInput({
+        id: `conv-item-title-input-${c.conversation_id}`,
+        className: 'conv-item-title-input',
+        value: rawTitle,
+        attrs: { 'data-conv-rename-cid': c.conversation_id, autocomplete: 'off', spellcheck: 'false' },
+      })
     : `<div class="conv-item-title${isUntitled ? ' conv-item-title-untitled' : ''}" title="${title}">${title}</div>`;
   const classes = [
     'conv-item',
@@ -6100,13 +6144,18 @@ function _conversationOperationDialog(options = {}) {
     overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay';
     const title = escapeHtml(options.title || '');
     const message = escapeHtml(options.message || '').replace(/\n/g, '<br />');
-    const confirmLabel = escapeHtml(options.confirmLabel || t('common.confirm'));
-    const cancelLabel = escapeHtml(t('common.cancel'));
-    const loadingLabel = escapeHtml(options.loadingLabel || t('common.loading'));
+    const confirmLabel = options.confirmLabel || t('common.confirm');
+    const cancelLabel = t('common.cancel');
+    const loadingLabel = options.loadingLabel || t('common.loading');
     const inputHtml = options.inputLabel
       ? `<label class="conversation-operation-field">
           <span>${escapeHtml(options.inputLabel)}</span>
-          <input type="text" class="ui-dialog-input" data-operation-title value="${escapeHtml(options.inputValue || '')}" autocomplete="off" spellcheck="false" />
+          ${uiInput({
+            id: 'conversation-operation-title-input',
+            className: 'ui-dialog-input',
+            value: options.inputValue || '',
+            attrs: { 'data-operation-title': '', autocomplete: 'off', spellcheck: 'false' },
+          })}
         </label>`
       : '';
     const sourcesHtml = Array.isArray(options.sources) && options.sources.length
@@ -6125,8 +6174,8 @@ function _conversationOperationDialog(options = {}) {
           <div class="conversation-operation-error" data-operation-error hidden></div>
         </div>
         <div class="modal-actions">
-          <button type="button" class="btn" data-operation-cancel>${cancelLabel}</button>
-          <button type="button" class="btn btn-primary" data-operation-confirm>${confirmLabel}</button>
+          ${uiButton({ label: cancelLabel, attrs: { 'data-operation-cancel': '' } })}
+          ${uiButton({ label: confirmLabel, role: 'primary', attrs: { 'data-operation-confirm': '' } })}
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -6410,18 +6459,24 @@ function _openConversationMergePicker(initialCid) {
     <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
       <div class="conversation-merge-picker-header">
         <h2 id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
-        <button type="button" class="modal-close-btn" data-merge-picker-close aria-label="${escapeHtml(t('common.close'))}" title="${escapeHtml(t('common.close'))}">${_uiIconHtml('x', 'modal-close-icon')}</button>
+        ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn', attrs: { 'data-merge-picker-close': '' } })}
       </div>
       <div class="conversation-merge-picker-search-wrap">
         <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
-        <input type="search" class="conversation-merge-picker-search" data-merge-picker-search placeholder="${escapeHtml(t('chat.merge.picker_search'))}" autocomplete="off" />
+        ${uiInput({
+          id: 'conversation-merge-picker-search',
+          type: 'search',
+          className: 'conversation-merge-picker-search',
+          placeholder: t('chat.merge.picker_search'),
+          attrs: { 'data-merge-picker-search': '', autocomplete: 'off' },
+        })}
       </div>
       <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
       <div class="conversation-merge-picker-list" data-merge-picker-list></div>
       <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
       <div class="conversation-merge-picker-footer">
-        <button type="button" class="btn conversation-merge-picker-cancel" data-merge-picker-cancel>${escapeHtml(t('common.cancel'))}</button>
-        <button type="button" class="btn btn-primary conversation-merge-picker-confirm" data-merge-picker-confirm disabled>${escapeHtml(t('chat.merge.action'))}</button>
+        ${uiButton({ label: t('common.cancel'), className: 'conversation-merge-picker-cancel', attrs: { 'data-merge-picker-cancel': '' } })}
+        ${uiButton({ label: t('chat.merge.action'), role: 'primary', className: 'conversation-merge-picker-confirm', disabled: true, attrs: { 'data-merge-picker-confirm': '' } })}
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -6648,7 +6703,7 @@ async function _openConversationSpacePicker(cid) {
     }).join('')
     : `<div class="conversation-space-empty">${escapeHtml(t('chat.conv_space_none'))}</div>`;
   const unbindHtml = currentSpaceId
-    ? `<button type="button" class="btn conversation-space-unbind" data-space-unbind>${escapeHtml(t('chat.conv_space_unbind'))}</button>`
+    ? uiButton({ label: t('chat.conv_space_unbind'), className: 'conversation-space-unbind', attrs: { 'data-space-unbind': '' } })
     : '';
   overlay.innerHTML = `
     <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-space-title">
@@ -6660,7 +6715,7 @@ async function _openConversationSpacePicker(cid) {
       </div>
       <div class="modal-actions">
         ${unbindHtml}
-        <button type="button" class="btn" data-space-cancel>${escapeHtml(t('common.cancel'))}</button>
+        ${uiButton({ label: t('common.cancel'), attrs: { 'data-space-cancel': '' } })}
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -7245,7 +7300,12 @@ function _renderSpaceSidebarGroup(sp, convs) {
   const moreTitle = t('project.menu.more_actions', '更多操作');
   const renaming = _spaceRenameId === sp.space_id;
   const labelHtml = renaming
-    ? `<input type="text" class="conv-space-rename-input" data-conv-space-rename-input="${escapeHtml(sp.space_id)}" value="${escapeHtml(_spaceRenameValue)}" autocomplete="off" spellcheck="false" />`
+    ? uiInput({
+        id: `conv-space-rename-input-${sp.space_id}`,
+        className: 'conv-space-rename-input',
+        value: _spaceRenameValue,
+        attrs: { 'data-conv-space-rename-input': sp.space_id, autocomplete: 'off', spellcheck: 'false' },
+      })
     : `<span class="conv-list-section-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
   return `
     <button type="button" class="conv-list-section-header is-collapsible${collapsed ? ' is-collapsed' : ''}${renaming ? ' is-renaming' : ''}"
@@ -7336,9 +7396,12 @@ function _renderChannelSidebarGroups(channelConvs) {
 function _renderSidebarSectionHeader(section, label, opts = {}) {
   const collapsed = !!_sidebarCollapse[section];
   const actionHtml = opts.action
-    ? `<button type="button" class="conv-list-section-action" data-sidebar-action="${escapeHtml(opts.action)}"
-        title="${escapeHtml(opts.actionTitle || '')}" aria-label="${escapeHtml(opts.actionTitle || '')}">
-        ${_uiIconHtml(opts.actionIcon || 'plus', 'conv-list-section-action-icon')}</button>`
+    ? uiIconButton({
+        label: opts.actionTitle || '',
+        icon: opts.actionIcon || 'plus',
+        className: 'conv-list-section-action',
+        attrs: { 'data-sidebar-action': opts.action },
+      })
     : '';
   return `
     <div class="conv-list-section-header conv-list-space-title${collapsed ? ' is-collapsed' : ''}">
@@ -7357,9 +7420,13 @@ function _renderConversationFlatList(items, itemOpts = {}) {
   rows.sort(_compareConversationsForSidebar);
   const parts = rows.map((c) => _renderConversationSidebarItem(c, itemOpts));
   if (itemOpts.loadMore) {
-    parts.push(`<button type="button" class="conversation-list-load-more" data-conv-bucket-more="1"
-      data-conv-bucket="${escapeHtml(itemOpts.loadMoreBucket || 'last30')}" data-conv-bucket-scope="sidebar">
-      ${escapeHtml(t('sidebar.load_more_conversations'))}</button>`);
+    parts.push(uiButton({
+      label: t('sidebar.load_more_conversations'),
+      role: 'ghost',
+      size: 'sm',
+      className: 'conversation-list-load-more',
+      attrs: { 'data-conv-bucket-more': '1', 'data-conv-bucket': itemOpts.loadMoreBucket || 'last30', 'data-conv-bucket-scope': 'sidebar' },
+    }));
   }
   return parts.join('');
 }
@@ -7368,9 +7435,12 @@ function _renderConversationFlatList(items, itemOpts = {}) {
 function _renderSidebarNewTaskComposer() {
   return `
     <div class="conv-sidebar-new-task">
-      <input data-sidebar-new-task-input value="${escapeHtml(_sidebarNewTaskValue)}"
-        placeholder="${escapeHtml(t('sidebar.new_task_ph', '输入任务描述，回车创建…'))}"
-        maxlength="500" autocomplete="off" spellcheck="false" />
+      ${uiInput({
+        id: 'sidebar-new-task-input',
+        value: _sidebarNewTaskValue,
+        placeholder: t('sidebar.new_task_ph', '输入任务描述，回车创建…'),
+        attrs: { 'data-sidebar-new-task-input': '', maxlength: '500', autocomplete: 'off', spellcheck: 'false' },
+      })}
     </div>`;
 }
 
@@ -8056,7 +8126,7 @@ function _renderCollaborationStatusHtml(collaboration) {
     ? collaboration.blocking_gate
     : null;
   const gateActions = blockingGate && blockingGate.id && !blockingGate.review_decision
-    ? `<div class="chat-collaboration-gate-actions"><span>${escapeHtml(t('chat.collaboration.gate_blocked', { name: String(blockingGate.name || 'gate') }))}</span><button type="button" class="btn primary small" data-collaboration-gate-review="approve">${escapeHtml(t('chat.collaboration.gate.approve'))}</button><button type="button" class="btn small" data-collaboration-gate-review="reject">${escapeHtml(t('chat.collaboration.gate.reject'))}</button></div>`
+    ? `<div class="chat-collaboration-gate-actions"><span>${escapeHtml(t('chat.collaboration.gate_blocked', { name: String(blockingGate.name || 'gate') }))}</span>${uiButton({ label: t('chat.collaboration.gate.approve'), role: 'primary', size: 'sm', attrs: { 'data-collaboration-gate-review': 'approve' } })}${uiButton({ label: t('chat.collaboration.gate.reject'), size: 'sm', attrs: { 'data-collaboration-gate-review': 'reject' } })}</div>`
     : '';
   const latestLabel = latestStep
     ? t('chat.collaboration.latest_step', {
@@ -9925,8 +9995,8 @@ function _renderMarketplaceInstallCard(card, req, cid, msgId) {
     : '';
   const actions = status === 'pending'
     ? `<div class="marketplace-card-actions chat-marketplace-request-actions">
-        <button type="button" class="btn btn-primary btn-sm" data-mp-decision="install">${escapeHtml(t('marketplace_request.install'))}</button>
-        <button type="button" class="btn btn-sm" data-mp-decision="skip">${escapeHtml(t('marketplace_request.skip'))}</button>
+        ${uiButton({ label: t('marketplace_request.install'), role: 'primary', size: 'sm', attrs: { 'data-mp-decision': 'install' } })}
+        ${uiButton({ label: t('marketplace_request.skip'), size: 'sm', attrs: { 'data-mp-decision': 'skip' } })}
       </div>`
     : `<div class="marketplace-card-actions chat-marketplace-request-actions">
         <span class="chat-marketplace-request-status">${escapeHtml(statusLabel)}</span>
@@ -9977,8 +10047,8 @@ function _renderKstarResultReviewCard(card, review) {
   const evaluation = `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.agent_eval', 'Agent 评估'))}</strong> ${escapeHtml(t('kstar.review.agent_eval_hint', '系统已根据预期与实际自动判定差异；你只需确认事实是否准确。'))}</div>`;
   const actions = card.dataset.status === 'pending'
     ? `<div class="chat-kstar-actions">
-        <button type="button" class="btn btn-primary btn-sm" data-kstar-result-action="confirm">${escapeHtml(t('kstar.review.confirm'))}</button>
-        <button type="button" class="btn btn-sm" data-kstar-result-action="correct">${escapeHtml(t('kstar.review.correct'))}</button>
+        ${uiButton({ label: t('kstar.review.confirm'), role: 'primary', size: 'sm', attrs: { 'data-kstar-result-action': 'confirm' } })}
+        ${uiButton({ label: t('kstar.review.correct'), size: 'sm', attrs: { 'data-kstar-result-action': 'correct' } })}
       </div>`
     : `<div class="chat-kstar-status">${escapeHtml(t('kstar.review.confirmed'))}</div>`;
   card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('kstar.review.card_title'))}</div>${evaluation}${expected}${actual}${actions}`;
@@ -10086,8 +10156,8 @@ function _renderWakeRequestCard(card, request, cid) {
         <div class="chat-wake-request-objective" title="${escapeHtml(objective)}">${escapeHtml(preview)}</div>
       </div>
       <div class="chat-wake-request-actions">
-        ${hasDetails ? `<button type="button" class="btn btn-sm" data-wake-details>${escapeHtml(t(detailsOpen ? 'p3394.wake.details.hide' : 'p3394.wake.details.show'))}</button>` : ''}
-        ${pending ? `<button type="button" class="btn btn-primary btn-sm" data-wake-decision="approve">${escapeHtml(t('p3394.wake.approve'))}</button><button type="button" class="btn btn-sm" data-wake-decision="reject">${escapeHtml(t('p3394.wake.reject'))}</button>` : `<span class="chat-wake-request-status">${escapeHtml(t(`p3394.wake.status.${status}`))}</span>`}
+        ${hasDetails ? uiButton({ label: t(detailsOpen ? 'p3394.wake.details.hide' : 'p3394.wake.details.show'), size: 'sm', attrs: { 'data-wake-details': '' } }) : ''}
+        ${pending ? `${uiButton({ label: t('p3394.wake.approve'), role: 'primary', size: 'sm', attrs: { 'data-wake-decision': 'approve' } })}${uiButton({ label: t('p3394.wake.reject'), size: 'sm', attrs: { 'data-wake-decision': 'reject' } })}` : `<span class="chat-wake-request-status">${escapeHtml(t(`p3394.wake.status.${status}`))}</span>`}
       </div>
     </div>
     ${detailsOpen ? `<div class="chat-wake-request-details">${escapeHtml(objective)}</div>` : ''}`;
@@ -10246,8 +10316,8 @@ function _renderSlowSwitchCard(host, cid, actorId, name, opts = {}) {
         ${candidates.length ? `<div class="chat-slow-switch-pick"><span class="chat-slow-switch-pick-label">${escapeHtml(t('p3394.slow.dropdown_label'))}</span>${optionsHtml}</div>` : ''}
       </div>
       <div class="chat-slow-switch-actions">
-        ${candidates.length ? `<button type="button" class="btn btn-primary btn-sm" data-slow-decision="switch">${escapeHtml(t('p3394.slow.switch'))}</button>` : ''}
-        <button type="button" class="btn btn-sm" data-slow-decision="wait">${escapeHtml(t('p3394.slow.wait'))}</button>
+        ${candidates.length ? uiButton({ label: t('p3394.slow.switch'), role: 'primary', size: 'sm', attrs: { 'data-slow-decision': 'switch' } }) : ''}
+        ${uiButton({ label: t('p3394.slow.wait'), size: 'sm', attrs: { 'data-slow-decision': 'wait' } })}
       </div>
     </div>`;
   for (const button of card.querySelectorAll('[data-slow-decision]')) {
@@ -10801,7 +10871,7 @@ function _renderQuotePreview(cid = currentCid) {
     return `<div class="chat-quote-item">
       <div class="chat-quote-header">
         <span class="chat-quote-from">${escapeHtml(attribution)}</span>
-        <button type="button" class="chat-quote-close" data-quote-index="${index}" title="${escapeHtml(t('chat.quote_remove_title'))}">×</button>
+        ${uiIconButton({ label: t('chat.quote_remove_title'), icon: 'x', className: 'chat-quote-close', attrs: { 'data-quote-index': index } })}
       </div>
       <div class="chat-quote-body">${escapeHtml(String(q.text || ''))}</div>
       ${q.referenceCount ? `<div class="chat-quote-nested">${escapeHtml(t('chat.quote_includes_references', { count: q.referenceCount }))}</div>` : ''}
@@ -11090,9 +11160,9 @@ function _beginUserMessageEdit(msgDiv, editButton) {
   const composer = document.createElement('form');
   composer.className = 'chat-message-edit-composer';
   composer.innerHTML = `
-    <textarea class="chat-message-edit-input" aria-label="${escapeHtml(t('chat.message_edit_title'))}"></textarea>
+    ${uiTextarea({ id: 'chat-message-edit-input', className: 'chat-message-edit-input', attrs: { 'aria-label': t('chat.message_edit_title') } })}
     <div class="chat-message-edit-actions">
-      <button type="button" class="btn btn-sm chat-message-edit-cancel">${escapeHtml(t('common.cancel'))}</button>
+      ${uiButton({ label: t('common.cancel'), size: 'sm', className: 'chat-message-edit-cancel' })}
       <button type="submit" class="btn btn-primary btn-sm chat-message-edit-submit">${escapeHtml(t('chat.message_edit_submit'))}</button>
     </div>
   `;
@@ -11294,7 +11364,7 @@ async function _openReferenceTargetPicker(payloads) {
   overlay.innerHTML = `<div class="modal-standard chat-reference-target-modal" role="dialog" aria-modal="true" aria-labelledby="chat-reference-target-title">
     <div class="modal-header chat-reference-target-header">
       <h2 class="modal-title" id="chat-reference-target-title">${escapeHtml(t('chat.reference_target_title', { count: payloads.length }))}</h2>
-      <button type="button" class="modal-close-btn chat-reference-target-close" title="${escapeHtml(t('common.close'))}" aria-label="${escapeHtml(t('common.close'))}">${_uiIconHtml('x', 'modal-close-icon') || '×'}</button>
+      ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn chat-reference-target-close' })}
     </div>
     <div class="modal-body chat-reference-target-body">
       <button type="button" class="chat-reference-new-task" data-new-task="1">
@@ -11308,7 +11378,7 @@ async function _openReferenceTargetPicker(payloads) {
           <span data-reference-list-hint>${escapeHtml(t('chat.reference_recent_tasks_hint'))}</span>
         </div>
         <label class="chat-reference-target-search-wrap">
-          <input type="search" class="chat-reference-target-search" placeholder="${escapeHtml(t('chat.reference_target_search'))}" />
+          ${uiInput({ id: 'chat-reference-target-search', type: 'search', className: 'chat-reference-target-search', placeholder: t('chat.reference_target_search') })}
         </label>
         <div class="chat-reference-target-list"></div>
       </section>
@@ -11416,10 +11486,10 @@ function _syncMessageSelectionUi() {
     bar = document.createElement('div');
     bar.id = 'chat-message-selection-bar';
     bar.className = 'chat-message-selection-bar';
-    bar.innerHTML = `<button type="button" class="btn btn-sm" data-selection-cancel>${escapeHtml(t('common.cancel'))}</button>
+    bar.innerHTML = `${uiButton({ label: t('common.cancel'), size: 'sm', attrs: { 'data-selection-cancel': '' } })}
       <span class="chat-message-selection-count" data-selection-count></span>
       <span class="chat-message-selection-spacer"></span>
-      <button type="button" class="btn btn-sm" data-selection-reference data-requires-selection>${escapeHtml(t('chat.reference_to'))}</button>`;
+      ${uiButton({ label: t('chat.reference_to'), size: 'sm', attrs: { 'data-selection-reference': '', 'data-requires-selection': '' } })}`;
     pane.insertBefore(bar, pane.querySelector('.chat-input-wrapper'));
     bar.querySelector('[data-selection-cancel]').addEventListener('click', _exitMessageSelection);
     bar.querySelector('[data-selection-reference]').addEventListener('click', () => {
@@ -11516,19 +11586,19 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const actions = document.createElement('span');
   actions.className = 'chat-bubble-actions';
   actions.dataset.mode = mode;
-  const quoteLabel = escapeHtml(t('chat.quote_btn_title'));
-  const copyLabel = escapeHtml(t('chat.copy_btn_title'));
-  const asideLabel = escapeHtml(t('aside.ask_btn_title'));
-  const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${quoteLabel}" aria-label="${quoteLabel}">${_uiIconHtml('at-sign', 'ui-icon')}</button>`;
-  const copyButton = `<button type="button" class="bubble-action-btn bubble-copy-btn" title="${copyLabel}" aria-label="${copyLabel}">${_uiIconHtml('copy', 'ui-icon')}</button>`;
-  const asideButton = `<button type="button" class="bubble-action-btn bubble-aside-btn" title="${asideLabel}" aria-label="${asideLabel}">${_uiIconHtml('message-square', 'ui-icon')}</button>`;
-  const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${_uiIconHtml('list', 'ui-icon')}<span>${escapeHtml(t('chat.message_select'))}</span></button>
-    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${_uiIconHtml('brain-circuit', 'ui-icon')}<span>${escapeHtml(t('cognition.capture.menu'))}</span></button>` : ''}
-    ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${_uiIconHtml('book-open', 'ui-icon')}<span>${escapeHtml(t('chat.archive_btn'))}</span></button>` : ''}`;
+  const quoteLabel = t('chat.quote_btn_title');
+  const copyLabel = t('chat.copy_btn_title');
+  const asideLabel = t('aside.ask_btn_title');
+  const quoteButton = uiIconButton({ label: quoteLabel, icon: 'at-sign', className: 'bubble-action-btn bubble-quote-btn' });
+  const copyButton = uiIconButton({ label: copyLabel, icon: 'copy', className: 'bubble-action-btn bubble-copy-btn' });
+  const asideButton = uiIconButton({ label: asideLabel, icon: 'message-square', className: 'bubble-action-btn bubble-aside-btn' });
+  const overflowItems = `${uiButton({ label: t('chat.message_select'), role: 'ghost', size: 'sm', icon: 'list', className: 'chat-bubble-menu-item bubble-select-btn', attrs: { role: 'menuitem', title: t('chat.message_select_title') } })}
+    ${includeArchive && !includeRetry ? uiButton({ label: t('cognition.capture.menu'), role: 'ghost', size: 'sm', icon: 'brain-circuit', className: 'chat-bubble-menu-item bubble-cognition-btn', attrs: { role: 'menuitem', title: t('cognition.capture.menu_title') } }) : ''}
+    ${includeArchive ? uiButton({ label: t('chat.archive_btn'), role: 'ghost', size: 'sm', icon: 'book-open', className: 'chat-bubble-menu-item bubble-archive-btn', attrs: { role: 'menuitem', title: t('chat.archive_btn_title') } }) : ''}`;
   actions.innerHTML = `
     <span class="chat-bubble-direct-actions">${copyButton}${quoteButton}${asideButton}</span>
     <span class="chat-bubble-more-wrap">
-      <button type="button" class="bubble-more-btn" title="${escapeHtml(t('chat.more_actions'))}" aria-label="${escapeHtml(t('chat.more_actions'))}" aria-haspopup="menu" aria-expanded="false">${_uiIconHtml('more-horizontal', 'ui-icon')}</button>
+      ${uiIconButton({ label: t('chat.more_actions'), icon: 'more-horizontal', className: 'bubble-more-btn', attrs: { 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
       <span class="chat-bubble-more-menu" role="menu" hidden>${overflowItems}</span>
     </span>
   `;
@@ -14847,8 +14917,8 @@ function createChatController(config) {
           <div class="chat-queue-drag" title="${escapeHtml(t('chat.queue_drag_title'))}">⋮⋮</div>
           <div class="chat-queue-text">${preview}</div>
           <div class="chat-queue-actions">
-            <button class="chat-queue-btn" data-act="edit">${escapeHtml(t('chat.queue_edit'))}</button>
-            <button class="chat-queue-btn danger" data-act="del">×</button>
+            ${uiButton({ label: t('chat.queue_edit'), role: 'ghost', size: 'sm', className: 'chat-queue-btn', attrs: { 'data-act': 'edit' } })}
+            ${uiIconButton({ label: t('common.delete'), icon: 'trash', variant: 'danger', className: 'chat-queue-btn danger', attrs: { 'data-act': 'del' } })}
           </div>
         </div>`;
     }).join('');
@@ -14910,10 +14980,10 @@ function createChatController(config) {
     if (!item) return;
     row.classList.add('editing');
     row.innerHTML = `
-      <textarea class="chat-queue-edit" rows="2"></textarea>
+      ${uiTextarea({ id: `chat-queue-edit-${qid}`, className: 'chat-queue-edit', value: item.content || '', attrs: { rows: '2' } })}
       <div class="chat-queue-edit-actions">
-        <button class="chat-queue-btn" data-act="cancel">${escapeHtml(t('chat.queue_cancel'))}</button>
-        <button class="chat-queue-btn" data-act="save">${escapeHtml(t('chat.queue_save'))}</button>
+        ${uiButton({ label: t('chat.queue_cancel'), role: 'ghost', size: 'sm', className: 'chat-queue-btn', attrs: { 'data-act': 'cancel' } })}
+        ${uiButton({ label: t('chat.queue_save'), role: 'primary', size: 'sm', className: 'chat-queue-btn', attrs: { 'data-act': 'save' } })}
       </div>`;
     const ta = row.querySelector('.chat-queue-edit');
     ta.value = item.content || '';

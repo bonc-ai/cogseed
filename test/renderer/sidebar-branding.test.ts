@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(resolve(process.cwd(), 'src/renderer/style.css'), 'utf8');
+const tokens = readFileSync(resolve(process.cwd(), 'src/renderer/tokens.css'), 'utf8');
 const narrowBlock = css.match(/@container\s*\(max-width:\s*230px\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
 
 describe('sidebar branding at narrow widths', () => {
@@ -15,10 +16,12 @@ describe('sidebar branding at narrow widths', () => {
     expect(css).not.toMatch(/\.sidebar-logo-version/);
 
     // Fixed-size icon so narrowing never resizes or recenters it.
-    expect(iconRule).toContain('width: 28px');
-    expect(iconRule).toContain('height: 28px');
+    expect(iconRule).toContain('width: var(--control-height-sm)');
+    expect(iconRule).toContain('height: var(--control-height-sm)');
+    expect(tokens).toContain('--control-height-sm: 28px;');
 
-    expect(textRule).toContain('font-size: 14px');
+    expect(textRule).toContain('font-size: var(--font-size-ui)');
+    expect(tokens).toContain('--font-size-ui: 14px;');
     expect(textRule).toContain('transition: font-size 0.2s ease');
 
     // Narrow state shrinks only the text: no icon override, no alignment

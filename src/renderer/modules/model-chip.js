@@ -243,11 +243,14 @@ function _createModelChip(target) {
   chip.className = 'model-chip exec-config-chip';
   chip.dataset.modelTarget = target;
   chip.hidden = true; // shown once entries exist or a recipient is picked
+  const settingsIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('settings', 'model-chip-icon')
+    : '';
   const chevron = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
     ? window.uiIconHtml('chevron-down', 'model-chip-chevron')
     : '';
   chip.innerHTML =
-    '<span class="model-chip-label"></span>' +
+    settingsIcon + '<span class="model-chip-label"></span>' +
     '<span class="exec-config-effort"></span>' +
     chevron;
   chip.addEventListener('click', (e) => {

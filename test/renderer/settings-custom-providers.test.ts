@@ -149,6 +149,10 @@ class FakeElement {
       child.type = attrs.match(/\btype="([^"]+)"/)?.[1] || '';
       child.value = attrs.match(/\bvalue="([^"]*)"/)?.[1] || '';
       child.placeholder = attrs.match(/\bplaceholder="([^"]*)"/)?.[1] || '';
+      child.title = attrs.match(/\btitle="([^"]*)"/)?.[1] || '';
+      child.disabled = /\bdisabled(?:\s|>|$)/i.test(attrs);
+      const ariaLabel = attrs.match(/\baria-label="([^"]*)"/)?.[1];
+      if (ariaLabel) child.setAttribute('aria-label', ariaLabel);
       for (const dataMatch of attrs.matchAll(/data-([a-z0-9-]+)="([^"]*)"/gi)) {
         child.dataset[dataMatch[1].replace(/-([a-z])/g, (_all, letter) => letter.toUpperCase())] = dataMatch[2];
       }
@@ -309,6 +313,11 @@ function buildHarness() {
     _aiSelectMount: aiSelectMount,
   };
   vm.createContext(context);
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-button.js'), 'utf8'), context, { filename: 'ui-button.js' });
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
+  context.uiButton = windowObj.uiButton;
+  context.uiIconButton = windowObj.uiIconButton;
+  context.uiInput = windowObj.uiInput;
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8'), context, { filename: 'settings.js' });
   return { context, registry, invoke, windowObj, documentListeners, aiSelectMount };
 }
