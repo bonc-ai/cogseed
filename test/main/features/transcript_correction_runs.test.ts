@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  annotateRun,
   buildReport,
   createRun,
   getRun,
@@ -152,6 +153,35 @@ describe('回滚', () => {
 
   it('run 不存在时抛错', () => {
     expect(() => revertRun(uid, 'run_000000_abcd')).toThrow();
+  });
+});
+
+describe('交付台账（另存到知识库的反查依据）', () => {
+  it('追加交付记录且只追加；报告里能读到', () => {
+    const text = '用 coxy 上课';
+    const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });
+    annotateRun(uid, run.runId, { kind: 'cleaned_copy', path: '1/站会-cleaned-20260915-1025.txt' });
+    annotateRun(uid, run.runId, { kind: 'cleaned_copy', path: '1/站会-cleaned-20260915-1025-2.txt' });
+    const after = getRun(uid, run.runId)!;
+    expect(after.deliveries?.map((d) => d.path)).toEqual([
+      '1/站会-cleaned-20260915-1025.txt',
+      '1/站会-cleaned-20260915-1025-2.txt',
+    ]);
+    expect(buildReport(uid, run.runId).deliveries).toHaveLength(2);
+  });
+
+  it('缺 path 抛错；run 不存在返回 null（不写脏数据）', () => {
+    const text = '用 coxy 上课';
+    const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });
+    expect(() => annotateRun(uid, run.runId, { kind: 'cleaned_copy', path: '' })).toThrow();
+    expect(annotateRun(uid, 'run_000000_abcd', { path: 'x.txt' })).toBeNull();
+  });
+
+  it('跨 uid 不可写（交付记录也按会话属主隔离）', () => {
+    const text = '用 coxy 上课';
+    const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });
+    expect(annotateRun(`${uid}_other`, run.runId, { path: 'x.txt' })).toBeNull();
+    expect(getRun(uid, run.runId)?.deliveries ?? []).toHaveLength(0);
   });
 });
 

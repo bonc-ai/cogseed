@@ -4398,5 +4398,8 @@
   "kb.transcriptCorrect.close": "Fechar",
   "kb.transcriptCorrect.group_high": "{count} de alto risco · confirme cada",
   "kb.transcriptCorrect.group_other": "Outros {count}",
-  "kb.transcriptCorrect.group_other_collapsed": "Outros {count} (recolhido)"
+  "kb.transcriptCorrect.group_other_collapsed": "Outros {count} (recolhido)",
+  "kb.transcriptCorrect.saved_to": "Salvo em: {path}",
+  "kb.transcriptCorrect.save_duplicate": "Já existe uma versão limpa idêntica na biblioteca{where}.",
+  "kb.transcriptCorrect.save_duplicate_dir": " (em “{dir}”)"
 }

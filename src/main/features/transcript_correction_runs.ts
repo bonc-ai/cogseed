@@ -58,6 +58,14 @@ export interface CorrectionRun {
   status: RunStatus;
   createdAt: number;
   revertedAt?: number;
+  /** 交付台账：本 run 产出的文件（如另存到知识库的清理版），只追加。 */
+  deliveries?: RunDelivery[];
+}
+
+export interface RunDelivery {
+  kind: 'cleaned_copy';
+  path: string;
+  at: number;
 }
 
 export type IssueReason =
@@ -227,6 +235,31 @@ export function revertRun(userId: string, runId: string): { run: CorrectionRun; 
   return { run: next, text: before, sha1Matched };
 }
 
+/**
+ * 追加一条交付记录（只追加）。用于把"另存到知识库"的产物路径与 run 绑定，
+ * 否则清理版文件名换成人类可读的时间戳后，就无法从文件名反查是哪次清理产出的。
+ * 无论 run 处于 draft/applied/reverted，交付事实都要留下。
+ */
+export function annotateRun(
+  userId: string,
+  runId: string,
+  delivery: { kind?: unknown; path?: unknown },
+): CorrectionRun | null {
+  const run = getRun(userId, runId);
+  if (!run) return null;
+  // 注意：局部名不要用 path —— 会遮蔽 node:path 模块（tsc 会直接报错）。
+  const deliveryPath = typeof delivery?.path === 'string' ? delivery.path.trim() : '';
+  if (!deliveryPath) throw new Error('transcript runs: delivery path is required');
+  const kind: RunDelivery['kind'] = 'cleaned_copy';
+  const record: RunDelivery = { kind, path: deliveryPath.slice(0, 500), at: Date.now() };
+  const next: CorrectionRun = {
+    ...run,
+    deliveries: [...(run.deliveries ?? []), record].slice(-50),
+  };
+  writeJson(path.join(runDir(userId, runId), 'run.json'), next);
+  return next;
+}
+
 // ── 未决项（待核）──────────────────────────────────────────────────────
 
 export function listIssues(
@@ -275,6 +308,8 @@ export interface CorrectionReport {
   issues: OpenIssue[];
   params: CorrectionRunParams;
   contextMaterials: string[];
+  /** 本 run 已另存出去的清理版路径（可能为空）。 */
+  deliveries: RunDelivery[];
   notes: string[];
 }
 
@@ -294,6 +329,7 @@ export function buildReport(userId: string, runId: string): CorrectionReport {
     issues,
     params: run.params,
     contextMaterials: Array.isArray(run.params.contextMaterials) ? run.params.contextMaterials : [],
+    deliveries: run.deliveries ?? [],
     notes,
   };
 }

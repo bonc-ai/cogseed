@@ -200,6 +200,14 @@ export const invokeHandlers = {
     report: transcriptRuns.buildReport(ctx.userId, requireText(payload?.runId, 'runId', 128)),
   }),
 
+  /** 追加"清理版已另存到某路径"的交付记录（只追加，供审计反查）。 */
+  'transcript.run.annotate': async (payload: Payload, ctx: IpcContext) => ({
+    run: transcriptRuns.annotateRun(ctx.userId, requireText(payload?.runId, 'runId', 128), {
+      kind: payload?.kind,
+      path: requireText(payload?.path, 'path', 500),
+    }),
+  }),
+
   /** 回滚只**返回**原文与校验结果，不写任何文档。 */
   'transcript.run.revert': async (payload: Payload, ctx: IpcContext) =>
     transcriptRuns.revertRun(ctx.userId, requireText(payload?.runId, 'runId', 128)),

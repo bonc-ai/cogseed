@@ -101,18 +101,52 @@
     };
   }
 
+  /**
+   * 分类另存结果（纯函数，便于单测）：
+   *   saved     —— 写入成功
+   *   duplicate —— 库里已有相同内容（main 返回 code=duplicate_content + existingDir）
+   *   retry     —— 同名冲突，可换 -2/-3 后缀重试
+   *   failed    —— 其它错误
+   */
+  function classifySaveResult(result) {
+    if (!result || result.ok !== false) return { kind: 'saved', path: String(result?.path || '') };
+    const code = String(result.code || '');
+    if (code === 'duplicate_content') {
+      return { kind: 'duplicate', existingDir: String(result.existingDir || '') };
+    }
+    const message = String(result.error || '');
+    if (/同名文件已存在|already exists|exist/i.test(message)) return { kind: 'retry', message };
+    return { kind: 'failed', message };
+  }
+
   function riskKey(level) {
     if (level === 'high') return 'risk_high';
     if (level === 'medium') return 'risk_medium';
     return 'risk_low';
   }
 
-  /** 清理版文件名：带 runId 短号，永不覆盖原文件。 */
-  function cleanedFileName(displayPath, runId) {
-    const base = String(displayPath || 'transcript').split(/[\\/]/).pop() || 'transcript';
-    const stem = base.replace(/\.[^.]+$/, '') || 'transcript';
-    const suffix = String(runId || '').replace(/^run_/, '').slice(0, 12) || 'draft';
-    return `${stem}-cleaned-${suffix}.txt`;
+  function two(n) { return String(n).padStart(2, '0'); }
+
+  /**
+   * 清理版目标路径：**放在原文同一个目录**（此前只取文件名，产物落到库根，
+   * 用户在原文所在文件夹里找不到），文件名用可读时间戳，永不与原文件同名。
+   *   例：`1/9.15站会.txt` → `1/9.15站会-cleaned-20260915-1025.txt`
+   */
+  function cleanedFileName(displayPath, when) {
+    const raw = String(displayPath || 'transcript');
+    const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+    const dir = cut >= 0 ? raw.slice(0, cut + 1) : '';
+    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
+    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
+    const d = when instanceof Date && !Number.isNaN(when.getTime()) ? when : new Date();
+    const stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+    return `${dir}${stem}-cleaned-${stamp}.txt`;
+  }
+
+  /** 同分钟重复另存时给出 -2/-3 候选名，避免覆盖上一次的产物。 */
+  function nextCandidateName(targetPath, attempt) {
+    if (!attempt) return targetPath;
+    return targetPath.replace(/(\.[^.]+)$/, `-${attempt + 1}$1`);
   }
 
   // ── 面板 ─────────────────────────────────────────────────────────────
@@ -150,6 +184,7 @@
       cleanedText: '',
       error: '',
       collapsedOther: false,
+      savedPath: '',
     };
 
     container.classList.add('kb-atc-host');
@@ -376,6 +411,7 @@
       parts.push(t('kb.transcriptCorrect.retention', '字符保留率 {percent}%', { percent: (info.retention * 100).toFixed(1) }));
       if (info.pendingTotal) parts.push(t('kb.transcriptCorrect.applied_pending', '待确认 {count} 条', { count: info.pendingTotal }));
       if (info.overRewrite) parts.push(t('kb.transcriptCorrect.over_rewrite', '疑似过度改写'));
+      if (state.savedPath) parts.push(t('kb.transcriptCorrect.saved_to', '已另存：{path}', { path: state.savedPath }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
     }
@@ -566,9 +602,33 @@
       state.busy = true;
       render();
       try {
-        const targetPath = cleanedFileName(ctx.displayPath, state.runId);
-        const result = await root.cogseed.invoke('library.writeText', { content: state.cleanedText, targetPath });
-        if (result?.ok === false) throw new Error(result.error || 'write failed');
+        const intentPath = cleanedFileName(ctx.displayPath, new Date());
+        let targetPath = intentPath;
+        let verdict = { kind: 'failed', message: '' };
+        // 同名冲突换 -2/-3 后缀；内容重复（main 的 sha1 去重）不重试，直接如实告知。
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          targetPath = nextCandidateName(intentPath, attempt);
+          const result = await root.cogseed.invoke('library.writeText', { content: state.cleanedText, targetPath });
+          verdict = classifySaveResult(result);
+          if (verdict.kind === 'saved' || verdict.kind === 'duplicate' || verdict.kind === 'failed') break;
+        }
+        if (verdict.kind === 'duplicate') {
+          state.savedPath = verdict.existingDir ? `${verdict.existingDir}/` : '';
+          setStatus(t('kb.transcriptCorrect.save_duplicate', '库里已有相同内容的清理版{where}，无需重复保存。', {
+            where: verdict.existingDir
+              ? t('kb.transcriptCorrect.save_duplicate_dir', '（在「{dir}」目录下）', { dir: verdict.existingDir })
+              : '',
+          }), '');
+          return;
+        }
+        if (verdict.kind === 'failed') throw new Error(verdict.message || 'write failed');
+        // 只追加的交付台账：把"哪次清理写到了哪个文件"绑定到 run（文件名已不含 runId）。
+        try {
+          await root.cogseed.invoke('transcript.run.annotate', { runId: state.runId, kind: 'cleaned_copy', path: targetPath });
+        } catch (annotateError) {
+          log?.warn('run annotate failed', { error: annotateError?.message || String(annotateError) });
+        }
+        state.savedPath = targetPath;
         toast(t('kb.transcriptCorrect.saved', '已保存到知识库：{name}', { name: targetPath }));
       } catch (error) {
         log?.warn('cleaned transcript save failed', { error: error?.message || String(error) });
@@ -694,11 +754,11 @@
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）
-    __test: { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, riskKey },
+    __test: { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, nextCandidateName, classifySaveResult, riskKey },
   };
 
   root.KbTranscriptCorrect = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, riskKey };
+    module.exports = { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, nextCandidateName, classifySaveResult, riskKey };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

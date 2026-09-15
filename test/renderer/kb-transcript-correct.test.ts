@@ -20,7 +20,9 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string }>) => { high: unknown[]; other: unknown[] };
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
-  cleanedFileName: (p: string, runId: string) => string;
+  cleanedFileName: (p: string, when?: Date) => string;
+  nextCandidateName: (p: string, attempt: number) => string;
+  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; message?: string };
   riskKey: (l: string) => string;
 };
 
@@ -109,19 +111,59 @@ describe('apply 摘要', () => {
   });
 });
 
-describe('清理版文件名', () => {
-  it('带 runId 短号、去掉原扩展名，永不与原文件同名', () => {
-    expect(panel.cleanedFileName('fixtures/meeting-transcript.txt', 'run_mu160jzg_3e95bfbd'))
-      .toBe('meeting-transcript-cleaned-mu160jzg_3e9.txt');
+describe('清理版保存路径', () => {
+  const when = new Date(2026, 8, 15, 10, 25); // 2026-09-15 10:25
+
+  it('放在原文同一个目录（真实缺陷：此前只取文件名，产物落到库根）', () => {
+    expect(panel.cleanedFileName('1/9.15站会文字转写.txt', when))
+      .toBe('1/9.15站会文字转写-cleaned-20260915-1025.txt');
   });
 
-  it('中文文件名同样处理（知识库里的纪要文件名多为中文）', () => {
-    expect(panel.cleanedFileName('library/组会纪要.md', 'run_abc123')).toBe('组会纪要-cleaned-abc123.txt');
+  it('原文在库根时保持根目录', () => {
+    expect(panel.cleanedFileName('meeting.txt', when)).toBe('meeting-cleaned-20260915-1025.txt');
   });
 
-  it('无 runId 时退回 draft 后缀，仍与原文件不同名', () => {
-    expect(panel.cleanedFileName('notes/a.md', '')).toBe('a-cleaned-draft.txt');
-    expect(panel.cleanedFileName('', '')).toBe('transcript-cleaned-draft.txt');
+  it('中文文件名、多级目录、无扩展名都安全', () => {
+    expect(panel.cleanedFileName('a/b/组会纪要.md', when)).toBe('a/b/组会纪要-cleaned-20260915-1025.txt');
+    expect(panel.cleanedFileName('a/b/无扩展名', when)).toBe('a/b/无扩展名-cleaned-20260915-1025.txt');
+    expect(panel.cleanedFileName('', when)).toBe('transcript-cleaned-20260915-1025.txt');
+  });
+
+  it('永不与原文件同名（同目录去重靠时间戳）', () => {
+    const original = '1/9.15站会文字转写.txt';
+    expect(panel.cleanedFileName(original, when)).not.toBe(original);
+  });
+
+  it('同一分钟重复另存走 -2/-3 后缀，不覆盖上一次产物', () => {
+    const base = '1/站会-cleaned-20260915-1025.txt';
+    expect(panel.nextCandidateName(base, 0)).toBe(base);
+    expect(panel.nextCandidateName(base, 1)).toBe('1/站会-cleaned-20260915-1025-2.txt');
+    expect(panel.nextCandidateName(base, 2)).toBe('1/站会-cleaned-20260915-1025-3.txt');
+  });
+});
+
+describe('另存结果分类（区分"同名冲突"与"内容重复"）', () => {
+  it('成功 → saved，带真实落点', () => {
+    expect(panel.classifySaveResult({ ok: true, path: '1/a-cleaned-20260915-1030.txt' }))
+      .toEqual({ kind: 'saved', path: '1/a-cleaned-20260915-1030.txt' });
+  });
+
+  it('内容重复 → duplicate，并带上已有文件所在目录（不当作失败）', () => {
+    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content', error: '文件已存在', existingDir: '1' }))
+      .toEqual({ kind: 'duplicate', existingDir: '1' });
+    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content', error: '文件已存在', existingDir: '' }))
+      .toEqual({ kind: 'duplicate', existingDir: '' });
+  });
+
+  it('同名冲突 → retry（换后缀再试）', () => {
+    expect(panel.classifySaveResult({ ok: false, error: '同名文件已存在' }).kind).toBe('retry');
+    expect(panel.classifySaveResult({ ok: false, error: 'A file with this name already exists' }).kind).toBe('retry');
+  });
+
+  it('其它错误 → failed，保留原文错误信息', () => {
+    const v = panel.classifySaveResult({ ok: false, error: 'unsupported text extension: zip' });
+    expect(v.kind).toBe('failed');
+    expect(v.message).toContain('unsupported text extension');
   });
 });
 
