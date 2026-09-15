@@ -11,11 +11,17 @@
  *   transcript.correct.apply       —— 按确认结果替换，落 run 快照，原文不可变
  *   transcript.run.list / get / report / revert
  *   transcript.issues.list / resolve
+ *
+ * 本体接线（P1，2026-09-15）：
+ *   transcript.glossary.syncOntology —— 归组 + 挂 ontologyRef + 出建议（+可选反哺候选）
+ *   transcript.glossary.adoptSeed    —— 采纳"待补错形"建议，建 ontology_seed 词条
+ *   transcript.glossary.applyAlignment —— 采纳"对齐"建议，改词条写法（只改 correct）
  */
 
 import * as transcriptGlossary from '../features/transcript_glossary';
 import * as transcriptAutoCorrect from '../features/transcript_auto_correct';
 import * as transcriptRuns from '../features/transcript_correction_runs';
+import * as transcriptOntology from '../features/transcript_ontology_bridge';
 
 interface IpcContext {
   userId: string;
@@ -116,6 +122,41 @@ export const invokeHandlers = {
 
   'transcript.glossary.export': async (payload: Payload, ctx: IpcContext) => ({
     bundle: transcriptGlossary.exportGlossary(ctx.userId, { includePeople: payload?.includePeople === true }),
+  }),
+
+  /**
+   * 本体/记忆接线（P1）。**只读来源 + 只写词表一个字段**：
+   *   - 来源（本体分组/长期记忆）为空时如实返回 0，不造占位数据；
+   *   - 反哺走既有候选池 addCandidate（candidate_id 幂等），默认开启，
+   *     面板可传 contribute:false 只做只读预览。
+   */
+  'transcript.glossary.syncOntology': async (payload: Payload, ctx: IpcContext) =>
+    transcriptOntology.syncOntology(ctx.userId, {
+      contribute: payload?.contribute !== false,
+      ...(typeof payload?.minFreq === 'number' ? { minFreq: Math.max(1, Math.floor(payload.minFreq)) } : {}),
+      ...(stringList(payload?.runIds, 50) ? { runIds: stringList(payload?.runIds, 50)! } : {}),
+      ...(stringList(payload?.docIds, 50) ? { docIds: stringList(payload?.docIds, 50)! } : {}),
+    }),
+
+  'transcript.glossary.adoptSeed': async (payload: Payload, ctx: IpcContext) => {
+    const ref = payload?.ontologyRef as { groupId?: unknown; fieldId?: unknown } | undefined;
+    const groupId = optionalText(ref?.groupId, 'groupId', 200);
+    const fieldId = optionalText(ref?.fieldId, 'fieldId', 200);
+    const entry = transcriptOntology.adoptMissingSuggestion(ctx.userId, {
+      wrong: requireText(payload?.wrong, 'wrong', 200),
+      correct: requireText(payload?.correct, 'correct', 200),
+      ...(payload?.kind ? { kind: payload.kind as transcriptGlossary.GlossaryKind } : {}),
+      ...(groupId ? { ontologyRef: { groupId, fieldId: fieldId ?? '' } } : {}),
+    });
+    return { entry };
+  },
+
+  'transcript.glossary.applyAlignment': async (payload: Payload, ctx: IpcContext) => ({
+    entry: transcriptOntology.applyAlignment(
+      ctx.userId,
+      requireText(payload?.entryId, 'entryId', 128),
+      requireText(payload?.correct, 'correct', 200),
+    ),
   }),
 
   // ── 扫描与替换 ────────────────────────────────────────────────────────

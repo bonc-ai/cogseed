@@ -422,6 +422,37 @@ export function findEntry(userId: string, id: string): GlossaryEntry | null {
   return loadGlossary(userId).entries.find((e) => e.id === id) ?? null;
 }
 
+/**
+ * 改一个词条的"正确写法"（本体对齐用：本体里的规范名比词表里的写法更权威）。
+ *
+ * 只动 `correct` / 重算的 `riskLevel` / `updatedAt`：
+ *   - 不碰 `wrong`：对齐是"写法修正"，不是新发现的错形；
+ *   - 不碰 `replacedIn` 台账与 `freq`：一次写法修正不等于一次新确认（审计口径）；
+ *   - 风险等级按新写法重算（写法变长变短会改变误替换风险），调用方无需自己猜。
+ */
+export function retargetEntry(userId: string, id: string, correctInput: unknown): GlossaryEntry | null {
+  const target = findEntry(userId, id);
+  if (!target) return null;
+  const correct = bounded(correctInput, 'correct', MAX_CORRECT_LEN);
+  if (!correct) throw new Error('transcript glossary: correct is required');
+  if (correct === target.correct) return target;
+
+  const file = loadGlossary(userId);
+  const entry = file.entries.find((e) => e.id === target.id);
+  if (!entry) return null;
+  const others = file.entries
+    .filter((e) => e.id !== entry.id && e.status === 'active' && foldText(e.wrong).trim() === foldText(entry.wrong).trim())
+    .map((e) => e.correct);
+  entry.correct = correct;
+  entry.riskLevel = deriveRiskLevel(
+    { wrong: entry.wrong, correct, action: entry.action, partial: false },
+    { otherCorrects: others },
+  );
+  entry.updatedAt = Date.now();
+  saveGlossary(userId, file);
+  return entry;
+}
+
 export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResult {
   const wrong = bounded(input.wrong, 'wrong', MAX_WRONG_LEN);
   const correct = input.action === 'delete' ? '' : bounded(input.correct, 'correct', MAX_CORRECT_LEN);

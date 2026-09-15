@@ -17,6 +17,18 @@ const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'u
 
 const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as {
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
+  conceptKeyOfCorrect: (t: unknown) => string;
+  groupRowsByConcept: (rows: unknown[]) => Array<{ conceptKey: string; display: string; spans: number; rows: number }>;
+  syncSummary: (sync: unknown) => {
+    groupCount: number;
+    conceptGroups: Array<{ display: string; count: number }>;
+    linked: number;
+    alignments: Array<{ entryId: string; wrong: string; current: string; suggested: string; source: string }>;
+    missing: Array<{ conceptKey: string; correct: string }>;
+    contributed: number;
+    canonicalNames: number;
+    noSources: boolean;
+  };
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string }>) => { high: unknown[]; other: unknown[] };
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
@@ -154,6 +166,63 @@ describe('风险键映射', () => {
   });
 });
 
+describe('概念归组（本体接线的读侧）', () => {
+  it('概念键与主进程同规则：NFKC + 小写 + 抹掉空白', () => {
+    expect(panel.conceptKeyOfCorrect('K star')).toBe('kstar');
+    expect(panel.conceptKeyOfCorrect('K-STAR')).toBe('kstar');
+    expect(panel.conceptKeyOfCorrect('ＫＳＴＡＲ')).toBe('kstar');
+  });
+
+  it('同一概念的多条错形归成一行汇总（避免散成互不相关的候选）', () => {
+    const rows = [
+      { entryRef: 'g_a', correct: 'KSTAR', action: 'replace', count: 4 },
+      { entryRef: 'g_b', correct: 'K star', action: 'replace', count: 2 },
+      { entryRef: 'g_c', correct: 'Moodle', action: 'replace', count: 1 },
+    ];
+    const groups = panel.groupRowsByConcept(rows);
+    expect(groups.map((g) => g.conceptKey)).toEqual(['kstar', 'moodle']);
+    expect(groups[0].spans).toBe(6);
+    expect(groups[0].rows).toBe(2);
+    expect(groups[0].display).toBe('KSTAR');
+  });
+
+  it('删除类（口癖）候选不进概念组：那不是"术语"', () => {
+    expect(panel.groupRowsByConcept([{ entryRef: 'g_d', correct: '嗯', action: 'delete', count: 9 }])).toEqual([]);
+  });
+});
+
+describe('本体同步结果摘要', () => {
+  it('本体与记忆都为空 → noSources=true（界面必须如实说明没改动）', () => {
+    const info = panel.syncSummary({ groups: [], linked: 0, canonicalNames: 0, alignments: [], missing: [] });
+    expect(info.noSources).toBe(true);
+    expect(info.groupCount).toBe(0);
+  });
+
+  it('收敛建议：对齐建议保留双向写法，待补建议带概念键', () => {
+    const info = panel.syncSummary({
+      groups: [{ display: 'Cogseed', entryCount: 3 }],
+      linked: 1,
+      canonicalNames: 2,
+      alignments: [{ kind: 'canonical_spelling', entryId: 'g_1', wrong: 'kstar', currentCorrect: 'K star', suggestedCorrect: 'KSTAR', source: 'ontology' }],
+      missing: [{ kind: 'missing_entry', correct: 'Raymond', source: 'ontology' }],
+      contributed: 1,
+    });
+    expect(info.noSources).toBe(false);
+    expect(info.alignments).toEqual([{ entryId: 'g_1', wrong: 'kstar', current: 'K star', suggested: 'KSTAR', source: 'ontology' }]);
+    expect(info.missing).toEqual([{ conceptKey: 'raymond', correct: 'Raymond' }]);
+  });
+
+  it('丢弃形状不对的条目（缺 entryId/缺 correct 时不渲染空按钮）', () => {
+    const info = panel.syncSummary({
+      canonicalNames: 1,
+      alignments: [{ kind: 'canonical_spelling', entryId: '', suggestedCorrect: 'X' }, { kind: 'missing_entry' }],
+      missing: [{ kind: 'missing_entry', correct: '' }, { kind: 'canonical_spelling', correct: 'Y' }],
+    });
+    expect(info.alignments).toEqual([]);
+    expect(info.missing).toEqual([]);
+  });
+});
+
 describe('locale 覆盖', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [
@@ -166,6 +235,13 @@ describe('locale 覆盖', () => {
     'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
     'delete_arrow', 'close_panel', 'unavailable', 'close', 'cleaned_suffix',
     'group_high', 'group_other', 'group_other_collapsed',
+    // 本体/记忆同步（P1）
+    'sync_section', 'sync_hint', 'sync', 'syncing', 'resync', 'sync_groups', 'sync_linked',
+    'sync_align', 'sync_missing', 'sync_contributed', 'sync_no_source', 'sync_done',
+    'sync_failed', 'sync_source_ontology', 'sync_source_memory', 'sync_align_row',
+    'sync_align_use', 'sync_aligned', 'sync_align_failed', 'sync_missing_row',
+    'sync_seed', 'sync_cancel', 'sync_seed_add', 'sync_seed_need_wrong', 'sync_seed_added',
+    'sync_seed_skipped', 'sync_seed_failed', 'summary_concepts', 'sync_chips_more',
   ];
 
   for (const lang of locales) {
@@ -187,6 +263,15 @@ describe('源码契约', () => {
     expect(/<button/i.test(source)).toBe(false);
   });
 
+
+  it('本体接线只调 transcript.* 三个通道，且采纳动作不伪造"确认"', () => {
+    expect(source).toContain("'transcript.glossary.syncOntology'");
+    expect(source).toContain("'transcript.glossary.applyAlignment'");
+    expect(source).toContain("'transcript.glossary.adoptSeed'");
+    // 面板不得自己拼 candidate_id / 直接写 memory：反哺只能经主进程 bridge
+    expect(source).not.toContain('candidate_id');
+    expect(source).not.toContain('memory.write');
+  });
 
   it('uiField 走契约形状 {id,label,control}：每个调用都带 id 与 control', () => {
     const calls = source.match(/root\.uiField\(\{[\s\S]*?\}\)/g) || [];

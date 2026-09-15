@@ -87,6 +87,71 @@
     return { high, other };
   }
 
+  /**
+   * 概念键：与主进程 `conceptKeyOf` 同规则（NFKC + 小写 + 抹掉一切分隔符号）。
+   * `KSTAR`/`K-STAR`/`K star` 是同一个概念；同一个概念的多种错形必须归到一起，
+   * 否则面板会把它们当互不相关的行，也会和本体里的规范名对不上。
+   */
+  function conceptKeyOfCorrect(text) {
+    return String(text || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  }
+
+  /** 把候选行按概念归组（同一 correct → 同一概念），命中多的概念在前。 */
+  function groupRowsByConcept(rows) {
+    const byKey = new Map();
+    for (const row of rows || []) {
+      if (row?.action === 'delete') continue;
+      const key = conceptKeyOfCorrect(row?.correct);
+      if (!key) continue;
+      const bucket = byKey.get(key) || { conceptKey: key, display: String(row.correct || ''), spans: 0, rows: 0 };
+      bucket.spans += Number(row.count || 0);
+      bucket.rows += 1;
+      byKey.set(key, bucket);
+    }
+    return [...byKey.values()].sort((a, b) => (b.spans - a.spans) || a.display.localeCompare(b.display));
+  }
+
+  /**
+   * 本体同步结果的展示摘要（纯函数）：
+   * 只做形状收敛 + 过滤，不拼文案（文案走 i18n，在渲染层组装）。
+   */
+  function syncSummary(sync) {
+    const raw = sync || {};
+    const groups = Array.isArray(raw.groups) ? raw.groups : [];
+    const alignments = (Array.isArray(raw.alignments) ? raw.alignments : [])
+      .filter((item) => item && item.kind === 'canonical_spelling')
+      .map((item) => ({
+        entryId: String(item.entryId || ''),
+        wrong: String(item.wrong || ''),
+        current: String(item.currentCorrect || ''),
+        suggested: String(item.suggestedCorrect || ''),
+        source: item.source === 'memory' ? 'memory' : 'ontology',
+      }))
+      .filter((item) => item.entryId && item.suggested);
+    const missing = (Array.isArray(raw.missing) ? raw.missing : [])
+      .filter((item) => item && item.kind === 'missing_entry')
+      .map((item) => ({
+        conceptKey: conceptKeyOfCorrect(item.correct),
+        correct: String(item.correct || ''),
+      }))
+      .filter((item) => item.conceptKey && item.correct);
+    const canonicalNames = Number(raw.canonicalNames || 0);
+    return {
+      conceptGroups: groups.slice(0, 8).map((group) => ({
+        display: String(group?.display || ''),
+        count: Number(group?.entryCount || 0),
+      })),
+      groupCount: groups.length,
+      linked: Number(raw.linked || 0),
+      alignments,
+      missing,
+      contributed: Number(raw.contributed || 0),
+      canonicalNames,
+      /** 本体与记忆都为空：本次同步什么都没改，界面必须如实说，不能装作做了事。 */
+      noSources: canonicalNames === 0,
+    };
+  }
+
   /** apply 结果的展示摘要。 */
   function applySummary(result) {
     const retention = Number.isFinite(Number(result?.retention)) ? Number(result.retention) : 1;
@@ -162,6 +227,10 @@
       '  <div class="kb-atc__summary" data-atc-summary hidden></div>',
       '  <div class="kb-atc__body" data-atc-body></div>',
       '  <div class="kb-atc__actions" data-atc-actions></div>',
+      '  <details class="kb-atc__sync" data-atc-sync>',
+      '    <summary data-atc-sync-summary></summary>',
+      '    <div class="kb-atc__sync-body" data-atc-sync-body></div>',
+      '  </details>',
       '  <details class="kb-atc__add" data-atc-add>',
       '    <summary data-atc-add-summary></summary>',
       '    <div class="kb-atc__add-form" data-atc-add-form></div>',
@@ -183,6 +252,11 @@
       error: '',
       collapsedOther: false,
       savedPath: '',
+      // 本体/记忆接线（P1）：sync = 主进程 SyncResult 原样，呈现交给 syncSummary
+      sync: null,
+      syncBusy: false,
+      syncError: '',
+      seedOpen: '',
     };
 
     container.classList.add('kb-atc-host');
@@ -393,6 +467,12 @@
         return;
       }
       const parts = [t('kb.transcriptCorrect.summary', '已选 {selected}/{total} 条 · 影响 {spans} 处', stats)];
+      // 同一个术语概念的多条错形归在一起数（主进程 conceptKeyOf 同规则）：
+      // 用户关心的不是"几条词条"，而是"本文档涉及几个术语"。
+      const concepts = groupRowsByConcept(state.rows);
+      if (concepts.length > 1) {
+        parts.push(t('kb.transcriptCorrect.summary_concepts', '{count} 个术语概念', { count: concepts.length }));
+      }
       if (stats.pendingHigh > 0) parts.push(t('kb.transcriptCorrect.pending_high', '{count} 条高危待确认', { count: stats.pendingHigh }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
@@ -456,6 +536,187 @@
       host.innerHTML = buttons.join('');
     }
 
+    /**
+     * 本体/记忆同步块（P1）：概念归组 + 与本体规范名对齐。
+     * 视觉口径：这里全是"建议"，一律弱化色（ghost/次级文字），只有真正被采纳
+     * 或需要用户注意的状态才用色调——颜色只表达状态。
+     */
+    function renderSync() {
+      const body = q('[data-atc-sync-body]');
+      if (!body) return;
+      const summary = q('[data-atc-sync-summary]');
+      if (summary) summary.textContent = t('kb.transcriptCorrect.sync_section', '本体 / 记忆同步');
+      if (state.syncBusy) state.syncError = '';
+
+      body.textContent = '';
+      const intro = document.createElement('div');
+      intro.className = 'kb-atc__sync-hint';
+      intro.textContent = t(
+        'kb.transcriptCorrect.sync_hint',
+        '把词表按概念归组，并与个人本体、长期记忆里的规范名对齐。同步不改原文，也不会自动新增词条。',
+      );
+      body.appendChild(intro);
+
+      const actions = document.createElement('div');
+      actions.className = 'kb-atc__sync-actions';
+      actions.innerHTML = button({
+        label: state.syncBusy
+          ? t('kb.transcriptCorrect.syncing', '正在同步…')
+          : (state.sync
+            ? t('kb.transcriptCorrect.resync', '重新同步')
+            : t('kb.transcriptCorrect.sync', '从本体/记忆同步')),
+        icon: 'refresh',
+        role: 'ghost',
+        size: 'sm',
+        loading: state.syncBusy,
+        disabled: state.syncBusy,
+        attrs: { 'data-atc-action': 'sync-ontology' },
+      });
+      body.appendChild(actions);
+
+      if (state.syncError) {
+        const note = document.createElement('div');
+        note.className = 'kb-atc__sync-note';
+        note.dataset.tone = 'warning';
+        note.textContent = state.syncError;
+        body.appendChild(note);
+        return;
+      }
+      if (!state.sync) return;
+
+      const info = syncSummary(state.sync);
+      const stats = document.createElement('div');
+      stats.className = 'kb-atc__sync-stats';
+      stats.textContent = [
+        t('kb.transcriptCorrect.sync_groups', '概念 {count} 组', { count: info.groupCount }),
+        t('kb.transcriptCorrect.sync_linked', '挂上本体引用 {count} 条', { count: info.linked }),
+        t('kb.transcriptCorrect.sync_align', '写法对齐 {count}', { count: info.alignments.length }),
+        t('kb.transcriptCorrect.sync_missing', '待补词条 {count}', { count: info.missing.length }),
+        t('kb.transcriptCorrect.sync_contributed', '投递候选 {count}', { count: info.contributed }),
+      ].join(' · ');
+      body.appendChild(stats);
+
+      if (info.noSources) {
+        const note = document.createElement('div');
+        note.className = 'kb-atc__sync-note';
+        note.textContent = t(
+          'kb.transcriptCorrect.sync_no_source',
+          '没有找到本体分组或长期记忆：本次同步没有改动任何词条。',
+        );
+        body.appendChild(note);
+      }
+
+      if (info.conceptGroups.length > 1) {
+        const chips = document.createElement('div');
+        chips.className = 'kb-atc__sync-chips';
+        for (const group of info.conceptGroups) {
+          const chip = document.createElement('span');
+          chip.className = 'kb-atc__sync-chip';
+          chip.textContent = `${group.display} ×${group.count}`;
+          chips.appendChild(chip);
+        }
+        // 只展示前几组时不装作"就这么多"：剩余组数如实标出来。
+        const rest = info.groupCount - info.conceptGroups.length;
+        if (rest > 0) {
+          const more = document.createElement('span');
+          more.className = 'kb-atc__sync-chip';
+          more.dataset.tone = 'more';
+          more.textContent = t('kb.transcriptCorrect.sync_chips_more', '还有 {count} 组', { count: rest });
+          chips.appendChild(more);
+        }
+        body.appendChild(chips);
+      }
+
+      for (const item of info.alignments) {
+        const row = document.createElement('div');
+        row.className = 'kb-atc__sync-row';
+        const main = document.createElement('div');
+        main.className = 'kb-atc__sync-row-main';
+        const label = document.createElement('span');
+        label.className = 'kb-atc__sync-row-label';
+        label.textContent = t('kb.transcriptCorrect.sync_align_row', '「{wrong}」现在写作 {current}，{source}里是 {suggested}', {
+          wrong: item.wrong,
+          current: item.current,
+          source: item.source === 'memory'
+            ? t('kb.transcriptCorrect.sync_source_memory', '长期记忆')
+            : t('kb.transcriptCorrect.sync_source_ontology', '本体'),
+          suggested: item.suggested,
+        });
+        main.appendChild(label);
+        const acts = document.createElement('div');
+        acts.className = 'kb-atc__sync-row-actions';
+        acts.innerHTML = button({
+          label: t('kb.transcriptCorrect.sync_align_use', '采用'),
+          role: 'ghost',
+          size: 'sm',
+          disabled: state.busy || state.syncBusy,
+          attrs: { 'data-atc-align': item.entryId, 'data-atc-suggest': item.suggested },
+        });
+        row.append(main, acts);
+        body.appendChild(row);
+      }
+
+      info.missing.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'kb-atc__sync-row';
+        const main = document.createElement('div');
+        main.className = 'kb-atc__sync-row-main';
+        const label = document.createElement('span');
+        label.className = 'kb-atc__sync-row-label';
+        label.textContent = t('kb.transcriptCorrect.sync_missing_row', '{correct}：本体里有这个词，词表里还没有', {
+          correct: item.correct,
+        });
+        main.appendChild(label);
+
+        const acts = document.createElement('div');
+        acts.className = 'kb-atc__sync-row-actions';
+        if (state.seedOpen === item.conceptKey) {
+          acts.innerHTML = button({
+            label: t('kb.transcriptCorrect.sync_cancel', '取消'),
+            role: 'ghost',
+            size: 'sm',
+            attrs: { 'data-atc-action': 'seed-close' },
+          });
+        } else {
+          acts.innerHTML = button({
+            label: t('kb.transcriptCorrect.sync_seed', '补错形'),
+            role: 'ghost',
+            size: 'sm',
+            disabled: state.busy || state.syncBusy,
+            attrs: { 'data-atc-seed-open': item.conceptKey },
+          });
+        }
+        row.append(main, acts);
+        body.appendChild(row);
+
+        if (state.seedOpen !== item.conceptKey) return;
+        const form = document.createElement('div');
+        form.className = 'kb-atc__sync-seed';
+        if (typeof root.uiField !== 'function') return;
+        try {
+          form.innerHTML = [
+            root.uiField({
+              // 用字符串拼接而不是模板串：uiField 的 id 契约由源码守卫按引号形态校验
+              id: 'atc-seed-' + index,
+              label: t('kb.transcriptCorrect.wrong', '转写里出现的错词'),
+              control: { kind: 'input', placeholder: item.correct },
+            }),
+            button({
+              label: t('kb.transcriptCorrect.sync_seed_add', '加入词表'),
+              icon: 'check-circle',
+              role: 'secondary',
+              size: 'sm',
+              disabled: state.busy,
+              attrs: { 'data-atc-seed-adopt': item.correct, 'data-atc-seed-input': `atc-seed-${index}` },
+            }),
+          ].join('');
+          body.appendChild(form);
+        } catch (error) {
+          log?.warn('sync seed form render failed', { error: error?.message || String(error) });
+        }
+      });
+    }
+
     function renderAddForm() {
       const host = q('[data-atc-add-form]');
       if (!host) return;
@@ -511,7 +772,7 @@
       // 逐段尝试渲染：某个共享原语抛错时，不得连带把扫描/替换流程卡死
       // （真实事故：uiField 缺 id 抛错 → render() 在 runScan 的 try 之外抛出，
       //  扫描永远停在"正在扫描…"）。
-      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderActions, renderAddForm]) {
+      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderActions, renderSync, renderAddForm]) {
         try {
           step();
         } catch (error) {
@@ -659,6 +920,77 @@
       }
     }
 
+    /**
+     * 同步本体/记忆。主进程是唯一写入方：本面板只传 `contribute` 开关，
+     * 不自己决定"投递什么候选"（幂等键在 bridge 里算）。
+     */
+    async function runSyncOntology() {
+      if (state.syncBusy) return;
+      state.syncBusy = true;
+      state.syncError = '';
+      render();
+      try {
+        state.sync = await root.cogseed.invoke('transcript.glossary.syncOntology', { contribute: true });
+        setStatus(t('kb.transcriptCorrect.sync_done', '已与本体/记忆对齐（原文未改动）'), '');
+      } catch (error) {
+        log?.warn('ontology sync failed', { error: error?.message || String(error) });
+        state.syncError = t('kb.transcriptCorrect.sync_failed', '同步失败，请稍后重试。');
+        setStatus(state.syncError, 'warning');
+      } finally {
+        state.syncBusy = false;
+        render();
+      }
+    }
+
+    /** 采纳"写法对齐"建议：只改词条写法，不伪造一次确认。 */
+    async function runApplyAlignment(entryId, suggested) {
+      if (state.busy || !entryId || !suggested) return;
+      state.busy = true;
+      render();
+      try {
+        await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId, correct: suggested });
+        // 先重跑同步让建议列表消失，再落本次动作的文案：同步会写自己的状态行，
+        // 顺序反了用户就看不到"刚刚采纳了什么"。
+        await runSyncOntology();
+        setStatus(t('kb.transcriptCorrect.sync_aligned', '已采用本体写法：{correct}', { correct: suggested }), '');
+      } catch (error) {
+        log?.warn('alignment apply failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.sync_align_failed', '采用失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /** 采纳"待补错形"：用户必须自己填错形，面板不替用户编造错形。 */
+    async function runAdoptSeed(correct, inputId) {
+      if (state.busy) return;
+      const input = inputId ? container.querySelector(`#${inputId}`) : null;
+      const wrong = String(input?.value || '').trim();
+      if (!wrong) {
+        setStatus(t('kb.transcriptCorrect.sync_seed_need_wrong', '请先填写转写里实际出现的错词。'), 'warning');
+        return;
+      }
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.adoptSeed', { wrong, correct });
+        if (!result?.entry) {
+          setStatus(t('kb.transcriptCorrect.sync_seed_skipped', '这条没能入册（错形与正确写法太接近，或与已有词条重复）。'), 'warning');
+          return;
+        }
+        state.seedOpen = '';
+        await runSyncOntology();
+        setStatus(t('kb.transcriptCorrect.sync_seed_added', '已从本体补入词表：{wrong} → {correct}', { wrong, correct }), '');
+      } catch (error) {
+        log?.warn('ontology seed adopt failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.sync_seed_failed', '补入词表失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
     async function runAddEntry() {
       const wrongInput = container.querySelector('#atc-wrong');
       const correctInput = container.querySelector('#atc-correct');
@@ -715,9 +1047,27 @@
         render();
         return;
       }
+      const align = event.target.closest('[data-atc-align]');
+      if (align) {
+        void runApplyAlignment(align.getAttribute('data-atc-align'), align.getAttribute('data-atc-suggest'));
+        return;
+      }
+      const seedOpen = event.target.closest('[data-atc-seed-open]');
+      if (seedOpen) {
+        state.seedOpen = seedOpen.getAttribute('data-atc-seed-open');
+        render();
+        return;
+      }
+      const seedAdopt = event.target.closest('[data-atc-seed-adopt]');
+      if (seedAdopt) {
+        void runAdoptSeed(seedAdopt.getAttribute('data-atc-seed-adopt'), seedAdopt.getAttribute('data-atc-seed-input'));
+        return;
+      }
       const action = event.target.closest('[data-atc-action]');
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
+      if (kind === 'sync-ontology') { void runSyncOntology(); return; }
+      if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }
       if (kind === 'scan') void runScan();
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
       else if (kind === 'apply') void runApply();
@@ -752,11 +1102,35 @@
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）
-    __test: { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, nextCandidateName, classifySaveResult, riskKey },
+    __test: {
+      groupCandidates,
+      groupRowsByConcept,
+      conceptKeyOfCorrect,
+      syncSummary,
+      summarizeRows,
+      splitByRisk,
+      applySummary,
+      cleanedFileName,
+      nextCandidateName,
+      classifySaveResult,
+      riskKey,
+    },
   };
 
   root.KbTranscriptCorrect = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { groupCandidates, summarizeRows, splitByRisk, applySummary, cleanedFileName, nextCandidateName, classifySaveResult, riskKey };
+    module.exports = {
+      groupCandidates,
+      groupRowsByConcept,
+      conceptKeyOfCorrect,
+      syncSummary,
+      summarizeRows,
+      splitByRisk,
+      applySummary,
+      cleanedFileName,
+      nextCandidateName,
+      classifySaveResult,
+      riskKey,
+    };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

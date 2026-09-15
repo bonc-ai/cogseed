@@ -27,6 +27,7 @@ import {
   markVerified,
   migrateGlossaryV1ToV2,
   recordReplacement,
+  retargetEntry,
   saveGlossary,
   setEntryStatus,
   deleteEntry,
@@ -49,6 +50,35 @@ describe('归一化与索引对齐', () => {
   it('全角/大小写折叠后等价', () => {
     expect(foldText('ＣＯＸＹ')).toBe('coxy');
     expect(foldText('CoXy')).toBe('coxy');
+  });
+});
+
+describe('写法对齐（本体规范名覆盖词表写法）', () => {
+  it('只改 correct，重算风险；wrong/台账/频次一律不动', () => {
+    const created = upsertEntry(uid, { wrong: 'kstar', correct: 'K star', kind: 'term' }).entry!;
+    recordReplacement(uid, [created.id], { docId: 'd1', runId: 'r1' });
+    const before = findEntry(uid, created.id)!;
+    const after = retargetEntry(uid, created.id, 'KSTAR')!;
+    expect(after.correct).toBe('KSTAR');
+    expect(after.wrong).toBe(before.wrong);
+    expect(after.freq).toBe(before.freq);
+    expect(after.replacedIn).toEqual(before.replacedIn);
+    expect(after.source).toBe(before.source);
+    expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+  });
+
+  it('同一个错形出现两种写法时 → 改完自动升为 high（同错不同正的风险）', () => {
+    const a = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    // 折叠后不同才算"另一种写法"（`CogSeed` 与 `Cogseed` 折叠等价 → 是同一条）
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Coseed' });
+    expect(retargetEntry(uid, a.id, 'Cogseed Studio')!.riskLevel).toBe('high');
+  });
+
+  it('改成空值报错；未知 id 返回 null；写法未变则原样返回不写盘', () => {
+    const entry = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    expect(() => retargetEntry(uid, entry.id, '   ')).toThrow();
+    expect(retargetEntry(uid, 'g_missing', 'X')).toBeNull();
+    expect(retargetEntry(uid, entry.id, 'Cogseed')!.correct).toBe('Cogseed');
   });
 });
 
