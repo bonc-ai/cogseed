@@ -236,6 +236,12 @@ describe('Recall cognition source catalog', () => {
     expect(group.items.find((item) => item.id === 'conv-complete')).toMatchObject({ captureReady: true });
     expect(group.items.find((item) => item.id === 'conv-followup')).toMatchObject({ captureReady: false });
     expect(mocks.getMessages.mock.calls.every((call) => call[2] === 50)).toBe(true);
+    // messageCount=可整理视角的有用消息条数（同一次读取带回，供整理列表过滤
+    // 一两句的简单对话）：conv-a 只有 1 条、conv-complete 2 条、conv-followup
+    // 过滤掉 system/tool/process 后 3 条。
+    expect(group.items.find((item) => item.id === 'conv-a')).toMatchObject({ messageCount: 1 });
+    expect(group.items.find((item) => item.id === 'conv-complete')).toMatchObject({ messageCount: 2 });
+    expect(group.items.find((item) => item.id === 'conv-followup')).toMatchObject({ messageCount: 3 });
   });
 
   it('does not read message bodies for paused or removed conversation sources', async () => {

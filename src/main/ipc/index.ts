@@ -1004,6 +1004,21 @@ async function ensureKstarWakeProjectionConfirmed(
   return null;
 }
 
+/** 整理记录批量入口的公共校验：id 数组、逐条 safeId、上限 100。 */
+function batchRecallCaptures(
+  ctx: { userId: string },
+  captureIds: unknown,
+  run: (userId: string, ids: string[]) => Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }>,
+): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
+  if (!Array.isArray(captureIds)
+    || captureIds.length < 1
+    || captureIds.length > 100
+    || captureIds.some((id) => typeof id !== 'string' || !safeId(id))) {
+    throw new Error('invalid recall capture ids');
+  }
+  return run(ctx.userId, captureIds);
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
   // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
   // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
@@ -2498,8 +2513,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, signal: await recallTeaching.revokeUserTeachingSignal(ctx.userId, signalId) };
   },
 
-  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor } = {}, ctx) => {
-    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid capture limit');
+  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor, scope } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid recall capture limit');
     const validStatuses = new Set([
       'waiting', 'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
       'review_ready', 'writing', 'completed', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
@@ -2515,11 +2530,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 500)) {
       throw new Error('invalid recall capture cursor');
     }
+    if (scope !== undefined && scope !== 'visible' && scope !== 'all') {
+      throw new Error('invalid recall capture scope');
+    }
     const page = await recallCaptures.queryRecallCaptures(ctx.userId, {
       ...(limit === undefined ? {} : { limit }),
       ...(statuses === undefined ? {} : { statuses }),
       ...(executionPolicy === undefined ? {} : { executionPolicy }),
       ...(cursor === undefined ? {} : { cursor }),
+      ...(scope === undefined ? {} : { scope }),
     });
     return { ok: true, ...page };
   },
@@ -2527,6 +2546,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.captures.read': async ({ captureId } = {}, ctx) => {
     if (!safeId(captureId)) throw new Error('invalid recall capture id');
     return { ok: true, capture: await recallCaptures.readRecallCaptureWorkflow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.context': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, context: await recallCaptures.readRecallCaptureContext(ctx.userId, captureId) };
   },
 
   'recall.captures.retry': async ({ captureId } = {}, ctx) => {
@@ -2552,6 +2576,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.captures.runNow': async ({ captureId } = {}, ctx) => {
     if (!safeId(captureId)) throw new Error('invalid recall capture id');
     return { ok: true, capture: await recallCaptures.runRecallCaptureNow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.batchRetry': async ({ captureIds } = {}, ctx) => {
+    return { ok: true, result: await batchRecallCaptures(ctx, captureIds, recallCaptures.retryRecallCapturesBatch) };
+  },
+
+  'recall.captures.batchRunNow': async ({ captureIds } = {}, ctx) => {
+    // 每条都是一次模型额度消耗：入口只收 id 列表，条数确认由前端弹窗负责
+    //（写死具体数字），这里不再二次拦截。
+    return { ok: true, result: await batchRecallCaptures(ctx, captureIds, recallCaptures.runRecallCapturesNowBatch) };
   },
 
   'recall.captures.manualCreate': async ({ conversationId } = {}, ctx) => {
