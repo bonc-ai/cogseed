@@ -32306,6 +32306,11 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
     grid-template-columns: 1fr;
   }
 }
+.kb-glo__metrics {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
 /* 词表管理页（模态）：列表是唯一滚动区，筛选与批量动作常驻可见。 */
 .kb-glo {
   display: flex;

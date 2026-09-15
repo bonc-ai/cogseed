@@ -378,6 +378,7 @@
       // 未决项（待核，方案 §4.3）：span 一律是**原文**坐标，apply 时由主进程映射
       flagged: [],
       truncated: false,
+      scanDoneAt: 0,
       notesText: '',
       compareBusy: false,
       llmCandidates: [],
@@ -1431,6 +1432,8 @@
         state.suspectError = '';
         state.llmCandidates = [];
         state.llmNote = '';
+        // 埋点起点：从"扫描完成"到"生成清理版"的秒数（方案 §8.2 可选埋点，本地）
+        state.scanDoneAt = Date.now();
         const stats = summarizeRows(state.rows, state.accepted);
         state.truncated = Boolean(result?.stats?.truncated);
         setStatus(stats.total === 0
@@ -1470,6 +1473,7 @@
         });
         state.apply = result?.result || null;
         state.mergedBlocks = Number(result?.run?.mergedBlocks || 0);
+        reportMetrics(result?.result);
         state.runId = String(result?.run?.runId || '');
         state.cleanedText = String(result?.result?.text || '');
         setStatus(t('kb.transcriptCorrect.apply_done', '清理版已生成（原文未改动）'), '');
@@ -1584,6 +1588,41 @@
     }
 
     /** 另存清理版到知识库（同目录、-清理版 后缀、内容 sha1 去重）。 */
+    /**
+     * 本地埋点（方案 §8.2「可选埋点，本地」）：把"确认耗时"与"保留率"记进本机
+     * metrics.jsonl。**失败不影响主流程**（埋点永远是旁路，不能因为它出错就
+     * 让用户的清理失败）。
+     */
+    function reportMetrics(result) {
+      if (!result || typeof root.cogseed?.invoke !== 'function') return;
+      const retention = Number(result.retention);
+      const send = (payload) => {
+        root.cogseed.invoke('transcript.metrics.record', payload).catch((error) => {
+          log?.warn('metrics record failed', { error: error?.message || String(error) });
+        });
+      };
+      if (Number.isFinite(retention)) {
+        send({
+          kind: 'retention',
+          retention,
+          charsIn: Number(result.charsIn) || 0,
+          charsOut: Number(result.charsOut) || 0,
+          overRewrite: Boolean(result.overRewriteSuspected),
+          docId: ctx.docId,
+        });
+      }
+      if (state.scanDoneAt) {
+        send({
+          kind: 'confirm_latency',
+          ms: Date.now() - state.scanDoneAt,
+          docId: ctx.docId,
+          rows: state.rows.length,
+          accepted: state.accepted.size,
+        });
+        state.scanDoneAt = 0;
+      }
+    }
+
     async function runSave() {
       if (state.busy || !state.cleanedText) return;
       state.busy = true;

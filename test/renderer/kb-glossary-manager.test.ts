@@ -121,6 +121,8 @@ describe('locale 覆盖（词表管理页）', () => {
     'qrw_on', 'qrw_off', 'qrw_enabled', 'qrw_disabled', 'qrw_failed',
     'pack_export', 'pack_exported', 'pack_export_failed', 'pack_review', 'pack_review_result',
     'pack_conflict_hint', 'pack_import', 'pack_imported', 'pack_import_failed', 'pack_invalid',
+    'metrics_runs', 'metrics_no_latency', 'metrics_latency', 'metrics_ok', 'metrics_over',
+    'metrics_retention', 'metrics_glossary', 'metrics_reached', 'metrics_not_reached', 'metrics_not_measurable',
   ];
 
   for (const lang of locales) {
@@ -150,6 +152,7 @@ describe('源码契约', () => {
       'transcript.glossary.setStatus', 'transcript.glossary.delete', 'transcript.glossary.setOwnerNote',
       'transcript.glossary.seedInitial', 'transcript.queryRewrite.set',
       'transcript.glossary.exportPack', 'transcript.glossary.reviewPack', 'transcript.glossary.importPack',
+      'transcript.metrics.summary',
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);

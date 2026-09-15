@@ -30,6 +30,7 @@ import * as transcriptLlm from '../features/transcript_llm_candidates';
 import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
+import * as transcriptMetrics from '../features/transcript_metrics';
 import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
@@ -294,6 +295,41 @@ export const invokeHandlers = {
       compareAvailable: rewrite.changed,
     };
   },
+
+  /**
+   * 本地埋点（方案 §8.2「可选埋点，本地」）：确认耗时与保留率。
+   * 只写本机 `<uid>/local/…/metrics.jsonl`，不联网、不上报；
+   * 测不了的指标在 summary 里如实列出 `notMeasurable`，不编数字。
+   */
+  'transcript.metrics.record': async (payload: Payload, ctx: IpcContext) => {
+    const docId = optionalId(payload?.docId, 'docId') ?? '';
+    if (payload?.kind === 'confirm_latency') {
+      transcriptMetrics.recordConfirmLatency(ctx.userId, {
+        ms: Number(payload?.ms) || 0,
+        docId,
+        rows: Number(payload?.rows) || 0,
+        accepted: Number(payload?.accepted) || 0,
+      });
+    } else if (payload?.kind === 'retention') {
+      transcriptMetrics.recordRetention(ctx.userId, {
+        retention: Number(payload?.retention) || 0,
+        charsIn: Number(payload?.charsIn) || 0,
+        charsOut: Number(payload?.charsOut) || 0,
+        overRewrite: payload?.overRewrite === true,
+        docId,
+      });
+    } else {
+      throw new Error('transcript metrics: unknown kind');
+    }
+    return { ok: true };
+  },
+
+  'transcript.metrics.summary': async (_payload: Payload, ctx: IpcContext) => ({
+    summary: transcriptMetrics.summarizeMetrics(
+      transcriptMetrics.readEvents(ctx.userId),
+      transcriptGlossary.listEntries(ctx.userId, { status: 'active' }).length,
+    ),
+  }),
 
   'transcript.glossary.setOwnerNote': async (payload: Payload, ctx: IpcContext) => ({
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),

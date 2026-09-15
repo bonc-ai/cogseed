@@ -130,6 +130,7 @@
       status: '',
       statusTone: '',
       queryRewrite: false,
+      metrics: null,
       packReview: null,
       packScope: 'personal',
       exportText: '',
@@ -146,6 +147,7 @@
       bodyHtml: [
         '<div class="kb-glo">',
         '  <div class="kb-glo__meta" data-glo-meta></div>',
+        '  <div class="kb-glo__metrics" data-glo-metrics></div>',
         '  <div class="kb-glo__filters" data-glo-filters></div>',
         '  <div class="kb-glo__status" data-glo-status hidden></div>',
         '  <div class="kb-glo__bulk" data-glo-bulk></div>',
@@ -178,6 +180,47 @@
       host.textContent = state.status;
       host.hidden = !state.status;
       host.dataset.tone = state.statusTone;
+    }
+
+    /** 本地埋点汇总（方案 §8.2）：确认耗时中位数 / 保留率分布 / 词表里程碑。 */
+    async function loadMetrics() {
+      try {
+        const result = await root.cogseed.invoke('transcript.metrics.summary', {});
+        state.metrics = result?.summary ?? null;
+      } catch (error) {
+        log?.warn('metrics summary failed', { error: error?.message || String(error) });
+        state.metrics = null;
+      }
+    }
+
+    function renderMetrics() {
+      const host = q('[data-glo-metrics]');
+      if (!host || !state.metrics) return;
+      const m = state.metrics;
+      const parts = [
+        t('kb.glossary.metrics_runs', '已记录 {count} 次清理', { count: m.runs }),
+        m.confirmLatency.median === null
+          ? t('kb.glossary.metrics_no_latency', '确认耗时：暂无样本')
+          : t('kb.glossary.metrics_latency', '确认耗时中位数 {seconds}s（目标 <{target}s：{verdict}）', {
+            seconds: (m.confirmLatency.median / 1000).toFixed(1),
+            target: (m.confirmLatency.targetMs / 1000).toFixed(0),
+            verdict: m.confirmLatency.withinTarget ? t('kb.glossary.metrics_ok', '达标') : t('kb.glossary.metrics_over', '偏慢'),
+          }),
+        t('kb.glossary.metrics_retention', '保留率分布：区间内 {inRange} · 低于 55% {below} · 高于 85% {above}', {
+          inRange: m.retention.inRange, below: m.retention.belowRange, above: m.retention.aboveRange,
+        }),
+        t('kb.glossary.metrics_glossary', '词表 {entries} 条（里程碑 ≥{milestone}：{verdict}）', {
+          entries: m.glossary.entries, milestone: m.glossary.milestone,
+          verdict: m.glossary.reached ? t('kb.glossary.metrics_reached', '已达成') : t('kb.glossary.metrics_not_reached', '未达成'),
+        }),
+      ];
+      host.textContent = parts.join(' · ');
+      const notMeasurable = document.createElement('div');
+      notMeasurable.className = 'kb-glo__row-meta';
+      notMeasurable.textContent = t('kb.glossary.metrics_not_measurable', '测不了的指标（不编数字）：{list}', {
+        list: (m.notMeasurable || []).join('；'),
+      });
+      host.appendChild(notMeasurable);
     }
 
     function renderMeta() {
@@ -523,7 +566,7 @@
     }
 
     function render() {
-      for (const step of [renderMeta, renderFilters, renderStatus, renderBulk, renderList, renderIo]) {
+      for (const step of [renderMeta, renderMetrics, renderFilters, renderStatus, renderBulk, renderList, renderIo]) {
         try { step(); } catch (error) {
           log?.warn('glossary manager render step failed', { step: step.name, error: error?.message || String(error) });
         }
@@ -541,6 +584,7 @@
           ? result.meta
           : { ownerNote: '', lastReconcileAt: 0 };
         state.queryRewrite = state.meta.queryRewrite === true;
+        await loadMetrics();
         const ids = new Set(state.entries.map((e) => e.id));
         state.selected = new Set([...state.selected].filter((id) => ids.has(id)));
       } catch (error) {
@@ -955,6 +999,7 @@
     dialog.addEventListener('change', onFilterChange);
     render();
     void reload();
+    void loadMetrics().then(() => renderMetrics());
 
     return modal;
   }
