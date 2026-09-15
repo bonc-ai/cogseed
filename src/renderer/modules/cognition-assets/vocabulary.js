@@ -130,6 +130,31 @@
     asset_write: ['cognition.capture_stage_asset_write', '写入资产'],
   };
 
+  /** 价值信号（后端 RecallCaptureValueSignal 九值）：这段对话被判为值得
+   *  整理的依据，详情页以 chips 形式给出「为什么是它」。 */
+  const CAPTURE_VALUE_SIGNAL = {
+    preference: ['cognition.capture_signal_preference', '用户偏好'],
+    rule: ['cognition.capture_signal_rule', '规则'],
+    decision: ['cognition.capture_signal_decision', '决策'],
+    template: ['cognition.capture_signal_template', '模板'],
+    method: ['cognition.capture_signal_method', '方法'],
+    artifact: ['cognition.capture_signal_artifact', '产物'],
+    reusable_outcome: ['cognition.capture_signal_reusable_outcome', '可复用成果'],
+    substantive_exchange: ['cognition.capture_signal_substantive_exchange', '实质性交流'],
+    manual_selection: ['cognition.capture_signal_manual_selection', '手动选择'],
+  };
+
+  /** 筛选原因（后端 RecallCaptureFilterReason 六值）：任务没产出候选时的
+   *  「为什么没有」白话。 */
+  const CAPTURE_FILTER_REASON = {
+    trivial_exchange: ['cognition.capture_filter_trivial_exchange', '只是一轮简单交流'],
+    no_result: ['cognition.capture_filter_no_result', '没有得到结果'],
+    low_reuse_value: ['cognition.capture_filter_low_reuse_value', '没有值得留存的可复用内容'],
+    model_no_candidate: ['cognition.capture_filter_model_no_candidate', '模型判断这轮没有可沉淀的内容'],
+    candidate_unparsable: ['cognition.capture_filter_candidate_unparsable', '提取结果无法解析（质量异常）'],
+    candidate_quality: ['cognition.capture_filter_candidate_quality', '提取内容未达质量门槛'],
+  };
+
   /** 分桶（后端 captureBucket 四值）：整理记录的筛选口径。注意「需要我处理」
    *  是分桶口径（含待确认/被暂停），比「待我处理」页的失败计数宽。 */
   const CAPTURE_BUCKET = {
@@ -157,6 +182,8 @@
     captureActionText: (action) => lookup(CAPTURE_ACTION, action, 'capture action'),
     captureBucketText: (bucket) => lookup(CAPTURE_BUCKET, bucket, 'capture bucket'),
     captureStageText: (stage) => lookup(CAPTURE_STAGE, stage, 'capture stage'),
+    captureSignalText: (signal) => lookup(CAPTURE_VALUE_SIGNAL, signal, 'capture value signal'),
+    captureFilterReasonText: (reason) => lookup(CAPTURE_FILTER_REASON, reason, 'capture filter reason'),
     /** 整理记录标题：会话标题优先，绝不裸出 rcap- 内部 ID。 */
     recordTitle(record) {
       const raw = record && (record.conversationTitle || record.title);

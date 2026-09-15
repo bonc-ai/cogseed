@@ -117,19 +117,20 @@
     candidates: [],
     captures: [],
     captureCounts: {},
-    captureBuckets: { attention: 0, active: 0, silent: 0, done: 0 },
+    /** 后端分桶计数；缺字段（旧主进程）时为 null，视图走前端兜底现算——
+     *  绝不能用全 0 对象冒充，否则版本错配时计数显示成 0 而不是兜底值。 */
+    captureBuckets: null,
     captureSettings: null,
     sources: [],
-    experiences: [],
-    experienceTotal: 0,
     tree: null,
     proofs: [],
-    /** 使用记录页：哪些资产卡片被展开（assetId 集合；重画后保留）。 */
-    expandedProofs: new Set(),
-    /** 自动整理页：历史会话列表是否展开全部（默认收拢 5 条）。 */
+    /** 整理详情页的「对话上下文」（2026-09-15 详情页改造）：{captureId, data}
+     *  按任务缓存；data 为 null 表示上下文不可用（详情页降级渲染）。 */
+    captureContext: null,
+    /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
-    /** 路由：{name, category, assetId, candidateId, manageTab, sourceKind, proofEventId, captureBucket, captureId} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '', captureBucket: '', captureId: '' },
+    /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' },
     backStack: [],
   };
   NS.store = store;
@@ -163,29 +164,30 @@
       // recall.teaching.list 的拉取在 2026-09-14 撤下——治理待办在新 UI 尚无
       // 处理出口（分级/边界编辑入口），报了也无处处理；等动作入口恢复后
       // 连同动作指引一起重上。渠道契约本身未变，随时可接回。
-      const [assets, candidates, captures, settings, sources, experiences] = await Promise.all([
+      const [assets, candidates, captures, settings, sources] = await Promise.all([
         api.soft('recall.assets.list', {}, {}),
         api.soft('recall.candidates.list', {}, {}),
-        // scope:'all'：整理记录要展示完整历史（含系统判定无留存内容的静默
+        // scope:'all'：整理页要展示完整历史（含系统判定无留存内容的静默
         // 记录）。后端保证静默记录零候选读取，这里多拉的记录不产生模型开销。
         api.soft('recall.captures.list', { limit: 40, scope: 'all' }, {}),
         api.soft('recall.captures.settings.get', {}, {}),
         api.soft('recall.sources.list', {}, {}),
-        api.soft('kstar.experiences.list', {}, {}),
       ]);
       store.assets = toArr(assets, ['assets', 'items']);
       store.candidates = toArr(candidates, ['candidates', 'items']);
       store.captures = toArr(captures, ['items', 'captures', 'tasks']);
       store.captureCounts = (captures && captures.counts) || {};
-      store.captureBuckets = (captures && captures.buckets) || { attention: 0, active: 0, silent: 0, done: 0 };
+      // 后端 buckets 缺席（旧主进程/旧网关）时保持 null，交给视图现算：
+      // 曾因 `|| {全0}` 把「缺字段」当「全为 0」，计数显示错误。
+      const remoteBuckets = captures && captures.buckets;
+      store.captureBuckets = remoteBuckets && Number.isFinite(Number(remoteBuckets.attention))
+        ? remoteBuckets
+        : null;
       store.captureSettings = (settings && settings.settings) || settings || null;
       store.sources = toArr(sources, ['groups', 'sources']);
-      // 提炼出的经验（KSTAR review 里 lesson 非空的记录，含沉淀状态）；失败不阻塞主快照。
-      store.experiences = toArr(experiences, ['experiences', 'items']);
-      store.experienceTotal = Number((experiences && experiences.total) || store.experiences.length) || 0;
-      // 证明链只服务「使用与证明」与成熟度展示，失败不阻塞主快照。
+      // 证明链服务资产详情内的使用记录区与成熟度展示，失败不阻塞主快照。
       // 通道是语义化的时间线（recall.timeline.list）：每条事件带 refs
-      // （assetId / transferProofId / usageReceiptId / version），与旧实现同源。
+      // （assetId / transferProofId / usageReceiptId / version）。
       const proofs = await api.soft('recall.timeline.list', { limit: 500 }, {});
       store.proofs = toArr(proofs, ['items', 'events']);
       store.loaded = true;
@@ -215,17 +217,36 @@
   };
   NS.notify = () => listeners.forEach((fn) => fn());
 
+  /** 整理详情页按需拉「对话上下文」（本次整理实际读到的消息 + 参与角色）。
+   *  按任务缓存；失败降级为 data:null（不进全局 errors——上下文缺席不该
+   *  触发「部分数据读取失败」横幅吓人）。 */
+  NS.loadCaptureContext = async function loadCaptureContext(captureId) {
+    const id = String(captureId || '');
+    if (!id || (store.captureContext && store.captureContext.captureId === id)) return;
+    store.captureContext = { captureId: id, loading: true };
+    NS.notify();
+    let data = null;
+    try {
+      const result = await api.call('recall.captures.context', { captureId: id });
+      data = (result && result.context) || null;
+    } catch (error) {
+      // 捕获记录不存在/会话清理：data 保持 null，详情页给降级文案。
+    }
+    if (!store.captureContext || store.captureContext.captureId !== id) return;
+    store.captureContext = { captureId: id, data };
+    NS.notify();
+  };
+
   /* ────────────────────────── 路由 ────────────────────────── */
 
+  /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab——我的认知 / 待我处理 /
+   * 整理。「我的认知」固定首位（子安拍板）。tab 只留标题（描述小字已删）。
+   * 使用记录并入资产详情、经验（KSTAR）与来源健康常态页砍除（来源改为
+   * 异常驱动，只在待我处理出现）。 */
   const TABS = [
-    { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知', descKey: 'cognition.tab_overview_desc', desc: '我拥有什么' },
-    { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理', descKey: 'cognition.tab_review_desc', desc: '需要我决定什么' },
-    { id: 'evidence', titleKey: 'cognition.tab_evidence', title: '使用记录', descKey: 'cognition.tab_evidence_desc', desc: '资产用得怎么样' },
-    // 「从历史会话整理」（动作）与「整理记录」（历史）从设置页拆出为并列 tab
-    // （2026-09-14）；设置固定末位。
-    { id: 'organize-history', titleKey: 'cognition.tab_organize_history', title: '从历史会话整理', descKey: 'cognition.tab_organize_history_desc', desc: '挑一段会话开始整理' },
-    { id: 'capture-log', titleKey: 'cognition.tab_capture_log', title: '整理记录', descKey: 'cognition.tab_capture_log_desc', desc: '整理任务的历史' },
-    { id: 'manage', titleKey: 'cognition.tab_manage', title: '设置与管理', descKey: 'cognition.tab_manage_desc', desc: '来源与整理' },
+    { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
+    { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
+    { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
   ];
   NS.TABS = TABS;
 
@@ -235,7 +256,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '', captureBucket: '', captureId: '' }, next);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;

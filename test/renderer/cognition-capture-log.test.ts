@@ -1,16 +1,11 @@
 /**
- * 整理记录页（cognition-assets/views.js::viewCaptureLog）页面级用例。
+ * 认知资产重构后（2026-09-15 全模块收敛为 3 tab）的页面级用例。
  *
- * 背景：后端 summarize 早就算好了每条记录的 displayStatus / displayReason /
- * actions（capture-service.ts），旧渲染只硬编码 failed/paused 两个状态，把
- * run_now / pause / cancel 全丢——14 行等待记录既没有标题也没有动作。2026-09-15
- * 重构后行渲染完全由 actions 驱动。
- *
- * 这里把**真实的 views.js + vocabulary.js** require 进来跑（与
- * cognition-pages.test.ts 同一模式，模块是挂在 window.CogAssets 上的 IIFE）：
- * stub 只负责 window 契约（CogAssets 的 T/esc/store/TABS 与 uiButton 工厂），
- * 断言落在渲染产出的 HTML 上——按钮 data-action 与后端语义 id 一字不差、
- * chip 计数、批量入口写死条数、筛选生效。
+ * 新信息架构：待我处理（决策中心：候选+来源异常下钻+整理失败入口）/
+ * 我的认知（树+资产明细，详情含使用记录）/整理（任务流+策略抽屉）。
+ * 这里把**真实的 views.js + vocabulary.js + ui-button.js** require 进来跑
+ * （与 cognition-pages.test.ts 同一模式）：stub 只负责 window 契约，断言
+ * 落在渲染产出的 HTML 上。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -30,37 +25,59 @@ const T = (key: string, fallback: string, vars?: Record<string, string>) => {
   return text;
 };
 
-/** 极简 uiButton：attrs 序列化进 HTML，让 data-act / data-action 可断言。 */
-const uiButton = ({ label, className, attrs }: { label: string; className?: string; attrs?: Record<string, string> }) =>
-  `<button class="${className || ''}"${Object.entries(attrs || {}).map(([k, v]) => ` ${k}="${esc(String(v))}"`).join('')}>${label}</button>`;
-
 const globalScope = globalThis as unknown as Record<string, unknown>;
 
-/** 装配 window 契约 → require 真实模块（含真 uiButton 工厂，钉住它的 attrs
- *  白名单与 btn() 的 data- 前缀协作）→ 渲染 → 返回 #ca-root 的 HTML。 */
+/** 模块级装配：views.js 是 IIFE，require 只执行一次并把 render 挂在
+ *  window.CogAssets 上；此后每次断言只改 store 再重画（与真实页面同构）。 */
 let cogAssets: Record<string, unknown> | null = null;
 let domRoot: { innerHTML: string } | null = null;
 function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerHTML: string } } {
   if (cogAssets && domRoot) return { cogAssets, domRoot };
   cogAssets = {
     T, esc, fmtDate: () => '2026/09/15 10:00',
-    TABS: [],
-    stats: () => ({}),
+    TABS: [
+      { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
+      { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
+      { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
+    ],
+    // stats 从 store 动态算（口径同 core.js）：attention 行的断言依赖它。
+    stats: () => {
+      const store = (cogAssets as Record<string, unknown>).store as Record<string, unknown>;
+      const sourceIssues = ((store.sources as Array<{ items?: Array<{ status?: string; statusReason?: string }> }> | undefined) || [])
+        .flatMap((group) => (Array.isArray(group.items) ? group.items : []))
+        .filter((item) => item.status === 'failed'
+          || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused')).length;
+      const failedTasks = Number(((store.captureCounts as { failed?: number } | undefined) || {}).failed || 0);
+      return {
+        confirmed: 0, pending: 0, validated: 0, transferOk: 0,
+        sourceIssues, failedTasks, coveredAssets: 0, proofCount: 0, attention: 0,
+      };
+    },
     store: {
       loaded: true, loading: false, errors: [],
-      route: { name: 'capture-log', captureBucket: '' },
-      captures: [], captureBuckets: undefined,
+      route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' },
+      captures: [], captureBuckets: undefined, captureSettings: null,
       sources: [], proofs: [], assets: [], candidates: [],
-      experienceTotal: 0, organizeListExpanded: false, expandedProofs: new Set(),
+      organizeSettingsOpen: false, organizeListExpanded: true,
     },
   };
   domRoot = { innerHTML: '' };
+  const attrsOf = (attrs?: Record<string, string>) => Object.entries(attrs || {}).map(([k, v]) => ` ${k}="${esc(String(v))}"`).join('');
   globalScope.window = {
     CogAssets: cogAssets,
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     uiButton: require('../../src/renderer/modules/ui-button.js').uiButton,
-    uiTextarea: () => '<textarea></textarea>',
-    uiInput: () => '<input/>',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    uiIconButton: require('../../src/renderer/modules/ui-button.js').uiIconButton,
+    // icons.js 是 IIFE 挂全局（无 CJS 导出）：先 require 触发挂载到 globalThis，
+    // 再取引用给 window stub（views.js 运行时读 window.uiIconHtml）。
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    uiIconHtml: (() => { require('../../src/renderer/modules/icons.js'); return (globalThis as unknown as Record<string, unknown>).uiIconHtml; })(),
+    // 表单控件透传 id/attrs：内嵌表单用例要断言 data-f 与候选后缀 id。
+    uiTextarea: ({ id, value, attrs }: { id?: string; value?: string; attrs?: Record<string, string> }) =>
+      `<textarea id="${esc(String(id || ''))}"${attrsOf(attrs)}>${esc(String(value || ''))}</textarea>`,
+    uiInput: ({ id, value, placeholder, attrs }: { id?: string; value?: string; placeholder?: string; attrs?: Record<string, string> }) =>
+      `<input id="${esc(String(id || ''))}" value="${esc(String(value || ''))}" placeholder="${esc(String(placeholder || ''))}"${attrsOf(attrs)}/>`,
   };
   globalScope.document = { getElementById: () => domRoot };
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -74,169 +91,691 @@ function renderPage(routeName: string, storePatch: Record<string, unknown>, rout
   const { cogAssets: NS, domRoot: rootEl } = ensureModule();
   const store = NS.store as Record<string, unknown>;
   Object.assign(store, storePatch);
-  store.route = { name: routeName, captureBucket: '', captureId: '', ...routePatch };
+  store.route = { name: routeName, category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', ...routePatch };
   rootEl.innerHTML = '';
   (NS.render as () => void)();
   return rootEl.innerHTML;
 }
 
-function renderCaptureLog(input: {
-  captures: Array<Record<string, unknown>>;
-  captureBuckets?: Record<string, number>;
-  captureBucket?: string;
-}): string {
-  return renderPage(
-    'capture-log',
-    { captures: input.captures, captureBuckets: input.captureBuckets },
-    { captureBucket: input.captureBucket || '' },
-  );
-}
+const conversationSources = [{
+  kind: 'conversation',
+  items: [
+    { id: 'conv-1', kind: 'conversation', title: 'Saying hello', updatedAt: '2026-09-15T02:00:00.000Z' },
+    { id: 'conv-2', kind: 'conversation', title: 'design-review 技能用途', updatedAt: '2026-09-14T02:00:00.000Z' },
+    { id: 'conv-3', kind: 'conversation', title: '查询可用的skills列表', updatedAt: '2026-09-13T02:00:00.000Z' },
+    { id: 'conv-4', kind: 'conversation', title: '会议纪要模板讨论', updatedAt: '2026-09-12T02:00:00.000Z' },
+    { id: 'conv-5', kind: 'conversation', title: '季度目标对齐', updatedAt: '2026-09-11T02:00:00.000Z' },
+  ],
+}];
 
-function renderOrganizeHistory(input: {
-  sources: Array<Record<string, unknown>>;
-  captures: Array<Record<string, unknown>>;
-}): string {
-  return renderPage('organize-history', { sources: input.sources, captures: input.captures, organizeListExpanded: true });
-}
-
-function renderCaptureDetail(input: {
-  captures: Array<Record<string, unknown>>;
-  captureId: string;
-  assets?: Array<Record<string, unknown>>;
-}): string {
-  return renderPage('capture-detail', { captures: input.captures, assets: input.assets || [] }, { captureId: input.captureId });
-}
-
-const baseCapture = {
-  id: 'rcap-a',
-  conversationId: 'conv-1',
-  status: 'waiting_manual',
-  visibility: 'visible',
-  bucket: 'active',
-  displayStatus: 'waiting',
-  displayReason: 'manual_start_required',
-  actions: ['run_now', 'pause', 'cancel', 'open_conversation'],
+const organizingCapture = {
+  id: 'rcap-org', conversationId: 'conv-2', visibility: 'visible',
+  conversationTitle: 'design-review 技能用途',
+  status: 'extracting', bucket: 'active', displayStatus: 'extracting',
+  displayReason: 'extracting', stage: 'model_extraction',
+  actions: ['pause', 'cancel', 'open_conversation'],
   reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
-  updatedAt: '2026-09-15T01:00:00.000Z',
+  updatedAt: '2026-09-15T03:00:00.000Z',
 };
-
 const failedCapture = {
-  ...baseCapture,
-  id: 'rcap-b', conversationId: 'conv-2',
+  ...organizingCapture,
+  id: 'rcap-fail', conversationId: 'conv-3', conversationTitle: '查询可用的skills列表',
   status: 'failed', bucket: 'attention', displayStatus: 'failed',
   displayReason: 'capture_failed', actions: ['retry', 'cancel', 'open_conversation'],
 };
-
-const reviewReadyCapture = {
-  ...baseCapture,
-  id: 'rcap-c', conversationId: 'conv-3',
-  status: 'review_ready', bucket: 'attention', displayStatus: 'review_ready',
-  displayReason: 'review_pending', actions: ['review_candidates', 'pause', 'cancel', 'open_conversation'],
-  reviewSummary: { total: 2, pending: 2, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
-};
-
 const silentCapture = {
-  ...baseCapture,
-  id: 'rcap-d', conversationId: 'conv-4',
-  status: 'no_candidate', visibility: 'internal', bucket: 'silent',
-  displayStatus: 'completed', displayReason: 'no_candidate', actions: ['open_conversation'],
+  ...organizingCapture,
+  id: 'rcap-silent', conversationId: 'conv-1', visibility: 'internal',
+  conversationTitle: 'Saying hello',
+  status: 'no_candidate', bucket: 'done', displayStatus: 'completed',
+  displayReason: 'no_candidate', actions: ['open_conversation'],
+};
+const waitingCapture = {
+  ...organizingCapture,
+  id: 'rcap-wait', conversationId: 'conv-4', conversationTitle: '会议纪要模板讨论',
+  status: 'waiting_manual', bucket: 'attention', displayStatus: 'waiting',
+  displayReason: 'manual_start_required', actions: ['run_now', 'pause', 'cancel', 'open_conversation'],
 };
 
-describe('整理记录页渲染', () => {
-  it('行内动作由后端 actions 驱动：run_now/pause/cancel 全部出现，语义 id 一字不差', () => {
-    const html = renderCaptureLog({ captures: [baseCapture] });
-    expect(html).toContain('data-action="run_now"');
-    expect(html).toContain('data-action="pause"');
-    expect(html).toContain('data-action="cancel"');
-    expect(html).toContain('立即整理');
-    // 旧实现的硬编码只剩语义字典驱动，不再有裸 status 判断
-    expect(viewsSource).not.toContain("capture.status === 'failed' ?");
-    expect(viewsSource).not.toContain("capture.status === 'paused' ?");
+const detailCapture = {
+  ...organizingCapture,
+  id: 'rcap-x', conversationId: 'conv-1', conversationTitle: 'Saying hello',
+  attempt: 2, durationMs: 65_000,
+  modelUsage: { totalTokens: 1234 },
+  createdAt: '2026-09-15T01:00:00.000Z',
+  startedAt: '2026-09-15T01:00:05.000Z',
+  reviewSummary: { total: 3, pending: 2, deferred: 0, promoted: 1, rejected: 0, missing: 0 },
+  confirmedAssetReceipts: [{ assetId: 'aa-1', assetType: 'rule', version: '1', scope: 'general', sourceRefCount: 2, reviewDecisionId: 'rd_1' }],
+};
+
+describe('信息架构：3 tab 收敛', () => {
+  it('旧六视图已删净，新视图 + 设置页 + 异常下钻组件存在', () => {
+    expect(coreSource).toContain("{ id: 'organize', titleKey: 'cognition.tab_organize'");
+    expect(coreSource.match(/id: '(evidence|experiences|organize-history|capture-log|manage)'/g)).toBeNull();
+    for (const gone of ['function viewManage', 'function viewSourcesOverview', 'function viewSourceDetail', 'function viewExperiences', 'function viewOrganizeHistory', 'function viewCaptureLog', 'function organizeSettingsDrawer']) {
+      expect(viewsSource, gone).not.toContain(gone);
+    }
+    expect(viewsSource).toContain('function viewOrganizeTasks');
+    expect(viewsSource).toContain('function viewOrganizeSettingsPage');
+    expect(viewsSource).toContain('function sourceIssuesSection');
   });
 
-  it('失败行主按钮=重试；待确认行主按钮=去确认（导航分流，不走 capture-action）', () => {
-    const html = renderCaptureLog({ captures: [failedCapture, reviewReadyCapture] });
-    expect(html).toContain('data-action="retry"');
+  it('旧路由/委托 case 已收敛，齿轮入口与设置页分流存在', () => {
+    expect(appSource).not.toContain("case 'manage-tab'");
+    expect(appSource).not.toContain("case 'go-sources'");
+    expect(appSource).not.toContain("case 'open-evidence'");
+    expect(appSource).not.toContain("case 'toggle-organize-settings'");
+    expect(appSource).toContain("case 'toggle-source-issues'");
+    expect(appSource).toContain("case 'go-organize-settings'");
+    expect(appSource).toContain("router.go({ name: 'organize-settings' })");
+    expect(viewsSource).toContain('data-cognition-page-link="captures"');
+  });
+
+  it('树：经验块移除、土壤落点为待我处理、冠回资产明细', () => {
+    expect(viewsSource).not.toContain('go-experiences');
+    expect(viewsSource).not.toContain('tree_soil_experience');
+    const html = renderPage('overview', { sources: [], assets: [], proofs: [], candidates: [], captures: [] });
     expect(html).toContain('data-act="go-review"');
-    expect(html).toContain('去确认');
-    // 待确认计数跟在 meta 里
-    expect(html).toContain('2 条待确认');
+    expect(html).toContain('data-act="open-ontology"');
+    expect(html).toContain('data-act="open-overview"');
+  });
+});
+
+describe('整理页（任务流 + 策略抽屉）', () => {
+  const baseStore = {
+    sources: conversationSources,
+    captures: [organizingCapture, failedCapture, silentCapture, waitingCapture],
+    captureBuckets: { attention: 1, active: 2, silent: 0, done: 1 },
+    captureSettings: { enabled: true, executionPolicy: 'smart', reviewPolicy: 'auto' },
+  };
+
+  it('页首只留齿轮入口（共享 uiIconButton），抽屉退役', () => {
+    const html = renderPage('organize', baseStore);
+    // 走共享组件体系（2026-09-15 团队规范）：ui-icon-button + icons.js 的
+    // settings 图标，不再有手写 SVG 孤例。
+    expect(html).toContain('ui-icon-button');
+    expect(html).toContain('data-act="go-organize-settings"');
+    expect(html).toContain('is-settings');
+    expect(html).not.toContain('<svg width="18"');
+    expect(html).not.toContain('ca-drawer');
+    expect(html).not.toContain('toggle-organize-settings');
+    // 位置：齿轮在 hero 区、位于筛选行之前。
+    expect(html.indexOf('go-organize-settings')).toBeLessThan(html.indexOf('data-act="capture-filter"'));
   });
 
-  it('标题即「打开会话」入口，携带 conversationId', () => {
-    const html = renderCaptureLog({ captures: [baseCapture] });
-    expect(html).toContain('data-act="open-conversation"');
-    expect(html).toContain('data-id="conv-1"');
+  it('共享图标统一：chevron-right 替代 › 字符、circle 替代 ◎（icons.js 真渲染）', () => {
+    const list = renderPage('overview', { assets: [{ id: 'aa-1', title: '上线前确认', type: 'rule', status: 'active' }], sources: [], proofs: [] });
+    expect(list).toContain('is-chevron-right');
+    const emptyHtml = renderPage('overview', { assets: [], sources: [], proofs: [], candidates: [] });
+    expect(emptyHtml).toContain('is-circle');
   });
 
-  it('筛选 chip 四枚带计数；attention 筛选只留需要处理的行', () => {
-    const captures = [baseCapture, failedCapture, silentCapture];
-    const buckets = { attention: 1, active: 1, silent: 1, done: 0 };
-    const html = renderCaptureLog({ captures, captureBuckets: buckets });
+  it('认知树骨架说明：浅灰一行（先骨架后打磨 + 因现阶段仅内部学员使用故展示，对外版本不出现）', () => {
+    const html = renderPage('overview', { assets: [], sources: [], proofs: [], candidates: [] });
+    expect(html).toContain('ca-tree-wip');
+    expect(html).toContain('开发中的骨架');
+    expect(html).toContain('先搭出可点的骨架');
+    expect(html).toContain('现阶段仅内部学员使用');
+    expect(html).toContain('正式对外版本中不会出现');
+    // cap 修正：候选圆点在树根（不再是与图形脱节的"枝头小点"）。
+    expect(html).toContain('树根上的圆点');
+    expect(html).not.toContain('枝头的小点');
+  });
+
+  it('沉淀设置页：夜间自动沉淀条状卡（左说明/中时间/右开关）与迁入的设置卡', () => {
+    const off = renderPage('organize-settings', { captureSettings: { enabled: true, executionPolicy: 'manual', reviewPolicy: 'manual', nightlyStart: '02:00' } });
+    expect(off).toContain('沉淀设置');
+    expect(off).toContain('夜间自动沉淀');
+    expect(off).toContain('等你批准或调整');
+    // 关闭态：开关未亮、无时间选择器。
+    expect(off).toContain('data-act="nightly-toggle"');
+    expect(off).not.toContain('ca-switch is-on');
+    expect(off).not.toContain('type="time"');
+
+    const on = renderPage('organize-settings', { captureSettings: { enabled: true, executionPolicy: 'nightly', reviewPolicy: 'manual', nightlyStart: '02:30' } });
+    // 开启态：开关亮、时间选择器出现且带当前值。
+    expect(on).toContain('ca-switch is-on');
+    expect(on).toContain('type="time"');
+    expect(on).toContain('value="02:30"');
+    expect(on).toContain('开始时间');
+    // 迁入的整理功能开关与候选确认方式。
+    expect(on).toContain('data-act="capture-toggle"');
+    expect(on).toContain('data-act="capture-review-toggle"');
+  });
+
+  it('整理中的条目置顶、按钮变「整理中」且禁用；失败出状态 chip', () => {
+    const html = renderPage('organize', baseStore);
+    const top = html.indexOf('design-review 技能用途');
+    const plain = html.indexOf('季度目标对齐');
+    expect(top).toBeGreaterThan(-1);
+    expect(plain).toBeGreaterThan(top);
+    expect(html).toContain('整理中');
+    expect(html).toContain('is-disabled');
+    expect(html).toContain('>失败</span>');
+  });
+
+  it('等待手动开始不再是「整理中」：显示等待 chip + 行内直达「立即整理」按钮', () => {
+    const html = renderPage('organize', baseStore);
+    // waiting_manual 行（conv-4）：等待态 chip + run_now 按钮，且该行无禁用钮。
+    const waitAt = html.indexOf('rcap-wait');
+    expect(waitAt).toBeGreaterThan(-1);
+    expect(html).toContain('data-id="rcap-wait" data-action="run_now"');
+    expect(html).toContain('等你手动开始整理');
+    // 行内不再有两个「整理中」：只有 extracting 的那一条显示整理中。
+    expect((html.match(/is-disabled/g) || []).length).toBe(1);
+  });
+
+  it('有任务条目点标题进详情；无任务条目保留「开始整理」', () => {
+    const html = renderPage('organize', baseStore);
+    expect(html).toContain('data-act="open-capture-detail" data-id="rcap-org"');
+    expect(html).toContain('data-act="organize-conv" data-id="conv-5"');
+  });
+
+  it('筛选 chip 四枚带计数；attention 只留需要处理、done 命中无留存内容（口径与行一致）', () => {
+    const html = renderPage('organize', baseStore);
     const chips = [...html.matchAll(/data-act="capture-filter"/g)].length;
     expect(chips).toBe(4);
-    expect(html).toContain('全部 3');
-    expect(html).toContain('需要我处理 1');
+    expect(html).toContain('全部 4');
 
-    const filtered = renderCaptureLog({ captures, captureBuckets: buckets, captureBucket: 'attention' });
-    expect(filtered).toContain('rcap-b');
+    const filtered = renderPage('organize', baseStore, { captureBucket: 'attention' });
+    expect(filtered).toContain('rcap-fail');
     expect(filtered).not.toContain('data-id="conv-1"');
-    expect(filtered).not.toContain('data-id="conv-4"');
+    expect(filtered).not.toContain('data-id="conv-5"');
 
-    const emptyDone = renderCaptureLog({ captures, captureBuckets: buckets, captureBucket: 'done' });
-    expect(emptyDone).toContain('这个筛选下没有整理记录');
+    // 2026-09-15 口径修复：无留存内容的行显示「已完成」，必须能在
+    // 「已完成」筛选下出现（此前 bucket=silent 导致筛选恒空）。
+    const doneFiltered = renderPage('organize', baseStore, { captureBucket: 'done' });
+    expect(doneFiltered).toContain('rcap-silent');
+    expect(doneFiltered).toContain('整理过，没有发现值得留存的内容');
   });
 
-  it('批量入口写死条数：重试失败（1）与立即整理（1），data-batch 指明动作', () => {
-    const html = renderCaptureLog({
-      captures: [baseCapture, failedCapture],
-      captureBuckets: { attention: 1, active: 1, silent: 0, done: 0 },
-    });
+  it('批量入口写死条数：重试失败（1）与立即整理（1）', () => {
+    const html = renderPage('organize', baseStore);
     expect(html).toContain('重试失败（1）');
     expect(html).toContain('立即整理（1）');
     expect(html).toContain('data-batch="retry"');
     expect(html).toContain('data-batch="run_now"');
   });
 
-  it('无可批量行时不出现批量按钮', () => {
-    const html = renderCaptureLog({
-      captures: [silentCapture],
-      captureBuckets: { attention: 0, active: 0, silent: 1, done: 0 },
-    });
-    expect(html).not.toContain('data-batch=');
+  it('静默任务也如实显示（无留存内容）', () => {
+    const html = renderPage('organize', baseStore);
+    expect(html).toContain('整理过，没有发现值得留存的内容');
   });
 
-  it('静默行按 displayReason 出人话文案；「待我处理」失败入口落点是整理记录页', () => {
-    const html = renderCaptureLog({
-      captures: [silentCapture],
-      captureBuckets: { attention: 0, active: 0, silent: 1, done: 0 },
+  it('旧主进程字段缺席时兜底：无 bucket 字段的行仍按状态显示「整理中」，计数走前端现算', () => {
+    // 版本错配场景（2026-09-15 实测事故）：主进程旧代码不返回 bucket/buckets，
+    // 前端不能因此显示全 0 计数或把「整理中」退化成「等待中」。
+    const legacyCapture = {
+      ...organizingCapture,
+      bucket: undefined,
+      // 旧的 displayStatus 语义保留，行仍有态。
+      displayStatus: 'extracting',
+    };
+    const html = renderPage('organize', {
+      sources: conversationSources,
+      captures: [legacyCapture],
+      captureBuckets: null,
+      captureSettings: { enabled: true, executionPolicy: 'smart', reviewPolicy: 'auto' },
     });
-    expect(html).toContain('整理过，没有发现值得留存的内容');
-    // 落点修复（2026-09-15）：此前「N 个整理任务需要重试」跳设置页的整理方式 tab
-    expect(viewsSource).toContain('data-act="go-capture-log"');
-    expect(viewsSource).not.toContain('data-act="go-organize"');
+    expect(html).toContain('整理中');
+    // 计数兜底现算：1 条 active → 「进行中 1」而不是「进行中 0」。
+    expect(html).toContain('进行中 1');
+    expect(html).toContain('全部 1');
+  });
+
+  it('简单对话（有用消息 ≤2 条）且无任务的行不进列表；有任务的简单对话仍显示', () => {
+    const store = {
+      ...baseStore,
+      sources: [{
+        kind: 'conversation',
+        items: [
+          { id: 'conv-full', kind: 'conversation', title: '完整的多轮会话', updatedAt: '2026-09-15T02:00:00.000Z', messageCount: 8 },
+          { id: 'conv-tiny', kind: 'conversation', title: '打个招呼而已', updatedAt: '2026-09-14T02:00:00.000Z', messageCount: 2 },
+          { id: 'conv-none', kind: 'conversation', title: '还没得到回复', updatedAt: '2026-09-13T02:00:00.000Z', messageCount: 1 },
+        ],
+      }],
+      captures: [silentCapture],
+    };
+    // silentCapture 属 conv-1——不在本组数据里，无干扰。
+    const html = renderPage('organize', store);
+    expect(html).toContain('完整的多轮会话');
+    expect(html).not.toContain('打个招呼而已');
+    expect(html).not.toContain('还没得到回复');
+
+    // 有任务的简单对话不被过滤（整理中的条目不能凭空消失）。
+    const tinyWithTask = {
+      sources: [{
+        kind: 'conversation',
+        items: [
+          { id: 'conv-tiny', kind: 'conversation', title: '打个招呼而已', updatedAt: '2026-09-15T02:00:00.000Z', messageCount: 2 },
+        ],
+      }],
+      captures: [{ ...organizingCapture, conversationId: 'conv-tiny', conversationTitle: '打个招呼而已' }],
+      captureBuckets: { attention: 0, active: 1, silent: 0, done: 0 },
+      captureSettings: baseStore.captureSettings,
+    };
+    const withTask = renderPage('organize', tinyWithTask);
+    expect(withTask).toContain('打个招呼而已');
+    expect(withTask).toContain('整理中');
   });
 });
 
-describe('整理记录页引导层（app.js）', () => {
+describe('整理详情页', () => {
+  it('展示状态、当前步骤、时间与用量，动作与打开会话/返回齐备', () => {
+    const html = renderPage('organize', { captures: [detailCapture], sources: [] }, { captureId: 'rcap-x' });
+    expect(html).toContain('Saying hello');
+    expect(html).toContain('正在提炼候选');
+    expect(html).toContain('模型提炼中');
+    expect(html).toContain('1 分 5 秒');
+    expect(html).toContain('1234 tokens');
+    expect(html).toContain('data-action="pause"');
+    expect(html).toContain('data-act="open-conversation" data-id="conv-1"');
+    expect(html).toContain('data-act="go-back"');
+  });
+
+  it('整理过程五步进度条：stage 高亮当前步、已过步打勾', () => {
+    const html = renderPage('organize', { captures: [detailCapture], sources: [] }, { captureId: 'rcap-x' });
+    expect(html).toContain('ca-steps-bar');
+    expect(html).toContain('ca-step is-current">模型提炼中');
+    expect(html).toContain('ca-step is-done">读取会话内容');
+    expect((html.match(/ca-step(?!s)/g) || []).length).toBeGreaterThanOrEqual(5);
+    // 非提炼期（无 stage）不显示进度条。
+    const idle = renderPage('organize', {
+      captures: [{ ...detailCapture, stage: undefined, status: 'waiting_manual', displayStatus: 'waiting' }],
+      sources: [],
+    }, { captureId: 'rcap-x' });
+    expect(idle).not.toContain('ca-steps-bar');
+  });
+
+  it('已沉淀资产并入整合卡并内联完整正文：不靠跳转就能看到沉淀了什么', () => {
+    const html = renderPage(
+      'organize',
+      { captures: [detailCapture], sources: [], assets: [{ id: 'aa-1', title: '上线前必须确认影响范围', type: 'rule', status: 'active', statement: '上线前必须确认影响范围：用真实日志分层归因，不允许拍脑袋给结论。' }] },
+      { captureId: 'rcap-x' },
+    );
+    expect(html).toContain('已沉淀资产');
+    expect(html).toContain('上线前必须确认影响范围');
+    // 沉淀的具体内容直接展示（statement 内联），而非只有跳转按钮。
+    expect(html).toContain('用真实日志分层归因，不允许拍脑袋给结论。');
+    expect(html).toContain('data-act="open-asset" data-id="aa-1"');
+    // 合并：资产区随整合卡渲染，页面卡片数从 4 降为 3（结果/上下文/整合卡），
+    // 不再有独立的资产卡。
+    expect((html.match(/class="ca-card[ ">]/g) || []).length).toBe(3);
+    // 卡头不再出「查看资产」主按钮（明细已在卡内，与 review_candidates 同规则过滤）。
+    expect(html).not.toContain('data-action="view_assets"');
+  });
+
+  it('快照缺该资产（已删除）时退回类型·版本，不裸出内部 id', () => {
+    const html = renderPage('organize', { captures: [detailCapture], sources: [], assets: [] }, { captureId: 'rcap-x' });
+    expect(html).toContain('规则与偏好 · v1');
+  });
+
+  it('任务不存在时给兜底文案，不白屏', () => {
+    const html = renderPage('organize', { captures: [], sources: [] }, { captureId: 'rcap-gone' });
+    expect(html).toContain('这条整理任务不存在或已被清理');
+  });
+
+  // ── 2026-09-15 详情页改造：结果三态 + 对话上下文 + 证据映射 ──
+
+  const contextData = {
+    captureId: 'rcap-x',
+    conversationId: 'conv-1',
+    conversationTitle: 'Saying hello',
+    participants: [
+      { id: 'user', name: 'user', kind: 'user' },
+      { id: 'commander', name: 'commander', kind: 'commander' },
+      { id: 'worker-a', name: '代码评审员', kind: 'agent' },
+    ],
+    messages: [
+      { id: 'msg-1', label: 'm1', ts: '2026-09-15T01:00:00.000Z', role: 'user', from: 'user', to: [], text: '帮我把上线前的检查做成清单。', truncated: false, artifacts: [], sourceId: 'msg-aaa' },
+      { id: 'msg-2', label: 'm2', ts: '2026-09-15T01:01:00.000Z', role: 'assistant', from: 'commander', to: ['user'], text: '已生成上线检查清单，包含 12 项。', truncated: false, artifacts: [{ id: 'art-1', title: '上线检查清单' }], sourceId: 'msg-bbb' },
+      { id: 'msg-3', label: 'm3', ts: '2026-09-15T01:02:00.000Z', role: 'assistant', from: 'worker-a', to: ['user'], text: '第二条也补上了。', truncated: false, artifacts: [], sourceId: 'msg-ccc' },
+    ],
+  };
+  const contextStore = { captureContext: { captureId: 'rcap-x', data: contextData } };
+
+  it('未保存候选：完整内容块（判断全文 + 类型/作用域 + 证据映射），不再只剩一行标题', () => {
+    const candidate = {
+      id: 'rcand-1', status: 'rejected',
+      judgment: '上线前必须确认影响范围再发布。', value: '', summary: '上线前确认影响范围',
+      suggestedType: 'rule', suggestedScope: 'general',
+      evidenceRefs: [{ id: 'msg-aaa' }, { id: 'msg-bbb' }],
+    };
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: ['rcand-1'], status: 'completed', displayStatus: 'completed', displayReason: 'review_completed', confirmedAssetReceipts: [], reviewSummary: { total: 1, pending: 0, deferred: 0, promoted: 0, rejected: 1, missing: 0 } }],
+      sources: [], candidates: [candidate],
+      ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('整理结果');
+    // 完整内容块：判断全文（非截断标题）+ 类型 + 作用域 + 未保存标记。
+    expect(html).toContain('ca-result-item');
+    expect(html).toContain('上线前必须确认影响范围再发布。');
+    expect(html).toContain('规则与偏好');
+    expect(html).toContain('未保存');
+    expect(html).toContain('来自消息 m1');
+    // 卡头三态：已完成 · 未保存。
+    expect(html).toContain('已完成 · 未保存');
+    // 内容已内联，行级跳转入口移除。
+    expect(html).not.toContain('data-act="open-candidate"');
+  });
+
+  it('已保存：卡头「已完成 · 已保存」，成果由已沉淀资产区代表', () => {
+    const confirmed = {
+      id: 'rcand-4', status: 'confirmed', promotedAssetId: 'aa-1',
+      judgment: '接口变更要同步更新文档。', value: '', summary: '',
+      suggestedType: 'template', suggestedScope: 'general',
+      capabilities: { canEdit: false, canPromote: false, countsAsPending: false, isTerminal: true },
+    };
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: ['rcand-4'], status: 'completed', displayStatus: 'completed', displayReason: 'review_completed', reviewSummary: { total: 1, pending: 0, deferred: 0, promoted: 1, rejected: 0, missing: 0 } }],
+      sources: [], candidates: [confirmed],
+      assets: [{ id: 'aa-1', title: '接口变更文档同步', type: 'template', status: 'active', statement: '接口变更后必须同步更新对应文档。' }],
+      ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('已完成 · 已保存');
+    // 成果在已沉淀资产区（完整 statement 内联）。
+    expect(html).toContain('已沉淀资产');
+    expect(html).toContain('接口变更后必须同步更新对应文档。');
+    // 结果区不重复列已保存候选。
+    expect(html).not.toContain('接口变更要同步更新文档。');
+  });
+
+  it('待确认候选内嵌完整确认表单：类型/判断编辑/证据/保存并使用，不必跳「待我处理」', () => {
+    const pending = {
+      id: 'rcand-2', status: 'pending_review',
+      judgment: '发布前先跑一遍冒烟清单。', value: '', summary: '发布前冒烟',
+      suggestedType: 'skill_method', suggestedScope: 'general',
+      evidenceRefs: [{ id: 'msg-aaa' }],
+      capabilities: { canEdit: true, canPromote: true, canReject: true, countsAsPending: true, isSnoozed: false },
+    };
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: ['rcand-2'], status: 'review_ready', displayStatus: 'review_ready', displayReason: 'review_pending' }],
+      sources: [], candidates: [pending],
+      ...contextStore,
+    }, { captureId: 'rcap-x' });
+    // 合并卡：表单块嵌在执行信息卡内部（ca-pending-embed），不是独立的卡。
+    expect(html).toContain('ca-pending-embed');
+    expect(html).not.toContain('ca-card ca-candidate-detail');
+    expect(html).toContain('data-f="judgment"');
+    expect(html).toContain('data-act="cand-type"');
+    expect(html).toContain('data-act="cand-adopt-with-form" data-id="rcand-2"');
+    expect(html).toContain('data-act="cand-decide"');
+    expect(html).toContain('保存并使用');
+    // 控件 id 带候选后缀（一页多卡不撞 id）。
+    expect(html).toContain('ca-cand-judgment-rcand-2');
+    // 整合排版（2026-09-15 重排）：状态/元信息/动作收进一行卡头（ca-capture-head
+    // 内同层），表单作为主体在其下；不再是两块上下拼接。
+    const headAt = html.indexOf('ca-capture-head');
+    expect(headAt).toBeGreaterThan(-1);
+    const headSection = html.slice(headAt, html.indexOf('ca-pending-embed'));
+    expect(headSection).toContain('模型用量');
+    expect(headSection).toContain('data-act="open-conversation"');
+    expect(headSection).toContain('ca-meta-row');
+    expect(headSection).toContain('ca-head-actions');
+    // 元信息流式呈现（标签+值同 span），不再用 kv 网格。
+    expect(html).toContain('ca-meta-item');
+    expect(html).not.toContain('ca-kv');
+    // 表单仍在卡头下方。
+    expect(html.indexOf('ca-cand-judgment-rcand-2')).toBeGreaterThan(html.indexOf('模型用量'));
+    expect(html.indexOf('ca-cand-judgment-rcand-2')).toBeGreaterThan(html.indexOf('data-act="open-conversation"'));
+    // 去重：待确认候选不再在「整理结果」区重复列出，改为一行指引。
+    expect(html).toContain('发现 1 条待确认内容');
+    expect((html.match(/发布前先跑一遍冒烟清单。/g) || []).length).toBe(1);
+    // 内嵌后详情页动作行不再出「去确认」跳转。
+    expect(html).not.toContain('data-act="go-review"');
+  });
+
+  it('混合候选：待确认出表单块、未保存出完整内容块，两卡控件 id 不重复', () => {
+    const pending = {
+      id: 'rcand-2', status: 'pending_review',
+      judgment: '发布前先跑一遍冒烟清单。', value: '', summary: '',
+      suggestedType: 'rule', suggestedScope: 'general',
+      capabilities: { canEdit: true, canPromote: true, countsAsPending: true, isSnoozed: false },
+    };
+    const rejected = {
+      id: 'rcand-3', status: 'rejected',
+      judgment: '接口变更要同步更新文档。', value: '', summary: '',
+      suggestedType: 'template', suggestedScope: 'general',
+      capabilities: { canEdit: false, canPromote: false, countsAsPending: false, isTerminal: true },
+    };
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: ['rcand-2', 'rcand-3'], status: 'review_ready', displayStatus: 'review_ready' }],
+      sources: [], candidates: [pending, rejected],
+      ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('ca-cand-judgment-rcand-2');
+    expect(html).toContain('发现 1 条待确认内容');
+    // 未保存候选：完整内容块（全文可见），没有第二份表单控件。
+    expect(html).toContain('接口变更要同步更新文档。');
+    expect(html).toContain('ca-result-item');
+    expect(html).not.toContain('ca-cand-judgment-rcand-3');
+    expect((html.match(/data-f="judgment"/g) || []).length).toBe(1);
+  });
+
+  it('无候选：显示模型给出的理由与筛选原因白话', () => {
+    const html = renderPage('organize', {
+      captures: [{
+        ...detailCapture, candidateIds: [], status: 'completed', displayStatus: 'completed',
+        displayReason: 'no_candidate', noCandidateReason: '这轮只是复述已知信息，没有新的可沉淀内容。',
+        filterReason: 'model_no_candidate',
+      }],
+      sources: [], ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('没有发现值得留存的内容');
+    expect(html).toContain('这轮只是复述已知信息');
+    expect(html).toContain('模型判断这轮没有可沉淀的内容');
+  });
+
+  it('进行中：结果区给出占位说明', () => {
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: [] }], sources: [], ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('整理还在进行');
+  });
+
+  it('对话上下文：参与角色 chips + 消息时间线（角色名/标签/折叠/产物）', () => {
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: [], screeningSignals: ['preference', 'decision'] }],
+      sources: [], ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('对话上下文');
+    expect(html).toContain('参与角色');
+    expect(html).toContain('消息时间线');
+    expect(html).toContain('你');
+    expect(html).toContain('指挥官');
+    expect(html).toContain('代码评审员');
+    expect(html).toContain('帮我把上线前的检查做成清单。');
+    expect(html).toContain('m1 ·');
+    expect(html).toContain('上线检查清单');
+    expect((html.match(/ca-tl-row/g) || []).length).toBeGreaterThanOrEqual(3);
+    // 价值信号白话化（manual_selection 被过滤不显示）
+    expect(html).toContain('用户偏好');
+    expect(html).toContain('决策');
+    expect(html).not.toContain('手动选择');
+  });
+
+  it('长消息折叠为 details，短消息直出', () => {
+    const longText = `${'深度内容。'.repeat(80)}\n第二段也很长。`;
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: [] }], sources: [],
+      captureContext: {
+        captureId: 'rcap-x',
+        data: { ...contextData, messages: [{ ...contextData.messages[0], text: longText, truncated: true }] },
+      },
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('ca-tl-body');
+    expect(html).toContain('内容过长，已截断');
+  });
+
+  it('上下文不可用/加载中降级文案', () => {
+    const unavailable = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: [] }], sources: [],
+      captureContext: { captureId: 'rcap-x', data: null },
+    }, { captureId: 'rcap-x' });
+    expect(unavailable).toContain('消息内容不可用');
+
+    const loading = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: [] }], sources: [],
+      captureContext: { captureId: 'rcap-x', loading: true, data: null },
+    }, { captureId: 'rcap-x' });
+    expect(loading).toContain('正在读取对话上下文');
+  });
+
+  it('上下文缓存与当前任务不符时不串用', () => {
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: [] }], sources: [],
+      captureContext: { captureId: 'rcap-other', data: contextData },
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('消息内容不可用');
+    expect(html).not.toContain('帮我把上线前的检查做成清单。');
+  });
+});
+
+describe('待我处理（决策中心）', () => {
+  const issueSource = {
+    kind: 'artifact_file',
+    items: [{
+      id: 'src-1', kind: 'artifact_file', title: '架构决策记录.md',
+      status: 'failed', statusReason: 'file_index_failed',
+    }],
+  };
+
+  it('来源异常行出现且默认收起；展开后出异常明细与处理动作', () => {
+    const store = { sources: [conversationSources[0], issueSource], candidates: [] };
+    const collapsed = renderPage('review', store);
+    expect(collapsed).toContain('1 条来源记录需要处理');
+    expect(collapsed).toContain('data-act="toggle-source-issues"');
+    expect(collapsed).not.toContain('data-action="retry"');
+
+    const open = renderPage('review', store, { sourceIssueOpen: 'open' });
+    expect(open).toContain('架构决策记录.md');
+    expect(open).toContain('文件索引失败，可重试');
+    expect(open).toContain('data-action="retry"');
+    expect(open).toContain('data-kind="artifact_file"');
+  });
+
+  it('健康来源不出现在待我处理（异常驱动，无常态清单）', () => {
+    const html = renderPage('review', { sources: [conversationSources[0]], candidates: [] });
+    expect(html).not.toContain('条来源记录需要处理');
+    expect(html).not.toContain('Saying hello');
+  });
+
+  it('整理失败入口指向整理页；处理记录收进折叠', () => {
+    const html = renderPage('review', {
+      sources: [], candidates: [], captureCounts: { failed: 2 },
+    });
+    expect(html).toContain('data-act="go-organize"');
+    expect(html).toContain('2 个整理任务需要重试');
+  });
+});
+
+describe('资产详情（使用记录并入）', () => {
+  const asset = { id: 'aa-1', title: '上线前必须确认影响范围', type: 'rule', status: 'active', scope: 'general', updatedAt: '2026-09-15T00:00:00.000Z' };
+  const proofs = [
+    {
+      id: 'ev-1', kind: 'usage_recorded', occurredAt: '2026-09-15T01:00:00.000Z',
+      refs: { assetId: 'aa-1', conversationId: 'conv-1', transferProofId: 'tp-1', version: 2 },
+    },
+    {
+      id: 'ev-2', kind: 'projection_confirmed', occurredAt: '2026-09-14T01:00:00.000Z',
+      refs: { assetId: 'aa-1', conversationId: 'conv-1' },
+    },
+  ];
+
+  it('使用记录区按时间倒序整句化，可评事件展开出评价按钮', () => {
+    const html = renderPage(
+      'overview',
+      { assets: [asset], proofs, sources: conversationSources },
+      { assetId: 'aa-1', proofEventId: 'ev-1' },
+    );
+    expect(html).toContain('使用记录');
+    expect(html).toContain('被实际使用');
+    expect(html).toContain('对话《Saying hello》里');
+    expect(html).toContain('data-act="proof-toggle" data-id="ev-1"');
+    expect(html).toContain('data-feedback="positive"');
+    expect(html).toContain('data-act="proof-rate"');
+  });
+
+  it('未使用资产出占位说明，不裸空白', () => {
+    const html = renderPage('overview', { assets: [asset], proofs: [], sources: [] }, { assetId: 'aa-1' });
+    expect(html).toContain('还没有被真实使用过');
+  });
+});
+
+describe('交互反馈与响应式（2026-09-15 全面优化）', () => {
+  const css = readFileSync(resolve(rootDir, 'src/renderer/cognition-assets.css'), 'utf8');
+
+  it('写操作按钮有旋转圈、首载有骨架、静默刷新有进度条', () => {
+    expect(css).toContain('ca-spin');
+    expect(css).toContain('.ca-btn.is-pending::after');
+    expect(css).toContain('ca-skel-row');
+    expect(css).toContain('ca-shimmer');
+    expect(css).toContain('ca-refresh-slide');
+    // 骨架结构真的渲染（首载态）
+    const html = renderPage('organize', { captures: [], sources: [] }, {});
+    expect(html).not.toContain('ca-skel-row'); // loaded=true 时不显示
+    const loadingHtml = renderPage('organize', { loaded: false, loading: true, captures: [], sources: [] }, {});
+    expect(loadingHtml).toContain('ca-skel-row');
+  });
+
+  it('抽屉展开/收起走 grid 行高过渡，收起态不可聚焦', () => {
+    expect(css).toContain('.ca-drawer');
+    expect(css).toContain('grid-template-rows: 0fr');
+    expect(css).toContain('.ca-drawer.is-open');
+    expect(css).toContain('visibility: hidden');
+  });
+
+  it('同页重画保持滚动位置（轮询不再弹回顶部），切页仍归零', () => {
+    // render 里保存并恢复 #ca-scroll 的 scrollTop，且只在路由指纹相同时恢复。
+    expect(viewsSource).toContain('lastRenderKey');
+    expect(viewsSource).toContain('restoreScroll');
+    expect(viewsSource).toContain('main.scrollTop = restoreScroll');
+  });
+
+  it('设置项乐观更新：先落选中态即时反馈，失败回滚重抛', () => {
+    const policyCase = appSource.slice(appSource.indexOf("case 'capture-policy'"), appSource.indexOf("case 'capture-toggle'"));
+    expect(policyCase).toContain('S.captureSettings = Object.assign');
+    expect(policyCase).toContain('NS.notify()');
+    expect(policyCase).toContain('S.captureSettings = previous');
+    expect(policyCase).toContain('throw error');
+    expect(appSource).toContain("setAttribute('aria-busy', 'true')");
+  });
+
+  it('响应式两档断点 + 减少动效尊重', () => {
+    expect(css).toContain('@media (max-width: 980px)');
+    expect(css).toContain('@media (max-width: 720px)');
+    expect(css).toContain('prefers-reduced-motion');
+  });
+
+  it('英文 kicker 与 tab 副标题已删（2026-09-15 子安要求）：hero 只有标题，tab 只留标题文字', () => {
+    // 源码级：hero 无 kicker 参数/元素；TABS 无 descKey；tab 渲染无 <small>。
+    expect(viewsSource).not.toContain('ca-kicker');
+    expect(viewsSource).not.toContain('<small>');
+    expect(coreSource).not.toContain('descKey');
+    expect(css).not.toContain('.ca-kicker');
+    // 页面级：三个页面（含设置页/详情页）都不再出英文标题或副标题。
+    for (const page of ['organize', 'organize-settings', 'overview']) {
+      const html = renderPage(page, { captures: [], sources: [], assets: [] });
+      expect(html).not.toContain('ORGANIZE');
+      expect(html).not.toContain('SETTINGS');
+      expect(html).not.toContain('COGNITION TREE');
+    }
+    const detail = renderPage('organize', { captures: [detailCapture], sources: [] }, { captureId: 'rcap-x' });
+    expect(detail).not.toContain('>LOG<');
+  });
+});
+
+describe('引导层（app.js / core.js）', () => {
+  it('表单读取就近化：readCandidateForm 从被点按钮向上找最近的表单卡（多卡不串）', () => {
+    expect(appSource).toContain('function readCandidateForm(anchorEl)');
+    expect(appSource).toContain("anchorEl.closest('.ca-candidate-detail')");
+    expect(appSource).toContain('readCandidateForm(el)');
+  });
+
   it('批量动作有确认弹窗（写死条数）并从 store 收敛可执行行', () => {
     expect(appSource).toContain("case 'capture-batch'");
     expect(appSource).toContain('capture_batch_retry_confirm');
-    expect(appSource).toContain('capture_batch_run_confirm');
-    expect(appSource).toContain('actions.includes(el.dataset.batch');
     expect(appSource).toContain('A.captureBatch');
-  });
-
-  it('configure_model 的处理出口是应用设置页（模型配置所在地）', () => {
-    expect(appSource).toContain("case 'go-configure-model'");
-    expect(appSource).toContain("setView('settings')");
-  });
-
-  it('详情入口分流存在；整理进行中有 4s 轮询且限定在两个活页', () => {
-    expect(appSource).toContain("case 'open-capture-detail'");
-    expect(appSource).toContain('scheduleCapturePoll');
-    expect(appSource).toContain("S.route.name === 'organize-history' || S.route.name === 'capture-detail'");
-    expect(appSource).toContain("capture.bucket === 'active'");
   });
 
   it('开始整理 = 建任务后立即 runNow（runNow 是既定的唯一额度消耗入口）', () => {
@@ -250,106 +789,16 @@ describe('整理记录页引导层（app.js）', () => {
     expect(runNow).toBeGreaterThan(autoStart);
     expect(block).toContain("capture.status === 'waiting_manual'");
   });
-});
 
-describe('从历史会话整理页（整理中置顶/按钮态/可点进详情）', () => {
-  const sources = [{
-    kind: 'conversation',
-    items: [
-      { id: 'conv-1', kind: 'conversation', title: 'Saying hello', updatedAt: '2026-09-15T02:00:00.000Z' },
-      { id: 'conv-2', kind: 'conversation', title: 'design-review 技能用途', updatedAt: '2026-09-14T02:00:00.000Z' },
-      { id: 'conv-3', kind: 'conversation', title: '查询可用的skills列表', updatedAt: '2026-09-13T02:00:00.000Z' },
-    ],
-  }];
-  const organizingCapture = {
-    id: 'rcap-org', conversationId: 'conv-2', visibility: 'visible',
-    conversationTitle: 'design-review 技能用途',
-    status: 'extracting', bucket: 'active', displayStatus: 'extracting',
-    displayReason: 'extracting', stage: 'model_extraction',
-    actions: ['pause', 'cancel', 'open_conversation'],
-    reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
-    updatedAt: '2026-09-15T03:00:00.000Z',
-  };
-
-  it('整理中的条目排到最顶，按钮变「整理中」且禁用', () => {
-    const html = renderOrganizeHistory({ sources, captures: [organizingCapture] });
-    const top = html.indexOf('design-review 技能用途');
-    const plain = html.indexOf('Saying hello');
-    expect(top).toBeGreaterThan(-1);
-    expect(plain).toBeGreaterThan(top);
-    expect(html).toContain('整理中');
-    expect(html).toContain('is-disabled');
-    expect(html).toContain('正在提炼候选');
+  it('快照不再拉 KSTAR 经验；时间线仍拉（资产详情使用记录依赖）', () => {
+    expect(coreSource).not.toContain('kstar.experiences.list');
+    expect(coreSource).toContain('recall.timeline.list');
   });
 
-  it('整理中条目可点进详情（open-capture-detail）；无任务条目保留「开始整理」', () => {
-    const html = renderOrganizeHistory({ sources, captures: [organizingCapture] });
-    expect(html).toContain('data-act="open-capture-detail" data-id="rcap-org"');
-    expect(html).toContain('data-act="organize-conv" data-id="conv-1"');
-    expect(html).toContain('开始整理');
-  });
-
-  it('失败/待确认的条目出状态 chip 且同样可进详情；不重复出「开始整理」', () => {
-    const failedCapture = {
-      ...organizingCapture,
-      id: 'rcap-fail', conversationId: 'conv-3', conversationTitle: '查询可用的skills列表',
-      status: 'failed', bucket: 'attention', displayStatus: 'failed',
-      displayReason: 'capture_failed', actions: ['retry', 'cancel', 'open_conversation'],
-    };
-    const html = renderOrganizeHistory({ sources, captures: [failedCapture] });
-    expect(html).toContain('data-act="open-capture-detail" data-id="rcap-fail"');
-    expect(html).toContain('>失败</span>');
-    expect(html).not.toContain('data-act="organize-conv" data-id="conv-3"');
-  });
-});
-
-describe('整理详情页', () => {
-  const detailCapture = {
-    id: 'rcap-x', conversationId: 'conv-1', visibility: 'visible',
-    conversationTitle: 'Saying hello',
-    status: 'extracting', bucket: 'active', displayStatus: 'extracting',
-    displayReason: 'extracting', stage: 'model_extraction',
-    attempt: 2, durationMs: 65_000,
-    modelUsage: { totalTokens: 1234 },
-    createdAt: '2026-09-15T01:00:00.000Z',
-    startedAt: '2026-09-15T01:00:05.000Z',
-    actions: ['pause', 'cancel', 'open_conversation'],
-    reviewSummary: { total: 3, pending: 2, deferred: 0, promoted: 1, rejected: 0, missing: 0 },
-    confirmedAssetReceipts: [{ assetId: 'aa-1', assetType: 'rule', version: '1', scope: 'general', sourceRefCount: 2, reviewDecisionId: 'rd_1' }],
-    updatedAt: '2026-09-15T01:02:00.000Z',
-  };
-
-  it('展示状态、当前步骤、时间与用量，动作与打开会话/返回齐备', () => {
-    const html = renderCaptureDetail({ captures: [detailCapture], captureId: 'rcap-x' });
-    expect(html).toContain('Saying hello');
-    expect(html).toContain('正在提炼候选');
-    expect(html).toContain('模型提炼中');
-    expect(html).toContain('1 分 5 秒');
-    expect(html).toContain('1234 tokens');
-    expect(html).toContain('data-action="pause"');
-    expect(html).toContain('data-act="open-conversation" data-id="conv-1"');
-    expect(html).toContain('data-act="go-back"');
-  });
-
-  it('已沉淀资产逐条可跳资产详情，标题取资产自身（缺资产时退回类型·版本）', () => {
-    const html = renderCaptureDetail({
-      captures: [detailCapture],
-      captureId: 'rcap-x',
-      assets: [
-        { id: 'aa-1', title: '上线前必须确认影响范围', type: 'rule', status: 'active' },
-      ],
-    });
-    expect(html).toContain('已沉淀资产');
-    expect(html).toContain('上线前必须确认影响范围');
-    expect(html).toContain('data-act="open-asset" data-id="aa-1"');
-
-    const noAsset = renderCaptureDetail({ captures: [detailCapture], captureId: 'rcap-x' });
-    expect(noAsset).toContain('规则与偏好 · v1');
-    expect(noAsset).not.toContain('aa-1</div>');
-  });
-
-  it('任务不存在时给兜底文案，不白屏', () => {
-    const html = renderCaptureDetail({ captures: [], captureId: 'rcap-gone' });
-    expect(html).toContain('这条整理任务不存在或已被清理');
+  it('configure_model 的处理出口是应用设置页；整理进行中轮询限定整理页', () => {
+    expect(appSource).toContain("case 'go-configure-model'");
+    expect(appSource).toContain("setView('settings')");
+    expect(appSource).toContain("S.route.name === 'organize'");
+    expect(appSource).toContain("capture.bucket === 'active'");
   });
 });

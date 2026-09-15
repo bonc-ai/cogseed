@@ -52,10 +52,8 @@
 }
 .ca-tab:hover { color: var(--ca-ink); }
 .ca-tab strong { font-size: var(--font-size-4); font-weight: 600; }
-.ca-tab small { font-size: var(--font-size-2); color: var(--ca-ink3); }
 .ca-tab.is-on { border-bottom-color: var(--ca-green); }
 .ca-tab.is-on strong { color: var(--ca-green-d); }
-.ca-tab.is-on small { color: var(--color-ca-green-mid); }
 
 /* ── 滚动区 ───────────────────────────────────────────────── */
 /* min-height:0 必须保留：flex item 默认 min-height:auto，会拒绝收缩到内容高度以下，
@@ -67,9 +65,7 @@
 .ca-scroll { contain: paint; }
 
 /* ── Hero ─────────────────────────────────────────────────── */
-.ca-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
-.ca-hero-main { min-width: 0; }
-.ca-kicker { font-size: 11px; letter-spacing: .12em; color: var(--color-ca-ink-4); text-transform: uppercase; }
+.ca-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 16px; }.ca-hero-main { min-width: 0; }
 .ca-hero h2 { font-size: var(--font-size-6); letter-spacing: .2px; margin-top: 4px; }
 .ca-hero p { color: var(--ca-ink2); margin-top: 5px; max-width: 680px; font-size: var(--font-size-3); }
 .ca-stats { display: flex; border: 1px solid var(--ca-line); border-radius: var(--radius-3); background: var(--ca-card); overflow: hidden; flex: 0 0 auto; }
@@ -167,6 +163,8 @@
 .ca-row-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ca-row-meta { color: var(--ca-ink3); font-size: 12px; margin-top: 2px; }
 .ca-chevron { color: var(--color-ca-ink-faint); font-size: 16px; }
+/* 共享 chevron 图标（icons.js）在行内的对齐：继承颜色、尺寸略小于字符版。 */
+.ca-chevron .ca-chevron-svg { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
 /* 整理记录：行标题即「打开来源会话」入口（行内有按钮，整行不再导航）。 */
 .ca-row-link { cursor: pointer; width: fit-content; max-width: 100%; }
 .ca-row-link:hover, .ca-row-link:focus-visible { color: var(--color-ca-green-text); text-decoration: underline; }
@@ -216,6 +214,8 @@
 .ca-proof-head-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 
 .ca-tree-cap { text-align: center; color: var(--ca-ink3); font-size: 12px; margin: 2px 0 10px; }
+/* 骨架阶段教学说明（2026-09-15）：比 cap 更弱一档的浅灰，与功能说明区分。 */
+.ca-tree-cap.ca-tree-wip { color: var(--color-ca-ink-4); margin: -6px 0 10px; }
 
 /* ── 简化交互：整卡可点 / 高级折叠区 ─────────────────────── */
 /* 候选卡整卡即入口：点任意位置进详情（行内决策按钮已移除）。 */
@@ -245,8 +245,15 @@
 .ca-more-copy { flex: 1 1 auto; min-width: 0; }
 .ca-more-copy strong { display: block; font-size: var(--font-size-3); font-weight: 600; }
 .ca-more-copy span { display: block; font-size: var(--font-size-2); color: var(--ca-ink3); margin-top: 1px; }
-/* 写操作进行中：按钮禁用+变淡（重画后自然消失） */
+/* 写操作进行中：按钮禁用+变淡+尾部旋转圈（重画后自然消失）。旋转圈用
+   ::after 注入，不改 uiButton 的 DOM 契约。 */
 .ca-btn.is-pending, .ca-more-toggle.is-pending { opacity: .55; pointer-events: none; }
+.ca-btn.is-pending::after {
+  content: ''; display: inline-block; width: 11px; height: 11px; margin-left: 7px;
+  border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
+  vertical-align: -1px; animation: ca-spin .7s linear infinite;
+}
+@keyframes ca-spin { to { transform: rotate(360deg); } }
 
 /* ── 候选 ─────────────────────────────────────────────────── */
 .ca-candidate .ca-content-text { color: var(--ca-ink2); }
@@ -295,6 +302,7 @@
 /* ── 空态与加载 ───────────────────────────────────────────── */
 .ca-empty { text-align: center; padding: 34px 24px 30px; color: var(--ca-ink2); display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .ca-empty-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--color-ca-fill-empty); color: var(--color-ca-green-dim); display: flex; align-items: center; justify-content: center; font-size: var(--font-size-6); }
+.ca-empty-icon .ca-empty-glyph { width: 20px; height: 20px; }
 .ca-empty strong { color: var(--ca-ink); font-size: var(--font-size-5); }
 .ca-empty > span { max-width: 620px; font-size: var(--font-size-3); line-height: 1.7; }
 .ca-empty .ca-actions { justify-content: center; }
@@ -387,7 +395,172 @@
 .ca-setcard .ca-note { margin: 0; }
 .ca-line-center { justify-content: center; margin-top: 12px; }
 
-/* tab 行紧凑模式（窄窗口自适应，2026-09-14）：隐藏副标题小字腾宽度，
-   6 个 tab 不挤压折行。由 app.js 测量后切换。 */
-.ca-tabs.is-compact .ca-tab small { display: none; }
+/* tab 行紧凑模式（窄窗口自适应）：标题折行时收紧 padding，由 app.js 测量后
+   切换（2026-09-15 起副标题已删，只剩标题折行一种触发）。 */
 .ca-tabs.is-compact .ca-tab { padding: 8px 11px 9px; }
+
+/* ── 沉淀设置（2026-09-15 齿轮入口 + 独立设置页） ─────────────────── */
+/* 齿轮按钮（整理页 hero 右侧）：走共享 uiIconButton + icons.js('settings')，
+   此处仅做 ca 作用域的视觉对齐（边框圆角，不抢主操作）。 */
+.ca-app .ca-settings-btn {
+  width: 34px; height: 34px; border-radius: 9px;
+  border: 1px solid var(--ca-line); background: var(--ca-card); color: var(--ca-ink2);
+}
+.ca-app .ca-settings-btn:hover { color: var(--ca-ink); border-color: var(--ca-green-line); }
+
+/* 夜间自动沉淀条状卡：左说明 / 中时间 / 右开关。 */
+.ca-setting-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; }
+.ca-setting-copy { flex: 1 1 240px; min-width: 0; }
+.ca-setting-time { display: inline-flex; align-items: center; gap: 8px; color: var(--ca-ink3); font-size: var(--font-size-2); }
+.ca-setting-time input[type="time"] {
+  border: 1px solid var(--ca-line); border-radius: 8px; padding: 5px 8px;
+  background: var(--ca-card); color: var(--ca-ink); font-family: inherit; font-size: var(--font-size-3);
+}
+
+/* toggle 开关：44×24 滑块，键盘可达（role=switch + aria-checked）。 */
+.ca-switch {
+  flex: 0 0 auto; width: 44px; height: 24px; border-radius: 999px;
+  border: 1px solid var(--ca-line); background: var(--color-ca-hover);
+  position: relative; cursor: pointer; padding: 0; transition: background-color .2s ease, border-color .2s ease;
+}
+.ca-switch-knob {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .2s ease;
+}
+.ca-switch.is-on { background: var(--ca-green); border-color: var(--ca-green-line); }
+.ca-switch.is-on .ca-switch-knob { transform: translateX(20px); }
+.ca-switch:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: 2px; }
+
+/* ── 交互反馈与过渡（2026-09-15 全面交互优化） ────────────────── */
+
+/* 列表行/按钮/chip 的状态变化都给过渡：硬切换在轮询重画下会闪。 */
+.ca-row.is-flat { transition: background-color .15s ease; }
+.ca-row.is-flat:hover { background: var(--color-ca-hover); }
+.ca-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
+.ca-chip { transition: background-color .15s ease, color .15s ease; }
+
+/* 静默刷新指示条：同页 reload（操作后/4s 轮询）期间顶部 2px 进度流动，
+   首载不走这里（首载有骨架）。 */
+.ca-app { position: relative; }
+.ca-app.is-refreshing::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; z-index: 5;
+  background: linear-gradient(90deg, transparent, var(--color-ca-green-text, #2f9e63), transparent);
+  background-size: 40% 100%; background-repeat: no-repeat;
+  animation: ca-refresh-slide 1s ease-in-out infinite;
+}
+@keyframes ca-refresh-slide {
+  0% { background-position: -40% 0; }
+  100% { background-position: 140% 0; }
+}
+
+/* 首载骨架：三行渐变条，比「加载中…」快有结构感。 */
+.ca-loading { padding: 8px 0; }
+.ca-skel-row {
+  height: 44px; margin-bottom: 10px; border-radius: 10px;
+  background: linear-gradient(90deg, var(--color-ca-hover) 25%, rgba(255,255,255,.55) 50%, var(--color-ca-hover) 75%);
+  background-size: 200% 100%; animation: ca-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes ca-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* 策略抽屉：常驻 DOM、用 grid 行高做展开/收起过渡（0fr↔1fr 可对内容动画，
+   不需要拍一个魔法 max-height）。收起时 inner 隐藏，键盘不会聚焦进去。 */
+.ca-drawer { display: grid; grid-template-rows: 0fr; opacity: .35; transition: grid-template-rows .3s ease, opacity .22s ease; }
+.ca-drawer.is-open { grid-template-rows: 1fr; opacity: 1; }
+.ca-drawer > .ca-drawer-inner { overflow: hidden; min-height: 0; visibility: hidden; transition: visibility 0s .3s; }
+.ca-drawer.is-open > .ca-drawer-inner { visibility: visible; transition: visibility 0s 0s; }
+
+/* 整理页「调整/收起」就地切换文案不重画整页：按钮 label 直接改由 app.js 处理，
+   这里只保证切换瞬间的过渡。 */
+
+/* 整理页策略状态行（hero 右侧，2026-09-15 布局调整）：开关态 + 当前时机 +
+   调整入口；窄窗口随 hero 换行。 */
+.ca-organize-policy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── 整理详情：对话上下文时间线（2026-09-15 详情页改造） ─────────────
+   展示口径=本次整理实际读到的消息；user=绿点、assistant=灰点。 */
+.ca-tl { margin-top: 4px; }
+.ca-tl-row { display: flex; gap: 10px; padding: 10px 2px; border-top: 1px solid var(--ca-line); }
+.ca-tl-row:first-child { border-top: 0; }
+.ca-tl-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--ca-ink3); }
+.ca-tl-row.is-user .ca-tl-dot { background: var(--ca-green); }
+.ca-tl-main { min-width: 0; flex: 1 1 auto; }
+.ca-tl-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ca-tl-head b { font-size: var(--font-size-3); }
+.ca-tl-text { margin-top: 4px; color: var(--ca-ink2); font-size: var(--font-size-3); white-space: pre-wrap; word-break: break-word; }
+.ca-tl-body { margin-top: 4px; }
+.ca-tl-body summary { cursor: pointer; color: var(--ca-ink2); font-size: var(--font-size-3); list-style: none; }
+.ca-tl-body summary::after { content: ' ▾'; color: var(--ca-ink3); font-size: var(--font-size-1); }
+.ca-tl-body[open] summary { color: var(--ca-ink3); margin-bottom: 4px; }
+.ca-tl-body[open] summary::after { content: ' ▴'; }
+.ca-tl .ca-chips { margin-top: 6px; }
+/* 无候选时模型自述理由的引用块。 */
+.ca-quote { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--ca-line); color: var(--ca-ink2); font-size: var(--font-size-3); white-space: pre-wrap; word-break: break-word; }
+.ca-participants { margin: 2px 0 6px; }
+
+/* 整理过程五步进度条（详情页，extracting 期间轮询自推进）。 */
+.ca-steps-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 12px 0 4px; }
+.ca-step { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ca-line); color: var(--ca-ink3); font-size: var(--font-size-2); transition: color .15s ease, border-color .15s ease, background-color .15s ease; }
+.ca-step.is-done { color: var(--ca-ink2); border-color: var(--ca-green-line); }
+.ca-step.is-done::after { content: ' ✓'; font-size: var(--font-size-1); }
+.ca-step.is-current { color: var(--color-ca-green-text); border-color: var(--ca-green-line); background: var(--ca-green-bg); font-weight: 600; }
+.ca-step-arrow { color: var(--ca-ink3); font-size: var(--font-size-1); font-style: normal; }
+
+/* 整理详情：整合卡（2026-09-15 重排，非拼接）——状态 chip + 元信息流 +
+   动作按钮收进一行卡头，腾出的空间让待确认表单成为主体。 */
+.ca-capture-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.ca-capture-head > .ca-chip { flex: 0 0 auto; }
+.ca-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; min-width: 0; flex: 1 1 auto; }
+.ca-meta-item { color: var(--ca-ink2); font-size: var(--font-size-2); white-space: nowrap; }
+.ca-meta-item i { font-style: normal; color: var(--ca-ink3); margin-right: 5px; }
+.ca-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ca-pending-embed { margin-top: 12px; }
+.ca-pending-block + .ca-pending-block { border-top: 1px dashed var(--ca-line); margin-top: 14px; padding-top: 14px; }
+
+/* 已沉淀资产区（2026-09-15 并入整合卡）：直接展示沉淀正文，浅底内容块
+   区分层级；「查看资产」降为项内次级入口。 */
+.ca-deposit { margin-top: 14px; }
+.ca-deposit-item { border: 1px solid var(--ca-line); border-radius: 10px; background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
+.ca-deposit-item + .ca-deposit-item { margin-top: 8px; }
+.ca-deposit-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ca-deposit-head b { font-size: var(--font-size-3); }
+.ca-deposit-item .ca-content-text { margin-top: 6px; }
+.ca-deposit-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+
+/* 整理结果：未保存候选的完整内容块（2026-09-15——不保存后仍能看到
+   当时整理出的具体内容）；与已沉淀资产块同一视觉语言。 */
+.ca-result-item { border: 1px solid var(--ca-line); border-radius: 10px; background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
+.ca-result-item + .ca-result-item { margin-top: 8px; }
+.ca-result-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ca-result-head .ca-right { margin-left: auto; }
+.ca-result-item .ca-content-text { margin-top: 6px; }
+.ca-result-item .ca-chips { margin-top: 6px; }
+
+/* ── 响应式适配（2026-09-15）───────────────────────────────────
+   模块此前无断点：窄窗口下 kv 三列互挤、工具栏与行内按钮溢出。
+   两档断点：
+   980px —— 中等窗口：统计栅格 3→2 列、hero 统计换行；
+   720px —— 窄窗口：kv 单列、工具栏纵向堆叠、行内按钮组换行、抽屉卡收紧。 */
+@media (max-width: 980px) {
+  .ca-kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ca-stats { flex-wrap: wrap; }
+  .ca-hero { flex-wrap: wrap; }
+  .ca-capture-toolbar { gap: 6px; }
+}
+@media (max-width: 720px) {
+  .ca-kv { grid-template-columns: minmax(0, 1fr); }
+  .ca-capture-toolbar { flex-direction: column; align-items: stretch; }
+  .ca-capture-toolbar .ca-right { margin-left: 0; }
+  .ca-capture-head { align-items: flex-start; }
+  .ca-head-actions { margin-left: 0; }
+  .ca-row.is-flat { flex-wrap: wrap; row-gap: 6px; }
+  .ca-row-side { margin-left: 0; flex-wrap: wrap; }
+  .ca-setcard { padding: 12px 13px; }
+  .ca-card { padding: 13px 14px; }
+  .ca-field { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+/* 尊重系统「减少动态效果」：动画是增强，不是功能。 */
+@media (prefers-reduced-motion: reduce) {
+  .ca-btn.is-pending::after, .ca-skel-row, .ca-app.is-refreshing::before { animation: none; }
+  .ca-drawer, .ca-drawer > .ca-drawer-inner, .ca-btn, .ca-chip, .ca-row.is-flat { transition: none; }
+}

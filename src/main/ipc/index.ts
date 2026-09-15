@@ -2548,6 +2548,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, capture: await recallCaptures.readRecallCaptureWorkflow(ctx.userId, captureId) };
   },
 
+  'recall.captures.context': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, context: await recallCaptures.readRecallCaptureContext(ctx.userId, captureId) };
+  },
+
   'recall.captures.retry': async ({ captureId } = {}, ctx) => {
     if (!safeId(captureId)) throw new Error('invalid recall capture id');
     return { ok: true, capture: await recallCaptures.retryRecallCapture(ctx.userId, captureId) };

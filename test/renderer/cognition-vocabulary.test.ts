@@ -135,6 +135,24 @@ describe('cognition vocabulary 门禁：后端枚举必须有前端翻译', () =
     expect(missing, `CAPTURE_STAGE 缺翻译: ${missing.join(', ')}`).toEqual([]);
   });
 
+  it('价值信号全集（RecallCaptureValueSignal 九值）逐项入字典', () => {
+    const screening = read('src/main/features/recall/capture-value-screening.ts');
+    const signals = unionLiterals(screening, 'RecallCaptureValueSignal');
+    expect(signals).toHaveLength(9);
+    const dict = new Set(dictKeys('CAPTURE_VALUE_SIGNAL'));
+    const missing = signals.filter((s) => !dict.has(s));
+    expect(missing, `CAPTURE_VALUE_SIGNAL 缺翻译: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('筛选原因全集（RecallCaptureFilterReason 六值）逐项入字典', () => {
+    const screening = read('src/main/features/recall/capture-value-screening.ts');
+    const reasons = unionLiterals(screening, 'RecallCaptureFilterReason');
+    expect(reasons).toHaveLength(6);
+    const dict = new Set(dictKeys('CAPTURE_FILTER_REASON'));
+    const missing = reasons.filter((r) => !dict.has(r));
+    expect(missing, `CAPTURE_FILTER_REASON 缺翻译: ${missing.join(', ')}`).toEqual([]);
+  });
+
   it('整理记录标题绝不裸出内部 ID', () => {
     // recordTitle 的取值顺序：会话标题 → 兜底文案；不含裸 id 回退。
     expect(vocabSource).toContain('conversationTitle || record.title');
