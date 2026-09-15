@@ -1,0 +1,275 @@
+{
+  "namespace": "CogSeedDesignSystem_f581b5",
+  "components": [
+    {
+      "name": "Button",
+      "sourcePath": "components/actions/Button.jsx"
+    },
+    {
+      "name": "IconButton",
+      "sourcePath": "components/actions/IconButton.jsx"
+    },
+    {
+      "name": "Composer",
+      "sourcePath": "components/composer/Composer.jsx"
+    },
+    {
+      "name": "Avatar",
+      "sourcePath": "components/data/Avatar.jsx"
+    },
+    {
+      "name": "AvatarGroup",
+      "sourcePath": "components/data/Avatar.jsx"
+    },
+    {
+      "name": "Card",
+      "sourcePath": "components/cards/Card.jsx"
+    },
+    {
+      "name": "CardFooter",
+      "sourcePath": "components/cards/Card.jsx"
+    },
+    {
+      "name": "GroupHeading",
+      "sourcePath": "components/cards/Card.jsx"
+    },
+    {
+      "name": "ConnectorCard",
+      "sourcePath": "components/data/ConnectorCard.jsx"
+    },
+    {
+      "name": "DataTable",
+      "sourcePath": "components/data/DataTable.jsx"
+    },
+    {
+      "name": "ScrollArea",
+      "sourcePath": "components/data/ScrollArea.jsx"
+    },
+    {
+      "name": "AspectRatio",
+      "sourcePath": "components/data/ScrollArea.jsx"
+    },
+    {
+      "name": "Tag",
+      "sourcePath": "components/data/Tag.jsx"
+    },
+    {
+      "name": "TaskListItem",
+      "sourcePath": "components/data/TaskListItem.jsx"
+    },
+    {
+      "name": "Alert",
+      "sourcePath": "components/feedback/Alert.jsx"
+    },
+    {
+      "name": "Dialog",
+      "sourcePath": "components/feedback/Dialog.jsx"
+    },
+    {
+      "name": "EmptyState",
+      "sourcePath": "components/feedback/EmptyState.jsx"
+    },
+    {
+      "name": "InlineAuthBar",
+      "sourcePath": "components/feedback/InlineAuthBar.jsx"
+    },
+    {
+      "name": "Popover",
+      "sourcePath": "components/feedback/Popover.jsx"
+    },
+    {
+      "name": "Tooltip",
+      "sourcePath": "components/feedback/Popover.jsx"
+    },
+    {
+      "name": "ProgressBar",
+      "sourcePath": "components/feedback/ProgressBar.jsx"
+    },
+    {
+      "name": "Spinner",
+      "sourcePath": "components/feedback/ProgressBar.jsx"
+    },
+    {
+      "name": "Skeleton",
+      "sourcePath": "components/feedback/Skeleton.jsx"
+    },
+    {
+      "name": "StatusPill",
+      "sourcePath": "components/feedback/StatusPill.jsx"
+    },
+    {
+      "name": "StatusDot",
+      "sourcePath": "components/feedback/StatusPill.jsx"
+    },
+    {
+      "name": "StatusCapsule",
+      "sourcePath": "components/feedback/StatusPill.jsx"
+    },
+    {
+      "name": "StepList",
+      "sourcePath": "components/feedback/StepList.jsx"
+    },
+    {
+      "name": "Toast",
+      "sourcePath": "components/feedback/Toast.jsx"
+    },
+    {
+      "name": "Checkbox",
+      "sourcePath": "components/forms/Checkbox.jsx"
+    },
+    {
+      "name": "Field",
+      "sourcePath": "components/forms/Field.jsx"
+    },
+    {
+      "name": "Input",
+      "sourcePath": "components/forms/Input.jsx"
+    },
+    {
+      "name": "Radio",
+      "sourcePath": "components/forms/Radio.jsx"
+    },
+    {
+      "name": "RadioCard",
+      "sourcePath": "components/forms/Radio.jsx"
+    },
+    {
+      "name": "SearchableSelect",
+      "sourcePath": "components/forms/SearchableSelect.jsx"
+    },
+    {
+      "name": "Select",
+      "sourcePath": "components/forms/Select.jsx"
+    },
+    {
+      "name": "Slider",
+      "sourcePath": "components/forms/Slider.jsx"
+    },
+    {
+      "name": "Stepper",
+      "sourcePath": "components/forms/Stepper.jsx"
+    },
+    {
+      "name": "Switch",
+      "sourcePath": "components/forms/Switch.jsx"
+    },
+    {
+      "name": "TagInput",
+      "sourcePath": "components/forms/TagInput.jsx"
+    },
+    {
+      "name": "Textarea",
+      "sourcePath": "components/forms/Textarea.jsx"
+    },
+    {
+      "name": "Icon",
+      "sourcePath": "components/foundation/Icon.jsx"
+    },
+    {
+      "name": "Accordion",
+      "sourcePath": "components/navigation/Accordion.jsx"
+    },
+    {
+      "name": "Breadcrumb",
+      "sourcePath": "components/navigation/Breadcrumb.jsx"
+    },
+    {
+      "name": "DropdownMenu",
+      "sourcePath": "components/navigation/DropdownMenu.jsx"
+    },
+    {
+      "name": "NavItem",
+      "sourcePath": "components/navigation/NavItem.jsx"
+    },
+    {
+      "name": "Pagination",
+      "sourcePath": "components/navigation/Pagination.jsx"
+    },
+    {
+      "name": "SegmentedControl",
+      "sourcePath": "components/navigation/SegmentedControl.jsx"
+    },
+    {
+      "name": "Tabs",
+      "sourcePath": "components/navigation/Tabs.jsx"
+    },
+    {
+      "name": "CommandPalette",
+      "sourcePath": "components/retrieval/CommandPalette.jsx"
+    },
+    {
+      "name": "DateRangePicker",
+      "sourcePath": "components/retrieval/DateRangePicker.jsx"
+    },
+    {
+      "name": "Calendar",
+      "sourcePath": "components/retrieval/DateRangePicker.jsx"
+    },
+    {
+      "name": "Dropzone",
+      "sourcePath": "components/retrieval/Dropzone.jsx"
+    },
+    {
+      "name": "FileRow",
+      "sourcePath": "components/retrieval/Dropzone.jsx"
+    },
+    {
+      "name": "UserMenu",
+      "sourcePath": "components/navigation/UserMenu.jsx"
+    },
+    {
+      "name": "SidebarTasks",
+      "sourcePath": "components/navigation/SidebarTasks.jsx"
+    },
+    {
+      "name": "SettingsSection",
+      "sourcePath": "components/forms/SettingsSection.jsx"
+    },
+    {
+      "name": "PageHeader",
+      "sourcePath": "components/navigation/PageHeader.jsx"
+    },
+    {
+      "name": "InlineConfirm",
+      "sourcePath": "components/feedback/InlineConfirm.jsx"
+    }
+  ],
+  "unexposedExports": [
+    {
+      "name": "csIcons",
+      "sourcePath": "components/foundation/Icon.jsx"
+    },
+    {
+      "name": "ResourceCard",
+      "sourcePath": "components/cards/Card.jsx"
+    },
+    {
+      "name": "CardGrid",
+      "sourcePath": "components/cards/Card.jsx"
+    },
+    {
+      "name": "PopoverItem",
+      "sourcePath": "components/feedback/Popover.jsx"
+    },
+    {
+      "name": "ComposerQueue",
+      "sourcePath": "components/composer/ComposerQueue.jsx"
+    },
+    {
+      "name": "ComposerAttachments",
+      "sourcePath": "components/composer/ComposerAttachments.jsx"
+    },
+    {
+      "name": "ComposerVoice",
+      "sourcePath": "components/composer/ComposerVoice.jsx"
+    },
+    {
+      "name": "ComposerNotice",
+      "sourcePath": "components/composer/ComposerNotice.jsx"
+    },
+    {
+      "name": "ComposerRichDraft",
+      "sourcePath": "components/composer/ComposerRichDraft.jsx"
+    }
+  ]
+}

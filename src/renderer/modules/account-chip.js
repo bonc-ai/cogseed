@@ -1,19 +1,19 @@
-// ─── 左下角融合入口（用户状态 + 设置，单击展开 / 再击收起）─────────────────
-// Sidebar footer 唯一常驻入口。与 Settings › 账号 tab 共享同一套 Hub 交互后端：
+// ─── 左下角共享 UserMenu（个人身份 + 设置）──────────────────────────────
+// Sidebar footer 唯一常驻入口。展示结构由 ui-user-menu.js 统一生成，
+// 与 Settings › 账号 tab 共享同一套 Hub 交互后端：
 //   - 只消费既有 IPC 通道（hub-account.status / start_login / logout / me），
 //     不新增、不修改主进程或 Hub 服务交互；
 //   - 登录完成同样靠 `hub-account:login-result` 推送（preload 的 onPushEvent
 //     允许同一 channel 多个监听，与本模块并存的 hub-account.js 互不影响）；
 //   - token 永不过 IPC 边界，本模块只读 renderer-safe 的 status DTO。
 //
-// 交互模型（docs/design/sidebar-click-toggle-draft.html v2）：
-//   - 单击入口 = 展开面板，再单击 = 收起；展开后保持打开，直到显式关闭
-//     （再点入口 / 面板底部「收起面板」按钮 / 点击面板外 / Esc）；
+// 交互模型：
+//   - 单击入口 = 展开面板，再单击 = 收起；展开后保持打开，直到再点入口、
+//     点击面板外或按 Esc；
 //   - hover 只做入口视觉高亮，不触发任何开合——原 hover 延迟开合与「钉住」
 //     概念已移除，入口不再出现 pin 图标；
-//   - 三态一致：未登录 / 已登录 / Hub 不可用，面板均向上展开并与入口
-//     无缝衔接（重叠 6px）；未登录时登录动作放在面板头卡（点击头卡 →
-//     浏览器授权登录）；
+//   - 三态一致：未登录 / 已登录 / Hub 不可用，入口都先表达本地个人工作空间；
+//     Hub 登录是菜单动作，不再把整个左下角入口伪装成服务状态按钮；
 //   - 键盘 Enter/Space 在入口上切换展开，Tab 可在面板项间移动，
 //     Esc 关闭并把焦点还给入口；
 //   - 原独立「设置」按钮并入面板（各态均保留），设置视图的 active 高亮由
@@ -45,18 +45,6 @@ const _chipState = {
   isOpen: false,
   settingsActive: false, // 当前视图是否为 settings（boot.js 同步）
 };
-
-/** Render a UI icon by name (single source: modules/icons.js — no emoji). */
-function _chipIcon(name, className) {
-  const html = window.uiIconHtml ? window.uiIconHtml(name, className) : '';
-  return html || `<span class="${className || 'ui-icon'}"></span>`;
-}
-
-function _chipEscapeHtml(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 /** Mask long ids for display (e.g. cogseed_acc_abc123 → cogseed_acc_***123). */
 function _chipMaskId(id) {
@@ -110,12 +98,31 @@ function _chipRoot() {
   return document.getElementById('hub-account-chip-root');
 }
 
-function _chipStatusDotClass() {
-  const s = _chipState.status;
-  if (!s) return 'warn';
-  if (_chipState.mode === 'signing-in') return 'warn';
-  if (s.hub_reachable === false) return 'warn';
-  return 'on';
+function _chipIdentity(status, mode) {
+  const signedIn = mode === 'signed-in' && status && status.signed_in;
+  if (mode === 'signing-in') {
+    return {
+      name: t('hub.chip.signing_in'),
+      description: t('hub.chip.signing_in_sub'),
+      avatar: { icon: 'loader', variant: 'spin' },
+    };
+  }
+  if (signedIn) {
+    const maskedId = _chipMaskId(status.account_id || '');
+    const initial = String(status.account_id || '?').trim().charAt(0).toUpperCase() || '?';
+    return {
+      name: maskedId,
+      description: t('hub.chip.personal_workspace'),
+      avatar: { text: initial, variant: 'gradient', role: 'avatar' },
+      nameRole: 'name',
+    };
+  }
+  const localName = t('hub.chip.local_user');
+  return {
+    name: localName,
+    description: t('hub.chip.personal_workspace'),
+    avatar: { text: String(localName).trim().charAt(0).toUpperCase() || '?', variant: 'gradient' },
+  };
 }
 
 function _renderChip() {
@@ -129,55 +136,29 @@ function _renderChip() {
   const status = _chipState.status;
   const mode = _chipState.mode;
   const signedIn = mode === 'signed-in' && status && status.signed_in;
-  const degraded = _chipDegraded();
-
-  let inner = '';
-  if (mode === 'signing-in') {
-    inner = `
-      <span class="hub-chip-avatar is-spin">${_chipIcon('loader', 'hub-chip-avatar-icon')}</span>
-      <span class="hub-chip-meta">
-        <span class="hub-chip-name">${_chipEscapeHtml(t('hub.chip.signing_in'))}</span>
-        <span class="hub-chip-sub">${_chipEscapeHtml(t('hub.chip.signing_in_sub'))}</span>
-      </span>
-      <span class="hub-chip-dot warn" aria-hidden="true"></span>`;
-  } else if (signedIn) {
-    const maskedId = _chipMaskId(status.account_id || '');
-    const initial = String(status.account_id || '?').trim().charAt(0).toUpperCase() || '?';
-    inner = `
-      <span class="hub-chip-avatar is-gradient" aria-hidden="true">${_chipEscapeHtml(initial)}</span>
-      <span class="hub-chip-meta">
-        <span class="hub-chip-name" data-chip-role="name">${maskedId}</span>
-        <span class="hub-chip-sub">${maskedId}</span>
-      </span>
-      <span class="hub-chip-dot ${_chipStatusDotClass()}" aria-hidden="true"></span>
-      <span class="hub-chip-chev">${_chipIcon('chevron-down')}</span>`;
-  } else if (degraded) {
-    inner = `
-      <span class="hub-chip-avatar is-signed">${_chipIcon('settings', 'hub-chip-avatar-icon')}</span>
-      <span class="hub-chip-meta">
-        <span class="hub-chip-name">${_chipEscapeHtml(t('hub.chip.degraded_name'))}</span>
-        <span class="hub-chip-sub">${_chipEscapeHtml(t('hub.chip.degraded_sub'))}</span>
-      </span>
-      <span class="hub-chip-dot warn" aria-hidden="true"></span>
-      <span class="hub-chip-chev">${_chipIcon('chevron-down')}</span>`;
-  } else {
-    // 未登录：单行「登录 Hub」（副标题已按设计删除，hover 面板头卡保留引导文案）。
-    inner = `
-      <span class="hub-chip-avatar">${_chipIcon('user', 'hub-chip-avatar-icon')}</span>
-      <span class="hub-chip-meta">
-        <span class="hub-chip-name">${_chipEscapeHtml(t('hub.chip.sign_in'))}</span>
-      </span>
-      <span class="hub-chip-dot ${_chipStatusDotClass()}" aria-hidden="true"></span>
-      <span class="hub-chip-chev">${_chipIcon('chevron-down')}</span>`;
-  }
+  const identity = _chipIdentity(status, mode);
 
   root.innerHTML = `
-    <button type="button" class="hub-chip${signedIn ? ' is-signed-row' : ''}" id="hub-account-chip"
-            aria-haspopup="menu" aria-expanded="${_chipState.isOpen ? 'true' : 'false'}"${mode === 'signing-in' ? ' disabled' : ''}>${inner}</button>
+    ${window.uiUserMenuTrigger({
+      id: 'hub-account-chip',
+      open: _chipState.isOpen,
+      disabled: mode === 'signing-in',
+      name: identity.name,
+      description: identity.description,
+      nameRole: identity.nameRole,
+      avatar: identity.avatar,
+      ariaLabel: t('hub.chip.user_menu_label', { name: identity.name }),
+    })}
     <div class="hub-chip-menu" id="hub-account-chip-menu" role="menu"${_chipState.isOpen && _chipState.mode !== 'signing-in' ? '' : ' hidden'}></div>`;
 
   const chip = root.querySelector('#hub-account-chip');
   chip.addEventListener('click', () => _onChipClick(chip));
+  chip.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    void _openMenu(event.key === 'ArrowUp' ? 'last' : 'first');
+  });
   // 服务不可达时给整条入口一个解释性 tooltip。
   if (status && status.hub_reachable === false && !signedIn && mode !== 'signing-in') {
     chip.setAttribute('title', t('hub.account.hub_unreachable'));
@@ -194,6 +175,7 @@ function _renderChip() {
       if (displayName) {
         nameEl.textContent = displayName;
         avatarEl.textContent = String(displayName).trim().charAt(0).toUpperCase() || avatarEl.textContent;
+        chip.setAttribute('aria-label', t('hub.chip.user_menu_label', { name: displayName }));
       }
     });
   }
@@ -209,39 +191,32 @@ async function _renderMenu() {
   const status = _chipState.status;
   const degraded = _chipDegraded();
 
-  const settingsItem = `
-    <button type="button" class="hub-chip-menu-item${_chipState.settingsActive ? ' is-active' : ''}" data-chip-action="settings" role="menuitem">
-      ${_chipIcon('settings', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.settings'))}
-    </button>`;
-  // 面板底部「收起面板」按钮：等价于再次点击入口（各态均保留）。
-  const collapseItem = `
-    <div class="hub-chip-menu-sep" role="separator"></div>
-    <button type="button" class="hub-chip-menu-collapse" data-chip-action="collapse" role="menuitem">
-      ${_chipIcon('chevron-down', 'hub-chip-menu-collapse-icon')}${_chipEscapeHtml(t('hub.chip.menu.collapse'))}
-    </button>`;
+  const identity = _chipIdentity(status, _chipState.mode);
+  const items = [{
+    action: 'settings',
+    label: t('hub.chip.menu.settings'),
+    icon: 'settings',
+    active: _chipState.settingsActive,
+  }];
 
   if (degraded) {
-    menu.innerHTML = `
-      <div class="hub-chip-menu-note">
-        ${_chipIcon('warning', 'hub-chip-menu-note-icon')}${_chipEscapeHtml(t('hub.chip.menu.hub_unavailable'))}
-      </div>
-      ${settingsItem}
-      ${collapseItem}`;
+    menu.innerHTML = window.uiUserMenuPanel({
+      ...identity,
+      note: { icon: 'warning', label: t('hub.chip.menu.hub_unavailable') },
+      items,
+    });
     _bindMenuActions(menu);
     return;
   }
 
   if (_chipState.mode === 'signed-out') {
-    menu.innerHTML = `
-      <div class="hub-chip-menu-head is-clickable" data-chip-action="sign-in" role="menuitem" tabindex="0">
-        <span class="hub-chip-avatar is-signed">${_chipIcon('user', 'hub-chip-avatar-icon')}</span>
-        <div class="hub-chip-menu-id">
-          <span class="hub-chip-menu-name">${_chipEscapeHtml(t('hub.chip.sign_in'))}</span>
-          <span class="hub-chip-menu-sub">${_chipEscapeHtml(t('hub.chip.menu.sign_in_sub'))}</span>
-        </div>
-      </div>
-      ${settingsItem}
-      ${collapseItem}`;
+    items.push({
+      action: 'sign-in',
+      label: t('hub.chip.sign_in'),
+      icon: 'user',
+      separatorBefore: true,
+    });
+    menu.innerHTML = window.uiUserMenuPanel({ ...identity, items });
     _bindMenuActions(menu);
     return;
   }
@@ -249,24 +224,19 @@ async function _renderMenu() {
   // 已登录：账号头部 + 设置 + 退出 + 收起。
   // P3394 ACCOUNT-01/03：菜单只保留当前账号状态、设置、退出登录；
   // 不再提供「账号概览」「登录设备」入口，也不展示 LocalIdentity 绑定状态。
-  const maskedId = _chipMaskId((status && status.account_id) || '');
   const displayName = await _chipDisplayName();
-  const name = displayName || maskedId;
-
-  menu.innerHTML = `
-    <div class="hub-chip-menu-head">
-      <span class="hub-chip-avatar is-signed">${_chipIcon('user', 'hub-chip-avatar-icon')}</span>
-      <div class="hub-chip-menu-id">
-        <span class="hub-chip-menu-name">${_chipEscapeHtml(name)}</span>
-        <span class="hub-chip-menu-sub">${_chipEscapeHtml(maskedId)}</span>
-      </div>
-    </div>
-    ${settingsItem}
-    <div class="hub-chip-menu-sep" role="separator"></div>
-    <button type="button" class="hub-chip-menu-item is-danger" data-chip-action="sign-out" role="menuitem">
-      ${_chipIcon('log-out', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.account.sign_out'))}
-    </button>
-    ${collapseItem}`;
+  if (displayName) {
+    identity.name = displayName;
+    identity.avatar = { text: String(displayName).trim().charAt(0).toUpperCase() || '?', variant: 'gradient' };
+  }
+  items.push({
+    action: 'sign-out',
+    label: t('hub.account.sign_out'),
+    icon: 'log-out',
+    danger: true,
+    separatorBefore: true,
+  });
+  menu.innerHTML = window.uiUserMenuPanel({ ...identity, items });
   _bindMenuActions(menu);
 }
 
@@ -288,7 +258,7 @@ function _closeMenu() {
   if (chip) chip.setAttribute('aria-expanded', 'false');
 }
 
-function _openMenu() {
+async function _openMenu(focusTarget = '') {
   const root = _chipRoot();
   const menu = root && root.querySelector('#hub-account-chip-menu');
   const chip = root && root.querySelector('#hub-account-chip');
@@ -298,7 +268,12 @@ function _openMenu() {
   if (root) root.classList.add('is-open');
   menu.hidden = false;
   chip.setAttribute('aria-expanded', 'true');
-  void _renderMenu();
+  await _renderMenu();
+  if (focusTarget) {
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    const target = focusTarget === 'last' ? items[items.length - 1] : items[0];
+    if (target && typeof target.focus === 'function') target.focus();
+  }
 }
 
 // ── 交互 ─────────────────────────────────────────────────────────────────
@@ -371,7 +346,6 @@ async function _refresh() {
 
 async function _onMenuAction(action) {
   _closeMenu();
-  if (action === 'collapse') return; // 收起按钮：仅关闭面板
   if (action === 'sign-out') {
     if (!window.confirm(t('hub.account.sign_out_confirm'))) return;
     try {
@@ -453,11 +427,26 @@ function _initChip() {
     _closeMenu();
   });
   document.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape' && _chipState.isOpen) {
       _closeMenu();
       const chip = root && root.querySelector('#hub-account-chip');
       if (chip) chip.focus();
+      return;
     }
+    if (!_chipState.isOpen || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    const menu = root && root.querySelector('#hub-account-chip-menu');
+    if (!menu || !menu.contains(e.target)) return;
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    if (!items.length) return;
+    const current = items.indexOf(e.target);
+    let next = current;
+    if (e.key === 'ArrowDown') next = (current + 1 + items.length) % items.length;
+    else if (e.key === 'ArrowUp') next = (current - 1 + items.length) % items.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = items.length - 1;
+    e.preventDefault();
+    items[next].focus();
   });
 }
 

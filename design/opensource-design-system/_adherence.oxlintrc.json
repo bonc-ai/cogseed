@@ -1,0 +1,496 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/actions/**",
+              "components/composer/**",
+              "components/data/**",
+              "components/feedback/**",
+              "components/forms/**",
+              "components/foundation/**",
+              "components/navigation/**",
+              "components/retrieval/**",
+              "ui_kits/enterprise-app/**"
+            ],
+            "message": "Import public components from the supplied index.js source entry; browser previews use _ds_bundle.js."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!var\\(--cs-font-sans\\)|system-ui\\b|sans-serif\\b)/i]",
+        "message": "Use system sans-serif through var(--cs-font-sans); do not name or bundle fonts."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "Accordion": {
+        "replaces": []
+      },
+      "Alert": {
+        "replaces": []
+      },
+      "Avatar": {
+        "replaces": []
+      },
+      "Breadcrumb": {
+        "replaces": []
+      },
+      "Button": {
+        "replaces": []
+      },
+      "Card": {
+        "replaces": []
+      },
+      "Checkbox": {
+        "replaces": []
+      },
+      "CommandGroup": {
+        "replaces": []
+      },
+      "Composer": {
+        "replaces": []
+      },
+      "ConnectorCard": {
+        "replaces": []
+      },
+      "DataTableColumn": {
+        "replaces": []
+      },
+      "DateRangePicker": {
+        "replaces": []
+      },
+      "Dialog": {
+        "replaces": []
+      },
+      "DropdownMenuGroup": {
+        "replaces": []
+      },
+      "Dropzone": {
+        "replaces": []
+      },
+      "EmptyState": {
+        "replaces": []
+      },
+      "Field": {
+        "replaces": []
+      },
+      "Icon": {
+        "replaces": []
+      },
+      "IconButton": {
+        "replaces": []
+      },
+      "InlineAuthBar": {
+        "replaces": []
+      },
+      "Input": {
+        "replaces": []
+      },
+      "NavItem": {
+        "replaces": []
+      },
+      "Pagination": {
+        "replaces": []
+      },
+      "Popover": {
+        "replaces": []
+      },
+      "ProgressBar": {
+        "replaces": []
+      },
+      "Radio": {
+        "replaces": []
+      },
+      "ScrollArea": {
+        "replaces": []
+      },
+      "SearchableSelect": {
+        "replaces": []
+      },
+      "SegmentedControl": {
+        "replaces": []
+      },
+      "Select": {
+        "replaces": []
+      },
+      "Skeleton": {
+        "replaces": []
+      },
+      "Slider": {
+        "replaces": []
+      },
+      "StatusPill": {
+        "replaces": []
+      },
+      "StepList": {
+        "replaces": []
+      },
+      "Stepper": {
+        "replaces": []
+      },
+      "Switch": {
+        "replaces": []
+      },
+      "Tabs": {
+        "replaces": []
+      },
+      "Tag": {
+        "replaces": []
+      },
+      "TagInput": {
+        "replaces": []
+      },
+      "TaskListItem": {
+        "replaces": []
+      },
+      "Textarea": {
+        "replaces": []
+      },
+      "Toast": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--cs-accent",
+      "--cs-accent-dash",
+      "--cs-accent-grad",
+      "--cs-accent-ink",
+      "--cs-accent-ring",
+      "--cs-accent-tint",
+      "--cs-accent-wash",
+      "--cs-accent-wash-soft",
+      "--cs-attention",
+      "--cs-attention-bg",
+      "--cs-attention-border",
+      "--cs-attention-ink",
+      "--cs-avatar-bg",
+      "--cs-border",
+      "--cs-border-control",
+      "--cs-border-field",
+      "--cs-border-hairline",
+      "--cs-border-strong",
+      "--cs-border-subtle",
+      "--cs-brand",
+      "--cs-canvas",
+      "--cs-card-grid-width-max",
+      "--cs-card-row-width-max",
+      "--cs-card-width-max",
+      "--cs-composer-width-max",
+      "--cs-composer-width-min",
+      "--cs-control-h",
+      "--cs-control-h-lg",
+      "--cs-control-h-login",
+      "--cs-control-h-segment",
+      "--cs-control-h-sm",
+      "--cs-critical",
+      "--cs-critical-bg",
+      "--cs-critical-border",
+      "--cs-critical-border-strong",
+      "--cs-dur-control",
+      "--cs-dur-hover",
+      "--cs-dur-panel",
+      "--cs-dur-progress",
+      "--cs-dur-view",
+      "--cs-ease-out",
+      "--cs-ease-panel",
+      "--cs-fade-bottom",
+      "--cs-field-padding-x",
+      "--cs-fill-quiet",
+      "--cs-focus-outline",
+      "--cs-focus-ring",
+      "--cs-font-mono",
+      "--cs-font-sans",
+      "--cs-font-serif",
+      "--cs-gap-section",
+      "--cs-home-background",
+      "--cs-icon-size",
+      "--cs-icon-stroke",
+      "--cs-ink",
+      "--cs-ink-24",
+      "--cs-ink-32",
+      "--cs-ink-45",
+      "--cs-ink-55",
+      "--cs-ink-60",
+      "--cs-ink-70",
+      "--cs-ink-body",
+      "--cs-layer-command",
+      "--cs-layer-modal",
+      "--cs-layer-modal-popover",
+      "--cs-layer-popover",
+      "--cs-layer-sticky",
+      "--cs-layer-task-menu",
+      "--cs-layer-toast",
+      "--cs-link",
+      "--cs-link-hover",
+      "--cs-overlay-disabled",
+      "--cs-overlay-fill",
+      "--cs-overlay-hover",
+      "--cs-overlay-hover-soft",
+      "--cs-panel-info-width",
+      "--cs-radius-card",
+      "--cs-radius-field",
+      "--cs-radius-full",
+      "--cs-radius-lg",
+      "--cs-radius-md",
+      "--cs-radius-sm",
+      "--cs-radius-window",
+      "--cs-radius-xs",
+      "--cs-row-list",
+      "--cs-row-menu",
+      "--cs-row-nav",
+      "--cs-row-option",
+      "--cs-row-table",
+      "--cs-row-table-head",
+      "--cs-scrim",
+      "--cs-scrollbar",
+      "--cs-scrollbar-hover",
+      "--cs-scrollbar-w",
+      "--cs-selected",
+      "--cs-shadow-inset-hairline",
+      "--cs-shadow-lg",
+      "--cs-shadow-md",
+      "--cs-shadow-sm",
+      "--cs-shadow-window",
+      "--cs-sidebar-bottom",
+      "--cs-sidebar-top",
+      "--cs-sidebar-width",
+      "--cs-size-body",
+      "--cs-size-body-lg",
+      "--cs-size-caption",
+      "--cs-size-dialog-title",
+      "--cs-size-heading",
+      "--cs-size-label",
+      "--cs-size-meta",
+      "--cs-size-numeric",
+      "--cs-size-title",
+      "--cs-size-ui",
+      "--cs-size-ui-sm",
+      "--cs-space-1",
+      "--cs-space-13",
+      "--cs-space-2",
+      "--cs-space-22",
+      "--cs-space-3",
+      "--cs-space-4",
+      "--cs-space-6",
+      "--cs-space-8",
+      "--cs-success",
+      "--cs-success-bg",
+      "--cs-success-bg-soft",
+      "--cs-success-border",
+      "--cs-success-ink",
+      "--cs-success-ink-soft",
+      "--cs-surface-subtle",
+      "--cs-tab-underline",
+      "--cs-text-body",
+      "--cs-text-disabled",
+      "--cs-text-muted",
+      "--cs-text-on-accent",
+      "--cs-text-placeholder",
+      "--cs-text-secondary",
+      "--cs-thread-width",
+      "--cs-thread-width-home",
+      "--cs-titlebar-height",
+      "--cs-tracking-label",
+      "--cs-transition-hover",
+      "--cs-type-body",
+      "--cs-type-caption",
+      "--cs-type-label",
+      "--cs-type-numeric",
+      "--cs-type-title",
+      "--cs-type-ui",
+      "--cs-white",
+      "--cs-window-close",
+      "--cs-window-maximize",
+      "--cs-window-minimize"
+    ],
+    "tokenKinds": {
+      "--cs-white": "color",
+      "--cs-canvas": "color",
+      "--cs-sidebar-top": "color",
+      "--cs-sidebar-bottom": "color",
+      "--cs-surface-subtle": "color",
+      "--cs-fill-quiet": "color",
+      "--cs-avatar-bg": "color",
+      "--cs-ink": "color",
+      "--cs-ink-body": "color",
+      "--cs-ink-70": "color",
+      "--cs-ink-60": "color",
+      "--cs-ink-55": "color",
+      "--cs-ink-45": "color",
+      "--cs-ink-32": "color",
+      "--cs-ink-24": "color",
+      "--cs-brand": "other",
+      "--cs-accent": "color",
+      "--cs-accent-grad": "color",
+      "--cs-accent-ink": "color",
+      "--cs-accent-wash": "color",
+      "--cs-accent-wash-soft": "color",
+      "--cs-accent-tint": "color",
+      "--cs-accent-ring": "color",
+      "--cs-accent-dash": "color",
+      "--cs-success": "color",
+      "--cs-success-ink": "color",
+      "--cs-success-ink-soft": "color",
+      "--cs-success-bg": "color",
+      "--cs-success-bg-soft": "color",
+      "--cs-success-border": "color",
+      "--cs-attention": "color",
+      "--cs-attention-ink": "color",
+      "--cs-attention-bg": "color",
+      "--cs-attention-border": "color",
+      "--cs-critical": "color",
+      "--cs-critical-bg": "color",
+      "--cs-critical-border": "color",
+      "--cs-critical-border-strong": "color",
+      "--cs-border-subtle": "color",
+      "--cs-border-hairline": "color",
+      "--cs-border": "color",
+      "--cs-border-field": "color",
+      "--cs-border-strong": "color",
+      "--cs-border-control": "color",
+      "--cs-overlay-hover": "color",
+      "--cs-overlay-hover-soft": "color",
+      "--cs-overlay-fill": "color",
+      "--cs-overlay-disabled": "color",
+      "--cs-scrim": "color",
+      "--cs-scrollbar": "color",
+      "--cs-scrollbar-hover": "color",
+      "--cs-text-body": "font",
+      "--cs-text-secondary": "font",
+      "--cs-text-muted": "font",
+      "--cs-text-placeholder": "font",
+      "--cs-text-disabled": "font",
+      "--cs-link": "color",
+      "--cs-link-hover": "color",
+      "--cs-text-on-accent": "font",
+      "--cs-selected": "color",
+      "--cs-focus-ring": "color",
+      "--cs-home-background": "other",
+      "--cs-focus-outline": "other",
+      "--cs-window-close": "other",
+      "--cs-window-minimize": "other",
+      "--cs-window-maximize": "other",
+      "--cs-shadow-sm": "shadow",
+      "--cs-shadow-md": "shadow",
+      "--cs-shadow-lg": "shadow",
+      "--cs-shadow-window": "shadow",
+      "--cs-shadow-inset-hairline": "shadow",
+      "--cs-tab-underline": "shadow",
+      "--cs-fade-bottom": "color",
+      "--cs-layer-task-menu": "other",
+      "--cs-layer-sticky": "other",
+      "--cs-layer-popover": "other",
+      "--cs-layer-modal": "other",
+      "--cs-layer-modal-popover": "other",
+      "--cs-layer-command": "other",
+      "--cs-layer-toast": "other",
+      "--cs-sidebar-width": "spacing",
+      "--cs-titlebar-height": "spacing",
+      "--cs-thread-width": "spacing",
+      "--cs-thread-width-home": "spacing",
+      "--cs-panel-info-width": "spacing",
+      "--cs-control-h-sm": "spacing",
+      "--cs-control-h": "spacing",
+      "--cs-control-h-lg": "spacing",
+      "--cs-row-nav": "spacing",
+      "--cs-row-list": "spacing",
+      "--cs-row-table": "spacing",
+      "--cs-row-table-head": "spacing",
+      "--cs-row-menu": "spacing",
+      "--cs-row-option": "spacing",
+      "--cs-icon-size": "spacing",
+      "--cs-icon-stroke": "color",
+      "--cs-scrollbar-w": "spacing",
+      "--cs-card-width-max": "other",
+      "--cs-card-row-width-max": "other",
+      "--cs-card-grid-width-max": "other",
+      "--cs-composer-width-min": "other",
+      "--cs-composer-width-max": "other",
+      "--cs-control-h-login": "other",
+      "--cs-control-h-segment": "other",
+      "--cs-ease-out": "other",
+      "--cs-ease-panel": "other",
+      "--cs-dur-hover": "other",
+      "--cs-dur-control": "other",
+      "--cs-dur-view": "other",
+      "--cs-dur-panel": "other",
+      "--cs-dur-progress": "other",
+      "--cs-transition-hover": "other",
+      "--cs-radius-xs": "radius",
+      "--cs-radius-sm": "radius",
+      "--cs-radius-md": "radius",
+      "--cs-radius-field": "radius",
+      "--cs-radius-lg": "radius",
+      "--cs-radius-card": "radius",
+      "--cs-radius-window": "radius",
+      "--cs-radius-full": "radius",
+      "--cs-space-1": "spacing",
+      "--cs-space-2": "spacing",
+      "--cs-space-3": "spacing",
+      "--cs-space-4": "spacing",
+      "--cs-space-6": "spacing",
+      "--cs-space-8": "spacing",
+      "--cs-space-13": "spacing",
+      "--cs-space-22": "spacing",
+      "--cs-gap-section": "spacing",
+      "--cs-field-padding-x": "spacing",
+      "--cs-font-sans": "font",
+      "--cs-font-serif": "font",
+      "--cs-font-mono": "font",
+      "--cs-size-heading": "spacing",
+      "--cs-size-dialog-title": "spacing",
+      "--cs-size-title": "spacing",
+      "--cs-size-body": "spacing",
+      "--cs-size-body-lg": "spacing",
+      "--cs-size-ui": "spacing",
+      "--cs-size-ui-sm": "spacing",
+      "--cs-size-caption": "spacing",
+      "--cs-size-meta": "spacing",
+      "--cs-size-label": "spacing",
+      "--cs-size-numeric": "spacing",
+      "--cs-tracking-label": "font",
+      "--cs-type-title": "font",
+      "--cs-type-body": "font",
+      "--cs-type-ui": "font",
+      "--cs-type-caption": "font",
+      "--cs-type-label": "font",
+      "--cs-type-numeric": "font"
+    },
+    "fontFamilies": [
+      "system-ui",
+      "sans-serif"
+    ]
+  }
+}

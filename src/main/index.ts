@@ -266,7 +266,12 @@ function createWindow(): BrowserWindow {
     // macOS: hiddenInset 标题栏——无原生标题栏（也就没有分割线），红绿灯
     // 悬浮在内容上，窗口拖拽区由渲染层 CSS（.is-macos 各视图顶部条）声明。
     // Windows 保持原生 frame。
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset' as const,
+      // Keep the native controls centered in the shared 52px Renderer
+      // titlebar, on the same axis as the shell navigation tools.
+      trafficLightPosition: { x: 12, y: 19 },
+    } : {}),
     show: !IS_PACKAGED_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),

@@ -1,0 +1,12 @@
+{
+  "--cs-font-serif": "Compatibility alias for previous consumers; system sans-serif only.",
+  "--cs-font-mono": "Compatibility alias for previous consumers; system sans-serif only.",
+  "--cs-space-1": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-2": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-3": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-4": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-6": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-8": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-13": "Complete documented layout spacing scale; available to consumer composition.",
+  "--cs-space-22": "Complete documented layout spacing scale; available to consumer composition."
+}

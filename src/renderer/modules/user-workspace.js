@@ -18,6 +18,7 @@ const _wsLog = (typeof createLogger === 'function')
 /** 空间列表缓存（spaces.list，含派生 meta）。 */
 let _spacesCache = [];
 let _spacesLoading = null;
+let _workspaceMenuOpenSeq = 0;
 
 /** new-chat 面板选中的空间 id（后续新对话创建带 space_id）；localStorage 持久化。 */
 const _NEW_CHAT_SPACE_KEY = 'chat.newChatSpaceId.v1';
@@ -179,11 +180,14 @@ function _createWorkspaceChip(target) {
   chip.dataset.wsTarget = target;
   chip.title = t('workspace.chip_title', '点击选择工作空间');
   const prefix = t('workspace.chip_label', '工作空间：');
+  const spaceIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('layout-grid', 'workspace-chip-icon')
+    : '';
   const chevronIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
     ? window.uiIconHtml('chevron-down', 'workspace-chip-chevron')
     : '';
   chip.innerHTML =
-    `<span class="workspace-chip-prefix">${escapeHtml(prefix)}</span>` +
+    spaceIcon + `<span class="workspace-chip-prefix">${escapeHtml(prefix)}</span>` +
     '<span class="workspace-chip-label"></span>' +
     chevronIcon;
   chip.addEventListener('click', (e) => {
@@ -208,6 +212,8 @@ function _spaceMenuItemHtml(name, sid, currentSid) {
 }
 
 function _showWorkspaceDropdown(anchor, target) {
+  if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('workspace');
+  const openSeq = ++_workspaceMenuOpenSeq;
   const old = document.getElementById('workspace-menu');
   if (old) {
     if (typeof old.__closeWorkspaceMenu === 'function') old.__closeWorkspaceMenu();
@@ -215,6 +221,7 @@ function _showWorkspaceDropdown(anchor, target) {
     return;
   } // 已有菜单 → 关闭（toggle）
   void _loadSpaces().then(() => {
+    if (openSeq !== _workspaceMenuOpenSeq) return;
     // 渲染前清掉任何残留菜单（防快速双击重复挂载）
     const existing = document.getElementById('workspace-menu');
     if (existing) {
@@ -229,7 +236,7 @@ function _renderSpaceMenu(anchor, target) {
   const currentSid = _currentSpaceId(target);
   const menu = document.createElement('div');
   menu.id = 'workspace-menu';
-  menu.className = 'workspace-menu space-menu';
+  menu.className = 'workspace-menu space-menu composer-popover';
   menu.dataset.wsTarget = target;
   anchor.classList.add('workspace-chip--open');
 
@@ -280,26 +287,49 @@ function _renderSpaceMenu(anchor, target) {
   });
   menu.appendChild(newItem);
 
-  const rect = anchor.getBoundingClientRect();
-  menu.style.position = 'fixed';
-  menu.style.left = rect.left + 'px';
-  menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
   let outsideBindTimer = null;
-  menu.__closeWorkspaceMenu = _closeMenu;
+  menu.__closeWorkspaceMenu = (options = {}) => _closeMenu(Boolean(options.returnFocus));
   document.body.appendChild(menu);
+  if (typeof window.positionPickerPopover === 'function') {
+    window.positionPickerPopover(menu, anchor, { anchorToButton: true, display: 'block' });
+  } else {
+    const rect = anchor.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.left = rect.left + 'px';
+    menu.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  }
 
   setTimeout(() => search.focus(), 0);
 
-  function _closeMenu() {
+  function _closeMenu(returnFocus = false) {
     if (outsideBindTimer) clearTimeout(outsideBindTimer);
     menu.remove();
     anchor.classList.remove('workspace-chip--open');
     document.removeEventListener('mousedown', _onOutside);
+    document.removeEventListener('keydown', _onKey, true);
+    window.removeEventListener('resize', _onViewportChange);
+    document.removeEventListener('scroll', _onViewportChange, true);
+    if (returnFocus && anchor.isConnected) anchor.focus();
   }
   function _onOutside(e) {
     if (!menu.contains(e.target) && !anchor.contains(e.target)) _closeMenu();
   }
+  function _onKey(e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape') {
+      _closeMenu(true);
+      e.preventDefault();
+    }
+  }
+  function _onViewportChange(e) {
+    const eventTarget = e && e.target;
+    if (eventTarget && (eventTarget === menu || menu.contains(eventTarget))) return;
+    _closeMenu();
+  }
   outsideBindTimer = setTimeout(() => document.addEventListener('mousedown', _onOutside), 0);
+  document.addEventListener('keydown', _onKey, true);
+  window.addEventListener('resize', _onViewportChange);
+  document.addEventListener('scroll', _onViewportChange, true);
 }
 
 // ── Init ────────────────────────────────────────────────────────────
@@ -347,6 +377,15 @@ if (typeof window !== 'undefined') {
   window.getNewChatSpaceId = getNewChatSpaceId;
   window.refreshWorkspaceChip = refreshWorkspaceChip;
   window.initUserWorkspace = initUserWorkspace;
+  if (typeof window.registerComposerPopover === 'function') {
+    window.registerComposerPopover('workspace', () => {
+      _workspaceMenuOpenSeq += 1;
+      const menu = document.getElementById('workspace-menu');
+      if (!menu) return;
+      if (typeof menu.__closeWorkspaceMenu === 'function') menu.__closeWorkspaceMenu();
+      else menu.remove();
+    });
+  }
   if (typeof window.addEventListener === 'function') window.addEventListener('i18n-change', () => {
     _updateAllChips();
     const menu = document.getElementById('workspace-menu');

@@ -311,11 +311,14 @@ function _createModelChip(target) {
   chip.className = 'model-chip exec-config-chip';
   chip.dataset.modelTarget = target;
   chip.hidden = true; // shown once entries exist or a recipient is picked
+  const settingsIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('settings', 'model-chip-icon')
+    : '';
   const chevron = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
     ? window.uiIconHtml('chevron-down', 'model-chip-chevron')
     : '';
   chip.innerHTML =
-    '<span class="model-chip-label"></span>' +
+    settingsIcon + '<span class="model-chip-label"></span>' +
     '<span class="exec-config-effort"></span>' +
     chevron;
   chip.addEventListener('click', (e) => {
@@ -512,9 +515,13 @@ function _closeModelMenu() {
 
 // Kept as a small public bridge for boot/navigation teardown callers.
 window.closeModelChipMenu = _closeModelMenu;
+if (typeof window.registerComposerPopover === 'function') {
+  window.registerComposerPopover('model', _closeModelMenu);
+}
 
 /** One menu, two sections: model (with provider drill-down) + effort. */
 function _toggleExecConfigMenu(anchor) {
+  if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('model');
   const old = document.getElementById('model-chip-menu');
   if (old) { _closeModelMenu(); return; }
 
@@ -525,7 +532,7 @@ function _toggleExecConfigMenu(anchor) {
   _modelChipRenderChip(anchor);
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
-  menu.className = 'model-chip-menu model-chip-menu--exec';
+  menu.className = 'model-chip-menu model-chip-menu--exec composer-popover';
   anchor.classList.add('model-chip--open');
   _renderExecConfigMenu(menu, anchor);
   _positionModelMenu(menu, anchor);

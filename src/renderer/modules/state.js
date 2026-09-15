@@ -357,13 +357,6 @@ function bindStaticHandlers() {
   // 设置入口已并入左下角融合面板（account-chip.js 的「设置」菜单项，
   // 通过 window.setView('settings') 切换视图，任何登录态都可达）。
 
-  // Sidebar conv tabs（ZCode 式「空间 | 最近任务」）
-  document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (typeof _setSidebarConvTab === 'function') _setSidebarConvTab(btn.dataset.convTab);
-    });
-  });
-
   // Global search trigger + Cmd+K
   _bindGlobalSearch();
 

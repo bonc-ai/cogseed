@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CogSeed 首版组件预览</title>
+  <title>CogSeed 开源设计系统组件预览</title>
   <link rel="stylesheet" href="./tokens.css" />
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./ui-components.css" />
+  <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./component-gallery.css" />
+  <link rel="stylesheet" href="./resource-pages.css" />
 </head>
 <body class="component-gallery-body">
   <div class="gallery-shell">
@@ -16,7 +18,7 @@
         <img src="../resources/icons/logo.png" alt="" draggable="false" />
         <div>
           <strong>CogSeed</strong>
-          <span>交付基准 / v0.1</span>
+          <span>开源设计系统 / 生产映射</span>
         </div>
       </div>
 
@@ -28,75 +30,95 @@
 
       <nav class="gallery-nav">
         <a href="#foundations"><span>FND</span>基础标尺</a>
+        <a href="#window-chrome"><span>CHR</span>WindowChrome</a>
+        <a href="#user-menu"><span>USR</span>UserMenu</a>
         <a href="#page-header"><span>PH</span>PageHeader</a>
+        <a href="#resource-pages"><span>PAGE</span>ResourcePage</a>
+        <a href="#tabs"><span>TAB</span>Tabs</a>
+        <a href="#resource-cards"><span>CARD</span>ResourceCard</a>
+        <a href="#settings-sections"><span>SET</span>SettingsSection</a>
         <a href="#buttons"><span>BTN</span>Button</a>
         <a href="#icon-buttons"><span>IB</span>IconButton</a>
-        <a href="#form-controls"><span>FRM</span>Input · Select · Form</a>
+        <a href="#segmented-controls"><span>SEG</span>SegmentedControl</a>
+        <a href="#composer"><span>CMP</span>Composer</a>
+        <a href="#form-controls"><span>FRM</span>Input · Checkbox · Select · Form</a>
+        <a href="#search-selection-components"><span>SEL</span>检索与选择</a>
         <a href="#empty-states"><span>EMP</span>EmptyState</a>
         <a href="#modals"><span>MOD</span>Modal</a>
         <a href="#automation"><span>AUTO</span>自动化组合态</a>
       </nav>
 
-      <div class="gallery-coverage" aria-label="首版范围">
-        <span>首版范围</span>
-        <strong>9 / 9 已定义</strong>
-        <small>本页不证明真实业务页面已经迁移。</small>
+      <div class="gallery-coverage" aria-label="设计系统覆盖范围">
+        <span>共享基础层</span>
+        <strong>18 / 18 已定义</strong>
+        <small>本页与真实页面复用同一套 token、CSS 和原生 JS primitives。</small>
       </div>
     </aside>
 
     <main class="gallery-main">
       <header class="gallery-intro">
         <div class="gallery-intro__copy">
-          <span class="gallery-kicker">SPIKE / UX QUALITY BASELINE</span>
+          <span class="gallery-kicker">OPEN SOURCE DESIGN SYSTEM / PRODUCTION MAPPING</span>
           <h1>不是看起来像组件，<br />而是每个状态都能被勾选。</h1>
           <p>本页直接加载 Renderer 的生产 token、组件 CSS 与原生 JS。产品在这里确认目标态，研发在这里核对实现，最终验收仍回到真实 Electron 页面。</p>
         </div>
         <dl class="gallery-intro__facts">
-          <div><dt>视觉基线</dt><dd>收敛现有 CogSeed</dd></div>
-          <div><dt>首个样板</dt><dd>自动化</dd></div>
-          <div><dt>禁止进入</dt><dd>React · Google Fonts</dd></div>
+          <div><dt>设计来源</dt><dd>开源设计系统</dd></div>
+          <div><dt>真实样板</dt><dd>自动化</dd></div>
+          <div><dt>实现边界</dt><dd>原生 HTML · CSS · JS</dd></div>
         </dl>
       </header>
 
       <section class="gallery-section" id="foundations">
         <div class="gallery-section__head">
           <span class="gallery-section__id">FND</span>
-          <div><h2>基础标尺</h2><p>只展示本轮已裁决且会被首版组件使用的值。</p></div>
+          <div><h2>基础标尺</h2><p>展示开源设计系统已映射到 Renderer 生产层的核心 token。</p></div>
         </div>
         <div class="gallery-foundation-grid">
           <article class="gallery-specimen">
             <div class="gallery-specimen__label"><strong>颜色语义</strong><span>品牌 ≠ 成功</span></div>
             <div class="gallery-swatches">
               <div><i class="is-brand"></i><span>品牌操作<code>#0E9F6E</code></span></div>
-              <div><i class="is-success"></i><span>完成成功<code>#16A34A</code></span></div>
-              <div><i class="is-warning"></i><span>需要注意<code>#FEF3C7</code></span></div>
-              <div><i class="is-danger"></i><span>危险与失败<code>#FEF2F2</code></span></div>
+              <div><i class="is-success"></i><span>完成成功<code>#1E6E4E</code></span></div>
+              <div><i class="is-warning"></i><span>需要注意<code>#FBF1E2</code></span></div>
+              <div><i class="is-danger"></i><span>危险与失败<code>#F8EBE8</code></span></div>
             </div>
           </article>
           <article class="gallery-specimen">
-            <div class="gallery-specimen__label"><strong>字号与节奏</strong><span>正文不小于 11px</span></div>
+            <div class="gallery-specimen__label"><strong>字号与节奏</strong><span>正文基线 15px</span></div>
             <div class="gallery-type-scale">
-              <p class="is-size-6">20 / 页面强调标题</p>
-              <p class="is-size-5">16 / 页面与弹窗标题</p>
-              <p class="is-size-4">14 / 正文与表单</p>
-              <p class="is-size-3">13 / 按钮与说明</p>
-              <p class="is-size-2">12 / 元数据</p>
-              <p class="is-size-1">11 / 最小辅助信息</p>
+              <p class="is-heading">22 / 页面标题</p>
+              <p class="is-dialog-title">18 / 弹窗标题</p>
+              <p class="is-body-lg">16 / 强调正文</p>
+              <p class="is-body">15 / 正文与标题</p>
+              <p class="is-ui">14 / 控件文字</p>
+              <p class="is-ui-sm">13 / 紧凑控件</p>
+              <p class="is-caption">12.5 / 辅助说明</p>
+              <p class="is-meta">12 / 元数据与标签</p>
             </div>
           </article>
           <article class="gallery-specimen gallery-specimen--wide">
-            <div class="gallery-specimen__label"><strong>间距、圆角与层级</strong><span>4px 栅格 · 6/8/12 · 顺序是契约</span></div>
+            <div class="gallery-specimen__label"><strong>间距、圆角与层级</strong><span>4px 栅格 · 内容宽度 720/760/880/1232 · 4/7/8/9/11/12/14/∞</span></div>
             <div class="gallery-foundation-row">
               <div class="gallery-space-scale" aria-label="间距标尺">
                 <i class="s1"></i><i class="s2"></i><i class="s3"></i><i class="s4"></i><i class="s5"></i><i class="s6"></i>
               </div>
               <div class="gallery-radius-scale" aria-label="圆角标尺">
-                <i class="r1">6</i><i class="r2">8</i><i class="r3">12</i><i class="rp">∞</i>
+                <i class="rx">4</i><i class="rsm">7</i><i class="rmd">8</i><i class="rf">9</i><i class="rlg">11</i><i class="rc">12</i><i class="rw">14</i><i class="rp">∞</i>
               </div>
               <code class="gallery-layer-order">base &lt; popover &lt; modal &lt; modal-popover &lt; command &lt; toast</code>
             </div>
           </article>
         </div>
+      </section>
+
+      <section class="gallery-section" id="window-chrome">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">CHR</span>
+          <div><h2>WindowChrome</h2><p>macOS 红绿灯由 Electron 原生绘制；Shell 只管理右侧搜索、运行状态与侧栏收起/展开。</p></div>
+        </div>
+        <div class="gallery-control-grid" id="sidebar-tools-specimens"></div>
+        <div class="gallery-sidebar-grid" id="sidebar-appearance-specimens"></div>
       </section>
 
       <section class="gallery-section" id="page-header">
@@ -107,10 +129,50 @@
         <div class="gallery-stack" id="page-header-specimens"></div>
       </section>
 
+      <section class="gallery-section" id="user-menu">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">USR</span>
+          <div><h2>UserMenu</h2><p>侧边栏底部保持单行个人身份入口；菜单向上弹出，设置与退出沿用真实图标、焦点和危险色。</p></div>
+        </div>
+        <div class="gallery-control-grid" id="user-menu-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="resource-pages">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">PAGE</span>
+          <div><h2>ResourcePage</h2><p>工作空间、自动化、认知资产和能力管理共用响应式边距、内容宽度与 Header 后留白；导航按页面需要出现。</p></div>
+        </div>
+        <div class="gallery-stack" id="resource-page-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="tabs">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">TAB</span>
+          <div><h2>Tabs</h2><p>下划线导航保持单行滚动；左右方向键与 Home / End 复用真实页面的 roving-focus 约定。</p></div>
+        </div>
+        <div class="gallery-stack" id="tabs-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="resource-cards">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">CARD</span>
+          <div><h2>ResourceCard</h2><p>工作空间、自动化、智能体、技能与连接共用同一网格和外壳；业务内容、操作和状态仍由各页面负责。</p></div>
+        </div>
+        <div class="gallery-resource-grid ui-resource-grid" id="resource-card-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="settings-sections">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">SET</span>
+          <div><h2>SettingsSection</h2><p>浅描边、16px 内边距、无阴影；分组间距承担层级，不再由页面叠加卡片效果。</p></div>
+        </div>
+        <div class="gallery-settings-grid" id="settings-section-specimens"></div>
+      </section>
+
       <section class="gallery-section" id="buttons">
         <div class="gallery-section__head">
           <span class="gallery-section__id">BTN</span>
-          <div><h2>Button</h2><p>4 个角色 × 2 个尺寸 × 6 个可核对状态，不暴露 padding、字号或圆角。</p></div>
+          <div><h2>Button</h2><p>4 个角色 × 3 个尺寸 × 6 个可核对状态，不暴露 padding、字号或圆角。</p></div>
         </div>
         <div class="gallery-matrix-wrap" id="button-matrix"></div>
       </section>
@@ -123,10 +185,26 @@
         <div class="gallery-matrix-wrap" id="icon-button-matrix"></div>
       </section>
 
+      <section class="gallery-section" id="segmented-controls">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">SEG</span>
+          <div><h2>SegmentedControl</h2><p>浅色轨道 + 白色选中片；每项保留原生按钮、Tab 访问和 aria-pressed。</p></div>
+        </div>
+        <div class="gallery-control-grid" id="segmented-control-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="composer">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">CMP</span>
+          <div><h2>Composer</h2><p>首页、已有对话和窄宽共用生产输入台样式；这里只核对视觉与响应式，发送、停止和排队仍由真实页面状态机负责。</p></div>
+        </div>
+        <div class="gallery-composer-grid" id="composer-specimens"></div>
+      </section>
+
       <section class="gallery-section" id="form-controls">
         <div class="gallery-section__head">
           <span class="gallery-section__id">FRM</span>
-          <div><h2>Input · Select · Form</h2><p>所有 Select 统一使用原项目 AiSelect；同一套行为覆盖简单选项、说明、图标与弹窗浮层。</p></div>
+          <div><h2>Input · Checkbox · Select · Form</h2><p>所有 Select 统一使用原项目 AiSelect；同一套行为覆盖简单选项、说明、图标与弹窗浮层。</p></div>
         </div>
         <div class="gallery-form-audit">
           <strong>采用策略</strong>
@@ -146,6 +224,32 @@
           <article class="gallery-specimen gallery-specimen--wide">
             <div class="gallery-specimen__label"><strong>复合 Form</strong><span>字段语义、两列布局、局部错误与统一操作区</span></div>
             <div class="gallery-form-demo" id="form-composition-specimen"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="gallery-section" id="search-selection-components">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">SEL</span>
+          <div><h2>CommandPalette · SearchableSelect · DateRangePicker</h2><p>共享外观与可访问状态；业务搜索、选择值和自动化调度仍由生产模块负责。</p></div>
+        </div>
+        <div class="gallery-behavior-strip">
+          <span>Cmd/Ctrl+K</span><span>方向键 + Enter</span><span>Escape 返回焦点</span><span>IME 组合期忽略动作键</span><span>窄宽不横溢</span>
+        </div>
+        <div class="gallery-control-grid">
+          <article class="gallery-specimen gallery-specimen--wide">
+            <div class="gallery-specimen__label"><strong>CommandPalette</strong><span>默认 · 打开 · 搜索中 · 无结果 · 错误 · 窄宽 · 键盘/IME</span></div>
+            <div class="gallery-state-tabs" id="command-palette-state-tabs"></div>
+            <div id="command-palette-specimen"></div>
+          </article>
+          <article class="gallery-specimen">
+            <div class="gallery-specimen__label"><strong>SearchableSelect / Select</strong><span>默认 · 打开 · 搜索中 · 无结果 · 禁用 · 错误 · 窄宽</span></div>
+            <div class="gallery-state-tabs" id="searchable-select-state-tabs"></div>
+            <div class="gallery-search-select-demo" id="searchable-select-specimen"></div>
+          </article>
+          <article class="gallery-specimen">
+            <div class="gallery-specimen__label"><strong>DateRangePicker / Date</strong><span>默认 · 错误 · 窄宽 · 键盘/焦点</span></div>
+            <div class="gallery-date-range-states" id="date-range-picker-specimen"></div>
           </article>
         </div>
       </section>
@@ -179,7 +283,7 @@
       </section>
 
       <footer class="gallery-footer">
-        <span>CogSeed UX Quality Spike</span>
+        <span>CogSeed 开源设计系统 / 生产映射</span>
         <span>产品目标态 ≠ 正式实现、QA 或发布证明</span>
       </footer>
     </main>
@@ -195,10 +299,14 @@
 
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-user-menu.js"></script>
+  <script src="./modules/ui-sidebar-tools.js"></script>
+  <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
+  <script src="./modules/composer-popovers.js"></script>
   <script src="./modules/utils.js"></script>
   <script src="./component-gallery.js"></script>
 </body>
