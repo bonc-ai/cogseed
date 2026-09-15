@@ -30979,9 +30979,12 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-mm-overlay-zoom span { font-size: 12px; color: var(--kb-text2); min-width: 46px; text-align: center; }
 .kb-mm-overlay-close.ui-icon-button { width: var(--control-height); height: var(--control-height); }
 .kb-mm-overlay-stage { flex: 1; overflow: hidden; position: relative; }
+/* 画布容器：跟随 stage 铺满，SVG 由 flex 居中 + JS transform 缩放/平移。
+   别改成 position:absolute; top/left:50%; width:max-content —— 那样容器左上角会落在
+   stage 中心，图整体偏到右下（"图不在正中央"的根因），容器中心也不再等于 SVG 中心，
+   "居中根节点"的平移量会跟着错。 */
 .kb-mm-overlay-wrap {
-  position: absolute; top: 50%; left: 50%; transform-origin: center center;
-  width: max-content; cursor: grab;
+  transform-origin: center center; cursor: grab;
 }
 .kb-mm-overlay-wrap:active { cursor: grabbing; }
 .kb-mm-overlay-wrap svg { display: block; border-radius: 12px; box-shadow: 0 8px 40px color-mix(in srgb, var(--color-black) 25%, transparent); }
