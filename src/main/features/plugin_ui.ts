@@ -299,13 +299,27 @@ function validatePlatformServerUrl(raw: string): string | null {
   return u.origin;
 }
 
+/** API 基址（2026-09-15 修复）：平台挂载在子路径（/edu）下时，
+ *  API 调用必须保留路径——validatePlatformServerUrl 返回 origin 会丢掉
+ *  /edu，导致 whoami 404 →「无法识别身份」。校验语义与基址语义分离。 */
+function platformApiBase(raw: string): string | null {
+  const value = raw.trim();
+  if (!value || value.length > 2048) return null;
+  let u: URL;
+  try { u = new URL(value); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (!u.hostname || u.username || u.password) return null;
+  if (u.search || u.hash) return null;
+  return u.origin + u.pathname.replace(/\/+$/, '');
+}
+
 /** 凭 API Key 从平台反查身份（`GET /api/agent/whoami`，身份由平台按 key
  *  绑定，不可伪造）。返回 null 表示平台返回了无法识别的身份。 */
 export async function resolveIdentityFromPlatform(
   serverUrl: string,
   apiKey: string,
 ): Promise<{ role: string; person_id: string } | null> {
-  const base = validatePlatformServerUrl(serverUrl);
+  const base = platformApiBase(serverUrl);
   if (!base) throw new Error('平台地址不合法（仅支持 http/https，且不含账号密码/查询参数）');
   const res = await fetch(`${base}/api/agent/whoami`, {
     method: 'GET',
@@ -491,7 +505,7 @@ const _versionAnnounceCache = new Map<string, { ts: number; latest?: string; min
 const VERSION_ANNOUNCE_TTL_MS = 5 * 60 * 1000;
 
 async function fetchVersionAnnouncement(serverUrl: string, apiKey: string): Promise<{ latest?: string; min?: string }> {
-  const base = validatePlatformServerUrl(serverUrl);
+  const base = platformApiBase(serverUrl);
   if (!base) return {};
   const cacheKey = `${base}`;
   const cached = _versionAnnounceCache.get(cacheKey);
