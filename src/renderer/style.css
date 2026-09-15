@@ -32648,10 +32648,17 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   background: var(--state-ignored-bg);
   color: var(--state-ignored-text);
 }
-/* §三-2 开关（合并同人发言 / 范围）加大点击热区，鼠标好点 */
-.kb-atc__scope .ui-button {
-  min-height: 32px;
-  padding-inline: var(--space-3);
+/* §三-2 范围/开关控件已改用共享组件（uiSegmentedControl / uiCheckbox）：
+   原先在此抬高 .ui-button 热区的页面级覆盖已删除——页面不再改共享组件内部。
+   若后续仍需要 32px 热区，按规范向组件 owner 提需求（组件层加 size 或调 --control-height-sm），
+   不在页面里自行覆盖。 */
+.kb-atc__scope-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2);
+  cursor: pointer;
 }
 /* §四-1 折叠块给箭头提示（details 默认 marker 拿掉，自己画一个） */
 .kb-atc__issues > summary,

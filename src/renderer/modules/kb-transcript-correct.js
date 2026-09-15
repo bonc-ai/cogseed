@@ -22,6 +22,9 @@
   const log = typeof createLogger === 'function' ? createLogger('kb-transcript-correct') : null;
   const MAX_TEXT_CHARS = 400000;
 
+  // 共享 uiCheckbox 要求唯一 id；面板可能同时挂载多次（多文件对比），故按实例计数。
+  let panelSeq = 0;
+
   // ── i18n（缺键回退到中文默认文案，与 anchored-source-view 同款）────────
   function formatFallback(text, vars) {
     return String(text || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_m, key) => String(vars?.[key] ?? ''));
@@ -359,6 +362,7 @@
   }
 
   function createPanel(container, ctx) {
+    const panelId = ++panelSeq;
     const state = {
       rows: [],
       accepted: new Set(),
@@ -848,34 +852,37 @@
     /**
      * 接受范围（方案 §七：接受（范围：本文档 / 当前任务））。
      * 只影响"接受时把词条作用域改成什么"；默认 keep = 不动词条原有作用域。
+     *
+     * 控件分工（全部走共享原语，不建页面局部变体）：
+     *   范围 = 互斥选择 → uiSegmentedControl；拟标题 = 动作 → uiButton；
+     *   合并同人发言 = 开关 → uiCheckbox。
+     * 点击委托仍按 data-atc-action / data-atc-scope 分派，故 attrs 原样透传给每个分段项。
      */
     function renderScope() {
       const host = q('[data-atc-scope]');
       if (!host) return;
       if (!state.scanned || state.rows.length === 0) { host.textContent = ''; return; }
-      const current = state.scopeChoice;
+      const scopeOptions = [
+        { value: 'keep', label: t('kb.transcriptCorrect.scope_keep', '默认'), disabled: state.busy },
+        { value: 'doc', label: t('kb.transcriptCorrect.scope_doc', '仅本文档'), disabled: state.busy },
+        {
+          value: 'task',
+          label: t('kb.transcriptCorrect.scope_task', '仅本场景'),
+          disabled: state.busy || !(ctx.scenarioTags || []).length,
+        },
+      ];
       host.innerHTML = [
         '<span class="kb-atc__scope-label">' + t('kb.transcriptCorrect.scope_label', '接受范围') + '</span>',
-        button({
-          label: t('kb.transcriptCorrect.scope_keep', '默认'),
-          role: current === 'keep' ? 'primary' : 'ghost',
-          size: 'sm',
-          disabled: state.busy,
-          attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'keep' },
-        }),
-        button({
-          label: t('kb.transcriptCorrect.scope_doc', '仅本文档'),
-          role: current === 'doc' ? 'primary' : 'ghost',
-          size: 'sm',
-          disabled: state.busy,
-          attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'doc' },
-        }),
-        button({
-          label: t('kb.transcriptCorrect.scope_task', '仅本场景'),
-          role: current === 'task' ? 'primary' : 'ghost',
-          size: 'sm',
-          disabled: state.busy || !(ctx.scenarioTags || []).length,
-          attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'task' },
+        root.uiSegmentedControl({
+          ariaLabel: t('kb.transcriptCorrect.scope_label', '接受范围'),
+          value: state.scopeChoice,
+          className: 'kb-atc__scope-control',
+          items: scopeOptions.map((option) => ({
+            label: option.label,
+            value: option.value,
+            disabled: option.disabled,
+            attrs: { 'data-atc-action': 'scope', 'data-atc-scope': option.value },
+          })),
         }),
         button({
           label: state.headingBusy
@@ -888,16 +895,12 @@
           disabled: state.busy || state.headingBusy,
           attrs: { 'data-atc-action': 'suggest-headings' },
         }),
-        button({
-          label: state.mergeSpeaker
-            ? t('kb.transcriptCorrect.merge_on', '合并同人发言')
-            : t('kb.transcriptCorrect.merge_off', '不合并发言'),
-          icon: state.mergeSpeaker ? 'check-circle' : 'x-circle',
-          role: state.mergeSpeaker ? 'primary' : 'ghost',
-          size: 'sm',
+        '<label class="kb-atc__scope-toggle">' + root.uiCheckbox({
+          id: 'kb-atc-merge-speaker-' + panelId,
+          checked: state.mergeSpeaker,
           disabled: state.busy,
           attrs: { 'data-atc-action': 'toggle-merge' },
-        }),
+        }) + '<span>' + t('kb.transcriptCorrect.merge_on', '合并同人发言') + '</span></label>',
       ].join('');
     }
 
@@ -2448,6 +2451,9 @@
       if (!container) throw new Error('kb transcript correct: container required');
       if (!root.cogseed || typeof root.cogseed.invoke !== 'function') throw new Error('kb transcript correct: ipc unavailable');
       if (typeof root.uiButton !== 'function') throw new Error('kb transcript correct: shared ui primitives unavailable');
+      if (typeof root.uiSegmentedControl !== 'function' || typeof root.uiCheckbox !== 'function') {
+        throw new Error('kb transcript correct: shared ui primitives unavailable (uiSegmentedControl / uiCheckbox)');
+      }
       const text = String(ctx?.text || '');
       if (!text) throw new Error('kb transcript correct: text required');
       if (text.length > MAX_TEXT_CHARS) throw new Error('kb transcript correct: text too long');

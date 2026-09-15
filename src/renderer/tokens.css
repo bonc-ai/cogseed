@@ -304,7 +304,9 @@
   --speaker-tint-0: var(--color-white);
   --speaker-tint-1: #F2F7F4;
   --speaker-tint-2: #EFF2F7;
-  --state-accepted-bg: #E8F1EC;
+  /* 与设计系统语义层同值的项一律别名，不重复写字面量（同步 develop #263 后的核对结果）：
+     --status-success-bg === --color-success-soft === #E8F1EC，故别名复用。 */
+  --state-accepted-bg: var(--status-success-bg);
   --state-accepted-text: #2F6B52;
   --state-accepted-line: rgba(47, 107, 82, 0.28);
   --state-caution-bg: #FDF0E3;

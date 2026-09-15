@@ -363,10 +363,24 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
     expect(roles('compare-search')).toContain('ghost');
   });
 
-  it('条目留白 + 极淡分隔线 + 开关热区加大（鼠标好点）', () => {
+  it('条目留白 + 极淡分隔线', () => {
     expect(style).toMatch(/\.kb-atc__row \{[^}]*padding-block: var\(--space-2\)/);
     expect(style).toMatch(/\.kb-atc__row \{[^}]*border-bottom: 1px solid var\(--line-default\)/);
-    expect(style).toMatch(/\.kb-atc__scope \.ui-button \{[^}]*min-height: 32px/);
+  });
+
+  it('范围/开关走共享组件：uiSegmentedControl + uiCheckbox，且不再有页面级 .ui-button 覆盖', () => {
+    // 互斥范围用共享分段控件，选中态由 value 驱动（不再靠 primary/ghost 互换）
+    expect(source).toContain('root.uiSegmentedControl({');
+    expect(source).toContain("value: state.scopeChoice");
+    // 每个分段项原样透传点击委托所需的 data-* 属性
+    expect(source).toMatch(/attrs: \{ 'data-atc-action': 'scope', 'data-atc-scope'/);
+    // 开关用共享复选框（<label> 包裹，沿用组件预览页的既有用法）
+    expect(source).toContain('root.uiCheckbox({');
+    expect(source).toContain('kb-atc__scope-toggle');
+    // 页面 CSS 不得再改共享按钮内部（原 32px 热区覆盖已删除，改为向组件层提需求）
+    expect(style).not.toMatch(/\.kb-atc__scope \.ui-button/);
+    // 开关不再是"靠 role 互换表达开关态"的按钮
+    expect(source).not.toMatch(/role: state\.mergeSpeaker \? 'primary'/);
   });
 
   it('折叠块有箭头提示，且说明文字弱化', () => {
