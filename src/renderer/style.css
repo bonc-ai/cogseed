@@ -17716,14 +17716,24 @@ body:has(#panel-settings.active) .main-top-actions {
 /* Model config entries render on a single line: provider, API key badge and
    status sit next to each other. */
 #settings-entries .entry-main {
-  flex-direction: row;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(90px, 120px) minmax(180px, 1fr);
   align-items: center;
-  gap: 10px;
-}
-#settings-entries .entry-meta {
-  flex: 1;
+  gap: var(--space-3);
   min-width: 0;
 }
+#settings-entries .entry-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(120px, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+#settings-entries .entry-primary { min-width: 0; }
+#settings-entries .entry-provider { width: auto; flex: 1 1 auto; }
+#settings-entries .entry-status { grid-column: 1 / -1; }
+#settings-entries .entry-status:empty { display: none; }
 /* Unified control sizing inside the model config list: pills, badges and
    buttons share one 28px rhythm so each row reads as a single line. */
 #settings-entries .entry-rank {
@@ -17735,12 +17745,30 @@ body:has(#panel-settings.active) .main-top-actions {
   padding: 5px 10px;
   font-size: 12px;
   line-height: 16px;
+  white-space: nowrap;
 }
 #settings-entries .entry-api-key-capsule {
+  width: 100%;
+  min-width: 120px;
   padding: 5px 4px 5px 12px;
 }
-#settings-entries .entry-api-key-input {
+#settings-entries .entry-api-key-input.form-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   line-height: 16px;
+}
+#settings-entries .entry-api-key-input.form-input:hover,
+#settings-entries .entry-api-key-input.form-input:focus,
+#settings-entries .entry-api-key-input.form-input:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 #settings-entries .entry-api-key-toggle {
   width: 20px;
@@ -17753,6 +17781,8 @@ body:has(#panel-settings.active) .main-top-actions {
 #settings-entries .entry-actions .icon-btn {
   line-height: 16px;
 }
+#settings-entries .entry-actions { align-items: center; }
+#settings-entries .entry-actions .entry-model-select { width: 150px; }
 .entry-primary {
   display: flex;
   align-items: center;

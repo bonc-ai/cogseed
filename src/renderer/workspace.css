@@ -49,7 +49,7 @@
 .ws-btn-ico { width: 15px; height: 15px; }
 
 /* ── 空间中心 ── */
-.ws-center { max-width: var(--layout-card-grid-width); margin: 0 auto; padding: var(--space-5) var(--space-6) var(--space-page); }
+.ws-center { max-width: var(--layout-card-grid-width); margin: 0 auto; padding: var(--space-4) var(--space-6) var(--space-page); }
 /* 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06），
    全宽通栏（.ws-center-header 是 .ws-view 的直接子级），副标题 tagline 移入正文区。 */
 .ws-center-header .ui-page-header { width: 100%; box-sizing: border-box; }
@@ -484,7 +484,7 @@
 .ws-loading { display: grid; place-items: center; min-height: 60vh; color: #7b857f; font-size: 13px; }
 .ws-detail-loading { display: grid; place-items: center; min-height: 160px; color: var(--muted); font-size: 13px; }
 .ws-recovery-page { width: 100%; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 12px; box-sizing: border-box; }
-.ws-refresh-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 44px; box-sizing: border-box; padding: 8px 16px; color: var(--muted); font-size: 13px; }
+.ws-refresh-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: var(--control-height-lg); box-sizing: border-box; padding: var(--space-1) var(--space-4); color: var(--muted); font-size: 13px; }
 .ws-empty { padding: 40px 20px; border: 1px dashed var(--ws-line-strong); border-radius: 12px; color: #87918b; background: #fafcfb; text-align: center; font-size: 12px; line-height: 1.6; }
 .ws-empty small { display: block; margin-top: 6px; color: #a4aca7; font-size: 11px; }
 .ws-load-error { display: grid; place-items: center; gap: 14px; min-height: 60vh; text-align: center; }

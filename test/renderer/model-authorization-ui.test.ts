@@ -73,6 +73,13 @@ describe('unified model authorization settings surface', () => {
     }
   });
 
+  it('keeps configured API entries aligned as provider, key, model, and actions', () => {
+    expect(style).toMatch(/#settings-entries \.entry-main\s*\{[^}]*grid-template-columns:\s*minmax\(90px, 120px\) minmax\(180px, 1fr\);/s);
+    expect(style).toMatch(/#settings-entries \.entry-meta\s*\{[^}]*grid-template-columns:\s*max-content minmax\(120px, 1fr\);/s);
+    expect(style).toMatch(/#settings-entries \.entry-api-key-input\.form-input\s*\{[^}]*padding:\s*0;[^}]*border:\s*0;[^}]*background:\s*transparent;/s);
+    expect(style).toContain('#settings-entries .entry-actions .entry-model-select { width: 150px; }');
+  });
+
   it('keeps four locale files aligned for model authorization strings', () => {
     const [baseLang, baseLocale] = locales[0];
     const baseKeys = modelAuthorizationKeys(baseLocale);

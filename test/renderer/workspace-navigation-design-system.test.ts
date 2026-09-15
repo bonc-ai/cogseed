@@ -167,6 +167,8 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceSource).not.toContain('<select class="ws-sort"');
     expect(workspaceCss).toContain('.ws-search .ui-input');
     expect(workspaceCss).toContain('.ws-sort .ai-select-trigger');
+    expect(workspaceCss).toMatch(/\.ws-center\s*\{[^}]*padding:\s*var\(--space-4\) var\(--space-6\) var\(--space-page\);/s);
+    expect(workspaceCss).toMatch(/\.ws-refresh-notice\s*\{[^}]*min-height:\s*var\(--control-height-lg\);/s);
   });
 
   it('uses shared controls and icon primitives in the artifact toolbar', () => {
