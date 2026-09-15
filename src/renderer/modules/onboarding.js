@@ -209,6 +209,13 @@ function _csSetButtonLabel(button, label) {
   else button.textContent = label;
 }
 
+function _csSetButtonDisabled(button, disabled) {
+  if (!button) return;
+  const nextDisabled = Boolean(disabled);
+  button.disabled = nextDisabled;
+  button.classList.toggle('is-disabled', nextDisabled);
+}
+
 function _csApplyI18n(root) {
   if (typeof applyDomI18n === 'function') applyDomI18n(root);
 }
@@ -3088,7 +3095,7 @@ function _csBuild() {
   if (consentBox && firstBegin) {
     _csSetButtonLabel(firstBegin, _csT('onboarding.start.begin', '开始一次真实工作'));
     const syncConsent = () => {
-      firstBegin.disabled = !consentBox.checked;
+      _csSetButtonDisabled(firstBegin, !consentBox.checked);
     };
     consentBox.addEventListener('change', syncConsent);
     syncConsent();
