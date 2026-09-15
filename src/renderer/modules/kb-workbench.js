@@ -1971,12 +1971,20 @@
   //      html 走 sandbox iframe 渲染页面；图片/音视频用原生标签）
   //   纯文本类（md/txt/代码）→ 原文查看器 `__openAnchorViewer`
   //     （它是转写纠错面板的宿主，也是引用高亮用的那个）
-  const _FV_RICH_EXTS = new Set([
+  //
+  // 清单来源：`anchored-source-view.js`（常驻加载）暴露的 `__kbRichPreviewExts`——
+  // 分派必须与"阅读器的兜底分支"用同一份表，否则某类型会被一边当排版类、
+  // 另一边当纯文本（PDF/Word 退化成没有排版的字符流）。这里保留同表副本只作为
+  // 独立加载（隔离测试 / 加载顺序异常）时的降级。
+  const _FV_RICH_EXTS_FALLBACK = [
     '.pdf', '.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm',
     '.html', '.htm',
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif',
     '.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.webm', '.mkv', '.avi',
-  ]);
+  ];
+  const _FV_RICH_EXTS = window.__kbRichPreviewExts instanceof Set
+    ? window.__kbRichPreviewExts
+    : new Set(_FV_RICH_EXTS_FALLBACK);
 
   function _extOfPath(relPath) {
     const name = String(relPath || '').split('/').pop() || '';
@@ -1986,6 +1994,7 @@
 
   /** 该文件是否该走"保排版"的富查看器（纯文本返回 false）。 */
   function _isRichPreview(relPath) {
+    if (typeof window.__kbIsRichPath === 'function') return window.__kbIsRichPath(relPath);
     return _FV_RICH_EXTS.has(_extOfPath(relPath));
   }
 
@@ -3976,27 +3985,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
     // 排版类文件（pdf/office/…）用富查看器打开，并把页码/引用片段带过去定位；
     // 文本类仍用原文查看器（引用高亮 + 转写纠错面板都在那边）。
-    if (_isRichPreview(anchor.path)) {
-      let hl = null;
-      try {
-        if (window.cogseed && typeof window.cogseed.invoke === 'function') {
-          const loc = await window.cogseed.invoke('cogseed.anchor.resolve', {
-            source: isSpace ? 'space' : 'library',
-            scope: isSpace ? 'space' : 'global',
-            path: anchor.path,
-            chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
-            ...(isSpace ? { spaceId } : {}),
-            ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
-          });
-          if (loc && loc.resolved) {
-            hl = {};
-            if (typeof loc.page === 'number' && loc.page > 0) hl.page = loc.page;
-          }
-        }
-      } catch (_) { /* 定位失败不阻断打开整篇 */ }
-      await _openFileViewer(isSpace ? { spaceId, path: anchor.path } : { path: anchor.path }, isSpace ? spaceId : '', hl);
-      return true;
-    }
+    if (_isRichPreview(anchor.path)) return _openRichForAnchor(anchor);
     if (typeof window.__openAnchorViewer !== 'function') return false;
     await window.__openAnchorViewer({
       source: 'library',
@@ -4007,6 +3996,43 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
       view: 'document',
     });
+    return true;
+  }
+
+  /**
+   * 排版类文件按"保排版"方式打开（PDF 走 PDFium、Office 走排版化 HTML），
+   * 并把引用定位（页码）带过去。返回 false = 这次没打开。
+   *
+   * 单独抽出来是因为它是**对外桥**：`anchored-source-view` 在把文件丢进
+   * 纯文本阅读器之前会先调它（见 `window.__openKbRichFile`）。渲染进程的
+   * 分派只有这一条路，PDF/Word 才不会退化成没有排版的字符流。
+   */
+  async function _openRichForAnchor(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return false;
+    const isSpace = anchor.source === 'space' || anchor.scope === 'space';
+    const spaceId = isSpace ? String(anchor.spaceId || '') : '';
+    if (isSpace && !spaceId) {
+      if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
+      return false;
+    }
+    let hl = null;
+    try {
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        const loc = await window.cogseed.invoke('cogseed.anchor.resolve', {
+          source: isSpace ? 'space' : 'library',
+          scope: isSpace ? 'space' : 'global',
+          path: anchor.path,
+          chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+          ...(isSpace ? { spaceId } : {}),
+          ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
+        });
+        if (loc && loc.resolved) {
+          hl = {};
+          if (typeof loc.page === 'number' && loc.page > 0) hl.page = loc.page;
+        }
+      }
+    } catch (_) { /* 定位失败不阻断打开整篇 */ }
+    await _openFileViewer(isSpace ? { spaceId, path: anchor.path } : { path: anchor.path }, isSpace ? spaceId : '', hl);
     return true;
   }
 
@@ -5985,6 +6011,15 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     normSpace: _fvNormSpace,
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
+  };
+
+  // 排版类文件的富查看器桥。调用方是常驻加载的 `anchored-source-view`：它拿到
+  // 排版类路径（pdf/office/html/图片/音视频）时先问这里，只有这里答不上来才
+  // 退回纯文本阅读器。返回 false = 不归我管（非排版类或参数不可用）。
+  window.__openKbRichFile = function openKbRichFile(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return Promise.resolve(false);
+    if (!_isRichPreview(anchor.path)) return Promise.resolve(false);
+    return Promise.resolve(_openRichForAnchor(anchor)).then((opened) => opened !== false, () => false);
   };
 
   // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：

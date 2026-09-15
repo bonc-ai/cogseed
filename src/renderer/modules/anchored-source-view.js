@@ -261,11 +261,70 @@
     });
   }
 
-  /** 只有"阅读全文 + 已解析出文本 + 面板模块已加载"时才提供纠错入口。 */
+  // ── 排版类文件：一律不进纯文本阅读器 ───────────────────────────────────
+  /**
+   * 「保排版」类型：PDF / Office / HTML / 图片 / 音视频。
+   *
+   * 为什么这份清单放在这里：它是**富查看器分派的唯一来源**。阅读器
+   * （本文件的纯文本视图）与富查看器（懒加载的 kb-workbench）各写一份
+   * 扩展名表会漂移——一边当排版类、另一边当纯文本，文件就被"降级成
+   * 没有排版的字符流"（真机反馈「word、pdf 等无法正常查看」就是这个）。
+   * kb-workbench 反过来读 `__kbRichPreviewExts` / `__kbIsRichPath`。
+   */
+  const RICH_PREVIEW_EXTS = new Set([
+    '.pdf', '.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm',
+    '.html', '.htm',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif',
+    '.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.webm', '.mkv', '.avi',
+  ]);
+
+  function richExtOf(relPath) {
+    const name = String(relPath || '').split(/[\\/]/).pop() || '';
+    const dot = name.lastIndexOf('.');
+    return dot >= 0 ? name.slice(dot).toLowerCase() : '';
+  }
+
+  /** 该路径是否该走"保排版"的富查看器（纯文本返回 false）。 */
+  function isRichPreviewPath(relPath) {
+    return RICH_PREVIEW_EXTS.has(richExtOf(relPath));
+  }
+
+  root.__kbRichPreviewExts = RICH_PREVIEW_EXTS;
+  root.__kbIsRichPath = isRichPreviewPath;
+
+  // ── 「文字转写」判定：纠错面板的准入条件 ────────────────────────────────
+  /**
+   * 纠错要解决的是**机器转写错词**（coxy → Cogseed / K 星 → K star），
+   * 只有转写稿才有这个场景。方案、笔记、代码这类普通文本给入口只会误导
+   * （真机反馈：纠错不该出现在所有文本上）。
+   *
+   * 判据 = 「名字像转写」或「正文像逐字稿」，任一成立即可；纯本地纯函数，
+   * 不做模型判定（可测、可解释、不联网）：
+   *   - 名字：转写 / 逐字稿 / 转录 / 实录 / 听写 / 字幕 / transcript / asr …
+   *   - 正文：≥2 段「说话人 + 时间」块头（`splitDialogueBlocks` 的识别规则），
+   *     或开头带一句转写声明（腾讯会议/飞书那类"机器识别结果仅供参考"）。
+   */
+  const TRANSCRIPT_NAME_RE = /(转写|逐字稿|转录|实录|听写|字幕|transcript|transcription|subtitle|asr)/i;
+  const TRANSCRIPT_NOTICE_RE = /(机器识别结果仅供参考|实时转写|语音转写|自动转写|识别结果仅供参考)/;
+  const TRANSCRIPT_MIN_BLOCKS = 2;
+
+  function isTranscriptDocument(relPath, text) {
+    const raw = String(text || '');
+    if (TRANSCRIPT_NOTICE_RE.test(raw.slice(0, 4000))) return true;
+    if (splitDialogueBlocks(raw).length >= TRANSCRIPT_MIN_BLOCKS) return true;
+    const name = String(relPath || '').split(/[\\/]/).pop() || '';
+    return TRANSCRIPT_NAME_RE.test(name);
+  }
+
+  /**
+   * 只有"文字转写 + 阅读全文 + 已解析出文本 + 面板模块已加载"时才提供纠错入口。
+   * 非转写文档（方案/笔记/代码）不出现这个按钮——它不是给普通文本用的能力。
+   */
   function canCorrect() {
     return activeView === 'document'
       && Boolean(activeResult?.resolved)
       && String(activeResult?.text || '').length > 0
+      && isTranscriptDocument(activeAnchor?.path || activeResult?.displayPath, activeResult?.text)
       && typeof root.KbTranscriptCorrect?.mount === 'function';
   }
 
@@ -559,16 +618,48 @@
     }
   }
 
+  /**
+   * 排版类文件 → 富查看器。富查看器住在懒加载的 kb-workbench 里，桥不在时
+   * **按需加载 KB 功能**（`loadRendererFeature('kb')` 只注入脚本，不切视图），
+   * 而不是把 PDF/Word 退化成纯文本。返回 true = 已按排版打开。
+   *
+   * 这是真机反馈「word、pdf 等无法正常查看」的根因所在：引用 chip / 发现页
+   * 桥缺席时会把 pdf 直接丢给纯文本阅读器（无排版 + 多出一个转写纠错按钮）。
+   */
+  function openViaRichViewer(anchor) {
+    const bridge = () => (typeof root.__openKbRichFile === 'function' ? root.__openKbRichFile : null);
+    const delegate = (fn) => Promise.resolve(fn(anchor)).then((opened) => opened !== false, () => false);
+    const now = bridge();
+    if (now) return delegate(now);
+    const loader = typeof root.loadRendererFeature === 'function' ? root.loadRendererFeature : null;
+    if (!loader) return Promise.resolve(false);
+    return Promise.resolve(loader('kb'))
+      .then(() => {
+        const loaded = bridge();
+        return loaded ? delegate(loaded) : false;
+      })
+      .catch(() => false);
+  }
+
   function openAnchorViewer(anchor) {
     const path = String(anchor?.path || '').trim();
     if (!path) return Promise.resolve();
+    if (isRichPreviewPath(path)) {
+      return openViaRichViewer({ ...anchor, path }).then((handled) => (
+        handled ? undefined : openTextViewer({ ...anchor, path })
+      ));
+    }
+    return openTextViewer({ ...anchor, path });
+  }
+
+  function openTextViewer(anchor) {
     if (!ensureModal()) {
       if (typeof root.uiToast === 'function') {
         root.uiToast(t('kb.viewer.ui_unavailable', '原文查看器暂时不可用'), { variant: 'warning' });
       }
       return Promise.resolve();
     }
-    activeAnchor = { ...anchor, path };
+    activeAnchor = { ...anchor, path: String(anchor?.path || '').trim() };
     return loadView(anchor?.view === 'document' ? 'document' : 'anchor');
   }
 

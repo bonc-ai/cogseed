@@ -995,6 +995,7 @@
 
   // 打开来源文档：排版类（pdf/office/html/图片）先交给 KB 富查看器保排版，
   // 纯文本（md/txt/代码）仍走原文查看器——后者带引用高亮与转写纠错面板。
+  // 回落路径同样安全：`__openAnchorViewer` 内部会按需拉起富查看器桥。
   function _openSource(path) {
     const fallback = () => {
       if (typeof window.__openAnchorViewer === 'function') {

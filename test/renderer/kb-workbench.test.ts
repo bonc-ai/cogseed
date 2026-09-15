@@ -471,7 +471,19 @@ describe('文件查看：按类型分派（#214 回归防护）', () => {
 
   it('引用锚点：排版类带页码定位到富查看器，文本类仍走原文查看器', () => {
     expect(src).toMatch(/_openFileViewerForAnchor[\s\S]{0,900}?_isRichPreview\(anchor\.path\)/);
-    expect(src).toMatch(/_openFileViewerForAnchor[\s\S]{0,1600}?page/);
+    // 页码定位与富查看器开在同一个函数里（_openRichForAnchor）
+    expect(src).toMatch(/_openRichForAnchor[\s\S]{0,1800}?page/);
+    expect(src).toMatch(/_openRichForAnchor[\s\S]{0,2200}?_openFileViewer\(/);
+  });
+
+  it('对外桥 __openKbRichFile：阅读器只问一次"这文件该不该保排版"', () => {
+    // 常驻加载的 anchored-source-view 在把排版类文件丢进纯文本阅读器前会调它；
+    // 桥必须：只接排版类、返回"是否接管"、且复用同一条 _openRichForAnchor。
+    expect(src).toContain('window.__openKbRichFile');
+    expect(src).toMatch(/__openKbRichFile[\s\S]{0,400}?_isRichPreview\(anchor\.path\)[\s\S]{0,200}?_openRichForAnchor/);
+    // 扩展名清单只有一份来源（anchored-source-view 暴露），避免两处漂移
+    expect(src).toContain('window.__kbRichPreviewExts');
+    expect(src).toContain('window.__kbIsRichPath');
   });
 
   it('HTML 用渲染 iframe（sandbox 只给 allow-scripts，与 chat-file-viewer 一致）', () => {
