@@ -48,7 +48,10 @@ describe('modal close control consistency', () => {
   it('uses the shared control in static and dynamically mounted dialogs', () => {
     for (const source of dialogSources) {
       expect(source).toContain('modal-close-btn');
-      expect(source).toContain('modal-close-icon');
+      expect(
+        source.includes('modal-close-icon')
+          || source.includes("uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn"),
+      ).toBe(true);
     }
   });
 

@@ -1,0 +1,58 @@
+// Source: src/renderer/modules/contexts.js (_ctxMenuItemsFor, inline rename,
+// text-view-edit). Preview data stays in this module until page reload. Upload
+// reads solely the File objects chosen by the user; no filesystem or KB writes,
+// indexing, system reveal, cross-space transfer, or automatic model invocation.
+(() => {
+const {Button,IconButton,Icon,Input,Textarea,Field,DropdownMenu,Dialog,EmptyState,Select}=window.CogSeedDesignSystem_f581b5;
+const seed=[
+ {id:'policies',parent:null,name:'制度文件',kind:'dir'},
+ {id:'templates',parent:null,name:'业务模板',kind:'dir'},
+ {id:'policy',parent:'policies',name:'项目管理办法.md',kind:'file',text:'# 项目管理办法\n\n## 材料核验\n核对企业基本信息、财务报表与项目申请材料。\n\n## 风险复核\n逐项记录异常财务指标、担保变化及材料缺失项。'},
+ {id:'checklist',parent:'templates',name:'调研材料清单.md',kind:'file',text:'# 调研材料清单\n\n- 企业基本信息\n- 最近三年财务报表\n- 项目用途及还款来源\n- 担保材料\n- 待补充材料与复核意见'},
+ {id:'report',parent:'templates',name:'进展简报模板.md',kind:'file',text:'# 进展简报\n\n统计期间：\n核心指标：\n变化原因：\n待核验事项：'}
+];
+// Module-lifetime draft store survives capability tab unmounts; a full page reload resets it.
+let libraryNodes=seed;
+const row={display:'flex',alignItems:'center',gap:'var(--cs-space-2)'};
+const textExtensions=/\.(md|txt|csv|json|yaml|yml|log|xml|html|css|js)$/i;
+function CapabilityLibrary({onSearch,onUse}) {
+ const [nodes,setNodes]=React.useState(()=>libraryNodes),[selected,setSelected]=React.useState(null),[expanded,setExpanded]=React.useState(['policies','templates']);
+ const [rename,setRename]=React.useState(null),[draft,setDraft]=React.useState(null),[dialog,setDialog]=React.useState(null),[notice,setNotice]=React.useState(''),[busy,setBusy]=React.useState(false);
+ const picker=React.useRef(null),target=React.useRef(null),counter=React.useRef(0),root=React.useRef(null),renameRow=React.useRef(null);
+ const chosen=nodes.find(n=>n.id===selected), count=nodes.filter(n=>n.kind==='file').length;
+ React.useEffect(()=>{libraryNodes=nodes;},[nodes]);
+ const newId=()=>`library-${Date.now()}-${counter.current++}`;
+ const expand=id=>{if(id)setExpanded(old=>old.includes(id)?old:[...old,id]);};
+ const descendants=id=>{const ids=new Set([id]);let changed=true;while(changed){changed=false;nodes.forEach(n=>{if(ids.has(n.parent)&&!ids.has(n.id)){ids.add(n.id);changed=true;}});}return ids;};
+ const nameError=(name,parent,id)=>!name.trim()?'名称不能为空':/[\\/\x00-\x1f]/.test(name)||name==='.'||name==='..'?'名称不能包含斜杠或路径符号':nodes.some(n=>n.id!==id&&n.parent===parent&&n.name===name.trim())?'同一文件夹下已有此名称':'';
+ React.useEffect(()=>{if(rename){const el=renameRow.current?.querySelector('input');el?.focus();el?.select();}},[rename?.id]);
+ const beginRename=n=>{setRename({id:n.id,name:n.name,error:''});};
+ const saveName=()=>{if(!rename)return;const n=nodes.find(n=>n.id===rename.id);const error=nameError(rename.name,n.parent,n.id);if(error){setRename({...rename,error});return;}setNodes(old=>old.map(n=>n.id===rename.id?{...n,name:rename.name.trim()}:n));setRename(null);};
+ const create=(kind,parent)=>{if(draft!==null){setNotice('请先保存或取消正在编辑的文件');return;}expand(parent);let name=kind==='dir'?'新建文件夹':'未命名.md',i=1;while(nodes.some(n=>n.parent===parent&&n.name===name))name=kind==='dir'?`新建文件夹 ${i++}`:`未命名 ${i++}.md`;const n={id:newId(),kind,parent,name,text:kind==='file'?'':undefined};setNodes(old=>[...old,n]);if(kind==='file')setSelected(n.id);beginRename(n);setNotice('');};
+ const choose=n=>{if(draft!==null&&selected!==n.id){setDialog({type:'discard',next:n.id});return;}setSelected(n.id);setNotice('');};
+ const upload=parent=>{target.current=parent;picker.current?.click();};
+ const importFiles=async event=>{const files=Array.from(event.target.files||[]);event.target.value='';if(!files.length)return;setBusy(true);setNotice('正在读取所选文件');try{const additions=[];let conflicts=0;for(const file of files){if(nodes.concat(additions).some(n=>n.parent===target.current&&n.name===file.name)){conflicts++;continue;}const readable=textExtensions.test(file.name)&&file.size<=2*1024*1024;additions.push({id:newId(),kind:'file',parent:target.current,name:file.name,text:readable?await file.text():null,size:file.size});}setNodes(old=>[...old,...additions]);expand(target.current);setNotice(`已添加 ${additions.length} 个文件${conflicts?`，${conflicts} 个同名文件未添加`:''}`);}catch{setNotice('文件读取失败，请重新选择文件');}finally{setBusy(false);}};
+ const edit=n=>{if(n.text===null)return;choose(n);if(draft===null||selected===n.id)setDraft(n.text);};
+ const rootItems=parent=>[{label:'新建文本',onSelect:()=>create('file',parent)},{label:'新建文件夹',onSelect:()=>create('dir',parent)},{label:'添加文件',onSelect:()=>upload(parent)}];
+ const menuGroups=n=>n.kind==='dir'?[{items:rootItems(n.id)},{items:[{label:'重命名',onSelect:()=>beginRename(n)},{label:'整理到文件夹',onSelect:()=>setDialog({type:'move',node:n,destination:''})}]},{danger:true,items:[{label:'删除',onSelect:()=>setDialog({type:'delete',node:n})}]}]:[{items:[...(n.text!==null?[{label:'编辑',onSelect:()=>edit(n)}]:[]),{label:'重命名',onSelect:()=>beginRename(n)}]},{danger:true,items:[{label:'删除',onSelect:()=>setDialog({type:'delete',node:n})}]},{items:[{label:'询问主智能体',onSelect:()=>onUse?onUse({name:n.name,text:n.text||'',reference:n.name}):setNotice('请从任务输入台引用此文件')},{label:'整理到文件夹',onSelect:()=>setDialog({type:'move',node:n,destination:''})},{label:'在系统中打开',onSelect:()=>setNotice('当前页面无法打开系统文件，请使用桌面客户端')}]}];
+ const renderBranch=(parent,depth=0)=>nodes.filter(n=>n.parent===parent).sort((a,b)=>(a.kind===b.kind?0:a.kind==='dir'?-1:1)).map(n=><React.Fragment key={n.id}><div style={{...row,paddingLeft:`calc(var(--cs-space-2) + ${depth} * var(--cs-space-4))`,minHeight:'var(--cs-row-list)',background:selected===n.id?'var(--cs-accent-wash)':undefined,borderRadius:'var(--cs-radius-md)'}}>
+ {rename?.id===n.id?<div ref={renameRow} style={{flex:1,minWidth:0}}><Field error={rename.error}><Input aria-label={`重命名 ${n.name}`} size="md" value={rename.name} onChange={e=>setRename({...rename,name:e.target.value,error:''})} onKeyDown={e=>{if(e.isComposing||e.keyCode===229)return;if(e.key==='Enter'){e.preventDefault();saveName();}if(e.key==='Escape'){e.preventDefault();setRename(null);}}}/></Field><Button size="sm" onClick={saveName}>保存名称</Button><Button size="sm" variant="ghost" onClick={()=>setRename(null)}>取消</Button></div>:<Button variant="ghost" aria-expanded={n.kind==='dir'?expanded.includes(n.id):undefined} aria-pressed={n.kind==='file'?selected===n.id:undefined} style={{flex:1,minWidth:0,justifyContent:'flex-start',padding:'0 var(--cs-space-1)'}} icon={<Icon name={n.kind==='dir'?(expanded.includes(n.id)?'chevronDown':'chevronRight'):'fileText'} size={14}/>} onClick={()=>n.kind==='dir'?setExpanded(old=>old.includes(n.id)?old.filter(id=>id!==n.id):[...old,n.id]):choose(n)}><span style={{overflow:'hidden',textOverflow:'ellipsis'}} title={n.name}>{n.name}</span></Button>}
+ <DropdownMenu align="start" trigger={<IconButton variant="quiet" size="sm" title={`${n.name} 更多操作`}><Icon name="dots" size={14}/></IconButton>} groups={menuGroups(n)}/></div>{n.kind==='dir'&&expanded.includes(n.id)&&renderBranch(n.id,depth+1)}</React.Fragment>);
+ const folderPath=n=>{const parent=nodes.find(p=>p.id===n.parent);return parent?`${folderPath(parent)} / ${n.name}`:n.name;};
+ const destinations=dialog?.type==='move'?[{id:'',label:'资料库根目录'},...nodes.filter(n=>n.kind==='dir'&&!descendants(dialog.node.id).has(n.id)).map(n=>({id:n.id,label:folderPath(n)}))]:[];
+ const closeDialog=()=>setDialog(null);
+ const confirmDialog=()=>{if(dialog.type==='discard'){setSelected(dialog.next);setDraft(null);closeDialog();return;}if(dialog.type==='delete'){const removed=descendants(dialog.node.id);setNodes(old=>old.filter(n=>!removed.has(n.id)));if(removed.has(selected)){setSelected(null);setDraft(null);}if(removed.has(rename?.id))setRename(null);closeDialog();setNotice('已删除');return;}if(dialog.type==='move'){const parent=dialog.destination||null;if(nameError(dialog.node.name,parent,dialog.node.id)){setDialog({...dialog,error:'目标文件夹已有同名文件，请选择其他位置'});return;}setNodes(old=>old.map(n=>n.id===dialog.node.id?{...n,parent}:n));expand(parent);closeDialog();setNotice('已移动');}};
+ return <section ref={root} aria-label="资料库" style={{display:'flex',flexDirection:'column',gap:'var(--cs-space-4)',minWidth:0}}>
+ <div style={row}><h2 style={{margin:0,font:'var(--cs-type-title)'}}>资料库</h2><span style={{flex:1}}/><IconButton title="搜索资料库" onClick={()=>onSearch?.()}><Icon name="search" size={15}/></IconButton></div>
+ <div style={row}><span style={{font:'var(--cs-type-ui)',color:'var(--cs-text-secondary)'}}>文件 {count}</span><span style={{flex:1}}/><DropdownMenu align="end" trigger={<IconButton title="资料库更多操作"><Icon name="dots" size={15}/></IconButton>} groups={[{items:rootItems(null)}]}/></div>
+ <input ref={picker} type="file" multiple hidden aria-label="上传资料文件" onChange={importFiles}/>
+ {notice&&<div role="status" aria-live="polite" style={{font:'var(--cs-type-caption)',color:'var(--cs-text-secondary)'}}>{notice}</div>}
+ <div aria-busy={busy||undefined} style={{display:'grid',gridTemplateColumns:'minmax(180px, 30%) minmax(0, 1fr)',minHeight:420,border:'1px solid var(--cs-border)',borderRadius:'var(--cs-radius-card)',overflow:'hidden'}}>
+ <nav aria-label="资料库文件树" style={{borderRight:'1px solid var(--cs-border)',padding:'var(--cs-space-2)',overflow:'auto',maxHeight:620}}>{nodes.length?renderBranch(null):<EmptyState icon="fileText" title="暂无文件" reason="通过更多操作新建或上传文件"/>}</nav>
+ <div style={{minWidth:0,padding:'var(--cs-space-6)',overflow:'auto',maxHeight:620}}>{!chosen?<div style={{display:'grid',placeItems:'center',minHeight:320}}><EmptyState icon="fileText" title="选择一个文件查看内容" reason="从左侧资料库中选择文件"/></div>:<><div style={{...row,flexWrap:'wrap',marginBottom:'var(--cs-space-4)'}}><strong style={{flex:1,overflowWrap:'anywhere',font:'var(--cs-type-title)'}}>{chosen.name}</strong>{draft===null?<><Button size="sm" disabled={chosen.text===null} onClick={()=>setDraft(chosen.text)}>编辑</Button><Button size="sm" variant="danger" onClick={()=>setDialog({type:'delete',node:chosen})}>删除</Button></>:<><Button size="sm" variant="ink" onClick={()=>{setNodes(old=>old.map(n=>n.id===selected?{...n,text:draft}:n));setDraft(null);setNotice('已保存');}}>保存</Button><Button size="sm" onClick={()=>setDraft(null)}>取消编辑</Button></>}</div>{draft!==null?<Textarea aria-label={`编辑 ${chosen.name}`} minHeight={320} value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.isComposing||e.keyCode===229)return;if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();setNodes(old=>old.map(n=>n.id===selected?{...n,text:draft}:n));setDraft(null);setNotice('已保存');}}}/>:chosen.text===null?<EmptyState icon="fileText" title="此文件暂不支持预览" reason="可在桌面客户端中打开原文件"/>:<article style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',font:'var(--cs-type-body)',lineHeight:1.75}}>{chosen.text||'此文件暂无内容'}</article>}</>}</div>
+ </div>
+ {dialog&&<Dialog title={dialog.type==='delete'?`删除「${dialog.node.name}」？`:dialog.type==='discard'?'放弃尚未保存的修改？':'整理到文件夹'} description={dialog.type==='delete'?`此操作将删除${dialog.node.kind==='dir'?'此文件夹及其中全部文件':'此文件'}，无法恢复。`:dialog.type==='discard'?'尚未保存的修改将丢失。':undefined} danger={dialog.type==='delete'} confirmLabel={dialog.type==='delete'?'删除':dialog.type==='discard'?'放弃修改':'移动文件'} onCancel={closeDialog} onConfirm={confirmDialog} extra={dialog.type==='move'?<div style={{width:'100%'}}><Field label="目标文件夹" error={dialog.error}><Select value={destinations.find(n=>n.id===dialog.destination)?.label} onChange={value=>setDialog({...dialog,destination:destinations.find(n=>n.label===value)?.id||'',error:''})} options={destinations.map(n=>n.label)}/></Field></div>:undefined}/>}
+ </section>;
+}
+window.CapabilityLibrary=CapabilityLibrary;
+})();

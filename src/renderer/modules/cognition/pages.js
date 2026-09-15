@@ -20,6 +20,36 @@
     return fallback.replace(/\{(\w+)\}/g, (match, name) => vars[name] == null ? match : String(vars[name]));
   }
 
+  function button(options) {
+    if (typeof root.uiButton !== 'function') throw new Error('cognition pages require uiButton');
+    return root.uiButton(options);
+  }
+
+  function iconButton(options) {
+    if (typeof root.uiIconButton !== 'function') throw new Error('cognition pages require uiIconButton');
+    return root.uiIconButton(options);
+  }
+
+  function input(options) {
+    if (typeof root.uiInput !== 'function') throw new Error('cognition pages require uiInput');
+    return root.uiInput(options);
+  }
+
+  function textarea(options) {
+    if (typeof root.uiTextarea !== 'function') throw new Error('cognition pages require uiTextarea');
+    return root.uiTextarea(options);
+  }
+
+  function emptyState(options) {
+    if (typeof root.uiEmptyState !== 'function') throw new Error('cognition pages require uiEmptyState');
+    return root.uiEmptyState(options);
+  }
+
+  function pageHeader(options) {
+    if (typeof root.uiPageHeader !== 'function') throw new Error('cognition pages require uiPageHeader');
+    return root.uiPageHeader(options);
+  }
+
   function stageMeta(stage) {
     const meta = {
       seed: {
@@ -208,84 +238,77 @@
     const evidence = Array.isArray(asset.evidence) ? asset.evidence : [];
     if (asset.reviewState === 'confirmed') {
       return '<div class="cognition-actions">'
-        + `<button type="button" class="btn btn-primary" data-cognition-action="reuse" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.reuse', '记录一次复用'))}</button>`
-        + `<button type="button" class="btn" data-cognition-action="add-evidence" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.add_evidence', '补充证据'))}</button>`
-        + `<button type="button" class="btn" data-cognition-action="view-history" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.history', '查看成长记录'))}</button>`
+        + button({ label: text('cognition.action.reuse', '记录一次复用'), role: 'primary', attrs: { 'data-cognition-action': 'reuse', 'data-cognition-id': asset.id } })
+        + button({ label: text('cognition.action.add_evidence', '补充证据'), attrs: { 'data-cognition-action': 'add-evidence', 'data-cognition-id': asset.id } })
+        + button({ label: text('cognition.action.history', '查看成长记录'), attrs: { 'data-cognition-action': 'view-history', 'data-cognition-id': asset.id } })
         + '</div>';
     }
     if (asset.reviewState === 'invalidated') {
-      const disabled = evidence.length ? '' : ' disabled aria-disabled="true"';
       return '<div class="cognition-actions">'
-        + `<button type="button" class="btn btn-primary" data-cognition-action="confirm" data-cognition-id="${escapeHtml(asset.id)}"${disabled}>${escapeHtml(text('cognition.action.reconfirm', '重新确认并写入长期记忆'))}</button>`
-        + `<button type="button" class="btn" data-cognition-action="add-evidence" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.add_evidence', '补充证据'))}</button>`
-        + `<button type="button" class="btn" data-cognition-action="defer" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.defer', '暂不确认'))}</button>`
+        + button({ label: text('cognition.action.reconfirm', '重新确认并写入长期记忆'), role: 'primary', disabled: !evidence.length, attrs: { 'data-cognition-action': 'confirm', 'data-cognition-id': asset.id, 'aria-disabled': evidence.length ? null : 'true' } })
+        + button({ label: text('cognition.action.add_evidence', '补充证据'), attrs: { 'data-cognition-action': 'add-evidence', 'data-cognition-id': asset.id } })
+        + button({ label: text('cognition.action.defer', '暂不确认'), attrs: { 'data-cognition-action': 'defer', 'data-cognition-id': asset.id } })
         + '</div>';
     }
-    const disabled = evidence.length ? '' : ' disabled aria-disabled="true"';
     const confirmLabel = asset.confirmationRequestedAt
       ? text('cognition.action.confirm_retry', '重试写入长期记忆')
       : text('cognition.action.confirm', '确认并写入长期记忆');
     return '<div class="cognition-actions">'
-      + `<button type="button" class="btn btn-primary" data-cognition-action="confirm" data-cognition-id="${escapeHtml(asset.id)}"${disabled}>${escapeHtml(confirmLabel)}</button>`
-      + `<button type="button" class="btn" data-cognition-action="add-evidence" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.add_evidence', '补充证据'))}</button>`
-      + `<button type="button" class="btn" data-cognition-action="defer" data-cognition-id="${escapeHtml(asset.id)}">${escapeHtml(text('cognition.action.defer', '暂不确认'))}</button>`
+      + button({ label: confirmLabel, role: 'primary', disabled: !evidence.length, attrs: { 'data-cognition-action': 'confirm', 'data-cognition-id': asset.id, 'aria-disabled': evidence.length ? null : 'true' } })
+      + button({ label: text('cognition.action.add_evidence', '补充证据'), attrs: { 'data-cognition-action': 'add-evidence', 'data-cognition-id': asset.id } })
+      + button({ label: text('cognition.action.defer', '暂不确认'), attrs: { 'data-cognition-action': 'defer', 'data-cognition-id': asset.id } })
       + '</div>';
   }
 
   function renderCreateForm() {
     return '<form class="cognition-create-form" id="cognition-create-form" hidden>'
-      + `<label>${escapeHtml(text('cognition.create.title', '认知名称'))}<input id="cognition-create-title" maxlength="120" required /></label>`
-      + `<label>${escapeHtml(text('cognition.create.summary', '观察到的工作方式'))}<textarea id="cognition-create-summary" maxlength="2000" required></textarea></label>`
-      + `<div class="cognition-actions"><button type="submit" class="btn btn-primary">${escapeHtml(text('cognition.create.submit', '创建种子'))}</button><button type="button" class="btn" data-cognition-action="cancel-create">${escapeHtml(text('cognition.action.cancel', '取消'))}</button></div>`
+      + `<label>${escapeHtml(text('cognition.create.title', '认知名称'))}${input({ id: 'cognition-create-title', required: true, attrs: { maxlength: 120 } })}</label>`
+      + `<label>${escapeHtml(text('cognition.create.summary', '观察到的工作方式'))}${textarea({ id: 'cognition-create-summary', required: true, attrs: { maxlength: 2000 } })}</label>`
+      + `<div class="cognition-actions">${button({ label: text('cognition.create.submit', '创建种子'), role: 'primary', attrs: { 'data-cognition-create-submit': 'true' } })}${button({ label: text('cognition.action.cancel', '取消'), attrs: { 'data-cognition-action': 'cancel-create' } })}</div>`
       + '</form>';
   }
 
-  function renderCognitionCapture(input) {
-    const state = input?.state === 'loading' || input?.state === 'error' ? input.state : 'ready';
+  function renderCognitionCapture(options) {
+    const state = options?.state === 'loading' || options?.state === 'error' ? options.state : 'ready';
     const loading = state === 'loading';
-    const error = String(input?.error || '').trim();
-    const title = String(input?.title || '').trim();
-    const summary = String(input?.summary || '').trim();
-    const evidence = String(input?.evidence || '').trim();
-    const sourceLabel = String(input?.sourceLabel || '').trim();
-    const conversationId = String(input?.conversationId || '').trim();
-    const messageId = String(input?.messageId || '').trim();
+    const error = String(options?.error || '').trim();
+    const title = String(options?.title || '').trim();
+    const summary = String(options?.summary || '').trim();
+    const evidence = String(options?.evidence || '').trim();
+    const sourceLabel = String(options?.sourceLabel || '').trim();
+    const conversationId = String(options?.conversationId || '').trim();
+    const messageId = String(options?.messageId || '').trim();
     // 四类分类是候选的最低必填项（saveRecallCandidate 会 requireAssetType）。
     // 模型预判只作默认值；给不出合法值时留空，强制用户自己选——不替他猜。
     const assetTypes = ['personal', 'rule', 'template', 'skill_method'];
-    const suggestedType = assetTypes.indexOf(String(input?.suggestedType || '')) >= 0
-      ? String(input.suggestedType)
+    const suggestedType = assetTypes.indexOf(String(options?.suggestedType || '')) >= 0
+      ? String(options.suggestedType)
       : '';
-    const disabled = state !== 'ready' ? ' disabled' : '';
+    const disabled = state !== 'ready';
     const status = loading
       ? `<p class="cognition-capture-status" data-cognition-capture-status aria-live="polite">${escapeHtml(text('cognition.capture.generating', '正在从会话中提炼可复用认知…'))}</p>`
       : (state === 'error'
         ? `<p class="cognition-capture-status cognition-capture-status-error" data-cognition-capture-status role="alert">${escapeHtml(error || text('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'))}</p>`
         : `<p class="cognition-capture-status" data-cognition-capture-status>${escapeHtml(text('cognition.capture.generated', '以下内容由模型生成，可编辑后保存。'))}</p>`);
     const actions = loading || state === 'error'
-      ? `<button type="button" class="btn" data-cognition-capture-cancel>${escapeHtml(text('cognition.action.cancel', '取消'))}</button>`
-      : `<button type="button" class="btn" data-cognition-capture-cancel>${escapeHtml(text('cognition.action.cancel', '取消'))}</button><button type="submit" class="btn btn-primary" data-cognition-capture-submit>${escapeHtml(text('cognition.capture.submit', '保存待确认认知'))}</button>`;
-    return '<div class="cognition-capture-overlay" data-cognition-capture-overlay>'
-      + `<form class="cognition-capture-modal" data-cognition-capture-form role="dialog" aria-modal="true" aria-busy="${loading ? 'true' : 'false'}">`
-      + '<div class="cognition-capture-header"><div>'
-      + '<strong>' + escapeHtml(text('cognition.capture.title', '沉淀为认知')) + '</strong>'
-      + `<span>${escapeHtml(loading ? text('cognition.capture.subtitle_generating', '正在生成候选草稿。') : text('cognition.capture.subtitle', '把这次有效做法保存为待确认候选。'))}</span>`
+      ? button({ label: text('cognition.action.cancel', '取消'), attrs: { 'data-cognition-capture-cancel': 'true' } })
+      : button({ label: text('cognition.action.cancel', '取消'), attrs: { 'data-cognition-capture-cancel': 'true' } })
+        + button({ label: text('cognition.capture.submit', '保存待确认认知'), role: 'primary', attrs: { 'data-cognition-capture-submit': 'true' } });
+    return `<form class="ui-modal ui-modal--md cognition-capture-modal" data-cognition-capture-form role="dialog" aria-modal="true" aria-busy="${loading ? 'true' : 'false'}">`
+      + '<header class="ui-modal__header cognition-capture-header"><div class="ui-modal__heading">'
+      + '<h2 class="ui-modal__title">' + escapeHtml(text('cognition.capture.title', '沉淀为认知')) + '</h2>'
+      + `<p class="ui-modal__description">${escapeHtml(loading ? text('cognition.capture.subtitle_generating', '正在生成候选草稿。') : text('cognition.capture.subtitle', '把这次有效做法保存为待确认候选。'))}</p>`
       + '</div>'
-      + '<button type="button" class="cognition-capture-close" data-cognition-capture-cancel aria-label="'
-      + escapeHtml(text('common.close', 'Close')) + '">x</button>'
-      + '</div>'
-      + '<div class="cognition-capture-body">'
+      + iconButton({ icon: 'x', label: text('common.close', 'Close'), className: 'cognition-capture-close', attrs: { 'data-cognition-capture-cancel': 'true' } })
+      + '</header>'
+      + '<div class="ui-modal__body cognition-capture-body">'
       + status
-      + '<label>' + escapeHtml(text('cognition.capture.name', '认知名称')) + '<input data-cognition-capture-title maxlength="120" required value="'
-      + escapeHtml(title) + `"${disabled} /></label>`
-      + '<label>' + escapeHtml(text('cognition.capture.summary', '可复用的工作方式')) + `<textarea data-cognition-capture-summary maxlength="2000" required${disabled}>`
-      + `${escapeHtml(summary)}</textarea></label>`
-      + '<label>' + escapeHtml(text('cognition.capture.evidence', '本次证据')) + `<textarea data-cognition-capture-evidence maxlength="2000" required${disabled}>`
-      + escapeHtml(evidence) + '</textarea></label>'
-      + '<label>' + escapeHtml(text('cognition.capture.source', '来源')) + '<input data-cognition-capture-source maxlength="160" required value="'
-      + escapeHtml(sourceLabel) + `"${disabled} /></label>`
+      + '<label>' + escapeHtml(text('cognition.capture.name', '认知名称')) + input({ id: 'cognition-capture-title', value: title, disabled, required: true, attrs: { maxlength: 120, 'data-cognition-capture-title': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.capture.summary', '可复用的工作方式')) + textarea({ id: 'cognition-capture-summary', value: summary, disabled, required: true, attrs: { maxlength: 2000, 'data-cognition-capture-summary': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.capture.evidence', '本次证据')) + textarea({ id: 'cognition-capture-evidence', value: evidence, disabled, required: true, attrs: { maxlength: 2000, 'data-cognition-capture-evidence': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.capture.source', '来源')) + input({ id: 'cognition-capture-source', value: sourceLabel, disabled, required: true, attrs: { maxlength: 160, 'data-cognition-capture-source': 'true' } }) + '</label>'
       + '<label>' + escapeHtml(text('cognition.capture.type', '归入哪一类'))
-      + `<select data-cognition-capture-type required${disabled}>`
+      + `<select class="ui-control" data-cognition-capture-type required${disabled ? ' disabled' : ''}>`
       + `<option value=""${suggestedType ? '' : ' selected'}>`
       + escapeHtml(text('cognition.capture.type_placeholder', '请选择…')) + '</option>'
       + assetTypes.map((value) => `<option value="${value}"${suggestedType === value ? ' selected' : ''}>`
@@ -297,13 +320,12 @@
       + '<input type="hidden" data-cognition-capture-message value="' + escapeHtml(messageId) + '" />'
       + '<p class="cognition-capture-note">' + escapeHtml(text('cognition.capture.note', '保存后会进入「待我处理」；确认后成为正式认知资产，可在后续任务中被复用。')) + '</p>'
       + '</div>'
-      + `<div class="cognition-capture-actions">${actions}</div>`
-      + '</form>'
-      + '</div>';
+      + `<footer class="ui-modal__footer cognition-capture-actions">${actions}</footer>`
+      + '</form>';
   }
 
   function renderAssetList(assets, activeId, emptyText) {
-    if (!assets.length) return `<div class="cognition-empty">${escapeHtml(emptyText)}</div>`;
+    if (!assets.length) return `<div class="cognition-empty">${emptyState({ title: emptyText, kind: 'quiet' })}</div>`;
     return '<ul class="cognition-asset-list">' + assets.map((asset) => {
       const meta = stageMeta(asset.stage);
       return `<li><button type="button" class="cognition-asset-row${asset.id === activeId ? ' active' : ''}" data-cognition-select="${escapeHtml(asset.id)}">`
@@ -367,7 +389,7 @@
       + `<h2>${escapeHtml(summary.title)}</h2>`
       + `<p>${escapeHtml(text('cognition.detail.unavailable', '完整详情暂不可用，请重试。'))}</p>`
       + '<div class="cognition-actions">'
-      + `<button type="button" class="btn" data-cognition-action="retry-detail">${escapeHtml(text('cognition.action.retry_detail', '重新加载详情'))}</button>`
+      + button({ label: text('cognition.action.retry_detail', '重新加载详情'), icon: 'refresh', attrs: { 'data-cognition-action': 'retry-detail' } })
       + '</div></section>';
   }
 
@@ -381,9 +403,9 @@
     });
     const busy = loading ? ` · ${text('cognition.pagination.loading', '加载中…')}` : '';
     return '<nav class="cognition-pagination" aria-label="' + escapeHtml(text('cognition.pagination.label', '认知资产分页')) + '">'
-      + `<button type="button" class="btn" data-cognition-page="${page - 1}"${loading || page <= 1 ? ' disabled' : ''}>${escapeHtml(text('cognition.pagination.previous', '上一页'))}</button>`
+      + button({ label: text('cognition.pagination.previous', '上一页'), size: 'sm', icon: 'arrow-left', disabled: loading || page <= 1, attrs: { 'data-cognition-page': page - 1 } })
       + `<span>${escapeHtml(label + busy)}</span>`
-      + `<button type="button" class="btn" data-cognition-page="${page + 1}"${loading || page >= pagination.totalPages ? ' disabled' : ''}>${escapeHtml(text('cognition.pagination.next', '下一页'))}</button>`
+      + button({ label: text('cognition.pagination.next', '下一页'), size: 'sm', iconEnd: 'arrow-right', disabled: loading || page >= pagination.totalPages, attrs: { 'data-cognition-page': page + 1 } })
       + '</nav>';
   }
 
@@ -415,10 +437,12 @@
       ? text('cognition.list.loading', '正在加载认知资产…')
       : emptyText;
     return '<div class="cognition-page" data-cognition-view-root>'
-      + `<header class="cognition-header"><div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p></div><button type="button" class="btn btn-primary" data-cognition-action="open-create">${escapeHtml(text('cognition.action.create', '新建认知种子'))}</button></header>`
+      + '<div class="cognition-header">'
+      + pageHeader({ title, actions: [{ label: text('cognition.action.create', '新建认知种子'), icon: 'plus', attrs: { 'data-cognition-action': 'open-create' } }] })
+      + `<p class="cognition-header-subtitle">${escapeHtml(subtitle)}</p></div>`
       + renderTabs(view)
       + renderCreateForm()
-      + (active ? `<div class="cognition-content"><main class="cognition-main">${renderGrowthVisual(active)}</main><aside>${renderAssetList(visible, active.id, emptyText)}${renderPagination(inputValue.pagination, inputValue.listLoading)}</aside>${detail}</div>` : `<div class="cognition-empty-page"${inputValue.listLoading ? ' aria-busy="true"' : ''}><div><p>${escapeHtml(emptyPage)}</p>${renderPagination(inputValue.pagination, inputValue.listLoading)}</div></div>`)
+      + (active ? `<div class="cognition-content"><main class="cognition-main">${renderGrowthVisual(active)}</main><aside>${renderAssetList(visible, active.id, emptyText)}${renderPagination(inputValue.pagination, inputValue.listLoading)}</aside>${detail}</div>` : `<div class="cognition-empty-page"${inputValue.listLoading ? ' aria-busy="true"' : ''}>${emptyState({ title: emptyPage, kind: 'quiet' })}${renderPagination(inputValue.pagination, inputValue.listLoading)}</div>`)
       + '</div>';
   }
 

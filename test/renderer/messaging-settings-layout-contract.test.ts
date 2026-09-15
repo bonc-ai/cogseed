@@ -76,13 +76,21 @@ describe('messaging connection-management layout contract', () => {
     expect(rendererStyle).toContain('grid-template-columns: minmax(0, 1fr);');
   });
 
-  it('keeps the connection page compact and removes the generic settings inset', () => {
-    expect(rendererStyle).toContain('#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container');
+  it('keeps the connection workbench inside the shared capability-page inset', () => {
+    const composition = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/renderer/resource-pages.css'),
+      'utf8',
+    );
+    expect(rendererStyle).not.toContain('#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container');
     expect(rendererStyle).toContain('.touchpoint-connections-header {');
     expect(rendererStyle).toMatch(/\.touchpoint-connections-header\s*\{[^{}]*display:\s*flex;[^{}]*min-height:\s*52px;/);
     expect(rendererStyle).toMatch(/\.touchpoint-connections-header h2\s*\{[^{}]*font-size:\s*16px;/);
     expect(rendererStyle).toMatch(/\.touchpoint-connections-view\s*\{[^{}]*gap:\s*8px;/);
     expect(rendererStyle).toMatch(/\.messaging-channel-overview\s*\{[^{}]*min-height:\s*82px;/);
+    expect(composition).toContain('.touchpoint-connections-header');
+    expect(composition).toContain('min-height: var(--control-height);');
+    expect(composition).toContain('.touchpoint-connections-header > div');
+    expect(composition).toContain('display: none;');
   });
 
   it('uses a labelled left-facing back button instead of an icon fallback', () => {
@@ -91,10 +99,12 @@ describe('messaging connection-management layout contract', () => {
       rendererHtml.indexOf('</header>', rendererHtml.indexOf('<header class="touchpoint-connections-header">')),
     );
 
-    expect(header).toContain('class="btn touchpoint-back-button"');
+    expect(header).toContain('touchpoint-back-button');
+    expect(header).toContain('ui-button--secondary');
     expect(header).toContain('data-ui-icon="chevron-left"');
     expect(header).toContain('data-i18n="common.back"');
     expect(header).not.toContain('data-ui-icon="arrow-left"');
+    expect(header).not.toContain('touchpoint_settings.connections.open_overview');
   });
 
   it('edits the channel-bridge sender allowlist per instance', () => {

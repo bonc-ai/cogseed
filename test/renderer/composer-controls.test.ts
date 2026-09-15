@@ -9,16 +9,14 @@ describe('composer control visual contract', () => {
   it('uses a neutral stop treatment while keeping send on the primary color', () => {
     const css = read('src/renderer/style.css');
     const tokenCss = read('src/renderer/tokens.css');
-    const streamingRule = css.match(/\.chat-send-btn\.streaming\s*{([\s\S]*?)}/)?.[1] || '';
-    const conversationStopRule = css.match(/#panel-conversation \.chat-send-btn\.streaming,[\s\S]*?#panel-conversation \.chat-send-btn\.streaming:disabled\s*{([\s\S]*?)}/)?.[1] || '';
+    const streamingRule = css.match(/\.chat-send-btn\.streaming\s*\{([\s\S]*?)}/)?.[1] || '';
+    const conversationStopRule = css.match(/#panel-conversation \.chat-send-btn\.streaming,[\s\S]*?#panel-conversation \.chat-send-btn\.streaming:disabled\s*\{([\s\S]*?)}/)?.[1] || '';
 
-    // style.css keeps the alias mapping; tokens.css owns the base literal
-    // (tokenization pass, see #203).
     expect(css).toMatch(/--control-stop:\s*var\(--color-control-stop\);/);
     expect(css).toMatch(/--control-stop-hover:\s*var\(--color-control-stop-hover\);/);
     expect(tokenCss).toMatch(/--color-control-stop:\s*#5B6470;/);
     expect(tokenCss).toMatch(/--color-control-stop-hover:\s*#46505B;/);
-    expect(css).toMatch(/\.chat-send-btn\s*{[\s\S]*?background:\s*var\(--primary\);/);
+    expect(css).toMatch(/\.chat-send-btn\s*\{[\s\S]*?background:\s*var\(--primary\);/);
     expect(streamingRule).toContain('background: var(--control-stop);');
     expect(streamingRule).not.toMatch(/#dc2626|var\(--danger\)/i);
     expect(conversationStopRule).toContain('background: color-mix(in srgb, var(--control-stop) 8%, var(--surface));');
@@ -28,12 +26,12 @@ describe('composer control visual contract', () => {
 
   it('keeps the conversation send button light without weakening the homepage CTA', () => {
     const css = read('src/renderer/style.css');
-    const conversationSendRule = css.match(/#panel-conversation \.chat-send-btn:not\(\.streaming\):not\(:disabled\)\s*{([\s\S]*?)}/)?.[1] || '';
+    const conversationSendRule = css.match(/#panel-conversation \.chat-send-btn:not\(\.streaming\):not\(:disabled\)\s*\{([\s\S]*?)}/)?.[1] || '';
 
     expect(conversationSendRule).toContain('background: color-mix(in srgb, var(--surface-2) 78%, var(--surface));');
     expect(conversationSendRule).toContain('color: var(--primary-text);');
     expect(conversationSendRule).toContain('box-shadow: none;');
-    expect(css).toMatch(/\.chat-send-btn\s*{[\s\S]*?background:\s*var\(--primary\);/);
+    expect(css).toMatch(/\.chat-send-btn\s*\{[\s\S]*?background:\s*var\(--primary\);/);
   });
 
   it('renders recipient chips as compact mentions in every locale', () => {
@@ -45,6 +43,21 @@ describe('composer control visual contract', () => {
 
     expect(html.match(/data-i18n="chat\.recipient_label">@<\/span>/g)).toHaveLength(3);
     expect(locales.every((locale) => locale['chat.recipient_label'] === '@')).toBe(true);
-    expect(css).toMatch(/\.chat-recipient-chip\s*{[\s\S]*?gap:\s*0;/);
+    expect(css).toMatch(/\.chat-recipient-chip\s*\{[\s\S]*?gap:\s*var\(--space-1\);[\s\S]*?min-height:\s*var\(--control-height-sm\);/);
+  });
+
+  it('uses shared compact controls and content-aware send emphasis', () => {
+    const css = read('src/renderer/style.css');
+
+    expect(css).toMatch(/:is\(\.new-chat-input-area, #panel-conversation \.chat-input-area\) :is\(\.chat-attach-btn, \.chat-stt-btn, \.chat-send-btn\)\s*\{[\s\S]*?width:\s*var\(--control-height-sm\);[\s\S]*?background:\s*transparent;/);
+    expect(css).toMatch(/:has\(\.chat-rich-editor:not\(:empty\)\) \.chat-send-btn:not\(\.streaming\):not\(:disabled\)\s*\{[\s\S]*?background:\s*var\(--control-primary-bg\);/);
+    expect(css).toMatch(/\.exec-config-effort\s*\{[\s\S]*?background:\s*var\(--color-overlay-fill\);[\s\S]*?border:\s*0;/);
+    expect(css).toMatch(/\.workspace-chip-label\s*\{[\s\S]*?font-family:\s*inherit;[\s\S]*?font-size:\s*inherit;/);
+    expect(css).toMatch(/\.model-chip-label\s*\{[\s\S]*?font-family:\s*inherit;[\s\S]*?font-size:\s*inherit;/);
+    expect(css).toMatch(/\.chat-permission-select\.ai-select\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?width:\s*auto;/);
+    expect(css).toMatch(/\.chat-permission-chip\s*\{[\s\S]*?--chat-permission-control-height:\s*26px;/);
+    expect(css).toMatch(/:is\(\.new-chat-input-area, #panel-conversation \.chat-input-area\) \.chat-permission-chip\s*\{[\s\S]*?height:\s*var\(--chat-permission-control-height\);[\s\S]*?min-height:\s*var\(--chat-permission-control-height\);/);
+    expect(css).toMatch(/\.chat-permission-chip \.chat-permission-select \.ai-select-trigger\s*\{[\s\S]*?width:\s*auto;[\s\S]*?font-size:\s*var\(--font-size-ui-sm\);[\s\S]*?font-weight:\s*var\(--font-weight-regular\);/);
+    expect(css).toMatch(/\.chat-permission-chip \.chat-permission-select \.ai-select-trigger:focus,[\s\S]*?border:\s*0;[\s\S]*?box-shadow:\s*none;/);
   });
 });
