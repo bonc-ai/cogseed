@@ -355,6 +355,102 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-analysis-card'].innerHTML).not.toContain('正在解析');
   });
 
+  it('生成脑图 / 生成测验不依赖 AI 解析：首屏（未解析）就可用', () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    // 首屏的按钮必须当场绑上 listener：只把 disabled 拿掉的话点了没反应
+    expect(els['kb-wb-analysis-card']).toBeTruthy();
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toMatch(/_refreshQaModelChipLabel\(\);[\s\S]{0,400}_bindAnalysisActions\(analysisCard\)/);
+    const html = els['kb-workbench'].innerHTML;
+    const mmIdx = html.indexOf('id="kb-wb-gen-mm"');
+    const quizIdx = html.indexOf('id="kb-wb-gen-quiz"');
+    expect(mmIdx).toBeGreaterThan(0);
+    expect(quizIdx).toBeGreaterThan(0);
+    // 两个按钮的标记里没有 disabled，也没有"请先生成 AI 解析"这个禁用理由
+    expect(html.slice(mmIdx - 400, mmIdx)).not.toContain('disabled');
+    expect(html.slice(quizIdx - 400, quizIdx)).not.toContain('disabled');
+    expect(html).not.toContain('请先生成 AI 解析');
+  });
+
+  it('两个入口的可用性只看"库是否为空"，并把解析裁掉的门槛去掉', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toContain('function _bindAnalysisActions');
+    expect(src).toMatch(/_bindAnalysisActions[\s\S]{0,600}_libFileCount\(\) === 0/);
+    // 解析结果不再决定按钮可用性（此前 disabled: !(ok && hasMm) / disabled: !ok）
+    expect(src).not.toMatch(/disabled: !\(ok && hasMm\)/);
+    expect(src).toContain('function _bindAnalysisActions');
+    expect(src).not.toContain('请先生成 AI 解析');
+  });
+
+  it('生成测验有真实实现：调 kb.quiz 并渲染可作答的卡片', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 这个入口此前只有调用点、没有实现（点击 ReferenceError）
+    expect(src).not.toMatch(/_renderQuiz\b/);
+    expect(src).toContain('function _genQuiz()');
+    expect(src).toContain("invoke('kb.quiz'");
+    expect(src).toContain('function _renderQuizCard');
+    // 题目文本一律走 textContent（模型输出不拼 innerHTML）
+    expect(src).toMatch(/function _renderQuizCard[\s\S]{0,900}textContent = String\(q\.question/);
+    // 会话恢复：quiz 消息按存下来的题目重建
+    expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,200}_appendQuizMessage/);
+    expect(src).toMatch(/kind: 'quiz', questions/);
+  });
+
+  it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
+    expect(src).toMatch(/kind: 'quiz', questions[\s\S]{0,200}_qaSaveCurrentSession\('测验'\)/);
+    expect(src).toMatch(/_state\.qaHistory\.push\(\{ role: 'assistant', kind: 'quiz'/);
+    // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
+    expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);
+    expect(src).toMatch(/Array\.isArray\(m\.questions\) \? m\.questions\.slice\(0, 20\)/);
+    // ③ 产物消息没有 content，不进模型多轮上下文
+    expect(src).toMatch(/filter\(\(m\) => m\.kind !== 'mindmap' && m\.kind !== 'quiz'\)/);
+  });
+
+  it('参考答案/解析分块显示，多要点自动列点', () => {
+    const { windowMock } = loadScript();
+    const clauses = windowMock.__kbFvUtils.quizAnswerClauses;
+    // 真机反馈里的原句：一个分号隔开的两个要点 → 拆成两条，而不是糊成一整段
+    const two = clauses('匹配角色只需要一个API Key；发版清理时应以CSV文件为准（提示词内是速览，以CSV为准）。');
+    expect(two).toHaveLength(2);
+    expect(two[0]).toBe('匹配角色只需要一个API Key'); // 列表项不带分隔符
+    expect(two[1]).toContain('发版清理时应以CSV文件为准');
+    // 单句不拆（不把一句话切碎）
+    expect(clauses('一句话参考答案。')).toEqual(['一句话参考答案。']);
+    // 编号式要点也认
+    expect(clauses('1. 先纠错 2. 再检索')).toEqual(['先纠错', '再检索']);
+    expect(clauses('')).toEqual([]);
+    // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toContain('function _quizAnswerBlock');
+    expect(src).toContain("_quizAnswerBlock('参考答案'");
+    expect(src).toContain("_quizAnswerBlock('解析'");
+    expect(src).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
+  });
+
+  it('共享库的分享显示为待开发（不再弹出"像能用"的分享弹窗）', () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    const html = els['kb-workbench'].innerHTML;
+    expect(html).toContain('kb-wb-soon-chip');
+    expect(html).toContain('待开发');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 开关 + 点击走说明弹层；真弹窗实现保留（翻开关即可恢复）
+    expect(src).toContain('const KB_SHARE_READY = false');
+    expect(src).toMatch(/if \(!KB_SHARE_READY\) \{ _kbShareSoonOpen\(\); return; \}/);
+    expect(src).toContain('function _kbShareSoonOpen');
+    expect(src).toContain('function _kbShareDialogOpen');
+  });
+
+  it('生成脑图仍走 kb.mindmap（本来就是独立能力）', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toMatch(/mmBtn\.addEventListener\('click', \(\) => _genMindmap\(\)\)/);
+    expect(src).toMatch(/quizBtn\.addEventListener\('click', \(\) => _genQuiz\(\)\)/);
+    expect(src).toContain("invoke('kb.mindmap'");
+  });
+
   it('renders shared knowledge bases (space library) in the tree', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
