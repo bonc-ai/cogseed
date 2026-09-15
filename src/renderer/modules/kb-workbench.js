@@ -3080,7 +3080,28 @@
     }
     wrap.classList.remove('is-outline');
     wrap.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
+    _mmPinStageSvg();
     _bindPreviewNodes();
+  }
+
+  // 画布内 SVG 按 viewBox 固定像素尺寸：flex 居中与「适应画布」的缩放都以真实像素为基准。
+  // 否则重渲染（折叠/搜索/背景/布局切换）后 SVG 回落到 .kb-mm-svg{width:100%;height:auto}，
+  // 缩放基准变成画布宽度 → 图会缩放失真、偏出画布中心。
+  function _mmPinStageSvg() {
+    const wrap = document.getElementById('kb-mm-overlay-wrap');
+    const svg = wrap && typeof wrap.querySelector === 'function' ? wrap.querySelector('svg') : null;
+    if (!svg) return null;
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    if (vb && vb.width && vb.height) {
+      if (svg.style) {
+        svg.style.width = vb.width + 'px';
+        svg.style.height = vb.height + 'px';
+        svg.style.maxWidth = 'none';
+        svg.style.maxHeight = 'none';
+        svg.style.flex = 'none';
+      }
+    }
+    return svg;
   }
 
   function _rerenderMindmaps() {
@@ -3133,22 +3154,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!overlay.hidden) return; // 已打开则不重置
     // 打开弹窗时隐藏对话区缩略脑图卡，避免"两个悬浮窗"叠加（关闭时恢复）
     document.querySelectorAll('.kb-qa-mm-action .kb-mm-msg').forEach((el) => { el.style.display = 'none'; });
-    // 应用用户记忆的窗口尺寸/位置，绑定拖拽调整/标题拖拽/保存状态
-    _mmApplyWindowRect();
     _mmBindResize();
     _mmBindTitleDrag();
+    // 先显示再套用尺寸/位置记忆：display:none 时量不到布局尺寸，居中位会被算成 0
+    // （全程同步执行，同一帧内完成，不会看到窗口跳动）
+    overlay.hidden = false;
+    _mmApplyWindowRect();
     _mmUpdateSaveState();
     _renderOverlay();
-    overlay.hidden = false;
     const titleInput = document.getElementById('kb-mm-title-input');
     if (titleInput) titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '知识库');
     _mmUpdateSaveState();
     if (_state.mmViewMode === 'graph') {
-      const svgEl = wrap.querySelector('svg');
-      if (svgEl && svgEl.viewBox && svgEl.viewBox.baseVal) {
-        svgEl.style.width = svgEl.viewBox.baseVal.width + 'px';
-        svgEl.style.height = svgEl.viewBox.baseVal.height + 'px';
-      }
+      _mmPinStageSvg();
       _mmFitToStage();
     }
     _mmUpdateToolbarState();
@@ -3178,14 +3196,6 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     dlg.style.width = w + 'px';
     dlg.style.height = h + 'px';
   }
-  function _mmSaveWindowSize() {
-    try {
-      const dlg = document.getElementById('kb-mm-dlg');
-      if (!dlg) return;
-      const r = dlg.getBoundingClientRect();
-      localStorage.setItem(_MM_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) }));
-    } catch { /* 无 localStorage */ }
-  }
   function _mmBindResize() {
     const dlg = document.getElementById('kb-mm-dlg');
     const handle = document.getElementById('kb-mm-resize');
@@ -3205,13 +3215,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const h = Math.max(400, Math.min(startH + (ev.clientY - startY), window.innerHeight - 40));
         dlg.style.width = w + 'px';
         dlg.style.height = h + 'px';
+        // 尺寸变化后窗口可能越出视口：按新尺寸重新夹取偏移，保证仍完整可见
+        const off = _mmWindowOffset();
+        const clamped = _mmClampWindowOffset(off.x, off.y);
+        _mmSetWindowOffset(clamped.x, clamped.y);
         _mmFitToStage();
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
         document.body.classList.remove('kb-wb-resizing');
-        _mmSaveWindowSize();
+        _mmSaveWindowRect();
       };
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
@@ -3262,6 +3276,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const items = [
       { k: 'fit', label: '适应画布', icon: 'maximize', fn: () => _mmFitToStage() },
       { k: 'center', label: '居中根节点', icon: 'target', fn: () => _mmCenterNode(0) },
+      { k: 'center-window', label: '窗口居中', icon: 'panel-collapse', fn: () => _mmCenterWindow() },
       { k: 'copy', label: '复制 SVG', icon: 'copy', fn: () => _mmCopySvg() },
     ];
     menu.innerHTML = items.map((it) => `<div class="kb-mm-more-item" data-more="${it.k}">${_icon(it.icon, 'kb-mm-menu-icon')}<span>${it.label}</span></div>`).join('');
@@ -3282,7 +3297,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
     try {
       const svg = _mmTreeSvg(root, new Set(), _mmRenderOpts());
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>脑图</title><style>body{margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh}</style></head><body>${svg}</body></html>`;
+      // 独立窗口：SVG 撑满窗口内容盒，靠 preserveAspectRatio（默认 xMidYMid meet）居中缩放。
+      // 此前 body 用 flex 居中 + min-height:100vh，图比窗口大时会被裁掉左上角且无法滚动（看着就没居中）。
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>脑图</title><style>html,body{height:100%}body{margin:0;box-sizing:border-box;padding:24px;background:#fff}svg{display:block;width:100%;height:100%}</style></head><body>${svg}</body></html>`;
       const res = await window.cogseed.invoke('kb.mindmap.popout', { html });
       if (res && res.ok === false && typeof uiToast === 'function') uiToast('独立窗口暂不可用', { variant: 'info' });
     } catch (err) {
@@ -3295,16 +3312,15 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const dlg = document.getElementById('kb-mm-dlg');
     if (!bar || !dlg || bar.dataset.dragBound) return;
     bar.dataset.dragBound = '1';
-    let sx = 0, sy = 0, ox = 0, oy = 0;
+    let sx = 0, sy = 0;
     bar.addEventListener('mousedown', (e) => {
       if (e.target.closest('input,button')) return;
+      e.preventDefault();
       sx = e.clientX; sy = e.clientY;
-      const r = dlg.getBoundingClientRect();
-      ox = r.left; oy = r.top;
+      const start = _mmWindowOffset(); // 从当前视觉偏移起拖，位移量直接累加
       const onMove = (ev) => {
-        dlg.style.left = Math.max(0, Math.min(window.innerWidth - dlg.offsetWidth, ox + (ev.clientX - sx))) + 'px';
-        dlg.style.top = Math.max(0, Math.min(window.innerHeight - dlg.offsetHeight, oy + (ev.clientY - sy))) + 'px';
-        dlg.style.margin = '0';
+        const off = _mmClampWindowOffset(start.x + (ev.clientX - sx), start.y + (ev.clientY - sy));
+        _mmSetWindowOffset(off.x, off.y);
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
@@ -3315,29 +3331,80 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       window.addEventListener('mouseup', onUp);
     });
   }
+
+  // ── 窗口位置：一律以「居中位 + translate 偏移」表达 ──
+  // 居中由 .kb-mm-overlay 的 flex 布局负责（窗口始终先落在正中），用户拖动只改 translate。
+  // 此前把记忆里的视口坐标直接写成 position:relative 的 left/top，会与居中位叠加：
+  // 每开一次窗口就再往右下推一次，最终只在屏幕角落露出一角——这正是「窗口没在正中央」的根因。
   const _MM_RECT_KEY = 'cogseed.kb-mm.rect';
-  function _mmApplyWindowRect() {
-    const dlg = document.getElementById('kb-mm-dlg');
+  // v1 的 x/y 语义（视口坐标）与写入方式（left/top 相对偏移）混在一起，旧值无法区分真假 → 一律作废并清除
+  const _MM_RECT_VERSION = 2;
+  function _mmDlgEl() { return document.getElementById('kb-mm-dlg'); }
+  function _mmWindowOffset() {
+    const dlg = _mmDlgEl();
+    const m = dlg ? /^(-?\d+(?:\.\d+)?)px\s+(-?\d+(?:\.\d+)?)px$/.exec(String(dlg.style.translate || '').trim()) : null;
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
+  }
+  // 居中位与尺寸取布局值：offsetLeft/offsetWidth 不受 transform/translate 与淡入动画影响，量得准
+  function _mmWindowBox() {
+    const dlg = _mmDlgEl();
+    if (!dlg) return null;
+    return { x: dlg.offsetLeft || 0, y: dlg.offsetTop || 0, w: dlg.offsetWidth || 0, h: dlg.offsetHeight || 0 };
+  }
+  function _mmSetWindowOffset(x, y) {
+    const dlg = _mmDlgEl();
     if (!dlg) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem(_MM_RECT_KEY) || 'null');
-      if (saved && saved.w && saved.h) {
-        dlg.style.width = Math.max(560, Math.min(saved.w, window.innerWidth - 40)) + 'px';
-        dlg.style.height = Math.max(400, Math.min(saved.h, window.innerHeight - 40)) + 'px';
-      }
-      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
-        dlg.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - 200)) + 'px';
-        dlg.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - 100)) + 'px';
-        dlg.style.margin = '0';
-      }
-    } catch { /* ignore */ }
+    dlg.style.left = ''; dlg.style.top = ''; dlg.style.margin = ''; // 清掉历史脏值，避免与居中位再叠加
+    dlg.style.translate = `${Math.round(x)}px ${Math.round(y)}px`;
+  }
+  // 夹取偏移，保证窗口**完整**落在视口内（此前只夹到"露出 200×100"，窗口能跑到屏幕外）
+  function _mmClampWindowOffset(x, y) {
+    const box = _mmWindowBox();
+    if (!box || !box.w || !box.h) return { x, y };
+    const maxX = Math.max(0, window.innerWidth - box.w - box.x);
+    const maxY = Math.max(0, window.innerHeight - box.h - box.y);
+    return { x: Math.max(-box.x, Math.min(x, maxX)), y: Math.max(-box.y, Math.min(y, maxY)) };
+  }
+  // 回到屏幕正中（更多菜单「窗口居中」）：清掉位置记忆，并顺手保尺寸
+  function _mmCenterWindow() {
+    _mmSetWindowOffset(0, 0);
+    try { localStorage.removeItem(_MM_RECT_KEY); } catch { /* 无 localStorage */ }
+    _mmSaveWindowRect();
+  }
+  // 打开弹窗时应用位置/尺寸记忆；无有效记忆 → 保持 CSS 默认（78vw×80vh，flex 居中）
+  function _mmApplyWindowRect() {
+    const dlg = _mmDlgEl();
+    if (!dlg) return;
+    _mmSetWindowOffset(0, 0); // 先归中：后续测量与越界兜底都以居中位为基准
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(_MM_RECT_KEY) || 'null'); } catch { saved = null; }
+    if (!saved || saved.v !== _MM_RECT_VERSION) {
+      if (saved) { try { localStorage.removeItem(_MM_RECT_KEY); } catch { /* 无 localStorage */ } }
+      _mmApplyWindowSize();
+      return; // 记不住的旧值 → 居中显示
+    }
+    if (Number.isFinite(saved.w) && Number.isFinite(saved.h) && saved.w > 0 && saved.h > 0) {
+      dlg.style.width = Math.max(560, Math.min(saved.w, window.innerWidth - 40)) + 'px';
+      dlg.style.height = Math.max(400, Math.min(saved.h, window.innerHeight - 40)) + 'px';
+    } else {
+      _mmApplyWindowSize();
+    }
+    if (!Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return;
+    const box = _mmWindowBox();
+    if (!box) return;
+    const off = _mmClampWindowOffset(saved.x - box.x, saved.y - box.y);
+    _mmSetWindowOffset(off.x, off.y);
   }
   function _mmSaveWindowRect() {
     try {
-      const dlg = document.getElementById('kb-mm-dlg');
-      if (!dlg) return;
-      const r = dlg.getBoundingClientRect();
-      localStorage.setItem(_MM_RECT_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) }));
+      const box = _mmWindowBox();
+      if (!box || !box.w || !box.h) return;
+      const off = _mmWindowOffset();
+      localStorage.setItem(_MM_RECT_KEY, JSON.stringify({
+        v: _MM_RECT_VERSION,
+        w: Math.round(box.w), h: Math.round(box.h),
+        x: Math.round(box.x + off.x), y: Math.round(box.y + off.y), // 视口绝对坐标
+      }));
     } catch { /* ignore */ }
   }
 
@@ -3549,14 +3616,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const vb = svg.viewBox && svg.viewBox.baseVal;
     const svgW = vb ? vb.width : 1200;
     const svgH = vb ? vb.height : 800;
+    // viewBox 原点不在 (0,0)（mind 布局最左分支会伸到负 x）：要减掉原点，否则偏移差一个 minX，节点落不到画布正中
+    const vbX = vb && Number.isFinite(vb.x) ? vb.x : 0;
+    const vbY = vb && Number.isFinite(vb.y) ? vb.y : 0;
     let bbox;
     try { bbox = el.getBBox(); } catch (_) { return; }
     if (!bbox || !bbox.width) return;
     const sx = bbox.x + bbox.width / 2;
     const sy = bbox.y + bbox.height / 2;
     _mmZoom = Math.max(_mmZoom, Math.min(1.4, Math.max(1, Math.min((stage.clientWidth || 800) / (bbox.width + 120), (stage.clientHeight || 600) / (bbox.height + 90)))));
-    _mmPanX = -(sx - svgW / 2) * _mmZoom;
-    _mmPanY = -(sy - svgH / 2) * _mmZoom;
+    _mmPanX = -((sx - vbX) - svgW / 2) * _mmZoom;
+    _mmPanY = -((sy - vbY) - svgH / 2) * _mmZoom;
     _applyMmTransform();
   }
 
@@ -3806,22 +3876,25 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _mmFitToStage() {
     const stage = document.getElementById('kb-mm-overlay-stage');
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    const svg = wrap ? wrap.querySelector('svg') : null;
-    if (!stage || !svg) return;
+    const svg = _mmPinStageSvg();
+    if (!stage || !wrap || !svg) return;
     const vb = svg.viewBox && svg.viewBox.baseVal;
-    const svgW = vb ? vb.width : (svg.style.width ? parseFloat(svg.style.width) : 1200);
-    const svgH = vb ? vb.height : (svg.style.height ? parseFloat(svg.style.height) : 800);
-    const stW = stage.clientWidth || 800;
-    const stH = stage.clientHeight || 600;
+    const svgW = vb && vb.width ? vb.width : (svg.style && svg.style.width ? parseFloat(svg.style.width) : 1200);
+    const svgH = vb && vb.height ? vb.height : (svg.style && svg.style.height ? parseFloat(svg.style.height) : 800);
+    // 以画布内容盒为准：stage 的 clientWidth 含 12px 内边距，会把图算大 ~3% 而略微溢出
+    const stW = wrap.clientWidth || stage.clientWidth || 800;
+    const stH = wrap.clientHeight || stage.clientHeight || 600;
     const scale = Math.min(stW / svgW, stH / svgH) * 0.92;
     _mmZoom = Math.max(0.15, Math.min(2.5, scale));
-    _mmPanX = 0; _mmPanY = 0;
+    _mmPanX = 0; _mmPanY = 0; // 平移归零：图正落画布中心
     _applyMmTransform();
   }
 
   function _applyMmTransform() {
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    if (wrap) wrap.style.transform = `scale(${_mmZoom}) translate(${_mmPanX}px, ${_mmPanY}px)`;
+    // 平移写在缩放外面：px 就是屏幕像素，拖拽 1:1 跟手，_mmCenterNode 的"逻辑位移×zoom"也对得上。
+    // 写成 scale() translate() 的话平移量会被再乘一次 zoom（拖拽变迟钝、居中偏一半）。
+    if (wrap) wrap.style.transform = `translate(${_mmPanX}px, ${_mmPanY}px) scale(${_mmZoom})`;
     const label = document.getElementById('kb-mm-zoom-label');
     if (label) label.textContent = Math.round(_mmZoom * 100) + '%';
   }
@@ -4007,8 +4080,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 画布范围（双向时 viewBox 从最左边界起，四周留白）
     // 基于**完整树**的布局坐标计算，折叠只隐藏节点、不改变画布大小
     // （避免收拢/展开时脑图尺寸跳动）
-    const minX = Math.min(...list.map((n) => n.x - n.w / 2)) - 60;
-    const maxX = Math.max(...list.map((n) => n.x + n.w / 2)) + 160;
+    // 左右留白必须等宽：此前左 60 / 右 160，整图会被推到画布中线左侧约 50 单位（看起来没在正中央）
+    const PAD_X = 120;
+    const minX = Math.min(...list.map((n) => n.x - n.w / 2)) - PAD_X;
+    const maxX = Math.max(...list.map((n) => n.x + n.w / 2)) + PAD_X;
     const maxY = Math.max(BOT, ...list.map((n) => n.y + n.h / 2)) + 30;
     const svgW = Math.max(400, maxX - minX);
     const svgH = Math.max(480, maxY);

@@ -113,13 +113,31 @@ const KB_FILES = [
   { path: 'external/feishu-wiki/SM 的交接.md', status: 'ready', chunks: 4, kind: 'word' },
 ];
 
-function loadScript(options: { narrow?: boolean } = {}) {
+// 生成脑图（kb.mindmap）返回的最小层级树：够触发弹窗预览与画布渲染
+const MINDMAP_ROOT = {
+  label: '班级建设',
+  children: [
+    { label: '分支一', children: [{ label: '子项 A' }, { label: '子项 B' }] },
+    { label: '分支二', children: [{ label: '子项 C' }] },
+  ],
+};
+
+function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string> } = {}) {
   const source = fs.readFileSync(
     path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
     'utf8',
   );
   const els: Record<string, any> = {};
   const created: any[] = [];
+  // localStorage：窗口尺寸/位置记忆的真实读写路径（此前 VM 里没有 localStorage，
+  // try/catch 一律静默降级，测不到"记忆被污染"这类回归）
+  const store = new Map<string, string>(Object.entries(options.storage || {}));
+  const localStorageMock = {
+    getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
+    setItem: (key: string, value: string) => { store.set(key, String(value)); },
+    removeItem: (key: string) => { store.delete(key); },
+    clear: () => store.clear(),
+  };
   const documentMock: any = {
     getElementById: vi.fn((id: string) => {
       if (!els[id]) els[id] = fakeEl(id);
@@ -136,6 +154,8 @@ function loadScript(options: { narrow?: boolean } = {}) {
     }),
   };
   const windowMock: any = {
+    innerWidth: options.width ?? 1440,
+    innerHeight: options.height ?? 900,
     addEventListener: vi.fn(),
     matchMedia: vi.fn(() => ({
       matches: Boolean(options.narrow),
@@ -182,6 +202,9 @@ function loadScript(options: { narrow?: boolean } = {}) {
             fingerprint: 'fp1',
           };
         }
+        if (ch === 'kb.mindmap') {
+          return { root: MINDMAP_ROOT };
+        }
         return {};
       }),
       stream: vi.fn(() => ({ promise: Promise.resolve() })),
@@ -199,10 +222,11 @@ function loadScript(options: { narrow?: boolean } = {}) {
     uiPrompt: windowMock.uiPrompt,
     document: documentMock,
     window: windowMock,
+    localStorage: localStorageMock,
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'kb-workbench.js' });
-  return { context, els, windowMock, created };
+  return { context, els, windowMock, created, localStorage: localStorageMock };
 }
 
 describe('KB workbench (S1 skeleton)', () => {
@@ -990,5 +1014,198 @@ describe('文件查看：按类型分派（#214 回归防护）', () => {
     expect(src).toContain('externalTarget: _fvExternalTarget');
     // 无当前文件上下文时必须隐藏，避免点了没反应
     expect(src).toMatch(/_fvCtx[\s\S]{0,400}?extBtn\.hidden/);
+  });
+});
+
+// ── 脑图「窗口 / 图」居中（真机反馈：无论窗口还是图都不在正中央）──
+describe('KB mindmap centering', () => {
+  const RECT_KEY = 'cogseed.kb-mm.rect';
+  const VIEW = { width: 1440, height: 900 };
+  // 1440×900 视口下 1123×720 窗口的居中位（.kb-mm-overlay 的 flex 居中结果）
+  const CENTERED = { x: 158, y: 90, w: 1123, h: 720 };
+
+  function source(): string {
+    return fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+  }
+
+  // 预置窗口几何 + 生成脑图按钮的绑定，返回可断言的 harness
+  function prepare(options: Parameters<typeof loadScript>[0] = {}) {
+    const h = loadScript({ ...VIEW, ...options } as any);
+    const dlg = fakeEl('kb-mm-dlg');
+    Object.assign(dlg, {
+      offsetLeft: CENTERED.x, offsetTop: CENTERED.y,
+      offsetWidth: CENTERED.w, offsetHeight: CENTERED.h,
+    });
+    h.els['kb-mm-dlg'] = dlg;
+    // 弹窗初始为关闭态（fakeEl 的 hidden 默认 false，不置真会被"已打开"分支直接 return）
+    const overlay = fakeEl('kb-mm-overlay');
+    overlay.hidden = true;
+    h.els['kb-mm-overlay'] = overlay;
+    const mmBtn = fakeEl('kb-wb-gen-mm');
+    h.els['kb-wb-gen-mm'] = mmBtn;
+    const card = fakeEl('kb-wb-analysis-card');
+    card.querySelector = vi.fn((sel: string) => (sel === '#kb-wb-gen-mm' ? mmBtn : null));
+    h.els['kb-wb-analysis-card'] = card;
+    return { h, dlg, mmBtn };
+  }
+
+  // 点「生成脑图」→ 等画布渲染 → 点缩略脑图卡打开弹窗（真实路径，不直接调内部函数）
+  async function openOverlay(h: ReturnType<typeof loadScript>, mmBtn: any) {
+    h.windowMock.renderKbWorkbench();
+    mmBtn._listeners.click();
+    await vi.waitFor(() => {
+      expect(h.created.some((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))).toBe(true);
+    });
+    const canvas = h.created.find((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))!.child;
+    canvas._listeners.click();
+    expect(h.els['kb-mm-overlay'].hidden).toBe(false);
+  }
+
+  function offsetOf(dlg: any): { x: number; y: number } {
+    const m = /^(-?\d+(?:\.\d+)?)px (-?\d+(?:\.\d+)?)px$/.exec(String(dlg.style.translate || ''));
+    expect(m).toBeTruthy();
+    return { x: Number(m![1]), y: Number(m![2]) };
+  }
+
+  it('无位置记忆时窗口落在屏幕正中（居中由 overlay 的 flex 布局给出，偏移为 0）', async () => {
+    const { h, dlg, mmBtn } = prepare();
+    await openOverlay(h, mmBtn);
+    expect(offsetOf(dlg)).toEqual({ x: 0, y: 0 });
+    expect(dlg.style.left).toBe('');
+    expect(dlg.style.top).toBe('');
+  });
+
+  it('被污染的 v1 位置记忆一律作废：窗口回正中，脏值被清掉', async () => {
+    // v1 写的是"视口坐标"，读的时候却当成 position:relative 的 left/top 叠加到居中位上，
+    // 每开一次就再往右下推一次（此前"窗口不在正中央"的根因）
+    const { h, dlg, mmBtn } = prepare({ storage: { [RECT_KEY]: JSON.stringify({ w: 1123, h: 720, x: 1240, y: 780 }) } });
+    await openOverlay(h, mmBtn);
+    expect(offsetOf(dlg)).toEqual({ x: 0, y: 0 });
+    expect(dlg.style.left).toBe('');
+    expect(h.localStorage.getItem(RECT_KEY)).toBeNull();
+  });
+
+  it('有效的 v2 位置记忆按"居中位 + 偏移"还原成原来那个绝对位置', async () => {
+    // 1123×720 的窗口在 1440×900 视口里，可落位区间是 x∈[0,317]、y∈[0,180]
+    const { h, dlg, mmBtn } = prepare({
+      storage: { [RECT_KEY]: JSON.stringify({ v: 2, w: 1123, h: 720, x: 300, y: 150 }) },
+    });
+    await openOverlay(h, mmBtn);
+    const off = offsetOf(dlg);
+    expect(CENTERED.x + off.x).toBe(300);
+    expect(CENTERED.y + off.y).toBe(150);
+  });
+
+  it('越界的记忆被夹取成"窗口完整可见"，不会只露一角或跑到屏幕外', async () => {
+    const { h, dlg, mmBtn } = prepare({
+      storage: { [RECT_KEY]: JSON.stringify({ v: 2, w: 1123, h: 720, x: 9999, y: 9999 }) },
+    });
+    await openOverlay(h, mmBtn);
+    const off = offsetOf(dlg);
+    const left = CENTERED.x + off.x;
+    const top = CENTERED.y + off.y;
+    expect(left).toBe(VIEW.width - CENTERED.w);
+    expect(top).toBe(VIEW.height - CENTERED.h);
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(top).toBeGreaterThanOrEqual(0);
+  });
+
+  it('先显示弹窗再套用记忆（display:none 时量不到居中位）', () => {
+    const src = source();
+    const start = src.indexOf('function _openMindPreview');
+    const iShow = src.indexOf('overlay.hidden = false;', start);
+    const iApply = src.indexOf('_mmApplyWindowRect();', start);
+    expect(iShow).toBeGreaterThan(-1);
+    expect(iApply).toBeGreaterThan(iShow);
+  });
+
+  it('画布图按 viewBox 固定像素尺寸并归中：scale 以画布内容盒算，平移归零', async () => {
+    const { h, mmBtn } = prepare();
+    const wrap = fakeEl('kb-mm-overlay-wrap');
+    wrap.clientWidth = 1440;
+    wrap.clientHeight = 640;
+    const svg: any = { style: {}, viewBox: { baseVal: { x: -260, y: 0, width: 2000, height: 800 } } };
+    wrap.querySelector = vi.fn(() => svg);
+    h.els['kb-mm-overlay-wrap'] = wrap;
+    await openOverlay(h, mmBtn);
+    // 固定成 viewBox 像素：否则重渲染后回落到 .kb-mm-svg{width:100%;height:auto}，缩放基准漂移
+    expect(svg.style.width).toBe('2000px');
+    expect(svg.style.height).toBe('800px');
+    const m = /^translate\((-?\d+)px, (-?\d+)px\) scale\(([\d.]+)\)$/.exec(String(wrap.style.transform));
+    expect(m).toBeTruthy();
+    expect(Number(m![3])).toBeCloseTo(Math.min(1440 / 2000, 640 / 800) * 0.92, 4);
+    expect([m![1], m![2]]).toEqual(['0', '0']);
+  });
+
+  it('画布容器跟随 stage 铺满（不再把左上角钉在 stage 中心，图才会真居中）', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+    const rules = [...css.matchAll(/\.kb-mm-overlay-wrap \{[\s\S]*?\}/g)].map((m) => m[0]);
+    expect(rules.length).toBeGreaterThan(0);
+    // 基础规则：铺满 + flex 居中
+    expect(rules[0]).toContain('width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;');
+    // 末条覆盖规则不得再引入绝对定位 + top/left 50% + max-content（左上角钉在 stage 中心 → 图整体偏右下）
+    const last = rules[rules.length - 1];
+    expect(last).not.toContain('position: absolute');
+    expect(last).not.toContain('top: 50%');
+    expect(last).not.toContain('width: max-content');
+  });
+
+  it('平移写在缩放外面（拖拽 1:1 跟手，缩放不会把平移量再乘一次）', () => {
+    const src = source();
+    expect(src).toContain('wrap.style.transform = `translate(${_mmPanX}px, ${_mmPanY}px) scale(${_mmZoom})`');
+  });
+
+  it('「居中根节点」补偿 viewBox 原点（minX≠0 时才算真居中）', () => {
+    const src = source();
+    expect(src).toMatch(/_mmPanX = -\(\(sx - vbX\) - svgW \/ 2\) \* _mmZoom;/);
+    expect(src).toMatch(/_mmPanY = -\(\(sy - vbY\) - svgH \/ 2\) \* _mmZoom;/);
+    expect(src).toMatch(/const vbX = vb && Number\.isFinite\(vb\.x\) \? vb\.x : 0;/);
+  });
+
+  it('脑图 viewBox 左右留白等宽（整图不被推向画布中线一侧）', () => {
+    const src = source();
+    expect(src).toContain('const PAD_X = 120;');
+    expect(src).toMatch(/const minX = Math\.min\([^\n]*\) - PAD_X;/);
+    expect(src).toMatch(/const maxX = Math\.max\([^\n]*\) \+ PAD_X;/);
+  });
+
+  it('「适应画布」按画布内容盒算缩放（不吃 stage 的 12px 内边距）', () => {
+    const src = source();
+    expect(src).toMatch(/const stW = wrap\.clientWidth \|\| stage\.clientWidth \|\| 800;/);
+    expect(src).toMatch(/const stH = wrap\.clientHeight \|\| stage\.clientHeight \|\| 600;/);
+  });
+
+  it('独立窗口：SVG 撑满内容盒 + 24px 内边距，靠 preserveAspectRatio 居中缩放（不再裁掉左上角）', () => {
+    const src = source();
+    const tpl = /const html = `<!doctype html>[\s\S]*?`;/.exec(src);
+    expect(tpl).toBeTruthy();
+    expect(tpl![0]).toContain('body{margin:0;box-sizing:border-box;padding:24px;background:#fff}');
+    expect(tpl![0]).toContain('svg{display:block;width:100%;height:100%}');
+    // 旧的 flex 居中 + min-height:100vh：图比窗口大时裁掉左上角且滚不到
+    expect(tpl![0]).not.toContain('min-height:100vh');
+    expect(tpl![0]).not.toContain('align-items:center');
+  });
+
+  it('主进程独立窗口按鼠标所在显示器的工作区居中（不是系统默认角落）', () => {
+    const mainSrc = fs.readFileSync(
+      path.join(__dirname, '../../src/main/ipc/index.ts'),
+      'utf8',
+    );
+    const start = mainSrc.indexOf("'kb.mindmap.popout'");
+    expect(start).toBeGreaterThan(-1);
+    const block = mainSrc.slice(start, start + 1400);
+    expect(block).toContain('screen.getDisplayNearestPoint(screen.getCursorScreenPoint())');
+    expect(block).toContain('area.x + (area.width - width) / 2');
+    expect(block).toContain('area.y + (area.height - height) / 2');
+    expect(block).toContain('center: true');
+  });
+
+  it('更多菜单提供「窗口居中」，一键把窗口拉回正中', () => {
+    const src = source();
+    expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
+    expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
   });
 });

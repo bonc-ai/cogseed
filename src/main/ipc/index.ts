@@ -14,7 +14,7 @@
  * dropping it into `invokeHandlers` or `streamHandlers`.
  */
 
-import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron';
+import { app, ipcMain, dialog, BrowserWindow, screen, type WebContents } from 'electron';
 
 import * as users from '../features/users';
 import * as chats from '../features/chats';
@@ -4317,13 +4317,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const source = typeof html === 'string' && html ? html : '';
     if (!source) return { ok: false, error: 'no html' };
     try {
+      // 窗口显式居中：BrowserWindow 默认按系统给的默认位置摆放，不看用户的鼠标/主窗口在哪，
+      // 实测会偏在屏幕一角。这里按"鼠标所在显示器"的工作区算中心点，多屏下也落在用户眼前。
+      const width = 900;
+      const height = 640;
+      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      const area = display.workArea;
       const win = new BrowserWindow({
-        width: 900, height: 640, minWidth: 480, minHeight: 320,
+        width, height, minWidth: 480, minHeight: 320,
+        x: Math.round(area.x + (area.width - width) / 2),
+        y: Math.round(area.y + (area.height - height) / 2),
+        center: true,
+        show: false,
         title: '脑图',
         backgroundColor: '#ffffff',
         webPreferences: { sandbox: true },
       });
       await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      win.show();
       win.on('closed', () => { /* no-op */ });
       return { ok: true };
     } catch (err) {
