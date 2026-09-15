@@ -372,6 +372,13 @@
           size: 'sm',
           disabled: state.busy,
           attrs: { 'data-atc-action': 'toggle-add' },
+        }) + button({
+          label: t('kb.glossary.title', '词表'),
+          icon: 'list',
+          role: 'ghost',
+          size: 'sm',
+          disabled: state.busy,
+          attrs: { 'data-atc-action': 'open-glossary' },
         });
       }
     }
@@ -1740,6 +1747,14 @@
         return;
       }
       if (kind === 'toggle-denied') { state.showDenied = !state.showDenied; render(); return; }
+      if (kind === 'open-glossary') {
+        if (root.KbGlossaryManager && typeof root.KbGlossaryManager.open === 'function') {
+          root.KbGlossaryManager.open({ onChanged: () => { void runScan(); } });
+        } else {
+          setStatus(t('kb.glossary.unavailable', '词表管理暂不可用。'), 'warning');
+        }
+        return;
+      }
       if (kind === 'find-suspects') { void runDetectSuspects(); return; }
       if (kind === 'clear-issues') { state.flagged = []; render(); return; }
       if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }

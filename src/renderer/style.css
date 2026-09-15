@@ -32250,6 +32250,125 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   min-height: 30px;
   padding-inline: var(--space-2);
 }
+/* 词表管理页（模态）：列表是唯一滚动区，筛选与批量动作常驻可见。 */
+.kb-glo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.kb-glo__meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+}
+.kb-glo__filters {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) repeat(3, minmax(120px, 1fr));
+  gap: var(--space-2);
+  align-items: end;
+}
+.kb-glo__status {
+  font-size: var(--font-size-2);
+  color: var(--text-body);
+}
+.kb-glo__status[data-tone="warning"] {
+  color: var(--color-warning-text);
+}
+.kb-glo__bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-glo__list {
+  max-height: min(46vh, 420px);
+  overflow-y: auto;
+  border-top: 1px solid var(--line-default);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-glo__list::-webkit-scrollbar {
+  width: 6px;
+}
+.kb-glo__list::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-3);
+  background: var(--line-default);
+}
+.kb-glo__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-1);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-glo__row:last-child {
+  border-bottom: none;
+}
+.kb-glo__row:hover {
+  background: var(--surface-card);
+}
+.kb-glo__row.is-selected {
+  background: var(--surface-subtle);
+}
+.kb-glo__row[data-paused="1"] .kb-glo__pair {
+  color: var(--text-muted);
+}
+.kb-glo__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-glo__pair {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-size: var(--font-size-3);
+}
+.kb-glo__row-meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
+.kb-glo__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+}
+.kb-glo__io {
+  border-top: 1px solid var(--line-default);
+  padding-top: var(--space-2);
+}
+.kb-glo__io summary {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  cursor: pointer;
+}
+.kb-glo__io-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+.kb-glo__io-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.kb-glo__io-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-glo__preview {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+}
+.kb-glo__preview[data-tone="warning"] {
+  color: var(--color-warning-text);
+}
+@media (max-width: 720px) {
+  .kb-glo__filters {
+    grid-template-columns: 1fr;
+  }
+}
 /* 待核块：唯一"需要人看一眼"的状态，用一次强调色；其余仍走弱化色。 */
 .kb-atc__issues {
   border-top: 1px solid var(--line-default);

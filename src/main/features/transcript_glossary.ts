@@ -432,12 +432,17 @@ export function entryId(wrong: string, correct: string): string {
 
 export function listEntries(
   userId: string,
-  filter: { kind?: GlossaryKind; riskLevel?: RiskLevel; status?: EntryStatus } = {},
+  filter: { kind?: GlossaryKind; riskLevel?: RiskLevel; status?: EntryStatus; search?: string } = {},
 ): GlossaryEntry[] {
+  // 搜索按折叠值做子串匹配：用户记得的是"大概长这样"，不该被大小写/全角挡住。
+  const needle = filter.search ? foldText(String(filter.search)).trim() : '';
   return loadGlossary(userId).entries.filter((e) =>
     (!filter.kind || e.kind === filter.kind)
     && (!filter.riskLevel || e.riskLevel === filter.riskLevel)
-    && (!filter.status || e.status === filter.status));
+    && (!filter.status || e.status === filter.status)
+    && (!needle
+      || foldText(e.wrong).includes(needle)
+      || foldText(e.correct).includes(needle)));
 }
 
 export function findEntry(userId: string, id: string): GlossaryEntry | null {
@@ -545,6 +550,23 @@ export function addContextAllow(userId: string, ids: string[], term: string): nu
   }
   if (updated > 0) saveGlossary(userId, file);
   return updated;
+}
+
+/**
+ * 词表 owner 备注（方案 §2.1-11 / §七「每行显示 owner、最后维护时间、来源」的词表级部分）。
+ * 只写 `meta.ownerNote`，不动词条。
+ */
+export function setOwnerNote(userId: string, note: string): string {
+  const file = loadGlossary(userId);
+  const text = typeof note === 'string' ? note.trim().slice(0, 120) : '';
+  file.meta = { ...file.meta, ownerNote: text };
+  saveGlossary(userId, file);
+  return text;
+}
+
+/** 词表级元数据（面板/管理页展示用）。 */
+export function readMeta(userId: string): GlossaryFile['meta'] {
+  return loadGlossary(userId).meta;
 }
 
 /** 移除一条加白（误加了就得能撤：白名单静默候选，不能只进不出）。 */

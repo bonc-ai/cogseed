@@ -154,8 +154,15 @@ export const invokeHandlers = {
       ...(payload?.kind ? { kind: payload.kind as transcriptGlossary.GlossaryKind } : {}),
       ...(payload?.riskLevel ? { riskLevel: payload.riskLevel as transcriptGlossary.RiskLevel } : {}),
       ...(payload?.status ? { status: payload.status as transcriptGlossary.EntryStatus } : {}),
+      ...(typeof payload?.search === 'string' && payload.search ? { search: payload.search } : {}),
     }),
+    // 词表 owner 与最后维护时间（方案 §七）；管理页据此显示表级归属。
+    meta: transcriptGlossary.readMeta(ctx.userId),
     file: 'transcript-glossary.json',
+  }),
+
+  'transcript.glossary.setOwnerNote': async (payload: Payload, ctx: IpcContext) => ({
+    ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),
   }),
 
   'transcript.glossary.upsert': async (payload: Payload, ctx: IpcContext) => {
