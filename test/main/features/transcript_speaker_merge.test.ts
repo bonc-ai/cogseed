@@ -108,22 +108,62 @@ describe('合并编辑集', () => {
   });
 });
 
-describe('真实验收稿上的效果（方案 §8.1-4）', () => {
-  const file = '/Users/cx/Desktop/文字转写/文字转写_教育智能体演示汇报_221240800.txt';
-  const exists = fs.existsSync(file);
+describe('规模不变量（合成样本，不含任何真实语料）', () => {
+  /** 造一份"同一人连说"的稿子：块数与合并后块数都可预期。 */
+  const synth = (blocks: number): string => {
+    const lines: string[] = [];
+    for (let i = 0; i < blocks; i += 1) {
+      const speaker = i % 3 === 0 ? 'A' : (i % 3 === 1 ? 'A' : 'B');
+      const clock = `19:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}`;
+      lines.push(`${speaker} 2026-09-05 ${clock} `, `第 ${i} 段正文。 `);
+    }
+    return lines.join('\n');
+  };
 
-  it.skipIf(!exists)('477 个发言槽合并到 ~122 块（Richard 手工版 126）', () => {
-    const text = fs.readFileSync(file, 'utf8');
+  it('大量发言槽被合并，且正文一字不改（只删块头 + 插时间区间）', () => {
+    const text = synth(477);
     const result = mergeSpeakerEdits(text);
     expect(result.blocksBefore).toBe(477);
-    expect(result.blocksAfter).toBeLessThan(150);
-    expect(result.blocksAfter).toBeGreaterThan(100);
-    expect(result.speakers.length).toBeGreaterThanOrEqual(5);
-    // 每个被删的都是块头、每个插入的都是时间区间
+    // 同人相邻被合并：块数下降，且"删掉的块头数 = 原块数 - 合并后块数"
+    expect(result.blocksAfter).toBeLessThan(result.blocksBefore);
+    const deletes = result.edits.filter((edit) => edit.action === 'delete');
+    expect(deletes).toHaveLength(result.blocksBefore - result.blocksAfter);
+    // 编辑集只有两类，且没有一条动到正文
     for (const edit of result.edits) {
       if (edit.action === 'delete') expect(edit.wrong).toMatch(/\d{2}:\d{2}:\d{2}/);
       else expect(edit.correct).toMatch(/^—\d{2}:\d{2}:\d{2}$/);
     }
+    // 交给引擎跑一遍：正文每一段都还在，块头数确实下降，偏移映射齐全
+    const candidates = result.edits.map((edit, index) => ({
+      entryRef: `merge_${index}`,
+      wrong: edit.wrong,
+      correct: edit.correct,
+      action: edit.action,
+      confidence: 1,
+      riskLevel: 'low' as const,
+      context: '',
+      span: edit.span,
+      ignoredCount: 0,
+      contextAllow: [],
+      structure: true,
+    }));
+    const applied = applyCorrections(text, candidates, {
+      acceptedIds: candidates.map((candidate) => candidate.entryRef),
+    });
+    for (const line of ['第 0 段正文。', '第 100 段正文。', '第 476 段正文。']) {
+      expect(applied.text).toContain(line);
+    }
+    expect(applied.offsetMap.length).toBeGreaterThan(0);
+    expect(applied.deletedFillers).toEqual({});
+  });
+
+  it('真实语料回归（可选，不把个人路径写进仓库）', () => {
+    // 需要在本地对真稿做回归时：COGSEED_TRANSCRIPT_SAMPLE=<绝对路径> npm test -- <本文件>
+    const sample = process.env.COGSEED_TRANSCRIPT_SAMPLE;
+    if (!sample || !fs.existsSync(sample)) return;
+    const result = mergeSpeakerEdits(fs.readFileSync(sample, 'utf8'));
+    expect(result.blocksBefore).toBeGreaterThan(result.blocksAfter);
+    expect(result.anchors.length).toBe(result.blocksAfter);
   });
 });
 
