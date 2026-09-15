@@ -32041,6 +32041,88 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   padding: var(--space-3) var(--space-6) var(--space-5);
   overflow: hidden;
 }
+/* 视觉规范 §一-1：左阅读 60% / 右纠错 40%。纠错面板需要固定可用宽度，
+   所以左列给 flex-grow，右列按比例但不低于 340px。 */
+.anchored-source-modal--reader .anchored-source-main {
+  flex: 1 1 60%;
+}
+.anchored-source-modal--reader .anchored-source-correct {
+  flex: 0 0 40%;
+  width: auto;
+  min-width: 340px;
+  max-width: 520px;
+}
+
+/* 视觉规范 §二-2：页面底（极浅灰）→ 左容器（白纸）→ 右面板（比底稍深），
+   用底色分层而不是生硬边框。 */
+.anchored-source-modal--reader .anchored-source-correct {
+  background: var(--surface-subtle);
+  border-left: none;
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+}
+.anchored-source-modal--reader .anchored-source-body {
+  background: var(--surface-raised);
+  padding: var(--space-5);
+}
+/* 双栏各自独立滚动，滚动条轻量化（规范 §五-1）。 */
+.anchored-source-modal--reader .anchored-source-body::-webkit-scrollbar {
+  width: 6px;
+}
+.anchored-source-modal--reader .anchored-source-body::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-3);
+  background: var(--line-default);
+}
+
+/* 视觉规范 §一-2：对话块——正文行高 1.5、说话人/时间小字号浅灰、
+   不同说话人之间留垂直间距，不再紧贴。 */
+.anchored-source-text[data-blocks="1"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-family: var(--font-sans);
+}
+.anchored-source-block {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-2);
+}
+/* 极淡的说话人底色（3 档循环）：只辅助分辨说话人切换，不做装饰。 */
+.anchored-source-block[data-speaker-index="0"] {
+  background: var(--speaker-tint-0);
+}
+.anchored-source-block[data-speaker-index="1"] {
+  background: var(--speaker-tint-1);
+}
+.anchored-source-block[data-speaker-index="2"] {
+  background: var(--speaker-tint-2);
+}
+.anchored-source-block-meta {
+  margin-bottom: 2px;
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+  line-height: 1.4;
+}
+.anchored-source-block-body {
+  color: var(--text-body);
+  font-size: var(--font-size-4);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* §五-3 阅读字号三档：只改正文与对话块的字号/行高。 */
+.anchored-source-modal[data-reader-scale="s"] .anchored-source-block-body,
+.anchored-source-modal[data-reader-scale="s"] .anchored-source-text {
+  font-size: var(--font-size-3);
+}
+.anchored-source-modal[data-reader-scale="l"] .anchored-source-block-body,
+.anchored-source-modal[data-reader-scale="l"] .anchored-source-text {
+  font-size: var(--font-size-5);
+  line-height: 1.7;
+}
+
 /* 查看器：左列（工具栏+正文）/ 右列（纠错面板）。原有的 .anchored-source-viewer
    规则在本块之后，故此处用两级选择器保证生效。 */
 .anchored-source-modal .anchored-source-viewer {
@@ -32430,6 +32512,98 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
     grid-template-columns: 1fr;
   }
 }
+/* ─── 视觉规范落地（2026-09-15）────────────────────────────────────────
+   §一-3 条目上下留白 + 极淡分隔线；§二-1 状态色四件套（低饱和墨绿 / 暖橙 /
+   浅灰蓝 / 中性灰）；§三-2 开关热区；§五-2 hover 柔和反馈。
+   颜色只表达状态，不大面积铺色。 */
+.kb-atc__row {
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-atc__row:hover {
+  background: var(--surface-subtle);
+}
+.kb-atc__row.is-accepted {
+  background: var(--state-accepted-bg);
+}
+.kb-atc__row.is-accepted:hover {
+  background: var(--state-accepted-bg);
+}
+/* 已接受按钮：低饱和墨绿，而不是品牌亮绿（长时间看不刺眼） */
+.kb-atc__row.is-accepted .ui-button--primary {
+  background: var(--state-accepted-bg);
+  border-color: var(--state-accepted-line);
+  color: var(--state-accepted-text);
+}
+/* 高危：暖橙（不是红，避免紧张感） */
+.kb-atc__row[data-risk="high"] {
+  border-left: 2px solid var(--state-caution-line);
+}
+.kb-atc__badge {
+  background: var(--state-review-bg);
+  color: var(--state-review-text);
+}
+.kb-atc__badge--issue {
+  background: var(--state-review-bg);
+  color: var(--state-review-text);
+}
+.kb-atc__row[data-risk="high"] .kb-atc__badge {
+  background: var(--state-caution-bg);
+  color: var(--state-caution-text);
+}
+.kb-atc__row.is-ignored {
+  background: var(--state-ignored-bg);
+  color: var(--state-ignored-text);
+}
+/* §三-2 开关（合并同人发言 / 范围）加大点击热区，鼠标好点 */
+.kb-atc__scope .ui-button {
+  min-height: 32px;
+  padding-inline: var(--space-3);
+}
+/* §四-1 折叠块给箭头提示（details 默认 marker 拿掉，自己画一个） */
+.kb-atc__issues > summary,
+.kb-atc__sync > summary,
+.kb-atc__add > summary,
+.kb-glo__io > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.kb-atc__issues > summary::-webkit-details-marker,
+.kb-atc__sync > summary::-webkit-details-marker,
+.kb-atc__add > summary::-webkit-details-marker,
+.kb-glo__io > summary::-webkit-details-marker {
+  display: none;
+}
+.kb-atc__issues > summary::before,
+.kb-atc__sync > summary::before,
+.kb-atc__add > summary::before,
+.kb-glo__io > summary::before {
+  content: '\25B8';
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+}
+.kb-atc__issues[open] > summary::before,
+.kb-atc__sync[open] > summary::before,
+.kb-atc__add[open] > summary::before,
+.kb-glo__io[open] > summary::before {
+  content: '\25BE';
+}
+/* 面板标题下的说明：弱化，不与标题抢视线（§二-3） */
+.kb-atc__hint {
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
+/* §二-3 辅助信息（文件名/字符数）降字号降不透明度 */
+.kb-atc__meta {
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+  opacity: 0.9;
+}
+
 /* 待核块：唯一"需要人看一眼"的状态，用一次强调色；其余仍走弱化色。 */
 .kb-atc__issues {
   border-top: 1px solid var(--line-default);

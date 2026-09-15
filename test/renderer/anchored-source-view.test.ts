@@ -33,6 +33,8 @@ function loadViewer() {
     addEventListener: vi.fn((name: string, handler: () => void) => {
       if (name === 'click') toggleHandler = handler;
     }),
+    // 真实元素一定有 querySelectorAll（工具栏用它挂多档字号按钮的监听）
+    querySelectorAll: vi.fn(() => []),
     querySelector: vi.fn((selector: string) => selector === '[data-anchor-view-toggle]'
       ? { addEventListener: (_name: string, handler: () => void) => { toggleHandler = handler; } }
       : selector === 'mark'
@@ -133,6 +135,14 @@ describe('anchored source viewer', () => {
       'cogseed.anchor.resolve',
       expect.objectContaining({ view: 'anchor' }),
     ));
+  });
+
+  it('视觉规范：对话块识别是纯函数，且不修改任何文本', () => {
+    // 通过源码契约守住两条：① 有块识别；② 只用于阅读着色（不参与替换）
+    expect(source).toContain('function splitDialogueBlocks');
+    expect(source).toContain('anchored-source-block-body');
+    expect(source).toMatch(/useBlocks = blocks\.length >= 2/);
+    expect(source).not.toMatch(/splitDialogueBlocks[\s\S]{0,400}(replace|correct)\s*\(/);
   });
 
   it('contains no page-local raw buttons or literal z-index values', () => {

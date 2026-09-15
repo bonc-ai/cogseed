@@ -74,6 +74,7 @@
       if (activeModal === modal) activeModal = null;
     });
     activeModal = modal;
+    applyReaderScale(readReaderScale());
     return modal;
   }
 
@@ -126,10 +127,32 @@
         attrs: { 'data-anchor-view-correct-toggle': 'true' },
       }));
     }
+    // 阅读字号三档（规范 §五-3）：只在"阅读全文"时给，图标+文字与其它工具按钮同款
+    if (activeView === 'document') {
+      const current = readReaderScale();
+      for (const [scale, label, key] of [
+        ['s', t('kb.viewer.scale_s', '小'), 'kb.viewer.scale_s'],
+        ['m', t('kb.viewer.scale_m', '中'), 'kb.viewer.scale_m'],
+        ['l', t('kb.viewer.scale_l', '大'), 'kb.viewer.scale_l'],
+      ]) {
+        buttons.push(root.uiButton({
+          label,
+          role: current === scale ? 'primary' : 'ghost',
+          size: 'sm',
+          attrs: { 'data-anchor-view-scale': scale, 'data-i18n': key },
+        }));
+      }
+    }
     host.innerHTML = buttons.join('');
     host.querySelector('[data-anchor-view-toggle]')?.addEventListener('click', () => {
       void loadView(activeView === 'anchor' ? 'document' : 'anchor');
     });
+    for (const node of host.querySelectorAll('[data-anchor-view-scale]')) {
+      node.addEventListener('click', () => {
+        applyReaderScale(node.getAttribute('data-anchor-view-scale'));
+        renderActions();
+      });
+    }
     host.querySelector('[data-anchor-view-correct-toggle]')?.addEventListener('click', () => {
       void toggleCorrection();
     });
@@ -221,6 +244,75 @@
     return t('kb.viewer.unavailable', '暂时无法读取该文件的原文。');
   }
 
+  /**
+   * 把逐字稿切成"发言人块"（纯函数，视觉规范 §四-2：多人对话用极淡底色区分说话人）。
+   * 与主进程 `transcript_speaker_merge.parseTranscriptBlocks` 同一套识别规则
+   * （名字 + 日期时间 / 名字｜时间 / 名字 时间），但这里只用于**阅读着色**，
+   * 不改任何文本、不做任何替换。
+   */
+  function splitDialogueBlocks(text) {
+    const raw = String(text || '');
+    const lines = raw.split('\n');
+    const headerRe = /^(?<speaker>.{1,24}?)\s+(?<date>\d{4}-\d{2}-\d{2})[ T](?<clock>\d{2}:\d{2}:\d{2})\s*$/;
+    const pipeRe = /^(?<speaker>.{1,24}?)\s*[｜|]\s*(?<clock>\d{2}:\d{2}:\d{2})\s*$/;
+    const plainRe = /^(?<speaker>.{1,24}?)\s+(?<clock>\d{2}:\d{2}:\d{2})\s*$/;
+    const blocks = [];
+    let cursor = 0;
+    let current = null;
+    for (const line of lines) {
+      const lineStart = cursor;
+      cursor = lineStart + line.length + 1;
+      const matched = line.match(headerRe) || line.match(pipeRe) || line.match(plainRe);
+      if (!matched) continue;
+      if (current) {
+        current.end = lineStart;
+        blocks.push(current);
+      }
+      current = {
+        speaker: (matched.groups?.speaker || '').trim(),
+        clock: matched.groups?.clock || '',
+        /** 块头所在行（仅用于定位，渲染时被换成 meta 行）。 */
+        start: lineStart,
+        /** 正文起点：块头行的下一行——正文里**不含**块头原文。 */
+        bodyStart: cursor,
+        end: cursor,
+      };
+    }
+    if (current) {
+      current.end = raw.length;
+      blocks.push(current);
+    }
+    return blocks.map((block, index) => ({ ...block, index }));
+  }
+
+  /**
+   * 阅读字号三档（规范 §五-3：长时间校对要能快速调字号）。
+   * 存在本机 localStorage（纯前端偏好，不进后端、不影响别人）。
+   */
+  const READER_SCALES = ['s', 'm', 'l'];
+  const READER_SCALE_KEY = 'cogseed.readerScale';
+
+  function readReaderScale() {
+    try {
+      const saved = root.localStorage?.getItem?.(READER_SCALE_KEY);
+      return READER_SCALES.includes(saved) ? saved : 'm';
+    } catch (_) {
+      return 'm';
+    }
+  }
+
+  function applyReaderScale(scale) {
+    const value = READER_SCALES.includes(scale) ? scale : 'm';
+    try {
+      root.localStorage?.setItem?.(READER_SCALE_KEY, value);
+    } catch (_) {
+      /* 偏好写不进去也不该影响阅读 */
+    }
+    const dialog = activeModal?.dialog;
+    if (dialog?.dataset) dialog.dataset.readerScale = value;
+    return value;
+  }
+
   function renderText(result) {
     const pre = element('[data-anchor-view-text]');
     const note = element('[data-anchor-view-note]');
@@ -242,13 +334,54 @@
     const markStart = Number.isFinite(absoluteStart) ? Math.max(0, Math.min(text.length, absoluteStart - textStart)) : 0;
     const markEnd = Number.isFinite(absoluteEnd) ? Math.max(markStart, Math.min(text.length, absoluteEnd - textStart)) : markStart;
 
-    pre.appendChild(document.createTextNode(text.slice(0, markStart)));
-    if (markEnd > markStart) {
-      const mark = document.createElement('mark');
-      mark.textContent = text.slice(markStart, markEnd);
-      pre.appendChild(mark);
+    // 视觉规范 §一/§四-2：识别出多个发言人时，改成"对话块"渲染——每块之间有
+    // 垂直间距、说话人+时间单独一行（小字号、浅灰）、不同说话人极淡底色区分；
+    // 认不出块头（普通文档）时退回原来的整段渲染，不动任何既有行为。
+    const blocks = splitDialogueBlocks(text);
+    const useBlocks = blocks.length >= 2;
+    if (useBlocks) {
+      const speakers = [];
+      for (const block of blocks) {
+        if (!speakers.includes(block.speaker)) speakers.push(block.speaker);
+      }
+      pre.dataset.blocks = '1';
+      for (const block of blocks) {
+        const node = document.createElement('div');
+        node.className = 'anchored-source-block';
+        // 只用 3 档极淡底色循环（多人时不会变成调色盘）
+        node.dataset.speakerIndex = String(speakers.indexOf(block.speaker) % 3);
+        const head = document.createElement('div');
+        head.className = 'anchored-source-block-meta';
+        head.textContent = [block.speaker, block.clock].filter(Boolean).join(' · ');
+        const body = document.createElement('div');
+        body.className = 'anchored-source-block-body';
+        const from = Math.max(block.bodyStart ?? block.start, 0);
+        const to = Math.min(block.end, text.length);
+        const localStart = Math.max(0, markStart - from);
+        const localEnd = Math.max(0, markEnd - from);
+        const slice = text.slice(from, to);
+        if (markEnd > markStart && localEnd > 0 && localStart < slice.length) {
+          body.appendChild(document.createTextNode(slice.slice(0, localStart)));
+          const mark = document.createElement('mark');
+          mark.textContent = slice.slice(localStart, Math.min(localEnd, slice.length));
+          body.appendChild(mark);
+          body.appendChild(document.createTextNode(slice.slice(Math.min(localEnd, slice.length))));
+        } else {
+          body.appendChild(document.createTextNode(slice));
+        }
+        node.appendChild(head);
+        node.appendChild(body);
+        pre.appendChild(node);
+      }
+    } else {
+      pre.appendChild(document.createTextNode(text.slice(0, markStart)));
+      if (markEnd > markStart) {
+        const mark = document.createElement('mark');
+        mark.textContent = text.slice(markStart, markEnd);
+        pre.appendChild(mark);
+      }
+      pre.appendChild(document.createTextNode(text.slice(markEnd)));
     }
-    pre.appendChild(document.createTextNode(text.slice(markEnd)));
 
     if (result.truncated) {
       note.hidden = false;

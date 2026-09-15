@@ -328,6 +328,74 @@ describe('待核（未决项）', () => {
   });
 });
 
+describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
+  const style = readSrc('renderer/style.css');
+  const tokens = readSrc('renderer/tokens.css');
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('状态色四件套走 token，不在 style.css 里写死颜色', () => {
+    for (const token of [
+      '--state-accepted-bg', '--state-accepted-text',
+      '--state-caution-bg', '--state-caution-text',
+      '--state-review-bg', '--state-review-text',
+      '--state-ignored-bg', '--state-ignored-text',
+    ]) {
+      expect(tokens).toContain(token);
+      expect(style).toContain(`var(${token})`);
+    }
+    // 已接受用低饱和墨绿（不是品牌亮绿）：按钮与行底色都换成状态色
+    expect(style).toMatch(/\.kb-atc__row\.is-accepted \.ui-button--primary \{[^}]*var\(--state-accepted-bg\)/);
+    // 高危用暖橙（不是红）
+    expect(style).toMatch(/\.kb-atc__row\[data-risk="high"\] \.kb-atc__badge \{[^}]*var\(--state-caution/);
+  });
+
+  it('按钮按"核心/次要/低频"分组：主色填充 / 线框 / 文字', () => {
+    // role 写在 attrs 之前，所以从 role 往后找对应的动作标识
+    const roles = (key: string) => {
+      const at = source.indexOf(`data-atc-action': '${key}'`);
+      const head = source.slice(Math.max(0, at - 400), at);
+      const found = head.match(/role: '(primary|secondary|ghost)'/g) || [];
+      return found.length ? found[found.length - 1] : '';
+    };
+    expect(roles('apply')).toContain('primary');
+    expect(roles('revert')).toContain('secondary');
+    expect(roles('notes')).toContain('ghost');
+    expect(roles('compare-search')).toContain('ghost');
+  });
+
+  it('条目留白 + 极淡分隔线 + 开关热区加大（鼠标好点）', () => {
+    expect(style).toMatch(/\.kb-atc__row \{[^}]*padding-block: var\(--space-2\)/);
+    expect(style).toMatch(/\.kb-atc__row \{[^}]*border-bottom: 1px solid var\(--line-default\)/);
+    expect(style).toMatch(/\.kb-atc__scope \.ui-button \{[^}]*min-height: 32px/);
+  });
+
+  it('折叠块有箭头提示，且说明文字弱化', () => {
+    expect(style).toContain('summary::before');
+    expect(style).toMatch(/\.kb-atc__issues\[open\] > summary::before/);
+    expect(style).toMatch(/\.kb-atc__hint \{[^}]*color: var\(--text-faint\)/);
+    expect(style).toMatch(/\.kb-atc__meta \{[^}]*font-size: var\(--font-size-1\)/);
+  });
+
+  it('面板标题下有一句作用说明，文件名只显示尾段（hover 给全路径）', () => {
+    expect(source).toContain('kb.transcriptCorrect.panel_hint');
+    expect(source).toContain("meta.setAttribute('title'");
+    // 只取路径尾段：`…split(/[\\/]/)…pop() || full`
+    expect(source).toContain('pop() || full');
+  });
+
+  it('左栏阅读：60/40 比例、行高 1.5、说话人三档专用 token、双栏细滚动条', () => {
+    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-main \{[^}]*flex: 1 1 60%/);
+    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*flex: 0 0 40%/);
+    expect(style).toMatch(/\.anchored-source-block-body \{[^}]*line-height: 1\.5/);
+    for (const token of ['--speaker-tint-0', '--speaker-tint-1', '--speaker-tint-2']) {
+      expect(tokens).toContain(token);
+    }
+    expect(style).toContain('.anchored-source-body::-webkit-scrollbar');
+    // 底色分层：右栏用底色而不是生硬左边框
+    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*border-left: none/);
+  });
+});
+
 describe('locale 覆盖', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [
@@ -373,6 +441,8 @@ describe('locale 覆盖', () => {
     'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
     'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
+    // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
+    'panel_hint', 'meta_full',
   ];
 
   for (const lang of locales) {

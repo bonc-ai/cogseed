@@ -332,7 +332,8 @@
       '  <div class="kb-atc__head">',
       '    <div class="kb-atc__head-main">',
       '      <div class="kb-atc__title" data-atc-title></div>',
-      '      <div class="kb-atc__meta" data-atc-meta></div>',
+      '      <div class="kb-atc__meta" data-atc-meta title=""></div>',
+      '      <div class="kb-atc__hint" data-atc-hint></div>',
       '    </div>',
       '    <div class="kb-atc__head-actions" data-atc-head-actions></div>',
       '  </div>',
@@ -433,10 +434,25 @@
       const actions = q('[data-atc-head-actions]');
       if (title) title.textContent = t('kb.transcriptCorrect.title', '转写纠错');
       if (meta) {
+        // 规范 §四-3：文件名过长时只显示尾段，hover 才给完整路径（title 属性）
+        const full = ctx.displayPath || ctx.docId || '';
+        const shortName = full.split(/[\\/]/).filter(Boolean).pop() || full;
         meta.textContent = t('kb.transcriptCorrect.meta', '{file} · {count} 字符', {
-          file: ctx.displayPath || ctx.docId || '',
+          file: shortName,
           count: ctx.text.length,
         });
+        meta.setAttribute('title', t('kb.transcriptCorrect.meta_full', '完整路径：{path}（{count} 字符）', {
+          path: full,
+          count: ctx.text.length,
+        }));
+      }
+      const hint = q('[data-atc-hint]');
+      if (hint) {
+        // 规范 §四-1：标题下给一句"这个面板是干什么的"
+        hint.textContent = t(
+          'kb.transcriptCorrect.panel_hint',
+          '只替换你词表里确认过的词；原文不会被改动，生成的清理版是另一份文件。',
+        );
       }
       if (actions) {
         // 次级操作贴着标题行右侧，避免单独占一行（视觉反馈：纵向留白更省）。
@@ -937,16 +953,17 @@
         buttons.push(button({
           label: t('kb.transcriptCorrect.notes', '清理附记'),
           icon: 'clipboard-list',
-          role: 'secondary',
+          // 低频操作 → 文字按钮（规范 §三-1）
+          role: 'ghost',
           size: 'sm',
           disabled: !state.runId,
           attrs: { 'data-atc-action': 'notes' },
         }));
         buttons.push(button({
-          label: t('kb.transcriptCorrect.revert', '回滚',
-          ),
+          label: t('kb.transcriptCorrect.revert', '回滚'),
           icon: 'x-circle',
-          role: 'ghost',
+          // 次要操作 → 线框按钮（规范 §三-1）
+          role: 'secondary',
           size: 'sm',
           attrs: { 'data-atc-action': 'revert' },
         }));
