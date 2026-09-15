@@ -1075,6 +1075,14 @@ function _aiSelectPopoverZIndexFor(el) {
 
 const _aiSelectInstances = new Set();
 
+function _aiSelectFilterOptions(options, query) {
+  const list = Array.isArray(options) ? options : [];
+  const normalized = String(query || '').trim().toLocaleLowerCase();
+  if (!normalized) return list.slice();
+  return list.filter((option) => [option && option.label, option && option.hint]
+    .some((value) => String(value || '').toLocaleLowerCase().includes(normalized)));
+}
+
 function _aiSelectMount(el, config) {
   if (!el) return null;
   const state = {
@@ -1084,6 +1092,15 @@ function _aiSelectMount(el, config) {
     onChange: () => {},
     open: false,
     activeIdx: -1,
+    searchable: false,
+    searchPlaceholder: t('ai_select.search_placeholder'),
+    usesDefaultSearchPlaceholder: !(config && typeof config.searchPlaceholder === 'string'),
+    query: '',
+    initialQuery: '',
+    loading: false,
+    total: null,
+    labelledBy: '',
+    ariaLabel: '',
     usesDefaultPlaceholder: !(config && typeof config.placeholder === 'string'),
   };
   Object.assign(state, config || {});
@@ -1093,19 +1110,22 @@ function _aiSelectMount(el, config) {
     : '';
 
   el.classList.add('ai-select');
+  const popoverId = `${el.id || `ai-select-${_aiSelectInstances.size + 1}`}-popover`;
   el.innerHTML = `
-    <button type="button" class="ai-select-trigger" aria-haspopup="listbox">
+    <button type="button" class="ai-select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="${escapeHtml(popoverId)}">
       <span class="ai-select-label"></span>
       ${caretIcon}
     </button>
-    <div class="ai-select-popover" role="listbox" hidden></div>
+    <div class="ai-select-popover" id="${escapeHtml(popoverId)}" role="listbox" hidden></div>
   `;
 
   const trigger = el.querySelector('.ai-select-trigger');
   const labelEl = el.querySelector('.ai-select-label');
   const popover = el.querySelector('.ai-select-popover');
+  if (state.labelledBy) trigger.setAttribute('aria-labelledby', state.labelledBy);
+  if (state.ariaLabel) trigger.setAttribute('aria-label', state.ariaLabel);
 
-  const renderOptionLabel = (target, opt) => {
+  const renderOptionLabel = (target, opt, highlightQuery = '') => {
     target.innerHTML = '';
     if (opt && opt.iconName && typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') {
       const iconWrap = document.createElement('span');
@@ -1114,7 +1134,18 @@ function _aiSelectMount(el, config) {
       target.appendChild(iconWrap);
     }
     const text = document.createElement('span');
-    text.textContent = opt ? opt.label : state.placeholder;
+    const label = opt ? String(opt.label || '') : state.placeholder;
+    const query = String(highlightQuery || '').trim();
+    const matchAt = query ? label.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()) : -1;
+    if (matchAt >= 0) {
+      text.appendChild(document.createTextNode(label.slice(0, matchAt)));
+      const mark = document.createElement('strong');
+      mark.textContent = label.slice(matchAt, matchAt + query.length);
+      text.appendChild(mark);
+      text.appendChild(document.createTextNode(label.slice(matchAt + query.length)));
+    } else {
+      text.textContent = label;
+    }
     target.appendChild(text);
   };
 
@@ -1131,23 +1162,63 @@ function _aiSelectMount(el, config) {
   };
 
   const renderPopover = () => {
+    const hadSearchFocus = state.searchable
+      && popover.contains(document.activeElement)
+      && document.activeElement?.classList?.contains('ai-select-search-input');
     popover.innerHTML = '';
-    if (state.options.length === 0) {
+    const visibleOptions = _aiSelectFilterOptions(state.options, state.query);
+    if (state.searchable) {
+      const searchRow = document.createElement('div');
+      searchRow.className = 'ai-select-search-row';
+      const searchIcon = document.createElement('span');
+      searchIcon.className = 'ai-select-search-icon';
+      if (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') {
+        searchIcon.innerHTML = window.uiIconHtml('search', 'ui-icon');
+      }
+      const input = document.createElement('input');
+      input.type = 'search';
+      input.className = 'ai-select-search-input';
+      input.value = state.query;
+      input.placeholder = state.searchPlaceholder;
+      input.setAttribute('aria-label', state.searchPlaceholder);
+      input.setAttribute('aria-controls', popoverId);
+      input.addEventListener('input', (event) => {
+        state.query = event.target.value;
+        const filtered = _aiSelectFilterOptions(state.options, state.query);
+        state.activeIdx = filtered.length ? 0 : -1;
+        renderPopover();
+        reposition();
+      });
+      searchRow.append(searchIcon, input);
+      popover.appendChild(searchRow);
+    }
+    const optionsHost = document.createElement('div');
+    optionsHost.className = 'ai-select-options';
+    popover.appendChild(optionsHost);
+    if (state.loading) {
+      const loading = document.createElement('div');
+      loading.className = 'ai-select-empty ai-select-loading';
+      loading.setAttribute('role', 'status');
+      loading.textContent = t('ai_select.loading');
+      optionsHost.appendChild(loading);
+    } else if (visibleOptions.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'ai-select-empty';
-      empty.textContent = t('ai_select.empty');
-      popover.appendChild(empty);
-      return;
-    }
-    state.options.forEach((opt, idx) => {
+      empty.textContent = state.query
+        ? t('ai_select.no_results', { query: state.query })
+        : t('ai_select.empty');
+      optionsHost.appendChild(empty);
+    } else visibleOptions.forEach((opt, idx) => {
       const item = document.createElement('div');
       item.className = 'ai-select-item';
+      item.id = `${popoverId}-option-${idx}`;
       item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', opt.value === state.value ? 'true' : 'false');
       if (opt.value === state.value) item.classList.add('active');
       if (idx === state.activeIdx) item.classList.add('hover');
       const main = document.createElement('div');
       main.className = 'ai-select-item-label';
-      renderOptionLabel(main, opt);
+      renderOptionLabel(main, opt, state.query);
       item.appendChild(main);
       if (opt.hint) {
         const hint = document.createElement('div');
@@ -1163,8 +1234,29 @@ function _aiSelectMount(el, config) {
         state.activeIdx = idx;
         popover.querySelectorAll('.ai-select-item').forEach((n, i) => n.classList.toggle('hover', i === idx));
       });
-      popover.appendChild(item);
+      optionsHost.appendChild(item);
     });
+    if (state.searchable) {
+      const footer = document.createElement('div');
+      footer.className = 'ai-select-footer';
+      const total = state.total != null && Number.isFinite(Number(state.total))
+        ? Number(state.total)
+        : state.options.length;
+      footer.textContent = t('ai_select.result_count', { visible: visibleOptions.length, total });
+      popover.appendChild(footer);
+      const input = popover.querySelector('.ai-select-search-input');
+      if (input) {
+        const activeOption = state.activeIdx >= 0
+          ? Array.from(popover.querySelectorAll('.ai-select-item')).find((item) => item.id === `${popoverId}-option-${state.activeIdx}`)
+          : null;
+        if (activeOption) input.setAttribute('aria-activedescendant', activeOption.id);
+        else input.removeAttribute('aria-activedescendant');
+        if (hadSearchFocus) {
+          input.focus();
+          input.setSelectionRange?.(input.value.length, input.value.length);
+        }
+      }
+    }
   };
 
   // Portal the popover to <body> while open so an ancestor with
@@ -1193,24 +1285,32 @@ function _aiSelectMount(el, config) {
   const open = () => {
     if (state.open) return;
     state.open = true;
+    state.query = state.initialQuery || '';
     el.classList.add('open');
+    trigger.setAttribute('aria-expanded', 'true');
     popover.hidden = false;
     portalParent = popover.parentNode;
     portalNextSibling = popover.nextSibling;
     document.body.appendChild(popover);
-    state.activeIdx = Math.max(0, state.options.findIndex(o => o.value === state.value));
+    const visibleOptions = _aiSelectFilterOptions(state.options, state.query);
+    const selectedIndex = visibleOptions.findIndex(o => o.value === state.value);
+    state.activeIdx = visibleOptions.length ? Math.max(0, selectedIndex) : -1;
     renderPopover();
     reposition();
+    if (state.searchable) {
+      setTimeout(() => popover.querySelector('.ai-select-search-input')?.focus(), 0);
+    }
     setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
     document.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition, true);
   };
 
-  const close = () => {
+  const close = (restoreFocus = false) => {
     if (!state.open) return;
     state.open = false;
     el.classList.remove('open');
+    trigger.setAttribute('aria-expanded', 'false');
     popover.hidden = true;
     popover.style.position = '';
     popover.style.left = '';
@@ -1234,6 +1334,7 @@ function _aiSelectMount(el, config) {
     document.removeEventListener('keydown', onKey, true);
     window.removeEventListener('scroll', reposition, true);
     window.removeEventListener('resize', reposition, true);
+    if (restoreFocus && trigger.isConnected && !trigger.disabled) trigger.focus();
   };
 
   const onDocDown = (e) => {
@@ -1245,9 +1346,10 @@ function _aiSelectMount(el, config) {
     // adjacent input would otherwise commit its Enter into "pick the
     // active option" of this select.
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Escape') { close(); e.preventDefault(); }
+    if (e.key === 'Escape') { close(true); e.preventDefault(); }
     else if (e.key === 'ArrowDown') {
-      state.activeIdx = Math.min(state.options.length - 1, state.activeIdx + 1);
+      const visibleOptions = _aiSelectFilterOptions(state.options, state.query);
+      state.activeIdx = Math.min(visibleOptions.length - 1, state.activeIdx + 1);
       renderPopover();
       e.preventDefault();
     } else if (e.key === 'ArrowUp') {
@@ -1255,8 +1357,9 @@ function _aiSelectMount(el, config) {
       renderPopover();
       e.preventDefault();
     } else if (e.key === 'Enter') {
-      if (state.activeIdx >= 0 && state.activeIdx < state.options.length) {
-        _aiSelectPick(api, state.options[state.activeIdx].value);
+      const visibleOptions = _aiSelectFilterOptions(state.options, state.query);
+      if (state.activeIdx >= 0 && state.activeIdx < visibleOptions.length) {
+        _aiSelectPick(api, visibleOptions[state.activeIdx].value);
         e.preventDefault();
       }
     }
@@ -1276,6 +1379,7 @@ function _aiSelectMount(el, config) {
       }
       // Normalize value if not in options
       if (state.value && !state.options.some(o => o.value === state.value)) state.value = '';
+      state.activeIdx = -1;
       renderTrigger();
       if (state.open) renderPopover();
     },
@@ -1285,11 +1389,23 @@ function _aiSelectMount(el, config) {
     },
     getValue() { return state.value; },
     onChange(fn) { state.onChange = typeof fn === 'function' ? fn : () => {}; },
+    setLoading(loading) {
+      state.loading = Boolean(loading);
+      if (state.open) renderPopover();
+    },
+    setSearchQuery(query) {
+      state.query = String(query || '');
+      const visibleOptions = _aiSelectFilterOptions(state.options, state.query);
+      state.activeIdx = visibleOptions.length ? 0 : -1;
+      if (state.open) renderPopover();
+    },
     refreshI18n() {
       if (state.usesDefaultPlaceholder) state.placeholder = t('ai_select.placeholder');
+      if (state.usesDefaultSearchPlaceholder) state.searchPlaceholder = t('ai_select.search_placeholder');
       renderTrigger();
       if (state.open) renderPopover();
     },
+    open,
     close,
   };
 
@@ -1315,7 +1431,7 @@ function _aiSelectPick(api, value) {
   const prev = api.state.value;
   api.state.value = value || '';
   api.el.dataset.value = api.state.value;
-  api.close();
+  api.close(true);
   if (prev !== api.state.value) {
     try { api.state.onChange(api.state.value); } catch (_) {}
   }
@@ -1370,6 +1486,7 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     _SAFE_EXTERNAL_LINK_RE,
     renderMarkdown,
     sanitizeMathExpressionForMathJax,
+    _aiSelectFilterOptions,
     _aiSelectNextZIndex,
   };
 }

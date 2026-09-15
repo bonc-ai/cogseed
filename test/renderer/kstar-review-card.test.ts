@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
+const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
 
 function extractFunction(name: string): string {
   const marker = `function ${name}`;
@@ -41,7 +42,7 @@ describe('KSTAR lightweight result review card', () => {
       escapeHtml: (value: unknown) => String(value ?? '').replace(/</g, '&lt;'),
     };
     vm.createContext(context);
-    vm.runInContext(`${extractFunction('_renderKstarResultReviewCard')}\n${extractFunction('_resolveKstarResultReview')}\nthis.render = _renderKstarResultReviewCard;`, context);
+    vm.runInContext(`${uiButtonSource}\nthis.uiButton = window.uiButton;\n${extractFunction('_renderKstarResultReviewCard')}\n${extractFunction('_resolveKstarResultReview')}\nthis.render = _renderKstarResultReviewCard;`, context);
 
     const review = {
       kind: 'kstar_review_card', episodeId: 'kse-a', reviewId: 'ksr-kse-a',

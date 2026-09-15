@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
+const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
 
 function extractFunction(name: string): string {
   const marker = `function ${name}`;
@@ -42,6 +43,8 @@ function loadReceiptHelpers(invoke = async () => ({ ok: true })) {
   };
   vm.createContext(context);
   vm.runInContext([
+    uiButtonSource,
+    'this.uiButton = window.uiButton;',
     extractFunction('_teachingReceiptScopeLabel'),
     extractFunction('_renderTeachingReceiptsHtml'),
     extractFunction('_hydrateTeachingReceipts'),

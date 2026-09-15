@@ -50,6 +50,26 @@
     return '';
   }
 
+  function _segmentedControl(options) {
+    if (typeof window.uiSegmentedControl !== 'function') throw new Error('workspace requires uiSegmentedControl');
+    return window.uiSegmentedControl(options);
+  }
+
+  function _formInput(options) {
+    if (typeof window.uiInput !== 'function') throw new Error('workspace requires uiInput');
+    return window.uiInput(options);
+  }
+
+  function _formTextarea(options) {
+    if (typeof window.uiTextarea !== 'function') throw new Error('workspace requires uiTextarea');
+    return window.uiTextarea(options);
+  }
+
+  function _formSelect(options) {
+    if (typeof window.uiSelect !== 'function') throw new Error('workspace requires uiSelect');
+    return window.uiSelect(options);
+  }
+
   /** IPC 调用（真实数据通道）。 */
   async function _invoke(channel, payload) {
     try {
@@ -98,6 +118,19 @@
   /** 空间类型 → 卡片配色（PRD 四类之一）。 */
   function _spaceTone(spaceType) {
     return ({ complex_project: 'violet', professional_work: 'green', recurring_routine: 'blue', temporary_task: 'green' })[spaceType] || 'green';
+  }
+
+  function _spaceIconName() {
+    return 'folder';
+  }
+
+  function _scenarioIconName(scenarioId) {
+    return ({
+      education: 'book-open',
+      writing: 'document-pencil',
+      workplace: 'layout-grid',
+      custom: 'puzzle',
+    })[scenarioId] || 'folder';
   }
 
   function _spaceTypeLabel(spaceType) {
@@ -511,11 +544,11 @@
    *  fixed = 始终展示且锁定的 tile（如 CogSeed，不写入 base_agents）；cliIds = 已选 cli type。 */
   function _baseAgentToolRow(cliIds, opts = {}) {
     const fixed = (opts.fixed || []).map((f) => `
-    <button type="button" class="ws-tool-tile selected locked" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(f.id)}" disabled title="${escapeHtml(f.name)}"><span class="ws-tool-logo">${escapeHtml(f.letter || 'AG')}</span><span>${escapeHtml(f.name)}</span></button>`).join('');
+    <button type="button" class="ws-tool-tile selected locked" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(f.id)}" aria-pressed="true" disabled title="${escapeHtml(f.name)}"><span class="ws-tool-logo">${escapeHtml(f.letter || 'AG')}</span><span>${escapeHtml(f.name)}</span></button>`).join('');
     const cards = (opts.catalog || []).map((o) => {
       const selected = (cliIds || []).includes(o.id);
       return `
-    <button type="button" class="ws-tool-tile ${selected ? 'selected' : ''}" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(o.id)}" title="${escapeHtml(o.name || o.id)}">${renderAvatarHtml(o.icon, o.color, { size: 38, seed: o.agent_id || o.id, letter: o.name || '' })}<span>${escapeHtml(o.name || o.id)}</span></button>`;
+    <button type="button" class="ws-tool-tile ${selected ? 'selected' : ''}" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(o.id)}" aria-pressed="${selected ? 'true' : 'false'}" title="${escapeHtml(o.name || o.id)}">${renderAvatarHtml(o.icon, o.color, { size: 38, seed: o.agent_id || o.id, letter: o.name || '' })}<span>${escapeHtml(o.name || o.id)}</span></button>`;
     }).join('');
     const body = fixed + cards;
     const empty = body ? '' : `<span class="ws-tool-empty">${opts.emptyText || ''}</span>`;
@@ -700,6 +733,7 @@
   let _detailSpaceId = null;       // 当前详情空间 space_id
   let _pendingOpenSpaceId = null;  // 会话面包屑请求打开的空间 id（renderWorkspace 消费一次）
   let _spaceTab = 'tasks';         // 详情页签：tasks | artifacts | assets
+  let _pendingSpaceTabFocus = null;
   let _configOpen = false;         // 详情页配置抽屉
   let _centerSearch = '';
   let _centerSort = 'recent';      // 空间中心排序：'recent' 最近使用 | 'name' 按名称
@@ -779,6 +813,7 @@
     _detailPending = {};
     _artHealthSeq++;
     _pendingOpenSpaceId = null;
+    _pendingSpaceTabFocus = null;
     window.__cogseedPendingOpenSpace = null;
   }
 
@@ -812,6 +847,7 @@
     _entryRevision++;
     _entryLoading = false;
     _view = view;
+    _pendingSpaceTabFocus = null;
     if (opts && opts.spaceId) _selectSpace(opts.spaceId);
     if (opts && opts.tab) _spaceTab = opts.tab;
     _configOpen = false;
@@ -866,15 +902,12 @@
 
   // ── 空间中心 ──────────────────────────────────────────────────────────────
 
-  // 一级页面 header 统一走 uiPageHeader()（页面骨架规格）：标题 + 单一操作，
-  // 操作统一 secondary/sm，不区分主次；副标题（tagline）移到正文区（.ws-tagline）。
+  // 一级页面 header 统一走 uiPageHeader()（页面骨架规格）：标题 + 单一操作。
   // 新建空间的 data-ws 属性保留，_bind() 仍按它挂点击。
   function _renderCenterPageHeader() {
     const createLabel = _t('ws.new_space', '新建空间');
-    if (typeof uiPageHeader !== 'function') {
-      return `<header class="ui-page-header"><div class="ui-page-header__body"><div class="ui-page-header__title-row"><h1 class="ui-page-header__title">${_t('ws.center_title', '工作空间')}</h1></div></div><button type="button" class="ws-primary" data-ws="create-space">${createLabel}</button></header>`;
-    }
-    return uiPageHeader({
+    if (typeof window.uiPageHeader !== 'function') throw new Error('workspace requires uiPageHeader');
+    return window.uiPageHeader({
       title: _t('ws.center_title', '工作空间'),
       actions: [{ label: createLabel, icon: 'plus', attrs: { 'data-ws': 'create-space' } }],
     });
@@ -890,46 +923,66 @@
         typeof getLang === 'function' && getLang() === 'en' ? 'en' : 'zh',
       ) || String(a.space_id).localeCompare(String(b.space_id))
       : (a, b) => String(b.last_conversation_at || b.updated_at || '').localeCompare(String(a.last_conversation_at || a.updated_at || '')));
+    const spacesContent = sorted.length
+      ? `<div class="ws-space-grid ui-resource-grid">${sorted.map(_spaceCardHtml).join('')}</div>`
+      : window.uiEmptyState(_spaces.length ? {
+          kind: 'actionable',
+          title: _t('ws.no_matching_spaces', '没有匹配的空间'),
+          hint: _t('ws.no_matching_spaces_hint', '调整搜索关键词后再试。'),
+          action: { label: _t('ws.clear_search', '清除搜索'), role: 'secondary', attrs: { 'data-ws': 'clear-center-search' } },
+        } : {
+          kind: 'actionable',
+          title: _t('ws.no_spaces_title', '还没有工作空间'),
+          hint: _t('ws.no_spaces_hint', '点击新建空间，或从下方模板开始。'),
+          action: { label: _t('ws.new_space', '新建空间'), attrs: { 'data-ws': 'create-space' } },
+        });
 
     return `
     <div class="ws-view">
       <div class="ws-center-header">${_renderCenterPageHeader()}</div>
       ${_refreshNotice()}
       <div class="ws-center">
-      <p class="ws-tagline">${_t('ws.center_tagline', '工作空间越用越懂你的专属空间，让工作自然接续，让成果持续积累，让认知持续沉淀。')}</p>
-
       <section class="ws-section">
         <div class="ws-section-head">
-          <div class="ws-section-title"><h2>${_t('ws.my_spaces', '我的空间')}</h2><span class="ws-count">${_spaces.length}</span></div>
+          <div class="ws-section-title"><h2>${_t('ws.my_spaces', '我的空间')} <span>· ${_spaces.length}</span></h2></div>
           <div class="ws-center-tools">
             <label class="ws-search">
               <span>${_icon('search', 'ui-icon')}</span>
-              <input data-ws="center-search" value="${escapeHtml(_centerSearch)}" placeholder="${_t('ws.search_spaces', '搜索已创建的空间')}" autocomplete="off" spellcheck="false" />
+              ${_formInput({
+                id: 'ws-center-search',
+                type: 'search',
+                value: _centerSearch,
+                placeholder: _t('ws.search_spaces', '搜索已创建的空间'),
+                attrs: { 'data-ws': 'center-search', autocomplete: 'off', 'aria-label': _t('ws.search_spaces', '搜索已创建的空间') },
+              })}
             </label>
-            <select class="ws-sort" data-ws="center-sort" title="${_t('ws.sort_title', '空间排序')}">
-              <option value="recent" ${_centerSort === 'recent' ? 'selected' : ''}>${_t('ws.sort_recent', '最近使用')}</option>
-              <option value="name" ${_centerSort === 'name' ? 'selected' : ''}>${_t('ws.sort_name', '按名称')}</option>
-            </select>
+            <div class="ws-sort">${_formSelect({
+              id: 'ws-center-sort',
+              ariaLabel: _t('ws.sort_title', '空间排序'),
+              value: _centerSort,
+              options: [
+                { value: 'recent', label: _t('ws.sort_recent', '最近使用') },
+                { value: 'name', label: _t('ws.sort_name', '按名称') },
+              ],
+            })}</div>
           </div>
         </div>
-        ${_spaces.length
-          ? `<div class="ws-space-grid">${sorted.map(_spaceCardHtml).join('')}</div>`
-          : `<div class="ws-empty">${_t('ws.no_spaces', '还没有工作空间，点右上角「新建空间」或从下方模板开始。')}</div>`}
+        ${spacesContent}
       </section>
 
       <section class="ws-section ws-template-section">
         <div class="ws-section-head">
-          <div class="ws-section-title"><h2>${_t('ws.from_template', '从模板创建')}</h2><span class="ws-count">${_scenarios.length + _templates.length}</span></div>
+          <div class="ws-section-title"><h2>${_t('ws.from_template', '从模板创建')}</h2></div>
         </div>
         ${_catalogs.templates.error || !_catalogs.templates.loaded ? _catalogStatus('templates') : ''}
         ${_catalogs.templates.loaded ? `${_scenarios.length
           ? `<div class="ws-create-group-label">${_t('ws.scenes_group', '场景')}</div>
-             <div class="ws-template-grid ws-scene-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
+             <div class="ws-template-grid ws-scene-grid ui-resource-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
           : ''}
         ${_templates.length
           ? `<div class="ws-create-group-label">${_t('ws.templates_group', '角色模板')}</div>
-             <div class="ws-template-grid">${_templates.map(_templateCardHtml).join('')}</div>`
-          : (!_scenarios.length ? `<div class="ws-empty">${_t('ws.no_templates', '暂无可用空间模板。')}</div>` : '')}` : ''}
+             <div class="ws-template-grid ui-resource-grid">${_templates.map(_templateCardHtml).join('')}</div>`
+          : (!_scenarios.length ? window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_templates', '暂无可用空间模板。') }) : '')}` : ''}
       </section>
       </div>
     </div>`;
@@ -937,7 +990,6 @@
 
   function _spaceCardHtml(s) {
     const displayName = _spaceDisplayName(s);
-    const mark = s.icon ? s.icon : (displayName || _t('ws.space_mark', '空')).charAt(0);
     const typeLabel = _spaceTypeLabel(s.space_type);
     const desc = s.sustained_outcome || s.template_name || '';
     const invalid = s.invalid_count || 0;
@@ -949,25 +1001,26 @@
       invalid ? { k: _t('ws.meta_invalid', '不可用引用'), v: _t('ws.item_count', '{count} 项', { count: invalid }) } : null,
     ].filter(Boolean);
     return `
-    <article class="ws-space-card" data-ws="open-space" data-space="${escapeHtml(s.space_id)}">
+    <article class="ws-space-card ui-resource-card" data-ws="open-space" data-space="${escapeHtml(s.space_id)}">
       <div class="ws-card-top">
         <div class="ws-space-name">
-          <div class="ws-space-icon ${_spaceTone(s.space_type)}">${escapeHtml(mark)}</div>
+          <div class="ws-space-icon ${_spaceTone(s.space_type)}">${_icon(_spaceIconName(s.space_type), 'ui-icon')}</div>
           <div><h3>${escapeHtml(displayName)}</h3><small>${escapeHtml(_relTime(s.updated_at))}</small></div>
         </div>
-        <button class="ws-more" data-ws="space-more" data-space="${escapeHtml(s.space_id)}" aria-label="${escapeHtml(_t('ws.more_actions_for', '{name}的更多操作', { name: displayName }))}">${_icon('more-horizontal', 'ui-icon')}</button>
+        ${window.uiIconButton({ label: _t('ws.more_actions_for', '{name}的更多操作', { name: displayName }), icon: 'more-horizontal', className: 'ws-more', attrs: { 'data-ws': 'space-more', 'data-space': s.space_id } })}
         <div class="ws-more-menu" hidden>
           ${metaRows.map((r) => `<div class="ws-more-row"><span>${escapeHtml(r.k)}</span><strong>${escapeHtml(r.v)}</strong></div>`).join('')}
           <div class="ws-more-actions">
-            <button class="ws-more-action" data-ws="rename-space" data-space="${escapeHtml(s.space_id)}">${_t('ws.rename_space', '重命名')}</button>
-            <button class="ws-more-danger" data-ws="delete-space" data-space="${escapeHtml(s.space_id)}">${_t('ws.delete_space', '删除空间')}</button>
+            ${window.uiButton({ label: _t('ws.rename_space', '重命名'), role: 'ghost', size: 'sm', className: 'ws-more-action', attrs: { 'data-ws': 'rename-space', 'data-space': s.space_id } })}
+            ${window.uiButton({ label: _t('ws.delete_space', '删除空间'), role: 'danger', size: 'sm', className: 'ws-more-danger', attrs: { 'data-ws': 'delete-space', 'data-space': s.space_id } })}
           </div>
         </div>
       </div>
       ${desc ? `<p class="ws-desc">${escapeHtml(desc)}</p>` : ''}
+      ${s.template_names ? `<p class="ws-space-roles">${escapeHtml(s.template_names)}</p>` : ''}
       <div class="ws-recent">
         <div><small>${_t('ws.recent_task', '最近')}</small><strong title="${escapeHtml(s.last_conversation_title || '')}">${escapeHtml(s.last_conversation_title || _t('ws.no_recent_task', '暂无最近任务'))}</strong></div>
-        <button data-ws="continue" data-space="${escapeHtml(s.space_id)}">${_t('ws.enter_space', '继续工作')} →</button>
+        ${window.uiButton({ label: _t('ws.enter_space', '继续工作'), role: 'ghost', size: 'sm', iconEnd: 'chevron-right', className: 'ws-card-action', attrs: { 'data-ws': 'continue', 'data-space': s.space_id } })}
       </div>
     </article>`;
   }
@@ -977,12 +1030,12 @@
     const agentN = (t.bundle && t.bundle.agentIds ? t.bundle.agentIds.length : 0);
     return `
     <article class="ws-template-card" data-ws="create-from-tpl" data-tpl="${escapeHtml(t.templateId)}">
-      <div class="ws-template-mark">${escapeHtml((t.name || _t('ws.template_mark', '模')).charAt(0))}</div>
+      <div class="ws-template-mark">${_icon('users', 'ui-icon')}</div>
       <h3>${escapeHtml(t.name)}</h3>
       <p>${escapeHtml(t.description || '')}</p>
       <div class="ws-template-bottom">
         <span>${escapeHtml(_t('ws.template_counts', '{skills} 个 Skill · {agents} 个 Agent', { skills: skillN, agents: agentN }))}</span>
-        <button data-ws="use-tpl" data-tpl="${escapeHtml(t.templateId)}">${_t('ws.use_template', '用此模板创建')}</button>
+        ${window.uiButton({ label: _t('ws.use_template', '用此模板创建'), role: 'ghost', size: 'sm', iconEnd: 'chevron-right', className: 'ws-card-action', attrs: { 'data-ws': 'use-tpl', 'data-tpl': t.templateId } })}
       </div>
     </article>`;
   }
@@ -1006,12 +1059,12 @@
     const tplLabel = _sceneTplLabel(sc);
     return `
     <article class="ws-template-card ws-scene-card" data-ws="create-from-scene" data-scene="${escapeHtml(sc.scenarioId)}">
-      <div class="ws-template-mark">${escapeHtml(sc.icon || _t('ws.scene_mark', '场'))}</div>
+      <div class="ws-template-mark">${_icon(_scenarioIconName(sc.scenarioId), 'ui-icon')}</div>
       <h3>${escapeHtml(sc.name)}</h3>
       <p>${escapeHtml(sc.description || '')}</p>
       <div class="ws-template-bottom">
         <span>${tplLabel ? `${escapeHtml(tplLabel)} · ` : ''}${_t('ws.scene_tag', '场景')}</span>
-        <button data-ws="use-scene" data-scene="${escapeHtml(sc.scenarioId)}">${_t('ws.use_scene', '用此场景创建')}</button>
+        ${window.uiButton({ label: _t('ws.use_scene', '用此场景创建'), role: 'ghost', size: 'sm', iconEnd: 'chevron-right', className: 'ws-card-action', attrs: { 'data-ws': 'use-scene', 'data-scene': sc.scenarioId } })}
       </div>
     </article>`;
   }
@@ -1038,27 +1091,24 @@
       <div class="ws-space-main">
         ${_refreshNotice()}
         <header class="ws-space-head">
-          <div class="ws-space-back-row">
-            <button class="ws-back" data-ws="back-to-center" title="${_t('ws.back_to_center', '返回空间中心')}">${_icon('chevron-left', 'ui-icon')}${_t('ws.back_to_center', '返回空间中心')}</button>
-          </div>
           <div class="ws-space-head-row">
-            <div class="ws-space-heading">
-              <div class="ws-space-icon ${_spaceTone(sp.space_type)}">${escapeHtml(sp.icon || (_spaceDisplayName(sp) || _t('ws.space_mark', '空')).charAt(0))}</div>
-              <div><h1>${escapeHtml(_spaceDisplayName(sp))}</h1><p>${escapeHtml(sp.sustained_outcome || '')}</p></div>
+            <div class="ws-space-titlebar">
+              ${window.uiIconButton({ label: _t('ws.back_to_center', '返回空间中心'), icon: 'chevron-left', className: 'ws-back', attrs: { 'data-ws': 'back-to-center' } })}
+              <h1>${escapeHtml(_spaceDisplayName(sp))}</h1>
             </div>
-            <div>
-              <button class="ws-secondary" data-ws="space-settings">${_t('ws.space_settings', '空间设置')}</button>
-              <button class="ws-primary" data-ws="new-task">${_icon('plus', 'ui-icon ws-btn-ico')}${_t('ws.new_task', '新建任务')}</button>
+            <div class="ws-space-head-actions">
+              ${window.uiButton({ label: _t('ws.space_settings', '空间设置'), size: 'sm', attrs: { 'data-ws': 'space-settings' } })}
+              ${window.uiButton({ label: _t('ws.new_task', '新建任务'), role: 'primary', size: 'sm', icon: 'plus', attrs: { 'data-ws': 'new-task' } })}
             </div>
           </div>
-          <nav class="ws-space-tabs">
+          <nav class="ws-space-tabs" role="tablist" aria-orientation="horizontal" aria-label="${escapeHtml(_spaceDisplayName(sp))}">
             ${Object.keys(tabMeta).map((k) => `
-              <button class="${_spaceTab === k ? 'active' : ''}" data-ws="space-tab" data-tab="${k}">
+              <button type="button" id="ws-space-tab-${k}" class="${_spaceTab === k ? 'active' : ''}" role="tab" aria-controls="ws-space-panel" aria-selected="${_spaceTab === k ? 'true' : 'false'}" tabindex="${_spaceTab === k ? '0' : '-1'}" data-ws="space-tab" data-tab="${k}">
                 ${tabMeta[k].label}<span>${tabMeta[k].count}</span>
               </button>`).join('')}
           </nav>
         </header>
-        <div class="ws-space-pane ${_spaceTab === 'artifacts' ? 'ws-space-pane--artifacts' : ''}">
+        <div id="ws-space-panel" class="ws-space-pane ${_spaceTab === 'artifacts' ? 'ws-space-pane--artifacts' : ''}" role="tabpanel" aria-labelledby="ws-space-tab-${_spaceTab}">
           ${_renderSpacePane(sp)}
         </div>
       </div>
@@ -1077,20 +1127,52 @@
     return notice + retry + (_spaceTab === 'artifacts' ? _renderArtifactsPane() : _spaceTab === 'assets' ? _renderAssetsPane() : _renderTasksPane());
   }
 
+  function _activateSpaceTab(tab, { restoreFocus = false } = {}) {
+    if (!['tasks', 'artifacts', 'assets'].includes(tab)) return;
+    _spaceTab = tab;
+    _pendingSpaceTabFocus = restoreFocus ? tab : null;
+    if (tab === 'artifacts') void _loadCatalog('agents');
+    // 产物/资产 tab：切到时强制重载（对话里新产出/新确认立即可见，避免缓存旧数据）
+    if ((tab === 'artifacts' || tab === 'assets') && _detailSpaceId) {
+      _detailLoadedFor = null;
+      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      return;
+    }
+    _reRender();
+  }
+
+  function _handleSpaceTabKey(event, current, buttons) {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const enabled = buttons.filter((button) => !button.disabled && !button.hidden && button.getAttribute('aria-disabled') !== 'true');
+    const currentIndex = enabled.indexOf(current);
+    if (currentIndex < 0 || !enabled.length) return;
+    event.preventDefault();
+    const nextIndex = event.key === 'Home' ? 0
+      : event.key === 'End' ? enabled.length - 1
+        : (currentIndex + (event.key === 'ArrowLeft' ? -1 : 1) + enabled.length) % enabled.length;
+    const next = enabled[nextIndex];
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    _activateSpaceTab(next.dataset.tab, { restoreFocus: true });
+  }
+
   function _renderTasksPane() {
     const list = _sessions.length
       ? `
     <div class="ws-toolbar"><span>${escapeHtml(_t('ws.tasks_summary', '{count} 个任务 · 按最近更新时间排序', { count: _sessions.length }))}</span></div>
     <div class="ws-session-list">
       ${_sessions.map((s) => `
-        <button class="ws-session-row" data-ws="open-task" data-session="${escapeHtml(s.id)}">
-          <span class="ws-session-icon">${_icon('message-square', 'ui-icon')}</span>
-          <div><strong>${escapeHtml(s.title)}</strong><small>${escapeHtml(s.desc)}</small></div>
-          <time>${escapeHtml(s.time)}</time>
-          <span class="ws-row-more-btn" data-ws="task-more" data-cid="${escapeHtml(s.id)}" role="button" title="${_t('ws.task_more', '更多操作')}">${_icon('more-horizontal', 'ui-icon')}</span>
-        </button>`).join('')}
+        <div class="ws-session-row">
+          <span class="ws-session-icon">${_icon('file-text', 'ui-icon')}</span>
+          <button type="button" class="ws-session-open" data-ws="open-task" data-session="${escapeHtml(s.id)}">
+            <strong>${escapeHtml(s.title)}</strong>
+            <small>${escapeHtml([s.desc, s.time].filter(Boolean).join(' · '))}</small>
+          </button>
+          ${window.uiButton({ label: _t('ws.task_unbind_btn', '移出空间'), role: 'ghost', size: 'sm', className: 'ws-task-remove', attrs: { 'data-ws': 'task-more', 'data-cid': s.id } })}
+        </div>`).join('')}
     </div>`
-      : `<div class="ws-empty">${_t('ws.tasks_empty', '该空间暂无任务。')}<small>${_t('ws.tasks_empty_hint', '点右上角「新建任务」在标准对话框里开始第一项任务。')}</small></div>`;
+      : window.uiEmptyState({ kind: 'actionable', title: _t('ws.tasks_empty', '该空间暂无任务。'), hint: _t('ws.tasks_empty_hint', '点右上角「新建任务」在标准对话框里开始第一项任务。'), action: { label: _t('ws.new_task', '新建任务'), attrs: { 'data-ws': 'new-task' } } });
     return list;
   }
 
@@ -1245,12 +1327,23 @@
     <div class="ws-ref-scrim" data-ws="close-ref">
       <section class="ws-ref-picker" data-ws="noop">
         <header class="ws-ref-head">
-          <div class="ws-ref-tabs">
-            <button class="${kind === 'artifact' ? 'active' : ''}" data-ws="ref-tab" data-kind="artifact">${_t('ws.ref_artifacts', '产物')}<span>${arts.length}</span></button>
-            <button class="${kind === 'asset' ? 'active' : ''}" data-ws="ref-tab" data-kind="asset">${_t('ws.ref_assets', '资产')}<span>${assets.length}</span></button>
-          </div>
-          <input data-ws="ref-search" value="${escapeHtml(_refSearch)}" placeholder="${_t('ws.ref_search', '搜索…')}" autocomplete="off" spellcheck="false" />
-          <button class="ws-ref-close" data-ws="close-ref" aria-label="${_t('ws.close', '关闭')}">${_icon('x', 'ui-icon')}</button>
+          ${_segmentedControl({
+            ariaLabel: `${_t('ws.ref_artifacts', '产物')} / ${_t('ws.ref_assets', '资产')}`,
+            className: 'ws-ref-tabs',
+            value: kind,
+            items: [
+              { value: 'artifact', label: _t('ws.ref_artifacts', '产物'), count: arts.length, attrs: { 'data-ws': 'ref-tab', 'data-kind': 'artifact' } },
+              { value: 'asset', label: _t('ws.ref_assets', '资产'), count: assets.length, attrs: { 'data-ws': 'ref-tab', 'data-kind': 'asset' } },
+            ],
+          })}
+          ${_formInput({
+            id: 'ws-ref-search',
+            type: 'search',
+            value: _refSearch,
+            placeholder: _t('ws.ref_search', '搜索…'),
+            attrs: { 'data-ws': 'ref-search', autocomplete: 'off', 'aria-label': _t('ws.ref_search', '搜索…') },
+          })}
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', className: 'ws-ref-close', attrs: { 'data-ws': 'close-ref' } })}
         </header>
         <div class="ws-ref-list">
           ${filtered.length ? filtered.map((it) => {
@@ -1265,11 +1358,11 @@
               <span class="ws-ref-check">${picked ? '✓' : ''}</span>
               <div><strong>${escapeHtml(name)}</strong><small>${escapeHtml(sub)}</small></div>
             </div>`;
-          }).join('') : `<div class="ws-ref-empty">${_t('ws.ref_empty', '没有可引用的内容。')}</div>`}
+          }).join('') : `<div class="ws-ref-empty">${window.uiEmptyState({ kind: 'quiet', title: _t('ws.ref_empty', '没有可引用的内容。') })}</div>`}
         </div>
         <footer class="ws-ref-foot">
           <span>${_t('ws.ref_selected', '已选')} ${_pendingRefs.length} ${_t('ws.ref_items', '项')}</span>
-          <button class="ws-primary" data-ws="save-ref">${_t('ws.save_ref', '保存引用')}</button>
+          ${window.uiButton({ label: _t('ws.save_ref', '保存引用'), role: 'primary', attrs: { 'data-ws': 'save-ref' } })}
         </footer>
       </section>
     </div>`;
@@ -1513,22 +1606,22 @@
   function _artifactActionsHtml(a) {
     return `
       <div class="ws-art-row-actions">
-        <button type="button" class="ws-art-open" data-ws="art-open" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_open', '打开'))}</button>
-        <button type="button" class="ws-art-more" data-ws="art-more" data-id="${escapeHtml(a.id)}" aria-label="${escapeHtml(_t('ws.art_more', '更多操作'))}" aria-expanded="false">${_icon('more-horizontal', 'ui-icon')}</button>
+        ${window.uiButton({ label: _t('ws.art_open', '打开'), role: 'ghost', size: 'sm', className: 'ws-art-open', attrs: { 'data-ws': 'art-open', 'data-id': a.id } })}
+        ${window.uiIconButton({ label: _t('ws.art_more', '更多操作'), icon: 'more-horizontal', className: 'ws-art-more', attrs: { 'data-ws': 'art-more', 'data-id': a.id, 'aria-expanded': 'false' } })}
         <div class="ws-art-more-menu" role="menu" data-art-menu="${escapeHtml(a.id)}" hidden>${_artifactMenuItemsHtml(a)}</div>
       </div>`;
   }
 
   function _artifactMenuItemsHtml(a) {
     const items = [
-      `<button type="button" role="menuitem" data-ws="art-action" data-action="ref" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_ref', '引用到新任务'))}</button>`,
+      window.uiButton({ label: _t('ws.art_action_ref', '引用到新任务'), role: 'ghost', size: 'sm', className: 'ws-art-menu-action', attrs: { role: 'menuitem', 'data-ws': 'art-action', 'data-action': 'ref', 'data-id': a.id } }),
     ];
-    if (a.source) items.push(`<button type="button" role="menuitem" data-ws="art-action" data-action="source" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_view_in_task', '在原任务中查看'))}</button>`);
+    if (a.source) items.push(window.uiButton({ label: _t('ws.art_action_view_in_task', '在原任务中查看'), role: 'ghost', size: 'sm', className: 'ws-art-menu-action', attrs: { role: 'menuitem', 'data-ws': 'art-action', 'data-action': 'source', 'data-id': a.id } }));
     if (a.path) {
       const revealLabel = a.broken ? _t('ws.art_relocate', '重新定位') : _t('ws.art_action_reveal', '在文件夹中显示');
-      items.push(`<button type="button" role="menuitem" data-ws="art-action" data-action="reveal" data-id="${escapeHtml(a.id)}">${escapeHtml(revealLabel)}</button>`);
+      items.push(window.uiButton({ label: revealLabel, role: 'ghost', size: 'sm', className: 'ws-art-menu-action', attrs: { role: 'menuitem', 'data-ws': 'art-action', 'data-action': 'reveal', 'data-id': a.id } }));
     }
-    items.push(`<button type="button" role="menuitem" class="ws-art-danger" data-ws="art-action" data-action="delete" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_delete', '删除产物'))}</button>`);
+    items.push(window.uiButton({ label: _t('ws.art_action_delete', '删除产物'), role: 'danger', size: 'sm', className: 'ws-art-menu-action ws-art-danger', attrs: { role: 'menuitem', 'data-ws': 'art-action', 'data-action': 'delete', 'data-id': a.id } }));
     return items.join('');
   }
 
@@ -1687,14 +1780,14 @@
             <p>${meta}</p>
             ${brokenHint}
           </div>
-          <button type="button" class="ws-art-drawer-close" data-ws="art-drawer-close" aria-label="${escapeHtml(_t('ws.close', '关闭'))}">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', className: 'ws-art-drawer-close', attrs: { 'data-ws': 'art-drawer-close' } })}
         </div>
         <div class="ws-art-drawer-content">
           <div class="ws-art-preview" id="ws-art-preview-body"></div>
         </div>
         <div class="ws-art-drawer-foot">
-          <button type="button" class="ws-secondary" data-ws="art-drawer-action" data-action="ref" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_ref', '引用到新任务'))}</button>
-          <button type="button" class="ws-primary" data-ws="art-drawer-action" data-action="open" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_open_full', '打开完整文件'))}</button>
+          ${window.uiButton({ label: _t('ws.art_action_ref', '引用到新任务'), size: 'sm', attrs: { 'data-ws': 'art-drawer-action', 'data-action': 'ref', 'data-id': a.id } })}
+          ${window.uiButton({ label: _t('ws.art_open_full', '打开完整文件'), role: 'primary', size: 'sm', attrs: { 'data-ws': 'art-drawer-action', 'data-action': 'open', 'data-id': a.id } })}
         </div>
       </aside>
     </div>`;
@@ -1706,40 +1799,72 @@
     ]));
     const sourceOptions = _artifactSourceOptions();
     const items = _filteredArtifacts();
+    const sourceSelect = _formSelect({
+      id: 'ws-art-source-filter',
+      ariaLabel: _t('ws.art_filter_source', '按来源任务筛选'),
+      value: _artifactSource,
+      options: [
+        { value: 'all', label: _t('ws.art_all_sources', '全部来源任务') },
+        ...sourceOptions,
+      ],
+      attrs: { 'data-ws': 'art-source-filter' },
+    });
+    const groupSelect = _formSelect({
+      id: 'ws-art-group-mode',
+      ariaLabel: _t('ws.art_group_label', '分组方式'),
+      value: _artifactGroup,
+      options: [
+        { value: 'time', label: _t('ws.art_group_time', '按时间分组') },
+        { value: 'source', label: _t('ws.art_group_source', '按任务分组') },
+      ],
+      attrs: { 'data-ws': 'art-group-mode' },
+    });
+    const sortSelect = _formSelect({
+      id: 'ws-art-sort-mode',
+      ariaLabel: _t('ws.art_sort_label', '排序方式'),
+      value: _artifactSort,
+      options: [
+        { value: 'newest', label: _t('ws.art_sort_newest', '最近更新') },
+        { value: 'oldest', label: _t('ws.art_sort_oldest', '最早更新') },
+        { value: 'name', label: _t('ws.art_sort_name', '按名称排序') },
+      ],
+      attrs: { 'data-ws': 'art-sort-mode' },
+    });
+    const viewListLabel = _t('ws.art_view_list', '列表视图');
+    const viewGridLabel = _t('ws.art_view_grid', '卡片视图');
     const toolbarHtml = `
     <div class="ws-art-toolbar">
       <div class="ws-art-toolbar-main">
         <label class="ws-art-search-wrap">
           <span class="ws-art-search-icon">${_icon('search', 'ui-icon')}</span>
-          <input class="ws-art-search" data-ws="art-search" value="${escapeHtml(_artifactSearch)}" placeholder="${escapeHtml(_t('ws.art_search_ph', '搜索产物名称、来源任务或 Agent'))}" autocomplete="off" spellcheck="false" />
+          ${_formInput({
+            id: 'ws-art-search',
+            type: 'search',
+            value: _artifactSearch,
+            placeholder: _t('ws.art_search_ph', '搜索产物名称、来源任务或 Agent'),
+            attrs: { 'data-ws': 'art-search', autocomplete: 'off', 'aria-label': _t('ws.art_search_ph', '搜索产物名称、来源任务或 Agent') },
+          })}
         </label>
         <div class="ws-art-toolbar-controls">
-          <select class="ws-art-select" data-ws="art-source-filter" aria-label="${escapeHtml(_t('ws.art_filter_source', '按来源任务筛选'))}">
-            <option value="all">${escapeHtml(_t('ws.art_all_sources', '全部来源任务'))}</option>
-            ${sourceOptions.map((o) => `<option value="${escapeHtml(o.value)}" ${_artifactSource === o.value ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
-          </select>
-          <select class="ws-art-select" data-ws="art-group-mode" aria-label="${escapeHtml(_t('ws.art_group_label', '分组方式'))}">
-            <option value="time" ${_artifactGroup === 'time' ? 'selected' : ''}>${escapeHtml(_t('ws.art_group_time', '按时间分组'))}</option>
-            <option value="source" ${_artifactGroup === 'source' ? 'selected' : ''}>${escapeHtml(_t('ws.art_group_source', '按任务分组'))}</option>
-          </select>
-          <select class="ws-art-select" data-ws="art-sort-mode" aria-label="${escapeHtml(_t('ws.art_sort_label', '排序方式'))}">
-            <option value="newest" ${_artifactSort === 'newest' ? 'selected' : ''}>${escapeHtml(_t('ws.art_sort_newest', '最近更新'))}</option>
-            <option value="oldest" ${_artifactSort === 'oldest' ? 'selected' : ''}>${escapeHtml(_t('ws.art_sort_oldest', '最早更新'))}</option>
-            <option value="name" ${_artifactSort === 'name' ? 'selected' : ''}>${escapeHtml(_t('ws.art_sort_name', '按名称排序'))}</option>
-          </select>
+          <div class="ws-art-select ws-art-select--source">${sourceSelect}</div>
+          <div class="ws-art-select">${groupSelect}</div>
+          <div class="ws-art-select">${sortSelect}</div>
           <div class="ws-art-view-toggle" role="group" aria-label="${escapeHtml(_t('ws.art_view_label', '显示方式'))}">
-            <button type="button" class="${_artifactView === 'list' ? 'active' : ''}" data-ws="art-view" data-view="list" aria-label="${escapeHtml(_t('ws.art_view_list', '列表视图'))}" title="${escapeHtml(_t('ws.art_view_list', '列表视图'))}" aria-pressed="${_artifactView === 'list'}">☷</button>
-            <button type="button" class="${_artifactView === 'grid' ? 'active' : ''}" data-ws="art-view" data-view="grid" aria-label="${escapeHtml(_t('ws.art_view_grid', '卡片视图'))}" title="${escapeHtml(_t('ws.art_view_grid', '卡片视图'))}" aria-pressed="${_artifactView === 'grid'}">▦</button>
+            ${window.uiIconButton({ label: viewListLabel, icon: 'list', className: `ws-art-view-button${_artifactView === 'list' ? ' is-active' : ''}`, attrs: { 'data-ws': 'art-view', 'data-view': 'list', 'aria-pressed': _artifactView === 'list' ? 'true' : 'false' } })}
+            ${window.uiIconButton({ label: viewGridLabel, icon: 'layout-grid', className: `ws-art-view-button${_artifactView === 'grid' ? ' is-active' : ''}`, attrs: { 'data-ws': 'art-view', 'data-view': 'grid', 'aria-pressed': _artifactView === 'grid' ? 'true' : 'false' } })}
           </div>
         </div>
       </div>
       <div class="ws-art-toolbar-secondary">
-        <div class="ws-art-chips" role="group" aria-label="${escapeHtml(_t('ws.art_filter_type', '按类型筛选'))}">
-          ${_ARTIFACT_FILTERS.map((id) => {
+        ${_segmentedControl({
+          ariaLabel: _t('ws.art_filter_type', '按类型筛选'),
+          className: 'ws-art-chips',
+          value: _artifactFilter,
+          items: _ARTIFACT_FILTERS.map((id) => {
             const label = id === 'all' ? _t('ws.all', '全部') : _artifactCategoryLabel(id);
-            return `<button type="button" class="${_artifactFilter === id ? 'active' : ''}" data-ws="artifact-filter" data-type="${id}">${escapeHtml(label)} ${typeCounts[id]}</button>`;
-          }).join('')}
-        </div>
+            return { label, value: id, count: typeCounts[id], attrs: { 'data-ws': 'artifact-filter', 'data-type': id } };
+          }),
+        })}
         <div class="ws-art-summary">${_artifactsLoading ? '' : (items.length === _artifacts.length
           ? _t('ws.art_summary_total', '共 {count} 个产物', { count: items.length })
           : _t('ws.art_summary_found', '找到 {count} 个产物', { count: items.length }))}</div>
@@ -2065,13 +2190,16 @@
     const items = _assets.filter((a) => _assetFilter === 'all' || a.typeId === _assetFilter);
     return `
     <div class="ws-info-note"><span>i</span><div><strong>${_t('ws.assets_note', '资产仅包含四类经过确认、可持续复用的认知与能力。')}</strong></div></div>
-    <div class="ws-asset-filters">
-      ${_ASSET_FILTERS.map((id) => {
+    ${_segmentedControl({
+      ariaLabel: _t('ws.space_asset', '空间资产'),
+      className: 'ws-asset-filters',
+      value: _assetFilter,
+      items: _ASSET_FILTERS.map((id) => {
         const label = id === 'all' ? _t('ws.all', '全部') : _assetTypeLabel(id);
         const count = id === 'all' ? _assets.length : _assets.filter((a) => a.typeId === id).length;
-        return `<button class="${_assetFilter === id ? 'active' : ''}" data-ws="asset-filter" data-type="${id}"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(_t('ws.item_count', '{count} 项', { count }))}</span></button>`;
-      }).join('')}
-    </div>
+        return { value: id, label, count: _t('ws.item_count', '{count} 项', { count }), attrs: { 'data-ws': 'asset-filter', 'data-type': id } };
+      }),
+    })}
     <div class="ws-asset-grid">
       ${items.map((a) => `
         <article class="ws-asset-card${a.revoked ? ' is-revoked' : ''}">
@@ -2081,7 +2209,7 @@
             <p>${escapeHtml(a.desc)}</p>
             <footer>${escapeHtml(a.type)}${a.revoked ? ` · ${_t('ws.revoked', '已撤销')}` : ''}</footer>
           </div>
-          ${a.revoked ? '' : `<button class="ws-unbind" data-ws="revoke-asset" data-asset="${escapeHtml(a.id)}" aria-label="${_t('ws.revoke_asset', '撤销资产')}">${_icon('x', 'ui-icon')}</button>`}
+          ${a.revoked ? '' : window.uiIconButton({ label: _t('ws.revoke_asset', '撤销资产'), icon: 'x', variant: 'danger', className: 'ws-unbind', attrs: { 'data-ws': 'revoke-asset', 'data-asset': a.id } })}
         </article>`).join('')}
     </div>`;
   }
@@ -2110,16 +2238,16 @@
     const instructionsValue = _configInstructionsDraft !== null ? _configInstructionsDraft : (sp.instructions || '');
     return `
     <aside class="ws-config-panel">
-      <header><h2>${_t('ws.space_settings', '空间设置')}</h2><button class="ws-drawer-close" data-ws="config-close" aria-label="${_t('ws.close', '关闭')}">${_icon('x', 'ui-icon')}</button></header>
+      <header><h2>${_t('ws.space_settings', '空间设置')}</h2>${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', className: 'ws-drawer-close', attrs: { 'data-ws': 'config-close' } })}</header>
       <div class="ws-config-body">
         ${!_configurationReady() ? _catalogStatus('configuration') : `
         <section><label>${_t('ws.default_goal', '默认目标/指令')}</label>
-          <textarea data-ws="config-instructions" maxlength="4000" rows="4" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(instructionsValue)}</textarea>
-          <div class="ws-config-actions"><button class="ws-secondary" data-ws="save-instructions">${_t('ws.save', '保存')}</button><span class="ws-config-hint">${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</span></div>
+          ${window.uiTextarea({ id: 'ws-config-instructions', value: instructionsValue, placeholder: _t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等'), attrs: { 'data-ws': 'config-instructions', maxlength: '4000', 'aria-label': _t('ws.default_goal', '默认目标/指令') } })}
+          <div class="ws-config-actions">${window.uiButton({ label: _t('ws.save', '保存'), role: 'primary', size: 'sm', attrs: { 'data-ws': 'save-instructions' } })}<span class="ws-config-hint">${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</span></div>
         </section>
         <section><label>${_t('ws.current_agent', '当前对话 Agent')}</label>
           <div class="ws-agent-row"><span>CX</span><div><strong>${_baseAgentNames(sp).length ? escapeHtml(_baseAgentNames(sp).join('、')) : escapeHtml(_t('ws.not_set', '未设置'))}</strong><small>${_t('ws.current_agent_hint', '承接空间内任务')}</small></div>
-            <button class="ws-secondary ws-ability-edit" data-ws="edit-base-agent">${_t('ws.adjust', '调整')}</button>
+            ${window.uiButton({ label: _t('ws.adjust', '调整'), size: 'sm', className: 'ws-ability-edit', attrs: { 'data-ws': 'edit-base-agent' } })}
           </div>
         </section>
         <section class="ws-config-ability">
@@ -2131,19 +2259,19 @@
                 <div class="ws-config-ability-title"><strong>${cap[k].label}</strong><span>${pick[k].length}</span></div>
                 <div class="ws-config-ability-chips">${pick[k].length ? pick[k].map((n, i) => `<span>${k === 'role' && i === 0 ? `<b class="ws-chip-tag">${_t('ws.primary_mark', '主')}</b>` : ''}${escapeHtml(n)}</span>`).join('') : `<em>${_t('ws.not_selected', '未选择')}</em>`}</div>
               </div>
-              <button class="ws-secondary ws-ability-edit" data-ws="${k === 'role' ? 'edit-role' : 'edit-ability'}" data-kind="${k}">${_t('ws.adjust', '调整')}</button>
+              ${window.uiButton({ label: _t('ws.adjust', '调整'), size: 'sm', className: 'ws-ability-edit', attrs: { 'data-ws': k === 'role' ? 'edit-role' : 'edit-ability', 'data-kind': k } })}
             </div>`).join('')}
         </section>
         <section><label>${_t('ws.main_skill', '主 Skill')}</label>
           <div class="ws-config-row">
             <span class="ws-config-value">${mainSkill ? escapeHtml(mainSkill.name) : _t('ws.no_main_skill', '未设置')}</span>
-            <button class="ws-secondary" data-ws="pick-main-skill">${_t('ws.choose', '选择')}</button>
+            ${window.uiButton({ label: _t('ws.choose', '选择'), size: 'sm', attrs: { 'data-ws': 'pick-main-skill' } })}
           </div>
         </section>
         <section><label>${_t('ws.invalid_refs', '失效引用')}</label>
           <div class="ws-config-row">
             <span class="ws-config-value">${invalidCount ? `${invalidCount} ${_t('ws.invalid_items', '项')}` : _t('ws.no_invalid', '无失效引用')}</span>
-            ${invalidCount ? `<button class="ws-secondary" data-ws="prune-invalid">${_t('ws.prune', '清理')}</button>` : ''}
+            ${invalidCount ? window.uiButton({ label: _t('ws.prune', '清理'), size: 'sm', attrs: { 'data-ws': 'prune-invalid' } }) : ''}
           </div>
         </section>
         `}
@@ -2180,13 +2308,13 @@
       <section class="ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-dialog-head">
           <div><h2>${_t('ws.new_space', '新建空间')}</h2>${tpl ? `<span>${escapeHtml(_t('ws.template_suffix', '{name}模板', { name: tpl.name }))}</span>` : ''}</div>
-          <button data-ws="close-create">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-create' } })}
         </header>
         <div class="ws-dialog-body">
           ${!_configurationReady() ? _catalogStatus('configuration') : `
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
-              <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
+              ${_formInput({ id: 'ws-create-name', value: _createName, placeholder: _t('ws.space_name_ph', '请输入空间名称'), attrs: { 'data-ws': 'create-name', maxlength: '60', autocomplete: 'off', spellcheck: 'false', 'aria-label': _t('ws.space_name', '空间名称') } })}</label>
             <label class="full"><span>${_t('ws.import_folder_label', '本地文件夹（可选）')}</span>
               <div class="ws-import-picker" data-ws="pick-import-dir" role="button" tabindex="0"
                 title="${escapeHtml(_t('ws.import_folder_pick', '选择本地文件夹'))}">
@@ -2211,7 +2339,7 @@
               })}
             </div>
             <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
-              <textarea data-ws="create-instruction" maxlength="500" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(_createInstruction)}</textarea></label>
+              ${_formTextarea({ id: 'ws-create-instruction', value: _createInstruction, placeholder: _t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等'), attrs: { 'data-ws': 'create-instruction', maxlength: '500', rows: '4', 'aria-label': _t('ws.default_goal', '默认目标/指令') } })}</label>
           </div>
           <div class="ws-cap-heading">
             <div><h3>${_t('ws.ability_config', '能力配置')}</h3><p>${tpl ? _t('ws.template_synced_hint', '空间模板已同步预置指令与推荐能力，可按需调整。') : _t('ws.custom_ability_hint', '角色、Task Agent 与 Skill 均为可选，可按需添加。')}</p></div>
@@ -2224,7 +2352,7 @@
                   <div class="ws-cap-top"><strong>${cap[k].label}</strong><span>${cap[k].picked.length}</span></div>
                   <div class="ws-chips">${cap[k].picked.length ? cap[k].picked.map((o, i) => `<i>${k === 'role' && i === 0 ? `<b class="ws-chip-tag">${_t('ws.primary_mark', '主')}</b>` : ''}${escapeHtml(o.name)}</i>`).join('') : `<i>${_t('ws.not_selected', '未选择')}</i>`}</div>
                 </div>
-                <button class="ws-secondary" data-ws="open-ability" data-kind="${k}">${_t('ws.adjust', '调整')}</button>
+                ${window.uiButton({ label: _t('ws.adjust', '调整'), size: 'sm', attrs: { 'data-ws': 'open-ability', 'data-kind': k } })}
               </div>`).join('')}
           </div>
           `}
@@ -2232,7 +2360,7 @@
         <footer class="ws-dialog-foot">
           <small>${_t('ws.create_footer', '创建后将自动进入空间的第一个新任务。')}</small>
           <div>
-            <button class="ws-secondary" data-ws="close-create">${_t('ws.cancel', '取消')}</button>
+            ${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-create' } })}
             ${window.uiButton({ label: _t('ws.create_space', '创建空间'), role: 'primary', disabled: !_configurationReady(), attrs: { 'data-ws': 'confirm-create' } })}
           </div>
         </footer>
@@ -2250,7 +2378,7 @@
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-ability-head">
           <div><h2>${_t('ws.pick_base_agent', '选择基础 Agent')}</h2><p>${_t('ws.pick_base_agent_hint', '可多选：所有被选中的 Agent 都会承接空间内任务。')}</p></div>
-          <button data-ws="close-create-agent">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-create-agent' } })}
         </header>
         <div class="ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
@@ -2268,7 +2396,7 @@
         </div>
         <footer class="ws-ability-foot">
           <div>${picks.length ? `<span class="ws-config-hint">${_t('ws.selected_agents', '已选 {count} 个', { count: picks.length })}</span>` : ''}</div>
-          <div>${picks.length ? `<button class="ws-secondary" data-ws="clear-create-agent">${_t('ws.clear', '清除')}</button>` : ''}<button class="ws-secondary" data-ws="close-create-agent">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-create-agent">${_t('ws.save_choice', '保存选择')}</button></div>
+          <div>${picks.length ? window.uiButton({ label: _t('ws.clear', '清除'), attrs: { 'data-ws': 'clear-create-agent' } }) : ''}${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-create-agent' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-create-agent' } })}</div>
         </footer>
       </section>
     </div>`;
@@ -2294,7 +2422,7 @@
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-ability-head">
           <div><h2>${_t('ws.choose_ability', '选择空间能力')}</h2><p>${_t('ws.choose_ability_hint', '角色决定工作视角，Task Agent 与 Skill 提供专项执行能力。')}</p></div>
-          <button data-ws="close-ability">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-ability' } })}
         </header>
         <div class="ws-ability-main">
           <nav>
@@ -2319,7 +2447,7 @@
         </div>
         <footer class="ws-ability-foot">
           <div></div>
-          <div><button class="ws-secondary" data-ws="close-ability">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-ability">${_t('ws.save_choice', '保存选择')}</button></div>
+          <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-ability' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-ability' } })}</div>
         </footer>
       </section>
     </div>`;
@@ -2341,7 +2469,7 @@
       <div class="ws-option-card ${isPicked ? 'selected' : ''} ${isPrimary ? 'is-primary' : isPicked ? 'is-secondary' : ''}" data-ws="toggle-ability" data-kind="role" data-id="${escapeHtml(o.id)}">
         <span class="ws-check">${isPicked ? '✓' : ''}</span>
         <div><strong>${escapeHtml(o.name)}</strong>${isPicked ? `<em class="ws-role-badge${isPrimary ? ' is-primary' : ''}">${isPrimary ? _t('ws.primary_role', '主角色') : _t('ws.secondary_role', '副角色')}</em>` : ''}<p>${escapeHtml(o.desc)}</p></div>
-        ${isPicked && !isPrimary ? `<button type="button" class="ws-role-primary-btn" data-ws="make-primary" data-id="${escapeHtml(o.id)}">${_t('ws.make_primary', '设为主')}</button>` : ''}
+        ${isPicked && !isPrimary ? window.uiButton({ label: _t('ws.make_primary', '设为主'), size: 'sm', className: 'ws-role-primary-btn', attrs: { 'data-ws': 'make-primary', 'data-id': o.id } }) : ''}
       </div>`;
     };
     const pickedHtml = pickedItems.map((o, i) => card(o, i)).join('');
@@ -2369,7 +2497,7 @@
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-ability-head">
           <div><h2>${_t('ws.adjust_ability', '调整空间能力')}</h2><p>${_t('ws.adjust_ability_hint', '{kind}：模板内置项固定开启，额外勾选的内容会写入空间扩充配置。', { kind: kindLabel })}</p></div>
-          <button data-ws="close-edit-ability">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-edit-ability' } })}
         </header>
         <div class="ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
@@ -2388,7 +2516,7 @@
         </div>
         <footer class="ws-ability-foot">
           <div></div>
-          <div><button class="ws-secondary" data-ws="close-edit-ability">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-edit-ability">${_t('ws.save_choice', '保存选择')}</button></div>
+          <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-edit-ability' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-edit-ability' } })}</div>
         </footer>
       </section>
     </div>`;
@@ -2404,7 +2532,7 @@
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-ability-head">
           <div><h2>${_t('ws.pick_main_skill', '选择主 Skill')}</h2><p>${_t('ws.pick_main_skill_hint', '主 Skill 作为空间的核心能力入口（可选）。')}</p></div>
-          <button data-ws="close-main-skill">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-main-skill' } })}
         </header>
         <div class="ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
@@ -2422,7 +2550,7 @@
         </div>
         <footer class="ws-ability-foot">
           <div></div>
-          <div>${current ? `<button class="ws-secondary" data-ws="clear-main-skill">${_t('ws.clear', '清除')}</button>` : ''}<button class="ws-secondary" data-ws="close-main-skill">${_t('ws.cancel', '取消')}</button></div>
+          <div>${current ? window.uiButton({ label: _t('ws.clear', '清除'), attrs: { 'data-ws': 'clear-main-skill' } }) : ''}${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-main-skill' } })}</div>
         </footer>
       </section>
     </div>`;
@@ -2437,7 +2565,7 @@
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-ability-head">
           <div><h2>${_t('ws.pick_base_agent', '选择当前对话 Agent')}</h2><p>${_t('ws.pick_base_agent_hint', '可多选：所有被选中的 Agent 都会承接空间内任务。')}</p></div>
-          <button data-ws="close-base-agent">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-base-agent' } })}
         </header>
         <div class="ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
@@ -2455,7 +2583,7 @@
         </div>
         <footer class="ws-ability-foot">
           <div>${picks.length ? `<span class="ws-config-hint">${_t('ws.selected_agents', '已选 {count} 个', { count: picks.length })}</span>` : ''}</div>
-          <div>${picks.length ? `<button class="ws-secondary" data-ws="clear-base-agent">${_t('ws.clear', '清除')}</button>` : ''}<button class="ws-secondary" data-ws="close-base-agent">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-base-agent">${_t('ws.save_choice', '保存选择')}</button></div>
+          <div>${picks.length ? window.uiButton({ label: _t('ws.clear', '清除'), attrs: { 'data-ws': 'clear-base-agent' } }) : ''}${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-base-agent' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-base-agent' } })}</div>
         </footer>
       </section>
     </div>`;
@@ -2471,7 +2599,7 @@
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ws-ability-head">
           <div><h2>${_t('ws.pick_role', '选择角色')}</h2><p>${_t('ws.pick_role_hint', '角色决定空间的工作视角与默认能力，模板预置的指令与能力会随角色变化。')}</p></div>
-          <button data-ws="close-role">${_icon('x', 'ui-icon')}</button>
+          ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-role' } })}
         </header>
         <div class="ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
@@ -2489,7 +2617,7 @@
         </div>
         <footer class="ws-ability-foot">
           <div></div>
-          <div><button class="ws-secondary" data-ws="close-role">${_t('ws.cancel', '取消')}</button></div>
+          <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-role' } })}</div>
         </footer>
       </section>
     </div>`;
@@ -2748,6 +2876,7 @@
 
     // 空间中心
     root.querySelectorAll('[data-ws="create-space"]').forEach((el) => el.addEventListener('click', () => _openCreate(null)));
+    root.querySelectorAll('[data-ws="clear-center-search"]').forEach((el) => el.addEventListener('click', () => { _centerSearch = ''; _reRender(); }));
     root.querySelectorAll('[data-ws="open-space"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="continue"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="create-from-tpl"], [data-ws="use-tpl"]').forEach((el) => el.addEventListener('click', () => _openCreate(el.dataset.tpl)));
@@ -2819,21 +2948,25 @@
     }));
     const cs = root.querySelector('[data-ws="center-search"]');
     if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _debouncedSearchReRender(); });
-    const sortSel = root.querySelector('[data-ws="center-sort"]');
-    if (sortSel) sortSel.addEventListener('change', () => { _centerSort = sortSel.value; _reRender(); });
+    const sharedSelectHost = root.querySelector('[data-ui-select]');
+    if (sharedSelectHost && typeof window.hydrateUiFormSelects === 'function') {
+      window.hydrateUiFormSelects(root, {
+        'ws-center-sort': (value) => { _centerSort = value; _reRender(); },
+        'ws-art-source-filter': (value) => { _artifactSource = value; _resetArtScroll(); _reRender(); },
+        'ws-art-group-mode': (value) => { _artifactGroup = value; _resetArtScroll(); _reRender(); },
+        'ws-art-sort-mode': (value) => { _artifactSort = value; _resetArtScroll(); _reRender(); },
+      });
+    } else {
+      const sortSel = root.querySelector('[data-ws="center-sort"]');
+      if (sortSel) sortSel.addEventListener('change', () => { _centerSort = sortSel.value; _reRender(); });
+    }
 
     // 空间详情
-    root.querySelectorAll('[data-ws="space-tab"]').forEach((el) => el.addEventListener('click', () => {
-      _spaceTab = el.dataset.tab;
-      if (_spaceTab === 'artifacts') void _loadCatalog('agents');
-      // 产物/资产 tab：切到时强制重载（对话里新产出/新确认立即可见，避免缓存旧数据）
-      if ((el.dataset.tab === 'artifacts' || el.dataset.tab === 'assets') && _detailSpaceId) {
-        _detailLoadedFor = null;
-        _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
-      } else {
-        _reRender();
-      }
-    }));
+    const spaceTabs = Array.from(root.querySelectorAll('[data-ws="space-tab"]'));
+    spaceTabs.forEach((el) => {
+      el.addEventListener('click', () => _activateSpaceTab(el.dataset.tab, { restoreFocus: true }));
+      el.addEventListener('keydown', (event) => _handleSpaceTabKey(event, el, spaceTabs));
+    });
     // 空间详情「返回空间中心」（返回上级）
     root.querySelectorAll('[data-ws="back-to-center"]').forEach((el) => el.addEventListener('click', () => _go('center')));
     root.querySelectorAll('[data-ws="space-settings"]').forEach((el) => el.addEventListener('click', () => {
@@ -2914,9 +3047,11 @@
     // 只重建结果区与汇总；过滤 200+ 条是亚毫秒级，无需防抖，即时反馈。
     const artSearch = root.querySelector('[data-ws="art-search"]');
     if (artSearch) artSearch.addEventListener('input', () => { _artifactSearch = artSearch.value; _resetArtScroll(); _refreshArtifactResults(); });
-    root.querySelectorAll('[data-ws="art-source-filter"]').forEach((el) => el.addEventListener('change', () => { _artifactSource = el.value; _resetArtScroll(); _reRender(); }));
-    root.querySelectorAll('[data-ws="art-group-mode"]').forEach((el) => el.addEventListener('change', () => { _artifactGroup = el.value; _resetArtScroll(); _reRender(); }));
-    root.querySelectorAll('[data-ws="art-sort-mode"]').forEach((el) => el.addEventListener('change', () => { _artifactSort = el.value; _resetArtScroll(); _reRender(); }));
+    if (typeof window.hydrateUiFormSelects !== 'function') {
+      root.querySelectorAll('[data-ws="art-source-filter"]').forEach((el) => el.addEventListener('change', () => { _artifactSource = el.value; _resetArtScroll(); _reRender(); }));
+      root.querySelectorAll('[data-ws="art-group-mode"]').forEach((el) => el.addEventListener('change', () => { _artifactGroup = el.value; _resetArtScroll(); _reRender(); }));
+      root.querySelectorAll('[data-ws="art-sort-mode"]').forEach((el) => el.addEventListener('change', () => { _artifactSort = el.value; _resetArtScroll(); _reRender(); }));
+    }
     // 资产卡 × → 撤销（品牌化确认 → 撤销；撤销后资产从空间列表消失——listAbilityAssetsForSpace 过滤 revoked）
     root.querySelectorAll('[data-ws="revoke-asset"]').forEach((el) => el.addEventListener('click', async () => {
       const assetId = el.dataset.asset;
@@ -3191,6 +3326,9 @@
     // 重建前捕获搜索框焦点/光标：innerHTML 全量替换会销毁输入框。
     // 搜索框在打字过程中触发的重建必须把焦点还给用户，否则每敲一次就失焦。
     const active = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
+    const activeSpaceTab = document.activeElement && typeof document.activeElement.matches === 'function'
+      && document.activeElement.matches('[data-ws="space-tab"]') ? document.activeElement.dataset.tab : null;
+    const restoreSpaceTab = _pendingSpaceTabFocus || activeSpaceTab;
     const restoreSel = active && (active.matches('[data-ws="center-search"]') || active.matches('[data-ws="ref-search"]') || active.matches('[data-ws="art-search"]'))
       ? { sel: active.dataset.ws, pos: typeof active.selectionStart === 'number' ? active.selectionStart : active.value.length }
       : null;
@@ -3213,6 +3351,14 @@
     root.innerHTML = html;
     _renderedHtml = html;
     _bind(root);
+    if (restoreSpaceTab && _view === 'space') {
+      const tab = root.querySelector(`[data-ws="space-tab"][data-tab="${restoreSpaceTab}"]`);
+      _pendingSpaceTabFocus = null;
+      if (tab) {
+        tab.focus({ preventScroll: true });
+        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+    }
     if (_view === 'space' && _spaceTab === 'artifacts') {
       if (_artifactView === 'list') {
         _artVWinRange = null; // The replaced DOM has a new, empty row window.

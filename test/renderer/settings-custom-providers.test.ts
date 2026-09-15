@@ -184,6 +184,10 @@ class FakeElement {
       child.type = attrs.match(/\btype="([^"]+)"/)?.[1] || '';
       child.value = attrs.match(/\bvalue="([^"]*)"/)?.[1] || '';
       child.placeholder = attrs.match(/\bplaceholder="([^"]*)"/)?.[1] || '';
+      child.title = attrs.match(/\btitle="([^"]*)"/)?.[1] || '';
+      child.disabled = /\bdisabled(?:\s|>|$)/i.test(attrs);
+      const ariaLabel = attrs.match(/\baria-label="([^"]*)"/)?.[1];
+      if (ariaLabel) child.setAttribute('aria-label', ariaLabel);
       // 浏览器行为对齐（2026-09-14 回显回归）：裸 checked 属性要反映成 .checked
       // 属性，textarea 的初始值来自元素文本而不是 value 属性。缺这两条，harness
       // 永远看不到「已保存的高级配置真的渲染进了表单」，回显缺陷测不出来。
@@ -443,6 +447,13 @@ function buildHarness() {
   windowObj.uiButton = (options: any) => `<button type="button" class="btn ui-button ${String(options?.className || '')}" data-label="${String(options?.label || '')}"><span class="ui-button__label">${String(options?.label || '')}</span></button>`;
   windowObj.uiIconButton = (options: any) => `<button type="button" class="ui-icon-button" data-label="${String(options?.label || '')}"></button>`;
   vm.createContext(context);
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-button.js'), 'utf8'), context, { filename: 'ui-button.js' });
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
+  context.uiButton = windowObj.uiButton;
+  context.uiIconButton = windowObj.uiIconButton;
+  context.uiInput = windowObj.uiInput;
+  context.uiCheckbox = windowObj.uiCheckbox;
+  context.uiTextarea = windowObj.uiTextarea;
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8'), context, { filename: 'settings.js' });
   return { context, registry, invoke, windowObj, documentListeners, aiSelectMount };
 }
@@ -452,7 +463,8 @@ describe('settings model providers surface', () => {
     const indexHtml = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8');
     const source = readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8');
 
-    expect(indexHtml).toContain('data-settings-tab="configuration" data-i18n="settings.tab.configuration"');
+    expect(indexHtml).toContain('data-settings-tab="configuration"');
+    expect(indexHtml).toContain('data-i18n="settings.tab.configuration"');
     expect(indexHtml).not.toContain('Model Authorization');
     // The standalone custom-provider list was folded into the provider
     // picker's two action rows; the dialogs remain reachable.
@@ -947,7 +959,7 @@ describe('settings model providers surface', () => {
     const smartToggle = body.querySelector('#settings-model-form-smart') as any;
     expect(smartToggle).toBeTruthy();
     // 渲染即默认开（harness 不解析无值裸属性，用 HTML 串锁定 checked）。
-    expect(body.innerHTML).toContain('settings-model-form-smart" checked');
+    expect(body.innerHTML).toContain('id="settings-model-form-smart" type="checkbox" checked');
     // FakeElement 不把 checked 属性反映为 .checked 属性（浏览器行为），显式置真。
     smartToggle.checked = true;
     const addIdInput = body.querySelector('#settings-custom-provider-model-edit-id') as any;

@@ -68,6 +68,11 @@
       bodyHtml: viewerBodyHtml(),
     });
     modal.dialog.classList.add('anchored-source-modal');
+    // Keep the reader's corner close control independent of the modal-shell
+    // click delegation, because the document surface can be scrollable.
+    modal.dialog.querySelector('[data-ui-modal-close]')?.addEventListener('click', () => {
+      modal.close(null, 'close');
+    });
     modal.then(() => {
       // 关闭查看器时销毁纠错面板（其内部状态随 run 走，不跨文档复用）。
       destroyCorrection();

@@ -10,6 +10,12 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf8');
+
+function installSharedUi(context: vm.Context) {
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-segmented-control.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8'), context, { filename: file });
+  }
+}
 const zh: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf8'),
 );
@@ -30,6 +36,7 @@ function loadRenderer(state: Record<string, unknown> = {}) {
   context.global = context;
   context.globalThis = context;
   vm.createContext(context);
+  installSharedUi(context);
   vm.runInContext(skillsSource, context, { filename: 'skills.js' });
   vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify(state)})`, context);
   return context;
