@@ -187,6 +187,32 @@ export function wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, bo
 </html>`;
 }
 
+/** 提不出任何可见文字的转换结果（`<p></p>` / 空串 / 纯空白都算空）。 */
+export function officeFragmentHasText(fragment: string): boolean {
+  return Boolean(String(fragment || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim());
+}
+
+/**
+ * Office 预览提不出正文时给一句能照做的说明，而不是空白页。
+ * 只给"整页阅读"的查看器用（知识库 `kb.openFile`）：卡片缩略 / 面板预览刻意
+ * 保持空白（见本文件测试里 "blank … without placeholder text" 那组断言）——小
+ * 尺寸卡片里塞一段说明更吵。
+ *
+ * Word 的两种真实原因分开说，用户才知道下一步做什么：
+ *   - `word/embeddings/*`：整份内容塞进了嵌入对象（Word 里要双击那个对象才看得到），
+ *     HTML 里提不出任何正文（真机案例：一份"报告.docx"里只有一个 OLE 包）；
+ *   - 其余：正文是图片/扫描件（mammoth 只提文字）。
+ * docx 是 zip，条目名在字节里就是明文，直接扫即可——为一句提示引 zip 依赖不划算。
+ */
+export function officeEmptyBodyHtml(kind: OfficePreviewKind, buf?: Buffer): string {
+  const embedded = Boolean(buf && Buffer.isBuffer(buf) && buf.includes('word/embeddings/'));
+  if (kind === 'word' && embedded) {
+    return '<p class="office-muted">这份 Word 的正文全在嵌入对象里（Word 里要双击那个对象才看得到），HTML 提不出文字。点右上角「在系统中打开」用本机 Office 打开原文件。</p>';
+  }
+  const what = kind === 'word' ? 'Word' : kind === 'spreadsheet' ? '表格' : '演示文稿';
+  return `<p class="office-muted">这份 ${what} 里没有可直接提取的文字（内容可能在图片、扫描件或嵌入对象里）。点右上角「在系统中打开」用本机 Office 查看原排版。</p>`;
+}
+
 export function esticogseedOfficePreviewHeight(kind: OfficePreviewKind, fragment: string): number | undefined {
   if (kind !== 'spreadsheet') return undefined;
   const sectionRe = /<section class="office-sheet">[\s\S]*?<\/section>/g;
@@ -217,6 +243,7 @@ export async function officeBufferToPreviewHtml(
   } else {
     fragment = pptxBufferToHtml(buf);
   }
+  // 卡片刻意保持空白（见测试断言），说明文案只给整页查看器用
   const previewHeight = esticogseedOfficePreviewHeight(kind, fragment);
   return {
     html: wrapOfficePreviewHtml(kind, title, fragment),

@@ -60,6 +60,14 @@ function fakeEl(id: string) {
     removeAttribute: vi.fn(),
     _listeners: listeners,
   };
+  Object.defineProperty(el, 'firstElementChild', {
+    get: () => {
+      if (!String(el.innerHTML || '').trim()) return null;
+      const child = fakeEl('');
+      child.innerHTML = el.innerHTML;
+      return child;
+    },
+  });
   return el;
 }
 
@@ -105,7 +113,7 @@ const KB_FILES = [
   { path: 'external/feishu-wiki/SM 的交接.md', status: 'ready', chunks: 4, kind: 'word' },
 ];
 
-function loadScript() {
+function loadScript(options: { narrow?: boolean } = {}) {
   const source = fs.readFileSync(
     path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
     'utf8',
@@ -129,6 +137,10 @@ function loadScript() {
   };
   const windowMock: any = {
     addEventListener: vi.fn(),
+    matchMedia: vi.fn(() => ({
+      matches: Boolean(options.narrow),
+      addEventListener: vi.fn(),
+    })),
     t: vi.fn((key: string) => ({
       'kb.workbench.external_feishu': '飞书 Wiki',
       'kb.workbench.external_source': '外部来源',
@@ -343,6 +355,102 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-analysis-card'].innerHTML).not.toContain('正在解析');
   });
 
+  it('生成脑图 / 生成测验不依赖 AI 解析：首屏（未解析）就可用', () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    // 首屏的按钮必须当场绑上 listener：只把 disabled 拿掉的话点了没反应
+    expect(els['kb-wb-analysis-card']).toBeTruthy();
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toMatch(/_refreshQaModelChipLabel\(\);[\s\S]{0,400}_bindAnalysisActions\(analysisCard\)/);
+    const html = els['kb-workbench'].innerHTML;
+    const mmIdx = html.indexOf('id="kb-wb-gen-mm"');
+    const quizIdx = html.indexOf('id="kb-wb-gen-quiz"');
+    expect(mmIdx).toBeGreaterThan(0);
+    expect(quizIdx).toBeGreaterThan(0);
+    // 两个按钮的标记里没有 disabled，也没有"请先生成 AI 解析"这个禁用理由
+    expect(html.slice(mmIdx - 400, mmIdx)).not.toContain('disabled');
+    expect(html.slice(quizIdx - 400, quizIdx)).not.toContain('disabled');
+    expect(html).not.toContain('请先生成 AI 解析');
+  });
+
+  it('两个入口的可用性只看"库是否为空"，并把解析裁掉的门槛去掉', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toContain('function _bindAnalysisActions');
+    expect(src).toMatch(/_bindAnalysisActions[\s\S]{0,600}_libFileCount\(\) === 0/);
+    // 解析结果不再决定按钮可用性（此前 disabled: !(ok && hasMm) / disabled: !ok）
+    expect(src).not.toMatch(/disabled: !\(ok && hasMm\)/);
+    expect(src).toContain('function _bindAnalysisActions');
+    expect(src).not.toContain('请先生成 AI 解析');
+  });
+
+  it('生成测验有真实实现：调 kb.quiz 并渲染可作答的卡片', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 这个入口此前只有调用点、没有实现（点击 ReferenceError）
+    expect(src).not.toMatch(/_renderQuiz\b/);
+    expect(src).toContain('function _genQuiz()');
+    expect(src).toContain("invoke('kb.quiz'");
+    expect(src).toContain('function _renderQuizCard');
+    // 题目文本一律走 textContent（模型输出不拼 innerHTML）
+    expect(src).toMatch(/function _renderQuizCard[\s\S]{0,900}textContent = String\(q\.question/);
+    // 会话恢复：quiz 消息按存下来的题目重建
+    expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,200}_appendQuizMessage/);
+    expect(src).toMatch(/kind: 'quiz', questions/);
+  });
+
+  it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
+    expect(src).toMatch(/kind: 'quiz', questions[\s\S]{0,200}_qaSaveCurrentSession\('测验'\)/);
+    expect(src).toMatch(/_state\.qaHistory\.push\(\{ role: 'assistant', kind: 'quiz'/);
+    // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
+    expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);
+    expect(src).toMatch(/Array\.isArray\(m\.questions\) \? m\.questions\.slice\(0, 20\)/);
+    // ③ 产物消息没有 content，不进模型多轮上下文
+    expect(src).toMatch(/filter\(\(m\) => m\.kind !== 'mindmap' && m\.kind !== 'quiz'\)/);
+  });
+
+  it('参考答案/解析分块显示，多要点自动列点', () => {
+    const { windowMock } = loadScript();
+    const clauses = windowMock.__kbFvUtils.quizAnswerClauses;
+    // 真机反馈里的原句：一个分号隔开的两个要点 → 拆成两条，而不是糊成一整段
+    const two = clauses('匹配角色只需要一个API Key；发版清理时应以CSV文件为准（提示词内是速览，以CSV为准）。');
+    expect(two).toHaveLength(2);
+    expect(two[0]).toBe('匹配角色只需要一个API Key'); // 列表项不带分隔符
+    expect(two[1]).toContain('发版清理时应以CSV文件为准');
+    // 单句不拆（不把一句话切碎）
+    expect(clauses('一句话参考答案。')).toEqual(['一句话参考答案。']);
+    // 编号式要点也认
+    expect(clauses('1. 先纠错 2. 再检索')).toEqual(['先纠错', '再检索']);
+    expect(clauses('')).toEqual([]);
+    // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toContain('function _quizAnswerBlock');
+    expect(src).toContain("_quizAnswerBlock('参考答案'");
+    expect(src).toContain("_quizAnswerBlock('解析'");
+    expect(src).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
+  });
+
+  it('共享库的分享显示为待开发（不再弹出"像能用"的分享弹窗）', () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    const html = els['kb-workbench'].innerHTML;
+    expect(html).toContain('kb-wb-soon-chip');
+    expect(html).toContain('待开发');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 开关 + 点击走说明弹层；真弹窗实现保留（翻开关即可恢复）
+    expect(src).toContain('const KB_SHARE_READY = false');
+    expect(src).toMatch(/if \(!KB_SHARE_READY\) \{ _kbShareSoonOpen\(\); return; \}/);
+    expect(src).toContain('function _kbShareSoonOpen');
+    expect(src).toContain('function _kbShareDialogOpen');
+  });
+
+  it('生成脑图仍走 kb.mindmap（本来就是独立能力）', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toMatch(/mmBtn\.addEventListener\('click', \(\) => _genMindmap\(\)\)/);
+    expect(src).toMatch(/quizBtn\.addEventListener\('click', \(\) => _genQuiz\(\)\)/);
+    expect(src).toContain("invoke('kb.mindmap'");
+  });
+
   it('renders shared knowledge bases (space library) in the tree', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
@@ -376,6 +484,323 @@ describe('KB workbench (S1 skeleton)', () => {
     collapse._listeners.click();
     expect(collapse.hidden).toBe(true);
     expect(expand.hidden).toBe(false);
+  });
+
+  it('collapses the AI panel at constrained width and restores it on demand', () => {
+    const { windowMock, els } = loadScript({ narrow: true });
+    windowMock.renderKbWorkbench();
+    const expand = els['kb-wb-right-expand'];
+    const collapse = els['kb-wb-right-collapse'];
+    const panel = els['kb-wb-right-panel'];
+
+    expect(expand.hidden).toBe(false);
+    expect(collapse.hidden).toBe(true);
+    expect(panel.setAttribute).toHaveBeenLastCalledWith('aria-hidden', 'true');
+
+    expand._listeners.click();
+    expect(expand.hidden).toBe(true);
+    expect(collapse.hidden).toBe(false);
+    expect(panel.setAttribute).toHaveBeenLastCalledWith('aria-hidden', 'false');
+
+    collapse._listeners.click();
+    expect(expand.hidden).toBe(false);
+    expect(collapse.hidden).toBe(true);
+    expect(expand.focus).toHaveBeenCalled();
+  });
+
+  it('uses the shared icon-button seam for the responsive AI panel controls', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const css = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/style.css'),
+      'utf8',
+    );
+
+    expect(source).toContain("typeof window.uiIconButton === 'function'");
+    expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
+    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.kb-wb\.right-panel-open \.kb-wb-right/);
+    expect(css).toContain('width: min(420px, calc(100% - 44px));');
+  });
+
+  it('routes every import-menu glyph through the shared icon registry', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+
+    for (const icon of ['file', 'folder', 'book-open', 'link', 'file-text', 'document-pencil', 'upload', 'mic']) {
+      expect(source).toContain(`_icon('${icon}', 'kb-wb-import-icon')`);
+    }
+    expect(source).not.toMatch(/data-imp="(?:file|dir|kblib|url|note|note-new|note-import|audio|folder)">[📄📁📚🔗🗒✏️📥🎙🗂]/u);
+  });
+
+  it('renders knowledge-base file row actions through shared icon buttons', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const fileRows = source.slice(
+      source.indexOf('function _renderNodeRows('),
+      source.indexOf('function _countFiles('),
+    );
+
+    expect(fileRows).toContain("_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn'");
+    expect(fileRows).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn'");
+    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? '折叠' : '展开', icon: open \? 'chevron-down' : 'chevron-right'/);
+    expect(fileRows).not.toMatch(/<button\b/);
+  });
+
+  it('renders knowledge-base context menu actions through shared buttons and icons', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const menus = source.slice(
+      source.indexOf('function _kbMenuShow('),
+      source.indexOf('async function _kbRenameSpaceFile('),
+    );
+
+    expect(menus).toContain("role: it.danger ? 'danger' : 'ghost'");
+    expect(menus).toContain("icon: 'edit-pencil'");
+    expect(menus).toContain("icon: 'users'");
+    expect(menus).toContain("icon: 'trash-2'");
+    expect(menus).toContain("_uiButton({ label: '置顶', icon: 'pin'");
+    expect(menus).toContain("_uiButton({ label: '编辑标签', icon: 'tag'");
+    expect(menus).toContain("_icon('lock', 'kb-ctx-menu-icon')");
+    expect(menus).not.toMatch(/[✏️🗑📂👥📌🏷🔐➡⧉▸✓]/u);
+    expect(menus).not.toMatch(/<button\b/);
+  });
+
+  it('keeps the note submenu open when hover is followed by click', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+
+    expect(source).toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = false;/);
+    expect(source).not.toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = !importNoteSub\.hidden;/);
+  });
+
+  it('opens the note submenu toward the available left side', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const css = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/style.css'),
+      'utf8',
+    );
+
+    expect(source).toContain("_icon('chevron-left', 'kb-import-caret-icon')");
+    const submenuRule = css.match(/\.kb-wb-import-sub\s*\{([^}]*)\}/)?.[1] || '';
+    expect(submenuRule).toContain('right: calc(100% - 4px);');
+    expect(submenuRule).not.toContain('left: calc(100% - 4px);');
+  });
+
+  it('renders mindmap window actions through shared buttons and registered icons', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const mindmapMarkup = source.slice(
+      source.indexOf('<div class="kb-mm-overlay"'),
+      source.indexOf('// 右列强制 flex column'),
+    );
+
+    for (const id of [
+      'kb-mm-mode-btn', 'kb-mm-popout-btn', 'kb-mm-overlay-close', 'kb-mm-undo',
+      'kb-mm-refresh', 'kb-mm-save', 'kb-mm-open-btn', 'kb-mm-export-btn',
+      'kb-mm-layout-btn', 'kb-mm-expand-all', 'kb-mm-collapse-all', 'kb-mm-focus-btn',
+      'kb-mm-outline-btn', 'kb-mm-bg-btn', 'kb-mm-dots-btn', 'kb-mm-zoom-out',
+      'kb-mm-zoom-in', 'kb-mm-reset', 'kb-mm-more-btn',
+    ]) {
+      expect(mindmapMarkup).toMatch(new RegExp(`_ui(?:Icon)?Button\\(\\{[\\s\\S]*?id: '${id}'`));
+    }
+    expect(mindmapMarkup).not.toMatch(/<button\b/);
+    expect(mindmapMarkup).not.toMatch(/[🧠👁💾📂📥🖼📐📄📝📋🏢⤢⤡◎☰▦▤＋⋯✕↩⟳]/u);
+    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? '编辑' : '预览'");
+  });
+
+  it('renders analysis disclosure, citations, and retry through shared buttons', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const analysis = source.slice(
+      source.indexOf('function _renderAnalysis('),
+      source.indexOf('function _mmSnapshotKey('),
+    );
+
+    expect(analysis).toContain("_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down'");
+    expect(analysis).toContain("_uiButton({ label: `${d.file}#chunk 1`, role: 'ghost', size: 'sm', className: 'kb-qa-chip'");
+    expect(analysis).toContain("_setUiButtonPresentation(btn, open ? '收起' : '展开', open ? 'chevron-up' : 'chevron-down')");
+    expect(analysis).toContain("_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh'");
+    expect(analysis).not.toMatch(/<button\b/);
+    expect(analysis).not.toMatch(/[▾▴↗🔄]/u);
+  });
+
+  it('renders QA actions and removable items through shared buttons', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const qaMarkup = source.slice(
+      source.indexOf('<div class="kb-qa-session">'),
+      source.indexOf('<div class="kb-mm-overlay"'),
+    );
+    const attachments = source.slice(
+      source.indexOf('function _renderQaAttachments()'),
+      source.indexOf('function _clearQa()'),
+    );
+    const historyPanel = source.slice(
+      source.indexOf('function _qaOpenHistory()'),
+      source.indexOf('function _qaFmtTime('),
+    );
+    const askMarkup = source.slice(
+      source.indexOf('function _ask(question)'),
+      source.indexOf('function _streamAnswer('),
+    );
+
+    for (const id of ['kb-qa-popout', 'kb-qa-history', 'kb-qa-clear', 'kb-qa-attach', 'kb-qa-send']) {
+      expect(qaMarkup).toMatch(new RegExp(`_uiIconButton\\(\\{[\\s\\S]*?id: '${id}'`));
+    }
+    expect((qaMarkup.match(/<button\b/g) || [])).toHaveLength(1);
+    expect(qaMarkup).toContain('class="kb-qa-model-chip"');
+    expect(attachments).toContain("_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger'");
+    expect(historyPanel).toContain("_uiButton({ label: '新建对话'");
+    expect(historyPanel).toContain("_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger'");
+    expect(askMarkup).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-qa-more-btn'");
+    expect(askMarkup).toContain("_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost'");
+    expect(askMarkup).toContain("_uiButton({ label: '删除', icon: 'trash-2', role: 'danger'");
+    expect(`${attachments}\n${historyPanel}`).not.toMatch(/[✕🗑＋]/u);
+    expect(historyPanel).toMatch(/onHistoryKeydown[\s\S]*?event\.key !== 'Escape'/);
+    expect(historyPanel).toMatch(/closePanel\(restoreFocus = true\)[\s\S]*?trigger\?\.focus\(\)/);
+    expect(source).toMatch(/event\.key !== 'Escape' \|\| !rightPanelNarrow[\s\S]*?getElementById\('kb-qa-history-panel'\)/);
+  });
+
+  it('renders QA sources, answer actions, and model dialog through shared UI seams', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const answerActions = source.slice(
+      source.indexOf('function _qaRefsElement('),
+      source.indexOf('function _decorateAnswerHtml('),
+    );
+    const modelPicker = source.slice(
+      source.indexOf('function _openQaModelPicker('),
+      source.indexOf('function _selectQaModel('),
+    );
+
+    expect(answerActions).toContain("_uiButton({\n      label: `资料来源 · ${n}`");
+    expect(answerActions).toContain("_uiButton({\n        label: `${r.path}#chunk ${r.chunkIdx}`");
+    expect(answerActions).toContain("_uiIconButton({\n        label: '复制引用路径',\n        icon: 'copy'");
+    expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
+    expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
+    expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
+
+    expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
+    expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
+    expect(modelPicker).toContain("_mountKbDialog({");
+    expect(modelPicker).toContain("initialFocus: '[aria-pressed=\"true\"]'");
+    expect(modelPicker).toContain("fallbackFocus: '#kb-qa-tools'");
+    expect(modelPicker).toContain("pop.setAttribute('aria-modal', 'true')");
+    expect((modelPicker.match(/el\('button'/g) || [])).toHaveLength(2);
+    expect(modelPicker).not.toMatch(/[✕✓]/u);
+  });
+
+  it('keeps the QA history panel above the responsive AI drawer', () => {
+    const css = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/style.css'),
+      'utf8',
+    );
+    const historyRule = css.match(/\.kb-qa-history-panel\s*\{([^}]*)\}/)?.[1] || '';
+    expect(historyRule).toContain('z-index: var(--z-modal-popover);');
+  });
+
+  it('renders the library import dialog with shared controls and recoverable loading state', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const importDialog = source.slice(
+      source.indexOf('async function _importSpaceFromLib()'),
+      source.indexOf('async function _kbNewFolder()'),
+    );
+    const importBinding = source.slice(
+      source.indexOf('function _bindImportDlgEvents('),
+      source.indexOf('function _pushImportDlgHistory('),
+    );
+
+    expect(importDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title"');
+    expect(importDialog).toContain("_uiIconButton({ label: '关闭导入弹窗', icon: 'x'");
+    expect(importDialog).toContain("_uiIconButton({ label: '返回', icon: 'chevron-left'");
+    expect(importDialog).toContain("_uiInput({ id: 'kb-import-dlg-search-input', type: 'search'");
+    expect(importDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
+    expect(importDialog).toContain("_uiButton({ label: '导入', role: 'primary'");
+    expect(importDialog).not.toMatch(/<button\b/);
+    expect(importDialog).not.toMatch(/<input\b/);
+    expect(importDialog).not.toMatch(/[✕←→]/u);
+    expect(importBinding).toMatch(/onImportDialogKeydown[\s\S]*?event\.key !== 'Escape'/);
+    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?okBtn\.disabled = _dlgSelected\.size === 0/);
+    expect(source).toMatch(/getElementById\('kb-qa-history-panel'\) \|\| document\.querySelector\('\.kb-import-dlg-overlay'\)/);
+  });
+
+  it('adopts shared controls and modal behavior for knowledge-base sharing dialogs', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const createDialog = source.slice(
+      source.indexOf('function _createSharedSpace()'),
+      source.indexOf('async function _kbShareSubmit()'),
+    );
+    const membersDialog = source.slice(
+      source.indexOf('function _kbMembersDialog()'),
+      source.indexOf('// ── 共享知识库分享弹窗'),
+    );
+    const shareDialogs = source.slice(
+      source.indexOf('function _kbShareDialogOpen()'),
+      source.indexOf('async function _kbRenameSpace('),
+    );
+
+    expect(source).toMatch(/function _mountKbDialog[\s\S]*?uiModalController\(\{ overlay, dialog, initialFocus, fallbackFocus/);
+    expect(createDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title"');
+    expect(createDialog).toContain("_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x'");
+    expect(createDialog).toContain("_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil'");
+    expect(createDialog).toContain("_uiInput({ id: 'kb-share-name', className: 'kb-share-input'");
+    expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input'");
+    expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input'");
+    expect(createDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
+    expect(createDialog).toContain("_uiButton({ label: '确定', role: 'primary'");
+    expect(createDialog).not.toMatch(/[✕📁✎▾✓]/u);
+    expect(membersDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-members-title"');
+    expect(membersDialog).toContain("_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x'");
+    expect(membersDialog).toContain("_uiInput({ id: 'kb-members-search-input', type: 'search'");
+    expect(membersDialog).toContain("_icon('users', 'kb-members-title-icon')");
+    expect(membersDialog).not.toMatch(/[✕👥]/u);
+    expect(shareDialogs).toContain("_uiButton({ label: '复制链接', role: 'secondary', icon: 'link'");
+    expect(shareDialogs).toContain("_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code'");
+    expect(shareDialogs).toContain("_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input'");
+    expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input'");
+    expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
+    expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: '保存并授权', role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: '撤销', role: 'danger', size: 'sm'");
+    expect(shareDialogs).toMatch(/_kbShareDlgClose\(\{ restoreFocus: false \}\)[\s\S]*?_kbPermDialogOpen\(\)/);
+    expect(shareDialogs).toMatch(/_kbShareDlgController\.close\('close', options\)/);
+    expect(shareDialogs).not.toMatch(/[✕›]/u);
+    expect(source).toContain("_uiInput({ id: 'kb-wb-side-search-input', type: 'search'");
+    expect(source).toContain("_uiInput({ id: 'kb-wb-search-input', type: 'search'");
+    expect(source).toContain("_uiInput({ id: 'kb-mm-search', type: 'search', className: 'kb-mm-search'");
   });
 
   it('search finds files inside unexpanded folders (recursive)', async () => {
@@ -430,5 +855,140 @@ describe('kb file-viewer highlight pure helpers', () => {
     const tokens = windowMock.__kbFvUtils.significantTokens('先选定并本地试跑一个 skills 目录');
     expect(tokens).toContain('skills');
     expect(tokens.length).toBeGreaterThan(0);
+  });
+});
+
+describe('查看器窗口：缩放与调整大小（真机反馈回归）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+  const css = src.slice(src.indexOf('function _injectFileViewerStyle'));
+
+  it('对话框自带定位上下文 —— 否则右下角手柄会跑到屏幕角落上', () => {
+    // 手柄是 position:absolute；对话框 position:static 时它相对 overlay(fixed) 定位，
+    // 实测手柄落在视口右下角、窗口自己那个角上什么都没有 → "能移动但不能调整大小"
+    const dialogRule = css.match(/\.kb-fv-dialog \{[\s\S]*?\n {6}\}/);
+    expect(dialogRule).toBeTruthy();
+    expect(dialogRule![0]).toContain('position: relative');
+    expect(css).toMatch(/\.kb-fv-resize \{[\s\S]{0,200}position: absolute/);
+  });
+
+  it('嵌入 iframe 的模式打开时给足高度（不再是 280px 的矮缝）', () => {
+    expect(css).toMatch(/\.kb-fv-dialog--frame \{ height: min\(86vh, 780px\); \}/);
+    // 进入/退出嵌入模式时两个 class 同步（少一个就会留下错误高度）
+    expect(src).toMatch(/function _fvEnterFrameMode\(overlay, body\) \{[\s\S]{0,300}kb-fv-body--frame[\s\S]{0,200}kb-fv-dialog--frame/);
+    expect(src).toMatch(/classList\.remove\('kb-fv-dialog--frame'\)/);
+  });
+
+  it('PDF 缩放靠真的重新加载（只改 hash 等于没缩放）', () => {
+    // 真机实测：只改 iframe.src 的 hash，PDFium 不重新排版（100%/120% 像素完全相同），
+    // 必须换成带新 zoom 的新 frame 才会重新加载
+    expect(src).toMatch(/function _fvApplyPdfZoom[\s\S]{0,700}cloneNode\(false\)[\s\S]{0,200}replaceWith\(frame\)/);
+    expect(src).toMatch(/cur\.lastZoom === pct/);
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.pdfSrcAt({ src: 'kb-file://kb/a.pdf', page: 3 }, 120))
+      .toBe('kb-file://kb/a.pdf#toolbar=1&navpanes=0&page=3&zoom=120');
+    expect(u.pdfSrcAt({ src: 'kb-file://space/s1/b.pdf', page: null }, 80))
+      .toBe('kb-file://space/s1/b.pdf#toolbar=1&navpanes=0&zoom=80');
+  });
+
+  it('拖手柄松手落在窗口外时，不会顺手把窗口关掉', () => {
+    // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
+    expect(src).toMatch(/pressedOnOverlay/);
+    expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+  });
+
+  it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
+    // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
+    // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
+    // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
+    expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
+    expect(src.match(/_fvEndDragShield\(fvOverlay\)/g)?.length).toBe(2);
+  });
+
+  it('恢复上次窗口位置时按已算好的宽高夹取（量 offset 在 display:none 下全是 0）', () => {
+    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\n {2}\}/);
+    expect(fn).toBeTruthy();
+    expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
+    expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
+    // 先显示再恢复：overlay 关着时量不到真实尺寸
+    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+  });
+});
+
+describe('文件查看：按类型分派（#214 回归防护）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+
+  it('保留富查看器（保排版/缩放）：PDF 走 PDFium iframe，Office 走排版 HTML', () => {
+    // 主进程 kb.openFile 的契约 + kb-file:// 协议仍在；渲染层必须有对应实现
+    expect(src).toContain('kb-file://kb/');
+    expect(src).toContain('kb-file://space/');
+    expect(src).toContain("toolbar=1&navpanes=0");
+    expect(src).toMatch(/kind === 'pdf'/);
+    expect(src).toMatch(/kind === 'office'/);
+    expect(src).toContain('_fvSetZoom');
+    expect(src).toContain('_fvResetZoom');
+  });
+
+  it('渲染型文件（html/图片/音视频）也走富查看器，不再退化成纯文本', () => {
+    expect(src).toContain("kind === 'html' || c.kind === 'image' || c.kind === 'media'");
+    expect(src).toContain('kb-fv-frame--html');
+    expect(src).toContain("createElement(c.audio ? 'audio' : 'video')");
+    // html 默认渲染页面，同时保留"查看源码"
+    expect(src).toContain('kb-fv-source');
+    expect(src).toContain('_fvToggleHtmlSource');
+  });
+
+  it('暴露 __kbWorkbenchOpenFile 供回归与自动化验证（分派本身就是被测行为）', () => {
+    expect(src).toContain('window.__kbWorkbenchOpenFile');
+  });
+
+  it('点击文件按扩展名分派：排版类 → 富查看器；纯文本 → 原文查看器', () => {
+    expect(src).toContain('function _isRichPreview');
+    expect(src).toContain('_FV_RICH_EXTS');
+    expect(src).toMatch(/if \(_isRichPreview\(relPath\)\) \{[\s\S]{0,400}?_openFileViewer\(/);
+    expect(src).toMatch(/if \(typeof window\.__openAnchorViewer === 'function'\) \{[\s\S]{0,300}?__openAnchorViewer\(\{/);
+    // .html 不再被当作文本类打开（否则 70 份 html 只看到源码）
+    expect(src).toContain("'.html', '.htm',");
+  });
+
+  it('引用锚点：排版类带页码定位到富查看器，文本类仍走原文查看器', () => {
+    expect(src).toMatch(/_openFileViewerForAnchor[\s\S]{0,900}?_isRichPreview\(anchor\.path\)/);
+    // 页码定位与富查看器开在同一个函数里（_openRichForAnchor）
+    expect(src).toMatch(/_openRichForAnchor[\s\S]{0,1800}?page/);
+    expect(src).toMatch(/_openRichForAnchor[\s\S]{0,2200}?_openFileViewer\(/);
+  });
+
+  it('对外桥 __openKbRichFile：阅读器只问一次"这文件该不该保排版"', () => {
+    // 常驻加载的 anchored-source-view 在把排版类文件丢进纯文本阅读器前会调它；
+    // 桥必须：只接排版类、返回"是否接管"、且复用同一条 _openRichForAnchor。
+    expect(src).toContain('window.__openKbRichFile');
+    expect(src).toMatch(/__openKbRichFile[\s\S]{0,400}?_isRichPreview\(anchor\.path\)[\s\S]{0,200}?_openRichForAnchor/);
+    // 扩展名清单只有一份来源（anchored-source-view 暴露），避免两处漂移
+    expect(src).toContain('window.__kbRichPreviewExts');
+    expect(src).toContain('window.__kbIsRichPath');
+  });
+
+  it('HTML 用渲染 iframe（sandbox 只给 allow-scripts，与 chat-file-viewer 一致）', () => {
+    // 跨 origin 才能挡住父页访问；脚本保留是为了交互型 HTML 能跑
+    expect(src).toMatch(/kb-fv-frame--html';\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+  });
+
+  it('查看源码走主进程 kb.openFile(asText)，不依赖 fetch(kb-file://)', () => {
+    // 非 http 方案没有 CORS 头，渲染进程 fetch 会 Failed to fetch（实测）
+    expect(src).toMatch(/asText: true/);
+    expect(src).not.toMatch(/fetch\(content\.src\)/);
+  });
+
+  it('工具栏提供"在系统中打开"（只读预览之外的编辑/批注出口）', () => {
+    expect(src).toContain('kb-fv-external');
+    expect(src).toContain("invoke('kb.openExternal'");
+    // 参数由纯函数给（载荷可测），无当前文件时按钮隐藏、点了也不发请求
+    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\n\s*const payload = _fvExternalTarget\(\);/);
+    expect(src).toContain('externalTarget: _fvExternalTarget');
+    // 无当前文件上下文时必须隐藏，避免点了没反应
+    expect(src).toMatch(/_fvCtx[\s\S]{0,400}?extBtn\.hidden/);
   });
 });

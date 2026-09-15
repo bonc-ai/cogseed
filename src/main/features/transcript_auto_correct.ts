@@ -14,7 +14,12 @@
  *      （真实事故：一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）；
  *   5. 保护区域：fenced code / 行内 code / URL 内不做替换；
  *   6. 重叠消解：长词优先、`freq` 次优先，同 span 只保留一个候选；
- *   7. **只做替换/删除，不生成句子**：输出必须能由"原文 + 编辑集"逐字重建
+ *   7. 口癖规则包：`kind=filler` 的词条按 `transcript_filler_rules` 的边界策略删除
+ *      （白名单词只在句首/独立出现；`就是/然后/对` 只在重复或纯应答），
+ *      绝不"见词就删"；
+ *   8. 语境白名单：命中窗口内出现 `contextAllow` 任一词则**整条候选静默丢弃**
+ *      （方案 §七「加白」：误杀一次就加白，别再反复提示）；
+ *   9. **只做替换/删除，不生成句子**：输出必须能由"原文 + 编辑集"逐字重建
  *      （`verifyEditsRebuild`），从结构上排除模型补写
  *      （真实事故：清理产物里出现原文没有的 11 秒发言）。
  *
@@ -30,6 +35,11 @@ import {
   isCjkOrWordChar,
   scopeAllows,
 } from './transcript_glossary';
+import {
+  detectFillers,
+  fillerRuleFor,
+  type FillerRule,
+} from './transcript_filler_rules';
 
 /** 清理版字符保留率低于此值即判"疑似过度改写"（方案 v0.2 §8.2）。 */
 export const OVER_REWRITE_THRESHOLD = 0.55;
@@ -40,6 +50,7 @@ export const DEFAULT_CONTEXT_WINDOW = 20;
 export type DeniedReason =
   | 'out_of_scope'
   | 'context_denied'
+  | 'context_allowed'
   | 'word_boundary'
   | 'overlapping_span'
   | 'protected_region';
@@ -69,6 +80,15 @@ export interface CorrectionCandidate {
   riskLevel: RiskLevel;
   context: string;
   span: Span;
+  /** 该词条被用户忽略过的次数（>0 = 降权展示：折叠到末尾、默认不勾选）。 */
+  ignoredCount: number;
+  /** 该词条已有的加白词（面板要能看见并移除；误加一次不该只能改 JSON）。 */
+  contextAllow: string[];
+  /**
+   * 结构性编辑（同人段落合并删块头 / 插时间区间）——不是"清理掉的口癖"。
+   * 标记后不会被计进 `deletedFillers`（否则 365 个块头会污染口癖计数）。
+   */
+  structure?: boolean;
 }
 
 export interface DeniedMatch {
@@ -84,7 +104,11 @@ export interface DeniedMatch {
 export interface ScanResult {
   candidates: CorrectionCandidate[];
   denied: DeniedMatch[];
-  stats: { entriesScanned: number; candidates: number; denied: number };
+  /**
+   * `truncated` = 候选超过上限被截断（口癖规则包会让候选数量级上升：
+   * 09-05 验收稿就有一千多条）。**截断必须可见**，否则用户以为"就这么多"。
+   */
+  stats: { entriesScanned: number; candidates: number; denied: number; truncated: boolean };
 }
 
 export interface AcceptedEdit {
@@ -93,6 +117,8 @@ export interface AcceptedEdit {
   correct: string;
   action: 'replace' | 'delete';
   span: Span;
+  /** 结构性编辑（合并块头等）：不计入口癖删除统计。 */
+  structure?: boolean;
 }
 
 export interface OffsetSegment {
@@ -189,6 +215,25 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
       continue;
     }
 
+    // 口癖/填充词（kind=filler + action=delete）走规则包：白名单词只在句首或
+    // 独立出现时删，语义连词只在重复或纯应答时删（方案 §五 P1-1）。
+    // 关键：**绝不"见词就删"**——`这个方案`、`然后我们` 都要原样留着。
+    if (entry.action === 'delete' && entry.kind === 'filler') {
+      const rule: FillerRule = fillerRuleFor(entry.wrong) ?? {
+        term: entry.wrong,
+        mode: 'standalone',
+        note: '词表自带口癖词：默认只删独立出现',
+      };
+      for (const match of detectFillers(text, [rule])) {
+        if (isProtected(protectedRanges, match.span)) {
+          denied.push({ entryRef: entry.id, wrong: entry.wrong, correct: entry.correct, reason: 'protected_region', span: match.span });
+          continue;
+        }
+        raw.push({ entry, span: match.span });
+      }
+      continue;
+    }
+
     let from = 0;
     for (;;) {
       const idx = foldedText.indexOf(expect, from);
@@ -205,6 +250,16 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
         continue;
       }
       if (entry.action === 'replace') {
+        // 白名单（加白）优先于黑名单：用户说过"这个语境里是对的"就不该再提示，
+        // 因此这里直接静默丢弃（连待确认都不进），只留一条 denied 记录可追溯。
+        const allowed = findDeniedContext(foldedText, span, entry.contextAllow ?? [], window);
+        if (allowed) {
+          denied.push({
+            entryRef: entry.id, wrong: entry.wrong, correct: entry.correct,
+            reason: 'context_allowed', span, deniedBy: allowed,
+          });
+          continue;
+        }
         const hit = findDeniedContext(foldedText, span, entry.contextDeny, window);
         if (hit) {
           denied.push({
@@ -240,7 +295,9 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
   }
 
   accepted.sort((a, b) => a.span.start - b.span.start);
-  const limit = options.maxCandidates ?? 500;
+  // 上限从 500 提到 2000：装上口癖规则包后，一份 1 小时的稿子轻松过千条候选，
+  // 原上限会把排在后面的口癖整类截掉（表现为"啊/呃/嗯 只清掉一半"）。
+  const limit = options.maxCandidates ?? 2000;
   const candidates: CorrectionCandidate[] = accepted.slice(0, limit).map((m) => ({
     entryRef: m.entry.id,
     wrong: m.entry.wrong,
@@ -250,12 +307,20 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
     riskLevel: m.entry.riskLevel,
     context: contextAround(text, m.span, 40),
     span: m.span,
+    ignoredCount: m.entry.ignoredCount ?? 0,
+    contextAllow: m.entry.contextAllow ?? [],
   }));
 
   return {
     candidates,
     denied,
-    stats: { entriesScanned, candidates: candidates.length, denied: denied.length },
+    stats: {
+      entriesScanned,
+      candidates: candidates.length,
+      denied: denied.length,
+      // 被上限截断 = 候选数打满上限，此时界面必须提示"还有更多没显示"
+      truncated: candidates.length >= limit,
+    },
   };
 }
 
@@ -310,6 +375,7 @@ export function applyCorrections(
 
   const edits: AcceptedEdit[] = chosen.map((c) => ({
     entryRef: c.entryRef, wrong: c.wrong, correct: c.correct, action: c.action, span: c.span,
+    structure: c.structure === true,
   }));
 
   const offsetMap: OffsetSegment[] = [];
@@ -336,7 +402,8 @@ export function applyCorrections(
         offsetMap.push({ inStart: edit.span.start, inEnd: end, outStart: out.length, outEnd: out.length, kind: 'delete' });
         cursor = end;
       }
-      deletedFillers[edit.wrong] = (deletedFillers[edit.wrong] ?? 0) + 1;
+      // 只有口癖类删除才计入"删了什么词"；结构性删除（合并块头）单独可查。
+      if (!edit.structure) deletedFillers[edit.wrong] = (deletedFillers[edit.wrong] ?? 0) + 1;
     } else {
       offsetMap.push({
         inStart: edit.span.start, inEnd: edit.span.end,
@@ -417,4 +484,97 @@ export function mapOffset(offsetMap: OffsetSegment[], inputOffset: number): numb
     }
   }
   return null;
+}
+
+// ── 未决项（待核）：疑似专名探测 + 可见标记 ───────────────────────────────
+//
+// 方案 §4.3 要求：无法确定该不该纠的地方**不猜**，而是标出来给人看
+// （`OpenIssue` + `【转写存疑】` 写回清理版）。这里只做两件纯文本事：
+//   1. `detectSuspectEntities`：**保守**地找出"疑似专名但词表/记忆分组都没有"的
+//      拉丁串。保守的含义是"宁漏勿噪"——只认长度 ≥4 且（含内部大写 或 全大写）
+//      的串：`KSTAR`/`NoteBookLM` 会被认出，`Hello`/`OK`/`API` 不会。
+//      真正的语义级"未知实体"（`roadmap` 可能指 Raymond）留给 P2 的 LLM 候选，
+//      本引擎不假装能做。
+//   2. `insertIssueMarkers`：把标记插进清理版，并返回插入后的新 span
+//      （从后往前插，避免前面的插入让后面的偏移失效）。
+
+/** 写回清理版的可见标记（方案 §4.3 固定文案）。 */
+export const ISSUE_MARKER = '【转写存疑】';
+
+export interface SuspectEntity {
+  span: Span;
+  text: string;
+  reason: 'unknown_entity';
+}
+
+/** 疑似专名的词形判据：含内部大写的拉丁串，或 4 个字母以上的全大写串。 */
+const SUSPECT_RE = /[A-Za-z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]+)+|[A-Z]{4,}/g;
+
+/**
+ * 找"疑似专名"。`known` = 词表（wrong/correct）与记忆分组里的规范名，
+ * 折叠后比对：已知的词不会进待核（它不是"未知实体"）。
+ */
+export function detectSuspectEntities(
+  text: string,
+  known: Iterable<string>,
+  limit = 200,
+): SuspectEntity[] {
+  const out: SuspectEntity[] = [];
+  const foldedKnown = new Set<string>();
+  for (const item of known) {
+    const folded = foldText(String(item ?? '')).trim();
+    if (folded) foldedKnown.add(folded);
+  }
+  const protectedRanges = computeProtectedRanges(text);
+  const seen = new Set<string>();
+  for (const match of text.matchAll(SUSPECT_RE)) {
+    const raw = match[0];
+    if (match.index === undefined) continue;
+    // 长度闸门：`API`/`PPT` 这类 3 字母缩写常见到没有信息量，进了只会制造噪声
+    if (raw.length < 4) continue;
+    const span: Span = { start: match.index, end: match.index + raw.length };
+    const folded = foldText(raw).trim();
+    if (!folded || foldedKnown.has(folded)) continue;
+    if (isProtected(protectedRanges, span)) continue;
+    const dedupeKey = `${folded}|${span.start}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({ span, text: raw, reason: 'unknown_entity' });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
+ * 把 `ISSUE_MARKER` 插到每个 span 之前（同一位置只插一次），返回新文本与**插入后**
+ * 的 span（含标记本身）。从后往前插入，保证前面的偏移不受影响。
+ */
+export function insertIssueMarkers(
+  text: string,
+  spans: Span[],
+): { text: string; spans: Span[]; byStart: Map<number, Span> } {
+  const starts = [...new Set(
+    (spans ?? [])
+      .map((s) => Math.max(0, Math.min(Number(s?.start) || 0, text.length)))
+      .filter((n) => Number.isFinite(n)),
+  )].sort((a, b) => a - b);
+  if (starts.length === 0) return { text, spans: [], byStart: new Map() };
+
+  const markerLen = ISSUE_MARKER.length;
+  let out = text;
+  const shifted: Span[] = [];
+  // 从后往前：插入点之后的旧内容整体后移，而更靠前的插入点不受已插入内容影响。
+  for (let i = starts.length - 1; i >= 0; i -= 1) {
+    const start = starts[i];
+    out = out.slice(0, start) + ISSUE_MARKER + out.slice(start);
+  }
+  // 第 i 个标记前面还插了 i 个标记（0..i-1），所以它的最终起点是 p_i + i*markerLen。
+  const byStart = new Map<number, Span>();
+  for (let i = 0; i < starts.length; i += 1) {
+    const start = starts[i] + markerLen * i;
+    const span = { start, end: start + markerLen };
+    shifted.push(span);
+    byStart.set(starts[i], span);
+  }
+  return { text: out, spans: shifted, byStart };
 }

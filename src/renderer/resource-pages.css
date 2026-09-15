@@ -1,0 +1,207 @@
+/* Shared composition for top-level resource pages. Loaded after page-specific
+ * styles so workspace, automation, cognition, and capability management share
+ * one responsive gutter and vertical rhythm without changing their behavior. */
+.ui-resource-page {
+  --resource-page-gutter: var(--space-6);
+  --resource-page-content-width: var(--card-grid-width-max);
+  --resource-page-inset: max(
+    var(--resource-page-gutter),
+    calc((100% - var(--resource-page-content-width)) / 2)
+  );
+  background: var(--surface-card);
+}
+
+/* Keep the title aligned with the body gutter while retaining a full-width
+ * header divider and the existing macOS drag-region behavior. */
+.ui-resource-page :is(
+  #auto-page-header,
+  #connections-page-header,
+  #cognition-page-header,
+  .ws-center-header
+) .ui-page-header {
+  padding-inline-end: var(--resource-page-inset);
+  padding-inline-start: max(
+    var(--resource-page-inset),
+    var(--shell-header-inset, var(--resource-page-gutter))
+  );
+}
+
+/* Each page keeps its own scroll owner and data flow. The shared wrapper only
+ * owns the usable width, page inset, and outer whitespace. */
+.ui-resource-page :is(.ws-center, .auto-scroll, .connections-container),
+.ui-resource-page .skills-cognition-surface .skills-cognition-page {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding: var(--space-6) var(--resource-page-inset) var(--space-7);
+  background: var(--surface-card);
+}
+
+.ui-resource-page .skills-cognition-page > * {
+  width: 100%;
+  max-width: none;
+}
+
+/* Workspace already keeps a stable refresh/status slot. Use that slot as the
+ * top whitespace so normal, refreshing, and recovery states do not jump. */
+.ui-resource-page .ws-center-header + .ws-refresh-notice {
+  min-height: var(--space-6);
+  padding: 0 var(--resource-page-inset);
+}
+
+.ui-resource-page .ws-refresh-notice + .ws-center { padding-top: 0; }
+
+/* Tabbed resource pages begin 12px below the title bar and share one underline
+ * row. Their existing click, roving-focus, and IME behavior stays page-owned. */
+.ui-resource-page .connections-container { padding-top: var(--space-3); }
+
+.ui-resource-page .skills-cognition-surface .skills-cognition-tabs {
+  display: block;
+  min-height: 0;
+  padding: var(--space-3) var(--resource-page-inset) 0;
+  border: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+}
+
+.ui-resource-page :is(.connections-tabs, .skills-cognition-tabs-row) {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 41px;
+  margin: 0;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.ui-resource-page .skills-cognition-tab-group {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  gap: var(--space-5);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  flex-wrap: nowrap;
+}
+
+.ui-resource-page .skills-cognition-surface .skills-cognition-tab,
+.ui-resource-page .connections-tab {
+  flex: none;
+  width: auto;
+  min-height: 40px;
+  padding: 0;
+  border-bottom: 1.5px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  font-weight: var(--font-weight-regular);
+  white-space: nowrap;
+}
+
+.ui-resource-page :is(.skills-cognition-tab, .connections-tab):hover {
+  background: transparent;
+  color: var(--text-heading);
+}
+
+.ui-resource-page :is(.skills-cognition-tab, .connections-tab).is-active {
+  border-bottom-color: var(--color-accent);
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-brand);
+  font-weight: var(--font-weight-medium);
+}
+
+.ui-resource-page :is(.skills-cognition-tab, .connections-tab).is-active::after { bottom: 0; }
+
+.ui-resource-page :is(.skills-cognition-tab, .connections-tab):focus-visible {
+  outline: var(--focus-width) solid var(--color-accent);
+  outline-offset: var(--focus-offset);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
+}
+
+.ui-resource-page .connections-body { margin-top: var(--space-3); }
+.ui-resource-page .skills-cognition-surface .skills-cognition-page { padding-top: var(--space-3); }
+
+/* Capability subpages use the Skill library as their composition baseline:
+ * one compact toolbar, 16px before content, and no repeated page title. */
+.ui-resource-page :is(
+  .agents-resource-toolbar,
+  .skills-resource-toolbar,
+  .connectors-page-header,
+  .plugins-page-header,
+  .contexts-page-header,
+  .touchpoint-connections-header
+) {
+  box-sizing: border-box;
+  min-height: var(--control-height);
+  margin: 0 0 var(--space-4);
+}
+
+.ui-resource-page :is(
+  .connectors-page-header,
+  .plugins-page-header,
+  .contexts-page-header,
+  .touchpoint-connections-header
+) {
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.ui-resource-page :is(
+  .plugins-page-header-main,
+  .contexts-page-header-main,
+  .touchpoint-connections-header > div
+) {
+  display: none;
+}
+
+.ui-resource-page :is(.plugins-page-header, .contexts-page-header) {
+  justify-content: flex-end;
+}
+
+.ui-resource-page :is(.contexts-layout, .messaging-settings-shell) {
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-card);
+  overflow: hidden;
+}
+
+.ui-resource-page .contexts-page-header-search.ui-button {
+  padding: 0 var(--space-3);
+  color: var(--text-secondary);
+}
+
+.ui-resource-page .connections-tools-shell { position: relative; }
+
+/* At desktop widths the MCP view switcher and the active view actions share
+ * the same toolbar row, matching Agent/Skill rather than creating a loose
+ * second header line. Narrow layouts keep the existing stacked flow. */
+@media (min-width: 761px) {
+  .ui-resource-page .connections-tools-view:not([hidden]) :is(
+    .connectors-page-header,
+    .plugins-page-header
+  ) {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: var(--z-raised);
+    margin: 0;
+  }
+}
+
+.ui-resource-page .touchpoint-connections-view { gap: 0; }
+.ui-resource-page .touchpoint-settings-shell.is-connections-view .touchpoint-connections-view { padding: 0; }
+
+@media (max-width: 1280px) {
+  .ui-resource-page { --resource-page-gutter: var(--space-5); }
+}
+
+@media (max-width: 960px) {
+  .ui-resource-page { --resource-page-gutter: var(--space-4); }
+}

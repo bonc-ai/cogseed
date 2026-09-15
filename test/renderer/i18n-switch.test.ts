@@ -343,7 +343,8 @@ describe('dynamic language refresh', () => {
     expect(en['ws.scene_mark']).toBe('S');
     expect(onboardingSource).toContain("_csT('onboarding.agent.other', '其他 Agent')");
     expect(conversationSource).toContain("t('chat.conv_space_mark')");
-    expect(workspaceSource).toContain("_t('ws.space_mark', '空')");
+    expect(workspaceSource).toContain("_icon(_spaceIconName(s.space_type), 'ui-icon')");
+    expect(workspaceSource).not.toContain("_t('ws.space_mark', '空')");
     expect(stateSource).toContain("t('common.unknown_error')");
     // 认知域空态文案的取词点随 skills.js 瘦身迁至 cognition-assets（T()，
     // 2026-09-14），断言同步迁移。

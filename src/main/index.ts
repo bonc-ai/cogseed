@@ -266,7 +266,12 @@ function createWindow(): BrowserWindow {
     // macOS: hiddenInset 标题栏——无原生标题栏（也就没有分割线），红绿灯
     // 悬浮在内容上，窗口拖拽区由渲染层 CSS（.is-macos 各视图顶部条）声明。
     // Windows 保持原生 frame。
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset' as const,
+      // Keep the native controls centered in the shared 52px Renderer
+      // titlebar, on the same axis as the shell navigation tools.
+      trafficLightPosition: { x: 12, y: 19 },
+    } : {}),
     show: !IS_PACKAGED_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),
@@ -932,9 +937,32 @@ const _KB_FILE_MIME: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+  // `.html/.htm` 必须在表里：缺了会回落到 `application/octet-stream`，
+  // 浏览器把它当下载 → iframe 空白（"HTML 渲染不出排版"的根因）。
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
   '.json': 'application/json',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xml': 'application/xml',
+  '.css': 'text/css; charset=utf-8',
+  // 音视频：`<audio>/<video>` 需要正确的 MIME 才会播放（否则只显示加载失败）
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
 };
 
 /**

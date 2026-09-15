@@ -204,6 +204,30 @@ describe('plugin_ui › runtime config store', () => {
     }
   });
 
+  it('preserves the platform subpath (/edu) in the whoami URL (2026-09-15 fix)', async () => {
+    const { savePluginRuntimeConfig } = await loadPluginUi();
+    installPkg('withui');
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ ok: true, role: 'student', person_id: 'S-7' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const res = await savePluginRuntimeConfig(TEST_UID, 'withui', {
+        server_url: 'https://cogseed-open.bonc.com.cn/edu',
+        api_key: 'k-edu',
+      });
+      expect(res.ok).toBe(true);
+      expect(urls[0]).toBe('https://cogseed-open.bonc.com.cn/edu/api/agent/whoami');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('parses the v2 key prefix and auto-fills server_url (key carries its server)', async () => {
     const { savePluginRuntimeConfig, readPluginRuntimeConfig } = await loadPluginUi();
     installPkg('withui');

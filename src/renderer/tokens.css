@@ -1,8 +1,8 @@
-/* CogSeed first-version design tokens.
+/* CogSeed open-source design-system tokens.
  *
- * This file is the production-facing token source for the UX quality spike.
- * Existing renderer aliases remain available so adoption can happen module by
- * module. New shared components use the semantic layer below.
+ * The independent opensource-design-system package is the visual reference;
+ * this file is the production token seam for the classic Electron renderer.
+ * Existing aliases remain available so business pages can migrate gradually.
  */
 
 :root {
@@ -10,36 +10,58 @@
   --color-brand: #0E9F6E;
   --color-brand-hover: #0A7A55;
   --color-brand-soft: #E2F5EC;
+  --color-accent-wash: rgba(14, 159, 110, 0.09);
+  --color-accent: #0A7A55;
+  --color-accent-hover: #086545;
+  --color-accent-gradient: linear-gradient(135deg, #0A7A55, #086545);
   --color-ink: #14281E;
+  --color-ink-body: #243D30;
   --color-ink-2: #3E5A4C;
-  --color-muted: #6E8578;
-  --color-faint: #A3B8AC;
-  --color-line: rgba(24, 84, 60, 0.09);
-  --color-line-strong: rgba(24, 84, 60, 0.18);
+  --color-ink-3: #4C685A;
+  --color-muted: #5E7467;
+  --color-faint: #9CAEA2;
+  --color-line-subtle: rgba(20, 40, 30, 0.06);
+  --color-line-hairline: rgba(20, 40, 30, 0.07);
+  --color-line: rgba(20, 40, 30, 0.09);
+  --color-line-field: rgba(20, 40, 30, 0.12);
+  --color-line-strong: rgba(20, 40, 30, 0.14);
+  --color-line-control: rgba(20, 40, 30, 0.22);
   --color-surface: #FFFFFF;
   --color-surface-2: #EDF3EF;
   --color-surface-3: #DCE5DF;
+  --color-surface-subtle: #F7FAF8;
+  --color-sidebar-top: #F4F8F5;
+  --color-sidebar-bottom: #EDF3EF;
   --color-surface-4: #FAFCFB;
   --color-border-soft: #E3EAE6;
   --color-bg: #FBFDFC;
   --color-black: #000000;
   --color-white: #FFFFFF;
-  --color-success: #16A34A;
-  --color-success-soft: #DCFCE7;
-  --color-warning: #D97706;
-  --color-warning-soft: #FEF3C7;
-  --color-warning-text: #92400E;
-  --color-danger: #DC2626;
-  --color-danger-hover: #B91C1C;
-  --color-danger-soft: #FEF2F2;
-  --color-danger-line: rgba(220, 38, 38, 0.30);
-  --color-danger-action-hover: rgba(220, 38, 38, 0.06);
+  --color-success: #1E6E4E;
+  --color-success-soft: #E8F1EC;
+  --color-warning: #B5761F;
+  --color-warning-soft: #FBF1E2;
+  --color-warning-text: #8A5A14;
+  --color-danger: #A33A2B;
+  --color-danger-hover: #8A3024;
+  --color-danger-soft: #F8EBE8;
+  --color-danger-line: rgba(163, 58, 43, 0.28);
+  --color-danger-action-hover: rgba(163, 58, 43, 0.08);
   --color-control-stop: #5B6470;
   --color-control-stop-hover: #46505B;
-  --color-scrim: rgba(20, 71, 55, 0.50);
-  --color-command-scrim: rgba(20, 71, 55, 0.40);
+  --color-scrim: rgba(20, 40, 30, 0.28);
+  /* Command palettes share the modal scrim; the separate alias remains for
+     compatibility with older gallery and business-page selectors. */
+  --color-command-scrim: var(--color-scrim);
   --color-focus-halo: rgba(14, 159, 110, 0.12);
+  --color-overlay-hover: rgba(20, 40, 30, 0.05);
+  --color-overlay-fill: rgba(20, 40, 30, 0.06);
+  --color-overlay-disabled: rgba(20, 40, 30, 0.08);
   --color-grid-line: rgba(14, 159, 110, 0.035);
+  --color-home-background:
+    radial-gradient(700px 430px at 88% -6%, rgba(14, 159, 110, 0.15) 0%, rgba(14, 159, 110, 0) 70%),
+    radial-gradient(540px 390px at 10% 6%, rgba(66, 184, 130, 0.10) 0%, rgba(66, 184, 130, 0) 72%),
+    linear-gradient(180deg, rgba(237, 248, 241, 0.95) 0%, rgba(255, 255, 255, 0) 48%);
   --color-info: #2563EB;
   --color-info-soft: #EAF2F8;
   --color-violet: #8B5CF6;
@@ -59,6 +81,17 @@
   --font-size-5: 16px;
   --font-size-6: 20px;
   --font-size-display: 32px;
+  --font-size-body: 15px;
+  --font-size-body-lg: 16px;
+  --font-size-caption: 12.5px;
+  --font-size-ui: 14px;
+  --font-size-ui-sm: 13px;
+  --font-size-meta: 12px;
+  --font-size-label: 12px;
+  --font-size-numeric: 13px;
+  --font-size-title: 15px;
+  --font-size-dialog-title: 18px;
+  --font-size-heading: 22px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
@@ -78,16 +111,47 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-7: 52px;
+  --space-page: 88px;
 
   /* Base radii and semantic radius aliases. */
   --radius-1: 6px;
   --radius-2: 8px;
   --radius-3: 12px;
   --radius-pill: 999px;
-  --radius-chip: var(--radius-1);
+  --radius-xs: 4px;
+  --radius-sm: 7px;
+  --radius-field: 9px;
+  --radius-popover: 11px;
+  --radius-window: 14px;
+  --radius-chip: var(--radius-xs);
+  --radius-icon-button: var(--radius-sm);
   --radius-control: var(--radius-2);
   --radius-card: var(--radius-3);
-  --radius-dialog: var(--radius-3);
+  --radius-dialog: var(--radius-window);
+
+  /* Layout and control metrics from the open-source reference. */
+  --layout-sidebar-width: 280px;
+  --layout-titlebar-height: 52px;
+  --layout-thread-width: 760px;
+  --layout-thread-home-width: 720px;
+  --layout-composer-width-min: 480px;
+  --layout-composer-width-max: 900px;
+  --layout-resource-detail-width: 880px;
+  --layout-info-panel-width: 308px;
+  --layout-settings-nav-width: 224px;
+  --layout-card-grid-width: 1232px;
+  --card-width-min: 280px;
+  --card-grid-gap: var(--space-4);
+  --card-width-max: 400px;
+  --card-grid-width-max: var(--layout-card-grid-width);
+  --control-height-sm: 28px;
+  --control-height: 32px;
+  --control-height-lg: 36px;
+  --icon-size: 16px;
+  --row-height-nav: 36px;
+  --row-height-list: 34px;
+  --row-height-table: 44px;
 
 
   /* ── Process-stream palette (chat-stream 活动流；PR209 P0-4 token 化) ── */
@@ -177,17 +241,19 @@
   --color-ca-row-hover: rgba(0, 0, 0, 0.03);
 
   /* Elevation and focus */
-  --shadow-card: 0 1px 2px rgba(20, 71, 55, 0.04), 0 8px 24px rgba(20, 71, 55, 0.06);
-  --shadow-card-hover: 0 4px 16px rgba(20, 71, 55, 0.06);
-  --shadow-composer: 0 4px 32px rgba(24, 84, 60, 0.06), 0 1px 0 rgba(255, 255, 255, 0.70) inset;
-  --shadow-dialog: 0 20px 40px rgba(0, 0, 0, 0.12);
-  --focus-width: 2px;
+  --shadow-sm: 0 1px 2px rgba(20, 40, 30, 0.06);
+  --shadow-card: 0 1px 2px rgba(20, 40, 30, 0.04), 0 8px 24px rgba(20, 40, 30, 0.05);
+  --shadow-card-hover: 0 6px 18px rgba(20, 40, 30, 0.05);
+  --shadow-composer: var(--shadow-card);
+  --shadow-dialog: 0 24px 60px rgba(20, 40, 30, 0.18);
+  --focus-width: 1px;
   --focus-offset: 2px;
 
   /* Motion */
   --duration-control: 120ms;
-  --duration-ui: 150ms;
-  --easing-ui: ease;
+  --duration-ui: 160ms;
+  --duration-panel: 200ms;
+  --easing-ui: ease-out;
 
   /* Layer order is the contract; large values keep migration safe. */
   --z-base: 0;
@@ -202,29 +268,56 @@
   --z-toast: 20000;
 
   /* Semantic component layer */
-  --text-body: var(--color-ink);
+  --text-body: var(--color-ink-body);
   --text-heading: var(--color-ink);
-  --text-secondary: var(--color-ink-2);
+  --text-secondary: var(--color-ink-3);
   --text-muted: var(--color-muted);
   --text-faint: var(--color-faint);
   --surface-app: var(--color-bg);
   --surface-card: var(--color-surface);
-  --surface-subtle: var(--color-surface-2);
+  --surface-subtle: var(--color-surface-subtle);
   --surface-raised: var(--color-surface);
+  --line-subtle: var(--color-line-subtle);
   --line-default: var(--color-line);
+  --line-hairline: var(--color-line-hairline);
+  --line-field: var(--color-line-field);
   --line-strong: var(--color-line-strong);
-  --control-primary-bg: var(--color-brand);
-  --control-primary-bg-hover: var(--color-brand-hover);
+  --control-primary-bg: var(--color-accent-gradient);
+  --control-primary-bg-hover: var(--color-accent-hover);
   --control-primary-text: var(--color-white);
   --control-secondary-bg: var(--color-surface);
   --control-secondary-bg-hover: var(--color-surface-2);
-  --control-secondary-text: var(--color-ink);
+  --control-secondary-text: var(--color-ink-2);
   --control-danger-bg-hover: var(--color-danger-action-hover);
   --control-danger-text: var(--color-danger);
   --status-success-bg: var(--color-success-soft);
   --status-success-text: var(--color-success);
   --status-warning-bg: var(--color-warning-soft);
   --status-warning-text: var(--color-warning-text);
+  /* 转写纠错面板的状态色（视觉规范 §二-1）：只用于标记状态，不大面积铺色。
+     - 已接受：低饱和墨绿（不是亮绿，长时间看不刺眼）
+     - 谨慎：暖橙（不是红，避免紧张感）
+     - 待核：浅灰蓝
+     - 忽略：中性灰 */
+  /* 阅读侧"说话人淡色"三档（视觉规范 §四-2）：极淡、仅辅助分辨说话人切换。
+     注意不能复用 surface 层——`--surface-subtle` 与 `--color-surface-2` 同色会撞档。 */
+  --speaker-tint-0: var(--color-white);
+  --speaker-tint-1: #F2F7F4;
+  --speaker-tint-2: #EFF2F7;
+  /* 与设计系统语义层同值的项一律别名，不重复写字面量（同步 develop #263 后的核对结果）：
+     --status-success-bg === --color-success-soft === #E8F1EC，故别名复用。 */
+  --state-accepted-bg: var(--status-success-bg);
+  --state-accepted-text: #2F6B52;
+  --state-accepted-line: rgba(47, 107, 82, 0.28);
+  --state-caution-bg: #FDF0E3;
+  --state-caution-text: #B45309;
+  --state-caution-line: rgba(180, 83, 9, 0.30);
+  --state-review-bg: #EDF1F7;
+  --state-review-text: #4A5A73;
+  --state-review-line: rgba(74, 90, 115, 0.26);
+  --state-ignored-bg: #F2F4F3;
+  --state-ignored-text: #6B7280;
+  --state-ignored-line: rgba(107, 114, 128, 0.24);
   --status-danger-bg: var(--color-danger-soft);
   --status-danger-text: var(--color-danger);
 

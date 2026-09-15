@@ -43,7 +43,8 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     const body = wsSource.slice(start, end);
     expect(body).toContain('主角色');
     expect(body).toContain('副角色');
-    expect(body).toContain('data-ws="make-primary"');
+    expect(body).toContain("'data-ws': 'make-primary'");
+    expect(body).toContain("className: 'ws-role-primary-btn'");
     expect(body).toContain('is-primary');
     expect(body).toContain('is-secondary');
     // 副角色「设为主」：把该角色移到 picks 首位（原主自动降为副）
