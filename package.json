@@ -78,7 +78,7 @@
     "vitest": "^4.1.5"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.79.9",
+    "@earendil-works/pi-ai": "^0.85.1",
     "@jsquash/webp": "1.5.0",
     "@larksuiteoapi/node-sdk": "^1.73.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
