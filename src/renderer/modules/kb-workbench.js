@@ -3065,6 +3065,8 @@
     if (_state.mmCollapsed.has(idx)) _state.mmCollapsed.delete(idx);
     else _state.mmCollapsed.add(idx);
     _rerenderMindmaps();
+    // 收拢后画布收紧（折叠分支不再占位）：重新适应一次，避免留出大片空白
+    if (_state.mmViewMode === 'graph') _mmFitToStage();
   }
 
   // 弹窗内容渲染：图形（svg）/ 大纲（文本）双视图
@@ -3957,45 +3959,101 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
   }
 
-  // ── 多级水平树脑图（双向放射/组织结构图双布局、分支成套色系、字号层级、换行、聚焦/搜索/背景）──
-  // 成套色系：每分支一套 deep/mid/light，逐级降饱和；一级分支前 3 色 = 绿/蓝/品红
+  // ── 多级水平树脑图（双向放射/组织结构图、分支成套色系、紧凑列布局、卡片式节点）──
+  // 成套色系：每分支一套 deep/mid/light/ink。deep 只给连线、色条、徽章描边；light 给一级分支底色；
+  // ink 是"在 light 上仍然可读"的深色文字色（原来一级分支用 deep 实心填充 + 白字，整屏重色块，很"脏"）。
   const KB_MM_PALETTES = [
-    { deep: '#0E9F6E', mid: '#5EBC9A', light: '#D8F0E5' }, // 绿
-    { deep: '#2563EB', mid: '#6E9AF2', light: '#DDE7FC' }, // 蓝
-    { deep: '#D946EF', mid: '#E684F6', light: '#F8DCFC' }, // 品红
-    { deep: '#D97706', mid: '#E9A95F', light: '#FAE6CC' }, // 橙
-    { deep: '#0D9488', mid: '#5FC5BC', light: '#D6F1EE' }, // 青
+    { deep: '#0E9F6E', mid: '#6FC79F', light: '#EAF7F1', ink: '#096B47' }, // 绿
+    { deep: '#2563EB', mid: '#7BA4F3', light: '#EBF1FE', ink: '#1D4ED8' }, // 蓝
+    { deep: '#B4469F', mid: '#D08BC6', light: '#FBEFF8', ink: '#8E2F7F' }, // 品红（降饱和）
+    { deep: '#C2740C', mid: '#E0A85C', light: '#FCF3E6', ink: '#96570A' }, // 琥珀
+    { deep: '#0D9488', mid: '#63C2BA', light: '#E8F6F4', ink: '#0B7A70' }, // 青
   ];
-  const KB_MM_ROOT = '#0E9F6E';
+  const KB_MM_ROOT = '#0B7A52';
+  const KB_MM_INK = '#1F3A2E';      // 二级节点正文
+  const KB_MM_INK_SOFT = '#456054'; // 三级及以下正文
+  const KB_MM_LINE = '#E1E9E4';     // 卡片描边
+  const KB_MM_LINE_SOFT = '#EAF0EC';
 
   // 字号层级：根 > 一级 > 二级 > 三级（叶子最小）
   function _mmFontSize(depth) {
-    if (depth === 0) return 15;
+    if (depth === 0) return 16;
     if (depth === 1) return 13;
-    if (depth === 2) return 12;
-    return 11;
+    if (depth === 2) return 12.5;
+    return 12;
   }
 
-  // 长文本自动换行：控制节点最大宽度（避免超长横条），按语义断行优先
-  function _mmDims(label, size) {
-    const maxW = 150;
-    const charW = size * 1.02;
-    const perLine = Math.max(5, Math.floor((maxW - 22) / charW));
-    const text = String(label || '');
-    // 优先按中英文标点断行，其次按字符数
+  // 单字宽度估算：中日韩/全角按 1em，拉丁词按字宽查表。
+  // 原实现用"字符数 × 字号 × 1.02"估算，对英文/数字严重高估 → 11 个汉字的标签就被折成两行
+  // （"文字折叠"的根因），而英文标签又留出大片空白。
+  function _mmCharW(ch, size) {
+    const code = ch.codePointAt(0) || 0;
+    const wide = (code >= 0x1100 && code <= 0x115f)
+      || code === 0x2329 || code === 0x232a
+      || (code >= 0x2e80 && code <= 0xa4cf)
+      || (code >= 0xac00 && code <= 0xd7a3)
+      || (code >= 0xf900 && code <= 0xfaff)
+      || (code >= 0xfe30 && code <= 0xfe6f)
+      || (code >= 0xff00 && code <= 0xff60)
+      || (code >= 0xffe0 && code <= 0xffe6);
+    if (wide) return size;
+    if (ch === ' ') return size * 0.3;
+    if (/[iIljtfr.,:;!'|]/.test(ch)) return size * 0.33;
+    if (/[A-Z0-9]/.test(ch)) return size * 0.64;
+    return size * 0.54;
+  }
+  function _mmTextW(text, size) {
+    let w = 0;
+    for (const ch of String(text || '')) w += _mmCharW(ch, size);
+    return w;
+  }
+
+  // 换行：按真实字宽切行，优先在标点/空格处断；拉丁词不拦腰断；最多两行，剩下用省略号。
+  function _mmWrap(text, size, maxW) {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return { lines: [''], truncated: false };
+    if (_mmTextW(raw, size) <= maxW) return { lines: [raw], truncated: false };
+    const MAX_LINES = 2;
+    const breakChars = /[\s，。；、,.!?：:;()（）\-—/·]/;
     const lines = [];
-    let rest = text;
-    while (rest.length > perLine) {
-      let cut = rest.slice(0, perLine);
-      const m = cut.match(/.*[，。；、,.!?；：\s]/);
-      if (m && m[0].length >= perLine * 0.5) cut = m[0];
-      lines.push(cut);
-      rest = rest.slice(cut.length);
+    let rest = raw;
+    while (rest && lines.length < MAX_LINES) {
+      if (_mmTextW(rest, size) <= maxW) { lines.push(rest); rest = ''; break; }
+      let cut = 0, acc = 0, lastBreak = 0;
+      for (const ch of rest) {
+        const cw = _mmCharW(ch, size);
+        if (acc + cw > maxW) break;
+        acc += cw;
+        cut += ch.length;
+        if (breakChars.test(ch)) lastBreak = cut;
+      }
+      if (cut === 0) cut = Math.min(rest.length, 1);
+      // 非末行优先在标点/空格处断（末行要留给省略号，尽量占满）
+      if (lines.length < MAX_LINES - 1 && lastBreak > 0 && lastBreak < cut) cut = lastBreak;
+      lines.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).trim();
     }
-    if (rest) lines.push(rest);
-    const w = Math.min(maxW, Math.max(66, lines[0].length * charW + 26));
-    const h = 34 + (lines.length - 1) * 15;
-    return { lines, w, h };
+    if (rest) {
+      let last = lines[lines.length - 1] || '';
+      while (last && _mmTextW(last + '…', size) > maxW) last = last.slice(0, -1);
+      lines[lines.length - 1] = last + '…';
+      return { lines, truncated: true };
+    }
+    return { lines, truncated: false };
+  }
+
+  // 节点尺寸：宽度随文本自适应（上限随层级放宽），高度按行数（单行 35 / 双行 52 附近）
+  const KB_MM_MAXW = [300, 250, 276, 276];
+  function _mmDims(label, depth) {
+    const size = _mmFontSize(depth);
+    const maxNodeW = KB_MM_MAXW[depth] === undefined ? 276 : KB_MM_MAXW[depth];
+    const { lines, truncated } = _mmWrap(String(label || ''), size, maxNodeW - 30);
+    const textW = lines.reduce((m, l) => Math.max(m, _mmTextW(l, size)), 0);
+    const minW = depth === 0 ? 104 : 78;
+    const w = Math.round(Math.min(maxNodeW, Math.max(minW, textW + (depth === 0 ? 40 : 30))));
+    const lineH = Math.round(size * 1.38);
+    const h = lines.length * lineH + 18;
+    return { lines, truncated, w, h, lineH, size };
   }
 
   function _mmPalette(branch) {
@@ -4007,7 +4065,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     return { mode: _state.mmMode || 'mind', focus: _state.mmFocus, highlight: _state.mmSearchHits, bg: _state.mmBg || 'dots' };
   }
 
-  // 布局：mind=双向放射（一级分支左右分摊，左右各自延展）；org=组织结构图（单向向右）
+  // 布局常量：列间距（连线空间）、叶子行高、画布留白
+  const KB_MM_COL_GAP = 68;
+  const KB_MM_ROW = 54;
+  const KB_MM_PAD_X = 56;
+  const KB_MM_PAD_Y = 40;
+
+  // 布局：mind=双向放射（一级分支左右分摊）；org=组织结构图（单向向右）
   function _mmTreeSvg(root, collapsed, opts) {
     collapsed = collapsed || new Set();
     opts = opts || {};
@@ -4015,54 +4079,38 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const focus = opts.focus === undefined || opts.focus === null ? null : Number(opts.focus);
     const highlight = opts.highlight instanceof Set ? opts.highlight : new Set();
     const bg = opts.bg || 'dots';
-    const ROOT_X = mode === 'org' ? 96 : 640;
-    // 间距：同级节点拉大留白，子分支与父节点留足间隔，避免视觉拥挤
-    const XGAP = mode === 'org' ? 320 : 300;
-    const TOP = 40, BOT = 500;
 
-    const list = []; // {label, depth, x, y, kids:[], idx, branch, dir, childCount, w, h, lines}
+    // 1) 建树 + 量尺寸（此时还没有坐标）
+    const list = []; // {label, source, depth, branch, dir, kids, idx, childCount, w, h, lines, x, y}
     const weight = (n) => (n && n.children && n.children.length ? n.children.reduce((a, c) => a + weight(c), 0) : 1);
-    const layout = (n, depth, top, bot, branch, dir) => {
-      const node = { label: String(n?.label || ''), source: n?.source || '', depth, kids: [], idx: list.length, branch, dir, childCount: (n?.children || []).length };
+    const build = (n, depth, branch, dir) => {
+      const label = String(n?.label || '');
+      const node = {
+        label, source: n?.source || '', depth, branch, dir, kids: [],
+        idx: list.length, childCount: (n?.children || []).length,
+        ..._mmDims(label, depth),
+      };
       list.push(node);
-      node.x = ROOT_X + dir * depth * XGAP;
-      node.y = (top + bot) / 2;
-      const kids = n.children || [];
+      const kids = n?.children || [];
       if (depth === 0) {
-        // 一级分支：mind 模式左右分摊（按权重折半），org 模式全部向右
-        let acc = top;
-        let accRight = top;
-        let bi = 0;
-        const totalW = kids.reduce((a, c) => a + weight(c), 0) || 1;
-        let leftW = 0;
-        for (const k of kids) {
-          leftW += weight(k);
-          if (mode === 'mind' && leftW <= totalW / 2) {
-            const span = (BOT - TOP) * (weight(k) / totalW);
-            node.kids.push(layout(k, depth + 1, acc, acc + span, bi, -1));
-            acc += span;
-          } else {
-            const span = (BOT - TOP) * (weight(k) / totalW);
-            node.kids.push(layout(k, depth + 1, accRight, accRight + span, bi, 1));
-            accRight += span;
-          }
-          bi++;
-        }
+        // 一级分支：mind 模式按权重折半左右分摊，org 模式全部向右
+        const weights = kids.map((k) => weight(k));
+        const total = weights.reduce((a, b) => a + b, 0) || 1;
+        let acc = 0;
+        kids.forEach((k, i) => {
+          const side = mode === 'mind' && acc + weights[i] <= total / 2 + 1e-6 ? -1 : 1;
+          acc += weights[i];
+          node.kids.push(build(k, depth + 1, i, side));
+        });
         return node;
       }
-      if (!kids.length) return node;
-      const total = kids.reduce((a, c) => a + weight(c), 0) || 1;
-      let acc = top;
-      for (const k of kids) {
-        const span = (bot - top) * (weight(k) / total);
-        node.kids.push(layout(k, depth + 1, acc, acc + span, branch, dir));
-        acc += span;
-      }
+      kids.forEach((k) => node.kids.push(build(k, depth + 1, branch, dir)));
       return node;
     };
-    const rootNode = layout(root, 0, TOP, BOT, 0, 1);
+    const rootNode = build(root, 0, 0, 1);
+    const maxDepth = list.reduce((m, n) => Math.max(m, n.depth), 0);
 
-    // 折叠的一级分支：子树隐藏
+    // 折叠的一级分支：子树整体不占位（收拢后脑图收紧，不留大片空档）
     const hidden = new Set();
     for (const kid of rootNode.kids) {
       if (collapsed.has(kid.idx)) {
@@ -4071,85 +4119,153 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       }
     }
 
-    // 节点尺寸（换行）预计算
+    // 2) 横向：每层列宽按该层最宽的节点算，列中心逐列累加（不再固定 300 的列距 → 图不再横向拉长）
+    const colMax = { '-1': {}, 1: {} };
     for (const n of list) {
-      const d = _mmDims(n.label, _mmFontSize(n.depth));
-      n.w = d.w; n.h = d.h; n.lines = d.lines;
+      if (n.depth === 0) continue;
+      const key = String(n.dir);
+      colMax[key][n.depth] = Math.max(colMax[key][n.depth] || 0, n.w);
+    }
+    const columnXs = (sideDir) => {
+      const key = String(sideDir);
+      const xs = { 0: 0 };
+      let cursor = rootNode.w / 2;
+      for (let d = 1; d <= maxDepth; d++) {
+        const cw = colMax[key][d] || 0;
+        if (!cw) { xs[d] = xs[d - 1] || 0; continue; }
+        cursor += KB_MM_COL_GAP + cw / 2;
+        xs[d] = sideDir * cursor;
+        cursor += cw / 2;
+      }
+      return xs;
+    };
+    const xsLeft = columnXs(-1);
+    const xsRight = columnXs(1);
+    for (const n of list) {
+      if (n.depth === 0) { n.x = 0; continue; }
+      n.x = (n.dir < 0 ? xsLeft : xsRight)[n.depth] || 0;
     }
 
-    // 画布范围（双向时 viewBox 从最左边界起，四周留白）
-    // 基于**完整树**的布局坐标计算，折叠只隐藏节点、不改变画布大小
-    // （避免收拢/展开时脑图尺寸跳动）
-    // 左右留白必须等宽：此前左 60 / 右 160，整图会被推到画布中线左侧约 50 单位（看起来没在正中央）
-    const PAD_X = 120;
-    const minX = Math.min(...list.map((n) => n.x - n.w / 2)) - PAD_X;
-    const maxX = Math.max(...list.map((n) => n.x + n.w / 2)) + PAD_X;
-    const maxY = Math.max(BOT, ...list.map((n) => n.y + n.h / 2)) + 30;
-    const svgW = Math.max(400, maxX - minX);
-    const svgH = Math.max(480, maxY);
-    const showFolded = hidden.size > 0;
+    // 3) 纵向：左右两侧各自排行，父节点对齐子节点中点（行高固定 → 疏密均匀）
+    //    两侧共用一套行号的话，图高 = 全部叶子数 × 行高，画布被拉得又高又窄、缩放被迫变小；
+    //    两侧各自排行后，图高只由"较满的一侧"决定，字号能大 30% 左右。
+    let rowLeft = 0;
+    let rowRight = 0;
+    const place = (n) => {
+      const kids = n.kids.filter((c) => !hidden.has(c.idx));
+      if (!kids.length) {
+        n.y = (n.dir < 0 ? rowLeft++ : rowRight++) * KB_MM_ROW;
+        return n.y;
+      }
+      const ys = kids.map(place);
+      n.y = (ys[0] + ys[ys.length - 1]) / 2;
+      return n.y;
+    };
+    place(rootNode);
 
-    // 连线：颜色=分支成套色系；粗细/透明度随层级递减
+    // 两侧纵向跨度对齐到同一中轴（否则左右长短不一时，根节点会明显偏离画布中线）
+    const visible = list.filter((n) => !hidden.has(n.idx));
+    const sideSpan = (dir) => {
+      const ns = visible.filter((n) => n.depth > 0 && n.dir === dir);
+      if (!ns.length) return null;
+      const top = Math.min(...ns.map((n) => n.y - n.h / 2));
+      const bottom = Math.max(...ns.map((n) => n.y + n.h / 2));
+      return (top + bottom) / 2;
+    };
+    const midL = sideSpan(-1);
+    const midR = sideSpan(1);
+    const mid = (midL !== null && midR !== null) ? (midL + midR) / 2 : (midL !== null ? midL : midR) || 0;
+    if (mid) for (const n of visible) n.y -= mid;
+    rootNode.y = 0;
+
+    // 4) 画布范围：按可见节点包围盒 + 等宽留白（左右留白必须一致，否则整图被推向一侧）
+    const minX = Math.min(...visible.map((n) => n.x - n.w / 2)) - KB_MM_PAD_X;
+    const maxX = Math.max(...visible.map((n) => n.x + n.w / 2)) + KB_MM_PAD_X + 12; // 右侧给折叠徽章留位
+    const minY = Math.min(...visible.map((n) => n.y - n.h / 2)) - KB_MM_PAD_Y;
+    const maxY = Math.max(...visible.map((n) => n.y + n.h / 2)) + KB_MM_PAD_Y;
+    const svgW = Math.max(360, maxX - minX);
+    const svgH = Math.max(280, maxY - minY);
+    const fc = (v) => (Math.round(v * 100) / 100).toString();
+
+    // 5) 连线：父节点边缘 → 子节点边缘，两端留短横段，视觉上"接得住"节点
     const edges = [];
     const walkE = (n) => { for (const c of n.kids) { if (!hidden.has(c.idx)) edges.push([n, c]); walkE(c); } };
     walkE(rootNode);
     const edgeSvg = edges.map(([a, b]) => {
       const pal = _mmPalette(b.branch);
-      const ax = a.x + a.dir * (a.w / 2 + 2);
-      const bx = b.x - b.dir * (b.w / 2 + 2);
-      const mx = (ax + bx) / 2;
-      const width = a.depth === 0 ? 2.6 : a.depth === 1 ? 2.1 : 1.6;
-      const op = a.depth === 0 ? 0.6 : a.depth === 1 ? 0.45 : 0.28;
-      return `<path d="M ${ax} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${bx} ${b.y}" fill="none" stroke="${pal.deep}" stroke-width="${width}" stroke-opacity="${op}"/>`;
+      const ax = a.x + a.dir * (a.w / 2 + 1);
+      const bx = b.x - b.dir * (b.w / 2 + 1);
+      const stub = Math.min(20, Math.max(8, Math.abs(bx - ax) / 3));
+      const sx = ax + a.dir * stub;
+      const ex = bx - b.dir * stub;
+      const mid = (sx + ex) / 2;
+      const width = a.depth === 0 ? 2.2 : a.depth === 1 ? 1.7 : 1.3;
+      const op = a.depth === 0 ? 0.55 : a.depth === 1 ? 0.42 : 0.3;
+      return `<path class="kb-mm-edge" d="M ${fc(ax)} ${fc(a.y)} L ${fc(sx)} ${fc(a.y)} C ${fc(mid)} ${fc(a.y)}, ${fc(mid)} ${fc(b.y)}, ${fc(ex)} ${fc(b.y)} L ${fc(bx)} ${fc(b.y)}" fill="none" stroke="${pal.deep}" stroke-width="${width}" stroke-opacity="${op}" stroke-linecap="round"/>`;
     }).join('');
 
-    // 节点：成套色系（一级深色实心 / 二级浅底深框 / 三级白底中框）、字号层级、换行、聚焦淡化、搜索高亮、来源标记
-    const nodeSvg = list.map((n) => {
-      if (hidden.has(n.idx)) return '';
-      const p = (() => {
-        if (n.depth === 0) return { fill: '#0B7A52', stroke: '#065F46', text: '#fff', size: 16, sw: 2.4 }; // 中心根节点高亮加深
-        const pal = _mmPalette(n.branch);
-        if (n.depth === 1) return { fill: pal.deep, stroke: pal.deep, text: '#fff', size: 13, sw: 1.6 };
-        if (n.depth === 2) return { fill: pal.light, stroke: pal.deep, text: '#14281E', size: 12, sw: 1.3 };
-        return { fill: '#FFFFFF', stroke: pal.mid, text: '#3E5A4C', size: 11, sw: 1.2 };
-      })();
+    // 6) 节点：卡片式（根=实心品牌绿；一级=浅底色+色条；二三级=白卡片+细描边），字号/行高统一
+    const nodeSvg = visible.map((n) => {
+      const pal = _mmPalette(n.branch);
+      const style = n.depth === 0
+        ? { fill: KB_MM_ROOT, stroke: KB_MM_ROOT, sw: 0, text: '#FFFFFF', weight: 700, shadow: true, radius: 12 }
+        : n.depth === 1
+          ? { fill: pal.light, stroke: pal.deep, sw: 1.4, text: pal.ink, weight: 650, shadow: false, radius: 9 }
+          : n.depth === 2
+            ? { fill: '#FFFFFF', stroke: KB_MM_LINE, sw: 1, text: KB_MM_INK, weight: 550, shadow: true, radius: 8 }
+            : { fill: '#FFFFFF', stroke: KB_MM_LINE_SOFT, sw: 1, text: KB_MM_INK_SOFT, weight: 450, shadow: true, radius: 8 };
       const w = n.w, h = n.h;
       const x = n.x - w / 2;
       const y = n.y - h / 2;
       const folded = n.depth === 1 && collapsed.has(n.idx);
-      const badgeX = n.x + n.dir * (w / 2 + 9);
-      // 徽章统一加 kb-mm-fold-badge class：折叠态是 +N（点击展开），展开态是 −（点击折叠）
-      const foldBadge = folded
-        ? `<circle class="kb-mm-fold-badge" cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="${p.stroke}"/><text class="kb-mm-fold-badge" x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="${p.stroke}">+${n.childCount}</text>`
-        : (n.childCount > 0 && n.depth >= 1 ? `<circle class="kb-mm-fold-badge" cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="#B7D3C3"/><text class="kb-mm-fold-badge" x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="#3E5A4C">−</text>` : '');
+      const badgeX = n.x + n.dir * (w / 2 + 10);
       const dim = focus !== null && n.depth >= 1 && n.branch !== focus;
       const hit = highlight.has(n.idx);
-      const hitRing = hit
-        ? `<rect x="${x - 5}" y="${y - 5}" width="${w + 10}" height="${h + 10}" rx="${(h + 10) / 2}" fill="none" stroke="#F59E0B" stroke-width="2" stroke-dasharray="5 3"/>`
-        : '';
-      const srcMark = n.source
-        ? `<text x="${n.x + w / 2 - 9}" y="${n.y - h / 2 + 11}" font-size="9.5" fill="#6E8578">📄</text>`
-        : '';
-      const textLines = n.lines.map((ln, i) =>
-        `<tspan x="${n.x}" dy="${i === 0 ? 5 : 15}" font-size="${p.size}">${_esc(ln)}</tspan>`).join('');
       const extra = (folded ? ' kb-mm-node--folded' : '') + (dim ? ' kb-mm-node--dim' : '') + (hit ? ' kb-mm-node--hit' : '');
-      return `<g class="kb-mm-node${extra}" data-depth="${n.depth}" data-mm-idx="${n.idx}" data-branch="${n.branch ?? -1}" data-dir="${n.dir}" data-folded="${folded ? '1' : '0'}" data-children="${n.childCount}"${n.source ? ` data-source="${_esc(n.source)}"` : ''}${dim ? ' opacity="0.13"' : ''}>
+
+      const hitRing = hit
+        ? `<rect x="${x - 5}" y="${y - 5}" width="${w + 10}" height="${h + 10}" rx="${style.radius + 3}" fill="none" stroke="#F59E0B" stroke-width="2" stroke-dasharray="5 3"/>`
+        : '';
+      const accent = n.depth === 1
+        ? `<rect x="${fc(n.dir > 0 ? x + 2 : x + w - 5)}" y="${fc(y + 8)}" width="3" height="${fc(h - 16)}" rx="1.5" fill="${pal.deep}"/>`
+        : '';
+      // 有来源的节点：前缘一个小圆点（原来的 📄 emoji 挤在角上，很花）
+      const srcDot = n.source && n.depth >= 2
+        ? `<circle cx="${fc(n.dir > 0 ? x + 7 : x + w - 7)}" cy="${fc(n.y)}" r="2.4" fill="${pal.mid}"/>`
+        : '';
+      const foldBadge = folded
+        ? `<circle class="kb-mm-fold-badge" cx="${fc(badgeX)}" cy="${fc(n.y)}" r="8" fill="#FFFFFF" stroke="${pal.deep}" stroke-width="1.2"/><text class="kb-mm-fold-badge" x="${fc(badgeX)}" y="${fc(n.y + 3.6)}" text-anchor="middle" font-size="10" font-weight="600" fill="${pal.ink}">+${n.childCount}</text>`
+        : (n.childCount > 0 && n.depth >= 1
+          ? `<circle class="kb-mm-fold-badge" cx="${fc(badgeX)}" cy="${fc(n.y)}" r="8" fill="#FFFFFF" stroke="${pal.mid}" stroke-width="1.2"/><text class="kb-mm-fold-badge" x="${fc(badgeX)}" y="${fc(n.y + 4)}" text-anchor="middle" font-size="11" font-weight="600" fill="${KB_MM_INK_SOFT}">−</text>`
+          : '');
+      const textLines = n.lines.map((ln, i) =>
+        `<tspan x="${fc(n.x)}" dy="${fc(i === 0 ? -((n.lines.length - 1) / 2) * n.lineH + n.size * 0.36 : n.lineH)}" font-size="${n.size}">${_esc(ln)}</tspan>`).join('');
+      return `<g class="kb-mm-node${extra}" data-depth="${n.depth}" data-mm-idx="${n.idx}" data-branch="${n.branch ?? -1}" data-dir="${n.dir}" data-folded="${folded ? '1' : '0'}" data-children="${n.childCount}"${n.source ? ` data-source="${_esc(n.source)}"` : ''}${dim ? ' opacity="0.16"' : ''}>
         ${hitRing}
-        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${p.sw}"/>
-        <text x="${n.x}" y="${n.y}" text-anchor="middle" font-weight="${n.depth <= 1 ? 600 : 500}" fill="${p.text}">${textLines}</text>
-        ${srcMark}
+        <rect x="${fc(x)}" y="${fc(y)}" width="${fc(w)}" height="${fc(h)}" rx="${style.radius}" fill="${style.fill}" stroke="${style.stroke}"${style.sw ? ` stroke-width="${style.sw}"` : ''}${style.shadow ? ' filter="url(#kb-mm-card-shadow)"' : ''}/>
+        ${accent}
+        ${srcDot}
+        <text x="${fc(n.x)}" y="${fc(n.y)}" text-anchor="middle" font-weight="${style.weight}" fill="${style.text}">${textLines}</text>
         ${foldBadge}
         ${n.source ? `<title>${_esc(n.source)}</title>` : ''}
       </g>`;
     }).join('');
 
-    // 背景：点阵 / 纯白 / 无（深色画布）
+    // 7) 背景与阴影（点阵/纯白/无；卡片阴影只定义一次）
+    const defs = '<defs>'
+      + '<filter id="kb-mm-card-shadow" x="-24%" y="-48%" width="148%" height="196%">'
+      + '<feDropShadow dx="0" dy="1.4" stdDeviation="1.8" flood-color="#0B2A1E" flood-opacity="0.10"/>'
+      + '</filter>'
+      + (bg === 'dots'
+        ? '<pattern id="kb-mm-dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="rgba(20,40,30,0.055)"/></pattern>'
+        : '')
+      + '</defs>';
     const bgSvg = bg === 'none'
       ? ''
       : bg === 'plain'
-        ? `<rect x="${minX}" y="0" width="${svgW}" height="${svgH}" fill="#FFFFFF"/>`
-        : `<defs><pattern id="kb-mm-dots" width="18" height="18" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill="rgba(20,40,30,0.07)"/></pattern></defs><rect x="${minX}" y="0" width="${svgW}" height="${svgH}" fill="url(#kb-mm-dots)"/>`;
-    return `<svg class="kb-mm-svg" viewBox="${minX} 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">${bgSvg}${edgeSvg}${nodeSvg}</svg>`;
+        ? `<rect x="${fc(minX)}" y="${fc(minY)}" width="${fc(svgW)}" height="${fc(svgH)}" fill="#FBFDFC"/>`
+        : `<rect x="${fc(minX)}" y="${fc(minY)}" width="${fc(svgW)}" height="${fc(svgH)}" fill="url(#kb-mm-dots)"/>`;
+    return `<svg class="kb-mm-svg" viewBox="${fc(minX)} ${fc(minY)} ${fc(svgW)} ${fc(svgH)}" xmlns="http://www.w3.org/2000/svg">${defs}${bgSvg}${edgeSvg}${nodeSvg}</svg>`;
   }
 
   // ── 问答流 ──

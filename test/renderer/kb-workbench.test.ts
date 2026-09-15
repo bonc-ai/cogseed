@@ -122,7 +122,7 @@ const MINDMAP_ROOT = {
   ],
 };
 
-function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string> } = {}) {
+function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string>; mindmapRoot?: unknown } = {}) {
   const source = fs.readFileSync(
     path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
     'utf8',
@@ -203,7 +203,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
           };
         }
         if (ch === 'kb.mindmap') {
-          return { root: MINDMAP_ROOT };
+          return { root: options.mindmapRoot || MINDMAP_ROOT };
         }
         return {};
       }),
@@ -1167,9 +1167,10 @@ describe('KB mindmap centering', () => {
 
   it('脑图 viewBox 左右留白等宽（整图不被推向画布中线一侧）', () => {
     const src = source();
-    expect(src).toContain('const PAD_X = 120;');
-    expect(src).toMatch(/const minX = Math\.min\([^\n]*\) - PAD_X;/);
-    expect(src).toMatch(/const maxX = Math\.max\([^\n]*\) \+ PAD_X;/);
+    expect(src).toContain('const KB_MM_PAD_X = 56;');
+    // 左右两侧必须引用同一个常量，否则整图会被推向一侧
+    expect(src).toMatch(/const minX = Math\.min\([^\n]*\)\s*-\s*KB_MM_PAD_X;/);
+    expect(src).toMatch(/const maxX = Math\.max\([^\n]*\)\s*\+\s*KB_MM_PAD_X \+ 12;/);
   });
 
   it('「适应画布」按画布内容盒算缩放（不吃 stage 的 12px 内边距）', () => {
@@ -1207,5 +1208,155 @@ describe('KB mindmap centering', () => {
     const src = source();
     expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
     expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
+  });
+});
+
+// ── 脑图排版与视觉（紧凑列布局 / 文字不折叠 / 卡片式节点）──
+describe('KB mindmap layout & typography', () => {
+  const VIS_ROOT = {
+    label: '班级建设资料库',
+    children: [
+      { label: '真实项目征集与筛选', source: 'a.pdf', children: [
+        { label: '面向全校本科生与研究生' },                     // 11 个汉字：必须单行
+        { label: '按挑战名建目录，不使用裸 ID' },                 // 含半角 ID
+        { label: 'Project-based learning roadmap', source: 'b.md' }, // 拉丁长句
+        { label: '成果归属与知识产权说明以及跨学院组队的认定口径需要逐条写清楚', source: 'c.docx' }, // 30 字：恰好两行、不丢字
+        { label: '跨学院组队的认定口径需要在评审细则里逐条写清楚并附上往届案例的判定结论与例外情形的处理办法', source: 'd.docx' }, // 50 字：两行 + 省略号
+      ] },
+      { label: '执行手册', children: [{ label: '资料归档要求' }] },
+    ],
+  };
+
+  function source(): string {
+    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+  }
+
+  // 走真实路径渲染一份脑图 SVG（生成 → 缩略卡 innerHTML）
+  async function renderSvg(root: unknown = VIS_ROOT) {
+    const h = loadScript({ width: 1440, height: 900, mindmapRoot: root });
+    // 先预置按钮与卡片（绑定发生在 render 时），再渲染一次
+    const btn = fakeEl('kb-wb-gen-mm');
+    h.els['kb-wb-gen-mm'] = btn;
+    const card = fakeEl('kb-wb-analysis-card');
+    card.querySelector = vi.fn((sel: string) => (sel === '#kb-wb-gen-mm' ? btn : null));
+    h.els['kb-wb-analysis-card'] = card;
+    h.windowMock.renderKbWorkbench();
+    btn._listeners.click();
+    await vi.waitFor(() => {
+      expect(h.created.some((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))).toBe(true);
+    });
+    const canvas = h.created.find((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))!.child;
+    return String(canvas.innerHTML);
+  }
+
+  type NodeBox = { idx: number; depth: number; dir: number; x: number; y: number; w: number; h: number; lines: string[] };
+
+  function parseNodes(svg: string): NodeBox[] {
+    return [...svg.matchAll(/<g class="kb-mm-node[^"]*"([^>]*)>([\s\S]*?)<\/g>/g)].map((m) => {
+      const attrs = m[1];
+      const body = m[2];
+      const rect = /<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)"/.exec(body);
+      const tspans = [...body.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)].map((t) => t[1]);
+      const attr = (name: string) => {
+        const mm = new RegExp(`${name}="([^"]*)"`).exec(attrs);
+        return mm ? mm[1] : '';
+      };
+      const x = Number(rect![1]), y = Number(rect![2]), w = Number(rect![3]), h = Number(rect![4]);
+      return { idx: Number(attr('data-mm-idx')), depth: Number(attr('data-depth')), dir: Number(attr('data-dir')), x, y, w, h, lines: tspans };
+    });
+  }
+
+  it('长中文标签不再被无谓折行：11 个汉字单行显示', async () => {
+    const nodes = parseNodes(await renderSvg());
+    const eleven = nodes.find((n) => n.lines.join('') === '面向全校本科生与研究生');
+    expect(eleven).toBeTruthy();
+    expect(eleven!.lines).toHaveLength(1);
+  });
+
+  it('超长标签最多两行并以省略号收尾（不再堆成三行以上）', async () => {
+    const svg = await renderSvg();
+    const nodes = parseNodes(svg);
+    const twoLines = nodes.find((n) => n.lines.join('').startsWith('成果归属与知识产权说明'));
+    expect(twoLines).toBeTruthy();
+    expect(twoLines!.lines).toHaveLength(2);
+    // 恰好放下就完整显示，不该丢字也不该加省略号
+    expect(twoLines!.lines.join('')).toBe('成果归属与知识产权说明以及跨学院组队的认定口径需要逐条写清楚');
+    const long = nodes.find((n) => n.lines.join('').startsWith('跨学院组队的认定口径需要'));
+    expect(long).toBeTruthy();
+    expect(long!.lines).toHaveLength(2);
+    expect(long!.lines[1].endsWith('…')).toBe(true);
+    // 所有节点都不超过两行
+    expect(Math.max(...nodes.map((n) => n.lines.length))).toBeLessThanOrEqual(2);
+  });
+
+  it('拉丁标签在词/断点处换行，不把单词拦腰截断', async () => {
+    const nodes = parseNodes(await renderSvg());
+    const latin = nodes.find((n) => n.lines.join(' ').includes('Project-based'));
+    expect(latin).toBeTruthy();
+    if (latin!.lines.length > 1) {
+      const first = latin!.lines[0];
+      const rest = 'Project-based learning roadmap'.slice(first.length, first.length + 1);
+      expect([' ', '-', '', '…'].includes(rest)).toBe(true);
+    }
+  });
+
+  it('列中心按各层最宽节点累加：同级节点等宽对齐，层间距为固定连线空间', async () => {
+    const nodes = parseNodes(await renderSvg());
+    const depth1 = nodes.filter((n) => n.depth === 1);
+    const depth2 = nodes.filter((n) => n.depth === 2);
+    // 同一层同侧的所有节点中心 x 必须完全一致（列对齐）
+    const xs1 = new Set(depth1.map((n) => n.x + n.w / 2));
+    const xs2 = new Set(depth2.map((n) => n.x + n.w / 2));
+    expect(xs1.size).toBe(1);
+    expect(xs2.size).toBe(1);
+    const root = nodes.find((n) => n.depth === 0)!;
+    const gapToL1 = (depth1[0].x + depth1[0].w / 2) - (root.x + root.w / 2);
+    const gapToL2 = (depth2[0].x + depth2[0].w / 2) - (depth1[0].x + depth1[0].w / 2);
+    expect(gapToL1).toBeGreaterThanOrEqual(68);
+    expect(gapToL2).toBeGreaterThanOrEqual(68);
+    // 紧凑：原实现固定 300 列距，这里必须显著更小
+    expect(gapToL1).toBeLessThan(240);
+  });
+
+  it('行距均匀：同一侧的叶子节点中心 y 等间隔（固定行高）', async () => {
+    const nodes = parseNodes(await renderSvg());
+    const leaves = nodes.filter((n) => n.depth === 3).map((n) => n.y + n.h / 2).sort((a, b) => a - b);
+    const deltas = leaves.slice(1).map((v, i) => Math.round(v - leaves[i]));
+    expect(deltas.every((d) => d === 54)).toBe(true);
+  });
+
+  it('卡片式视觉：根节点实心品牌绿、一级分支浅底 + 色条、二三级白卡片带阴影、不再用 📄 emoji', async () => {
+    const svg = await renderSvg();
+    expect(svg).toContain('id="kb-mm-card-shadow"');
+    expect(svg).toContain('filter="url(#kb-mm-card-shadow)"');
+    expect(svg).toMatch(/<rect[^>]*fill="#0B7A52"/);
+    expect(svg).not.toContain('📄');
+    // 一级分支：浅底色 + 前缘 3px 色条
+    const depth1 = parseNodes(svg).filter((n) => n.depth === 1);
+    expect(depth1.length).toBeGreaterThan(0);
+    expect(svg).toMatch(/<rect x="[\d.]+" y="[\d.]+" width="3" height="[\d.]+" rx="1.5" fill="#/);
+  });
+
+  it('折叠分支不占位（收拢后画布收紧，不留大片空白）', () => {
+    const src = source();
+    expect(src).toMatch(/const kids = n\.kids\.filter\(\(c\) => !hidden\.has\(c\.idx\)\);/);
+    // 收拢后重新适应画布
+    expect(src).toMatch(/function _mmToggleFold[\s\S]{0,240}?_mmFitToStage\(\);/);
+  });
+
+  it('字号与行高成体系：根 16 / 一级 13 / 二级 12.5 / 叶子 12，节点高度 = 行数×行高 + 18', () => {
+    const src = source();
+    expect(src).toContain('if (depth === 0) return 16;');
+    expect(src).toContain('if (depth === 1) return 13;');
+    expect(src).toContain('if (depth === 2) return 12.5;');
+    expect(src).toContain('return 12;');
+    expect(src).toContain('const h = lines.length * lineH + 18;');
+  });
+
+  it('文本宽度按字形估算（中文 1em / 大写数字 0.64em），不再用"字符数×字号"一刀切', () => {
+    const src = source();
+    expect(src).toContain('function _mmCharW(ch, size) {');
+    expect(src).toMatch(/if \(wide\) return size;/);
+    expect(src).toMatch(/if \(\/\[A-Z0-9\]\/\.test\(ch\)\) return size \* 0\.64;/);
   });
 });
