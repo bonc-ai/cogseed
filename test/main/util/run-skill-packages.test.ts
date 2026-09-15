@@ -249,3 +249,226 @@ describe('run-skill.cjs › external packages root', () => {
     expect(JSON.parse(r.stdout.trim())).toEqual({ ok: true, where: 'codex' });
   });
 });
+
+describe('run-skill.cjs › package runtime secrets injection', () => {
+  function writeSecrets(pkgName: string, secrets: Record<string, unknown>): void {
+    const dir = path.join(pkgsDir(), '.secrets');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${pkgName}.json`), JSON.stringify(secrets));
+  }
+
+  function writeManifest(pkgName: string, courseId: string): void {
+    fs.mkdirSync(path.join(pkgsDir(), pkgName), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgsDir(), pkgName, 'manifest.json'),
+      JSON.stringify({ name: pkgName, course_id: courseId }),
+    );
+  }
+
+  /** Skill whose output reports presence (never values) of injected env keys —
+   *  keeps the api_key out of test stdout/stderr entirely. */
+  function writeEnvProbeSkill(pkgName: string, skillId: string): void {
+    const skillDir = path.join(pkgsDir(), pkgName, 'skills', skillId);
+    const scriptsDir = path.join(skillDir, 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: ${skillId}\ndescription: env probe\n---\nbody\n`);
+    fs.writeFileSync(
+      path.join(scriptsDir, 'probe.js'),
+      [
+        'module.exports = async () => ({',
+        '  hasKey: !!process.env.EDUSEED_API_KEY,',
+        '  server: process.env.EDUSEED_SERVER_URL || "",',
+        '  student: process.env.EDUSEED_STUDENT_ID || "",',
+        '  role: process.env.EDUSEED_ROLE || "",',
+        '  autoupdate: Object.prototype.hasOwnProperty.call(process.env, "EDUSEED_PLUGIN_AUTOUPDATE") ? process.env.EDUSEED_PLUGIN_AUTOUPDATE : null',
+        '});',
+        '',
+      ].join('\n'),
+    );
+  }
+
+  function writeCloudSkill(skillId: string): void {
+    const skillDir = path.join(tmpDir, TEST_UID, 'cloud', 'skills', skillId);
+    const scriptsDir = path.join(skillDir, 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: ${skillId}\ndescription: cloud skill\n---\nbody\n`);
+    fs.writeFileSync(
+      path.join(scriptsDir, 'probe.js'),
+      'module.exports = async () => ({ hasKey: !!process.env.EDUSEED_API_KEY });\n',
+    );
+  }
+
+  function pkgEntry(name: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { name, kind: 'skill', skill_roots: ['skills'], bin_entries: [], enabled: true, ...extra };
+  }
+
+  function probeResult(r: { stdout: string; stderr: string; status: number | null }) {
+    return { status: r.status, stderr: r.stderr, out: JSON.parse(r.stdout.trim()) };
+  }
+
+  it('logs bad_uid (debug mode) and skips injection when COGSEED_UID is absent', () => {
+    writeEnvProbeSkill('mypack', 'pkg-probe');
+    writeRegistry({ version: 1, packages: [pkgEntry('mypack')] });
+    writeSecrets('mypack', { server_url: 'http://s.example', api_key: 'k1', student_id: 's1' });
+    const scriptDir = path.join(pkgsDir(), 'mypack', 'skills', 'pkg-probe');
+
+    const r = runSkill('pkg-probe', 'probe', [], {
+      COGSEED_UID: '',
+      COGSEED_RUN_SKILL_DEBUG: '1',
+      COGSEED_RUN_SKILL_DIR: scriptDir,
+    });
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out).toEqual({ hasKey: false, server: '', student: '', role: '', autoupdate: null });
+    expect(p.stderr).toContain('[run-skill:secrets]');
+    expect(p.stderr).toContain('"reason":"bad_uid"');
+  });
+
+  it('logs registry_malformed (debug mode) when the registry has no packages array', () => {
+    writeCloudSkill('cloud-probe');
+    writeRegistry({ version: 1 });
+
+    const r = runSkill('cloud-probe', 'probe', [], { COGSEED_RUN_SKILL_DEBUG: '1' });
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out.hasKey).toBe(false);
+    expect(p.stderr).toContain('"reason":"registry_malformed"');
+  });
+
+  it('logs no_owner_package (debug mode) when the skill dir is not inside any package root', () => {
+    writeCloudSkill('cloud-probe');
+    writeRegistry({ version: 1, packages: [] });
+
+    const r = runSkill('cloud-probe', 'probe', [], { COGSEED_RUN_SKILL_DEBUG: '1' });
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out.hasKey).toBe(false);
+    expect(p.stderr).toContain('"reason":"no_owner_package"');
+  });
+
+  it('keeps stderr clean for non-package skills by default', () => {
+    writeCloudSkill('cloud-probe');
+    writeRegistry({ version: 1, packages: [] });
+
+    const r = runSkill('cloud-probe', 'probe');
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('[run-skill:secrets]');
+    expect(JSON.parse(r.stdout.trim())).toEqual({ hasKey: false });
+  });
+
+  it('logs missing_secrets with the package name and defaults autoupdate off for plain-local installs', () => {
+    writeEnvProbeSkill('mypack', 'pkg-probe');
+    writeRegistry({ version: 1, packages: [pkgEntry('mypack')] });
+
+    const r = runSkill('pkg-probe', 'probe');
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out).toEqual({ hasKey: false, server: '', student: '', role: '', autoupdate: '0' });
+    expect(p.stderr).toContain('"reason":"missing_secrets"');
+    expect(p.stderr).toContain('"package":"mypack"');
+  });
+
+  it('injects the owning package credentials and logs the package name', () => {
+    writeEnvProbeSkill('mypack', 'pkg-probe');
+    writeRegistry({ version: 1, packages: [pkgEntry('mypack')] });
+    writeSecrets('mypack', { server_url: 'http://s.example', api_key: 'k1', student_id: 's1', role: 'student' });
+
+    const r = runSkill('pkg-probe', 'probe');
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out).toEqual({
+      hasKey: true,
+      server: 'http://s.example',
+      student: 's1',
+      role: 'student',
+      autoupdate: '0',
+    });
+    expect(p.stderr).toContain('"reason":"injected"');
+    expect(p.stderr).toContain('"package":"mypack"');
+    expect(p.stderr).not.toContain('k1');
+  });
+
+  it('borrows credentials from a same-course configured package', () => {
+    writeEnvProbeSkill('pilot', 'pkg-probe');
+    writeEnvProbeSkill('builtin', 'other-probe');
+    writeManifest('pilot', 'aix-course-elite20');
+    writeManifest('builtin', 'aix-course-elite20');
+    writeRegistry({
+      version: 1,
+      packages: [pkgEntry('pilot'), pkgEntry('builtin')],
+    });
+    writeSecrets('builtin', { server_url: 'http://builtin.example', api_key: 'k2', student_id: 's2', role: 'teacher' });
+
+    const r = runSkill('pkg-probe', 'probe');
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out).toEqual({
+      hasKey: true,
+      server: 'http://builtin.example',
+      student: 's2',
+      role: 'teacher',
+      autoupdate: '0',
+    });
+    expect(p.stderr).toContain('"reason":"borrowed"');
+    expect(p.stderr).toContain('"package":"pilot"');
+    expect(p.stderr).toContain('"from_package":"builtin"');
+    expect(p.stderr).not.toContain('k2');
+  });
+
+  it('does not borrow from a different-course package', () => {
+    writeEnvProbeSkill('pilot', 'pkg-probe');
+    writeEnvProbeSkill('other', 'other-probe');
+    writeManifest('pilot', 'aix-course-elite20');
+    writeManifest('other', 'some-other-course');
+    writeRegistry({
+      version: 1,
+      packages: [pkgEntry('pilot'), pkgEntry('other')],
+    });
+    writeSecrets('other', { server_url: 'http://other.example', api_key: 'k3', student_id: 's3' });
+
+    const r = runSkill('pkg-probe', 'probe');
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out.hasKey).toBe(false);
+    expect(p.stderr).toContain('"reason":"missing_secrets"');
+    expect(p.stderr).not.toContain('borrowed');
+  });
+
+  it('does not borrow from a disabled or key-less sibling', () => {
+    writeEnvProbeSkill('pilot', 'pkg-probe');
+    writeManifest('pilot', 'aix-course-elite20');
+    writeManifest('disabled-sib', 'aix-course-elite20');
+    writeManifest('keyless-sib', 'aix-course-elite20');
+    writeRegistry({
+      version: 1,
+      packages: [pkgEntry('pilot'), pkgEntry('disabled-sib', { enabled: false }), pkgEntry('keyless-sib')],
+    });
+    writeSecrets('disabled-sib', { server_url: 'http://d.example', api_key: 'k4', student_id: 's4' });
+    writeSecrets('keyless-sib', { server_url: 'http://k.example', api_key: '', student_id: 's5' });
+
+    const r = runSkill('pkg-probe', 'probe');
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out.hasKey).toBe(false);
+    expect(p.stderr).toContain('"reason":"missing_secrets"');
+    expect(p.stderr).not.toContain('borrowed');
+  });
+
+  it('keeps explicit caller env over injected secrets', () => {
+    writeEnvProbeSkill('mypack', 'pkg-probe');
+    writeRegistry({ version: 1, packages: [pkgEntry('mypack')] });
+    writeSecrets('mypack', { server_url: 'http://stored.example', api_key: 'k5', student_id: 's6' });
+
+    const r = runSkill('pkg-probe', 'probe', [], { EDUSEED_SERVER_URL: 'http://caller.example' });
+    const p = probeResult(r);
+    expect(p.status).toBe(0);
+    expect(p.out).toEqual({
+      hasKey: true,
+      server: 'http://caller.example',
+      student: 's6',
+      role: '',
+      autoupdate: '0',
+    });
+    expect(p.stderr).toContain('"reason":"injected"');
+  });
+});
