@@ -2779,6 +2779,66 @@
       + '</div>';
   }
 
+  /**
+   * 参考答案/解析的切分：把"多要点"的长句拆成条目。
+   *
+   * 为什么拆：模型给的参考答案常是「要点A；要点B（补充说明）。」这种多要点句子，
+   * 直接整段显示就是一大坨（真机反馈原文："匹配角色只需要一个API Key；发版清理时
+   * 应以CSV文件为准（提示词内是速览，以CSV为准）。"）。按换行 / 分号 / 序号拆开列点，
+   * 一眼能看出有几个要点。拆不动（单句）时原样返回，不做二次加工。
+   */
+  function _quizAnswerClauses(text) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw) return [];
+    const parts = raw
+      .replace(/\r\n?/g, '\n')
+      // 编号式要点（1. / 2、/ 3)）前断开
+      .replace(/(?:^|[ \t])(?=[1-9][.、)）]\s)/gm, '\n')
+      .split('\n')
+      // 分号即要点分隔（分号留在句尾，读起来更自然）
+      .flatMap((line) => line.split(/(?<=[；;])\s*/))
+      // 成了列表项就不该再拖个分号（那是句子里的分隔符，不是要点本身）
+      .map((x) => x.replace(/^[1-9][.、)）]\s*/, '').replace(/[；;]\s*$/, '').trim())
+      .filter(Boolean);
+    // 拆不出多个要点时退回整段，不把一句话切碎
+    return parts.length > 1 ? parts : [raw];
+  }
+
+  /** 一块带标签的答案/解析：标签 + （多要点 → 列表 / 单句 → 文本）。 */
+  function _quizAnswerBlock(label, text, tone) {
+    const wrap = document.createElement('div');
+    wrap.className = 'kb-quiz-answer' + (tone ? ` is-${tone}` : '');
+    const tag = document.createElement('span');
+    tag.className = 'kb-quiz-answer-tag';
+    tag.textContent = label;
+    wrap.appendChild(tag);
+    const clauses = _quizAnswerClauses(text);
+    if (clauses.length > 1) {
+      const ul = document.createElement('ul');
+      ul.className = 'kb-quiz-answer-list';
+      for (const c of clauses) {
+        const li = document.createElement('li');
+        li.textContent = c;
+        ul.appendChild(li);
+      }
+      wrap.appendChild(ul);
+    } else {
+      const body = document.createElement('span');
+      body.className = 'kb-quiz-answer-text';
+      body.textContent = clauses[0] || '—';
+      wrap.appendChild(body);
+    }
+    return wrap;
+  }
+
+  /** 单选作答后的"对/错"状态行。 */
+  function _quizStatusLine(right) {
+    const line = document.createElement('div');
+    line.className = 'kb-quiz-status ' + (right ? 'is-right' : 'is-wrong');
+    line.textContent = right ? '✅ 答对了' : '❌ 答错了';
+    return line;
+  }
+
   /** 把模型给的题目渲染成可作答的卡片（纯 DOM 构建，题目文本一律走 textContent）。 */
   function _renderQuizCard(container, questions) {
     container.textContent = '';
@@ -2815,8 +2875,14 @@
               if (el.textContent === String(q.answer)) el.classList.add('is-right');
               el.disabled = true;
             }
+            // 结构化：先落"对/错"状态，再分「正确答案」「解析」两块——此前是把
+            // 答案与解析用 ' · ' 拼成一句话，两个长句糊在一起读不动（真机反馈）
             explain.hidden = false;
-            explain.textContent = `${right ? '✅ 答对了' : '❌ 正确答案：' + q.answer}${q.explain ? ' · ' + q.explain : ''}`;
+            explain.replaceChildren(
+              _quizStatusLine(right),
+              ...(right ? [] : [_quizAnswerBlock('正确答案', q.answer, 'right')]),
+              ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
+            );
           });
           list.appendChild(btn);
         }
@@ -2829,7 +2895,12 @@
         const answer = document.createElement('div');
         answer.className = 'kb-quiz-explain';
         answer.hidden = true;
-        answer.textContent = `${q.answer || '（无参考答案）'}${q.explain ? ' · ' + q.explain : ''}`;
+        // 同样的结构化：参考答案与解析各占一块，参考答案里的多个要点自动列点，
+        // 不再拼成一整句（"…；…．· …；…"那种读不出层次的句子）
+        answer.replaceChildren(
+          _quizAnswerBlock('参考答案', q.answer || '（无参考答案）'),
+          ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
+        );
         reveal.addEventListener('click', () => {
           answer.hidden = !answer.hidden;
           reveal.textContent = answer.hidden ? '显示参考答案' : '收起参考答案';
@@ -4626,7 +4697,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                   className: 'kb-wb-right-expand',
                   attrs: { id: 'kb-wb-right-expand', 'aria-controls': 'kb-wb-right-panel', 'aria-expanded': 'false' },
                 })}
-                ${_uiIconButton({ label: '分享知识库', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
+                <span class="kb-wb-share-wrap">
+                  ${_uiIconButton({ label: '分享知识库（待开发）', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
+                  <span class="kb-wb-soon-chip">待开发</span>
+                </span>
                 <div class="kb-wb-more">
                   ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-more-btn' } })}
                   <div class="kb-wb-more-menu" id="kb-wb-more-menu" hidden>
@@ -4982,6 +5056,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
       if (_isExternalSourceSelected()) return;
+      if (!KB_SHARE_READY) { _kbShareSoonOpen(); return; }
       _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
@@ -5848,6 +5923,50 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     return _state.spaces.find((s) => s.space_id === _state.spaceId) || null;
   }
 
+  /**
+   * 共享知识库的「分享」目前是**待开发**：飞书分享 / 复制链接 / 知识码 / 权限设置
+   * 这一整套还没有真正落地，弹出来只会让人以为能用。按仓库既有约定
+   * （kb-eco 的「发现待开发」）显示为待开发：按钮挂 chip，点击给一句说明。
+   *
+   * 真要做时把这里翻成 true 即可——下面 `_kbShareDialogOpen` 的实现原样保留。
+   */
+  const KB_SHARE_READY = false;
+
+  /** 「分享（待开发）」说明小弹层：说清现状，别让用户白点。 */
+  function _kbShareSoonOpen() {
+    const trigger = document.activeElement;
+    _kbMenuHide();
+    _kbPermDlgClose();
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <section class="kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
+        ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></div>
+        <div class="kb-wb-right-placeholder kb-share-soon-body">
+          共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
+          当前可以用「成员」把库内资料共享给同一空间的同事。
+        </div>
+        <div class="kb-share-pop-actions">
+          ${_uiButton({ label: '知道了', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
+        </div>
+      </section>`;
+    document.body.appendChild(overlay);
+    _kbShareDlg = overlay;
+    _kbShareDlgController = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-share-soon-ok',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+      onClose: () => {
+        if (_kbShareDlg === overlay) { _kbShareDlg = null; _kbShareDlgController = null; }
+      },
+    });
+    overlay.querySelector('.kb-share-pop-close')?.addEventListener('click', () => _kbShareDlgController?.close());
+    overlay.querySelector('#kb-share-soon-ok')?.addEventListener('click', () => _kbShareDlgController?.close());
+  }
+
   // 图 2：分享弹窗 —— 知识库信息卡 + 分享方式行（点击跳权限设置）+ 复制链接/生成知识码
   function _kbShareDialogOpen() {
     const trigger = document.activeElement;
@@ -6698,6 +6817,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
     pdfSrcAt: _fvPdfSrcAt,
+    quizAnswerClauses: _quizAnswerClauses,
   };
 
   // 排版类文件的富查看器桥。调用方是常驻加载的 `anchored-source-view`：它拿到

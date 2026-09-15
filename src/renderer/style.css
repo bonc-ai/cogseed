@@ -30416,6 +30416,23 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 }
 .kb-quiz-reveal:hover { background: var(--kb-hover); }
 .kb-quiz-explain { margin-top: 8px; font-size: var(--font-size-2); color: var(--kb-text2); line-height: 1.6; }
+.kb-quiz-status { margin-top: 8px; font-size: var(--font-size-2); font-weight: 600; }
+.kb-quiz-status.is-right { color: var(--success); }
+.kb-quiz-status.is-wrong { color: var(--danger); }
+.kb-quiz-answer { margin-top: 6px; display: flex; gap: 6px; align-items: flex-start; font-size: var(--font-size-2); line-height: 1.6; }
+.kb-quiz-answer-tag { flex: none; color: var(--kb-text3); }
+.kb-quiz-answer.is-right .kb-quiz-answer-tag { color: var(--success); }
+.kb-quiz-answer.is-wrong .kb-quiz-answer-tag { color: var(--danger); }
+.kb-quiz-answer-text { color: var(--kb-text); }
+.kb-quiz-answer-list { margin: 0; padding-left: 16px; color: var(--kb-text); display: flex; flex-direction: column; gap: 2px; }
+/* 「待开发」标记（分享等未落地能力）：与 kb-eco 的 chip 同款观感 */
+.kb-wb-share-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.kb-wb-soon-chip {
+  font-size: var(--font-size-1); line-height: 1; padding: 2px 5px; border-radius: var(--radius-1);
+  background: var(--kb-hover); color: var(--kb-text3); font-weight: 500; white-space: nowrap;
+}
+.kb-share-pop-head .kb-wb-soon-chip { margin-left: 4px; vertical-align: middle; }
+.kb-share-pop--soon .kb-share-soon-body { margin: 4px 0 2px; text-align: left; }
 .kb-wb-mm { margin-top: 14px; border: 1px solid var(--kb-border); border-radius: var(--radius-2); overflow: hidden; }
 .kb-wb-mm-head {
   display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px;

@@ -409,6 +409,41 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).toMatch(/filter\(\(m\) => m\.kind !== 'mindmap' && m\.kind !== 'quiz'\)/);
   });
 
+  it('参考答案/解析分块显示，多要点自动列点', () => {
+    const { windowMock } = loadScript();
+    const clauses = windowMock.__kbFvUtils.quizAnswerClauses;
+    // 真机反馈里的原句：一个分号隔开的两个要点 → 拆成两条，而不是糊成一整段
+    const two = clauses('匹配角色只需要一个API Key；发版清理时应以CSV文件为准（提示词内是速览，以CSV为准）。');
+    expect(two).toHaveLength(2);
+    expect(two[0]).toBe('匹配角色只需要一个API Key'); // 列表项不带分隔符
+    expect(two[1]).toContain('发版清理时应以CSV文件为准');
+    // 单句不拆（不把一句话切碎）
+    expect(clauses('一句话参考答案。')).toEqual(['一句话参考答案。']);
+    // 编号式要点也认
+    expect(clauses('1. 先纠错 2. 再检索')).toEqual(['先纠错', '再检索']);
+    expect(clauses('')).toEqual([]);
+    // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    expect(src).toContain('function _quizAnswerBlock');
+    expect(src).toContain("_quizAnswerBlock('参考答案'");
+    expect(src).toContain("_quizAnswerBlock('解析'");
+    expect(src).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
+  });
+
+  it('共享库的分享显示为待开发（不再弹出"像能用"的分享弹窗）', () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    const html = els['kb-workbench'].innerHTML;
+    expect(html).toContain('kb-wb-soon-chip');
+    expect(html).toContain('待开发');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 开关 + 点击走说明弹层；真弹窗实现保留（翻开关即可恢复）
+    expect(src).toContain('const KB_SHARE_READY = false');
+    expect(src).toMatch(/if \(!KB_SHARE_READY\) \{ _kbShareSoonOpen\(\); return; \}/);
+    expect(src).toContain('function _kbShareSoonOpen');
+    expect(src).toContain('function _kbShareDialogOpen');
+  });
+
   it('生成脑图仍走 kb.mindmap（本来就是独立能力）', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).toMatch(/mmBtn\.addEventListener\('click', \(\) => _genMindmap\(\)\)/);
