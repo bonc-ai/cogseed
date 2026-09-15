@@ -16,6 +16,7 @@
  *   transcript.glossary.syncOntology —— 归组 + 挂 ontologyRef + 出建议（+可选反哺候选）
  *   transcript.glossary.adoptSeed    —— 采纳"待补错形"建议，建 ontology_seed 词条
  *   transcript.glossary.applyAlignment —— 采纳"对齐"建议，改词条写法（只改 correct）
+ *   transcript.glossary.setScope / setIgnored / addAllow —— 接受的三个动作（范围/忽略/加白）
  */
 
 import * as transcriptGlossary from '../features/transcript_glossary';
@@ -210,6 +211,48 @@ export const invokeHandlers = {
     });
     return { entry };
   },
+
+  /**
+   * 接受范围（方案 §七）：本文档 / 当前任务 / 全局。
+   * 高危词条拒绝全局（方案 §2.2 红线），拒绝项如实回报，不静默降级。
+   */
+  'transcript.glossary.setScope': async (payload: Payload, ctx: IpcContext) => {
+    const choice = payload?.choice === 'doc' || payload?.choice === 'task' || payload?.choice === 'global'
+      ? payload.choice
+      : 'keep';
+    return transcriptGlossary.setScope(ctx.userId, stringList(payload?.ids, 500) ?? [], {
+      choice,
+      ...(optionalId(payload?.docId, 'docId') ? { docId: optionalId(payload?.docId, 'docId')! } : {}),
+      ...(stringList(payload?.scenarioTags, 20) ? { scenarioTags: stringList(payload?.scenarioTags, 20)! } : {}),
+    });
+  },
+
+  /** 忽略（可逆、降权）与恢复：只留痕，不删词条、不动台账。 */
+  'transcript.glossary.setIgnored': async (payload: Payload, ctx: IpcContext) => ({
+    updated: transcriptGlossary.setIgnored(
+      ctx.userId,
+      stringList(payload?.ids, 500) ?? [],
+      payload?.ignored === true,
+    ),
+  }),
+
+  /** 加白（误杀加白）：窗口内出现该词则整条候选静默。 */
+  'transcript.glossary.addAllow': async (payload: Payload, ctx: IpcContext) => ({
+    updated: transcriptGlossary.addContextAllow(
+      ctx.userId,
+      stringList(payload?.ids, 500) ?? [],
+      requireText(payload?.term, 'term', 40),
+    ),
+  }),
+
+  /** 移除一条加白（白名单静默候选，必须可撤）。 */
+  'transcript.glossary.removeAllow': async (payload: Payload, ctx: IpcContext) => ({
+    updated: transcriptGlossary.removeContextAllow(
+      ctx.userId,
+      stringList(payload?.ids, 500) ?? [],
+      requireText(payload?.term, 'term', 40),
+    ),
+  }),
 
   'transcript.glossary.applyAlignment': async (payload: Payload, ctx: IpcContext) => ({
     entry: transcriptOntology.applyAlignment(

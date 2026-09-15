@@ -49,6 +49,9 @@
         correct: String(candidate.correct || ''),
         action: candidate.action === 'delete' ? 'delete' : 'replace',
         riskLevel: candidate.riskLevel === 'high' || candidate.riskLevel === 'medium' ? candidate.riskLevel : 'low',
+        ignoredCount: Number(candidate.ignoredCount || 0),
+        contextAllow: Array.isArray(candidate.contextAllow) ? candidate.contextAllow.map(String) : [],
+        context: String(candidate.context || ''),
         count: 0,
         spans: [],
       };
@@ -76,15 +79,28 @@
     return { total: (rows || []).length, selected, spans, pendingHigh };
   }
 
-  /** 分组：高危优先展示，其余归入可折叠组（视觉噪声主要来自低风险条目）。 */
+  /**
+   * 分组：高危优先展示，其余归入可折叠组（视觉噪声主要来自低风险条目），
+   * 被忽略过的词条另外折叠到最后——这就是方案里的"忽略（降权）"，
+   * 不是删除：用户仍能展开看到并恢复。
+   */
   function splitByRisk(rows) {
     const high = [];
     const other = [];
+    const ignored = [];
     for (const row of rows || []) {
-      if (row.riskLevel === 'high') high.push(row);
+      if (Number(row.ignoredCount || 0) > 0) ignored.push(row);
+      else if (row.riskLevel === 'high') high.push(row);
       else other.push(row);
     }
-    return { high, other };
+    return { high, other, ignored };
+  }
+
+  /** 默认勾选的行：低风险且未被忽略（被忽略的词条降权，不默认重来一遍）。 */
+  function defaultAcceptedIds(rows) {
+    return (rows || [])
+      .filter((row) => row.riskLevel === 'low' && Number(row.ignoredCount || 0) === 0)
+      .map((row) => row.entryRef);
   }
 
   /**
@@ -252,6 +268,7 @@
       '  <div class="kb-atc__status" data-atc-status hidden></div>',
       '  <div class="kb-atc__summary" data-atc-summary hidden></div>',
       '  <div class="kb-atc__body" data-atc-body></div>',
+      '  <div class="kb-atc__scope" data-atc-scope></div>',
       '  <div class="kb-atc__actions" data-atc-actions></div>',
       '  <details class="kb-atc__issues" data-atc-issues>',
       '    <summary data-atc-issues-summary></summary>',
@@ -289,6 +306,16 @@
       seedOpen: '',
       // 未决项（待核，方案 §4.3）：span 一律是**原文**坐标，apply 时由主进程映射
       flagged: [],
+      // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
+      scopeChoice: 'keep',
+      rowMenu: '',
+      allowOpen: '',
+      allowDraft: '',
+      renameOpen: '',
+      renameDraft: '',
+      denied: [],
+      showDenied: false,
+      actionError: '',
       suspects: [],
       suspectBusy: false,
       suspectError: '',
@@ -398,9 +425,9 @@
       const actions = document.createElement('div');
       actions.className = 'kb-atc__row-actions';
       const isAccepted = state.accepted.has(row.entryRef);
-      const isIgnored = state.ignored.has(row.entryRef);
       // 高危行用纯文字按钮（hover 才出底色），把横向空间让给内容。
       const acceptRole = isAccepted ? 'primary' : (row.riskLevel === 'high' ? 'ghost' : 'secondary');
+      const isIgnoredRow = Number(row.ignoredCount || 0) > 0;
       actions.innerHTML = [
         button({
           label: isAccepted
@@ -409,30 +436,161 @@
           role: acceptRole,
           size: 'sm',
           className: 'kb-atc__btn',
-          disabled: state.busy || isIgnored,
+          disabled: state.busy,
           attrs: { 'data-atc-accept': row.entryRef },
         }),
         button({
-          label: t('kb.transcriptCorrect.ignore', '忽略'),
+          label: isIgnoredRow
+            ? t('kb.transcriptCorrect.restore', '恢复')
+            : t('kb.transcriptCorrect.ignore', '忽略'),
           role: 'ghost',
           size: 'sm',
           className: 'kb-atc__btn',
-          disabled: state.busy || isAccepted,
-          attrs: { 'data-atc-ignore': row.entryRef },
+          disabled: state.busy,
+          attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': isIgnoredRow ? '1' : '0' },
         }),
         button({
-          label: flaggedSpans.length
-            ? t('kb.transcriptCorrect.issue_unmark', '取消待核')
-            : t('kb.transcriptCorrect.issue_mark', '标待核'),
+          label: t('kb.transcriptCorrect.more', '更多'),
+          icon: state.rowMenu === row.entryRef ? 'chevron-down' : 'chevron-right',
           role: 'ghost',
           size: 'sm',
           className: 'kb-atc__btn',
-          attrs: { 'data-atc-flag': row.entryRef },
+          attrs: { 'data-atc-rowmenu': row.entryRef },
         }),
       ].join('');
 
       el.append(main, count, actions);
+      if (state.rowMenu === row.entryRef) {
+        el.appendChild(rowMenuElement(row, flaggedSpans, isIgnoredRow));
+      }
       return el;
+    }
+
+    /** 行内次级动作：标待核 / 加白 / 改写法 / 恢复（默认收起，避免每行堆 5 个按钮）。 */
+    function rowMenuElement(row, flaggedSpans, isIgnoredRow) {
+      const wrap = document.createElement('div');
+      wrap.className = 'kb-atc__row-menu';
+      wrap.innerHTML = button({
+        label: flaggedSpans.length
+          ? t('kb.transcriptCorrect.issue_unmark', '取消待核')
+          : t('kb.transcriptCorrect.issue_mark', '标待核'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-atc__btn',
+        attrs: { 'data-atc-flag': row.entryRef },
+      }) + button({
+        label: t('kb.transcriptCorrect.add_allow', '加白'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-atc__btn',
+        attrs: { 'data-atc-allow-open': row.entryRef },
+      }) + button({
+        label: t('kb.transcriptCorrect.rename_correct', '改写法'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-atc__btn',
+        attrs: { 'data-atc-rename-open': row.entryRef },
+      }) + (isIgnoredRow ? button({
+        label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-atc__btn',
+        attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
+      }) : '');
+
+      if (state.allowOpen === row.entryRef) {
+        const form = document.createElement('div');
+        form.className = 'kb-atc__row-form';
+        if (typeof root.uiField === 'function') {
+          try {
+            form.innerHTML = [
+              root.uiField({
+                id: 'atc-allow-' + row.entryRef,
+                label: t('kb.transcriptCorrect.add_allow', '加白'),
+                control: { kind: 'input', placeholder: t('kb.transcriptCorrect.add_allow_placeholder', '出现这个词时不要替换') },
+              }),
+              button({
+                label: t('kb.transcriptCorrect.confirm', '确定'),
+                role: 'secondary',
+                size: 'sm',
+                disabled: state.busy,
+                attrs: { 'data-atc-allow-add': row.entryRef },
+              }),
+              button({
+                label: t('kb.transcriptCorrect.cancel', '取消'),
+                role: 'ghost',
+                size: 'sm',
+                attrs: { 'data-atc-allow-close': '1' },
+              }),
+            ].join('');
+            const hint = document.createElement('div');
+            hint.className = 'kb-atc__sync-note';
+            hint.textContent = t('kb.transcriptCorrect.add_allow_context', '这一处的上下文：{context}', {
+              context: row.context || t('kb.transcriptCorrect.no_context', '（无）'),
+            });
+            form.appendChild(hint);
+            const existing = Array.isArray(row.contextAllow) ? row.contextAllow : [];
+            if (existing.length) {
+              const list = document.createElement('div');
+              list.className = 'kb-atc__allow-list';
+              const label = document.createElement('span');
+              label.className = 'kb-atc__sync-row-label';
+              label.textContent = t('kb.transcriptCorrect.add_allow_existing', '已加白：');
+              list.appendChild(label);
+              for (const term of existing) {
+                const item = document.createElement('span');
+                item.className = 'kb-atc__allow-item';
+                item.textContent = term;
+                const remove = document.createElement('span');
+                remove.className = 'kb-atc__allow-remove';
+                remove.textContent = t('kb.transcriptCorrect.remove', '移除');
+                remove.setAttribute('data-atc-allow-remove', row.entryRef);
+                remove.setAttribute('data-atc-allow-term', term);
+                remove.setAttribute('role', 'button');
+                item.appendChild(remove);
+                list.appendChild(item);
+              }
+              form.appendChild(list);
+            }
+          } catch (error) {
+            log?.warn('allow form render failed', { error: error?.message || String(error) });
+          }
+        }
+        wrap.appendChild(form);
+      }
+
+      if (state.renameOpen === row.entryRef) {
+        const form = document.createElement('div');
+        form.className = 'kb-atc__row-form';
+        if (typeof root.uiField === 'function') {
+          try {
+            form.innerHTML = [
+              root.uiField({
+                id: 'atc-rename-' + row.entryRef,
+                label: t('kb.transcriptCorrect.rename_correct', '改写法'),
+                control: { kind: 'input', placeholder: row.correct, value: row.correct },
+              }),
+              button({
+                label: t('kb.transcriptCorrect.confirm', '确定'),
+                role: 'secondary',
+                size: 'sm',
+                disabled: state.busy,
+                attrs: { 'data-atc-rename-apply': row.entryRef },
+              }),
+              button({
+                label: t('kb.transcriptCorrect.cancel', '取消'),
+                role: 'ghost',
+                size: 'sm',
+                attrs: { 'data-atc-rename-close': '1' },
+              }),
+            ].join('');
+          } catch (error) {
+            log?.warn('rename form render failed', { error: error?.message || String(error) });
+          }
+        }
+        wrap.appendChild(form);
+      }
+      return wrap;
     }
 
     function groupHeaderElement(label, tone) {
@@ -443,17 +601,21 @@
       return el;
     }
 
-    /** 折叠组头：用按钮而非裸控件，便于键盘与样式统一。 */
-    function groupToggleElement(label, collapsed) {
+    /**
+     * 折叠组头：用按钮而非裸控件，便于键盘与样式统一。
+     * `action` 指定折叠开关（其余条目组用 toggle-other；被拒组用 toggle-denied）。
+     */
+    function groupToggleElement(label, collapsed, action) {
       const host = document.createElement('div');
       host.className = 'kb-atc__group kb-atc__group--toggle';
+      if (action && action !== 'toggle-other') host.dataset.tone = action.replace('toggle-', '');
       host.innerHTML = button({
         label,
         icon: collapsed ? 'chevron-right' : 'chevron-down',
         role: 'ghost',
         size: 'sm',
         className: 'kb-atc__group-btn',
-        attrs: { 'data-atc-action': 'toggle-other' },
+        attrs: { 'data-atc-action': action || 'toggle-other' },
       });
       return host;
     }
@@ -491,7 +653,7 @@
         return;
       }
 
-      const { high, other } = splitByRisk(state.rows);
+      const { high, other, ignored } = splitByRisk(state.rows);
       if (high.length) {
         body.appendChild(groupHeaderElement(
           t('kb.transcriptCorrect.group_high', '高危 {count} 条 · 逐条确认', { count: high.length }),
@@ -508,6 +670,30 @@
         ));
         if (!state.collapsedOther) {
           for (const row of other) body.appendChild(rowElement(row));
+        }
+      }
+      if (ignored.length) {
+        body.appendChild(groupHeaderElement(
+          t('kb.transcriptCorrect.group_ignored', '已忽略 {count} 条（降权，可恢复）', { count: ignored.length }),
+          'ignored',
+        ));
+        for (const row of ignored) body.appendChild(rowElement(row));
+      }
+      if (state.denied.length) {
+        body.appendChild(groupToggleElement(
+          t('kb.transcriptCorrect.denied', '被护栏拦下 {count} 处', { count: state.denied.length }),
+          state.showDenied,
+          'toggle-denied',
+        ));
+        if (state.showDenied) {
+          for (const item of state.denied.slice(0, 50)) {
+            const el = document.createElement('div');
+            el.className = 'kb-atc__denied';
+            el.dataset.denied = '1';
+            el.textContent = `${item.wrong} → ${item.correct} · ${t('kb.transcriptCorrect.denied_reason_' + item.reason, item.reason)}`
+              + (item.deniedBy ? `（${item.deniedBy}）` : '');
+            body.appendChild(el);
+          }
         }
       }
     }
@@ -549,6 +735,41 @@
       if (state.savedPath) parts.push(t('kb.transcriptCorrect.saved_to', '已另存：{path}', { path: state.savedPath }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
+    }
+
+    /**
+     * 接受范围（方案 §七：接受（范围：本文档 / 当前任务））。
+     * 只影响"接受时把词条作用域改成什么"；默认 keep = 不动词条原有作用域。
+     */
+    function renderScope() {
+      const host = q('[data-atc-scope]');
+      if (!host) return;
+      if (!state.scanned || state.rows.length === 0) { host.textContent = ''; return; }
+      const current = state.scopeChoice;
+      host.innerHTML = [
+        '<span class="kb-atc__scope-label">' + t('kb.transcriptCorrect.scope_label', '接受范围') + '</span>',
+        button({
+          label: t('kb.transcriptCorrect.scope_keep', '默认'),
+          role: current === 'keep' ? 'primary' : 'ghost',
+          size: 'sm',
+          disabled: state.busy,
+          attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'keep' },
+        }),
+        button({
+          label: t('kb.transcriptCorrect.scope_doc', '仅本文档'),
+          role: current === 'doc' ? 'primary' : 'ghost',
+          size: 'sm',
+          disabled: state.busy,
+          attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'doc' },
+        }),
+        button({
+          label: t('kb.transcriptCorrect.scope_task', '仅本场景'),
+          role: current === 'task' ? 'primary' : 'ghost',
+          size: 'sm',
+          disabled: state.busy || !(ctx.scenarioTags || []).length,
+          attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'task' },
+        }),
+      ].join('');
     }
 
     function renderActions() {
@@ -964,7 +1185,7 @@
       // 逐段尝试渲染：某个共享原语抛错时，不得连带把扫描/替换流程卡死
       // （真实事故：uiField 缺 id 抛错 → render() 在 runScan 的 try 之外抛出，
       //  扫描永远停在"正在扫描…"）。
-      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderActions, renderIssues, renderSync, renderAddForm]) {
+      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderScope, renderActions, renderIssues, renderSync, renderAddForm]) {
         try {
           step();
         } catch (error) {
@@ -987,8 +1208,10 @@
           ...(Array.isArray(ctx.scenarioTags) && ctx.scenarioTags.length ? { scenarioTags: ctx.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
+        state.denied = Array.isArray(result?.denied) ? result.denied : [];
+        state.showDenied = false;
         state.scanned = true;
-        state.accepted = new Set(state.rows.filter((row) => row.riskLevel === 'low').map((row) => row.entryRef));
+        state.accepted = new Set(defaultAcceptedIds(state.rows));
         state.ignored = new Set();
         state.apply = null;
         state.cleanedText = '';
@@ -1189,6 +1412,128 @@
       }
     }
 
+    /** 接受范围（方案 §七）：把已接受的词条限定到本文档 / 本场景。 */
+    async function applyScopeChoice(entryRef) {
+      const choice = state.scopeChoice;
+      if (choice === 'keep') return;
+      if (choice === 'task' && !(ctx.scenarioTags || []).length) {
+        setStatus(t('kb.transcriptCorrect.scope_need_tags', '当前文档没有场景标签，请改用「本文档」。'), 'warning');
+        return;
+      }
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.setScope', {
+          ids: [entryRef],
+          choice,
+          docId: ctx.docId,
+          ...(choice === 'task' ? { scenarioTags: ctx.scenarioTags } : {}),
+        });
+        const refused = Array.isArray(result?.refused) ? result.refused : [];
+        if (refused.length) {
+          setStatus(t('kb.transcriptCorrect.scope_refused', '高危词条不能设为全局（会误伤无关稿件），已保持原作用域。'), 'warning');
+          return;
+        }
+        setStatus(t('kb.transcriptCorrect.scope_applied', '已限定作用域：{scope}', {
+          scope: choice === 'doc'
+            ? t('kb.transcriptCorrect.scope_doc', '仅本文档')
+            : t('kb.transcriptCorrect.scope_task', '仅本场景'),
+        }), '');
+      } catch (error) {
+        log?.warn('scope apply failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.scope_failed', '设置作用域失败，请稍后重试。'), 'warning');
+      }
+    }
+
+    /** 忽略 / 恢复（持久化，可逆）：不是删词条，只是降权。 */
+    async function runIgnore(entryRef, restore) {
+      if (state.busy) return;
+      const row = state.rows.find((item) => item.entryRef === entryRef);
+      try {
+        await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        if (row) row.ignoredCount = restore ? 0 : Number(row.ignoredCount || 0) + 1;
+        if (restore) {
+          state.accepted.add(entryRef);
+        } else {
+          state.accepted.delete(entryRef);
+        }
+        setStatus(restore
+          ? t('kb.transcriptCorrect.restored', '已恢复：{wrong} 重新参与清理。', { wrong: row?.wrong || '' })
+          : t('kb.transcriptCorrect.ignored_done', '已忽略：{wrong} 降权到末尾（可恢复）。', { wrong: row?.wrong || '' }), '');
+      } catch (error) {
+        log?.warn('ignore failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.ignore_failed', '忽略失败，请稍后重试。'), 'warning');
+      } finally {
+        render();
+      }
+    }
+
+    /** 加白：把用户填的上下文词加入白名单，之后该语境静默（需重扫生效）。 */
+    async function runAddAllow(entryRef) {
+      if (state.busy) return;
+      const input = container.querySelector('#atc-allow-' + entryRef);
+      const term = String(input?.value || '').trim();
+      if (!term) {
+        setStatus(t('kb.transcriptCorrect.add_allow_need_term', '请填写一个上下文词。'), 'warning');
+        return;
+      }
+      state.busy = true;
+      render();
+      try {
+        await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        state.allowOpen = '';
+        setStatus(t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
+          term,
+          wrong: state.rows.find((r) => r.entryRef === entryRef)?.wrong || '',
+        }), '');
+        await runScan();
+      } catch (error) {
+        log?.warn('add allow failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.add_allow_failed', '加白失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /** 移除一条加白（白名单会静默候选，必须能撤）。 */
+    async function runRemoveAllow(entryRef, term) {
+      if (state.busy) return;
+      try {
+        await root.cogseed.invoke('transcript.glossary.removeAllow', { ids: [entryRef], term });
+        setStatus(t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term }), '');
+        await runScan();
+      } catch (error) {
+        log?.warn('remove allow failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.remove_allow_failed', '移除失败，请稍后重试。'), 'warning');
+      } finally {
+        render();
+      }
+    }
+
+    /** 改写法（方案 §七「改别名」的词表侧）：只改 correct，不伪造一次确认。 */
+    async function runRename(entryRef) {
+      if (state.busy) return;
+      const input = container.querySelector('#atc-rename-' + entryRef);
+      const correct = String(input?.value || '').trim();
+      if (!correct) {
+        setStatus(t('kb.transcriptCorrect.rename_need_value', '请填写新的写法。'), 'warning');
+        return;
+      }
+      state.busy = true;
+      render();
+      try {
+        await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        state.renameOpen = '';
+        setStatus(t('kb.transcriptCorrect.rename_done', '已改为：{correct}', { correct }), '');
+        await runScan();
+      } catch (error) {
+        log?.warn('rename failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.rename_failed', '改写失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
     /** 标/取消一行候选的全部出现处（一处也不猜，全标出来）。 */
     function toggleRowFlag(entryRef) {
       const row = state.rows.find((item) => item.entryRef === entryRef);
@@ -1298,18 +1643,59 @@
       if (accept) {
         const ref = accept.getAttribute('data-atc-accept');
         if (state.accepted.has(ref)) state.accepted.delete(ref);
-        else { state.accepted.add(ref); state.ignored.delete(ref); }
+        else {
+          state.accepted.add(ref);
+          state.ignored.delete(ref);
+          // 接受时按当前范围选择落到词条（本文档 / 本场景），keep = 不动
+          void applyScopeChoice(ref);
+        }
         render();
         return;
       }
       const ignore = event.target.closest('[data-atc-ignore]');
       if (ignore) {
         const ref = ignore.getAttribute('data-atc-ignore');
-        state.ignored.add(ref);
-        state.accepted.delete(ref);
+        void runIgnore(ref, ignore.getAttribute('data-atc-ignored') === '1');
+        return;
+      }
+      const rowMenu = event.target.closest('[data-atc-rowmenu]');
+      if (rowMenu) {
+        const ref = rowMenu.getAttribute('data-atc-rowmenu');
+        state.rowMenu = state.rowMenu === ref ? '' : ref;
+        state.allowOpen = '';
+        state.renameOpen = '';
         render();
         return;
       }
+      const allowRemove = event.target.closest('[data-atc-allow-remove]');
+      if (allowRemove) {
+        void runRemoveAllow(allowRemove.getAttribute('data-atc-allow-remove'), allowRemove.getAttribute('data-atc-allow-term'));
+        return;
+      }
+      const allowOpen = event.target.closest('[data-atc-allow-open]');
+      if (allowOpen) {
+        const ref = allowOpen.getAttribute('data-atc-allow-open');
+        state.allowOpen = state.allowOpen === ref ? '' : ref;
+        state.renameOpen = '';
+        render();
+        return;
+      }
+      const allowClose = event.target.closest('[data-atc-allow-close]');
+      if (allowClose) { state.allowOpen = ''; render(); return; }
+      const allowAdd = event.target.closest('[data-atc-allow-add]');
+      if (allowAdd) { void runAddAllow(allowAdd.getAttribute('data-atc-allow-add')); return; }
+      const renameOpen = event.target.closest('[data-atc-rename-open]');
+      if (renameOpen) {
+        const ref = renameOpen.getAttribute('data-atc-rename-open');
+        state.renameOpen = state.renameOpen === ref ? '' : ref;
+        state.allowOpen = '';
+        render();
+        return;
+      }
+      const renameClose = event.target.closest('[data-atc-rename-close]');
+      if (renameClose) { state.renameOpen = ''; render(); return; }
+      const renameApply = event.target.closest('[data-atc-rename-apply]');
+      if (renameApply) { void runRename(renameApply.getAttribute('data-atc-rename-apply')); return; }
       const flag = event.target.closest('[data-atc-flag]');
       if (flag) {
         toggleRowFlag(flag.getAttribute('data-atc-flag'));
@@ -1347,6 +1733,13 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'sync-ontology') { void runSyncOntology(); return; }
+      if (kind === 'scope') {
+        const value = action.getAttribute('data-atc-scope') || 'keep';
+        state.scopeChoice = value === 'doc' || value === 'task' ? value : 'keep';
+        render();
+        return;
+      }
+      if (kind === 'toggle-denied') { state.showDenied = !state.showDenied; render(); return; }
       if (kind === 'find-suspects') { void runDetectSuspects(); return; }
       if (kind === 'clear-issues') { state.flagged = []; render(); return; }
       if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }
@@ -1393,6 +1786,7 @@
       syncSummary,
       summarizeRows,
       splitByRisk,
+      defaultAcceptedIds,
       applySummary,
       cleanedFileName,
       nextCandidateName,
@@ -1412,6 +1806,7 @@
       syncSummary,
       summarizeRows,
       splitByRisk,
+      defaultAcceptedIds,
       applySummary,
       cleanedFileName,
       nextCandidateName,

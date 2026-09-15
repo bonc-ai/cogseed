@@ -14,7 +14,9 @@
  *      （真实事故：一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）；
  *   5. 保护区域：fenced code / 行内 code / URL 内不做替换；
  *   6. 重叠消解：长词优先、`freq` 次优先，同 span 只保留一个候选；
- *   7. **只做替换/删除，不生成句子**：输出必须能由"原文 + 编辑集"逐字重建
+ *   7. 语境白名单：命中窗口内出现 `contextAllow` 任一词则**整条候选静默丢弃**
+ *      （方案 §七「加白」：误杀一次就加白，别再反复提示）；
+ *   8. **只做替换/删除，不生成句子**：输出必须能由"原文 + 编辑集"逐字重建
  *      （`verifyEditsRebuild`），从结构上排除模型补写
  *      （真实事故：清理产物里出现原文没有的 11 秒发言）。
  *
@@ -40,6 +42,7 @@ export const DEFAULT_CONTEXT_WINDOW = 20;
 export type DeniedReason =
   | 'out_of_scope'
   | 'context_denied'
+  | 'context_allowed'
   | 'word_boundary'
   | 'overlapping_span'
   | 'protected_region';
@@ -69,6 +72,10 @@ export interface CorrectionCandidate {
   riskLevel: RiskLevel;
   context: string;
   span: Span;
+  /** 该词条被用户忽略过的次数（>0 = 降权展示：折叠到末尾、默认不勾选）。 */
+  ignoredCount: number;
+  /** 该词条已有的加白词（面板要能看见并移除；误加一次不该只能改 JSON）。 */
+  contextAllow: string[];
 }
 
 export interface DeniedMatch {
@@ -205,6 +212,16 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
         continue;
       }
       if (entry.action === 'replace') {
+        // 白名单（加白）优先于黑名单：用户说过"这个语境里是对的"就不该再提示，
+        // 因此这里直接静默丢弃（连待确认都不进），只留一条 denied 记录可追溯。
+        const allowed = findDeniedContext(foldedText, span, entry.contextAllow ?? [], window);
+        if (allowed) {
+          denied.push({
+            entryRef: entry.id, wrong: entry.wrong, correct: entry.correct,
+            reason: 'context_allowed', span, deniedBy: allowed,
+          });
+          continue;
+        }
         const hit = findDeniedContext(foldedText, span, entry.contextDeny, window);
         if (hit) {
           denied.push({
@@ -250,6 +267,8 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
     riskLevel: m.entry.riskLevel,
     context: contextAround(text, m.span, 40),
     span: m.span,
+    ignoredCount: m.entry.ignoredCount ?? 0,
+    contextAllow: m.entry.contextAllow ?? [],
   }));
 
   return {

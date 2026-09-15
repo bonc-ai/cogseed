@@ -67,6 +67,12 @@ export interface GlossaryEntry {
   boundary: BoundaryMode;
   /** 语境黑名单：命中窗口内出现任一词则拒绝替换（防 `傅平/扶贫办` 类误替换）。 */
   contextDeny: string[];
+  /**
+   * 语境白名单（方案 §七「加白」）：窗口内出现任一词则**整条候选不产出**，
+   * 连待确认都不出现——用于"这个词在这个语境里是对的，别再提示我"。
+   * 与 `contextDeny` 的区别：deny 只否决替换（仍上报为 denied），allow 直接静默。
+   */
+  contextAllow: string[];
   scope: GlossaryScope;
   /** 被确认替换的累计次数（越高越优先展示）。 */
   freq: number;
@@ -80,6 +86,12 @@ export interface GlossaryEntry {
   createdAt: number;
   updatedAt: number;
   lastVerifiedAt: number;
+  /**
+   * 忽略留痕（方案 §七「忽略（可逆，降权）」）：被忽略的次数与最近一次时间。
+   * 忽略**不删词条**、不改台账，只用于降权排序与面板折叠；恢复时次数清零。
+   */
+  ignoredCount?: number;
+  ignoredAt?: number;
 }
 
 export interface GlossaryFile {
@@ -98,6 +110,7 @@ export interface UpsertEntryInput {
   /** 允许调用方（人工复核后的导入）显式指定；缺省时按规则推导。 */
   riskLevel?: unknown;
   contextDeny?: unknown;
+  contextAllow?: unknown;
   scope?: unknown;
   source?: unknown;
   ownerScope?: unknown;
@@ -231,6 +244,7 @@ export function migrateGlossaryV1ToV2(raw: { entries?: unknown; meta?: unknown }
       riskLevel: deriveRiskLevel({ wrong, correct, action, partial: isPartialTag(item) }),
       boundary: defaultBoundary(wrong, action),
       contextDeny: [],
+      contextAllow: [],
       scope: {
         docIds: [],
         scenarioTags: Array.isArray(item?.scenarioTags)
@@ -356,6 +370,14 @@ function normalizeStoredEntry(input: unknown): GlossaryEntry | null {
     contextDeny: Array.isArray(e.contextDeny)
       ? e.contextDeny.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
       : [],
+    contextAllow: Array.isArray(e.contextAllow)
+      ? e.contextAllow.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
+      : [],
+    // 忽略留痕：可选字段，恢复时直接删键（避免在用户文件里留一堆 0）
+    ...(typeof e.ignoredCount === 'number' && e.ignoredCount > 0
+      ? { ignoredCount: Math.floor(e.ignoredCount) }
+      : {}),
+    ...(typeof e.ignoredAt === 'number' ? { ignoredAt: e.ignoredAt } : {}),
     scope: normalizeScope(e.scope),
     freq: typeof e.freq === 'number' && e.freq >= 0 ? Math.floor(e.freq) : 0,
     source: normalizeSource(e.source),
@@ -420,6 +442,131 @@ export function listEntries(
 
 export function findEntry(userId: string, id: string): GlossaryEntry | null {
   return loadGlossary(userId).entries.find((e) => e.id === id) ?? null;
+}
+
+/** 作用域选择（面板「接受」动作的范围，方案 §七）。 */
+export type ScopeChoice = 'keep' | 'doc' | 'task' | 'global';
+
+export interface SetScopeResult {
+  updated: number;
+  /**
+   * 被拒的条目：**高危词条不允许"全部个人库"范围**（方案 §2.2 红线）。
+   * 拒绝时保持原作用域不变，并如实回报，绝不静默降级。
+   */
+  refused: Array<{ id: string; wrong: string; reason: 'high_risk_cannot_global' }>;
+}
+
+/**
+ * 设定已接受词条的作用域——"接受（范围：本文档 / 当前任务 / 全局）"。
+ *   keep   不动（默认）
+ *   doc    只在本文档生效（`docIds=[docId]`，global=false）
+ *   task   只在本场景生效（`scenarioTags=[…]`，global=false）
+ *   global 全局（高危词条拒绝，见 SetScopeResult.refused）
+ */
+export function setScope(
+  userId: string,
+  ids: string[],
+  opts: { choice: ScopeChoice; docId?: string; scenarioTags?: string[] },
+): SetScopeResult {
+  const wanted = new Set(ids.filter((id) => typeof id === 'string' && !!id));
+  if (wanted.size === 0 || opts.choice === 'keep') return { updated: 0, refused: [] };
+  const file = loadGlossary(userId);
+  const now = Date.now();
+  let updated = 0;
+  const refused: SetScopeResult['refused'] = [];
+  for (const entry of file.entries) {
+    if (!wanted.has(entry.id)) continue;
+    if (opts.choice === 'global') {
+      if (entry.riskLevel === 'high') {
+        refused.push({ id: entry.id, wrong: entry.wrong, reason: 'high_risk_cannot_global' });
+        continue;
+      }
+      entry.scope = { docIds: [], scenarioTags: [], global: true };
+    } else if (opts.choice === 'doc') {
+      if (!opts.docId) throw new Error('transcript glossary: docId is required for doc scope');
+      entry.scope = { docIds: [opts.docId], scenarioTags: [], global: false };
+    } else {
+      const tags = (opts.scenarioTags ?? []).filter((t) => typeof t === 'string' && !!t.trim()).slice(0, 50);
+      if (!tags.length) throw new Error('transcript glossary: scenarioTags are required for task scope');
+      entry.scope = { docIds: [], scenarioTags: tags, global: false };
+    }
+    entry.updatedAt = now;
+    updated += 1;
+  }
+  if (updated > 0) saveGlossary(userId, file);
+  return { updated, refused };
+}
+
+/**
+ * 忽略 / 恢复（方案 §七「忽略（可逆，降权）」）。
+ * 忽略不删词条、不动台账：只累计次数与时间（面板据此折叠到末尾、默认不勾选）。
+ */
+export function setIgnored(userId: string, ids: string[], ignored: boolean): number {
+  const wanted = new Set(ids.filter((id) => typeof id === 'string' && !!id));
+  if (wanted.size === 0) return 0;
+  const file = loadGlossary(userId);
+  const now = Date.now();
+  let updated = 0;
+  for (const entry of file.entries) {
+    if (!wanted.has(entry.id)) continue;
+    if (ignored) {
+      entry.ignoredCount = (entry.ignoredCount ?? 0) + 1;
+      entry.ignoredAt = now;
+    } else {
+      delete entry.ignoredCount;
+      delete entry.ignoredAt;
+    }
+    entry.updatedAt = now;
+    updated += 1;
+  }
+  if (updated > 0) saveGlossary(userId, file);
+  return updated;
+}
+
+/**
+ * 加白（方案 §七「加白（误杀加白）」）：把某个上下文词加到白名单，
+ * 以后这些词出现在窗口里就整条静默，不再提示。重复加白只留一条。
+ */
+export function addContextAllow(userId: string, ids: string[], term: string): number {
+  const needle = bounded(term, 'contextAllow', 40);
+  if (!needle) throw new Error('transcript glossary: contextAllow term is required');
+  const wanted = new Set(ids.filter((id) => typeof id === 'string' && !!id));
+  if (wanted.size === 0) return 0;
+  const file = loadGlossary(userId);
+  const now = Date.now();
+  let updated = 0;
+  for (const entry of file.entries) {
+    if (!wanted.has(entry.id)) continue;
+    const list = entry.contextAllow ?? [];
+    if (list.some((item) => foldText(item).trim() === foldText(needle).trim())) continue;
+    entry.contextAllow = [...list, needle].slice(0, 50);
+    entry.updatedAt = now;
+    updated += 1;
+  }
+  if (updated > 0) saveGlossary(userId, file);
+  return updated;
+}
+
+/** 移除一条加白（误加了就得能撤：白名单静默候选，不能只进不出）。 */
+export function removeContextAllow(userId: string, ids: string[], term: string): number {
+  const needle = foldText(bounded(term, 'contextAllow', 40)).trim();
+  if (!needle) throw new Error('transcript glossary: contextAllow term is required');
+  const wanted = new Set(ids.filter((id) => typeof id === 'string' && !!id));
+  if (wanted.size === 0) return 0;
+  const file = loadGlossary(userId);
+  const now = Date.now();
+  let updated = 0;
+  for (const entry of file.entries) {
+    if (!wanted.has(entry.id)) continue;
+    const list = entry.contextAllow ?? [];
+    const next = list.filter((item) => foldText(item).trim() !== needle);
+    if (next.length === list.length) continue;
+    entry.contextAllow = next;
+    entry.updatedAt = now;
+    updated += 1;
+  }
+  if (updated > 0) saveGlossary(userId, file);
+  return updated;
 }
 
 /**
@@ -502,6 +649,9 @@ export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResu
       : defaultBoundary(wrong, action),
     contextDeny: Array.isArray(input.contextDeny)
       ? input.contextDeny.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
+      : [],
+    contextAllow: Array.isArray(input.contextAllow)
+      ? input.contextAllow.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
       : [],
     scope,
     freq: existingIndex >= 0 ? file.entries[existingIndex].freq : 0,
@@ -588,7 +738,7 @@ export function exportGlossary(
     .filter((e) => opts.includePeople || e.kind !== 'people')
     .map((e) => ({
       wrong: e.wrong, correct: e.correct, action: e.action, kind: e.kind,
-      riskLevel: e.riskLevel, boundary: e.boundary, contextDeny: e.contextDeny,
+      riskLevel: e.riskLevel, boundary: e.boundary, contextDeny: e.contextDeny, contextAllow: e.contextAllow,
       scope: e.scope, ownerScope: e.ownerScope, source: e.source,
     }));
   return { version: GLOSSARY_VERSION, exportedAt: Date.now(), entries };

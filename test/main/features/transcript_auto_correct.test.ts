@@ -38,6 +38,7 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
     riskLevel,
     boundary: over.boundary ?? 'word',
     contextDeny: over.contextDeny ?? [],
+    contextAllow: over.contextAllow ?? [],
     scope: over.scope ?? { docIds: [], scenarioTags: [], global: true },
     freq: over.freq ?? 0,
     source: over.source ?? 'manual',
@@ -48,6 +49,8 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
     createdAt: over.createdAt ?? 1,
     updatedAt: over.updatedAt ?? 1,
     lastVerifiedAt: over.lastVerifiedAt ?? 1,
+    ...(over.ignoredCount ? { ignoredCount: over.ignoredCount } : {}),
+    ...(over.ignoredAt ? { ignoredAt: over.ignoredAt } : {}),
   };
 }
 
@@ -227,6 +230,44 @@ describe('替换与偏移映射', () => {
     const result = applyCorrections(text, scan.candidates as CorrectionCandidate[]);
     expect(result.retention).toBeLessThan(0.55);
     expect(result.overRewriteSuspected).toBe(true);
+  });
+});
+
+describe('语境白名单（加白，方案 §七）', () => {
+  const entry_ = (over: Partial<GlossaryEntry> & { wrong: string; correct: string }) => entry(over);
+
+  it('窗口内出现白名单词 → 整条静默（连待确认都不进），并留 denied 记录', () => {
+    const guarded = entry_({
+      wrong: 'model', correct: 'Moodle',
+      contextAllow: ['产品模型', '数据模型'],
+    });
+    const hit = scanText('这是产品模型 model 的说明', [guarded]);
+    expect(hit.candidates).toHaveLength(0);
+    expect(hit.denied[0].reason).toBe('context_allowed');
+    expect(hit.denied[0].deniedBy).toBe('产品模型');
+  });
+
+  it('白名单优先于黑名单：两者同时命中时按"已加白、静默"处理', () => {
+    const both = entry_({
+      wrong: 'model', correct: 'Moodle',
+      contextDeny: ['模型'], contextAllow: ['产品模型'],
+    });
+    const hit = scanText('产品模型 model', [both]);
+    expect(hit.candidates).toHaveLength(0);
+    expect(hit.denied[0].reason).toBe('context_allowed');
+  });
+
+  it('窗口内没有白名单词 → 照常产出候选', () => {
+    const guarded = entry_({ wrong: 'model', correct: 'Moodle', contextAllow: ['产品模型'] });
+    const hit = scanText('这次 model 说的是工具', [guarded]);
+    expect(hit.candidates).toHaveLength(1);
+    // 面板要能看见已有的加白（否则误加一次只能改 JSON）
+    expect(hit.candidates[0].contextAllow).toEqual(['产品模型']);
+  });
+
+  it('候选带上被忽略次数（>0 = 降权展示）', () => {
+    const ignored = entry_({ wrong: 'coxy', correct: 'Cogseed', ignoredCount: 3 });
+    expect(scanText('coxy', [ignored]).candidates[0].ignoredCount).toBe(3);
   });
 });
 

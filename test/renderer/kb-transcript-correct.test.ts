@@ -32,7 +32,8 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
     noSources: boolean;
   };
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
-  splitByRisk: (rows: Array<{ riskLevel: string }>) => { high: unknown[]; other: unknown[] };
+  splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
+  defaultAcceptedIds: (rows: unknown[]) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
@@ -99,7 +100,7 @@ describe('高风险优先分组', () => {
   });
 
   it('空值与混合输入安全', () => {
-    expect(panel.splitByRisk([])).toEqual({ high: [], other: [] });
+    expect(panel.splitByRisk([])).toEqual({ high: [], other: [], ignored: [] });
   });
 });
 
@@ -383,7 +384,7 @@ describe('面板 DOM 契约', () => {
   const source = readSrc('renderer/modules/kb-transcript-correct.js');
 
   it('折叠动作与分组标题存在，且低风险不渲染风险标签', () => {
-    expect(source).toContain("data-atc-action': 'toggle-other'");
+    expect(source).toContain("'data-atc-action': action || 'toggle-other'");
     expect(source).toContain('kb-atc__group');
     expect(source).toMatch(/if \(row\.riskLevel !== 'low'\)/);
   });

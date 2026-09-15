@@ -32366,6 +32366,68 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   padding: var(--space-2) 0 var(--space-2) var(--space-2);
   border-left: 2px solid var(--line-default);
 }
+/* 接受范围（方案 §七）：一行三个小按钮，选中态用 primary 表达"当前状态"。 */
+.kb-atc__scope {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-atc__scope-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+.kb-atc__row-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex: 1 0 100%;
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line-default);
+}
+.kb-atc__row-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 0 100%;
+  padding-top: var(--space-1);
+}
+.kb-atc__allow-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-1);
+}
+.kb-atc__allow-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-2);
+  color: var(--text-muted);
+}
+.kb-atc__allow-remove {
+  color: var(--text-faint);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.kb-atc__allow-remove:hover {
+  color: var(--text-body);
+}
+.kb-atc__denied {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  padding: 2px 0;
+}
+.kb-atc__group[data-tone="ignored"] {
+  color: var(--text-muted);
+}
+.kb-atc__group[data-tone="denied"] {
+  color: var(--text-faint);
+}
 .kb-atc__add {
   border-top: 1px solid var(--line-default);
   padding-top: var(--space-2);
