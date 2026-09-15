@@ -30388,6 +30388,34 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-mm-msg-head {
   font-size: var(--font-size-2); font-weight: 600; color: var(--kb-text2); margin-bottom: 8px;
 }
+/* ─── 测验卡（kb.quiz 产物）：与脑图卡同区同风格 ─────────────────────── */
+.kb-quiz-msg { max-width: 620px; }
+.kb-quiz-canvas {
+  background: var(--color-white); border: 1px solid var(--kb-border);
+  border-radius: var(--radius-2); padding: 12px;
+}
+.kb-quiz-meta { font-size: var(--font-size-2); color: var(--kb-text3); margin-bottom: 10px; }
+.kb-quiz-list { display: flex; flex-direction: column; gap: 14px; }
+.kb-quiz-item { border-top: 1px solid var(--kb-border); padding-top: 12px; }
+.kb-quiz-item:first-child { border-top: 0; padding-top: 0; }
+.kb-quiz-q-head { font-size: var(--font-size-2); color: var(--kb-text3); margin-bottom: 4px; }
+.kb-quiz-q-text { font-size: var(--font-size-3); color: var(--kb-text); line-height: 1.6; margin-bottom: 8px; }
+.kb-quiz-opts { display: flex; flex-direction: column; gap: 6px; }
+.kb-quiz-opt {
+  text-align: left; padding: 7px 10px; border: 1px solid var(--kb-border);
+  border-radius: var(--radius-2); background: var(--kb-panel); color: var(--kb-text);
+  font-size: var(--font-size-2); cursor: pointer;
+}
+.kb-quiz-opt:hover:not(:disabled) { background: var(--kb-hover); border-color: var(--kb-blue-line); }
+.kb-quiz-opt:disabled { cursor: default; }
+.kb-quiz-opt.is-right { border-color: var(--success); color: var(--success); background: var(--success-soft); }
+.kb-quiz-opt.is-wrong { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.kb-quiz-reveal {
+  padding: 6px 10px; border: 1px solid var(--kb-border); border-radius: var(--radius-2);
+  background: var(--kb-panel); color: var(--kb-accent); font-size: var(--font-size-2); cursor: pointer;
+}
+.kb-quiz-reveal:hover { background: var(--kb-hover); }
+.kb-quiz-explain { margin-top: 8px; font-size: var(--font-size-2); color: var(--kb-text2); line-height: 1.6; }
 .kb-wb-mm { margin-top: 14px; border: 1px solid var(--kb-border); border-radius: var(--radius-2); overflow: hidden; }
 .kb-wb-mm-head {
   display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px;
