@@ -418,3 +418,96 @@ export function mapOffset(offsetMap: OffsetSegment[], inputOffset: number): numb
   }
   return null;
 }
+
+// ── 未决项（待核）：疑似专名探测 + 可见标记 ───────────────────────────────
+//
+// 方案 §4.3 要求：无法确定该不该纠的地方**不猜**，而是标出来给人看
+// （`OpenIssue` + `【转写存疑】` 写回清理版）。这里只做两件纯文本事：
+//   1. `detectSuspectEntities`：**保守**地找出"疑似专名但词表/记忆分组都没有"的
+//      拉丁串。保守的含义是"宁漏勿噪"——只认长度 ≥4 且（含内部大写 或 全大写）
+//      的串：`KSTAR`/`NoteBookLM` 会被认出，`Hello`/`OK`/`API` 不会。
+//      真正的语义级"未知实体"（`roadmap` 可能指 Raymond）留给 P2 的 LLM 候选，
+//      本引擎不假装能做。
+//   2. `insertIssueMarkers`：把标记插进清理版，并返回插入后的新 span
+//      （从后往前插，避免前面的插入让后面的偏移失效）。
+
+/** 写回清理版的可见标记（方案 §4.3 固定文案）。 */
+export const ISSUE_MARKER = '【转写存疑】';
+
+export interface SuspectEntity {
+  span: Span;
+  text: string;
+  reason: 'unknown_entity';
+}
+
+/** 疑似专名的词形判据：含内部大写的拉丁串，或 4 个字母以上的全大写串。 */
+const SUSPECT_RE = /[A-Za-z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]+)+|[A-Z]{4,}/g;
+
+/**
+ * 找"疑似专名"。`known` = 词表（wrong/correct）与记忆分组里的规范名，
+ * 折叠后比对：已知的词不会进待核（它不是"未知实体"）。
+ */
+export function detectSuspectEntities(
+  text: string,
+  known: Iterable<string>,
+  limit = 200,
+): SuspectEntity[] {
+  const out: SuspectEntity[] = [];
+  const foldedKnown = new Set<string>();
+  for (const item of known) {
+    const folded = foldText(String(item ?? '')).trim();
+    if (folded) foldedKnown.add(folded);
+  }
+  const protectedRanges = computeProtectedRanges(text);
+  const seen = new Set<string>();
+  for (const match of text.matchAll(SUSPECT_RE)) {
+    const raw = match[0];
+    if (match.index === undefined) continue;
+    // 长度闸门：`API`/`PPT` 这类 3 字母缩写常见到没有信息量，进了只会制造噪声
+    if (raw.length < 4) continue;
+    const span: Span = { start: match.index, end: match.index + raw.length };
+    const folded = foldText(raw).trim();
+    if (!folded || foldedKnown.has(folded)) continue;
+    if (isProtected(protectedRanges, span)) continue;
+    const dedupeKey = `${folded}|${span.start}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({ span, text: raw, reason: 'unknown_entity' });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
+ * 把 `ISSUE_MARKER` 插到每个 span 之前（同一位置只插一次），返回新文本与**插入后**
+ * 的 span（含标记本身）。从后往前插入，保证前面的偏移不受影响。
+ */
+export function insertIssueMarkers(
+  text: string,
+  spans: Span[],
+): { text: string; spans: Span[]; byStart: Map<number, Span> } {
+  const starts = [...new Set(
+    (spans ?? [])
+      .map((s) => Math.max(0, Math.min(Number(s?.start) || 0, text.length)))
+      .filter((n) => Number.isFinite(n)),
+  )].sort((a, b) => a - b);
+  if (starts.length === 0) return { text, spans: [], byStart: new Map() };
+
+  const markerLen = ISSUE_MARKER.length;
+  let out = text;
+  const shifted: Span[] = [];
+  // 从后往前：插入点之后的旧内容整体后移，而更靠前的插入点不受已插入内容影响。
+  for (let i = starts.length - 1; i >= 0; i -= 1) {
+    const start = starts[i];
+    out = out.slice(0, start) + ISSUE_MARKER + out.slice(start);
+  }
+  // 第 i 个标记前面还插了 i 个标记（0..i-1），所以它的最终起点是 p_i + i*markerLen。
+  const byStart = new Map<number, Span>();
+  for (let i = 0; i < starts.length; i += 1) {
+    const start = starts[i] + markerLen * i;
+    const span = { start, end: start + markerLen };
+    shifted.push(span);
+    byStart.set(starts[i], span);
+  }
+  return { text: out, spans: shifted, byStart };
+}

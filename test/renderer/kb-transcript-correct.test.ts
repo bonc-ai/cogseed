@@ -19,6 +19,8 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
   conceptKeyOfCorrect: (t: unknown) => string;
   groupRowsByConcept: (rows: unknown[]) => Array<{ conceptKey: string; display: string; spans: number; rows: number }>;
+  flaggedSummary: (flagged: unknown) => { count: number; distinct: number; byReason: Record<string, number> };
+  mergeFlagged: (existing: unknown[], incoming: unknown[]) => unknown[];
   syncSummary: (sync: unknown) => {
     groupCount: number;
     conceptGroups: Array<{ display: string; count: number }>;
@@ -223,6 +225,32 @@ describe('本体同步结果摘要', () => {
   });
 });
 
+describe('待核（未决项）', () => {
+  it('摘要按理由分档、原词去重计数', () => {
+    const stats = panel.flaggedSummary([
+      { span: { start: 1, end: 2 }, text: 'KSTAR', reason: 'unknown_entity' },
+      { span: { start: 9, end: 14 }, text: 'KSTAR', reason: 'ambiguous_name' },
+    ]);
+    expect(stats.count).toBe(2);
+    expect(stats.distinct).toBe(1);
+    expect(stats.byReason.unknown_entity).toBe(1);
+    expect(stats.byReason.ambiguous_name).toBe(1);
+  });
+
+  it('空输入安全（未扫描时不渲染任何待核）', () => {
+    expect(panel.flaggedSummary(null)).toEqual({ count: 0, distinct: 0, byReason: {} });
+  });
+
+  it('同位置同理由重复标记被合并：清理版不能插两个标记', () => {
+    const existing = [{ span: { start: 3, end: 7 }, text: 'coxy', reason: 'ambiguous_name' }];
+    const merged = panel.mergeFlagged(existing, [
+      { span: { start: 3, end: 7 }, text: 'coxy', reason: 'ambiguous_name' },
+      { span: { start: 20, end: 24 }, text: 'coxy', reason: 'ambiguous_name' },
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+});
+
 describe('locale 覆盖', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [
@@ -242,6 +270,12 @@ describe('locale 覆盖', () => {
     'sync_align_use', 'sync_aligned', 'sync_align_failed', 'sync_missing_row',
     'sync_seed', 'sync_cancel', 'sync_seed_add', 'sync_seed_need_wrong', 'sync_seed_added',
     'sync_seed_skipped', 'sync_seed_failed', 'summary_concepts', 'sync_chips_more',
+    // 待核 / 未决项（方案 §4.3）
+    'issue_section', 'issue_section_count', 'issue_hint', 'issue_find_suspects', 'issue_finding',
+    'issue_suspects_found', 'issue_suspects_none', 'issue_suspects_failed', 'issue_suspect_row',
+    'issue_mark', 'issue_unmark', 'issue_badge', 'issue_cancel', 'issue_at', 'issue_empty',
+    'issue_list_title', 'issue_summary', 'issue_reason_unknown_entity', 'issue_reason_ambiguous_name',
+    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable',
   ];
 
   for (const lang of locales) {
@@ -271,6 +305,14 @@ describe('源码契约', () => {
     // 面板不得自己拼 candidate_id / 直接写 memory：反哺只能经主进程 bridge
     expect(source).not.toContain('candidate_id');
     expect(source).not.toContain('memory.write');
+  });
+
+  it('未决项走主进程：疑似专名只查不改，待核随 apply 一起提交', () => {
+    expect(source).toContain("'transcript.correct.suspects'");
+    expect(source).toMatch(/issues: state\.flagged/);
+    // 清理版文本只来自主进程：面板不得自己往文本里拼标记
+    expect(source).not.toMatch(/cleanedText\s*=\s*[^;]*【转写存疑】/);
+    expect(source).toMatch(/state\.cleanedText = String\(result\?\.result\?\.text/);
   });
 
   it('uiField 走契约形状 {id,label,control}：每个调用都带 id 与 control', () => {

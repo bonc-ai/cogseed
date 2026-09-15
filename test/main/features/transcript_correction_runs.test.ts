@@ -25,7 +25,13 @@ import {
   revertRun,
   sha1,
 } from '../../../src/main/features/transcript_correction_runs';
-import { applyCorrections, scanText } from '../../../src/main/features/transcript_auto_correct';
+import {
+  applyCorrections,
+  insertIssueMarkers,
+  ISSUE_MARKER,
+  scanText,
+  type CorrectionCandidate,
+} from '../../../src/main/features/transcript_auto_correct';
 import type { GlossaryEntry } from '../../../src/main/features/transcript_glossary';
 import { userTranscriptRunDir } from '../../../src/main/paths';
 
@@ -128,6 +134,26 @@ describe('列表与隔离', () => {
 });
 
 describe('回滚', () => {
+  it('有未决项时必须标 draft，且标记留在清理版里（方案 §8.1-7）', () => {
+    const text = 'coxy 与 KSTAR 都要核';
+    const result = applyCorrections(text, [
+      { entryRef: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', confidence: 1, riskLevel: 'low', context: '', span: { start: 0, end: 4 } },
+    ] as CorrectionCandidate[], { acceptedIds: ['g_coxy'] });
+    const marked = insertIssueMarkers(result.text, [{ start: 7, end: 12 }]);
+    const run = createRun(uid, {
+      docId: 'doc-issue',
+      sourceText: text,
+      result: { ...result, text: marked.text, charsOut: marked.text.length },
+      issues: [{ span: marked.spans[0], text: 'KSTAR', reason: 'unknown_entity' }],
+    });
+    expect(run.status).toBe('draft');
+    expect(readRunText(uid, run.runId, 'after')).toContain(ISSUE_MARKER);
+    const issues = listIssues(uid, { runId: run.runId });
+    expect(issues).toHaveLength(1);
+    expect(issues[0].marker).toBe(ISSUE_MARKER);
+    expect(issues[0].status).toBe('open');
+  });
+
   it('回滚返回原文且 sha1 校验通过，状态置 reverted', () => {
     const text = '用 coxy 上课';
     const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });

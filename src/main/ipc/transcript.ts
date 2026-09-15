@@ -86,6 +86,66 @@ function issueInputs(value: unknown): Array<{
   });
 }
 
+/**
+ * 把"待核"标记真正写进清理版，并返回插入后的 span。
+ * 输入 span 必须是**清理版**坐标（调用方先用 mapOffset 从原文坐标换算过来）；
+ * 映射不到的（落在被删除区域且无对应位置）直接丢弃，不假装标上了。
+ */
+function withIssueMarkers(
+  applied: transcriptAutoCorrect.ApplyResult,
+  issues: Array<{
+    span: { start: number; end: number };
+    text: string;
+    reason: transcriptRuns.IssueReason;
+    suggestion?: string;
+  }>,
+): {
+  result: transcriptAutoCorrect.ApplyResult;
+  issues: Array<{
+    span: { start: number; end: number };
+    text: string;
+    reason: transcriptRuns.IssueReason;
+    suggestion?: string;
+  }>;
+} {
+  if (issues.length === 0) return { result: applied, issues: [] };
+  const resolved = issues
+    .map((issue) => {
+      const at = transcriptAutoCorrect.mapOffset(applied.offsetMap, issue.span.start);
+      if (at === null) return null;
+      const start = Math.max(0, Math.min(at, applied.text.length));
+      const end = Math.max(start, Math.min(
+        transcriptAutoCorrect.mapOffset(applied.offsetMap, issue.span.end) ?? start + 1,
+        applied.text.length,
+      ));
+      return { ...issue, span: { start, end } };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  if (resolved.length === 0) return { result: applied, issues: [] };
+
+  const marked = transcriptAutoCorrect.insertIssueMarkers(applied.text, resolved.map((i) => i.span));
+  // byStart 以**输入**插入点为键，同一位置多条待核共用同一个标记 span
+  const withSpans = resolved
+    .map((issue) => {
+      const span = marked.byStart.get(issue.span.start);
+      return span ? { ...issue, span } : null;
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const charsOut = marked.text.length;
+  const charsIn = applied.charsIn;
+  const retention = charsIn > 0 ? charsOut / charsIn : 1;
+  return {
+    result: {
+      ...applied,
+      text: marked.text,
+      charsOut,
+      retention,
+      overRewriteSuspected: retention < transcriptAutoCorrect.OVER_REWRITE_THRESHOLD,
+    },
+    issues: withSpans,
+  };
+}
+
 export const invokeHandlers = {
   // ── 词表 ──────────────────────────────────────────────────────────────
   'transcript.glossary.list': async (payload: Payload, ctx: IpcContext) => ({
@@ -172,6 +232,22 @@ export const invokeHandlers = {
   },
 
   /**
+   * 疑似专名探测（只读）：找出"词表与记忆分组里都没有"的混合大小写/全大写拉丁串。
+   * 保守设计（宁漏勿噪）：不产出任何替换，只给"标待核"当输入。
+   */
+  'transcript.correct.suspects': async (payload: Payload, ctx: IpcContext) => {
+    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
+    const known = new Set<string>();
+    for (const entry of transcriptGlossary.listEntries(ctx.userId, { status: 'active' })) {
+      known.add(entry.wrong);
+      known.add(entry.correct);
+    }
+    for (const name of transcriptOntology.collectCanonicalNames(ctx.userId)) known.add(name.name);
+    const limit = typeof payload?.limit === 'number' ? Math.max(1, Math.min(500, Math.floor(payload.limit))) : 200;
+    return { suspects: transcriptAutoCorrect.detectSuspectEntities(text, known, limit) };
+  },
+
+  /**
    * 替换入口。注意三件事：
    *   1. `acceptedIds` 缺省时只接受 low/medium 风险候选；high 一律进 pending。
    *   2. **不写回任何文档**：产出清理版 + run 快照，调用方决定落地位置。
@@ -188,10 +264,13 @@ export const invokeHandlers = {
       includeDelete: payload?.includeDelete === true,
     });
     const acceptedIds = stringList(payload?.acceptedIds, 1000);
-    const result = transcriptAutoCorrect.applyCorrections(text, scan.candidates, {
+    const applied0 = transcriptAutoCorrect.applyCorrections(text, scan.candidates, {
       ...(acceptedIds ? { acceptedIds } : {}),
       ...(riskLevels(payload?.acceptRiskLevels) ? { acceptRiskLevels: riskLevels(payload?.acceptRiskLevels)! } : {}),
     });
+    // 未决项（方案 §4.3/§8.1-7）：用户标的 span 在**原文**坐标系，先按偏移映射
+    // 落到清理版，再插「【转写存疑】」。有未决项时 createRun 会把产物标 draft。
+    const { result, issues } = withIssueMarkers(applied0, issueInputs(payload?.issues));
     const params = {
       glossaryVersion: 2,
       ...(optionalText(payload?.fillerRulePack, 'fillerRulePack', 40)
@@ -203,13 +282,13 @@ export const invokeHandlers = {
     const run = transcriptRuns.createRun(ctx.userId, {
       docId,
       sourceText: text,
+      ...(issues.length ? { issues } : {}),
       ...(optionalText(payload?.sourcePath, 'sourcePath', 500)
         ? { sourcePath: optionalText(payload?.sourcePath, 'sourcePath', 500)! }
         : {}),
       result,
       params,
       mergedBlocks: typeof payload?.mergedBlocks === 'number' ? Math.max(0, Math.floor(payload.mergedBlocks)) : 0,
-      issues: issueInputs(payload?.issues),
     });
     transcriptGlossary.recordReplacement(
       ctx.userId,

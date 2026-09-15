@@ -152,6 +152,32 @@
     };
   }
 
+  /** 待核项的展示摘要（纯函数）：条数、去重后的原词数、按理由分档。 */
+  function flaggedSummary(flagged) {
+    const list = Array.isArray(flagged) ? flagged : [];
+    const byReason = {};
+    const texts = new Set();
+    for (const item of list) {
+      const reason = String(item?.reason || 'unknown_entity');
+      byReason[reason] = (byReason[reason] || 0) + 1;
+      if (item?.text) texts.add(String(item.text));
+    }
+    return { count: list.length, distinct: texts.size, byReason };
+  }
+
+  /** 同位置重复标记要去重：一处只留一条待核（否则清理版会插两个标记）。 */
+  function mergeFlagged(existing, incoming) {
+    const seen = new Set((existing || []).map((i) => `${i.span?.start}|${i.span?.end}|${i.reason}`));
+    const out = [...(existing || [])];
+    for (const item of incoming || []) {
+      const key = `${item?.span?.start}|${item?.span?.end}|${item?.reason}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
+  }
+
   /** apply 结果的展示摘要。 */
   function applySummary(result) {
     const retention = Number.isFinite(Number(result?.retention)) ? Number(result.retention) : 1;
@@ -227,6 +253,10 @@
       '  <div class="kb-atc__summary" data-atc-summary hidden></div>',
       '  <div class="kb-atc__body" data-atc-body></div>',
       '  <div class="kb-atc__actions" data-atc-actions></div>',
+      '  <details class="kb-atc__issues" data-atc-issues>',
+      '    <summary data-atc-issues-summary></summary>',
+      '    <div class="kb-atc__issues-body" data-atc-issues-body></div>',
+      '  </details>',
       '  <details class="kb-atc__sync" data-atc-sync>',
       '    <summary data-atc-sync-summary></summary>',
       '    <div class="kb-atc__sync-body" data-atc-sync-body></div>',
@@ -257,6 +287,11 @@
       syncBusy: false,
       syncError: '',
       seedOpen: '',
+      // 未决项（待核，方案 §4.3）：span 一律是**原文**坐标，apply 时由主进程映射
+      flagged: [],
+      suspects: [],
+      suspectBusy: false,
+      suspectError: '',
     };
 
     container.classList.add('kb-atc-host');
@@ -345,6 +380,17 @@
         main.appendChild(badge);
       }
 
+      const flaggedSpans = (row.spans || []).filter((span) => state.flagged.some(
+        (issue) => issue.span?.start === span.start && issue.span?.end === span.end,
+      ));
+      if (flaggedSpans.length) {
+        el.classList.add('is-flagged');
+        const badge = document.createElement('span');
+        badge.className = 'kb-atc__badge kb-atc__badge--issue';
+        badge.textContent = t('kb.transcriptCorrect.issue_badge', '待核');
+        main.appendChild(badge);
+      }
+
       const count = document.createElement('span');
       count.className = 'kb-atc__count';
       count.textContent = `×${row.count}`;
@@ -373,6 +419,15 @@
           className: 'kb-atc__btn',
           disabled: state.busy || isAccepted,
           attrs: { 'data-atc-ignore': row.entryRef },
+        }),
+        button({
+          label: flaggedSpans.length
+            ? t('kb.transcriptCorrect.issue_unmark', '取消待核')
+            : t('kb.transcriptCorrect.issue_mark', '标待核'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-flag': row.entryRef },
         }),
       ].join('');
 
@@ -474,6 +529,8 @@
         parts.push(t('kb.transcriptCorrect.summary_concepts', '{count} 个术语概念', { count: concepts.length }));
       }
       if (stats.pendingHigh > 0) parts.push(t('kb.transcriptCorrect.pending_high', '{count} 条高危待确认', { count: stats.pendingHigh }));
+      const flagged = flaggedSummary(state.flagged);
+      if (flagged.count > 0) parts.push(t('kb.transcriptCorrect.issue_summary', '待核 {count} 处', { count: flagged.count }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
     }
@@ -534,6 +591,138 @@
         }));
       }
       host.innerHTML = buttons.join('');
+    }
+
+    /** 行上的"标待核"徽标：不猜的意思就是先标出来给人看。 */
+    function issueReasonLabel(reason) {
+      const map = {
+        unknown_entity: t('kb.transcriptCorrect.issue_reason_unknown_entity', '未知实体'),
+        ambiguous_name: t('kb.transcriptCorrect.issue_reason_ambiguous_name', '名称存疑'),
+        mixed_speech: t('kb.transcriptCorrect.issue_reason_mixed_speech', '中英混杂'),
+        asr_unrecoverable: t('kb.transcriptCorrect.issue_reason_asr_unrecoverable', '转写不可辨'),
+      };
+      return map[reason] || map.unknown_entity;
+    }
+
+    /**
+     * 待核块（方案 §4.3 / §8.1-7）：把"不确定该不该纠"的地方标出来，
+     * 生成清理版时以「【转写存疑】」写进正文，产物标 draft。
+     * 视觉口径：待核是"需要人看一眼"的状态 → 只在这里用一次强调色。
+     */
+    function renderIssues() {
+      const body = q('[data-atc-issues-body]');
+      if (!body) return;
+      const stats = flaggedSummary(state.flagged);
+      const summary = q('[data-atc-issues-summary]');
+      if (summary) {
+        const title = t('kb.transcriptCorrect.issue_section', '待核');
+        summary.textContent = stats.count
+          ? t('kb.transcriptCorrect.issue_section_count', '{title}（{count} 处）', { title, count: stats.count })
+          : title;
+      }
+
+      body.textContent = '';
+      const hint = document.createElement('div');
+      hint.className = 'kb-atc__issues-hint';
+      hint.textContent = t(
+        'kb.transcriptCorrect.issue_hint',
+        '拿不准的地方不要猜：标出来会以「【转写存疑】」写进清理版，有未决项时产物标为草稿。',
+      );
+      body.appendChild(hint);
+
+      const actions = document.createElement('div');
+      actions.className = 'kb-atc__sync-actions';
+      const buttons = [button({
+        label: state.suspectBusy
+          ? t('kb.transcriptCorrect.issue_finding', '正在查找…')
+          : t('kb.transcriptCorrect.issue_find_suspects', '查找疑似专名'),
+        icon: 'search',
+        role: 'ghost',
+        size: 'sm',
+        loading: state.suspectBusy,
+        disabled: state.suspectBusy || !state.scanned,
+        attrs: { 'data-atc-action': 'find-suspects' },
+      })];
+      if (state.flagged.length) {
+        buttons.push(button({
+          label: t('kb.transcriptCorrect.issue_clear', '清空待核'),
+          role: 'ghost',
+          size: 'sm',
+          attrs: { 'data-atc-action': 'clear-issues' },
+        }));
+      }
+      actions.innerHTML = buttons.join('');
+      body.appendChild(actions);
+
+      if (state.suspectError) {
+        const note = document.createElement('div');
+        note.className = 'kb-atc__sync-note';
+        note.dataset.tone = 'warning';
+        note.textContent = state.suspectError;
+        body.appendChild(note);
+      } else if (state.suspects.length) {
+        const note = document.createElement('div');
+        note.className = 'kb-atc__sync-note';
+        note.textContent = t('kb.transcriptCorrect.issue_suspects_found', '找到 {count} 处疑似专名（词表与记忆分组里都没有）：', { count: state.suspects.length });
+        body.appendChild(note);
+      }
+
+      for (const suspect of state.suspects.slice(0, 20)) {
+        const row = document.createElement('div');
+        row.className = 'kb-atc__sync-row';
+        const main = document.createElement('div');
+        main.className = 'kb-atc__sync-row-main';
+        const label = document.createElement('span');
+        label.className = 'kb-atc__sync-row-label';
+        label.textContent = t('kb.transcriptCorrect.issue_suspect_row', '{text}（第 {offset} 字符处）', {
+          text: suspect.text,
+          offset: suspect.span?.start ?? 0,
+        });
+        main.appendChild(label);
+        const acts = document.createElement('div');
+        acts.className = 'kb-atc__sync-row-actions';
+        acts.innerHTML = button({
+          label: t('kb.transcriptCorrect.issue_mark', '标待核'),
+          role: 'ghost',
+          size: 'sm',
+          attrs: { 'data-atc-flag-suspect': suspect.text },
+        });
+        row.append(main, acts);
+        body.appendChild(row);
+      }
+
+      if (!state.flagged.length) {
+        const empty = document.createElement('div');
+        empty.className = 'kb-atc__sync-note';
+        empty.textContent = t('kb.transcriptCorrect.issue_empty', '还没有标出的待核项。');
+        body.appendChild(empty);
+        return;
+      }
+
+      const list = document.createElement('div');
+      list.className = 'kb-atc__issues-list';
+      list.textContent = t('kb.transcriptCorrect.issue_list_title', '已标 {count} 处：', { count: stats.count });
+      body.appendChild(list);
+      state.flagged.slice(0, 50).forEach((issue, index) => {
+        const row = document.createElement('div');
+        row.className = 'kb-atc__sync-row';
+        const main = document.createElement('div');
+        main.className = 'kb-atc__sync-row-main';
+        const label = document.createElement('span');
+        label.className = 'kb-atc__sync-row-label';
+        label.textContent = `「${issue.text}」· ${issueReasonLabel(issue.reason)} · ${t('kb.transcriptCorrect.issue_at', '第 {offset} 字符处', { offset: issue.span?.start ?? 0 })}`;
+        main.appendChild(label);
+        const acts = document.createElement('div');
+        acts.className = 'kb-atc__sync-row-actions';
+        acts.innerHTML = button({
+          label: t('kb.transcriptCorrect.issue_cancel', '取消'),
+          role: 'ghost',
+          size: 'sm',
+          attrs: { 'data-atc-unflag': issue.span?.start + ':' + issue.span?.end + ':' + issue.reason },
+        });
+        row.append(main, acts);
+        body.appendChild(row);
+      });
     }
 
     /**
@@ -775,7 +964,7 @@
       // 逐段尝试渲染：某个共享原语抛错时，不得连带把扫描/替换流程卡死
       // （真实事故：uiField 缺 id 抛错 → render() 在 runScan 的 try 之外抛出，
       //  扫描永远停在"正在扫描…"）。
-      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderActions, renderSync, renderAddForm]) {
+      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderActions, renderIssues, renderSync, renderAddForm]) {
         try {
           step();
         } catch (error) {
@@ -804,6 +993,10 @@
         state.apply = null;
         state.cleanedText = '';
         state.collapsedOther = false;
+        // 重扫后旧的 span/坐标全部失效，待核与疑似清单必须一起清掉
+        state.flagged = [];
+        state.suspects = [];
+        state.suspectError = '';
         const stats = summarizeRows(state.rows, state.accepted);
         setStatus(stats.total === 0
           ? ''
@@ -830,6 +1023,8 @@
           text: ctx.text,
           docId: ctx.docId,
           acceptedIds: [...state.accepted],
+          // 待核 span 是原文坐标，主进程按偏移映射后插「【转写存疑】」
+          ...(state.flagged.length ? { issues: state.flagged } : {}),
         });
         state.apply = result?.result || null;
         state.runId = String(result?.run?.runId || '');
@@ -994,6 +1189,71 @@
       }
     }
 
+    /** 标/取消一行候选的全部出现处（一处也不猜，全标出来）。 */
+    function toggleRowFlag(entryRef) {
+      const row = state.rows.find((item) => item.entryRef === entryRef);
+      if (!row) return;
+      const spans = row.spans || [];
+      const already = spans.length > 0 && spans.every((span) => state.flagged.some(
+        (issue) => issue.span?.start === span.start && issue.span?.end === span.end,
+      ));
+      if (already) {
+        state.flagged = state.flagged.filter((issue) => !spans.some(
+          (span) => issue.span?.start === span.start && issue.span?.end === span.end,
+        ));
+      } else {
+        state.flagged = mergeFlagged(state.flagged, spans.map((span) => ({
+          span: { start: span.start, end: span.end },
+          text: row.wrong,
+          reason: 'ambiguous_name',
+        })));
+      }
+      render();
+    }
+
+    /** 把一个疑似专名标成待核（未知实体）。 */
+    function flagSuspect(text, span) {
+      state.flagged = mergeFlagged(state.flagged, [{
+        span: { start: span?.start ?? 0, end: span?.end ?? 0 },
+        text,
+        reason: 'unknown_entity',
+      }]);
+      state.suspects = state.suspects.filter((item) => item.text !== text);
+      render();
+    }
+
+    function unflag(key) {
+      const [start, end, reason] = String(key || '').split(':');
+      state.flagged = state.flagged.filter((issue) => !(
+        String(issue.span?.start) === start && String(issue.span?.end) === end && issue.reason === reason
+      ));
+      render();
+    }
+
+    /** 查找疑似专名：词表与记忆分组里都没有的英文专名（只提示，不自动标）。 */
+    async function runDetectSuspects() {
+      if (state.suspectBusy || !state.scanned) return;
+      state.suspectBusy = true;
+      state.suspectError = '';
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.correct.suspects', { text: ctx.text, limit: 200 });
+        state.suspects = Array.isArray(result?.suspects) ? result.suspects : [];
+        if (!state.suspects.length) {
+          setStatus(t('kb.transcriptCorrect.issue_suspects_none', '没有发现疑似专名。'), '');
+        } else {
+          setStatus(t('kb.transcriptCorrect.issue_suspects_found', '找到 {count} 处疑似专名（词表与记忆分组里都没有）：', { count: state.suspects.length }), '');
+        }
+      } catch (error) {
+        log?.warn('suspect detection failed', { error: error?.message || String(error) });
+        state.suspectError = t('kb.transcriptCorrect.issue_suspects_failed', '查找失败，请稍后重试。');
+        setStatus(state.suspectError, 'warning');
+      } finally {
+        state.suspectBusy = false;
+        render();
+      }
+    }
+
     async function runAddEntry() {
       const wrongInput = container.querySelector('#atc-wrong');
       const correctInput = container.querySelector('#atc-correct');
@@ -1050,6 +1310,23 @@
         render();
         return;
       }
+      const flag = event.target.closest('[data-atc-flag]');
+      if (flag) {
+        toggleRowFlag(flag.getAttribute('data-atc-flag'));
+        return;
+      }
+      const flagSuspectBtn = event.target.closest('[data-atc-flag-suspect]');
+      if (flagSuspectBtn) {
+        const text = flagSuspectBtn.getAttribute('data-atc-flag-suspect');
+        const found = state.suspects.find((item) => item.text === text);
+        if (found) flagSuspect(text, found.span);
+        return;
+      }
+      const unflagBtn = event.target.closest('[data-atc-unflag]');
+      if (unflagBtn) {
+        unflag(unflagBtn.getAttribute('data-atc-unflag'));
+        return;
+      }
       const align = event.target.closest('[data-atc-align]');
       if (align) {
         void runApplyAlignment(align.getAttribute('data-atc-align'), align.getAttribute('data-atc-suggest'));
@@ -1070,6 +1347,8 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'sync-ontology') { void runSyncOntology(); return; }
+      if (kind === 'find-suspects') { void runDetectSuspects(); return; }
+      if (kind === 'clear-issues') { state.flagged = []; render(); return; }
       if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }
       if (kind === 'scan') void runScan();
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
@@ -1108,6 +1387,8 @@
     __test: {
       groupCandidates,
       groupRowsByConcept,
+      flaggedSummary,
+      mergeFlagged,
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
@@ -1125,6 +1406,8 @@
     module.exports = {
       groupCandidates,
       groupRowsByConcept,
+      flaggedSummary,
+      mergeFlagged,
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
