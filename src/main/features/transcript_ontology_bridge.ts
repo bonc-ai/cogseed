@@ -12,8 +12,17 @@
  *             （`personal_ontology_candidates.addCandidate`），用 candidate_id
  *             作幂等键；候选未确认前不写任何记忆/别名。
  *
+ * 来源范围（说清楚，别让人以为读的是"全部记忆"）：
+ *   - 本体：`<uid>/cloud/contexts/.personal_ontology_groups/<groupId>.md` 的**字段值**
+ *     （界面上叫「记忆分组」，可在记忆页新建；隐藏目录，不能依赖 KB 索引）；
+ *   - 记忆：`<uid>/cloud/memory/{USER,MEMORY}.md`，即用户/共享两档长期记忆；
+ *   - **不读** `cloud/memory/agents/<agent>/MEMORY.md`（agent 档）与角色模板画像：
+ *     那两处是散文，整条折叠后永远匹配不上概念名，硬接只会造噪；等 P2 用 LLM
+ *     抽术语时一并处理。
+ *
  * 现实约束（2026-09-15 实测）：本机 dev profile 的 `.personal_ontology_groups/`
- * 与 `cloud/memory/{USER,MEMORY}.md` **都不存在**。因此：
+ * 台账为 `共 0 个分组`、`cloud/memory/MEMORY.md` 为 0 条（`USER.md` 不存在），
+ * app 自己的 `personalOntology.groups.list` 也返回 `[]`。因此：
  *   - 本模块对空来源必须"什么都不做 + 如实返回 0"，不造占位数据；
  *   - 概念聚合**不依赖本体**：以 `correct` 的折叠值为概念键，今天就能把
  *     28 条散词条收成若干概念组（有本体时再补 `ontologyRef`）。
@@ -173,7 +182,7 @@ export function suggestMissing(entries: GlossaryEntry[], names: CanonicalName[])
       kind: 'missing_entry',
       correct: canonical.name,
       source: canonical.source,
-      reason: '本体里有这个概念',
+      reason: '记忆分组里有这个概念',
     });
   }
   return out;
