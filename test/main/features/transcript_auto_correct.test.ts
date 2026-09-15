@@ -14,6 +14,9 @@ import { describe, it, expect } from 'vitest';
 import {
   applyCorrections,
   computeProtectedRanges,
+  detectSuspectEntities,
+  insertIssueMarkers,
+  ISSUE_MARKER,
   mapOffset,
   scanText,
   verifyEditsRebuild,
@@ -35,6 +38,7 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
     riskLevel,
     boundary: over.boundary ?? 'word',
     contextDeny: over.contextDeny ?? [],
+    contextAllow: over.contextAllow ?? [],
     scope: over.scope ?? { docIds: [], scenarioTags: [], global: true },
     freq: over.freq ?? 0,
     source: over.source ?? 'manual',
@@ -45,6 +49,8 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
     createdAt: over.createdAt ?? 1,
     updatedAt: over.updatedAt ?? 1,
     lastVerifiedAt: over.lastVerifiedAt ?? 1,
+    ...(over.ignoredCount ? { ignoredCount: over.ignoredCount } : {}),
+    ...(over.ignoredAt ? { ignoredAt: over.ignoredAt } : {}),
   };
 }
 
@@ -224,5 +230,102 @@ describe('替换与偏移映射', () => {
     const result = applyCorrections(text, scan.candidates as CorrectionCandidate[]);
     expect(result.retention).toBeLessThan(0.55);
     expect(result.overRewriteSuspected).toBe(true);
+  });
+});
+
+describe('语境白名单（加白，方案 §七）', () => {
+  const entry_ = (over: Partial<GlossaryEntry> & { wrong: string; correct: string }) => entry(over);
+
+  it('窗口内出现白名单词 → 整条静默（连待确认都不进），并留 denied 记录', () => {
+    const guarded = entry_({
+      wrong: 'model', correct: 'Moodle',
+      contextAllow: ['产品模型', '数据模型'],
+    });
+    const hit = scanText('这是产品模型 model 的说明', [guarded]);
+    expect(hit.candidates).toHaveLength(0);
+    expect(hit.denied[0].reason).toBe('context_allowed');
+    expect(hit.denied[0].deniedBy).toBe('产品模型');
+  });
+
+  it('白名单优先于黑名单：两者同时命中时按"已加白、静默"处理', () => {
+    const both = entry_({
+      wrong: 'model', correct: 'Moodle',
+      contextDeny: ['模型'], contextAllow: ['产品模型'],
+    });
+    const hit = scanText('产品模型 model', [both]);
+    expect(hit.candidates).toHaveLength(0);
+    expect(hit.denied[0].reason).toBe('context_allowed');
+  });
+
+  it('窗口内没有白名单词 → 照常产出候选', () => {
+    const guarded = entry_({ wrong: 'model', correct: 'Moodle', contextAllow: ['产品模型'] });
+    const hit = scanText('这次 model 说的是工具', [guarded]);
+    expect(hit.candidates).toHaveLength(1);
+    // 面板要能看见已有的加白（否则误加一次只能改 JSON）
+    expect(hit.candidates[0].contextAllow).toEqual(['产品模型']);
+  });
+
+  it('候选带上被忽略次数（>0 = 降权展示）', () => {
+    const ignored = entry_({ wrong: 'coxy', correct: 'Cogseed', ignoredCount: 3 });
+    expect(scanText('coxy', [ignored]).candidates[0].ignoredCount).toBe(3);
+  });
+});
+
+describe('未决项：疑似专名探测（保守，宁漏勿噪）', () => {
+  it('含内部大写/全大写的长串才算疑似专名，常见词不打扰', () => {
+    const text = 'Hello 大家，KSTAR 和 NoteBookLM 都在，API 与 OK 不算。';
+    const found = detectSuspectEntities(text, []).map((s) => s.text);
+    expect(found).toContain('KSTAR');
+    expect(found).toContain('NoteBookLM');
+    // 首字母大写但不是专名形态的普通词、过短的全大写缩写都不进待核
+    expect(found).not.toContain('Hello');
+    expect(found).not.toContain('API');
+    expect(found).not.toContain('OK');
+  });
+
+  it('词表/记忆分组里已有的词不进待核（已知实体不是未知实体）', () => {
+    const text = 'KSTAR 与 Cogseed 都已经在词表里。';
+    const found = detectSuspectEntities(text, ['KSTAR', 'Cogseed']).map((s) => s.text);
+    expect(found).toEqual([]);
+  });
+
+  it('code/URL 里的串不当疑似专名', () => {
+    const text = '看 https://Example.com/PATH 和 `NoteBookLM` 这两个。';
+    const found = detectSuspectEntities(text, []).map((s) => s.text);
+    expect(found).toEqual([]);
+  });
+
+  it('span 指向原文里的真实位置', () => {
+    const text = '前 KSTAR 后';
+    const [first] = detectSuspectEntities(text, []);
+    expect(text.slice(first.span.start, first.span.end)).toBe('KSTAR');
+  });
+});
+
+describe('未决项：标记写回清理版', () => {
+  it('标记插到 span 之前，且返回插入后的新 span', () => {
+    const text = 'coxy 和 KSTAR 都要核';
+    const marked = insertIssueMarkers(text, [{ start: 0, end: 4 }, { start: 7, end: 12 }]);
+    expect(marked.text).toBe(`${ISSUE_MARKER}coxy 和 ${ISSUE_MARKER}KSTAR 都要核`);
+    for (const span of marked.spans) {
+      expect(marked.text.slice(span.start, span.end)).toBe(ISSUE_MARKER);
+    }
+    expect(marked.byStart.get(0)).toEqual({ start: 0, end: ISSUE_MARKER.length });
+    expect(marked.byStart.get(7)).toEqual({
+      start: 7 + ISSUE_MARKER.length,
+      end: 7 + ISSUE_MARKER.length * 2,
+    });
+  });
+
+  it('同一位置标两次只插一个标记（否则清理版会出现两个标记）', () => {
+    const marked = insertIssueMarkers('abc', [{ start: 1, end: 2 }, { start: 1, end: 2 }]);
+    expect(marked.text).toBe(`a${ISSUE_MARKER}bc`);
+    expect(marked.spans).toHaveLength(1);
+  });
+
+  it('空输入原样返回，不产生标记', () => {
+    const marked = insertIssueMarkers('abc', []);
+    expect(marked.text).toBe('abc');
+    expect(marked.spans).toEqual([]);
   });
 });
