@@ -32250,6 +32250,11 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   min-height: 30px;
   padding-inline: var(--space-2);
 }
+.kb-atc__notes {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2);
+}
 /* 对照视图（方案 §七）：左右并排、同高滚动、逐处高亮；颜色只表达"变了"这件事。 */
 .kb-atc__diff {
   display: grid;

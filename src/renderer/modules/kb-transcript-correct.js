@@ -287,14 +287,15 @@
    * 同日再次另存由 nextCandidateName 追加 -2/-3（不覆盖上一次产物）。
    * 后缀走 i18n（zh=清理版 / en=cleaned …），因为它是用户直接看到的文件名。
    */
-  function cleanedFileName(displayPath, suffix) {
+  function cleanedFileName(displayPath, suffix, extension) {
     const raw = String(displayPath || 'transcript');
     const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
     const dir = cut >= 0 ? raw.slice(0, cut + 1) : '';
     const base = cut >= 0 ? raw.slice(cut + 1) : raw;
     const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
     const tail = String(suffix || '').trim() || 'cleaned';
-    return `${dir}${stem}-${tail}.txt`;
+    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
+    return `${dir}${stem}-${tail}.${ext}`;
   }
 
   /** 同分钟重复另存时给出 -2/-3 候选名，避免覆盖上一次的产物。 */
@@ -356,6 +357,7 @@
       // 未决项（待核，方案 §4.3）：span 一律是**原文**坐标，apply 时由主进程映射
       flagged: [],
       truncated: false,
+      notesText: '',
       // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
       scopeChoice: 'keep',
       rowMenu: '',
@@ -871,6 +873,14 @@
           attrs: { 'data-atc-action': 'save' },
         }));
         buttons.push(button({
+          label: t('kb.transcriptCorrect.notes', '清理附记'),
+          icon: 'clipboard-list',
+          role: 'secondary',
+          size: 'sm',
+          disabled: !state.runId,
+          attrs: { 'data-atc-action': 'notes' },
+        }));
+        buttons.push(button({
           label: t('kb.transcriptCorrect.revert', '回滚',
           ),
           icon: 'x-circle',
@@ -1329,6 +1339,8 @@
           docId: ctx.docId,
           includeDelete: true,
           mergeSpeaker: state.mergeSpeaker,
+          // 附记要能说清"这份清理版是从哪份转写来的"
+          ...(ctx.displayPath ? { sourcePath: ctx.displayPath } : {}),
           acceptedIds: [...state.accepted],
           // 待核 span 是原文坐标，主进程按偏移映射后插「【转写存疑】」
           ...(state.flagged.length ? { issues: state.flagged } : {}),
@@ -1488,6 +1500,70 @@
       } finally {
         state.busy = false;
         render();
+      }
+    }
+
+    /**
+     * 清理附记（方案 §五 P1-3）：术语对照表 / 口癖删除 / 未决项 / 上下文材料 /
+     * 本次参数，渲染成 Markdown。可以预览，也可以另存到知识库（同目录 .md）。
+     */
+    async function openNotesModal() {
+      if (!state.runId) return;
+      state.busy = true;
+      render();
+      let payload = null;
+      try {
+        payload = await root.cogseed.invoke('transcript.run.notes', { runId: state.runId });
+      } catch (error) {
+        log?.warn('run notes failed', { error: error?.message || String(error) });
+      } finally {
+        state.busy = false;
+        render();
+      }
+      if (!payload?.markdown) {
+        setStatus(t('kb.transcriptCorrect.notes_failed', '生成清理附记失败，请稍后重试。'), 'warning');
+        return;
+      }
+      state.notesText = String(payload.markdown);
+      if (typeof root.uiModal !== 'function') return;
+      const modal = root.uiModal({
+        title: t('kb.transcriptCorrect.notes_title', '清理附记'),
+        size: 'lg',
+        closeLabel: t('kb.transcriptCorrect.close', '关闭'),
+        description: t('kb.transcriptCorrect.notes_desc', '对照表 / 口癖删除 / 未决项 / 材料 / 参数；附记只记录事实，不含推断。'),
+        bodyHtml: '<pre class="kb-atc__preview kb-atc__notes" data-atc-notes></pre>',
+        actions: [
+          { id: 'save-notes', label: t('kb.transcriptCorrect.notes_save', '另存到知识库'), role: 'primary', size: 'sm' },
+        ],
+      });
+      const host = modal?.dialog?.querySelector('[data-atc-notes]');
+      if (host) host.textContent = state.notesText;
+      const result = await modal.result;
+      if (result?.reason === 'action' && result?.id === 'save-notes') {
+        await saveNotes();
+      }
+    }
+
+    /** 另存附记：与清理版同目录，`<stem>-清理附记.md`。 */
+    async function saveNotes() {
+      if (!state.notesText) return;
+      try {
+        const targetPath = cleanedFileName(
+          ctx.displayPath,
+          t('kb.transcriptCorrect.notes_suffix', '清理附记'),
+          'md',
+        );
+        const result = await root.cogseed.invoke('library.writeText', { content: state.notesText, targetPath });
+        if (result?.ok === false) {
+          setStatus(result.code === 'duplicate_content'
+            ? t('kb.transcriptCorrect.notes_duplicate', '库里已有相同内容的附记，无需重复保存。')
+            : t('kb.transcriptCorrect.notes_save_failed', '保存失败：{error}', { error: String(result.error || '') }), 'warning');
+          return;
+        }
+        setStatus(t('kb.transcriptCorrect.notes_saved', '附记已另存：{path}', { path: result?.path || targetPath }), '');
+      } catch (error) {
+        log?.warn('save notes failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.notes_save_failed', '保存失败：{error}', { error: error?.message || '' }), 'warning');
       }
     }
 
@@ -1954,6 +2030,7 @@
       else if (kind === 'apply') void runApply();
       else if (kind === 'preview') openTextModal(t('kb.transcriptCorrect.preview_title', '清理版预览'), state.cleanedText);
       else if (kind === 'diff') void openDiffModal();
+      else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
       else if (kind === 'revert') void runRevert();
       else if (kind === 'add') void runAddEntry();

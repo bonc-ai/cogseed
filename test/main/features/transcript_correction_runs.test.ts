@@ -19,6 +19,7 @@ import {
   getRun,
   listIssues,
   listRuns,
+  renderRunNotes,
   readOffsetMap,
   readRunText,
   resolveIssue,
@@ -246,7 +247,11 @@ describe('未决项与报告', () => {
       issues: [{ span: { start: 0, end: 1 }, text: '某名称', reason: 'ambiguous_name' }],
     });
     const report = buildReport(uid, run.runId);
-    expect(report.terminology).toEqual([{ wrong: 'coxy', correct: 'Cogseed', action: 'replace', count: 1, entryRef: 'g_coxy' }]);
+    expect(report.terminology.map((row) => ({
+      wrong: row.wrong, correct: row.correct, action: row.action, count: row.count, entryRef: row.entryRef,
+    }))).toEqual([{ wrong: 'coxy', correct: 'Cogseed', action: 'replace', count: 1, entryRef: 'g_coxy' }]);
+    // 依据：词表里查不到这条合成词条 → 如实标 missingInGlossary，不编来源
+    expect(report.terminology[0].basis.missingInGlossary).toBe(true);
     expect(report.contextMaterials).toHaveLength(2);
     expect(report.issues).toHaveLength(1);
     expect(report.notes.some((n) => n.includes('待核'))).toBe(true);
@@ -254,5 +259,62 @@ describe('未决项与报告', () => {
 
   it('报告对不存在的 run 抛错', () => {
     expect(() => buildReport(uid, 'run_000000_abcd')).toThrow();
+  });
+});
+
+describe('清理附记（方案 §五 P1-3 / §七）', () => {
+  it('五个段落齐全：对照表 / 口癖 / 未决项 / 材料 / 参数', () => {
+    const text = 'coxy 与 K star 都在。嗯，就这些。';
+    const scan = scanText(text, [
+      { id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', kind: 'product', riskLevel: 'low', boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true }, freq: 3, source: 'manual', status: 'active', ownerScope: 'personal', replacedIn: [], createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1 },
+    ] as never, { includeDelete: true });
+    const result = applyCorrections(text, scan.candidates, { acceptedIds: ['g_coxy'] });
+    const run = createRun(uid, { docId: 'doc-notes', sourceText: text, result, mergedBlocks: 3 });
+    const notes = renderRunNotes(buildReport(uid, run.runId));
+    expect(notes).toContain('# 转写清理附记');
+    expect(notes).toContain('## 一、术语对照表');
+    expect(notes).toContain('## 二、口癖与填充词删除');
+    expect(notes).toContain('## 三、未决项清单');
+    expect(notes).toContain('## 四、上下文材料');
+    expect(notes).toContain('## 五、本次参数');
+    expect(notes).toContain('coxy');
+    expect(notes).toContain('原文从未被就地改写');
+  });
+
+  it('draft 时开头必须写明"不得宣称完成"（§8.1-7）', () => {
+    const text = 'coxy 在，嗯。';
+    const scan = scanText(text, [
+      { id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', kind: 'product', riskLevel: 'low', boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true }, freq: 1, source: 'manual', status: 'active', ownerScope: 'personal', replacedIn: [], createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1 },
+    ] as never);
+    const result = applyCorrections(text, scan.candidates, { acceptedIds: ['g_coxy'] });
+    const run = createRun(uid, {
+      docId: 'doc-draft', sourceText: text, result,
+      issues: [{ span: { start: 0, end: 4 }, text: 'coxy', reason: 'ambiguous_name' }],
+    });
+    expect(run.status).toBe('draft');
+    const notes = renderRunNotes(buildReport(uid, run.runId));
+    expect(notes).toContain('草稿（draft）');
+    expect(notes).toContain('未决项清零前不得宣称清理完成');
+  });
+
+  it('对照表带"依据"，且结构性编辑（merge_*）不进术语表', () => {
+    const text = 'coxy 在。';
+    const scan = scanText(text, [
+      { id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', kind: 'product', riskLevel: 'low', boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true }, freq: 7, source: 'ontology_seed', status: 'active', ownerScope: 'personal', replacedIn: [], createdBy: 'import', createdAt: 1, updatedAt: 1, lastVerifiedAt: 0 },
+    ] as never);
+    const mergeEdit = {
+      entryRef: 'merge_0', wrong: 'A 2026-09-05 19:31:32', correct: '', action: 'delete' as const,
+      confidence: 1, riskLevel: 'low' as const, context: '', span: { start: 0, end: 0 }, ignoredCount: 0, contextAllow: [], structure: true,
+    };
+    const result = applyCorrections(text, [...scan.candidates, mergeEdit], {
+      acceptedIds: ['g_coxy', 'merge_0'],
+    });
+    const run = createRun(uid, { docId: 'doc-basis', sourceText: text, result });
+    const report = buildReport(uid, run.runId);
+    expect(report.terminology.map((row) => row.wrong)).toEqual(['coxy']);
+    // 词表里没有 g_coxy（合成 id）→ 依据如实标 unknown + missingInGlossary，不编来源
+    expect(report.terminology[0].basis.source).toBe('unknown');
+    expect(report.terminology[0].basis.missingInGlossary).toBe(true);
+    expect(report.materials.some((m) => m.includes('源转写'))).toBe(true);
   });
 });

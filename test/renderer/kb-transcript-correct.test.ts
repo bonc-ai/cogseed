@@ -345,6 +345,8 @@ describe('locale 覆盖', () => {
     'diff', 'diff_title', 'diff_bar', 'diff_before', 'diff_after', 'diff_note', 'diff_failed',
     'seed_fillers', 'seed_fillers_done', 'seed_fillers_failed', 'scan_truncated',
     'merge_on', 'merge_off', 'merged_blocks',
+    'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
+    'notes_duplicate', 'notes_save_failed', 'notes_failed',
   ];
 
   for (const lang of locales) {

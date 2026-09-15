@@ -9,7 +9,7 @@
  *   transcript.glossary.list / upsert / setStatus / delete / import / export
  *   transcript.correct.scan        —— 只读扫描，产出候选 + 拒绝原因
  *   transcript.correct.apply       —— 按确认结果替换，落 run 快照，原文不可变
- *   transcript.run.list / get / report / revert
+ *   transcript.run.list / get / report / notes / revert
  *   transcript.issues.list / resolve
  *
  * 本体接线（P1，2026-09-15）：
@@ -420,6 +420,16 @@ export const invokeHandlers = {
   'transcript.run.report': async (payload: Payload, ctx: IpcContext) => ({
     report: transcriptRuns.buildReport(ctx.userId, requireText(payload?.runId, 'runId', 128)),
   }),
+
+  /**
+   * 清理附记（方案 §五 P1-3 / §七）：术语对照表 + 口癖删除 + 未决项 +
+   * 上下文材料 + 本次参数，渲染成 Markdown 供预览与另存。
+   */
+  'transcript.run.notes': async (payload: Payload, ctx: IpcContext) => {
+    const runId = requireText(payload?.runId, 'runId', 128);
+    const report = transcriptRuns.buildReport(ctx.userId, runId);
+    return { markdown: transcriptRuns.renderRunNotes(report), report };
+  },
 
   /** 追加"清理版已另存到某路径"的交付记录（只追加，供审计反查）。 */
   'transcript.run.annotate': async (payload: Payload, ctx: IpcContext) => ({

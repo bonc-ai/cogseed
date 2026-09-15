@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto';
 import { userTranscriptRunDir, userTranscriptRunsDir } from '../paths';
 import { createLogger } from '../logger';
 import type { ApplyResult, AppliedSummary, OffsetSegment } from './transcript_auto_correct';
+import { loadGlossary } from './transcript_glossary';
 
 const log = createLogger('transcript_correction_runs');
 
@@ -308,13 +309,34 @@ export function resolveIssue(userId: string, runId: string, issueId: string, res
 
 // ── 三件套之 C：对照表 / 报告 ───────────────────────────────────────────
 
+export interface TerminologyRow {
+  wrong: string;
+  correct: string;
+  action: string;
+  count: number;
+  entryRef: string;
+  /** 依据（方案 §五 P1-3 要求对照表带"依据"）：来自当前词表的来源/风险/类别。 */
+  basis: {
+    source: string;
+    riskLevel: string;
+    kind: string;
+    freq: number;
+    /** 来自记忆分组时给出定位（groupId/fieldId）。 */
+    ontologyRef?: { groupId: string; fieldId: string };
+    /** 词表里已经找不到这条（被删/被改）——如实标注，不编依据。 */
+    missingInGlossary?: boolean;
+  };
+}
+
 export interface CorrectionReport {
   run: CorrectionRun;
   /** 术语对照表：清理后用词 ← 原始转写典型形式（← 次数）。 */
-  terminology: Array<{ wrong: string; correct: string; action: string; count: number; entryRef: string }>;
+  terminology: TerminologyRow[];
   issues: OpenIssue[];
   params: CorrectionRunParams;
   contextMaterials: string[];
+  /** 上下文材料清单（方案 §七：附记要列清这次依据了哪些东西）。 */
+  materials: string[];
   /** 本 run 已另存出去的清理版路径（可能为空）。 */
   deliveries: RunDelivery[];
   notes: string[];
@@ -328,17 +350,155 @@ export function buildReport(userId: string, runId: string): CorrectionReport {
   if (run.overRewriteSuspected) notes.push(`字符保留率 ${(run.retention * 100).toFixed(1)}% 低于阈值，疑似过度改写`);
   if (run.pendingTotal > 0) notes.push(`还有 ${run.pendingTotal} 条候选未确认`);
   if (issues.some((i) => i.status === 'open')) notes.push(`还有 ${issues.filter((i) => i.status === 'open').length} 处待核`);
+  // 依据来自**当前**词表（词条可能事后被改/被删，那就如实标 missingInGlossary）
+  const glossary = loadGlossary(userId);
+  const byId = new Map(glossary.entries.map((entry) => [entry.id, entry]));
+  const terminology: TerminologyRow[] = run.applied
+    // 结构性编辑（合并块头）不属于"术语对照表"
+    .filter((a) => !a.entryRef.startsWith('merge_'))
+    .map((a) => {
+      const entry = byId.get(a.entryRef);
+      return {
+        wrong: a.wrong,
+        correct: a.correct,
+        action: a.action,
+        count: a.count,
+        entryRef: a.entryRef,
+        basis: entry
+          ? {
+            source: entry.source,
+            riskLevel: entry.riskLevel,
+            kind: entry.kind,
+            freq: entry.freq,
+            ...(entry.ontologyRef ? { ontologyRef: entry.ontologyRef } : {}),
+          }
+          : { source: 'unknown', riskLevel: 'unknown', kind: 'unknown', freq: 0, missingInGlossary: true },
+      };
+    });
+  const contextMaterials = Array.isArray(run.params.contextMaterials) ? run.params.contextMaterials : [];
+  // 材料清单：能由事实推出的就推（源文件、词表、规则包、记忆分组），不编造
+  const ontologyBacked = terminology.filter((row) => row.basis.ontologyRef).length;
+  const materials = [
+    run.sourcePath
+      ? `源转写：${run.sourcePath}（sha1 ${run.sourceSha1.slice(0, 8)}）`
+      : `源转写：${run.docId}（sha1 ${run.sourceSha1.slice(0, 8)}）`,
+    `词表：transcript-glossary.json v${run.params.glossaryVersion ?? 2}（本次用到 ${new Set(terminology.map((r) => r.entryRef)).size} 条）`,
+    ...(run.params.fillerRulePack ? [`口癖规则包：${run.params.fillerRulePack}`] : []),
+    ...(run.mergedBlocks > 0 ? [`同人段落合并：${run.mergedBlocks} 块（时间锚点见 offset-map.json.anchors）`] : []),
+    ...(ontologyBacked > 0 ? [`记忆分组：${ontologyBacked} 条词条带本体引用`] : []),
+    ...contextMaterials.map((item) => `补充材料：${item}`),
+  ];
   return {
     run,
-    terminology: run.applied.map((a) => ({
-      wrong: a.wrong, correct: a.correct, action: a.action, count: a.count, entryRef: a.entryRef,
-    })),
+    terminology,
     issues,
     params: run.params,
-    contextMaterials: Array.isArray(run.params.contextMaterials) ? run.params.contextMaterials : [],
+    contextMaterials,
+    materials,
     deliveries: run.deliveries ?? [],
     notes,
   };
+}
+
+/**
+ * 清理附记（方案 §五 P1-3 / §七）：把 run 的一切事实渲染成一份 Markdown。
+ *
+ * 原则：**只写 run 里已有的东西**，推不出来的不写；产物是 draft 时必须
+ * 在开头写明"未决项未清零，不得宣称完成"（§8.1-7）。
+ * 纯函数，便于单测（不碰磁盘）。
+ */
+export function renderRunNotes(report: CorrectionReport, opts: { generatedAt?: number } = {}): string {
+  const run = report.run;
+  const when = new Date(opts.generatedAt ?? Date.now()).toISOString().replace('T', ' ').slice(0, 19);
+  const retention = (Number(run.retention) || 0) * 100;
+  const openIssues = report.issues.filter((issue) => issue.status === 'open');
+  const lines: string[] = [];
+
+  lines.push('# 转写清理附记');
+  lines.push('');
+  lines.push(`- 生成时间：${when}`);
+  lines.push(`- 文档：${run.docId}`);
+  lines.push(`- run：${run.runId}`);
+  lines.push(`- 原文指纹：sha1 ${run.sourceSha1}`);
+  lines.push(`- 原文字符：${run.counts.charsIn} → 清理版字符：${run.counts.charsOut}（保留率 ${retention.toFixed(1)}%）`);
+  lines.push(`- 替换 ${run.counts.replace} 处 · 删除 ${run.counts.delete} 处 · 同人段落合并 ${run.mergedBlocks} 块`);
+  lines.push(`- 产物状态：${run.status === 'draft' ? '**草稿（draft）**' : '已应用（applied）'}`);
+  lines.push('');
+  if (run.status === 'draft') {
+    lines.push('> ⚠️ 本次产物是草稿：' + (report.notes.length ? report.notes.join('；') : '存在未确认项')
+      + '。未决项清零前不得宣称清理完成。');
+    lines.push('');
+  }
+
+  lines.push('## 一、术语对照表');
+  lines.push('');
+  if (report.terminology.length === 0) {
+    lines.push('本次没有术语替换。');
+  } else {
+    lines.push('| 清理后用词 | 原始典型形式 | 处数 | 类别 | 风险 | 依据 |');
+    lines.push('|---|---|---|---|---|---|');
+    for (const row of report.terminology) {
+      const basis = row.basis.missingInGlossary
+        ? '词表中已不存在该词条'
+        : `${row.basis.source}${row.basis.ontologyRef ? `（记忆分组 ${row.basis.ontologyRef.fieldId}）` : ''} · 已确认 ${row.basis.freq} 次`;
+      lines.push(`| ${row.correct || '（删除）'} | ${row.wrong} | ${row.count} | ${row.basis.kind} | ${row.basis.riskLevel} | ${basis} |`);
+    }
+  }
+  lines.push('');
+
+  lines.push('## 二、口癖与填充词删除');
+  lines.push('');
+  const fillerKeys = Object.keys(run.deletedFillers ?? {});
+  if (fillerKeys.length === 0) {
+    lines.push('本次没有删除口癖（未装规则包或未接受）。');
+  } else {
+    lines.push('| 词 | 删除处数 |');
+    lines.push('|---|---|');
+    for (const key of fillerKeys.sort((a, b) => (run.deletedFillers[b] ?? 0) - (run.deletedFillers[a] ?? 0))) {
+      lines.push(`| ${key} | ${run.deletedFillers[key]} |`);
+    }
+  }
+  lines.push('');
+
+  lines.push('## 三、未决项清单');
+  lines.push('');
+  if (report.issues.length === 0) {
+    lines.push('本次没有未决项。');
+  } else {
+    lines.push(`共 ${report.issues.length} 条（未解决 ${openIssues.length} 条）：`);
+    lines.push('');
+    lines.push('| 标记 | 原文片段 | 理由 | 状态 |');
+    lines.push('|---|---|---|---|');
+    for (const issue of report.issues) {
+      lines.push(`| ${issue.marker} | ${issue.text} | ${issue.reason} | ${issue.status === 'open' ? '待核' : '已解决'} |`);
+    }
+  }
+  lines.push('');
+
+  lines.push('## 四、上下文材料');
+  lines.push('');
+  if (report.materials.length === 0) lines.push('（无）');
+  else for (const item of report.materials) lines.push(`- ${item}`);
+  lines.push('');
+
+  lines.push('## 五、本次参数');
+  lines.push('');
+  lines.push('```json');
+  lines.push(JSON.stringify({ ...report.params, runId: run.runId, status: run.status, pendingTotal: run.pendingTotal }, null, 2));
+  lines.push('```');
+  lines.push('');
+  if (report.deliveries.length) {
+    lines.push('## 六、交付记录');
+    lines.push('');
+    for (const delivery of report.deliveries) {
+      lines.push(`- ${delivery.kind}：${delivery.path}（${new Date(delivery.at).toISOString().slice(0, 19)}）`);
+    }
+    lines.push('');
+  }
+  lines.push('---');
+  lines.push('');
+  lines.push('*原文从未被就地改写：以上所有替换/删除都发生在派生文件里，回滚只需校验 sha1（`transcript.run.revert`）。*');
+  return lines.join('\n');
 }
 
 // ── 小工具 ──────────────────────────────────────────────────────────────
