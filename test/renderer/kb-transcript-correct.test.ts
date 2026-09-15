@@ -638,8 +638,11 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('destroyCorrection()');
   });
 
-  it('入口只在"阅读全文 + 已解析文本"时出现', () => {
-    expect(viewer).toMatch(/function canCorrect\(\)[\s\S]*activeView === 'document'[\s\S]*activeResult\?\.resolved/);
+  it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {
+    expect(viewer).toMatch(/function canCorrect\(\)[\s\S]{0,400}activeView !== 'document'[\s\S]{0,200}activeResult\?\.resolved/);
+    // 真机反馈：纠错入口不该出现在所有文本上——非转写文档不提供（判定行为见
+    // anchored-source-view.test.ts「纠错入口只服务文字转写」一组断言）
+    expect(viewer).toMatch(/function canCorrect\(\)[\s\S]{0,1200}isTranscriptDocument\(/);
   });
 
   it('面板模块在查看器之前注册（避免入口点击时未加载）', () => {

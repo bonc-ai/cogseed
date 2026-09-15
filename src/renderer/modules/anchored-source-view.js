@@ -324,13 +324,21 @@
   /**
    * 只有"文字转写 + 阅读全文 + 已解析出文本 + 面板模块已加载"时才提供纠错入口。
    * 非转写文档（方案/笔记/代码）不出现这个按钮——它不是给普通文本用的能力。
+   *
+   * 判定包了 try：它跑在工具栏渲染里，判定本身出问题也不该让整条工具栏挂掉
+   * （宁可少给一个入口）。
    */
   function canCorrect() {
-    return activeView === 'document'
-      && Boolean(activeResult?.resolved)
-      && String(activeResult?.text || '').length > 0
-      && isTranscriptDocument(activeAnchor?.path || activeResult?.displayPath, activeResult?.text)
-      && typeof root.KbTranscriptCorrect?.mount === 'function';
+    if (activeView !== 'document') return false;
+    if (!activeResult?.resolved) return false;
+    if (!String(activeResult?.text || '').length) return false;
+    if (typeof root.KbTranscriptCorrect?.mount !== 'function') return false;
+    try {
+      return isTranscriptDocument(activeAnchor?.path || activeResult?.displayPath, activeResult?.text);
+    } catch (error) {
+      log?.warn('transcript detection failed', { error: error?.message || String(error) });
+      return false;
+    }
   }
 
   function destroyCorrection() {
