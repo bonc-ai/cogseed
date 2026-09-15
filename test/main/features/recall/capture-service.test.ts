@@ -357,15 +357,53 @@ describe('Recall conversation capture', () => {
       queue,
     });
 
+    // 2026-09-15 终态口径：仅夜间自动沉淀（enabled+nightly）才转发创建；
+    // smart（任务一结束就整理）保持下线。默认 smart → 不转发。
     for (const status of ['failed', 'cancelled', 'waiting_input']) listener?.({ ...completedEvent, status });
     listener?.(completedEvent);
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(queue).toHaveBeenCalledTimes(4);
-    expect(queue).toHaveBeenCalledWith(expect.objectContaining({ status: 'waiting_input' }));
-    expect(queue).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
-    expect(queue).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }));
+    expect(queue).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('夜间自动沉淀开启后，terminal 事件恢复转发（scheduled 任务到点跑）', async () => {
+    const capture = await captureModule();
+    const settings = await import('../../../../src/main/features/recall/capture-settings');
+    await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'nightly' });
+
+    let listener: ((event: any) => void) | undefined;
+    const queue = vi.fn(async () => undefined);
+    const stop = capture.startRecallCaptureOrchestrator({
+      subscribe: (next) => { listener = next; return vi.fn(); },
+      queue,
+    });
+    listener?.(completedEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
     expect(queue).toHaveBeenCalledWith(completedEvent);
+    stop();
+  });
+
+  it('夜间开关关闭（manual）不转发；功能总开关关闭时同样不转发', async () => {
+    const capture = await captureModule();
+    const settings = await import('../../../../src/main/features/recall/capture-settings');
+    let listener: ((event: any) => void) | undefined;
+    const queue = vi.fn(async () => undefined);
+    const stop = capture.startRecallCaptureOrchestrator({
+      subscribe: (next) => { listener = next; return vi.fn(); },
+      queue,
+    });
+
+    await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'manual' });
+    listener?.(completedEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(queue).not.toHaveBeenCalled();
+
+    await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'nightly', enabled: false });
+    listener?.(completedEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(queue).not.toHaveBeenCalled();
     stop();
   });
 
@@ -2625,5 +2663,204 @@ describe('空返回的可解释性', () => {
   it('旧口径 parseRecallCaptureOutput 仍只交出候选数组', async () => {
     const capture = await import('../../../../src/main/features/recall/capture-service');
     expect(capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [] }), labels)).toEqual([]);
+  });
+});
+
+describe('整理记录列表：scope / 分桶 / 标题回填 / 批量', () => {
+  /** 造一条可见记录并直接改盘上字段（同会话手动创建会去重复用，多记录用不同 conversationId）。 */
+  async function craftCapture(capture: typeof import('../../../../src/main/features/recall/capture-service'), conversationId: string, patch: Record<string, unknown>) {
+    const created = await capture.queueManualRecallCaptureFromConversation('capture-user', conversationId);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', created.id, (current) => ({
+      ...current!,
+      ...patch,
+    }));
+    return created.id;
+  }
+
+  it('scope=all 拉入内部静默记录，且静默记录零候选读取（性能不变式）', async () => {
+    const capture = await captureModule();
+    const silentId = await craftCapture(capture, 'conv-1', {
+      status: 'no_candidate',
+      visibility: 'internal',
+      screeningStatus: 'filtered',
+      // 遗留数据即使带候选 id，静默路由也不读它——这是不变式要钉住的行为
+      candidateIds: ['cand-silent'],
+    });
+
+    const visiblePage = await capture.queryRecallCaptures('capture-user', {});
+    expect(visiblePage.captures.map((row) => row.id)).not.toContain(silentId);
+    expect(visiblePage.buckets).toEqual({ attention: 0, active: 0, silent: 0, done: 0 });
+
+    mocks.readCandidate.mockClear();
+    const allPage = await capture.queryRecallCaptures('capture-user', { scope: 'all' });
+    const silentRow = allPage.captures.find((row) => row.id === silentId);
+    expect(silentRow).toMatchObject({
+      // 2026-09-15 口径修正：无留存内容对用户就是"已完成"（行上显示的正是
+      // 「已完成」），展示桶归 done；零读取路由（性能不变式）不受影响。
+      bucket: 'done',
+      workflowStatus: 'completed',
+      displayStatus: 'completed',
+      displayReason: 'no_candidate',
+      nextAction: 'none',
+      actions: ['open_conversation'],
+      reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
+    });
+    expect(allPage.buckets).toEqual({ attention: 0, active: 0, silent: 0, done: 1 });
+    expect(mocks.readCandidate).not.toHaveBeenCalled();
+  });
+
+  it('review_ready 的候选被全部处理完 → displayStatus 已完成 → 桶归 done（筛选与行一致）', async () => {
+    const capture = await captureModule();
+    const store = await import('../../../../src/main/features/recall/store');
+    const created = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    // 候选已全部终态（rejected）：summarize 会把 review_ready 修正为 completed。
+    await store.updateRecallJsonRecord('capture-user', 'captures', created.id, (current) => ({
+      ...current!,
+      status: 'review_ready',
+      candidateIds: ['cand-settled'],
+    }));
+    mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
+      id: candidateId, status: 'rejected',
+    }));
+
+    const page = await capture.queryRecallCaptures('capture-user', { scope: 'all' });
+    const row = page.captures.find((item) => item.id === created.id);
+    expect(row).toMatchObject({ status: 'review_ready', displayStatus: 'completed' });
+    expect(row?.bucket).toBe('done');
+    expect(page.buckets.done).toBe(1);
+  });
+
+  it('buckets 分桶：failed→attention、waiting_manual→attention（等你开始，不冒充整理中），行内带 bucket 与 actions', async () => {
+    const capture = await captureModule();
+    const failedId = await craftCapture(capture, 'conv-1', { status: 'failed', errorCode: 'model_failed' });
+    const waitingId = await craftCapture(capture, 'conv-2', {});
+
+    const page = await capture.queryRecallCaptures('capture-user', { scope: 'all' });
+    // 2026-09-15 口径修正：waiting_manual 归 attention（详情页有「立即整理」，
+    // 列表却显示「整理中」的自相矛盾由此修复）。
+    expect(page.buckets).toEqual({ attention: 2, active: 0, silent: 0, done: 0 });
+    const failedRow = page.captures.find((row) => row.id === failedId);
+    expect(failedRow?.bucket).toBe('attention');
+    expect(failedRow?.actions).toEqual(expect.arrayContaining(['retry', 'cancel']));
+    expect(failedRow?.displayReason).toBe('capture_failed');
+    const waitingRow = page.captures.find((row) => row.id === waitingId);
+    expect(waitingRow?.bucket).toBe('attention');
+    expect(waitingRow?.actions).toEqual(expect.arrayContaining(['run_now', 'pause', 'cancel']));
+    expect(waitingRow?.displayReason).toBe('manual_start_required');
+  });
+
+  it('自动创建按设置分流（2026-09-15 终态）：smart 不创建、nightly+enabled 创建', async () => {
+    const capture = await captureModule();
+    // queueRecallCaptureFromTerminal 函数本身保留（手动链路与夜间入口）。
+    expect(capture.queueRecallCaptureFromTerminal).toBeTypeOf('function');
+    // 源码级钉住：判断读的是用户设置（terminalCaptureEnabledFor），而非全局常量。
+    const service = fs.readFileSync(path.join(__dirname, '../../../../src/main/features/recall/capture-service.ts'), 'utf8');
+    expect(service).toContain('terminalCaptureEnabledFor');
+    expect(service).toContain("settings.executionPolicy === 'nightly'");
+  });
+
+  it('读路径按会话补标题：内存补齐、不写盘、会话读失败不抛', async () => {
+    const capture = await captureModule();
+    // 手动创建会带标题；模拟"从未跑过的自动捕获记录"＝抹掉标题
+    const id = await craftCapture(capture, 'conv-1', { conversationTitle: undefined });
+
+    // getConversation mock 返回 title: 'Decision work'（beforeEach 默认）
+    const page = await capture.queryRecallCaptures('capture-user', {});
+    expect(page.captures[0].conversationTitle).toBe('Decision work');
+
+    // 不写盘：盘上记录仍无标题（读路径补齐是展示增强，不是数据修复）
+    const raw = await capture.readRecallCapture('capture-user', id);
+    expect(raw.conversationTitle).toBeUndefined();
+
+    // 会话读取失败：不阻塞列表，标题走兜底文案
+    mocks.getConversation.mockRejectedValueOnce(new Error('conversation store unavailable'));
+    const fallbackPage = await capture.queryRecallCaptures('capture-user', {});
+    expect(fallbackPage.captures[0].conversationTitle).toBeUndefined();
+  });
+
+  it('批量重试：逐条复用状态机，单条失败不影响其余', async () => {
+    const capture = await captureModule();
+    const failedA = await craftCapture(capture, 'conv-1', { status: 'failed', errorCode: 'model_failed' });
+    const failedB = await craftCapture(capture, 'conv-2', { status: 'failed', errorCode: 'model_failed' });
+    const notRetryable = await craftCapture(capture, 'conv-3', {});
+
+    const result = await capture.retryRecallCapturesBatch('capture-user', [failedA, failedB, notRetryable]);
+
+    expect(result.succeeded.sort()).toEqual([failedA, failedB].sort());
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].id).toBe(notRetryable);
+    expect(result.failed[0].error).toContain('not retryable');
+    const rowA = await capture.readRecallCapture('capture-user', failedA);
+    expect(rowA.status).toBe('queued');
+    const rowC = await capture.readRecallCapture('capture-user', notRetryable);
+    expect(rowC.status).toBe('waiting_manual');
+  });
+
+  it('批量立即整理：waiting_manual 记录进入 queued', async () => {
+    const capture = await captureModule();
+    const waitingA = await craftCapture(capture, 'conv-1', {});
+    const waitingB = await craftCapture(capture, 'conv-2', {});
+
+    const result = await capture.runRecallCapturesNowBatch('capture-user', [waitingA, waitingB]);
+
+    expect(result.succeeded.sort()).toEqual([waitingA, waitingB].sort());
+    expect(result.failed).toEqual([]);
+    expect((await capture.readRecallCapture('capture-user', waitingA)).status).toBe('queued');
+    expect((await capture.readRecallCapture('capture-user', waitingB)).status).toBe('queued');
+  });
+});
+
+describe('整理详情：对话上下文（readRecallCaptureContext）', () => {
+  it('按 messageIds 组装消息（标签/角色/sourceId）与参与角色', async () => {
+    const capture = await captureModule();
+    const created = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    // mock 消息（beforeEach 默认）过滤后 = user-1(user) + assistant-1(commander)；
+    // 创建记录的 messageIds 即这两条。
+
+    const context = await capture.readRecallCaptureContext('capture-user', created.id);
+
+    expect(context.conversationId).toBe('conv-1');
+    expect(context.contextUnavailable).toBeUndefined();
+    expect(context.messages).toHaveLength(2);
+    expect(context.messages[0]).toMatchObject({ label: 'm1', role: 'user', from: 'user' });
+    expect(context.messages[1]).toMatchObject({ label: 'm2', role: 'assistant', from: 'commander' });
+    // sourceId = evidenceRefs 同源哈希（cognitionMessageSourceId），供前端映射。
+    expect(context.messages[0].sourceId).toMatch(/^msg-/);
+    // 参与角色：user 最前、commander 次之；members 文件不存在时名字退回 id。
+    expect(context.participants.map((p) => p.id)).toEqual(['user', 'commander']);
+  });
+
+  it('超长消息截断到上限并带 truncated 标记', async () => {
+    const capture = await captureModule();
+    const created = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    mocks.getMessages.mockResolvedValue([
+      { id: 'user-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: 'x'.repeat(6_000) },
+      { id: 'assistant-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', to: ['user'], text: 'Done.' },
+    ]);
+
+    const context = await capture.readRecallCaptureContext('capture-user', created.id);
+
+    expect(context.messages[0].text).toHaveLength(4_000);
+    expect(context.messages[0].truncated).toBe(true);
+    expect(context.messages[1].truncated).toBe(false);
+  });
+
+  it('消息读不到时降级 contextUnavailable，不抛错（详情页其余区块照常渲染）', async () => {
+    const capture = await captureModule();
+    const created = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    mocks.getMessages.mockResolvedValue([]);
+
+    const context = await capture.readRecallCaptureContext('capture-user', created.id);
+
+    expect(context.contextUnavailable).toBe(true);
+    expect(context.messages).toEqual([]);
+    expect(context.participants).toEqual([]);
+  });
+
+  it('捕获记录不存在时透传错误（与 read 口径一致）', async () => {
+    const capture = await captureModule();
+    await expect(capture.readRecallCaptureContext('capture-user', 'rcap-gone'))
+      .rejects.toThrow(/not found/i);
   });
 });
