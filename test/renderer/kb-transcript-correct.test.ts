@@ -20,7 +20,7 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string }>) => { high: unknown[]; other: unknown[] };
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
-  cleanedFileName: (p: string, when?: Date) => string;
+  cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
   classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; message?: string };
   riskKey: (l: string) => string;
@@ -111,59 +111,37 @@ describe('apply 摘要', () => {
   });
 });
 
-describe('清理版保存路径', () => {
-  const when = new Date(2026, 8, 15, 10, 25); // 2026-09-15 10:25
+describe('清理版保存路径与命名', () => {
+  const SUF = '清理版';
 
-  it('放在原文同一个目录（真实缺陷：此前只取文件名，产物落到库根）', () => {
-    expect(panel.cleanedFileName('1/9.15站会文字转写.txt', when))
-      .toBe('1/9.15站会文字转写-cleaned-20260915-1025.txt');
+  it('放在原文同一个目录，后缀短且一眼可认（真实反馈：时间戳名不好找）', () => {
+    expect(panel.cleanedFileName('1/9.15站会文字转写.txt', SUF)).toBe('1/9.15站会文字转写-清理版.txt');
   });
 
   it('原文在库根时保持根目录', () => {
-    expect(panel.cleanedFileName('meeting.txt', when)).toBe('meeting-cleaned-20260915-1025.txt');
+    expect(panel.cleanedFileName('meeting.txt', SUF)).toBe('meeting-清理版.txt');
   });
 
   it('中文文件名、多级目录、无扩展名都安全', () => {
-    expect(panel.cleanedFileName('a/b/组会纪要.md', when)).toBe('a/b/组会纪要-cleaned-20260915-1025.txt');
-    expect(panel.cleanedFileName('a/b/无扩展名', when)).toBe('a/b/无扩展名-cleaned-20260915-1025.txt');
-    expect(panel.cleanedFileName('', when)).toBe('transcript-cleaned-20260915-1025.txt');
+    expect(panel.cleanedFileName('a/b/组会纪要.md', SUF)).toBe('a/b/组会纪要-清理版.txt');
+    expect(panel.cleanedFileName('a/b/无扩展名', SUF)).toBe('a/b/无扩展名-清理版.txt');
+    expect(panel.cleanedFileName('', SUF)).toBe('transcript-清理版.txt');
   });
 
-  it('永不与原文件同名（同目录去重靠时间戳）', () => {
-    const original = '1/9.15站会文字转写.txt';
-    expect(panel.cleanedFileName(original, when)).not.toBe(original);
+  it('后缀按界面语言走 i18n（缺省回退英文 cleaned）', () => {
+    expect(panel.cleanedFileName('1/a.txt', '')).toBe('1/a-cleaned.txt');
+    expect(panel.cleanedFileName('1/a.txt', 'cleaned')).toBe('1/a-cleaned.txt');
   });
 
-  it('同一分钟重复另存走 -2/-3 后缀，不覆盖上一次产物', () => {
-    const base = '1/站会-cleaned-20260915-1025.txt';
+  it('永不与原文件同名', () => {
+    expect(panel.cleanedFileName('1/站会.txt', SUF)).not.toBe('1/站会.txt');
+  });
+
+  it('同日重复另存走 -2/-3 后缀，不覆盖上一次产物', () => {
+    const base = '1/站会-清理版.txt';
     expect(panel.nextCandidateName(base, 0)).toBe(base);
-    expect(panel.nextCandidateName(base, 1)).toBe('1/站会-cleaned-20260915-1025-2.txt');
-    expect(panel.nextCandidateName(base, 2)).toBe('1/站会-cleaned-20260915-1025-3.txt');
-  });
-});
-
-describe('另存结果分类（区分"同名冲突"与"内容重复"）', () => {
-  it('成功 → saved，带真实落点', () => {
-    expect(panel.classifySaveResult({ ok: true, path: '1/a-cleaned-20260915-1030.txt' }))
-      .toEqual({ kind: 'saved', path: '1/a-cleaned-20260915-1030.txt' });
-  });
-
-  it('内容重复 → duplicate，并带上已有文件所在目录（不当作失败）', () => {
-    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content', error: '文件已存在', existingDir: '1' }))
-      .toEqual({ kind: 'duplicate', existingDir: '1' });
-    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content', error: '文件已存在', existingDir: '' }))
-      .toEqual({ kind: 'duplicate', existingDir: '' });
-  });
-
-  it('同名冲突 → retry（换后缀再试）', () => {
-    expect(panel.classifySaveResult({ ok: false, error: '同名文件已存在' }).kind).toBe('retry');
-    expect(panel.classifySaveResult({ ok: false, error: 'A file with this name already exists' }).kind).toBe('retry');
-  });
-
-  it('其它错误 → failed，保留原文错误信息', () => {
-    const v = panel.classifySaveResult({ ok: false, error: 'unsupported text extension: zip' });
-    expect(v.kind).toBe('failed');
-    expect(v.message).toContain('unsupported text extension');
+    expect(panel.nextCandidateName(base, 1)).toBe('1/站会-清理版-2.txt');
+    expect(panel.nextCandidateName(base, 2)).toBe('1/站会-清理版-3.txt');
   });
 });
 
@@ -186,7 +164,7 @@ describe('locale 覆盖', () => {
     'revert', 'revert_title', 'revert_ok', 'revert_mismatch', 'revert_failed',
     'add_entry', 'wrong', 'correct', 'kind', 'add', 'added', 'add_failed', 'need_both', 'reject_digits',
     'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
-    'delete_arrow', 'close_panel', 'unavailable', 'close',
+    'delete_arrow', 'close_panel', 'unavailable', 'close', 'cleaned_suffix',
     'group_high', 'group_other', 'group_other_collapsed',
   ];
 

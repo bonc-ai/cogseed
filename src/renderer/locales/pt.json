@@ -4401,5 +4401,6 @@
   "kb.transcriptCorrect.group_other_collapsed": "Outros {count} (recolhido)",
   "kb.transcriptCorrect.saved_to": "Salvo em: {path}",
   "kb.transcriptCorrect.save_duplicate": "Já existe uma versão limpa idêntica na biblioteca{where}.",
-  "kb.transcriptCorrect.save_duplicate_dir": " (em “{dir}”)"
+  "kb.transcriptCorrect.save_duplicate_dir": " (em “{dir}”)",
+  "kb.transcriptCorrect.cleaned_suffix": "limpa"
 }

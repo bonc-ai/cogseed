@@ -6289,5 +6289,6 @@
   "kb.transcriptCorrect.group_other_collapsed": "其余 {count} 条（已折叠）",
   "kb.transcriptCorrect.saved_to": "已另存：{path}",
   "kb.transcriptCorrect.save_duplicate": "库里已有相同内容的清理版{where}，无需重复保存。",
-  "kb.transcriptCorrect.save_duplicate_dir": "（在「{dir}」目录下）"
+  "kb.transcriptCorrect.save_duplicate_dir": "（在「{dir}」目录下）",
+  "kb.transcriptCorrect.cleaned_suffix": "清理版"
 }

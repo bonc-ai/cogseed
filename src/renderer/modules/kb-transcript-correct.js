@@ -125,22 +125,20 @@
     return 'risk_low';
   }
 
-  function two(n) { return String(n).padStart(2, '0'); }
-
   /**
-   * 清理版目标路径：**放在原文同一个目录**（此前只取文件名，产物落到库根，
-   * 用户在原文所在文件夹里找不到），文件名用可读时间戳，永不与原文件同名。
-   *   例：`1/9.15站会.txt` → `1/9.15站会-cleaned-20260915-1025.txt`
+   * 清理版目标路径：**放在原文同一个目录**，名字尽量短且一眼可认。
+   *   例：`1/9.15站会.txt` → `1/9.15站会-清理版.txt`
+   * 同日再次另存由 nextCandidateName 追加 -2/-3（不覆盖上一次产物）。
+   * 后缀走 i18n（zh=清理版 / en=cleaned …），因为它是用户直接看到的文件名。
    */
-  function cleanedFileName(displayPath, when) {
+  function cleanedFileName(displayPath, suffix) {
     const raw = String(displayPath || 'transcript');
     const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
     const dir = cut >= 0 ? raw.slice(0, cut + 1) : '';
     const base = cut >= 0 ? raw.slice(cut + 1) : raw;
     const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
-    const d = when instanceof Date && !Number.isNaN(when.getTime()) ? when : new Date();
-    const stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
-    return `${dir}${stem}-cleaned-${stamp}.txt`;
+    const tail = String(suffix || '').trim() || 'cleaned';
+    return `${dir}${stem}-${tail}.txt`;
   }
 
   /** 同分钟重复另存时给出 -2/-3 候选名，避免覆盖上一次的产物。 */
@@ -602,7 +600,7 @@
       state.busy = true;
       render();
       try {
-        const intentPath = cleanedFileName(ctx.displayPath, new Date());
+        const intentPath = cleanedFileName(ctx.displayPath, t('kb.transcriptCorrect.cleaned_suffix', '清理版'));
         let targetPath = intentPath;
         let verdict = { kind: 'failed', message: '' };
         // 同名冲突换 -2/-3 后缀；内容重复（main 的 sha1 去重）不重试，直接如实告知。

@@ -6289,5 +6289,6 @@
   "kb.transcriptCorrect.group_other_collapsed": "{count} others (collapsed)",
   "kb.transcriptCorrect.saved_to": "Saved to: {path}",
   "kb.transcriptCorrect.save_duplicate": "Identical cleaned copy already in the library{where}.",
-  "kb.transcriptCorrect.save_duplicate_dir": " (in “{dir}”)"
+  "kb.transcriptCorrect.save_duplicate_dir": " (in “{dir}”)",
+  "kb.transcriptCorrect.cleaned_suffix": "cleaned"
 }

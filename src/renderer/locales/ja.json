@@ -4401,5 +4401,6 @@
   "kb.transcriptCorrect.group_other_collapsed": "その他 {count} 件（折りたたみ）",
   "kb.transcriptCorrect.saved_to": "保存先：{path}",
   "kb.transcriptCorrect.save_duplicate": "同じ内容の整文版が既にあります{where}。",
-  "kb.transcriptCorrect.save_duplicate_dir": "（「{dir}」内）"
+  "kb.transcriptCorrect.save_duplicate_dir": "（「{dir}」内）",
+  "kb.transcriptCorrect.cleaned_suffix": "整形版"
 }
