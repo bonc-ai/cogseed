@@ -32049,8 +32049,74 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .anchored-source-modal--reader .anchored-source-correct {
   flex: 0 0 40%;
   width: auto;
-  min-width: 340px;
-  max-width: 520px;
+  min-width: 280px;
+  max-width: 760px;
+  /* 真机反馈：原来右栏 overflow:hidden、只有 __body 能滚，非 body 部分一多就把
+     列表压成 0 高——既滚不动也看不见。现在整栏可滚，任何内容都到得了。 */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.anchored-source-modal--reader .anchored-source-correct::-webkit-scrollbar {
+  width: 6px;
+}
+.anchored-source-modal--reader .anchored-source-correct::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-3);
+  background: var(--line-default);
+}
+/* 面板不再吃满高度：让它自然长高，由右栏统一滚动。 */
+.anchored-source-modal--reader .kb-atc {
+  height: auto;
+  min-height: 100%;
+}
+.anchored-source-modal--reader .kb-atc__body {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+/* 标题与主操作吸顶/吸底：滚动时仍随时可达（不然长列表里找不到按钮）。 */
+.anchored-source-modal--reader .kb-atc__head {
+  position: sticky;
+  top: 0;
+  padding-bottom: var(--space-1);
+  background: var(--surface-subtle);
+}
+.anchored-source-modal--reader .kb-atc__actions {
+  position: sticky;
+  bottom: 0;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  background: var(--surface-subtle);
+}
+
+/* 左右分隔符（可拖拽调宽）：默认只有一条细线，hover/聚焦时才明显。 */
+.anchored-source-splitter {
+  flex: 0 0 10px;
+  align-self: stretch;
+  margin-left: calc(var(--space-3) * -1 + 5px);
+  cursor: col-resize;
+  border-radius: var(--radius-1);
+  background: transparent;
+  position: relative;
+}
+.anchored-source-splitter[hidden] {
+  display: none;
+}
+.anchored-source-splitter::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 4px;
+  width: 2px;
+  border-radius: var(--radius-1);
+  background: var(--line-default);
+}
+.anchored-source-splitter:hover::before,
+.anchored-source-splitter:focus-visible::before {
+  background: var(--line-strong);
+}
+.anchored-source-splitter:focus-visible {
+  outline: 2px solid var(--color-focus-halo);
+  outline-offset: 2px;
 }
 
 /* 视觉规范 §二-2：页面底（极浅灰）→ 左容器（白纸）→ 右面板（比底稍深），
@@ -32163,6 +32229,7 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 }
 .kb-atc__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
@@ -32184,9 +32251,21 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-family: var(--font-mono);
   font-size: var(--font-size-1);
   line-height: var(--line-height-body);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 文件名是辅助信息，但不该被截断——换行显示，hover 里还有完整路径 */
+  overflow-wrap: anywhere;
+}
+/* 按钮行一律允许换行：右栏最窄可到 280px，不换行就会横向溢出
+   （真机：待核块的「查找疑似专名 + 让模型给候选（受约束）」撑破 36px） */
+.kb-atc__head-actions,
+.kb-atc__actions,
+.kb-atc__sync-actions,
+.kb-atc__row-actions,
+.kb-atc__sync-row-actions {
+  flex-wrap: wrap;
+  /* 允许收缩到比按钮自然宽更窄：否则 280px 栏宽下整行会顶出 4px（被 overflow-x 裁掉，
+     用户看到的就是"文字没显示全"）。 */
+  flex-shrink: 1;
+  min-width: 0;
 }
 .kb-atc__head-actions,
 .kb-atc__actions {
@@ -32195,7 +32274,10 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   gap: var(--space-2);
 }
 .kb-atc__head-actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  /* 用 max-width 把它真正压进容器：否则按钮的 min-content 会顶出 4px，
+     再被 overflow-x 裁掉——表现就是"文字没显示全"。 */
+  max-width: 100%;
 }
 /* 状态与汇总都是轻量内联文字：不带底色块，避免区块割裂。 */
 .kb-atc__status,
@@ -32278,6 +32360,7 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 }
 .kb-atc__row-main {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: baseline;
   gap: var(--space-1);
@@ -32287,9 +32370,10 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-atc__wrong {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 真机反馈：长词条被 ellipsis 截掉（`personaltology`、`Personal Ontology`）。
+     词条名是这一行的主体信息，必须完整可读——允许换行、允许长词断行。 */
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .kb-atc__arrow {
   color: var(--text-faint);
@@ -32298,9 +32382,8 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   color: var(--text-body);
   font-family: var(--font-mono);
   font-weight: var(--font-weight-semibold);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .kb-atc__badge {
   flex: 0 0 auto;

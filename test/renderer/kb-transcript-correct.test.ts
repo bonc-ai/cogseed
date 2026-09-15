@@ -396,6 +396,52 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
   });
 });
 
+describe('滚动与可调宽（2026-09-15 使用侧反馈修复）', () => {
+  const style = readSrc('renderer/style.css');
+  const viewer = readSrc('renderer/modules/anchored-source-view.js');
+
+  it('右栏整体可滚动：不再"只有列表能滚、其余块把列表压成 0 高"', () => {
+    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*overflow-y: auto/);
+    expect(style).toMatch(/\.anchored-source-modal--reader \.kb-atc \{[^}]*height: auto/);
+    expect(style).toMatch(/\.anchored-source-modal--reader \.kb-atc__body \{[^}]*flex: 0 0 auto/);
+    // 标题吸顶、主操作吸底：长列表里也够得着
+    expect(style).toMatch(/\.anchored-source-modal--reader \.kb-atc__head \{[^}]*position: sticky/);
+    expect(style).toMatch(/\.anchored-source-modal--reader \.kb-atc__actions \{[^}]*position: sticky/);
+  });
+
+  it('窄栏（最窄 280px）不许横向溢出：按钮行可换行且可收缩', () => {
+    expect(style).toMatch(/\.kb-atc__head-actions,[\s\S]{0,240}?flex-wrap: wrap;[\s\S]{0,120}?flex-shrink: 1/);
+    expect(style).toMatch(/\.kb-atc__head-actions \{[^}]*max-width: 100%/);
+    expect(style).toMatch(/\.kb-atc__head \{[^}]*flex-wrap: wrap/);
+  });
+
+  it('长词条与长文件名不再被省略号截断（可换行）', () => {
+    expect(style).toMatch(/\.kb-atc__wrong \{[^}]*overflow-wrap: anywhere/);
+    expect(style).toMatch(/\.kb-atc__correct \{[^}]*overflow-wrap: anywhere/);
+    expect(style).toMatch(/\.kb-atc__row-main \{[^}]*flex-wrap: wrap/);
+    expect(style).toMatch(/\.kb-atc__meta \{[^}]*overflow-wrap: anywhere/);
+    // 旧的截断写法必须已经拿掉
+    expect(style).not.toMatch(/\.kb-atc__wrong \{[^}]*text-overflow: ellipsis/);
+    expect(style).not.toMatch(/\.kb-atc__correct \{[^}]*text-overflow: ellipsis/);
+  });
+
+  it('左右之间有可拖拽分隔符：指针 + 键盘 + 持久化 + 复位，且随面板显隐', () => {
+    expect(viewer).toContain('anchored-source-splitter');
+    expect(viewer).toContain("role=\"separator\"");
+    expect(viewer).toContain('beginSplitDrag');
+    expect(viewer).toContain('onSplitKeydown');
+    expect(viewer).toContain('cogseed.readerSplitWidth');
+    // 夹取范围：不许把某一栏拖到不可用
+    expect(viewer).toMatch(/SPLIT_MIN_PX = \d+/);
+    expect(viewer).toContain('const dynamicMax = Math.max(');
+    // 左栏保底 240px：窄窗口下不许把阅读区挤掉
+    expect(viewer).toContain('containerWidth || 0) - 300');
+    // 面板关闭时分隔符隐藏、打开时显示
+    expect(viewer).toContain('if (splitter) splitter.hidden = true');
+    expect(viewer).toContain('if (splitter) splitter.hidden = false');
+  });
+});
+
 describe('locale 覆盖', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [

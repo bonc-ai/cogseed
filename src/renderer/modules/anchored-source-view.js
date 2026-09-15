@@ -47,6 +47,9 @@
       '<div class="anchored-source-note" data-anchor-view-note hidden></div>',
       '</div>',
       '</div>',
+      // 左右之间的可拖拽分隔符（真机反馈：没有分割符就只能吃默认比例）
+      '<div class="anchored-source-splitter" data-anchor-view-split hidden role="separator"'
+      + ' aria-orientation="vertical" tabindex="0" data-anchor-view-split-handle></div>',
       '<aside class="anchored-source-correct" data-anchor-view-correct hidden></aside>',
       '</div>',
     ].join('');
@@ -158,6 +161,106 @@
     });
   }
 
+  /**
+   * 右栏宽度（视觉反馈：左右之间要能拖）。
+   *   - 指针拖拽：`pointerdown/move/up`，夹在 [MIN, MAX] 内，按容器宽度动态上限；
+   *   - 键盘：←/→ 每次 16px，Home/Enter 回到默认 40%；
+   *   - 持久化：本机 localStorage（下次打开还是这个宽度）；
+   *   - 双击 / 双击分隔符：复位到默认比例。
+   */
+  const SPLIT_MIN_PX = 280;
+  const SPLIT_MAX_PX = 760;
+  const SPLIT_STEP_PX = 16;
+  const SPLIT_KEY = 'cogseed.readerSplitWidth';
+
+  function readSplitWidth() {
+    try {
+      const saved = Number(root.localStorage?.getItem?.(SPLIT_KEY));
+      return Number.isFinite(saved) && saved > 0 ? saved : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function clampSplitWidth(width, containerWidth) {
+    // 上限取三者最小：绝对上限、容器的 62%、以及"左栏至少留 240px"——
+    // 不然窄窗口下右栏会把阅读区挤到 200px 出头，读不下去。
+    // 左栏（含工具栏内边距）至少留 300px，不然阅读区只剩两百出头，读不下去
+    const keepReading = Math.max(SPLIT_MIN_PX, Math.floor((containerWidth || 0) - 300));
+    const dynamicMax = Math.max(
+      SPLIT_MIN_PX,
+      Math.min(SPLIT_MAX_PX, Math.floor((containerWidth || 0) * 0.62), keepReading),
+    );
+    return Math.max(SPLIT_MIN_PX, Math.min(Math.round(width), dynamicMax));
+  }
+
+  function applySplitWidth(width, options = {}) {
+    const viewer = element('.anchored-source-viewer');
+    const aside = element('[data-anchor-view-correct]');
+    if (!viewer || !aside) return 0;
+    const containerWidth = viewer.getBoundingClientRect?.().width || viewer.clientWidth || 0;
+    const value = clampSplitWidth(width || containerWidth * 0.4, containerWidth);
+    aside.style.flexBasis = `${value}px`;
+    aside.style.maxWidth = `${value}px`;
+    aside.style.minWidth = `${Math.min(SPLIT_MIN_PX, value)}px`;
+    if (options.persist !== false) {
+      try { root.localStorage?.setItem?.(SPLIT_KEY, String(value)); } catch (_) { /* 存偏好失败不影响布局 */ }
+    }
+    return value;
+  }
+
+  function beginSplitDrag(event) {
+    const viewer = element('.anchored-source-viewer');
+    const handle = element('[data-anchor-view-split]');
+    if (!viewer || !handle) return;
+    event.preventDefault?.();
+    const rect = viewer.getBoundingClientRect?.() || { right: 0, width: 0 };
+    const move = (moveEvent) => {
+      const clientX = moveEvent.clientX ?? 0;
+      applySplitWidth(rect.right - clientX, { persist: false });
+    };
+    const finish = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', finish);
+      const aside = element('[data-anchor-view-correct]');
+      const current = aside ? Number.parseFloat(aside.style.flexBasis || '0') : 0;
+      if (current > 0) applySplitWidth(current);
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', finish);
+    handle.setPointerCapture?.(event.pointerId);
+  }
+
+  function onSplitKeydown(event) {
+    const viewer = element('.anchored-source-viewer');
+    const aside = element('[data-anchor-view-correct]');
+    if (!viewer || !aside) return;
+    const current = Number.parseFloat(aside.style.flexBasis || '0')
+      || (viewer.getBoundingClientRect?.().width || 0) * 0.4;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault?.();
+      applySplitWidth(current - SPLIT_STEP_PX);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault?.();
+      applySplitWidth(current + SPLIT_STEP_PX);
+    } else if (event.key === 'Enter' || event.key === ' ' || event.key === 'Home') {
+      event.preventDefault?.();
+      applySplitWidth((viewer.getBoundingClientRect?.().width || 0) * 0.4);
+    }
+  }
+
+  function bindSplitter() {
+    const handle = element('[data-anchor-view-split-handle]');
+    if (!handle || handle.dataset.bound === '1') return;
+    handle.dataset.bound = '1';
+    handle.addEventListener('pointerdown', beginSplitDrag);
+    handle.addEventListener('keydown', onSplitKeydown);
+    handle.addEventListener('dblclick', () => {
+      const viewer = element('.anchored-source-viewer');
+      applySplitWidth((viewer?.getBoundingClientRect?.().width || 0) * 0.4);
+    });
+  }
+
   /** 只有"阅读全文 + 已解析出文本 + 面板模块已加载"时才提供纠错入口。 */
   function canCorrect() {
     return activeView === 'document'
@@ -176,6 +279,8 @@
       panel.textContent = '';
     }
     element('.anchored-source-viewer')?.classList.remove('is-correct-open');
+    const splitter = element('[data-anchor-view-split]');
+    if (splitter) splitter.hidden = true;
   }
 
   /**
@@ -226,6 +331,11 @@
       });
       correctionOpen = true;
       element('.anchored-source-viewer')?.classList.add('is-correct-open');
+    const splitter = element('[data-anchor-view-split]');
+    if (splitter) splitter.hidden = false;
+    bindSplitter();
+    const saved = readSplitWidth();
+    if (saved > 0) applySplitWidth(saved, { persist: false });
     } catch (error) {
       log?.warn('correction panel mount failed', { error: error?.message || String(error) });
       correctionOpen = false;
@@ -391,13 +501,21 @@
   }
 
   function renderMeta(result) {
-    const bits = [String(result?.displayPath || activeAnchor?.path || '')].filter(Boolean);
+    const fullPath = String(result?.displayPath || activeAnchor?.path || '');
+    // 只显示尾段（路口窄，长路径会被省略号吃掉）；完整路径放 title，hover 可见
+    const tail = fullPath.split(/[\\/]/).filter(Boolean).pop() || fullPath;
+    const bits = [tail].filter(Boolean);
     if (result?.page) bits.push(t('kb.viewer.page', '第 {page} 页', { page: result.page }));
     if (Number.isFinite(Number(result?.charStart)) && Number.isFinite(Number(result?.charEnd))) {
       bits.push(t('kb.viewer.characters', '字符 {start}–{end}', { start: result.charStart, end: result.charEnd }));
     }
     if (Number.isFinite(Number(result?.totalChars))) {
       bits.push(t('kb.viewer.total_chars', '共 {count} 字符', { count: result.totalChars }));
+    }
+    const metaHost = element('[data-anchor-view-meta]');
+    if (metaHost && typeof metaHost.setAttribute === 'function') {
+      // 窄窗口下这行一定会用省略号收尾——hover 要能看全（完整路径 + 全部信息）
+      metaHost.setAttribute('title', `${fullPath}\n${bits.join(' · ')}`);
     }
     setMeta(bits.join(' · '));
   }
