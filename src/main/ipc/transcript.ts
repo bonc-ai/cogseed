@@ -29,6 +29,7 @@ import * as transcriptSeed from '../features/transcript_glossary_seed';
 import * as transcriptLlm from '../features/transcript_llm_candidates';
 import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
+import * as transcriptPack from '../features/transcript_contribution_pack';
 import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
@@ -200,6 +201,33 @@ export const invokeHandlers = {
   'transcript.glossary.seedInitial': async (_payload: Payload, ctx: IpcContext) => {
     const result = transcriptSeed.seedInitialEntries(ctx.userId);
     return { ...result, excluded: transcriptSeed.SEED_EXCLUDED.map((row) => row.wrong) };
+  },
+
+  /**
+   * 贡献包导出（方案 §五 P3-1）：按 kind/scenarioTags 导出子集，
+   * **人名类默认不导**；包里剥掉 replacedIn / scope.docIds 等本地隐私字段。
+   */
+  'transcript.glossary.exportPack': async (payload: Payload, ctx: IpcContext) => ({
+    pack: transcriptPack.buildContributionPack(ctx.userId, {
+      ...(stringList(payload?.kinds, 20) ? { kinds: stringList(payload?.kinds, 20)! as transcriptGlossary.GlossaryKind[] } : {}),
+      ...(stringList(payload?.scenarioTags, 20) ? { scenarioTags: stringList(payload?.scenarioTags, 20)! } : {}),
+      includePeople: payload?.includePeople === true,
+      ownerScope: payload?.ownerScope === 'team' || payload?.ownerScope === 'org' ? payload.ownerScope : 'personal',
+    }),
+  }),
+
+  /** 贡献包导入预览（治理闸门：先给人看新增/冲突/高风险/人名，再决定导不导）。 */
+  'transcript.glossary.reviewPack': async (payload: Payload, ctx: IpcContext) => {
+    const pack = transcriptPack.parseContributionPack(payload?.pack ?? payload);
+    if (!pack) throw new Error('transcript glossary: invalid contribution pack');
+    return { review: transcriptPack.reviewContributionPack(ctx.userId, pack), ownerScope: pack.ownerScope };
+  },
+
+  /** 贡献包导入：优先级 组织 > 团队 > 个人（本地更高时保留本地并如实计数）。 */
+  'transcript.glossary.importPack': async (payload: Payload, ctx: IpcContext) => {
+    const pack = transcriptPack.parseContributionPack(payload?.pack ?? payload);
+    if (!pack) throw new Error('transcript glossary: invalid contribution pack');
+    return transcriptPack.applyContributionPack(ctx.userId, pack);
   },
 
   /** 检索前 query 同义改写开关（方案 §五 P2-3，默认关）。 */

@@ -130,6 +130,8 @@
       status: '',
       statusTone: '',
       queryRewrite: false,
+      packReview: null,
+      packScope: 'personal',
       exportText: '',
       exportIncludePeople: false,
       importText: '',
@@ -417,6 +419,21 @@
           }),
           '<div class="kb-glo__io-actions">',
           button({
+            label: t('kb.glossary.pack_export', '生成贡献包（可共享）'),
+            role: 'ghost', size: 'sm', disabled: state.busy,
+            attrs: { 'data-glo-action': 'pack-export' },
+          }),
+          button({
+            label: t('kb.glossary.pack_review', '预览贡献包导入'),
+            role: 'ghost', size: 'sm', disabled: state.busy || !state.importText,
+            attrs: { 'data-glo-action': 'pack-review' },
+          }),
+          button({
+            label: t('kb.glossary.pack_import', '导入贡献包'),
+            role: 'ghost', size: 'sm', disabled: state.busy || !state.importText || !state.packReview,
+            attrs: { 'data-glo-action': 'pack-import' },
+          }),
+          button({
             label: t('kb.glossary.export_generate', '生成导出内容'),
             role: 'ghost', size: 'sm', disabled: state.busy,
             attrs: { 'data-glo-action': 'export-generate' },
@@ -453,6 +470,24 @@
               ],
             },
           }),
+          state.packReview
+            ? `<p class="kb-glo__preview" data-tone="${state.packReview.conflicts.length ? 'warning' : 'plain'}">${t(
+              'kb.glossary.pack_review_result',
+              '贡献包预览（{scope} 层）：共 {total} 条 · 新增 {added} · 更新 {updates} · 冲突 {conflicts} · 高风险 {highRisk} · 含人名 {people}{conflictHint}',
+              {
+                scope: state.packReview.ownerScope,
+                total: state.packReview.total,
+                added: state.packReview.added,
+                updates: state.packReview.updates,
+                conflicts: state.packReview.conflicts.length,
+                highRisk: state.packReview.highRisk,
+                people: state.packReview.people,
+                conflictHint: state.packReview.conflicts.length
+                  ? t('kb.glossary.pack_conflict_hint', '；冲突按"组织 > 团队 > 个人"裁决，本地层级更高时保留本地')
+                  : '',
+              },
+            )}</p>`
+            : '',
           preview
             ? `<p class="kb-glo__preview" data-tone="${preview.mode === 'replace' ? 'warning' : 'plain'}">${t(
               'kb.glossary.import_preview',
@@ -699,6 +734,83 @@
      * 装入方案附 A 的初始词表（幂等）。方案明写"默认不入册"的词（`for → Forge`）
      * 不在种子里，返回里会说明被排除的是哪些，避免用户以为装漏了。
      */
+    /**
+     * 贡献包导出（方案 §五 P3-1）：人名默认不导；包里不含本地文档名/runId。
+     * 生成后写进同一个导出文本框，用户可以直接另存或复制给别人。
+     */
+    async function exportPack() {
+      if (state.busy) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.exportPack', {
+          includePeople: state.exportIncludePeople,
+          ownerScope: state.packScope,
+        });
+        const pack = result?.pack;
+        state.exportText = JSON.stringify(pack, null, 2);
+        const textarea = dialog.querySelector('#glo-export-text');
+        if (textarea) textarea.value = state.exportText;
+        setStatus(t('kb.glossary.pack_exported', '贡献包已生成：{total} 条（排除人名 {people} 条，层级 {scope}）', {
+          total: Number(pack?.counts?.total || 0),
+          people: Number(pack?.counts?.peopleExcluded || 0),
+          scope: String(pack?.ownerScope || 'personal'),
+        }), '');
+      } catch (error) {
+        log?.warn('export pack failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.pack_export_failed', '生成贡献包失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /** 贡献包导入预览（治理闸门：先看新增/冲突/高风险/人名）。 */
+    async function reviewPack() {
+      const parsed = parseImportText();
+      if (!parsed) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.reviewPack', { pack: parsed });
+        state.packReview = result?.review ?? null;
+        setStatus('', '');
+      } catch (error) {
+        log?.warn('review pack failed', { error: error?.message || String(error) });
+        state.packReview = null;
+        setStatus(t('kb.glossary.pack_invalid', '这不是一份可识别的贡献包。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /** 导入贡献包（优先级 组织 > 团队 > 个人；本地更高时保留本地并如实计数）。 */
+    async function importPack() {
+      if (state.busy || !state.packReview) return;
+      const parsed = parseImportText();
+      if (!parsed) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.importPack', { pack: parsed });
+        setStatus(t('kb.glossary.pack_imported', '贡献包已导入：新增 {added} · 更新 {updated} · 覆盖 {overwritten} · 保留本地 {keptLocal}', {
+          added: Number(result?.added || 0),
+          updated: Number(result?.updated || 0),
+          overwritten: Number(result?.overwritten || 0),
+          keptLocal: Number(result?.keptLocal || 0),
+        }), '');
+        state.packReview = null;
+      } catch (error) {
+        log?.warn('import pack failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.pack_import_failed', '导入贡献包失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        await reload();
+        opts.onChanged?.();
+      }
+    }
+
     /** 检索前 query 同义改写开关（方案 §五 P2-3）：默认关，改检索行为要用户点头。 */
     async function toggleQueryRewrite() {
       if (state.busy) return;
@@ -791,6 +903,12 @@
         void setStatusBulk('paused');
       } else if (kind === 'resume-selected') {
         void setStatusBulk('active');
+      } else if (kind === 'pack-export') {
+        void exportPack();
+      } else if (kind === 'pack-review') {
+        void reviewPack();
+      } else if (kind === 'pack-import') {
+        void importPack();
       } else if (kind === 'toggle-qrw') {
         void toggleQueryRewrite();
       } else if (kind === 'seed-initial') {
