@@ -2393,11 +2393,19 @@
       sub.textContent = `当前库：${_esc(dispName)} · ${count} 个内容`;
     }
     _maybeShowQaHint();
+    // 文件树/空间文件是异步到的：这里按最新的文件数刷一次两个生成入口的可用性
+    const analysisCard = document.getElementById('kb-wb-analysis-card');
+    if (analysisCard) _bindAnalysisActions(analysisCard);
   }
 
   // ── AI 解析（S3：kb.summary → 逐文档要点 + 一句话总结 + 脑图骨架）──
-  // 切换库/空间时把解析卡重置为「未解析」态：脑图/测验入口保持可见（禁用），
-  // 避免用户误以为功能消失；点击「✨ 生成 AI 解析」后启用。
+  /**
+   * 切换库/空间时把解析卡重置为「未解析」态。
+   *
+   * 注意：**脑图/测验入口与解析无关**（真机反馈"为什么只在 AI 解析后才能打开"）——
+   * 它们各自独立取库内 ready 文档生成（kb.mindmap / kb.quiz），所以这里直接可用，
+   * 只有"库是空的"才禁用。解析只是同一张卡上的另一个入口。
+   */
   function _resetAnalysisCard() {
     const card = document.getElementById('kb-wb-analysis-card');
     if (!card) return;
@@ -2405,8 +2413,8 @@
       <div class="kb-wb-right-card-title">
         <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
         <span class="kb-wb-card-actions">
-          ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', disabled: true, className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm', title: '请先生成 AI 解析' } })}
-          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', disabled: true, className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz', title: '请先生成 AI 解析' } })}
+          ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
         </span>
       </div>
       <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
@@ -2414,6 +2422,45 @@
     // 重新绑定手动解析按钮（原按钮随 innerHTML 替换销毁）
     const analyzeBtn = card.querySelector('#kb-analyze-btn');
     if (analyzeBtn) analyzeBtn.addEventListener('click', () => _loadSummary());
+    _bindAnalysisActions(card);
+  }
+
+  /** 当前库/空间的文件数（两个生成入口的可用性只看这个）。 */
+  function _libFileCount() {
+    if (_state.spaceId) return _state.spaceFiles.length;
+    const node = _findLibNode(_state.currentLib);
+    return node ? _countFiles(node) : 0;
+  }
+
+  /**
+   * 绑定「生成脑图 / 生成测验」两个入口。
+   *
+   * 两者都只依赖"库内有 ready 文档"：脑图走 kb.mindmap（多级层级 JSON），测验走
+   * kb.quiz（本地出题）。**都不需要先生成 AI 解析**——此前它们被解析结果挡着，
+   * 库空时才该禁用（点了也没有材料）。
+   */
+  function _bindAnalysisActions(card) {
+    // 可用性每次重算（库树是异步加载的：首屏渲染时文件数还是 0，加载完要放行），
+    // 但 listener 只挂一次——本文件既有的 dataset.*Bound 幂等写法。
+    const empty = _libFileCount() === 0;
+    const mmBtn = card.querySelector('#kb-wb-gen-mm');
+    if (mmBtn) {
+      mmBtn.disabled = empty;
+      mmBtn.title = empty ? '当前知识库还没有内容' : '基于当前库文档生成多级脑图（不依赖 AI 解析）';
+      if (!mmBtn.dataset.kbGenBound) {
+        mmBtn.dataset.kbGenBound = '1';
+        mmBtn.addEventListener('click', () => _genMindmap());
+      }
+    }
+    const quizBtn = card.querySelector('#kb-wb-gen-quiz');
+    if (quizBtn) {
+      quizBtn.disabled = empty;
+      quizBtn.title = empty ? '当前知识库还没有内容' : '基于当前库文档生成测验题（不依赖 AI 解析）';
+      if (!quizBtn.dataset.kbGenBound) {
+        quizBtn.dataset.kbGenBound = '1';
+        quizBtn.addEventListener('click', () => _genQuiz());
+      }
+    }
   }
 
   function _loadSummary() {
@@ -2478,9 +2525,10 @@
     const srcTag = summary.source === 'cached' ? ' <span class="kb-wb-card-src">(缓存)</span>'
       : summary.source === 'degraded' ? ' <span class="kb-wb-card-src">(降级)</span>' : '';
 
+    // 生成脑图 / 生成测验与解析成败无关：它们只用库内文档（禁用与否由 _bindAnalysisActions 按库是否为空决定）
     const actions = `<span class="kb-wb-card-actions">
-      ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', disabled: !(ok && hasMm), className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-      ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', disabled: !ok, className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
+      ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+      ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
       ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}
     </span>`;
 
@@ -2517,10 +2565,7 @@
     const degNote = document.getElementById('kb-qa-degraded-note');
     if (degNote && ok) degNote.hidden = true;
 
-    const mmBtn = card.querySelector('#kb-wb-gen-mm');
-    if (mmBtn && !mmBtn.disabled) mmBtn.addEventListener('click', () => _genMindmap());
-    const quizBtn = card.querySelector('#kb-wb-gen-quiz');
-    if (quizBtn && !quizBtn.disabled) quizBtn.addEventListener('click', () => _renderQuiz(summary));
+    _bindAnalysisActions(card);
     card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
       const body = card.querySelector('#kb-wb-analysis-body');
       const btn = card.querySelector('#kb-wb-analysis-toggle');
@@ -2715,6 +2760,240 @@
         canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
       });
     box.scrollTop = box.scrollHeight;
+  }
+
+  // ── 生成测验（kb.quiz）────────────────────────────────────────────────
+  // 与脑图同规矩：产物追加到对话消息区，不藏在解析卡折叠区；不依赖 AI 解析。
+  let _quizGenerating = false;
+
+  function _quizFailHtml(reason) {
+    const texts = {
+      empty: '当前知识库还没有已解析的文档，无法出题。请先导入内容并等索引完成。',
+      timeout: '出题超时：本地模型排队/推理超过 2 分钟未返回。模型通道繁忙，请稍后重试。',
+      'model-failed': '出题失败（模型暂不可用），请稍后重试。',
+      unparsable: '模型返回的内容不是有效题目，请重试（或换个更聚焦的库）。',
+    };
+    const tip = texts[reason] || '测验生成失败，请稍后重试。';
+    return '<div class="kb-mm-fail">' + tip
+      + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-quiz-retry-btn' })
+      + '</div>';
+  }
+
+  /**
+   * 参考答案/解析的切分：把"多要点"的长句拆成条目。
+   *
+   * 为什么拆：模型给的参考答案常是「要点A；要点B（补充说明）。」这种多要点句子，
+   * 直接整段显示就是一大坨（真机反馈原文："匹配角色只需要一个API Key；发版清理时
+   * 应以CSV文件为准（提示词内是速览，以CSV为准）。"）。按换行 / 分号 / 序号拆开列点，
+   * 一眼能看出有几个要点。拆不动（单句）时原样返回，不做二次加工。
+   */
+  function _quizAnswerClauses(text) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw) return [];
+    const parts = raw
+      .replace(/\r\n?/g, '\n')
+      // 编号式要点（1. / 2、/ 3)）前断开
+      .replace(/(?:^|[ \t])(?=[1-9][.、)）]\s)/gm, '\n')
+      .split('\n')
+      // 分号即要点分隔（分号留在句尾，读起来更自然）
+      .flatMap((line) => line.split(/(?<=[；;])\s*/))
+      // 成了列表项就不该再拖个分号（那是句子里的分隔符，不是要点本身）
+      .map((x) => x.replace(/^[1-9][.、)）]\s*/, '').replace(/[；;]\s*$/, '').trim())
+      .filter(Boolean);
+    // 拆不出多个要点时退回整段，不把一句话切碎
+    return parts.length > 1 ? parts : [raw];
+  }
+
+  /** 一块带标签的答案/解析：标签 + （多要点 → 列表 / 单句 → 文本）。 */
+  function _quizAnswerBlock(label, text, tone) {
+    const wrap = document.createElement('div');
+    wrap.className = 'kb-quiz-answer' + (tone ? ` is-${tone}` : '');
+    const tag = document.createElement('span');
+    tag.className = 'kb-quiz-answer-tag';
+    tag.textContent = label;
+    wrap.appendChild(tag);
+    const clauses = _quizAnswerClauses(text);
+    if (clauses.length > 1) {
+      const ul = document.createElement('ul');
+      ul.className = 'kb-quiz-answer-list';
+      for (const c of clauses) {
+        const li = document.createElement('li');
+        li.textContent = c;
+        ul.appendChild(li);
+      }
+      wrap.appendChild(ul);
+    } else {
+      const body = document.createElement('span');
+      body.className = 'kb-quiz-answer-text';
+      body.textContent = clauses[0] || '—';
+      wrap.appendChild(body);
+    }
+    return wrap;
+  }
+
+  /** 单选作答后的"对/错"状态行。 */
+  function _quizStatusLine(right) {
+    const line = document.createElement('div');
+    line.className = 'kb-quiz-status ' + (right ? 'is-right' : 'is-wrong');
+    line.textContent = right ? '✅ 答对了' : '❌ 答错了';
+    return line;
+  }
+
+  /** 把模型给的题目渲染成可作答的卡片（纯 DOM 构建，题目文本一律走 textContent）。 */
+  function _renderQuizCard(container, questions) {
+    container.textContent = '';
+    questions.forEach((q, idx) => {
+      const item = document.createElement('div');
+      item.className = 'kb-quiz-item';
+      const head = document.createElement('div');
+      head.className = 'kb-quiz-q-head';
+      const kind = q.type === 'single' ? '单选' : '简答';
+      head.textContent = `第 ${idx + 1} 题 · ${kind}` + (q.source ? ` · 来源：${q.source}` : '');
+      const text = document.createElement('div');
+      text.className = 'kb-quiz-q-text';
+      text.textContent = String(q.question || '');
+      item.append(head, text);
+
+      if (q.type === 'single' && Array.isArray(q.options) && q.options.length) {
+        const list = document.createElement('div');
+        list.className = 'kb-quiz-opts';
+        const explain = document.createElement('div');
+        explain.className = 'kb-quiz-explain';
+        explain.hidden = true;
+        let answered = false;
+        for (const opt of q.options) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'kb-quiz-opt';
+          btn.textContent = String(opt);
+          btn.addEventListener('click', () => {
+            if (answered) return;
+            answered = true;
+            const right = String(opt) === String(q.answer);
+            btn.classList.add(right ? 'is-right' : 'is-wrong');
+            for (const el of list.children) {
+              if (el.textContent === String(q.answer)) el.classList.add('is-right');
+              el.disabled = true;
+            }
+            // 结构化：先落"对/错"状态，再分「正确答案」「解析」两块——此前是把
+            // 答案与解析用 ' · ' 拼成一句话，两个长句糊在一起读不动（真机反馈）
+            explain.hidden = false;
+            explain.replaceChildren(
+              _quizStatusLine(right),
+              ...(right ? [] : [_quizAnswerBlock('正确答案', q.answer, 'right')]),
+              ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
+            );
+          });
+          list.appendChild(btn);
+        }
+        item.append(list, explain);
+      } else {
+        const reveal = document.createElement('button');
+        reveal.type = 'button';
+        reveal.className = 'kb-quiz-reveal';
+        reveal.textContent = '显示参考答案';
+        const answer = document.createElement('div');
+        answer.className = 'kb-quiz-explain';
+        answer.hidden = true;
+        // 同样的结构化：参考答案与解析各占一块，参考答案里的多个要点自动列点，
+        // 不再拼成一整句（"…；…．· …；…"那种读不出层次的句子）
+        answer.replaceChildren(
+          _quizAnswerBlock('参考答案', q.answer || '（无参考答案）'),
+          ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
+        );
+        reveal.addEventListener('click', () => {
+          answer.hidden = !answer.hidden;
+          reveal.textContent = answer.hidden ? '显示参考答案' : '收起参考答案';
+        });
+        item.append(reveal, answer);
+      }
+      container.appendChild(item);
+    });
+  }
+
+  /** 生成测验 → 追加到对话消息区（kb-qa-messages）；成功后落 qaHistory 供会话恢复。 */
+  function _genQuiz() {
+    if (_quizGenerating) return; // 生成中防重复
+    const box = document.getElementById('kb-qa-messages');
+    if (!box) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (typeof uiToast === 'function') uiToast('测验服务不可用', { variant: 'warning' });
+      return;
+    }
+    _quizGenerating = true;
+    const ai = document.createElement('div');
+    ai.className = 'kb-qa-msg is-ai';
+    const body = document.createElement('div');
+    body.className = 'kb-qa-msg-body kb-quiz-msg';
+    body.innerHTML = '<div class="kb-mm-msg-head">📝 测验</div>'
+      + '<div class="kb-quiz-canvas"><div class="kb-mm-loading">正在生成测验题（本地模型推理中，约 30–60 秒）…</div></div>';
+    ai.appendChild(body);
+    box.appendChild(ai);
+    box.scrollTop = box.scrollHeight;
+    const canvas = body.querySelector('.kb-quiz-canvas');
+    const replaceCard = (html) => {
+      ai.remove();
+      const next = document.createElement('div');
+      next.className = 'kb-qa-msg is-ai';
+      const nb = document.createElement('div');
+      nb.className = 'kb-qa-msg-body kb-quiz-msg';
+      nb.innerHTML = html;
+      next.appendChild(nb);
+      box.appendChild(next);
+      box.scrollTop = box.scrollHeight;
+      return nb;
+    };
+    window.cogseed.invoke('kb.quiz', {
+      dir: _state.spaceId ? null : (_state.currentLib || null),
+      spaceId: _state.spaceId || null,
+    })
+      .then((res) => {
+        _quizGenerating = false;
+        const questions = Array.isArray(res && res.questions) ? res.questions : [];
+        if (!res || res.source === 'degraded' || !questions.length) {
+          const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+            + '<div class="kb-quiz-canvas">' + _quizFailHtml(res && res.reason) + '</div>');
+          nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
+            nb.parentElement?.remove();
+            _genQuiz();
+          });
+          return;
+        }
+        const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+          + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
+          + '<div class="kb-quiz-list"></div></div>');
+        _renderQuizCard(nb.querySelector('.kb-quiz-list'), questions);
+        // 落进会话历史（题目随消息存着，没有独立存档），并**立刻持久化**：
+        // 只 push 不保存的话切库/换会话/重开就没了（真机反馈：「刚生成的测验没进
+        // 历史会话」）。缓存命中（cached）同样是一张真卡片，也要记。
+        _state.qaHistory.push({ role: 'assistant', kind: 'quiz', questions, ts: Date.now() });
+        if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
+        _qaSaveCurrentSession('测验');
+      })
+      .catch(() => {
+        _quizGenerating = false;
+        const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+          + '<div class="kb-quiz-canvas"><div class="kb-mm-fail">测验生成失败，请稍后重试</div></div>');
+        nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
+          nb.parentElement?.remove();
+          _genQuiz();
+        });
+      });
+  }
+
+  /** 会话历史恢复：按存下来的题目重建测验卡（题目随消息保存，不额外存盘）。 */
+  function _appendQuizMessage(box, m) {
+    const questions = Array.isArray(m.questions) ? m.questions : [];
+    const el = document.createElement('div');
+    el.className = 'kb-qa-msg is-ai';
+    const body = document.createElement('div');
+    body.className = 'kb-qa-msg-body kb-quiz-msg';
+    body.innerHTML = '<div class="kb-mm-msg-head">📝 测验</div>'
+      + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
+      + '<div class="kb-quiz-list"></div></div>';
+    el.appendChild(body);
+    box.appendChild(el);
+    _renderQuizCard(body.querySelector('.kb-quiz-list'), questions);
   }
 
   // 对话回答 → 脑图：基于本条回答文本生成（复用 kb.mindmap 的 text 参数）。
@@ -3840,16 +4119,24 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const s = _state.qaSessions.find((x) => x.id === id);
     if (!s) return;
     _state.qaSessionId = id;
-    const migrated = (s.msgs || []).map((m) => (
-      m && m.kind === 'mindmap'
-        ? { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts }
-        : {
-            role: m.role,
-            content: m.content,
-            ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
-            ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
-          }
-    ));
+    const migrated = (s.msgs || []).map((m) => {
+      if (m && m.kind === 'mindmap') {
+        return { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts };
+      }
+      // 测验消息：题目就存在消息里（没有独立存档），载入必须带上——否则会话里
+      // 只剩一条空回答（真机反馈：「刚生成的测验没进历史会话」的第二个原因：
+      // 这里曾把所有非脑图消息都重建成 {role,content}，quiz 连同题目一起被丢掉）。
+      if (m && m.kind === 'quiz') {
+        const questions = Array.isArray(m.questions) ? m.questions.slice(0, 20) : [];
+        return questions.length ? { role: m.role || 'assistant', kind: 'quiz', questions, ts: m.ts } : null;
+      }
+      return {
+        role: m.role,
+        content: m.content,
+        ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
+        ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
+      };
+    }).filter(Boolean);
     _state.qaHistory = migrated;
     _clearQa();
     const box = document.getElementById('kb-qa-messages');
@@ -3867,6 +4154,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     let legacyAttached = false;
     const nextMsgs = [];
     for (const m of _state.qaHistory) {
+      if (m.kind === 'quiz') {
+        nextMsgs.push(m);
+        _appendQuizMessage(box, m);
+        prevAi = null;
+        continue;
+      }
       if (m.kind === 'mindmap') {
         // 老会话兼容：该脑图就近挂到它前面那条“还没有脑图”的回答，按钮变「重新生成脑图」
         if (prevAi && prevAi.msg && !(prevAi.msg.mm && prevAi.msg.mm.key)) {
@@ -4181,7 +4474,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         dir: _state.spaceId ? null : (_state.currentLib || null),
         k: 8,
         attach_paths: attachPaths,
-        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1),
+        // 脑图/测验这类产物消息没有 content，不能进模型多轮上下文
+        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap' && m.kind !== 'quiz').slice(0, -1),
         // 用户在模型配置弹层里选定的模型（未选则走主进程默认）
         model: (_qaModelEntry && _qaModelEntry.provider && _qaModelEntry.model)
           ? { provider: _qaModelEntry.provider, model: _qaModelEntry.model }
@@ -4403,7 +4697,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                   className: 'kb-wb-right-expand',
                   attrs: { id: 'kb-wb-right-expand', 'aria-controls': 'kb-wb-right-panel', 'aria-expanded': 'false' },
                 })}
-                ${_uiIconButton({ label: '分享知识库', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
+                <span class="kb-wb-share-wrap">
+                  ${_uiIconButton({ label: '分享知识库（待开发）', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
+                  <span class="kb-wb-soon-chip">待开发</span>
+                </span>
                 <div class="kb-wb-more">
                   ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-more-btn' } })}
                   <div class="kb-wb-more-menu" id="kb-wb-more-menu" hidden>
@@ -4465,8 +4762,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
               <div class="kb-wb-right-card-title">
                 <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
                 <span class="kb-wb-card-actions">
-                  ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', disabled: true, className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm', title: '请先生成 AI 解析' } })}
-                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', disabled: true, className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz', title: '请先生成 AI 解析' } })}
+                  ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
                 </span>
               </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
@@ -4759,6 +5056,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
       if (_isExternalSourceSelected()) return;
+      if (!KB_SHARE_READY) { _kbShareSoonOpen(); return; }
       _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
@@ -5037,6 +5335,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _restoreQaModelSelection();
     _renderQaModelChip();
     _refreshQaModelChipLabel();
+    // 首屏解析卡的两个生成入口必须当场绑上：静态模板里的按钮没有 listener，
+    // 只把 disabled 去掉的话点了没反应（要等切换库才绑上）。
+    const analysisCard = document.getElementById('kb-wb-analysis-card');
+    if (analysisCard) _bindAnalysisActions(analysisCard);
     _loadAll();
   }
 
@@ -5619,6 +5921,50 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   function _kbCurSpace() {
     return _state.spaces.find((s) => s.space_id === _state.spaceId) || null;
+  }
+
+  /**
+   * 共享知识库的「分享」目前是**待开发**：飞书分享 / 复制链接 / 知识码 / 权限设置
+   * 这一整套还没有真正落地，弹出来只会让人以为能用。按仓库既有约定
+   * （kb-eco 的「发现待开发」）显示为待开发：按钮挂 chip，点击给一句说明。
+   *
+   * 真要做时把这里翻成 true 即可——下面 `_kbShareDialogOpen` 的实现原样保留。
+   */
+  const KB_SHARE_READY = false;
+
+  /** 「分享（待开发）」说明小弹层：说清现状，别让用户白点。 */
+  function _kbShareSoonOpen() {
+    const trigger = document.activeElement;
+    _kbMenuHide();
+    _kbPermDlgClose();
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <section class="kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
+        ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></div>
+        <div class="kb-wb-right-placeholder kb-share-soon-body">
+          共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
+          当前可以用「成员」把库内资料共享给同一空间的同事。
+        </div>
+        <div class="kb-share-pop-actions">
+          ${_uiButton({ label: '知道了', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
+        </div>
+      </section>`;
+    document.body.appendChild(overlay);
+    _kbShareDlg = overlay;
+    _kbShareDlgController = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-share-soon-ok',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+      onClose: () => {
+        if (_kbShareDlg === overlay) { _kbShareDlg = null; _kbShareDlgController = null; }
+      },
+    });
+    overlay.querySelector('.kb-share-pop-close')?.addEventListener('click', () => _kbShareDlgController?.close());
+    overlay.querySelector('#kb-share-soon-ok')?.addEventListener('click', () => _kbShareDlgController?.close());
   }
 
   // 图 2：分享弹窗 —— 知识库信息卡 + 分享方式行（点击跳权限设置）+ 复制链接/生成知识码
@@ -6471,6 +6817,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
     pdfSrcAt: _fvPdfSrcAt,
+    quizAnswerClauses: _quizAnswerClauses,
   };
 
   // 排版类文件的富查看器桥。调用方是常驻加载的 `anchored-source-view`：它拿到
