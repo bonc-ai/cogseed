@@ -227,15 +227,46 @@ export type RecallCaptureNextAction =
   | 'view_assets'
   | 'none';
 
+/**
+ * 整理记录的用户视角分桶（按原始 status 计算，不依赖候选读取）：
+ *  - attention  有事要用户做：失败 / 待确认 / 需配置模型 / 被暂停
+ *  - active     自己在走：排队 / 提炼 / 写入 / 各类等待与夜间计划
+ *  - silent     系统判定无值得留存内容（no_candidate）；随时间无界增长，
+ *               永不进 summarizeRecallCaptures（性能不变式，见 queryRecallCaptures）
+ *  - done       已终态：完成 / 已取消
+ */
+export type RecallCaptureBucket = 'attention' | 'active' | 'silent' | 'done';
+
+export function captureBucket(capture: Pick<RecallCaptureRecord, 'status'>): RecallCaptureBucket {
+  if (capture.status === 'no_candidate') return 'silent';
+  if (['failed', 'configuration_required', 'review_ready', 'paused'].includes(capture.status)) return 'attention';
+  if (['completed', 'cancelled'].includes(capture.status)) return 'done';
+  return 'active';
+}
+
+/** 静默路由谓词：系统筛空的**内部**记录才走零读取构造器。真正随时间无界
+ *  增长的是这批（每段安静会话都会筛出一条）；visible 的 no_candidate 是
+ *  刻意展示（手工造数/旧数据），照常进 summarize 参与计数。 */
+function isSilentCapture(capture: RecallCaptureRecord): boolean {
+  return capture.status === 'no_candidate' && capture.visibility === 'internal';
+}
+
 export interface RecallCaptureWorkflowRecord extends RecallCaptureRecord {
   workflowStatus: RecallCaptureWorkflowStatus;
   displayStatus: RecallCaptureDisplayStatus;
   displayReason: RecallCaptureDisplayReason;
+  bucket: RecallCaptureBucket;
   reviewSummary: RecallCaptureReviewSummary;
   linkedAssetIds: string[];
   confirmedAssetReceipts: RecallCaptureConfirmedAssetReceipt[];
   nextAction: RecallCaptureNextAction;
   actions: RecallCaptureAction[];
+}
+
+/** 批量控制结果：逐条复用单条状态机，单条失败只记录、不影响其余条目。 */
+export interface RecallCaptureBatchResult {
+  succeeded: string[];
+  failed: Array<{ id: string; error: string }>;
 }
 
 /** Small, display-safe view of a formal asset created through candidate review. */
@@ -258,11 +289,16 @@ export interface RecallCaptureCandidatePromotion {
 
 export type RecallCaptureQueryStatus = RecallCaptureStatus | RecallCaptureDisplayStatus | 'completed';
 
+/** 列表范围：visible=只看用户可见记录（默认，既有口径）；all=含系统内部
+ *  记录（被筛掉的 no_candidate、内部失败等），配合 bucket 分桶展示。 */
+export type RecallCaptureListScope = 'visible' | 'all';
+
 export interface ListRecallCapturesQuery {
   statuses?: RecallCaptureQueryStatus[];
   executionPolicy?: RecallCaptureExecutionPolicy | 'immediate';
   cursor?: string;
   limit?: number;
+  scope?: RecallCaptureListScope;
 }
 
 export interface RecallCaptureCounts {
@@ -274,10 +310,18 @@ export interface RecallCaptureCounts {
   cancelled: number;
 }
 
+export interface RecallCaptureBucketCounts {
+  attention: number;
+  active: number;
+  silent: number;
+  done: number;
+}
+
 export interface RecallCapturePage {
   captures: RecallCaptureWorkflowRecord[];
   nextCursor: string | null;
   counts: RecallCaptureCounts;
+  buckets: RecallCaptureBucketCounts;
 }
 
 export interface CapturePromptMessage {
@@ -1223,6 +1267,7 @@ async function summarizeRecallCaptures(
       workflowStatus,
       displayStatus,
       displayReason: captureDisplayReason(capture, workflowStatus),
+      bucket: captureBucket(capture),
       reviewSummary,
       linkedAssetIds: linkedAssets,
       confirmedAssetReceipts,
@@ -1232,12 +1277,57 @@ async function summarizeRecallCaptures(
   }));
 }
 
+/** 静默记录的展示视图：不经 summarizeRecallCaptures（不读候选/资产）。
+ *  no_candidate 语义上已终态且无任何用户动作，reviewSummary 全零即真值。 */
+function silentRecallCaptureWorkflow(capture: RecallCaptureRecord): RecallCaptureWorkflowRecord {
+  return {
+    ...capture,
+    workflowStatus: 'completed',
+    displayStatus: 'completed',
+    displayReason: 'no_candidate',
+    bucket: 'silent',
+    reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
+    linkedAssetIds: [],
+    confirmedAssetReceipts: [],
+    nextAction: 'none',
+    actions: ['open_conversation'],
+  };
+}
+
+/** 读路径补会话标题：conversationTitle 只在执行提炼时落盘（runRecallCapture），
+ *  从未跑过的等待类记录永远没有标题。这里按会话去重补齐——只在内存里补，
+ *  不写盘（记录的 updatedAt 不因展示需要而变动）；会话读取失败不抛（标题是
+ *  展示增强，不是数据修复），保留「未命名会话的整理」兜底。 */
+async function withConversationTitles(
+  userId: string,
+  captures: RecallCaptureWorkflowRecord[],
+): Promise<RecallCaptureWorkflowRecord[]> {
+  const missing = captures.filter((capture) => !String(capture.conversationTitle || '').trim());
+  if (!missing.length) return captures;
+  const titles = new Map<string, string>();
+  await Promise.all([...new Set(missing.map((capture) => capture.conversationId))].map(
+    async (conversationId) => {
+      try {
+        const conversation = await chats.getConversation(userId, conversationId);
+        if (conversation && conversation.title) titles.set(conversationId, conversation.title);
+      } catch {
+        // 会话已删或读取失败：不阻塞列表，标题走兜底文案。
+      }
+    },
+  ));
+  if (!titles.size) return captures;
+  return captures.map((capture) => (!String(capture.conversationTitle || '').trim())
+    && titles.has(capture.conversationId)
+    ? { ...capture, conversationTitle: titles.get(capture.conversationId) }
+    : capture);
+}
+
 export async function readRecallCaptureWorkflow(
   userId: string,
   id: string,
 ): Promise<RecallCaptureWorkflowRecord> {
   const [capture] = await summarizeRecallCaptures(userId, [await readRecallCapture(userId, id)]);
-  return capture;
+  return (await withConversationTitles(userId, [capture]))[0];
 }
 
 async function listAllRecallCaptures(userId: string): Promise<RecallCaptureRecord[]> {
@@ -1281,7 +1371,7 @@ async function findMergeableAutomaticCapture(
 export async function listRecallCaptures(userId: string, limit = 20): Promise<RecallCaptureWorkflowRecord[]> {
   const wanted = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
   const visible = (await listAllRecallCaptures(userId)).filter((capture) => capture.visibility === 'visible');
-  return summarizeRecallCaptures(userId, visible.slice(0, wanted));
+  return withConversationTitles(userId, (await summarizeRecallCaptures(userId, visible.slice(0, wanted))));
 }
 
 function captureCounts(captures: RecallCaptureWorkflowRecord[]): RecallCaptureCounts {
@@ -1294,6 +1384,13 @@ function captureCounts(captures: RecallCaptureWorkflowRecord[]): RecallCaptureCo
     else counts.waiting += 1;
     return counts;
   }, { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 });
+}
+
+function captureBucketCounts(captures: Array<Pick<RecallCaptureRecord, 'status'>>): RecallCaptureBucketCounts {
+  return captures.reduce<RecallCaptureBucketCounts>((counts, capture) => {
+    counts[captureBucket(capture)] += 1;
+    return counts;
+  }, { attention: 0, active: 0, silent: 0, done: 0 });
 }
 
 const DISPLAY_CAPTURE_STATUSES = new Set<RecallCaptureDisplayStatus>([
@@ -1324,9 +1421,20 @@ export async function queryRecallCaptures(
   userId: string,
   query: ListRecallCapturesQuery = {},
 ): Promise<RecallCapturePage> {
-  const visible = (await listAllRecallCaptures(userId)).filter((capture) => capture.visibility === 'visible');
-  const all = await summarizeRecallCaptures(userId, visible);
-  const counts = captureCounts(all);
+  const records = await listAllRecallCaptures(userId);
+  const scoped = query.scope === 'all'
+    ? records
+    : records.filter((capture) => capture.visibility === 'visible');
+  // 性能不变式：静默记录（内部筛空的 no_candidate，随时间无界增长）永不进
+  // summarizeRecallCaptures——它要逐条读候选/资产。静默记录走零读取的
+  // 展示构造器；counts 口径不变（只数非静默），静默数走 buckets。
+  const loud = scoped.filter((capture) => !isSilentCapture(capture));
+  const silent = scoped.filter(isSilentCapture);
+  const summarized = await summarizeRecallCaptures(userId, loud);
+  const all = [...summarized, ...silent.map(silentRecallCaptureWorkflow)]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  const counts = captureCounts(summarized);
+  const buckets = captureBucketCounts(scoped);
   const statuses = query.statuses?.length ? new Set(query.statuses) : undefined;
   const cursor = query.cursor ? decodeCaptureCursor(query.cursor) : undefined;
   const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 25)));
@@ -1347,8 +1455,9 @@ export async function queryRecallCaptures(
   });
   const captures = filtered.slice(0, limit);
   return {
-    captures,
+    captures: await withConversationTitles(userId, captures),
     counts,
+    buckets,
     nextCursor: filtered.length > captures.length && captures.length
       ? encodeCaptureCursor(captures[captures.length - 1])
       : null,
@@ -2875,6 +2984,39 @@ export async function runRecallCaptureNow(userId: string, id: string): Promise<R
   cancelScheduledCapture(userId, id);
   scheduleRecallCapture(userId, id);
   return capture;
+}
+
+async function batchRecallCaptureControl(
+  userId: string,
+  captureIds: string[],
+  control: (userId: string, id: string) => Promise<RecallCaptureRecord>,
+): Promise<RecallCaptureBatchResult> {
+  const succeeded: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+  // 逐条复用单条状态机（retry / runNow 的全部前置检查与副作用原样生效）；
+  // 单条失败（不可重试 / 不可立即运行 / 已被并发改动）只记录结果，不中断
+  // 也不回滚其余条目。串行执行：控制写盘有读-改-写竞态，并发批量放大会
+  // 互相踩 updateCapture。
+  for (const id of [...new Set(captureIds)]) {
+    try {
+      await control(userId, id);
+      succeeded.push(id);
+    } catch (error) {
+      failed.push({ id, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { succeeded, failed };
+}
+
+/** 批量重试：只对确实失败 / 待配置的记录生效（retryRecallCapture 自校验）。 */
+export function retryRecallCapturesBatch(userId: string, captureIds: string[]): Promise<RecallCaptureBatchResult> {
+  return batchRecallCaptureControl(userId, captureIds, retryRecallCapture);
+}
+
+/** 批量立即整理：每次都是一次模型额度消耗，入口方（IPC/前端）必须先让用户
+ *  确认具体条数；这里不做二次确认，只保证逐条状态机语义。 */
+export function runRecallCapturesNowBatch(userId: string, captureIds: string[]): Promise<RecallCaptureBatchResult> {
+  return batchRecallCaptureControl(userId, captureIds, runRecallCaptureNow);
 }
 
 export async function recoverRecallCaptures(userId: string): Promise<number> {

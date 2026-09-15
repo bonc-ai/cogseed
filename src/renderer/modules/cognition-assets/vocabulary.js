@@ -59,8 +59,10 @@
    *  另含 completed 旧数据兼容）。 */
   const CAPTURE_STATUS = {
     queued: ['cognition.capture_status_queued', '排队中'],
+    waiting_quiet: ['cognition.capture_status_waiting_quiet', '静默期等待'],
     waiting_completion: ['cognition.capture_status_waiting_completion', '等待会话完成'],
     waiting_manual: ['cognition.capture_status_waiting_manual', '等待手动触发'],
+    scheduled: ['cognition.capture_status_scheduled', '等待整理窗口'],
     extracting: ['cognition.capture_status_extracting', '提炼中'],
     writing: ['cognition.capture_status_writing', '写入中'],
     review_ready: ['cognition.capture_status_review', '待确认'],
@@ -69,7 +71,72 @@
     cancelled: ['cognition.capture_status_cancelled', '已取消'],
     paused: ['cognition.capture_status_paused', '已暂停'],
     no_candidate: ['cognition.capture_status_no_candidate', '没有发现可留存的内容'],
+    configuration_required: ['cognition.capture_status_configuration_required', '需要配置模型'],
     active: ['cognition.capture_status_active', '进行中'],
+  };
+
+  /** 展示状态（后端 captureDisplayStatus 的七值全集）。 */
+  const CAPTURE_DISPLAY_STATUS = {
+    waiting: ['cognition.capture_display_waiting', '等待中'],
+    extracting: ['cognition.capture_display_extracting', '提炼中'],
+    review_ready: ['cognition.capture_display_review', '待确认'],
+    writing: ['cognition.capture_display_writing', '写入中'],
+    completed: ['cognition.capture_display_completed', '已完成'],
+    failed: ['cognition.capture_display_failed', '失败'],
+    cancelled: ['cognition.capture_display_cancelled', '已取消'],
+  };
+
+  /** 展示原因（后端 captureDisplayReason 的十七值全集）——状态之外讲清
+   *  「为什么停在这个状态」，是整理记录每行的主文案。 */
+  const CAPTURE_DISPLAY_REASON = {
+    quiet_period: ['cognition.capture_reason_quiet_period', '会话刚结束，正在静默期观察'],
+    conversation_active: ['cognition.capture_reason_conversation_active', '会话还在进行，等这轮结束'],
+    manual_start_required: ['cognition.capture_reason_manual_start_required', '等你手动开始整理'],
+    nightly_window: ['cognition.capture_reason_nightly_window', '等本地夜间整理窗口'],
+    queued: ['cognition.capture_reason_queued', '已排队，即将开始'],
+    paused: ['cognition.capture_reason_paused', '被暂停'],
+    extracting: ['cognition.capture_reason_extracting', '正在提炼候选'],
+    asset_write: ['cognition.capture_reason_asset_write', '正在写入资产'],
+    review_pending: ['cognition.capture_reason_review_pending', '候选已就绪，等你确认'],
+    no_candidate: ['cognition.capture_reason_no_candidate', '整理过，没有发现值得留存的内容'],
+    review_completed: ['cognition.capture_reason_review_completed', '候选已处理完'],
+    model_not_configured: ['cognition.capture_reason_model_not_configured', '还没有配置可用模型'],
+    model_auth_required: ['cognition.capture_reason_model_auth_required', '模型授权已失效，需要重新授权'],
+    asset_write_failed: ['cognition.capture_reason_asset_write_failed', '资产写入失败'],
+    asset_write_interrupted: ['cognition.capture_reason_asset_write_interrupted', '写入被中断（如应用退出）'],
+    capture_failed: ['cognition.capture_reason_capture_failed', '整理没有完成'],
+    cancelled: ['cognition.capture_reason_cancelled', '已取消'],
+  };
+
+  /** 行内动作（后端 captureActions 的九值全集）：按钮文案的唯一来源。 */
+  const CAPTURE_ACTION = {
+    run_now: ['cognition.capture_action_run_now', '立即整理'],
+    pause: ['cognition.capture_action_pause', '暂停'],
+    resume: ['cognition.capture_action_resume', '继续'],
+    cancel: ['cognition.capture_action_cancel', '取消任务'],
+    review_candidates: ['cognition.capture_action_review_candidates', '去确认'],
+    configure_model: ['cognition.capture_action_configure_model', '去配置模型'],
+    retry: ['cognition.capture_action_retry', '重试'],
+    view_assets: ['cognition.capture_action_view_assets', '查看资产'],
+    open_conversation: ['cognition.capture_action_open_conversation', '打开会话'],
+  };
+
+  /** 提炼阶段（后端 RecallCaptureStage 五值）：整理详情页讲「现在做到哪一步」。 */
+  const CAPTURE_STAGE = {
+    model_check: ['cognition.capture_stage_model_check', '检查模型'],
+    recall_view: ['cognition.capture_stage_recall_view', '读取会话内容'],
+    model_extraction: ['cognition.capture_stage_model_extraction', '模型提炼中'],
+    candidate_save: ['cognition.capture_stage_candidate_save', '保存候选'],
+    asset_write: ['cognition.capture_stage_asset_write', '写入资产'],
+  };
+
+  /** 分桶（后端 captureBucket 四值）：整理记录的筛选口径。注意「需要我处理」
+   *  是分桶口径（含待确认/被暂停），比「待我处理」页的失败计数宽。 */
+  const CAPTURE_BUCKET = {
+    attention: ['cognition.capture_bucket_attention', '需要我处理'],
+    active: ['cognition.capture_bucket_active', '进行中'],
+    silent: ['cognition.capture_bucket_silent', '无留存内容'],
+    done: ['cognition.capture_bucket_done', '已完成'],
   };
 
   function lookup(dict, value, what) {
@@ -85,6 +152,11 @@
     sourceStatusText: (status) => lookup(SOURCE_STATUS, status, 'source status'),
     sourceReasonText: (reason) => lookup(SOURCE_REASON, reason, 'source reason'),
     captureStatusText: (status) => lookup(CAPTURE_STATUS, status, 'capture status'),
+    captureDisplayStatusText: (status) => lookup(CAPTURE_DISPLAY_STATUS, status, 'capture display status'),
+    captureReasonText: (reason) => lookup(CAPTURE_DISPLAY_REASON, reason, 'capture display reason'),
+    captureActionText: (action) => lookup(CAPTURE_ACTION, action, 'capture action'),
+    captureBucketText: (bucket) => lookup(CAPTURE_BUCKET, bucket, 'capture bucket'),
+    captureStageText: (stage) => lookup(CAPTURE_STAGE, stage, 'capture stage'),
     /** 整理记录标题：会话标题优先，绝不裸出 rcap- 内部 ID。 */
     recordTitle(record) {
       const raw = record && (record.conversationTitle || record.title);

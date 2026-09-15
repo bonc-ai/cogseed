@@ -2627,3 +2627,113 @@ describe('空返回的可解释性', () => {
     expect(capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [] }), labels)).toEqual([]);
   });
 });
+
+describe('整理记录列表：scope / 分桶 / 标题回填 / 批量', () => {
+  /** 造一条可见记录并直接改盘上字段（同会话手动创建会去重复用，多记录用不同 conversationId）。 */
+  async function craftCapture(capture: typeof import('../../../../src/main/features/recall/capture-service'), conversationId: string, patch: Record<string, unknown>) {
+    const created = await capture.queueManualRecallCaptureFromConversation('capture-user', conversationId);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', created.id, (current) => ({
+      ...current!,
+      ...patch,
+    }));
+    return created.id;
+  }
+
+  it('scope=all 拉入内部静默记录，且静默记录零候选读取（性能不变式）', async () => {
+    const capture = await captureModule();
+    const silentId = await craftCapture(capture, 'conv-1', {
+      status: 'no_candidate',
+      visibility: 'internal',
+      screeningStatus: 'filtered',
+      // 遗留数据即使带候选 id，静默路由也不读它——这是不变式要钉住的行为
+      candidateIds: ['cand-silent'],
+    });
+
+    const visiblePage = await capture.queryRecallCaptures('capture-user', {});
+    expect(visiblePage.captures.map((row) => row.id)).not.toContain(silentId);
+    expect(visiblePage.buckets).toEqual({ attention: 0, active: 0, silent: 0, done: 0 });
+
+    mocks.readCandidate.mockClear();
+    const allPage = await capture.queryRecallCaptures('capture-user', { scope: 'all' });
+    const silentRow = allPage.captures.find((row) => row.id === silentId);
+    expect(silentRow).toMatchObject({
+      bucket: 'silent',
+      workflowStatus: 'completed',
+      displayStatus: 'completed',
+      displayReason: 'no_candidate',
+      nextAction: 'none',
+      actions: ['open_conversation'],
+      reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
+    });
+    expect(allPage.buckets).toEqual({ attention: 0, active: 0, silent: 1, done: 0 });
+    expect(mocks.readCandidate).not.toHaveBeenCalled();
+  });
+
+  it('buckets 分桶：failed→attention、waiting_manual→active，行内带 bucket 与 actions', async () => {
+    const capture = await captureModule();
+    const failedId = await craftCapture(capture, 'conv-1', { status: 'failed', errorCode: 'model_failed' });
+    const waitingId = await craftCapture(capture, 'conv-2', {});
+
+    const page = await capture.queryRecallCaptures('capture-user', { scope: 'all' });
+    expect(page.buckets).toEqual({ attention: 1, active: 1, silent: 0, done: 0 });
+    const failedRow = page.captures.find((row) => row.id === failedId);
+    expect(failedRow?.bucket).toBe('attention');
+    expect(failedRow?.actions).toEqual(expect.arrayContaining(['retry', 'cancel']));
+    expect(failedRow?.displayReason).toBe('capture_failed');
+    const waitingRow = page.captures.find((row) => row.id === waitingId);
+    expect(waitingRow?.bucket).toBe('active');
+    expect(waitingRow?.actions).toEqual(expect.arrayContaining(['run_now', 'pause', 'cancel']));
+    expect(waitingRow?.displayReason).toBe('manual_start_required');
+  });
+
+  it('读路径按会话补标题：内存补齐、不写盘、会话读失败不抛', async () => {
+    const capture = await captureModule();
+    // 手动创建会带标题；模拟"从未跑过的自动捕获记录"＝抹掉标题
+    const id = await craftCapture(capture, 'conv-1', { conversationTitle: undefined });
+
+    // getConversation mock 返回 title: 'Decision work'（beforeEach 默认）
+    const page = await capture.queryRecallCaptures('capture-user', {});
+    expect(page.captures[0].conversationTitle).toBe('Decision work');
+
+    // 不写盘：盘上记录仍无标题（读路径补齐是展示增强，不是数据修复）
+    const raw = await capture.readRecallCapture('capture-user', id);
+    expect(raw.conversationTitle).toBeUndefined();
+
+    // 会话读取失败：不阻塞列表，标题走兜底文案
+    mocks.getConversation.mockRejectedValueOnce(new Error('conversation store unavailable'));
+    const fallbackPage = await capture.queryRecallCaptures('capture-user', {});
+    expect(fallbackPage.captures[0].conversationTitle).toBeUndefined();
+  });
+
+  it('批量重试：逐条复用状态机，单条失败不影响其余', async () => {
+    const capture = await captureModule();
+    const failedA = await craftCapture(capture, 'conv-1', { status: 'failed', errorCode: 'model_failed' });
+    const failedB = await craftCapture(capture, 'conv-2', { status: 'failed', errorCode: 'model_failed' });
+    const notRetryable = await craftCapture(capture, 'conv-3', {});
+
+    const result = await capture.retryRecallCapturesBatch('capture-user', [failedA, failedB, notRetryable]);
+
+    expect(result.succeeded.sort()).toEqual([failedA, failedB].sort());
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].id).toBe(notRetryable);
+    expect(result.failed[0].error).toContain('not retryable');
+    const rowA = await capture.readRecallCapture('capture-user', failedA);
+    expect(rowA.status).toBe('queued');
+    const rowC = await capture.readRecallCapture('capture-user', notRetryable);
+    expect(rowC.status).toBe('waiting_manual');
+  });
+
+  it('批量立即整理：waiting_manual 记录进入 queued', async () => {
+    const capture = await captureModule();
+    const waitingA = await craftCapture(capture, 'conv-1', {});
+    const waitingB = await craftCapture(capture, 'conv-2', {});
+
+    const result = await capture.runRecallCapturesNowBatch('capture-user', [waitingA, waitingB]);
+
+    expect(result.succeeded.sort()).toEqual([waitingA, waitingB].sort());
+    expect(result.failed).toEqual([]);
+    expect((await capture.readRecallCapture('capture-user', waitingA)).status).toBe('queued');
+    expect((await capture.readRecallCapture('capture-user', waitingB)).status).toBe('queued');
+  });
+});

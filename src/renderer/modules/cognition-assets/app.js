@@ -21,6 +21,7 @@
     'refresh', 'cand-adopt-with-form', 'cand-decide',
     'asset-action', 'source-action', 'capture-action', 'organize-conv',
     'capture-policy', 'capture-toggle', 'capture-review-toggle', 'proof-rate',
+    'capture-batch',
   ]);
 
   /* ────────────────────────── 事件委托 ────────────────────────── */
@@ -91,6 +92,32 @@
           case 'go-sources-overview': router.go({ name: 'manage', manageTab: 'sources', sourceKind: '' }); break;
           case 'go-experiences': router.go({ name: 'experiences' }); break;
           case 'go-organize': router.go({ name: 'manage', manageTab: 'organize' }); break;
+          case 'go-capture-log': router.go({ name: 'capture-log' }); break;
+          case 'go-configure-model': {
+            // configuration_required 的处理出口：模型配置在应用设置页（与
+            // kb-workbench 等模块同一条 setView('settings') 通道）。
+            if (typeof window.setView === 'function') window.setView('settings');
+            break;
+          }
+          case 'capture-filter': router.go({ name: 'capture-log', captureBucket: id }); break;
+          case 'open-capture-detail': router.go({ name: 'capture-detail', captureId: id }); break;
+          case 'open-conversation': NS.openConversation(id); break;
+          case 'capture-batch': {
+            // 批量动作的条数在渲染时写死进按钮（只数当前已加载且该动作可执行
+            // 的行）；这里再次从 store 收敛同一口径，防止路由/数据在确认弹窗
+            // 与执行之间变动后多发。
+            const runnable = (S.captures || []).filter((capture) => (
+              Array.isArray(capture.actions) && capture.actions.includes(el.dataset.batch || '')
+            ));
+            if (!runnable.length) break;
+            const action = el.dataset.batch === 'retry' ? 'retry' : 'run_now';
+            const ok = action === 'retry'
+              ? await NS.confirmUser(T('cognition.capture_batch_retry_confirm', '确认重试 {n} 条失败的整理任务？', { n: String(runnable.length) }))
+              : await NS.confirmUser(T('cognition.capture_batch_run_confirm', '将立即整理 {n} 个会话，每条都会消耗模型额度。确认开始？', { n: String(runnable.length) }));
+            if (!ok) break;
+            await A.captureBatch(action, runnable.map((capture) => capture.id));
+            break;
+          }
           case 'open-candidate': router.go({ name: 'review', candidateId: id }); break;
           case 'open-ontology': await NS.openPersonalOntology(); break;
           case 'open-asset': router.go({ name: 'overview', assetId: id }); break;
@@ -171,6 +198,25 @@
 
   /* ────────────────────────── 生命周期 ────────────────────────── */
 
+  let capturePollTimer = null;
+  /** 整理进行中的轻量轮询（4s）：「从历史会话整理」与整理详情页需要看到
+   *  extracting → 完成/失败的状态推进（页面无推送通道）。存在 active 任务
+   *  且用户停在这两个页面时才拉快照；状态离开 active 自动停。 */
+  async function capturePollTick() {
+    capturePollTimer = null;
+    if (!booted || !panelVisible()) return;
+    const onLivePage = S.route.name === 'organize-history' || S.route.name === 'capture-detail';
+    const hasActive = (S.captures || []).some((capture) => capture && capture.bucket === 'active');
+    if (!onLivePage || !hasActive) return;
+    await NS.reload();
+    // reload 被 loading 守卫吞掉时不会触发 notify，这里兜底续上（有守卫不会重复）。
+    scheduleCapturePoll();
+  }
+  function scheduleCapturePoll() {
+    if (capturePollTimer) return;
+    capturePollTimer = setTimeout(capturePollTick, 4000);
+  }
+
   function panelVisible() {
     const panel = document.getElementById('panel-recall');
     if (!panel) return false;
@@ -226,6 +272,9 @@
       void NS.reload({ tree: true });
     }
   });
+
+  // 每次重画后排一次轮询检查（条件不满足时 tick 自行退出）。
+  NS.onChange(() => { scheduleCapturePoll(); });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scheduleBoot, { once: true });

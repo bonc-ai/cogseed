@@ -21,6 +21,14 @@
   const btn = (label, act, options) => {
     const opts = options || {};
     const classes = ['ca-btn', opts.primary ? 'is-primary' : '', opts.danger ? 'is-danger' : '', opts.small ? 'is-sm' : '', opts.className || ''].filter(Boolean).join(' ');
+    // opts.data 的键统一补 data- 前缀：uiButton 的 attrs 白名单只放行
+    // id/role/title/aria-*/data-*，裸键（action/batch/kind…）会被静默丢弃——
+    // 2026-09-14 前端重建起这里的行内动作属性一直没渲染出来，委托层读到
+    // 的 dataset.action 恒为 undefined（2026-09-15 修，整理记录重构时抓出）。
+    const dataAttrs = Object.assign(
+      {},
+      ...Object.entries(opts.data || {}).map(([key, value]) => ({ [`data-${key}`]: value })),
+    );
     return window.uiButton({
       label,
       className: classes,
@@ -30,7 +38,7 @@
         {},
         act ? { 'data-act': act } : {},
         opts.id != null ? { 'data-id': String(opts.id) } : {},
-        opts.data || {},
+        dataAttrs,
         opts.title ? { title: opts.title } : {},
       ),
     });
@@ -129,6 +137,30 @@
   const candidatePending = (candidate) => !!(candidate.capabilities && candidate.capabilities.countsAsPending);
   const candidateTitle = (candidate) => String(candidate.judgment || candidate.summary || '').trim().slice(0, 60)
     || T('cognition.candidate_untitled', '未命名候选');
+
+  /* 整理任务行内动作（整理记录行与整理详情共用）：主按钮按优先级取一个，
+   * 暂停/取消作次级；导航类动作（去确认/配置模型）在 app.js 分流，控制类走
+   * capture-action（与后端 actions 语义 id 一字不差）。 */
+  const CAPTURE_PRIMARY_ORDER = ['review_candidates', 'run_now', 'resume', 'retry', 'configure_model', 'view_assets'];
+  const CAPTURE_NAV_ACTS = { review_candidates: 'go-review', configure_model: 'go-configure-model' };
+  function captureActionButtons(capture) {
+    const vocab = NS.vocabulary;
+    const actions = Array.isArray(capture.actions) ? capture.actions : [];
+    const primary = CAPTURE_PRIMARY_ORDER.find((action) => actions.includes(action));
+    const primaryBtn = primary === 'view_assets'
+      ? btn(T('cognition.capture_action_view_assets', '查看资产'), 'open-asset', { id: (capture.linkedAssetIds || [])[0] || '', small: true, primary: true })
+      : primary && CAPTURE_NAV_ACTS[primary]
+        ? btn(vocab ? vocab.captureActionText(primary) : primary, CAPTURE_NAV_ACTS[primary], { small: true, primary: true })
+        : primary
+          ? btn(vocab ? vocab.captureActionText(primary) : primary, 'capture-action', { id: capture.id, data: { action: primary }, small: true, primary: true })
+          : '';
+    const secondaryBtns = ['pause', 'cancel'].filter((action) => actions.includes(action)).map((action) => btn(
+      vocab ? vocab.captureActionText(action) : action,
+      'capture-action',
+      { id: capture.id, data: { action }, small: true, danger: action === 'cancel' },
+    )).join('');
+    return primaryBtn + secondaryBtns;
+  }
 
   /* ────────────────────────── 认知树（方块堆形版） ────────────────────────── */
   /* 垂直轴 = 处理梯度：土壤（记录）→ 根（候选）→ 干/枝（正式资产）→ 冠（已验证）。
@@ -385,7 +417,9 @@
       attention.push(`<div class="ca-attention-row" data-act="go-sources" ${roleBtn()}><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
     }
     if (stats.failedTasks) {
-      attention.push(`<div class="ca-attention-row" data-act="go-organize" ${roleBtn()}><span>${esc(T('cognition.overview_failed_tasks', '{count} 个整理任务需要重试', { count: String(stats.failedTasks) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
+      // 落点修（2026-09-15）：重试按钮在「整理记录」页，此前却跳到设置页的
+      // 「整理方式」tab——用户到了地方找不到重试入口。
+      attention.push(`<div class="ca-attention-row" data-act="go-capture-log" ${roleBtn()}><span>${esc(T('cognition.overview_failed_tasks', '{count} 个整理任务需要重试', { count: String(stats.failedTasks) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
     }
     return `${hero(
       T('cognition.inbox', '待我处理'), T('cognition.review_title', '待我处理'),
@@ -795,49 +829,217 @@
     </div>`;
   }
 
-  /* 从历史会话整理（独立 tab，2026-09-14 自设置页拆出）。 */
+  /* 从历史会话整理（独立 tab，2026-09-14 自设置页拆出）。
+   * 2026-09-15 交互补全：点「开始整理」后任务立即开跑，该条目带「整理中」
+   * 状态置顶显示（此前点了只弹 toast、列表毫无变化，用户以为没响应）；
+   * 有整理任务的条目可点进详情页看具体情况。任务态来自 store.captures
+   * （快照已含 scope=all，按会话取最相关一条：active 优先，同级取最近）。 */
   function viewOrganizeHistory() {
+    const vocab = NS.vocabulary;
     const conversationItems = S.sources
       .filter((g) => String(g.kind || '') === 'conversation' || (g.items || []).some((i) => i.kind === 'conversation'))
       .flatMap((g) => (Array.isArray(g.items) ? g.items : []));
+    const CLASS_ORDER = { active: 0, attention: 1, done: 2, silent: 3 };
+    const captureByConv = new Map();
+    for (const capture of (Array.isArray(S.captures) ? S.captures : [])) {
+      if (capture.visibility !== 'visible') continue;
+      const prev = captureByConv.get(capture.conversationId);
+      const rank = (row) => (CLASS_ORDER[row.bucket] !== undefined ? CLASS_ORDER[row.bucket] : 9);
+      if (!prev
+        || rank(capture) < rank(prev)
+        || (rank(capture) === rank(prev) && String(capture.updatedAt || '') > String(prev.updatedAt || ''))) {
+        captureByConv.set(capture.conversationId, capture);
+      }
+    }
+    const rows = conversationItems.map((conv) => ({ conv, capture: captureByConv.get(conv.id) || null }));
+    // 「整理中」的条目恒在最顶部，其余按会话最近活动排序（原有口径）。
+    rows.sort((left, right) => {
+      const leftActive = left.capture && left.capture.bucket === 'active' ? 1 : 0;
+      const rightActive = right.capture && right.capture.bucket === 'active' ? 1 : 0;
+      if (leftActive !== rightActive) return rightActive - leftActive;
+      return String(right.conv.updatedAt || right.conv.createdAt || '')
+        .localeCompare(String(left.conv.updatedAt || left.conv.createdAt || ''));
+    });
     // 默认收拢最近 5 条可整理会话，「查看全部」展开（列表与侧栏高度重复，铺开即噪音）。
-    const listLimit = S.organizeListExpanded ? conversationItems.length : Math.min(5, conversationItems.length);
-    const conversations = conversationItems.slice(0, listLimit);
+    const listLimit = S.organizeListExpanded ? rows.length : Math.min(5, rows.length);
+    const visibleRows = rows.slice(0, listLimit);
+    const rowHtml = ({ conv, capture }) => {
+      const convTime = fmtDate(conv.updatedAt || conv.createdAt);
+      if (!capture) {
+        return `
+        <div class="ca-row is-flat">
+          <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
+          <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
+        </div>`;
+      }
+      const detailLink = `data-act="open-capture-detail" data-id="${esc(capture.id)}"`;
+      const titleHtml = `<div class="ca-row-title ca-row-link" ${detailLink} ${roleBtn()} title="${esc(T('cognition.capture_detail_open_hint', '查看整理情况'))}">${esc(vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || conv.title || conv.id))}</div>`;
+      const metaText = [
+        vocab ? vocab.captureReasonText(capture.displayReason) : String(capture.displayReason || ''),
+        convTime,
+      ].filter(Boolean).join(' · ');
+      const sideHtml = capture.bucket === 'active'
+        ? btn(T('cognition.organize_active_label', '整理中'), '', { small: true, primary: true, disabled: true })
+        : chip(
+          vocab ? vocab.captureDisplayStatusText(capture.displayStatus) : String(capture.displayStatus || ''),
+          capture.displayStatus === 'failed' ? 'red' : (capture.displayStatus === 'review_ready' || capture.displayStatus === 'completed') ? 'green' : 'amber',
+        );
+      return `
+        <div class="ca-row is-flat">
+          <div class="ca-row-main">${titleHtml}<div class="ca-row-meta">${esc(metaText)}</div></div>
+          <div class="ca-row-side">${sideHtml}</div>
+        </div>`;
+    };
     return `${hero(
       T('cognition.capture_manual_eyebrow', 'ORGANIZE'), T('cognition.capture_manual_title', '从历史会话整理'),
       T('cognition.capture_manual_note', '整理会使用模型额度，随时可以取消'),
     )}
-    <div class="ca-card">${conversations.length ? conversations.map((conv) => `
-      <div class="ca-row is-flat">
-        <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(fmtDate(conv.updatedAt || conv.createdAt))}</div></div>
-        <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
-      </div>`).join('') : `<div class="ca-note">${esc(T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}
+    <div class="ca-card">${visibleRows.length ? visibleRows.map(rowHtml).join('') : `<div class="ca-note">${esc(T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}
       ${conversationItems.length > 5 ? `<div class="ca-line ca-line-center">${btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${conversationItems.length} 个会话`, { n: String(conversationItems.length) }), 'toggle-organize-list', { small: true })}</div>` : ''}
     </div>`;
   }
 
-  /* 整理记录（独立 tab，2026-09-14 自设置页拆出）。 */
-  function viewCaptureLog() {
-    const captureStatus = (capture) => (NS.vocabulary
-      ? NS.vocabulary.captureStatusText(capture.status)
-      : String(capture.status || ''));
-    const recordTitle = (capture) => (NS.vocabulary
-      ? NS.vocabulary.recordTitle(capture)
-      : String(capture.conversationTitle || capture.title || capture.id || ''));
+  /* 整理详情（2026-09-15 新增）：一条整理任务的完整执行情况——状态与当前
+   * 步骤、时间与模型用量、候选产出与已沉淀资产；动作与整理记录行同一套
+   * 语义（captureActionButtons），标题可回来源会话。 */
+  function viewCaptureDetail(route) {
+    const vocab = NS.vocabulary;
+    const backHtml = btn(`← ${T('common.back', '返回')}`, 'go-back', { className: 'ca-backlink' });
+    const capture = (Array.isArray(S.captures) ? S.captures : [])
+      .find((row) => String(row.id) === String(route.captureId));
+    if (!capture) {
+      return `${backHtml}${empty(T('cognition.capture_detail_missing', '这条整理任务不存在或已被清理'), '')}`;
+    }
+    const summary = capture.reviewSummary || {};
+    const kvRow = (label, value) => (value ? `<div><div class="ca-k">${esc(label)}</div><div class="ca-v">${esc(value)}</div></div>` : '');
+    const totalSec = Number(capture.durationMs) > 0 ? Math.round(Number(capture.durationMs) / 1000) : 0;
+    const durationText = totalSec > 0
+      ? (totalSec < 60
+        ? T('cognition.capture_duration_sec', '{n} 秒', { n: String(totalSec) })
+        : T('cognition.capture_duration_min', '{n} 分 {s} 秒', { n: String(Math.floor(totalSec / 60)), s: String(totalSec % 60) }))
+      : '';
+    const tokens = Number(capture.modelUsage && capture.modelUsage.totalTokens) || 0;
+    const statusTone = capture.displayStatus === 'failed' ? 'red'
+      : (capture.displayStatus === 'completed' || capture.displayStatus === 'review_ready') ? 'green' : 'amber';
+    const receipts = Array.isArray(capture.confirmedAssetReceipts) ? capture.confirmedAssetReceipts : [];
+    // 资产行标题优先取资产自身标题（快照里有）；快照缺这条资产时退回
+    // 「类型 · 版本」，不裸出内部 id。
+    const receiptTitle = (receipt) => {
+      const asset = (Array.isArray(S.assets) ? S.assets : [])
+        .find((row) => String(row.id) === String(receipt.assetId));
+      return asset && asset.title
+        ? String(asset.title)
+        : `${categoryLabel(receipt.assetType)} · v${String(receipt.version || '1')}`;
+    };
+    const assetsHtml = receipts.map((receipt) => `
+      <div class="ca-row is-flat">
+        <div class="ca-row-main"><div class="ca-row-title">${esc(receiptTitle(receipt))}</div></div>
+        <div class="ca-row-side">${btn(T('cognition.capture_action_view_assets', '查看资产'), 'open-asset', { id: receipt.assetId, small: true })}</div>
+      </div>`).join('');
+    return `${backHtml}
+    ${hero(
+      T('cognition.capture_log_eyebrow', 'LOG'),
+      vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || capture.id || ''),
+      vocab ? vocab.captureReasonText(capture.displayReason) : String(capture.displayReason || ''),
+      statsRow([
+        [Number(summary.pending) || 0, T('cognition.capture_metric_review', '待确认')],
+        [Number(summary.promoted) || 0, T('cognition.capture_detail_assets', '已沉淀资产')],
+        [Number(capture.attempt) || 1, T('cognition.capture_detail_attempt', '尝试次数')],
+      ]),
+    )}
+    <div class="ca-card">
+      <div class="ca-line">${chip(
+        vocab ? vocab.captureDisplayStatusText(capture.displayStatus) : String(capture.displayStatus || ''),
+        statusTone,
+      )}</div>
+      <div class="ca-kv">
+        ${kvRow(T('cognition.capture_detail_stage', '当前步骤'), vocab && capture.stage ? vocab.captureStageText(capture.stage) : '')}
+        ${kvRow(T('cognition.capture_detail_created', '创建于'), fmtDate(capture.createdAt))}
+        ${kvRow(T('cognition.capture_detail_started', '开始时间'), fmtDate(capture.startedAt))}
+        ${kvRow(T('cognition.capture_detail_finished', '结束时间'), fmtDate(capture.finishedAt))}
+        ${kvRow(T('cognition.capture_detail_duration', '耗时'), durationText)}
+        ${kvRow(T('cognition.capture_detail_tokens', '模型用量'), tokens ? `${tokens} tokens` : '')}
+      </div>
+      <div class="ca-actions ca-actions-right">
+        ${captureActionButtons(capture)}
+        ${btn(T('cognition.capture_action_open_conversation', '打开会话'), 'open-conversation', { id: capture.conversationId || '', small: true })}
+      </div>
+    </div>
+    ${receipts.length ? `<div class="ca-card">${assetsHtml}</div>` : ''}`;
+  }
+
+  /* 整理记录（独立 tab，2026-09-14 自设置页拆出）。
+   * 2026-09-15 重构：行渲染从「只认 failed/paused 两个状态」改为完全由后端
+   * summarize 出的 displayStatus / displayReason / actions 驱动——后端早就算好
+   * 了每条记录该显示什么、能做什么（capture-service 的 captureDisplayReason /
+   * captureActions），旧渲染把 run_now / pause / cancel 全丢了。另加分桶筛选
+   * chip 与批量入口；标题点击直接打开来源会话。 */
+  function viewCaptureLog(route) {
+    const vocab = NS.vocabulary;
     const captures = Array.isArray(S.captures) ? S.captures : [];
+    /** 前端兜底分桶（老快照无 bucket 字段时现算；口径与后端 captureBucket 一致）。 */
+    const bucketOf = (capture) => (capture.bucket || (
+      capture.status === 'no_candidate' ? 'silent'
+        : ['failed', 'configuration_required', 'review_ready', 'paused'].includes(capture.status) ? 'attention'
+          : ['completed', 'cancelled'].includes(capture.status) ? 'done' : 'active'));
+    const countBy = new Map();
+    for (const capture of captures) countBy.set(bucketOf(capture), (countBy.get(bucketOf(capture)) || 0) + 1);
+    // 计数优先用后端 buckets（scope 内全量，含未加载分页），兜底前端现算。
+    const buckets = S.captureBuckets && Number.isFinite(Number(S.captureBuckets.attention))
+      ? S.captureBuckets
+      : { attention: countBy.get('attention') || 0, active: countBy.get('active') || 0, silent: countBy.get('silent') || 0, done: countBy.get('done') || 0 };
+    const totalCount = buckets.attention + buckets.active + buckets.silent + buckets.done;
+    const rows = route.captureBucket ? captures.filter((capture) => bucketOf(capture) === route.captureBucket) : captures;
+    // 批量入口口径：只作用于「当前已加载且该动作在 actions 里」的行——立即
+    // 整理每条都是一次模型额度消耗，绝不按后端计数隐式扩大范围。
+    const retryableIds = captures.filter((capture) => (capture.actions || []).includes('retry'));
+    const runnableIds = captures.filter((capture) => (capture.actions || []).includes('run_now'));
+
+    const rowHtml = (capture) => {
+      const pending = Number(capture.reviewSummary && capture.reviewSummary.pending) || 0;
+      const promoted = Number(capture.reviewSummary && capture.reviewSummary.promoted) || 0;
+      const detailBits = [
+        vocab ? vocab.captureReasonText(capture.displayReason) : String(capture.displayReason || ''),
+        pending ? T('cognition.capture_review_count', '{n} 条待确认', { n: String(pending) }) : '',
+        promoted ? T('cognition.capture_promoted_count', '{n} 条已沉淀', { n: String(promoted) }) : '',
+        fmtDate(capture.updatedAt || capture.createdAt),
+      ].filter(Boolean);
+      return `
+      <div class="ca-row is-flat">
+        <div class="ca-row-main">
+          <div class="ca-row-title ca-row-link" data-act="open-conversation" data-id="${esc(capture.conversationId || '')}" title="${esc(T('cognition.capture_open_conversation_hint', '打开这个会话'))}" ${roleBtn()}>${esc(vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || capture.id || ''))}</div>
+          <div class="ca-row-meta">${esc(detailBits.join(' · '))}</div>
+        </div>
+        <div class="ca-row-side">${captureActionButtons(capture)}</div>
+      </div>`;
+    };
+
+    const chips = [['', T('common.all', '全部'), totalCount], ['attention', null, buckets.attention], ['active', null, buckets.active], ['done', null, buckets.done]]
+      .map(([id, label, count]) => {
+        const text = label || (vocab ? vocab.captureBucketText(id) : id);
+        return btn(`${text} ${count}`, 'capture-filter', {
+          id,
+          className: `ca-chip ca-chip-btn${String(route.captureBucket || '') === id ? ' is-green' : ''}`,
+        });
+      }).join(' ');
+    const batchBtns = [
+      retryableIds.length ? btn(T('cognition.capture_batch_retry', '重试失败（{n}）', { n: String(retryableIds.length) }), 'capture-batch', { data: { batch: 'retry' }, small: true }) : '',
+      runnableIds.length ? btn(T('cognition.capture_batch_run', '立即整理（{n}）', { n: String(runnableIds.length) }), 'capture-batch', { data: { batch: 'run_now' }, small: true, primary: true }) : '',
+    ].filter(Boolean).join('');
     return `${hero(
       T('cognition.capture_log_eyebrow', 'LOG'), T('cognition.capture_task_log_title', '整理记录'),
       T('cognition.capture_log_hint', '每次整理的执行结果；失败的可以重试。'),
     )}
-    ${captures.length ? `<div class="ca-card">${captures.map((capture) => `
-      <div class="ca-row is-flat">
-        <div class="ca-row-main"><div class="ca-row-title">${esc(recordTitle(capture))}</div>
-        <div class="ca-row-meta">${esc(captureStatus(capture))} · ${esc(fmtDate(capture.updatedAt || capture.createdAt))}</div></div>
-        <div class="ca-row-side">
-          ${capture.status === 'failed' ? btn(T('cognition.capture_action_retry', '重试'), 'capture-action', { id: capture.id, data: { action: 'retry' }, small: true }) : ''}
-          ${capture.status === 'paused' ? btn(T('cognition.capture_action_resume', '继续'), 'capture-action', { id: capture.id, data: { action: 'resume' }, small: true }) : ''}
-        </div>
-      </div>`).join('')}</div>` : `<div class="ca-card">${empty(T('cognition.capture_log_empty', '还没有整理记录'))}</div>`}`;
+    <div class="ca-line ca-capture-toolbar">
+      <div class="ca-chips">${chips}</div>
+      ${batchBtns ? `<div class="ca-right">${batchBtns}</div>` : ''}
+    </div>
+    ${rows.length ? `<div class="ca-card">${rows.map(rowHtml).join('')}</div>` : `<div class="ca-card">${empty(
+      route.captureBucket
+        ? T('cognition.capture_log_empty_filtered', '这个筛选下没有整理记录')
+        : T('cognition.capture_log_empty', '还没有整理记录'),
+    )}</div>`}
+    <p class="ca-footnote">${esc(T('cognition.capture_bucket_scope_note', '「需要我处理」包括待确认与被暂停的记录，比「待我处理」页只数失败的口径宽；「无留存内容」的记录只在「全部」里出现。'))}</p>`;
   }
 
   /* ────────────────────────── 渲染入口 ────────────────────────── */
@@ -861,7 +1063,8 @@
     else if (route.name === 'evidence') body = viewEvidence(route);
     else if (route.name === 'experiences') body = viewExperiences();
     else if (route.name === 'organize-history') body = viewOrganizeHistory();
-    else if (route.name === 'capture-log') body = viewCaptureLog();
+    else if (route.name === 'capture-log') body = viewCaptureLog(route);
+    else if (route.name === 'capture-detail') body = viewCaptureDetail(route);
     else if (route.name === 'manage') body = viewManage(route);
     else body = viewOverview(route);
     const errorBanner = S.errors.length && S.loaded

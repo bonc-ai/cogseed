@@ -167,6 +167,11 @@
 .ca-row-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ca-row-meta { color: var(--ca-ink3); font-size: 12px; margin-top: 2px; }
 .ca-chevron { color: var(--color-ca-ink-faint); font-size: 16px; }
+/* 整理记录：行标题即「打开来源会话」入口（行内有按钮，整行不再导航）。 */
+.ca-row-link { cursor: pointer; width: fit-content; max-width: 100%; }
+.ca-row-link:hover, .ca-row-link:focus-visible { color: var(--color-ca-green-text); text-decoration: underline; }
+/* 整理记录：筛选 chip 与批量入口同一行，窄窗口折行。 */
+.ca-capture-toolbar { flex-wrap: wrap; gap: 8px; margin-bottom: 2px; }
 
 /* ── 树 ───────────────────────────────────────────────────── */
 .ca-tree-card { padding-bottom: 10px; }

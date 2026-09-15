@@ -117,6 +117,7 @@
     candidates: [],
     captures: [],
     captureCounts: {},
+    captureBuckets: { attention: 0, active: 0, silent: 0, done: 0 },
     captureSettings: null,
     sources: [],
     experiences: [],
@@ -127,8 +128,8 @@
     expandedProofs: new Set(),
     /** 自动整理页：历史会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
-    /** 路由：{name, category, assetId, candidateId, manageTab, sourceKind, proofEventId} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' },
+    /** 路由：{name, category, assetId, candidateId, manageTab, sourceKind, proofEventId, captureBucket, captureId} */
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '', captureBucket: '', captureId: '' },
     backStack: [],
   };
   NS.store = store;
@@ -165,7 +166,9 @@
       const [assets, candidates, captures, settings, sources, experiences] = await Promise.all([
         api.soft('recall.assets.list', {}, {}),
         api.soft('recall.candidates.list', {}, {}),
-        api.soft('recall.captures.list', { limit: 40 }, {}),
+        // scope:'all'：整理记录要展示完整历史（含系统判定无留存内容的静默
+        // 记录）。后端保证静默记录零候选读取，这里多拉的记录不产生模型开销。
+        api.soft('recall.captures.list', { limit: 40, scope: 'all' }, {}),
         api.soft('recall.captures.settings.get', {}, {}),
         api.soft('recall.sources.list', {}, {}),
         api.soft('kstar.experiences.list', {}, {}),
@@ -174,6 +177,7 @@
       store.candidates = toArr(candidates, ['candidates', 'items']);
       store.captures = toArr(captures, ['items', 'captures', 'tasks']);
       store.captureCounts = (captures && captures.counts) || {};
+      store.captureBuckets = (captures && captures.buckets) || { attention: 0, active: 0, silent: 0, done: 0 };
       store.captureSettings = (settings && settings.settings) || settings || null;
       store.sources = toArr(sources, ['groups', 'sources']);
       // 提炼出的经验（KSTAR review 里 lesson 非空的记录，含沉淀状态）；失败不阻塞主快照。
@@ -231,7 +235,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' }, next);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '', captureBucket: '', captureId: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
@@ -440,9 +444,12 @@
       await NS.reload();
     },
     async captureAction(captureId, action) {
+      // 行内动作直接用后端语义 id（run_now / pause / resume / cancel / retry），
+      // 与 vocabulary.CAPTURE_ACTION 的键一字不差；导航类动作（去确认 / 打开
+      // 会话等）在 app.js 委托层分流，不到这里。
       const channels = {
         pause: 'recall.captures.pause', resume: 'recall.captures.resume', cancel: 'recall.captures.cancel',
-        retry: 'recall.captures.retry', 'run-now': 'recall.captures.runNow',
+        retry: 'recall.captures.retry', run_now: 'recall.captures.runNow',
       };
       const channel = channels[action];
       if (!channel) return;
@@ -454,9 +461,31 @@
       toast(T('common.done', '已完成'));
       await NS.reload();
     },
+    /** 批量控制：ids 由调用方收敛到「当前已加载且该动作可执行」的行（每条
+     *  立即整理都是一次模型额度消耗），确认弹窗在 app.js 写死条数。 */
+    async captureBatch(action, ids) {
+      const channel = action === 'retry' ? 'recall.captures.batchRetry' : 'recall.captures.batchRunNow';
+      if (!channel || !ids.length) return;
+      const result = await api.call(channel, { captureIds: ids });
+      const outcome = (result && result.result) || { succeeded: [], failed: [] };
+      if (outcome.failed && outcome.failed.length) {
+        toast(T('cognition.capture_batch_partial', '已处理 {ok} 条，{fail} 条没有成功（多为状态已变化）', { ok: String(outcome.succeeded.length), fail: String(outcome.failed.length) }), 'warning');
+      } else {
+        toast(T('cognition.capture_batch_done', '已处理 {n} 条', { n: String(outcome.succeeded.length) }));
+      }
+      await NS.reload();
+      return outcome;
+    },
     async organizeConversation(conversationId) {
-      await api.call('recall.captures.historicalAutoStart', { conversationId });
-      toast(T('cognition.capture_started', '已加入整理任务'));
+      const created = await api.call('recall.captures.historicalAutoStart', { conversationId });
+      const capture = created && created.capture;
+      // 「开始整理」按钮的语义就是立即提炼：后端这一步只建 waiting_manual 任务
+      // （runNow 是既定的唯一额度消耗入口，2026-09-15 用户实测反馈点了没响应），
+      // 这里紧跟的那次 runNow 就是按钮点击本身——显式、且只此一次。
+      if (capture && capture.status === 'waiting_manual') {
+        await api.call('recall.captures.runNow', { captureId: capture.id });
+      }
+      toast(T('cognition.capture_started', '已开始整理'));
       await NS.reload();
     },
     async updateCaptureSettings(patch) {
@@ -491,6 +520,19 @@
       else document.getElementById('recall-btn')?.click();
     } catch (_) { /* 面板切换失败也要完成路由 */ }
   }
+
+  /** 整理记录行 → 打开来源会话：与「继续工作」「运行中心」同一条全局通道
+   *  （setView('conversation', cid)），失败提示而不静默吞掉。 */
+  NS.openConversation = function openConversation(conversationId) {
+    const cid = String(conversationId || '').trim();
+    if (!cid) return false;
+    if (typeof window.setView === 'function') {
+      window.setView('conversation', cid);
+      return true;
+    }
+    toast(T('cognition.capture_open_conversation_unavailable', '当前页面无法直接打开会话，请从对话列表进入'), 'warning');
+    return false;
+  };
 
   function wireOntologyBackButton(section) {
     const back = section.querySelector('[data-cognition-subview-tree]');
