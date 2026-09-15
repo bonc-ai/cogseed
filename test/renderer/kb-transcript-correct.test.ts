@@ -41,6 +41,8 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
     contributed: number;
     canonicalNames: number;
     noSources: boolean;
+    structureOnly: boolean;
+    stats: { ontologyValues: number; ontologyFields: number; memoryEntries: number };
   };
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
@@ -209,7 +211,25 @@ describe('本体同步结果摘要', () => {
   it('本体与记忆都为空 → noSources=true（界面必须如实说明没改动）', () => {
     const info = panel.syncSummary({ groups: [], linked: 0, canonicalNames: 0, alignments: [], missing: [] });
     expect(info.noSources).toBe(true);
+    expect(info.structureOnly).toBe(false);
     expect(info.groupCount).toBe(0);
+  });
+
+  it('只有结构标签（分组标题/字段名）时单独提示，不谎称"找到了记忆分组"', () => {
+    const info = panel.syncSummary({
+      groups: [], linked: 0, canonicalNames: 3, alignments: [], missing: [],
+      stats: { ontologyValues: 0, ontologyFields: 3, memoryEntries: 0 },
+    });
+    expect(info.noSources).toBe(true);
+    expect(info.structureOnly).toBe(true);
+  });
+
+  it('有字段值时不算空来源', () => {
+    const info = panel.syncSummary({
+      groups: [], canonicalNames: 1, stats: { ontologyValues: 1, ontologyFields: 5, memoryEntries: 0 },
+    });
+    expect(info.noSources).toBe(false);
+    expect(info.structureOnly).toBe(false);
   });
 
   it('收敛建议：对齐建议保留双向写法，待补建议带概念键', () => {
@@ -346,7 +366,7 @@ describe('locale 覆盖', () => {
     'seed_fillers', 'seed_fillers_done', 'seed_fillers_failed', 'scan_truncated',
     'merge_on', 'merge_off', 'merged_blocks',
     'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
-    'notes_duplicate', 'notes_save_failed', 'notes_failed',
+    'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
   ];
 
   for (const lang of locales) {

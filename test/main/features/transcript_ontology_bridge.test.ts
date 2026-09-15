@@ -15,6 +15,8 @@ import * as path from 'node:path';
 import {
   adoptMissingSuggestion,
   applyAlignment,
+  collectAllCanonicalNames,
+  type CanonicalName,
   buildCandidateInput,
   candidateIdFor,
   collectCanonicalNames,
@@ -257,6 +259,38 @@ describe('反哺候选池（幂等）', () => {
     expect(second).toBe(1); // 再次调用仍"投了"，但池内不重复
     const { candidate_updates } = await listCandidates(uid);
     expect(candidate_updates.filter((c) => c.candidate_id === candidateIdFor('coxy', 'Cogseed'))).toHaveLength(1);
+  });
+});
+
+describe('recall/ontology-taxonomy 作为结构标签来源（方案 §五 P1-4）', () => {
+  it('只有结构标签（分组标题/字段名）时不产生"待补词条"建议——那是结构不是术语', () => {
+    const names: CanonicalName[] = [
+      { name: '团队成员', source: 'ontology', seedKind: 'field', ontologyRef: { groupId: 'g1', fieldId: '团队成员' } },
+      { name: 'P1验证', source: 'ontology', seedKind: 'group', ontologyRef: { groupId: 'g1', fieldId: '' } },
+    ];
+    expect(suggestMissing([], names)).toEqual([]);
+  });
+
+  it('字段值仍然可以提待补；字段名只用于挂引用', () => {
+    const entry = seed('coxy', 'Cogseed').entry!;
+    const names: CanonicalName[] = [
+      { name: 'Cogseed', source: 'ontology', seedKind: 'value', ontologyRef: { groupId: 'g1', fieldId: '产品名' } },
+      { name: 'OpenMAIC', source: 'ontology', seedKind: 'value', ontologyRef: { groupId: 'g1', fieldId: '项目名' } },
+    ];
+    expect(suggestMissing([entry], names).map((m) => (m as { correct: string }).correct)).toEqual(['OpenMAIC']);
+    // 字段名 `产品名` 挂引用成功（哪怕值里没有它）
+    expect(linkOntologyRefs(uid, loadGlossary(uid).entries, [
+      { name: '产品名', source: 'ontology', seedKind: 'field', ontologyRef: { groupId: 'g2', fieldId: '产品名' } },
+    ])).toBe(0); // 词表里没有"产品名"这个概念 → 0 是正确结果，不是失败
+  });
+
+  it('collectAllCanonicalNames 给出三档来源计数（taxonomy 为空时不炸）', async () => {
+    seed('coxy', 'Cogseed');
+    const { names, stats } = await collectAllCanonicalNames(uid);
+    expect(Array.isArray(names)).toBe(true);
+    expect(stats.memoryEntries).toBe(0);
+    expect(stats.ontologyValues).toBe(0);
+    expect(typeof stats.ontologyFields).toBe('number');
   });
 });
 

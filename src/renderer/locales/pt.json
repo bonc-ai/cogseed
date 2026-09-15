@@ -4515,6 +4515,7 @@
   "kb.transcriptCorrect.notes_duplicate": "Já existem notas idênticas na biblioteca; não é preciso salvar de novo.",
   "kb.transcriptCorrect.notes_save_failed": "Falha ao salvar: {error}",
   "kb.transcriptCorrect.notes_failed": "Não foi possível gerar as notas. Tente novamente mais tarde.",
+  "kb.transcriptCorrect.sync_structure_only": "Só foram encontrados {count} nomes de grupo/campo (rótulos estruturais), sem valores preenchidos por você: esta sincronização não alterou nada.",
   "kb.glossary.title": "Glossário de transcrição",
   "kb.glossary.count": "{count} termos",
   "kb.glossary.owner_named": "Responsável: {owner}",
@@ -4585,5 +4586,9 @@
   "kb.glossary.import_done": "Importado: {added} adicionados, {updated} atualizados, {invalid} ignorados.",
   "kb.glossary.import_failed": "Falha na importação. Tente novamente mais tarde.",
   "kb.glossary.import_invalid_json": "O conteúdo colado não é um JSON válido.",
-  "kb.glossary.unavailable": "O gerenciamento do glossário não está disponível."
+  "kb.glossary.unavailable": "O gerenciamento do glossário não está disponível.",
+  "kb.glossary.seed_initial": "Completar o glossário inicial (anexo A do plano)",
+  "kb.glossary.seed_initial_done": "Glossário inicial completado: {created} adicionados, {updated} atualizados{excluded}",
+  "kb.glossary.seed_initial_excluded": "; excluídos de propósito pelo plano: {list}",
+  "kb.glossary.seed_initial_failed": "Não foi possível completar o glossário inicial. Tente novamente mais tarde."
 }

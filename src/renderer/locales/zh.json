@@ -6403,6 +6403,7 @@
   "kb.transcriptCorrect.notes_duplicate": "库里已有相同内容的附记，无需重复保存。",
   "kb.transcriptCorrect.notes_save_failed": "保存失败：{error}",
   "kb.transcriptCorrect.notes_failed": "生成清理附记失败，请稍后重试。",
+  "kb.transcriptCorrect.sync_structure_only": "只找到 {count} 个分组/字段名（结构标签），没有你填写过的字段值：本次同步没有改动任何词条。",
   "kb.glossary.title": "转写词表",
   "kb.glossary.count": "共 {count} 条",
   "kb.glossary.owner_named": "词表 owner：{owner}",
@@ -6473,5 +6474,9 @@
   "kb.glossary.import_done": "导入完成：新增 {added} 条、更新 {updated} 条、跳过 {invalid} 条。",
   "kb.glossary.import_failed": "导入失败，请稍后重试。",
   "kb.glossary.import_invalid_json": "导入内容不是合法 JSON。",
-  "kb.glossary.unavailable": "词表管理暂不可用。"
+  "kb.glossary.unavailable": "词表管理暂不可用。",
+  "kb.glossary.seed_initial": "补全初始词表（方案附 A）",
+  "kb.glossary.seed_initial_done": "初始词表已补全：新增 {created} 条、更新 {updated} 条{excluded}",
+  "kb.glossary.seed_initial_excluded": "；按方案刻意不入册：{list}",
+  "kb.glossary.seed_initial_failed": "补全初始词表失败，请稍后重试。"
 }

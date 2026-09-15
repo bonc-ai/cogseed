@@ -278,6 +278,11 @@
           role: 'ghost', size: 'sm', disabled: state.busy,
           attrs: { 'data-glo-action': 'owner-note' },
         }),
+        button({
+          label: t('kb.glossary.seed_initial', '补全初始词表（方案附 A）'),
+          role: 'ghost', size: 'sm', disabled: state.busy,
+          attrs: { 'data-glo-action': 'seed-initial' },
+        }),
       ].join('');
     }
 
@@ -681,6 +686,34 @@
       }
     }
 
+    /**
+     * 装入方案附 A 的初始词表（幂等）。方案明写"默认不入册"的词（`for → Forge`）
+     * 不在种子里，返回里会说明被排除的是哪些，避免用户以为装漏了。
+     */
+    async function seedInitial() {
+      if (state.busy) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.seedInitial', {});
+        const excluded = Array.isArray(result?.excluded) ? result.excluded : [];
+        setStatus(t('kb.glossary.seed_initial_done', '初始词表已补全：新增 {created} 条、更新 {updated} 条{excluded}', {
+          created: Number(result?.created || 0),
+          updated: Number(result?.updated || 0),
+          excluded: excluded.length
+            ? t('kb.glossary.seed_initial_excluded', '；按方案刻意不入册：{list}', { list: excluded.join('、') })
+            : '',
+        }), '');
+      } catch (error) {
+        log?.warn('seed initial failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.seed_initial_failed', '补全初始词表失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        await reload();
+        opts.onChanged?.();
+      }
+    }
+
     async function editOwnerNote() {
       const current = String(state.meta?.ownerNote || '');
       let next = null;
@@ -729,6 +762,8 @@
         void setStatusBulk('paused');
       } else if (kind === 'resume-selected') {
         void setStatusBulk('active');
+      } else if (kind === 'seed-initial') {
+        void seedInitial();
       } else if (kind === 'owner-note') {
         void editOwnerNote();
       } else if (kind === 'export-generate') {

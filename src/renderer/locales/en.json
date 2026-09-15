@@ -6403,6 +6403,7 @@
   "kb.transcriptCorrect.notes_duplicate": "Identical notes already exist in the library; no need to save again.",
   "kb.transcriptCorrect.notes_save_failed": "Save failed: {error}",
   "kb.transcriptCorrect.notes_failed": "Could not generate the run notes. Please try again later.",
+  "kb.transcriptCorrect.sync_structure_only": "Only {count} group/field names (structural labels) were found, with no field values you filled in: this sync changed nothing.",
   "kb.glossary.title": "Transcript glossary",
   "kb.glossary.count": "{count} entries",
   "kb.glossary.owner_named": "Owner: {owner}",
@@ -6473,5 +6474,9 @@
   "kb.glossary.import_done": "Imported: {added} added, {updated} updated, {invalid} skipped.",
   "kb.glossary.import_failed": "Import failed. Please try again later.",
   "kb.glossary.import_invalid_json": "The pasted content is not valid JSON.",
-  "kb.glossary.unavailable": "Glossary management is unavailable."
+  "kb.glossary.unavailable": "Glossary management is unavailable.",
+  "kb.glossary.seed_initial": "Fill in the initial glossary (plan annex A)",
+  "kb.glossary.seed_initial_done": "Initial glossary filled in: {created} added, {updated} updated{excluded}",
+  "kb.glossary.seed_initial_excluded": "; deliberately excluded per the plan: {list}",
+  "kb.glossary.seed_initial_failed": "Could not fill in the initial glossary. Please try again later."
 }

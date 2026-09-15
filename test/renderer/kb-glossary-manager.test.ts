@@ -144,6 +144,7 @@ describe('源码契约', () => {
     const allowed = new Set([
       'transcript.glossary.list', 'transcript.glossary.export', 'transcript.glossary.import',
       'transcript.glossary.setStatus', 'transcript.glossary.delete', 'transcript.glossary.setOwnerNote',
+      'transcript.glossary.seedInitial',
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);

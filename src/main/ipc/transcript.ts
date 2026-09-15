@@ -25,6 +25,7 @@ import * as transcriptRuns from '../features/transcript_correction_runs';
 import * as transcriptOntology from '../features/transcript_ontology_bridge';
 import * as transcriptFillers from '../features/transcript_filler_rules';
 import * as transcriptMerge from '../features/transcript_speaker_merge';
+import * as transcriptSeed from '../features/transcript_glossary_seed';
 
 interface IpcContext {
   userId: string;
@@ -186,6 +187,15 @@ export const invokeHandlers = {
       }
     }
     return { created, updated, pack: transcriptFillers.FILLER_PACK_VERSION };
+  },
+
+  /**
+   * 装入方案附 A 的初始词表种子（幂等）。`for → Forge` 等方案明写"默认不入册"
+   * 的词**不在种子里**（见 transcript_glossary_seed）。
+   */
+  'transcript.glossary.seedInitial': async (_payload: Payload, ctx: IpcContext) => {
+    const result = transcriptSeed.seedInitialEntries(ctx.userId);
+    return { ...result, excluded: transcriptSeed.SEED_EXCLUDED.map((row) => row.wrong) };
   },
 
   'transcript.glossary.setOwnerNote': async (payload: Payload, ctx: IpcContext) => ({

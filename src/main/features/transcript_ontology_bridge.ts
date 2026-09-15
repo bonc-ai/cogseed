@@ -43,6 +43,7 @@ import {
   type GlossaryKind,
 } from './transcript_glossary';
 import { loadEntries as loadMemoryEntries } from './memory';
+import { loadOntologyTaxonomy } from './recall/ontology-taxonomy';
 import {
   collectTemplateFileFields,
   isTemplateFileText,
@@ -61,6 +62,14 @@ const MAX_CANONICAL_NAME_LEN = 40;
 export interface CanonicalName {
   name: string;
   source: 'ontology' | 'memory';
+  /**
+   * 来源细分（决定"能不能当待补词条提出去"）：
+   *   value = 分组文件里的字段值（用户自己填的名单，可信，可提待补）
+   *   field = 本体重字段名（来自 `recall/ontology-taxonomy`，是**结构标签**，
+   *           只用于挂引用/对齐，绝不提议"补错形"——那只会制造噪声）
+   *   group = 分组标题（同上）
+   */
+  seedKind?: 'value' | 'field' | 'group';
   /** 本体来源时的定位（group/字段），记忆来源时为 undefined。 */
   ontologyRef?: { groupId: string; fieldId: string };
   evidence?: string;
@@ -81,6 +90,15 @@ export type SeedSuggestion =
   | { kind: 'canonical_spelling'; entryId: string; wrong: string; currentCorrect: string; suggestedCorrect: string; source: CanonicalName['source'] }
   | { kind: 'missing_entry'; correct: string; source: CanonicalName['source']; reason: string };
 
+export interface SyncStats {
+  /** 分组文件里用户填的字段值个数（唯一能生产"待补"的来源）。 */
+  ontologyValues: number;
+  /** 本体重字段名个数（结构标签，只参与挂引用/对齐）。 */
+  ontologyFields: number;
+  /** 长期记忆条目个数。 */
+  memoryEntries: number;
+}
+
 export interface SyncResult {
   /** 归组统计（P1-a，始终可用于面板分组展示）。 */
   groups: ConceptGroup[];
@@ -94,6 +112,8 @@ export interface SyncResult {
   contributed: number;
   /** 扫描到的规范名总数（本体 + 记忆）。 */
   canonicalNames: number;
+  /** 来源细分（面板据此区分"有内容"和"只有结构"两种空）。 */
+  stats: SyncStats;
 }
 
 // ── 纯函数（可测）──────────────────────────────────────────────────────
@@ -175,6 +195,8 @@ export function suggestMissing(entries: GlossaryEntry[], names: CanonicalName[])
   const seen = new Set<string>();
   for (const canonical of names) {
     if (canonical.source !== 'ontology') continue;
+    // 只有"用户填写过的字段值"才值得提议补词条；分组标题/字段名是结构标签
+    if (canonical.seedKind && canonical.seedKind !== 'value') continue;
     const key = conceptKeyOf(canonical.name);
     if (!key || known.has(key) || seen.has(key)) continue;
     seen.add(key);
@@ -254,14 +276,20 @@ export function collectCanonicalNames(userId: string): CanonicalName[] {
       if (isTemplateFileText(text)) {
         for (const field of collectTemplateFileFields(text)) {
           for (const fieldValue of field.values ?? []) {
-            push(String(fieldValue?.value ?? ''), 'ontology', { ontologyRef: { groupId, fieldId: field.name } });
+            push(String(fieldValue?.value ?? ''), 'ontology', {
+              seedKind: 'value',
+              ontologyRef: { groupId, fieldId: field.name },
+            });
           }
         }
       } else {
         const content = parseGroupContent(text);
         for (const [fieldName, values] of Object.entries(content.fields ?? {})) {
           for (const fieldValue of values ?? []) {
-            push(String(fieldValue?.value ?? ''), 'ontology', { ontologyRef: { groupId, fieldId: fieldName } });
+            push(String(fieldValue?.value ?? ''), 'ontology', {
+              seedKind: 'value',
+              ontologyRef: { groupId, fieldId: fieldName },
+            });
           }
         }
         // 流水条目是散文，不做规范名（见 suggestMissing 的来源限定）
@@ -283,6 +311,63 @@ export function collectCanonicalNames(userId: string): CanonicalName[] {
   }
 
   return names.slice(0, MAX_CANONICAL_NAMES);
+}
+
+/**
+ * 在文件来源之外，补上 `recall/ontology-taxonomy`（方案 §五 P1-4 点名的两个来源之一）。
+ *
+ * **只作为"结构标签"补进来**（seedKind=field/group）：字段名 `团队成员`、分组标题
+ * `P1验证` 这类是结构，不是待纠正的术语——把它们当词条提议会导致一堆永远匹配
+ * 不上的噪声。它们的作用是：分组文件还没填值时，词条仍能通过字段名挂上
+ * `ontologyRef`（本体定位照旧可查）。
+ * taxonomy 读失败（契约/文件问题）时安静降级为"没读到"，不影响同步其余部分。
+ */
+export async function collectTaxonomyNames(userId: string): Promise<CanonicalName[]> {
+  const names: CanonicalName[] = [];
+  try {
+    const taxonomy = await loadOntologyTaxonomy(userId);
+    for (const group of taxonomy.groups) {
+      if (group.title) {
+        names.push({
+          name: String(group.title).trim(),
+          source: 'ontology',
+          seedKind: 'group',
+          ...(group.groupId ? { ontologyRef: { groupId: group.groupId, fieldId: '' } } : {}),
+        });
+      }
+      for (const field of group.fields ?? []) {
+        const fieldName = String(field?.name ?? '').trim();
+        if (!fieldName) continue;
+        names.push({
+          name: fieldName,
+          source: 'ontology',
+          seedKind: 'field',
+          ...(group.groupId ? { ontologyRef: { groupId: group.groupId, fieldId: fieldName } } : {}),
+        });
+      }
+    }
+  } catch (error) {
+    log.warn('ontology taxonomy read failed; continuing without it', { error: (error as Error).message });
+  }
+  return names;
+}
+
+/** 收集全部规范名（文件来源 + taxonomy 结构标签），并给出来源细分。 */
+export async function collectAllCanonicalNames(userId: string): Promise<{
+  names: CanonicalName[];
+  stats: SyncStats;
+}> {
+  const fileNames = collectCanonicalNames(userId);
+  const taxonomyNames = await collectTaxonomyNames(userId);
+  const names = [...fileNames, ...taxonomyNames].slice(0, MAX_CANONICAL_NAMES + 200);
+  return {
+    names,
+    stats: {
+      ontologyValues: names.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').length,
+      ontologyFields: names.filter((n) => n.seedKind === 'field' || n.seedKind === 'group').length,
+      memoryEntries: names.filter((n) => n.source === 'memory').length,
+    },
+  };
 }
 
 // ── 组合动作 ────────────────────────────────────────────────────────────
@@ -336,7 +421,7 @@ export async function syncOntology(
   opts: { contribute?: boolean; minFreq?: number; runIds?: string[]; docIds?: string[] } = {},
 ): Promise<SyncResult> {
   const entries = loadGlossary(userId).entries;
-  const names = collectCanonicalNames(userId);
+  const { names, stats } = await collectAllCanonicalNames(userId);
   const linked = linkOntologyRefs(userId, entries, names);
   const after = linked > 0 ? loadGlossary(userId).entries : entries;
   const contributed = opts.contribute === false
@@ -349,6 +434,7 @@ export async function syncOntology(
     missing: suggestMissing(after, names),
     contributed,
     canonicalNames: names.length,
+    stats,
   };
 }
 

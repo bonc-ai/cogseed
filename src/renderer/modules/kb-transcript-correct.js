@@ -152,7 +152,17 @@
       }))
       .filter((item) => item.conceptKey && item.correct);
     const canonicalNames = Number(raw.canonicalNames || 0);
+    const rawStats = raw.stats && typeof raw.stats === 'object' ? raw.stats : {};
+    const hasStats = typeof rawStats.ontologyValues === 'number'
+      || typeof rawStats.ontologyFields === 'number'
+      || typeof rawStats.memoryEntries === 'number';
+    const stats = {
+      ontologyValues: Number(rawStats.ontologyValues || 0),
+      ontologyFields: Number(rawStats.ontologyFields || 0),
+      memoryEntries: Number(rawStats.memoryEntries || 0),
+    };
     return {
+      stats,
       conceptGroups: groups.slice(0, 8).map((group) => ({
         display: String(group?.display || ''),
         count: Number(group?.entryCount || 0),
@@ -163,8 +173,19 @@
       missing,
       contributed: Number(raw.contributed || 0),
       canonicalNames,
-      /** 本体与记忆都为空：本次同步什么都没改，界面必须如实说，不能装作做了事。 */
-      noSources: canonicalNames === 0,
+      /**
+       * 本体与记忆都为空：本次同步什么都没改，界面必须如实说，不能装作做了事。
+       * 主进程没给 stats（旧载荷）时退回"按规范名总数判断"，免得界面凭空数据
+       * 断言"你什么都没有"。
+       */
+      noSources: hasStats
+        ? (stats.ontologyValues === 0 && stats.memoryEntries === 0)
+        : canonicalNames === 0,
+      /** 只有结构标签（分组标题/字段名）：也没有可用的规范名，但说法要不一样。 */
+      structureOnly: hasStats
+        && stats.ontologyValues === 0
+        && stats.memoryEntries === 0
+        && stats.ontologyFields > 0,
     };
   }
 
@@ -1090,10 +1111,16 @@
       if (info.noSources) {
         const note = document.createElement('div');
         note.className = 'kb-atc__sync-note';
-        note.textContent = t(
-          'kb.transcriptCorrect.sync_no_source',
-          '没有找到本体分组或长期记忆：本次同步没有改动任何词条。',
-        );
+        note.textContent = info.structureOnly
+          ? t(
+            'kb.transcriptCorrect.sync_structure_only',
+            '只找到 {count} 个分组/字段名（结构标签），没有你填写过的字段值：本次同步没有改动任何词条。',
+            { count: info.stats.ontologyFields },
+          )
+          : t(
+            'kb.transcriptCorrect.sync_no_source',
+            '没有找到记忆分组或用户级长期记忆（偏好 / 共享）：本次同步没有改动任何词条。',
+          );
         body.appendChild(note);
       }
 

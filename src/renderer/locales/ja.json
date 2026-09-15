@@ -4515,6 +4515,7 @@
   "kb.transcriptCorrect.notes_duplicate": "同じ内容のレポートが既にあります。重複保存は不要です。",
   "kb.transcriptCorrect.notes_save_failed": "保存に失敗しました：{error}",
   "kb.transcriptCorrect.notes_failed": "レポートの生成に失敗しました。しばらくして再試行してください。",
+  "kb.transcriptCorrect.sync_structure_only": "{count} 件のグループ名/フィールド名（構造ラベル）のみで、入力済みの値がありません：今回の同期で変更はありません。",
   "kb.glossary.title": "文字起こし用語集",
   "kb.glossary.count": "全 {count} 件",
   "kb.glossary.owner_named": "管理者：{owner}",
@@ -4585,5 +4586,9 @@
   "kb.glossary.import_done": "完了：追加 {added}、更新 {updated}、スキップ {invalid}。",
   "kb.glossary.import_failed": "インポートに失敗しました。しばらくして再試行してください。",
   "kb.glossary.import_invalid_json": "貼り付けた内容が正しい JSON ではありません。",
-  "kb.glossary.unavailable": "用語集管理は利用できません。"
+  "kb.glossary.unavailable": "用語集管理は利用できません。",
+  "kb.glossary.seed_initial": "初期用語集を補完（計画 付録A）",
+  "kb.glossary.seed_initial_done": "初期用語集を補完しました：追加 {created} 件・更新 {updated} 件{excluded}",
+  "kb.glossary.seed_initial_excluded": "／計画により意図的に除外：{list}",
+  "kb.glossary.seed_initial_failed": "補完に失敗しました。しばらくして再試行してください。"
 }
