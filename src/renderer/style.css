@@ -32010,6 +32010,15 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   width: min(1120px, calc(100vw - 48px));
   max-height: min(94vh, 980px);
 }
+.anchored-source-modal .ui-modal__header {
+  position: relative;
+  z-index: var(--z-raised);
+  flex: 0 0 auto;
+}
+.anchored-source-modal .ui-modal__header [data-ui-modal-close] {
+  position: relative;
+  pointer-events: auto;
+}
 .anchored-source-modal .ui-modal__body {
   display: flex;
   padding-top: 0;
