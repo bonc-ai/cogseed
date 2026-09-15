@@ -182,6 +182,7 @@ import {
   parseStreamEnvelope,
   parseStreamRequestId,
 } from './security';
+import { officeEmptyBodyHtml, officeFragmentHasText } from '../util/office-preview';
 
 const log = createLogger('ipc');
 
@@ -4527,11 +4528,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
             fragment = pptxBufferToHtml(buf);
           }
           // 转换结果里可能一个字都提不出来（扫描件、旧版 .doc 以嵌入对象塞进
-          // docx 的"壳文件"等）。这时给一句能照做的说明，而不是空白页。
-          const hasText = Boolean(String(fragment || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim());
-          const bodyHtml = hasText
-            ? fragment
-            : '<p class="office-muted">这份文件里没有可直接提取的正文（内容可能在嵌入对象或图片里）。点右上角「在系统中打开」用本机 Office 查看原排版。</p>';
+          // docx 的"壳文件"等）。这时给一句能照做的说明，而不是空白页——文案
+          // 与其它 Office 预览出口（资料面板 / 聊天文件）共用同一份。
+          const bodyHtml = officeFragmentHasText(fragment) ? fragment : officeEmptyBodyHtml(officeKind, buf);
           const html = _wrapOfficePreviewHtml(officeKind, name, bodyHtml);
           _officePreviewCachePut(cacheKey, html, officeKind);
           return { ok: true, kind: 'office', officeKind, name, path: display, html, ...spaceField };
