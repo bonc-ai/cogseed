@@ -26,7 +26,12 @@ import {
   loadGlossary,
   markVerified,
   migrateGlossaryV1ToV2,
+  addContextAllow,
   recordReplacement,
+  removeContextAllow,
+  retargetEntry,
+  setIgnored,
+  setScope,
   saveGlossary,
   setEntryStatus,
   deleteEntry,
@@ -49,6 +54,115 @@ describe('归一化与索引对齐', () => {
   it('全角/大小写折叠后等价', () => {
     expect(foldText('ＣＯＸＹ')).toBe('coxy');
     expect(foldText('CoXy')).toBe('coxy');
+  });
+});
+
+describe('删除类词条（口癖）的存读往返', () => {
+  it('correct 为空的 delete 词条必须能存能读（曾经被读盘校验丢掉，只剩最后一条）', () => {
+    for (const term of ['嗯', '呃', '啊', '哦', '这个', '那个', '的话', '就是', '然后', '对']) {
+      upsertEntry(uid, { wrong: term, action: 'delete', kind: 'filler', boundary: 'substring', source: 'import' });
+    }
+    const fillers = listEntries(uid, { kind: 'filler' });
+    expect(fillers).toHaveLength(10);
+    expect(fillers.every((e) => e.action === 'delete' && e.correct === '')).toBe(true);
+    // 重新读盘一次仍然在（写一次覆盖一次的 bug 就藏在这条断言后面）
+    expect(loadGlossary(uid).entries.filter((e) => e.action === 'delete')).toHaveLength(10);
+  });
+
+  it('replace 词条缺正确写法仍然是脏数据（不能被放进词表）', () => {
+    const entry = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    const file = loadGlossary(uid);
+    const broken = { ...file, entries: [...file.entries, { ...entry, id: 'g_broken', correct: '' }] };
+    saveGlossary(uid, broken);
+    expect(loadGlossary(uid).entries.some((e) => e.id === 'g_broken')).toBe(false);
+  });
+});
+
+describe('写法对齐（本体规范名覆盖词表写法）', () => {
+  it('只改 correct，重算风险；wrong/台账/频次一律不动', () => {
+    const created = upsertEntry(uid, { wrong: 'kstar', correct: 'K star', kind: 'term' }).entry!;
+    recordReplacement(uid, [created.id], { docId: 'd1', runId: 'r1' });
+    const before = findEntry(uid, created.id)!;
+    const after = retargetEntry(uid, created.id, 'KSTAR')!;
+    expect(after.correct).toBe('KSTAR');
+    expect(after.wrong).toBe(before.wrong);
+    expect(after.freq).toBe(before.freq);
+    expect(after.replacedIn).toEqual(before.replacedIn);
+    expect(after.source).toBe(before.source);
+    expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+  });
+
+  it('同一个错形出现两种写法时 → 改完自动升为 high（同错不同正的风险）', () => {
+    const a = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    // 折叠后不同才算"另一种写法"（`CogSeed` 与 `Cogseed` 折叠等价 → 是同一条）
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Coseed' });
+    expect(retargetEntry(uid, a.id, 'Cogseed Studio')!.riskLevel).toBe('high');
+  });
+
+  it('改成空值报错；未知 id 返回 null；写法未变则原样返回不写盘', () => {
+    const entry = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    expect(() => retargetEntry(uid, entry.id, '   ')).toThrow();
+    expect(retargetEntry(uid, 'g_missing', 'X')).toBeNull();
+    expect(retargetEntry(uid, entry.id, 'Cogseed')!.correct).toBe('Cogseed');
+  });
+});
+
+describe('接受的三个动作（范围 / 忽略 / 加白）', () => {
+  it('范围：限本文档 / 限本场景，全局只给非高危', () => {
+    const a = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    const risky = upsertEntry(uid, { wrong: 'model', correct: 'Moodle', riskLevel: 'high' }).entry!;
+
+    expect(setScope(uid, [a.id], { choice: 'doc', docId: 'doc-1' }).updated).toBe(1);
+    expect(findEntry(uid, a.id)!.scope).toEqual({ docIds: ['doc-1'], scenarioTags: [], global: false });
+
+    expect(setScope(uid, [a.id], { choice: 'task', scenarioTags: ['组会'] }).updated).toBe(1);
+    expect(findEntry(uid, a.id)!.scope).toEqual({ docIds: [], scenarioTags: ['组会'], global: false });
+
+    // 高危词条拒绝全局：拒绝项如实回报，且原作用域不变（方案 §2.2 红线）
+    const before = findEntry(uid, risky.id)!.scope;
+    const refused = setScope(uid, [a.id, risky.id], { choice: 'global' });
+    expect(refused.updated).toBe(1);
+    expect(refused.refused).toEqual([{ id: risky.id, wrong: 'model', reason: 'high_risk_cannot_global' }]);
+    expect(findEntry(uid, risky.id)!.scope).toEqual(before);
+    expect(findEntry(uid, a.id)!.scope.global).toBe(true);
+  });
+
+  it('范围：缺 docId/场景标签时抛错，不静默降级', () => {
+    const a = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    expect(() => setScope(uid, [a.id], { choice: 'doc' })).toThrow();
+    expect(() => setScope(uid, [a.id], { choice: 'task', scenarioTags: [] })).toThrow();
+    expect(setScope(uid, [a.id], { choice: 'keep' })).toEqual({ updated: 0, refused: [] });
+  });
+
+  it('忽略可逆且留痕：不删词条、不动台账与频次', () => {
+    const entry = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    recordReplacement(uid, [entry.id], { docId: 'd1', runId: 'r1' });
+    const before = findEntry(uid, entry.id)!;
+    expect(setIgnored(uid, [entry.id], true)).toBe(1);
+    const ignored = findEntry(uid, entry.id)!;
+    expect(ignored.ignoredCount).toBe(1);
+    expect(ignored.freq).toBe(before.freq);
+    expect(ignored.replacedIn).toEqual(before.replacedIn);
+
+    expect(setIgnored(uid, [entry.id], false)).toBe(1);
+    // 恢复 = 删键，不在用户文件里留 0
+    expect(findEntry(uid, entry.id)!.ignoredCount).toBeUndefined();
+    expect(findEntry(uid, entry.id)!.ignoredAt).toBeUndefined();
+  });
+
+  it('加白去重、截断，且不改动黑名单', () => {
+    const entry = upsertEntry(uid, { wrong: 'model', correct: 'Moodle', contextDeny: ['模型'] }).entry!;
+    expect(addContextAllow(uid, [entry.id], '产品模型')).toBe(1);
+    expect(addContextAllow(uid, [entry.id], '产品模型')).toBe(0); // 重复不加
+    const after = findEntry(uid, entry.id)!;
+    expect(after.contextAllow).toEqual(['产品模型']);
+    expect(after.contextDeny).toEqual(['模型']);
+    expect(() => addContextAllow(uid, [entry.id], '   ')).toThrow();
+
+    // 白名单必须能撤（静默候选 = 只进不出会变成黑洞）
+    expect(removeContextAllow(uid, [entry.id], '产品模型')).toBe(1);
+    expect(findEntry(uid, entry.id)!.contextAllow).toEqual([]);
+    expect(removeContextAllow(uid, [entry.id], '产品模型')).toBe(0);
   });
 });
 

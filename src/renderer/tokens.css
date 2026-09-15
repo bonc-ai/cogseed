@@ -294,6 +294,30 @@
   --status-success-text: var(--color-success);
   --status-warning-bg: var(--color-warning-soft);
   --status-warning-text: var(--color-warning-text);
+  /* 转写纠错面板的状态色（视觉规范 §二-1）：只用于标记状态，不大面积铺色。
+     - 已接受：低饱和墨绿（不是亮绿，长时间看不刺眼）
+     - 谨慎：暖橙（不是红，避免紧张感）
+     - 待核：浅灰蓝
+     - 忽略：中性灰 */
+  /* 阅读侧"说话人淡色"三档（视觉规范 §四-2）：极淡、仅辅助分辨说话人切换。
+     注意不能复用 surface 层——`--surface-subtle` 与 `--color-surface-2` 同色会撞档。 */
+  --speaker-tint-0: var(--color-white);
+  --speaker-tint-1: #F2F7F4;
+  --speaker-tint-2: #EFF2F7;
+  /* 与设计系统语义层同值的项一律别名，不重复写字面量（同步 develop #263 后的核对结果）：
+     --status-success-bg === --color-success-soft === #E8F1EC，故别名复用。 */
+  --state-accepted-bg: var(--status-success-bg);
+  --state-accepted-text: #2F6B52;
+  --state-accepted-line: rgba(47, 107, 82, 0.28);
+  --state-caution-bg: #FDF0E3;
+  --state-caution-text: #B45309;
+  --state-caution-line: rgba(180, 83, 9, 0.30);
+  --state-review-bg: #EDF1F7;
+  --state-review-text: #4A5A73;
+  --state-review-line: rgba(74, 90, 115, 0.26);
+  --state-ignored-bg: #F2F4F3;
+  --state-ignored-text: #6B7280;
+  --state-ignored-line: rgba(107, 114, 128, 0.24);
   --status-danger-bg: var(--color-danger-soft);
   --status-danger-text: var(--color-danger);
 

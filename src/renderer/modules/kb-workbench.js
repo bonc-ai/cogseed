@@ -1392,8 +1392,852 @@
     if (el) el.textContent = String(n);
   }
 
-  // ── 文件查看（点击文件行 → 打开原文查看器）──
+  async function _openFileViewer(payload, scopeName, opts) {
+    const scope = scopeName || (payload && payload.spaceId ? payload.spaceId : '');
+    const hl = (opts && typeof opts === 'object') ? opts : null;
+    let overlay = _ensureFileViewerOverlay();
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    // 先显示再恢复上次的窗口尺寸/位置：overlay 关着时是 display:none，量出来的
+    // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
+    // 之后尤其明显），用户既看不全也抓不到右下角手柄。
+    overlay.hidden = false;
+    if (dialog) _fvApplyWindowRect(dialog);
+    _fvResetZoom(dialog);
+    _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
+    try {
+      const res = await window.cogseed.invoke('kb.openFile', payload);
+      if (!res || !res.ok) {
+        const errMsg = (res && res.error) || '打开失败';
+        const friendly = errMsg === 'too_large'
+          ? `文件超过 2MB 预览上限（${res && res.size ? Math.round(res.size / 1024 / 1024) : ''}MB），暂不支持在线预览`
+          : errMsg === 'file not found' ? '文件不存在或已被移动'
+            : /暂不支持预览/.test(errMsg) ? errMsg : errMsg;
+        _setFileViewerState(overlay, {
+          error: friendly,
+          title: (payload && payload.path || '').split('/').pop() || '原文查看',
+          scope,
+        });
+        if (typeof uiToast === 'function') uiToast('无法预览该文件', { variant: 'warning' });
+        return;
+      }
+      _setFileViewerState(overlay, { content: res, title: res.name || (payload && payload.path || '').split('/').pop(), scope }, hl);
+    } catch (err) {
+      _setFileViewerState(overlay, {
+        error: (err && err.message) || String(err),
+        title: (payload && payload.path || '').split('/').pop() || '原文查看',
+        scope,
+      });
+      if (typeof uiToast === 'function') uiToast('打开文件失败', { variant: 'error' });
+    }
+  }
+
+  // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
+  // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
+  let _fileViewerOverlay = null;
+  let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
+  function _ensureFileViewerOverlay() {
+    if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const overlay = el('div', 'kb-fv-overlay');
+    overlay.id = 'kb-file-viewer';
+    overlay.hidden = true;
+
+    const dialog = el('section', 'kb-fv-dialog');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const head = el('header', 'kb-fv-head');
+    const headMain = el('div', 'kb-fv-head-main');
+    const title = el('span', 'kb-fv-title', '原文查看');
+    title.id = 'kb-fv-title';
+    const scope = el('span', 'kb-fv-scope');
+    scope.id = 'kb-fv-scope';
+    headMain.append(title, scope);
+    const headActions = el('div', 'kb-fv-head-actions');
+    // 缩放控件：− / 百分比(可点重置) / ＋
+    const zoomOutBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '−');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.title = '缩小';
+    const zoomLabel = el('button', 'kb-fv-zoom-label', '100%');
+    zoomLabel.type = 'button';
+    zoomLabel.title = '重置缩放（点击回到 100%）';
+    const zoomInBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '＋');
+    zoomInBtn.type = 'button';
+    zoomInBtn.title = '放大';
+    // HTML 专用：默认渲染页面，一键切回源码（两种能力都保留）
+    const sourceBtn = el('button', 'kb-fv-btn', '</> 查看源码');
+    sourceBtn.type = 'button';
+    sourceBtn.id = 'kb-fv-source';
+    sourceBtn.title = '在"渲染页面"和"HTML 源码"之间切换';
+    sourceBtn.hidden = true;
+    // 交给系统应用：查看器只做只读预览，PDF 批注编辑 / 旧版或嵌入对象 Office
+    // 文件要动本机原生应用时走这里（主进程 kb.openExternal，同一套防穿越解析）
+    const externalBtn = el('button', 'kb-fv-btn', '↗ 在系统中打开');
+    externalBtn.type = 'button';
+    externalBtn.id = 'kb-fv-external';
+    externalBtn.title = '用本机默认应用打开（可编辑/批注/打印）';
+    externalBtn.hidden = true;
+    const readerBtn = el('button', 'kb-fv-btn', '⇱ 阅读模式');
+    readerBtn.type = 'button';
+    readerBtn.id = 'kb-fv-reader';
+    readerBtn.title = '切换阅读宽度';
+    const closeBtn = el('button', 'kb-fv-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.id = 'kb-fv-close';
+    closeBtn.title = '关闭（Esc）';
+    headActions.append(zoomOutBtn, zoomLabel, zoomInBtn, sourceBtn, externalBtn, readerBtn, closeBtn);
+    head.append(headMain, headActions);
+
+    const body = el('div', 'kb-fv-body');
+    const loading = el('div', 'kb-fv-loading', '正在读取文件…');
+    loading.id = 'kb-fv-loading';
+    loading.hidden = true;
+    const errorEl = el('div', 'kb-fv-error');
+    errorEl.id = 'kb-fv-error';
+    errorEl.hidden = true;
+    const textEl = el('pre', 'kb-fv-text');
+    textEl.id = 'kb-fv-text';
+    textEl.hidden = true;
+    const mdEl = el('div', 'kb-fv-md');
+    mdEl.id = 'kb-fv-md';
+    mdEl.hidden = true;
+    body.append(loading, errorEl, textEl, mdEl);
+
+    const resizeHandle = el('div', 'kb-fv-resize');
+    resizeHandle.title = '拖动调整窗口大小';
+
+    dialog.append(head, body, resizeHandle);
+    overlay.appendChild(dialog);
+    // 点遮罩空白处关闭——但必须"按在遮罩上也松在遮罩上"才算点击：
+    // 拖右下角手柄改大小时指针常常落到窗口外（=遮罩上），松手那次 click 的
+    // target 就成了遮罩，会把窗口直接关掉（实测：拖完手柄窗口消失）。
+    let pressedOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+    });
+    document.body.appendChild(overlay);
+    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    readerBtn.addEventListener('click', () => {
+      const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
+      readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
+      _fvSaveWindowRect();
+    });
+    // Esc 关闭
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
+    overlay.tabIndex = -1;
+    zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
+    sourceBtn.addEventListener('click', () => {
+      const cur = _fvCur;
+      if (cur && cur.mode === 'html') _fvToggleHtmlSource(overlay, cur);
+      else if (cur && cur.mode === 'text' && _fvHtmlCtx) _fvToggleHtmlSource(overlay, _fvHtmlCtx);
+    });
+    zoomInBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom + 0.1)));
+    zoomLabel.addEventListener('click', () => _fvSetZoom(dialog, 1));
+    externalBtn.addEventListener('click', () => {
+      const payload = _fvExternalTarget();
+      if (!payload) return;
+      void window.cogseed.invoke('kb.openExternal', payload).then((r) => {
+        if (r && r.ok === false && typeof uiToast === 'function') {
+          uiToast('打开失败：' + (r.error || '未知原因'), { variant: 'warning' });
+        }
+      }).catch(() => { /* ignore */ });
+    });
+    // Ctrl/Cmd + 滚轮 缩放内容（pdf 内部滚轮由 PDFium 自行处理，不劫持）
+    body.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      _fvSetZoom(dialog, _fvZoom + (e.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
+    _fvBindTitleDrag(dialog, head);
+    _fvBindResize(dialog, resizeHandle);
+    _fileViewerOverlay = overlay;
+    _injectFileViewerStyle();
+    return overlay;
+  }
+
+  // ── 预览窗交互：标题拖拽移动 / 右下角调整大小（尺寸与位置记忆） ──
+  const _FV_RECT_KEY = 'cogseed.kb-file-viewer.rect';
+
+  /**
+   * 拖拽期间的"事件罩"：盖住整个 overlay 的透明层。
+   *
+   * 为什么必须有它：查看器里嵌的 PDF / HTML iframe 是**独立进程**，指针一旦划到
+   * 它上面，mousemove 就被送进那个进程，主窗口的监听收不到。实测过：从右下角往
+   * 右下拉能变大（指针落在窗口外的遮罩上），往左上拉完全没反应——也就是用户说的
+   * "能移动，但不能调整大小"。罩子把指针事件截在主窗口里，拖拽才跟手。
+   */
+  function _fvOverlayOf(el) {
+    return el?.closest?.('.kb-fv-overlay') || null;
+  }
+  function _fvBeginDragShield(overlay) {
+    if (!overlay || overlay.querySelector('.kb-fv-drag-shield')) return;
+    const shield = document.createElement('div');
+    shield.className = 'kb-fv-drag-shield';
+    overlay.appendChild(shield);
+  }
+  function _fvEndDragShield(overlay) {
+    if (!overlay) return;
+    overlay.querySelectorAll('.kb-fv-drag-shield').forEach((s) => s.remove());
+  }
+
+  function _fvClampRect(dialog) {
+    const vw = window.innerWidth; const vh = window.innerHeight;
+    const w = Math.min(Math.max(dialog.offsetWidth, 420), vw - 24);
+    const h = Math.min(Math.max(dialog.offsetHeight, 280), vh - 24);
+    dialog.style.width = w + 'px';
+    dialog.style.height = h + 'px';
+    const r = dialog.getBoundingClientRect();
+    dialog.style.left = Math.max(0, Math.min(r.left, vw - w)) + 'px';
+    dialog.style.top = Math.max(0, Math.min(r.top, vh - h)) + 'px';
+  }
+  function _fvAbsolute(dialog) {
+    // 脱离 flex 居中流，改为 overlay 内的绝对定位（记忆 x/y 时用）
+    if (dialog.style.position === 'absolute') return;
+    const r = dialog.getBoundingClientRect();
+    dialog.style.position = 'absolute';
+    dialog.style.margin = '0';
+    dialog.style.left = Math.max(0, r.left) + 'px';
+    dialog.style.top = Math.max(0, r.top) + 'px';
+  }
+  function _fvApplyWindowRect(dialog) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(_FV_RECT_KEY) || 'null');
+      if (!saved || !(saved.w && saved.h)) return; // 无记忆 → flex 居中默认
+      const vw = window.innerWidth; const vh = window.innerHeight;
+      dialog.style.position = 'absolute';
+      dialog.style.margin = '0';
+      const w = Math.min(Math.max(Number(saved.w), 420), vw - 24);
+      const h = Math.min(Math.max(Number(saved.h), 280), vh - 24);
+      dialog.style.width = w + 'px';
+      dialog.style.height = h + 'px';
+      // 用刚算好的 w/h 夹位置，而不是 offsetWidth：刚显示出来的那一帧量到的值
+      // 可能还没稳定，拿它夹会把窗口放到可视区外。
+      const x = typeof saved.x === 'number' ? saved.x : Math.round((vw - w) / 2);
+      const y = typeof saved.y === 'number' ? saved.y : Math.round((vh - h) / 2);
+      dialog.style.left = Math.max(0, Math.min(x, vw - w)) + 'px';
+      dialog.style.top = Math.max(0, Math.min(y, vh - h)) + 'px';
+    } catch { /* localStorage 不可用：保持居中 */ }
+  }
+  function _fvSaveWindowRect() {
+    const overlay = document.getElementById('kb-file-viewer');
+    if (!overlay || overlay.hidden) return;
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    if (!dialog) return;
+    try {
+      const r = dialog.getBoundingClientRect();
+      localStorage.setItem(_FV_RECT_KEY, JSON.stringify({
+        w: Math.round(r.width), h: Math.round(r.height),
+        x: Math.round(r.left), y: Math.round(r.top),
+      }));
+    } catch { /* ignore */ }
+  }
+  function _fvBindTitleDrag(dialog, bar) {
+    if (bar.dataset.fvDragBound) return;
+    bar.dataset.fvDragBound = '1';
+    let sx = 0; let sy = 0; let ox = 0; let oy = 0;
+    bar.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button,input,select,textarea')) return;
+      e.preventDefault();
+      _fvAbsolute(dialog);
+      const fvOverlay = _fvOverlayOf(dialog);
+      _fvBeginDragShield(fvOverlay);
+      sx = e.clientX; sy = e.clientY;
+      const r = dialog.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      const onMove = (ev) => {
+        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
+        dialog.style.left = Math.max(0, Math.min(window.innerWidth - w, ox + (ev.clientX - sx))) + 'px';
+        dialog.style.top = Math.max(0, Math.min(window.innerHeight - h, oy + (ev.clientY - sy))) + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        _fvEndDragShield(fvOverlay);
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+  function _fvBindResize(dialog, handle) {
+    if (handle.dataset.fvResizeBound) return;
+    handle.dataset.fvResizeBound = '1';
+    let sx = 0; let sy = 0; let sw = 0; let sh = 0;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _fvAbsolute(dialog);
+      const fvOverlay = _fvOverlayOf(dialog);
+      _fvBeginDragShield(fvOverlay);
+      sx = e.clientX; sy = e.clientY;
+      sw = dialog.offsetWidth; sh = dialog.offsetHeight;
+      document.body.classList.add('kb-fv-resizing');
+      const onMove = (ev) => {
+        const w = Math.min(Math.max(sw + (ev.clientX - sx), 420), window.innerWidth - 24);
+        const h = Math.min(Math.max(sh + (ev.clientY - sy), 280), window.innerHeight - 24);
+        dialog.style.width = w + 'px';
+        dialog.style.height = h + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('kb-fv-resizing');
+        _fvEndDragShield(fvOverlay);
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ── 内容缩放（md/text 走容器 zoom；office 走 iframe 文档 zoom；pdf 走 URL zoom 重载） ──
+  let _fvZoom = 1;
+  let _fvCur = null; // { mode: 'md'|'text'|'office'|'pdf'|'html'|'image'|'media', el?, src? }
+  let _fvCtx = null; // 当前文件的 { path, spaceId }：给"在系统中打开"用
+  /** "在系统中打开"要发给主进程的参数（无当前文件 → null；纯函数，便于测试锁定载荷）。 */
+  function _fvExternalTarget() {
+    const cur = _fvCtx;
+    if (!cur || !cur.path) return null;
+    return cur.spaceId ? { spaceId: cur.spaceId, path: cur.path } : { path: cur.path };
+  }
+  /** HTML 文件：在"渲染页面"和"源码"之间切换（只对 html 显示该按钮）。 */
+  function _fvToggleHtmlSource(overlay, content) {
+    const body = overlay.querySelector('.kb-fv-body');
+    const srcBtn = overlay.querySelector('#kb-fv-source');
+    const frame = body?.querySelector('.kb-fv-frame--html');
+    const pre = overlay.querySelector('#kb-fv-text');
+    if (!body || !frame || !pre || !content) return;
+    const showingSource = !pre.hidden;
+    if (showingSource) {
+      // 回渲染视图
+      pre.hidden = true;
+      pre.textContent = '';
+      frame.hidden = false;
+      if (srcBtn) srcBtn.textContent = '</> 查看源码';
+      _fvCur = { mode: 'html', el: frame, src: content.src, rel: content.rel, spaceId: content.spaceId };
+      return;
+    }
+    // 切到源码：走主进程 kb.openFile(asText) 读同一份文件
+    // （渲染进程 fetch('kb-file://…') 取不到——非 http 方案没有 CORS 头，实测 Failed to fetch）
+    void (async () => {
+      try {
+        const payload = content.spaceId
+          ? { spaceId: content.spaceId, path: content.rel, asText: true }
+          : { path: content.rel, asText: true };
+        const res = await window.cogseed.invoke('kb.openFile', payload);
+        const text = res && res.ok ? String(res.content || '') : '';
+        if (!text) {
+          if (typeof uiToast === 'function') uiToast('读取源码失败，请用"在系统中打开"查看', { variant: 'warning' });
+          return;
+        }
+        frame.hidden = true;
+        pre.hidden = false;
+        pre.textContent = text;
+        if (srcBtn) srcBtn.textContent = '⇲ 渲染视图';
+        _fvCur = { mode: 'text', el: pre };
+      } catch (_) {
+        if (typeof uiToast === 'function') uiToast('读取源码失败，请用"在系统中打开"查看', { variant: 'warning' });
+      }
+    })();
+  }
+
+  function _fvResetZoom(dialog) {
+    _fvZoom = 1;
+    _fvRenderZoom(dialog);
+  }
+  function _fvSetZoom(dialog, z) {
+    _fvZoom = Math.min(2.5, Math.max(0.6, Math.round((z || 1) * 10) / 10));
+    _fvRenderZoom(dialog);
+  }
+  /** PDF iframe 的目标 URL（zoom 是 hash 参数，PDFium 只在**真正加载**时读它）。 */
+  function _fvPdfSrcAt(cur, pct) {
+    const base = String(cur.src || '').split('#')[0];
+    const pagePart = cur.page ? `&page=${cur.page}` : '';
+    return `${base}#toolbar=1&navpanes=0${pagePart}&zoom=${pct}`;
+  }
+
+  /**
+   * 换一个新的 PDF iframe 来应用缩放。
+   *
+   * 为什么不直接改 `el.src`：zoom 写在 URL 的 hash 里，只改 hash 对 PDF 插件
+   * 属于"同文档导航"——Chromium 的 PDF 阅读器不会重新按 zoom 排版。真机实测：
+   * 标签从 100% 点到 144%、iframe src 也跟着变了，**画面像素一模一样**
+   * （截图逐像素比对：dark 32360 三个档位完全相同）。所以必须让它真的加载一次：
+   * 用同一个 URL（新的 zoom）替换掉这个 frame。
+   */
+  function _fvApplyPdfZoom(cur, pct) {
+    const old = cur.el;
+    if (!old) return;
+    if (!old.isConnected || typeof old.replaceWith !== 'function') {
+      old.src = _fvPdfSrcAt(cur, pct);
+      return;
+    }
+    const frame = old.cloneNode(false); // 复制 class/title 等属性，保持样式一致
+    frame.src = _fvPdfSrcAt(cur, pct);
+    old.replaceWith(frame);
+    cur.el = frame;
+    _fvCur = cur;
+  }
+
+  function _fvRenderZoom(dialog) {
+    const label = dialog.querySelector('.kb-fv-zoom-label');
+    if (label) label.textContent = Math.round(_fvZoom * 100) + '%';
+    const cur = _fvCur;
+    if (!cur) return;
+    if (cur.mode === 'office' && cur.el && cur.el.contentDocument && cur.el.contentDocument.documentElement) {
+      // office blob iframe 已开 allow-same-origin：直接缩放其内部文档
+      cur.el.contentDocument.documentElement.style.zoom = String(_fvZoom);
+    } else if (cur.mode === 'pdf' && cur.el) {
+      // PDFium 无外部 zoom API：缩放值变化时用新 zoom 重新加载 frame
+      const pct = Math.round(_fvZoom * 100);
+      if (cur.lastZoom === pct) return;
+      cur.lastZoom = pct;
+      _fvApplyPdfZoom(cur, pct);
+    } else if (cur.el) {
+      cur.el.style.zoom = String(_fvZoom);
+    }
+  }
+
+  // ── 整篇查看器高亮：在渲染文档里定位引用文本并包 <mark>（兼容 md 渲染差异）──
+  function _fvTextNodeList(root) {
+    const doc = (root && root.ownerDocument) || root;
+    if (!doc || !doc.createTreeWalker) return [];
+    const walker = doc.createTreeWalker(root, 4 /* SHOW_TEXT */);
+    const out = [];
+    let n;
+    while ((n = walker.nextNode())) out.push(n);
+    return out;
+  }
+  function _fvNormSpace(s) {
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  }
+  function _fvWrapRaw(node, start, len) {
+    if (!node || !node.nodeValue) return null;
+    const end = Math.min(node.nodeValue.length, start + Math.max(len, 1));
+    if (start >= end) return null;
+    const doc = node.ownerDocument;
+    const range = doc.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    const mark = doc.createElement('mark');
+    mark.className = 'kb-fv-mark';
+    try { range.surroundContents(mark); } catch (_) { return null; }
+    return mark;
+  }
+  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
+  function _fvApproxRawStart(raw, normIdx) {
+    let p = 0;
+    let inWS = false;
+    for (let i = 0; i < raw.length; i++) {
+      const ws = /\s/.test(raw[i]);
+      if (ws) {
+        if (!inWS) { if (p === normIdx) return i; p++; inWS = true; }
+      } else {
+        inWS = false;
+        if (p === normIdx) return i;
+        p++;
+      }
+    }
+    return Math.max(0, raw.length - 1);
+  }
+  // 去掉行首 md 标记（标题/引用/无序与有序列表编号），便于与渲染后 DOM 比对
+  function _fvStripMdMarks(s) {
+    return String(s || '').split('\n').map((ln) => ln
+      .replace(/^\s*(?:#{1,6}[ \t]+|>[\t ]?|[-*+•][ \t]+|\d+[.、)][ \t]+|```+[^\n]*|~~~+)/, ''))
+      .join(' ');
+  }
+  // 高亮前最终清洗：行首标记 + 行内强调符 + 空白归一（与高亮实际使用一致）
+  function _fvCleanQuote(q) {
+    return _fvNormSpace(_fvStripMdMarks(q).replace(/\*\*|__|`/g, ''));
+  }
+  function _fvSignificantTokens(s) {
+    const seen = new Set();
+    const out = [];
+    String(s || '').split(/[^\p{L}\p{N}]+/u).forEach((t) => {
+      const c = (t || '').replace(/[^\p{L}\p{N}_-]/gu, '');
+      if (c && c.length >= 3 && !seen.has(c)) { seen.add(c); out.push(c); }
+    });
+    return out;
+  }
+  function _fvHighlightContainer(container, quote) {
+    if (!container || !quote) return false;
+    // 渲染后正文不含 ** ` 与列表序号/标题标记，先清洗再比对
+    const cleaned = _fvCleanQuote(quote);
+    if (!cleaned) return false;
+    const needles = [];
+    const push = (s) => {
+      const c = _fvNormSpace(s);
+      if (c && c.length >= 3 && !needles.includes(c)) needles.push(c);
+    };
+    push(cleaned.slice(0, 140));
+    if (cleaned.length > 140) push(cleaned.slice(0, 80));
+    const headSentence = (cleaned.match(/^[^\n。！？!?；;，,]{0,60}/) || [''])[0];
+    push(headSentence);
+    const root = container.nodeType === 9 ? container.body : container;
+    const nodes = _fvTextNodeList(root);
+    for (const needle of needles) {
+      const needleNorm = _fvNormSpace(needle);
+      for (const node of nodes) {
+        const raw = node.nodeValue || '';
+        if (!raw.trim()) continue;
+        const rawNorm = _fvNormSpace(raw);
+        const idx = rawNorm.indexOf(needleNorm);
+        let rawStart = -1;
+        if (idx >= 0) {
+          rawStart = _fvApproxRawStart(raw, idx);
+        } else {
+          const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
+          if (!word) continue;
+          const w = raw.indexOf(word);
+          if (w < 0) continue;
+          rawStart = w;
+        }
+        if (rawStart < 0) continue;
+        const mark = _fvWrapRaw(node, rawStart, Math.min(needleNorm.length * 2 + 8, 200));
+        if (mark) {
+          try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+          return true;
+        }
+      }
+    }
+    // 单节点匹配失败（列表/加粗把一句话拆到多个节点）→ 块级兜底：高亮整段
+    const blocks = root.querySelectorAll ? Array.from(root.querySelectorAll('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,dd,dt,summary')) : [];
+    if (blocks.length) {
+      const tokens = _fvSignificantTokens(cleaned);
+      let best = null;
+      let bestScore = 0;
+      for (const b of blocks) {
+        const bn = _fvNormSpace(b.textContent || '');
+        if (!bn) continue;
+        let score = 0;
+        for (const t of tokens) if (bn.includes(t)) score++;
+        if (score > bestScore) { bestScore = score; best = b; }
+      }
+      if (best && bestScore >= 1) {
+        best.classList.add('kb-fv-block-mark');
+        try { best.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+        return true;
+      }
+    }
+    return false;
+  }
+  function _fvHighlightFrame(frame, quote) {
+    try {
+      const doc = frame.contentDocument;
+      if (doc && doc.body && quote) return _fvHighlightContainer(doc.body, quote);
+    } catch (_) { /* 跨域/未就绪 */ }
+    return false;
+  }
+
+  /**
+   * 进入"嵌入 iframe"模式（pdf/office/html/图片/音视频）：正文区与对话框同时标记。
+   * 对话框那份给的是默认高度——iframe 撑不起固有高度，只靠 min-height 的话窗口
+   * 一开只有 280px 高（真机反馈：一打开就想拉大它）。
+   */
+  function _fvEnterFrameMode(overlay, body) {
+    body.classList.add('kb-fv-body--frame');
+    overlay.querySelector('.kb-fv-dialog')?.classList.add('kb-fv-dialog--frame');
+  }
+
+  function _setFileViewerState(overlay, st, hl) {
+    const loading = overlay.querySelector('#kb-fv-loading');
+    const errorEl = overlay.querySelector('#kb-fv-error');
+    const textEl = overlay.querySelector('#kb-fv-text');
+    const mdEl = overlay.querySelector('#kb-fv-md');
+    const body = overlay.querySelector('.kb-fv-body');
+    // 清理上一个文件的嵌入 iframe（pdf / office html），释放 blob URL
+    body.querySelectorAll('.kb-fv-frame').forEach((f) => f.remove());
+    // 退出嵌入模式：正文区与对话框两个 class 一起清（--frame 负责给足高度）
+    body.classList.remove('kb-fv-body--frame');
+    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--frame');
+    if (_fvOfficeBlobUrl) {
+      try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
+      _fvOfficeBlobUrl = null;
+    }
+    _fvCur = null; // 内容视图变化：失效上一文件的缩放目标（error/loading 也走这里）
+    loading.hidden = !st.loading;
+    errorEl.hidden = true; errorEl.textContent = '';
+    textEl.hidden = true; textEl.textContent = '';
+    mdEl.hidden = true; mdEl.innerHTML = '';
+    if (st.title) overlay.querySelector('#kb-fv-title').textContent = st.title;
+    const scopeEl = overlay.querySelector('#kb-fv-scope');
+    scopeEl.textContent = st.scope ? `来自「${st.scope}」` : '';
+    scopeEl.hidden = !st.scope;
+    overlay.querySelector('#kb-fv-reader').textContent = '⇱ 阅读模式';
+    const srcBtn = overlay.querySelector('#kb-fv-source');
+    if (srcBtn) srcBtn.hidden = !(st.content && st.content.kind === 'html');
+    // "在系统中打开"的当前文件上下文（follow 每次内容视图变化；无内容时隐藏按钮）
+    _fvCtx = st.content ? { path: String(st.content.path || st.content.relPath || ''), spaceId: st.content.spaceId ? String(st.content.spaceId) : '' } : null;
+    const extBtn = overlay.querySelector('#kb-fv-external');
+    if (extBtn) extBtn.hidden = !(_fvCtx && _fvCtx.path);
+    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--reader');
+    if (st.error) {
+      errorEl.hidden = false;
+      errorEl.textContent = String(st.error);
+      return;
+    }
+    const c = st.content;
+    if (!c || !c.kind) {
+      errorEl.hidden = false;
+      errorEl.textContent = '文件内容为空';
+      return;
+    }
+    if (c.kind === 'markdown') {
+      mdEl.hidden = false;
+      const bodyMd = String(c.content || '');
+      mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${typeof renderMarkdown === 'function' ? renderMarkdown(bodyMd) : _esc(bodyMd)}</div>`;
+      _fvCur = { mode: 'md', el: mdEl };
+      if (hl && hl.quote) setTimeout(() => {
+        if (!_fvHighlightContainer(mdEl, hl.quote)) {
+          console.warn('[kb] highlight-miss', { kind: 'markdown', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
+        }
+      }, 60);
+    } else if (c.kind === 'text') {
+      textEl.hidden = false;
+      textEl.textContent = String(c.content || '');
+      _fvCur = { mode: 'text', el: textEl };
+      if (hl && hl.quote) setTimeout(() => {
+        if (!_fvHighlightContainer(textEl, hl.quote)) {
+          console.warn('[kb] highlight-miss', { kind: 'text', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
+        }
+      }, 60);
+    } else if (c.kind === 'pdf') {
+      // 原生 PDFium iframe（排版 100% 保持）：个人库 kb-file://kb/<rel>；
+      // 空间库 kb-file://space/<spaceId>/<rel>（主进程已注册空间路由）
+      const rel = String(c.path || '');
+      const sid = c.spaceId ? String(c.spaceId) : '';
+      const enc = (s) => String(s).split('/').map(encodeURIComponent).join('/');
+      const src = sid
+        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
+        : `kb-file://kb/${enc(rel)}`;
+      const pagePart = hl && typeof hl.page === 'number' && hl.page > 0 ? `&page=${Math.floor(hl.page)}` : '';
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--pdf';
+      frame.src = `${src}#toolbar=1&navpanes=0${pagePart}`;
+      frame.title = String(c.name || rel);
+      body.appendChild(frame);
+      _fvEnterFrameMode(overlay, body);
+      _fvCur = { mode: 'pdf', el: frame, src, page: (hl && hl.page) || null, lastZoom: 100 };
+    } else if (c.kind === 'html' || c.kind === 'image' || c.kind === 'media') {
+      // 渲染型文件：直接用 kb-file:// 取字节，保留各自的原生排版/控件。
+      // html 用 sandbox（不给脚本），image/media 用原生 <img>/<video>/<audio>。
+      const rel = String(c.relPath || c.path || '');
+      const sid = c.spaceId ? String(c.spaceId) : '';
+      const enc = (v) => String(v).split('/').map(encodeURIComponent).join('/');
+      const base = sid
+        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
+        : `kb-file://kb/${enc(rel)}`;
+      if (c.kind === 'image') {
+        const img = document.createElement('img');
+        img.className = 'kb-fv-media kb-fv-image';
+        img.src = base;
+        img.alt = String(c.name || rel);
+        img.style.maxWidth = `${_fvZoom * 100}%`;
+        body.appendChild(img);
+        _fvEnterFrameMode(overlay, body);
+        _fvCur = { mode: 'image', el: img };
+      } else if (c.kind === 'media') {
+        const node = document.createElement(c.audio ? 'audio' : 'video');
+        node.className = 'kb-fv-media';
+        node.controls = true;
+        node.src = base;
+        body.appendChild(node);
+        _fvEnterFrameMode(overlay, body);
+        _fvCur = { mode: 'media', el: node };
+      } else {
+        // HTML：默认渲染页面（原排版 / 自带样式 / 相对路径 css+图片都能加载，
+        // 交互卡片里的脚本也能跑），工具栏提供"查看源码"切回纯文本。
+        // sandbox 与 chat-file-viewer.js 的 HTML 分支保持一致：只给 allow-scripts，
+        // 不给 allow-same-origin——`kb-file://` origin ≠ 渲染进程 origin，SOP 已挡住
+        // 父页访问，脚本只为让交互型 HTML 能用。缩放走父页对 iframe 元素的 zoom
+        // （跨 origin 拿不到 contentDocument，也不需要）。
+        const frame = document.createElement('iframe');
+        frame.className = 'kb-fv-frame kb-fv-frame--html';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.src = base;
+        frame.title = String(c.name || rel);
+        body.appendChild(frame);
+        _fvEnterFrameMode(overlay, body);
+        _fvCur = { mode: 'html', el: frame, src: base, rel, spaceId: sid };
+        _fvHtmlCtx = _fvCur;
+      }
+    } else if (c.kind === 'office') {
+      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式）。
+      // sandbox 保持无脚本；allow-same-origin 让父页可对内部文档做 CSS zoom 缩放
+      const officeHtml = String(c.html || '');
+      _fvOfficeBlobUrl = URL.createObjectURL(new Blob([officeHtml], { type: 'text/html;charset=utf-8' }));
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--office';
+      frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.src = _fvOfficeBlobUrl;
+      frame.title = String(c.name || c.path || '');
+      body.appendChild(frame);
+      _fvEnterFrameMode(overlay, body);
+      _fvCur = { mode: 'office', el: frame, src: _fvOfficeBlobUrl };
+      // iframe 就绪后：应用缩放 + 尽力高亮引用段落（失败可见）
+      frame.addEventListener('load', () => {
+        if (hl && hl.quote) setTimeout(() => {
+          if (!_fvHighlightFrame(frame, hl.quote)) {
+            console.warn('[kb] highlight-miss', { kind: 'office', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
+          }
+        }, 80);
+        if (_fvCur && _fvCur.el === frame && _fvZoom !== 1) {
+          try { frame.contentDocument.documentElement.style.zoom = String(_fvZoom); } catch (_) { /* ignore */ }
+        }
+      });
+    } else {
+      errorEl.hidden = false;
+      errorEl.textContent = '暂不支持预览该文件';
+      return;
+    }
+    overlay.focus();
+  }
+
+  let _fvStyleInjected = false;
+  /** 当前打开的 HTML 文件上下文（渲染 ⇄ 源码 切换用）。 */
+  let _fvHtmlCtx = null;
+  function _injectFileViewerStyle() {
+    if (_fvStyleInjected || document.getElementById('kb-file-viewer-style')) return;
+    _fvStyleInjected = true;
+    const style = document.createElement('style');
+    style.id = 'kb-file-viewer-style';
+    style.textContent = `
+      .kb-fv-overlay {
+        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        display: flex; align-items: center; justify-content: center; padding: 24px;
+      }
+      .kb-fv-overlay[hidden] { display: none; }
+      .kb-fv-dialog {
+        background: var(--surface, #fff); color: var(--text, #1f2329);
+        width: min(860px, 96vw); max-height: 88vh; border-radius: 12px;
+        display: flex; flex-direction: column; overflow: hidden;
+        box-shadow: 0 16px 48px rgba(0,0,0,.28); outline: none;
+        min-width: 420px; min-height: 280px;
+        /* 必须有自己的定位上下文：右下角缩放手柄是 absolute，缺了它手柄会挂到
+           overlay（fixed）上 → 跑到屏幕角落，而窗口自己的那个角上什么都没有
+           （真机反馈「能移动但不能调整大小」）。 */
+        position: relative;
+      }
+      .kb-fv-dialog--reader { width: min(1160px, 98vw); max-height: 94vh; }
+      /* 嵌入 iframe 的模式（pdf/office/html/图片/音视频）：高度给足，否则 iframe
+         只能吃 min-height，窗口一开就是一条矮缝，用户第一件事就是想拉大它。
+         用户拖过大小后 inline height 会覆盖这里（inline 优先级更高）。 */
+      .kb-fv-dialog--frame { height: min(86vh, 780px); }
+      .kb-fv-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,.22);
+        background: linear-gradient(180deg, rgba(14,159,110,.05), transparent);
+        cursor: move; user-select: none;
+      }
+      .kb-fv-head-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+      .kb-fv-title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .kb-fv-scope { font-size: 12px; color: #0E9F6E; opacity: .85; white-space: nowrap; }
+      .kb-fv-head-actions { display: flex; align-items: center; gap: 5px; flex: none; }
+      .kb-fv-btn, .kb-fv-close {
+        border: 1px solid rgba(14,159,110,.35); background: transparent; color: #0E9F6E;
+        font-size: 12px; padding: 3px 10px; border-radius: 8px; cursor: pointer;
+      }
+      .kb-fv-btn:hover { background: #E2F5EC; }
+      .kb-fv-zoom-btn { padding: 3px 8px; font-size: 13px; }
+      .kb-fv-zoom-label { min-width: 54px; text-align: center; }
+      .kb-fv-close { border-color: transparent; font-size: 16px; padding: 1px 7px; color: #888; }
+      .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
+      .kb-fv-resize {
+        position: absolute; right: 0; bottom: 0;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+      }
+      .kb-fv-resize::after {
+        content: ''; position: absolute; right: 5px; bottom: 5px;
+        width: 7px; height: 7px;
+        border-right: 2px solid rgba(128,128,128,.55);
+        border-bottom: 2px solid rgba(128,128,128,.55);
+      }
+      .kb-fv-resize:hover::after { border-color: #0E9F6E; }
+      /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
+         （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
+      body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
+      .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
+      .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
+      .kb-fv-error { color: #c0392b; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+      .kb-fv-text {
+        white-space: pre-wrap; word-break: break-word; margin: 0;
+        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 13px; line-height: 1.7; color: inherit;
+      }
+      .kb-fv-markdown { font-size: 14px; line-height: 1.8; }
+      .kb-fv-dialog--reader .kb-fv-body { padding: 32px 56px; }
+      .kb-fv-dialog--reader .kb-fv-markdown { font-size: 16px; }
+      .kb-fv-dialog--reader .kb-fv-text { font-size: 15px; font-family: inherit; }
+      /* pdf / office 嵌入 iframe：占满正文区，独立滚动，正文区本身不滚 */
+      .kb-fv-body--frame { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .kb-fv-body--frame .kb-fv-frame {
+        flex: 1; width: 100%; border: 0; min-height: 0;
+        background: #fff; border-radius: 0 0 12px 12px;
+      }
+      .kb-fv-dialog--reader .kb-fv-body--frame { padding: 0; }
+      .kb-fv-frame--office { background: #eef2f7; }
+      .kb-fv-mark { background: #ffe58a; color: inherit; padding: 0 1px; border-radius: 2px; scroll-margin-top: 64px; }
+      .kb-fv-block-mark {
+        background: rgba(255, 229, 138, .4); box-shadow: inset 3px 0 0 rgba(240, 173, 0, .75);
+        border-radius: 2px; scroll-margin-top: 64px;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // 问答区提示：无消息时显示「基于某库提问」引导
+
+  // ── 文件查看（点击文件行）──────────────────────────────────────────────
+  // 分派原则（#214 曾把右侧这条全部换成纯文本查看器，PDF/Word 因此丢了排版与缩放）：
+  //   排版/渲染类（pdf、Office、html、图片、音视频）→ 富查看器 `_openFileViewer`
+  //     （PDF 走 PDFium：原生工具栏=缩放/翻页/下载/打印；Office 走主进程排版 HTML；
+  //      html 走 sandbox iframe 渲染页面；图片/音视频用原生标签）
+  //   纯文本类（md/txt/代码）→ 原文查看器 `__openAnchorViewer`
+  //     （它是转写纠错面板的宿主，也是引用高亮用的那个）
+  //
+  // 清单来源：`anchored-source-view.js`（常驻加载）暴露的 `__kbRichPreviewExts`——
+  // 分派必须与"阅读器的兜底分支"用同一份表，否则某类型会被一边当排版类、
+  // 另一边当纯文本（PDF/Word 退化成没有排版的字符流）。这里保留同表副本只作为
+  // 独立加载（隔离测试 / 加载顺序异常）时的降级。
+  const _FV_RICH_EXTS_FALLBACK = [
+    '.pdf', '.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm',
+    '.html', '.htm',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif',
+    '.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.webm', '.mkv', '.avi',
+  ];
+  const _FV_RICH_EXTS = window.__kbRichPreviewExts instanceof Set
+    ? window.__kbRichPreviewExts
+    : new Set(_FV_RICH_EXTS_FALLBACK);
+
+  function _extOfPath(relPath) {
+    const name = String(relPath || '').split('/').pop() || '';
+    const dot = name.lastIndexOf('.');
+    return dot >= 0 ? name.slice(dot).toLowerCase() : '';
+  }
+
+  /** 该文件是否该走"保排版"的富查看器（纯文本返回 false）。 */
+  function _isRichPreview(relPath) {
+    if (typeof window.__kbIsRichPath === 'function') return window.__kbIsRichPath(relPath);
+    return _FV_RICH_EXTS.has(_extOfPath(relPath));
+  }
+
+  /** 按类型打开文件：富查看器 or 原文查看器。返回打开方式，便于测试与埋点。 */
   function _openFile(relPath) {
+    if (_isRichPreview(relPath)) {
+      const spaceId = _state.spaceId || '';
+      void _openFileViewer(
+        spaceId ? { spaceId, path: relPath } : { path: relPath },
+        spaceId ? String(spaceId) : (_state.currentLib || ''),
+        null,
+      );
+      return 'rich';
+    }
     if (typeof window.__openAnchorViewer === 'function') {
       window.__openAnchorViewer({
         source: 'library',
@@ -1403,12 +2247,13 @@
         ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
         view: 'document',
       });
-      return;
+      return 'anchor';
     }
     if (typeof uiToast === 'function') {
       const translated = typeof window.t === 'function' ? window.t('kb.viewer.ui_unavailable') : '';
       uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : '原文查看器暂时不可用', { variant: 'warning' });
     }
+    return 'unavailable';
   }
 
   // 问答区提示：无消息时显示「基于某库提问」引导
@@ -1994,7 +2839,9 @@
   }
 
   // ── 脑图放大预览（滚轮缩放 / 拖拽平移 / 双击重命名）──
-  let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
+  // 原文查看器（kb-fv）：PDF/Office 走这里以保证排版与缩放（#214 曾把它删掉，
+// 主进程 kb.openFile / kb-file:// 一直在，缺的就是这一层）；变量随查看器代码块一起恢复。
+let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
   let _mmGenerating = false; // 生成中防重复点击
   let _mmPreheatedKey = '';  // 已后台预热脑图缓存的库 key
   const _mmUndoStack = [];   // 重命名撤销栈 [{idx, old}]，上限 20
@@ -2622,8 +3469,10 @@
       walk({ children: _state.tree });
       const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
       if (hit) {
-        window.__openAnchorViewer({
-          source: 'library',
+        // 与列表点击同一条分派：排版类（pdf/office/html/图片）走富查看器保排版，
+        // 文本类才回落原文查看器（原先这里一律走文本查看器，PDF 来源跳转就丢排版）。
+        _openFileViewerForAnchor({
+          source: _state.spaceId ? 'space' : 'library',
           scope: _state.spaceId ? 'space' : 'global',
           path: hit,
           chunkIdx: 0,
@@ -3412,6 +4261,9 @@
       if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
       return false;
     }
+    // 排版类文件（pdf/office/…）用富查看器打开，并把页码/引用片段带过去定位；
+    // 文本类仍用原文查看器（引用高亮 + 转写纠错面板都在那边）。
+    if (_isRichPreview(anchor.path)) return _openRichForAnchor(anchor);
     if (typeof window.__openAnchorViewer !== 'function') return false;
     await window.__openAnchorViewer({
       source: 'library',
@@ -3422,6 +4274,43 @@
       ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
       view: 'document',
     });
+    return true;
+  }
+
+  /**
+   * 排版类文件按"保排版"方式打开（PDF 走 PDFium、Office 走排版化 HTML），
+   * 并把引用定位（页码）带过去。返回 false = 这次没打开。
+   *
+   * 单独抽出来是因为它是**对外桥**：`anchored-source-view` 在把文件丢进
+   * 纯文本阅读器之前会先调它（见 `window.__openKbRichFile`）。渲染进程的
+   * 分派只有这一条路，PDF/Word 才不会退化成没有排版的字符流。
+   */
+  async function _openRichForAnchor(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return false;
+    const isSpace = anchor.source === 'space' || anchor.scope === 'space';
+    const spaceId = isSpace ? String(anchor.spaceId || '') : '';
+    if (isSpace && !spaceId) {
+      if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
+      return false;
+    }
+    let hl = null;
+    try {
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        const loc = await window.cogseed.invoke('cogseed.anchor.resolve', {
+          source: isSpace ? 'space' : 'library',
+          scope: isSpace ? 'space' : 'global',
+          path: anchor.path,
+          chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+          ...(isSpace ? { spaceId } : {}),
+          ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
+        });
+        if (loc && loc.resolved) {
+          hl = {};
+          if (typeof loc.page === 'number' && loc.page > 0) hl.page = loc.page;
+        }
+      }
+    } catch (_) { /* 定位失败不阻断打开整篇 */ }
+    await _openFileViewer(isSpace ? { spaceId, path: anchor.path } : { path: anchor.path }, isSpace ? spaceId : '', hl);
     return true;
   }
 
@@ -5569,12 +6458,28 @@
     return tokens;
   }
 
+  // 文件查看分派（供渲染层回归测试与自动化验证：返回 'rich'|'anchor'|'unavailable'）
+  window.__kbWorkbenchOpenFile = function openFileForTest(relPath) {
+    return _openFile(relPath);
+  };
+
   // 高亮纯函数（供渲染层回归测试锁定清洗/分词逻辑）
   window.__kbFvUtils = {
     stripMdMarks: _fvStripMdMarks,
     cleanQuote: _fvCleanQuote,
     normSpace: _fvNormSpace,
     significantTokens: _fvSignificantTokens,
+    externalTarget: _fvExternalTarget,
+    pdfSrcAt: _fvPdfSrcAt,
+  };
+
+  // 排版类文件的富查看器桥。调用方是常驻加载的 `anchored-source-view`：它拿到
+  // 排版类路径（pdf/office/html/图片/音视频）时先问这里，只有这里答不上来才
+  // 退回纯文本阅读器。返回 false = 不归我管（非排版类或参数不可用）。
+  window.__openKbRichFile = function openKbRichFile(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return Promise.resolve(false);
+    if (!_isRichPreview(anchor.path)) return Promise.resolve(false);
+    return Promise.resolve(_openRichForAnchor(anchor)).then((opened) => opened !== false, () => false);
   };
 
   // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：
