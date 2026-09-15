@@ -76,4 +76,38 @@ describe('onboarding design-system integration', () => {
     expect(onboardingCss).not.toContain('#cs-onboarding .cs-import-btn:hover');
     expect(onboardingCss).toContain('#cs-onboarding button:not(.ui-button)');
   });
+
+  it('keeps the consent action native and shared disabled states in sync', () => {
+    const transitions: Array<[string, boolean]> = [];
+    const button = {
+      disabled: false,
+      classList: {
+        toggle(className: string, enabled: boolean) {
+          transitions.push([className, enabled]);
+        },
+      },
+    };
+    const context: any = {
+      console,
+      setTimeout,
+      clearTimeout,
+      button,
+    };
+    context.window = context;
+    context.globalThis = context;
+    context.createLogger = () => ({ info() {}, warn() {}, error() {} });
+    vm.createContext(context);
+    for (const file of ['modules/icons.js', 'modules/ui-button.js', 'modules/onboarding.js']) {
+      vm.runInContext(readFileSync(resolve(rendererRoot, file), 'utf8'), context, { filename: file });
+    }
+
+    vm.runInContext('_csSetButtonDisabled(button, true)', context);
+    expect(button.disabled).toBe(true);
+    expect(transitions.at(-1)).toEqual(['is-disabled', true]);
+
+    vm.runInContext('_csSetButtonDisabled(button, false)', context);
+    expect(button.disabled).toBe(false);
+    expect(transitions.at(-1)).toEqual(['is-disabled', false]);
+    expect(onboardingSource).toContain('_csSetButtonDisabled(firstBegin, !consentBox.checked)');
+  });
 });
