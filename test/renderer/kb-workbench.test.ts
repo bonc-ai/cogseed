@@ -397,6 +397,18 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).toMatch(/kind: 'quiz', questions/);
   });
 
+  it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
+    expect(src).toMatch(/kind: 'quiz', questions[\s\S]{0,200}_qaSaveCurrentSession\('测验'\)/);
+    expect(src).toMatch(/_state\.qaHistory\.push\(\{ role: 'assistant', kind: 'quiz'/);
+    // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
+    expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);
+    expect(src).toMatch(/Array\.isArray\(m\.questions\) \? m\.questions\.slice\(0, 20\)/);
+    // ③ 产物消息没有 content，不进模型多轮上下文
+    expect(src).toMatch(/filter\(\(m\) => m\.kind !== 'mindmap' && m\.kind !== 'quiz'\)/);
+  });
+
   it('生成脑图仍走 kb.mindmap（本来就是独立能力）', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).toMatch(/mmBtn\.addEventListener\('click', \(\) => _genMindmap\(\)\)/);

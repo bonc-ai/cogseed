@@ -2892,9 +2892,12 @@
           + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
           + '<div class="kb-quiz-list"></div></div>');
         _renderQuizCard(nb.querySelector('.kb-quiz-list'), questions);
-        if (res.source === 'generated') {
-          _state.qaHistory.push({ role: 'assistant', kind: 'quiz', questions, ts: Date.now() });
-        }
+        // 落进会话历史（题目随消息存着，没有独立存档），并**立刻持久化**：
+        // 只 push 不保存的话切库/换会话/重开就没了（真机反馈：「刚生成的测验没进
+        // 历史会话」）。缓存命中（cached）同样是一张真卡片，也要记。
+        _state.qaHistory.push({ role: 'assistant', kind: 'quiz', questions, ts: Date.now() });
+        if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
+        _qaSaveCurrentSession('测验');
       })
       .catch(() => {
         _quizGenerating = false;
@@ -4045,16 +4048,24 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const s = _state.qaSessions.find((x) => x.id === id);
     if (!s) return;
     _state.qaSessionId = id;
-    const migrated = (s.msgs || []).map((m) => (
-      m && m.kind === 'mindmap'
-        ? { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts }
-        : {
-            role: m.role,
-            content: m.content,
-            ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
-            ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
-          }
-    ));
+    const migrated = (s.msgs || []).map((m) => {
+      if (m && m.kind === 'mindmap') {
+        return { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts };
+      }
+      // 测验消息：题目就存在消息里（没有独立存档），载入必须带上——否则会话里
+      // 只剩一条空回答（真机反馈：「刚生成的测验没进历史会话」的第二个原因：
+      // 这里曾把所有非脑图消息都重建成 {role,content}，quiz 连同题目一起被丢掉）。
+      if (m && m.kind === 'quiz') {
+        const questions = Array.isArray(m.questions) ? m.questions.slice(0, 20) : [];
+        return questions.length ? { role: m.role || 'assistant', kind: 'quiz', questions, ts: m.ts } : null;
+      }
+      return {
+        role: m.role,
+        content: m.content,
+        ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
+        ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
+      };
+    }).filter(Boolean);
     _state.qaHistory = migrated;
     _clearQa();
     const box = document.getElementById('kb-qa-messages');
@@ -4392,7 +4403,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         dir: _state.spaceId ? null : (_state.currentLib || null),
         k: 8,
         attach_paths: attachPaths,
-        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1),
+        // 脑图/测验这类产物消息没有 content，不能进模型多轮上下文
+        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap' && m.kind !== 'quiz').slice(0, -1),
         // 用户在模型配置弹层里选定的模型（未选则走主进程默认）
         model: (_qaModelEntry && _qaModelEntry.provider && _qaModelEntry.model)
           ? { provider: _qaModelEntry.provider, model: _qaModelEntry.model }
