@@ -932,9 +932,32 @@ const _KB_FILE_MIME: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+  // `.html/.htm` 必须在表里：缺了会回落到 `application/octet-stream`，
+  // 浏览器把它当下载 → iframe 空白（"HTML 渲染不出排版"的根因）。
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
   '.json': 'application/json',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xml': 'application/xml',
+  '.css': 'text/css; charset=utf-8',
+  // 音视频：`<audio>/<video>` 需要正确的 MIME 才会播放（否则只显示加载失败）
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
 };
 
 /**

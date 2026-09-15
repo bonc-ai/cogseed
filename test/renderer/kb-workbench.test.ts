@@ -432,3 +432,66 @@ describe('kb file-viewer highlight pure helpers', () => {
     expect(tokens.length).toBeGreaterThan(0);
   });
 });
+
+describe('文件查看：按类型分派（#214 回归防护）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+
+  it('保留富查看器（保排版/缩放）：PDF 走 PDFium iframe，Office 走排版 HTML', () => {
+    // 主进程 kb.openFile 的契约 + kb-file:// 协议仍在；渲染层必须有对应实现
+    expect(src).toContain('kb-file://kb/');
+    expect(src).toContain('kb-file://space/');
+    expect(src).toContain("toolbar=1&navpanes=0");
+    expect(src).toMatch(/kind === 'pdf'/);
+    expect(src).toMatch(/kind === 'office'/);
+    expect(src).toContain('_fvSetZoom');
+    expect(src).toContain('_fvResetZoom');
+  });
+
+  it('渲染型文件（html/图片/音视频）也走富查看器，不再退化成纯文本', () => {
+    expect(src).toContain("kind === 'html' || c.kind === 'image' || c.kind === 'media'");
+    expect(src).toContain('kb-fv-frame--html');
+    expect(src).toContain("createElement(c.audio ? 'audio' : 'video')");
+    // html 默认渲染页面，同时保留"查看源码"
+    expect(src).toContain('kb-fv-source');
+    expect(src).toContain('_fvToggleHtmlSource');
+  });
+
+  it('暴露 __kbWorkbenchOpenFile 供回归与自动化验证（分派本身就是被测行为）', () => {
+    expect(src).toContain('window.__kbWorkbenchOpenFile');
+  });
+
+  it('点击文件按扩展名分派：排版类 → 富查看器；纯文本 → 原文查看器', () => {
+    expect(src).toContain('function _isRichPreview');
+    expect(src).toContain('_FV_RICH_EXTS');
+    expect(src).toMatch(/if \(_isRichPreview\(relPath\)\) \{[\s\S]{0,400}?_openFileViewer\(/);
+    expect(src).toMatch(/if \(typeof window\.__openAnchorViewer === 'function'\) \{[\s\S]{0,300}?__openAnchorViewer\(\{/);
+    // .html 不再被当作文本类打开（否则 70 份 html 只看到源码）
+    expect(src).toContain("'.html', '.htm',");
+  });
+
+  it('引用锚点：排版类带页码定位到富查看器，文本类仍走原文查看器', () => {
+    expect(src).toMatch(/_openFileViewerForAnchor[\s\S]{0,900}?_isRichPreview\(anchor\.path\)/);
+    expect(src).toMatch(/_openFileViewerForAnchor[\s\S]{0,1600}?page/);
+  });
+
+  it('HTML 用渲染 iframe（sandbox 只给 allow-scripts，与 chat-file-viewer 一致）', () => {
+    // 跨 origin 才能挡住父页访问；脚本保留是为了交互型 HTML 能跑
+    expect(src).toMatch(/kb-fv-frame--html';\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+  });
+
+  it('查看源码走主进程 kb.openFile(asText)，不依赖 fetch(kb-file://)', () => {
+    // 非 http 方案没有 CORS 头，渲染进程 fetch 会 Failed to fetch（实测）
+    expect(src).toMatch(/asText: true/);
+    expect(src).not.toMatch(/fetch\(content\.src\)/);
+  });
+
+  it('工具栏提供"在系统中打开"（只读预览之外的编辑/批注出口）', () => {
+    expect(src).toContain('kb-fv-external');
+    expect(src).toContain("invoke('kb.openExternal'");
+    // 参数由纯函数给（载荷可测），无当前文件时按钮隐藏、点了也不发请求
+    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\n\s*const payload = _fvExternalTarget\(\);/);
+    expect(src).toContain('externalTarget: _fvExternalTarget');
+    // 无当前文件上下文时必须隐藏，避免点了没反应
+    expect(src).toMatch(/_fvCtx[\s\S]{0,400}?extBtn\.hidden/);
+  });
+});

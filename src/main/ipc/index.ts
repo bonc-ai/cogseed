@@ -460,6 +460,33 @@ function _escapePreviewHtml(s: string): string {
 
 type OfficePreviewKind = 'word' | 'spreadsheet' | 'presentation';
 
+/**
+ * 知识库文件 → 磁盘绝对路径，供 `kb.openFile`（预览）与 `kb.openExternal`
+ * （用系统默认应用打开）共用。
+ *
+ * 两条路由：
+ *   - 空间库（`spaceId` 存在）：路径相对该空间 contexts 目录，逐段校验不得逃逸；
+ *   - 个人库：relPath 含库前缀，交给 `contexts.resolveContextFileAbsPath`
+ *     （它自带越界/隐藏段/存在性校验）。
+ * 失败抛错（'invalid spaceId' / 'invalid path' / 'not found: …'），调用方转成
+ * `{ ok: false, error }` 回渲染层——与改动前 `kb.openFile` 的报错文案一致。
+ */
+async function resolveKbFileAbsPath(
+  userId: string,
+  spaceId: unknown,
+  relPath: string,
+): Promise<{ abs: string; spaceRoot: string | null }> {
+  if (typeof spaceId === 'string' && spaceId) {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const { spaceContextsDir } = await import('../paths');
+    const root = path.resolve(spaceContextsDir(userId, spaceId));
+    const abs = path.resolve(root, relPath);
+    if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('invalid path');
+    return { abs, spaceRoot: root };
+  }
+  return { abs: contexts.resolveContextFileAbsPath(relPath), spaceRoot: null };
+}
+
 function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
   if (ext === '.docx' || ext === '.docm') return 'word';
   if (ext === '.xlsx' || ext === '.xlsm') return 'spreadsheet';
@@ -4421,33 +4448,52 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 打开知识库文件内容（点击文件查看）：个人库 relPath 或 空间库 spaceId+path。
   // 文本直读（md 渲染为 Markdown）；docx/xlsx/pptx 转排版化 HTML 预览；
   // pdf 走 kb-file:// 原生 PDFium iframe（排版不失真），此处只校验返回路径。
-  'kb.openFile': async ({ spaceId, path: relPath } = {}, ctx) => {
+  'kb.openFile': async ({ spaceId, path: relPath, asText } = {}, ctx) => {
     const p = typeof relPath === 'string' ? relPath.trim() : '';
     if (!p) return { ok: false, error: 'missing path' };
     try {
-      let abs: string;
-      let display = p;
-      let spaceRoot: string | null = null;
-      if (typeof spaceId === 'string' && spaceId) {
-        // 空间库：路径在空间 contexts 目录下（防穿越）
-        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
-        const { spaceContextsDir } = await import('../paths');
-        const root = path.resolve(spaceContextsDir(ctx.userId, spaceId));
-        spaceRoot = root;
-        abs = path.resolve(root, p);
-        if (abs !== root && !abs.startsWith(root + path.sep)) {
-          return { ok: false, error: 'invalid path' };
-        }
-      } else {
-        // 个人库：relPath（含库前缀）经 contexts 安全解析（越界/不存在会 throw）
-        abs = contexts.resolveContextFileAbsPath(p);
-      }
+      const resolvedKb = await resolveKbFileAbsPath(ctx.userId, spaceId, p);
+      const abs = resolvedKb.abs;
+      const display = p;
+      const spaceRoot = resolvedKb.spaceRoot;
+      // 空间库文件必须回传 spaceId：渲染层靠它拼 `kb-file://space/…`、切源码、
+      // 以及"在系统中打开"的二次 IPC（缺了就会按个人库路由而找不到文件）。
+      const spaceField = spaceRoot && typeof spaceId === 'string' ? { spaceId } : {};
       if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
         return { ok: false, error: 'file not found' };
       }
       const ext = path.extname(abs).toLowerCase();
       const name = path.basename(abs);
-      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      // `.html/.htm` 从文本类里拿出来：**渲染页面**才是用户要的"原来的排版"
+      // （渲染层仍提供"查看源码"切换，源码能力不丢）。
+      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      const HTML_EXTS = ['.html', '.htm'];
+      const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif'];
+      const MEDIA_EXTS = ['.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.webm', '.mkv', '.avi'];
+      // html 的"查看源码"：显式要文本时按文本返回（渲染层渲染⇄源码切换用）。
+      // 只能走这条 IPC——渲染进程 fetch('kb-file://…') 取不到（非 http 方案无 CORS 头）。
+      if (HTML_EXTS.includes(ext) && asText === true) {
+        const MAX_SRC = 2 * 1024 * 1024;
+        const st = fs.statSync(abs);
+        if (st.size > MAX_SRC) return { ok: false, error: 'too_large', size: st.size };
+        let text = fs.readFileSync(abs, 'utf8');
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        return { ok: true, kind: 'text', name, path: display, content: text, ...spaceField };
+      }
+      // 渲染型文件：渲染层用 `kb-file://` 直接取字节（PDF 走 PDFium、图片走 <img>、
+      // 音视频走 <video>/<audio>），排版与原生控件都保留，不再退化成纯文本。
+      if (HTML_EXTS.includes(ext) || IMAGE_EXTS.includes(ext) || MEDIA_EXTS.includes(ext)) {
+        const kind = HTML_EXTS.includes(ext) ? 'html' : (IMAGE_EXTS.includes(ext) ? 'image' : 'media');
+        return {
+          ok: true,
+          kind,
+          name,
+          path: display,
+          relPath: p,
+          ...spaceField,
+          ...(MEDIA_EXTS.includes(ext) && ['.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac'].includes(ext) ? { audio: true } : {}),
+        };
+      }
       if (TEXT_EXTS.includes(ext)) {
         const MAX = 2 * 1024 * 1024;
         const st = fs.statSync(abs);
@@ -4456,7 +4502,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         // .md/.markdown 渲染为 Markdown（阅读视图），其余文本纯文本展示
         const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
-        return { ok: true, kind, name, path: display, content: text };
+        return { ok: true, kind, name, path: display, content: text, ...spaceField };
       }
       const officeKind = _officePreviewKindForExt(ext);
       if (officeKind) {
@@ -4466,7 +4512,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         if (st.size > MAX_OFFICE) return { ok: false, error: 'too_large', size: st.size };
         const cacheKey = `${abs}:${st.size}:${st.mtimeMs}:kb`;
         const cached = _officePreviewCacheGet(cacheKey);
-        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html };
+        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html, ...spaceField };
         try {
           const buf = fs.readFileSync(abs);
           let fragment = '';
@@ -4480,16 +4526,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
             const { pptxBufferToHtml } = await import('../util/extract-office');
             fragment = pptxBufferToHtml(buf);
           }
-          const html = _wrapOfficePreviewHtml(officeKind, name, fragment || '<p class="office-muted">（暂无可见内容）</p>');
+          // 转换结果里可能一个字都提不出来（扫描件、旧版 .doc 以嵌入对象塞进
+          // docx 的"壳文件"等）。这时给一句能照做的说明，而不是空白页。
+          const hasText = Boolean(String(fragment || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim());
+          const bodyHtml = hasText
+            ? fragment
+            : '<p class="office-muted">这份文件里没有可直接提取的正文（内容可能在嵌入对象或图片里）。点右上角「在系统中打开」用本机 Office 查看原排版。</p>';
+          const html = _wrapOfficePreviewHtml(officeKind, name, bodyHtml);
           _officePreviewCachePut(cacheKey, html, officeKind);
-          return { ok: true, kind: 'office', officeKind, name, path: display, html };
+          return { ok: true, kind: 'office', officeKind, name, path: display, html, ...spaceField };
         } catch (err) {
           return { ok: false, error: String((err as Error).message || 'preview failed'), name };
         }
       }
       if (ext === '.pdf') {
-        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src
-        return { ok: true, kind: 'pdf', name, path: display, spaceId: spaceRoot ? (typeof spaceId === 'string' ? spaceId : undefined) : undefined };
+        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src。
+        // 帧内工具栏 = 缩放/翻页/下载/打印，都是 PDFium 原生的，不需要我们自造。
+        return {
+          ok: true,
+          kind: 'pdf',
+          name,
+          path: display,
+          relPath: p,
+          ...spaceField,
+        };
       }
       return { ok: false, error: `暂不支持预览 ${ext} 格式`, kind: 'unsupported', name };
     } catch (err) {
@@ -4498,6 +4558,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       // contexts.resolveContextFileAbsPath 对缺失文件抛 "not found: <rel>"（ENOENT）
       const error = code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg;
       return { ok: false, error };
+    }
+  },
+
+  // 用系统默认应用打开知识库文件。查看器只做只读预览（PDF 走 PDFium 的
+  // 缩放/翻页/下载/打印），批注编辑、旧版/嵌入对象 Office 文件这类"要动原生
+  // 应用"的场景由这里兜底——同一个防穿越解析入口，不额外放开路径。
+  'kb.openExternal': async ({ spaceId, path: relPath } = {}, ctx) => {
+    const p = typeof relPath === 'string' ? relPath.trim() : '';
+    if (!p) return { ok: false, error: 'missing path' };
+    try {
+      const resolvedKb = await resolveKbFileAbsPath(ctx.userId, spaceId, p);
+      if (!fs.existsSync(resolvedKb.abs) || !fs.statSync(resolvedKb.abs).isFile()) {
+        return { ok: false, error: 'file not found' };
+      }
+      const err = await shell.openPath(resolvedKb.abs);
+      if (err) return { ok: false, error: err };
+      return { ok: true };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg };
     }
   },
 
