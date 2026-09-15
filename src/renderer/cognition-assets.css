@@ -359,7 +359,7 @@
 
 /* 树干主体 = 个人本体（2026-09-14 布局调整）：关于我类资产归属于本体内部，
    不再单列为枝叶；干块带副行计数（关于我 N），样式与分类块同族。 */
-.ca-fig-trunk .ca-fig-sub { font-size: 10px; font-weight: 400; fill: var(--ca-ink3); }
+.ca-fig-trunk .ca-fig-sub { font-size: var(--font-size-1); font-weight: 400; fill: var(--ca-ink3); }
 
 /* 个人本体独立界面（2026-09-14）：点树干进入后本体独占内容区、撑满高度；
    !hidden 条件避免与既有 [hidden]{display:none} 规则打架。 */

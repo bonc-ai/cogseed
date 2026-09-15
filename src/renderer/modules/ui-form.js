@@ -4,7 +4,7 @@
 (function initUiForm(root) {
   'use strict';
 
-  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number']);
+  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number', 'date']);
 
   function escapeText(value) {
     return String(value == null ? '' : value)
@@ -18,7 +18,7 @@
   function renderAttrs(attrs) {
     const safe = [];
     for (const [key, rawValue] of Object.entries(attrs || {})) {
-      if (!/^(name|autocomplete|inputmode|min|max|minlength|maxlength|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
+      if (!/^(name|title|autocomplete|inputmode|min|max|minlength|maxlength|rows|spellcheck|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
       if (rawValue == null || rawValue === false) continue;
       safe.push(`${key}="${escapeText(rawValue === true ? '' : rawValue)}"`);
     }
@@ -41,14 +41,24 @@
     const id = String(value.id || '').trim();
     if (!id) throw new TypeError('uiInput requires an id');
     const type = INPUT_TYPES.has(value.type) ? value.type : 'text';
-    return `<input class="form-input ui-control ui-input" id="${escapeText(id)}" type="${type}"${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+    const classes = ['form-input', 'ui-control', 'ui-input', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="${type}"${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+  }
+
+  function uiCheckbox(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiCheckbox requires an id');
+    const classes = ['ui-control', 'ui-checkbox', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="checkbox"${value.name ? ` name="${escapeText(value.name)}"` : ''}${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.checked ? ' checked' : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
   }
 
   function uiTextarea(options) {
     const value = options || {};
     const id = String(value.id || '').trim();
     if (!id) throw new TypeError('uiTextarea requires an id');
-    return `<textarea class="form-input ui-control ui-textarea" id="${escapeText(id)}"${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)}>${escapeText(value.value)}</textarea>`;
+    const classes = ['form-input', 'ui-control', 'ui-textarea', value.className || ''].filter(Boolean).join(' ');
+    return `<textarea class="${escapeText(classes)}" id="${escapeText(id)}"${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)}>${escapeText(value.value)}</textarea>`;
   }
 
   function uiSelect(options) {
@@ -65,10 +75,16 @@
         ...(option.iconName ? { iconName: String(option.iconName) } : {}),
       })),
       labelId: value.labelId || '',
+      ariaLabel: value.ariaLabel || '',
       describedBy: value.describedBy || '',
       disabled: Boolean(value.disabled),
       invalid: Boolean(value.invalid),
       required: Boolean(value.required),
+      searchable: Boolean(value.searchable),
+      searchPlaceholder: value.searchPlaceholder == null ? null : String(value.searchPlaceholder),
+      loading: Boolean(value.loading),
+      total: value.total != null && Number.isFinite(Number(value.total)) ? Number(value.total) : null,
+      initialQuery: value.initialQuery == null ? '' : String(value.initialQuery),
       previewState: value.previewState || '',
     };
     const classes = [
@@ -102,6 +118,11 @@
         options: config.options || [],
         value: config.value || '',
         ...(config.placeholder == null ? {} : { placeholder: config.placeholder }),
+        ...(config.searchPlaceholder == null ? {} : { searchPlaceholder: config.searchPlaceholder }),
+        searchable: Boolean(config.searchable),
+        loading: Boolean(config.loading),
+        total: config.total,
+        initialQuery: config.initialQuery || '',
         onChange,
       });
       const trigger = api.el.querySelector('.ai-select-trigger');
@@ -109,6 +130,7 @@
       if (valueLabel && host.id) valueLabel.id = `${host.id}-selected-value`;
       const labelledBy = [config.labelId, valueLabel && valueLabel.id].filter(Boolean).join(' ');
       if (labelledBy) trigger.setAttribute('aria-labelledby', labelledBy);
+      if (config.ariaLabel) trigger.setAttribute('aria-label', config.ariaLabel);
       if (config.describedBy) trigger.setAttribute('aria-describedby', config.describedBy);
       if (config.required) trigger.setAttribute('aria-required', 'true');
       if (config.invalid) trigger.setAttribute('aria-invalid', 'true');
@@ -121,6 +143,36 @@
       host._uiSelectApi = api;
       return api;
     });
+  }
+
+  function uiDateRangePicker(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiDateRangePicker requires an id');
+    const startId = `${id}-start`;
+    const endId = `${id}-end`;
+    const classes = ['date-range-picker', value.className || ''].filter(Boolean).join(' ');
+    const start = uiInput({
+      id: startId,
+      type: 'date',
+      className: 'ui-date-control',
+      value: value.start || '',
+      disabled: value.disabled,
+      invalid: value.invalidStart,
+      previewState: value.startPreviewState,
+      attrs: { 'aria-label': value.startLabel || 'Start date' },
+    });
+    const end = uiInput({
+      id: endId,
+      type: 'date',
+      className: 'ui-date-control',
+      value: value.end || '',
+      disabled: value.disabled,
+      invalid: value.invalidEnd,
+      previewState: value.endPreviewState,
+      attrs: { 'aria-label': value.endLabel || 'End date' },
+    });
+    return `<div class="${escapeText(classes)}" id="${escapeText(id)}" role="group" aria-label="${escapeText(value.ariaLabel || 'Date range')}">${start}<span class="date-range-picker__separator" aria-hidden="true">${escapeText(value.separator || 'to')}</span>${end}</div>`;
   }
 
   function renderControl(options) {
@@ -191,13 +243,15 @@
   }
 
   root.uiInput = uiInput;
+  root.uiCheckbox = uiCheckbox;
   root.uiTextarea = uiTextarea;
   root.uiSelect = uiSelect;
   root.hydrateUiFormSelects = hydrateUiFormSelects;
+  root.uiDateRangePicker = uiDateRangePicker;
   root.uiField = uiField;
   root.uiForm = uiForm;
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { uiInput, uiTextarea, uiSelect, hydrateUiFormSelects, uiField, uiForm };
+    module.exports = { uiInput, uiCheckbox, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

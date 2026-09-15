@@ -22,6 +22,9 @@ function _bindGlobalSearch() {
   // (Step 7 in the main-screen redesign — confirmed by user).
   document.getElementById('contexts-page-header-search')?.addEventListener('click', openGlobalSearch);
   document.getElementById('search-close-btn')?.addEventListener('click', closeGlobalSearch);
+  document.getElementById('search-overlay')?.addEventListener('mousedown', (event) => {
+    if (event.target === event.currentTarget) closeGlobalSearch();
+  });
   const input = document.getElementById('search-input');
   if (input && !input.dataset.bound) {
     input.dataset.bound = '1';
@@ -39,18 +42,38 @@ function _bindGlobalSearch() {
   // in VS Code / Notion / etc.) — without this, the keystroke would re-call
   // openGlobalSearch() and reset query + tab state mid-typing.
   document.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    const overlay = document.getElementById('search-overlay');
+    const isOpen = overlay && overlay.style.display !== 'none';
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
-      const overlay = document.getElementById('search-overlay');
-      if (overlay && overlay.style.display !== 'none') {
+      if (isOpen) {
         closeGlobalSearch();
       } else {
         openGlobalSearch();
       }
-    } else if (e.key === 'Escape' && document.getElementById('search-overlay').style.display !== 'none') {
+    } else if (e.key === 'Escape' && isOpen) {
       closeGlobalSearch();
+    } else if (e.key === 'Tab' && isOpen) {
+      _trapSearchFocus(e, overlay);
     }
   });
+}
+
+function _trapSearchFocus(event, overlay) {
+  const focusable = Array.from(overlay.querySelectorAll(
+    'button:not([disabled]):not([hidden]), input:not([disabled]):not([hidden]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 const _SEARCH_VALID_TABS = new Set(['all', 'chat', 'agent', 'skill', 'context']);
@@ -59,6 +82,8 @@ function _setSearchTab(tab) {
   _searchTab = tab;
   document.querySelectorAll('.search-tab').forEach((b) => {
     b.classList.toggle('is-active', b.dataset.tab === tab);
+    b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false');
+    b.tabIndex = b.dataset.tab === tab ? 0 : -1;
   });
   _renderSearchResults(_searchLastQuery);
 }
@@ -68,6 +93,7 @@ function openGlobalSearch() {
   if (!overlay) return;
   _searchPreviousFocus = document.activeElement;
   overlay.style.display = '';
+  overlay.setAttribute('aria-hidden', 'false');
   const input = document.getElementById('search-input');
   if (input) {
     input.value = '';
@@ -97,6 +123,7 @@ function closeGlobalSearch() {
   const q = (input?.value || '').trim();
   if (q) _saveSearchHistoryEntry(q);
   overlay.style.display = 'none';
+  overlay.setAttribute('aria-hidden', 'true');
   if (_searchTimer) { clearTimeout(_searchTimer); _searchTimer = null; }
   let returnTarget = _searchPreviousFocus;
   _searchPreviousFocus = null;
@@ -136,6 +163,7 @@ async function _runSearchNow(queryArg) {
   const query = (queryArg !== undefined ? queryArg : (input?.value || '')).trim();
   if (!query) { _setSearchTabsVisible(false); _renderSearchEmptyState(); return; }
   const seq = ++_searchSeq;
+  _renderSearchLoading(query);
   try {
     const projectId = _activeProjectIdForSearch();
     const res = await apiFetch('/api/search/global', {
@@ -212,6 +240,8 @@ function _renderSearchEmptyState() {
       </div>`
     : '';
   body.innerHTML = historyHtml || `<div class="search-empty">${escapeHtml(t('search.empty_hint'))}</div>`;
+  _searchActiveIdx = -1;
+  _syncSearchActiveDescendant();
   body.querySelectorAll('[data-history-q]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const q = btn.dataset.historyQ;
@@ -226,11 +256,22 @@ function _renderSearchEmptyState() {
   });
 }
 
+function _renderSearchLoading(query) {
+  const body = document.getElementById('search-body');
+  if (!body) return;
+  _searchLastError = null;
+  _searchActiveIdx = -1;
+  body.innerHTML = `<div class="search-empty search-loading" role="status">${escapeHtml(t('search.loading', { query }))}</div>`;
+  _syncSearchActiveDescendant();
+}
+
 function _renderSearchError(msg) {
   const body = document.getElementById('search-body');
   if (!body) return;
   _searchLastError = msg || '';
-  body.innerHTML = `<div class="search-empty" style="color:var(--danger)">${escapeHtml(t('search.failed', { msg: msg || '' }))}</div>`;
+  _searchActiveIdx = -1;
+  body.innerHTML = `<div class="search-empty search-error">${escapeHtml(t('search.failed', { msg: msg || '' }))}</div>`;
+  _syncSearchActiveDescendant();
 }
 
 function _highlightSnippet(snippet, query) {
@@ -286,7 +327,7 @@ function _renderSearchRow(r, dataIdx, query) {
   }
   const active = dataIdx === _searchActiveIdx ? ' active' : '';
   return `
-    <div class="search-result${active}" data-idx="${dataIdx}">
+    <div class="search-result${active}" id="search-result-${dataIdx}" role="option" aria-selected="${dataIdx === _searchActiveIdx ? 'true' : 'false'}" data-idx="${dataIdx}">
       <div class="search-result-head">
         <span class="search-result-kind ${metaCfg.cls}">${escapeHtml(label)}</span>
         <span class="search-result-title">${escapeHtml(title)}</span>
@@ -309,7 +350,9 @@ function _renderSearchResults(query) {
   _searchLastError = null;
   if (!_searchResults.length) {
     _searchVisibleResults = [];
+    _searchActiveIdx = -1;
     body.innerHTML = `<div class="search-empty">${escapeHtml(t('search.no_results', { query }))}</div>`;
+    _syncSearchActiveDescendant();
     return;
   }
   const { chats, agents, skills, contexts } = _partitionSearchResults(_searchResults);
@@ -342,11 +385,13 @@ function _renderSearchResults(query) {
   if (!visible.length) {
     body.innerHTML = `<div class="search-empty">${escapeHtml(t('search.no_results', { query }))}</div>`;
     _searchActiveIdx = -1;
+    _syncSearchActiveDescendant();
     return;
   }
   // Clamp active idx into range of the new visible list.
   _searchActiveIdx = Math.min(Math.max(_searchActiveIdx, 0), visible.length - 1);
   body.innerHTML = parts.join('');
+  _syncSearchActiveDescendant();
 
   body.querySelectorAll('.search-result').forEach((row) => {
     row.addEventListener('click', () => {
@@ -391,8 +436,18 @@ function _moveSearchSelection(delta) {
   _searchActiveIdx = (_searchActiveIdx + delta + n) % n;
   document.querySelectorAll('.search-result').forEach((row, i) => {
     row.classList.toggle('active', i === _searchActiveIdx);
+    row.setAttribute('aria-selected', i === _searchActiveIdx ? 'true' : 'false');
     if (i === _searchActiveIdx) row.scrollIntoView({ block: 'nearest' });
   });
+  _syncSearchActiveDescendant();
+}
+
+function _syncSearchActiveDescendant() {
+  const input = document.getElementById('search-input');
+  const active = _searchActiveIdx >= 0 ? document.getElementById(`search-result-${_searchActiveIdx}`) : null;
+  if (!input) return;
+  if (active) input.setAttribute('aria-activedescendant', active.id);
+  else input.removeAttribute('aria-activedescendant');
 }
 
 async function _gotoSearchResult(r) {

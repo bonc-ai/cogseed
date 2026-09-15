@@ -7,6 +7,13 @@ const source = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/memory.js'),
   'utf8',
 );
+const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
+const uiFormSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-form.js'), 'utf8');
+const uiSegmentedControlSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-segmented-control.js'), 'utf8');
+const rendererCss = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/style.css'),
+  'utf8',
+);
 
 function clickable() {
   const listeners: Record<string, () => void> = {};
@@ -17,7 +24,34 @@ function clickable() {
   };
 }
 
+function loadMemoryModule(context: vm.Context) {
+  vm.runInContext(uiButtonSource, context, { filename: 'ui-button.js' });
+  vm.runInContext(uiFormSource, context, { filename: 'ui-form.js' });
+  vm.runInContext(uiSegmentedControlSource, context, { filename: 'ui-segmented-control.js' });
+  (context as any).uiButton = (context as any).window.uiButton;
+  (context as any).uiIconButton = (context as any).window.uiIconButton;
+  (context as any).uiTextarea = (context as any).window.uiTextarea;
+  (context as any).uiSegmentedControl = (context as any).window.uiSegmentedControl;
+  vm.runInContext(source, context, { filename: 'memory.js' });
+}
+
 describe('settings memory entry', () => {
+  it('uses the shared page, card, field, and dialog tokens', () => {
+    expect(rendererCss).toMatch(/\.memory-detail-header\s*{[^}]*min-height:\s*var\(--layout-titlebar-height\);[^}]*border-bottom:\s*1px solid var\(--line-subtle\);/s);
+    expect(rendererCss).toMatch(/\.memory-col\s*{[^}]*width:\s*var\(--layout-thread-width\);[^}]*padding:\s*var\(--space-5\) var\(--space-6\) var\(--space-page\);/s);
+    expect(rendererCss).toMatch(/\.memory-entry\s*{[^}]*border-radius:\s*var\(--radius-card\);[^}]*box-shadow:\s*var\(--shadow-card\);/s);
+    expect(rendererCss).toMatch(/\.memory-entry-textarea\s*{[^}]*border:\s*1px solid var\(--line-field\);[^}]*border-radius:\s*var\(--radius-field\);/s);
+    expect(rendererCss).toMatch(/\.memory-modal\s*{[^}]*border-radius:\s*var\(--radius-dialog\);[^}]*box-shadow:\s*var\(--shadow-dialog\);/s);
+  });
+
+  it('routes ordinary memory controls through shared renderer primitives', () => {
+    expect(source).toContain("uiButton({ label: t('memory.import')");
+    expect(source).toContain("uiIconButton({ label: t('memory.add_entry')");
+    expect(source).toContain("uiTextarea({ id: 'memory-import-text'");
+    expect(source).toContain('uiSegmentedControl({');
+    expect(source.match(/<(?:button|input|textarea|select)\b/gi)).toHaveLength(1);
+  });
+
   it('binds immediately when the lazy feature loads after DOMContentLoaded', async () => {
     const card = clickable();
     const dataTab = clickable();
@@ -48,7 +82,7 @@ describe('settings memory entry', () => {
       clearTimeout,
     });
 
-    vm.runInContext(source, context, { filename: 'memory.js' });
+    loadMemoryModule(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     card.click();
@@ -118,7 +152,7 @@ describe('memory page entry mutations', () => {
     const context = makeContext({
       invoke: async () => ({ ok: true, files: { user: { count: 0 }, shared: { count: 0 } } }),
     });
-    vm.runInContext(source, context, { filename: 'memory.js' });
+    loadMemoryModule(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vm.runInContext('typeof _memTrackEvent', context)).toBe('function');
   });
@@ -130,7 +164,7 @@ describe('memory page entry mutations', () => {
       return { ok: true, entries: [], usage: { current: 0, limit: 1500 } };
     });
     const context = makeContext({ invoke });
-    vm.runInContext(source, context, { filename: 'memory.js' });
+    loadMemoryModule(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     await vm.runInContext(`(async () => {
@@ -152,7 +186,7 @@ describe('memory page entry mutations', () => {
         return { ok: true, entries: [], usage: { current: 0, limit: 1500 } };
       },
     });
-    vm.runInContext(source, context, { filename: 'memory.js' });
+    loadMemoryModule(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     await vm.runInContext(`(async () => {

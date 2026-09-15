@@ -33,6 +33,21 @@ function _ctxUiIconHtml(name, className) {
   return '';
 }
 
+function _ctxButton(options) {
+  if (typeof window.uiButton !== 'function') throw new Error('contexts require uiButton');
+  return window.uiButton(options);
+}
+
+function _ctxIconButton(options) {
+  if (typeof window.uiIconButton !== 'function') throw new Error('contexts require uiIconButton');
+  return window.uiIconButton(options);
+}
+
+function _ctxInput(options) {
+  if (typeof window.uiInput !== 'function') throw new Error('contexts require uiInput');
+  return window.uiInput(options);
+}
+
 async function loadContexts() {
   try {
     const [treeRes, kbRes] = await Promise.all([
@@ -338,7 +353,7 @@ function _kbUnavailableHtml() {
     : 'contexts.kb.unavailable';
   return `<div class="lazy-feature-error ctx-kb-unavailable">
     <span>${escapeHtml(t(key))}</span>
-    <button type="button" class="btn btn-sm" data-kb-status-retry>${escapeHtml(t('chat.retry_btn'))}</button>
+    ${_ctxButton({ label: t('chat.retry_btn'), size: 'sm', attrs: { 'data-kb-status-retry': '' } })}
   </div>`;
 }
 
@@ -386,7 +401,6 @@ function renderCtxTree() {
 
 function _renderCtxNodes(nodes, depth = 0) {
   const indent = 10 + depth * 14;
-  const moreTitle = escapeHtml(t('contexts.menu.more_actions'));
   return _sortCtxNodes(nodes).map(n => {
     const isPendingRename = _ctxPendingRename && _ctxPendingRename.path === n.path;
     if (n.type === 'dir') {
@@ -400,7 +414,7 @@ function _renderCtxNodes(nodes, depth = 0) {
         ? `<div class="skill-tree-children">${_renderCtxNodes(n.children || [], depth + 1)}</div>`
         : '';
       const labelHtml = isPendingRename
-        ? `<input class="ctx-tree-rename-input" type="text" value="${escapeHtml(n.name)}" autocomplete="off" spellcheck="false" />`
+        ? _ctxInput({ id: `ctx-rename-${n.path}`, className: 'ctx-tree-rename-input', value: n.name, attrs: { autocomplete: 'off', spellcheck: 'false' } })
         : `<span class="skill-tree-label">${escapeHtml(n.name)}</span>`;
       return `
         <div class="ctx-tree-wrap" data-path="${escapeHtml(n.path)}" data-type="dir" draggable="true">
@@ -408,7 +422,7 @@ function _renderCtxNodes(nodes, depth = 0) {
             <span class="${caretCls}"></span>
             <span class="skill-tree-icon icon-folder">${icon}</span>
             ${labelHtml}
-            <button type="button" class="ctx-row-menu-btn" data-menu title="${moreTitle}" aria-label="${moreTitle}">${_ctxUiIconHtml('more-horizontal', 'ctx-row-menu-icon')}</button>
+            ${_ctxIconButton({ label: t('contexts.menu.more_actions'), icon: 'more-horizontal', className: 'ctx-row-menu-btn', attrs: { 'data-menu': '' } })}
           </div>
           ${childrenHtml}
         </div>
@@ -424,7 +438,7 @@ function _renderCtxNodes(nodes, depth = 0) {
     // `_bindCtxTreeHandlers` for the handlers.
     const mtime = _ctxFormatMtime(n.mtime);
     const labelHtml = isPendingRename
-      ? `<input class="ctx-tree-rename-input" type="text" value="${escapeHtml(n.name)}" autocomplete="off" spellcheck="false" />`
+      ? _ctxInput({ id: `ctx-rename-${n.path}`, className: 'ctx-tree-rename-input', value: n.name, attrs: { autocomplete: 'off', spellcheck: 'false' } })
       : `<span class="skill-tree-main"><span class="skill-tree-label">${escapeHtml(n.name)}</span>${mtime ? `<span class="skill-tree-meta">${escapeHtml(mtime)}</span>` : ''}</span>`;
     return `
       <div class="ctx-tree-wrap" data-path="${escapeHtml(n.path)}" data-type="file" draggable="true">
@@ -433,7 +447,7 @@ function _renderCtxNodes(nodes, depth = 0) {
           <span class="skill-tree-icon icon-file" data-ext="${escapeHtml(ext)}">${_ctxFileIconHtml(n.name)}</span>
           ${labelHtml}
           ${chip}
-          <button type="button" class="ctx-row-menu-btn" data-menu title="${moreTitle}" aria-label="${moreTitle}">${_ctxUiIconHtml('more-horizontal', 'ctx-row-menu-icon')}</button>
+          ${_ctxIconButton({ label: t('contexts.menu.more_actions'), icon: 'more-horizontal', className: 'ctx-row-menu-btn', attrs: { 'data-menu': '' } })}
         </div>
       </div>
     `;
@@ -499,8 +513,8 @@ function _renderCtxBatchBar() {
   }
   bar.innerHTML = `
     <span class="library-batch-count">${escapeHtml(t('contexts.transfer.selected_count', { count: _ctxSelected.size }))}</span>
-    <button type="button" class="btn btn-sm btn-primary" data-library-batch-organize>${escapeHtml(t('contexts.transfer.title'))}</button>
-    <button type="button" class="library-batch-clear" data-library-batch-clear title="${escapeHtml(t('contexts.transfer.clear_selection'))}" aria-label="${escapeHtml(t('contexts.transfer.clear_selection'))}">${_ctxUiIconHtml('x', 'library-batch-clear-icon')}</button>
+    ${_ctxButton({ label: t('contexts.transfer.title'), role: 'primary', size: 'sm', attrs: { 'data-library-batch-organize': '' } })}
+    ${_ctxIconButton({ label: t('contexts.transfer.clear_selection'), icon: 'x', className: 'library-batch-clear', attrs: { 'data-library-batch-clear': '' } })}
   `;
   bar.querySelector('[data-library-batch-organize]')?.addEventListener('click', () => _openCtxTransfer(Array.from(_ctxSelected), 'batch'));
   bar.querySelector('[data-library-batch-clear]')?.addEventListener('click', () => {
@@ -1604,6 +1618,11 @@ function _encodeKbFileUrl(rel) {
   return 'kb-file://kb/' + rel.split('/').map(encodeURIComponent).join('/');
 }
 
+function _ctxViewerActionsHtml() {
+  return _ctxButton({ label: t('contexts.viewer.open_system'), size: 'sm', attrs: { id: 'ctx-viewer-reveal' } })
+    + _ctxButton({ label: t('contexts.viewer.delete'), role: 'danger', size: 'sm', attrs: { id: 'ctx-viewer-del' } });
+}
+
 function _showCtxPdfViewer(rel) {
   const els = _prepCtxViewerShell(rel);
   if (!els) return;
@@ -1612,10 +1631,7 @@ function _showCtxPdfViewer(rel) {
   // (zoom, print, download) visible; hide the sidebar since the panel is
   // already narrow.
   els.bodyEl.innerHTML = `<iframe class="ctx-viewer-pdf" src="${src}#toolbar=1&navpanes=0" title="${escapeHtml(rel)}"></iframe>`;
-  els.actionsEl.innerHTML = `
-    <button class="btn btn-sm" id="ctx-viewer-reveal">${escapeHtml(t('contexts.viewer.open_system'))}</button>
-    <button class="btn btn-sm btn-danger" id="ctx-viewer-del">${escapeHtml(t('contexts.viewer.delete'))}</button>
-  `;
+  els.actionsEl.innerHTML = _ctxViewerActionsHtml();
   els.actionsEl.querySelector('#ctx-viewer-reveal').addEventListener('click', () => revealCtxFile(rel));
   els.actionsEl.querySelector('#ctx-viewer-del').addEventListener('click', _deleteCtxFromViewer);
 }
@@ -1627,10 +1643,7 @@ function _showCtxDocxViewer(rel, html) {
   // a scoped `.ctx-viewer-docx` container so its styling doesn't bleed into
   // the rest of the app chrome.
   els.bodyEl.innerHTML = `<div class="ctx-viewer-docx markdown-body">${html || `<p class="muted">${escapeHtml(t('contexts.viewer.docx_empty'))}</p>`}</div>`;
-  els.actionsEl.innerHTML = `
-    <button class="btn btn-sm" id="ctx-viewer-reveal">${escapeHtml(t('contexts.viewer.open_system'))}</button>
-    <button class="btn btn-sm btn-danger" id="ctx-viewer-del">${escapeHtml(t('contexts.viewer.delete'))}</button>
-  `;
+  els.actionsEl.innerHTML = _ctxViewerActionsHtml();
   els.actionsEl.querySelector('#ctx-viewer-reveal').addEventListener('click', () => revealCtxFile(rel));
   els.actionsEl.querySelector('#ctx-viewer-del').addEventListener('click', _deleteCtxFromViewer);
   els.bodyEl.scrollTop = 0;
@@ -1649,10 +1662,7 @@ async function _showCtxOfficeViewer(rel) {
   _ctxOfficeBlobUrl = URL.createObjectURL(new Blob([String(data.html || '')], { type: 'text/html;charset=utf-8' }));
   const style = data.previewHeight ? ` style="height:${Math.max(120, Number(data.previewHeight) || 0)}px"` : '';
   els.bodyEl.innerHTML = `<iframe class="ctx-viewer-office" sandbox="" src="${_ctxOfficeBlobUrl}"${style} title="${escapeHtml(rel)}"></iframe>`;
-  els.actionsEl.innerHTML = `
-    <button class="btn btn-sm" id="ctx-viewer-reveal">${escapeHtml(t('contexts.viewer.open_system'))}</button>
-    <button class="btn btn-sm btn-danger" id="ctx-viewer-del">${escapeHtml(t('contexts.viewer.delete'))}</button>
-  `;
+  els.actionsEl.innerHTML = _ctxViewerActionsHtml();
   els.actionsEl.querySelector('#ctx-viewer-reveal').addEventListener('click', () => revealCtxFile(rel));
   els.actionsEl.querySelector('#ctx-viewer-del').addEventListener('click', _deleteCtxFromViewer);
   els.bodyEl.scrollTop = 0;
@@ -1756,10 +1766,7 @@ function _showCtxImageViewer(rel, base64, mediaType, bytes) {
       <div class="ctx-viewer-image-meta">${escapeHtml(rel)}${sizeKb}</div>
     </div>
   `;
-  els.actionsEl.innerHTML = `
-    <button class="btn btn-sm" id="ctx-viewer-reveal">${escapeHtml(t('contexts.viewer.open_system'))}</button>
-    <button class="btn btn-sm btn-danger" id="ctx-viewer-del">${escapeHtml(t('contexts.viewer.delete'))}</button>
-  `;
+  els.actionsEl.innerHTML = _ctxViewerActionsHtml();
   els.actionsEl.querySelector('#ctx-viewer-reveal').addEventListener('click', () => revealCtxFile(rel));
   els.actionsEl.querySelector('#ctx-viewer-del').addEventListener('click', _deleteCtxFromViewer);
   els.bodyEl.scrollTop = 0;
@@ -1777,13 +1784,10 @@ function _showCtxBinaryViewer(rel, kind) {
       <div class="ctx-viewer-binary-icon">${icon}</div>
       <div class="ctx-viewer-binary-name">${escapeHtml(rel)}</div>
       <div class="ctx-viewer-binary-hint">${escapeHtml(t('contexts.viewer.binary_hint', { kind: kindLabel }))}</div>
-      <button class="btn btn-primary" id="ctx-viewer-reveal-big">${escapeHtml(t('contexts.viewer.open_system'))}</button>
+      ${_ctxButton({ label: t('contexts.viewer.open_system'), role: 'primary', attrs: { id: 'ctx-viewer-reveal-big' } })}
     </div>
   `;
-  els.actionsEl.innerHTML = `
-    <button class="btn btn-sm" id="ctx-viewer-reveal">${escapeHtml(t('contexts.viewer.open_system'))}</button>
-    <button class="btn btn-sm btn-danger" id="ctx-viewer-del">${escapeHtml(t('contexts.viewer.delete'))}</button>
-  `;
+  els.actionsEl.innerHTML = _ctxViewerActionsHtml();
   const openHandler = () => revealCtxFile(rel);
   els.bodyEl.querySelector('#ctx-viewer-reveal-big')?.addEventListener('click', openHandler);
   els.actionsEl.querySelector('#ctx-viewer-reveal').addEventListener('click', openHandler);

@@ -19,6 +19,46 @@ const _connectorsLog = createLogger('connectors');
 const _CONNECTORS_RENDER_CACHE_VERSION = 2;
 const _CONNECTORS_RENDER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 let _connectorsLegacyCachePurged = false;
+let _connectorsSearchQuery = '';
+
+function _connectorAttrsHtml(attrs) {
+  return Object.entries(attrs || {})
+    .filter(([, value]) => value != null && value !== false)
+    .map(([key, value]) => ` ${escapeHtml(key)}="${escapeHtml(value === true ? '' : value)}"`)
+    .join('');
+}
+
+function _connectorUiButton(options) {
+  if (typeof uiButton === 'function') return uiButton(options);
+  const role = options.role || 'secondary';
+  const size = options.size || 'md';
+  const classes = `btn ui-button ui-button--${role} ui-button--${size}${options.loading ? ' is-loading' : ''} ${options.className || ''}`;
+  const icon = options.icon && typeof uiIconHtml === 'function' ? uiIconHtml(options.icon, 'ui-button__icon') : '';
+  return `<button type="button" class="${escapeHtml(classes)}"${options.disabled || options.loading ? ' disabled' : ''}${_connectorAttrsHtml(options.attrs)}>${icon}<span class="ui-button__label">${escapeHtml(options.label)}</span></button>`;
+}
+
+function _connectorUiIconButton(options) {
+  if (typeof uiIconButton === 'function') return uiIconButton(options);
+  const icon = typeof uiIconHtml === 'function' ? uiIconHtml(options.icon, 'ui-icon') : '';
+  return `<button type="button" class="ui-icon-button ${escapeHtml(options.className || '')}" aria-label="${escapeHtml(options.label)}" title="${escapeHtml(options.title || options.label)}"${_connectorAttrsHtml(options.attrs)}>${icon}</button>`;
+}
+
+function _connectorUiInput(options) {
+  if (typeof uiInput !== 'function') throw new Error('connectors require uiInput');
+  return uiInput(options);
+}
+
+function _connectorUiEmptyState(options) {
+  if (typeof uiEmptyState !== 'function') throw new Error('connectors require uiEmptyState');
+  return uiEmptyState(options);
+}
+
+function _setConnectorButtonPresentation(button, label) {
+  if (!button) return;
+  const labelEl = button.querySelector('.ui-button__label');
+  if (labelEl) labelEl.textContent = label;
+  else button.textContent = label;
+}
 
 function _connectorsTrackClick(action, data) {
 }
@@ -354,13 +394,44 @@ const _CONNECTOR_BRAND_TINT = {
   'google-workspace': '#4285f4',
 };
 
-function _renderConnectorsGrid() {
-  const gridView = document.getElementById('connectors-grid-view');
-  if (!gridView) return;
-  gridView.style.display = '';
+function _ensureConnectorsToolbar() {
+  const searchHost = document.getElementById('connectors-search-field');
+  if (searchHost) {
+    let input = searchHost.querySelector('#connectors-search-input');
+    if (!input) {
+      searchHost.innerHTML = `${uiIconHtml('search', 'connectors-search-icon')}${_connectorUiInput({
+        id: 'connectors-search-input',
+        type: 'search',
+        value: _connectorsSearchQuery,
+        placeholder: t('connectors.search_placeholder'),
+        attrs: { autocomplete: 'off', spellcheck: 'false' },
+      })}`;
+      if (typeof hydrateUiIcons === 'function') hydrateUiIcons(searchHost);
+      input = searchHost.querySelector('#connectors-search-input');
+    }
+    if (input) {
+      input.placeholder = t('connectors.search_placeholder');
+      if (input.dataset.connectorsSearchBound !== 'true') {
+        input.dataset.connectorsSearchBound = 'true';
+        input.addEventListener('input', () => {
+          _connectorsSearchQuery = input.value || '';
+          _renderConnectorsGrid();
+        });
+      }
+    }
+  }
 
-  // Idempotent header-button wiring — the panel HTML is static, so bind once.
+  const actionsHost = document.getElementById('connectors-page-header-actions');
+  if (actionsHost && !actionsHost.querySelector('#connectors-add-custom-btn')) {
+    actionsHost.innerHTML = _connectorUiButton({
+      label: t('connectors.action.add_custom'),
+      role: 'secondary',
+      size: 'sm',
+      attrs: { id: 'connectors-add-custom-btn' },
+    });
+  }
   const addBtn = document.getElementById('connectors-add-custom-btn');
+  _setConnectorButtonPresentation(addBtn, t('connectors.action.add_custom'));
   if (addBtn && !addBtn.dataset.bound) {
     addBtn.dataset.bound = '1';
     addBtn.addEventListener('click', () => {
@@ -368,6 +439,48 @@ function _renderConnectorsGrid() {
       _openAddCustomDialog();
     });
   }
+}
+
+function _connectorMatchesSearch(item, query, lang) {
+  if (!query) return true;
+  const entry = item && item.entry ? item.entry : {};
+  const instance = item && item.instance ? item.instance : {};
+  const haystack = [
+    entry.display_name,
+    entry.id,
+    pickDesc(entry, lang),
+    instance.account_label,
+  ].filter(Boolean).join(' ').toLocaleLowerCase();
+  return haystack.includes(query);
+}
+
+function _renderConnectorsEmptyState(empty, kind) {
+  if (!empty) return;
+  const noMatch = kind === 'no-match';
+  empty.innerHTML = _connectorUiEmptyState(noMatch ? {
+    kind: 'actionable',
+    icon: 'search',
+    title: t('connectors.no_match'),
+    hint: t('connectors.no_match_hint'),
+    action: { label: t('common.clear'), role: 'secondary', attrs: { 'data-connectors-clear-search': true } },
+  } : {
+    kind: 'quiet',
+    title: kind === 'loading' ? t('common.loading') : t('connectors.empty'),
+  });
+  empty.style.display = '';
+  empty.querySelector('[data-connectors-clear-search]')?.addEventListener('click', () => {
+    _connectorsSearchQuery = '';
+    const input = document.getElementById('connectors-search-input');
+    if (input) input.value = '';
+    _renderConnectorsGrid();
+  });
+}
+
+function _renderConnectorsGrid() {
+  const gridView = document.getElementById('connectors-grid-view');
+  if (!gridView) return;
+  gridView.style.display = '';
+  _ensureConnectorsToolbar();
 
   const groupConn = document.getElementById('connectors-group-connected');
   const groupAvail = document.getElementById('connectors-group-available');
@@ -420,31 +533,35 @@ function _renderConnectorsGrid() {
   const cmp = (a, b) => (a.entry.display_name || '').localeCompare(b.entry.display_name || '', undefined, { sensitivity: 'base', numeric: true });
   connectedItems.sort(cmp);
   availableItems.sort(cmp);
+  const lang = (typeof getLang === 'function') ? getLang() : 'en';
+  const query = _connectorsSearchQuery.trim().toLocaleLowerCase();
+  const visibleConnectedItems = connectedItems.filter((item) => _connectorMatchesSearch(item, query, lang));
+  const visibleAvailableItems = availableItems.filter((item) => _connectorMatchesSearch(item, query, lang));
 
   // Render each group.
   gridConn.innerHTML = '';
-  for (const it of connectedItems) gridConn.appendChild(_renderCatalogCard(it.entry, it.instance));
-  groupConn.style.display = connectedItems.length ? '' : 'none';
+  for (const it of visibleConnectedItems) gridConn.appendChild(_renderCatalogCard(it.entry, it.instance));
+  groupConn.style.display = visibleConnectedItems.length ? '' : 'none';
 
   gridAvail.innerHTML = '';
-  for (const it of availableItems) gridAvail.appendChild(_renderCatalogCard(it.entry, it.instance));
-  groupAvail.style.display = availableItems.length ? '' : 'none';
+  for (const it of visibleAvailableItems) gridAvail.appendChild(_renderCatalogCard(it.entry, it.instance));
+  groupAvail.style.display = visibleAvailableItems.length ? '' : 'none';
 
   if (_connectorsState.loading && !_connectorsState.catalog.length) {
-    empty.style.display = '';
-    empty.textContent = t('common.loading');
+    _renderConnectorsEmptyState(empty, 'loading');
   } else if (!connectedItems.length && !availableItems.length) {
-    empty.style.display = '';
-    empty.textContent = t('connectors.empty');
+    _renderConnectorsEmptyState(empty, 'empty');
+  } else if (!visibleConnectedItems.length && !visibleAvailableItems.length) {
+    _renderConnectorsEmptyState(empty, 'no-match');
   } else {
     empty.style.display = 'none';
   }
 
-  // Surface E per-group count chips.
+  // Visible counts follow the active search, matching the cards currently shown.
   const connCountEl = document.getElementById('connectors-group-connected-count');
-  if (connCountEl) connCountEl.textContent = connectedItems.length > 0 ? String(connectedItems.length) : '';
+  if (connCountEl) connCountEl.textContent = visibleConnectedItems.length > 0 ? String(visibleConnectedItems.length) : '';
   const availCountEl = document.getElementById('connectors-group-available-count');
-  if (availCountEl) availCountEl.textContent = availableItems.length > 0 ? String(availableItems.length) : '';
+  if (availCountEl) availCountEl.textContent = visibleAvailableItems.length > 0 ? String(visibleAvailableItems.length) : '';
 }
 
 function _renderCatalogCard(entry, instance) {
@@ -464,7 +581,7 @@ function _renderCatalogCard(entry, instance) {
     : true;
 
   const card = document.createElement('div');
-  card.className = `connector-card${connected && !enabledFlag ? ' is-disabled' : ''}${degraded ? ' is-unverified' : ''}`;
+  card.className = `connector-card ui-resource-card${connected && !enabledFlag ? ' is-disabled' : ''}${degraded ? ' is-unverified' : ''}`;
   card.dataset.id = e.id;
 
   // Brand-color square per design (Surface E) — applied ONLY to the
@@ -497,7 +614,12 @@ function _renderCatalogCard(entry, instance) {
   // doesn't apply when there's nothing to disable). Degraded cards keep the menu because their
   // bottom-row action is retry, while disconnect still needs to remain reachable.
   const menuHtml = (connected || degraded)
-    ? `<button class="connector-card-menu-btn" data-act="menu" aria-label="${escapeHtml(t('common.more'))}" aria-expanded="false">⋯</button>`
+    ? _connectorUiIconButton({
+        label: t('common.more'),
+        icon: 'more-horizontal',
+        className: 'connector-card-menu-btn',
+        attrs: { 'data-act': 'menu', 'aria-expanded': 'false' },
+      })
     : '';
 
   // Bottom-row action:
@@ -514,32 +636,32 @@ function _renderCatalogCard(entry, instance) {
   let action = '';
   const isConnecting = _connectorsState.connecting && _connectorsState.connecting.has(e.id);
   if (isConnecting) {
-    action = `<button class="btn btn-sm btn-primary is-loading" data-act="connect">${escapeHtml(t('connectors.action.connecting'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.connecting'), role: 'primary', size: 'sm', loading: true, attrs: { 'data-act': 'connect' } });
   } else if (isOAuthPending) {
-    action = `<button class="btn btn-sm" disabled>${escapeHtml(t('connectors.action.unavailable'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.unavailable'), role: 'secondary', size: 'sm', disabled: true });
   } else if (isVisibleDisabled) {
-    action = `<button class="btn btn-sm btn-primary" data-act="unsupported-connect">${escapeHtml(t('connectors.action.connect'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'unsupported-connect' } });
   } else if (connected) {
-    const useTitle = escapeHtml(formatChatUseLabel({ kind: 'connector', id: e.id, name: e.display_name || e.id }));
-    action = `<button class="agent-card-use connector-card-use" data-act="use-connector" title="${useTitle}" aria-label="${useTitle}" ${enabledFlag ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>${escapeHtml(t('common.use'))}</button>`;
+    const useTitle = formatChatUseLabel({ kind: 'connector', id: e.id, name: e.display_name || e.id });
+    action = _connectorUiButton({ label: t('common.use'), role: 'primary', size: 'sm', className: 'connector-card-use', disabled: !enabledFlag, attrs: { 'data-act': 'use-connector', title: useTitle } });
   } else if (degraded) {
     // Retry re-runs connect + token refresh (`connectors.refresh`) — NOT OAuth. The grant is fine;
     // what failed was reaching the backend. Offering "连接" here would send the user through a
     // pointless re-authorization for what is usually a server-side outage.
-    action = `<button class="btn btn-sm btn-primary" data-act="retry-degraded">${escapeHtml(t('connectors.action.retry'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.retry'), role: 'primary', size: 'sm', icon: 'refresh', attrs: { 'data-act': 'retry-degraded' } });
   } else if (e._custom) {
     // Custom server, not connected: retry probes the stored transport
     // (`connectors.refresh`), never OAuth. Disconnect stays available so a
     // dead entry can be removed.
     action = `
-      <button class="btn btn-sm btn-primary" data-act="retry-custom">${escapeHtml(t('connectors.action.retry'))}</button>
-      <button class="btn btn-sm btn-danger" data-act="disconnect">${escapeHtml(t('connectors.action.disconnect'))}</button>`;
+      ${_connectorUiButton({ label: t('connectors.action.retry'), role: 'secondary', size: 'sm', icon: 'refresh', attrs: { 'data-act': 'retry-custom' } })}
+      ${_connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', attrs: { 'data-act': 'disconnect' } })}`;
   } else if (_isReconnectableError(e, instance)) {
-    action = `<button class="btn btn-sm btn-primary" data-act="connect">${escapeHtml(t('connectors.action.connect'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'connect' } });
   } else if (errored) {
-    action = `<button class="btn btn-sm btn-danger" data-act="disconnect">${escapeHtml(t('connectors.action.disconnect'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', attrs: { 'data-act': 'disconnect' } });
   } else {
-    action = `<button class="btn btn-sm btn-primary" data-act="connect">${escapeHtml(t('connectors.action.connect'))}</button>`;
+    action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'connect' } });
   }
 
   let secondaryHtml = '';
@@ -631,8 +753,8 @@ function _openCardMenu(anchorBtn, entry, instance) {
     : true;
   const toggleLabel = enabledFlag ? t('component.disable') : t('component.enable');
   pop.innerHTML = `
-    <div class="connector-card-menu-item" data-act="toggle-enabled">${escapeHtml(toggleLabel)}</div>
-    <div class="connector-card-menu-item is-danger" data-act="disconnect">${escapeHtml(t('connectors.action.disconnect'))}</div>
+    ${_connectorUiButton({ label: toggleLabel, role: 'ghost', size: 'sm', className: 'connector-card-menu-item', attrs: { 'data-act': 'toggle-enabled' } })}
+    ${_connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', className: 'connector-card-menu-item', attrs: { 'data-act': 'disconnect' } })}
   `;
   document.body.appendChild(pop);
   const popRect = pop.getBoundingClientRect();
@@ -944,50 +1066,99 @@ function _parseEnvLines(text) {
 function _openAddCustomDialog() {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay ui-dialog-overlay';
+  const formHtml = uiForm({
+    ariaLabel: t('connectors.custom.title'),
+    fields: [
+      {
+        wide: true,
+        html: uiField({
+          id: 'connector-custom-name',
+          label: t('connectors.custom.name_label'),
+          required: true,
+          control: { kind: 'input', attrs: { 'data-f': 'name', maxlength: 64 } },
+        }),
+      },
+      {
+        wide: true,
+        html: uiField({
+          id: 'connector-custom-kind',
+          label: t('connectors.custom.kind_label'),
+          required: true,
+          control: {
+            kind: 'select',
+            value: 'streamable-http',
+            options: [
+              { value: 'streamable-http', label: t('connectors.custom.kind_http') },
+              { value: 'stdio', label: t('connectors.custom.kind_stdio') },
+            ],
+          },
+        }),
+      },
+      {
+        wide: true,
+        html: `<div class="connector-custom-section" data-sec="http">
+          ${uiField({
+            id: 'connector-custom-url',
+            label: t('connectors.custom.url_label'),
+            required: true,
+            control: {
+              kind: 'input',
+              placeholder: 'https://example.com/mcp',
+              attrs: { 'data-f': 'url' },
+            },
+          })}
+          ${uiField({
+            id: 'connector-custom-headers',
+            label: t('connectors.custom.headers_label'),
+            control: {
+              kind: 'textarea',
+              placeholder: 'Authorization: Bearer ...',
+              attrs: { 'data-f': 'headers' },
+            },
+          })}
+        </div>`,
+      },
+      {
+        wide: true,
+        html: `<div class="connector-custom-section" data-sec="stdio" hidden>
+          ${uiField({
+            id: 'connector-custom-command',
+            label: t('connectors.custom.command_label'),
+            required: true,
+            control: { kind: 'input', placeholder: 'npx', attrs: { 'data-f': 'command' } },
+          })}
+          ${uiField({
+            id: 'connector-custom-args',
+            label: t('connectors.custom.args_label'),
+            control: {
+              kind: 'textarea',
+              placeholder: '-y\n@scope/mcp-server',
+              attrs: { 'data-f': 'args' },
+            },
+          })}
+          ${uiField({
+            id: 'connector-custom-env',
+            label: t('connectors.custom.env_label'),
+            control: {
+              kind: 'textarea',
+              placeholder: 'API_KEY=...',
+              attrs: { 'data-f': 'env' },
+            },
+          })}
+          <div class="muted connector-custom-warning">${escapeHtml(t('connectors.custom.stdio_warning'))}</div>
+        </div>`,
+      },
+    ],
+    actions: [
+      { label: t('common.cancel'), role: 'secondary', attrs: { 'data-act': 'cancel' } },
+      { label: t('connectors.custom.submit'), role: 'primary', icon: 'plug', attrs: { 'data-act': 'ok' } },
+    ],
+  });
   overlay.innerHTML = `
     <div class="modal modal-standard ui-dialog connector-custom-dialog" role="dialog" aria-modal="true" aria-labelledby="connector-custom-title">
       <div class="modal-title ui-dialog-title" id="connector-custom-title">${escapeHtml(t('connectors.custom.title'))}</div>
       <div class="modal-body">
-      <div class="form-row">
-        <label>${escapeHtml(t('connectors.custom.name_label'))}</label>
-        <input type="text" data-f="name" maxlength="64" />
-      </div>
-      <div class="form-row">
-        <label>${escapeHtml(t('connectors.custom.kind_label'))}</label>
-        <select data-f="kind">
-          <option value="streamable-http">${escapeHtml(t('connectors.custom.kind_http'))}</option>
-          <option value="stdio">${escapeHtml(t('connectors.custom.kind_stdio'))}</option>
-        </select>
-      </div>
-      <div data-sec="http">
-        <div class="form-row">
-          <label>${escapeHtml(t('connectors.custom.url_label'))}</label>
-          <input type="text" data-f="url" placeholder="https://example.com/mcp" />
-        </div>
-        <div class="form-row">
-          <label>${escapeHtml(t('connectors.custom.headers_label'))}</label>
-          <textarea data-f="headers" rows="2" placeholder="Authorization: Bearer ..."></textarea>
-        </div>
-      </div>
-      <div data-sec="stdio" style="display:none">
-        <div class="form-row">
-          <label>${escapeHtml(t('connectors.custom.command_label'))}</label>
-          <input type="text" data-f="command" placeholder="npx" />
-        </div>
-        <div class="form-row">
-          <label>${escapeHtml(t('connectors.custom.args_label'))}</label>
-          <textarea data-f="args" rows="2" placeholder="-y&#10;@scope/mcp-server"></textarea>
-        </div>
-        <div class="form-row">
-          <label>${escapeHtml(t('connectors.custom.env_label'))}</label>
-          <textarea data-f="env" rows="2" placeholder="API_KEY=..."></textarea>
-        </div>
-        <div class="muted connector-custom-warning">${escapeHtml(t('connectors.custom.stdio_warning'))}</div>
-      </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" data-act="cancel">${escapeHtml(t('common.cancel'))}</button>
-        <button class="btn btn-primary" data-act="ok">${escapeHtml(t('connectors.custom.submit'))}</button>
+        ${formHtml}
       </div>
     </div>
   `;
@@ -996,11 +1167,23 @@ function _openAddCustomDialog() {
   const f = (name) => overlay.querySelector(`[data-f="${name}"]`);
   const secHttp = overlay.querySelector('[data-sec="http"]');
   const secStdio = overlay.querySelector('[data-sec="stdio"]');
-  f('kind').addEventListener('change', () => {
-    const stdio = f('kind').value === 'stdio';
-    secHttp.style.display = stdio ? 'none' : '';
-    secStdio.style.display = stdio ? '' : 'none';
-  });
+  const syncKindSections = (value) => {
+    const stdio = value === 'stdio';
+    secHttp.hidden = stdio;
+    secStdio.hidden = !stdio;
+  };
+  const kindHost = overlay.querySelector('#connector-custom-kind');
+  let kindSelect = null;
+  if (typeof hydrateUiFormSelects === 'function') {
+    hydrateUiFormSelects(overlay, { 'connector-custom-kind': syncKindSections });
+    kindSelect = kindHost && kindHost._uiSelectApi;
+  }
+  const readKind = () => (kindSelect && typeof kindSelect.getValue === 'function'
+    ? kindSelect.getValue()
+    : 'streamable-http');
+  syncKindSections(readKind());
+  const form = overlay.querySelector('form');
+  if (form) form.addEventListener('submit', (event) => event.preventDefault());
 
   // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
   const dialog = overlay.querySelector('[role="dialog"]');
@@ -1015,7 +1198,7 @@ function _openAddCustomDialog() {
 
   const okBtn = overlay.querySelector('[data-act="ok"]');
   okBtn.addEventListener('click', async () => {
-    const kind = f('kind').value;
+    const kind = readKind();
     let transport;
     if (kind === 'stdio') {
       const env = _parseEnvLines(f('env').value);
@@ -1032,7 +1215,9 @@ function _openAddCustomDialog() {
       transport = { kind: 'streamable-http', url: f('url').value.trim(), headers };
     }
     okBtn.disabled = true;
-    okBtn.textContent = t('connectors.action.connecting');
+    okBtn.classList.add('is-loading');
+    okBtn.setAttribute('aria-busy', 'true');
+    _setConnectorButtonPresentation(okBtn, t('connectors.action.connecting'));
     const payload = { transport_kind: kind };
     const startedAt = performance.now();
     _connectorsTrackClick('connector_custom_add', payload);
@@ -1080,7 +1265,9 @@ function _openAddCustomDialog() {
       uiAlert((err && err.message) || t('connectors.errors.connect_failed'));
     } finally {
       okBtn.disabled = false;
-      okBtn.textContent = t('connectors.custom.submit');
+      okBtn.classList.remove('is-loading');
+      okBtn.removeAttribute('aria-busy');
+      _setConnectorButtonPresentation(okBtn, t('connectors.custom.submit'));
     }
   });
   if (controller) controller.open();

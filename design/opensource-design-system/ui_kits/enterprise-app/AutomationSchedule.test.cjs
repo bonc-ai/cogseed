@@ -1,0 +1,15 @@
+const assert = require('node:assert/strict');
+const model = require('./AutomationSchedule.js');
+const base = model.defaults(new Date(2026,8,5));
+assert.deepEqual(base,{type:'daily',date:'2026-09-05',hour:9,minute:0,weekday:1,day:1});
+assert.equal(model.validate({...base,type:'one_time',date:'2026-02-30'}),'请选择有效的触发日期');
+assert.equal(model.validate({...base,type:'one_time',date:'2028-02-29'}),'');
+for (const patch of [{hour:24},{minute:-1},{type:'weekly',weekday:7},{type:'monthly',day:0},{type:'unknown'}]) assert.ok(model.validate({...base,...patch}));
+assert.equal(model.format({...base,type:'monthly',day:31}),'月底 09:00');
+assert.equal(model.format({...base,type:'weekly',weekday:0}),'每周日 09:00');
+const draft = {message:'  第一行\n第二行 ',title:' ',enabled:false,schedule:base,mentions:[{id:'agent',kind:'agent',name:'cogseed'}],attachments:[{name:'资料.pdf',size:120}],runs:[{id:'run'}]};
+const task = model.makeTask(draft,'task');
+assert.equal(task.title,'第一行'); assert.equal(task.enabled,false); assert.equal(task.runs.length,1);
+task.schedule.hour=15; task.mentions[0].name='changed'; task.attachments[0].name='changed';
+assert.equal(draft.schedule.hour,9); assert.equal(draft.mentions[0].name,'cogseed'); assert.equal(draft.attachments[0].name,'资料.pdf');
+console.log('Automation schedule and draft isolation checks passed.');

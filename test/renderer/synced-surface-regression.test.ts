@@ -23,14 +23,18 @@ function cssBlockLast(css: string, selector: RegExp) {
 describe('synced PC surface regressions', () => {
   it('keeps card Use actions as text buttons and reserves icon sizing for icon buttons', () => {
     const css = read('src/renderer/style.css');
+    const sharedCss = read('src/renderer/ui-components.css');
     const html = read('src/renderer/index.html');
+    const agents = read('src/renderer/modules/agents.js');
+    const skills = read('src/renderer/modules/skills.js');
 
-    const useBlock = cssBlock(css, /\.agent-card-use,\s*\.skill-card-use,\s*\.agent-dialog-btn\s*{([\s\S]*?)}/);
-    expect(useBlock).toContain('padding: 4px 10px;');
-    expect(useBlock).toContain('border-radius: 8px;');
-    expect(useBlock).toContain('background: var(--primary);');
-    expect(useBlock).not.toContain('width: 26px;');
-    expect(useBlock).not.toContain('border-radius: 50%;');
+    const sharedSmallButton = cssBlock(sharedCss, /\.ui-button--sm\s*{([\s\S]*?)}/);
+    const sharedPrimaryButton = cssBlock(sharedCss, /\.ui-button--primary\s*{([\s\S]*?)}/);
+    expect(sharedSmallButton).toContain('height: var(--control-height-sm);');
+    expect(sharedSmallButton).toContain('padding-inline: var(--space-3);');
+    expect(sharedPrimaryButton).toContain('background: var(--control-primary-bg);');
+    expect(skills).toContain("className: 'skill-card-use'");
+    expect(skills).toContain("role: 'primary'");
 
     const iconBlock = cssBlock(css, /\.btn-icon-use\s*{([\s\S]*?)}/);
     expect(iconBlock).toContain('width: 26px;');
@@ -38,30 +42,48 @@ describe('synced PC surface regressions', () => {
     expect(iconBlock).toContain('border-radius: 8px;');
 
     expect(css).toContain('.skill-card--global-group');
-    expect(css).toContain('.skill-card-disclosure');
+    expect(css).toContain('.skill-card-disclosure.ui-button');
+    expect(css).toContain('.skill-card-more.ui-icon-button');
+    expect(agents).toContain("className: 'agent-card-use'");
+    expect(agents).toContain("role: 'primary'");
+    expect(css).toContain('.agent-card-use.ui-button { flex-shrink: 0; }');
     expect(html).toContain('class="skill-card-use skill-dialog-btn" id="skill-use-btn"');
     expect(html).toContain('class="agent-card-use agent-dialog-btn" id="agent-use-btn"');
   });
 
-  it('keeps synced tab card layout sizing for agent and marketplace chips', () => {
+  it('keeps resource-card grids aligned with the open-source CardGrid contract', () => {
     const css = read('src/renderer/style.css');
 
     const agentCardBlock = cssBlockLast(css, /\.agent-card\s*{([\s\S]*?)}/g);
-    expect(agentCardBlock).toContain('gap: 2px;');
-    expect(agentCardBlock).toContain('min-height: 132px;');
+    expect(agentCardBlock).toContain('gap: var(--space-1);');
+    expect(agentCardBlock).toContain('min-height: 176px;');
 
     const agentHeaderBlock = cssBlockLast(css, /\.agent-card-header\s*{([\s\S]*?)}/g);
     expect(agentHeaderBlock).toContain('padding-right: 26px;');
     expect(css).toContain('.agent-card-title');
     expect(css).toContain('.agent-card-meta');
 
-    const agentMoreBlock = cssBlockLast(css, /(?:^|\n)\.agent-card-more\s*{([\s\S]*?)}/g);
+    const agentMoreBlock = cssBlockLast(css, /(?:^|\n)\.agent-card-more\.ui-icon-button\s*{([\s\S]*?)}/g);
     expect(agentMoreBlock).toContain('position: absolute;');
     expect(agentMoreBlock).toContain('right: 12px;');
     expect(agentMoreBlock).toContain('width: 22px;');
 
     const skillDescBlock = cssBlock(css, /\.skill-card-desc\s*{([\s\S]*?)}/);
-    expect(skillDescBlock).toContain('color: var(--text-2);');
+    expect(skillDescBlock).toContain('color: var(--text-secondary);');
+    expect(skillDescBlock).toContain('-webkit-line-clamp: 2;');
+
+    const skillNameBlock = cssBlock(css, /\.skill-card-name\s*{([\s\S]*?)}/);
+    expect(skillNameBlock).toContain('-webkit-line-clamp: 2;');
+
+    const marketplaceCardBlock = cssBlockLast(css, /(?:^|\n)\.marketplace-card\s*{([\s\S]*?)}/g);
+    expect(marketplaceCardBlock).toContain('border-radius: var(--radius-card);');
+    expect(marketplaceCardBlock).toContain('box-shadow: var(--shadow-card);');
+
+    const marketplaceDescBlock = cssBlock(css, /\.marketplace-card-desc\s*{([\s\S]*?)}/);
+    expect(marketplaceDescBlock).toContain('-webkit-line-clamp: 2;');
+
+    const agentDescBlock = cssBlockLast(css, /(?:^|\n)\.agent-card-desc\s*{([\s\S]*?)}/g);
+    expect(agentDescBlock).toContain('-webkit-line-clamp: 2;');
 
     const chipBlock = cssBlock(css, /\.marketplace-card-chip,\s*\.skill-card-chip,\s*\.agent-card-chip\s*{([\s\S]*?)}/);
     expect(chipBlock).toContain('display: inline-flex;');
@@ -70,8 +92,12 @@ describe('synced PC surface regressions', () => {
     expect(chipBlock).toContain('line-height: 1.2;');
 
     expect(css).toContain('.skills-grid,\n.skills-source-section-grid,\n.agents-grid,\n.agents-source-section-grid,\n.marketplace-grid');
-    expect(css).toContain('--tab-card-min: 240px;');
-    expect(css).toContain('calc((100% - (3 * var(--tab-grid-gap))) / 4)');
+    expect(css).toContain('grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));');
+    expect(css).toContain('max-width: var(--layout-card-grid-width);');
+    expect(css).toContain('.marketplace-grid > .marketplace-card');
+    expect(css).toContain('max-width: 400px;');
+    expect(css).not.toContain('--tab-card-min: 240px;');
+    expect(css).not.toContain('calc((100% - (3 * var(--tab-grid-gap))) / 4)');
     expect(css).toContain('.agents-grid-header-titles');
     expect(css).toContain('.agents-grid-subtitle');
   });

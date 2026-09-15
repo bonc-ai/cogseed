@@ -7,6 +7,10 @@ const conversationSource = readFileSync(
   resolve(__dirname, '../../src/renderer/modules/conversation.js'),
   'utf8',
 );
+const uiButtonSource = readFileSync(
+  resolve(__dirname, '../../src/renderer/modules/ui-button.js'),
+  'utf8',
+);
 const start = conversationSource.indexOf('let _agentStatusPopover');
 const end = conversationSource.indexOf('\nfunction _bindChatHeaderActions', start);
 const agentStatusSource = conversationSource.slice(start, end);
@@ -17,7 +21,11 @@ function render(snapshot: any): string {
     Math,
     Set,
     String,
-    window: { innerWidth: 1024, innerHeight: 768 },
+    window: {
+      innerWidth: 1024,
+      innerHeight: 768,
+      uiIconHtml: (name: string) => `<svg data-icon="${name}"></svg>`,
+    },
     document: { getElementById: () => null },
     _groupMembersCache: new Map(),
     _membersRequestUrl: (cid: string) => `/members/${cid}`,
@@ -50,7 +58,7 @@ function render(snapshot: any): string {
       return dict[key] || key;
     },
   };
-  vm.runInNewContext(agentStatusSource, sandbox, { filename: 'conversation-agent-status.js' });
+  vm.runInNewContext(`${uiButtonSource}\nthis.uiIconButton = window.uiIconButton;\n${agentStatusSource}`, sandbox, { filename: 'conversation-agent-status.js' });
   return sandbox._renderAgentStatusPanelHtml(snapshot);
 }
 

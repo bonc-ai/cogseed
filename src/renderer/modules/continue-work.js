@@ -61,35 +61,34 @@ function _cwStatusText(item) {
 }
 
 function _cwIcon(name) {
-  const paths = {
-    close: '<path d="M12 4 4 12M4 4l8 8"/>',
-    play: '<path d="M6 4v16l14-8z"/>',
-    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
-    check: '<path d="m5 12 5 5 9-11"/>',
-    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    refresh: '<path d="M20 11a8 8 0 1 0-2.3 6.3M20 4v7h-7"/>',
-    eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
-    lock: '<circle cx="12" cy="16" r="1"/><rect x="3" y="10" width="18" height="12" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/>',
-    loading: '<path d="M21 12a9 9 0 1 1-6.22-8.56"/>',
-    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
-    'chevron-right': '<path d="m9 18 6-6-6-6"/>',
-    'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-5"/>',
-  };
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ''}</svg>`;
+  const iconName = { close: 'x', loading: 'loader', play: 'play' }[name] || name;
+  if (typeof window.uiIconHtml !== 'function') throw new Error('continue work requires uiIconHtml');
+  return window.uiIconHtml(iconName, 'ui-icon');
 }
 
-function _cwKeydown(e) {
-  if (e.key === 'Escape' && _cw && _cw.backdrop && _cw.backdrop.isConnected) {
-    _cwClose();
-  }
+function _cwButton(options) {
+  if (typeof window.uiButton !== 'function') throw new Error('continue work requires uiButton');
+  return window.uiButton(options);
 }
 
-function _cwClose() {
+function _cwIconButton(options) {
+  if (typeof window.uiIconButton !== 'function') throw new Error('continue work requires uiIconButton');
+  return window.uiIconButton(options);
+}
+
+function _cwInput(options) {
+  if (typeof window.uiInput !== 'function') throw new Error('continue work requires uiInput');
+  return window.uiInput(options);
+}
+
+function _cwClose(reason = 'action') {
   if (!_cw) return;
   _cw.cancel = true;
-  if (_cw.backdrop && _cw.backdrop.isConnected) _cw.backdrop.remove();
-  document.removeEventListener('keydown', _cwKeydown);
+  if (_cw.modalController?.isOpen()) {
+    _cw.modalController.close(reason);
+    return;
+  }
+  if (_cw.backdrop?.isConnected) _cw.backdrop.remove();
   _cw = null;
 }
 
@@ -139,24 +138,25 @@ function open() {
     collapsedProjects: new Set(),
     importItems: [],
     backdrop: null,
+    modalController: null,
   };
 
   const backdrop = document.createElement('div');
-  backdrop.className = 'cw-backdrop';
+  backdrop.className = 'ui-modal-overlay cw-backdrop';
   backdrop.innerHTML = `
-    <div class="cw-modal" role="dialog" aria-modal="true">
-      <div class="cw-head">
+    <div class="ui-modal ui-modal--lg cw-modal" role="dialog" aria-modal="true">
+      <div class="ui-modal__header cw-head">
         <span class="cw-head-icon">${_cwIcon('clock')}</span>
         <div class="cw-head-copy">
           <div class="cw-kicker" data-cw-i18n="kicker">${_cwEsc(_cwT('continue_work.kicker', '继续之前的工作'))}</div>
           <div class="cw-title" data-cw-i18n="title">${_cwEsc(_cwT('continue_work.title', '导入历史会话并接续'))}</div>
           <div class="cw-subtitle" data-cw-i18n="subtitle">${_cwEsc(_cwT('continue_work.subtitle', '从你授权的会话中准备任务摘要与接续状态，不改动原 Agent 内容。'))}</div>
         </div>
-        <button type="button" class="cw-close" data-cw-close aria-label="${_cwEsc(_cwT('common.close', '关闭'))}">${_cwIcon('close')}</button>
+        ${_cwIconButton({ label: _cwT('common.close', '关闭'), icon: 'x', className: 'cw-close', attrs: { 'data-cw-close': '' } })}
       </div>
       <div class="cw-steps" data-cw-steps></div>
-      <div class="cw-body" data-cw-body></div>
-      <div class="cw-foot" data-cw-foot></div>
+      <div class="ui-modal__body cw-body" data-cw-body></div>
+      <div class="ui-modal__footer cw-foot" data-cw-foot></div>
     </div>`;
   document.body.appendChild(backdrop);
   state.backdrop = backdrop;
@@ -164,9 +164,20 @@ function open() {
 
   backdrop.querySelectorAll('[data-cw-close]').forEach((el) => el.addEventListener('click', _cwClose));
   backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) _cwClose();
+    if (e.target === backdrop) _cwClose('backdrop');
   });
-  document.addEventListener('keydown', _cwKeydown);
+  const dialog = backdrop.querySelector('[role="dialog"]');
+  state.modalController = window.uiModalController({
+    overlay: backdrop,
+    dialog,
+    initialFocus: '[data-cw-close]',
+    onClose: () => {
+      if (_cw !== state) return;
+      backdrop.remove();
+      _cw = null;
+    },
+  });
+  state.modalController.open(document.activeElement);
 
   _cwRenderHeader();
   _cwGo(1);
@@ -247,8 +258,8 @@ function _cwRenderBody(options = {}) {
           <button type="button" class="cw-time-range-option${_cw.timeRange === value ? ' is-active' : ''}" data-cw-time-range-option="${value}">${_cwEsc(_cwT(`continue_work.sessions.time_${value}`, label))}</button>`).join('')}
       </div>
       <div class="cw-session-toolbar">
-        <div class="cw-search">${_cwIcon('search')}<input type="text" data-cw-search placeholder="${_cwEsc(_cwT('continue_work.sessions.search', '搜索标题、项目或 Agent'))}" /></div>
-        <button type="button" class="cw-select-all" data-cw-select-all>${_cwEsc(_cwT('continue_work.sessions.select_all', '全选当前结果'))}</button>
+        <div class="cw-search">${_cwIcon('search')}${_cwInput({ id: 'continue-work-search', className: 'cw-search-input', placeholder: _cwT('continue_work.sessions.search', '搜索标题、项目或 Agent'), attrs: { 'data-cw-search': '' } })}</div>
+        ${_cwButton({ label: _cwT('continue_work.sessions.select_all', '全选当前结果'), size: 'sm', className: 'cw-select-all', attrs: { 'data-cw-select-all': '' } })}
         <span class="cw-session-count" data-cw-count></span>
       </div>
       <div class="cw-session-list" data-cw-session-list>
@@ -307,21 +318,21 @@ function _cwRenderFoot() {
   let right = '';
 
   if (_cw.step === 1) {
-    left = `<button type="button" class="cw-btn ghost" data-cw-action="close">${_cwEsc(_cwT('common.cancel', '取消'))}</button>`;
+    left = _cwButton({ label: _cwT('common.cancel', '取消'), role: 'ghost', attrs: { 'data-cw-action': 'close' } });
     center = `<span class="cw-selection-summary">${_cwEsc(_cwT('continue_work.source.selected_count', '已选择 {count} 个来源', { count: _cw.selectedSources.size }))}</span>`;
     const canNext = _cw.selectedSources.size > 0;
-    right = `<button type="button" class="cw-btn primary" data-cw-action="next"${canNext ? '' : ' disabled'}>${_cwEsc(_cwT('continue_work.next', '下一步'))}</button>`;
+    right = _cwButton({ label: _cwT('continue_work.next', '下一步'), role: 'primary', disabled: !canNext, attrs: { 'data-cw-action': 'next' } });
   } else if (_cw.step === 2) {
-    left = `<button type="button" class="cw-btn ghost" data-cw-action="source">${_cwEsc(_cwT('common.back', '返回'))}</button>`;
+    left = _cwButton({ label: _cwT('common.back', '返回'), role: 'ghost', attrs: { 'data-cw-action': 'source' } });
     center = `<span class="cw-selection-summary">${_cwEsc(_cwT('continue_work.sessions.selected_count', '已选 {count} 个会话', { count: _cw.selected.size }))}</span>`;
     const startLabel = _cw.selected.size
       ? _cwT('continue_work.import.start_count', '开始准备（{count}）', { count: _cw.selected.size })
       : _cwT('continue_work.import.start', '开始准备');
-    right = `<button type="button" class="cw-btn primary" data-cw-action="import"${_cw.selected.size ? '' : ' disabled'}>${_cwEsc(startLabel)}</button>`;
+    right = _cwButton({ label: startLabel, role: 'primary', disabled: !_cw.selected.size, attrs: { 'data-cw-action': 'import' } });
   } else {
     left = '';
     center = '';
-    right = `<button type="button" class="cw-btn ghost" data-cw-action="close"${_cw.busy ? ' disabled' : ''}>${_cwEsc(_cw.busy ? _cwT('continue_work.import.running', '导入中…') : _cwT('common.close', '关闭'))}</button>`;
+    right = _cwButton({ label: _cw.busy ? _cwT('continue_work.import.running', '导入中…') : _cwT('common.close', '关闭'), role: 'ghost', disabled: _cw.busy, attrs: { 'data-cw-action': 'close' } });
   }
 
   foot.innerHTML = `<div class="cw-foot-left">${left}</div><div class="cw-foot-center">${center}</div><div class="cw-foot-right">${right}</div>`;
@@ -383,7 +394,7 @@ function _cwRenderSourceGrid() {
       <div class="cw-empty">
         <div class="cw-empty-icon">${_cwIcon('folder')}</div>
         <div>${_cwEsc(message)}</div>
-        <button type="button" class="cw-btn ghost" data-cw-retry>${_cwEsc(_cwT('continue_work.source.retry', '重新检测'))}</button>
+        ${_cwButton({ label: _cwT('continue_work.source.retry', '重新检测'), role: 'ghost', attrs: { 'data-cw-retry': '' } })}
       </div>`;
     grid.querySelector('[data-cw-retry]')?.addEventListener('click', () => void _cwLoadSources());
     return;
@@ -966,7 +977,7 @@ function _cwRenderDone() {
           ${item.pendingExtract ? `<span class="cw-done-tag is-pending">${_cwEsc(_cwT('continue_work.done.distilling', '提炼中'))}</span>` : ''}
           ${item.degraded ? `<span class="cw-done-tag" title="${_cwEsc(_cwDegradedReason(item.degradedReasonRaw))}">${_cwEsc(_cwT('continue_work.status.not_distilled', '未提炼'))}</span>` : ''}
           ${item.degraded ? `<small class="cw-done-reason">${_cwEsc(_cwDegradedReason(item.degradedReasonRaw))}</small>` : ''}
-          <button type="button" class="cw-btn small" data-cw-open-cid="${_cwEsc(item.cid)}">${_cwEsc(_cwT('common.open', '打开'))}</button>
+          ${_cwButton({ label: _cwT('common.open', '打开'), size: 'sm', attrs: { 'data-cw-open-cid': item.cid } })}
         </div>`).join('')}</div>` : ''}`;
     body.querySelectorAll('[data-cw-open-cid]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -979,7 +990,7 @@ function _cwRenderDone() {
   }
   const foot = _cw.backdrop.querySelector('[data-cw-foot]');
   if (foot) {
-    foot.innerHTML = `<div class="cw-foot-left"><span class="cw-selection-summary">${_cwEsc(_cwT('continue_work.done.no_auto_start', '准备完成，不会自动启动外部 Agent'))}</span></div><div class="cw-foot-right"><button type="button" class="cw-btn primary" data-cw-action="done">${_cwEsc(_cwT('continue_work.done.action', '完成'))}</button></div>`;
+    foot.innerHTML = `<div class="cw-foot-left"><span class="cw-selection-summary">${_cwEsc(_cwT('continue_work.done.no_auto_start', '准备完成，不会自动启动外部 Agent'))}</span></div><div class="cw-foot-right">${_cwButton({ label: _cwT('continue_work.done.action', '完成'), role: 'primary', attrs: { 'data-cw-action': 'done' } })}</div>`;
     foot.querySelector('[data-cw-action="done"]').addEventListener('click', () => {
       const latest = _cw.imported.length ? _cw.imported[_cw.imported.length - 1] : null;
       const cid = latest && latest.cid;

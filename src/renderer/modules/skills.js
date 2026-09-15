@@ -9,6 +9,7 @@ let _skillsCache = null;
 let _openSkillsCache = [];
 let _packagesCache = [];
 let _skillsLoadInFlight = null;
+let _skillsSearchQuery = '';
 let _selectedSkill = null;    // { source, id }
 let _expandedGlobalSkillGroups = new Set();
 const _GLOBAL_SKILL_GROUP_MIN = 2;
@@ -31,6 +32,36 @@ function _skillUiIconHtml(name, className) {
     return window.uiIconHtml(name, className);
   }
   return '';
+}
+
+function _skillUiButton(options) {
+  if (typeof window.uiButton !== 'function') throw new Error('skills require uiButton');
+  return window.uiButton(options);
+}
+
+function _skillUiIconButton(options) {
+  if (typeof window.uiIconButton !== 'function') throw new Error('skills require uiIconButton');
+  return window.uiIconButton(options);
+}
+
+function _skillUiSegmentedControl(options) {
+  if (typeof window.uiSegmentedControl !== 'function') throw new Error('skills require uiSegmentedControl');
+  return window.uiSegmentedControl(options);
+}
+
+function _skillUiInput(options) {
+  if (typeof window.uiInput !== 'function') throw new Error('skills require uiInput');
+  return window.uiInput(options);
+}
+
+function _skillUiTextarea(options) {
+  if (typeof window.uiTextarea !== 'function') throw new Error('skills require uiTextarea');
+  return window.uiTextarea(options);
+}
+
+function _skillUiEmptyState(options) {
+  if (typeof window.uiEmptyState !== 'function') throw new Error('skills require uiEmptyState');
+  return window.uiEmptyState(options);
 }
 
 function _skillCardChipsHtml(s) {
@@ -307,15 +338,14 @@ function _skillsSecuritySummaryHtml(skills) {
     const k = String(s.security.status);
     if (counts[k] !== undefined) counts[k] += 1;
   }
-  const parts = [t('skills.security_summary_verified', { n: counts.verified })];
+  const parts = [t('skills.security_summary_label'), t('skills.security_summary_verified', { n: counts.verified })];
   if (counts.risk) parts.push(t('skills.security_summary_risk', { n: counts.risk }));
   if (counts.withheld) parts.push(t('skills.security_summary_withheld', { n: counts.withheld }));
   if (counts.unchecked) parts.push(t('skills.security_summary_unchecked', { n: counts.unchecked }));
   const attention = counts.withheld > 0;
   return `<div class="skills-security-summary${attention ? ' needs-attention' : ''}">`
     + `<span class="skills-security-summary-text">${escapeHtml(parts.join(' · '))}</span>`
-    + `<button type="button" class="skills-security-recheck" data-skills-recheck>`
-    + `${escapeHtml(t('skills.security_recheck'))}</button>`
+    + _skillUiButton({ label: t('skills.security_recheck'), size: 'sm', className: 'skills-security-recheck', attrs: { 'data-skills-recheck': '' } })
     + `</div>`;
 }
 
@@ -474,17 +504,65 @@ function renderSkillsList(skills) { renderSkillsGrid(skills); }
 // matches `_mpState.category` semantics in marketplace.js.
 let _skillsActiveCategory = '';
 
+function _ensureSkillsSearchControl() {
+  const host = document.getElementById('skills-search-field');
+  if (!host) return;
+  let input = host.querySelector('#skills-search-input');
+  if (!input) {
+    host.innerHTML = `${_skillUiIconHtml('search', 'skills-search-icon')}${_skillUiInput({
+      id: 'skills-search-input',
+      type: 'search',
+      value: _skillsSearchQuery,
+      placeholder: t('skills.search_placeholder'),
+      attrs: { autocomplete: 'off', spellcheck: 'false' },
+    })}`;
+    if (typeof hydrateUiIcons === 'function') hydrateUiIcons(host);
+    input = host.querySelector('#skills-search-input');
+  }
+  if (!input) return;
+  input.placeholder = t('skills.search_placeholder');
+  if (input.dataset.skillsSearchBound === 'true') return;
+  input.dataset.skillsSearchBound = 'true';
+  input.addEventListener('input', () => {
+    _skillsSearchQuery = input.value || '';
+    if (_skillsCache) renderSkillsGrid(_skillsCache);
+  });
+}
+
+function _renderSkillsEmptyState(emptyEl, noMatch) {
+  if (!emptyEl) return;
+  emptyEl.innerHTML = _skillUiEmptyState(noMatch ? {
+    kind: 'actionable',
+    icon: 'search',
+    title: t('skills.no_match'),
+    hint: t('skills.no_match_hint'),
+    action: { label: t('common.clear'), role: 'secondary', attrs: { 'data-skills-clear-search': true } },
+  } : {
+    kind: 'quiet',
+    title: t('skills.empty'),
+  });
+  emptyEl.style.display = '';
+  emptyEl.querySelector('[data-skills-clear-search]')?.addEventListener('click', () => {
+    _skillsSearchQuery = '';
+    _skillsActiveCategory = '';
+    const input = document.getElementById('skills-search-input');
+    if (input) input.value = '';
+    if (_skillsCache) renderSkillsGrid(_skillsCache);
+  });
+}
+
 function renderSkillsGrid(skills) {
   const emptyEl = document.getElementById('skills-empty');
   const chipsHost = document.getElementById('skills-categories');
   const gridEl = document.getElementById('skills-grid');
   if (!gridEl) return;
+  _ensureSkillsSearchControl();
 
   if (!skills.length) {
     if (chipsHost) chipsHost.innerHTML = '';
     // Even with no editable skills, open-tier skills (packages/global) may
     // exist — render them so they're visible + togglable.
-    const openHtml = _openSkillsSectionHtml();
+    const openHtml = _openSkillsSectionHtml({ query: _skillsSearchQuery });
     if (openHtml) {
       gridEl.classList.add('is-sectioned');
       gridEl.innerHTML = openHtml;
@@ -495,16 +573,15 @@ function renderSkillsGrid(skills) {
     gridEl.classList.remove('is-sectioned');
     gridEl.innerHTML = '';
     if (emptyEl) {
-      if (typeof _mpUpdateInstallingEmptyStates === 'function') _mpUpdateInstallingEmptyStates();
-      else emptyEl.textContent = t('skills.empty');
-      emptyEl.style.display = '';
+      if (!_skillsSearchQuery && typeof _mpUpdateInstallingEmptyStates === 'function') _mpUpdateInstallingEmptyStates();
+      else _renderSkillsEmptyState(emptyEl, Boolean(_skillsSearchQuery.trim()));
     }
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';
 
-  const useTitle = escapeHtml(t('skills.use_tooltip'));
-  const moreTitle = escapeHtml(t('skills.more_actions'));
+  const useTitle = t('skills.use_tooltip');
+  const moreTitle = t('skills.more_actions');
   const lang = getLang();
   const customChipLabel = t('skills.custom_group');
   const marketplaceGroupLabel = (() => {
@@ -551,15 +628,15 @@ function renderSkillsGrid(skills) {
   }
 
   if (chipsHost) {
-    const allActive = _skillsActiveCategory === '' ? ' is-active' : '';
-    const chipsHtml = [
-      `<button type="button" class="marketplace-chip${allActive}" data-skills-cat="">${escapeHtml(allLabel)}</button>`,
-      ...chipCodes.map((c) => {
-        const active = _skillsActiveCategory === c.code ? ' is-active' : '';
-        return `<button type="button" class="marketplace-chip${active}" data-skills-cat="${escapeHtml(c.code)}">${escapeHtml(c.label)}</button>`;
-      }),
-    ].join('');
-    chipsHost.innerHTML = chipsHtml;
+    chipsHost.innerHTML = _skillUiSegmentedControl({
+      ariaLabel: t('skills.category_filter_label'),
+      value: _skillsActiveCategory,
+      className: 'skills-category-filter',
+      items: [
+        { label: allLabel, value: '', attrs: { 'data-skills-cat': '' } },
+        ...chipCodes.map((c) => ({ label: c.label, value: c.code, attrs: { 'data-skills-cat': c.code } })),
+      ],
+    });
     chipsHost.querySelectorAll('[data-skills-cat]').forEach((btn) => {
       btn.addEventListener('click', () => {
         _skillsActiveCategory = btn.dataset.skillsCat || '';
@@ -569,22 +646,37 @@ function renderSkillsGrid(skills) {
   }
 
   const filtered = skills.filter((s) => {
-    if (_skillsActiveCategory === '') return true;
-    return _effectiveCategoryCode(s && s.category, knownCodes) === _skillsActiveCategory;
+    if (_skillsActiveCategory !== '' && _effectiveCategoryCode(s && s.category, knownCodes) !== _skillsActiveCategory) return false;
+    const query = _skillsSearchQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return `${s?.name || s?.id || ''} ${pickDesc(s, lang)}`.toLocaleLowerCase().includes(query);
   });
 
   const cardHtml = (s) => {
     const desc = pickDesc(s, lang).trim();
     const descClass = desc ? 'skill-card-desc' : 'skill-card-desc is-empty';
     const descText = desc || t('skills.no_desc');
-    const moreBtn = `<button type="button" class="skill-card-more" data-skill-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
+    const moreBtn = _skillUiIconButton({
+      label: moreTitle,
+      icon: 'more-horizontal',
+      className: 'skill-card-more',
+      attrs: { 'data-skill-more': true },
+    });
     const enabled = s.enabled !== false;
     const cardChips = _skillCardChipsHtml(s);
     const withheld = _isSkillWithheld(s);
     const usable = enabled && !withheld;
-    const thisUseTitle = withheld ? escapeHtml(t('skills.security_withheld_hint')) : useTitle;
+    const thisUseTitle = withheld ? t('skills.security_withheld_hint') : useTitle;
+    const useBtn = _skillUiButton({
+      label: t('skills.use'),
+      role: 'primary',
+      size: 'sm',
+      className: 'skill-card-use',
+      disabled: !usable,
+      attrs: { 'data-skill-use': true, title: thisUseTitle, 'aria-label': thisUseTitle },
+    });
     return `
-      <div class="skill-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
+      <div class="skill-card ui-resource-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(s.name)}</span>
           ${_skillSecurityBadgeHtml(s)}
@@ -593,9 +685,7 @@ function renderSkillsGrid(skills) {
         <div class="${descClass}">${escapeHtml(descText)}</div>
         <div class="skill-card-actions">
           ${cardChips}
-          <button type="button" class="skill-card-use" data-skill-use title="${thisUseTitle}" aria-label="${thisUseTitle}" ${usable ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>
-            ${escapeHtml(t('skills.use'))}
-          </button>
+          ${useBtn}
         </div>
       </div>
     `;
@@ -614,11 +704,8 @@ function renderSkillsGrid(skills) {
     if (!list.length) return '';
     return `
       <section class="skills-source-section">
-        <div class="skills-source-section-head">
-          <span>${escapeHtml(label)}</span>
-          <span class="skills-source-section-count">${list.length}</span>
-        </div>
-        <div class="skills-source-section-grid">
+        <div class="skills-source-section-head">${escapeHtml(label)} · ${list.length}</div>
+        <div class="skills-source-section-grid ui-resource-grid">
           ${list.map(cardHtml).join('')}
         </div>
       </section>
@@ -638,12 +725,22 @@ function renderSkillsGrid(skills) {
     }
     for (const [owner, list] of byOwner) privateHtml += sectionHtml(`${baseLabel} · ${owner}`, list);
   }
+  const openHtml = _skillsActiveCategory === ''
+    ? _openSkillsSectionHtml({ query: _skillsSearchQuery })
+    : '';
+  if (!filtered.length && !openHtml) {
+    gridEl.classList.remove('is-sectioned');
+    gridEl.innerHTML = '';
+    _renderSkillsEmptyState(emptyEl, true);
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
   gridEl.classList.add('is-sectioned');
   gridEl.innerHTML = _skillsSecuritySummaryHtml(filtered)
     + sectionHtml(customChipLabel, groups.custom)
     + sectionHtml(marketplaceGroupLabel, groups.marketplace)
     + privateHtml
-    + _openSkillsSectionHtml();
+    + openHtml;
   _wireOpenSkillCards(gridEl);
   _wireSkillsSecurityRecheck(gridEl);
   _wireSkillSecurityPanels(gridEl);
@@ -775,9 +872,15 @@ function _groupGlobalSkills(rows) {
  *  dash (`lark-*` → `lark`) so machine-shared roots don't become a wall of
  *  one-card-per-recipe rows. Management lives in per-card menus. Returns ''
  *  when none. */
-function _openSkillsSectionHtml() {
-  const rows = _openSkillsCache || [];
-  const externalPackageRows = _externalPackageRows(rows);
+function _openSkillsSectionHtml(options = {}) {
+  const query = String(options.query || '').trim().toLocaleLowerCase();
+  const matches = (value) => !query || String(value || '').toLocaleLowerCase().includes(query);
+  const rows = (_openSkillsCache || []).filter((row) => (
+    !query || matches(`${row?.name || row?.id || ''} ${row?.description || ''} ${row?.package_name || ''}`)
+  ));
+  const externalPackageRows = _externalPackageRows(rows).filter((row) => (
+    !query || matches(`${row?.display_name || row?.name || ''} ${row?.name || ''} ${(row?.bin_names || []).join(' ')}`)
+  ));
   const globalSkillRows = rows.filter((s) => s.source === 'global');
   if (!externalPackageRows.length && !globalSkillRows.length) return '';
   const card = (s) => {
@@ -795,18 +898,32 @@ function _openSkillsSectionHtml() {
     const packageMeta = packageMetaBits.length
       ? `<div class="skill-card-meta">${escapeHtml(packageMetaBits.join(' · '))}</div>`
       : '';
-    const moreTitle = escapeHtml(t('skills.more_actions'));
-    const useTitle = escapeHtml(t('skills.use_tooltip'));
+    const moreTitle = t('skills.more_actions');
+    const useTitle = t('skills.use_tooltip');
     const enabled = s.enabled !== false;
-    const moreAttr = packageName ? 'data-open-more data-open-package-more' : 'data-open-more';
-    const moreBtn = `<button type="button" class="skill-card-more" ${moreAttr} title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
+    const moreAttrs = packageName
+      ? { 'data-open-more': true, 'data-open-package-more': true }
+      : { 'data-open-more': true };
+    const moreBtn = _skillUiIconButton({
+      label: moreTitle,
+      icon: 'more-horizontal',
+      className: 'skill-card-more',
+      attrs: moreAttrs,
+    });
     const packageAttr = packageName ? ` data-open-package-name="${escapeHtml(packageName)}"` : '';
     const sourceAttr = ` data-open-source="${escapeHtml(s.source || '')}"`;
     // "Use" selects the skill in the Commander composer. Disabled when the
     // skill is turned off, mirroring trusted cards.
-    const useBtn = `<button type="button" class="skill-card-use" data-open-use title="${useTitle}" aria-label="${useTitle}" ${enabled ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>${escapeHtml(t('skills.use'))}</button>`;
+    const useBtn = _skillUiButton({
+      label: t('skills.use'),
+      role: 'primary',
+      size: 'sm',
+      className: 'skill-card-use',
+      disabled: !enabled,
+      attrs: { 'data-open-use': true, title: useTitle, 'aria-label': useTitle },
+    });
     return `
-      <div class="skill-card is-readonly${enabled ? '' : ' is-disabled'}" data-open-id="${escapeHtml(s.id)}"${sourceAttr}${packageAttr}>
+      <div class="skill-card ui-resource-card is-readonly${enabled ? '' : ' is-disabled'}" data-open-id="${escapeHtml(s.id)}"${sourceAttr}${packageAttr}>
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(displayName)}</span>
           ${moreBtn}
@@ -829,12 +946,18 @@ function _openSkillsSectionHtml() {
     const meta = metaBits.length
       ? `<div class="skill-card-meta">${escapeHtml(metaBits.join(' · '))}</div>`
       : '';
-    const moreTitle = escapeHtml(t('skills.more_actions'));
+    const moreTitle = t('skills.more_actions');
+    const moreBtn = _skillUiIconButton({
+      label: moreTitle,
+      icon: 'more-horizontal',
+      className: 'skill-card-more',
+      attrs: { 'data-open-package-more': true },
+    });
     return `
-      <div class="skill-card is-readonly${p.enabled ? '' : ' is-disabled'}" data-open-package-card="1" data-open-package-name="${escapeHtml(packageName)}">
+      <div class="skill-card ui-resource-card is-readonly${p.enabled ? '' : ' is-disabled'}" data-open-package-card="1" data-open-package-name="${escapeHtml(packageName)}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(packageDisplayName)}</span>
-          <button type="button" class="skill-card-more" data-open-package-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>
+          ${moreBtn}
         </div>
         ${meta}
       </div>`;
@@ -844,21 +967,34 @@ function _openSkillsSectionHtml() {
     const expanded = _expandedGlobalSkillGroups.has(group.key);
     const enabled = (group.rows || []).some((row) => row.enabled !== false);
     const label = expanded ? t('skills.global_group_collapse') : t('skills.global_group_expand');
-    const icon = _skillUiIconHtml(expanded ? 'chevron-down' : 'chevron-right', 'skill-card-disclosure-icon');
-    const moreTitle = escapeHtml(t('skills.more_actions'));
+    const moreTitle = t('skills.more_actions');
+    const moreBtn = _skillUiIconButton({
+      label: moreTitle,
+      icon: 'more-horizontal',
+      className: 'skill-card-more',
+      attrs: { 'data-global-skill-group-more': group.key },
+    });
+    const disclosure = _skillUiButton({
+      label,
+      role: 'secondary',
+      size: 'sm',
+      icon: expanded ? 'chevron-down' : 'chevron-right',
+      className: 'skill-card-disclosure',
+      attrs: {
+        'data-global-skill-group-toggle': group.key,
+        'aria-expanded': expanded ? 'true' : 'false',
+      },
+    });
     const summary = _globalSkillGroupSummary(group);
     return `
-      <div class="skill-card is-readonly${enabled ? '' : ' is-disabled'} skill-card--global-group" data-global-skill-group="${escapeHtml(group.key)}">
+      <div class="skill-card ui-resource-card is-readonly${enabled ? '' : ' is-disabled'} skill-card--global-group" data-global-skill-group="${escapeHtml(group.key)}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(name)}</span>
-          <button type="button" class="skill-card-more" data-global-skill-group-more="${escapeHtml(group.key)}" title="${moreTitle}" aria-label="${moreTitle}">⋯</button>
+          ${moreBtn}
         </div>
         <div class="skill-card-desc skill-card-desc--global-summary">${escapeHtml(summary)}</div>
         <div class="skill-card-actions">
-          <button type="button" class="skill-card-disclosure" data-global-skill-group-toggle="${escapeHtml(group.key)}" aria-expanded="${expanded ? 'true' : 'false'}">
-            ${icon}
-            <span>${escapeHtml(label)}</span>
-          </button>
+          ${disclosure}
         </div>
       </div>`;
   };
@@ -885,22 +1021,20 @@ function _openSkillsSectionHtml() {
     return `
     <section class="skills-source-section skills-source-section--global">
       <div class="skills-source-section-head">
-        <span>${escapeHtml(t('skills.global_group'))}</span>
-        <span class="skills-source-section-count">${list.length}</span>
+        <span>${escapeHtml(t('skills.global_group'))} · ${list.length}</span>
         ${hintHtml}
       </div>
-      <div class="skills-source-section-grid">${tiles.join('')}</div>
+      <div class="skills-source-section-grid ui-resource-grid">${tiles.join('')}</div>
     </section>`;
   };
   const externalHtml = externalPackageRows.length
     ? `
     <section class="skills-source-section">
       <div class="skills-source-section-head">
-        <span>${escapeHtml(t('skills.external_group'))}</span>
-        <span class="skills-source-section-count">${externalPackageRows.length}</span>
+        <span>${escapeHtml(t('skills.external_group'))} · ${externalPackageRows.length}</span>
         <span class="skills-source-section-hint">${escapeHtml(t('skills.external_group_hint'))}</span>
       </div>
-      <div class="skills-source-section-grid">${externalPackageRows.map(packageCard).join('')}</div>
+      <div class="skills-source-section-grid ui-resource-grid">${externalPackageRows.map(packageCard).join('')}</div>
     </section>`
     : '';
   return externalHtml

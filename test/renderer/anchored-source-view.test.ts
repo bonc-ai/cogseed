@@ -23,6 +23,7 @@ function fakeClassList() {
 
 function loadViewer() {
   let toggleHandler: (() => void) | null = null;
+  let closeHandler: (() => void) | null = null;
   const makeElement = () => ({
     textContent: '',
     hidden: false,
@@ -49,13 +50,18 @@ function loadViewer() {
     '[data-anchor-view-note]': makeElement(),
     '.ui-modal__title': makeElement(),
     '.ui-modal__description': makeElement(),
+    '[data-ui-modal-close]': {
+      addEventListener: vi.fn((name: string, handler: () => void) => {
+        if (name === 'click') closeHandler = handler;
+      }),
+    },
   };
   const dialog = {
     classList: fakeClassList(),
     querySelector: vi.fn((selector: string) => elements[selector] || null),
   };
   const overlay = {};
-  const modal = Object.assign(new Promise(() => {}), { dialog, overlay });
+  const modal = Object.assign(new Promise(() => {}), { dialog, overlay, close: vi.fn() });
   const invoke = vi.fn(async (_channel: string, payload: any) => payload.view === 'document'
     ? {
         resolved: true,
@@ -101,7 +107,15 @@ function loadViewer() {
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'anchored-source-view.js' });
-  return { windowMock, uiModal, uiButton, invoke, getToggleHandler: () => toggleHandler };
+  return {
+    windowMock,
+    uiModal,
+    uiButton,
+    invoke,
+    modal,
+    getToggleHandler: () => toggleHandler,
+    getCloseHandler: () => closeHandler,
+  };
 }
 
 describe('anchored source viewer', () => {
@@ -143,6 +157,17 @@ describe('anchored source viewer', () => {
     expect(source).toContain('anchored-source-block-body');
     expect(source).toMatch(/useBlocks = blocks\.length >= 2/);
     expect(source).not.toMatch(/splitDialogueBlocks[\s\S]{0,400}(replace|correct)\s*\(/);
+  });
+
+  it('closes the document reader from its corner close control', async () => {
+    const viewer = loadViewer();
+    await viewer.windowMock.__openAnchorViewer({
+      source: 'library', scope: 'global', path: 'notes/feishu-wiki.md', chunkIdx: 1, view: 'document',
+    });
+
+    viewer.getCloseHandler()?.();
+
+    expect(viewer.modal.close).toHaveBeenCalledWith(null, 'close');
   });
 
   it('contains no page-local raw buttons or literal z-index values', () => {
