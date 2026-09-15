@@ -24,6 +24,7 @@ import * as transcriptAutoCorrect from '../features/transcript_auto_correct';
 import * as transcriptRuns from '../features/transcript_correction_runs';
 import * as transcriptOntology from '../features/transcript_ontology_bridge';
 import * as transcriptFillers from '../features/transcript_filler_rules';
+import * as transcriptMerge from '../features/transcript_speaker_merge';
 
 interface IpcContext {
   userId: string;
@@ -340,8 +341,33 @@ export const invokeHandlers = {
       includeDelete: payload?.includeDelete === true,
     });
     const acceptedIds = stringList(payload?.acceptedIds, 1000);
-    const applied0 = transcriptAutoCorrect.applyCorrections(text, scan.candidates, {
-      ...(acceptedIds ? { acceptedIds } : {}),
+    // 同人段落合并（方案 §五 P1-2）：合并 = 编辑集（删冗余块头 + 插时间区间），
+    // 因此走同一条替换/偏移/回滚流水线，而不是第二套改写逻辑。
+    const merge = payload?.mergeSpeaker === true
+      ? transcriptMerge.mergeSpeakerEdits(text)
+      : null;
+    const mergeCandidates: transcriptAutoCorrect.CorrectionCandidate[] = merge
+      ? merge.edits.map((edit, index) => ({
+        entryRef: `merge_${index}`,
+        wrong: edit.wrong,
+        correct: edit.correct,
+        action: edit.action,
+        confidence: 1,
+        riskLevel: 'low' as const,
+        context: '',
+        span: edit.span,
+        ignoredCount: 0,
+        contextAllow: [],
+        // 结构编辑：不计入口癖删除统计（否则 355 个块头会占满 deletedFillers）
+        structure: true,
+      }))
+      : [];
+    const allCandidates = [...scan.candidates, ...mergeCandidates];
+    const acceptedAll = mergeCandidates.length
+      ? [...(acceptedIds ?? []), ...mergeCandidates.map((c) => c.entryRef)]
+      : acceptedIds;
+    const applied0 = transcriptAutoCorrect.applyCorrections(text, allCandidates, {
+      ...(acceptedAll ? { acceptedIds: acceptedAll } : {}),
       ...(riskLevels(payload?.acceptRiskLevels) ? { acceptRiskLevels: riskLevels(payload?.acceptRiskLevels)! } : {}),
     });
     // 未决项（方案 §4.3/§8.1-7）：用户标的 span 在**原文**坐标系，先按偏移映射
@@ -354,7 +380,6 @@ export const invokeHandlers = {
         : {}),
       ...(payload?.params && typeof payload.params === 'object' ? (payload.params as Record<string, unknown>) : {}),
     };
-    const mergeSpeaker = payload?.mergeSpeaker === true;
     const run = transcriptRuns.createRun(ctx.userId, {
       docId,
       sourceText: text,
@@ -364,14 +389,14 @@ export const invokeHandlers = {
         : {}),
       result,
       params,
-      mergedBlocks: typeof payload?.mergedBlocks === 'number' ? Math.max(0, Math.floor(payload.mergedBlocks)) : 0,
+      mergedBlocks: merge ? merge.blocksAfter : 0,
+      ...(merge ? { anchors: merge.anchors } : {}),
     });
     transcriptGlossary.recordReplacement(
       ctx.userId,
       result.applied.map((a) => a.entryRef),
       { docId, runId: run.runId },
     );
-    void mergeSpeaker;
     return { run, result, denied: scan.denied };
   },
 

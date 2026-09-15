@@ -98,6 +98,8 @@ export interface CreateRunInput {
   params?: CorrectionRunParams;
   mergedBlocks?: number;
   issues?: Array<Omit<OpenIssue, 'id' | 'runId' | 'docId' | 'marker' | 'status' | 'createdAt'>>;
+  /** 时间/说话人锚点（方案 §4.2：删除与合并后时间锚点必须可重算）。 */
+  anchors?: unknown[];
 }
 
 export function sha1(text: string): string {
@@ -158,7 +160,12 @@ export function createRun(userId: string, input: CreateRunInput): CorrectionRun 
     deletedFillers: run.deletedFillers,
     params: run.params,
   });
-  writeJson(path.join(dir, 'offset-map.json'), { generatedAt: run.createdAt, segments: input.result.offsetMap });
+  writeJson(path.join(dir, 'offset-map.json'), {
+    generatedAt: run.createdAt,
+    segments: input.result.offsetMap,
+    // 锚点：原稿块 → 合并块的时间区间与原文范围，供引用/时间戳回查
+    anchors: Array.isArray(input.anchors) ? input.anchors : [],
+  });
 
   if (input.issues && input.issues.length) {
     const now = Date.now();

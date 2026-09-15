@@ -789,6 +789,9 @@
       parts.push(t('kb.transcriptCorrect.retention', '字符保留率 {percent}%', { percent: (info.retention * 100).toFixed(1) }));
       if (info.pendingTotal) parts.push(t('kb.transcriptCorrect.applied_pending', '待确认 {count} 条', { count: info.pendingTotal }));
       if (info.overRewrite) parts.push(t('kb.transcriptCorrect.over_rewrite', '疑似过度改写'));
+      if (state.mergedBlocks > 0) {
+        parts.push(t('kb.transcriptCorrect.merged_blocks', '合并为 {count} 块', { count: state.mergedBlocks }));
+      }
       if (state.savedPath) parts.push(t('kb.transcriptCorrect.saved_to', '已另存：{path}', { path: state.savedPath }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
@@ -1325,11 +1328,13 @@
           text: ctx.text,
           docId: ctx.docId,
           includeDelete: true,
+          mergeSpeaker: state.mergeSpeaker,
           acceptedIds: [...state.accepted],
           // 待核 span 是原文坐标，主进程按偏移映射后插「【转写存疑】」
           ...(state.flagged.length ? { issues: state.flagged } : {}),
         });
         state.apply = result?.result || null;
+        state.mergedBlocks = Number(result?.run?.mergedBlocks || 0);
         state.runId = String(result?.run?.runId || '');
         state.cleanedText = String(result?.result?.text || '');
         setStatus(t('kb.transcriptCorrect.apply_done', '清理版已生成（原文未改动）'), '');

@@ -84,6 +84,11 @@ export interface CorrectionCandidate {
   ignoredCount: number;
   /** 该词条已有的加白词（面板要能看见并移除；误加一次不该只能改 JSON）。 */
   contextAllow: string[];
+  /**
+   * 结构性编辑（同人段落合并删块头 / 插时间区间）——不是"清理掉的口癖"。
+   * 标记后不会被计进 `deletedFillers`（否则 365 个块头会污染口癖计数）。
+   */
+  structure?: boolean;
 }
 
 export interface DeniedMatch {
@@ -112,6 +117,8 @@ export interface AcceptedEdit {
   correct: string;
   action: 'replace' | 'delete';
   span: Span;
+  /** 结构性编辑（合并块头等）：不计入口癖删除统计。 */
+  structure?: boolean;
 }
 
 export interface OffsetSegment {
@@ -368,6 +375,7 @@ export function applyCorrections(
 
   const edits: AcceptedEdit[] = chosen.map((c) => ({
     entryRef: c.entryRef, wrong: c.wrong, correct: c.correct, action: c.action, span: c.span,
+    structure: c.structure === true,
   }));
 
   const offsetMap: OffsetSegment[] = [];
@@ -394,7 +402,8 @@ export function applyCorrections(
         offsetMap.push({ inStart: edit.span.start, inEnd: end, outStart: out.length, outEnd: out.length, kind: 'delete' });
         cursor = end;
       }
-      deletedFillers[edit.wrong] = (deletedFillers[edit.wrong] ?? 0) + 1;
+      // 只有口癖类删除才计入"删了什么词"；结构性删除（合并块头）单独可查。
+      if (!edit.structure) deletedFillers[edit.wrong] = (deletedFillers[edit.wrong] ?? 0) + 1;
     } else {
       offsetMap.push({
         inStart: edit.span.start, inEnd: edit.span.end,
