@@ -32051,6 +32051,154 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   padding: var(--space-3) var(--space-6) var(--space-5);
   overflow: hidden;
 }
+/* 视觉规范 §一-1：左阅读 60% / 右纠错 40%。纠错面板需要固定可用宽度，
+   所以左列给 flex-grow，右列按比例但不低于 340px。 */
+.anchored-source-modal--reader .anchored-source-main {
+  flex: 1 1 60%;
+}
+.anchored-source-modal--reader .anchored-source-correct {
+  flex: 0 0 40%;
+  width: auto;
+  min-width: 280px;
+  max-width: 760px;
+  /* 真机反馈：原来右栏 overflow:hidden、只有 __body 能滚，非 body 部分一多就把
+     列表压成 0 高——既滚不动也看不见。现在整栏可滚，任何内容都到得了。 */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.anchored-source-modal--reader .anchored-source-correct::-webkit-scrollbar {
+  width: 6px;
+}
+.anchored-source-modal--reader .anchored-source-correct::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-3);
+  background: var(--line-default);
+}
+/* 面板不再吃满高度：让它自然长高，由右栏统一滚动。 */
+.anchored-source-modal--reader .kb-atc {
+  height: auto;
+  min-height: 100%;
+}
+.anchored-source-modal--reader .kb-atc__body {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+/* 标题与主操作吸顶/吸底：滚动时仍随时可达（不然长列表里找不到按钮）。 */
+.anchored-source-modal--reader .kb-atc__head {
+  position: sticky;
+  top: 0;
+  padding-bottom: var(--space-1);
+  background: var(--surface-subtle);
+}
+.anchored-source-modal--reader .kb-atc__actions {
+  position: sticky;
+  bottom: 0;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  background: var(--surface-subtle);
+}
+
+/* 左右分隔符（可拖拽调宽）：默认只有一条细线，hover/聚焦时才明显。 */
+.anchored-source-splitter {
+  flex: 0 0 10px;
+  align-self: stretch;
+  margin-left: calc(var(--space-3) * -1 + 5px);
+  cursor: col-resize;
+  border-radius: var(--radius-1);
+  background: transparent;
+  position: relative;
+}
+.anchored-source-splitter[hidden] {
+  display: none;
+}
+.anchored-source-splitter::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 4px;
+  width: 2px;
+  border-radius: var(--radius-1);
+  background: var(--line-default);
+}
+.anchored-source-splitter:hover::before,
+.anchored-source-splitter:focus-visible::before {
+  background: var(--line-strong);
+}
+.anchored-source-splitter:focus-visible {
+  outline: 2px solid var(--color-focus-halo);
+  outline-offset: 2px;
+}
+
+/* 视觉规范 §二-2：页面底（极浅灰）→ 左容器（白纸）→ 右面板（比底稍深），
+   用底色分层而不是生硬边框。 */
+.anchored-source-modal--reader .anchored-source-correct {
+  background: var(--surface-subtle);
+  border-left: none;
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+}
+.anchored-source-modal--reader .anchored-source-body {
+  background: var(--surface-raised);
+  padding: var(--space-5);
+}
+/* 双栏各自独立滚动，滚动条轻量化（规范 §五-1）。 */
+.anchored-source-modal--reader .anchored-source-body::-webkit-scrollbar {
+  width: 6px;
+}
+.anchored-source-modal--reader .anchored-source-body::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-3);
+  background: var(--line-default);
+}
+
+/* 视觉规范 §一-2：对话块——正文行高 1.5、说话人/时间小字号浅灰、
+   不同说话人之间留垂直间距，不再紧贴。 */
+.anchored-source-text[data-blocks="1"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-family: var(--font-sans);
+}
+.anchored-source-block {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-2);
+}
+/* 极淡的说话人底色（3 档循环）：只辅助分辨说话人切换，不做装饰。 */
+.anchored-source-block[data-speaker-index="0"] {
+  background: var(--speaker-tint-0);
+}
+.anchored-source-block[data-speaker-index="1"] {
+  background: var(--speaker-tint-1);
+}
+.anchored-source-block[data-speaker-index="2"] {
+  background: var(--speaker-tint-2);
+}
+.anchored-source-block-meta {
+  margin-bottom: 2px;
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+  line-height: 1.4;
+}
+.anchored-source-block-body {
+  color: var(--text-body);
+  font-size: var(--font-size-4);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* §五-3 阅读字号三档：只改正文与对话块的字号/行高。 */
+.anchored-source-modal[data-reader-scale="s"] .anchored-source-block-body,
+.anchored-source-modal[data-reader-scale="s"] .anchored-source-text {
+  font-size: var(--font-size-3);
+}
+.anchored-source-modal[data-reader-scale="l"] .anchored-source-block-body,
+.anchored-source-modal[data-reader-scale="l"] .anchored-source-text {
+  font-size: var(--font-size-5);
+  line-height: 1.7;
+}
+
 /* 查看器：左列（工具栏+正文）/ 右列（纠错面板）。原有的 .anchored-source-viewer
    规则在本块之后，故此处用两级选择器保证生效。 */
 .anchored-source-modal .anchored-source-viewer {
@@ -32091,6 +32239,7 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 }
 .kb-atc__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
@@ -32112,9 +32261,21 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-family: var(--font-mono);
   font-size: var(--font-size-1);
   line-height: var(--line-height-body);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 文件名是辅助信息，但不该被截断——换行显示，hover 里还有完整路径 */
+  overflow-wrap: anywhere;
+}
+/* 按钮行一律允许换行：右栏最窄可到 280px，不换行就会横向溢出
+   （真机：待核块的「查找疑似专名 + 让模型给候选（受约束）」撑破 36px） */
+.kb-atc__head-actions,
+.kb-atc__actions,
+.kb-atc__sync-actions,
+.kb-atc__row-actions,
+.kb-atc__sync-row-actions {
+  flex-wrap: wrap;
+  /* 允许收缩到比按钮自然宽更窄：否则 280px 栏宽下整行会顶出 4px（被 overflow-x 裁掉，
+     用户看到的就是"文字没显示全"）。 */
+  flex-shrink: 1;
+  min-width: 0;
 }
 .kb-atc__head-actions,
 .kb-atc__actions {
@@ -32123,7 +32284,10 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   gap: var(--space-2);
 }
 .kb-atc__head-actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  /* 用 max-width 把它真正压进容器：否则按钮的 min-content 会顶出 4px，
+     再被 overflow-x 裁掉——表现就是"文字没显示全"。 */
+  max-width: 100%;
 }
 /* 状态与汇总都是轻量内联文字：不带底色块，避免区块割裂。 */
 .kb-atc__status,
@@ -32206,6 +32370,7 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 }
 .kb-atc__row-main {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: baseline;
   gap: var(--space-1);
@@ -32215,9 +32380,10 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-atc__wrong {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 真机反馈：长词条被 ellipsis 截掉（`personaltology`、`Personal Ontology`）。
+     词条名是这一行的主体信息，必须完整可读——允许换行、允许长词断行。 */
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .kb-atc__arrow {
   color: var(--text-faint);
@@ -32226,9 +32392,8 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   color: var(--text-body);
   font-family: var(--font-mono);
   font-weight: var(--font-weight-semibold);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .kb-atc__badge {
   flex: 0 0 auto;
@@ -32259,6 +32424,463 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-atc__row-actions .ui-button.kb-atc__btn {
   min-height: 30px;
   padding-inline: var(--space-2);
+}
+.kb-atc__notes {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2);
+}
+/* 对照视图（方案 §七）：左右并排、同高滚动、逐处高亮；颜色只表达"变了"这件事。 */
+.kb-atc__diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.kb-atc__diff-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.kb-atc__diff-pane header {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+.kb-atc__diff-text {
+  max-height: min(56vh, 520px);
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-3);
+  background: var(--surface-card);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kb-atc__diff-changed {
+  background: var(--status-warning-bg);
+  color: var(--color-warning-text);
+  border-radius: var(--radius-1);
+}
+.kb-atc__diff-deleted {
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.kb-atc__diff-note {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+@media (max-width: 720px) {
+  .kb-atc__diff {
+    grid-template-columns: 1fr;
+  }
+}
+.kb-glo__metrics {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
+/* 词表管理页（模态）：列表是唯一滚动区，筛选与批量动作常驻可见。 */
+.kb-glo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.kb-glo__meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+}
+.kb-glo__filters {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) repeat(3, minmax(120px, 1fr));
+  gap: var(--space-2);
+  align-items: end;
+}
+.kb-glo__status {
+  font-size: var(--font-size-2);
+  color: var(--text-body);
+}
+.kb-glo__status[data-tone="warning"] {
+  color: var(--color-warning-text);
+}
+.kb-glo__bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-glo__list {
+  max-height: min(46vh, 420px);
+  overflow-y: auto;
+  border-top: 1px solid var(--line-default);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-glo__list::-webkit-scrollbar {
+  width: 6px;
+}
+.kb-glo__list::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-3);
+  background: var(--line-default);
+}
+.kb-glo__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-1);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-glo__row:last-child {
+  border-bottom: none;
+}
+.kb-glo__row:hover {
+  background: var(--surface-card);
+}
+.kb-glo__row.is-selected {
+  background: var(--surface-subtle);
+}
+.kb-glo__row[data-paused="1"] .kb-glo__pair {
+  color: var(--text-muted);
+}
+.kb-glo__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-glo__pair {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-size: var(--font-size-3);
+}
+.kb-glo__row-meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
+.kb-glo__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+}
+.kb-glo__io {
+  border-top: 1px solid var(--line-default);
+  padding-top: var(--space-2);
+}
+.kb-glo__io summary {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  cursor: pointer;
+}
+.kb-glo__io-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+.kb-glo__io-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.kb-glo__io-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-glo__preview {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+}
+.kb-glo__preview[data-tone="warning"] {
+  color: var(--color-warning-text);
+}
+@media (max-width: 720px) {
+  .kb-glo__filters {
+    grid-template-columns: 1fr;
+  }
+}
+/* ─── 视觉规范落地（2026-09-15）────────────────────────────────────────
+   §一-3 条目上下留白 + 极淡分隔线；§二-1 状态色四件套（低饱和墨绿 / 暖橙 /
+   浅灰蓝 / 中性灰）；§三-2 开关热区；§五-2 hover 柔和反馈。
+   颜色只表达状态，不大面积铺色。 */
+.kb-atc__row {
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-atc__row:hover {
+  background: var(--surface-subtle);
+}
+.kb-atc__row.is-accepted {
+  background: var(--state-accepted-bg);
+}
+.kb-atc__row.is-accepted:hover {
+  background: var(--state-accepted-bg);
+}
+/* 已接受按钮：低饱和墨绿，而不是品牌亮绿（长时间看不刺眼） */
+.kb-atc__row.is-accepted .ui-button--primary {
+  background: var(--state-accepted-bg);
+  border-color: var(--state-accepted-line);
+  color: var(--state-accepted-text);
+}
+/* 高危：暖橙（不是红，避免紧张感） */
+.kb-atc__row[data-risk="high"] {
+  border-left: 2px solid var(--state-caution-line);
+}
+.kb-atc__badge {
+  background: var(--state-review-bg);
+  color: var(--state-review-text);
+}
+.kb-atc__badge--issue {
+  background: var(--state-review-bg);
+  color: var(--state-review-text);
+}
+.kb-atc__row[data-risk="high"] .kb-atc__badge {
+  background: var(--state-caution-bg);
+  color: var(--state-caution-text);
+}
+.kb-atc__row.is-ignored {
+  background: var(--state-ignored-bg);
+  color: var(--state-ignored-text);
+}
+/* §三-2 范围/开关控件已改用共享组件（uiSegmentedControl / uiCheckbox）：
+   原先在此抬高 .ui-button 热区的页面级覆盖已删除——页面不再改共享组件内部。
+   若后续仍需要 32px 热区，按规范向组件 owner 提需求（组件层加 size 或调 --control-height-sm），
+   不在页面里自行覆盖。 */
+.kb-atc__scope-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2);
+  cursor: pointer;
+}
+/* §四-1 折叠块给箭头提示（details 默认 marker 拿掉，自己画一个） */
+.kb-atc__issues > summary,
+.kb-atc__sync > summary,
+.kb-atc__add > summary,
+.kb-glo__io > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.kb-atc__issues > summary::-webkit-details-marker,
+.kb-atc__sync > summary::-webkit-details-marker,
+.kb-atc__add > summary::-webkit-details-marker,
+.kb-glo__io > summary::-webkit-details-marker {
+  display: none;
+}
+.kb-atc__issues > summary::before,
+.kb-atc__sync > summary::before,
+.kb-atc__add > summary::before,
+.kb-glo__io > summary::before {
+  content: '\25B8';
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+}
+.kb-atc__issues[open] > summary::before,
+.kb-atc__sync[open] > summary::before,
+.kb-atc__add[open] > summary::before,
+.kb-glo__io[open] > summary::before {
+  content: '\25BE';
+}
+/* 面板标题下的说明：弱化，不与标题抢视线（§二-3） */
+.kb-atc__hint {
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
+/* §二-3 辅助信息（文件名/字符数）降字号降不透明度 */
+.kb-atc__meta {
+  color: var(--text-faint);
+  font-size: var(--font-size-1);
+  opacity: 0.9;
+}
+
+/* 待核块：唯一"需要人看一眼"的状态，用一次强调色；其余仍走弱化色。 */
+.kb-atc__issues {
+  border-top: 1px solid var(--line-default);
+  padding-top: var(--space-2);
+}
+.kb-atc__issues summary {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  cursor: pointer;
+}
+.kb-atc__issues-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+.kb-atc__issues-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  line-height: 1.5;
+}
+.kb-atc__issues-list {
+  color: var(--color-warning-text);
+  font-size: var(--font-size-2);
+}
+.kb-atc__badge--issue {
+  color: var(--color-warning-text);
+  background: var(--status-warning-bg);
+}
+.kb-atc__row.is-flagged {
+  background: var(--status-warning-bg);
+}
+.kb-atc__row.is-flagged:hover {
+  background: var(--status-warning-bg);
+}
+/* 本体/记忆同步：整块都是"建议"，用弱化色；只有需要注意的状态（无来源/失败）才用色。 */
+.kb-atc__sync {
+  border-top: 1px solid var(--line-default);
+  padding-top: var(--space-2);
+}
+.kb-atc__sync summary {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  cursor: pointer;
+}
+.kb-atc__sync-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+.kb-atc__sync-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  line-height: 1.5;
+}
+.kb-atc__sync-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+.kb-atc__sync-stats {
+  color: var(--text-body);
+  font-size: var(--font-size-2);
+  font-variant-numeric: tabular-nums;
+}
+.kb-atc__sync-note {
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  line-height: 1.5;
+}
+.kb-atc__sync-note[data-tone="warning"] {
+  color: var(--color-warning-text);
+}
+.kb-atc__sync-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-atc__sync-chip {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+.kb-atc__sync-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-atc__sync-row:last-child {
+  border-bottom: none;
+}
+.kb-atc__sync-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-atc__sync-row-label {
+  color: var(--text-body);
+  font-size: var(--font-size-2);
+  line-height: 1.5;
+}
+.kb-atc__sync-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+}
+.kb-atc__sync-seed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-2) var(--space-2);
+  border-left: 2px solid var(--line-default);
+}
+/* 接受范围（方案 §七）：一行三个小按钮，选中态用 primary 表达"当前状态"。 */
+.kb-atc__scope {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.kb-atc__scope-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+.kb-atc__row-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex: 1 0 100%;
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line-default);
+}
+.kb-atc__row-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 0 100%;
+  padding-top: var(--space-1);
+}
+.kb-atc__allow-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-1);
+}
+.kb-atc__allow-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-2);
+  color: var(--text-muted);
+}
+.kb-atc__allow-remove {
+  color: var(--text-faint);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.kb-atc__allow-remove:hover {
+  color: var(--text-body);
+}
+.kb-atc__denied {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  padding: 2px 0;
+}
+.kb-atc__group[data-tone="ignored"] {
+  color: var(--text-muted);
+}
+.kb-atc__group[data-tone="denied"] {
+  color: var(--text-faint);
 }
 .kb-atc__add {
   border-top: 1px solid var(--line-default);
