@@ -253,14 +253,44 @@ export const invokeHandlers = {
         ? cogseedKbManager.search(ctx.userId, rewrite.rewritten, { k })
         : Promise.resolve(null),
     ]);
-    // cogseedKbManager.search 返回的就是命中数组（VecSearchHit[]），这里只数条数
-    const countOf = (result: unknown): number => (Array.isArray(result) ? result.length : 0);
+    // cogseedKbManager.search 返回 VecSearchHit[]。**只数条数会骗人**：库里同时有
+    // 原稿与清理版时两边都能命中、数字打平。真正有信息量的是"命中了哪些来源"——
+    // 搜错形只该找到原稿，搜正确写法只该找到清理版（这才说明改写解决了"搜不到"）。
+    const hitsOf = (result: unknown): Array<{ sourceId: string; title: string }> => {
+      if (!Array.isArray(result)) return [];
+      // VecSearchHit: { file_id, rel_path, kind, chunk_idx, title, content, score, distance }
+      return (result as Array<Record<string, unknown>>).map((hit) => ({
+        sourceId: String(hit?.rel_path ?? hit?.file_id ?? ''),
+        title: String(hit?.title ?? ''),
+      }));
+    };
+    // 标题就是"命中片段的标题"（KB 入库时取该段首行）→ 截断，且**每侧最多留 2 条**
+    // （留 5 条会让附记表格变成一整段难读的长文本）
+    const titlesOf = (hits: Array<{ sourceId: string; title: string }>): string[] => {
+      const out: string[] = [];
+      for (const hit of hits) {
+        const raw = (hit.title || hit.sourceId).replace(/\s+/g, ' ').trim();
+        if (!raw) continue;
+        const label = raw.length > 24 ? `${raw.slice(0, 24)}…` : raw;
+        if (!out.includes(label)) out.push(label);
+      }
+      return out.slice(0, 2);
+    };
+    const beforeHits = hitsOf(before);
+    const afterHits = hitsOf(after);
     return {
       query,
       rewritten: rewrite.rewritten,
       applied: rewrite.applied,
-      beforeHits: countOf(before),
-      afterHits: countOf(after),
+      beforeHits: beforeHits.length,
+      afterHits: afterHits.length,
+      beforeSources: titlesOf(beforeHits),
+      afterSources: titlesOf(afterHits),
+      /** 命中来源是否确实不同（改写带来"搜得到"的证据；0/0 时无意义）。 */
+      sourcesDiffer: rewrite.changed
+        && beforeHits.length > 0
+        && afterHits.length > 0
+        && titlesOf(beforeHits).join('|') !== titlesOf(afterHits).join('|'),
       compareAvailable: rewrite.changed,
     };
   },
@@ -593,6 +623,29 @@ export const invokeHandlers = {
     const report = transcriptRuns.buildReport(ctx.userId, runId);
     return { markdown: transcriptRuns.renderRunNotes(report), report };
   },
+
+  /** 记录一次检索命中对比（只追加，见 P0-5"记录替换前/后检索命中数"）。 */
+  'transcript.run.recordSearchCompare': async (payload: Payload, ctx: IpcContext) => ({
+    run: transcriptRuns.recordSearchCompare(
+      ctx.userId,
+      requireText(payload?.runId, 'runId', 128),
+      {
+        query: requireText(payload?.query, 'query', 500),
+        rewritten: typeof payload?.rewritten === 'string' ? payload.rewritten : '',
+        beforeHits: Number(payload?.beforeHits) || 0,
+        afterHits: Number(payload?.afterHits) || 0,
+        ...(stringList(payload?.beforeSources, 5) ? { beforeSources: stringList(payload?.beforeSources, 5)! } : {}),
+        ...(stringList(payload?.afterSources, 5) ? { afterSources: stringList(payload?.afterSources, 5)! } : {}),
+        applied: Array.isArray(payload?.applied)
+          ? (payload.applied as Array<{ wrong?: unknown; correct?: unknown; count?: unknown }>).map((item) => ({
+            wrong: String(item?.wrong ?? ''),
+            correct: String(item?.correct ?? ''),
+            count: Number(item?.count) || 0,
+          }))
+          : [],
+      },
+    ),
+  }),
 
   /** 追加"清理版已另存到某路径"的交付记录（只追加，供审计反查）。 */
   'transcript.run.annotate': async (payload: Payload, ctx: IpcContext) => ({

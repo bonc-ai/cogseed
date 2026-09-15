@@ -61,6 +61,27 @@ export interface CorrectionRun {
   revertedAt?: number;
   /** 交付台账：本 run 产出的文件（如另存到知识库的清理版），只追加。 */
   deliveries?: RunDelivery[];
+  /**
+   * 检索命中对比台账（方案 §五 P0-5「记录替换前/后检索命中数」）。
+   * 只追加：留痕"当时搜错形与搜正确写法各命中多少"，供复核，不宣称因果。
+   */
+  searchCompares?: SearchCompare[];
+}
+
+export interface SearchCompare {
+  query: string;
+  rewritten: string;
+  beforeHits: number;
+  afterHits: number;
+  /**
+   * 命中的**片段标题**（KB 入库时取该段首行），比条数有信息量：
+   * 搜错形与搜正确写法命中的片段是否不同，才说明改写解决了"搜不到"。
+   */
+  beforeSources?: string[];
+  afterSources?: string[];
+  applied: Array<{ wrong: string; correct: string; count: number }>;
+  /** 由主进程落盘时补（调用方不必传）。 */
+  at?: number;
 }
 
 export interface RunDelivery {
@@ -481,7 +502,26 @@ export function renderRunNotes(report: CorrectionReport, opts: { generatedAt?: n
   else for (const item of report.materials) lines.push(`- ${item}`);
   lines.push('');
 
-  lines.push('## 五、本次参数');
+  const compares = run.searchCompares ?? [];
+  if (compares.length) {
+    lines.push('## 五、检索命中对比');
+    lines.push('');
+    lines.push('> 自测口径：同一份库里"搜错形"与"搜正确写法"各自的命中条数与命中片段（该段首行），**不宣称因果**。');
+    lines.push('');
+    lines.push('| 搜什么 | 改写为 | 命中 | 命中片段（前 2） | 对比 |');
+    lines.push('|---|---|---|---|---|');
+    for (const item of compares) {
+      const before = (item.beforeSources?.length ? item.beforeSources.join('、') : '（无）');
+      const after = (item.afterSources?.length ? item.afterSources.join('、') : '（无）');
+      const differ = item.beforeSources?.length && item.afterSources?.length
+        ? (item.beforeSources.join('|') === item.afterSources.join('|') ? '片段相同' : '片段不同')
+        : '—';
+      lines.push(`| ${item.query} | ${item.rewritten || '（未改写）'} | ${item.beforeHits} → ${item.afterHits} | ${before} → ${after} | ${differ} |`);
+    }
+    lines.push('');
+  }
+
+  lines.push('## 六、本次参数');
   lines.push('');
   lines.push('```json');
   lines.push(JSON.stringify({ ...report.params, runId: run.runId, status: run.status, pendingTotal: run.pendingTotal }, null, 2));
@@ -499,6 +539,38 @@ export function renderRunNotes(report: CorrectionReport, opts: { generatedAt?: n
   lines.push('');
   lines.push('*原文从未被就地改写：以上所有替换/删除都发生在派生文件里，回滚只需校验 sha1（`transcript.run.revert`）。*');
   return lines.join('\n');
+}
+
+/**
+ * 记录一次检索命中对比（只追加）。方案 §五 P0-5 要求 run 里能回看
+ * "替换前/后检索命中数"——但**只记录实际发生的观察**，不推因果。
+ */
+export function recordSearchCompare(userId: string, runId: string, input: SearchCompare): CorrectionRun {
+  assertRunId(runId);
+  const run = getRun(userId, runId);
+  if (!run) throw new Error('transcript runs: run not found');
+  const entry: SearchCompare = {
+    query: String(input.query ?? '').slice(0, 500),
+    rewritten: String(input.rewritten ?? '').slice(0, 500),
+    beforeHits: Math.max(0, Math.floor(Number(input.beforeHits) || 0)),
+    afterHits: Math.max(0, Math.floor(Number(input.afterHits) || 0)),
+    ...(Array.isArray(input.beforeSources) ? { beforeSources: input.beforeSources.map(String).slice(0, 5) } : {}),
+    ...(Array.isArray(input.afterSources) ? { afterSources: input.afterSources.map(String).slice(0, 5) } : {}),
+    applied: Array.isArray(input.applied)
+      ? input.applied.slice(0, 50).map((item) => ({
+        wrong: String(item?.wrong ?? '').slice(0, 200),
+        correct: String(item?.correct ?? '').slice(0, 200),
+        count: Math.max(0, Math.floor(Number(item?.count) || 0)),
+      }))
+      : [],
+    at: typeof input.at === 'number' ? input.at : Date.now(),
+  };
+  const next: CorrectionRun = {
+    ...run,
+    searchCompares: [...(run.searchCompares ?? []), entry].slice(-50),
+  };
+  writeJson(path.join(runDir(userId, runId), 'run.json'), next);
+  return next;
 }
 
 // ── 小工具 ──────────────────────────────────────────────────────────────

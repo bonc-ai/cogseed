@@ -19,6 +19,7 @@ import {
   getRun,
   listIssues,
   listRuns,
+  recordSearchCompare,
   renderRunNotes,
   readOffsetMap,
   readRunText,
@@ -276,9 +277,32 @@ describe('清理附记（方案 §五 P1-3 / §七）', () => {
     expect(notes).toContain('## 二、口癖与填充词删除');
     expect(notes).toContain('## 三、未决项清单');
     expect(notes).toContain('## 四、上下文材料');
-    expect(notes).toContain('## 五、本次参数');
+    expect(notes).toContain('## 六、本次参数');
     expect(notes).toContain('coxy');
     expect(notes).toContain('原文从未被就地改写');
+  });
+
+  it('检索命中对比会写进附记第五节（P0-5 的"记录替换前后命中数"）', () => {
+    const text = 'coxy 在。';
+    const scan = scanText(text, [
+      { id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', kind: 'product', riskLevel: 'low', boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true }, freq: 1, source: 'manual', status: 'active', ownerScope: 'personal', replacedIn: [], createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1 },
+    ] as never);
+    const result = applyCorrections(text, scan.candidates, { acceptedIds: ['g_coxy'] });
+    const run = createRun(uid, { docId: 'doc-cmp', sourceText: text, result });
+    recordSearchCompare(uid, run.runId, {
+      query: 'coxy', rewritten: 'Cogseed', beforeHits: 1, afterHits: 3,
+      beforeSources: ['09-05 原始转写'],
+      afterSources: ['09-05 清理版'],
+      applied: [{ wrong: 'coxy', correct: 'Cogseed', count: 1 }],
+    });
+    const notes = renderRunNotes(buildReport(uid, run.runId));
+    expect(notes).toContain('## 五、检索命中对比');
+    // 表格带"命中来源"：比条数有信息量（搜错形与搜正确写法命中的文档是否不同）
+    expect(notes).toContain('| coxy | Cogseed | 1 → 3 | 09-05 原始转写 → 09-05 清理版 | 片段不同 |');
+    expect(notes).toContain('不宣称因果');
+    // 只追加：再来一条就在后面
+    recordSearchCompare(uid, run.runId, { query: 'K star', rewritten: 'KSTAR', beforeHits: 0, afterHits: 0, applied: [] });
+    expect(getRun(uid, run.runId)!.searchCompares).toHaveLength(2);
   });
 
   it('draft 时开头必须写明"不得宣称完成"（§8.1-7）', () => {

@@ -1842,11 +1842,32 @@
           return;
         }
         const applied = (result.applied || []).map((item) => `${item.wrong} → ${item.correct}`).join('；');
-        setStatus(t('kb.transcriptCorrect.compare_result', '命中对比：搜「{before}」{beforeHits} 篇 / 搜「{after}」{afterHits} 篇（{applied}）', {
+        // 落台账：让"替换前后命中数"进入 run（方案 §五 P0-5），附记里可回看
+        if (state.runId) {
+          try {
+            await root.cogseed.invoke('transcript.run.recordSearchCompare', {
+              runId: state.runId,
+              query: result.query,
+              rewritten: result.rewritten,
+              beforeHits: Number(result.beforeHits || 0),
+              afterHits: Number(result.afterHits || 0),
+              beforeSources: result.beforeSources || [],
+              afterSources: result.afterSources || [],
+              applied: result.applied || [],
+            });
+          } catch (error) {
+            log?.warn('record search compare failed', { error: error?.message || String(error) });
+          }
+        }
+        // 显示的是"命中片段（该段首行）"，不是文档名——如实这么叫
+        const sources = (list) => (Array.isArray(list) && list.length ? list.slice(0, 2).join('、') : t('kb.transcriptCorrect.compare_no_source', '（未命中任何片段）'));
+        setStatus(t('kb.transcriptCorrect.compare_result', '命中对比：搜「{before}」{beforeHits} 段（首行：{beforeSrc}）/ 搜「{after}」{afterHits} 段（首行：{afterSrc}）· {applied}', {
           before: result.query,
           beforeHits: Number(result.beforeHits || 0),
+          beforeSrc: sources(result.beforeSources),
           after: result.rewritten,
           afterHits: Number(result.afterHits || 0),
+          afterSrc: sources(result.afterSources),
           applied,
         }), '');
       } catch (error) {
