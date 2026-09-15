@@ -168,6 +168,55 @@
     };
   }
 
+  /**
+   * 对照视图分段（纯函数）：按 offsetMap 把原文与清理版切成 keep / changed / deleted。
+   * `changed` = 被替换或被插入标记；`deleted` 只在原文侧出现（口癖删除）。
+   * 不复用 diff 算法——offsetMap 就是权威事实，重新算 diff 只会引入不一致。
+   */
+  function buildDiffPanes(beforeText, afterText, offsetMap) {
+    const before = String(beforeText || '');
+    const after = String(afterText || '');
+    const segments = Array.isArray(offsetMap) ? offsetMap : [];
+    const panes = { before: [], after: [], changedCount: 0, deletedCount: 0 };
+    if (!segments.length) {
+      panes.before.push({ kind: 'keep', text: before });
+      panes.after.push({ kind: 'keep', text: after });
+      return panes;
+    }
+    let beforeCursor = 0;
+    let afterCursor = 0;
+    const pushPane = (side, kind, text) => {
+      if (!text) return;
+      const list = panes[side];
+      const last = list[list.length - 1];
+      if (last && last.kind === kind) last.text += text;
+      else list.push({ kind, text });
+    };
+    for (const seg of segments) {
+      if (!seg || typeof seg.inStart !== 'number') continue;
+      pushPane('before', 'keep', before.slice(beforeCursor, seg.inStart));
+      pushPane('after', 'keep', after.slice(afterCursor, seg.outStart));
+      const inText = before.slice(seg.inStart, seg.inEnd);
+      const outText = after.slice(seg.outStart, seg.outEnd);
+      if (seg.kind === 'delete') {
+        pushPane('before', 'deleted', inText);
+        panes.deletedCount += 1;
+      } else if (seg.kind === 'replace') {
+        pushPane('before', 'changed', inText);
+        pushPane('after', 'changed', outText);
+        panes.changedCount += 1;
+      } else {
+        pushPane('before', 'keep', inText);
+        pushPane('after', 'keep', outText);
+      }
+      beforeCursor = seg.inEnd;
+      afterCursor = seg.outEnd;
+    }
+    pushPane('before', 'keep', before.slice(beforeCursor));
+    pushPane('after', 'keep', after.slice(afterCursor));
+    return panes;
+  }
+
   /** 待核项的展示摘要（纯函数）：条数、去重后的原词数、按理由分档。 */
   function flaggedSummary(flagged) {
     const list = Array.isArray(flagged) ? flagged : [];
@@ -803,6 +852,14 @@
           attrs: { 'data-atc-action': 'preview' },
         }));
         buttons.push(button({
+          label: t('kb.transcriptCorrect.diff', '对照原文'),
+          icon: 'split',
+          role: 'secondary',
+          size: 'sm',
+          disabled: !state.runId,
+          attrs: { 'data-atc-action': 'diff' },
+        }));
+        buttons.push(button({
           label: t('kb.transcriptCorrect.save', '另存到知识库'),
           icon: 'folder-open',
           role: 'secondary',
@@ -1284,6 +1341,93 @@
       return modal;
     }
 
+    /**
+     * 对照视图（方案 §七「清理版预览与回滚：diff 视图，左原文/右清理版，逐处高亮」）。
+     * 分段只认 offsetMap（权威事实），不另算 diff；回滚入口放在同一屏，
+     * 用户看完差异就能撤，不用回面板找按钮。
+     */
+    async function openDiffModal() {
+      if (!state.runId) return;
+      state.busy = true;
+      render();
+      let payload = null;
+      try {
+        payload = await root.cogseed.invoke('transcript.run.get', { runId: state.runId });
+      } catch (error) {
+        log?.warn('run get failed', { error: error?.message || String(error) });
+      } finally {
+        state.busy = false;
+        render();
+      }
+      if (!payload) {
+        setStatus(t('kb.transcriptCorrect.diff_failed', '读取对照失败，请稍后重试。'), 'warning');
+        return;
+      }
+      const panes = buildDiffPanes(payload.before, payload.after, payload.offsetMap);
+      const run = payload.run || {};
+      if (typeof root.uiModal !== 'function') return;
+      const modal = root.uiModal({
+        title: t('kb.transcriptCorrect.diff_title', '对照：原文 / 清理版'),
+        size: 'lg',
+        closeLabel: t('kb.transcriptCorrect.close', '关闭'),
+        description: t('kb.transcriptCorrect.diff_bar', 'run {runId} · 替换 {changed} 处 · 删除 {deleted} 处 · 字符保留率 {percent}%', {
+          runId: String(run.runId || '').slice(0, 12),
+          changed: panes.changedCount,
+          deleted: panes.deletedCount,
+          percent: ((Number(run.retention) || 1) * 100).toFixed(1),
+        }),
+        bodyHtml: [
+          '<div class="kb-atc__diff">',
+          '  <section class="kb-atc__diff-pane">',
+          '    <header data-atc-diff-head-before></header>',
+          '    <pre class="kb-atc__diff-text" data-atc-diff-before></pre>',
+          '  </section>',
+          '  <section class="kb-atc__diff-pane">',
+          '    <header data-atc-diff-head-after></header>',
+          '    <pre class="kb-atc__diff-text" data-atc-diff-after></pre>',
+          '  </section>',
+          '</div>',
+          '<div class="kb-atc__diff-note" data-atc-diff-note></div>',
+        ].join(''),
+        actions: [
+          { id: 'revert', label: t('kb.transcriptCorrect.revert', '回滚'), role: 'ghost', size: 'sm' },
+        ],
+      });
+      const dialog = modal?.dialog;
+      if (!dialog) return;
+      const beforeHost = dialog.querySelector('[data-atc-diff-before]');
+      const afterHost = dialog.querySelector('[data-atc-diff-after]');
+      const headBefore = dialog.querySelector('[data-atc-diff-head-before]');
+      const headAfter = dialog.querySelector('[data-atc-diff-head-after]');
+      const note = dialog.querySelector('[data-atc-diff-note]');
+      const drawPane = (host, list, side) => {
+        if (!host) return;
+        host.textContent = '';
+        for (const segment of list) {
+          if (segment.kind === 'keep') {
+            host.appendChild(document.createTextNode(segment.text));
+            continue;
+          }
+          const el = document.createElement(segment.kind === 'deleted' && side === 'before' ? 'del' : 'mark');
+          el.className = segment.kind === 'deleted' ? 'kb-atc__diff-deleted' : 'kb-atc__diff-changed';
+          el.textContent = segment.text;
+          host.appendChild(el);
+        }
+      };
+      drawPane(beforeHost, panes.before, 'before');
+      drawPane(afterHost, panes.after, 'after');
+      if (headBefore) headBefore.textContent = t('kb.transcriptCorrect.diff_before', '原文（不可变，sha1 {sha1}）', { sha1: String(run.sourceSha1 || '').slice(0, 8) });
+      if (headAfter) headAfter.textContent = t('kb.transcriptCorrect.diff_after', '清理版（派生，未写回原文）');
+      if (note) {
+        note.textContent = t('kb.transcriptCorrect.diff_note', '高亮 = 本次替换，删除线 = 口癖删除；原文从未被改写，回滚只做校验与返回。');
+      }
+      const result = await modal.result;
+      if (result?.reason === 'action' && result?.id === 'revert') {
+        await runRevert();
+      }
+    }
+
+    /** 另存清理版到知识库（同目录、-清理版 后缀、内容 sha1 去重）。 */
     async function runSave() {
       if (state.busy || !state.cleanedText) return;
       state.busy = true;
@@ -1326,6 +1470,7 @@
       }
     }
 
+    /** 回滚（面板与对照视图共用）：只校验 sha1 并返回原文，绝不写回文件。 */
     async function runRevert() {
       if (state.busy || !state.runId) return;
       state.busy = true;
@@ -1762,6 +1907,7 @@
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
       else if (kind === 'apply') void runApply();
       else if (kind === 'preview') openTextModal(t('kb.transcriptCorrect.preview_title', '清理版预览'), state.cleanedText);
+      else if (kind === 'diff') void openDiffModal();
       else if (kind === 'save') void runSave();
       else if (kind === 'revert') void runRevert();
       else if (kind === 'add') void runAddEntry();
@@ -1797,6 +1943,7 @@
       groupRowsByConcept,
       flaggedSummary,
       mergeFlagged,
+      buildDiffPanes,
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
@@ -1817,6 +1964,7 @@
       groupRowsByConcept,
       flaggedSummary,
       mergeFlagged,
+      buildDiffPanes,
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,

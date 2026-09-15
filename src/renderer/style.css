@@ -32250,6 +32250,57 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   min-height: 30px;
   padding-inline: var(--space-2);
 }
+/* 对照视图（方案 §七）：左右并排、同高滚动、逐处高亮；颜色只表达"变了"这件事。 */
+.kb-atc__diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.kb-atc__diff-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.kb-atc__diff-pane header {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+.kb-atc__diff-text {
+  max-height: min(56vh, 520px);
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-3);
+  background: var(--surface-card);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kb-atc__diff-changed {
+  background: var(--status-warning-bg);
+  color: var(--color-warning-text);
+  border-radius: var(--radius-1);
+}
+.kb-atc__diff-deleted {
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.kb-atc__diff-note {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+@media (max-width: 720px) {
+  .kb-atc__diff {
+    grid-template-columns: 1fr;
+  }
+}
 /* 词表管理页（模态）：列表是唯一滚动区，筛选与批量动作常驻可见。 */
 .kb-glo {
   display: flex;

@@ -11,6 +11,11 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  applyCorrections,
+  scanText,
+} from '../../src/main/features/transcript_auto_correct';
+import type { GlossaryEntry } from '../../src/main/features/transcript_glossary';
 
 const root = path.resolve(__dirname, '../..');
 const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'utf8');
@@ -20,6 +25,12 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   conceptKeyOfCorrect: (t: unknown) => string;
   groupRowsByConcept: (rows: unknown[]) => Array<{ conceptKey: string; display: string; spans: number; rows: number }>;
   flaggedSummary: (flagged: unknown) => { count: number; distinct: number; byReason: Record<string, number> };
+  buildDiffPanes: (before: string, after: string, offsetMap: unknown[]) => {
+    before: Array<{ kind: string; text: string }>;
+    after: Array<{ kind: string; text: string }>;
+    changedCount: number;
+    deletedCount: number;
+  };
   mergeFlagged: (existing: unknown[], incoming: unknown[]) => unknown[];
   syncSummary: (sync: unknown) => {
     groupCount: number;
@@ -226,6 +237,51 @@ describe('本体同步结果摘要', () => {
   });
 });
 
+describe('对照视图分段（offsetMap 就是权威事实）', () => {
+  const entryOf = (over: Partial<GlossaryEntry> & { wrong: string; correct: string }): GlossaryEntry => ({
+    id: over.id ?? 'g_1', wrong: over.wrong, correct: over.correct,
+    action: over.action ?? 'replace', kind: 'product', riskLevel: 'low',
+    boundary: 'word', contextDeny: [], contextAllow: [],
+    scope: { docIds: [], scenarioTags: [], global: true },
+    freq: 0, source: 'manual', status: 'active', ownerScope: 'personal',
+    replacedIn: [], createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1,
+  });
+
+  it('左右两栏分段拼回去必须与原文/清理版逐字相同（否则高亮就是错的）', () => {
+    const text = 'coxy 与 K star 都在，嗯，这次用 coxy。';
+    const entries = [
+      entryOf({ id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed' }),
+      entryOf({ id: 'g_kstar', wrong: 'K star', correct: 'KSTAR' }),
+      entryOf({ id: 'g_filler', wrong: '嗯', correct: '', action: 'delete', kind: 'filler', boundary: 'substring' }),
+    ];
+    const scan = scanText(text, entries, { includeDelete: true });
+    const result = applyCorrections(text, scan.candidates, {
+      acceptedIds: ['g_coxy', 'g_kstar', 'g_filler'],
+    });
+    const panes = panel.buildDiffPanes(text, result.text, result.offsetMap);
+    expect(panes.before.map((s) => s.text).join('')).toBe(text);
+    expect(panes.after.map((s) => s.text).join('')).toBe(result.text);
+    expect(panes.changedCount).toBe(3);
+    expect(panes.deletedCount).toBe(1);
+  });
+
+  it('没有 offsetMap 时两侧整体作为 keep（不假装有差异）', () => {
+    const panes = panel.buildDiffPanes('abc', 'abc', []);
+    expect(panes.before).toEqual([{ kind: 'keep', text: 'abc' }]);
+    expect(panes.after).toEqual([{ kind: 'keep', text: 'abc' }]);
+    expect(panes.changedCount).toBe(0);
+  });
+
+  it('相邻同类分段会合并（避免每个字一个 mark 造成满屏高亮）', () => {
+    const panes = panel.buildDiffPanes('aabb', 'xxyy', [
+      { inStart: 0, inEnd: 1, outStart: 0, outEnd: 1, kind: 'replace' },
+      { inStart: 1, inEnd: 2, outStart: 1, outEnd: 2, kind: 'replace' },
+    ]);
+    expect(panes.before[0]).toEqual({ kind: 'changed', text: 'aa' });
+    expect(panes.after[0]).toEqual({ kind: 'changed', text: 'xx' });
+  });
+});
+
 describe('待核（未决项）', () => {
   it('摘要按理由分档、原词去重计数', () => {
     const stats = panel.flaggedSummary([
@@ -277,6 +333,16 @@ describe('locale 覆盖', () => {
     'issue_mark', 'issue_unmark', 'issue_badge', 'issue_cancel', 'issue_at', 'issue_empty',
     'issue_list_title', 'issue_summary', 'issue_reason_unknown_entity', 'issue_reason_ambiguous_name',
     'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable',
+    // 接受的三个动作 + 对照视图
+    'more', 'restore', 'reopen_row', 'restored', 'ignored_done', 'ignore_failed', 'group_ignored',
+    'denied', 'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed',
+    'denied_reason_word_boundary', 'denied_reason_overlapping_span', 'denied_reason_protected_region',
+    'scope_label', 'scope_keep', 'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
+    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder', 'add_allow_context',
+    'add_allow_need_term', 'add_allow_done', 'add_allow_failed', 'add_allow_existing', 'remove',
+    'remove_allow_done', 'remove_allow_failed', 'rename_correct', 'rename_done', 'rename_failed',
+    'rename_need_value', 'confirm', 'cancel', 'no_context',
+    'diff', 'diff_title', 'diff_bar', 'diff_before', 'diff_after', 'diff_note', 'diff_failed',
   ];
 
   for (const lang of locales) {
@@ -314,6 +380,12 @@ describe('源码契约', () => {
     // 清理版文本只来自主进程：面板不得自己往文本里拼标记
     expect(source).not.toMatch(/cleanedText\s*=\s*[^;]*【转写存疑】/);
     expect(source).toMatch(/state\.cleanedText = String\(result\?\.result\?\.text/);
+  });
+
+  it('对照视图在模态内提供回滚，且分段只吃 offsetMap（不另算 diff）', () => {
+    expect(source).toContain("'transcript.run.get'");
+    expect(source).toContain('buildDiffPanes(payload.before, payload.after, payload.offsetMap)');
+    expect(source).toMatch(/id: 'revert'/);
   });
 
   it('uiField 走契约形状 {id,label,control}：每个调用都带 id 与 control', () => {
