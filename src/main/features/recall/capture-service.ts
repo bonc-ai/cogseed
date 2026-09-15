@@ -23,6 +23,7 @@ import {
   type TaskTerminalEvent,
   type TaskTerminalListener,
 } from '../group_chat/bus';
+import { readMembers } from '../group_chat/state';
 import type { GroupMessage } from '../group_chat/visibility';
 import { readAbilityAsset } from './asset-service';
 import {
@@ -227,15 +228,51 @@ export type RecallCaptureNextAction =
   | 'view_assets'
   | 'none';
 
+/**
+ * 整理记录的用户视角分桶（2026-09-15 口径修正：与行上展示的 displayStatus
+ * 对齐，否则「已完成」筛选恒空——原始状态几乎不停在 completed）：
+ *  - attention  有事要用户做：失败 / 待确认（未清）/ 需配置模型 / 被暂停 /
+ *               等待手动开始（waiting_manual 没在跑，不冒充整理中）
+ *  - active     自己在走：排队 / 提炼 / 写入（真·整理中，通常几十秒）
+ *               及静默期/夜间窗口等会自动推进的等待
+ *  - done       已终态：完成 / 已取消 / **没有发现可留存内容**（no_candidate
+ *               ——对用户就是"跑完了、没内容"，行上显示的正是「已完成」）
+ *  - silent     纯内部路由概念（isSilentCapture 零读取跳过 summarize 的
+ *               性能不变式），展示口径不再产出（计数恒 0，见 summarize 层
+ *               对 displayStatus 的 done 修正）
+ */
+export type RecallCaptureBucket = 'attention' | 'active' | 'silent' | 'done';
+
+export function captureBucket(capture: Pick<RecallCaptureRecord, 'status'>): RecallCaptureBucket {
+  if (capture.status === 'no_candidate') return 'done';
+  if (['failed', 'configuration_required', 'review_ready', 'paused', 'waiting_manual'].includes(capture.status)) return 'attention';
+  if (['completed', 'cancelled'].includes(capture.status)) return 'done';
+  return 'active';
+}
+
+/** 静默路由谓词：系统筛空的**内部**记录才走零读取构造器。真正随时间无界
+ *  增长的是这批（每段安静会话都会筛出一条）；visible 的 no_candidate 是
+ *  刻意展示（手工造数/旧数据），照常进 summarize 参与计数。 */
+function isSilentCapture(capture: RecallCaptureRecord): boolean {
+  return capture.status === 'no_candidate' && capture.visibility === 'internal';
+}
+
 export interface RecallCaptureWorkflowRecord extends RecallCaptureRecord {
   workflowStatus: RecallCaptureWorkflowStatus;
   displayStatus: RecallCaptureDisplayStatus;
   displayReason: RecallCaptureDisplayReason;
+  bucket: RecallCaptureBucket;
   reviewSummary: RecallCaptureReviewSummary;
   linkedAssetIds: string[];
   confirmedAssetReceipts: RecallCaptureConfirmedAssetReceipt[];
   nextAction: RecallCaptureNextAction;
   actions: RecallCaptureAction[];
+}
+
+/** 批量控制结果：逐条复用单条状态机，单条失败只记录、不影响其余条目。 */
+export interface RecallCaptureBatchResult {
+  succeeded: string[];
+  failed: Array<{ id: string; error: string }>;
 }
 
 /** Small, display-safe view of a formal asset created through candidate review. */
@@ -258,11 +295,16 @@ export interface RecallCaptureCandidatePromotion {
 
 export type RecallCaptureQueryStatus = RecallCaptureStatus | RecallCaptureDisplayStatus | 'completed';
 
+/** 列表范围：visible=只看用户可见记录（默认，既有口径）；all=含系统内部
+ *  记录（被筛掉的 no_candidate、内部失败等），配合 bucket 分桶展示。 */
+export type RecallCaptureListScope = 'visible' | 'all';
+
 export interface ListRecallCapturesQuery {
   statuses?: RecallCaptureQueryStatus[];
   executionPolicy?: RecallCaptureExecutionPolicy | 'immediate';
   cursor?: string;
   limit?: number;
+  scope?: RecallCaptureListScope;
 }
 
 export interface RecallCaptureCounts {
@@ -274,10 +316,18 @@ export interface RecallCaptureCounts {
   cancelled: number;
 }
 
+export interface RecallCaptureBucketCounts {
+  attention: number;
+  active: number;
+  silent: number;
+  done: number;
+}
+
 export interface RecallCapturePage {
   captures: RecallCaptureWorkflowRecord[];
   nextCursor: string | null;
   counts: RecallCaptureCounts;
+  buckets: RecallCaptureBucketCounts;
 }
 
 export interface CapturePromptMessage {
@@ -1218,11 +1268,18 @@ async function summarizeRecallCaptures(
     }
     const linkedAssets = [...linkedAssetIds];
     const displayStatus = captureDisplayStatus(capture, workflowStatus);
+    // 分桶与展示状态对齐（2026-09-15 口径修正）：review_ready 的候选被全部
+    // 处理完时 displayStatus 已是 completed（行上显示「已完成」），桶必须
+    // 跟着进 done——此前按 raw status 归 attention，「已完成」筛选恒空。
+    const bucket = displayStatus === 'completed' || displayStatus === 'cancelled'
+      ? 'done' as const
+      : captureBucket(capture);
     return {
       ...capture,
       workflowStatus,
       displayStatus,
       displayReason: captureDisplayReason(capture, workflowStatus),
+      bucket,
       reviewSummary,
       linkedAssetIds: linkedAssets,
       confirmedAssetReceipts,
@@ -1232,12 +1289,179 @@ async function summarizeRecallCaptures(
   }));
 }
 
+/** 静默记录的展示视图：不经 summarizeRecallCaptures（不读候选/资产）。
+ *  no_candidate 语义上已终态且无任何用户动作，reviewSummary 全零即真值。 */
+function silentRecallCaptureWorkflow(capture: RecallCaptureRecord): RecallCaptureWorkflowRecord {
+  return {
+    ...capture,
+    workflowStatus: 'completed',
+    displayStatus: 'completed',
+    displayReason: 'no_candidate',
+    // 展示归「已完成」（2026-09-15 口径修正）：行上显示的就是「已完成」，
+    // 筛选与计数必须一致；零读取路由（isSilentCapture）不受此影响。
+    bucket: 'done',
+    reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
+    linkedAssetIds: [],
+    confirmedAssetReceipts: [],
+    nextAction: 'none',
+    actions: ['open_conversation'],
+  };
+}
+
+/** 读路径补会话标题：conversationTitle 只在执行提炼时落盘（runRecallCapture），
+ *  从未跑过的等待类记录永远没有标题。这里按会话去重补齐——只在内存里补，
+ *  不写盘（记录的 updatedAt 不因展示需要而变动）；会话读取失败不抛（标题是
+ *  展示增强，不是数据修复），保留「未命名会话的整理」兜底。 */
+async function withConversationTitles(
+  userId: string,
+  captures: RecallCaptureWorkflowRecord[],
+): Promise<RecallCaptureWorkflowRecord[]> {
+  const missing = captures.filter((capture) => !String(capture.conversationTitle || '').trim());
+  if (!missing.length) return captures;
+  const titles = new Map<string, string>();
+  await Promise.all([...new Set(missing.map((capture) => capture.conversationId))].map(
+    async (conversationId) => {
+      try {
+        const conversation = await chats.getConversation(userId, conversationId);
+        if (conversation && conversation.title) titles.set(conversationId, conversation.title);
+      } catch {
+        // 会话已删或读取失败：不阻塞列表，标题走兜底文案。
+      }
+    },
+  ));
+  if (!titles.size) return captures;
+  return captures.map((capture) => (!String(capture.conversationTitle || '').trim())
+    && titles.has(capture.conversationId)
+    ? { ...capture, conversationTitle: titles.get(capture.conversationId) }
+    : capture);
+}
+
 export async function readRecallCaptureWorkflow(
   userId: string,
   id: string,
 ): Promise<RecallCaptureWorkflowRecord> {
   const [capture] = await summarizeRecallCaptures(userId, [await readRecallCapture(userId, id)]);
-  return capture;
+  return (await withConversationTitles(userId, [capture]))[0];
+}
+
+/* ── 整理详情的「对话上下文」（2026-09-15 详情页改造）──────────────────
+ * 展示口径 = 本次整理实际读到的消息（capture.messageIds），与模型看到的
+ * 一致——"系统就是看这些内容得出的结论"。独立于 loadStoredPromptMessages
+ *（模型路径的文本预算截断不该影响展示），保留 from/to 原始 actor id 供
+ * 参与角色与时间线渲染。 */
+
+export interface RecallCaptureContextParticipant {
+  id: string;
+  name: string;
+  kind: 'user' | 'commander' | 'agent';
+}
+
+export interface RecallCaptureContextMessage {
+  id: string;
+  /** m1..mN，与当年喂给模型的标签一致（证据映射的可读锚点）。 */
+  label: string;
+  ts: string;
+  role: 'user' | 'assistant';
+  from: string;
+  to: string[];
+  text: string;
+  truncated: boolean;
+  artifacts: Array<{ id: string; title: string }>;
+  /** evidenceRefs 用的稳定哈希 id（cognitionMessageSourceId），前端据此把
+   *  候选证据关联到时间线上的具体消息。 */
+  sourceId: string;
+}
+
+export interface RecallCaptureContextRecord {
+  captureId: string;
+  conversationId: string;
+  conversationTitle?: string;
+  participants: RecallCaptureContextParticipant[];
+  messages: RecallCaptureContextMessage[];
+  /** 会话消息已不可读（被清理/迁移）：详情页仍可渲染，只是没有上下文区。 */
+  contextUnavailable?: boolean;
+}
+
+const CAPTURE_CONTEXT_TEXT_LIMIT = 4_000;
+
+function contextParticipantKind(actorId: string): RecallCaptureContextParticipant['kind'] {
+  if (actorId === 'user') return 'user';
+  if (actorId === 'commander') return 'commander';
+  return 'agent';
+}
+
+export async function readRecallCaptureContext(
+  userId: string,
+  id: string,
+): Promise<RecallCaptureContextRecord> {
+  const capture = await readRecallCapture(userId, id);
+  const base: RecallCaptureContextRecord = {
+    captureId: capture.id,
+    conversationId: capture.conversationId,
+    conversationTitle: capture.conversationTitle,
+    participants: [],
+    messages: [],
+  };
+  let selected: GroupMessage[];
+  try {
+    const allMessages = await chats.getMessages(userId, capture.conversationId, 2_000);
+    const byId = new Map(allMessages.filter(isRecallConversationMessage).map((message) => [message.id, message]));
+    selected = capture.messageIds.map((messageId) => byId.get(messageId))
+      .filter((message): message is GroupMessage => Boolean(message));
+  } catch {
+    // 会话存储不可读：上下文不可用，但任务元数据照常展示。
+    return { ...base, contextUnavailable: true };
+  }
+  if (!selected.length) return { ...base, contextUnavailable: true };
+
+  const members = await readMembers(userId, capture.conversationId);
+  const nameById = new Map(members.actors.map((actor) => [actor.id, actor.name || actor.id]));
+
+  const messages: RecallCaptureContextMessage[] = selected.map((message, index) => {
+    const text = String(message.text || '');
+    return {
+      id: message.id,
+      label: `m${index + 1}`,
+      ts: message.ts,
+      role: message.from === 'user' ? 'user' : 'assistant',
+      from: message.from,
+      to: Array.isArray(message.to) ? [...message.to] : [],
+      text: text.length > CAPTURE_CONTEXT_TEXT_LIMIT
+        ? text.slice(0, CAPTURE_CONTEXT_TEXT_LIMIT)
+        : text,
+      truncated: text.length > CAPTURE_CONTEXT_TEXT_LIMIT,
+      artifacts: (message.artifacts || []).slice(0, 10).map((artifact) => ({
+        id: artifact.id,
+        title: artifact.title,
+      })),
+      sourceId: cognitionMessageSourceId(capture.conversationId, message.id),
+    };
+  });
+
+  // 参与角色：只列这段上下文里实际出现过的 actor（user 最前、指挥官次之、
+  // agent 按首次出现），名字取成员名录，缺名录时用 actor id。
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    for (const actorId of [message.from, ...message.to]) {
+      if (!actorId || seen.has(actorId)) continue;
+      seen.add(actorId);
+      order.push(actorId);
+    }
+  }
+  order.sort((left, right) => {
+    const weight = (actorId: string) => (actorId === 'user' ? 0 : actorId === 'commander' ? 1 : 2);
+    return weight(left) - weight(right);
+  });
+  const participants = order.map((actorId) => ({
+    id: actorId,
+    name: actorId === 'user' || actorId === 'commander'
+      ? actorId
+      : (nameById.get(actorId) || actorId),
+    kind: contextParticipantKind(actorId),
+  }));
+
+  return { ...base, participants, messages };
 }
 
 async function listAllRecallCaptures(userId: string): Promise<RecallCaptureRecord[]> {
@@ -1281,7 +1505,7 @@ async function findMergeableAutomaticCapture(
 export async function listRecallCaptures(userId: string, limit = 20): Promise<RecallCaptureWorkflowRecord[]> {
   const wanted = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
   const visible = (await listAllRecallCaptures(userId)).filter((capture) => capture.visibility === 'visible');
-  return summarizeRecallCaptures(userId, visible.slice(0, wanted));
+  return withConversationTitles(userId, (await summarizeRecallCaptures(userId, visible.slice(0, wanted))));
 }
 
 function captureCounts(captures: RecallCaptureWorkflowRecord[]): RecallCaptureCounts {
@@ -1294,6 +1518,15 @@ function captureCounts(captures: RecallCaptureWorkflowRecord[]): RecallCaptureCo
     else counts.waiting += 1;
     return counts;
   }, { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 });
+}
+
+/** 分桶计数按 workflow 记录的（修正后）bucket 字段直读——它已含
+ *  displayStatus 的 done 修正与 no_candidate 归并，与行上展示一致。 */
+function captureBucketCounts(captures: Array<Pick<RecallCaptureWorkflowRecord, 'bucket'>>): RecallCaptureBucketCounts {
+  return captures.reduce<RecallCaptureBucketCounts>((counts, capture) => {
+    counts[capture.bucket] += 1;
+    return counts;
+  }, { attention: 0, active: 0, silent: 0, done: 0 });
 }
 
 const DISPLAY_CAPTURE_STATUSES = new Set<RecallCaptureDisplayStatus>([
@@ -1324,9 +1557,21 @@ export async function queryRecallCaptures(
   userId: string,
   query: ListRecallCapturesQuery = {},
 ): Promise<RecallCapturePage> {
-  const visible = (await listAllRecallCaptures(userId)).filter((capture) => capture.visibility === 'visible');
-  const all = await summarizeRecallCaptures(userId, visible);
-  const counts = captureCounts(all);
+  const records = await listAllRecallCaptures(userId);
+  const scoped = query.scope === 'all'
+    ? records
+    : records.filter((capture) => capture.visibility === 'visible');
+  // 性能不变式：静默记录（内部筛空的 no_candidate，随时间无界增长）永不进
+  // summarizeRecallCaptures——它要逐条读候选/资产。静默记录走零读取的
+  // 展示构造器；counts 口径不变（只数非静默），静默数走 buckets。
+  const loud = scoped.filter((capture) => !isSilentCapture(capture));
+  const silent = scoped.filter(isSilentCapture);
+  const summarized = await summarizeRecallCaptures(userId, loud);
+  const all = [...summarized, ...silent.map(silentRecallCaptureWorkflow)]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  const counts = captureCounts(summarized);
+  // 分桶计数按 workflow 记录（含 displayStatus 的 done 修正），与行上展示一致。
+  const buckets = captureBucketCounts(all);
   const statuses = query.statuses?.length ? new Set(query.statuses) : undefined;
   const cursor = query.cursor ? decodeCaptureCursor(query.cursor) : undefined;
   const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 25)));
@@ -1347,8 +1592,9 @@ export async function queryRecallCaptures(
   });
   const captures = filtered.slice(0, limit);
   return {
-    captures,
+    captures: await withConversationTitles(userId, captures),
     counts,
+    buckets,
     nextCursor: filtered.length > captures.length && captures.length
       ? encodeCaptureCursor(captures[captures.length - 1])
       : null,
@@ -2877,6 +3123,39 @@ export async function runRecallCaptureNow(userId: string, id: string): Promise<R
   return capture;
 }
 
+async function batchRecallCaptureControl(
+  userId: string,
+  captureIds: string[],
+  control: (userId: string, id: string) => Promise<RecallCaptureRecord>,
+): Promise<RecallCaptureBatchResult> {
+  const succeeded: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+  // 逐条复用单条状态机（retry / runNow 的全部前置检查与副作用原样生效）；
+  // 单条失败（不可重试 / 不可立即运行 / 已被并发改动）只记录结果，不中断
+  // 也不回滚其余条目。串行执行：控制写盘有读-改-写竞态，并发批量放大会
+  // 互相踩 updateCapture。
+  for (const id of [...new Set(captureIds)]) {
+    try {
+      await control(userId, id);
+      succeeded.push(id);
+    } catch (error) {
+      failed.push({ id, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { succeeded, failed };
+}
+
+/** 批量重试：只对确实失败 / 待配置的记录生效（retryRecallCapture 自校验）。 */
+export function retryRecallCapturesBatch(userId: string, captureIds: string[]): Promise<RecallCaptureBatchResult> {
+  return batchRecallCaptureControl(userId, captureIds, retryRecallCapture);
+}
+
+/** 批量立即整理：每次都是一次模型额度消耗，入口方（IPC/前端）必须先让用户
+ *  确认具体条数；这里不做二次确认，只保证逐条状态机语义。 */
+export function runRecallCapturesNowBatch(userId: string, captureIds: string[]): Promise<RecallCaptureBatchResult> {
+  return batchRecallCaptureControl(userId, captureIds, runRecallCaptureNow);
+}
+
 export async function recoverRecallCaptures(userId: string): Promise<number> {
   const captures = await listAllRecallCaptures(userId);
   let recovered = 0;
@@ -2968,6 +3247,21 @@ export interface RecallCaptureOrchestratorRuntime {
   queue?: (event: TaskTerminalEvent) => Promise<RecallCaptureRecord | undefined>;
 }
 
+/** 自动创建口径（2026-09-15 两度拍板的终态）：
+ *  - smart（任务一结束就整理）保持下线——判断不成熟，手动整理为主；
+ *  - nightly（夜间自动沉淀）由用户在「沉淀设置」里显式开启：仅当
+ *    enabled && executionPolicy==='nightly' 时，任务终态才创建 scheduled
+ *    整理任务（scheduledFor=所选夜间时间），到点由既有定时器执行；
+ *    产出走「先问我」（开启时联动 reviewPolicy=manual，见渲染层）。 */
+async function terminalCaptureEnabledFor(userId: string): Promise<boolean> {
+  try {
+    const settings = await readRecallCaptureSettings(userId);
+    return settings.enabled && settings.executionPolicy === 'nightly';
+  } catch {
+    return false;
+  }
+}
+
 export function startRecallCaptureOrchestrator(
   runtime: RecallCaptureOrchestratorRuntime = {},
 ): () => void {
@@ -2975,7 +3269,10 @@ export function startRecallCaptureOrchestrator(
   const subscribe = runtime.subscribe || subscribeTaskTerminals;
   const queue = runtime.queue || queueRecallCaptureFromTerminal;
   const unsubscribe = subscribe((event) => {
-    void queue(event).catch(() => {
+    void (async () => {
+      if (!await terminalCaptureEnabledFor(event.user_id)) return;
+      await queue(event);
+    })().catch(() => {
       log.warn('recall terminal capture queue failed', {
         conversation_id: event.conversation_id,
         run_id: event.run_id,
