@@ -353,8 +353,12 @@ function normalizeStoredEntry(input: unknown): GlossaryEntry | null {
   if (!e || typeof e.wrong !== 'string' || typeof e.correct !== 'string') return null;
   const wrong = e.wrong.trim();
   const correct = e.correct.trim();
-  if (!wrong || !correct) return null;
   const action: GlossaryAction = e.action === 'delete' ? 'delete' : 'replace';
+  // 删除类词条（口癖）**本来就没有 correct**：早先的校验把 `correct` 为空一律当脏数据
+  // 丢掉，于是口癖词条能写进文件却读不回来（写一次覆盖一次，只剩最后一条）。
+  // 这里按 action 区分：replace 必须有正确写法，delete 只要求错形非空。
+  if (!wrong) return null;
+  if (action === 'replace' && !correct) return null;
   const createdAt = typeof e.createdAt === 'number' ? e.createdAt : Date.now();
   const updatedAt = typeof e.updatedAt === 'number' ? e.updatedAt : createdAt;
   return {

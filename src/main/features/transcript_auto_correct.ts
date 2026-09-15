@@ -14,9 +14,12 @@
  *      （真实事故：一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）；
  *   5. 保护区域：fenced code / 行内 code / URL 内不做替换；
  *   6. 重叠消解：长词优先、`freq` 次优先，同 span 只保留一个候选；
- *   7. 语境白名单：命中窗口内出现 `contextAllow` 任一词则**整条候选静默丢弃**
+ *   7. 口癖规则包：`kind=filler` 的词条按 `transcript_filler_rules` 的边界策略删除
+ *      （白名单词只在句首/独立出现；`就是/然后/对` 只在重复或纯应答），
+ *      绝不"见词就删"；
+ *   8. 语境白名单：命中窗口内出现 `contextAllow` 任一词则**整条候选静默丢弃**
  *      （方案 §七「加白」：误杀一次就加白，别再反复提示）；
- *   8. **只做替换/删除，不生成句子**：输出必须能由"原文 + 编辑集"逐字重建
+ *   9. **只做替换/删除，不生成句子**：输出必须能由"原文 + 编辑集"逐字重建
  *      （`verifyEditsRebuild`），从结构上排除模型补写
  *      （真实事故：清理产物里出现原文没有的 11 秒发言）。
  *
@@ -32,6 +35,11 @@ import {
   isCjkOrWordChar,
   scopeAllows,
 } from './transcript_glossary';
+import {
+  detectFillers,
+  fillerRuleFor,
+  type FillerRule,
+} from './transcript_filler_rules';
 
 /** 清理版字符保留率低于此值即判"疑似过度改写"（方案 v0.2 §8.2）。 */
 export const OVER_REWRITE_THRESHOLD = 0.55;
@@ -91,7 +99,11 @@ export interface DeniedMatch {
 export interface ScanResult {
   candidates: CorrectionCandidate[];
   denied: DeniedMatch[];
-  stats: { entriesScanned: number; candidates: number; denied: number };
+  /**
+   * `truncated` = 候选超过上限被截断（口癖规则包会让候选数量级上升：
+   * 09-05 验收稿就有一千多条）。**截断必须可见**，否则用户以为"就这么多"。
+   */
+  stats: { entriesScanned: number; candidates: number; denied: number; truncated: boolean };
 }
 
 export interface AcceptedEdit {
@@ -196,6 +208,25 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
       continue;
     }
 
+    // 口癖/填充词（kind=filler + action=delete）走规则包：白名单词只在句首或
+    // 独立出现时删，语义连词只在重复或纯应答时删（方案 §五 P1-1）。
+    // 关键：**绝不"见词就删"**——`这个方案`、`然后我们` 都要原样留着。
+    if (entry.action === 'delete' && entry.kind === 'filler') {
+      const rule: FillerRule = fillerRuleFor(entry.wrong) ?? {
+        term: entry.wrong,
+        mode: 'standalone',
+        note: '词表自带口癖词：默认只删独立出现',
+      };
+      for (const match of detectFillers(text, [rule])) {
+        if (isProtected(protectedRanges, match.span)) {
+          denied.push({ entryRef: entry.id, wrong: entry.wrong, correct: entry.correct, reason: 'protected_region', span: match.span });
+          continue;
+        }
+        raw.push({ entry, span: match.span });
+      }
+      continue;
+    }
+
     let from = 0;
     for (;;) {
       const idx = foldedText.indexOf(expect, from);
@@ -257,7 +288,9 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
   }
 
   accepted.sort((a, b) => a.span.start - b.span.start);
-  const limit = options.maxCandidates ?? 500;
+  // 上限从 500 提到 2000：装上口癖规则包后，一份 1 小时的稿子轻松过千条候选，
+  // 原上限会把排在后面的口癖整类截掉（表现为"啊/呃/嗯 只清掉一半"）。
+  const limit = options.maxCandidates ?? 2000;
   const candidates: CorrectionCandidate[] = accepted.slice(0, limit).map((m) => ({
     entryRef: m.entry.id,
     wrong: m.entry.wrong,
@@ -274,7 +307,13 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
   return {
     candidates,
     denied,
-    stats: { entriesScanned, candidates: candidates.length, denied: denied.length },
+    stats: {
+      entriesScanned,
+      candidates: candidates.length,
+      denied: denied.length,
+      // 被上限截断 = 候选数打满上限，此时界面必须提示"还有更多没显示"
+      truncated: candidates.length >= limit,
+    },
   };
 }
 

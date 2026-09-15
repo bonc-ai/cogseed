@@ -23,6 +23,7 @@ import * as transcriptGlossary from '../features/transcript_glossary';
 import * as transcriptAutoCorrect from '../features/transcript_auto_correct';
 import * as transcriptRuns from '../features/transcript_correction_runs';
 import * as transcriptOntology from '../features/transcript_ontology_bridge';
+import * as transcriptFillers from '../features/transcript_filler_rules';
 
 interface IpcContext {
   userId: string;
@@ -160,6 +161,31 @@ export const invokeHandlers = {
     meta: transcriptGlossary.readMeta(ctx.userId),
     file: 'transcript-glossary.json',
   }),
+
+  /**
+   * 装入口癖规则包（方案 §五 P1-1）：把默认规则写成 `action=delete` +
+   * `kind=filler` 的词条，之后走既有词表链路（可暂停、可删、可回滚）。
+   * 幂等：已在词表里的词只更新规则字段，不重复入库。
+   */
+  'transcript.glossary.seedFillers': async (_payload: Payload, ctx: IpcContext) => {
+    let created = 0;
+    let updated = 0;
+    for (const rule of transcriptFillers.fillerRuleEntries()) {
+      const result = transcriptGlossary.upsertEntry(ctx.userId, {
+        wrong: rule.wrong,
+        action: 'delete',
+        kind: 'filler',
+        boundary: 'substring',
+        riskLevel: 'low',
+        source: 'import',
+      });
+      if (result.entry) {
+        if (result.created) created += 1;
+        else updated += 1;
+      }
+    }
+    return { created, updated, pack: transcriptFillers.FILLER_PACK_VERSION };
+  },
 
   'transcript.glossary.setOwnerNote': async (payload: Payload, ctx: IpcContext) => ({
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),

@@ -57,6 +57,27 @@ describe('归一化与索引对齐', () => {
   });
 });
 
+describe('删除类词条（口癖）的存读往返', () => {
+  it('correct 为空的 delete 词条必须能存能读（曾经被读盘校验丢掉，只剩最后一条）', () => {
+    for (const term of ['嗯', '呃', '啊', '哦', '这个', '那个', '的话', '就是', '然后', '对']) {
+      upsertEntry(uid, { wrong: term, action: 'delete', kind: 'filler', boundary: 'substring', source: 'import' });
+    }
+    const fillers = listEntries(uid, { kind: 'filler' });
+    expect(fillers).toHaveLength(10);
+    expect(fillers.every((e) => e.action === 'delete' && e.correct === '')).toBe(true);
+    // 重新读盘一次仍然在（写一次覆盖一次的 bug 就藏在这条断言后面）
+    expect(loadGlossary(uid).entries.filter((e) => e.action === 'delete')).toHaveLength(10);
+  });
+
+  it('replace 词条缺正确写法仍然是脏数据（不能被放进词表）', () => {
+    const entry = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
+    const file = loadGlossary(uid);
+    const broken = { ...file, entries: [...file.entries, { ...entry, id: 'g_broken', correct: '' }] };
+    saveGlossary(uid, broken);
+    expect(loadGlossary(uid).entries.some((e) => e.id === 'g_broken')).toBe(false);
+  });
+});
+
 describe('写法对齐（本体规范名覆盖词表写法）', () => {
   it('只改 correct，重算风险；wrong/台账/频次一律不动', () => {
     const created = upsertEntry(uid, { wrong: 'kstar', correct: 'K star', kind: 'term' }).entry!;

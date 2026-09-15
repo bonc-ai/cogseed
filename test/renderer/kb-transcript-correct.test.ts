@@ -343,6 +343,7 @@ describe('locale 覆盖', () => {
     'remove_allow_done', 'remove_allow_failed', 'rename_correct', 'rename_done', 'rename_failed',
     'rename_need_value', 'confirm', 'cancel', 'no_context',
     'diff', 'diff_title', 'diff_bar', 'diff_before', 'diff_after', 'diff_note', 'diff_failed',
+    'seed_fillers', 'seed_fillers_done', 'seed_fillers_failed', 'scan_truncated',
   ];
 
   for (const lang of locales) {
@@ -411,6 +412,11 @@ describe('源码契约', () => {
   it('文案走 i18n（t() 调用存在，且不硬编码中文 UI 文案到 DOM）', () => {
     expect(source).toContain("t('kb.transcriptCorrect.");
     expect(source).not.toContain('.textContent = \'转写纠错\'');
+  });
+
+  it('口癖（action=delete）必须真的进扫描与替换：两处都得带 includeDelete', () => {
+    const occurrences = source.match(/includeDelete: true/g) || [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(2);
   });
 
   it('高危候选不默认进清理版：只有 low 风险行默认勾选', () => {

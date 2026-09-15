@@ -355,6 +355,7 @@
       seedOpen: '',
       // 未决项（待核，方案 §4.3）：span 一律是**原文**坐标，apply 时由主进程映射
       flagged: [],
+      truncated: false,
       // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
       scopeChoice: 'keep',
       rowMenu: '',
@@ -1236,6 +1237,14 @@
             disabled: state.busy,
             attrs: { 'data-atc-action': 'add' },
           }),
+          button({
+            label: t('kb.transcriptCorrect.seed_fillers', '装入口癖规则包'),
+            icon: 'sparkles',
+            role: 'ghost',
+            size: 'sm',
+            disabled: state.busy,
+            attrs: { 'data-atc-action': 'seed-fillers' },
+          }),
         ].join('');
         // select 需要水合才可交互（与其它页面同一套 shared-ui 流程）。
         if (typeof root.hydrateUiFormSelects === 'function') root.hydrateUiFormSelects(host);
@@ -1269,6 +1278,9 @@
         const result = await root.cogseed.invoke('transcript.correct.scan', {
           text: ctx.text,
           docId: ctx.docId,
+          // 口癖规则包装进词表后是 action=delete 词条：不带这个开关它们不会出现，
+          // 用户会以为"装了规则包却没反应"（真机踩过）。
+          includeDelete: true,
           ...(Array.isArray(ctx.scenarioTags) && ctx.scenarioTags.length ? { scenarioTags: ctx.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
@@ -1285,9 +1297,12 @@
         state.suspects = [];
         state.suspectError = '';
         const stats = summarizeRows(state.rows, state.accepted);
+        state.truncated = Boolean(result?.stats?.truncated);
         setStatus(stats.total === 0
           ? ''
-          : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选', { total: stats.total }), '');
+          : (state.truncated
+            ? t('kb.transcriptCorrect.scan_truncated', '扫描完成：{total} 条候选（已达上限，可能还有更多；建议先暂停部分词条）', { total: stats.total })
+            : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选', { total: stats.total })), '');
       } catch (error) {
         log?.warn('transcript scan failed', { error: error?.message || String(error) });
         state.scanned = true;
@@ -1309,6 +1324,7 @@
         const result = await root.cogseed.invoke('transcript.correct.apply', {
           text: ctx.text,
           docId: ctx.docId,
+          includeDelete: true,
           acceptedIds: [...state.accepted],
           // 待核 span 是原文坐标，主进程按偏移映射后插「【转写存疑】」
           ...(state.flagged.length ? { issues: state.flagged } : {}),
@@ -1592,6 +1608,31 @@
       } catch (error) {
         log?.warn('scope apply failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.scope_failed', '设置作用域失败，请稍后重试。'), 'warning');
+      }
+    }
+
+    /**
+     * 装入口癖规则包（方案 §五 P1-1）：词条化 + 走既有链路。
+     * 规则包本身是保守的：白名单词只在句首/独立出现时删，`就是/然后/对`
+     * 只在重复或纯应答时删——面板必须把这件事说清楚。
+     */
+    async function runSeedFillers() {
+      if (state.busy) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.seedFillers', {});
+        setStatus(t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
+          created: Number(result?.created || 0),
+          updated: Number(result?.updated || 0),
+        }), '');
+        await runScan();
+      } catch (error) {
+        log?.warn('seed fillers failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.seed_fillers_failed', '装入口癖规则包失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
       }
     }
 
@@ -1911,6 +1952,7 @@
       else if (kind === 'save') void runSave();
       else if (kind === 'revert') void runRevert();
       else if (kind === 'add') void runAddEntry();
+      else if (kind === 'seed-fillers') void runSeedFillers();
     }
 
     container.addEventListener('click', onClick);
