@@ -761,3 +761,138 @@ describe('kb file-viewer highlight pure helpers', () => {
     expect(tokens.length).toBeGreaterThan(0);
   });
 });
+
+describe('查看器窗口：缩放与调整大小（真机反馈回归）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+  const css = src.slice(src.indexOf('function _injectFileViewerStyle'));
+
+  it('对话框自带定位上下文 —— 否则右下角手柄会跑到屏幕角落上', () => {
+    // 手柄是 position:absolute；对话框 position:static 时它相对 overlay(fixed) 定位，
+    // 实测手柄落在视口右下角、窗口自己那个角上什么都没有 → "能移动但不能调整大小"
+    const dialogRule = css.match(/\.kb-fv-dialog \{[\s\S]*?\n {6}\}/);
+    expect(dialogRule).toBeTruthy();
+    expect(dialogRule![0]).toContain('position: relative');
+    expect(css).toMatch(/\.kb-fv-resize \{[\s\S]{0,200}position: absolute/);
+  });
+
+  it('嵌入 iframe 的模式打开时给足高度（不再是 280px 的矮缝）', () => {
+    expect(css).toMatch(/\.kb-fv-dialog--frame \{ height: min\(86vh, 780px\); \}/);
+    // 进入/退出嵌入模式时两个 class 同步（少一个就会留下错误高度）
+    expect(src).toMatch(/function _fvEnterFrameMode\(overlay, body\) \{[\s\S]{0,300}kb-fv-body--frame[\s\S]{0,200}kb-fv-dialog--frame/);
+    expect(src).toMatch(/classList\.remove\('kb-fv-dialog--frame'\)/);
+  });
+
+  it('PDF 缩放靠真的重新加载（只改 hash 等于没缩放）', () => {
+    // 真机实测：只改 iframe.src 的 hash，PDFium 不重新排版（100%/120% 像素完全相同），
+    // 必须换成带新 zoom 的新 frame 才会重新加载
+    expect(src).toMatch(/function _fvApplyPdfZoom[\s\S]{0,700}cloneNode\(false\)[\s\S]{0,200}replaceWith\(frame\)/);
+    expect(src).toMatch(/cur\.lastZoom === pct/);
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.pdfSrcAt({ src: 'kb-file://kb/a.pdf', page: 3 }, 120))
+      .toBe('kb-file://kb/a.pdf#toolbar=1&navpanes=0&page=3&zoom=120');
+    expect(u.pdfSrcAt({ src: 'kb-file://space/s1/b.pdf', page: null }, 80))
+      .toBe('kb-file://space/s1/b.pdf#toolbar=1&navpanes=0&zoom=80');
+  });
+
+  it('拖手柄松手落在窗口外时，不会顺手把窗口关掉', () => {
+    // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
+    expect(src).toMatch(/pressedOnOverlay/);
+    expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+  });
+
+  it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
+    // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
+    // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
+    // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
+    expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
+    expect(src.match(/_fvEndDragShield\(fvOverlay\)/g)?.length).toBe(2);
+  });
+
+  it('恢复上次窗口位置时按已算好的宽高夹取（量 offset 在 display:none 下全是 0）', () => {
+    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\n {2}\}/);
+    expect(fn).toBeTruthy();
+    expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
+    expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
+    // 先显示再恢复：overlay 关着时量不到真实尺寸
+    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+  });
+});
+
+describe('文件查看：按类型分派（#214 回归防护）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+
+  it('保留富查看器（保排版/缩放）：PDF 走 PDFium iframe，Office 走排版 HTML', () => {
+    // 主进程 kb.openFile 的契约 + kb-file:// 协议仍在；渲染层必须有对应实现
+    expect(src).toContain('kb-file://kb/');
+    expect(src).toContain('kb-file://space/');
+    expect(src).toContain("toolbar=1&navpanes=0");
+    expect(src).toMatch(/kind === 'pdf'/);
+    expect(src).toMatch(/kind === 'office'/);
+    expect(src).toContain('_fvSetZoom');
+    expect(src).toContain('_fvResetZoom');
+  });
+
+  it('渲染型文件（html/图片/音视频）也走富查看器，不再退化成纯文本', () => {
+    expect(src).toContain("kind === 'html' || c.kind === 'image' || c.kind === 'media'");
+    expect(src).toContain('kb-fv-frame--html');
+    expect(src).toContain("createElement(c.audio ? 'audio' : 'video')");
+    // html 默认渲染页面，同时保留"查看源码"
+    expect(src).toContain('kb-fv-source');
+    expect(src).toContain('_fvToggleHtmlSource');
+  });
+
+  it('暴露 __kbWorkbenchOpenFile 供回归与自动化验证（分派本身就是被测行为）', () => {
+    expect(src).toContain('window.__kbWorkbenchOpenFile');
+  });
+
+  it('点击文件按扩展名分派：排版类 → 富查看器；纯文本 → 原文查看器', () => {
+    expect(src).toContain('function _isRichPreview');
+    expect(src).toContain('_FV_RICH_EXTS');
+    expect(src).toMatch(/if \(_isRichPreview\(relPath\)\) \{[\s\S]{0,400}?_openFileViewer\(/);
+    expect(src).toMatch(/if \(typeof window\.__openAnchorViewer === 'function'\) \{[\s\S]{0,300}?__openAnchorViewer\(\{/);
+    // .html 不再被当作文本类打开（否则 70 份 html 只看到源码）
+    expect(src).toContain("'.html', '.htm',");
+  });
+
+  it('引用锚点：排版类带页码定位到富查看器，文本类仍走原文查看器', () => {
+    expect(src).toMatch(/_openFileViewerForAnchor[\s\S]{0,900}?_isRichPreview\(anchor\.path\)/);
+    // 页码定位与富查看器开在同一个函数里（_openRichForAnchor）
+    expect(src).toMatch(/_openRichForAnchor[\s\S]{0,1800}?page/);
+    expect(src).toMatch(/_openRichForAnchor[\s\S]{0,2200}?_openFileViewer\(/);
+  });
+
+  it('对外桥 __openKbRichFile：阅读器只问一次"这文件该不该保排版"', () => {
+    // 常驻加载的 anchored-source-view 在把排版类文件丢进纯文本阅读器前会调它；
+    // 桥必须：只接排版类、返回"是否接管"、且复用同一条 _openRichForAnchor。
+    expect(src).toContain('window.__openKbRichFile');
+    expect(src).toMatch(/__openKbRichFile[\s\S]{0,400}?_isRichPreview\(anchor\.path\)[\s\S]{0,200}?_openRichForAnchor/);
+    // 扩展名清单只有一份来源（anchored-source-view 暴露），避免两处漂移
+    expect(src).toContain('window.__kbRichPreviewExts');
+    expect(src).toContain('window.__kbIsRichPath');
+  });
+
+  it('HTML 用渲染 iframe（sandbox 只给 allow-scripts，与 chat-file-viewer 一致）', () => {
+    // 跨 origin 才能挡住父页访问；脚本保留是为了交互型 HTML 能跑
+    expect(src).toMatch(/kb-fv-frame--html';\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+  });
+
+  it('查看源码走主进程 kb.openFile(asText)，不依赖 fetch(kb-file://)', () => {
+    // 非 http 方案没有 CORS 头，渲染进程 fetch 会 Failed to fetch（实测）
+    expect(src).toMatch(/asText: true/);
+    expect(src).not.toMatch(/fetch\(content\.src\)/);
+  });
+
+  it('工具栏提供"在系统中打开"（只读预览之外的编辑/批注出口）', () => {
+    expect(src).toContain('kb-fv-external');
+    expect(src).toContain("invoke('kb.openExternal'");
+    // 参数由纯函数给（载荷可测），无当前文件时按钮隐藏、点了也不发请求
+    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\n\s*const payload = _fvExternalTarget\(\);/);
+    expect(src).toContain('externalTarget: _fvExternalTarget');
+    // 无当前文件上下文时必须隐藏，避免点了没反应
+    expect(src).toMatch(/_fvCtx[\s\S]{0,400}?extBtn\.hidden/);
+  });
+});

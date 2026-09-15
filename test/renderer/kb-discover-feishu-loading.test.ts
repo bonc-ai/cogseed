@@ -50,6 +50,16 @@ describe('KB discovery Feishu document action', () => {
     expect(source).toMatch(/function _openSource[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
   });
 
+  it('排版类来源先走富查看器桥（PDF/Word 不能又只剩纯文本）', () => {
+    const source = read('src/renderer/modules/kb-discover.js');
+    const body = source.slice(source.indexOf('function _openSource'));
+
+    // 桥被咨询过 → 由桥判定是否接管；不接管/抛错/桥不存在都回落原文查看器
+    expect(body).toMatch(/if \(typeof window\.__openKbSourceDocument === 'function'\) \{[\s\S]{0,400}?__openKbSourceDocument\(\{/);
+    expect(body).toMatch(/\.then\(\(handled\) => \{ if \(!handled\) fallback\(\); \}\)/);
+    expect(body).toMatch(/\.catch\(fallback\)/);
+  });
+
   it('renders the shared button as loading while Wiki documents are being listed', () => {
     const context = loadPageAction();
     const options = context.module.exports._feishuDocumentActionOptions(true, 'list-documents');

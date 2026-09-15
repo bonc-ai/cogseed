@@ -98,13 +98,32 @@
     history.querySelectorAll('.markdown-body').forEach(linkify);
   }
 
+  // 引用点击的统一入口：**排版类**（pdf/office/html/图片）交给 KB 富查看器保排版，
+  // 纯文本仍走原文查看器（转写纠错面板的宿主）。
+  // `__openKbSourceDocument` 由 kb-workbench.js 暴露，而 KB 是懒加载的——桥不在时
+  // 直接回落原文查看器；空间库引用（chip 不带 spaceId）也走回落。
+  // 排版类的最终兜底在 `__openAnchorViewer` 里：它自己会按需拉起富查看器桥，
+  // 所以这里回落也不会把 PDF/Word 变成没有排版的纯文本。
+  function _openCitationTarget(anchor) {
+    const fallback = () => {
+      if (typeof window.__openAnchorViewer === 'function') window.__openAnchorViewer({ ...anchor });
+    };
+    if (anchor.scope !== 'space' && typeof window.__openKbSourceDocument === 'function') {
+      Promise.resolve(window.__openKbSourceDocument(anchor)).then((handled) => {
+        if (!handled) fallback();
+      }).catch(fallback);
+      return;
+    }
+    fallback();
+  }
+
   document.addEventListener('click', (e) => {
     const chip = e.target.closest ? e.target.closest('[data-citation-chunk]') : null;
     if (!chip) return;
     e.preventDefault();
     const scope = chip.dataset.citationScope || 'global';
     if (scope === 'attachment') return; // needs cid — not resolvable from the chip yet
-    window.__openAnchorViewer({
+    _openCitationTarget({
       source: 'library',
       scope,
       path: chip.dataset.citationPath,

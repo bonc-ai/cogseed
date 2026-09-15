@@ -146,6 +146,8 @@ export const cogseedAgentSkillLifecycleDir = (uid: string) => path.join(cogseedA
 export const userTranscriptGlossaryDir  = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'transcript');
 export const userTranscriptGlossaryFile = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'transcript-glossary.json');
 export const userTranscriptRunsDir      = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'runs');
+/** 本地埋点（方案 §8.2「可选埋点，本地」）：一行一个事件，只追加、不上报。 */
+export const userTranscriptMetricsFile  = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'metrics.jsonl');
 export const userTranscriptRunDir       = (uid: string, runId: string) => path.join(userTranscriptRunsDir(uid), runId);
 
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
