@@ -1,0 +1,15 @@
+/* CogSeed 开源版 · 基础复位与全局元素样式 */
+html{text-size-adjust:100%;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--cs-canvas);color:var(--cs-ink);font:var(--cs-type-ui);font-family:var(--cs-font-sans);text-wrap:pretty;font-variant-numeric:tabular-nums}
+button,input,select,textarea,code,kbd,pre,samp{font-family:var(--cs-font-sans)}
+a{color:var(--cs-link);text-decoration:none}
+a:hover{color:var(--cs-link-hover)}
+::placeholder{color:var(--cs-text-placeholder)}
+::selection{background:var(--cs-accent-tint);color:var(--cs-ink)}
+[data-cs-scroll]{overflow:auto}
+[data-cs-scroll]::-webkit-scrollbar{width:var(--cs-scrollbar-w);height:var(--cs-scrollbar-w)}
+[data-cs-scroll]::-webkit-scrollbar-thumb{background:var(--cs-scrollbar);border-radius:3px}
+[data-cs-scroll]::-webkit-scrollbar-thumb:hover{background:var(--cs-scrollbar-hover)}
+[data-cs-scroll]::-webkit-scrollbar-track{background:transparent}
+
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}

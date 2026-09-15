@@ -1,0 +1,46 @@
+/* Width belongs to the composite; Button owns the shared 28px entry height. */
+.cs-composer { container-type: inline-size; container-name: composer; }
+/* The draft stays visually unframed while focused. */
+:root .cs-composer > textarea:focus,
+:root .cs-composer > textarea:focus:focus-visible,
+:root .cs-composer .cs-rich-draft:focus { outline: none; box-shadow: none; }
+.cs-composer-compact-icon { display: none; }
+.cs-composer-trigger-label { display: inline-flex; align-items: center; gap: var(--cs-space-1); max-width: 170px; overflow: hidden; white-space: nowrap; }
+.cs-composer-context-label { display: block; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Query available composer content width, including when a side panel is open. */
+@container composer (max-width: 720px) {
+  .cs-composer-trigger-label, .cs-composer-context-label { display: none; }
+  .cs-composer-compact-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 14px; }
+}
+.cs-queue-composition { display: flex; flex-direction: column; gap: var(--cs-space-1); max-width: 900px; }
+.cs-queue-list { max-height: 240px; overflow-y: auto; }
+.cs-queue-row { display: flex; align-items: center; gap: var(--cs-space-1); padding: var(--cs-space-2) 0; border-bottom: 1px solid var(--cs-border-hairline); }
+.cs-queue-row:last-child { border: 0; }
+.cs-queue-text { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--cs-ink); }
+.cs-queue-edit { flex: 1; min-width: 0; }
+.cs-attachments-panel { margin-bottom: var(--cs-space-2); border-radius: var(--cs-radius-md); min-width: 0; }
+.cs-attachments-panel.is-dragging { border: 1px dashed var(--cs-accent); padding: var(--cs-space-1) var(--cs-space-2); background: var(--cs-accent-tint); }
+.cs-drop-hint { display: flex; align-items: center; gap: var(--cs-space-2); min-height: 32px; color: var(--cs-text-muted); font-size: var(--cs-size-ui-sm); }
+.cs-attachment-list { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--cs-space-1); overflow-x: auto; padding-bottom: var(--cs-space-1); overscroll-behavior-x: contain; }
+.cs-attachment-item { display: inline-flex; flex: 0 0 auto; align-items: center; gap: var(--cs-space-1); height: 32px; box-sizing: border-box; max-width: 220px; padding: 0 var(--cs-space-1) 0 var(--cs-space-2); border: 1px solid var(--cs-border-field); border-radius: var(--cs-radius-sm); }
+.cs-attachment-name { min-width: 0; font-size: var(--cs-size-ui-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-attachment-item.is-error { border-color: var(--cs-critical-border); color: var(--cs-critical); }
+.cs-voice-panel { padding: var(--cs-space-2) 0; font-size: var(--cs-size-ui-sm); }
+.cs-voice-wave { display: flex; align-items: center; height: 32px; gap: var(--cs-space-1); color: var(--cs-accent); }
+.cs-voice-wave span { width: 3px; background: currentColor; border-radius: 2px; }
+.cs-composer-notice { display: flex; align-items: center; gap: var(--cs-space-2); margin: var(--cs-space-2) 0 var(--cs-space-1); padding: var(--cs-space-2) var(--cs-space-2); background: var(--cs-surface-subtle); border-radius: var(--cs-radius-sm); font-size: var(--cs-size-ui-sm); line-height: 1.6; color: var(--cs-text-muted); }
+.cs-composer-notice > span { flex: 1; }
+.cs-composer-notice.is-error { background: var(--cs-critical-bg); color: var(--cs-critical); }
+.cs-rich-draft { min-height: 80px; max-height: 200px; overflow-y: auto; font-size: var(--cs-size-title); line-height: 1.8;  }
+.cs-inline-token { display: inline-flex; align-items: center; vertical-align: middle; font-size: var(--cs-size-ui-sm); background: var(--cs-accent-tint); padding-left: var(--cs-space-2); margin: 0 var(--cs-space-1); border-radius: var(--cs-radius-sm); }
+.cs-quote-sample { padding: var(--cs-space-2) var(--cs-space-3); margin-bottom: var(--cs-space-3); border-left: 2px solid var(--cs-accent); background: var(--cs-surface-subtle); font-size: var(--cs-size-ui-sm); }
+
+
+.cs-state-rule { color: var(--cs-text-muted); line-height: 1.7; font-size: var(--cs-size-ui-sm); }
+
+.cs-state-muted { font-size: var(--cs-size-caption); color: var(--cs-text-muted); }
+
+.cs-state-actions { display: flex; gap: var(--cs-space-2); align-items: center; margin-top: var(--cs-space-2); }
+
+.cs-composer-toolbar{flex-wrap:nowrap}
+@container composer (max-width:720px){.cs-composer-toolbar{flex-wrap:wrap;row-gap:var(--cs-space-2)}}

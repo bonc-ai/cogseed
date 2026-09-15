@@ -33,6 +33,16 @@ function loadSkillRendererHelpers() {
   context.global = context;
   context.globalThis = context;
   vm.createContext(context);
+  for (const file of [
+    'icons.js',
+    'ui-button.js',
+    'ui-form.js',
+    'ui-empty.js',
+    'ui-segmented-control.js',
+  ]) {
+    const code = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'modules', file), 'utf8');
+    vm.runInContext(code, context, { filename: file });
+  }
   const code = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'modules', 'skills.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'skills.js' });
   return context;

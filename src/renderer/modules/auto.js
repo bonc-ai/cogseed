@@ -322,7 +322,7 @@ function _autoTaskMessagePreviewHtml(task, maxLength = 160) {
 function _autoRenderRow(task, opts) {
   // opts: { showProjectBadge?: boolean, onEdit: (task) => void, afterChange: () => void }
   const row = document.createElement('div');
-  row.className = 'auto-row' + (task.enabled ? '' : ' is-disabled');
+  row.className = 'auto-row ui-resource-card ui-resource-card--row' + (task.enabled ? '' : ' is-disabled');
   row.dataset.taskId = task.id;
 
   // ── Main column (left) ────────────────────────────────────────────────
@@ -346,7 +346,8 @@ function _autoRenderRow(task, opts) {
   }
   const attachCount = Array.isArray(task.attachments) ? task.attachments.length : 0;
   if (attachCount > 0) {
-    chips.push(`<span class="auto-row-chip is-attach">📎 ${escapeHtml(t('auto.attachment_count', { n: attachCount }))}</span>`);
+    const attachmentIcon = typeof window.uiIconHtml === 'function' ? window.uiIconHtml('paperclip', 'ui-icon') : '';
+    chips.push(`<span class="auto-row-chip is-attach">${attachmentIcon}${escapeHtml(t('auto.attachment_count', { n: attachCount }))}</span>`);
   }
   if (opts && opts.showProjectBadge && task.project_id) {
     const pname = _buildProjectNameLookup()(task.project_id) || task.project_id;
@@ -373,31 +374,40 @@ function _autoRenderRow(task, opts) {
   // ── Right column (schedule + last run + ⋯) ───────────────────────────
   const summary = escapeHtml(_autoFormatSummary(task));
   const lastRun = escapeHtml(_autoFormatLastRun(task.last_run_at));
+  const enabledLabel = escapeHtml(t(task.enabled ? 'common.enabled' : 'common.disabled'));
   const moreTitle = escapeHtml(t('auto.more_menu'));
 
   // Conversation count badge — number of convs in the global cache whose
   // origin_auto_task_id matches this task. Used for the "Conversations (N)"
   // expand header.
   const convCount = _autoCountConvsForTask(task.id);
-  const expandIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
-    ? window.uiIconHtml('chevron-down', 'auto-row-expand-icon')
-    : '▾';
+  const expandButton = uiIconButton({
+    icon: 'chevron-down',
+    label: t('auto.task_convs', { n: convCount }),
+    className: 'auto-row-expand',
+    attrs: { 'data-act': 'expand', 'aria-expanded': 'false' },
+  });
+  const moreButton = uiIconButton({
+    icon: 'more-horizontal',
+    label: t('auto.more_menu'),
+    className: 'auto-row-more',
+    attrs: { 'data-act': 'more' },
+  });
 
   row.innerHTML = `
     <div class="auto-row-head">
-      <button type="button" class="auto-row-expand" data-act="expand" aria-expanded="false" aria-label="${escapeHtml(t('auto.task_convs', { n: convCount }))}">
-        ${expandIcon}
-      </button>
+      ${expandButton}
       <div class="auto-row-main">
         ${contentHtml}
         ${titleHtml}
         ${chipsHtml}
       </div>
       <div class="auto-row-side">
+        <div class="auto-row-status${task.enabled ? ' is-enabled' : ' is-disabled'}"><span class="auto-row-status-dot" aria-hidden="true"></span><span>${enabledLabel}</span></div>
         <div class="auto-row-schedule">${summary}</div>
         <div class="auto-row-lastrun">${lastRun}</div>
       </div>
-      <button type="button" class="auto-row-more" data-act="more" title="${moreTitle}" aria-label="${moreTitle}">⋯</button>
+      ${moreButton}
     </div>
     <div class="auto-row-convs" hidden>
       <div class="auto-row-convs-head muted">${escapeHtml(t('auto.task_convs', { n: convCount }))}</div>
@@ -601,7 +611,7 @@ function _autoRenderTaskConvs(taskId, container) {
         .map((c) => _renderConversationSidebarItem(c, { nested: true, hidePin: true }))
         .join('');
   if (page.nextOffset !== null) {
-    html += `<button type="button" class="conversation-list-load-more" data-auto-task-convs-more="1">${escapeHtml(t('sidebar.load_more_conversations'))}</button>`;
+    html += uiButton({ label: t('sidebar.load_more_conversations'), role: 'ghost', size: 'sm', className: 'conversation-list-load-more', attrs: { 'data-auto-task-convs-more': '1' } });
   }
   container.innerHTML = html;
   if (typeof _bindConversationSidebarItems === 'function') {
@@ -703,11 +713,11 @@ function _openAutoRowMenu(anchorBtn, task, opts) {
   anchorBtn.closest('.auto-row')?.classList.add('is-menu-open');
   menu.dataset.taskId = task.id;
   const toggleLabel = task.enabled ? t('auto.disable_btn') : t('auto.enable_btn');
-  menu.innerHTML = `
-    <div class="auto-row-menu-item" data-action="toggle-enabled">${escapeHtml(toggleLabel)}</div>
-    <div class="auto-row-menu-item" data-action="edit">${escapeHtml(t('auto.edit_btn'))}</div>
-    <div class="auto-row-menu-item is-danger" data-action="delete">${escapeHtml(t('auto.delete_btn'))}</div>
-  `;
+  menu.innerHTML = [
+    uiButton({ label: toggleLabel, role: 'ghost', size: 'sm', className: 'auto-row-menu-item', attrs: { 'data-action': 'toggle-enabled' } }),
+    uiButton({ label: t('auto.edit_btn'), role: 'ghost', size: 'sm', className: 'auto-row-menu-item', attrs: { 'data-action': 'edit' } }),
+    uiButton({ label: t('auto.delete_btn'), role: 'danger', size: 'sm', className: 'auto-row-menu-item', attrs: { 'data-action': 'delete' } }),
+  ].join('');
   for (const item of menu.querySelectorAll('.auto-row-menu-item')) {
     item.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -872,7 +882,7 @@ function _autoRenderTemplates(container, opts = {}) {
     const meta = (!isBlank && tpl.schedule)
       ? `<span class="auto-tpl-card-meta">${escapeHtml(_autoFormatSummary({ schedule: tpl.schedule }))}</span>`
       : '';
-    return `<button type="button" class="auto-tpl-card${isBlank ? ' is-blank' : ''}" data-auto-tpl="${escapeHtml(tpl.id)}">`
+    return `<button type="button" class="auto-tpl-card ui-resource-card${isBlank ? ' is-blank' : ''}" data-auto-tpl="${escapeHtml(tpl.id)}">`
       + `<span class="auto-tpl-card-ico">${iconHtml(tpl.icon, 'auto-tpl-ico')}</span>`
       + `<span class="auto-tpl-card-body">`
       + `<span class="auto-tpl-card-name">${name}</span>`
@@ -882,7 +892,7 @@ function _autoRenderTemplates(container, opts = {}) {
   }).join('');
   const head = `<div class="auto-tpl-subhead">${escapeHtml(t('auto.templates_more'))}</div>`;
   container.classList.toggle('is-compact', compact);
-  container.innerHTML = head + `<div class="auto-tpl-grid">${cards}</div>`;
+  container.innerHTML = head + `<div class="auto-tpl-grid ui-resource-grid">${cards}</div>`;
   if (typeof hydrateUiIcons === 'function') hydrateUiIcons(container);
   container.querySelectorAll('[data-auto-tpl]').forEach((btn) => {
     btn.addEventListener('click', () => _autoApplyTemplate(btn.getAttribute('data-auto-tpl')));
@@ -2377,21 +2387,31 @@ function _renderAutoTimeAdjustCard(cid, task, newTime) {
 
   var card = document.createElement('div');
   card.className = 'auto-time-adjust-card';
+  var adjustIcon = typeof window.uiIconHtml === 'function' ? window.uiIconHtml('clock', 'auto-time-adjust-icon') : '';
+  var keepButton = uiButton({
+    label: t('auto.time_adjust_keep', { oldTime: oldTime }),
+    role: 'secondary',
+    size: 'sm',
+    attrs: { 'data-act': 'dismiss' },
+  });
+  var confirmButton = uiButton({
+    label: t('auto.time_adjust_confirm', { newTime: newTimeStr }),
+    role: 'primary',
+    size: 'sm',
+    attrs: { 'data-act': 'confirm' },
+  });
 
   card.innerHTML =
     '<div class="auto-time-adjust-header">' +
-      '<svg class="auto-time-adjust-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-        '<circle cx="12" cy="12" r="10"></circle>' +
-        '<polyline points="12 6 12 12 16 14"></polyline>' +
-      '</svg>' +
+      adjustIcon +
       '<span class="auto-time-adjust-title">' + escapeHtml(t('auto.time_adjust_title')) + '</span>' +
     '</div>' +
     '<div class="auto-time-adjust-body">' +
       t('auto.time_adjust_message', { oldTime: '<span class="time-highlight">' + escapeHtml(oldTime) + '</span>', newTime: '<span class="time-highlight">' + escapeHtml(newTimeStr) + '</span>' }) +
     '</div>' +
     '<div class="auto-time-adjust-actions">' +
-      '<button class="btn" data-act="dismiss">' + escapeHtml(t('auto.time_adjust_keep', { oldTime: oldTime })) + '</button>' +
-      '<button class="btn btn-primary" data-act="confirm">' + escapeHtml(t('auto.time_adjust_confirm', { newTime: newTimeStr })) + '</button>' +
+      keepButton +
+      confirmButton +
     '</div>' +
     '<div class="auto-time-adjust-result"></div>';
 

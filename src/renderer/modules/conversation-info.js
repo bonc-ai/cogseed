@@ -94,6 +94,16 @@ const ConversationInfo = (() => {
     }
   }
 
+  function _button(options) {
+    if (typeof window.uiButton !== 'function') throw new Error('conversation info requires uiButton');
+    return window.uiButton(options);
+  }
+
+  function _iconButton(options) {
+    if (typeof window.uiIconButton !== 'function') throw new Error('conversation info requires uiIconButton');
+    return window.uiIconButton(options);
+  }
+
   function _compactText(text, max = 82) {
     const s = String(text || '').replace(/\s+/g, ' ').trim();
     if (!s) return '';
@@ -382,9 +392,9 @@ const ConversationInfo = (() => {
   function _renderCogSeedActions(task, actions) {
     if (!task) return '';
     const buttons = [];
-    if (actions && actions.retry) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="retry" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.retry', 'Retry'))}</button>`);
-    if (actions && actions.resume) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="resume" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.resume', 'Resume'))}</button>`);
-    if (actions && actions.abort) buttons.push(`<button type="button" class="conversation-info-cogseed-action is-danger" data-cogseed-action="abort" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.abort', 'Abort'))}</button>`);
+    if (actions && actions.retry) buttons.push(_button({ label: _label('common.retry', 'Retry'), size: 'sm', className: 'conversation-info-cogseed-action', attrs: { 'data-cogseed-action': 'retry', 'data-cogseed-task-id': task.taskId } }));
+    if (actions && actions.resume) buttons.push(_button({ label: _label('common.resume', 'Resume'), size: 'sm', className: 'conversation-info-cogseed-action', attrs: { 'data-cogseed-action': 'resume', 'data-cogseed-task-id': task.taskId } }));
+    if (actions && actions.abort) buttons.push(_button({ label: _label('common.abort', 'Abort'), role: 'danger', size: 'sm', className: 'conversation-info-cogseed-action is-danger', attrs: { 'data-cogseed-action': 'abort', 'data-cogseed-task-id': task.taskId } }));
     return buttons.length ? `<div class="conversation-info-cogseed-actions">${buttons.join('')}</div>` : '';
   }
 
@@ -659,9 +669,7 @@ const ConversationInfo = (() => {
           <span class="conversation-info-dir-folder-icon conversation-info-dir-folder-closed">${_uiIcon('folder', 'ui-icon conversation-info-dir-svg-icon')}</span>
           <span class="conversation-info-dir-folder-icon conversation-info-dir-folder-open">${_uiIcon('folder-open', 'ui-icon conversation-info-dir-svg-icon')}</span>
           <span class="conversation-info-dir-name">${escapeHtml(name)}</span>
-          ${dirPath ? `<button type="button" class="conversation-info-file-menu-btn" data-file-menu
-                  data-entry-kind="dir" data-entry-path="${escapeHtml(dirPath)}" data-entry-name="${escapeHtml(name)}"
-                  title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</button>` : ''}
+          ${dirPath ? _iconButton({ label: moreTitle, icon: 'more-horizontal', className: 'conversation-info-file-menu-btn', attrs: { 'data-file-menu': '', 'data-entry-kind': 'dir', 'data-entry-path': dirPath, 'data-entry-name': name } }) : ''}
         </summary>
         ${_renderTreeNode(child, depth + 1)}
       </details>
@@ -678,9 +686,7 @@ const ConversationInfo = (() => {
         <span class="conversation-info-file-icon">${_iconForName(file.name)}</span>
         <span class="conversation-info-file-name">${escapeHtml(file.name)}</span>
         ${producedTag}
-        <button type="button" class="conversation-info-file-menu-btn" data-file-menu
-                data-entry-kind="${escapeHtml(kind)}" data-entry-path="${escapeHtml(file.path)}" data-entry-name="${escapeHtml(file.name)}"
-                title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</button>
+        ${_iconButton({ label: moreTitle, icon: 'more-horizontal', className: 'conversation-info-file-menu-btn', attrs: { 'data-file-menu': '', 'data-entry-kind': kind, 'data-entry-path': file.path, 'data-entry-name': file.name } })}
       </div>
     `;
     }).join('');
@@ -714,7 +720,7 @@ const ConversationInfo = (() => {
         'conversation_info.files_workspace_missing',
         '工作区目录已被移动或删除，文件列表暂不可用；对话中生成的产物仍可查看。'
       ))}</div>
-      <button type="button" class="conversation-info-files-repick" data-files-repick-workspace>${escapeHtml(_label('conversation_info.files_workspace_repick', '重新选择工作区目录'))}</button>`;
+      ${_button({ label: _label('conversation_info.files_workspace_repick', '重新选择工作区目录'), size: 'sm', className: 'conversation-info-files-repick', attrs: { 'data-files-repick-workspace': '' } })}`;
     } else {
       workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_no_workspace', '暂无工作区文件'))}</div>`;
     }
@@ -978,7 +984,7 @@ const ConversationInfo = (() => {
     if (!rows.length) {
       return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.agent_activity.empty', 'No agents have joined this conversation yet.'))}</div>`;
     }
-    return `<div class="conversation-info-agent-activity"><div class="conversation-info-agent-activity-toolbar"><div><div class="conversation-info-agent-activity-heading">${escapeHtml(_label('conversation_info.agent_activity.title', 'Agent Activity'))}</div><div class="conversation-info-agent-activity-subtitle">${escapeHtml(_label('conversation_info.agent_activity.subtitle', 'What agents are doing in this conversation'))}</div></div><button type="button" class="conversation-info-agent-activity-refresh" data-agent-activity-refresh title="${escapeHtml(_label('common.refresh', 'Refresh'))}" aria-label="${escapeHtml(_label('common.refresh', 'Refresh'))}">${_uiIcon('refresh-cw', 'conversation-info-agent-activity-refresh-icon')}</button></div><div class="conversation-info-agent-activity-layout"><div class="conversation-info-agent-activity-rail">${_renderAgentActivitySummary(rows, _snapshot.runtime || {})}</div><div class="conversation-info-agent-activity-list">${_renderAgentActivityRows(rows)}</div></div></div>`;
+    return `<div class="conversation-info-agent-activity"><div class="conversation-info-agent-activity-toolbar"><div><div class="conversation-info-agent-activity-heading">${escapeHtml(_label('conversation_info.agent_activity.title', 'Agent Activity'))}</div><div class="conversation-info-agent-activity-subtitle">${escapeHtml(_label('conversation_info.agent_activity.subtitle', 'What agents are doing in this conversation'))}</div></div>${_iconButton({ label: _label('common.refresh', 'Refresh'), icon: 'refresh-cw', className: 'conversation-info-agent-activity-refresh', attrs: { 'data-agent-activity-refresh': '' } })}</div><div class="conversation-info-agent-activity-layout"><div class="conversation-info-agent-activity-rail">${_renderAgentActivitySummary(rows, _snapshot.runtime || {})}</div><div class="conversation-info-agent-activity-list">${_renderAgentActivityRows(rows)}</div></div></div>`;
   }
 
   function _renderCollaborationTaskOverview(collaboration, runtime) {
@@ -1047,7 +1053,7 @@ const ConversationInfo = (() => {
   function _renderCollaborationAttentionSection(items) {
     const rows = Array.isArray(items) ? items : [];
     const body = rows.length
-      ? rows.map((item) => `<div class="conversation-info-collaboration-attention-item" data-attention-kind="${escapeHtml(item.kind)}" data-open-in-chat="${escapeHtml(item.target.ref)}" data-open-in-chat-message-id="${escapeHtml(item.target.messageId || '')}"><div class="conversation-info-collaboration-attention-label">${escapeHtml(item.label)}</div>${item.meta ? `<div class="conversation-info-collaboration-attention-meta">${escapeHtml(item.meta)}</div>` : ''}<button type="button" class="conversation-info-collaboration-open-in-chat">${escapeHtml(_label('conversation_info.collaboration.open_in_chat', 'Open in chat'))}</button></div>`).join('')
+      ? rows.map((item) => `<div class="conversation-info-collaboration-attention-item" data-attention-kind="${escapeHtml(item.kind)}" data-open-in-chat="${escapeHtml(item.target.ref)}" data-open-in-chat-message-id="${escapeHtml(item.target.messageId || '')}"><div class="conversation-info-collaboration-attention-label">${escapeHtml(item.label)}</div>${item.meta ? `<div class="conversation-info-collaboration-attention-meta">${escapeHtml(item.meta)}</div>` : ''}${_button({ label: _label('conversation_info.collaboration.open_in_chat', 'Open in chat'), size: 'sm', className: 'conversation-info-collaboration-open-in-chat' })}</div>`).join('')
       : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.attention_none', 'Nothing needs attention right now.'))}</div>`;
     return `<section class="conversation-info-collaboration-section"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_attention', 'Attention Needed'))}</div><div class="conversation-info-collaboration-attention-list">${body}</div></section>`;
   }
@@ -1203,7 +1209,7 @@ const ConversationInfo = (() => {
 
   function _renderProtocolInspector() {
     const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
-    const header = `<div class="conversation-info-protocol-header"><div><div class="conversation-info-protocol-heading">${escapeHtml(_label('conversation_info.protocol.title', 'Protocol Inspector'))}</div><div class="conversation-info-protocol-subtitle">${escapeHtml(_label('conversation_info.protocol.subtitle', 'P3394 agent protocol events in this conversation'))}</div></div><button type="button" class="conversation-info-agent-activity-refresh" data-protocol-refresh title="${escapeHtml(_label('common.refresh', 'Refresh'))}" aria-label="${escapeHtml(_label('common.refresh', 'Refresh'))}">${_uiIcon('refresh-cw', 'conversation-info-agent-activity-refresh-icon')}</button></div>`;
+    const header = `<div class="conversation-info-protocol-header"><div><div class="conversation-info-protocol-heading">${escapeHtml(_label('conversation_info.protocol.title', 'Protocol Inspector'))}</div><div class="conversation-info-protocol-subtitle">${escapeHtml(_label('conversation_info.protocol.subtitle', 'P3394 agent protocol events in this conversation'))}</div></div>${_iconButton({ label: _label('common.refresh', 'Refresh'), icon: 'refresh-cw', className: 'conversation-info-agent-activity-refresh', attrs: { 'data-protocol-refresh': '' } })}</div>`;
     if (_snapshot.protocolError) {
       const message = _label('conversation_info.protocol.load_failed', 'Could not load protocol events: {reason}', { reason: _snapshot.protocolError });
       return `<div class="conversation-info-protocol">${header}<div class="conversation-info-empty is-small is-error">${escapeHtml(message)}</div></div>`;
@@ -1703,8 +1709,8 @@ const ConversationInfo = (() => {
       if (bounds.length) body += '<div class="run-context-cog-bounds">' + bounds.join('') + '</div>';
     }
     var actions = '<div class="run-context-cog-actions">' +
-      '<button type="button" class="btn btn-sm btn-primary" data-candidate-promote="' + escapeHtml(c.id) + '">' + escapeHtml(_label('conversation_info.run_context.assets_confirm', '确认入库')) + '</button>' +
-      '<button type="button" class="btn btn-sm" data-candidate-ignore="' + escapeHtml(c.id) + '">' + escapeHtml(_label('conversation_info.run_context.assets_ignore', '忽略')) + '</button>' +
+      _button({ label: _label('conversation_info.run_context.assets_confirm', '确认入库'), role: 'primary', size: 'sm', attrs: { 'data-candidate-promote': c.id } }) +
+      _button({ label: _label('conversation_info.run_context.assets_ignore', '忽略'), size: 'sm', attrs: { 'data-candidate-ignore': c.id } }) +
     '</div>';
     return head + body + actions + '</div>';
   }

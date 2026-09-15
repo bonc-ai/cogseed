@@ -1,0 +1,19 @@
+/* Automation-only page composition; cards, controls and modal visuals remain shared. */
+.cs-automation-list {display:flex;flex-direction:column;gap:var(--cs-space-3)}
+.cs-automation-form {display:flex;flex-direction:column;gap:var(--cs-space-6);padding:var(--cs-space-6) 0}
+.cs-automation-content-field {display:flex;flex-direction:column;gap:var(--cs-space-2)}
+.cs-automation-field-label {font-size:var(--cs-size-ui-sm);font-weight:500}
+.cs-automation-field-label span {font-size:var(--cs-size-caption);font-weight:400;color:var(--cs-ink-45);margin-left:var(--cs-space-2)}
+.cs-automation-schedule-row {display:flex;align-items:flex-end;flex-wrap:wrap;gap:var(--cs-space-3)}
+.cs-automation-schedule-row>div {min-width:100px;flex:1}
+.cs-automation-time {display:flex;align-items:flex-end;gap:var(--cs-space-2)}
+.cs-automation-time>div {flex:1;min-width:68px}
+.cs-automation-time>span {line-height:32px}
+.cs-automation-attachments {list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--cs-space-1)}
+.cs-automation-attachments li {display:flex;align-items:center;gap:var(--cs-space-2);font-size:var(--cs-size-caption)}
+.cs-automation-attachments li>span {flex:1;overflow-wrap:anywhere}
+.cs-automation-error {margin:0;color:var(--cs-critical);font-size:var(--cs-size-ui-sm)}
+.cs-automation-row-references {display:flex;flex-wrap:wrap;gap:var(--cs-space-3);font-size:var(--cs-size-caption);color:var(--cs-ink-45)}
+.cs-automation-history {border-top:1px solid var(--cs-border);padding-top:var(--cs-space-3);font-size:var(--cs-size-ui-sm);color:var(--cs-ink-45)}
+.cs-automation-history p {margin:0;padding:var(--cs-space-3) 0;text-align:center}
+.cs-automation-run {display:flex;align-items:center;justify-content:space-between;gap:var(--cs-space-3)}

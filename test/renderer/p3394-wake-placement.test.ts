@@ -42,8 +42,8 @@ describe('P3394 wake approval placement', () => {
     const wakeCss = styleSource.slice(cssStart, cssEnd);
 
     expect(renderSource).toContain('chat-wake-request-main');
-    expect(renderSource).toContain('btn btn-primary btn-sm');
-    expect(renderSource).toContain('btn btn-sm');
+    expect(renderSource).toContain("role: 'primary', size: 'sm'");
+    expect(renderSource).toContain("data-wake-decision': 'reject'");
     expect(renderSource).toContain('event.stopPropagation()');
     expect(wakeCss).toContain('min-height: 36px');
     expect(wakeCss).toContain('white-space: nowrap');

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CogSeed 开源版 · 设计系统</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="catalog.css">
+  <script src="catalog.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳至内容</a>
+  <aside class="sidebar">
+    <header class="brand"><strong>CogSeed <span>开源版</span></strong><p>设计系统</p></header>
+    <div class="search-box"><label for="search">查找内容</label><input id="search" type="search" placeholder="搜索组件、颜色、排版…" autocomplete="off"><p id="count" role="status"></p></div>
+    <nav id="navigation" aria-label="设计系统目录"></nav>
+    <footer>视觉规范与组件</footer>
+  </aside>
+  <main id="main" tabindex="-1">
+    <header class="preview-header">
+      <div><p id="category" class="category"></p><h1 id="title"></h1><p id="description" class="description"></p></div>
+      <a id="open-page" class="open-page" target="_blank" rel="noopener">新窗口打开</a>
+    </header>
+    <div class="preview-area"><iframe id="preview" title="页面内容"></iframe></div>
+    <noscript>请启用浏览器 JavaScript，或<a href="ui_kits/enterprise-app/index.html">打开完整应用</a>。</noscript>
+  </main>
+</body>
+</html>

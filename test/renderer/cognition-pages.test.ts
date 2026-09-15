@@ -3,6 +3,16 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+require('../../src/renderer/modules/icons.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('../../src/renderer/modules/ui-button.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('../../src/renderer/modules/ui-form.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('../../src/renderer/modules/ui-empty.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('../../src/renderer/modules/ui-page-header.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const pages = require('../../src/renderer/modules/cognition/pages.js') as {
   renderCognitionPage: (input: {
     assets?: Array<Record<string, unknown>>;

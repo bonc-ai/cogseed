@@ -1,0 +1,31 @@
+/* Independent review pages; selectors do not style production/page-kit chrome. */
+.cs-state-gallery { max-width: 960px; min-width: 480px; margin: 0 auto; padding: var(--cs-space-6); }
+.cs-state-gallery h1 { font-size: var(--cs-size-title); margin: 0 0 var(--cs-space-2); }
+.cs-state-example { padding: var(--cs-space-6) 0 var(--cs-space-8); border-top: 1px solid var(--cs-border-field); margin-top: var(--cs-space-6); }
+.cs-state-example h2 { font-size: var(--cs-size-body); font-weight: 500; margin: 0 0 var(--cs-space-2); }
+.cs-state-stage { padding-top: var(--cs-space-3); }
+.cs-state-gap { height: 18px; }
+.cs-state-feedback { font-size: var(--cs-size-ui-sm); color: var(--cs-text-muted); }
+
+/* All specimens remain visible on the single Composer catalog page. */
+.cs-state-group { margin-top: var(--cs-space-13); }
+.cs-state-group-title { font-size: var(--cs-size-title); font-weight: 600; padding-bottom: var(--cs-space-3); border-bottom: 1px solid var(--cs-border-field); }
+.cs-state-group .cs-state-example h2 { font-size: var(--cs-size-body); }
+
+/* Catalog-only navigation; never added to the application Composer. */
+.cs-composer-review-layout { display: grid; grid-template-columns: 156px minmax(480px, 1fr); gap: var(--cs-space-6); max-width: 1156px; margin: 0 auto; padding: var(--cs-space-4); }
+.cs-composer-review-layout .cs-state-gallery { min-width: 0; width: 100%; box-sizing: border-box; padding: 0; }
+.cs-composer-review-nav { position: sticky; top: 20px; align-self: start; max-height: calc(100vh - 40px); overflow-y: auto; }
+.cs-review-nav-title { font-size: var(--cs-size-ui-sm); color: var(--cs-text-muted); margin-bottom: var(--cs-space-3); }
+.cs-composer-review-nav nav { display: flex; flex-direction: column; gap: var(--cs-space-1); }
+.cs-composer-review-nav a { display: block; padding: var(--cs-space-2) var(--cs-space-2); font-size: var(--cs-size-ui-sm); border-radius: var(--cs-radius-sm); color: var(--cs-text-muted); }
+.cs-composer-review-nav a:hover { background: var(--cs-overlay-hover); }
+.cs-composer-review-nav a[aria-current] { color: var(--cs-ink); background: var(--cs-accent-tint); font-weight: 500; }
+.cs-composer-review-layout section[id] { scroll-margin-top: 20px; }
+.cs-scene-example { margin: var(--cs-space-4) 0 var(--cs-space-6); }
+.cs-scene-example h3 { font-size: var(--cs-size-body); font-weight: 500; margin: 0; }
+@media (max-width: 740px) {
+  .cs-composer-review-layout { grid-template-columns: minmax(480px, 1fr); gap: var(--cs-space-4); padding: 0; }
+  .cs-composer-review-nav { position: static; max-height: none; }
+  .cs-composer-review-nav nav { flex-direction: row; flex-wrap: wrap; }
+}

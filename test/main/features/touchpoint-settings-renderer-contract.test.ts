@@ -2,6 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+function expectRendererDataAttribute(source: string, name: string, value: string): void {
+  const inlineMarkup = `${name}="${value}"`;
+  const componentAttribute = `'${name}': '${value}'`;
+  expect(source.includes(inlineMarkup) || source.includes(componentAttribute)).toBe(true);
+}
+
 describe('touchpoint settings renderer contract', () => {
   it('uses sibling overview and connection-management views instead of a stacked details panel', () => {
     const html = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/index.html'), 'utf8');
@@ -17,7 +23,8 @@ describe('touchpoint settings renderer contract', () => {
     expect(source).toContain('async function showConnections(options)');
     expect(source).toContain("if (action === 'connection.manage') { await showConnections(); return; }");
     expect(source).toContain("if (action === 'connection.connect') { await showConnections({ startFeishuQr: true }); return; }");
-    expect(source).toContain("if (action === 'connections.back') { showOverview(); return; }");
+    expect(source).toContain("if (action === 'overview.open') { showOverview(); return; }");
+    expect(source).toContain('await showConnections();');
   });
 
   it('settings loads the unified touchpoint surface instead of both legacy centers', () => {
@@ -85,7 +92,7 @@ describe('touchpoint settings renderer contract', () => {
     expect(source).toContain("touchpoints.config.save");
     expect(source).not.toContain('data-touchpoint-config-default');
     expect(source).toContain('data-touchpoint-config-route');
-    expect(source).toContain('data-touchpoint-config-button="approve"');
+    expectRendererDataAttribute(source, 'data-touchpoint-config-button', 'approve');
     expect(source).toContain('instanceId: state.touchpointConfig');
     expect(source).toContain('defaultInstanceId: state.touchpointConfig?.defaultInstanceId || null');
   });
@@ -93,12 +100,12 @@ describe('touchpoint settings renderer contract', () => {
   it('keeps approval-card configuration behind a dedicated simplified management view', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings.js'), 'utf8');
     expect(source).toContain("state.view === 'approvalCards'");
-    expect(source).toContain('data-touchpoint-action="approval_cards.manage"');
-    expect(source).toContain('data-touchpoint-action="approval_cards.back"');
-    expect(source).toContain('data-touchpoint-action="touchpoint.test"');
+    expectRendererDataAttribute(source, 'data-touchpoint-action', 'approval_cards.manage');
+    expectRendererDataAttribute(source, 'data-touchpoint-action', 'approval_cards.back');
+    expectRendererDataAttribute(source, 'data-touchpoint-action', 'touchpoint.test');
     expect(source).toContain('data-touchpoint-template-preview');
     expect(source).toContain('<details class="touchpoint-template-advanced">');
-    expect(source).toContain('data-touchpoint-scene="${scene}"');
+    expect(source).toContain("'data-touchpoint-scene': scene");
     expect(source).not.toContain("renderTouchpointConfig()}<div class=\"touchpoint-delivery-grid\"");
   });
 

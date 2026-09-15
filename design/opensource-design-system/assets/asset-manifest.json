@@ -1,0 +1,35 @@
+{
+  "description": "CogSeed 开源版本地预览资源；品牌图形沿用开源客户端，字体使用系统默认非衬线。",
+  "resources": [
+    {
+      "path": "vendor/react.production.min.js",
+      "source": "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+      "sha256": "d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd",
+      "bytes": 10751
+    },
+    {
+      "path": "vendor/react-dom.production.min.js",
+      "source": "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
+      "sha256": "35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d",
+      "bytes": 131835
+    },
+    {
+      "path": "vendor/LICENSE-React.txt",
+      "source": "https://raw.githubusercontent.com/facebook/react/v18.3.1/LICENSE",
+      "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+      "bytes": 1086
+    },
+    {
+      "path": "assets/brand/logo.png",
+      "source": "cogseed-source/src/resources/icons/logo.png",
+      "sha256": "149386207b2d06da1c5966c574e8cc760c8ec91d4b6c2f8afff55695843672f0",
+      "bytes": 551622
+    },
+    {
+      "path": "assets/brand/cogseed-squirrel-perch.png",
+      "source": "cogseed-source/src/resources/icons/cogseed-squirrel-perch.png",
+      "sha256": "adad788ad9b06b650ac72cb2d557d39cfcc7b1c9fbfeffc3d9c55df1bb5874d3",
+      "bytes": 1005787
+    }
+  ]
+}
