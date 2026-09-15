@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
+import * as kbQuiz from '../features/kb_quiz';
 import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
@@ -4251,6 +4252,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           sessionId: opts.sessionId,
           // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
           // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（kb.summary/kb.mindmap 同款）。
+          ephemeralSession: true,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB quiz (知识库测验题)：与 kb.mindmap 同源（库内 ready 文档要点）+ 本地 LLM，
+  // **不依赖 kb.summary** —— AI 解析卡上的「生成测验」不再要求"先解析"。
+  // 支持 text 参数：基于对话回答文本出题；count 控制题量（1–20，默认 5）。
+  'kb.quiz': async ({ dir, spaceId, force, text, count }, ctx) => {
+    const res = await kbQuiz.kbQuiz(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      force: force === true,
+      text: typeof text === 'string' && text ? text : null,
+      count: Number.isFinite(Number(count)) ? Number(count) : undefined,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 单发无状态出题：不写/不复用持久会话（与 kb.summary/kb.mindmap 同款）
           ephemeralSession: true,
           skillList: [],
           disableTools: true,
