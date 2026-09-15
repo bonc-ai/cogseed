@@ -433,6 +433,66 @@ describe('kb file-viewer highlight pure helpers', () => {
   });
 });
 
+describe('查看器窗口：缩放与调整大小（真机反馈回归）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+  const css = src.slice(src.indexOf('function _injectFileViewerStyle'));
+
+  it('对话框自带定位上下文 —— 否则右下角手柄会跑到屏幕角落上', () => {
+    // 手柄是 position:absolute；对话框 position:static 时它相对 overlay(fixed) 定位，
+    // 实测手柄落在视口右下角、窗口自己那个角上什么都没有 → "能移动但不能调整大小"
+    const dialogRule = css.match(/\.kb-fv-dialog \{[\s\S]*?\n {6}\}/);
+    expect(dialogRule).toBeTruthy();
+    expect(dialogRule![0]).toContain('position: relative');
+    expect(css).toMatch(/\.kb-fv-resize \{[\s\S]{0,200}position: absolute/);
+  });
+
+  it('嵌入 iframe 的模式打开时给足高度（不再是 280px 的矮缝）', () => {
+    expect(css).toMatch(/\.kb-fv-dialog--frame \{ height: min\(86vh, 780px\); \}/);
+    // 进入/退出嵌入模式时两个 class 同步（少一个就会留下错误高度）
+    expect(src).toMatch(/function _fvEnterFrameMode\(overlay, body\) \{[\s\S]{0,300}kb-fv-body--frame[\s\S]{0,200}kb-fv-dialog--frame/);
+    expect(src).toMatch(/classList\.remove\('kb-fv-dialog--frame'\)/);
+  });
+
+  it('PDF 缩放靠真的重新加载（只改 hash 等于没缩放）', () => {
+    // 真机实测：只改 iframe.src 的 hash，PDFium 不重新排版（100%/120% 像素完全相同），
+    // 必须换成带新 zoom 的新 frame 才会重新加载
+    expect(src).toMatch(/function _fvApplyPdfZoom[\s\S]{0,700}cloneNode\(false\)[\s\S]{0,200}replaceWith\(frame\)/);
+    expect(src).toMatch(/cur\.lastZoom === pct/);
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.pdfSrcAt({ src: 'kb-file://kb/a.pdf', page: 3 }, 120))
+      .toBe('kb-file://kb/a.pdf#toolbar=1&navpanes=0&page=3&zoom=120');
+    expect(u.pdfSrcAt({ src: 'kb-file://space/s1/b.pdf', page: null }, 80))
+      .toBe('kb-file://space/s1/b.pdf#toolbar=1&navpanes=0&zoom=80');
+  });
+
+  it('拖手柄松手落在窗口外时，不会顺手把窗口关掉', () => {
+    // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
+    expect(src).toMatch(/pressedOnOverlay/);
+    expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+  });
+
+  it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
+    // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
+    // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
+    // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
+    expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
+    expect(src.match(/_fvEndDragShield\(fvOverlay\)/g)?.length).toBe(2);
+  });
+
+  it('恢复上次窗口位置时按已算好的宽高夹取（量 offset 在 display:none 下全是 0）', () => {
+    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\n {2}\}/);
+    expect(fn).toBeTruthy();
+    expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
+    expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
+    // 先显示再恢复：overlay 关着时量不到真实尺寸
+    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+  });
+});
+
 describe('文件查看：按类型分派（#214 回归防护）', () => {
   const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
 

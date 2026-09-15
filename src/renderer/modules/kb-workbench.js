@@ -1257,10 +1257,12 @@
     const scope = scopeName || (payload && payload.spaceId ? payload.spaceId : '');
     const hl = (opts && typeof opts === 'object') ? opts : null;
     let overlay = _ensureFileViewerOverlay();
-    // 打开时恢复上次的窗口尺寸/位置（无记忆则 flex 居中）
     const dialog = overlay.querySelector('.kb-fv-dialog');
-    if (dialog) _fvApplyWindowRect(dialog);
+    // 先显示再恢复上次的窗口尺寸/位置：overlay 关着时是 display:none，量出来的
+    // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
+    // 之后尤其明显），用户既看不全也抓不到右下角手柄。
     overlay.hidden = false;
+    if (dialog) _fvApplyWindowRect(dialog);
     _fvResetZoom(dialog);
     _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
     try {
@@ -1371,7 +1373,14 @@
 
     dialog.append(head, body, resizeHandle);
     overlay.appendChild(dialog);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
+    // 点遮罩空白处关闭——但必须"按在遮罩上也松在遮罩上"才算点击：
+    // 拖右下角手柄改大小时指针常常落到窗口外（=遮罩上），松手那次 click 的
+    // target 就成了遮罩，会把窗口直接关掉（实测：拖完手柄窗口消失）。
+    let pressedOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+    });
     document.body.appendChild(overlay);
     closeBtn.addEventListener('click', () => { overlay.hidden = true; });
     readerBtn.addEventListener('click', () => {
@@ -1414,6 +1423,29 @@
 
   // ── 预览窗交互：标题拖拽移动 / 右下角调整大小（尺寸与位置记忆） ──
   const _FV_RECT_KEY = 'cogseed.kb-file-viewer.rect';
+
+  /**
+   * 拖拽期间的"事件罩"：盖住整个 overlay 的透明层。
+   *
+   * 为什么必须有它：查看器里嵌的 PDF / HTML iframe 是**独立进程**，指针一旦划到
+   * 它上面，mousemove 就被送进那个进程，主窗口的监听收不到。实测过：从右下角往
+   * 右下拉能变大（指针落在窗口外的遮罩上），往左上拉完全没反应——也就是用户说的
+   * "能移动，但不能调整大小"。罩子把指针事件截在主窗口里，拖拽才跟手。
+   */
+  function _fvOverlayOf(el) {
+    return el?.closest?.('.kb-fv-overlay') || null;
+  }
+  function _fvBeginDragShield(overlay) {
+    if (!overlay || overlay.querySelector('.kb-fv-drag-shield')) return;
+    const shield = document.createElement('div');
+    shield.className = 'kb-fv-drag-shield';
+    overlay.appendChild(shield);
+  }
+  function _fvEndDragShield(overlay) {
+    if (!overlay) return;
+    overlay.querySelectorAll('.kb-fv-drag-shield').forEach((s) => s.remove());
+  }
+
   function _fvClampRect(dialog) {
     const vw = window.innerWidth; const vh = window.innerHeight;
     const w = Math.min(Math.max(dialog.offsetWidth, 420), vw - 24);
@@ -1437,18 +1469,19 @@
     try {
       const saved = JSON.parse(localStorage.getItem(_FV_RECT_KEY) || 'null');
       if (!saved || !(saved.w && saved.h)) return; // 无记忆 → flex 居中默认
+      const vw = window.innerWidth; const vh = window.innerHeight;
       dialog.style.position = 'absolute';
       dialog.style.margin = '0';
-      dialog.style.width = Math.min(Math.max(Number(saved.w), 420), window.innerWidth - 24) + 'px';
-      dialog.style.height = Math.min(Math.max(Number(saved.h), 280), window.innerHeight - 24) + 'px';
-      if (typeof saved.x === 'number' && typeof saved.y === 'number') {
-        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
-        dialog.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - w)) + 'px';
-        dialog.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - h)) + 'px';
-      } else {
-        dialog.style.left = Math.round((window.innerWidth - dialog.offsetWidth) / 2) + 'px';
-        dialog.style.top = Math.round((window.innerHeight - dialog.offsetHeight) / 2) + 'px';
-      }
+      const w = Math.min(Math.max(Number(saved.w), 420), vw - 24);
+      const h = Math.min(Math.max(Number(saved.h), 280), vh - 24);
+      dialog.style.width = w + 'px';
+      dialog.style.height = h + 'px';
+      // 用刚算好的 w/h 夹位置，而不是 offsetWidth：刚显示出来的那一帧量到的值
+      // 可能还没稳定，拿它夹会把窗口放到可视区外。
+      const x = typeof saved.x === 'number' ? saved.x : Math.round((vw - w) / 2);
+      const y = typeof saved.y === 'number' ? saved.y : Math.round((vh - h) / 2);
+      dialog.style.left = Math.max(0, Math.min(x, vw - w)) + 'px';
+      dialog.style.top = Math.max(0, Math.min(y, vh - h)) + 'px';
     } catch { /* localStorage 不可用：保持居中 */ }
   }
   function _fvSaveWindowRect() {
@@ -1472,6 +1505,8 @@
       if (e.target.closest('button,input,select,textarea')) return;
       e.preventDefault();
       _fvAbsolute(dialog);
+      const fvOverlay = _fvOverlayOf(dialog);
+      _fvBeginDragShield(fvOverlay);
       sx = e.clientX; sy = e.clientY;
       const r = dialog.getBoundingClientRect();
       ox = r.left; oy = r.top;
@@ -1483,6 +1518,7 @@
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
+        _fvEndDragShield(fvOverlay);
         _fvSaveWindowRect();
       };
       window.addEventListener('mousemove', onMove);
@@ -1497,6 +1533,8 @@
       e.preventDefault();
       e.stopPropagation();
       _fvAbsolute(dialog);
+      const fvOverlay = _fvOverlayOf(dialog);
+      _fvBeginDragShield(fvOverlay);
       sx = e.clientX; sy = e.clientY;
       sw = dialog.offsetWidth; sh = dialog.offsetHeight;
       document.body.classList.add('kb-fv-resizing');
@@ -1510,6 +1548,7 @@
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
         document.body.classList.remove('kb-fv-resizing');
+        _fvEndDragShield(fvOverlay);
         _fvSaveWindowRect();
       };
       window.addEventListener('mousemove', onMove);
@@ -1576,6 +1615,36 @@
     _fvZoom = Math.min(2.5, Math.max(0.6, Math.round((z || 1) * 10) / 10));
     _fvRenderZoom(dialog);
   }
+  /** PDF iframe 的目标 URL（zoom 是 hash 参数，PDFium 只在**真正加载**时读它）。 */
+  function _fvPdfSrcAt(cur, pct) {
+    const base = String(cur.src || '').split('#')[0];
+    const pagePart = cur.page ? `&page=${cur.page}` : '';
+    return `${base}#toolbar=1&navpanes=0${pagePart}&zoom=${pct}`;
+  }
+
+  /**
+   * 换一个新的 PDF iframe 来应用缩放。
+   *
+   * 为什么不直接改 `el.src`：zoom 写在 URL 的 hash 里，只改 hash 对 PDF 插件
+   * 属于"同文档导航"——Chromium 的 PDF 阅读器不会重新按 zoom 排版。真机实测：
+   * 标签从 100% 点到 144%、iframe src 也跟着变了，**画面像素一模一样**
+   * （截图逐像素比对：dark 32360 三个档位完全相同）。所以必须让它真的加载一次：
+   * 用同一个 URL（新的 zoom）替换掉这个 frame。
+   */
+  function _fvApplyPdfZoom(cur, pct) {
+    const old = cur.el;
+    if (!old) return;
+    if (!old.isConnected || typeof old.replaceWith !== 'function') {
+      old.src = _fvPdfSrcAt(cur, pct);
+      return;
+    }
+    const frame = old.cloneNode(false); // 复制 class/title 等属性，保持样式一致
+    frame.src = _fvPdfSrcAt(cur, pct);
+    old.replaceWith(frame);
+    cur.el = frame;
+    _fvCur = cur;
+  }
+
   function _fvRenderZoom(dialog) {
     const label = dialog.querySelector('.kb-fv-zoom-label');
     if (label) label.textContent = Math.round(_fvZoom * 100) + '%';
@@ -1585,13 +1654,11 @@
       // office blob iframe 已开 allow-same-origin：直接缩放其内部文档
       cur.el.contentDocument.documentElement.style.zoom = String(_fvZoom);
     } else if (cur.mode === 'pdf' && cur.el) {
-      // PDFium 无外部 zoom API：仅缩放值变化时重载 iframe src 带 zoom 参数
+      // PDFium 无外部 zoom API：缩放值变化时用新 zoom 重新加载 frame
       const pct = Math.round(_fvZoom * 100);
       if (cur.lastZoom === pct) return;
       cur.lastZoom = pct;
-      const base = String(cur.src || '').split('#')[0];
-      const pagePart = cur.page ? `&page=${cur.page}` : '';
-      cur.el.src = `${base}#toolbar=1&navpanes=0${pagePart}&zoom=${pct}`;
+      _fvApplyPdfZoom(cur, pct);
     } else if (cur.el) {
       cur.el.style.zoom = String(_fvZoom);
     }
@@ -1728,6 +1795,16 @@
     return false;
   }
 
+  /**
+   * 进入"嵌入 iframe"模式（pdf/office/html/图片/音视频）：正文区与对话框同时标记。
+   * 对话框那份给的是默认高度——iframe 撑不起固有高度，只靠 min-height 的话窗口
+   * 一开只有 280px 高（真机反馈：一打开就想拉大它）。
+   */
+  function _fvEnterFrameMode(overlay, body) {
+    body.classList.add('kb-fv-body--frame');
+    overlay.querySelector('.kb-fv-dialog')?.classList.add('kb-fv-dialog--frame');
+  }
+
   function _setFileViewerState(overlay, st, hl) {
     const loading = overlay.querySelector('#kb-fv-loading');
     const errorEl = overlay.querySelector('#kb-fv-error');
@@ -1736,7 +1813,9 @@
     const body = overlay.querySelector('.kb-fv-body');
     // 清理上一个文件的嵌入 iframe（pdf / office html），释放 blob URL
     body.querySelectorAll('.kb-fv-frame').forEach((f) => f.remove());
+    // 退出嵌入模式：正文区与对话框两个 class 一起清（--frame 负责给足高度）
     body.classList.remove('kb-fv-body--frame');
+    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--frame');
     if (_fvOfficeBlobUrl) {
       try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
       _fvOfficeBlobUrl = null;
@@ -1803,7 +1882,7 @@
       frame.src = `${src}#toolbar=1&navpanes=0${pagePart}`;
       frame.title = String(c.name || rel);
       body.appendChild(frame);
-      body.classList.add('kb-fv-body--frame');
+      _fvEnterFrameMode(overlay, body);
       _fvCur = { mode: 'pdf', el: frame, src, page: (hl && hl.page) || null, lastZoom: 100 };
     } else if (c.kind === 'html' || c.kind === 'image' || c.kind === 'media') {
       // 渲染型文件：直接用 kb-file:// 取字节，保留各自的原生排版/控件。
@@ -1821,7 +1900,7 @@
         img.alt = String(c.name || rel);
         img.style.maxWidth = `${_fvZoom * 100}%`;
         body.appendChild(img);
-        body.classList.add('kb-fv-body--frame');
+        _fvEnterFrameMode(overlay, body);
         _fvCur = { mode: 'image', el: img };
       } else if (c.kind === 'media') {
         const node = document.createElement(c.audio ? 'audio' : 'video');
@@ -1829,7 +1908,7 @@
         node.controls = true;
         node.src = base;
         body.appendChild(node);
-        body.classList.add('kb-fv-body--frame');
+        _fvEnterFrameMode(overlay, body);
         _fvCur = { mode: 'media', el: node };
       } else {
         // HTML：默认渲染页面（原排版 / 自带样式 / 相对路径 css+图片都能加载，
@@ -1844,7 +1923,7 @@
         frame.src = base;
         frame.title = String(c.name || rel);
         body.appendChild(frame);
-        body.classList.add('kb-fv-body--frame');
+        _fvEnterFrameMode(overlay, body);
         _fvCur = { mode: 'html', el: frame, src: base, rel, spaceId: sid };
         _fvHtmlCtx = _fvCur;
       }
@@ -1859,7 +1938,7 @@
       frame.src = _fvOfficeBlobUrl;
       frame.title = String(c.name || c.path || '');
       body.appendChild(frame);
-      body.classList.add('kb-fv-body--frame');
+      _fvEnterFrameMode(overlay, body);
       _fvCur = { mode: 'office', el: frame, src: _fvOfficeBlobUrl };
       // iframe 就绪后：应用缩放 + 尽力高亮引用段落（失败可见）
       frame.addEventListener('load', () => {
@@ -1900,8 +1979,16 @@
         display: flex; flex-direction: column; overflow: hidden;
         box-shadow: 0 16px 48px rgba(0,0,0,.28); outline: none;
         min-width: 420px; min-height: 280px;
+        /* 必须有自己的定位上下文：右下角缩放手柄是 absolute，缺了它手柄会挂到
+           overlay（fixed）上 → 跑到屏幕角落，而窗口自己的那个角上什么都没有
+           （真机反馈「能移动但不能调整大小」）。 */
+        position: relative;
       }
       .kb-fv-dialog--reader { width: min(1160px, 98vw); max-height: 94vh; }
+      /* 嵌入 iframe 的模式（pdf/office/html/图片/音视频）：高度给足，否则 iframe
+         只能吃 min-height，窗口一开就是一条矮缝，用户第一件事就是想拉大它。
+         用户拖过大小后 inline height 会覆盖这里（inline 优先级更高）。 */
+      .kb-fv-dialog--frame { height: min(86vh, 780px); }
       .kb-fv-head {
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
         padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,.22);
@@ -1932,6 +2019,9 @@
         border-bottom: 2px solid rgba(128,128,128,.55);
       }
       .kb-fv-resize:hover::after { border-color: #0E9F6E; }
+      /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
+         （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
       body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
       .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
       .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
@@ -6011,6 +6101,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     normSpace: _fvNormSpace,
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
+    pdfSrcAt: _fvPdfSrcAt,
   };
 
   // 排版类文件的富查看器桥。调用方是常驻加载的 `anchored-source-view`：它拿到
