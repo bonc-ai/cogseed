@@ -129,6 +129,7 @@
       busy: false,
       status: '',
       statusTone: '',
+      queryRewrite: false,
       exportText: '',
       exportIncludePeople: false,
       importText: '',
@@ -277,6 +278,13 @@
           label: t('kb.glossary.owner_note', '词表 owner 备注'),
           role: 'ghost', size: 'sm', disabled: state.busy,
           attrs: { 'data-glo-action': 'owner-note' },
+        }),
+        button({
+          label: state.queryRewrite
+            ? t('kb.glossary.qrw_on', '检索改写：开')
+            : t('kb.glossary.qrw_off', '检索改写：关'),
+          role: state.queryRewrite ? 'primary' : 'ghost', size: 'sm', disabled: state.busy,
+          attrs: { 'data-glo-action': 'toggle-qrw' },
         }),
         button({
           label: t('kb.glossary.seed_initial', '补全初始词表（方案附 A）'),
@@ -497,6 +505,7 @@
         state.meta = result?.meta && typeof result.meta === 'object'
           ? result.meta
           : { ownerNote: '', lastReconcileAt: 0 };
+        state.queryRewrite = state.meta.queryRewrite === true;
         const ids = new Set(state.entries.map((e) => e.id));
         state.selected = new Set([...state.selected].filter((id) => ids.has(id)));
       } catch (error) {
@@ -690,6 +699,26 @@
      * 装入方案附 A 的初始词表（幂等）。方案明写"默认不入册"的词（`for → Forge`）
      * 不在种子里，返回里会说明被排除的是哪些，避免用户以为装漏了。
      */
+    /** 检索前 query 同义改写开关（方案 §五 P2-3）：默认关，改检索行为要用户点头。 */
+    async function toggleQueryRewrite() {
+      if (state.busy) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.queryRewrite.set', { enabled: !state.queryRewrite });
+        state.queryRewrite = result?.enabled === true;
+        setStatus(state.queryRewrite
+          ? t('kb.glossary.qrw_enabled', '已开启：检索前会把词表里的错形改写成正确写法（高危词不改）。')
+          : t('kb.glossary.qrw_disabled', '已关闭检索改写。'), '');
+      } catch (error) {
+        log?.warn('query rewrite toggle failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.qrw_failed', '切换失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
     async function seedInitial() {
       if (state.busy) return;
       state.busy = true;
@@ -762,6 +791,8 @@
         void setStatusBulk('paused');
       } else if (kind === 'resume-selected') {
         void setStatusBulk('active');
+      } else if (kind === 'toggle-qrw') {
+        void toggleQueryRewrite();
       } else if (kind === 'seed-initial') {
         void seedInitial();
       } else if (kind === 'owner-note') {

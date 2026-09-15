@@ -26,6 +26,10 @@ import * as transcriptOntology from '../features/transcript_ontology_bridge';
 import * as transcriptFillers from '../features/transcript_filler_rules';
 import * as transcriptMerge from '../features/transcript_speaker_merge';
 import * as transcriptSeed from '../features/transcript_glossary_seed';
+import * as transcriptLlm from '../features/transcript_llm_candidates';
+import * as transcriptHeadings from '../features/transcript_headings';
+import * as transcriptQuery from '../features/transcript_query_rewrite';
+import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
   userId: string;
@@ -198,6 +202,41 @@ export const invokeHandlers = {
     return { ...result, excluded: transcriptSeed.SEED_EXCLUDED.map((row) => row.wrong) };
   },
 
+  /** 检索前 query 同义改写开关（方案 §五 P2-3，默认关）。 */
+  'transcript.queryRewrite.set': async (payload: Payload, ctx: IpcContext) => ({
+    enabled: transcriptGlossary.setQueryRewrite(ctx.userId, payload?.enabled === true),
+  }),
+
+  'transcript.queryRewrite.status': async (_payload: Payload, ctx: IpcContext) => ({
+    enabled: transcriptGlossary.isQueryRewriteEnabled(ctx.userId),
+  }),
+
+  /**
+   * 检索命中对比（方案 §五 P2-4 / §8.1-9 Richard 原话要求）：
+   * 同一份知识库里"搜错形"与"搜正确写法"各命中多少，如实并列（自测口径，不宣称因果）。
+   */
+  'transcript.query.compare': async (payload: Payload, ctx: IpcContext) => {
+    const query = requireText(payload?.query, 'query', 500);
+    const k = typeof payload?.k === 'number' ? Math.max(1, Math.min(50, Math.floor(payload.k))) : 10;
+    const rewrite = transcriptQuery.rewriteQuery(ctx.userId, query, { enabled: true });
+    const [before, after] = await Promise.all([
+      cogseedKbManager.search(ctx.userId, query, { k }),
+      rewrite.changed
+        ? cogseedKbManager.search(ctx.userId, rewrite.rewritten, { k })
+        : Promise.resolve(null),
+    ]);
+    // cogseedKbManager.search 返回的就是命中数组（VecSearchHit[]），这里只数条数
+    const countOf = (result: unknown): number => (Array.isArray(result) ? result.length : 0);
+    return {
+      query,
+      rewritten: rewrite.rewritten,
+      applied: rewrite.applied,
+      beforeHits: countOf(before),
+      afterHits: countOf(after),
+      compareAvailable: rewrite.changed,
+    };
+  },
+
   'transcript.glossary.setOwnerNote': async (payload: Payload, ctx: IpcContext) => ({
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),
   }),
@@ -335,6 +374,54 @@ export const invokeHandlers = {
   },
 
   /**
+   * 主题标题候选（方案 §五 P2-2）：只提议，不改正文；用户点「采用」后
+   * 才在 apply 时作为结构编辑插入 `## 标题`。
+   */
+  'transcript.headings.suggest': async (payload: Payload, ctx: IpcContext) => {
+    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
+    return transcriptHeadings.suggestHeadings(ctx.userId, text, {
+      sessionKey: optionalId(payload?.docId, 'docId'),
+    });
+  },
+
+  /**
+   * 受约束 LLM 候选（方案 §五 P2-1）：只问"疑似专名"，只认白名单目标，
+   * 低置信只进待确认。**不自动替换**——替换照旧走 apply 的护栏与风险分级。
+   */
+  'transcript.correct.llmCandidates': async (payload: Payload, ctx: IpcContext) => {
+    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
+    const entries = transcriptGlossary.listEntries(ctx.userId, { status: 'active' });
+    const known = new Set<string>();
+    for (const entry of entries) {
+      known.add(entry.wrong);
+      known.add(entry.correct);
+    }
+    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
+    for (const name of canonical) known.add(name.name);
+    const suspects = transcriptAutoCorrect.detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_SUSPECTS);
+    // 白名单 = 词表正确写法 + 记忆分组字段值（**不含**投影里的结构标签）
+    const allowed = [
+      ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
+      ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
+    ].filter((value) => !!value && value.length <= 60);
+    const result = await transcriptLlm.generateCandidates(
+      ctx.userId,
+      suspects.map((suspect) => ({
+        text: suspect.text,
+        context: text.slice(Math.max(0, suspect.span.start - 30), Math.min(text.length, suspect.span.end + 30)).replace(/\n/g, ' '),
+        start: suspect.span.start,
+      })),
+      allowed,
+      { sessionKey: optionalId(payload?.docId, 'docId') },
+    );
+    return {
+      ...result,
+      suspects: suspects.map((suspect) => ({ text: suspect.text, span: suspect.span })),
+      allowedCount: allowed.length,
+    };
+  },
+
+  /**
    * 替换入口。注意三件事：
    *   1. `acceptedIds` 缺省时只接受 low/medium 风险候选；high 一律进 pending。
    *   2. **不写回任何文档**：产出清理版 + run 快照，调用方决定落地位置。
@@ -372,9 +459,33 @@ export const invokeHandlers = {
         structure: true,
       }))
       : [];
-    const allCandidates = [...scan.candidates, ...mergeCandidates];
-    const acceptedAll = mergeCandidates.length
-      ? [...(acceptedIds ?? []), ...mergeCandidates.map((c) => c.entryRef)]
+    // 主题标题（方案 §五 P2-2）：只在用户显式采用后才插入，且是结构编辑
+    const headingInputs = Array.isArray(payload?.headings) ? payload.headings.slice(0, 50) : [];
+    const headingCandidates: transcriptAutoCorrect.CorrectionCandidate[] = headingInputs
+      .map((raw, index) => {
+        const item = raw as Partial<{ start: number; title: string }>;
+        const start = typeof item?.start === 'number' ? Math.max(0, Math.min(Math.floor(item.start), text.length)) : -1;
+        const title = typeof item?.title === 'string' ? item.title.trim().slice(0, 60) : '';
+        if (start < 0 || !title) return null;
+        return {
+          entryRef: `heading_${index}`,
+          wrong: '',
+          correct: `## ${title}\n`,
+          action: 'replace' as const,
+          confidence: 1,
+          riskLevel: 'low' as const,
+          context: '',
+          span: { start, end: start },
+          ignoredCount: 0,
+          contextAllow: [],
+          structure: true,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+    const allCandidates = [...scan.candidates, ...mergeCandidates, ...headingCandidates];
+    const syntheticRefs = [...mergeCandidates, ...headingCandidates].map((c) => c.entryRef);
+    const acceptedAll = syntheticRefs.length
+      ? [...(acceptedIds ?? []), ...syntheticRefs]
       : acceptedIds;
     const applied0 = transcriptAutoCorrect.applyCorrections(text, allCandidates, {
       ...(acceptedAll ? { acceptedIds: acceptedAll } : {}),

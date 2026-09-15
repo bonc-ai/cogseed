@@ -379,8 +379,16 @@
       flagged: [],
       truncated: false,
       notesText: '',
+      compareBusy: false,
+      llmCandidates: [],
+      llmBusy: false,
+      llmNote: '',
+      headings: [],
+      headingBusy: false,
       // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
       scopeChoice: 'keep',
+      // 同人段落合并（方案 §五 P1-2）：默认开——它是"清理版"能不能真正好用的关键
+      mergeSpeaker: true,
       rowMenu: '',
       allowOpen: '',
       allowDraft: '',
@@ -852,6 +860,27 @@
           disabled: state.busy || !(ctx.scenarioTags || []).length,
           attrs: { 'data-atc-action': 'scope', 'data-atc-scope': 'task' },
         }),
+        button({
+          label: state.headingBusy
+            ? t('kb.transcriptCorrect.headings_running', '正在拟标题…')
+            : t('kb.transcriptCorrect.headings_ask', '拟主题标题'),
+          icon: 'book-open',
+          role: 'ghost',
+          size: 'sm',
+          loading: state.headingBusy,
+          disabled: state.busy || state.headingBusy,
+          attrs: { 'data-atc-action': 'suggest-headings' },
+        }),
+        button({
+          label: state.mergeSpeaker
+            ? t('kb.transcriptCorrect.merge_on', '合并同人发言')
+            : t('kb.transcriptCorrect.merge_off', '不合并发言'),
+          icon: state.mergeSpeaker ? 'check-circle' : 'x-circle',
+          role: state.mergeSpeaker ? 'primary' : 'ghost',
+          size: 'sm',
+          disabled: state.busy,
+          attrs: { 'data-atc-action': 'toggle-merge' },
+        }),
       ].join('');
     }
 
@@ -892,6 +921,17 @@
           role: 'secondary',
           size: 'sm',
           attrs: { 'data-atc-action': 'save' },
+        }));
+        buttons.push(button({
+          label: state.compareBusy
+            ? t('kb.transcriptCorrect.compare_running', '正在检索…')
+            : t('kb.transcriptCorrect.compare', '检索对比'),
+          icon: 'search',
+          role: 'ghost',
+          size: 'sm',
+          loading: state.compareBusy,
+          disabled: state.compareBusy,
+          attrs: { 'data-atc-action': 'compare-search' },
         }));
         buttons.push(button({
           label: t('kb.transcriptCorrect.notes', '清理附记'),
@@ -963,6 +1003,17 @@
         disabled: state.suspectBusy || !state.scanned,
         attrs: { 'data-atc-action': 'find-suspects' },
       })];
+      buttons.push(button({
+        label: state.llmBusy
+          ? t('kb.transcriptCorrect.llm_running', '正在问模型…')
+          : t('kb.transcriptCorrect.llm_ask', '让模型给候选（受约束）'),
+        icon: 'brain-circuit',
+        role: 'ghost',
+        size: 'sm',
+        loading: state.llmBusy,
+        disabled: state.llmBusy || !state.scanned,
+        attrs: { 'data-atc-action': 'llm-candidates' },
+      }));
       if (state.flagged.length) {
         buttons.push(button({
           label: t('kb.transcriptCorrect.issue_clear', '清空待核'),
@@ -984,6 +1035,48 @@
         const note = document.createElement('div');
         note.className = 'kb-atc__sync-note';
         note.textContent = t('kb.transcriptCorrect.issue_suspects_found', '找到 {count} 处疑似专名（词表与记忆分组里都没有）：', { count: state.suspects.length });
+        body.appendChild(note);
+      }
+
+      for (const candidate of state.llmCandidates.slice(0, 20)) {
+        const row = document.createElement('div');
+        row.className = 'kb-atc__sync-row';
+        const main = document.createElement('div');
+        main.className = 'kb-atc__sync-row-main';
+        const label = document.createElement('span');
+        label.className = 'kb-atc__sync-row-label';
+        label.textContent = t('kb.transcriptCorrect.llm_row', '{wrong} → {correct}（置信 {percent}%{pending}）', {
+          wrong: candidate.wrong,
+          correct: candidate.correct,
+          percent: Math.round((Number(candidate.confidence) || 0) * 100),
+          pending: candidate.pending ? t('kb.transcriptCorrect.llm_pending', '，待确认') : '',
+        });
+        main.appendChild(label);
+        if (candidate.reason) {
+          const why = document.createElement('div');
+          why.className = 'kb-atc__sync-note';
+          why.textContent = candidate.reason;
+          main.appendChild(why);
+        }
+        const acts = document.createElement('div');
+        acts.className = 'kb-atc__sync-row-actions';
+        acts.innerHTML = button({
+          label: t('kb.transcriptCorrect.llm_adopt', '采纳为词条'),
+          role: 'ghost',
+          size: 'sm',
+          disabled: state.busy || state.llmBusy,
+          attrs: {
+            'data-atc-llm-adopt': candidate.wrong,
+            'data-atc-llm-correct': candidate.correct,
+          },
+        });
+        row.append(main, acts);
+        body.appendChild(row);
+      }
+      if (state.llmNote) {
+        const note = document.createElement('div');
+        note.className = 'kb-atc__sync-note';
+        note.textContent = state.llmNote;
         body.appendChild(note);
       }
 
@@ -1336,6 +1429,8 @@
         state.flagged = [];
         state.suspects = [];
         state.suspectError = '';
+        state.llmCandidates = [];
+        state.llmNote = '';
         const stats = summarizeRows(state.rows, state.accepted);
         state.truncated = Boolean(result?.stats?.truncated);
         setStatus(stats.total === 0
@@ -1366,6 +1461,7 @@
           docId: ctx.docId,
           includeDelete: true,
           mergeSpeaker: state.mergeSpeaker,
+          ...(state.headings.length ? { headings: state.headings } : {}),
           // 附记要能说清"这份清理版是从哪份转写来的"
           ...(ctx.displayPath ? { sourcePath: ctx.displayPath } : {}),
           acceptedIds: [...state.accepted],
@@ -1720,6 +1816,185 @@
     }
 
     /**
+     * 检索命中对比（方案 §五 P2-4 / §8.1-9，Richard 原话要求）：
+     * 同一份库里"搜错形"和"搜正确写法"各命中多少，如实并列。
+     * 这是**自测口径**，不宣称因果（库里本来有没有清理版会影响数字）。
+     */
+    async function runCompareSearch() {
+      if (state.compareBusy) return;
+      const suggestion = state.apply?.applied?.[0]?.wrong
+        || state.rows.find((row) => row.riskLevel === 'low')?.wrong
+        || '';
+      let query = null;
+      if (typeof root.uiPrompt === 'function') {
+        query = await root.uiPrompt(t('kb.transcriptCorrect.compare_prompt', '要对比的检索词（用转写里的错形）'), suggestion);
+      } else if (typeof root.prompt === 'function') {
+        query = root.prompt(t('kb.transcriptCorrect.compare_prompt', '要对比的检索词（用转写里的错形）'), suggestion);
+      }
+      const text = String(query || '').trim();
+      if (!text) return;
+      state.compareBusy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.query.compare', { query: text, k: 10 });
+        if (!result?.compareAvailable) {
+          setStatus(t('kb.transcriptCorrect.compare_no_rewrite', '「{query}」没有可改写的词表命中，无法对比。', { query: text }), '');
+          return;
+        }
+        const applied = (result.applied || []).map((item) => `${item.wrong} → ${item.correct}`).join('；');
+        setStatus(t('kb.transcriptCorrect.compare_result', '命中对比：搜「{before}」{beforeHits} 篇 / 搜「{after}」{afterHits} 篇（{applied}）', {
+          before: result.query,
+          beforeHits: Number(result.beforeHits || 0),
+          after: result.rewritten,
+          afterHits: Number(result.afterHits || 0),
+          applied,
+        }), '');
+      } catch (error) {
+        log?.warn('compare search failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.compare_failed', '检索对比失败，请稍后重试。'), 'warning');
+      } finally {
+        state.compareBusy = false;
+        render();
+      }
+    }
+
+    /**
+     * 主题标题候选（方案 §五 P2-2）：**只提议**。用户在弹层里逐条"采用"，
+     * 采用的标题进入 state.headings，生成清理版时作为结构编辑插入（不改正文语义）。
+     */
+    async function runSuggestHeadings() {
+      if (state.headingBusy) return;
+      state.headingBusy = true;
+      render();
+      let result = null;
+      try {
+        result = await root.cogseed.invoke('transcript.headings.suggest', { text: ctx.text, docId: ctx.docId });
+      } catch (error) {
+        log?.warn('heading suggest failed', { error: error?.message || String(error) });
+      } finally {
+        state.headingBusy = false;
+        render();
+      }
+      const headings = Array.isArray(result?.headings) ? result.headings : [];
+      const skipped = String(result?.skipped || '');
+      if (!headings.length) {
+        setStatus(skipped === 'no_model'
+          ? t('kb.transcriptCorrect.headings_no_model', '还没有配置模型，无法拟标题。')
+          : skipped === 'too_short'
+            ? t('kb.transcriptCorrect.headings_too_short', '这份稿太短，不值得分主题。')
+            : t('kb.transcriptCorrect.headings_none', '没有拟出合适的标题（宁缺勿滥）。'), '');
+        return;
+      }
+      if (typeof root.uiModal !== 'function') return;
+      const modal = root.uiModal({
+        title: t('kb.transcriptCorrect.headings_title', '主题标题候选'),
+        size: 'lg',
+        closeLabel: t('kb.transcriptCorrect.close', '关闭'),
+        description: t('kb.transcriptCorrect.headings_desc', '只生成标题、不改正文；逐条确认，采用的会在生成清理版时插入。'),
+        bodyHtml: '<div class="kb-atc__headings" data-atc-headings></div>',
+      });
+      const host = modal?.dialog?.querySelector('[data-atc-headings]');
+      if (host) {
+        for (const item of headings) {
+          const row = document.createElement('div');
+          row.className = 'kb-atc__sync-row';
+          const main = document.createElement('div');
+          main.className = 'kb-atc__sync-row-main';
+          const label = document.createElement('span');
+          label.className = 'kb-atc__sync-row-label';
+          label.textContent = item.title;
+          main.appendChild(label);
+          const acts = document.createElement('div');
+          acts.className = 'kb-atc__sync-row-actions';
+          const adopted = state.headings.some((h) => h.start === item.start);
+          acts.innerHTML = button({
+            label: adopted
+              ? t('kb.transcriptCorrect.headings_adopted', '已采用')
+              : t('kb.transcriptCorrect.headings_adopt', '采用'),
+            role: adopted ? 'primary' : 'secondary',
+            size: 'sm',
+            attrs: { 'data-atc-heading-adopt': String(item.start), 'data-atc-heading-title': item.title },
+          });
+          row.append(main, acts);
+          host.appendChild(row);
+        }
+      }
+      await modal.result;
+      render();
+    }
+
+    /** 采用/取消一条标题（纯状态操作，真正插入发生在 apply）。 */
+    function toggleHeading(start, title) {
+      const index = state.headings.findIndex((item) => item.start === start);
+      if (index >= 0) state.headings.splice(index, 1);
+      else state.headings.push({ start, title });
+      setStatus(t('kb.transcriptCorrect.headings_count', '已采用 {count} 个标题（生成清理版时插入）', {
+        count: state.headings.length,
+      }), '');
+      render();
+    }
+
+    /**
+     * 受约束 LLM 候选（方案 §五 P2-1）：只对"疑似专名"问一次模型，
+     * 目标必须落在词表白名单里；低置信只提示不采纳。
+     * 采纳 = 用户显式点「采纳为词条」，之后重新扫描，替换仍受护栏管。
+     */
+    async function runLlmCandidates() {
+      if (state.llmBusy || !state.scanned) return;
+      state.llmBusy = true;
+      state.llmNote = '';
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.correct.llmCandidates', {
+          text: ctx.text,
+          docId: ctx.docId,
+        });
+        state.llmCandidates = Array.isArray(result?.candidates) ? result.candidates : [];
+        const rejected = Array.isArray(result?.rejected) ? result.rejected.length : 0;
+        const skipped = String(result?.skipped || '');
+        state.llmNote = state.llmCandidates.length
+          ? t('kb.transcriptCorrect.llm_found', '模型给出 {count} 条候选（白名单 {allowed} 个目标{rejected}）', {
+            count: state.llmCandidates.length,
+            allowed: Number(result?.allowedCount || 0),
+            rejected: rejected
+              ? t('kb.transcriptCorrect.llm_rejected', '，挡掉白名单外的 {count} 条', { count: rejected })
+              : '',
+          })
+          : (skipped === 'no_model'
+            ? t('kb.transcriptCorrect.llm_no_model', '还没有配置模型，无法生成候选。')
+            : skipped === 'no_allowed'
+              ? t('kb.transcriptCorrect.llm_no_allowed', '词表与记忆分组里没有可用目标，先补几条正确写法再试。')
+              : skipped === 'no_suspects'
+                ? t('kb.transcriptCorrect.llm_no_suspects', '没有发现疑似专名，不需要问模型。')
+                : t('kb.transcriptCorrect.llm_none', '模型没有给出可信候选（宁可空着，也不硬猜）。'));
+      } catch (error) {
+        log?.warn('llm candidates failed', { error: error?.message || String(error) });
+        state.llmNote = t('kb.transcriptCorrect.llm_failed', '生成候选失败，请稍后重试。');
+      } finally {
+        state.llmBusy = false;
+        render();
+      }
+    }
+
+    /** 采纳一条模型候选：写成词条（错形来自转写，正确写法来自白名单）。 */
+    async function adoptLlmCandidate(wrong, correct) {
+      if (state.busy) return;
+      try {
+        await root.cogseed.invoke('transcript.glossary.upsert', {
+          wrong, correct, kind: 'people', source: 'manual',
+        });
+        state.llmCandidates = state.llmCandidates.filter((item) => item.wrong !== wrong);
+        setStatus(t('kb.transcriptCorrect.llm_adopted', '已采纳为词条：{wrong} → {correct}', { wrong, correct }), '');
+        await runScan();
+      } catch (error) {
+        log?.warn('adopt llm candidate failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.llm_adopt_failed', '采纳失败，请稍后重试。'), 'warning');
+      } finally {
+        render();
+      }
+    }
+
+    /**
      * 装入口癖规则包（方案 §五 P1-1）：词条化 + 走既有链路。
      * 规则包本身是保守的：白名单词只在句首/独立出现时删，`就是/然后/对`
      * 只在重复或纯应答时删——面板必须把这件事说清楚。
@@ -2002,6 +2277,20 @@
         toggleRowFlag(flag.getAttribute('data-atc-flag'));
         return;
       }
+      const headingAdopt = event.target.closest('[data-atc-heading-adopt]');
+      if (headingAdopt) {
+        const start = Number(headingAdopt.getAttribute('data-atc-heading-adopt'));
+        toggleHeading(start, headingAdopt.getAttribute('data-atc-heading-title'));
+        headingAdopt.textContent = state.headings.some((h) => h.start === start)
+          ? t('kb.transcriptCorrect.headings_adopted', '已采用')
+          : t('kb.transcriptCorrect.headings_adopt', '采用');
+        return;
+      }
+      const llmAdopt = event.target.closest('[data-atc-llm-adopt]');
+      if (llmAdopt) {
+        void adoptLlmCandidate(llmAdopt.getAttribute('data-atc-llm-adopt'), llmAdopt.getAttribute('data-atc-llm-correct'));
+        return;
+      }
       const flagSuspectBtn = event.target.closest('[data-atc-flag-suspect]');
       if (flagSuspectBtn) {
         const text = flagSuspectBtn.getAttribute('data-atc-flag-suspect');
@@ -2050,6 +2339,10 @@
         return;
       }
       if (kind === 'find-suspects') { void runDetectSuspects(); return; }
+      if (kind === 'llm-candidates') { void runLlmCandidates(); return; }
+      if (kind === 'suggest-headings') { void runSuggestHeadings(); return; }
+      if (kind === 'compare-search') { void runCompareSearch(); return; }
+      if (kind === 'toggle-merge') { state.mergeSpeaker = !state.mergeSpeaker; render(); return; }
       if (kind === 'clear-issues') { state.flagged = []; render(); return; }
       if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }
       if (kind === 'scan') void runScan();

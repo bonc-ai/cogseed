@@ -98,7 +98,12 @@ export interface GlossaryFile {
   version: 2;
   uid: string;
   entries: GlossaryEntry[];
-  meta: { lastReconcileAt: number; ownerNote: string };
+  meta: {
+    lastReconcileAt: number;
+    ownerNote: string;
+    /** 检索前 query 同义改写开关（方案 §五 P2-3，默认关：用户要能预期检索行为）。 */
+    queryRewrite?: boolean;
+  };
 }
 
 export interface UpsertEntryInput {
@@ -339,6 +344,7 @@ export function loadGlossary(userId: string): GlossaryFile {
     meta: {
       lastReconcileAt: typeof file2.meta?.lastReconcileAt === 'number' ? file2.meta.lastReconcileAt : 0,
       ownerNote: typeof file2.meta?.ownerNote === 'string' ? file2.meta.ownerNote : '',
+      ...(file2.meta?.queryRewrite === true ? { queryRewrite: true } : {}),
     },
   };
 }
@@ -554,6 +560,22 @@ export function addContextAllow(userId: string, ids: string[], term: string): nu
   }
   if (updated > 0) saveGlossary(userId, file);
   return updated;
+}
+
+/**
+ * 检索前 query 同义改写开关（方案 §五 P2-3）。
+ * 默认关：改检索词会改变用户看到的结果，必须由用户显式打开。
+ */
+export function setQueryRewrite(userId: string, enabled: boolean): boolean {
+  const file = loadGlossary(userId);
+  file.meta = { ...file.meta, queryRewrite: enabled === true };
+  saveGlossary(userId, file);
+  return enabled === true;
+}
+
+/** 读取开关状态（缺省 false）。 */
+export function isQueryRewriteEnabled(userId: string): boolean {
+  return loadGlossary(userId).meta.queryRewrite === true;
 }
 
 /**

@@ -367,6 +367,12 @@ describe('locale 覆盖', () => {
     'merge_on', 'merge_off', 'merged_blocks',
     'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
     'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
+    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_adopt', 'llm_found', 'llm_rejected',
+    'llm_no_model', 'llm_no_allowed', 'llm_no_suspects', 'llm_none', 'llm_failed',
+    'llm_adopted', 'llm_adopt_failed',
+    'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
+    'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
+    'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
   ];
 
   for (const lang of locales) {
