@@ -1391,11 +1391,6 @@ if (!gotLock) {
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
     const stopTaskAutoArchive = startTaskAutoArchiveOrchestrator();
     app.once('before-quit', stopTaskAutoArchive);
-    app.once('before-quit', () => {
-      void stopP3394Bridge().catch(() => {});
-      // 受管 P3394 外接网关：应用退出时一并停止（桥下线后它们已无回发目标）。
-      void import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()).catch(() => {});
-    });
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1455,6 +1450,12 @@ if (!gotLock) {
     // runtime controller when COGSEED_P3394_PORT is set; no-op otherwise.
     registerImmediate('p3394:bridge', () => {
       void maybeStartP3394Bridge().then((handle) => { p3394AppBridge = handle; });
+    }, 'serial');
+    // 模型窗口/输出的用户本地覆盖：把存储层解析器装进模型层（runner 只问
+    // "这个 (provider, model) 被覆盖了吗"，不自己读用户数据）。
+    registerImmediate('model-overrides:resolver', async () => {
+      const { installModelOverrideResolver } = await import('./features/model_overrides');
+      installModelOverrideResolver();
     }, 'serial');
     registerImmediate('skills:version-recovery', async () => {
       const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
@@ -1537,6 +1538,15 @@ if (!gotLock) {
       const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
       await migrateLegacyUserFacingTitles(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // A 轨道（2026-09-13 scope 枚举化）：存量自由文本 scope（"用户全局画像"）
+    // 归一为受控词表——否则自动投影永远 scope_mismatch，确认资产在正式通道
+    // 失效。幂等；迁移会同步刷新仍存活 committed 投影的版本快照（2026-09-14
+    // 补——此前"跳过被引用资产"的说法与实现相反，committed 校验器的版本
+    // 强校验会让注入整体失败）。
+    registerDeferred('recall:migrate-legacy-scopes', async () => {
+      const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
+      await migrateLegacyFreeTextScopes(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {
@@ -1600,16 +1610,27 @@ if (!gotLock) {
 
   // Flush pending search-index writes + close KB vector DBs before exit.
   let shutdownFlushed = false;
+  let shutdownPromise: Promise<void> | null = null;
   app.on('before-quit', async (e) => {
     if (shutdownFlushed) return;
     e.preventDefault();
-    try { await searchFeature.flushAll(); }
-    catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
-    try {
-      const kb = await import('./features/kb_vector');
-      kb.closeAllKb();
-    } catch (err) { createLogger('kb_vector').warn('close failed', { error: (err as Error).message }); }
-    shutdownFlushed = true;
-    app.quit();
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = Promise.resolve().then(async () => {
+      try { await searchFeature.flushAll(); }
+      catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
+      try {
+        const kb = await import('./features/kb_vector');
+        kb.closeAllKb();
+      } catch (err) { createLogger('kb_vector').warn('close failed', { error: (err as Error).message }); }
+      // Keep Electron alive until the bridge and every managed external gateway
+      // process tree have completed their graceful shutdown.
+      await Promise.allSettled([
+        stopP3394Bridge(),
+        import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()),
+      ]);
+      shutdownFlushed = true;
+      app.quit();
+    });
+    await shutdownPromise;
   });
 }

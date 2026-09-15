@@ -56,7 +56,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   'search.js': 3,
   'settings-security.js': 0,
   'settings.js': 2,
-  'skills.js': 32,
+  'skills.js': 2,
   'terminal-panel.js': 3,
   'text-view-edit.js': 3,
   'touchpoint-settings.js': 5,

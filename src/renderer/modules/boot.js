@@ -467,7 +467,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'run-center' ? 'panel-run-center'
                 : view === 'agents' || view === 'contexts' ? 'panel-connections'
                 : view === 'skills' ? 'panel-connections'
-                : view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
@@ -483,7 +482,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
   document.getElementById('kb-btn')?.classList.toggle('active', view === 'kb');
   document.getElementById('run-center-btn')?.classList.toggle('active', view === 'run-center');
-  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
@@ -594,21 +593,11 @@ function setView(view, cid, opts = {}) {
     currentCid = null;
     _deferSidebarNavWork('recall-tab-refresh', () => {
       _loadViewFeature('recall', 'recall', () => {
-        if (typeof initSkillsCognitionConsole === 'function') initSkillsCognitionConsole();
-        // 深链 setView('personal-ontology') 在 setView 顶部被归一化为 recall；
-        // 「关于我」已不是独立 tab，而是「我的资产」里的 personal 分类：切到
-        // 该页并选中该分类，个人本体就在页内展开。
-        if (openPersonalOntology && typeof switchSkillsCognitionPage === 'function') {
-          if (typeof _skillsCognitionState !== 'undefined' && _skillsCognitionState) {
-            _skillsCognitionState.assetCategoryFilter = 'personal';
-            // 个人本体通过「查看关于我」入口单独进入（ontology subview）。
-            _skillsCognitionState.assetSubview = 'ontology';
-          }
-          switchSkillsCognitionPage('assets');
-        }
-        if (typeof loadSkillsCognitionSnapshot === 'function') {
-          Promise.resolve(loadSkillsCognitionSnapshot())
-            .catch((e) => _bootLog.warn('Recall refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+        // 认知资产面板由 cognition-assets/app.js 自举（面板激活即拉数据）；
+        // 深链 setView('personal-ontology') 在 setView 顶部被归一化为 recall，
+        // 本体工作台内嵌在面板下方，由 cognition-assets 模块接管展开。
+        if (openPersonalOntology && window.CogAssets && typeof window.CogAssets.openPersonalOntology === 'function') {
+          void window.CogAssets.openPersonalOntology();
         }
       });
     });

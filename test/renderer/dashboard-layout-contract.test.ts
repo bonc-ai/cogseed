@@ -15,6 +15,7 @@ const runCenterModel = read('src/renderer/modules/run-center-model.js');
 const board = read('src/renderer/modules/run-center-board.js');
 const detail = read('src/renderer/modules/run-center-detail.js');
 const agents = read('src/renderer/modules/run-center-agents.js');
+const sidebarTools = read('src/renderer/modules/ui-sidebar-tools.js');
 const css = read('src/renderer/style.css');
 const zh = JSON.parse(read('src/renderer/locales/zh.json'));
 const en = JSON.parse(read('src/renderer/locales/en.json'));
@@ -22,7 +23,8 @@ const en = JSON.parse(read('src/renderer/locales/en.json'));
 describe('unified Agent Operations Center layout contract', () => {
   it('moves the primary entry to the top toolbar while retaining a hidden compatibility target', () => {
     expect(html).toMatch(/id="run-center-btn"[^>]*hidden[^>]*aria-hidden="true"/);
-    expect(html).toContain('id="run-center-global-entry"');
+    expect(html).toContain('id="app-shell-tools"');
+    expect(sidebarTools).toContain('id="run-center-global-entry"');
     expect(html).not.toMatch(/<button[^>]*id="run-center-global-btn"/);
     expect(globalRunCenter).toContain("className: 'run-center-global-btn'");
     expect(globalRunCenter).toContain("id: 'run-center-global-btn'");

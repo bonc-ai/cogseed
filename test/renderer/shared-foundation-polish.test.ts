@@ -17,6 +17,7 @@ describe('open-source shared foundation polish', () => {
   const sharedCss = read('src/renderer/ui-components.css');
   const rendererCss = read('src/renderer/style.css');
   const index = read('src/renderer/index.html');
+  const cognitionAssetsView = read('src/renderer/modules/cognition-assets/views.js');
 
   it('keeps PageHeader, Tabs, EmptyState, ResourceCard, and SettingsSection in shared CSS', () => {
     for (const selector of [
@@ -58,12 +59,13 @@ describe('open-source shared foundation polish', () => {
   it('marks real page tabs and settings groups without changing their routing hooks', () => {
     expect(index).toContain('class="connections-tabs ui-tabs"');
     expect(index).toContain('class="connections-tab ui-tab is-active"');
-    expect(index).toContain('class="skills-cognition-tab ui-tab is-active"');
+    expect(index).toContain('id="ca-root"');
+    expect(cognitionAssetsView).toContain('class="ca-tab${active ? \' is-on\' : \'\'}"');
+    expect(cognitionAssetsView).toContain('data-act="tab" data-id="${tab.id}"');
     expect(index).toContain('class="settings-group ui-settings-section"');
     for (const hook of [
       'data-connections-tab="agents"',
       'data-connections-tab="mcp"',
-      'data-cognition-page="assets"',
       'data-settings-tab="data"',
     ]) {
       expect(index).toContain(hook);

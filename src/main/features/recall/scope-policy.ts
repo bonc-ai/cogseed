@@ -1,5 +1,41 @@
 import { safeId } from '../../storage';
 
+// ── 受控 scope 词表（A 轨道 · 2026-09-13 枚举化）─────────────────────────
+//
+// 自由文本 scope（"用户全局画像"、"该用户的身份与沟通定位…"）在自动投影里
+// 永远匹配不上任务词（context-projection.ts:347 注释早预言：purpose='review'
+// 等任务词下这类资产被 scope_mismatch 剔除）——用户确认过的资产在正式通道
+// 全部失效，只剩画像旁路在起作用（实机 09-12：proj-a3ae7e6a3646
+// assetIds=[]、两条身份资产 omittedRefs=scope_mismatch）。
+//
+// 词表与 KStar 线（extraction-service.scopeForTask）的五个任务类型词对齐，
+// 另有 'space:<id>'（空间限定）与 '*'（显式通配）两个结构形态。词表是
+// **目标不是闸门**：产生线经 normalizeAssetScopeValue 尽力归一，归不了的
+// 保留原值（软着陆——匹配层的 token 软匹配本就兜底，硬拒会拦存量与
+// LLM 产出）。
+export const RECALL_SCOPE_TERMS = ['general', 'report', 'code', 'review', 'product'] as const;
+export type RecallScopeTerm = (typeof RECALL_SCOPE_TERMS)[number];
+
+export function isRecallScopeTerm(value: string): boolean {
+  return (RECALL_SCOPE_TERMS as readonly string[]).includes(String(value || '').trim().toLowerCase());
+}
+
+/** 明确的全局语义（中英文措辞）→ 'general'。中招即归一。 */
+const GLOBAL_SCOPE_HINTS = [
+  '全局', '通用', '画像', '所有对话', '所有会话', '跨会话', '不限空间',
+  '任何任务', 'global', 'general', 'personal', 'user',
+];
+
+/** 自由文本 scope → 词表值（软归一）。
+ *  返回 null = 无法安全归一，调用方保留原值。幂等：词表值原样返回。 */
+export function normalizeAssetScopeValue(raw: string): RecallScopeTerm | null {
+  const text = String(raw || '').trim().toLowerCase();
+  if (!text) return null;
+  if (isRecallScopeTerm(text)) return text as RecallScopeTerm;
+  if (GLOBAL_SCOPE_HINTS.some((hint) => text.includes(hint))) return 'general';
+  return null;
+}
+
 /** 资产的作用域白名单。每个字段三态：缺失=没有限制，`[]`=一个都不允许，
  *  非空=只允许列出的这些。消费方不得把缺失和空数组当成同一件事。 */
 export interface RecallAbilityAssetScopePolicy {

@@ -7756,11 +7756,22 @@ async function _loadOlderConversationHistory(cid, before) {
         .map(_groupMsgToLegacy)
         .sort((a, b) => _msTs(a && a.time) - _msTs(b && b.time));
       const fragment = document.createDocumentFragment();
-      messages.forEach((msg) => appendChatMessage(msg, false, {
-        cid,
-        container: fragment,
-        historyHydration: true,
-      }));
+      // 与 loadConversationHistory 主路径同款隔离：单条坏消息只丢自己。
+      messages.forEach((msg) => {
+        try {
+          appendChatMessage(msg, false, {
+            cid,
+            container: fragment,
+            historyHydration: true,
+          });
+        } catch (err) {
+          _convLog.warn('older history message render failed, skipping', {
+            cid,
+            msg_id: msg && msg._msg_id,
+            error: err && err.message,
+          });
+        }
+      });
       // Keep the auto-load sentinel as the first child. Every successively
       // older page lands immediately after it and before the already-mounted
       // transcript, preserving chronological order across repeated loads.
@@ -8230,22 +8241,46 @@ async function loadConversationHistory(cid, opts = {}) {
       // tree scans. Live messages and recovery paths still use the guarded
       // incremental insertion path below.
       const historyFragment = document.createDocumentFragment();
-      history.forEach((msg) => appendChatMessage(msg, false, {
-        cid,
-        // Only stamp authoritative source indexes returned by an anchored
-        // history read. A normal latest-page row has no global index; using
-        // its local 0..9 offset would let a later search falsely match it.
-        msgIndex: Number.isSafeInteger(msg?._history_index) ? msg._history_index : undefined,
-        container: historyFragment,
-        historyHydration: true,
-      }));
+      // 单条消息渲染失败只丢该条并记日志——一条坏消息不能把整个会话
+      // 炸成"加载失败"（2026-09-11 codex 会话 usage 缺失事故的教训）。
+      let renderFailures = 0;
+      history.forEach((msg) => {
+        try {
+          appendChatMessage(msg, false, {
+            cid,
+            // Only stamp authoritative source indexes returned by an anchored
+            // history read. A normal latest-page row has no global index; using
+            // its local 0..9 offset would let a later search falsely match it.
+            msgIndex: Number.isSafeInteger(msg?._history_index) ? msg._history_index : undefined,
+            container: historyFragment,
+            historyHydration: true,
+          });
+        } catch (err) {
+          renderFailures += 1;
+          _convLog.warn('history message render failed, skipping', {
+            cid,
+            msg_id: msg && msg._msg_id,
+            error: err && err.message,
+          });
+        }
+      });
+      if (renderFailures > 0) {
+        _convLog.warn('history render skipped broken messages', { cid, count: renderFailures });
+      }
       container.appendChild(historyFragment);
     }
     // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
     // appendChatMessage 里的刷新查不到已挂载消息，插入完成后统一刷一次
-    // 会话统计行（Task 8）。
-    _refreshSessionStats();
-    _mountCollaborationStatusCard(container, convMeta.collaboration || null);
+    // 会话统计行（Task 8）。统计/协作卡属聚合侧功能：失败降级隐藏，不拖垮历史加载。
+    try {
+      _refreshSessionStats();
+      _mountCollaborationStatusCard(container, convMeta.collaboration || null);
+    } catch (err) {
+      _convLog.warn('session stats/collaboration card refresh failed, hiding', {
+        cid,
+        error: err && err.message,
+      });
+    }
     _setLoadEarlierHistory(container, cid, data.next_cursor);
     const searchTargetRevealed = opts.searchTarget
       ? _revealConversationHistorySearchTarget(cid, opts.searchTarget)
@@ -8508,8 +8543,13 @@ async function _recoverPolledVisibleMessages(cid, rawMessages) {
     // runtime settles, normal history reconciliation either removes the row as
     // superseded by the final message or renders it when it was genuine.
     if (_shouldDeferInterruptedHistoryRecord(cid, gm)) continue;
-    const legacy = _groupMsgToLegacy(gm);
-    const bubble = appendChatMessage(legacy, true, { cid, archive: true });
+    let bubble = null;
+    try {
+      const legacy = _groupMsgToLegacy(gm);
+      bubble = appendChatMessage(legacy, true, { cid, archive: true });
+    } catch (err) {
+      _convLog.warn('interruption replay render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+    }
     if (bubble) bubble.dataset.fromActor = String(gm.from || '');
     changed = true;
   }
@@ -8549,7 +8589,13 @@ function _claimPersistedUserMessage(cid, gm) {
 function _renderOrClaimPersistedUserMessage(cid, gm, opts = {}) {
   if (!cid || cid !== currentCid || !gm || gm.from !== 'user') return false;
   if (_claimPersistedUserMessage(cid, gm)) return true;
-  const bubble = appendChatMessage(_groupMsgToLegacy(gm), opts.autoScroll !== false, { cid, archive: true });
+  let bubble = null;
+  try {
+    bubble = appendChatMessage(_groupMsgToLegacy(gm), opts.autoScroll !== false, { cid, archive: true });
+  } catch (err) {
+    _convLog.warn('persisted user message render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+    return false;
+  }
   if (!bubble) return false;
   bubble.dataset.fromActor = 'user';
   if (gm.id) bubble.dataset.msgId = String(gm.id);
@@ -9158,7 +9204,8 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
-  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
+  // 上下文段独立加框突出（2026-09-11 需求）：总窗口 + 占用量一眼可辨。
+  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot, cls: 'ctx' });
   segs.push({
     k: t('chat.stats.tokK'),
     v: f.cacheReadText
@@ -9170,7 +9217,7 @@ function _refreshSessionStats() {
   box.hidden = false;
   segs.forEach((s) => {
     const seg = document.createElement('span');
-    seg.className = s.hot ? 'seg seg-hot' : 'seg';
+    seg.className = ['seg', s.hot ? 'seg-hot' : '', s.cls ? `seg-${s.cls}` : ''].filter(Boolean).join(' ');
     if (s.k) {
       const k = document.createElement('span');
       k.className = 'k';
@@ -10443,19 +10490,14 @@ async function _resolveMarketplaceInstallRequest(card, req, cid, msgId, decision
 function _renderPersistedProcess(msgDiv, items, { expanded = false } = {}) {
   const bubble = msgDiv.querySelector('.chat-bubble');
   if (!bubble) return;
-  const details = document.createElement('details');
+  // 2026-09-11 需求变更：过程轨迹不再用 details 折叠卡容器包裹，改普通
+  // div 平铺纯文本行（与流式路径同形态）。expanded 参数保留签名兼容但
+  // 平铺恒显，无折叠语义。
+  void expanded;
+  const details = document.createElement('div');
   details.className = 'stream-process';
-  if (expanded) details.open = true;
-  details.innerHTML = `
-    <summary class="stream-process-summary">
-      <span class="stream-process-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'ui-icon stream-process-caret-icon')}</span>
-      <span class="stream-process-label">${escapeHtml(t('chat.process_info'))}</span>
-      <span class="stream-process-runtime" hidden></span>
-    </summary>
-    <div class="stream-process-body"></div>
-  `;
+  details.innerHTML = '<div class="stream-process-body"></div>';
   const body = details.querySelector('.stream-process-body');
-  _setProcessSummaryRuntime(details, _processSummaryRuntimeFromItems(items));
   for (const item of items) {
     let text = '';
     const itemEvent = item && item.type === 'event'
@@ -13780,14 +13822,9 @@ function _createStreamingAssistantMessage(container, opts = {}) {
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
     </div>
     <div class="chat-bubble">
-      <details class="stream-process" data-role="process-container" style="display:none">
-        <summary class="stream-process-summary">
-          <span class="stream-process-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'ui-icon stream-process-caret-icon')}</span>
-          <span class="stream-process-label">${escapeHtml(t('chat.process_info'))}</span>
-          <span class="stream-process-runtime" hidden></span>
-        </summary>
+      <div class="stream-process" data-role="process-container" style="display:none">
         <div class="stream-process-body" data-role="process"></div>
-      </details>
+      </div>
       <div class="stream-activity" data-role="activity" style="display:none">
         <span class="stream-activity-pulse" aria-hidden="true"></span>
         <span class="stream-activity-text" data-role="activity-text"></span>
@@ -14342,31 +14379,16 @@ function _streamingSetFinal(msg, text, { archive = false } = {}) {
   // line (e.g. the model answered in one shot with no reasoning / tool
   // calls), keep the initial display:none so we don't render an empty
   // "process info" bubble.
-  // **Exception**: when the final body is just an empty/abort stub
-  // (i.e. the "(stopped)" placeholder for a turn that never produced
-  // real text), the process trail IS the user-visible output — keep
-  // it expanded; otherwise the user perceives it as "the process I
-  // just watched stream is gone after finalize", which gets worse on
-  // refresh.
+  // 2026-09-11 需求变更：过程轨迹已平铺（无折叠卡），finalize 只按"有无
+  // 过程行"控制显隐——空回合（中断桩）与正常回合同形态恒显，无展开态可谈。
   const details = msg.querySelector('.stream-process');
   if (details) {
     const body = details.querySelector('.stream-process-body');
     const hasProcess = !!body && body.children.length > 0;
-    const bodyText = String(display || '').trim();
-    // Match both possible forms — jsonl history can carry either depending
-    // on the UI language at the time of write (i18n key `model.aborted` →
-    // '(stopped)' in en, '（已中断）' in zh).
-    const isAbortStub = bodyText === '（已中断）' || bodyText === '(stopped)' || bodyText === '';
-    if (hasProcess && isAbortStub) {
-      details.open = true;
+    if (hasProcess) {
       details.style.display = '';
-    } else if (hasProcess) {
-      details.removeAttribute('open');
-      details.style.display = '';
-    } else {
-      details.removeAttribute('open');
-      // else: keep display:none (the initial value set by _createStreamingAssistantMessage).
     }
+    // else: keep display:none (the initial value set by _createStreamingAssistantMessage).
   }
 }
 
@@ -14495,6 +14517,10 @@ function _finishStreamingMsg(cid) {
   // failures are safe here: the backend task is cancelled/terminal by then,
   // so the re-check finds nothing to re-establish.
   _scheduleBackendRunRediscovery(cid);
+  // 状态自愈兜底（2026-09-14 Bug3 修复）：turn 结束信号与 UI 状态机竞态
+  // 可能残留 busy 标记 → 队列永远停在"待发送"。延迟 1.2s 再跑一次保险丝
+  // （_healStaleGroupBusy 自带活跃控制器守卫，幂等）。
+  setTimeout(() => _healStaleGroupBusy(cid), 1200);
 }
 
 // One-shot re-check that re-establishes the running placeholder for a
@@ -14909,7 +14935,22 @@ function createChatController(config) {
         historyEl.innerHTML = `<div class="empty">${escapeHtml(t('chat.empty'))}</div>`;
       } else {
         historyEl.innerHTML = '';
-        history.forEach((msg, idx) => _appendHistoryMessage(msg, false, id, idx));
+        // 单条坏消息只丢自己（与 loadConversationHistory 主路径同款隔离），
+        // 不能让一条异常记录把整个历史区炸成"加载失败"。
+        let renderFailures = 0;
+        history.forEach((msg, idx) => {
+          try {
+            _appendHistoryMessage(msg, false, id, idx);
+          } catch (err) {
+            renderFailures += 1;
+            _convLog.warn('scene history message render failed, skipping', {
+              cid: id,
+              msg_id: msg && msg._msg_id,
+              error: err && err.message,
+            });
+          }
+        });
+        if (renderFailures > 0) _convLog.warn('scene history render skipped broken messages', { cid: id, count: renderFailures });
       }
       _scrollToBottomNoAnim(historyEl);
       if (features.queue) renderQueue();
@@ -15898,8 +15939,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       if (ph && ph.parentElement) {
         _finalizeActorPlaceholder(ph, gm, cid, archive);
       } else {
-        const legacy = _groupMsgToLegacy(gm);
-        const bubble = appendChatMessage(legacy, true, { cid, archive });
+        let bubble = null;
+        try {
+          const legacy = _groupMsgToLegacy(gm);
+          bubble = appendChatMessage(legacy, true, { cid, archive });
+        } catch (err) {
+          _convLog.warn('live fallback render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+        }
         if (bubble) bubble.dataset.fromActor = String(gm.from || '');
         // Cache-refresh parity with `_mountCreatedAgentChip`: the placeholder
         // path goes through it (which calls loadAgents/loadSkills(true)),
@@ -15929,8 +15975,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —
       // append a new bubble alongside, leave the streaming placeholder alive
       // for the rest of the actor's turn.
-      const legacy = _groupMsgToLegacy(gm);
-      const bubble = appendChatMessage(legacy, true, { cid, archive });
+      let bubble = null;
+      try {
+        const legacy = _groupMsgToLegacy(gm);
+        bubble = appendChatMessage(legacy, true, { cid, archive });
+      } catch (err) {
+        _convLog.warn('mid-turn side-effect render failed, skipping', { cid, msg_id: gm && gm._msg_id, error: err && err.message });
+      }
       if (bubble) bubble.dataset.fromActor = String(gm.from || '');
     }
     // (Removed pre-seed-recipient-placeholder logic.) Earlier I pre-created

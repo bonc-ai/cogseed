@@ -20,6 +20,7 @@ describe('resource page composition integration', () => {
   it('keeps navigation optional and preserves existing page hooks', () => {
     const html = read('index.html');
     const automation = html.slice(html.indexOf('id="panel-auto"'), html.indexOf('id="panel-run-center"'));
+    const cognitionAssetsView = read('modules/cognition-assets/views.js');
     const workspace = read('modules/workspace.js');
     const workspaceCenter = workspace.slice(
       workspace.indexOf('<div class="ws-center-header">'),
@@ -29,7 +30,8 @@ describe('resource page composition integration', () => {
     expect(automation).not.toContain('role="tablist"');
     expect(workspaceCenter).not.toContain('role="tablist"');
     expect(workspaceCenter).not.toContain('ws-space-tabs');
-    expect(html).toContain('data-cognition-page="governance"');
+    expect(cognitionAssetsView).toContain('data-act="tab" data-id="${tab.id}"');
+    expect(cognitionAssetsView).toContain("route.name === 'manage'");
     expect(html).toContain('data-connections-tab="touchpoints"');
     expect(workspace).toContain('ws-space-tabs');
   });

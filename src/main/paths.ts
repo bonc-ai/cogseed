@@ -137,6 +137,17 @@ export const cogseedAgentCoordinationsDir = (uid: string) => path.join(cogseedAg
 export const cogseedAgentReviewDecisionsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'review-decisions');
 export const cogseedAgentCostTelemetryDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'cost-telemetry');
 export const cogseedAgentSkillLifecycleDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'skill-lifecycle');
+// ── 转写纠错词表 / 清理产物（transcript glossary & correction runs）──────
+// 词表 = 用户可复核的私人资产 → cloud 域（账号体系落地后可同步）。
+// 清理产物（before/after/diff/offset-map）= 机器私有派生物 → local 域，
+// 与 archives / spills 同类。
+// 目录刻意**不使用点前缀**：KB reconcile 会把磁盘上不存在的索引行删掉，
+// 且其 walk 跳过点前缀目录——放隐藏目录等于"写入可检索、重启即消失"。
+export const userTranscriptGlossaryDir  = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'transcript');
+export const userTranscriptGlossaryFile = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'transcript-glossary.json');
+export const userTranscriptRunsDir      = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'runs');
+export const userTranscriptRunDir       = (uid: string, runId: string) => path.join(userTranscriptRunsDir(uid), runId);
+
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
 export const userAgentChatDir       = (uid: string, aid: string) => path.join(userChatsDir(uid), 'agent', aid);
@@ -496,6 +507,10 @@ export const userComponentEnabledFile = (uid: string) => path.join(userCloudConf
 // user's account-level safety posture, unlike granted-roots which contain
 // machine-specific absolute paths and stay local-only.
 export const userPermissionsFile = (uid: string) => path.join(userCloudConfigDir(uid), 'permissions.json');
+// Per-user local overrides for built-in provider presets (model window / max
+// output). Synced like the other cloud config: a window cap is a property of
+// the user's account, not of this machine. Schema in features/model_overrides.ts.
+export const userModelOverridesFile = (uid: string) => path.join(userCloudConfigDir(uid), 'model-overrides.json');
 
 // Packaged builtin resources. Source files ship with the app under
 // `resources/builtin/` (extraResources in packaged builds); startup/login

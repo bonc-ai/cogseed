@@ -31,6 +31,12 @@
 .cognition-task-metric:first-child { border-left: 0; }
 .cognition-task-metric strong { color: var(--text-heading); font-size: var(--font-size-heading); font-weight: var(--font-weight-medium); font-variant-numeric: tabular-nums; line-height: 1.2; }
 .cognition-task-metric span { color: var(--text-muted); font-size: var(--font-size-1); white-space: nowrap; }
+.cognition-task-empty { max-width: var(--layout-card-grid-width); min-height: 180px; margin: 0 auto; border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+/* 空态里“标题 / 说明 / 步骤 / 入口”各占一行，保持信息层次。 */
+.cognition-task-empty > strong { display: block; margin: 0 0 6px; color: var(--text-heading); font-size: var(--font-size-ui); }
+.cognition-task-empty > span { display: block; max-width: 720px; margin: 0 auto 10px; line-height: 1.7; }
+.cognition-task-empty > .skills-cognition-meta { color: var(--text-muted); font-size: var(--font-size-1); }
+.cognition-task-empty > button, .cognition-task-empty > .btn { margin-top: 4px; }
 .recall-proof-list { display: grid; max-width: var(--layout-card-grid-width); margin: 0 auto; gap: var(--space-4); }
 .recall-proof-asset { padding: 0; overflow: hidden; border-radius: var(--radius-card); }
 .recall-proof-asset > .skills-cognition-card-head { align-items: center; padding: 15px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }

@@ -97,9 +97,12 @@ html, body {
 .ed-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 
 .ed-para { margin: 0 0 10px; color: var(--ed-text); }
-.ed-kv { display: flex; gap: 12px; padding: 6px 0; font-size: 13px; border-top: 1px dashed var(--ed-line); }
+/* 2026-09-14 修复 v2（对齐 Ant Design Form/Descriptions 惯例）：
+   标签列固定等宽 92px、值列统一从同一 x 起对齐；超长未知 key 在标签列内
+   换行（labelWrap 语义），绝不溢出叠到值上。 */
+.ed-kv { display: grid; grid-template-columns: 92px 1fr; column-gap: 12px; padding: 6px 0; font-size: 13px; border-top: 1px dashed var(--ed-line); align-items: baseline; }
 .ed-kv:first-of-type { border-top: 0; }
-.ed-kv-label { flex-shrink: 0; width: 76px; color: var(--ed-text-3); }
+.ed-kv-label { color: var(--ed-text-3); white-space: normal; overflow-wrap: anywhere; word-break: break-all; }
 .ed-kv > span:last-child { white-space: pre-wrap; word-break: break-word; min-width: 0; }
 
 .ed-bar { display: flex; align-items: center; margin-bottom: 12px; }

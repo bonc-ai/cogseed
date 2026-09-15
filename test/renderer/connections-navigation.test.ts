@@ -34,6 +34,7 @@ class FakeElement {
   focused = false;
   scrolled = false;
   attributes = new Map<string, string>();
+  listeners = new Map<string, Array<() => void>>();
 
   constructor(
     public dataset: Record<string, string>,
@@ -59,33 +60,71 @@ class FakeElement {
   scrollIntoView() {
     this.scrolled = true;
   }
+
+  addEventListener(type: string, handler: () => void) {
+    const list = this.listeners.get(type) || [];
+    list.push(handler);
+    this.listeners.set(type, list);
+  }
+
+  click() {
+    for (const handler of this.listeners.get('click') || []) handler();
+  }
 }
 
 function loadConnectionsModule() {
   const tabs = [
     new FakeElement({ connectionsTab: 'agents' }, ['connections-tab']),
     new FakeElement({ connectionsTab: 'mcp' }, ['connections-tab', 'is-active']),
+    new FakeElement({ connectionsTab: 'touchpoints' }, ['connections-tab']),
+    new FakeElement({ connectionsTab: 'models' }, ['connections-tab']),
   ];
   const panes = [
     new FakeElement({ connectionsPane: 'agents' }, ['connections-tab-pane'], true),
     new FakeElement({ connectionsPane: 'mcp' }, ['connections-tab-pane']),
+    new FakeElement({ connectionsPane: 'touchpoints' }, ['connections-tab-pane'], true),
+    new FakeElement({ connectionsPane: 'models' }, ['connections-tab-pane'], true),
+  ];
+  const cards = [
+    new FakeElement({ connectionsSubentry: 'models' }),
   ];
   const setView = vi.fn();
   const loadAgents = vi.fn();
+  const loadRendererFeature = vi.fn(async () => undefined);
+  const initTouchpointSettings = vi.fn();
   const document = {
-    getElementById() { return null; },
+    getElementById() {
+      return null;
+    },
+    querySelector(selector: string) {
+      if (selector === '.connections-tab.is-active') {
+        return tabs.find((tab) => tab.classList.contains('is-active')) || null;
+      }
+      return null;
+    },
     querySelectorAll(selector: string) {
       if (selector === '.connections-tab') return tabs;
       if (selector === '.connections-tab-pane') return panes;
+      if (selector === '[data-connections-subentry]') return cards;
       return [];
     },
   };
-  const context: any = { document, loadAgents, Promise, setView, window: {} };
+  const context: any = {
+    document,
+    initTouchpointSettings,
+    loadAgents,
+    loadRendererFeature,
+    Promise,
+    setView,
+    window: { addEventListener: vi.fn() },
+  };
   context.window.window = context.window;
+  context.window.loadRendererFeature = loadRendererFeature;
+  context.window.initTouchpointSettings = initTouchpointSettings;
   vm.createContext(context);
   const source = fs.readFileSync(path.join(root, 'src/renderer/modules/connections.js'), 'utf8');
   vm.runInContext(source, context, { filename: 'connections.js' });
-  return { context, loadAgents, panes, setView, tabs, window: context.window };
+  return { cards, context, initTouchpointSettings, loadAgents, loadRendererFeature, panes, setView, tabs, window: context.window };
 }
 
 describe('connections navigation', () => {
@@ -156,15 +195,28 @@ describe('connections navigation', () => {
     expect(loadAgents).toHaveBeenCalledWith(false);
   });
 
-  it('keeps IM inside the capability page instead of redirecting to Settings', () => {
-    const { panes, setView, tabs, window } = loadConnectionsModule();
-    tabs.push(new FakeElement({ connectionsTab: 'touchpoints' }, ['connections-tab']));
-    panes.push(new FakeElement({ connectionsPane: 'touchpoints' }, ['connections-tab-pane'], true));
+  it('keeps the Touchpoints tab inside Connections and loads its settings bundle', async () => {
+    const { initTouchpointSettings, loadRendererFeature, panes, setView, tabs, window } = loadConnectionsModule();
 
     window.activateConnectionsTab('touchpoints');
+    await Promise.resolve();
 
     expect(setView).not.toHaveBeenCalled();
     expect(tabs[2].classList.contains('is-active')).toBe(true);
     expect(panes[2].hidden).toBe(false);
+    expect(loadRendererFeature).toHaveBeenCalledWith('settings');
+    expect(initTouchpointSettings).toHaveBeenCalled();
+  });
+
+  it('routes Models & Quota to Settings configuration without adding a duplicate Connections tab', () => {
+    const { cards, setView, window } = loadConnectionsModule();
+
+    window.initConnections();
+    cards[0].click();
+
+    expect(setView).toHaveBeenCalledWith('settings', undefined, {
+      settingsTab: 'configuration',
+      settingsAnchor: 'models',
+    });
   });
 });

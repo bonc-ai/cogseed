@@ -153,8 +153,8 @@ describe('first-version renderer components', () => {
     expect(html).not.toContain('>四<');
   });
 
-  it('renders Input, Textarea, and the unified AiSelect host from one field contract', () => {
-    const { uiField, uiSelect, hydrateUiFormSelects, uiDateRangePicker } = loadFactories();
+  it('renders Input, Checkbox, Textarea, and the unified AiSelect host from one field contract', () => {
+    const { uiCheckbox, uiField, uiSelect, hydrateUiFormSelects, uiDateRangePicker } = loadFactories();
 
     const input = uiField({
       id: 'task-name',
@@ -170,6 +170,18 @@ describe('first-version renderer components', () => {
     expect(loadFactories().uiInput({ id: 'search', className: 'asset-search' })).toContain('ui-input asset-search');
     expect(loadFactories().uiInput({ id: 'title', attrs: { title: '双击修改标题' } }))
       .toContain('title="双击修改标题"');
+
+    const checkbox = uiCheckbox({
+      id: 'capability-search',
+      name: 'capability',
+      value: '<search>',
+      checked: true,
+      disabled: true,
+    });
+    expect(checkbox).toContain('class="ui-control ui-checkbox"');
+    expect(checkbox).toContain('id="capability-search" type="checkbox"');
+    expect(checkbox).toContain('name="capability" value="&lt;search&gt;"');
+    expect(checkbox).toContain(' checked disabled');
 
     const textarea = uiField({ id: 'task-content', label: '任务内容', control: { kind: 'textarea' } });
     expect(textarea).toContain('ui-textarea');
@@ -211,6 +223,45 @@ describe('first-version renderer components', () => {
     expect(range).toContain('id="report-range-end"');
     expect(range).toContain('aria-label="报告日期范围"');
     expect(range).toContain('aria-invalid="true"');
+  });
+
+  it('lets a field drop the per-field requirement marker without losing required semantics', () => {
+    const { uiField } = loadFactories();
+
+    // 默认：每个字段都标"必填/选填"。
+    expect(uiField({ id: 'plain', label: '普通字段', control: { kind: 'input' } })).toContain('ui-field__requirement');
+    expect(uiField({ id: 'plain', label: '普通字段', control: { kind: 'input' } })).toContain('>选填<');
+
+    // showRequirement: false：标记整块不渲染，但 required 仍落到控件与可访问性上
+    // （整卡都必填时逐条标注是噪音——自定义供应商详情卡就是这种场景）。
+    const quiet = uiField({
+      id: 'quiet',
+      label: '名称',
+      required: true,
+      showRequirement: false,
+      control: { kind: 'input' },
+    });
+    expect(quiet).not.toContain('ui-field__requirement');
+    expect(quiet).not.toContain('必填');
+    expect(quiet).not.toContain('选填');
+    // 输入框的 required 落在控件属性上；select 走 AiSelect 宿主，required 落在
+    // 触发器的 aria-required 上——两条路径都要保住语义。
+    expect(quiet).toContain(' required');
+    const quietSelect = uiField({
+      id: 'quiet-select',
+      label: '格式',
+      required: true,
+      showRequirement: false,
+      control: { kind: 'select', options: [{ value: 'a', label: 'A' }] },
+    });
+    expect(quietSelect).not.toContain('ui-field__requirement');
+    // select 的 required 进 AiSelect 配置（挂载时才会变成触发器的 aria-required）。
+    expect(quietSelect).toContain('&quot;required&quot;:true');
+
+    // 不声明 required 时同样只是"不标注"，不会反向把字段变成必填。
+    const quietOptional = uiField({ id: 'quiet2', label: '备注', showRequirement: false, control: { kind: 'input' } });
+    expect(quietOptional).not.toContain('ui-field__requirement');
+    expect(quietOptional).not.toContain('aria-required');
   });
 
   it('makes field errors and composed form structure observable', () => {

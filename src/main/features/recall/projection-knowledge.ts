@@ -95,6 +95,21 @@ async function loadOntologyFacts(
     .map(({ fact }) => fact);
 }
 
+/** 画像条目标题：≤80 字原样；超长在句读边界截断加省略号，不再半句断头
+ *  （T1.4：原 slice(0,80) 会把标题切成"……技术口径处理，而不是按终端用户提"
+ *  这种断头话，注入块/检索结果里的人读体验都受影响）。 */
+function ontologyTitle(statement: string): string {
+  if (statement.length <= 80) return statement;
+  const head = statement.slice(0, 80);
+  let cut = -1;
+  for (const mark of ['。', '；', '，', '、', '；', ' ', ',', ';']) {
+    cut = Math.max(cut, head.lastIndexOf(mark));
+  }
+  // 边界太靠前（前 40 字内无断点）时保长度优先，硬切。
+  const base = cut >= 40 ? head.slice(0, cut + 1) : head;
+  return `${base}…`;
+}
+
 function ontologyAssetFromEntry(
   text: string,
   source: 'user_profile' | 'shared_memory',
@@ -105,7 +120,7 @@ function ontologyAssetFromEntry(
   return {
     id: `onto-${contentKey.slice(0, 24)}`,
     version: '1',
-    title: statement.slice(0, 80) || 'Personal ontology',
+    title: ontologyTitle(statement) || 'Personal ontology',
     type: 'personal',
     statement,
     scope: 'general',
@@ -119,7 +134,11 @@ function ontologyAssetFromEntry(
   };
 }
 
-function loadOntologyAssets(userId: string): WorldModelAbilityAsset[] {
+/** USER.md / MEMORY.md → 虚拟画像资产（onto-<sha256 前 24 位>）。
+ *  导出供检索侧复用（search_ability_assets 把画像纳入检索池并标来源）；
+ *  条目不落盘、不进投影授权链——只作为背景通道存在（见 prompt-injection
+ *  的 <durable-profile-memory> 独立块）。 */
+export function loadOntologyAssets(userId: string): WorldModelAbilityAsset[] {
   const assets: WorldModelAbilityAsset[] = [];
   const sources = [
     { file: userProfileFile(userId), name: 'user_profile' as const },

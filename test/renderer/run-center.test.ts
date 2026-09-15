@@ -24,9 +24,11 @@ describe('Run Center renderer contract', () => {
     const boot = read('src/renderer/modules/boot.js');
     const state = read('src/renderer/modules/state.js');
     const manifest = read('src/renderer/modules/lazy-features.js');
+    const sidebarTools = read('src/renderer/modules/ui-sidebar-tools.js');
 
     expect(html).toContain('id="run-center-btn"');
-    expect(html).toContain('id="run-center-global-entry"');
+    expect(html).toContain('id="app-shell-tools"');
+    expect(sidebarTools).toContain('id="run-center-global-entry"');
     expect(html).not.toMatch(/<button[^>]*id="run-center-global-btn"/);
     expect(html).toContain('id="panel-run-center"');
     expect(html).toMatch(/id="panel-run-center"[\s\S]*?class="app-top-drag-strip"/);
@@ -123,6 +125,8 @@ describe('Run Center renderer contract', () => {
     expect(source).toContain("document.addEventListener('keydown'");
     expect(source).toContain('data-run-center-settings-anchor="worktrees"');
     expect(source).toContain('data-run-center-settings-anchor="diagnostics"');
+    expect(source).not.toContain("settingsAnchor: 'models'");
+    expect(source).not.toContain("settingsAnchor: 'agents'");
     expect(source).toContain('data-run-center-source-filter');
     expect(source).toContain('req-run-center-');
     expect(source).not.toContain('cogseed_agent.task.');
@@ -1032,7 +1036,7 @@ describe('Run Center renderer contract', () => {
           },
         },
         addEventListener: vi.fn(), setTimeout, clearTimeout, confirm: vi.fn(() => true),
-        setView: vi.fn(), activateSettingsTab: vi.fn(), uiToast: vi.fn(),
+        setView: vi.fn(), activateSettingsTab: vi.fn(), activateConnectionsTab: vi.fn(), uiToast: vi.fn(),
         uiIconHtml: (name: string) => `<i>${name}</i>`,
       },
       document: Object.assign(documentState, { getElementById: () => panel, addEventListener: (type: string, listener: (event: any) => void) => documentListeners.set(type, listener) }),
@@ -1129,9 +1133,9 @@ describe('Run Center renderer contract', () => {
     expect(context.window.setView).toHaveBeenCalledTimes(viewCallsBeforeUnavailableAgentTask);
     expect(context.window.uiToast).toHaveBeenLastCalledWith('run_center.task_unavailable', { variant: 'warning' });
     click({ runCenterAgentSettings: '' });
-    expect(context.window.setView).toHaveBeenLastCalledWith('settings', undefined, {
-      settingsTab: 'configuration', settingsAnchor: 'agents',
-    });
+    expect(context.window.setView).toHaveBeenLastCalledWith('connections');
+    expect(context.window.activateSettingsTab).not.toHaveBeenCalledWith('configuration', { anchor: 'agents' });
+    expect(context.window.activateConnectionsTab).toHaveBeenLastCalledWith('agents');
 
     expect(html).toContain('data-run-center-tools-toggle');
     expect(html).toContain('aria-haspopup="menu" aria-controls="run-center-tools-menu" aria-expanded="false"');
@@ -1479,10 +1483,9 @@ describe('Run Center renderer contract', () => {
     expect(failedSummary).toContain('class="btn ui-button ui-button--primary ui-button--sm');
     expect(failedSummary).not.toContain('data-run-center-action="retry"');
     click({ runCenterConfigureModel: '' });
-    expect(context.window.setView).toHaveBeenLastCalledWith('settings', undefined, {
-      settingsTab: 'configuration', settingsAnchor: 'models',
-    });
-    expect(context.window.activateSettingsTab).toHaveBeenLastCalledWith('configuration', { anchor: 'models' });
+    expect(context.window.setView).toHaveBeenLastCalledWith('connections');
+    expect(context.window.activateSettingsTab).not.toHaveBeenCalledWith('configuration', { anchor: 'models' });
+    expect(context.window.activateConnectionsTab).toHaveBeenLastCalledWith('models');
 
     task.errorCode = 'model_preflight';
     click({ runCenterRefresh: '' });

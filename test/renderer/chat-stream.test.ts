@@ -335,7 +335,7 @@ describe('chat-stream module', () => {
     expect(thinks[0].innerHTML).toContain('持续了');
   });
 
-  it('思考实时流式（2026-09-09）：inProgress 增量逐段落入且行自动展开，completed 前缀去重不重复', () => {
+  it('思考实时流式（2026-09-11 需求变更）：inProgress 增量逐段落入但行默认折叠，completed 前缀去重不重复', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     const flow = inserts[0].node;
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '正在' } });
@@ -343,9 +343,10 @@ describe('chat-stream module', () => {
     const body = bodyOf(flow);
     let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
     expect(thinks).toHaveLength(1);
-    // 进行中：增量聚合完整可见，且行自动展开（同步看到推理进度）。
+    // 进行中：增量聚合保留（点开可见全文），但行默认折叠——不自动 cs-open，
+    // 进度由行内 cs-think-live 单行实时预览承担。
     expect(thinks[0].dataset.csFull).toBe('正在读取文件…');
-    expect(String(thinks[0].className)).toContain('cs-open');
+    expect(String(thinks[0].className)).not.toContain('cs-open');
     // completed 整段（=已画前缀，无尾部差额）：不重复落入。
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });
     thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
@@ -354,6 +355,28 @@ describe('chat-stream module', () => {
     // completed 带尾部差额（实时流只画到一半的补齐场景）：只补差额。
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r2', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…还有后续' } });
     expect(thinks[0].dataset.csFull).toBe('正在读取文件…还有后续');
+  });
+
+  it('思考内容常显单行预览、点击展开纯文本全文（2026-09-11 方案 C）', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '核对 131072 的来源与回退链路' } });
+    const body = bodyOf(flow);
+    let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks).toHaveLength(1);
+    // 运行中：单行预览在。
+    expect(thinks[0].innerHTML).toContain('cs-think-live');
+    // 收行（后续工具行到来）：预览不再消失，全文块存在但默认收起。
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks[0].dataset.csClosed).toBe('1');
+    // 回归锚点：收行后内容必须仍可见（071bd064 曾把这里清空为只剩时长）。
+    expect(thinks[0].innerHTML).toContain('cs-think-live');
+    expect(thinks[0].innerHTML).toContain('cs-think-full');
+    expect(String(thinks[0].className)).not.toContain('cs-open');
+    // 点击行 → 展开纯文本全文（fake DOM 用记录的 handler 触发）。
+    (thinks[0].handlers.click!)();
+    expect(String(thinks[0].className)).toContain('cs-open');
   });
 
   it('prewarm 发送即起计（2026-09-09）：面板与计时立即存在，真 turnId 首事件迁移接管', () => {
@@ -534,6 +557,32 @@ describe('chat-stream module', () => {
     expect(flow.dataset.csText).toBeUndefined();
   });
 
+  it('文字段 rAF 合帧：帧延迟时画的是帧内最新全文，不停在调度那一刻的旧快照（真机 09-12 中间叙述截断）', () => {
+    // 真机事故：窗口被遮挡/后台节流时 rAF 不跑；一段叙述的全部增量在同一帧
+    // 窗口内到达，帧恢复后只画出「第一个增量那一刻」的前缀（如「我先」），
+    // 其余内容被 _csSegRaf 吞掉、再无重绘——中间叙述永久截断。
+    const frames: Array<() => void> = [];
+    g.requestAnimationFrame = (cb: () => void) => { frames.push(cb); return frames.length; };
+    try {
+      handle({ type: 'chat.turn.started', turnId: 'T-raf', cid: 'c-1', actorId: 'a', startedAt: '' });
+      handle({ type: 'chat.item', turnId: 'T-raf', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '我先' } });
+      handle({ type: 'chat.item', turnId: 'T-raf', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '实际探一下自己的运行时状态，再回答——不靠猜。' } });
+      const flow = inserts[0].node;
+      const seg = bodyOf(flow).children.filter((c) => String(c.className).includes('cs-text'))[0];
+      // 同一帧窗口内后续增量不重复排队（合帧不变），但帧内必须读最新文本。
+      expect(frames).toHaveLength(1);
+      frames.splice(0).forEach((cb) => cb());
+      expect(seg.textContent).toBe('我先实际探一下自己的运行时状态，再回答——不靠猜。');
+      // 帧跑完后的新增量照常再排一帧并追上。
+      handle({ type: 'chat.item', turnId: 'T-raf', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '（补）' } });
+      expect(frames).toHaveLength(1);
+      frames.splice(0).forEach((cb) => cb());
+      expect(seg.textContent).toBe('我先实际探一下自己的运行时状态，再回答——不靠猜。（补）');
+    } finally {
+      delete g.requestAnimationFrame;
+    }
+  });
+
   it('usage 行渲染并含上下文告警，diff 行渲染增删统计与着色行', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { inputTokens: 100, contextWindowRatio: 0.92 } });
@@ -606,6 +655,67 @@ describe('chat-stream module', () => {
 
     expect(() => handle(null)).not.toThrow();
     expect(() => handle({ type: 'chat.future' })).not.toThrow();
+  });
+
+  // ── 切换对话后计时停摆的回归（根因：ticker 因 isConnected 自杀无重启 +
+  //    历史态流被 live 事件复用时形态不升级） ──────────────────────────────
+  it('切换会话（DOM 断开致 ticker 自杀）后复用运行流：计时自愈重启且起点不变', () => {
+    let intervalCalls = 0;
+    g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'commander', startedAt: '' });
+    const flow = inserts[0].node;
+    expect(intervalCalls).toBe(1);
+    const t0 = flow.dataset.csT0;
+
+    // 模拟会话切换：container 清空 → flow 断开 → 下一次 tick 自杀（ticker 清空）。
+    flow.connected = false;
+    flow._csTicker = null;
+    flow.connected = true;
+
+    // live 事件继续到达并复用同一流 → 应自愈重启，且沿用原起点（不重置为 now）。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'reasoning', status: 'completed', payload: { text: 'x' } });
+    expect(intervalCalls).toBe(2);
+    expect(flow.dataset.csT0).toBe(t0);
+  });
+
+  it('切换回来后历史重放先建历史态流：live 事件到达时升级运行形态并启动计时', () => {
+    let intervalCalls = 0;
+    g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
+    const msgDiv = makeEl('div');
+    anchor.appendChild(msgDiv);
+    const items = [
+      { type: 'turn', turn: { type: 'chat.turn.started', turnId: 'T2', startedAt: '2026-09-12T10:00:00.000Z' } },
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'T2', itemId: 'i1', kind: 'reasoning', status: 'completed', payload: { text: 'x' } } },
+    ];
+    // 历史重放：回合无 turn.completed（任务仍在跑）——现状按完成态建流。
+    const ok = g.window.chatStreamRenderPersisted('c-1', msgDiv, items, { actorName: 'commander', turnId: 'T2' });
+    expect(ok).toBe(true);
+    const flow = msgDiv.querySelector('.cs-flow')!;
+    const badge = flow.querySelector('.cs-badge')!;
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
+    expect(badge.querySelector('.cs-badge-elapsed')).toBeNull();
+    expect(intervalCalls).toBe(0);
+
+    // live 事件到达（回合其实仍活跃）→ 升级：补计时位、文案回「工作中」、启动 ticker。
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'i2', kind: 'reasoning', status: 'inProgress', payload: { delta: 'y' } });
+    expect(badge.querySelector('.cs-badge-elapsed')).toBeTruthy();
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('工作中');
+    expect(intervalCalls).toBe(1);
+  });
+
+  it('终态流不被 live 迟到事件复活（csTerminal 保护）', () => {
+    let intervalCalls = 0;
+    g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    const before = intervalCalls;
+
+    // 迟到事件（usage 收尾等）复用终态流：不得重启计时。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { text: 'tokens' } });
+    expect(intervalCalls).toBe(before);
+    expect(flow.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
   });
 
   it('interaction.requested 渲染审批卡，closed 撤卡禁用', () => {
@@ -775,11 +885,10 @@ describe('chat-stream module', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].innerHTML).toContain('done');
     expect(rows[0].innerHTML).toContain('npm test');
-    // 工具行显示权威耗时（1500ms → 「1 秒」，floor 整秒口径见
-    // _csFmtDur，交互设计 2026-09-09 去小数需求），徽章显示整段总耗时
-    // （末终态 4s = 幻影收编后跨度）与工具数 2。
-    expect(rows[0].innerHTML).toContain('cs-dur');
-    expect(rows[0].innerHTML).toContain('1 秒');
+    // 工具行不再显示耗时（2026-09-11 需求变更：本地 CLI 毫秒级耗时信息
+    // 量低），行内只有目标与展开区；徽章仍显示整段总耗时与工具数 2。
+    expect(rows[0].innerHTML).not.toContain('cs-dur');
+    expect(rows[0].innerHTML).not.toContain('1 秒');
     expect(rows[1].innerHTML).toContain('搜索');
     expect(rows[1].innerHTML).toContain('ok');
     const badge = flow.querySelector('.cs-badge')!;

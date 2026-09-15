@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
+  <link rel="stylesheet" href="./cognition-assets.css" />
   <link rel="stylesheet" href="./ui-components.css" />
   <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./plugins.css" />
@@ -450,48 +451,8 @@
 
       <!-- Cognitive assets -->
       <section class="panel ui-resource-page" id="panel-recall">
-        <div class="skills-cognition-console">
-          <div class="skills-cognition-surface">
-          <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
-               标题 + 辅助入口操作；eyebrow/副标题不再进 header（副标题描述由各 tab 内
-               hero 承担），刷新动作移到 tab 条右侧。渲染入口见 skills.js::_renderCognitionPageHeader。 -->
-          <div id="cognition-page-header"></div>
-          <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产任务视图" data-i18n-aria-label="cognition.task_views">
-            <div class="skills-cognition-tabs-row">
-            <div class="skills-cognition-tab-group" role="presentation">
-              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab ui-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-assets" data-cognition-page="assets">
-                <span class="skills-cognition-tab-label" data-i18n="cognition.my_assets">我的认知树</span>
-              </button>
-              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab ui-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-inbox" tabindex="-1" data-cognition-page="inbox">
-                <span class="skills-cognition-tab-label" data-i18n="cognition.inbox">待我处理</span>
-              </button>
-              <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab ui-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs">
-                <span class="skills-cognition-tab-label" data-i18n="cognition.proofs">复用与证明</span>
-              </button>
-              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab ui-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
-                <span class="skills-cognition-tab-label" data-i18n="cognition.governance">版本与治理</span>
-              </button>
-            </div>
-              <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
-                <span data-ui-icon="refresh"></span>
-              </button>
-            </div>
-          </nav>
-          <main class="skills-cognition-main" id="skills-cognition-main" tabindex="0"
-                data-i18n-aria-label="cognition.content" aria-label="认知资产内容">
-          <!-- 我的认知树（第一个任务视图，进入认知资产默认停在这里）：一级页面
-               是种子/认知树（先看我拥有什么）；点树上的叶子进入二级页面——详细
-               的四类资产（四类卡 + 列表 + 详情，顶部返回认知树）；「关于我」
-               分类在二级页面展开个人本体。 -->
-          <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
-            <div id="skills-cognition-assets-summary"></div>
-            <!-- 「关于我」不再是独立任务页：它是四类资产之一，选中 personal
-                 分类时在这里展开个人本体。整份骨架全仓只有这一处——
-                 personal-ontology.js 全程用 getElementById 定位
-                 #personal-onto-nav / -main-header / -main-body，一旦出现第二份
-                 同 id 骨架，渲染会落到文档靠前那份，另一处就变成死壳。 -->
-            <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
+                  <div id="ca-root"></div>
+          <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
             <!-- 个人本体（#panel-personal-ontology）整体内嵌：保留 id，渲染函数照常工作。 -->
             <section class="panel skills-embedded-panel recall-personal-ontology-frame" id="panel-personal-ontology">
               <div class="personal-onto-layout">
@@ -546,74 +507,7 @@
               </div>
             </section>
             </section>
-            <section class="recall-formal-assets-section" id="skills-cognition-formal-assets">
-              <div class="recall-asset-section-head recall-personal-memory-head" hidden>
-                <div>
-                  <h2 data-i18n="cognition.personal_memories_section">已沉淀信息</h2>
-                  <p data-i18n="cognition.personal_memories_section_hint">从会话中确认并保存的“关于我”认知资产</p>
-                </div>
-              </div>
-              <div id="skills-cognition-assets-body"></div>
-            </section>
-            <!-- 角色模板库弹窗同理：唯一一份跟着个人本体放在「关于我」tab。 -->
-          </section>
-          <!-- 待我处理：只放"真的需要用户决定"的事项。加工进度（沉淀任务、
-               来源连接状态）不进这里——它们是后台进度，归右上角「沉淀活动」
-               「管理来源」。
-               默认停在第一个任务视图「我的资产」（我的认知树）；本页永远只被
-               用户主动点进来，停在这里显示真实状态（"当前无需处理"或待决事项），
-               不会被弹走——否则空状态永远见不到，用户也无从确认"是真的没事，
-               还是页面坏了"。 -->
-          <section class="skills-cognition-page" id="skills-cognition-inbox" role="tabpanel" aria-labelledby="skills-cognition-tab-inbox" data-cognition-page-body="inbox">
-            <div id="skills-cognition-inbox-body"></div>
-          </section>
-          <!-- 版本与治理：回答"我的资产发生过什么变化、我怎样保持控制"。
-               动作全部落在既有 IPC（recall.assets.versions / rollback / pause /
-               resume / revoke / archive / delete），这里不新增治理语义。 -->
-          <section class="skills-cognition-page" id="skills-cognition-governance" role="tabpanel" aria-labelledby="skills-cognition-tab-governance" data-cognition-page-body="governance" hidden>
-            <div id="skills-cognition-governance-body"></div>
-          </section>
-          <!-- 使用与证明：回答"这些资产究竟在哪里用过、真的起作用了吗"。
-               数据全部来自既有事实链（usage / transfer proof / effectiveness proof
-               / receipt），这里只做按资产的聚合展示，不新增事实。 -->
-          <section class="skills-cognition-page" id="skills-cognition-proofs" role="tabpanel" aria-labelledby="skills-cognition-tab-proofs" data-cognition-page-body="proofs" hidden>
-            <div id="skills-cognition-proofs-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-sources" role="tabpanel" aria-labelledby="skills-cognition-tab-sources" data-cognition-page-body="sources" hidden>
-            <div id="skills-cognition-sources-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-captures" role="tabpanel" aria-labelledby="skills-cognition-tab-captures" data-cognition-page-body="captures" hidden>
-            <div id="skills-cognition-captures-body"></div>
-          </section>
-          <!-- 候选详情：一条候选的整页决定面。作用范围冲突这类事项要用户一次
-               看清"内容是什么 + 该在什么范围生效 + 为什么轮到我决定"，折叠行
-               放不下这三件事。动作全部落在既有 recall.candidates.* 通道。 -->
-          <section class="skills-cognition-page" id="skills-cognition-candidate" role="tabpanel" aria-labelledby="skills-cognition-tab-candidate" data-cognition-page-body="candidate" hidden>
-            <div id="skills-cognition-candidate-body"></div>
-          </section>
-          <!-- 认知树：正式资产的成长投影，读 recall.tree.read。树只呈现资产
-               节点——任务接续快照、Session、运行记录属于支撑对象，不长叶片，
-               这条契约在 tree-service 里就成立，渲染层不再另作判断。 -->
-          <section class="skills-cognition-page" id="skills-cognition-tree" role="tabpanel" aria-labelledby="skills-cognition-tab-tree" data-cognition-page-body="tree" hidden>
-            <div id="skills-cognition-tree-body"></div>
-          </section>
-          <!-- 非资产分流：任务状态被带走，但不进四类资产和认知树。快照本体的
-               读通道（task_continuation）尚未接到 IPC，页面先给完整说明与入口，
-               数据区显示明确空态，不塞示例数据。 -->
-          <section class="skills-cognition-page" id="skills-cognition-nonasset" role="tabpanel" aria-labelledby="skills-cognition-tab-nonasset" data-cognition-page-body="nonasset" hidden>
-            <div id="skills-cognition-nonasset-body"></div>
-          </section>
-          <!-- Skill 更新候选：系统提出更新，用户只决定是否接受。版本与回滚点
-               来自 cognition.skills.summary；diff 正文与"接受限域更新"的决策
-               通道尚缺，相应区域显示待接入而不是编造内容。 -->
-          <section class="skills-cognition-page" id="skills-cognition-skillupdate" role="tabpanel" aria-labelledby="skills-cognition-tab-skillupdate" data-cognition-page-body="skillupdate" hidden>
-            <div id="skills-cognition-skillupdate-body"></div>
-          </section>
-          </main>
-          </div>
-          </div>
-        </div>
-      </section>
+</section>
 
 
 
@@ -1024,7 +918,7 @@
       </section>
             </div>
 
-            <!-- IM：消息渠道、机器人实例、身份绑定与消息行为。 -->
+            <!-- 触点：连接页内直接承载原消息平台/触点工作台。 -->
             <div class="connections-tab-pane" id="connections-pane-touchpoints" data-connections-pane="touchpoints" hidden>
               <!-- 触点（飞书等）整体迁入：原设置 messaging pane 的内容原样搬移。 -->
               <div class="touchpoint-settings-shell" aria-live="polite">
@@ -1698,6 +1592,10 @@
     <div class="modal modal-standard settings-custom-provider-modal" role="dialog" aria-modal="true" aria-labelledby="settings-custom-provider-modal-title">
       <div class="modal-header">
         <h3 class="modal-title" id="settings-custom-provider-modal-title">Model provider</h3>
+        <!-- 头部右侧动作区：由当前视图填充（拉取模型列表的「全选/取消全选」）。
+             切换视图时由 _settingsSetCustomProviderModalView 清空，避免上一个
+             视图的按钮残留。 -->
+        <div class="settings-custom-provider-head-actions" id="settings-custom-provider-modal-head-actions"></div>
       </div>
       <div class="modal-body" id="settings-custom-provider-modal-body"></div>
       <div class="form-msg" id="settings-custom-provider-modal-status"></div>
@@ -1987,6 +1885,7 @@
        必须在 conversation.js 之前加载（其消费方是 _mountMsgMeta）。 -->
   <script src="./modules/conversation-metrics.js"></script>
   <script src="./modules/conversation.js"></script>
+  <script src="./modules/kb-transcript-correct.js"></script>
   <script src="./modules/anchored-source-view.js"></script>
   <script src="./modules/chat-citation.js"></script>
   <script src="./modules/artifact-security.js"></script>

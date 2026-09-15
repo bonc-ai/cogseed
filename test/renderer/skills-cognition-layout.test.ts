@@ -8,7 +8,6 @@ const recallCss = [
   fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8'),
   fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8'),
 ].join('\n');
-const rendererCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
 const recallLocalCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8');
 
 /**
@@ -157,14 +156,13 @@ describe('Recall cognition workspace layout', () => {
       ['renderSkillsCognitionInbox', 'cognition.inbox_title'],
       // 「我的认知树」分两级：一级是种子/认知树（_renderCognitionTreeFirstPage），
       // 二级是四类资产 + 详情（返回认知树入口在 renderSkillsCognitionAssets）。
-      ['_renderCognitionTreeFirstPage', '_renderCognitionTreeContent'],
+      ['_renderCognitionTreeFirstPage', 'cognition.tree_title'],
       ['renderSkillsCognitionAssets', 'cognition.assets_back_to_tree'],
       ['renderSkillsCognitionProofs', 'cognition.proofs_title'],
       ['renderSkillsCognitionGovernance', 'cognition.governance_title'],
     ]) {
       expect(sliceFunction(skills, view)).toContain(key);
     }
-    expect(sliceFunction(skills, '_renderCognitionTreeContent')).toContain('cognition.tree_panel_title');
 
     const proofs = sliceFunction(skills, 'renderSkillsCognitionProofs');
     expect(proofs).toContain('recall-proof-timeline');
@@ -236,14 +234,6 @@ describe('Recall cognition workspace layout', () => {
     expect(paneHtml).toContain('id="skills-chat-input"');
   });
 
-  it('keeps capability content under one page header and scrollable tabs', () => {
-    expect(html).toContain('id="connections-page-header"');
-    expect(rendererCss).toMatch(/\.connections-tabs\s*{[^}]*overflow-x:\s*auto;[^}]*scrollbar-width:\s*none;/s);
-    expect(rendererCss).toMatch(/\.connections-tab\s*{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s);
-    expect(rendererCss).toMatch(/\.connections-embedded-panel \.agents-grid-header,[\s\S]*?\.connectors-page-header\s*{[^}]*padding:\s*0 0 var\(--space-4\);[^}]*border-bottom:\s*0;[^}]*background:\s*transparent;/s);
-    expect(rendererCss).toMatch(/\.connections-embedded-panel \.agents-grid-scroll,[\s\S]*?\.connectors-grid-scroll\s*{[^}]*padding:\s*0 0 var\(--space-7\);/s);
-  });
-
   it('routes and lazy-loads Skills through Connections', () => {
     const boot = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf-8');
     const state = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/state.js'), 'utf-8');
@@ -272,31 +262,24 @@ describe('Recall cognition workspace layout', () => {
     expect(surfaceHtml).toContain('id="skills-cognition-assets"');
   });
 
-  it('presents the four user workflows as the shared underlined page tabs', () => {
+  it('presents the four user workflows as a task-card navigation shell', () => {
     const css = recallCss;
     const navStart = html.indexOf('id="skills-cognition-tabs"');
     const navHtml = html.slice(navStart, html.indexOf('</nav>', navStart));
     expect(html).toContain('id="cognition-page-header"');
     expect(sliceFunction(skillsSource, '_renderCognitionPageHeader')).toContain("title: _cognitionText('cognition.title', '认知资产')");
     expect(navHtml).toContain('data-i18n-aria-label="cognition.task_views"');
-    for (const key of ['my_assets', 'inbox', 'proofs', 'governance']) expect(navHtml).toContain(`data-i18n="cognition.${key}"`);
-    expect(navHtml).not.toContain('skills-cognition-tab-icon');
-    expect(navHtml).not.toContain('skills-cognition-tab-copy');
+    for (const key of ['inbox_desc', 'my_assets_desc', 'proofs_desc', 'governance_desc']) {
+      expect(navHtml).toContain(`data-i18n="cognition.${key}"`);
+    }
     expect(css).toMatch(/\.skills-cognition-workspace\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
     expect(css).toMatch(/\.skills-cognition-tabs\s*\{[^}]*display:\s*block;[^}]*border-bottom:/s);
-    expect(css).toMatch(/\.skills-cognition-tab-group\s*\{[^}]*display:\s*flex;[^}]*width:\s*max-content;/s);
-    expect(css).toMatch(/\.skills-cognition-tabs-row \.skills-cognition-tab-group\s*\{[^}]*overflow-x:\s*auto;[^}]*scrollbar-width:\s*none;/s);
-    expect(css).toMatch(/\.skills-cognition-tabs-row \.cognition-refresh-btn\s*\{[^}]*flex:\s*none;[^}]*align-self:\s*center;/s);
-    expect(css).toMatch(/\.skills-cognition-tab\s*\{[^}]*flex:\s*0 0 auto;[^}]*min-width:\s*max-content;[^}]*white-space:\s*nowrap;/s);
-    expect(css).toMatch(/\.skills-cognition-tab-label\s*\{[^}]*white-space:\s*nowrap;/s);
+    expect(css).toMatch(/\.skills-cognition-tab-group\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(4,/s);
     expect(css).toMatch(/\.skills-cognition-tab-group-label\s*\{[^}]*display:\s*none;/s);
-    expect(css).toMatch(/\.skills-cognition-tab\s*\{[^}]*border-bottom:\s*1\.5px solid transparent;[^}]*font-size:\s*var\(--font-size-3\);/s);
-    expect(css).toMatch(/\.skills-cognition-tab\.is-active\s*\{[^}]*border-bottom-color:\s*var\(--color-ink\);[^}]*font-weight:\s*var\(--font-weight-medium\);/s);
-    expect(css).not.toMatch(/\.skills-cognition-tab\.is-active\s*\{[^}]*inset 3px 0 0/s);
-    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tabs\s*\{[^}]*overflow:\s*hidden;/);
-    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-tab-group\s*\{[^}]*width:\s*max-content;/);
-    expect(css).not.toMatch(/\.skills-cognition-tab-icon/);
-    expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tabs\s*\{[^}]*overflow:\s*hidden;/);
+    expect(css).toMatch(/\.skills-cognition-tab\.is-active\s*\{[^}]*inset 3px 0 0/s);
+    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-tab-group\s*\{[^}]*grid-template-columns:\s*repeat\(2,/);
+    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tab \.ui-icon\s*\{[^}]*display:\s*inline-block;/);
+    expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tabs\s*\{[^}]*overflow-x:\s*auto;/);
     expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.skills-cognition-tab-group\s*\{[^}]*display:\s*flex;/);
   });
 
@@ -304,7 +287,11 @@ describe('Recall cognition workspace layout', () => {
     expect(recallLocalCss).toMatch(/\.skills-cognition-main\s*\{[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*scroll;[^}]*overscroll-behavior:\s*auto;/s);
     expect(recallLocalCss).toMatch(/\.skills-cognition-page\s*\{[^}]*min-height:\s*100%;[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
     expect(recallLocalCss).toContain('#skills-cognition-assets { overflow: visible; }');
-    expect(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8')).toContain('Find scrollable');
+    // 2026-09-14 认知资产前端重建：主滚动容器改为 #ca-root 内的 .ca-scroll
+    //（views.js render 产出，路由切换时 core.js 将其 scrollTop 归零）；
+    //「Find scrollable」边缘滚动转发随旧 skills-bindings 认知段删除。
+    const views = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
+    expect(views).toContain('id="ca-scroll"');
   });
 
 
@@ -423,50 +410,6 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).not.toContain('function _renderCognitionSourceStatus');
     expect(sources).toContain('recall-source-card');
     expect(sources).toContain('_cognitionSourceKindPresentation');
-    expect(sources).toContain("_skillUiButton({ label: _cognitionText('cognition.open_conversation', '打开会话')");
-    expect(sources).toContain("_skillUiButton({ label: _cognitionText('cognition.source_action_reconnect_now', '重新连接'), role: 'primary'");
-    expect(skills).toContain("className: 'recall-source-more'");
-    expect(skills).not.toContain('class="btn btn-sm recall-source-more"');
-    expect(recallCss).toMatch(/\.recall-source-card\s*\{[^}]*border:\s*1px solid var\(--line-default\);[^}]*border-radius:\s*var\(--radius-card\);[^}]*background:\s*var\(--surface-card\);/s);
-    expect(recallCss).toContain('.recall-source-more { flex: none; }');
-    expect(skills).toContain("icon: 'chevron-left', attrs: { 'data-cognition-page-link': backPage }");
-    expect(skills).toContain("className: 'recall-capture-load-more'");
-    expect(skills).not.toContain('class="btn btn-sm recall-capture-load-more"');
-    expect(skills).not.toContain('class="btn btn-sm btn-primary" data-cognition-open-asset');
-    expect(skills).not.toContain('class="btn btn-sm" data-cognition-tree-reload');
-    expect(skills).not.toContain('class="btn btn-sm" data-cognition-continuation-reload');
-    expect(skills).toContain("'data-cognition-review-history-reload': ''");
-    expect(skills).toContain("className: 'cognition-evidence-pick'");
-    expect(skills).toContain("className: 'cognition-evidence-remove'");
-    expect(skills).not.toContain('class="btn btn-sm cognition-evidence-pick"');
-    expect(skills).not.toContain('class="btn btn-sm btn-danger" data-ability-asset-action');
-    expect(skills).toContain("function _skillUiTextarea(options)");
-    expect(skills).toContain("className: 'recall-proof-evidence-note'");
-    expect(skills).not.toContain('<textarea class="recall-proof-evidence-note"');
-    expect(skills).not.toContain('class="btn btn-sm btn-primary" data-recall-proof-evidence-submit');
-    expect(recallCss).toContain('.recall-proof-evidence-note.ui-textarea');
-    expect(skills).toContain("'data-recall-candidate-promote-all': ''");
-    expect(skills).toContain("id: `recall-candidate-${candidateIndex}-judgment`");
-    expect(skills).toContain("id: 'cognition-candidate-scope'");
-    expect(skills).toContain("'data-cognition-locate-candidate-capture': candidate.id");
-    expect(skills).not.toContain('class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote"');
-    expect(skills).not.toContain('<textarea data-recall-edit-judgment>');
-    expect(recallCss).toContain('.cognition-candidate-field .ui-control');
-    expect(recallCss).toContain('.recall-candidate-editor .ui-control');
-    expect(skills).toContain("id: 'recall-asset-edit-statement'");
-    expect(skills).toContain("'data-recall-asset-edit-save': asset.id");
-    expect(skills).toContain("'data-cognition-skill-decision': 'reject'");
-    expect(skills).toContain("className: 'recall-asset-version-close'");
-    expect(skills).not.toContain('class="btn btn-sm btn-primary" data-cognition-skill-decision');
-    expect(skills).not.toContain('<textarea data-recall-asset-edit-statement>');
-    expect(recallCss).toContain('.recall-asset-version-close.ui-icon-button');
-    expect(skills).toContain("label: _cognitionText('cognition.seed_pick_history', '选择历史会话'), role: 'primary'");
-    expect(skills).not.toContain('class="btn btn-sm btn-primary" data-cognition-page-link="inbox"');
-    expect(skills).not.toContain('class="btn btn-primary" data-cognition-page-link="captures"');
-    expect(skills).not.toContain("'data-cognition-page-link': 'nonasset'");
-    expect(skills).toContain("label: _cognitionText('cognition.teaching_revoke', '撤销'), role: 'danger'");
-    expect(skills).toContain("label: _cognitionText('cognition.inbox_empty_go_assets', '去看我的资产'), role: 'primary'");
-    expect(skills).not.toContain('class="btn btn-sm" data-recall-teaching-revoke');
     expect(sliceFunction(skills, 'renderSkillsCognitionAssets')).toContain('_renderCognitionRecentActivity()');
     expect(skills).toContain('data-cognition-open-asset');
   });
@@ -489,7 +432,7 @@ describe('Recall cognition workspace layout', () => {
     expect(sliceFunction(skills, 'switchSkillsCognitionPage')).not.toContain('_cognitionInboxIsEmpty');
     // 引导改由空态承担，入口是显式按钮而不是一次跳转。
     const inbox = sliceFunction(skills, 'renderSkillsCognitionInbox');
-    expect(inbox).toContain("'data-cognition-page-link': 'assets'");
+    expect(inbox).toContain('data-cognition-page-link="assets"');
     expect(inbox).toContain('_cognitionSeedMarkup()');
   });
 
@@ -517,12 +460,15 @@ describe('Recall cognition workspace layout', () => {
   });
 
   it('资产更新在无绑定控件时不传 ontologyRefs（不清空既有绑定）', () => {
-    const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
-    // 控件不存在 = undefined = 不改动；传空数组会把用户已有的绑定抹掉。
-    expect(bindings).toContain('const ontologyRefs = ontologySelect');
-    expect(bindings).toContain("...(ontologyRefs !== undefined ? { ontologyRefs } : {})");
-    // 分组按需取，且读失败不阻断编辑
-    expect(bindings).toContain("window.cogseed.invoke('personalOntology.groups.list').catch(() => null)");
+    // 资产编辑器（含本体绑定控件）已随认知资产前端重建删除：新实现
+    //（cognition-assets/*）没有资产编辑表单，也不再有 ontologyRefs 的读写
+    // 路径——「无控件时误传空数组清空既有绑定」的入口不复存在。守卫：
+    // 新模块不再携带 ontologyRefs 载荷。
+    const dir = path.join(__dirname, '../../src/renderer/modules/cognition-assets');
+    for (const file of ['core.js', 'views.js', 'app.js']) {
+      const source = fs.readFileSync(path.join(dir, file), 'utf8');
+      expect(source, `${file} must not carry ontologyRefs`).not.toContain('ontologyRefs');
+    }
   });
 
   it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {

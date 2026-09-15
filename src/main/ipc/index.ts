@@ -34,6 +34,7 @@ import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import * as confirmCards from '../features/group_chat/confirm-cards';
 import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
 import {
   createChatEventProjectorState,
@@ -65,7 +66,9 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
+import { listKstarEpisodes } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
+import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as formalAssets from '../features/recall/formal-assets';
@@ -106,6 +109,8 @@ import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
 import * as customProviders from '../features/custom_providers';
+import * as modelOverrides from '../features/model_overrides';
+import { curatedModelsFor } from '../model/provider_catalog';
 import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
 import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
@@ -147,6 +152,7 @@ import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench'
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
+import { invokeHandlers as transcriptHandlers } from './transcript';
 import { invokeHandlers as updatesHandlers } from './updates';
 import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
@@ -227,9 +233,17 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  vision?: unknown;
+  input?: unknown;
+  capabilities?: unknown;
+  reasoningLevels?: unknown;
+  reasoningParamsMap?: unknown;
 } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} required`);
-  const raw = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const raw = value as {
+    id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
+    input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+  };
   const id = boundedText(raw.id, `${field}.id`, 200);
   const boundedInteger = (candidate: unknown, name: string, max: number): number => {
     if (!Number.isSafeInteger(candidate) || (candidate as number) <= 0 || (candidate as number) > max) {
@@ -240,7 +254,18 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
   const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
   if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
-  return { id, contextWindow, maxTokens };
+  // 新配置字段（2026-09-13 统一模型配置表单）原样透传——严格校验在
+  // custom_providers.normalizeModel（单一口径，避免两处规则漂移）。
+  return {
+    id,
+    contextWindow,
+    maxTokens,
+    ...(raw.vision === undefined ? {} : { vision: raw.vision }),
+    ...(raw.input === undefined ? {} : { input: raw.input }),
+    ...(raw.capabilities === undefined ? {} : { capabilities: raw.capabilities }),
+    ...(raw.reasoningLevels === undefined ? {} : { reasoningLevels: raw.reasoningLevels }),
+    ...(raw.reasoningParamsMap === undefined ? {} : { reasoningParamsMap: raw.reasoningParamsMap }),
+  };
 }
 type StreamHandler = (
   payload: any,
@@ -1164,6 +1189,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         history_indexes: page.historyIndexes,
       } : {}),
     };
+  },
+
+  // 确认卡片专用通道（2026-09-14 Bug3）：幂等 + 直达总线，绕过渲染层发送队列；
+  // action: 'confirm' | 'cancel'（评审补强：取消同通道、同步落盘 cancelled）。
+  'groupChat.sendConfirm': async ({ cid, artifactId, op, payload, action }, ctx) => {
+    return confirmCards.sendConfirmAndMark({
+      userId: ctx.userId,
+      cid,
+      artifactId,
+      op: typeof op === 'string' ? op : String(op ?? ''),
+      payload,
+      action: action === 'cancel' ? 'cancel' : 'confirm',
+    });
   },
 
   // ── Conversation aside: read-only side thread (see features/conversation_aside) ──
@@ -2769,6 +2807,46 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
+  },
+  'kstar.episodes.list': async ({ limit } = {}, ctx) => {
+    try {
+      const episodes = await listKstarEpisodes(ctx.userId);
+      const n = Number(limit);
+      const capped = Number.isFinite(n) && n > 0 ? Math.min(n, 200) : 100;
+      return {
+        ok: true,
+        total: episodes.length,
+        episodes: episodes.slice(0, capped).map((episode) => ({
+          id: episode.id,
+          createdAt: episode.createdAt,
+          status: (episode.r && episode.r.status) || 'unknown',
+          goal: String((episode.t && episode.t.userGoal) || '').slice(0, 200),
+          summary: String((episode.s && episode.s.conversationSummary) || '').slice(0, 200),
+          durationMs: episode.r && typeof episode.r.durationMs === 'number' ? episode.r.durationMs : null,
+        })),
+      };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.experiences.list': async ({ limit } = {}, ctx) => {
+    try {
+      const n = Number(limit);
+      const result = await kstarReviewService.listKstarExperiences(
+        ctx.userId,
+        Number.isFinite(n) && n > 0 ? n : undefined,
+      );
+      return { ok: true, total: result.total, experiences: result.experiences };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.runEvidence.read': async ({ taskId, taskRunId } = {}, ctx) => {
+    if (!safeId(taskId) || !safeId(taskRunId)) throw new Error('invalid kstar run evidence input');
+    return {
+      ok: true,
+      evidence: await kstarRunEvidence.readKstarRunEvidence(ctx.userId, { taskId, taskRunId }),
+    };
   },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
   'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
@@ -4898,6 +4976,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
     return customProviders.setCustomProviderEnabled(ctx.userId, id, args.enabled);
   },
+  // ── 内置预设的本地覆盖（设置页「预设详情」）──
+  // 窗口/输出的用户级覆盖：只改本机生效值（运行时预算 + 模型下拉），不动预设。
+  'modelOverrides.list': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const presetModels = curatedModelsFor(provider);
+    return {
+      ok: true,
+      provider,
+      models: modelOverrides.describeModelAbilityOverrides(ctx.userId, provider, presetModels),
+      caps: {
+        contextWindow: modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW,
+        maxTokens: modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS,
+      },
+    };
+  },
+  'modelOverrides.set': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const model = boundedText(args?.model, 'model', 200);
+    const presetModels = curatedModelsFor(provider);
+    const presetEntry = presetModels.find((entry) => entry.id === model);
+    const preset = {
+      ...(typeof presetEntry?.contextWindow === 'number' ? { contextWindow: presetEntry.contextWindow } : {}),
+      ...(typeof presetEntry?.maxTokens === 'number' ? { maxTokens: presetEntry.maxTokens } : {}),
+    };
+    const toPatch = (value: unknown, max: number): number | null | undefined => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > max) {
+        throw new Error('override value must be a positive safe integer within range');
+      }
+      return value as number;
+    };
+    return modelOverrides.setModelOverride(
+      ctx.userId,
+      provider,
+      model,
+      {
+        contextWindow: toPatch(args?.contextWindow, modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW),
+        maxTokens: toPatch(args?.maxTokens, modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS),
+      },
+      {
+        ...(typeof preset.contextWindow === 'number' ? { contextWindow: preset.contextWindow } : {}),
+        ...(typeof preset.maxTokens === 'number' ? { maxTokens: preset.maxTokens } : {}),
+      },
+    );
+  },
+  'modelOverrides.clear': async (args, ctx) => modelOverrides.clearModelOverride(
+    ctx.userId,
+    boundedText(args?.provider, 'provider', 120),
+    boundedText(args?.model, 'model', 200),
+  ),
   'customProviders.model.add': async (args, ctx) => customProviders.addCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),
@@ -4909,6 +5038,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.modelId, 'modelId', 200),
     boundedCustomProviderModel(args.model, 'model'),
   ),
+  // 模型级开关（S2）：关闭 = 选择器隐藏 + 阻止新绑定 + 已绑定条目跳过兜底；
+  // 配置与绑定都保留，随时可拨回。
+  'customProviders.model.setEnabled': async (args, ctx) => {
+    if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    return customProviders.setCustomProviderModelEnabled(
+      ctx.userId,
+      boundedText(args?.providerId, 'providerId', 120),
+      boundedText(args?.modelId, 'modelId', 200),
+      args.enabled,
+    );
+  },
   'customProviders.model.remove': async (args, ctx) => customProviders.removeCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),
@@ -5759,6 +5899,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
   ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
 
+  // 转写纠错词表与清理产物（方案 v0.2 P0）。词表是用户确认过的
+  // wrong→correct 纠错对；扫描只产候选，替换必须显式接受，原文永不就地改写
+  // （apply 只产出清理版 + run 快照，见 features/transcript_correction_runs）。
+  ...transcriptHandlers,
+
   // P3394 TaskContinuationSnapshot and ContextReuseReceipt handlers for
 };
 
@@ -6061,7 +6206,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       log.info(`sendStream closed cid=${cid} relayed=${relayCount} process=${processCount} sendDone=${sendDone} cancelled=${cancelled}`);
@@ -6174,7 +6327,15 @@ const streamHandlers: Record<string, StreamHandler> = {
             }
           }
           if (cancelled) break;
-          await new Promise<void>((resolve) => { wake = resolve; });
+          // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
         }
       } finally {
         log.info(`groupEvents closed cid=${cid} relayed=${relayCount} process=${processCount} cancelled=${cancelled}`);
@@ -6209,7 +6370,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       try { unsub(); } catch { /* ignore */ }
@@ -6238,7 +6407,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       try { unsub(); } catch { /* ignore */ }

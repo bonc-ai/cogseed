@@ -360,7 +360,9 @@
     ];
     byId('input-control-states').innerHTML = inputStates.map(([label, options], index) => (
       `<div class="gallery-control-state"><span>${label}</span>${uiInput({ id: `gallery-input-${index}`, ...options })}</div>`
-    )).join('') + `<div class="gallery-control-state gallery-control-state--wide"><span>多行</span>${uiTextarea({ id: 'gallery-textarea', placeholder: '描述希望自动执行的工作' })}</div>`;
+    )).join('')
+      + `<div class="gallery-control-state"><span>复选框</span><label>${uiCheckbox({ id: 'gallery-checkbox', name: 'gallery-capability', value: 'search', checked: true })}启用联网搜索</label></div>`
+      + `<div class="gallery-control-state gallery-control-state--wide"><span>多行</span>${uiTextarea({ id: 'gallery-textarea', placeholder: '描述希望自动执行的工作' })}</div>`;
 
     const frequencyOptions = [
       { value: 'daily', label: '每天' },
@@ -398,7 +400,22 @@
         { label: '取消', role: 'secondary' },
         { label: '创建自动化任务', role: 'primary' },
       ],
-    });
+    })
+      // 2026-09-14 新增契约：整卡都必填时不逐条标"必填/选填"（供应商详情卡）。
+      // required 语义仍在控件上，去掉的只是每个字段的标注文案。
+      + specimen(
+        'B / 整卡必填：不逐条标注',
+        'showRequirement: false —— 控件仍带 required，标签行不再出现必填/选填',
+        uiForm({
+          ariaLabel: '供应商详情示例',
+          columns: 2,
+          fields: [
+            { html: uiField({ id: 'gallery-quiet-name', label: '名称', required: true, showRequirement: false, control: { kind: 'input', value: 'command' } }) },
+            { html: uiField({ id: 'gallery-quiet-format', label: 'API 格式', required: true, showRequirement: false, control: { kind: 'select', value: 'openai', options: [{ value: 'openai', label: 'Chat Completions' }, { value: 'anthropic', label: 'Anthropic Messages' }] } }) },
+            { wide: true, html: uiField({ id: 'gallery-quiet-key', label: 'API Key', showRequirement: false, hint: '留空表示不修改；输入新值即替换。', control: { kind: 'input', type: 'password', value: '' } }) },
+          ],
+        }),
+      );
     hydrateUiFormSelects(byId('form-composition-specimen'));
   }
 

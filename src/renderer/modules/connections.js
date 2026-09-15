@@ -5,7 +5,7 @@
 //   - MCP与工具 tab  ← connectors 网格 + 插件中心
 //   - Skills tab     ← #panel-skills（技能库）
 //   - 数据源 tab     ← #panel-contexts（资料库）
-//   - IM tab         ← messaging/touchpoint（自设置迁入）
+//   - 触点 tab       ← messaging/touchpoint（自设置迁入）
 // 模型与额度保留在设置，不再重复占用能力页一级 tab。
 // Tab switching + per-tab lazy priming + entry-card wiring live here.
 
@@ -124,7 +124,9 @@ function initConnections() {
 
   // Restore the last-visible tab across view re-entries (preserves the user's
   // position while inside the panel; defaults to the first tab on first open).
-  const lastTab = _connectionsLastTab || document.querySelector('.connections-tab.is-active')?.dataset.connectionsTab || tabs[0].dataset.connectionsTab;
+  const requestedTab = window.__connectionsPendingTab || '';
+  window.__connectionsPendingTab = '';
+  const lastTab = requestedTab || _connectionsLastTab || document.querySelector('.connections-tab.is-active')?.dataset.connectionsTab || tabs[0].dataset.connectionsTab;
   _renderConnectionsPageHeader();
   _renderConnectionsToolsSwitcher();
   activateConnectionsTab(lastTab);
@@ -137,6 +139,10 @@ let _connectionsSkillsPrimed = false;
 let _connectionsToolsLastView = 'mcp';
 
 function _connectionsOpenTarget(target) {
+  if (target === 'touchpoints') {
+    activateConnectionsTab('touchpoints');
+    return;
+  }
   if (target === 'models' && typeof setView === 'function') {
     _connectionsOpenConfiguration('models');
   }
@@ -251,6 +257,24 @@ function activateConnectionsTab(name) {
     Promise.resolve(loadAgents(false)).catch(() => {});
   }
 
+  // 触点 tab 内嵌原设置触点工作台；需要 settings bundle 里的
+  // messaging/touchpoint modules，但不再跳转到 Settings › Configuration。
+  if (target === 'touchpoints') {
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    Promise.resolve(typeof loader === 'function' ? loader('settings') : undefined)
+      .then(() => {
+        if (typeof window.initTouchpointSettings === 'function') return window.initTouchpointSettings();
+        if (typeof initTouchpointSettings === 'function') return initTouchpointSettings();
+        return undefined;
+      })
+      .catch((err) => {
+        if (typeof createLogger === 'function') {
+          createLogger('connections').warn('touchpoints load failed', {
+            error: (err && err.message) || String(err),
+          });
+        }
+      });
+  }
   // 数据源 tab 内嵌资料库。
   if (target === 'sources') {
     // 资料库（contexts）是懒加载模块：从「连接」视图进入时 boot 只初始化

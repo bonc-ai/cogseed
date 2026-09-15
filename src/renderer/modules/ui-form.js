@@ -45,6 +45,14 @@
     return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="${type}"${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
   }
 
+  function uiCheckbox(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiCheckbox requires an id');
+    const classes = ['ui-control', 'ui-checkbox', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="checkbox"${value.name ? ` name="${escapeText(value.name)}"` : ''}${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.checked ? ' checked' : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+  }
+
   function uiTextarea(options) {
     const value = options || {};
     const id = String(value.id || '').trim();
@@ -191,9 +199,15 @@
       describedBy,
       labelId,
     });
-    const requirement = value.required
-      ? '<span class="ui-field__requirement">必填</span>'
-      : '<span class="ui-field__requirement">选填</span>';
+    // 需求标记（必填/选填）默认渲染，showRequirement: false 时整块不渲染——
+    // 用于"整张卡片每个字段都必填"这类逐条标注纯属噪音的场景（2026-09-14 自定义
+    // 供应商详情卡：名称 / Base URL / API 格式 / API Key 都是必填）。required
+    // 仍照常落到控件上（required 属性 + aria-required），只是不再逐条写文案。
+    const requirement = value.showRequirement === false
+      ? ''
+      : value.required
+        ? '<span class="ui-field__requirement">必填</span>'
+        : '<span class="ui-field__requirement">选填</span>';
     const hint = value.hint
       ? `<p class="ui-field__hint" id="${escapeText(hintId)}">${escapeText(value.hint)}</p>`
       : '';
@@ -229,6 +243,7 @@
   }
 
   root.uiInput = uiInput;
+  root.uiCheckbox = uiCheckbox;
   root.uiTextarea = uiTextarea;
   root.uiSelect = uiSelect;
   root.hydrateUiFormSelects = hydrateUiFormSelects;
@@ -237,6 +252,6 @@
   root.uiForm = uiForm;
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { uiInput, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
+    module.exports = { uiInput, uiCheckbox, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
   }
 })(typeof window !== 'undefined' ? window : globalThis);
