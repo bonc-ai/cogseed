@@ -489,10 +489,24 @@ export const invokeHandlers = {
       : [];
     // 主题标题（方案 §五 P2-2）：只在用户显式采用后才插入，且是结构编辑
     const headingInputs = Array.isArray(payload?.headings) ? payload.headings.slice(0, 50) : [];
+    // 标题要插在"这一段的开头"。但同人段落合并会删掉冗余块头，锚点若落在被删的块头里
+    // 就会被 apply 当成已消费而**静默丢弃**（真机踩过：采用 3 个只进 1 个）。
+    // 这里把锚点挪到该段之后，标题照旧插在这一段前面。
+    const deletedSpans = merge
+      ? merge.edits.filter((edit) => edit.action === 'delete').map((edit) => edit.span)
+      : [];
+    const anchorFor = (start: number): number => {
+      let at = start;
+      for (const span of deletedSpans) {
+        if (at >= span.start && at <= span.end) at = Math.max(at, span.end);
+      }
+      return at;
+    };
     const headingCandidates: transcriptAutoCorrect.CorrectionCandidate[] = headingInputs
       .map((raw, index) => {
         const item = raw as Partial<{ start: number; title: string }>;
-        const start = typeof item?.start === 'number' ? Math.max(0, Math.min(Math.floor(item.start), text.length)) : -1;
+        const rawStart = typeof item?.start === 'number' ? Math.max(0, Math.min(Math.floor(item.start), text.length)) : -1;
+        const start = rawStart >= 0 ? anchorFor(rawStart) : -1;
         const title = typeof item?.title === 'string' ? item.title.trim().slice(0, 60) : '';
         if (start < 0 || !title) return null;
         return {

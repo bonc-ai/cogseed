@@ -184,3 +184,35 @@ describe('结构编辑与口癖统计要分得清', () => {
     expect(applied.text).toContain('—19:31:35');
   });
 });
+
+describe('结构编辑与标题锚点的配合（真机踩过的坑）', () => {
+  it('标题锚点落在被合并删掉的块头上时，仍应插进清理版', () => {
+    const text = 'A 2026-09-05 19:31:32 \n第一段。\nA 2026-09-05 19:31:35 \n第二段。\n';
+    const merge = mergeSpeakerEdits(text);
+    const deleted = merge.edits.find((edit) => edit.action === 'delete')!.span;
+    // 锚点落在被删块头的起点（就是第二段原本的块头位置）
+    const anchor = deleted.start;
+    const adjusted = (() => {
+      let at = anchor;
+      for (const span of merge.edits.filter((e) => e.action === 'delete').map((e) => e.span)) {
+        if (at >= span.start && at <= span.end) at = Math.max(at, span.end);
+      }
+      return at;
+    })();
+    const candidates: CorrectionCandidate[] = [
+      ...merge.edits.map((edit, index) => ({
+        entryRef: `merge_${index}`, wrong: edit.wrong, correct: edit.correct, action: edit.action,
+        confidence: 1, riskLevel: 'low' as const, context: '', span: edit.span,
+        ignoredCount: 0, contextAllow: [], structure: true,
+      })),
+      {
+        entryRef: 'heading_0', wrong: '', correct: '## 小标题\n', action: 'replace' as const,
+        confidence: 1, riskLevel: 'low' as const, context: '', span: { start: adjusted, end: adjusted },
+        ignoredCount: 0, contextAllow: [], structure: true,
+      },
+    ];
+    const applied = applyCorrections(text, candidates, { acceptedIds: candidates.map((c) => c.entryRef) });
+    expect(applied.text).toContain('## 小标题');
+    expect(applied.text).toContain('第二段。');
+  });
+});
