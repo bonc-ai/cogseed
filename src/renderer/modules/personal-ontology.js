@@ -40,6 +40,31 @@
     return '';
   }
 
+  function _button(options) {
+    if (typeof window.uiButton !== 'function') throw new Error('personal ontology requires uiButton');
+    return window.uiButton(options);
+  }
+
+  function _iconButton(options) {
+    if (typeof window.uiIconButton !== 'function') throw new Error('personal ontology requires uiIconButton');
+    return window.uiIconButton(options);
+  }
+
+  function _input(options) {
+    if (typeof window.uiInput !== 'function') throw new Error('personal ontology requires uiInput');
+    return window.uiInput(options);
+  }
+
+  function _textarea(options) {
+    if (typeof window.uiTextarea !== 'function') throw new Error('personal ontology requires uiTextarea');
+    return window.uiTextarea(options);
+  }
+
+  function _emptyState(options) {
+    if (typeof window.uiEmptyState !== 'function') throw new Error('personal ontology requires uiEmptyState');
+    return window.uiEmptyState(options);
+  }
+
   // ── state ────────────────────────────────────────────────────────────────
   let _pocTemplates = [];
   let _pocTemplatesLoaded = false;
@@ -274,9 +299,9 @@
     if (!ed.sections || !ed.sections.length) {
       return `<div class="memory-empty muted">${escapeHtml(_t('memory.group_form_no_fields', '该模板没有分节'))}</div>`;
     }
-    return ed.sections.map((sec) => {
+    return ed.sections.map((sec, sectionIndex) => {
       const ref = `${ed.groupId}::${sec.title}`;
-      const fields = (sec.fields || []).map((f) => `
+      const fields = (sec.fields || []).map((f, fieldIndex) => `
         <div class="memory-group-field" data-mem-group-field="${escapeHtml(f.name)}">
           <div class="memory-group-field-name">
             <span class="memory-group-field-name-text">${escapeHtml(f.name)}</span>
@@ -289,20 +314,14 @@
                   <span class="memory-group-field-value-text">${escapeHtml(v.value)}</span>
                   <span class="memory-group-field-source muted">${escapeHtml(_tv('memory.group_field_value_source', { value: '', source: v.source }))}</span>
                   ${v.project ? `<span class="memory-group-field-project">@${escapeHtml(_pocProjectNames ? (_pocProjectNames.get(v.project) || v.project) : v.project)}</span>` : ''}
-                  <button type="button" class="memory-icon-btn" data-poc-group-action="field-edit-value"
-                    data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
-                    title="${escapeHtml(_t('memory.edit', '编辑'))}">${_icon('edit-pencil', 'ui-icon')}</button>
-                  <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="field-remove-value"
-                    data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
-                    title="${escapeHtml(_t('memory.delete', '删除'))}">${_icon('x', 'ui-icon')}</button>
+                  ${_iconButton({ label: _t('memory.edit', '编辑'), icon: 'edit-pencil', className: 'memory-icon-btn', attrs: { 'data-poc-group-action': 'field-edit-value', 'data-poc-ref': ref, 'data-poc-field': f.name, 'data-poc-value': v.value } })}
+                  ${_iconButton({ label: _t('memory.delete', '删除'), icon: 'x', variant: 'danger', className: 'memory-icon-btn is-muted', attrs: { 'data-poc-group-action': 'field-remove-value', 'data-poc-ref': ref, 'data-poc-field': f.name, 'data-poc-value': v.value } })}
                 </div>`).join('')
               : `<span class="memory-group-field-empty muted">${escapeHtml(_t('memory.group_field_empty', '暂无值'))}</span>`}
           </div>
           <div class="memory-group-field-add">
-            <input type="text" class="memory-group-field-input" data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}"
-              placeholder="${escapeHtml(_t('memory.group_field_add_placeholder', '填值…'))}" />
-            <button type="button" class="btn btn-sm btn-primary" data-poc-group-action="field-add-value"
-              data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}">${escapeHtml(_t('memory.save', '保存'))}</button>
+            ${_input({ id: `personal-onto-field-${sectionIndex}-${fieldIndex}`, className: 'memory-group-field-input', placeholder: _t('memory.group_field_add_placeholder', '填值…'), attrs: { 'data-poc-ref': ref, 'data-poc-field': f.name } })}
+            ${_button({ label: _t('memory.save', '保存'), role: 'primary', size: 'sm', attrs: { 'data-poc-group-action': 'field-add-value', 'data-poc-ref': ref, 'data-poc-field': f.name } })}
           </div>
         </div>`).join('');
       const flows = (ed.entriesBySection && ed.entriesBySection[sec.title]) || [];
@@ -310,10 +329,8 @@
         ? flows.map((e) => `
           <div class="memory-group-flow-entry">
             <span class="memory-group-flow-text">${escapeHtml(e)}</span>
-            <button type="button" class="btn btn-sm" data-poc-group-action="entry-promote"
-              data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}">${escapeHtml(_t('memory.group_promote', '升格'))}</button>
-            <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="entry-remove"
-              data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}" title="${escapeHtml(_t('memory.delete', '删除'))}">${_icon('x', 'ui-icon')}</button>
+            ${_button({ label: _t('memory.group_promote', '升格'), size: 'sm', attrs: { 'data-poc-group-action': 'entry-promote', 'data-poc-ref': ref, 'data-poc-entry': e } })}
+            ${_iconButton({ label: _t('memory.delete', '删除'), icon: 'x', variant: 'danger', className: 'memory-icon-btn is-muted', attrs: { 'data-poc-group-action': 'entry-remove', 'data-poc-ref': ref, 'data-poc-entry': e } })}
           </div>`).join('')
         : `<div class="memory-empty muted">${escapeHtml(_t('memory.group_flow_empty', '暂无流水条目'))}</div>`;
       return `<div class="memory-group-template-section">
@@ -328,7 +345,7 @@
   }
 
   function _pocRenderGroupRawView(ed) {
-    return `<textarea class="memory-entry-textarea memory-group-editor-textarea" rows="14" data-poc-group-content>${escapeHtml(ed.content || '')}</textarea>`;
+    return _textarea({ id: 'personal-ontology-group-content', className: 'memory-entry-textarea memory-group-editor-textarea', value: ed.content || '', attrs: { rows: 14, 'data-poc-group-content': '' } });
   }
 
   // A role template is a narrower projection than the general personal
@@ -367,7 +384,7 @@
       : ed.loadError
         ? `<div class="personal-onto-template-read-error" role="alert">
             <span>${escapeHtml(_t('personalOntology.load_error', '加载失败'))}: ${escapeHtml(ed.loadError)}</span>
-            <button type="button" class="btn btn-sm" data-poc-group-action="reload-group">${escapeHtml(_t('personalOntology.retry', '重试'))}</button>
+            ${_button({ label: _t('personalOntology.retry', '重试'), size: 'sm', attrs: { 'data-poc-group-action': 'reload-group' } })}
           </div>`
         : (view === 'form' ? _pocRenderTemplateFormView(ed) : _pocRenderGroupRawView(ed));
     const profileBridge = _pocRenderTemplateProfileBridge(ed);
@@ -387,7 +404,7 @@
       <div class="memory-entry-foot">
         <span class="memory-entry-charcount">${ready && ed.content ? ed.content.length : 0}</span>
         <span class="memory-flex"></span>
-        ${view === 'raw' && ready ? `<button type="button" class="btn btn-sm btn-primary" data-poc-group-action="save-content">${escapeHtml(_t('memory.save', '保存'))}</button>` : ''}
+        ${view === 'raw' && ready ? _button({ label: _t('memory.save', '保存'), role: 'primary', size: 'sm', attrs: { 'data-poc-group-action': 'save-content' } }) : ''}
       </div>
     </div>`;
   }
@@ -737,13 +754,11 @@
     const nSections = (t.sections || []).length;
     const nFields = (t.sections || []).reduce((n, s) => n + (s.fields || []).length, 0);
     const uninstallBtn = t.installed
-      ? `<button type="button" class="personal-onto-library-uninstall" data-template-id="${escapeHtml(t.template_id)}"
-           title="${escapeHtml(_t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'))}">${_icon('x', 'ui-icon')}</button>`
+      ? _iconButton({ label: _t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'), icon: 'x', variant: 'danger', className: 'personal-onto-library-uninstall', attrs: { 'data-template-id': t.template_id } })
       : '';
     const installBtn = t.installed
       ? `<span class="personal-onto-library-installed muted">${_t('personalOntology.template_installed_badge', '已安装')}</span>`
-      : `<button type="button" class="btn btn-sm btn-primary personal-onto-library-install" data-template-id="${escapeHtml(t.template_id)}"
-           ${atLimit ? 'disabled' : ''}>${_t('memory.templates_install', '安装')}</button>`;
+      : _button({ label: _t('memory.templates_install', '安装'), role: 'primary', size: 'sm', className: 'personal-onto-library-install', disabled: atLimit, attrs: { 'data-template-id': t.template_id } });
     return `<div class="personal-onto-library-detail-card${t.installed ? ' is-installed' : ''}" data-template-id="${escapeHtml(t.template_id)}">
       <div class="personal-onto-library-detail-head">
         <div>
@@ -810,8 +825,7 @@
           <span class="personal-onto-nav-row-text">${escapeHtml(tmpl.name)}</span>
           <span class="memory-template-name-suffix">${escapeHtml(_t('memory.templates_suffix', '模板'))}</span>
         </button>
-        <button type="button" class="personal-onto-template-uninstall" data-poc-nav="template-uninstall" data-poc-template-id="${escapeHtml(tmpl.template_id)}"
-                title="${escapeHtml(_t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'))}">${_icon('x', 'ui-icon')}</button>
+        ${_iconButton({ label: _t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'), icon: 'x', variant: 'danger', className: 'personal-onto-template-uninstall', attrs: { 'data-poc-nav': 'template-uninstall', 'data-poc-template-id': tmpl.template_id } })}
       </div>`;
     }).join('');
     const profileSelected = _pocSelected.kind === 'profile';
@@ -863,12 +877,12 @@
       return;
     }
     headerEl.innerHTML = `<span class="personal-onto-main-title">${escapeHtml(_t('personalOntology.nav_templates', '角色模板'))}</span>`;
-    bodyEl.innerHTML = `<div class="personal-onto-empty personal-onto-template-empty">
-      <span>${escapeHtml(_t('personalOntology.dest_no_roles', '尚未安装角色模板，可在「角色模板库」中安装'))}</span>
-      <button type="button" class="btn btn-sm btn-primary" id="personal-onto-empty-open-library">
-        ${_icon('package', 'ui-icon')}<span>${_t('personalOntology.template_library', '角色模板库')}</span>
-      </button>
-    </div>`;
+    bodyEl.innerHTML = `<div class="personal-onto-empty personal-onto-template-empty">${_emptyState({
+      kind: 'actionable',
+      title: _t('personalOntology.dest_no_roles', '尚未安装角色模板，可在「角色模板库」中安装'),
+      icon: 'package',
+      action: { label: _t('personalOntology.template_library', '角色模板库'), icon: 'package', size: 'sm', attrs: { id: 'personal-onto-empty-open-library' } },
+    })}</div>`;
     const emptyOpen = document.getElementById('personal-onto-empty-open-library');
     if (emptyOpen) emptyOpen.addEventListener('click', () => _pocOpenTemplateLibrary());
   }
@@ -881,10 +895,12 @@
     const error = escapeHtml(_pocTemplatesLoadError || _t('personalOntology.load_error', '加载失败'));
     headerEl.innerHTML = `<span class="personal-onto-main-title">${escapeHtml(_t('personalOntology.nav_templates', '角色模板'))}</span>`;
     nav.innerHTML = `<div class="personal-onto-nav-empty personal-onto-load-error" role="alert">${error}</div>`;
-    bodyEl.innerHTML = `<div class="personal-onto-empty personal-onto-load-error" role="alert">
-      <span>${escapeHtml(_t('personalOntology.load_error', '加载失败'))}: ${error}</span>
-      <button type="button" class="btn btn-sm btn-primary" id="personal-onto-load-retry">${escapeHtml(_t('personalOntology.retry', '重试'))}</button>
-    </div>`;
+    bodyEl.innerHTML = `<div class="personal-onto-empty personal-onto-load-error" role="alert">${_emptyState({
+      kind: 'actionable',
+      title: `${_t('personalOntology.load_error', '加载失败')}: ${_pocTemplatesLoadError || _t('personalOntology.load_error', '加载失败')}`,
+      icon: 'warning',
+      action: { label: _t('personalOntology.retry', '重试'), size: 'sm', attrs: { id: 'personal-onto-load-retry' } },
+    })}</div>`;
     const retry = document.getElementById('personal-onto-load-retry');
     if (retry) {
       retry.addEventListener('click', async () => {

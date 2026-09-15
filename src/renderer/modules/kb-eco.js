@@ -24,6 +24,23 @@
     return String(label).split(' · ')[0];
   }
 
+  function _tr(key, fallback) {
+    const value = typeof window.t === 'function' ? window.t(key) : '';
+    return value && value !== key ? value : fallback;
+  }
+
+  function _compactButton() {
+    const label = _compact
+      ? _tr('kb.eco.show_labels', '显示图标和文字')
+      : _tr('kb.eco.hide_labels', '仅显示图标');
+    return window.uiIconButton({
+      label,
+      icon: 'panel-list',
+      className: 'kb-eco-compact',
+      attrs: { id: 'kb-eco-compact', 'aria-pressed': String(_compact) },
+    });
+  }
+
   function _navBtn(item, active) {
     const badge = item.status === 'soon' ? '<span class="kb-eco-tab-soon">待开发</span>' : '';
     return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
@@ -34,7 +51,14 @@
   function _applyCompact() {
     document.querySelectorAll('.kb-eco').forEach((el) => el.classList.toggle('kb-eco--compact', _compact));
     const btn = document.getElementById('kb-eco-compact');
-    if (btn) btn.title = _compact ? '切换为「图标 + 文字」' : '切换为「仅图标」';
+    if (btn) {
+      const label = _compact
+        ? _tr('kb.eco.show_labels', '显示图标和文字')
+        : _tr('kb.eco.hide_labels', '仅显示图标');
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('aria-pressed', String(_compact));
+    }
   }
 
   function renderKbEco() {
@@ -44,7 +68,7 @@
     host.innerHTML = `<div class="kb-eco">
       <div class="kb-eco-topnav">
         <div class="kb-eco-tabs">${nav}</div>
-        <button type="button" class="kb-eco-compact" id="kb-eco-compact" title="切换为「仅图标」">≡</button>
+        ${_compactButton()}
       </div>
       <div class="kb-eco-body">
         <div class="kb-workbench" id="kb-workbench"></div>

@@ -1,0 +1,14 @@
+/* CogSeed 开源版 · 间距 · 4px 基数
+   同组元素 8，组间 16–24，区块间 32–52，页面留白 88。 */
+:root{
+  --cs-space-1:4px;
+  --cs-space-2:8px;
+  --cs-space-3:12px;
+  --cs-space-4:16px;
+  --cs-space-6:24px;
+  --cs-space-8:32px;
+  --cs-space-13:52px;
+  --cs-space-22:88px;
+  --cs-gap-section:32px;
+  --cs-field-padding-x:12px;
+}

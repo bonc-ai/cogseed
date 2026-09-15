@@ -59,6 +59,10 @@ function loadSecurityPage(status: unknown) {
   };
   context.window.window = context.window;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules/ui-button.js'), 'utf8'), context, { filename: 'ui-button.js' });
+  vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
+  context.uiButton = context.window.uiButton;
+  context.uiInput = context.window.uiInput;
   const code = fs.readFileSync(path.join(root, 'src/renderer/modules/settings-security.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'settings-security.js' });
   return { window: context.window, body };

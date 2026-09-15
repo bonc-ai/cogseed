@@ -1,0 +1,33 @@
+/* CogSeed 开源版 · 系统默认非衬线字体。仅指定通用 system-ui、sans-serif 类别，不绑定具体字体。 */
+:root{
+  --cs-font-sans:system-ui,sans-serif;
+  /* 兼容旧组件的 token 名称，实际字体统一为系统非衬线。 */
+  --cs-font-serif:var(--cs-font-sans);
+  --cs-font-mono:var(--cs-font-sans);
+
+  /* 字号阶 */
+  --cs-size-heading:22px;
+  --cs-size-dialog-title:18px;
+  --cs-size-title:15px;
+  --cs-size-body:15px;
+  --cs-size-body-lg:16px;
+  --cs-size-ui:14px;
+  --cs-size-ui-sm:13px;
+  --cs-size-caption:12.5px;
+  --cs-size-meta:12px;
+  --cs-size-label:12px;
+  --cs-size-numeric:13px;
+
+  /* 行高 */
+
+  /* 字距 */
+  --cs-tracking-label:.04em;
+
+  /* 组合别名 */
+  --cs-type-title:500 var(--cs-size-title)/1.5 var(--cs-font-sans);
+  --cs-type-body:400 var(--cs-size-body)/1.75 var(--cs-font-sans);
+  --cs-type-ui:400 var(--cs-size-ui)/1.5 var(--cs-font-sans);
+  --cs-type-caption:400 var(--cs-size-caption)/1.6 var(--cs-font-sans);
+  --cs-type-label:500 var(--cs-size-label)/1.4 var(--cs-font-sans);
+  --cs-type-numeric:400 var(--cs-size-numeric)/1.5 var(--cs-font-sans);
+}

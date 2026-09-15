@@ -11,6 +11,10 @@ const conversationInfoSource = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/conversation-info.js'),
   'utf8',
 );
+const uiButtonSource = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/modules/ui-button.js'),
+  'utf8',
+);
 
 function extractFunction(name: string, input = source): string {
   const asyncMarker = `async function ${name}`;
@@ -127,7 +131,7 @@ describe('imported-session welcome panel', () => {
 
   it('renders the carry strip with real counts and source toggle', () => {
     const render = runWith(
-      [extractFunction('_renderWelcomeCarryHtml')],
+      [uiButtonSource, extractFunction('_renderWelcomeCarryHtml')],
       {
         escapeHtml,
         t: createTranslator('zh'),
@@ -153,6 +157,7 @@ describe('imported-session welcome panel', () => {
   it('renders the welcome-carry block with resume data and continue button', () => {
     const render = runWith(
       [
+        uiButtonSource,
         extractFunction('_renderWelcomeCarryHtml'),
       ],
       {
@@ -189,7 +194,7 @@ describe('imported-session welcome panel', () => {
 
   it('renders English from the stable carry kind instead of the backend Chinese label', () => {
     const render = runWith(
-      [extractFunction('_renderWelcomeCarryHtml')],
+      [uiButtonSource, extractFunction('_renderWelcomeCarryHtml')],
       { escapeHtml, t: createTranslator('en'), Array, String, Number },
       '_renderWelcomeCarryHtml',
     );

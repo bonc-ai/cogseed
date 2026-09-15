@@ -24,9 +24,11 @@ describe('Run Center renderer contract', () => {
     const boot = read('src/renderer/modules/boot.js');
     const state = read('src/renderer/modules/state.js');
     const manifest = read('src/renderer/modules/lazy-features.js');
+    const sidebarTools = read('src/renderer/modules/ui-sidebar-tools.js');
 
     expect(html).toContain('id="run-center-btn"');
-    expect(html).toContain('id="run-center-global-entry"');
+    expect(html).toContain('id="app-shell-tools"');
+    expect(sidebarTools).toContain('id="run-center-global-entry"');
     expect(html).not.toMatch(/<button[^>]*id="run-center-global-btn"/);
     expect(html).toContain('id="panel-run-center"');
     expect(html).toMatch(/id="panel-run-center"[\s\S]*?class="app-top-drag-strip"/);

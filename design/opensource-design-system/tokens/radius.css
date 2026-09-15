@@ -1,0 +1,11 @@
+/* CogSeed 开源版 · 圆角 */
+:root{
+  --cs-radius-xs:4px;   /* 标签、徽标 */
+  --cs-radius-sm:7px;   /* 小按钮、图标钮、页码 */
+  --cs-radius-md:8px;   /* 导航项、按钮、菜单项 */
+  --cs-radius-field:9px;/* 输入框、选择器 */
+  --cs-radius-lg:11px;  /* 浮层、菜单、popover、提示条 */
+  --cs-radius-card:12px;/* 卡片 */
+  --cs-radius-window:14px; /* 对话框、命令面板、输入台 */
+  --cs-radius-full:999px;  /* 状态胶囊、开关 */
+}

@@ -77,13 +77,13 @@ describe('9.1 unified framework · left zone (tasks & sessions)', () => {
     expect(conversationSource).not.toContain("badge.classList.add('is-running')");
   });
 
-  it('aggregates a task status line (running / queued / plan progress) per conversation', () => {
+  it('shows only a compact inline running indicator in sidebar task rows', () => {
     expect(conversationSource).toContain('function _convTaskStatusLine');
-    expect(conversationSource).toContain('window.planRail.planFor(cid)');
-    expect(conversationSource).toContain("t('chat.task_plan_label'");
     expect(conversationSource).toContain('_refreshConvTaskLine(cid)');
-    expect(styleSource).toContain('.conv-task-line');
-    expect(styleSource).toContain('.conv-task-chip.is-running');
+    expect(conversationSource).toContain('class="conv-task-indicator"');
+    expect(conversationSource).not.toContain('class="conv-task-chip');
+    expect(styleSource).toContain('.conv-task-indicator');
+    expect(styleSource).toContain('@keyframes conv-task-spin');
   });
 
   it('exposes plan progress per conversation from the plan rail', () => {

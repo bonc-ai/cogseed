@@ -7,6 +7,10 @@ const conversationSource = readFileSync(
   resolve(__dirname, '../../src/renderer/modules/conversation.js'),
   'utf8',
 );
+const uiButtonSource = readFileSync(
+  resolve(__dirname, '../../src/renderer/modules/ui-button.js'),
+  'utf8',
+);
 const start = conversationSource.indexOf('function _collaborationCount');
 const end = conversationSource.indexOf('\nfunction _ensureCreateAgentInlineObserver', start);
 const collaborationStatusSource = conversationSource.slice(start, end);
@@ -24,7 +28,7 @@ function render(snapshot: any): string {
     }[c] || c)),
     t: (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ':' + JSON.stringify(vars) : ''}`,
   };
-  vm.runInNewContext(collaborationStatusSource, sandbox, { filename: 'conversation-collaboration-status.js' });
+  vm.runInNewContext(`${uiButtonSource}\n${collaborationStatusSource}`, sandbox, { filename: 'conversation-collaboration-status.js' });
   return sandbox._renderCollaborationStatusHtml(snapshot);
 }
 
@@ -46,7 +50,7 @@ function mount(snapshot: any): { container: any; sandbox: any } {
     escapeHtml: (value: unknown) => String(value ?? ''),
     t: (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ':' + JSON.stringify(vars) : ''}`,
   };
-  vm.runInNewContext(collaborationStatusSource, sandbox, { filename: 'conversation-collaboration-status.js' });
+  vm.runInNewContext(`${uiButtonSource}\n${collaborationStatusSource}`, sandbox, { filename: 'conversation-collaboration-status.js' });
   sandbox._mountCollaborationStatusCard(container, snapshot);
   container.removed = removed;
   return { container, sandbox };

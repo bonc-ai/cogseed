@@ -1,0 +1,9 @@
+/* Settings Section: existing section/inline spacing tokens; no decorative shadow. */
+.cs-settings-section{margin:0 0 var(--cs-gap-section);min-width:0;padding:var(--cs-space-4);border:1px solid var(--cs-border);border-radius:var(--cs-radius-card);background:var(--cs-white);box-sizing:border-box}
+.cs-settings-section:last-child{margin-bottom:0}
+.cs-settings-section__header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--cs-space-2) var(--cs-space-4);margin-bottom:var(--cs-space-3)}
+.cs-settings-section__title{font:600 var(--cs-size-ui)/1.5 var(--cs-font-sans);color:var(--cs-ink);margin:0}
+.cs-settings-section__actions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--cs-space-2);min-width:0}
+.cs-settings-section__body{min-width:0}
+.cs-settings-section__body>:first-child{margin-top:0}
+.cs-settings-section__body>:last-child{margin-bottom:0}
