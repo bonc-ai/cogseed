@@ -116,6 +116,9 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   expiresAt: string;
   taskRunId?: string;
   targetAssetId?: string;
+  /** 版本组契约（2026-09-16）：任务实际使用的目标资产版本（KSTAR 改进
+   *  提案锚定用）；确认时与资产当前在用版核对，避免改错对象。 */
+  targetVersionUsed?: string;
   /** Automatic semantic deduplication provenance. These links are audit hints,
    *  not lifecycle states: the candidate still ends in a normal state. */
   mergedInto?: string;
@@ -180,6 +183,10 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   deletedAt?: string;
   purgedAt?: string;
   version: string;
+  /** 在用版本指针（2026-09-16 版本组）：缺省=跟随最新（version）；
+   *  selectAbilityAssetVersion 切换后指向所选历史版本；后续内容更新
+   *  bump 时重置为最新版。注入默认取该版本的内容快照。 */
+  activeVersion?: string;
   /** 空间归属：资产由某空间的候选确认而来（随 recall 全局存储，不随空间删）。 */
   spaceId?: string;
   /** Provenance for assets learned from conversation sources. */
@@ -207,6 +214,9 @@ export interface SaveRecallCandidateInput {
   expiresAt?: string;
   taskRunId?: string;
   targetAssetId?: string;
+  /** 版本组契约（2026-09-16）：任务实际使用的目标资产版本（KSTAR 改进
+   *  提案锚定用）；确认时与资产当前在用版核对，避免改错对象。 */
+  targetVersionUsed?: string;
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
@@ -768,6 +778,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
   if (taskRunId && !safeId(taskRunId)) throw new Error('invalid task run id');
   const targetAssetId = input.targetAssetId === undefined ? undefined : boundedText(input.targetAssetId, 'target asset id', 160, true);
   if (targetAssetId && !safeId(targetAssetId)) throw new Error('invalid target asset id');
+  const targetVersionUsed = input.targetVersionUsed === undefined ? undefined : boundedText(input.targetVersionUsed, 'target version used', 16, true);
   // 规则候选的适用/禁止范围：抽取阶段就带着走，否则自动线永远给不出边界，
   // 而 PRD 3.1 把边界列为 RuleAsset 的最低准入门槛，规则就再也晋升不了。
   // 走和资产同一套归一化，并过一遍敏感内容闸（这是自由文本）。
@@ -867,6 +878,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     ...(input.spaceId && safeId(input.spaceId) ? { spaceId: input.spaceId } : {}),
     ...(taskRunId ? { taskRunId } : {}),
     ...(targetAssetId ? { targetAssetId } : {}),
+    ...(targetVersionUsed ? { targetVersionUsed } : {}),
     expiresAt,
     createdAt: now,
     updatedAt: now,

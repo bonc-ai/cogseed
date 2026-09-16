@@ -787,6 +787,31 @@ describe('整理详情页', () => {
     expect(coreSource).not.toContain("defer: T('cognition.candidate_deferred'");
   });
 
+  it('更新候选的差异确认卡：旧版对照 + 版本核对提示（2026-09-16 版本组）', () => {
+    const target = {
+      id: 'aa-t1', title: '接口变更同步文档', type: 'rule', status: 'active',
+      scope: 'general', statement: '接口变更后必须同步更新对应文档，并在群里告知。', version: '2', activeVersion: '2',
+    };
+    const update = {
+      id: 'rcand-u', status: 'pending_review',
+      judgment: '接口变更后必须同步更新对应文档与 wiki，并在群里告知；紧急变更可先口头同步。', value: '', summary: '接口变更同步文档修订',
+      suggestedType: 'rule', suggestedScope: 'general',
+      suggestedAction: 'update', targetAssetId: 'aa-t1', targetVersionUsed: '1',
+      capabilities: { canEdit: true, canPromote: true, countsAsPending: true, isSnoozed: false },
+    };
+    const review = renderPage('review', { sources: [conversationSources[0]], candidates: [update], assets: [target] }, { candidateId: 'rcand-u' });
+    // 差异卡：旧版全文可见（对照新内容可编辑区）。
+    expect(review).toContain('当前版本（v2）');
+    expect(review).toContain('接口变更后必须同步更新对应文档，并在群里告知。');
+    // 版本核对：任务用的是 v1、当前在用 v2 → 提示核对改进对象。
+    expect(review).toContain('任务当时使用的是 v1');
+    expect(review).toContain('当前在用 v2');
+    // 版本一致时不出核对提示。
+    const aligned = { ...update, targetVersionUsed: '2' };
+    const reviewAligned = renderPage('review', { sources: [conversationSources[0]], candidates: [aligned], assets: [target] }, { candidateId: 'rcand-u' });
+    expect(reviewAligned).not.toContain('任务当时使用的是');
+  });
+
   it('无候选：显示模型给出的理由与筛选原因白话', () => {
     const html = renderPage('organize', {
       captures: [{
@@ -960,6 +985,52 @@ describe('资产详情（使用记录并入）', () => {
     expect(html).toContain('data-act="proof-toggle" data-id="ev-1"');
     expect(html).toContain('data-feedback="positive"');
     expect(html).toContain('data-act="proof-rate"');
+  });
+
+  it('版本链（2026-09-16 版本组）：V1 归入同条目可展开，非在用版可「选用此版」', () => {
+    const multi = {
+      ...asset,
+      version: '2',
+      activeVersion: '2',
+      title: 'Renamed in v2',
+      statement: '新内容',
+    };
+    const html = renderPage('overview', {
+      assets: [multi],
+      proofs: [],
+      sources: [],
+      assetVersions: {
+        assetId: 'aa-1',
+        versions: [
+          { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', snapshot: { title: '上线前必须确认影响范围', statement: '旧内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '1' } },
+          { assetId: 'aa-1', version: '2', at: '2026-09-15T01:00:00.000Z', reason: 'Rename for v2.', snapshot: { title: 'Renamed in v2', statement: '新内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '2' } },
+        ],
+      },
+    }, { assetId: 'aa-1' });
+    // 版本链 section：标题 + 两版（各版快照标题可辨）。
+    expect(html).toContain('版本记录');
+    expect(html).toContain('Renamed in v2');
+    expect(html).toContain('上线前必须确认影响范围');
+    // 在用版（v2）标「在用」，非在用版（v1）给「选用此版」。
+    expect(html).toContain('data-act="select-asset-version" data-id="aa-1" data-version="1"');
+    expect(html).not.toContain('data-version="2"');
+    expect(html).toContain('在用');
+  });
+
+  it('单版本资产不出版本链区（没有"链"可言）；在用版非最新时头部提示', () => {
+    const single = renderPage('overview', {
+      assets: [{ ...asset, version: '1' }],
+      proofs: [], sources: [],
+      assetVersions: { assetId: 'aa-1', versions: [{ assetId: 'aa-1', version: '1', at: '2026-09-15T01:00:00.000Z', snapshot: { title: '上线前必须确认影响范围', type: 'rule', evidenceRefs: [] } }] },
+    }, { assetId: 'aa-1' });
+    expect(single).not.toContain('版本记录');
+    // 选用旧版后（activeVersion=1 而最新=3）：头部显示在用 v1 并提示存在更新。
+    const stale = renderPage('overview', {
+      assets: [{ ...asset, version: '3', activeVersion: '1' }],
+      proofs: [], sources: [], assetVersions: null,
+    }, { assetId: 'aa-1' });
+    expect(stale).toContain('v1');
+    expect(stale).toContain('已有更新的版本');
   });
 
   it('未使用资产出占位说明，不裸空白', () => {

@@ -25,7 +25,7 @@ import {
 } from '../group_chat/bus';
 import { readMembers } from '../group_chat/state';
 import type { GroupMessage } from '../group_chat/visibility';
-import { readAbilityAsset } from './asset-service';
+import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import {
   isAutoCaptureEligible,
   autoApplyRecallCandidate,
@@ -833,6 +833,10 @@ function extractionSystemPrompt(): string {
     // summary 是候选在界面上的名字（2026-09-16）：渲染层以它为卡片标题，模型
     // 必须给出"像名字"的短语——完整句子或 judgment 前缀会让列表不可读。
     'summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation (e.g. "回复保持简洁", "接口变更须同步文档"). Never write a full sentence, a question, or a prefix copied from judgment.',
+    // 版本组（2026-09-16）：update 候选必须基于现有资产的在用版融合生成——
+    // 输入里的 existingAssets 列表带当前内容；无融合的重写会让新版丢失
+    // 旧版仍然有效的信息。
+    'When the conversation corrects or refines an existing asset (see "existingAssets" in the input), emit that candidate with suggestedAction "update" and targetAssetId set to that asset id, and write judgment as a MERGED REVISION of the asset current statement plus the new information — keep still-valid content from the current version, do not rewrite from scratch. If your revision would drop key content of the current version, emit it as a separate "create" candidate instead.',
     // 空返回也要说明白为什么。没有这句，实机上「这次没抽出来」在系统里没有
     // 任何解释，用户无法判断是抽对了还是抽漏了。
     'When nothing is durable enough, return {"candidates":[],"reason":"one short sentence, in the language of the conversation, saying what was missing"}.',
@@ -855,13 +859,39 @@ function extractionSystemPrompt(): string {
   ].join('\n');
 }
 
+/** 版本组（2026-09-16）：提炼时附用户现有资产清单（在用版内容），供模型
+ *  识别 update 场景并基于现有版融合生成，而非无上下文重写。上限护栏：
+ *  只带 active 的最近 20 条，防 prompt 膨胀。 */
+async function existingAssetsForExtraction(userId: string) {
+  try {
+    const assets = await listAbilityAssets(userId);
+    return assets
+      .filter((asset) => asset.status === 'active')
+      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+      .slice(0, 20)
+      .map((asset: RecallAbilityAssetRecord) => ({
+        id: asset.id,
+        title: asset.title,
+        statement: asset.statement,
+        type: asset.type,
+        scope: asset.scope,
+        version: String(asset.activeVersion || asset.version || '1'),
+      }));
+  } catch {
+    // 资产清单读取失败不阻断整理：模型照常提炼，只是没有 update 上下文。
+    return [];
+  }
+}
+
 function extractionInput(
   conversationTitle: string,
   messages: CapturePromptMessage[],
   recallView: RecallViewRecord,
+  existingAssets: Array<{ id: string; title: string; statement: string; type: string; scope: string; version: string }> = [],
 ): string {
   return JSON.stringify({
     conversation: { title: conversationTitle },
+    ...(existingAssets.length ? { existingAssets } : {}),
     recallView: {
       id: recallView.id,
       purpose: recallView.purpose,
@@ -903,7 +933,7 @@ async function extractCaptureViaCli(
   const available = entries.filter((e) => e && e.available);
   if (!available.length) return null;
   const chosen = available.find((e) => e.type === 'claude') ?? available[0];
-  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView);
+  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView, await existingAssetsForExtraction(userId));
   const prompt =
     `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
     `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
@@ -911,6 +941,7 @@ async function extractCaptureViaCli(
     `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
     `suggestedScope must be one of the five controlled terms: "general" (across all conversations and spaces — identity, durable preferences) or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes.\n` +
     `summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation. Never a full sentence or a prefix copied from judgment.\n` +
+    `When the conversation corrects an existing asset (see "existingAssets" in the input), emit it with suggestedAction "update", targetAssetId set, and judgment as a merged revision of that asset's current statement plus the new information.\n` +
     `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
     `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
     `Write candidate text in the same language as the conversation.\n\n` +
@@ -2051,7 +2082,7 @@ export async function runRecallCapture(
       if (signal?.aborted) modelController.abort();
       try {
         result = await runner.run({
-          message: extractionInput(conversation.title, promptMessages, recallView),
+          message: extractionInput(conversation.title, promptMessages, recallView, await existingAssetsForExtraction(userId)),
           signal: modelController.signal,
           thinkingLevel: 'off',
           cacheRetention: 'none',

@@ -295,6 +295,9 @@
     if (kind === 'asset_version') {
       return T('cognition.proof_sentence_version', '{when}，保存了新版本{version}', { when, version });
     }
+    if (kind === 'asset_version_selected') {
+      return T('cognition.proof_sentence_version_selected', '{when}，选用 v{n} 为在用版本', { when, n: String(refs.version || '') });
+    }
     return T('cognition.proof_sentence_unknown', '{when}，{title}', { when, title: proofEventTitle(proof) });
   }
 
@@ -349,6 +352,29 @@
     </div>`;
   }
 
+  /** 版本链（2026-09-16 版本组）：V1 归入同条目可展开；在用=指针可切换，
+   *  「选用此版」走 select-asset-version（内容同步、不产生新版本号）。 */
+  function assetVersionsSection(asset) {
+    const state = S.assetVersions;
+    if (!state || state.assetId !== String(asset.id) || !Array.isArray(state.versions) || state.versions.length < 2) return '';
+    const active = String(asset.activeVersion || asset.version || '');
+    const rows = [...state.versions]
+      .sort((left, right) => Number(right.version) - Number(left.version))
+      .map((v) => {
+        const isActive = String(v.version) === active;
+        const title = String((v.snapshot && v.snapshot.title) || asset.title || '');
+        const meta = [fmtDate(v.at), String(v.reason || '')].filter(Boolean).join(' · ');
+        const side = isActive
+          ? chip(T('cognition.asset_version_active', '在用'), 'green')
+          : btn(T('cognition.asset_version_select', '选用此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });
+        return `<div class="ca-row is-flat">
+          <div class="ca-row-main"><div class="ca-row-title">v${esc(String(v.version))} · ${esc(title)}</div><div class="ca-row-meta">${esc(meta)}</div></div>
+          <div class="ca-row-side">${side}</div>
+        </div>`;
+      }).join('');
+    return `<div class="ca-sect"><div class="ca-row-title">${esc(T('cognition.asset_versions_section', '版本记录'))}</div>${rows}</div>`;
+  }
+
   function assetDetail(asset, route) {
     const affectedCopy = {
       active: [T('cognition.asset_pause_hint', '暂停后，新任务不再默认带上这条资产；已完成任务、历史版本与使用证据都会保留。'),
@@ -382,7 +408,7 @@
       <div class="ca-line">
         <div>
           <h3>${esc(asset.title || asset.id)}</h3>
-          <div class="ca-sub">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))} · ${esc(T('cognition.asset_updated', '更新于'))} ${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div>
+          <div class="ca-sub">${esc(categoryLabel(asset.type))} · v${esc(String(asset.activeVersion || asset.version || '1'))}${asset.activeVersion && asset.activeVersion !== asset.version ? ` · ${esc(T('cognition.asset_version_latest_note', '已有更新的版本'))}` : ''} · ${esc(T('cognition.asset_updated', '更新于'))} ${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div>
         </div>
         <div class="ca-right">${assetStatusChip(asset)}</div>
       </div>
@@ -395,6 +421,7 @@
           <div><div class="ca-k">${esc(T('cognition.asset_proofs_label', '用过几次'))}</div><div class="ca-v">${proofCount ? `${proofCount} ${esc(T('cognition.asset_proof_times', '次'))}` : esc(T('cognition.asset_no_proofs', '还没用过'))}</div></div>
         </div>
       </details>
+      ${assetVersionsSection(asset)}
       ${affectedCopy.length ? `<div class="ca-sect"><p class="ca-note">${esc(affectedCopy[0])}</p><div class="ca-actions">${affectedCopy.slice(1).join('')}</div></div>` : ''}
       ${assetUsageSection(asset, route)}
       <div class="ca-more-wrap">
@@ -617,6 +644,20 @@
     const broken = evidenceMostlyUnavailable(candidate);
     const edit = candidate.capabilities && candidate.capabilities.canEdit;
     const field = (label, inner) => `<label class="ca-field"><span>${esc(label)}</span>${inner}</label>`;
+    // 更新候选的差异确认卡（2026-09-16 版本组）：旧版全文对照 + 版本核对
+    // 提示——任务所用版与当前在用版不一致时，确认前先核对改进对象。
+    const updateDiff = (() => {
+      const mutating = ['update', 'limit_scope'].includes(String(candidate.suggestedAction || ''));
+      if (!mutating || !candidate.targetAssetId) return '';
+      const target = S.assets.find((a) => String(a.id) === String(candidate.targetAssetId));
+      if (!target) return '';
+      const activeVersion = String(target.activeVersion || target.version || '1');
+      const usedVersion = String(candidate.targetVersionUsed || '');
+      const mismatch = usedVersion && usedVersion !== activeVersion
+        ? `<div class="ca-warn">${esc(T('cognition.candidate_version_mismatch', '核对改进对象：任务当时使用的是 v{used}，该资产当前在用 v{active}——确认这次更新应作用在当前在用版上。', { used: usedVersion, active: activeVersion }))}</div>`
+        : '';
+      return `${mismatch}<div class="ca-field"><span>${esc(T('cognition.candidate_current_version', '当前版本（v{n}）', { n: activeVersion }))}</span><p class="ca-note">${esc(target.statement || '')}</p></div>`;
+    })();
     const actionsHtml = `<div class="ca-actions ca-actions-right">
         ${(candidate.capabilities && candidate.capabilities.canPromote) ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
         ${btn(T('cognition.candidate_defer_action', '稍后处理'), 'cand-decide', { id: candidate.id, data: { action: 'defer' } })}
@@ -624,6 +665,7 @@
       </div>`;
     return `
       ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>` : ''}
+      ${updateDiff}
       ${edit ? `
         ${field(T('cognition.type', '类型'), `<div class="ca-chips">${CATEGORIES.map(([id, key, fb]) => { const on = String(candidate.suggestedType || '') === id; return `<span class="ca-chip ca-chip-opt${on ? ' is-green' : ''}" data-act="cand-type" data-id="${esc(id)}" ${roleBtn(`aria-pressed="${on ? 'true' : 'false'}"`)}>${esc(T(key, fb))}</span>`; }).join('')}</div>`)}
         ${field(T('cognition.judgment', '具体内容'), window.uiTextarea({ id: `ca-cand-judgment-${esc(candidate.id)}`, value: candidate.judgment || '', attrs: { 'data-f': 'judgment' } }))}

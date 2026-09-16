@@ -42,6 +42,7 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   assetId: string;
   action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked'
     | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
+    | 'version_selected'
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
     | 'recommendation_cleared'
     | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
@@ -179,6 +180,10 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
       || value.lifecycleStatus === 'system_precipitated_unverified'
       ? value.lifecycleStatus
       : 'user_confirmed_unverified';
+  const activeVersion = value.activeVersion === undefined ? undefined : String(value.activeVersion);
+  if (activeVersion !== undefined && (!/^\d+$/.test(activeVersion) || Number(activeVersion) < 1)) {
+    throw new Error('malformed recall ability asset active version');
+  }
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
@@ -188,6 +193,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     // must survive reads — the asset stays honest about NOT being
     // user-confirmed.
     lifecycleStatus,
+    ...(activeVersion !== undefined ? { activeVersion } : {}),
     sourceCandidateIds,
     appliedReviewDecisionIds,
     appliedValidationIds,
@@ -453,6 +459,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       ...relationContract,
       ...semantics,
       version: nextVersion(current.version),
+      activeVersion: nextVersion(current.version),
       ...(reviewDecisionId ? {
         appliedReviewDecisionIds: [...new Set([...(current.appliedReviewDecisionIds || []), reviewDecisionId])],
         sourceCandidateIds: [...new Set([...(current.sourceCandidateIds || [current.candidateId]), sourceCandidateId!])],
@@ -509,6 +516,7 @@ export async function mergeAbilityAssetEvidence(
       evidenceRefs: merged,
       ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
       version: nextVersion(cur.version),
+      activeVersion: nextVersion(cur.version),
       updatedAt: new Date().toISOString(),
     };
   }));
@@ -961,12 +969,52 @@ export async function rollbackAbilityAsset(
       // 变回 active，验证过的成熟度也不该被一次内容回滚抹掉。
       ...content,
       version: nextVersion(current.version),
+      activeVersion: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
     };
   });
   const asset = asAsset(updated);
   await appendVersion(userId, asset, { reason: action.reason, actor: action.actor });
   await appendAudit(userId, asset.id, 'rolled_back', { note: action.reason, actor: action.actor });
+  return asset;
+}
+
+/**
+ * 选用某个历史版本为「在用版」（2026-09-16 版本组）。
+ *
+ * 与 rollback 的区别：rollback 生成新版本号（内容追加演进），select 只切
+ * 「在用」指针——资产内容同步为所选版本快照，version 计数不变、不追加
+ * 版本记录；后续内容更新会 bump 并让指针跟随最新。历史任务引用不受影响
+ * （注入回放按投影冻结的版本号）。
+ */
+export async function selectAbilityAssetVersion(
+  userId: string,
+  assetId: string,
+  toVersion: string,
+  input: AbilityAssetUserActionInput,
+): Promise<RecallAbilityAssetRecord> {
+  const action = requireAssetAction(input);
+  // 先判终态再查版本（与 rollback 同序）：purge 后的 select 报终态而不是版本错误。
+  assertNotPurged(await readAbilityAsset(userId, assetId));
+  const versions = await listAbilityAssetVersions(userId, assetId);
+  const target = versions.find((record) => record.version === toVersion);
+  if (!target) throw new Error('recall ability asset version not found');
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    assertNotPurged(current);
+    if ((current.activeVersion || current.version) === toVersion) throw new Error('ability asset already selected');
+    // 内容同步为所选快照（治理状态与成熟度不动，与 rollback 同口径）。
+    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, ...content } = target.snapshot;
+    return {
+      ...current,
+      ...content,
+      activeVersion: toVersion,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  const asset = asAsset(updated);
+  await appendAudit(userId, asset.id, 'version_selected', { note: `${action.reason || 'select'} (v${toVersion})`, actor: action.actor });
   return asset;
 }
 

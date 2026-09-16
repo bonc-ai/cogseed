@@ -118,6 +118,8 @@
     captures: [],
     captureCounts: {},
     captureSettings: null,
+    /** 资产详情按需拉的版本链（版本组 2026-09-16）：{assetId, versions}。 */
+    assetVersions: null,
     sources: [],
     tree: null,
     proofs: [],
@@ -233,6 +235,25 @@
     }
     if (!store.captureContext || store.captureContext.captureId !== id) return;
     store.captureContext = { captureId: id, data };
+    NS.notify();
+  };
+
+  /** 资产详情按需拉版本链（版本组 2026-09-16）。按资产缓存；失败降级为
+   *  空列表（版本链区静默不渲染）。 */
+  NS.loadAssetVersions = async function loadAssetVersions(assetId) {
+    const id = String(assetId || '');
+    if (!id || (store.assetVersions && store.assetVersions.assetId === id)) return;
+    store.assetVersions = { assetId: id, loading: true };
+    NS.notify();
+    let versions = [];
+    try {
+      const result = await api.call('recall.assets.versions.list', { assetId: id });
+      versions = (result && result.versions) || [];
+    } catch (error) {
+      versions = [];
+    }
+    if (!store.assetVersions || store.assetVersions.assetId !== id) return;
+    store.assetVersions = { assetId: id, versions };
     NS.notify();
   };
 
@@ -456,6 +477,13 @@
       await api.call(channel, { assetId });
       toast(T('cognition.asset_action_done', '已完成'));
       if (action === 'delete' || action === 'purge') router.go({ name: 'overview' });
+      await NS.reload();
+    },
+    /** 选用历史版本为在用版（版本组 2026-09-16）：切指针不产生新版本号。 */
+    async selectAssetVersion(assetId, version) {
+      await api.call('recall.assets.versions.select', { assetId, version });
+      toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
+      store.assetVersions = null;
       await NS.reload();
     },
     async sourceAction(kind, sourceId, action) {

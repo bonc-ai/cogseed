@@ -14,6 +14,7 @@ export type RecallAssetTimelineKind =
   | 'asset_purged'
   | 'asset_restored'
   | 'asset_rolled_back'
+  | 'asset_version_selected'
   | 'asset_maturity_downgraded'
   | 'asset_version'
   | 'projection_confirmed'
@@ -65,6 +66,7 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_purged': return 'Asset purged';
     case 'asset_restored': return 'Asset restored';
     case 'asset_rolled_back': return 'Asset rolled back';
+    case 'asset_version_selected': return 'Asset version selected';
     case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
@@ -93,6 +95,7 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
     case 'purged': return 'asset_purged';
     case 'restored': return 'asset_restored';
     case 'rolled_back': return 'asset_rolled_back';
+    case 'version_selected': return 'asset_version_selected';
     case 'maturity_downgraded': return 'asset_maturity_downgraded';
     case 'pause_recommended':
     case 'rework_recommended':

@@ -17,6 +17,7 @@ import type {
 } from './types';
 import type { AssetUsageReceipt } from '../recall/asset-usage-receipt';
 import type { InjectionReceipt } from '../recall/injection-receipt';
+import { readAbilityAsset } from '../recall/asset-service';
 
 const log = createLogger('kstar.review-inference');
 const MAX_REVIEW_TEXT = 4_000;
@@ -222,6 +223,9 @@ function inferenceSystemPrompt(): string {
     'lesson is OPTIONAL but valuable: it captures a REUSABLE experience discovered DURING execution — a pattern, pitfall, or method the executor would apply differently next time. This is separate from deltaR: even a fully successful task (met_expected, deltaR 0) can yield a lesson, e.g. "merge-conflict type assertions (as X) hide runtime errors — prefer explicit discriminant checks".',
     'Only write a lesson when it is genuinely reusable and non-trivial (a specific pattern/pitfall/method, not "the task was completed"). Omit lesson when the execution was routine with nothing to carry forward.',
     'HARD RULE — language: write the lesson (and reason) in the SAME language as the task goal and conversation. A Chinese task MUST yield a Chinese lesson; an English task MUST yield an English lesson. A lesson in a different language is discarded entirely by a deterministic gate — never produce it. This keeps precipitated assets readable and retrievable for the user.',
+    // 版本组（2026-09-16）：引用资产出问题（过时/冲突）时，lesson 必须是
+    // 基于该资产当前内容的融合修订（保留仍有效信息），不是凭空重写。
+    'When "referencedAssets" is present and the failure is caused by one of those assets being outdated or conflicting (attributionDetails category "asset_outdated" / "asset_conflict"), the lesson MUST be a merged revision of that asset\'s current statement plus the corrective insight: keep its still-valid content, integrate what must change. Never rewrite the asset from scratch.',
   ].join('\n');
 }
 
@@ -246,6 +250,31 @@ async function defaultRunModel(
   });
   if (result.meta.aborted || result.meta.error) throw new Error('review model unavailable');
   return result.text;
+}
+
+/** 版本组（2026-09-16）：任务引用了资产时，把在用版内容带给复盘模型——
+ *  归因 asset_outdated 的 lesson 才能基于现有内容给出融合修订，而非凭空
+ *  重写导致新版丢失旧版仍然有效的信息。读取失败静默跳过（复盘不阻断）。 */
+async function referencedAssetsForReview(userId: string, episode: KstarEpisodeRecord) {
+  const refs = [...new Set((episode.k.abilityAssetRefs || []))].slice(0, 5);
+  const assets: Array<{ id: string; title: string; statement: string; type: string; scope: string; version: string }> = [];
+  for (const assetId of refs) {
+    try {
+      const asset = await readAbilityAsset(userId, assetId);
+      if (!asset || asset.status === 'purged') continue;
+      assets.push({
+        id: asset.id,
+        title: asset.title,
+        statement: asset.statement,
+        type: asset.type,
+        scope: asset.scope,
+        version: String(asset.activeVersion || asset.version || '1'),
+      });
+    } catch {
+      // 单条资产读取失败不影响其余引用的复盘上下文。
+    }
+  }
+  return assets;
 }
 
 export async function inferKstarReview(
@@ -286,6 +315,7 @@ export async function inferKstarReview(
           : null);
     if (runModel) {
       try {
+        const referencedAssets = await referencedAssetsForReview(userId, episode);
         const message = JSON.stringify({
           forecast: {
             predictedResult: forecast.rHat,
@@ -303,6 +333,7 @@ export async function inferKstarReview(
           evidenceRefIds: episode.evidenceRefs.map((ref) => `${ref.kind}:${ref.id}`),
           conversation: formatConversationForReview(options.messages),
           selectedAssetTypes: options.selectedAssetTypes || [],
+          ...(referencedAssets.length ? { referencedAssets } : {}),
         });
         const text = await runModel({ systemPrompt: inferenceSystemPrompt(), message });
         const parsed = parseKstarReviewInference(text, episode.evidenceRefs);
@@ -421,15 +452,17 @@ export async function inferKstarReview(
   }
 
   try {
+    const referencedAssets = await referencedAssetsForReview(userId, episode);
     const message = JSON.stringify({
       evidence: buildDeterministicReviewEvidence(episode),
       evidenceRefIds: episode.evidenceRefs.map((ref) => `${ref.kind}:${ref.id}`),
       episode: {
-      status: episode.r.status,
-      toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
-      producedFiles: episode.r.producedFiles.slice(0, 20),
-      verification: episode.r.verification,
+        status: episode.r.status,
+        toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
+        producedFiles: episode.r.producedFiles.slice(0, 20),
+        verification: episode.r.verification,
       },
+      ...(referencedAssets.length ? { referencedAssets } : {}),
     });
     const text = options.runModel
       ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message })

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   readCandidate: vi.fn(),
   readHandoffReceipt: vi.fn(),
   readAbilityAsset: vi.fn(),
+  listAbilityAssets: vi.fn(async () => []),
   promoteCandidate: vi.fn(),
   autoApplyCandidate: vi.fn(),
   prepareSkillDraft: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('../../../../src/main/features/recall/candidate-service', () => ({
 vi.mock('../../../../src/main/features/recall/asset-service', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../../src/main/features/recall/asset-service')>(),
   readAbilityAsset: mocks.readAbilityAsset,
+  listAbilityAssets: mocks.listAbilityAssets,
 }));
 vi.mock('../../../../src/main/features/recall/skill-draft-service', () => ({
   prepareRecallSkillDraft: mocks.prepareSkillDraft,
@@ -964,6 +966,45 @@ describe('Recall conversation capture', () => {
 
     await expect(running).resolves.toMatchObject({ status: 'queued' });
     await expect(capture.readRecallCapture('capture-user', queued!.id)).resolves.toMatchObject({ status: 'queued' });
+  });
+
+  it('feeds existing assets (in-use versions) into extraction for update fusion（2026-09-16 版本组）', async () => {
+    mocks.getConversation.mockResolvedValueOnce({
+      conversation_id: 'conv-1',
+      title: 'Decision work',
+      project_id: 'workspace-a',
+    });
+    mocks.listAbilityAssets.mockResolvedValueOnce([{
+      id: 'asset-fuse-1', title: 'Decision log rule', type: 'rule', status: 'active',
+      scope: 'project', statement: 'Keep every architecture decision in the shared decision log.',
+      version: '2', activeVersion: '1',
+      createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+    }]);
+    let capturedPrompt = '';
+    let capturedMessage = '';
+    mocks.runModel.mockImplementationOnce(async (arg: { message: string }) => {
+      capturedMessage = arg.message;
+      return {
+        text: JSON.stringify({ candidates: [] }),
+        content: [],
+        meta: { aborted: false, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } },
+      };
+    });
+    mocks.buildRunner.mockImplementationOnce(async (arg: { systemPrompt: string }) => {
+      capturedPrompt = arg.systemPrompt;
+      return { runner: { run: mocks.runModel } };
+    });
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    await capture.runRecallCapture('capture-user', queued!.id);
+
+    // 提炼输入带现有资产清单（在用版内容），提示词含融合生成要求。
+    expect(capturedMessage).toContain('existingAssets');
+    expect(capturedMessage).toContain('asset-fuse-1');
+    expect(capturedMessage).toContain('decision log');
+    expect(capturedPrompt).toContain('MERGED REVISION');
+    expect(capturedPrompt).toContain('targetAssetId');
   });
 
   it('uses an ephemeral no-tools runner and saves pending candidates with message evidence', async () => {

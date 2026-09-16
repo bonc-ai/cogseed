@@ -610,6 +610,48 @@ describe('治理动作', () => {
     await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, asset.version, userAction('rollback')))
       .rejects.toThrow('already at that version');
   });
+
+  it('选用历史版本（在用指针，2026-09-16 版本组）：内容同步、版本号不动、不产生新快照', async () => {
+    // 版本组语义：select = 切「在用」指针——资产内容回到所选版本快照，但
+    // version 计数不变、不追加版本记录（区别于 rollback 生成新版本）。
+    // 历史任务引用的版本不受影响（注入回放按投影冻结版本号）。
+    const { assets, asset } = await seed('user-select');
+    await assets.updateAbilityAsset('user-select', asset.id, {
+      title: 'Renamed in v2', reason: 'Rename for v2.', actor: 'user',
+    });
+    await assets.pauseAbilityAsset('user-select', asset.id, userAction('pause'));
+
+    const selected = await assets.selectAbilityAssetVersion('user-select', asset.id, '1', userAction('use v1'));
+    expect(selected.title).toBe(asset.title);          // 内容回到 v1
+    expect(selected.version).toBe('2');                 // 版本号不动
+    expect(selected.activeVersion).toBe('1');           // 在用指针
+    expect(selected.status).toBe('paused');             // 治理状态不受影响
+
+    // 不追加版本记录；审计记录选用动作。
+    const versions = await assets.listAbilityAssetVersions('user-select', asset.id);
+    expect(versions.map((v) => v.version)).toEqual(['1', '2']);
+    expect((await assets.listAbilityAssetAudit('user-select', asset.id)).map((r) => r.action)).toContain('version_selected');
+
+    // 选用后内容更新：bump 到 v3，指针跟随最新（不锁定旧版）。
+    const updated = await assets.updateAbilityAsset('user-select', asset.id, {
+      title: 'Edited on v1 base', reason: 'edit', actor: 'user',
+    });
+    expect(updated.version).toBe('3');
+    expect(updated.activeVersion).toBe('3');
+    expect(updated.title).toBe('Edited on v1 base');
+  });
+
+  it('选用不存在/当前在用版本被拒绝；purge 后拒绝', async () => {
+    const { assets, asset } = await seed('user-select-bad');
+    await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, '99', userAction('x')))
+      .rejects.toThrow('version not found');
+    // 默认在用=最新内容版；选当前在用版是幂等空操作 → 拒绝（与 rollback 原地语义一致）。
+    await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, asset.version, userAction('x')))
+      .rejects.toThrow('already selected');
+    await assets.purgeAbilityAsset('user-select-bad', asset.id, userAction('purge'));
+    await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, '1', userAction('x')))
+      .rejects.toThrow('ability asset has been purged');
+  });
 });
 
 describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {

@@ -19,7 +19,7 @@
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
-    'asset-action', 'source-action', 'capture-action', 'organize-conv',
+    'asset-action', 'select-asset-version', 'source-action', 'capture-action', 'organize-conv',
     'capture-toggle', 'capture-review-toggle', 'proof-rate',
     'capture-batch',
   ]);
@@ -157,6 +157,7 @@
           case 'cand-adopt-with-form': await A.adoptCandidate(id, readCandidateForm(el) || undefined); break;
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
+          case 'select-asset-version': await A.selectAssetVersion(id, el.dataset.version || ''); break;
           case 'source-action': await A.sourceAction(el.dataset.kind || '', id, el.dataset.action); break;
           case 'capture-action': await A.captureAction(id, el.dataset.action); break;
           case 'organize-conv': await A.organizeConversation(id); break;
@@ -353,6 +354,11 @@
     const captureId = String(S.route.captureId || '');
     if (captureId && (!S.captureContext || S.captureContext.captureId !== captureId)) {
       void NS.loadCaptureContext(captureId);
+    }
+    // 资产详情版本链同理按需补拉（版本组 2026-09-16）。
+    const assetId = String(S.route.assetId || '');
+    if (assetId && (!S.assetVersions || S.assetVersions.assetId !== assetId)) {
+      void NS.loadAssetVersions(assetId);
     }
   });
 
