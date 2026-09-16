@@ -4,10 +4,44 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 import { getRecallCandidateCapabilities } from '../../src/main/features/recall/candidate-capabilities';
+import { renderCognition } from './helpers/cognition-renderer';
 
 /** 候选桩的能力取自主进程的真实映射，测试桩与 IPC DTO 用同一套判据。 */
 const CAPS = (status: string, risk?: 'low' | 'medium' | 'high') =>
   getRecallCandidateCapabilities({ status: status as never, ...(risk ? { risk } : {}) });
+
+function cognitionCandidate(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cand-review',
+    status: 'pending_review',
+    capabilities: CAPS('pending_review'),
+    judgment: 'Keep every approval tied to source evidence.',
+    summary: 'Traceable review rule',
+    suggestedType: 'rule',
+    suggestedScope: 'project,review',
+    sourceRefs: [],
+    ...overrides,
+  };
+}
+
+function cognitionAsset(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'asset-rule',
+    type: 'rule',
+    title: 'Scoped review rule',
+    statement: 'Keep review evidence scoped.',
+    status: 'active',
+    maturity: 'transfer_validated',
+    version: '2',
+    scope: 'review',
+    lifecycleStatus: 'user_confirmed',
+    ...overrides,
+  };
+}
+
+function visibleText(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 function loadSkillRendererHelpers() {
   const context: any = {
@@ -245,94 +279,174 @@ describe('skills renderer frontmatter parsing', () => {
     ]);
   });
 
-  // ── 2026-09-15 #266 全模块重构：候选/资产渲染自 skills.js 迁至
-  //    cognition-assets/views.js（candidateCard / candidateFormBody /
-  //    assetDetail），旧 vm 渲染入口（renderSkillsCognitionCandidates /
-  //    renderSkillsCognitionAssets / _skillsCognitionState）删除。以下断言
-  //    更新为对真实渲染源码的契约检查，覆盖相同的用户语义。
-
-  const views = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf-8');
-  const core = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf-8');
-
   it('renders pending Recall candidates with the simplified review actions', () => {
-    // 卡片整体是入口（open-candidate），决策动作收在详情页。
-    expect(views).toContain('data-act="open-candidate"');
-    expect(views).toContain("'cand-adopt-with-form'");
-    expect(views).toContain("'cand-decide'");
-    expect(views).toContain("action: 'reject'");
-    // 卡片上不再有行内按钮（按钮与点卡片进详情冲突）。
-    expect(views).not.toContain('data-recall-candidate-action');
+    const candidate = cognitionCandidate();
+    const list = renderCognition({ name: 'review' }, { candidates: [candidate] });
+    expect(visibleText(list)).toContain('Keep every approval tied to source evidence.');
+    expect(list).toContain('data-act="open-candidate" data-id="cand-review"');
+    expect(list).not.toContain('data-act="cand-adopt-with-form"');
+    expect(list).not.toContain('data-act="cand-decide"');
+
+    const detail = renderCognition(
+      { name: 'review', candidateId: 'cand-review' },
+      { candidates: [candidate] },
+    );
+    expect(detail).toContain('data-act="cand-adopt-with-form"');
+    expect(detail).toContain('data-act="cand-decide"');
+    expect(detail).toContain('data-action="reject"');
   });
 
-  it('keeps deferred Recall candidates hidden from the wait list', () => {
-    // review 页只渲染等待确认的候选；defer 是把候选移出当前轮次的动作。
-    expect(views).toContain("healthy.map((c) => candidateCard(c, false))");
-    expect(core).toContain("defer: 'recall.candidates.defer'");
-    expect(core).toContain("T('cognition.candidate_deferred'");
+  it('keeps deferred Recall candidates actionable in the wait list after #266', () => {
+    const html = renderCognition(
+      { name: 'review' },
+      { candidates: [cognitionCandidate({ id: 'cand-deferred', status: 'deferred', capabilities: CAPS('deferred'), judgment: 'Add invariant checks.' })] },
+    );
+
+    expect(html).toContain('data-act="open-candidate" data-id="cand-deferred"');
+    expect(visibleText(html)).toContain('Add invariant checks.');
   });
 
   it('renders Recall candidate judgment, scope, evidence, and action set', () => {
-    // 详情表单：judgment 文本域 + scope 输入 + 证据引用 + 动作。
-    expect(views).toContain("'data-f': 'judgment'");
-    expect(views).toContain("'data-f': 'scope'");
-    expect(views).toContain('evidenceRefs');
-    expect(views).toContain("'cand-adopt-with-form'");
-    expect(views).toContain("action: 'reject'");
+    const html = renderCognition(
+      { name: 'review', candidateId: 'cand-review' },
+      {
+        candidates: [cognitionCandidate({
+          sourceRefs: [
+            { kind: 'execution', id: 'run-1', title: '运行证据' },
+            { kind: 'memory', id: 'experience-1', title: '记忆证据' },
+          ],
+        })],
+      },
+    );
+
+    expect(html).toContain('data-f="judgment"');
+    expect(html).toContain('Keep every approval tied to source evidence.');
+    expect(html).toContain('data-f="scope"');
+    expect(html).toContain('value="project,review"');
+    expect(visibleText(html)).toContain('运行证据');
+    expect(visibleText(html)).toContain('记忆证据');
+    expect(html).toContain('data-act="cand-adopt-with-form"');
+    expect(html).toContain('data-act="cand-decide"');
   });
 
-  it('renders normalized asset relation and reuse counts in asset detail', () => {
-    // 资产详情渲染来源与使用记录区（asset_usage_section），不落内部字段名。
-    expect(views).toContain('cognition.asset_usage_section');
-    expect(views).toContain('assetDetail(asset, route)');
-    // 旧 nested cards / open-skill 入口已删。
-    expect(views).not.toContain('data-cognition-open-skill');
-    expect(views).not.toContain('cognition-asset-card');
+  it('renders current proof counts and usage records in asset detail', () => {
+    const asset = cognitionAsset();
+    const html = renderCognition(
+      { name: 'overview', assetId: 'asset-rule' },
+      {
+        assets: [asset],
+        proofs: [
+          { id: 'proof-1', kind: 'usage_recorded', occurredAt: '2026-09-15T10:00:00.000Z', refs: { assetId: 'asset-rule', conversationId: 'conv-a', version: '2' } },
+          { id: 'proof-2', kind: 'projection_confirmed', occurredAt: '2026-09-15T09:00:00.000Z', refs: { assetId: 'asset-rule', conversationId: 'conv-b', version: '2' } },
+        ],
+      },
+    );
+
+    expect(visibleText(html)).toContain('Scoped review rule');
+    expect(visibleText(html)).toContain('用过几次 2 次');
+    expect(visibleText(html)).toContain('被实际使用 1 次');
+    expect(visibleText(html)).toContain('被带入任务 1 次');
+    expect(html).toContain('data-act="proof-toggle" data-id="proof-1"');
   });
 
   it('renders assets as tree-first integrated rows instead of nested cards', () => {
-    // 一级是认知树（SVG + 分类卡），资产列表由 filter-cat 分类驱动。
-    expect(views).toContain('data-act="filter-cat"');
-    expect(views).toContain('data-act="open-ontology"');
-    expect(views).not.toContain('cognition-asset-card');
+    const html = renderCognition(
+      { name: 'overview' },
+      { assets: [cognitionAsset(), cognitionAsset({ id: 'asset-template', type: 'template', title: 'Review template' })] },
+    );
+
+    expect(html).toContain('ca-tree-card');
+    expect(html).toContain('data-act="filter-cat"');
+    expect(html).toContain('data-go-asset="asset-rule"');
+    expect(html).toContain('data-go-asset="asset-template"');
+    expect(html).not.toContain('cognition-asset-card');
   });
 
   it('renders Recall candidates as entry cards without inline actions', () => {
-    expect(views).toContain('ca-candidate');
-    expect(views).toContain('data-act="open-candidate"');
-    expect(views).not.toContain('data-cognition-candidate-action');
+    const html = renderCognition(
+      { name: 'review' },
+      { candidates: [cognitionCandidate(), cognitionCandidate({ id: 'cand-second', judgment: 'Second candidate' })] },
+    );
+
+    expect(html.match(/class="ca-card ca-candidate/g)).toHaveLength(2);
+    expect(html.match(/data-act="open-candidate"/g)).toHaveLength(2);
+    expect(html).not.toContain('data-act="cand-adopt-with-form"');
+    expect(html).not.toContain('data-act="cand-decide"');
   });
 
   it('renders ability assets with PRD categories and without marketplace skill promotion', () => {
-    // 分类卡按 PRD 类别渲染（CATEGORIES），成熟度翻译成用户说法。
-    expect(views).toContain('const CATEGORIES = [');
-    expect(views).toContain('cognition.maturity');
-    expect(views).not.toContain('marketplace');
-    expect(views).not.toContain('office-excel');
+    const html = renderCognition({ name: 'overview' }, { assets: [] });
+
+    for (const category of ['关于我', '规则与偏好', '模板与范例', '技能与方法']) {
+      expect(visibleText(html)).toContain(category);
+    }
+    expect(html).not.toContain('marketplace');
+    expect(html).not.toContain('office-excel');
   });
 
   it('lets users view empty ability asset categories from the accounting cards', () => {
-    // 树的分类卡始终渲染（is-empty 态），点击过滤到对应分类。
-    expect(views).toContain("' is-empty'");
-    expect(views).toContain('data-act="filter-cat"');
+    const html = renderCognition({ name: 'overview' }, { assets: [] });
+
+    expect(html.match(/data-act="filter-cat"/g)?.length || 0).toBeGreaterThanOrEqual(4);
+    for (const categoryId of ['personal', 'rule', 'template', 'skill_method']) {
+      expect(html).toContain(`data-act="filter-cat" data-id="${categoryId}"`);
+    }
+    expect(html.match(/is-empty/g)?.length || 0).toBeGreaterThanOrEqual(4);
   });
 
   it('renders the selected ability asset detail instead of always using the first asset', () => {
-    // 路由资产 id 驱动详情：route.assetId 存在时渲染 assetDetail。
-    expect(core).toContain('assetId');
-    expect(views).toContain('assetDetail(asset, route)');
+    const html = renderCognition(
+      { name: 'overview', assetId: 'asset-second' },
+      {
+        assets: [
+          cognitionAsset({ id: 'asset-first', title: 'First Rule' }),
+          cognitionAsset({ id: 'asset-second', title: 'Second Method', type: 'skill_method' }),
+        ],
+      },
+    );
+
+    expect(html).toContain('<h3>Second Method</h3>');
+    expect(visibleText(html)).not.toContain('First Rule');
   });
 
-  it('keeps ability assets in the useful list view even with stale tree state', () => {
-    // 树是常态页；列表由分类过滤驱动，不再有可顶掉列表的旧 tree 子视图。
-    expect(views).not.toContain('ability-assets-tree-page');
-    expect(views).not.toContain('cognition-tree-leaf');
-    expect(views).toContain('data-act="filter-cat"');
+  it('filters the integrated asset list by the selected tree category', () => {
+    const html = renderCognition(
+      { name: 'overview', category: 'rule' },
+      {
+        assets: [
+          cognitionAsset({ id: 'asset-rule', title: 'Rule asset', type: 'rule' }),
+          cognitionAsset({ id: 'asset-template', title: 'Template asset', type: 'template' }),
+        ],
+      },
+    );
+
+    expect(visibleText(html)).toContain('Rule asset');
+    expect(visibleText(html)).not.toContain('Template asset');
   });
 
   it('renders Recall asset governance state and actions in the latest asset detail layout', () => {
-    // 治理动作（pause/resume/archive/restore）在资产详情内。
-    expect(views).toContain("data: { action: 'pause' }");
-    expect(views).toContain("data: { action: 'archive' }");
-    expect(views).toContain("data: { action: 'restore' }");
+    const renderStatus = (status: string) => renderCognition(
+      { name: 'overview', assetId: 'asset-rule' },
+      { assets: [cognitionAsset({ status })] },
+    );
+
+    const active = renderStatus('active');
+    expect(active).toContain('data-action="pause"');
+    expect(active).toContain('data-action="archive"');
+    expect(active).not.toContain('data-action="resume"');
+
+    const paused = renderStatus('paused');
+    expect(paused).toContain('data-action="resume"');
+    expect(paused).not.toContain('data-action="pause"');
+
+    const archived = renderStatus('archived');
+    expect(archived).toContain('data-action="restore"');
+    expect(archived).not.toContain('data-action="archive"');
+
+    for (const html of [active, paused, archived]) {
+      expect(html).toContain('data-action="delete"');
+      expect(html).toContain('data-action="revoke"');
+      expect(html).toContain('data-action="purge"');
+    }
   });
 });
