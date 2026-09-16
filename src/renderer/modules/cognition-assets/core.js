@@ -428,8 +428,32 @@
         result = await promote(false);
       } catch (error) {
         if (error && error.code === 'recall_candidate_similar_asset') {
-          const ok = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。如果它是同一条的修订，建议返回改为"更新"；确认仍要保存为新条目吗？', { info: String(error.message || '').replace(/^similar asset [^ ]+ /, '').replace(/ \(score [\d.]+\)$/, '') }));
-          if (!ok) return;
+          const info = String(error.message || '').replace(/^similar asset [^ ]+ /, '').replace(/ \(score [\d.]+\)$/, '');
+          const ok = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。确认 = 保存为新条目；取消 = 改为对它的更新（进入差异对照）。', { info }));
+          if (!ok) {
+            // 检修闭环（2026-09-16）：提示"改为更新"却无入口=把用户指到墙前。
+            // 取消即把候选转为对相似资产的更新，表单切差异卡模式再确认。
+            const match = String(error.message || '').match(/^similar asset ([A-Za-z0-9-]+)/);
+            const targetAssetId = match ? match[1] : '';
+            if (targetAssetId) {
+              await api.call('recall.candidates.update', {
+                candidateId,
+                judgment: candidate.judgment,
+                value: candidate.value || '',
+                summary: candidate.summary || '',
+                suggestedType: candidate.suggestedType,
+                suggestedScope: candidate.suggestedScope || 'general',
+                suggestedAction: 'update',
+                targetAssetId,
+                risk: candidate.risk || 'low',
+                sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
+                evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
+              });
+              toast(T('cognition.candidate_switched_to_update', '已改为更新——请对照差异后确认'));
+              await NS.reload();
+            }
+            return;
+          }
           result = await promote(true);
         } else {
           throw error;
