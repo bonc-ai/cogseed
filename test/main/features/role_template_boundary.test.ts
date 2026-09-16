@@ -138,13 +138,19 @@ describe('role-template boundary › M2 渲染层不再拼接 PO 复合 id', () 
 });
 
 describe('role-template boundary › M3 三元组不再跨 renderer / IPC 往返', () => {
-  it('skills.js 落点下拉的 option value 就是 fieldRef，不再序列化四元组', () => {
+  it('落点下拉已随认知资产前端重建删除，renderer 不再序列化四元组', () => {
+    // 2026-09-15 重构：资产编辑器与落点选择器整体删除，renderer 层不再
+    // 出现 fieldTargets / fieldRef / 四元组序列化；后端通道保留但无前端调用。
     const skills = stripComments(read('src/renderer/modules/skills.js'));
-    expect(skills).toContain("invoke('personalOntology.templates.fieldTargets')");
-    expect(skills).toContain('target.fieldRef');
+    expect(skills).not.toContain("invoke('personalOntology.templates.fieldTargets')");
+    expect(skills).not.toContain('target.fieldRef');
     expect(skills).not.toContain('groupId: template.group_id');
     expect(skills).not.toContain('encodeURIComponent(JSON.stringify({');
-    expect(skills).not.toContain('personalTemplates');
+    for (const file of ['core.js', 'views.js', 'app.js']) {
+      const src = stripComments(read(`src/renderer/modules/cognition-assets/${file}`));
+      expect(src, `${file} 不得序列化落点四元组`).not.toContain('fieldTargets');
+      expect(src, `${file} 不得 JSON 序列化落点`).not.toContain('encodeURIComponent(JSON.stringify({');
+    }
   });
 
   it('skills-bindings.js 只回传 { fieldRef }，不再 JSON.parse 落点', () => {

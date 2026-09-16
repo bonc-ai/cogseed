@@ -37,6 +37,8 @@
   --color-bg: #FBFDFC;
   --color-black: #000000;
   --color-white: #FFFFFF;
+  --color-white-55: rgba(255, 255, 255, 0.55);
+  --color-shadow-soft: rgba(0, 0, 0, 0.2);
   --color-success: #1E6E4E;
   --color-success-soft: #E8F1EC;
   --color-warning: #B5761F;
@@ -122,6 +124,7 @@
   --radius-xs: 4px;
   --radius-sm: 7px;
   --radius-field: 9px;
+  --radius-item: 10px;
   --radius-popover: 11px;
   --radius-window: 14px;
   --radius-chip: var(--radius-xs);

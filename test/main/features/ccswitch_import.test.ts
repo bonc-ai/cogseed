@@ -230,7 +230,8 @@ env_key = "OPENAI_API_KEY"` }),
     await providers.syncFromCcSwitch(UID, ['hermes:winprobe'], home);
     const first = providers.listCustomProviders(UID)[0];
     // No probe data and no catalog hit → both keep the default guess.
-    expect(first.models.map((m) => m.contextWindow)).toEqual([131_072, 131_072]);
+    // 2026-09-13 产品口径：无探测无目录命中 → 1M 默认窗口。
+    expect(first.models.map((m) => m.contextWindow)).toEqual([1_000_000, 1_000_000]);
 
     await providers.syncFromCcSwitch(
       UID, ['hermes:winprobe'], home,
@@ -243,8 +244,8 @@ env_key = "OPENAI_API_KEY"` }),
       } },
     );
     expect(providers.listCustomProviders(UID)[0].models).toEqual([
-      { id: 'vendor/big-model', contextWindow: 2_097_152, maxTokens: 8_192, vision: false },
-      { id: 'vendor/plain-model', contextWindow: 131_072, maxTokens: 8_192, vision: true },
+      { id: 'vendor/big-model', contextWindow: 2_097_152, maxTokens: 384_000, vision: false },
+      { id: 'vendor/plain-model', contextWindow: 1_000_000, maxTokens: 384_000, vision: true },
     ]);
   });
 });

@@ -31,7 +31,8 @@ describe('resource page composition integration', () => {
     expect(workspaceCenter).not.toContain('role="tablist"');
     expect(workspaceCenter).not.toContain('ws-space-tabs');
     expect(cognitionAssetsView).toContain('data-act="tab" data-id="${tab.id}"');
-    expect(cognitionAssetsView).toContain("route.name === 'manage'");
+    // 2026-09-15 重构：路由名收敛为 overview / review / organize。
+    expect(cognitionAssetsView).toContain("route.name === 'organize'");
     expect(html).toContain('data-connections-tab="touchpoints"');
     expect(workspace).toContain('ws-space-tabs');
   });
