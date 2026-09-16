@@ -716,6 +716,70 @@ describe('治理动作', () => {
     expect(byVersion['2']).toMatchObject({ applied: 1 });
   });
 
+  it('归并的检修回归（2026-09-16 审查）：版本号一致性/旧版在用/幂等/revoked 守卫', async () => {
+    const { assets } = await modules();
+    const U = 'user-mrg-x';
+    let seq = 0;
+    const mk = async (judgment: string, summary: string) => {
+      const assets2 = await import('../../../../src/main/features/recall/asset-service');
+      void assets2;
+      const now = new Date().toISOString();
+      seq += 1;
+      const assetId = `aa-mrgprobe-${String(seq).padStart(2, '0')}xxxxxxxxxxxxxxxx`;
+      const created = await assets.createAbilityAsset(U, {
+        schemaVersion: 2, ownerId: U, id: assetId, candidateId: `cand-mrg-${seq}`,
+        sourceCandidateIds: [`cand-mrg-${seq}`], reviewDecisionId: `rd_mrgprobe_${String(seq).padStart(4, '0')}`,
+        type: 'rule', title: summary, statement: judgment,
+        evidenceRefs: [{ kind: 'conversation', id: `conv-mrg-${seq}` }], scope: 'general', status: 'active',
+        lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+        createdAt: now, updatedAt: now,
+      }, { actor: 'user', reason: 'merge regression seed' });
+      return { asset: created };
+    };
+    // P0-2（source 较新且曾 select 旧版）：merge 后在用内容必须与 activeVersion
+    // 指向的快照一致（额外 append 一条在用内容快照，不指向 source 末版）。
+    const src = await mk('较新的身份陈述，含新信息。', '身份A');
+    await assets.updateAbilityAsset(U, src.asset.id, { statement: '第二版内容。', reason: 'bump', actor: 'user' });
+    await assets.selectAbilityAssetVersion(U, src.asset.id, '1', userAction('use old'));
+    const tgtOld = await mk('目标条目的旧内容。', '身份B');
+    await assets.updateAbilityAsset(U, tgtOld.asset.id, { statement: '更旧的目标。', reason: 'aged', actor: 'user' });
+    // 再动一次 source，让它的 updatedAt 晚于 target（sourceNewer=true）。
+    await assets.updateAbilityAsset(U, src.asset.id, { statement: '第一版内容的修订。', reason: 'refresh', actor: 'user' });
+    const merged = await assets.mergeAbilityAssets(U, src.asset.id, tgtOld.asset.id, userAction('merge'));
+    const { readAbilityAssetVersionSnapshot } = await import('../../../../src/main/features/recall/asset-service');
+    const activeSnapshot = await readAbilityAssetVersionSnapshot(U, tgtOld.asset.id, String(merged.activeVersion));
+    expect(activeSnapshot?.statement).toBe(merged.statement);
+    expect(merged.statement).toBe('第一版内容的修订。');
+    // P0-1：merge 后再更新——版本号不与并入的快照撞号（链内版本唯一）。
+    const updated = await assets.updateAbilityAsset(U, tgtOld.asset.id, { statement: '归并后的新修订。', reason: 'post-merge edit', actor: 'user' });
+    const versions = await assets.listAbilityAssetVersions(U, tgtOld.asset.id);
+    expect(new Set(versions.map((v) => v.version)).size).toBe(versions.length);
+    expect(updated.activeVersion).toBe(updated.version);
+    // P0-1（source 较旧方向）：计数器推进且在用内容/指针不漂移。
+    const srcOld = await mk('更旧的一条内容。', '身份E');
+    const tgtNew = await mk('新目标，晚于 source 创建。', '身份F');
+    const mergedOld = await assets.mergeAbilityAssets(U, srcOld.asset.id, tgtNew.asset.id, userAction('merge old'));
+    expect(mergedOld.statement).toBe('新目标，晚于 source 创建。');
+    // 在用钉在 target 原版（v1），计数器推进到并入后的 2——内容与指针不分叉。
+    expect(mergedOld.activeVersion).toBe('1');
+    expect(Number(mergedOld.version)).toBeGreaterThan(1);
+    const oldActiveSnapshot = await readAbilityAssetVersionSnapshot(U, tgtNew.asset.id, String(mergedOld.activeVersion));
+    expect(oldActiveSnapshot?.statement).toBe(mergedOld.statement);
+    // P1-1：二次 merge 同一 source 被拒（幂等守卫）。
+    await expect(assets.mergeAbilityAssets(U, src.asset.id, tgtOld.asset.id, userAction('again')))
+      .rejects.toThrow('already been merged');
+    // P1-1/P2-2：revoked 资产不可 merge/select/rollback。
+    const rev = await mk('将被撤回的条目。', '身份C');
+    await assets.revokeAbilityAsset(U, rev.asset.id, userAction('revoke'));
+    const other = await mk('另一条。', '身份D');
+    await expect(assets.mergeAbilityAssets(U, other.asset.id, rev.asset.id, userAction('x')))
+      .rejects.toThrow('revoked ability asset cannot be changed');
+    await expect(assets.selectAbilityAssetVersion(U, rev.asset.id, '1', userAction('x')))
+      .rejects.toThrow('revoked ability asset cannot be changed');
+    await expect(assets.rollbackAbilityAsset(U, rev.asset.id, '1', userAction('x')))
+      .rejects.toThrow('revoked ability asset cannot be changed');
+  });
+
   it('归并的守卫：跨类型/同条目/不存在被拒', async () => {
     const { candidates, assets } = await modules();
     const aCand = await candidates.saveRecallCandidate('user-merge-bad', {

@@ -560,6 +560,15 @@ function assertNotPurged(current: RecallAbilityAssetRecord): void {
   if (current.status === 'purged') throw new Error('ability asset has been purged');
 }
 
+/** 版本组写路径的统一终态守卫（2026-09-16 检修）：purged/revoked/deleted 都
+ *  不可再变更内容或版本——与 updateAbilityAsset 的 revoked 口径一致，此前
+ *  select/rollback/merge 只查 purged，绕过了"撤回不可变更"与删除保留期。 */
+function assertMutableAbilityAsset(current: RecallAbilityAssetRecord): void {
+  assertNotPurged(current);
+  if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+  if (current.status === 'deleted') throw new Error('deleted ability asset cannot be changed');
+}
+
 async function setStatus(
   userId: string,
   assetId: string,
@@ -958,14 +967,14 @@ export async function rollbackAbilityAsset(
   const action = requireAssetAction(input);
   // 先判终态再查版本：彻底清除会一并删掉版本流，反过来的顺序会把「已被清除」
   // 报成「版本不存在」，让调用方以为是自己传错了版本号。
-  assertNotPurged(await readAbilityAsset(userId, assetId));
+  assertMutableAbilityAsset(await readAbilityAsset(userId, assetId));
   const versions = await listAbilityAssetVersions(userId, assetId);
   const target = versions.find((record) => record.version === toVersion);
   if (!target) throw new Error('recall ability asset version not found');
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
+    assertMutableAbilityAsset(current);
     if (current.version === toVersion) throw new Error('ability asset is already at that version');
     const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, ...content } = target.snapshot;
     return {
@@ -1000,14 +1009,14 @@ export async function selectAbilityAssetVersion(
 ): Promise<RecallAbilityAssetRecord> {
   const action = requireAssetAction(input);
   // 先判终态再查版本（与 rollback 同序）：purge 后的 select 报终态而不是版本错误。
-  assertNotPurged(await readAbilityAsset(userId, assetId));
+  assertMutableAbilityAsset(await readAbilityAsset(userId, assetId));
   const versions = await listAbilityAssetVersions(userId, assetId);
   const target = versions.find((record) => record.version === toVersion);
   if (!target) throw new Error('recall ability asset version not found');
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
+    assertMutableAbilityAsset(current);
     if ((current.activeVersion || current.version) === toVersion) throw new Error('ability asset already selected');
     // 内容同步为所选快照（治理状态与成熟度不动，与 rollback 同口径）。
     const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, ...content } = target.snapshot;
@@ -1040,15 +1049,16 @@ export async function mergeAbilityAssets(
   if (sourceAssetId === targetAssetId) throw new Error('cannot merge an ability asset into itself');
   const source = await readAbilityAsset(userId, sourceAssetId);
   if (!source) throw new Error('recall ability asset not found');
-  assertNotPurged(source);
+  assertMutableAbilityAsset(source);
+  if (source.mergedIntoAssetId) throw new Error('ability asset has already been merged');
   const target = await readAbilityAsset(userId, targetAssetId);
   if (!target) throw new Error('recall ability asset not found');
-  assertNotPurged(target);
+  assertMutableAbilityAsset(target);
   if (source.type !== target.type) throw new Error('ability asset merge requires the same type');
   const sourceVersions = (await listAbilityAssetVersions(userId, sourceAssetId))
     .sort((left, right) => String(left.at).localeCompare(String(right.at)));
-  const sourceActive = String(source.activeVersion || source.version || '1');
-  const sourceActiveSnapshot = sourceVersions.find((v) => v.version === sourceActive)?.snapshot;
+  const sourceActiveVersion = String(source.activeVersion || source.version || '1');
+  const sourceActiveIndex = sourceVersions.findIndex((v) => v.version === sourceActiveVersion);
   // source 全部版本快照续接进 target 流（重编号，at 保留原时间可考）。
   let versionCursor = target.version;
   for (const entry of sourceVersions) {
@@ -1065,23 +1075,52 @@ export async function mergeAbilityAssets(
       snapshot: entry.snapshot,
     } as AbilityAssetVersionRecord);
   }
+  // source 在用内容的快照（版本流缺失的遗留资产用 source 记录状态兜底）。
+  const sourceActiveSnapshot = sourceActiveIndex >= 0
+    ? sourceVersions[sourceActiveIndex].snapshot
+    : snapshot(source);
   const sourceNewer = String(source.updatedAt || '') > String(target.updatedAt || '');
+  // source 曾 select 旧版（在用版不是末版）时，在用内容与末版快照不同——
+  // 额外 append 一条在用内容快照，保证 activeVersion 指向的快照与在用内容
+  // 恒一致（注入回放按 activeVersion 读快照，分叉=注入与所见不一致）。
+  let activeCursor = versionCursor;
+  if (sourceNewer && sourceActiveIndex >= 0 && sourceActiveIndex !== sourceVersions.length - 1) {
+    activeCursor = nextVersion(versionCursor);
+    await appendRecallJsonlRecord(userId, 'ability-asset-versions', targetAssetId, {
+      schemaVersion: 1,
+      ownerId: userId,
+      id: `${targetAssetId}-v${activeCursor}`,
+      assetId: targetAssetId,
+      version: activeCursor,
+      at: new Date().toISOString(),
+      reason: `merged active version from ${sourceAssetId}`,
+      actor: action.actor,
+      snapshot: sourceActiveSnapshot,
+    } as AbilityAssetVersionRecord);
+  }
   const merged = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', targetAssetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
     assertNotPurged(current);
     if (!sourceNewer) {
-      return { ...current, updatedAt: new Date().toISOString() };
+      // source 较旧：在用内容不动，但版本计数器必须推进到 cursor——否则后续
+      // 更新的 nextVersion 会与并入的快照撞号（JSONL 追加不去重，撞号后
+      // rollback/select 按号查到错误内容）。activeVersion 显式钉在原在用版
+      // （缺省跟随会指向并入的 source 快照，与在用内容分叉）。
+      return {
+        ...current,
+        version: activeCursor,
+        activeVersion: String(current.activeVersion || target.version),
+        updatedAt: new Date().toISOString(),
+      };
     }
-    const pick = sourceActiveSnapshot || snapshot(source);
+    const { status: _s, maturity: _m, version: _v, ...content } = sourceActiveSnapshot;
     return {
       ...current,
-      title: pick.title,
-      statement: pick.statement,
-      scope: pick.scope,
+      ...content,
       evidenceRefs: [...current.evidenceRefs, ...source.evidenceRefs].slice(0, 200),
-      version: versionCursor,
-      activeVersion: versionCursor,
+      version: activeCursor,
+      activeVersion: activeCursor,
       updatedAt: new Date().toISOString(),
     };
   }));
@@ -1090,6 +1129,7 @@ export async function mergeAbilityAssets(
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
     assertNotPurged(current);
+    if (current.mergedIntoAssetId) throw new Error('ability asset has already been merged');
     return { ...current, status: 'archived' as const, mergedIntoAssetId: targetAssetId, updatedAt: new Date().toISOString() };
   });
   await appendAudit(userId, targetAssetId, 'merged_from', { note: `${action.reason || 'merge'} (from ${sourceAssetId})`, actor: action.actor });

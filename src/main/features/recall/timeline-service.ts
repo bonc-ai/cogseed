@@ -115,18 +115,21 @@ function pushSorted(items: RecallAssetTimelineItem[], item: RecallAssetTimelineI
   items.push(item);
 }
 
-/** M10（2026-09-16）：找该投影已完成（succeeded）的迁移证明 id——usage 行
- *  带上它，评价控件才有入口。同投影多条时取最新完成的。 */
-async function transferProofIdForProjection(userId: string, projectionId: string | undefined): Promise<string | undefined> {
-  if (!projectionId) return undefined;
-  try {
-    const proofs = (await listTransferProofs(userId))
-      .filter((proof: TransferProofRecord) => proof.projectionId === projectionId && proof.completedAt)
-      .sort((left: TransferProofRecord, right: TransferProofRecord) => String(right.completedAt).localeCompare(String(left.completedAt)));
-    return proofs[0]?.id;
-  } catch {
-    return undefined;
+/** M10（2026-09-16）：投影 → 最新已完成迁移证明 的索引。一次性构建供全部
+ *  usage 行查询（检修修：此前每条 usage 全量扫 proofs 目录，I/O 随
+ *  usage×资产数放大）。 */
+function buildTransferProofIndex(proofs: TransferProofRecord[]): Map<string, string> {
+  const index = new Map<string, { id: string; completedAt: string }>();
+  for (const proof of proofs) {
+    if (!proof.projectionId || !proof.completedAt) continue;
+    const prev = index.get(proof.projectionId);
+    if (!prev || String(proof.completedAt) > prev.completedAt) {
+      index.set(proof.projectionId, { id: proof.id, completedAt: String(proof.completedAt) });
+    }
   }
+  const ids = new Map<string, string>();
+  for (const [projectionId, { id }] of index) ids.set(projectionId, id);
+  return ids;
 }
 
 export async function listAbilityAssetTimeline(userId: string, assetId: string): Promise<RecallAssetTimelineItem[]> {
@@ -214,6 +217,10 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       return undefined;
     }
   };
+  // 检修剪（2026-09-16）：proofs 只读一次，建投影索引供全部 usage 行查询
+  // （下方 transfer 段复用同一份，避免重复全量扫描）。
+  const transferProofs = await listTransferProofs(userId);
+  const transferProofByProjection = buildTransferProofIndex(transferProofs);
   for (const usage of await listRecallUsage(userId, assetId)) {
     // 会话 id：新投影的 conversationId 优先；旧数据用 episode 的
     // taskRunId→sessionId 回溯——用户要求老记录也能看出"在哪个对话里被用"。
@@ -221,7 +228,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       || episodeConversationByRun.get(String(usage.taskRunId || ''));
     // M10（2026-09-16 审计收口）：带上该投影已完成的迁移证明 id——评价控件
     // 的渲染条件依赖它，此前恒缺导致"效果评价 UI 不可达"。
-    const usageProofId = await transferProofIdForProjection(userId, usage.projectionId);
+    const usageProofId = usage.projectionId ? transferProofByProjection.get(usage.projectionId) : undefined;
     pushSorted(items, {
       id: usage.id,
       kind: 'usage_recorded',
@@ -246,7 +253,6 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     });
   }
 
-  const transferProofs = await listTransferProofs(userId);
   const relevantTransfers = transferProofs.filter((proof: TransferProofRecord) => proof.assetVersions.some((entry) => entry.assetId === asset.id));
   for (const proof of relevantTransfers) {
     const projection = await readContextProjection(userId, proof.projectionId);

@@ -446,6 +446,8 @@
       })();
       if (result && result.assetId) {
         toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
+        // 检修剪：update 候选确认会 bump 目标资产版本——曾缓存的版本链失效。
+        if (candidate && candidate.targetAssetId) store.assetVersions = null;
         router.go({ name: 'overview', assetId: result.assetId });
       } else {
         toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
@@ -513,6 +515,8 @@
       if (!ok) return;
       await api.call('recall.assets.merge', { sourceAssetId, targetAssetId });
       toast(T('cognition.asset_merge_done', '已合并为同一版本组'));
+      // 检修剪：target 的版本链缓存必须失效（曾在本次会话打开过它的详情）。
+      store.assetVersions = null;
       router.go({ name: 'overview', assetId: targetAssetId });
       await NS.reload();
     },
