@@ -403,7 +403,7 @@
 /* 齿轮按钮（整理页 hero 右侧）：走共享 uiIconButton + icons.js('settings')，
    此处仅做 ca 作用域的视觉对齐（边框圆角，不抢主操作）。 */
 .ca-app .ca-settings-btn {
-  width: 34px; height: 34px; border-radius: 9px;
+  width: 34px; height: 34px; border-radius: var(--radius-field);
   border: 1px solid var(--ca-line); background: var(--ca-card); color: var(--ca-ink2);
 }
 .ca-app .ca-settings-btn:hover { color: var(--ca-ink); border-color: var(--ca-green-line); }
@@ -425,7 +425,7 @@
 }
 .ca-switch-knob {
   position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
-  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .2s ease;
+  background: var(--color-white); box-shadow: 0 1px 2px var(--color-shadow-soft); transition: transform .2s ease;
 }
 .ca-switch.is-on { background: var(--ca-green); border-color: var(--ca-green-line); }
 .ca-switch.is-on .ca-switch-knob { transform: translateX(20px); }
@@ -443,8 +443,8 @@
    首载不走这里（首载有骨架）。 */
 .ca-app { position: relative; }
 .ca-app.is-refreshing::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; z-index: 5;
-  background: linear-gradient(90deg, transparent, var(--color-ca-green-text, #2f9e63), transparent);
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; z-index: var(--z-raised);
+  background: linear-gradient(90deg, transparent, var(--color-ca-green-text), transparent);
   background-size: 40% 100%; background-repeat: no-repeat;
   animation: ca-refresh-slide 1s ease-in-out infinite;
 }
@@ -456,8 +456,8 @@
 /* 首载骨架：三行渐变条，比「加载中…」快有结构感。 */
 .ca-loading { padding: 8px 0; }
 .ca-skel-row {
-  height: 44px; margin-bottom: 10px; border-radius: 10px;
-  background: linear-gradient(90deg, var(--color-ca-hover) 25%, rgba(255,255,255,.55) 50%, var(--color-ca-hover) 75%);
+  height: 44px; margin-bottom: 10px; border-radius: var(--radius-item);
+  background: linear-gradient(90deg, var(--color-ca-hover) 25%, var(--color-white-55) 50%, var(--color-ca-hover) 75%);
   background-size: 200% 100%; animation: ca-shimmer 1.2s ease-in-out infinite;
 }
 @keyframes ca-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
@@ -519,7 +519,7 @@
 /* 已沉淀资产区（2026-09-15 并入整合卡）：直接展示沉淀正文，浅底内容块
    区分层级；「查看资产」降为项内次级入口。 */
 .ca-deposit { margin-top: 14px; }
-.ca-deposit-item { border: 1px solid var(--ca-line); border-radius: 10px; background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
+.ca-deposit-item { border: 1px solid var(--ca-line); border-radius: var(--radius-item); background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
 .ca-deposit-item + .ca-deposit-item { margin-top: 8px; }
 .ca-deposit-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ca-deposit-head b { font-size: var(--font-size-3); }
@@ -528,7 +528,7 @@
 
 /* 整理结果：未保存候选的完整内容块（2026-09-15——不保存后仍能看到
    当时整理出的具体内容）；与已沉淀资产块同一视觉语言。 */
-.ca-result-item { border: 1px solid var(--ca-line); border-radius: 10px; background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
+.ca-result-item { border: 1px solid var(--ca-line); border-radius: var(--radius-item); background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
 .ca-result-item + .ca-result-item { margin-top: 8px; }
 .ca-result-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ca-result-head .ca-right { margin-left: auto; }
