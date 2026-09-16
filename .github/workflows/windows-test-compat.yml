@@ -1,0 +1,32 @@
+name: Windows test compatibility
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - .github/workflows/windows-test-compat.yml
+      - .gitattributes
+      - test/renderer/agent-shared-ui.test.ts
+      - test/renderer/skill-shared-ui.test.ts
+      - test/renderer/conversation-shared-ui.test.ts
+      - test/renderer/kb-workbench.test.ts
+      - test/renderer/resource-grid-layout.test.ts
+      - test/main/features/transcript_correction_runs.test.ts
+
+permissions:
+  contents: read
+
+jobs:
+  windows-tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      - run: node scripts/run-tests.mjs run --maxWorkers=1
+      - run: npm run test:resources
