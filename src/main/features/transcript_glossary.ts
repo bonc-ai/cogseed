@@ -173,7 +173,7 @@ export function isSingleSurnameHonorific(text: string): boolean {
 
 /**
  * 已知高危 token：合法英文词/介词/框架词，全局替换会写坏用户所有文档。
- * 来源：真实清理产物里出现过 `for→Forge`、`model→Moodle`、`contact→Context`、
+ * 来源：真实清理产物里出现过 `for→Foo`、`model→Moodle`、`contact→Context`、
  * `redmi→README` 这几条。
  */
 const HIGH_RISK_TOKENS = new Set([

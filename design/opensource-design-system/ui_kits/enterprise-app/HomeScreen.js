@@ -11,7 +11,7 @@
   ];
   const SUGGESTIONS = ["\u7A7A\u95F4\u6A21\u5F0F", "\u7EE7\u7EED\u4E4B\u524D\u7684\u5DE5\u4F5C", ...HOME_SCENARIOS.map((s) => s.label)];
   function HomeScreen({ collapsed, onExpand, onOpenTask, onSubmit, onConnectAgent, spaces = [] }) {
-    const [txt, setTxt] = React.useState(""), [effort, setEffort] = React.useState("\u81EA\u52A8"), [recipient, setRecipient] = React.useState({ id: "raymond", name: "cogseed", kind: "agent" }), [spaceId, setSpaceId] = React.useState("");
+    const [txt, setTxt] = React.useState(""), [effort, setEffort] = React.useState("\u81EA\u52A8"), [recipient, setRecipient] = React.useState({ id: "cogseed", name: "cogseed", kind: "agent" }), [spaceId, setSpaceId] = React.useState("");
     const [continueOpen, setContinueOpen] = React.useState(false), [selection, setSelection] = React.useState(null), [hour, setHour] = React.useState(() => (/* @__PURE__ */ new Date()).getHours());
     React.useEffect(() => {
       const timer = setInterval(() => setHour((/* @__PURE__ */ new Date()).getHours()), 6e4);

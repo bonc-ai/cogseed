@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const esbuild = require(process.env.COGSEED_ESBUILD_PATH || process.env.RAYMOND_ESBUILD_PATH || 'esbuild');
+const esbuild = require(process.env.COGSEED_ESBUILD_PATH || 'esbuild');
 const root = path.resolve(__dirname, '..');
 const read = p => fs.readFileSync(path.join(root, p), 'utf8');
 const write = (p, value) => fs.writeFileSync(path.join(root, p), value);
@@ -37,7 +37,8 @@ async function main() {
     alias:{react:path.join(__dirname,'react-shim.cjs')},legalComments:'inline'});
   const sources = [...files('components'),...files('ui_kits')].filter(p=>p.endsWith('.jsx'));
   meta.sourceHashes = Object.fromEntries(sources.map(p=>[p,crypto.createHash('sha256').update(read(p)).digest('hex').slice(0,12)]));
-  write('_ds_bundle.js',`/* @ds-bundle: ${JSON.stringify(meta)} */\n\n${result.outputFiles[0].text}`);
+  const bundle = result.outputFiles[0].text.replace(/[ \t]+$/gm, '');
+  write('_ds_bundle.js',`/* @ds-bundle: ${JSON.stringify(meta)} */\n\n${bundle}`);
   for (const p of sources.filter(p=>p.startsWith('ui_kits/') || p.endsWith('.demo.jsx'))) {
     const result = await esbuild.transform(read(p),{loader:'jsx',format:'iife',target:'es2020',legalComments:'inline'});
     write(p.replace(/\.jsx$/,'.js'),'/* Generated from '+p+' by tools/build.cjs. */\n'+result.code);

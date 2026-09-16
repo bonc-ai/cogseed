@@ -6,7 +6,7 @@
  * 语料里猜的；每行的 kind/riskLevel 也照抄方案，避免"我替用户降风险"。
  *
  * 两处刻意不入册（方案 §2.2 红线，写在下面）：
- *   - `for → Forge`：介词/关键字，方案明写"默认不入册，仅会议场景人工确认后启用"；
+ *   - `for → Foo`：介词/关键字，方案明写"默认不入册，仅会议场景人工确认后启用"；
  *   - 口癖类（action=delete）：不在这里，走 `transcript_filler_rules` 规则包。
  */
 
@@ -36,7 +36,7 @@ export const INITIAL_GLOSSARY_SEED: SeedRow[] = [
   { wrong: 'K2', correct: 'KSTAR', kind: 'term', riskLevel: 'low', note: '部分形态 → 限本场景' },
   { wrong: 'K4', correct: 'KSTAR', kind: 'term', riskLevel: 'low', note: '部分形态 → 限本场景' },
   { wrong: 'Case2', correct: 'KSTAR', kind: 'term', riskLevel: 'low', note: '' },
-  { wrong: '雷蒙德', correct: 'Raymond', kind: 'product', riskLevel: 'low', note: '用户补充确认' },
+  { wrong: '示例人物', correct: 'SpeakerA', kind: 'product', riskLevel: 'low', note: '用户补充确认' },
   { wrong: 'IDC', correct: 'EduSeed', kind: 'course', riskLevel: 'medium', note: 'IDC 在其它语境可能是机构缩写' },
   { wrong: 'IU seed', correct: 'EduSeed', kind: 'course', riskLevel: 'medium', note: '' },
   { wrong: 'open cloud', correct: 'OpenClaw', kind: 'product', riskLevel: 'low', note: '普通 cloud 不替换' },
@@ -52,7 +52,7 @@ export const INITIAL_GLOSSARY_SEED: SeedRow[] = [
 
 /** 方案明写"默认不入册"的词（显式列出，防止以后有人"顺手补上"）。 */
 export const SEED_EXCLUDED: Array<{ wrong: string; correct: string; why: string }> = [
-  { wrong: 'for', correct: 'Forge', why: '介词/关键字 → 方案 §2.2：默认不入册，仅会议场景人工确认后启用' },
+  { wrong: 'for', correct: 'Foo', why: '介词/关键字 → 方案 §2.2：默认不入册，仅会议场景人工确认后启用' },
 ];
 
 export interface SeedInitialResult {
