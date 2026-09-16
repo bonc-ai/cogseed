@@ -39,7 +39,7 @@
 
 以下为独立任务的交付检查；整合后的当前结果见 [验证记录](../../verification.md)。
 
-- `RAYMOND_ESBUILD_PATH=/Users/zhongyangfan/Developer/cogseed-source/node_modules/esbuild node tools/build.cjs`：成功，复用已有依赖；58 个组件、33 个预览脚本、32 个元数据卡片。
+- `COGSEED_ESBUILD_PATH=/path/to/cogseed-source/node_modules/esbuild node tools/build.cjs`：成功，复用已有依赖；58 个组件、33 个预览脚本、32 个元数据卡片。
 - `node tools/verify.cjs`：13 项既有离线契约及 87 个源哈希通过。
 - `node tools/verify-agents.cjs`：10 项工作台离线契约通过，覆盖类型权限、禁用态、模型关系、继承空状态、卸载确认、入口与返回及未知 ID 恢复。
 - 生成 JS 语法、HTML 资源存在、工作台 CSS tokens、引用图标与文件空白检查通过。

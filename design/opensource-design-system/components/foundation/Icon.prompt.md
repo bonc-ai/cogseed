@@ -9,4 +9,4 @@ Icon — CogSeed 开源版唯一图标来源：本地 Lucide 官方 SVG，统一
 
 设置使用 `settings` 齿轮图标（轮齿与中心圆孔），退出登录使用 `logout`（门框与向外箭头）。用户菜单两项统一显示为 14px，沿用默认 2px 描边。
 
-当前契约：默认尺寸与描边读取 --cs-icon-size / --cs-icon-stroke。静态名称由 verify-source.cjs 校验；预览开发时设置 window.RAYMOND_DESIGN_DEBUG=true，动态未知名称会警告并省略图标。
+当前契约：默认尺寸与描边读取 --cs-icon-size / --cs-icon-stroke。静态名称由 verify-source.cjs 校验；预览开发时设置 window.COGSEED_DESIGN_DEBUG=true，动态未知名称会警告并省略图标。
