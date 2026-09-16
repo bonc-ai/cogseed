@@ -32879,6 +32879,28 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   color: var(--text-muted);
   font-size: var(--font-size-1);
 }
+/* 场景标签（「仅本场景」的前置数据）：与接受范围同一行的紧凑控件 */
+.kb-atc__scenario {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  width: 100%;
+}
+.kb-atc__scenario-label,
+.kb-atc__scenario-suggest-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  flex: 0 0 auto;
+}
+.kb-atc__scenario .ui-input {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+.kb-atc__scenario-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
 .kb-atc__row-menu {
   display: flex;
   flex-wrap: wrap;
