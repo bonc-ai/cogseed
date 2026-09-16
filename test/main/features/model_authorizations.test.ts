@@ -253,7 +253,8 @@ describe('model authorizations', () => {
         id: providerId,
         enabled: false,
         models: [
-          { id: 'claude-sonnet-4-6', contextWindow: 131072, maxTokens: 8192 },
+          // 2026-09-13 产品口径：目录未登记的模型 id 统一套 1M/384K 默认值。
+          { id: 'claude-sonnet-4-6', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'claude-opus-4-8', contextWindow: 524288, maxTokens: 32768 },
         ],
       }),

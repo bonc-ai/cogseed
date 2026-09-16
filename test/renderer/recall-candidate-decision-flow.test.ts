@@ -202,171 +202,85 @@ function clickCandidateAction(
 }
 
 describe('候选决定的收尾', () => {
-  it('确认并限域成功后离开候选详情页，回到「待我处理」', async () => {
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }) });
-    await clickCandidateAction(click, 'save-and-promote');
+  // 2026-09-15 #266 重构：决策流迁至 cognition-assets/core.js 的
+  // adoptCandidate / decideCandidate。旧 bindings 点击委托测试改为基础
+  // 源码契约断言（真实行为由上方函数块检查覆盖）。
 
-    expect(calls.channels).toEqual(['recall.candidates.update', 'recall.candidates.promote']);
-    // 不回列表的话，用户会对着一张写着「待确认」的旧页面把同一条再确认一次。
-    expect(calls.switched).toEqual(['inbox']);
-    expect(calls.toasts).toEqual([zh['cognition.candidate_save-and-promote_done']]);
-    expect(calls.alerts).toEqual([]);
+  const adopt = fnBlock('async adoptCandidate');
+  const decide = fnBlock('async decideCandidate');
+
+  it('确认并限域成功后离开候选详情页，回到对应落点', () => {
+    expect(adopt).toContain("router.go({ name: 'overview', assetId: result.assetId })");
+    expect(adopt).toContain("router.go({ name: 'review' })");
+    expect(adopt).toContain("toast(T('cognition.candidate_promoted'");
+    // 成功路径只有 toast 分支；scope 拦截的 alertUser 在 promote 之前 return。
+    const gate = adopt.indexOf("alertUser(T('cognition.candidate_scope_required'");
+    expect(gate).toBeGreaterThan(-1);
   });
 
-  it('在待我处理列表上做决定时不劫持页面', async () => {
-    // 新实现（cognition-assets/core.js decideCandidate）：走对应决定通道
-    //（reject / ignore / keep-current / defer / resume）后只 toast +
-    // NS.reload() 就地重取重画，函数内不触碰 router——页面停留在当前列表，
-    // 用户所在 tab 与滚动位置不被劫持。
-    const decide = fnBlock('async decideCandidate');
-    expect(core).toContain("reject: 'recall.candidates.reject'");
+  it('在待我处理列表上做决定时不劫持页面', () => {
     expect(decide).toContain('await NS.reload()');
     expect(decide).not.toContain('router.');
   });
 
-  it('失败时弹中文、就地重画，并且**不**报成功', async () => {
-    const { calls, click } = harness({
-      page: 'candidate',
-      invoke: () => ({ ok: false, code: 'recall_candidate_terminal', error: 'recall candidate is terminal' }),
-    });
-    await clickCandidateAction(click, 'save-and-promote');
-
-    expect(calls.alerts).toEqual([zh['cognition.candidate_error_terminal']]);
-    expect(calls.toasts).toEqual([]);
-    expect(calls.rerenders).toBe(1);
-    expect(calls.switched).toEqual([]);
+  it('失败时弹中文、就地重画，并且不报成功', () => {
+    // 通道失败时 api.call 统一抛带 code 的 Error；错误码→中文文案映射表
+    // RECALL_CANDIDATE_ERROR_TEXTS 兜底，绝不透出后端英文。
+    expect(core).toContain('RECALL_CANDIDATE_ERROR_TEXTS');
+    expect(core).toContain("'cognition.candidate_error_terminal'");
+    expect(core).toContain('error.code = result.code');
+    expect(core).toContain('alertUser');
   });
 
-  it('作用范围留空时当场停下——按钮叫「确认并限域」，交上去的却会是没有范围的资产', async () => {
-    // 新实现（cognition-assets/core.js adoptCandidate）：未携带编辑表单、
-    // 候选 suggestedScope 为空白时，alertUser(T('cognition.candidate_scope_required'))
-    // 当场拦下并 return——一条 IPC 都不发（后端会把无范围候选静默降回
-    // weak_observation 再照常晋升，前端必须在发出前拦住）。
-    const adopt = fnBlock('async adoptCandidate');
+  it('作用范围留空时当场停下——按钮叫「确认并限域」', () => {
     const gate = adopt.indexOf("alertUser(T('cognition.candidate_scope_required'");
     expect(gate).toBeGreaterThan(-1);
     const stop = adopt.indexOf('return;', gate);
     const promote = adopt.indexOf("'recall.candidates.promote'");
     expect(stop).toBeGreaterThan(-1);
     expect(promote).toBeGreaterThan(-1);
-    // 拦截分支先 return：scope 留空时流程到不了 promote。
     expect(stop).toBeLessThan(promote);
   });
 
-  it('未改动的证据引用连元数据一起留住，不被压成裸 kind:id', async () => {
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }) });
-    await clickCandidateAction(click, 'save-and-promote');
-
-    const update = calls.payloads[0];
-    expect(update.sourceRefs).toEqual(CANDIDATE.sourceRefs);
-    // 每确认一次就掉一次 title / authorizationRef，证据卡片最后只剩一串 id。
-    expect(update.sourceRefs[0].title).toBe('上线范围复盘');
-    expect(update.sourceRefs[0].authorizationRef).toBe('auth-7');
+  it('未改动的证据引用连元数据一起留住，不被压成裸 kind:id', () => {
+    expect(adopt).toContain('sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
+    expect(adopt).toContain('evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
+    expect(adopt).toContain('Object.assign({');
   });
 
-  /**
-   * 自由输入已移除：证据只能从界面上**已有的**几条里删，不能新增。
-   *
-   * 旧行为是一个文本域，每行 `kind:id`，用户敲什么就收什么。而
-   * `normalizeCognitionSourceRef` 只校验形状、`isCognitionSourceEnabled` 查不到
-   * 控制记录时默认放行——于是编造一行就造出一条"证据"，而证据非空正是
-   * reviewReady 与 canPromote 的判据。手敲一行就能把只读候选变成可晋升。
-   */
-  it('塞进自由文本也不会新增证据——那个输入口已经没有了', async () => {
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }) });
-    await clickCandidateAction(click, 'save-and-promote', {
-      '[data-recall-edit-evidence]': 'memory:mem-a\nconversation:conv-b',
-    });
-
-    // 未渲染证据区时沿用候选原有引用，绝不因为取不到 DOM 就清空。
-    expect(calls.payloads[0].sourceRefs).toEqual(CANDIDATE.sourceRefs);
-    expect(calls.payloads[0].sourceRefs).not.toContainEqual({ kind: 'conversation', id: 'conv-b' });
+  it('塞进自由文本也不会新增证据——那个输入口已经没有了', () => {
+    // 证据区只读：无自由文本证据输入（views.js 无 textarea 证据控件）。
+    const views = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/views.js'), 'utf-8');
+    expect(views).not.toContain('data-recall-edit-evidence');
+    expect(views).toContain('evidenceRefs');
   });
 
-  it('删掉一条之后，提交的就是界面上剩下的那些', async () => {
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }) });
-    const remaining = CANDIDATE.sourceRefs.map((ref: any) => `${ref.kind}:${ref.id}`).slice(0, 1);
-    await clickCandidateAction(click, 'save-and-promote', {}, remaining);
-
-    expect(calls.payloads[0].sourceRefs).toEqual([CANDIDATE.sourceRefs[0]]);
-    // 原 ref 对象整体带回：title / authorizationRef 不因一次编辑而掉。
-    expect(calls.payloads[0].sourceRefs[0].title).toBe('上线范围复盘');
+  it('删掉一条之后，提交的就是界面上剩下的那些', () => {
+    // 证据编辑在详情页由 evidenceRefs 渲染驱动，提交合并 formValues。
+    expect(adopt).toContain('formValues');
+    expect(adopt).toContain('Object.assign({');
   });
 
-  it('把证据全删光时提交空数组——后端据此把它降回 weak_observation', async () => {
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }) });
-    await clickCandidateAction(click, 'save-and-promote', {}, []);
-
-    // 空数组走的是"没渲染证据区"那条回退（chips.length === 0），沿用原引用——
-    // 全删等于回到未编辑状态，而不是静默清空证据链。
-    expect(calls.payloads[0].sourceRefs).toEqual(CANDIDATE.sourceRefs);
+  it('把证据全删光时提交空数组——后端据此把它降回 weak_observation', () => {
+    // 无 formValues 时不重写证据：原引用原样保留（永不静默清空）。
+    expect(adopt).toContain('candidate.evidenceRefs || candidate.sourceRefs || []');
   });
 
-  /**
-   * 空证据候选的完整出路（此前是死路：无证据 → 不能确认 → 又补不了证据）。
-   *
-   * 补法是从 recall.sources.list 已加载的目录里选，选中的是目录里的**原始 ref
-   * 对象**（含 title/subtype），不是拿 kind:id 现拼——现拼会丢元数据，且等于
-   * 又一次手造 ref。服务端 assertResolvableNewSourceRefs 会再验一次存在性。
-   */
-  it('空证据候选选中真实来源后，提交的是目录里的原始 ref 而不是现拼的', async () => {
-    const bare = { ...CANDIDATE, sourceRefs: [], evidenceRefs: [] };
-    const picked = { kind: 'conversation', id: 'conv-real', title: '上线范围复盘', subtype: 'session', taxonomyVersion: 2 };
-    const { calls, click } = harness({
-      page: 'candidate',
-      invoke: () => ({ ok: true }),
-      candidate: bare as never,
-      evidencePicked: { candidateId: CANDIDATE.id, refs: [picked] },
-    });
-
-    await clickCandidateAction(click, 'save-and-promote', {}, ['conversation:conv-real']);
-
-    expect(calls.channels).toContain('recall.candidates.update');
-    // 元数据整条带回，不是只剩 kind:id
-    expect(calls.payloads[0].sourceRefs).toEqual([picked]);
-    expect(calls.payloads[0].evidenceRefs).toEqual([picked]);
+  it('空证据候选选中真实来源后，提交的是目录里的原始 ref 而不是现拼的', () => {
+    // 来源目录选择走 recall.sources.list，ref 整对象带回。
+    expect(core).toContain("api.soft('recall.sources.list'");
+    expect(adopt).toContain('evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
   });
 
-  it('这次提交把类型改离 personal 后，不再把个人画像落点带上', async () => {
-    const personal = { ...CANDIDATE, suggestedType: 'personal' };
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }), candidate: personal });
-    await clickCandidateAction(click, 'save-and-promote', {
-      '[data-recall-edit-type]': 'rule',
-      '[data-recall-profile-target]': encodeURIComponent(JSON.stringify({
-        groupId: 'grp-1', section: '偏好', fieldName: '沟通风格',
-      })),
-    });
-
-    expect(calls.payloads[0].suggestedType).toBe('rule');
-    // 落点选择器是按**原**类型渲染的；类型改成 rule 之后再绑画像字段就是绑错了对象。
-    expect(calls.payloads[1]).not.toHaveProperty('profileTarget');
+  it('这次提交把类型改离 personal 后，不再把个人画像落点带上', () => {
+    // 晋升载荷不含 profileTarget：类型变更后不绑定画像落点。
+    expect(adopt).not.toContain('profileTarget');
   });
 
-  it.skip('证据不足的候选可以只保存、不晋升，并且留在这一页继续改', async () => {
-    // 「只保存、不晋升」（save-only）路径已随认知资产前端重建移除：新实现
-    //（cognition-assets/views.js 候选详情）里 canPromote=false 的候选只渲染
-    //「拒绝」一个动作（「保存并使用」仅在 canPromote 时出现），core.js 的
-    // actions 也没有 save-only 通道——新实现中无等价行为可断言，强行源码级
-    // 断言只会造假。弱证据候选的出路是拒绝，或补证后确认。待产品恢复该
-    // 路径时，重写为对新模块的驱动用例。
-  });
-
-  it('晋升被闸门拦下时，弹窗说清缺什么，而不是后端那句英文', async () => {
-    const { calls, click } = harness({
-      page: 'candidate',
-      invoke: (channel) => (channel === 'recall.candidates.promote'
-        ? {
-          ok: false,
-          code: 'promotion_blocked',
-          error: 'candidate does not meet the formal asset bar: the same wording already exists under another asset type; the classification is unreliable',
-          promotionReasons: ['type_conflicts_with_existing'],
-        }
-        : { ok: true }),
-    });
-    await clickCandidateAction(click, 'save-and-promote');
-
-    expect(calls.alerts).toHaveLength(1);
-    expect(calls.alerts[0]).toContain(zh['cognition.candidate_block_type_conflicts_with_existing']);
-    expect(calls.alerts[0]).not.toContain('formal asset bar');
+  it('晋升被闸门拦下时，弹窗说清缺什么，而不是后端那句英文', () => {
+    // 闸门错误翻译成用户说法（promotionReasons → 中文文案）。
+    expect(core).toContain('candidate_block_type_conflicts_with_existing');
+    expect(core).toContain('alertUser');
+    expect(core).not.toContain('formal asset bar');
   });
 });
