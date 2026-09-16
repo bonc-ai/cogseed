@@ -2804,113 +2804,6 @@
     return parts.length > 1 ? parts : [raw];
   }
 
-  /** 一块带标签的答案/解析：标签 + （多要点 → 列表 / 单句 → 文本）。 */
-  function _quizAnswerBlock(label, text, tone) {
-    const wrap = document.createElement('div');
-    wrap.className = 'kb-quiz-answer' + (tone ? ` is-${tone}` : '');
-    const tag = document.createElement('span');
-    tag.className = 'kb-quiz-answer-tag';
-    tag.textContent = label;
-    wrap.appendChild(tag);
-    const clauses = _quizAnswerClauses(text);
-    if (clauses.length > 1) {
-      const ul = document.createElement('ul');
-      ul.className = 'kb-quiz-answer-list';
-      for (const c of clauses) {
-        const li = document.createElement('li');
-        li.textContent = c;
-        ul.appendChild(li);
-      }
-      wrap.appendChild(ul);
-    } else {
-      const body = document.createElement('span');
-      body.className = 'kb-quiz-answer-text';
-      body.textContent = clauses[0] || '—';
-      wrap.appendChild(body);
-    }
-    return wrap;
-  }
-
-  /** 单选作答后的"对/错"状态行。 */
-  function _quizStatusLine(right) {
-    const line = document.createElement('div');
-    line.className = 'kb-quiz-status ' + (right ? 'is-right' : 'is-wrong');
-    line.textContent = right ? '✅ 答对了' : '❌ 答错了';
-    return line;
-  }
-
-  /** 把模型给的题目渲染成可作答的卡片（纯 DOM 构建，题目文本一律走 textContent）。 */
-  function _renderQuizCard(container, questions) {
-    container.textContent = '';
-    questions.forEach((q, idx) => {
-      const item = document.createElement('div');
-      item.className = 'kb-quiz-item';
-      const head = document.createElement('div');
-      head.className = 'kb-quiz-q-head';
-      const kind = q.type === 'single' ? '单选' : '简答';
-      head.textContent = `第 ${idx + 1} 题 · ${kind}` + (q.source ? ` · 来源：${q.source}` : '');
-      const text = document.createElement('div');
-      text.className = 'kb-quiz-q-text';
-      text.textContent = String(q.question || '');
-      item.append(head, text);
-
-      if (q.type === 'single' && Array.isArray(q.options) && q.options.length) {
-        const list = document.createElement('div');
-        list.className = 'kb-quiz-opts';
-        const explain = document.createElement('div');
-        explain.className = 'kb-quiz-explain';
-        explain.hidden = true;
-        let answered = false;
-        for (const opt of q.options) {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'kb-quiz-opt';
-          btn.textContent = String(opt);
-          btn.addEventListener('click', () => {
-            if (answered) return;
-            answered = true;
-            const right = String(opt) === String(q.answer);
-            btn.classList.add(right ? 'is-right' : 'is-wrong');
-            for (const el of list.children) {
-              if (el.textContent === String(q.answer)) el.classList.add('is-right');
-              el.disabled = true;
-            }
-            // 结构化：先落"对/错"状态，再分「正确答案」「解析」两块——此前是把
-            // 答案与解析用 ' · ' 拼成一句话，两个长句糊在一起读不动（真机反馈）
-            explain.hidden = false;
-            explain.replaceChildren(
-              _quizStatusLine(right),
-              ...(right ? [] : [_quizAnswerBlock('正确答案', q.answer, 'right')]),
-              ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
-            );
-          });
-          list.appendChild(btn);
-        }
-        item.append(list, explain);
-      } else {
-        const reveal = document.createElement('button');
-        reveal.type = 'button';
-        reveal.className = 'kb-quiz-reveal';
-        reveal.textContent = '显示参考答案';
-        const answer = document.createElement('div');
-        answer.className = 'kb-quiz-explain';
-        answer.hidden = true;
-        // 同样的结构化：参考答案与解析各占一块，参考答案里的多个要点自动列点，
-        // 不再拼成一整句（"…；…．· …；…"那种读不出层次的句子）
-        answer.replaceChildren(
-          _quizAnswerBlock('参考答案', q.answer || '（无参考答案）'),
-          ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
-        );
-        reveal.addEventListener('click', () => {
-          answer.hidden = !answer.hidden;
-          reveal.textContent = answer.hidden ? '显示参考答案' : '收起参考答案';
-        });
-        item.append(reveal, answer);
-      }
-      container.appendChild(item);
-    });
-  }
-
   /** 生成测验 → 追加到对话消息区（kb-qa-messages）；成功后落 qaHistory 供会话恢复。 */
   function _genQuiz() {
     if (_quizGenerating) return; // 生成中防重复
@@ -2959,16 +2852,22 @@
           });
           return;
         }
-        const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
-          + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
-          + '<div class="kb-quiz-list"></div></div>');
-        _renderQuizCard(nb.querySelector('.kb-quiz-list'), questions);
+        const payload = {
+          questions,
+          sources: Array.isArray(res && res.sources) ? res.sources : [],
+          fingerprint: String((res && res.fingerprint) || ''),
+        };
+        const nb = replaceCard(_quizLauncherHtml(payload));
         // 落进会话历史（题目随消息存着，没有独立存档），并**立刻持久化**：
         // 只 push 不保存的话切库/换会话/重开就没了（真机反馈：「刚生成的测验没进
         // 历史会话」）。缓存命中（cached）同样是一张真卡片，也要记。
-        _state.qaHistory.push({ role: 'assistant', kind: 'quiz', questions, ts: Date.now() });
+        const entry = { role: 'assistant', kind: 'quiz', ...payload, ts: Date.now() };
+        _state.qaHistory.push(entry);
         if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
         _qaSaveCurrentSession('测验');
+        _bindQuizLauncher(nb, entry);
+        // 生成完直接进入答题界面（NotebookLM 也是生成即答），卡片留在会话里可随时重开
+        _openQuizPanel(entry);
       })
       .catch(() => {
         _quizGenerating = false;
@@ -2981,19 +2880,95 @@
       });
   }
 
-  /** 会话历史恢复：按存下来的题目重建测验卡（题目随消息保存，不额外存盘）。 */
+  /** 会话历史恢复：按存下来的题目重建测验缩略卡（点开进答题面板，题目随消息保存）。 */
   function _appendQuizMessage(box, m) {
     const questions = Array.isArray(m.questions) ? m.questions : [];
     const el = document.createElement('div');
     el.className = 'kb-qa-msg is-ai';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-quiz-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">📝 测验</div>'
-      + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
-      + '<div class="kb-quiz-list"></div></div>';
+    body.innerHTML = _quizLauncherHtml({
+      questions,
+      sources: Array.isArray(m.sources) ? m.sources : [],
+      fingerprint: String(m.fingerprint || ''),
+    });
     el.appendChild(body);
     box.appendChild(el);
-    _renderQuizCard(body.querySelector('.kb-quiz-list'), questions);
+    _bindQuizLauncher(body, m);
+  }
+
+  /**
+   * 测验缩略卡：只做"入口 + 事实"，真正的答题/结果在 window.KbQuizPanel 面板里
+   * （NotebookLM 的测验是独立工作面：逐题作答、提示、结果页、再测/新测）。
+   */
+  function _quizLauncherHtml(payload) {
+    const questions = Array.isArray(payload && payload.questions) ? payload.questions : [];
+    const singles = questions.filter((q) => q && q.type === 'single').length;
+    const shorts = questions.length - singles;
+    const sources = Array.isArray(payload && payload.sources) ? payload.sources.length : 0;
+    const meta = [
+      `${_tr('kb.quiz.card_count', '共 {n} 题', { n: questions.length })}`,
+      ...(shorts ? [`${_tr('kb.quiz.card_mix', '单选 {s} · 简答 {q}', { s: singles, q: shorts })}`] : []),
+      ...(sources ? [`${_tr('kb.quiz.card_sources', '{n} 个来源', { n: sources })}`] : []),
+    ].join(' · ');
+    return '<div class="kb-mm-msg-head">📝 ' + _esc(_tr('kb.quiz.card_title', '测验')) + '</div>'
+      + '<div class="kb-quiz-canvas">'
+      + `<div class="kb-quiz-meta">${_esc(meta)}</div>`
+      + `<div class="kb-quiz-launch">${_uiButton({ label: _tr('kb.quiz.start', '开始答题'), role: 'primary', size: 'sm', icon: 'check-circle', className: 'kb-quiz-start-btn', attrs: { id: 'kb-quiz-start' } })}</div>`
+      + '</div>';
+  }
+
+  /** 缩略卡 → 面板：卡片本身可点，按钮也绑一次（键盘/鼠标都到位）。 */
+  function _bindQuizLauncher(scopeEl, entry) {
+    const open = () => _openQuizPanel(entry);
+    const btn = scopeEl.querySelector('#kb-quiz-start, .kb-quiz-start-btn');
+    if (btn) btn.addEventListener('click', (e) => { e.stopPropagation(); open(); });
+    const canvas = scopeEl.querySelector('.kb-quiz-canvas');
+    if (canvas) canvas.addEventListener('click', open);
+  }
+
+  /** 打开测验面板：把"新题生成 / 打开来源 / 关闭"作为宿主能力交给面板。 */
+  function _openQuizPanel(entry) {
+    const panel = window.KbQuizPanel;
+    if (!panel || typeof panel.open !== 'function') {
+      if (typeof uiToast === 'function') uiToast('测验面板没能加载，请刷新后重试', { variant: 'warning' });
+      return;
+    }
+    panel.open({
+      questions: Array.isArray(entry.questions) ? entry.questions : [],
+      sources: Array.isArray(entry.sources) ? entry.sources : [],
+      fingerprint: String(entry.fingerprint || ''),
+      title: _tr('kb.quiz.panel_title', '{lib} · 测验', { lib: _state.spaceId ? (_state.spaceName || '共享库') : (_state.currentLib || '知识库') }),
+      dir: _state.spaceId ? null : (_state.currentLib || null),
+      spaceId: _state.spaceId || null,
+      host: {
+        // 「生成后续测验」：同一份材料重新出题（force 绕过缓存），并把新题写回会话历史
+        onRegenerate: () => window.cogseed.invoke('kb.quiz', {
+          dir: _state.spaceId ? null : (_state.currentLib || null),
+          spaceId: _state.spaceId || null,
+          force: true,
+        }).then((res) => {
+          const questions = Array.isArray(res && res.questions) ? res.questions : [];
+          if (!res || res.source === 'degraded' || !questions.length) return null;
+          const next = {
+            questions,
+            sources: Array.isArray(res.sources) ? res.sources : [],
+            fingerprint: String(res.fingerprint || ''),
+          };
+          entry.questions = next.questions;
+          entry.sources = next.sources;
+          entry.fingerprint = next.fingerprint;
+          entry.ts = Date.now();
+          _qaSaveCurrentSession('测验');
+          return next;
+        }),
+        onOpenSource: (path) => {
+          if (!path) return false;
+          _openFile(String(path));
+          return true;
+        },
+      },
+    });
   }
 
   // 对话回答 → 脑图：基于本条回答文本生成（复用 kb.mindmap 的 text 参数）。

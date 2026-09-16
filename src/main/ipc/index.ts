@@ -23,6 +23,7 @@ import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
 import * as kbQuiz from '../features/kb_quiz';
+import * as kbQuizFeedback from '../features/kb_quiz_feedback';
 import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
@@ -4328,6 +4329,43 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       },
     });
     return res;
+  },
+
+  // 测验「提示」：只给文档内的线索、不给答案（单题小请求，30s 预算）。
+  'kb.quiz.hint': async ({ question, options, type, source, dir, spaceId, fingerprint, qid }, ctx) => {
+    const res = await kbQuiz.kbQuizHint(ctx.userId, {
+      question: typeof question === 'string' ? question : '',
+      options: Array.isArray(options) ? options.map((o: unknown) => String(o ?? '')) : [],
+      type: typeof type === 'string' ? type : '',
+      source: typeof source === 'string' && source ? source : null,
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      fingerprint: typeof fingerprint === 'string' ? fingerprint : '',
+      qid: Number.isFinite(Number(qid)) ? Number(qid) : 0,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 单发无状态：不写/不复用持久会话（与 kb.summary/kb.mindmap/kb.quiz 同款）
+          ephemeralSession: true,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // 测验评分反馈（「优质内容 / 劣质内容」）：只写本机 JSONL 台账，不上报、不联网。
+  'kb.quiz.feedback': async ({ fingerprint, qid, verdict, type, source, correct }, ctx) => {
+    const res = kbQuizFeedback.appendQuizFeedback(ctx.userId, {
+      fingerprint, qid, verdict, type, source, correct,
+    });
+    return { ok: res.ok };
   },
 
   // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。

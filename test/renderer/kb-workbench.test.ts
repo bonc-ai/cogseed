@@ -407,33 +407,38 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).not.toContain('请先生成 AI 解析');
   });
 
-  it('生成测验有真实实现：调 kb.quiz 并渲染可作答的卡片', () => {
+  it('生成测验有真实实现：调 kb.quiz、渲染缩略卡并打开答题面板', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
-    // 这个入口此前只有调用点、没有实现（点击 ReferenceError）
+    // 这个入口此前只有调用点、没有实现（点击直接 ReferenceError）
     expect(src).not.toMatch(/_renderQuiz\b/);
     expect(src).toContain('function _genQuiz()');
     expect(src).toContain("invoke('kb.quiz'");
-    expect(src).toContain('function _renderQuizCard');
-    // 题目文本一律走 textContent（模型输出不拼 innerHTML）
-    expect(src).toMatch(/function _renderQuizCard[\s\S]{0,900}textContent = String\(q\.question/);
-    // 会话恢复：quiz 消息按存下来的题目重建
+    // 答题/结果工作面移到 window.KbQuizPanel（逐题作答、提示、结果页、再测/新测），
+    // 会话流里只留一张缩略卡（入口 + 事实），生成完直接进入答题
+    expect(src).toContain('function _quizLauncherHtml(payload)');
+    expect(src).toMatch(/function _bindQuizLauncher[\s\S]{0,400}_openQuizPanel/);
+    expect(src).toMatch(/function _openQuizPanel[\s\S]{0,400}panel\.open\(/);
+    expect(src).toMatch(/_bindQuizLauncher\(nb, entry\);[\s\S]{0,200}_openQuizPanel\(entry\)/);
+    // 会话恢复：quiz 消息按存下来的题目重建缩略卡
     expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,200}_appendQuizMessage/);
-    expect(src).toMatch(/kind: 'quiz', questions/);
+    expect(src).toMatch(/kind: 'quiz', \.\.\.payload/);
   });
 
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
-    expect(src).toMatch(/kind: 'quiz', questions[\s\S]{0,200}_qaSaveCurrentSession\('测验'\)/);
-    expect(src).toMatch(/_state\.qaHistory\.push\(\{ role: 'assistant', kind: 'quiz'/);
+    expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\('测验'\)/);
+    expect(src).toMatch(/const entry = \{ role: 'assistant', kind: 'quiz', \.\.\.payload, ts: Date\.now\(\) \};[\s\S]{0,200}_state\.qaHistory\.push\(entry\)/);
     // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
     expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);
     expect(src).toMatch(/Array\.isArray\(m\.questions\) \? m\.questions\.slice\(0, 20\)/);
+    // 来源与指纹一并存下来：面板的"查看 N 个来源"与「生成后续测验」的缓存键都靠它
+    expect(src).toMatch(/function _appendQuizMessage[\s\S]{0,400}m\.sources/);
     // ③ 产物消息没有 content，不进模型多轮上下文
     expect(src).toMatch(/filter\(\(m\) => m\.kind !== 'mindmap' && m\.kind !== 'quiz'\)/);
   });
 
-  it('参考答案/解析分块显示，多要点自动列点', () => {
+  it('参考答案/解析分块显示，多要点自动列点（纯函数仍由 __kbFvUtils 暴露给测验面板）', () => {
     const { windowMock } = loadScript();
     const clauses = windowMock.__kbFvUtils.quizAnswerClauses;
     // 真机反馈里的原句：一个分号隔开的两个要点 → 拆成两条，而不是糊成一整段
@@ -448,10 +453,16 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(clauses('')).toEqual([]);
     // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
-    expect(src).toContain('function _quizAnswerBlock');
-    expect(src).toContain("_quizAnswerBlock('参考答案'");
-    expect(src).toContain("_quizAnswerBlock('解析'");
-    expect(src).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
+    // 纯函数留在 kb-workbench（__kbFvUtils 导出给面板复用），答案块渲染已在测验面板里
+    expect(src).toContain('quizAnswerClauses: _quizAnswerClauses');
+    expect(src).not.toContain('function _quizAnswerBlock');
+    const panel = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-quiz.js'), 'utf8');
+    expect(panel).toContain("_answerBlock(_tr('kb.quiz.reference'");
+    expect(panel).toContain("_answerBlock(_tr('kb.quiz.explain'");
+    expect(panel).toContain("_answerBlock(_tr('kb.quiz.correct_answer'");
+    expect(panel).toMatch(/function _clauses\(text\)[\s\S]{0,300}quizAnswerClauses/);
+    // 仍然不用 ' · ' 把答案与解析拼成一句话
+    expect(panel).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
   });
 
   it('共享库的分享显示为待开发（不再弹出"像能用"的分享弹窗）', () => {
