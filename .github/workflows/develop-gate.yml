@@ -1,0 +1,105 @@
+name: Develop Gate
+
+# L1 快检 —— 挂在 PR -> develop 上，把红账挡在源头。
+#
+# 为什么需要它：ci.yml 只在 cicd 上触发，develop 侧没有任何检查会拦住问题。
+# 1.1.2 发版时爆出来的 231 个测试失败，是在 develop 上躺了两周没人发现的。
+# 详见《CogSeed 发版流程规范 v1.9》第四节第 0 项。
+#
+# 【灰度说明 · 重要】
+# 本版所有 job 都是 continue-on-error: true —— 只出结论、不阻塞合并。
+# 跑一周看红的分布：
+#   · 红的都是历史遗留 -> 修完把 continue-on-error 删掉，转成阻塞
+#   · 有大量新提交引入的红 -> 说明拦得对，直接删掉转阻塞
+# 转阻塞 = 删掉下面每处 `continue-on-error: true` 这一行，别的都不用动。
+#
+# 【为什么用 macos-latest 而不是 ubuntu】
+# 测试跑在 Electron 的 Node 运行时里（scripts/run-tests.mjs 里
+# ELECTRON_RUN_AS_NODE=1，所以不需要显示器）。但目前 macOS 和 Windows 上的
+# CI 都验证过，ubuntu 从未跑过，而 npm ci 的 postinstall 会拉原生依赖
+# （sqlite/pty ABI、sherpa-onnx、embedding model）。
+# 第一版优先保证「能跑」，稳定之后再评估是否把静态检查拆到 ubuntu 提速。
+
+on:
+  pull_request:
+    branches:
+      - develop
+
+# 同一个 PR 连续 push 时，取消上一次未跑完的，省时间也省额度。
+concurrency:
+  group: develop-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static-gates:
+    # 灰度期：只报告不拦截。转阻塞时删掉这一行。
+    continue-on-error: true
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --changed 需要 base 提交在本地，fetch-depth 必须为 0
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      # 以下五项在 1.1.2 实测里合计约 1.5 分钟
+      # （typecheck 0.2 / lint 0.4 / 其余各 0.0）
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Design-token gate
+        run: npm run tokens:check
+      - name: Builtin manifest gate
+        run: npm run builtin:manifest:check
+      - name: README link gate
+        run: npm run readme:check
+
+  affected-tests:
+    # 灰度期：只报告不拦截。转阻塞时删掉这一行。
+    continue-on-error: true
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      - name: Affected tests only (module-graph aware)
+        run: |
+          set -euo pipefail
+          # 用 PR 的 base sha 比 origin/develop 稳（不受并发合并影响）
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            BASE=$(git merge-base origin/develop HEAD)
+          fi
+          echo "base commit: $BASE"
+          echo "--- 本次改动的源文件（供人工核对筛选是否合理）---"
+          git diff --name-only "$BASE"...HEAD -- src/ | head -50 || true
+          echo "--- 受影响的测试 ---"
+          # 注意：这里必须是「模块图传播」筛选，不能退化成「只跑改动过的测试文件」。
+          # 1.1.2 最典型的失败 test/main/features/ccswitch_import.test.ts
+          # 在 develop 与 cicd 上字节完全相同，是它被测的源码被改了。
+          #
+          # --passWithNoTests：只改文档/配置的 PR 可能筛出 0 个测试，
+          # vitest 默认会以退出码 1 结束（"No test files found"），
+          # 那会变成误报红。加上这个标志，0 个测试算通过。
+          node scripts/run-tests.mjs run --changed "$BASE" --maxWorkers=2 --passWithNoTests
+
+      - name: Reminder on miss
+        # 兜底提示：受影响测试筛选必然有漏网，夜间全量才是真正的安全网。
+        if: failure()
+        run: |
+          echo "::warning::受影响测试未通过或筛选有漏。请注意：L1 只跑受影响的测试，"
+          echo "::warning::漏网是预期内的 —— develop-nightly.yml 会在每天夜里跑全量兜底。"
