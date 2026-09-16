@@ -423,12 +423,12 @@
   border: 1px solid var(--ca-line); background: var(--color-ca-hover);
   position: relative; cursor: pointer; padding: 0; transition: background-color .2s ease, border-color .2s ease;
 }
-.ca-switch-knob {
+.ca-switch .ui-switch__knob {
   position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
   background: var(--color-white); box-shadow: 0 1px 2px var(--color-shadow-soft); transition: transform .2s ease;
 }
 .ca-switch.is-on { background: var(--ca-green); border-color: var(--ca-green-line); }
-.ca-switch.is-on .ca-switch-knob { transform: translateX(20px); }
+.ca-switch.is-on .ui-switch__knob { transform: translateX(20px); }
 .ca-switch:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: 2px; }
 
 /* ── 交互反馈与过渡（2026-09-15 全面交互优化） ────────────────── */
