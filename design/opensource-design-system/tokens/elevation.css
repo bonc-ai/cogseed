@@ -1,0 +1,22 @@
+/* CogSeed 开源版 · 阴影
+   层级靠版式与分割线建立，阴影只用于"浮起"的东西。 */
+:root{
+  --cs-shadow-sm:0 1px 2px rgba(20,40,30,.06);
+  --cs-shadow-md:0 1px 2px rgba(20,40,30,.04),0 8px 24px rgba(20,40,30,.05);
+  --cs-shadow-lg:0 6px 18px rgba(20,40,30,.05);
+  --cs-shadow-window:0 24px 60px rgba(20,40,30,.18);
+  --cs-shadow-inset-hairline:inset 0 0 0 1px rgba(20,40,30,.1);
+  --cs-tab-underline:inset 0 -1.5px 0 #14281E; /* @kind shadow */
+  --cs-fade-bottom:linear-gradient(180deg,rgba(255,255,255,0),#FFFFFF); /* @kind color */
+}
+
+:root { --cs-layer-task-menu: var(--cs-layer-popover); }
+
+:root{
+  --cs-layer-sticky:2;
+  --cs-layer-popover:30;
+  --cs-layer-modal:60;
+  --cs-layer-modal-popover:65;
+  --cs-layer-command:80;
+  --cs-layer-toast:90;
+}

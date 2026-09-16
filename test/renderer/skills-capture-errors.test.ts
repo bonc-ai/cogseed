@@ -3,16 +3,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 
-const bindings = fs.readFileSync(
-  path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'),
-  'utf8',
-);
-const skillsModule = fs.readFileSync(
-  path.join(__dirname, '../../src/renderer/modules/skills.js'),
+// 手动沉淀错误文案 2026-09-14 随认知资产前端重建迁至 cognition-assets/
+// core.js 的 NS.captureErrorText（自 skills-bindings.js 的
+// _recallCaptureErrorMessage 迁入）；来源原因文案在 vocabulary.js 的
+// SOURCE_REASON 映射。读取源同步迁移。
+const core = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'),
   'utf8',
 );
 
-function extractFunction(name: string, source = bindings): string {
+function extractFunction(name: string, source = core): string {
   const start = source.indexOf(`function ${name}`);
   if (start < 0) throw new Error(`missing function: ${name}`);
   const bodyStart = source.indexOf('{', start);
@@ -37,27 +37,24 @@ function extractFunction(name: string, source = bindings): string {
 
 function loadMessageFormatter() {
   const sandbox: any = {
-    _cognitionText(key: string, fallback: string) {
-      const table: Record<string, string> = {
-        'cognition.capture_error_no_completed_exchange': '当前会话还没有完成一轮问答，暂时无法沉淀。',
-        'cognition.capture_error_waiting_response': '当前会话仍在等待回复，完成后才能沉淀。',
-        'cognition.capture_error_disabled': '沉淀功能已关闭，请先在沉淀设置中开启。',
-        'cognition.capture_error_conversation_not_found': '找不到这个会话，暂时无法沉淀。',
-        'cognition.capture_error_unknown': '沉淀任务发生未知错误',
-      };
-      return table[key] || fallback;
+    window: {
+      t(key: string, fallback: string) {
+        const table: Record<string, string> = {
+          'cognition.capture_error_no_completed_exchange': '当前会话还没有完成一轮问答，暂时无法沉淀。',
+          'cognition.capture_error_waiting_response': '当前会话仍在等待回复，完成后才能沉淀。',
+          'cognition.capture_error_disabled': '沉淀功能已关闭，请先在沉淀设置中开启。',
+          'cognition.capture_error_conversation_not_found': '找不到这个会话，暂时无法沉淀。',
+          'cognition.capture_error_unknown': '沉淀任务发生未知错误',
+        };
+        return table[key] || fallback;
+      },
     },
   };
-  vm.runInNewContext(`${extractFunction('_recallCaptureErrorMessage')}\nthis.format = _recallCaptureErrorMessage;`, sandbox);
+  vm.runInNewContext(
+    `function T(key, fallback) { return window.t(key, fallback); }\n${extractFunction('captureErrorText')}\nthis.format = captureErrorText;`,
+    sandbox,
+  );
   return sandbox.format as (error: unknown) => string;
-}
-
-function loadCaptureErrorLabel() {
-  const sandbox: any = {
-    _cognitionText(_key: string, fallback: string) { return fallback; },
-  };
-  vm.runInNewContext(`${extractFunction('_captureErrorLabel', skillsModule)}\nthis.format = _captureErrorLabel;`, sandbox);
-  return sandbox.format as (code: string, capture?: unknown) => string;
 }
 
 describe('Recall capture error feedback', () => {
@@ -76,9 +73,13 @@ describe('Recall capture error feedback', () => {
   });
 
   it('explains paused and removed source failures instead of showing an unknown error', () => {
-    const format = loadCaptureErrorLabel();
-    expect(format('source_paused')).toContain('暂停');
-    expect(format('source_removed')).toContain('移除');
+    // 来源原因文案随重构迁至 vocabulary.js 的 SOURCE_REASON 映射。
+    const vocab = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/cognition-assets/vocabulary.js'),
+      'utf8',
+    );
+    expect(vocab).toContain("source_paused: ['cognition.source_reason_source_paused'");
+    expect(vocab).toContain("source_removed: ['cognition.source_reason_source_removed'");
   });
 
   it('ships the feedback strings for every supported locale', () => {
@@ -92,8 +93,8 @@ describe('Recall capture error feedback', () => {
         'cognition.capture_error_waiting_response',
         'cognition.capture_error_disabled',
         'cognition.capture_error_conversation_not_found',
-        'cognition.capture_error_source_paused',
-        'cognition.capture_error_source_removed',
+        'cognition.source_reason_source_paused',
+        'cognition.source_reason_source_removed',
       ]) expect(table[key]).toBeTruthy();
     }
   });

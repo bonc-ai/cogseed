@@ -6,12 +6,19 @@ const style = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/style.css'),
   'utf8',
 );
+const tokens = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/tokens.css'),
+  'utf8',
+);
 
 describe('conversation user message bubble', () => {
   it('uses a neutral low-contrast surface only in the main conversation', () => {
     expect(style).toMatch(
-      /#panel-conversation \.chat-message\.user > \.chat-bubble\s*\{[^}]*background:\s*rgba\(245, 247, 246, 0\.82\);[^}]*border:\s*1px solid rgba\(30, 41, 59, 0\.045\);[^}]*border-radius:\s*20px;[^}]*box-shadow:\s*none;/s,
+      /#panel-conversation \.chat-message\.user > \.chat-bubble\s*\{[^}]*background:\s*var\(--color-surface-2\);[^}]*border:\s*1px solid var\(--line-subtle\);[^}]*border-radius:\s*var\(--radius-card\);[^}]*box-shadow:\s*none;/s,
     );
+    expect(tokens).toContain('--color-surface-2: #EDF3EF;');
+    expect(tokens).toContain('--line-subtle: var(--color-line-subtle);');
+    expect(tokens).toContain('--radius-card: var(--radius-3);');
   });
 
   it('reserves green feedback for selected user messages', () => {

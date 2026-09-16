@@ -37,6 +37,7 @@
     pendingRename: {}, // 共享库文件重命名待索引合并：oldPath → newPath（防刷新快照"消失"）
     pendingDelete: new Set(), // 共享库文件删除待索引合并
     sideCollapsed: false, // 知识库列表面板收起
+    rightPanelOpen: true, // 受限宽度下的 AI 解析 / 问答抽屉
     treeFilter: '', // 库树搜索关键词（过滤个人库+共享库）
     qaAttachments: [], // 本次提问挂载的附件 [{name, path, size}]（最多 5 个）
     qaHistory: [], // 当前会话消息 [{role, content}]（多轮上下文）；脑图条目 {role:'assistant', kind:'mindmap', key, label, ts}
@@ -106,6 +107,99 @@
   };
   function _svg(name) {
     return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
+  }
+
+  function _uiIconButton(options) {
+    if (typeof window.uiIconButton === 'function') return window.uiIconButton(options);
+    const attrs = options.attrs || {};
+    const attrHtml = Object.entries(attrs)
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
+      .join('');
+    const disabled = options.disabled ? ' disabled' : '';
+    const variantClass = options.variant === 'danger' ? ' ui-icon-button--danger' : '';
+    return `<button type="button" class="ui-icon-button${variantClass} ${_esc(options.className || '')}" aria-label="${_esc(options.label)}" title="${_esc(options.title || options.label)}"${disabled}${attrHtml}>${_icon(options.icon, 'ui-icon')}</button>`;
+  }
+
+  function _uiButton(options) {
+    if (typeof window.uiButton === 'function') return window.uiButton(options);
+    const attrs = options.attrs || {};
+    const attrHtml = Object.entries(attrs)
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
+      .join('');
+    const disabled = options.disabled ? ' disabled' : '';
+    const role = options.role || 'secondary';
+    const size = options.size || 'md';
+    const leadingIcon = options.icon ? _icon(options.icon, 'ui-button__icon') : '';
+    const trailingIcon = options.iconEnd ? _icon(options.iconEnd, 'ui-button__icon') : '';
+    return `<button type="button" class="btn ui-button ui-button--${_esc(role)} ui-button--${_esc(size)} ${_esc(options.className || '')}"${disabled}${attrHtml}>${leadingIcon}<span class="ui-button__label">${_esc(options.label)}</span>${trailingIcon}</button>`;
+  }
+
+  function _uiInput(options) {
+    if (typeof window.uiInput === 'function') return window.uiInput(options);
+    const attrs = options.attrs || {};
+    const attrHtml = Object.entries(attrs)
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
+      .join('');
+    return `<input class="form-input ui-control ui-input ${_esc(options.className || '')}" id="${_esc(options.id)}" type="${_esc(options.type || 'text')}"${options.value == null ? '' : ` value="${_esc(options.value)}"`}${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>`;
+  }
+
+  function _uiTextarea(options) {
+    if (typeof window.uiTextarea === 'function') return window.uiTextarea(options);
+    const attrs = options.attrs || {};
+    const attrHtml = Object.entries(attrs)
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
+      .join('');
+    return `<textarea class="form-input ui-control ui-textarea ${_esc(options.className || '')}" id="${_esc(options.id)}"${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>${_esc(options.value || '')}</textarea>`;
+  }
+
+  function _elementFromHtml(markup) {
+    const host = document.createElement('div');
+    host.innerHTML = String(markup || '').trim();
+    const element = host.firstElementChild;
+    if (!element) throw new Error('expected shared UI markup to create an element');
+    return element;
+  }
+
+  function _setUiButtonPresentation(button, label, icon) {
+    if (!button) return;
+    const labelEl = button.querySelector('.ui-button__label');
+    if (labelEl) labelEl.textContent = label;
+    else button.textContent = label;
+    if (!icon) return;
+    const iconEl = button.querySelector('.ui-button__icon');
+    if (iconEl) iconEl.outerHTML = _icon(icon, 'ui-button__icon');
+  }
+
+  function _mountKbDialog({ overlay, dialogSelector, initialFocus, fallbackFocus, trigger, onClose }) {
+    const dialog = overlay.querySelector(dialogSelector);
+    let removed = false;
+    const cleanup = () => {
+      if (removed) return;
+      removed = true;
+      overlay.remove();
+      if (typeof onClose === 'function') onClose();
+    };
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({ overlay, dialog, initialFocus, fallbackFocus, onClose: cleanup })
+      : null;
+    const close = (reason = 'close', options) => {
+      if (controller && controller.isOpen()) controller.close(reason, options);
+      else cleanup();
+    };
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close('backdrop');
+    });
+    if (controller) controller.open(trigger);
+    else {
+      overlay.hidden = false;
+      overlay.style.display = 'flex';
+      setTimeout(() => overlay.querySelector(initialFocus)?.focus(), 0);
+    }
+    return { close, controller };
   }
 
   function _extClass(name) {
@@ -238,7 +332,7 @@
       { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
         `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
           ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
-      ).join('') || '<div class="kb-tree-empty">暂无知识库，点击 ＋ 创建</div>' },
+      ).join('') || '<div class="kb-tree-empty">暂无知识库，可使用右侧按钮创建</div>' },
       { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
         `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
           ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
@@ -249,8 +343,13 @@
       const open = !_state.treeGroups.has(g.key);
       return `<div class="kb-tree-group">
         <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${open ? '收起' : '展开'}">
-          <span class="kb-tree-caret">${open ? '▼' : '▶'}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
-          ${g.plus ? `<button type="button" class="kb-tree-plus" id="${_esc(g.btnId || 'kb-new-lib')}" title="${_esc(g.btnTitle || '创建')}">＋</button>` : ''}
+          <span class="kb-tree-caret">${_icon(open ? 'chevron-down' : 'chevron-right', 'kb-tree-caret-icon')}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
+          ${g.plus ? _uiIconButton({
+            label: g.btnTitle || '创建',
+            icon: 'plus',
+            className: 'kb-tree-plus',
+            attrs: { id: g.btnId || 'kb-new-lib' },
+          }) : ''}
         </div>
         ${open ? `<div class="kb-tree-items">${g.html}</div>` : ''}
       </div>`;
@@ -393,32 +492,34 @@
 
   // ── 创建共享知识库（对标 ima：名称*/封面/描述/加入方式/成员权限/推荐问题）──
   let _kbShareDialog = null;
+  let _kbShareDialogController = null;
   let _kbShareCover = ''; // 封面 base64（'' = 默认）
 
   function _createSharedSpace() {
+    const trigger = document.activeElement;
     _kbShareCloseDialog();
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-dlg-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-dlg">
-        <button type="button" class="kb-share-dlg-close" title="关闭">✕</button>
-        <h3 class="kb-share-dlg-title">创建共享知识库</h3>
+      <section class="kb-share-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title">
+        ${_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x', className: 'kb-share-dlg-close' })}
+        <h3 class="kb-share-dlg-title" id="kb-share-dlg-title">创建共享知识库</h3>
         <div class="kb-share-form">
           <div class="kb-share-field">
             <label class="kb-share-label">名称 <span class="kb-share-required">*</span></label>
-            <input type="text" class="kb-share-input" id="kb-share-name" placeholder="请输入知识库名称" autocomplete="off" spellcheck="false" />
+            ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: '请输入知识库名称', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           <div class="kb-share-field">
             <label class="kb-share-label">封面</label>
             <div class="kb-share-cover">
-              <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">📁</span></div>
-              <button type="button" class="kb-share-cover-edit" id="kb-share-cover-edit" title="上传 / 更换知识库封面">✎</button>
+              <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">${_icon('folder', 'kb-share-cover-default-icon')}</span></div>
+              ${_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
               <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
             </div>
           </div>
           <div class="kb-share-field">
             <label class="kb-share-label">描述</label>
-            <textarea class="kb-share-input" id="kb-share-desc" rows="3" placeholder="为你的共享知识库填写描述"></textarea>
+            ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: '为你的共享知识库填写描述', attrs: { rows: 3 } })}
           </div>
           <div class="kb-share-field">
             <label class="kb-share-label">加入方式</label>
@@ -434,10 +535,10 @@
             <label class="kb-share-label">成员权限</label>
             <div class="kb-share-perm" id="kb-share-perm">
               <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger">
-                <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">▾</span>
+                <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
               </button>
-              <div class="kb-share-perm-menu" id="kb-share-perm-menu" hidden>
-                <div class="kb-share-perm-item is-selected" data-perm="view_export">✓ 内容可查看和导出</div>
+              <div class="kb-share-perm-menu" id="kb-share-perm-menu" data-ui-modal-popover data-trigger-id="kb-share-perm-trigger" data-open="false" hidden>
+                <div class="kb-share-perm-item is-selected" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>内容可查看和导出</div>
                 <div class="kb-share-perm-item" data-perm="view_only">内容可查看但不可导出</div>
                 <div class="kb-share-perm-item" data-perm="hidden">内容不可查看</div>
               </div>
@@ -445,17 +546,28 @@
           </div>
           <div class="kb-share-field">
             <label class="kb-share-label">设置推荐问题</label>
-            <textarea class="kb-share-input" id="kb-share-questions" rows="2" placeholder="为你的知识库预设推荐问题（每行一个）"></textarea>
+            ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: '为你的知识库预设推荐问题（每行一个）', attrs: { rows: 2 } })}
           </div>
         </div>
         <div class="kb-share-dlg-actions">
-          <button type="button" class="kb-share-btn kb-share-btn-ghost" id="kb-share-cancel">取消</button>
-          <button type="button" class="kb-share-btn kb-share-btn-primary" id="kb-share-ok" disabled>确定</button>
+          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-btn', attrs: { id: 'kb-share-cancel' } })}
+          ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-btn', disabled: true, attrs: { id: 'kb-share-ok' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
     _kbShareDialog = overlay;
     _kbShareCover = '';
+    _kbShareDialogController = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-dlg',
+      initialFocus: '#kb-share-name',
+      fallbackFocus: '#kb-empty-create',
+      trigger,
+      onClose: () => {
+        if (_kbShareDialog === overlay) _kbShareDialog = null;
+        _kbShareDialogController = null;
+      },
+    });
 
     const nameInput = overlay.querySelector('#kb-share-name');
     const okBtn = overlay.querySelector('#kb-share-ok');
@@ -490,25 +602,28 @@
     overlay.querySelector('#kb-share-perm-trigger').addEventListener('click', (e) => {
       e.stopPropagation();
       permMenu.hidden = !permMenu.hidden;
+      permMenu.dataset.open = permMenu.hidden ? 'false' : 'true';
     });
     permMenu.querySelectorAll('.kb-share-perm-item').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         permMenu.querySelectorAll('.kb-share-perm-item').forEach((x) => x.classList.remove('is-selected'));
         item.classList.add('is-selected');
-        overlay.querySelector('#kb-share-perm-label').textContent = item.textContent.replace(/^\s*✓\s*/, '');
+        overlay.querySelector('#kb-share-perm-label').textContent = item.textContent.trim();
         permMenu.hidden = true;
+        permMenu.dataset.open = 'false';
       });
     });
 
     overlay.querySelector('#kb-share-cancel').addEventListener('click', _kbShareCloseDialog);
     overlay.querySelector('.kb-share-dlg-close').addEventListener('click', _kbShareCloseDialog);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) _kbShareCloseDialog(); });
     overlay.addEventListener('click', (e) => {
-      if (!e.target.closest('#kb-share-perm')) permMenu.hidden = true;
+      if (!e.target.closest('#kb-share-perm')) {
+        permMenu.hidden = true;
+        permMenu.dataset.open = 'false';
+      }
     });
     okBtn.addEventListener('click', _kbShareSubmit);
-    setTimeout(() => nameInput.focus(), 50);
   }
 
   async function _kbShareSubmit() {
@@ -524,7 +639,9 @@
       .split(/\n+/).map((q) => q.trim()).filter(Boolean).slice(0, 10);
     const okBtn = overlay.querySelector('#kb-share-ok');
     okBtn.disabled = true;
-    okBtn.textContent = '创建中…';
+    okBtn.classList.add('is-loading');
+    okBtn.setAttribute('aria-busy', 'true');
+    _setUiButtonPresentation(okBtn, '创建中…');
     try {
       const res = await window.cogseed.invoke('spaces.create', {
         name,
@@ -543,7 +660,9 @@
     } catch (err) {
       _log.warn('create shared space failed', err);
       okBtn.disabled = false;
-      okBtn.textContent = '确定';
+      okBtn.classList.remove('is-loading');
+      okBtn.removeAttribute('aria-busy');
+      _setUiButtonPresentation(okBtn, '确定');
       const raw = String((err && err.message) || err || '');
       if (typeof uiToast === 'function') uiToast(`创建失败：${_kbSpaceErrText(raw)}`, { variant: 'error', timeoutMs: 3000 });
     }
@@ -564,18 +683,16 @@
   }
 
   function _kbShareCloseDialog() {
-    if (_kbShareDialog) {
-      _kbShareDialog.remove();
-      _kbShareDialog = null;
-    }
+    if (_kbShareDialogController) _kbShareDialogController.close('close');
+    else if (_kbShareDialog) { _kbShareDialog.remove(); _kbShareDialog = null; }
   }
 
   // 空态：居中插图 + 大号主按钮（保留库头部骨架，不一片白板）
   // 空库（左侧无库）→ 创建知识库；库内无内容 → 「添加内容」打开与工具栏一致的导入菜单
   function _emptyStateHtml(kind) {
     const createBtn = kind === 'lib'
-      ? '<button type="button" class="kb-empty-btn" id="kb-empty-create">＋ 创建知识库</button>'
-      : '<button type="button" class="kb-empty-btn" id="kb-empty-add">＋ 添加内容</button>';
+      ? _uiButton({ label: '创建知识库', role: 'primary', icon: 'plus', className: 'kb-empty-btn', attrs: { id: 'kb-empty-create' } })
+      : _uiButton({ label: '添加内容', role: 'primary', icon: 'plus', className: 'kb-empty-btn', attrs: { id: 'kb-empty-add' } });
     return `<div class="kb-empty">
       <div class="kb-empty-illus">${_icon('book-open', 'kb-empty-ico')}</div>
       <div class="kb-empty-title">${kind === 'lib' ? '还没有知识库' : '知识库什么也没有，去这里添加'}</div>
@@ -709,9 +826,21 @@
   }
 
   function _bindImportDlgEvents(overlay) {
-    overlay.querySelector('.kb-import-dlg-close')?.addEventListener('click', () => overlay.remove());
-    overlay.querySelector('.kb-import-dlg-cancel')?.addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const trigger = document.getElementById('kb-wb-import');
+    function closeImportDialog(restoreFocus = true) {
+      document.removeEventListener('keydown', onImportDialogKeydown);
+      overlay.remove();
+      if (restoreFocus) trigger?.focus();
+    }
+    function onImportDialogKeydown(event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeImportDialog();
+    }
+    document.addEventListener('keydown', onImportDialogKeydown);
+    overlay.querySelector('.kb-import-dlg-close')?.addEventListener('click', () => closeImportDialog());
+    overlay.querySelector('.kb-import-dlg-cancel')?.addEventListener('click', () => closeImportDialog());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeImportDialog(); });
     // 返回 / 前进
     overlay.querySelector('.kb-import-dlg-back')?.addEventListener('click', () => {
       if (_dlgHistIdx <= 0) return;
@@ -790,7 +919,11 @@
       const files = Array.from(_dlgSelected);
       const okBtn = overlay.querySelector('.kb-import-dlg-ok');
       okBtn.disabled = true;
-      okBtn.textContent = '导入中…';
+      okBtn.classList.add('is-loading');
+      okBtn.setAttribute('aria-busy', 'true');
+      const okIcon = okBtn.querySelector('.ui-button__icon');
+      if (okIcon) okIcon.hidden = true;
+      _setUiButtonPresentation(okBtn, '导入中…');
       try {
         const res = await window.cogseed.invoke('spaces.files.importFromLibFiles', { spaceId: _state.spaceId, paths: files });
         if (!res || res.ok === false) {
@@ -800,13 +933,18 @@
         if (typeof uiToast === 'function') {
           uiToast(`已导入 ${Number(res.imported) || 0} 个文件`, { variant: 'success', timeoutMs: 2500 });
         }
-        overlay.remove();
+        closeImportDialog();
         _loadSpaceFiles(_state.spaceId);
       } catch (err) {
         _log.warn('import dlg files failed', err);
         if (typeof uiToast === 'function') uiToast('导入失败', { variant: 'error' });
-        okBtn.disabled = false;
-        okBtn.textContent = '导入';
+      } finally {
+        if (overlay.isConnected) {
+          okBtn.classList.remove('is-loading');
+          okBtn.removeAttribute('aria-busy');
+          _setUiButtonPresentation(okBtn, '导入', 'upload');
+          okBtn.disabled = _dlgSelected.size === 0;
+        }
       }
     });
   }
@@ -849,18 +987,18 @@
     const overlay = document.createElement('div');
     overlay.className = 'kb-import-dlg-overlay';
     overlay.innerHTML = `
-      <div class="kb-import-dlg">
+      <div class="kb-import-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title">
         <div class="kb-import-dlg-head">
-          <div class="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_svg('upload')}</span>导入内容</div>
+          <div class="kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>导入内容</div>
           <div class="kb-import-dlg-search">
-            <span class="kb-import-dlg-search-ico">${_svg('search')}</span>
-            <input type="text" placeholder="搜索" autocomplete="off" spellcheck="false" />
+            <span class="kb-import-dlg-search-ico">${_icon('search', 'kb-import-dlg-search-icon')}</span>
+            ${_uiInput({ id: 'kb-import-dlg-search-input', type: 'search', placeholder: '搜索', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
-          <button type="button" class="kb-import-dlg-close" title="关闭">✕</button>
+          ${_uiIconButton({ label: '关闭导入弹窗', icon: 'x', className: 'kb-import-dlg-close' })}
         </div>
         <div class="kb-import-dlg-nav">
-          <button type="button" class="kb-import-dlg-back" title="返回">←</button>
-          <button type="button" class="kb-import-dlg-forward" title="前进">→</button>
+          ${_uiIconButton({ label: '返回', icon: 'chevron-left', className: 'kb-import-dlg-back' })}
+          ${_uiIconButton({ label: '前进', icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
           <span class="kb-import-dlg-path"></span>
         </div>
         <div class="kb-import-dlg-body">
@@ -873,8 +1011,8 @@
         <div class="kb-import-dlg-foot">
           <span class="kb-import-dlg-count">已选中 0 个文件</span>
           <div class="kb-import-dlg-actions">
-            <button type="button" class="kb-import-dlg-cancel">取消</button>
-            <button type="button" class="kb-import-dlg-ok" disabled>导入</button>
+            ${_uiButton({ label: '取消', role: 'secondary', size: 'sm', className: 'kb-import-dlg-cancel' })}
+            ${_uiButton({ label: '导入', role: 'primary', size: 'sm', icon: 'upload', disabled: true, className: 'kb-import-dlg-ok' })}
           </div>
         </div>
       </div>`;
@@ -882,6 +1020,7 @@
     _bindImportDlgEvents(overlay);
     _renderImportDlgList();
     _syncImportDlgNav(overlay);
+    overlay.querySelector('.kb-import-dlg-search input')?.focus();
   }
 
   // 导入菜单「新建文件夹」：个人库 contexts.mkdir / 空间 spaces.files.mkdir
@@ -1085,7 +1224,7 @@
           ${_icon('folder-open', 'kb-file-icon-svg is-dir')}
           <span class="kb-file-name">${_esc(d.name)}</span>
           <span class="kb-file-meta">${_countFiles(d)} 项</span>
-          <span class="kb-file-actions"><button type="button" class="kb-mini-btn" data-kb-dir-toggle="${_esc(path)}" title="展开">${_icon('chevron-right', 'kb-mini-ico')}</button></span>
+          <span class="kb-file-actions">${_uiIconButton({ label: '展开', icon: 'chevron-right', className: 'kb-mini-btn', attrs: { 'data-kb-dir-toggle': path } })}</span>
         </div>`);
       }
       for (const f of files) {
@@ -1096,7 +1235,7 @@
           <span class="kb-file-meta">${_esc(_relDirLabel(parentPath))}</span>
           <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
           ${_statusChip(rel)}
-          <span class="kb-file-actions"><button type="button" class="kb-mini-btn" title="生成思维导图（S3）">${_icon('sparkles', 'kb-mini-ico')}</button><button type="button" class="kb-mini-btn" title="更多">${_icon('more-horizontal', 'kb-mini-ico')}</button></span>
+          <span class="kb-file-actions">${_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
         </div>`);
       }
       for (const d of (children || []).filter((n) => n.type === 'dir')) {
@@ -1120,7 +1259,7 @@
         ${_icon('folder-open', 'kb-file-icon-svg is-dir')}
         <span class="kb-file-name">${_esc(d.name)}</span>
         <span class="kb-file-meta">${_countFiles(d)} 项</span>
-        <span class="kb-file-actions"><button type="button" class="kb-mini-btn" data-kb-dir-toggle="${_esc(path)}" title="${open ? '折叠' : '展开'}">${_icon(open ? 'chevron-down' : 'chevron-right', 'kb-mini-ico')}</button></span>
+        <span class="kb-file-actions">${_uiIconButton({ label: open ? '折叠' : '展开', icon: open ? 'chevron-down' : 'chevron-right', className: 'kb-mini-btn', attrs: { 'data-kb-dir-toggle': path } })}</span>
       </div>`);
       if (open) _renderNodeRows(parts, d.children || [], level + 1, path, q);
     }
@@ -1132,7 +1271,7 @@
         <span class="kb-file-meta">${_esc(_extLabel(f.name))}</span>
         <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
         ${_statusChip(rel)}
-        <span class="kb-file-actions"><button type="button" class="kb-mini-btn" title="生成思维导图（S3）">${_icon('sparkles', 'kb-mini-ico')}</button><button type="button" class="kb-mini-btn" title="更多">${_icon('more-horizontal', 'kb-mini-ico')}</button></span>
+        <span class="kb-file-actions">${_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
       </div>`);
     }
   }
@@ -1161,7 +1300,7 @@
         <span class="kb-file-meta">${_esc(_extLabel(f.name || f.path))}</span>
         <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
         ${chip}
-        <span class="kb-file-actions"><button type="button" class="kb-mini-btn" title="生成思维导图（S3）">${_icon('sparkles', 'kb-mini-ico')}</button><button type="button" class="kb-mini-btn" title="更多">${_icon('more-horizontal', 'kb-mini-ico')}</button></span>
+        <span class="kb-file-actions">${_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
       </div>`;
     }
     // 底部：没有更多内容了（对齐 ima 列表结束提示）
@@ -1253,8 +1392,852 @@
     if (el) el.textContent = String(n);
   }
 
-  // ── 文件查看（点击文件行 → 打开原文查看器）──
+  async function _openFileViewer(payload, scopeName, opts) {
+    const scope = scopeName || (payload && payload.spaceId ? payload.spaceId : '');
+    const hl = (opts && typeof opts === 'object') ? opts : null;
+    let overlay = _ensureFileViewerOverlay();
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    // 先显示再恢复上次的窗口尺寸/位置：overlay 关着时是 display:none，量出来的
+    // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
+    // 之后尤其明显），用户既看不全也抓不到右下角手柄。
+    overlay.hidden = false;
+    if (dialog) _fvApplyWindowRect(dialog);
+    _fvResetZoom(dialog);
+    _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
+    try {
+      const res = await window.cogseed.invoke('kb.openFile', payload);
+      if (!res || !res.ok) {
+        const errMsg = (res && res.error) || '打开失败';
+        const friendly = errMsg === 'too_large'
+          ? `文件超过 2MB 预览上限（${res && res.size ? Math.round(res.size / 1024 / 1024) : ''}MB），暂不支持在线预览`
+          : errMsg === 'file not found' ? '文件不存在或已被移动'
+            : /暂不支持预览/.test(errMsg) ? errMsg : errMsg;
+        _setFileViewerState(overlay, {
+          error: friendly,
+          title: (payload && payload.path || '').split('/').pop() || '原文查看',
+          scope,
+        });
+        if (typeof uiToast === 'function') uiToast('无法预览该文件', { variant: 'warning' });
+        return;
+      }
+      _setFileViewerState(overlay, { content: res, title: res.name || (payload && payload.path || '').split('/').pop(), scope }, hl);
+    } catch (err) {
+      _setFileViewerState(overlay, {
+        error: (err && err.message) || String(err),
+        title: (payload && payload.path || '').split('/').pop() || '原文查看',
+        scope,
+      });
+      if (typeof uiToast === 'function') uiToast('打开文件失败', { variant: 'error' });
+    }
+  }
+
+  // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
+  // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
+  let _fileViewerOverlay = null;
+  let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
+  function _ensureFileViewerOverlay() {
+    if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const overlay = el('div', 'kb-fv-overlay');
+    overlay.id = 'kb-file-viewer';
+    overlay.hidden = true;
+
+    const dialog = el('section', 'kb-fv-dialog');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const head = el('header', 'kb-fv-head');
+    const headMain = el('div', 'kb-fv-head-main');
+    const title = el('span', 'kb-fv-title', '原文查看');
+    title.id = 'kb-fv-title';
+    const scope = el('span', 'kb-fv-scope');
+    scope.id = 'kb-fv-scope';
+    headMain.append(title, scope);
+    const headActions = el('div', 'kb-fv-head-actions');
+    // 缩放控件：− / 百分比(可点重置) / ＋
+    const zoomOutBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '−');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.title = '缩小';
+    const zoomLabel = el('button', 'kb-fv-zoom-label', '100%');
+    zoomLabel.type = 'button';
+    zoomLabel.title = '重置缩放（点击回到 100%）';
+    const zoomInBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '＋');
+    zoomInBtn.type = 'button';
+    zoomInBtn.title = '放大';
+    // HTML 专用：默认渲染页面，一键切回源码（两种能力都保留）
+    const sourceBtn = el('button', 'kb-fv-btn', '</> 查看源码');
+    sourceBtn.type = 'button';
+    sourceBtn.id = 'kb-fv-source';
+    sourceBtn.title = '在"渲染页面"和"HTML 源码"之间切换';
+    sourceBtn.hidden = true;
+    // 交给系统应用：查看器只做只读预览，PDF 批注编辑 / 旧版或嵌入对象 Office
+    // 文件要动本机原生应用时走这里（主进程 kb.openExternal，同一套防穿越解析）
+    const externalBtn = el('button', 'kb-fv-btn', '↗ 在系统中打开');
+    externalBtn.type = 'button';
+    externalBtn.id = 'kb-fv-external';
+    externalBtn.title = '用本机默认应用打开（可编辑/批注/打印）';
+    externalBtn.hidden = true;
+    const readerBtn = el('button', 'kb-fv-btn', '⇱ 阅读模式');
+    readerBtn.type = 'button';
+    readerBtn.id = 'kb-fv-reader';
+    readerBtn.title = '切换阅读宽度';
+    const closeBtn = el('button', 'kb-fv-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.id = 'kb-fv-close';
+    closeBtn.title = '关闭（Esc）';
+    headActions.append(zoomOutBtn, zoomLabel, zoomInBtn, sourceBtn, externalBtn, readerBtn, closeBtn);
+    head.append(headMain, headActions);
+
+    const body = el('div', 'kb-fv-body');
+    const loading = el('div', 'kb-fv-loading', '正在读取文件…');
+    loading.id = 'kb-fv-loading';
+    loading.hidden = true;
+    const errorEl = el('div', 'kb-fv-error');
+    errorEl.id = 'kb-fv-error';
+    errorEl.hidden = true;
+    const textEl = el('pre', 'kb-fv-text');
+    textEl.id = 'kb-fv-text';
+    textEl.hidden = true;
+    const mdEl = el('div', 'kb-fv-md');
+    mdEl.id = 'kb-fv-md';
+    mdEl.hidden = true;
+    body.append(loading, errorEl, textEl, mdEl);
+
+    const resizeHandle = el('div', 'kb-fv-resize');
+    resizeHandle.title = '拖动调整窗口大小';
+
+    dialog.append(head, body, resizeHandle);
+    overlay.appendChild(dialog);
+    // 点遮罩空白处关闭——但必须"按在遮罩上也松在遮罩上"才算点击：
+    // 拖右下角手柄改大小时指针常常落到窗口外（=遮罩上），松手那次 click 的
+    // target 就成了遮罩，会把窗口直接关掉（实测：拖完手柄窗口消失）。
+    let pressedOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+    });
+    document.body.appendChild(overlay);
+    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    readerBtn.addEventListener('click', () => {
+      const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
+      readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
+      _fvSaveWindowRect();
+    });
+    // Esc 关闭
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
+    overlay.tabIndex = -1;
+    zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
+    sourceBtn.addEventListener('click', () => {
+      const cur = _fvCur;
+      if (cur && cur.mode === 'html') _fvToggleHtmlSource(overlay, cur);
+      else if (cur && cur.mode === 'text' && _fvHtmlCtx) _fvToggleHtmlSource(overlay, _fvHtmlCtx);
+    });
+    zoomInBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom + 0.1)));
+    zoomLabel.addEventListener('click', () => _fvSetZoom(dialog, 1));
+    externalBtn.addEventListener('click', () => {
+      const payload = _fvExternalTarget();
+      if (!payload) return;
+      void window.cogseed.invoke('kb.openExternal', payload).then((r) => {
+        if (r && r.ok === false && typeof uiToast === 'function') {
+          uiToast('打开失败：' + (r.error || '未知原因'), { variant: 'warning' });
+        }
+      }).catch(() => { /* ignore */ });
+    });
+    // Ctrl/Cmd + 滚轮 缩放内容（pdf 内部滚轮由 PDFium 自行处理，不劫持）
+    body.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      _fvSetZoom(dialog, _fvZoom + (e.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
+    _fvBindTitleDrag(dialog, head);
+    _fvBindResize(dialog, resizeHandle);
+    _fileViewerOverlay = overlay;
+    _injectFileViewerStyle();
+    return overlay;
+  }
+
+  // ── 预览窗交互：标题拖拽移动 / 右下角调整大小（尺寸与位置记忆） ──
+  const _FV_RECT_KEY = 'cogseed.kb-file-viewer.rect';
+
+  /**
+   * 拖拽期间的"事件罩"：盖住整个 overlay 的透明层。
+   *
+   * 为什么必须有它：查看器里嵌的 PDF / HTML iframe 是**独立进程**，指针一旦划到
+   * 它上面，mousemove 就被送进那个进程，主窗口的监听收不到。实测过：从右下角往
+   * 右下拉能变大（指针落在窗口外的遮罩上），往左上拉完全没反应——也就是用户说的
+   * "能移动，但不能调整大小"。罩子把指针事件截在主窗口里，拖拽才跟手。
+   */
+  function _fvOverlayOf(el) {
+    return el?.closest?.('.kb-fv-overlay') || null;
+  }
+  function _fvBeginDragShield(overlay) {
+    if (!overlay || overlay.querySelector('.kb-fv-drag-shield')) return;
+    const shield = document.createElement('div');
+    shield.className = 'kb-fv-drag-shield';
+    overlay.appendChild(shield);
+  }
+  function _fvEndDragShield(overlay) {
+    if (!overlay) return;
+    overlay.querySelectorAll('.kb-fv-drag-shield').forEach((s) => s.remove());
+  }
+
+  function _fvClampRect(dialog) {
+    const vw = window.innerWidth; const vh = window.innerHeight;
+    const w = Math.min(Math.max(dialog.offsetWidth, 420), vw - 24);
+    const h = Math.min(Math.max(dialog.offsetHeight, 280), vh - 24);
+    dialog.style.width = w + 'px';
+    dialog.style.height = h + 'px';
+    const r = dialog.getBoundingClientRect();
+    dialog.style.left = Math.max(0, Math.min(r.left, vw - w)) + 'px';
+    dialog.style.top = Math.max(0, Math.min(r.top, vh - h)) + 'px';
+  }
+  function _fvAbsolute(dialog) {
+    // 脱离 flex 居中流，改为 overlay 内的绝对定位（记忆 x/y 时用）
+    if (dialog.style.position === 'absolute') return;
+    const r = dialog.getBoundingClientRect();
+    dialog.style.position = 'absolute';
+    dialog.style.margin = '0';
+    dialog.style.left = Math.max(0, r.left) + 'px';
+    dialog.style.top = Math.max(0, r.top) + 'px';
+  }
+  function _fvApplyWindowRect(dialog) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(_FV_RECT_KEY) || 'null');
+      if (!saved || !(saved.w && saved.h)) return; // 无记忆 → flex 居中默认
+      const vw = window.innerWidth; const vh = window.innerHeight;
+      dialog.style.position = 'absolute';
+      dialog.style.margin = '0';
+      const w = Math.min(Math.max(Number(saved.w), 420), vw - 24);
+      const h = Math.min(Math.max(Number(saved.h), 280), vh - 24);
+      dialog.style.width = w + 'px';
+      dialog.style.height = h + 'px';
+      // 用刚算好的 w/h 夹位置，而不是 offsetWidth：刚显示出来的那一帧量到的值
+      // 可能还没稳定，拿它夹会把窗口放到可视区外。
+      const x = typeof saved.x === 'number' ? saved.x : Math.round((vw - w) / 2);
+      const y = typeof saved.y === 'number' ? saved.y : Math.round((vh - h) / 2);
+      dialog.style.left = Math.max(0, Math.min(x, vw - w)) + 'px';
+      dialog.style.top = Math.max(0, Math.min(y, vh - h)) + 'px';
+    } catch { /* localStorage 不可用：保持居中 */ }
+  }
+  function _fvSaveWindowRect() {
+    const overlay = document.getElementById('kb-file-viewer');
+    if (!overlay || overlay.hidden) return;
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    if (!dialog) return;
+    try {
+      const r = dialog.getBoundingClientRect();
+      localStorage.setItem(_FV_RECT_KEY, JSON.stringify({
+        w: Math.round(r.width), h: Math.round(r.height),
+        x: Math.round(r.left), y: Math.round(r.top),
+      }));
+    } catch { /* ignore */ }
+  }
+  function _fvBindTitleDrag(dialog, bar) {
+    if (bar.dataset.fvDragBound) return;
+    bar.dataset.fvDragBound = '1';
+    let sx = 0; let sy = 0; let ox = 0; let oy = 0;
+    bar.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button,input,select,textarea')) return;
+      e.preventDefault();
+      _fvAbsolute(dialog);
+      const fvOverlay = _fvOverlayOf(dialog);
+      _fvBeginDragShield(fvOverlay);
+      sx = e.clientX; sy = e.clientY;
+      const r = dialog.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      const onMove = (ev) => {
+        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
+        dialog.style.left = Math.max(0, Math.min(window.innerWidth - w, ox + (ev.clientX - sx))) + 'px';
+        dialog.style.top = Math.max(0, Math.min(window.innerHeight - h, oy + (ev.clientY - sy))) + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        _fvEndDragShield(fvOverlay);
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+  function _fvBindResize(dialog, handle) {
+    if (handle.dataset.fvResizeBound) return;
+    handle.dataset.fvResizeBound = '1';
+    let sx = 0; let sy = 0; let sw = 0; let sh = 0;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _fvAbsolute(dialog);
+      const fvOverlay = _fvOverlayOf(dialog);
+      _fvBeginDragShield(fvOverlay);
+      sx = e.clientX; sy = e.clientY;
+      sw = dialog.offsetWidth; sh = dialog.offsetHeight;
+      document.body.classList.add('kb-fv-resizing');
+      const onMove = (ev) => {
+        const w = Math.min(Math.max(sw + (ev.clientX - sx), 420), window.innerWidth - 24);
+        const h = Math.min(Math.max(sh + (ev.clientY - sy), 280), window.innerHeight - 24);
+        dialog.style.width = w + 'px';
+        dialog.style.height = h + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('kb-fv-resizing');
+        _fvEndDragShield(fvOverlay);
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ── 内容缩放（md/text 走容器 zoom；office 走 iframe 文档 zoom；pdf 走 URL zoom 重载） ──
+  let _fvZoom = 1;
+  let _fvCur = null; // { mode: 'md'|'text'|'office'|'pdf'|'html'|'image'|'media', el?, src? }
+  let _fvCtx = null; // 当前文件的 { path, spaceId }：给"在系统中打开"用
+  /** "在系统中打开"要发给主进程的参数（无当前文件 → null；纯函数，便于测试锁定载荷）。 */
+  function _fvExternalTarget() {
+    const cur = _fvCtx;
+    if (!cur || !cur.path) return null;
+    return cur.spaceId ? { spaceId: cur.spaceId, path: cur.path } : { path: cur.path };
+  }
+  /** HTML 文件：在"渲染页面"和"源码"之间切换（只对 html 显示该按钮）。 */
+  function _fvToggleHtmlSource(overlay, content) {
+    const body = overlay.querySelector('.kb-fv-body');
+    const srcBtn = overlay.querySelector('#kb-fv-source');
+    const frame = body?.querySelector('.kb-fv-frame--html');
+    const pre = overlay.querySelector('#kb-fv-text');
+    if (!body || !frame || !pre || !content) return;
+    const showingSource = !pre.hidden;
+    if (showingSource) {
+      // 回渲染视图
+      pre.hidden = true;
+      pre.textContent = '';
+      frame.hidden = false;
+      if (srcBtn) srcBtn.textContent = '</> 查看源码';
+      _fvCur = { mode: 'html', el: frame, src: content.src, rel: content.rel, spaceId: content.spaceId };
+      return;
+    }
+    // 切到源码：走主进程 kb.openFile(asText) 读同一份文件
+    // （渲染进程 fetch('kb-file://…') 取不到——非 http 方案没有 CORS 头，实测 Failed to fetch）
+    void (async () => {
+      try {
+        const payload = content.spaceId
+          ? { spaceId: content.spaceId, path: content.rel, asText: true }
+          : { path: content.rel, asText: true };
+        const res = await window.cogseed.invoke('kb.openFile', payload);
+        const text = res && res.ok ? String(res.content || '') : '';
+        if (!text) {
+          if (typeof uiToast === 'function') uiToast('读取源码失败，请用"在系统中打开"查看', { variant: 'warning' });
+          return;
+        }
+        frame.hidden = true;
+        pre.hidden = false;
+        pre.textContent = text;
+        if (srcBtn) srcBtn.textContent = '⇲ 渲染视图';
+        _fvCur = { mode: 'text', el: pre };
+      } catch (_) {
+        if (typeof uiToast === 'function') uiToast('读取源码失败，请用"在系统中打开"查看', { variant: 'warning' });
+      }
+    })();
+  }
+
+  function _fvResetZoom(dialog) {
+    _fvZoom = 1;
+    _fvRenderZoom(dialog);
+  }
+  function _fvSetZoom(dialog, z) {
+    _fvZoom = Math.min(2.5, Math.max(0.6, Math.round((z || 1) * 10) / 10));
+    _fvRenderZoom(dialog);
+  }
+  /** PDF iframe 的目标 URL（zoom 是 hash 参数，PDFium 只在**真正加载**时读它）。 */
+  function _fvPdfSrcAt(cur, pct) {
+    const base = String(cur.src || '').split('#')[0];
+    const pagePart = cur.page ? `&page=${cur.page}` : '';
+    return `${base}#toolbar=1&navpanes=0${pagePart}&zoom=${pct}`;
+  }
+
+  /**
+   * 换一个新的 PDF iframe 来应用缩放。
+   *
+   * 为什么不直接改 `el.src`：zoom 写在 URL 的 hash 里，只改 hash 对 PDF 插件
+   * 属于"同文档导航"——Chromium 的 PDF 阅读器不会重新按 zoom 排版。真机实测：
+   * 标签从 100% 点到 144%、iframe src 也跟着变了，**画面像素一模一样**
+   * （截图逐像素比对：dark 32360 三个档位完全相同）。所以必须让它真的加载一次：
+   * 用同一个 URL（新的 zoom）替换掉这个 frame。
+   */
+  function _fvApplyPdfZoom(cur, pct) {
+    const old = cur.el;
+    if (!old) return;
+    if (!old.isConnected || typeof old.replaceWith !== 'function') {
+      old.src = _fvPdfSrcAt(cur, pct);
+      return;
+    }
+    const frame = old.cloneNode(false); // 复制 class/title 等属性，保持样式一致
+    frame.src = _fvPdfSrcAt(cur, pct);
+    old.replaceWith(frame);
+    cur.el = frame;
+    _fvCur = cur;
+  }
+
+  function _fvRenderZoom(dialog) {
+    const label = dialog.querySelector('.kb-fv-zoom-label');
+    if (label) label.textContent = Math.round(_fvZoom * 100) + '%';
+    const cur = _fvCur;
+    if (!cur) return;
+    if (cur.mode === 'office' && cur.el && cur.el.contentDocument && cur.el.contentDocument.documentElement) {
+      // office blob iframe 已开 allow-same-origin：直接缩放其内部文档
+      cur.el.contentDocument.documentElement.style.zoom = String(_fvZoom);
+    } else if (cur.mode === 'pdf' && cur.el) {
+      // PDFium 无外部 zoom API：缩放值变化时用新 zoom 重新加载 frame
+      const pct = Math.round(_fvZoom * 100);
+      if (cur.lastZoom === pct) return;
+      cur.lastZoom = pct;
+      _fvApplyPdfZoom(cur, pct);
+    } else if (cur.el) {
+      cur.el.style.zoom = String(_fvZoom);
+    }
+  }
+
+  // ── 整篇查看器高亮：在渲染文档里定位引用文本并包 <mark>（兼容 md 渲染差异）──
+  function _fvTextNodeList(root) {
+    const doc = (root && root.ownerDocument) || root;
+    if (!doc || !doc.createTreeWalker) return [];
+    const walker = doc.createTreeWalker(root, 4 /* SHOW_TEXT */);
+    const out = [];
+    let n;
+    while ((n = walker.nextNode())) out.push(n);
+    return out;
+  }
+  function _fvNormSpace(s) {
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  }
+  function _fvWrapRaw(node, start, len) {
+    if (!node || !node.nodeValue) return null;
+    const end = Math.min(node.nodeValue.length, start + Math.max(len, 1));
+    if (start >= end) return null;
+    const doc = node.ownerDocument;
+    const range = doc.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    const mark = doc.createElement('mark');
+    mark.className = 'kb-fv-mark';
+    try { range.surroundContents(mark); } catch (_) { return null; }
+    return mark;
+  }
+  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
+  function _fvApproxRawStart(raw, normIdx) {
+    let p = 0;
+    let inWS = false;
+    for (let i = 0; i < raw.length; i++) {
+      const ws = /\s/.test(raw[i]);
+      if (ws) {
+        if (!inWS) { if (p === normIdx) return i; p++; inWS = true; }
+      } else {
+        inWS = false;
+        if (p === normIdx) return i;
+        p++;
+      }
+    }
+    return Math.max(0, raw.length - 1);
+  }
+  // 去掉行首 md 标记（标题/引用/无序与有序列表编号），便于与渲染后 DOM 比对
+  function _fvStripMdMarks(s) {
+    return String(s || '').split('\n').map((ln) => ln
+      .replace(/^\s*(?:#{1,6}[ \t]+|>[\t ]?|[-*+•][ \t]+|\d+[.、)][ \t]+|```+[^\n]*|~~~+)/, ''))
+      .join(' ');
+  }
+  // 高亮前最终清洗：行首标记 + 行内强调符 + 空白归一（与高亮实际使用一致）
+  function _fvCleanQuote(q) {
+    return _fvNormSpace(_fvStripMdMarks(q).replace(/\*\*|__|`/g, ''));
+  }
+  function _fvSignificantTokens(s) {
+    const seen = new Set();
+    const out = [];
+    String(s || '').split(/[^\p{L}\p{N}]+/u).forEach((t) => {
+      const c = (t || '').replace(/[^\p{L}\p{N}_-]/gu, '');
+      if (c && c.length >= 3 && !seen.has(c)) { seen.add(c); out.push(c); }
+    });
+    return out;
+  }
+  function _fvHighlightContainer(container, quote) {
+    if (!container || !quote) return false;
+    // 渲染后正文不含 ** ` 与列表序号/标题标记，先清洗再比对
+    const cleaned = _fvCleanQuote(quote);
+    if (!cleaned) return false;
+    const needles = [];
+    const push = (s) => {
+      const c = _fvNormSpace(s);
+      if (c && c.length >= 3 && !needles.includes(c)) needles.push(c);
+    };
+    push(cleaned.slice(0, 140));
+    if (cleaned.length > 140) push(cleaned.slice(0, 80));
+    const headSentence = (cleaned.match(/^[^\n。！？!?；;，,]{0,60}/) || [''])[0];
+    push(headSentence);
+    const root = container.nodeType === 9 ? container.body : container;
+    const nodes = _fvTextNodeList(root);
+    for (const needle of needles) {
+      const needleNorm = _fvNormSpace(needle);
+      for (const node of nodes) {
+        const raw = node.nodeValue || '';
+        if (!raw.trim()) continue;
+        const rawNorm = _fvNormSpace(raw);
+        const idx = rawNorm.indexOf(needleNorm);
+        let rawStart = -1;
+        if (idx >= 0) {
+          rawStart = _fvApproxRawStart(raw, idx);
+        } else {
+          const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
+          if (!word) continue;
+          const w = raw.indexOf(word);
+          if (w < 0) continue;
+          rawStart = w;
+        }
+        if (rawStart < 0) continue;
+        const mark = _fvWrapRaw(node, rawStart, Math.min(needleNorm.length * 2 + 8, 200));
+        if (mark) {
+          try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+          return true;
+        }
+      }
+    }
+    // 单节点匹配失败（列表/加粗把一句话拆到多个节点）→ 块级兜底：高亮整段
+    const blocks = root.querySelectorAll ? Array.from(root.querySelectorAll('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,dd,dt,summary')) : [];
+    if (blocks.length) {
+      const tokens = _fvSignificantTokens(cleaned);
+      let best = null;
+      let bestScore = 0;
+      for (const b of blocks) {
+        const bn = _fvNormSpace(b.textContent || '');
+        if (!bn) continue;
+        let score = 0;
+        for (const t of tokens) if (bn.includes(t)) score++;
+        if (score > bestScore) { bestScore = score; best = b; }
+      }
+      if (best && bestScore >= 1) {
+        best.classList.add('kb-fv-block-mark');
+        try { best.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+        return true;
+      }
+    }
+    return false;
+  }
+  function _fvHighlightFrame(frame, quote) {
+    try {
+      const doc = frame.contentDocument;
+      if (doc && doc.body && quote) return _fvHighlightContainer(doc.body, quote);
+    } catch (_) { /* 跨域/未就绪 */ }
+    return false;
+  }
+
+  /**
+   * 进入"嵌入 iframe"模式（pdf/office/html/图片/音视频）：正文区与对话框同时标记。
+   * 对话框那份给的是默认高度——iframe 撑不起固有高度，只靠 min-height 的话窗口
+   * 一开只有 280px 高（真机反馈：一打开就想拉大它）。
+   */
+  function _fvEnterFrameMode(overlay, body) {
+    body.classList.add('kb-fv-body--frame');
+    overlay.querySelector('.kb-fv-dialog')?.classList.add('kb-fv-dialog--frame');
+  }
+
+  function _setFileViewerState(overlay, st, hl) {
+    const loading = overlay.querySelector('#kb-fv-loading');
+    const errorEl = overlay.querySelector('#kb-fv-error');
+    const textEl = overlay.querySelector('#kb-fv-text');
+    const mdEl = overlay.querySelector('#kb-fv-md');
+    const body = overlay.querySelector('.kb-fv-body');
+    // 清理上一个文件的嵌入 iframe（pdf / office html），释放 blob URL
+    body.querySelectorAll('.kb-fv-frame').forEach((f) => f.remove());
+    // 退出嵌入模式：正文区与对话框两个 class 一起清（--frame 负责给足高度）
+    body.classList.remove('kb-fv-body--frame');
+    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--frame');
+    if (_fvOfficeBlobUrl) {
+      try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
+      _fvOfficeBlobUrl = null;
+    }
+    _fvCur = null; // 内容视图变化：失效上一文件的缩放目标（error/loading 也走这里）
+    loading.hidden = !st.loading;
+    errorEl.hidden = true; errorEl.textContent = '';
+    textEl.hidden = true; textEl.textContent = '';
+    mdEl.hidden = true; mdEl.innerHTML = '';
+    if (st.title) overlay.querySelector('#kb-fv-title').textContent = st.title;
+    const scopeEl = overlay.querySelector('#kb-fv-scope');
+    scopeEl.textContent = st.scope ? `来自「${st.scope}」` : '';
+    scopeEl.hidden = !st.scope;
+    overlay.querySelector('#kb-fv-reader').textContent = '⇱ 阅读模式';
+    const srcBtn = overlay.querySelector('#kb-fv-source');
+    if (srcBtn) srcBtn.hidden = !(st.content && st.content.kind === 'html');
+    // "在系统中打开"的当前文件上下文（follow 每次内容视图变化；无内容时隐藏按钮）
+    _fvCtx = st.content ? { path: String(st.content.path || st.content.relPath || ''), spaceId: st.content.spaceId ? String(st.content.spaceId) : '' } : null;
+    const extBtn = overlay.querySelector('#kb-fv-external');
+    if (extBtn) extBtn.hidden = !(_fvCtx && _fvCtx.path);
+    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--reader');
+    if (st.error) {
+      errorEl.hidden = false;
+      errorEl.textContent = String(st.error);
+      return;
+    }
+    const c = st.content;
+    if (!c || !c.kind) {
+      errorEl.hidden = false;
+      errorEl.textContent = '文件内容为空';
+      return;
+    }
+    if (c.kind === 'markdown') {
+      mdEl.hidden = false;
+      const bodyMd = String(c.content || '');
+      mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${typeof renderMarkdown === 'function' ? renderMarkdown(bodyMd) : _esc(bodyMd)}</div>`;
+      _fvCur = { mode: 'md', el: mdEl };
+      if (hl && hl.quote) setTimeout(() => {
+        if (!_fvHighlightContainer(mdEl, hl.quote)) {
+          console.warn('[kb] highlight-miss', { kind: 'markdown', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
+        }
+      }, 60);
+    } else if (c.kind === 'text') {
+      textEl.hidden = false;
+      textEl.textContent = String(c.content || '');
+      _fvCur = { mode: 'text', el: textEl };
+      if (hl && hl.quote) setTimeout(() => {
+        if (!_fvHighlightContainer(textEl, hl.quote)) {
+          console.warn('[kb] highlight-miss', { kind: 'text', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
+        }
+      }, 60);
+    } else if (c.kind === 'pdf') {
+      // 原生 PDFium iframe（排版 100% 保持）：个人库 kb-file://kb/<rel>；
+      // 空间库 kb-file://space/<spaceId>/<rel>（主进程已注册空间路由）
+      const rel = String(c.path || '');
+      const sid = c.spaceId ? String(c.spaceId) : '';
+      const enc = (s) => String(s).split('/').map(encodeURIComponent).join('/');
+      const src = sid
+        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
+        : `kb-file://kb/${enc(rel)}`;
+      const pagePart = hl && typeof hl.page === 'number' && hl.page > 0 ? `&page=${Math.floor(hl.page)}` : '';
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--pdf';
+      frame.src = `${src}#toolbar=1&navpanes=0${pagePart}`;
+      frame.title = String(c.name || rel);
+      body.appendChild(frame);
+      _fvEnterFrameMode(overlay, body);
+      _fvCur = { mode: 'pdf', el: frame, src, page: (hl && hl.page) || null, lastZoom: 100 };
+    } else if (c.kind === 'html' || c.kind === 'image' || c.kind === 'media') {
+      // 渲染型文件：直接用 kb-file:// 取字节，保留各自的原生排版/控件。
+      // html 用 sandbox（不给脚本），image/media 用原生 <img>/<video>/<audio>。
+      const rel = String(c.relPath || c.path || '');
+      const sid = c.spaceId ? String(c.spaceId) : '';
+      const enc = (v) => String(v).split('/').map(encodeURIComponent).join('/');
+      const base = sid
+        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
+        : `kb-file://kb/${enc(rel)}`;
+      if (c.kind === 'image') {
+        const img = document.createElement('img');
+        img.className = 'kb-fv-media kb-fv-image';
+        img.src = base;
+        img.alt = String(c.name || rel);
+        img.style.maxWidth = `${_fvZoom * 100}%`;
+        body.appendChild(img);
+        _fvEnterFrameMode(overlay, body);
+        _fvCur = { mode: 'image', el: img };
+      } else if (c.kind === 'media') {
+        const node = document.createElement(c.audio ? 'audio' : 'video');
+        node.className = 'kb-fv-media';
+        node.controls = true;
+        node.src = base;
+        body.appendChild(node);
+        _fvEnterFrameMode(overlay, body);
+        _fvCur = { mode: 'media', el: node };
+      } else {
+        // HTML：默认渲染页面（原排版 / 自带样式 / 相对路径 css+图片都能加载，
+        // 交互卡片里的脚本也能跑），工具栏提供"查看源码"切回纯文本。
+        // sandbox 与 chat-file-viewer.js 的 HTML 分支保持一致：只给 allow-scripts，
+        // 不给 allow-same-origin——`kb-file://` origin ≠ 渲染进程 origin，SOP 已挡住
+        // 父页访问，脚本只为让交互型 HTML 能用。缩放走父页对 iframe 元素的 zoom
+        // （跨 origin 拿不到 contentDocument，也不需要）。
+        const frame = document.createElement('iframe');
+        frame.className = 'kb-fv-frame kb-fv-frame--html';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.src = base;
+        frame.title = String(c.name || rel);
+        body.appendChild(frame);
+        _fvEnterFrameMode(overlay, body);
+        _fvCur = { mode: 'html', el: frame, src: base, rel, spaceId: sid };
+        _fvHtmlCtx = _fvCur;
+      }
+    } else if (c.kind === 'office') {
+      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式）。
+      // sandbox 保持无脚本；allow-same-origin 让父页可对内部文档做 CSS zoom 缩放
+      const officeHtml = String(c.html || '');
+      _fvOfficeBlobUrl = URL.createObjectURL(new Blob([officeHtml], { type: 'text/html;charset=utf-8' }));
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--office';
+      frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.src = _fvOfficeBlobUrl;
+      frame.title = String(c.name || c.path || '');
+      body.appendChild(frame);
+      _fvEnterFrameMode(overlay, body);
+      _fvCur = { mode: 'office', el: frame, src: _fvOfficeBlobUrl };
+      // iframe 就绪后：应用缩放 + 尽力高亮引用段落（失败可见）
+      frame.addEventListener('load', () => {
+        if (hl && hl.quote) setTimeout(() => {
+          if (!_fvHighlightFrame(frame, hl.quote)) {
+            console.warn('[kb] highlight-miss', { kind: 'office', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
+          }
+        }, 80);
+        if (_fvCur && _fvCur.el === frame && _fvZoom !== 1) {
+          try { frame.contentDocument.documentElement.style.zoom = String(_fvZoom); } catch (_) { /* ignore */ }
+        }
+      });
+    } else {
+      errorEl.hidden = false;
+      errorEl.textContent = '暂不支持预览该文件';
+      return;
+    }
+    overlay.focus();
+  }
+
+  let _fvStyleInjected = false;
+  /** 当前打开的 HTML 文件上下文（渲染 ⇄ 源码 切换用）。 */
+  let _fvHtmlCtx = null;
+  function _injectFileViewerStyle() {
+    if (_fvStyleInjected || document.getElementById('kb-file-viewer-style')) return;
+    _fvStyleInjected = true;
+    const style = document.createElement('style');
+    style.id = 'kb-file-viewer-style';
+    style.textContent = `
+      .kb-fv-overlay {
+        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        display: flex; align-items: center; justify-content: center; padding: 24px;
+      }
+      .kb-fv-overlay[hidden] { display: none; }
+      .kb-fv-dialog {
+        background: var(--surface, #fff); color: var(--text, #1f2329);
+        width: min(860px, 96vw); max-height: 88vh; border-radius: 12px;
+        display: flex; flex-direction: column; overflow: hidden;
+        box-shadow: 0 16px 48px rgba(0,0,0,.28); outline: none;
+        min-width: 420px; min-height: 280px;
+        /* 必须有自己的定位上下文：右下角缩放手柄是 absolute，缺了它手柄会挂到
+           overlay（fixed）上 → 跑到屏幕角落，而窗口自己的那个角上什么都没有
+           （真机反馈「能移动但不能调整大小」）。 */
+        position: relative;
+      }
+      .kb-fv-dialog--reader { width: min(1160px, 98vw); max-height: 94vh; }
+      /* 嵌入 iframe 的模式（pdf/office/html/图片/音视频）：高度给足，否则 iframe
+         只能吃 min-height，窗口一开就是一条矮缝，用户第一件事就是想拉大它。
+         用户拖过大小后 inline height 会覆盖这里（inline 优先级更高）。 */
+      .kb-fv-dialog--frame { height: min(86vh, 780px); }
+      .kb-fv-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,.22);
+        background: linear-gradient(180deg, rgba(14,159,110,.05), transparent);
+        cursor: move; user-select: none;
+      }
+      .kb-fv-head-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+      .kb-fv-title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .kb-fv-scope { font-size: 12px; color: #0E9F6E; opacity: .85; white-space: nowrap; }
+      .kb-fv-head-actions { display: flex; align-items: center; gap: 5px; flex: none; }
+      .kb-fv-btn, .kb-fv-close {
+        border: 1px solid rgba(14,159,110,.35); background: transparent; color: #0E9F6E;
+        font-size: 12px; padding: 3px 10px; border-radius: 8px; cursor: pointer;
+      }
+      .kb-fv-btn:hover { background: #E2F5EC; }
+      .kb-fv-zoom-btn { padding: 3px 8px; font-size: 13px; }
+      .kb-fv-zoom-label { min-width: 54px; text-align: center; }
+      .kb-fv-close { border-color: transparent; font-size: 16px; padding: 1px 7px; color: #888; }
+      .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
+      .kb-fv-resize {
+        position: absolute; right: 0; bottom: 0;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+      }
+      .kb-fv-resize::after {
+        content: ''; position: absolute; right: 5px; bottom: 5px;
+        width: 7px; height: 7px;
+        border-right: 2px solid rgba(128,128,128,.55);
+        border-bottom: 2px solid rgba(128,128,128,.55);
+      }
+      .kb-fv-resize:hover::after { border-color: #0E9F6E; }
+      /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
+         （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
+      body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
+      .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
+      .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
+      .kb-fv-error { color: #c0392b; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+      .kb-fv-text {
+        white-space: pre-wrap; word-break: break-word; margin: 0;
+        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 13px; line-height: 1.7; color: inherit;
+      }
+      .kb-fv-markdown { font-size: 14px; line-height: 1.8; }
+      .kb-fv-dialog--reader .kb-fv-body { padding: 32px 56px; }
+      .kb-fv-dialog--reader .kb-fv-markdown { font-size: 16px; }
+      .kb-fv-dialog--reader .kb-fv-text { font-size: 15px; font-family: inherit; }
+      /* pdf / office 嵌入 iframe：占满正文区，独立滚动，正文区本身不滚 */
+      .kb-fv-body--frame { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .kb-fv-body--frame .kb-fv-frame {
+        flex: 1; width: 100%; border: 0; min-height: 0;
+        background: #fff; border-radius: 0 0 12px 12px;
+      }
+      .kb-fv-dialog--reader .kb-fv-body--frame { padding: 0; }
+      .kb-fv-frame--office { background: #eef2f7; }
+      .kb-fv-mark { background: #ffe58a; color: inherit; padding: 0 1px; border-radius: 2px; scroll-margin-top: 64px; }
+      .kb-fv-block-mark {
+        background: rgba(255, 229, 138, .4); box-shadow: inset 3px 0 0 rgba(240, 173, 0, .75);
+        border-radius: 2px; scroll-margin-top: 64px;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // 问答区提示：无消息时显示「基于某库提问」引导
+
+  // ── 文件查看（点击文件行）──────────────────────────────────────────────
+  // 分派原则（#214 曾把右侧这条全部换成纯文本查看器，PDF/Word 因此丢了排版与缩放）：
+  //   排版/渲染类（pdf、Office、html、图片、音视频）→ 富查看器 `_openFileViewer`
+  //     （PDF 走 PDFium：原生工具栏=缩放/翻页/下载/打印；Office 走主进程排版 HTML；
+  //      html 走 sandbox iframe 渲染页面；图片/音视频用原生标签）
+  //   纯文本类（md/txt/代码）→ 原文查看器 `__openAnchorViewer`
+  //     （它是转写纠错面板的宿主，也是引用高亮用的那个）
+  //
+  // 清单来源：`anchored-source-view.js`（常驻加载）暴露的 `__kbRichPreviewExts`——
+  // 分派必须与"阅读器的兜底分支"用同一份表，否则某类型会被一边当排版类、
+  // 另一边当纯文本（PDF/Word 退化成没有排版的字符流）。这里保留同表副本只作为
+  // 独立加载（隔离测试 / 加载顺序异常）时的降级。
+  const _FV_RICH_EXTS_FALLBACK = [
+    '.pdf', '.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm',
+    '.html', '.htm',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif',
+    '.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.webm', '.mkv', '.avi',
+  ];
+  const _FV_RICH_EXTS = window.__kbRichPreviewExts instanceof Set
+    ? window.__kbRichPreviewExts
+    : new Set(_FV_RICH_EXTS_FALLBACK);
+
+  function _extOfPath(relPath) {
+    const name = String(relPath || '').split('/').pop() || '';
+    const dot = name.lastIndexOf('.');
+    return dot >= 0 ? name.slice(dot).toLowerCase() : '';
+  }
+
+  /** 该文件是否该走"保排版"的富查看器（纯文本返回 false）。 */
+  function _isRichPreview(relPath) {
+    if (typeof window.__kbIsRichPath === 'function') return window.__kbIsRichPath(relPath);
+    return _FV_RICH_EXTS.has(_extOfPath(relPath));
+  }
+
+  /** 按类型打开文件：富查看器 or 原文查看器。返回打开方式，便于测试与埋点。 */
   function _openFile(relPath) {
+    if (_isRichPreview(relPath)) {
+      const spaceId = _state.spaceId || '';
+      void _openFileViewer(
+        spaceId ? { spaceId, path: relPath } : { path: relPath },
+        spaceId ? String(spaceId) : (_state.currentLib || ''),
+        null,
+      );
+      return 'rich';
+    }
     if (typeof window.__openAnchorViewer === 'function') {
       window.__openAnchorViewer({
         source: 'library',
@@ -1264,12 +2247,13 @@
         ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
         view: 'document',
       });
-      return;
+      return 'anchor';
     }
     if (typeof uiToast === 'function') {
       const translated = typeof window.t === 'function' ? window.t('kb.viewer.ui_unavailable') : '';
       uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : '原文查看器暂时不可用', { variant: 'warning' });
     }
+    return 'unavailable';
   }
 
   // 问答区提示：无消息时显示「基于某库提问」引导
@@ -1312,7 +2296,7 @@
         <span class="kb-qa-attach-ico is-${String(ext).toLowerCase()}">${_esc(ext)}</span>
         <span class="kb-qa-attach-name" title="${_esc(a.name)}">${_esc(a.name)}</span>
         <span class="kb-qa-attach-meta">${_esc(ext)} ${_esc(size)}</span>
-        <button type="button" class="kb-qa-attach-rm" data-attach-idx="${i}" title="移除附件">✕</button>
+        ${_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger', className: 'kb-qa-attach-rm', attrs: { 'data-attach-idx': i } })}
       </div>`;
     }).join('');
     strip.querySelectorAll('[data-attach-idx]').forEach((btn) => {
@@ -1409,11 +2393,19 @@
       sub.textContent = `当前库：${_esc(dispName)} · ${count} 个内容`;
     }
     _maybeShowQaHint();
+    // 文件树/空间文件是异步到的：这里按最新的文件数刷一次两个生成入口的可用性
+    const analysisCard = document.getElementById('kb-wb-analysis-card');
+    if (analysisCard) _bindAnalysisActions(analysisCard);
   }
 
   // ── AI 解析（S3：kb.summary → 逐文档要点 + 一句话总结 + 脑图骨架）──
-  // 切换库/空间时把解析卡重置为「未解析」态：脑图/测验入口保持可见（禁用），
-  // 避免用户误以为功能消失；点击「✨ 生成 AI 解析」后启用。
+  /**
+   * 切换库/空间时把解析卡重置为「未解析」态。
+   *
+   * 注意：**脑图/测验入口与解析无关**（真机反馈"为什么只在 AI 解析后才能打开"）——
+   * 它们各自独立取库内 ready 文档生成（kb.mindmap / kb.quiz），所以这里直接可用，
+   * 只有"库是空的"才禁用。解析只是同一张卡上的另一个入口。
+   */
   function _resetAnalysisCard() {
     const card = document.getElementById('kb-wb-analysis-card');
     if (!card) return;
@@ -1421,15 +2413,54 @@
       <div class="kb-wb-right-card-title">
         <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
         <span class="kb-wb-card-actions">
-          <button type="button" class="kb-wb-a-btn is-primary" id="kb-wb-gen-mm" disabled title="请先点击「✨ 生成 AI 解析」">🧠 生成脑图</button>
-          <button type="button" class="kb-wb-a-btn" id="kb-wb-gen-quiz" disabled title="请先点击「✨ 生成 AI 解析」">📝 生成测验</button>
+          ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
         </span>
       </div>
       <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
-      <div class="kb-wb-right-placeholder"><button type="button" class="kb-wb-a-btn" id="kb-analyze-btn">✨ 生成 AI 解析</button></div>`;
+      <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>`;
     // 重新绑定手动解析按钮（原按钮随 innerHTML 替换销毁）
     const analyzeBtn = card.querySelector('#kb-analyze-btn');
     if (analyzeBtn) analyzeBtn.addEventListener('click', () => _loadSummary());
+    _bindAnalysisActions(card);
+  }
+
+  /** 当前库/空间的文件数（两个生成入口的可用性只看这个）。 */
+  function _libFileCount() {
+    if (_state.spaceId) return _state.spaceFiles.length;
+    const node = _findLibNode(_state.currentLib);
+    return node ? _countFiles(node) : 0;
+  }
+
+  /**
+   * 绑定「生成脑图 / 生成测验」两个入口。
+   *
+   * 两者都只依赖"库内有 ready 文档"：脑图走 kb.mindmap（多级层级 JSON），测验走
+   * kb.quiz（本地出题）。**都不需要先生成 AI 解析**——此前它们被解析结果挡着，
+   * 库空时才该禁用（点了也没有材料）。
+   */
+  function _bindAnalysisActions(card) {
+    // 可用性每次重算（库树是异步加载的：首屏渲染时文件数还是 0，加载完要放行），
+    // 但 listener 只挂一次——本文件既有的 dataset.*Bound 幂等写法。
+    const empty = _libFileCount() === 0;
+    const mmBtn = card.querySelector('#kb-wb-gen-mm');
+    if (mmBtn) {
+      mmBtn.disabled = empty;
+      mmBtn.title = empty ? '当前知识库还没有内容' : '基于当前库文档生成多级脑图（不依赖 AI 解析）';
+      if (!mmBtn.dataset.kbGenBound) {
+        mmBtn.dataset.kbGenBound = '1';
+        mmBtn.addEventListener('click', () => _genMindmap());
+      }
+    }
+    const quizBtn = card.querySelector('#kb-wb-gen-quiz');
+    if (quizBtn) {
+      quizBtn.disabled = empty;
+      quizBtn.title = empty ? '当前知识库还没有内容' : '基于当前库文档生成测验题（不依赖 AI 解析）';
+      if (!quizBtn.dataset.kbGenBound) {
+        quizBtn.dataset.kbGenBound = '1';
+        quizBtn.addEventListener('click', () => _genQuiz());
+      }
+    }
   }
 
   function _loadSummary() {
@@ -1477,7 +2508,7 @@
         const b2 = document.getElementById('kb-analyze-btn');
         if (b2) b2.disabled = false;
         const h = card.querySelector('.kb-wb-right-placeholder');
-        if (h) h.textContent = '解析失败，请点击「✨ 生成 AI 解析」重试。';
+        if (h) h.textContent = '解析失败，请点击「生成 AI 解析」重试。';
       });
   }
 
@@ -1494,10 +2525,11 @@
     const srcTag = summary.source === 'cached' ? ' <span class="kb-wb-card-src">(缓存)</span>'
       : summary.source === 'degraded' ? ' <span class="kb-wb-card-src">(降级)</span>' : '';
 
+    // 生成脑图 / 生成测验与解析成败无关：它们只用库内文档（禁用与否由 _bindAnalysisActions 按库是否为空决定）
     const actions = `<span class="kb-wb-card-actions">
-      <button type="button" class="kb-wb-a-btn is-primary" id="kb-wb-gen-mm"${ok && hasMm ? '' : ' disabled'}>🧠 生成脑图</button>
-      <button type="button" class="kb-wb-a-btn" id="kb-wb-gen-quiz"${ok ? '' : ' disabled'}>📝 生成测验</button>
-      <button type="button" class="kb-wb-analysis-toggle" id="kb-wb-analysis-toggle">展开 ▾</button>
+      ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+      ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
+      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}
     </span>`;
 
     let html = `<div class="kb-wb-right-card-title">
@@ -1514,7 +2546,7 @@
         html += `<div class="kb-wb-doc">
           <div class="kb-wb-doc-head">
             <span class="kb-wb-doc-name">${_esc(d.name)}</span>
-            <button type="button" class="kb-qa-chip" data-kb-anchor="${_esc(d.file)}">${_esc(d.file)}#chunk 1 ↗</button>
+            ${_uiButton({ label: `${d.file}#chunk 1`, role: 'ghost', size: 'sm', className: 'kb-qa-chip', attrs: { 'data-kb-anchor': d.file } })}
           </div>`;
         if (d.text) html += `<div class="kb-wb-doc-text">${_esc(d.text)}</div>`;
         html += `</div>`;
@@ -1533,17 +2565,15 @@
     const degNote = document.getElementById('kb-qa-degraded-note');
     if (degNote && ok) degNote.hidden = true;
 
-    const mmBtn = card.querySelector('#kb-wb-gen-mm');
-    if (mmBtn && !mmBtn.disabled) mmBtn.addEventListener('click', () => _genMindmap());
-    const quizBtn = card.querySelector('#kb-wb-gen-quiz');
-    if (quizBtn && !quizBtn.disabled) quizBtn.addEventListener('click', () => _renderQuiz(summary));
+    _bindAnalysisActions(card);
     card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
       const body = card.querySelector('#kb-wb-analysis-body');
       const btn = card.querySelector('#kb-wb-analysis-toggle');
       if (!body || !btn) return;
       const open = body.hidden;
       body.hidden = !open;
-      btn.textContent = open ? '收起 ▴' : '展开 ▾';
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      _setUiButtonPresentation(btn, open ? '收起' : '展开', open ? 'chevron-up' : 'chevron-down');
     });
     card.querySelectorAll('[data-kb-anchor]').forEach((el) => {
       el.addEventListener('click', () => _openAnchor({ source: 'library', scope: 'global', path: el.dataset.kbAnchor, chunkIdx: 1 }));
@@ -1580,7 +2610,7 @@
     const tip = texts[reason] || texts['model-failed'];
     const withRetry = reason !== 'empty';
     return '<div class="kb-mm-fail">' + tip
-      + (withRetry ? '<br><button type="button" class="kb-mm-retry-btn">🔄 重新生成</button>' : '')
+      + (withRetry ? `<br>${_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })}` : '')
       + '</div>';
   }
 
@@ -1732,6 +2762,240 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  // ── 生成测验（kb.quiz）────────────────────────────────────────────────
+  // 与脑图同规矩：产物追加到对话消息区，不藏在解析卡折叠区；不依赖 AI 解析。
+  let _quizGenerating = false;
+
+  function _quizFailHtml(reason) {
+    const texts = {
+      empty: '当前知识库还没有已解析的文档，无法出题。请先导入内容并等索引完成。',
+      timeout: '出题超时：本地模型排队/推理超过 2 分钟未返回。模型通道繁忙，请稍后重试。',
+      'model-failed': '出题失败（模型暂不可用），请稍后重试。',
+      unparsable: '模型返回的内容不是有效题目，请重试（或换个更聚焦的库）。',
+    };
+    const tip = texts[reason] || '测验生成失败，请稍后重试。';
+    return '<div class="kb-mm-fail">' + tip
+      + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-quiz-retry-btn' })
+      + '</div>';
+  }
+
+  /**
+   * 参考答案/解析的切分：把"多要点"的长句拆成条目。
+   *
+   * 为什么拆：模型给的参考答案常是「要点A；要点B（补充说明）。」这种多要点句子，
+   * 直接整段显示就是一大坨（真机反馈原文："匹配角色只需要一个API Key；发版清理时
+   * 应以CSV文件为准（提示词内是速览，以CSV为准）。"）。按换行 / 分号 / 序号拆开列点，
+   * 一眼能看出有几个要点。拆不动（单句）时原样返回，不做二次加工。
+   */
+  function _quizAnswerClauses(text) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw) return [];
+    const parts = raw
+      .replace(/\r\n?/g, '\n')
+      // 编号式要点（1. / 2、/ 3)）前断开
+      .replace(/(?:^|[ \t])(?=[1-9][.、)）]\s)/gm, '\n')
+      .split('\n')
+      // 分号即要点分隔（分号留在句尾，读起来更自然）
+      .flatMap((line) => line.split(/(?<=[；;])\s*/))
+      // 成了列表项就不该再拖个分号（那是句子里的分隔符，不是要点本身）
+      .map((x) => x.replace(/^[1-9][.、)）]\s*/, '').replace(/[；;]\s*$/, '').trim())
+      .filter(Boolean);
+    // 拆不出多个要点时退回整段，不把一句话切碎
+    return parts.length > 1 ? parts : [raw];
+  }
+
+  /** 一块带标签的答案/解析：标签 + （多要点 → 列表 / 单句 → 文本）。 */
+  function _quizAnswerBlock(label, text, tone) {
+    const wrap = document.createElement('div');
+    wrap.className = 'kb-quiz-answer' + (tone ? ` is-${tone}` : '');
+    const tag = document.createElement('span');
+    tag.className = 'kb-quiz-answer-tag';
+    tag.textContent = label;
+    wrap.appendChild(tag);
+    const clauses = _quizAnswerClauses(text);
+    if (clauses.length > 1) {
+      const ul = document.createElement('ul');
+      ul.className = 'kb-quiz-answer-list';
+      for (const c of clauses) {
+        const li = document.createElement('li');
+        li.textContent = c;
+        ul.appendChild(li);
+      }
+      wrap.appendChild(ul);
+    } else {
+      const body = document.createElement('span');
+      body.className = 'kb-quiz-answer-text';
+      body.textContent = clauses[0] || '—';
+      wrap.appendChild(body);
+    }
+    return wrap;
+  }
+
+  /** 单选作答后的"对/错"状态行。 */
+  function _quizStatusLine(right) {
+    const line = document.createElement('div');
+    line.className = 'kb-quiz-status ' + (right ? 'is-right' : 'is-wrong');
+    line.textContent = right ? '✅ 答对了' : '❌ 答错了';
+    return line;
+  }
+
+  /** 把模型给的题目渲染成可作答的卡片（纯 DOM 构建，题目文本一律走 textContent）。 */
+  function _renderQuizCard(container, questions) {
+    container.textContent = '';
+    questions.forEach((q, idx) => {
+      const item = document.createElement('div');
+      item.className = 'kb-quiz-item';
+      const head = document.createElement('div');
+      head.className = 'kb-quiz-q-head';
+      const kind = q.type === 'single' ? '单选' : '简答';
+      head.textContent = `第 ${idx + 1} 题 · ${kind}` + (q.source ? ` · 来源：${q.source}` : '');
+      const text = document.createElement('div');
+      text.className = 'kb-quiz-q-text';
+      text.textContent = String(q.question || '');
+      item.append(head, text);
+
+      if (q.type === 'single' && Array.isArray(q.options) && q.options.length) {
+        const list = document.createElement('div');
+        list.className = 'kb-quiz-opts';
+        const explain = document.createElement('div');
+        explain.className = 'kb-quiz-explain';
+        explain.hidden = true;
+        let answered = false;
+        for (const opt of q.options) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'kb-quiz-opt';
+          btn.textContent = String(opt);
+          btn.addEventListener('click', () => {
+            if (answered) return;
+            answered = true;
+            const right = String(opt) === String(q.answer);
+            btn.classList.add(right ? 'is-right' : 'is-wrong');
+            for (const el of list.children) {
+              if (el.textContent === String(q.answer)) el.classList.add('is-right');
+              el.disabled = true;
+            }
+            // 结构化：先落"对/错"状态，再分「正确答案」「解析」两块——此前是把
+            // 答案与解析用 ' · ' 拼成一句话，两个长句糊在一起读不动（真机反馈）
+            explain.hidden = false;
+            explain.replaceChildren(
+              _quizStatusLine(right),
+              ...(right ? [] : [_quizAnswerBlock('正确答案', q.answer, 'right')]),
+              ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
+            );
+          });
+          list.appendChild(btn);
+        }
+        item.append(list, explain);
+      } else {
+        const reveal = document.createElement('button');
+        reveal.type = 'button';
+        reveal.className = 'kb-quiz-reveal';
+        reveal.textContent = '显示参考答案';
+        const answer = document.createElement('div');
+        answer.className = 'kb-quiz-explain';
+        answer.hidden = true;
+        // 同样的结构化：参考答案与解析各占一块，参考答案里的多个要点自动列点，
+        // 不再拼成一整句（"…；…．· …；…"那种读不出层次的句子）
+        answer.replaceChildren(
+          _quizAnswerBlock('参考答案', q.answer || '（无参考答案）'),
+          ...(q.explain ? [_quizAnswerBlock('解析', q.explain)] : []),
+        );
+        reveal.addEventListener('click', () => {
+          answer.hidden = !answer.hidden;
+          reveal.textContent = answer.hidden ? '显示参考答案' : '收起参考答案';
+        });
+        item.append(reveal, answer);
+      }
+      container.appendChild(item);
+    });
+  }
+
+  /** 生成测验 → 追加到对话消息区（kb-qa-messages）；成功后落 qaHistory 供会话恢复。 */
+  function _genQuiz() {
+    if (_quizGenerating) return; // 生成中防重复
+    const box = document.getElementById('kb-qa-messages');
+    if (!box) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (typeof uiToast === 'function') uiToast('测验服务不可用', { variant: 'warning' });
+      return;
+    }
+    _quizGenerating = true;
+    const ai = document.createElement('div');
+    ai.className = 'kb-qa-msg is-ai';
+    const body = document.createElement('div');
+    body.className = 'kb-qa-msg-body kb-quiz-msg';
+    body.innerHTML = '<div class="kb-mm-msg-head">📝 测验</div>'
+      + '<div class="kb-quiz-canvas"><div class="kb-mm-loading">正在生成测验题（本地模型推理中，约 30–60 秒）…</div></div>';
+    ai.appendChild(body);
+    box.appendChild(ai);
+    box.scrollTop = box.scrollHeight;
+    const canvas = body.querySelector('.kb-quiz-canvas');
+    const replaceCard = (html) => {
+      ai.remove();
+      const next = document.createElement('div');
+      next.className = 'kb-qa-msg is-ai';
+      const nb = document.createElement('div');
+      nb.className = 'kb-qa-msg-body kb-quiz-msg';
+      nb.innerHTML = html;
+      next.appendChild(nb);
+      box.appendChild(next);
+      box.scrollTop = box.scrollHeight;
+      return nb;
+    };
+    window.cogseed.invoke('kb.quiz', {
+      dir: _state.spaceId ? null : (_state.currentLib || null),
+      spaceId: _state.spaceId || null,
+    })
+      .then((res) => {
+        _quizGenerating = false;
+        const questions = Array.isArray(res && res.questions) ? res.questions : [];
+        if (!res || res.source === 'degraded' || !questions.length) {
+          const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+            + '<div class="kb-quiz-canvas">' + _quizFailHtml(res && res.reason) + '</div>');
+          nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
+            nb.parentElement?.remove();
+            _genQuiz();
+          });
+          return;
+        }
+        const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+          + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
+          + '<div class="kb-quiz-list"></div></div>');
+        _renderQuizCard(nb.querySelector('.kb-quiz-list'), questions);
+        // 落进会话历史（题目随消息存着，没有独立存档），并**立刻持久化**：
+        // 只 push 不保存的话切库/换会话/重开就没了（真机反馈：「刚生成的测验没进
+        // 历史会话」）。缓存命中（cached）同样是一张真卡片，也要记。
+        _state.qaHistory.push({ role: 'assistant', kind: 'quiz', questions, ts: Date.now() });
+        if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
+        _qaSaveCurrentSession('测验');
+      })
+      .catch(() => {
+        _quizGenerating = false;
+        const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+          + '<div class="kb-quiz-canvas"><div class="kb-mm-fail">测验生成失败，请稍后重试</div></div>');
+        nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
+          nb.parentElement?.remove();
+          _genQuiz();
+        });
+      });
+  }
+
+  /** 会话历史恢复：按存下来的题目重建测验卡（题目随消息保存，不额外存盘）。 */
+  function _appendQuizMessage(box, m) {
+    const questions = Array.isArray(m.questions) ? m.questions : [];
+    const el = document.createElement('div');
+    el.className = 'kb-qa-msg is-ai';
+    const body = document.createElement('div');
+    body.className = 'kb-qa-msg-body kb-quiz-msg';
+    body.innerHTML = '<div class="kb-mm-msg-head">📝 测验</div>'
+      + `<div class="kb-quiz-canvas"><div class="kb-quiz-meta">共 ${questions.length} 题 · 点选项即判对错</div>`
+      + '<div class="kb-quiz-list"></div></div>';
+    el.appendChild(body);
+    box.appendChild(el);
+    _renderQuizCard(body.querySelector('.kb-quiz-list'), questions);
+  }
+
   // 对话回答 → 脑图：基于本条回答文本生成（复用 kb.mindmap 的 text 参数）。
   // entry 是该回答在 qaHistory 里的消息对象：生成成功后把快照记到 entry.mm，
   // 使该回答的按钮变为「重新生成脑图」（可覆盖式再生成）。
@@ -1775,7 +3039,8 @@
         canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
         if (res.source === 'generated') {
-          btn.textContent = '🧠 重新生成脑图';
+          _setUiButtonPresentation(btn, '重新生成脑图', 'brain-circuit');
+          btn.title = '重新生成该回答的脑图';
           if (entry && typeof entry === 'object') _recordAnswerMindmap(res.root, entry);
           else _mmRecordToHistory(res.root);
         }
@@ -1800,6 +3065,8 @@
     if (_state.mmCollapsed.has(idx)) _state.mmCollapsed.delete(idx);
     else _state.mmCollapsed.add(idx);
     _rerenderMindmaps();
+    // 收拢后画布收紧（折叠分支不再占位）：重新适应一次，避免留出大片空白
+    if (_state.mmViewMode === 'graph') _mmFitToStage();
   }
 
   // 弹窗内容渲染：图形（svg）/ 大纲（文本）双视图
@@ -1815,7 +3082,28 @@
     }
     wrap.classList.remove('is-outline');
     wrap.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
+    _mmPinStageSvg();
     _bindPreviewNodes();
+  }
+
+  // 画布内 SVG 按 viewBox 固定像素尺寸：flex 居中与「适应画布」的缩放都以真实像素为基准。
+  // 否则重渲染（折叠/搜索/背景/布局切换）后 SVG 回落到 .kb-mm-svg{width:100%;height:auto}，
+  // 缩放基准变成画布宽度 → 图会缩放失真、偏出画布中心。
+  function _mmPinStageSvg() {
+    const wrap = document.getElementById('kb-mm-overlay-wrap');
+    const svg = wrap && typeof wrap.querySelector === 'function' ? wrap.querySelector('svg') : null;
+    if (!svg) return null;
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    if (vb && vb.width && vb.height) {
+      if (svg.style) {
+        svg.style.width = vb.width + 'px';
+        svg.style.height = vb.height + 'px';
+        svg.style.maxWidth = 'none';
+        svg.style.maxHeight = 'none';
+        svg.style.flex = 'none';
+      }
+    }
+    return svg;
   }
 
   function _rerenderMindmaps() {
@@ -1853,7 +3141,9 @@
   }
 
   // ── 脑图放大预览（滚轮缩放 / 拖拽平移 / 双击重命名）──
-  let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
+  // 原文查看器（kb-fv）：PDF/Office 走这里以保证排版与缩放（#214 曾把它删掉，
+// 主进程 kb.openFile / kb-file:// 一直在，缺的就是这一层）；变量随查看器代码块一起恢复。
+let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
   let _mmGenerating = false; // 生成中防重复点击
   let _mmPreheatedKey = '';  // 已后台预热脑图缓存的库 key
   const _mmUndoStack = [];   // 重命名撤销栈 [{idx, old}]，上限 20
@@ -1866,22 +3156,19 @@
     if (!overlay.hidden) return; // 已打开则不重置
     // 打开弹窗时隐藏对话区缩略脑图卡，避免"两个悬浮窗"叠加（关闭时恢复）
     document.querySelectorAll('.kb-qa-mm-action .kb-mm-msg').forEach((el) => { el.style.display = 'none'; });
-    // 应用用户记忆的窗口尺寸/位置，绑定拖拽调整/标题拖拽/保存状态
-    _mmApplyWindowRect();
     _mmBindResize();
     _mmBindTitleDrag();
+    // 先显示再套用尺寸/位置记忆：display:none 时量不到布局尺寸，居中位会被算成 0
+    // （全程同步执行，同一帧内完成，不会看到窗口跳动）
+    overlay.hidden = false;
+    _mmApplyWindowRect();
     _mmUpdateSaveState();
     _renderOverlay();
-    overlay.hidden = false;
     const titleInput = document.getElementById('kb-mm-title-input');
     if (titleInput) titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '知识库');
     _mmUpdateSaveState();
     if (_state.mmViewMode === 'graph') {
-      const svgEl = wrap.querySelector('svg');
-      if (svgEl && svgEl.viewBox && svgEl.viewBox.baseVal) {
-        svgEl.style.width = svgEl.viewBox.baseVal.width + 'px';
-        svgEl.style.height = svgEl.viewBox.baseVal.height + 'px';
-      }
+      _mmPinStageSvg();
       _mmFitToStage();
     }
     _mmUpdateToolbarState();
@@ -1911,14 +3198,6 @@
     dlg.style.width = w + 'px';
     dlg.style.height = h + 'px';
   }
-  function _mmSaveWindowSize() {
-    try {
-      const dlg = document.getElementById('kb-mm-dlg');
-      if (!dlg) return;
-      const r = dlg.getBoundingClientRect();
-      localStorage.setItem(_MM_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) }));
-    } catch { /* 无 localStorage */ }
-  }
   function _mmBindResize() {
     const dlg = document.getElementById('kb-mm-dlg');
     const handle = document.getElementById('kb-mm-resize');
@@ -1938,13 +3217,17 @@
         const h = Math.max(400, Math.min(startH + (ev.clientY - startY), window.innerHeight - 40));
         dlg.style.width = w + 'px';
         dlg.style.height = h + 'px';
+        // 尺寸变化后窗口可能越出视口：按新尺寸重新夹取偏移，保证仍完整可见
+        const off = _mmWindowOffset();
+        const clamped = _mmClampWindowOffset(off.x, off.y);
+        _mmSetWindowOffset(clamped.x, clamped.y);
         _mmFitToStage();
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
         document.body.classList.remove('kb-wb-resizing');
-        _mmSaveWindowSize();
+        _mmSaveWindowRect();
       };
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
@@ -1972,7 +3255,10 @@
     const dlg = document.getElementById('kb-mm-dlg');
     const btn = document.getElementById('kb-mm-mode-btn');
     if (dlg) dlg.classList.toggle('is-preview', _mmPreviewMode);
-    if (btn) btn.textContent = _mmPreviewMode ? '✎ 编辑' : '👁 预览';
+    if (btn) {
+      _setUiButtonPresentation(btn, _mmPreviewMode ? '编辑' : '预览', _mmPreviewMode ? 'edit-pencil' : 'eye');
+      btn.setAttribute('aria-pressed', String(_mmPreviewMode));
+    }
     const undo = document.getElementById('kb-mm-undo');
     const refresh = document.getElementById('kb-mm-refresh');
     if (undo) undo.hidden = _mmPreviewMode;
@@ -1990,11 +3276,12 @@
     if (!menu || menu.dataset.built) return;
     menu.dataset.built = '1';
     const items = [
-      { k: 'fit', label: '适应画布', fn: () => _mmFitToStage() },
-      { k: 'center', label: '居中根节点', fn: () => _mmCenterNode(0) },
-      { k: 'copy', label: '复制 SVG', fn: () => _mmCopySvg() },
+      { k: 'fit', label: '适应画布', icon: 'maximize', fn: () => _mmFitToStage() },
+      { k: 'center', label: '居中根节点', icon: 'target', fn: () => _mmCenterNode(0) },
+      { k: 'center-window', label: '窗口居中', icon: 'panel-collapse', fn: () => _mmCenterWindow() },
+      { k: 'copy', label: '复制 SVG', icon: 'copy', fn: () => _mmCopySvg() },
     ];
-    menu.innerHTML = items.map((it) => `<div class="kb-mm-more-item" data-more="${it.k}">${it.label}</div>`).join('');
+    menu.innerHTML = items.map((it) => `<div class="kb-mm-more-item" data-more="${it.k}">${_icon(it.icon, 'kb-mm-menu-icon')}<span>${it.label}</span></div>`).join('');
     menu.querySelectorAll('[data-more]').forEach((el) => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2012,7 +3299,9 @@
     }
     try {
       const svg = _mmTreeSvg(root, new Set(), _mmRenderOpts());
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>脑图</title><style>body{margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh}</style></head><body>${svg}</body></html>`;
+      // 独立窗口：SVG 撑满窗口内容盒，靠 preserveAspectRatio（默认 xMidYMid meet）居中缩放。
+      // 此前 body 用 flex 居中 + min-height:100vh，图比窗口大时会被裁掉左上角且无法滚动（看着就没居中）。
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>脑图</title><style>html,body{height:100%}body{margin:0;box-sizing:border-box;padding:24px;background:#fff}svg{display:block;width:100%;height:100%}</style></head><body>${svg}</body></html>`;
       const res = await window.cogseed.invoke('kb.mindmap.popout', { html });
       if (res && res.ok === false && typeof uiToast === 'function') uiToast('独立窗口暂不可用', { variant: 'info' });
     } catch (err) {
@@ -2025,16 +3314,15 @@
     const dlg = document.getElementById('kb-mm-dlg');
     if (!bar || !dlg || bar.dataset.dragBound) return;
     bar.dataset.dragBound = '1';
-    let sx = 0, sy = 0, ox = 0, oy = 0;
+    let sx = 0, sy = 0;
     bar.addEventListener('mousedown', (e) => {
       if (e.target.closest('input,button')) return;
+      e.preventDefault();
       sx = e.clientX; sy = e.clientY;
-      const r = dlg.getBoundingClientRect();
-      ox = r.left; oy = r.top;
+      const start = _mmWindowOffset(); // 从当前视觉偏移起拖，位移量直接累加
       const onMove = (ev) => {
-        dlg.style.left = Math.max(0, Math.min(window.innerWidth - dlg.offsetWidth, ox + (ev.clientX - sx))) + 'px';
-        dlg.style.top = Math.max(0, Math.min(window.innerHeight - dlg.offsetHeight, oy + (ev.clientY - sy))) + 'px';
-        dlg.style.margin = '0';
+        const off = _mmClampWindowOffset(start.x + (ev.clientX - sx), start.y + (ev.clientY - sy));
+        _mmSetWindowOffset(off.x, off.y);
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
@@ -2045,29 +3333,80 @@
       window.addEventListener('mouseup', onUp);
     });
   }
+
+  // ── 窗口位置：一律以「居中位 + translate 偏移」表达 ──
+  // 居中由 .kb-mm-overlay 的 flex 布局负责（窗口始终先落在正中），用户拖动只改 translate。
+  // 此前把记忆里的视口坐标直接写成 position:relative 的 left/top，会与居中位叠加：
+  // 每开一次窗口就再往右下推一次，最终只在屏幕角落露出一角——这正是「窗口没在正中央」的根因。
   const _MM_RECT_KEY = 'cogseed.kb-mm.rect';
-  function _mmApplyWindowRect() {
-    const dlg = document.getElementById('kb-mm-dlg');
+  // v1 的 x/y 语义（视口坐标）与写入方式（left/top 相对偏移）混在一起，旧值无法区分真假 → 一律作废并清除
+  const _MM_RECT_VERSION = 2;
+  function _mmDlgEl() { return document.getElementById('kb-mm-dlg'); }
+  function _mmWindowOffset() {
+    const dlg = _mmDlgEl();
+    const m = dlg ? /^(-?\d+(?:\.\d+)?)px\s+(-?\d+(?:\.\d+)?)px$/.exec(String(dlg.style.translate || '').trim()) : null;
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
+  }
+  // 居中位与尺寸取布局值：offsetLeft/offsetWidth 不受 transform/translate 与淡入动画影响，量得准
+  function _mmWindowBox() {
+    const dlg = _mmDlgEl();
+    if (!dlg) return null;
+    return { x: dlg.offsetLeft || 0, y: dlg.offsetTop || 0, w: dlg.offsetWidth || 0, h: dlg.offsetHeight || 0 };
+  }
+  function _mmSetWindowOffset(x, y) {
+    const dlg = _mmDlgEl();
     if (!dlg) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem(_MM_RECT_KEY) || 'null');
-      if (saved && saved.w && saved.h) {
-        dlg.style.width = Math.max(560, Math.min(saved.w, window.innerWidth - 40)) + 'px';
-        dlg.style.height = Math.max(400, Math.min(saved.h, window.innerHeight - 40)) + 'px';
-      }
-      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
-        dlg.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - 200)) + 'px';
-        dlg.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - 100)) + 'px';
-        dlg.style.margin = '0';
-      }
-    } catch { /* ignore */ }
+    dlg.style.left = ''; dlg.style.top = ''; dlg.style.margin = ''; // 清掉历史脏值，避免与居中位再叠加
+    dlg.style.translate = `${Math.round(x)}px ${Math.round(y)}px`;
+  }
+  // 夹取偏移，保证窗口**完整**落在视口内（此前只夹到"露出 200×100"，窗口能跑到屏幕外）
+  function _mmClampWindowOffset(x, y) {
+    const box = _mmWindowBox();
+    if (!box || !box.w || !box.h) return { x, y };
+    const maxX = Math.max(0, window.innerWidth - box.w - box.x);
+    const maxY = Math.max(0, window.innerHeight - box.h - box.y);
+    return { x: Math.max(-box.x, Math.min(x, maxX)), y: Math.max(-box.y, Math.min(y, maxY)) };
+  }
+  // 回到屏幕正中（更多菜单「窗口居中」）：清掉位置记忆，并顺手保尺寸
+  function _mmCenterWindow() {
+    _mmSetWindowOffset(0, 0);
+    try { localStorage.removeItem(_MM_RECT_KEY); } catch { /* 无 localStorage */ }
+    _mmSaveWindowRect();
+  }
+  // 打开弹窗时应用位置/尺寸记忆；无有效记忆 → 保持 CSS 默认（78vw×80vh，flex 居中）
+  function _mmApplyWindowRect() {
+    const dlg = _mmDlgEl();
+    if (!dlg) return;
+    _mmSetWindowOffset(0, 0); // 先归中：后续测量与越界兜底都以居中位为基准
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(_MM_RECT_KEY) || 'null'); } catch { saved = null; }
+    if (!saved || saved.v !== _MM_RECT_VERSION) {
+      if (saved) { try { localStorage.removeItem(_MM_RECT_KEY); } catch { /* 无 localStorage */ } }
+      _mmApplyWindowSize();
+      return; // 记不住的旧值 → 居中显示
+    }
+    if (Number.isFinite(saved.w) && Number.isFinite(saved.h) && saved.w > 0 && saved.h > 0) {
+      dlg.style.width = Math.max(560, Math.min(saved.w, window.innerWidth - 40)) + 'px';
+      dlg.style.height = Math.max(400, Math.min(saved.h, window.innerHeight - 40)) + 'px';
+    } else {
+      _mmApplyWindowSize();
+    }
+    if (!Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return;
+    const box = _mmWindowBox();
+    if (!box) return;
+    const off = _mmClampWindowOffset(saved.x - box.x, saved.y - box.y);
+    _mmSetWindowOffset(off.x, off.y);
   }
   function _mmSaveWindowRect() {
     try {
-      const dlg = document.getElementById('kb-mm-dlg');
-      if (!dlg) return;
-      const r = dlg.getBoundingClientRect();
-      localStorage.setItem(_MM_RECT_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) }));
+      const box = _mmWindowBox();
+      if (!box || !box.w || !box.h) return;
+      const off = _mmWindowOffset();
+      localStorage.setItem(_MM_RECT_KEY, JSON.stringify({
+        v: _MM_RECT_VERSION,
+        w: Math.round(box.w), h: Math.round(box.h),
+        x: Math.round(box.x + off.x), y: Math.round(box.y + off.y), // 视口绝对坐标
+      }));
     } catch { /* ignore */ }
   }
 
@@ -2158,7 +3497,7 @@
         const d = new Date(m.savedAt || Date.now());
         const time = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
         const pretty = m.key.startsWith('space:') ? `共享空间 ${m.key.slice(6)}` : `个人库 ${m.key.slice(4)}`;
-        return `<div class="kb-mm-open-item" data-key="${_esc(m.key)}"><span class="kb-mm-open-item-name">${_esc(pretty)}</span><span class="kb-mm-open-item-time">${time}</span></div>`;
+        return `<div class="kb-mm-open-item" data-key="${_esc(m.key)}">${_icon('brain-circuit', 'kb-mm-menu-icon')}<span class="kb-mm-open-item-name">${_esc(pretty)}</span><span class="kb-mm-open-item-time">${time}</span></div>`;
       }).join('');
       menu.querySelectorAll('.kb-mm-open-item[data-key]').forEach((el) => {
         el.addEventListener('click', () => {
@@ -2279,14 +3618,17 @@
     const vb = svg.viewBox && svg.viewBox.baseVal;
     const svgW = vb ? vb.width : 1200;
     const svgH = vb ? vb.height : 800;
+    // viewBox 原点不在 (0,0)（mind 布局最左分支会伸到负 x）：要减掉原点，否则偏移差一个 minX，节点落不到画布正中
+    const vbX = vb && Number.isFinite(vb.x) ? vb.x : 0;
+    const vbY = vb && Number.isFinite(vb.y) ? vb.y : 0;
     let bbox;
     try { bbox = el.getBBox(); } catch (_) { return; }
     if (!bbox || !bbox.width) return;
     const sx = bbox.x + bbox.width / 2;
     const sy = bbox.y + bbox.height / 2;
     _mmZoom = Math.max(_mmZoom, Math.min(1.4, Math.max(1, Math.min((stage.clientWidth || 800) / (bbox.width + 120), (stage.clientHeight || 600) / (bbox.height + 90)))));
-    _mmPanX = -(sx - svgW / 2) * _mmZoom;
-    _mmPanY = -(sy - svgH / 2) * _mmZoom;
+    _mmPanX = -((sx - vbX) - svgW / 2) * _mmZoom;
+    _mmPanY = -((sy - vbY) - svgH / 2) * _mmZoom;
     _applyMmTransform();
   }
 
@@ -2478,8 +3820,10 @@
       walk({ children: _state.tree });
       const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
       if (hit) {
-        window.__openAnchorViewer({
-          source: 'library',
+        // 与列表点击同一条分派：排版类（pdf/office/html/图片）走富查看器保排版，
+        // 文本类才回落原文查看器（原先这里一律走文本查看器，PDF 来源跳转就丢排版）。
+        _openFileViewerForAnchor({
+          source: _state.spaceId ? 'space' : 'library',
           scope: _state.spaceId ? 'space' : 'global',
           path: hit,
           chunkIdx: 0,
@@ -2499,18 +3843,29 @@
       const on = _state.mmFocus !== null;
       focusBtn.classList.toggle('is-active', on);
       focusBtn.title = on ? '点击一级分支切换聚焦分支 · 点此取消聚焦' : '聚焦分支：点击一级分支只看该分支';
-      focusBtn.textContent = on ? '◎ 聚焦中' : '◎ 聚焦';
+      focusBtn.setAttribute('aria-pressed', String(on));
+      _setUiButtonPresentation(focusBtn, on ? '聚焦中' : '聚焦', 'target');
     }
     const layoutBtn = document.getElementById('kb-mm-layout-btn');
-    if (layoutBtn) layoutBtn.textContent = _state.mmMode === 'org' ? '📐 组织结构' : '📐 思维导图';
+    if (layoutBtn) _setUiButtonPresentation(layoutBtn, _state.mmMode === 'org' ? '组织结构' : '思维导图', 'layout-grid');
     const bgBtn = document.getElementById('kb-mm-bg-btn');
     if (bgBtn) {
       const names = { dots: '点阵', plain: '纯白', none: '无' };
-      bgBtn.textContent = `▦ ${names[_state.mmBg] || ''}`;
+      _setUiButtonPresentation(bgBtn, names[_state.mmBg] || '背景', 'palette');
       bgBtn.title = '背景切换（点阵/纯白/无）';
     }
     const outlineBtn = document.getElementById('kb-mm-outline-btn');
-    if (outlineBtn) outlineBtn.classList.toggle('is-active', _state.mmViewMode === 'outline');
+    if (outlineBtn) {
+      const on = _state.mmViewMode === 'outline';
+      outlineBtn.classList.toggle('is-active', on);
+      outlineBtn.setAttribute('aria-pressed', String(on));
+    }
+    const dotsBtn = document.getElementById('kb-mm-dots-btn');
+    if (dotsBtn) {
+      const on = _state.mmBg === 'dots';
+      dotsBtn.classList.toggle('is-active', on);
+      dotsBtn.setAttribute('aria-pressed', String(on));
+    }
     const hint = document.querySelector('#kb-mm-overlay-stage .kb-mm-overlay-stage-hint');
     if (hint) {
       hint.textContent = _state.mmViewMode === 'outline'
@@ -2523,22 +3878,25 @@
   function _mmFitToStage() {
     const stage = document.getElementById('kb-mm-overlay-stage');
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    const svg = wrap ? wrap.querySelector('svg') : null;
-    if (!stage || !svg) return;
+    const svg = _mmPinStageSvg();
+    if (!stage || !wrap || !svg) return;
     const vb = svg.viewBox && svg.viewBox.baseVal;
-    const svgW = vb ? vb.width : (svg.style.width ? parseFloat(svg.style.width) : 1200);
-    const svgH = vb ? vb.height : (svg.style.height ? parseFloat(svg.style.height) : 800);
-    const stW = stage.clientWidth || 800;
-    const stH = stage.clientHeight || 600;
+    const svgW = vb && vb.width ? vb.width : (svg.style && svg.style.width ? parseFloat(svg.style.width) : 1200);
+    const svgH = vb && vb.height ? vb.height : (svg.style && svg.style.height ? parseFloat(svg.style.height) : 800);
+    // 以画布内容盒为准：stage 的 clientWidth 含 12px 内边距，会把图算大 ~3% 而略微溢出
+    const stW = wrap.clientWidth || stage.clientWidth || 800;
+    const stH = wrap.clientHeight || stage.clientHeight || 600;
     const scale = Math.min(stW / svgW, stH / svgH) * 0.92;
     _mmZoom = Math.max(0.15, Math.min(2.5, scale));
-    _mmPanX = 0; _mmPanY = 0;
+    _mmPanX = 0; _mmPanY = 0; // 平移归零：图正落画布中心
     _applyMmTransform();
   }
 
   function _applyMmTransform() {
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    if (wrap) wrap.style.transform = `scale(${_mmZoom}) translate(${_mmPanX}px, ${_mmPanY}px)`;
+    // 平移写在缩放外面：px 就是屏幕像素，拖拽 1:1 跟手，_mmCenterNode 的"逻辑位移×zoom"也对得上。
+    // 写成 scale() translate() 的话平移量会被再乘一次 zoom（拖拽变迟钝、居中偏一半）。
+    if (wrap) wrap.style.transform = `translate(${_mmPanX}px, ${_mmPanY}px) scale(${_mmZoom})`;
     const label = document.getElementById('kb-mm-zoom-label');
     if (label) label.textContent = Math.round(_mmZoom * 100) + '%';
   }
@@ -2601,45 +3959,101 @@
     }
   }
 
-  // ── 多级水平树脑图（双向放射/组织结构图双布局、分支成套色系、字号层级、换行、聚焦/搜索/背景）──
-  // 成套色系：每分支一套 deep/mid/light，逐级降饱和；一级分支前 3 色 = 绿/蓝/品红
+  // ── 多级水平树脑图（双向放射/组织结构图、分支成套色系、紧凑列布局、卡片式节点）──
+  // 成套色系：每分支一套 deep/mid/light/ink。deep 只给连线、色条、徽章描边；light 给一级分支底色；
+  // ink 是"在 light 上仍然可读"的深色文字色（原来一级分支用 deep 实心填充 + 白字，整屏重色块，很"脏"）。
   const KB_MM_PALETTES = [
-    { deep: '#0E9F6E', mid: '#5EBC9A', light: '#D8F0E5' }, // 绿
-    { deep: '#2563EB', mid: '#6E9AF2', light: '#DDE7FC' }, // 蓝
-    { deep: '#D946EF', mid: '#E684F6', light: '#F8DCFC' }, // 品红
-    { deep: '#D97706', mid: '#E9A95F', light: '#FAE6CC' }, // 橙
-    { deep: '#0D9488', mid: '#5FC5BC', light: '#D6F1EE' }, // 青
+    { deep: '#0E9F6E', mid: '#6FC79F', light: '#EAF7F1', ink: '#096B47' }, // 绿
+    { deep: '#2563EB', mid: '#7BA4F3', light: '#EBF1FE', ink: '#1D4ED8' }, // 蓝
+    { deep: '#B4469F', mid: '#D08BC6', light: '#FBEFF8', ink: '#8E2F7F' }, // 品红（降饱和）
+    { deep: '#C2740C', mid: '#E0A85C', light: '#FCF3E6', ink: '#96570A' }, // 琥珀
+    { deep: '#0D9488', mid: '#63C2BA', light: '#E8F6F4', ink: '#0B7A70' }, // 青
   ];
-  const KB_MM_ROOT = '#0E9F6E';
+  const KB_MM_ROOT = '#0B7A52';
+  const KB_MM_INK = '#1F3A2E';      // 二级节点正文
+  const KB_MM_INK_SOFT = '#456054'; // 三级及以下正文
+  const KB_MM_LINE = '#E1E9E4';     // 卡片描边
+  const KB_MM_LINE_SOFT = '#EAF0EC';
 
   // 字号层级：根 > 一级 > 二级 > 三级（叶子最小）
   function _mmFontSize(depth) {
-    if (depth === 0) return 15;
+    if (depth === 0) return 16;
     if (depth === 1) return 13;
-    if (depth === 2) return 12;
-    return 11;
+    if (depth === 2) return 12.5;
+    return 12;
   }
 
-  // 长文本自动换行：控制节点最大宽度（避免超长横条），按语义断行优先
-  function _mmDims(label, size) {
-    const maxW = 150;
-    const charW = size * 1.02;
-    const perLine = Math.max(5, Math.floor((maxW - 22) / charW));
-    const text = String(label || '');
-    // 优先按中英文标点断行，其次按字符数
+  // 单字宽度估算：中日韩/全角按 1em，拉丁词按字宽查表。
+  // 原实现用"字符数 × 字号 × 1.02"估算，对英文/数字严重高估 → 11 个汉字的标签就被折成两行
+  // （"文字折叠"的根因），而英文标签又留出大片空白。
+  function _mmCharW(ch, size) {
+    const code = ch.codePointAt(0) || 0;
+    const wide = (code >= 0x1100 && code <= 0x115f)
+      || code === 0x2329 || code === 0x232a
+      || (code >= 0x2e80 && code <= 0xa4cf)
+      || (code >= 0xac00 && code <= 0xd7a3)
+      || (code >= 0xf900 && code <= 0xfaff)
+      || (code >= 0xfe30 && code <= 0xfe6f)
+      || (code >= 0xff00 && code <= 0xff60)
+      || (code >= 0xffe0 && code <= 0xffe6);
+    if (wide) return size;
+    if (ch === ' ') return size * 0.3;
+    if (/[iIljtfr.,:;!'|]/.test(ch)) return size * 0.33;
+    if (/[A-Z0-9]/.test(ch)) return size * 0.64;
+    return size * 0.54;
+  }
+  function _mmTextW(text, size) {
+    let w = 0;
+    for (const ch of String(text || '')) w += _mmCharW(ch, size);
+    return w;
+  }
+
+  // 换行：按真实字宽切行，优先在标点/空格处断；拉丁词不拦腰断；最多两行，剩下用省略号。
+  function _mmWrap(text, size, maxW) {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return { lines: [''], truncated: false };
+    if (_mmTextW(raw, size) <= maxW) return { lines: [raw], truncated: false };
+    const MAX_LINES = 2;
+    const breakChars = /[\s，。；、,.!?：:;()（）\-—/·]/;
     const lines = [];
-    let rest = text;
-    while (rest.length > perLine) {
-      let cut = rest.slice(0, perLine);
-      const m = cut.match(/.*[，。；、,.!?；：\s]/);
-      if (m && m[0].length >= perLine * 0.5) cut = m[0];
-      lines.push(cut);
-      rest = rest.slice(cut.length);
+    let rest = raw;
+    while (rest && lines.length < MAX_LINES) {
+      if (_mmTextW(rest, size) <= maxW) { lines.push(rest); rest = ''; break; }
+      let cut = 0, acc = 0, lastBreak = 0;
+      for (const ch of rest) {
+        const cw = _mmCharW(ch, size);
+        if (acc + cw > maxW) break;
+        acc += cw;
+        cut += ch.length;
+        if (breakChars.test(ch)) lastBreak = cut;
+      }
+      if (cut === 0) cut = Math.min(rest.length, 1);
+      // 非末行优先在标点/空格处断（末行要留给省略号，尽量占满）
+      if (lines.length < MAX_LINES - 1 && lastBreak > 0 && lastBreak < cut) cut = lastBreak;
+      lines.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).trim();
     }
-    if (rest) lines.push(rest);
-    const w = Math.min(maxW, Math.max(66, lines[0].length * charW + 26));
-    const h = 34 + (lines.length - 1) * 15;
-    return { lines, w, h };
+    if (rest) {
+      let last = lines[lines.length - 1] || '';
+      while (last && _mmTextW(last + '…', size) > maxW) last = last.slice(0, -1);
+      lines[lines.length - 1] = last + '…';
+      return { lines, truncated: true };
+    }
+    return { lines, truncated: false };
+  }
+
+  // 节点尺寸：宽度随文本自适应（上限随层级放宽），高度按行数（单行 35 / 双行 52 附近）
+  const KB_MM_MAXW = [300, 250, 276, 276];
+  function _mmDims(label, depth) {
+    const size = _mmFontSize(depth);
+    const maxNodeW = KB_MM_MAXW[depth] === undefined ? 276 : KB_MM_MAXW[depth];
+    const { lines, truncated } = _mmWrap(String(label || ''), size, maxNodeW - 30);
+    const textW = lines.reduce((m, l) => Math.max(m, _mmTextW(l, size)), 0);
+    const minW = depth === 0 ? 104 : 78;
+    const w = Math.round(Math.min(maxNodeW, Math.max(minW, textW + (depth === 0 ? 40 : 30))));
+    const lineH = Math.round(size * 1.38);
+    const h = lines.length * lineH + 18;
+    return { lines, truncated, w, h, lineH, size };
   }
 
   function _mmPalette(branch) {
@@ -2651,7 +4065,13 @@
     return { mode: _state.mmMode || 'mind', focus: _state.mmFocus, highlight: _state.mmSearchHits, bg: _state.mmBg || 'dots' };
   }
 
-  // 布局：mind=双向放射（一级分支左右分摊，左右各自延展）；org=组织结构图（单向向右）
+  // 布局常量：列间距（连线空间）、叶子行高、画布留白
+  const KB_MM_COL_GAP = 68;
+  const KB_MM_ROW = 54;
+  const KB_MM_PAD_X = 56;
+  const KB_MM_PAD_Y = 40;
+
+  // 布局：mind=双向放射（一级分支左右分摊）；org=组织结构图（单向向右）
   function _mmTreeSvg(root, collapsed, opts) {
     collapsed = collapsed || new Set();
     opts = opts || {};
@@ -2659,54 +4079,38 @@
     const focus = opts.focus === undefined || opts.focus === null ? null : Number(opts.focus);
     const highlight = opts.highlight instanceof Set ? opts.highlight : new Set();
     const bg = opts.bg || 'dots';
-    const ROOT_X = mode === 'org' ? 96 : 640;
-    // 间距：同级节点拉大留白，子分支与父节点留足间隔，避免视觉拥挤
-    const XGAP = mode === 'org' ? 320 : 300;
-    const TOP = 40, BOT = 500;
 
-    const list = []; // {label, depth, x, y, kids:[], idx, branch, dir, childCount, w, h, lines}
+    // 1) 建树 + 量尺寸（此时还没有坐标）
+    const list = []; // {label, source, depth, branch, dir, kids, idx, childCount, w, h, lines, x, y}
     const weight = (n) => (n && n.children && n.children.length ? n.children.reduce((a, c) => a + weight(c), 0) : 1);
-    const layout = (n, depth, top, bot, branch, dir) => {
-      const node = { label: String(n?.label || ''), source: n?.source || '', depth, kids: [], idx: list.length, branch, dir, childCount: (n?.children || []).length };
+    const build = (n, depth, branch, dir) => {
+      const label = String(n?.label || '');
+      const node = {
+        label, source: n?.source || '', depth, branch, dir, kids: [],
+        idx: list.length, childCount: (n?.children || []).length,
+        ..._mmDims(label, depth),
+      };
       list.push(node);
-      node.x = ROOT_X + dir * depth * XGAP;
-      node.y = (top + bot) / 2;
-      const kids = n.children || [];
+      const kids = n?.children || [];
       if (depth === 0) {
-        // 一级分支：mind 模式左右分摊（按权重折半），org 模式全部向右
-        let acc = top;
-        let accRight = top;
-        let bi = 0;
-        const totalW = kids.reduce((a, c) => a + weight(c), 0) || 1;
-        let leftW = 0;
-        for (const k of kids) {
-          leftW += weight(k);
-          if (mode === 'mind' && leftW <= totalW / 2) {
-            const span = (BOT - TOP) * (weight(k) / totalW);
-            node.kids.push(layout(k, depth + 1, acc, acc + span, bi, -1));
-            acc += span;
-          } else {
-            const span = (BOT - TOP) * (weight(k) / totalW);
-            node.kids.push(layout(k, depth + 1, accRight, accRight + span, bi, 1));
-            accRight += span;
-          }
-          bi++;
-        }
+        // 一级分支：mind 模式按权重折半左右分摊，org 模式全部向右
+        const weights = kids.map((k) => weight(k));
+        const total = weights.reduce((a, b) => a + b, 0) || 1;
+        let acc = 0;
+        kids.forEach((k, i) => {
+          const side = mode === 'mind' && acc + weights[i] <= total / 2 + 1e-6 ? -1 : 1;
+          acc += weights[i];
+          node.kids.push(build(k, depth + 1, i, side));
+        });
         return node;
       }
-      if (!kids.length) return node;
-      const total = kids.reduce((a, c) => a + weight(c), 0) || 1;
-      let acc = top;
-      for (const k of kids) {
-        const span = (bot - top) * (weight(k) / total);
-        node.kids.push(layout(k, depth + 1, acc, acc + span, branch, dir));
-        acc += span;
-      }
+      kids.forEach((k) => node.kids.push(build(k, depth + 1, branch, dir)));
       return node;
     };
-    const rootNode = layout(root, 0, TOP, BOT, 0, 1);
+    const rootNode = build(root, 0, 0, 1);
+    const maxDepth = list.reduce((m, n) => Math.max(m, n.depth), 0);
 
-    // 折叠的一级分支：子树隐藏
+    // 折叠的一级分支：子树整体不占位（收拢后脑图收紧，不留大片空档）
     const hidden = new Set();
     for (const kid of rootNode.kids) {
       if (collapsed.has(kid.idx)) {
@@ -2715,83 +4119,153 @@
       }
     }
 
-    // 节点尺寸（换行）预计算
+    // 2) 横向：每层列宽按该层最宽的节点算，列中心逐列累加（不再固定 300 的列距 → 图不再横向拉长）
+    const colMax = { '-1': {}, 1: {} };
     for (const n of list) {
-      const d = _mmDims(n.label, _mmFontSize(n.depth));
-      n.w = d.w; n.h = d.h; n.lines = d.lines;
+      if (n.depth === 0) continue;
+      const key = String(n.dir);
+      colMax[key][n.depth] = Math.max(colMax[key][n.depth] || 0, n.w);
+    }
+    const columnXs = (sideDir) => {
+      const key = String(sideDir);
+      const xs = { 0: 0 };
+      let cursor = rootNode.w / 2;
+      for (let d = 1; d <= maxDepth; d++) {
+        const cw = colMax[key][d] || 0;
+        if (!cw) { xs[d] = xs[d - 1] || 0; continue; }
+        cursor += KB_MM_COL_GAP + cw / 2;
+        xs[d] = sideDir * cursor;
+        cursor += cw / 2;
+      }
+      return xs;
+    };
+    const xsLeft = columnXs(-1);
+    const xsRight = columnXs(1);
+    for (const n of list) {
+      if (n.depth === 0) { n.x = 0; continue; }
+      n.x = (n.dir < 0 ? xsLeft : xsRight)[n.depth] || 0;
     }
 
-    // 画布范围（双向时 viewBox 从最左边界起，四周留白）
-    // 基于**完整树**的布局坐标计算，折叠只隐藏节点、不改变画布大小
-    // （避免收拢/展开时脑图尺寸跳动）
-    const minX = Math.min(...list.map((n) => n.x - n.w / 2)) - 60;
-    const maxX = Math.max(...list.map((n) => n.x + n.w / 2)) + 160;
-    const maxY = Math.max(BOT, ...list.map((n) => n.y + n.h / 2)) + 30;
-    const svgW = Math.max(400, maxX - minX);
-    const svgH = Math.max(480, maxY);
-    const showFolded = hidden.size > 0;
+    // 3) 纵向：左右两侧各自排行，父节点对齐子节点中点（行高固定 → 疏密均匀）
+    //    两侧共用一套行号的话，图高 = 全部叶子数 × 行高，画布被拉得又高又窄、缩放被迫变小；
+    //    两侧各自排行后，图高只由"较满的一侧"决定，字号能大 30% 左右。
+    let rowLeft = 0;
+    let rowRight = 0;
+    const place = (n) => {
+      const kids = n.kids.filter((c) => !hidden.has(c.idx));
+      if (!kids.length) {
+        n.y = (n.dir < 0 ? rowLeft++ : rowRight++) * KB_MM_ROW;
+        return n.y;
+      }
+      const ys = kids.map(place);
+      n.y = (ys[0] + ys[ys.length - 1]) / 2;
+      return n.y;
+    };
+    place(rootNode);
 
-    // 连线：颜色=分支成套色系；粗细/透明度随层级递减
+    // 两侧纵向跨度对齐到同一中轴（否则左右长短不一时，根节点会明显偏离画布中线）
+    const visible = list.filter((n) => !hidden.has(n.idx));
+    const sideSpan = (dir) => {
+      const ns = visible.filter((n) => n.depth > 0 && n.dir === dir);
+      if (!ns.length) return null;
+      const top = Math.min(...ns.map((n) => n.y - n.h / 2));
+      const bottom = Math.max(...ns.map((n) => n.y + n.h / 2));
+      return (top + bottom) / 2;
+    };
+    const midL = sideSpan(-1);
+    const midR = sideSpan(1);
+    const mid = (midL !== null && midR !== null) ? (midL + midR) / 2 : (midL !== null ? midL : midR) || 0;
+    if (mid) for (const n of visible) n.y -= mid;
+    rootNode.y = 0;
+
+    // 4) 画布范围：按可见节点包围盒 + 等宽留白（左右留白必须一致，否则整图被推向一侧）
+    const minX = Math.min(...visible.map((n) => n.x - n.w / 2)) - KB_MM_PAD_X;
+    const maxX = Math.max(...visible.map((n) => n.x + n.w / 2)) + KB_MM_PAD_X + 12; // 右侧给折叠徽章留位
+    const minY = Math.min(...visible.map((n) => n.y - n.h / 2)) - KB_MM_PAD_Y;
+    const maxY = Math.max(...visible.map((n) => n.y + n.h / 2)) + KB_MM_PAD_Y;
+    const svgW = Math.max(360, maxX - minX);
+    const svgH = Math.max(280, maxY - minY);
+    const fc = (v) => (Math.round(v * 100) / 100).toString();
+
+    // 5) 连线：父节点边缘 → 子节点边缘，两端留短横段，视觉上"接得住"节点
     const edges = [];
     const walkE = (n) => { for (const c of n.kids) { if (!hidden.has(c.idx)) edges.push([n, c]); walkE(c); } };
     walkE(rootNode);
     const edgeSvg = edges.map(([a, b]) => {
       const pal = _mmPalette(b.branch);
-      const ax = a.x + a.dir * (a.w / 2 + 2);
-      const bx = b.x - b.dir * (b.w / 2 + 2);
-      const mx = (ax + bx) / 2;
-      const width = a.depth === 0 ? 2.6 : a.depth === 1 ? 2.1 : 1.6;
-      const op = a.depth === 0 ? 0.6 : a.depth === 1 ? 0.45 : 0.28;
-      return `<path d="M ${ax} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${bx} ${b.y}" fill="none" stroke="${pal.deep}" stroke-width="${width}" stroke-opacity="${op}"/>`;
+      const ax = a.x + a.dir * (a.w / 2 + 1);
+      const bx = b.x - b.dir * (b.w / 2 + 1);
+      const stub = Math.min(20, Math.max(8, Math.abs(bx - ax) / 3));
+      const sx = ax + a.dir * stub;
+      const ex = bx - b.dir * stub;
+      const mid = (sx + ex) / 2;
+      const width = a.depth === 0 ? 2.2 : a.depth === 1 ? 1.7 : 1.3;
+      const op = a.depth === 0 ? 0.55 : a.depth === 1 ? 0.42 : 0.3;
+      return `<path class="kb-mm-edge" d="M ${fc(ax)} ${fc(a.y)} L ${fc(sx)} ${fc(a.y)} C ${fc(mid)} ${fc(a.y)}, ${fc(mid)} ${fc(b.y)}, ${fc(ex)} ${fc(b.y)} L ${fc(bx)} ${fc(b.y)}" fill="none" stroke="${pal.deep}" stroke-width="${width}" stroke-opacity="${op}" stroke-linecap="round"/>`;
     }).join('');
 
-    // 节点：成套色系（一级深色实心 / 二级浅底深框 / 三级白底中框）、字号层级、换行、聚焦淡化、搜索高亮、来源标记
-    const nodeSvg = list.map((n) => {
-      if (hidden.has(n.idx)) return '';
-      const p = (() => {
-        if (n.depth === 0) return { fill: '#0B7A52', stroke: '#065F46', text: '#fff', size: 16, sw: 2.4 }; // 中心根节点高亮加深
-        const pal = _mmPalette(n.branch);
-        if (n.depth === 1) return { fill: pal.deep, stroke: pal.deep, text: '#fff', size: 13, sw: 1.6 };
-        if (n.depth === 2) return { fill: pal.light, stroke: pal.deep, text: '#14281E', size: 12, sw: 1.3 };
-        return { fill: '#FFFFFF', stroke: pal.mid, text: '#3E5A4C', size: 11, sw: 1.2 };
-      })();
+    // 6) 节点：卡片式（根=实心品牌绿；一级=浅底色+色条；二三级=白卡片+细描边），字号/行高统一
+    const nodeSvg = visible.map((n) => {
+      const pal = _mmPalette(n.branch);
+      const style = n.depth === 0
+        ? { fill: KB_MM_ROOT, stroke: KB_MM_ROOT, sw: 0, text: '#FFFFFF', weight: 700, shadow: true, radius: 12 }
+        : n.depth === 1
+          ? { fill: pal.light, stroke: pal.deep, sw: 1.4, text: pal.ink, weight: 650, shadow: false, radius: 9 }
+          : n.depth === 2
+            ? { fill: '#FFFFFF', stroke: KB_MM_LINE, sw: 1, text: KB_MM_INK, weight: 550, shadow: true, radius: 8 }
+            : { fill: '#FFFFFF', stroke: KB_MM_LINE_SOFT, sw: 1, text: KB_MM_INK_SOFT, weight: 450, shadow: true, radius: 8 };
       const w = n.w, h = n.h;
       const x = n.x - w / 2;
       const y = n.y - h / 2;
       const folded = n.depth === 1 && collapsed.has(n.idx);
-      const badgeX = n.x + n.dir * (w / 2 + 9);
-      // 徽章统一加 kb-mm-fold-badge class：折叠态是 +N（点击展开），展开态是 −（点击折叠）
-      const foldBadge = folded
-        ? `<circle class="kb-mm-fold-badge" cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="${p.stroke}"/><text class="kb-mm-fold-badge" x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="${p.stroke}">+${n.childCount}</text>`
-        : (n.childCount > 0 && n.depth >= 1 ? `<circle class="kb-mm-fold-badge" cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="#B7D3C3"/><text class="kb-mm-fold-badge" x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="#3E5A4C">−</text>` : '');
+      const badgeX = n.x + n.dir * (w / 2 + 10);
       const dim = focus !== null && n.depth >= 1 && n.branch !== focus;
       const hit = highlight.has(n.idx);
-      const hitRing = hit
-        ? `<rect x="${x - 5}" y="${y - 5}" width="${w + 10}" height="${h + 10}" rx="${(h + 10) / 2}" fill="none" stroke="#F59E0B" stroke-width="2" stroke-dasharray="5 3"/>`
-        : '';
-      const srcMark = n.source
-        ? `<text x="${n.x + w / 2 - 9}" y="${n.y - h / 2 + 11}" font-size="9.5" fill="#6E8578">📄</text>`
-        : '';
-      const textLines = n.lines.map((ln, i) =>
-        `<tspan x="${n.x}" dy="${i === 0 ? 5 : 15}" font-size="${p.size}">${_esc(ln)}</tspan>`).join('');
       const extra = (folded ? ' kb-mm-node--folded' : '') + (dim ? ' kb-mm-node--dim' : '') + (hit ? ' kb-mm-node--hit' : '');
-      return `<g class="kb-mm-node${extra}" data-depth="${n.depth}" data-mm-idx="${n.idx}" data-branch="${n.branch ?? -1}" data-dir="${n.dir}" data-folded="${folded ? '1' : '0'}" data-children="${n.childCount}"${n.source ? ` data-source="${_esc(n.source)}"` : ''}${dim ? ' opacity="0.13"' : ''}>
+
+      const hitRing = hit
+        ? `<rect x="${x - 5}" y="${y - 5}" width="${w + 10}" height="${h + 10}" rx="${style.radius + 3}" fill="none" stroke="#F59E0B" stroke-width="2" stroke-dasharray="5 3"/>`
+        : '';
+      const accent = n.depth === 1
+        ? `<rect x="${fc(n.dir > 0 ? x + 2 : x + w - 5)}" y="${fc(y + 8)}" width="3" height="${fc(h - 16)}" rx="1.5" fill="${pal.deep}"/>`
+        : '';
+      // 有来源的节点：前缘一个小圆点（原来的 📄 emoji 挤在角上，很花）
+      const srcDot = n.source && n.depth >= 2
+        ? `<circle cx="${fc(n.dir > 0 ? x + 7 : x + w - 7)}" cy="${fc(n.y)}" r="2.4" fill="${pal.mid}"/>`
+        : '';
+      const foldBadge = folded
+        ? `<circle class="kb-mm-fold-badge" cx="${fc(badgeX)}" cy="${fc(n.y)}" r="8" fill="#FFFFFF" stroke="${pal.deep}" stroke-width="1.2"/><text class="kb-mm-fold-badge" x="${fc(badgeX)}" y="${fc(n.y + 3.6)}" text-anchor="middle" font-size="10" font-weight="600" fill="${pal.ink}">+${n.childCount}</text>`
+        : (n.childCount > 0 && n.depth >= 1
+          ? `<circle class="kb-mm-fold-badge" cx="${fc(badgeX)}" cy="${fc(n.y)}" r="8" fill="#FFFFFF" stroke="${pal.mid}" stroke-width="1.2"/><text class="kb-mm-fold-badge" x="${fc(badgeX)}" y="${fc(n.y + 4)}" text-anchor="middle" font-size="11" font-weight="600" fill="${KB_MM_INK_SOFT}">−</text>`
+          : '');
+      const textLines = n.lines.map((ln, i) =>
+        `<tspan x="${fc(n.x)}" dy="${fc(i === 0 ? -((n.lines.length - 1) / 2) * n.lineH + n.size * 0.36 : n.lineH)}" font-size="${n.size}">${_esc(ln)}</tspan>`).join('');
+      return `<g class="kb-mm-node${extra}" data-depth="${n.depth}" data-mm-idx="${n.idx}" data-branch="${n.branch ?? -1}" data-dir="${n.dir}" data-folded="${folded ? '1' : '0'}" data-children="${n.childCount}"${n.source ? ` data-source="${_esc(n.source)}"` : ''}${dim ? ' opacity="0.16"' : ''}>
         ${hitRing}
-        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${p.sw}"/>
-        <text x="${n.x}" y="${n.y}" text-anchor="middle" font-weight="${n.depth <= 1 ? 600 : 500}" fill="${p.text}">${textLines}</text>
-        ${srcMark}
+        <rect x="${fc(x)}" y="${fc(y)}" width="${fc(w)}" height="${fc(h)}" rx="${style.radius}" fill="${style.fill}" stroke="${style.stroke}"${style.sw ? ` stroke-width="${style.sw}"` : ''}${style.shadow ? ' filter="url(#kb-mm-card-shadow)"' : ''}/>
+        ${accent}
+        ${srcDot}
+        <text x="${fc(n.x)}" y="${fc(n.y)}" text-anchor="middle" font-weight="${style.weight}" fill="${style.text}">${textLines}</text>
         ${foldBadge}
         ${n.source ? `<title>${_esc(n.source)}</title>` : ''}
       </g>`;
     }).join('');
 
-    // 背景：点阵 / 纯白 / 无（深色画布）
+    // 7) 背景与阴影（点阵/纯白/无；卡片阴影只定义一次）
+    const defs = '<defs>'
+      + '<filter id="kb-mm-card-shadow" x="-24%" y="-48%" width="148%" height="196%">'
+      + '<feDropShadow dx="0" dy="1.4" stdDeviation="1.8" flood-color="#0B2A1E" flood-opacity="0.10"/>'
+      + '</filter>'
+      + (bg === 'dots'
+        ? '<pattern id="kb-mm-dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="rgba(20,40,30,0.055)"/></pattern>'
+        : '')
+      + '</defs>';
     const bgSvg = bg === 'none'
       ? ''
       : bg === 'plain'
-        ? `<rect x="${minX}" y="0" width="${svgW}" height="${svgH}" fill="#FFFFFF"/>`
-        : `<defs><pattern id="kb-mm-dots" width="18" height="18" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill="rgba(20,40,30,0.07)"/></pattern></defs><rect x="${minX}" y="0" width="${svgW}" height="${svgH}" fill="url(#kb-mm-dots)"/>`;
-    return `<svg class="kb-mm-svg" viewBox="${minX} 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">${bgSvg}${edgeSvg}${nodeSvg}</svg>`;
+        ? `<rect x="${fc(minX)}" y="${fc(minY)}" width="${fc(svgW)}" height="${fc(svgH)}" fill="#FBFDFC"/>`
+        : `<rect x="${fc(minX)}" y="${fc(minY)}" width="${fc(svgW)}" height="${fc(svgH)}" fill="url(#kb-mm-dots)"/>`;
+    return `<svg class="kb-mm-svg" viewBox="${fc(minX)} ${fc(minY)} ${fc(svgW)} ${fc(svgH)}" xmlns="http://www.w3.org/2000/svg">${defs}${bgSvg}${edgeSvg}${nodeSvg}</svg>`;
   }
 
   // ── 问答流 ──
@@ -2836,16 +4310,24 @@
     const s = _state.qaSessions.find((x) => x.id === id);
     if (!s) return;
     _state.qaSessionId = id;
-    const migrated = (s.msgs || []).map((m) => (
-      m && m.kind === 'mindmap'
-        ? { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts }
-        : {
-            role: m.role,
-            content: m.content,
-            ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
-            ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
-          }
-    ));
+    const migrated = (s.msgs || []).map((m) => {
+      if (m && m.kind === 'mindmap') {
+        return { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts };
+      }
+      // 测验消息：题目就存在消息里（没有独立存档），载入必须带上——否则会话里
+      // 只剩一条空回答（真机反馈：「刚生成的测验没进历史会话」的第二个原因：
+      // 这里曾把所有非脑图消息都重建成 {role,content}，quiz 连同题目一起被丢掉）。
+      if (m && m.kind === 'quiz') {
+        const questions = Array.isArray(m.questions) ? m.questions.slice(0, 20) : [];
+        return questions.length ? { role: m.role || 'assistant', kind: 'quiz', questions, ts: m.ts } : null;
+      }
+      return {
+        role: m.role,
+        content: m.content,
+        ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
+        ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
+      };
+    }).filter(Boolean);
     _state.qaHistory = migrated;
     _clearQa();
     const box = document.getElementById('kb-qa-messages');
@@ -2854,12 +4336,21 @@
     let prevAi = null;
     const refreshAiMm = (ai) => {
       const btn = ai.row.querySelector('.kb-qa-mm-btn');
-      if (btn) { btn.innerHTML = '🧠 重新生成脑图'; btn.title = '重新生成该回答的脑图'; }
+      if (btn) {
+        _setUiButtonPresentation(btn, '重新生成脑图', 'brain-circuit');
+        btn.title = '重新生成该回答的脑图';
+      }
       if (ai.msg.mm && ai.msg.mm.key) _qaSnapshotInto(ai.row, ai.msg.mm.key);
     };
     let legacyAttached = false;
     const nextMsgs = [];
     for (const m of _state.qaHistory) {
+      if (m.kind === 'quiz') {
+        nextMsgs.push(m);
+        _appendQuizMessage(box, m);
+        prevAi = null;
+        continue;
+      }
       if (m.kind === 'mindmap') {
         // 老会话兼容：该脑图就近挂到它前面那条“还没有脑图”的回答，按钮变「重新生成脑图」
         if (prevAi && prevAi.msg && !(prevAi.msg.mm && prevAi.msg.mm.key)) {
@@ -2899,8 +4390,10 @@
     _maybeShowQaHint();
   }
   // 历史面板：会话列表（新建/切换/删除）
+  let _qaHistoryCleanup = null;
   function _qaOpenHistory() {
     _qaLoadSessions();
+    if (_qaHistoryCleanup) _qaHistoryCleanup(false);
     let panel = document.getElementById('kb-qa-history-panel');
     if (panel) { panel.remove(); panel = null; }
     panel = document.createElement('div');
@@ -2909,25 +4402,41 @@
     panel.innerHTML = `
       <div class="kb-qa-history-head">
         <span>会话历史</span>
-        <button type="button" class="kb-qa-history-close" title="关闭">✕</button>
+        ${_uiIconButton({ label: '关闭会话历史', icon: 'x', className: 'kb-qa-history-close' })}
       </div>
-      <div class="kb-qa-history-new" id="kb-qa-history-new">＋ 新建对话</div>
+      ${_uiButton({ label: '新建对话', role: 'secondary', size: 'sm', icon: 'plus', className: 'kb-qa-history-new', attrs: { id: 'kb-qa-history-new' } })}
       <div class="kb-qa-history-list">${_state.qaSessions.length
         ? _state.qaSessions.map((s) => `<div class="kb-qa-history-item${s.id === _state.qaSessionId ? ' is-active' : ''}" data-hist-id="${_esc(s.id)}">
             <span class="kb-qa-history-title">${_esc(s.title || '新对话')}</span>
             <span class="kb-qa-history-meta">${s.msgs ? s.msgs.length : 0} 条 · ${_qaFmtTime(s.ts)}</span>
-            <button type="button" class="kb-qa-history-del" data-hist-del="${_esc(s.id)}" title="删除会话">🗑</button>
+            ${_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger', className: 'kb-qa-history-del', attrs: { 'data-hist-del': s.id } })}
           </div>`).join('')
         : '<div class="kb-qa-history-empty">暂无历史对话</div>'}
       </div>`;
     document.body.appendChild(panel);
-    panel.querySelector('.kb-qa-history-close').addEventListener('click', () => panel.remove());
-    panel.querySelector('#kb-qa-history-new').addEventListener('click', () => { panel.remove(); _qaNewSession(); });
+    const trigger = document.getElementById('kb-qa-history');
+    function closePanel(restoreFocus = true) {
+      document.removeEventListener('keydown', onHistoryKeydown);
+      panel.remove();
+      if (_qaHistoryCleanup === closePanel) _qaHistoryCleanup = null;
+      if (restoreFocus) trigger?.focus();
+    }
+    function onHistoryKeydown(event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closePanel();
+    }
+    _qaHistoryCleanup = closePanel;
+    document.addEventListener('keydown', onHistoryKeydown);
+    panel.querySelector('.kb-qa-history-close').addEventListener('click', () => closePanel());
+    const newSessionBtn = panel.querySelector('#kb-qa-history-new');
+    newSessionBtn.addEventListener('click', () => { closePanel(false); _qaNewSession(); });
+    newSessionBtn.focus();
     panel.querySelectorAll('[data-hist-id]').forEach((el) => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('[data-hist-del]')) return;
         _qaLoadSession(el.dataset.histId);
-        panel.remove();
+        closePanel(false);
       });
     });
     panel.querySelectorAll('[data-hist-del]').forEach((btn) => {
@@ -2983,32 +4492,38 @@
     const box = document.createElement('div');
     box.className = 'kb-qa-src';
     const n = evidence.length;
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'kb-qa-src-toggle';
+    const toggle = _elementFromHtml(_uiButton({
+      label: `资料来源 · ${n}`,
+      role: 'ghost',
+      size: 'sm',
+      iconEnd: 'chevron-down',
+      className: 'kb-qa-src-toggle',
+      attrs: { 'aria-expanded': 'false' },
+    }));
     const list = document.createElement('div');
     list.className = 'kb-qa-src-list';
     list.hidden = true;
     const setLabel = (open) => {
-      toggle.textContent = `资料来源 · ${n}${open ? ' ▴' : ' ▾'}`;
+      _setUiButtonPresentation(toggle, `资料来源 · ${n}`, open ? 'chevron-up' : 'chevron-down');
       toggle.setAttribute('aria-expanded', String(open));
     };
     setLabel(false);
     for (const r of evidence) {
       const row = document.createElement('div');
       row.className = 'kb-qa-src-row';
-      const pathBtn = document.createElement('button');
-      pathBtn.type = 'button';
-      pathBtn.className = 'kb-qa-src-path';
-      pathBtn.textContent = `${r.path}#chunk ${r.chunkIdx}`;
-      pathBtn.title = '跳转到原文';
+      const pathBtn = _elementFromHtml(_uiButton({
+        label: `${r.path}#chunk ${r.chunkIdx}`,
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-qa-src-path',
+        attrs: { title: '跳转到原文' },
+      }));
       pathBtn.addEventListener('click', () => _openAnchor(r));
-      const copy = document.createElement('button');
-      copy.type = 'button';
-      copy.className = 'kb-qa-src-copy';
-      copy.textContent = '⧉';
-      copy.title = '复制引用路径';
-      copy.setAttribute('aria-label', '复制引用路径');
+      const copy = _elementFromHtml(_uiIconButton({
+        label: '复制引用路径',
+        icon: 'copy',
+        className: 'kb-qa-src-copy',
+      }));
       copy.addEventListener('click', (e) => {
         e.stopPropagation();
         _copyText(`${r.path}#chunk ${r.chunkIdx}`, '已复制引用路径');
@@ -3029,12 +4544,15 @@
   function _qaMmButtonRow(answerText, entry) {
     const row = document.createElement('div');
     row.className = 'kb-qa-mm-action';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'kb-qa-mm-btn';
     const hasMm = !!(entry && entry.mm && entry.mm.key);
-    btn.innerHTML = hasMm ? '🧠 重新生成脑图' : '🧠 生成脑图';
-    btn.title = hasMm ? '重新生成该回答的脑图' : '基于本条回答内容生成脑图';
+    const btn = _elementFromHtml(_uiButton({
+      label: hasMm ? '重新生成脑图' : '生成脑图',
+      role: 'primary',
+      size: 'sm',
+      icon: 'brain-circuit',
+      className: 'kb-qa-mm-btn',
+      attrs: { title: hasMm ? '重新生成该回答的脑图' : '基于本条回答内容生成脑图' },
+    }));
     btn.addEventListener('click', () => _genMindmapFromText(answerText, btn, entry));
     row.appendChild(btn);
     return row;
@@ -3081,10 +4599,10 @@
     user.className = 'kb-qa-msg is-user';
     user.innerHTML = `<div class="kb-qa-msg-body">${_esc(q)}</div>
       <div class="kb-qa-msg-more">
-        <button type="button" class="kb-qa-more-btn" title="更多">${_svg('more-h')}</button>
+        ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-qa-more-btn' })}
         <div class="kb-qa-msg-menu" hidden>
-          <div class="kb-qa-msg-menu-item" data-qa-act="rename">📝 重命名</div>
-          <div class="kb-qa-msg-menu-item is-danger" data-qa-act="delete">🗑 删除</div>
+          ${_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-qa-msg-menu-item', attrs: { 'data-qa-act': 'rename' } })}
+          ${_uiButton({ label: '删除', icon: 'trash-2', role: 'danger', size: 'sm', className: 'kb-qa-msg-menu-item', attrs: { 'data-qa-act': 'delete' } })}
         </div>
       </div>`;
     box.appendChild(user);
@@ -3147,7 +4665,8 @@
         dir: _state.spaceId ? null : (_state.currentLib || null),
         k: 8,
         attach_paths: attachPaths,
-        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1),
+        // 脑图/测验这类产物消息没有 content，不能进模型多轮上下文
+        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap' && m.kind !== 'quiz').slice(0, -1),
         // 用户在模型配置弹层里选定的模型（未选则走主进程默认）
         model: (_qaModelEntry && _qaModelEntry.provider && _qaModelEntry.model)
           ? { provider: _qaModelEntry.provider, model: _qaModelEntry.model }
@@ -3190,10 +4709,13 @@
             const txt = document.createElement('span');
             txt.className = 'kb-qa-suggest-txt';
             txt.innerHTML = `📁 当前库未找到，可能在「<b>${_esc(sug.dir)}</b>」：<code>${_esc(sug.path)}</code>`;
-            const goBtn = document.createElement('button');
-            goBtn.type = 'button';
-            goBtn.className = 'kb-qa-suggest-btn';
-            goBtn.textContent = '前往该库提问';
+            const goBtn = _elementFromHtml(_uiButton({
+              label: '前往该库提问',
+              role: 'primary',
+              size: 'sm',
+              iconEnd: 'arrow-right',
+              className: 'kb-qa-suggest-btn',
+            }));
             goBtn.addEventListener('click', () => {
               if (_state.currentLib !== sug.dir) _selectLib(sug.dir);
               _ask(q);
@@ -3224,6 +4746,9 @@
       if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
       return false;
     }
+    // 排版类文件（pdf/office/…）用富查看器打开，并把页码/引用片段带过去定位；
+    // 文本类仍用原文查看器（引用高亮 + 转写纠错面板都在那边）。
+    if (_isRichPreview(anchor.path)) return _openRichForAnchor(anchor);
     if (typeof window.__openAnchorViewer !== 'function') return false;
     await window.__openAnchorViewer({
       source: 'library',
@@ -3234,6 +4759,43 @@
       ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
       view: 'document',
     });
+    return true;
+  }
+
+  /**
+   * 排版类文件按"保排版"方式打开（PDF 走 PDFium、Office 走排版化 HTML），
+   * 并把引用定位（页码）带过去。返回 false = 这次没打开。
+   *
+   * 单独抽出来是因为它是**对外桥**：`anchored-source-view` 在把文件丢进
+   * 纯文本阅读器之前会先调它（见 `window.__openKbRichFile`）。渲染进程的
+   * 分派只有这一条路，PDF/Word 才不会退化成没有排版的字符流。
+   */
+  async function _openRichForAnchor(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return false;
+    const isSpace = anchor.source === 'space' || anchor.scope === 'space';
+    const spaceId = isSpace ? String(anchor.spaceId || '') : '';
+    if (isSpace && !spaceId) {
+      if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
+      return false;
+    }
+    let hl = null;
+    try {
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        const loc = await window.cogseed.invoke('cogseed.anchor.resolve', {
+          source: isSpace ? 'space' : 'library',
+          scope: isSpace ? 'space' : 'global',
+          path: anchor.path,
+          chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+          ...(isSpace ? { spaceId } : {}),
+          ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
+        });
+        if (loc && loc.resolved) {
+          hl = {};
+          if (typeof loc.page === 'number' && loc.page > 0) hl.page = loc.page;
+        }
+      }
+    } catch (_) { /* 定位失败不阻断打开整篇 */ }
+    await _openFileViewer(isSpace ? { spaceId, path: anchor.path } : { path: anchor.path }, isSpace ? spaceId : '', hl);
     return true;
   }
 
@@ -3290,18 +4852,18 @@
     _state.rendered = true;
     host.innerHTML = `
       <div class="kb-wb">
-        <button type="button" class="kb-wb-side-expand" id="kb-wb-side-expand" title="展开知识库列表" hidden>${_svg('chevron-right')}</button>
+        ${_uiIconButton({ label: '展开知识库列表', icon: 'chevron-right', className: 'kb-wb-side-expand', attrs: { id: 'kb-wb-side-expand', hidden: true } })}
         <aside class="kb-wb-side">
           <div class="kb-wb-side-head">
             <h2>知识库列表</h2>
             <div class="kb-wb-side-actions">
-              <button type="button" class="kb-wb-icon-btn" id="kb-wb-side-collapse" title="收起 / 展开知识库面板">${_svg('panel-collapse')}</button>
-              <button type="button" class="kb-wb-icon-btn" id="kb-wb-side-search-btn" title="搜索知识库">${_svg('search')}</button>
+              ${_uiIconButton({ label: '收起知识库列表', icon: 'panel-list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-collapse' } })}
+              ${_uiIconButton({ label: '搜索知识库', icon: 'search', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-search-btn' } })}
             </div>
           </div>
           <div class="kb-wb-side-search" id="kb-wb-side-search" hidden>
             <span class="kb-wb-side-search-ico">${_svg('search')}</span>
-            <input type="text" id="kb-wb-side-search-input" placeholder="搜索知识库…" autocomplete="off" spellcheck="false" />
+            ${_uiInput({ id: 'kb-wb-side-search-input', type: 'search', placeholder: '搜索知识库…', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           <div class="kb-wb-tree" id="kb-wb-tree"></div>
         </aside>
@@ -3320,9 +4882,18 @@
                 </div>
               </div>
               <div class="kb-wb-lib-actions">
-                <button type="button" class="kb-wb-icon-btn" id="kb-wb-share" title="分享知识库">${_svg('share')}</button>
+                ${_uiIconButton({
+                  label: _tr('kb.workbench.open_ai_panel', '打开 AI 解析与问答'),
+                  icon: 'message-square',
+                  className: 'kb-wb-right-expand',
+                  attrs: { id: 'kb-wb-right-expand', 'aria-controls': 'kb-wb-right-panel', 'aria-expanded': 'false' },
+                })}
+                <span class="kb-wb-share-wrap">
+                  ${_uiIconButton({ label: '分享知识库（待开发）', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
+                  <span class="kb-wb-soon-chip">待开发</span>
+                </span>
                 <div class="kb-wb-more">
-                  <button type="button" class="kb-wb-icon-btn" id="kb-wb-more-btn" title="更多">${_svg('more')}</button>
+                  ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-more-btn' } })}
                   <div class="kb-wb-more-menu" id="kb-wb-more-menu" hidden>
                     <div class="kb-wb-more-item" data-more="refresh">刷新</div>
                     <div class="kb-wb-more-item" data-more="rename">重命名</div>
@@ -3333,10 +4904,10 @@
             </div>
             <div class="kb-wb-mid-sub">
               <div class="kb-wb-content-title">内容(<span id="kb-wb-count">0</span>)</div>
-              <input id="kb-wb-search-input" placeholder="搜索文档…" autocomplete="off">
+              ${_uiInput({ id: 'kb-wb-search-input', type: 'search', placeholder: '搜索文档…', attrs: { autocomplete: 'off' } })}
               <div class="kb-wb-tools">
                 <div class="kb-wb-sort">
-                  <button type="button" class="kb-wb-icon-btn" id="kb-wb-sort" title="排序">${_svg('sort')}</button>
+                  ${_uiIconButton({ label: '排序', icon: 'list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-sort' } })}
                   <div class="kb-wb-sort-menu" id="kb-wb-sort-menu" hidden>
                     <div class="kb-wb-sort-item is-selected" data-sort="updated">✓ 更新时间</div>
                     <div class="kb-wb-sort-item" data-sort="size">大小</div>
@@ -3344,23 +4915,23 @@
                     <div class="kb-wb-sort-item" data-sort="name">名称</div>
                   </div>
                 </div>
-                <button type="button" class="kb-wb-icon-btn" id="kb-wb-refresh" title="重置排序并刷新">${_svg('refresh')}</button>
+                ${_uiIconButton({ label: '重置排序并刷新', icon: 'refresh', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-refresh' } })}
                 <div class="kb-wb-import-wrap">
-                  <button type="button" class="kb-wb-icon-btn" id="kb-wb-import" title="导入内容">${_svg('upload')}</button>
+                  ${_uiIconButton({ label: '导入内容', icon: 'upload', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-import' } })}
                   <div class="kb-wb-import-menu" id="kb-wb-import-menu" hidden>
-                    <div class="kb-wb-import-item" data-imp="file">📄 本地文件</div>
-                    <div class="kb-wb-import-item" data-imp="dir">📁 本地文件夹</div>
-                    <div class="kb-wb-import-item" data-imp="kblib">📚 个人知识库</div>
-                    <div class="kb-wb-import-item" data-imp="url">🔗 网页链接</div>
+                    <div class="kb-wb-import-item" data-imp="file">${_icon('file', 'kb-wb-import-icon')}<span>本地文件</span></div>
+                    <div class="kb-wb-import-item" data-imp="dir">${_icon('folder', 'kb-wb-import-icon')}<span>本地文件夹</span></div>
+                    <div class="kb-wb-import-item" data-imp="kblib">${_icon('book-open', 'kb-wb-import-icon')}<span>个人知识库</span></div>
+                    <div class="kb-wb-import-item" data-imp="url">${_icon('link', 'kb-wb-import-icon')}<span>网页链接</span></div>
                     <div class="kb-wb-import-has-sub">
-                      <div class="kb-wb-import-item" data-imp="note">🗒 笔记 <span class="kb-import-caret">▸</span></div>
+                      <div class="kb-wb-import-item" data-imp="note">${_icon('file-text', 'kb-wb-import-icon')}<span>笔记</span><span class="kb-import-caret">${_icon('chevron-left', 'kb-import-caret-icon')}</span></div>
                       <div class="kb-wb-import-sub" id="kb-wb-import-note-sub" hidden>
-                        <div class="kb-wb-import-item" data-imp="note-new">✏️ 新建笔记</div>
-                        <div class="kb-wb-import-item" data-imp="note-import">📥 导入笔记</div>
+                        <div class="kb-wb-import-item" data-imp="note-new">${_icon('document-pencil', 'kb-wb-import-icon')}<span>新建笔记</span></div>
+                        <div class="kb-wb-import-item" data-imp="note-import">${_icon('upload', 'kb-wb-import-icon')}<span>导入笔记</span></div>
                       </div>
                     </div>
-                    <div class="kb-wb-import-item" data-imp="audio">🎙 录音纪要</div>
-                    <div class="kb-wb-import-item" data-imp="folder">🗂 新建文件夹</div>
+                    <div class="kb-wb-import-item" data-imp="audio">${_icon('mic', 'kb-wb-import-icon')}<span>录音纪要</span></div>
+                    <div class="kb-wb-import-item" data-imp="folder">${_icon('folder', 'kb-wb-import-icon')}<span>新建文件夹</span></div>
                   </div>
                 </div>
               </div>
@@ -3370,27 +4941,32 @@
           <div class="kb-wb-files" id="kb-wb-files"></div>
         </section>
         <div class="kb-wb-divider" data-wb-divider="2" title="拖动调整宽度"></div>
-        <section class="kb-wb-right">
-          <div class="kb-wb-right-head"><span class="kb-wb-chip">📚 <span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span>本地推理 · 资料不上云</span></div>
+        <section class="kb-wb-right" id="kb-wb-right-panel">
+          <div class="kb-wb-right-head"><span class="kb-wb-chip">${_icon('book-open', 'kb-wb-chip-icon')}<span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span>本地推理 · 资料不上云</span>${_uiIconButton({
+            label: _tr('kb.workbench.close_ai_panel', '关闭 AI 解析与问答'),
+            icon: 'x',
+            className: 'kb-wb-right-collapse',
+            attrs: { id: 'kb-wb-right-collapse', 'aria-controls': 'kb-wb-right-panel' },
+          })}</div>
           <div class="kb-wb-right-body" id="kb-wb-right">
             <div class="kb-wb-right-card" id="kb-wb-analysis-card">
               <div class="kb-wb-right-card-title">
                 <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
                 <span class="kb-wb-card-actions">
-                  <button type="button" class="kb-wb-a-btn is-primary" id="kb-wb-gen-mm" disabled title="请先点击「✨ 生成 AI 解析」">🧠 生成脑图</button>
-                  <button type="button" class="kb-wb-a-btn" id="kb-wb-gen-quiz" disabled title="请先点击「✨ 生成 AI 解析」">📝 生成测验</button>
+                  ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
                 </span>
               </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
-              <div class="kb-wb-right-placeholder"><button type="button" class="kb-wb-a-btn" id="kb-analyze-btn">✨ 生成 AI 解析</button></div>
+              <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>
             </div>
             <div class="kb-qa-session">
               <div class="kb-qa-session-head">
                 <span class="kb-qa-session-date" id="kb-qa-session-date"></span>
                 <div class="kb-qa-session-actions">
-                  <button type="button" class="kb-qa-session-btn" id="kb-qa-popout" title="新建对话">${_svg('plus')}</button>
-                  <button type="button" class="kb-qa-session-btn" id="kb-qa-history" title="会话历史">${_svg('history')}</button>
-                  <button type="button" class="kb-qa-session-btn" id="kb-qa-clear" title="清空当前对话">${_svg('close')}</button>
+                  ${_uiIconButton({ label: '新建对话', icon: 'plus', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-popout' } })}
+                  ${_uiIconButton({ label: '会话历史', icon: 'history', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-history' } })}
+                  ${_uiIconButton({ label: '清空当前对话', icon: 'x', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-clear' } })}
                 </div>
               </div>
               <div class="kb-qa-messages" id="kb-qa-messages"></div>
@@ -3401,13 +4977,13 @@
             <div class="kb-qa-attach-strip" id="kb-qa-attach-strip" hidden></div>
             <div class="kb-qa-box">
               <button type="button" class="kb-qa-model-chip" id="kb-qa-tools" title="选择问答模型">
-                <span class="kb-qa-model-chip-ico">🧠</span>
+                ${_icon('brain-circuit', 'kb-qa-model-chip-ico')}
                 <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
                 <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
               </button>
               <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
-                <button type="button" class="kb-qa-icon-btn" id="kb-qa-attach" title="上传附件">${_svg('paperclip')}</button>
+                ${_uiIconButton({ label: '上传附件', icon: 'paperclip', className: 'kb-qa-icon-btn', attrs: { id: 'kb-qa-attach' } })}
                 <div class="kb-qa-attach-tip" id="kb-qa-attach-tip" hidden>
                   <div class="kb-qa-attach-tip-title">支持上传附件</div>
                   <div class="kb-qa-attach-tip-item">• 文件数量：最多支持 5 个</div>
@@ -3415,7 +4991,7 @@
                   <div class="kb-qa-attach-tip-item">• 文本类附件会作为本次提问的补充上下文</div>
                 </div>
               </div>
-              <button type="button" class="kb-qa-send" id="kb-qa-send" title="发送" disabled>${_svg('send')}</button>
+              ${_uiIconButton({ label: '发送', icon: 'send', className: 'kb-qa-send', disabled: true, attrs: { id: 'kb-qa-send' } })}
             </div>
             <div class="kb-qa-note">内容由 AI 生成仅供参考 · 引用均已核验锚点</div>
           </div>
@@ -3424,62 +5000,62 @@
       <div class="kb-mm-overlay" id="kb-mm-overlay" hidden>
         <div class="kb-mm-dlg" id="kb-mm-dlg">
         <div class="kb-mm-titlebar" id="kb-mm-titlebar">
-          <span class="kb-mm-titlebar-ico">🧠</span>
-          <input class="kb-mm-title-input" id="kb-mm-title-input" value="脑图预览" title="双击修改标题" spellcheck="false" />
+          <span class="kb-mm-titlebar-ico">${_icon('brain-circuit', 'kb-mm-titlebar-icon')}</span>
+          ${_uiInput({ id: 'kb-mm-title-input', className: 'kb-mm-title-input', value: '脑图预览', attrs: { title: '双击修改标题', spellcheck: 'false' } })}
           <span class="kb-mm-save-state" id="kb-mm-save-state"></span>
           <div class="kb-mm-titlebar-actions">
-            <button type="button" id="kb-mm-mode-btn" title="切换预览/编辑模式">👁 预览</button>
-            <button type="button" id="kb-mm-popout-btn" title="弹出独立窗口">⧉ 独立窗口</button>
-            <button type="button" class="kb-mm-overlay-close" id="kb-mm-overlay-close" title="关闭（Esc）">✕</button>
+            ${_uiButton({ label: '预览', role: 'secondary', size: 'sm', icon: 'eye', className: 'kb-mm-titlebar-btn', attrs: { id: 'kb-mm-mode-btn', title: '切换预览/编辑模式', 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: '独立窗口', role: 'secondary', size: 'sm', icon: 'external', className: 'kb-mm-titlebar-btn', attrs: { id: 'kb-mm-popout-btn', title: '弹出独立窗口' } })}
+            ${_uiIconButton({ label: '关闭脑图预览', icon: 'x', className: 'kb-mm-overlay-close', attrs: { id: 'kb-mm-overlay-close', title: '关闭（Esc）' } })}
           </div>
         </div>
         <div class="kb-mm-overlay-toolbar">
           <div class="kb-mm-tb-group">
-            <button type="button" id="kb-mm-undo" title="撤销">↩ 撤销</button>
-            <button type="button" id="kb-mm-refresh" title="重新生成脑图">⟳ 刷新</button>
+            ${_uiButton({ label: '撤销', role: 'ghost', size: 'sm', icon: 'undo', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-undo', title: '撤销' } })}
+            ${_uiButton({ label: '刷新', role: 'ghost', size: 'sm', icon: 'refresh', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-refresh', title: '重新生成脑图' } })}
           </div>
           <div class="kb-mm-tb-group">
-            <button type="button" id="kb-mm-save" title="保存到知识库">💾 保存</button>
+            ${_uiButton({ label: '保存', role: 'ghost', size: 'sm', icon: 'archive', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-save', title: '保存到知识库' } })}
             <div class="kb-mm-open">
-              <button type="button" id="kb-mm-open-btn" title="打开已保存的脑图">📂 存档 ▾</button>
+              ${_uiButton({ label: '存档', role: 'ghost', size: 'sm', icon: 'folder-open', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-open-btn', title: '打开已保存的脑图' } })}
               <div class="kb-mm-open-menu" id="kb-mm-open-menu" hidden></div>
             </div>
             <div class="kb-mm-export">
-              <button type="button" id="kb-mm-export-btn" title="导出">📥 导出 ▾</button>
+              ${_uiButton({ label: '导出', role: 'ghost', size: 'sm', icon: 'download', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-export-btn', title: '导出' } })}
               <div class="kb-mm-export-menu" id="kb-mm-export-menu" hidden>
-                <div class="kb-mm-export-item" data-export="png">🖼 下载 PNG 图片</div>
-                <div class="kb-mm-export-item" data-export="svg">📐 下载 SVG 矢量图</div>
-                <div class="kb-mm-export-item" data-export="pdf">📄 下载 PDF 文档</div>
-                <div class="kb-mm-export-item" data-export="md">📝 导出 Markdown 大纲</div>
-                <div class="kb-mm-export-item" data-export="copy">📋 复制到剪贴板</div>
+                <div class="kb-mm-export-item" data-export="png">${_icon('image', 'kb-mm-menu-icon')}<span>下载 PNG 图片</span></div>
+                <div class="kb-mm-export-item" data-export="svg">${_icon('code', 'kb-mm-menu-icon')}<span>下载 SVG 矢量图</span></div>
+                <div class="kb-mm-export-item" data-export="pdf">${_icon('file-text', 'kb-mm-menu-icon')}<span>下载 PDF 文档</span></div>
+                <div class="kb-mm-export-item" data-export="md">${_icon('list', 'kb-mm-menu-icon')}<span>导出 Markdown 大纲</span></div>
+                <div class="kb-mm-export-item" data-export="copy">${_icon('copy', 'kb-mm-menu-icon')}<span>复制到剪贴板</span></div>
               </div>
             </div>
           </div>
           <div class="kb-mm-tb-group kb-mm-tb-view">
             <div class="kb-mm-layout">
-              <button type="button" id="kb-mm-layout-btn" title="切换布局">📐 布局</button>
+              ${_uiButton({ label: '布局', role: 'ghost', size: 'sm', icon: 'layout-grid', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-layout-btn', title: '切换布局' } })}
               <div class="kb-mm-layout-menu" id="kb-mm-layout-menu" hidden>
-                <div class="kb-mm-layout-item" data-mode="mind">🧠 思维导图（双向放射）</div>
-                <div class="kb-mm-layout-item" data-mode="org">🏢 组织结构图（单向）</div>
+                <div class="kb-mm-layout-item" data-mode="mind">${_icon('brain-circuit', 'kb-mm-menu-icon')}<span>思维导图（双向放射）</span></div>
+                <div class="kb-mm-layout-item" data-mode="org">${_icon('layout-grid', 'kb-mm-menu-icon')}<span>组织结构图（单向）</span></div>
               </div>
             </div>
-            <button type="button" id="kb-mm-expand-all" title="全部展开">⤢ 展开</button>
-            <button type="button" id="kb-mm-collapse-all" title="全部收拢">⤡ 收拢</button>
-            <button type="button" id="kb-mm-focus-btn" title="聚焦分支">◎ 聚焦</button>
-            <button type="button" id="kb-mm-outline-btn" title="大纲视图切换">☰ 大纲</button>
-            <button type="button" id="kb-mm-bg-btn" title="背景切换">▦ 背景</button>
-            <button type="button" id="kb-mm-dots-btn" title="点阵开关">▤ 点阵</button>
+            ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', icon: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-expand-all', title: '全部展开' } })}
+            ${_uiButton({ label: '收拢', role: 'ghost', size: 'sm', icon: 'chevron-up', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-collapse-all', title: '全部收拢' } })}
+            ${_uiButton({ label: '聚焦', role: 'ghost', size: 'sm', icon: 'target', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-focus-btn', title: '聚焦分支', 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: '大纲', role: 'ghost', size: 'sm', icon: 'list', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-outline-btn', title: '大纲视图切换', 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: '背景', role: 'ghost', size: 'sm', icon: 'palette', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-bg-btn', title: '背景切换' } })}
+            ${_uiButton({ label: '点阵', role: 'ghost', size: 'sm', icon: 'dot', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-dots-btn', title: '点阵开关', 'aria-pressed': 'false' } })}
           </div>
           <div class="kb-mm-tb-group kb-mm-tb-more">
-            <input type="search" class="kb-mm-search" id="kb-mm-search" placeholder="搜索节点…" />
+            ${_uiInput({ id: 'kb-mm-search', type: 'search', className: 'kb-mm-search', placeholder: '搜索节点…' })}
             <div class="kb-mm-overlay-zoom">
-              <button type="button" id="kb-mm-zoom-out" title="缩小">−</button>
+              ${_uiIconButton({ label: '缩小', icon: 'minus', className: 'kb-mm-zoom-btn', attrs: { id: 'kb-mm-zoom-out' } })}
               <span id="kb-mm-zoom-label">100%</span>
-              <button type="button" id="kb-mm-zoom-in" title="放大">＋</button>
-              <button type="button" id="kb-mm-reset" title="适应画布">适应</button>
+              ${_uiIconButton({ label: '放大', icon: 'plus', className: 'kb-mm-zoom-btn', attrs: { id: 'kb-mm-zoom-in' } })}
+              ${_uiButton({ label: '适应', role: 'ghost', size: 'sm', icon: 'maximize', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-reset', title: '适应画布' } })}
             </div>
             <div class="kb-mm-more">
-              <button type="button" id="kb-mm-more-btn" title="更多">⋯</button>
+              ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mm-more-btn', attrs: { id: 'kb-mm-more-btn' } })}
               <div class="kb-mm-more-menu" id="kb-mm-more-menu" hidden></div>
             </div>
           </div>
@@ -3544,6 +5120,49 @@
       applySideCollapsed();
     });
     applySideCollapsed();
+    // 受限宽度下将右侧 AI 区变为按需抽屉，避免三栏互相挤压成竖排文字。
+    const wb = document.querySelector('.kb-wb');
+    const rightPanel = document.getElementById('kb-wb-right-panel');
+    const rightExpandBtn = document.getElementById('kb-wb-right-expand');
+    const rightCollapseBtn = document.getElementById('kb-wb-right-collapse');
+    const rightPanelMedia = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 1100px)')
+      : null;
+    let rightPanelNarrow = Boolean(rightPanelMedia && rightPanelMedia.matches);
+    _state.rightPanelOpen = !rightPanelNarrow;
+    const applyRightPanel = () => {
+      const open = !rightPanelNarrow || _state.rightPanelOpen;
+      wb?.classList.toggle('right-panel-open', open);
+      wb?.classList.toggle('right-panel-collapsed', !open);
+      if (rightPanel) rightPanel.setAttribute('aria-hidden', String(!open));
+      if (rightExpandBtn) {
+        rightExpandBtn.hidden = !rightPanelNarrow || open;
+        rightExpandBtn.setAttribute('aria-expanded', String(open));
+      }
+      if (rightCollapseBtn) rightCollapseBtn.hidden = !rightPanelNarrow || !open;
+    };
+    rightExpandBtn?.addEventListener('click', () => {
+      _state.rightPanelOpen = true;
+      applyRightPanel();
+    });
+    rightCollapseBtn?.addEventListener('click', () => {
+      _state.rightPanelOpen = false;
+      applyRightPanel();
+      rightExpandBtn?.focus();
+    });
+    rightPanelMedia?.addEventListener?.('change', (event) => {
+      rightPanelNarrow = Boolean(event.matches);
+      _state.rightPanelOpen = !rightPanelNarrow;
+      applyRightPanel();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !rightPanelNarrow || !_state.rightPanelOpen) return;
+      if (document.getElementById('kb-qa-history-panel') || document.querySelector('.kb-import-dlg-overlay')) return;
+      _state.rightPanelOpen = false;
+      applyRightPanel();
+      rightExpandBtn?.focus();
+    });
+    applyRightPanel();
     // 分隔条拖拽：aside/mid、mid/right 之间左右调整列宽（对标 ima）
     // 宽度持久化到 localStorage（环境无 localStorage 时静默降级）
     let dividerDrag = null;
@@ -3628,6 +5247,7 @@
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
       if (_isExternalSourceSelected()) return;
+      if (!KB_SHARE_READY) { _kbShareSoonOpen(); return; }
       _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
@@ -3689,7 +5309,7 @@
         else if (typeof uiToast === 'function') uiToast('该导入渠道即将上线', { variant: 'info' });
       });
     });
-    // 笔记 → 二级子菜单（悬浮展开 + 点击 toggle，向右弹出）
+    // 笔记 → 二级子菜单（悬浮展开 + 点击保持展开，向左弹出以避开窗口右边界）
     const noteWrap = importMenu ? importMenu.querySelector('.kb-wb-import-has-sub') : null;
     if (noteWrap && importNoteSub) {
       noteWrap.addEventListener('mouseenter', () => { importNoteSub.hidden = false; });
@@ -3698,7 +5318,7 @@
       if (noteToggle) {
         noteToggle.addEventListener('click', (e) => {
           e.stopPropagation();
-          importNoteSub.hidden = !importNoteSub.hidden;
+          importNoteSub.hidden = false;
         });
       }
       importNoteSub.querySelectorAll('.kb-wb-import-item').forEach((item) => {
@@ -3854,8 +5474,6 @@
       if (e.key === 'Escape') {
         const ov = document.getElementById('kb-mm-overlay');
         if (ov && !ov.hidden) ov.hidden = true;
-        const d = document.querySelector('.kb-import-dlg-overlay');
-        if (d) d.remove();
       }
     });
     const mmSearchInput = document.getElementById('kb-mm-search');
@@ -3908,6 +5526,10 @@
     _restoreQaModelSelection();
     _renderQaModelChip();
     _refreshQaModelChipLabel();
+    // 首屏解析卡的两个生成入口必须当场绑上：静态模板里的按钮没有 listener，
+    // 只把 disabled 去掉的话点了没反应（要等切换库才绑上）。
+    const analysisCard = document.getElementById('kb-wb-analysis-card');
+    if (analysisCard) _bindAnalysisActions(analysisCard);
     _loadAll();
   }
 
@@ -3974,17 +5596,18 @@
       if (typeof uiToast === 'function') uiToast('问答服务不可用', { variant: 'warning' });
       return;
     }
+    const trigger = document.activeElement;
     window.cogseed.invoke('auth.listEntries', {})
       .then((res) => {
         const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries.filter((e) => e && e.modelAvailable !== false) : [];
-        _buildQaModelPicker(entries);
+        _buildQaModelPicker(entries, trigger);
       })
       .catch(() => {
         if (typeof uiToast === 'function') uiToast('获取模型列表失败', { variant: 'error' });
       });
   }
 
-  function _buildQaModelPicker(entries) {
+  function _buildQaModelPicker(entries, trigger) {
     const el = (tag, cls, text) => {
       const n = document.createElement(tag);
       if (cls) n.className = cls;
@@ -3993,12 +5616,21 @@
     };
     const overlay = el('div', 'kb-qa-model-overlay');
     overlay.id = 'kb-qa-model-picker';
+    overlay.hidden = true;
     const pop = el('div', 'kb-qa-model-pop');
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-modal', 'true');
+    pop.setAttribute('aria-labelledby', 'kb-qa-model-pop-title');
     const head = el('div', 'kb-qa-model-pop-head');
-    head.append(el('span', 'kb-qa-model-pop-title', '选择问答模型'), el('span', 'kb-qa-model-pop-hint', '已配置模型，点击即切换'));
-    const closeBtn = el('button', 'kb-qa-model-pop-close', '✕');
-    closeBtn.type = 'button';
-    closeBtn.title = '关闭（Esc）';
+    const title = el('span', 'kb-qa-model-pop-title', '选择问答模型');
+    title.id = 'kb-qa-model-pop-title';
+    head.append(title, el('span', 'kb-qa-model-pop-hint', '已配置模型，点击即切换'));
+    const closeBtn = _elementFromHtml(_uiIconButton({
+      label: '关闭模型选择弹窗',
+      icon: 'x',
+      className: 'kb-qa-model-pop-close',
+      title: '关闭（Esc）',
+    }));
     head.appendChild(closeBtn);
     pop.appendChild(head);
 
@@ -4008,11 +5640,12 @@
     // 「默认模型」行：清空自选，走系统默认
     const defRow = el('button', 'kb-qa-model-item');
     defRow.type = 'button';
-    const defIco = el('span', 'kb-qa-model-item-check', currentId ? '' : '✓');
+    defRow.setAttribute('aria-pressed', String(!currentId));
+    const defIco = el('span', 'kb-qa-model-item-check');
+    if (!currentId) defIco.innerHTML = _icon('check', 'ui-icon');
     const defMain = el('span', 'kb-qa-model-item-main');
     defMain.append(el('span', 'kb-qa-model-item-name', '默认模型'), el('span', 'kb-qa-model-item-sub', '系统配置的默认问答模型'));
     defRow.append(defIco, defMain);
-    defRow.addEventListener('click', () => { _selectQaModel(null); overlay.remove(); });
     list.appendChild(defRow);
 
     if (!entries.length) {
@@ -4027,35 +5660,56 @@
         const row = el('button', 'kb-qa-model-item');
         row.type = 'button';
         row.dataset.entryId = String(e.entryId || '');
-        const ico = el('span', 'kb-qa-model-item-check', currentId === e.entryId ? '✓' : '');
+        const selected = currentId === e.entryId;
+        row.setAttribute('aria-pressed', String(selected));
+        const ico = el('span', 'kb-qa-model-item-check');
+        if (selected) ico.innerHTML = _icon('check', 'ui-icon');
         const main = el('span', 'kb-qa-model-item-main');
         const name = el('span', 'kb-qa-model-item-name', `${e.providerLabel || e.provider} · ${e.modelName || e.model}`);
         const sub = el('span', 'kb-qa-model-item-sub', e.model || '');
         main.append(name, sub);
         row.append(ico, main);
-        row.addEventListener('click', () => { _selectQaModel(e); overlay.remove(); });
         list.appendChild(row);
       }
     }
     pop.appendChild(list);
 
     const foot = el('div', 'kb-qa-model-pop-foot');
-    const manageBtn = el('button', 'kb-qa-model-pop-manage', '去设置管理模型');
-    manageBtn.type = 'button';
-    manageBtn.addEventListener('click', () => {
-      overlay.remove();
-      if (typeof window.setView === 'function') window.setView('settings');
-      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
-    });
+    const manageBtn = _elementFromHtml(_uiButton({
+      label: '去设置管理模型',
+      role: 'secondary',
+      icon: 'settings',
+      className: 'kb-qa-model-pop-manage',
+    }));
     foot.appendChild(manageBtn);
     pop.appendChild(foot);
 
     overlay.appendChild(pop);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
-    overlay.tabIndex = -1;
     document.body.appendChild(overlay);
-    overlay.focus();
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-qa-model-pop',
+      initialFocus: '[aria-pressed="true"]',
+      fallbackFocus: '#kb-qa-tools',
+      trigger,
+    });
+    closeBtn.addEventListener('click', () => modal.close('close-button'));
+    defRow.addEventListener('click', () => {
+      _selectQaModel(null);
+      modal.close('select');
+    });
+    for (const row of list.querySelectorAll('.kb-qa-model-item[data-entry-id]')) {
+      row.addEventListener('click', () => {
+        const entry = entries.find((item) => String(item.entryId || '') === row.dataset.entryId);
+        if (entry) _selectQaModel(entry);
+        modal.close('select');
+      });
+    }
+    manageBtn.addEventListener('click', () => {
+      modal.close('manage', { restoreFocus: false });
+      if (typeof window.setView === 'function') window.setView('settings');
+      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    });
   }
 
   function _selectQaModel(entry) {
@@ -4255,9 +5909,14 @@
     _kbMenuHide();
     const el = document.createElement('div');
     el.className = 'kb-ctx-menu';
-    el.innerHTML = items.map((it) =>
-      `<button type="button" class="kb-ctx-menu-item${it.danger ? ' is-danger' : ''}" data-kb-ctx="${_esc(String(it.key))}">${_esc(it.label)}</button>`
-    ).join('');
+    el.innerHTML = items.map((it) => _uiButton({
+      label: it.label,
+      icon: it.icon,
+      role: it.danger ? 'danger' : 'ghost',
+      size: 'sm',
+      className: 'kb-ctx-menu-item',
+      attrs: { 'data-kb-ctx': String(it.key) },
+    })).join('');
     el.style.left = Math.min(x, window.innerWidth - 180) + 'px';
     el.style.top = Math.min(y, window.innerHeight - items.length * 34 - 12) + 'px';
     document.body.appendChild(el);
@@ -4279,47 +5938,47 @@
 
   function _kbRowMenu(path, isDir, x, y) {
     const items = [
-      { key: 'rename', label: '✏️ 重命名', fn: () => _kbRename(path, isDir) },
-      { key: 'delete', label: '🗑 删除到回收站', danger: true, fn: () => _kbDelete(path) },
+      { key: 'rename', label: '重命名', icon: 'edit-pencil', fn: () => _kbRename(path, isDir) },
+      { key: 'delete', label: '删除到回收站', icon: 'trash-2', danger: true, fn: () => _kbDelete(path) },
     ];
-    if (!isDir) items.push({ key: 'reveal', label: '📂 在文件夹中显示', fn: () => _kbReveal(path) });
+    if (!isDir) items.push({ key: 'reveal', label: '在文件夹中显示', icon: 'folder-open', fn: () => _kbReveal(path) });
     _kbMenuShow(items, x, y);
   }
 
   function _kbExternalFileMenu(path, x, y) {
     _kbMenuShow([
-      { key: 'reveal', label: _tr('kb.workbench.reveal_file', '在文件夹中显示'), fn: () => _kbReveal(path) },
+      { key: 'reveal', label: _tr('kb.workbench.reveal_file', '在文件夹中显示'), icon: 'folder-open', fn: () => _kbReveal(path) },
     ], x, y);
   }
 
   // ── 共享知识库（空间）重命名 / 删除（spaces.update / spaces.delete）──
   function _kbSpaceMenu(spaceId, x, y) {
     _kbMenuShow([
-      { key: 'rename', label: '✏️ 重命名', fn: () => _kbRenameSpace(spaceId) },
-      { key: 'members', label: '👥 知识库成员', fn: () => _kbMembersDialog(spaceId) },
-      { key: 'delete', label: '🗑 删除共享知识库', danger: true, fn: () => _kbDeleteSpace(spaceId) },
+      { key: 'rename', label: '重命名', icon: 'edit-pencil', fn: () => _kbRenameSpace(spaceId) },
+      { key: 'members', label: '知识库成员', icon: 'users', fn: () => _kbMembersDialog(spaceId) },
+      { key: 'delete', label: '删除共享知识库', icon: 'trash-2', danger: true, fn: () => _kbDeleteSpace(spaceId) },
     ], x, y);
   }
 
-  // ── 共享库文件右键菜单（对齐 ima：置顶/编辑标签/重命名/成员权限▸/移动到/复制到/删除）──
+  // ── 共享库文件右键菜单（对齐 ima：置顶/编辑标签/重命名/成员权限子菜单/移动到/复制到/删除）──
   function _kbSpaceFileMenu(path, x, y) {
     _kbMenuHide();
     const el = document.createElement('div');
     el.className = 'kb-ctx-menu kb-file-menu';
     el.innerHTML = `
-      <div class="kb-ctx-menu-item" data-fm="pin">📌 置顶</div>
-      <div class="kb-ctx-menu-item" data-fm="tag">🏷 编辑标签</div>
-      <div class="kb-ctx-menu-item" data-fm="rename">✏️ 重命名</div>
-      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm">🔐 成员权限 <span class="kb-import-caret">▸</span>
+      ${_uiButton({ label: '置顶', icon: 'pin', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'pin' } })}
+      ${_uiButton({ label: '编辑标签', icon: 'tag', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'tag' } })}
+      ${_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'rename' } })}
+      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm" role="button" tabindex="0">${_icon('lock', 'kb-ctx-menu-icon')}<span>成员权限</span><span class="kb-import-caret">${_icon('chevron-right', 'kb-ctx-menu-caret-icon')}</span>
         <div class="kb-ctx-sub" data-sub="perm">
-          <div class="kb-ctx-menu-item is-selected" data-perm="view_export">✓ 内容可查看和导出</div>
-          <div class="kb-ctx-menu-item" data-perm="view_only">内容可查看但不可导出</div>
-          <div class="kb-ctx-menu-item" data-perm="hidden">内容不可查看</div>
+          ${_uiButton({ label: '内容可查看和导出', icon: 'check', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item is-selected', attrs: { 'data-perm': 'view_export' } })}
+          ${_uiButton({ label: '内容可查看但不可导出', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'view_only' } })}
+          ${_uiButton({ label: '内容不可查看', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'hidden' } })}
         </div>
       </div>
-      <div class="kb-ctx-menu-item" data-fm="move">➡ 移动到</div>
-      <div class="kb-ctx-menu-item" data-fm="copy">⧉ 复制到</div>
-      <div class="kb-ctx-menu-item is-danger" data-fm="del">🗑 删除</div>`;
+      ${_uiButton({ label: '移动到', icon: 'arrow-right', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'move' } })}
+      ${_uiButton({ label: '复制到', icon: 'copy', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'copy' } })}
+      ${_uiButton({ label: '删除', icon: 'trash-2', role: 'danger', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'del' } })}`;
     el.style.left = Math.min(x, window.innerWidth - 200) + 'px';
     el.style.top = Math.min(y, window.innerHeight - 300) + 'px';
     document.body.appendChild(el);
@@ -4410,14 +6069,15 @@
 
   // ── 知识库成员弹窗（对齐 ima：标题+图标 / 搜索 / 创建者列表）──
   function _kbMembersDialog() {
+    const trigger = document.activeElement;
     _kbMenuHide();
     const overlay = document.createElement('div');
     overlay.className = 'kb-members-overlay';
     overlay.innerHTML = `
-      <div class="kb-members-dlg">
-        <button type="button" class="kb-members-close" title="关闭">✕</button>
-        <div class="kb-members-title">👥 知识库成员</div>
-        <div class="kb-members-search"><input type="text" placeholder="搜索知识库成员" autocomplete="off" /></div>
+      <section class="kb-members-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-members-title">
+        ${_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x', className: 'kb-members-close' })}
+        <div class="kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>知识库成员</span></div>
+        <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: '搜索知识库成员', attrs: { autocomplete: 'off' } })}</div>
         <div class="kb-members-list">
           <div class="kb-members-item">
             <span class="kb-members-avatar">我</span>
@@ -4425,10 +6085,16 @@
             <span class="kb-members-role">创建者</span>
           </div>
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('.kb-members-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-members-dlg',
+      initialFocus: '.kb-members-search input',
+      fallbackFocus: '#kb-wb-members',
+      trigger,
+    });
+    overlay.querySelector('.kb-members-close').addEventListener('click', () => modal.close('close'));
     overlay.querySelector('.kb-members-search input').addEventListener('input', (e) => {
       const q = e.target.value.trim().toLowerCase();
       overlay.querySelectorAll('.kb-members-item').forEach((item) => {
@@ -4441,13 +6107,60 @@
   // ── 共享知识库分享弹窗（图 2）+ 权限设置弹窗（图 1，对标 ima）──
   let _kbShareDlg = null; // 分享弹窗
   let _kbPermDlg = null;  // 权限设置弹窗
+  let _kbShareDlgController = null;
+  let _kbPermDlgController = null;
 
   function _kbCurSpace() {
     return _state.spaces.find((s) => s.space_id === _state.spaceId) || null;
   }
 
+  /**
+   * 共享知识库的「分享」目前是**待开发**：飞书分享 / 复制链接 / 知识码 / 权限设置
+   * 这一整套还没有真正落地，弹出来只会让人以为能用。按仓库既有约定
+   * （kb-eco 的「发现待开发」）显示为待开发：按钮挂 chip，点击给一句说明。
+   *
+   * 真要做时把这里翻成 true 即可——下面 `_kbShareDialogOpen` 的实现原样保留。
+   */
+  const KB_SHARE_READY = false;
+
+  /** 「分享（待开发）」说明小弹层：说清现状，别让用户白点。 */
+  function _kbShareSoonOpen() {
+    const trigger = document.activeElement;
+    _kbMenuHide();
+    _kbPermDlgClose();
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <section class="kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
+        ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></div>
+        <div class="kb-wb-right-placeholder kb-share-soon-body">
+          共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
+          当前可以用「成员」把库内资料共享给同一空间的同事。
+        </div>
+        <div class="kb-share-pop-actions">
+          ${_uiButton({ label: '知道了', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
+        </div>
+      </section>`;
+    document.body.appendChild(overlay);
+    _kbShareDlg = overlay;
+    _kbShareDlgController = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-share-soon-ok',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+      onClose: () => {
+        if (_kbShareDlg === overlay) { _kbShareDlg = null; _kbShareDlgController = null; }
+      },
+    });
+    overlay.querySelector('.kb-share-pop-close')?.addEventListener('click', () => _kbShareDlgController?.close());
+    overlay.querySelector('#kb-share-soon-ok')?.addEventListener('click', () => _kbShareDlgController?.close());
+  }
+
   // 图 2：分享弹窗 —— 知识库信息卡 + 分享方式行（点击跳权限设置）+ 复制链接/生成知识码
   function _kbShareDialogOpen() {
+    const trigger = document.activeElement;
     _kbMenuHide();
     const sp = _kbCurSpace();
     const isSpace = !!_state.spaceId;
@@ -4459,11 +6172,11 @@
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop">
-        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>分享</div>
+      <section class="kb-share-pop" role="dialog" aria-modal="true" aria-labelledby="kb-share-pop-title">
+        ${_uiIconButton({ label: '关闭分享弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享</div>
         <div class="kb-share-pop-card">
-          <span class="kb-share-pop-folder">${_svg('folder')}</span>
+          <span class="kb-share-pop-folder">${_icon('folder', 'kb-share-pop-folder-icon')}</span>
           <div class="kb-share-pop-card-meta">
             <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
             <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
@@ -4471,36 +6184,46 @@
         </div>
         <div class="kb-share-pop-row" id="kb-share-pop-perm-row">
           <span class="kb-share-pop-row-label">选择分享方式</span>
-          <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">›</span></span>
+          <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
         </div>
         <div class="kb-share-pop-row" id="kb-share-pop-status-row">
           <span class="kb-share-pop-row-label">分享到飞书</span>
-          <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">›</span></span>
+          <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
         </div>
         <div class="kb-share-pop-row" id="kb-share-cogseed-row">
           <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
-          <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">›</span></span>
+          <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
         </div>
         <div class="kb-share-pop-actions">
-          <button type="button" class="kb-share-pop-btn" id="kb-share-pop-copy-link">${_svg('link')}复制链接</button>
-          <button type="button" class="kb-share-pop-btn is-code" id="kb-share-pop-code">${_svg('qrcode')}生成知识码</button>
-          <button type="button" class="kb-share-pop-btn is-manage" id="kb-share-pop-manage" hidden>${_svg('settings', 'kb-share-ico')}管理</button>
+          ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-pop-copy-link' } })}
+          ${_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code', className: 'kb-share-pop-btn is-code', attrs: { id: 'kb-share-pop-code' } })}
+          ${_uiButton({ label: '管理', role: 'secondary', icon: 'settings', className: 'kb-share-pop-btn is-manage', attrs: { id: 'kb-share-pop-manage', hidden: true } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
     _kbShareDlg = overlay;
-    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    _kbShareDlgController = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-share-pop-copy-link',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+      onClose: () => {
+        if (_kbShareDlg === overlay) _kbShareDlg = null;
+        _kbShareDlgController = null;
+      },
+    });
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => _kbShareDlgClose());
     // 点分享方式行 → 跳权限设置弹窗
     overlay.querySelector('#kb-share-pop-perm-row').addEventListener('click', () => {
-      overlay.remove();
+      _kbShareDlgClose({ restoreFocus: false });
       _kbPermDialogOpen();
     });
     // 分享状态行 → 已分享时跳管理面板
     overlay.querySelector('#kb-share-pop-status-row').addEventListener('click', async () => {
       const state = await _kbShareStateOf(sp.space_id);
       if (state) {
-        overlay.remove();
+        _kbShareDlgClose({ restoreFocus: false });
         _kbShareManageOpen();
       } else {
         await _kbSharePublish(sp);
@@ -4510,7 +6233,7 @@
     overlay.querySelector('#kb-share-cogseed-row').addEventListener('click', async () => {
       const state = await _kbCogseedStateOf(sp.space_id);
       if (state) {
-        overlay.remove();
+        _kbShareDlgClose({ restoreFocus: false });
         _kbCogseedManageOpen();
       } else {
         await _kbCogseedPublish(sp);
@@ -4520,9 +6243,10 @@
     overlay.querySelector('#kb-share-pop-copy-link').addEventListener('click', async (e) => {
       e.stopPropagation();
       const btn = e.currentTarget;
-      const label = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = '分享中…';
+      btn.classList.add('is-loading');
+      btn.setAttribute('aria-busy', 'true');
+      _setUiButtonPresentation(btn, '分享中…');
       try {
         let state = await _kbShareStateOf(sp.space_id);
         if (!state) state = await _kbSharePublish(sp, { silent: true });
@@ -4535,7 +6259,9 @@
         if (typeof uiToast === 'function') uiToast('分享失败：' + ((err && err.message) || String(err)), { variant: 'error' });
       } finally {
         btn.disabled = false;
-        btn.innerHTML = label;
+        btn.classList.remove('is-loading');
+        btn.removeAttribute('aria-busy');
+        _setUiButtonPresentation(btn, '复制链接', 'link');
       }
     });
     // 生成知识码（二维码）：先确保已分享
@@ -4558,7 +6284,7 @@
     // 管理面板
     overlay.querySelector('#kb-share-pop-manage').addEventListener('click', (e) => {
       e.stopPropagation();
-      overlay.remove();
+      _kbShareDlgClose({ restoreFocus: false });
       _kbShareManageOpen();
     });
     _kbRefreshShareStatus(sp);
@@ -4591,9 +6317,9 @@
     if (!hint) return;
     const state = await _kbCogseedStateOf(sp.space_id);
     if (state) {
-      hint.innerHTML = `${_esc(state.url)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">›</span>`;
+      hint.innerHTML = `${_esc(state.url)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
     } else {
-      hint.innerHTML = '未发布 <span class="kb-share-pop-row-arrow">›</span>';
+      hint.innerHTML = `未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
     }
   }
 
@@ -4606,6 +6332,7 @@
         return res.state;
       }
       if (res && res.code === 'not_configured') {
+        _kbShareDlgClose({ restoreFocus: false });
         _kbCogseedConfigDialog(sp);
         return null;
       }
@@ -4620,30 +6347,37 @@
 
   // CogSeed 共享服务配置弹窗（后端地址 + API Key）
   function _kbCogseedConfigDialog(sp) {
+    const trigger = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop kb-share-pop--config">
-        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('link')}</span>配置 CogSeed 共享服务</div>
+      <section class="kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-config-title">
+        ${_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置 CogSeed 共享服务</div>
         <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
         <div class="kb-share-config-field">
           <label class="kb-share-config-label">服务地址</label>
-          <input type="text" class="kb-share-config-input" id="kb-cogseed-baseurl" placeholder="https://share.cogseed.dev" autocomplete="off" spellcheck="false" />
+          ${_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input', placeholder: 'https://share.cogseed.dev', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
         </div>
         <div class="kb-share-config-field">
           <label class="kb-share-config-label">API Key</label>
-          <input type="password" class="kb-share-config-input" id="kb-cogseed-apikey" placeholder="服务方发放的密钥" autocomplete="off" spellcheck="false" />
+          ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: '服务方发放的密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
         </div>
         <div class="kb-share-pop-actions kb-share-pop-actions--right">
-          <button type="button" class="kb-share-pop-btn" id="kb-cogseed-config-cancel">取消</button>
-          <button type="button" class="kb-share-pop-btn is-primary" id="kb-cogseed-config-save">保存并发布</button>
+          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-cancel' } })}
+          ${_uiButton({ label: '保存并发布', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-save' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    overlay.querySelector('#kb-cogseed-config-cancel').addEventListener('click', () => overlay.remove());
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-cogseed-baseurl',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+    });
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => modal.close('close'));
+    overlay.querySelector('#kb-cogseed-config-cancel').addEventListener('click', () => modal.close('cancel'));
     overlay.querySelector('#kb-cogseed-config-save').addEventListener('click', async (e) => {
       const baseUrl = overlay.querySelector('#kb-cogseed-baseurl').value.trim();
       const apiKey = overlay.querySelector('#kb-cogseed-apikey').value.trim();
@@ -4653,21 +6387,27 @@
       }
       const btn = e.currentTarget;
       btn.disabled = true;
+      btn.classList.add('is-loading');
+      btn.setAttribute('aria-busy', 'true');
+      _setUiButtonPresentation(btn, '保存并发布');
       try {
         const res = await window.cogseed.invoke('kb.share.cogseed.config.set', { baseUrl, apiKey });
         if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
-        overlay.remove();
+        modal.close('submit', { restoreFocus: false });
         await _kbCogseedPublish(sp);
       } catch (err) {
         _log.warn('kb cogseed config save failed', err);
         if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
         btn.disabled = false;
+        btn.classList.remove('is-loading');
+        btn.removeAttribute('aria-busy');
       }
     });
   }
 
   // CogSeed 问答管理面板（成员审核 + 复制链接 + 撤销）
   async function _kbCogseedManageOpen() {
+    const trigger = document.activeElement;
     _kbMenuHide();
     const sp = _kbCurSpace();
     if (!sp) return;
@@ -4681,9 +6421,9 @@
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop kb-share-pop--manage">
-        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>CogSeed 问答分享管理</div>
+      <section class="kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-manage-title">
+        ${_uiIconButton({ label: '关闭 CogSeed 问答分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>CogSeed 问答分享管理</div>
         ${state ? `<div class="kb-share-manage-item">
           <div class="kb-share-manage-item-head">
             <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
@@ -4691,8 +6431,8 @@
           </div>
           <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
           <div class="kb-share-manage-item-actions">
-            <button type="button" class="kb-share-manage-btn" data-cogseed-act="copy">复制链接</button>
-            <button type="button" class="kb-share-manage-btn is-danger" data-cogseed-act="revoke">撤销</button>
+            ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
+            ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
           </div>
         </div>` : '<div class="kb-share-manage-empty">未发布</div>'}
         <div class="kb-share-cogseed-members">
@@ -4703,19 +6443,25 @@
               <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
               <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
               <div class="kb-share-manage-item-actions">
-                <button type="button" class="kb-share-manage-btn" data-member-act="approve">通过</button>
-                <button type="button" class="kb-share-manage-btn is-danger" data-member-act="reject">拒绝</button>
+                ${_uiButton({ label: '通过', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
+                ${_uiButton({ label: '拒绝', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
               </div>
             </div>`).join('')}
         </div>
         <div class="kb-share-pop-actions kb-share-pop-actions--right">
-          <button type="button" class="kb-share-pop-btn" id="kb-cogseed-manage-close">关闭</button>
+          ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-manage-close' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    overlay.querySelector('#kb-cogseed-manage-close').addEventListener('click', () => overlay.remove());
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '[data-cogseed-act="copy"], #kb-cogseed-manage-close',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+    });
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => modal.close('close'));
+    overlay.querySelector('#kb-cogseed-manage-close').addEventListener('click', () => modal.close('close'));
     overlay.addEventListener('click', async (e) => {
       const actBtn = e.target.closest('[data-cogseed-act]');
       if (actBtn) {
@@ -4725,7 +6471,7 @@
           catch { uiToast && uiToast('复制失败', { variant: 'warning' }); }
         } else if (act === 'revoke') {
           const res = await window.cogseed.invoke('kb.share.cogseed.revoke', { spaceId: sp.space_id });
-          if (res && res.ok) { uiToast && uiToast('已撤销', { variant: 'success' }); overlay.remove(); _kbShareDialogOpen(); }
+          if (res && res.ok) { uiToast && uiToast('已撤销', { variant: 'success' }); modal.close('revoke', { restoreFocus: false }); _kbShareDialogOpen(); }
           else uiToast && uiToast('撤销失败', { variant: 'error' });
         }
         return;
@@ -4737,7 +6483,7 @@
         const verdict = memberBtn.dataset.memberAct;
         memberBtn.disabled = true;
         const res = await window.cogseed.invoke('kb.share.cogseed.review', { spaceId: sp.space_id, memberId, verdict });
-        if (res && res.ok) { uiToast && uiToast(verdict === 'approve' ? '已通过' : '已拒绝', { variant: 'success', timeoutMs: 1500 }); overlay.remove(); _kbCogseedManageOpen(); }
+        if (res && res.ok) { uiToast && uiToast(verdict === 'approve' ? '已通过' : '已拒绝', { variant: 'success', timeoutMs: 1500 }); modal.close('review', { restoreFocus: false }); _kbCogseedManageOpen(); }
         else { uiToast && uiToast('操作失败', { variant: 'error' }); memberBtn.disabled = false; }
       }
     });
@@ -4752,7 +6498,7 @@
     if (!hint || !manage) return;
     if (state) {
       const accessText = { anyone: '互联网可读', tenant: '组织内可读', private: '已关闭' }[state.access] || state.access;
-      hint.innerHTML = `${_esc(accessText)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">›</span>`;
+      hint.innerHTML = `${_esc(accessText)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
       manage.hidden = false;
     } else {
       hint.textContent = '未分享';
@@ -4786,6 +6532,7 @@
         return null;
       }
       if (res && res.code === 'not_configured') {
+        _kbShareDlgClose({ restoreFocus: false });
         _kbShareConfigDialog(sp);
         return null;
       }
@@ -4804,31 +6551,38 @@
 
   // 分享应用配置弹窗（独立于消息机器人）：填写飞书开放平台应用 App ID/Secret
   function _kbShareConfigDialog(sp) {
+    const trigger = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop kb-share-pop--config">
-        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('link')}</span>配置飞书分享</div>
+      <section class="kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-share-config-title">
+        ${_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置飞书分享</div>
         <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
         <div class="kb-share-config-field">
           <label class="kb-share-config-label">App ID</label>
-          <input type="text" class="kb-share-config-input" id="kb-share-config-appid" placeholder="cli_xxxxxxxx" autocomplete="off" spellcheck="false" />
+          ${_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input', placeholder: 'cli_xxxxxxxx', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
         </div>
         <div class="kb-share-config-field">
           <label class="kb-share-config-label">App Secret</label>
-          <input type="password" class="kb-share-config-input" id="kb-share-config-secret" placeholder="应用密钥" autocomplete="off" spellcheck="false" />
+          ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: '应用密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
         </div>
         <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
         <div class="kb-share-pop-actions kb-share-pop-actions--right">
-          <button type="button" class="kb-share-pop-btn" id="kb-share-config-cancel">取消</button>
-          <button type="button" class="kb-share-pop-btn is-primary" id="kb-share-config-save">保存并授权</button>
+          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-cancel' } })}
+          ${_uiButton({ label: '保存并授权', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-save' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    overlay.querySelector('#kb-share-config-cancel').addEventListener('click', () => overlay.remove());
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-share-config-appid',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+    });
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => modal.close('close'));
+    overlay.querySelector('#kb-share-config-cancel').addEventListener('click', () => modal.close('cancel'));
     overlay.querySelector('#kb-share-config-save').addEventListener('click', async (e) => {
       const appId = overlay.querySelector('#kb-share-config-appid').value.trim();
       const appSecret = overlay.querySelector('#kb-share-config-secret').value.trim();
@@ -4838,10 +6592,12 @@
       }
       const btn = e.currentTarget;
       btn.disabled = true;
+      btn.classList.add('is-loading');
+      btn.setAttribute('aria-busy', 'true');
       try {
         const res = await window.cogseed.invoke('kb.share.appConfig.set', { appId, appSecret });
         if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
-        overlay.remove();
+        modal.close('submit', { restoreFocus: false });
         if (typeof uiToast === 'function') uiToast('应用凭据已保存，正在发起授权…', { variant: 'info', timeoutMs: 2500 });
         // 保存后触发重新授权（分享写权限 scope，走分享专用凭据）
         try {
@@ -4854,30 +6610,39 @@
         _log.warn('kb share app config save failed', err);
         if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
         btn.disabled = false;
+        btn.classList.remove('is-loading');
+        btn.removeAttribute('aria-busy');
       }
     });
   }
 
   // 知识码：二维码弹窗（复用内置 qrcode-generator）
   function _kbQrCodeShow(url, name) {
+    const trigger = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop kb-share-pop--qr">
-        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('qrcode')}</span>知识码</div>
+      <section class="kb-share-pop kb-share-pop--qr" role="dialog" aria-modal="true" aria-labelledby="kb-share-qr-title">
+        ${_uiIconButton({ label: '关闭知识码弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>知识码</div>
         <div class="kb-share-qr-body">
           <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
           <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
           <div class="kb-share-qr-url">${_esc(url)}</div>
         </div>
         <div class="kb-share-pop-actions">
-          <button type="button" class="kb-share-pop-btn" id="kb-share-qr-copy">${_svg('link')}复制链接</button>
+          ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-qr-copy' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-share-qr-copy',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+    });
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => modal.close('close'));
     // 生成二维码 SVG
     const host = overlay.querySelector('#kb-share-qr-img');
     try {
@@ -4908,6 +6673,7 @@
 
   // 分享管理面板（方案 B：列表 / 更新内容 / 撤销 / 复制链接 / 二维码）
   async function _kbShareManageOpen() {
+    const trigger = document.activeElement;
     _kbMenuHide();
     let items = [];
     try {
@@ -4919,9 +6685,9 @@
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop kb-share-pop--manage">
-        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>分享管理</div>
+      <section class="kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-share-manage-title">
+        ${_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享管理</div>
         <div class="kb-share-manage-list" id="kb-share-manage-list">
           ${items.length === 0 ? '<div class="kb-share-manage-empty">还没有分享到飞书的知识库<br><span>打开知识库 → 分享 → 复制链接</span></div>' : ''}
           ${items.map((item, idx) => `
@@ -4932,21 +6698,27 @@
               </div>
               <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
               <div class="kb-share-manage-item-actions">
-                <button type="button" class="kb-share-manage-btn" data-act="copy">复制链接</button>
-                <button type="button" class="kb-share-manage-btn" data-act="qr">知识码</button>
-                <button type="button" class="kb-share-manage-btn" data-act="update">更新内容</button>
-                <button type="button" class="kb-share-manage-btn is-danger" data-act="revoke">撤销</button>
+                ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
+                ${_uiButton({ label: '知识码', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
+                ${_uiButton({ label: '更新内容', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
+                ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
               </div>
             </div>`).join('')}
         </div>
         <div class="kb-share-pop-actions kb-share-pop-actions--right">
-          <button type="button" class="kb-share-pop-btn" id="kb-share-manage-close">关闭</button>
+          ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-manage-close' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    overlay.querySelector('#kb-share-manage-close').addEventListener('click', () => overlay.remove());
+    const modal = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '[data-act="copy"], #kb-share-manage-close',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+    });
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => modal.close('close'));
+    overlay.querySelector('#kb-share-manage-close').addEventListener('click', () => modal.close('close'));
     overlay.querySelector('#kb-share-manage-list').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]');
       if (!btn) return;
@@ -4961,26 +6733,33 @@
           if (typeof uiToast === 'function') uiToast('复制失败', { variant: 'warning' });
         }
       } else if (act === 'qr') {
+        modal.close('qr', { restoreFocus: false });
         _kbQrCodeShow(item.url, item.spaceName);
       } else if (act === 'update') {
         btn.disabled = true;
-        const label = btn.textContent;
-        btn.textContent = '更新中…';
+        btn.classList.add('is-loading');
+        btn.setAttribute('aria-busy', 'true');
+        _setUiButtonPresentation(btn, '更新中…');
         try {
           const res = await window.cogseed.invoke('kb.share.update', { spaceId: item.spaceId });
           if (res && res.ok) {
             if (typeof uiToast === 'function') uiToast('内容已更新', { variant: 'success', timeoutMs: 1500 });
+            modal.close('update', { restoreFocus: false });
             _kbShareManageOpen(); // 刷新面板
           } else {
             if (typeof uiToast === 'function') uiToast('更新失败：' + ((res && res.error) || '未知错误'), { variant: 'error' });
             btn.disabled = false;
-            btn.textContent = label;
+            btn.classList.remove('is-loading');
+            btn.removeAttribute('aria-busy');
+            _setUiButtonPresentation(btn, '更新内容');
           }
         } catch (err) {
           _log.warn('kb share update failed', err);
           if (typeof uiToast === 'function') uiToast('更新失败', { variant: 'error' });
           btn.disabled = false;
-          btn.textContent = label;
+          btn.classList.remove('is-loading');
+          btn.removeAttribute('aria-busy');
+          _setUiButtonPresentation(btn, '更新内容');
         }
       } else if (act === 'revoke') {
         const mode = typeof uiConfirm === 'function'
@@ -4992,6 +6771,7 @@
           const res = await window.cogseed.invoke('kb.share.revoke', { spaceId: item.spaceId, mode });
           if (res && res.ok) {
             if (typeof uiToast === 'function') uiToast('已撤销分享', { variant: 'success', timeoutMs: 1500 });
+            modal.close('revoke', { restoreFocus: false });
             _kbShareManageOpen();
           } else {
             if (typeof uiToast === 'function') uiToast('撤销失败：' + ((res && res.error) || '未知错误'), { variant: 'error' });
@@ -5015,15 +6795,18 @@
     return `${permText}，${joinText}`;
   }
 
-  function _kbShareDlgClose() {
-    if (_kbShareDlg) { _kbShareDlg.remove(); _kbShareDlg = null; }
+  function _kbShareDlgClose(options) {
+    if (_kbShareDlgController) _kbShareDlgController.close('close', options);
+    else if (_kbShareDlg) { _kbShareDlg.remove(); _kbShareDlg = null; }
   }
-  function _kbPermDlgClose() {
-    if (_kbPermDlg) { _kbPermDlg.remove(); _kbPermDlg = null; }
+  function _kbPermDlgClose(options) {
+    if (_kbPermDlgController) _kbPermDlgController.close('close', options);
+    else if (_kbPermDlg) { _kbPermDlg.remove(); _kbPermDlg = null; }
   }
 
   // 图 1：权限设置弹窗 —— 设为私密开关 + 成员权限/加入方式下拉 + 取消/确定
   function _kbPermDialogOpen() {
+    const trigger = document.activeElement;
     _kbMenuHide();
     const sp = _kbCurSpace();
     if (!sp) return;
@@ -5035,8 +6818,9 @@
     const overlay = document.createElement('div');
     overlay.className = 'kb-share-pop-overlay';
     overlay.innerHTML = `
-      <div class="kb-share-pop kb-share-pop--perm">
-        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('lock')}</span>权限设置</div>
+      <section class="kb-share-pop kb-share-pop--perm" role="dialog" aria-modal="true" aria-labelledby="kb-perm-title">
+        ${_uiIconButton({ label: '关闭权限设置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        <div class="kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>权限设置</div>
         <div class="kb-share-perm-block">
           <div class="kb-share-perm-row">
             <div class="kb-share-perm-texts">
@@ -5069,20 +6853,31 @@
           </div>
         </div>
         <div class="kb-share-pop-actions kb-share-pop-actions--right">
-          <button type="button" class="kb-share-pop-btn" id="kb-perm-cancel">取消</button>
-          <button type="button" class="kb-share-pop-btn is-primary" id="kb-perm-ok">确定</button>
+          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-cancel' } })}
+          ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-ok' } })}
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
     _kbPermDlg = overlay;
+    _kbPermDlgController = _mountKbDialog({
+      overlay,
+      dialogSelector: '.kb-share-pop',
+      initialFocus: '#kb-perm-private',
+      fallbackFocus: '#kb-wb-share',
+      trigger,
+      onClose: () => {
+        if (_kbPermDlg === overlay) _kbPermDlg = null;
+        _kbPermDlgController = null;
+      },
+    });
     const privateBtn = overlay.querySelector('#kb-perm-private');
     const setPrivate = (on) => {
       privateBtn.classList.toggle('is-on', on);
       privateBtn.setAttribute('aria-checked', on ? 'true' : 'false');
     };
     privateBtn.addEventListener('click', () => setPrivate(!privateBtn.classList.contains('is-on')));
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => _kbPermDlgClose());
     overlay.querySelector('#kb-perm-cancel').addEventListener('click', _kbPermDlgClose);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) _kbPermDlgClose(); });
     overlay.querySelector('#kb-perm-ok').addEventListener('click', async () => {
       const nextPerm = overlay.querySelector('#kb-perm-member').value;
       const nextJoin = overlay.querySelector('#kb-perm-join').value;
@@ -5200,12 +6995,29 @@
     return tokens;
   }
 
+  // 文件查看分派（供渲染层回归测试与自动化验证：返回 'rich'|'anchor'|'unavailable'）
+  window.__kbWorkbenchOpenFile = function openFileForTest(relPath) {
+    return _openFile(relPath);
+  };
+
   // 高亮纯函数（供渲染层回归测试锁定清洗/分词逻辑）
   window.__kbFvUtils = {
     stripMdMarks: _fvStripMdMarks,
     cleanQuote: _fvCleanQuote,
     normSpace: _fvNormSpace,
     significantTokens: _fvSignificantTokens,
+    externalTarget: _fvExternalTarget,
+    pdfSrcAt: _fvPdfSrcAt,
+    quizAnswerClauses: _quizAnswerClauses,
+  };
+
+  // 排版类文件的富查看器桥。调用方是常驻加载的 `anchored-source-view`：它拿到
+  // 排版类路径（pdf/office/html/图片/音视频）时先问这里，只有这里答不上来才
+  // 退回纯文本阅读器。返回 false = 不归我管（非排版类或参数不可用）。
+  window.__openKbRichFile = function openKbRichFile(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return Promise.resolve(false);
+    if (!_isRichPreview(anchor.path)) return Promise.resolve(false);
+    return Promise.resolve(_openRichForAnchor(anchor)).then((opened) => opened !== false, () => false);
   };
 
   // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：

@@ -64,7 +64,7 @@ Add it with `git commit -s`. By signing off you agree to the terms of the
 
 - Reference the issue your PR addresses, if any.
 - Describe what the change does and why.
-- Ensure all CI checks pass.
+- Ensure required checks pass (email-hygiene gate on `develop`; full CI on `cicd`).
 - A maintainer will review; be patient and responsive to feedback.
 
 ## Branching and Merge Rules
@@ -72,8 +72,8 @@ Add it with `git commit -s`. By signing off you agree to the terms of the
 We use a **three-line branch model**:
 
 - `main` — public release branch. Always releasable and **protected** — no direct pushes, all changes go through pull requests.
-- `develop` — the main development branch. All feature work merges here via pull requests; CI (`verify`) must pass and a reviewer must approve before merge.
-- `cicd` — release packaging branch. Used to build, sign and publish artifacts; merging into it requires a review (plus a manual security scan by the maintainers).
+- `develop` — the main development branch. All feature work merges here via pull requests; **a reviewer approval is required**. The email-hygiene gate (`check-commit-emails`) runs on every PR. The **full CI suite (`verify` on macOS + `verify-windows` on Windows) does not run on `develop`** — it runs on `cicd` (see below).
+- `cicd` — release packaging branch and the **release gate**. Promotion from `develop` into `cicd` runs the full pipeline (macOS `verify`; Windows `verify-windows` — native suite plus the full JS suite split into four shards — and `compliance`); merging into it requires a review. Releases come from the tag-triggered `release.yml`, which only accepts a tag pointing at a `cicd` commit whose **push** run of `CI` and `compliance` is green.
 - Short-lived personal branches: `dev/<your-github-username>` (e.g. `dev/alice`) for day-to-day work; open a pull request against `develop` when ready.
 - `release/vX.Y` branches are cut from `main` at release time for patch-only fixes; they are protected by the same review rules.
 
@@ -82,7 +82,7 @@ We use a **three-line branch model**:
 ### Merge requirements (branch protection)
 
 1. At least **1 approving review** from a designated reviewer (see CODEOWNERS / `@bonc-ai/reviewers`).
-2. All required CI checks pass (`verify`).
+2. Required checks pass: on `develop` that is the email-hygiene gate (`check-commit-emails`); on `cicd` it is the full `verify` + `verify-windows` + `compliance` pipeline.
 3. You cannot approve or merge your own pull request.
 
 ### Commit messages

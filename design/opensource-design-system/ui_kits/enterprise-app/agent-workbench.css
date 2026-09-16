@@ -1,0 +1,25 @@
+/* Page composition only; shared fields, groups and actions retain DS styling. */
+.cs-agent-workbench { min-width: 0; padding-bottom: var(--cs-space-6); }
+.cs-agent-header { display:flex; align-items:center; flex-wrap:wrap; gap:var(--cs-space-3); padding-block:var(--cs-space-4); border-bottom:1px solid var(--cs-border-subtle); }
+.cs-agent-header h1 { font:var(--cs-type-title); margin:0; overflow-wrap:anywhere; }
+.cs-agent-header-actions { display:flex; flex-wrap:wrap; gap:var(--cs-space-2); margin-left:auto; }
+.cs-agent-columns { display:grid; grid-template-columns:minmax(0,1fr); }
+.cs-agent-columns.is-editing { grid-template-columns:minmax(0,1fr) minmax(260px,308px); }
+.cs-agent-body { display:flex; flex-direction:column; gap:var(--cs-space-6); width:100%; max-width:880px; margin-inline:auto; padding:var(--cs-space-6); box-sizing:border-box; font:var(--cs-type-body); overflow-wrap:anywhere; }
+.cs-agent-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--cs-space-4); }
+.cs-agent-muted { color:var(--cs-text-secondary); font:var(--cs-type-ui); line-height:1.75; }
+.cs-agent-intro { margin:0; }
+.cs-agent-list { display:flex; flex-direction:column; gap:var(--cs-space-3); }
+.cs-agent-list-row { display:flex; align-items:center; gap:var(--cs-space-3); }
+.cs-agent-list-row>span,.cs-agent-list-row>div:first-child { flex:1; min-width:0; }
+.cs-agent-workflow h3 { font:var(--cs-type-title); margin:0 0 var(--cs-space-2); }
+.cs-agent-workflow p { margin:0; }
+.cs-agent-workflow section+section { margin-top:var(--cs-space-6); }
+.cs-agent-directory { display:flex; flex-wrap:wrap; align-items:end; gap:var(--cs-space-3); margin-top:var(--cs-space-4); }
+.cs-agent-assistant { border-left:1px solid var(--cs-border-subtle); padding:var(--cs-space-4); display:flex; flex-direction:column; gap:var(--cs-space-4); }
+.cs-agent-assistant h2 { font:var(--cs-type-title); margin:0; }
+.cs-agent-messages { flex:1; min-height:200px; overflow-wrap:anywhere; }
+.cs-agent-messages p { padding:var(--cs-space-3); background:var(--cs-surface-subtle); border-radius:var(--cs-radius-card); font:var(--cs-type-body); }
+.cs-agent-assistant form { display:flex; flex-direction:column; gap:var(--cs-space-3); }
+@media(max-width:1100px) { .cs-agent-columns.is-editing { grid-template-columns:minmax(0,1fr); } .cs-agent-assistant { border-left:0; border-top:1px solid var(--cs-border-subtle); } }
+@media(max-width:680px) { .cs-agent-body { padding:var(--cs-space-4) 0; } .cs-agent-fields { grid-template-columns:minmax(0,1fr); } .cs-agent-header-actions { width:100%; margin:0; } }
