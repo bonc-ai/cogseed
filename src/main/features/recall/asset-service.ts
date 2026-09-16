@@ -42,7 +42,7 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   assetId: string;
   action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked'
     | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
-    | 'version_selected'
+    | 'version_selected' | 'merged_from' | 'merged_into'
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
     | 'recommendation_cleared'
     | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
@@ -184,6 +184,10 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (activeVersion !== undefined && (!/^\d+$/.test(activeVersion) || Number(activeVersion) < 1)) {
     throw new Error('malformed recall ability asset active version');
   }
+  const mergedIntoAssetId = value.mergedIntoAssetId === undefined ? undefined : String(value.mergedIntoAssetId);
+  if (mergedIntoAssetId !== undefined && !safeId(mergedIntoAssetId)) {
+    throw new Error('malformed recall ability asset merge target');
+  }
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
@@ -194,6 +198,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     // user-confirmed.
     lifecycleStatus,
     ...(activeVersion !== undefined ? { activeVersion } : {}),
+    ...(mergedIntoAssetId !== undefined ? { mergedIntoAssetId } : {}),
     sourceCandidateIds,
     appliedReviewDecisionIds,
     appliedValidationIds,
@@ -1018,8 +1023,109 @@ export async function selectAbilityAssetVersion(
   return asset;
 }
 
+/**
+ * 归并两条同义资产为同一版本组（2026-09-16 存量治理）。
+ *
+ * source 的版本快照按时间序并入 target 版本流（续接编号）；source 更新时
+ * target 在用内容切换为 source 在用内容。source 条目归档并记录去向
+ * （mergedIntoAssetId），历史引用不回写——时间线/回执仍指向原条目可读。
+ */
+export async function mergeAbilityAssets(
+  userId: string,
+  sourceAssetId: string,
+  targetAssetId: string,
+  input: AbilityAssetUserActionInput,
+): Promise<RecallAbilityAssetRecord> {
+  const action = requireAssetAction(input);
+  if (sourceAssetId === targetAssetId) throw new Error('cannot merge an ability asset into itself');
+  const source = await readAbilityAsset(userId, sourceAssetId);
+  if (!source) throw new Error('recall ability asset not found');
+  assertNotPurged(source);
+  const target = await readAbilityAsset(userId, targetAssetId);
+  if (!target) throw new Error('recall ability asset not found');
+  assertNotPurged(target);
+  if (source.type !== target.type) throw new Error('ability asset merge requires the same type');
+  const sourceVersions = (await listAbilityAssetVersions(userId, sourceAssetId))
+    .sort((left, right) => String(left.at).localeCompare(String(right.at)));
+  const sourceActive = String(source.activeVersion || source.version || '1');
+  const sourceActiveSnapshot = sourceVersions.find((v) => v.version === sourceActive)?.snapshot;
+  // source 全部版本快照续接进 target 流（重编号，at 保留原时间可考）。
+  let versionCursor = target.version;
+  for (const entry of sourceVersions) {
+    versionCursor = nextVersion(versionCursor);
+    await appendRecallJsonlRecord(userId, 'ability-asset-versions', targetAssetId, {
+      schemaVersion: 1,
+      ownerId: userId,
+      id: `${targetAssetId}-v${versionCursor}`,
+      assetId: targetAssetId,
+      version: versionCursor,
+      at: entry.at,
+      reason: `merged from ${sourceAssetId}`,
+      actor: action.actor,
+      snapshot: entry.snapshot,
+    } as AbilityAssetVersionRecord);
+  }
+  const sourceNewer = String(source.updatedAt || '') > String(target.updatedAt || '');
+  const merged = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', targetAssetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    assertNotPurged(current);
+    if (!sourceNewer) {
+      return { ...current, updatedAt: new Date().toISOString() };
+    }
+    const pick = sourceActiveSnapshot || snapshot(source);
+    return {
+      ...current,
+      title: pick.title,
+      statement: pick.statement,
+      scope: pick.scope,
+      evidenceRefs: [...current.evidenceRefs, ...source.evidenceRefs].slice(0, 200),
+      version: versionCursor,
+      activeVersion: versionCursor,
+      updatedAt: new Date().toISOString(),
+    };
+  }));
+  // source 归档 + 去向 + 双向审计。
+  await updateRecallJsonRecord(userId, 'ability-assets', sourceAssetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    assertNotPurged(current);
+    return { ...current, status: 'archived' as const, mergedIntoAssetId: targetAssetId, updatedAt: new Date().toISOString() };
+  });
+  await appendAudit(userId, targetAssetId, 'merged_from', { note: `${action.reason || 'merge'} (from ${sourceAssetId})`, actor: action.actor });
+  await appendAudit(userId, sourceAssetId, 'merged_into', { note: `${action.reason || 'merge'} (into ${targetAssetId})`, actor: action.actor });
+  return merged;
+}
+
 export async function listAbilityAssetVersions(userId: string, assetId: string): Promise<AbilityAssetVersionRecord[]> {
   return (await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0)).map(asVersion);
+}
+
+/** 版本链 + 按版本的使用效果聚合（2026-09-16 M8）：供版本对比视图——
+ *  「实际采用」（applied）与「被否定」（contradicted）按版本号计数，
+ *  数据来自 usage 回执（外键注入回执，只认有据使用）。 */
+export async function listAbilityAssetVersionsWithUsage(
+  userId: string,
+  assetId: string,
+): Promise<{ versions: AbilityAssetVersionRecord[]; usage: Array<{ version: string; applied: number; contradicted: number; total: number }> }> {
+  const versions = await listAbilityAssetVersions(userId, assetId);
+  const { listAssetUsageReceipts } = await import('./asset-usage-receipt');
+  const counts = new Map<string, { applied: number; contradicted: number; total: number }>();
+  try {
+    for (const receipt of await listAssetUsageReceipts(userId)) {
+      if (String(receipt.assetId || '') !== assetId) continue;
+      const version = String(receipt.assetVersion || '');
+      if (!version) continue;
+      const entry = counts.get(version) || { applied: 0, contradicted: 0, total: 0 };
+      entry.total += 1;
+      if (receipt.status === 'applied') entry.applied += 1;
+      if (receipt.status === 'contradicted') entry.contradicted += 1;
+      counts.set(version, entry);
+    }
+  } catch {
+    // 回执读取失败只丢效果列，不阻断版本链。
+  }
+  return { versions, usage: [...counts.entries()].map(([version, c]) => ({ version, ...c })) };
 }
 
 /** Read the immutable content snapshot of a specific asset version, or null

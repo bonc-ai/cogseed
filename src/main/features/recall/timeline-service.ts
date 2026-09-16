@@ -104,6 +104,8 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
     case 'cross_scope_withdrawn':
     case 'maturity_advanced':
     case 'maturity_corrected':
+    case 'merged_from':
+    case 'merged_into':
       return 'asset_updated';
     default: return undefined;
   }
@@ -111,6 +113,20 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
 
 function pushSorted(items: RecallAssetTimelineItem[], item: RecallAssetTimelineItem): void {
   items.push(item);
+}
+
+/** M10（2026-09-16）：找该投影已完成（succeeded）的迁移证明 id——usage 行
+ *  带上它，评价控件才有入口。同投影多条时取最新完成的。 */
+async function transferProofIdForProjection(userId: string, projectionId: string | undefined): Promise<string | undefined> {
+  if (!projectionId) return undefined;
+  try {
+    const proofs = (await listTransferProofs(userId))
+      .filter((proof: TransferProofRecord) => proof.projectionId === projectionId && proof.completedAt)
+      .sort((left: TransferProofRecord, right: TransferProofRecord) => String(right.completedAt).localeCompare(String(left.completedAt)));
+    return proofs[0]?.id;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function listAbilityAssetTimeline(userId: string, assetId: string): Promise<RecallAssetTimelineItem[]> {
@@ -203,6 +219,9 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     // taskRunId→sessionId 回溯——用户要求老记录也能看出"在哪个对话里被用"。
     const usageConversationId = (await conversationOfProjection(usage.projectionId))
       || episodeConversationByRun.get(String(usage.taskRunId || ''));
+    // M10（2026-09-16 审计收口）：带上该投影已完成的迁移证明 id——评价控件
+    // 的渲染条件依赖它，此前恒缺导致"效果评价 UI 不可达"。
+    const usageProofId = await transferProofIdForProjection(userId, usage.projectionId);
     pushSorted(items, {
       id: usage.id,
       kind: 'usage_recorded',
@@ -216,6 +235,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         version: usage.assetVersion,
         projectionId: usage.projectionId,
         taskRunId: usage.taskRunId,
+        ...(usageProofId ? { transferProofId: usageProofId } : {}),
         ...(usageConversationId ? { conversationId: usageConversationId } : {}),
         // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
         // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查

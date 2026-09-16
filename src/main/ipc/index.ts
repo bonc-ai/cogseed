@@ -2703,9 +2703,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.batchPromoteRecallCandidates(ctx.userId, candidateIds)) };
   },
 
-  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
+  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget, forceCreateSimilar } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    if (forceCreateSimilar !== undefined && typeof forceCreateSimilar !== 'boolean') throw new Error('invalid force-create flag');
     // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
     // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
     // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
@@ -2720,6 +2721,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
+      ...(forceCreateSimilar === true ? { forceCreateSimilar: true } : {}),
       ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
@@ -2783,11 +2785,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 「在用」指针（内容同步、不 bump——与 rollback 的生成新版语义互补）。
   'recall.assets.versions.list': async ({ assetId } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
-    return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId) };
+    return { ok: true, ...(await recallAssets.listAbilityAssetVersionsWithUsage(ctx.userId, assetId)) };
   },
   'recall.assets.versions.select': async ({ assetId, version, note } = {}, ctx) => {
     if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version selection');
     return { ok: true, asset: await recallAssets.selectAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user selected v${version}` }) };
+  },
+
+  // 存量治理（2026-09-16）：同义资产归并为一个版本组（source 版本链并入
+  // target，source 归档并记录去向）。
+  'recall.assets.merge': async ({ sourceAssetId, targetAssetId, note } = {}, ctx) => {
+    if (!safeId(sourceAssetId) || !safeId(targetAssetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset merge');
+    return { ok: true, asset: await recallAssets.mergeAbilityAssets(ctx.userId, sourceAssetId, targetAssetId, { actor: 'user', reason: note ?? 'user merge' }) };
   },
 
   'recall.skills.prepare': async ({ assetId } = {}, ctx) => {

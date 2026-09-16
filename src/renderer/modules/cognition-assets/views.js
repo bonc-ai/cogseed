@@ -140,6 +140,40 @@
   };
 
   const candidatePending = (candidate) => !!(candidate.capabilities && candidate.capabilities.countsAsPending);
+  /** 候选来源徽章（2026-09-16 KSTAR 融合）：三条产出线可辨——任务复盘
+   *  （learningSignal/learningProvenance）、偏好识别（source=preference_scan，
+   *  确定性扫描线）、会话整理（capture 线，无信号）。 */
+  function candidateSourceBadge(candidate) {
+    const signal = candidate.learningSignal;
+    if (signal && String(signal.source || '') === 'preference_scan') {
+      return chip(T('cognition.source_pref_scan', '偏好识别'));
+    }
+    if (signal || candidate.learningProvenance) return chip(T('cognition.source_kstar_review', '任务复盘'));
+    return chip(T('cognition.source_capture', '会话整理'));
+  }
+  /** KSTAR 候选的复盘依据块（2026-09-16）：预期/实际/结果四行——知道"这条
+   *  是从哪次成败学来的"，确认保存才心里有底。 */
+  function reviewSignalBlock(candidate) {
+    const signal = candidate.learningSignal;
+    const provenance = candidate.learningProvenance;
+    if (!signal && !provenance) return '';
+    const outcomeText = {
+      better_than_expected: T('cognition.review_outcome_better', '比预期好'),
+      met_expected: T('cognition.review_outcome_met', '符合预期'),
+      worse_than_expected: T('cognition.review_outcome_worse', '比预期差'),
+      unclear: T('cognition.review_outcome_unclear', '结果不明'),
+    }[String(signal && signal.outcome || '')] || String(signal && signal.outcome || '');
+    const row = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value).slice(0, 200))}</span></div>` : '';
+    return `<div class="ca-sect">
+      <div class="ca-row-title">${esc(T('cognition.review_signal_title', '复盘依据'))}</div>
+      <div class="ca-meta-row">
+        ${row(T('cognition.review_signal_expected', '预期'), signal && signal.expectedResult)}
+        ${row(T('cognition.review_signal_actual', '实际'), signal && signal.actualResult)}
+        ${row(T('cognition.review_signal_outcome', '结果'), outcomeText)}
+        ${row(T('cognition.review_signal_attribution', '归因'), provenance && provenance.attribution)}
+      </div>
+    </div>`;
+  }
   /** 待确认口径（2026-09-16 B1 统一）：需要用户判断且未被"稍后处理"静音。
    *  统计卡与全局 stats 共用这一份（单一事实源），杜绝 7/5/0 三数分叉；
    *  deferred 行仍在列表可见（子安口径：与待确认同形态），只是不占
@@ -358,12 +392,19 @@
     const state = S.assetVersions;
     if (!state || state.assetId !== String(asset.id) || !Array.isArray(state.versions) || state.versions.length < 2) return '';
     const active = String(asset.activeVersion || asset.version || '');
+    const usageByVersion = new Map((state.usage || []).map((u) => [String(u.version), u]));
     const rows = [...state.versions]
       .sort((left, right) => Number(right.version) - Number(left.version))
       .map((v) => {
         const isActive = String(v.version) === active;
         const title = String((v.snapshot && v.snapshot.title) || asset.title || '');
-        const meta = [fmtDate(v.at), String(v.reason || '')].filter(Boolean).join(' · ');
+        const usage = usageByVersion.get(String(v.version));
+        const usageText = usage
+          ? [usage.applied ? T('cognition.asset_usage_applied', '实际采用 {n} 次', { n: String(usage.applied) }) : '',
+            usage.contradicted ? T('cognition.asset_usage_contradicted', '被否定 {n} 次', { n: String(usage.contradicted) }) : '']
+            .filter(Boolean).join(' · ')
+          : '';
+        const meta = [fmtDate(v.at), String(v.reason || ''), usageText].filter(Boolean).join(' · ');
         const side = isActive
           ? chip(T('cognition.asset_version_active', '在用'), 'green')
           : btn(T('cognition.asset_version_select', '选用此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });
@@ -391,12 +432,14 @@
     const scopeText = !scopeRaw
       ? T('cognition.asset_scope_unset', '还没设置')
       : (/全局|画像/.test(scopeRaw) ? T('cognition.asset_scope_all', '所有对话') : scopeRaw);
-    const originText = {
-      user_confirmed: T('cognition.asset_origin_user', '你确认的'),
-      user_confirmed_unverified: T('cognition.asset_origin_user', '你确认的'),
-      automatically_extracted_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
-      system_precipitated_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
-    }[String(asset.lifecycleStatus || '')] || String(asset.lifecycleStatus || '—');
+    const originText = asset.learningProvenance
+      ? T('cognition.asset_origin_kstar', '来自任务复盘')
+      : {
+        user_confirmed: T('cognition.asset_origin_user', '你确认的'),
+        user_confirmed_unverified: T('cognition.asset_origin_user', '你确认的'),
+        automatically_extracted_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
+        system_precipitated_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
+      }[String(asset.lifecycleStatus || '')] || String(asset.lifecycleStatus || '—');
     const moreRow = (label, hint, action) => `
       <div class="ca-more-row">
         <div class="ca-more-copy"><strong>${esc(label)}</strong><span>${esc(hint)}</span></div>
@@ -432,7 +475,28 @@
           ${moreRow(T('cognition.asset_purge', '彻底清除'), T('cognition.asset_purge_hint', '删除全部历史与证据，不可恢复'), 'purge')}
         </div>
       </div>
+      ${assetMergeSection(asset)}
     </div>`;
+  }
+
+  /** 存量治理（2026-09-16）：同义资产归并面板——同类型的其他条目可选为
+   *  归并目标，本条版本链并入它（本条归档、较新内容为在用）。 */
+  function assetMergeSection(asset) {
+    const sameType = S.assets
+      .filter((a) => String(a.id) !== String(asset.id)
+        && a.type === asset.type
+        && !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active')))
+      .slice(0, 8);
+    if (!sameType.length) return '';
+    const rows = sameType.map((other) => `<div class="ca-row is-flat">
+      <div class="ca-row-main"><div class="ca-row-title">${esc(other.title || other.id)}</div><div class="ca-row-meta">v${esc(String(other.activeVersion || other.version || '1'))}</div></div>
+      <div class="ca-row-side">${btn(T('cognition.asset_merge_into', '并入这条'), 'merge-asset', { id: asset.id, data: { target: String(other.id) }, small: true })}</div>
+    </div>`).join('');
+    return `<details class="ca-advanced">
+      <summary>${esc(T('cognition.asset_merge_section', '与另一条合并（同一认知的重复条目）'))}</summary>
+      <p class="ca-note">${esc(T('cognition.asset_merge_hint', '把本条的全部历史版本并入所选条目：较新的内容成为其新版本，本条归档不再单独显示。'))}</p>
+      ${rows}
+    </details>`;
   }
 
   /* ────────────────────────── 视图：我的认知 ────────────────────────── */
@@ -529,7 +593,7 @@
     <div class="ca-card ca-candidate${broken ? ' is-broken' : ''}" data-act="open-candidate" data-id="${esc(candidate.id)}" role="button" tabindex="0">
       <div class="ca-line">
         <div class="ca-row-title">${esc(candidateTitle(candidate))} <span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
-        <div class="ca-right">${(candidate.capabilities && candidate.capabilities.isSnoozed) ? chip(T('cognition.candidate_snoozed', '已稍后处理'), 'amber') : ''}${chip(categoryLabel(candidate.suggestedType), '')} ${broken ? chip(T('cognition.candidate_evidence_weak', '来源已删'), 'amber') : chip(T('cognition.candidate_evidence_ok', '证据充足'), 'green')}</div>
+        <div class="ca-right">${(candidate.capabilities && candidate.capabilities.isSnoozed) ? chip(T('cognition.candidate_snoozed', '已稍后处理'), 'amber') : ''}${chip(categoryLabel(candidate.suggestedType), '')} ${candidateSourceBadge(candidate)} ${broken ? chip(T('cognition.candidate_evidence_weak', '来源已删'), 'amber') : chip(T('cognition.candidate_evidence_ok', '证据充足'), 'green')}</div>
       </div>
       <p class="ca-content-text">${esc(String(candidate.judgment || candidate.value || '').slice(0, 220))}</p>
       ${refsHtml}${warnHtml}
@@ -665,6 +729,7 @@
       </div>`;
     return `
       ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>` : ''}
+      ${reviewSignalBlock(candidate)}
       ${updateDiff}
       ${edit ? `
         ${field(T('cognition.type', '类型'), `<div class="ca-chips">${CATEGORIES.map(([id, key, fb]) => { const on = String(candidate.suggestedType || '') === id; return `<span class="ca-chip ca-chip-opt${on ? ' is-green' : ''}" data-act="cand-type" data-id="${esc(id)}" ${roleBtn(`aria-pressed="${on ? 'true' : 'false'}"`)}>${esc(T(key, fb))}</span>`; }).join('')}</div>`)}

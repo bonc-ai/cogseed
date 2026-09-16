@@ -187,6 +187,9 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
    *  selectAbilityAssetVersion 切换后指向所选历史版本；后续内容更新
    *  bump 时重置为最新版。注入默认取该版本的内容快照。 */
   activeVersion?: string;
+  /** 归并去向（2026-09-16 存量治理）：本条已并入某条目后记录其 id；
+   *  本条随之归档，历史引用不回写。 */
+  mergedIntoAssetId?: string;
   /** 空间归属：资产由某空间的候选确认而来（随 recall 全局存储，不随空间删）。 */
   spaceId?: string;
   /** Provenance for assets learned from conversation sources. */
@@ -271,6 +274,9 @@ export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
   decisionId?: string;
   decisionReason?: string;
   riskAcknowledged?: boolean;
+  /** 版本组防分裂（2026-09-16）：用户在相似资产提示后明确选择"仍保存为新
+   *  条目"时置 true，跳过相似闸门。 */
+  forceCreateSimilar?: boolean;
   /** R-Box causal rule; only activated when explicitly supplied by the user. */
   causalRule?: CausalRule;
   /** Optional explicit personal-template destination selected during review. */
@@ -1672,6 +1678,38 @@ export async function promoteRecallCandidate(
   const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
   const optionSemantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
   const preflight = await readRecallCandidate(userId, candidateId);
+  // 版本组防分裂闸门（2026-09-16）：用户确认 create 候选时若与现有资产语义
+  // 高度相似，先问一句（专用错误码）——前端提示"新条目还是改为更新"，确认
+  // 新条目后带 forceCreateSimilar 重试。带 update 目标/自动线不经过这里；
+  // embedding 不可用（degraded）时放行（不能因查重基础设施缺席卡用户）。
+  if (options.actor === 'user'
+    && !options.forceCreateSimilar
+    && !preflight.targetAssetId
+    && String(preflight.suggestedAction || 'create') === 'create'
+    && preflight.status !== 'confirmed') {
+    const { findSemanticDuplicate } = await import('./similarity');
+    const pools = await loadDedupPools(userId);
+    const outcome = await findSemanticDuplicate(userId, {
+      text: String(preflight.judgment || ''),
+      candidateTexts: [],
+      assetTexts: pools.assetTexts,
+      excludeIds: new Set([preflight.id]),
+    });
+    if (outcome.status === 'match' && outcome.match.kind === 'asset') {
+      // 排除"这条资产本来就是本候选写出的"（handoff 中断后的重试路径）——
+      // 那是同一件事的产物，不是分裂。
+      const matched = await readAbilityAssetSafe(userId, outcome.match.id);
+      const isOwnHandoff = matched
+        && (matched.candidateId === preflight.id
+          || (matched.sourceCandidateIds || []).includes(preflight.id));
+      if (!isOwnHandoff) {
+        throw recallCandidateError(
+          'recall_candidate_similar_asset',
+          `similar asset ${outcome.match.id} "${matched ? String(matched.title || '') : ''}" (score ${outcome.match.score.toFixed(2)})`,
+        );
+      }
+    }
+  }
   let targetSemantics: AbilityAssetSemantics = {};
   if (preflight.targetAssetId && candidateActionNeedsTarget(preflight.suggestedAction)) {
     const target = await readAbilityAsset(userId, preflight.targetAssetId);

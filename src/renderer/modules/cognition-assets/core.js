@@ -246,14 +246,17 @@
     store.assetVersions = { assetId: id, loading: true };
     NS.notify();
     let versions = [];
+    let usage = [];
     try {
       const result = await api.call('recall.assets.versions.list', { assetId: id });
       versions = (result && result.versions) || [];
+      usage = (result && result.usage) || [];
     } catch (error) {
       versions = [];
+      usage = [];
     }
     if (!store.assetVersions || store.assetVersions.assetId !== id) return;
-    store.assetVersions = { assetId: id, versions };
+    store.assetVersions = { assetId: id, versions, usage };
     NS.notify();
   };
 
@@ -319,6 +322,8 @@
       '内容被认知安全闸门拦下，不能沉淀为资产。'],
     recall_candidate_unknown_source: ['cognition.candidate_error_unknown_source',
       '有一条证据引用在来源列表里找不到，不能保存。证据只能从真实来源中选取。'],
+    recall_candidate_similar_asset: ['cognition.candidate_error_similar_asset',
+      '检测到与现有资产高度相似——确认是新条目，还是同一条的修订（改为更新）。'],
     recall_capture_not_review_ready: ['cognition.candidate_error_capture_not_review_ready',
       '它所属的沉淀任务还没到可复核状态，稍后再确认。'],
     recall_capture_writing: ['cognition.candidate_error_capture_writing',
@@ -415,7 +420,21 @@
         await alertUser(T('cognition.candidate_scope_required', '先填写作用范围：没有范围的资产不会被带入任何任务。'));
         return;
       }
-      const result = await api.call('recall.candidates.promote', { candidateId, ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}) });
+      // 版本组防分裂（2026-09-16）：create 候选与现有资产语义高度相似时后端
+      // 拦下并返回专用错误码——问用户"仍存新条目"还是回来改为更新。
+      const promote = (force) => api.call('recall.candidates.promote', { candidateId, forceCreateSimilar: force, ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}) });
+      let result;
+      try {
+        result = await promote(false);
+      } catch (error) {
+        if (error && error.code === 'recall_candidate_similar_asset') {
+          const ok = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。如果它是同一条的修订，建议返回改为"更新"；确认仍要保存为新条目吗？', { info: String(error.message || '').replace(/^similar asset [^ ]+ /, '').replace(/ \(score [\d.]+\)$/, '') }));
+          if (!ok) return;
+          result = await promote(true);
+        } else {
+          throw error;
+        }
+      }
       // 晋升可能改变个人画像投影：异步刷新本体，失败只提醒不阻断（资产已落库）。
       void (async () => {
         if (typeof window.refreshPersonalOntology !== 'function') return;
@@ -484,6 +503,17 @@
       await api.call('recall.assets.versions.select', { assetId, version });
       toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
       store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 同义资产归并（2026-09-16 存量治理）：本条并入目标条目（版本链续接、
+     *  本条归档）。破坏性低但影响面大（两条合一），双重确认。 */
+    async mergeAssets(sourceAssetId, targetAssetId) {
+      const target = (store.assets || []).find((a) => String(a.id) === String(targetAssetId));
+      const ok = await confirmUser(T('cognition.asset_merge_confirm', '将把本条的全部历史版本并入「{title}」，本条归档不再单独显示。确认合并？', { title: (target && target.title) || targetAssetId }), true);
+      if (!ok) return;
+      await api.call('recall.assets.merge', { sourceAssetId, targetAssetId });
+      toast(T('cognition.asset_merge_done', '已合并为同一版本组'));
+      router.go({ name: 'overview', assetId: targetAssetId });
       await NS.reload();
     },
     async sourceAction(kind, sourceId, action) {

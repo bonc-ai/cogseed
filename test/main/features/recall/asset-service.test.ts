@@ -652,6 +652,89 @@ describe('治理动作', () => {
     await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, '1', userAction('x')))
       .rejects.toThrow('ability asset has been purged');
   });
+
+  it('归并两条同义资产为版本组（2026-09-16）：版本链续接、较新内容为在用、来源归档', async () => {
+    const { candidates, assets } = await modules();
+    // 两条"同一认知"的资产：target 旧、source 新（各自有一版历史）。
+    const tCand = await candidates.saveRecallCandidate('user-merge', {
+      judgment: '用户身份：本程序开发人员。', summary: '用户身份A', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-m1' }],
+    });
+    const tAsset = await candidates.promoteRecallCandidate('user-merge', tCand.id, { actor: 'user', forceCreateSimilar: true });
+    await assets.updateAbilityAsset('user-merge', tAsset.asset.id, { statement: '用户身份：本程序开发人员（开发者）。', reason: 'refine', actor: 'user' });
+    const sCand = await candidates.saveRecallCandidate('user-merge', {
+      judgment: '用户身份：CogSeed 开发者，参与认知资产开发。', summary: '用户身份B', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-m2' }],
+    });
+    const sAsset = await candidates.promoteRecallCandidate('user-merge', sCand.id, { actor: 'user', forceCreateSimilar: true });
+
+    const merged = await assets.mergeAbilityAssets('user-merge', sAsset.asset.id, tAsset.asset.id, userAction('merge dup'));
+    // 版本链：target 原 2 版 + source 的 1 版续接 = 3 版；较新（source）内容为在用。
+    const versions = await assets.listAbilityAssetVersions('user-merge', tAsset.asset.id);
+    expect(versions.map((v) => v.version)).toEqual(['1', '2', '3']);
+    expect(merged.version).toBe('3');
+    expect(merged.activeVersion).toBe('3');
+    expect(merged.statement).toContain('CogSeed 开发者');
+    // 来源条目归档 + 记录去向，不再出现在活跃列表。
+    const source = await assets.readAbilityAsset('user-merge', sAsset.asset.id);
+    expect(source.status).toBe('archived');
+    expect((source as { mergedIntoAssetId?: string }).mergedIntoAssetId).toBe(tAsset.asset.id);
+    // 审计双向留痕。
+    const actions = (await assets.listAbilityAssetAudit('user-merge', tAsset.asset.id)).map((r) => r.action);
+    expect(actions).toContain('merged_from');
+  });
+
+  it('版本链带按版本的使用效果聚合（2026-09-16 M8）：applied/contradicted 计数', async () => {
+    const { candidates, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const cCand = await candidates.saveRecallCandidate('user-usage-agg', {
+      judgment: 'Usage aggregation rule.', summary: 'Usage rule', suggestedType: 'rule',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-ua' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-usage-agg', cCand.id, { actor: 'user', forceCreateSimilar: true });
+    const assetId = promoted.asset.id;
+    await assets.updateAbilityAsset('user-usage-agg', assetId, { statement: 'Usage aggregation rule v2.', reason: 'bump', actor: 'user' });
+    // v1 被"实际采用"2 次、被否定 1 次；v2 采用 1 次（外键需要注入回执）。
+    const injection = await import('../../../../src/main/features/recall/injection-receipt');
+    const mk = async (run: string, version: string, status: string) => {
+      const inj = await injection.recordInjectionReceipt('user-usage-agg', {
+        taskRunId: run, projectionId: 'proj-ua', assetId, assetVersion: version, boundary: 'real', status: 'injected', channel: 'projection',
+      } as never);
+      await receipts.recordAssetUsageReceipt('user-usage-agg', {
+        taskRunId: run, projectionId: 'proj-ua', assetId, assetVersion: version,
+        injectionReceiptId: inj.id, status, evidenceRefs: [{ kind: 'conversation', id: 'conv-ua' }], evidenceKind: 'final_output', boundary: 'real',
+      } as never);
+    };
+    await mk('turn-ua-1', '1', 'applied');
+    await mk('turn-ua-2', '1', 'applied');
+    await mk('turn-ua-3', '1', 'contradicted');
+    await mk('turn-ua-4', '2', 'applied');
+
+    const summary = await assets.listAbilityAssetVersionsWithUsage('user-usage-agg', assetId);
+    const byVersion = Object.fromEntries((summary.usage || []).map((u) => [u.version, u]));
+    expect(byVersion['1']).toMatchObject({ applied: 2, contradicted: 1 });
+    expect(byVersion['2']).toMatchObject({ applied: 1 });
+  });
+
+  it('归并的守卫：跨类型/同条目/不存在被拒', async () => {
+    const { candidates, assets } = await modules();
+    const aCand = await candidates.saveRecallCandidate('user-merge-bad', {
+      judgment: 'Rule one for merging.', summary: 'Rule', suggestedType: 'rule',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-mb1' }],
+    });
+    const a = await candidates.promoteRecallCandidate('user-merge-bad', aCand.id, { actor: 'user', forceCreateSimilar: true });
+    const pCand = await candidates.saveRecallCandidate('user-merge-bad', {
+      judgment: 'Personal one for merging.', summary: 'Personal', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-mb2' }],
+    });
+    const p = await candidates.promoteRecallCandidate('user-merge-bad', pCand.id, { actor: 'user', forceCreateSimilar: true });
+    await expect(assets.mergeAbilityAssets('user-merge-bad', p.asset.id, a.asset.id, userAction('x')))
+      .rejects.toThrow('same type');
+    await expect(assets.mergeAbilityAssets('user-merge-bad', a.asset.id, a.asset.id, userAction('x')))
+      .rejects.toThrow('into itself');
+    await expect(assets.mergeAbilityAssets('user-merge-bad', a.asset.id, 'aa-nonexistent', userAction('x')))
+      .rejects.toThrow('not found');
+  });
 });
 
 describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {

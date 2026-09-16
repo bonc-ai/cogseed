@@ -2953,13 +2953,14 @@ export function startHistoricalRecallCapture(
 export async function promoteRecallCaptureCandidate(
   userId: string,
   candidateId: string,
-  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget } = {},
+  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget; forceCreateSimilar?: boolean } = {},
 ): Promise<RecallCaptureCandidatePromotion> {
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+  const similarRetry = options.forceCreateSimilar === true ? { forceCreateSimilar: true } : {};
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
     // 用户确认提升 → actor 必须为 user（promoteRecallCandidate 强制校验；此前漏传导致 IPC 提升一直失败）
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;
   }
@@ -2981,7 +2982,7 @@ export async function promoteRecallCaptureCandidate(
   });
 
   try {
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     await updateCapture(userId, capture.id, (current) => (
       current.status === 'writing' && current.writingCandidateId === candidateId

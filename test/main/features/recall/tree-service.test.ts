@@ -43,7 +43,7 @@ async function seedAsset(
     suggestedScope: 'review',
     sourceRefs: [sourceRef],
   });
-  const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user' });
+  const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user', forceCreateSimilar: true });
   return { candidate, asset };
 }
 
@@ -317,7 +317,7 @@ describe('cognition tree candidate buds', () => {
     const before = await tree.rebuildCognitionTree('u-promote');
     expect(before.nodes.map((node) => node.id)).toEqual([`candidate:${candidate.id}`]);
 
-    const { asset } = await candidates.promoteRecallCandidate('u-promote', candidate.id, { actor: 'user' });
+    const { asset } = await candidates.promoteRecallCandidate('u-promote', candidate.id, { actor: 'user', forceCreateSimilar: true });
     const after = await tree.rebuildCognitionTree('u-promote');
 
     expect(after.nodes.map((node) => node.id)).toEqual([`asset:${asset.id}`]);
@@ -339,7 +339,7 @@ describe('cognition tree candidate buds', () => {
       suggestedType: 'rule',
       sourceRefs: [{ kind: 'conversation', id: 'conv-drift' }],
     });
-    const { asset } = await candidates.promoteRecallCandidate('u-drift', candidate.id, { actor: 'user' });
+    const { asset } = await candidates.promoteRecallCandidate('u-drift', candidate.id, { actor: 'user', forceCreateSimilar: true });
     // 人为把候选状态改回可晋升，模拟"某条晋升路径忘了落状态"。
     const stored = await store.readRecallJsonRecord('u-drift', 'candidates', candidate.id);
     await store.writeRecallJsonRecord('u-drift', 'candidates', candidate.id, {

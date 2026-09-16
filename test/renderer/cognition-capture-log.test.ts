@@ -812,6 +812,43 @@ describe('整理详情页', () => {
     expect(reviewAligned).not.toContain('任务当时使用的是');
   });
 
+  it('来源徽章与复盘信号块（2026-09-16 KSTAR 前端融合）：任务复盘/偏好识别/会话整理', () => {
+    const mk = (over) => ({
+      id: 'rcand-k', status: 'pending_review', suggestedType: 'rule', suggestedScope: 'general',
+      judgment: '性能类提问需用真实日志做分层归因。', summary: '性能归因',
+      capabilities: { canEdit: true, canPromote: true, countsAsPending: true, isSnoozed: false },
+      ...over,
+    });
+    const review = (cands) => renderPage('review', { sources: [conversationSources[0]], candidates: cands });
+    // KSTAR 复盘候选：列表行带「任务复盘」徽章；详情展开复盘信号块。
+    const kstar = mk({ learningSignal: { deltaR: -1, deltaA: 'unknown', outcome: 'worse_than_expected', confidence: 0.95, source: 'review', expectedResult: '给出技术结论', actualResult: '模型调用失败' } });
+    const listHtml = review([kstar]);
+    expect(listHtml).toContain('任务复盘');
+    const detailHtml = renderPage('review', { sources: [conversationSources[0]], candidates: [kstar] }, { candidateId: 'rcand-k' });
+    expect(detailHtml).toContain('复盘依据');
+    expect(detailHtml).toContain('给出技术结论');
+    expect(detailHtml).toContain('模型调用失败');
+    expect(detailHtml).toContain('比预期差');
+    // 偏好扫描候选：徽章「偏好识别」。
+    const pref = mk({ suggestedType: 'personal', learningSignal: { deltaR: 'unknown', deltaA: 'unknown', outcome: 'met_expected', confidence: 0.9, source: 'preference_scan' } });
+    expect(review([pref])).toContain('偏好识别');
+    // capture 候选：徽章「会话整理」。
+    expect(review([mk({})])).toContain('会话整理');
+  });
+
+  it('资产详情溯源行（2026-09-16）：learningProvenance 存在时标来源', () => {
+    const asset = {
+      id: 'aa-src', title: '性能类提问需用真实日志做分层归因', type: 'rule', status: 'active',
+      scope: 'general', version: '1', updatedAt: '2026-09-15T00:00:00.000Z',
+      learningProvenance: { projectionId: 'proj-x', episodeId: 'kse-y', attribution: 'execution_gap' },
+    };
+    const html = renderPage('overview', { assets: [asset], proofs: [], sources: [] }, { assetId: 'aa-src' });
+    expect(html).toContain('来自任务复盘');
+    // 无溯源数据的资产不出该行。
+    const plain = renderPage('overview', { assets: [{ ...asset, id: 'aa-plain', learningProvenance: undefined }], proofs: [], sources: [] }, { assetId: 'aa-plain' });
+    expect(plain).not.toContain('来自任务复盘');
+  });
+
   it('无候选：显示模型给出的理由与筛选原因白话', () => {
     const html = renderPage('organize', {
       captures: [{
@@ -1001,6 +1038,7 @@ describe('资产详情（使用记录并入）', () => {
       sources: [],
       assetVersions: {
         assetId: 'aa-1',
+        usage: [{ version: '1', applied: 3, contradicted: 1, total: 4 }, { version: '2', applied: 1, contradicted: 0, total: 1 }],
         versions: [
           { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', snapshot: { title: '上线前必须确认影响范围', statement: '旧内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '1' } },
           { assetId: 'aa-1', version: '2', at: '2026-09-15T01:00:00.000Z', reason: 'Rename for v2.', snapshot: { title: 'Renamed in v2', statement: '新内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '2' } },
@@ -1015,6 +1053,9 @@ describe('资产详情（使用记录并入）', () => {
     expect(html).toContain('data-act="select-asset-version" data-id="aa-1" data-version="1"');
     expect(html).not.toContain('data-version="2"');
     expect(html).toContain('在用');
+    // 按版本的使用效果列（M8）：v1 采用 3 次·被否定 1 次。
+    expect(html).toContain('实际采用 3 次');
+    expect(html).toContain('被否定 1 次');
   });
 
   it('单版本资产不出版本链区（没有"链"可言）；在用版非最新时头部提示', () => {

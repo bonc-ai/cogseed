@@ -162,7 +162,9 @@ export interface KstarLearningSignal {
   deltaA: number | 'unknown';
   outcome: KstarOutcome;
   confidence: number;
-  source: 'review';
+  /** 'review'=任务复盘线；'preference_scan'=偏好确定性扫描线（2026-09-16
+   *  来源徽章区分用）。存量数据均为 'review'。 */
+  source: 'review' | 'preference_scan';
 }
 
 export interface KstarLearningProvenance {
