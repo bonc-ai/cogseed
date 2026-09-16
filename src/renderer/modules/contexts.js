@@ -1353,7 +1353,36 @@ function _ctxLibraryDirectoryLabel(existingDir) {
 async function _ctxAlertDuplicateUploads(rows) {
   if (!rows.length) return;
   const dirs = Array.from(new Set(rows.map((row) => _ctxLibraryDirectoryLabel(row.existingDir))));
-  await uiAlert(t('contexts.upload_duplicate', { dirs: dirs.join('\n') }));
+  const message = t('contexts.upload_duplicate', { dirs: dirs.join('\n') });
+  // 同一份内容已经在别的库：默认不重复导入（说清"在哪一份"），但给一次显式覆盖
+  // ——「仍要导入一份」把刚才被拦下的文件复制成本库里的新名字。
+  const overridable = rows.filter((row) => row && typeof row.duplicateToken === 'string' && row.duplicateToken);
+  if (!overridable.length) {
+    await uiAlert(message);
+    return;
+  }
+  const confirmed = typeof uiConfirm === 'function'
+    ? await uiConfirm({
+        message,
+        okLabel: t('contexts.upload_duplicate_override'),
+        cancelLabel: t('contexts.upload_duplicate_keep'),
+      })
+    : false;
+  if (!confirmed) return;
+  let imported = 0;
+  const failed = [];
+  for (const row of overridable) {
+    try {
+      const res = await window.cogseed.invoke('contexts.importDuplicateAnyway', { token: row.duplicateToken });
+      if (res && res.ok) imported += 1;
+      else failed.push(row.name || '');
+    } catch (err) {
+      failed.push(row.name || '');
+    }
+  }
+  await loadContexts();
+  if (imported) uiToast(t('contexts.upload_duplicate_done', { count: imported }), { variant: 'success' });
+  if (failed.length) uiToast(t('contexts.upload_duplicate_failed', { list: failed.join('、') }), { variant: 'warning' });
 }
 
 async function _ctxAlertUploadFailures(rows) {
@@ -1431,6 +1460,8 @@ async function handleCtxUpload(fileList, targetDir = '') {
           reason: data.error || 'unknown',
           code: data.code || '',
           existingDir: typeof data.existingDir === 'string' ? data.existingDir : '',
+          existingPath: typeof data.existingPath === 'string' ? data.existingPath : '',
+          duplicateToken: typeof data.duplicateToken === 'string' ? data.duplicateToken : '',
         };
       }
       return { ok: true, name: file.name };

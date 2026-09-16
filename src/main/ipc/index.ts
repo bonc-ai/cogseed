@@ -4117,6 +4117,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return contexts.uploadContextFile(target, buf);
   },
 
+  // 「文件已存在」弹窗上的「仍要导入一份」：凭被去重拦下时发的 token，把那份本地
+  // 文件再复制成本库里的一个新名字（显式覆盖，见 contexts.importContextFileAsDuplicate）。
+  'contexts.importDuplicateAnyway': async ({ token } = {}) => {
+    return contexts.importContextFileAsDuplicate(String(token || ''));
+  },
+
   // KB 问答附件选择：返回本地文件路径元数据（挂载卡片 + askStream 读内容）。
   'kbqa.attachPick': async ({ extensions } = {}) => {
     const rawExts = Array.isArray(extensions) ? extensions : CHAT_PICK_EXTENSIONS;
