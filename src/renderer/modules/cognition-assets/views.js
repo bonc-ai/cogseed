@@ -409,7 +409,11 @@
             usage.contradicted ? T('cognition.asset_usage_contradicted', '被否定 {n} 次', { n: String(usage.contradicted) }) : '']
             .filter(Boolean).join(' · ')
           : '';
-        const meta = [fmtDate(v.at), String(v.reason || ''), unchangedAfter.has(String(v.version)) ? T('cognition.asset_version_unchanged', '内容未变（系统迁移/搬运）') : '', usageText].filter(Boolean).join(' · ');
+        // 内容摘要（2026-09-16 用户反馈：两版只显示标题看不出差异，也看不到
+        // 具体内容）——正文截 80 字进 meta，标题相同的内容差异由此可辨。
+        const statement = String((v.snapshot && v.snapshot.statement) || '').replace(/\s+/g, ' ').trim();
+        const statementPreview = statement.length > 80 ? `${statement.slice(0, 80)}…` : statement;
+        const meta = [statementPreview, fmtDate(v.at), String(v.reason || ''), unchangedAfter.has(String(v.version)) ? T('cognition.asset_version_unchanged', '内容未变（系统迁移/搬运）') : '', usageText].filter(Boolean).join(' · ');
         const side = isActive
           ? chip(T('cognition.asset_version_active', '在用'), 'green')
           : btn(T('cognition.asset_version_select', '选用此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });
