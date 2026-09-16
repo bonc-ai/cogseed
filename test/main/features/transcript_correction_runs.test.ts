@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import {
   annotateRun,
   buildReport,
@@ -70,7 +71,7 @@ describe('创建产物', () => {
   });
 
   it('sourcePath 只是记录，不会被写入（原文不变）', () => {
-    const docPath = path.join('/tmp', `transcript-${Date.now()}.txt`);
+    const docPath = path.join(os.tmpdir(), `transcript-${Date.now()}.txt`);
     fs.writeFileSync(docPath, '用 coxy 上课', 'utf8');
     const before = fs.readFileSync(docPath, 'utf8');
     const run = createRun(uid, { docId: 'doc-x', sourcePath: docPath, sourceText: before, result: pipeline(before) });

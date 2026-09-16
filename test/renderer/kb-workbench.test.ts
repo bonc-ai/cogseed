@@ -718,15 +718,15 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _selectQaModel('),
     );
 
-    expect(answerActions).toContain("_uiButton({\n      label: `资料来源 · ${n}`");
-    expect(answerActions).toContain("_uiButton({\n        label: `${r.path}#chunk ${r.chunkIdx}`");
-    expect(answerActions).toContain("_uiIconButton({\n        label: '复制引用路径',\n        icon: 'copy'");
-    expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
+    expect(answerActions).toMatch(/_uiButton\(\{\r?\n      label: `资料来源 · \$\{n\}`/);
+    expect(answerActions).toMatch(/_uiButton\(\{\r?\n        label: `\$\{r\.path\}#chunk \$\{r\.chunkIdx\}`/);
+    expect(answerActions).toMatch(/_uiIconButton\(\{\r?\n        label: '复制引用路径',\r?\n        icon: 'copy'/);
+    expect(answerActions).toMatch(/icon: 'brain-circuit',\r?\n      className: 'kb-qa-mm-btn'/);
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
 
-    expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
-    expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
+    expect(modelPicker).toMatch(/_uiIconButton\(\{\r?\n      label: '关闭模型选择弹窗',\r?\n      icon: 'x'/);
+    expect(modelPicker).toMatch(/_uiButton\(\{\r?\n      label: '去设置管理模型',\r?\n      role: 'secondary'/);
     expect(modelPicker).toContain("_mountKbDialog({");
     expect(modelPicker).toContain("initialFocus: '[aria-pressed=\"true\"]'");
     expect(modelPicker).toContain("fallbackFocus: '#kb-qa-tools'");
@@ -933,12 +933,12 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
   });
 
   it('恢复上次窗口位置时按已算好的宽高夹取（量 offset 在 display:none 下全是 0）', () => {
-    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\n {2}\}/);
+    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\r?\n {2}\}/);
     expect(fn).toBeTruthy();
     expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
     expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
     // 先显示再恢复：overlay 关着时量不到真实尺寸
-    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+    expect(src).toMatch(/overlay\.hidden = false;\r?\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
   });
 });
 
@@ -997,7 +997,7 @@ describe('文件查看：按类型分派（#214 回归防护）', () => {
 
   it('HTML 用渲染 iframe（sandbox 只给 allow-scripts，与 chat-file-viewer 一致）', () => {
     // 跨 origin 才能挡住父页访问；脚本保留是为了交互型 HTML 能跑
-    expect(src).toMatch(/kb-fv-frame--html';\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+    expect(src).toMatch(/kb-fv-frame--html';\r?\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
   });
 
   it('查看源码走主进程 kb.openFile(asText)，不依赖 fetch(kb-file://)', () => {
@@ -1010,7 +1010,7 @@ describe('文件查看：按类型分派（#214 回归防护）', () => {
     expect(src).toContain('kb-fv-external');
     expect(src).toContain("invoke('kb.openExternal'");
     // 参数由纯函数给（载荷可测），无当前文件时按钮隐藏、点了也不发请求
-    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\n\s*const payload = _fvExternalTarget\(\);/);
+    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\r?\n\s*const payload = _fvExternalTarget\(\);/);
     expect(src).toContain('externalTarget: _fvExternalTarget');
     // 无当前文件上下文时必须隐藏，避免点了没反应
     expect(src).toMatch(/_fvCtx[\s\S]{0,400}?extBtn\.hidden/);
@@ -1207,7 +1207,7 @@ describe('KB mindmap centering', () => {
   it('更多菜单提供「窗口居中」，一键把窗口拉回正中', () => {
     const src = source();
     expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
-    expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
+    expect(src).toMatch(/function _mmCenterWindow\(\) \{\r?\n\s*_mmSetWindowOffset\(0, 0\);/);
   });
 });
 

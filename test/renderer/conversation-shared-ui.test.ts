@@ -16,7 +16,7 @@ describe('conversation shared UI integration', () => {
     const draft = functionSource('_renderSpaceDraftButtonHtml', '_parseWelcomeCarry');
     const carry = functionSource('_renderWelcomeCarryHtml', '_renderWelcomePendingHtml');
 
-    expect(draft).toContain("uiButton({\n      label: t('new_chat.space_draft_create'");
+    expect(draft).toMatch(/uiButton\(\{\r?\n      label: t\('new_chat\.space_draft_create'/);
     expect(carry).toContain("role: 'ghost'");
     expect(carry).toContain("className: 'welcome-carry-continue'");
     expect(`${draft}${carry}`).not.toMatch(/<button\b/);
@@ -27,7 +27,7 @@ describe('conversation shared UI integration', () => {
     const mergePicker = functionSource('_openConversationMergePicker', '_mergeSelectedConversationsWithConfirm');
     const spacePicker = functionSource('_openConversationSpacePicker', '_openConversationActionMenu');
 
-    expect(operation).toContain("uiInput({\n            id: 'conversation-operation-title-input'");
+    expect(operation).toMatch(/uiInput\(\{\r?\n            id: 'conversation-operation-title-input'/);
     expect(operation).toContain("uiButton({ label: confirmLabel, role: 'primary'");
     expect(mergePicker).toContain("uiIconButton({ label: t('common.close'), icon: 'x'");
     expect(mergePicker).toContain("id: 'conversation-merge-picker-search'");
