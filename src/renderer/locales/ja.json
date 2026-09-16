@@ -3828,6 +3828,7 @@
   "cognition.proof_sentence_version": "{when}、新しいバージョンが保存されました{version}",
   "cognition.proof_sentence_version_selected": "{when}、v{n} を使用中の版に切り替え",
   "cognition.asset_versions_section": "バージョン履歴",
+  "cognition.asset_version_unchanged": "内容変更なし（システム移行・搬送）",
   "cognition.asset_usage_applied": "実際に適用 {n} 回",
   "cognition.asset_usage_contradicted": "否定された {n} 回",
   "cognition.asset_version_active": "使用中",

@@ -1060,8 +1060,16 @@ export async function mergeAbilityAssets(
   const sourceActiveVersion = String(source.activeVersion || source.version || '1');
   const sourceActiveIndex = sourceVersions.findIndex((v) => v.version === sourceActiveVersion);
   // source 全部版本快照续接进 target 流（重编号，at 保留原时间可考）。
+  // 空版本去重（2026-09-16 修）：系统迁移会 bump 版本号但内容一字不变
+  //（scope 枚举化等格式迁移）——与前一版 statement+title 相同的快照不占新号，
+  // 否则归并后会出现成对的"一模一样"版本（用户实测抓出）。
+  const snapshotContentKey = (snap: AbilityAssetVersionRecord['snapshot']): string => `${snap.title}\n${snap.statement}`;
+  let lastAppendedKey: string | null = null;
   let versionCursor = target.version;
   for (const entry of sourceVersions) {
+    const key = snapshotContentKey(entry.snapshot);
+    if (lastAppendedKey !== null && key === lastAppendedKey) continue;
+    lastAppendedKey = key;
     versionCursor = nextVersion(versionCursor);
     await appendRecallJsonlRecord(userId, 'ability-asset-versions', targetAssetId, {
       schemaVersion: 1,

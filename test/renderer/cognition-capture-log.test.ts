@@ -1027,7 +1027,7 @@ describe('资产详情（使用记录并入）', () => {
   it('版本链（2026-09-16 版本组）：V1 归入同条目可展开，非在用版可「选用此版」', () => {
     const multi = {
       ...asset,
-      version: '2',
+      version: '3',
       activeVersion: '2',
       title: 'Renamed in v2',
       statement: '新内容',
@@ -1042,6 +1042,7 @@ describe('资产详情（使用记录并入）', () => {
         versions: [
           { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', snapshot: { title: '上线前必须确认影响范围', statement: '旧内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '1' } },
           { assetId: 'aa-1', version: '2', at: '2026-09-15T01:00:00.000Z', reason: 'Rename for v2.', snapshot: { title: 'Renamed in v2', statement: '新内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '2' } },
+          { assetId: 'aa-1', version: '3', at: '2026-09-16T01:00:00.000Z', reason: 'merged from aa-x', snapshot: { title: 'Renamed in v2', statement: '新内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '3' } },
         ],
       },
     }, { assetId: 'aa-1' });
@@ -1056,6 +1057,8 @@ describe('资产详情（使用记录并入）', () => {
     // 按版本的使用效果列（M8）：v1 采用 3 次·被否定 1 次。
     expect(html).toContain('实际采用 3 次');
     expect(html).toContain('被否定 1 次');
+    // 空版本标记（2026-09-16）：v3 与 v2 一字不差 → 标"内容未变"。
+    expect(html).toContain('内容未变（系统迁移/搬运）');
   });
 
   it('单版本资产不出版本链区（没有"链"可言）；在用版非最新时头部提示', () => {

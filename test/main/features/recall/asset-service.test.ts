@@ -780,6 +780,35 @@ describe('治理动作', () => {
       .rejects.toThrow('revoked ability asset cannot be changed');
   });
 
+  it('归并去重空版本（2026-09-16 修）：源资产的迁移垫版不占新号', async () => {
+    const { assets } = await modules();
+    const U = 'user-mrg-dedup';
+    const now = new Date().toISOString();
+    const mk = async (seq: number, statement: string) => assets.createAbilityAsset(U, {
+      schemaVersion: 2, ownerId: U, id: `aa-dedup-${String(seq).padStart(2, '0')}xxxxxxxxxxxxxxxx`,
+      candidateId: `cand-dedup-${seq}`, sourceCandidateIds: [`cand-dedup-${seq}`],
+      reviewDecisionId: `rd_dedup_${String(seq).padStart(4, '0')}`,
+      type: 'rule', title: `dedup-${seq}`, statement,
+      evidenceRefs: [{ kind: 'conversation', id: `conv-dedup-${seq}` }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'dedup seed' });
+    const src = await mk(1, '第一段真实内容。');
+    // 模拟迁移垫版：内容一字不变，scope 迁移 bump（真实数据 09-13 的形态）。
+    await assets.updateAbilityAsset(U, src.id, { scope: 'general', reason: 'legacy free-text scope migration', actor: 'user' });
+    const srcStmts = (await assets.listAbilityAssetVersions(U, src.id)).map((v) => v.snapshot.statement);
+    expect(new Set(srcStmts).size).toBe(1);
+    const tgt = await mk(2, '另一段内容。');
+    await assets.updateAbilityAsset(U, src.id, { statement: '第一段真实内容。（更新让它较新）', reason: 'newer', actor: 'user' });
+    const merged = await assets.mergeAbilityAssets(U, src.id, tgt.id, userAction('dedup merge'));
+    // 源的 v1/v2 同内容 → 只并入一版；随后在用内容（v3=更新版）只占一号。
+    const versions = await assets.listAbilityAssetVersions(U, tgt.id);
+    const stmts = versions.map((v) => v.snapshot.statement);
+    expect(new Set(stmts).size).toBe(stmts.length);
+    expect(merged.version).toBe('3');
+    expect(merged.activeVersion).toBe('3');
+  });
+
   it('归并的守卫：跨类型/同条目/不存在被拒', async () => {
     const { candidates, assets } = await modules();
     const aCand = await candidates.saveRecallCandidate('user-merge-bad', {

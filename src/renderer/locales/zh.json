@@ -4107,6 +4107,7 @@
   "cognition.proof_sentence_version": "{when}，保存了新版本{version}",
   "cognition.proof_sentence_version_selected": "{when}，选用 v{n} 为在用版本",
   "cognition.asset_versions_section": "版本记录",
+  "cognition.asset_version_unchanged": "内容未变（系统迁移/搬运）",
   "cognition.asset_usage_applied": "实际采用 {n} 次",
   "cognition.asset_usage_contradicted": "被否定 {n} 次",
   "cognition.asset_version_active": "在用",

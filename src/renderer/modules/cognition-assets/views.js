@@ -393,8 +393,13 @@
     if (!state || state.assetId !== String(asset.id) || !Array.isArray(state.versions) || state.versions.length < 2) return '';
     const active = String(asset.activeVersion || asset.version || '');
     const usageByVersion = new Map((state.usage || []).map((u) => [String(u.version), u]));
+    // 空版本标记（2026-09-16）：与相邻版内容一字不差的版本（系统迁移垫高/
+    // 旧版归并搬运）显示"内容未变"，避免"两版一模一样"被误读为出错。
+    const contentKey = (snap) => `${snap.title || ''}\n${snap.statement || ''}`;
+    const sortedAsc = [...state.versions].sort((left, right) => Number(left.version) - Number(right.version));
+    const unchangedAfter = new Set(sortedAsc.filter((v, i) => i > 0 && contentKey(v.snapshot || {}) === contentKey(sortedAsc[i - 1].snapshot || {})).map((v) => String(v.version)));
     const rows = [...state.versions]
-      .sort((left, right) => Number(right.version) - Number(left.version))
+      .sort((left, right) => Number(right.version) - Number(right.version))
       .map((v) => {
         const isActive = String(v.version) === active;
         const title = String((v.snapshot && v.snapshot.title) || asset.title || '');
@@ -404,7 +409,7 @@
             usage.contradicted ? T('cognition.asset_usage_contradicted', '被否定 {n} 次', { n: String(usage.contradicted) }) : '']
             .filter(Boolean).join(' · ')
           : '';
-        const meta = [fmtDate(v.at), String(v.reason || ''), usageText].filter(Boolean).join(' · ');
+        const meta = [fmtDate(v.at), String(v.reason || ''), unchangedAfter.has(String(v.version)) ? T('cognition.asset_version_unchanged', '内容未变（系统迁移/搬运）') : '', usageText].filter(Boolean).join(' · ');
         const side = isActive
           ? chip(T('cognition.asset_version_active', '在用'), 'green')
           : btn(T('cognition.asset_version_select', '选用此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });

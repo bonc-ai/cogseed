@@ -4104,6 +4104,7 @@
   "cognition.proof_sentence_version": "{when}, a new version was saved{version}",
   "cognition.proof_sentence_version_selected": "{when}, switched to v{n} as the active version",
   "cognition.asset_versions_section": "Version history",
+  "cognition.asset_version_unchanged": "Content unchanged (system migration/transfer)",
   "cognition.asset_usage_applied": "Actually applied {n}×",
   "cognition.asset_usage_contradicted": "Contradicted {n}×",
   "cognition.asset_version_active": "In use",
