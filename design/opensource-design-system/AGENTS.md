@@ -6,7 +6,7 @@
 
 当前处于开源设计系统适配与确认阶段。先读 [设计适配 Handoff](HANDOFF.md)，本次只修改本包的规范、tokens、共享组件和页面样例。正式客户端代码实施需要用户另行明确要求，不能从设计确认任务推断。
 
-企业来源的历史记录保留，但 Raymond 字标、金融版用语和蓝色品牌不作为本包要求。开源适配结果与待确认项维护在 verification.md。
+企业来源的历史记录保留，但专属字标、业务版用语和蓝色品牌不作为本包要求。开源适配结果与待确认项维护在 verification.md。
 
 - 这里是独立设计系统与交互样例。React/JSX 预览不是正式 Renderer 实现；接入客户端仍须遵循仓库的共享组件、Renderer 与 IPC 约束。
 - 知识库模块和运行中心模块不纳入本设计系统的页面样例范围，不补建对应页面，也不将其列为待补缺口。能力管理中已有的「资料库」维持原有范围。除非用户明确调整范围，不扩展这两个模块。
@@ -26,7 +26,7 @@
 
 - `components/registry.json` 是公开组件与辅助导出的注册来源。增删或重命名导出时更新注册表；[组件清单](components.md)、bundle 元数据和 manifest 的组件列表由构建同步，不分别手改。
 - JSX、tokens、注册表或卡片元数据变化后，在本目录运行 `node tools/build.cjs`。同步生成 JS、bundle、清单与派生页面入口；不得只修改生成文件。
-- 使用已有 esbuild 环境，必要时通过 `RAYMOND_ESBUILD_PATH` 指定；新依赖仍遵循仓库的事先讨论要求。
+- 使用已有 esbuild 环境，必要时通过 `COGSEED_ESBUILD_PATH` 指定；新依赖仍遵循仓库的事先讨论要求。
 - 页面目录入口维护在 `catalog.js`；详细文件映射见 [UI Kit 说明](ui_kits/enterprise-app/README.md)。
 
 ## 交互与视觉底线

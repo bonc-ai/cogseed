@@ -21,7 +21,7 @@ beforeEach(() => {
 describe('附 A 种子清单', () => {
   it('包含方案点名的关键行（含此前漏掉的 personalontology）', () => {
     const wrongs = INITIAL_GLOSSARY_SEED.map((row) => row.wrong);
-    for (const expected of ['coxy', 'K 星', '雷蒙德', 'IDC', '多 vbl', 'personalontology', 'personaltology']) {
+    for (const expected of ['coxy', 'K 星', '示例人物', 'IDC', '多 vbl', 'personalontology', 'personaltology']) {
       expect(wrongs).toContain(expected);
     }
   });
@@ -32,7 +32,7 @@ describe('附 A 种子清单', () => {
     }
   });
 
-  it('`for → Forge` 只在"刻意排除"清单里，不在种子里', () => {
+  it('`for → Foo` 只在"刻意排除"清单里，不在种子里', () => {
     expect(SEED_EXCLUDED.map((row) => row.wrong)).toContain('for');
     expect(INITIAL_GLOSSARY_SEED.map((row) => row.wrong)).not.toContain('for');
   });

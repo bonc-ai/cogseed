@@ -83,7 +83,7 @@ check('settings and workspace confirmations share the same action surface',()=>{
 check('space detail restores asset tab and keeps new task in its space',()=>{
   context.location={search:'?page=space&space=space-0&view=assets',href:'https://preview.invalid/?page=space&space=space-0&view=assets'};
   context.URL=URL;context.history={pushState:(_,__,url)=>{context.location.search=url.search;}};
-  let spaces=[{id:'space-0',name:'对公信贷',tasks:[['idle','核验材料']],count:1}],opened;
+  let spaces=[{id:'space-0',name:'项目空间',tasks:[['idle','核验材料']],count:1}],opened;
   const m=mount(context.SpaceDetailScreen,{space:spaces[0],setSpaces:fn=>spaces=fn(spaces),onOpenTask:t=>opened=t});
   let t=m.render();assert.equal(nodes(t,n=>n.type===context.PageTabs)[0].props.value,2);
   nodes(t,n=>n.type===context.PageTabs)[0].props.onChange(0);t=m.render();
@@ -121,7 +121,7 @@ check('new workspace starts without fabricated artifacts or assets',()=>{
 
 check('dynamic unknown icons warn only in explicit preview debug mode',()=>{
  const previous=context.console;let warnings=0;context.console={...previous,warn:()=>warnings++};
- try{context.RAYMOND_DESIGN_DEBUG=true;assert.equal(mount(ds.Icon,{name:'toString'}).render(),null);assert.equal(warnings,1);context.RAYMOND_DESIGN_DEBUG=false;assert.equal(mount(ds.Icon,{name:'not-an-icon'}).render(),null);assert.equal(warnings,1);assert.equal(mount(ds.Icon,{name:'check'}).render().type,'svg');}finally{context.console=previous;context.RAYMOND_DESIGN_DEBUG=false;}
+ try{context.COGSEED_DESIGN_DEBUG=true;assert.equal(mount(ds.Icon,{name:'toString'}).render(),null);assert.equal(warnings,1);context.COGSEED_DESIGN_DEBUG=false;assert.equal(mount(ds.Icon,{name:'not-an-icon'}).render(),null);assert.equal(warnings,1);assert.equal(mount(ds.Icon,{name:'check'}).render().type,'svg');}finally{context.console=previous;context.COGSEED_DESIGN_DEBUG=false;}
 });
 check('table preserves headers, sort direction and explicit row selection',()=>{
  let sorted,selected;const t=mount(ds.DataTable,{columns:[{key:'name',label:'名称',sortable:true}],rows:[{name:'材料'}],sortKey:'name',sortDir:-1,onSort:v=>sorted=v,onSelect:v=>selected=v}).render();
