@@ -1,0 +1,91 @@
+name: Develop Nightly
+
+# L2 夜间全量 —— develop 每天凌晨跑一次完整套件，兜住 L1 的漏网。
+#
+# 为什么必须有这一层：
+#   L1（develop-gate.yml）只跑「受影响的测试」，靠模块图传播筛选。
+#   这个筛选必然有漏网可能，所以全量必须有地方跑。
+#   1.1.2 实测：macOS 全量套件约 7.2 分钟，整个 job 约 9 分钟。
+#
+# 为什么放在夜里而不是 PR 上：
+#   全量套件是唯一的成本中心（PR 上跑会让每个 PR 多等 7 分钟）。
+#   放在夜里，红了第二天早上修 —— 比攒两周后在同步时集体爆雷便宜一个数量级。
+#
+# 【红了怎么办】
+#   这一层不阻塞任何合并（schedule 本来就不参与分支保护）。
+#   但它红了必须当天修，否则又变成 1.1.2 那种「攒着没人管」。
+#   建议：SM 每天早会固定过一眼本 workflow 的结果。
+
+on:
+  schedule:
+    # 北京时间 02:00（UTC 18:00）
+    - cron: '0 18 * * *'
+  # 支持手动触发，方便修完立刻验证
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-suite:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      - run: npm run typecheck
+      - run: npm run lint
+      # 与 ci.yml 的 verify 保持一致：全量套件限 2 个 worker。
+      # macos-latest 是 3 vCPU，默认 4 worker 会过度抢占，导致负载型时序用例
+      # （CLI 版本探测、boot 恢复投影等）偶发超时红单。
+      - name: Full JS suite
+        run: node scripts/run-tests.mjs run --maxWorkers=2
+      - run: npm run test:resources
+      - run: npm run readme:check
+      - run: npm run tokens:check
+      - run: npm run builtin:manifest:check
+
+      - name: Skip 残留检查（防 it.skip 静音）
+        run: |
+          set -euo pipefail
+          # ci.yml 只在 cicd 上跑，所以 develop 侧必须自己盯这一条。
+          # 1.1.2 的同步分支 2bc6bb9c 曾一次静音 231 个失败。
+          n=$(git grep -nE '\b(it|test|describe)\.skip\s*\(' -- test/ | wc -l | tr -d ' ')
+          echo "develop 上 it.skip / describe.skip 命中数：$n"
+          if [ "$n" -gt 0 ]; then
+            echo "::warning::develop 上存在 $n 处 skip。请确认每一处都有正当理由并在 PR 里留痕。"
+            git grep -nE '\b(it|test|describe)\.skip\s*\(' -- test/
+          fi
+
+      - name: 测试用例数快照（覆盖度趋势）
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "=== 14 个曾出问题文件的用例数（用于对比覆盖度是否又掉了）==="
+          for f in \
+            test/renderer/recall-cognition-flow.test.ts \
+            test/renderer/cognition-chain-view.test.ts \
+            test/renderer/skills-cognition-layout.test.ts \
+            test/renderer/skills-frontmatter.test.ts \
+            test/renderer/recall-source-display.test.ts \
+            test/renderer/recall-candidate-capability-ui.test.ts \
+            test/renderer/recall-candidate-decision-flow.test.ts \
+            test/renderer/ui-components.test.ts \
+            test/renderer/shared-ui-adoption-guard.test.ts ; do
+            if git cat-file -e "HEAD:$f" 2>/dev/null; then
+              printf '%-58s %s\n' "$f" "$(git show HEAD:$f | grep -cE '\b(it|test)\s*\(' || echo 0)"
+            fi
+          done
+          echo ""
+          echo "对照基线（1.1.2 修复前 f79719c7）："
+          echo "  recall-cognition-flow 115 / cognition-chain-view 21 / skills-cognition-layout 27"
+          echo "  skills-frontmatter 17 / recall-source-display 8 / recall-candidate-capability-ui 23"
+          echo "  recall-candidate-decision-flow 11 / ui-components ? / shared-ui-adoption-guard 1"
