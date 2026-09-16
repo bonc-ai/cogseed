@@ -5,7 +5,7 @@ import * as path from 'node:path';
 const root = path.resolve(__dirname, '../..');
 
 function read(relativePath: string) {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 describe('skill card shared UI adoption', () => {
@@ -36,9 +36,9 @@ describe('skill card shared UI adoption', () => {
   it('routes standard card actions through shared buttons and icons', () => {
     const source = read('src/renderer/modules/skills.js');
 
-    expect(source).toMatch(/icon: 'more-horizontal',\r?\n      className: 'skill-card-more'/);
-    expect(source).toMatch(/role: 'primary',\r?\n      size: 'sm',\r?\n      className: 'skill-card-use'/);
-    expect(source).toMatch(/role: 'secondary',\r?\n      size: 'sm',\r?\n      icon: expanded \? 'chevron-down' : 'chevron-right'/);
+    expect(source).toContain("icon: 'more-horizontal',\n      className: 'skill-card-more'");
+    expect(source).toContain("role: 'primary',\n      size: 'sm',\n      className: 'skill-card-use'");
+    expect(source).toContain("role: 'secondary',\n      size: 'sm',\n      icon: expanded ? 'chevron-down' : 'chevron-right'");
     expect(source).toContain("className: 'skills-security-recheck'");
     expect(source).not.toContain('>⋯</button>');
     expect(source).not.toContain('class="skills-security-recheck" data-skills-recheck');
