@@ -1,0 +1,169 @@
+/* Shared window chrome: native traffic lights on the left, shell navigation
+ * tools on the right, and one recoverable expand entry after collapse. */
+.app-container {
+  --shell-tools-reserved-width: calc(
+    var(--space-3)
+    + var(--control-height-sm)
+    + var(--control-height-sm)
+    + var(--control-height-sm)
+    + var(--space-1)
+    + var(--space-1)
+  );
+}
+
+.sidebar-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sidebar-tools > .ui-icon-button {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+}
+
+.app-shell-tools {
+  position: fixed;
+  top: 0;
+  left: calc(clamp(180px, var(--sidebar-width, var(--layout-sidebar-width)), 480px) - var(--shell-tools-reserved-width));
+  width: max-content;
+  height: var(--layout-titlebar-height);
+  justify-content: flex-end;
+  -webkit-app-region: no-drag;
+  z-index: calc(var(--z-sticky) + 1);
+}
+
+.app-shell-tools > button,
+.app-shell-tools .run-center-global-btn {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.is-macos .sidebar::before {
+  left: 76px;
+  right: var(--shell-tools-reserved-width);
+  height: var(--layout-titlebar-height);
+}
+
+.is-macos .sidebar-logo {
+  -webkit-app-region: no-drag;
+}
+
+.shell-sidebar-hidden {
+  --shell-header-inset: 56px;
+}
+
+html.is-macos .shell-sidebar-hidden {
+  /* Keep the native controls and their hit region in a separate gutter. */
+  --shell-expand-left: 104px;
+  --shell-header-inset: calc(var(--shell-expand-left) + var(--control-height-sm) + var(--space-4));
+}
+
+.shell-sidebar-hidden .app-shell-tools {
+  left: var(--space-4);
+  width: var(--control-height-sm);
+}
+
+html.is-macos .shell-sidebar-hidden .app-shell-tools {
+  left: var(--shell-expand-left);
+}
+
+.shell-sidebar-hidden #sidebar-search-btn,
+.shell-sidebar-hidden #run-center-global-entry {
+  display: none;
+}
+
+body.sidebar-collapsed .sidebar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0 !important;
+  min-width: 0;
+  max-width: 0;
+  overflow: hidden;
+  border-right: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.sidebar-collapsed .sidebar > * {
+  display: none;
+}
+
+/* Make room for the recovery entry without pushing normal expanded headers. */
+body.shell-sidebar-hidden .main-content :is(
+  .ui-page-header,
+  .chat-header,
+  .ws-page-top,
+  .ws-space-head-row,
+  .run-center-header,
+  .marketplace-header,
+  .agents-grid-header,
+  .skills-grid-header,
+  .contexts-page-header
+) {
+  box-sizing: border-box;
+  padding-inline-start: var(--shell-header-inset);
+}
+
+html.is-macos body.shell-sidebar-hidden .app-top-drag-strip {
+  left: var(--shell-header-inset);
+}
+
+/* Settings replaces the application rail with its own category navigation. */
+html.is-macos body:has(#panel-settings.active) #settings-page-header .ui-page-header {
+  padding-inline-start: 84px;
+  -webkit-app-region: drag;
+}
+
+/* A native Electron drag rectangle can swallow a floating control regardless
+ * of z-index. Exclude the recovery gutter, then restore dragging on the inset
+ * header content while keeping its controls interactive. */
+html.is-macos body.shell-sidebar-hidden .main-content :is(
+  .ui-page-header,
+  .chat-header,
+  .ws-page-top,
+  .ws-space-head,
+  .run-center-header,
+  .marketplace-header,
+  .agents-grid-header,
+  .skills-grid-header,
+  .contexts-page-header
+) {
+  -webkit-app-region: no-drag;
+}
+
+html.is-macos body.shell-sidebar-hidden .main-content :is(
+  .ui-page-header__body,
+  .chat-header-main,
+  .ws-space-heading
+),
+html.is-macos body.shell-sidebar-hidden .main-content :is(
+  .ws-page-top,
+  .run-center-header
+) > :first-child {
+  -webkit-app-region: drag;
+}
+
+html.is-macos body.shell-sidebar-hidden .main-content :is(
+  .ui-page-header__body,
+  .chat-header-main,
+  .ws-space-heading
+) :is(button, input, a, [contenteditable], .chat-header-breadcrumb, .chat-header-meta) {
+  -webkit-app-region: no-drag;
+}
+
+@media (max-width: 720px) {
+  body:has(:is(#panel-run-center, #panel-workspace).active) .app-shell-tools {
+    left: var(--space-4);
+    width: var(--control-height-sm);
+    z-index: calc(var(--z-popover) + 1);
+  }
+
+  html.is-macos body:has(:is(#panel-run-center, #panel-workspace).active) .app-shell-tools {
+    left: 104px;
+  }
+
+  body:has(:is(#panel-run-center, #panel-workspace).active) #run-center-global-entry {
+    display: none;
+  }
+}

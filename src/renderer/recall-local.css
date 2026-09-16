@@ -1,41 +1,44 @@
 /* Recall cognition console. */
-.skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--app-bg, #f6f7fb); }
+.skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--surface-app); }
 /* 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06），
    .skills-cognition-header* 的手写标题 / eyebrow / 副标题 / 操作已删除。 */
 #cognition-page-header .ui-page-header { width: 100%; box-sizing: border-box; }
-.skills-cognition-tabs { display: block; flex: none; min-width: 0; padding: 0 28px 20px; overflow-x: hidden; overflow-y: visible; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--card, #fff); }
-.skills-cognition-tabs-row { display: flex; align-items: flex-start; gap: 12px; }
-.skills-cognition-tabs-row .skills-cognition-tab-group { flex: 1 1 auto; min-width: 0; }
-.skills-cognition-tabs-row .cognition-refresh-btn { flex: none; }
-.skills-cognition-tab { display: flex; min-width: 0; min-height: 82px; align-items: flex-start; gap: 12px; margin: 0; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: color-mix(in srgb, var(--card, #fff) 97%, var(--fg, #111827) 3%); color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; text-align: left; white-space: normal; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease; }
-.skills-cognition-tab:hover { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, var(--card, #fff)); color: var(--fg, #111827); transform: translateY(-1px); }
-.skills-cognition-tab.is-active { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 55%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 8%, var(--card, #fff)); color: var(--fg, #111827); box-shadow: inset 3px 0 0 var(--primary, #0E9F6E), 0 4px 12px rgba(20, 71, 55, .08); }
-.skills-cognition-tab-icon { display: grid; flex: none; width: 34px; height: 34px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--fg, #111827) 5%, transparent); color: var(--muted-fg, #6b7280); }
-.skills-cognition-tab.is-active .skills-cognition-tab-icon { background: color-mix(in srgb, var(--primary, #0E9F6E) 14%, transparent); color: var(--primary-text, #06734f); }
-.skills-cognition-tab-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
-.skills-cognition-tab-copy strong { color: var(--fg, #111827); font-size: 13px; line-height: 1.35; }
-.skills-cognition-tab-copy small { color: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 400; line-height: 1.45; }
-.skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: 22px 28px 32px; background: var(--app-bg, #f6f7fb); }
-.skills-cognition-page { min-height: 100%; height: auto; box-sizing: border-box; overflow: visible; padding: 22px 28px 32px; background: var(--app-bg, #f6f7fb); }
+.skills-cognition-tabs { display: block; flex: none; min-width: 0; padding: 0 var(--space-6); overflow-x: hidden; overflow-y: visible; border-bottom: 1px solid var(--line-default); background: var(--surface-card); }
+.skills-cognition-tabs-row { display: flex; min-width: 0; align-items: stretch; gap: var(--space-3); }
+.skills-cognition-tabs-row .skills-cognition-tab-group { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.skills-cognition-tabs-row .skills-cognition-tab-group::-webkit-scrollbar { display: none; }
+.skills-cognition-tabs-row .cognition-refresh-btn { flex: none; align-self: center; }
+.skills-cognition-tab { display: flex; flex: 0 0 auto; min-width: max-content; min-height: var(--row-height-table); align-items: center; margin: 0 0 -1px; padding: var(--space-3) 0; border: 0; border-bottom: 1.5px solid transparent; border-radius: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: var(--font-size-3); font-weight: var(--font-weight-regular); text-align: left; white-space: nowrap; transition: border-color var(--duration-control) var(--easing-ui), color var(--duration-control) var(--easing-ui); }
+.skills-cognition-tab:hover { color: var(--text-heading); }
+.skills-cognition-tab.is-active { border-bottom-color: var(--color-ink); color: var(--text-heading); font-weight: var(--font-weight-medium); }
+.skills-cognition-tab:focus-visible { outline: var(--focus-width) solid var(--color-accent); outline-offset: var(--focus-offset); }
+.skills-cognition-tab-label { white-space: nowrap; }
+.skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: var(--space-5) var(--space-6) var(--space-7); background: var(--surface-app); }
+.skills-cognition-page { min-height: 100%; height: auto; box-sizing: border-box; overflow: visible; padding: var(--space-5) var(--space-6) var(--space-7); background: var(--surface-app); }
 /* style.css 里 .skills-cognition-page 是 display:flex，会压掉 UA [hidden] 的 display:none，
    导致六个 tab 页全部同时显示（点 tab 无反应、看着像同一个页面）。这里显式补覆盖。 */
 .skills-cognition-page[hidden] { display: none; }
-.skills-cognition-overview { display: grid; gap: 14px; max-width: 1480px; margin: 0 auto; }
-.cognition-task-hero { max-width: 1480px; margin: 0 auto 20px; padding: 4px 0 20px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.skills-cognition-overview { display: grid; gap: var(--space-4); max-width: var(--layout-card-grid-width); margin: 0 auto; }
+.cognition-task-hero { max-width: var(--layout-card-grid-width); margin: 0 auto var(--space-6); padding: var(--space-2) 0 var(--space-6); border-bottom: 1px solid var(--line-hairline); }
 .skills-cognition-overview > .cognition-task-hero { width: 100%; margin-bottom: 2px; }
 .cognition-task-eyebrow { display: block; margin-bottom: 8px; color: var(--primary-text, #06734f); font-size: var(--font-size-1); font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
-.cognition-task-hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; }
+.cognition-task-hero-row { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); }
 .cognition-task-hero-row > div:first-child { min-width: 0; max-width: 760px; }
 .cognition-task-hero h2 { margin: 0; color: var(--fg, #111827); font-size: 24px; line-height: 1.28; letter-spacing: -.025em; }
 .cognition-task-hero p { margin: 8px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.65; }
-.cognition-task-metrics { display: flex; flex: none; align-items: stretch; overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
-.cognition-task-metric { display: grid; min-width: 104px; gap: 2px; padding: 10px 14px; border-left: 1px solid var(--border, #e5e7eb); }
+.cognition-task-metrics { display: grid; flex: 1 0 100%; width: 100%; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); align-items: stretch; padding: var(--space-4) 0; overflow: hidden; border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+.cognition-task-metric { display: grid; min-width: 0; gap: var(--space-2); padding: 0 var(--space-6); border-left: 1px solid var(--line-hairline); }
 .cognition-task-metric:first-child { border-left: 0; }
-.cognition-task-metric strong { color: var(--fg, #111827); font-size: 19px; font-variant-numeric: tabular-nums; line-height: 1.2; }
-.cognition-task-metric span { color: var(--muted-fg, #6b7280); font-size: var(--font-size-1); white-space: nowrap; }
-.cognition-task-empty { max-width: 1480px; min-height: 180px; margin: 0 auto; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
-.recall-proof-list { display: grid; max-width: 1480px; margin: 0 auto; gap: 14px; }
-.recall-proof-asset { padding: 0; overflow: hidden; border-radius: 10px; }
+.cognition-task-metric strong { color: var(--text-heading); font-size: var(--font-size-heading); font-weight: var(--font-weight-medium); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.cognition-task-metric span { color: var(--text-muted); font-size: var(--font-size-1); white-space: nowrap; }
+.cognition-task-empty { max-width: var(--layout-card-grid-width); min-height: 180px; margin: 0 auto; border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+/* 空态里“标题 / 说明 / 步骤 / 入口”各占一行，保持信息层次。 */
+.cognition-task-empty > strong { display: block; margin: 0 0 6px; color: var(--text-heading); font-size: var(--font-size-ui); }
+.cognition-task-empty > span { display: block; max-width: 720px; margin: 0 auto 10px; line-height: 1.7; }
+.cognition-task-empty > .skills-cognition-meta { color: var(--text-muted); font-size: var(--font-size-1); }
+.cognition-task-empty > button, .cognition-task-empty > .btn { margin-top: 4px; }
+.recall-proof-list { display: grid; max-width: var(--layout-card-grid-width); margin: 0 auto; gap: var(--space-4); }
+.recall-proof-asset { padding: 0; overflow: hidden; border-radius: var(--radius-card); }
 .recall-proof-asset > .skills-cognition-card-head { align-items: center; padding: 15px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
 .recall-proof-asset > .skills-cognition-card-head > div { display: grid; min-width: 0; gap: 4px; }
 .recall-proof-count { color: var(--muted-fg, #6b7280); font-size: var(--font-size-1); }
@@ -63,7 +66,7 @@
 .recall-overview-notices { display: grid; gap: 8px; }
 .recall-overview-notices .skills-cognition-warning { margin-bottom: 0; }
 .skills-cognition-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.skills-cognition-card { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); padding: 14px; }
+.skills-cognition-card { border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); padding: var(--space-4); box-shadow: var(--shadow-card); }
 .skills-cognition-card h2, .skills-cognition-card-head h2 { margin: 0; font-size: 14px; color: var(--fg, #111827); }
 .skills-cognition-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .skills-cognition-list { display: grid; gap: 12px; }
@@ -151,7 +154,7 @@
 .cognition-task-hero-aside { display: flex; flex: none; align-items: center; gap: 8px; }
 /* 沉淀活动的三个区块：自动沉淀 / 从历史会话沉淀 / 沉淀记录。段头统一成一个
    组件，消除此前三种并存的标题样式。 */
-.recall-capture-block { max-width: 1480px; margin: 0 auto 22px; }
+.recall-capture-block { max-width: var(--layout-card-grid-width); margin: 0 auto var(--space-6); }
 .recall-capture-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .recall-capture-section-head strong { color: var(--fg, #111827); font-size: 15px; letter-spacing: -.01em; }
 .recall-capture-section-head > span { color: var(--muted-fg, #6b7280); font-size: 11px; text-align: right; }
@@ -164,9 +167,9 @@
 /* 区块之间拉开距离，让"三块"这件事在视觉上先于块内细节被读到。 */
 .recall-capture-block + .recall-capture-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border, #e5e7eb); }
 /* 去向说明。刻意不编号——编号会和下面的段落标题抢层级，用户会以为要照着做。 */
-.recall-capture-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 1480px; margin: 0 auto 20px; padding: 10px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); color: var(--fg, #374151); font-size: 12px; }
+.recall-capture-chain { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); max-width: var(--layout-card-grid-width); margin: 0 auto var(--space-6); padding: var(--space-3) var(--space-4); border: 1px solid var(--line-default); border-radius: var(--radius-control); background: color-mix(in srgb, var(--color-accent) 4%, var(--surface-card)); color: var(--text-secondary); font-size: var(--font-size-2); }
 .recall-capture-chain i { color: var(--muted-fg, #9ca3af); font-style: normal; }
-.recall-manual-search { width: 100%; margin-bottom: 8px; padding: 8px 11px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
+.recall-manual-search { width: 100%; margin-bottom: var(--space-2); }
 /* 候选就地展开在被选中的那条沉淀记录底下，而不是另起一个一级区域——候选是
    任务走到某一步的待确认结果，不是和任务平级的东西。 */
 .recall-capture-inline-review:empty { display: none; }
@@ -185,20 +188,20 @@
 /* 五类来源概览卡。首屏要回答"系统能从哪五类地方发现认知、各自什么状态"，所以
    五类并列成卡，条目收进展开态——直接铺条目时光「会话」一类就占满一屏，另外
    四类被挤到屏幕外。 */
-.recall-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; margin-bottom: 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
-.recall-source-card.is-expanded { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--border, #e5e7eb)); }
-.recall-source-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 14px 4px 14px 16px; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
-.recall-source-card-icon { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); }
+.recall-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; margin-bottom: var(--space-3); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+.recall-source-card.is-expanded { border-color: var(--line-strong); }
+.recall-source-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); width: 100%; padding: var(--space-3) var(--space-1) var(--space-3) var(--space-4); border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-source-card-icon { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: var(--radius-control); background: var(--color-brand-soft); color: var(--color-brand-hover); }
 .recall-source-card-icon-glyph { width: 17px; height: 17px; }
 .recall-source-card-copy { display: grid; gap: 3px; min-width: 0; }
-.recall-source-card-copy strong { color: var(--fg, #111827); font-size: 13px; }
-.recall-source-card-copy small { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.recall-source-card-action { padding: 0 16px 0 8px; }
+.recall-source-card-copy strong { color: var(--text-heading); font-size: 13px; }
+.recall-source-card-copy small { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.recall-source-card-action { padding: 0 var(--space-4) 0 var(--space-2); }
 /* 展开的条目列表横跨整张卡，不挤在左列里。 */
-.recall-source-card > .recall-source-items { grid-column: 1 / -1; padding: 0 16px 12px; border-top: 1px solid var(--border, #eef0f3); }
+.recall-source-card > .recall-source-items { grid-column: 1 / -1; padding: 0 var(--space-4) var(--space-3); border-top: 1px solid var(--line-default); }
 @media (max-width: 720px) {
   .recall-source-card { grid-template-columns: minmax(0, 1fr); }
-  .recall-source-card-action { padding: 0 16px 14px 16px; }
+  .recall-source-card-action { padding: 0 var(--space-4) var(--space-3); }
 }
 /* 统计条里可点的那两格（需授权 / 失败记录）。其余三格保持纯统计的样子——
    让不可点的东西看起来可点，比不能点更糟。 */
@@ -211,17 +214,17 @@
    看到之后就该让位给内容。 */
 .recall-source-group.is-located { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 45%, transparent); outline-offset: 3px; border-radius: 10px; }
 /* 候选详情 / Skill 更新候选共用的两栏：左边做决定，右边给依据。 */
-.cognition-candidate-layout { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 14px; align-items: start; }
+.cognition-candidate-layout { display: grid; max-width: var(--layout-card-grid-width); margin: 0 auto; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: var(--space-4); align-items: start; }
 .cognition-candidate-main { display: grid; gap: 12px; }
 .cognition-candidate-main h2 { margin: 0; color: var(--fg, #111827); font-size: 17px; line-height: 1.4; }
 .cognition-candidate-quote { margin: 0; padding: 12px 14px; border-left: 3px solid color-mix(in srgb, var(--primary, #0E9F6E) 40%, transparent); border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, transparent); color: var(--fg, #374151); font-size: 13px; line-height: 1.65; }
 .cognition-candidate-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 12px; }
 .cognition-candidate-field.is-wide { grid-template-columns: 92px minmax(0, 1fr); align-items: start; }
 .cognition-candidate-field > span { color: var(--muted-fg, #6b7280); font-size: 12px; }
-.cognition-candidate-field input,
 .cognition-candidate-field select,
-.cognition-candidate-field textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
-.cognition-candidate-field textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
+.cognition-candidate-field .ui-control { width: 100%; min-width: 0; }
+.cognition-candidate-field select { width: 100%; padding: 7px 10px; border: 1px solid var(--line-default); border-radius: var(--radius-control); background: var(--surface-card); color: var(--text-primary); font: inherit; font-size: 12px; }
+.cognition-candidate-field .ui-textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
 .cognition-candidate-profile-target { align-items: start; }
 .cognition-candidate-profile-target small { grid-column: 2; margin-top: -5px; line-height: 1.45; }
 .cognition-candidate-actions { margin-top: 4px; }
@@ -230,7 +233,7 @@
 .cognition-candidate-side ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 .cognition-candidate-side li { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 /* 认知树：四条分支 + 关系区 + 图例。叶片深浅直接映射 maturity，不自己发明分级。 */
-.cognition-tree-layout { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(0, 1fr) minmax(260px, .5fr); gap: 14px; align-items: start; }
+.cognition-tree-layout { display: grid; max-width: var(--layout-card-grid-width); margin: 0 auto; grid-template-columns: minmax(0, 1fr) minmax(260px, .5fr); gap: var(--space-4); align-items: start; }
 .cognition-tree-canvas { display: grid; gap: 12px; min-width: 0; }
 .cognition-tree-branch-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .cognition-tree-branch-head strong { color: var(--fg, #111827); font-size: 13px; }
@@ -257,24 +260,24 @@
 .cognition-tree-legend-row span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
 .cognition-tree-legend .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 /* 我的资产页底的认知树入口。 */
-.ability-asset-tree-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1480px; margin: 0 auto 18px; padding: 13px 16px; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
+.ability-asset-tree-entry { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); max-width: var(--layout-card-grid-width); margin: 0 auto var(--space-5); padding: var(--space-3) var(--space-4); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
 .ability-asset-tree-entry strong { color: var(--fg, #111827); font-size: 13px; }
 .ability-asset-tree-entry .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
 /* 我的认知树 tab：种子/树是一级页面，四类资产卡接在树内容下方。 */
 #skills-cognition-assets-summary .ability-asset-summary-grid { margin-top: 18px; }
 #skills-cognition-assets-summary .cognition-seed-wrap { padding-top: 34px; }
 /* 二级页面（四类资产 + 详情）的返回认知树头部：按钮靠右。 */
-.cognition-assets-subview-head { display: flex; justify-content: flex-end; max-width: 1480px; margin: 0 auto 12px; }
+.cognition-assets-subview-head { display: flex; justify-content: flex-end; max-width: var(--layout-card-grid-width); margin: 0 auto var(--space-3); }
 /* 非资产分流的链路条。 */
 .cognition-nonasset-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .cognition-nonasset-step { display: grid; gap: 3px; flex: 1 1 150px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
 .cognition-nonasset-step strong { color: var(--fg, #111827); font-size: 12px; }
 .cognition-nonasset-step span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
-.cognition-nonasset-layout { display: grid; max-width: 1480px; margin: 14px auto 0; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 14px; align-items: start; }
+.cognition-nonasset-layout { display: grid; max-width: var(--layout-card-grid-width); margin: var(--space-4) auto 0; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: var(--space-4); align-items: start; }
 /* 使用与证明的分层筛选与两张说明卡。说明卡不是装饰：用户最容易犯的错就是把
    「被正确带入」读成「有效」，这一页的全部意义就是把这两件事分开。 */
-.cognition-proof-filters { max-width: 1480px; margin: 0 auto 14px; }
-.cognition-proof-notes { display: grid; max-width: 1480px; margin: 16px auto 0; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.cognition-proof-filters { max-width: var(--layout-card-grid-width); margin: 0 auto var(--space-4); }
+.cognition-proof-notes { display: grid; max-width: var(--layout-card-grid-width); margin: var(--space-4) auto 0; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-4); }
 .cognition-proof-notes h3 { margin: 0 0 6px; color: var(--fg, #111827); font-size: 12px; }
 .cognition-proof-notes .panel-sub { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 /* 我的资产详情里的三格事实（作用范围 / 默认使用 / 版本）。 */
@@ -287,7 +290,7 @@
   .cognition-candidate-field.is-wide { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .cognition-candidate-profile-target small { grid-column: 1; }
 }
-.cognition-governance-workbench { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
+.cognition-governance-workbench { display: grid; max-width: var(--layout-card-grid-width); margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: var(--space-4); align-items: start; }
 .cognition-governance-history-card,
 .cognition-governance-control-card { min-width: 0; padding: 0; overflow: hidden; border-radius: 10px; }
 .cognition-governance-panel-head,
@@ -368,12 +371,8 @@
 .recall-capture-control-field[hidden] { display: none; }
 .recall-capture-control-field > span { color: var(--muted-fg, #6b7280); font-size: 11px; }
 .recall-capture-control-field > label, .recall-capture-model-state label { color: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 600; }
-.recall-capture-policy-group { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(100%, 420px); padding: 3px; border: 1px solid var(--border, #dfe3e8); border-radius: 8px; background: var(--surface-subtle, #f7f8fa); }
-.recall-capture-policy-group.is-review { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.recall-capture-policy { min-width: 0; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 12px; }
-.recall-capture-policy:hover:not(:disabled) { color: var(--fg, #111827); }
-.recall-capture-policy.is-active { background: var(--card, #fff); color: var(--primary, #0E9F6E); box-shadow: 0 1px 3px rgba(20, 71, 55, .12); font-weight: 600; }
-.recall-capture-policy:disabled { cursor: not-allowed; opacity: .5; }
+.recall-capture-policy-group { width: min(100%, 420px); }
+.recall-capture-policy-group > button { flex: 1 1 0; justify-content: center; }
 .recall-capture-night-window > div { display: flex; align-items: center; gap: 8px; }
 .recall-capture-night-window input[type="time"], .recall-capture-quiet-window select { min-width: 116px; height: 34px; padding: 0 9px; border: 1px solid var(--border, #dfe3e8); border-radius: 6px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; }
 .recall-capture-quiet-window span { color: var(--muted-fg, #6b7280); font-size: 11px; }
@@ -404,11 +403,7 @@
 .recall-manual-conversation-main small { color: var(--muted-fg, #6b7280); font-size: var(--font-size-1); }
 .recall-capture-task-workbench { padding-top: 18px; }
 .recall-capture-task-log-head { margin-bottom: 12px; }
-.recall-capture-filter-bar { display: flex; gap: 6px; margin-bottom: 14px; overflow-x: auto; }
-.recall-capture-filter { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
-.recall-capture-filter:hover { color: var(--fg, #111827); background: var(--surface-subtle, #f7f8fa); }
-.recall-capture-filter.is-active { border-color: var(--border, #dfe3e8); background: var(--card, #fff); color: var(--fg, #111827); }
-.recall-capture-filter b { display: inline-flex; min-width: 18px; min-height: 18px; align-items: center; justify-content: center; border-radius: 6px; background: var(--surface-subtle, #eef1f4); color: inherit; font-size: var(--font-size-1); }
+.recall-capture-filter-bar { margin-bottom: var(--space-4); }
 .recall-capture-task-list { display: grid; gap: 8px; }
 .recall-capture-task { overflow: hidden; border: 1px solid var(--border, #e1e5ea); border-radius: 8px; background: var(--card, #fff); }
 .recall-capture-task.is-selected { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 42%, var(--border, #e1e5ea)); }
@@ -563,14 +558,13 @@
   font-weight: 600;
 }
 
-.recall-candidate-editor input,
-.recall-candidate-editor select,
-.recall-candidate-editor textarea {
+.recall-candidate-editor .ui-control,
+.recall-candidate-editor select {
   width: 100%;
   min-width: 0;
 }
 
-.recall-candidate-editor textarea {
+.recall-candidate-editor .ui-textarea {
   min-height: 76px;
   resize: vertical;
 }
@@ -611,7 +605,7 @@
 /* Recall workspace shell and page-specific workbenches. */
 #panel-recall {
   overflow: hidden;
-  background: var(--app-bg, #f6f7fb);
+  background: var(--surface-app);
 }
 
 .skills-cognition-surface {
@@ -622,7 +616,7 @@
   overflow: hidden;
   border: 0;
   border-radius: 0;
-  background: var(--card, #fff);
+  background: var(--surface-card);
   box-shadow: none;
 }
 
@@ -643,10 +637,10 @@
 }
 
 .skills-cognition-tab-group {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
+  width: max-content;
   align-items: stretch;
-  gap: 10px;
+  gap: var(--space-5);
   padding: 0;
 }
 .skills-cognition-tab-group + .skills-cognition-tab-group {
@@ -657,8 +651,6 @@
 .skills-cognition-tab-group-label {
   display: none;
 }
-
-.skills-cognition-tab-icon .ui-icon { width: 17px; height: 17px; flex: none; }
 
 .skills-cognition-main {
   flex: 1 1 auto;
@@ -671,9 +663,9 @@
   overflow-y: scroll;
   overscroll-behavior: auto;
   scrollbar-gutter: stable;
-  background: var(--app-bg, #f6f7fb);
+  background: var(--surface-app);
 }
-.skills-cognition-main:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 42%, transparent); outline-offset: -2px; }
+.skills-cognition-main:focus-visible { outline: var(--focus-width) solid var(--color-accent); outline-offset: calc(-1 * var(--focus-offset)); }
 
 .recall-workbench-page-head {
   display: flex;
@@ -723,24 +715,24 @@
 .recall-workbench-empty-state span { max-width: 520px; font-size: 12px; line-height: 1.6; }
 .recall-workbench-empty-state .btn { margin-top: 6px; }
 .recall-candidate-empty { min-height: 260px; border-top: 0; }
-.recall-source-items { border-top: 1px solid var(--border, #e5e7eb); }
+.recall-source-items { border-top: 1px solid var(--line-default); }
 .recall-source-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 54px;
   padding: 8px 2px;
-  border-bottom: 1px solid var(--border, #eef0f3);
+  border-bottom: 1px solid var(--line-default);
 }
 .recall-source-item-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.recall-source-item-main strong { overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 13px; }
-.recall-source-item-main span { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; }
-.recall-source-item-main small { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.45; }
-.recall-source-item-main .recall-source-next { color: var(--fg, #374151); }
-.recall-source-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.recall-source-item:focus-within { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 55%, transparent); outline-offset: -2px; }
-.recall-source-more { display: grid; width: 32px; min-width: 32px; padding: 0; place-items: center; }
+.recall-source-item-main strong { overflow-wrap: anywhere; color: var(--text-heading); font-size: 13px; }
+.recall-source-item-main span { overflow-wrap: anywhere; color: var(--text-muted); font-size: 11px; }
+.recall-source-item-main small { overflow-wrap: anywhere; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.recall-source-item-main .recall-source-next { color: var(--text-secondary); }
+.recall-source-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+.recall-source-item:focus-within { outline: var(--focus-width) solid var(--color-brand); outline-offset: var(--focus-offset); }
+.recall-source-more { flex: none; }
 .recall-source-more .ui-icon { width: 15px; height: 15px; }
 .recall-source-group-advanced > summary { cursor: pointer; list-style: none; }
 .recall-source-group-advanced > summary::-webkit-details-marker { display: none; }
@@ -754,11 +746,10 @@
   scrollbar-gutter: stable;
 }
 @media (max-width: 1100px) {
-  .skills-cognition-surface .skills-cognition-tabs { min-height: 0; padding: 0 28px 20px; overflow-x: hidden; overflow-y: visible; }
-  .skills-cognition-tab-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .skills-cognition-surface .skills-cognition-tab { gap: 12px; padding: 14px; font-size: inherit; }
-  .skills-cognition-surface .skills-cognition-tab .ui-icon { display: inline-block; }
-  .skills-cognition-surface .skills-cognition-page { padding: 22px 28px 32px; }
+  .skills-cognition-surface .skills-cognition-tabs { min-height: 0; padding: 0 var(--space-6); overflow: hidden; }
+  .skills-cognition-tab-group { display: flex; width: max-content; }
+  .skills-cognition-surface .skills-cognition-tab { padding: var(--space-3) 0; }
+  .skills-cognition-surface .skills-cognition-page { padding: var(--space-5) var(--space-6) var(--space-7); }
   .cognition-task-hero-row { align-items: flex-start; flex-direction: column; gap: 16px; }
   .cognition-task-metrics { width: 100%; }
   .cognition-task-metric { min-width: 0; flex: 1 1 0; }
@@ -767,10 +758,10 @@
 }
 
 @media (max-width: 600px) {
-  .skills-cognition-surface .skills-cognition-tabs { padding: 0 16px 16px; overflow-x: auto; overflow-y: hidden; }
+  .skills-cognition-surface .skills-cognition-tabs { padding: 0 var(--space-4); overflow: hidden; }
   .skills-cognition-tab-group { display: flex; width: max-content; }
-  .skills-cognition-surface .skills-cognition-tab { width: min(76vw, 260px); }
-  .skills-cognition-surface .skills-cognition-page { padding: 18px 16px 24px; }
+  .skills-cognition-surface .skills-cognition-tab { width: auto; }
+  .skills-cognition-surface .skills-cognition-page { padding: var(--space-4) var(--space-4) var(--space-6); }
   .recall-workbench-summary { grid-template-columns: 1fr; }
   .recall-workbench-summary > div { border-left: 0; border-top: 1px solid var(--border, #e5e7eb); }
   .recall-workbench-summary > div:first-child { border-top: 0; }
@@ -848,8 +839,8 @@
 }
 
 .ability-assets-workbench { display: grid; gap: 14px; }
-.ability-asset-summary-grid { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.ability-asset-summary-card { min-height: 96px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.ability-asset-summary-grid { display: grid; max-width: var(--layout-card-grid-width); margin: 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
+.ability-asset-summary-card { min-height: 96px; padding: var(--space-4); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); box-shadow: var(--shadow-card); }
 .ability-asset-summary-card span { display: block; color: var(--muted-fg, #6b7280); font-size: 12px; }
 .ability-asset-summary-card strong { display: block; margin: 6px 0 2px; font-size: 22px; }
 .ability-asset-summary-card small { color: var(--muted-fg, #6b7280); font-size: 11px; }
@@ -925,7 +916,8 @@
 .recall-personal-memory-head { padding-top: 18px; border-top: 1px solid var(--border, #e5e7eb); }
 .ability-assets-workbench.is-asset-management-only { gap: 0; }
 .ability-assets-management { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); min-width: 0; min-height: 0; gap: 14px; align-items: start; }
-.ability-asset-list, .ability-asset-detail, .ability-assets-empty { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); overflow: hidden; }
+.ability-asset-list, .ability-asset-detail, .ability-assets-empty { overflow: hidden; border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+.ability-assets-empty > .ui-empty-state { min-height: 220px; }
 .ability-asset-list, .ability-asset-detail { min-width: 0; min-height: 0; }
 .ability-asset-list-head { padding: 12px; border-bottom: 1px solid var(--border, #e5e7eb); }
 .ability-asset-list-row { width: 100%; grid-template-columns: minmax(0, 1fr) auto; text-align: left; cursor: pointer; }
@@ -956,11 +948,11 @@
 .ability-asset-detail .asset-detail-head p { margin: 5px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .ability-asset-detail .asset-detail-head .skills-cognition-status { flex: 0 0 auto; }
 .asset-detail-head-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
-.recall-asset-more { display: grid; width: 32px; min-width: 32px; padding: 0; place-items: center; }
+.recall-asset-more { flex: none; }
 .recall-asset-version-panel { margin-top: 12px; border-top: 1px solid var(--border, #e5e7eb); }
 .recall-asset-version-head { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; }
 .recall-asset-version-head > strong { font-size: 12px; }
-.recall-asset-version-close { display: grid; width: 28px; min-width: 28px; padding: 0; place-items: center; }
+.recall-asset-version-close.ui-icon-button { flex: none; }
 .recall-asset-version-row { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border, #eef0f3); }
 .recall-asset-version-row > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .recall-asset-version-row strong { color: var(--fg, #111827); font-size: 11px; }
@@ -1219,7 +1211,7 @@
    路径，所以给它一块能写字、能勾选依据的地方，而不是一个赞。 */
 .recall-proof-rating.is-evidence { display: grid; gap: 9px; }
 .recall-proof-evidence-hint { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
-.recall-proof-evidence-note { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
+.recall-proof-evidence-note.ui-textarea { width: 100%; box-sizing: border-box; }
 .recall-proof-evidence-options { display: grid; gap: 6px; }
 .recall-proof-evidence-option { display: flex; align-items: baseline; gap: 7px; color: var(--fg, #111827); font-size: 12px; cursor: pointer; }
 .recall-proof-evidence-option code { color: var(--muted-fg, #6b7280); font-size: var(--font-size-1); overflow-wrap: anywhere; }
@@ -1287,7 +1279,88 @@
 .cognition-tree-summary-row b { margin-left: auto; color: var(--fg, #111827); font-size: 13px; font-variant-numeric: tabular-nums; }
 .cognition-tree-summary-note { margin-left: auto; color: var(--muted-fg, #6b7280); font-size: var(--font-size-1); text-align: right; }
 .cognition-tree-summary-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.cognition-tree-nonasset-link { justify-self: start; margin-top: 2px; }
+.cognition-tree-nonasset-link.ui-button { justify-self: start; margin-top: 2px; }
+
+/* 认知树一级页采用一体化工作台：树、成长状态和动作是同一份真实投影，分支清单
+   紧随其后。这里覆盖旧版“Hero + KPI + 分离卡片”的页面组合，不改变数据或入口。 */
+.cognition-tree-workbench { max-width: var(--layout-card-grid-width); margin: 0 auto; }
+.cognition-tree-top { display: grid; grid-template-columns: minmax(0, 1fr) 232px; overflow: hidden; border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+.cognition-tree-stage { min-width: 0; }
+.cognition-tree-stage-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 16px 18px 0; }
+.cognition-tree-stage-label strong { color: var(--fg, #111827); font-size: 14px; font-weight: 650; }
+.cognition-tree-stage-label span { color: var(--muted-fg, #6b7280); font-size: 11px; white-space: nowrap; }
+.cognition-tree-stage-canvas { position: relative; width: 100%; aspect-ratio: 720 / 430; }
+.cognition-tree-stage-canvas .cognition-tree-svg { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; }
+.cognition-tree-svg-ground { fill: color-mix(in srgb, var(--primary, #0E9F6E) 7%, var(--surface-card)); opacity: 1; }
+.cognition-tree-svg-trunk,
+.cognition-tree-svg-branch,
+.cognition-tree-svg-root-lines { fill: none; stroke: color-mix(in srgb, var(--primary, #0E9F6E) 24%, var(--fg, #111827)); stroke-linecap: round; }
+.cognition-tree-svg-trunk { stroke-width: 16px; }
+.cognition-tree-svg-branch { stroke-width: 6px; }
+.cognition-tree-svg-root-lines { stroke-width: 3px; }
+.cognition-tree-svg-empty { fill: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 500; }
+.cognition-tree-svg-leaf ellipse { stroke: color-mix(in srgb, var(--primary, #0E9F6E) 42%, var(--line-default)); stroke-width: 1px; }
+.cognition-tree-svg-leaf.is-ratio-none ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 15%, var(--surface-card)); }
+.cognition-tree-svg-leaf.is-ratio-mixed ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 29%, var(--surface-card)); }
+.cognition-tree-svg-leaf.is-ratio-full ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 45%, var(--surface-card)); }
+.cognition-tree-svg-leaf-label,
+.cognition-tree-svg-leaf.is-ratio-mixed .cognition-tree-svg-leaf-label,
+.cognition-tree-svg-leaf.is-ratio-full .cognition-tree-svg-leaf-label { fill: color-mix(in srgb, var(--primary, #0E9F6E) 74%, var(--fg, #111827)); font-size: 12px; font-weight: 650; }
+.cognition-tree-svg-bud circle { fill: color-mix(in srgb, var(--warning, #d97706) 80%, var(--surface-card)); stroke: var(--surface-card); stroke-width: 2px; }
+.cognition-tree-legend { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px 20px; margin: 0 12px 12px; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.cognition-tree-legend .cognition-tree-dot { width: 8px; height: 8px; margin: 0; }
+.cognition-tree-root-facts { padding: 9px 14px; border-top: 1px solid var(--line-default); color: var(--muted-fg, #6b7280); font-size: 11px; text-align: center; }
+.cognition-tree-growth { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px; border-left: 1px solid var(--line-default); background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--surface-card)); }
+.cognition-tree-growth-head h3 { margin: 0; color: var(--fg, #111827); font-size: 14px; font-weight: 650; }
+.cognition-tree-growth-total { display: grid; gap: 2px; margin: 8px 0 2px; }
+.cognition-tree-growth-total strong { color: var(--fg, #111827); font-size: 30px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.cognition-tree-growth-total span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-growth-breakdown { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--line-default); }
+.cognition-tree-growth-breakdown > div,
+.cognition-tree-growth-pending { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-growth-breakdown span { display: inline-flex; min-width: 0; align-items: center; gap: 6px; }
+.cognition-tree-growth-breakdown .cognition-tree-dot { width: 8px; height: 8px; margin: 0; }
+.cognition-tree-growth-breakdown b,
+.cognition-tree-growth-pending strong { color: var(--fg, #111827); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.cognition-tree-growth > .ui-button { justify-content: center; width: 100%; }
+.cognition-tree-growth > small { margin-top: auto; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-tree-branch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 28px; margin-top: 24px; }
+.cognition-tree-branch { min-width: 0; }
+.cognition-tree-branch-head { margin-bottom: 6px; padding-bottom: 7px; border-bottom: 1px solid var(--line-default); }
+.cognition-tree-branch-head strong { display: inline-flex; align-items: baseline; gap: 6px; }
+.cognition-tree-branch-head strong span { color: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 500; }
+.cognition-tree-branch-open { width: 28px; height: 28px; }
+.cognition-tree-branch-open .ui-icon { width: 15px; height: 15px; }
+.cognition-tree-branch-grid .cognition-tree-leaves { display: grid; grid-template-columns: 1fr; gap: 0; }
+.cognition-tree-branch-grid .cognition-tree-leaf { min-width: 0; min-height: 52px; padding: 9px 4px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line-default) 72%, transparent); border-radius: 0; background: transparent; }
+.cognition-tree-branch-grid .cognition-tree-leaf:hover { background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, transparent); }
+.cognition-tree-branch-grid .cognition-tree-leaf-body strong { font-weight: 550; }
+.cognition-tree-branch-empty { margin: 0; padding: 10px 4px; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-tree-relations { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line-default); }
+.cognition-tree-relations .cognition-tree-branch-head { margin-bottom: 0; }
+.cognition-tree-page-state { display: grid; gap: 12px; max-width: var(--layout-card-grid-width); margin: 0 auto; }
+.cognition-tree-page-state > strong { color: var(--fg, #111827); font-size: 14px; font-weight: 650; }
+
+@media (max-width: 900px) {
+  .cognition-tree-top { grid-template-columns: 1fr; }
+  .cognition-tree-growth { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; border-top: 1px solid var(--line-default); border-left: 0; }
+  .cognition-tree-growth-head { grid-column: 1 / -1; }
+  .cognition-tree-growth-total { margin: 0; }
+  .cognition-tree-growth-breakdown { padding: 0; border-bottom: 0; }
+  .cognition-tree-growth-pending { align-self: center; }
+  .cognition-tree-growth > small { margin: 0; align-self: center; }
+}
+
+@media (max-width: 680px) {
+  .cognition-tree-stage-label { padding: 14px 14px 0; }
+  .cognition-tree-stage-canvas { min-height: 260px; }
+  .cognition-tree-legend { justify-content: flex-start; margin: 0 14px 12px; }
+  .cognition-tree-root-facts { padding-right: 10px; padding-left: 10px; }
+  .cognition-tree-growth { grid-template-columns: 1fr; padding: 14px; }
+  .cognition-tree-growth-head { grid-column: auto; }
+  .cognition-tree-branch-grid { grid-template-columns: 1fr; gap: 18px; margin-top: 20px; }
+}
 
 /* 「已处理」历史带。与上面两条待办带同构，但状态徽章用完成色——它记录的是
    已经落账的事实，不是还要做的事。 */

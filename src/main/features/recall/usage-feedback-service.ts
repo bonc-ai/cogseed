@@ -85,6 +85,59 @@ export async function recordRecallMessageFeedback(
       outcome,
     }));
   }
+  // 负反馈接线（T2.2 · 2026-09-13）：feedback_negative 此前只进 usage 流水、
+  // 零消费方——"这条资产总被用户点踩"对治理链完全不可见。接两环：
+  // ① contradicted 使用收据——补上五态中"零写入方"里语义最明确的一个
+  //    （用户明确说这次没用）；无匹配注入收据（旧消息/旁路）就不编造。
+  // ② 该资产累计负反馈 ≥2 → 生成 pause 治理建议（建议非停用，治理页
+  //    里由人决定）。
+  if (input.feedback === 'negative' && records.length) {
+    try {
+      const { listInjectionReceipts } = await import('./injection-receipt');
+      const { recordAssetUsageReceipt } = await import('./asset-usage-receipt');
+      const injections = await listInjectionReceipts(userId, taskRunId);
+      for (const citation of message.recall_citations) {
+        const injection = injections.find((receipt) => (
+          receipt.assetId === citation.asset_id
+          && receipt.assetVersion === citation.version
+          && receipt.projectionId === citation.projection_id
+          && (receipt.status === 'injected' || receipt.status === 'dispatched')
+        ));
+        if (!injection) continue;
+        await recordAssetUsageReceipt(userId, {
+          taskRunId,
+          projectionId: citation.projection_id,
+          assetId: citation.asset_id,
+          assetVersion: citation.version,
+          injectionReceiptId: injection.id,
+          status: 'contradicted',
+          evidenceKind: 'agent_action',
+          evidenceRefs: [{ kind: 'conversation', id: input.cid, title: 'user negative feedback' }],
+          boundary: 'real',
+          reason: `用户对消息 ${input.messageId} 点了「需改进」`,
+        }).catch(() => undefined);
+      }
+    } catch {
+      // 收据侧失败不阻断反馈记账——流水里已有 feedback_negative。
+    }
+    try {
+      const allUsage = await listRecallUsage(userId);
+      const { recommendAbilityAssetAction } = await import('./asset-service');
+      for (const citation of message.recall_citations) {
+        const negatives = allUsage.filter((record) => (
+          record.assetId === citation.asset_id && record.outcome === 'feedback_negative'
+        )).length;
+        if (negatives < 2) continue;
+        await recommendAbilityAssetAction(userId, citation.asset_id, {
+          action: 'pause',
+          reason: `累计 ${negatives} 次用户负反馈（「需改进」），建议暂停注入并复核内容`,
+          actor: 'system',
+        }).catch(() => undefined);
+      }
+    } catch {
+      // 治理建议失败同样不阻断——幂等，下次负反馈会再尝试。
+    }
+  }
   return {
     feedback: input.feedback,
     citationCount: message.recall_citations.length,

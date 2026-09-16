@@ -287,7 +287,11 @@ describe('Recall cognition workspace layout', () => {
     expect(recallLocalCss).toMatch(/\.skills-cognition-main\s*\{[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*scroll;[^}]*overscroll-behavior:\s*auto;/s);
     expect(recallLocalCss).toMatch(/\.skills-cognition-page\s*\{[^}]*min-height:\s*100%;[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
     expect(recallLocalCss).toContain('#skills-cognition-assets { overflow: visible; }');
-    expect(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8')).toContain('Find scrollable');
+    // 2026-09-14 认知资产前端重建：主滚动容器改为 #ca-root 内的 .ca-scroll
+    //（views.js render 产出，路由切换时 core.js 将其 scrollTop 归零）；
+    //「Find scrollable」边缘滚动转发随旧 skills-bindings 认知段删除。
+    const views = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
+    expect(views).toContain('id="ca-scroll"');
   });
 
 
@@ -456,12 +460,15 @@ describe('Recall cognition workspace layout', () => {
   });
 
   it('资产更新在无绑定控件时不传 ontologyRefs（不清空既有绑定）', () => {
-    const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
-    // 控件不存在 = undefined = 不改动；传空数组会把用户已有的绑定抹掉。
-    expect(bindings).toContain('const ontologyRefs = ontologySelect');
-    expect(bindings).toContain("...(ontologyRefs !== undefined ? { ontologyRefs } : {})");
-    // 分组按需取，且读失败不阻断编辑
-    expect(bindings).toContain("window.cogseed.invoke('personalOntology.groups.list').catch(() => null)");
+    // 资产编辑器（含本体绑定控件）已随认知资产前端重建删除：新实现
+    //（cognition-assets/*）没有资产编辑表单，也不再有 ontologyRefs 的读写
+    // 路径——「无控件时误传空数组清空既有绑定」的入口不复存在。守卫：
+    // 新模块不再携带 ontologyRefs 载荷。
+    const dir = path.join(__dirname, '../../src/renderer/modules/cognition-assets');
+    for (const file of ['core.js', 'views.js', 'app.js']) {
+      const source = fs.readFileSync(path.join(dir, file), 'utf8');
+      expect(source, `${file} must not carry ontologyRefs`).not.toContain('ontologyRefs');
+    }
   });
 
   it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {
@@ -472,87 +479,46 @@ describe('Recall cognition workspace layout', () => {
   });
 
   it('ships the task shell and capture feedback in every renderer locale', () => {
+    // 2026-09-15 全模块重构（3 tab）+ 零引用键清理后，此清单更新为当前 UI
+    // 的真实键集：三 tab 壳、来源字典、整理动作/原因、资产详情使用记录区。
+    // 旧清单（workspace/pipeline/governance/skill_draft 等）对应的 UI 已随
+    // 09-14 前端重建删除，键已按零引用清出四语文件。
     for (const locale of ['en', 'zh', 'ja', 'pt']) {
       const messages = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf-8'));
       for (const key of [
-        'cognition.workspace_eyebrow',
-        'cognition.task_views',
-        'cognition.inbox_desc',
-        'cognition.inbox_title',
-        'cognition.inbox_confirm_now',
-        'cognition.my_assets_desc',
-        'cognition.assets_title',
-        'cognition.proofs_desc',
-        'cognition.proofs_title',
-        'cognition.proofs_assets_covered',
-        'cognition.governance_desc',
-        'cognition.governance_title',
-        'cognition.governance_use_control',
-        'cognition.governance_asset_body',
-        'cognition.source_status',
+        'cognition.tab_review',
+        'cognition.tab_review_desc',
+        'cognition.tab_overview',
+        'cognition.tab_overview_desc',
+        'cognition.tab_organize',
+        'cognition.tab_organize_desc',
         'cognition.source_conversation',
-        'cognition.source_artifact_file',
-        'cognition.source_execution_evaluation',
-        'cognition.source_user_teaching_signal',
-        'cognition.source_authorized_external_system',
-        'cognition.pipeline_title',
-        'cognition.pipeline_sources',
-        'cognition.pipeline_candidates',
-        'cognition.pipeline_next_conversation',
-        'cognition.pipeline_next_wait',
-        'cognition.pipeline_next_review',
-        'cognition.pipeline_next_retry',
-        'cognition.pipeline_next_configure',
-        'cognition.overview_metrics',
-        'cognition.overview_active_tasks',
-        'cognition.overview_skill_candidates',
-        'cognition.overview_attention',
-        'cognition.overview_attention_hint',
-        'cognition.overview_model_required',
+        'cognition.source_artifact',
+        'cognition.source_execution',
+        'cognition.source_teaching',
+        'cognition.source_external',
+        'cognition.capture_status_queued',
+        'cognition.capture_status_extracting',
+        'cognition.capture_status_writing',
+        'cognition.capture_status_review',
+        'cognition.capture_status_no_candidate',
+        'cognition.capture_status_configuration_required',
+        'cognition.capture_status_failed',
+        'cognition.capture_error_unknown',
+        'cognition.capture_stage_asset_write',
+        'cognition.capture_action_run_now',
+        'cognition.capture_action_retry',
+        'cognition.capture_action_pause',
+        'cognition.capture_action_resume',
+        'cognition.capture_action_cancel',
+        'cognition.capture_reason_review_pending',
+        'cognition.capture_reason_capture_failed',
+        'cognition.capture_bucket_attention',
+        'cognition.organize_settings_open',
+        'cognition.capture_batch_run_confirm',
+        'cognition.asset_usage_section',
         'cognition.overview_failed_tasks',
         'cognition.overview_source_issues',
-        'cognition.overview_recent_activity',
-        'cognition.overview_activity_capture',
-        'cognition.overview_activity_memory',
-        'cognition.overview_activity_asset',
-        'cognition.overview_activity_empty',
-        'cognition.teaching_title',
-        'cognition.teaching_pending',
-        'cognition.teaching_revoked',
-        'cognition.teaching_revoke',
-        'cognition.capture_queued',
-        'cognition.capture_waiting',
-        'cognition.capture_extracting',
-        'cognition.capture_writing',
-        'cognition.capture_review_ready',
-        'cognition.capture_no_candidate',
-        'cognition.capture_configuration_required',
-        'cognition.capture_failed',
-        'cognition.capture_error_model_not_configured',
-        'cognition.capture_error_model_auth_required',
-        'cognition.capture_error_source_unavailable',
-        'cognition.capture_error_recall_view_failed',
-        'cognition.capture_error_model_failed',
-        'cognition.capture_error_invalid_model_output',
-        'cognition.capture_error_candidate_save_failed',
-        'cognition.capture_error_asset_write_failed',
-        'cognition.capture_error_asset_write_interrupted',
-        'cognition.capture_stage_asset_write',
-        'cognition.capture_review_title',
-        'cognition.capture_review_hint',
-        'cognition.capture_review_empty',
-        'cognition.memory_content',
-        'cognition.personal_memories_section',
-        'cognition.personal_memories_section_hint',
-        'cognition.ability_assets',
-        'cognition.generate_skill',
-        'cognition.add_to_skill_library',
-        'cognition.skill_draft_title',
-        'cognition.skill_draft_level_a_passed',
-        'cognition.skill_draft_level_a_failed',
-        'cognition.skill_draft_hint',
-        'cognition.skill_created',
-        'cognition.capture_error_unknown',
       ]) expect(messages[key]).toBeTruthy();
     }
   });

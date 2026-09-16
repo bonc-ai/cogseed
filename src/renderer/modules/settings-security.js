@@ -157,7 +157,7 @@
       <td><span class="sec-pill ${pillCls(r.decision)}" data-role="pill">${esc(decisionText(r.decision))}</span></td>
       <td>${scoreBar(r.securityScore)}</td>
       <td class="sec-time">${esc(relTime(r.scannedAt))}</td>
-      <td><button type="button" class="sec-link" data-action="recheck">${esc(t('settings.security.recheck'))}</button></td>
+      <td>${uiButton({ label: t('settings.security.recheck'), role: 'ghost', size: 'sm', className: 'sec-link', attrs: { 'data-action': 'recheck' } })}</td>
     </tr>`;
   }
 
@@ -182,7 +182,7 @@
       ${state.receipts.length > 10
         ? `<div class="sec-table-foot">
             <span class="sec-hint">${esc(t('settings.security.table_foot_hint'))}</span>
-            <button type="button" class="sec-link" data-action="toggle-all">${esc(state.expanded ? t('settings.security.view_recent') : t('settings.security.view_all'))}</button>
+            ${uiButton({ label: state.expanded ? t('settings.security.view_recent') : t('settings.security.view_all'), role: 'ghost', size: 'sm', className: 'sec-link', attrs: { 'data-action': 'toggle-all' } })}
           </div>`
         : `<div class="sec-table-foot"><span class="sec-hint">${esc(t('settings.security.table_foot_hint'))}</span></div>`}
     </div>`;
@@ -196,7 +196,7 @@
       .slice(0, 50);
     const receiptById = new Map(state.receipts.map((r) => [r.skillId, r]));
     return `<div class="sec-picker${state.pickerOpen ? ' open' : ''}">
-      <input class="sec-picker-input" data-role="picker-input" placeholder="${esc(t('settings.security.search_placeholder'))}" value="${esc(q)}">
+      ${uiInput({ id: 'settings-security-picker-input', type: 'search', className: 'sec-picker-input', placeholder: t('settings.security.search_placeholder'), value: q, attrs: { 'data-role': 'picker-input' } })}
       <div class="sec-picker-list">
         ${matches.length
           ? matches.map((sk) => {
@@ -204,7 +204,7 @@
             return `<div class="sec-picker-item">
               <span class="sec-picker-name">${esc(sk.id)}</span>
               <span class="sec-picker-sub">${esc(sk.name || '')}${rc ? ` · ${esc(decisionText(rc.decision))}` : ''}</span>
-              <button type="button" class="sec-link" data-action="check" data-skill="${esc(sk.id)}">${esc(t('settings.security.check_action'))}</button>
+              ${uiButton({ label: t('settings.security.check_action'), role: 'ghost', size: 'sm', className: 'sec-link', attrs: { 'data-action': 'check', 'data-skill': sk.id } })}
             </div>`;
           }).join('')
           : `<div class="sec-empty">${esc(t('settings.security.picker_empty'))}</div>`}
@@ -221,9 +221,9 @@
       ${componentCardsHtml()}
       ${receiptsHtml()}
       <div class="sec-actions">
-        <button type="button" class="btn btn-sm sec-btn-primary" data-action="export">${esc(t('settings.security.export'))}</button>
-        <button type="button" class="btn btn-sm" data-action="toggle-picker">${esc(t('settings.security.check_one'))}</button>
-        <button type="button" class="btn btn-sm" data-action="refresh">${esc(t('settings.security.refresh'))}</button>
+        ${uiButton({ label: t('settings.security.export'), role: 'primary', size: 'sm', className: 'sec-btn-primary', attrs: { 'data-action': 'export' } })}
+        ${uiButton({ label: t('settings.security.check_one'), size: 'sm', attrs: { 'data-action': 'toggle-picker' } })}
+        ${uiButton({ label: t('settings.security.refresh'), size: 'sm', attrs: { 'data-action': 'refresh' } })}
       </div>
       ${pickerHtml()}
       <div class="sec-protect"><span class="sec-lock"></span><span>${esc(t('settings.security.protection_sub'))}</span></div>`;

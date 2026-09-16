@@ -132,18 +132,111 @@ function workspaceRoot() {
 //     into tool output.
 //   - Skill→package matching goes through the packages registry (same
 //     registry-driven rule as skill root discovery above), not path guessing.
+//
+// Same-course fallback (2026-09): the EduSeed course client ships both as a
+// builtin package (`eduseed-course-client`) and as a pilot install
+// (`aix-course-elite20`) carrying identical skill ids, while credentials are
+// stored per package name — configuring one card does not configure the
+// other, so the skill can run from a package whose credentials were never
+// saved. When the owning package has no stored credentials but another
+// enabled package declares the same manifest `course_id` and holds a usable
+// api_key, that sibling's credentials are borrowed so the run does not die
+// with a bare ConfigError. Every path below emits a `[run-skill:secrets]`
+// diagnostic line on stderr (never containing key material): all previously
+// silent bail-outs now say WHY, so "plugin says not connected" is debuggable
+// from the tool output alone.
+
+function maskUid(uid) {
+  if (!uid) return '';
+  const s = String(uid);
+  if (s.length <= 4) return '***';
+  return `${s.slice(0, 2)}***${s.slice(-2)}`;
+}
+
+function secretsDiag(uidMask, message, extra) {
+  const payload = { scope: 'run-skill:secrets', ...(extra || {}), msg: message };
+  try {
+    process.stderr.write(`[run-skill:secrets] ${JSON.stringify(payload)}\n`);
+  } catch {
+    /* stderr unavailable — diagnostics must never break the skill run */
+  }
+}
+
+function readPackageSecretsFile(packagesRoot, pkgName) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(packagesRoot, '.secrets', `${pkgName}.json`), 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPackageCourseId(packagesRoot, pkgName) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(packagesRoot, pkgName, 'manifest.json'), 'utf8'));
+    const courseId = manifest && typeof manifest.course_id === 'string' ? manifest.course_id.trim() : '';
+    return /^[A-Za-z0-9_-]{1,64}$/.test(courseId) ? courseId : '';
+  } catch {
+    return '';
+  }
+}
+
+function findConfiguredSibling(packagesRoot, registry, ownerName, courseId) {
+  for (const pkg of registry.packages) {
+    if (!pkg || typeof pkg.name !== 'string' || !PKG_NAME_RE.test(pkg.name)) continue;
+    if (pkg.name === ownerName || pkg.enabled === false) continue;
+    if (readPackageCourseId(packagesRoot, pkg.name) !== courseId) continue;
+    const secrets = readPackageSecretsFile(packagesRoot, pkg.name);
+    if (!secrets) continue;
+    if (typeof secrets.api_key === 'string' && secrets.api_key.trim()) return { pkg, secrets };
+  }
+  return null;
+}
 
 function injectPackageRuntimeSecrets(scriptPath) {
+  // Full diagnostics (including the pre-owner bail-outs below) are opt-in via
+  // COGSEED_RUN_SKILL_DEBUG=1: those exits are the normal shape of every
+  // non-package skill run and would spam every tool result otherwise. The
+  // owner-matched states (injected / borrowed / missing_secrets) always log —
+  // they are the only ones that can explain "plugin says not connected".
+  const debugSecrets = process.env.COGSEED_RUN_SKILL_DEBUG === '1';
   const uid = process.env.COGSEED_UID;
-  if (!uid || !/^[A-Za-z0-9_-]{1,64}$/.test(uid)) return;
+  const uidMask = maskUid(uid);
+  if (!uid || !/^[A-Za-z0-9_-]{1,64}$/.test(uid)) {
+    if (debugSecrets) {
+      secretsDiag(uidMask, 'skipping secrets injection: COGSEED_UID missing or invalid', { reason: 'bad_uid' });
+    }
+    return;
+  }
   const packagesRoot = path.join(workspaceRoot(), uid, 'local', 'packages');
   let registry;
   try {
     registry = JSON.parse(fs.readFileSync(path.join(packagesRoot, '_registry.json'), 'utf8'));
-  } catch { return; }
-  if (!registry || !Array.isArray(registry.packages)) return;
+  } catch (e) {
+    if (debugSecrets) {
+      secretsDiag(uidMask, 'skipping secrets injection: packages registry unreadable', {
+        reason: 'registry_unreadable',
+        error: (e && e.message) || '',
+      });
+    }
+    return;
+  }
+  if (!registry || !Array.isArray(registry.packages)) {
+    if (debugSecrets) {
+      secretsDiag(uidMask, 'skipping secrets injection: packages registry malformed', { reason: 'registry_malformed' });
+    }
+    return;
+  }
 
+  // Find the registered package whose skill root owns this script's dir.
   const skillDir = path.resolve(path.dirname(path.dirname(scriptPath)));
+  let owner = null;
   for (const pkg of registry.packages) {
     if (!pkg || typeof pkg.name !== 'string' || !PKG_NAME_RE.test(pkg.name)) continue;
     const roots = Array.isArray(pkg.skill_roots) ? pkg.skill_roots : [];
@@ -151,21 +244,56 @@ function injectPackageRuntimeSecrets(scriptPath) {
       if (typeof rel !== 'string' || path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) continue;
       const root = path.resolve(rel === '.' ? path.join(packagesRoot, pkg.name) : path.join(packagesRoot, pkg.name, rel));
       if (skillDir !== root && !skillDir.startsWith(root + path.sep)) continue;
-      let secrets;
-      try {
-        secrets = JSON.parse(fs.readFileSync(path.join(packagesRoot, '.secrets', `${pkg.name}.json`), 'utf8'));
-      } catch { return; }
-      if (!secrets || typeof secrets !== 'object') return;
-      // Bundled / plain-local installs carry no repo_url and cannot git-update:
-      // silent auto-update defaults OFF for them (updates ride the app release).
-      // An explicit caller env always wins.
-      if (!pkg.repo_url && !('EDUSEED_PLUGIN_AUTOUPDATE' in process.env)) {
-        process.env.EDUSEED_PLUGIN_AUTOUPDATE = '0';
-      }
-      applyPackageSecrets(secrets);
-      return;
+      owner = pkg;
+      break;
     }
+    if (owner) break;
   }
+  if (!owner) {
+    if (debugSecrets) {
+      secretsDiag(uidMask, 'skipping secrets injection: skill dir is not inside any registered package skill root', {
+        reason: 'no_owner_package',
+        skill_dir: skillDir,
+      });
+    }
+    return;
+  }
+
+  // Bundled / plain-local installs carry no repo_url and cannot git-update:
+  // silent auto-update defaults OFF for them (updates ride the app release).
+  // An explicit caller env always wins.
+  if (!owner.repo_url && !('EDUSEED_PLUGIN_AUTOUPDATE' in process.env)) {
+    process.env.EDUSEED_PLUGIN_AUTOUPDATE = '0';
+  }
+
+  const own = readPackageSecretsFile(packagesRoot, owner.name);
+  if (own) {
+    applyPackageSecrets(own);
+    secretsDiag(uidMask, `injected platform credentials from package "${owner.name}"`, {
+      reason: 'injected',
+      package: owner.name,
+    });
+    return;
+  }
+
+  const courseId = readPackageCourseId(packagesRoot, owner.name);
+  const sibling = courseId ? findConfiguredSibling(packagesRoot, registry, owner.name, courseId) : null;
+  if (sibling) {
+    applyPackageSecrets(sibling.secrets);
+    secretsDiag(uidMask, `package "${owner.name}" has no stored credentials; borrowed from same-course configured package "${sibling.pkg.name}"`, {
+      reason: 'borrowed',
+      package: owner.name,
+      from_package: sibling.pkg.name,
+      course_id: courseId,
+    });
+    return;
+  }
+
+  secretsDiag(uidMask, `package "${owner.name}" has no stored credentials and no configured same-course package — platform calls will fail; configure it at 连接 > 插件 > "${owner.name}" → 平台配置`, {
+    reason: 'missing_secrets',
+    package: owner.name,
+    ...(courseId ? { course_id: courseId } : {}),
+  });
 }
 
 function applyPackageSecrets(secrets) {

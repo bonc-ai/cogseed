@@ -299,13 +299,27 @@ function validatePlatformServerUrl(raw: string): string | null {
   return u.origin;
 }
 
+/** API 基址（2026-09-15 修复）：平台挂载在子路径（/edu）下时，
+ *  API 调用必须保留路径——validatePlatformServerUrl 返回 origin 会丢掉
+ *  /edu，导致 whoami 404 →「无法识别身份」。校验语义与基址语义分离。 */
+function platformApiBase(raw: string): string | null {
+  const value = raw.trim();
+  if (!value || value.length > 2048) return null;
+  let u: URL;
+  try { u = new URL(value); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (!u.hostname || u.username || u.password) return null;
+  if (u.search || u.hash) return null;
+  return u.origin + u.pathname.replace(/\/+$/, '');
+}
+
 /** 凭 API Key 从平台反查身份（`GET /api/agent/whoami`，身份由平台按 key
  *  绑定，不可伪造）。返回 null 表示平台返回了无法识别的身份。 */
 export async function resolveIdentityFromPlatform(
   serverUrl: string,
   apiKey: string,
 ): Promise<{ role: string; person_id: string } | null> {
-  const base = validatePlatformServerUrl(serverUrl);
+  const base = platformApiBase(serverUrl);
   if (!base) throw new Error('平台地址不合法（仅支持 http/https，且不含账号密码/查询参数）');
   const res = await fetch(`${base}/api/agent/whoami`, {
     method: 'GET',
@@ -344,6 +358,8 @@ export async function savePluginRuntimeConfig(
   //      自己服务器的地址（换服务器自动换），这里拆出地址；整串仍是 api_key
   //      （平台认证对整串做哈希）。
   //   2) JSON 接入信息 {"server":"…","api_key":"…"}（/companion 兼容形式）。
+  // 规则：密钥/接入信息自带地址为权威——无条件覆盖表单预填或已存的旧
+  // server_url（换 key 即换服务器，存量用户无需手动清地址/重下配置）。
   if (typeof input.api_key === 'string') {
     const pasted = input.api_key.trim();
     if (pasted.startsWith('{')) {
@@ -355,9 +371,7 @@ export async function savePluginRuntimeConfig(
           return { ok: false, error: '接入信息格式不正确（需要 {"server":"…","api_key":"…"}）' };
         }
         input.api_key = blobKey;
-        if (typeof input.server_url !== 'string' || !input.server_url.trim()) {
-          input.server_url = blobServer;
-        }
+        input.server_url = blobServer;
       } catch {
         return { ok: false, error: '接入信息格式不正确（需要合法 JSON）' };
       }
@@ -372,9 +386,7 @@ export async function savePluginRuntimeConfig(
         if (!validatePlatformServerUrl(origin)) {
           return { ok: false, error: '密钥内嵌的平台地址不合法' };
         }
-        if (typeof input.server_url !== 'string' || !input.server_url.trim()) {
-          input.server_url = origin;
-        }
+        input.server_url = origin;
       } catch {
         return { ok: false, error: '密钥内嵌的平台地址无法解析' };
       }
@@ -493,7 +505,7 @@ const _versionAnnounceCache = new Map<string, { ts: number; latest?: string; min
 const VERSION_ANNOUNCE_TTL_MS = 5 * 60 * 1000;
 
 async function fetchVersionAnnouncement(serverUrl: string, apiKey: string): Promise<{ latest?: string; min?: string }> {
-  const base = validatePlatformServerUrl(serverUrl);
+  const base = platformApiBase(serverUrl);
   if (!base) return {};
   const cacheKey = `${base}`;
   const cached = _versionAnnounceCache.get(cacheKey);

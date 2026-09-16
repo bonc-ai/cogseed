@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeProcessTrail, _modelSupportsThinkingByDefault } from '../../../../src/main/features/group_chat/bus';
+import { mergeProcessTrail, _modelSupportsThinkingByDefault, _isDeepSeekOfficialBaseUrl, _targetsDeepSeekOfficialApi } from '../../../../src/main/features/group_chat/bus';
 import type { PersistedChatEntry } from '../../../../src/main/features/chat_events/process-persist';
 
 /** PR209 评审 M7：mergeProcessTrail 两组 slice 各自取同额度导致合并总长
@@ -276,5 +276,29 @@ describe('_modelSupportsThinkingByDefault 收紧（PR209 评审 M8）', () => {
     expect(_modelSupportsThinkingByDefault(queueItem('QwQ-32B'))).toBe(true);
     expect(_modelSupportsThinkingByDefault(queueItem('gpt-4o'))).toBe(false);
     expect(_modelSupportsThinkingByDefault(queueItem('claude-sonnet-4'))).toBe(false);
+  });
+});
+
+describe('DeepSeek 官方直连端点排除（auto 不升 low）', () => {
+  it('官方域名判定：api.deepseek.com 及子域命中，中转/官方 anthropic 路径不命中', () => {
+    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com/v1')).toBe(true);
+    // 裸域名也是官方端点（官方文档 base_url 示例形态；存储侧会剥尾斜杠。
+    // 2026-09-14 修正：此前强制 `/` 让主流填法永远判 false、排除失效）。
+    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com')).toBe(true);
+    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com/')).toBe(true);
+    expect(_isDeepSeekOfficialBaseUrl('https://api.deepseek.com/anthropic')).toBe(true);
+    expect(_isDeepSeekOfficialBaseUrl('https://api.commandcode.ai/provider/v1')).toBe(false);
+    expect(_isDeepSeekOfficialBaseUrl('https://opencode.ai/zen/go/v1')).toBe(false);
+    expect(_isDeepSeekOfficialBaseUrl('https://evil-deepseek.com.example.com/v1')).toBe(false);
+    expect(_isDeepSeekOfficialBaseUrl(undefined)).toBe(false);
+  });
+
+  it('空 uid / 空 provider / 非 cp: 合成 id 一律不排除', () => {
+    // 内置 'deepseek' provider 不在排除范围（defaultReasoning 400 规避设计另管）
+    expect(_targetsDeepSeekOfficialApi('', 'cp:cp-mty7nahn-1')).toBe(false);
+    expect(_targetsDeepSeekOfficialApi('user-1', '')).toBe(false);
+    expect(_targetsDeepSeekOfficialApi('user-1', 'deepseek')).toBe(false);
+    // 测试环境无该用户的存储记录 → findCustomProvider 为 undefined → false
+    expect(_targetsDeepSeekOfficialApi('user-nonexistent', 'cp:cp-nothing')).toBe(false);
   });
 });

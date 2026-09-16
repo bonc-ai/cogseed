@@ -12,6 +12,37 @@ function loadLocale(name: string) {
 
 const LOCALES = ['en', 'zh', 'ja', 'pt'];
 
+/** 2026-09-14 认知资产前端重建：使用记录/证明的实现自 skills-bindings.js
+ *  迁至 cognition-assets/core.js（LOADERS 快照 + actions），读取源同步迁移。 */
+const core = readSrc('modules/cognition-assets/core.js');
+
+/** 从 `{` 起按深度取一段，跳过字符串里的括号（做法同
+ *  recall-candidate-error-text.test.ts 的 sliceBlock）。 */
+function sliceBlock(source: string, start: number): string {
+  const bodyStart = source.indexOf('{', start);
+  let depth = 0;
+  let quote = '';
+  for (let i = bodyStart; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote) {
+      if (char === '\\') i += 1;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+    if (char === '{') depth += 1;
+    else if (char === '}' && --depth === 0) return source.slice(start, i + 1);
+  }
+  throw new Error('unterminated block');
+}
+
+/** 取 core.js 里某个函数声明的完整块。 */
+function fnBlock(marker: string): string {
+  const start = core.indexOf(marker);
+  if (start < 0) throw new Error(`missing block: ${marker}`);
+  return sliceBlock(core, start);
+}
+
 const STAGES = ['formation', 'settling', 'inheritance', 'use', 'evidence'];
 
 /** 与选择层 WithheldReason 加渲染侧两个（needs_confirmation / truncated）对齐。 */
@@ -104,16 +135,22 @@ describe('使用与证明的接线', () => {
   });
 
   it('bindings 里有加载与关闭两条路径', () => {
-    const bindings = readSrc('modules/skills-bindings.js');
-    expect(bindings).toContain("recall.cognitionChain.read");
-    expect(bindings).toContain("recall.usage.list");
-    expect(bindings).toContain('data-recall-asset-chain-close');
+    // 已随认知链视图迁移（2026-09-14 认知资产前端重建）：recall.cognitionChain.read
+    // 通道与独立履历视图废弃，加载与关闭合并进 core.js 的快照 + 路由
+    // （加载 = LOADERS 经 api.soft；关闭 = router.go / back 切走）。守卫废弃
+    // 通道与旧关闭选择器不回流，新加载入口真实存在。
+    expect(core).not.toContain('recall.cognitionChain.read');
+    expect(core).not.toContain('data-recall-asset-chain-close');
+    expect(core).toContain("api.soft('recall.timeline.list'");
+    expect(core).toContain('go(next, options)');
   });
 
   it('使用记录取不到不影响履历打开', () => {
-    // 履历本身来自回执，使用记录只是补充——它挂了不该让整个面板打不开。
-    const bindings = readSrc('modules/skills-bindings.js');
-    expect(bindings).toMatch(/recall\.usage\.list[^\n]*\.catch\(\(\) => null\)/);
+    // 履历本身来自时间线快照，使用记录只是其中一类事件——读取走 api.soft：
+    // soft 内部 try/catch，失败记入 store.errors 并返回 fallback，页面照常
+    // 渲染，使用记录 tab 不会因取不到数据而打不开。
+    expect(core).toContain("api.soft('recall.timeline.list'");
+    expect(core).toMatch(/async soft\(channel, payload, fallback\)[\s\S]*?try \{[\s\S]*?catch \(error\)[\s\S]*?return fallback;/);
   });
 
   it('not_yet 只是更淡，不用警告色也不加图标', () => {
@@ -168,8 +205,13 @@ describe('跨作用域确认入口', () => {
   });
 
   it('确认后就地更新资产列表，按钮不会弹回旧状态', () => {
-    const bindings = readSrc('modules/skills-bindings.js');
-    expect(bindings).toMatch(/list\[index\] = result\.asset/);
+    // 新实现（cognition-assets/core.js）：决定/采纳动作完成后 NS.reload()
+    // 重取快照并整页重画（render 由 onChange 监听触发），列表不再靠
+    // 「把返回的 asset 塞回局部数组」更新——没有可弹回的旧副本。
+    const adopt = fnBlock('async adoptCandidate');
+    const decide = fnBlock('async decideCandidate');
+    expect(adopt).toContain('await NS.reload()');
+    expect(decide).toContain('await NS.reload()');
   });
 });
 
@@ -220,7 +262,9 @@ describe('证明那半边', () => {
   });
 
   it('证明取不到不影响履历打开', () => {
-    const bindings = readSrc('modules/skills-bindings.js');
-    expect(bindings).toMatch(/recall\.proofs\.list[^\n]*\.catch\(\(\) => null\)/);
+    // 证明与使用记录已同源：都来自 recall.timeline.list 快照（api.soft 容错），
+    // 旧 recall.proofs.list 补充通道随认知链视图迁移废弃，不再回流。
+    expect(core).not.toContain('recall.proofs.list');
+    expect(core).toContain("api.soft('recall.timeline.list'");
   });
 });

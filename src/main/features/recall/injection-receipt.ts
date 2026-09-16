@@ -12,12 +12,17 @@ export interface InjectionReceipt extends RecallJsonRecord {
   assetVersion: string;
   boundary: 'real' | 'degraded' | 'test-double';
   status: 'injected' | 'dispatched' | 'omitted' | 'failed';
+  /** 注入通道（2026-09-13 通道显式化）：projection=投影授权的正式资产；
+   *  profile_memory=USER.md/MEMORY.md 派生的背景记忆（无投影授权）。
+   *  缺省视为 projection（存量收据与新正式资产收据一致）。 */
+  channel?: 'projection' | 'profile_memory';
   messageId?: string;
   createdAt: string;
 }
 
 const INJECTION_BOUNDARIES = new Set<InjectionReceipt['boundary']>(['real', 'degraded', 'test-double']);
 const INJECTION_STATUSES = new Set<InjectionReceipt['status']>(['injected', 'dispatched', 'omitted', 'failed']);
+const INJECTION_CHANNELS = new Set<InjectionReceipt['channel']>(['projection', 'profile_memory']);
 
 function asInjectionReceipt(userId: string, value: RecallJsonRecord): InjectionReceipt {
   if (
@@ -31,6 +36,7 @@ function asInjectionReceipt(userId: string, value: RecallJsonRecord): InjectionR
     || !value.assetVersion.trim()
     || !INJECTION_BOUNDARIES.has(value.boundary as InjectionReceipt['boundary'])
     || !INJECTION_STATUSES.has(value.status as InjectionReceipt['status'])
+    || (value.channel !== undefined && !INJECTION_CHANNELS.has(value.channel as InjectionReceipt['channel']))
     || (value.messageId !== undefined && !safeId(value.messageId))
     || typeof value.createdAt !== 'string'
   ) throw new Error('malformed injection receipt');
@@ -42,6 +48,7 @@ export async function recordInjectionReceipt(
   input: {
     taskRunId: string; projectionId?: string; assetId: string; assetVersion: string;
     boundary: InjectionReceipt['boundary']; status: InjectionReceipt['status']; messageId?: string;
+    channel?: InjectionReceipt['channel'];
   },
 ): Promise<InjectionReceipt> {
   if (
@@ -53,6 +60,7 @@ export async function recordInjectionReceipt(
     || !input.assetVersion.trim()
     || !INJECTION_BOUNDARIES.has(input.boundary)
     || !INJECTION_STATUSES.has(input.status)
+    || (input.channel !== undefined && !INJECTION_CHANNELS.has(input.channel))
     || (input.messageId !== undefined && !safeId(input.messageId))
   ) throw new Error('invalid injection receipt reference');
   const key = `${input.taskRunId}:${input.assetId}:${input.assetVersion}:${input.status}:${input.messageId || ''}`;
@@ -61,7 +69,9 @@ export async function recordInjectionReceipt(
     id: `inj-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`,
     taskRunId: input.taskRunId, ...(input.projectionId ? { projectionId: input.projectionId } : {}),
     assetId: input.assetId, assetVersion: input.assetVersion, boundary: input.boundary,
-    status: input.status, ...(input.messageId ? { messageId: input.messageId } : {}),
+    status: input.status,
+    ...(input.channel ? { channel: input.channel } : {}),
+    ...(input.messageId ? { messageId: input.messageId } : {}),
     createdAt: new Date().toISOString(),
   };
   const existing = (await listInjectionReceipts(userId))

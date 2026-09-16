@@ -13,6 +13,7 @@ function fakeElement(dataset: Record<string, string> = {}) {
     innerHTML: '',
     title: '',
     classList: { toggle: vi.fn() },
+    setAttribute: vi.fn(),
     addEventListener: vi.fn((name: string, handler: () => void) => { listeners[name] = handler; }),
     querySelector: vi.fn(() => null),
     querySelectorAll: vi.fn(() => []),
@@ -34,7 +35,13 @@ describe('KB ecosystem navigation refresh', () => {
     const renderKbWorkbench = vi.fn();
     const renderKbDiscover = vi.fn();
     const context: any = {
-      window: { addEventListener: vi.fn(), uiIconHtml: vi.fn(() => ''), renderKbWorkbench, renderKbDiscover },
+      window: {
+        addEventListener: vi.fn(),
+        uiIconHtml: vi.fn(() => ''),
+        uiIconButton: vi.fn(({ label, icon, attrs }: any) => `<button id="${attrs.id}" aria-label="${label}">${icon}</button>`),
+        renderKbWorkbench,
+        renderKbDiscover,
+      },
       document: {
         getElementById: vi.fn((id: string) => elements[id] || null),
         querySelectorAll: vi.fn((selector: string) => selector === '[data-kb-eco]' ? buttons : []),
@@ -53,5 +60,8 @@ describe('KB ecosystem navigation refresh', () => {
     expect(renderKbDiscover).toHaveBeenCalledOnce();
     expect(renderKbWorkbench).toHaveBeenCalledOnce();
     expect(elements['kb-workbench'].hidden).toBe(false);
+    expect(context.window.uiIconButton).toHaveBeenCalledWith(expect.objectContaining({ icon: 'panel-list' }));
+    expect(source).not.toContain('class="ui-icon-button kb-eco-compact"');
+    expect(elements['kb-eco-compact'].setAttribute).toHaveBeenCalledWith('aria-pressed', 'false');
   });
 });

@@ -10,8 +10,37 @@ const workspaceCss = fs.readFileSync(path.join(root, 'src/renderer/workspace.css
 const modelChip = fs.readFileSync(path.join(root, 'src/renderer/modules/model-chip.js'), 'utf8');
 const boot = fs.readFileSync(path.join(root, 'src/renderer/modules/boot.js'), 'utf8');
 const sidebarResize = fs.readFileSync(path.join(root, 'src/renderer/modules/sidebar-resize.js'), 'utf8');
+const shellNavigation = fs.readFileSync(path.join(root, 'src/renderer/shell-navigation.css'), 'utf8');
+const mainIndex = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8');
 
 describe('macOS top drag regions', () => {
+  it('bounds panel drag strips to main content so shell tools keep mouse hit targets', () => {
+    const mainContentRule = css.match(/\.main-content\s*\{([^}]*)}/)?.[1] || '';
+    const dragStripRule = css.match(/\.is-macos \.app-top-drag-strip\s*\{([^}]*)}/)?.[1] || '';
+
+    expect(mainContentRule).toContain('position: relative;');
+    expect(dragStripRule).toContain('position: absolute;');
+    expect(dragStripRule).not.toContain('position: fixed;');
+  });
+
+  it('keeps sidebar drag geometry outside native controls and shell tools', () => {
+    const sidebarDragRule = shellNavigation.match(/\.is-macos \.sidebar::before\s*\{([^}]*)}/)?.[1] || '';
+    const sidebarLogoRule = shellNavigation.match(/\.is-macos \.sidebar-logo\s*\{([^}]*)}/)?.[1] || '';
+
+    expect(sidebarDragRule).toContain('left: 76px;');
+    expect(sidebarDragRule).toContain('right: var(--shell-tools-reserved-width);');
+    expect(sidebarLogoRule).toContain('-webkit-app-region: no-drag;');
+  });
+
+  it('aligns native traffic lights and keeps the collapsed recovery gutter clickable', () => {
+    expect(mainIndex).toContain('trafficLightPosition: { x: 12, y: 19 }');
+    expect(html.indexOf('id="app-shell-tools"')).toBeLessThan(html.indexOf('<aside class="sidebar">'));
+    expect(shellNavigation).toContain('html.is-macos .shell-sidebar-hidden .app-shell-tools');
+    expect(shellNavigation).toContain('--shell-expand-left: 104px;');
+    expect(shellNavigation).toMatch(/html\.is-macos body\.shell-sidebar-hidden \.main-content :is\([\s\S]*?-webkit-app-region:\s*no-drag;/);
+    expect(shellNavigation).toMatch(/html\.is-macos body\.shell-sidebar-hidden \.main-content :is\([\s\S]*?\.ui-page-header__body[\s\S]*?-webkit-app-region:\s*drag;/);
+  });
+
   it.each(['connections', 'workspace'])('covers the %s panel top edge', (panel) => {
     expect(html).toMatch(new RegExp(`id="panel-${panel}"[\\s\\S]*?class="app-top-drag-strip"`));
   });
@@ -54,19 +83,21 @@ describe('macOS top drag regions', () => {
     // 回归钉子：dismiss 在 document 上挂 capture scroll 监听，本意是页面
     // 滚动导致锚点移位时收起悬浮菜单；但菜单自身滚动（模型列表翻页、
     // 搜索框横滚）也会被 capture 捕获——用户滚一下菜单就秒关，长清单
-    // 根本翻不动。onViewportChange 必须忽略来自菜单内部的 scroll。
+    // 根本翻不动。onViewportChange 必须忽略来自菜单内部的 scroll；级联
+    // 飞出层（provider → 模型 → 思考强度）同属这个菜单，也必须一并忽略。
     expect(modelChip).toContain('const t = e && e.target;');
-    expect(modelChip).toContain('if (t && t.nodeType && (t === menu || menu.contains(t))) return;');
+    expect(modelChip).toContain('if (t && t.nodeType && (t === menu || menu.contains(t) || _inFlyout(t))) return;');
   });
 
   it('styles the model menu drill-down controls as inline icons, not full-width buttons', () => {
-    // 回归钉子：model-chip.js 会生成 .model-chip-menu-arrow / -back /
-    // -loading，但这批类曾完全没有 CSS——行容器是 column 布局，箭头按钮
-    // 参与流式排版后被拉成文字下方的整行宽大按钮（吃全局按钮样式）。
-    // 箭头必须绝对定位贴右缘；返回钮/状态文字必须去默认按钮框。
+    // 回归钉子：model-chip.js 会生成 .model-chip-menu-arrow / -loading，
+    // 但这批类曾完全没有 CSS——行容器是 column 布局，箭头按钮参与流式排版
+    // 后被拉成文字下方的整行宽大按钮（吃全局按钮样式）。箭头必须绝对定位
+    // 贴右缘；状态文字必须去默认按钮框。级联飞出层的行同样带箭头，行距规则
+    // 与主菜单 --exec 一致（飞出层不是 --exec，需自带一条）。
     expect(css).toMatch(/\.model-chip-menu--exec \.model-chip-menu-item:has\(> \.model-chip-menu-arrow\)\s*{\s*padding-right:/);
     expect(css).toMatch(/\.model-chip-menu-arrow\s*{[^}]*position:\s*absolute;[^}]*border:\s*none;/);
-    expect(css).toMatch(/\.model-chip-menu-back\s*{[^}]*border:\s*none;/);
+    expect(css).toMatch(/\.model-chip-flyout \.model-chip-menu-item:has\(> \.model-chip-menu-arrow\)\s*{[^}]*padding-right:/);
     expect(css).toMatch(/\.model-chip-menu-loading\s*{[^}]*color:\s*var\(--muted\);/);
   });
 

@@ -11,7 +11,7 @@ const dialogsSource = readFileSync(resolve(__dirname, '../../src/renderer/module
 const settingsSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/settings.js'), 'utf8');
 const workspaceSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
 const stateSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/state.js'), 'utf8');
-const skillsBindingsSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf8');
+const cognitionAssetsSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
 
 function extractFunction(input: string, name: string) {
   const start = input.indexOf(`function ${name}(`);
@@ -343,9 +343,12 @@ describe('dynamic language refresh', () => {
     expect(en['ws.scene_mark']).toBe('S');
     expect(onboardingSource).toContain("_csT('onboarding.agent.other', '其他 Agent')");
     expect(conversationSource).toContain("t('chat.conv_space_mark')");
-    expect(workspaceSource).toContain("_t('ws.space_mark', '空')");
+    expect(workspaceSource).toContain("_icon(_spaceIconName(s.space_type), 'ui-icon')");
+    expect(workspaceSource).not.toContain("_t('ws.space_mark', '空')");
     expect(stateSource).toContain("t('common.unknown_error')");
-    expect(skillsBindingsSource).toContain("_cognitionText('cognition.asset_reason_pause_prompt'");
+    // 认知域空态文案的取词点随 skills.js 瘦身迁至 cognition-assets（T()，
+    // 2026-09-14），断言同步迁移。
+    expect(cognitionAssetsSource).toContain("T('cognition.asset_no_proofs', '还没用过')");
   });
 
   it('repaints Continue Work without repeating source/session reads or import work', () => {

@@ -166,6 +166,8 @@ function loadAccountChip(statusFixture: Record<string, unknown> | null, invokeIm
   };
 
   vm.createContext(context);
+  const userMenuSource = fs.readFileSync(path.join(root, 'src/renderer/modules/ui-user-menu.js'), 'utf8');
+  vm.runInContext(userMenuSource, context, { filename: 'ui-user-menu.js' });
   const source = fs.readFileSync(path.join(root, 'src/renderer/modules/account-chip.js'), 'utf8');
   vm.runInContext(source, context, { filename: 'account-chip.js' });
 
@@ -191,7 +193,8 @@ describe('account-chip merged footer entry (click toggle)', () => {
     await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
     expect(rootEl.menu!.innerHTML).toContain('hub.account.sign_out');
-    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
+    expect(rootEl.menu!.innerHTML).toContain('hub.chip.personal_workspace');
+    expect(rootEl.menu!.innerHTML).not.toContain('hub.chip.menu.collapse');
     // P3394 ACCOUNT-01/03：已登录菜单不再有「账号概览」「登录设备」入口，
     // 也不展示 LocalIdentity 绑定状态（已绑定/未绑定本机身份）。
     expect(rootEl.menu!.querySelector('[data-chip-action="overview"]')).toBeNull();
@@ -228,20 +231,6 @@ describe('account-chip merged footer entry (click toggle)', () => {
     expect(rootEl.menu!.hidden).toBe(true);
   });
 
-  it('closes via the collapse button at the bottom of the panel', async () => {
-    const { rootEl } = loadAccountChip(SIGNED_IN);
-    await settle(50);
-
-    rootEl.chip!.click();
-    await settle(20);
-    const collapse = rootEl.menu!.querySelector('[data-chip-action="collapse"]')!;
-    expect(collapse).not.toBeNull();
-
-    collapse.click();
-    expect(rootEl.menu!.hidden).toBe(true);
-    expect(rootEl.classList.contains('is-open')).toBe(false);
-  });
-
   it('routes the merged settings item to window.setView("settings") and closes', async () => {
     const { rootEl, setView, activateSettingsTab } = loadAccountChip(SIGNED_IN);
     await settle(50);
@@ -275,7 +264,8 @@ describe('account-chip merged footer entry (click toggle)', () => {
     await settle(50);
 
     expect(rootEl.hidden).toBe(false);
-    expect(rootEl.innerHTML).toContain('hub.chip.degraded_name');
+    expect(rootEl.innerHTML).toContain('hub.chip.local_user');
+    expect(rootEl.innerHTML).toContain('hub.chip.personal_workspace');
     expect(rootEl.innerHTML).not.toContain('hub.chip.sign_in');
 
     rootEl.chip!.click();
@@ -283,7 +273,7 @@ describe('account-chip merged footer entry (click toggle)', () => {
     await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.hub_unavailable');
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
-    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
+    expect(rootEl.menu!.innerHTML).not.toContain('hub.chip.menu.collapse');
     expect(rootEl.menu!.innerHTML).not.toContain('hub.account.sign_out');
   });
 
@@ -296,32 +286,33 @@ describe('account-chip merged footer entry (click toggle)', () => {
 
     expect(invoke).toHaveBeenCalledWith('hub-account.status', {});
     expect(rootEl.hidden).toBe(false);
-    expect(rootEl.innerHTML).toContain('hub.chip.degraded_name');
+    expect(rootEl.innerHTML).toContain('hub.chip.local_user');
 
     rootEl.chip!.click();
     await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
-    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
+    expect(rootEl.menu!.innerHTML).not.toContain('hub.chip.menu.collapse');
   });
 
-  it('opens on click when signed out; sign-in lives in the panel head card', async () => {
+  it('opens as a local user menu when signed out; sign-in remains a menu action', async () => {
     const { rootEl, invoke } = loadAccountChip({ signed_in: false, account_id: '', bound: false, hub_reachable: true });
     await settle(50);
 
-    // 未登录态单击同样展开，面板含设置项、登录头卡与收起按钮。
+    expect(rootEl.innerHTML).toContain('hub.chip.local_user');
+    expect(rootEl.innerHTML).toContain('hub.chip.personal_workspace');
+    // 未登录态单击同样展开，面板含设置与 Hub 登录动作。
     rootEl.chip!.click();
     expect(rootEl.menu!.hidden).toBe(false);
     await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.sign_in');
-    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
+    expect(rootEl.menu!.innerHTML).not.toContain('hub.chip.menu.collapse');
 
     // 单击入口只负责展开/收起，不直接触发登录。
     expect(invoke).not.toHaveBeenCalledWith('hub-account.start_login', {});
 
-    // 登录动作在面板头卡内。
-    const head = rootEl.menu!.querySelector('[data-chip-action="sign-in"]')!;
-    head.click();
+    const signIn = rootEl.menu!.querySelector('[data-chip-action="sign-in"]')!;
+    signIn.click();
     expect(invoke).toHaveBeenCalledWith('hub-account.start_login', {});
   });
 

@@ -30,15 +30,20 @@ describe('exec-config chip — reasoning capability prefetch', () => {
 
   it('re-renders a cold-opened menu only when new annotations landed (no loop)', () => {
     // 仅在有新标注且菜单仍停在顶层执行配置视图时重画——防「重画→再预取→
-    // 再重画」循环，也防把已下钻的二级列表拽回顶层。
-    expect(chip).toMatch(/changed && menu\.isConnected && menu\.dataset\.view === 'exec'/);
+    // 再重画」循环，也防把已下钻的二级列表拽回顶层。2026-09-14 改为
+    // early-return 写法并加了「飞出层打开时推迟重画」（重画不发生在悬停
+    // 级联使用中——悬空与拆级联同因消除），条件语义不变。
+    expect(chip).toMatch(/if \(!changed \|\| !menu\.isConnected \|\| menu\.dataset\.view !== 'exec'\) return;/);
+    expect(chip).toContain('_pendingExecRepaint');
   });
 
   it('warm-prefetches on entries load — boot path and entries-changed event', () => {
     // refreshModelChipEntries + cogseed:model-entries-changed + 菜单冷开
-    // 三处都要触发预取。
-    const calls = chip.match(/void _prefetchReasoningForEntries\(\)/g) || [];
+    // 三处都要触发预取（entries-changed 带 force=true：设置页改完模型配置后
+    // 三级飞出层的档位标注必须换新，不能沿用启动时的旧表）。
+    const calls = chip.match(/void _prefetchReasoningForEntries\(/g) || [];
     expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(chip).toContain('void _prefetchReasoningForEntries(true)');
   });
 
   it('skips providers that already have a table (no refetch per menu open)', () => {

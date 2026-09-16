@@ -34,9 +34,7 @@ function loadContextsScript() {
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (value: unknown) => String(value ?? ''),
     t: (key: string, vars?: Record<string, unknown>) => `${key}:${JSON.stringify(vars || {})}`,
-    window: {
-      addEventListener: vi.fn(),
-    },
+    addEventListener: vi.fn(),
     document: {
       addEventListener: vi.fn(),
       body: {},
@@ -45,7 +43,16 @@ function loadContextsScript() {
       querySelectorAll: vi.fn(() => []),
     },
   };
+  context.window = context;
+  context.globalThis = context;
   vm.createContext(context);
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js']) {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8'),
+      context,
+      { filename: file },
+    );
+  }
   vm.runInContext(source, context, { filename: 'contexts.js' });
   return context;
 }

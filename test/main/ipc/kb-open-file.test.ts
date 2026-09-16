@@ -141,6 +141,26 @@ describe('kb.openFile › 个人库文本/文档预览', () => {
     expect(res.path).toBe(`${LIB}/d.pdf`);
     expect(res.content).toBeUndefined();
   });
+
+  // #214 之后 html 曾被当纯文本读，排版丢失；这里锁死"默认渲染 + 按需源码"两条路。
+  it('html 默认返回渲染型（不返回正文，交给 kb-file:// iframe 保排版）', async () => {
+    writeLibFile(`${LIB}/page.html`, '<!doctype html><html><body><h1>标题</h1></body></html>');
+    const res = await invoke('kb.openFile', { path: `${LIB}/page.html` });
+    expect(res.ok).toBe(true);
+    expect(res.kind).toBe('html');
+    expect(res.relPath).toBe(`${LIB}/page.html`);
+    expect(res.content).toBeUndefined();
+  });
+
+  it('html + asText 返回源码（查看源码切换用）', async () => {
+    writeLibFile(`${LIB}/page2.html`, '\uFEFF<!doctype html><html><body><p>正文</p></body></html>');
+    const res = await invoke('kb.openFile', { path: `${LIB}/page2.html`, asText: true });
+    expect(res.ok).toBe(true);
+    expect(res.kind).toBe('text');
+    expect(res.content).toContain('<p>正文</p>');
+    // 与文本类一致：剥掉 BOM
+    expect(res.content.charCodeAt(0)).not.toBe(0xFEFF);
+  });
 });
 
 describe('kb.openFile › 空间库文件预览', () => {
@@ -179,6 +199,41 @@ describe('kb.openFile › 空间库文件预览', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBeTruthy();
   });
+
+  // 回归：office/text/html 分支曾漏回传 spaceId → 渲染层按个人库路由，
+  // "在系统中打开"/"查看源码"在空间库里必然找不到文件。
+  it('每种 kind 都回传 spaceId（office/text/html）', async () => {
+    const sid = await makeSpace('共享库5');
+    const paths = await import('../../../src/main/paths');
+    const root = paths.spaceContextsDir(TEST_UID, sid);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'doc.docx'), makeMinimalDocx({ heading: '空间标题', paragraphs: ['空间段落'] }));
+    fs.writeFileSync(path.join(root, 'note.md'), '# 空间笔记', 'utf8');
+    fs.writeFileSync(path.join(root, 'page.html'), '<!doctype html><html><body>空间页面</body></html>', 'utf8');
+
+    for (const name of ['doc.docx', 'note.md', 'page.html']) {
+      const res = await invoke('kb.openFile', { spaceId: sid, path: name });
+      expect(res.ok, name).toBe(true);
+      expect(res.spaceId, name).toBe(sid);
+    }
+  });
+
+  // Office 预览有进程内 LRU 缓存（第二参数是被缓存的那条路径）——
+  // 回传字段必须在"命中缓存"和"现解析"两条路上一致。
+  it('office 命中预览缓存时同样回传 spaceId', async () => {
+    const sid = await makeSpace('共享库6');
+    const paths = await import('../../../src/main/paths');
+    const root = paths.spaceContextsDir(TEST_UID, sid);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'cached.docx'), makeMinimalDocx({ heading: 'H', paragraphs: ['P'] }));
+
+    const first = await invoke('kb.openFile', { spaceId: sid, path: 'cached.docx' });
+    const second = await invoke('kb.openFile', { spaceId: sid, path: 'cached.docx' });
+    expect(first.spaceId).toBe(sid);
+    expect(second.ok).toBe(true);
+    expect(second.html).toBe(first.html); // 命中缓存（同一份 HTML）
+    expect(second.spaceId).toBe(sid);
+  });
 });
 
 describe('kb.openFile › 错误路径', () => {
@@ -206,5 +261,54 @@ describe('kb.openFile › 错误路径', () => {
     const res = await invoke('kb.openFile', { path: `${LIB}/x.bin` });
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/暂不支持预览/);
+  });
+});
+
+// 查看器只做只读预览；批注编辑 / 原生 Office 打开走 kb.openExternal。
+describe('kb.openExternal › 交给系统默认应用', () => {
+  it('个人库文件用绝对路径调 shell.openPath', async () => {
+    const electron = await import('electron') as any;
+    writeLibFile(`${LIB}/外部.pdf`, makeMinimalPdf(['第 1 页']));
+    const res = await invoke('kb.openExternal', { path: `${LIB}/外部.pdf` });
+    expect(res.ok).toBe(true);
+    const called = electron.shell.openPath.mock.calls.at(-1)?.[0];
+    expect(called).toBe(path.join(contextsRoot(), `${LIB}/外部.pdf`));
+  });
+
+  it('空间库文件解析到空间 contexts 目录', async () => {
+    const electron = await import('electron') as any;
+    const sid = await makeSpace('共享库3');
+    const paths = await import('../../../src/main/paths');
+    const root = paths.spaceContextsDir(TEST_UID, sid);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'slide.pdf'), makeMinimalPdf(['空间 pdf']), 'utf8');
+
+    const res = await invoke('kb.openExternal', { spaceId: sid, path: 'slide.pdf' });
+    expect(res.ok).toBe(true);
+    expect(electron.shell.openPath.mock.calls.at(-1)?.[0]).toBe(path.join(root, 'slide.pdf'));
+  });
+
+  it('越界路径被拒且不触碰 shell.openPath', async () => {
+    const electron = await import('electron') as any;
+    const sid = await makeSpace('共享库4');
+    electron.shell.openPath.mockClear();
+    const res = await invoke('kb.openExternal', { spaceId: sid, path: '../../secret.pdf' });
+    expect(res.ok).toBe(false);
+    expect(electron.shell.openPath).not.toHaveBeenCalled();
+  });
+
+  it('文件不存在返回 file not found', async () => {
+    const res = await invoke('kb.openExternal', { path: `${LIB}/没有这个.pdf` });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('file not found');
+  });
+
+  it('shell.openPath 报错时透出错误信息', async () => {
+    const electron = await import('electron') as any;
+    writeLibFile(`${LIB}/坏文件.pdf`, makeMinimalPdf(['x']));
+    electron.shell.openPath.mockResolvedValueOnce('no application knows how to open');
+    const res = await invoke('kb.openExternal', { path: `${LIB}/坏文件.pdf` });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('no application');
   });
 });
