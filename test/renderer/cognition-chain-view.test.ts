@@ -154,3 +154,58 @@ describe('证明评价文案', () => {
     expect(core).toContain("api.soft('recall.timeline.list'");
   });
 });
+
+// 2026-09-16 #274 压绿时删掉了「每种原因都有对应文案，不落到显示机器码」。
+// 判 A 类（契约仍成立）：字典未命中裸出原始字符串是实现缺陷而非产品取消，
+// 本批随修复恢复守卫——lookup 与各内联字典未命中一律走「其他/未知」兜底文案。
+
+describe('未知枚举不落到机器码', () => {
+  const views = readSrc('modules/cognition-assets/views.js');
+
+  it('资产状态 chip 对字典没有的状态给兜底文案，不把原始 status 当文案', () => {
+    const start = views.indexOf('const assetStatusChip');
+    expect(start).toBeGreaterThan(-1);
+    const block = sliceBlock(views, start);
+    expect(block, '未知状态必须落到 asset_status_unknown').toContain('cognition.asset_status_unknown');
+    expect(block, '不允许裸回退原始 status').not.toContain('|| [String(');
+  });
+
+  it('资产来源标签对未知生命周期状态给兜底文案（空值保留「—」占位）', () => {
+    const start = views.indexOf('const originText');
+    expect(start).toBeGreaterThan(-1);
+    // originText 是赋值语句不是函数体，取到下一个声明前的整段（含字典后的
+    // 兜底分支），sliceBlock 只会切到对象字面量闭合、丢掉兜底部分。
+    const block = views.slice(start, views.indexOf('const moreRow', start));
+    expect(block).toContain('cognition.asset_origin_status_other');
+    expect(block).not.toContain('|| String(asset.lifecycleStatus');
+  });
+
+  it('证明事件标题认不出时给占位文案；title 是自然语言时保留原文', () => {
+    const start = views.indexOf('const proofEventTitle');
+    expect(start).toBeGreaterThan(-1);
+    const block = sliceBlock(views, start);
+    expect(block).toContain('cognition.proof_event_other');
+    expect(block, '认不出不允许裸返回原始值').not.toContain(': raw;');
+  });
+
+  it('vocabulary 缺席的防御分支也不裸出枚举原始值', () => {
+    // vocab 三元的 else 分支与 || 短路都算：兜底文案在，机器码不在。
+    expect(views).not.toContain(': String(item.kind');
+    expect(views).not.toContain('|| String(item.kind');
+    expect(views).not.toContain(': String(c.status');
+    expect(views).not.toContain('|| String(c.status');
+    expect(views).not.toContain(': String(capture.displayStatus');
+    expect(views).not.toContain(': String(capture.displayReason');
+    expect(views).not.toContain(': String(signal)');
+    expect(views).not.toContain(': String(actorId)');
+    expect(views).toContain('cognition.candidate_status_other');
+    expect(views).toContain('cognition.capture_detail_actor_unknown');
+  });
+
+  it('vocabulary 缺席时整理标题不裸出内部 ID（recordTitle 契约同款）', () => {
+    // recordTitle 的契约是「绝不裸出 rcap- 内部 ID」；防御分支不能绕过它。
+    expect(views).not.toContain('|| conv.id');
+    expect(views).not.toContain('|| capture.id');
+    expect(views).toContain('cognition.capture_untitled_record');
+  });
+});

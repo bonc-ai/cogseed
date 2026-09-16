@@ -162,3 +162,49 @@ describe('cognition vocabulary 门禁：后端枚举必须有前端翻译', () =
     expect(fnBody).not.toMatch(/record\.id/);
   });
 });
+
+describe('未知枚举不裸出机器码（未命中走兜底文案）', () => {
+  /** 十一个翻译出口的兜底 key（vocabulary.js 侧）。 */
+  const VOCAB_FALLBACK_KEYS = [
+    'cognition.source_kind_other',
+    'cognition.source_status_other',
+    'cognition.source_reason_other',
+    'cognition.capture_status_other',
+    'cognition.capture_display_status_other',
+    'cognition.capture_display_reason_other',
+    'cognition.capture_action_other',
+    'cognition.capture_bucket_other',
+    'cognition.capture_stage_other',
+    'cognition.capture_signal_other',
+    'cognition.capture_filter_other',
+  ];
+  /** views.js 内联字典的兜底 key。 */
+  const VIEWS_FALLBACK_KEYS = [
+    'cognition.asset_status_unknown',
+    'cognition.asset_origin_status_other',
+    'cognition.candidate_status_other',
+    'cognition.proof_event_other',
+    'cognition.capture_detail_actor_unknown',
+  ];
+
+  it('lookup 未命中返回兜底文案，不再把原始值返回给界面', () => {
+    // 旧实现 console.warn 后 return String(value)——后端加了枚举而字典没跟上
+    // 时，snake_case 原始值直接上屏（机器码裸露）。修复后由 fallback 接管。
+    expect(vocabSource).not.toContain('return String(value)');
+    expect(vocabSource).toContain('return T(fallback[0], fallback[1])');
+  });
+
+  it('十一个翻译出口都接了兜底文案', () => {
+    for (const key of VOCAB_FALLBACK_KEYS) {
+      expect(vocabSource, `出口没接 ${key}`).toContain(key);
+    }
+  });
+
+  it('四种语言都有全部兜底文案', () => {
+    const all = [...VOCAB_FALLBACK_KEYS, ...VIEWS_FALLBACK_KEYS];
+    for (const locale of ['zh', 'en', 'ja', 'pt']) {
+      const data = JSON.parse(read(`src/renderer/locales/${locale}.json`));
+      for (const key of all) expect(data[key], `${locale} 缺兜底文案 ${key}`).toBeTruthy();
+    }
+  });
+});
