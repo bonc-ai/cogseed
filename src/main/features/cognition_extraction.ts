@@ -98,7 +98,7 @@ For each cognition provide:
 1. **judgment**: a clear, actionable statement (1-2 sentences)
 2. **summary**: a very short title (5-10 words)
 3. **type**: one of "personal" (identity/preference), "rule" (must-follow constraint), "skill_method" (learned technique), "template" (reusable pattern)
-4. **scope**: "global" (applies to all work) or the specific project/domain it applies to
+4. **scope**: one of "general", "report", "code", "review", "product" — use "general" for user-level facts that apply to all work (identity, preferences); the others are task-type terms for task-specific knowledge
 5. **uncertainty**: brief note on confidence (optional)
 
 Write judgment, summary, and uncertainty in the SAME language the user writes in. If the user writes in Chinese, respond in Chinese.
@@ -305,14 +305,19 @@ export async function extractCognitionsFromSession(input: ExtractionInput): Prom
 
   // Validate and normalize
   const candidates: ExtractionCandidate[] = [];
+  const { normalizeAssetScopeValue } = await import('./recall/scope-policy');
   for (const item of extracted) {
     if (!item || typeof item.judgment !== 'string' || !item.judgment.trim()) continue;
     const type = ['personal', 'rule', 'template', 'skill_method'].includes(item.type) ? item.type : 'personal';
+    // scope 归一（A 轨道）：'global'/自由全局措辞 → 'general'；归不了的
+    // 保留原文（缺省 'general'——旧缺省 'global' 是历史词形）。
     candidates.push({
       judgment: item.judgment.trim(),
       summary: typeof item.summary === 'string' ? item.summary.trim() : undefined,
       suggestedType: type,
-      suggestedScope: typeof item.scope === 'string' ? item.scope.trim() : 'global',
+      suggestedScope: (typeof item.scope === 'string' && item.scope.trim())
+        ? (normalizeAssetScopeValue(item.scope) ?? item.scope.trim())
+        : 'general',
       uncertainty: typeof item.uncertainty === 'string' ? item.uncertainty.trim() : undefined,
     });
   }

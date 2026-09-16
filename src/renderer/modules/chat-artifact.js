@@ -148,6 +148,38 @@
         // Only the currently-viewed conversation has live iframes in the DOM,
         // but guard anyway — a result for a non-current cid is a stale fire.
         if (!cid || cid !== currentCid) return;
+        const p = data.payload;
+        // 确认/取消卡片走专用幂等通道（2026-09-14 Bug3 修复 + 评审补强）：
+        // 绕过普通发送队列，主进程直达总线；点击即乐观置 submitting，
+        // 成功 confirmed/cancelled 只读，失败 failed 可重试。取消与确认同通道
+        // 对称处理（旧路径会被 busy 死锁卡在「待发送」，智能体收不到取消）。
+        if (p && typeof p === 'object' && (p.action === 'plugin-confirm' || p.action === 'plugin-cancel')) {
+          const isCancel = p.action === 'plugin-cancel';
+          const targetState = isCancel ? 'cancelled' : 'confirmed';
+          const card = frame.closest ? frame.closest('.chat-artifact-card') : null;
+          if (card) {
+            const st = String(card.dataset.confirmState || '');
+            if (st === 'submitting' || st === 'confirmed' || st === 'cancelled') return; // 防抖 + 终态幂等
+            _setConfirmState(card, 'submitting');
+            const invoke = window.cogseed && window.cogseed.invoke;
+            if (typeof invoke !== 'function') { _setConfirmState(card, 'failed'); return; }
+            invoke('groupChat.sendConfirm', {
+              cid,
+              artifactId,
+              op: String(p.op || ''),
+              payload: p.payload,
+              action: isCancel ? 'cancel' : 'confirm',
+            })
+              .then((res) => {
+                if (res && res.ok === false && res.code === 'ALREADY_CONFIRMED') return _setConfirmState(card, 'confirmed');
+                if (res && res.ok === false && res.code === 'ALREADY_CANCELLED') return _setConfirmState(card, 'cancelled');
+                if (!res || res.ok === false) return _setConfirmState(card, 'failed');
+                _setConfirmState(card, targetState);
+              })
+              .catch((err) => _setConfirmState(card, 'failed', (err && err.message) || ''));
+            return;
+          }
+        }
         const text = encodeArtifactResult(artifactId, agentId, title, data.payload);
         try { sendInCurrentConversation(text); }
         catch (err) { try { _convLog.warn('artifact result send failed', err && err.message ? err.message : err); } catch (_) {} }
@@ -376,9 +408,34 @@
     catch (err) { _trackError('artifact_open_viewer', { error_message: String(err && err.message || err) }); _notifyFail(_t('artifact.open_failed', 'Could not open'), err); }
   }
 
+  function _setConfirmState(card, state, errorText) {
+    if (!card) return;
+    card.dataset.confirmState = state;
+    card.classList.remove('is-confirm-submitting', 'is-confirmed', 'is-confirm-failed', 'is-cancelled');
+    if (state === 'submitting') card.classList.add('is-confirm-submitting');
+    else if (state === 'confirmed') card.classList.add('is-confirmed');
+    else if (state === 'failed') card.classList.add('is-confirm-failed');
+    else if (state === 'cancelled') card.classList.add('is-cancelled');
+    let badge = card.querySelector('.chat-artifact-confirm-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'chat-artifact-confirm-badge';
+      const header = card.querySelector('.chat-artifact-header');
+      const spacer = header ? header.querySelector('.chat-artifact-spacer') : null;
+      if (header && spacer) header.insertBefore(badge, spacer);
+      else if (header) header.appendChild(badge);
+    }
+    if (state === 'submitting') badge.textContent = _t('artifact.confirm_submitting', '正在提交…');
+    else if (state === 'confirmed') badge.textContent = _t('artifact.confirm_confirmed', '✓ 已确认');
+    else if (state === 'failed') badge.textContent = _t('artifact.confirm_failed', '提交失败 · 重试');
+    else if (state === 'cancelled') badge.textContent = _t('artifact.confirm_cancelled', '已取消');
+    else badge.textContent = '';
+    void errorText;
+  }
+
   // ── render ──────────────────────────────────────────────────────────────
   // host: a container element appended inside the bubble.
-  // ctx:  { cid, artifactId, title, agentId }
+  // ctx:  { cid, artifactId, title, agentId, confirmState }
   function renderChatArtifact(host, ctx) {
     if (!host || !ctx || !ctx.cid || !ctx.artifactId) return;
     _bindGlobalListener();
@@ -406,6 +463,9 @@
     header.appendChild(titleEl);
     header.appendChild(spacer);
     header.appendChild(moreBtn);
+    card.appendChild(header);
+    // 历史回放：确认态徽标必须在 header 挂载后再应用（2026-09-14 Bug3）
+    if (ctx.confirmState) _setConfirmState(card, ctx.confirmState);
 
     const frame = document.createElement('iframe');
     frame.className = 'chat-artifact-frame';
@@ -424,7 +484,6 @@
       _openMenu(moreBtn, { frame, cid: ctx.cid, artifactId: ctx.artifactId, title, agentId: ctx.agentId || '' });
     });
 
-    card.appendChild(header);
     card.appendChild(frame);
     host.appendChild(card);
     _checkArtifactAvailability(frame, ctx);
@@ -446,6 +505,7 @@
         artifactId: a.id,
         title: a.title || '',
         agentId: a.agent_id || '',
+        confirmState: a.confirm_state || '',
       });
     }
   }

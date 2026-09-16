@@ -21,7 +21,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 ## 运行时调用方式
 
-首选（CogSeed 内，bash 工具）：
+唯一受支持的方式（CogSeed 内，bash 工具）：
 
 ```bash
 "$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" eduseed-student-submit runtime -- <命令> '<JSON载荷>'
@@ -29,9 +29,26 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 新版 run_skill 工具等价形式：`{skill_id:"eduseed-student-submit", script:"runtime", args:["<命令>","<JSON载荷>"]}`
 
-本地开发：`node scripts/runtime.js <命令> '<JSON载荷>'`
+> ⚠️ **不要**用 `node scripts/runtime.js …` 之类的方式直接跑脚本。`run-skill.cjs` 是宿主
+> 注入运行时凭证的唯一入口，绕过它就拿不到凭证，所有需要鉴权的命令都会 `AUTH_FAILED`。
 
 每次调用 stdout 输出一个 JSON 结果（`{ok, ...}`）。**不得**把多次结果拼进一个 shell 命令的管道再喂给用户，必须逐步读取、逐条解释。
+
+## 凭证由宿主注入（重要：不要自行查找凭证）
+
+`EDUSEED_SERVER_URL` / `EDUSEED_API_KEY` / `EDUSEED_STUDENT_ID` / `EDUSEED_ROLE`
+由 CogSeed **在本次技能运行的那一刻**注入技能进程，随本次运行结束即收回。
+
+因此：
+
+- 在 bash 里 `printenv | grep EDUSEED` **看不到任何东西是正常的**，不代表凭证缺失；
+- **不要**用环境变量判断凭证是否存在；**不要**全盘 `find` / `grep` 搜索凭证文件；
+- **不要**使用桌面、下载目录里的历史 `*-config-*.json`——那可能是别的学号的旧配置；
+- 需要鉴权的命令（`list-challenges` / `get-challenge` / `export-challenge-pack` …）
+  **只用上面那条首选命令**即可，凭证会自动到位；
+- `health` 是免鉴权端点，它通过**不代表**凭证有效，**不能**作为凭证就绪的依据；
+- 若按首选命令仍报 `AUTH_FAILED`，正确处置是引导学生到平台 `/companion` 重新生成
+  API Key；**绝不要**关闭授权校验（例如 `EDUSEED_REQUIRE_LICENSE=0`）。
 
 ## 命令面（学生视角，来自 runtime help）
 
@@ -73,7 +90,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 ### 步骤 4.5 — 提交摘要人工确认（MVP User Story，硬性）
 
 在调用 `submit-project` / `submit-and-track` 之前，必须：
-1. 向学生展示**提交摘要**：**提交身份（学号，取自运行时 submit 结果的 studentId，A2-2 硬性）**、挑战 ID、项目标题、GitHub 仓库、AAR/自评字数、交付物检查结果、缺件清单；
+1. 向学生展示**提交摘要**：**提交身份（学号，取自运行时 submit 结果的 studentId，A2-2 硬性）**、**挑战名称（challengeTitle，取自 get-challenge 返回的 title）**、挑战 ID、项目标题、GitHub 仓库、AAR/自评字数、交付物检查结果、缺件清单；
 2. 明确提问："将以 <学号> 身份提交，确认吗？（回复'确认'后才会写平台）"；
 3. **只在学生明确确认后**执行写入。学生未确认/要求修改 → 停止并列出待改项。
 失败行为：`never_submit_without_user_confirm`
@@ -85,7 +102,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 1. 创建 artifact（title=「待确认：提交项目」），含两个文件：
    - `index.html`：确认卡片宿主模板（附录 A，**原样使用**，不要增删改动）
-   - `confirm-config.json`：`{"op":"submit-project","payload":{…完整写入载荷…}}`（A2-2 硬性：payload 必须包含 `提交身份` 字段 = 运行时 submit 结果的 studentId）
+   - `confirm-config.json`：`{"op":"submit-project","payload":{…完整写入载荷…}}`（A2-2 硬性：payload 必须包含 `提交身份` 字段 = 运行时 submit 结果的 studentId；Bug2 硬性：payload 必须包含 `challengeTitle` = get-challenge 返回的 title，与 `challengeId` 并存——卡片会把「挑战名称」与「挑战 ID」分开展示，不得只用裸 ID 充当挑战名）
 2. 对话中会渲染出插件确认面板（载荷摘要 + 确认/取消按钮）；
 3. 等待用户操作：
    - 收到 `{"action":"plugin-confirm","op":"submit-project","payload":…}` → 用该 payload 执行第 5 步 `submit-project`；

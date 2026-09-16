@@ -65,6 +65,7 @@ import { safeId } from '../storage';
 import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
+import { resolveModelOverride } from './model_overrides';
 import {
   CATALOG,
   FEATURED_API_PROVIDERS,
@@ -259,20 +260,73 @@ export interface TtsProfile {
   createdAt: number;
 }
 
-export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 131072;
-export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 8192;
+// 模型配置默认值口径（2026-09-13 产品口径，十进制）：新建/未声明模型的
+// 上下文窗口默认 1M（1000000）、最大输出默认 384K（384000）。此前为
+// 保守值 131072/8192——所有配置入口统一引用本常量，避免各处默认漂移。
+//
+// 2026-09-14 复核后确认继续沿用（产品负责人明确定调）：**目录里查不到的
+// 自定义模型 id 仍套这两个默认值**，不改成"提示未确认、要求手填"。
+// 理由与边界：
+//   - 目录（public_model_catalog）已是"已验证 id"的登记处：厂商实测确认的
+//     id 应当登记进目录，届时走目录值；默认值只服务"还没登记的新 id"。
+//   - 未知 id 兜大（1M/384K）比兜小（128K/8K）更符合实际——兜小会静默压低
+//     上下文预算与 max_tokens（v4-flash-vision-exp 就吃过这个亏）。
+//   - 代价：万一厂商真实窗口更小，界面分母会偏乐观。用户可在「模型配置」
+//     编辑里显式填窗口/输出覆盖掉默认值（自定义供应商表单接受显式值）。
+export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 1000000;
+export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 384000;
 export const MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW = 16_777_216;
 export const MAX_CUSTOM_PROVIDER_MAX_TOKENS = 1_048_576;
 export const MAX_CUSTOM_PROVIDER_MODELS = 100;
 export const MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH = 200;
+
+/** 输入类型（2026-09-13 统一模型配置表单）：与「输入类型」多选一一对应。
+ *  text 恒支持（表单里锁定勾选）；image 驱动 vision（供 pi-ai 的
+ *  model.input 与视觉降级链消费）；video/pdf 现在只落库声明——引擎侧
+ *  视频为展示-only、PDF 走抽取路径，不做注入。 */
+export type CustomProviderModelInput = 'text' | 'image' | 'video' | 'pdf';
+
+/** 模型能力（2026-09-13）：结构化输出 / 原生联网搜索 / 对话中系统消息。
+ *  落库声明 + 供构造 Model 时映射 compat 开关（developer role / strict
+ *  mode）；原生联网搜索按 api 注入（openai-responses），声明留档。 */
+export type CustomProviderModelCapability = 'structured_output' | 'native_web_search' | 'system_message';
+
+export const CUSTOM_PROVIDER_MODEL_INPUTS: readonly CustomProviderModelInput[] = ['text', 'image', 'video', 'pdf'];
+export const CUSTOM_PROVIDER_MODEL_CAPABILITIES: readonly CustomProviderModelCapability[] = [
+  'structured_output', 'native_web_search', 'system_message',
+];
+export const MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS = 8;
+export const MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH = 40;
+export const MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS = 16;
+export const MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH = 4_000;
 
 export interface CustomProviderModel {
   id: string;
   contextWindow: number;
   maxTokens: number;
   /** Accepts image inputs. undefined = unknown (no guessed default — the
-   *  conservative consumers pass images through when unknown). */
+   *  conservative consumers pass images through when unknown).
+   *  显式声明 input 时由 input 派生（含 image ⇔ true），保持单一口径。 */
   vision?: boolean;
+  /** 输入类型多选（缺省 = 未声明，行为与旧数据一致）。 */
+  input?: CustomProviderModelInput[];
+  /** 模型能力多选（缺省 = 未声明）。 */
+  capabilities?: CustomProviderModelCapability[];
+  /** 推理等级（从低到高，如 ['low','medium','high']）。落库声明；
+   *  档位下传链的消费接线留待后续（现状档位由全局/每任务配置驱动）。 */
+  reasoningLevels?: string[];
+  /** 推理参数映射（档位名 → 请求参数对象）。落库声明 + 可解析校验。 */
+  reasoningParamsMap?: Record<string, unknown>;
+  /**
+   * 模型级启用开关（2026-09-14 参考图：行内开关）。**缺省 = 启用**，
+   * 只在关闭时写 `false`（与 cloud/config/component-enabled.json 同约定：
+   * 老数据无需迁移，也不写一堆 true）。
+   * 关闭语义（S2）：从模型选择器隐藏（auth.listModels 过滤）+ 阻止新绑定
+   * （isCustomProviderModelAllowed）+ 已绑定条目按既有"不可用即跳过"机制
+   * 自动兜底到下一条；模型参数（窗口/输出/推理档位/输入类型）原样保留，
+   * 随时可开关恢复。
+   */
+  enabled?: boolean;
 }
 
 export interface CustomProvider {
@@ -614,22 +668,94 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
     const maxTokens = Math.min(
       normalizedLegacyCustomProviderNumber(
         metadata.maxTokens,
-        DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        // 未显式存过输出上限时优先取目录预设（2026-09-13 起目录登记 DeepSeek
+        // V4/V4.1 的 384K；此前一律兜 8192，编辑页显示偏低的根因）。已存的
+        // 显式值不受影响。
+        publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
         MAX_CUSTOM_PROVIDER_MAX_TOKENS,
       ),
       contextWindow,
     );
     // vision 只收显式 boolean（probe/用户口径）；未知保持未知，不猜。
     const rawVision = (metadata as { vision?: unknown }).vision;
+    // 新表单字段（2026-09-13）：读时宽容——非法/超限值静默丢弃，不阻断
+    // 老数据加载（与 vision 同风格）。
+    const input = parseCustomProviderModelInputs((metadata as { input?: unknown }).input);
+    const capabilities = parseCustomProviderModelCapabilities((metadata as { capabilities?: unknown }).capabilities);
+    const reasoningLevels = parseCustomProviderReasoningLevels((metadata as { reasoningLevels?: unknown }).reasoningLevels);
+    const reasoningParamsMap = parseCustomProviderReasoningMap((metadata as { reasoningParamsMap?: unknown }).reasoningParamsMap);
+    // enabled 只在显式 false 时落字段（true/缺失都等于启用）。
+    const modelEnabled = (metadata as { enabled?: unknown }).enabled;
     models.push({
       id,
       contextWindow,
       maxTokens,
       ...(typeof rawVision === 'boolean' ? { vision: rawVision } : {}),
+      ...(modelEnabled === false ? { enabled: false } : {}),
+      ...(input ? { input } : {}),
+      ...(capabilities ? { capabilities } : {}),
+      // 空数组=用户显式清空推理等级（合法配置，运行时据此不发 thinking
+      // 参数），不能按 falsy 丢弃——与写入侧 normalizeModel 口径一致。
+      ...(reasoningLevels !== undefined ? { reasoningLevels } : {}),
+      ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
     });
     if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
   }
   return models;
+}
+
+/** 宽容解析：合法子集（白名单/去重/上限），空或全非法返回 undefined。 */
+function parseCustomProviderModelInputs(value: unknown): CustomProviderModelInput[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: CustomProviderModelInput[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const token = raw.trim().toLowerCase() as CustomProviderModelInput;
+    if (!CUSTOM_PROVIDER_MODEL_INPUTS.includes(token) || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= CUSTOM_PROVIDER_MODEL_INPUTS.length) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function parseCustomProviderModelCapabilities(value: unknown): CustomProviderModelCapability[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: CustomProviderModelCapability[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const token = raw.trim().toLowerCase() as CustomProviderModelCapability;
+    if (!CUSTOM_PROVIDER_MODEL_CAPABILITIES.includes(token) || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= CUSTOM_PROVIDER_MODEL_CAPABILITIES.length) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function parseCustomProviderReasoningLevels(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const token = raw.replace(/\s+/g, ' ').trim();
+    if (!token || token.length > MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS) break;
+  }
+  // 数组输入原样返回（含空数组=显式清空）；只有非数组才视为未声明——
+  // 与写侧 normalizeModel 的「显式空=清空、未提供=未声明」口径一致。
+  return out;
+}
+
+function parseCustomProviderReasoningMap(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length || entries.length > MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS) return undefined;
+  try {
+    if (JSON.stringify(value).length > MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH) return undefined;
+  } catch {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
 }
 
 function migrateCustomProviderModelsFromEntries(
@@ -831,10 +957,14 @@ function customProviderForId(store: ProfilesFile, providerId: string): CustomPro
   return (store.customProviders || []).find((provider) => provider.id === id);
 }
 
+/** 该模型是否可用：存在 **且** 未被模型级开关关闭。
+ *  关闭后这里返回 false → isEntryAllowed 判条目"不可用" → 对话调度按既有
+ *  "跳过不可用条目、兜底到下一条"机制处理（auth.ts pickChatEntryGroup）。 */
 function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
   const normalized = String(model || '').trim();
   if (!normalized) return false;
-  return provider.models.some((candidate) => candidate.id === normalized);
+  const hit = provider.models.find((candidate) => candidate.id === normalized);
+  return !!hit && hit.enabled !== false;
 }
 
 function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
@@ -1187,19 +1317,18 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
-    // 方案 C：reasoning 标注按识别结果（与 custom_provider_runtime 的
-    // 透传判定同一数据源）——识别为支持推理的模型，UI 解锁档位且请求
-    // 真的会带 reasoning_effort；识别不出的保持 undefined（UI 显示能力
-    // 未知并禁用低/高），不再写死 false。
+    // 思考强度展示与配置严格同步（2026-09-13）：自定义模型的 reasoning
+    // 注解只认模型配置里的显式声明（统一模型表单的「推理等级 / 推理参数
+    // 映射」）——配置中未定义的选项不再靠识别猜测解锁 UI 档位（实机：
+    // deepseek 模型未配任何推理等级，前端却可切低/中/高）。声明后档位
+    // 恢复，形成"配置驱动展示"的闭环。运行时的 reasoning_effort 透传
+    // 判定（custom_provider_runtime）不变——展示链与执行链职责分离。
     const custom = customProviderForId(loadProfiles(), id);
-    const models = custom?.models || [];
+    // 模型级开关关闭的不进选择器（S2：隐藏 + 阻止新绑定；详情卡用的是
+    // customProviders.list 的全量清单，开关本身仍然可见可拨回）。
+    const models = (custom?.models || []).filter((model) => model.enabled !== false);
     const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] = [];
-    // reasoning 标注按识别结果（识别器不可用时省略该字段，与运行时不透传
-    // 的行为一致）；contextWindow/vision 透传不依赖识别器（目录解析独立）。
-    let recognizer: typeof import('../model/model_id_recognition') | null = null;
-    try {
-      recognizer = await import('../model/model_id_recognition');
-    } catch { recognizer = null; }
+    // contextWindow/vision 透传不依赖识别器（目录解析独立）。
     for (const model of models) {
       const abilities = publicModelAbilitiesFor(model.id);
       const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
@@ -1209,13 +1338,14 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
         : stored;
       const resolvedVision = typeof model.vision === 'boolean'
         ? model.vision : abilities.vision;
-      const recognized = recognizer ? await recognizer.recognizeModelByIdReady(model.id) : null;
+      const declaredReasoning = (Array.isArray(model.reasoningLevels) && model.reasoningLevels.length > 0)
+        || (model.reasoningParamsMap && Object.keys(model.reasoningParamsMap).length > 0);
       out.push({
         id: model.id,
         name: model.id,
         ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
         ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
-        ...(recognized?.reasoning !== undefined ? { reasoning: recognized.reasoning } : {}),
+        ...(declaredReasoning ? { reasoning: true } : {}),
       });
     }
     return { models: out };
@@ -1241,7 +1371,9 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
     }
     return out;
   };
-  const curated = curatedModelsFor(id);
+  // 本地覆盖（设置页「预设详情」）优先于预设：模型下拉/上下文分母读的就是这里，
+  // 设置页改了窗口而列表还显示预设值会立刻造成"界面与运行时两套数"。
+  const curated = applyModelOverrides(id, curatedModelsFor(id));
   if (curated.length) return { models: await annotate(allowed(curated)) };
   try {
     const mod = await ca();
@@ -1425,6 +1557,25 @@ export interface EntryView {
   modelAvailable?: false;
   createdAt: number;
   lastUsed: number;
+}
+
+/** 用户本地覆盖（features/model_overrides）叠加到预设条目上，覆盖字段优先。 */
+function applyModelOverrides<T extends { id: string; contextWindow?: number; maxTokens?: number }>(
+  providerId: string,
+  models: T[],
+): T[] {
+  let uid = '';
+  try { uid = getActiveUserId(); } catch { return models; }
+  if (!uid) return models;
+  return models.map((model) => {
+    const override = resolveModelOverride(uid, providerId, model.id);
+    if (!override) return model;
+    return {
+      ...model,
+      ...(typeof override.contextWindow === 'number' ? { contextWindow: override.contextWindow } : {}),
+      ...(typeof override.maxTokens === 'number' ? { maxTokens: override.maxTokens } : {}),
+    };
+  });
 }
 
 function entryToView(e: Entry, store: ProfilesFile, modelNameLookup: (p: string, m: string) => string): EntryView {
@@ -1964,7 +2115,9 @@ export async function completeAuthorization(
           models: orderedModels.map((id) => existingModelMetadata.get(id) || ({
             id,
             contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
-            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+            // 目录登记过输出上限的模型跟随预设（与 fetch 导入路径同口径，
+            // 2026-09-14：此前手动填 id 一律写死 384K，绕过了目录优先）。
+            maxTokens: publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
           })),
           source: input.source,
           ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
@@ -1979,7 +2132,7 @@ export async function completeAuthorization(
           models: orderedModels.map((id) => ({
             id,
             contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
-            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+            maxTokens: publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
           })),
           enabled: true,
           source: input.source,
@@ -2772,7 +2925,15 @@ export async function testAuthorizationDraft(
       if (EXTERNAL_API_PROVIDERS.includes(providerId)) {
         const ext = await import('../model/core-agent/external-providers');
         if (providerId === 'moonshot') provider = await ext.createMoonshotProvider({ apiKey, modelId: model });
-        else if (providerId === 'deepseek') provider = await ext.createDeepSeekProvider({ apiKey, modelId: model });
+        else if (providerId === 'deepseek') {
+          provider = await ext.createDeepSeekProvider({
+            apiKey,
+            modelId: model,
+            override: (() => {
+              try { return resolveModelOverride(getActiveUserId(), 'deepseek', model); } catch { return null; }
+            })(),
+          });
+        }
         else if (providerId === 'doubao') provider = await ext.createDoubaoProvider({ apiKey, modelId: model });
         else if (providerId === 'openai-compatible') {
           provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: input.baseUrl || '', modelId: model });
@@ -2850,7 +3011,13 @@ export async function testConnection(
       } else if (pid === 'deepseek') {
         // Default probe = V4 Flash (cheaper than Pro; fine for a 1-token ping).
         probeModel = probeModel || 'deepseek-v4-flash';
-        provider = await ext.createDeepSeekProvider({ apiKey, modelId: probeModel });
+        provider = await ext.createDeepSeekProvider({
+          apiKey,
+          modelId: probeModel,
+          override: (() => {
+            try { return resolveModelOverride(getActiveUserId(), 'deepseek', probeModel); } catch { return null; }
+          })(),
+        });
       } else if (pid === 'doubao') {
         // Default probe = Seed 2.0 Lite (cheaper than Pro).
         probeModel = probeModel || 'doubao-seed-2-0-lite-260215';

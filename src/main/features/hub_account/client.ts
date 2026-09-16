@@ -30,10 +30,9 @@ import type {
 const log = createLogger('hub_account:client');
 
 export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
-// 内部测试包（packaged-dev）与正式 release 均指向 HTTPS 官网。
-// 注意：80 端口会 301 到 https，若用 http 会导致 POST（callback/refresh/logout）
-// 被重定向降级为 GET 而失败，因此 packaged-dev 也必须直接用 https。
-export const PACKAGED_DEV_HUB_API_BASE = 'https://cogseed-open.bonc.com.cn';
+// 验收用 packaged-dev 包固定指向本机 Hub 测试服务；正式 release
+// 仍使用线上 HTTPS 地址，避免测试配置泄漏到发布通道。
+export const PACKAGED_DEV_HUB_API_BASE = 'http://127.0.0.1:4180';
 export const RELEASE_HUB_API_BASE = 'https://cogseed-open.bonc.com.cn';
 
 /**

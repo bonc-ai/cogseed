@@ -281,7 +281,7 @@
     const enabledBadge = pkg.enabled
       ? `<span class="plugins-badge is-on">${_esc(_t('plugins.enabled', '已启用'))}</span>`
       : `<span class="plugins-badge is-off">${_esc(_t('plugins.disabled', '已停用'))}</span>`;
-    return `<div class="plugins-card${pkg.enabled ? '' : ' is-disabled'}" data-plugins-card="${_esc(pkg.name)}" role="button" tabindex="0">
+    return `<div class="plugins-card ui-resource-card${pkg.enabled ? '' : ' is-disabled'}" data-plugins-card="${_esc(pkg.name)}" role="button" tabindex="0">
       <div class="plugins-card-main" data-plugins-action="detail" data-plugins-name="${_esc(pkg.name)}">
         <div class="plugins-card-icon">${_icon('puzzle', 'plugins-card-icon-svg')}</div>
         <div class="plugins-card-body">

@@ -1,0 +1,40 @@
+/* Shared sidebar geometry is identical in component cards and page shells. */
+.cs-sidebar,.cs-sidebar *{box-sizing:border-box}
+.cs-sidebar-tasks{display:flex;flex-direction:column;flex:1;min-height:0;color:var(--cs-ink-70);font:var(--cs-type-body)}
+.cs-sidebar-task-scroll{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:0 var(--cs-space-3) var(--cs-space-4);overscroll-behavior:contain}
+.cs-task-group{margin-top:var(--cs-space-2)}.cs-task-group-head{display:flex;align-items:center;min-height:32px}
+.cs-task-group-head>button:first-child{display:flex;align-items:center;gap:var(--cs-space-2);flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:var(--cs-size-caption);color:var(--cs-text-muted);text-align:left;padding:var(--cs-space-1) var(--cs-space-1);cursor:pointer}
+.cs-task-group-head span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cs-task-group-head small{margin-left:auto;font:inherit}
+.cs-sidebar-task-row{position:relative;border-radius:var(--cs-radius-md);margin:var(--cs-space-1) 0}
+.cs-sidebar-task-row:hover,.cs-sidebar-task-row:focus-within,.cs-sidebar-task-row.is-menu-open{background:var(--cs-overlay-hover-soft)}
+.cs-sidebar-task-row.is-selected{background:var(--cs-accent-wash)}
+.cs-task-open{display:block;width:100%;text-align:left;border:0;background:none;color:inherit;cursor:pointer;font:inherit;padding:var(--cs-space-2) var(--cs-space-2);min-height:36px}
+.cs-task-title{display:flex;align-items:center;gap:var(--cs-space-1);padding-right:var(--cs-space-8);font-size:var(--cs-size-ui-sm);line-height:20px}
+.cs-task-title>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cs-task-title>svg{flex:none}
+.cs-task-open.is-untitled{color:var(--cs-text-muted)}
+.cs-task-time{position:absolute;right:10px;top:11px;font-size:var(--cs-size-caption);color:var(--cs-text-muted);pointer-events:none}
+.cs-task-more{position:absolute;right:4px;top:5px;visibility:hidden}
+.cs-sidebar-task-row:hover .cs-task-more,.cs-sidebar-task-row:focus-within .cs-task-more,.cs-sidebar-task-row.is-menu-open .cs-task-more{visibility:visible}
+.cs-sidebar-task-row:hover .cs-task-time,.cs-sidebar-task-row:focus-within .cs-task-time,.cs-sidebar-task-row.is-menu-open .cs-task-time{visibility:hidden}
+.cs-task-notice{padding:var(--cs-space-2) var(--cs-space-4);border-top:1px solid var(--cs-border-subtle);font-size:var(--cs-size-caption);color:var(--cs-text-muted)}
+.cs-task-empty{padding:var(--cs-space-6) var(--cs-space-2);text-align:center;font-size:var(--cs-size-ui-sm);color:var(--cs-text-muted)}
+.cs-task-editor{padding:var(--cs-space-1)}.cs-task-edit-actions{display:flex;justify-content:flex-end;gap:var(--cs-space-1);margin-top:var(--cs-space-1)}
+.cs-task-menu{position:fixed;z-index:var(--cs-layer-task-menu);width:176px;box-sizing:border-box;padding:var(--cs-space-1);background:var(--cs-white);border:1px solid var(--cs-border-field);border-radius:var(--cs-radius-lg);box-shadow:var(--cs-shadow-md)}
+.cs-task-menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:var(--cs-space-2) var(--cs-space-2);border-radius:var(--cs-radius-sm);font:inherit;font-size:var(--cs-size-ui-sm);color:var(--cs-ink-70);cursor:pointer}
+.cs-task-menu button:hover,.cs-task-menu button:focus-visible{background:var(--cs-overlay-hover)}.cs-task-menu .is-danger{color:var(--cs-critical);border-top:1px solid var(--cs-border-subtle);margin-top:var(--cs-space-1)}
+.cs-task-dialog{border:1px solid var(--cs-border);padding:var(--cs-space-6);border-radius:var(--cs-radius-window);box-shadow:var(--cs-shadow-window);background:var(--cs-white);color:var(--cs-ink);width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 48px);box-sizing:border-box;font-family:var(--cs-font-sans)}
+.cs-task-dialog::backdrop{background:var(--cs-scrim)}.cs-task-dialog h2{font-size:var(--cs-size-dialog-title);font-weight:500;margin:0 0 var(--cs-space-4)}.cs-task-dialog p{font-size:var(--cs-size-ui-sm);line-height:1.7;overflow-wrap:anywhere;color:var(--cs-text-muted)}
+.cs-task-dialog footer{display:flex;justify-content:flex-end;gap:var(--cs-space-2);margin-top:var(--cs-space-4)}.cs-task-picker{display:flex;flex-direction:column;gap:var(--cs-space-1);max-height:300px;overflow:auto;margin-top:var(--cs-space-3)}
+.cs-task-picker label{display:flex;align-items:center;gap:var(--cs-space-2);padding:var(--cs-space-2) var(--cs-space-1);font-size:var(--cs-size-ui-sm);cursor:pointer}.cs-task-picker label span{overflow-wrap:anywhere}.cs-task-picker input{accent-color:var(--cs-accent)}
+@media(hover:none){.cs-task-more{visibility:visible}.cs-task-time{display:none}}
+
+.cs-task-indicator{display:inline-block;flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid var(--cs-accent-ring);border-top-color:var(--cs-accent);border-right-color:var(--cs-accent);border-radius:50%;animation:cs-task-spin 1s linear infinite}
+.cs-task-section-label{display:flex;align-items:center;gap:var(--cs-space-2);width:100%;border:0;background:transparent;text-align:left;font:inherit;font-size:var(--cs-size-caption);color:var(--cs-text-muted);padding:var(--cs-space-4) var(--cs-space-1) var(--cs-space-1);cursor:pointer}
+.cs-task-spaces>.cs-task-group{margin-top:var(--cs-space-1)}
+.cs-task-spaces>.cs-task-group+.cs-task-group{margin-top:var(--cs-space-1)}
+.cs-task-spaces .cs-task-group-head>button:first-child{font-size:var(--cs-size-ui-sm);color:var(--cs-ink-70);font-weight:400}
+.cs-task-spaces .cs-task-group-head svg{flex:none}
+.cs-task-spaces .cs-task-group-head small{font-weight:400;color:var(--cs-text-muted)}
+.cs-task-spaces .cs-sidebar-task-row{margin-left:var(--cs-space-4)}
+@keyframes cs-task-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.cs-task-indicator{animation:none}}

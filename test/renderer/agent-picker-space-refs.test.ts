@@ -106,6 +106,7 @@ function loadAgentPicker() {
     _mpCanonicalCategoryCode: (code: unknown) => String(code || ''),
     _mpMaybeRefreshCategoriesForCodes: () => {},
     _mpShowReviewStatusUi: () => false,
+    uiIconButton: (options: any) => `<button type="button" class="ui-icon-button ${options.className || ''}" aria-label="${options.label || ''}"></button>`,
     uiToast: () => {},
     _agentsTrackClick: () => {},
     currentCid: '',

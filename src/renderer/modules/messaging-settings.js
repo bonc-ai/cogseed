@@ -449,7 +449,7 @@
     const consoleUrl = guide.brand === 'lark'
       ? `https://open.larksuite.com/app/${guide.appId}/safe`
       : `https://open.feishu.cn/app/${guide.appId}/safe`;
-    const section = el('section', 'messaging-config-card messaging-setup-guide-card');
+    const section = el('section', 'messaging-config-card ui-settings-section messaging-setup-guide-card');
     const heading = el('div', 'messaging-config-card-heading');
     heading.appendChild(el('h3', '', labelFor('messaging.setup_guide.title', '')));
     heading.appendChild(el('p', '', labelFor('messaging.setup_guide.desc', '')));
@@ -586,7 +586,7 @@
   }
 
   function card(titleKey, subtitleKey, className) {
-    const section = el('section', `messaging-config-card ${className || ''}`.trim());
+    const section = el('section', `messaging-config-card ui-settings-section ${className || ''}`.trim());
     const heading = el('div', 'messaging-config-card-heading');
     heading.appendChild(el('h3', '', labelFor(titleKey, '')));
     if (subtitleKey) heading.appendChild(el('p', '', labelFor(subtitleKey, '')));
@@ -595,7 +595,7 @@
   }
 
   function settingsSection(titleKey, subtitleKey, className) {
-    const section = el('section', `messaging-settings-section ${className || ''}`.trim());
+    const section = el('section', `messaging-settings-section ui-settings-section ${className || ''}`.trim());
     const heading = el('div', 'messaging-section-heading');
     heading.appendChild(el('h3', '', labelFor(titleKey, '')));
     if (subtitleKey) heading.appendChild(el('p', '', labelFor(subtitleKey, '')));
@@ -713,7 +713,7 @@
   }
 
   function associationCard(instance) {
-    const section = el('section', 'messaging-config-card messaging-association-card');
+    const section = el('section', 'messaging-config-card ui-settings-section messaging-association-card');
     const row = el('div', 'messaging-association-row');
     const copy = el('div', 'messaging-config-card-heading');
     copy.appendChild(el('h3', '', labelFor('messaging.association_title', '')));
@@ -748,7 +748,7 @@
 
   function renderInstanceList(channel) {
     const instances = instancesForChannel(channel);
-    const section = el('section', 'messaging-settings-section messaging-instance-card');
+    const section = el('section', 'messaging-settings-section ui-settings-section messaging-instance-card');
     const toolbar = el('div', 'messaging-instance-toolbar');
     const heading = el('div', 'messaging-section-heading');
     heading.appendChild(el('h3', '', labelFor('messaging.instance.account_title', '')));
@@ -975,7 +975,7 @@
       deletion.appendChild(deleteButton);
       wrapper.appendChild(deletion);
     } else {
-      const empty = el('div', 'messaging-config-card messaging-empty-card');
+      const empty = el('div', 'messaging-config-card ui-settings-section messaging-empty-card');
       const scan = el('button', 'btn messaging-scan-button', labelFor('messaging.scan', ''));
       scan.type = 'button';
       scan.appendChild(icon('qr-code', 'messaging-action-icon'));
@@ -1525,7 +1525,7 @@
   }
 
   function wechatAssociationCard() {
-    const section = el('section', 'messaging-config-card messaging-association-card');
+    const section = el('section', 'messaging-config-card ui-settings-section messaging-association-card');
     const row = el('div', 'messaging-association-row');
     const copy = el('div', 'messaging-config-card-heading');
     copy.appendChild(el('h3', '', labelFor('messaging.wechat_qr.title', '')));

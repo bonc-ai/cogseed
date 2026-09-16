@@ -266,7 +266,12 @@ function createWindow(): BrowserWindow {
     // macOS: hiddenInset 标题栏——无原生标题栏（也就没有分割线），红绿灯
     // 悬浮在内容上，窗口拖拽区由渲染层 CSS（.is-macos 各视图顶部条）声明。
     // Windows 保持原生 frame。
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset' as const,
+      // Keep the native controls centered in the shared 52px Renderer
+      // titlebar, on the same axis as the shell navigation tools.
+      trafficLightPosition: { x: 12, y: 19 },
+    } : {}),
     show: !IS_PACKAGED_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),
@@ -932,9 +937,32 @@ const _KB_FILE_MIME: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+  // `.html/.htm` 必须在表里：缺了会回落到 `application/octet-stream`，
+  // 浏览器把它当下载 → iframe 空白（"HTML 渲染不出排版"的根因）。
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
   '.json': 'application/json',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xml': 'application/xml',
+  '.css': 'text/css; charset=utf-8',
+  // 音视频：`<audio>/<video>` 需要正确的 MIME 才会播放（否则只显示加载失败）
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
 };
 
 /**
@@ -1446,6 +1474,12 @@ if (!gotLock) {
     registerImmediate('p3394:bridge', () => {
       void maybeStartP3394Bridge().then((handle) => { p3394AppBridge = handle; });
     }, 'serial');
+    // 模型窗口/输出的用户本地覆盖：把存储层解析器装进模型层（runner 只问
+    // "这个 (provider, model) 被覆盖了吗"，不自己读用户数据）。
+    registerImmediate('model-overrides:resolver', async () => {
+      const { installModelOverrideResolver } = await import('./features/model_overrides');
+      installModelOverrideResolver();
+    }, 'serial');
     registerImmediate('skills:version-recovery', async () => {
       const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
       const result = await recoverSkillVersionMutations(users.getActiveUserId());
@@ -1526,6 +1560,15 @@ if (!gotLock) {
     registerDeferred('recall:migrate-legacy-titles', async () => {
       const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
       await migrateLegacyUserFacingTitles(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // A 轨道（2026-09-13 scope 枚举化）：存量自由文本 scope（"用户全局画像"）
+    // 归一为受控词表——否则自动投影永远 scope_mismatch，确认资产在正式通道
+    // 失效。幂等；迁移会同步刷新仍存活 committed 投影的版本快照（2026-09-14
+    // 补——此前"跳过被引用资产"的说法与实现相反，committed 校验器的版本
+    // 强校验会让注入整体失败）。
+    registerDeferred('recall:migrate-legacy-scopes', async () => {
+      const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
+      await migrateLegacyFreeTextScopes(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);

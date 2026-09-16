@@ -9,6 +9,9 @@ import { assertCogSeedAgentId, assertCogSeedConnectorId, assertCogSeedKbSourceId
 import { listCogSeedConnectors } from './connector-store';
 import { cogseedConnectorManager } from './connector-manager';
 import { cogseedKbManager } from './cogseed-kb-store';
+import { rewriteQuery } from '../transcript_query_rewrite';
+import { isQueryRewriteEnabled } from '../transcript_glossary';
+import { createLogger } from '../../logger';
 import { createCogSeedTask, listCogSeedSessions, listCogSeedTasks, purgeCogSeedArchivedTasks, readCogSeedSession, readCogSeedTask, readCogSeedTaskByRequestId } from './task-store';
 import { readCogSeedCoordination } from './coordinator';
 import { cogseedCollaborationStore } from './collaboration-store-adapter';
@@ -37,6 +40,9 @@ import {
 import { cogSeedRequestFingerprint } from './request-fingerprint';
 import { safeId } from '../../storage';
 import { spaceWorkspaceDir } from '../../paths';
+
+// 检索/任务等后端 IPC 的统一日志（与既有模块同一套 createLogger）
+const log = createLogger('cogseed-backend');
 
 const MAX_TASK_CHARS = 64_000;
 const MAX_PROFILE_ID_CHARS = 300;
@@ -1197,7 +1203,28 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       assertCogSeedUserId(userId);
       const raw = asObject(payload);
       const query = boundedString(raw.query, 'query', 2_000) ?? '';
-      return cogseedKbManager.search(userId, query, { k: Math.max(1, Math.min(Math.floor(Number(raw.k) || 10), 50)) });
+      // 转写纠错词表：检索前把错形改写成正确写法（方案 §五 P2-3）。
+      // 默认关；开关与改写明细都回传，调用方可以如实告诉用户"我改了什么词"。
+      const rewrite = isQueryRewriteEnabled(userId)
+        ? rewriteQuery(userId, query, { enabled: true })
+        : { original: query, rewritten: query, applied: [], changed: false };
+      const effective = rewrite.changed ? rewrite.rewritten : query;
+      if (rewrite.changed) {
+        log.info('kb search query rewritten by transcript glossary', {
+          original: rewrite.original.slice(0, 120),
+          rewritten: rewrite.rewritten.slice(0, 120),
+          applied: rewrite.applied,
+        });
+      }
+      const result = await cogseedKbManager.search(userId, effective, {
+        k: Math.max(1, Math.min(Math.floor(Number(raw.k) || 10), 50)),
+      });
+      return {
+        ...result,
+        ...(rewrite.changed
+          ? { queryRewrite: { original: rewrite.original, rewritten: rewrite.rewritten, applied: rewrite.applied } }
+          : {}),
+      };
     },
 
     async kbRead(userId: string, payload: unknown) {

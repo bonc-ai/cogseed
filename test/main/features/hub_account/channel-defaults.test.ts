@@ -22,7 +22,9 @@ describe('hub channel-aware defaults', () => {
     expect(resolveHubApiBase(undefined, 'dev')).toBe(DEFAULT_HUB_API_BASE);
     expect(resolveHubApiBase(undefined, 'unknown')).toBe(DEFAULT_HUB_API_BASE);
     expect(resolveHubApiBase(undefined, 'packaged-dev')).toBe(PACKAGED_DEV_HUB_API_BASE);
+    expect(resolveHubApiBase(undefined, 'packaged-dev')).toBe('http://127.0.0.1:4180');
     expect(resolveHubApiBase(undefined, 'release')).toBe(RELEASE_HUB_API_BASE);
+    expect(resolveHubApiBase(undefined, 'release')).toBe('https://cogseed-open.bonc.com.cn');
   });
 
   it('prefers the environment override over channel defaults', () => {

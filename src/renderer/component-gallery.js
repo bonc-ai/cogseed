@@ -4,8 +4,16 @@
   const galleryTranslations = {
     'ai_select.placeholder': '请选择',
     'ai_select.empty': '没有可选项',
+    'ai_select.loading': '正在读取选项…',
+    'ai_select.no_results': '未找到与「{query}」匹配的选项',
+    'ai_select.result_count': '显示 {visible} / {total} 项',
+    'ai_select.search_placeholder': '搜索选项…',
+    'sidebar.search_title': '全局搜索 (Cmd/Ctrl+K)',
+    'sidebar.collapse_title': '收起侧边栏',
+    'sidebar.expand_title': '展开侧边栏',
   };
-  window.t = window.t || ((key) => galleryTranslations[key] || key);
+  window.t = window.t || ((key, values = {}) => String(galleryTranslations[key] || key)
+    .replace(/\{([a-z]+)\}/gi, (_, name) => values[name] == null ? '' : values[name]));
 
   const byId = (id) => document.getElementById(id);
 
@@ -45,6 +53,157 @@
     )).join('');
   }
 
+  function renderSidebarTools() {
+    const cases = [
+      {
+        collapsed: false,
+        label: '侧栏展开',
+        note: '原生窗口控件在左·搜索与收起在右',
+      },
+      {
+        collapsed: true,
+        label: '侧栏收起',
+        note: '只保留可聚焦、可恢复的展开入口',
+      },
+    ];
+    byId('sidebar-tools-specimens').innerHTML = cases.map((item) => specimen(
+      item.label,
+      item.note,
+      `<div class="gallery-window-chrome${item.collapsed ? ' is-collapsed' : ''}">
+        <span class="gallery-window-chrome__native">原生窗口控件区</span>
+        <div class="sidebar-tools">${uiSidebarTools({ collapsed: item.collapsed })}</div>
+      </div>`,
+    )).join('');
+  }
+
+  function renderSidebarAppearance() {
+    const navItem = (icon, label, active = false) => `<button type="button" class="sidebar-btn${active ? ' active' : ''}">
+      <span data-ui-icon="${icon}" data-ui-icon-class="sidebar-btn-icon"></span><span>${label}</span>
+    </button>`;
+    const task = (title, time, active = false) => `<div class="conv-item${active ? ' active' : ''}">
+      <div class="conv-item-row"><div class="conv-item-title">${title}</div><span class="conv-item-time">${time}</span></div>
+    </div>`;
+    const sidebar = (selected) => `<div class="gallery-sidebar-frame"><aside class="sidebar">
+      <div class="sidebar-logo"><img class="logo-icon" src="../resources/icons/logo.png" alt="" /><span class="logo-text">CogSeed</span></div>
+      <div class="sidebar-actions">
+        ${navItem('plus', '新建任务', !selected)}
+        ${navItem('folder', '工作空间')}
+        ${navItem('git-branch', '认知资产')}
+        ${navItem('clock', '自动化')}
+        ${navItem('plug', '智能体 / 技能 / 连接')}
+      </div>
+      <div class="sidebar-conversation-nav"><div class="sidebar-section sidebar-conversations-section"><div class="conversation-list">
+        <div class="conv-list-section-header conv-list-space-title"><button type="button" class="conv-list-section-fold"><span data-ui-icon="chevron-down" data-ui-icon-class="conv-list-section-caret-icon"></span><span class="conv-list-section-label">最近任务</span></button></div>
+        ${task('项目里程碑与提醒', '2分', selected)}
+        ${task('资料来源与引用复核', '昨天')}
+        <div class="conv-list-section-header conv-list-space-title"><button type="button" class="conv-list-section-fold"><span data-ui-icon="chevron-down" data-ui-icon-class="conv-list-section-caret-icon"></span><span class="conv-list-section-label">空间</span></button></div>
+      </div></div></div>
+      <div class="sidebar-footer-actions"><div class="sidebar-footer-account"><button type="button" class="hub-chip">
+        <span class="hub-chip-avatar is-gradient" aria-hidden="true">陈</span><span class="hub-chip-meta"><span class="hub-chip-name">陈昱</span><span class="hub-chip-sub">个人工作空间</span></span><span class="hub-chip-chev" data-ui-icon="chevron-down"></span>
+      </button></div></div>
+    </aside></div>`;
+    byId('sidebar-appearance-specimens').innerHTML = [
+      specimen('默认侧栏', 'F4F8F5 主面 · 400 导航字重 · 500 用户名', sidebar(false)),
+      specimen('任务选中', '绿色 wash 只表达当前位置，不额外加粗', sidebar(true)),
+    ].join('');
+  }
+
+  function renderUserMenus() {
+    const identity = {
+      name: '陈昱',
+      description: '个人工作空间',
+      avatar: { text: '陈', variant: 'gradient' },
+    };
+    const trigger = (open) => uiUserMenuTrigger({
+      ...identity,
+      id: `gallery-user-menu-${open ? 'open' : 'closed'}`,
+      open,
+      ariaLabel: '陈昱的用户菜单',
+    });
+    const panel = uiUserMenuPanel({
+      ...identity,
+      items: [
+        { action: 'settings', label: '设置', icon: 'settings' },
+        { action: 'sign-out', label: '退出登录', icon: 'log-out', danger: true, separatorBefore: true },
+      ],
+    });
+    byId('user-menu-specimens').innerHTML = [
+      specimen('默认入口', '头像 · 名称 · 工作空间 · 展开箭头', `<div class="gallery-user-menu-demo">${trigger(false)}</div>`),
+      specimen('菜单展开', '顶部身份 · 设置 · 危险操作', `<div class="gallery-user-menu-demo is-open">${trigger(true)}<div class="hub-chip-menu" role="menu">${panel}</div></div>`),
+    ].join('');
+  }
+
+  function renderTabs() {
+    const tab = (label, selected, count = '') => `<button type="button" class="ui-tab${selected ? ' is-active' : ''}" role="tab" aria-selected="${selected ? 'true' : 'false'}" tabindex="${selected ? '0' : '-1'}" data-gallery-tab>${label}${count === '' ? '' : ` <span class="ui-segmented-control__count">${count}</span>`}</button>`;
+    byId('tabs-specimens').innerHTML = specimen(
+      '主页面导航',
+      '单一 Tab 入口 · 下划线选中 · 绿色键盘焦点',
+      `<div class="ui-tabs" role="tablist" aria-label="能力页面">${tab('智能体', true, 6)}${tab('MCP 与工具', false, 4)}${tab('技能', false, 18)}${tab('资料库', false)}${tab('IM', false)}</div>`,
+    );
+  }
+
+  function renderResourcePages() {
+    const tab = (label, selected) => `<button type="button" class="skills-cognition-tab ui-tab${selected ? ' is-active' : ''}" role="tab" aria-selected="${selected ? 'true' : 'false'}" tabindex="${selected ? '0' : '-1'}" data-gallery-resource-tab>${label}</button>`;
+    const empty = (title, hint) => uiEmptyState({ kind: 'explained', title, hint });
+    byId('resource-page-specimens').innerHTML = [
+      specimen(
+        '无页签资源页',
+        '32px 桌面留白 · 1232px 内容上限 · 窄宽自动收敛',
+        `<div class="ui-resource-page gallery-resource-page-preview">
+          <div class="ws-center-header">${uiPageHeader({ title: '工作空间', actions: [{ label: '新建空间', icon: 'plus' }] })}</div>
+          <div class="auto-scroll">${empty('还没有工作空间', '正文与标题使用同一套响应式边距。')}</div>
+        </div>`,
+      ),
+      specimen(
+        '带页签资源页',
+        '透明选中态 · Header 后 12px · 页签与正文共用水平起点',
+        `<div class="ui-resource-page gallery-resource-page-preview">
+          <div class="skills-cognition-surface">
+            <div id="cognition-page-header">${uiPageHeader({ title: '认知资产' })}</div>
+            <div class="skills-cognition-tabs">
+              <div class="skills-cognition-tabs-row">
+                <div class="skills-cognition-tab-group" role="tablist" aria-label="认知资产页签预览">${tab('我的认知树', true)}${tab('待我处理', false)}${tab('复用与证明', false)}</div>
+              </div>
+            </div>
+            <div class="skills-cognition-page">${empty('当前分类暂无内容', '页签行为仍由业务页面负责。')}</div>
+          </div>
+        </div>`,
+      ),
+    ].join('');
+  }
+
+  function renderResourceCards() {
+    const card = ({ title, description, icon, status, action, row = false }) => `
+      <article class="ui-resource-card${row ? ' ui-resource-card--row' : ''}">
+        <div class="ui-resource-card__header">
+          <span class="ui-resource-card__icon"><span data-ui-icon="${icon}"></span></span>
+          <div class="ui-resource-card__heading"><h3 class="ui-resource-card__title">${title}</h3></div>
+        </div>
+        <p class="ui-resource-card__description">${description}</p>
+        <div class="ui-resource-card__footer"><span class="ui-resource-card__status">${status}</span>${uiButton({ label: action, role: 'primary', size: 'sm' })}</div>
+      </article>`;
+    byId('resource-card-specimens').innerHTML = [
+      card({ title: '产品研发', description: '组织需求、设计与研发交付，保留最近任务上下文。', icon: 'folder', status: '刚刚更新', action: '继续工作' }),
+      card({ title: '每日工作收尾', description: '下班前整理当天进展、风险和明日待办。', icon: 'clock', status: '每天 18:00', action: '使用模板' }),
+      card({ title: '项目分析师', description: '核对材料并整理风险线索，适用于通用分析任务。', icon: 'users', status: '可使用', action: '使用智能体' }),
+      card({ title: '需求证据整理', description: '把多来源反馈整理成可追溯的问题主题与证据账本。', icon: 'database', status: '已启用', action: '使用技能' }),
+      card({ title: 'GitHub', description: '查找和管理代码仓库、Issue、PR、文件与代码。', icon: 'globe', status: '未连接', action: '连接账户' }),
+      card({ title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', row: true }),
+    ].join('');
+    hydrateUiIcons(byId('resource-card-specimens'));
+  }
+
+  function renderSettingsSections() {
+    const section = (title, rows, action = '') => `<section class="ui-settings-section" aria-label="${title}">
+      <header class="ui-settings-section__header"><h3 class="ui-settings-section__title">${title}</h3>${action}</header>
+      <div class="ui-settings-section__body">${rows.map(([label, value]) => `<div class="gallery-settings-row"><span>${label}</span><strong>${value}</strong></div>`).join('')}</div>
+    </section>`;
+    byId('settings-section-specimens').innerHTML = [
+      section('通用', [['语言', '简体中文'], ['默认推理强度', '中等']]),
+      section('数据', [['资料库', '3 个来源'], ['数据目录', '本机']], uiButton({ label: '打开目录', role: 'secondary', size: 'sm' })),
+    ].join('');
+  }
+
   function buttonForState(role, size, state) {
     return uiButton({
       label: state === 'loading' ? '处理中' : role.label,
@@ -69,7 +228,7 @@
     const stateLabels = ['默认', '悬停', '按下', '焦点', '禁用', '加载'];
     const rows = [];
     for (const role of roles) {
-      for (const size of ['md', 'sm']) {
+      for (const size of ['lg', 'md', 'sm']) {
         rows.push(`<tr><td>${role.id} / ${size}</td>${states.map((state) => `<td><div class="gallery-matrix__control">${buttonForState(role, size, state)}</div></td>`).join('')}</tr>`);
       }
     }
@@ -81,7 +240,9 @@
     const labels = ['默认', '悬停', '按下', '焦点', '禁用'];
     const cases = [
       { label: '更多操作', icon: 'more-horizontal', variant: 'plain' },
+      { label: '导入内容', icon: 'upload', variant: 'plain' },
       { label: '关闭弹窗', icon: 'x', variant: 'plain' },
+      { label: '删除记忆', icon: 'bookmark', variant: 'plain' },
       { label: '删除任务', icon: 'trash-2', variant: 'danger' },
     ];
     const rows = cases.map((item) => `<tr><td>${item.label}</td>${states.map((state) => `<td><div class="gallery-matrix__control">${uiIconButton({
@@ -90,6 +251,102 @@
       attrs: state === 'hover' || state === 'active' || state === 'focus' ? { 'data-preview-state': state } : {},
     })}</div></td>`).join('')}</tr>`).join('');
     byId('icon-button-matrix').innerHTML = `<table class="gallery-matrix"><thead><tr><th>可读名称</th>${labels.map((label) => `<th>${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderSegmentedControls() {
+    const cases = [
+      {
+        label: '基础筛选', note: '默认 · 选中 · 悬停 · 键盘焦点',
+        html: uiSegmentedControl({
+          ariaLabel: '资产范围',
+          value: 'all',
+          attrs: { 'data-gallery-segmented': '' },
+          items: [
+            { value: 'all', label: '全部' },
+            { value: 'mine', label: '我负责' },
+            { value: 'archived', label: '已归档' },
+          ],
+        }),
+      },
+      {
+        label: '带数量', note: '数量跟随标签，不渲染徽标气泡',
+        html: uiSegmentedControl({
+          ariaLabel: '证明记录筛选',
+          value: 'used',
+          attrs: { 'data-gallery-segmented': '' },
+          items: [
+            { value: 'all', label: '全部', count: 24 },
+            { value: 'used', label: '已引用', count: 8 },
+            { value: 'verified', label: '效果已验证', count: 3 },
+          ],
+        }),
+      },
+      {
+        label: '二级页面切换', note: '与技能分类同形 · 保留 Tab 语义与方向键切换',
+        html: uiSegmentedControl({
+          ariaLabel: 'MCP与工具',
+          role: 'tablist',
+          value: 'mcp',
+          items: [
+            { value: 'mcp', label: 'MCP 连接器' },
+            { value: 'plugins', label: '插件' },
+          ],
+        }),
+      },
+    ];
+    byId('segmented-control-specimens').innerHTML = cases.map((item) => specimen(item.label, item.note, item.html)).join('');
+  }
+
+  function composerToolbar({ conversation = false } = {}) {
+    const permission = conversation
+      ? '<span class="chat-permission-chip"><span data-ui-icon="lock" data-ui-icon-class="chat-permission-chip-icon"></span><span class="chat-permission-select ai-select"><button type="button" class="ai-select-trigger" aria-label="访问权限：请求批准" aria-haspopup="listbox" aria-expanded="false"><span class="ai-select-label"><span>请求批准</span></span><span data-ui-icon="chevron-down" data-ui-icon-class="ai-select-caret"></span></button></span></span>'
+      : '';
+    return `<div class="chat-bottom-bar">
+      <button type="button" class="chat-attach-btn" aria-label="添加附件">+</button>
+      <span class="chat-composer-divider" aria-hidden="true"></span>
+      <button type="button" class="chat-recipient-chip" aria-label="选择智能体、技能与引用"><span class="chat-recipient-prefix">@</span><span class="chat-recipient-name">项目助理</span></button>
+      <button type="button" class="workspace-chip" aria-label="选择工作空间"><span data-ui-icon="layout-grid" data-ui-icon-class="workspace-chip-icon"></span><span class="workspace-chip-prefix">工作空间：</span><span class="workspace-chip-label">默认工作区</span><span data-ui-icon="chevron-down" data-ui-icon-class="workspace-chip-chevron"></span></button>
+      ${permission}
+      <button type="button" class="model-chip exec-config-chip" aria-label="执行配置（本次任务）"><span data-ui-icon="settings" data-ui-icon-class="model-chip-icon"></span><span class="model-chip-label">DeepSeek V4 Flash</span><span class="exec-config-effort">自动</span><span data-ui-icon="chevron-down" data-ui-icon-class="model-chip-chevron"></span></button>
+      <button type="button" class="chat-stt-btn" aria-label="语音输入"><span data-ui-icon="mic" data-ui-icon-class="chat-stt-icon"></span></button>
+      <button type="button" class="chat-send-btn" aria-label="发送消息"><span data-ui-icon="send" data-ui-icon-class="send-icon"></span></button>
+    </div>`;
+  }
+
+  function composerDemo({ conversation = false, narrow = false, value = '' } = {}) {
+    const areaClass = conversation ? 'chat-input-area' : 'new-chat-input-area';
+    const demoClass = `gallery-composer-demo${conversation ? ' is-conversation' : ''}${narrow ? ' is-narrow' : ''}`;
+    const area = `<div class="${areaClass}">
+      <div class="chat-input-rich-wrap"><div class="chat-rich-editor" role="textbox" aria-multiline="true" data-placeholder="描述一项工作，或粘贴一份材料。输入 @ 选择智能体与技能。">${value}</div></div>
+      ${composerToolbar({ conversation })}
+    </div>`;
+    return `<div class="${demoClass}">${conversation ? `<div id="panel-conversation">${area}</div>` : area}</div>`;
+  }
+
+  function composerPopoverMatrix() {
+    const agent = `<div class="skill-picker composer-popover gallery-composer-popover">
+      <div class="skill-picker-tabs"><button type="button" class="skill-picker-tab active">智能体</button><button type="button" class="skill-picker-tab">技能</button></div>
+      <div class="skill-picker-header"><input type="text" value="" placeholder="搜索智能体…" /></div>
+      <div class="skill-picker-list"><div class="skill-picker-item active"><div class="skill-picker-item-name">cogseed</div><div class="skill-picker-item-desc">默认接收者，无需 @</div></div><div class="skill-picker-item"><div class="skill-picker-item-name">WorkBuddy</div><div class="skill-picker-item-desc">本地代码研发智能体</div></div></div>
+    </div>`;
+    const workspace = `<div class="workspace-menu space-menu composer-popover gallery-composer-popover">
+      <input class="workspace-menu-search" type="text" placeholder="搜索工作空间…" />
+      <div class="workspace-menu-list"><button type="button" class="workspace-menu-item workspace-menu-item--active"><span>默认工作区</span><span class="workspace-menu-check"><span data-ui-icon="check" data-ui-icon-class="workspace-check-icon"></span></span></button><button type="button" class="workspace-menu-item"><span>教育</span></button></div>
+    </div>`;
+    const permission = `<div class="ai-select-popover composer-popover chat-permission-popover gallery-composer-popover" role="listbox">
+      <div class="ai-select-options"><div class="ai-select-item" role="option" aria-selected="false"><div class="ai-select-item-label">完全访问</div></div><div class="ai-select-item" role="option" aria-selected="false"><div class="ai-select-item-label">帮我批准</div></div><div class="ai-select-item active" role="option" aria-selected="true"><div class="ai-select-item-label">请求批准</div></div></div>
+    </div>`;
+    return `<div class="gallery-composer-popover-grid"><div><strong>@ 智能体 / 技能</strong>${agent}</div><div><strong>工作空间</strong>${workspace}</div><div><strong>访问权限</strong>${permission}</div></div>`;
+  }
+
+  function renderComposerSpecimens() {
+    const cases = [
+      ['首页 / 900px', '完整标签 · 空正文使用安静发送键', composerDemo()],
+      ['已有对话 / 760px', '64–200px 正文 · 有内容时发送键转为品牌主操作', composerDemo({ conversation: true, value: '请核对这份项目材料。' })],
+      ['窄宽 / 480px', '按输入台自身宽度收起标签，不依赖页面宽度', composerDemo({ narrow: true, value: '请按团队整理客户信息。' })],
+    ];
+    byId('composer-specimens').innerHTML = cases.map(([label, note, html]) => specimen(label, note, `<div class="gallery-composer-stage">${html}</div>`)).join('')
+      + specimen('弹层 / 统一外壳', '互斥打开 · 同一描边、圆角、层级与阴影', composerPopoverMatrix());
   }
 
   function renderFormControls() {
@@ -103,7 +360,9 @@
     ];
     byId('input-control-states').innerHTML = inputStates.map(([label, options], index) => (
       `<div class="gallery-control-state"><span>${label}</span>${uiInput({ id: `gallery-input-${index}`, ...options })}</div>`
-    )).join('') + `<div class="gallery-control-state gallery-control-state--wide"><span>多行</span>${uiTextarea({ id: 'gallery-textarea', placeholder: '描述希望自动执行的工作' })}</div>`;
+    )).join('')
+      + `<div class="gallery-control-state"><span>复选框</span><label>${uiCheckbox({ id: 'gallery-checkbox', name: 'gallery-capability', value: 'search', checked: true })}启用联网搜索</label></div>`
+      + `<div class="gallery-control-state gallery-control-state--wide"><span>多行</span>${uiTextarea({ id: 'gallery-textarea', placeholder: '描述希望自动执行的工作' })}</div>`;
 
     const frequencyOptions = [
       { value: 'daily', label: '每天' },
@@ -141,8 +400,129 @@
         { label: '取消', role: 'secondary' },
         { label: '创建自动化任务', role: 'primary' },
       ],
-    });
+    })
+      // 2026-09-14 新增契约：整卡都必填时不逐条标"必填/选填"（供应商详情卡）。
+      // required 语义仍在控件上，去掉的只是每个字段的标注文案。
+      + specimen(
+        'B / 整卡必填：不逐条标注',
+        'showRequirement: false —— 控件仍带 required，标签行不再出现必填/选填',
+        uiForm({
+          ariaLabel: '供应商详情示例',
+          columns: 2,
+          fields: [
+            { html: uiField({ id: 'gallery-quiet-name', label: '名称', required: true, showRequirement: false, control: { kind: 'input', value: 'command' } }) },
+            { html: uiField({ id: 'gallery-quiet-format', label: 'API 格式', required: true, showRequirement: false, control: { kind: 'select', value: 'openai', options: [{ value: 'openai', label: 'Chat Completions' }, { value: 'anthropic', label: 'Anthropic Messages' }] } }) },
+            { wide: true, html: uiField({ id: 'gallery-quiet-key', label: 'API Key', showRequirement: false, hint: '留空表示不修改；输入新值即替换。', control: { kind: 'input', type: 'password', value: '' } }) },
+          ],
+        }),
+      );
     hydrateUiFormSelects(byId('form-composition-specimen'));
+  }
+
+  function renderSearchSelectionComponents() {
+    const commandStates = [
+      ['default', '默认'], ['open', '打开'], ['loading', '搜索中'], ['empty', '无结果'],
+      ['error', '错误'], ['narrow', '窄宽'], ['keyboard', '键盘 / IME'],
+    ];
+    const selectStates = [
+      ['default', '默认'], ['open', '打开'], ['loading', '搜索中'], ['empty', '无结果'],
+      ['disabled', '禁用'], ['error', '错误'], ['narrow', '窄宽'],
+    ];
+    const stateButtons = (states, attr, selected) => states.map(([id, label]) => uiButton({
+      label,
+      role: 'secondary',
+      size: 'sm',
+      className: id === selected ? 'is-selected' : '',
+      attrs: { [attr]: id },
+    })).join('');
+    byId('command-palette-state-tabs').innerHTML = stateButtons(commandStates, 'data-command-state', 'default');
+    byId('searchable-select-state-tabs').innerHTML = stateButtons(selectStates, 'data-search-select-state', 'default');
+
+    const renderCommandState = (state) => {
+      const host = byId('command-palette-specimen');
+      const query = state === 'empty' ? '不存在的资料' : '季度复盘';
+      let body = '<div class="search-empty">输入关键词开始搜索</div>';
+      if (state === 'open' || state === 'narrow') {
+        body = '<div class="search-section-label">任务</div><div class="search-result active" role="option" aria-selected="true"><div class="search-result-head"><span class="search-result-kind is-chat">任务</span><span class="search-result-title">产品季度复盘</span><span class="search-result-meta">我 · 今天 11:20</span></div><div class="search-result-snippet">核对<strong>季度复盘</strong>材料与交付时间</div></div>';
+      } else if (state === 'loading') {
+        body = '<div class="search-empty search-loading" role="status">正在搜索“季度复盘”…</div>';
+      } else if (state === 'empty') {
+        body = '<div class="search-empty">未找到“不存在的资料”相关内容</div>';
+      } else if (state === 'error') {
+        body = '<div class="search-empty search-error">搜索失败，请稍后重试</div>';
+      } else if (state === 'keyboard') {
+        body = '<div class="gallery-command__state" id="gallery-command-key-state">方向键移动，Enter 打开；组合输入期间动作键保持静默。</div>';
+      }
+      host.classList.toggle('is-narrow', state === 'narrow');
+      host.innerHTML = `<div class="gallery-command gallery-command--inline"><div class="gallery-command__input-row"><span data-ui-icon="search"></span><input type="text" aria-label="全局搜索" value="${state === 'default' ? '' : query}" /><kbd>⌘K</kbd></div><div class="search-body">${body}</div></div>`;
+      const input = host.querySelector('input');
+      if (state === 'keyboard' && input) {
+        input.addEventListener('keydown', (event) => {
+          const status = byId('gallery-command-key-state');
+          if (event.isComposing || event.keyCode === 229) {
+            status.textContent = 'IME 组合中：未执行导航或打开动作。';
+            return;
+          }
+          if (['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) {
+            event.preventDefault();
+            status.textContent = `已识别键盘动作：${event.key}`;
+          }
+        });
+        input.focus();
+      }
+      hydrateUiIcons(host);
+      byId('command-palette-state-tabs').querySelectorAll('[data-command-state]').forEach((button) => {
+        button.classList.toggle('is-selected', button.dataset.commandState === state);
+      });
+    };
+
+    const selectOptions = [
+      { value: 'core', label: 'Core Agent', hint: '内置模型' },
+      { value: 'openai', label: 'OpenAI', hint: 'API Key / OAuth' },
+      { value: 'anthropic', label: 'Anthropic', hint: 'API Key' },
+      { value: 'google', label: 'Google Gemini', hint: 'API Key' },
+      { value: 'custom', label: '自定义供应商', hint: 'OpenAI 兼容协议' },
+    ];
+    let selectApi = null;
+    const renderSelectState = (state) => {
+      selectApi?.close();
+      const host = byId('searchable-select-specimen');
+      host.classList.toggle('is-narrow', state === 'narrow');
+      host.innerHTML = uiSelect({
+        id: 'gallery-search-select',
+        ariaLabel: '模型或供应商',
+        placeholder: '选择模型或供应商',
+        options: selectOptions,
+        searchable: true,
+        total: 47,
+        loading: state === 'loading',
+        initialQuery: state === 'empty' ? '不存在' : '',
+        disabled: state === 'disabled',
+        invalid: state === 'error',
+      });
+      [selectApi] = hydrateUiFormSelects(host);
+      if (['open', 'loading', 'empty'].includes(state)) selectApi.open();
+      byId('searchable-select-state-tabs').querySelectorAll('[data-search-select-state]').forEach((button) => {
+        button.classList.toggle('is-selected', button.dataset.searchSelectState === state);
+      });
+    };
+
+    byId('date-range-picker-specimen').innerHTML = [
+      ['默认', uiDateRangePicker({ id: 'gallery-date-range-default', ariaLabel: '报告日期范围', startLabel: '开始日期', endLabel: '结束日期', separator: '至', start: '2026-09-01', end: '2026-09-14' })],
+      ['错误', uiDateRangePicker({ id: 'gallery-date-range-error', ariaLabel: '无效日期范围', startLabel: '开始日期', endLabel: '结束日期', separator: '至', start: '2026-09-20', end: '2026-09-14', invalidStart: true, invalidEnd: true })],
+      ['窄宽 / 焦点', uiDateRangePicker({ id: 'gallery-date-range-narrow', className: 'is-narrow', ariaLabel: '窄宽日期范围', startLabel: '开始日期', endLabel: '结束日期', separator: '至', start: '2026-09-01', end: '2026-09-14', startPreviewState: 'focus' })],
+    ].map(([label, html]) => `<div class="gallery-control-state"><span>${label}</span>${html}</div>`).join('');
+
+    byId('command-palette-state-tabs').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-command-state]');
+      if (button) renderCommandState(button.dataset.commandState);
+    });
+    byId('searchable-select-state-tabs').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-search-select-state]');
+      if (button) renderSelectState(button.dataset.searchSelectState);
+    });
+    renderCommandState('default');
+    renderSelectState('default');
   }
 
   function renderEmptyStates() {
@@ -274,6 +654,45 @@
   }
 
   function wireInteractions() {
+    document.querySelectorAll('[data-gallery-segmented]').forEach((group) => {
+      group.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button || !group.contains(button)) return;
+        group.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', item === button ? 'true' : 'false'));
+      });
+    });
+    document.querySelectorAll('.ui-tabs').forEach((group) => {
+      const tabs = Array.from(group.querySelectorAll('[data-gallery-tab]'));
+      if (!tabs.length) return;
+      const activate = (tab) => {
+        tabs.forEach((item) => {
+          const selected = item === tab;
+          item.classList.toggle('is-active', selected);
+          item.setAttribute('aria-selected', selected ? 'true' : 'false');
+          item.tabIndex = selected ? 0 : -1;
+        });
+        tab.focus();
+        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      };
+      group.addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-gallery-tab]');
+        if (tab && group.contains(tab)) activate(tab);
+      });
+      group.addEventListener('keydown', (event) => {
+        if (event.isComposing || event.keyCode === 229) return;
+        const current = event.target.closest('[data-gallery-tab]');
+        const index = tabs.indexOf(current);
+        if (index < 0) return;
+        let next = -1;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        if (next < 0) return;
+        event.preventDefault();
+        activate(tabs[next]);
+      });
+    });
     document.addEventListener('click', (event) => {
       const modalTrigger = event.target.closest('[data-modal-demo]');
       if (modalTrigger) {
@@ -312,9 +731,19 @@
   }
 
   renderPageHeaders();
+  renderSidebarTools();
+  renderSidebarAppearance();
+  renderUserMenus();
+  renderResourcePages();
+  renderTabs();
+  renderResourceCards();
+  renderSettingsSections();
   renderButtons();
   renderIconButtons();
+  renderSegmentedControls();
+  renderComposerSpecimens();
   renderFormControls();
+  renderSearchSelectionComponents();
   renderEmptyStates();
   renderModalLaunchers();
   renderAutomation();
