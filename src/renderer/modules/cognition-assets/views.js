@@ -803,7 +803,7 @@
       if (!capture) {
         return `
         <div class="ca-row is-flat">
-          <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
+          <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || T('chat.untitled', '未命名对话'))}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
           <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
         </div>`;
       }
