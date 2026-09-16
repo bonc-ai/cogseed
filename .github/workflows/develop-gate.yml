@@ -103,3 +103,24 @@ jobs:
         run: |
           echo "::warning::受影响测试未通过或筛选有漏。请注意：L1 只跑受影响的测试，"
           echo "::warning::漏网是预期内的 —— develop-nightly.yml 会在每天夜里跑全量兜底。"
+
+  windows-tests:
+    # Gray rollout: report the full Windows failure inventory without blocking merges.
+    continue-on-error: true
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      - run: node scripts/run-tests.mjs run --maxWorkers=1 --shard=${{ matrix.shard }}/4
+      - if: ${{ !cancelled() && matrix.shard == 1 }}
+        run: npm run test:resources
