@@ -700,10 +700,8 @@
         <div class="ca-row-title">${esc(T('cognition.nightly_capture_title', '夜间自动沉淀'))}</div>
         <div class="ca-sub">${esc(T('cognition.nightly_capture_hint', '夜间在所选时间自动整理当天结束的会话（消耗模型额度）；产出的内容进入「待我处理」，等你批准或调整。'))}</div>
       </div>
-      ${nightlyOn ? `<label class="ca-setting-time"><span>${esc(T('cognition.nightly_capture_time', '开始时间'))}</span><input type="time" value="${esc(nightlyStart)}" data-act="nightly-time"></label>` : ''}
-      <button type="button" class="ca-switch${nightlyOn ? ' is-on' : ''}" role="switch" aria-checked="${nightlyOn ? 'true' : 'false'}" data-act="nightly-toggle" aria-label="${esc(T('cognition.nightly_capture_title', '夜间自动沉淀'))}">
-        <span class="ca-switch-knob" aria-hidden="true"></span>
-      </button>
+      ${nightlyOn ? `<label class="ca-setting-time"><span>${esc(T('cognition.nightly_capture_time', '开始时间'))}</span>${window.uiInput({ id: 'ca-nightly-start', type: 'time', value: nightlyStart, attrs: { 'data-act': 'nightly-time' } })}</label>` : ''}
+      ${window.uiSwitch({ label: T('cognition.nightly_capture_title', '夜间自动沉淀'), checked: nightlyOn, className: 'ca-switch', attrs: { 'data-act': 'nightly-toggle' } })}
     </div>
     <div class="ca-card ca-setcard">
       <div class="ca-line">
