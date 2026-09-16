@@ -399,7 +399,7 @@
     const sortedAsc = [...state.versions].sort((left, right) => Number(left.version) - Number(right.version));
     const unchangedAfter = new Set(sortedAsc.filter((v, i) => i > 0 && contentKey(v.snapshot || {}) === contentKey(sortedAsc[i - 1].snapshot || {})).map((v) => String(v.version)));
     const rows = [...state.versions]
-      .sort((left, right) => Number(right.version) - Number(right.version))
+      .sort((left, right) => Number(right.version) - Number(left.version))
       .map((v) => {
         const isActive = String(v.version) === active;
         const title = String((v.snapshot && v.snapshot.title) || asset.title || '');
