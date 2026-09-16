@@ -30388,6 +30388,10 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-mm-msg-head {
   font-size: var(--font-size-2); font-weight: 600; color: var(--kb-text2); margin-bottom: 8px;
 }
+/* 文档级脑图：标题行右侧标注作用域（避免误以为画的是整库） */
+.kb-mm-msg-scope {
+  margin-left: 6px; font-weight: 400; font-size: var(--font-size-2); color: var(--kb-text3);
+}
 /* ─── 测验卡（kb.quiz 产物）：与脑图卡同区同风格 ─────────────────────── */
 .kb-quiz-msg { max-width: 620px; }
 .kb-quiz-canvas {

@@ -4277,11 +4277,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
-  // 支持 text 参数：基于对话回答文本生成；缺省基于知识库文档要点。
-  'kb.mindmap': async ({ dir, spaceId, force, text }, ctx) => {
+  // 三个作用域，优先级 text > doc > dir/space：
+  //   text —— 基于对话回答文本生成；
+  //   doc  —— 文档级脑图（根主题 = 这一份文档，一级分支 = 它的章节）；
+  //   缺省 —— 基于整个知识库（目录 / 空间）的 ready 文档要点。
+  'kb.mindmap': async ({ dir, spaceId, doc, force, text }, ctx) => {
     const res = await kbMindmap.kbMindmap(ctx.userId, {
       dir: typeof dir === 'string' && dir ? dir : null,
       spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      doc: typeof doc === 'string' && doc ? doc : null,
       force: force === true,
       text: typeof text === 'string' && text ? text : null,
     }, {

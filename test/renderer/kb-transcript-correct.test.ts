@@ -50,7 +50,7 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
-  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; message?: string };
+  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; existingPath?: string; message?: string };
   riskKey: (l: string) => string;
 };
 
@@ -170,6 +170,40 @@ describe('清理版保存路径与命名', () => {
     expect(panel.nextCandidateName(base, 0)).toBe(base);
     expect(panel.nextCandidateName(base, 1)).toBe('1/站会-清理版-2.txt');
     expect(panel.nextCandidateName(base, 2)).toBe('1/站会-清理版-3.txt');
+  });
+});
+
+describe('另存后的库列表刷新与"已有文件"告知（真机反馈：另存了却找不到）', () => {
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('去重命中时把已有文件的确切路径带出来（只说"在某个目录下"用户照样找不到）', () => {
+    const verdict = panel.classifySaveResult({
+      ok: false,
+      code: 'duplicate_content',
+      error: '相同内容已存在',
+      existingDir: '文字转写',
+      existingPath: '文字转写/文字转写_ECS9点30早会_36696491729-清理版.txt',
+    });
+    expect(verdict.kind).toBe('duplicate');
+    expect(verdict.existingPath).toBe('文字转写/文字转写_ECS9点30早会_36696491729-清理版.txt');
+    expect(verdict.existingDir).toBe('文字转写');
+  });
+
+  it('main 没给 existingPath 时不编造，缺省为空串', () => {
+    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content' }).existingPath).toBe('');
+  });
+
+  it('写入方保存成功后必须显式请知识库重载（列表渲染的是旧树快照）', () => {
+    // 两处另存（清理版 / 附记）都得通知，否则"已另存：…"和列表对不上
+    const notifyCalls = source.match(/notifyLibraryChanged\(\);/g) || [];
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(3); // 成功 / 去重 / 附记
+    expect(source).toMatch(/function notifyLibraryChanged\(\)[\s\S]{0,600}root\.loadContexts/);
+    expect(source).toMatch(/function notifyLibraryChanged\(\)[\s\S]{0,600}root\.renderKbWorkbench/);
+  });
+
+  it('去重提示优先给文件名，拿不到才退回目录级文案', () => {
+    expect(source).toContain("t('kb.transcriptCorrect.save_duplicate_file'");
+    expect(source).toContain("t('kb.transcriptCorrect.save_duplicate_dir'");
   });
 });
 
@@ -503,6 +537,8 @@ describe('locale 覆盖', () => {
     'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
     // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
     'panel_hint', 'meta_full',
+    // 另存去重时指出确切已有文件（2026-09-16：只说目录级，用户找不到）
+    'save_duplicate_file',
   ];
 
   for (const lang of locales) {

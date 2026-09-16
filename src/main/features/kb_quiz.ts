@@ -22,8 +22,10 @@ const DEFAULT_COUNT = 5;
 const MAX_COUNT = 20;
 /** 题目数量上限（防模型多输出）。 */
 const MAX_QUESTIONS = 20;
-/** 拼音 LLM 单次出题超时：与 kb_mindmap 同款预算（含排队+推理+流式输出）。 */
-const QUIZ_LLM_TIMEOUT_MS = 120 * 1000;
+/** LLM 单次出题超时：与 kb_mindmap 同款预算（含排队+推理+流式输出）。
+ *  2026-09-16：共用的采样预算放开到最多 30k 字后，120s 会误杀正常请求，
+ *  随脑图一起放宽到 180s（kb_summary / kb_mindmap / kb_quiz 三处对齐）。 */
+const QUIZ_LLM_TIMEOUT_MS = 180 * 1000;
 /** 「提示」是单题小请求：预算比整卷出题短得多（30s 还没回就不值得让用户等）。 */
 export const HINT_LLM_TIMEOUT_MS = 30 * 1000;
 /** 基于对话文本出题时的输入截断（防止超长回答撑爆上下文）。 */

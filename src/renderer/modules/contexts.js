@@ -23,6 +23,7 @@ let _kbUnavailableCode = '';
 let _kbUnavailableReportedCode = '';
 let _kbEventsAbort = null;
 let _kbStatusRefreshTimer = null;
+let _ctxTreeReloadTimer = null;     // 库内容变化的兜底重载去抖计时器
 let _kbReconcileInFlight = false;
 const CTX_INTERNAL_DRAG_TYPE = 'application/x-context-path';
 
@@ -224,6 +225,12 @@ function _applyKbEvent(ev) {
   } else {
     renderCtxTree();
   }
+  // 快照过期判定：事件里的路径快照中没有（库刚长了文件）／已被删除但快照里还有
+  // （库少了文件）。此时 renderCtxTree() 只是拿旧快照重绘，永远画不出新行。
+  const known = _ctxTreeHasPath(p);
+  if ((ev.status === 'deleted' && known) || (ev.status !== 'deleted' && !known)) {
+    _scheduleContextsReload();
+  }
   _scheduleKbStatusRefreshIfNeeded();
 }
 
@@ -311,6 +318,29 @@ function _collectCtxEntryPaths(nodes, out = []) {
     if (node.type === 'dir') _collectCtxEntryPaths(node.children || [], out);
   }
   return out;
+}
+
+/** `_ctxTree` 快照里有没有这个相对路径。 */
+function _ctxTreeHasPath(relPath) {
+  const target = String(relPath || '').replace(/\\/g, '/');
+  if (!target) return false;
+  try { return _collectCtxEntryPaths(_ctxTree).includes(target); } catch (_) { return false; }
+}
+
+/**
+ * 库内容变了就重拉一次树（去抖）。
+ *
+ * kb.events 只报"某个路径的索引进度"，**不带目录树**；真机反馈：在「转写纠错」里
+ * 「另存到知识库」之后，库里明明多了 `…-清理版.txt`（磁盘、向量库、检索索引都在），
+ * 但列表里找不到——因为 `_ctxTree` 是进入视图时拍的快照，事件只改了徽标。
+ * 凡快照里查不到的路径（别人刚写进来）或已消失的路径，都说明快照过期了。
+ */
+function _scheduleContextsReload() {
+  if (_ctxTreeReloadTimer) return;
+  _ctxTreeReloadTimer = setTimeout(() => {
+    _ctxTreeReloadTimer = null;
+    if (typeof loadContexts === 'function') loadContexts();
+  }, 400);
 }
 
 // ── Tree render ──

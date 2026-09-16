@@ -486,6 +486,54 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).toContain("invoke('kb.mindmap'");
   });
 
+  it('文档级脑图：文件菜单给入口，且 doc 作用域下沉到 kb.mindmap', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 两个入口：个人库文件行右键/… + 共享库文件菜单
+    const entries = src.match(/生成脑图（本文档）/g) || [];
+    expect(entries.length).toBeGreaterThanOrEqual(2);
+    expect(src).toContain('function _kbMindmapForDoc');
+    expect(src).toMatch(/if \(act === 'mind'\) _kbMindmapForDoc\(path\)/);
+    // 有 doc 时不再传 dir：作用域必须下沉到单文档，否则根主题还是"这个库是什么"。
+    // spaceId 仍要带上——共享库的文件得去共享库索引里找。
+    expect(src).toContain('? { doc, spaceId: _state.spaceId || null }');
+    expect(src).not.toMatch(/invoke\('kb\.mindmap', doc[\s\S]{0,200}?\? \{ doc \}/);
+    // 快照 key 以主进程回执的真实作用域为准，避免"请求本文档、实际整库"的错误脑图也顶着 doc: 存档
+    expect(src).toMatch(/function _mmSnapshotKey\(doc, scope\)/);
+    expect(src).toMatch(/const base = \(doc && \(!scope \|\| scope === 'doc'\)\)/);
+    // 降级提示按作用域区分（文档级别说成"当前知识库没有文档"）
+    expect(src).toMatch(/function _mmDegradedHtml\(reason, doc\)/);
+  });
+
+  it('作用域回执校验：主进程没按「本文档」生成时必须丢弃结果并提示重启', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 请求了 doc 就必须拿到 scope==='doc' 且 files 恰好是那一份；否则不渲染、不存档
+    expect(src).toMatch(/if \(doc && \(res\.scope !== 'doc' \|\| !Array\.isArray\(res\.files\) \|\| res\.files\.length !== 1 \|\| res\.files\[0\] !== doc\)\)/);
+    const anchor = src.indexOf('主进程没有按「本文档」作用域生成');
+    expect(anchor).toBeGreaterThan(-1);
+    expect(src).toContain('完全退出 CogSeed 后重新启动');
+    // 该分支必须 return，不能继续走渲染/写历史
+    expect(src.slice(anchor, anchor + 900)).toMatch(/return;/);
+    // 刷新(⟳)与保存(💾)沿用同一作用域，不能把本文档脑图换成整库脑图/存到库档位
+    expect(src).toMatch(/function _mmRefreshMindmap\(\)[\s\S]{0,1200}\(s && s\.doc\)/);
+    expect(src).toMatch(/function _mmCurrentKey\(\)[\s\S]{0,400}scope === 'doc'\) return `doc:\$\{s\.doc\}`/);
+    expect(src).toContain('mmScope: null');
+  });
+
+  it('脑图作用域全程不串味：生成/回答/历史恢复三条路径都带上作用域', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 存档 key ←→ 作用域 双向可逆
+    expect(src).toMatch(/function _mmScopeFromKey\(key\)/);
+    expect(src).toMatch(/if \(k\.startsWith\('doc:'\)\) return \{ doc: k\.slice\(4\)\.split\('#'\)\[0\], scope: 'doc' \}/);
+    // 三条渲染路径都把作用域挂到画布上
+    expect(src).toMatch(/canvas\._mmScope = _state\.mmScope/); // 文件/整库生成 + 回答生成
+    expect(src).toMatch(/canvas\._mmScope = _mmScopeFromKey\(m\.key\)/); // 会话历史里的脑图消息
+    expect(src).toMatch(/canvas\._mmScope = _mmScopeFromKey\(key\)/); // 答案内的脑图快照
+    // 打开弹窗前同步到全局：⟳/💾 作用在这张图真正的作用域上
+    expect(src).toMatch(/if \(canvas\._mmScope\) _state\.mmScope = canvas\._mmScope;/);
+    // 「回答 → 脑图」必须显式归位 text，否则会沿用上一次的 doc 作用域
+    expect(src).toMatch(/_state\.mmScope = \{ doc: null, scope: 'text' \};/);
+  });
+
   it('renders shared knowledge bases (space library) in the tree', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
@@ -1369,5 +1417,90 @@ describe('KB mindmap layout & typography', () => {
     expect(src).toContain('function _mmCharW(ch, size) {');
     expect(src).toMatch(/if \(wide\) return size;/);
     expect(src).toMatch(/if \(\/\[A-Z0-9\]\/\.test\(ch\)\) return size \* 0\.64;/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 库列表不落后于磁盘（真机反馈 2026-09-16）
+//
+// 现场：在「转写纠错」里把清理版另存到知识库 → 磁盘/向量库/检索索引都有这份
+// `…-清理版.txt`，但个人知识库列表里找不到，用户以为"另存没生效"。
+// 原因：文件列表渲染的是**进入视图时拍的 `contexts.tree` 快照**，kb.events 只
+// 报"某个路径的索引进度"，此前只更新「已索引」徽标、从不重拉树。
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TREE_WITH_CLEANED = TREE.map((node) => (node.name !== '班级建设资料' ? node : {
+  ...node,
+  children: [
+    ...(node.children || []),
+    { name: '站会-清理版.txt', path: '班级建设资料/站会-清理版.txt', type: 'file', bytes: 9, mtime: 2 },
+  ],
+}));
+
+describe('库列表不落后于磁盘（另存到知识库后找不到文件）', () => {
+  /**
+   * 装一份"库真的变了"的现场：第二次拉 contexts.tree 时多出一个刚另存的文件，
+   * 并把 kb.events 的回调握在手里，好手动推一个索引事件进去。
+   */
+  function loadWithLiveKbStream() {
+    const harness = loadScript();
+    const { windowMock } = harness;
+    const baseInvoke = windowMock.cogseed.invoke;
+    let treeServed = 0;
+    windowMock.cogseed.invoke = vi.fn(async (channel: string) => {
+      if (channel === 'contexts.tree') {
+        treeServed += 1;
+        return { tree: treeServed > 1 ? TREE_WITH_CLEANED : TREE };
+      }
+      return baseInvoke(channel);
+    });
+    let kbEvent: ((ev: unknown) => void) | null = null;
+    windowMock.cogseed.stream = vi.fn((_channel: string, _payload: unknown, cb: (ev: unknown) => void) => {
+      kbEvent = cb;
+      return { promise: new Promise(() => { /* 长连接：测试期间不结束 */ }) };
+    });
+    return {
+      ...harness,
+      pushKbEvent: (ev: unknown) => { kbEvent?.(ev); },
+      treeCalls: () => treeServed,
+    };
+  }
+
+  it('索引事件带来快照里没有的新文件时重拉库树，文件随即出现在列表里', async () => {
+    const h = loadWithLiveKbStream();
+    h.windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(h.els['kb-wb-files'].innerHTML).toContain('a.pdf'));
+    expect(h.els['kb-wb-files'].innerHTML).not.toContain('站会-清理版.txt');
+    expect(h.treeCalls()).toBe(1);
+
+    // main 写盘后会推一条该路径的索引事件（另存/导入/AI 落库都是这条路）
+    h.pushKbEvent({ event: { relPath: '班级建设资料/站会-清理版.txt', status: 'ready', chunks: 3, kind: 'text' } });
+
+    await vi.waitFor(
+      () => expect(h.els['kb-wb-files'].innerHTML).toContain('站会-清理版.txt'),
+      { timeout: 3000 },
+    );
+    expect(h.treeCalls()).toBe(2);
+  });
+
+  it('已知路径的索引进度只更新徽标，不重拉库树（不做无谓的整树刷新）', async () => {
+    const h = loadWithLiveKbStream();
+    h.windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(h.els['kb-wb-files'].innerHTML).toContain('a.pdf'));
+
+    h.pushKbEvent({ event: { relPath: '班级建设资料/a.pdf', status: 'ready', chunks: 2, kind: 'pdf' } });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(h.treeCalls()).toBe(1);
+  });
+
+  it('文件在别处被删掉（快照里还在）时也重拉库树，让幽灵行消失', async () => {
+    const h = loadWithLiveKbStream();
+    h.windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(h.els['kb-wb-files'].innerHTML).toContain('a.pdf'));
+
+    h.pushKbEvent({ event: { relPath: '班级建设资料/a.pdf', status: 'deleted' } });
+
+    await vi.waitFor(() => expect(h.treeCalls()).toBe(2), { timeout: 3000 });
   });
 });

@@ -9,8 +9,12 @@
  *   - 本面板**只调用** transcript.* IPC；不直接读写文件、不改原文
  *     （主进程的 apply 只产出清理版 + run 快照，回滚也只返回原文）。
  *   - 高危（high）候选**不会**默认进清理版：必须显式勾选，并计入「待确认」。
- *   - 「另存到知识库」走既有的 library.writeText 通道，文件名带 runId 短号，
- *     永不覆盖原文件。
+ *   - 「另存到知识库」走既有的 library.writeText 通道：落在原文**同一个目录**、
+ *     文件名加 i18n 后缀（zh `清理版`），永不覆盖原文件；内容级 sha1 去重命中时
+ *     不重复写盘，并把已有文件的确切路径告知用户。
+ *   - 另存成功后由本面板**显式**请求库视图重载目录树（`notifyLibraryChanged`）：
+ *     库列表渲染的是进入视图时的树快照，不通知就会出现"另存了却找不到文件"
+ *     （2026-09-16 真机反馈）。
  *
  * Renderer 约束：classic script（无 JSX/bundler）、可见文案走 i18n、
  * 控件用共享原语（uiButton/uiField/uiEmptyState/uiModal）、图标来自 icons.js。
@@ -292,11 +296,35 @@
     if (!result || result.ok !== false) return { kind: 'saved', path: String(result?.path || '') };
     const code = String(result.code || '');
     if (code === 'duplicate_content') {
-      return { kind: 'duplicate', existingDir: String(result.existingDir || '') };
+      return {
+        kind: 'duplicate',
+        existingDir: String(result.existingDir || ''),
+        // 去重命中时把**已有文件的确切路径**带出来：只说"在某个目录下"用户还是
+        // 找不到（真机反馈），必须能给到一个可以直接去看的文件。
+        existingPath: String(result.existingPath || ''),
+      };
     }
     const message = String(result.error || '');
     if (/同名文件已存在|already exists|exist/i.test(message)) return { kind: 'retry', message };
     return { kind: 'failed', message };
+  }
+
+  /**
+   * 请知识库视图重载它的目录树。
+   *
+   * 库列表（`contexts.js` 的资源树 / `kb-workbench.js` 的个人知识库文件列表）
+   * 渲染的是**各自进入视图时拍的树快照**，main 侧写盘只回一条全局 kb.events
+   * 状态事件。本面板另存的文件因此不会自己出现在列表里——真机反馈就是
+   * 「另存到知识库了却找不到文件」。写入方负责显式通知，才能立刻看到。
+   * 用内联的 typeof 守卫而不是固定引用：两个模块可能未加载（其他视图下面板也可用）。
+   */
+  function notifyLibraryChanged() {
+    try {
+      if (typeof root.loadContexts === 'function') root.loadContexts();
+      if (typeof root.renderKbWorkbench === 'function') root.renderKbWorkbench();
+    } catch (error) {
+      log?.warn('library refresh after save failed', { error: error?.message || String(error) });
+    }
   }
 
   function riskKey(level) {
@@ -1659,12 +1687,18 @@
           if (verdict.kind === 'saved' || verdict.kind === 'duplicate' || verdict.kind === 'failed') break;
         }
         if (verdict.kind === 'duplicate') {
-          state.savedPath = verdict.existingDir ? `${verdict.existingDir}/` : '';
+          const existing = verdict.existingPath;
+          // 已有文件优先按"确切文件"告知；拿不到路径时才退回目录级提示。
+          state.savedPath = existing || (verdict.existingDir ? `${verdict.existingDir}/` : '');
           setStatus(t('kb.transcriptCorrect.save_duplicate', '库里已有相同内容的清理版{where}，无需重复保存。', {
-            where: verdict.existingDir
-              ? t('kb.transcriptCorrect.save_duplicate_dir', '（在「{dir}」目录下）', { dir: verdict.existingDir })
-              : '',
+            where: existing
+              ? t('kb.transcriptCorrect.save_duplicate_file', '（已有文件：{path}）', { path: existing })
+              : (verdict.existingDir
+                ? t('kb.transcriptCorrect.save_duplicate_dir', '（在「{dir}」目录下）', { dir: verdict.existingDir })
+                : ''),
           }), '');
+          // 没有新文件可"看"，但用户要的是那份已有文件——列表得刷出来。
+          notifyLibraryChanged();
           return;
         }
         if (verdict.kind === 'failed') throw new Error(verdict.message || 'write failed');
@@ -1676,6 +1710,8 @@
         }
         state.savedPath = targetPath;
         toast(t('kb.transcriptCorrect.saved', '已保存到知识库：{name}', { name: targetPath }));
+        // 保存成功即刻刷新库列表：别让用户对着"已保存"的提示却找不到文件。
+        notifyLibraryChanged();
       } catch (error) {
         log?.warn('cleaned transcript save failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.save_failed', '保存失败，请稍后重试。'), 'warning');
@@ -1743,6 +1779,7 @@
           return;
         }
         setStatus(t('kb.transcriptCorrect.notes_saved', '附记已另存：{path}', { path: result?.path || targetPath }), '');
+        notifyLibraryChanged();
       } catch (error) {
         log?.warn('save notes failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.notes_save_failed', '保存失败：{error}', { error: error?.message || '' }), 'warning');

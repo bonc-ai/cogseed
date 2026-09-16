@@ -326,7 +326,11 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
 
 /** 边界判定：`substring` 只要求不是更长词的一部分（由重叠消解兜底）；
  *  `word` 要求左右邻不是字母/数字/CJK。 */
-function boundaryOk(text: string, span: Span, boundary: GlossaryEntry['boundary']): boolean {
+/**
+ * 边界判定（导出供 `transcript_recall` 复用——模糊召回与精确扫描必须用
+ * 同一套边界语义，否则同一条词条在两个通道里得到相反结论）。
+ */
+export function boundaryOk(text: string, span: Span, boundary: GlossaryEntry['boundary']): boolean {
   const before = span.start > 0 ? text[span.start - 1] : undefined;
   const after = span.end < text.length ? text[span.end] : undefined;
   if (boundary === 'word') return !isCjkOrWordChar(before) && !isCjkOrWordChar(after);
@@ -337,7 +341,8 @@ function boundaryOk(text: string, span: Span, boundary: GlossaryEntry['boundary'
   return !nextAscii && !prevAscii;
 }
 
-function findDeniedContext(
+/** 语境窗口匹配（导出供 `transcript_recall` 复用，理由同 `boundaryOk`）。 */
+export function findDeniedContext(
   foldedText: string,
   span: Span,
   denyList: string[],

@@ -21,6 +21,9 @@
     summary: null,
     summaryCache: {}, // key(库名或 space:xxx) → 已解析的 summary（切回已解析库时立即显示，不重新触发 LLM）
     lastMind: null, // 最近生成的脑图根节点（预览/编辑用）
+    // 当前脑图的**作用域**：{ doc, scope }。刷新(⟳)/保存(💾)必须沿用同一作用域，
+    // 否则"本文档脑图"会被刷新成整库脑图、或按库 key 存进档（真机出过这个问题）。
+    mmScope: null,
     mmCollapsed: new Set(), // 已折叠的一级分支节点 idx
     mmMode: 'mind', // 布局模式 mind=双向放射 | org=组织结构图(单向)
     mmFocus: null, // 聚焦的一级分支 idx（其他分支淡化）
@@ -234,6 +237,36 @@
       return null;
     };
     return find(_state.tree);
+  }
+
+  // `_state.tree` 这份快照里有没有这个相对路径（文件/目录都用 path 精确比对）。
+  // 判定"快照是否过期"的唯一依据：kb.events 只报某个路径的索引进度，不带目录树；
+  // 快照里查不到的路径 = 别处刚写进库的新文件，必须重拉树才可能出现行。
+  function _treeHasPath(relPath) {
+    const target = String(relPath || '').replace(/\\/g, '/');
+    if (!target) return false;
+    const find = (nodes) => {
+      for (const node of nodes || []) {
+        if (!node) continue;
+        if (node.path === target) return true;
+        if (node.children && find(node.children)) return true;
+      }
+      return false;
+    };
+    try { return find(_state.tree); } catch (_) { return false; }
+  }
+
+  // 库树兜底重载（去抖）：新文件首次被索引、或文件在别处被删掉时，
+  // 快照就过期了——只更新「已索引」徽标是不够的，列表读的是 `_state.tree`
+  // 快照。真机反馈：在「转写纠错」里另存到知识库后，列表里找不到刚存的文件。
+  let _treeReloadTimer = null;
+  function _scheduleTreeReload() {
+    if (_treeReloadTimer) return;
+    _treeReloadTimer = setTimeout(() => {
+      _treeReloadTimer = null;
+      if (_state.loading) { _scheduleTreeReload(); return; } // 正在加载 → 顺延，别丢这次刷新
+      _loadAll();
+    }, 400);
   }
 
   // 沿 dirStack 下钻到当前目录节点（dirStack 为空 = 库根）
@@ -2601,14 +2634,19 @@
 
   // 降级/失败提示（source='degraded'）：说明原因并给重试入口，
   // 避免把「单节点知识库」当正常脑图展示（此前用户以为模型只生成了这么点）。
-  function _mmDegradedHtml(reason) {
+  function _mmDegradedHtml(reason, doc) {
     const texts = {
-      empty: '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。',
-      timeout: '脑图生成超时：本地模型排队/推理超过 2 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。',
+      empty: doc
+        ? '这份文档还没有解析好的要点，无法生成脑图（仅显示中心节点）。请等索引完成后再试。'
+        : '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。',
+      'not-found': doc
+        ? '这份文档不在当前知识库的「已索引」列表里（可能还在索引中、刚被移动或改名），无法按本文档生成脑图。'
+        : '指定的文档不在当前知识库的已索引列表里。',
+      timeout: '脑图生成超时：本地模型排队/推理超过 3 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。',
       'model-failed': '脑图生成失败（模型暂不可用），已降级为仅中心节点。请稍后点击重试。',
     };
     const tip = texts[reason] || texts['model-failed'];
-    const withRetry = reason !== 'empty';
+    const withRetry = reason !== 'empty' && reason !== 'not-found';
     return '<div class="kb-mm-fail">' + tip
       + (withRetry ? `<br>${_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })}` : '')
       + '</div>';
@@ -2617,17 +2655,34 @@
   // ── 脑图入会话历史（方案 A）：快照 key + kind:'mindmap' 消息条目 ──
   // 快照 key 与手动存档（space:xxx / dir:xxx）分开：`<base>#<会话>-<时间戳>`，
   // 每次生成独立快照，历史里的旧脑图不被新生成覆盖；'#' 标记在存档列表中被过滤。
-  function _mmSnapshotKey() {
-    const base = _state.spaceId ? `space:${_state.spaceId}` : `dir:${_state.currentLib || 'global'}`;
+  function _mmSnapshotKey(doc, scope) {
+    // 存档 key 以**主进程回执的真实作用域**为准（调用方已校验 doc 匹配），
+    // 避免"请求本文档、实际整库"的错误脑图也顶着 doc: 前缀存进档。
+    const base = (doc && (!scope || scope === 'doc'))
+      ? `doc:${doc}`
+      : (_state.spaceId ? `space:${_state.spaceId}` : `dir:${_state.currentLib || 'global'}`);
     const sid = String(_state.qaSessionId || 'solo').replace(/[^0-9a-zA-Z_-]/g, '');
     return `${base}#${sid}-${Date.now()}`;
   }
 
+  /**
+   * 从存档 key 反推作用域（与 _mmSnapshotKey 的构造对称）。
+   * 会话历史/存档恢复出来的脑图必须把作用域一起带回来，否则之后点 ⟳刷新 / 💾保存
+   * 会用到上一次生成留下的作用域，把某一份文档的脑图覆盖成整库脑图（或反之）。
+   */
+  function _mmScopeFromKey(key) {
+    const k = String(key || '');
+    if (k.startsWith('doc:')) return { doc: k.slice(4).split('#')[0], scope: 'doc' };
+    if (k.startsWith('space:')) return { doc: null, scope: 'space' };
+    if (k.startsWith('dir:')) return { doc: null, scope: 'dir' };
+    return null;
+  }
+
   // 生成成功（非降级）后：自动存档快照并写入当前会话历史，刷新/切会话可还原
-  function _mmRecordToHistory(root) {
+  function _mmRecordToHistory(root, doc, scope) {
     if (!root || !root.label) return;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
-    const key = _mmSnapshotKey();
+    const key = _mmSnapshotKey(doc, scope);
     window.cogseed.invoke('kb.mindmap.save', { key, root })
       .then((r) => {
         if (!r || !r.ok) return;
@@ -2679,6 +2734,7 @@
         _state.mmCollapsed.clear();
         canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
         canvas._mmRoot = root;
+        canvas._mmScope = _mmScopeFromKey(m.key); // 恢复存档也要带回作用域，否则刷新/保存会串味
         _bindMindCanvas(canvas);
       })
       .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
@@ -2703,6 +2759,7 @@
         _state.mmCollapsed.clear();
         canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
         canvas._mmRoot = root;
+        canvas._mmScope = _mmScopeFromKey(key);
         _bindMindCanvas(canvas);
       })
       .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
@@ -2711,18 +2768,29 @@
   // 生成脑图 → 作为产物追加到**对话消息区**（kb-qa-messages），
   // 与问答流同区可见、可滚动，不藏在解析卡的折叠区。
   // 生成脑图 → 调本地 kb.mindmap（多级层级 JSON）→ 对话区渲染精致树形脑图
-  function _genMindmap() {
+  //
+  // `doc` 存在时走**文档级脑图**（只读这一个文件的 chunk）；否则基于整个当前库
+  // （`dir` / `spaceId`）。为什么必须有文档级入口：整库脑图的作用域是"目录"，
+  // 根主题必然是"这个库是什么"。真机案例：一个目录里同时放了 Palantir 一本书的
+  // 对照译文 + 一篇 209 号文文章，生成的根节点就成了「AI与软件行业资料梳理」，
+  // 一级分支按**文件**分（帕兰提尔 / 工信部209号文 / 软件行业AI改写）而不是按
+  // **内容主题**分——因为输入本身就是两份互不相关的资料。想要"以某一份文档为
+  // 中心主题"的脑图，只能把作用域下沉到文档。
+  function _genMindmap(doc) {
     if (_mmGenerating) return; // 生成中防重复
     const box = document.getElementById('kb-qa-messages');
     if (!box) return;
     _mmGenerating = true;
+    const docName = doc ? String(doc).split('/').pop() : '';
     const ai = document.createElement('div');
     ai.className = 'kb-qa-msg is-ai';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-mm-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览</div>'
+    body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览'
+      + (docName ? `<span class="kb-mm-msg-scope">本文档：${_esc(docName)}</span>` : '')
+      + '</div>'
       + '<div class="kb-wb-mm-canvas" id="kb-wb-mm-canvas">'
-      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–60 秒，复杂知识库最长约 2 分钟）…</div></div>';
+      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–90 秒，长文档最长约 3 分钟）…</div></div>';
     ai.appendChild(body);
     box.appendChild(ai);
     const canvas = body.querySelector('.kb-wb-mm-canvas');
@@ -2730,36 +2798,72 @@
       _mmGenerating = false;
       return;
     }
-    window.cogseed.invoke('kb.mindmap', {
-      dir: _state.spaceId ? null : (_state.currentLib || null),
-      spaceId: _state.spaceId || null,
-    })
+    window.cogseed.invoke('kb.mindmap', doc
+      // 文档级：带上 spaceId —— 共享库的文件必须去共享库的索引里找，
+      // 否则同一份 rel_path 在个人库里找不到，会误报 not-found。
+      ? { doc, spaceId: _state.spaceId || null }
+      : {
+        dir: _state.spaceId ? null : (_state.currentLib || null),
+        spaceId: _state.spaceId || null,
+      })
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        // ── 作用域回执校验 ──────────────────────────────────────────────
+        // 请求了「本文档」就必须真的拿到 doc 作用域。主进程若是旧版本（不认识 doc
+        // 参数，静默退回"整库前 N 个文件"），这里必须**丢弃结果**并说清原因——
+        // 真机事故：一份 ECS 早会转写的"仅本文档"脑图里全是别的目录文件的内容，
+        // 用户完全看不出问题出在作用域上（且这个错误脑图还会以 doc: 为 key 存档）。
+        if (doc && (res.scope !== 'doc' || !Array.isArray(res.files) || res.files.length !== 1 || res.files[0] !== doc)) {
+          canvas.innerHTML = '<div class="kb-mm-fail">'
+            + '主进程没有按「本文档」作用域生成（返回作用域：' + _esc(res.scope || '未知') + '），已丢弃这次结果。'
+            + '<br>常见原因是应用主进程仍是旧代码（只刷新了界面，没重启进程）：请**完全退出 CogSeed 后重新启动**再试。'
+            + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
+            + '</div>';
+          // 标题行不能还挂着「本文档：xxx」——否则用户在错误提示上方仍看到"这是本文档的图"
+          const scopeTag = body.querySelector('.kb-mm-msg-scope');
+          if (scopeTag) scopeTag.textContent = '作用域不匹配，已丢弃';
+          const retry = canvas.querySelector('.kb-mm-retry-btn');
+          if (retry) retry.addEventListener('click', () => { ai.remove(); _genMindmap(doc); });
+          return;
+        }
         if (res.source === 'degraded') {
-          canvas.innerHTML = _mmDegradedHtml(res.reason);
+          canvas.innerHTML = _mmDegradedHtml(res.reason, doc);
           const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
           if (retryBtn) retryBtn.addEventListener('click', () => {
             ai.remove();
-            _genMindmap();
+            _genMindmap(doc);
           });
           return;
         }
         _state.lastMind = res.root;
+        _state.mmScope = { doc: doc || null, scope: res.scope || (doc ? 'doc' : 'dir') };
+        canvas._mmScope = _state.mmScope;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
         canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
-        if (res.source === 'generated') _mmRecordToHistory(res.root);
+        if (res.source === 'generated') _mmRecordToHistory(res.root, doc, res.scope);
       })
       .catch(() => {
         _mmGenerating = false;
         canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
       });
     box.scrollTop = box.scrollHeight;
+  }
+
+  /**
+   * 文件右键 / 「…」菜单的「生成脑图（本文档）」入口。
+   *
+   * 直接把该文件的相对路径作为 `doc` 交给 kb.mindmap：主进程只读这一个文件的
+   * chunk（`collectReadyDocLines({ doc })`），于是根主题 = 这份文档的主题、
+   * 一级分支 = 这份文档的章节。整库脑图仍保留在「生成脑图」主按钮上。
+   */
+  function _kbMindmapForDoc(relPath) {
+    if (!relPath) return;
+    _genMindmap(relPath);
   }
 
   // ── 生成测验（kb.quiz）────────────────────────────────────────────────
@@ -2997,6 +3101,10 @@
       .then((res) => {
         btn.disabled = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        // 「回答 → 脑图」的作用域必须显式归位为 text：否则会沿用上一次的 doc 作用域，
+        // 让之后的 ⟳刷新 / 💾保存 跑到某一份文档上（作用域状态串味）。
+        _state.mmScope = { doc: null, scope: 'text' };
+        canvas._mmScope = _state.mmScope;
         if (res.source === 'degraded') {
           canvas.innerHTML = _mmDegradedHtml(res.reason);
           const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
@@ -3031,6 +3139,8 @@
     canvas.addEventListener('click', () => {
       // 历史里可能有多张脑图：优先打开当前画布对应的快照树
       if (canvas._mmRoot) _state.lastMind = canvas._mmRoot;
+      // 作用域跟着画布走：弹窗里的 ⟳刷新 / 💾保存 必须作用在这张图真正的作用域上
+      if (canvas._mmScope) _state.mmScope = canvas._mmScope;
       _openMindPreview();
     });
   }
@@ -3385,8 +3495,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     } catch { /* ignore */ }
   }
 
-  // 当前库的存档 key（与主进程 mindKey 对齐）
+  // 当前脑图的存档 key（与主进程 mindKey 对齐）。
+  // 文档级脑图必须存到 `doc:<路径>`，否则"本文档脑图"会被存进整个库的档位里，
+  // 下次打开这个库看到的却是某一份文档的脑图。
   function _mmCurrentKey() {
+    const s = _state.mmScope;
+    if (s && s.doc && s.scope === 'doc') return `doc:${s.doc}`;
     return _state.spaceId ? `space:${_state.spaceId}` : `dir:${_state.currentLib || 'global'}`;
   }
 
@@ -3398,11 +3512,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       return;
     }
     const key = _mmCurrentKey();
+    const isDoc = key.startsWith('doc:');
     window.cogseed.invoke('kb.mindmap.save', { key, root })
       .then((r) => {
         if (r && r.ok) {
           _mmMarkSaved();
-          if (typeof uiToast === 'function') uiToast('脑图已保存到知识库（下次打开可直接读取）', { variant: 'success' });
+          if (typeof uiToast === 'function') {
+            uiToast(isDoc ? '脑图已保存到这份文档' : '脑图已保存到知识库（下次打开可直接读取）', { variant: 'success' });
+          }
         } else if (typeof uiToast === 'function') {
           uiToast('保存失败', { variant: 'warning' });
         }
@@ -3410,21 +3527,39 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       .catch(() => { if (typeof uiToast === 'function') uiToast('保存失败', { variant: 'warning' }); });
   }
 
-  // ⟳ 刷新：强制重新生成当前库脑图（不走缓存）
+  // ⟳ 刷新：强制重新生成脑图（不走缓存）。**沿用当前作用域**——文档级脑图刷新后
+  // 仍是这份文档的脑图，不会被悄悄换成整库脑图（真机会话里这样错配过）。
   function _mmRefreshMindmap() {
     if (_mmGenerating) return;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    const s = _state.mmScope;
+    if (s && s.scope === 'text') {
+      if (typeof uiToast === 'function') uiToast('这张脑图来自对话回答，无法重新生成', { variant: 'warning' });
+      return;
+    }
     _mmGenerating = true;
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒，复杂知识库最长约 2 分钟）…</div>';
-    window.cogseed.invoke('kb.mindmap', {
-      dir: _state.spaceId ? null : (_state.currentLib || null),
-      spaceId: _state.spaceId || null,
-      force: true,
-    })
+    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒，长文档最长约 3 分钟）…</div>';
+    window.cogseed.invoke('kb.mindmap', (s && s.doc)
+      ? { doc: s.doc, force: true }
+      : {
+        dir: _state.spaceId ? null : (_state.currentLib || null),
+        spaceId: _state.spaceId || null,
+        force: true,
+      })
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        // 与首次生成同一套作用域回执校验：主进程没按本文档生成就丢弃结果
+        if (s && s.doc && res.scope !== 'doc') {
+          const w = document.getElementById('kb-mm-overlay-wrap');
+          if (w) {
+            w.innerHTML = '<div class="kb-mm-fail">主进程未按「本文档」作用域重新生成（返回：' + _esc(res.scope || '未知') + '），已丢弃。请完全退出 CogSeed 后重启再试。'
+              + '<div class="kb-mm-refresh-hint" style="font-size:12px;margin-top:8px">原脑图已保留，未受影响</div></div>';
+          }
+          if (typeof uiToast === 'function') uiToast('重新生成未按本文档作用域，已保留原脑图', { variant: 'warning' });
+          return;
+        }
         if (res.source === 'degraded') {
           const wrap = document.getElementById('kb-mm-overlay-wrap');
           if (wrap) {
@@ -3437,6 +3572,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           return;
         }
         _state.lastMind = res.root;
+        _state.mmScope = (s && s.doc) ? { doc: s.doc, scope: 'doc' } : { doc: null, scope: res.scope || 'dir' };
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
@@ -3494,11 +3630,21 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           return;
         }
         _state.lastMind = r.root;
+        // 载入存档同样要记住作用域：文档级存档（doc:）刷新/再保存时不能退回整库
+        const isDocKey = key.startsWith('doc:');
+        _state.mmScope = isDocKey
+          ? { doc: key.slice(4).split('#')[0], scope: 'doc' }
+          : { doc: null, scope: key.startsWith('space:') ? 'space' : 'dir' };
         const titleEl = document.getElementById('kb-mm-title-input');
         const overlay = document.getElementById('kb-mm-overlay');
         if (titleEl && overlay) {
           overlay.hidden = false;
-          titleEl.textContent = `🧠 脑图预览 - ${key.startsWith('space:') ? `共享空间 ${key.slice(6)}` : `个人库 ${key.slice(4)}`}（已保存）`;
+          const scopeLabel = key.startsWith('space:')
+            ? `共享空间 ${key.slice(6)}`
+            : isDocKey
+              ? `文档 ${String(key.slice(4).split('#')[0]).split('/').pop()}`
+              : `个人库 ${key.slice(4)}`;
+          titleEl.textContent = `🧠 脑图预览 - ${scopeLabel}（已保存）`;
         }
         _rerenderMindmaps();
         _mmFitToStage();
@@ -4806,6 +4952,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (inner.status === 'deleted') _state.kbStatus.delete(inner.relPath);
         else _state.kbStatus.set(inner.relPath, { status: inner.status, chunks: inner.chunks, kind: inner.kind, error: inner.error });
         _renderFiles();
+        // 索引事件同时也是"库内容变了"的信号：快照里查不到的路径说明库刚长了文件
+        // （别人另存/导入/AI 落库），已删除的路径说明库少了文件。两种都要重拉树——
+        // 只更新「已索引」徽标会让列表永远停在进入视图时的那份快照上。
+        const known = _treeHasPath(inner.relPath);
+        if ((inner.status === 'deleted' && known) || (inner.status !== 'deleted' && !known)) {
+          _scheduleTreeReload();
+        }
       });
       _state.streamHandle = handle;
       handle.promise.catch(() => { /* ignore */ }).finally(() => {
@@ -5917,6 +6070,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       { key: 'delete', label: '删除到回收站', icon: 'trash-2', danger: true, fn: () => _kbDelete(path) },
     ];
     if (!isDir) items.push({ key: 'reveal', label: '在文件夹中显示', icon: 'folder-open', fn: () => _kbReveal(path) });
+    // 文档级脑图：以这一份文档为中心主题（整库脑图是按目录聚合的，多文档库里
+    // 根主题会变成"这个库是什么"，一级分支按文件分而不是按内容主题分）。
+    if (!isDir) items.unshift({ key: 'mindmap', label: '生成脑图（本文档）', icon: 'brain-circuit', fn: () => _kbMindmapForDoc(path) });
     _kbMenuShow(items, x, y);
   }
 
@@ -5941,6 +6097,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const el = document.createElement('div');
     el.className = 'kb-ctx-menu kb-file-menu';
     el.innerHTML = `
+      ${_uiButton({ label: '生成脑图（本文档）', icon: 'brain-circuit', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'mind' } })}
       ${_uiButton({ label: '置顶', icon: 'pin', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'pin' } })}
       ${_uiButton({ label: '编辑标签', icon: 'tag', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'tag' } })}
       ${_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'rename' } })}
@@ -5977,7 +6134,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (!item) return;
       const act = item.dataset.fm;
       close();
-      if (act === 'pin') { if (typeof uiToast === 'function') uiToast('置顶：即将上线', { variant: 'info' }); }
+      if (act === 'mind') _kbMindmapForDoc(path);
+      else if (act === 'pin') { if (typeof uiToast === 'function') uiToast('置顶：即将上线', { variant: 'info' }); }
       else if (act === 'tag') { if (typeof uiToast === 'function') uiToast('编辑标签：即将上线', { variant: 'info' }); }
       else if (act === 'rename') _kbRenameSpaceFile(path);
       else if (act === 'move') { if (typeof uiToast === 'function') uiToast('移动到：即将上线', { variant: 'info' }); }
