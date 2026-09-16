@@ -37,13 +37,26 @@ function loadWorkspace() {
     get innerHTML() { return html; },
     set innerHTML(value: string) {
       html = value; writes.push(value); artifactWindow.innerHTML = '';
-      controls = [...value.matchAll(/<(button|input|select|article)\b([^>]*)>/g)].map(([, , text]) => {
+      controls = [...value.matchAll(/<(button|input|select|textarea|article)\b([^>]*)>/g)].map(([, , text]) => {
         const attrs = Object.fromEntries([...text.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, k, v]) => [k, v]));
         const dataset = Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-'))
           .map(([k, v]) => [k.slice(5).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()), v]));
         const listeners = new Map<string, (event: any) => any>();
-        return { attrs, dataset, value: attrs.value || '', focus: vi.fn(), addEventListener: (type: string, fn: any) => listeners.set(type, fn),
-          fire: (type = 'click') => listeners.get(type)?.({ preventDefault() {}, stopPropagation() {} }) };
+        const control: any = {
+          attrs,
+          dataset,
+          value: attrs.value || '',
+          disabled: 'disabled' in attrs,
+          hidden: 'hidden' in attrs,
+          tabIndex: Number(attrs.tabindex || 0),
+          scrollIntoView: vi.fn(),
+          getAttribute: (name: string) => attrs[name] || null,
+          matches: (selector: string) => matches(control, selector),
+          addEventListener: (type: string, fn: any) => listeners.set(type, fn),
+          fire: (type = 'click', event: Record<string, unknown> = {}) => listeners.get(type)?.({ preventDefault() {}, stopPropagation() {}, ...event }),
+        };
+        control.focus = vi.fn(() => { document.activeElement = control; });
+        return control;
       });
     },
   };
@@ -68,6 +81,7 @@ function loadWorkspace() {
   });
   const context: any = { document, HTMLInputElement: class {}, Element: class {}, setTimeout, clearTimeout, Date: class extends Date { static now() { return now; } }, Map, Set, Intl, URL };
   context.window = { document, cogseed: { invoke }, addEventListener: (type: string, fn: () => void) => events.set(type, fn) };
+  context.renderAvatarHtml = (_icon: string, _color: string, options: any = {}) => `<span>${options.letter || ''}</span>`;
   context.setView = vi.fn((view: string) => {
     if (view === 'workspace') {
       context.window.prepareWorkspaceView?.();
@@ -75,7 +89,7 @@ function loadWorkspace() {
     } else context.window.leaveWorkspace?.();
   });
   vm.createContext(context);
-  for (const name of ['ui-button', 'ui-empty', 'workspace']) vm.runInContext(read(`src/renderer/modules/${name}.js`), context, { filename: `${name}.js` });
+  for (const name of ['ui-button', 'ui-form', 'ui-empty', 'ui-page-header', 'ui-segmented-control', 'workspace']) vm.runInContext(read(`src/renderer/modules/${name}.js`), context, { filename: `${name}.js` });
   return {
     context, root, invoke, writes, answers, events, html: () => html, artifactHtml: () => artifactWindow.innerHTML,
     // Existing recovery tests explicitly refresh; visit models normal navigation.
@@ -88,10 +102,37 @@ function loadWorkspace() {
       expect(control, `missing real control: ${action}`).toBeTruthy();
       control.fire(); await flush();
     },
+    control: (action: string, attribute = '', value = '') => controls.find((el) => el.dataset.ws === action && (!attribute || el.dataset[attribute] === value)),
+    key: async (action: string, key: string, attribute = '', value = '', extra: Record<string, unknown> = {}) => {
+      const control = controls.find((el) => el.dataset.ws === action && (!attribute || el.dataset[attribute] === value));
+      expect(control, `missing real control: ${action}`).toBeTruthy();
+      const preventDefault = vi.fn();
+      control.fire('keydown', { key, keyCode: 0, isComposing: false, preventDefault, ...extra });
+      await flush();
+      return preventDefault;
+    },
   };
 }
 
 describe('workspace navigation and asynchronous ownership', () => {
+  it('uses one-tab-entry semantics and keyboard navigation in space details', async () => {
+    const h = loadWorkspace(); await h.enter(); await h.open('a');
+    expect(h.html()).toMatch(/class="ws-space-tabs" role="tablist" aria-orientation="horizontal"/);
+    expect(h.html()).toMatch(/id="ws-space-tab-tasks"[^>]*aria-selected="true"[^>]*tabindex="0"/);
+    expect(h.html().match(/role="tab"/g)).toHaveLength(3);
+    expect(h.html().match(/tabindex="-1"/g)).toHaveLength(2);
+
+    const preventDefault = await h.key('space-tab', 'ArrowRight', 'tab', 'tasks');
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(h.html()).toMatch(/id="ws-space-tab-artifacts"[^>]*aria-selected="true"[^>]*tabindex="0"/);
+    expect(h.control('space-tab', 'tab', 'artifacts').focus).toHaveBeenCalled();
+    expect(h.control('space-tab', 'tab', 'artifacts').scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+
+    const ignored = await h.key('space-tab', 'ArrowRight', 'tab', 'artifacts', { isComposing: true, keyCode: 229 });
+    expect(ignored).not.toHaveBeenCalled();
+    expect(h.html()).toMatch(/id="ws-space-tab-artifacts"[^>]*aria-selected="true"/);
+  });
+
   it('shows spaces while template reads are still pending, without loading configuration catalogs', async () => {
     const h = loadWorkspace(); const response = deferred();
     h.answers.set('personalOntology.templates.catalog:', response.promise);
@@ -138,6 +179,26 @@ describe('workspace navigation and asynchronous ownership', () => {
     expect(h.html()).toContain('data-ws="create-name"');
     expect(h.html()).not.toMatch(/<button[^>]*disabled[^>]*data-ws="confirm-create"/);
     expect(h.invoke.mock.calls.some(([channel]) => channel === 'spaces.create')).toBe(false);
+  });
+
+  it('exposes and updates the selected state of collaborating Agent tools', async () => {
+    const h = loadWorkspace();
+    h.answers.set('localAgents.list:', {
+      entries: [
+        { type: 'claude', available: true },
+        { type: 'codex', available: true },
+      ],
+    });
+    await h.visit(); await h.click('create-space'); await flush();
+
+    expect(h.control('toggle-create-tool', 'id', 'claude').attrs['aria-pressed']).toBe('true');
+    expect(h.control('toggle-create-tool', 'id', 'codex').attrs['aria-pressed']).toBe('false');
+
+    await h.click('toggle-create-tool', 'id', 'codex');
+    expect(h.control('toggle-create-tool', 'id', 'codex').attrs['aria-pressed']).toBe('true');
+
+    await h.click('toggle-create-tool', 'id', 'claude');
+    expect(h.control('toggle-create-tool', 'id', 'claude').attrs['aria-pressed']).toBe('false');
   });
 
   it('does not mark visible tasks busy while only an unused artifact read is pending', async () => {

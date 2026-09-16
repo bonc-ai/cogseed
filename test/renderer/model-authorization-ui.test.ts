@@ -73,6 +73,13 @@ describe('unified model authorization settings surface', () => {
     }
   });
 
+  it('keeps configured API entries aligned as provider, key, model, and actions', () => {
+    expect(style).toMatch(/#settings-entries \.entry-main\s*\{[^}]*grid-template-columns:\s*minmax\(90px, 120px\) minmax\(180px, 1fr\);/s);
+    expect(style).toMatch(/#settings-entries \.entry-meta\s*\{[^}]*grid-template-columns:\s*max-content minmax\(120px, 1fr\);/s);
+    expect(style).toMatch(/#settings-entries \.entry-api-key-input\.form-input\s*\{[^}]*padding:\s*0;[^}]*border:\s*0;[^}]*background:\s*transparent;/s);
+    expect(style).toContain('#settings-entries .entry-actions .entry-model-select { width: 150px; }');
+  });
+
   it('keeps four locale files aligned for model authorization strings', () => {
     const [baseLang, baseLocale] = locales[0];
     const baseKeys = modelAuthorizationKeys(baseLocale);
@@ -195,6 +202,7 @@ function loadInteractiveHarness() {
   });
   const windowObj: any = {
     cogseed: { invoke },
+    uiIconHtml: (name: string) => `<i data-icon="${name}"></i>`,
     addEventListener(type: string, handler: (...args: any[]) => unknown) { const list = windowListeners.get(type) || []; list.push(handler); windowListeners.set(type, list); },
   };
   const refreshModelGuard = vi.fn(async () => true);
@@ -211,6 +219,11 @@ function loadInteractiveHarness() {
     setTimeout, clearTimeout,
   };
   vm.createContext(context);
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-button.js'), 'utf8'), context, { filename: 'ui-button.js' });
+  vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
+  context.uiButton = windowObj.uiButton;
+  context.uiIconButton = windowObj.uiIconButton;
+  context.uiInput = windowObj.uiInput;
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8'), context, { filename: 'model-authorization.js' });
   return { context, registry, invoke, discoverResolvers, windowListeners, refreshModelGuard };
 }
@@ -526,7 +539,8 @@ describe('model authorization interactive wizard', () => {
 
     expect(registry.get('model-authorization-body')!.innerHTML)
       .toContain('settings.model_authorization.model_list_empty');
-    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('complete" disabled');
+    expect(registry.get('model-authorization-actions')!.innerHTML)
+      .toMatch(/<button[^>]*disabled[^>]*data-model-auth-action="complete"/);
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-empty-model-result');
   });
 

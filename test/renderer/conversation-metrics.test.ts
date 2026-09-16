@@ -69,6 +69,27 @@ describe('messageMetricsLine', () => {
     expect(line.outText).toBeNull();
     expect(line.cacheBadgeText).toBeNull();
   });
+  it('hostile usage shapes never throw (2026-09-14 加固 fixtures)', () => {
+    const shapes = [
+      { usage: null },
+      { usage: {} },
+      { usage: { inputTokens: -5, outputTokens: 'x', cacheReadTokens: NaN } },
+      { usage: 7 },
+      { firstTokenAt: null },                       // 无 usage 且无 ttft → 提前返回
+      { startedAt: 'bad', firstTokenAt: 2, completedAt: 3 },
+      null,                                          // 整条 metrics 为空
+      undefined,
+    ];
+    for (const extra of shapes) {
+      const base = { startedAt: 1_000, firstTokenAt: 3_100, completedAt: 69_100 };
+      const input = extra === null ? null : (extra === undefined ? undefined : { ...base, ...extra });
+      expect(() => messageMetricsLine(input)).not.toThrow();
+      const line = messageMetricsLine(input);
+      if (line !== null) {
+        expect(Number.isFinite(line.durationMs ?? NaN) || line.durationMs === null).toBe(true);
+      }
+    }
+  });
 });
 
 describe('foldSessionMetrics', () => {

@@ -204,6 +204,30 @@ describe('plugin_ui › runtime config store', () => {
     }
   });
 
+  it('preserves the platform subpath (/edu) in the whoami URL (2026-09-15 fix)', async () => {
+    const { savePluginRuntimeConfig } = await loadPluginUi();
+    installPkg('withui');
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ ok: true, role: 'student', person_id: 'S-7' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const res = await savePluginRuntimeConfig(TEST_UID, 'withui', {
+        server_url: 'https://cogseed-open.bonc.com.cn/edu',
+        api_key: 'k-edu',
+      });
+      expect(res.ok).toBe(true);
+      expect(urls[0]).toBe('https://cogseed-open.bonc.com.cn/edu/api/agent/whoami');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('parses the v2 key prefix and auto-fills server_url (key carries its server)', async () => {
     const { savePluginRuntimeConfig, readPluginRuntimeConfig } = await loadPluginUi();
     installPkg('withui');
@@ -221,6 +245,35 @@ describe('plugin_ui › runtime config store', () => {
       expect(stored.server_url).toBe(origin);
       expect(stored.api_key).toBe(v2key); // 整串保存（平台对整串做哈希）
       expect(stored.role).toBe('student');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('overwrites a previously stored server_url with the new key embedded address (key is authoritative)', async () => {
+    const { savePluginRuntimeConfig, readPluginRuntimeConfig } = await loadPluginUi();
+    installPkg('withui');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, agent_id: 'student-companion-S-3', role: 'student', person_id: 'S-3' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    try {
+      // 存量用户：先存一份"旧服务器"配置
+      await savePluginRuntimeConfig(TEST_UID, 'withui', {
+        server_url: 'http://old-server.example.com',
+        api_key: 'k-old',
+        student_id: 'S-3',
+        role: 'student',
+      });
+      // 只粘贴新 v2 密钥（表单未提交 server_url）→ 旧地址必须被密钥内嵌地址覆盖
+      const origin = 'https://edu.example.com';
+      const b64 = Buffer.from(origin, 'utf8').toString('base64url');
+      const v2key = `eduseed1.${b64}.course-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
+      const res = await savePluginRuntimeConfig(TEST_UID, 'withui', { api_key: v2key });
+      expect(res.ok).toBe(true);
+      const stored = readPluginRuntimeConfig(TEST_UID, 'withui');
+      expect(stored.server_url).toBe(origin);
+      expect(stored.api_key).toBe(v2key);
     } finally {
       vi.unstubAllGlobals();
     }

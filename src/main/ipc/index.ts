@@ -14,7 +14,7 @@
  * dropping it into `invokeHandlers` or `streamHandlers`.
  */
 
-import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron';
+import { app, ipcMain, dialog, BrowserWindow, screen, type WebContents } from 'electron';
 
 import * as users from '../features/users';
 import * as chats from '../features/chats';
@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
+import * as kbQuiz from '../features/kb_quiz';
 import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
@@ -34,6 +35,7 @@ import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import * as confirmCards from '../features/group_chat/confirm-cards';
 import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
 import {
   createChatEventProjectorState,
@@ -65,6 +67,7 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
+import { listKstarEpisodes } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
 import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
@@ -107,6 +110,8 @@ import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
 import * as customProviders from '../features/custom_providers';
+import * as modelOverrides from '../features/model_overrides';
+import { curatedModelsFor } from '../model/provider_catalog';
 import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
 import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
@@ -148,6 +153,7 @@ import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench'
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
+import { invokeHandlers as transcriptHandlers } from './transcript';
 import { invokeHandlers as updatesHandlers } from './updates';
 import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
@@ -177,6 +183,7 @@ import {
   parseStreamEnvelope,
   parseStreamRequestId,
 } from './security';
+import { officeEmptyBodyHtml, officeFragmentHasText } from '../util/office-preview';
 
 const log = createLogger('ipc');
 
@@ -228,9 +235,17 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  vision?: unknown;
+  input?: unknown;
+  capabilities?: unknown;
+  reasoningLevels?: unknown;
+  reasoningParamsMap?: unknown;
 } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} required`);
-  const raw = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const raw = value as {
+    id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
+    input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+  };
   const id = boundedText(raw.id, `${field}.id`, 200);
   const boundedInteger = (candidate: unknown, name: string, max: number): number => {
     if (!Number.isSafeInteger(candidate) || (candidate as number) <= 0 || (candidate as number) > max) {
@@ -241,7 +256,18 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
   const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
   if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
-  return { id, contextWindow, maxTokens };
+  // 新配置字段（2026-09-13 统一模型配置表单）原样透传——严格校验在
+  // custom_providers.normalizeModel（单一口径，避免两处规则漂移）。
+  return {
+    id,
+    contextWindow,
+    maxTokens,
+    ...(raw.vision === undefined ? {} : { vision: raw.vision }),
+    ...(raw.input === undefined ? {} : { input: raw.input }),
+    ...(raw.capabilities === undefined ? {} : { capabilities: raw.capabilities }),
+    ...(raw.reasoningLevels === undefined ? {} : { reasoningLevels: raw.reasoningLevels }),
+    ...(raw.reasoningParamsMap === undefined ? {} : { reasoningParamsMap: raw.reasoningParamsMap }),
+  };
 }
 type StreamHandler = (
   payload: any,
@@ -435,6 +461,33 @@ function _escapePreviewHtml(s: string): string {
 }
 
 type OfficePreviewKind = 'word' | 'spreadsheet' | 'presentation';
+
+/**
+ * 知识库文件 → 磁盘绝对路径，供 `kb.openFile`（预览）与 `kb.openExternal`
+ * （用系统默认应用打开）共用。
+ *
+ * 两条路由：
+ *   - 空间库（`spaceId` 存在）：路径相对该空间 contexts 目录，逐段校验不得逃逸；
+ *   - 个人库：relPath 含库前缀，交给 `contexts.resolveContextFileAbsPath`
+ *     （它自带越界/隐藏段/存在性校验）。
+ * 失败抛错（'invalid spaceId' / 'invalid path' / 'not found: …'），调用方转成
+ * `{ ok: false, error }` 回渲染层——与改动前 `kb.openFile` 的报错文案一致。
+ */
+async function resolveKbFileAbsPath(
+  userId: string,
+  spaceId: unknown,
+  relPath: string,
+): Promise<{ abs: string; spaceRoot: string | null }> {
+  if (typeof spaceId === 'string' && spaceId) {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const { spaceContextsDir } = await import('../paths');
+    const root = path.resolve(spaceContextsDir(userId, spaceId));
+    const abs = path.resolve(root, relPath);
+    if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('invalid path');
+    return { abs, spaceRoot: root };
+  }
+  return { abs: contexts.resolveContextFileAbsPath(relPath), spaceRoot: null };
+}
 
 function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
   if (ext === '.docx' || ext === '.docm') return 'word';
@@ -951,6 +1004,21 @@ async function ensureKstarWakeProjectionConfirmed(
   return null;
 }
 
+/** 整理记录批量入口的公共校验：id 数组、逐条 safeId、上限 100。 */
+function batchRecallCaptures(
+  ctx: { userId: string },
+  captureIds: unknown,
+  run: (userId: string, ids: string[]) => Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }>,
+): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
+  if (!Array.isArray(captureIds)
+    || captureIds.length < 1
+    || captureIds.length > 100
+    || captureIds.some((id) => typeof id !== 'string' || !safeId(id))) {
+    throw new Error('invalid recall capture ids');
+  }
+  return run(ctx.userId, captureIds);
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
   // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
   // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
@@ -1165,6 +1233,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         history_indexes: page.historyIndexes,
       } : {}),
     };
+  },
+
+  // 确认卡片专用通道（2026-09-14 Bug3）：幂等 + 直达总线，绕过渲染层发送队列；
+  // action: 'confirm' | 'cancel'（评审补强：取消同通道、同步落盘 cancelled）。
+  'groupChat.sendConfirm': async ({ cid, artifactId, op, payload, action }, ctx) => {
+    return confirmCards.sendConfirmAndMark({
+      userId: ctx.userId,
+      cid,
+      artifactId,
+      op: typeof op === 'string' ? op : String(op ?? ''),
+      payload,
+      action: action === 'cancel' ? 'cancel' : 'confirm',
+    });
   },
 
   // ── Conversation aside: read-only side thread (see features/conversation_aside) ──
@@ -2432,8 +2513,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, signal: await recallTeaching.revokeUserTeachingSignal(ctx.userId, signalId) };
   },
 
-  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor } = {}, ctx) => {
-    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid capture limit');
+  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor, scope } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid recall capture limit');
     const validStatuses = new Set([
       'waiting', 'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
       'review_ready', 'writing', 'completed', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
@@ -2449,11 +2530,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 500)) {
       throw new Error('invalid recall capture cursor');
     }
+    if (scope !== undefined && scope !== 'visible' && scope !== 'all') {
+      throw new Error('invalid recall capture scope');
+    }
     const page = await recallCaptures.queryRecallCaptures(ctx.userId, {
       ...(limit === undefined ? {} : { limit }),
       ...(statuses === undefined ? {} : { statuses }),
       ...(executionPolicy === undefined ? {} : { executionPolicy }),
       ...(cursor === undefined ? {} : { cursor }),
+      ...(scope === undefined ? {} : { scope }),
     });
     return { ok: true, ...page };
   },
@@ -2461,6 +2546,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.captures.read': async ({ captureId } = {}, ctx) => {
     if (!safeId(captureId)) throw new Error('invalid recall capture id');
     return { ok: true, capture: await recallCaptures.readRecallCaptureWorkflow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.context': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, context: await recallCaptures.readRecallCaptureContext(ctx.userId, captureId) };
   },
 
   'recall.captures.retry': async ({ captureId } = {}, ctx) => {
@@ -2486,6 +2576,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.captures.runNow': async ({ captureId } = {}, ctx) => {
     if (!safeId(captureId)) throw new Error('invalid recall capture id');
     return { ok: true, capture: await recallCaptures.runRecallCaptureNow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.batchRetry': async ({ captureIds } = {}, ctx) => {
+    return { ok: true, result: await batchRecallCaptures(ctx, captureIds, recallCaptures.retryRecallCapturesBatch) };
+  },
+
+  'recall.captures.batchRunNow': async ({ captureIds } = {}, ctx) => {
+    // 每条都是一次模型额度消耗：入口只收 id 列表，条数确认由前端弹窗负责
+    //（写死具体数字），这里不再二次拦截。
+    return { ok: true, result: await batchRecallCaptures(ctx, captureIds, recallCaptures.runRecallCapturesNowBatch) };
   },
 
   'recall.captures.manualCreate': async ({ conversationId } = {}, ctx) => {
@@ -2767,6 +2867,39 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (conversationId !== undefined && !safeId(conversationId)) return { ok: false, error: 'invalid kstar failure conversation id' };
     try {
       return { ok: true, failures: await kstarFailures.listKstarFailures(ctx.userId, conversationId !== undefined ? { conversationId } : {}) };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.episodes.list': async ({ limit } = {}, ctx) => {
+    try {
+      const episodes = await listKstarEpisodes(ctx.userId);
+      const n = Number(limit);
+      const capped = Number.isFinite(n) && n > 0 ? Math.min(n, 200) : 100;
+      return {
+        ok: true,
+        total: episodes.length,
+        episodes: episodes.slice(0, capped).map((episode) => ({
+          id: episode.id,
+          createdAt: episode.createdAt,
+          status: (episode.r && episode.r.status) || 'unknown',
+          goal: String((episode.t && episode.t.userGoal) || '').slice(0, 200),
+          summary: String((episode.s && episode.s.conversationSummary) || '').slice(0, 200),
+          durationMs: episode.r && typeof episode.r.durationMs === 'number' ? episode.r.durationMs : null,
+        })),
+      };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.experiences.list': async ({ limit } = {}, ctx) => {
+    try {
+      const n = Number(limit);
+      const result = await kstarReviewService.listKstarExperiences(
+        ctx.userId,
+        Number.isFinite(n) && n > 0 ? n : undefined,
+      );
+      return { ok: true, total: result.total, experiences: result.experiences };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
@@ -4163,6 +4296,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return res;
   },
 
+  // KB quiz (知识库测验题)：与 kb.mindmap 同源（库内 ready 文档要点）+ 本地 LLM，
+  // **不依赖 kb.summary** —— AI 解析卡上的「生成测验」不再要求"先解析"。
+  // 支持 text 参数：基于对话回答文本出题；count 控制题量（1–20，默认 5）。
+  'kb.quiz': async ({ dir, spaceId, force, text, count }, ctx) => {
+    const res = await kbQuiz.kbQuiz(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      force: force === true,
+      text: typeof text === 'string' && text ? text : null,
+      count: Number.isFinite(Number(count)) ? Number(count) : undefined,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 单发无状态出题：不写/不复用持久会话（与 kb.summary/kb.mindmap 同款）
+          ephemeralSession: true,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
   // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。
   'kb.mindmap.save': async ({ key, root }, ctx) => {
     const k = typeof key === 'string' && key ? key : '';
@@ -4190,13 +4351,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const source = typeof html === 'string' && html ? html : '';
     if (!source) return { ok: false, error: 'no html' };
     try {
+      // 窗口显式居中：BrowserWindow 默认按系统给的默认位置摆放，不看用户的鼠标/主窗口在哪，
+      // 实测会偏在屏幕一角。这里按"鼠标所在显示器"的工作区算中心点，多屏下也落在用户眼前。
+      const width = 900;
+      const height = 640;
+      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      const area = display.workArea;
       const win = new BrowserWindow({
-        width: 900, height: 640, minWidth: 480, minHeight: 320,
+        width, height, minWidth: 480, minHeight: 320,
+        x: Math.round(area.x + (area.width - width) / 2),
+        y: Math.round(area.y + (area.height - height) / 2),
+        center: true,
+        show: false,
         title: '脑图',
         backgroundColor: '#ffffff',
         webPreferences: { sandbox: true },
       });
       await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      win.show();
       win.on('closed', () => { /* no-op */ });
       return { ok: true };
     } catch (err) {
@@ -4351,33 +4523,52 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 打开知识库文件内容（点击文件查看）：个人库 relPath 或 空间库 spaceId+path。
   // 文本直读（md 渲染为 Markdown）；docx/xlsx/pptx 转排版化 HTML 预览；
   // pdf 走 kb-file:// 原生 PDFium iframe（排版不失真），此处只校验返回路径。
-  'kb.openFile': async ({ spaceId, path: relPath } = {}, ctx) => {
+  'kb.openFile': async ({ spaceId, path: relPath, asText } = {}, ctx) => {
     const p = typeof relPath === 'string' ? relPath.trim() : '';
     if (!p) return { ok: false, error: 'missing path' };
     try {
-      let abs: string;
-      let display = p;
-      let spaceRoot: string | null = null;
-      if (typeof spaceId === 'string' && spaceId) {
-        // 空间库：路径在空间 contexts 目录下（防穿越）
-        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
-        const { spaceContextsDir } = await import('../paths');
-        const root = path.resolve(spaceContextsDir(ctx.userId, spaceId));
-        spaceRoot = root;
-        abs = path.resolve(root, p);
-        if (abs !== root && !abs.startsWith(root + path.sep)) {
-          return { ok: false, error: 'invalid path' };
-        }
-      } else {
-        // 个人库：relPath（含库前缀）经 contexts 安全解析（越界/不存在会 throw）
-        abs = contexts.resolveContextFileAbsPath(p);
-      }
+      const resolvedKb = await resolveKbFileAbsPath(ctx.userId, spaceId, p);
+      const abs = resolvedKb.abs;
+      const display = p;
+      const spaceRoot = resolvedKb.spaceRoot;
+      // 空间库文件必须回传 spaceId：渲染层靠它拼 `kb-file://space/…`、切源码、
+      // 以及"在系统中打开"的二次 IPC（缺了就会按个人库路由而找不到文件）。
+      const spaceField = spaceRoot && typeof spaceId === 'string' ? { spaceId } : {};
       if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
         return { ok: false, error: 'file not found' };
       }
       const ext = path.extname(abs).toLowerCase();
       const name = path.basename(abs);
-      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      // `.html/.htm` 从文本类里拿出来：**渲染页面**才是用户要的"原来的排版"
+      // （渲染层仍提供"查看源码"切换，源码能力不丢）。
+      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      const HTML_EXTS = ['.html', '.htm'];
+      const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif'];
+      const MEDIA_EXTS = ['.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.webm', '.mkv', '.avi'];
+      // html 的"查看源码"：显式要文本时按文本返回（渲染层渲染⇄源码切换用）。
+      // 只能走这条 IPC——渲染进程 fetch('kb-file://…') 取不到（非 http 方案无 CORS 头）。
+      if (HTML_EXTS.includes(ext) && asText === true) {
+        const MAX_SRC = 2 * 1024 * 1024;
+        const st = fs.statSync(abs);
+        if (st.size > MAX_SRC) return { ok: false, error: 'too_large', size: st.size };
+        let text = fs.readFileSync(abs, 'utf8');
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        return { ok: true, kind: 'text', name, path: display, content: text, ...spaceField };
+      }
+      // 渲染型文件：渲染层用 `kb-file://` 直接取字节（PDF 走 PDFium、图片走 <img>、
+      // 音视频走 <video>/<audio>），排版与原生控件都保留，不再退化成纯文本。
+      if (HTML_EXTS.includes(ext) || IMAGE_EXTS.includes(ext) || MEDIA_EXTS.includes(ext)) {
+        const kind = HTML_EXTS.includes(ext) ? 'html' : (IMAGE_EXTS.includes(ext) ? 'image' : 'media');
+        return {
+          ok: true,
+          kind,
+          name,
+          path: display,
+          relPath: p,
+          ...spaceField,
+          ...(MEDIA_EXTS.includes(ext) && ['.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac'].includes(ext) ? { audio: true } : {}),
+        };
+      }
       if (TEXT_EXTS.includes(ext)) {
         const MAX = 2 * 1024 * 1024;
         const st = fs.statSync(abs);
@@ -4386,7 +4577,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         // .md/.markdown 渲染为 Markdown（阅读视图），其余文本纯文本展示
         const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
-        return { ok: true, kind, name, path: display, content: text };
+        return { ok: true, kind, name, path: display, content: text, ...spaceField };
       }
       const officeKind = _officePreviewKindForExt(ext);
       if (officeKind) {
@@ -4396,7 +4587,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         if (st.size > MAX_OFFICE) return { ok: false, error: 'too_large', size: st.size };
         const cacheKey = `${abs}:${st.size}:${st.mtimeMs}:kb`;
         const cached = _officePreviewCacheGet(cacheKey);
-        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html };
+        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html, ...spaceField };
         try {
           const buf = fs.readFileSync(abs);
           let fragment = '';
@@ -4410,16 +4601,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
             const { pptxBufferToHtml } = await import('../util/extract-office');
             fragment = pptxBufferToHtml(buf);
           }
-          const html = _wrapOfficePreviewHtml(officeKind, name, fragment || '<p class="office-muted">（暂无可见内容）</p>');
+          // 转换结果里可能一个字都提不出来（扫描件、旧版 .doc 以嵌入对象塞进
+          // docx 的"壳文件"等）。这时给一句能照做的说明，而不是空白页——文案
+          // 与其它 Office 预览出口（资料面板 / 聊天文件）共用同一份。
+          const bodyHtml = officeFragmentHasText(fragment) ? fragment : officeEmptyBodyHtml(officeKind, buf);
+          const html = _wrapOfficePreviewHtml(officeKind, name, bodyHtml);
           _officePreviewCachePut(cacheKey, html, officeKind);
-          return { ok: true, kind: 'office', officeKind, name, path: display, html };
+          return { ok: true, kind: 'office', officeKind, name, path: display, html, ...spaceField };
         } catch (err) {
           return { ok: false, error: String((err as Error).message || 'preview failed'), name };
         }
       }
       if (ext === '.pdf') {
-        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src
-        return { ok: true, kind: 'pdf', name, path: display, spaceId: spaceRoot ? (typeof spaceId === 'string' ? spaceId : undefined) : undefined };
+        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src。
+        // 帧内工具栏 = 缩放/翻页/下载/打印，都是 PDFium 原生的，不需要我们自造。
+        return {
+          ok: true,
+          kind: 'pdf',
+          name,
+          path: display,
+          relPath: p,
+          ...spaceField,
+        };
       }
       return { ok: false, error: `暂不支持预览 ${ext} 格式`, kind: 'unsupported', name };
     } catch (err) {
@@ -4428,6 +4631,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       // contexts.resolveContextFileAbsPath 对缺失文件抛 "not found: <rel>"（ENOENT）
       const error = code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg;
       return { ok: false, error };
+    }
+  },
+
+  // 用系统默认应用打开知识库文件。查看器只做只读预览（PDF 走 PDFium 的
+  // 缩放/翻页/下载/打印），批注编辑、旧版/嵌入对象 Office 文件这类"要动原生
+  // 应用"的场景由这里兜底——同一个防穿越解析入口，不额外放开路径。
+  'kb.openExternal': async ({ spaceId, path: relPath } = {}, ctx) => {
+    const p = typeof relPath === 'string' ? relPath.trim() : '';
+    if (!p) return { ok: false, error: 'missing path' };
+    try {
+      const resolvedKb = await resolveKbFileAbsPath(ctx.userId, spaceId, p);
+      if (!fs.existsSync(resolvedKb.abs) || !fs.statSync(resolvedKb.abs).isFile()) {
+        return { ok: false, error: 'file not found' };
+      }
+      const err = await shell.openPath(resolvedKb.abs);
+      if (err) return { ok: false, error: err };
+      return { ok: true };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg };
     }
   },
 
@@ -4906,6 +5130,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
     return customProviders.setCustomProviderEnabled(ctx.userId, id, args.enabled);
   },
+  // ── 内置预设的本地覆盖（设置页「预设详情」）──
+  // 窗口/输出的用户级覆盖：只改本机生效值（运行时预算 + 模型下拉），不动预设。
+  'modelOverrides.list': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const presetModels = curatedModelsFor(provider);
+    return {
+      ok: true,
+      provider,
+      models: modelOverrides.describeModelAbilityOverrides(ctx.userId, provider, presetModels),
+      caps: {
+        contextWindow: modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW,
+        maxTokens: modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS,
+      },
+    };
+  },
+  'modelOverrides.set': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const model = boundedText(args?.model, 'model', 200);
+    const presetModels = curatedModelsFor(provider);
+    const presetEntry = presetModels.find((entry) => entry.id === model);
+    const preset = {
+      ...(typeof presetEntry?.contextWindow === 'number' ? { contextWindow: presetEntry.contextWindow } : {}),
+      ...(typeof presetEntry?.maxTokens === 'number' ? { maxTokens: presetEntry.maxTokens } : {}),
+    };
+    const toPatch = (value: unknown, max: number): number | null | undefined => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > max) {
+        throw new Error('override value must be a positive safe integer within range');
+      }
+      return value as number;
+    };
+    return modelOverrides.setModelOverride(
+      ctx.userId,
+      provider,
+      model,
+      {
+        contextWindow: toPatch(args?.contextWindow, modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW),
+        maxTokens: toPatch(args?.maxTokens, modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS),
+      },
+      {
+        ...(typeof preset.contextWindow === 'number' ? { contextWindow: preset.contextWindow } : {}),
+        ...(typeof preset.maxTokens === 'number' ? { maxTokens: preset.maxTokens } : {}),
+      },
+    );
+  },
+  'modelOverrides.clear': async (args, ctx) => modelOverrides.clearModelOverride(
+    ctx.userId,
+    boundedText(args?.provider, 'provider', 120),
+    boundedText(args?.model, 'model', 200),
+  ),
   'customProviders.model.add': async (args, ctx) => customProviders.addCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),
@@ -4917,6 +5192,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.modelId, 'modelId', 200),
     boundedCustomProviderModel(args.model, 'model'),
   ),
+  // 模型级开关（S2）：关闭 = 选择器隐藏 + 阻止新绑定 + 已绑定条目跳过兜底；
+  // 配置与绑定都保留，随时可拨回。
+  'customProviders.model.setEnabled': async (args, ctx) => {
+    if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    return customProviders.setCustomProviderModelEnabled(
+      ctx.userId,
+      boundedText(args?.providerId, 'providerId', 120),
+      boundedText(args?.modelId, 'modelId', 200),
+      args.enabled,
+    );
+  },
   'customProviders.model.remove': async (args, ctx) => customProviders.removeCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),
@@ -5767,6 +6053,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
   ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
 
+  // 转写纠错词表与清理产物（方案 v0.2 P0）。词表是用户确认过的
+  // wrong→correct 纠错对；扫描只产候选，替换必须显式接受，原文永不就地改写
+  // （apply 只产出清理版 + run 快照，见 features/transcript_correction_runs）。
+  ...transcriptHandlers,
+
   // P3394 TaskContinuationSnapshot and ContextReuseReceipt handlers for
 };
 
@@ -6069,7 +6360,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       log.info(`sendStream closed cid=${cid} relayed=${relayCount} process=${processCount} sendDone=${sendDone} cancelled=${cancelled}`);
@@ -6182,7 +6481,15 @@ const streamHandlers: Record<string, StreamHandler> = {
             }
           }
           if (cancelled) break;
-          await new Promise<void>((resolve) => { wake = resolve; });
+          // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
         }
       } finally {
         log.info(`groupEvents closed cid=${cid} relayed=${relayCount} process=${processCount} cancelled=${cancelled}`);
@@ -6217,7 +6524,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       try { unsub(); } catch { /* ignore */ }
@@ -6246,7 +6561,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        await new Promise<void>((resolve) => { wake = resolve; });
+        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
+        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
+        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        await new Promise<void>((resolve) => {
+          let done = false;
+          wake = () => { if (done) return; done = true; resolve(); };
+          const t = setTimeout(() => { if (done) return; done = true; resolve(); }, 2000);
+          if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref();
+        });
       }
     } finally {
       try { unsub(); } catch { /* ignore */ }

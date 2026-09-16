@@ -32,6 +32,7 @@ import type { LLMProvider } from '#core-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { listCustomProviders } from '../../features/custom_providers';
 import type { CustomProvider } from '../../features/auth';
+import { publicModelAbilitiesFor } from '../../model/public_model_catalog';
 
 type CA = typeof import('#core-agent');
 let _caPromise: Promise<CA> | null = null;
@@ -44,11 +45,11 @@ const CUSTOM_PROVIDER_PREFIX = 'cp:';
 
 /** Default context window / max output tokens for a hand-built custom model.
  *  We can't know the real limits of an arbitrary third-party endpoint, so we
- *  pick conservative, widely-safe values. 131072 context is the same lower
- *  bound external-providers.ts uses for unknown ids; 8192 output avoids 400s
- *  on relays that cap low. Users can refine per-model later if needed. */
-const DEFAULT_CONTEXT_WINDOW = 131072;
-const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+ *  reference the unified product defaults (2026-09-13 十进制口径 1M / 384K，
+ *  与 auth.ts 的 DEFAULT_CUSTOM_PROVIDER_* 同源同值)。Users can refine
+ *  per-model later if needed. */
+const DEFAULT_CONTEXT_WINDOW = 1000000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 384000;
 
 /** True when a provider id addresses a custom provider (synthetic `cp:` id). */
 export function isCustomProviderId(providerId: string): boolean {
@@ -89,6 +90,21 @@ function apiForProtocol(protocol: CustomProvider['protocol']): Api {
 }
 
 /**
+ * OpenCode Zen/Go 端点自 2026-09-05 起要求每个请求带 `x-opencode-session`
+ * （服务端做会话路由，缺失直接 400 "cannot be routed correctly"）。pi-ai
+ * 自身不注入该头（上游 issue earendil-works/pi#4847，0.85.1 仍未修），
+ * 且 CogSeed 的 Model 构造在这里——按端点识别后补上。
+ * 值取 provider 级稳定 id：服务端要求"稳定"即可；逐对话一一对应需要请求级
+ * 上下文（模型层拿不到），先满足路由的最低要求。
+ */
+function customProviderHeaders(baseUrl: string, providerId: string): Record<string, string> | undefined {
+  if (/^https:\/\/(?:[a-z0-9-]+\.)?opencode\.ai\//i.test(String(baseUrl || ''))) {
+    return { 'x-opencode-session': `cogseed-${providerId}` };
+  }
+  return undefined;
+}
+
+/**
  * Hand-build a pi-ai Model for one (custom provider, model id) pair.
  * `baseUrl` is baked into the Model so createPiProvider routes there
  * directly. Cost is left at 0 (local stat display only — the real bill
@@ -101,6 +117,38 @@ export function buildCustomProviderModel(
 ): Model<Api> {
   const api = apiForProtocol(cp.protocol);
   const metadata = buildCustomProviderModelMeta(cp, modelId);
+  const headers = customProviderHeaders(cp.baseUrl, cp.id);
+  // 配置 → 调用映射（2026-09-13 全面对齐，子安口径"配置驱动调用"；层级化
+  // 语义 2026-09-14 修正：配置字段存在即定音，缺失才走兜底）：
+  //   input（输入类型）   配置勾选 > 目录登记 > 识别器。显式只勾文本
+  //                      （input:['text']，存储层落库 vision:false）不会被
+  //                      目录/识别器翻回图片——否则"配置驱动调用"名不副实。
+  //   reasoning（推理）   推理等级/参数映射字段存在（含显式空=用户清空过）
+  //                      即按配置定音；字段缺失才回退识别器。没配等级的
+  //                      模型不带 reasoning_effort（选了档位也不会盲发参数）。
+  //   capabilities        structured_output → compat.supportsStrictMode（当前
+  //                      在 openai-completions 通道为留档声明，不改变请求）；
+  //                      system_message 为声明留档，不再映射
+  //                      supportsDeveloperRole——那会在推理模型上把 system
+  //                      消息改发 developer role，对多数第三方中转是 400
+  //                      风险，与「支持系统消息」的勾选语义相反；
+  //                      native_web_search 按 api 注入（openai-responses），
+  //                      openai-completions 通道声明留档不生效
+  //   reasoningParamsMap  高级参数映射：落库+校验+展示；运行时注入接线
+  //                      留待后续（pi-ai 的 thinkingLevel 已覆盖常规档位）
+  const stored = cp.models.find((candidate) => candidate.id === modelId);
+  const storedInput = Array.isArray(stored?.input) ? stored!.input! : undefined;
+  const acceptsImage = storedInput != null
+    ? storedInput.includes('image')
+    : (publicModelAbilitiesFor(modelId).vision === true || recognition?.vision === true);
+  // 「存在即定音」与 updateCustomProviderModel 的部分更新语义对齐：未提供=
+  // 未声明（回退兜底），显式空数组/空对象=用户清空（不盲发参数）。
+  const reasoningConfigured = Array.isArray(stored?.reasoningLevels) || stored?.reasoningParamsMap !== undefined;
+  const reasoningOn = reasoningConfigured
+    ? ((Array.isArray(stored?.reasoningLevels) ? stored!.reasoningLevels!.length > 0 : false)
+      || Boolean(stored?.reasoningParamsMap && Object.keys(stored!.reasoningParamsMap!).length > 0))
+    : recognition?.reasoning === true;
+  const capabilities = Array.isArray(stored?.capabilities) ? stored!.capabilities! : [];
   const model: Model<Api> = {
     id: modelId,
     name: modelId,
@@ -109,12 +157,12 @@ export function buildCustomProviderModel(
     // us clear of catalog collisions.
     provider: customProviderId(cp.id) as any,
     baseUrl: cp.baseUrl,
-    // 方案 C（参数真透传）：reasoning 按识别结果开启——pi-ai 对 openai
-    // 兼容端点在 model.reasoning=true 且用户选了档位时会自动带上
-    // reasoning_effort；anthropic 端点同理带 thinking。识别不出（未知
-    // 模型）保持关闭，不给不认识的服务盲发参数。
-    reasoning: recognition?.reasoning === true,
-    input: recognition?.vision === true ? ['text', 'image'] : ['text'],
+    ...(headers ? { headers } : {}),
+    reasoning: reasoningOn,
+    input: acceptsImage ? ['text', 'image'] : ['text'],
+    ...(capabilities.includes('structured_output')
+      ? { compat: { supportsStrictMode: true } }
+      : {}),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: metadata.contextWindow,
     maxTokens: metadata.maxTokens,

@@ -251,6 +251,11 @@ export interface GroupMessage {
     /** Historical clone locator. When present, the iframe resolves against
      * the source conversation rather than the conversation displaying it. */
     source_cid?: string;
+    /** 确认卡片状态（2026-09-14）：pending/confirmed/cancelled/failed。
+     * 持久化在消息体上——历史重渲染按此回放只读态，不得回退到可点。 */
+    confirm_state?: 'pending' | 'confirmed' | 'cancelled' | 'failed';
+    confirm_op?: string;
+    confirmed_at?: string;
   }>;
   /** Durable receipt for an explicit user teaching interaction whose memory
    * write succeeded. The linked candidate remains reviewable and revocable. */

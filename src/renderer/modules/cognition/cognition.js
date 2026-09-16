@@ -342,7 +342,7 @@
     const title = String(form.querySelector('#cognition-create-title')?.value || '').trim();
     const summary = String(form.querySelector('#cognition-create-summary')?.value || '').trim();
     if (!title || !summary) return;
-    const submit = form.querySelector('button[type="submit"]');
+    const submit = form.querySelector('[data-cognition-create-submit]');
     if (submit?.disabled) return;
     if (submit) submit.disabled = true;
     try {
@@ -388,26 +388,34 @@
     await postAction(`/api/cognition/assets/${encodeURIComponent(asset.id)}/reuse`, { sourceLabel });
   }
 
-  function closeCaptureOverlay(overlay, onKeyDown, trigger, onBackdropClick) {
-    if (onKeyDown) document.removeEventListener('keydown', onKeyDown, true);
-    if (onBackdropClick) overlay?.removeEventListener('click', onBackdropClick);
-    overlay?.remove();
-    if (trigger?.isConnected && typeof trigger.focus === 'function') trigger.focus();
-  }
-
   function openCognitionCapture(input = {}) {
     if (!window.CognitionPages || typeof window.CognitionPages.renderCognitionCapture !== 'function') return false;
-    if (document.querySelector('.cognition-capture-overlay')) return false;
+    if (typeof window.uiModalController !== 'function') return false;
+    if (document.querySelector('[data-cognition-capture-overlay]')) return false;
     const payload = input && typeof input === 'object' ? input : {};
     const conversationId = String(payload.conversationId || '').trim();
     const messageId = String(payload.messageId || '').trim();
     if (!conversationId || !messageId) return false;
     const trigger = document.activeElement;
-    const overlay = document.createElement('div');
     const rendered = document.createElement('div');
-    rendered.className = 'cognition-capture-overlay';
-    if (!rendered) return false;
+    rendered.className = 'ui-modal-overlay cognition-capture-overlay';
+    rendered.dataset.cognitionCaptureOverlay = 'true';
+    let modalController = null;
+    let closed = false;
+    const removeOverlay = () => {
+      rendered.remove();
+    };
+    const closeOverlay = (reason = 'close') => {
+      if (closed) return;
+      closed = true;
+      if (modalController?.isOpen()) modalController.close(reason);
+      else {
+        removeOverlay();
+        if (trigger?.isConnected && typeof trigger.focus === 'function') trigger.focus();
+      }
+    };
     const renderMarkup = (state, values = {}) => {
+      if (modalController?.isOpen()) modalController.close('rerender', { restoreFocus: false });
       rendered.innerHTML = window.CognitionPages.renderCognitionCapture({
         state,
         title: values.title || '',
@@ -419,47 +427,36 @@
         messageId,
         error: values.error || '',
       });
+      const dialog = rendered.querySelector('[data-cognition-capture-form]');
+      if (!dialog) throw new Error('cognition capture dialog is unavailable');
+      modalController = window.uiModalController({
+        overlay: rendered,
+        dialog,
+        initialFocus: state === 'ready' ? '[data-cognition-capture-title]' : '[data-cognition-capture-cancel]',
+        fallbackFocus: trigger,
+        onClose: (reason) => {
+          if (reason === 'rerender') return;
+          closed = true;
+          removeOverlay();
+        },
+      });
+      modalController.open(trigger);
     };
-    renderMarkup('loading');
     document.body.appendChild(rendered);
-    let closed = false;
-    const onKeyDown = (event) => {
-      if (event.isComposing || event.keyCode === 229) return;
-      if (event.key === 'Escape') {
-        closed = true;
-        closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const focusable = Array.from(rendered.querySelectorAll(
-        'button:not([disabled]), input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )).filter((element) => !element.hidden);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
+    renderMarkup('loading');
     const onBackdropClick = (event) => {
       if (event.target === rendered) {
-        closed = true;
-        closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
+        closeOverlay('backdrop');
       }
     };
     const bindControls = () => {
       rendered.querySelectorAll('[data-cognition-capture-cancel]').forEach((button) => {
-        button.addEventListener('click', () => {
-          closed = true;
-          closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
-        });
+        button.addEventListener('click', () => closeOverlay('action'));
       });
       const form = rendered.querySelector('[data-cognition-capture-form]');
-      if (!form || !form.querySelector('[data-cognition-capture-submit]')) return;
+      const submitControl = form?.querySelector('[data-cognition-capture-submit]');
+      if (!form || !submitControl) return;
+      submitControl.addEventListener('click', () => form.requestSubmit());
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const title = String(form.querySelector('[data-cognition-capture-title]')?.value || '').trim();
@@ -505,8 +502,7 @@
           if (!result?.ok) throw new Error(result?.error || translate('cognition.error.action_failed', '认知操作失败'));
           clearError();
           void reloadAfterMutation();
-          closed = true;
-          closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
+          closeOverlay('action');
           if (typeof uiToast === 'function') uiToast(translate('cognition.capture.saved', '已存为待确认候选，可在「待我处理」里确认'), { variant: 'success' });
         } catch (error) {
           if (submit) submit.disabled = false;
@@ -522,7 +518,6 @@
       });
     };
     rendered.addEventListener('click', onBackdropClick);
-    document.addEventListener('keydown', onKeyDown, true);
     bindControls();
     const generate = async () => {
       try {
@@ -624,6 +619,9 @@
     page.querySelector('#cognition-create-form')?.addEventListener('submit', (event) => {
       event.preventDefault();
       void createAsset(event.currentTarget);
+    });
+    page.querySelector('[data-cognition-create-submit]')?.addEventListener('click', () => {
+      page.querySelector('#cognition-create-form')?.requestSubmit();
     });
   }
 
