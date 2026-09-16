@@ -126,7 +126,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
   const source = fs.readFileSync(
     path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
     'utf8',
-  );
+  ).replace(/\r\n/g, '\n');
   const els: Record<string, any> = {};
   const created: any[] = [];
   // localStorage：窗口尺寸/位置记忆的真实读写路径（此前 VM 里没有 localStorage，
@@ -234,7 +234,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(source).toMatch(/function _openFile[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
     expect(source).not.toContain('原文查看器：S2 上线（anchor-resolver 已就绪）');
@@ -384,7 +384,7 @@ describe('KB workbench (S1 skeleton)', () => {
     windowMock.renderKbWorkbench();
     // 首屏的按钮必须当场绑上 listener：只把 disabled 拿掉的话点了没反应
     expect(els['kb-wb-analysis-card']).toBeTruthy();
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toMatch(/_refreshQaModelChipLabel\(\);[\s\S]{0,400}_bindAnalysisActions\(analysisCard\)/);
     const html = els['kb-workbench'].innerHTML;
     const mmIdx = html.indexOf('id="kb-wb-gen-mm"');
@@ -398,7 +398,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('两个入口的可用性只看"库是否为空"，并把解析裁掉的门槛去掉', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toContain('function _bindAnalysisActions');
     expect(src).toMatch(/_bindAnalysisActions[\s\S]{0,600}_libFileCount\(\) === 0/);
     // 解析结果不再决定按钮可用性（此前 disabled: !(ok && hasMm) / disabled: !ok）
@@ -408,7 +408,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('生成测验有真实实现：调 kb.quiz 并渲染可作答的卡片', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // 这个入口此前只有调用点、没有实现（点击 ReferenceError）
     expect(src).not.toMatch(/_renderQuiz\b/);
     expect(src).toContain('function _genQuiz()');
@@ -422,7 +422,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
     expect(src).toMatch(/kind: 'quiz', questions[\s\S]{0,200}_qaSaveCurrentSession\('测验'\)/);
     expect(src).toMatch(/_state\.qaHistory\.push\(\{ role: 'assistant', kind: 'quiz'/);
@@ -447,7 +447,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(clauses('1. 先纠错 2. 再检索')).toEqual(['先纠错', '再检索']);
     expect(clauses('')).toEqual([]);
     // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toContain('function _quizAnswerBlock');
     expect(src).toContain("_quizAnswerBlock('参考答案'");
     expect(src).toContain("_quizAnswerBlock('解析'");
@@ -460,7 +460,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const html = els['kb-workbench'].innerHTML;
     expect(html).toContain('kb-wb-soon-chip');
     expect(html).toContain('待开发');
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // 开关 + 点击走说明弹层；真弹窗实现保留（翻开关即可恢复）
     expect(src).toContain('const KB_SHARE_READY = false');
     expect(src).toMatch(/if \(!KB_SHARE_READY\) \{ _kbShareSoonOpen\(\); return; \}/);
@@ -469,7 +469,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('生成脑图仍走 kb.mindmap（本来就是独立能力）', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toMatch(/mmBtn\.addEventListener\('click', \(\) => _genMindmap\(\)\)/);
     expect(src).toMatch(/quizBtn\.addEventListener\('click', \(\) => _genQuiz\(\)\)/);
     expect(src).toContain("invoke('kb.mindmap'");
@@ -536,11 +536,11 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const css = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/style.css'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(source).toContain("typeof window.uiIconButton === 'function'");
     expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
@@ -552,7 +552,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     for (const icon of ['file', 'folder', 'book-open', 'link', 'file-text', 'document-pencil', 'upload', 'mic']) {
       expect(source).toContain(`_icon('${icon}', 'kb-wb-import-icon')`);
@@ -564,7 +564,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const fileRows = source.slice(
       source.indexOf('function _renderNodeRows('),
       source.indexOf('function _countFiles('),
@@ -580,7 +580,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const menus = source.slice(
       source.indexOf('function _kbMenuShow('),
       source.indexOf('async function _kbRenameSpaceFile('),
@@ -601,7 +601,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(source).toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = false;/);
     expect(source).not.toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = !importNoteSub\.hidden;/);
@@ -611,11 +611,11 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const css = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/style.css'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(source).toContain("_icon('chevron-left', 'kb-import-caret-icon')");
     const submenuRule = css.match(/\.kb-wb-import-sub\s*\{([^}]*)\}/)?.[1] || '';
@@ -627,7 +627,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const mindmapMarkup = source.slice(
       source.indexOf('<div class="kb-mm-overlay"'),
       source.indexOf('// 右列强制 flex column'),
@@ -651,7 +651,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const analysis = source.slice(
       source.indexOf('function _renderAnalysis('),
       source.indexOf('function _mmSnapshotKey('),
@@ -669,7 +669,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const qaMarkup = source.slice(
       source.indexOf('<div class="kb-qa-session">'),
       source.indexOf('<div class="kb-mm-overlay"'),
@@ -708,7 +708,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const answerActions = source.slice(
       source.indexOf('function _qaRefsElement('),
       source.indexOf('function _decorateAnswerHtml('),
@@ -718,15 +718,15 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _selectQaModel('),
     );
 
-    expect(answerActions).toMatch(/_uiButton\(\{\r?\n      label: `资料来源 · \$\{n\}`/);
-    expect(answerActions).toMatch(/_uiButton\(\{\r?\n        label: `\$\{r\.path\}#chunk \$\{r\.chunkIdx\}`/);
-    expect(answerActions).toMatch(/_uiIconButton\(\{\r?\n        label: '复制引用路径',\r?\n        icon: 'copy'/);
-    expect(answerActions).toMatch(/icon: 'brain-circuit',\r?\n      className: 'kb-qa-mm-btn'/);
+    expect(answerActions).toContain("_uiButton({\n      label: `资料来源 · ${n}`");
+    expect(answerActions).toContain("_uiButton({\n        label: `${r.path}#chunk ${r.chunkIdx}`");
+    expect(answerActions).toContain("_uiIconButton({\n        label: '复制引用路径',\n        icon: 'copy'");
+    expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
 
-    expect(modelPicker).toMatch(/_uiIconButton\(\{\r?\n      label: '关闭模型选择弹窗',\r?\n      icon: 'x'/);
-    expect(modelPicker).toMatch(/_uiButton\(\{\r?\n      label: '去设置管理模型',\r?\n      role: 'secondary'/);
+    expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
+    expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
     expect(modelPicker).toContain("_mountKbDialog({");
     expect(modelPicker).toContain("initialFocus: '[aria-pressed=\"true\"]'");
     expect(modelPicker).toContain("fallbackFocus: '#kb-qa-tools'");
@@ -739,7 +739,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const css = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/style.css'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const historyRule = css.match(/\.kb-qa-history-panel\s*\{([^}]*)\}/)?.[1] || '';
     expect(historyRule).toContain('z-index: var(--z-modal-popover);');
   });
@@ -748,7 +748,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const importDialog = source.slice(
       source.indexOf('async function _importSpaceFromLib()'),
       source.indexOf('async function _kbNewFolder()'),
@@ -776,7 +776,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const createDialog = source.slice(
       source.indexOf('function _createSharedSpace()'),
       source.indexOf('async function _kbShareSubmit()'),
@@ -883,7 +883,7 @@ describe('kb file-viewer highlight pure helpers', () => {
 });
 
 describe('查看器窗口：缩放与调整大小（真机反馈回归）', () => {
-  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
   const css = src.slice(src.indexOf('function _injectFileViewerStyle'));
 
   it('对话框自带定位上下文 —— 否则右下角手柄会跑到屏幕角落上', () => {
@@ -933,17 +933,17 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
   });
 
   it('恢复上次窗口位置时按已算好的宽高夹取（量 offset 在 display:none 下全是 0）', () => {
-    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\r?\n {2}\}/);
+    const fn = src.match(/function _fvApplyWindowRect\(dialog\) \{[\s\S]*?\n {2}\}/);
     expect(fn).toBeTruthy();
     expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
     expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
     // 先显示再恢复：overlay 关着时量不到真实尺寸
-    expect(src).toMatch(/overlay\.hidden = false;\r?\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
   });
 });
 
 describe('文件查看：按类型分派（#214 回归防护）', () => {
-  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
 
   it('保留富查看器（保排版/缩放）：PDF 走 PDFium iframe，Office 走排版 HTML', () => {
     // 主进程 kb.openFile 的契约 + kb-file:// 协议仍在；渲染层必须有对应实现
@@ -997,7 +997,7 @@ describe('文件查看：按类型分派（#214 回归防护）', () => {
 
   it('HTML 用渲染 iframe（sandbox 只给 allow-scripts，与 chat-file-viewer 一致）', () => {
     // 跨 origin 才能挡住父页访问；脚本保留是为了交互型 HTML 能跑
-    expect(src).toMatch(/kb-fv-frame--html';\r?\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+    expect(src).toMatch(/kb-fv-frame--html';\n\s*frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
   });
 
   it('查看源码走主进程 kb.openFile(asText)，不依赖 fetch(kb-file://)', () => {
@@ -1010,7 +1010,7 @@ describe('文件查看：按类型分派（#214 回归防护）', () => {
     expect(src).toContain('kb-fv-external');
     expect(src).toContain("invoke('kb.openExternal'");
     // 参数由纯函数给（载荷可测），无当前文件时按钮隐藏、点了也不发请求
-    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\r?\n\s*const payload = _fvExternalTarget\(\);/);
+    expect(src).toMatch(/externalBtn\.addEventListener\('click', \(\) => \{\n\s*const payload = _fvExternalTarget\(\);/);
     expect(src).toContain('externalTarget: _fvExternalTarget');
     // 无当前文件上下文时必须隐藏，避免点了没反应
     expect(src).toMatch(/_fvCtx[\s\S]{0,400}?extBtn\.hidden/);
@@ -1028,7 +1028,7 @@ describe('KB mindmap centering', () => {
     return fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
   }
 
   // 预置窗口几何 + 生成脑图按钮的绑定，返回可断言的 harness
@@ -1141,7 +1141,7 @@ describe('KB mindmap centering', () => {
   });
 
   it('画布容器跟随 stage 铺满（不再把左上角钉在 stage 中心，图才会真居中）', () => {
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
     const rules = [...css.matchAll(/\.kb-mm-overlay-wrap \{[\s\S]*?\}/g)].map((m) => m[0]);
     expect(rules.length).toBeGreaterThan(0);
     // 基础规则：铺满 + flex 居中
@@ -1194,7 +1194,7 @@ describe('KB mindmap centering', () => {
     const mainSrc = fs.readFileSync(
       path.join(__dirname, '../../src/main/ipc/index.ts'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const start = mainSrc.indexOf("'kb.mindmap.popout'");
     expect(start).toBeGreaterThan(-1);
     const block = mainSrc.slice(start, start + 1400);
@@ -1207,7 +1207,7 @@ describe('KB mindmap centering', () => {
   it('更多菜单提供「窗口居中」，一键把窗口拉回正中', () => {
     const src = source();
     expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
-    expect(src).toMatch(/function _mmCenterWindow\(\) \{\r?\n\s*_mmSetWindowOffset\(0, 0\);/);
+    expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
   });
 });
 
@@ -1228,7 +1228,7 @@ describe('KB mindmap layout & typography', () => {
   };
 
   function source(): string {
-    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
   }
 
   // 走真实路径渲染一份脑图 SVG（生成 → 缩略卡 innerHTML）
