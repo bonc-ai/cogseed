@@ -8,18 +8,26 @@ name: Develop Nightly
 #   把 develop 的工具放到 main 上会破坏这个约定。
 #   所以这里改用 push 触发 + 每日一次门控：
 #     - push 事件读的是**被 push 分支上的 workflow 文件**，develop 上可以生效；
-#     - 门控步骤检查"今天是否已经跑过"，跑过就跳过，保证每天最多一次。
+#     - 门控步骤检查"今天是否已经跑过全量"，跑过就跳过，保证每天最多一次。
 #   净效果 = 每天在 develop 的第一次提交上跑一次全量。
 #
 #   代价（可接受）：当天更晚合入的代码，要等第二天那一次才能覆盖到。
 #   如果觉得不够及时，把下面门控的"今天"改成"最近 12 小时"即可变成一天两次。
 #
+# 【门控为什么是 fail-open —— 2026-09-16 教训，必读】
+#   第一版把门控写成了"失败就报错"，结果门控步骤自己抛错、后续 14 个步骤
+#   全部 skipped，整次运行被标记为 failure —— 但实际上一行测试都没跑。
+#   这是最坏的结果：**看起来像"develop 有红单"，其实是假警报**。
+#   现已改为 fail-open：任何异常（取不到数据、解析失败、网络问题）一律
+#   当作"该跑"，让全量正常执行。宁可多跑一次，不制造假红。
+#
 # 【为什么必须有这一层】
 #   L1（develop-gate.yml）只跑「受影响的测试」，靠模块图传播筛选，必然有漏网。
 #   1.1.2 实证：macOS 全量套件约 7.2 分钟，整个 job 约 9 分钟。
-#   而且 develop 上确实存在 L1 抓不到的红单——PR #277 报告
-#   context-projection-confirm-wake.test.ts 2 个用例在干净 develop 上同样失败，
-#   因为这个文件本身没被改过、是被测源码变了（语义冲突）。
+#   而且 develop 上确实存在 L1 抓不到的红单 —— PR #277 报告
+#   context-projection-confirm-wake.test.ts 2 个用例、PR #279 报告
+#   conv-workspace-space.test.ts 2 个用例，在干净 develop 上都失败，
+#   因为这些文件本身没被改过、是被测源码变了（语义冲突）。
 #
 # 【红了怎么办】
 #   本层不阻塞任何合并。但红了必须当天修，否则又变成 1.1.2 那种"攒着没人管"。
@@ -29,99 +37,114 @@ on:
   push:
     branches:
       - develop
-  # 保留手动触发：想立刻验证时不必等下一次 push
+  # 保留手动触发：想立刻验证时不必等下一次 push。手动触发不做门控。
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read        # 门控步骤要读本 workflow 的历史运行记录
+  actions: read        # 门控要读本 workflow 的历史运行记录
 
 jobs:
   full-suite:
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
-      - name: 每日一次门控（今天已跑过就跳过）
+      - name: 每日一次门控（fail-open：出任何问题都照常跑）
         id: gate
+        # 双保险：即使脚本本身抛错，也不会顶掉后面的全量
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          # 手动触发时不做门控，随点随跑
+          # 注意：这里不用 set -e —— 门控绝不应该是"能失败"的东西
+          SHOULD_RUN=true
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "手动触发，跳出门控"
-            exit 0
-          fi
-          TODAY=$(date -u +%Y-%m-%d)
-          # 只数已完成（completed）的运行，避免把本次自己算进去
-          N=$(gh run list \
-                --repo "$GITHUB_REPOSITORY" \
-                --workflow=develop-nightly.yml \
-                --created "$TODAY" \
-                --status completed \
-                --limit 20 \
-                --json databaseId -q 'length' 2>/dev/null || echo 0)
-          N=${N:-0}
-          echo "今天（UTC $TODAY）已完成的运行次数：$N"
-          if [ "$N" -gt 0 ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "今天已经跑过全量，本次跳过。"
+            echo "手动触发，不做门控"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            TODAY=$(date -u +%Y-%m-%d)
+            echo "查询 UTC $TODAY 已完成的运行次数（workflow=develop-nightly.yml）"
+
+            # 直接用 API 拿 total_count，比 gh run list + jq length 更明确
+            RESP=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/develop-nightly.yml/runs?created=${TODAY}&status=completed&per_page=1" \
+              2>&1) || true
+            echo "---- API 原始返回 ----"
+            echo "$RESP" | head -c 1500
+            echo ""
+            echo "----------------------"
+
+            COUNT=$(echo "$RESP" | jq -r '.total_count // empty' 2>/dev/null) || true
+
+            case "$COUNT" in
+              ''|*[!0-9]*)
+                echo "::warning::拿不到运行次数（返回：[${COUNT}]），按应当执行处理，本次正常跑全量"
+                SHOULD_RUN=true
+                ;;
+              0)
+                echo "今天还没跑过全量，正常执行"
+                SHOULD_RUN=true
+                ;;
+              *)
+                echo "今天已经跑过 $COUNT 次全量，本次跳过"
+                SHOULD_RUN=false
+                ;;
+            esac
           fi
 
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip == 'false'
+        if: steps.gate.outputs.should_run != 'false'
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
-        if: steps.gate.outputs.skip == 'false'
+        if: steps.gate.outputs.should_run != 'false'
         with:
           node-version: 24
           cache: npm
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm ci
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run test:resources:setup
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run typecheck
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run lint
 
       # 与 ci.yml 的 verify 保持一致：限 2 个 worker。
       # macos-latest 是 3 vCPU，默认 4 worker 会过度抢占，导致负载型时序用例
       # （CLI 版本探测、boot 恢复投影等）偶发超时红单。
       - name: Full JS suite
-        if: steps.gate.outputs.skip == 'false'
+        if: steps.gate.outputs.should_run != 'false'
         run: node scripts/run-tests.mjs run --maxWorkers=2
 
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run test:resources
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run readme:check
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run tokens:check
-      - if: steps.gate.outputs.skip == 'false'
+      - if: steps.gate.outputs.should_run != 'false'
         run: npm run builtin:manifest:check
 
       - name: Skip 残留检查（防 it.skip 静音）
-        if: steps.gate.outputs.skip == 'false'
+        if: steps.gate.outputs.should_run != 'false'
         run: |
-          set -euo pipefail
-          # ci.yml 只在 cicd 上跑，所以 develop 侧必须自己盯这一条。
-          # 1.1.2 的同步分支 2bc6bb9c 曾一次静音 231 个失败。
-          n=$(git grep -nE '\b(it|test|describe)\.skip\s*\(' -- test/ | wc -l | tr -d ' ')
-          echo "develop 上 it.skip / describe.skip 命中数：$n"
+          # 只告警不失败：目的是让"有人用 skip 静音"这件事当天下班前被看见
+          n=$(git grep -cE '\b(it|test|describe)\.skip\s*\(' -- test/ | wc -l | tr -d ' ')
+          echo "develop 上 it.skip / describe.skip 命中文件数：$n"
           if [ "$n" -gt 0 ]; then
-            echo "::warning::develop 上存在 $n 处 skip。请确认每一处都有正当理由并在 PR 里留痕。"
+            echo "::warning::develop 上存在 skip，请确认每一处都有正当理由并在 PR 里留痕"
             git grep -nE '\b(it|test|describe)\.skip\s*\(' -- test/
           fi
+          exit 0
 
       - name: 测试用例数快照（覆盖度趋势）
-        if: always() && steps.gate.outputs.skip == 'false'
+        if: always() && steps.gate.outputs.should_run != 'false'
         run: |
-          set -euo pipefail
           echo "=== 关键文件的用例数（用于对比覆盖度是否又掉了）==="
           for f in \
             test/renderer/recall-cognition-flow.test.ts \
@@ -134,7 +157,7 @@ jobs:
             test/renderer/ui-components.test.ts \
             test/renderer/shared-ui-adoption-guard.test.ts ; do
             if git cat-file -e "HEAD:$f" 2>/dev/null; then
-              printf '%-58s %s\n' "$f" "$(git show HEAD:$f | grep -cE '\b(it|test)\s*\(' || echo 0)"
+              printf '%-58s %s\n' "$f" "$(git show HEAD:$f | grep -cE '\b(it|test)\s*\(' || true)"
             fi
           done
           echo ""
@@ -142,3 +165,4 @@ jobs:
           echo "  recall-cognition-flow 115 / cognition-chain-view 21 / skills-cognition-layout 27"
           echo "  skills-frontmatter 17 / recall-source-display 8 / recall-candidate-capability-ui 23"
           echo "  recall-candidate-decision-flow 11 / shared-ui-adoption-guard 1"
+          exit 0
