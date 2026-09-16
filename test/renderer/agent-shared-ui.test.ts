@@ -5,7 +5,7 @@ import * as path from 'node:path';
 const root = path.resolve(__dirname, '../..');
 
 function read(relativePath: string) {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 describe('agent detail shared UI adoption', () => {
@@ -26,12 +26,12 @@ describe('agent detail shared UI adoption', () => {
   it('routes agent card and supporting actions through shared buttons', () => {
     const source = read('src/renderer/modules/agents.js');
 
-    expect(source).toMatch(/icon: 'more-horizontal',\r?\n      className: 'agent-card-more'/);
-    expect(source).toMatch(/role: 'primary',\r?\n            size: 'sm',\r?\n            className: 'agent-card-use'/);
-    expect(source).toMatch(/icon: 'folder-open',\r?\n            disabled: !canEdit/);
-    expect(source).toMatch(/icon: 'undo',\r?\n            disabled: !canEdit/);
+    expect(source).toContain("icon: 'more-horizontal',\n      className: 'agent-card-more'");
+    expect(source).toContain("role: 'primary',\n            size: 'sm',\n            className: 'agent-card-use'");
+    expect(source).toContain("icon: 'folder-open',\n            disabled: !canEdit");
+    expect(source).toContain("icon: 'undo',\n            disabled: !canEdit");
     expect(source).toContain("attrs: { id: 'agent-ext-peers-open-dashboard' }");
-    expect(source).toMatch(/variant: 'danger',\r?\n        className: 'chat-taskref-remove'/);
+    expect(source).toContain("variant: 'danger',\n        className: 'chat-taskref-remove'");
     expect(source).not.toContain('>⋯</button>');
     expect(source).not.toContain('>×</button>');
   });
