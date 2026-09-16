@@ -175,7 +175,7 @@ describe('风险分级', () => {
 
   it('生造产品词 → low', () => {
     expect(deriveRiskLevel({ wrong: 'coxy', correct: 'Cogseed', action: 'replace' })).toBe('low');
-    expect(deriveRiskLevel({ wrong: '雷蒙德', correct: 'Raymond', action: 'replace' })).toBe('low');
+    expect(deriveRiskLevel({ wrong: '示例人物', correct: 'SpeakerA', action: 'replace' })).toBe('low');
   });
 
   it('单姓敬称 / 纯数字 / 显式 partial → high 或拒绝', () => {
@@ -235,7 +235,7 @@ describe('CRUD 与不变量', () => {
     expect(manual.entry?.scope.global).toBe(true);
 
     const meeting = upsertEntry(uid, {
-      wrong: '雷蒙德', correct: 'Raymond', source: 'meeting_accept',
+      wrong: '示例人物', correct: 'SpeakerA', source: 'meeting_accept',
       scope: { docIds: ['doc-2026-09-05'], scenarioTags: [], global: false },
     });
     expect(meeting.entry?.scope.global).toBe(false);
@@ -336,12 +336,12 @@ describe('导入导出', () => {
 
   it('merge 导入保留既有词条；replace 模式先清空', () => {
     upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
-    const bundle = { version: 2, entries: [{ wrong: '雷蒙德', correct: 'Raymond', kind: 'product' }] };
+    const bundle = { version: 2, entries: [{ wrong: '示例人物', correct: 'SpeakerA', kind: 'product' }] };
     expect(importGlossary(uid, bundle).imported).toBe(1);
     expect(listEntries(uid)).toHaveLength(2);
     expect(importGlossary(uid, bundle, { mode: 'replace' }).imported).toBe(1);
     expect(listEntries(uid)).toHaveLength(1);
-    expect(listEntries(uid)[0].wrong).toBe('雷蒙德');
+    expect(listEntries(uid)[0].wrong).toBe('示例人物');
   });
 
   it('非法 payload 抛错而不是静默清空', () => {

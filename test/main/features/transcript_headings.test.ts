@@ -15,11 +15,11 @@ import {
 } from '../../../src/main/features/transcript_headings';
 
 const SAMPLE = [
-  'Richard 2026-09-05 19:31:32 ',
+  'SpeakerA 2026-09-05 19:31:32 ',
   'Hello，我们开始。 ',
   '张浩 2026-09-05 19:31:36 ',
   '我先说产品进度。 ',
-  'Richard 2026-09-05 19:40:00 ',
+  'SpeakerA 2026-09-05 19:40:00 ',
   '接下来看教育场景。 ',
   '张浩 2026-09-05 19:50:00 ',
   '最后讲排期。 ',
@@ -30,7 +30,7 @@ describe('切段（用于拟标题）', () => {
     const chunks = splitForHeadings(SAMPLE, { chunkSize: 2 });
     expect(chunks.length).toBeGreaterThanOrEqual(2);
     expect(chunks[0].start).toBe(0);
-    expect(chunks[0].speakers).toContain('Richard');
+    expect(chunks[0].speakers).toContain('SpeakerA');
     expect(SAMPLE.slice(chunks[1].start)).toContain('19:40:00');
   });
 

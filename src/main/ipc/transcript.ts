@@ -196,7 +196,7 @@ export const invokeHandlers = {
   },
 
   /**
-   * 装入方案附 A 的初始词表种子（幂等）。`for → Forge` 等方案明写"默认不入册"
+   * 装入方案附 A 的初始词表种子（幂等）。`for → Foo` 等方案明写"默认不入册"
    * 的词**不在种子里**（见 transcript_glossary_seed）。
    */
   'transcript.glossary.seedInitial': async (_payload: Payload, ctx: IpcContext) => {
@@ -241,7 +241,7 @@ export const invokeHandlers = {
   }),
 
   /**
-   * 检索命中对比（方案 §五 P2-4 / §8.1-9 Richard 原话要求）：
+   * 检索命中对比（方案 §五 P2-4 / §8.1-9 人工基线要求）：
    * 同一份知识库里"搜错形"与"搜正确写法"各命中多少，如实并列（自测口径，不宣称因果）。
    */
   'transcript.query.compare': async (payload: Payload, ctx: IpcContext) => {

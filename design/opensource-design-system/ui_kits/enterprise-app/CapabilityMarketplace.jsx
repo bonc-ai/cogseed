@@ -7,7 +7,7 @@
   const kinds=['agent','skill','open'];
   const labels={agent:'智能体',skill:'技能',open:'开源项目'};
   const entries=[
-    {id:'market-credit-agent',kind:'agent',name:'项目材料审阅',category:'金融业务',description:'梳理项目材料、识别待补充事项并整理复核依据。',file:'AGENT.md',body:'# 项目材料审阅\n\n先确认材料范围，再核验一致性并输出待确认问题。\n\n交付：材料目录、异常清单、来源引用。\n技能：文档摘要、项目报告口径核验。'},
+    {id:'market-credit-agent',kind:'agent',name:'项目材料审阅',category:'业务',description:'梳理项目材料、识别待补充事项并整理复核依据。',file:'AGENT.md',body:'# 项目材料审阅\n\n先确认材料范围，再核验一致性并输出待确认问题。\n\n交付：材料目录、异常清单、来源引用。\n技能：文档摘要、项目报告口径核验。'},
     {id:'market-report-agent',kind:'agent',name:'进展简报编写',category:'文档处理',description:'汇总经营数据与业务说明，形成有来源依据的简报。',file:'AGENT.md',body:'# 进展简报编写\n\n确认统计期间与口径，整理变化原因和待核验事项。'},
     {id:'meeting-notes',kind:'skill',name:'会议纪要',category:'文档处理',description:'将会议材料整理为议题、决定与行动清单。',file:'SKILL.md',body:'# 会议纪要\n\n逐项记录决定、责任人和截止时间，保留尚未确定的事项。'},
     {id:'data-validation',kind:'skill',name:'数据质量核验',category:'数据分析',description:'检查缺失值、重复记录和汇总口径。',file:'SKILL.md',body:'# 数据质量核验\n\n检查数据完整性与一致性，输出异常清单及来源。'},
