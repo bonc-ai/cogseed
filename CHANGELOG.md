@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-16
+
+### Security
+
+- 打包构建启用 Electron fuses 隐私基线：禁用 `NODE_OPTIONS` / `--inspect` 注入路径，启用 `app.asar` 启动完整性校验与 `OnlyLoadAppFromAsar`。
+- 新增 `scripts/check-fuses.cjs`，并在 CI 打包 job 中强制断言产物 fuse 状态，防止基线回退。
+
 ## [1.0.2] - 2026-09-10
 
 ### Security

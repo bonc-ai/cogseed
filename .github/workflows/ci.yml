@@ -113,6 +113,8 @@ jobs:
       - name: Packaged STT smoke (informational)
         continue-on-error: true
         run: npm run verify:package:stt:win
+      - name: Assert packaged Electron fuse baseline
+        run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe
       - name: Upload Windows test package
         uses: actions/upload-artifact@v4
         with:
