@@ -77,7 +77,7 @@ jobs:
           npx json -I -f package.json -e 'this.build.files.push("!**/*.tar.gz")'
           npx electron-builder --mac --publish never
       - name: Assert packaged Electron fuse baseline
-        run: node scripts/check-fuses.cjs dist/mac-arm64/CogSeed.app dist/mac-x64/CogSeed.app
+        run: node scripts/check-fuses.cjs dist/mac-arm64/CogSeed.app dist/mac/CogSeed.app
       - uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS-${{ needs.gate.outputs.peeled-sha }}
