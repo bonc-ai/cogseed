@@ -154,7 +154,7 @@ describe('first-version renderer components', () => {
   });
 
   it('renders Input, Checkbox, Textarea, and the unified AiSelect host from one field contract', () => {
-    const { uiCheckbox, uiField, uiSelect, hydrateUiFormSelects, uiDateRangePicker } = loadFactories();
+    const { uiCheckbox, uiSwitch, uiField, uiSelect, hydrateUiFormSelects, uiDateRangePicker } = loadFactories();
 
     const input = uiField({
       id: 'task-name',
@@ -170,6 +170,8 @@ describe('first-version renderer components', () => {
     expect(loadFactories().uiInput({ id: 'search', className: 'asset-search' })).toContain('ui-input asset-search');
     expect(loadFactories().uiInput({ id: 'title', attrs: { title: '双击修改标题' } }))
       .toContain('title="双击修改标题"');
+    expect(loadFactories().uiInput({ id: 'start-time', type: 'time', value: '02:30' }))
+      .toContain('id="start-time" type="time" value="02:30"');
 
     const checkbox = uiCheckbox({
       id: 'capability-search',
@@ -182,6 +184,18 @@ describe('first-version renderer components', () => {
     expect(checkbox).toContain('id="capability-search" type="checkbox"');
     expect(checkbox).toContain('name="capability" value="&lt;search&gt;"');
     expect(checkbox).toContain(' checked disabled');
+
+    const switchControl = uiSwitch({
+      label: '夜间自动沉淀',
+      checked: true,
+      className: 'ca-switch',
+      attrs: { 'data-act': 'nightly-toggle' },
+    });
+    expect(switchControl).toContain('class="ui-switch ca-switch is-on"');
+    expect(switchControl).toContain('role="switch" aria-checked="true"');
+    expect(switchControl).toContain('aria-label="夜间自动沉淀"');
+    expect(switchControl).toContain('data-act="nightly-toggle"');
+    expect(switchControl).toContain('class="ui-switch__knob"');
 
     const textarea = uiField({ id: 'task-content', label: '任务内容', control: { kind: 'textarea' } });
     expect(textarea).toContain('ui-textarea');
