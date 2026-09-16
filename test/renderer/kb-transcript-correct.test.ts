@@ -19,6 +19,7 @@ import type { GlossaryEntry } from '../../src/main/features/transcript_glossary'
 
 const root = path.resolve(__dirname, '../..');
 const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'utf8');
+const panelSrc = readSrc('renderer/modules/kb-transcript-correct.js');
 
 const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as {
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
@@ -47,6 +48,7 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
   defaultAcceptedIds: (rows: unknown[]) => string[];
+  normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
@@ -672,6 +674,35 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('data-anchor-view-correct');
     expect(viewer).toContain('KbTranscriptCorrect?.mount');
     expect(viewer).toContain('destroyCorrection()');
+  });
+
+  it('场景标签：归一规则与主进程一致（纯函数）', () => {
+    expect(panel.normalizeScenarioTags([' 英语演讲课 '])).toEqual(['英语演讲课']);
+    expect(panel.normalizeScenarioTags(['Cogseed', 'cogseed'])).toEqual(['Cogseed']);
+    expect(panel.normalizeScenarioTags('英语演讲课')).toEqual([]);
+    expect(panel.normalizeScenarioTags(Array.from({ length: 12 }, (_, i) => `场景${i}`))).toHaveLength(8);
+  });
+
+  it('场景标签接线：「仅本场景」的前置数据有读有写、全程带上', () => {
+    // 读/写/建议三条 IPC 都要用到（此前标签没有任何来源，选项永远点不动）
+    expect(panelSrc).toContain("invoke('transcript.docTags.get'");
+    expect(panelSrc).toContain("invoke('transcript.docTags.set'");
+    expect(panelSrc).toContain("invoke('transcript.docTags.suggest'");
+    // 扫描与设作用域都要带上文档自己的标签，否则 scopeAllows 恒 false
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}scenarioTags: state\.scenarioTags/);
+    expect(panelSrc).toMatch(/choice === 'task' \? \{ scenarioTags: state\.scenarioTags \}/);
+    // 可用性只看标签有没有（不再看 ctx —— ctx 恒为空数组正是"点不动"的原因）
+    expect(panelSrc).not.toContain('ctx.scenarioTags || []).length');
+    expect(panelSrc).toMatch(/disabled: state\.busy \|\| !state\.scenarioTags\.length/);
+  });
+
+  it('置灰必须说明原因：仅本场景带 title（不再只灰不说）', () => {
+    expect(panelSrc).toMatch(/scope_task_hint|scope_need_tags/);
+    expect(panelSrc).toMatch(/option\.title \? \{ title: option\.title \}/);
+  });
+
+  it('场景标签变更要重扫（否则"未生效"清单停在旧标签上）', () => {
+    expect(panelSrc).toMatch(/async function applyScenarioTags[\s\S]{0,2200}await runScan\(\)/);
   });
 
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {
