@@ -91,7 +91,7 @@ describe('创建产物', () => {
   });
 
   it('存在未确认高危候选 → 状态 draft（pendingTotal 沿用引擎结果）', () => {
-    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Forge', riskLevel: 'high' };
+    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' };
     const text = '用在 for 里';
     const result = pipeline(text, [coxy, risky]);
     const run = createRun(uid, { docId: 'doc-1', sourceText: text, result });
@@ -229,7 +229,7 @@ describe('未决项与报告', () => {
   });
 
   it('仍有未确认候选时解决未决项也不会把 draft 提成 applied', () => {
-    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Forge', riskLevel: 'high' };
+    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' };
     const text = '用在 for 里';
     const run = createRun(uid, {
       docId: 'doc-1', sourceText: text, result: pipeline(text, [coxy, risky]),

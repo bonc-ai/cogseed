@@ -7,7 +7,7 @@ export { csIcons };
 export function Icon({ name, size = 'var(--cs-icon-size)', strokeWidth = 'var(--cs-icon-stroke)', color = 'currentColor', style, ...rest }) {
   const body = Object.prototype.hasOwnProperty.call(csIcons, name) ? csIcons[name] : null;
   if (!body) {
-    if (typeof window !== 'undefined' && window.RAYMOND_DESIGN_DEBUG) console.warn(`Unknown design icon: ${name}`);
+    if (typeof window !== 'undefined' && window.COGSEED_DESIGN_DEBUG) console.warn(`Unknown design icon: ${name}`);
     return null;
   }
   return (

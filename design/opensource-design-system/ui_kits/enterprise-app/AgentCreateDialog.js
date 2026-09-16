@@ -25,7 +25,7 @@
         setError("\u540D\u79F0\u4EC5\u652F\u6301\u4E2D\u6587\u3001\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u548C\u77ED\u6A2A\u7EBF");
         return;
       }
-      if (["cogseed", "raymond", "commander"].includes(name.toLowerCase())) {
+      if (["cogseed", "commander"].includes(name.toLowerCase())) {
         setError("\u6B64\u540D\u79F0\u5DF2\u4FDD\u7559\uFF0C\u8BF7\u6362\u4E00\u4E2A\u540D\u79F0");
         return;
       }

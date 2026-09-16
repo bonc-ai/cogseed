@@ -46,12 +46,12 @@ describe('导出：隐私边界', () => {
 
   it('人名类默认不导，并如实报告排除了多少条', () => {
     upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', kind: 'product' });
-    upsertEntry(uid, { wrong: '雷蒙德', correct: 'Raymond', kind: 'people' });
+    upsertEntry(uid, { wrong: '示例人物', correct: 'SpeakerA', kind: 'people' });
     const pack = buildContributionPack(uid);
     expect(pack.entries.map((entry) => entry.wrong)).toEqual(['coxy']);
     expect(pack.counts.peopleExcluded).toBe(1);
     const withPeople = buildContributionPack(uid, { includePeople: true });
-    expect(withPeople.entries.map((entry) => entry.wrong).sort()).toEqual(['coxy', '雷蒙德']);
+    expect(withPeople.entries.map((entry) => entry.wrong).sort()).toEqual(['coxy', '示例人物']);
   });
 
   it('按 kind / scenarioTags 过滤子集', () => {
@@ -135,9 +135,9 @@ describe('治理：优先级 组织 > 团队 > 个人', () => {
     const review = reviewContributionPack(uid, packOf('team', [
       { wrong: 'coxy', correct: 'Cogseed' },
       { wrong: 'newone', correct: 'NewOne', riskLevel: 'high' },
-      { wrong: '雷蒙德', correct: 'Raymond', kind: 'people' },
+      { wrong: '示例人物', correct: 'SpeakerA', kind: 'people' },
     ]));
-    // coxy 是更新；newone 与 雷蒙德 都是新增（3 条里 1 更新 2 新增）
+    // coxy 是更新；示例人物与 newone 都是新增（3 条里 1 更新 2 新增）
     expect(review).toMatchObject({ total: 3, added: 2, updates: 1, highRisk: 1, people: 1 });
   });
 

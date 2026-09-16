@@ -8,11 +8,11 @@ export const COMPOSER_EXAMPLES = [
   { id: 'agent-manager', kind: 'agent', name: '项目助理', description: '整理客户材料、核对项目信息' },
   { id: 'agent-risk', kind: 'agent', name: '风险审查员', description: '检查风险事项与审查口径' },
   { id: 'skill-check', kind: 'skill', name: '项目材料核对', description: '按清单核对材料完整性' },
-  { id: 'skill-minutes', kind: 'skill', name: '客户走访纪要', description: '将走访记录整理为结构化纪要' },
+  { id: 'skill-minutes', kind: 'skill', name: '访谈记录', description: '将访谈记录整理为结构化纪要' },
   { id: 'artifact-list', kind: 'artifact', name: '项目到期清单_2026Q3.xlsx', description: '华东团队空间 · 任务产物' },
   { id: 'artifact-review', kind: 'artifact', name: '交付后监测复核报告.docx', description: '华东团队空间 · 任务产物' },
   { id: 'asset-rules', kind: 'asset', name: '项目项目审查口径', description: '已沉淀资产 · 审查参考' },
-  { id: 'asset-template', kind: 'asset', name: '客户走访纪要模板', description: '已沉淀资产 · 文档模板' }
+  { id: 'asset-template', kind: 'asset', name: '访谈记录模板', description: '已沉淀资产 · 文档模板' }
 ];
 export const MENTION_LABELS = { agent: '智能体', skill: '技能', artifact: '产物', asset: '资产', connector: '连接器', library: '资料库文件' };
 
