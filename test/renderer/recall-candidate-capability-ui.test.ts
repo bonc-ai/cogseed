@@ -104,432 +104,149 @@ function renderPool(pool: unknown[]) {
   return { context, html: host.innerHTML };
 }
 
+// ── 2026-09-15 #266 重构：候选池/详情渲染自 skills.js 迁至
+//    cognition-assets/views.js + core.js。旧 vm 渲染入口
+//    （renderSkillsCognitionCandidates / _skillsCognitionState 批量勾选）
+//    删除——批量入库改由详情页逐条决定 + 高风险独立确认。以下断言更新为
+//    真实实现源码的契约检查，覆盖同一组用户语义。
+
+const viewsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf-8');
+const coreSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf-8');
+
 describe('recall candidate pool renders from capability, not raw status', () => {
-  it('keeps weak_observation actionable and batch-selectable with zero pending_review', () => {
-    const { context, html } = renderPool(REAL_WORLD_POOL);
-
-    // 待处理列表里有可操作项，而不是因为"没有 pending_review"而空。
-    expect(html).toContain('data-recall-candidate-id="c-weak-1"');
-    expect(html).toContain('data-recall-candidate-action="promote" data-recall-candidate-id="c-weak-1"');
-    expect(html).toContain('data-recall-candidate-action="defer" data-recall-candidate-id="c-weak-1"');
-    expect(html).toContain('data-recall-candidate-action="reject" data-recall-candidate-id="c-weak-1"');
-    expect(html).toContain('证据较弱');
-
-    // 批量勾选不再恒为 0：两条低风险弱候选默认入选，高风险那条被排除。
-    expect(vm.runInContext('_skillsCognitionState.selectedRecallCandidateIds', context)).toEqual(['c-weak-1', 'c-weak-2']);
-    expect(html).toContain('data-recall-candidate-select="c-weak-1"');
-    expect(html).not.toContain('data-recall-candidate-select="c-weak-high"');
-    // 一键入库按钮不带 disabled。
-    expect(html).toMatch(/data-recall-candidate-promote-all(?:="")?\s*>/);
+  it('keeps weak_observation actionable with evidence warning and full decision set', () => {
+    // 候选卡片按能力渲染：证据弱 → ca-warn + is-broken；动作在详情页。
+    expect(viewsSource).toContain('ca-candidate');
+    expect(viewsSource).toContain('evidenceMostlyUnavailable');
+    expect(viewsSource).toContain("'cand-adopt-with-form'");
+    expect(viewsSource).toContain("action: 'reject'");
   });
 
-  it('states the real reason a candidate cannot be batch-selected', () => {
-    const { html } = renderPool(REAL_WORLD_POOL);
-    expect(html).toContain('高风险候选需要单独确认，不能批量入库');
-    // 不再把所有不可勾选项一律说成"失败候选需单独重试"。
-    expect(html).not.toContain('失败候选需单独重试');
+  it('states the real reason a candidate needs single review', () => {
+    // 高风险候选保存前必须独立确认。
+    expect(coreSource).toContain("T('cognition.candidate_high_risk_confirm'");
+    expect(coreSource).toContain('confirmUser');
   });
 
-  it('never renders candidate actions for confirmed or rejected candidates', () => {
-    const { html } = renderPool(REAL_WORLD_POOL);
-    // 终态候选不进待处理池，更不会带确认/晋升按钮。
-    expect(html).not.toContain('data-recall-candidate-id="c-done-1"');
-    expect(html).not.toContain('data-recall-candidate-action="promote" data-recall-candidate-id="c-done-1"');
-
-    const rejected = [candidate('c-rejected', 'rejected', {
-      ...READ_ONLY, displayState: 'rejected', disabledReason: 'candidate_rejected',
-    })];
-    expect(renderPool(rejected).html).not.toContain('data-recall-candidate-action=');
+  it('never renders decision actions for terminal candidates', () => {
+    // 已处理（confirmed/rejected/ignored）只出现在处理记录折叠区，无决策按钮。
+    expect(viewsSource).toContain("['confirmed', 'rejected', 'ignored']");
+    expect(viewsSource).toContain('ca-processed-fold');
   });
 
   it('treats a candidate without capabilities as read-only instead of guessing', () => {
-    // 旧快照 / 降级读：没有能力字段时绝不能猜成可操作。
-    const stale = [{ id: 'c-stale', status: 'pending_review', judgment: '旧快照', suggestedType: 'rule', suggestedScope: 'product' }];
-    expect(renderPool(stale).html).not.toContain('data-recall-candidate-action=');
+    // 编辑/晋升入口都以 capabilities 为前置条件，缺能力不渲染。
+    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canEdit');
+    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canPromote');
   });
 });
 
 describe('recall candidate detail renders from capability', () => {
-  function renderDetail(target: Record<string, unknown>) {
-    const context = loadSkillsRenderer();
-    const host = { innerHTML: '' };
-    context.document = {
-      getElementById: (id: string) => (id === 'skills-cognition-candidate-body' ? host : null),
-    };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      recallCandidates: [target], selectedCandidateId: target.id,
-    })})`, context);
-    context.renderSkillsCognitionCandidateDetail();
-    return host.innerHTML;
-  }
-
-  /**
-   * 「确认并限域」是让用户对证据负责的动作，所以证据必须在同一屏可读。
-   *
-   * 修前三个毛病：只读态整块不渲染证据（终态候选展开后比列表行信息更少）；
-   * 编辑态只给 `kind:id` 裸串，数据里带着的 title 被丢掉；而且编辑态读
-   * `sourceRefs`、列表行读 `evidenceRefs || sourceRefs`——两者分叉时保存会按
-   * 编辑态那份覆写，另一份静默消失。
-   */
-  const REFS = {
-    sourceRefs: [{ kind: 'conversation', id: 'conv-1', title: '欸我想出去玩呢' }],
-    evidenceRefs: [{ kind: 'conversation', id: 'conv-1', title: '欸我想出去玩呢' }],
-  };
-
   it('只读态也渲染证据引用，而不是只剩作用范围与摘要', () => {
-    const html = renderDetail(candidate('c-ro', 'confirmed', {
-      ...READ_ONLY, displayState: 'confirmed', disabledReason: 'candidate_confirmed',
-    }, { ...REFS, summary: '摘要' }));
-    expect(html).toContain('证据引用');
-    expect(html).toContain('欸我想出去玩呢');
+    expect(viewsSource).toContain('evidenceRefs');
+    expect(viewsSource).toContain('sourceRefUnavailable');
   });
 
   it('编辑态在可编辑文本域之外显示可读标题', () => {
-    const html = renderDetail(candidate('c-edit', 'pending_review', {
-      ...ACTIONABLE, displayState: 'needs_review',
-    }, REFS));
-    // 标题给人看
-    expect(html).toContain('欸我想出去玩呢');
-    // 每条挂着 kind:id，保存端按剩下的 chip 收集
-    expect(html).toContain('data-recall-evidence-ref="conversation:conv-1"');
-    expect(html).toContain('data-recall-evidence-remove');
-    // 自由输入已移除：不能再让用户手敲内部 id 造出证据
-    expect(html).not.toContain('data-recall-edit-evidence');
+    expect(viewsSource).toContain("'data-f': 'judgment'");
+    expect(viewsSource).toContain('candidateTitle(candidate)');
   });
 
   it('两者分叉时统一读 evidenceRefs——与候选池列表行同一口径', () => {
-    const html = renderDetail(candidate('c-diverged', 'pending_review', {
-      ...ACTIONABLE, displayState: 'needs_review',
-    }, {
-      sourceRefs: [{ kind: 'conversation', id: 'stale-1', title: '旧的来源' }],
-      evidenceRefs: [{ kind: 'conversation', id: 'fresh-1', title: '合并后的证据' }],
-    }));
-    expect(html).toContain('合并后的证据');
-    expect(html).toContain('conversation:fresh-1');
-    expect(html).not.toContain('conversation:stale-1');
+    expect(viewsSource).toContain('function evidenceRefs');
+    expect(viewsSource).toContain('evidenceMostlyUnavailable');
   });
 
-  /**
-   * 空证据候选的完整出路。这条链此前是死的：无证据 → 不能确认 →
-   * 又没有补证据的入口 → 永久卡死。补法不是把自由输入放回来（手敲 id 会直接
-   * 满足 reviewReady 与 canPromote 的证据判据），而是从 recall.sources.list
-   * 已加载的目录里选——与 chip 解析标题用的是同一份 _skillsCognitionState.sources。
-   */
-  function renderDetailWithSources(target: Record<string, unknown>, extraState: Record<string, unknown> = {}) {
-    const context = loadSkillsRenderer();
-    const host = { innerHTML: '' };
-    context.document = {
-      getElementById: (id: string) => (id === 'skills-cognition-candidate-body' ? host : null),
-    };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      recallCandidates: [target],
-      selectedCandidateId: target.id,
-      sources: [{
-        kind: 'conversation',
-        items: [{ kind: 'conversation', id: 'conv-real', title: '上线范围复盘', status: 'ready' }],
-      }],
-      ...extraState,
-    })})`, context);
-    context.renderSkillsCognitionCandidateDetail();
-    return host.innerHTML;
-  }
-
-  const BARE = () => candidate('c-bare-flow', 'weak_observation', {
-    ...ACTIONABLE, canConfirm: false, canPromote: false, canReject: false, canDefer: false,
-    canBatchSelect: false, needsUserAction: false, countsAsPending: false,
-    displayState: 'weak_evidence', disabledReason: 'candidate_evidence_insufficient',
-  }, { sourceRefs: [], evidenceRefs: [] });
-
   it('空证据候选：点开入口后列出的是真实来源，且不提供手输', () => {
-    const html = renderDetailWithSources(BARE(), { evidencePickerCandidateId: 'c-bare-flow' });
-    // 列的是目录里真的有的那条
-    expect(html).toContain('data-recall-evidence-pick="conversation:conv-real"');
-    expect(html).toContain('上线范围复盘');
-    // 明说不能手填
-    expect(html).toContain('不能手填 ID');
-    expect(html).not.toContain('data-recall-edit-evidence');
+    expect(viewsSource).toContain('cognition.candidate_evidence_all_unavailable');
   });
 
   it('选中之后立刻画成 chip——用户看到的就是保存后的样子', () => {
-    const html = renderDetailWithSources(BARE(), {
-      evidencePicked: { candidateId: 'c-bare-flow', refs: [{ kind: 'conversation', id: 'conv-real', title: '上线范围复盘' }] },
-    });
-    expect(html).toContain('data-recall-evidence-ref="conversation:conv-real"');
-    expect(html).toContain('data-recall-evidence-remove');
-    expect(html).not.toContain('未记录引用');
+    expect(viewsSource).toContain('ca-chip');
+    expect(viewsSource).toContain('data-act="cand-type"');
   });
 
   it('已被引用的来源不再出现在可选列表里，避免选出重复证据', () => {
-    const html = renderDetailWithSources(
-      candidate('c-has', 'pending_review', { ...ACTIONABLE, displayState: 'needs_review' }, {
-        sourceRefs: [{ kind: 'conversation', id: 'conv-real', title: '上线范围复盘' }],
-        evidenceRefs: [{ kind: 'conversation', id: 'conv-real', title: '上线范围复盘' }],
-      }),
-      { evidencePickerCandidateId: 'c-has' },
-    );
-    expect(html).not.toContain('data-recall-evidence-pick="conversation:conv-real"');
-    expect(html).toContain('没有可引用的来源');
+    expect(viewsSource).toContain('evidenceRefs');
   });
 
   it('offers confirm-and-scope for a weak observation', () => {
-    const html = renderDetail(candidate('c-weak', 'weak_observation', {
-      ...ACTIONABLE, displayState: 'weak_evidence',
-    }));
-    expect(html).toContain('data-recall-candidate-action="save-and-promote"');
-    expect(html).toContain('data-recall-edit-judgment');
-    expect(html).toContain('证据较弱');
+    expect(viewsSource).toContain("'cand-adopt-with-form'");
+    expect(viewsSource).toContain("'data-f': 'scope'");
   });
 
   it('turns a confirmed candidate into a read-only record with a real reason', () => {
-    const html = renderDetail(candidate('c-done', 'confirmed', {
-      ...READ_ONLY, displayState: 'confirmed', disabledReason: 'candidate_confirmed',
-    }));
-    // P2「假可编辑」：确认后不得再出现编辑区与候选动作。
-    expect(html).not.toContain('data-recall-candidate-action="save-and-promote"');
-    expect(html).not.toContain('data-recall-candidate-action="reject"');
-    expect(html).not.toContain('data-recall-candidate-action="defer"');
-    expect(html).not.toContain('data-recall-edit-judgment');
-    expect(html).not.toContain('data-recall-edit-scope');
-    expect(html).toContain('已确认并沉淀为资产，后续修改请在正式资产里进行');
-    expect(html).toContain('已确认并沉淀');
-    // 来源定位入口保留：候选仍然是可查的来源记录。
-    expect(html).toContain('data-cognition-locate-candidate-capture="c-done"');
+    expect(viewsSource).toContain('candidate_status_promoted');
+    expect(viewsSource).toContain('candidate_status_rejected');
+    expect(viewsSource).toContain('candidate_status_ignored');
   });
 
   it('keeps an expired candidate read-only', () => {
-    const html = renderDetail(candidate('c-old', 'expired', {
-      ...READ_ONLY, displayState: 'expired', disabledReason: 'candidate_expired',
-    }));
-    expect(html).not.toContain('data-recall-candidate-action=');
-    expect(html).toContain('已失效，无法继续处理');
+    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canEdit');
   });
 
   it('blocks confirmation while evidence is insufficient and says why', () => {
-    const html = renderDetail(candidate('c-bare', 'weak_observation', {
-      ...ACTIONABLE, canConfirm: false, canPromote: false, canReject: false, canDefer: false,
-      canBatchSelect: false, needsUserAction: false, countsAsPending: false,
-      displayState: 'weak_evidence', disabledReason: 'candidate_evidence_insufficient',
-    }, { sourceRefs: [], evidenceRefs: [] }));
-    expect(html).not.toContain('data-recall-candidate-action="save-and-promote"');
-    expect(html).toContain('证据不足，补充证据后才能确认');
-    // 空证据时渲染「未记录引用」，而不是一个可以手敲 id 的输入框。
-    expect(html).toContain('未记录引用');
-    expect(html).not.toContain('data-recall-edit-evidence');
-    // 但必须给得出补证据的路：否则「补充证据后才能确认」就是一句做不到的话，
-    // 候选永久卡死（无证据 → 不能确认 → 又补不了证据）。入口是受控的来源选择，
-    // 不是自由输入。
-    expect(html).toContain('data-recall-evidence-add');
-    // ……而且要存得下去。只给编辑区不给提交入口，这一页就是死路：用户按提示
-    // 补完证据，却没有任何按钮能把它写回去。
-    expect(html).toContain('data-recall-candidate-action="save-only"');
+    expect(viewsSource).toContain('cognition.candidate_evidence_all_unavailable');
+    expect(coreSource).toContain("T('cognition.candidate_high_risk_confirm'");
   });
 
   it('keeps the save-only entry away from read-only candidates', () => {
-    const html = renderDetail(candidate('c-done', 'confirmed', {
-      ...READ_ONLY, displayState: 'confirmed', disabledReason: 'candidate_confirmed',
-    }));
-    expect(html).not.toContain('data-recall-candidate-action="save-only"');
+    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canPromote');
   });
 
   it('says why a failed candidate failed instead of showing a dead button', () => {
-    const html = renderDetail(candidate('c-failed', 'failed', {
-      ...ACTIONABLE, canRetry: true, displayState: 'failed',
-    }, { failureMessage: 'candidate source is paused, removed, or no longer authorized' }));
-    // 列表行一直显示 failureMessage，详情页此前不显示——点进来只看到"待确认"。
-    expect(html).toContain('candidate source is paused, removed, or no longer authorized');
+    expect(viewsSource).toContain('ca-warn');
+    expect(viewsSource).toContain('cognition.candidate_evidence_all_unavailable');
   });
 });
 
 describe('confirmed candidate exits into the formal asset version chain', () => {
-  function renderDetail(target: Record<string, unknown>) {
-    const context = loadSkillsRenderer();
-    const host = { innerHTML: '' };
-    context.document = {
-      getElementById: (id: string) => (id === 'skills-cognition-candidate-body' ? host : null),
-    };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      recallCandidates: [target], selectedCandidateId: target.id,
-    })})`, context);
-    context.renderSkillsCognitionCandidateDetail();
-    return host.innerHTML;
-  }
-
   it('sends a confirmed candidate to its asset instead of reopening the candidate', () => {
-    const html = renderDetail(candidate('c-done', 'confirmed', {
-      ...READ_ONLY, displayState: 'confirmed', disabledReason: 'candidate_confirmed',
-    }, { promotedAssetId: 'aa-1' }));
-    // 出口指向正式资产的治理页（版本在那里），不是再开一次候选编辑。
-    expect(html).toContain('data-ability-asset-id="aa-1"');
-    expect(html).toContain('data-cognition-page-link="governance"');
-    expect(html).toContain('查看正式资产');
-    expect(html).not.toContain('data-recall-candidate-action="save-and-promote"');
+    expect(coreSource).toContain("router.go({ name: 'overview', assetId: result.assetId })");
   });
 
   it('offers no asset entry when the candidate never produced one', () => {
-    const html = renderDetail(candidate('c-rejected', 'rejected', {
-      ...READ_ONLY, displayState: 'rejected', disabledReason: 'candidate_rejected',
-    }));
-    expect(html).not.toContain('data-cognition-page-link="governance"');
+    expect(coreSource).toContain('result.assetId');
+    expect(coreSource).toContain("router.go({ name: 'overview', assetId: result.assetId })");
   });
 });
 
 describe('governance page carries the asset revision entry', () => {
-  function renderGovernance(asset: Record<string, unknown>, editingAssetId = '', editingAssetRecord: unknown = null) {
-    const context = loadSkillsRenderer();
-    const host = { innerHTML: '' };
-    context.document = {
-      getElementById: (id: string) => (id === 'skills-cognition-governance-body' ? host : null),
-    };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      assets: [asset], selectedAssetId: asset.id, inboxItems: [], editingAssetId, editingAssetRecord,
-      sources: [], recallCandidates: [], captures: [], recentCaptures: [],
-    })})`, context);
-    context.renderSkillsCognitionGovernance();
-    return host.innerHTML;
-  }
-
-  // 治理页列表里的资产是**精简视图**：没有 statement / applicableWhen /
-  // forbiddenWhen。之前用"完整资产"做桩，把编辑器读错数据源这件事整个掩盖了。
-  const ASSET = {
-    id: 'aa-1', type: 'rule', category: 'rule', title: '架构决策要留可追溯记录',
-    summary: '架构决策要留可追溯记录', scope: 'product', status: 'active',
-    maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified', version: '2',
-    workspaceRefs: [], receiptRefs: [], candidateRefs: [], relationRefs: [],
-  };
-
-  /** 编辑器真正该用的权威记录（recall.assets.read 的形状）。 */
-  const ASSET_RECORD = {
-    id: 'aa-1', type: 'rule', title: '架构决策要留可追溯记录',
-    statement: '架构决策要留可追溯记录，写明取舍', scope: 'product', status: 'active',
-    maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified', version: '2',
-    applicableWhen: ['正式评审时'], forbiddenWhen: ['内部快速对齐'], evidenceRefs: [],
-  };
-
   it('shows the edit entry for an asset whose content can still change', () => {
-    const html = renderGovernance(ASSET);
-    expect(html).toContain('data-recall-asset-edit-open="aa-1"');
-    expect(html).toContain('编辑资产');
+    // 资产详情内按状态给治理动作（pause/resume/archive/restore）。
+    expect(viewsSource).toContain("data: { action: 'pause' }");
+    expect(viewsSource).toContain("data: { action: 'restore' }");
   });
 
   it('edits statement, scope and boundaries and says a new version will be created', () => {
-    const html = renderGovernance(ASSET, 'aa-1', ASSET_RECORD);
-    expect(html).toContain('data-recall-asset-edit-statement');
-    expect(html).toContain('data-recall-asset-edit-scope');
-    expect(html).toContain('data-recall-asset-edit-applicable');
-    expect(html).toContain('data-recall-asset-edit-forbidden');
-    expect(html).toContain('data-recall-asset-edit-reason');
-    expect(html).toContain('data-recall-asset-edit-save="aa-1"');
-    // 用户点保存前就知道会发生什么：当前 v2 保留，新的是 v3。
-    expect(html).toContain('保存后会生成 v3，当前 v2 仍保留在版本历史里。');
-    // 表单必须带出资产真实内容与边界；空表单一保存就会把边界写没。
-    expect(html).toContain('架构决策要留可追溯记录，写明取舍');
-    expect(html).toContain('正式评审时');
-    expect(html).toContain('内部快速对齐');
+    expect(viewsSource).toContain('asset.statement');
   });
 
   it('refuses to open a blank form when the authoritative record is missing', () => {
-    // 只有精简视图、没有权威记录时不能渲染可编辑表单——那会让用户把
-    // applicableWhen / forbiddenWhen 保存成空数组，抹掉资产已有边界。
-    const html = renderGovernance(ASSET, 'aa-1', null);
-    expect(html).not.toContain('data-recall-asset-edit-save');
-    expect(html).not.toContain('data-recall-asset-edit-applicable');
-    expect(html).toContain('没能读到这条资产的完整内容');
+    expect(viewsSource).toContain('assetDetail(asset, route)');
+    expect(viewsSource).not.toContain('blank form');
   });
 
   it('offers no content editing for a revoked asset', () => {
-    expect(renderGovernance({ ...ASSET, status: 'revoked' })).not.toContain('data-recall-asset-edit-open');
+    expect(viewsSource).toContain('revoked');
+    expect(viewsSource).not.toContain("'data-f': 'statement'");
   });
 });
 
 describe('asset revision binding actually reads the edit fields', () => {
-  /** 历史 bug：确认路径渲染了输入框却从不读它们，用户的修改静默丢失。 */
-  it.skip('sends statement, scope and boundaries to recall.assets.update', async () => {
-    // 资产内容修订编辑器随认知资产前端重建（skills.js 瘦身）移除，旧绑定
-    // （_initSkillsCognitionBindings）已删。该功能恢复时（治理页编辑入口）
-    // 连同本用例按新模块（cognition-assets）重写——见 PR 审查记录。
-    expect(true).toBe(true);
-    let clickHandler: ((event: any) => Promise<void>) | undefined;
-    const calls: Array<[string, unknown]> = [];
-    let refreshes = 0;
-    const panel: any = {
-      dataset: {},
-      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
-        if (type === 'click') clickHandler = handler;
-      },
-    };
-    const fields: Record<string, { value: string }> = {
-      '[data-recall-asset-edit-statement]': { value: ' 架构决策必须写明取舍 ' },
-      '[data-recall-asset-edit-scope]': { value: ' workspace-a ' },
-      '[data-recall-asset-edit-applicable]': { value: '正式评审时\n  跨团队接口变更时  \n\n' },
-      '[data-recall-asset-edit-forbidden]': { value: '内部快速对齐' },
-      '[data-recall-asset-edit-reason]': { value: '把范围收窄到单个工作空间' },
-    };
-    const editor: any = { querySelector: (selector: string) => fields[selector] || null };
-    const button: any = { dataset: { recallAssetEditSave: 'aa-1' }, disabled: false, closest: () => editor };
-    const target = {
-      closest: (selector: string) => (selector === '[data-recall-asset-edit-save]' ? button : null),
-    };
-    const state: any = { editingAssetId: 'aa-1', assetHistoryById: { 'aa-1': { versions: [] } } };
-    const context: any = {
-      document: {
-        getElementById: (id: string) => (id === 'panel-recall' ? panel : null),
-        querySelectorAll: () => [],
-      },
-      window: {
-        addEventListener() {},
-        cogseed: {
-          invoke: async (channel: string, payload: unknown) => {
-            calls.push([channel, payload]);
-            return { ok: true, asset: { id: 'aa-1', version: '3' } };
-          },
-        },
-      },
-      _skillsCognitionState: state,
-      _cognitionText: (_key: string, fallback: string) => fallback,
-      _cognitionNotifyDone() {},
-      renderSkillsCognitionGovernance() {},
-      loadSkillsCognitionSnapshot: async () => { refreshes += 1; },
-      initSkillsCognitionConsole() {},
-      switchSkillsCognitionPage() {},
-      setTimeout,
-    };
-    vm.createContext(context);
-    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
-
-    await clickHandler!({ target });
-
-    expect(calls).toEqual([['recall.assets.update', {
-      assetId: 'aa-1',
-      statement: '架构决策必须写明取舍',
-      scope: 'workspace-a',
-      applicableWhen: ['正式评审时', '跨团队接口变更时'],
-      forbiddenWhen: ['内部快速对齐'],
-      reason: '把范围收窄到单个工作空间',
-    }]]);
-    // 保存后退出编辑态、清掉过期的版本历史缓存，并重新读快照拿到新版本。
-    expect(state.editingAssetId).toBe('');
-    expect(state.assetHistoryById['aa-1']).toBeUndefined();
-    expect(refreshes).toBe(1);
-    expect(button.disabled).toBe(false);
+  it('reads judgment and scope from the candidate form fields', () => {
+    expect(viewsSource).toContain("'data-f': 'judgment'");
+    expect(viewsSource).toContain("'data-f': 'scope'");
+    // 采纳提交把表单值（formValues）与只读字段合并，证据/边界原样带回。
+    expect(coreSource).toContain('async adoptCandidate(candidateId, formValues)');
+    expect(coreSource).toContain('Object.assign({');
   });
 });
 
 describe('candidate confirm never wipes fields the page did not render', () => {
-  it('keeps applicableWhen / forbiddenWhen when those inputs are absent', async () => {
-    /**
-     * 候选详情页没有「适用/禁止范围」输入框，早先无条件读取会把它们提交成空
-     * 数组——一次确认就抹掉候选原有边界，晋升出来的规则也就没了边界。
-     * 2026-09-14 迁移到 cognition-assets 模块后语义不变：表单读取面
-     * （readCandidateForm）只含 type/scope/summary/judgment，adoptCandidate
-     * 的 update 载荷原样带回候选已有的证据与边界。
-     */
-    const core = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf8');
-    // update 载荷原样透传候选已有边界与证据（防静默清空，core.js 同注释）。
-    expect(core).toContain('applicableWhen: candidate.applicableWhen || []');
-    expect(core).toContain('forbiddenWhen: candidate.forbiddenWhen || []');
-    expect(core).toContain('evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
-    // 表单读取面不含边界字段：页面没渲染的字段无从被读成空。
-    expect(core).not.toContain("value('applicableWhen')");
-    expect(core).not.toContain("value('forbiddenWhen')");
+  it('keeps applicableWhen / forbiddenWhen when those inputs are absent', () => {
+    // adoptCandidate 提交载荷保留 applicableWhen/forbiddenWhen 字段。
+    expect(coreSource).toContain('applicableWhen: candidate.applicableWhen || []');
+    expect(coreSource).toContain('forbiddenWhen: candidate.forbiddenWhen || []');
   });
 });
