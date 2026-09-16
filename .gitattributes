@@ -1,3 +1,7 @@
+* text=auto eol=lf
 resources/builtin/** text eol=lf
 resources/guardrail/skill-declaration-core/** text eol=lf
 *.sh text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
