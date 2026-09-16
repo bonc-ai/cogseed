@@ -43,10 +43,11 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
     // stats 从 store 动态算（口径同 core.js）：attention 行的断言依赖它。
     stats: () => {
       const store = (cogAssets as Record<string, unknown>).store as Record<string, unknown>;
-      const sourceIssues = ((store.sources as Array<{ items?: Array<{ status?: string; statusReason?: string }> }> | undefined) || [])
+      const sourceIssues = ((store.sources as Array<{ items?: Array<{ kind?: string; status?: string; statusReason?: string }> }> | undefined) || [])
         .flatMap((group) => (Array.isArray(group.items) ? group.items : []))
-        .filter((item) => item.status === 'failed'
-          || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused')).length;
+        .filter((item) => String(item.kind || '') !== 'execution_evaluation'
+          && (item.status === 'failed'
+            || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused'))).length;
       const failedTasks = Number(((store.captureCounts as { failed?: number } | undefined) || {}).failed || 0);
       return {
         confirmed: 0, pending: 0, validated: 0, transferOk: 0,
@@ -56,7 +57,7 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
     store: {
       loaded: true, loading: false, errors: [],
       route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' },
-      captures: [], captureBuckets: undefined, captureSettings: null,
+      captures: [], captureSettings: null,
       sources: [], proofs: [], assets: [], candidates: [],
       organizeSettingsOpen: false, organizeListExpanded: true,
     },
@@ -185,7 +186,6 @@ describe('整理页（任务流 + 策略抽屉）', () => {
   const baseStore = {
     sources: conversationSources,
     captures: [organizingCapture, failedCapture, silentCapture, waitingCapture],
-    captureBuckets: { attention: 1, active: 2, silent: 0, done: 1 },
     captureSettings: { enabled: true, executionPolicy: 'smart', reviewPolicy: 'auto' },
   };
 
@@ -275,7 +275,8 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     const html = renderPage('organize', baseStore);
     const chips = [...html.matchAll(/data-act="capture-filter"/g)].length;
     expect(chips).toBe(4);
-    expect(html).toContain('全部 4');
+    // 「全部」= 列表行数（4 个有任务会话 + conv-5 无任务行），2026-09-16 起与行同口径。
+    expect(html).toContain('全部 5');
 
     const filtered = renderPage('organize', baseStore, { captureBucket: 'attention' });
     expect(filtered).toContain('rcap-fail');
@@ -287,6 +288,178 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     const doneFiltered = renderPage('organize', baseStore, { captureBucket: 'done' });
     expect(doneFiltered).toContain('rcap-silent');
     expect(doneFiltered).toContain('整理过，没有发现值得留存的内容');
+  });
+
+  it('chip 计数与列表行同口径：同一会话多条整理记录只计 1 行（2026-09-16 修复）', () => {
+    // 真实事故形态：会话被整理过多次（失败重试/夜间多轮），后端 buckets 按
+    // 记录数计数，列表却每会话只显示最相关一条——修复前 chip 显示「需要我
+    // 处理 4」而列表只有 2 行，数字与内容对不上。
+    const store = {
+      sources: [{
+        kind: 'conversation',
+        items: [
+          { id: 'conv-a', kind: 'conversation', title: '关于我的了解程度', updatedAt: '2026-09-15T02:00:00.000Z' },
+          { id: 'conv-b', kind: 'conversation', title: '别的会话', updatedAt: '2026-09-14T02:00:00.000Z' },
+        ],
+      }],
+      captures: [
+        { ...waitingCapture, id: 'w1', conversationId: 'conv-a', conversationTitle: '关于我的了解程度', updatedAt: '2026-09-15T04:00:00.000Z' },
+        { ...waitingCapture, id: 'w2', conversationId: 'conv-a', conversationTitle: '关于我的了解程度', updatedAt: '2026-09-15T03:00:00.000Z' },
+        { ...waitingCapture, id: 'w3', conversationId: 'conv-a', conversationTitle: '关于我的了解程度', updatedAt: '2026-09-15T02:00:00.000Z' },
+        { ...failedCapture, id: 'f1', conversationId: 'conv-b', conversationTitle: '别的会话' },
+      ],
+      captureSettings: baseStore.captureSettings,
+    };
+    const html = renderPage('organize', store);
+    // 行口径：conv-a 三条记录去重成 1 行 + conv-b 1 行 = 2。
+    expect(html).toContain('需要我处理 2');
+    expect(html).not.toContain('需要我处理 4');
+    // 「全部」数列表行数（含无任务行），不再是四桶记录之和。
+    expect(html).toContain('全部 2');
+    // 筛选后可见行数与 chip 一致。
+    const filtered = renderPage('organize', store, { captureBucket: 'attention' });
+    expect((filtered.match(/data-act="open-capture-detail"/g) || []).length).toBe(2);
+  });
+
+  it('筛选态行数超过收拢上限也出「查看全部」按钮（2026-09-16：chip 数字必须能被看到）', () => {
+    // 真实数据形态：已完成 8 行 > 收拢上限 5。此前展开按钮被
+    // `!route.captureBucket` 排除在筛选态外——chip 显示 8、列表只铺 5 行
+    // 且无法展开，数字与可见内容对不上。
+    const manyDone = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({
+      ...silentCapture,
+      id: `done-${n}`,
+      conversationId: `conv-done-${n}`,
+      conversationTitle: `已完成的会话 ${n}`,
+      updatedAt: `2026-09-${String(10 + n).padStart(2, '0')}T02:00:00.000Z`,
+    }));
+    const store = {
+      sources: [{
+        kind: 'conversation',
+        items: manyDone.map((c) => ({ id: c.conversationId, kind: 'conversation', title: c.conversationTitle, updatedAt: c.updatedAt })),
+      }],
+      captures: manyDone,
+      organizeListExpanded: false,
+      captureSettings: baseStore.captureSettings,
+    };
+    const html = renderPage('organize', store, { captureBucket: 'done' });
+    expect(html).toContain('已完成 8');
+    // 收拢只铺 5 行，但必须有出口看到剩下 3 行（数字用筛选后行数）。
+    expect(html).toContain('查看全部 8 个会话');
+    expect(html.match(/ca-row is-flat/g)?.length).toBe(5);
+    // 展开后 8 行全铺。
+    const expanded = renderPage('organize', { ...store, organizeListExpanded: true }, { captureBucket: 'done' });
+    expect(expanded.match(/ca-row is-flat/g)?.length).toBe(8);
+    expect(expanded).toContain('收起');
+  });
+
+  it('「无需沉淀」分类：寒暄优先归类（含整理过的），全部含低价值行，行可点开内容（2026-09-16）', () => {
+    const store = {
+      sources: [{
+        kind: 'conversation',
+        items: [
+          { id: 'conv-failed', kind: 'conversation', title: '没等到回复的会话', updatedAt: '2026-09-15T04:00:00.000Z', lastTurnFailed: true },
+          { id: 'conv-chat', kind: 'conversation', title: '打个招呼', updatedAt: '2026-09-15T03:00:00.000Z', chatLike: true },
+          { id: 'conv-real', kind: 'conversation', title: '正经工作', updatedAt: '2026-09-15T02:00:00.000Z' },
+          { id: 'conv-chat-tasked', kind: 'conversation', title: '整理过的寒暄', updatedAt: '2026-09-15T01:00:00.000Z', chatLike: true },
+        ],
+      }],
+      captures: [{ ...silentCapture, id: 'rcap-chatted', conversationId: 'conv-chat-tasked', conversationTitle: '整理过的寒暄' }],
+      captureSettings: baseStore.captureSettings,
+    };
+    // 「全部」含低价值行（2026-09-16 子安口径）：默认视图展示所有会话。
+    const html = renderPage('organize', store);
+    expect(html).toContain('全部 4');
+    expect(html).toContain('无需沉淀 3');
+    expect(html).toContain('没等到回复的会话');
+    expect(html).toContain('正经工作');
+    // 任务三桶只数正常行：寒暄任务行（原本进已完成）移入无需沉淀。
+    expect(html).toContain('已完成 0');
+
+    // 低价值无任务行：标题可点回看内容，「开始整理」位置提示「无需整理」。
+    expect(html).toContain('data-act="open-conversation" data-id="conv-failed"');
+    expect(html).toContain('data-act="open-conversation" data-id="conv-chat"');
+    expect(html).toContain('未得到回复');
+    expect(html).toContain('纯寒暄');
+    expect(html).toContain('无需整理');
+    expect(html).not.toContain('data-act="organize-conv" data-id="conv-failed"');
+    expect(html).not.toContain('data-act="organize-conv" data-id="conv-chat"');
+    // 正常无任务行保留「开始整理」（捞回通道在正常行上）。
+    expect(html).toContain('data-act="organize-conv" data-id="conv-real"');
+
+    // 筛选视图：寒暄优先——整理过的寒暄行也从「已完成」移到这里。
+    const excluded = renderPage('organize', store, { captureBucket: 'excluded' });
+    expect((excluded.match(/ca-row is-flat/g) || []).length).toBe(3);
+    expect(excluded).toContain('整理过的寒暄');
+    expect(excluded).not.toContain('正经工作');
+    const doneFiltered = renderPage('organize', store, { captureBucket: 'done' });
+    expect(doneFiltered).not.toContain('整理过的寒暄');
+  });
+
+  it('消息级溯源项（subtype:message）不混进整理任务流（2026-09-16 真机抓出 msg- 哈希行）', () => {
+    // sources 组里除会话级（subtype:session）项外还有消息级溯源项——它的 id
+    // 是 msg- 哈希、没有会话标题，只供证据 chip 解析；混进任务流会显示成
+    // 「msg-xxx + 开始整理」且不属于任何筛选桶。真机形态：后端 limit 默认
+    // 25，会话不足时用消息项补足（14 会话 + 11 消息项 = 25 行）。
+    const store = {
+      ...baseStore,
+      sources: [{
+        kind: 'conversation',
+        items: [
+          { id: 'conv-a', kind: 'conversation', subtype: 'session', title: '真实会话', updatedAt: '2026-09-15T02:00:00.000Z' },
+          { id: 'msg-de01145145dc9f9b355a73b6', kind: 'conversation', subtype: 'message', sourceVersion: '2026-09-15T01:00:00.000Z' },
+          { id: 'msg-5dfab3464124da9847ab5cff', kind: 'conversation', subtype: 'message', sourceVersion: '2026-09-15T00:00:00.000Z' },
+        ],
+      }],
+      captures: [],
+    };
+    const html = renderPage('organize', store);
+    expect(html).toContain('真实会话');
+    expect(html).not.toContain('msg-de0114');
+    expect(html).not.toContain('msg-5dfab3');
+    // 计数只数会话行。
+    expect(html).toContain('全部 1');
+    expect((html.match(/data-act="organize-conv"/g) || []).length).toBe(1);
+  });
+
+  it('来源拉满上限时提示「仅显示最近 100 个会话」（2026-09-16 C1：静默丢行不可接受）', () => {
+    // 审计 C1：渲染层此前不传 limit（后端默认 25），第 26 个会话起静默丢失。
+    // 修复=显式传 limit:100（IPC 上限）+ 满额时提示，不再无声截断。
+    expect(coreSource).toContain("'recall.sources.list', { limit: 100 }");
+    const full = {
+      kind: 'conversation',
+      items: Array.from({ length: 100 }, (_, n) => ({
+        id: `conv-${n}`, kind: 'conversation', subtype: 'session',
+        title: `会话 ${n}`, updatedAt: `2026-09-01T00:00:00.000Z`,
+      })),
+    };
+    const html = renderPage('organize', { ...baseStore, sources: [full] });
+    expect(html).toContain('仅显示最近 100 个会话');
+    // 未满额不提示。
+    const partial = renderPage('organize', {
+      ...baseStore,
+      sources: [{ kind: 'conversation', items: full.items.slice(0, 99) }],
+    });
+    expect(partial).not.toContain('仅显示最近 100 个会话');
+  });
+
+  it('「等待确认」口径统一（2026-09-16 B1）：deferred 可见但不占数，带「已稍后处理」标注', () => {
+    // 审计 B1：三套口径曾同时给出 7/5/0。统一为「需要判断且未被稍后处理
+    // 静音」——统计卡/全局 stats 同函数；deferred 行留在列表（子安口径）。
+    expect(coreSource).toContain('countsAsPending && !');
+    expect(coreSource).toContain('isSnoozed');
+    const mk = (id, status, snoozed) => ({
+      id, status, suggestedType: 'rule',
+      judgment: '一条足够长的候选判断正文内容。', summary: `标题-${id}`,
+      capabilities: { canEdit: true, canPromote: true, countsAsPending: true, isSnoozed: snoozed },
+    });
+    const html = renderPage('review', {
+      sources: [conversationSources[0]],
+      candidates: [mk('p1', 'pending_review', false), mk('d1', 'deferred', true)],
+    });
+    expect(html).toContain('<b>1</b><span>等待确认');
+    expect(html).toContain('标题-d1');
+    expect(html).toContain('已稍后处理');
+    expect(html).not.toContain('<b>2</b><span>等待确认');
   });
 
   it('批量入口写死条数：重试失败（1）与立即整理（1）', () => {
@@ -314,23 +487,26 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     const html = renderPage('organize', {
       sources: conversationSources,
       captures: [legacyCapture],
-      captureBuckets: null,
       captureSettings: { enabled: true, executionPolicy: 'smart', reviewPolicy: 'auto' },
     });
     expect(html).toContain('整理中');
-    // 计数兜底现算：1 条 active → 「进行中 1」而不是「进行中 0」。
+    // 计数恒为行口径现算（2026-09-16 起不读后端 buckets，版本错配天然免疫）：
+    // 1 行 active。
     expect(html).toContain('进行中 1');
-    expect(html).toContain('全部 1');
+    // 列表行 = 5 个会话（1 有任务 + 4 无任务行）。
+    expect(html).toContain('全部 5');
   });
 
-  it('简单对话（有用消息 ≤2 条）且无任务的行不进列表；有任务的简单对话仍显示', () => {
+  it('简单对话不再被隐藏：带寒暄标记的进「无需沉淀」，无标记的留在主列表（宁漏勿误伤）', () => {
+    // 2026-09-16 起 messageCount 前端隐藏过滤退役：低价值判定由后端
+    // chatLike/lastTurnFailed 打标（见 source-catalog），前端不猜。
     const store = {
       ...baseStore,
       sources: [{
         kind: 'conversation',
         items: [
           { id: 'conv-full', kind: 'conversation', title: '完整的多轮会话', updatedAt: '2026-09-15T02:00:00.000Z', messageCount: 8 },
-          { id: 'conv-tiny', kind: 'conversation', title: '打个招呼而已', updatedAt: '2026-09-14T02:00:00.000Z', messageCount: 2 },
+          { id: 'conv-tiny', kind: 'conversation', title: '打个招呼而已', updatedAt: '2026-09-14T02:00:00.000Z', messageCount: 2, chatLike: true },
           { id: 'conv-none', kind: 'conversation', title: '还没得到回复', updatedAt: '2026-09-13T02:00:00.000Z', messageCount: 1 },
         ],
       }],
@@ -339,10 +515,17 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     // silentCapture 属 conv-1——不在本组数据里，无干扰。
     const html = renderPage('organize', store);
     expect(html).toContain('完整的多轮会话');
-    expect(html).not.toContain('打个招呼而已');
-    expect(html).not.toContain('还没得到回复');
+    // 无标记的简单对话留在主列表：判定信号来自后端，不由 messageCount 猜。
+    expect(html).toContain('还没得到回复');
+    // 「全部」含低价值行（2026-09-16 口径）：3 个会话全展示。
+    expect(html).toContain('全部 3');
+    expect(html).toContain('无需沉淀 1');
+    expect(html).toContain('打个招呼而已');
+    const excluded = renderPage('organize', store, { captureBucket: 'excluded' });
+    expect(excluded).toContain('打个招呼而已');
+    expect(excluded).not.toContain('完整的多轮会话');
 
-    // 有任务的简单对话不被过滤（整理中的条目不能凭空消失）。
+    // 有任务的简单对话照常显示（整理中的条目不能凭空消失）。
     const tinyWithTask = {
       sources: [{
         kind: 'conversation',
@@ -351,7 +534,6 @@ describe('整理页（任务流 + 策略抽屉）', () => {
         ],
       }],
       captures: [{ ...organizingCapture, conversationId: 'conv-tiny', conversationTitle: '打个招呼而已' }],
-      captureBuckets: { attention: 0, active: 1, silent: 0, done: 0 },
       captureSettings: baseStore.captureSettings,
     };
     const withTask = renderPage('organize', tinyWithTask);
@@ -552,6 +734,59 @@ describe('整理详情页', () => {
     expect((html.match(/data-f="judgment"/g) || []).length).toBe(1);
   });
 
+  it('确认表单三枚动作：保存并使用 / 稍后处理 / 拒绝（2026-09-16 补 defer 入口）', () => {
+    // defer 链路（IPC/状态机/7 天冷却唤醒）早已存在，此前只缺表单按钮——
+    // 用户在整理详情页看到内容后无法选"稍后处理"。
+    const pending = {
+      id: 'rcand-d', status: 'pending_review',
+      judgment: '发布前先跑一遍冒烟清单。', value: '', summary: '发布前冒烟',
+      suggestedType: 'skill_method', suggestedScope: 'general',
+      capabilities: { canEdit: true, canPromote: true, canReject: true, canDefer: true, countsAsPending: true, isSnoozed: false },
+    };
+    const html = renderPage('organize', {
+      captures: [{ ...detailCapture, candidateIds: ['rcand-d'], status: 'review_ready', displayStatus: 'review_ready', displayReason: 'review_pending' }],
+      sources: [], candidates: [pending],
+      ...contextStore,
+    }, { captureId: 'rcap-x' });
+    expect(html).toContain('保存并使用');
+    expect(html).toContain('data-id="rcand-d" data-action="defer"');
+    expect(html).toContain('稍后处理');
+    expect(html).toContain('data-id="rcand-d" data-action="reject"');
+    // 顺序：保存在前、拒绝在后，稍后处理居中。
+    expect(html.indexOf('data-action="defer"')).toBeGreaterThan(html.indexOf('cand-adopt-with-form'));
+    expect(html.indexOf('data-action="reject"')).toBeGreaterThan(html.indexOf('data-action="defer"'));
+  });
+
+  it('候选卡标题优先用模型生成的 summary（2026-09-16：此前 judgment 截断优先，名字成了内容前缀）', () => {
+    const mk = (over) => ({
+      id: 'rcand-t', status: 'pending_review', suggestedType: 'rule', suggestedScope: 'general',
+      capabilities: { canEdit: true, canPromote: true, countsAsPending: true, isSnoozed: false },
+      ...over,
+    });
+    const review = (cands) => renderPage('review', { sources: [conversationSources[0]], candidates: cands });
+    // summary 优先：列表行标题=模型短标题。
+    const withSummary = review([mk({ judgment: '接口变更后必须同步更新文档，并在群里同步告知，同时留档到 wiki。', summary: '接口变更同步文档' })]);
+    expect(withSummary).toContain('接口变更同步文档');
+    // 无 summary 的存量候选：类别 + 判断前 12 字的克制兜底，不再裸截 60 字。
+    const noSummary = review([mk({ judgment: '发布前先跑一遍冒烟清单，确认核心链路无回归再上线。', summary: '' })]);
+    expect(noSummary).toContain('规则与偏好 · 发布前先跑一遍冒烟清');
+    // 标题行不再包含判断的后半段（旧口径截 60 字会整段露出；内容区全文属正常）。
+    expect(noSummary).not.toMatch(/ca-row-title[^>]*>[^<]*确认核心链路无回归/);
+    // 两者皆空：未命名兜底。
+    const empty = review([mk({ judgment: '', summary: '' })]);
+    expect(empty).toContain('未命名候选');
+  });
+
+  it('「稍后处理」随界面语境分流（2026-09-16）：待我处理页静默回列表，整理页提示去向', () => {
+    // 子安口径：人已在「待我处理」页时"已进入待处理"没有信息量，处理完
+    // 这条直接回列表；整理详情页（内容确实被送走）才提示去向。
+    expect(coreSource).toContain("if (action === 'defer')");
+    expect(coreSource).toContain("=== 'review'");
+    expect(coreSource).toContain("router.go({ name: 'review' })");
+    expect(coreSource).toContain("cognition.candidate_deferred", '已进入待处理');
+    expect(coreSource).not.toContain("defer: T('cognition.candidate_deferred'");
+  });
+
   it('无候选：显示模型给出的理由与筛选原因白话', () => {
     const html = renderPage('organize', {
       captures: [{
@@ -636,7 +871,7 @@ describe('待我处理（决策中心）', () => {
     kind: 'artifact_file',
     items: [{
       id: 'src-1', kind: 'artifact_file', title: '架构决策记录.md',
-      status: 'failed', statusReason: 'file_index_failed',
+      status: 'failed', statusReason: 'file_index_failed', actions: ['retry', 'remove'],
     }],
   };
 
@@ -652,6 +887,37 @@ describe('待我处理（决策中心）', () => {
     expect(open).toContain('文件索引失败，可重试');
     expect(open).toContain('data-action="retry"');
     expect(open).toContain('data-kind="artifact_file"');
+  });
+
+  it('执行失败轮次不算「来源需要处理」（2026-09-16：turn-哈希行看不懂且无可用动作）', () => {
+    // execution_evaluation 的 failed 项（reason=execution_failed、无标题、
+    // actions 仅 remove）是 agent 执行失败的历史轮次——不是用户能修复的
+    // 数据源，进异常区只显示成 turn-哈希 + 无效重试；执行失败在对话侧已
+    // 可见，这里纯属噪音（真机 13 条全部如此）。
+    const failedTurns = {
+      kind: 'execution_evaluation',
+      items: [1, 2].map((n) => ({
+        id: `turn-abc${n}`, kind: 'execution_evaluation', subtype: 'execution',
+        status: 'failed', statusReason: 'execution_failed', actions: ['remove'],
+      })),
+    };
+    const store = { sources: [conversationSources[0], failedTurns, issueSource], candidates: [] };
+    const collapsed = renderPage('review', store);
+    // 只数 artifact_file 那条真异常。
+    expect(collapsed).toContain('1 条来源记录需要处理');
+    const open = renderPage('review', store, { sourceIssueOpen: 'open' });
+    expect(open).not.toContain('turn-abc1');
+    expect(open).toContain('架构决策记录.md');
+  });
+
+  it('重试按钮只给 actions 含 retry 的来源项（2026-09-16：无效重试误导）', () => {
+    const noRetry = {
+      kind: 'context_file',
+      items: [{ id: 'src-x', kind: 'context_file', title: '读不了的文件.md', status: 'failed', statusReason: 'source_unavailable', actions: ['remove'] }],
+    };
+    const open = renderPage('review', { sources: [conversationSources[0], noRetry], candidates: [] }, { sourceIssueOpen: 'open' });
+    expect(open).toContain('读不了的文件.md');
+    expect(open).not.toContain('data-action="retry"');
   });
 
   it('健康来源不出现在待我处理（异常驱动，无常态清单）', () => {
@@ -732,12 +998,10 @@ describe('交互反馈与响应式（2026-09-15 全面优化）', () => {
     expect(viewsSource).toContain('main.scrollTop = restoreScroll');
   });
 
-  it('设置项乐观更新：先落选中态即时反馈，失败回滚重抛', () => {
-    const policyCase = appSource.slice(appSource.indexOf("case 'capture-policy'"), appSource.indexOf("case 'capture-toggle'"));
-    expect(policyCase).toContain('S.captureSettings = Object.assign');
-    expect(policyCase).toContain('NS.notify()');
-    expect(policyCase).toContain('S.captureSettings = previous');
-    expect(policyCase).toContain('throw error');
+  it('设置项乐观更新：capture-policy 死委托已删净（2026-09-16 B3），aria-busy 反馈保留', () => {
+    // 三档单选的 case 与声明随旧抽屉退役（设置页现为夜间开关两态）；
+    // 乐观更新模式由 capture-toggle/nightly 等活路径承载。
+    expect(appSource).not.toContain("case 'capture-policy'");
     expect(appSource).toContain("setAttribute('aria-busy', 'true')");
   });
 

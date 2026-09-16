@@ -151,6 +151,9 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   resumeStatus?: 'waiting_quiet' | 'waiting_completion' | 'waiting_manual' | 'scheduled' | 'queued';
   attempt: number;
   candidateIds: string[];
+  /** 终态时点固化的复核计数快照（2026-09-16 A2）：workflowStatus 判定以它
+   *  为准，杜绝 defer 冷却过期等读取时点漂移把已完成任务翻成失败。 */
+  reviewSnapshot?: RecallCaptureReviewSummary;
   writingCandidateId?: string;
   /** Persisted intent to write qualifying candidates without a later approval click. */
   autoWrite?: boolean;
@@ -827,6 +830,9 @@ function extractionSystemPrompt(): string {
     // 里永远匹配不上任务词，用户确认的资产会全部失配。general=跨对话/跨
     // 空间的用户级事实；其余四个是任务类型词。空间限定交给 workspace-ref。
     'suggestedScope must be one of the five controlled terms: "general" (applies across all conversations and spaces — identity, durable preferences), or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes like "用户全局画像" — use "general" instead.',
+    // summary 是候选在界面上的名字（2026-09-16）：渲染层以它为卡片标题，模型
+    // 必须给出"像名字"的短语——完整句子或 judgment 前缀会让列表不可读。
+    'summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation (e.g. "回复保持简洁", "接口变更须同步文档"). Never write a full sentence, a question, or a prefix copied from judgment.',
     // 空返回也要说明白为什么。没有这句，实机上「这次没抽出来」在系统里没有
     // 任何解释，用户无法判断是抽对了还是抽漏了。
     'When nothing is durable enough, return {"candidates":[],"reason":"one short sentence, in the language of the conversation, saying what was missing"}.',
@@ -904,6 +910,7 @@ async function extractCaptureViaCli(
     `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
     `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
     `suggestedScope must be one of the five controlled terms: "general" (across all conversations and spaces — identity, durable preferences) or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes.\n` +
+    `summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation. Never a full sentence or a prefix copied from judgment.\n` +
     `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
     `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
     `Write candidate text in the same language as the conversation.\n\n` +
@@ -1197,20 +1204,36 @@ async function summarizeRecallCaptures(
   return Promise.all(captures.map(async (capture) => {
     const candidateIds = [...new Set(capture.candidateIds)];
     const candidates = await Promise.all(candidateIds.map(readCandidate));
-    const reviewSummary: RecallCaptureReviewSummary = {
-      total: 0,
-      pending: 0,
-      deferred: 0,
-      promoted: 0,
-      rejected: 0,
-      missing: 0,
-    };
+    // 终态固化的快照优先（2026-09-16 A2）：只保护 completed 终态——防 defer
+    // 冷却过期等读取时点漂移把已完成的任务翻成失败。review_ready 保持现算：
+    // 它是活的等待区，用户确认/拒绝后照常翻「已完成」（既有行为），不锁死。
+    // 快照存在时仍现算 confirmed 回执——那是详情页的展示数据。
+    const snapshotted = capture.status === 'completed' ? capture.reviewSnapshot : undefined;
+    const reviewSummary: RecallCaptureReviewSummary = snapshotted
+      ? { ...snapshotted }
+      : { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 };
     const linkedAssetIds = new Set<string>();
     const confirmedAssetReceipts: RecallCaptureConfirmedAssetReceipt[] = [];
+    const collectConfirmedReceipt = async (candidate: RecallCandidateRecord) => {
+      if (!candidate.promotedAssetId || !candidate.reviewDecisionId) return;
+      const [asset, receipt] = await Promise.all([
+        readAsset(candidate.promotedAssetId),
+        readReceipt(candidate.id, candidate.reviewDecisionId),
+      ]);
+      const displayReceipt = asset && receipt
+        ? confirmedAssetReceipt(candidate, asset, receipt)
+        : undefined;
+      if (displayReceipt) {
+        linkedAssetIds.add(displayReceipt.assetId);
+        confirmedAssetReceipts.push(displayReceipt);
+      }
+    };
     for (const candidate of candidates) {
       if (!candidate) {
-        reviewSummary.total += 1;
-        reviewSummary.missing += 1;
+        if (!snapshotted) {
+          reviewSummary.total += 1;
+          reviewSummary.missing += 1;
+        }
         continue;
       }
       // 复核摘要按 capability 计数，不按 raw status 列举：实机上多数候选是
@@ -1220,6 +1243,10 @@ async function summarizeRecallCaptures(
       // 稍后处理是用户自己按下的静音，这份摘要里继续保持安静（既有行为）。
       if (capability.isSnoozed) continue;
       if (!capability.countsAsPending && !capability.isTerminal) continue;
+      if (snapshotted) {
+        if (candidate.status === 'confirmed') await collectConfirmedReceipt(candidate);
+        continue;
+      }
       reviewSummary.total += 1;
       if (capability.countsAsPending) reviewSummary.pending += 1;
       else if (candidate.status === 'confirmed') {
@@ -2228,6 +2255,25 @@ export async function runRecallCapture(
     const hasReviewableCandidates = candidates.some((candidate) => (
       isAutoCaptureEligible(resolvedCandidates.get(candidate.id) || candidate)
     ));
+    // 终态固化复核快照（2026-09-16 A2）：只在 completed 落点固化（自动写
+    // 完成线）——防 defer 冷却过期等读取时点漂移把已完成任务翻成失败。
+    // review_ready 是活的等待区（用户处理后照常翻「已完成」），不固化。
+    // 口径与读取侧共用 summarizeRecallCaptures；读取异常时放弃固化，绝不
+    // 让它把一次成功的整理拖成 failed。
+    const finishingAsCompleted = automaticWrite && !hasReviewableCandidates;
+    let reviewSnapshot: RecallCaptureReviewSummary | undefined;
+    if (finishingAsCompleted && candidateIds.length) {
+      try {
+        const [workflow] = await summarizeRecallCaptures(userId, [
+          { ...capture, candidateIds } as RecallCaptureRecord,
+        ]);
+        if (workflow && workflow.reviewSummary.total) reviewSnapshot = workflow.reviewSummary;
+      } catch {
+        // 快照是防漂移的加固，不是整理的必要产物——读取侧异常时放弃固化，
+        // 保持既有读取时现算口径，绝不让它把一次成功的整理拖成 failed。
+        reviewSnapshot = undefined;
+      }
+    }
     capture = await updateCapture(userId, id, (current) => (automaticWrite
       ? current.status !== 'writing'
       : current.status !== 'extracting')
@@ -2235,6 +2281,7 @@ export async function runRecallCapture(
       : {
           ...current,
           status: hasReviewableCandidates ? 'review_ready' : automaticWrite ? 'completed' : 'no_candidate',
+          ...(reviewSnapshot ? { reviewSnapshot } : {}),
           visibility: current.executionPolicy === 'manual' || hasQualifiedCandidates || automaticWrite ? 'visible' : 'internal',
           screeningStatus: hasQualifiedCandidates ? 'qualified' : 'filtered',
           // 三分而不是二分：模型判空 / 模型给了但全被丢弃 / 给了且接住但下游筛掉。

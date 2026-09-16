@@ -20,7 +20,7 @@
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
     'asset-action', 'source-action', 'capture-action', 'organize-conv',
-    'capture-policy', 'capture-toggle', 'capture-review-toggle', 'proof-rate',
+    'capture-toggle', 'capture-review-toggle', 'proof-rate',
     'capture-batch',
   ]);
 
@@ -160,25 +160,6 @@
           case 'source-action': await A.sourceAction(el.dataset.kind || '', id, el.dataset.action); break;
           case 'capture-action': await A.captureAction(id, el.dataset.action); break;
           case 'organize-conv': await A.organizeConversation(id); break;
-          case 'capture-policy': {
-            // 分段单选：点已选中项不重复提交；切换走乐观更新——先落选中态
-            // 与页首摘要，失败由 catch 回滚（设置是即时性最强的操作，等一次
-            // IPC 往返再变视觉上像没点上）。
-            const current = String((S.captureSettings || {}).executionPolicy || 'smart');
-            if (id && id !== current) {
-              const previous = S.captureSettings;
-              S.captureSettings = Object.assign({}, previous, { executionPolicy: id });
-              NS.notify();
-              try {
-                await A.updateCaptureSettings({ executionPolicy: id });
-              } catch (error) {
-                S.captureSettings = previous;
-                NS.notify();
-                throw error;
-              }
-            }
-            break;
-          }
           case 'capture-toggle': {
             const enabled = !(S.captureSettings && S.captureSettings.enabled !== false);
             if (!enabled) {

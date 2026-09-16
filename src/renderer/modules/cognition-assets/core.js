@@ -117,9 +117,6 @@
     candidates: [],
     captures: [],
     captureCounts: {},
-    /** 后端分桶计数；缺字段（旧主进程）时为 null，视图走前端兜底现算——
-     *  绝不能用全 0 对象冒充，否则版本错配时计数显示成 0 而不是兜底值。 */
-    captureBuckets: null,
     captureSettings: null,
     sources: [],
     tree: null,
@@ -139,7 +136,10 @@
   NS.stats = function stats() {
     const s = store;
     const confirmed = s.assets.filter((a) => String(a.status || 'active') !== 'archived').length;
-    const pending = s.candidates.filter((c) => (c.capabilities && c.capabilities.countsAsPending) || false).length;
+    // 待确认口径（2026-09-16 B1 统一）：需要判断且未被"稍后处理"静音——
+    // 与 views.candidateAwaiting 同一份口径（countsAsPending && !isSnoozed），
+    // deferred 不再占「待确认」名额（三套口径 7/5/0 分叉的修复）。
+    const pending = s.candidates.filter((c) => (c.capabilities && c.capabilities.countsAsPending) && !(c.capabilities && c.capabilities.isSnoozed)).length;
     const validated = s.assets.filter((a) => a.maturity === 'effectiveness_validated').length;
     const transferOk = s.assets.filter((a) => a.maturity === 'transfer_validated' || a.maturity === 'effectiveness_validated').length;
     const sourceIssues = s.sources
@@ -147,8 +147,11 @@
       // 用户主动暂停的来源（reason=source_paused）不算"需要处理"——用户
       // 自己停的，再提示他去处理自相矛盾；连接器断开等真故障的 paused
       // 仍计入（2026-09-14 修：实机出现 [paused] source_paused 假警报）。
-      .filter((item) => item.status === 'failed'
-        || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused')).length;
+      // 执行失败轮次同样不算（2026-09-16）：与 views.sourceItemNeedsAttention
+      // 同口径，agent 执行失败不是用户可修复的来源故障。
+      .filter((item) => String(item.kind || '') !== 'execution_evaluation'
+        && (item.status === 'failed'
+          || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused'))).length;
     const failedTasks = Number(s.captureCounts && s.captureCounts.failed || 0);
     const coveredAssets = new Set(s.proofs.map((p) => String((p.refs || {}).assetId || '')).filter(Boolean)).size;
     const attention = s.assets.filter((a) => String(a.status || 'active') === 'paused' || String(a.status || '') === 'archived').length;
@@ -171,18 +174,14 @@
         // 记录）。后端保证静默记录零候选读取，这里多拉的记录不产生模型开销。
         api.soft('recall.captures.list', { limit: 40, scope: 'all' }, {}),
         api.soft('recall.captures.settings.get', {}, {}),
-        api.soft('recall.sources.list', {}, {}),
+        // limit:100=IPC 上限（审计 C1 修复，2026-09-16）：此前不传 limit 走
+        // 后端默认 25，会话超 25 个后整理页静默丢行。满 100 时视图侧另有提示。
+        api.soft('recall.sources.list', { limit: 100 }, {}),
       ]);
       store.assets = toArr(assets, ['assets', 'items']);
       store.candidates = toArr(candidates, ['candidates', 'items']);
       store.captures = toArr(captures, ['items', 'captures', 'tasks']);
       store.captureCounts = (captures && captures.counts) || {};
-      // 后端 buckets 缺席（旧主进程/旧网关）时保持 null，交给视图现算：
-      // 曾因 `|| {全0}` 把「缺字段」当「全为 0」，计数显示错误。
-      const remoteBuckets = captures && captures.buckets;
-      store.captureBuckets = remoteBuckets && Number.isFinite(Number(remoteBuckets.attention))
-        ? remoteBuckets
-        : null;
       store.captureSettings = (settings && settings.settings) || settings || null;
       store.sources = toArr(sources, ['groups', 'sources']);
       // 证明链服务资产详情内的使用记录区与成熟度展示，失败不阻塞主快照。
@@ -418,7 +417,18 @@
       const channel = CANDIDATE_CHANNELS[action];
       if (!channel) return;
       await api.call(channel, { candidateId });
-      toast({ reject: T('cognition.candidate_rejected', '已拒绝'), defer: T('cognition.candidate_deferred', '已稍后处理'), ignore: T('cognition.candidate_ignored', '已忽略') }[action] || T('common.done', '已完成'));
+      if (action === 'defer') {
+        // 「稍后处理」的提示与导航随语境分流（2026-09-16 子安口径）：
+        // 整理页=内容被送进待我处理，提示去向；待我处理页内=人已在此，
+        // "已进入待处理"没有信息量，处理完这条直接回列表即反馈。
+        if (String(store.route && store.route.name || '') === 'review') {
+          router.go({ name: 'review' });
+        } else {
+          toast(T('cognition.candidate_deferred', '已进入待处理'));
+        }
+      } else {
+        toast({ reject: T('cognition.candidate_rejected', '已拒绝'), ignore: T('cognition.candidate_ignored', '已忽略') }[action] || T('common.done', '已完成'));
+      }
       await NS.reload();
     },
     async rateProof(proofId, feedback, extra) {

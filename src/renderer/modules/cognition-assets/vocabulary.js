@@ -156,12 +156,14 @@
   };
 
   /** 分桶（后端 captureBucket 四值）：整理记录的筛选口径。注意「需要我处理」
-   *  是分桶口径（含待确认/被暂停），比「待我处理」页的失败计数宽。 */
+   *  是分桶口径（含待确认/被暂停），比「待我处理」页的失败计数宽。
+   *  excluded（无需沉淀）是会话维度分类（非 capture 分桶）：失败/寒暄会话。 */
   const CAPTURE_BUCKET = {
     attention: ['cognition.capture_bucket_attention', '需要我处理'],
     active: ['cognition.capture_bucket_active', '进行中'],
     silent: ['cognition.capture_bucket_silent', '无留存内容'],
     done: ['cognition.capture_bucket_done', '已完成'],
+    excluded: ['cognition.capture_bucket_excluded', '无需沉淀'],
   };
 
   function lookup(dict, value, what) {

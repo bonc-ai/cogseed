@@ -140,8 +140,24 @@
   };
 
   const candidatePending = (candidate) => !!(candidate.capabilities && candidate.capabilities.countsAsPending);
-  const candidateTitle = (candidate) => String(candidate.judgment || candidate.summary || '').trim().slice(0, 60)
-    || T('cognition.candidate_untitled', '未命名候选');
+  /** 待确认口径（2026-09-16 B1 统一）：需要用户判断且未被"稍后处理"静音。
+   *  统计卡与全局 stats 共用这一份（单一事实源），杜绝 7/5/0 三数分叉；
+   *  deferred 行仍在列表可见（子安口径：与待确认同形态），只是不占
+   *  "等待确认"名额并带「已稍后处理」标注。 */
+  const candidateAwaiting = (candidate) => candidatePending(candidate) && !(candidate.capabilities && candidate.capabilities.isSnoozed);
+  /** 候选显示名（2026-09-16 修）：优先模型提炼的 summary 短标题——此前
+   *  judgment 截断 60 字优先，卡片名成了"内容前缀"看不懂；无 summary 的
+   *  存量候选用类别 + 判断前 12 字克制兜底，两者皆空给未命名。 */
+  const candidateTitle = (candidate) => {
+    const summary = String(candidate.summary || '').trim();
+    if (summary) return summary.length > 24 ? `${summary.slice(0, 24)}…` : summary;
+    const judgment = String(candidate.judgment || '').trim();
+    if (judgment) {
+      const label = categoryLabel(candidate.suggestedType);
+      return `${label ? `${label} · ` : ''}${judgment.slice(0, 12)}${judgment.length > 12 ? '…' : ''}`;
+    }
+    return T('cognition.candidate_untitled', '未命名候选');
+  };
 
   /* 整理任务行内动作（整理记录行与整理详情共用）：主按钮按优先级取一个，
    * 暂停/取消作次级；导航类动作（去确认/配置模型）在 app.js 分流，控制类走
@@ -486,7 +502,7 @@
     <div class="ca-card ca-candidate${broken ? ' is-broken' : ''}" data-act="open-candidate" data-id="${esc(candidate.id)}" role="button" tabindex="0">
       <div class="ca-line">
         <div class="ca-row-title">${esc(candidateTitle(candidate))} <span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
-        <div class="ca-right">${chip(categoryLabel(candidate.suggestedType), '')} ${broken ? chip(T('cognition.candidate_evidence_weak', '来源已删'), 'amber') : chip(T('cognition.candidate_evidence_ok', '证据充足'), 'green')}</div>
+        <div class="ca-right">${(candidate.capabilities && candidate.capabilities.isSnoozed) ? chip(T('cognition.candidate_snoozed', '已稍后处理'), 'amber') : ''}${chip(categoryLabel(candidate.suggestedType), '')} ${broken ? chip(T('cognition.candidate_evidence_weak', '来源已删'), 'amber') : chip(T('cognition.candidate_evidence_ok', '证据充足'), 'green')}</div>
       </div>
       <p class="ca-content-text">${esc(String(candidate.judgment || candidate.value || '').slice(0, 220))}</p>
       ${refsHtml}${warnHtml}
@@ -497,6 +513,10 @@
    *  主动暂停的 paused。2026-09-15 重构：来源健康不再有常态页，异常条目
    *  就地展开在「待我处理」，健康时完全沉默。 */
   function sourceItemNeedsAttention(item) {
+    // 执行失败轮次（execution_evaluation/failed）不算来源异常（2026-09-16）：
+    // 它是 agent 执行失败的历史记录，不是用户能修复的数据源——进异常区只
+    // 显示成 turn-哈希 + 无效重试；执行失败在对话侧已可见。
+    if (String(item.kind || '') === 'execution_evaluation') return false;
     return item.status === 'failed'
       || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused');
   }
@@ -514,9 +534,14 @@
     const vocab = NS.vocabulary;
     const rows = issues.slice(0, 20).map((item) => {
       const reasonText = vocab ? vocab.sourceReasonText(item.statusReason) : '';
-      const action = item.status === 'failed'
+      // 重试只给 actions 里真支持 retry 的项（2026-09-16）：无差别给重试会让
+      // 不支持重试的来源（如 actions 仅 remove）点了无效、误导用户。
+      const actions = Array.isArray(item.actions) ? item.actions : [];
+      const action = item.status === 'failed' && actions.includes('retry')
         ? btn(T('cognition.source_retry', '重试'), 'source-action', { id: item.id, data: { action: 'retry', kind: item.kind }, small: true })
-        : btn(T('cognition.source_resume', '恢复'), 'source-action', { id: item.id, data: { action: 'resume', kind: item.kind }, small: true });
+        : item.status !== 'failed' && actions.includes('resume')
+          ? btn(T('cognition.source_resume', '恢复'), 'source-action', { id: item.id, data: { action: 'resume', kind: item.kind }, small: true })
+          : '';
       return `<div class="ca-row is-flat">
         <div class="ca-row-main">
           <div class="ca-row-title">${esc(item.title || item.id)}</div>
@@ -563,8 +588,8 @@
       T('cognition.review_title', '待我处理'),
       T('cognition.inbox_page_hint', '每条只需要一个决定：保存，还是不保存。'),
       statsRow([
-        [healthy.length, T('cognition.review_stat_wait', '等待确认')],
-        [broken.length, T('cognition.review_stat_evidence', '来源已删')],
+        [healthy.filter(candidateAwaiting).length, T('cognition.review_stat_wait', '等待确认')],
+        [broken.filter(candidateAwaiting).length, T('cognition.review_stat_evidence', '来源已删')],
       ]),
     )}
     ${attention.length ? `<div class="ca-notice">${attention.join('')}</div>` : ''}
@@ -594,6 +619,7 @@
     const field = (label, inner) => `<label class="ca-field"><span>${esc(label)}</span>${inner}</label>`;
     const actionsHtml = `<div class="ca-actions ca-actions-right">
         ${(candidate.capabilities && candidate.capabilities.canPromote) ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
+        ${btn(T('cognition.candidate_defer_action', '稍后处理'), 'cand-decide', { id: candidate.id, data: { action: 'defer' } })}
         ${btn(T('cognition.candidate_reject', '拒绝'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
       </div>`;
     return `
@@ -687,7 +713,7 @@
   function viewOrganizeSettingsPage() {
     const settings = S.captureSettings || {};
     const enabled = settings.enabled !== false;
-    const nightlyOn = String(settings.executionPolicy || 'smart') === 'nightly';
+    const nightlyOn = String(settings.executionPolicy || 'manual') === 'nightly';
     const reviewAuto = String(settings.reviewPolicy || 'auto') === 'auto';
     const nightlyStart = String(settings.nightlyStart || '02:00');
     return `${btn(`← ${T('cognition.tab_organize', '整理')}`, 'go-back', { className: 'ca-backlink' })}
@@ -733,9 +759,13 @@
   function viewOrganizeTasks(route) {
     const vocab = NS.vocabulary;
 
+    // 只取会话级项：同组里还有 subtype:message 的消息级溯源项（id=msg- 哈希、
+    // 无会话标题，供证据 chip 解析），混进任务流会显示成裸哈希行且不属于任何
+    // 筛选桶（2026-09-16 真机抓出；后端 limit 不足时用它补位）。排除法保兼容。
     const conversationItems = S.sources
       .filter((g) => String(g.kind || '') === 'conversation' || (g.items || []).some((i) => i.kind === 'conversation'))
-      .flatMap((g) => (Array.isArray(g.items) ? g.items : []));
+      .flatMap((g) => (Array.isArray(g.items) ? g.items : []))
+      .filter((item) => String(item.subtype || '') !== 'message');
     // 任务关联（含 silent：无留存内容的记录也如实显示）：每会话取最相关一条。
     const CLASS_ORDER = { active: 0, attention: 1, done: 2, silent: 3 };
     const captureByConv = new Map();
@@ -760,15 +790,11 @@
     const isRunning = (capture) => ['queued', 'extracting', 'writing'].includes(String(capture.status));
 
     let rows = conversationItems.map((conv) => ({ conv, capture: captureByConv.get(conv.id) || null }));
-    // 简单对话过滤（2026-09-15 子安口径："只有一两句的不要进这个列表"）：
-    // 有用消息 ≤2 条且从未有过整理任务的候选行不显示；有任务的行不过滤
-    //（否则整理中/失败的条目会凭空消失）。老网关无 messageCount 字段时不过滤。
-    const MIN_CONVERSATION_MESSAGES = 3;
-    rows = rows.filter((row) => (
-      row.capture
-      || row.conv.messageCount == null
-      || Number(row.conv.messageCount) >= MIN_CONVERSATION_MESSAGES
-    ));
+    // 低价值归类（2026-09-16「无需沉淀」分类，子安口径）：寒暄命中即归类
+    //（无视任务——整理过的寒暄如「hi」也从「已完成」移入）；回复失败仅对
+    // 无任务行（失败会话被整理过=用户已主动处理过）。取代旧的 messageCount
+    // 前端隐藏过滤——判定信号由后端出，前端不猜，宁漏勿误伤。
+    const isExcludedRow = (row) => Boolean(row.conv.chatLike || (!row.capture && row.conv.lastTurnFailed));
     // 真正跑着的（queued/extracting/writing）恒在最顶，其余按会话最近活动。
     rows.sort((left, right) => {
       const leftActive = left.capture && isRunning(left.capture) ? 1 : 0;
@@ -777,16 +803,19 @@
       return String(right.conv.updatedAt || right.conv.createdAt || '')
         .localeCompare(String(left.conv.updatedAt || left.conv.createdAt || ''));
     });
-    // 分桶筛选只作用于有任务的行（无任务行只在「全部」出现）。
-    const filtered = route.captureBucket
-      ? rows.filter((row) => row.capture && bucketOf(row.capture) === route.captureBucket)
-      : rows;
-    // 计数优先用后端 buckets（scope 内全量）；兜底前端现算。
-    const countBy = new Map();
-    for (const capture of (Array.isArray(S.captures) ? S.captures : [])) countBy.set(bucketOf(capture), (countBy.get(bucketOf(capture)) || 0) + 1);
-    const buckets = S.captureBuckets && Number.isFinite(Number(S.captureBuckets.attention))
-      ? S.captureBuckets
-      : { attention: countBy.get('attention') || 0, active: countBy.get('active') || 0, silent: countBy.get('silent') || 0, done: countBy.get('done') || 0 };
+    const normalRows = rows.filter((row) => !isExcludedRow(row));
+    const excludedRows = rows.filter(isExcludedRow);
+    // 「全部」含低价值行（2026-09-16 子安口径）：默认视图展示所有会话，低
+    // 价值行带标注；任务三桶只数正常行（寒暄任务行已移入无需沉淀）。
+    const filtered = route.captureBucket === 'excluded' ? excludedRows
+      : route.captureBucket
+        ? normalRows.filter((row) => row.capture && bucketOf(row.capture) === route.captureBucket)
+        : rows;
+    // chip 计数与列表行同口径（2026-09-16 修复）：列表每会话只显示最相关
+    // 一条任务，同一会话的多次整理（重试/夜间多轮）会让后端 buckets 的记录
+    // 数大于列表行数——chip 必须数 rows，点开筛选看到的行数才和数字对得上。
+    const rowBucketCounts = { attention: 0, active: 0, silent: 0, done: 0 };
+    for (const row of normalRows) if (row.capture) rowBucketCounts[bucketOf(row.capture)] += 1;
     // 批量入口口径：只作用于「当前已加载且该动作在 actions 里」的行——立即
     // 整理每条都是一次模型额度消耗，绝不按后端计数隐式扩大范围。
     const retryableIds = (Array.isArray(S.captures) ? S.captures : []).filter((capture) => (capture.actions || []).includes('retry'));
@@ -795,9 +824,26 @@
     const listLimit = S.organizeListExpanded ? filtered.length : Math.min(5, filtered.length);
     const visibleRows = filtered.slice(0, listLimit);
 
-    const rowHtml = ({ conv, capture }) => {
+    const rowHtml = (row) => {
+      const { conv, capture } = row;
       const convTime = fmtDate(conv.updatedAt || conv.createdAt);
+      const excluded = isExcludedRow(row);
+      // 低价值行的原因 chip（2026-09-16）：寒暄/失败分别注明。
+      const excludedTag = excluded
+        ? (conv.chatLike
+          ? chip(T('cognition.capture_excluded_chatty', '纯寒暄'))
+          : chip(T('cognition.capture_excluded_failed', '未得到回复')))
+        : '';
       if (!capture) {
+        // 低价值无任务行：标题可点回看会话内容，「开始整理」位置改为
+        // 「无需整理」提示（2026-09-16 子安口径：内容可看，但不再给整理入口）。
+        if (excluded) {
+          return `
+          <div class="ca-row is-flat">
+            <div class="ca-row-main"><div class="ca-row-title ca-row-link" data-act="open-conversation" data-id="${esc(conv.id)}" ${roleBtn()} title="${esc(T('cognition.capture_action_open_conversation', '打开会话'))}">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
+            <div class="ca-row-side">${excludedTag}${chip(T('cognition.capture_excluded_action_hint', '无需整理'), 'amber')}</div>
+          </div>`;
+        }
         return `
         <div class="ca-row is-flat">
           <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
@@ -819,7 +865,7 @@
         : '';
       const sideHtml = isRunning(capture)
         ? btn(T('cognition.organize_active_label', '整理中'), '', { small: true, primary: true, disabled: true })
-        : `${chip(
+        : `${excludedTag}${chip(
           vocab ? vocab.captureDisplayStatusText(capture.displayStatus) : String(capture.displayStatus || ''),
           capture.displayStatus === 'failed' ? 'red' : (capture.displayStatus === 'review_ready' || capture.displayStatus === 'completed') ? 'green' : 'amber',
         )}${primaryAction}`;
@@ -830,10 +876,11 @@
         </div>`;
     };
 
-    const chips = [['', T('common.all', '全部')], ['attention', null], ['active', null], ['done', null]]
+    const chips = [['', T('common.all', '全部')], ['attention', null], ['active', null], ['done', null],
+      ...(excludedRows.length ? [['excluded', null]] : [])]
       .map(([id, label]) => {
         const text = label || (vocab ? vocab.captureBucketText(id) : id);
-        const count = id === '' ? (buckets.attention + buckets.active + buckets.silent + buckets.done) : buckets[id];
+        const count = id === '' ? rows.length : id === 'excluded' ? excludedRows.length : rowBucketCounts[id];
         return btn(`${text} ${count}`, 'capture-filter', {
           id,
           className: `ca-chip ca-chip-btn${String(route.captureBucket || '') === id ? ' is-green' : ''}`,
@@ -866,9 +913,10 @@
     <div class="ca-card">${visibleRows.length ? visibleRows.map(rowHtml).join('') : `<div class="ca-note">${esc(route.captureBucket
       ? T('cognition.capture_log_empty_filtered', '这个筛选下没有整理记录')
       : T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}
-      ${!route.captureBucket && rows.length > 5 ? `<div class="ca-line ca-line-center">${btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${rows.length} 个会话`, { n: String(rows.length) }), 'toggle-organize-list', { small: true })}</div>` : ''}
+      ${conversationItems.length >= 100 ? `<div class="ca-sub">${esc(T('cognition.capture_sources_truncated', '仅显示最近 100 个会话（来源拉取上限）'))}</div>` : ''}
+      ${filtered.length > 5 ? `<div class="ca-line ca-line-center">${btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${filtered.length} 个会话`, { n: String(filtered.length) }), 'toggle-organize-list', { small: true })}</div>` : ''}
     </div>
-    <p class="ca-footnote">${esc(T('cognition.capture_bucket_scope_note', '「需要我处理」包括待确认与被暂停的记录，比「待我处理」页只数失败的口径宽；「无留存内容」的记录只在「全部」里出现。'))}</p>`;
+    <p class="ca-footnote">${esc(T('cognition.capture_bucket_scope_note', '「需要我处理」包括待确认与被暂停的记录，比「待我处理」页只数失败的口径宽；「无留存内容」的记录只在「全部」里出现；「无需沉淀」收纳纯寒暄（含整理过的）与未得到回复的会话，点标题可回看内容。'))}</p>`;
   }
 
   /* 整理详情（2026-09-15 新增）：一条整理任务的完整执行情况——状态与当前

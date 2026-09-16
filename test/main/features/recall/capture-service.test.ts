@@ -116,12 +116,16 @@ const reviewableCandidateContract = {
   suggestedAction: 'create' as const,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-capture-'));
   previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  // 2026-09-16 B3：默认档已改为 manual，本套件的 quiet-wait 用例此前吃
+  // 旧默认 smart——显式恢复该环境，避免与新默认耦合。
+  const captureSettings = await import('../../../../src/main/features/recall/capture-settings');
+  await captureSettings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'smart' });
   mocks.configured = true;
   mocks.oauthExpired = null;
   mocks.getMessages.mockReset().mockResolvedValue(messages);
@@ -137,7 +141,9 @@ beforeEach(() => {
     status: 'pending_review',
     ...input,
   }));
-  mocks.readCandidate.mockRejectedValue(new Error('candidate not found'));
+  // 与 candidateUnavailableForWorkflow 认定的"候选不可读"消息一致（2026-09-16
+  // A2：终态固化在 run 内读候选，mock 消息不匹配会被当成真错误）。
+  mocks.readCandidate.mockRejectedValue(new Error('recall candidate not found'));
   mocks.readHandoffReceipt.mockReset().mockResolvedValue(undefined);
   mocks.readAbilityAsset.mockReset().mockRejectedValue(new Error('recall ability asset not found'));
   mocks.promoteCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
@@ -982,6 +988,11 @@ describe('Recall conversation capture', () => {
     });
     const capture = await captureModule();
     const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    // 固化快照在终态前读候选计数：提供真实候选（pending_review），避免吃
+    // 全局 reject mock 算成 missing。
+    mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => (
+      { id: candidateId, status: 'pending_review' }
+    ));
     await capture.runRecallCaptureNow('capture-user', queued!.id);
     const completed = await capture.runRecallCapture('capture-user', queued!.id);
 
@@ -1031,6 +1042,8 @@ describe('Recall conversation capture', () => {
       durationMs: expect.any(Number),
       modelUsage: { inputTokens: 120, outputTokens: 30, totalTokens: 150 },
     });
+    // 快照只固化 completed 落点（A2）：review_ready 是活的等待区，不固化。
+    expect(completed.reviewSnapshot).toBeUndefined();
     expect(mocks.autoApplyCandidate).not.toHaveBeenCalled();
     expect(completed.stage).toBeUndefined();
     const persisted = await capture.readRecallCapture('capture-user', queued!.id);
@@ -2261,6 +2274,32 @@ describe('Recall conversation capture', () => {
 
     await expect(capture.retryRecallCapture('capture-user', queued!.id))
       .resolves.toMatchObject({ status: 'queued', attempt: 2, autoWrite: true });
+  });
+
+  it('snapshot freezes terminal counts: post-terminal candidate drift never flips a completed capture（2026-09-16 A2）', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    // 终态时点：唯一候选被拒绝 → pending 0，任务 completed，快照固化。
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'completed',
+      visibility: 'visible',
+      screeningStatus: 'qualified',
+      candidateIds: ['cand-x'],
+      reviewSnapshot: { total: 1, pending: 0, deferred: 0, promoted: 0, rejected: 1, missing: 0 },
+    }));
+    // 读取时点漂移：候选被 defer 冷却过期归一回 pending_review——无快照的
+    // 现算口径会把 completed 翻成 failed（状态随时间自动劣化）。
+    mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => (
+      { id: candidateId, status: 'pending_review' }
+    ));
+
+    const page = await capture.queryRecallCaptures('capture-user', { statuses: ['completed'] });
+    expect(page.captures[0]).toMatchObject({
+      workflowStatus: 'completed',
+      reviewSummary: { total: 1, pending: 0, deferred: 0, promoted: 0, rejected: 1, missing: 0 },
+    });
   });
 
   it('keeps pending candidates in review while deferred candidates stay quiet', async () => {
