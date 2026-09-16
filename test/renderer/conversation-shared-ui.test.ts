@@ -5,7 +5,7 @@ import * as path from 'node:path';
 const source = fs.readFileSync(
   path.resolve(__dirname, '../../src/renderer/modules/conversation.js'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 function functionSource(name: string, nextName: string): string {
   return source.slice(source.indexOf(`function ${name}(`), source.indexOf(`function ${nextName}(`));
