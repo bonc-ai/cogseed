@@ -20,9 +20,6 @@ const legacyRawControlBaseline: Record<string, number> = {
   'bash_permission.js': 5,
   'boot.js': 1,
   'chat-artifact.js': 1,
-  // 2026-09-15 认知资产重构新模块：时间输入与 switch 两处 raw control 冻结
-  // 为现状基线，迁移到共享原语前不得再增。
-  'cognition-assets/views.js': 2,
   'chat-file-viewer.js': 3,
   'chat-input-form.js': 2,
   'chat-lightbox.js': 3,
