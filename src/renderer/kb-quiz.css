@@ -29,8 +29,10 @@
 .kb-qz-panel {
   display: flex;
   flex-direction: column;
-  width: min(760px, 94vw);
-  max-height: min(88vh, 900px);
+  /* 宽度自适应但**不占满大屏**：常规 620px 上限，长题干靠"放大"再铺开 */
+  width: min(620px, 92vw);
+  min-height: 260px;
+  max-height: min(86vh, 860px);
   background: var(--color-white);
   border: 1px solid var(--kb-border);
   border-radius: var(--radius-3);
@@ -40,10 +42,10 @@
   transition: width 0.16s ease-out, max-height 0.16s ease-out;
 }
 
-/* 「放大」：把答题面铺到接近整屏，方便长题干阅读 */
+/* 「放大」：把答题面铺到接近整屏，方便长题干/逐题回顾 */
 .kb-qz-panel.is-max {
-  width: min(1180px, 98vw);
-  max-height: 96vh;
+  width: min(1080px, 96vw);
+  max-height: 94vh;
 }
 
 .kb-qz-head {
@@ -55,6 +57,42 @@
   background: var(--color-white);
   flex-wrap: wrap;
   position: relative;
+}
+
+/* 顶部进度条：让"做完整套题"这件事可见（不只是"第 n/N 题"文字） */
+.kb-qz-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px var(--space-4) 10px;
+  border-bottom: 1px solid var(--kb-border);
+  background: var(--color-white);
+}
+
+.kb-qz-progress-track {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--kb-hover);
+  overflow: hidden;
+}
+
+.kb-qz-progress-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: var(--radius-pill);
+  background: var(--kb-green);
+  transition: width 0.18s ease-out;
+}
+
+/* 进度文字是"当前状态"，比题型标签重一档 */
+.kb-qz-progress-text {
+  flex: none;
+  font-size: var(--font-size-2);
+  font-weight: 600;
+  color: var(--kb-text2);
+  white-space: nowrap;
 }
 
 .kb-qz-head-ico { display: inline-flex; color: var(--kb-green); }
@@ -140,6 +178,35 @@
   cursor: pointer;
 }
 
+/* 分组标题 + 当前项标记 + 快捷键说明（更多菜单） */
+.kb-qz-menu-head {
+  padding: 6px 10px 2px;
+  font-size: var(--font-size-1);
+  color: var(--kb-text3);
+}
+
+.kb-qz-menu-item.is-active .kb-qz-menu-label { color: var(--kb-green); font-weight: 600; }
+.kb-qz-menu-item.is-active::after { content: '✓'; margin-left: auto; color: var(--kb-green); }
+.kb-qz-menu-item.is-disabled { color: var(--kb-text3); cursor: default; }
+.kb-qz-menu-item.is-disabled:hover { background: transparent; }
+.kb-qz-menu-tag {
+  margin-left: auto;
+  font-size: var(--font-size-1);
+  color: var(--kb-amber);
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+}
+.kb-qz-menu-label { flex: 1; min-width: 0; }
+.kb-qz-menu-keys {
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--kb-border);
+  margin-top: 4px;
+  font-size: var(--font-size-1);
+  color: var(--kb-text3);
+  line-height: 1.6;
+}
+
 .kb-qz-menu-item:hover,
 .kb-qz-source-row:hover { background: var(--kb-hover); color: var(--kb-text); }
 .kb-qz-menu-icon { width: 15px; height: 15px; }
@@ -157,24 +224,27 @@
   margin-bottom: var(--space-2);
 }
 
+/* 题干：主文字，上下留白拉开与"进度/选项"的距离（此前紧贴题号，长题干读着累） */
 .kb-qz-question {
   font-size: var(--font-size-5);
   font-weight: 600;
   color: var(--kb-text);
-  line-height: 1.6;
-  margin-bottom: var(--space-4);
+  line-height: 1.65;
+  margin: var(--space-4) 0 var(--space-5);
+  letter-spacing: 0.1px;
 }
 
-.kb-qz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+/* 选项之间留出可点区域与呼吸感 */
+.kb-qz-options { display: flex; flex-direction: column; gap: 10px; }
 
 /* 选项：未提交前不透露对错（NotebookLM 是选完点「下一个」才判） */
 .kb-qz-option {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: var(--space-3);
   width: 100%;
   text-align: left;
-  padding: 10px 12px;
+  padding: 11px 14px;
   border: 1px solid var(--kb-border);
   border-radius: var(--radius-2);
   background: var(--color-white);
@@ -182,25 +252,38 @@
   font-size: var(--font-size-4);
   line-height: 1.5;
   cursor: pointer;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out;
 }
 
-.kb-qz-option:hover { background: var(--kb-hover); }
+/* hover：整行浅底（点哪儿都算这一项，命中率更高） */
+.kb-qz-option:hover { background: var(--kb-hover); border-color: var(--kb-blue-line); }
+
+/* 选中：字母圈填充 + 行高亮（点完立刻看得见，不必等提交） */
 .kb-qz-option.is-selected {
   border-color: var(--kb-green);
   background: var(--kb-accent-weak);
 }
 
+/* 即时解析模式下已提交：正确项绿、选错的项红 */
+.kb-qz-option.is-right { border-color: var(--kb-green); background: var(--status-success-bg); }
+.kb-qz-option.is-wrong { border-color: var(--kb-red); background: var(--color-warning-soft); }
+.kb-qz-option:disabled { cursor: default; }
+
 .kb-qz-option-letter {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   border-radius: var(--radius-pill);
-  background: var(--kb-hover);
+  border: 1px solid var(--kb-border);
+  background: var(--color-white);
   color: var(--kb-text2);
   font-size: var(--font-size-2);
+  font-weight: 600;
 }
+
+.kb-qz-option:hover .kb-qz-option-letter { border-color: var(--kb-green); color: var(--kb-green); }
 
 .kb-qz-option.is-selected .kb-qz-option-letter {
   background: var(--kb-green);
@@ -258,27 +341,54 @@
   margin-bottom: var(--space-2);
 }
 
+/* 原文依据 = 辅助信息：小字、浅灰、链接带下划线（一眼看出可点） */
 .kb-qz-qsource {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--space-2);
-  margin-top: var(--space-3);
-  font-size: var(--font-size-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--kb-border);
+  font-size: var(--font-size-1);
   color: var(--kb-text3);
 }
+
+.kb-qz-qsource-label { flex: none; color: var(--kb-text3); }
+.kb-qz-qsource-none { color: var(--kb-text3); }
 
 .kb-qz-qsource-link {
   border: 0;
   background: transparent;
-  color: var(--kb-green);
-  font-size: var(--font-size-2);
+  color: var(--kb-text2);
+  font-size: var(--font-size-1);
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
-  max-width: 420px;
+  text-underline-offset: 2px;
+  max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.kb-qz-qsource-link:hover { color: var(--kb-green); }
+
+.kb-qz-qsource-hint { flex: none; color: var(--kb-text3); opacity: 0.7; }
+
+/* hover 预览：不离开测验就能核对原文片段 */
+.kb-qz-snippet-pop {
+  position: fixed;
+  z-index: var(--z-popover);
+  padding: 10px 12px;
+  border: 1px solid var(--kb-border);
+  border-radius: var(--radius-2);
+  background: var(--color-white);
+  box-shadow: 0 12px 36px color-mix(in srgb, var(--color-overlay-ink) 18%, transparent);
+  font-size: var(--font-size-2);
+  line-height: 1.6;
+  color: var(--kb-text2);
+  max-height: 220px;
+  overflow: auto;
 }
 
 .kb-qz-foot {
@@ -290,6 +400,21 @@
   background: var(--color-white);
   flex-wrap: wrap;
 }
+
+/* 次要操作（提示/跳过/查看/修订）：浅色文字按钮，不与主按钮抢注意力 */
+.kb-qz-textbtn {
+  border: 0;
+  background: transparent;
+  color: var(--kb-text3);
+  font-size: var(--font-size-3);
+  padding: 6px 8px;
+  border-radius: var(--radius-1);
+  cursor: pointer;
+}
+
+.kb-qz-textbtn:hover { background: var(--kb-hover); color: var(--kb-text2); }
+.kb-qz-textbtn:disabled { color: var(--kb-text3); cursor: not-allowed; background: transparent; }
+.kb-qz-hint-more { align-self: flex-start; flex: none; }
 
 .kb-qz-btn {
   height: var(--control-height);
@@ -319,17 +444,30 @@
 .kb-qz-selfmark-btn.is-right { border-color: var(--kb-green); color: var(--kb-green); }
 .kb-qz-selfmark-btn.is-wrong { border-color: var(--kb-red); color: var(--kb-red); }
 
-.kb-qz-rating { margin-left: auto; display: inline-flex; gap: var(--space-1); align-items: center; }
+/* 每题的工具区（修订 + 评分）靠右，用小图标而不是常驻大按钮 */
+.kb-qz-qtools {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.kb-qz-rate { display: inline-flex; gap: 2px; align-items: center; }
 
 .kb-qz-rate-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
   border: 0;
   background: transparent;
   color: var(--kb-text3);
-  font-size: var(--font-size-1);
   cursor: pointer;
-  padding: 4px 6px;
   border-radius: var(--radius-1);
 }
+
+.kb-qz-rate-icon { display: inline-flex; }
+.kb-qz-rate-icon svg { width: 14px; height: 14px; }
 
 .kb-qz-rate-btn:hover { background: var(--kb-hover); color: var(--kb-text2); }
 .kb-qz-rate-btn.is-active { color: var(--kb-green); background: var(--kb-accent-weak); font-weight: 600; }
@@ -445,4 +583,106 @@
   .kb-qz-title { max-width: 100%; }
   .kb-qz-body { padding: var(--space-4); }
   .kb-qz-rating { margin-left: 0; }
+}
+
+/* ── 即时解析：揭晓块 ── */
+.kb-qz-reveal {
+  margin-top: var(--space-4);
+  padding: 12px 14px;
+  border: 1px solid var(--kb-border);
+  border-left: 3px solid var(--kb-green);
+  border-radius: var(--radius-2);
+  background: var(--surface-subtle);
+}
+
+.kb-qz-reveal-status {
+  font-size: var(--font-size-2);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+
+.kb-qz-reveal-status.is-right { color: var(--color-success); }
+.kb-qz-reveal-status.is-wrong { color: var(--kb-red); }
+
+/* ── 错题重练的模式提示条 ── */
+.kb-qz-mode-flag {
+  font-size: var(--font-size-2);
+  color: var(--kb-amber);
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-2);
+  padding: 6px 10px;
+  margin-bottom: var(--space-3);
+}
+
+/* ── 防误关：确认条 ── */
+.kb-qz-confirm {
+  padding: var(--space-4);
+  border: 1px solid var(--kb-border);
+  border-radius: var(--radius-3);
+  background: var(--surface-subtle);
+}
+
+.kb-qz-confirm-title {
+  font-size: var(--font-size-4);
+  font-weight: 600;
+  color: var(--kb-text);
+  margin-bottom: var(--space-2);
+}
+
+.kb-qz-confirm-note {
+  font-size: var(--font-size-2);
+  color: var(--kb-text3);
+  line-height: 1.7;
+}
+
+/* ── 题目现场修订 ── */
+.kb-qz-editor {
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--kb-border);
+  border-radius: var(--radius-3);
+  background: var(--surface-subtle);
+}
+
+.kb-qz-editor-title {
+  font-size: var(--font-size-3);
+  font-weight: 600;
+  color: var(--kb-text);
+  margin-bottom: var(--space-2);
+}
+
+.kb-qz-editor-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: var(--space-2);
+  padding: 8px 10px;
+  border: 1px solid var(--kb-border);
+  border-radius: var(--radius-2);
+  font-size: var(--font-size-3);
+  color: var(--kb-text);
+  background: var(--color-white);
+  resize: vertical;
+}
+
+.kb-qz-editor-input:focus { outline: none; border-color: var(--kb-green); }
+
+.kb-qz-editor-note {
+  font-size: var(--font-size-1);
+  color: var(--kb-text3);
+  line-height: 1.6;
+  margin-bottom: var(--space-2);
+}
+
+.kb-qz-editor-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
+
+/* ── 窄屏：压缩内边距与标题，避免文字横向挤压 ── */
+@media (max-width: 640px) {
+  .kb-qz-overlay { padding: var(--space-2); }
+  .kb-qz-panel { width: 100%; max-height: 94vh; }
+  .kb-qz-title { max-width: 100%; }
+  .kb-qz-body { padding: var(--space-3); }
+  .kb-qz-head { padding: 8px var(--space-3); }
+  .kb-qz-progress { padding: 6px var(--space-3) 8px; }
+  .kb-qz-question { margin: var(--space-3) 0 var(--space-4); }
+  .kb-qz-qtools { margin-left: 0; }
 }

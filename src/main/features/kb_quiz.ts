@@ -291,6 +291,75 @@ export async function kbQuizHint(
   }
 }
 
+
+/**
+ * 二级提示：**材料片段**（不打模型，离线也能用）。
+ *
+ * 一级提示（`kbQuizHint`）是模型给的"该看哪一节"；用户还想直接看原文时，
+ * 不必离开测验——这里从该题来源文档的要点里挑**和题干重合度最高**的一段。
+ * 打分刻意朴素可解释：题干的关键词（2 字以上的中英词/字）在候选行里的命中数
+ * 与命中密度，同分取靠前的一段；选不出来就如实返回 ok:false。
+ */
+export function pickSnippet(
+  lines: string[],
+  question: string,
+  opts: { maxChars?: number } = {},
+): { snippet: string; line: number } | null {
+  const maxChars = Math.max(80, Math.min(1200, Math.trunc(Number(opts?.maxChars) || 320)));
+  const candidates = (Array.isArray(lines) ? lines : [])
+    .map((raw) => String(raw || '').trim())
+    .filter(Boolean);
+  if (!candidates.length) return null;
+  const terms = questionTerms(question);
+  if (!terms.length) return { snippet: candidates[0].slice(0, maxChars), line: 0 };
+
+  let best = { score: -1, line: 0 };
+  candidates.forEach((text, idx) => {
+    const lower = text.toLowerCase();
+    let hits = 0;
+    for (const term of terms) if (lower.includes(term)) hits += 1;
+    // 命中数为主、命中密度（命中/长度）为辅，避免"长段落天然占优"
+    const density = hits / Math.max(40, text.length);
+    const score = hits + density * 10;
+    if (score > best.score) best = { score, line: idx };
+  });
+  if (best.score <= 0) return null;
+  return { snippet: candidates[best.line].slice(0, maxChars), line: best.line };
+}
+
+/** 题干关键词：去标点后按 2 字以上切分（中文按 2 字滑窗，英文按词）。 */
+export function questionTerms(question: string): string[] {
+  const text = String(question || '').toLowerCase();
+  const out = new Set<string>();
+  for (const word of text.match(/[a-z0-9]{2,}/g) || []) out.add(word);
+  const cjk = text.replace(/[^\u4e00-\u9fff]/g, '');
+  for (let i = 0; i + 2 <= cjk.length; i += 1) out.add(cjk.slice(i, i + 2));
+  return [...out].slice(0, 40);
+}
+
+export interface KbQuizSnippetResult {
+  snippet: string;
+  /** 片段来自该文档抽样要点的第几段（0-based，-1 = 没定位到）。 */
+  line: number;
+  source: string;
+  ok: boolean;
+}
+
+/** 取某题来源文档里与题干最相关的一段（供"查看原文片段"用）。 */
+export function kbQuizSnippet(
+  userId: string,
+  opts: { question?: string; source?: string | null; dir?: string | null; spaceId?: string | null; maxChars?: number },
+): KbQuizSnippetResult {
+  const question = String(opts?.question || '').trim();
+  const docName = String(opts?.source || '').trim();
+  const all = collectReadyDocLines(userId, { dir: opts?.dir || null, spaceId: opts?.spaceId || null });
+  const scoped = docName ? all.filter((l) => l.includes(docName)) : all;
+  const lines = (scoped.length ? scoped : all).flatMap((l) => l.split(/\n{2,}/));
+  const picked = pickSnippet(lines, question, { maxChars: opts?.maxChars });
+  if (!picked) return { snippet: '', line: -1, source: docName, ok: false };
+  return { snippet: picked.snippet, line: picked.line, source: docName, ok: true };
+}
+
 function trimCache(): void {
   if (cache.size <= CACHE_MAX) return;
   const first = cache.keys().next().value;
@@ -384,6 +453,8 @@ export const _internals = {
   parseQuizJson,
   parseHintJson,
   collectQuizSources,
+  pickSnippet,
+  questionTerms,
   resolveAnswer,
   fingerprint,
   normalizeAnswerText,

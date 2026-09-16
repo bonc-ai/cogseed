@@ -4331,8 +4331,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return res;
   },
 
-  // 测验「提示」：只给文档内的线索、不给答案（单题小请求，30s 预算）。
-  'kb.quiz.hint': async ({ question, options, type, source, dir, spaceId, fingerprint, qid }, ctx) => {
+  // 测验「提示」两级：
+  //   level 1（默认）—— 文档内线索，不给答案（单题小请求，30s 预算）；
+  //   level 2        —— **材料片段**：直接从来源文档要点里挑与题干最相关的一段，
+  //                     不打模型，因此离线/未配模型也能给，且是逐字原文。
+  'kb.quiz.hint': async ({ question, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
+    if (Number(level) === 2) {
+      const snip = kbQuiz.kbQuizSnippet(ctx.userId, {
+        question: typeof question === 'string' ? question : '',
+        source: typeof source === 'string' && source ? source : null,
+        dir: typeof dir === 'string' && dir ? dir : null,
+        spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      });
+      return { level: 2, snippet: snip.snippet, line: snip.line, covered: snip.ok, source: 'material', reason: snip.ok ? undefined : 'empty' };
+    }
     const res = await kbQuiz.kbQuizHint(ctx.userId, {
       question: typeof question === 'string' ? question : '',
       options: Array.isArray(options) ? options.map((o: unknown) => String(o ?? '')) : [],
@@ -4358,6 +4370,31 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       },
     });
     return res;
+  },
+
+  // 测验导出 PDF（线下打印/发团队）：与脑图导出同一条 printToPDF 链路，只是 A4 版式。
+  'kb.quiz.exportPdf': async ({ html, title }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const base = String(title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出测验 PDF',
+        defaultPath: `${base}-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      log.warn('kb quiz export pdf failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false };
+    }
   },
 
   // 测验评分反馈（「优质内容 / 劣质内容」）：只写本机 JSONL 台账，不上报、不联网。
