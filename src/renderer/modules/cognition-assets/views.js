@@ -142,21 +142,31 @@
     return refs.filter(sourceRefUnavailable).length * 2 > refs.length;
   }
   const evidenceChip = (ref) => {
-    const unavailable = sourceRefUnavailable(ref);
-    // KSTAR 任务复盘引用（2026-09-17 资产侧溯源）：显示任务目标摘要、可点
-    // 开复盘详情——此前只有内部 id 加占位标题，KSTAR 血统确认后不可见。
+    // 证据条目按类型说人话（2026-09-17，子安"看不懂"口径）：此前裸问句
+    // （任务目标摘要）、裸会话名、以及两条「来源记录不可用」并排——没有
+    // 一条说得出自己是什么。现在每类带类型前缀；"不可用"只在补不出任何
+    // 类型时兜底。
     const refId = String(ref.id || '');
-    if (!unavailable && refId.startsWith('kse-')) {
+    const kind = String(ref.kind || '');
+    if (refId.startsWith('kse-')) {
       const summary = (S.kstarSummaries && S.kstarSummaries[refId]) || null;
-      const label = summary && summary.goal
-        ? summary.goal.slice(0, 24)
-        : String(ref.title || T('cognition.kstar_episode_generic', 'KSTAR 复盘记录')).trim();
+      const goal = summary && summary.goal ? String(summary.goal).slice(0, 24) : '';
+      const label = T('cognition.evidence_task_review', '任务复盘：{title}', {
+        title: goal || T('cognition.evidence_task_review_generic', '一次任务'),
+      });
       return `<span class="ca-chip ca-chip-link is-line" data-act="open-kstar-episode" data-id="${esc(refId)}" ${roleBtn()} title="${esc(T('cognition.kstar_episode_open_hint', '查看这次任务的复盘'))}">${esc(label)}</span>`;
     }
-    const label = unavailable
-      ? T('cognition.source_unavailable_label', '来源记录不可用')
-      : String(ref.title || ref.conversationTitle || ref.name || sourceIndex().get(String(ref.id || ''))?.title || '').trim();
-    return chip(label || T('cognition.source_deleted', '来源已删除'), unavailable ? 'amber' : 'line');
+    if (kind === 'user_teaching_signal') return chip(T('cognition.evidence_teaching', '你的一次明确表态'), 'line');
+    if (kind === 'conversation') {
+      if (String(ref.subtype || '') === 'message') return chip(T('cognition.evidence_message', '对话里的一条消息'), 'line');
+      const name = String(ref.title || ref.conversationTitle || sourceIndex().get(refId)?.title || '').trim()
+        || String(conversationNames().get(refId) || '');
+      return chip(name
+        ? T('cognition.evidence_conversation_named', '对话：《{name}》', { name })
+        : T('cognition.evidence_conversation_generic', '一段对话'), 'line');
+    }
+    const loose = String(ref.title || ref.conversationTitle || ref.name || sourceIndex().get(refId)?.title || '').trim();
+    return chip(loose || T('cognition.evidence_fallback', '来源记录'), 'line');
   };
 
   /** KSTAR 复盘详情块（2026-09-17）：点开证据 chip 就地展开那次任务的
@@ -692,7 +702,7 @@
           <div><div class="ca-k">${esc(T('cognition.asset_meta_updated', '最近更新'))}</div><div class="ca-v">${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div></div>
         </div>
       </details>
-      ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div></details>` : ''}
+      ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><p class="ca-note">${esc(T('cognition.evidence_lead', '这条资产是从下面这些真实材料里总结出来的；点「任务复盘」可查看当时的经过。'))}</p><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div></details>` : ''}
       ${kstarEpisodeSection(route)}
       ${assetVersionsSection(asset)}
       ${assetUsageSection(asset, route)}
