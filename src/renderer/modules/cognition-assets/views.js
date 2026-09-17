@@ -173,6 +173,7 @@
         ${row(T('cognition.review_signal_actual', '实际'), state.review && state.review.actualResult)}
         ${row(T('cognition.review_signal_outcome', '结果'), outcomeText)}
         ${row(T('cognition.review_signal_attribution', '归因'), state.review && state.review.attribution)}
+        ${row(T('cognition.kstar_lesson_label', '沉淀的经验'), state.review && state.review.lesson)}
       </div>
       <p class="ca-note">${esc(String(state.episode && state.episode.goal || ''))}</p>
       ${btn(T('common.close', '收起'), 'open-kstar-episode', { id: '', small: true })}

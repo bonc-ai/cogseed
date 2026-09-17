@@ -4161,6 +4161,7 @@
   "cognition.kstar_episode_open_hint": "View this task review",
   "cognition.kstar_episode_loading": "Loading this task review…",
   "cognition.kstar_episode_detail_title": "Task review detail",
+  "cognition.kstar_lesson_label": "Lesson precipitated",
   "cognition.candidate_current_version": "Current version (v{n})",
   "cognition.candidate_defer_action": "Later",
   "cognition.candidate_evidence_ok": "Evidence sufficient",

@@ -4164,6 +4164,7 @@
   "cognition.kstar_episode_open_hint": "查看这次任务的复盘",
   "cognition.kstar_episode_loading": "正在读取这次任务的复盘…",
   "cognition.kstar_episode_detail_title": "任务复盘详情",
+  "cognition.kstar_lesson_label": "沉淀的经验",
   "cognition.candidate_current_version": "当前版本（v{n}）",
   "cognition.candidate_defer_action": "稍后处理",
   "cognition.candidate_evidence_ok": "证据充足",

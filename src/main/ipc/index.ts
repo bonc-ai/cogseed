@@ -2824,6 +2824,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       const record = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
       if (record) {
         review = {
+          ...(record.lesson !== undefined && String(record.lesson || '').trim() ? { lesson: String(record.lesson).slice(0, 600) } : {}),
           ...(record.expectedResult !== undefined ? { expectedResult: String(record.expectedResult).slice(0, 400) } : {}),
           ...(record.actualResult !== undefined ? { actualResult: String(record.actualResult).slice(0, 400) } : {}),
           ...(record.outcome !== undefined ? { outcome: String(record.outcome) } : {}),

@@ -3885,6 +3885,7 @@
   "cognition.kstar_episode_open_hint": "このタスクの振り返りを見る",
   "cognition.kstar_episode_loading": "タスクの振り返りを読み込み中…",
   "cognition.kstar_episode_detail_title": "タスク振り返り詳細",
+  "cognition.kstar_lesson_label": "沈殿した経験",
   "cognition.candidate_current_version": "現在のバージョン（v{n}）",
   "cognition.candidate_defer_action": "あとで",
   "cognition.candidate_evidence_ok": "証拠は十分",
