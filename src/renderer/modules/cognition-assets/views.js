@@ -141,7 +141,7 @@
       const summary = (S.kstarSummaries && S.kstarSummaries[refId]) || null;
       const label = summary && summary.goal
         ? summary.goal.slice(0, 24)
-        : String(ref.title || T('cognition.kstar_episode_generic', '任务复盘记录')).trim();
+        : String(ref.title || T('cognition.kstar_episode_generic', 'KSTAR 复盘记录')).trim();
       return `<span class="ca-chip ca-chip-link is-line" data-act="open-kstar-episode" data-id="${esc(refId)}" ${roleBtn()} title="${esc(T('cognition.kstar_episode_open_hint', '查看这次任务的复盘'))}">${esc(label)}</span>`;
     }
     const label = unavailable
@@ -167,7 +167,7 @@
     }[String((state.review && state.review.outcome) || '')] || '—';
     const row = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value).slice(0, 200))}</span></div>` : '';
     return `<div class="ca-sect">
-      <div class="ca-row-title">${esc(T('cognition.kstar_episode_detail_title', '任务复盘详情'))}</div>
+      <div class="ca-row-title">${esc(T('cognition.kstar_episode_detail_title', 'KSTAR 复盘详情'))}</div>
       <div class="ca-meta-row">
         ${row(T('cognition.review_signal_expected', '预期'), state.review && state.review.expectedResult)}
         ${row(T('cognition.review_signal_actual', '实际'), state.review && state.review.actualResult)}
@@ -181,15 +181,16 @@
   }
 
   const candidatePending = (candidate) => !!(candidate.capabilities && candidate.capabilities.countsAsPending);
-  /** 候选来源徽章（2026-09-16 KSTAR 融合）：三条产出线可辨——任务复盘
-   *  （learningSignal/learningProvenance）、偏好识别（source=preference_scan，
-   *  确定性扫描线）、会话整理（capture 线，无信号）。 */
+  /** 候选来源徽章（2026-09-16 KSTAR 融合）：三条产出线可辨——KSTAR 复盘
+   *  （learningSignal/learningProvenance）、KSTAR 偏好（source=preference_scan，
+   *  确定性扫描线）、会话整理（capture 线，无信号）。KSTAR 两条线的徽章
+   *  文案必须带 "KSTAR" 前缀（子安口径：用户可辨，不接受裸"任务复盘"）。 */
   function candidateSourceBadge(candidate) {
     const signal = candidate.learningSignal;
     if (signal && String(signal.source || '') === 'preference_scan') {
-      return chip(T('cognition.source_pref_scan', '偏好识别'));
+      return chip(T('cognition.source_pref_scan', 'KSTAR 偏好'));
     }
-    if (signal || candidate.learningProvenance) return chip(T('cognition.source_kstar_review', '任务复盘'));
+    if (signal || candidate.learningProvenance) return chip(T('cognition.source_kstar_review', 'KSTAR 复盘'));
     return chip(T('cognition.source_capture', '会话整理'));
   }
   /** KSTAR 候选的复盘依据块（2026-09-16）：预期/实际/结果四行——知道"这条
@@ -491,9 +492,9 @@
         ? String(asset.learningSignal.source)
         : '';
     const originText = kstarSource === 'preference_scan'
-      ? T('cognition.asset_origin_pref_scan', '来自偏好识别')
+      ? T('cognition.asset_origin_pref_scan', '来自 KSTAR 偏好')
       : kstarSource
-        ? T('cognition.asset_origin_kstar', '来自任务复盘')
+        ? T('cognition.asset_origin_kstar', '来自 KSTAR 复盘')
         : {
         user_confirmed: T('cognition.asset_origin_user', '你确认的'),
         user_confirmed_unverified: T('cognition.asset_origin_user', '你确认的'),

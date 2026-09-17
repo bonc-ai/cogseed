@@ -812,7 +812,7 @@ describe('整理详情页', () => {
     expect(reviewAligned).not.toContain('任务当时使用的是');
   });
 
-  it('来源徽章与复盘信号块（2026-09-16 KSTAR 前端融合）：任务复盘/偏好识别/会话整理', () => {
+  it('来源徽章与复盘信号块（2026-09-16 KSTAR 前端融合）：KSTAR 复盘/KSTAR 偏好/会话整理', () => {
     const mk = (over) => ({
       id: 'rcand-k', status: 'pending_review', suggestedType: 'rule', suggestedScope: 'general',
       judgment: '性能类提问需用真实日志做分层归因。', summary: '性能归因',
@@ -820,18 +820,18 @@ describe('整理详情页', () => {
       ...over,
     });
     const review = (cands) => renderPage('review', { sources: [conversationSources[0]], candidates: cands });
-    // KSTAR 复盘候选：列表行带「任务复盘」徽章；详情展开复盘信号块。
+    // KSTAR 复盘候选：列表行带「KSTAR 复盘」徽章；详情展开复盘信号块。
     const kstar = mk({ learningSignal: { deltaR: -1, deltaA: 'unknown', outcome: 'worse_than_expected', confidence: 0.95, source: 'review', expectedResult: '给出技术结论', actualResult: '模型调用失败' } });
     const listHtml = review([kstar]);
-    expect(listHtml).toContain('任务复盘');
+    expect(listHtml).toContain('KSTAR 复盘');
     const detailHtml = renderPage('review', { sources: [conversationSources[0]], candidates: [kstar] }, { candidateId: 'rcand-k' });
     expect(detailHtml).toContain('复盘依据');
     expect(detailHtml).toContain('给出技术结论');
     expect(detailHtml).toContain('模型调用失败');
     expect(detailHtml).toContain('比预期差');
-    // 偏好扫描候选：徽章「偏好识别」。
+    // 偏好扫描候选：徽章「KSTAR 偏好」。
     const pref = mk({ suggestedType: 'personal', learningSignal: { deltaR: 'unknown', deltaA: 'unknown', outcome: 'met_expected', confidence: 0.9, source: 'preference_scan' } });
-    expect(review([pref])).toContain('偏好识别');
+    expect(review([pref])).toContain('KSTAR 偏好');
     // capture 候选：徽章「会话整理」。
     expect(review([mk({})])).toContain('会话整理');
   });
@@ -843,13 +843,13 @@ describe('整理详情页', () => {
       learningProvenance: { projectionId: 'proj-x', episodeId: 'kse-y', attribution: 'execution_gap' },
     };
     const html = renderPage('overview', { assets: [asset], proofs: [], sources: [] }, { assetId: 'aa-src' });
-    expect(html).toContain('来自任务复盘');
+    expect(html).toContain('来自 KSTAR 复盘');
     // 无溯源数据的资产不出该行。
     const plain = renderPage('overview', { assets: [{ ...asset, id: 'aa-plain', learningProvenance: undefined }], proofs: [], sources: [] }, { assetId: 'aa-plain' });
-    expect(plain).not.toContain('来自任务复盘');
+    expect(plain).not.toContain('来自 KSTAR 复盘');
   });
 
-  it('KSTAR 资产侧溯源（2026-09-17）：偏好信号→来自偏好识别；kse 证据 chip 显目标摘要可点开复盘', () => {
+  it('KSTAR 资产侧溯源（2026-09-17）：偏好信号→来自 KSTAR 偏好；kse 证据 chip 显目标摘要可点开复盘', () => {
     // ① learningSignal.source=preference_scan 的溯源（偏好线不写 provenance）。
     const asset = {
       id: 'aa-k1', title: '不用比喻回答', type: 'personal', status: 'active',
@@ -861,7 +861,7 @@ describe('整理详情页', () => {
       assets: [asset], proofs: [], sources: [],
       kstarSummaries: { 'kse-abc123': { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？', status: 'completed', at: '' } },
     }, { assetId: 'aa-k1' });
-    expect(html).toContain('来自偏好识别');
+    expect(html).toContain('来自 KSTAR 偏好');
     expect(html).toContain('data-act="open-kstar-episode" data-id="kse-abc123"');
     expect(html).toContain('我想知道你的认知资产是怎么存的？'.slice(0, 12));
     // ② 点开态：复盘详情块（route.kstarEpisodeId + store.kstarEpisode）。
@@ -869,7 +869,7 @@ describe('整理详情页', () => {
       assets: [asset], proofs: [], sources: [], kstarSummaries: null,
       kstarEpisode: { episodeId: 'kse-abc123', episode: { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？' }, review: { expectedResult: '给出技术结论', actualResult: '调用失败', outcome: 'worse_than_expected', attribution: 'execution_gap', lesson: '查模型配置类问题时，应从运行日志交叉验证，不要依赖模型自述。' } },
     }, { assetId: 'aa-k1', kstarEpisodeId: 'kse-abc123' });
-    expect(open).toContain('任务复盘详情');
+    expect(open).toContain('KSTAR 复盘详情');
     expect(open).toContain('给出技术结论');
     expect(open).toContain('比预期差');
     expect(open).toContain('execution_gap');
