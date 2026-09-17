@@ -61,6 +61,7 @@
     "build:mac": "electron-builder --mac",
     "prebuild:win": "node scripts/ensure-sherpa-windows-runtime.cjs && node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
     "build:win": "electron-builder --win --x64 --publish never",
+    "verify:package:launch": "node scripts/verify-packaged-launch.cjs",
     "verify:package:stt:win": "node scripts/verify-packaged-stt-win.cjs"
   },
   "devDependencies": {

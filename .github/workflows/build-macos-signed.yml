@@ -46,6 +46,8 @@ jobs:
           npx json -I -f package.json -e 'this.build.files.push("!**/archive/**")'
           npx json -I -f package.json -e 'this.build.files.push("!**/*.tar.gz")'
           npx electron-builder --mac --publish never
+      - name: Packaged launch smoke
+        run: npm run verify:package:launch
       - uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS-manual
