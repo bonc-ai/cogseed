@@ -940,13 +940,18 @@ describe('整理详情页', () => {
   it('KSTAR 任务复盘折叠区（我的认知页底部）：行带目标可点开，空态不裸白', () => {
     const rows = renderPage('overview', {
       assets: [], proofs: [], sources: [],
+      // 与 kstar.episodes.list 真实返回同构：goal 平铺（此前只读 t.userGoal
+      // 全显示"（未记录目标）"，2026-09-17 子安实测抓出）；kse-2 留完整
+      // 记录形态验证兼容。
       kstarEpisodes: [
-        { id: 'kse-1', t: { userGoal: '查认知资产是怎么存的' }, updatedAt: '2026-09-17T10:00:00.000Z' },
-        { id: 'kse-2', t: {}, createdAt: '2026-09-16T09:00:00.000Z' },
+        { id: 'kse-1', goal: '查认知资产是怎么存的', createdAt: '2026-09-17T10:00:00.000Z' },
+        { id: 'kse-2', t: { userGoal: '命中既有候选是怎么一个逻辑' }, createdAt: '2026-09-16T09:00:00.000Z' },
+        { id: 'kse-3', t: {}, createdAt: '2026-09-16T08:00:00.000Z' },
       ],
     });
     expect(rows).toContain('KSTAR 任务复盘');
     expect(rows).toContain('查认知资产是怎么存的');
+    expect(rows).toContain('命中既有候选是怎么一个逻辑');
     expect(rows).toContain('data-act="open-kstar-episode" data-id="kse-1"');
     expect(rows).toContain('（未记录目标）');
     const empty = renderPage('overview', { assets: [], proofs: [], sources: [], kstarEpisodes: [] });

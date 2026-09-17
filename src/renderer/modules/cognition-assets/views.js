@@ -983,7 +983,10 @@
     const episodes = Array.isArray(S.kstarEpisodes) ? S.kstarEpisodes : [];
     const openId = String(route.kstarEpisodeId || '');
     const rows = (episodes || []).map((ep) => {
-      const goal = String((ep.t && ep.t.userGoal) || '').trim();
+      // goal 兼容两种形态：kstar.episodes.list 返回平铺 goal 字段（精简
+      // 摘要）；完整 episode 记录里在 t.userGoal——此前只读后者，列表
+      // 全显示"（未记录目标）"（2026-09-17 子安实测抓出）。
+      const goal = String(ep.goal || (ep.t && ep.t.userGoal) || '').trim();
       const at = String(ep.updatedAt || ep.createdAt || '');
       const isOpen = openId === String(ep.id || '');
       return `<div class="ca-row is-flat is-clickable" data-act="open-kstar-episode" data-id="${esc(String(ep.id || ''))}" ${roleBtn()}>
