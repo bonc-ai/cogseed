@@ -869,13 +869,19 @@ describe('整理详情页', () => {
       assets: [asset], proofs: [], sources: [], kstarSummaries: null,
       kstarEpisode: { episodeId: 'kse-abc123', episode: { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？' }, review: { expectedResult: '给出技术结论', actualResult: '调用失败', outcome: 'worse_than_expected', attribution: 'execution_gap', lesson: '查模型配置类问题时，应从运行日志交叉验证，不要依赖模型自述。' } },
     }, { assetId: 'aa-k1', kstarEpisodeId: 'kse-abc123' });
-    expect(open).toContain('KSTAR 复盘详情');
+    // 白话化（2026-09-17 二改）：标题/行标签人话，归因枚举翻译成"为什么"，
+    // 目标不再以尾注重复（当期任务行展示一次）。
+    expect(open).toContain('这次任务的经过');
+    expect(open).toContain('当时的任务');
     expect(open).toContain('给出技术结论');
     expect(open).toContain('比预期差');
-    expect(open).toContain('execution_gap');
+    expect(open).toContain('执行环节没做到位');
+    expect(open).not.toContain('execution_gap');
     // 沉淀的经验正文（KSTAR 的核心产出）在复盘详情中可见。
     expect(open).toContain('沉淀的经验');
     expect(open).toContain('查模型配置类问题时，应从运行日志交叉验证');
+    // 展开块落在证据折叠区内部（点 chip 就地展开，2026-09-17 二改）。
+    expect(open).toContain('ca-episode-detail');
   });
 
   it('无候选：显示模型给出的理由与筛选原因白话', () => {

@@ -169,32 +169,63 @@
     return chip(loose || T('cognition.evidence_fallback', '来源记录'), 'line');
   };
 
-  /** KSTAR 复盘详情块（2026-09-17）：点开证据 chip 就地展开那次任务的
-   *  预期/实际/结果/归因——资产确认后 KSTAR 来龙去脉仍可追。 */
+  /** 原始记录清洗（2026-09-17）：实际产出里会有 markdown 记号（**、##、代码
+   *  块），原样展示是一坨看不懂的技术文本——去记号、折叠代码块、压空白。 */
+  function stripMarkdown(text) {
+    return String(text || '')
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[`*#>_|]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  /** 归因枚举 → 人话（2026-09-17）：此前直接透传 execution_gap/unclear 这类
+   *  内部枚举，用户看不懂"为什么"。 */
+  const ATTRIBUTION_LABELS = {
+    knowledge_gap: ['cognition.attribution_knowledge_gap', '缺相关知识'],
+    rule_gap: ['cognition.attribution_rule_gap', '规则不合适'],
+    template_gap: ['cognition.attribution_template_gap', '缺合适的模板'],
+    skill_gap: ['cognition.attribution_skill_gap', '缺对应技能'],
+    execution_gap: ['cognition.attribution_execution_gap', '执行环节没做到位'],
+    unclear: ['cognition.attribution_unclear', '原因不明确'],
+  };
+  function attributionLabel(value) {
+    const entry = ATTRIBUTION_LABELS[String(value || '')];
+    return entry ? T(entry[0], entry[1]) : '';
+  }
+
+  /** 任务经过块（2026-09-17 二次改，白话化）：点证据 chip 就地展开"当时
+   *  这次任务发生了什么"——字段是内部语言（attribution 枚举、markdown
+   *  原文、与目标重复的 expectedResult），逐项翻成人话：当时的目标 /
+   *  实际发生（清洗+截断）/ 结果 / 为什么 / 学到的。 */
   function kstarEpisodeSection(route) {
     const id = String(route.kstarEpisodeId || '');
     if (!id) return '';
     const state = S.kstarEpisode;
     if (!state || state.episodeId !== id) {
-      return `<div class="ca-sect"><div class="ca-sub">${esc(T('cognition.kstar_episode_loading', '正在读取这次任务的复盘…'))}</div></div>`;
+      return `<div class="ca-sect"><div class="ca-sub">${esc(T('cognition.kstar_episode_loading', '正在读取这次任务的经过…'))}</div></div>`;
     }
+    const review = state.review || {};
+    const goal = String((state.episode && state.episode.goal) || '').trim();
+    const expected = stripMarkdown(review.expectedResult);
+    const actual = stripMarkdown(review.actualResult).slice(0, 160);
     const outcomeText = {
       better_than_expected: T('cognition.review_outcome_better', '比预期好'),
       met_expected: T('cognition.review_outcome_met', '符合预期'),
       worse_than_expected: T('cognition.review_outcome_worse', '比预期差'),
       unclear: T('cognition.review_outcome_unclear', '结果不明'),
-    }[String((state.review && state.review.outcome) || '')] || '—';
-    const row = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value).slice(0, 200))}</span></div>` : '';
-    return `<div class="ca-sect">
-      <div class="ca-row-title">${esc(T('cognition.kstar_episode_detail_title', 'KSTAR 复盘详情'))}</div>
+    }[String(review.outcome || '')] || '';
+    const row = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value))}</span></div>` : '';
+    return `<div class="ca-sect ca-episode-detail">
+      <div class="ca-row-title">${esc(T('cognition.kstar_episode_detail_title', '这次任务的经过'))}</div>
       <div class="ca-meta-row">
-        ${row(T('cognition.review_signal_expected', '预期'), state.review && state.review.expectedResult)}
-        ${row(T('cognition.review_signal_actual', '实际'), state.review && state.review.actualResult)}
+        ${row(T('cognition.kstar_episode_goal_label', '当时的任务'), goal)}
+        ${expected && expected !== goal ? row(T('cognition.review_signal_expected', '期望的结果'), expected) : ''}
+        ${row(T('cognition.review_signal_actual', '实际发生'), actual)}
         ${row(T('cognition.review_signal_outcome', '结果'), outcomeText)}
-        ${row(T('cognition.review_signal_attribution', '归因'), state.review && state.review.attribution)}
-        ${row(T('cognition.kstar_lesson_label', '沉淀的经验'), state.review && state.review.lesson)}
+        ${row(T('cognition.review_signal_attribution', '为什么'), attributionLabel(review.attribution))}
+        ${row(T('cognition.kstar_lesson_label', '沉淀的经验'), review.lesson)}
       </div>
-      <p class="ca-note">${esc(String(state.episode && state.episode.goal || ''))}</p>
       ${btn(T('common.close', '收起'), 'open-kstar-episode', { id: '', small: true })}
     </div>`;
   }
@@ -228,10 +259,10 @@
     return `<div class="ca-sect">
       <div class="ca-row-title">${esc(T('cognition.review_signal_title', '复盘依据'))}</div>
       <div class="ca-meta-row">
-        ${row(T('cognition.review_signal_expected', '预期'), signal && signal.expectedResult)}
-        ${row(T('cognition.review_signal_actual', '实际'), signal && signal.actualResult)}
+        ${row(T('cognition.review_signal_expected', '期望的结果'), stripMarkdown(signal && signal.expectedResult))}
+        ${row(T('cognition.review_signal_actual', '实际发生'), stripMarkdown(signal && signal.actualResult).slice(0, 160))}
         ${row(T('cognition.review_signal_outcome', '结果'), outcomeText)}
-        ${row(T('cognition.review_signal_attribution', '归因'), provenance && provenance.attribution)}
+        ${row(T('cognition.review_signal_attribution', '为什么'), attributionLabel(provenance && provenance.attribution))}
       </div>
     </div>`;
   }
@@ -702,8 +733,7 @@
           <div><div class="ca-k">${esc(T('cognition.asset_meta_updated', '最近更新'))}</div><div class="ca-v">${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div></div>
         </div>
       </details>
-      ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><p class="ca-note">${esc(T('cognition.evidence_lead', '这条资产是从下面这些真实材料里总结出来的；点「任务复盘」可查看当时的经过。'))}</p><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div></details>` : ''}
-      ${kstarEpisodeSection(route)}
+      ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><p class="ca-note">${esc(T('cognition.evidence_lead', '这条资产是从下面这些真实材料里总结出来的；点「任务复盘」可查看当时的经过。'))}</p><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div>${kstarEpisodeSection(route)}</details>` : ''}
       ${assetVersionsSection(asset)}
       ${assetUsageSection(asset, route)}
       <div class="ca-more-wrap">

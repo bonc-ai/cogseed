@@ -441,6 +441,11 @@
 .ca-row.is-clickable:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: -2px; }
 /* 版本展开详情块：嵌在版本链里，比列表行缩进一层。 */
 .ca-version-detail { margin: 2px 0 8px; }
+/* 可点 chip（2026-09-17 补样式）：类名此前在、样式缺失——可点 chip 和普通
+   chip 长得一样，用户不知道能点。下划虚线 + hover 反馈 + 键盘焦点。 */
+.ca-chip-link { cursor: pointer; border-bottom: 1px dashed currentColor; }
+.ca-chip-link:hover { background: var(--color-ca-hover); }
+.ca-chip-link:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: 2px; }
 .ca-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
 .ca-chip { transition: background-color .15s ease, color .15s ease; }
 
