@@ -937,6 +937,14 @@ describe('整理详情页', () => {
     expect(only).not.toContain('对话沉淀资产');
   });
 
+  it('列表行版本号显示在用版（2026-09-17 子安实测）：删掉 v3-v5 后游标停在 v5，行上该显示在用的 v2', () => {
+    const html = renderPage('overview', {
+      assets: [{ id: 'aa-v', title: '版本号显示', type: 'rule', status: 'active', version: '5', activeVersion: '2', updatedAt: '2026-09-16T00:00:00.000Z' }], proofs: [], sources: [], kstarEpisodes: [],
+    });
+    expect(html).toContain('v2 ·');
+    expect(html).not.toContain('v5 ·');
+  });
+
   it('KSTAR 任务复盘折叠区（我的认知页底部）：行带目标可点开，空态不裸白', () => {
     const rows = renderPage('overview', {
       assets: [], proofs: [], sources: [],

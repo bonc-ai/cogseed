@@ -415,6 +415,16 @@
       void NS.loadAssetVersions(assetId);
     }
     if (assetId) void NS.loadKstarEpisodeSummaries(assetId);
+    // 候选详情的 kse 证据 chip 也要真实目标摘要（此前只覆盖资产详情，
+    // 候选页 chip 一直显示兜底"一次任务"，2026-09-17 子安实测抓出）。
+    const candidateId = String(S.route.candidateId || '');
+    if (candidateId) {
+      const cand = S.candidates.find((c) => String(c.id) === candidateId);
+      if (cand) {
+        const ids = [...(cand.sourceRefs || []), ...(cand.evidenceRefs || [])].map((r) => String(r.id || ''));
+        void NS.loadKstarEpisodeSummariesByIds(ids);
+      }
+    }
     // KSTAR 复盘折叠区（2026-09-17 二次定调）：复盘历史随「我的认知」页
     // 懒加载一次（折叠区默认收起，数据先备好，展开即渲染）。
     if (String(S.route.name || '') === 'overview') void NS.loadKstarEpisodes();

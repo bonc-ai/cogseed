@@ -285,6 +285,24 @@
     }
   };
 
+  /** 按 kse id 批量补复盘摘要（候选详情页用：候选不是资产，走不了
+   *  loadKstarEpisodeSummaries 的按资产入口——候选的 kse 引用来自
+   *  sourceRefs/evidenceRefs）。 */
+  NS.loadKstarEpisodeSummariesByIds = async function loadKstarEpisodeSummariesByIds(ids) {
+    const wanted = (ids || []).map(String).filter((id) => id.startsWith('kse-'));
+    if (!wanted.length) return;
+    const have = store.kstarSummaries || {};
+    const missing = wanted.filter((id) => !have[id]);
+    if (!missing.length) return;
+    try {
+      const result = await api.call('recall.kstar.episodes.summaries', { ids: missing });
+      store.kstarSummaries = { ...have, ...Object.fromEntries(((result && result.summaries) || []).map((s) => [String(s.id), s])) };
+      NS.notify();
+    } catch (error) {
+      // 摘要缺席只影响 chip 文案，不阻断详情。
+    }
+  };
+
   /** 点开单条任务复盘详情（就地展开块）。 */
   NS.loadKstarEpisode = async function loadKstarEpisode(episodeId) {
     const id = String(episodeId || '');

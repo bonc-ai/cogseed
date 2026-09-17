@@ -877,7 +877,10 @@
         <div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
           <div class="ca-row-main">
             <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
-            <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))} · ${esc(lastUseText(asset.id))}</div>
+            <!-- 行上版本号显示在用版（2026-09-17 子安实测抓出）：version 是
+                 只增游标（真删不回退，防历史引用错位），删掉高版本后游标
+                 停在旧值（如 v5）——用户看到的是"这条资产现在用第几版"。 -->
+            <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.activeVersion || asset.version || '1'))} · ${esc(lastUseText(asset.id))}</div>
           </div>
           <div class="ca-row-side">${NS.isKstarAsset(asset) ? chip(T('cognition.asset_kstar_badge', 'KSTAR'), 'line') : ''}${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
         </div>`).join('')
