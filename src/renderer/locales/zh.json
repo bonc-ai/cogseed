@@ -7738,5 +7738,6 @@
   "kb.quiz.q_source_none": "（模型未标注来源）",
   "kb.quiz.share": "分享测验",
   "kb.quiz.wrong_only_flag": "错题重练：只做上一轮答错 / 跳过的题",
-  "kb.quiz.next_question": "下一题"
+  "kb.quiz.next_question": "下一题",
+  "cognition.evidence_source_processing": "来源整理中"
 }

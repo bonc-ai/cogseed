@@ -146,7 +146,16 @@
     // （任务目标摘要）、裸会话名、以及两条「来源记录不可用」并排——没有
     // 一条说得出自己是什么。现在每类带类型前缀；"不可用"只在补不出任何
     // 类型时兜底。
+    // 来源诚实状态（2026-09-17 审查补回）：详情页证据区此前把"来源已
+    // 删/整理中"吞成泛化 chip——不可读就明说不可读（防裸 id 的底线之上
+    // 还要可诊断），整理中如实说整理中。
     const refId = String(ref.id || '');
+    if (sourceRefUnavailable(ref)) return chip(T('cognition.source_unavailable_label', '来源记录不可用'), 'line');
+    const catalogItem = sourceIndex().get(refId);
+    if (catalogItem && !String(catalogItem.title || '').trim()
+      && ['pending', 'processing'].includes(String(catalogItem.status || ''))) {
+      return chip(T('cognition.evidence_source_processing', '来源整理中'), 'line');
+    }
     const kind = String(ref.kind || '');
     if (refId.startsWith('kse-')) {
       const summary = (S.kstarSummaries && S.kstarSummaries[refId]) || null;

@@ -5727,5 +5727,6 @@
   "cognition.asset_scope_personal": "個人的な会話",
   "cognition.proof_version_deleted": "（当時の v{n}、そのバージョンは後に削除されました）",
   "cognition.assets_kstar_tab": "KSTAR",
-  "cognition.asset_kstar_badge": "KSTAR"
+  "cognition.asset_kstar_badge": "KSTAR",
+  "cognition.evidence_source_processing": "ソース整理中"
 }

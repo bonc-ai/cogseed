@@ -7738,5 +7738,6 @@
   "kb.quiz.q_source_none": "(the model marked no source)",
   "kb.quiz.share": "Share quiz",
   "kb.quiz.wrong_only_flag": "Wrong-answer drill: only the questions you missed or skipped last round",
-  "kb.quiz.next_question": "Next question"
+  "kb.quiz.next_question": "Next question",
+  "cognition.evidence_source_processing": "Source still processing"
 }

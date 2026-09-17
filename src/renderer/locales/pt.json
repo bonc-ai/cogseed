@@ -5727,5 +5727,6 @@
   "cognition.asset_scope_personal": "Conversas pessoais",
   "cognition.proof_version_deleted": "(v{n} na época; essa versão foi excluída depois)",
   "cognition.assets_kstar_tab": "KSTAR",
-  "cognition.asset_kstar_badge": "KSTAR"
+  "cognition.asset_kstar_badge": "KSTAR",
+  "cognition.evidence_source_processing": "Fonte ainda em processamento"
 }
