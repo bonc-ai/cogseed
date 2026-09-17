@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "ai-product": {
+      "version": "0.2.1",
+      "source": "local",
+      "manifest_hash": "sha256:82b0906231a61172a950a63e9983d0417b03708fb5926e478e1f4366767a5bce",
+      "enabled": true,
+      "priority": 20,
+      "registered_commands": {
+        "codex": [
+          "speckit.ai-product.route",
+          "speckit.ai-product.frame",
+          "speckit.ai-product.discover",
+          "speckit.ai-product.qualify",
+          "speckit.ai-product.define",
+          "speckit.ai-product.derisk",
+          "speckit.ai-product.build-evaluate",
+          "speckit.ai-product.launch-learn",
+          "speckit.ai-product.evidence",
+          "speckit.ai-product.gate"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-09-17T08:37:44.976681+00:00"
+    }
+  }
+}
