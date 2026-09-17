@@ -54,6 +54,11 @@ describe('release workflow contract', () => {
     expect(p3394Index).toBeLessThan(fullJsIndex);
   });
 
+  it('requires a real packaged macOS launch before the cicd gate is green', () => {
+    const macos = commands(load('ci.yml').jobs.verify);
+    expect(macos).toContain('npm run package:dev:mac && npm run verify:package:dev:mac');
+  });
+
   it('pins the Windows P3394 lane to the platform-native regression suites', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
     expect(pkg.scripts['test:p3394:windows']).toBe('node scripts/run-p3394-windows-tests.mjs');
@@ -93,7 +98,9 @@ describe('release workflow contract', () => {
       const checkout = steps(workflow.jobs[name]).find((step) => step.uses === 'actions/checkout@v4');
       expect(checkout?.with?.ref).toBe('${{ needs.gate.outputs.peeled-sha }}');
       expect(steps(workflow.jobs[name]).some((step) => step.uses === 'actions/upload-artifact@v4')).toBe(true);
+      expect(commands(workflow.jobs[name])).toContain('npm run verify:package:launch');
     }
+    expect(commands(workflow.jobs['build-windows'])).toContain('npm run verify:package:stt:win');
     expect(workflow.jobs.publish.needs).toEqual(['gate', 'build-macos', 'build-windows']);
   });
 

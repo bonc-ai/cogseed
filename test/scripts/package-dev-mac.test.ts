@@ -21,7 +21,7 @@ describe('isolated mac development packaging', () => {
       mac: { category: 'public.app-category.productivity', target: ['dmg'] },
     };
     const snapshot = structuredClone(base);
-    const config = createDevBuilderConfig(base, { channel: 'packaged-dev' }, { electronDist: '/cache/electron.zip' });
+    const config = createDevBuilderConfig(base, { channel: 'packaged-dev' }, { electronDist: '/cache/electron.zip', arch: 'x64' });
 
     expect(base).toEqual(snapshot);
     expect(config).toMatchObject({
@@ -34,7 +34,7 @@ describe('isolated mac development packaging', () => {
         category: 'public.app-category.productivity',
         forceCodeSigning: false,
         identity: null,
-        target: [{ target: 'dir', arch: ['arm64'] }],
+        target: [{ target: 'dir', arch: ['x64'] }],
       },
     });
     expect(config.protocols).toBeUndefined();
@@ -42,17 +42,24 @@ describe('isolated mac development packaging', () => {
   });
 
   it('computes the isolated app bundle path', () => {
-    expect(expectedDevAppPath('/repo')).toBe(path.join('/repo', 'dist-dev', 'mac-arm64', 'CogSeed Dev.app'));
+    expect(expectedDevAppPath('/repo', 'arm64')).toBe(path.join('/repo', 'dist-dev', 'mac-arm64', 'CogSeed Dev.app'));
+    expect(expectedDevAppPath('/repo', 'x64')).toBe(path.join('/repo', 'dist-dev', 'mac', 'CogSeed Dev.app'));
   });
 
   it('uses a cached Electron zip and rejects a renamed source bundle', () => {
     const expectedZip = path.posix.join('/cache', 'hash', 'electron-v41.7.1-darwin-arm64.zip');
     expect(resolveLocalElectronDist({
-      electronVersion: '41.7.1',
+      electronVersion: '41.7.1', arch: 'arm64',
       cacheRoot: '/cache',
       exists: (candidate: string) => candidate === '/cache' || candidate === expectedZip,
       listDirs: () => ['hash'],
     })).toBe(expectedZip);
     expect(resolveLocalElectronDist({ electronVersion: '41.7.1', cacheRoot: '/cache', exists: () => false, listDirs: () => [] })).toBe('');
+    const x64Zip = path.posix.join('/cache', 'hash', 'electron-v41.7.1-darwin-x64.zip');
+    expect(resolveLocalElectronDist({
+      electronVersion: '41.7.1', arch: 'x64', cacheRoot: '/cache',
+      exists: (candidate: string) => candidate === '/cache' || candidate === x64Zip,
+      listDirs: () => ['hash'],
+    })).toBe(x64Zip);
   });
 });
