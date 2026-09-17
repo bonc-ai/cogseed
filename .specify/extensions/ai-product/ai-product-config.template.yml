@@ -1,0 +1,33 @@
+schema_version: "1.0"
+status: candidate
+timezone: Asia/Shanghai
+
+authority:
+  default_level: A1
+  maximum_without_independent_approval: A2
+  a4_enabled: false
+  prohibited_by_default:
+    - external_message_send
+    - production_write
+    - publish_or_release
+    - permission_change
+    - money_or_contract_commitment
+    - sensitive_data_export
+    - irreversible_action
+
+evidence:
+  allowed_source_types: [real, desensitized, synthetic, stub]
+  accepted_requires_human_reviewer: true
+  preserve_unknowns: true
+
+workflow:
+  discovery_gate_required_for:
+    - new_mental_model
+    - first_value_path
+    - high_risk_human_ai_decision
+  spec_kit_handoff_command: speckit.specify
+  require_one_primary_uncertainty: true
+
+claims:
+  allowed_for_candidate: [locally_built, locally_tested, structurally_validated]
+  prohibited_without_separate_evidence: [staged, published, production_ready, accepted, business_value]
