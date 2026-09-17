@@ -977,12 +977,18 @@ export async function rollbackAbilityAsset(
     const current = asAsset(raw);
     assertMutableAbilityAsset(current);
     if (current.version === toVersion) throw new Error('ability asset is already at that version');
-    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, ...content } = target.snapshot;
+    // scope 单独摘出且不倒退（2026-09-17 对齐 select 的守卫）：旧快照可能带
+    // 词表化前的自由文本 scope，原样写回会再触发 legacy 迁移垫空版本。
+    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, scope: rbScope, ...content } = target.snapshot;
+    const scope = isRecallScopeTerm(String(rbScope || ''))
+      ? String(rbScope)
+      : (normalizeAssetScopeValue(String(rbScope || '')) || current.scope);
     return {
       ...current,
       // 只回滚内容，不回滚治理状态与成熟度：暂停过的资产不该因为回滚就自己
       // 变回 active，验证过的成熟度也不该被一次内容回滚抹掉。
       ...content,
+      scope,
       version: nextVersion(current.version),
       activeVersion: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
@@ -1065,9 +1071,12 @@ export async function deleteAbilityAssetVersion(
     throw new Error('cannot delete the active version; select another version first');
   }
   // ① 先给所有引用它的已确认投影冻结内容副本（先保引用，幂等）。
-  const { listContextProjections } = await import('./context-projection');
-  const referencing = (await listContextProjections(userId)).filter((projection) =>
-    projection.status === 'confirmed' && String(projection.assetVersions?.[assetId] || '') === version);
+  // 全量枚举（2026-09-17 P0 修复）：listContextProjections 默认 clamp 到 20 条，
+  // 投影存量超过后老投影漏冻结——删了版本副本就丢，注入静默降级。与
+  // refreshCommittedProjectionAssetVersion 同款教训，改走全量目录扫描。
+  const { listAllConfirmedProjections } = await import('./context-projection');
+  const referencing = (await listAllConfirmedProjections(userId)).filter((projection) =>
+    String(projection.assetVersions?.[assetId] || '') === version);
   for (const projection of referencing) {
     await updateRecallJsonRecord(userId, 'projections', projection.id, (raw) => {
       if (!raw) throw new Error('context projection not found');

@@ -197,7 +197,16 @@ async function buildPromptContextForProjections(
           } else {
             snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
             if (!snapshot) {
-              if (liveAsset.version !== confirmedVersion) continue;
+              if (liveAsset.version !== confirmedVersion) {
+                // 可恢复降级必须可见（AGENTS.md）：冻结副本缺失且线上版本
+                // 已变，这条已确认资产本次只能缺席——静默吞掉实机无法诊断。
+                log.warn('confirmed projection asset version snapshot missing', {
+                  projectionId: projection.id,
+                  assetId,
+                  confirmedVersion,
+                });
+                continue;
+              }
             }
           }
         }

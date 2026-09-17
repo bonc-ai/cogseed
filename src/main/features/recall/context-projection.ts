@@ -790,6 +790,33 @@ export function validateCommittedProjectionAssetVersions(
  *  且无任何回退——旧实现的安全论证引用的是非 committed 路径的宽容跳过，
  *  论证对象错了（2026-09-14 修复）。只动版本号快照，注入内容仍按投影
  *  确认时冻结的语句；返回刷新的投影条数。 */
+/** 全量列举 confirmed 投影（不过 listContextProjections——它 clamp 条数，
+ *  存量超过时最老的投影漏掉。版本删除冻结副本（asset-service）等"必须
+ *  一个不漏"的消费方用这个；条数敏感的常规列表仍走 listContextProjections）。 */
+export async function listAllConfirmedProjections(userId: string): Promise<ContextProjectionRecord[]> {
+  let names: string[];
+  try {
+    names = await fs.readdir(projectionsDirectory(userId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const records = await Promise.all(names
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => readRecallJsonRecord(userId, 'projections', name.slice(0, -5))));
+  const confirmed: ContextProjectionRecord[] = [];
+  for (const raw of records) {
+    if (!raw) continue;
+    try {
+      const projection = asProjection(raw);
+      if (isCommittedProjection(projection)) confirmed.push(projection);
+    } catch {
+      continue;
+    }
+  }
+  return confirmed;
+}
+
 export async function refreshCommittedProjectionAssetVersion(
   userId: string,
   assetId: string,

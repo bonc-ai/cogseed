@@ -926,6 +926,30 @@ describe('版本真删（2026-09-17）：物理删除 + 引用快照冻结', () 
     expect(listed?.assetVersionSnapshots?.[asset.id]?.snapshot.statement).toContain('v2 statement');
   });
 
+  it('投影存量超过 listContextProjections 条数上限（P0 回归）：老投影照样被冻结，一个不漏', async () => {
+    // 2026-09-17 审查 P0：冻结枚举曾走 listContextProjections（默认 clamp 20 条），
+    // 第 21 条及更早的 confirmed 投影引用的版本删除前不冻结副本——注入静默丢失。
+    const uid = 'user-vdel-overflow';
+    const { assets, store, asset } = await seedVersioned(uid, '2');
+    // 再种 30 个引用 v2 的老投影（id 排序在 proj-del-1 之前，createdAt 更早）。
+    for (let i = 0; i < 30; i += 1) {
+      await store.writeRecallJsonRecord(uid, 'projections', `proj-old-${String(i).padStart(2, '0')}`, {
+        schemaVersion: 2, ownerId: uid, id: `proj-old-${String(i).padStart(2, '0')}`, taskRunId: `kst-old-${i}`,
+        purpose: 'review', authorization: 'workspace_policy',
+        assetIds: [asset.id], assetVersions: { [asset.id]: '2' },
+        sourceRefs: [], omittedRefs: [], status: 'confirmed',
+        createdAt: new Date(Date.parse('2026-09-01T00:00:00Z') + i * 1000).toISOString(),
+      });
+    }
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('delete with overflow projections'));
+    // 31 个引用投影（1 个 seed + 30 个老投影）全部带上冻结副本。
+    const ids = ['proj-del-1', ...Array.from({ length: 30 }, (_, i) => `proj-old-${String(i).padStart(2, '0')}`)];
+    for (const pid of ids) {
+      const raw = await store.readRecallJsonRecord(uid, 'projections', pid) as { assetVersionSnapshots?: Record<string, { version: string }> };
+      expect(raw?.assetVersionSnapshots?.[asset.id]?.version, pid).toBe('2');
+    }
+  });
+
   it('删未被投影引用的版本：不往投影写缓存', async () => {
     const uid = 'user-vdel-noref';
     const { assets, store, asset } = await seedVersioned(uid, '2');

@@ -272,6 +272,11 @@
             router.go({
               name: 'overview',
               assetId: String(S.route.assetId || ''),
+              // 带全上下文（2026-09-17 审查补）：使用记录与版本区同页，丢了
+              // assetVersionId/kstarEpisodeId 会把就地展开的版本/复盘收起。
+              assetVersionId: String(S.route.assetVersionId || ''),
+              assetVersionDiff: String(S.route.assetVersionDiff || ''),
+              kstarEpisodeId: String(S.route.kstarEpisodeId || ''),
               proofEventId: String(S.route.proofEventId) === id ? '' : id,
             });
             break;
