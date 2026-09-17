@@ -836,52 +836,70 @@ describe('整理详情页', () => {
     expect(review([mk({})])).toContain('会话整理');
   });
 
-  it('资产详情溯源行（2026-09-16）：learningProvenance 存在时标来源', () => {
+  it('版本块溯源行（2026-09-16/17 下沉改）：快照带 learningProvenance 时标来源，无信号不出该行', () => {
     const asset = {
       id: 'aa-src', title: '性能类提问需用真实日志做分层归因', type: 'rule', status: 'active',
-      scope: 'general', version: '1', updatedAt: '2026-09-15T00:00:00.000Z',
-      learningProvenance: { projectionId: 'proj-x', episodeId: 'kse-y', attribution: 'execution_gap' },
+      scope: 'general', version: '2', activeVersion: '1', updatedAt: '2026-09-15T00:00:00.000Z',
     };
-    const html = renderPage('overview', { assets: [asset], proofs: [], sources: [] }, { assetId: 'aa-src' });
-    expect(html).toContain('来自 KSTAR 复盘');
-    // 无溯源数据的资产不出该行。
-    const plain = renderPage('overview', { assets: [{ ...asset, id: 'aa-plain', learningProvenance: undefined }], proofs: [], sources: [] }, { assetId: 'aa-plain' });
+    const versions = {
+      assetId: 'aa-src', usage: [],
+      versions: [
+        { assetId: 'aa-src', version: '1', at: '2026-09-14T01:00:00.000Z', snapshot: { title: 'T', statement: 'S', evidenceRefs: [], learningProvenance: { projectionId: 'proj-x', episodeId: 'kse-y', attribution: 'execution_gap' } } },
+        { assetId: 'aa-src', version: '2', at: '2026-09-15T01:00:00.000Z', snapshot: { title: 'T', statement: 'S', evidenceRefs: [] } },
+      ],
+    };
+    // 有 provenance 的 v1 展开：来源行在版本块内。
+    const open = renderPage('overview', { assets: [asset], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-src', assetVersionId: '1' });
+    expect(open).toContain('来自 KSTAR 复盘');
+    // 无信号快照（v2）展开：不出该行。
+    const plain = renderPage('overview', { assets: [asset], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-src', assetVersionId: '2' });
     expect(plain).not.toContain('来自 KSTAR 复盘');
   });
 
-  it('KSTAR 资产侧溯源（2026-09-17）：偏好信号→来自 KSTAR 偏好；kse 证据 chip 显目标摘要可点开复盘', () => {
-    // ① learningSignal.source=preference_scan 的溯源（偏好线不写 provenance）。
+  it('KSTAR 证据与来源按版本显示（2026-09-17 下沉）：版本展开块内出证据 chips、KSTAR 来源行，点开「这次任务的经过」', () => {
+    // 快照级的证据与信号：evidenceRefs/learningSignal 都冻在版本快照里——
+    // 顶部不再显示资产级副本，全部进版本展开块。
     const asset = {
       id: 'aa-k1', title: '不用比喻回答', type: 'personal', status: 'active',
-      scope: 'general', version: '1', updatedAt: '2026-09-16T00:00:00.000Z',
-      learningSignal: { deltaR: 'unknown', deltaA: 'unknown', outcome: 'met_expected', confidence: 0.9, source: 'preference_scan' },
-      evidenceRefs: [{ id: 'kse-abc123', kind: 'execution', title: 'KSTAR requirement episode' }],
+      scope: 'general', version: '2', activeVersion: '1', updatedAt: '2026-09-16T00:00:00.000Z',
     };
-    const html = renderPage('overview', {
-      assets: [asset], proofs: [], sources: [],
-      kstarSummaries: { 'kse-abc123': { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？', status: 'completed', at: '' } },
-    }, { assetId: 'aa-k1' });
-    expect(html).toContain('来自 KSTAR 偏好');
-    expect(html).toContain('data-act="open-kstar-episode" data-id="kse-abc123"');
-    expect(html).toContain('我想知道你的认知资产是怎么存的？'.slice(0, 12));
-    // ② 点开态：复盘详情块（route.kstarEpisodeId + store.kstarEpisode）。
+    const versions = {
+      assetId: 'aa-k1', usage: [],
+      versions: [
+        { assetId: 'aa-k1', version: '1', at: '2026-09-10T01:00:00.000Z', reason: 'review_decision:rd_x', snapshot: { title: '不用比喻回答', statement: 'S1', scope: 'general', evidenceRefs: [{ id: 'kse-abc123', kind: 'execution', title: 'KSTAR requirement episode' }], learningSignal: { deltaR: 'unknown', deltaA: 'unknown', outcome: 'met_expected', confidence: 0.9, source: 'preference_scan' } } },
+        { assetId: 'aa-k1', version: '2', at: '2026-09-15T01:00:00.000Z', reason: 'user manual edit', snapshot: { title: '不用比喻回答', statement: 'S2', scope: 'general', evidenceRefs: [] } },
+      ],
+    };
+    // ① 展开带 KSTAR 信号的 v1：证据 chips + 来源行都在版本块里；顶部无两折叠区。
     const open = renderPage('overview', {
-      assets: [asset], proofs: [], sources: [], kstarSummaries: null,
+      assets: [asset], proofs: [], sources: [], assetVersions: versions,
+      kstarSummaries: { 'kse-abc123': { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？', status: 'completed', at: '' } },
+    }, { assetId: 'aa-k1', assetVersionId: '1' });
+    expect(open).not.toContain('详细信息');
+    expect(open).toContain('来自 KSTAR 偏好');
+    expect(open).toContain('data-act="open-kstar-episode" data-id="kse-abc123"');
+    expect(open).toContain('任务复盘：我想知道你的认知资产是怎么存的');
+    // ② 点开态（route.kstarEpisodeId）：「这次任务的经过」就地出现在版本块内，
+    // 白话化（标题/行标签/归因枚举翻译）。
+    const episode = renderPage('overview', {
+      assets: [asset], proofs: [], sources: [], assetVersions: versions, kstarSummaries: null,
       kstarEpisode: { episodeId: 'kse-abc123', episode: { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？' }, review: { expectedResult: '给出技术结论', actualResult: '调用失败', outcome: 'worse_than_expected', attribution: 'execution_gap', lesson: '查模型配置类问题时，应从运行日志交叉验证，不要依赖模型自述。' } },
-    }, { assetId: 'aa-k1', kstarEpisodeId: 'kse-abc123' });
-    // 白话化（2026-09-17 二改）：标题/行标签人话，归因枚举翻译成"为什么"，
-    // 目标不再以尾注重复（当期任务行展示一次）。
-    expect(open).toContain('这次任务的经过');
-    expect(open).toContain('当时的任务');
-    expect(open).toContain('给出技术结论');
-    expect(open).toContain('比预期差');
-    expect(open).toContain('执行环节没做到位');
-    expect(open).not.toContain('execution_gap');
-    // 沉淀的经验正文（KSTAR 的核心产出）在复盘详情中可见。
-    expect(open).toContain('沉淀的经验');
-    expect(open).toContain('查模型配置类问题时，应从运行日志交叉验证');
-    // 展开块落在证据折叠区内部（点 chip 就地展开，2026-09-17 二改）。
-    expect(open).toContain('ca-episode-detail');
+    }, { assetId: 'aa-k1', assetVersionId: '1', kstarEpisodeId: 'kse-abc123' });
+    expect(episode).toContain('这次任务的经过');
+    expect(episode).toContain('当时的任务');
+    expect(episode).toContain('给出技术结论');
+    expect(episode).toContain('比预期差');
+    expect(episode).toContain('执行环节没做到位');
+    expect(episode).not.toContain('execution_gap');
+    expect(episode).toContain('沉淀的经验');
+    expect(episode).toContain('查模型配置类问题时，应从运行日志交叉验证');
+    expect(episode).toContain('ca-episode-detail');
+    // ③ 展开无证据的 v2：不渲染证据 chips，也无来源行。
+    const openV2 = renderPage('overview', {
+      assets: [asset], proofs: [], sources: [], assetVersions: versions,
+    }, { assetId: 'aa-k1', assetVersionId: '2' });
+    expect(openV2).not.toContain('open-kstar-episode');
+    expect(openV2).not.toContain('来自 KSTAR');
   });
 
   it('无候选：显示模型给出的理由与筛选原因白话', () => {
@@ -1135,7 +1153,7 @@ describe('资产详情（使用记录并入）', () => {
     expect(openHtml).toContain('详情全文。');
     expect(openHtml).toContain('做发版自查');
     expect(openHtml).toContain('临时草稿');
-    expect(openHtml).toContain('证据来源');
+    expect(openHtml).toContain('来源记录');
     expect(openHtml).toContain('实际采用 3 次');
     expect(openHtml).toContain('data-act="delete-asset-version" data-id="aa-1" data-version="1"');
     // 点开在用版 v2：无删除按钮，白话提示先切换再删。
@@ -1153,10 +1171,11 @@ describe('资产详情（使用记录并入）', () => {
     expect(list).toContain('ca-sub">使用中：这条资产会自动带入你的新任务');
     expect(list).not.toContain('data-act="edit-asset"');
     expect(list).not.toContain('data-action="archive"');
-    // 头部只留标题（正常状态不摆任何章）；分类/最近更新收进「详细信息」。
+    // 头部只留标题+正文+开关：详细信息和证据来源已按版本下沉（2026-09-17
+    // 子安口径），顶部不再出现这两个折叠区。
     expect(list).not.toContain('已成功带入');
-    expect(list).toContain('分类');
-    expect(list).toContain('最近更新');
+    expect(list).not.toContain('详细信息');
+    expect(list).not.toContain('证据来源');
     expect(list).toContain('data-action="pause"');
     // 版本行的编辑入口：在用版与历史版的展开块都有「基于此版修改」。
     const multi = { ...asset, version: '2', activeVersion: '1' };
@@ -1246,13 +1265,14 @@ describe('资产详情（使用记录并入）', () => {
     expect(detail).toContain('data-action="restore"');
   });
 
-  it('单版本资产不出版本链区（没有"链"可言）；在用版非最新时头部提示', () => {
+  it('单版本资产也出版本区（2026-09-17 下沉改：证据/详细信息的家在版本块）；头部不再有版本提示', () => {
     const single = renderPage('overview', {
       assets: [{ ...asset, version: '1' }],
       proofs: [], sources: [],
       assetVersions: { assetId: 'aa-1', versions: [{ assetId: 'aa-1', version: '1', at: '2026-09-15T01:00:00.000Z', snapshot: { title: '上线前必须确认影响范围', type: 'rule', evidenceRefs: [] } }] },
     }, { assetId: 'aa-1' });
-    expect(single).not.toContain('版本记录');
+    // 守卫 ≥2 → ≥1：单版本资产的证据只存在唯一一版里，必须给它位置可看。
+    expect(single).toContain('版本记录');
     // 头部重构（2026-09-17 用户视角）：头部不再出现版本号/"已有更新的版本"
     // ——版本信息全部归版本区（"在用"绿标 + 各版本行自明）。
     const stale = renderPage('overview', {

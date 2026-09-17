@@ -541,6 +541,23 @@
   /** 单个版本的展开详情（2026-09-17）：列表行只给 80 字预览，点行看全文与
    * 逐项信息；非在用版就地提供「删除此版本」（真删：物理移除，引用它的
    * 已确认注入在服务端冻结了内容副本）。 */
+  /** 适用范围白话化（2026-09-17 随详细信息下沉版本块提取共用）。 */
+  function scopeLabelText(raw) {
+    const value = String(raw || '');
+    if (!value) return T('cognition.asset_scope_unset', '还没设置');
+    return /全局|画像/.test(value) ? T('cognition.asset_scope_all', '所有对话') : value;
+  }
+  /** 版本快照的来源行（2026-09-17 下沉）：按该版快照的学习信号判定 KSTAR
+   *  血统；无信号（会话整理线）不显示——返回空串即可被行渲染跳过。 */
+  function snapshotOriginText(signal, provenance) {
+    const source = provenance ? 'review'
+      : signal && ['review', 'preference_scan'].includes(String(signal.source || '')) ? String(signal.source) : '';
+    if (!source) return '';
+    return source === 'preference_scan'
+      ? T('cognition.asset_origin_pref_scan', '来自 KSTAR 偏好')
+      : T('cognition.asset_origin_kstar', '来自 KSTAR 复盘');
+  }
+
   function assetVersionDetailBlock(asset, v, isActive, usage) {
     const snap = v.snapshot || {};
     const usageText = usage
@@ -564,26 +581,33 @@
         ${btn(showDiff ? T('cognition.asset_version_diff_hide', '收起对比') : T('cognition.asset_version_diff_show', '与在用版对比'), 'diff-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
         ${btn(T('cognition.asset_version_merge', '与在用版合并为新版'), 'merge-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
         ${btn(T('cognition.asset_version_delete', '删除此版本'), 'delete-asset-version', { id: asset.id, data: { version: String(v.version) }, danger: true, small: true })}`;
+    // 详细信息与证据按版本下沉（2026-09-17 子安口径）：范围/怎么来的/证据
+    // 本就存于每版快照、各版不同——跟版本走，顶部不再显示资产级副本。
+    // 证据 chips 点开「这次任务的经过」也挂块内（展开态走路由，重画不丢）。
     return `<div class="ca-sect ca-version-detail">
       <div class="ca-row-title">${esc(T('cognition.asset_version_detail_title', '版本详情'))} · v${esc(String(v.version))}</div>
       <p class="ca-note">${esc(String(snap.statement || ''))}</p>
       <div class="ca-meta-row">
+        ${rowHtml(T('cognition.asset_scope_label', '适用范围'), scopeLabelText(snap.scope))}
         ${rowHtml(T('cognition.asset_version_applicable', '适用场景'), (Array.isArray(snap.applicableWhen) ? snap.applicableWhen : []).join('；'))}
         ${rowHtml(T('cognition.asset_version_forbidden', '禁用场景'), (Array.isArray(snap.forbiddenWhen) ? snap.forbiddenWhen : []).join('；'))}
-        ${rowHtml(T('cognition.asset_version_evidence_label', '证据来源'), evidenceCount ? T('cognition.asset_version_evidence_count', '{n} 条', { n: String(evidenceCount) }) : '')}
+        ${rowHtml(T('cognition.asset_origin_label', '怎么来的'), snapshotOriginText(snap.learningSignal, snap.learningProvenance))}
         ${rowHtml(T('cognition.asset_version_reason_label', '变更说明'), [v.reason || '', fmtDate(v.at)].filter(Boolean).join(' · '))}
         ${rowHtml(T('cognition.asset_version_usage_label', '使用效果'), usageText)}
       </div>
+      ${evidenceCount ? `<div class="ca-chips">${snap.evidenceRefs.map(evidenceChip).join('')}</div>${kstarEpisodeSection(S.route)}` : ''}
       <div class="ca-actions ca-actions-right">${actions}</div>
       ${showDiff && activeV ? assetVersionDiffBlock(asset, activeV, v) : ''}
     </div>`;
   }
 
   /** 版本链（2026-09-16 版本组）：V1 归入同条目可展开；在用=指针可切换，
-   *  「选用此版」走 select-asset-version（内容同步、不产生新版本号）。 */
+   *  「选用此版」走 select-asset-version（内容同步、不产生新版本号）。
+   *  守卫 ≥1 版即显示（2026-09-17 下沉改）：详细信息和证据都归版本展开
+   *  块——单版本资产的证据也要有位置可看。 */
   function assetVersionsSection(asset) {
     const state = S.assetVersions;
-    if (!state || state.assetId !== String(asset.id) || !Array.isArray(state.versions) || state.versions.length < 2) return '';
+    if (!state || state.assetId !== String(asset.id) || !Array.isArray(state.versions) || state.versions.length < 1) return '';
     const active = String(asset.activeVersion || asset.version || '');
     const usageByVersion = new Map((state.usage || []).map((u) => [String(u.version), u]));
     // 空版本标记（2026-09-16）：与相邻版内容一字不差的版本（系统迁移垫高/
@@ -682,30 +706,8 @@
       : statusKind === 'archived'
         ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_archived_note', '已归并：这条资产已并入另一条资产，历史版本完整保留在并入目标的版本记录中。'))}</p></div>`
         : '';
-    const proofCount = S.proofs.filter((p) => String((p.refs || {}).assetId || '') === String(asset.id)).length;
-    // 元信息白话化：后端值可能是内部术语，认出常见形态翻成人话，认不出原样显示。
-    const scopeRaw = String(asset.scope || '');
-    const scopeText = !scopeRaw
-      ? T('cognition.asset_scope_unset', '还没设置')
-      : (/全局|画像/.test(scopeRaw) ? T('cognition.asset_scope_all', '所有对话') : scopeRaw);
-    // 溯源行（2026-09-17 补齐）：KSTAR 血统认 learningProvenance **或**
-    // learningSignal——偏好扫描线不写 provenance 只写信号，此前被漏掉，
-    // 资产确认后 KSTAR 来龙去脉在详情页不可见。
-    const kstarSource = asset.learningProvenance
-      ? 'review'
-      : asset.learningSignal && ['review', 'preference_scan'].includes(String(asset.learningSignal.source || ''))
-        ? String(asset.learningSignal.source)
-        : '';
-    const originText = kstarSource === 'preference_scan'
-      ? T('cognition.asset_origin_pref_scan', '来自 KSTAR 偏好')
-      : kstarSource
-        ? T('cognition.asset_origin_kstar', '来自 KSTAR 复盘')
-        : {
-        user_confirmed: T('cognition.asset_origin_user', '你确认的'),
-        user_confirmed_unverified: T('cognition.asset_origin_user', '你确认的'),
-        automatically_extracted_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
-        system_precipitated_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
-      }[String(asset.lifecycleStatus || '')] || String(asset.lifecycleStatus || '—');
+    // 详细信息与证据已按版本下沉（2026-09-17 子安口径）：范围/怎么来的/证据
+    // 各版不同、存于各版快照——归版本展开块显示，顶部不再放资产级副本。
     const moreRow = (label, hint, action) => `
       <div class="ca-more-row">
         <div class="ca-more-copy"><strong>${esc(label)}</strong><span>${esc(hint)}</span></div>
@@ -723,17 +725,6 @@
       </div>
       ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}
-      <details class="ca-advanced">
-        <summary>${esc(T('cognition.asset_meta_summary', '详细信息'))}</summary>
-        <div class="ca-kv">
-          <div><div class="ca-k">${esc(T('cognition.asset_meta_category', '分类'))}</div><div class="ca-v">${esc(categoryLabel(asset.type))}</div></div>
-          <div><div class="ca-k">${esc(T('cognition.asset_scope_label', '适用范围'))}</div><div class="ca-v">${esc(scopeText)}</div></div>
-          <div><div class="ca-k">${esc(T('cognition.asset_origin_label', '怎么来的'))}</div><div class="ca-v">${esc(originText)}</div></div>
-          <div><div class="ca-k">${esc(T('cognition.asset_proofs_label', '用过几次'))}</div><div class="ca-v">${proofCount ? `${proofCount} ${esc(T('cognition.asset_proof_times', '次'))}` : esc(T('cognition.asset_no_proofs', '还没用过'))}</div></div>
-          <div><div class="ca-k">${esc(T('cognition.asset_meta_updated', '最近更新'))}</div><div class="ca-v">${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div></div>
-        </div>
-      </details>
-      ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><p class="ca-note">${esc(T('cognition.evidence_lead', '这条资产是从下面这些真实材料里总结出来的；点「任务复盘」可查看当时的经过。'))}</p><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div>${kstarEpisodeSection(route)}</details>` : ''}
       ${assetVersionsSection(asset)}
       ${assetUsageSection(asset, route)}
       <div class="ca-more-wrap">

@@ -201,12 +201,12 @@
           }
           case 'open-kstar-episode': {
             // 再点同一 chip 或点「收起」（id 空）即收起；展开时拉详情。
-            // 展开块不是导航（replace 不压返回栈），且必须带全 route 上下文
-            //（go 的 next 会与默认形状合并，缺 name 会跳走）。
+            // 必须带全 route 上下文（含 assetVersionId——证据 chip 在版本展开
+            // 块内，丢了它整块会被收起，2026-09-17 下沉改连带修）。
             const prev = String(S.route.kstarEpisodeId || '');
             const next = String(el.dataset.id || '');
             const open = next && next !== prev ? next : '';
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), kstarEpisodeId: open }, { replace: true });
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: String(S.route.assetVersionDiff || ''), kstarEpisodeId: open }, { replace: true });
             if (open) void NS.loadKstarEpisode(open);
             break;
           }
