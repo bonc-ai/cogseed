@@ -162,7 +162,7 @@ describe('contexts › writeContextFile', () => {
 });
 
 describe('contexts › content-level dedup', () => {
-  it('rejects upload with sha1 matching a different existing path', async () => {
+  it('rejects upload with sha1 matching a different path in the SAME library', async () => {
     const c = await loadContexts();
     // Seed: write real PDF bytes at /work/a.pdf so the KB flow produces a
     // kb_files row (indexer is mocked, so we seed kb_vector directly).
@@ -179,8 +179,8 @@ describe('contexts › content-level dedup', () => {
       chunks: [{ title: 't', content: 'c', embedding: new Array(512).fill(0) }],
     });
 
-    // Now upload identical bytes at a different path → must reject.
-    const up2 = c.uploadContextFile('archive/dup.pdf', buf);
+    // Now upload identical bytes at a different path in the same library → must reject.
+    const up2 = c.uploadContextFile('work/dup.pdf', buf);
     expect(up2.ok).toBe(false);
     expect(up2).toMatchObject({
       ok: false,
@@ -188,8 +188,12 @@ describe('contexts › content-level dedup', () => {
       existingDir: 'work',
     });
     expect((up2 as { ok: false; error: string }).error).not.toMatch(/work|a\.pdf/);
+    // 命中时带上"已有内容在哪一份"，供弹窗提示（base64 上传没有可再读的源文件，
+    // 因此不发覆盖 token —— 覆盖只对"从本地路径导入"开放）
+    expect((up2 as { existingPath?: string }).existingPath).toBe('work/a.pdf');
+    expect((up2 as { duplicateToken?: string }).duplicateToken).toBeUndefined();
     // Sanity: file should NOT be written to disk.
-    expect(fs.existsSync(path.join(ctxRoot(), 'archive/dup.pdf'))).toBe(false);
+    expect(fs.existsSync(path.join(ctxRoot(), 'work/dup.pdf'))).toBe(false);
   });
 
   it('rejects re-upload of identical content to the same path too', async () => {
@@ -216,7 +220,7 @@ describe('contexts › content-level dedup', () => {
     });
   });
 
-  it('rejects writeContextFile with sha1 matching a different existing path', async () => {
+  it('rejects writeContextFile with sha1 matching a different path in the same library', async () => {
     const c = await loadContexts();
     const content = '# Hello\n\nshared note body';
     expect(c.writeContextFile('notes/a.md', content).ok).toBe(true);
@@ -229,13 +233,75 @@ describe('contexts › content-level dedup', () => {
       chunks: [{ title: 't', content, embedding: new Array(512).fill(0) }],
     });
 
-    const w2 = c.writeContextFile('archive/copy.md', content);
+    const w2 = c.writeContextFile('notes/copy.md', content);
     expect(w2.ok).toBe(false);
     expect(w2).toMatchObject({
       ok: false,
       code: 'duplicate_content',
       existingDir: 'notes',
     });
+  });
+
+  it('allows identical content in a DIFFERENT library (同一资料可放进多个库)', async () => {
+    const c = await loadContexts();
+    const buf = Buffer.from('%PDF-1.4\n%%EOF\n');
+    expect(c.uploadContextFile('work/a.pdf', buf).ok).toBe(true);
+
+    const kb = await import('../../../src/main/features/kb_vector');
+    const crypto = await import('node:crypto');
+    const sha1 = crypto.createHash('sha1').update(buf).digest('hex');
+    await kb.upsertFile(TEST_UID, {
+      relPath: 'work/a.pdf', kind: 'pdf', bytes: buf.length, mtime: 1, sha1,
+      chunks: [{ title: 't', content: 'c', embedding: new Array(512).fill(0) }],
+    });
+
+    // 真机反馈：同一份 PDF 想同时放进「智能」和另一个库时被全库去重拦住。
+    // 现在的口径是"同库内不重复，跨库允许"。
+    const up = c.uploadContextFile('archive/a.pdf', buf);
+    expect(up.ok).toBe(true);
+    expect(fs.existsSync(path.join(ctxRoot(), 'archive/a.pdf'))).toBe(true);
+  });
+
+  it('importContextFileAsDuplicate：显式覆盖把被拦下的文件按新名字导入同库', async () => {
+    const c = await loadContexts();
+    const crypto = await import('node:crypto');
+    const kb = await import('../../../src/main/features/kb_vector');
+    const buf = Buffer.from('%PDF-1.4\n%%EOF\n');
+    const sha1 = crypto.createHash('sha1').update(buf).digest('hex');
+    await kb.upsertFile(TEST_UID, {
+      relPath: 'work/a.pdf', kind: 'pdf', bytes: buf.length, mtime: 1, sha1,
+      chunks: [{ title: 't', content: 'c', embedding: new Array(512).fill(0) }],
+    });
+    // 源文件放在库外（模拟用户桌面上那份）
+    const sourceAbs = path.join(os.tmpdir(), `ctx-dup-${Date.now()}.pdf`);
+    fs.writeFileSync(sourceAbs, buf);
+
+    const blocked = await c.importContextFileFromPath('work/a.pdf', sourceAbs);
+    expect(blocked.ok).toBe(false);
+    const token = (blocked as { duplicateToken?: string }).duplicateToken;
+    expect(typeof token).toBe('string');
+
+    // 目标库内没有同名文件 → 就用原名导入（用户要的是"放进这个库"）
+    const overridden = await c.importContextFileAsDuplicate(token as string);
+    expect(overridden.ok).toBe(true);
+    expect((overridden as { path: string }).path).toBe('work/a.pdf');
+    expect(fs.existsSync(path.join(ctxRoot(), 'work/a.pdf'))).toBe(true);
+
+    // 目标路径已被占（而不是内容重复）时，退到 -2 不覆盖任何文件
+    const blockedAgain = await c.importContextFileFromPath('work/a.pdf', sourceAbs);
+    expect(blockedAgain.ok).toBe(false);
+    const retry = await c.importContextFileAsDuplicate((blockedAgain as { duplicateToken: string }).duplicateToken);
+    expect(retry.ok).toBe(true);
+    expect((retry as { path: string }).path).toBe('work/a-2.pdf');
+    expect(fs.existsSync(path.join(ctxRoot(), 'work/a-2.pdf'))).toBe(true);
+    fs.rmSync(sourceAbs, { force: true });
+  });
+
+  it('覆盖导入 token 只能用一个：重复使用直接失败', async () => {
+    const c = await loadContexts();
+    const res = await c.importContextFileAsDuplicate('not-a-real-token');
+    expect(res.ok).toBe(false);
+    expect((res as { code?: string }).code).toBe('E_IMPORT_TOKEN');
   });
 
   it('allows empty content write/upload without dedup check', async () => {

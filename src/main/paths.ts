@@ -146,9 +146,15 @@ export const cogseedAgentSkillLifecycleDir = (uid: string) => path.join(cogseedA
 export const userTranscriptGlossaryDir  = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'transcript');
 export const userTranscriptGlossaryFile = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'transcript-glossary.json');
 export const userTranscriptRunsDir      = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'runs');
+/** 转写文档的场景标签（「仅本场景」作用域的依据）：与词表同域、同属私人资产。 */
+export const userTranscriptDocTagsFile  = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'transcript-doc-tags.json');
 /** 本地埋点（方案 §8.2「可选埋点，本地」）：一行一个事件，只追加、不上报。 */
 export const userTranscriptMetricsFile  = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'metrics.jsonl');
 export const userTranscriptRunDir       = (uid: string, runId: string) => path.join(userTranscriptRunsDir(uid), runId);
+
+// ── 知识库测验（测验面板的本地反馈台账）────────────────────────────────────
+/** 「优质内容 / 劣质内容」评分：一行一个事件，只追加、不联网、不上报。 */
+export const userKbQuizFeedbackFile     = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'kb', 'quiz-feedback.jsonl');
 
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
