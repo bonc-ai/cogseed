@@ -120,6 +120,10 @@
     captureSettings: null,
     /** 资产详情按需拉的版本链（版本组 2026-09-16）：{assetId, versions}。 */
     assetVersions: null,
+    /** KSTAR 溯源（2026-09-17）：{[episodeId]: {goal,status,at}} 摘要缓存；
+     *  kstarEpisode 为点开中的单条详情 {episodeId, episode, review}。 */
+    kstarSummaries: null,
+    kstarEpisode: null,
     sources: [],
     tree: null,
     proofs: [],
@@ -129,7 +133,7 @@
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '' },
     backStack: [],
   };
   NS.store = store;
@@ -260,6 +264,42 @@
     NS.notify();
   };
 
+  /** KSTAR 溯源（2026-09-17）：资产详情证据含 kse 引用时批量拉任务目标
+   *  摘要（chip 显示用）；失败静默（chip 退回占位标题）。 */
+  NS.loadKstarEpisodeSummaries = async function loadKstarEpisodeSummaries(assetId) {
+    const asset = store.assets.find((a) => String(a.id) === String(assetId));
+    if (!asset) return;
+    const ids = (asset.evidenceRefs || []).map((ref) => String(ref.id || '')).filter((id) => id.startsWith('kse-'));
+    if (!ids.length) return;
+    const have = store.kstarSummaries || {};
+    const missing = ids.filter((id) => !have[id]);
+    if (!missing.length) return;
+    try {
+      const result = await api.call('recall.kstar.episodes.summaries', { ids: missing });
+      store.kstarSummaries = { ...have, ...Object.fromEntries(((result && result.summaries) || []).map((s) => [String(s.id), s])) };
+      NS.notify();
+    } catch (error) {
+      // 摘要缺席只影响 chip 文案，不阻断详情。
+    }
+  };
+
+  /** 点开单条任务复盘详情（就地展开块）。 */
+  NS.loadKstarEpisode = async function loadKstarEpisode(episodeId) {
+    const id = String(episodeId || '');
+    if (!id) return;
+    store.kstarEpisode = { episodeId: id };
+    NS.notify();
+    let data = null;
+    try {
+      data = await api.call('recall.kstar.episode.read', { episodeId: id });
+    } catch (error) {
+      data = null;
+    }
+    if (!store.kstarEpisode || String(store.kstarEpisode.episodeId) !== id) return;
+    store.kstarEpisode = { episodeId: id, episode: data && data.episode, review: data && data.review };
+    NS.notify();
+  };
+
   /* ────────────────────────── 路由 ────────────────────────── */
 
   /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab——我的认知 / 待我处理 /
@@ -279,7 +319,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' }, next);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;

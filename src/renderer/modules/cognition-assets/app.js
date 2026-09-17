@@ -158,6 +158,17 @@
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
           case 'select-asset-version': await A.selectAssetVersion(id, el.dataset.version || ''); break;
+          case 'open-kstar-episode': {
+            // 再点同一 chip 或点「收起」（id 空）即收起；展开时拉详情。
+            // 展开块不是导航（replace 不压返回栈），且必须带全 route 上下文
+            //（go 的 next 会与默认形状合并，缺 name 会跳走）。
+            const prev = String(S.route.kstarEpisodeId || '');
+            const next = String(el.dataset.id || '');
+            const open = next && next !== prev ? next : '';
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), kstarEpisodeId: open }, { replace: true });
+            if (open) void NS.loadKstarEpisode(open);
+            break;
+          }
           case 'merge-asset': await A.mergeAssets(id, el.dataset.target || ''); break;
           case 'source-action': await A.sourceAction(el.dataset.kind || '', id, el.dataset.action); break;
           case 'capture-action': await A.captureAction(id, el.dataset.action); break;
@@ -356,11 +367,13 @@
     if (captureId && (!S.captureContext || S.captureContext.captureId !== captureId)) {
       void NS.loadCaptureContext(captureId);
     }
-    // 资产详情版本链同理按需补拉（版本组 2026-09-16）。
+    // 资产详情版本链同理按需补拉（版本组 2026-09-16）；KSTAR 摘要随详情
+    // 一起（2026-09-17 资产侧溯源）。
     const assetId = String(S.route.assetId || '');
     if (assetId && (!S.assetVersions || S.assetVersions.assetId !== assetId)) {
       void NS.loadAssetVersions(assetId);
     }
+    if (assetId) void NS.loadKstarEpisodeSummaries(assetId);
   });
 
   /** 静默刷新指示：同页 reload（操作后/轮询）期间顶部走一条细进度条。

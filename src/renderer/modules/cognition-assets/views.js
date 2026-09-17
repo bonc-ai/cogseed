@@ -133,11 +133,51 @@
     return refs.filter(sourceRefUnavailable).length * 2 > refs.length;
   }
   const evidenceChip = (ref) => {
-    const label = sourceRefUnavailable(ref)
+    const unavailable = sourceRefUnavailable(ref);
+    // KSTAR 任务复盘引用（2026-09-17 资产侧溯源）：显示任务目标摘要、可点
+    // 开复盘详情——此前只有内部 id 加占位标题，KSTAR 血统确认后不可见。
+    const refId = String(ref.id || '');
+    if (!unavailable && refId.startsWith('kse-')) {
+      const summary = (S.kstarSummaries && S.kstarSummaries[refId]) || null;
+      const label = summary && summary.goal
+        ? summary.goal.slice(0, 24)
+        : String(ref.title || T('cognition.kstar_episode_generic', '任务复盘记录')).trim();
+      return `<span class="ca-chip ca-chip-link is-line" data-act="open-kstar-episode" data-id="${esc(refId)}" ${roleBtn()} title="${esc(T('cognition.kstar_episode_open_hint', '查看这次任务的复盘'))}">${esc(label)}</span>`;
+    }
+    const label = unavailable
       ? T('cognition.source_unavailable_label', '来源记录不可用')
       : String(ref.title || ref.conversationTitle || ref.name || sourceIndex().get(String(ref.id || ''))?.title || '').trim();
-    return chip(label || T('cognition.source_deleted', '来源已删除'), sourceRefUnavailable(ref) ? 'amber' : 'line');
+    return chip(label || T('cognition.source_deleted', '来源已删除'), unavailable ? 'amber' : 'line');
   };
+
+  /** KSTAR 复盘详情块（2026-09-17）：点开证据 chip 就地展开那次任务的
+   *  预期/实际/结果/归因——资产确认后 KSTAR 来龙去脉仍可追。 */
+  function kstarEpisodeSection(route) {
+    const id = String(route.kstarEpisodeId || '');
+    if (!id) return '';
+    const state = S.kstarEpisode;
+    if (!state || state.episodeId !== id) {
+      return `<div class="ca-sect"><div class="ca-sub">${esc(T('cognition.kstar_episode_loading', '正在读取这次任务的复盘…'))}</div></div>`;
+    }
+    const outcomeText = {
+      better_than_expected: T('cognition.review_outcome_better', '比预期好'),
+      met_expected: T('cognition.review_outcome_met', '符合预期'),
+      worse_than_expected: T('cognition.review_outcome_worse', '比预期差'),
+      unclear: T('cognition.review_outcome_unclear', '结果不明'),
+    }[String((state.review && state.review.outcome) || '')] || '—';
+    const row = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value).slice(0, 200))}</span></div>` : '';
+    return `<div class="ca-sect">
+      <div class="ca-row-title">${esc(T('cognition.kstar_episode_detail_title', '任务复盘详情'))}</div>
+      <div class="ca-meta-row">
+        ${row(T('cognition.review_signal_expected', '预期'), state.review && state.review.expectedResult)}
+        ${row(T('cognition.review_signal_actual', '实际'), state.review && state.review.actualResult)}
+        ${row(T('cognition.review_signal_outcome', '结果'), outcomeText)}
+        ${row(T('cognition.review_signal_attribution', '归因'), state.review && state.review.attribution)}
+      </div>
+      <p class="ca-note">${esc(String(state.episode && state.episode.goal || ''))}</p>
+      ${btn(T('common.close', '收起'), 'open-kstar-episode', { id: '', small: true })}
+    </div>`;
+  }
 
   const candidatePending = (candidate) => !!(candidate.capabilities && candidate.capabilities.countsAsPending);
   /** 候选来源徽章（2026-09-16 KSTAR 融合）：三条产出线可辨——任务复盘
@@ -441,9 +481,19 @@
     const scopeText = !scopeRaw
       ? T('cognition.asset_scope_unset', '还没设置')
       : (/全局|画像/.test(scopeRaw) ? T('cognition.asset_scope_all', '所有对话') : scopeRaw);
-    const originText = asset.learningProvenance
-      ? T('cognition.asset_origin_kstar', '来自任务复盘')
-      : {
+    // 溯源行（2026-09-17 补齐）：KSTAR 血统认 learningProvenance **或**
+    // learningSignal——偏好扫描线不写 provenance 只写信号，此前被漏掉，
+    // 资产确认后 KSTAR 来龙去脉在详情页不可见。
+    const kstarSource = asset.learningProvenance
+      ? 'review'
+      : asset.learningSignal && ['review', 'preference_scan'].includes(String(asset.learningSignal.source || ''))
+        ? String(asset.learningSignal.source)
+        : '';
+    const originText = kstarSource === 'preference_scan'
+      ? T('cognition.asset_origin_pref_scan', '来自偏好识别')
+      : kstarSource
+        ? T('cognition.asset_origin_kstar', '来自任务复盘')
+        : {
         user_confirmed: T('cognition.asset_origin_user', '你确认的'),
         user_confirmed_unverified: T('cognition.asset_origin_user', '你确认的'),
         automatically_extracted_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
@@ -473,6 +523,8 @@
           <div><div class="ca-k">${esc(T('cognition.asset_proofs_label', '用过几次'))}</div><div class="ca-v">${proofCount ? `${proofCount} ${esc(T('cognition.asset_proof_times', '次'))}` : esc(T('cognition.asset_no_proofs', '还没用过'))}</div></div>
         </div>
       </details>
+      ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div></details>` : ''}
+      ${kstarEpisodeSection(route)}
       ${assetVersionsSection(asset)}
       ${affectedCopy.length ? `<div class="ca-sect"><p class="ca-note">${esc(affectedCopy[0])}</p><div class="ca-actions">${affectedCopy.slice(1).join('')}</div></div>` : ''}
       ${assetUsageSection(asset, route)}

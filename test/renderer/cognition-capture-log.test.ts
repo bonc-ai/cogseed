@@ -849,6 +849,32 @@ describe('整理详情页', () => {
     expect(plain).not.toContain('来自任务复盘');
   });
 
+  it('KSTAR 资产侧溯源（2026-09-17）：偏好信号→来自偏好识别；kse 证据 chip 显目标摘要可点开复盘', () => {
+    // ① learningSignal.source=preference_scan 的溯源（偏好线不写 provenance）。
+    const asset = {
+      id: 'aa-k1', title: '不用比喻回答', type: 'personal', status: 'active',
+      scope: 'general', version: '1', updatedAt: '2026-09-16T00:00:00.000Z',
+      learningSignal: { deltaR: 'unknown', deltaA: 'unknown', outcome: 'met_expected', confidence: 0.9, source: 'preference_scan' },
+      evidenceRefs: [{ id: 'kse-abc123', kind: 'execution', title: 'KSTAR requirement episode' }],
+    };
+    const html = renderPage('overview', {
+      assets: [asset], proofs: [], sources: [],
+      kstarSummaries: { 'kse-abc123': { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？', status: 'completed', at: '' } },
+    }, { assetId: 'aa-k1' });
+    expect(html).toContain('来自偏好识别');
+    expect(html).toContain('data-act="open-kstar-episode" data-id="kse-abc123"');
+    expect(html).toContain('我想知道你的认知资产是怎么存的？'.slice(0, 12));
+    // ② 点开态：复盘详情块（route.kstarEpisodeId + store.kstarEpisode）。
+    const open = renderPage('overview', {
+      assets: [asset], proofs: [], sources: [], kstarSummaries: null,
+      kstarEpisode: { episodeId: 'kse-abc123', episode: { id: 'kse-abc123', goal: '我想知道你的认知资产是怎么存的？' }, review: { expectedResult: '给出技术结论', actualResult: '调用失败', outcome: 'worse_than_expected', attribution: 'execution_gap' } },
+    }, { assetId: 'aa-k1', kstarEpisodeId: 'kse-abc123' });
+    expect(open).toContain('任务复盘详情');
+    expect(open).toContain('给出技术结论');
+    expect(open).toContain('比预期差');
+    expect(open).toContain('execution_gap');
+  });
+
   it('无候选：显示模型给出的理由与筛选原因白话', () => {
     const html = renderPage('organize', {
       captures: [{

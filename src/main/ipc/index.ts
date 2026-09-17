@@ -67,7 +67,7 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
-import { listKstarEpisodes } from '../features/kstar/episode-store';
+import { listKstarEpisodes, readKstarEpisode } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
 import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
@@ -2797,6 +2797,55 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.assets.merge': async ({ sourceAssetId, targetAssetId, note } = {}, ctx) => {
     if (!safeId(sourceAssetId) || !safeId(targetAssetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset merge');
     return { ok: true, asset: await recallAssets.mergeAbilityAssets(ctx.userId, sourceAssetId, targetAssetId, { actor: 'user', reason: note ?? 'user merge' }) };
+  },
+
+  // 资产侧 KSTAR 溯源（2026-09-17）：证据区 kse 引用的批量摘要与单条复盘
+  // 详情——此前 KSTAR 血统只在候选卡可见，确认后沉回数据层。
+  'recall.kstar.episodes.summaries': async ({ ids } = {}, ctx) => {
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some((id) => typeof id !== 'string' || !safeId(id))) throw new Error('invalid kstar episode ids');
+    const wanted = new Set(ids.map((id) => String(id)));
+    const episodes = (await listKstarEpisodes(ctx.userId)).filter((episode) => wanted.has(String(episode.id)));
+    return {
+      ok: true,
+      summaries: episodes.map((episode) => ({
+        id: episode.id,
+        goal: String(episode.t?.userGoal || '').slice(0, 120),
+        status: String(episode.r?.status || ''),
+        at: String(episode.createdAt || ''),
+      })),
+    };
+  },
+  'recall.kstar.episode.read': async ({ episodeId } = {}, ctx) => {
+    if (typeof episodeId !== 'string' || !safeId(episodeId)) throw new Error('invalid kstar episode id');
+    const episode = await readKstarEpisode(ctx.userId, episodeId);
+    if (!episode) throw new Error('kstar episode not found');
+    let review: { expectedResult?: string; actualResult?: string; outcome?: string; attribution?: string; confidence?: number } | null = null;
+    try {
+      const record = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
+      if (record) {
+        review = {
+          ...(record.expectedResult !== undefined ? { expectedResult: String(record.expectedResult).slice(0, 400) } : {}),
+          ...(record.actualResult !== undefined ? { actualResult: String(record.actualResult).slice(0, 400) } : {}),
+          ...(record.outcome !== undefined ? { outcome: String(record.outcome) } : {}),
+          ...(record.attribution !== undefined ? { attribution: String(record.attribution) } : {}),
+          ...(record.confidence !== undefined ? { confidence: Number(record.confidence) } : {}),
+        };
+      }
+    } catch {
+      // 复盘记录缺席只少一截展示，不阻断 episode 详情。
+    }
+    return {
+      ok: true,
+      episode: {
+        id: episode.id,
+        goal: String(episode.t?.userGoal || '').slice(0, 400),
+        status: String(episode.r?.status || ''),
+        finalText: String(episode.r?.finalText || '').slice(0, 600),
+        sessionId: String(episode.sessionId || ''),
+        at: String(episode.createdAt || ''),
+      },
+      review,
+    };
   },
 
   'recall.skills.prepare': async ({ assetId } = {}, ctx) => {
