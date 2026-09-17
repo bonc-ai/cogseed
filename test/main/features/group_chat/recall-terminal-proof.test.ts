@@ -88,14 +88,14 @@ describe('group-chat recall terminal proof entry', () => {
 
       const proofs = await import('../../../../src/main/features/recall/proof-service');
       const assets = await import('../../../../src/main/features/recall/asset-service');
-      let advanced = false;
-      for (let attempt = 0; attempt < 50 && !advanced; attempt += 1) {
+      // Proof success is persisted before the asset and receipt updates. Wait for
+      // all terminal outcomes before asserting completion and removing test data.
+      await vi.waitFor(async () => {
         const list = await proofs.listTransferProofs(userId);
-        advanced = list.some((proof) => proof.status === 'succeeded' && proof.receiptId);
-        if (!advanced) await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(advanced).toBe(true);
-      expect((await assets.readAbilityAsset(userId, asset.id)).maturity).toBe('transfer_validated');
+        expect(list.some((proof) => proof.status === 'succeeded' && proof.receiptId)).toBe(true);
+        expect((await assets.readAbilityAsset(userId, asset.id)).maturity).toBe('transfer_validated');
+        expect((await receipts.readReceipt(userId, `turn-${turnId}`)).status).toBe('completed');
+      }, { timeout: 5_000 });
     } finally {
       stop();
     }
