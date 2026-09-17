@@ -5683,19 +5683,6 @@
   "kb.workbench.close_ai_panel": "Fechar análise e perguntas com IA",
   "kb.eco.hide_labels": "Mostrar apenas ícones",
   "kb.eco.show_labels": "Mostrar ícones e rótulos",
-  "cognition.source_chat": "De conversas",
-  "cognition.source_kstar": "Do KSTAR",
-  "cognition.tab_kstar_assets": "Ativos do KSTAR",
-  "cognition.tab_kstar_attention": "Propostas KSTAR",
-  "cognition.tab_kstar_episodes": "Análises de tarefas",
-  "cognition.kstar_assets_title": "Ativos precipitados pelo KSTAR",
-  "cognition.kstar_assets_hint": "Lições que o KSTAR extraiu de tarefas concluídas, confirmadas por você como ativos.",
-  "cognition.kstar_assets_stat": "Precipitado pelo KSTAR",
-  "cognition.kstar_assets_empty": "Ainda não há ativos precipitados pelo KSTAR — após uma tarefa terminar e ser analisada, novas lições aparecem primeiro em \"Propostas KSTAR\".",
-  "cognition.kstar_attention_title": "Propostas KSTAR",
-  "cognition.kstar_attention_hint": "Propostas de experiência geradas pelas análises do KSTAR de tarefas concluídas; confirmar torna uma um ativo oficial.",
-  "cognition.kstar_attention_empty": "Nenhuma proposta KSTAR aguardando confirmação",
-  "cognition.kstar_episodes_title": "Análises de tarefas",
   "cognition.kstar_episodes_hint": "Após cada tarefa terminar, o KSTAR analisa automaticamente: a tarefa, o que aconteceu, por quê e a lição aprendida. Clique para ver a análise completa.",
   "cognition.kstar_episodes_empty": "Ainda não há tarefas analisadas pelo KSTAR",
   "cognition.kstar_episodes_loading": "Carregando análises de tarefas…",
@@ -5705,5 +5692,7 @@
   "cognition.evidence_group_chat": "Conversas e suas declarações",
   "cognition.evidence_group_chat_hint": "resumidas a partir de conversas do dia a dia",
   "cognition.asset_scope_personal": "Conversas pessoais",
-  "cognition.proof_version_deleted": "(v{n} na época; essa versão foi excluída depois)"
+  "cognition.proof_version_deleted": "(v{n} na época; essa versão foi excluída depois)",
+  "cognition.assets_kstar_tab": "KSTAR",
+  "cognition.asset_kstar_badge": "KSTAR"
 }

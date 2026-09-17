@@ -816,15 +816,11 @@
 
   function viewOverview(route) {
     const stats = NS.stats();
-    // 两线顶级分开（2026-09-17 B 档）：对话线列表与统计只算对话血统资产
-    //（KSTAR 血统归 KSTAR 侧）——数字与列表逐条对得上，不分线会出现
-    // "统计 14 条、列表 11 条"的错位。已删除档例外：保留全部（保留期
-    // 恢复入口只有这一处，KSTAR 血统的已删资产也在这里恢复）。
-    const chatAssets = S.assets.filter((a) => !NS.isKstarAsset(a));
-    const chatPending = S.candidates.filter((c) => candidateAwaiting(c) && !NS.isKstarCandidate(c)).length;
-    const chatValidated = chatAssets.filter((a) => a.maturity === 'transfer_validated' || a.maturity === 'effectiveness_validated').length;
+    // 两线不拆列表（2026-09-17 二次定调）：全量列表+每条 KSTAR 资产打徽章
+    //（子安口径：出身标记直接带 KSTAR 字样）+ chips 里给一个「KSTAR」筛选
+    // 档。已删除档保留全部（保留期恢复入口只有这一处）。
     const counts = {};
-    for (const [id] of CATEGORIES) counts[id] = chatAssets.filter((a) => a.type === id && !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length;
+    for (const [id] of CATEGORIES) counts[id] = S.assets.filter((a) => a.type === id && !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length;
     const sourceCount = S.sources.reduce((n, group) => n + (Array.isArray(group.items) ? group.items.length : 0), 0);
     const captureCount = Array.isArray(S.captures) ? S.captures.length : 0;
     // 每个资产的最近使用时间（时间线里 occurredAt 的最大值）：列表行此前
@@ -847,9 +843,9 @@
       T('cognition.overview_title', '我的认知资产'),
       T('cognition.tree_page_hint', '树只展示正式认知资产。候选经确认后成为正式资产，经真实复用与证据验证后升级为「已验证」。'),
       statsRow([
-        [chatAssets.filter((a) => !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length, T('cognition.overview_stat_confirmed', '已确认资产')],
-        [chatPending, T('cognition.overview_stat_pending', '待确认候选')],
-        [chatValidated, T('cognition.overview_stat_validated', '已验证')],
+        [stats.confirmed, T('cognition.overview_stat_confirmed', '已确认资产')],
+        [stats.pending, T('cognition.overview_stat_pending', '待确认候选')],
+        [stats.transferOk, T('cognition.overview_stat_validated', '已验证')],
         [stats.attention, T('cognition.overview_stat_attention', '需要关注')],
       ]),
     );
@@ -865,12 +861,16 @@
     // purged/revoked 不单列（墓碑无内容/终态）。
     const HIDDEN_STATUS = ['archived', 'deleted', 'purged', 'revoked'];
     const deletedCount = S.assets.filter((a) => String(a.status || 'active') === 'deleted').length;
+    const kstarCount = S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active')) && NS.isKstarAsset(a)).length;
     const filtered = route.category === 'deleted'
       ? S.assets.filter((a) => String(a.status || 'active') === 'deleted')
-      : chatAssets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))
-        && (!route.category || a.type === route.category));
-    const chips = [['', T('common.all', '全部'), chatAssets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))).length]]
+      : route.category === 'kstar'
+        ? S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active')) && NS.isKstarAsset(a))
+        : S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))
+          && (!route.category || a.type === route.category));
+    const chips = [['', T('common.all', '全部'), S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))).length]]
       .concat(CATEGORIES.map(([id, key, fallback]) => [id, T(key, fallback), counts[id]]))
+      .concat(kstarCount ? [['kstar', T('cognition.assets_kstar_tab', 'KSTAR'), kstarCount]] : [])
       .concat(deletedCount ? [['deleted', T('cognition.assets_deleted_tab', '已删除'), deletedCount]] : []);
     const listHtml = filtered.length
       ? filtered.map((asset) => `
@@ -879,7 +879,7 @@
             <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
             <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))} · ${esc(lastUseText(asset.id))}</div>
           </div>
-          <div class="ca-row-side">${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
+          <div class="ca-row-side">${NS.isKstarAsset(asset) ? chip(T('cognition.asset_kstar_badge', 'KSTAR'), 'line') : ''}${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
         </div>`).join('')
       : empty(
         T('cognition.tree_empty', '还没有正式资产'),
@@ -901,7 +901,8 @@
         <div class="ca-tree-cap ca-tree-wip">${esc(T('cognition.tree_wip_note', '这部分还是开发中的骨架：先搭出可点的骨架，再按骨架逐步打磨视觉与交互。现阶段仅内部学员使用，所以未完成部分暂时展示；正式对外版本中不会出现。'))}</div>
       </div>
       ${sectionHead(T('cognition.overview_list_title', '资产明细'), '', chips.map(([id, label, count]) => btn(`${label} ${count}`, 'filter-cat', { id, className: `ca-chip ca-chip-btn${String(route.category || '') === id ? ' is-green' : ''}` })).join(' '))}
-      ${listHtml}`;
+      ${listHtml}
+      ${kstarEpisodesSection(route)}`;
   }
 
   /* ────────────────────────── 视图：待我处理 ────────────────────────── */
@@ -975,53 +976,11 @@
     </div>`;
   }
 
-  /* ───────────────── 视图：KSTAR 线（2026-09-17 B 档两线分开） ───────────────── */
-
-  /** KSTAR 沉淀的资产：口径=NS.isKstarAsset（身上挂 KSTAR 任务复盘证据或
-   *  学习信号）。详情复用 assetDetail——版本块内证据按两线分组呈现，KSTAR
-   *  资产上混挂的对话证据不会被藏掉，只是各自归组。 */
-  function viewKstarAssets(route) {
-    if (route.assetId) {
-      const asset = S.assets.find((a) => String(a.id) === String(route.assetId));
-      if (asset) return hero(T('cognition.kstar_assets_title', 'KSTAR 沉淀的资产'), '') + assetDetail(asset, route);
-    }
-    const HIDDEN_STATUS = ['archived', 'deleted', 'purged', 'revoked'];
-    const kstarAssets = S.assets.filter((a) => NS.isKstarAsset(a) && !HIDDEN_STATUS.includes(String(a.status || 'active')));
-    const rows = kstarAssets.map((asset) => `
-      <div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
-        <div class="ca-row-main">
-          <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
-          <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))}</div>
-        </div>
-        <div class="ca-row-side">${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
-      </div>`).join('');
-    return `${hero(
-      T('cognition.kstar_assets_title', 'KSTAR 沉淀的资产'),
-      T('cognition.kstar_assets_hint', '任务完结后 KSTAR 复盘沉淀出的经验，经你确认后成为资产。'),
-      statsRow([[kstarAssets.length, T('cognition.kstar_assets_stat', 'KSTAR 沉淀')]]),
-    )}
-    ${kstarAssets.length ? `<div class="ca-card">${rows}</div>` : `<div class="ca-card">${empty(T('cognition.kstar_assets_empty', '还没有 KSTAR 沉淀的资产——任务完结并复盘后，学到的经验会先出现在「待确认提案」'))}</div>`}`;
-  }
-
-  /** KSTAR 待确认提案：与对话线「待我处理」同构，只收 KSTAR 血统候选。 */
-  function viewKstarAttention(route) {
-    if (route.candidateId) return viewCandidate(route);
-    const pending = S.candidates.filter((c) => candidatePending(c) && NS.isKstarCandidate(c));
-    const broken = pending.filter(evidenceMostlyUnavailable);
-    const healthy = pending.filter((c) => !evidenceMostlyUnavailable(c));
-    return `${hero(
-      T('cognition.kstar_attention_title', 'KSTAR 待确认提案'),
-      T('cognition.kstar_attention_hint', '任务完结后 KSTAR 复盘产生的经验提案；确认后成为正式资产。'),
-      statsRow([[healthy.filter(candidateAwaiting).length, T('cognition.review_stat_wait', '等待确认')]]),
-    )}
-    ${healthy.length ? healthy.map((c) => candidateCard(c, false)).join('') : `<div class="ca-card">${empty(T('cognition.kstar_attention_empty', '当前没有等待确认的 KSTAR 提案'))}</div>`}
-    ${broken.length ? sectionHead(T('cognition.review_group_evidence', '来源已删除的候选'), T('cognition.review_group_evidence_note', '这些候选的原始出处已被删除；可以点开确认后仍要保存，或选择不保存')) + broken.map((c) => candidateCard(c, true)).join('') : ''}`;
-  }
-
-  /** KSTAR 任务复盘历史：每场被复盘的任务一行，点行展开完整复盘
-   *  （kstarEpisodeSection 复用，数据走 loadKstarEpisode）。 */
-  function viewKstarEpisodes(route) {
-    const episodes = Array.isArray(S.kstarEpisodes) ? S.kstarEpisodes : null;
+  /* ───────────────── KSTAR 复盘历史区块（2026-09-17 二次定调） ─────────────────
+   * 两线不拆 tab：KSTAR 任务复盘作为「我的认知」页底部折叠区（默认收起），
+   * 每场被复盘的任务一行，点行就地展开完整复盘（复用 kstarEpisodeSection）。 */
+  function kstarEpisodesSection(route) {
+    const episodes = Array.isArray(S.kstarEpisodes) ? S.kstarEpisodes : [];
     const openId = String(route.kstarEpisodeId || '');
     const rows = (episodes || []).map((ep) => {
       const goal = String((ep.t && ep.t.userGoal) || '').trim();
@@ -1034,27 +993,27 @@
         </div>
       </div>${isOpen ? kstarEpisodeSection(route) : ''}`;
     }).join('');
-    return `${hero(
-      T('cognition.kstar_episodes_title', '任务复盘'),
-      T('cognition.kstar_episodes_hint', '每场任务完结后 KSTAR 自动复盘：当时的任务、实际发生、为什么、学到的经验。点开看完整复盘。'),
-    )}
-    ${episodes === null
+    const body = episodes === null
       ? `<div class="ca-card">${empty(T('cognition.kstar_episodes_loading', '正在读取任务复盘列表…'))}</div>`
       : episodes.length
         ? `<div class="ca-card">${rows}</div>`
-        : `<div class="ca-card">${empty(T('cognition.kstar_episodes_empty', '还没有被 KSTAR 复盘过的任务'))}</div>`}`;
+        : `<div class="ca-card">${empty(T('cognition.kstar_episodes_empty', '还没有被 KSTAR 复盘过的任务'))}</div>`;
+    return `<details class="ca-advanced ca-kstar-episodes"${openId ? ' open' : ''}>
+      <summary>${esc(T('cognition.evidence_group_kstar', 'KSTAR 任务复盘'))}<span class="ca-note">${esc(T('cognition.kstar_episodes_hint', '每场任务完结后 KSTAR 自动复盘：当时的任务、实际发生、为什么、学到的经验。点开看完整复盘。'))}</span></summary>
+      ${body}
+    </details>`;
   }
 
   function viewReview(route) {
     if (route.candidateId) return viewCandidate(route);
     const stats = NS.stats();
-    // 两线分开（B 档）：对话线待处理只收对话线候选，KSTAR 提案归
-    // kstar-attention；处理记录同步分线。
-    const pending = S.candidates.filter((c) => candidatePending(c) && !NS.isKstarCandidate(c));
+    // 两线不拆（2026-09-17 二次定调）：KSTAR 提案与对话候选同池确认，
+    // 候选卡自带来源徽章（KSTAR 复盘/KSTAR 偏好/会话整理）区分出身。
+    const pending = S.candidates.filter(candidatePending);
     const broken = pending.filter(evidenceMostlyUnavailable);
     const healthy = pending.filter((c) => !evidenceMostlyUnavailable(c));
     const processed = S.candidates
-      .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status || '')) && !NS.isKstarCandidate(c))
+      .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status || '')))
       .slice(0, 5);
     // 处理结果按真实状态如实显示——此前无论保存还是拒绝都写「已保存」，
     // 与筛选口径（confirmed/rejected/ignored 三种）不符（用户实测抓出）。
@@ -1695,18 +1654,11 @@
     lastRenderKey = key;
     // 候选详情归「待我处理」、整理详情归「整理」；interactive-tour 靠
     // data-cognition-page-link="assets"/"captures" 定位 tab，随重构迁移。
+    // 两线不拆 tab（2026-09-17 二次定调）：系统层本就合流（进候选池即同
+    // 一套处理与使用），界面上分区是人为对立——单列表+出身徽章+筛选档。
     const activeTab = route.name === 'review' || route.candidateId ? 'review'
-      : route.name === 'organize' || route.name === 'organize-settings' || route.captureId ? 'organize'
-      : route.name === 'kstar-assets' || route.name === 'kstar-attention' || route.name === 'kstar-episodes' ? route.name
-      : 'overview';
-    // 两线顶级分开（2026-09-17 子安拍板 B 档）：当前在哪条线由路由推导
-    //（kstar- 前缀即 KSTAR 线），tab 条只显示本线的 tab，互不混排。
-    const source = activeTab.startsWith('kstar-') ? 'kstar' : 'chat';
-    const sourceSwitch = `<div class="ca-source-switch">
-      <div class="ca-source-btn${source === 'chat' ? ' is-on' : ''}" data-act="switch-source" data-id="chat" ${roleBtn()}>${esc(T('cognition.source_chat', '对话沉淀'))}</div>
-      <div class="ca-source-btn${source === 'kstar' ? ' is-on' : ''}" data-act="switch-source" data-id="kstar" ${roleBtn()}>${esc(T('cognition.source_kstar', 'KSTAR 沉淀'))}</div>
-    </div>`;
-    const tabsHtml = `<nav class="ca-tabs">${NS.TABS.filter((tab) => (tab.group || 'chat') === source).map((tab) => {
+      : route.name === 'organize' || route.name === 'organize-settings' || route.captureId ? 'organize' : 'overview';
+    const tabsHtml = `<nav class="ca-tabs">${NS.TABS.map((tab) => {
       const active = activeTab === tab.id;
       const extra = tab.id === 'overview' ? ' data-cognition-page-link="assets"' : (tab.id === 'organize' ? ' data-cognition-page-link="captures"' : '');
       // 2026-09-15 子安要求：tab 只留标题，描述小字与 title 悬浮注释删除。
@@ -1721,16 +1673,12 @@
     } else if (route.name === 'review') body = viewReview(route);
     else if (route.name === 'organize') body = route.captureId ? viewCaptureDetail(route) : viewOrganizeTasks(route);
     else if (route.name === 'organize-settings') body = viewOrganizeSettingsPage();
-    else if (route.name === 'kstar-assets') body = viewKstarAssets(route);
-    else if (route.name === 'kstar-attention') body = viewKstarAttention(route);
-    else if (route.name === 'kstar-episodes') body = viewKstarEpisodes(route);
     else body = viewOverview(route);
     const errorBanner = S.errors.length && S.loaded
       ? `<div class="ca-banner">${esc(T('cognition.partial_load', '部分数据读取失败，页面已用可用数据渲染。'))}${btn(T('common.retry', '重试'), 'refresh', { small: true })}</div>`
       : '';
     root.innerHTML = `
       <div class="ca-app">
-        ${sourceSwitch}
         ${tabsHtml}
         ${errorBanner}
         <div class="ca-scroll" id="ca-scroll">${body}</div>

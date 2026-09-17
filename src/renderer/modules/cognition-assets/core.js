@@ -325,14 +325,9 @@
    * 使用记录并入资产详情、经验（KSTAR）与来源健康常态页砍除（来源改为
    * 异常驱动，只在待我处理出现）。 */
   const TABS = [
-    { id: 'overview', group: 'chat', titleKey: 'cognition.tab_overview', title: '我的认知' },
-    { id: 'review', group: 'chat', titleKey: 'cognition.tab_review', title: '待我处理' },
-    { id: 'organize', group: 'chat', titleKey: 'cognition.tab_organize', title: '整理' },
-    // KSTAR 侧（2026-09-17 子安拍板 B 档）：与对话沉淀线顶级分开，全链路
-    // 各走各的 tab——列表、待确认、复盘历史互不混排。
-    { id: 'kstar-assets', group: 'kstar', titleKey: 'cognition.tab_kstar_assets', title: '沉淀的资产' },
-    { id: 'kstar-attention', group: 'kstar', titleKey: 'cognition.tab_kstar_attention', title: '待确认提案' },
-    { id: 'kstar-episodes', group: 'kstar', titleKey: 'cognition.tab_kstar_episodes', title: '任务复盘' },
+    { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
+    { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
+    { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
   ];
   NS.TABS = TABS;
   // 归边判定 NS.isKstarAsset / NS.isKstarCandidate 由 views.js 定义

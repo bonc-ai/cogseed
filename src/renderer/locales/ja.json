@@ -5683,19 +5683,6 @@
   "kb.workbench.close_ai_panel": "AI 解析と質問応答を閉じる",
   "kb.eco.hide_labels": "アイコンのみ表示",
   "kb.eco.show_labels": "アイコンとラベルを表示",
-  "cognition.source_chat": "会話からの蓄積",
-  "cognition.source_kstar": "KSTAR からの蓄積",
-  "cognition.tab_kstar_assets": "KSTAR 資産",
-  "cognition.tab_kstar_attention": "KSTAR 提案",
-  "cognition.tab_kstar_episodes": "タスク振り返り",
-  "cognition.kstar_assets_title": "KSTAR が蓄積した資産",
-  "cognition.kstar_assets_hint": "タスク完了後に KSTAR が振り返りから抽出した経験を、あなたが確認して資産にします。",
-  "cognition.kstar_assets_stat": "KSTAR 蓄積",
-  "cognition.kstar_assets_empty": "KSTAR 蓄積の資産はまだありません。タスク完了して振り返られると、新しい経験はまず「KSTAR 提案」に現れます。",
-  "cognition.kstar_attention_title": "KSTAR 提案",
-  "cognition.kstar_attention_hint": "完了タスクの KSTAR 振り返りで生まれた経験の提案。確認すると正式な資産になります。",
-  "cognition.kstar_attention_empty": "確認待ちの KSTAR 提案はありません",
-  "cognition.kstar_episodes_title": "タスク振り返り",
   "cognition.kstar_episodes_hint": "各タスクの完了後、KSTAR が自動で振り返ります：当時の任务、実際の結果、理由、得られた経験。クリックで全文を見られます。",
   "cognition.kstar_episodes_empty": "KSTAR が振り返ったタスクはまだありません",
   "cognition.kstar_episodes_loading": "タスク振り返りを読み込み中…",
@@ -5705,5 +5692,7 @@
   "cognition.evidence_group_chat": "会話とあなたの表明",
   "cognition.evidence_group_chat_hint": "日常の会話からまとめたもの",
   "cognition.asset_scope_personal": "個人的な会話",
-  "cognition.proof_version_deleted": "（当時の v{n}、そのバージョンは後に削除されました）"
+  "cognition.proof_version_deleted": "（当時の v{n}、そのバージョンは後に削除されました）",
+  "cognition.assets_kstar_tab": "KSTAR",
+  "cognition.asset_kstar_badge": "KSTAR"
 }

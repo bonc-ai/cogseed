@@ -7588,19 +7588,6 @@
   "kb.workbench.close_ai_panel": "关闭 AI 解析与问答",
   "kb.eco.hide_labels": "仅显示图标",
   "kb.eco.show_labels": "显示图标和文字",
-  "cognition.source_chat": "对话沉淀",
-  "cognition.source_kstar": "KSTAR 沉淀",
-  "cognition.tab_kstar_assets": "沉淀的资产",
-  "cognition.tab_kstar_attention": "待确认提案",
-  "cognition.tab_kstar_episodes": "任务复盘",
-  "cognition.kstar_assets_title": "KSTAR 沉淀的资产",
-  "cognition.kstar_assets_hint": "任务完结后 KSTAR 复盘沉淀出的经验，经你确认后成为资产。",
-  "cognition.kstar_assets_stat": "KSTAR 沉淀",
-  "cognition.kstar_assets_empty": "还没有 KSTAR 沉淀的资产——任务完结并复盘后，学到的经验会先出现在「待确认提案」",
-  "cognition.kstar_attention_title": "KSTAR 待确认提案",
-  "cognition.kstar_attention_hint": "任务完结后 KSTAR 复盘产生的经验提案；确认后成为正式资产。",
-  "cognition.kstar_attention_empty": "当前没有等待确认的 KSTAR 提案",
-  "cognition.kstar_episodes_title": "任务复盘",
   "cognition.kstar_episodes_hint": "每场任务完结后 KSTAR 自动复盘：当时的任务、实际发生、为什么、学到的经验。点开看完整复盘。",
   "cognition.kstar_episodes_empty": "还没有被 KSTAR 复盘过的任务",
   "cognition.kstar_episodes_loading": "正在读取任务复盘列表…",
@@ -7610,5 +7597,7 @@
   "cognition.evidence_group_chat": "对话与你的表态",
   "cognition.evidence_group_chat_hint": "日常对话里总结出来的",
   "cognition.asset_scope_personal": "个人对话",
-  "cognition.proof_version_deleted": "（当时的 v{n}，该版本后来已删除）"
+  "cognition.proof_version_deleted": "（当时的 v{n}，该版本后来已删除）",
+  "cognition.assets_kstar_tab": "KSTAR",
+  "cognition.asset_kstar_badge": "KSTAR"
 }

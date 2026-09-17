@@ -7588,19 +7588,6 @@
   "kb.workbench.close_ai_panel": "Close AI analysis and Q&A",
   "kb.eco.hide_labels": "Show icons only",
   "kb.eco.show_labels": "Show icons and labels",
-  "cognition.source_chat": "From conversations",
-  "cognition.source_kstar": "From KSTAR",
-  "cognition.tab_kstar_assets": "KSTAR assets",
-  "cognition.tab_kstar_attention": "KSTAR proposals",
-  "cognition.tab_kstar_episodes": "Task reviews",
-  "cognition.kstar_assets_title": "Assets precipitated by KSTAR",
-  "cognition.kstar_assets_hint": "Lessons KSTAR distilled from finished tasks, confirmed by you into assets.",
-  "cognition.kstar_assets_stat": "KSTAR precipitated",
-  "cognition.kstar_assets_empty": "No KSTAR-precipitated assets yet — after a task finishes and gets reviewed, new lessons first appear under \"KSTAR proposals\".",
-  "cognition.kstar_attention_title": "KSTAR proposals",
-  "cognition.kstar_attention_hint": "Experience proposals from KSTAR reviews of finished tasks; confirming one makes it an official asset.",
-  "cognition.kstar_attention_empty": "No KSTAR proposals awaiting confirmation",
-  "cognition.kstar_episodes_title": "Task reviews",
   "cognition.kstar_episodes_hint": "After each task finishes, KSTAR reviews it: the task, what happened, why, and the lesson learned. Click to see the full review.",
   "cognition.kstar_episodes_empty": "No tasks reviewed by KSTAR yet",
   "cognition.kstar_episodes_loading": "Loading task reviews…",
@@ -7610,5 +7597,7 @@
   "cognition.evidence_group_chat": "Conversations & your statements",
   "cognition.evidence_group_chat_hint": "summarized from daily conversations",
   "cognition.asset_scope_personal": "Personal conversations",
-  "cognition.proof_version_deleted": "(v{n} at the time; that version was later deleted)"
+  "cognition.proof_version_deleted": "(v{n} at the time; that version was later deleted)",
+  "cognition.assets_kstar_tab": "KSTAR",
+  "cognition.asset_kstar_badge": "KSTAR"
 }

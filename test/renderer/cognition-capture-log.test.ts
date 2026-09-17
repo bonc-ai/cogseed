@@ -36,12 +36,9 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
   cogAssets = {
     T, esc, fmtDate: () => '2026/09/15 10:00',
     TABS: [
-      { id: 'review', group: 'chat', titleKey: 'cognition.tab_review', title: '待我处理' },
-      { id: 'overview', group: 'chat', titleKey: 'cognition.tab_overview', title: '我的认知' },
-      { id: 'organize', group: 'chat', titleKey: 'cognition.tab_organize', title: '整理' },
-      { id: 'kstar-assets', group: 'kstar', titleKey: 'cognition.tab_kstar_assets', title: '沉淀的资产' },
-      { id: 'kstar-attention', group: 'kstar', titleKey: 'cognition.tab_kstar_attention', title: '待确认提案' },
-      { id: 'kstar-episodes', group: 'kstar', titleKey: 'cognition.tab_kstar_episodes', title: '任务复盘' },
+      { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
+      { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
+      { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
     ],
     // stats 从 store 动态算（口径同 core.js）：attention 行的断言依赖它。
     stats: () => {
@@ -154,9 +151,9 @@ const detailCapture = {
 
 describe('信息架构：3 tab 收敛', () => {
   it('旧六视图已删净，新视图 + 设置页 + 异常下钻组件存在', () => {
-    expect(coreSource).toContain("{ id: 'organize', group: 'chat', titleKey: 'cognition.tab_organize'");
-    // B 档（2026-09-17）：KSTAR 线独立三 tab 在 core TABS 注册。
-    expect(coreSource).toContain("{ id: 'kstar-assets', group: 'kstar'");
+    expect(coreSource).toContain("{ id: 'organize', titleKey: 'cognition.tab_organize'");
+    // 两线不拆 tab（2026-09-17 二次定调）：TABS 回三 tab，KSTAR 以徽章+筛选档出现。
+    expect(coreSource).not.toContain("id: 'kstar-assets'");
     expect(coreSource.match(/id: '(evidence|experiences|organize-history|capture-log|manage)'/g)).toBeNull();
     for (const gone of ['function viewManage', 'function viewSourcesOverview', 'function viewSourceDetail', 'function viewExperiences', 'function viewOrganizeHistory', 'function viewCaptureLog', 'function organizeSettingsDrawer']) {
       expect(viewsSource, gone).not.toContain(gone);
@@ -828,18 +825,16 @@ describe('整理详情页', () => {
     // KSTAR 复盘候选（B 档两线分开）：在 KSTAR 侧「待确认提案」列出，
     // 列表行带「KSTAR 复盘」徽章；详情展开复盘信号块。
     const kstar = mk({ learningSignal: { deltaR: -1, deltaA: 'unknown', outcome: 'worse_than_expected', confidence: 0.95, source: 'review', expectedResult: '给出技术结论', actualResult: '模型调用失败' } });
-    const listHtml = renderPage('kstar-attention', { sources: [conversationSources[0]], candidates: [kstar] });
+    const listHtml = review([kstar]);
     expect(listHtml).toContain('KSTAR 复盘');
-    const detailHtml = renderPage('kstar-attention', { sources: [conversationSources[0]], candidates: [kstar] }, { candidateId: 'rcand-k' });
+    const detailHtml = renderPage('review', { sources: [conversationSources[0]], candidates: [kstar] }, { candidateId: 'rcand-k' });
     expect(detailHtml).toContain('复盘依据');
     expect(detailHtml).toContain('给出技术结论');
     expect(detailHtml).toContain('模型调用失败');
     expect(detailHtml).toContain('比预期差');
-    // 对话线「待我处理」不再混入 KSTAR 候选（顶级分开的互斥口径）。
-    expect(review([kstar])).not.toContain('KSTAR 复盘');
-    // 偏好扫描候选：徽章「KSTAR 偏好」（同在 KSTAR 侧）。
+    // 偏好扫描候选：徽章「KSTAR 偏好」。
     const pref = mk({ suggestedType: 'personal', learningSignal: { deltaR: 'unknown', deltaA: 'unknown', outcome: 'met_expected', confidence: 0.9, source: 'preference_scan' } });
-    expect(renderPage('kstar-attention', { sources: [conversationSources[0]], candidates: [pref] })).toContain('KSTAR 偏好');
+    expect(review([pref])).toContain('KSTAR 偏好');
     // capture 候选：徽章「会话整理」。
     expect(review([mk({})])).toContain('会话整理');
   });
@@ -928,35 +923,33 @@ describe('整理详情页', () => {
 
     const chatAsset = { id: 'aa-chat', title: '对话沉淀资产', type: 'rule', status: 'active', version: '1', updatedAt: '2026-09-15T00:00:00.000Z', evidenceRefs: [{ kind: 'conversation', id: 'conv-1', subtype: 'session' }] };
     const kstarAsset = { id: 'aa-kstar', title: 'KSTAR 沉淀资产', type: 'personal', status: 'active', version: '1', updatedAt: '2026-09-16T00:00:00.000Z', evidenceRefs: [{ kind: 'execution', id: 'kse-9' }] };
-    // ① 对话线列表：有源切换条、只列对话血统资产。
-    const chatHtml = renderPage('overview', { assets: [chatAsset, kstarAsset], proofs: [], sources: [] });
-    expect(chatHtml).toContain('data-act="switch-source" data-id="kstar"');
-    expect(chatHtml).toContain('对话沉淀资产');
-    expect(chatHtml).not.toContain('KSTAR 沉淀资产');
-    // ② KSTAR 侧：tab 条只出本线三个 tab，列表只列血统资产。
-    const kstarHtml = renderPage('kstar-assets', { assets: [chatAsset, kstarAsset], proofs: [], sources: [] });
-    expect(kstarHtml).toContain('KSTAR 沉淀资产');
-    expect(kstarHtml).not.toContain('对话沉淀资产');
-    expect(kstarHtml).toContain('任务复盘');
-    expect(kstarHtml).not.toContain('待我处理');
-    expect(kstarHtml).not.toContain('整理');
-    // ③ KSTAR 侧空态。
-    const emptyHtml = renderPage('kstar-assets', { assets: [chatAsset], proofs: [], sources: [] });
-    expect(emptyHtml).toContain('还没有 KSTAR 沉淀的资产');
+    // 单列表两线混排（2026-09-17 二次定调）：不分区，出身靠徽章。
+    const html = renderPage('overview', { assets: [chatAsset, kstarAsset], proofs: [], sources: [], kstarEpisodes: [] });
+    expect(html).toContain('对话沉淀资产');
+    expect(html).toContain('KSTAR 沉淀资产');
+    // KSTAR 资产行带「KSTAR」徽章（子安口径：出身标记直接带 KSTAR 字样）。
+    expect(html).toContain('>KSTAR</span>');
+    // chips 给「KSTAR」筛选档。
+    expect(html).toContain('data-act="filter-cat" data-id="kstar"');
+    // 筛选档只留 KSTAR 血统。
+    const only = renderPage('overview', { assets: [chatAsset, kstarAsset], proofs: [], sources: [], kstarEpisodes: [] }, { category: 'kstar' });
+    expect(only).toContain('KSTAR 沉淀资产');
+    expect(only).not.toContain('对话沉淀资产');
   });
 
-  it('KSTAR 任务复盘列表（kstar-episodes）：行带目标可点开，空态不裸白', () => {
-    const rows = renderPage('kstar-episodes', {
+  it('KSTAR 任务复盘折叠区（我的认知页底部）：行带目标可点开，空态不裸白', () => {
+    const rows = renderPage('overview', {
       assets: [], proofs: [], sources: [],
       kstarEpisodes: [
         { id: 'kse-1', t: { userGoal: '查认知资产是怎么存的' }, updatedAt: '2026-09-17T10:00:00.000Z' },
         { id: 'kse-2', t: {}, createdAt: '2026-09-16T09:00:00.000Z' },
       ],
     });
+    expect(rows).toContain('KSTAR 任务复盘');
     expect(rows).toContain('查认知资产是怎么存的');
     expect(rows).toContain('data-act="open-kstar-episode" data-id="kse-1"');
     expect(rows).toContain('（未记录目标）');
-    const empty = renderPage('kstar-episodes', { assets: [], proofs: [], sources: [], kstarEpisodes: [] });
+    const empty = renderPage('overview', { assets: [], proofs: [], sources: [], kstarEpisodes: [] });
     expect(empty).toContain('还没有被 KSTAR 复盘过的任务');
   });
 
