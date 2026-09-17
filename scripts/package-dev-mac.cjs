@@ -30,20 +30,21 @@ function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
     ...(config.mac || {}),
     forceCodeSigning: false,
     identity: null,
-    target: [{ target: 'dir', arch: ['arm64'] }],
+    target: [{ target: 'dir', arch: [options.arch || 'arm64'] }],
   };
   return config;
 }
 
 function resolveLocalElectronDist({
   electronVersion,
+  arch = process.arch,
   cacheRoot = path.join(os.homedir(), 'Library', 'Caches', 'electron'),
   exists = fs.existsSync,
   listDirs = (root) => fs.readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory()).map((entry) => entry.name),
 } = {}) {
   if (!electronVersion || !exists(cacheRoot)) return '';
-  const zipName = `electron-v${electronVersion}-darwin-arm64.zip`;
+  const zipName = `electron-v${electronVersion}-darwin-${arch}.zip`;
   for (const directory of listDirs(cacheRoot)) {
     const candidate = path.posix.join(cacheRoot, directory, zipName);
     if (exists(candidate)) return candidate;
@@ -51,8 +52,9 @@ function resolveLocalElectronDist({
   return '';
 }
 
-function expectedDevAppPath(root = ROOT, arch = 'arm64') {
-  return path.join(root, 'dist-dev', `mac-${arch}`, 'CogSeed Dev.app');
+function expectedDevAppPath(root = ROOT, arch = process.arch) {
+  const outputDir = arch === 'x64' ? 'mac' : `mac-${arch}`;
+  return path.join(root, 'dist-dev', outputDir, 'CogSeed Dev.app');
 }
 
 function run(command, args) {
@@ -66,17 +68,19 @@ function main() {
   run(process.execPath, [path.join(ROOT, 'scripts', 'write-build-info.cjs'), '--channel=packaged-dev']);
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const electronVersion = require(path.join(ROOT, 'node_modules', 'electron', 'package.json')).version;
-  const electronDist = resolveLocalElectronDist({ electronVersion });
+  const arch = process.arch;
+  if (!['arm64', 'x64'].includes(arch)) throw new Error(`package:dev:mac does not support architecture ${arch}`);
+  const electronDist = resolveLocalElectronDist({ electronVersion, arch });
   if (!electronDist) {
-    throw new Error(`Electron ${electronVersion} arm64 zip is not cached; run the normal dependency setup once before packaging`);
+    throw new Error(`Electron ${electronVersion} ${arch} zip is not cached; run the normal dependency setup once before packaging`);
   }
-  const config = createDevBuilderConfig(packageJson.build, { channel: 'packaged-dev' }, { electronDist });
+  const config = createDevBuilderConfig(packageJson.build, { channel: 'packaged-dev' }, { electronDist, arch });
   const configPath = path.join(ROOT, '.build', 'electron-builder-dev.json');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
   const builderCli = require.resolve('electron-builder/out/cli/cli.js');
-  run(process.execPath, [builderCli, '--config', configPath, '--mac', 'dir', '--arm64', '--publish', 'never']);
-  const appPath = expectedDevAppPath(ROOT);
+  run(process.execPath, [builderCli, '--config', configPath, '--mac', 'dir', `--${arch}`, '--publish', 'never']);
+  const appPath = expectedDevAppPath(ROOT, arch);
   if (!fs.existsSync(appPath)) throw new Error(`development app was not produced: ${appPath}`);
   process.stdout.write(`${appPath}\n`);
 }
