@@ -505,9 +505,13 @@
     const versions = (S.assetVersions && S.assetVersions.versions) || [];
     const activeV = versions.find((x) => String(x.version) === String(asset.activeVersion || asset.version));
     const showDiff = String(S.route.assetVersionDiff || '') === String(v.version);
+    // 编辑入口只在版本行（2026-09-17 子安口径）：每个版本（含在用版）都能
+    // 成为编辑起点——在用版直接编辑，历史版先设为在用再编辑（合一步）。
+    const editFromBtn = btn(T('cognition.asset_edit_from_version', '基于此版修改'), 'edit-from-version', { id: asset.id, data: { version: String(v.version) }, small: true, primary: true });
     const actions = isActive
-      ? `<span class="ca-note">${esc(T('cognition.asset_version_active_locked', '当前在用版本不可删除；先选用其他版本，再删除它。'))}</span>`
-      : `${btn(showDiff ? T('cognition.asset_version_diff_hide', '收起对比') : T('cognition.asset_version_diff_show', '与在用版对比'), 'diff-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
+      ? `${editFromBtn}<span class="ca-note">${esc(T('cognition.asset_version_active_locked', '当前在用版本不可删除；先选用其他版本，再删除它。'))}</span>`
+      : `${editFromBtn}
+        ${btn(showDiff ? T('cognition.asset_version_diff_hide', '收起对比') : T('cognition.asset_version_diff_show', '与在用版对比'), 'diff-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
         ${btn(T('cognition.asset_version_merge', '与在用版合并为新版'), 'merge-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
         ${btn(T('cognition.asset_version_delete', '删除此版本'), 'delete-asset-version', { id: asset.id, data: { version: String(v.version) }, danger: true, small: true })}`;
     return `<div class="ca-sect ca-version-detail">
@@ -614,21 +618,27 @@
     // 话不该以"系统先产候选"为前提；保存走 recall.assets.update（+1 版本，
     // 与候选采纳产出的版本同链）。类型与范围不在表单里：类型变更走候选线
     // 重审，范围自由文本会再触发 scope 迁移产空版本。
+    // 动作区（2026-09-17 二次重构，子安口径：顶部=资产级、版本区=版本级、
+    // 作用对象必须显式）：顶部只留一个总开关管「这条资产是否自动带入新任
+    // 务」+ 一句实时生效说明；编辑入口只在版本行（基于此版修改）；归档从
+    // 界面消失——数据层 archived 状态保留给归并机制，被归并条目只读说明。
     const editing = !!route.assetEdit && ['active', 'paused'].includes(String(asset.status || 'active'));
-    const editBtn = editing ? '' : btn(T('cognition.asset_edit', '编辑'), 'edit-asset', { id: asset.id, primary: true, small: true });
-    const affectedCopy = {
-      active: [T('cognition.asset_pause_hint', '暂停后，新任务不再默认带上这条资产；已完成任务、历史版本与使用证据都会保留。'),
-        editBtn,
-        btn(T('cognition.asset_pause', '暂停使用'), 'asset-action', { id: asset.id, data: { action: 'pause' } }),
-        btn(T('cognition.asset_archive', '归档'), 'asset-action', { id: asset.id, data: { action: 'archive' } })],
-      paused: [T('cognition.asset_resume_hint', '恢复后，这条资产会重新参与任务匹配。'),
-        editBtn,
-        btn(T('cognition.asset_resume', '恢复使用'), 'asset-action', { id: asset.id, data: { action: 'resume' }, primary: true })],
-      archived: [T('cognition.asset_restore_hint', '恢复后，这条资产重新出现在常用资产中。'),
-        btn(T('cognition.asset_restore', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true })],
-      deleted: [T('cognition.asset_deleted_hint', '已删除的资产在保留期内可恢复；恢复后重新出现在常用资产。'),
-        btn(T('cognition.asset_restore_deleted', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true })],
-    }[String(asset.status || 'active')] || [];
+    const statusKind = String(asset.status || 'active');
+    const statusOn = statusKind === 'active';
+    const topControl = statusKind === 'active' || statusKind === 'paused'
+      ? `<div class="ca-sect ca-asset-switch">
+          <button type="button" class="ca-switch${statusOn ? ' is-on' : ''}" role="switch" aria-checked="${statusOn ? 'true' : 'false'}" data-act="asset-action" data-id="${esc(asset.id)}" data-action="${statusOn ? 'pause' : 'resume'}" aria-label="${esc(T('cognition.asset_switch_label', '自动带入新任务'))}">
+            <span class="ca-switch-knob" aria-hidden="true"></span>
+          </button>
+          <span class="ca-note">${esc(statusOn
+            ? T('cognition.asset_switch_on_hint', '使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI')
+            : T('cognition.asset_switch_off_hint', '已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开'))}</span>
+        </div>`
+      : statusKind === 'deleted'
+        ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_deleted_hint', '已删除的资产在保留期内可恢复；恢复后重新出现在常用资产。'))}</p><div class="ca-actions">${btn(T('cognition.asset_restore_deleted', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true, small: true })}</div></div>`
+        : statusKind === 'archived'
+          ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_archived_note', '已归并：这条资产已并入另一条资产，历史版本完整保留在并入目标的版本记录中。'))}</p></div>`
+          : '';
     const proofCount = S.proofs.filter((p) => String((p.refs || {}).assetId || '') === String(asset.id)).length;
     // 元信息白话化：后端值可能是内部术语，认出常见形态翻成人话，认不出原样显示。
     const scopeRaw = String(asset.scope || '');
@@ -668,7 +678,8 @@
         </div>
         <div class="ca-right">${assetStatusChip(asset)}</div>
       </div>
-      ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
+      ${editing ? assetEditForm(asset) : `<div class="ca-sub">${esc(T('cognition.asset_content_label', '当前内容（即在用版本 v{n}）', { n: String(asset.activeVersion || asset.version || '1') }))}</div><p class="ca-content-text">${esc(asset.statement || '')}</p>`}
+      ${topControl}
       <details class="ca-advanced">
         <summary>${esc(T('cognition.asset_meta_summary', '详细信息'))}</summary>
         <div class="ca-kv">
@@ -680,7 +691,6 @@
       ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div></details>` : ''}
       ${kstarEpisodeSection(route)}
       ${assetVersionsSection(asset)}
-      ${affectedCopy.length ? `<div class="ca-sect"><p class="ca-note">${esc(affectedCopy[0])}</p><div class="ca-actions">${affectedCopy.slice(1).join('')}</div></div>` : ''}
       ${assetUsageSection(asset, route)}
       <div class="ca-more-wrap">
         ${btn(T('cognition.asset_more', '更多操作'), 'toggle-asset-more', { className: 'ca-more-toggle' })}

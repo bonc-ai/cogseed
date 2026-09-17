@@ -1138,18 +1138,41 @@ describe('资产详情（使用记录并入）', () => {
     expect(activeHtml).toContain('当前在用版本不可删除');
   });
 
-  it('资产编辑（2026-09-17 报告建议 A）：详情有编辑按钮；编辑态表单预填现值', () => {
-    const editable = { ...asset, applicableWhen: ['发版自查'], forbiddenWhen: ['临时草稿'] };
-    const list = renderPage('overview', { assets: [editable], proofs: [], sources: [] }, { assetId: 'aa-1' });
-    expect(list).toContain('data-act="edit-asset"');
+  it('资产级开关与版本级编辑入口（2026-09-17 二次重构）：顶部开关+状态说明、正文锚点、编辑只在版本行', () => {
+    const list = renderPage('overview', { assets: [asset], proofs: [], sources: [] }, { assetId: 'aa-1' });
+    // 顶部：总开关（pause/resume 走 asset-action）+ 一句生效说明；顶部不再有编辑/归档按钮。
+    expect(list).toContain('data-action="pause"');
+    expect(list).toContain('使用中：这条资产会自动带入你的新任务');
+    expect(list).not.toContain('data-act="edit-asset"');
+    expect(list).not.toContain('data-action="archive"');
+    // 正文锚点：正文 = 在用版本内容，首次显式化。
+    expect(list).toContain('当前内容（即在用版本 v1）');
+    // 版本行的编辑入口：在用版与历史版的展开块都有「基于此版修改」。
+    const multi = { ...asset, version: '2', activeVersion: '1' };
+    const versions = { assetId: 'aa-1', versions: [
+      { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', snapshot: { title: 'T1', statement: 'S1', evidenceRefs: [] } },
+      { assetId: 'aa-1', version: '2', at: '2026-09-15T01:00:00.000Z', snapshot: { title: 'T2', statement: 'S2', evidenceRefs: [] } },
+    ] };
+    const openV2 = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionId: '2' });
+    expect(openV2).toContain('data-act="edit-from-version" data-id="aa-1" data-version="2"');
+    const openV1 = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionId: '1' });
+    expect(openV1).toContain('data-act="edit-from-version" data-id="aa-1" data-version="1"');
+    expect(openV1).toContain('当前在用版本不可删除');
+    // 编辑态表单仍渲染（预填现值，保存/取消齐全）。
+    const editable = { ...asset, applicableWhen: ['发版自查'] };
     const edit = renderPage('overview', { assets: [editable], proofs: [], sources: [] }, { assetId: 'aa-1', assetEdit: '1' });
     expect(edit).toContain('ca-asset-edit');
-    expect(edit).toContain('data-f="title"');
     expect(edit).toContain('data-f="statement"');
-    expect(edit).toContain('data-f="applicable"');
     expect(edit).toContain('发版自查');
     expect(edit).toContain('data-act="asset-edit-save"');
     expect(edit).toContain('data-act="asset-edit-cancel"');
+    // 暂停态：开关 off（resume 即恢复入口）+ 暂停说明；已归并态：只读说明、无任何操作。
+    const paused = renderPage('overview', { assets: [{ ...asset, status: 'paused' }], proofs: [], sources: [] }, { assetId: 'aa-1' });
+    expect(paused).toContain('data-action="resume"');
+    expect(paused).toContain('已暂停：新任务不再自动带入');
+    const archived = renderPage('overview', { assets: [{ ...asset, status: 'archived' }], proofs: [], sources: [] }, { assetId: 'aa-1' });
+    expect(archived).toContain('已归并');
+    expect(archived).not.toContain('data-action="restore"');
   });
 
   it('版本来源标签与空版本折叠（2026-09-17 报告建议 E）：标签替原文，迁移空版本默认隐藏可展开', () => {

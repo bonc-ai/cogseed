@@ -608,6 +608,20 @@
       store.assetVersions = null;
       await NS.reload();
     },
+    /** 基于某一版修改（2026-09-17 子安口径：编辑入口只在版本行）：历史版
+     *  先设为在用（select 通道，切指针不产新版本），再进入编辑——"切回+
+     *  编辑"合一步，每个版本都能成为编辑起点。 */
+    async editFromVersion(assetId, version) {
+      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      if (!asset) return;
+      if (String(asset.activeVersion || asset.version) !== String(version)) {
+        await api.call('recall.assets.versions.select', { assetId, version });
+        toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
+        store.assetVersions = null;
+        await NS.reload();
+      }
+      router.go({ name: 'overview', assetId, assetVersionId: '', assetVersionDiff: '', assetEdit: '1' }, { replace: true });
+    },
     /** 手动编辑资产（2026-09-17 报告建议 A）：改动自己写的话不该以"系统先
      *  产候选"为前提。与现值逐字段比对，无实际修改不提交——后端没有内容
      *  等价检查，相同内容也会 bump 出空版本。 */
