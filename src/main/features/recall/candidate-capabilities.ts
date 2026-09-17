@@ -362,6 +362,9 @@ export type RecallCandidateErrorCode =
   | 'recall_candidate_security_blocked'
   /** 编辑时新加的证据引用在来源目录里查不到——不接受用户自造的 id。 */
   | 'recall_candidate_unknown_source'
+  /** 版本组防分裂（2026-09-16）：create 候选与现有资产语义高度相似，等用户
+   *  决定"保存为新条目（forceCreateSimilar 重试）还是改为更新"。 */
+  | 'recall_candidate_similar_asset'
   | 'recall_capture_not_review_ready'
   | 'recall_capture_writing';
 

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 
-import { appendJsonlAtomic, safeId, writeJson } from '../../storage';
+import { appendJsonlAtomic, removeJsonlRecords, safeId, writeJson } from '../../storage';
 import { fileEditLock } from '../../util/locks';
 import {
   recallJsonRecordPath,
@@ -165,6 +165,22 @@ export async function removeRecallJsonlStream(
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
     throw error;
   }
+}
+
+/**
+ * 从 JSONL 流中物理移除记录（真删，2026-09-17 版本删除）。与 append 共享
+ * 同一把行锁，整文件临时写+原子改名回写；全部记录被移除时直接删掉流文件。
+ * 与 removeRecallJsonlStream 的分工：那是删整条流（彻底清除资产），这是按
+ * 记录粒度删（删除单个版本），除此之外没有别的调用理由。
+ */
+export async function removeRecallJsonlRecords(
+  userId: string,
+  collection: string,
+  stream: string,
+  keep: (record: RecallJsonRecord) => boolean,
+): Promise<void> {
+  const streamPath = recallJsonlPath(userId, collection, stream);
+  await removeJsonlRecords(streamPath, keep);
 }
 
 export async function listRecallJsonlRecords(

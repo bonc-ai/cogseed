@@ -461,4 +461,49 @@ describe('KSTAR review and Recall bridge', () => {
     expect(scopeForTask('生成一份架构审查报告')).toBe('report');
     expect(scopeForTask('随便聊聊')).toBe('general');
   });
+
+  it('asset-mutation proposals carry the version the task actually used（2026-09-16 版本组契约）', async () => {
+    const [{ createInitialKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = {
+      ...episode([{ name: 'read_file', status: 'ok' }]),
+      t: { userGoal: '生成一份架构审查报告。', constraints: [] },
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-x'], abilityAssetVersions: { 'asset-x': '2' } },
+    };
+    const review = {
+      ...createInitialKstarReview(current),
+      attribution: 'knowledge_gap',
+      confidence: 0.9,
+      lesson: '接口变更后要同步更新文档，避免下游引用失效。',
+      attributionDetails: [{ category: 'asset_outdated' }],
+    };
+    const proposals = proposeKstarCandidates(current, review);
+    const mutation = proposals.find((p) => p.suggestedAction === 'update');
+    expect(mutation).toMatchObject({ targetAssetId: 'asset-x', targetVersionUsed: '2' });
+    // episode 无版本映射（老数据）：targetVersionUsed 缺省，不阻断提案。
+    const legacy = { ...current, k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-x'] } };
+    const legacyProposals = proposeKstarCandidates(legacy, review);
+    expect(legacyProposals.find((p) => p.suggestedAction === 'update')).toMatchObject({ targetAssetId: 'asset-x' });
+    expect(legacyProposals.find((p) => p.suggestedAction === 'update')).not.toHaveProperty('targetVersionUsed');
+  });
+
+  it('bridge passes targetVersionUsed through to the saved recall candidate', async () => {
+    const { saveKstarCandidateProposals } = await import('../../../../src/main/features/kstar/recall-bridge');
+    const [saved] = await saveKstarCandidateProposals('review-user-version', [{
+      judgment: 'Refine the report verification rule after the failed run.',
+      summary: '报告校验规则修订',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'update',
+      targetAssetId: 'asset-ver-1',
+      targetVersionUsed: '2',
+      sourceRefs: [{ kind: 'execution', id: 'exec-versioned-run' }],
+    }]);
+    expect(saved.targetVersionUsed).toBe('2');
+    const { listRecallCandidates } = await import('../../../../src/main/features/recall/candidate-service');
+    const reloaded = (await listRecallCandidates('review-user-version')).find((c) => c.id === saved.id);
+    expect(reloaded?.targetVersionUsed).toBe('2');
+  });
 });

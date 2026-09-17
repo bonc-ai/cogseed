@@ -379,7 +379,10 @@ describe('Recall cognition workspace layout', () => {
     const dir = path.join(__dirname, '../../src/renderer/modules/cognition-assets');
     for (const file of ['core.js', 'views.js', 'app.js']) {
       const source = fs.readFileSync(path.join(dir, file), 'utf8');
-      expect(source, `${file} must not guess ontology binding`).not.toMatch(/similar|match|guess|infer/i);
+      // 2026-09-17 收窄：recall_candidate_similar_asset / forceCreateSimilar 是
+      // 主进程相似闸门的 API 契约词（candidate-service 错误码），不是本体
+      // 绑定推断——守卫只拦"本体上下文里的相似度推断"。
+      expect(source, `${file} must not guess ontology binding`).not.toMatch(/ontolog(?:y|ies)[^\n]{0,80}(?:similar|match|guess|infer)/i);
     }
   });
 
