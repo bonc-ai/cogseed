@@ -138,20 +138,32 @@ describe('role-template boundary › M2 渲染层不再拼接 PO 复合 id', () 
 });
 
 describe('role-template boundary › M3 三元组不再跨 renderer / IPC 往返', () => {
-  it('skills.js 落点下拉的 option value 就是 fieldRef，不再序列化四元组', () => {
+  it('落点下拉已随认知资产前端重建删除，renderer 不再序列化四元组', () => {
+    // 2026-09-15 重构：资产编辑器与落点选择器整体删除，renderer 层不再
+    // 出现 fieldTargets / fieldRef / 四元组序列化；后端通道保留但无前端调用。
     const skills = stripComments(read('src/renderer/modules/skills.js'));
-    expect(skills).toContain("invoke('personalOntology.templates.fieldTargets')");
-    expect(skills).toContain('target.fieldRef');
+    expect(skills).not.toContain("invoke('personalOntology.templates.fieldTargets')");
+    expect(skills).not.toContain('target.fieldRef');
     expect(skills).not.toContain('groupId: template.group_id');
     expect(skills).not.toContain('encodeURIComponent(JSON.stringify({');
-    expect(skills).not.toContain('personalTemplates');
+    for (const file of ['core.js', 'views.js', 'app.js']) {
+      const src = stripComments(read(`src/renderer/modules/cognition-assets/${file}`));
+      expect(src, `${file} 不得序列化落点四元组`).not.toContain('fieldTargets');
+      expect(src, `${file} 不得 JSON 序列化落点`).not.toContain('encodeURIComponent(JSON.stringify({');
+    }
   });
 
   it('skills-bindings.js 只回传 { fieldRef }，不再 JSON.parse 落点', () => {
-    const bindings = stripComments(read('src/renderer/modules/skills-bindings.js'));
-    expect(bindings).toContain('{ fieldRef }');
-    expect(bindings).not.toContain('decodeURIComponent(encoded)');
-    expect(bindings).not.toContain('target.groupId');
+    // M3：renderer 不解析 opaque 落点。落点选择功能已随认知资产前端重建删除
+    //（skills-bindings.js 只剩技能静态绑定），等价断言迁到 cognition-assets/
+    // core.js 的 adoptCandidate：字段全部显式命名传递（sourceRefs），整个
+    // 模块不再出现 JSON.parse / decodeURIComponent。
+    const core = stripComments(read('src/renderer/modules/cognition-assets/core.js'));
+    expect(core).toContain("'recall.candidates.update'");
+    expect(core).toContain('sourceRefs');
+    expect(core).not.toContain('JSON.parse');
+    expect(core).not.toContain('decodeURIComponent(encoded)');
+    expect(core).not.toContain('target.groupId');
   });
 
   it('IPC 层不再逐字段校验 PO 内部结构', () => {

@@ -1,7 +1,14 @@
 import { nowIso } from '../../storage';
+import { createLogger } from '../../logger';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
-import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord, writeKstarJsonRecord } from './episode-store';
+import {
+  listKstarJsonRecords,
+  readKstarEpisode,
+  readKstarJsonRecord,
+  replaceKstarJsonRecord,
+  writeKstarJsonRecord,
+} from './episode-store';
 import { normalizeKstarAttributionDetails } from './secondary-attribution';
 import type {
   KstarAttribution,
@@ -9,6 +16,8 @@ import type {
   KstarOutcome,
   KstarReviewRecord,
 } from './types';
+
+const log = createLogger('kstar.review');
 
 export interface SaveKstarReviewInput {
   expectedResult?: string;
@@ -187,4 +196,69 @@ export async function readKstarReview(userId: string, episodeId: string): Promis
     throw new Error('kstar episode not found for attribution evidence');
   }
   return validateStoredReview(userId, episodeId, raw, episodeEvidenceRefs);
+}
+
+export interface KstarExperienceSummary {
+  id: string;
+  episodeId: string;
+  /** 提炼出的经验正文（review.lesson）。 */
+  lesson: string;
+  confidence: number;
+  outcome: KstarOutcome;
+  reviewState: 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
+  /** 来源任务的目标（episode.t.userGoal）。 */
+  goal: string;
+  taskStatus: string;
+  createdAt: string;
+  /** 是否已通过 extraction-run 沉淀成候选。 */
+  precipitated: boolean;
+  candidateCount: number;
+}
+
+/** 列出"提炼出的经验"（lesson 非空的 review），并 join 来源任务与沉淀状态。
+ *  注意：只有真正带 lesson 的记录才会出现在这里——episode 任务流水不在本列表
+ *  语义内（另有 kstar.episodes.list）。
+ *  已知行为（暂不修改）：用户手动确认 review 会重建记录且不带 lesson，
+ *  经验列表可能随确认而减少，属现有语义。 */
+export async function listKstarExperiences(
+  userId: string,
+  limit?: number,
+): Promise<{ total: number; experiences: KstarExperienceSummary[] }> {
+  const records = await listKstarJsonRecords(userId, 'reviews');
+  const lessons: Array<{ review: KstarReviewRecord; lesson: string }> = [];
+  for (const raw of records) {
+    const episodeId = String(raw.episodeId || '');
+    if (!episodeId) continue;
+    try {
+      const review = validateStoredReview(userId, episodeId, raw);
+      const lesson = String(review.lesson || '').trim();
+      if (lesson) lessons.push({ review, lesson });
+    } catch (error) {
+      log.warn('skipping degraded kstar review', { episodeId, error: (error as Error).message });
+    }
+  }
+  lessons.sort((a, b) => String(b.review.createdAt).localeCompare(String(a.review.createdAt)));
+  const capped = Number.isFinite(limit) && Number(limit) > 0 ? Math.min(Number(limit), 200) : 100;
+  const experiences: KstarExperienceSummary[] = [];
+  for (const { review, lesson } of lessons.slice(0, capped)) {
+    const episode = await readKstarEpisode(userId, review.episodeId).catch(() => null);
+    const run = await readKstarJsonRecord(userId, 'extraction-runs', `ksx-${review.episodeId}`).catch(() => null);
+    const candidateIds = run && Array.isArray(run.candidateIds)
+      ? run.candidateIds.filter((value): value is string => typeof value === 'string')
+      : [];
+    experiences.push({
+      id: review.id,
+      episodeId: review.episodeId,
+      lesson: lesson.slice(0, 500),
+      confidence: review.confidence,
+      outcome: review.outcome,
+      reviewState: review.reviewState || 'unknown',
+      goal: String((episode && episode.t && episode.t.userGoal) || '').slice(0, 200),
+      taskStatus: String((episode && episode.r && episode.r.status) || 'unknown'),
+      createdAt: String(review.createdAt),
+      precipitated: candidateIds.length > 0,
+      candidateCount: candidateIds.length,
+    });
+  }
+  return { total: lessons.length, experiences };
 }

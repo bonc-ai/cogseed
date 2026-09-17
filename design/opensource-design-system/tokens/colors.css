@@ -1,0 +1,82 @@
+/* CogSeed 开源版 · 颜色
+   原则：开源绿色 + 中性界面。品牌强调与状态分别定义，状态色只承载状态。 */
+:root{
+  /* 中性 · 面 */
+  --cs-white:#FFFFFF;
+  --cs-canvas:#FBFDFC;
+  --cs-sidebar-top:#F4F8F5;
+  --cs-sidebar-bottom:#EDF3EF;
+  --cs-surface-subtle:#F7FAF8;
+  --cs-fill-quiet:#EDF3EF;
+  --cs-avatar-bg:#E5EDE8;
+
+  /* 中性 · 墨 */
+  --cs-ink:#14281E;
+  --cs-ink-body:#243D30;
+  --cs-ink-70:#3E5A4C;
+  --cs-ink-60:#4C685A;
+  --cs-ink-55:#587363;
+  --cs-ink-45:#5E7467;
+  --cs-ink-32:#9CAEA2;
+  --cs-ink-24:#C1CDC5;
+
+  /* 品牌识别与主要操作 */
+  --cs-brand:#0E9F6E;
+  --cs-accent:#0A7A55;
+  --cs-accent-grad:linear-gradient(135deg,#0A7A55,#086545); /* @kind color */
+  --cs-accent-ink:#0A6044;
+  --cs-accent-wash:rgba(14,159,110,.09);
+  --cs-accent-wash-soft:rgba(14,159,110,.05);
+  --cs-accent-tint:rgba(14,159,110,.1);
+  --cs-accent-ring:rgba(14,159,110,.12);
+  --cs-accent-dash:rgba(14,159,110,.5); /* @kind color */
+
+  /* 状态 */
+  --cs-success:#1E6E4E;
+  --cs-success-ink:#1B5B41;
+  --cs-success-ink-soft:#4A6B5C;
+  --cs-success-bg:#E8F1EC;
+  --cs-success-bg-soft:#F1F6F3;
+  --cs-success-border:rgba(30,110,78,.22);
+  --cs-attention:#B5761F;
+  --cs-attention-ink:#8A5A14;
+  --cs-attention-bg:#FBF1E2;
+  --cs-attention-border:rgba(181,118,31,.28);
+  --cs-critical:#A33A2B;
+  --cs-critical-bg:#F8EBE8;
+  --cs-critical-border:rgba(163,58,43,.28);
+  --cs-critical-border-strong:rgba(163,58,43,.3);
+
+  /* 描边与叠加 */
+  --cs-border-subtle:rgba(20,40,30,.06);
+  --cs-border-hairline:rgba(20,40,30,.07);
+  --cs-border:rgba(20,40,30,.09);
+  --cs-border-field:rgba(20,40,30,.12);
+  --cs-border-strong:rgba(20,40,30,.14);
+  --cs-border-control:rgba(20,40,30,.22);
+  --cs-overlay-hover:rgba(20,40,30,.05);
+  --cs-overlay-hover-soft:rgba(20,40,30,.04);
+  --cs-overlay-fill:rgba(20,40,30,.06);
+  --cs-overlay-disabled:rgba(20,40,30,.08);
+  --cs-scrim:rgba(20,40,30,.28);
+  --cs-scrollbar:rgba(20,40,30,.22);
+  --cs-scrollbar-hover:rgba(20,40,30,.36);
+
+  /* 语义别名 */
+  --cs-text-body:var(--cs-ink-body);
+  --cs-text-secondary:var(--cs-ink-60);
+  --cs-text-muted:var(--cs-ink-45);
+  --cs-text-placeholder:var(--cs-ink-45);
+  --cs-text-disabled:var(--cs-ink-32);
+  --cs-link:var(--cs-accent);
+  --cs-link-hover:#086545;
+  --cs-text-on-accent:#FFFFFF;
+  --cs-selected:#E2F5EC;
+  --cs-focus-ring:0 0 0 3px var(--cs-accent-ring);
+}
+
+/* Brand mist is exclusive to the initial home page. */
+:root{--cs-home-background:radial-gradient(700px 430px at 88% -6%,rgba(14,159,110,.15) 0%,rgba(14,159,110,0) 70%),radial-gradient(540px 390px at 10% 6%,rgba(66,184,130,.10) 0%,rgba(66,184,130,0) 72%),linear-gradient(180deg,rgba(237,248,241,.95) 0%,rgba(255,255,255,0) 48%);}
+
+:root{--cs-focus-outline:1px solid var(--cs-accent);--cs-window-close:#FF5F57;--cs-window-minimize:#FEBC2E;--cs-window-maximize:#28C840;}
+/* --cs-attention is non-text only. Text uses --cs-attention-ink at full opacity. */

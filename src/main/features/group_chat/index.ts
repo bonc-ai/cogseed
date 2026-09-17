@@ -181,11 +181,15 @@ export async function runtimeStatus(
     let backendTurns: Array<{ actor: string; turn_id: string; started_at_ms: number }> = [];
     try {
       const { listCogSeedTasks } = await import('../cogseed_backend/task-store');
+      const { isCogSeedTaskExecutingStatus } = await import('../cogseed_backend/lifecycle');
       const tasks = await listCogSeedTasks(userId);
+      // 只认「执行中」（created/queued/running）。此前按"非终态"黑名单过滤，
+      // 把 `waiting_user`（已停止、等用户回话）也算作活跃，导致会话
+      // processing 恒为 true：发送按钮卡在停止态、后续消息被排队
+      // （2026-09-11 claude spawn 失败后实机复现）。
       const active = (Array.isArray(tasks) ? tasks : []).filter((t) => (
         t && t.conversationId === cid
-        && t.status !== 'completed' && t.status !== 'failed'
-        && t.status !== 'cancelled' && t.status !== 'recoverable'
+        && isCogSeedTaskExecutingStatus(t.status)
       ));
       backendActive = active.length > 0;
       backendAgents = Array.from(new Set(
@@ -259,7 +263,8 @@ import * as marketplace from '../marketplace';
 
 const log = createLogger('group_chat.facade');
 
-function mainJsonlFile(uid: string, cid: string): string {
+/** 主 jsonl 文件路径（confirm-cards.ts 等子模块共用）。 */
+export function mainJsonlFile(uid: string, cid: string): string {
   return conversationMessageFile(uid, cid);
 }
 
@@ -793,12 +798,31 @@ export async function send(
     const chats = await import('../chats');
     const conv = await chats.getConversation(userId, cid);
     if (conv && !conv.title_manually_set && isPlaceholderTitle(conv.title)) {
+      const mechanicalTitle = chats.autoTitle(text);
       await chats.updateConversation(
         userId,
         cid,
-        { title: chats.autoTitle(text) },
+        { title: mechanicalTitle },
         conv.project_id || null,
       );
+      // 机械标题先上（即时、离线可用）；再异步请模型生成一个概括性标题覆盖。
+      // 应用前重新检查：期间用户手动改过（title_manually_set）或标题已被别的
+      // 路径改写（≠ mechanicalTitle）就不再动——模型慢也不许覆盖新状态。
+      if (typeof text === 'string' && text.trim()) {
+        const sourceText = text;
+        void (async () => {
+          try {
+            const { generateConversationTitle } = await import('../conversation-title');
+            const generated = await generateConversationTitle(userId, cid, sourceText);
+            if (!generated || generated === mechanicalTitle) return;
+            const latest = await chats.getConversation(userId, cid);
+            if (!latest || latest.title_manually_set || latest.title !== mechanicalTitle) return;
+            await chats.updateConversation(userId, cid, { title: generated }, latest.project_id || null);
+          } catch (err) {
+            log.warn(`model auto-title failed user=${userId} cid=${cid}: ${(err as Error).message}`);
+          }
+        })();
+      }
     }
   } catch (err) {
     log.warn(`auto-title failed user=${userId} cid=${cid}: ${(err as Error).message}`);

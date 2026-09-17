@@ -31,7 +31,7 @@ describe('connector brand icons', () => {
     const renderer = fs.readFileSync(path.join(root, 'src/renderer/modules/connectors.js'), 'utf8');
     const css = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
 
-    expect(renderer).toContain('btn btn-sm btn-primary is-loading');
+    expect(renderer).toContain("_connectorUiButton({ label: t('connectors.action.connecting'), role: 'primary', size: 'sm', loading: true");
     expect(renderer).not.toContain('class="btn-spinner"');
     expect(css).toContain('.btn.is-loading::before');
     expect(css).not.toMatch(/(^|\n)\.btn-spinner\s*\{/);

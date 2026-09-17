@@ -25,6 +25,9 @@ function _csEscapeHtml(text) {
 
 /** cid+turnId → 活动流根元素。流式回合切换/视图切换时由 GC 惰性清理。 */
 const _csPanels = new Map();
+/** 历史重放深度：重放内部借道 chatStreamHandleEvent 喂条目，这不是 live
+ *  事件——重放期间禁止运行形态升级（否则历史消息会被误标成「工作中」）。 */
+let _csReplayDepth = 0;
 
 function _csPanelKey(cid, turnId) { return `${cid}::${turnId}`; }
 
@@ -142,7 +145,11 @@ function _csFirstArg(args, keys) {
 }
 
 function _csFmtDur(ms) {
-  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  // 亚秒级显示毫秒（2026-09-11：本地 CLI 工具普遍几十毫秒完成，整秒
+  // 取整把真实耗时吞成"0 秒"，看起来像计时坏了——真机两轮误报）。
+  const v = Math.max(0, Number(ms) || 0);
+  if (v < 1000) return `${Math.round(v)}ms`;
+  const total = Math.floor(v / 1000);
   if (total < 60) return `${total} 秒`;
   return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
 }
@@ -178,10 +185,51 @@ function _csStartTicker(flow, startedAtMs) {
   flow._csLocalSendMs = t0;
   // 立即先画一次（此刻 badge 尚未插入 DOM，isConnected 检查只放在轮询里）。
   label.textContent = _csFmtTaskDur(Date.now() - t0);
+  _csStopTicker(flow);
   flow._csTicker = setInterval(() => {
     if (!flow.isConnected) { _csStopTicker(flow); return; }
     label.textContent = _csFmtTaskDur(Date.now() - t0);
   }, 1000);
+}
+
+/** 运行态自愈（"切换对话后计时停摆"的根因修复）：
+ *  ticker 的存活检查是 flow.isConnected——会话切换的 container 清空、历史
+ *  重放的 detached fragment 等合法中间态都会让 ticker 自杀，而它此前没有
+ *  任何重启路径。复用/重挂载运行语义的 flow 时调用：只要未打终态标记
+ *  （csTerminal）且徽章仍有计时位（历史态流没有），就用原起点重启。 */
+function _csReviveTicker(flow) {
+  if (!flow || flow._csTicker != null) return;
+  if (flow.dataset.csTerminal === '1') return;
+  const label = flow._csBadge && flow._csBadge.querySelector('.cs-badge-elapsed');
+  if (!label) return;
+  const t0 = Number(flow.dataset.csT0) || Number(flow._csLocalSendMs) || Date.now();
+  _csStartTicker(flow, t0);
+}
+
+/** live 事件复用历史态流时升级为运行形态：历史重放（noStatus）建的徽章
+ *  没有计时位且文案是「已完成」——切换会话后重放先于 live 事件建流，若
+ *  不升级，后续事件只会往流里追加内容，计时永远不会启动（复用判定只看
+ *  元素位置、不看形态的根因之二）。终态流不升级（csTerminal 挡迟到事件）。 */
+function _csUpgradeFlowForLive(flow, startedAtMs) {
+  if (!flow || !flow._csBadge) return;
+  if (_csReplayDepth > 0) return; // 历史重放自己喂的条目不算 live
+  if (flow.dataset.csTerminal === '1') return; // 仅 live 终态挡复活；重放终态可复活
+  const badge = flow._csBadge;
+  const hasElapsed = !!badge.querySelector('.cs-badge-elapsed');
+  if (hasElapsed && flow._csTicker != null) return; // 已是活跃运行态，事件密集时不重启
+  if (!hasElapsed) {
+    const text = badge.querySelector('.cs-badge-label');
+    if (text) text.textContent = '工作中';
+    const span = document.createElement('span');
+    span.className = 'cs-badge-elapsed';
+    badge.appendChild(span);
+  }
+  // 重放收尾已把流定格为 done——复活时切回 running（loading 指示不重建）。
+  if (!flow.classList.contains('running')) {
+    flow.classList.remove('done', 'failed', 'cancelled');
+    flow.classList.add('running');
+  }
+  _csStartTicker(flow, startedAtMs);
 }
 
 /** 收起/展开时间线正文（徽章点击唯一入口；aria 同步）。 */
@@ -338,6 +386,8 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
   // 「connected 或就在本 anchor 消息树内」都算活着：同一消息树里已注册的流
   // 就是可复用的那条，与它在不在文档无关。
   if (flow && (flow.isConnected || !!(anchor && anchor.contains && anchor.contains(flow)))) {
+    // 复用即自愈：切换会话/重挂载会让 ticker 因 isConnected 自杀且无重启路径。
+    _csReviveTicker(flow);
     return { flow, body: flow.querySelector('.cs-flow-body') };
   }
   // 发送即起计的 pending 流接管（交互设计 2026-09-09 需求：计时器在发送
@@ -399,8 +449,12 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
 }
 
 /** 回合终态：徽章定格为「已完成 总时长」（历史无数据只显示已完成），
- *  停止按钮撤除，计时器停止；收起开关保留（点击可开合时间线）。 */
-function _csSetFlowState(flow, status, error, endedAtMs) {
+ *  停止按钮撤除，计时器停止；收起开关保留（点击可开合时间线）。
+ *  opts.replay：历史重放收尾的"按持久化数据看已完成"——不设 csTerminal，
+ *  因为该回合可能其实仍在运行（切回运行中会话），live 事件到达要能复活；
+ *  只有收到过 live 终态事件（turn.completed 等）的流才永久挡复活。 */
+function _csSetFlowState(flow, status, error, endedAtMs, opts) {
+  if (!(opts && opts.replay)) flow.dataset.csTerminal = '1';
   flow.classList.remove('running', 'done', 'failed', 'cancelled');
   flow.classList.add(status === 'completed' ? 'done' : status);
   _csStopTicker(flow);
@@ -544,19 +598,13 @@ function _csRenderToolRow(row, payload, status) {
   const failed = status === 'failed';
   const target = _csTargetHtml(style.targetKind, args, argsSummary);
   const hover = [p.toolName, argsSummary].filter(Boolean).join(' ');
-  // 工具耗时：主进程权威 timing（存储补差后实时/历史同源）；历史重放是瞬时
-  // 到达，墙钟差恒为 0——没有 payload.timing 就不显示（不编造）。
-  let dur = '';
-  if (p.timing && typeof p.timing.startedAtMs === 'number'
-    && typeof p.timing.completedAtMs === 'number') {
-    dur = `<span class="cs-dur">${_csFmtDur(Math.max(0, p.timing.completedAtMs - p.timing.startedAtMs))}</span>`;
-  }
+  // 工具耗时不再显示（2026-09-11 需求变更）：本地 CLI 工具普遍毫秒级完成，
+  // 数字信息量低还占行宽；timing 数据仍随条目保留，需要时悬停/调试可查。
   // 行 = 一行内联摘要（cs-row-line）+ 块级展开区（错误/输出，点行开合）。
   const line = [
     `<span class="cs-ico${failed ? ' failed' : ''}">${_csIco(style.icon)}</span>`,
     `<span class="cs-verb${failed ? ' failed' : ''}${style.raw ? ' raw' : ''}">${_csEscapeHtml(style.verb)}</span>`,
     target,
-    dur,
   ];
   const blocks = [];
   if (p.error) blocks.push(`<div class="cs-row-error">${_csEscapeHtml(p.error)}</div>`);
@@ -653,12 +701,14 @@ function _csThinkDurText(row) {
 // 「上一锚点→下一锚点」窗口写回 csT0/csDur——见该处的推导注释。
 
 function _csRenderThinkRow(row) {
-  const running = row.dataset.csClosed !== '1';
+  // 单行预览常显（2026-09-11 方案 C）：不管运行中还是已收行，都显示思考
+  // 内容的一行预览（最后一个非空行，尾部截断）——收行后内容不再消失。
   let live = '';
-  if (running && row.dataset.csFull) {
+  if (row.dataset.csFull) {
     const tl = String(row.dataset.csFull).split('\n').filter(Boolean).pop() || '';
     if (tl) live = `<span class="cs-think-live">${_csEscapeHtml(tl.slice(-90))}</span>`;
   }
+  // 点击行展开全文：纯文本块，无边框/底色/圆角（不算卡片）。
   const full = row.dataset.csFull
     ? `<div class="cs-think-full">${_csEscapeHtml(row.dataset.csFull)}</div>` : '';
   row.innerHTML = `
@@ -675,8 +725,12 @@ function _csRenderThinkRow(row) {
  *  rAF 节流逐段渲染；renderer 不可用（测试 stub）退化为纯文本。渲染失败
  *  静默回退 textContent，正文永不丢。 */
 function _csPaintTextSeg(seg) {
-  const raw = seg.dataset.csSeg || '';
   const paint = () => {
+    // 帧内读最新文本，不在调度前抓快照（真机 09-12 截断事故：窗口遮挡/
+    // 后台节流时 rAF 不跑，一段叙述的增量全落在同一待刷帧里——快照读在
+    // 调度前只会画出第一个增量那一刻的前缀（如「我先」），后续增量被
+    // _csSegRaf 吞掉且帧内不重读，中间叙述就永久停在旧前缀）。
+    const raw = seg.dataset.csSeg || '';
     if (typeof renderMarkdownFull === 'function') {
       try {
         seg.innerHTML = `<div class="markdown-body">${renderMarkdownFull(raw)}</div>`;
@@ -705,6 +759,7 @@ function _csAppendReasoning(body, text) {
     row = document.createElement('div');
     row.className = 'cs-row cs-row-think';
     row.dataset.csT0 = String(Date.now());
+    // 点击行展开/收起全文（方案 C：纯文本块，无卡片样式）。
     row.addEventListener('click', () => row.classList.toggle('cs-open'));
     body.appendChild(row);
   }
@@ -897,16 +952,19 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       // 在 onAssistantStart 挂载）——本地发送→本地收尾，全程不依赖模型
       // 侧时间数据（模型收到时刻/开始思考/吞吐）。缺省回退事件时间戳。
       const localSend = Number(anchor && anchor.dataset && anchor.dataset.localSendMs);
-      _csEnsureFlow(cid, anchor, chatEvent.turnId, {
-        startedAtMs: (Number.isFinite(localSend) && localSend > 0)
-          ? localSend
-          : (chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now()),
-      });
+      const startedAtMs = (Number.isFinite(localSend) && localSend > 0)
+        ? localSend
+        : (chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now());
+      const { flow } = _csEnsureFlow(cid, anchor, chatEvent.turnId, { startedAtMs });
+      // 复用历史态流（切换会话后重放先建流）时升级回运行形态并启动计时。
+      _csUpgradeFlowForLive(flow, startedAtMs);
       return;
     }
     if (chatEvent.type === 'chat.item') {
       const { kind, status, itemId, payload, turnId } = chatEvent;
       const { flow, body } = _csEnsureFlow(cid, anchor, turnId);
+      // 事件仍在到达 = 回合仍活跃：历史态流补上计时位并启动（终态流不升级）。
+      _csUpgradeFlowForLive(flow, Number(flow && flow.dataset && flow.dataset.csT0) || undefined);
       if (kind === 'text') {
         // 时间线接管正文（边思考边说边执行的真实交错）：delta 追加到当前
         // 文字段，遇其它 item 关段；回合收尾只把「开放段」（最终正文）
@@ -946,11 +1004,11 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
         const rDelta = String((payload && payload.delta) || '');
         const rFull = String((payload && payload.text) || '');
         if (status === 'inProgress') {
-          // 思考实时流式（交互设计 2026-09-09 需求）：增量逐段落入思考行，
-          // 行自动展开——进行中就能看到推理进度，不等完成态折叠块。
+          // 思考实时流式：增量逐段落入思考行。默认折叠（2026-09-11 需求
+          // 变更：交互过程不再自动展开全文）——行内 cs-think-live 保留单行
+          // 实时预览，用户点击行才展开 cs-think-full 全文。
           if (rDelta) {
-            const row = _csAppendReasoning(body, rDelta);
-            row.classList.add('cs-open');
+            _csAppendReasoning(body, rDelta);
           }
           return;
         }
@@ -1243,23 +1301,28 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
           if (Number.isFinite(t)) _anchors.push(t);
         }
       }
-      for (const entry of chatEntries) {
-        if (entry.type !== 'chatItem') continue;
-        const ev = entry.item;
-        if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
-        // 文本段（交互设计 2026-09-08：展开缺 AI 中间输出）：completed 的整段
-        // 条目是「被后续工具/思考截断的中间正文」——消息体只有最终段，这些
-        // 不落面板就永远丢了；inProgress 增量条目（CLI 逐 token 旧格式）
-        // 与最终段跳过，防与消息体重复。
-        if (ev.kind === 'text' && ev.status !== 'completed') continue;
-        // 兜底（真机踩坑 2026-09-08 16:20）：含 ::: 结构指令（dashboard/
-        // chart-bar 等组件源码）的段落属于最终稿内容——面板以纯文本显示
-        // 就是"源码外露"，且与正文渲染好的可视化面板重复。过程面板只收
-        // 人读中间叙述，结构化成品留给正文管道。
-        if (ev.kind === 'text' && /(^|\n):::/.test(String((ev.payload && ev.payload.delta) || ''))) continue;
-        // 重放期间消息行若被并发 reconcile 重建（anchor 换节点），feed 会
-        // 落进旧树里的流（不可见，无害）；规范流仍收尾。
-        window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
+      _csReplayDepth += 1;
+      try {
+        for (const entry of chatEntries) {
+          if (entry.type !== 'chatItem') continue;
+          const ev = entry.item;
+          if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
+          // 文本段（交互设计 2026-09-08：展开缺 AI 中间输出）：completed 的整段
+          // 条目是「被后续工具/思考截断的中间正文」——消息体只有最终段，这些
+          // 不落面板就永远丢了；inProgress 增量条目（CLI 逐 token 旧格式）
+          // 与最终段跳过，防与消息体重复。
+          if (ev.kind === 'text' && ev.status !== 'completed') continue;
+          // 兜底（真机踩坑 2026-09-08 16:20）：含 ::: 结构指令（dashboard/
+          // chart-bar 等组件源码）的段落属于最终稿内容——面板以纯文本显示
+          // 就是"源码外露"，且与正文渲染好的可视化面板重复。过程面板只收
+          // 人读中间叙述，结构化成品留给正文管道。
+          if (ev.kind === 'text' && /(^|\n):::/.test(String((ev.payload && ev.payload.delta) || ''))) continue;
+          // 重放期间消息行若被并发 reconcile 重建（anchor 换节点），feed 会
+          // 落进旧树里的流（不可见，无害）；规范流仍收尾。
+          window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
+        }
+      } finally {
+        _csReplayDepth -= 1;
       }
       // 思考行回填：按锚点窗口逐行写真实 t0/dur（行序 = 建行序 = 条目序）。
       {
@@ -1296,8 +1359,9 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       // 终态兜底（真机踩坑 2026-09-08）：重放目标是历史消息——无论条目里
       // 有没有 turn 终态，面板必须离开 running。detached 重放（历史渲染
       // 先建树后挂文档）同样定格：DOM 操作不依赖 connected，跳过只会留下
-      // running 残壳。
-      _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined);
+      // running 残壳。replay 标记：这是"按持久化数据看已完成"，不封锁 live
+      // 复活（切回运行中会话时该回合其实仍在跑）。
+      _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined, { replay: true });
       // 重放循环可能经 ensure 新建过中间流（同 key 断链重建），确保注册
       // 表里最终态就是这个 flow。
       _csPanels.set(replayKey, flow);

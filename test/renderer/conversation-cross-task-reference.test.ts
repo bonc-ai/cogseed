@@ -18,11 +18,11 @@ describe('conversation cross-task message reference UI', () => {
   it('uses a collapsible WorkBuddy-style icon rail with secondary actions in overflow', () => {
     expect(conversationSource).toContain('<span class="chat-bubble-direct-actions">${copyButton}${quoteButton}${asideButton}</span>');
     expect(conversationSource).toContain('class="chat-bubble-more-menu" role="menu" hidden');
-    expect(conversationSource).toContain("_uiIconHtml('copy', 'ui-icon')");
-    expect(conversationSource).toContain("_uiIconHtml('at-sign', 'ui-icon')");
+    expect(conversationSource).toContain("uiIconButton({ label: copyLabel, icon: 'copy'");
+    expect(conversationSource).toContain("uiIconButton({ label: quoteLabel, icon: 'at-sign'");
     expect(iconsSource).toContain("'at-sign':");
-    expect(conversationSource).toContain("_uiIconHtml('message-square', 'ui-icon')");
-    expect(conversationSource).toContain("_uiIconHtml('more-horizontal', 'ui-icon')");
+    expect(conversationSource).toContain("uiIconButton({ label: asideLabel, icon: 'message-square'");
+    expect(conversationSource).toContain("icon: 'more-horizontal', className: 'bubble-more-btn'");
     expect(conversationSource).toContain('chat-bubble-menu-item bubble-select-btn');
     expect(conversationSource).toContain('chat-bubble-menu-item bubble-archive-btn');
     expect(styleSource).toContain('.chat-bubble-more-menu');
@@ -66,8 +66,8 @@ describe('conversation cross-task message reference UI', () => {
   });
 
   it('uses a secondary reference action and exits selection after a successful handoff', () => {
-    expect(conversationSource).toContain('class="btn btn-sm" data-selection-reference');
-    expect(conversationSource).not.toContain('btn btn-sm btn-primary" data-selection-reference');
+    expect(conversationSource).toContain("uiButton({ label: t('chat.reference_to'), size: 'sm'");
+    expect(conversationSource).not.toContain("label: t('chat.reference_to'), role: 'primary'");
     expect(conversationSource).toMatch(/function _transferSelectedReferences[\s\S]*?_exitMessageSelection\(\)/);
     expect(conversationSource).toMatch(/function _stageReferencesForNewTask[\s\S]*?_exitMessageSelection\(\)/);
   });
@@ -116,6 +116,7 @@ describe('conversation cross-task message reference UI', () => {
     expect(conversationSource).not.toContain('chat-reference-target-chevron');
     expect(conversationSource).toContain('class="chat-reference-leading-plus"');
     expect(conversationSource).toContain('class="chat-reference-row-arrow"');
+    expect(conversationSource).toContain("id: 'chat-reference-target-search'");
   });
 
   it('sends references as structured sidecar data and persists them with drafts', () => {

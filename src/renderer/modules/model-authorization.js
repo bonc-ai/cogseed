@@ -488,15 +488,15 @@
 
   function renderChoices() {
     return `<div class="model-authorization-choice-grid">
-      <button class="model-authorization-choice" data-model-auth-action="choose-oauth">${esc(tr('settings.model_authorization.auth_type_oauth'))}</button>
-      <button class="model-authorization-choice" data-model-auth-action="choose-api-key">${esc(tr('settings.model_authorization.auth_type_api_key'))}</button>
+      ${uiButton({ label: tr('settings.model_authorization.auth_type_oauth'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'choose-oauth' } })}
+      ${uiButton({ label: tr('settings.model_authorization.auth_type_api_key'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'choose-api-key' } })}
     </div>`;
   }
 
   function renderSourceChoices() {
     return `<div class="model-authorization-choice-grid">
-      <button class="model-authorization-choice" data-model-auth-action="source-manual">${esc(tr('settings.model_authorization.source_manual'))}</button>
-      <button class="model-authorization-choice" data-model-auth-action="source-ccswitch">${esc(tr('settings.model_authorization.source_ccswitch'))}</button>
+      ${uiButton({ label: tr('settings.model_authorization.source_manual'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'source-manual' } })}
+      ${uiButton({ label: tr('settings.model_authorization.source_ccswitch'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'source-ccswitch' } })}
     </div>`;
   }
 
@@ -504,10 +504,10 @@
     return `<div class="model-authorization-protocols">
       <div class="model-authorization-progress">${esc(tr('settings.model_authorization.protocol_title'))}</div>
       <div class="model-authorization-choice-grid">
-        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="openai">${esc(tr('settings.model_authorization.protocol_openai'))}</button>
-        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="openai-responses">${esc(tr('settings.model_authorization.protocol_openai_responses'))}</button>
-        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="anthropic">${esc(tr('settings.model_authorization.protocol_anthropic'))}</button>
-        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="gemini">${esc(tr('settings.model_authorization.protocol_gemini'))}</button>
+        ${uiButton({ label: tr('settings.model_authorization.protocol_openai'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'choose-protocol', 'data-protocol': 'openai' } })}
+        ${uiButton({ label: tr('settings.model_authorization.protocol_openai_responses'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'choose-protocol', 'data-protocol': 'openai-responses' } })}
+        ${uiButton({ label: tr('settings.model_authorization.protocol_anthropic'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'choose-protocol', 'data-protocol': 'anthropic' } })}
+        ${uiButton({ label: tr('settings.model_authorization.protocol_gemini'), className: 'model-authorization-choice', attrs: { 'data-model-auth-action': 'choose-protocol', 'data-protocol': 'gemini' } })}
       </div>
     </div>`;
   }
@@ -575,7 +575,7 @@
       catalogState = `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.providers_loading'))}</div>`;
     } else if (controller.providerCatalog.status === 'error') {
       catalogState = `<div class="model-authorization-warning">${esc(controller.providerCatalog.error || tr('settings.model_authorization.providers_load_failed'))}</div>
-        <button type="button" class="btn" data-model-auth-action="retry-providers">${esc(tr('settings.model_authorization.retry_providers'))}</button>`;
+        ${uiButton({ label: tr('settings.model_authorization.retry_providers'), attrs: { 'data-model-auth-action': 'retry-providers' } })}`;
     } else if (!presets.length) {
       catalogState = `<div class="settings-empty">${esc(tr('settings.model_authorization.providers_empty'))}</div>`;
     }
@@ -590,12 +590,9 @@
   }
 
   function keyInputHtml() {
-    const eye = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
-      ? window.uiIconHtml('eye', 'model-authorization-key-toggle-icon')
-      : '';
     return `<div class="model-authorization-key-wrap">
-      <input id="model-authorization-api-key" class="form-input" type="password" autocomplete="off" spellcheck="false" />
-      <button type="button" class="model-authorization-key-toggle" data-model-auth-action="toggle-key-visible" data-target="model-authorization-api-key" title="${esc(tr('settings.model_authorization.key_show'))}" aria-label="${esc(tr('settings.model_authorization.key_show'))}">${eye}</button>
+      ${uiInput({ id: 'model-authorization-api-key', type: 'password', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      ${uiIconButton({ label: tr('settings.model_authorization.key_show'), icon: 'eye', className: 'model-authorization-key-toggle', attrs: { 'data-model-auth-action': 'toggle-key-visible', 'data-target': 'model-authorization-api-key' } })}
     </div>`;
   }
 
@@ -605,13 +602,13 @@
     const title = isBuiltin && provider ? provider.label : tr('settings.model_authorization.api_key_flow_hint');
     const baseRow = isBuiltin
       ? `<div class="model-authorization-note">${esc(tr('settings.model_authorization.base_url_builtin_hint'))}</div>`
-      : `<div class="form-row"><label>${esc(tr('settings.custom.base_url'))}</label><input id="model-authorization-base-url" class="form-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>`;
+      : `<div class="form-row"><label for="model-authorization-base-url">${esc(tr('settings.custom.base_url'))}</label>${uiInput({ id: 'model-authorization-base-url', type: 'url', placeholder: 'https://api.example.com/v1', attrs: { autocomplete: 'off', spellcheck: 'false' } })}</div>`;
     const docs = isBuiltin && provider && provider.docsUrl
       ? `<a class="model-authorization-provider-docs" href="${esc(provider.docsUrl)}" target="_blank" rel="noopener noreferrer">${esc(tr('settings.model_authorization.provider_docs_hint'))}</a>`
       : '';
     return `<div class="model-authorization-credentials">
       <div class="model-authorization-progress">${esc(title)}</div>
-      <div class="form-row"><label>${esc(tr('settings.custom.api_key'))}</label>${keyInputHtml()}</div>
+      <div class="form-row"><label for="model-authorization-api-key">${esc(tr('settings.custom.api_key'))}</label>${keyInputHtml()}</div>
       ${baseRow}
       ${docs}
     </div>`;
@@ -640,12 +637,12 @@
     const selected = new Set(controller.draft.selectedModels);
     const rows = controller.draft.models.map((model) => `
       <div class="model-authorization-model-row" data-model-id="${esc(model.id)}">
-        <button data-model-auth-action="toggle-model" data-model-id="${esc(model.id)}" data-checked="${selected.has(model.id) ? 'false' : 'true'}">${selected.has(model.id) ? '✓' : '+'}</button>
+        ${uiIconButton({ label: selected.has(model.id) ? tr('settings.model_authorization.remove_model') : tr('settings.custom_providers.add_model'), icon: selected.has(model.id) ? 'check' : 'plus', className: 'model-authorization-model-toggle', attrs: { 'data-model-auth-action': 'toggle-model', 'data-model-id': model.id, 'data-checked': selected.has(model.id) ? 'false' : 'true' } })}
         <span>${esc(model.name || model.id)}</span>
-        <button data-model-auth-action="default-model" data-model-id="${esc(model.id)}" ${selected.has(model.id) ? '' : 'disabled'}>${controller.draft.defaultModel === model.id ? esc(tr('settings.model_authorization.default_label')) : esc(tr('settings.model_authorization.make_default'))}</button>
+        ${uiButton({ label: controller.draft.defaultModel === model.id ? tr('settings.model_authorization.default_label') : tr('settings.model_authorization.make_default'), role: 'ghost', size: 'sm', disabled: !selected.has(model.id), attrs: { 'data-model-auth-action': 'default-model', 'data-model-id': model.id } })}
       </div>`).join('');
     const manual = controller.draft.discoveryErrorCode === 'unsupported_discovery'
-      ? `<div class="form-row"><input id="model-authorization-manual-model" class="form-input" type="text" /><button class="btn" data-model-auth-action="add-manual-model">${esc(tr('settings.model_authorization.manual_model_title'))}</button></div>`
+      ? `<div class="form-row">${uiInput({ id: 'model-authorization-manual-model' })}${uiButton({ label: tr('settings.model_authorization.manual_model_title'), attrs: { 'data-model-auth-action': 'add-manual-model' } })}</div>`
       : '';
     const empty = controller.draft.discoveryStatus === 'ready' && !controller.draft.models.length
       ? `<div class="settings-empty">${esc(tr('settings.model_authorization.model_list_empty'))}</div>`
@@ -659,15 +656,15 @@
 
   function renderActions() {
     const step = controller.draft.step;
-    const cancel = `<button class="btn" data-model-auth-action="cancel">${esc(tr('common.cancel') || 'Cancel')}</button>`;
-    const back = `<button class="btn" data-model-auth-action="back">${esc(tr('common.back') || 'Back')}</button>`;
+    const cancel = uiButton({ label: tr('common.cancel') || 'Cancel', attrs: { 'data-model-auth-action': 'cancel' } });
+    const back = uiButton({ label: tr('common.back') || 'Back', attrs: { 'data-model-auth-action': 'back' } });
     if (step === 'auth_type') return cancel;
     if (step === 'credentials' || step === 'credential_ready') {
-      return `${back}<button class="btn btn-primary" data-model-auth-action="continue-credentials">${esc(tr('common.continue') || 'Continue')}</button>`;
+      return `${back}${uiButton({ label: tr('common.continue') || 'Continue', role: 'primary', attrs: { 'data-model-auth-action': 'continue-credentials' } })}`;
     }
     if (step === 'models' || step === 'manual_model') {
       const disabled = controller.busy || !controller.draft.selectedModels.length;
-      return `${back}<button class="btn btn-primary" data-model-auth-action="complete"${disabled ? ' disabled' : ''}>${esc(tr('settings.model_authorization.complete'))}</button>`;
+      return `${back}${uiButton({ label: tr('settings.model_authorization.complete'), role: 'primary', disabled, attrs: { 'data-model-auth-action': 'complete' } })}`;
     }
     return back;
   }
@@ -1044,12 +1041,9 @@
         const id = model.model || model.id || '';
         const isDefault = id === defaultModel;
         const entryId = normalizeModelId(model.entryId);
-        const removeIcon = typeof window.uiIconHtml === 'function'
-          ? window.uiIconHtml('x', 'model-authorization-model-remove-icon')
-          : '';
         const removing = entryId && controller.removingModelEntryId === entryId;
         const removeButton = entryId
-          ? `<button type="button" class="model-authorization-model-remove" data-model-auth-action="remove-model" data-authorization-id="${esc(authorizationId)}" data-entry-id="${esc(entryId)}" title="${esc(tr('settings.model_authorization.confirm_remove_model'))}" aria-label="${esc(tr('settings.model_authorization.confirm_remove_model'))}"${removing ? ' disabled' : ''}>${removeIcon}</button>`
+          ? uiIconButton({ label: tr('settings.model_authorization.confirm_remove_model'), icon: 'x', variant: 'danger', disabled: removing, className: 'model-authorization-model-remove', attrs: { 'data-model-auth-action': 'remove-model', 'data-authorization-id': authorizationId, 'data-entry-id': entryId } })
           : '';
         return `<span class="model-authorization-model-chip${isDefault ? ' is-default' : ''}"><span class="model-authorization-model-chip-label">${esc(id)}</span>${isDefault ? '<span class="model-authorization-chip-check">✓</span>' : ''}${removeButton}</span>`;
       }).join('');
@@ -1062,7 +1056,7 @@
             <div class="model-authorization-card-title">${esc(auth.label || auth.providerLabel || authorizationId)}</div>
             <div class="model-authorization-card-meta"><span class="model-authorization-auth-type">${esc(auth.authType || '')}</span><span>${esc(auth.source || '')}</span></div>
           </div>
-          <button type="button" class="btn btn-sm btn-danger" data-model-auth-action="remove-authorization" data-authorization-id="${esc(authorizationId)}">${esc(tr('settings.model_authorization.remove_authorization'))}</button>
+          ${uiButton({ label: tr('settings.model_authorization.remove_authorization'), role: 'danger', size: 'sm', attrs: { 'data-model-auth-action': 'remove-authorization', 'data-authorization-id': authorizationId } })}
         </div>
         ${warning ? `<div class="model-authorization-warning">${esc(warning)}</div>` : ''}
         ${chips ? `<div class="model-authorization-model-chips">${chips}</div>` : ''}

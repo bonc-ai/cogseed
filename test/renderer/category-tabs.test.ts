@@ -74,6 +74,9 @@ function loadCategoryRenderers() {
       'skills.global_group_expand': '展开',
       'skills.global_group_collapse': '收起',
       'skills.no_match': '无匹配技能',
+      'skills.no_match_hint': '请尝试其他关键词或清除分类筛选。',
+      'skills.search_placeholder': '搜索技能',
+      'skills.category_filter_label': '技能分类',
       'skills.source_custom': '自定义',
       'skills.source_marketplace': '市场',
       'skills.security_withheld': '未通过安检',
@@ -110,6 +113,7 @@ function loadCategoryRenderers() {
       'skills.security_scanned_just_now': '刚刚检查',
       'skills.security_scanned_days_ago': '{n} 天前检查',
       'skills.security_summary_verified': '{n} 个技能已通过安检',
+      'skills.security_summary_label': '安检',
       'skills.security_summary_risk': '{n} 个有提示',
       'skills.security_summary_withheld': '{n} 个未通过',
       'skills.security_summary_unchecked': '{n} 个待检查',
@@ -153,6 +157,16 @@ function loadCategoryRenderers() {
     _mpShowReviewStatusUi: () => false,
   };
   vm.createContext(context);
+  for (const file of [
+    'icons.js',
+    'ui-button.js',
+    'ui-form.js',
+    'ui-empty.js',
+    'ui-segmented-control.js',
+  ]) {
+    const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8');
+    vm.runInContext(code, context, { filename: file });
+  }
   for (const file of ['agents.js', 'skills.js']) {
     const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8');
     vm.runInContext(code, context, { filename: file });
@@ -172,6 +186,7 @@ describe('agent and skill category tabs', () => {
     context.renderAgentsGrid(agents);
     expect(el('agents-categories').innerHTML).toContain('通用');
     expect(el('agents-categories').innerHTML).not.toContain('未知');
+    expect(el('agents-categories').innerHTML).toContain('ui-segmented-control');
     expect(el('agents-grid').innerHTML).toContain('class="agent-card-open" data-agent-open');
     expect(el('agents-grid').innerHTML).toContain('aria-label="agents.manage_tooltip: No Category"');
     expect(el('agents-grid').innerHTML).not.toContain('role="button" tabindex="0"');
@@ -203,6 +218,8 @@ describe('agent and skill category tabs', () => {
     context.renderSkillsGrid(skills);
     expect(el('skills-categories').innerHTML).toContain('通用');
     expect(el('skills-categories').innerHTML).not.toContain('未知');
+    expect(el('skills-categories').innerHTML).toContain('ui-segmented-control');
+    expect(el('skills-categories').innerHTML).toContain('aria-label="技能分类"');
 
     vm.runInContext('_skillsActiveCategory = "general"', context);
     context.renderSkillsGrid(skills);
@@ -290,7 +307,7 @@ describe('agent and skill category tabs', () => {
     expect(html).toContain('外部包');
     expect(html).toContain('cogseed-cli-smoke');
     expect(html).toContain('命令行 · `cogseed-cli-smoke`');
-    expect(html).toContain('skill-card is-readonly');
+    expect(html).toContain('skill-card ui-resource-card is-readonly');
     expect(html).toContain('data-open-package-card');
     expect(html).toContain('data-open-package-more');
     expect(html).not.toContain('packages-list');
@@ -774,7 +791,7 @@ describe('skills grid › withheld (failed security check) cards', () => {
     expect(html).toContain('skill-card-chip is-withheld');
     expect(html).toContain('is-withheld');
     // Use must be inert even though the user's `enabled` preference is true.
-    expect(html).toContain('disabled aria-disabled="true"');
+    expect(html).toMatch(/class="[^"]*ui-button--primary[^"]*skill-card-use[^"]*" disabled/);
     // The hint tells the user the fix rather than just naming the state.
     expect(html).toContain('重新安装可恢复');
   });

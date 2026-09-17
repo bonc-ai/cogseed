@@ -145,6 +145,8 @@ function renderFilesResult(snapshot: {
   };
   context.window.window = context.window;
   vm.createContext(context);
+  const buttonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
+  vm.runInContext(buttonSource, context);
   const policySource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/file-operation-policy.js'), 'utf8');
   vm.runInContext(policySource, context);
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');

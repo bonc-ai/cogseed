@@ -1541,7 +1541,7 @@ function _mpCardHtml(item, lang) {
     btnAttrs = 'disabled';
   }
   return `
-    <div class="marketplace-card" data-id="${escapeHtml(item.id)}">
+    <div class="marketplace-card ui-resource-card" data-id="${escapeHtml(item.id)}">
       <div class="marketplace-card-header">
         ${avatar}
         <span class="marketplace-card-name">${escapeHtml(item.name || item.id)}</span>

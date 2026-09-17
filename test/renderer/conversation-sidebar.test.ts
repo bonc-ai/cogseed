@@ -53,6 +53,7 @@ function loadConversationRenderer() {
       'chat.conv_del_title': 'Delete',
       'project.menu.more_actions': 'More actions',
       'auto.title': 'Automation',
+      'chat.status.running': 'Running',
       'agents.use_label': `Agent: ${params?.agent || ''}`,
       'skills.use_label': `Skill: ${params?.skill || ''}`,
       'chat.stream.compaction_tokens': `Context compressed: ${params?.before} -> ${params?.after} tokens`,
@@ -97,6 +98,9 @@ function loadConversationRenderer() {
   };
   context.window.window = context.window;
   vm.createContext(context);
+  const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
+  const uiFormSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-form.js'), 'utf8');
+  vm.runInContext(`${uiButtonSource}\n${uiFormSource}\nthis.uiButton = window.uiButton; this.uiIconButton = window.uiIconButton; this.uiInput = window.uiInput;`, context);
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
   vm.runInContext(source, context);
   return context;
@@ -185,6 +189,61 @@ describe('conversation run observer cleanup', () => {
 });
 
 describe('conversation sidebar task row actions', () => {
+  it('renders the real sidebar vertically as conditional pinned, recent, then spaces', () => {
+    const context = loadConversationRenderer();
+    const container = {
+      innerHTML: '',
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+    context.document.getElementById = (id: string) => id === 'conversation-list' ? container : null;
+    vm.runInContext(`
+      _sidebarSpacesLoaded = true;
+      _sidebarSpaces = [{ space_id: 'space-111', name: '111' }];
+      _sidebarCollapse.pinned = false;
+      _sidebarCollapse.recent = false;
+      _sidebarCollapse.spaces = false;
+      _sidebarCollapse.spaceGroups = {};
+    `, context);
+    context.conversations = [
+      {
+        conversation_id: 'pinned-1',
+        title: 'Pinned task',
+        pinned_at: '2026-09-08T01:00:00.000Z',
+        updated_at: '2026-09-08T01:00:00.000Z',
+      },
+      {
+        conversation_id: 'recent-1',
+        title: 'Recent task',
+        updated_at: '2026-09-08T00:00:00.000Z',
+      },
+      {
+        conversation_id: 'space-task-1',
+        space_id: 'space-111',
+        title: 'Space task',
+        updated_at: '2026-09-08T00:00:00.000Z',
+      },
+    ];
+
+    context.renderConversationList();
+
+    const html = container.innerHTML;
+    expect(html.indexOf('sidebar.pinned_section')).toBeLessThan(html.indexOf('Recent tasks'));
+    expect(html.indexOf('Recent tasks')).toBeLessThan(html.indexOf('Spaces'));
+    expect(html.indexOf('Spaces')).toBeLessThan(html.indexOf('111'));
+    expect(html).toContain('Pinned task');
+    expect(html).toContain('Recent task');
+    expect(html).toContain('Space task');
+    expect(html).toContain('data-icon="space"');
+
+    context.conversations = context.conversations.filter((item: any) => !item.pinned_at);
+    context.renderConversationList();
+
+    expect(container.innerHTML).not.toContain('sidebar.pinned_section');
+    expect(container.innerHTML).toContain('Recent tasks');
+    expect(container.innerHTML).toContain('Spaces');
+  });
+
   it('fetches and renders a recently-active task that is missing from the bounded startup cache', async () => {
     const context = loadConversationRenderer();
     const container = {
@@ -392,6 +451,7 @@ describe('conversation sidebar task row actions', () => {
     expect(actionsIdx).toBeGreaterThan(titleIdx);
     expect(menuIdx).toBeGreaterThan(actionsIdx);
     expect(html).toContain('data-hide-pin="0"');
+    expect(html).toContain('data-icon="more-horizontal"');
   });
 
   it('marks the menu as no-pin in surfaces that explicitly hide pinning', () => {
@@ -405,6 +465,36 @@ describe('conversation sidebar task row actions', () => {
     expect(html).toContain('class="conv-item-actions"');
     expect(html).toContain('conv-item-menu');
     expect(html).toContain('data-hide-pin="1"');
+    expect(html).not.toContain('conv-item-auto-icon');
+  });
+
+  it('keeps agent identity metadata out of compact sidebar task rows', () => {
+    const context = loadConversationRenderer();
+    const html = context._renderConversationSidebarItem({
+      conversation_id: 'agent-task-1',
+      title: 'Agent task',
+      commander_in_chat: true,
+      agent_ids: ['writer', 'reviewer'],
+    });
+
+    expect(html).not.toContain('conv-item-meta');
+    expect(html).not.toContain('conv-item-members');
+    expect(html).not.toContain('conv-item-member');
+  });
+
+  it('renders live work as one inline running indicator before the title', () => {
+    const context = loadConversationRenderer();
+    vm.runInContext('_latestInFlight.set("running-1", ["commander"])', context);
+
+    const html = context._renderConversationSidebarItem({
+      conversation_id: 'running-1',
+      title: 'Running task',
+    });
+
+    expect(html).toContain('class="conv-task-indicator"');
+    expect(html).toContain('aria-label="Running"');
+    expect(html.indexOf('conv-task-indicator')).toBeLessThan(html.indexOf('class="conv-item-title"'));
+    expect(html).not.toContain('conv-task-line');
   });
 
   it('renders an inline title input while renaming a row', () => {
@@ -416,7 +506,7 @@ describe('conversation sidebar task row actions', () => {
       title: 'Editable task',
     });
 
-    expect(html).toContain('class="conv-item-title-input"');
+    expect(html).toContain('ui-input conv-item-title-input');
     expect(html).toContain('data-conv-rename-cid="c1"');
     expect(html).not.toContain('class="conv-item-title" title="Editable task"');
   });

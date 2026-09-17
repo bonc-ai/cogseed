@@ -861,6 +861,9 @@ describe('KSTAR run evidence', () => {
       }],
       injectionReceipts: [injection],
       usageReceipts: [usageReceipt],
+      // T2.2 反馈计数：该资产无 feedback_* 记录 → 0/0。
+      feedbackPositive: 0,
+      feedbackNegative: 0,
     }]);
     expect(result.transferProofs).toEqual([aggregateTransfer, transfer]);
     expect(result.effectivenessProofs).toEqual([aggregateEffectiveness, effectiveness]);
