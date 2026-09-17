@@ -244,6 +244,51 @@ describe('Recall cognition source catalog', () => {
     expect(group.items.find((item) => item.id === 'conv-followup')).toMatchObject({ messageCount: 3 });
   });
 
+  it('marks failed replies and trivial chats as low-signal sessions（无需沉淀分类信号）', async () => {
+    mocks.listConversations.mockResolvedValue([
+      { ...conversation, conversation_id: 'conv-failed', title: '没等到回复' },
+      { ...conversation, conversation_id: 'conv-interrupted', title: '中断的会话' },
+      { ...conversation, conversation_id: 'conv-chat', title: '打个招呼' },
+      { ...conversation, conversation_id: 'conv-fail-then-ok', title: '失败后成功' },
+      { ...conversation, conversation_id: 'conv-real', title: '正经工作' },
+    ]);
+    mocks.getMessages.mockImplementation(async (_userId: string, conversationId: string) => {
+      if (conversationId === 'conv-failed') return [
+        { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: '帮我写一份方案' },
+        { id: 'f-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', text: '模型没有响应', failure_kind: 'model', failure_code: 'model_stream_error' },
+      ];
+      if (conversationId === 'conv-interrupted') return [
+        { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: '继续刚才的分析' },
+        { id: 's-1', ts: '2026-08-01T00:02:00.000Z', from: 'system', text: '回复被中断', system_kind: 'reply_interrupted' },
+      ];
+      if (conversationId === 'conv-chat') return [
+        { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: '你好！' },
+        { id: 'a-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', text: '你好！有什么可以帮你' },
+      ];
+      if (conversationId === 'conv-fail-then-ok') return [
+        { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: '你好' },
+        { id: 'f-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', text: '失败了', failure_kind: 'model' },
+        { id: 'u-2', ts: '2026-08-01T00:03:00.000Z', from: 'user', text: '再试一次' },
+        { id: 'a-2', ts: '2026-08-01T00:04:00.000Z', from: 'commander', text: '成功了' },
+      ];
+      return [
+        { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: '帮我梳理这个模块的问题' },
+        { id: 'a-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', text: '梳理完了' },
+      ];
+    });
+
+    const [group] = await listCognitionSources('user-a', { kinds: ['conversation'], limit: 10 });
+    // 最后一条 user 之后是失败占位 → lastTurnFailed（中断同理，同属"未得到回复"）。
+    expect(group.items.find((item) => item.id === 'conv-failed')).toMatchObject({ lastTurnFailed: true, chatLike: false });
+    expect(group.items.find((item) => item.id === 'conv-interrupted')).toMatchObject({ lastTurnFailed: true, chatLike: false });
+    // 一轮寒暄（≤3 条有用消息 + user 消息全部命中寒暄口径）→ chatLike。
+    expect(group.items.find((item) => item.id === 'conv-chat')).toMatchObject({ lastTurnFailed: false, chatLike: true });
+    // 失败后重试成功（最后一轮有正常回复）不标失败；"再试一次"不命中寒暄 → 不标闲聊。
+    expect(group.items.find((item) => item.id === 'conv-fail-then-ok')).toMatchObject({ lastTurnFailed: false, chatLike: false });
+    // 正经对话双 false。
+    expect(group.items.find((item) => item.id === 'conv-real')).toMatchObject({ lastTurnFailed: false, chatLike: false });
+  });
+
   it('does not read message bodies for paused or removed conversation sources', async () => {
     mocks.listConversations.mockResolvedValue([
       conversation,

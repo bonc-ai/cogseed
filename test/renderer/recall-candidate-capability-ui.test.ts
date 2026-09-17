@@ -213,8 +213,9 @@ describe('confirmed candidate exits into the formal asset version chain', () => 
 
 describe('governance page carries the asset revision entry', () => {
   it('shows the edit entry for an asset whose content can still change', () => {
-    // 资产详情内按状态给治理动作（pause/resume/archive/restore）。
-    expect(viewsSource).toContain("data: { action: 'pause' }");
+    // 2026-09-17 重构：暂停/恢复合并为标题旁总开关（data-action 动态二值），
+    // 恢复入口保留在 deleted 态；编辑入口=版本行的「基于此版修改」。
+    expect(viewsSource).toContain("data-action=\"${statusOn ? 'pause' : 'resume'}\"");
     expect(viewsSource).toContain("data: { action: 'restore' }");
   });
 
@@ -228,8 +229,10 @@ describe('governance page carries the asset revision entry', () => {
   });
 
   it('offers no content editing for a revoked asset', () => {
-    expect(viewsSource).toContain('revoked');
-    expect(viewsSource).not.toContain("'data-f': 'statement'");
+    // 2026-09-17：编辑表单回到界面（就地编辑，用户口径），但编辑态门口
+    // 限定 active/paused——revoked/archived 等终态只读（断言改判门口条件，
+    // 源码级"无表单字样"已随功能恢复失效）。
+    expect(viewsSource).toContain("['active', 'paused'].includes(String(asset.status || 'active'))");
   });
 });
 

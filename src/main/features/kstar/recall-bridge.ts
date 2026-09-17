@@ -38,6 +38,7 @@ export async function saveKstarCandidateProposals(
       ...(proposal.forbiddenWhen ? { forbiddenWhen: proposal.forbiddenWhen } : {}),
       ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
       ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
+      ...(proposal.targetVersionUsed ? { targetVersionUsed: proposal.targetVersionUsed } : {}),
       ...(options.spaceId && safeId(options.spaceId) ? { spaceId: options.spaceId } : {}),
     }));
   }

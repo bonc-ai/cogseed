@@ -289,8 +289,9 @@ function toolCallsFromGroupMessages(messages: GroupKstarMessageInput[]): KstarTo
   return calls;
 }
 
-function abilityAssetRefsFromCitations(input: GroupKstarEpisodeInput, messages: GroupKstarMessageInput[]): string[] {
+function abilityAssetRefsFromCitations(input: GroupKstarEpisodeInput, messages: GroupKstarMessageInput[]): { refs: string[]; versions: Record<string, string> } {
   const refs: string[] = [];
+  const versions: Record<string, string> = {};
   const seen = new Set<string>();
   for (const message of messages) {
     for (const citation of message.recall_citations || []) {
@@ -299,9 +300,12 @@ function abilityAssetRefsFromCitations(input: GroupKstarEpisodeInput, messages: 
       if (!citation.asset_id || seen.has(citation.asset_id)) continue;
       seen.add(citation.asset_id);
       refs.push(citation.asset_id);
+      // 版本组契约（2026-09-16）：采集任务实际使用的版本（改进提案锚定用）。
+      const version = String(citation.version || '').trim();
+      if (version) versions[citation.asset_id] = version;
     }
   }
-  return refs;
+  return { refs, versions };
 }
 
 function messagesInRun(input: GroupKstarEpisodeInput): GroupKstarMessageInput[] {
@@ -350,7 +354,7 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     ...(input.authorizedExternalSystemRefs || []),
   ]);
   const toolCalls = toolCallsFromGroupMessages(actionMessages);
-  const abilityAssetRefs = abilityAssetRefsFromCitations(input, actionMessages);
+  const { refs: abilityAssetRefs, versions: abilityAssetVersions } = abilityAssetRefsFromCitations(input, actionMessages);
   const summary = resultMessages
     .map((message) => `${message.from}: ${compactText(message.text, 180) || ''}`)
     .filter(Boolean)
@@ -375,7 +379,7 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     ...(input.projectionId ? { projectionId: input.projectionId } : {}),
     ...(input.forecastId ? { forecastId: input.forecastId } : {}),
     ...(input.wakeRequestId ? { wakeRequestId: input.wakeRequestId } : {}),
-    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs },
+    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs, ...(Object.keys(abilityAssetVersions).length ? { abilityAssetVersions } : {}) },
     s: { conversationSummary: compactText(summary, MAX_SUMMARY) },
     t: { userGoal, normalizedTask: compactText(userGoal, MAX_SUMMARY), constraints: [] },
     a: {

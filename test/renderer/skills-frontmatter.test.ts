@@ -343,7 +343,8 @@ describe('skills renderer frontmatter parsing', () => {
     );
 
     expect(visibleText(html)).toContain('Scoped review rule');
-    expect(visibleText(html)).toContain('用过几次 2 次');
+    // 2026-09-17 下沉改：「用过几次」随详细信息归版本展开块；顶部使用
+    // 汇总在使用记录区（被实际使用/被带入任务）。
     expect(visibleText(html)).toContain('被实际使用 1 次');
     expect(visibleText(html)).toContain('被带入任务 1 次');
     expect(html).toContain('data-act="proof-toggle" data-id="proof-1"');
@@ -432,7 +433,6 @@ describe('skills renderer frontmatter parsing', () => {
 
     const active = renderStatus('active');
     expect(active).toContain('data-action="pause"');
-    expect(active).toContain('data-action="archive"');
     expect(active).not.toContain('data-action="resume"');
 
     const paused = renderStatus('paused');
@@ -440,7 +440,9 @@ describe('skills renderer frontmatter parsing', () => {
     expect(paused).not.toContain('data-action="pause"');
 
     const archived = renderStatus('archived');
-    expect(archived).toContain('data-action="restore"');
+    // 2026-09-17：归档=归并终态（只读说明块，无恢复按钮——恢复入口随归档
+    // 操作一起从界面移除，子安拍板）；deleted 态才有「恢复」。
+    expect(archived).toContain('已归并');
     expect(archived).not.toContain('data-action="archive"');
 
     for (const html of [active, paused, archived]) {
