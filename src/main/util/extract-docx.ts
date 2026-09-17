@@ -11,6 +11,38 @@ function loadMammoth(): Promise<any> {
   return _mammothPromise;
 }
 
+/**
+ * 内联图片占位（剥掉 base64 后留下"此处原本有图"的信息）。
+ * 用全角括号，避免下游把占位符当成 markdown 图片语法。
+ */
+const IMAGE_PLACEHOLDER = '（图）';
+
+/** `![alt](data:image/jpeg;base64,AAAA…)` —— base64 字母表不含 `)`，故 `[^)]*` 安全。 */
+const MD_INLINE_IMAGE_RE = /!\[([^\]]*)\]\(\s*data:image\/[a-z0-9.+-]+;base64,[^)]*\)/gi;
+/** `<img src="data:image/png;base64,AAAA…">`（mammoth 某些版本/表格内会走 HTML）。 */
+const HTML_INLINE_IMAGE_RE = /<img\b[^>]*\bsrc\s*=\s*["']data:image\/[a-z0-9.+-]+;base64,[^"']*["'][^>]*>/gi;
+
+/**
+ * 剥掉内联 base64 图片数据，只留短占位。**这是文档索引链路的必要一步**：
+ *
+ * mammoth 会把 docx 里的图片内联成 `![alt](data:image/jpeg;base64,…)`，而 KB 索引
+ * 按 `EMBED_MAX_CHARS = 400` 切块——一张 140KB 的截图 base64 后约 19 万字符，
+ * 会被切成 ~470 个纯 base64 乱码 chunk，把所有正文块推到几千号 chunk 的位置。
+ *
+ * 真机案例（2026-09-16，`软件行业的三块地基，正在被AI改写.docx`）：正文只有
+ * 5,531 字 / 24 个 chunk，却因为 6 张插图被切成 **2871 个 chunk（114 万字）**，
+ * 正文块索引散落在 1,2,3,[541,542,543],[1020…1023],… 之后——于是"取前 N 个
+ * chunk"的取样策略永远取不到正文，生成的脑图只剩封面标题。
+ *
+ * 下游三个消费者（KB 索引 / 全文检索 file_indexer / 飞书分享）都只要文字，
+ * 且图片预览走 `docxBufferToHtml`（不经过这里），故在此统一剥离，无副作用。
+ */
+export function stripInlineImageData(md: string): string {
+  return String(md ?? '')
+    .replace(MD_INLINE_IMAGE_RE, IMAGE_PLACEHOLDER)
+    .replace(HTML_INLINE_IMAGE_RE, IMAGE_PLACEHOLDER);
+}
+
 export async function docxBufferToMarkdown(buf: Buffer): Promise<string> {
   if (!buf || !(buf instanceof Buffer) || buf.length === 0) {
     throw new Error('docxBufferToMarkdown: empty or invalid buffer');
@@ -21,7 +53,7 @@ export async function docxBufferToMarkdown(buf: Buffer): Promise<string> {
   const result = await fn({ buffer: buf });
   // mammoth returns { value, messages }; messages are warnings about unrecognized
   // styles — non-fatal, drop them. Caller can re-extract if needed.
-  return String(result?.value ?? '').trim();
+  return stripInlineImageData(String(result?.value ?? '')).trim();
 }
 
 /**

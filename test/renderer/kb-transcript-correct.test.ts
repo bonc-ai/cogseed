@@ -19,6 +19,7 @@ import type { GlossaryEntry } from '../../src/main/features/transcript_glossary'
 
 const root = path.resolve(__dirname, '../..');
 const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'utf8');
+const panelSrc = readSrc('renderer/modules/kb-transcript-correct.js');
 
 const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as {
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
@@ -47,10 +48,11 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
   defaultAcceptedIds: (rows: unknown[]) => string[];
+  normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
-  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; message?: string };
+  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; existingPath?: string; message?: string };
   riskKey: (l: string) => string;
 };
 
@@ -173,6 +175,40 @@ describe('清理版保存路径与命名', () => {
   });
 });
 
+describe('另存后的库列表刷新与"已有文件"告知（真机反馈：另存了却找不到）', () => {
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('去重命中时把已有文件的确切路径带出来（只说"在某个目录下"用户照样找不到）', () => {
+    const verdict = panel.classifySaveResult({
+      ok: false,
+      code: 'duplicate_content',
+      error: '相同内容已存在',
+      existingDir: '文字转写',
+      existingPath: '文字转写/文字转写_ECS9点30早会_36696491729-清理版.txt',
+    });
+    expect(verdict.kind).toBe('duplicate');
+    expect(verdict.existingPath).toBe('文字转写/文字转写_ECS9点30早会_36696491729-清理版.txt');
+    expect(verdict.existingDir).toBe('文字转写');
+  });
+
+  it('main 没给 existingPath 时不编造，缺省为空串', () => {
+    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content' }).existingPath).toBe('');
+  });
+
+  it('写入方保存成功后必须显式请知识库重载（列表渲染的是旧树快照）', () => {
+    // 两处另存（清理版 / 附记）都得通知，否则"已另存：…"和列表对不上
+    const notifyCalls = source.match(/notifyLibraryChanged\(\);/g) || [];
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(3); // 成功 / 去重 / 附记
+    expect(source).toMatch(/function notifyLibraryChanged\(\)[\s\S]{0,600}root\.loadContexts/);
+    expect(source).toMatch(/function notifyLibraryChanged\(\)[\s\S]{0,600}root\.renderKbWorkbench/);
+  });
+
+  it('去重提示优先给文件名，拿不到才退回目录级文案', () => {
+    expect(source).toContain("t('kb.transcriptCorrect.save_duplicate_file'");
+    expect(source).toContain("t('kb.transcriptCorrect.save_duplicate_dir'");
+  });
+});
+
 describe('风险键映射', () => {
   it('只产出三种已知键', () => {
     expect(panel.riskKey('high')).toBe('risk_high');
@@ -238,12 +274,12 @@ describe('本体同步结果摘要', () => {
       linked: 1,
       canonicalNames: 2,
       alignments: [{ kind: 'canonical_spelling', entryId: 'g_1', wrong: 'kstar', currentCorrect: 'K star', suggestedCorrect: 'KSTAR', source: 'ontology' }],
-      missing: [{ kind: 'missing_entry', correct: 'Raymond', source: 'ontology' }],
+      missing: [{ kind: 'missing_entry', correct: 'SpeakerA', source: 'ontology' }],
       contributed: 1,
     });
     expect(info.noSources).toBe(false);
     expect(info.alignments).toEqual([{ entryId: 'g_1', wrong: 'kstar', current: 'K star', suggested: 'KSTAR', source: 'ontology' }]);
-    expect(info.missing).toEqual([{ conceptKey: 'raymond', correct: 'Raymond' }]);
+    expect(info.missing).toEqual([{ conceptKey: 'speakera', correct: 'SpeakerA' }]);
   });
 
   it('丢弃形状不对的条目（缺 entryId/缺 correct 时不渲染空按钮）', () => {
@@ -503,6 +539,8 @@ describe('locale 覆盖', () => {
     'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
     // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
     'panel_hint', 'meta_full',
+    // 另存去重时指出确切已有文件（2026-09-16：只说目录级，用户找不到）
+    'save_duplicate_file',
   ];
 
   for (const lang of locales) {
@@ -636,6 +674,35 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('data-anchor-view-correct');
     expect(viewer).toContain('KbTranscriptCorrect?.mount');
     expect(viewer).toContain('destroyCorrection()');
+  });
+
+  it('场景标签：归一规则与主进程一致（纯函数）', () => {
+    expect(panel.normalizeScenarioTags([' 英语演讲课 '])).toEqual(['英语演讲课']);
+    expect(panel.normalizeScenarioTags(['Cogseed', 'cogseed'])).toEqual(['Cogseed']);
+    expect(panel.normalizeScenarioTags('英语演讲课')).toEqual([]);
+    expect(panel.normalizeScenarioTags(Array.from({ length: 12 }, (_, i) => `场景${i}`))).toHaveLength(8);
+  });
+
+  it('场景标签接线：「仅本场景」的前置数据有读有写、全程带上', () => {
+    // 读/写/建议三条 IPC 都要用到（此前标签没有任何来源，选项永远点不动）
+    expect(panelSrc).toContain("invoke('transcript.docTags.get'");
+    expect(panelSrc).toContain("invoke('transcript.docTags.set'");
+    expect(panelSrc).toContain("invoke('transcript.docTags.suggest'");
+    // 扫描与设作用域都要带上文档自己的标签，否则 scopeAllows 恒 false
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}scenarioTags: state\.scenarioTags/);
+    expect(panelSrc).toMatch(/choice === 'task' \? \{ scenarioTags: state\.scenarioTags \}/);
+    // 可用性只看标签有没有（不再看 ctx —— ctx 恒为空数组正是"点不动"的原因）
+    expect(panelSrc).not.toContain('ctx.scenarioTags || []).length');
+    expect(panelSrc).toMatch(/disabled: state\.busy \|\| !state\.scenarioTags\.length/);
+  });
+
+  it('置灰必须说明原因：仅本场景带 title（不再只灰不说）', () => {
+    expect(panelSrc).toMatch(/scope_task_hint|scope_need_tags/);
+    expect(panelSrc).toMatch(/option\.title \? \{ title: option\.title \}/);
+  });
+
+  it('场景标签变更要重扫（否则"未生效"清单停在旧标签上）', () => {
+    expect(panelSrc).toMatch(/async function applyScenarioTags[\s\S]{0,2200}await runScan\(\)/);
   });
 
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {

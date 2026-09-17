@@ -51,7 +51,7 @@ check('commander cannot be disabled or uninstalled and has no output preference'
  assert.equal(section(t,'输入输出'),undefined);assert.equal(section(t,'出生时继承'),undefined);
 });
 check('disabled custom agent remains manageable, but cannot start work',()=>{
- const t=mount(context.AgentWorkbench,{...props('credit'),item:{id:'credit',name:'授信分析师',enabled:false}}).render();
+ const t=mount(context.AgentWorkbench,{...props('credit'),item:{id:'credit',name:'项目分析师',enabled:false}}).render();
  assert.equal(button(t,'使用智能体').props.disabled,true);assert.ok(button(t,'编辑'));assert.ok(button(t,'启用'));
 });
 check('name validation and provider change preserve edit invariants',()=>{

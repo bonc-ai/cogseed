@@ -326,7 +326,11 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
 
 /** 边界判定：`substring` 只要求不是更长词的一部分（由重叠消解兜底）；
  *  `word` 要求左右邻不是字母/数字/CJK。 */
-function boundaryOk(text: string, span: Span, boundary: GlossaryEntry['boundary']): boolean {
+/**
+ * 边界判定（导出供 `transcript_recall` 复用——模糊召回与精确扫描必须用
+ * 同一套边界语义，否则同一条词条在两个通道里得到相反结论）。
+ */
+export function boundaryOk(text: string, span: Span, boundary: GlossaryEntry['boundary']): boolean {
   const before = span.start > 0 ? text[span.start - 1] : undefined;
   const after = span.end < text.length ? text[span.end] : undefined;
   if (boundary === 'word') return !isCjkOrWordChar(before) && !isCjkOrWordChar(after);
@@ -337,7 +341,8 @@ function boundaryOk(text: string, span: Span, boundary: GlossaryEntry['boundary'
   return !nextAscii && !prevAscii;
 }
 
-function findDeniedContext(
+/** 语境窗口匹配（导出供 `transcript_recall` 复用，理由同 `boundaryOk`）。 */
+export function findDeniedContext(
   foldedText: string,
   span: Span,
   denyList: string[],
@@ -493,7 +498,7 @@ export function mapOffset(offsetMap: OffsetSegment[], inputOffset: number): numb
 //   1. `detectSuspectEntities`：**保守**地找出"疑似专名但词表/记忆分组都没有"的
 //      拉丁串。保守的含义是"宁漏勿噪"——只认长度 ≥4 且（含内部大写 或 全大写）
 //      的串：`KSTAR`/`NoteBookLM` 会被认出，`Hello`/`OK`/`API` 不会。
-//      真正的语义级"未知实体"（`roadmap` 可能指 Raymond）留给 P2 的 LLM 候选，
+//      真正的语义级"未知实体"（`roadmap` 可能指 SpeakerA）留给 P2 的 LLM 候选，
 //      本引擎不假装能做。
 //   2. `insertIssueMarkers`：把标记插进清理版，并返回插入后的新 span
 //      （从后往前插，避免前面的插入让后面的偏移失效）。

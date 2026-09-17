@@ -1,0 +1,23 @@
+schema_version: "1.0"
+kind: authority-grant
+id: AUTH-REPLACE-ME
+level: A1
+allowed_actions:
+  - "在项目内生成待确认候选"
+prohibited_actions:
+  - external_message_send
+  - production_write
+  - publish_or_release
+  - permission_change
+  - money_or_contract_commitment
+  - sensitive_data_export
+  - irreversible_action
+data_boundary:
+  - "仅项目内已授权来源"
+confirmation_points: []
+rollback_plan: null
+audit_requirements:
+  - "保留指令、候选、确认和结果引用"
+owner: null
+approved_at: null
+a4_enabled: false

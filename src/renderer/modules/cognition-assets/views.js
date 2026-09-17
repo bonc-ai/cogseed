@@ -96,7 +96,7 @@
     deleted: ['已删除', 'red'], purged: ['已清除', 'red'], revoked: ['已撤回', 'red'],
   };
   const assetStatusChip = (asset) => {
-    const [label, tone] = ASSET_STATUS[String(asset.status || 'active')] || [String(asset.status || ''), ''];
+    const [label, tone] = ASSET_STATUS[String(asset.status || 'active')] || [T('cognition.asset_status_unknown', '状态未知'), ''];
     const maturity = asset.maturity === 'effectiveness_validated'
       ? chip(T('cognition.maturity_validated', '已验证'), 'green')
       : (asset.maturity === 'transfer_validated' ? chip(T('cognition.maturity_transferred', '已成功带入'), 'green') : '');
@@ -969,7 +969,7 @@
       return `<div class="ca-row is-flat">
         <div class="ca-row-main">
           <div class="ca-row-title">${esc(item.title || item.id)}</div>
-          <div class="ca-row-meta">${esc(vocab ? (vocab.kindLabel(item.kind) || String(item.kind || '')) : String(item.kind || ''))}${reasonText ? ` · ${esc(reasonText)}` : ''}</div>
+          <div class="ca-row-meta">${esc(vocab ? vocab.kindLabel(item.kind) : T('cognition.source_kind_other', '其他来源'))}${reasonText ? ` · ${esc(reasonText)}` : ''}</div>
         </div>
         <div class="ca-row-side">${action}</div>
       </div>`;
@@ -1027,7 +1027,7 @@
       confirmed: T('cognition.candidate_status_promoted', '已保存'),
       rejected: T('cognition.candidate_status_rejected', '未保存'),
       ignored: T('cognition.candidate_status_ignored', '已忽略'),
-    }[String(c.status || '')] || String(c.status || ''));
+    }[String(c.status || '')] || T('cognition.candidate_status_other', '已处理'));
     const attention = [];
     // 注：治理待办（cognition.inbox：未分级 / 规则缺边界 / 分类冲突等）曾在此
     // 列出，但新 UI 尚无资产分级与边界编辑入口——报了警却无处处理，只会
@@ -1176,7 +1176,11 @@
     if (byKind) return T(byKind[0], byKind[1]);
     const raw = String(proof.outcome || proof.title || proof.kind || '');
     const byText = EVENT_TITLE_BY_TEXT[raw];
-    return byText ? T(byText[0], byText[1]) : raw;
+    if (byText) return T(byText[0], byText[1]);
+    // title 可能是历史数据里的自然语言标题，保留原文；outcome/kind 是内部
+    // 枚举，认不出时宁可给占位文案也不裸 snake_case 机器码。
+    if (proof.title) return String(proof.title);
+    return T('cognition.proof_event_other', '证明事件');
   };
 
   /* ────────────────────────── 视图：整理（任务流 + 策略） ────────────────────────── */
@@ -1202,10 +1206,8 @@
         <div class="ca-row-title">${esc(T('cognition.nightly_capture_title', '夜间自动沉淀'))}</div>
         <div class="ca-sub">${esc(T('cognition.nightly_capture_hint', '夜间在所选时间自动整理当天结束的会话（消耗模型额度）；产出的内容进入「待我处理」，等你批准或调整。'))}</div>
       </div>
-      ${nightlyOn ? `<label class="ca-setting-time"><span>${esc(T('cognition.nightly_capture_time', '开始时间'))}</span><input type="time" value="${esc(nightlyStart)}" data-act="nightly-time"></label>` : ''}
-      <button type="button" class="ca-switch${nightlyOn ? ' is-on' : ''}" role="switch" aria-checked="${nightlyOn ? 'true' : 'false'}" data-act="nightly-toggle" aria-label="${esc(T('cognition.nightly_capture_title', '夜间自动沉淀'))}">
-        <span class="ca-switch-knob" aria-hidden="true"></span>
-      </button>
+      ${nightlyOn ? `<label class="ca-setting-time"><span>${esc(T('cognition.nightly_capture_time', '开始时间'))}</span>${window.uiInput({ id: 'ca-nightly-start', type: 'time', value: nightlyStart, attrs: { 'data-act': 'nightly-time' } })}</label>` : ''}
+      ${window.uiSwitch({ label: T('cognition.nightly_capture_title', '夜间自动沉淀'), checked: nightlyOn, className: 'ca-switch', attrs: { 'data-act': 'nightly-toggle' } })}
     </div>
     <div class="ca-card ca-setcard">
       <div class="ca-line">
@@ -1322,15 +1324,15 @@
         }
         return `
         <div class="ca-row is-flat">
-          <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
+          <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || T('chat.untitled', '未命名对话'))}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
           <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
         </div>`;
       }
       const detailLink = `data-act="open-capture-detail" data-id="${esc(capture.id)}"`;
-      const titleHtml = `<div class="ca-row-title ca-row-link" ${detailLink} ${roleBtn()} title="${esc(T('cognition.capture_detail_open_hint', '查看整理情况'))}">${esc(vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || conv.title || conv.id))}</div>`;
+      const titleHtml = `<div class="ca-row-title ca-row-link" ${detailLink} ${roleBtn()} title="${esc(T('cognition.capture_detail_open_hint', '查看整理情况'))}">${esc(vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || conv.title || T('cognition.capture_untitled_record', '未命名会话的整理')))}</div>`;
       const pending = Number(capture.reviewSummary && capture.reviewSummary.pending) || 0;
       const metaText = [
-        vocab ? vocab.captureReasonText(capture.displayReason) : String(capture.displayReason || ''),
+        vocab ? vocab.captureReasonText(capture.displayReason) : T('cognition.capture_display_reason_other', '原因未记录'),
         pending ? T('cognition.capture_review_count', '{n} 条待确认', { n: String(pending) }) : '',
         convTime,
       ].filter(Boolean).join(' · ');
@@ -1342,7 +1344,7 @@
       const sideHtml = isRunning(capture)
         ? btn(T('cognition.organize_active_label', '整理中'), '', { small: true, primary: true, disabled: true })
         : `${excludedTag}${chip(
-          vocab ? vocab.captureDisplayStatusText(capture.displayStatus) : String(capture.displayStatus || ''),
+          vocab ? vocab.captureDisplayStatusText(capture.displayStatus) : T('cognition.capture_display_status_other', '状态未知'),
           capture.displayStatus === 'failed' ? 'red' : (capture.displayStatus === 'review_ready' || capture.displayStatus === 'completed') ? 'green' : 'amber',
         )}${primaryAction}`;
       return `
@@ -1479,7 +1481,7 @@
     const signals = (Array.isArray(capture.screeningSignals) ? capture.screeningSignals : [])
       .filter((signal) => signal !== 'manual_selection');
     const signalChips = signals.length
-      ? `<span class="ca-chips">${signals.map((signal) => chip(vocab ? vocab.captureSignalText(signal) : String(signal), 'line')).join(' ')}</span>`
+      ? `<span class="ca-chips">${signals.map((signal) => chip(vocab ? vocab.captureSignalText(signal) : T('cognition.capture_signal_other', '其他信号'), 'line')).join(' ')}</span>`
       : '';
     if (!context || context.loading) {
       const hint = context && context.loading
@@ -1492,7 +1494,7 @@
       if (actorId === 'user') return T('cognition.capture_detail_you', '你');
       if (actorId === 'commander') return T('cognition.capture_detail_commander', '指挥官');
       const participant = nameById.get(String(actorId));
-      return participant ? participant.name : String(actorId);
+      return participant ? participant.name : T('cognition.capture_detail_actor_unknown', '未知参与者');
     };
     const rows = (context.messages || []).map((message) => {
       const text = String(message.text || '');
@@ -1586,7 +1588,7 @@
     const hasUnsaved = !hasSaved && settledRows.some((row) => ['rejected', 'ignored', 'expired'].includes(String(row.status)));
     const statusLabel = vocab
       ? vocab.captureDisplayStatusText(capture.displayStatus)
-      : String(capture.displayStatus || '');
+      : T('cognition.capture_display_status_other', '状态未知');
     const headStatus = capture.displayStatus === 'completed'
       ? (hasSaved
         ? { label: `${statusLabel} · ${T('cognition.capture_detail_candidate_confirmed', '已保存')}`, tone: 'green' }
@@ -1612,8 +1614,8 @@
     }).join('');
     return `${backHtml}
     ${hero(
-      vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || capture.id || ''),
-      vocab ? vocab.captureReasonText(capture.displayReason) : String(capture.displayReason || ''),
+      vocab ? vocab.recordTitle(capture) : String(capture.conversationTitle || T('cognition.capture_untitled_record', '未命名会话的整理')),
+      vocab ? vocab.captureReasonText(capture.displayReason) : T('cognition.capture_display_reason_other', '原因未记录'),
       statsRow([
         [Number(summary.pending) || 0, T('cognition.capture_metric_review', '待确认')],
         [Number(summary.promoted) || 0, T('cognition.capture_detail_assets', '已沉淀资产')],

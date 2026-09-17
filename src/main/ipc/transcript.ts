@@ -31,6 +31,7 @@ import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
 import * as transcriptMetrics from '../features/transcript_metrics';
+import * as transcriptDocTags from '../features/transcript_doc_tags';
 import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
@@ -196,7 +197,7 @@ export const invokeHandlers = {
   },
 
   /**
-   * 装入方案附 A 的初始词表种子（幂等）。`for → Forge` 等方案明写"默认不入册"
+   * 装入方案附 A 的初始词表种子（幂等）。`for → Foo` 等方案明写"默认不入册"
    * 的词**不在种子里**（见 transcript_glossary_seed）。
    */
   'transcript.glossary.seedInitial': async (_payload: Payload, ctx: IpcContext) => {
@@ -241,7 +242,7 @@ export const invokeHandlers = {
   }),
 
   /**
-   * 检索命中对比（方案 §五 P2-4 / §8.1-9 Richard 原话要求）：
+   * 检索命中对比（方案 §五 P2-4 / §8.1-9 人工基线要求）：
    * 同一份知识库里"搜错形"与"搜正确写法"各命中多少，如实并列（自测口径，不宣称因果）。
    */
   'transcript.query.compare': async (payload: Payload, ctx: IpcContext) => {
@@ -403,6 +404,29 @@ export const invokeHandlers = {
       ...(stringList(payload?.scenarioTags, 20) ? { scenarioTags: stringList(payload?.scenarioTags, 20)! } : {}),
     });
   },
+
+  /**
+   * 转写文档的「场景标签」读 / 写 / 建议 —— 「仅本场景」这条作用域的前置数据。
+   *
+   * 为什么放在这里：`transcript.correct.scan` / `.apply` / `transcript.glossary.setScope`
+   * 都收 `scenarioTags`，但此前渲染层没有任何来源可传（面板 ctx 里恒为空），于是
+   * 「仅本场景」永远置灰、带场景标签的词条也永远命中不了。这三条把"文档 → 标签"
+   * 补上：面板读它、写它，扫描/接受时带上它。
+   */
+  'transcript.docTags.get': async (payload: Payload, ctx: IpcContext) => {
+    const docId = optionalId(payload?.docId, 'docId');
+    if (!docId) return { ok: false, error: 'missing docId', tags: [] as string[] };
+    return { ok: true, docId, tags: transcriptDocTags.readTagsForDoc(ctx.userId, docId) };
+  },
+  'transcript.docTags.set': async (payload: Payload, ctx: IpcContext) => {
+    const docId = optionalId(payload?.docId, 'docId');
+    if (!docId) return { ok: false, error: 'missing docId' };
+    return transcriptDocTags.setTagsForDoc(ctx.userId, docId, payload?.tags);
+  },
+  'transcript.docTags.suggest': async (_payload: Payload, ctx: IpcContext) => ({
+    ok: true,
+    tags: await transcriptDocTags.suggestScenarioTags(ctx.userId),
+  }),
 
   /** 忽略（可逆、降权）与恢复：只留痕，不删词条、不动台账。 */
   'transcript.glossary.setIgnored': async (payload: Payload, ctx: IpcContext) => ({

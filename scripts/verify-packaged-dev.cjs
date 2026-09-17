@@ -2,18 +2,16 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const { listPackage, extractFile } = require('@electron/asar');
 const { expectedDevAppPath } = require('./package-dev-mac.cjs');
+const { launchPackagedSmoke, verifySmokeMarker } = require('./verify-packaged-launch.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const ASAR_REQUIRED = Object.freeze([
   'package.json',
   'bootstrap.cjs',
   'src/main/install-data-root.cjs',
-  'src/main/util/migrate-source-data-root.cjs',
   '.build/build-info.json',
   'src/main/index.ts',
   'src/main/util/image-transform.ts',
@@ -82,71 +80,10 @@ function verifyPackagedDevBundle(appPath, options = {}) {
   return { ok: errors.length === 0, errors, appPath, asarPath, identity };
 }
 
-function verifySmokeMarker(marker) {
-  const errors = [];
-  if (marker?.status !== 'ready') errors.push('smoke marker must have status=ready');
-  if (marker?.appIsPackaged !== true) errors.push('smoke marker must confirm appIsPackaged=true');
-  if (marker?.appAsar !== true) errors.push('smoke marker must confirm appAsar=true');
-  if (marker?.preloadLoaded !== true) errors.push('smoke marker must confirm preloadLoaded=true');
-  if (marker?.rendererLoaded !== true) errors.push('smoke marker must confirm rendererLoaded=true');
-  if (marker?.ipcPing !== 'pong') errors.push('smoke marker must confirm ipcPing=pong');
-  return errors;
-}
-
-function waitForMarker(markerPath, child, timeoutMs = 90_000) {
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const timer = setInterval(() => {
-      if (fs.existsSync(markerPath)) {
-        clearInterval(timer);
-        try { resolve(JSON.parse(fs.readFileSync(markerPath, 'utf8'))); }
-        catch (error) { reject(new Error(`invalid smoke marker: ${error.message || error}`)); }
-        return;
-      }
-      if (child.exitCode != null) {
-        clearInterval(timer);
-        reject(new Error(`packaged app exited before writing the smoke marker (status ${child.exitCode})`));
-        return;
-      }
-      if (Date.now() - startedAt >= timeoutMs) {
-        clearInterval(timer);
-        child.kill('SIGTERM');
-        reject(new Error(`timed out after ${timeoutMs}ms waiting for packaged launch smoke`));
-      }
-    }, 200);
-  });
-}
-
 async function launchSmoke(appPath) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-packaged-dev-'));
-  const markerPath = path.join(tempRoot, 'ready.json');
   const executable = path.join(appPath, 'Contents', 'MacOS', 'CogSeed Dev');
   if (!fs.existsSync(executable)) throw new Error(`missing packaged executable: ${executable}`);
-  const launchEnv = { ...process.env };
-  delete launchEnv.COGSEED_WORKSPACE_ROOT;
-  delete launchEnv.COGSEED_WORKSPACE_ROOT;
-  delete launchEnv.COGSEED_RUNTIME_CONTAINER;
-  delete launchEnv.COGSEED_RUNTIME_CONTAINER;
-  const child = spawn(executable, [], {
-    cwd: ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...launchEnv,
-      HOME: tempRoot,
-      COGSEED_PACKAGED_LAUNCH_SMOKE_FILE: markerPath,
-    },
-  });
-  let stderr = '';
-  child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-12_000); });
-  try {
-    const marker = await waitForMarker(markerPath, child);
-    const errors = verifySmokeMarker(marker);
-    if (errors.length) throw new Error(`${errors.join('; ')}${stderr ? `\n${stderr}` : ''}`);
-    return marker;
-  } finally {
-    if (child.exitCode == null) child.kill('SIGTERM');
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
+  return launchPackagedSmoke(executable, { cwd: ROOT });
 }
 
 async function main() {

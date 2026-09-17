@@ -4,7 +4,7 @@
 (function initUiForm(root) {
   'use strict';
 
-  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number', 'date']);
+  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number', 'date', 'time']);
 
   function escapeText(value) {
     return String(value == null ? '' : value)
@@ -51,6 +51,15 @@
     if (!id) throw new TypeError('uiCheckbox requires an id');
     const classes = ['ui-control', 'ui-checkbox', value.className || ''].filter(Boolean).join(' ');
     return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="checkbox"${value.name ? ` name="${escapeText(value.name)}"` : ''}${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.checked ? ' checked' : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+  }
+
+  function uiSwitch(options) {
+    const value = options || {};
+    const label = String(value.label || '').trim();
+    if (!label) throw new TypeError('uiSwitch requires an accessible label');
+    const checked = Boolean(value.checked);
+    const classes = ['ui-switch', value.className || '', checked ? 'is-on' : ''].filter(Boolean).join(' ');
+    return `<button type="button" class="${escapeText(classes)}" role="switch" aria-checked="${checked ? 'true' : 'false'}" aria-label="${escapeText(label)}"${controlStateAttrs(value)}${renderAttrs(value.attrs)}><span class="ui-switch__knob" aria-hidden="true"></span></button>`;
   }
 
   function uiTextarea(options) {
@@ -244,6 +253,7 @@
 
   root.uiInput = uiInput;
   root.uiCheckbox = uiCheckbox;
+  root.uiSwitch = uiSwitch;
   root.uiTextarea = uiTextarea;
   root.uiSelect = uiSelect;
   root.hydrateUiFormSelects = hydrateUiFormSelects;
@@ -252,6 +262,6 @@
   root.uiForm = uiForm;
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { uiInput, uiCheckbox, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
+    module.exports = { uiInput, uiCheckbox, uiSwitch, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

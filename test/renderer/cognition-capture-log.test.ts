@@ -63,7 +63,8 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
     },
   };
   domRoot = { innerHTML: '' };
-  const attrsOf = (attrs?: Record<string, string>) => Object.entries(attrs || {}).map(([k, v]) => ` ${k}="${esc(String(v))}"`).join('');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { uiInput, uiSwitch, uiTextarea } = require('../../src/renderer/modules/ui-form.js');
   globalScope.window = {
     CogAssets: cogAssets,
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -74,11 +75,9 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
     // 再取引用给 window stub（views.js 运行时读 window.uiIconHtml）。
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     uiIconHtml: (() => { require('../../src/renderer/modules/icons.js'); return (globalThis as unknown as Record<string, unknown>).uiIconHtml; })(),
-    // 表单控件透传 id/attrs：内嵌表单用例要断言 data-f 与候选后缀 id。
-    uiTextarea: ({ id, value, attrs }: { id?: string; value?: string; attrs?: Record<string, string> }) =>
-      `<textarea id="${esc(String(id || ''))}"${attrsOf(attrs)}>${esc(String(value || ''))}</textarea>`,
-    uiInput: ({ id, value, placeholder, attrs }: { id?: string; value?: string; placeholder?: string; attrs?: Record<string, string> }) =>
-      `<input id="${esc(String(id || ''))}" value="${esc(String(value || ''))}" placeholder="${esc(String(placeholder || ''))}"${attrsOf(attrs)}/>`,
+    uiInput,
+    uiSwitch,
+    uiTextarea,
   };
   globalScope.document = { getElementById: () => domRoot };
   // eslint-disable-next-line @typescript-eslint/no-require-imports

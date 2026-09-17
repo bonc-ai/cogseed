@@ -2,9 +2,9 @@
 // inheritance and runtime gates. All records/mutations below are memory-only fixtures.
 const {Button,Input,Textarea,Field,Select,SettingsSection,StatusDot,Icon,InlineConfirm,EmptyState} = window.CogSeedDesignSystem_f581b5;
 const AGENT_PROFILES = {
-  credit:{source:'custom',category:'金融',intro:'核对企业项目材料与项目报告口径，整理风险事项和待补材料，输出可复核的项目分析意见。',capabilities:['核对财务报表与项目申请材料','识别口径差异并定位原始证据'],standards:['每条风险事项附材料位置和核验依据','区分已核实事实与待补充事项'],memory:['金额统一使用万元，保留原始币种'],workflow:'1. 核对材料范围\n确认统计期间与待核验企业，记录缺失材料。\n\n2. 交叉核验\n逐项比对财务指标与项目申请，记录口径差异。\n\n3. 输出分析意见\n整理风险事项、证据位置和待补材料清单。',inheritance:null},
-  compliance:{source:'platform',category:'金融',version:'1.0.0',intro:'对照制度条款审阅业务材料，列出需复核的差异及其依据。',capabilities:['定位材料与制度条款的差异'],standards:['引用对应条款与材料位置'],memory:[],workflow:'1. 读取材料\n确认业务范围与适用制度。\n\n2. 核对条款\n逐项记录差异与依据。\n\n3. 提交复核\n输出待人工确认的事项。',inheritance:null},
-  report:{source:'custom',category:'金融',intro:'汇总经营指标，核对变化原因并生成进展简报。',capabilities:[],standards:[],memory:[],workflow:'',inheritance:[]},
+  credit:{source:'custom',category:'业务',intro:'核对项目材料与报告口径，整理待补材料，输出可复核的项目分析意见。',capabilities:['核对数据报表与项目材料','识别口径差异并定位原始证据'],standards:['每条问题附材料位置和核验依据','区分已核实事实与待补充事项'],memory:['数值统一使用标准单位，保留原始口径'],workflow:'1. 核对材料范围\n确认统计期间与待核验项目，记录缺失材料。\n\n2. 交叉核验\n逐项比对指标与项目申请，记录口径差异。\n\n3. 输出分析意见\n整理问题、证据位置和待补材料清单。',inheritance:null},
+  compliance:{source:'platform',category:'业务',version:'1.0.0',intro:'对照制度条款审阅业务材料，列出需复核的差异及其依据。',capabilities:['定位材料与制度条款的差异'],standards:['引用对应条款与材料位置'],memory:[],workflow:'1. 读取材料\n确认业务范围与适用制度。\n\n2. 核对条款\n逐项记录差异与依据。\n\n3. 提交复核\n输出待人工确认的事项。',inheritance:null},
+  report:{source:'custom',category:'业务',intro:'汇总运营指标，核对变化原因并生成进展简报。',capabilities:[],standards:[],memory:[],workflow:'',inheritance:[]},
   codex:{source:'external',category:'通用',intro:'通过 P3394 协议接入本机 Codex，在项目目录中实现功能、修复问题与重构代码。',memory:[],capabilities:[],standards:[],workflow:'',directory:'默认工作空间',inheritance:null},
   commander:{source:'commander',category:'通用',intro:'理解目标、拆解工作，并选择智能体、技能、连接器与工具完成任务。',memory:[],capabilities:['将需求拆成目标、约束、输入与交付结果','选择合适的智能体、技能和工具'],standards:['交接时明确目标、输入和成功条件','最终结果明确来源、限制与下一步'],workflow:'1. 理解目标\n梳理背景、约束与交付形式。\n\n2. 选择能力\n匹配任务需要的智能体、技能与工具。\n\n3. 编排执行\n按任务依赖推进执行。\n\n4. 读取结果\n识别缺口、错误和冲突。\n\n5. 恢复与改派\n继续执行或说明阻塞原因。\n\n6. 综合交付\n整理可直接使用的结果。',inheritance:null}
 };
@@ -26,7 +26,7 @@ function AgentWorkbench({item,editing,onEdit,onPatch,onBack,onUse,onRemove}) {
       <Button variant="ghost" onClick={onBack}><Icon name="chevronLeft" size={14}/>返回列表</Button>
       <Icon name={item.icon||'file'} size={24}/>
       {editing&&definition ? <Field error={!agent.name.trim()?'名称不能为空':undefined}><Input aria-label="智能体名称" value={agent.name} onChange={e=>onPatch({name:e.target.value})}/></Field>:<h1>{agent.name}</h1>}
-      {definition?<Select aria-label="智能体分类" options={['通用','金融','产研']} value={agent.category} onChange={value=>patch({category:value})}/>:<span className="cs-agent-muted">{agent.version ? `v${agent.version} · `:''}{agent.category}</span>}
+      {definition?<Select aria-label="智能体分类" options={['通用','业务','产研']} value={agent.category} onChange={value=>patch({category:value})}/>:<span className="cs-agent-muted">{agent.version ? `v${agent.version} · `:''}{agent.category}</span>}
       <div className="cs-agent-header-actions">{editing?<Button variant="primary" disabled={!agent.name.trim()} onClick={()=>{onEdit(false);setNotice('已完成编辑');}}>完成编辑</Button>:<><Button variant="primary" disabled={!agent.enabled} onClick={()=>onUse({title:`使用${agent.name}开展工作`})}>使用智能体</Button><Button onClick={()=>onEdit(true)}>编辑</Button>{!commander&&<Button onClick={()=>patch({enabled:!agent.enabled})}>{agent.enabled?'停用':'启用'}</Button>}{definition&&<Button variant="ghost" onClick={()=>setConfirm(true)}>卸载</Button>}</>}</div>
     </header>
     {notice&&<p className="cs-resource-page-notice" role="status">{notice}</p>}

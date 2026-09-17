@@ -166,26 +166,28 @@
     excluded: ['cognition.capture_bucket_excluded', '无需沉淀'],
   };
 
-  function lookup(dict, value, what) {
+  /** 未命中兜底：字典没有的枚举值绝不裸出原始字符串（机器码），统一落到
+   *  「其他/未知」类文案；console.warn 留给排查「后端加枚举、字典没跟上」。 */
+  function lookup(dict, value, what, fallback) {
     if (value === undefined || value === null || value === '') return '';
     const hit = dict[String(value)];
     if (hit) return T(hit[0], hit[1]);
     console.warn(`[cognition-vocabulary] unmapped ${what}: ${value}`);
-    return String(value);
+    return T(fallback[0], fallback[1]);
   }
 
   NS.vocabulary = {
-    kindLabel: (kind) => lookup(SOURCE_KINDS, kind, 'source kind'),
-    sourceStatusText: (status) => lookup(SOURCE_STATUS, status, 'source status'),
-    sourceReasonText: (reason) => lookup(SOURCE_REASON, reason, 'source reason'),
-    captureStatusText: (status) => lookup(CAPTURE_STATUS, status, 'capture status'),
-    captureDisplayStatusText: (status) => lookup(CAPTURE_DISPLAY_STATUS, status, 'capture display status'),
-    captureReasonText: (reason) => lookup(CAPTURE_DISPLAY_REASON, reason, 'capture display reason'),
-    captureActionText: (action) => lookup(CAPTURE_ACTION, action, 'capture action'),
-    captureBucketText: (bucket) => lookup(CAPTURE_BUCKET, bucket, 'capture bucket'),
-    captureStageText: (stage) => lookup(CAPTURE_STAGE, stage, 'capture stage'),
-    captureSignalText: (signal) => lookup(CAPTURE_VALUE_SIGNAL, signal, 'capture value signal'),
-    captureFilterReasonText: (reason) => lookup(CAPTURE_FILTER_REASON, reason, 'capture filter reason'),
+    kindLabel: (kind) => lookup(SOURCE_KINDS, kind, 'source kind', ['cognition.source_kind_other', '其他来源']),
+    sourceStatusText: (status) => lookup(SOURCE_STATUS, status, 'source status', ['cognition.source_status_other', '状态未知']),
+    sourceReasonText: (reason) => lookup(SOURCE_REASON, reason, 'source reason', ['cognition.source_reason_other', '原因未记录']),
+    captureStatusText: (status) => lookup(CAPTURE_STATUS, status, 'capture status', ['cognition.capture_status_other', '状态未知']),
+    captureDisplayStatusText: (status) => lookup(CAPTURE_DISPLAY_STATUS, status, 'capture display status', ['cognition.capture_display_status_other', '状态未知']),
+    captureReasonText: (reason) => lookup(CAPTURE_DISPLAY_REASON, reason, 'capture display reason', ['cognition.capture_display_reason_other', '原因未记录']),
+    captureActionText: (action) => lookup(CAPTURE_ACTION, action, 'capture action', ['cognition.capture_action_other', '其他操作']),
+    captureBucketText: (bucket) => lookup(CAPTURE_BUCKET, bucket, 'capture bucket', ['cognition.capture_bucket_other', '其他状态']),
+    captureStageText: (stage) => lookup(CAPTURE_STAGE, stage, 'capture stage', ['cognition.capture_stage_other', '其他步骤']),
+    captureSignalText: (signal) => lookup(CAPTURE_VALUE_SIGNAL, signal, 'capture value signal', ['cognition.capture_signal_other', '其他信号']),
+    captureFilterReasonText: (reason) => lookup(CAPTURE_FILTER_REASON, reason, 'capture filter reason', ['cognition.capture_filter_other', '其他原因']),
     /** 整理记录标题：会话标题优先，绝不裸出 rcap- 内部 ID。 */
     recordTitle(record) {
       const raw = record && (record.conversationTitle || record.title);
