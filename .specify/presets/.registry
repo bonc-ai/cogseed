@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "presets": {
+    "ai-product-method": {
+      "version": "0.2.1",
+      "source": "local",
+      "manifest_hash": "sha256:e4402126f86045416b91cbbbed79b6127c8251325c39be2b6f6f4a166a1488c6",
+      "enabled": true,
+      "priority": 20,
+      "registered_commands": {},
+      "registered_skills": {},
+      "installed_at": "2026-09-17T08:37:44.845487+00:00"
+    }
+  }
+}
