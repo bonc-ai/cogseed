@@ -23,6 +23,7 @@ import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
 import * as kbQuiz from '../features/kb_quiz';
+import * as kbQuizFeedback from '../features/kb_quiz_feedback';
 import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
@@ -4117,6 +4118,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return contexts.uploadContextFile(target, buf);
   },
 
+  // 「文件已存在」弹窗上的「仍要导入一份」：凭被去重拦下时发的 token，把那份本地
+  // 文件再复制成本库里的一个新名字（显式覆盖，见 contexts.importContextFileAsDuplicate）。
+  'contexts.importDuplicateAnyway': async ({ token } = {}) => {
+    return contexts.importContextFileAsDuplicate(String(token || ''));
+  },
+
   // KB 问答附件选择：返回本地文件路径元数据（挂载卡片 + askStream 读内容）。
   'kbqa.attachPick': async ({ extensions } = {}) => {
     const rawExts = Array.isArray(extensions) ? extensions : CHAT_PICK_EXTENSIONS;
@@ -4270,11 +4277,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
-  // 支持 text 参数：基于对话回答文本生成；缺省基于知识库文档要点。
-  'kb.mindmap': async ({ dir, spaceId, force, text }, ctx) => {
+  // 三个作用域，优先级 text > doc > dir/space：
+  //   text —— 基于对话回答文本生成；
+  //   doc  —— 文档级脑图（根主题 = 这一份文档，一级分支 = 它的章节）；
+  //   缺省 —— 基于整个知识库（目录 / 空间）的 ready 文档要点。
+  'kb.mindmap': async ({ dir, spaceId, doc, force, text }, ctx) => {
     const res = await kbMindmap.kbMindmap(ctx.userId, {
       dir: typeof dir === 'string' && dir ? dir : null,
       spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      doc: typeof doc === 'string' && doc ? doc : null,
       force: force === true,
       text: typeof text === 'string' && text ? text : null,
     }, {
@@ -4322,6 +4333,80 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       },
     });
     return res;
+  },
+
+  // 测验「提示」两级：
+  //   level 1（默认）—— 文档内线索，不给答案（单题小请求，30s 预算）；
+  //   level 2        —— **材料片段**：直接从来源文档要点里挑与题干最相关的一段，
+  //                     不打模型，因此离线/未配模型也能给，且是逐字原文。
+  'kb.quiz.hint': async ({ question, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
+    if (Number(level) === 2) {
+      const snip = kbQuiz.kbQuizSnippet(ctx.userId, {
+        question: typeof question === 'string' ? question : '',
+        source: typeof source === 'string' && source ? source : null,
+        dir: typeof dir === 'string' && dir ? dir : null,
+        spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      });
+      return { level: 2, snippet: snip.snippet, line: snip.line, covered: snip.ok, source: 'material', reason: snip.ok ? undefined : 'empty' };
+    }
+    const res = await kbQuiz.kbQuizHint(ctx.userId, {
+      question: typeof question === 'string' ? question : '',
+      options: Array.isArray(options) ? options.map((o: unknown) => String(o ?? '')) : [],
+      type: typeof type === 'string' ? type : '',
+      source: typeof source === 'string' && source ? source : null,
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      fingerprint: typeof fingerprint === 'string' ? fingerprint : '',
+      qid: Number.isFinite(Number(qid)) ? Number(qid) : 0,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 单发无状态：不写/不复用持久会话（与 kb.summary/kb.mindmap/kb.quiz 同款）
+          ephemeralSession: true,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // 测验导出 PDF（线下打印/发团队）：与脑图导出同一条 printToPDF 链路，只是 A4 版式。
+  'kb.quiz.exportPdf': async ({ html, title }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const base = String(title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出测验 PDF',
+        defaultPath: `${base}-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      log.warn('kb quiz export pdf failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false };
+    }
+  },
+
+  // 测验评分反馈（「优质内容 / 劣质内容」）：只写本机 JSONL 台账，不上报、不联网。
+  'kb.quiz.feedback': async ({ fingerprint, qid, verdict, type, source, correct }, ctx) => {
+    const res = kbQuizFeedback.appendQuizFeedback(ctx.userId, {
+      fingerprint, qid, verdict, type, source, correct,
+    });
+    return { ok: res.ok };
   },
 
   // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。

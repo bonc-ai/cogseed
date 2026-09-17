@@ -87,9 +87,30 @@ export function wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, bo
       margin: 0 0 16px 24px;
       padding: 0;
     }
+    /* docx 里的图片是 mammoth 内联的 base64 data URI，**不带任何宽高属性**：
+       没有这条约束时它们按固有像素渲染（真机案例：1080px 宽的图塞进 692px 的正文
+       栏 → 右侧溢出、与原文排版不符）。 */
+    .office-word img,
+    .office-word svg,
+    .office-word video {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 14px auto;
+    }
+    /* 长串（URL、无空格长文）与宽表格同样不该把正文页撑破 */
+    .office-word p,
+    .office-word li,
+    .office-word td,
+    .office-word th,
+    .office-word a {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .office-word table {
       border-collapse: collapse;
       width: 100%;
+      max-width: 100%;
       margin: 16px 0;
     }
     .office-word th, .office-word td,

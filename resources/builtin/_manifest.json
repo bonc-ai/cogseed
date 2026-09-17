@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "3f12dbf2eb30976ce4f618516e8afd5eb437a01d7f400bd277359e1e0f0cef83",
+  "content_tree_sha256": "534fe8845c80b1a013d713a8296557d9393c796ad37d9d12ba8468b3fcd664fb",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -6309,13 +6309,13 @@
     },
     {
       "path": "system/skills/kb-mindmap/references/skill-spec.md",
-      "bytes": 1945,
-      "sha256": "d40d2d1fe0a36687178f44a60389335ac6d3fcc1b89a625a7544e2358f95a478"
+      "bytes": 3076,
+      "sha256": "8ac171aa46e603041a66a4df2ff5c7a31edf7e62bb28b67089a0d5b07c09549b"
     },
     {
       "path": "system/skills/kb-mindmap/SKILL.md",
-      "bytes": 2440,
-      "sha256": "fe8abe20efb80a240474eb55a02875604dee7db91f84f55b96f794016ea1aedd"
+      "bytes": 3578,
+      "sha256": "a52151627e976a091b6e9244bd1e15b5fb5e75a415eff56d30257ab76537d519"
     },
     {
       "path": "system/skills/package-installer/_meta.json",

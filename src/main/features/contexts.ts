@@ -117,6 +117,10 @@ export interface ResultError {
   error: string;
   code?: string;
   existingDir?: string;
+  /** 已有内容所在库内相对路径（去重命中时给，供 UI 提示"在哪一份"）。 */
+  existingPath?: string;
+  /** 显式覆盖导入凭据（见 `importContextFileAsDuplicate`）。 */
+  duplicateToken?: string;
 }
 
 export type Result<T = Record<string, unknown>> = ({ ok: true } & T) | ResultError;
@@ -425,18 +429,33 @@ const IMAGE_MEDIA_TYPE: Record<string, string> = {
  * extension. Triggers KB reindex of the new content.
  */
 /**
- * Reject any write/upload whose content sha1 is already tracked anywhere in
- * the KB — including the same path. Policy is "no duplicate bytes, period":
- * user either edits the existing file (via `updateContextFile` which isn't
- * gated here) or picks a different source. A same-path re-upload of
- * identical content is treated as a duplicate too so the user gets explicit
- * feedback rather than a silent no-op.
+ * 内容去重的作用域是「同一个库」：`cloud/contexts/<库名>/…` 的第一段就是库名
+ * （根目录下的文件归 '' 库）。同一份字节允许同时存在于**不同库**——同一份资料
+ * 常常要放进多个库，早先"全库任何位置都不许有第二份"的规则会让用户导入失败且
+ * 看不出原因（真机反馈：把同一份 PDF 导进第二个库时只弹"文件已存在"）。
+ * **同一个库内**仍然拒绝重复（含同一路径重传），避免一个库里出现两份相同内容；
+ * 用户确实要在同库留副本时走显式覆盖（`importContextFileAsDuplicate`）。
  *
  * Path-based imports serialize their duplicate-check/copy critical section so
  * renderer windows and native pickers cannot exploit the indexer's short row-
  * creation delay. In-memory upload callers remain synchronous after hashing.
  */
-function checkDuplicateContentForUser(uid: string, sha1: string): Result<null> | null {
+function libraryKeyForRelPath(relPath: string): string {
+  const parts = String(relPath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .filter(Boolean);
+  return parts.length > 1 ? parts[0] : '';
+}
+
+function checkDuplicateContentForUser(
+  uid: string,
+  sha1: string,
+  targetRelPath?: string,
+  opts: { allowDuplicate?: boolean } = {},
+): Result<null> | null {
+  if (opts.allowDuplicate) return null;
   let existing: kbVector.KbFileRow | null;
   try {
     existing = kbVector.findBySha1(uid, sha1);
@@ -445,17 +464,93 @@ function checkDuplicateContentForUser(uid: string, sha1: string): Result<null> |
     return null;
   }
   if (!existing) return null;
+  // 跨库不算重复：只在"目标库 == 已有内容所在库"时拦
+  if (targetRelPath !== undefined
+    && libraryKeyForRelPath(existing.rel_path) !== libraryKeyForRelPath(targetRelPath)) return null;
   const existingDir = path.posix.dirname(existing.rel_path.replace(/\\/g, '/'));
   return {
     ok: false,
     error: t('errors.kb_duplicate_sha1'),
     code: 'duplicate_content',
     existingDir: existingDir === '.' ? '' : existingDir,
+    existingPath: existing.rel_path,
   };
 }
 
-function checkDuplicateContent(sha1: string): Result<null> | null {
-  return checkDuplicateContentForUser(getActiveUserId(), sha1);
+function checkDuplicateContent(
+  sha1: string,
+  targetRelPath?: string,
+  opts?: { allowDuplicate?: boolean },
+): Result<null> | null {
+  return checkDuplicateContentForUser(getActiveUserId(), sha1, targetRelPath, opts);
+}
+
+/**
+ * 被去重拦下的导入先记在这里，渲染层弹窗上的「仍要导入一份」凭 token 回来取
+ * （同一会话/15 分钟内有效）。记 token 而不是把源文件绝对路径回给渲染层：
+ * 覆盖导入只允许"刚刚被拦下的那一份"，不构成任意路径读取的入口。
+ */
+const PENDING_DUPLICATE_IMPORTS = new Map<string, { sourceAbs: string; targetRel: string; at: number }>();
+const PENDING_DUPLICATE_TTL_MS = 15 * 60 * 1000;
+
+function rememberDuplicateImport(sourceAbs: string, targetRel: string): string {
+  const now = Date.now();
+  for (const [key, value] of PENDING_DUPLICATE_IMPORTS) {
+    if (now - value.at > PENDING_DUPLICATE_TTL_MS) PENDING_DUPLICATE_IMPORTS.delete(key);
+  }
+  const token = crypto.randomBytes(12).toString('hex');
+  PENDING_DUPLICATE_IMPORTS.set(token, { sourceAbs, targetRel, at: now });
+  return token;
+}
+
+/** 同目录下找一个没占用的名字：`名称-2.pdf`（与 IPC 层 `_uniqueContextImportPath` 同约定）。 */
+function uniqueRelPathForImport(relPath: string): string {
+  const norm = String(relPath || '').replace(/\\/g, '/');
+  const dir = path.posix.dirname(norm);
+  const base = path.posix.basename(norm);
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  const join = (name: string) => (dir && dir !== '.' ? `${dir}/${name}` : name);
+  if (!fs.existsSync(resolvePath(norm))) return norm;
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = join(`${stem}-${i}${ext}`);
+    if (!fs.existsSync(resolvePath(candidate))) return candidate;
+  }
+  return join(`${stem}-${Date.now()}${ext}`);
+}
+
+/**
+ * 显式覆盖：用户在「文件已存在」弹窗上点「仍要导入一份」时，把刚才被去重拦下的
+ * 那份本地文件复制成目标库里的一个新名字（同库内允许留副本，但必须是用户的明确动作）。
+ */
+export async function importContextFileAsDuplicate(token: string): Promise<Result<{ path: string; bytes: number }>> {
+  const key = String(token || '');
+  const pending = key ? PENDING_DUPLICATE_IMPORTS.get(key) : undefined;
+  if (!pending) return { ok: false, error: 'duplicate import token expired', code: 'E_IMPORT_TOKEN' };
+  PENDING_DUPLICATE_IMPORTS.delete(key);
+  if (Date.now() - pending.at > PENDING_DUPLICATE_TTL_MS) {
+    return { ok: false, error: 'duplicate import token expired', code: 'E_IMPORT_TOKEN' };
+  }
+  const target = uniqueRelPathForImport(pending.targetRel);
+  const result = await importContextFileFromPath(target, pending.sourceAbs, { allowDuplicateContent: true });
+  const failure = (result as { error?: string }).error;
+  const bytes = (result as { bytes?: number }).bytes;
+  if (failure) {
+    log.warn('duplicate override import failed', {
+      user_id: maskId(getActiveUserId()),
+      path: logPathRef(target),
+      error: logErrorSummary(new Error(failure)),
+    });
+  } else {
+    log.info('imported local library file (duplicate override)', {
+      user_id: maskId(getActiveUserId()),
+      path: logPathRef(target),
+      ext: extOf(target),
+      bytes,
+    });
+  }
+  return result;
 }
 
 function kbKindForContextName(name: string): kbVector.KbKind {
@@ -510,7 +605,7 @@ export function writeContextFileForUser(uid: string, relpath: string, content: s
   // content (sha1 of an empty string is meaningless for dedup).
   if (path.basename(p) !== CONTEXTS_INDEX_FILENAME && body.length > 0) {
     const sha1 = crypto.createHash('sha1').update(body, 'utf8').digest('hex');
-    const dup = checkDuplicateContentForUser(uid, sha1);
+    const dup = checkDuplicateContentForUser(uid, sha1, relpath);
     if (dup) return dup;
   }
   try { fs.writeFileSync(p, body, 'utf8'); }
@@ -583,11 +678,11 @@ export function uploadContextFile(relpath: string, raw: Buffer | Uint8Array | nu
   if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
     return { ok: false, error: 'path is a directory' };
   }
-  // Content-level dedup: reject identical content already tracked at a
-  // different path. Empty uploads skip (no signal).
+  // Content-level dedup: reject identical content already tracked in the SAME
+  // library. Empty uploads skip (no signal). Cross-library copies are allowed.
   if (buf.length > 0) {
     const sha1 = crypto.createHash('sha1').update(buf).digest('hex');
-    const dup = checkDuplicateContent(sha1);
+    const dup = checkDuplicateContent(sha1, relpath);
     if (dup) return dup;
   }
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -610,6 +705,7 @@ export function uploadContextFile(relpath: string, raw: Buffer | Uint8Array | nu
 export async function importContextFileFromPath(
   relpath: string,
   sourceAbs: string,
+  opts: { allowDuplicateContent?: boolean } = {},
 ): Promise<Result<{ path: string; bytes: number }>> {
   const startedAt = Date.now();
   const uid = getActiveUserId();
@@ -628,8 +724,19 @@ export async function importContextFileFromPath(
   try {
     const source = await inspectLocalImportSource(sourceAbs, MAX_FILE_BYTES);
     const result = await withLocalImportLock(`contexts:${uid}`, async () => {
-      const dup = source.bytes > 0 ? checkDuplicateContent(source.sha1) : null;
-      if (dup) return dup;
+      const dup = source.bytes > 0
+        ? checkDuplicateContent(source.sha1, relpath, { allowDuplicate: opts.allowDuplicateContent === true })
+        : null;
+      if (dup) {
+        // 命中也要留痕：此前静默 return，用户反复导入却在日志里看不到任何记录。
+        log.info('local library import blocked by duplicate content', {
+          user_id: maskId(uid),
+          path: logPathRef(relpath),
+          existing: logPathRef(String((dup as { existingPath?: string }).existingPath || '')),
+          bytes: source.bytes,
+        });
+        return { ...dup, duplicateToken: rememberDuplicateImport(source.absPath, relpath) };
+      }
       await assertLocalImportTarget(contextsRoot(), target);
       await copyLocalFileAtomic(source.absPath, target, source);
       try {
