@@ -13,7 +13,7 @@ import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord, RecallAbilityAssetLifecycleStatus } from './candidate-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
 import { readAbilityAssetSemantics } from './asset-semantics';
-import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import { normalizeAbilityAssetScopePolicy, normalizeAssetScopeValue, isRecallScopeTerm, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { normalizeCausalRule } from './world-model-types';
 import { createLogger } from '../../logger';
@@ -1019,10 +1019,18 @@ export async function selectAbilityAssetVersion(
     assertMutableAbilityAsset(current);
     if ((current.activeVersion || current.version) === toVersion) throw new Error('ability asset already selected');
     // 内容同步为所选快照（治理状态与成熟度不动，与 rollback 同口径）。
-    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, ...content } = target.snapshot;
+    // scope 单独摘出且不倒退（2026-09-17 修）：旧快照可能带着词表化之前的
+    // 自由文本 scope——原样写回会让 legacy scope 迁移在下次启动时再 bump
+    // 一个内容不变的新版本（实机 aa-34b688 连产 v4/v5）。选用旧版只回内容，
+    // scope 保持词表值。
+    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, scope: snapshotScope, ...content } = target.snapshot;
+    const scope = isRecallScopeTerm(String(snapshotScope || ''))
+      ? String(snapshotScope)
+      : (normalizeAssetScopeValue(String(snapshotScope || '')) || current.scope);
     return {
       ...current,
       ...content,
+      scope,
       activeVersion: toVersion,
       updatedAt: new Date().toISOString(),
     };

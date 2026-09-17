@@ -653,6 +653,27 @@ describe('治理动作', () => {
       .rejects.toThrow('ability asset has been purged');
   });
 
+  it('选用旧版不把 legacy scope 倒退回主记录（2026-09-17 修）：迁移不再重复 bump', async () => {
+    const uid = 'user-select-scope';
+    const { candidates, assets } = await modules();
+    // v1 快照带词表化之前的自由文本 scope（实机 aa-34b688 场景：scope='personal'）。
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Prefer concise direct answers.',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'personal',
+      sourceRefs: [{ kind: 'execution', id: 'exec-scope' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
+    await assets.updateAbilityAsset(uid, asset.id, { statement: 'Prefer concise direct answers with reasons.', reason: 'v2', actor: 'user' });
+    // 选用 v1（快照 scope='personal'）：主记录 scope 必须保持词表值，不能被
+    // 旧快照写回——否则下次启动 legacy scope 迁移又垫一个内容不变的新版本。
+    const selected = await assets.selectAbilityAssetVersion(uid, asset.id, '1', userAction('back to v1'));
+    expect(selected.scope).not.toBe('personal');
+    expect(selected.statement).toBe(asset.statement);
+    expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['1', '2']);
+    // 迁移扫描零命中（修复前这里会命中 'personal' 再迁一遍）。
+    expect(await assets.migrateLegacyFreeTextScopes(uid)).toBe(0);
+  });
+
   it('归并两条同义资产为版本组（2026-09-16）：版本链续接、较新内容为在用、来源归档', async () => {
     const { candidates, assets } = await modules();
     // 两条"同一认知"的资产：target 旧、source 新（各自有一版历史）。
