@@ -98,4 +98,28 @@ describe('Mate runtime asset context assembly (Decision 2 = connect)', () => {
     // No COGSEED_WORKSPACE_ROOT data seeded for this user; reads yield no projections.
     await expect(buildRuntimeAssetContext('user-missing', 'cid-missing')).resolves.toEqual([]);
   });
+
+  it('records one InjectionReceipt per injected asset at the injection site (taskId anchor)', async () => {
+    await seedConfirmedProjection(
+      'user-a', 'cid-receipts',
+      'Keep architecture decisions in a decision log before changing runtime boundaries.',
+      'Use decision logs for architecture changes',
+    );
+    const { buildRuntimeAssetContext } = await import('../../../../src/main/features/cogseed_backend/runtime-asset-context');
+    const items = await buildRuntimeAssetContext('user-a', 'cid-receipts', 'task-rt-1');
+    expect(items).toHaveLength(1);
+    const { listInjectionReceipts } = await import('../../../../src/main/features/recall/injection-receipt');
+    const receipts = await listInjectionReceipts('user-a', 'task-rt-1');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      taskRunId: 'task-rt-1',
+      status: 'injected',
+      boundary: 'real',
+      channel: 'projection',
+    });
+    expect(receipts[0].messageId).toBeUndefined();
+    // taskId 缺席时（旧调用方）不落收据——没有稳定锚就不编造。
+    await buildRuntimeAssetContext('user-a', 'cid-receipts');
+    expect(await listInjectionReceipts('user-a', 'task-rt-1')).toHaveLength(1);
+  });
 });

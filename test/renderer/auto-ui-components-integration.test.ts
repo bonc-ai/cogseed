@@ -10,6 +10,7 @@ describe('automation page shared-component integration', () => {
   const auto = read('src/renderer/modules/auto.js');
   const modal = read('src/renderer/modules/ui-modal.js');
   const css = read('src/renderer/ui-components.css');
+  const rendererCss = read('src/renderer/style.css');
   const zh = JSON.parse(read('src/renderer/locales/zh.json'));
   const en = JSON.parse(read('src/renderer/locales/en.json'));
 
@@ -67,5 +68,12 @@ describe('automation page shared-component integration', () => {
         expect(locale[key], key).toBeTruthy();
       }
     }
+  });
+
+  it('uses the shared three-column resource-card geometry for templates', () => {
+    expect(rendererCss).toMatch(/\.auto-tpl-grid\s*{[^}]*repeat\(auto-fit, minmax\(min\(100%, 300px\), 1fr\)\)[^}]*gap:\s*var\(--space-4\)/s);
+    expect(rendererCss).toMatch(/\.auto-tpl-card\s*{[^}]*max-width:\s*400px[^}]*border-radius:\s*var\(--radius-card\)[^}]*box-shadow:\s*var\(--shadow-card\)/s);
+    expect(rendererCss).toMatch(/\.auto-tpl-card-desc\s*{[^}]*-webkit-line-clamp:\s*2;/s);
+    expect(rendererCss).toMatch(/\.auto-tpl-card-ico\s*{[^}]*background:\s*var\(--color-brand-soft\);[^}]*color:\s*var\(--color-accent\);/s);
   });
 });

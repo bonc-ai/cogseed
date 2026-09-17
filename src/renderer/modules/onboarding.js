@@ -30,10 +30,6 @@ const CS_AGENT_LABELS = {
   workbuddy: 'WorkBuddy',
 };
 
-// One neutral terminal glyph for every CLI — we don't ship per-agent brand
-// marks in this build and a real logo set can land later.
-const CS_TERMINAL_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>';
-
 // How many sessions import concurrently. The backend gates all model work
 // behind a 5-slot global semaphore, so we keep this modest to speed up a batch
 // without saturating that pool (a single big session may itself fan out to a
@@ -175,6 +171,51 @@ function _csT(key, fallback, vars) {
   ));
 }
 
+function _csIcon(name, className) {
+  if (typeof uiIconHtml !== 'function') throw new Error('onboarding requires the shared icon registry');
+  return uiIconHtml(name, className || '');
+}
+
+function _csButton(options) {
+  if (typeof uiButton !== 'function') throw new Error('onboarding requires the shared button primitive');
+  const value = options || {};
+  let html = uiButton({
+    label: value.label,
+    role: value.role,
+    size: value.size,
+    icon: value.icon,
+    iconEnd: value.iconEnd,
+    disabled: value.disabled,
+    loading: value.loading,
+    className: value.className,
+    attrs: value.attrs,
+  });
+  if (value.i18nKey) {
+    html = html.replace(
+      '<span class="ui-button__label">',
+      `<span class="ui-button__label" data-i18n="${_csEsc(value.i18nKey)}">`,
+    );
+  }
+  const openingTag = '<' + 'button ';
+  if (value.hidden) html = html.replace(openingTag, `${openingTag}hidden `);
+  if (value.style) html = html.replace(openingTag, `${openingTag}style="${_csEsc(value.style)}" `);
+  return html;
+}
+
+function _csSetButtonLabel(button, label) {
+  if (!button) return;
+  const labelEl = button.querySelector('.ui-button__label');
+  if (labelEl) labelEl.textContent = label;
+  else button.textContent = label;
+}
+
+function _csSetButtonDisabled(button, disabled) {
+  if (!button) return;
+  const nextDisabled = Boolean(disabled);
+  button.disabled = nextDisabled;
+  button.classList.toggle('is-disabled', nextDisabled);
+}
+
 function _csApplyI18n(root) {
   if (typeof applyDomI18n === 'function') applyDomI18n(root);
 }
@@ -203,8 +244,7 @@ function _csRefreshDynamicI18n() {
   const shell = document.getElementById('cs-onboarding');
   if (!shell) return;
   _csApplyI18n(shell);
-  const beginLabel = shell.querySelector('#first-begin span');
-  if (beginLabel) beginLabel.textContent = _csT('onboarding.start.begin', '开始一次真实工作');
+  _csSetButtonLabel(shell.querySelector('#first-begin'), _csT('onboarding.start.begin', '开始一次真实工作'));
   const lead = document.getElementById('cs-matching-lead');
   if (lead) lead.textContent = _csT(_csMatchingLead.key, _csMatchingLead.fallback, _csMatchingLead.vars);
   if (_csActiveStep === 1) {
@@ -230,31 +270,15 @@ function _csObShellHtml() {
             <p data-i18n="onboarding.hero.description">CogSeed不替代你正在使用的Agent。它把你确认过的能力和当前任务状态，带到新的Session或Agent，让工作不用从头解释。</p>
             <div class="first-run-promise">
               <div>
-                <i>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>
-                    <path d="M12 11h.01"/><path d="M16 11h.01"/><path d="M8 11h.01"/>
-                  </svg>
-                </i>
+                <i>${_csIcon('message-square', 'icon-svg')}</i>
                 <p><strong data-i18n="onboarding.promise.start_title">从真实任务开始</strong><span data-i18n="onboarding.promise.start_desc">不要求先创建Agent、选择角色或配置认知资产。</span></p>
               </div>
               <div>
-                <i>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
-                    <path d="m9 12 2 2 4-4"/>
-                  </svg>
-                </i>
+                <i>${_csIcon('shield-check', 'icon-svg')}</i>
                 <p><strong data-i18n="onboarding.promise.permission_title">先授权，再读取</strong><span data-i18n="onboarding.promise.permission_desc">检测只看可用状态；Session内容必须由你逐项授权。</span></p>
               </div>
               <div>
-                <i>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="6" cy="19" r="3"/>
-                    <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/>
-                    <circle cx="18" cy="5" r="3"/>
-                  </svg>
-                </i>
+                <i>${_csIcon('git-branch', 'icon-svg')}</i>
                 <p><strong data-i18n="onboarding.promise.continuity_title">60秒看到接续</strong><span data-i18n="onboarding.promise.continuity_desc">计时从"带着这些继续"开始，不包含安装、登录和授权。</span></p>
               </div>
             </div>
@@ -275,14 +299,14 @@ function _csObShellHtml() {
                 <span class="first-run-consent-and" data-i18n="onboarding.legal_consent_and">和</span>
                 <button type="button" class="first-run-legal-link" data-open-external-url="https://cogseed-open.bonc.com.cn/#view=terms" data-i18n="onboarding.legal_terms">用户协议</button>
               </div>
-              <button class="btn primary first-run-primary" id="first-begin" data-csnext="1" disabled><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><span>开始一次真实工作</span></button>
+              ${_csButton({ label: _csT('onboarding.start.begin', '开始一次真实工作'), i18nKey: 'onboarding.start.begin', role: 'primary', size: 'lg', icon: 'sparkles', disabled: true, className: 'first-run-primary', attrs: { id: 'first-begin', 'data-csnext': '1' } })}
               <div class="first-run-scan" id="first-run-scan">
-                <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"></path><path d="M20.054 15.987H3.946"></path></svg></i><div><strong data-i18n="onboarding.scan.local_agent">本机Agent</strong><p id="first-agent-copy" data-i18n="onboarding.scan.checking">正在检查可用状态</p></div><span class="status" id="first-agent-status" data-i18n="onboarding.scan.detecting">检测中</span></div>
-                <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></i><div><strong data-i18n="onboarding.scan.recent_work">最近工作</strong><p id="first-history-copy" data-i18n="onboarding.scan.not_read">尚未读取任何内容</p></div><span class="status" id="first-history-status" data-i18n="onboarding.scan.not_read_short">未读取</span></div>
-                <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.744 17.736a6 6 0 1 1-7.48-7.48"></path><path d="M15 6h1v4"></path><path d="m6.134 14.768.866-.5 2 3.464"></path><circle cx="16" cy="8" r="6"></circle></svg></i><div><strong data-i18n="onboarding.scan.execution">真实执行方式</strong><p id="first-execution-copy" data-i18n="onboarding.scan.execution_check">正在确认可用Agent或体验额度</p></div><span class="status" id="first-execution-status" data-i18n="onboarding.scan.detecting">检查中</span></div>
+                <div class="first-scan-row"><i>${_csIcon('bell', 'icon-svg')}</i><div><strong data-i18n="onboarding.scan.local_agent">本机Agent</strong><p id="first-agent-copy" data-i18n="onboarding.scan.checking">正在检查可用状态</p></div><span class="status" id="first-agent-status" data-i18n="onboarding.scan.detecting">检测中</span></div>
+                <div class="first-scan-row"><i>${_csIcon('history', 'icon-svg')}</i><div><strong data-i18n="onboarding.scan.recent_work">最近工作</strong><p id="first-history-copy" data-i18n="onboarding.scan.not_read">尚未读取任何内容</p></div><span class="status" id="first-history-status" data-i18n="onboarding.scan.not_read_short">未读取</span></div>
+                <div class="first-scan-row"><i>${_csIcon('activity', 'icon-svg')}</i><div><strong data-i18n="onboarding.scan.execution">真实执行方式</strong><p id="first-execution-copy" data-i18n="onboarding.scan.execution_check">正在确认可用Agent或体验额度</p></div><span class="status" id="first-execution-status" data-i18n="onboarding.scan.detecting">检查中</span></div>
               </div>
-              <div class="first-run-route" id="first-run-route"><strong id="first-route-title" data-i18n="onboarding.route.title">推荐：继续最近一项工作</strong><p id="first-route-copy" data-i18n="onboarding.route.description">下一步只确认授权范围；授权前不会读取Session内容。</p><button class="btn primary" id="first-route-primary"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg><span data-i18n="onboarding.continue">继续</span></button></div>
-              <div class="first-run-trust"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="16" r="1"></circle><rect x="3" y="10" width="18" height="12" rx="2"></rect><path d="M7 10V7a5 5 0 0 1 10 0v3"></path></svg><span data-i18n="onboarding.trust">无需CogSeed账号即可开始。本地身份默认创建；登录Hub只用于额度、同步或社区能力。</span></div>
+              <div class="first-run-route" id="first-run-route"><strong id="first-route-title" data-i18n="onboarding.route.title">推荐：继续最近一项工作</strong><p id="first-route-copy" data-i18n="onboarding.route.description">下一步只确认授权范围；授权前不会读取Session内容。</p>${_csButton({ label: _csT('onboarding.continue', '继续'), i18nKey: 'onboarding.continue', role: 'primary', iconEnd: 'arrow-right', attrs: { id: 'first-route-primary' } })}</div>
+              <div class="first-run-trust">${_csIcon('lock', 'icon-svg')}<span data-i18n="onboarding.trust">无需CogSeed账号即可开始。本地身份默认创建；登录Hub只用于额度、同步或社区能力。</span></div>
             </div>
           </aside>
         </div>
@@ -295,7 +319,7 @@ function _csObShellHtml() {
           <p class="cs-auth-lead" data-i18n="onboarding.connect.description">授权后，CogSeed才能从你选择的Session中恢复当前目标、确认过的能力和任务状态。未授权时只显示Agent名称与可用状态。</p>
 
           <div class="cs-privacy-line">
-            <svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+            ${_csIcon('shield-check', 'icon-svg')}
             <div><strong data-i18n="onboarding.connect.privacy_title">不会读取全部历史，也不会接收登录凭证。</strong><br><span data-i18n="onboarding.connect.privacy_desc">默认只读、仅本次、可随时撤销；正式资产仍由你拥有。</span></div>
           </div>
 
@@ -312,10 +336,10 @@ function _csObShellHtml() {
           <div class="cs-auth-actions">
             <small data-i18n="onboarding.connect.action_note">点击「执行」只会把该 Agent 接入本机，授权前不会读取任何 Session 内容。</small>
             <div class="cs-auth-btns">
-              <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span data-i18n="common.back">返回</span></button>
-              <button class="cs-btn ghost" id="cs-team-refresh" data-i18n="onboarding.refresh">重新检测</button>
-              <button class="cs-btn ghost" data-csnext="2" data-i18n="onboarding.connect.skip">跳过 · 稍后再连</button>
-              <button class="cs-btn" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg><span data-i18n="onboarding.connect.next">下一步 · 选择起点</span></button>
+              ${_csButton({ label: _csT('common.back', '返回'), i18nKey: 'common.back', role: 'ghost', icon: 'arrow-left', attrs: { 'data-csnext': '0' } })}
+              ${_csButton({ label: _csT('onboarding.refresh', '重新检测'), i18nKey: 'onboarding.refresh', role: 'secondary', icon: 'refresh', attrs: { id: 'cs-team-refresh' } })}
+              ${_csButton({ label: _csT('onboarding.connect.skip', '跳过 · 稍后再连'), i18nKey: 'onboarding.connect.skip', role: 'ghost', attrs: { 'data-csnext': '2' } })}
+              ${_csButton({ label: _csT('onboarding.connect.next', '下一步 · 选择起点'), i18nKey: 'onboarding.connect.next', role: 'primary', iconEnd: 'arrow-right', attrs: { 'data-csnext': '2' } })}
             </div>
           </div>
         </div>
@@ -338,7 +362,7 @@ function _csObShellHtml() {
               <div class="cs-fork-cards" id="cs-fork-cards">
                 <!-- 卡片①（复杂项目）由 _csLoadRecommendation 动态填充 -->
                 <button type="button" class="cs-fork-card" id="cs-fork-continue" data-fork="continue" disabled>
-                  <span class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+                  <span class="f-ico">${_csIcon('history')}</span>
                   <span class="f-body">
                     <h3 id="cs-fork-continue-title" data-i18n="onboarding.fork.loading_project">正在读取你最近的项目…</h3>
                     <p id="cs-fork-continue-desc" class="f-desc" data-i18n="onboarding.fork.loading_project_desc">自动找出你投入最多、最近还在做的项目。</p>
@@ -348,7 +372,7 @@ function _csObShellHtml() {
                 </button>
 
                 <button type="button" class="cs-fork-card" data-fork="other">
-                  <span class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/></svg></span>
+                  <span class="f-ico">${_csIcon('message-square')}</span>
                   <span class="f-body">
                     <h3 data-i18n="onboarding.fork.other_title">选择其他会话</h3>
                     <p class="f-desc" data-i18n="onboarding.fork.other_desc">按 Agent、空间和时间选择一个已授权来源。</p>
@@ -357,7 +381,7 @@ function _csObShellHtml() {
                 </button>
 
                 <button type="button" class="cs-fork-card" data-fork="blank">
-                  <span class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
+                  <span class="f-ico">${_csIcon('plus')}</span>
                   <span class="f-body">
                     <h3 data-i18n="onboarding.fork.blank_title">从空白任务开始</h3>
                     <p class="f-desc" data-i18n="onboarding.fork.blank_desc">可以直接使用，但本次不会验证已有任务的接续效果。</p>
@@ -372,26 +396,26 @@ function _csObShellHtml() {
               <h4 class="cs-fork-side-title" data-i18n="onboarding.fork.side_title">这次会用什么</h4>
               <p class="cs-fork-side-note" data-i18n="onboarding.fork.side_desc">以下来自这台 Mac 上的真实检测；授权前不会读取任何 Session 正文。</p>
               <div class="cs-fork-side-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
+                ${_csIcon('code-block')}
                 <div><strong data-i18n="onboarding.fork.source_agent">来源 Agent</strong><span id="cs-side-source" data-i18n="onboarding.detecting">正在检测…</span></div>
               </div>
               <div class="cs-fork-side-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                ${_csIcon('folder')}
                 <div><strong data-i18n="onboarding.fork.source_project">来源项目</strong><span id="cs-side-project" data-i18n="onboarding.reading">正在读取…</span></div>
               </div>
               <div class="cs-fork-side-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                ${_csIcon('activity')}
                 <div><strong data-i18n="onboarding.fork.scale">对话规模</strong><span id="cs-side-scale" data-i18n="onboarding.reading">正在读取…</span></div>
               </div>
               <div class="cs-fork-side-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
+                ${_csIcon('shield-check')}
                 <div><strong data-i18n="onboarding.fork.readonly_title">最小只读范围</strong><span data-i18n="onboarding.fork.readonly_desc">不复制完整会话，不读取其他空间，不接收 Agent 密码</span></div>
               </div>
             </aside>
           </div>
 
           <div class="cs-actions">
-            <button class="cs-btn ghost" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span data-i18n="common.back">返回</span></button>
+            ${_csButton({ label: _csT('common.back', '返回'), i18nKey: 'common.back', role: 'ghost', icon: 'arrow-left', attrs: { 'data-csnext': '1' } })}
           </div>
         </div>
 
@@ -403,10 +427,7 @@ function _csObShellHtml() {
 
           <div class="cs-import-hint">
             <span><span data-i18n="onboarding.import.count_prefix">已导入</span> <span id="cs-import-count">0</span> <span data-i18n="onboarding.import.count_suffix">条会话</span></span>
-            <button type="button" class="cs-btn-inline" id="cs-do-import" style="display:none" onclick="_csDoImport()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
-              <span data-i18n="onboarding.import.selected_sessions">导入所选会话</span>
-            </button>
+            ${_csButton({ label: _csT('onboarding.import.selected_sessions', '导入所选会话'), i18nKey: 'onboarding.import.selected_sessions', role: 'primary', size: 'sm', icon: 'upload', className: 'cs-btn-inline', style: 'display:none', attrs: { id: 'cs-do-import' } })}
           </div>
 
           <div class="cs-list" id="cs-agent-list">
@@ -414,10 +435,10 @@ function _csObShellHtml() {
           </div>
 
           <div class="cs-actions">
-            <button class="cs-btn ghost" id="cs-import-back-fork"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span data-i18n="onboarding.import.back">返回起点选择</span></button>
-            <button class="cs-btn ghost" id="cs-agent-refresh" data-i18n="onboarding.refresh_agent">重新检测 Agent</button>
-            <button class="cs-btn cs-step2-next" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg><span data-i18n="onboarding.import.organize">开始整理</span></button>
-            <button class="cs-btn cs-step2-finish" id="cs-step2-finish" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg><span data-i18n="onboarding.import.finish">完成导入</span></button>
+            ${_csButton({ label: _csT('onboarding.import.back', '返回起点选择'), i18nKey: 'onboarding.import.back', role: 'ghost', icon: 'arrow-left', attrs: { id: 'cs-import-back-fork' } })}
+            ${_csButton({ label: _csT('onboarding.refresh_agent', '重新检测 Agent'), i18nKey: 'onboarding.refresh_agent', role: 'secondary', icon: 'refresh', attrs: { id: 'cs-agent-refresh' } })}
+            ${_csButton({ label: _csT('onboarding.import.organize', '开始整理'), i18nKey: 'onboarding.import.organize', role: 'primary', iconEnd: 'arrow-right', className: 'cs-step2-next', attrs: { 'data-csnext': '3' } })}
+            ${_csButton({ label: _csT('onboarding.import.finish', '完成导入'), i18nKey: 'onboarding.import.finish', role: 'primary', icon: 'check', className: 'cs-step2-finish', style: 'display:none', attrs: { id: 'cs-step2-finish' } })}
           </div>
         </div>
       </section>
@@ -425,7 +446,7 @@ function _csObShellHtml() {
       <section class="cs-panel" data-cspanel="3">
         <div class="cs-matching" id="cs-matching-view">
           <div class="cs-matching-spinner" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+            ${_csIcon('loader')}
           </div>
           <div class="cs-kicker" id="cs-matching-kicker" data-i18n="onboarding.matching.kicker">正在为你整理</div>
           <h1 id="cs-matching-title" data-i18n="onboarding.matching.title">正在准备你接下来要用到的东西…</h1>
@@ -852,7 +873,7 @@ function _csRenderAgents(entries) {
     box.innerHTML =
       `<div class="cs-state">${_csEsc(_csT('onboarding.agent.none_installed', '未检测到任何已安装的 Agent 命令行工具（如 Claude Code、Codex）。安装后点「重新检测」即可。'))}</div>` +
       '<div class="cs-import-bar">' +
-      `<button type="button" class="cs-import-btn cs-demo-btn" id="cs-demo-start">${_csEsc(_csT('onboarding.agent.preview_demo', '预览演示（合成数据 · 不计入资产）'))}</button>` +
+      _csButton({ label: _csT('onboarding.agent.preview_demo', '预览演示（合成数据 · 不计入资产）'), role: 'secondary', size: 'sm', icon: 'play', className: 'cs-import-btn cs-demo-btn', attrs: { id: 'cs-demo-start' } }) +
       '<div class="cs-import-result" id="cs-demo-result"></div>' +
       '</div>';
     const demoBtn = document.getElementById('cs-demo-start');
@@ -881,7 +902,7 @@ async function _csStartDemoMode() {
   const demoSession = (idx, title, summary, kind) => `
     <div class="cs-src cs-collapsible-item" data-demo-idx="${idx}">
       <input type="checkbox" />
-      <div class="s-ico">${CS_TERMINAL_SVG}</div>
+      <div class="s-ico">${_csIcon('terminal')}</div>
       <div>
         <strong>${_csEsc(title)}</strong>
         <small>${_csEsc(summary)}</small>
@@ -899,7 +920,7 @@ async function _csStartDemoMode() {
     `<div class="cs-state">${_csEsc(_csT('onboarding.demo.notice', '演示模式：以下是合成样例数据，仅用于预览产品流程。不会写入任何正式资产，不计入真实使用指标。'))}</div>` +
     demoSessions.join('') +
     `<div class="cs-import-bar">
-       <button type="button" class="cs-import-btn" id="cs-demo-import">${_csEsc(_csT('onboarding.demo.import', '演示导入所选会话'))}</button>
+       ${_csButton({ label: _csT('onboarding.demo.import', '演示导入所选会话'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { id: 'cs-demo-import' } })}
        <div class="cs-import-result" id="cs-demo-import-result"></div>
      </div>`;
 
@@ -921,13 +942,13 @@ async function _csStartDemoMode() {
       if (result) result.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.demo.select_first', '请先勾选要演示的会话。'))}</div>`;
       return;
     }
-    if (btn) { btn.disabled = true; btn.textContent = _csT('onboarding.demo.importing', '正在演示导入并提取候选…'); }
+    if (btn) { btn.disabled = true; _csSetButtonLabel(btn, _csT('onboarding.demo.importing', '正在演示导入并提取候选…')); }
     if (result) result.innerHTML = `<div class="cs-state loading">${_csEsc(_csT('onboarding.demo.importing', '正在演示导入并提取候选…'))}</div>`;
     await new Promise((r) => setTimeout(r, 1200));
     if (result) {
       result.innerHTML = `<div class="cs-state" style="color:var(--cs-forest-deep)">${_csEsc(_csT('onboarding.demo.done', '✓ 演示完成：提取到 3 条候选认知（1 规则 / 1 模板 / 1 技能方法）。'))}<br><b>${_csEsc(_csT('onboarding.demo.done_note', '以上均为合成演示数据，不会写入你的资产，不计入任何真实指标。'))}</b></div>`;
     }
-    if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.demo.import', '演示导入所选会话'); }
+    if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.demo.import', '演示导入所选会话')); }
     _csDemoMode = true;
   });
 }
@@ -939,7 +960,7 @@ async function _csStartDemoMode() {
     const isFirst = idx === 0;
     return `
       <div class="cs-agent-item${isFirst ? ' active' : ''}" data-agent="${_csEsc(e.type)}" onclick="_csSelectAgent('${_csEsc(e.type)}')">
-        <div class="ai-icon">${CS_TERMINAL_SVG}</div>
+        <div class="ai-icon">${_csIcon('terminal')}</div>
         <div class="ai-info">
           <div class="ai-name">${_csEsc(label)}</div>
           <div class="ai-version">${ver}</div>
@@ -1027,22 +1048,22 @@ function _csLoadAgentAssets(agentType) {
     <div class="cs-asset-panel" data-agent="${ag}">
       <div class="cs-asset-tabs">
         <button type="button" class="cs-asset-tab active" data-asset="sessions" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
-          <span class="ash-icon">💬</span>
+          <span class="ash-icon">${_csIcon('message-square')}</span>
           <span class="ash-title">${_csEsc(_csT('onboarding.asset.tab_sessions', '会话'))}</span>
           <span class="ash-count" id="cs-count-${ag}-sessions"></span>
         </button>
         <button type="button" class="cs-asset-tab" data-asset="skills" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
-          <span class="ash-icon">🔧</span>
+          <span class="ash-icon">${_csIcon('settings')}</span>
           <span class="ash-title">${_csEsc(_csT('onboarding.asset.tab_skills', '技能'))}</span>
           <span class="ash-count" id="cs-count-${ag}-skills"></span>
         </button>
         <button type="button" class="cs-asset-tab" data-asset="memory" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
-          <span class="ash-icon">🧠</span>
+          <span class="ash-icon">${_csIcon('brain-circuit')}</span>
           <span class="ash-title">${_csEsc(_csT('onboarding.asset.tab_memory', '记忆'))}</span>
           <span class="ash-count" id="cs-count-${ag}-memory"></span>
         </button>
         <button type="button" class="cs-asset-tab" data-asset="tasks" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
-          <span class="ash-icon">⏰</span>
+          <span class="ash-icon">${_csIcon('clock')}</span>
           <span class="ash-title">${_csEsc(tasksTabTitle)}</span>
           <span class="ash-count" id="cs-count-${ag}-tasks"></span>
         </button>
@@ -1119,9 +1140,9 @@ window._csToggleShowMore = function(btn, total) {
   items.forEach((el, idx) => {
     if (idx >= 3) el.style.display = allVisible ? 'none' : '';
   });
-  btn.textContent = allVisible
+  _csSetButtonLabel(btn, allVisible
     ? _csT('onboarding.asset.more', '+ 还有 {count} 个', { count: total - 3 })
-    : _csT('onboarding.common.collapse', '收起');
+    : _csT('onboarding.common.collapse', '收起'));
 };
 
 // Update asset count badge
@@ -1343,14 +1364,14 @@ function _csRenderTeam(localClis) {
     // 可用 → 执行按钮；不可用 → 无执行动作。
     const action = available
       ? `<div class="cs-team-actions">
-        <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">${_csEsc(_csT('onboarding.agent.run', '执行'))}</button>
+        ${_csButton({ label: _csT('onboarding.agent.run', '执行'), role: 'primary', size: 'sm', icon: 'play', className: 'cs-team-connect', attrs: { 'data-app-type': appType } })}
       </div>`
       : '';
 
     _csCliByAgent[appType] = _csCodingCliForAppType(appType);
     return `
       <div class="cs-src cs-team-row" data-app-type="${_csEsc(appType)}">
-        <div class="s-ico">${CS_TERMINAL_SVG}</div>
+        <div class="s-ico">${_csIcon('terminal')}</div>
         <div>
           <strong>${_csEsc(label)}</strong>
           ${hintHtml}
@@ -1392,7 +1413,7 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
     return;
   }
 
-  if (btn) { btn.disabled = true; btn.textContent = _csT('onboarding.agent.connecting', '连接中…'); }
+  if (btn) { btn.disabled = true; _csSetButtonLabel(btn, _csT('onboarding.agent.connecting', '连接中…')); }
 
   try {
     // 1) Add the local coding CLI as a real team member. Best-effort: a create
@@ -1473,7 +1494,7 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
     if (row) {
       const statusEl = row.querySelector('.g-status');
       if (statusEl) { statusEl.textContent = _csT('onboarding.agent.connected', '已连接'); statusEl.classList.remove('off'); }
-      if (btn) { btn.textContent = _csT('onboarding.agent.connected', '已连接'); btn.disabled = true; btn.classList.add('done'); }
+      if (btn) { _csSetButtonLabel(btn, _csT('onboarding.agent.connected', '已连接')); btn.disabled = true; btn.classList.add('done'); }
     }
 
     // Honest, combined summary of what actually happened.
@@ -1493,7 +1514,7 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });
     _csToast(_csT('onboarding.agent.connect_failed', '连接「{label}」失败：{reason}', { label, reason: msg }));
-    if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.agent.run', '执行'); }
+    if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.agent.run', '执行')); }
   }
 }
 
@@ -1538,7 +1559,7 @@ async function _csLoadClaudeSessions(agentType) {
       return `
         <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-title="${_csEsc(s.firstMessage || '')}">
           <input type="checkbox" />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(s.firstMessage)}</strong>
             ${projectLabel}
@@ -1550,7 +1571,7 @@ async function _csLoadClaudeSessions(agentType) {
     // Import action bar (no toggle button, all sessions visible in scrollable container)
     container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportClaudeSessions('${_csEsc(agentType)}')">${_csEsc(_csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { 'data-cs-import-action': 'claude-sessions', 'data-agent': agentType } })}
          <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
@@ -1602,7 +1623,7 @@ async function _csLoadCodexSessions(agentType) {
       return `
         <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
           <input type="checkbox" />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(s.title)}</strong>
             ${cwdLabel}
@@ -1614,7 +1635,7 @@ async function _csLoadCodexSessions(agentType) {
     // Import action bar (no toggle button, all sessions visible in scrollable container)
     container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportCodexSessions('${_csEsc(agentType)}')">${_csEsc(_csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { 'data-cs-import-action': 'codex-sessions', 'data-agent': agentType } })}
          <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
@@ -1682,7 +1703,7 @@ async function _csLoadOpencodeSessions(agentType) {
       return `
         <div class="cs-src" data-session-id="${_csEsc(s.id)}">
           <input type="checkbox" />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(s.title)}</strong>
             <small>${_csEsc(msgCount)} · ${_csEsc(modelLabel)}</small>
@@ -1693,7 +1714,7 @@ async function _csLoadOpencodeSessions(agentType) {
 
     container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportOpencodeSessions('${_csEsc(agentType)}')">${_csEsc(_csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { 'data-cs-import-action': 'opencode-sessions', 'data-agent': agentType } })}
          <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
@@ -1772,7 +1793,7 @@ async function _csImportClaudeSessions(agentType) {
   const total = selected.length;
   let ok = 0, failed = 0, cognitions = 0, done = 0;
   const paint = () => {
-    if (btn) btn.textContent = _csT('onboarding.asset.importing_button', '导入中… {done}/{total}', { done, total });
+    if (btn) _csSetButtonLabel(btn, _csT('onboarding.asset.importing_button', '导入中… {done}/{total}', { done, total }));
     if (result) result.textContent = _csT('onboarding.asset.importing_sessions', '正在导入并提炼认知（{done}/{total} 完成）· 大会话需要一点时间，请稍候…', { done, total });
   };
   paint();
@@ -1810,7 +1831,7 @@ async function _csImportClaudeSessions(agentType) {
       paint();
     }
   });
-  if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'); }
+  if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）')); }
   if (result) {
     result.textContent = _csImportSummary(ok, failed, cognitions);
   }
@@ -1860,7 +1881,7 @@ async function _csLoadWorkbuddySessions(agentType) {
       return `
         <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-project="${_csEsc(s.projectPath || '')}" data-session-title="${_csEsc(s.firstMessage || '')}">
           <input type="checkbox" />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(s.firstMessage)}</strong>
             ${projectLabel}
@@ -1871,7 +1892,7 @@ async function _csLoadWorkbuddySessions(agentType) {
 
     container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportWorkbuddySessions('${_csEsc(agentType)}')">${_csEsc(_csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { 'data-cs-import-action': 'workbuddy-sessions', 'data-agent': agentType } })}
          <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
@@ -1920,7 +1941,7 @@ async function _csImportWorkbuddySessions(agentType) {
   const total = selected.length;
   let ok = 0, failed = 0, cognitions = 0, done = 0;
   const paint = () => {
-    if (btn) btn.textContent = _csT('onboarding.asset.importing_button', '导入中… {done}/{total}', { done, total });
+    if (btn) _csSetButtonLabel(btn, _csT('onboarding.asset.importing_button', '导入中… {done}/{total}', { done, total }));
     if (result) result.textContent = _csT('onboarding.asset.importing_sessions', '正在导入并提炼认知（{done}/{total} 完成）· 大会话需要一点时间，请稍候…', { done, total });
   };
   paint();
@@ -1953,7 +1974,7 @@ async function _csImportWorkbuddySessions(agentType) {
       paint();
     }
   });
-  if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'); }
+  if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）')); }
   if (result) {
     result.textContent = _csImportSummary(ok, failed, cognitions);
   }
@@ -2006,7 +2027,7 @@ async function _csImportCodexSessions(agentType) {
   const total = selected.length;
   let ok = 0, failed = 0, done = 0;
   const paint = () => {
-    if (btn) btn.textContent = _csT('onboarding.asset.importing_button', '导入中… {done}/{total}', { done, total });
+    if (btn) _csSetButtonLabel(btn, _csT('onboarding.asset.importing_button', '导入中… {done}/{total}', { done, total }));
     if (result) result.textContent = _csT('onboarding.asset.importing_plain', '正在导入（{done}/{total} 完成），请稍候…', { done, total });
   };
   paint();
@@ -2040,7 +2061,7 @@ async function _csImportCodexSessions(agentType) {
       paint();
     }
   });
-  if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）'); }
+  if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.asset.import_sessions', '导入所选会话（最多 3 条）')); }
   if (result) {
     result.textContent = _csImportSummary(ok, failed);
   }
@@ -2083,7 +2104,7 @@ async function _csLoadClaudeSkills(agentType) {
       return `
         <div class="cs-src cs-collapsible-item"${hidden} data-skill-dir="${_csEsc(s.dirName)}">
           <input type="checkbox" checked />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(s.name)}</strong>
             ${desc}
@@ -2092,12 +2113,12 @@ async function _csLoadClaudeSkills(agentType) {
     }).join('');
 
     const toggleBtn = skills.length > 3
-      ? `<button type="button" class="cs-toggle-more" data-target="skills-${_csEsc(agentType)}">${_csEsc(_csT('onboarding.asset.show_all', '显示全部 {count} 个技能', { count: skills.length }))}</button>`
+      ? _csButton({ label: _csT('onboarding.asset.show_all', '显示全部 {count} 个技能', { count: skills.length }), role: 'secondary', size: 'sm', className: 'cs-toggle-more', attrs: { 'data-target': `skills-${agentType}` } })
       : '';
 
     container.innerHTML = rows + toggleBtn +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-skill-import-btn" data-agent="${_csEsc(agentType)}">${_csEsc(_csT('onboarding.asset.import_skills', '导入所选技能'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_skills', '导入所选技能'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-skill-import-btn', attrs: { 'data-agent': agentType } })}
          <div class="cs-import-result cs-skill-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
 
@@ -2212,7 +2233,7 @@ async function _csLoadCodexSkills(agentType) {
       return `
         <div class="cs-src cs-collapsible-item"${hidden} data-skill-dir="${_csEsc(s.dirName)}">
           <input type="checkbox" checked />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(s.name)}</strong>
             ${desc}
@@ -2221,12 +2242,12 @@ async function _csLoadCodexSkills(agentType) {
     }).join('');
 
     const toggleBtn = skills.length > 3
-      ? `<button type="button" class="cs-toggle-more" data-target="skills-${_csEsc(agentType)}">${_csEsc(_csT('onboarding.asset.show_all', '显示全部 {count} 个技能', { count: skills.length }))}</button>`
+      ? _csButton({ label: _csT('onboarding.asset.show_all', '显示全部 {count} 个技能', { count: skills.length }), role: 'secondary', size: 'sm', className: 'cs-toggle-more', attrs: { 'data-target': `skills-${agentType}` } })
       : '';
 
     container.innerHTML = rows + toggleBtn +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-skill-import-btn" data-agent="${_csEsc(agentType)}">${_csEsc(_csT('onboarding.asset.import_skills', '导入所选技能'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_skills', '导入所选技能'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-skill-import-btn', attrs: { 'data-agent': agentType } })}
          <div class="cs-import-result cs-skill-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
 
@@ -2326,7 +2347,7 @@ async function _csLoadClaudeMemory(agentType) {
       `<div class="cs-state">${_csEsc(_csT('onboarding.memory.summary', 'Claude Code 的记忆分布在七个来源，共检测到 {count} 条可导入条目。选择要导入的来源，导入后进入共享知识库，供各 Agent 使用。', { count: total }))}</div>` +
       `<div class="cs-mem-sources">${blocks}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-mem-import-btn" data-agent="${_csEsc(agentType)}" ${canImport ? '' : 'disabled'}>${_csEsc(_csT('onboarding.memory.import', '导入所选记忆'))}</button>
+         ${_csButton({ label: _csT('onboarding.memory.import', '导入所选记忆'), role: 'primary', size: 'sm', icon: 'upload', disabled: !canImport, className: 'cs-mem-import-btn', attrs: { 'data-agent': agentType } })}
          <div class="cs-import-result cs-mem-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
 
@@ -2409,7 +2430,7 @@ async function _csLoadCodexMemory(agentType) {
       `<div class="cs-state">${_csEsc(_csT('onboarding.memory.codex_summary', '从 Codex config.toml 检测到 {count} 条配置偏好。导入后进入共享知识库。', { count: entries.length }))}</div>` +
       `<div class="cs-import-lines">${sample}${more}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-codex-mem-import-btn" data-agent="${_csEsc(agentType)}">${_csEsc(_csT('onboarding.memory.import_config', '导入 Codex 配置'))}</button>
+         ${_csButton({ label: _csT('onboarding.memory.import_config', '导入 Codex 配置'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-codex-mem-import-btn', attrs: { 'data-agent': agentType } })}
          <div class="cs-import-result cs-codex-mem-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
 
@@ -2491,7 +2512,7 @@ async function _csLoadOpencodeMemory(agentType) {
       `<div class="cs-state">${_csEsc(_csT('onboarding.memory.opencode_summary', '从 OpenCode 配置检测到 {count} 条偏好。导入后进入共享知识库。', { count: entries.length }))}</div>` +
       `<div class="cs-import-lines">${sample}${more}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-codex-mem-import-btn" data-agent="${_csEsc(agentType)}">${_csEsc(_csT('onboarding.memory.import_opencode', '导入 OpenCode 配置'))}</button>
+         ${_csButton({ label: _csT('onboarding.memory.import_opencode', '导入 OpenCode 配置'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-codex-mem-import-btn', attrs: { 'data-agent': agentType } })}
          <div class="cs-import-result cs-codex-mem-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
 
@@ -2531,7 +2552,7 @@ async function _csLoadOpencodeTasks(agentType) {
       return `
         <div class="cs-src cs-collapsible-item"${hidden} data-todo-id="${_csEsc(t.id)}">
           <input type="checkbox" />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(t.content)}</strong>
             ${src}
@@ -2541,14 +2562,14 @@ async function _csLoadOpencodeTasks(agentType) {
     }).join('');
 
     const toggleBtn = todos.length > 3
-      ? `<button type="button" class="cs-toggle-more">${_csEsc(_csT('onboarding.tasks.show_all', '显示全部 {count} 条任务', { count: todos.length }))}</button>`
+      ? _csButton({ label: _csT('onboarding.tasks.show_all', '显示全部 {count} 条任务', { count: todos.length }), role: 'secondary', size: 'sm', className: 'cs-toggle-more' })
       : '';
 
     container.innerHTML =
       `<div class="cs-state">${_csEsc(_csT('onboarding.tasks.opencode_summary', '检测到 {count} 条 OpenCode 任务清单（todo，无定时调度）。勾选后导入为一次性任务，执行时间默认为 1 小时后，可在「任务」模块调整。', { count: todos.length }))}</div>` +
       rows + toggleBtn +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportOpencodeTodos('${_csEsc(agentType)}')">${_csEsc(_csT('onboarding.asset.import_tasks', '导入所选任务'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_tasks', '导入所选任务'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { 'data-cs-import-action': 'opencode-tasks', 'data-agent': agentType } })}
          <div class="cs-import-result"></div>
        </div>`;
 
@@ -2601,7 +2622,7 @@ async function _csImportOpencodeTodos(agentType) {
     if (resultBox) resultBox.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.asset.select_tasks', '请先勾选要导入的任务。'))}</div>`;
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = _csT('onboarding.tasks.importing', '导入中…'); }
+  if (btn) { btn.disabled = true; _csSetButtonLabel(btn, _csT('onboarding.tasks.importing', '导入中…')); }
   if (resultBox) resultBox.innerHTML = `<div class="cs-state loading">${_csEsc(_csT('onboarding.tasks.importing_selected', '正在导入所选任务…'))}</div>`;
   try {
     const res = await window.cogseed.invoke('sessionImport.importOpencodeTodos', { todoIds: selected });
@@ -2621,7 +2642,7 @@ async function _csImportOpencodeTodos(agentType) {
     _obLog.warn('opencode todos import failed', { error: msg });
     if (resultBox) resultBox.innerHTML = `<div class="cs-state err">${_csEsc(_csT('onboarding.tasks.import_failed', '导入任务失败：{reason}', { reason: msg }))}</div>`;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.asset.import_tasks', '导入所选任务'); }
+    if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.asset.import_tasks', '导入所选任务')); }
   }
 }
 
@@ -2686,7 +2707,7 @@ async function _csLoadCodexTasks(agentType) {
       return `
         <div class="cs-src cs-collapsible-item"${hidden} data-task-id="${_csEsc(t.id)}">
           <input type="checkbox" />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div class="s-ico">${_csIcon('terminal')}</div>
           <div>
             <strong>${_csEsc(t.name)}</strong>
             <small>${meta}</small>
@@ -2696,14 +2717,14 @@ async function _csLoadCodexTasks(agentType) {
     }).join('');
 
     const toggleBtn = tasks.length > 3
-      ? `<button type="button" class="cs-toggle-more">${_csEsc(_csT('onboarding.tasks.show_all', '显示全部 {count} 条任务', { count: tasks.length }))}</button>`
+      ? _csButton({ label: _csT('onboarding.tasks.show_all', '显示全部 {count} 条任务', { count: tasks.length }), role: 'secondary', size: 'sm', className: 'cs-toggle-more' })
       : '';
 
     container.innerHTML =
       `<div class="cs-state">${_csEsc(_csT('onboarding.tasks.codex_summary', '检测到 {count} 个 Codex 定时任务，勾选后导入到本应用的任务中心。', { count: tasks.length }))}</div>` +
       rows + toggleBtn +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportCodexTasks('${_csEsc(agentType)}')">${_csEsc(_csT('onboarding.asset.import_tasks', '导入所选任务'))}</button>
+         ${_csButton({ label: _csT('onboarding.asset.import_tasks', '导入所选任务'), role: 'primary', size: 'sm', icon: 'upload', className: 'cs-import-btn', attrs: { 'data-cs-import-action': 'codex-tasks', 'data-agent': agentType } })}
          <div class="cs-import-result"></div>
        </div>`;
 
@@ -2760,7 +2781,7 @@ async function _csImportCodexTasks(agentType) {
     if (resultBox) resultBox.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.asset.select_tasks', '请先勾选要导入的任务。'))}</div>`;
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = _csT('onboarding.tasks.importing', '导入中…'); }
+  if (btn) { btn.disabled = true; _csSetButtonLabel(btn, _csT('onboarding.tasks.importing', '导入中…')); }
   if (resultBox) resultBox.innerHTML = `<div class="cs-state loading">${_csEsc(_csT('onboarding.tasks.importing_selected', '正在导入所选任务…'))}</div>`;
   try {
     const res = await window.cogseed.invoke('sessionImport.importCodexTasks', { taskIds: selected });
@@ -2784,7 +2805,7 @@ async function _csImportCodexTasks(agentType) {
     _obLog.warn('codex tasks import failed', { error: msg });
     if (resultBox) resultBox.innerHTML = `<div class="cs-state err">${_csEsc(_csT('onboarding.tasks.import_failed_scheduled', '导入定时任务失败：{reason}', { reason: msg }))}</div>`;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = _csT('onboarding.asset.import_tasks', '导入所选任务'); }
+    if (btn) { btn.disabled = false; _csSetButtonLabel(btn, _csT('onboarding.asset.import_tasks', '导入所选任务')); }
   }
 }
 
@@ -2897,9 +2918,9 @@ async function _csLoadAcpSessions() {
 
       const groupHtml = `
         <div class="cs-group-head" data-group="acp-${_csEsc(agentType)}" style="margin-top:16px">
-          <span class="g-name">${CS_TERMINAL_SVG}${_csEsc(agentLabel)}</span>
+          <span class="g-name">${_csIcon('terminal')}${_csEsc(agentLabel)}</span>
           <span class="g-status">${_csEsc(_csT('onboarding.import.acp_status', '从录制文件读取'))}</span>
-          <svg class="g-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          ${_csIcon('chevron-down', 'g-toggle')}
         </div>
         <div class="cs-sessions-container" data-agent="acp-${_csEsc(agentType)}"></div>`;
 
@@ -2929,7 +2950,7 @@ async function _csLoadAcpSessions() {
         return `
           <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
             <input type="checkbox" />
-            <div class="s-ico">${CS_TERMINAL_SVG}</div>
+            <div class="s-ico">${_csIcon('terminal')}</div>
             <div>
               <strong>${_csEsc(s.firstMessage)}</strong>
               ${projectLabel}
@@ -3072,10 +3093,9 @@ function _csBuild() {
   const consentBox = shell.querySelector('#first-consent');
   const firstBegin = shell.querySelector('#first-begin');
   if (consentBox && firstBegin) {
-    const beginLabel = firstBegin.querySelector('span');
-    if (beginLabel) beginLabel.textContent = _csT('onboarding.start.begin', '开始一次真实工作');
+    _csSetButtonLabel(firstBegin, _csT('onboarding.start.begin', '开始一次真实工作'));
     const syncConsent = () => {
-      firstBegin.disabled = !consentBox.checked;
+      _csSetButtonDisabled(firstBegin, !consentBox.checked);
     };
     consentBox.addEventListener('change', syncConsent);
     syncConsent();
@@ -3083,6 +3103,21 @@ function _csBuild() {
 
   shell.querySelector('#cs-team-refresh')?.addEventListener('click', () => _csLoadTeam(true));
   shell.querySelector('#cs-agent-refresh')?.addEventListener('click', () => _csLoadAgents(true));
+  shell.querySelector('#cs-do-import')?.addEventListener('click', () => { void window._csDoImport(); });
+  shell.querySelector('#cs-agent-list')?.addEventListener('click', (event) => {
+    const target = event.target && event.target.closest
+      ? event.target.closest('[data-cs-import-action]')
+      : null;
+    if (!target || target.disabled) return;
+    const agentType = target.dataset.agent || '';
+    const action = target.dataset.csImportAction || '';
+    if (action === 'claude-sessions') void _csImportClaudeSessions(agentType);
+    else if (action === 'codex-sessions') void _csImportCodexSessions(agentType);
+    else if (action === 'opencode-sessions') void window._csImportOpencodeSessions(agentType);
+    else if (action === 'workbuddy-sessions') void _csImportWorkbuddySessions(agentType);
+    else if (action === 'opencode-tasks') void _csImportOpencodeTodos(agentType);
+    else if (action === 'codex-tasks') void _csImportCodexTasks(agentType);
+  });
 
   // Step 2 fork cards: ① continue recommended project, ② browse other
   // sessions (reveals the by-Agent import UI), ③ start blank — all three end

@@ -47,6 +47,7 @@ class FakeElement {
 }
 
 function loadSettingsTabsModule() {
+  const backButton = new FakeElement({});
   const tabs = [
     new FakeElement({ settingsTab: 'data' }, ['settings-tab', 'is-active']),
     new FakeElement({ settingsTab: 'configuration' }, ['settings-tab']),
@@ -61,6 +62,9 @@ function loadSettingsTabsModule() {
   panes[2].hidden = true;
 
   const document = {
+    getElementById(id: string) {
+      return id === 'settings-back-btn' ? backButton : null;
+    },
     querySelectorAll(selector: string) {
       if (selector === '.settings-tab') return tabs;
       if (selector === '.settings-tab-pane') return panes;
@@ -73,12 +77,13 @@ function loadSettingsTabsModule() {
       return null;
     },
   };
-  const context: any = { document, window: {} };
+  const setView = vi.fn();
+  const context: any = { document, window: {}, setView };
   context.window.window = context.window;
   vm.createContext(context);
   const code = fs.readFileSync(path.join(root, 'src/renderer/modules/settings_tabs.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'settings_tabs.js' });
-  return { window: context.window, tabs, panes };
+  return { window: context.window, tabs, panes, backButton, setView };
 }
 
 function loadMessagingSettingsTestHooks() {
@@ -111,7 +116,8 @@ describe('settings tabs module', () => {
     const settingsScript = '<script src="./modules/settings.js"></script>';
 
     expect(fs.existsSync(modulePath)).toBe(true);
-    expect(indexHtml).toContain('data-settings-tab="configuration" data-i18n="settings.tab.configuration"');
+    expect(indexHtml).toContain('data-settings-tab="configuration"');
+    expect(indexHtml).toContain('data-i18n="settings.tab.configuration"');
     // 触点已从设置迁至「连接 > 触点」，设置不再保留消息平台 tab。
     expect(indexHtml).not.toContain('data-i18n="settings.tab.messaging"');
     expect(indexHtml).toContain('data-connections-pane="touchpoints"');
@@ -203,6 +209,16 @@ describe('settings tabs module', () => {
     expect(window.activateSettingsTab('credentials')).toBe('configuration');
     expect(tabs[1].classList.contains('is-active')).toBe(true);
     expect(panes[1].hidden).toBe(false);
+  });
+
+  it('returns from the standalone settings surface to its originating view', () => {
+    const { window, backButton, setView } = loadSettingsTabsModule();
+    window.__settingsReturnTarget = { view: 'conversation', cid: 'gconv-1' };
+
+    window.initSettingsTabs();
+    backButton.click();
+
+    expect(setView).toHaveBeenCalledWith('conversation', 'gconv-1');
   });
 
   it('keeps Feishu China and Lark Global as distinct supported channels', () => {

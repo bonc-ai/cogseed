@@ -33,6 +33,13 @@ function _escapeHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function _setHubButtonLabel(button, label) {
+  if (!button) return;
+  const labelNode = button.querySelector && button.querySelector('.ui-button__label');
+  if (labelNode) labelNode.textContent = label;
+  else button.textContent = label;
+}
+
 /** Mask long ids for display (e.g. cogseed_acc_abc123 → cogseed_acc_***123). */
 function _maskId(id) {
   if (!id) return '';
@@ -161,7 +168,7 @@ function _signedOutCard(status) {
       <h3 class="hub-hero-title">${_escapeHtml(t('hub.account.signed_out_title'))}</h3>
       <p class="hub-hero-desc">${_escapeHtml(t('hub.account.signed_out_desc'))}</p>
       ${unreachable}
-      <button type="button" class="btn btn-primary hub-hero-cta" id="hub-account-sign-in" data-i18n="hub.account.sign_in">${_icon('shield-check', 'hub-hero-cta-icon')}${_escapeHtml(t('hub.account.sign_in'))}</button>
+      ${uiButton({ label: t('hub.account.sign_in'), icon: 'shield-check', role: 'primary', className: 'hub-hero-cta', attrs: { id: 'hub-account-sign-in', 'data-i18n': 'hub.account.sign_in' } })}
       <div class="hub-hero-safe">${_icon('shield-check', 'hub-hero-safe-icon')}${_escapeHtml(t('hub.account.local_safe_hint'))}</div>
     </div>
 
@@ -186,7 +193,7 @@ function _signedInCard(status, devices, consents, displayName, loginId, phoneMas
       : '';
     const revoke = dev.is_current
       ? ''
-      : `<button type="button" class="hub-btn-mini" data-hub-revoke-device="${_escapeHtml(dev.device_id)}">${_icon('trash-2', 'hub-btn-icon')}${_escapeHtml(t('hub.account.revoke'))}</button>`;
+      : uiButton({ label: t('hub.account.revoke'), icon: 'trash-2', role: 'danger', size: 'sm', className: 'hub-btn-mini', attrs: { 'data-hub-revoke-device': dev.device_id } });
     // P3394 DEVICE-05：设备名缺失用通用占位名，不展示 device_id/installation_id 等内部标识。
     const name = _friendlyDeviceName(dev) || _escapeHtml(t('hub.account.device_unknown'));
     const os = (dev.device_os || '').replace(/\bunknown\b/gi, '').trim();
@@ -207,8 +214,8 @@ function _signedInCard(status, devices, consents, displayName, loginId, phoneMas
 
   const consentRows = consents.map((c) => {
     const action = c.granted
-      ? `<button type="button" class="hub-btn-mini" data-hub-consent="${_escapeHtml(c.scope)}" data-hub-consent-action="revoke">${_icon('x-circle', 'hub-btn-icon')}${_escapeHtml(t('hub.account.consent_revoke'))}</button>`
-      : `<button type="button" class="hub-btn-mini hub-btn-mini-ghost" data-hub-consent="${_escapeHtml(c.scope)}" data-hub-consent-action="grant">${_icon('check-circle', 'hub-btn-icon')}${_escapeHtml(t('hub.account.consent_grant'))}</button>`;
+      ? uiButton({ label: t('hub.account.consent_revoke'), icon: 'x-circle', role: 'danger', size: 'sm', className: 'hub-btn-mini', attrs: { 'data-hub-consent': c.scope, 'data-hub-consent-action': 'revoke' } })
+      : uiButton({ label: t('hub.account.consent_grant'), icon: 'check-circle', size: 'sm', className: 'hub-btn-mini hub-btn-mini-ghost', attrs: { 'data-hub-consent': c.scope, 'data-hub-consent-action': 'grant' } });
     const state = c.granted ? `<span class="hub-chip hub-chip-on">${_icon('check-circle', 'hub-chip-icon')}${_escapeHtml(t('hub.account.consent_granted'))}</span>` : `<span class="hub-chip hub-chip-off">${_escapeHtml(t('hub.account.consent_revoked'))}</span>`;
     return `
       <div class="hub-consent-row">
@@ -240,7 +247,7 @@ function _signedInCard(status, devices, consents, displayName, loginId, phoneMas
     <div class="hub-hero hub-hero-compact">
       <div class="hub-hero-top">
         <div class="hub-hero-badge hub-hero-badge-on">${_icon('check-circle', 'hub-hero-badge-icon')}${_escapeHtml(t('hub.account.signed_in_title'))}</div>
-        <button type="button" class="btn btn-sm hub-hero-manage" id="hub-account-manage">${_icon('settings', 'hub-btn-icon')}${_escapeHtml(t('hub.account.manage'))}</button>
+        ${uiButton({ label: t('hub.account.manage'), icon: 'settings', size: 'sm', className: 'hub-hero-manage', attrs: { id: 'hub-account-manage' } })}
       </div>
       <div class="hub-account-line">
         <span class="hub-account-avatar is-gradient" aria-hidden="true">${_escapeHtml(initial)}</span>
@@ -260,8 +267,8 @@ function _signedInCard(status, devices, consents, displayName, loginId, phoneMas
     <div class="hub-card hub-card-list">${consentRows}</div>
 
     <div class="hub-actions">
-      <button type="button" class="btn btn-sm" id="hub-account-sign-out">${_icon('log-out', 'hub-btn-icon')}${_escapeHtml(t('hub.account.sign_out'))}</button>
-      <button type="button" class="btn btn-sm btn-danger" id="hub-account-delete">${_icon('trash-2', 'hub-btn-icon')}${_escapeHtml(t('hub.account.delete_account'))}</button>
+      ${uiButton({ label: t('hub.account.sign_out'), icon: 'log-out', size: 'sm', attrs: { id: 'hub-account-sign-out' } })}
+      ${uiButton({ label: t('hub.account.delete_account'), icon: 'trash-2', role: 'danger', size: 'sm', attrs: { id: 'hub-account-delete' } })}
     </div>
   `;
 }
@@ -271,19 +278,18 @@ function _signedInCard(status, devices, consents, displayName, loginId, phoneMas
 function _bindSignIn(card) {
   const btn = card.querySelector('#hub-account-sign-in');
   if (!btn) return;
-  const idleHtml = `${_icon('shield-check', 'hub-hero-cta-icon')}${_escapeHtml(t('hub.account.sign_in'))}`;
   btn.addEventListener('click', async () => {
     btn.disabled = true;
-    btn.innerHTML = _escapeHtml(t('hub.account.signing_in'));
+    _setHubButtonLabel(btn, t('hub.account.signing_in'));
     try {
       await _invoke('hub-account.start_login');
       // Browser flow: the deep link callback completes the login; keep the
       // button disabled until the status refresh reflects it.
-      window.setTimeout(() => { btn.disabled = false; btn.innerHTML = idleHtml; void _renderHubAccount(); }, 800);
+      window.setTimeout(() => { btn.disabled = false; _setHubButtonLabel(btn, t('hub.account.sign_in')); void _renderHubAccount(); }, 800);
     } catch (err) {
       _hubLog.warn('hub sign-in start failed', { error: (err && err.message) || String(err) });
       btn.disabled = false;
-      btn.innerHTML = idleHtml;
+      _setHubButtonLabel(btn, t('hub.account.sign_in'));
       window.alert((err && err.message) || t('hub.account.error_start'));
     }
   });
@@ -394,24 +400,29 @@ function _deletionStep1Html(ctx) {
       <div class="hub-card hub-card-list">${rows}</div>
       <div class="hub-deletion-local-note">${_icon('hard-drive', 'hub-btn-icon')}${_escapeHtml(t('hub.account.deletion_local_note'))}</div>
       <div class="hub-actions">
-        <button type="button" class="btn btn-sm" data-hub-deletion-cancel>${_escapeHtml(t('hub.account.deletion_back'))}</button>
-        <button type="button" class="btn btn-sm btn-primary" data-hub-deletion-next>${_escapeHtml(t('hub.account.deletion_continue'))}</button>
+        ${uiButton({ label: t('hub.account.deletion_back'), size: 'sm', attrs: { 'data-hub-deletion-cancel': '' } })}
+        ${uiButton({ label: t('hub.account.deletion_continue'), role: 'primary', size: 'sm', attrs: { 'data-hub-deletion-next': '' } })}
       </div>
     </div>`;
 }
 
 function _deletionStep2Html(ctx) {
   const sendBtn = ctx.method === 'sms_code'
-    ? `<button type="button" class="btn btn-sm" data-hub-deletion-send ${ctx.resendAfter > 0 ? 'disabled' : ''}>${_escapeHtml(ctx.resendAfter > 0 ? t('hub.account.deletion_resend_in', { s: ctx.resendAfter }) : t('hub.account.deletion_send_code'))}</button>`
+    ? uiButton({
+      label: ctx.resendAfter > 0 ? t('hub.account.deletion_resend_in', { s: ctx.resendAfter }) : t('hub.account.deletion_send_code'),
+      size: 'sm',
+      disabled: ctx.resendAfter > 0,
+      attrs: { 'data-hub-deletion-send': '' },
+    })
     : '';
   const reauthField = ctx.method === 'sms_code'
     ? `
       <div class="hub-deletion-reauth-line">${_icon('smartphone', 'hub-btn-icon')}${_escapeHtml(t('hub.account.deletion_reauth_sms_hint', { phone: ctx.phoneMasked || '—' }))}</div>
       <div class="hub-deletion-code-row">
-        <input class="hub-deletion-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" data-hub-deletion-code value="${_escapeHtml(ctx.code)}" placeholder="${_escapeHtml(t('hub.account.deletion_code_placeholder'))}" />
+        ${uiInput({ id: 'hub-deletion-code', className: 'hub-deletion-input', value: ctx.code, placeholder: t('hub.account.deletion_code_placeholder'), attrs: { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '8', 'data-hub-deletion-code': '' } })}
         ${sendBtn}
       </div>`
-    : `<input class="hub-deletion-input" type="password" data-hub-deletion-password value="${_escapeHtml(ctx.password)}" placeholder="${_escapeHtml(t('hub.account.deletion_password_placeholder'))}" />`;
+    : uiInput({ id: 'hub-deletion-password', type: 'password', className: 'hub-deletion-input', value: ctx.password, placeholder: t('hub.account.deletion_password_placeholder'), attrs: { 'data-hub-deletion-password': '' } });
   return `
     <div class="hub-deletion-flow">
       <div class="hub-deletion-head">
@@ -422,8 +433,8 @@ function _deletionStep2Html(ctx) {
       ${reauthField}
       ${_deletionErrorHtml(ctx)}
       <div class="hub-actions">
-        <button type="button" class="btn btn-sm" data-hub-deletion-back>${_escapeHtml(t('hub.account.deletion_back'))}</button>
-        <button type="button" class="btn btn-sm btn-primary" data-hub-deletion-next>${_escapeHtml(t('hub.account.deletion_continue'))}</button>
+        ${uiButton({ label: t('hub.account.deletion_back'), size: 'sm', attrs: { 'data-hub-deletion-back': '' } })}
+        ${uiButton({ label: t('hub.account.deletion_continue'), role: 'primary', size: 'sm', attrs: { 'data-hub-deletion-next': '' } })}
       </div>
     </div>`;
 }
@@ -444,11 +455,11 @@ function _deletionStep3Html(ctx) {
       </div>
       <div class="hub-alert hub-alert-danger" role="status">${_icon('warning', 'hub-alert-icon')}${_escapeHtml(t('hub.account.deletion_confirm_notice', { deadline }))}</div>
       <div class="hub-deletion-checks">${checks}</div>
-      <input class="hub-deletion-input" type="text" data-hub-deletion-phrase value="${_escapeHtml(ctx.phrase)}" placeholder="${_escapeHtml(t('hub.account.deletion_phrase_placeholder'))}" />
+      ${uiInput({ id: 'hub-deletion-phrase', className: 'hub-deletion-input', value: ctx.phrase, placeholder: t('hub.account.deletion_phrase_placeholder'), attrs: { 'data-hub-deletion-phrase': '' } })}
       ${_deletionErrorHtml(ctx)}
       <div class="hub-actions">
-        <button type="button" class="btn btn-sm" data-hub-deletion-back>${_escapeHtml(t('hub.account.deletion_back'))}</button>
-        <button type="button" class="btn btn-sm btn-danger" data-hub-deletion-submit disabled>${_escapeHtml(t('hub.account.deletion_confirm_submit'))}</button>
+        ${uiButton({ label: t('hub.account.deletion_back'), size: 'sm', attrs: { 'data-hub-deletion-back': '' } })}
+        ${uiButton({ label: t('hub.account.deletion_confirm_submit'), role: 'danger', size: 'sm', disabled: true, attrs: { 'data-hub-deletion-submit': '' } })}
       </div>
     </div>`;
 }
@@ -507,7 +518,8 @@ async function _sendDeletionReauthCode(card, ctx) {
   const btn = card.querySelector('[data-hub-deletion-send]');
   if (btn) {
     btn.disabled = ctx.resendAfter > 0;
-    btn.textContent = ctx.resendAfter > 0 ? t('hub.account.deletion_resend_in', { s: ctx.resendAfter }) : t('hub.account.deletion_send_code');
+    btn.classList.toggle('is-disabled', ctx.resendAfter > 0);
+    _setHubButtonLabel(btn, ctx.resendAfter > 0 ? t('hub.account.deletion_resend_in', { s: ctx.resendAfter }) : t('hub.account.deletion_send_code'));
   }
   if (ctx.error) {
     const box = card.querySelector('.hub-deletion-flow');
@@ -529,7 +541,8 @@ function _startDeletionCountdown(card, ctx) {
     const btn = card.querySelector('[data-hub-deletion-send]');
     if (btn) {
       btn.disabled = ctx.resendAfter > 0;
-      btn.textContent = ctx.resendAfter > 0 ? t('hub.account.deletion_resend_in', { s: ctx.resendAfter }) : t('hub.account.deletion_send_code');
+      btn.classList.toggle('is-disabled', ctx.resendAfter > 0);
+      _setHubButtonLabel(btn, ctx.resendAfter > 0 ? t('hub.account.deletion_resend_in', { s: ctx.resendAfter }) : t('hub.account.deletion_send_code'));
     }
     if (ctx.resendAfter <= 0) _stopDeletionCountdown();
   }, 1000);

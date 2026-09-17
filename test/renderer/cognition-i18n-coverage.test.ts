@@ -32,8 +32,14 @@ const tables = Object.fromEntries(LOCALES.map((name) => [
  * 间接写法（`const key = ... ? 'k' : ...` 再传给 `_cognitionText(key)`）扫不到，
  * 代码里应直接内联成 `_cognitionText('k', ...)` 调用，让这条扫描能看见。 */
 function referencedKeys(): string[] {
-  const callPattern = /(?:_cognitionText|_t|_tv|_label|\bt)\(\s*['"]([A-Za-z0-9_.]+)['"]/g;
+  const callPattern = /(?:_cognitionText|_t|_tv|_label|\bt|T)\(\s*['"]([A-Za-z0-9_.]+)['"]/g;
   const propPattern = /(?:titleKey|descriptionKey)\s*:\s*['"]([A-Za-z0-9_.]+)['"]/g;
+  // 字符串字面量兜底：认知资产重建后部分 key 由数组/映射常量承载
+  // （CATEGORIES / EVENT_TITLES / PROOF_FEEDBACKS 等，形态=「key, 中文回退」
+  // 相邻字符串）。第二个字符串必须含汉字：文案回退全为中文，而 IPC 通道
+  // 名映射（'recall.candidates.ignore', 'keep-current': …）的相邻字符串
+  // 是拉丁标识符，靠这一形状区分——宁可多扫也不静默放走缺口。
+  const literalPattern = /['"]((?:cognition|recall|personalOntology)\.[A-Za-z0-9_.]+)['"]\s*,\s*['"][^'"]*[\u4e00-\u9fff][^'"]*['"]/g;
   const keys = new Set<string>();
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -43,12 +49,15 @@ function referencedKeys(): string[] {
         continue;
       }
       if (!entry.name.endsWith('.js')) continue;
-      const source = fs.readFileSync(full, 'utf8');
-      for (const match of source.matchAll(callPattern)) {
-        if (PREFIXES.some((prefix) => match[1].startsWith(prefix))) keys.add(match[1]);
-      }
-      for (const match of source.matchAll(propPattern)) {
-        if (PREFIXES.some((prefix) => match[1].startsWith(prefix))) keys.add(match[1]);
+      const source = fs.readFileSync(full, 'utf8')
+        // IPC 通道名（recall.assets.list 等）形如词条但不是取词点，先剔除。
+        .replace(/api\.(?:call|soft)\(\s*['"][^'"]+['"]/g, 'api.call(/*stripped*/)')
+        .replace(/^[ \t]*\/\/.*$/gm, '');
+      for (const pattern of [callPattern, propPattern, literalPattern]) {
+        pattern.lastIndex = 0;
+        for (const match of source.matchAll(pattern)) {
+          if (PREFIXES.some((prefix) => match[1].startsWith(prefix))) keys.add(match[1]);
+        }
       }
     }
   };
@@ -64,10 +73,13 @@ describe('认知域词条覆盖', () => {
   const keys = referencedKeys();
 
   it('扫到了真实的取词点——解析失败会让下面两条变成空断言', () => {
-    expect(keys.length).toBeGreaterThan(600);
-    expect(keys).toContain('cognition.candidate_confirm_scoped');
-    // 新扫进来的两种写法也要真的有键被扫到，否则同样会退化成空断言：
-    // `_label('recall.projection...')`（卡片组件）与 `titleKey: 'personalOntology...'`（属性式）。
+    // 认知资产前端重建（skills.js 瘦身）后取词点集中在 cognition-assets/
+    // （T() 与数组常量），阈值按新分布校准。
+    expect(keys.length).toBeGreaterThan(250);
+    expect(keys).toContain('cognition.tab_overview');
+    expect(keys).toContain('cognition.proof_rate_question');
+    expect(keys).toContain('cognition.candidate_error_terminal');
+    // 属性式（TABS 的 titleKey）与字面量兜底（EVENT_TITLES）都要真的扫到。
     expect(keys).toContain('recall.projection.title');
     expect(keys).toContain('personalOntology.ontology_identity');
   });

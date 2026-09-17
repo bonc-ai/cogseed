@@ -47,11 +47,18 @@ function activateSettingsTab(name, options = {}) {
 }
 
 function initSettingsTabs() {
-  const tabs = document.querySelectorAll('.settings-tab');
+  const tabs = Array.from(document.querySelectorAll('.settings-tab'));
   if (!tabs.length) return;
 
   if (!window.__settingsTabsBound) {
     window.__settingsTabsBound = true;
+    const backButton = typeof document.getElementById === 'function'
+      ? document.getElementById('settings-back-btn')
+      : null;
+    backButton?.addEventListener('click', () => {
+      const target = window.__settingsReturnTarget || { view: 'new-chat', cid: null };
+      if (typeof setView === 'function') setView(target.view || 'new-chat', target.cid || undefined);
+    });
     if (typeof window.addEventListener === 'function') {
       window.addEventListener('i18n-change', _renderSettingsPageHeader);
     }
@@ -60,8 +67,9 @@ function initSettingsTabs() {
     btn.addEventListener('click', () => activateSettingsTab(btn.dataset.settingsTab));
   });
 
-  const defaultTab = document.querySelector('.settings-tab.is-active')?.dataset.settingsTab
-    || tabs[0]?.dataset.settingsTab;
+  const defaultTab = tabs.some((tab) => tab.dataset.settingsTab === 'data')
+    ? 'data'
+    : tabs[0]?.dataset.settingsTab;
   _renderSettingsPageHeader();
   activateSettingsTab(defaultTab);
 }

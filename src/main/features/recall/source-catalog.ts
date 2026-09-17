@@ -53,6 +53,9 @@ export interface CognitionCatalogSource extends CognitionSourceRef {
   availability: CognitionSourceAvailability;
   /** Session-only preflight used by the manual capture picker. */
   captureReady?: boolean;
+  /** Session-only: usable (capture-visible) message count, for filtering
+   *  trivial conversations out of the manual capture picker. */
+  messageCount?: number;
   statusReason?: string;
   actions: CognitionSourceAction[];
   nextAction: CognitionSourceNextAction;
@@ -71,6 +74,7 @@ interface DiscoveredSource extends CognitionSourceRef {
   kind: CognitionCatalogKind;
   status: CognitionSourceLifecycleStatus;
   captureReady?: boolean;
+  messageCount?: number;
   statusReason?: string;
 }
 
@@ -176,12 +180,15 @@ function conversationStatus(conversation: chats.Conversation): Pick<DiscoveredSo
  * Keep this as a small metadata preflight: message bodies are not returned in
  * the catalog, and the capture service still performs the authoritative check
  * immediately before creating a task. */
-async function conversationCaptureReadiness(userId: string, conversationId: string): Promise<boolean | undefined> {
+/** 会话的可整理预检：ready=最后一轮是否已有 assistant 回复（undefined=读不
+ *  到无法判断）；messageCount=可整理视角的有用消息条数（供列表过滤一两句
+ *  的简单对话）。两者都从同一次消息读取里得出，不产生额外 IO。 */
+async function conversationCaptureReadiness(
+  userId: string,
+  conversationId: string,
+): Promise<{ ready?: boolean; messageCount?: number } | undefined> {
   try {
-    const readinessFrom = (input: GroupMessage[]): boolean | undefined => {
-      const messages = input
-        .filter(usefulMessage)
-        .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+    const readinessFrom = (messages: GroupMessage[]): boolean | undefined => {
       let lastUserIndex = -1;
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         if (messages[index].from === 'user') {
@@ -192,13 +199,15 @@ async function conversationCaptureReadiness(userId: string, conversationId: stri
       if (lastUserIndex < 0) return undefined;
       return messages.slice(lastUserIndex + 1).some(isRecallAssistantMessage);
     };
-    const recent = await chats.getMessages(userId, conversationId, 50);
+    const recent = (await chats.getMessages(userId, conversationId, 50))
+      .filter(usefulMessage)
+      .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
     const recentReadiness = readinessFrom(recent);
-    if (recentReadiness !== undefined) return recentReadiness;
+    if (recentReadiness !== undefined) return { ready: recentReadiness, messageCount: recent.length };
     const messages = (await chats.getMessages(userId, conversationId, 2_000))
       .filter(usefulMessage)
       .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
-    return readinessFrom(messages) ?? false;
+    return { ready: readinessFrom(messages) ?? false, messageCount: messages.length };
   } catch {
     // An unreadable source remains actionable through the normal source error
     // path; do not claim that it is complete based on missing data.
@@ -218,10 +227,10 @@ async function conversationSources(userId: string, query: Parameters<SourceAdapt
       title: conversation.title,
       sourceVersion: conversation.updated_at,
     }, status.status, status.statusReason);
-    const captureReady = conversation.processing || query.disabledConversationIds?.has(conversation.conversation_id)
+    const readiness = conversation.processing || query.disabledConversationIds?.has(conversation.conversation_id)
       ? undefined
       : await conversationCaptureReadiness(userId, conversation.conversation_id);
-    return captureReady === undefined ? source : { ...source, captureReady };
+    return readiness === undefined ? source : { ...source, captureReady: readiness.ready, messageCount: readiness.messageCount };
   }));
   if (sessions.length >= query.limit) return sessions;
   const messages = await loadRecentMessages(
@@ -318,6 +327,10 @@ function executionLifecycle(status: executionRecords.ExecutionStatus): { status:
   if (status === 'queued') return { status: 'pending', reason: 'execution_queued' };
   if (status === 'running') return { status: 'processing', reason: 'execution_running' };
   if (status === 'completed') return { status: 'ready' };
+  // 用户主动取消=正常终止，不是故障：把它算 failed 会让"待我处理"永驻一条
+  // 无从处理的假警报（2026-09-14 修：实机出现 [failed] execution_cancelled）。
+  // 超时/真失败仍算 failed（用户可能需重跑）。
+  if (status === 'cancelled') return { status: 'ready' };
   return { status: 'failed', reason: `execution_${status}` };
 }
 

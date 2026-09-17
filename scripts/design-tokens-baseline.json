@@ -1,28 +1,27 @@
 {
   "onboarding.css": {
-    "color": 92,
-    "fontSize": 26,
+    "color": 82,
+    "fontSize": 24,
     "radius": 11
   },
   "plugins.css": {
-    "color": 48,
-    "fontSize": 8,
-    "radius": 2
+    "color": 17,
+    "fontSize": 4
   },
   "recall-local.css": {
-    "color": 526,
+    "color": 462,
     "fontSize": 13,
-    "radius": 13
+    "radius": 4
   },
   "style.css": {
-    "color": 1602,
-    "zIndex": 12,
-    "fontSize": 360,
-    "radius": 300
+    "color": 1417,
+    "zIndex": 7,
+    "fontSize": 323,
+    "radius": 254
   },
   "workspace.css": {
-    "color": 510,
-    "fontSize": 10,
-    "radius": 71
+    "color": 317,
+    "fontSize": 6,
+    "radius": 39
   }
 }
