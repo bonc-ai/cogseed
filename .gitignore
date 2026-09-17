@@ -83,3 +83,6 @@ build-info.json
 .tmp-override-src-*/
 .tmp-skill-import-*/
 .tmp-skill-runner-*/
+
+# Local Python environment for Spec Kit template composition.
+/.venv-speckit/
