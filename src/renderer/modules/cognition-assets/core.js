@@ -323,9 +323,10 @@
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
+      // 滚动不在这里清零（2026-09-17 修）：views.render 的 restoreScroll 按
+      // routeKey 判定——页面级路由变了回顶，就地展开（使用记录/版本详情/
+      // KSTAR 复盘）保持原位。此前无条件清零会把展开后的视口打回页面顶部。
       NS.notify();
-      const main = document.getElementById('ca-scroll');
-      if (main) main.scrollTop = 0;
     },
     back() {
       const prev = store.backStack.pop();
