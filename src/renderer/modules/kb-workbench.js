@@ -2640,7 +2640,7 @@
         ? '这份文档还没有解析好的要点，无法生成脑图（仅显示中心节点）。请等索引完成后再试。'
         : '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。',
       'not-found': doc
-        ? '这份文档不在当前知识库的「已索引」列表里（可能还在索引中、刚被移动或改名），无法按本文档生成脑图。'
+        ? '这份文档不在「当前知识库」的已索引列表里：可能还在索引中、刚被移动/改名，或者它属于另一个库（例如你在看共享库、文件却在个人库）。请切到它所在的库再试。'
         : '指定的文档不在当前知识库的已索引列表里。',
       timeout: '脑图生成超时：本地模型排队/推理超过 3 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。',
       'model-failed': '脑图生成失败（模型暂不可用），已降级为仅中心节点。请稍后点击重试。',
@@ -2731,7 +2731,7 @@
           return;
         }
         const root = r.root;
-        _state.mmCollapsed.clear();
+        _mmResetFoldToDefault(root); // 恢复出来的图也回到骨架层（首屏可读）
         canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
         canvas._mmRoot = root;
         canvas._mmScope = _mmScopeFromKey(m.key); // 恢复存档也要带回作用域，否则刷新/保存会串味
@@ -2756,7 +2756,7 @@
           return;
         }
         const root = r.root;
-        _state.mmCollapsed.clear();
+        _mmResetFoldToDefault(root);
         canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
         canvas._mmRoot = root;
         canvas._mmScope = _mmScopeFromKey(key);
@@ -2809,12 +2809,17 @@
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
-        // ── 作用域回执校验 ──────────────────────────────────────────────
+        // ── 作用域回执校验（顺序很关键！）───────────────────────────────
         // 请求了「本文档」就必须真的拿到 doc 作用域。主进程若是旧版本（不认识 doc
         // 参数，静默退回"整库前 N 个文件"），这里必须**丢弃结果**并说清原因——
         // 真机事故：一份 ECS 早会转写的"仅本文档"脑图里全是别的目录文件的内容，
         // 用户完全看不出问题出在作用域上（且这个错误脑图还会以 doc: 为 key 存档）。
-        if (doc && (res.scope !== 'doc' || !Array.isArray(res.files) || res.files.length !== 1 || res.files[0] !== doc)) {
+        //
+        // 顺序：先判 scope，再判 degraded，最后才判 files。因为**降级响应本来就没有
+        // files**（not-found 时 files=[]），把 files 混进第一条会让"这份文档没索引到"
+        // 被误报成"作用域不匹配，请重启"（2026-09-16 真机就此误报过，用户以为功能坏了）。
+        const scopeMismatch = Boolean(doc) && res.scope !== 'doc';
+        if (scopeMismatch) {
           canvas.innerHTML = '<div class="kb-mm-fail">'
             + '主进程没有按「本文档」作用域生成（返回作用域：' + _esc(res.scope || '未知') + '），已丢弃这次结果。'
             + '<br>常见原因是应用主进程仍是旧代码（只刷新了界面，没重启进程）：请**完全退出 CogSeed 后重新启动**再试。'
@@ -2836,10 +2841,23 @@
           });
           return;
         }
+        // 走到这里一定是"真的生成/读到缓存"的响应：此时 files 必须恰好是请求的那一份。
+        // 路径按 Unicode 归一化 + 文件名比较：macOS 上存在 NFC/NFD 两种等价形式，
+        // 严格字符串相等会把同一文件判成两个（而这条校验的真正目的是"别把整库图冒充
+        // 本文档图"，不是比对字节）。
+        if (doc && !_mmSameDoc(res.files, doc)) {
+          canvas.innerHTML = '<div class="kb-mm-fail">'
+            + '主进程读取的文件与请求的不是同一份（请求：' + _esc(doc) + '；实际：' + _esc(Array.isArray(res.files) ? res.files.join('、') : '未知') + '），已丢弃这次结果。'
+            + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
+            + '</div>';
+          const retry2 = canvas.querySelector('.kb-mm-retry-btn');
+          if (retry2) retry2.addEventListener('click', () => { ai.remove(); _genMindmap(doc); });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmScope = { doc: doc || null, scope: res.scope || (doc ? 'doc' : 'dir') };
         canvas._mmScope = _state.mmScope;
-        _state.mmCollapsed.clear();
+        _mmResetFoldToDefault(res.root); // 新生成 → 回到骨架层（首屏只到一级分支）
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
@@ -2852,6 +2870,22 @@
         canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
       });
     box.scrollTop = box.scrollHeight;
+  }
+
+  /**
+   * 主进程回执的文件列表是否就是请求的那一份。
+   *
+   * 只要求"恰好一份 + 文件名一致"：真正要守住的是"别把整库图冒充本文档图"，
+   * 而不是比对字节。macOS 上文件名存在 NFC/NFD 两种等价形式（同一个文件两种字节），
+   * 严格字符串相等会把它们判成两份，导致合法请求被当成错配丢弃。
+   */
+  function _mmSameDoc(files, doc) {
+    if (!Array.isArray(files) || files.length !== 1) return false;
+    const norm = (s) => String(s || '').normalize('NFC');
+    const base = (s) => norm(s).split('/').pop();
+    const want = norm(doc);
+    const got = norm(files[0]);
+    return got === want || base(got) === base(want);
   }
 
   /**
@@ -3115,7 +3149,7 @@
           return;
         }
         _state.lastMind = res.root;
-        _state.mmCollapsed.clear();
+        _mmResetFoldToDefault(res.root);
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
@@ -3145,7 +3179,36 @@
     });
   }
 
-  // 折叠 / 展开一级分支（数据驱动重渲染）
+  /**
+   * 默认展开层级：**只展开根 + 一级分支**（所有"有子节点的节点"默认折叠），
+   * 像 NotebookLM 的脑图那样先给一张骨架，点开哪一支再看哪一支的下一层。
+   *
+   * 为什么不默认全展开：一张 100+ 节点的图全展开后，节点会被压到只剩几个像素，
+   * 用户必须先把图缩到看不清、再逐个放大才能读——顺序反了。先给骨架、按需逐层打开，
+   * 首屏的信息密度才是"可读"的（每层节点的 +N 徽章也告诉用户"这里还有内容"）。
+   *
+   * 根节点永不折叠（否则首屏只剩一个孤点）；叶子没有子节点，不参与。
+   */
+  function _mmDefaultCollapsedFor(root) {
+    const idxs = new Set();
+    if (!root) return idxs;
+    let idx = 0;
+    const walk = (n, depth) => {
+      const cur = idx++;
+      const kids = n?.children || [];
+      if (depth >= 1 && kids.length) idxs.add(cur);
+      for (const c of kids) walk(c, depth + 1);
+    };
+    walk(root, 0);
+    return idxs;
+  }
+
+  /** 新内容上场（生成 / 从历史或存档恢复 / 刷新）统一回到"骨架层"。 */
+  function _mmResetFoldToDefault(root) {
+    _state.mmCollapsed = _mmDefaultCollapsedFor(root);
+  }
+
+  // 折叠 / 展开节点（任意层级；数据驱动重渲染）
   function _mmToggleFold(idx) {
     if (_state.mmCollapsed.has(idx)) _state.mmCollapsed.delete(idx);
     else _state.mmCollapsed.add(idx);
@@ -3573,7 +3636,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         }
         _state.lastMind = res.root;
         _state.mmScope = (s && s.doc) ? { doc: s.doc, scope: 'doc' } : { doc: null, scope: res.scope || 'dir' };
-        _state.mmCollapsed.clear();
+        _mmResetFoldToDefault(res.root);
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         _rerenderMindmaps();
@@ -3653,7 +3716,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       .catch(() => { if (typeof uiToast === 'function') uiToast('载入失败', { variant: 'warning' }); });
   }
 
-  // 预览层内：一级分支点击折叠/展开；双击节点重命名
+  // 预览层内：节点点击=逐层展开/聚焦；徽章点击=折叠；双击节点重命名
   function _bindPreviewNodes() {
     const wrap = document.getElementById('kb-mm-overlay-wrap');
     const root = _state.lastMind;
@@ -3662,14 +3725,23 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const depth = Number(el.dataset.depth || 0);
       const hasKids = Number(el.dataset.children || 0) > 0;
       const idx = Number(el.dataset.mmIdx);
+      // 渐进展开（任意层级）：徽章点击 = 折叠/展开；**折叠态下点节点主体 = 展开这一层**。
+      // 这条监听必须最先注册并用 stopImmediatePropagation 截断——否则同一次点击还会
+      // 命中后面的"聚焦/跳来源"监听（折叠节点点一下又跳原文，用户会莫名其妙）。
+      if (hasKids) {
+        el.addEventListener('click', (e) => {
+          const onBadge = !!(e.target && e.target.closest && e.target.closest('.kb-mm-fold-badge'));
+          if (onBadge || _state.mmCollapsed.has(idx)) {
+            e.stopImmediatePropagation();
+            _mmToggleFold(idx); // 内部已含"结构变化后重新适应画布"
+          }
+        });
+        el.style.cursor = 'pointer';
+      }
       if (depth === 1) {
-        // 一级分支：徽章(−/+)点击=折叠；节点主体点击=聚焦/取消聚焦该分支
+        // 一级分支（已展开时）：主体点击 = 聚焦/取消聚焦该分支
         el.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (e.target && e.target.closest && e.target.closest('.kb-mm-fold-badge')) {
-            _mmToggleFold(idx);
-            return;
-          }
           if (_state.mmFocus === idx) _state.mmFocus = null;
           else _state.mmFocus = idx;
           _rerenderMindmaps();
@@ -3723,11 +3795,40 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       row.addEventListener('click', () => {
         _state.mmViewMode = 'graph';
         _mmUpdateToolbarState();
+        _mmExpandPathTo(idx); // 折叠态下先展开到该节点，否则图里没有落点
         _renderOverlay();
         _mmFitToStage();
         _mmCenterNode(idx);
       });
     });
+  }
+
+  /**
+   * 展开到指定节点：把"根 → 该节点"这条祖先链从折叠集里移除。
+   *
+   * 默认是骨架态（所有非叶子都折叠），所以"大纲点深层行 / 搜索命中深层节点"必须先
+   * 展开路径，否则目标节点根本不在图里——`_mmCenterNode` 找不到元素会静默什么都不做，
+   * 用户以为点击失效。
+   */
+  function _mmExpandPathTo(idx) {
+    const root = _state.lastMind;
+    if (!root || Number.isNaN(idx)) return false;
+    let cur = 0;
+    const path = [];
+    let found = false;
+    const walk = (n) => {
+      const me = cur++;
+      path.push(me);
+      if (me === idx) { found = true; return true; }
+      for (const c of (n.children || [])) if (walk(c)) return true;
+      path.pop();
+      return false;
+    };
+    walk(root);
+    if (!found) return false;
+    let changed = false;
+    for (const i of path) if (_state.mmCollapsed.delete(i)) changed = true;
+    return changed;
   }
 
   // 定位到指定节点（画布居中，自动放大到至少 100%）
@@ -3760,7 +3861,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const walk = (n, depth) => {
       const cur = idx++;
       lines.push({ label: String(n?.label || ''), source: n?.source || '', depth, idx: cur, childCount: (n?.children || []).length });
-      if (depth === 1 && _state.mmCollapsed.has(cur)) return; // 折叠的一级分支不展开
+      if ((n.children || []).length && _state.mmCollapsed.has(cur)) return; // 折叠的分支不展开（任意层级）
       for (const c of (n?.children || [])) walk(c, depth + 1);
     };
     walk(root, 0);
@@ -3824,20 +3925,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       .catch(() => { if (typeof uiToast === 'function') uiToast('PDF 导出失败', { variant: 'warning' }); });
   }
 
-  // 全部展开 / 全部收拢（一级分支）
-  function _mmBranchIdxList() {
-    const root = _state.lastMind;
-    const idxs = [];
-    if (!root) return idxs;
-    let idx = 0;
-    const walk = (n, depth) => {
-      const cur = idx++;
-      if (depth === 1 && (n.children || []).length) idxs.push(cur);
-      for (const c of (n.children || [])) walk(c, depth + 1);
-    };
-    walk(root, 0);
-    return idxs;
-  }
+  /** 全部展开：清空折叠集 → 整图铺开（结构巨变，必须重新适应画布）。 */
   function _mmExpandAll() {
     if (!_state.lastMind) {
       if (typeof uiToast === 'function') uiToast('请先生成脑图', { variant: 'info' });
@@ -3845,17 +3933,29 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
     _state.mmCollapsed.clear();
     _rerenderMindmaps();
+    if (_state.mmViewMode === 'graph') _mmFitToStage();
   }
+
+  /**
+   * 全部收拢：回到"骨架层"（根 + 一级分支）= 与默认初始态一致。
+   *
+   * 幂等是有意为之：默认初始态就是收拢的，再按一次应当"维持收拢"。
+   * （旧实现在"已全折叠"时会反过来全部展开，用来提示用户"点了有反应"；
+   * 默认折叠后那条规则会把首次点击变成"全部铺开"，与按钮语义正好相反，故移除。）
+   */
   function _mmCollapseAll() {
-    const idxs = _mmBranchIdxList();
-    if (!idxs.length) {
+    const root = _state.lastMind;
+    if (!root) {
+      if (typeof uiToast === 'function') uiToast('请先生成脑图', { variant: 'info' });
+      return;
+    }
+    if (!_mmDefaultCollapsedFor(root).size) {
       if (typeof uiToast === 'function') uiToast('当前脑图没有可折叠的分支', { variant: 'info' });
       return;
     }
-    // 若已全部折叠则先展开以便用户看到反馈（避免"点了没反应"）
-    if (_state.mmCollapsed.size >= idxs.length) _state.mmCollapsed.clear();
-    for (const i of idxs) _state.mmCollapsed.add(i);
+    _mmResetFoldToDefault(root);
     _rerenderMindmaps();
+    if (_state.mmViewMode === 'graph') _mmFitToStage();
   }
 
   // 布局切换：思维导图（双向放射）↔ 组织结构图（单向）
@@ -3891,7 +3991,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     else {
       const stage = document.getElementById('kb-mm-overlay-stage');
       const hint = stage ? stage.querySelector('.kb-mm-overlay-stage-hint') : null;
-      if (hint) hint.textContent = '点击行可跳转到对应节点 · 折叠的一级分支不展开';
+      if (hint) hint.textContent = '点击行可跳转到对应节点 · 折叠的分支不展开';
     }
   }
 
@@ -3912,19 +4012,20 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _state.mmSearchHits = hits;
     _rerenderMindmaps();
     if (q && hits.size) {
+      const first = [...hits][0];
+      // 默认骨架态下命中节点可能被折叠隐藏：先展开路径再定位，否则"搜索了但看不到"
+      if (_mmExpandPathTo(first)) _rerenderMindmaps();
       if (_state.mmViewMode === 'outline') {
-        const first = wrapFirstHit();
         _state.mmViewMode = 'graph';
         _mmUpdateToolbarState();
         _renderOverlay();
         _mmFitToStage();
         _mmCenterNode(first);
       } else {
-        _mmCenterNode([...hits][0]);
+        _mmCenterNode(first);
       }
       if (typeof uiToast === 'function') uiToast(`匹配 ${hits.size} 个节点`, { variant: 'info' });
     }
-    function wrapFirstHit() { return [...hits][0]; }
   }
 
   // 溯源：点击带来源的节点 → 跳转知识库原文片段
@@ -3990,7 +4091,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const hint = document.querySelector('#kb-mm-overlay-stage .kb-mm-overlay-stage-hint');
     if (hint) {
       hint.textContent = _state.mmViewMode === 'outline'
-        ? '点击行可跳转到对应节点 · 折叠的一级分支不展开'
+        ? '点击行可跳转到对应节点 · 折叠的分支不展开'
         : '滚轮缩放 · 拖拽平移 · 一级分支点击聚焦 · −/+ 折叠 · 双击重命名';
     }
   }
@@ -4231,14 +4332,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const rootNode = build(root, 0, 0, 1);
     const maxDepth = list.reduce((m, n) => Math.max(m, n.depth), 0);
 
-    // 折叠的一级分支：子树整体不占位（收拢后脑图收紧，不留大片空档）
+    // 折叠节点：其整棵子树不占位（收拢后脑图收紧，不留大片空档）。
+    // 2026-09-16：由"只支持一级分支折叠"放开为**任意层级**——渐进展开要求
+    // "点一层开一层"，二级/三级节点也必须能被折叠，否则展开一级分支时会把整支
+    // 一次炸开（4 层图直接铺满窗口），退回"全展开才看得清"的老问题。
     const hidden = new Set();
-    for (const kid of rootNode.kids) {
-      if (collapsed.has(kid.idx)) {
-        const walkHide = (n) => { for (const c of n.kids) { hidden.add(c.idx); walkHide(c); } };
-        walkHide(kid);
+    const hideSubtree = (n) => { for (const c of n.kids) { hidden.add(c.idx); hideSubtree(c); } };
+    const walkCollapse = (n) => {
+      for (const c of n.kids) {
+        if (collapsed.has(c.idx)) hideSubtree(c);
+        walkCollapse(c);
       }
-    }
+    };
+    walkCollapse(rootNode);
 
     // 2) 横向：每层列宽按该层最宽的节点算，列中心逐列累加（不再固定 300 的列距 → 图不再横向拉长）
     const colMax = { '-1': {}, 1: {} };
@@ -4338,7 +4444,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const w = n.w, h = n.h;
       const x = n.x - w / 2;
       const y = n.y - h / 2;
-      const folded = n.depth === 1 && collapsed.has(n.idx);
+      // 有子节点且被折叠（任意层级都算）→ 画 +N 徽章，表示"这里还有一层，点开看"
+      const folded = n.childCount > 0 && collapsed.has(n.idx);
       const badgeX = n.x + n.dir * (w / 2 + 10);
       const dim = focus !== null && n.depth >= 1 && n.branch !== focus;
       const hit = highlight.has(n.idx);
@@ -7131,6 +7238,23 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   // 文件查看分派（供渲染层回归测试与自动化验证：返回 'rich'|'anchor'|'unavailable'）
   window.__kbWorkbenchOpenFile = function openFileForTest(relPath) {
     return _openFile(relPath);
+  };
+
+  // 脑图折叠/自适应用户可见行为的最小钩子（与 __kbWorkbenchOpenFile 同规矩）：
+  // 让回归测试能真跑"默认骨架 → 点开一层 → 画布重算尺寸"这条链路，而不是只比对源码文本。
+  window.__kbMindmapTest = {
+    /** 默认折叠集（= 所有非叶子节点，根除外）：首屏只到一级分支。 */
+    defaultCollapsed: (root) => [..._mmDefaultCollapsedFor(root || _state.lastMind)],
+    collapsed: () => [..._state.mmCollapsed],
+    resetFold: (root) => { _mmResetFoldToDefault(root || _state.lastMind); return [..._state.mmCollapsed]; },
+    toggleFold: (idx) => { _mmToggleFold(idx); return [..._state.mmCollapsed]; },
+    expandPathTo: (idx) => _mmExpandPathTo(idx),
+    /** 「回执文件是否就是请求的那一份」的判定（NFC/NFD 容差 + 恰好一份）。 */
+    sameDoc: (files, doc) => _mmSameDoc(files, doc),
+    /** 用当前折叠态渲染 SVG（与界面同一条路径）。 */
+    svg: (root) => _mmTreeSvg(root || _state.lastMind, _state.mmCollapsed, _mmRenderOpts()),
+    /** 全展开渲染：导出与独立窗口就是"整图"语义（排版/尺寸类回归用这个基准）。 */
+    svgExpanded: (root) => _mmTreeSvg(root || _state.lastMind, new Set(), _mmRenderOpts()),
   };
 
   // 高亮纯函数（供渲染层回归测试锁定清洗/分词逻辑）

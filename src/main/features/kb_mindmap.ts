@@ -180,13 +180,40 @@ export async function kbMindmap(
   // 优先级：显式 text（对话回答 → 脑图）> doc（单文档脑图）> dir/space（整库脑图）
   const isText = typeof opts?.text === 'string' && !!opts.text.trim();
   const doc = opts?.doc || null;
-  const docs = isText
+  /** 未命中留痕：这条路径不调模型、不写存档，没有日志就成了"点了没反应"。
+   *  （真机 2026-09-16 排查 doc 级脑图失败时，日志里查不到任何痕迹。） */
+  const onMiss = (spaceId: string | null) => ({ reason, candidates }: { reason: string; candidates: number }) =>
+    log.warn('kb mindmap doc not found', {
+      user_id: maskId(userId),
+      doc: doc || null,
+      space_id: spaceId,
+      reason,
+      ready_candidates: candidates,
+    });
+  let resolvedSpaceId = opts?.spaceId || null;
+  let docs = isText
     ? []
     : collectReadyDocs(userId, {
       dir: opts?.dir || null,
-      spaceId: opts?.spaceId || null,
+      spaceId: resolvedSpaceId,
       doc,
+      onMiss: onMiss(resolvedSpaceId),
     });
+  // 文档级兜底：渲染层的 spaceId 可能残留（刚看过共享库就切回个人库并右键文件），
+  // 于是去共享库索引里找个人库的文件 → 空。这里再按个人库找一次。
+  // 注意兜底**仍然锁定这一份 doc**（不是回退成整库），所以不会重演"整库图冒充本文档图"。
+  if (doc && !docs.length && resolvedSpaceId) {
+    const retry = collectReadyDocs(userId, { dir: null, spaceId: null, doc, onMiss: onMiss(null) });
+    if (retry.length) {
+      log.info('kb mindmap doc found in personal library after space miss', {
+        user_id: maskId(userId),
+        doc,
+        space_id: resolvedSpaceId,
+      });
+      docs = retry;
+      resolvedSpaceId = null;
+    }
+  }
   const docLines = isText
     ? [opts.text!.trim().slice(0, DOC_CHAR_CAP * 8)]
     : docs.map((d) => d.text);

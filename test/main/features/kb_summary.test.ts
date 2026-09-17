@@ -277,6 +277,38 @@ describe('kb_summary › collectReadyDocLines 作用域', () => {
     expect(docs[0].text).toContain('## lib/a.docx');
   });
 
+  it('doc 解析宽容：Unicode 归一化差异不再变成"这份文档不在索引里"', () => {
+    // 索引里是 NFC，渲染层传来 NFD（macOS 上同一个文件的两种字节形式）
+    listFilesMock.mockReturnValue([readyFile('lib/会议-Café.pdf'.normalize('NFC'))]);
+    readChunksMock.mockReturnValue([{ chunk_idx: 1, title: null, content: '要点' }]);
+    const docs = collectReadyDocs('u1', { doc: 'lib/会议-Café.pdf'.normalize('NFD') });
+    expect(docs.map((d) => d.path)).toEqual(['lib/会议-Café.pdf'.normalize('NFC')]);
+  });
+
+  it('doc 解析宽容：文件名唯一时按文件名兜底匹配（目录前缀写法差异）', () => {
+    listFilesMock.mockReturnValue([readyFile('文字转写/a.txt'), readyFile('文字转写/b.txt')]);
+    readChunksMock.mockReturnValue([{ chunk_idx: 1, title: null, content: '要点' }]);
+    const docs = collectReadyDocs('u1', { doc: 'a.txt' });
+    expect(docs.map((d) => d.path)).toEqual(['文字转写/a.txt']);
+  });
+
+  it('doc 找不到就上报 onMiss，且绝不回退整库（硬约束）', () => {
+    listFilesMock.mockReturnValue([readyFile('lib/a.txt'), readyFile('lib/b.txt')]);
+    readChunksMock.mockReturnValue([{ chunk_idx: 1, title: null, content: '要点' }]);
+    const onMiss = vi.fn();
+    const docs = collectReadyDocs('u1', { doc: 'lib/missing.txt', onMiss });
+    expect(docs).toEqual([]); // 不回退成整库两份
+    expect(onMiss).toHaveBeenCalledWith({ reason: 'not-found', candidates: 2 });
+  });
+
+  it('同名文件不唯一时不做兜底猜测（宁可 not-found 也不给错文件）', () => {
+    listFilesMock.mockReturnValue([readyFile('lib/a.txt'), readyFile('other/a.txt')]);
+    readChunksMock.mockReturnValue([{ chunk_idx: 1, title: null, content: '要点' }]);
+    const onMiss = vi.fn();
+    expect(collectReadyDocs('u1', { doc: 'a.txt', onMiss })).toEqual([]);
+    expect(onMiss).toHaveBeenCalled();
+  });
+
   it('共享库 + doc：只在共享库索引里找这一份文件（不会误落个人库）', () => {
     // 个人库里同名文件也应被忽略：doc+spaceId 时作用域是共享库
     listFilesMock.mockReturnValue([readyFile('lib/a.docx')]);

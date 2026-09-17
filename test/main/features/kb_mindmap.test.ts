@@ -88,6 +88,26 @@ describe('kb_mindmap', () => {
     expect(res.files).toEqual(['lib/a.docx']);
   });
 
+  it('spaceId 残留时兜底查个人库（仍然锁定这一份 doc，不回退整库）', async () => {
+    // 第一次（带 spaceId）空 → 第二次（个人库）命中
+    rawCollectMock.mockReturnValueOnce([]).mockReturnValueOnce(['## lib/a.docx\n正文']);
+    const res = await kbMindmap('u1', { spaceId: 'sp1', doc: 'lib/a.docx' }, { complete: completeOk(SAMPLE) });
+    expect(res.source).toBe('generated');
+    expect(res.scope).toBe('doc');
+    expect(res.files).toEqual(['lib/a.docx']);
+    // 两次调用的作用域参数：先带 spaceId，再不带
+    expect(rawCollectMock.mock.calls[0][1]).toMatchObject({ spaceId: 'sp1', doc: 'lib/a.docx' });
+    expect(rawCollectMock.mock.calls[1][1]).toMatchObject({ spaceId: null, doc: 'lib/a.docx' });
+  });
+
+  it('两处都找不到才算 not-found（且不会去读整库）', async () => {
+    rawCollectMock.mockReturnValue([]);
+    const res = await kbMindmap('u1', { spaceId: 'sp1', doc: 'lib/gone.txt' }, { complete: completeOk('{}') });
+    expect(res.source).toBe('degraded');
+    expect(res.reason).toBe('not-found');
+    expect(rawCollectMock.mock.calls.every((c) => (c[1] as { doc?: string }).doc === 'lib/gone.txt')).toBe(true);
+  });
+
   it('回执 scope=dir 且列出实际纳入的文件（整库脑图）', async () => {
     rawCollectMock.mockReturnValue(['## lib/a.docx\nA', '## lib/b.pdf\nB']);
     const res = await kbMindmap('u1', { dir: 'lib' }, { complete: completeOk(SAMPLE) });

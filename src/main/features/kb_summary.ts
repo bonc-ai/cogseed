@@ -234,6 +234,26 @@ export function sampleDocLines(rows: DocChunkRow[], budget: number = DOC_CHAR_CA
 }
 
 /**
+ * `doc` 的宽容解析：先精确匹配，再按 Unicode 归一化（NFC/NFD 在 macOS 上是同一个
+ * 文件的两种字节形式）匹配，最后退到"文件名唯一"匹配。
+ *
+ * 为什么需要宽容：`doc` 是渲染层从库树里取的名字，索引里的 `rel_path` 是索引时
+ * 从磁盘读的名字；两者只要在规范化形式上有一点差异，精确相等就会落空 → 用户看到
+ * "这份文档不在已索引列表里"，而文件其实好好地在索引里（真机 2026-09-16 就撞过）。
+ * 注意返回的是**解析到的真实 rel_path**，调用方据此回执，绝不猜一个不存在的路径。
+ */
+function resolveDocPath(files: Array<{ rel_path: string }>, doc: string): string | null {
+  const exact = files.find((f) => f.rel_path === doc);
+  if (exact) return exact.rel_path;
+  const want = doc.normalize('NFC');
+  const normHit = files.find((f) => f.rel_path.normalize('NFC') === want);
+  if (normHit) return normHit.rel_path;
+  const base = want.split('/').pop() || '';
+  const sameBase = files.filter((f) => (f.rel_path.normalize('NFC').split('/').pop() || '') === base);
+  return sameBase.length === 1 ? sameBase[0].rel_path : null;
+}
+
+/**
  * 收集当前库 ready 文档的要点（kb_summary / kb_mindmap / kb_quiz 共用同源）。
  *
  * 返回**带文件路径**的条目，供调用方做作用域回执校验（见 kb_mindmap 的 `scope`/`files`）——
@@ -245,7 +265,7 @@ export function sampleDocLines(rows: DocChunkRow[], budget: number = DOC_CHAR_CA
  */
 export function collectReadyDocs(
   userId: string,
-  opts: { dir?: string | null; spaceId?: string | null; doc?: string | null },
+  opts: { dir?: string | null; spaceId?: string | null; doc?: string | null; onMiss?: (info: { reason: string; candidates: number }) => void },
 ): Array<{ path: string; text: string }> {
   const dir = opts?.dir || null;
   const spaceId = opts?.spaceId || null;
@@ -253,18 +273,21 @@ export function collectReadyDocs(
   const isSpace = !!spaceId;
   let ready;
   if (isSpace) {
-    ready = spaceLibrary
-      .listFiles(userId, spaceId)
-      .filter((f) => f.status === 'ready')
-      .filter((f) => !doc || f.rel_path === doc)
-      .slice(0, doc ? 1 : FILES_CAP);
+    const all = spaceLibrary.listFiles(userId, spaceId).filter((f) => f.status === 'ready');
+    ready = doc
+      ? all.filter((f) => f.rel_path === resolveDocPath(all, doc)).slice(0, 1)
+      : all.slice(0, FILES_CAP);
+    if (doc && !ready.length) opts?.onMiss?.({ reason: 'not-found', candidates: all.length });
   } else {
-    ready = kbVector
-      .listFiles(userId)
-      .filter((f) => f.status === 'ready')
-      .filter((f) => !doc || f.rel_path === doc)
-      .filter((f) => doc || !dir || f.rel_path === dir || f.rel_path.startsWith(`${dir}/`))
-      .slice(0, doc ? 1 : FILES_CAP);
+    const all = kbVector.listFiles(userId).filter((f) => f.status === 'ready');
+    const scoped = doc ? all : all.filter((f) => !dir || f.rel_path === dir || f.rel_path.startsWith(`${dir}/`));
+    if (doc) {
+      const hit = resolveDocPath(scoped, doc);
+      ready = hit ? scoped.filter((f) => f.rel_path === hit).slice(0, 1) : [];
+      if (!ready.length) opts?.onMiss?.({ reason: 'not-found', candidates: scoped.length });
+    } else {
+      ready = scoped.slice(0, FILES_CAP);
+    }
   }
   // 总预算按文件数摊分：文件多时单文件少给，保证整轮 prompt 不超 TOTAL_CHAR_CAP。
   const perFile = ready.length
