@@ -1327,7 +1327,7 @@
         if (excluded) {
           return `
           <div class="ca-row is-flat">
-            <div class="ca-row-main"><div class="ca-row-title ca-row-link" data-act="open-conversation" data-id="${esc(conv.id)}" ${roleBtn()} title="${esc(T('cognition.capture_action_open_conversation', '打开会话'))}">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
+            <div class="ca-row-main"><div class="ca-row-title ca-row-link" data-act="open-conversation" data-id="${esc(conv.id)}" ${roleBtn()} title="${esc(T('cognition.capture_action_open_conversation', '打开会话'))}">${esc(conv.title || T('cognition.evidence_conversation_generic', '一段对话'))}</div><div class="ca-row-meta">${esc(convTime)}</div></div>
             <div class="ca-row-side">${excludedTag}${chip(T('cognition.capture_excluded_action_hint', '无需整理'), 'amber')}</div>
           </div>`;
         }
