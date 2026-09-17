@@ -2,7 +2,7 @@ const { Composer, ComposerQueue, ComposerAttachments, ComposerVoice, ComposerNot
 const TAGS = [{label:'@ 项目助理',selected:true},{label:'华东团队空间'}];
 const SAMPLE_FILES = [
   {id:'a',name:'项目台账_2026Q3.xlsx',size:'1.2 MB',status:'ready'},
-  {id:'b',name:'客户走访纪要.docx',size:'680 KB',status:'uploading'},
+  {id:'b',name:'访谈记录.docx',size:'680 KB',status:'uploading'},
   {id:'c',name:'财务报表.pdf',size:'3.4 MB',status:'ready'},
   {id:'d',name:'交付后监测补充资料_华东团队_2026年第三季度.docx',size:'820 KB',status:'ready'},
   {id:'e',name:'客户现场记录.mp4',size:'8.1 MB',status:'ready',video:true}

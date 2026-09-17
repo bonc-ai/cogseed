@@ -83,7 +83,7 @@
 
 - 全界面使用系统默认非衬线字体，不指定字体名称，也不包含字体资源。React 18.3.1 与预编译页面脚本从包内读取。组件 `.jsx` 保留为源文件，浏览器加载对应生成的 `.js`。
 - UI Kit 统一采用 macOS 窗体与快捷键；Windows 原生窗体和快捷键由客户端构建适配。预览中的三色窗口按钮只表达布局。
-- 在已有 esbuild 环境运行 `node tools/build.cjs`（从设计系统根目录）；或通过 `RAYMOND_ESBUILD_PATH` 指定已有模块。
+- 在已有 esbuild 环境运行 `node tools/build.cjs`（从设计系统根目录）；或通过 `COGSEED_ESBUILD_PATH` 指定已有模块。
 - 详细基线见 [Windows 与内网规范](../../guidelines/windows-intranet.md)，本轮检查见 [验证记录](../../verification.md)。
 
 ## 任务对话样例

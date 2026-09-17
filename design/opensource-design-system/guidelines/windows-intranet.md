@@ -41,7 +41,7 @@
 - 字体直接使用本机系统默认非衬线；React 预览运行资源、CSS、组件脚本和图标随包分发。页面不得发起字体下载或依赖外部 CDN。
 - 预览页面加载预编译的普通 JS；JSX 作为可编辑源文件保留，浏览器不依赖 Babel 在线编译。
 - `assets/asset-manifest.json` 保存资源来源、大小、SHA-256；来源 URL 仅作追溯，不能被页面运行时调用。运行资源的许可证随包交付。
-- 文件修改后，使用已有 esbuild 环境运行 `node tools/build.cjs`；可用 `RAYMOND_ESBUILD_PATH` 指向已有 esbuild 模块。构建不会下载依赖。
+- 文件修改后，使用已有 esbuild 环境运行 `node tools/build.cjs`；可用 `COGSEED_ESBUILD_PATH` 指向已有 esbuild 模块。构建不会下载依赖。
 - 原生客户端按现有本地资源与 IPC 架构集成设计，不因展示本 UI Kit 在 Electron main 中新增 HTTP 服务。
 - 内网完整显示仅指界面资源可用；模型、登录及业务调用仍依赖相应企业服务。
 

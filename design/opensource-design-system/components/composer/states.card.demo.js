@@ -4,7 +4,7 @@
   const TAGS = [{ label: "@ \u9879\u76EE\u52A9\u7406", selected: true }, { label: "\u534E\u4E1C\u56E2\u961F\u7A7A\u95F4" }];
   const SAMPLE_FILES = [
     { id: "a", name: "\u9879\u76EE\u53F0\u8D26_2026Q3.xlsx", size: "1.2 MB", status: "ready" },
-    { id: "b", name: "\u5BA2\u6237\u8D70\u8BBF\u7EAA\u8981.docx", size: "680 KB", status: "uploading" },
+    { id: "b", name: "\u8BBF\u8C08\u8BB0\u5F55.docx", size: "680 KB", status: "uploading" },
     { id: "c", name: "\u8D22\u52A1\u62A5\u8868.pdf", size: "3.4 MB", status: "ready" },
     { id: "d", name: "\u4EA4\u4ED8\u540E\u76D1\u6D4B\u8865\u5145\u8D44\u6599_\u534E\u4E1C\u56E2\u961F_2026\u5E74\u7B2C\u4E09\u5B63\u5EA6.docx", size: "820 KB", status: "ready" },
     { id: "e", name: "\u5BA2\u6237\u73B0\u573A\u8BB0\u5F55.mp4", size: "8.1 MB", status: "ready", video: true }

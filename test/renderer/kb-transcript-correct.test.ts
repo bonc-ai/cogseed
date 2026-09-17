@@ -272,12 +272,12 @@ describe('本体同步结果摘要', () => {
       linked: 1,
       canonicalNames: 2,
       alignments: [{ kind: 'canonical_spelling', entryId: 'g_1', wrong: 'kstar', currentCorrect: 'K star', suggestedCorrect: 'KSTAR', source: 'ontology' }],
-      missing: [{ kind: 'missing_entry', correct: 'Raymond', source: 'ontology' }],
+      missing: [{ kind: 'missing_entry', correct: 'SpeakerA', source: 'ontology' }],
       contributed: 1,
     });
     expect(info.noSources).toBe(false);
     expect(info.alignments).toEqual([{ entryId: 'g_1', wrong: 'kstar', current: 'K star', suggested: 'KSTAR', source: 'ontology' }]);
-    expect(info.missing).toEqual([{ conceptKey: 'raymond', correct: 'Raymond' }]);
+    expect(info.missing).toEqual([{ conceptKey: 'speakera', correct: 'SpeakerA' }]);
   });
 
   it('丢弃形状不对的条目（缺 entryId/缺 correct 时不渲染空按钮）', () => {

@@ -102,13 +102,13 @@ describe('规范名来源读取（空来源不造数据）', () => {
   });
 
   it('模板组文件 → 字段值算规范名并带 ontologyRef；字段名只是结构标签，不入册', () => {
-    writeTemplateGroup('g_team', { 团队成员: ['Raymond', '雷蒙德'], 产品名: ['Moodle'] });
+    writeTemplateGroup('g_team', { 团队成员: ['SpeakerA', '示例人物'], 产品名: ['Moodle'] });
     const names = collectCanonicalNames(uid);
     const byName = new Map(names.map((n) => [n.name, n]));
     expect(byName.get('团队成员')).toBeUndefined();
     expect(byName.get('产品名')).toBeUndefined();
-    expect(byName.get('Raymond')?.source).toBe('ontology');
-    expect(byName.get('Raymond')?.ontologyRef).toEqual({ groupId: 'g_team', fieldId: '团队成员' });
+    expect(byName.get('SpeakerA')?.source).toBe('ontology');
+    expect(byName.get('SpeakerA')?.ontologyRef).toEqual({ groupId: 'g_team', fieldId: '团队成员' });
     expect(byName.get('Moodle')?.ontologyRef).toEqual({ groupId: 'g_team', fieldId: '产品名' });
   });
 
@@ -155,11 +155,11 @@ describe('对齐建议与待补建议', () => {
     const entry = seed('coxy', 'Cogseed').entry!;
     const missing = suggestMissing([entry], [
       { name: 'Cogseed', source: 'ontology' },
-      { name: 'Raymond', source: 'ontology' },
-      { name: 'raymond', source: 'memory' },
+      { name: 'SpeakerA', source: 'ontology' },
+      { name: 'speakera', source: 'memory' },
     ]);
     expect(missing).toHaveLength(1);
-    expect(missing[0]).toMatchObject({ kind: 'missing_entry', correct: 'Raymond', source: 'ontology' });
+    expect(missing[0]).toMatchObject({ kind: 'missing_entry', correct: 'SpeakerA', source: 'ontology' });
   });
 
   it('记忆来源不参与"待补错形"：散文补词条会造出永远匹配不到的假术语', () => {
@@ -169,8 +169,8 @@ describe('对齐建议与待补建议', () => {
 
   it('采纳待补建议 → ontology_seed 来源 + 带 ontologyRef', () => {
     const entry = adoptMissingSuggestion(uid, {
-      wrong: '雷蒙德',
-      correct: 'Raymond',
+      wrong: '示例人物',
+      correct: 'SpeakerA',
       kind: 'person',
       ontologyRef: { groupId: 'g_team', fieldId: '团队成员' },
     });
@@ -311,14 +311,14 @@ describe('syncOntology 组合动作', () => {
   it('有本体时：挂引用 + 出对齐/待补建议，一次调用全给面板', async () => {
     const entry = seed('kstar', 'K star').entry!;
     for (const runId of ['r1', 'r2', 'r3']) recordReplacement(uid, [entry.id], { docId: 'd1', runId });
-    writeTemplateGroup('g_team', { 产品名: ['KSTAR', 'Raymond'] });
+    writeTemplateGroup('g_team', { 产品名: ['KSTAR', 'SpeakerA'] });
     const result = await syncOntology(uid, { minFreq: 3 });
     // 字段名本身也是一种规范名（`产品名`）+ 两个字段值
     // 只有两个字段值入册（`产品名` 字段名不入册）
     expect(result.canonicalNames).toBe(2);
     expect(result.linked).toBe(1);
     expect(result.alignments.map((a) => (a as { suggestedCorrect: string }).suggestedCorrect)).toEqual(['KSTAR']);
-    expect(result.missing.map((m) => (m as { correct: string }).correct)).toEqual(['Raymond']);
+    expect(result.missing.map((m) => (m as { correct: string }).correct)).toEqual(['SpeakerA']);
     expect(result.contributed).toBe(1);
     expect(loadGlossary(uid).entries[0].ontologyRef).toEqual({ groupId: 'g_team', fieldId: '产品名' });
   });
