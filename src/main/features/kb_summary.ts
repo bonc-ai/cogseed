@@ -55,14 +55,23 @@ export interface KbSummaryDeps {
   }) => Promise<{ ok: boolean; text: string; error: string }>;
 }
 
-const CHUNKS_PER_FILE = 2; // 每文件取前 N 个 chunk
-const CHUNK_CHAR_CAP = 300; // 每 chunk 截断字符
-const DOC_CHAR_CAP = 900; // 每文件拼进 prompt 的总字符上限
+/**
+ * 要点采样预算（2026-09-16 重写）。
+ *
+ * 旧值 `CHUNKS_PER_FILE=2 / CHUNK_CHAR_CAP=300 / DOC_CHAR_CAP=900` 把长文档截成
+ * "封面"：一篇 5,531 字的文章只送 427 字进 prompt，模型连第一个小节标题都没看到，
+ * 脑图/要点/测验全部退化成标题复述。新策略见 `sampleDocLines`——标题块优先 +
+ * 全文等距覆盖，预算按 token 量级放开（中文 1 字 ≈ 1 token）。
+ */
+const CHUNK_CHAR_CAP = 800; // 每 chunk 截断字符
+const DOC_CHAR_CAP = 12000; // 每文件拼进 prompt 的字符上限（短文档可整篇进）
+const TOTAL_CHAR_CAP = 40000; // 整个库拼进 prompt 的总字符上限（按文件数摊分，≈30k token）
 const FILES_CAP = 10; // 单库最多纳入的文件数
 const CACHE_MAX = 50;
 /** LLM 单次解析超时。先 abort 上游请求（释放模型 turn 锁、停止浪费生成）再降级，
- *  避免 UI 无限"正在解析…"。120s 与 kb_mindmap 对齐，覆盖慢端点首字数十秒的真实完成时间。 */
-const SUMMARY_LLM_TIMEOUT_MS = 120 * 1000;
+ *  避免 UI 无限"正在解析…"。180s 与 kb_mindmap 对齐（采样预算放开到最多 30k 字后，
+ *  120s 会开始误杀正常请求），覆盖慢端点首字数十秒的真实完成时间。 */
+const SUMMARY_LLM_TIMEOUT_MS = 180 * 1000;
 
 /** 超时 + 中止：到点先 abort（真正停掉服务端生成、释放单飞模型锁），再以超时错误
  *  reject。比"只 reject 不取消"干净——被掐断的请求不会继续占着模型锁拖慢后续调用。 */
@@ -119,39 +128,189 @@ export function parseSummaryJson(text: string): { docs: KbDocPoint[]; oneLiner: 
   return { docs, oneLiner, mindmap: { root, kids } };
 }
 
-/** 收集当前库 ready 文档的要点行（kb_summary / kb_mindmap 共用同源）。 */
-export function collectReadyDocLines(
+interface DocChunkRow {
+  chunk_idx: number;
+  title: string | null;
+  content: string;
+}
+
+/**
+ * 乱码块判定（旧索引里图片内联 base64 的残留）：既无信息又极占预算，直接丢。
+ *
+ * 判据分两级，因为 base64 被切块后**只有第一块带 `base64,` 标记**，其余都是纯乱码：
+ *   1. 带 `base64,` 标记 → 丢；
+ *   2. 含 CJK（中/日/韩）→ 一定是正文，留；
+ *   3. 无 CJK 时看空白：真实西文正文（词组之间）与逐行文本一定含空格/换行，
+ *      而 base64 切块是**一整条无空白的长 token** → 丢。
+ *
+ * 这一条很重要：真机老索引里 2871 个 chunk 有 2847 个是图片乱码，而它们
+ * 有一半逃过了"纯 base64 字符集"正则，最终挤掉正文槽位（实测把「六｜…」
+ * 这一节挤出了 prompt）。
+ */
+function isNoiseChunk(content: string): boolean {
+  const t = String(content || '').trim();
+  if (!t) return true;
+  if (t.includes('base64,')) return true;
+  if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(t)) return false;
+  return !/\s/.test(t);
+}
+
+/** 标题已在正文开头时不再前缀，避免 `标题：标题…` 的重复（真机出现过）。 */
+function withTitle(title: string | null | undefined, content: string): string {
+  const body = String(content || '').trim();
+  const t = String(title || '').trim();
+  if (!t) return body;
+  if (body.startsWith(t) || body.slice(0, 60).includes(t)) return body;
+  return `${t}：${body}`;
+}
+
+/** 等距取 k 项（含首尾），保证覆盖整篇而不是只看开头。 */
+function evenSample<T>(items: T[], k: number): T[] {
+  if (k <= 0) return [];
+  if (items.length <= k) return items.slice();
+  const out: T[] = [];
+  const seen = new Set<number>();
+  for (let i = 0; i < k; i++) {
+    const idx = Math.round((i * (items.length - 1)) / Math.max(1, k - 1));
+    if (!seen.has(idx)) { seen.add(idx); out.push(items[idx]); }
+  }
+  return out;
+}
+
+/**
+ * 单文件要点采样（纯函数，便于单测）。
+ *
+ * 原实现是"取前 2 个 chunk、每 chunk 截 300 字、每文件总截 900 字"——对长文档
+ * 等于只喂封面：真机案例一篇 5,531 字的文章只送去 427 字，连第一个小节标题
+ * (`一｜政策方向…`，第 3 个 chunk) 都没进 prompt，生成的脑图只剩标题句。
+ *
+ * 现改为**结构优先 + 全文等距覆盖**：
+ *   1. 丢弃 base64 乱码块（旧索引里图片内联残留）；
+ *   2. 预算内优先收全部"带标题的 chunk"（标题块 = 章节骨架，正是脑图一级分支）；
+ *   3. 剩余预算对全文等距取样，而不是从头截断；
+ *   4. 槽位数不足时**逐格收缩重算**，绝不"先选好再从尾部砍"——本轮实现中实测：
+ *      先选后砍会把老索引里的「六｜…」静默丢弃（输出 5,808 字里没有最后一节），
+ *      改成收缩重算后同一份数据六节齐全；
+ *   5. 输出仍按文档原序，模型看到的是顺序文本。
+ */
+export function sampleDocLines(rows: DocChunkRow[], budget: number = DOC_CHAR_CAP): string {
+  const clean = (rows || [])
+    .filter((r) => r && !isNoiseChunk(String(r.content || '')))
+    .map((r) => ({
+      idx: r.chunk_idx,
+      heading: Boolean(String(r.title || '').trim()),
+      text: withTitle(r.title, String(r.content || '')).slice(0, CHUNK_CHAR_CAP),
+    }));
+  if (!clean.length) return '';
+
+  const size = (list: typeof clean) => list.reduce((a, c) => a + c.text.length + 2, 0);
+  const total = size(clean);
+  if (total <= budget) return clean.map((c) => c.text).join('\n\n');
+
+  // 预算不够时按"字数"而不是"块数"分配，避免长块把预算吃光。
+  const avg = Math.max(1, total / clean.length);
+  const headings = clean.filter((c) => c.heading);
+  const bodies = clean.filter((c) => !c.heading);
+
+  /** 给定槽位数选块：标题块（骨架）优先，其余等距补足；返回结果仍按文档原序。 */
+  const pick = (slots: number) => {
+    const keepHeadings = headings.length <= slots ? headings : evenSample(headings, slots);
+    const keepBodies = evenSample(bodies, Math.max(0, slots - keepHeadings.length));
+    const kept = new Set([...keepHeadings, ...keepBodies].map((c) => c.idx));
+    return clean.filter((c) => kept.has(c.idx));
+  };
+
+  let slots = Math.max(1, Math.min(clean.length, Math.floor(budget / avg)));
+  let picked = pick(slots);
+  while (slots > 1 && size(picked) > budget) {
+    slots -= 1;
+    picked = pick(slots);
+  }
+  if (size(picked) <= budget) return picked.map((c) => c.text).join('\n\n');
+
+  // 兜底：只剩一格仍超预算（单块极长）时按格硬截，保证结果一定 ≤ budget。
+  const perItem = Math.max(1, Math.floor(budget / picked.length) - 2);
+  return picked.map((c) => c.text.slice(0, perItem)).join('\n\n');
+}
+
+/**
+ * `doc` 的宽容解析：先精确匹配，再按 Unicode 归一化（NFC/NFD 在 macOS 上是同一个
+ * 文件的两种字节形式）匹配，最后退到"文件名唯一"匹配。
+ *
+ * 为什么需要宽容：`doc` 是渲染层从库树里取的名字，索引里的 `rel_path` 是索引时
+ * 从磁盘读的名字；两者只要在规范化形式上有一点差异，精确相等就会落空 → 用户看到
+ * "这份文档不在已索引列表里"，而文件其实好好地在索引里（真机 2026-09-16 就撞过）。
+ * 注意返回的是**解析到的真实 rel_path**，调用方据此回执，绝不猜一个不存在的路径。
+ */
+function resolveDocPath(files: Array<{ rel_path: string }>, doc: string): string | null {
+  const exact = files.find((f) => f.rel_path === doc);
+  if (exact) return exact.rel_path;
+  const want = doc.normalize('NFC');
+  const normHit = files.find((f) => f.rel_path.normalize('NFC') === want);
+  if (normHit) return normHit.rel_path;
+  const base = want.split('/').pop() || '';
+  const sameBase = files.filter((f) => (f.rel_path.normalize('NFC').split('/').pop() || '') === base);
+  return sameBase.length === 1 ? sameBase[0].rel_path : null;
+}
+
+/**
+ * 收集当前库 ready 文档的要点（kb_summary / kb_mindmap / kb_quiz 共用同源）。
+ *
+ * 返回**带文件路径**的条目，供调用方做作用域回执校验（见 kb_mindmap 的 `scope`/`files`）——
+ * 只返回拼接好的文本的话，调用方无法证明"这次到底读了哪些文件"。
+ *
+ * `doc`：单文档模式——**只读这一个文件**的 chunk，并给足整库预算（文档级脑图用）。
+ * 注意这里的过滤是**硬约束**：`doc` 给了就绝不回退到库级读取（否则一旦上游把参数
+ * 丢了/改了名，就会静默画成"整库脑图"，真机事故见 kb_mindmap.ts 的 scope 注释）。
+ */
+export function collectReadyDocs(
   userId: string,
-  opts: { dir?: string | null; spaceId?: string | null },
-): string[] {
+  opts: { dir?: string | null; spaceId?: string | null; doc?: string | null; onMiss?: (info: { reason: string; candidates: number }) => void },
+): Array<{ path: string; text: string }> {
   const dir = opts?.dir || null;
   const spaceId = opts?.spaceId || null;
+  const doc = opts?.doc || null;
   const isSpace = !!spaceId;
   let ready;
   if (isSpace) {
-    ready = spaceLibrary
-      .listFiles(userId, spaceId)
-      .filter((f) => f.status === 'ready')
-      .slice(0, FILES_CAP);
+    const all = spaceLibrary.listFiles(userId, spaceId).filter((f) => f.status === 'ready');
+    ready = doc
+      ? all.filter((f) => f.rel_path === resolveDocPath(all, doc)).slice(0, 1)
+      : all.slice(0, FILES_CAP);
+    if (doc && !ready.length) opts?.onMiss?.({ reason: 'not-found', candidates: all.length });
   } else {
-    ready = kbVector
-      .listFiles(userId)
-      .filter((f) => f.status === 'ready')
-      .filter((f) => !dir || f.rel_path === dir || f.rel_path.startsWith(`${dir}/`))
-      .slice(0, FILES_CAP);
+    const all = kbVector.listFiles(userId).filter((f) => f.status === 'ready');
+    const scoped = doc ? all : all.filter((f) => !dir || f.rel_path === dir || f.rel_path.startsWith(`${dir}/`));
+    if (doc) {
+      const hit = resolveDocPath(scoped, doc);
+      ready = hit ? scoped.filter((f) => f.rel_path === hit).slice(0, 1) : [];
+      if (!ready.length) opts?.onMiss?.({ reason: 'not-found', candidates: scoped.length });
+    } else {
+      ready = scoped.slice(0, FILES_CAP);
+    }
   }
-  const docLines: string[] = [];
+  // 总预算按文件数摊分：文件多时单文件少给，保证整轮 prompt 不超 TOTAL_CHAR_CAP。
+  const perFile = ready.length
+    ? Math.max(CHUNK_CHAR_CAP, Math.min(DOC_CHAR_CAP, Math.floor(TOTAL_CHAR_CAP / ready.length)))
+    : DOC_CHAR_CAP;
+  const out: Array<{ path: string; text: string }> = [];
   for (const f of ready) {
     const chunks = isSpace
       ? spaceLibrary.readFileChunks(userId, spaceId, f.rel_path)
       : kbVector.readFileChunks(userId, f.rel_path);
-    const head = (chunks || [])
-      .slice(0, CHUNKS_PER_FILE)
-      .map((c) => (c.title ? `${c.title}：` : '') + String(c.content || '').slice(0, CHUNK_CHAR_CAP))
-      .join('\n');
-    docLines.push(`## ${f.rel_path}\n${head.slice(0, DOC_CHAR_CAP)}`);
+    const head = sampleDocLines(chunks || [], perFile);
+    if (!head) continue;
+    out.push({ path: f.rel_path, text: `## ${f.rel_path}\n${head}` });
   }
-  return docLines;
+  return out;
+}
+
+/** 只要拼接文本的老接口（kb_summary / kb_quiz 用；二者不需要作用域回执）。 */
+export function collectReadyDocLines(
+  userId: string,
+  opts: { dir?: string | null; spaceId?: string | null; doc?: string | null },
+): string[] {
+  return collectReadyDocs(userId, opts).map((d) => d.text);
 }
 
 export async function kbSummarize(

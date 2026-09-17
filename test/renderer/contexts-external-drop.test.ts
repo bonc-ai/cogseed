@@ -323,6 +323,59 @@ describe('Library external file drag-and-drop', () => {
     expect(zh['contexts.upload_duplicate']).toBe('文件已存在\n所在目录：{dirs}');
   });
 
+  it('重复内容带 token 时弹确认框，「仍要导入一份」走覆盖导入', async () => {
+    const context = loadContextsScript();
+    const file = { name: '209号.pdf', size: 10, arrayBuffer: vi.fn(async () => new ArrayBuffer(10)) };
+    context.cogseed = {
+      importLocalFiles: vi.fn(async () => ({
+        files: [{
+          ok: false,
+          code: 'duplicate_content',
+          existingDir: '11/16',
+          existingPath: '11/16/209号.pdf',
+          duplicateToken: 'tok-override',
+        }],
+      })),
+      invoke: vi.fn(async () => ({ ok: true, path: '智能/209号.pdf' })),
+    };
+    context.loadContexts = vi.fn(async () => undefined);
+    context.uiAlert = vi.fn(async () => undefined);
+    context.uiConfirm = vi.fn(async () => true);
+    context.uiToast = vi.fn();
+
+    await context.handleCtxUpload([file], '智能');
+
+    // 不再只是"弹个告警就结束"：给一次显式覆盖的机会
+    expect(context.uiConfirm).toHaveBeenCalledOnce();
+    const opts = context.uiConfirm.mock.calls[0][0];
+    expect(opts.message).toContain('contexts.upload_duplicate');
+    expect(opts.message).toContain('11/16');
+    expect(opts.okLabel).toContain('contexts.upload_duplicate_override');
+    expect(context.cogseed.invoke).toHaveBeenCalledWith('contexts.importDuplicateAnyway', { token: 'tok-override' });
+    expect(context.uiToast).toHaveBeenCalled();
+    expect(context.uiAlert).not.toHaveBeenCalled();
+  });
+
+  it('用户选择"不重复导入"时不发起覆盖导入', async () => {
+    const context = loadContextsScript();
+    const file = { name: '209号.pdf', size: 10, arrayBuffer: vi.fn(async () => new ArrayBuffer(10)) };
+    context.cogseed = {
+      importLocalFiles: vi.fn(async () => ({
+        files: [{ ok: false, code: 'duplicate_content', existingDir: '11/16', duplicateToken: 'tok-2' }],
+      })),
+      invoke: vi.fn(async () => ({ ok: true })),
+    };
+    context.loadContexts = vi.fn(async () => undefined);
+    context.uiAlert = vi.fn(async () => undefined);
+    context.uiConfirm = vi.fn(async () => false);
+    context.uiToast = vi.fn();
+
+    await context.handleCtxUpload([file], '智能');
+
+    expect(context.cogseed.invoke).not.toHaveBeenCalled();
+    expect(context.uiToast).not.toHaveBeenCalled();
+  });
+
   it('lists failed filenames without exposing backend details', async () => {
     const context = loadContextsScript();
     const file = {

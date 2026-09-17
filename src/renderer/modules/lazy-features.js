@@ -65,6 +65,10 @@ const _rendererFeatureManifest = Object.freeze({
   kb: [
     { src: './modules/kb-eco.js' },
     { src: './vendor/qrcode-generator/qrcode.js' },
+    // 测验答题/结果面板：样式与模块都随 KB 功能懒加载（kb-workbench 消费
+    // window.KbQuizPanel，必须先于它加载）。
+    { src: './kb-quiz.css', type: 'style' },
+    { src: './modules/kb-quiz.js' },
     { src: './modules/kb-workbench.js' },
     { src: './modules/kb-notes.js' },
     { src: './modules/kb-discover.js' },
