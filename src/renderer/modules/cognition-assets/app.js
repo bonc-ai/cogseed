@@ -64,7 +64,17 @@
       }
       try {
         switch (act) {
-          case 'go-back': router.back(); break;
+          case 'go-back': {
+            // 「返回」按文案回列表（2026-09-17 修）：此前是 router.back()——
+            // "返回上一步"，从候选/整理详情跳进资产详情后，点返回退回的是
+            // 跳转前的深层页而不是列表，与按钮文案不符。按详情类型归位到
+            // 对应列表根（资产详情保留分类筛选）；仍压栈，需要时可再进详情。
+            const name = S.route.candidateId ? 'review'
+              : (S.route.captureId || S.route.name === 'organize' || S.route.name === 'organize-settings') ? 'organize'
+                : 'overview';
+            router.go({ name, category: name === 'overview' ? String(S.route.category || '') : '' });
+            break;
+          }
           case 'cand-type': {
             // 类型选择是纯前端态：只更新 chip 选中与卡片 dataset，不触发重画
             // （整页重画会丢失其他字段未保存的输入）。
