@@ -1108,11 +1108,14 @@
         </details>
         <div class="ca-detail-foot">
           ${field(T('cognition.evidence_refs', '证据引用'), refs.length ? evidenceGroupsHtml(refs) : `<span class="ca-note">${esc(T('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</span>`)}
+          ${kstarEpisodeSection(S.route)}
           ${actionsHtml}
         </div>
       ` : `
         <p class="ca-content-text">${esc(candidate.judgment || '')}</p>
         ${field(T('cognition.candidate_scope_label', '作用范围'), `<span class="ca-v">${esc(candidate.suggestedScope || T('cognition.asset_scope_unset', '未设置'))}</span>`)}
+        ${refs.length ? evidenceGroupsHtml(refs) : ''}
+        ${kstarEpisodeSection(S.route)}
         ${actionsHtml}
       `}`;
   }

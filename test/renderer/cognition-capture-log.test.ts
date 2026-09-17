@@ -993,6 +993,24 @@ describe('整理详情页', () => {
     expect(html).not.toContain('review_decision');
   });
 
+  it('候选详情点复盘 chip 就地展开（2026-09-17 修）：不跳页、块出现在证据区下方', () => {
+    const cand = {
+      id: 'rcand-ep', status: 'pending_review', suggestedType: 'rule', suggestedScope: 'general',
+      judgment: '解释机制先给线性主线。', summary: '线性主线',
+      capabilities: { canEdit: true, canPromote: true, countsAsPending: true, isSnoozed: false },
+      sourceRefs: [{ kind: 'execution', id: 'kse-1' }],
+    };
+    // 点开态（route 带 candidateId+kstarEpisodeId）：复盘块渲染在候选详情内，
+    // 页面仍是 review（此前处理器硬编码 overview，点 chip 整页跳回"我的认知"）。
+    const html = renderPage('review', {
+      sources: [], candidates: [cand],
+      kstarEpisode: { episodeId: 'kse-1', episode: { id: 'kse-1', goal: '命中既有候选是怎么一个逻辑' }, review: { outcome: 'met_expected', attribution: 'execution_gap', lesson: '先给主线再补分支。' } },
+    }, { candidateId: 'rcand-ep', kstarEpisodeId: 'kse-1' });
+    expect(html).toContain('ca-episode-detail');
+    expect(html).toContain('这次任务的经过');
+    expect(html).toContain('命中既有候选是怎么一个逻辑');
+  });
+
   it('使用记录引用已删版本（bug3）：标注"当时的版本后来已删除"', () => {
     const asset = { id: 'aa-del', title: '有历史使用的资产', type: 'rule', status: 'active', version: '2', activeVersion: '2', updatedAt: '2026-09-16T00:00:00.000Z' };
     const html = renderPage('overview', {
