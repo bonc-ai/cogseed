@@ -133,7 +133,7 @@
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '' },
     backStack: [],
   };
   NS.store = store;
@@ -319,7 +319,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '' }, next);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
@@ -568,6 +568,20 @@
     async selectAssetVersion(assetId, version) {
       await api.call('recall.assets.versions.select', { assetId, version });
       toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
+      store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 真删单个版本（2026-09-17）：物理移除该版本记录；引用它的已确认注入
+     *  在服务端冻结内容副本后继续可用。危险操作，双按钮确认。 */
+    async deleteAssetVersion(assetId, version) {
+      const ok = await confirmUser(T('cognition.asset_version_delete_confirm',
+        '永久删除 v{n}，不可恢复。引用过它的已确认注入会继续使用保留的内容副本。确认删除？', { n: String(version) }), true);
+      if (!ok) return;
+      await api.call('recall.assets.versions.delete', { assetId, version });
+      toast(T('cognition.asset_version_deleted', '已删除 v{n}', { n: String(version) }));
+      if (String(store.route.assetVersionId || '') === String(version)) {
+        router.go({ name: 'overview', assetId: String(store.route.assetId || ''), assetVersionId: '' }, { replace: true });
+      }
       store.assetVersions = null;
       await NS.reload();
     },

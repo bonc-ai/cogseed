@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
 import { createLogger } from '../../logger';
-import { listAbilityAssets, readAbilityAsset } from './asset-service';
+import { listAbilityAssets, readAbilityAsset, type AbilityAssetVersionRecord } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
 import { isAssetScopeAllowed, scopeIncludes } from './scope-policy';
@@ -99,6 +99,10 @@ export interface ContextProjectionRecord extends RecallJsonRecord {
   authorization: ProjectionAuthorization;
   assetIds: string[];
   assetVersions?: Record<string, string>;
+  /** 版本真删前冻结进投影的内容副本（2026-09-17）：已确认注入引用的版本被
+   *  物理删除时，把该版本快照抄进这里；之后注入优先按副本供给，效果与
+   *  删除前一致。仅为删除时的兜底缓存，不是投影本体的必填结构。 */
+  assetVersionSnapshots?: Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }>;
   assetMatches?: RecallAssetMatch[];
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
@@ -241,6 +245,24 @@ function validateAssetVersions(value: unknown): Record<string, string> | undefin
     out[assetId] = version;
   }
   return out;
+}
+
+/** 快照缓存是删除时的兜底字段：形状不对就整字段剥离（回退版本流读取），
+ *  不让它有权力把整条投影判成畸形。 */
+function validateAssetVersionSnapshots(
+  value: unknown,
+): Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }> = {};
+  for (const [assetId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!safeId(assetId) || !entry || typeof entry !== 'object' || Array.isArray(entry)) return undefined;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.version !== 'string' || !record.version.trim()
+      || !record.snapshot || typeof record.snapshot !== 'object' || Array.isArray(record.snapshot)) return undefined;
+    out[assetId] = { version: record.version, snapshot: record.snapshot as AbilityAssetVersionRecord['snapshot'] };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function validateProjectionStatus(value: unknown): ContextProjectionStatus {
@@ -397,7 +419,8 @@ function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   if (value.selectionDegraded !== undefined && typeof value.selectionDegraded !== 'boolean') throw new Error('malformed context projection');
   const assetMatches = validateAssetMatches(value.assetMatches);
   const assetVersions = validateAssetVersions(value.assetVersions);
-  return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}) } as ContextProjectionRecord;
+  const assetVersionSnapshots = validateAssetVersionSnapshots(value.assetVersionSnapshots);
+  return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}), ...(assetVersionSnapshots ? { assetVersionSnapshots } : {}) } as ContextProjectionRecord;
 }
 
 /** Default semantic HARD FLOOR (dual-signal selection): scores below this

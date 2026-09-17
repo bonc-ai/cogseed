@@ -830,6 +830,96 @@ describe('治理动作', () => {
   });
 });
 
+describe('版本真删（2026-09-17）：物理删除 + 引用快照冻结', () => {
+  const userAction = (reason: string) => ({ actor: 'user' as const, reason });
+
+  /** 三版资产（v1/v2/v3，在用=最新）；projectOnVersion 给定时再写一个引用该
+   * 版本的 confirmed 投影（模拟"已确认注入契约冻结了该版本"）。 */
+  async function seedVersioned(uid: string, projectOnVersion?: string) {
+    const [candidates, assets, store, projections, paths] = await Promise.all([
+      import('../../../../src/main/features/recall/candidate-service'),
+      import('../../../../src/main/features/recall/asset-service'),
+      import('../../../../src/main/features/recall/store'),
+      import('../../../../src/main/features/recall/context-projection'),
+      import('../../../../src/main/features/recall/paths'),
+    ]);
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Prefer append-only audit trails.',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-vdel' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
+    await assets.updateAbilityAsset(uid, asset.id, { statement: 'v2 statement for deletion tests.', reason: 'v2', actor: 'user' });
+    await assets.updateAbilityAsset(uid, asset.id, { statement: 'v3 statement for deletion tests.', reason: 'v3', actor: 'user' });
+    if (projectOnVersion) {
+      await store.writeRecallJsonRecord(uid, 'projections', 'proj-del-1', {
+        schemaVersion: 2, ownerId: uid, id: 'proj-del-1', taskRunId: 'kst-del-1',
+        purpose: 'review', authorization: 'workspace_policy',
+        assetIds: [asset.id], assetVersions: { [asset.id]: projectOnVersion },
+        sourceRefs: [], omittedRefs: [], status: 'confirmed', createdAt: new Date().toISOString(),
+      });
+    }
+    return { assets, store, projections, paths, asset };
+  }
+
+  it('物理删除历史版本：列表/按号读快照都拿不到、磁盘行数减少、审计留痕、在用内容不受影响', async () => {
+    const uid = 'user-vdel';
+    const { assets, paths, asset } = await seedVersioned(uid);
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '1', userAction('clean migration noise'));
+    // 列表与按号读取都拿不到了（真删，非隐藏）。
+    expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['2', '3']);
+    expect(await assets.readAbilityAssetVersionSnapshot(uid, asset.id, '1')).toBeNull();
+    // 磁盘上的版本流确实少了那一行。
+    const streamText = fs.readFileSync(paths.recallJsonlPath(uid, 'ability-asset-versions', asset.id), 'utf8');
+    expect(streamText.trim().split('\n')).toHaveLength(2);
+    // 审计只记动作（version_deleted），资产本体与在用内容不动。
+    expect((await assets.listAbilityAssetAudit(uid, asset.id)).map((r) => r.action)).toContain('version_deleted');
+    const after = await assets.readAbilityAsset(uid, asset.id);
+    expect(after.version).toBe('3');
+    expect(after.statement).toContain('v3 statement');
+    // 版本号不回退：后续更新继续 v4。
+    const updated = await assets.updateAbilityAsset(uid, asset.id, { statement: 'v4 statement after deletion.', reason: 'v4', actor: 'user' });
+    expect(updated.version).toBe('4');
+  });
+
+  it('删除被已确认投影引用的版本：删除前把快照冻结进投影，注入引用继续可用', async () => {
+    const uid = 'user-vdel-proj';
+    const { assets, store, projections, asset } = await seedVersioned(uid, '2');
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('delete referenced version'));
+    expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['1', '3']);
+    // 投影带上冻结的内容副本：版本已删，注入按副本继续供给原内容。
+    const raw = await store.readRecallJsonRecord(uid, 'projections', 'proj-del-1');
+    const cached = (raw as { assetVersionSnapshots?: Record<string, { version: string; snapshot: { statement?: string } }> }).assetVersionSnapshots?.[asset.id];
+    expect(cached?.version).toBe('2');
+    expect(cached?.snapshot.statement).toBe('v2 statement for deletion tests.');
+    // 经 sanitize 读回（注入路径）缓存仍在——缓存字段不会在校验时被剥掉。
+    const listed = (await projections.listContextProjections(uid)).find((p) => p.id === 'proj-del-1');
+    expect(listed?.assetVersionSnapshots?.[asset.id]?.version).toBe('2');
+    expect(listed?.assetVersionSnapshots?.[asset.id]?.snapshot.statement).toContain('v2 statement');
+  });
+
+  it('删未被投影引用的版本：不往投影写缓存', async () => {
+    const uid = 'user-vdel-noref';
+    const { assets, store, asset } = await seedVersioned(uid, '2');
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '1', userAction('delete unreferenced'));
+    const raw = await store.readRecallJsonRecord(uid, 'projections', 'proj-del-1');
+    expect((raw as { assetVersionSnapshots?: unknown }).assetVersionSnapshots).toBeUndefined();
+  });
+
+  it('守卫：在用版本不可删；不存在/重复删被拒；purge 后拒绝；select 已删版本被拒', async () => {
+    const uid = 'user-vdel-guard';
+    const { assets, asset } = await seedVersioned(uid);
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '3', userAction('active'))).rejects.toThrow('active version');
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '99', userAction('missing'))).rejects.toThrow('not found');
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('first delete'));
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('repeat'))).rejects.toThrow('not found');
+    // 已删版本无法被选用为在用（活链守卫）。
+    await expect(assets.selectAbilityAssetVersion(uid, asset.id, '2', userAction('select deleted'))).rejects.toThrow('version not found');
+    await assets.purgeAbilityAsset(uid, asset.id, userAction('purge'));
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '1', userAction('after purge'))).rejects.toThrow('purged');
+  });
+});
+
 describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
   async function seedWithScope(uid: string, scope: string) {
     const { candidates, assets } = await modules();

@@ -1079,15 +1079,46 @@ describe('资产详情（使用记录并入）', () => {
     expect(html).toContain('版本记录');
     expect(html).toContain('Renamed in v2');
     expect(html).toContain('上线前必须确认影响范围');
-    // 在用版（v2）标「在用」，非在用版（v1）给「选用此版」。
+    // 在用版（v2）标「在用」，非在用版（v1）给「选用此版」（在用版无选用按钮；
+    // 2026-09-17 起每行带 data-version 供点开，判"无按钮"须带全 data-act 前缀）。
     expect(html).toContain('data-act="select-asset-version" data-id="aa-1" data-version="1"');
-    expect(html).not.toContain('data-version="2"');
+    expect(html).not.toContain('data-act="select-asset-version" data-id="aa-1" data-version="2"');
     expect(html).toContain('在用');
     // 按版本的使用效果列（M8）：v1 采用 3 次·被否定 1 次。
     expect(html).toContain('实际采用 3 次');
     expect(html).toContain('被否定 1 次');
     // 空版本标记（2026-09-16）：v3 与 v2 一字不差 → 标"内容未变"。
     expect(html).toContain('内容未变（系统迁移/搬运）');
+  });
+
+  it('版本行点开详情与真删入口（2026-09-17）：全文/逐项信息/删除按钮/在用版提示', () => {
+    const multi = { ...asset, version: '3', activeVersion: '2', title: 'Renamed in v2', statement: '新内容' };
+    const versions = {
+      assetId: 'aa-1',
+      usage: [{ version: '1', applied: 3, contradicted: 1, total: 4 }],
+      versions: [
+        { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', reason: 'initial', snapshot: { title: '上线前必须确认影响范围', statement: '旧内容的完整正文，超过八十字预览的部分也要在展开块里完整可见，用于区分列表预览与详情全文。'.repeat(2), type: 'rule', evidenceRefs: [{ kind: 'execution', id: 'exec-v1' }], applicableWhen: ['做发版自查'], forbiddenWhen: ['临时草稿'], status: 'active', maturity: 'seed', version: '1' } },
+        { assetId: 'aa-1', version: '2', at: '2026-09-15T01:00:00.000Z', reason: 'Rename for v2.', snapshot: { title: 'Renamed in v2', statement: '新内容', type: 'rule', evidenceRefs: [], status: 'active', maturity: 'seed', version: '2' } },
+      ],
+    };
+    // 列表行可点：每行带 open-asset-version；未展开时不出现详情块。
+    const listHtml = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1' });
+    expect(listHtml).toContain('data-act="open-asset-version" data-version="1"');
+    expect(listHtml).not.toContain('版本详情');
+    // 点开 v1（非在用）：全文可见（预览截断处之后的内容只在展开块里）、
+    // 适用/禁用场景、证据条数、使用效果与「删除此版本」。
+    const openHtml = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionId: '1' });
+    expect(openHtml).toContain('版本详情 · v1');
+    expect(openHtml).toContain('详情全文。');
+    expect(openHtml).toContain('做发版自查');
+    expect(openHtml).toContain('临时草稿');
+    expect(openHtml).toContain('证据来源');
+    expect(openHtml).toContain('实际采用 3 次');
+    expect(openHtml).toContain('data-act="delete-asset-version" data-id="aa-1" data-version="1"');
+    // 点开在用版 v2：无删除按钮，白话提示先切换再删。
+    const activeHtml = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionId: '2' });
+    expect(activeHtml).not.toContain('delete-asset-version');
+    expect(activeHtml).toContain('当前在用版本不可删除');
   });
 
   it('单版本资产不出版本链区（没有"链"可言）；在用版非最新时头部提示', () => {

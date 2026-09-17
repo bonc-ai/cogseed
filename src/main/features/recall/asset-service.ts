@@ -6,7 +6,7 @@ import { recallJsonRecordPath } from './paths';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 import {
   appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord,
-  removeRecallJsonlStream, updateRecallJsonRecord,
+  removeRecallJsonlStream, removeRecallJsonlRecords, updateRecallJsonRecord,
 } from './store';
 import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
@@ -42,7 +42,7 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   assetId: string;
   action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked'
     | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
-    | 'version_selected' | 'merged_from' | 'merged_into'
+    | 'version_selected' | 'version_deleted' | 'merged_from' | 'merged_into'
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
     | 'recommendation_cleared'
     | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
@@ -1030,6 +1030,51 @@ export async function selectAbilityAssetVersion(
   const asset = asAsset(updated);
   await appendAudit(userId, asset.id, 'version_selected', { note: `${action.reason || 'select'} (v${toVersion})`, actor: action.actor });
   return asset;
+}
+
+/** 真删单个版本（2026-09-17，子安口径：删除就是删除，不留界面外的暗桩）。
+ *  物理移除该版本的全部 JSONL 记录：之后版本列表、按号读快照都拿不到它，
+ *  不可恢复。安全网两层：①「在用」版本不可删（删除即资产内容变空）；
+ *  ②删除前把该版本快照冻结进每个引用它的已确认投影（assetVersionSnapshots），
+ *  已确认注入继续按副本供给，效果与删除前一致——先保引用、后删数据，任一
+ *  投影写副本失败则整体中止。版本号不回退：历史回执写着 asset@vN，重排
+ *  补位会让旧回执错指到别的内容。 */
+export async function deleteAbilityAssetVersion(
+  userId: string,
+  assetId: string,
+  version: string,
+  input: AbilityAssetUserActionInput,
+): Promise<void> {
+  const action = requireAssetAction(input);
+  if (!/^[0-9]{1,9}$/.test(version)) throw new Error('invalid recall ability asset version');
+  // 先判终态再查版本（与 select/rollback 同序）。
+  const current = await readAbilityAsset(userId, assetId);
+  assertMutableAbilityAsset(current);
+  const target = (await listAbilityAssetVersions(userId, assetId)).find((record) => record.version === version);
+  if (!target) throw new Error('recall ability asset version not found');
+  if (String(current.activeVersion || current.version) === version) {
+    throw new Error('cannot delete the active version; select another version first');
+  }
+  // ① 先给所有引用它的已确认投影冻结内容副本（先保引用，幂等）。
+  const { listContextProjections } = await import('./context-projection');
+  const referencing = (await listContextProjections(userId)).filter((projection) =>
+    projection.status === 'confirmed' && String(projection.assetVersions?.[assetId] || '') === version);
+  for (const projection of referencing) {
+    await updateRecallJsonRecord(userId, 'projections', projection.id, (raw) => {
+      if (!raw) throw new Error('context projection not found');
+      const existing = raw.assetVersionSnapshots;
+      const cached = existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? existing as Record<string, { version: string; snapshot: unknown }>
+        : {};
+      if (cached[assetId] && String(cached[assetId].version || '') === version) return raw;
+      return { ...raw, assetVersionSnapshots: { ...cached, [assetId]: { version, snapshot: target.snapshot } } };
+    });
+  }
+  // ② 再物理删除该版本的全部记录行。
+  await removeRecallJsonlRecords(userId, 'ability-asset-versions', assetId,
+    (record) => String(record.version || '') !== version);
+  // ③ 审计只记动作（何时删了 v几），不记任何内容——与彻底清除同口径。
+  await appendAudit(userId, assetId, 'version_deleted', { note: `${action.reason || 'delete'} (v${version})`, actor: action.actor });
 }
 
 /**

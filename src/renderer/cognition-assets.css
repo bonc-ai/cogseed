@@ -436,6 +436,11 @@
 /* 列表行/按钮/chip 的状态变化都给过渡：硬切换在轮询重画下会闪。 */
 .ca-row.is-flat { transition: background-color .15s ease; }
 .ca-row.is-flat:hover { background: var(--color-ca-hover); }
+/* 可点行（2026-09-17 版本行点开详情）：手型 + 键盘焦点可见。 */
+.ca-row.is-clickable { cursor: pointer; }
+.ca-row.is-clickable:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: -2px; }
+/* 版本展开详情块：嵌在版本链里，比列表行缩进一层。 */
+.ca-version-detail { margin: 2px 0 8px; }
 .ca-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
 .ca-chip { transition: background-color .15s ease, color .15s ease; }
 

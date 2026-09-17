@@ -428,6 +428,35 @@
     </div>`;
   }
 
+  /** 单个版本的展开详情（2026-09-17）：列表行只给 80 字预览，点行看全文与
+   * 逐项信息；非在用版就地提供「删除此版本」（真删：物理移除，引用它的
+   * 已确认注入在服务端冻结了内容副本）。 */
+  function assetVersionDetailBlock(asset, v, isActive, usage) {
+    const snap = v.snapshot || {};
+    const usageText = usage
+      ? [usage.applied ? T('cognition.asset_usage_applied', '实际采用 {n} 次', { n: String(usage.applied) }) : '',
+        usage.contradicted ? T('cognition.asset_usage_contradicted', '被否定 {n} 次', { n: String(usage.contradicted) }) : '']
+        .filter(Boolean).join(' · ')
+      : '';
+    const evidenceCount = Array.isArray(snap.evidenceRefs) ? snap.evidenceRefs.length : 0;
+    const rowHtml = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value))}</span></div>` : '';
+    const actions = isActive
+      ? `<span class="ca-note">${esc(T('cognition.asset_version_active_locked', '当前在用版本不可删除；先选用其他版本，再删除它。'))}</span>`
+      : btn(T('cognition.asset_version_delete', '删除此版本'), 'delete-asset-version', { id: asset.id, data: { version: String(v.version) }, danger: true, small: true });
+    return `<div class="ca-sect ca-version-detail">
+      <div class="ca-row-title">${esc(T('cognition.asset_version_detail_title', '版本详情'))} · v${esc(String(v.version))}</div>
+      <p class="ca-note">${esc(String(snap.statement || ''))}</p>
+      <div class="ca-meta-row">
+        ${rowHtml(T('cognition.asset_version_applicable', '适用场景'), (Array.isArray(snap.applicableWhen) ? snap.applicableWhen : []).join('；'))}
+        ${rowHtml(T('cognition.asset_version_forbidden', '禁用场景'), (Array.isArray(snap.forbiddenWhen) ? snap.forbiddenWhen : []).join('；'))}
+        ${rowHtml(T('cognition.asset_version_evidence_label', '证据来源'), evidenceCount ? T('cognition.asset_version_evidence_count', '{n} 条', { n: String(evidenceCount) }) : '')}
+        ${rowHtml(T('cognition.asset_version_reason_label', '变更说明'), [v.reason || '', fmtDate(v.at)].filter(Boolean).join(' · '))}
+        ${rowHtml(T('cognition.asset_version_usage_label', '使用效果'), usageText)}
+      </div>
+      <div class="ca-actions ca-actions-right">${actions}</div>
+    </div>`;
+  }
+
   /** 版本链（2026-09-16 版本组）：V1 归入同条目可展开；在用=指针可切换，
    *  「选用此版」走 select-asset-version（内容同步、不产生新版本号）。 */
   function assetVersionsSection(asset) {
@@ -459,10 +488,13 @@
         const side = isActive
           ? chip(T('cognition.asset_version_active', '在用'), 'green')
           : btn(T('cognition.asset_version_select', '选用此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });
-        return `<div class="ca-row is-flat">
+        // 行可点开（2026-09-17）：点行就地展开该版本全文详情；再点收起。
+        const open = String(S.route.assetVersionId || '') === String(v.version);
+        return `<div class="ca-row is-flat is-clickable" data-act="open-asset-version" data-version="${esc(String(v.version))}" ${roleBtn()}>
           <div class="ca-row-main"><div class="ca-row-title">v${esc(String(v.version))} · ${esc(title)}</div><div class="ca-row-meta">${esc(meta)}</div></div>
           <div class="ca-row-side">${side}</div>
-        </div>`;
+        </div>
+        ${open ? assetVersionDetailBlock(asset, v, isActive, usage) : ''}`;
       }).join('');
     return `<div class="ca-sect"><div class="ca-row-title">${esc(T('cognition.asset_versions_section', '版本记录'))}</div>${rows}</div>`;
   }

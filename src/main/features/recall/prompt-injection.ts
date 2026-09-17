@@ -188,9 +188,17 @@ async function buildPromptContextForProjections(
           // snapshot; never inject a drifted live version under a confirmed
           // Projection. When the snapshot record is missing we fall back to
           // the live asset ONLY if it still sits on the confirmed version.
-          snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
-          if (!snapshot) {
-            if (liveAsset.version !== confirmedVersion) continue;
+          // 版本真删兜底（2026-09-17）：删除前系统把该版本快照冻结进了
+          // projection.assetVersionSnapshots——版本记录已物理删除时按副本
+          // 继续供给，注入效果与删除前一致。
+          const cached = projection.assetVersionSnapshots?.[assetId];
+          if (cached && cached.version === confirmedVersion) {
+            snapshot = cached.snapshot;
+          } else {
+            snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
+            if (!snapshot) {
+              if (liveAsset.version !== confirmedVersion) continue;
+            }
           }
         }
         // Frozen snapshots preserve the content the user confirmed. Governance

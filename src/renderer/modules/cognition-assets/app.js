@@ -19,7 +19,7 @@
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
-    'asset-action', 'select-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
+    'asset-action', 'select-asset-version', 'delete-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
     'capture-toggle', 'capture-review-toggle', 'proof-rate',
     'capture-batch',
   ]);
@@ -158,6 +158,16 @@
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
           case 'select-asset-version': await A.selectAssetVersion(id, el.dataset.version || ''); break;
+          case 'delete-asset-version': await A.deleteAssetVersion(id, el.dataset.version || ''); break;
+          case 'open-asset-version': {
+            // 点版本行就地展开/收起（模式同 open-kstar-episode）：再点同一行
+            // 收起；展开态只存路由键，数据已在 store.assetVersions 里。
+            const prev = String(S.route.assetVersionId || '');
+            const next = String(el.dataset.version || '');
+            const open = next && next !== prev ? next : '';
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: open }, { replace: true });
+            break;
+          }
           case 'open-kstar-episode': {
             // 再点同一 chip 或点「收起」（id 空）即收起；展开时拉详情。
             // 展开块不是导航（replace 不压返回栈），且必须带全 route 上下文

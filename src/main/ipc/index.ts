@@ -2791,6 +2791,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version selection');
     return { ok: true, asset: await recallAssets.selectAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user selected v${version}` }) };
   },
+  // 版本真删（2026-09-17）：物理移除该版本记录；删除前把快照冻结进引用它的
+  // 已确认投影（注入按副本继续）。在用版本不可删。
+  'recall.assets.versions.delete': async ({ assetId, version, note } = {}, ctx) => {
+    if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version deletion');
+    await recallAssets.deleteAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user deleted v${version}` });
+    return { ok: true };
+  },
 
   // 存量治理（2026-09-16）：同义资产归并为一个版本组（source 版本链并入
   // target，source 归档并记录去向）。
