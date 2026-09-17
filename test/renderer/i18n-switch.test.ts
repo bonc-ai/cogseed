@@ -254,7 +254,8 @@ describe('Chinese and English locale catalogs', () => {
       'cognition.title': 'Cognition Assets',
       'connections.tab.sources': 'Library',
       'agent_picker.ref_artifact': 'Artifact',
-      'cognition.candidate_receipt_title': 'Recall',
+      // 'cognition.candidate_receipt_title': 'Recall' —— key 已随 #266
+      // （认知资产三 tab 收敛）移除，术语表同步过期删除（2026-09-17 修）。
     };
 
     for (const [key, term] of Object.entries(canonicalTerms)) {

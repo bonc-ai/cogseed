@@ -653,8 +653,7 @@ describe('治理动作', () => {
       .rejects.toThrow('ability asset has been purged');
   });
 
-  it('选用旧版不把 legacy scope 倒退回主记录（2026-09-17 修）：迁移不再重复 bump', async () => {
-    const uid = 'user-select-scope';
+  it('选用旧版不把 legacy scope 倒退回主记录（2026-09-17 修）：迁移不再重复 bump', async () => {    const uid = 'user-select-scope';
     const { candidates, assets } = await modules();
     // v1 快照带词表化之前的自由文本 scope（实机 aa-34b688 场景：scope='personal'）。
     const candidate = await candidates.saveRecallCandidate(uid, {
@@ -672,6 +671,14 @@ describe('治理动作', () => {
     expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['1', '2']);
     // 迁移扫描零命中（修复前这里会命中 'personal' 再迁一遍）。
     expect(await assets.migrateLegacyFreeTextScopes(uid)).toBe(0);
+  });
+
+  it('已删除资产不可被 update（2026-09-17 守卫对齐）：与 select/rollback/merge 同口径', async () => {
+    const uid = 'user-upd-guard';
+    const { assets, asset } = await seed(uid);
+    await assets.deleteAbilityAsset(uid, asset.id, userAction('进入删除保留期'));
+    await expect(assets.updateAbilityAsset(uid, asset.id, { statement: 'edit after delete.', reason: 'edit', actor: 'user' }))
+      .rejects.toThrow('deleted ability asset cannot be changed');
   });
 
   it('归并两条同义资产为版本组（2026-09-16）：版本链续接、较新内容为在用、来源归档', async () => {

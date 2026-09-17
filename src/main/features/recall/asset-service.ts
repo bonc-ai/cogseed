@@ -447,8 +447,9 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
-    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    // 统一终态守卫（2026-09-17 对齐）：此前只挡 purged/revoked，已删除资产
+    // 仍可被 update 改内容并 bump 版本——与 select/rollback/merge 同口径。
+    assertMutableAbilityAsset(current);
     if (reviewDecisionId && current.appliedReviewDecisionIds?.includes(reviewDecisionId)) return current;
     changed = true;
     clearedRecommendation = Boolean(current.recommendedAction && input.acknowledgeRecommendation);

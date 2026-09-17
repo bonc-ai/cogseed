@@ -133,7 +133,7 @@
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '' },
     backStack: [],
   };
   NS.store = store;
@@ -319,7 +319,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '' }, next);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
@@ -470,10 +470,27 @@
       } catch (error) {
         if (error && error.code === 'recall_candidate_similar_asset') {
           const info = String(error.message || '').replace(/^similar asset [^ ]+ /, '').replace(/ \(score [\d.]+\)$/, '');
-          const ok = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。确认 = 保存为新条目；取消 = 改为对它的更新（进入差异对照）。', { info }));
-          if (!ok) {
-            // 检修闭环（2026-09-16）：提示"改为更新"却无入口=把用户指到墙前。
-            // 取消即把候选转为对相似资产的更新，表单切差异卡模式再确认。
+          // 相似确认改双选（2026-09-17 报告建议 F）：此前用「确认=新条目 /
+          // 取消=改为更新」——取消不等于取消，用户凭"别乱存"的本能点取消
+          // 会被推进一个没预期的流程。uiChoice 三义各归其位：存为新条目 /
+          // 更新到该条 / 先不动（真取消）。
+          let choice = null;
+          if (typeof window.uiChoice === 'function') {
+            choice = await window.uiChoice({
+              title: T('cognition.candidate_similar_choice_title', '检测到与现有资产高度相似'),
+              message: T('cognition.candidate_similar_choice_message', '这条候选与「{info}」高度相似。要怎么处理？', { info }),
+              choices: [
+                { id: 'create', label: T('cognition.candidate_similar_choice_create', '存为新条目') },
+                { id: 'update', label: T('cognition.candidate_similar_choice_update', '更新到该条资产'), style: '' },
+              ],
+              cancelLabel: T('cognition.candidate_similar_choice_cancel', '先不动'),
+            });
+          } else {
+            choice = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。确认 = 保存为新条目；取消 = 改为对它的更新。', { info })) ? 'create' : 'update';
+          }
+          if (choice === 'create') {
+            result = await promote(true);
+          } else if (choice === 'update') {
             const match = String(error.message || '').match(/^similar asset ([A-Za-z0-9-]+)/);
             const targetAssetId = match ? match[1] : '';
             if (targetAssetId) {
@@ -494,8 +511,9 @@
               await NS.reload();
             }
             return;
+          } else {
+            return; // 先不动：真正的取消，什么都不发生。
           }
-          result = await promote(true);
         } else {
           throw error;
         }
@@ -561,7 +579,11 @@
         if (!ok) return;
       }
       await api.call(channel, { assetId });
-      toast(T('cognition.asset_action_done', '已完成'));
+      // 删除给时间感（报告建议 G）：保留期常量 30 天在后端标注 TODO(产品确
+      // 认)，文案先按现值显示，定稿后同步。
+      toast(action === 'delete'
+        ? T('cognition.asset_delete_done_retention', '已删除，30 天内可在「已删除」中恢复')
+        : T('cognition.asset_action_done', '已完成'));
       if (action === 'delete' || action === 'purge') router.go({ name: 'overview' });
       await NS.reload();
     },
@@ -583,6 +605,66 @@
       if (String(store.route.assetVersionId || '') === String(version)) {
         router.go({ name: 'overview', assetId: String(store.route.assetId || ''), assetVersionId: '' }, { replace: true });
       }
+      store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 手动编辑资产（2026-09-17 报告建议 A）：改动自己写的话不该以"系统先
+     *  产候选"为前提。与现值逐字段比对，无实际修改不提交——后端没有内容
+     *  等价检查，相同内容也会 bump 出空版本。 */
+    async editAsset(assetId) {
+      const card = document.querySelector('.ca-asset-edit');
+      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      if (!card || !asset) return;
+      const raw = (name) => { const el = card.querySelector(`[data-f="${name}"]`); return el ? String(el.value || '').trim() : ''; };
+      const splitList = (text) => (text ? String(text).split(/[、;；,，\n]/).map((s) => s.trim()).filter(Boolean) : []);
+      const payload = {
+        title: raw('title'),
+        statement: raw('statement'),
+        applicableWhen: splitList(raw('applicable')),
+        forbiddenWhen: splitList(raw('forbidden')),
+      };
+      const unchanged = payload.title === String(asset.title || '')
+        && payload.statement === String(asset.statement || '')
+        && JSON.stringify(payload.applicableWhen) === JSON.stringify((asset.applicableWhen || []))
+        && JSON.stringify(payload.forbiddenWhen) === JSON.stringify((asset.forbiddenWhen || []));
+      const exitEdit = () => router.go({ name: 'overview', assetId, assetEdit: '' }, { replace: true });
+      if (unchanged) {
+        toast(T('cognition.asset_edit_unchanged', '内容没有变化，未保存'));
+        exitEdit();
+        return;
+      }
+      const result = await api.call('recall.assets.update', { assetId, ...payload, reason: 'user manual edit' });
+      const version = String((result && result.asset && result.asset.version) || '');
+      toast(T('cognition.asset_edit_saved', '已保存为新版本 v{n}', { n: version }));
+      store.assetVersions = null;
+      exitEdit();
+      await NS.reload();
+    },
+    /** 两版合并为新版（2026-09-17 报告建议 H）：把所选版正文接在在用版正文
+     *  之后存为新版本（只合并正文，标题/范围取在用版）；合并后可用「编辑」
+     *  整理措辞。合成结果与在用版相同则不提交（后端无内容等价检查）。 */
+    async mergeAssetVersion(assetId, version) {
+      const state = store.assetVersions;
+      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      if (!state || state.assetId !== String(assetId) || !asset) return;
+      const pick = (v) => (state.versions || []).find((x) => String(x.version) === String(v));
+      const activeV = pick(asset.activeVersion || asset.version);
+      const targetV = pick(version);
+      if (!activeV || !targetV) return;
+      const activeText = String((activeV.snapshot && activeV.snapshot.statement) || '').trim();
+      const targetText = String((targetV.snapshot && targetV.snapshot.statement) || '').trim();
+      if (!targetText || targetText === activeText) {
+        toast(T('cognition.asset_version_merge_same', '所选版正文与在用版一致，无需合并'));
+        return;
+      }
+      const ok = await confirmUser(T('cognition.asset_version_merge_confirm',
+        '将把 v{n} 的正文接在在用版正文之后，保存为新版本；保存后可用「编辑」整理措辞。确认合并？', { n: String(version) }), true);
+      if (!ok) return;
+      const merged = `${activeText}\n\n${targetText}`;
+      const result = await api.call('recall.assets.update', {
+        assetId, statement: merged, reason: `merge versions v${String(asset.activeVersion || asset.version)}+v${String(version)}`,
+      });
+      toast(T('cognition.asset_edit_saved', '已保存为新版本 v{n}', { n: String((result && result.asset && result.asset.version) || '') }));
       store.assetVersions = null;
       await NS.reload();
     },

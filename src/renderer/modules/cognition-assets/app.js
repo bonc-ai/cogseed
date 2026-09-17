@@ -19,7 +19,7 @@
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
-    'asset-action', 'select-asset-version', 'delete-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
+    'asset-action', 'select-asset-version', 'delete-asset-version', 'asset-edit-save', 'merge-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
     'capture-toggle', 'capture-review-toggle', 'proof-rate',
     'capture-batch',
   ]);
@@ -159,6 +159,14 @@
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
           case 'select-asset-version': await A.selectAssetVersion(id, el.dataset.version || ''); break;
           case 'delete-asset-version': await A.deleteAssetVersion(id, el.dataset.version || ''); break;
+          case 'edit-asset': {
+            // 进入/退出编辑态（纯路由切换，不压返回栈）。
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetEdit: S.route.assetEdit ? '' : '1' }, { replace: true });
+            break;
+          }
+          case 'asset-edit-save': await A.editAsset(id); break;
+          case 'asset-edit-cancel': router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetEdit: '' }, { replace: true }); break;
+          case 'merge-asset-version': await A.mergeAssetVersion(id, el.dataset.version || ''); break;
           case 'open-asset-version': {
             // 点版本行就地展开/收起（模式同 open-kstar-episode）：再点同一行
             // 收起；展开态只存路由键，数据已在 store.assetVersions 里。
@@ -166,6 +174,23 @@
             const next = String(el.dataset.version || '');
             const open = next && next !== prev ? next : '';
             router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: open }, { replace: true });
+            break;
+          }
+          case 'diff-asset-version': {
+            // 展开块内「与在用版对比」：就地开/收（数据已在渲染层，前端自算）。
+            // 必须带全 route 上下文（含 assetVersionId）——否则展开块被默认值清掉。
+            const cur = String(S.route.assetVersionDiff || '');
+            const next = String(el.dataset.version || '');
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: next && next !== cur ? next : '' }, { replace: true });
+            break;
+          }
+          case 'diff-asset-latest': {
+            const cur = String(S.route.assetVersionDiff || '');
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: cur === 'latest' ? '' : 'latest' }, { replace: true });
+            break;
+          }
+          case 'toggle-asset-versions-noise': {
+            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionsExpanded: S.route.assetVersionsExpanded ? '' : '1' }, { replace: true });
             break;
           }
           case 'open-kstar-episode': {

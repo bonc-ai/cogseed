@@ -1138,6 +1138,78 @@ describe('资产详情（使用记录并入）', () => {
     expect(activeHtml).toContain('当前在用版本不可删除');
   });
 
+  it('资产编辑（2026-09-17 报告建议 A）：详情有编辑按钮；编辑态表单预填现值', () => {
+    const editable = { ...asset, applicableWhen: ['发版自查'], forbiddenWhen: ['临时草稿'] };
+    const list = renderPage('overview', { assets: [editable], proofs: [], sources: [] }, { assetId: 'aa-1' });
+    expect(list).toContain('data-act="edit-asset"');
+    const edit = renderPage('overview', { assets: [editable], proofs: [], sources: [] }, { assetId: 'aa-1', assetEdit: '1' });
+    expect(edit).toContain('ca-asset-edit');
+    expect(edit).toContain('data-f="title"');
+    expect(edit).toContain('data-f="statement"');
+    expect(edit).toContain('data-f="applicable"');
+    expect(edit).toContain('发版自查');
+    expect(edit).toContain('data-act="asset-edit-save"');
+    expect(edit).toContain('data-act="asset-edit-cancel"');
+  });
+
+  it('版本来源标签与空版本折叠（2026-09-17 报告建议 E）：标签替原文，迁移空版本默认隐藏可展开', () => {
+    const multi = { ...asset, version: '3', activeVersion: '1', title: 'T', statement: 'S' };
+    const versions = {
+      assetId: 'aa-1', usage: [],
+      versions: [
+        { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', reason: 'review_decision:rd_x', snapshot: { title: 'T', statement: 'S', evidenceRefs: [] } },
+        { assetId: 'aa-1', version: '2', at: '2026-09-13T01:00:00.000Z', reason: 'legacy free-text scope "personal" → controlled term "general" (2026-09-13 scope enumeration)', snapshot: { title: 'T', statement: 'S', evidenceRefs: [] } },
+        { assetId: 'aa-1', version: '3', at: '2026-09-17T01:00:00.000Z', reason: 'user manual edit', snapshot: { title: 'T2', statement: 'S2', evidenceRefs: [] } },
+      ],
+    };
+    const html = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1' });
+    expect(html).toContain('候选确认');
+    expect(html).toContain('手动编辑');
+    expect(html).not.toContain('legacy free-text scope');
+    // 迁移空版本（v2 与 v1 同文）默认隐藏，尾部给展开入口。
+    expect(html).not.toContain('data-act="open-asset-version" data-version="2"');
+    expect(html).toContain('显示 1 条系统迁移产生的空版本');
+    expect(html).toContain('切回此版');
+    const expanded = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionsExpanded: '1' });
+    expect(expanded).toContain('data-act="open-asset-version" data-version="2"');
+    expect(expanded).toContain('系统迁移');
+    expect(expanded).toContain('收起系统迁移版本');
+  });
+
+  it('版本对比（2026-09-17 报告建议 C）：展开块与在用版就地对比，字段级 旧 → 新', () => {
+    const multi = { ...asset, version: '2', activeVersion: '1', title: 'T1', statement: 'S1' };
+    const versions = {
+      assetId: 'aa-1', usage: [],
+      versions: [
+        { assetId: 'aa-1', version: '1', at: '2026-09-10T01:00:00.000Z', reason: 'review_decision:rd_x', snapshot: { title: 'T1', statement: 'S1', evidenceRefs: [] } },
+        { assetId: 'aa-1', version: '2', at: '2026-09-17T01:00:00.000Z', reason: 'user manual edit', snapshot: { title: 'T2', statement: 'S2', evidenceRefs: [{ kind: 'conversation', id: 'c1' }] } },
+      ],
+    };
+    const closed = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionId: '2' });
+    expect(closed).toContain('data-act="diff-asset-version" data-id="aa-1" data-version="2"');
+    const open = renderPage('overview', { assets: [multi], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionId: '2', assetVersionDiff: '2' });
+    expect(open).toContain('版本对比：v1（在用） → v2');
+    expect(open).toContain('S1 → S2');
+    expect(open).toContain('T1 → T2');
+    expect(open).toContain('0 → 1');
+    expect(open).toContain('与在用版合并为新版');
+    // 最新 vs 在用的下钻（在用非最新时头部出现）。
+    const latestMulti = { ...multi, activeVersion: '1' };
+    const latest = renderPage('overview', { assets: [latestMulti], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionDiff: 'latest' });
+    expect(latest).toContain('版本对比：v1（在用） → v2');
+  });
+
+  it('已删除档（2026-09-17 报告建议 G）：默认视图不含已删除；「已删除」档与详情恢复入口', () => {
+    const assets = [asset, { ...asset, id: 'aa-del', title: '已删条目占位', status: 'deleted' }];
+    const list = renderPage('overview', { assets, proofs: [], sources: [] });
+    expect(list).not.toContain('已删条目占位');
+    expect(list).toContain('已删除 1');
+    const delTab = renderPage('overview', { assets, proofs: [], sources: [] }, { category: 'deleted' });
+    expect(delTab).toContain('已删条目占位');
+    const detail = renderPage('overview', { assets: [{ ...asset, id: 'aa-del', status: 'deleted' }], proofs: [], sources: [] }, { assetId: 'aa-del' });
+    expect(detail).toContain('data-action="restore"');
+  });
+
   it('单版本资产不出版本链区（没有"链"可言）；在用版非最新时头部提示', () => {
     const single = renderPage('overview', {
       assets: [{ ...asset, version: '1' }],

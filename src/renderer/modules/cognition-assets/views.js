@@ -432,6 +432,62 @@
     </div>`;
   }
 
+  /** 版本来源标签（2026-09-17 报告建议 E）：reason 是审计字段（多为机器
+   *  生成），直接透传用户读不懂；先归一成来源种类，标签走 locale，原文
+   *  收进展开块"变更说明"。reason 归一只认数据层的固定英文前缀（core 写
+   *  reason 时用英文常量，不随界面语言变——否则归一化会跟着漂）。 */
+  function versionSourceKind(v) {
+    const reason = String(v.reason || '');
+    if (reason.startsWith('review_decision:')) return 'decision';
+    if (reason.startsWith('legacy ') || reason.includes('(2026-08-15)') || reason.includes('(2026-09-13')) return 'migration';
+    if (reason.startsWith('merged from ') || reason.startsWith('merged active version')) return 'merge';
+    if (reason.startsWith('user rollback to v')) return 'rollback';
+    if (reason === 'evidence merged from candidate dedup') return 'dedup';
+    if (reason.startsWith('merge versions v')) return 'version_merge';
+    if (reason.startsWith('user manual edit')) return 'manual';
+    return v.actor === 'user' ? 'manual' : 'system';
+  }
+  const VERSION_SOURCE_LABELS = {
+    decision: ['cognition.asset_version_src_decision', '候选确认'],
+    migration: ['cognition.asset_version_src_migration', '系统迁移'],
+    merge: ['cognition.asset_version_src_merge', '归并'],
+    rollback: ['cognition.asset_version_src_rollback', '回退'],
+    dedup: ['cognition.asset_version_src_dedup', '证据归并'],
+    version_merge: ['cognition.asset_version_src_version_merge', '版本合并'],
+    manual: ['cognition.asset_version_src_manual', '手动编辑'],
+    system: ['cognition.asset_version_src_system', '系统'],
+  };
+  function versionSourceLabel(v) {
+    const entry = VERSION_SOURCE_LABELS[versionSourceKind(v)] || VERSION_SOURCE_LABELS.system;
+    return T(entry[0], entry[1]);
+  }
+
+  /** 两版字段级对比（2026-09-17 报告建议 C）：两版全量快照已在渲染层
+   *  （versions.list），前端自算任意两版——通道只返回相邻版本对，覆盖
+   *  不了"v3 vs 在用 v2"。展示顺序照主进程 CHANGE_ORDER：边界→范围→
+   *  正文→证据→标题；无差异明说"内容一致"。 */
+  function assetVersionDiffBlock(asset, baseV, targetV) {
+    const a = (baseV && baseV.snapshot) || {};
+    const b = (targetV && targetV.snapshot) || {};
+    const text = (value) => (Array.isArray(value) ? value.join('、') : String(value || '')) || '—';
+    const rows = [
+      [T('cognition.asset_edit_field_applicable', '适用场景'), text(a.applicableWhen), text(b.applicableWhen)],
+      [T('cognition.asset_edit_field_forbidden', '禁用场景'), text(a.forbiddenWhen), text(b.forbiddenWhen)],
+      [T('cognition.asset_version_diff_scope', '适用范围'), text(a.scope), text(b.scope)],
+      [T('cognition.asset_version_diff_statement', '正文'), text(a.statement), text(b.statement)],
+      [T('cognition.asset_version_diff_evidence', '证据数量'), String((a.evidenceRefs || []).length), String((b.evidenceRefs || []).length)],
+      [T('cognition.asset_version_diff_title_field', '标题'), text(a.title), text(b.title)],
+    ].filter((row) => row[1] !== row[2]);
+    const title = T('cognition.asset_version_diff_line', '版本对比：v{a}（在用） → v{b}', { a: String((baseV && baseV.version) || '?'), b: String((targetV && targetV.version) || '?') });
+    if (!rows.length) {
+      return `<div class="ca-sect ca-version-diff"><div class="ca-row-title">${esc(title)}</div><p class="ca-note">${esc(T('cognition.asset_version_diff_same', '两版内容一致。'))}</p></div>`;
+    }
+    return `<div class="ca-sect ca-version-diff">
+      <div class="ca-row-title">${esc(title)}</div>
+      ${rows.map(([label, from, to]) => `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(from)} → ${esc(to)}</span></div>`).join('')}
+    </div>`;
+  }
+
   /** 单个版本的展开详情（2026-09-17）：列表行只给 80 字预览，点行看全文与
    * 逐项信息；非在用版就地提供「删除此版本」（真删：物理移除，引用它的
    * 已确认注入在服务端冻结了内容副本）。 */
@@ -444,9 +500,16 @@
       : '';
     const evidenceCount = Array.isArray(snap.evidenceRefs) ? snap.evidenceRefs.length : 0;
     const rowHtml = (label, value) => value ? `<div class="ca-meta-item"><span class="ca-meta-k">${esc(label)}</span><span class="ca-meta-v">${esc(String(value))}</span></div>` : '';
+    // 对比/合并的目标与基准都在版本链里；diff 就地展开（报告建议 C），
+    // 合并两版为新版（报告建议 H）也挂这里——查看与危险操作集中在展开块。
+    const versions = (S.assetVersions && S.assetVersions.versions) || [];
+    const activeV = versions.find((x) => String(x.version) === String(asset.activeVersion || asset.version));
+    const showDiff = String(S.route.assetVersionDiff || '') === String(v.version);
     const actions = isActive
       ? `<span class="ca-note">${esc(T('cognition.asset_version_active_locked', '当前在用版本不可删除；先选用其他版本，再删除它。'))}</span>`
-      : btn(T('cognition.asset_version_delete', '删除此版本'), 'delete-asset-version', { id: asset.id, data: { version: String(v.version) }, danger: true, small: true });
+      : `${btn(showDiff ? T('cognition.asset_version_diff_hide', '收起对比') : T('cognition.asset_version_diff_show', '与在用版对比'), 'diff-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
+        ${btn(T('cognition.asset_version_merge', '与在用版合并为新版'), 'merge-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true })}
+        ${btn(T('cognition.asset_version_delete', '删除此版本'), 'delete-asset-version', { id: asset.id, data: { version: String(v.version) }, danger: true, small: true })}`;
     return `<div class="ca-sect ca-version-detail">
       <div class="ca-row-title">${esc(T('cognition.asset_version_detail_title', '版本详情'))} · v${esc(String(v.version))}</div>
       <p class="ca-note">${esc(String(snap.statement || ''))}</p>
@@ -458,6 +521,7 @@
         ${rowHtml(T('cognition.asset_version_usage_label', '使用效果'), usageText)}
       </div>
       <div class="ca-actions ca-actions-right">${actions}</div>
+      ${showDiff && activeV ? assetVersionDiffBlock(asset, activeV, v) : ''}
     </div>`;
   }
 
@@ -473,7 +537,15 @@
     const contentKey = (snap) => `${snap.title || ''}\n${snap.statement || ''}`;
     const sortedAsc = [...state.versions].sort((left, right) => Number(left.version) - Number(right.version));
     const unchangedAfter = new Set(sortedAsc.filter((v, i) => i > 0 && contentKey(v.snapshot || {}) === contentKey(sortedAsc[i - 1].snapshot || {})).map((v) => String(v.version)));
-    const rows = [...state.versions]
+    // 来源标签（报告建议 E）：reason 原文收展开块，行上只给归一化标签。
+    // 系统迁移产生的空版本默认折叠（报告建议 E）：与相邻版一字不差的
+    // 迁移垫版本整行隐藏，尾部给展开入口——用户扫版本链时分得清"哪些是
+    // 我真的改过、哪些只是系统垫高了号"。
+    const isNoiseVersion = (v) => versionSourceKind(v) === 'migration' && unchangedAfter.has(String(v.version));
+    const expanded = !!S.route.assetVersionsExpanded;
+    const noiseCount = state.versions.filter(isNoiseVersion).length;
+    const visibleVersions = expanded ? state.versions : state.versions.filter((v) => !isNoiseVersion(v));
+    const rows = [...visibleVersions]
       .sort((left, right) => Number(right.version) - Number(left.version))
       .map((v) => {
         const isActive = String(v.version) === active;
@@ -488,10 +560,10 @@
         // 具体内容）——正文截 80 字进 meta，标题相同的内容差异由此可辨。
         const statement = String((v.snapshot && v.snapshot.statement) || '').replace(/\s+/g, ' ').trim();
         const statementPreview = statement.length > 80 ? `${statement.slice(0, 80)}…` : statement;
-        const meta = [statementPreview, fmtDate(v.at), String(v.reason || ''), unchangedAfter.has(String(v.version)) ? T('cognition.asset_version_unchanged', '内容未变（系统迁移/搬运）') : '', usageText].filter(Boolean).join(' · ');
+        const meta = [statementPreview, fmtDate(v.at), versionSourceLabel(v), unchangedAfter.has(String(v.version)) ? T('cognition.asset_version_unchanged', '内容未变（系统迁移/搬运）') : '', usageText].filter(Boolean).join(' · ');
         const side = isActive
           ? chip(T('cognition.asset_version_active', '在用'), 'green')
-          : btn(T('cognition.asset_version_select', '选用此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });
+          : btn(T('cognition.asset_version_select', '切回此版'), 'select-asset-version', { id: asset.id, data: { version: String(v.version) }, small: true });
         // 行可点开（2026-09-17）：点行就地展开该版本全文详情；再点收起。
         const open = String(S.route.assetVersionId || '') === String(v.version);
         return `<div class="ca-row is-flat is-clickable" data-act="open-asset-version" data-version="${esc(String(v.version))}" ${roleBtn()}>
@@ -500,18 +572,62 @@
         </div>
         ${open ? assetVersionDetailBlock(asset, v, isActive, usage) : ''}`;
       }).join('');
-    return `<div class="ca-sect"><div class="ca-row-title">${esc(T('cognition.asset_versions_section', '版本记录'))}</div>${rows}</div>`;
+    // 头部「已有更新的版本」的下钻（报告建议 C）：在用 vs 最新就地对比。
+    const activeRecord = sortedAsc.find((x) => String(x.version) === active);
+    const latestRecord = sortedAsc[sortedAsc.length - 1];
+    const latestDiff = String(S.route.assetVersionDiff || '') === 'latest' && activeRecord && latestRecord && String(latestRecord.version) !== active
+      ? assetVersionDiffBlock(asset, activeRecord, latestRecord)
+      : '';
+    const noiseToggle = noiseCount
+      ? `<div class="ca-sub">${btn(expanded
+        ? T('cognition.asset_versions_noise_hide', '收起系统迁移版本')
+        : T('cognition.asset_versions_noise_show', '显示 {n} 条系统迁移产生的空版本', { n: String(noiseCount) }),
+      'toggle-asset-versions-noise', { id: asset.id, small: true })}</div>`
+      : '';
+    return `<div class="ca-sect"><div class="ca-row-title">${esc(T('cognition.asset_versions_section', '版本记录'))}</div>${latestDiff}${rows}${noiseToggle}</div>`;
+  }
+
+  /** 资产编辑表单（2026-09-17 报告建议 A）：预填在用版现值；保存产生新
+   *  版本（core.editAsset 先比对，无实际修改不提交——后端相同内容也会
+   *  bump 出空版本）。类型与范围不在此改：类型变更走候选线重审，范围
+   *  自由文本会再触发 scope 迁移。 */
+  function assetEditForm(asset) {
+    const fieldHtml = (label, inner) => `<label class="ca-field"><span>${esc(label)}</span>${inner}</label>`;
+    const joinList = (list) => (Array.isArray(list) ? list.join('、') : '');
+    const fid = (name) => `ca-asset-edit-${name}-${esc(asset.id)}`;
+    return `<div class="ca-sect ca-asset-edit">
+      <div class="ca-row-title">${esc(T('cognition.asset_edit_title', '编辑资产'))}</div>
+      <p class="ca-note">${esc(T('cognition.asset_edit_hint', '保存后会产生一个新版本；当前内容仍完整保留在版本记录里。'))}</p>
+      ${fieldHtml(T('cognition.asset_edit_field_title', '标题'), window.uiInput({ id: fid('title'), value: String(asset.title || ''), attrs: { 'data-f': 'title' } }))}
+      ${fieldHtml(T('cognition.asset_edit_field_statement', '正文'), window.uiTextarea({ id: fid('statement'), value: String(asset.statement || ''), attrs: { 'data-f': 'statement' } }))}
+      ${fieldHtml(T('cognition.asset_edit_field_applicable', '适用场景（多条用顿号分隔）'), window.uiInput({ id: fid('applicable'), value: joinList(asset.applicableWhen), attrs: { 'data-f': 'applicable' } }))}
+      ${fieldHtml(T('cognition.asset_edit_field_forbidden', '禁用场景（多条用顿号分隔）'), window.uiInput({ id: fid('forbidden'), value: joinList(asset.forbiddenWhen), attrs: { 'data-f': 'forbidden' } }))}
+      <div class="ca-actions ca-actions-right">
+        ${btn(T('common.cancel', '取消'), 'asset-edit-cancel', { id: asset.id })}
+        ${btn(T('cognition.asset_edit_save', '保存为新版本'), 'asset-edit-save', { id: asset.id, primary: true })}
+      </div>
+    </div>`;
   }
 
   function assetDetail(asset, route) {
+    // 编辑态（2026-09-17 报告建议 A）：正文区替换为编辑表单——改自己写的
+    // 话不该以"系统先产候选"为前提；保存走 recall.assets.update（+1 版本，
+    // 与候选采纳产出的版本同链）。类型与范围不在表单里：类型变更走候选线
+    // 重审，范围自由文本会再触发 scope 迁移产空版本。
+    const editing = !!route.assetEdit && ['active', 'paused'].includes(String(asset.status || 'active'));
+    const editBtn = editing ? '' : btn(T('cognition.asset_edit', '编辑'), 'edit-asset', { id: asset.id, primary: true, small: true });
     const affectedCopy = {
       active: [T('cognition.asset_pause_hint', '暂停后，新任务不再默认带上这条资产；已完成任务、历史版本与使用证据都会保留。'),
+        editBtn,
         btn(T('cognition.asset_pause', '暂停使用'), 'asset-action', { id: asset.id, data: { action: 'pause' } }),
         btn(T('cognition.asset_archive', '归档'), 'asset-action', { id: asset.id, data: { action: 'archive' } })],
       paused: [T('cognition.asset_resume_hint', '恢复后，这条资产会重新参与任务匹配。'),
+        editBtn,
         btn(T('cognition.asset_resume', '恢复使用'), 'asset-action', { id: asset.id, data: { action: 'resume' }, primary: true })],
       archived: [T('cognition.asset_restore_hint', '恢复后，这条资产重新出现在常用资产中。'),
         btn(T('cognition.asset_restore', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true })],
+      deleted: [T('cognition.asset_deleted_hint', '已删除的资产在保留期内可恢复；恢复后重新出现在常用资产。'),
+        btn(T('cognition.asset_restore_deleted', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true })],
     }[String(asset.status || 'active')] || [];
     const proofCount = S.proofs.filter((p) => String((p.refs || {}).assetId || '') === String(asset.id)).length;
     // 元信息白话化：后端值可能是内部术语，认出常见形态翻成人话，认不出原样显示。
@@ -548,11 +664,11 @@
       <div class="ca-line">
         <div>
           <h3>${esc(asset.title || asset.id)}</h3>
-          <div class="ca-sub">${esc(categoryLabel(asset.type))} · v${esc(String(asset.activeVersion || asset.version || '1'))}${asset.activeVersion && asset.activeVersion !== asset.version ? ` · ${esc(T('cognition.asset_version_latest_note', '已有更新的版本'))}` : ''} · ${esc(T('cognition.asset_updated', '更新于'))} ${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div>
+          <div class="ca-sub">${esc(categoryLabel(asset.type))} · v${esc(String(asset.activeVersion || asset.version || '1'))}${asset.activeVersion && asset.activeVersion !== asset.version ? ` · ${esc(T('cognition.asset_version_latest_note', '已有更新的版本'))} ${btn(T('cognition.asset_version_diff_latest', '看最新一版改了什么'), 'diff-asset-latest', { id: asset.id, small: true })}` : ''} · ${esc(T('cognition.asset_updated', '更新于'))} ${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div>
         </div>
         <div class="ca-right">${assetStatusChip(asset)}</div>
       </div>
-      <p class="ca-content-text">${esc(asset.statement || '')}</p>
+      ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       <details class="ca-advanced">
         <summary>${esc(T('cognition.asset_meta_summary', '详细信息'))}</summary>
         <div class="ca-kv">
@@ -603,7 +719,7 @@
   function viewOverview(route) {
     const stats = NS.stats();
     const counts = {};
-    for (const [id] of CATEGORIES) counts[id] = S.assets.filter((a) => a.type === id && String(a.status || 'active') !== 'archived').length;
+    for (const [id] of CATEGORIES) counts[id] = S.assets.filter((a) => a.type === id && !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length;
     const sourceCount = S.sources.reduce((n, group) => n + (Array.isArray(group.items) ? group.items.length : 0), 0);
     const captureCount = Array.isArray(S.captures) ? S.captures.length : 0;
     // 每个资产的最近使用时间（时间线里 occurredAt 的最大值）：列表行此前
@@ -638,10 +754,19 @@
       //（使用记录已并入详情，2026-09-15）。
       if (asset) return hero(T('cognition.overview_title', '我的认知资产'), '') + assetDetail(asset, route);
     }
-    const filtered = S.assets.filter((a) => String(a.status || 'active') !== 'archived'
-      && (!route.category || a.type === route.category));
-    const chips = [['', T('common.all', '全部'), S.assets.filter((a) => String(a.status || 'active') !== 'archived').length]]
-      .concat(CATEGORIES.map(([id, key, fallback]) => [id, T(key, fallback), counts[id]]));
+    // 列表口径（2026-09-17 报告建议 G，顺带修 bug）：默认视图只放正常态
+    // （archived/deleted/purged/revoked 都不混进来——此前只排除 archived，
+    // 已删除资产会漏进「全部」）；「已删除」单列一档，保留期内可自助恢复。
+    // purged/revoked 不单列（墓碑无内容/终态）。
+    const HIDDEN_STATUS = ['archived', 'deleted', 'purged', 'revoked'];
+    const deletedCount = S.assets.filter((a) => String(a.status || 'active') === 'deleted').length;
+    const filtered = route.category === 'deleted'
+      ? S.assets.filter((a) => String(a.status || 'active') === 'deleted')
+      : S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))
+        && (!route.category || a.type === route.category));
+    const chips = [['', T('common.all', '全部'), S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))).length]]
+      .concat(CATEGORIES.map(([id, key, fallback]) => [id, T(key, fallback), counts[id]]))
+      .concat(deletedCount ? [['deleted', T('cognition.assets_deleted_tab', '已删除'), deletedCount]] : []);
     const listHtml = filtered.length
       ? filtered.map((asset) => `
         <div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
