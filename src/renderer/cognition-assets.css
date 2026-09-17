@@ -117,9 +117,14 @@
 .ca-actions-right { justify-content: flex-end; }
 /* 候选详情：决策按钮与「证据引用」同行（整组右端、垂直居中），不再独占
    卡片底部一行。 */
-.ca-detail-foot { display: flex; align-items: center; gap: 16px; }
+.ca-detail-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .ca-detail-foot .ca-field { flex: 1; min-width: 0; margin-bottom: 0; }
 .ca-detail-foot .ca-actions { margin-top: 0; flex: 0 0 auto; }
+/* 复盘展开块在 ca-detail-foot 内整行独占（2026-09-17 修：横排 flex 的
+   第三个项会横向撑破卡片、与证据字段叠字——截图实测块宽 1658 > 容器
+   1242）；元信息行内允许换行，长"实际发生"文本不再把行撑出界。 */
+.ca-detail-foot .ca-episode-detail { flex: 1 1 100%; min-width: 0; }
+.ca-episode-detail .ca-meta-item { white-space: normal; }
 
 /* ── 标签片 ───────────────────────────────────────────────── */
 .ca-chip {
