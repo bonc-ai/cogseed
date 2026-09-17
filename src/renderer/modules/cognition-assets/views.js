@@ -381,6 +381,10 @@
   function assetUsageSection(asset, route) {
     const items = S.proofs
       .filter((p) => String((p.refs || {}).assetId || '') === String(asset.id))
+      // 只认「真实引用」事件（2026-09-17 子安口径）：什么时候在哪个对话被
+      // 带入任务/被实际使用。版本保存、选用切换、治理与迁移证明这类系统
+      // 操作不是使用，不进使用记录。
+      .filter((p) => ['usage_recorded', 'projection_confirmed'].includes(String(p.kind || '')))
       .sort((left, right) => String(right.occurredAt || '').localeCompare(String(left.occurredAt || '')));
     if (!items.length) {
       return `<div class="ca-sect"><div class="ca-sub">${esc(T('cognition.asset_no_proofs_section', '还没有被真实使用过。资产在任务中被真正使用、并留下可核对的记录后，会出现在这里。'))}</div></div>`;

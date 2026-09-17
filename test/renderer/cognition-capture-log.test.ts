@@ -1053,6 +1053,23 @@ describe('资产详情（使用记录并入）', () => {
     expect(html).toContain('data-act="proof-rate"');
   });
 
+  it('使用记录只认真实引用（2026-09-17）：版本保存/选用切换/治理操作不进使用记录', () => {
+    const noisy = [
+      ...proofs,
+      { id: 'ev-3', kind: 'asset_version', occurredAt: '2026-09-16T01:00:00.000Z', refs: { assetId: 'aa-1', version: 3 } },
+      { id: 'ev-4', kind: 'asset_version_selected', occurredAt: '2026-09-16T02:00:00.000Z', refs: { assetId: 'aa-1', version: '2' } },
+      { id: 'ev-5', kind: 'asset_archived', occurredAt: '2026-09-16T03:00:00.000Z', refs: { assetId: 'aa-1' } },
+    ];
+    const html = renderPage('overview', { assets: [asset], proofs: noisy, sources: conversationSources }, { assetId: 'aa-1' });
+    expect(html).toContain('被实际使用');
+    expect(html).toContain('被带入任务');
+    expect(html).not.toContain('保存了新版本');
+    expect(html).not.toContain('选用 v2 为在用版本');
+    // 噪音事件不进计数摘要。
+    expect(html).toContain('被实际使用 1 次');
+    expect(html).toContain('被带入任务 1 次');
+  });
+
   it('版本链（2026-09-16 版本组）：V1 归入同条目可展开，非在用版可「选用此版」', () => {
     const multi = {
       ...asset,
