@@ -51,6 +51,17 @@ jobs:
             exit 1
           fi
           echo "✅ All commit author emails are noreply."
+          # Bodies / Co-authored-by trailers are public record too (#184 leak).
+          bad_msg=$(git log --format='%h|%B' "origin/cicd..HEAD" 2>/dev/null \
+            | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+            | grep -viE '^([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|support@github\.com)$' \
+            | sort -u || true)
+          if [ -n "$bad_msg" ]; then
+            echo "::error::Commit messages / Co-authored-by contain non-allowlisted emails:"
+            echo "$bad_msg"
+            exit 1
+          fi
+          echo "✅ Commit messages and Co-authored-by trailers are clean."
 
   verify-windows-native:
     runs-on: windows-latest
@@ -113,6 +124,8 @@ jobs:
       - name: Packaged STT smoke (informational)
         continue-on-error: true
         run: npm run verify:package:stt:win
+      - name: Assert packaged Electron fuse baseline
+        run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe
       - name: Upload Windows test package
         uses: actions/upload-artifact@v4
         with:

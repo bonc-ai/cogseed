@@ -1,0 +1,37 @@
+/* Shared card geometry; layouts never stretch beyond the declared limits. */
+.cs-card{box-shadow:var(--cs-card-shadow,var(--cs-shadow-sm));width:100%;max-width:var(--cs-card-width-max);min-width:0;overflow-wrap:anywhere}
+.cs-card--row{max-width:var(--cs-card-row-width-max)}
+.cs-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:var(--cs-space-4);width:100%;max-width:var(--cs-card-grid-width-max);align-items:stretch}
+.cs-resource-card{display:flex;flex-direction:column}
+.cs-resource-head{display:flex;align-items:center;gap:var(--cs-space-3)}
+.cs-resource-icon{width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--cs-accent-wash);border-radius:var(--cs-radius-md)}
+.cs-resource-heading{min-width:0;flex:1}
+.cs-resource-heading h3{margin:0;font-size:var(--cs-size-title);font-weight:500;line-height:1.5}
+.cs-resource-control{flex:none;display:flex;align-items:center;gap:var(--cs-space-2)}
+.cs-resource-description{font-size:var(--cs-size-ui-sm);line-height:1.65;color:var(--cs-ink-55);margin:var(--cs-space-3) 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:3.3em}
+.cs-resource-footer{margin-top:auto}
+.cs-resource-status{flex:1;min-width:0;font-size:var(--cs-size-meta);line-height:1.5;color:var(--cs-text-muted)}
+.cs-resource-card--template .cs-resource-icon{border:1px dashed var(--cs-border-strong)}
+@media(prefers-reduced-motion:reduce){.cs-card{box-shadow:var(--cs-card-shadow,var(--cs-shadow-sm));transition:none!important}}
+
+.cs-resource-menu-details{margin:0;display:grid;gap:var(--cs-space-3);font-size:var(--cs-size-ui-sm);line-height:1.6}
+.cs-resource-menu-details>div{display:flex;justify-content:space-between;gap:var(--cs-space-4)}
+.cs-resource-menu-details dt{color:var(--cs-text-muted)}
+.cs-resource-menu-details dd{margin:0;font-weight:500;text-align:right;color:var(--cs-ink-70)}
+
+.cs-resource-title-action{font:inherit;text-align:left;color:inherit;border:0;background:transparent;padding:0;cursor:pointer}.cs-resource-heading small,.cs-resource-workspace-roles,.cs-resource-status small{font:var(--cs-type-caption);color:var(--cs-text-muted)}.cs-resource-workspace-roles{margin:var(--cs-space-2) 0 0}.cs-resource-recent-task{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cs-resource-card--workspace .cs-resource-status{min-width:0}.cs-resource-title-action:hover{text-decoration:underline}
+
+.cs-resource-automation-meta{display:grid;grid-template-columns:1fr 1fr;gap:var(--cs-space-4);font:var(--cs-type-caption);margin:var(--cs-space-4) 0 0}.cs-resource-automation-meta dt,.cs-resource-heading small{color:var(--cs-text-muted)}.cs-resource-automation-meta dd{margin:var(--cs-space-1) 0 0;overflow-wrap:anywhere}
+.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta){display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,.65fr);column-gap:var(--cs-space-6)}.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta)>.cs-resource-head{grid-column:1/-1}.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta)>.cs-resource-description{grid-column:1;grid-row:2}.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta)>.cs-resource-automation-meta{grid-column:2;grid-row:2}.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta)>.cs-resource-footer{grid-column:1/-1}.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta)>:last-child:not(.cs-resource-footer):not(.cs-resource-automation-meta):not(.cs-resource-description):not(.cs-resource-head){grid-column:1/-1}@media(max-width:600px){.cs-resource-card--automation.cs-card--row:has(.cs-resource-automation-meta){display:flex;flex-direction:column}}
+
+/* Automation row: content and schedule share one compact line. */
+.cs-automation-card-main{display:flex;align-items:flex-start;gap:var(--cs-space-3)}
+.cs-automation-card-content{flex:1;min-width:0}
+.cs-automation-card-content h3{margin:0;font:var(--cs-type-ui);line-height:1.6}
+.cs-automation-card-caption{display:flex;align-items:center;flex-wrap:wrap;gap:var(--cs-space-3);margin-top:var(--cs-space-1);font:var(--cs-type-caption);color:var(--cs-text-muted)}
+.cs-automation-card-caption small{font:inherit}
+.cs-automation-card-schedule{display:flex;gap:var(--cs-space-4);margin:0;flex-shrink:0;font:var(--cs-type-caption);color:var(--cs-text-muted)}
+.cs-automation-card-schedule dt{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.cs-automation-card-schedule dd{margin:0;line-height:1.8}
+.cs-automation-card-details{margin:var(--cs-space-2) 0 0 var(--cs-space-13)}
+@media(max-width:760px){.cs-automation-card-main{flex-wrap:wrap}.cs-automation-card-content{flex-basis:65%}.cs-automation-card-schedule{padding-left:var(--cs-space-13)}.cs-automation-card-details{margin-left:0}}

@@ -1,0 +1,167 @@
+/* CogSeed · macOS 基础窗体；随可用窗口伸缩。Windows 原生窗体由客户端构建适配。 */
+html,body,#root{width:100%;height:100%;margin:0;min-width:0}
+body{background:var(--cs-white)}
+.cs-window,.cs-window *{box-sizing:border-box}
+.cs-window{position:relative;width:100%;height:100vh;height:100dvh;display:flex;overflow:hidden;background:var(--cs-white);font-family:var(--cs-font-sans);color:var(--cs-ink)}
+.cs-brand{white-space:nowrap}
+ .cs-home{height:100%;min-height:0}
+.cs-home-scroll{min-height:0;overscroll-behavior:contain}
+.cs-home-content{flex:none}
+.cs-app-titlebar{min-height:var(--cs-titlebar-height)}
+@media(max-width:1280px){.cs-home-scroll{padding-inline:var(--cs-space-6)!important}}
+@media(max-width:960px){.cs-home-scroll{padding-inline:var(--cs-space-4)!important}}
+@media(max-height:700px){.cs-home-content{padding-top:var(--cs-space-8)!important}}
+@media(prefers-reduced-motion:reduce){
+  .cs-window *{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important;scroll-behavior:auto!important}
+}
+
+/* Match the home titlebar inset even at compact workspace breakpoints. */
+
+
+.cs-home-mist{position:absolute;inset:0;pointer-events:none;background:var(--cs-home-background)}
+.cs-app-titlebar[data-sidebar-collapsed="true"]{padding-inline-start:16px!important}
+
+/* Shared resource-page composition; card geometry remains in components/cards. */
+
+.cs-resource-page-scroll{padding:var(--cs-space-8) var(--cs-space-8) var(--cs-space-13)}
+.cs-resource-page-content{max-width:var(--cs-card-grid-width-max);width:100%;margin:0 auto}
+.cs-resource-page-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--cs-space-3)}
+.cs-resource-page-caption{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(--cs-space-2);margin:var(--cs-space-4) 0;font-size:var(--cs-size-meta);color:var(--cs-text-muted)}
+.cs-resource-page-section{margin-top:var(--cs-space-8);display:flex;flex-direction:column;gap:var(--cs-space-4)}
+.cs-resource-page-notice{font-size:var(--cs-size-ui-sm);line-height:1.6;color:var(--cs-accent-ink);padding:var(--cs-space-3);background:var(--cs-accent-wash);border-radius:var(--cs-radius-md)}
+.cs-preview-editor{display:flex;flex-direction:column;gap:var(--cs-space-3);padding:var(--cs-space-4);border:1px solid var(--cs-border);border-radius:var(--cs-radius-card);margin-bottom:var(--cs-space-4);max-width:400px;font-size:var(--cs-size-ui);box-sizing:border-box}
+@media(max-width:760px){.cs-resource-page-scroll{padding:var(--cs-space-4) var(--cs-space-4)}.cs-resource-page-toolbar>div{max-width:100%}}
+
+/* Settings: replace workspace navigation with a dedicated category rail. */
+.cs-settings-layout{display:flex;flex:1;min-height:0}
+.cs-settings-nav{width:224px;flex:none;display:flex;flex-direction:column;padding:var(--cs-space-4) var(--cs-space-4);background:var(--cs-sidebar-top);border-right:1px solid var(--cs-border-subtle);overflow:auto;box-sizing:border-box}
+
+
+.cs-settings-muted{font-size:var(--cs-size-ui-sm);color:var(--cs-text-muted)}
+.cs-settings-content{max-width:760px;margin:0 auto;padding:var(--cs-space-6) var(--cs-space-8) var(--cs-space-13);box-sizing:border-box}
+.cs-settings-heading h1{font-size:var(--cs-size-heading);font-weight:500;line-height:1.4;margin:0 0 var(--cs-space-6)}
+.cs-settings-notice{font-size:var(--cs-size-label);color:var(--cs-text-muted);margin:0 0 var(--cs-space-4)}
+.cs-settings-notice:empty{display:none}
+.cs-settings-row{display:flex;align-items:center;justify-content:space-between;gap:var(--cs-space-6);padding:var(--cs-space-3) 0;border-bottom:1px solid var(--cs-border-hairline)}
+.cs-settings-row-copy{min-width:0;flex:1}
+.cs-settings-row-title{font-size:var(--cs-size-ui);font-weight:400;line-height:1.5}
+.cs-settings-row-copy p{font-size:var(--cs-size-ui-sm);color:var(--cs-text-muted);line-height:1.5;margin:var(--cs-space-1) 0 0}
+.cs-settings-row-control{flex:none;display:flex;align-items:center;justify-content:flex-end;max-width:100%}
+@media(max-width:900px){.cs-settings-nav{width:192px;padding:var(--cs-space-4) var(--cs-space-3)}.cs-settings-content{padding:var(--cs-space-6) var(--cs-space-6) var(--cs-space-13)}.cs-settings-row{gap:var(--cs-space-4)}}
+@media(max-width:640px){.cs-settings-nav{width:156px;padding:var(--cs-space-3) var(--cs-space-2)}.cs-settings-content{padding:var(--cs-space-6) var(--cs-space-4) var(--cs-space-8)}.cs-settings-row{align-items:flex-start;flex-direction:column;gap:var(--cs-space-3)}}
+
+/* Memory detail shares the settings content column and navigation. */
+.cs-memory-heading,.cs-memory-section-head,.cs-memory-actions,.cs-memory-editor-actions{display:flex;align-items:center;gap:var(--cs-space-3)}
+.cs-memory-heading{align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:var(--cs-space-4)}
+.cs-memory-section{margin-bottom:var(--cs-space-8)}
+.cs-memory-section-head{padding-bottom:var(--cs-space-2);border-bottom:1px solid var(--cs-border-subtle);gap:var(--cs-space-2)}
+.cs-memory-section-head h2{font-size:var(--cs-size-ui);font-weight:500;margin:0}
+.cs-memory-section-help{font-size:var(--cs-size-ui-sm);line-height:1.65;color:var(--cs-text-muted);margin:var(--cs-space-2) 0 var(--cs-space-1)}
+.cs-memory-entry{display:flex;align-items:flex-start;gap:var(--cs-space-4);padding:var(--cs-space-4) 0;border-bottom:1px solid var(--cs-border-hairline);flex-wrap:wrap}
+.cs-memory-entry-copy{flex:1;min-width:180px;overflow-wrap:anywhere}
+.cs-memory-entry-copy h3{font-size:var(--cs-size-ui);font-weight:500;margin:0 0 var(--cs-space-1)}
+.cs-memory-entry-copy p{font-size:var(--cs-size-ui);line-height:1.75;white-space:pre-wrap;margin:0}
+.cs-memory-entry-actions{display:flex;gap:var(--cs-space-1);flex:none}
+.cs-memory-editor{display:flex;flex-direction:column;gap:var(--cs-space-3);padding:var(--cs-space-4) 0;border-bottom:1px solid var(--cs-border-hairline)}
+.cs-memory-delete{display:flex;align-items:center;gap:var(--cs-space-2);flex-wrap:wrap;width:100%;font-size:var(--cs-size-ui-sm)}
+@media(max-width:640px){.cs-memory-section-head{flex-wrap:wrap}.cs-memory-actions{flex-wrap:wrap}.cs-memory-entry-actions{margin-left:auto}}
+
+/* Settings pages compose existing design-system controls; spacing is page-local. */
+.cs-settings-nav nav{display:flex;flex-direction:column;gap:var(--cs-space-1)}
+.cs-settings-content [hidden]{display:none!important}
+.cs-settings-choice{width:216px;max-width:100%}
+.cs-settings-actions{display:flex;align-items:center;gap:var(--cs-space-2);flex-wrap:wrap;margin:var(--cs-space-3) 0}
+.cs-settings-row-control .cs-settings-actions{margin:0;justify-content:flex-end}
+.cs-settings-editor{padding:var(--cs-space-4);margin:var(--cs-space-4) 0;border:1px solid var(--cs-border-subtle);border-radius:var(--cs-radius-lg)}
+.cs-settings-editor h2,.cs-settings-editor h3{font-size:var(--cs-size-ui);font-weight:500;margin:0 0 var(--cs-space-3)}
+.cs-settings-editor p{font-size:var(--cs-size-ui-sm);line-height:1.65}
+.cs-settings-options{display:flex;flex-direction:column;gap:var(--cs-space-2);margin:var(--cs-space-4) 0}
+.cs-settings-table{overflow-x:auto;margin:var(--cs-space-4) 0}
+.cs-settings-table>.cs-data-table{min-width:570px}
+.cs-settings-progress{height:6px;background:var(--cs-border-subtle);border-radius:var(--cs-radius-full);overflow:hidden}
+.cs-settings-progress span{display:block;height:100%;background:var(--cs-accent);transition:width 180ms var(--cs-ease-out)}
+.cs-settings-row-copy{overflow-wrap:anywhere}
+@media(max-width:900px){.cs-settings-row{flex-wrap:wrap}.cs-settings-row-control{max-width:100%}.cs-settings-choice{width:200px}}
+
+/* Connections source panes, composed from existing preview primitives. */
+/* Shared main tabs: compact header spacing, scrolling labels and fixed trailing actions. */
+.cs-resource-page-scroll.cs-page-tabs-layout{padding-top:var(--cs-space-3)}
+.cs-page-tabs{display:flex;align-items:center;gap:var(--cs-space-4);margin-bottom:var(--cs-space-6);border-bottom:1px solid var(--cs-border-hairline)}
+.cs-page-tabs-scroll{flex:1;min-width:0;overflow-x:auto;overscroll-behavior-x:contain}
+.cs-page-tabs-scroll>[role="tablist"]{flex-wrap:nowrap}
+.cs-page-tabs-actions{display:flex;align-items:center;gap:var(--cs-space-2);flex:none}
+.cs-capabilities-content [role="tabpanel"] > .cs-resource-page-toolbar { margin-bottom:var(--cs-space-6); flex-wrap: wrap; }
+.cs-capabilities-content [role="tabpanel"] > [role="tablist"] { margin-bottom:var(--cs-space-6); }
+.cs-capabilities-content h2 { font-size: var(--cs-size-ui); font-weight: 500; margin:0 0 var(--cs-space-4); }
+.cs-capabilities-content h3 { font-size: var(--cs-size-ui-sm); font-weight: 500; }
+.cs-capability-sections { display: grid; gap:var(--cs-space-8); }
+.cs-capability-sections section > .cs-card-grid { margin-top:var(--cs-space-4); }
+.cs-capability-detail { border: 1px solid var(--cs-border); border-radius: var(--cs-radius-card); padding:var(--cs-space-6); margin-bottom:var(--cs-space-6); }
+.cs-capability-detail > label { margin:var(--cs-space-4) 0; }
+.cs-capabilities-content dl { display: grid; grid-template-columns: auto 1fr; gap:var(--cs-space-3) var(--cs-space-6); font-size: var(--cs-size-ui-sm); }
+.cs-capabilities-content dt { color: var(--cs-text-muted); }
+.cs-capabilities-content dd { margin:0; }
+
+.cs-settings-section__body > .cs-settings-row:first-child{padding-top:0}
+.cs-settings-section__body > .cs-settings-row:last-child{border-bottom:0}
+
+.cs-settings-external { color: var(--cs-ink-70); font-size: var(--cs-size-ui); text-underline-offset: 3px; }
+
+/* IM opens the full connection manager directly, without the old overview. */
+.cs-im-layout{display:grid;grid-template-columns:220px minmax(0,1fr);border:1px solid var(--cs-border);border-radius:var(--cs-radius-card);min-height:620px}
+.cs-im-menu{background:var(--cs-surface-subtle,var(--cs-white));border-right:1px solid var(--cs-border-hairline)}
+.cs-im-menu-heading{padding:var(--cs-space-6);border-bottom:1px solid var(--cs-border-hairline)}
+.cs-im-page h3{margin:0;font-weight:500}
+.cs-im-channel-list{display:grid;gap:var(--cs-space-2);padding:var(--cs-space-6) var(--cs-space-3) 0}
+.cs-im-channel-list button{justify-content:flex-start;text-align:left;width:100%;gap:var(--cs-space-2)}
+.cs-im-channel-status{margin-left:auto;font-size:var(--cs-size-meta)}
+.cs-im-content{min-width:0}
+.cs-im-channel-header{display:flex;align-items:center;gap:var(--cs-space-4);padding:var(--cs-space-6);border-bottom:1px solid var(--cs-border-hairline)}
+.cs-im-channel-icon{width:56px;height:56px;display:grid;place-items:center;background:var(--cs-accent-wash);color:var(--cs-accent-ink);border-radius:var(--cs-radius-card)}
+.cs-im-channel-copy{display:grid;gap:var(--cs-space-3)}
+.cs-im-channel-name{display:flex;align-items:center;gap:var(--cs-space-3)}
+.cs-im-channel-name h3{font-size:var(--cs-size-title)}
+.cs-im-region{border:1px solid var(--cs-border);border-radius:var(--cs-radius-full);padding:var(--cs-space-1) var(--cs-space-2);font-size:var(--cs-size-meta);color:var(--cs-text-muted)}
+.cs-im-receive{margin-left:auto;display:flex;align-items:center;gap:var(--cs-space-3);font-size:var(--cs-size-ui-sm)}
+.cs-im-section{padding:var(--cs-space-6);border-bottom:1px solid var(--cs-border-hairline)}
+.cs-im-section:last-child{border-bottom:0}
+.cs-im-section>h3{margin-bottom:var(--cs-space-4)}
+.cs-im-section-row{display:flex;align-items:center;justify-content:space-between;gap:var(--cs-space-4)}
+.cs-im-account{display:flex;align-items:center;gap:var(--cs-space-4);padding:var(--cs-space-4);border:1px solid var(--cs-border);border-radius:var(--cs-radius-field)}
+.cs-im-account>div{display:grid;gap:var(--cs-space-2);flex:1}
+.cs-im-account strong{font-weight:500;font-size:var(--cs-size-ui-sm)}
+.cs-im-owner-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:var(--cs-space-3)}
+.cs-im-behavior{display:grid;grid-template-columns:160px minmax(0,1fr);gap:var(--cs-space-6)}
+.cs-im-setting-row{display:flex;justify-content:space-between;align-items:center;gap:var(--cs-space-4);padding:0 0 var(--cs-space-6);font-size:var(--cs-size-ui-sm)}
+.cs-im-setting-row+ .cs-im-setting-row{padding-top:var(--cs-space-6);border-top:1px solid var(--cs-border-hairline)}
+.cs-im-setting-row:last-child{padding-bottom:0}
+.cs-im-setting-row>div{min-width:180px}
+.cs-im-notice,.cs-im-scan{margin:var(--cs-space-4) var(--cs-space-6);color:var(--cs-text-muted);font-size:var(--cs-size-ui-sm)}
+.cs-im-scan{margin:var(--cs-space-4) 0 0;padding:var(--cs-space-4);border:1px solid var(--cs-border);border-radius:var(--cs-radius-field)}
+.cs-im-actions{display:flex;gap:var(--cs-space-3)}
+@media(max-width:1100px){.cs-im-layout{grid-template-columns:180px minmax(0,1fr)}.cs-im-owner-form{grid-template-columns:1fr}.cs-im-behavior{grid-template-columns:1fr}.cs-im-setting-row{flex-wrap:wrap}}
+@media(max-width:720px){.cs-im-layout{grid-template-columns:1fr}.cs-im-menu{border-right:0;border-bottom:1px solid var(--cs-border-hairline);padding-bottom:var(--cs-space-6)}.cs-im-channel-header{flex-wrap:wrap}.cs-im-receive{margin-left:0}}
+
+/* ResourceToolbar is shared by list pages; keep search adjacent to its actions. */
+.cs-resource-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:var(--cs-space-4);margin-bottom:var(--cs-space-6)}
+.cs-resource-toolbar-leading{min-width:0}
+.cs-resource-toolbar-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:var(--cs-space-3);margin-inline-start:auto;max-width:100%}
+.cs-resource-toolbar-search{width:240px;max-width:100%;min-width:0}
+.cs-resource-toolbar-search .cs-field-shell{width:100%;box-sizing:border-box}
+.cs-capability-sections>section{display:grid;gap:var(--cs-space-4);min-width:0}
+.cs-capability-sections>section>.cs-card-grid{margin-top:0}
+@media(max-width:600px){.cs-resource-toolbar-controls{width:100%}.cs-resource-toolbar-search{flex:1;min-width:140px}}
+
+
+/* Primary navigation stays underlined; category filters share the action row. */
+.cs-capabilities-content>.cs-page-tabs{margin-bottom:var(--cs-space-3)}
+.cs-capabilities-content .cs-resource-toolbar{gap:var(--cs-space-3);margin-bottom:var(--cs-space-4)}
+.cs-resource-toolbar-leading{display:flex;align-items:center}
+.cs-skills-layout>.cs-resource-toolbar{margin-bottom:0}
+
+@media(max-width:1280px){.cs-resource-page-scroll{padding-inline:var(--cs-space-6)}}
+@media(max-width:960px){.cs-resource-page-scroll{padding-inline:var(--cs-space-4)}}
+
+/* Existing open-source mascot is decorative and never covers composer controls. */
+.cs-brand-composer{position:relative;width:100%;min-width:0}
+.cs-brand-mascot{position:absolute;width:88px;height:auto;right:var(--cs-space-4);bottom:calc(100% - 8px);pointer-events:none;user-select:none}

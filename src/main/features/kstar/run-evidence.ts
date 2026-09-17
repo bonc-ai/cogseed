@@ -27,6 +27,7 @@ import {
   type ValidationRecord,
 } from '../recall/validation-service';
 import { readKstarEpisode } from './episode-store';
+import { listRecallUsage } from '../recall/usage-service';
 import {
   readKstarRequirement,
   readKstarTask,
@@ -67,6 +68,11 @@ export interface KstarRunEvidenceAsset {
   }>;
   injectionReceipts: InjectionReceipt[];
   usageReceipts: AssetUsageReceipt[];
+  /** 用户反馈计数（T2.2 · 2026-09-13 接线）：usage-records 的
+   *  feedback_positive / feedback_negative 按资产聚合——此前正负反馈只进
+   *  流水，证据导出里不可见，"这条资产用户觉得有没有用"无从回答。 */
+  feedbackPositive: number;
+  feedbackNegative: number;
 }
 
 export interface KstarRunEvidence {
@@ -297,6 +303,8 @@ export async function readKstarRunEvidence(
         new Map(versions.map((record) => [record.version, record.snapshot])),
       );
     }));
+  // 用户反馈计数（T2.2）：正/负反馈只在 usage 流水里，聚合进资产级证据。
+  const feedbackUsage = await listRecallUsage(userId).catch(() => []);
   const assets = requestedAssetVersions
     .map(({ assetId, assetVersion }): KstarRunEvidenceAsset => ({
       assetId,
@@ -320,6 +328,12 @@ export async function readKstarRunEvidence(
       usageReceipts: usageReceipts.filter((receipt) => (
         receipt.assetId === assetId && receipt.assetVersion === assetVersion
       )),
+      feedbackPositive: feedbackUsage.filter((record) => (
+        record.assetId === assetId && record.outcome === 'feedback_positive'
+      )).length,
+      feedbackNegative: feedbackUsage.filter((record) => (
+        record.assetId === assetId && record.outcome === 'feedback_negative'
+      )).length,
     }));
 
   const proofExecutionIdsByProjection = new Map<string, Set<string>>();

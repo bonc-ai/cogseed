@@ -97,6 +97,14 @@ export interface GroupMessageMetrics {
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
+    /** 最后一次调用的 prompt 侧用量（2026-09-11）：当前上下文占用的权威
+     *  口径；上方字段为整轮累加（消耗口径，每步重发的历史被求和）。 */
+    lastCallUsage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+    };
     /** CLI 自报成本（美元，claude 的 total_cost_usd 等）。比单价表估算准，
      *  渲染层优先消费；缺省时回退价格表估算。 */
     costUsd?: number;
@@ -243,6 +251,11 @@ export interface GroupMessage {
     /** Historical clone locator. When present, the iframe resolves against
      * the source conversation rather than the conversation displaying it. */
     source_cid?: string;
+    /** 确认卡片状态（2026-09-14）：pending/confirmed/cancelled/failed。
+     * 持久化在消息体上——历史重渲染按此回放只读态，不得回退到可点。 */
+    confirm_state?: 'pending' | 'confirmed' | 'cancelled' | 'failed';
+    confirm_op?: string;
+    confirmed_at?: string;
   }>;
   /** Durable receipt for an explicit user teaching interaction whose memory
    * write succeeded. The linked candidate remains reviewable and revocable. */

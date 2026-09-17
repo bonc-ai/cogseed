@@ -1,0 +1,48 @@
+/* Native action reset and a single focus contract across components and pages. */
+.cs-plain-action{appearance:none;border:0;background:transparent;padding:0;font:inherit;color:inherit;text-align:inherit;display:inline-flex;align-items:center;gap:var(--cs-space-1);cursor:pointer;box-sizing:border-box}
+.cs-plain-action:disabled{cursor:not-allowed;color:var(--cs-text-disabled)}
+.cs-task-row{width:100%;text-align:left}
+.cs-accordion-trigger{width:100%;text-align:left}
+.cs-tabs [aria-selected="true"]{box-shadow:var(--cs-tab-underline)}
+:root :is(button,input,select,textarea,a[href],summary,[tabindex]):focus-visible,:root .cs-field-shell:has(input:focus-visible){outline:var(--cs-focus-outline);outline-offset:2px;box-shadow:var(--cs-focus-ring)}
+.cs-radio{display:flex;align-items:center;gap:var(--cs-space-2);font:var(--cs-type-ui);cursor:pointer}
+.cs-radio input{appearance:auto;accent-color:var(--cs-ink);width:16px;height:16px;flex:none;margin:0}
+.cs-radio:has(input:disabled){cursor:not-allowed;color:var(--cs-text-disabled)}
+.cs-radio-card{align-items:flex-start;padding:var(--cs-space-2) var(--cs-space-3);border-radius:var(--cs-radius-md)}
+.cs-radio-card:hover{background:var(--cs-overlay-hover)}
+.cs-radio-card:has(input:checked){background:var(--cs-accent-wash);color:var(--cs-accent-ink)}
+.cs-radio-title,.cs-radio-help{display:block}.cs-radio-help{font-size:var(--cs-size-caption);color:var(--cs-text-muted);margin-top:var(--cs-space-1)}
+.cs-pagination{display:flex;align-items:center;flex-wrap:wrap;gap:var(--cs-space-2);font:var(--cs-type-ui)}
+.cs-pagination button{display:flex;align-items:center;justify-content:center;min-width:var(--cs-control-h-sm);height:var(--cs-control-h-sm);border:1px solid transparent;border-radius:var(--cs-radius-sm);background:transparent;color:var(--cs-ink-70);font:inherit;cursor:pointer}
+.cs-pagination button[aria-current]{background:var(--cs-accent-wash);color:var(--cs-accent-ink);border-color:var(--cs-accent)}
+.cs-pagination button:disabled{color:var(--cs-text-disabled);cursor:not-allowed}.cs-pagination-total{margin-left:auto;font:var(--cs-type-caption);color:var(--cs-text-muted)}
+.cs-data-table{overflow:auto;max-width:100%;background:var(--cs-white);border:1px solid var(--cs-border);border-radius:var(--cs-radius-lg)}
+.cs-data-table table{width:100%;min-width:460px;border-collapse:collapse;font:var(--cs-type-ui);font-size:var(--cs-size-ui-sm)}
+.cs-data-table th,.cs-data-table td{padding:var(--cs-space-2) var(--cs-space-4);border-bottom:1px solid var(--cs-border-hairline);text-align:left;overflow-wrap:anywhere}
+.cs-data-table th{height:var(--cs-row-table-head);box-sizing:border-box;background:var(--cs-surface-subtle);color:var(--cs-text-muted);font-weight:500}
+.cs-data-table td{height:var(--cs-row-table);box-sizing:border-box;color:var(--cs-ink-60)}
+.cs-data-table tr:hover{background:var(--cs-surface-subtle)}.cs-data-table tr.is-selected{background:var(--cs-accent-wash)}
+@media(forced-colors:active){
+  :root :is(button,input,select,textarea,[role=button]){outline:1px solid ButtonBorder;outline-offset:-1px}
+  :root :is(button,input,select,textarea,a[href],summary,[tabindex]):focus-visible,:root .cs-field-shell:has(input:focus-visible){outline:1px solid Highlight;box-shadow:none}
+  [aria-pressed=true],[aria-current=page],.cs-data-table tr.is-selected{outline:1px solid Highlight;outline-offset:-1px}
+  .cs-card,.cs-data-table,[role=dialog]{border:1px solid CanvasText}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important}}
+
+/* Field shells carry the ring, while tag-removal buttons keep their own focus. */
+:root .cs-field-shell input:focus-visible{outline:none;box-shadow:none}
+
+/* Text entry uses a quiet neutral edge, never the blue action-control ring.
+ * Keep OS forced-color focus indicators; invalid borders remain component-owned. */
+@media (forced-colors: none){
+  html:root :is(input:not(:where([type=checkbox],[type=radio],[type=range],[type=button],[type=submit],[type=reset],[type=file],[type=color])),textarea,.cs-select-trigger,[contenteditable=true]):focus{
+    outline:none;box-shadow:none;
+  }
+  html:root :is(input:not(:where([type=checkbox],[type=radio],[type=range],[type=button],[type=submit],[type=reset],[type=file],[type=color])),textarea,.cs-select-trigger,[contenteditable=true]):focus-visible{
+    outline:none;box-shadow:inset 0 -1px 0 var(--cs-border-control);
+  }
+  :root .cs-field-shell:has(input:focus){outline:none;box-shadow:inset 0 -1px 0 var(--cs-border-control)}
+  :root .cs-field-shell input:focus,:root .cs-field-shell input:focus-visible{outline:none;box-shadow:none}
+  :root .cs-composer textarea:focus,:root .cs-composer [contenteditable=true]:focus{outline:none;box-shadow:none}
+}

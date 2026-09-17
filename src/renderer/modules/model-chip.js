@@ -31,15 +31,25 @@ let _modelChipBound = false;
 // reasoning capability). Unknown ids fall back to the name heuristic.
 const _modelReasoningByProvider = new Map();
 
+// provider → models[]（auth.listModels 原样结果）：一级菜单悬停 provider 时
+// 立刻弹二级模型清单用它，与能力表来自同一次请求（同一数据源，不重复拉）。
+const _modelListByProvider = new Map();
+
+// provider → { [modelId]: string[] }：模型在「模型配置 → 高级配置 → 推理等级」
+// 里声明的思考强度档位（自定义 provider 的 reasoningLevels）。三级飞出层用它
+// 标注「该模型已配置哪些档位」；内置 provider 无此数据（走能力表）。
+const _modelLevelsByProvider = new Map();
+let _modelChipLevelsLoaded = false;
+
 // auth.listEntries 不带 reasoning 标注，能力表过去只在下钻二级列表时填充
 // ——顶层菜单冷开会对自定义 provider 误显示「该模型不支持」。启动加载
 // 条目时按 provider 预取标注，与下钻共用同一张表（同一数据源）。
-async function _prefetchReasoningForEntries() {
+async function _prefetchReasoningForEntries(force = false) {
   const providers = new Set(_modelChipEntries.map((e) => e && e.provider).filter(Boolean));
-  let changed = false;
+  let changed = await _prefetchConfiguredReasoningLevels(force);
   for (const provider of providers) {
     // 已有表（含标注为空的空表）不再重复拉；IPC 失败不入表，下次打开重试。
-    if (_modelReasoningByProvider.has(provider)) continue;
+    if (!force && _modelReasoningByProvider.has(provider)) continue;
     try {
       const res = await window.cogseed.invoke('auth.listModels', { provider });
       if (!(res && res.ok && Array.isArray(res.models))) continue;
@@ -48,10 +58,68 @@ async function _prefetchReasoningForEntries() {
         if (m && typeof m === 'object' && typeof m.reasoning === 'boolean') table[String(m.id)] = m.reasoning;
       }
       _modelReasoningByProvider.set(String(provider), table);
+      _modelListByProvider.set(String(provider), res.models);
       changed = true;
     } catch { /* 下次打开菜单重试 */ }
   }
   return changed;
+}
+
+/** 模型配置里声明的思考强度档位（自定义 provider）：三级飞出层的档位标注。
+ *  数据来自 customProviders.list（与设置页同一来源），按 cp:<id> 建表；失败
+ *  静默——档位标注是增强信息，缺了不影响选择。成功一次即不再重复拉，配置
+ *  变更（cogseed:model-entries-changed）时 force 重拉。 */
+async function _prefetchConfiguredReasoningLevels(force = false) {
+  if (_modelChipLevelsLoaded && !force) return false;
+  try {
+    const res = await window.cogseed.invoke('customProviders.list');
+    if (!(res && Array.isArray(res.providers))) return false;
+    for (const provider of res.providers) {
+      const levels = {};
+      for (const model of Array.isArray(provider.models) ? provider.models : []) {
+        const id = String((model && model.id) || '').trim();
+        if (!id) continue;
+        const declared = Array.isArray(model.reasoningLevels)
+          ? model.reasoningLevels.map((level) => String(level || '').trim()).filter(Boolean)
+          : [];
+        if (declared.length) levels[id] = declared;
+      }
+      _modelLevelsByProvider.set(`cp:${provider.id}`, levels);
+    }
+    _modelChipLevelsLoaded = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 该模型声明的思考强度档位（没有则空数组）。 */
+function _configuredLevelsFor(provider, model) {
+  const table = _modelLevelsByProvider.get(String(provider || ''));
+  const levels = table ? table[String(model || '')] : null;
+  return Array.isArray(levels) ? levels : [];
+}
+
+/** 某个 provider 的模型清单：命中缓存直接返回，否则拉一次并入表（能力表
+ *  同步填充——二级/三级与顶层菜单共用同一份标注）。 */
+async function _loadProviderModels(provider) {
+  const key = String(provider || '');
+  const cached = _modelListByProvider.get(key);
+  if (Array.isArray(cached)) return cached;
+  try {
+    const res = await window.cogseed.invoke('auth.listModels', { provider: key });
+    if (!(res && res.ok && Array.isArray(res.models))) return [];
+    const table = {};
+    for (const m of res.models) {
+      if (m && typeof m === 'object' && typeof m.reasoning === 'boolean') table[String(m.id)] = m.reasoning;
+    }
+    _modelReasoningByProvider.set(key, table);
+    _modelListByProvider.set(key, res.models);
+    return res.models;
+  } catch (err) {
+    _modelChipLog.warn('list models failed', { error: (err && err.message) || String(err) });
+    return [];
+  }
 }
 
 const _EFFORT_OPTIONS = ['auto', 'off', 'low', 'high'];
@@ -243,11 +311,14 @@ function _createModelChip(target) {
   chip.className = 'model-chip exec-config-chip';
   chip.dataset.modelTarget = target;
   chip.hidden = true; // shown once entries exist or a recipient is picked
+  const settingsIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('settings', 'model-chip-icon')
+    : '';
   const chevron = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
     ? window.uiIconHtml('chevron-down', 'model-chip-chevron')
     : '';
   chip.innerHTML =
-    '<span class="model-chip-label"></span>' +
+    settingsIcon + '<span class="model-chip-label"></span>' +
     '<span class="exec-config-effort"></span>' +
     chevron;
   chip.addEventListener('click', (e) => {
@@ -382,10 +453,20 @@ function _positionModelMenu(menu, anchor) {
 
 function _bindModelMenuDismiss(menu, anchor) {
   const onDocDown = (e) => {
-    if (!menu.contains(e.target) && !anchor.contains(e.target)) _closeModelMenu();
+    // 飞出层同样属于这个菜单：点三级档位不能被当成"外部点击"先把菜单关了。
+    if (menu.contains(e.target) || anchor.contains(e.target) || _inFlyout(e.target)) return;
+    _closeMenuWithFlyouts();
   };
   const onKey = (e) => {
-    if (e.key === 'Escape') { _closeModelMenu(); e.preventDefault(); }
+    if (e.key !== 'Escape') return;
+    // 级联是两层：Escape 先收飞出层，再按一次收菜单（一次全关会让人找不回上一级）。
+    if (document.querySelector('.model-chip-flyout')) {
+      _closeFlyouts();
+      e.preventDefault();
+      return;
+    }
+    _closeMenuWithFlyouts();
+    e.preventDefault();
   };
   menu._onDocDown = onDocDown;
   menu._onKey = onKey;
@@ -395,8 +476,8 @@ function _bindModelMenuDismiss(menu, anchor) {
   // 根本翻不动。
   const onViewportChange = (e) => {
     const t = e && e.target;
-    if (t && t.nodeType && (t === menu || menu.contains(t))) return;
-    _closeModelMenu();
+    if (t && t.nodeType && (t === menu || menu.contains(t) || _inFlyout(t))) return;
+    _closeMenuWithFlyouts();
   };
   menu._onViewportChange = onViewportChange;
   menu._onDocDownTimer = setTimeout(() => {
@@ -409,7 +490,15 @@ function _bindModelMenuDismiss(menu, anchor) {
   document.addEventListener('scroll', onViewportChange, true);
 }
 
+/** 菜单 + 两级飞出层一起收：飞出的子菜单不属于 menu 子树，漏关会留下
+ *  悬浮孤儿层（且它的滚动/点击不再被菜单的关闭逻辑覆盖）。 */
+function _closeMenuWithFlyouts() {
+  _closeFlyouts();
+  _closeModelMenu();
+}
+
 function _closeModelMenu() {
+  _closeFlyouts();
   const menu = document.getElementById('model-chip-menu');
   if (!menu) return;
   if (menu._onDocDownTimer != null) {
@@ -426,9 +515,13 @@ function _closeModelMenu() {
 
 // Kept as a small public bridge for boot/navigation teardown callers.
 window.closeModelChipMenu = _closeModelMenu;
+if (typeof window.registerComposerPopover === 'function') {
+  window.registerComposerPopover('model', _closeModelMenu);
+}
 
 /** One menu, two sections: model (with provider drill-down) + effort. */
 function _toggleExecConfigMenu(anchor) {
+  if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('model');
   const old = document.getElementById('model-chip-menu');
   if (old) { _closeModelMenu(); return; }
 
@@ -439,7 +532,7 @@ function _toggleExecConfigMenu(anchor) {
   _modelChipRenderChip(anchor);
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
-  menu.className = 'model-chip-menu model-chip-menu--exec';
+  menu.className = 'model-chip-menu model-chip-menu--exec composer-popover';
   anchor.classList.add('model-chip--open');
   _renderExecConfigMenu(menu, anchor);
   _positionModelMenu(menu, anchor);
@@ -491,66 +584,41 @@ function _renderExecConfigMenu(menu, anchor) {
     return;
   }
 
-  // ── Model section ──
-  // 一层平铺：列出全部已配置的服务条目，当前生效的打勾；有任务级覆盖时该行
-  // 加「本次任务」徽标，再次点击即取消覆盖回到跟随默认。不再有摘要行 /
-  // "恢复默认"操作行——同一个模型出现两次只会让人分不清哪个能点。
-  _menuSectionLabel(menu, 'exec_config.section_model');
+  // ── Provider section（一级：provider 名称）──
+  // 级联：悬停 provider → 二级模型清单 → 悬停模型 → 三级思考强度。一级不再
+  // 平铺模型行（模型放到二级），当前生效的 provider 带「当前/本次任务」徽标；
+  // 思考强度也从一级移到三级——它本来就是"某个模型"的属性，挂在模型下面口径
+  // 才对得上（模型配置页的推理等级同源）。
+  _menuSectionLabel(menu, 'exec_config.section_provider');
 
   if (_modelChipEntries.length || cfg.model) {
-    _renderApiProviderRows(menu, anchor, target, cfg);
+    _renderProviderRows(menu, anchor, target, cfg);
   }
+  // 「管理模型」兜底入口（产品交互图）：列表下方一行，跳「设置 → 配置」。
+  // 菜单管的是"本次任务用哪个"，配置页管的是"有哪些可用"——没有这行时
+  // 用户只能自己找设置入口。
+  _renderManageModelsRow(menu);
 
-  // 推理能力标注补拉（冷开兜底）：预取通常在条目加载时已完成，这里只处理
-  // 「菜单先开、标注后到」的窗口——取回新标注且菜单仍停在顶层时原位重画。
-  // changed 才重画（否则「重画→再预取→再重画」死循环），下钻视图不拽回。
+  // 推理能力标注/模型清单/声明档位补拉（冷开兜底）：预取通常在条目加载时已
+  // 完成，这里只处理「菜单先开、数据后到」的窗口——取回新数据且菜单仍留在
+  // 顶层时原位重画。changed 才重画（否则「重画→再预取→再重画」死循环）。
   menu.dataset.view = 'exec';
   void _prefetchReasoningForEntries().then((changed) => {
-    if (changed && menu.isConnected && menu.dataset.view === 'exec') {
+    if (!changed || !menu.isConnected || menu.dataset.view !== 'exec') return;
+    const repaint = () => {
+      if (!menu.isConnected || menu.dataset.view !== 'exec') return;
       _renderExecConfigMenu(menu, anchor);
       _positionModelMenu(menu, anchor);
+    };
+    // 飞出层正被使用（悬停级联中）时推迟到关闭后再重画：重画会重建行，
+    // 旧行上打开的飞出层既收不到 mouseleave（悬空）、也会把用户正看的
+    // 级联拆掉。推迟使重画永不发生在飞出层打开期间——悬空成因被消除。
+    if (_flyoutProviderKey) {
+      _pendingExecRepaint = repaint;
+      return;
     }
+    repaint();
   });
-
-  // ── Effort section ──
-  _menuSectionLabel(menu, 'exec_config.section_effort');
-  {
-    // Segmented one-row picker — four stacked rows made the menu tall and
-    // visually heavy; pills read instantly and halve the effort-section
-    // height. Disabled pills keep the reason in their tooltip + the note.
-    const supports = cfg.model ? cfg.reasoning : false;
-    const activeEffort = cfg.effort || 'auto';
-    const seg = document.createElement('div');
-    seg.className = 'model-chip-menu-segmented';
-    _EFFORT_OPTIONS.forEach((level) => {
-      const isActive = activeEffort === level;
-      const unavailable = (level === 'low' || level === 'high') && !supports;
-      const pill = document.createElement('button');
-      pill.type = 'button';
-      pill.className = 'model-chip-seg-btn'
-        + (isActive ? ' is-active' : '')
-        + (unavailable ? ' is-disabled' : '');
-      pill.textContent = t('model_effort.' + level);
-      if (unavailable) {
-        pill.disabled = true;
-        pill.title = t('model_effort.unsupported_title');
-      }
-      if (!unavailable) {
-        pill.addEventListener('click', () => {
-          _setTaskEffort(target, level);
-          _closeModelMenu();
-        });
-      }
-      seg.appendChild(pill);
-    });
-    menu.appendChild(seg);
-    if (cfg.model && !supports) {
-      const note = document.createElement('div');
-      note.className = 'model-chip-menu-note';
-      note.textContent = t('model_effort.unsupported_hint');
-      menu.appendChild(note);
-    }
-  }
 }
 
 // ── Model option rows ────────────────────────────────────────────────────
@@ -586,55 +654,382 @@ function _setTaskEffort(target, level) {
   }
 }
 
-/** API models: one row per configured provider (its current priority
- *  entry); the chevron drills into the provider's full model list. Picking
- *  writes a task override — or, when the recipient IS an API model pick,
- *  swaps the recipient itself (the pick is the target, not a layer on it). */
-function _renderApiProviderRows(menu, anchor, target, cfg) {
+/** 「管理模型」行：与列表项同款行样式 + 上方分隔线，点击跳设置配置页。 */
+function _renderManageModelsRow(menu) {
+  const divider = document.createElement('div');
+  divider.className = 'model-chip-menu-divider';
+  divider.setAttribute('role', 'separator');
+  menu.appendChild(divider);
+
+  const row = document.createElement('div');
+  row.className = 'model-chip-menu-item model-chip-menu-item--action';
+  row.tabIndex = 0;
+  row.dataset.action = 'manage-models';
+  row.title = t('exec_config.manage_models_hint');
+  row.innerHTML = '<span class="model-chip-menu-main">'
+    + `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.manage_models'))}</span>`
+    + '</span>';
+  const open = (e) => {
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    _openModelManagement();
+  };
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      _openModelManagement();
+    }
+  });
+  menu.appendChild(row);
+}
+
+/** 跳到「设置 → 配置」：与 Run Center 的锚点跳转同一条缝——
+ *  setView 负责切视图并懒加载设置特性（boot.js 用 opts.settingsTab/anchor 调
+ *  loadSettings），activateSettingsTab 负责立刻切 tab 与锚点（设置特性已在内存
+ *  时的路径）。两处都传 anchor='models'：配置页的 focusAnchor 表里
+ *  models → #settings-model-authorizations（模型供应商/模型配置那一组），
+ *  落地就停在模型区而不是配置页顶部。 */
+function _openModelManagement() {
+  _closeMenuWithFlyouts();
+  try {
+    const rootWindow = (typeof window !== 'undefined') ? window : null;
+    const viewFn = (typeof setView === 'function') ? setView : (rootWindow ? rootWindow.setView : null);
+    if (typeof viewFn === 'function') {
+      viewFn('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
+    }
+    if (rootWindow && typeof rootWindow.activateSettingsTab === 'function') {
+      rootWindow.activateSettingsTab('configuration', { anchor: 'models' });
+    }
+  } catch (err) {
+    _modelChipLog.warn('open model management failed', { error: (err && err.message) || String(err) });
+  }
+}
+
+/** 一级菜单：每个已配置 provider 一行（当前生效的带徽标）。悬停即弹该
+ *  provider 的模型清单（二级飞出层）；点击/键盘同样打开（触屏与键盘路径），
+ *  与悬停共用同一个飞出层。provider 行不再直接选模型——选模型在二级。 */
+function _renderProviderRows(menu, anchor, target, cfg) {
   const chevronIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
     ? window.uiIconHtml('chevron-right', 'model-chip-menu-arrow-icon')
     : '›';
 
+  // 条目按 provider 去重：同一 provider 可能有多条优先级条目（主/备），
+  // 一级只列一次；当前生效的 provider 永远在列（接收者是清单外的模型时
+  // 补一条合成行，否则它的思考强度没有入口）。
+  const rows = [];
+  const seen = new Set();
   _modelChipEntries.forEach((entry) => {
-    if (!entry || !entry.provider || !entry.model) return;
-    const isCurrent = cfg.provider === entry.provider && cfg.model === entry.model;
+    if (!entry || !entry.provider) return;
+    if (seen.has(entry.provider)) return;
+    seen.add(entry.provider);
+    rows.push(entry);
+  });
+  if (cfg.provider && !seen.has(cfg.provider)) {
+    rows.unshift({ provider: cfg.provider, providerLabel: cfg.providerLabel, model: cfg.model, modelName: cfg.modelLabel });
+  }
+
+  rows.forEach((entry) => {
+    const isCurrent = cfg.provider === entry.provider;
     const item = document.createElement('div');
-    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
+    item.className = 'model-chip-menu-item model-chip-menu-item--provider' + (isCurrent ? ' is-default' : '');
+    item.tabIndex = 0;
+    item.dataset.provider = entry.provider;
+    item.title = t('model_chip.expand_title');
     const provider = entry.providerLabel || entry.provider || '';
-    const model = entry.modelName || entry.model || '';
-    // 当前行的徽标语义：跟随默认 → 「当前」；来自任务级覆盖 → 「本次任务」。
-    // 再点一次当前行 = 取消覆盖、回到跟随默认（不需要单独的恢复入口）。
+    const entryModel = entry.modelName || entry.model || '';
+    // 主行 = provider 名称（展开后看的是"用哪家"），副行保留该 provider 当前
+    // 生效的模型名——原先一行一个模型的信息不丢。
     item.innerHTML =
       '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(model)}</span>` +
+      `<span class="model-chip-menu-name">${escapeHtml(provider)}</span>` +
       (isCurrent
         ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
         : '') +
       '</span>' +
-      `<span class="model-chip-menu-sub">${escapeHtml(provider)}</span>`;
-    const expand = document.createElement('button');
-    expand.type = 'button';
+      (entryModel ? `<span class="model-chip-menu-sub">${escapeHtml(entryModel)}</span>` : '');
+    const expand = document.createElement('span');
     expand.className = 'model-chip-menu-arrow';
     expand.innerHTML = chevronIcon;
-    expand.title = t('model_chip.expand_title');
-    expand.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _openProviderModels(menu, anchor, target, entry, cfg);
-    });
     item.appendChild(expand);
-    item.addEventListener('click', () => {
-      if (isCurrent) {
-        if (cfg.modelOverridden) {
-          _clearModelOverride(target);
-        }
-        _closeModelMenu();
-        return;
+
+    const open = () => _openProviderFlyout(target, cfg, entry, item, { pin: false });
+    const openPinned = () => _openProviderFlyout(target, cfg, entry, item, { pin: true });
+    item.addEventListener('mouseenter', () => _scheduleFlyoutOpen(open));
+    item.addEventListener('mouseleave', _scheduleFlyoutClose);
+    item.addEventListener('focus', openPinned);
+    // 键盘路径的关闭：悬停有 mouseleave，focus 打开的 pinned 飞出层此前
+    // 没有 blur 对应——Tab 离开后飞出层钉住残留。焦点转入自家飞出层
+    // （沿级联下钻）不关；转到别处则解除 pin 并收起。
+    item.addEventListener('blur', () => {
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (active && _inFlyout(active)) return;
+        if (active && menu.contains(active) && active !== item) return;
+        _closeFlyouts();
+      }, 0);
+    });
+    item.addEventListener('click', (e) => { e.stopPropagation(); openPinned(); });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        openPinned();
       }
-      _applyModelPick(target, cfg, entry.provider, entry.model, model, entry.providerLabel);
-      _closeModelMenu();
     });
     menu.appendChild(item);
   });
+}
+
+// ── Right-side hover flyouts (provider → models → thinking strength) ──────
+//
+// 悬停级联：一级 provider 行 → 二级模型清单 → 三级思考强度。飞出层挂在
+// body 上（与主菜单同样的 fixed 定位），指针进入飞出层取消关闭计时，离开
+// 后才收起；点击/键盘打开则钉住，直到外部点击或 Escape——触屏没有 hover。
+
+const _FLYOUT_OPEN_DELAY = 90;
+const _FLYOUT_CLOSE_DELAY = 220;
+let _flyoutOpenTimer = null;
+let _flyoutCloseTimer = null;
+let _flyoutPinned = false;
+let _pendingExecRepaint = null;
+let _flyoutProviderKey = '';
+
+function _cancelFlyoutTimers() {
+  if (_flyoutOpenTimer) { clearTimeout(_flyoutOpenTimer); _flyoutOpenTimer = null; }
+  if (_flyoutCloseTimer) { clearTimeout(_flyoutCloseTimer); _flyoutCloseTimer = null; }
+}
+
+function _scheduleFlyoutOpen(open) {
+  _cancelFlyoutTimers();
+  _flyoutPinned = false;
+  _flyoutOpenTimer = setTimeout(() => {
+    _flyoutOpenTimer = null;
+    open();
+  }, _FLYOUT_OPEN_DELAY);
+}
+
+function _scheduleFlyoutClose() {
+  if (_flyoutPinned) return;
+  _cancelFlyoutTimers();
+  _flyoutCloseTimer = setTimeout(() => {
+    _flyoutCloseTimer = null;
+    _closeFlyouts();
+  }, _FLYOUT_CLOSE_DELAY);
+}
+
+function _closeFlyout(kind) {
+  const el = document.getElementById(`model-chip-flyout-${kind}`);
+  if (el) el.remove();
+  if (kind === 'models') _flyoutProviderKey = '';
+}
+
+function _closeFlyouts() {
+  _cancelFlyoutTimers();
+  _closeFlyout('levels');
+  _closeFlyout('models');
+  _flyoutPinned = false;
+  // 推迟的 exec 重画（飞出层使用中到达的 prefetch 数据）：关闭时机到了再画。
+  if (_pendingExecRepaint) {
+    const repaint = _pendingExecRepaint;
+    _pendingExecRepaint = null;
+    setTimeout(repaint, 0);
+  }
+}
+
+function _inFlyout(node) {
+  return !!(node && node.closest && node.closest('.model-chip-flyout'));
+}
+
+function _ensureFlyout(kind) {
+  let el = document.getElementById(`model-chip-flyout-${kind}`);
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = `model-chip-flyout-${kind}`;
+  // model-chip-submenu 是既有的右侧子菜单样式钩子（比主菜单宽、层级更高）。
+  el.className = `model-chip-flyout model-chip-menu model-chip-submenu model-chip-flyout--${kind}`;
+  el.dataset.flyout = kind;
+  el.addEventListener('mouseenter', _cancelFlyoutTimers);
+  el.addEventListener('mouseleave', _scheduleFlyoutClose);
+  document.body.appendChild(el);
+  return el;
+}
+
+/** 贴着触发行的右侧展开；右边放不下就翻到左侧，纵向夹在视口内。 */
+function _positionFlyout(flyout, rowEl) {
+  if (!flyout || !rowEl) return;
+  flyout.style.position = 'fixed';
+  const rect = rowEl.getBoundingClientRect();
+  const gap = 6;
+  const edge = 8;
+  const width = flyout.offsetWidth || 240;
+  const height = flyout.offsetHeight || 200;
+  let left = rect.right + gap;
+  if (left + width > window.innerWidth - edge) {
+    const flipped = rect.left - gap - width;
+    left = flipped >= edge ? flipped : Math.max(edge, window.innerWidth - width - edge);
+  }
+  const top = Math.min(Math.max(edge, rect.top - 6), Math.max(edge, window.innerHeight - height - edge));
+  flyout.style.left = `${Math.round(left)}px`;
+  flyout.style.top = `${Math.round(top)}px`;
+}
+
+function _flyoutHeader(flyout, title, sub = '') {
+  const header = document.createElement('div');
+  header.className = 'model-chip-menu-header';
+  header.textContent = title;
+  if (sub) {
+    const subEl = document.createElement('div');
+    subEl.className = 'model-chip-flyout-sub';
+    subEl.textContent = sub;
+    header.appendChild(subEl);
+  }
+  flyout.appendChild(header);
+}
+
+/** 二级：该 provider 配置的模型清单（悬停 provider 行弹出）。每个模型行
+ *  悬停再弹三级思考强度；点击模型 = 选择该模型（与旧的一级行点击同语义）。 */
+async function _openProviderFlyout(target, cfg, entry, rowEl, options = {}) {
+  if (!entry || !entry.provider) return;
+  if (options.pin) { _cancelFlyoutTimers(); _flyoutPinned = true; }
+  const flyout = _ensureFlyout('models');
+  _closeFlyout('levels');
+  _flyoutProviderKey = String(entry.provider);
+  flyout.innerHTML = '';
+  _flyoutHeader(flyout, entry.providerLabel || entry.provider || '', '');
+  const cached = _modelListByProvider.get(String(entry.provider));
+  if (!Array.isArray(cached)) {
+    const loading = document.createElement('div');
+    loading.className = 'model-chip-menu-loading';
+    loading.textContent = t('model_chip.loading_models');
+    flyout.appendChild(loading);
+  }
+  _positionFlyout(flyout, rowEl);
+
+  const models = Array.isArray(cached) ? cached : await _loadProviderModels(entry.provider);
+  // 异步回来时飞出层可能已经换人/被收起，丢弃过期结果。
+  if (!flyout.isConnected || _flyoutProviderKey !== String(entry.provider)) return;
+  flyout.innerHTML = '';
+  _flyoutHeader(flyout, entry.providerLabel || entry.provider || '', '');
+
+  if (!models.length) {
+    const empty = document.createElement('div');
+    empty.className = 'model-chip-menu-loading';
+    empty.textContent = t('exec_config.provider_no_models');
+    flyout.appendChild(empty);
+    _positionFlyout(flyout, rowEl);
+    return;
+  }
+
+  const chevronIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('chevron-right', 'model-chip-menu-arrow-icon')
+    : '›';
+  models.forEach((m) => {
+    const id = String(m && typeof m === 'object' ? (m.id || m.name || '') : m || '');
+    if (!id) return;
+    const label = String((m && m.name) || id);
+    const isCurrent = cfg.provider === entry.provider && cfg.model === id;
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item model-chip-menu-item--provider' + (isCurrent ? ' is-default' : '');
+    item.tabIndex = 0;
+    item.dataset.model = id;
+    item.title = t('model_chip.expand_title');
+    const levels = _configuredLevelsFor(entry.provider, id);
+    item.innerHTML =
+      '<span class="model-chip-menu-main">' +
+      `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
+      (isCurrent
+        ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
+        : '') +
+      '</span>' +
+      (levels.length
+        ? `<span class="model-chip-menu-sub">${escapeHtml(t('exec_config.model_levels_configured', { levels: levels.join(' · ') }))}</span>`
+        : '');
+    const arrow = document.createElement('span');
+    arrow.className = 'model-chip-menu-arrow';
+    arrow.innerHTML = chevronIcon;
+    item.appendChild(arrow);
+
+    const openLevels = (pin) => _openLevelsFlyout(target, cfg, entry, id, label, item, pin);
+    const pick = () => {
+      // 与旧一级行同语义：点当前模型 = 取消任务级覆盖、回到跟随默认；
+      // 有任务级覆盖时该行带「本次任务」徽标，再点一次即撤销。
+      if (isCurrent) {
+        if (cfg.modelOverridden) _clearModelOverride(target);
+        _closeModelMenu();
+        return;
+      }
+      _applyModelPick(target, cfg, entry.provider, id, label, entry.providerLabel);
+      _closeModelMenu();
+    };
+    item.addEventListener('mouseenter', () => _scheduleFlyoutOpen(() => openLevels(false)));
+    item.addEventListener('mouseleave', _scheduleFlyoutClose);
+    item.addEventListener('focus', () => openLevels(true));
+    item.addEventListener('click', pick);
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        pick();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        openLevels(true);
+      }
+    });
+    flyout.appendChild(item);
+  });
+  _positionFlyout(flyout, rowEl);
+}
+
+/** 三级：该模型可配置的思考强度清单。档位遵循运行时的实际取值域
+ *  （自动 / 关闭 / 低 / 高）——模型声明了推理能力才开放低/高，否则置灰并
+ *  给出原因，不放假开关。同时标注「模型配置」里声明的档位，让两级口径对得上。 */
+function _openLevelsFlyout(target, cfg, entry, modelId, modelLabel, rowEl, pin) {
+  if (pin) { _cancelFlyoutTimers(); _flyoutPinned = true; }
+  const flyout = _ensureFlyout('levels');
+  flyout.innerHTML = '';
+  _flyoutHeader(flyout, t('model_effort.menu_title'), modelLabel || modelId);
+  const supported = _modelReasoningCapability(entry.provider, modelId);
+  const isCurrentModel = cfg.provider === entry.provider && cfg.model === modelId;
+  const activeEffort = isCurrentModel ? (cfg.effort || 'auto') : '';
+  _EFFORT_OPTIONS.forEach((level) => {
+    const unavailable = (level === 'low' || level === 'high') && !supported;
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item'
+      + (activeEffort === level ? ' is-default' : '')
+      + (unavailable ? ' is-disabled' : '');
+    item.tabIndex = unavailable ? -1 : 0;
+    item.innerHTML = `<span class="model-chip-menu-main"><span class="model-chip-menu-name">${escapeHtml(t('model_effort.' + level))}</span></span>`
+      + (activeEffort === level
+        ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>`
+        : '');
+    if (unavailable) {
+      item.title = t('model_effort.unsupported_title');
+      return flyout.appendChild(item);
+    }
+    const pick = () => {
+      // 对非当前模型选档位 = 「用这个模型跑这个强度」：先落模型，再落强度。
+      if (!isCurrentModel) _applyModelPick(target, cfg, entry.provider, modelId, modelLabel, entry.providerLabel);
+      _setTaskEffort(target, level);
+      _closeModelMenu();
+    };
+    item.addEventListener('click', pick);
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
+    });
+    flyout.appendChild(item);
+  });
+  const levels = _configuredLevelsFor(entry.provider, modelId);
+  if (levels.length) {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('exec_config.model_levels_configured', { levels: levels.join(' · ') });
+    flyout.appendChild(note);
+  }
+  if (!supported) {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('model_effort.unsupported_hint');
+    flyout.appendChild(note);
+  }
+  _positionFlyout(flyout, rowEl);
 }
 
 /** Apply a model pick: recipient-swap for model recipients (the pick is the
@@ -664,88 +1059,6 @@ function _applyModelPick(target, cfg, provider, model, modelLabel, providerLabel
   }
 }
 
-/** Second level: every model of one provider (annotated with reasoning
- *  capability, cached for the effort gating). */
-async function _openProviderModels(menu, anchor, target, entry, cfg) {
-  menu.innerHTML = '';
-  menu.dataset.view = 'providers';
-
-  const back = document.createElement('button');
-  back.type = 'button';
-  back.className = 'model-chip-menu-back';
-  const backIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
-    ? window.uiIconHtml('chevron-left', 'model-chip-menu-back-icon')
-    : '‹ ';
-  back.innerHTML = backIcon + `<span>${escapeHtml(t('model_chip.back'))}</span>`;
-  back.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _renderExecConfigMenu(menu, anchor);
-    _positionModelMenu(menu, anchor);
-  });
-  menu.appendChild(back);
-
-  const header = document.createElement('div');
-  header.className = 'model-chip-menu-header';
-  header.textContent = entry.providerLabel || entry.provider || '';
-  menu.appendChild(header);
-
-  const loading = document.createElement('div');
-  loading.className = 'model-chip-menu-loading';
-  loading.textContent = t('model_chip.loading_models');
-  menu.appendChild(loading);
-  _positionModelMenu(menu, anchor);
-
-  let models = [];
-  try {
-    const res = await window.cogseed.invoke('auth.listModels', { provider: entry.provider });
-    if (res && res.ok && Array.isArray(res.models)) models = res.models;
-  } catch (err) {
-    _modelChipLog.warn('list models failed', { error: (err && err.message) || String(err) });
-  }
-  // Remember the reasoning capability for effort gating on this provider.
-  if (models.length) {
-    const table = {};
-    for (const m of models) {
-      if (m && typeof m === 'object' && typeof m.reasoning === 'boolean') table[String(m.id)] = m.reasoning;
-    }
-    _modelReasoningByProvider.set(String(entry.provider), table);
-  }
-  // Menu may have been closed while loading.
-  if (!menu.isConnected) return;
-  loading.remove();
-
-  if (!models.length) {
-    const empty = document.createElement('div');
-    empty.className = 'model-chip-menu-loading';
-    empty.textContent = t('model_chip.no_models');
-    menu.appendChild(empty);
-    _positionModelMenu(menu, anchor);
-    return;
-  }
-
-  models.forEach((m) => {
-    const id = String(m && typeof m === 'object' ? (m.id || m.name || '') : m || '');
-    if (!id) return;
-    const label = String((m && m.name) || id);
-    const isCurrent = cfg.provider === entry.provider && cfg.model === id;
-    const item = document.createElement('div');
-    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
-    item.innerHTML =
-      '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
-      (isCurrent ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
-      '</span>' +
-      (m && typeof m === 'object' && m.reasoning === false
-        ? `<span class="model-chip-menu-sub">${escapeHtml(t('exec_config.no_reasoning_note'))}</span>`
-        : '');
-    item.addEventListener('click', () => {
-      _applyModelPick(target, cfg, entry.provider, id, label, entry.providerLabel);
-      _closeModelMenu();
-    });
-    menu.appendChild(item);
-  });
-  _positionModelMenu(menu, anchor);
-}
 
 /** CLI 模型列表（扫描式）：打开即触发扫描（有缓存用缓存），列表 =
  *  扫描 ∪ 静态目录 ∪ 手输记忆；选择写任务级 model 覆盖（bare id），再点
@@ -981,10 +1294,12 @@ function initModelChip() {
     // consuming them the chip would keep re-rendering the stale boot-time
     // list, so a model configured in settings never shows up until restart.
     window.addEventListener('cogseed:model-entries-changed', (e) => {
+      // 模型配置（含推理等级/输入类型）在设置页改完会广播新条目：三级飞出层
+      // 的档位标注来自同一份配置，必须一起换新，否则层级里还是旧档位。
       if (e && e.detail && Array.isArray(e.detail.entries)) {
         _modelChipEntries = e.detail.entries;
         _modelChipRenderAll();
-        void _prefetchReasoningForEntries();
+        void _prefetchReasoningForEntries(true);
       } else {
         refreshModelChipEntries();
       }

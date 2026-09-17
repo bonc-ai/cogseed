@@ -10,11 +10,24 @@ description: ① 教师用自然语言创建挑战：补全必填项→展示发
 
 ## 运行时调用方式
 
+唯一受支持的方式：
+
 ```bash
 "$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" eduseed-teacher-publish runtime -- <命令> '<JSON载荷>'
 ```
 
 run_skill 工具等价形式：`{skill_id:"eduseed-teacher-publish", script:"runtime", args:["<命令>","<JSON>"]}`
+
+> ⚠️ **不要**用 `node scripts/runtime.js …` 之类的方式直接跑脚本——`run-skill.cjs` 是宿主注入运行时凭证的唯一入口，绕过它就拿不到凭证，需要鉴权的命令会全部 `AUTH_FAILED`。
+
+## 凭证由宿主注入（不要自行查找）
+
+`EDUSEED_*`（SERVER_URL / API_KEY / STUDENT_ID / ROLE）由 CogSeed 在**技能运行的那一刻**注入技能进程，随本次运行结束即收回。因此：
+
+- bash 里 `printenv` 看不到 `EDUSEED_*` **是正常的**，不代表凭证缺失；
+- **不要**用环境变量判断凭证是否存在，**不要**全盘 `find` / `grep` 搜凭证文件，**不要**用桌面或下载目录里的历史 `*-config-*.json`（可能是别的学号的旧配置）；
+- 需要鉴权的命令**只用上面那条命令**即可，凭证会自动到位；`health` 是免鉴权端点，通过**不代表**凭证有效；
+- 报 `AUTH_FAILED` 时，正确处置是引导学生到平台 `/companion` 重新生成 API Key；**绝不要**关闭授权校验（如 `EDUSEED_REQUIRE_LICENSE=0`）。
 
 ## 命令面（教师视角）
 

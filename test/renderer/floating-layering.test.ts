@@ -6,6 +6,10 @@ function readRendererCss() {
   return fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
 }
 
+function readShellCss() {
+  return fs.readFileSync(path.join(__dirname, '../../src/renderer/shell-navigation.css'), 'utf8');
+}
+
 const tokensCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/tokens.css'), 'utf8');
 
 function zIndexForSelector(css: string, selector: string) {
@@ -37,31 +41,26 @@ describe('floating layer ordering', () => {
     }
   });
 
-  it('keeps the merged footer panel seamlessly attached to its trigger', () => {
+  it('keeps the user menu above its trigger with the shared popover layer', () => {
     const css = readRendererCss();
     // 锚定行首主块（折叠态的 body.sidebar-collapsed .hub-chip-menu 在更前面）。
     const menuBlock = css.match(/^\.hub-chip-menu\s*\{[\s\S]*?\}/m)?.[0] || '';
-    // 与状态栏重叠 6px：面板与入口视觉连成一体。
-    expect(menuBlock).toContain('bottom: calc(100% - 6px)');
+    expect(menuBlock).toContain('bottom: calc(100% + 6px)');
     expect(menuBlock).toContain('z-index: var(--z-popover)');
-    expect(menuBlock).toContain('padding: 6px 6px 14px');
+    expect(menuBlock).toContain('padding: var(--space-1)');
   });
 
-  it('keeps the collapsed-rail footer entry alive as an icon trigger', () => {
-    const css = readRendererCss();
-    // 侧栏折叠（48px 窄条）时融合入口仍常驻：只留头像图标，面板加最小宽度。
-    expect(css).toMatch(/body\.sidebar-collapsed \.sidebar-footer-account\s*\{\s*display: block/);
-    expect(css).toMatch(/body\.sidebar-collapsed \.hub-chip-meta,[\s\S]*?\{ display: none; \}/);
-    expect(css).toContain('width: 236px');
+  it('removes the collapsed rail while keeping the shell recovery entry', () => {
+    const shellCss = readShellCss();
+    expect(shellCss).toMatch(/body\.sidebar-collapsed \.sidebar\s*\{[^}]*width:\s*0 !important/);
+    expect(shellCss).toMatch(/body\.sidebar-collapsed \.sidebar > \*\s*\{[^}]*display:\s*none/);
+    expect(shellCss).toContain('html.is-macos .shell-sidebar-hidden .app-shell-tools');
   });
 
-  it('keeps open / collapse / active state styles for the merged footer panel', () => {
+  it('keeps open and active state styles for the footer user menu', () => {
     const css = readRendererCss();
     expect(css).toMatch(/\.sidebar-footer-account\.is-open \.hub-chip\s*\{/);
     expect(css).toMatch(/\.sidebar-footer-account\.is-open \.hub-chip-chev\s*\{/);
-    const collapseBlock = css.match(/\.hub-chip-menu-collapse\s*\{[\s\S]*?\}/)?.[0] || '';
-    expect(collapseBlock).toContain('justify-content: center');
-    expect(css).toMatch(/\.hub-chip-menu-collapse:hover\s*\{/);
     const activeBlock = css.match(/\.hub-chip-menu-item\.is-active\s*\{[\s\S]*?\}/)?.[0] || '';
     expect(activeBlock).toContain('background: var(--primary-soft)');
     expect(activeBlock).toContain('color: var(--primary-text)');
