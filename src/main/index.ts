@@ -42,6 +42,7 @@ import {
   isOfficialWecomQuickCreateUrl,
 } from './util/window-security';
 import { formatBuildIdentityLabel, resolveBuildIdentity } from './util/build-identity';
+import { buildStaleMainReport } from './util/source-stamp';
 import { resolveContainedProtocolFile } from './util/protocol-path';
 
 const WINDOWS_TASK_BADGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAPklEQVR4nGNgoAX4jwNQpJkoQ2CK3ru4YMV4DSGkGa8hxGrGacioAVQwgOJopEpCQjcEF8CrmZAhRGkmFQAAcdLnkJb3ml4AAAAASUVORK5CYII=';
@@ -505,6 +506,12 @@ function registerIpc(): void {
       packagedInfoPath: path.join(app.getAppPath(), '.build', 'build-info.json'),
     });
     const version = app.getVersion();
+    // dev 半更新检测：bootstrap.cjs 用 tsx 在进程启动时加载 src/main/**/*.ts，
+    // 而渲染层的 .js 每次刷新窗口都会重读磁盘。若磁盘上的 main 源码比本进程启动
+    // 还新，就说明"界面已是新代码、主进程还是旧代码"——此时新参数会被旧主进程
+    // 静默忽略（真机事故：kb.mindmap 的 doc 参数被忽略 → 整库脑图冒充本文档脑图）。
+    // 详见 util/source-stamp.ts。
+    const staleMain = buildStaleMainReport({ pcRoot: paths.PC_ROOT, isPackaged: app.isPackaged });
     return {
       ok: true,
       isDev: !app.isPackaged,
@@ -515,6 +522,7 @@ function registerIpc(): void {
       buildCommit: buildIdentity.commit,
       buildDirty: buildIdentity.dirty,
       buildTime: buildIdentity.builtAt,
+      ...staleMain,
       platform,
       osVersion: systemVersion,
       arch: process.arch,
