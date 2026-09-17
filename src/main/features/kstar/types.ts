@@ -56,6 +56,10 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
     memoryRefs: string[];
     contextRefs: string[];
     abilityAssetRefs: string[];
+    /** 任务实际使用的资产版本映射（2026-09-16 版本组契约）：来自消息
+     *  recall_citations 的 version。改进提案据此锚定"任务当时用的版本"，
+     *  与资产当前在用版核对，避免改错对象。老 episode 缺省。 */
+    abilityAssetVersions?: Record<string, string>;
     promptContextSummary?: string;
   };
   s: {
@@ -158,7 +162,9 @@ export interface KstarLearningSignal {
   deltaA: number | 'unknown';
   outcome: KstarOutcome;
   confidence: number;
-  source: 'review';
+  /** 'review'=任务复盘线；'preference_scan'=偏好确定性扫描线（2026-09-16
+   *  来源徽章区分用）。存量数据均为 'review'。 */
+  source: 'review' | 'preference_scan';
 }
 
 export interface KstarLearningProvenance {
@@ -180,6 +186,9 @@ export interface KstarCandidateProposal {
   /** Existing asset selected from the episode's persisted asset references.
    * Required for update/limit_scope/pause; absent when the target is ambiguous. */
   targetAssetId?: string;
+  /** 版本组契约（2026-09-16）：任务实际使用的目标资产版本（episode 的
+   *  引用版本映射）。供确认时与资产当前在用版核对；缺省不阻断。 */
+  targetVersionUsed?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   /** 适用范围。规则类候选必须带（PRD 3.1 的 RuleAsset 最低门槛）。

@@ -68,7 +68,7 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
-import { listKstarEpisodes } from '../features/kstar/episode-store';
+import { listKstarEpisodes, readKstarEpisode } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
 import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
@@ -2636,7 +2636,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.readRecallCandidate(ctx.userId, candidateId)) };
   },
 
-  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, spaceId, applicableWhen, forbiddenWhen } = {}, ctx) => {
+  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, targetVersionUsed, spaceId, applicableWhen, forbiddenWhen } = {}, ctx) => {
     if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
     if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
     if (value !== undefined && (typeof value !== 'string' || value.length > 1_000)) throw new Error('invalid recall candidate value');
@@ -2647,13 +2647,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (spaceId !== undefined && !safeId(spaceId)) throw new Error('invalid space id');
     if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
     if (suggestedAction !== undefined && !['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject'].includes(suggestedAction)) throw new Error('invalid recall candidate action');
+    if (targetVersionUsed !== undefined && (typeof targetVersionUsed !== 'string' || !/^[0-9]{1,9}$/.test(targetVersionUsed))) throw new Error('invalid recall candidate target version');
     if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) throw new Error('invalid recall candidate risk');
     if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) throw new Error('invalid recall candidate expiry');
     if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid recall candidate task run id');
     if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
     if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall candidate applicable range');
     if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall candidate forbidden range');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(spaceId ? { spaceId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(targetVersionUsed !== undefined ? { targetVersionUsed } : {}), ...(spaceId ? { spaceId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
   },
 
   'recall.candidates.update': async ({ candidateId, judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, applicableWhen, forbiddenWhen } = {}, ctx) => {
@@ -2703,9 +2704,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.batchPromoteRecallCandidates(ctx.userId, candidateIds)) };
   },
 
-  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
+  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget, forceCreateSimilar } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    if (forceCreateSimilar !== undefined && typeof forceCreateSimilar !== 'boolean') throw new Error('invalid force-create flag');
     // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
     // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
     // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
@@ -2720,6 +2722,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
+      ...(forceCreateSimilar === true ? { forceCreateSimilar: true } : {}),
       ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
@@ -2778,6 +2781,81 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.assets.purge': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset purge'); return { ok: true, asset: await recallAssets.purgeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user purge' }) }; },
   'recall.assets.restore': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset restore'); return { ok: true, asset: await recallAssets.restoreAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user restore' }) }; },
   'recall.assets.rollback': async ({ assetId, version, note } = {}, ctx) => { if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset rollback'); return { ok: true, asset: await recallAssets.rollbackAbilityAsset(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user rollback to v${version}` }) }; },
+
+  // 版本组（2026-09-16）：versions.list 供资产详情版本链；versions.select 切
+  // 「在用」指针（内容同步、不 bump——与 rollback 的生成新版语义互补）。
+  'recall.assets.versions.list': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, ...(await recallAssets.listAbilityAssetVersionsWithUsage(ctx.userId, assetId)) };
+  },
+  'recall.assets.versions.select': async ({ assetId, version, note } = {}, ctx) => {
+    if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version selection');
+    return { ok: true, asset: await recallAssets.selectAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user selected v${version}` }) };
+  },
+  // 版本真删（2026-09-17）：物理移除该版本记录；删除前把快照冻结进引用它的
+  // 已确认投影（注入按副本继续）。在用版本不可删。
+  'recall.assets.versions.delete': async ({ assetId, version, note } = {}, ctx) => {
+    if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version deletion');
+    await recallAssets.deleteAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user deleted v${version}` });
+    return { ok: true };
+  },
+
+  // 存量治理（2026-09-16）：同义资产归并为一个版本组（source 版本链并入
+  // target，source 归档并记录去向）。
+  'recall.assets.merge': async ({ sourceAssetId, targetAssetId, note } = {}, ctx) => {
+    if (!safeId(sourceAssetId) || !safeId(targetAssetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset merge');
+    return { ok: true, asset: await recallAssets.mergeAbilityAssets(ctx.userId, sourceAssetId, targetAssetId, { actor: 'user', reason: note ?? 'user merge' }) };
+  },
+
+  // 资产侧 KSTAR 溯源（2026-09-17）：证据区 kse 引用的批量摘要与单条复盘
+  // 详情——此前 KSTAR 血统只在候选卡可见，确认后沉回数据层。
+  'recall.kstar.episodes.summaries': async ({ ids } = {}, ctx) => {
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some((id) => typeof id !== 'string' || !safeId(id))) throw new Error('invalid kstar episode ids');
+    const wanted = new Set(ids.map((id) => String(id)));
+    const episodes = (await listKstarEpisodes(ctx.userId)).filter((episode) => wanted.has(String(episode.id)));
+    return {
+      ok: true,
+      summaries: episodes.map((episode) => ({
+        id: episode.id,
+        goal: String(episode.t?.userGoal || '').slice(0, 120),
+        status: String(episode.r?.status || ''),
+        at: String(episode.createdAt || ''),
+      })),
+    };
+  },
+  'recall.kstar.episode.read': async ({ episodeId } = {}, ctx) => {
+    if (typeof episodeId !== 'string' || !safeId(episodeId)) throw new Error('invalid kstar episode id');
+    const episode = await readKstarEpisode(ctx.userId, episodeId);
+    if (!episode) throw new Error('kstar episode not found');
+    let review: { expectedResult?: string; actualResult?: string; outcome?: string; attribution?: string; confidence?: number } | null = null;
+    try {
+      const record = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
+      if (record) {
+        review = {
+          ...(record.lesson !== undefined && String(record.lesson || '').trim() ? { lesson: String(record.lesson).slice(0, 600) } : {}),
+          ...(record.expectedResult !== undefined ? { expectedResult: String(record.expectedResult).slice(0, 400) } : {}),
+          ...(record.actualResult !== undefined ? { actualResult: String(record.actualResult).slice(0, 400) } : {}),
+          ...(record.outcome !== undefined ? { outcome: String(record.outcome) } : {}),
+          ...(record.attribution !== undefined ? { attribution: String(record.attribution) } : {}),
+          ...(record.confidence !== undefined ? { confidence: Number(record.confidence) } : {}),
+        };
+      }
+    } catch {
+      // 复盘记录缺席只少一截展示，不阻断 episode 详情。
+    }
+    return {
+      ok: true,
+      episode: {
+        id: episode.id,
+        goal: String(episode.t?.userGoal || '').slice(0, 400),
+        status: String(episode.r?.status || ''),
+        finalText: String(episode.r?.finalText || '').slice(0, 600),
+        sessionId: String(episode.sessionId || ''),
+        at: String(episode.createdAt || ''),
+      },
+      review,
+    };
+  },
 
   'recall.skills.prepare': async ({ assetId } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');

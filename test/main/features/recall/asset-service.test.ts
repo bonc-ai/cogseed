@@ -610,6 +610,366 @@ describe('治理动作', () => {
     await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, asset.version, userAction('rollback')))
       .rejects.toThrow('already at that version');
   });
+
+  it('选用历史版本（在用指针，2026-09-16 版本组）：内容同步、版本号不动、不产生新快照', async () => {
+    // 版本组语义：select = 切「在用」指针——资产内容回到所选版本快照，但
+    // version 计数不变、不追加版本记录（区别于 rollback 生成新版本）。
+    // 历史任务引用的版本不受影响（注入回放按投影冻结版本号）。
+    const { assets, asset } = await seed('user-select');
+    await assets.updateAbilityAsset('user-select', asset.id, {
+      title: 'Renamed in v2', reason: 'Rename for v2.', actor: 'user',
+    });
+    await assets.pauseAbilityAsset('user-select', asset.id, userAction('pause'));
+
+    const selected = await assets.selectAbilityAssetVersion('user-select', asset.id, '1', userAction('use v1'));
+    expect(selected.title).toBe(asset.title);          // 内容回到 v1
+    expect(selected.version).toBe('2');                 // 版本号不动
+    expect(selected.activeVersion).toBe('1');           // 在用指针
+    expect(selected.status).toBe('paused');             // 治理状态不受影响
+
+    // 不追加版本记录；审计记录选用动作。
+    const versions = await assets.listAbilityAssetVersions('user-select', asset.id);
+    expect(versions.map((v) => v.version)).toEqual(['1', '2']);
+    expect((await assets.listAbilityAssetAudit('user-select', asset.id)).map((r) => r.action)).toContain('version_selected');
+
+    // 选用后内容更新：bump 到 v3，指针跟随最新（不锁定旧版）。
+    const updated = await assets.updateAbilityAsset('user-select', asset.id, {
+      title: 'Edited on v1 base', reason: 'edit', actor: 'user',
+    });
+    expect(updated.version).toBe('3');
+    expect(updated.activeVersion).toBe('3');
+    expect(updated.title).toBe('Edited on v1 base');
+  });
+
+  it('选用不存在/当前在用版本被拒绝；purge 后拒绝', async () => {
+    const { assets, asset } = await seed('user-select-bad');
+    await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, '99', userAction('x')))
+      .rejects.toThrow('version not found');
+    // 默认在用=最新内容版；选当前在用版是幂等空操作 → 拒绝（与 rollback 原地语义一致）。
+    await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, asset.version, userAction('x')))
+      .rejects.toThrow('already selected');
+    await assets.purgeAbilityAsset('user-select-bad', asset.id, userAction('purge'));
+    await expect(assets.selectAbilityAssetVersion('user-select-bad', asset.id, '1', userAction('x')))
+      .rejects.toThrow('ability asset has been purged');
+  });
+
+  it('选用旧版不把 legacy scope 倒退回主记录（2026-09-17 修）：迁移不再重复 bump', async () => {    const uid = 'user-select-scope';
+    const { candidates, assets } = await modules();
+    // v1 快照带词表化之前的自由文本 scope（实机 aa-34b688 场景：scope='personal'）。
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Prefer concise direct answers.',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'personal',
+      sourceRefs: [{ kind: 'execution', id: 'exec-scope' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
+    await assets.updateAbilityAsset(uid, asset.id, { statement: 'Prefer concise direct answers with reasons.', reason: 'v2', actor: 'user' });
+    // 选用 v1（快照 scope='personal'）：主记录 scope 必须保持词表值，不能被
+    // 旧快照写回——否则下次启动 legacy scope 迁移又垫一个内容不变的新版本。
+    const selected = await assets.selectAbilityAssetVersion(uid, asset.id, '1', userAction('back to v1'));
+    expect(selected.scope).not.toBe('personal');
+    expect(selected.statement).toBe(asset.statement);
+    expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['1', '2']);
+    // 迁移扫描零命中（修复前这里会命中 'personal' 再迁一遍）。
+    expect(await assets.migrateLegacyFreeTextScopes(uid)).toBe(0);
+  });
+
+  it('已删除资产不可被 update（2026-09-17 守卫对齐）：与 select/rollback/merge 同口径', async () => {
+    const uid = 'user-upd-guard';
+    const { assets, asset } = await seed(uid);
+    await assets.deleteAbilityAsset(uid, asset.id, userAction('进入删除保留期'));
+    await expect(assets.updateAbilityAsset(uid, asset.id, { statement: 'edit after delete.', reason: 'edit', actor: 'user' }))
+      .rejects.toThrow('deleted ability asset cannot be changed');
+  });
+
+  it('归并两条同义资产为版本组（2026-09-16）：版本链续接、较新内容为在用、来源归档', async () => {
+    const { candidates, assets } = await modules();
+    // 两条"同一认知"的资产：target 旧、source 新（各自有一版历史）。
+    const tCand = await candidates.saveRecallCandidate('user-merge', {
+      judgment: '用户身份：本程序开发人员。', summary: '用户身份A', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-m1' }],
+    });
+    const tAsset = await candidates.promoteRecallCandidate('user-merge', tCand.id, { actor: 'user', forceCreateSimilar: true });
+    await assets.updateAbilityAsset('user-merge', tAsset.asset.id, { statement: '用户身份：本程序开发人员（开发者）。', reason: 'refine', actor: 'user' });
+    const sCand = await candidates.saveRecallCandidate('user-merge', {
+      judgment: '用户身份：CogSeed 开发者，参与认知资产开发。', summary: '用户身份B', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-m2' }],
+    });
+    const sAsset = await candidates.promoteRecallCandidate('user-merge', sCand.id, { actor: 'user', forceCreateSimilar: true });
+
+    const merged = await assets.mergeAbilityAssets('user-merge', sAsset.asset.id, tAsset.asset.id, userAction('merge dup'));
+    // 版本链：target 原 2 版 + source 的 1 版续接 = 3 版；较新（source）内容为在用。
+    const versions = await assets.listAbilityAssetVersions('user-merge', tAsset.asset.id);
+    expect(versions.map((v) => v.version)).toEqual(['1', '2', '3']);
+    expect(merged.version).toBe('3');
+    expect(merged.activeVersion).toBe('3');
+    expect(merged.statement).toContain('CogSeed 开发者');
+    // 来源条目归档 + 记录去向，不再出现在活跃列表。
+    const source = await assets.readAbilityAsset('user-merge', sAsset.asset.id);
+    expect(source.status).toBe('archived');
+    expect((source as { mergedIntoAssetId?: string }).mergedIntoAssetId).toBe(tAsset.asset.id);
+    // 审计双向留痕。
+    const actions = (await assets.listAbilityAssetAudit('user-merge', tAsset.asset.id)).map((r) => r.action);
+    expect(actions).toContain('merged_from');
+  });
+
+  it('版本链带按版本的使用效果聚合（2026-09-16 M8）：applied/contradicted 计数', async () => {
+    const { candidates, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const cCand = await candidates.saveRecallCandidate('user-usage-agg', {
+      judgment: 'Usage aggregation rule.', summary: 'Usage rule', suggestedType: 'rule',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-ua' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-usage-agg', cCand.id, { actor: 'user', forceCreateSimilar: true });
+    const assetId = promoted.asset.id;
+    await assets.updateAbilityAsset('user-usage-agg', assetId, { statement: 'Usage aggregation rule v2.', reason: 'bump', actor: 'user' });
+    // v1 被"实际采用"2 次、被否定 1 次；v2 采用 1 次（外键需要注入回执）。
+    const injection = await import('../../../../src/main/features/recall/injection-receipt');
+    const mk = async (run: string, version: string, status: string) => {
+      const inj = await injection.recordInjectionReceipt('user-usage-agg', {
+        taskRunId: run, projectionId: 'proj-ua', assetId, assetVersion: version, boundary: 'real', status: 'injected', channel: 'projection',
+      } as never);
+      await receipts.recordAssetUsageReceipt('user-usage-agg', {
+        taskRunId: run, projectionId: 'proj-ua', assetId, assetVersion: version,
+        injectionReceiptId: inj.id, status, evidenceRefs: [{ kind: 'conversation', id: 'conv-ua' }], evidenceKind: 'final_output', boundary: 'real',
+      } as never);
+    };
+    await mk('turn-ua-1', '1', 'applied');
+    await mk('turn-ua-2', '1', 'applied');
+    await mk('turn-ua-3', '1', 'contradicted');
+    await mk('turn-ua-4', '2', 'applied');
+
+    const summary = await assets.listAbilityAssetVersionsWithUsage('user-usage-agg', assetId);
+    const byVersion = Object.fromEntries((summary.usage || []).map((u) => [u.version, u]));
+    expect(byVersion['1']).toMatchObject({ applied: 2, contradicted: 1 });
+    expect(byVersion['2']).toMatchObject({ applied: 1 });
+  });
+
+  it('归并的检修回归（2026-09-16 审查）：版本号一致性/旧版在用/幂等/revoked 守卫', async () => {
+    const { assets } = await modules();
+    const U = 'user-mrg-x';
+    let seq = 0;
+    const mk = async (judgment: string, summary: string) => {
+      const assets2 = await import('../../../../src/main/features/recall/asset-service');
+      void assets2;
+      const now = new Date().toISOString();
+      seq += 1;
+      const assetId = `aa-mrgprobe-${String(seq).padStart(2, '0')}xxxxxxxxxxxxxxxx`;
+      const created = await assets.createAbilityAsset(U, {
+        schemaVersion: 2, ownerId: U, id: assetId, candidateId: `cand-mrg-${seq}`,
+        sourceCandidateIds: [`cand-mrg-${seq}`], reviewDecisionId: `rd_mrgprobe_${String(seq).padStart(4, '0')}`,
+        type: 'rule', title: summary, statement: judgment,
+        evidenceRefs: [{ kind: 'conversation', id: `conv-mrg-${seq}` }], scope: 'general', status: 'active',
+        lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+        createdAt: now, updatedAt: now,
+      }, { actor: 'user', reason: 'merge regression seed' });
+      return { asset: created };
+    };
+    // P0-2（source 较新且曾 select 旧版）：merge 后在用内容必须与 activeVersion
+    // 指向的快照一致（额外 append 一条在用内容快照，不指向 source 末版）。
+    const src = await mk('较新的身份陈述，含新信息。', '身份A');
+    await assets.updateAbilityAsset(U, src.asset.id, { statement: '第二版内容。', reason: 'bump', actor: 'user' });
+    await assets.selectAbilityAssetVersion(U, src.asset.id, '1', userAction('use old'));
+    const tgtOld = await mk('目标条目的旧内容。', '身份B');
+    await assets.updateAbilityAsset(U, tgtOld.asset.id, { statement: '更旧的目标。', reason: 'aged', actor: 'user' });
+    // 再动一次 source，让它的 updatedAt 晚于 target（sourceNewer=true）。
+    await assets.updateAbilityAsset(U, src.asset.id, { statement: '第一版内容的修订。', reason: 'refresh', actor: 'user' });
+    const merged = await assets.mergeAbilityAssets(U, src.asset.id, tgtOld.asset.id, userAction('merge'));
+    const { readAbilityAssetVersionSnapshot } = await import('../../../../src/main/features/recall/asset-service');
+    const activeSnapshot = await readAbilityAssetVersionSnapshot(U, tgtOld.asset.id, String(merged.activeVersion));
+    expect(activeSnapshot?.statement).toBe(merged.statement);
+    expect(merged.statement).toBe('第一版内容的修订。');
+    // P0-1：merge 后再更新——版本号不与并入的快照撞号（链内版本唯一）。
+    const updated = await assets.updateAbilityAsset(U, tgtOld.asset.id, { statement: '归并后的新修订。', reason: 'post-merge edit', actor: 'user' });
+    const versions = await assets.listAbilityAssetVersions(U, tgtOld.asset.id);
+    expect(new Set(versions.map((v) => v.version)).size).toBe(versions.length);
+    expect(updated.activeVersion).toBe(updated.version);
+    // P0-1（source 较旧方向）：计数器推进且在用内容/指针不漂移。
+    const srcOld = await mk('更旧的一条内容。', '身份E');
+    const tgtNew = await mk('新目标，晚于 source 创建。', '身份F');
+    const mergedOld = await assets.mergeAbilityAssets(U, srcOld.asset.id, tgtNew.asset.id, userAction('merge old'));
+    expect(mergedOld.statement).toBe('新目标，晚于 source 创建。');
+    // 在用钉在 target 原版（v1），计数器推进到并入后的 2——内容与指针不分叉。
+    expect(mergedOld.activeVersion).toBe('1');
+    expect(Number(mergedOld.version)).toBeGreaterThan(1);
+    const oldActiveSnapshot = await readAbilityAssetVersionSnapshot(U, tgtNew.asset.id, String(mergedOld.activeVersion));
+    expect(oldActiveSnapshot?.statement).toBe(mergedOld.statement);
+    // P1-1：二次 merge 同一 source 被拒（幂等守卫）。
+    await expect(assets.mergeAbilityAssets(U, src.asset.id, tgtOld.asset.id, userAction('again')))
+      .rejects.toThrow('already been merged');
+    // P1-1/P2-2：revoked 资产不可 merge/select/rollback。
+    const rev = await mk('将被撤回的条目。', '身份C');
+    await assets.revokeAbilityAsset(U, rev.asset.id, userAction('revoke'));
+    const other = await mk('另一条。', '身份D');
+    await expect(assets.mergeAbilityAssets(U, other.asset.id, rev.asset.id, userAction('x')))
+      .rejects.toThrow('revoked ability asset cannot be changed');
+    await expect(assets.selectAbilityAssetVersion(U, rev.asset.id, '1', userAction('x')))
+      .rejects.toThrow('revoked ability asset cannot be changed');
+    await expect(assets.rollbackAbilityAsset(U, rev.asset.id, '1', userAction('x')))
+      .rejects.toThrow('revoked ability asset cannot be changed');
+  });
+
+  it('归并去重空版本（2026-09-16 修）：源资产的迁移垫版不占新号', async () => {
+    const { assets } = await modules();
+    const U = 'user-mrg-dedup';
+    const now = new Date().toISOString();
+    const mk = async (seq: number, statement: string) => assets.createAbilityAsset(U, {
+      schemaVersion: 2, ownerId: U, id: `aa-dedup-${String(seq).padStart(2, '0')}xxxxxxxxxxxxxxxx`,
+      candidateId: `cand-dedup-${seq}`, sourceCandidateIds: [`cand-dedup-${seq}`],
+      reviewDecisionId: `rd_dedup_${String(seq).padStart(4, '0')}`,
+      type: 'rule', title: `dedup-${seq}`, statement,
+      evidenceRefs: [{ kind: 'conversation', id: `conv-dedup-${seq}` }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'dedup seed' });
+    const src = await mk(1, '第一段真实内容。');
+    // 模拟迁移垫版：内容一字不变，scope 迁移 bump（真实数据 09-13 的形态）。
+    await assets.updateAbilityAsset(U, src.id, { scope: 'general', reason: 'legacy free-text scope migration', actor: 'user' });
+    const srcStmts = (await assets.listAbilityAssetVersions(U, src.id)).map((v) => v.snapshot.statement);
+    expect(new Set(srcStmts).size).toBe(1);
+    const tgt = await mk(2, '另一段内容。');
+    await assets.updateAbilityAsset(U, src.id, { statement: '第一段真实内容。（更新让它较新）', reason: 'newer', actor: 'user' });
+    const merged = await assets.mergeAbilityAssets(U, src.id, tgt.id, userAction('dedup merge'));
+    // 源的 v1/v2 同内容 → 只并入一版；随后在用内容（v3=更新版）只占一号。
+    const versions = await assets.listAbilityAssetVersions(U, tgt.id);
+    const stmts = versions.map((v) => v.snapshot.statement);
+    expect(new Set(stmts).size).toBe(stmts.length);
+    expect(merged.version).toBe('3');
+    expect(merged.activeVersion).toBe('3');
+  });
+
+  it('归并的守卫：跨类型/同条目/不存在被拒', async () => {
+    const { candidates, assets } = await modules();
+    const aCand = await candidates.saveRecallCandidate('user-merge-bad', {
+      judgment: 'Rule one for merging.', summary: 'Rule', suggestedType: 'rule',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-mb1' }],
+    });
+    const a = await candidates.promoteRecallCandidate('user-merge-bad', aCand.id, { actor: 'user', forceCreateSimilar: true });
+    const pCand = await candidates.saveRecallCandidate('user-merge-bad', {
+      judgment: 'Personal one for merging.', summary: 'Personal', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-mb2' }],
+    });
+    const p = await candidates.promoteRecallCandidate('user-merge-bad', pCand.id, { actor: 'user', forceCreateSimilar: true });
+    await expect(assets.mergeAbilityAssets('user-merge-bad', p.asset.id, a.asset.id, userAction('x')))
+      .rejects.toThrow('same type');
+    await expect(assets.mergeAbilityAssets('user-merge-bad', a.asset.id, a.asset.id, userAction('x')))
+      .rejects.toThrow('into itself');
+    await expect(assets.mergeAbilityAssets('user-merge-bad', a.asset.id, 'aa-nonexistent', userAction('x')))
+      .rejects.toThrow('not found');
+  });
+});
+
+describe('版本真删（2026-09-17）：物理删除 + 引用快照冻结', () => {
+  const userAction = (reason: string) => ({ actor: 'user' as const, reason });
+
+  /** 三版资产（v1/v2/v3，在用=最新）；projectOnVersion 给定时再写一个引用该
+   * 版本的 confirmed 投影（模拟"已确认注入契约冻结了该版本"）。 */
+  async function seedVersioned(uid: string, projectOnVersion?: string) {
+    const [candidates, assets, store, projections, paths] = await Promise.all([
+      import('../../../../src/main/features/recall/candidate-service'),
+      import('../../../../src/main/features/recall/asset-service'),
+      import('../../../../src/main/features/recall/store'),
+      import('../../../../src/main/features/recall/context-projection'),
+      import('../../../../src/main/features/recall/paths'),
+    ]);
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Prefer append-only audit trails.',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-vdel' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
+    await assets.updateAbilityAsset(uid, asset.id, { statement: 'v2 statement for deletion tests.', reason: 'v2', actor: 'user' });
+    await assets.updateAbilityAsset(uid, asset.id, { statement: 'v3 statement for deletion tests.', reason: 'v3', actor: 'user' });
+    if (projectOnVersion) {
+      await store.writeRecallJsonRecord(uid, 'projections', 'proj-del-1', {
+        schemaVersion: 2, ownerId: uid, id: 'proj-del-1', taskRunId: 'kst-del-1',
+        purpose: 'review', authorization: 'workspace_policy',
+        assetIds: [asset.id], assetVersions: { [asset.id]: projectOnVersion },
+        sourceRefs: [], omittedRefs: [], status: 'confirmed', createdAt: new Date().toISOString(),
+      });
+    }
+    return { assets, store, projections, paths, asset };
+  }
+
+  it('物理删除历史版本：列表/按号读快照都拿不到、磁盘行数减少、审计留痕、在用内容不受影响', async () => {
+    const uid = 'user-vdel';
+    const { assets, paths, asset } = await seedVersioned(uid);
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '1', userAction('clean migration noise'));
+    // 列表与按号读取都拿不到了（真删，非隐藏）。
+    expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['2', '3']);
+    expect(await assets.readAbilityAssetVersionSnapshot(uid, asset.id, '1')).toBeNull();
+    // 磁盘上的版本流确实少了那一行。
+    const streamText = fs.readFileSync(paths.recallJsonlPath(uid, 'ability-asset-versions', asset.id), 'utf8');
+    expect(streamText.trim().split('\n')).toHaveLength(2);
+    // 审计只记动作（version_deleted），资产本体与在用内容不动。
+    expect((await assets.listAbilityAssetAudit(uid, asset.id)).map((r) => r.action)).toContain('version_deleted');
+    const after = await assets.readAbilityAsset(uid, asset.id);
+    expect(after.version).toBe('3');
+    expect(after.statement).toContain('v3 statement');
+    // 版本号不回退：后续更新继续 v4。
+    const updated = await assets.updateAbilityAsset(uid, asset.id, { statement: 'v4 statement after deletion.', reason: 'v4', actor: 'user' });
+    expect(updated.version).toBe('4');
+  });
+
+  it('删除被已确认投影引用的版本：删除前把快照冻结进投影，注入引用继续可用', async () => {
+    const uid = 'user-vdel-proj';
+    const { assets, store, projections, asset } = await seedVersioned(uid, '2');
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('delete referenced version'));
+    expect((await assets.listAbilityAssetVersions(uid, asset.id)).map((v) => v.version)).toEqual(['1', '3']);
+    // 投影带上冻结的内容副本：版本已删，注入按副本继续供给原内容。
+    const raw = await store.readRecallJsonRecord(uid, 'projections', 'proj-del-1');
+    const cached = (raw as { assetVersionSnapshots?: Record<string, { version: string; snapshot: { statement?: string } }> }).assetVersionSnapshots?.[asset.id];
+    expect(cached?.version).toBe('2');
+    expect(cached?.snapshot.statement).toBe('v2 statement for deletion tests.');
+    // 经 sanitize 读回（注入路径）缓存仍在——缓存字段不会在校验时被剥掉。
+    const listed = (await projections.listContextProjections(uid)).find((p) => p.id === 'proj-del-1');
+    expect(listed?.assetVersionSnapshots?.[asset.id]?.version).toBe('2');
+    expect(listed?.assetVersionSnapshots?.[asset.id]?.snapshot.statement).toContain('v2 statement');
+  });
+
+  it('投影存量超过 listContextProjections 条数上限（P0 回归）：老投影照样被冻结，一个不漏', async () => {
+    // 2026-09-17 审查 P0：冻结枚举曾走 listContextProjections（默认 clamp 20 条），
+    // 第 21 条及更早的 confirmed 投影引用的版本删除前不冻结副本——注入静默丢失。
+    const uid = 'user-vdel-overflow';
+    const { assets, store, asset } = await seedVersioned(uid, '2');
+    // 再种 30 个引用 v2 的老投影（id 排序在 proj-del-1 之前，createdAt 更早）。
+    for (let i = 0; i < 30; i += 1) {
+      await store.writeRecallJsonRecord(uid, 'projections', `proj-old-${String(i).padStart(2, '0')}`, {
+        schemaVersion: 2, ownerId: uid, id: `proj-old-${String(i).padStart(2, '0')}`, taskRunId: `kst-old-${i}`,
+        purpose: 'review', authorization: 'workspace_policy',
+        assetIds: [asset.id], assetVersions: { [asset.id]: '2' },
+        sourceRefs: [], omittedRefs: [], status: 'confirmed',
+        createdAt: new Date(Date.parse('2026-09-01T00:00:00Z') + i * 1000).toISOString(),
+      });
+    }
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('delete with overflow projections'));
+    // 31 个引用投影（1 个 seed + 30 个老投影）全部带上冻结副本。
+    const ids = ['proj-del-1', ...Array.from({ length: 30 }, (_, i) => `proj-old-${String(i).padStart(2, '0')}`)];
+    for (const pid of ids) {
+      const raw = await store.readRecallJsonRecord(uid, 'projections', pid) as { assetVersionSnapshots?: Record<string, { version: string }> };
+      expect(raw?.assetVersionSnapshots?.[asset.id]?.version, pid).toBe('2');
+    }
+  });
+
+  it('删未被投影引用的版本：不往投影写缓存', async () => {
+    const uid = 'user-vdel-noref';
+    const { assets, store, asset } = await seedVersioned(uid, '2');
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '1', userAction('delete unreferenced'));
+    const raw = await store.readRecallJsonRecord(uid, 'projections', 'proj-del-1');
+    expect((raw as { assetVersionSnapshots?: unknown }).assetVersionSnapshots).toBeUndefined();
+  });
+
+  it('守卫：在用版本不可删；不存在/重复删被拒；purge 后拒绝；select 已删版本被拒', async () => {
+    const uid = 'user-vdel-guard';
+    const { assets, asset } = await seedVersioned(uid);
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '3', userAction('active'))).rejects.toThrow('active version');
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '99', userAction('missing'))).rejects.toThrow('not found');
+    await assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('first delete'));
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '2', userAction('repeat'))).rejects.toThrow('not found');
+    // 已删版本无法被选用为在用（活链守卫）。
+    await expect(assets.selectAbilityAssetVersion(uid, asset.id, '2', userAction('select deleted'))).rejects.toThrow('version not found');
+    await assets.purgeAbilityAsset(uid, asset.id, userAction('purge'));
+    await expect(assets.deleteAbilityAssetVersion(uid, asset.id, '1', userAction('after purge'))).rejects.toThrow('purged');
+  });
 });
 
 describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
