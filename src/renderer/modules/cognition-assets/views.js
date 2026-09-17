@@ -168,6 +168,39 @@
     const loose = String(ref.title || ref.conversationTitle || ref.name || sourceIndex().get(refId)?.title || '').trim();
     return chip(loose || T('cognition.evidence_fallback', '来源记录'), 'line');
   };
+  const isKstarEvidenceRef = (ref) => String(ref.kind || '') === 'execution' && String(ref.id || '').startsWith('kse-');
+  /** 归边判定（2026-09-17 B 档）：纯渲染层口径，不动主进程——身上挂有
+   *  KSTAR 任务复盘证据（kind=execution 且 id 前缀 kse-），或带 KSTAR 学习
+   *  信号/溯源（learningSignal.source=review|preference_scan、
+   *  learningProvenance）即归 KSTAR 线。reason=review_decision 不能用作
+   *  判据：对话线候选确认的版本也写这个前缀（两线共用确认队列）。
+   *  挂 NS 供列表过滤与测试共用。 */
+  NS.isKstarAsset = function isKstarAsset(asset) {
+    if (!asset) return false;
+    if (asset.learningProvenance) return true;
+    const signal = asset.learningSignal;
+    if (signal && ['review', 'preference_scan'].includes(String(signal.source || ''))) return true;
+    return (asset.evidenceRefs || []).some(isKstarEvidenceRef);
+  };
+  NS.isKstarCandidate = function isKstarCandidate(candidate) {
+    if (!candidate) return false;
+    if (candidate.learningSignal || candidate.learningProvenance) return true;
+    return (candidate.sourceRefs || []).some((ref) => String(ref.id || '').startsWith('kse-'));
+  };
+  /** 证据分组（2026-09-17 B 档两线分开）：KSTAR 任务复盘一组、对话与表态
+   *  一组，各带一句来源说明——两线证据混排一排正是"杂揉"观感的来源。 */
+  const evidenceGroupsHtml = (refs) => {
+    const kstar = refs.filter(isKstarEvidenceRef);
+    const chat = refs.filter((ref) => !isKstarEvidenceRef(ref));
+    const group = (titleKey, title, hintKey, hint, list) => list.length
+      ? `<div class="ca-evgroup">
+          <div class="ca-evgroup-title">${esc(T(titleKey, title))}<span class="ca-note">${esc(T(hintKey, hint))}</span></div>
+          <div class="ca-chips">${list.map(evidenceChip).join('')}</div>
+        </div>`
+      : '';
+    return group('cognition.evidence_group_kstar', 'KSTAR 任务复盘', 'cognition.evidence_group_kstar_hint', '任务完结后 KSTAR 复盘学到的', kstar)
+      + group('cognition.evidence_group_chat', '对话与你的表态', 'cognition.evidence_group_chat_hint', '日常对话里总结出来的', chat);
+  };
 
   /** 原始记录清洗（2026-09-17）：实际产出里会有 markdown 记号（**、##、代码
    *  块），原样展示是一坨看不懂的技术文本——去记号、折叠代码块、压空白。 */
@@ -400,13 +433,18 @@
       ? T('cognition.proof_where_named', '对话《{name}》里', { name })
       : T('cognition.proof_where_generic', '一次对话里');
   }
-  /** 事件整句化：一句话说明在什么时间、哪个对话里被怎么用。 */
-  function proofSentence(names, proof) {
+  /** 事件整句化：一句话说明在什么时间、哪个对话里被怎么用。
+   *  knownVersions：该资产现存的版本号集合——使用记录忠实保留历史，引用
+   *  的版本可能已被删除（版本真删上线后很常见），裸标 v5 用户会懵"v5 是
+   *  啥，我只有 v1/v2"；不在集合内的标注"当时的版本后来已删除"。 */
+  function proofSentence(names, proof, knownVersions) {
     const refs = proof.refs || {};
     const when = fmtDate(proof.occurredAt);
     const where = proofWherePhrase(names, refs.conversationId);
     const version = refs.version
-      ? T('cognition.proof_version_suffix', '（v{n}）', { n: String(refs.version) })
+      ? (knownVersions && knownVersions.size && !knownVersions.has(String(refs.version))
+        ? T('cognition.proof_version_deleted', '（当时的 v{n}，该版本后来已删除）', { n: String(refs.version) })
+        : T('cognition.proof_version_suffix', '（v{n}）', { n: String(refs.version) }))
       : '';
     const kind = String(proof.kind || '');
     if (kind === 'usage_recorded') {
@@ -440,6 +478,14 @@
       return `<div class="ca-sect"><div class="ca-sub">${esc(T('cognition.asset_no_proofs_section', '还没有被真实使用过。资产在任务中被真正使用、并留下可核对的记录后，会出现在这里。'))}</div></div>`;
     }
     const names = conversationNames();
+    // 现存版本集合（bug3）：只认版本链里实际存在的版本——asset.version 是
+    // 只增游标（真删不回退，防引用错位），不能当"现存"用；链未加载时不
+    // 标注（拿不准宁可显示普通后缀，不误标"已删除"）。
+    const knownVersions = new Set();
+    if (S.assetVersions && S.assetVersions.assetId === String(asset.id) && Array.isArray(S.assetVersions.versions)) {
+      knownVersions.add(String(asset.activeVersion || ''));
+      for (const v of S.assetVersions.versions) knownVersions.add(String(v.version));
+    }
     const usedCount = items.filter((p) => p.kind === 'usage_recorded').length;
     const projectedCount = items.filter((p) => p.kind === 'projection_confirmed').length;
     const summaryLine = [
@@ -470,7 +516,7 @@
       <div class="ca-proof-row${isOpen ? ' is-open' : ''}">
         <div class="ca-proof-event" data-act="proof-toggle" data-id="${esc(proof.id)}" ${roleBtn()}>
           <span class="ca-proof-dot" aria-hidden="true"></span>
-          <span class="ca-proof-body"><strong class="ca-proof-sentence">${esc(proofSentence(names, proof))}</strong></span>
+          <span class="ca-proof-body"><strong class="ca-proof-sentence">${esc(proofSentence(names, proof, knownVersions))}</strong></span>
         </div>
         ${ratingHtml}
       </div>`;
@@ -498,7 +544,10 @@
     return v.actor === 'user' ? 'manual' : 'system';
   }
   const VERSION_SOURCE_LABELS = {
-    decision: ['cognition.asset_version_src_decision', '候选确认'],
+    // 「确认沉淀」（2026-09-17 改）：review_decision 前缀两线通用（对话线
+    // 候选确认与 KSTAR 复盘确认都写它），此前文案「候选确认」是内部流程
+    // 词汇——用户视角这一版是"确认后沉淀下来的"。
+    decision: ['cognition.asset_version_src_decision', '确认沉淀'],
     migration: ['cognition.asset_version_src_migration', '系统迁移'],
     merge: ['cognition.asset_version_src_merge', '归并'],
     rollback: ['cognition.asset_version_src_rollback', '回退'],
@@ -545,7 +594,11 @@
   function scopeLabelText(raw) {
     const value = String(raw || '');
     if (!value) return T('cognition.asset_scope_unset', '还没设置');
-    return /全局|画像/.test(value) ? T('cognition.asset_scope_all', '所有对话') : value;
+    // 白话映射覆盖中英两种内部写法（2026-09-17 修 personal 裸英文）：
+    // 后端 scope 是自由文本，认得出的常见形态翻人话，认不出原样显示。
+    if (/全局|画像|general/.test(value)) return T('cognition.asset_scope_all', '所有对话');
+    if (value === 'personal') return T('cognition.asset_scope_personal', '个人对话');
+    return value;
   }
   /** 版本快照的来源行（2026-09-17 下沉）：按该版快照的学习信号判定 KSTAR
    *  血统；无信号（会话整理线）不显示——返回空串即可被行渲染跳过。 */
@@ -592,10 +645,10 @@
         ${rowHtml(T('cognition.asset_version_applicable', '适用场景'), (Array.isArray(snap.applicableWhen) ? snap.applicableWhen : []).join('；'))}
         ${rowHtml(T('cognition.asset_version_forbidden', '禁用场景'), (Array.isArray(snap.forbiddenWhen) ? snap.forbiddenWhen : []).join('；'))}
         ${rowHtml(T('cognition.asset_origin_label', '怎么来的'), snapshotOriginText(snap.learningSignal, snap.learningProvenance))}
-        ${rowHtml(T('cognition.asset_version_reason_label', '变更说明'), [v.reason || '', fmtDate(v.at)].filter(Boolean).join(' · '))}
+        ${rowHtml(T('cognition.asset_version_reason_label', '变更说明'), [versionSourceLabel(v), fmtDate(v.at)].filter(Boolean).join(' · '))}
         ${rowHtml(T('cognition.asset_version_usage_label', '使用效果'), usageText)}
       </div>
-      ${evidenceCount ? `<div class="ca-chips">${snap.evidenceRefs.map(evidenceChip).join('')}</div>${kstarEpisodeSection(S.route)}` : ''}
+      ${evidenceCount ? `${evidenceGroupsHtml(snap.evidenceRefs)}${kstarEpisodeSection(S.route)}` : ''}
       <div class="ca-actions ca-actions-right">${actions}</div>
       ${showDiff && activeV ? assetVersionDiffBlock(asset, activeV, v) : ''}
     </div>`;
@@ -763,8 +816,15 @@
 
   function viewOverview(route) {
     const stats = NS.stats();
+    // 两线顶级分开（2026-09-17 B 档）：对话线列表与统计只算对话血统资产
+    //（KSTAR 血统归 KSTAR 侧）——数字与列表逐条对得上，不分线会出现
+    // "统计 14 条、列表 11 条"的错位。已删除档例外：保留全部（保留期
+    // 恢复入口只有这一处，KSTAR 血统的已删资产也在这里恢复）。
+    const chatAssets = S.assets.filter((a) => !NS.isKstarAsset(a));
+    const chatPending = S.candidates.filter((c) => candidateAwaiting(c) && !NS.isKstarCandidate(c)).length;
+    const chatValidated = chatAssets.filter((a) => a.maturity === 'transfer_validated' || a.maturity === 'effectiveness_validated').length;
     const counts = {};
-    for (const [id] of CATEGORIES) counts[id] = S.assets.filter((a) => a.type === id && !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length;
+    for (const [id] of CATEGORIES) counts[id] = chatAssets.filter((a) => a.type === id && !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length;
     const sourceCount = S.sources.reduce((n, group) => n + (Array.isArray(group.items) ? group.items.length : 0), 0);
     const captureCount = Array.isArray(S.captures) ? S.captures.length : 0;
     // 每个资产的最近使用时间（时间线里 occurredAt 的最大值）：列表行此前
@@ -787,9 +847,9 @@
       T('cognition.overview_title', '我的认知资产'),
       T('cognition.tree_page_hint', '树只展示正式认知资产。候选经确认后成为正式资产，经真实复用与证据验证后升级为「已验证」。'),
       statsRow([
-        [stats.confirmed, T('cognition.overview_stat_confirmed', '已确认资产')],
-        [stats.pending, T('cognition.overview_stat_pending', '待确认候选')],
-        [stats.transferOk, T('cognition.overview_stat_validated', '已验证')],
+        [chatAssets.filter((a) => !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length, T('cognition.overview_stat_confirmed', '已确认资产')],
+        [chatPending, T('cognition.overview_stat_pending', '待确认候选')],
+        [chatValidated, T('cognition.overview_stat_validated', '已验证')],
         [stats.attention, T('cognition.overview_stat_attention', '需要关注')],
       ]),
     );
@@ -807,9 +867,9 @@
     const deletedCount = S.assets.filter((a) => String(a.status || 'active') === 'deleted').length;
     const filtered = route.category === 'deleted'
       ? S.assets.filter((a) => String(a.status || 'active') === 'deleted')
-      : S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))
+      : chatAssets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))
         && (!route.category || a.type === route.category));
-    const chips = [['', T('common.all', '全部'), S.assets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))).length]]
+    const chips = [['', T('common.all', '全部'), chatAssets.filter((a) => !HIDDEN_STATUS.includes(String(a.status || 'active'))).length]]
       .concat(CATEGORIES.map(([id, key, fallback]) => [id, T(key, fallback), counts[id]]))
       .concat(deletedCount ? [['deleted', T('cognition.assets_deleted_tab', '已删除'), deletedCount]] : []);
     const listHtml = filtered.length
@@ -915,14 +975,86 @@
     </div>`;
   }
 
+  /* ───────────────── 视图：KSTAR 线（2026-09-17 B 档两线分开） ───────────────── */
+
+  /** KSTAR 沉淀的资产：口径=NS.isKstarAsset（身上挂 KSTAR 任务复盘证据或
+   *  学习信号）。详情复用 assetDetail——版本块内证据按两线分组呈现，KSTAR
+   *  资产上混挂的对话证据不会被藏掉，只是各自归组。 */
+  function viewKstarAssets(route) {
+    if (route.assetId) {
+      const asset = S.assets.find((a) => String(a.id) === String(route.assetId));
+      if (asset) return hero(T('cognition.kstar_assets_title', 'KSTAR 沉淀的资产'), '') + assetDetail(asset, route);
+    }
+    const HIDDEN_STATUS = ['archived', 'deleted', 'purged', 'revoked'];
+    const kstarAssets = S.assets.filter((a) => NS.isKstarAsset(a) && !HIDDEN_STATUS.includes(String(a.status || 'active')));
+    const rows = kstarAssets.map((asset) => `
+      <div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
+        <div class="ca-row-main">
+          <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
+          <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))}</div>
+        </div>
+        <div class="ca-row-side">${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
+      </div>`).join('');
+    return `${hero(
+      T('cognition.kstar_assets_title', 'KSTAR 沉淀的资产'),
+      T('cognition.kstar_assets_hint', '任务完结后 KSTAR 复盘沉淀出的经验，经你确认后成为资产。'),
+      statsRow([[kstarAssets.length, T('cognition.kstar_assets_stat', 'KSTAR 沉淀')]]),
+    )}
+    ${kstarAssets.length ? `<div class="ca-card">${rows}</div>` : `<div class="ca-card">${empty(T('cognition.kstar_assets_empty', '还没有 KSTAR 沉淀的资产——任务完结并复盘后，学到的经验会先出现在「待确认提案」'))}</div>`}`;
+  }
+
+  /** KSTAR 待确认提案：与对话线「待我处理」同构，只收 KSTAR 血统候选。 */
+  function viewKstarAttention(route) {
+    if (route.candidateId) return viewCandidate(route);
+    const pending = S.candidates.filter((c) => candidatePending(c) && NS.isKstarCandidate(c));
+    const broken = pending.filter(evidenceMostlyUnavailable);
+    const healthy = pending.filter((c) => !evidenceMostlyUnavailable(c));
+    return `${hero(
+      T('cognition.kstar_attention_title', 'KSTAR 待确认提案'),
+      T('cognition.kstar_attention_hint', '任务完结后 KSTAR 复盘产生的经验提案；确认后成为正式资产。'),
+      statsRow([[healthy.filter(candidateAwaiting).length, T('cognition.review_stat_wait', '等待确认')]]),
+    )}
+    ${healthy.length ? healthy.map((c) => candidateCard(c, false)).join('') : `<div class="ca-card">${empty(T('cognition.kstar_attention_empty', '当前没有等待确认的 KSTAR 提案'))}</div>`}
+    ${broken.length ? sectionHead(T('cognition.review_group_evidence', '来源已删除的候选'), T('cognition.review_group_evidence_note', '这些候选的原始出处已被删除；可以点开确认后仍要保存，或选择不保存')) + broken.map((c) => candidateCard(c, true)).join('') : ''}`;
+  }
+
+  /** KSTAR 任务复盘历史：每场被复盘的任务一行，点行展开完整复盘
+   *  （kstarEpisodeSection 复用，数据走 loadKstarEpisode）。 */
+  function viewKstarEpisodes(route) {
+    const episodes = Array.isArray(S.kstarEpisodes) ? S.kstarEpisodes : null;
+    const openId = String(route.kstarEpisodeId || '');
+    const rows = (episodes || []).map((ep) => {
+      const goal = String((ep.t && ep.t.userGoal) || '').trim();
+      const at = String(ep.updatedAt || ep.createdAt || '');
+      const isOpen = openId === String(ep.id || '');
+      return `<div class="ca-row is-flat is-clickable" data-act="open-kstar-episode" data-id="${esc(String(ep.id || ''))}" ${roleBtn()}>
+        <div class="ca-row-main">
+          <div class="ca-row-title">${esc(goal || T('cognition.kstar_episode_no_goal', '（未记录目标）'))}</div>
+          <div class="ca-row-meta">${esc(fmtDate(at))}</div>
+        </div>
+      </div>${isOpen ? kstarEpisodeSection(route) : ''}`;
+    }).join('');
+    return `${hero(
+      T('cognition.kstar_episodes_title', '任务复盘'),
+      T('cognition.kstar_episodes_hint', '每场任务完结后 KSTAR 自动复盘：当时的任务、实际发生、为什么、学到的经验。点开看完整复盘。'),
+    )}
+    ${episodes === null
+      ? `<div class="ca-card">${empty(T('cognition.kstar_episodes_loading', '正在读取任务复盘列表…'))}</div>`
+      : episodes.length
+        ? `<div class="ca-card">${rows}</div>`
+        : `<div class="ca-card">${empty(T('cognition.kstar_episodes_empty', '还没有被 KSTAR 复盘过的任务'))}</div>`}`;
+  }
+
   function viewReview(route) {
     if (route.candidateId) return viewCandidate(route);
     const stats = NS.stats();
-    const pending = S.candidates.filter(candidatePending);
+    // 两线分开（B 档）：对话线待处理只收对话线候选，KSTAR 提案归
+    // kstar-attention；处理记录同步分线。
+    const pending = S.candidates.filter((c) => candidatePending(c) && !NS.isKstarCandidate(c));
     const broken = pending.filter(evidenceMostlyUnavailable);
     const healthy = pending.filter((c) => !evidenceMostlyUnavailable(c));
     const processed = S.candidates
-      .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status || '')))
+      .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status || '')) && !NS.isKstarCandidate(c))
       .slice(0, 5);
     // 处理结果按真实状态如实显示——此前无论保存还是拒绝都写「已保存」，
     // 与筛选口径（confirmed/rejected/ignored 三种）不符（用户实测抓出）。
@@ -1010,7 +1142,7 @@
           ${field(T('cognition.summary', '摘要'), window.uiInput({ id: `ca-cand-summary-${esc(candidate.id)}`, value: candidate.summary || '', attrs: { 'data-f': 'summary' } }))}
         </details>
         <div class="ca-detail-foot">
-          ${field(T('cognition.evidence_refs', '证据引用'), `<div class="ca-chips">${refs.map(evidenceChip).join('') || `<span class="ca-note">${esc(T('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</span>`}</div>`)}
+          ${field(T('cognition.evidence_refs', '证据引用'), refs.length ? evidenceGroupsHtml(refs) : `<span class="ca-note">${esc(T('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</span>`)}
           ${actionsHtml}
         </div>
       ` : `
@@ -1564,8 +1696,17 @@
     // 候选详情归「待我处理」、整理详情归「整理」；interactive-tour 靠
     // data-cognition-page-link="assets"/"captures" 定位 tab，随重构迁移。
     const activeTab = route.name === 'review' || route.candidateId ? 'review'
-      : route.name === 'organize' || route.name === 'organize-settings' || route.captureId ? 'organize' : 'overview';
-    const tabsHtml = `<nav class="ca-tabs">${NS.TABS.map((tab) => {
+      : route.name === 'organize' || route.name === 'organize-settings' || route.captureId ? 'organize'
+      : route.name === 'kstar-assets' || route.name === 'kstar-attention' || route.name === 'kstar-episodes' ? route.name
+      : 'overview';
+    // 两线顶级分开（2026-09-17 子安拍板 B 档）：当前在哪条线由路由推导
+    //（kstar- 前缀即 KSTAR 线），tab 条只显示本线的 tab，互不混排。
+    const source = activeTab.startsWith('kstar-') ? 'kstar' : 'chat';
+    const sourceSwitch = `<div class="ca-source-switch">
+      <div class="ca-source-btn${source === 'chat' ? ' is-on' : ''}" data-act="switch-source" data-id="chat" ${roleBtn()}>${esc(T('cognition.source_chat', '对话沉淀'))}</div>
+      <div class="ca-source-btn${source === 'kstar' ? ' is-on' : ''}" data-act="switch-source" data-id="kstar" ${roleBtn()}>${esc(T('cognition.source_kstar', 'KSTAR 沉淀'))}</div>
+    </div>`;
+    const tabsHtml = `<nav class="ca-tabs">${NS.TABS.filter((tab) => (tab.group || 'chat') === source).map((tab) => {
       const active = activeTab === tab.id;
       const extra = tab.id === 'overview' ? ' data-cognition-page-link="assets"' : (tab.id === 'organize' ? ' data-cognition-page-link="captures"' : '');
       // 2026-09-15 子安要求：tab 只留标题，描述小字与 title 悬浮注释删除。
@@ -1580,12 +1721,16 @@
     } else if (route.name === 'review') body = viewReview(route);
     else if (route.name === 'organize') body = route.captureId ? viewCaptureDetail(route) : viewOrganizeTasks(route);
     else if (route.name === 'organize-settings') body = viewOrganizeSettingsPage();
+    else if (route.name === 'kstar-assets') body = viewKstarAssets(route);
+    else if (route.name === 'kstar-attention') body = viewKstarAttention(route);
+    else if (route.name === 'kstar-episodes') body = viewKstarEpisodes(route);
     else body = viewOverview(route);
     const errorBanner = S.errors.length && S.loaded
       ? `<div class="ca-banner">${esc(T('cognition.partial_load', '部分数据读取失败，页面已用可用数据渲染。'))}${btn(T('common.retry', '重试'), 'refresh', { small: true })}</div>`
       : '';
     root.innerHTML = `
       <div class="ca-app">
+        ${sourceSwitch}
         ${tabsHtml}
         ${errorBanner}
         <div class="ca-scroll" id="ca-scroll">${body}</div>

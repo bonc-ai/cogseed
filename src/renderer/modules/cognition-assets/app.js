@@ -16,6 +16,11 @@
   let treeRequested = false;
   let booted = false;
 
+  /** 资产/复盘详情的宿主 tab（2026-09-17 B 档两线分开）：KSTAR 线里的
+   *  详情操作留在 KSTAR 线（kstar-assets/kstar-episodes），对话线回
+   *  overview——由当前路由推导，绝不带线跳。 */
+  const hostRoute = () => (['kstar-assets', 'kstar-episodes'].includes(String(S.route.name || '')) ? String(S.route.name) : 'overview');
+
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
@@ -51,7 +56,7 @@
   function bindEvents(root) {
     root.addEventListener('click', async (event) => {
       const assetRow = event.target.closest('[data-go-asset]');
-      if (assetRow) { router.go({ name: 'overview', assetId: assetRow.dataset.goAsset }); return; }
+      if (assetRow) { router.go({ name: hostRoute(), assetId: assetRow.dataset.goAsset }); return; }
       const el = event.target.closest('[data-act]');
       if (!el) return;
       const act = el.dataset.act;
@@ -69,9 +74,9 @@
             // "返回上一步"，从候选/整理详情跳进资产详情后，点返回退回的是
             // 跳转前的深层页而不是列表，与按钮文案不符。按详情类型归位到
             // 对应列表根（资产详情保留分类筛选）；仍压栈，需要时可再进详情。
-            const name = S.route.candidateId ? 'review'
+            const name = S.route.candidateId ? (S.route.name === 'kstar-attention' ? 'kstar-attention' : 'review')
               : (S.route.captureId || S.route.name === 'organize' || S.route.name === 'organize-settings') ? 'organize'
-                : 'overview';
+                : hostRoute();
             router.go({ name, category: name === 'overview' ? String(S.route.category || '') : '' });
             break;
           }
@@ -94,7 +99,22 @@
             break;
           }
           case 'refresh': await NS.reload({ tree: true }); await NS.reload(); break;
-          case 'tab': router.go({ name: id }); break;
+          case 'tab': {
+            router.go({ name: id });
+            // KSTAR 复盘列表懒加载：进 tab 才拉（其余数据 boot 时已有）。
+            if (id === 'kstar-episodes') void NS.loadKstarEpisodes();
+            break;
+          }
+          case 'switch-source': {
+            // 两线顶级切换（2026-09-17 B 档）：切到该线默认 tab。
+            if (id === 'kstar') {
+              router.go({ name: 'kstar-assets' });
+              void NS.loadKstarEpisodes();
+            } else {
+              router.go({ name: 'overview' });
+            }
+            break;
+          }
           case 'filter-cat': router.go({ name: 'overview', category: id }); break;
           case 'go-review': router.go({ name: 'review' }); break;
           case 'go-organize': router.go({ name: 'organize' }); break;
@@ -160,9 +180,9 @@
             await A.captureBatch(action, runnable.map((capture) => capture.id));
             break;
           }
-          case 'open-candidate': router.go({ name: 'review', candidateId: id }); break;
+          case 'open-candidate': router.go({ name: S.route.name === 'kstar-attention' ? 'kstar-attention' : 'review', candidateId: id }); break;
           case 'open-ontology': await NS.openPersonalOntology(); break;
-          case 'open-asset': router.go({ name: 'overview', assetId: id }); break;
+          case 'open-asset': router.go({ name: hostRoute(), assetId: id }); break;
           case 'open-overview': router.go({ name: 'overview' }); break;
           case 'cand-adopt-with-form': await A.adoptCandidate(id, readCandidateForm(el) || undefined); break;
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
@@ -171,11 +191,11 @@
           case 'delete-asset-version': await A.deleteAssetVersion(id, el.dataset.version || ''); break;
           case 'edit-asset': {
             // 进入/退出编辑态（纯路由切换，不压返回栈）。
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetEdit: S.route.assetEdit ? '' : '1' }, { replace: true });
+            router.go({ name: hostRoute(), assetId: String(S.route.assetId || ''), assetEdit: S.route.assetEdit ? '' : '1' }, { replace: true });
             break;
           }
           case 'asset-edit-save': await A.editAsset(id); break;
-          case 'asset-edit-cancel': router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetEdit: '' }, { replace: true }); break;
+          case 'asset-edit-cancel': router.go({ name: hostRoute(), assetId: String(S.route.assetId || ''), assetEdit: '' }, { replace: true }); break;
           case 'edit-from-version': await A.editFromVersion(id, el.dataset.version || ''); break;
           case 'merge-asset-version': await A.mergeAssetVersion(id, el.dataset.version || ''); break;
           case 'open-asset-version': {
@@ -184,7 +204,7 @@
             const prev = String(S.route.assetVersionId || '');
             const next = String(el.dataset.version || '');
             const open = next && next !== prev ? next : '';
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: open }, { replace: true });
+            router.go({ name: hostRoute(), assetId: String(S.route.assetId || ''), assetVersionId: open }, { replace: true });
             break;
           }
           case 'diff-asset-version': {
@@ -192,11 +212,11 @@
             // 必须带全 route 上下文（含 assetVersionId）——否则展开块被默认值清掉。
             const cur = String(S.route.assetVersionDiff || '');
             const next = String(el.dataset.version || '');
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: next && next !== cur ? next : '' }, { replace: true });
+            router.go({ name: hostRoute(), assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: next && next !== cur ? next : '' }, { replace: true });
             break;
           }
           case 'toggle-asset-versions-noise': {
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionsExpanded: S.route.assetVersionsExpanded ? '' : '1' }, { replace: true });
+            router.go({ name: hostRoute(), assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionsExpanded: S.route.assetVersionsExpanded ? '' : '1' }, { replace: true });
             break;
           }
           case 'open-kstar-episode': {
@@ -206,7 +226,7 @@
             const prev = String(S.route.kstarEpisodeId || '');
             const next = String(el.dataset.id || '');
             const open = next && next !== prev ? next : '';
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: String(S.route.assetVersionDiff || ''), kstarEpisodeId: open }, { replace: true });
+            router.go({ name: hostRoute(), assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: String(S.route.assetVersionDiff || ''), kstarEpisodeId: open }, { replace: true });
             if (open) void NS.loadKstarEpisode(open);
             break;
           }

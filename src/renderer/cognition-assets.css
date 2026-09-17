@@ -45,6 +45,19 @@
 /* ── 四个主标签 ───────────────────────────────────────────── */
 /* ── 页头 tab（紧凑横排：标题 + 一句说明，下划线选中态） ───────────── */
 .ca-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--ca-line); }
+/* 两线顶级切换（2026-09-17 B 档）：对话沉淀 / KSTAR 沉淀。 */
+.ca-source-switch { display: flex; gap: 6px; margin-bottom: 10px; }
+.ca-source-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px 6px;
+  border: 1px solid var(--ca-line); border-radius: 999px; background: none;
+  cursor: pointer; font: inherit; font-size: var(--font-size-5); color: var(--ca-ink2);
+}
+.ca-source-btn:hover { color: var(--ca-ink); border-color: var(--ca-ink2); }
+.ca-source-btn.is-on { color: var(--ca-green-d); border-color: var(--ca-green); background: color-mix(in srgb, var(--ca-green) 10%, transparent); font-weight: 600; }
+/* 证据分组（2026-09-17 B 档）：KSTAR 任务复盘 / 对话与表态 各一组。 */
+.ca-evgroup { margin-top: 10px; }
+.ca-evgroup-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; font-size: var(--font-size-5); font-weight: 600; color: var(--ca-ink); }
+.ca-evgroup-title .ca-note { font-weight: 400; }
 .ca-tab {
   display: flex; align-items: baseline; gap: 6px; padding: 7px 13px 8px;
   border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;

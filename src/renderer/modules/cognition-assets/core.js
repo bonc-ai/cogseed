@@ -124,6 +124,8 @@
      *  kstarEpisode 为点开中的单条详情 {episodeId, episode, review}。 */
     kstarSummaries: null,
     kstarEpisode: null,
+    /** KSTAR 任务复盘列表（kstar-episodes tab）：kstar.episodes.list 的记录。 */
+    kstarEpisodes: null,
     sources: [],
     tree: null,
     proofs: [],
@@ -300,6 +302,22 @@
     NS.notify();
   };
 
+  /** KSTAR 任务复盘列表（kstar-episodes tab）：一次性拉最近复盘过的任务。 */
+  NS.loadKstarEpisodes = async function loadKstarEpisodes(force) {
+    if (!force && Array.isArray(store.kstarEpisodes)) return;
+    const prev = store.kstarEpisodes;
+    store.kstarEpisodes = [];
+    try {
+      const result = await api.soft('kstar.episodes.list', { limit: 50 }, { episodes: [] });
+      const episodes = (result && (result.episodes || result.items)) || [];
+      store.kstarEpisodes = [...episodes].sort((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')));
+    } catch (error) {
+      // 列表缺席只影响 tab 内容，恢复上一份避免整页空白。
+      store.kstarEpisodes = prev || [];
+    }
+    NS.notify();
+  };
+
   /* ────────────────────────── 路由 ────────────────────────── */
 
   /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab——我的认知 / 待我处理 /
@@ -307,11 +325,18 @@
    * 使用记录并入资产详情、经验（KSTAR）与来源健康常态页砍除（来源改为
    * 异常驱动，只在待我处理出现）。 */
   const TABS = [
-    { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
-    { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
-    { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
+    { id: 'overview', group: 'chat', titleKey: 'cognition.tab_overview', title: '我的认知' },
+    { id: 'review', group: 'chat', titleKey: 'cognition.tab_review', title: '待我处理' },
+    { id: 'organize', group: 'chat', titleKey: 'cognition.tab_organize', title: '整理' },
+    // KSTAR 侧（2026-09-17 子安拍板 B 档）：与对话沉淀线顶级分开，全链路
+    // 各走各的 tab——列表、待确认、复盘历史互不混排。
+    { id: 'kstar-assets', group: 'kstar', titleKey: 'cognition.tab_kstar_assets', title: '沉淀的资产' },
+    { id: 'kstar-attention', group: 'kstar', titleKey: 'cognition.tab_kstar_attention', title: '待确认提案' },
+    { id: 'kstar-episodes', group: 'kstar', titleKey: 'cognition.tab_kstar_episodes', title: '任务复盘' },
   ];
   NS.TABS = TABS;
+  // 归边判定 NS.isKstarAsset / NS.isKstarCandidate 由 views.js 定义
+  //（2026-09-17 B 档两线分开；渲染层唯一消费方，跟着渲染代码走）。
 
   const router = {
     go(next, options) {
