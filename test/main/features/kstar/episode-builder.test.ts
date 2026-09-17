@@ -148,7 +148,7 @@ describe('KSTAR episode builders', () => {
       sessionKind: 'group_chat',
       projectionId: 'proj-a',
       forecastId: 'wf-a',
-      k: { abilityAssetRefs: ['asset-a'] },
+      k: { abilityAssetRefs: ['asset-a'], abilityAssetVersions: { 'asset-a': '2' } },
       r: { status: 'completed', finalText: 'Plan completed.', producedFiles: ['plan.md'] },
       t: { userGoal: 'Make a concise plan.' },
     });

@@ -171,13 +171,10 @@ describe('未知枚举不落到机器码', () => {
   });
 
   it('资产来源标签对未知生命周期状态给兜底文案（空值保留「—」占位）', () => {
-    const start = views.indexOf('const originText');
-    expect(start).toBeGreaterThan(-1);
-    // originText 是赋值语句不是函数体，取到下一个声明前的整段（含字典后的
-    // 兜底分支），sliceBlock 只会切到对象字面量闭合、丢掉兜底部分。
-    const block = views.slice(start, views.indexOf('const moreRow', start));
-    expect(block).toContain('cognition.asset_origin_status_other');
-    expect(block).not.toContain('|| String(asset.lifecycleStatus');
+    // 2026-09-17 下沉改：资产级 lifecycleStatus 标签随头部重构移除——渲染层
+    // 不再消费该字段（来源改由版本快照的学习信号判定，见 snapshotOriginText），
+    // 未知枚举不可能裸出；守卫改为"渲染层零消费"。
+    expect(views).not.toContain('lifecycleStatus');
   });
 
   it('证明事件标题认不出时给占位文案；title 是自然语言时保留原文', () => {

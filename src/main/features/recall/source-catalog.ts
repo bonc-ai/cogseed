@@ -56,6 +56,12 @@ export interface CognitionCatalogSource extends CognitionSourceRef {
   /** Session-only: usable (capture-visible) message count, for filtering
    *  trivial conversations out of the manual capture picker. */
   messageCount?: number;
+  /** Session-only low-signal signals for the organize view's "无需沉淀"
+   *  bucket: the last user turn ended in a failed/interrupted reply. */
+  lastTurnFailed?: boolean;
+  /** Session-only low-signal signal: few useful messages and every user
+   *  message is a greeting/trivial text. */
+  chatLike?: boolean;
   statusReason?: string;
   actions: CognitionSourceAction[];
   nextAction: CognitionSourceNextAction;
@@ -75,6 +81,8 @@ interface DiscoveredSource extends CognitionSourceRef {
   status: CognitionSourceLifecycleStatus;
   captureReady?: boolean;
   messageCount?: number;
+  lastTurnFailed?: boolean;
+  chatLike?: boolean;
   statusReason?: string;
 }
 
@@ -176,17 +184,39 @@ function conversationStatus(conversation: chats.Conversation): Pick<DiscoveredSo
     : { status: 'ready' };
 }
 
+/** 未得到正常回复的回合残留：模型失败占位或中断占位（同属"回复失败"口径，
+ *  与 resolveFailedTurnRetry 的失败判定同源：failure_kind/failure_code）。 */
+function isFailurePlaceholder(message: GroupMessage): boolean {
+  return Boolean(message.failure_kind || message.failure_code || message.system_kind === 'reply_interrupted');
+}
+
+/** 寒暄文本口径：规范化（小写、去空白与标点）后 ≤2 字符或命中词表。词表刻意
+ *  保守——误把正经短消息（如"再试一次"）当寒暄的代价是它从整理列表消失，
+ *  大于漏掉一条寒暄。 */
+const CHATLIKE_NORMALIZED_TEXTS = new Set([
+  'hi', 'yo', 'ok', 'ty', 'hello', 'hey', 'thanks', 'thankyou', 'hola',
+  'goodmorning', 'goodevening', 'goodnight',
+  '你好', '您好', '嗨', '哈喽', '在吗', '在么', '谢谢', '多谢', '感谢', '辛苦了',
+  '早', '早安', '早上好', '午安', '晚上好', '晚安', '再见', '拜拜',
+  '嗯', '嗯嗯', '好的', '哈哈', '哈哈哈',
+]);
+function isChatLikeText(text: string): boolean {
+  const normalized = String(text || '').trim().toLocaleLowerCase().replace(/[\s\p{P}]+/gu, '');
+  return normalized.length > 0 && (normalized.length <= 2 || CHATLIKE_NORMALIZED_TEXTS.has(normalized));
+}
+
 /** A manual capture must never offer an unfinished conversation as runnable.
  * Keep this as a small metadata preflight: message bodies are not returned in
  * the catalog, and the capture service still performs the authoritative check
  * immediately before creating a task. */
 /** 会话的可整理预检：ready=最后一轮是否已有 assistant 回复（undefined=读不
  *  到无法判断）；messageCount=可整理视角的有用消息条数（供列表过滤一两句
- *  的简单对话）。两者都从同一次消息读取里得出，不产生额外 IO。 */
+ *  的简单对话）；lastTurnFailed/chatLike=整理页「无需沉淀」分类的低价值信
+ *  号（最后回合失败 / 纯寒暄）。全部从同一次消息读取里得出，不产生额外 IO。 */
 async function conversationCaptureReadiness(
   userId: string,
   conversationId: string,
-): Promise<{ ready?: boolean; messageCount?: number } | undefined> {
+): Promise<{ ready?: boolean; messageCount?: number; lastTurnFailed?: boolean; chatLike?: boolean } | undefined> {
   try {
     const readinessFrom = (messages: GroupMessage[]): boolean | undefined => {
       let lastUserIndex = -1;
@@ -199,15 +229,29 @@ async function conversationCaptureReadiness(
       if (lastUserIndex < 0) return undefined;
       return messages.slice(lastUserIndex + 1).some(isRecallAssistantMessage);
     };
-    const recent = (await chats.getMessages(userId, conversationId, 50))
-      .filter(usefulMessage)
-      .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
-    const recentReadiness = readinessFrom(recent);
-    if (recentReadiness !== undefined) return { ready: recentReadiness, messageCount: recent.length };
-    const messages = (await chats.getMessages(userId, conversationId, 2_000))
-      .filter(usefulMessage)
-      .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
-    return { ready: readinessFrom(messages) ?? false, messageCount: messages.length };
+    const analyze = (raw: GroupMessage[]) => {
+      const sorted = [...raw].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+      const useful = sorted.filter(usefulMessage);
+      const ready = readinessFrom(useful);
+      // 失败占位被 usefulMessage 排除，判定要回到原始序列：锚定 useful 视角
+      // 的最后一条 user，看其后是否有失败/中断占位（ready=false 保证那一轮
+      // 没有正常回复——失败后重试成功的会话不算）。
+      let lastUser: GroupMessage | undefined;
+      for (let index = useful.length - 1; index >= 0; index -= 1) {
+        if (useful[index].from === 'user') { lastUser = useful[index]; break; }
+      }
+      const lastTurnFailed = ready === false && Boolean(lastUser)
+        && sorted.slice(sorted.indexOf(lastUser as GroupMessage) + 1).some(isFailurePlaceholder);
+      const userMessages = useful.filter((message) => message.from === 'user');
+      const chatLike = useful.length <= 3
+        && userMessages.length > 0
+        && userMessages.every((message) => isChatLikeText(String(message.text || '')));
+      return { ready, messageCount: useful.length, lastTurnFailed, chatLike };
+    };
+    const first = analyze(await chats.getMessages(userId, conversationId, 50));
+    if (first.ready !== undefined) return first;
+    const full = analyze(await chats.getMessages(userId, conversationId, 2_000));
+    return { ...full, ready: full.ready ?? false };
   } catch {
     // An unreadable source remains actionable through the normal source error
     // path; do not claim that it is complete based on missing data.
@@ -230,7 +274,13 @@ async function conversationSources(userId: string, query: Parameters<SourceAdapt
     const readiness = conversation.processing || query.disabledConversationIds?.has(conversation.conversation_id)
       ? undefined
       : await conversationCaptureReadiness(userId, conversation.conversation_id);
-    return readiness === undefined ? source : { ...source, captureReady: readiness.ready, messageCount: readiness.messageCount };
+    return readiness === undefined ? source : {
+      ...source,
+      captureReady: readiness.ready,
+      messageCount: readiness.messageCount,
+      lastTurnFailed: readiness.lastTurnFailed,
+      chatLike: readiness.chatLike,
+    };
   }));
   if (sessions.length >= query.limit) return sessions;
   const messages = await loadRecentMessages(

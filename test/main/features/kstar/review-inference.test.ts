@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { KstarEpisodeRecord } from '../../../../src/main/features/kstar/types';
 
+vi.mock('../../../../src/main/features/recall/asset-service', () => ({
+  readAbilityAsset: vi.fn(async (userId: string, assetId: string) => ({
+    id: assetId, title: 'Decision log rule', type: 'rule', status: 'active',
+    statement: 'Keep every architecture decision in the shared decision log.',
+    scope: 'general', version: '2', activeVersion: '1',
+    createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+  })),
+}));
+
 function episode(overrides: Partial<KstarEpisodeRecord> = {}): KstarEpisodeRecord {
   return {
     schemaVersion: 1,
@@ -59,6 +68,22 @@ describe('KSTAR review inference', () => {
     });
     expect(result.review.actualResult).toContain('Fixed the login bug');
     expect(result.review.actualResult).toContain('auth.test.ts');
+  });
+
+  it('feeds referenced assets (in-use versions) into review input for lesson fusion（2026-09-16 版本组）', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    let capturedMessage = '';
+    const runModel = vi.fn(async ({ message }: { message: string }) => {
+      capturedMessage = message;
+      return JSON.stringify({ outcome: 'worse_than_expected', attribution: 'knowledge_gap', confidence: 0.8 });
+    });
+    await inference.inferKstarReview('user-a', episode({
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-fuse-1'] },
+    }), { runModel });
+
+    expect(capturedMessage).toContain('referencedAssets');
+    expect(capturedMessage).toContain('asset-fuse-1');
+    expect(capturedMessage).toContain('decision log');
   });
 
   it('uses strict model analysis for a completed task without objective verification', async () => {

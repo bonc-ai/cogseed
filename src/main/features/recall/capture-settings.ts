@@ -36,7 +36,10 @@ export interface UpdateRecallCaptureSettingsInput {
 
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
-  executionPolicy: 'smart' as const,
+  // 2026-09-16 B3：默认档与实际行为对齐——smart 的自动创建早已下线
+  //（terminalCaptureEnabledFor 仅放行 nightly），默认留在半死档会让
+  // "smart+auto"组合的手动整理意外自动采纳。
+  executionPolicy: 'manual' as const,
   reviewPolicy: 'auto' as const,
   quietMinutes: 10,
   nightlyStart: '02:00',
@@ -49,6 +52,9 @@ function isStoredExecutionPolicy(value: unknown): value is StoredRecallCaptureEx
 }
 
 function canonicalExecutionPolicy(value: StoredRecallCaptureExecutionPolicy): RecallCaptureExecutionPolicy {
+  // 2026-09-16 B3 收窄：只改默认值不动存量归一——smart 自动创建闸门已拦，
+  // 存量 smart 用户动一次夜间开关即离开该档；强行归一会让 waiting_quiet
+  // 新建路径与 22 个活测试整体作废，代价大于收益。
   return value === 'immediate' ? 'smart' : value;
 }
 
