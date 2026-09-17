@@ -4172,6 +4172,8 @@
   "cognition.asset_content_label": "当前内容（即在用版本 v{n}）",
   "cognition.asset_edit_from_version": "基于此版修改",
   "cognition.asset_archived_note": "已归并：这条资产已并入另一条资产，历史版本完整保留在并入目标的版本记录中。",
+  "cognition.asset_meta_category": "分类",
+  "cognition.asset_meta_updated": "最近更新",
   "cognition.proof_sentence_unknown": "{when}，{title}",
   "cognition.proof_version_suffix": "（v{n}）",
   "cognition.proof_used_times": "被实际使用 {n} 次",

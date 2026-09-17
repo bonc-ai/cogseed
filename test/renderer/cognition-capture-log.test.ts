@@ -1145,8 +1145,11 @@ describe('资产详情（使用记录并入）', () => {
     expect(list).toContain('使用中：这条资产会自动带入你的新任务');
     expect(list).not.toContain('data-act="edit-asset"');
     expect(list).not.toContain('data-action="archive"');
-    // 正文锚点：正文 = 在用版本内容，首次显式化。
-    expect(list).toContain('当前内容（即在用版本 v1）');
+    // 头部只留标题（正常状态不摆任何章）；分类/最近更新收进「详细信息」。
+    expect(list).not.toContain('已成功带入');
+    expect(list).toContain('分类');
+    expect(list).toContain('最近更新');
+    expect(list).toContain('data-action="pause"');
     // 版本行的编辑入口：在用版与历史版的展开块都有「基于此版修改」。
     const multi = { ...asset, version: '2', activeVersion: '1' };
     const versions = { assetId: 'aa-1', versions: [
@@ -1216,10 +1219,12 @@ describe('资产详情（使用记录并入）', () => {
     expect(open).toContain('T1 → T2');
     expect(open).toContain('0 → 1');
     expect(open).toContain('与在用版合并为新版');
-    // 最新 vs 在用的下钻（在用非最新时头部出现）。
+    // 头部下钻已随用户视角重构移除（2026-09-17）：版本信息全归版本区，
+    // 头部不再出现"已有更新的版本/看最新一版改了什么"。
     const latestMulti = { ...multi, activeVersion: '1' };
-    const latest = renderPage('overview', { assets: [latestMulti], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1', assetVersionDiff: 'latest' });
-    expect(latest).toContain('版本对比：v1（在用） → v2');
+    const latest = renderPage('overview', { assets: [latestMulti], proofs: [], sources: [], assetVersions: versions }, { assetId: 'aa-1' });
+    expect(latest).not.toContain('已有更新的版本');
+    expect(latest).not.toContain('看最新一版改了什么');
   });
 
   it('已删除档（2026-09-17 报告建议 G）：默认视图不含已删除；「已删除」档与详情恢复入口', () => {
@@ -1240,13 +1245,14 @@ describe('资产详情（使用记录并入）', () => {
       assetVersions: { assetId: 'aa-1', versions: [{ assetId: 'aa-1', version: '1', at: '2026-09-15T01:00:00.000Z', snapshot: { title: '上线前必须确认影响范围', type: 'rule', evidenceRefs: [] } }] },
     }, { assetId: 'aa-1' });
     expect(single).not.toContain('版本记录');
-    // 选用旧版后（activeVersion=1 而最新=3）：头部显示在用 v1 并提示存在更新。
+    // 头部重构（2026-09-17 用户视角）：头部不再出现版本号/"已有更新的版本"
+    // ——版本信息全部归版本区（"在用"绿标 + 各版本行自明）。
     const stale = renderPage('overview', {
       assets: [{ ...asset, version: '3', activeVersion: '1' }],
       proofs: [], sources: [], assetVersions: null,
     }, { assetId: 'aa-1' });
-    expect(stale).toContain('v1');
-    expect(stale).toContain('已有更新的版本');
+    expect(stale).not.toContain('已有更新的版本');
+    expect(stale).not.toContain('看最新一版改了什么');
   });
 
   it('未使用资产出占位说明，不裸空白', () => {

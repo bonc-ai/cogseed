@@ -3893,6 +3893,8 @@
   "cognition.asset_content_label": "Conteúdo atual (a versão em uso v{n})",
   "cognition.asset_edit_from_version": "Editar a partir desta versão",
   "cognition.asset_archived_note": "Mesclado: este ativo foi mesclado em outro; o histórico completo vive nos registros de versão dele.",
+  "cognition.asset_meta_category": "Categoria",
+  "cognition.asset_meta_updated": "Última atualização",
   "cognition.proof_sentence_unknown": "{when}, {title}",
   "cognition.proof_version_suffix": " (v{n})",
   "cognition.proof_used_times": "Usado {n} vezes",

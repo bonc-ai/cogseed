@@ -4169,6 +4169,8 @@
   "cognition.asset_content_label": "Current content (the active version v{n})",
   "cognition.asset_edit_from_version": "Edit from this version",
   "cognition.asset_archived_note": "Merged: this asset was merged into another asset; its full history lives in that asset's version records.",
+  "cognition.asset_meta_category": "Category",
+  "cognition.asset_meta_updated": "Last updated",
   "cognition.proof_sentence_unknown": "{when}, {title}",
   "cognition.proof_version_suffix": " (v{n})",
   "cognition.proof_used_times": "Used {n} times",

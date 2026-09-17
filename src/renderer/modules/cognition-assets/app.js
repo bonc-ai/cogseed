@@ -195,11 +195,6 @@
             router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: next && next !== cur ? next : '' }, { replace: true });
             break;
           }
-          case 'diff-asset-latest': {
-            const cur = String(S.route.assetVersionDiff || '');
-            router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionDiff: cur === 'latest' ? '' : 'latest' }, { replace: true });
-            break;
-          }
           case 'toggle-asset-versions-noise': {
             router.go({ name: 'overview', assetId: String(S.route.assetId || ''), assetVersionId: String(S.route.assetVersionId || ''), assetVersionsExpanded: S.route.assetVersionsExpanded ? '' : '1' }, { replace: true });
             break;

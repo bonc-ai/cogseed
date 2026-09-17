@@ -3893,6 +3893,8 @@
   "cognition.asset_content_label": "現在の内容（使用中バージョン v{n}）",
   "cognition.asset_edit_from_version": "この版を基に編集",
   "cognition.asset_archived_note": "統合済み：この資産は別の資産に統合されました。履歴は先方のバージョン記録に完全に残っています。",
+  "cognition.asset_meta_category": "分類",
+  "cognition.asset_meta_updated": "最終更新",
   "cognition.proof_sentence_unknown": "{when}、{title}",
   "cognition.proof_version_suffix": "（v{n}）",
   "cognition.proof_used_times": "実際に {n} 回使用",

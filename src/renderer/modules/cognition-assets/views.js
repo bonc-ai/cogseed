@@ -102,6 +102,15 @@
       : (asset.maturity === 'transfer_validated' ? chip(T('cognition.maturity_transferred', '已成功带入'), 'green') : '');
     return chip(label, tone) + maturity;
   };
+  /** 详情页头部章（2026-09-17 用户视角重构）：正常状态（active）不摆任何
+   *  章——自己确认过的资产不需要解释；只有异常状态（暂停/删除/撤回等）
+   *  才出章提醒。成熟度章只在列表行显示（快速识别），不进详情头部。 */
+  const detailStatusChip = (asset) => {
+    const status = String(asset.status || 'active');
+    if (status === 'active') return '';
+    const [label, tone] = ASSET_STATUS[status] || [status, ''];
+    return chip(label, tone);
+  };
 
   /** 来源目录索引：证据 chip 的解析与"多数不可用"判断共用这一份。 */
   function sourceIndex() {
@@ -576,19 +585,15 @@
         </div>
         ${open ? assetVersionDetailBlock(asset, v, isActive, usage) : ''}`;
       }).join('');
-    // 头部「已有更新的版本」的下钻（报告建议 C）：在用 vs 最新就地对比。
-    const activeRecord = sortedAsc.find((x) => String(x.version) === active);
-    const latestRecord = sortedAsc[sortedAsc.length - 1];
-    const latestDiff = String(S.route.assetVersionDiff || '') === 'latest' && activeRecord && latestRecord && String(latestRecord.version) !== active
-      ? assetVersionDiffBlock(asset, activeRecord, latestRecord)
-      : '';
+    // 头部「已有更新的版本」下钻已随头部重构移除（2026-09-17）：版本信息
+    // 全部归版本区——每行展开块内本就有「与在用版对比」，头部不再重复。
     const noiseToggle = noiseCount
       ? `<div class="ca-sub">${btn(expanded
         ? T('cognition.asset_versions_noise_hide', '收起系统迁移版本')
         : T('cognition.asset_versions_noise_show', '显示 {n} 条系统迁移产生的空版本', { n: String(noiseCount) }),
       'toggle-asset-versions-noise', { id: asset.id, small: true })}</div>`
       : '';
-    return `<div class="ca-sect"><div class="ca-row-title">${esc(T('cognition.asset_versions_section', '版本记录'))}</div>${latestDiff}${rows}${noiseToggle}</div>`;
+    return `<div class="ca-sect"><div class="ca-row-title">${esc(T('cognition.asset_versions_section', '版本记录'))}</div>${rows}${noiseToggle}</div>`;
   }
 
   /** 资产编辑表单（2026-09-17 报告建议 A）：预填在用版现值；保存产生新
@@ -674,18 +679,19 @@
       <div class="ca-line">
         <div>
           <h3>${esc(asset.title || asset.id)}</h3>
-          <div class="ca-sub">${esc(categoryLabel(asset.type))} · v${esc(String(asset.activeVersion || asset.version || '1'))}${asset.activeVersion && asset.activeVersion !== asset.version ? ` · ${esc(T('cognition.asset_version_latest_note', '已有更新的版本'))} ${btn(T('cognition.asset_version_diff_latest', '看最新一版改了什么'), 'diff-asset-latest', { id: asset.id, small: true })}` : ''} · ${esc(T('cognition.asset_updated', '更新于'))} ${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div>
         </div>
-        <div class="ca-right">${assetStatusChip(asset)}</div>
+        <div class="ca-right">${detailStatusChip(asset)}</div>
       </div>
-      ${editing ? assetEditForm(asset) : `<div class="ca-sub">${esc(T('cognition.asset_content_label', '当前内容（即在用版本 v{n}）', { n: String(asset.activeVersion || asset.version || '1') }))}</div><p class="ca-content-text">${esc(asset.statement || '')}</p>`}
+      ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}
       <details class="ca-advanced">
         <summary>${esc(T('cognition.asset_meta_summary', '详细信息'))}</summary>
         <div class="ca-kv">
+          <div><div class="ca-k">${esc(T('cognition.asset_meta_category', '分类'))}</div><div class="ca-v">${esc(categoryLabel(asset.type))}</div></div>
           <div><div class="ca-k">${esc(T('cognition.asset_scope_label', '适用范围'))}</div><div class="ca-v">${esc(scopeText)}</div></div>
           <div><div class="ca-k">${esc(T('cognition.asset_origin_label', '怎么来的'))}</div><div class="ca-v">${esc(originText)}</div></div>
           <div><div class="ca-k">${esc(T('cognition.asset_proofs_label', '用过几次'))}</div><div class="ca-v">${proofCount ? `${proofCount} ${esc(T('cognition.asset_proof_times', '次'))}` : esc(T('cognition.asset_no_proofs', '还没用过'))}</div></div>
+          <div><div class="ca-k">${esc(T('cognition.asset_meta_updated', '最近更新'))}</div><div class="ca-v">${esc(fmtDate(asset.updatedAt || asset.createdAt))}</div></div>
         </div>
       </details>
       ${(asset.evidenceRefs || []).length ? `<details class="ca-advanced"><summary>${esc(T('cognition.asset_evidence_section', '证据来源'))}</summary><div class="ca-chips">${(asset.evidenceRefs || []).map(evidenceChip).join('')}</div></details>` : ''}
