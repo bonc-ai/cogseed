@@ -1,0 +1,182 @@
+schema_version: "1.0"
+
+workflow:
+  id: ai-product-lifecycle
+  name: "AI Product Lifecycle with Native Spec Kit"
+  version: "0.2.1"
+  author: "AI Product Method Working Group"
+  description: "Routes AI product uncertainty, pauses at human gates, then invokes the native Spec Kit specification and implementation chain."
+
+requires:
+  speckit_version: ">=1.0.1,<2.0.0"
+  integrations:
+    any: [codex, claude, copilot, gemini, opencode]
+
+inputs:
+  spec:
+    type: string
+    required: true
+    prompt: "Describe the AI product opportunity, iteration or diagnosis"
+  entry_mode:
+    type: string
+    default: zero_to_one
+    enum: [zero_to_one, iteration, diagnosis]
+  integration:
+    type: string
+    default: auto
+    prompt: "Integration to use; auto inherits the initialized project integration"
+
+steps:
+  - id: route
+    command: speckit.ai-product.route
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "entry_mode={{ inputs.entry_mode }} request={{ inputs.spec }}"
+
+  - id: review-route
+    type: gate
+    message: "Review the route candidate shown by the preceding step, then select exactly one primary uncertainty. This choice approves only the route, not the product or release."
+    options: [value, experience, ai-capability, integration, governance, clear, unknown, reject]
+    on_reject: abort
+
+  - id: uncertainty-path
+    type: switch
+    expression: "{{ steps.review-route.output.choice }}"
+    cases:
+      value:
+        - id: frame-value
+          command: speckit.ai-product.frame
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "{{ inputs.spec }}"
+        - id: discover-value
+          command: speckit.ai-product.discover
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "{{ inputs.spec }}"
+      experience:
+        - id: derisk-experience
+          command: speckit.ai-product.derisk
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "primary_uncertainty=experience request={{ inputs.spec }}"
+      ai-capability:
+        - id: derisk-ai
+          command: speckit.ai-product.derisk
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "primary_uncertainty=ai-capability request={{ inputs.spec }}"
+      integration:
+        - id: derisk-integration
+          command: speckit.ai-product.derisk
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "primary_uncertainty=integration request={{ inputs.spec }}"
+      governance:
+        - id: qualify-governance
+          command: speckit.ai-product.qualify
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "primary_uncertainty=governance request={{ inputs.spec }}"
+      clear:
+        - id: frame-clear
+          command: speckit.ai-product.frame
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "Confirm the existing frozen frame and list its evidence refs for: {{ inputs.spec }}"
+      unknown:
+        - id: frame-unknown
+          command: speckit.ai-product.frame
+          integration: "{{ inputs.integration }}"
+          input:
+            args: "Identify the smallest evidence gap needed to select one primary uncertainty for: {{ inputs.spec }}"
+
+  - id: discovery-gate
+    type: gate
+    message: "Discovery review: confirm user goal, journey, success/failure/refusal/empty states, evidence limits and unresolved assumptions before specification."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: qualify
+    command: speckit.ai-product.qualify
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: authority-gate
+    type: gate
+    message: "Review AI fit, data boundary and minimum A0-A4 authority. A4 remains disabled; this gate does not grant external-system permission."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: define
+    command: speckit.ai-product.define
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: spec-handoff-gate
+    type: gate
+    message: "Confirm the Spec Handoff is traceable and ready to invoke native speckit.specify."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: specify
+    command: speckit.specify
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: plan
+    command: speckit.plan
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: tasks
+    command: speckit.tasks
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: analyze
+    command: speckit.analyze
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: analysis-review
+    type: gate
+    message: "Review native Spec Kit consistency analysis. Reject on any unresolved CRITICAL/HIGH finding."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: implement
+    command: speckit.implement
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: build-evaluate
+    command: speckit.ai-product.build-evaluate
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: release-readiness-gate
+    type: gate
+    message: "Review implementation and evaluation evidence. Approval means readiness material accepted for a separate release decision; it does not release or publish."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: launch-learn
+    command: speckit.ai-product.launch-learn
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "Observe only if a separate release and data-access decision exists for: {{ inputs.spec }}"
+
+  - id: learning-gate
+    type: gate
+    message: "Review real-outcome evidence and any proposed Change Candidate. Do not auto-apply method, prompt, threshold or authority changes."
+    options: [approve, reject]
+    on_reject: abort
