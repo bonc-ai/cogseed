@@ -439,8 +439,6 @@
 /* 可点行（2026-09-17 版本行点开详情）：手型 + 键盘焦点可见。 */
 .ca-row.is-clickable { cursor: pointer; }
 .ca-row.is-clickable:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: -2px; }
-/* 资产级总开关行（2026-09-17）：开关 + 一句实时生效说明横排。 */
-.ca-asset-switch { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* 版本展开详情块：嵌在版本链里，比列表行缩进一层。 */
 .ca-version-detail { margin: 2px 0 8px; }
 .ca-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }

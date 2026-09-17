@@ -1143,6 +1143,8 @@ describe('资产详情（使用记录并入）', () => {
     // 顶部：总开关（pause/resume 走 asset-action）+ 一句生效说明；顶部不再有编辑/归档按钮。
     expect(list).toContain('data-action="pause"');
     expect(list).toContain('使用中：这条资产会自动带入你的新任务');
+    // 开关说明贴着标题（2026-09-17 红线口径）：说明在标题区副标题位（ca-sub），不沉在正文后。
+    expect(list).toContain('ca-sub">使用中：这条资产会自动带入你的新任务');
     expect(list).not.toContain('data-act="edit-asset"');
     expect(list).not.toContain('data-action="archive"');
     // 头部只留标题（正常状态不摆任何章）；分类/最近更新收进「详细信息」。

@@ -623,27 +623,24 @@
     // 话不该以"系统先产候选"为前提；保存走 recall.assets.update（+1 版本，
     // 与候选采纳产出的版本同链）。类型与范围不在表单里：类型变更走候选线
     // 重审，范围自由文本会再触发 scope 迁移产空版本。
-    // 动作区（2026-09-17 二次重构，子安口径：顶部=资产级、版本区=版本级、
-    // 作用对象必须显式）：顶部只留一个总开关管「这条资产是否自动带入新任
-    // 务」+ 一句实时生效说明；编辑入口只在版本行（基于此版修改）；归档从
-    // 界面消失——数据层 archived 状态保留给归并机制，被归并条目只读说明。
+    // 资产级状态与开关贴着标题（2026-09-17 二改，子安红线口径）：标题右侧
+    // 放总开关、标题下方一句实时生效说明——资产级信息归顶部（正文是内容、
+    // 不是状态说明的挂载点）。异常态（删除/归并）仍走下方独立块。
     const editing = !!route.assetEdit && ['active', 'paused'].includes(String(asset.status || 'active'));
     const statusKind = String(asset.status || 'active');
     const statusOn = statusKind === 'active';
-    const topControl = statusKind === 'active' || statusKind === 'paused'
-      ? `<div class="ca-sect ca-asset-switch">
-          <button type="button" class="ca-switch${statusOn ? ' is-on' : ''}" role="switch" aria-checked="${statusOn ? 'true' : 'false'}" data-act="asset-action" data-id="${esc(asset.id)}" data-action="${statusOn ? 'pause' : 'resume'}" aria-label="${esc(T('cognition.asset_switch_label', '自动带入新任务'))}">
-            <span class="ca-switch-knob" aria-hidden="true"></span>
-          </button>
-          <span class="ca-note">${esc(statusOn
-            ? T('cognition.asset_switch_on_hint', '使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI')
-            : T('cognition.asset_switch_off_hint', '已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开'))}</span>
-        </div>`
-      : statusKind === 'deleted'
-        ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_deleted_hint', '已删除的资产在保留期内可恢复；恢复后重新出现在常用资产。'))}</p><div class="ca-actions">${btn(T('cognition.asset_restore_deleted', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true, small: true })}</div></div>`
-        : statusKind === 'archived'
-          ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_archived_note', '已归并：这条资产已并入另一条资产，历史版本完整保留在并入目标的版本记录中。'))}</p></div>`
-          : '';
+    const switchable = statusKind === 'active' || statusKind === 'paused';
+    const switchEl = `<button type="button" class="ca-switch${statusOn ? ' is-on' : ''}" role="switch" aria-checked="${statusOn ? 'true' : 'false'}" data-act="asset-action" data-id="${esc(asset.id)}" data-action="${statusOn ? 'pause' : 'resume'}" aria-label="${esc(T('cognition.asset_switch_label', '自动带入新任务'))}">
+        <span class="ca-switch-knob" aria-hidden="true"></span>
+      </button>`;
+    const switchHint = statusOn
+      ? T('cognition.asset_switch_on_hint', '使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI')
+      : T('cognition.asset_switch_off_hint', '已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开');
+    const topControl = statusKind === 'deleted'
+      ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_deleted_hint', '已删除的资产在保留期内可恢复；恢复后重新出现在常用资产。'))}</p><div class="ca-actions">${btn(T('cognition.asset_restore_deleted', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true, small: true })}</div></div>`
+      : statusKind === 'archived'
+        ? `<div class="ca-sect"><p class="ca-note">${esc(T('cognition.asset_archived_note', '已归并：这条资产已并入另一条资产，历史版本完整保留在并入目标的版本记录中。'))}</p></div>`
+        : '';
     const proofCount = S.proofs.filter((p) => String((p.refs || {}).assetId || '') === String(asset.id)).length;
     // 元信息白话化：后端值可能是内部术语，认出常见形态翻成人话，认不出原样显示。
     const scopeRaw = String(asset.scope || '');
@@ -679,8 +676,9 @@
       <div class="ca-line">
         <div>
           <h3>${esc(asset.title || asset.id)}</h3>
+          ${switchable ? `<div class="ca-sub">${esc(switchHint)}</div>` : ''}
         </div>
-        <div class="ca-right">${detailStatusChip(asset)}</div>
+        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}</div>
       </div>
       ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}
