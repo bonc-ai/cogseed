@@ -427,10 +427,14 @@ describe('recall search_ability_assets tool', () => {
     hint.resetAssetCatalogHintCacheForTest();
     const block = await hint.assetCatalogForPrompt(TEST_UID);
     expect(block).toContain('31 reusable assets');
-    expect(block).toContain('search_ability_assets with no arguments');
-    // 关键：不再整份目录进上下文（没有条目行）。
-    expect(block.split('\n').filter((line) => /^\d+\. \[asset:/.test(line))).toHaveLength(0);
-    expect(block.length).toBeLessThanOrEqual(600);
+    // 大库也给一段目录（前 20 条内联）+ 一行"还有 N 条"的翻页提示；
+    // 只给一句"去调工具"的提示，真机样本证明模型多半不会去查。
+    const inline = block.split('\n').filter((line) => /^\d+\. \[asset:/.test(line));
+    expect(inline).toHaveLength(20);
+    expect(block).toContain('还有 11 条');
+    expect(block).toContain('search_ability_assets');
+    // 预算：20 条 × ~110 + 头尾，仍远小于注入块上限。
+    expect(block.length).toBeLessThanOrEqual(3000);
   });
 
   it('常驻目录（可发现性）：小库给完整目录且 ≤ 30 条，超限退回一行提示，空池不给块；60 秒缓存', async () => {

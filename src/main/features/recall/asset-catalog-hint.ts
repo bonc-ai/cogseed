@@ -1,6 +1,6 @@
 import { createLogger } from '../../logger';
 import { logErrorRef, maskId } from '../../util/log-redact';
-import { formatCatalogEntries, loadAssetUsageStatsCached } from './asset-catalog';
+import { formatCatalogEntries, loadAssetUsageStatsCached, type AssetUsageStat } from './asset-catalog';
 
 const log = createLogger('recall.catalog-hint');
 
@@ -75,30 +75,36 @@ async function buildCatalogPrompt(userId: string, cid: string): Promise<{ count:
   const assets = await listAbilityAssets(userId);
   const active = assets.filter((asset) => asset.status === 'active');
   if (!active.length) return { count: 0, text: '' };
-  if (active.length > INLINE_CATALOG_MAX_ENTRIES) {
-    return {
-      count: active.length,
-      text: [
-        `Asset catalog: ${active.length} reusable assets are stored for this user.`,
-        'Skim it once before starting a task — call search_ability_assets with no arguments',
-        '(one compact line per asset), then pull full text with assetIds when one fits it.',
-        'Use attach_assets_to_task if this task should keep using it.',
-      ].join(' '),
-    };
-  }
-  let stats = new Map<string, { count: number }>();
+  let stats = new Map<string, AssetUsageStat>();
   try {
     stats = await loadAssetUsageStatsCached(userId);
   } catch {
     // 使用次数拿不到不影响目录本身。
   }
-  const lines = formatCatalogEntries(active, stats as never);
+  const total = active.length;
+  // 大库（>30 条）也**给一段目录**：按"用得多 + 最近用过"取前 20 条内联，其余交给
+  // 工具。真机样本已经证明"只给一句提示"模型多半不会去查（0-1/3），所以在预算内
+  // 尽量让目录可见；超出部分用 offset 翻页拿。
+  const inline = total > INLINE_CATALOG_MAX_ENTRIES
+    ? [...active].sort((left, right) => {
+      const leftStat = stats.get(left.id);
+      const rightStat = stats.get(right.id);
+      const byCount = (rightStat?.count || 0) - (leftStat?.count || 0);
+      if (byCount !== 0) return byCount;
+      return String(rightStat?.lastAt || right.updatedAt || '').localeCompare(String(leftStat?.lastAt || left.updatedAt || ''));
+    }).slice(0, 20)
+    : active;
+  const lines = formatCatalogEntries(inline, stats);
+  const more = total - inline.length;
   return {
-    count: active.length,
+    count: total,
     text: [
-      `Asset catalog (${active.length} reusable assets; one line each — pull the full text with`,
+      `Asset catalog (${total} reusable assets; one compact line each — pull the full text with`,
       'search_ability_assets + assetIds when one fits, and attach_assets_to_task to keep using it):',
       ...lines,
+      ...(more > 0
+        ? [`…还有 ${more} 条：用 search_ability_assets（不带参数，可带 offset）翻页查看更多。`]
+        : []),
     ].join('\n'),
   };
 }
