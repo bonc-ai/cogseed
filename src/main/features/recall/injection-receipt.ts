@@ -13,16 +13,19 @@ export interface InjectionReceipt extends RecallJsonRecord {
   boundary: 'real' | 'degraded' | 'test-double';
   status: 'injected' | 'dispatched' | 'omitted' | 'failed';
   /** 注入通道（2026-09-13 通道显式化）：projection=投影授权的正式资产；
-   *  profile_memory=USER.md/MEMORY.md 派生的背景记忆（无投影授权）。
+   *  profile_memory=USER.md/MEMORY.md 派生的背景记忆（无投影授权）；
+   *  agent_read=模型通过 search_ability_assets 目录/正文模式自己取用的资产
+   *  （2026-09-18：模型主动读进上下文也算一次真实带入，否则自选资产
+   *  永远进不了使用统计与升档链）。
    *  缺省视为 projection（存量收据与新正式资产收据一致）。 */
-  channel?: 'projection' | 'profile_memory';
+  channel?: 'projection' | 'profile_memory' | 'agent_read';
   messageId?: string;
   createdAt: string;
 }
 
 const INJECTION_BOUNDARIES = new Set<InjectionReceipt['boundary']>(['real', 'degraded', 'test-double']);
 const INJECTION_STATUSES = new Set<InjectionReceipt['status']>(['injected', 'dispatched', 'omitted', 'failed']);
-const INJECTION_CHANNELS = new Set<InjectionReceipt['channel']>(['projection', 'profile_memory']);
+const INJECTION_CHANNELS = new Set<InjectionReceipt['channel']>(['projection', 'profile_memory', 'agent_read']);
 
 function asInjectionReceipt(userId: string, value: RecallJsonRecord): InjectionReceipt {
   if (

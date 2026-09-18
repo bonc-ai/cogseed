@@ -768,12 +768,18 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(params.cid ? { cid: params.cid } : {}),
   }) : [];
 
-  // Recall ability-asset search tool (search_ability_assets). Read-only, no
-  // localExec required. Injected for every main conv + group_chat actor so
-  // the LLM can actively consult the GLOBAL asset pool (product design
+  // Recall ability-asset tools (search_ability_assets: 目录 / 取正文 / 语义检索).
+  // Read-only, no localExec required. Injected for every main conv + group_chat
+  // actor so the LLM can actively consult the GLOBAL asset pool (product design
   // 2026-08-17: 注入只显示本空间资产，全局池的使用交给主动检索).
+  // 2026-09-18：带上回合上下文——模型自己取用的资产要写 agent_read 注入回执
+  // 与使用流水（turnId），并以当前消息文本做适用/禁用场景匹配（taskText）。
   const recallTools = uid && !params.disableTools ? createRecallTools({
     userId: uid,
+    ...(params.turnId ? { turnId: params.turnId } : {}),
+    ...(params.cid ? { cid: params.cid } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+    ...(params.userMessage ? { taskText: params.userMessage } : {}),
   }) : [];
 
   // Personal Ontology read-only tools (personal_ontology_fields). Gives skills

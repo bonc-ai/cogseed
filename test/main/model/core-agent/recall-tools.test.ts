@@ -96,17 +96,121 @@ describe('recall search_ability_assets tool', () => {
     expect(scopeFiltered.content).not.toContain('番茄工作法');
   });
 
-  it('requires a query and reports empty pool', async () => {
+  it('目录模式（2026-09-18）：不给 query 也不给 assetIds 时返回全量目录，含判断适配需要的字段', async () => {
+    const a = await seedAsset('发布类公告应包含背景、变更点、影响范围、生效时间、联系方式五段。', { spaceId: 'sp_a', scope: 'space' });
+    await seedAsset('已停用的经验。', { spaceId: 'sp_a', scope: 'space', pause: true });
+    await seedAsset('番茄工作法：25 分钟专注加 5 分钟休息。', { scope: 'general' });
+
     const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
     const [tool] = createRecallTools({ userId: TEST_UID });
 
-    const missing = await tool.execute({}, {} as never);
-    expect(missing.isError).toBe(true);
-    expect(missing.content).toContain('query');
+    const catalog = await tool.execute({}, {} as never);
+    expect(catalog.isError).not.toBe(true);
+    // 目录是"在用资产的全量"：未停用的两条都在，停用的不在。
+    expect(catalog.content).toContain('认知资产目录');
+    expect(catalog.content).toContain('发布类公告');
+    expect(catalog.content).toContain('番茄工作法');
+    expect(catalog.content).not.toContain('已停用的经验');
+    expect(catalog.content).toContain(`[asset:${a.id}]`);
+    // 模型据此判断适配所需的字段：类型/范围/成熟度/版本/一句话/适用与禁用场景。
+    expect(catalog.content).toContain('类型:rule');
+    expect(catalog.content).toContain('范围:space');
+    expect(catalog.content).toContain('成熟度:bud');
+    expect(catalog.content).toMatch(/v\d/);
+    expect(catalog.content).toContain('一句话:');
+    expect(catalog.content).toContain('适用于: 正式评审与架构决策时');
+    expect(catalog.content).toContain('禁用: 内部快速对齐');
+    // 取用指引：按需取正文 + 引用格式。
+    expect(catalog.content).toContain('assetIds');
+    expect(catalog.content).toContain('[asset:<id>]');
 
-    const empty = await tool.execute({ query: '什么都不存在的内容' }, {} as never);
-    expect(empty.isError).not.toBe(true);
-    expect(empty.content).toContain('认知资产池共 0 条');
+    // 过滤与分页
+    const byType = await tool.execute({ type: 'rule' }, {} as never);
+    expect(byType.content).toContain('过滤：type=rule');
+    const byScope = await tool.execute({ scope: 'space', spaceId: 'sp_a' }, {} as never);
+    expect(byScope.content).toContain('发布类公告');
+    expect(byScope.content).not.toContain('番茄工作法');
+    const page = await tool.execute({ k: 1, offset: 0 }, {} as never);
+    expect(page.content).toContain('本页 1-1 条');
+    expect(page.content).toMatch(/还有 \d+ 条：用 offset=1/);
+    const page2 = await tool.execute({ k: 1, offset: 1 }, {} as never);
+    expect(page2.content).toContain('本页 2-2 条');
+  });
+
+  it('正文模式（2026-09-18）：按 id 取正文，过准入门，并写 agent_read 注入回执 + 使用流水', async () => {
+    const live = await seedAsset('性能类提问需用真实日志做分层归因，先给链路再给瓶颈。', { scope: 'general' });
+    const paused = await seedAsset('已停用的经验。', { scope: 'general', pause: true });
+
+    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const receipts = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/usage-service');
+    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-read0001' });
+
+    const read = await tool.execute({ assetIds: [live.id] }, {} as never);
+    expect(read.isError).not.toBe(true);
+    expect(read.content).toContain('已取出 1 条资产正文');
+    expect(read.content).toContain(`[asset:${live.id}]`);
+    expect(read.content).toContain('正文:');
+    expect(read.content).toContain('先给链路再给瓶颈');
+    expect(read.content).toMatch(/版本:v\d/);
+    expect(read.content).toContain('生命周期:');
+
+    // 留痕：模型自己取用也算一次真实带入（否则自选资产进不了升档链）。
+    const rows = await receipts.listInjectionReceipts(TEST_UID, 'turn-read0001');
+    expect(rows.map((row) => `${row.channel}:${row.assetId}`)).toEqual([`agent_read:${live.id}`]);
+    expect(rows[0].boundary).toBe('real');
+    expect(rows[0].status).toBe('injected');
+    const used = await usage.listRecallUsage(TEST_UID, live.id);
+    expect(used.map((row) => row.outcome)).toEqual(['agent_read']);
+    expect(used[0].taskRunId).toBe('turn-read0001');
+
+    // 同一回合重复取用：不重复刷使用次数（回执幂等 + 使用按回合计一次）。
+    await tool.execute({ assetIds: [live.id] }, {} as never);
+    expect(await usage.listRecallUsage(TEST_UID, live.id)).toHaveLength(1);
+    expect(await receipts.listInjectionReceipts(TEST_UID, 'turn-read0001')).toHaveLength(1);
+
+    // 准入被拦的资产：如实说明原因，不返回正文、不写留痕。
+    const blocked = await tool.execute({ assetIds: [paused.id] }, {} as never);
+    expect(blocked.content).toContain('当前不可使用');
+    expect(blocked.content).toContain('已暂停/归档/撤销');
+    expect(blocked.content).not.toContain('正文:');
+    expect((await receipts.listInjectionReceipts(TEST_UID, 'turn-read0001')).some((row) => row.assetId === paused.id)).toBe(false);
+
+    // 不存在的 id：如实说未找到。
+    const missing = await tool.execute({ assetIds: ['aa-doesnotexist0001'] }, {} as never);
+    expect(missing.content).toContain('未找到');
+  });
+
+  it('正文模式：单次取用上限 6 条，超出部分提示忽略；没有 turnId 时不记账', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      const asset = await seedAsset(`第 ${i} 条经验：用于验证正文模式的条数上限。`, { scope: 'general' });
+      ids.push(asset.id);
+    }
+    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const receipts = await import('../../../../src/main/features/recall/injection-receipt');
+    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-read0002' });
+    const read = await tool.execute({ assetIds: ids }, {} as never);
+    expect(read.content).toContain('已取出 6 条资产正文');
+    expect(read.content).toContain('单次最多 6 条');
+    expect(await receipts.listInjectionReceipts(TEST_UID, 'turn-read0002')).toHaveLength(6);
+
+    // 缺 turnId（没有回合并定位）：只读不记账，绝不写脏回执。
+    const [noTurn] = createRecallTools({ userId: TEST_UID });
+    const readNoTurn = await noTurn.execute({ assetIds: [ids[0]] }, {} as never);
+    expect(readNoTurn.isError).not.toBe(true);
+    expect(await receipts.listInjectionReceipts(TEST_UID)).toHaveLength(6);
+  });
+
+  it('语义检索模式同样记 agent_read（检索结果进了上下文就算带入）', async () => {
+    const asset = await seedAsset('竞品调研应先明确可比维度（范围/功能/定价/体验）再收集证据。', { scope: 'general' });
+    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const receipts = await import('../../../../src/main/features/recall/injection-receipt');
+    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-search001' });
+    const result = await tool.execute({ query: '竞品调研' }, {} as never);
+    expect(result.content).toContain('竞品调研');
+    const rows = await receipts.listInjectionReceipts(TEST_UID, 'turn-search001');
+    expect(rows.some((row) => row.assetId === asset.id && row.channel === 'agent_read')).toBe(true);
   });
 
   it('searches profile memory with an explicit source label (T1.3 画像进池)', async () => {
