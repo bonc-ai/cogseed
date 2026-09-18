@@ -353,12 +353,19 @@ describe('kb-quiz 契约', () => {
     expect(src).toMatch(/q\.question = nextQuestion;/);
   });
 
-  it('导出：Markdown + PDF（PDF 走 kb.quiz.exportPdf，主进程 printToPDF）', () => {
+  it('导出：Markdown 与 PDF 都走主进程保存对话框（不再用渲染层 Blob 静默下载）', () => {
     const src = source();
-    expect(src).toContain("_download(`${_safeName()}-\${Date.now()}.md`");
-    expect(src).toMatch(/invoke\(|_invoke\('kb\.quiz\.exportPdf'/);
+    // Markdown：主进程弹保存对话框 + 写文件 + 回执（原先 Blob 下载失败是静默的）
+    expect(src).toContain("_invoke('kb.quiz.exportMarkdown'");
     expect(src).toContain("_invoke('kb.quiz.exportPdf'");
     expect(src).toContain('quizToHtml');
+    // 渲染层不再自建 Blob 下载：a.click() 后同步 revokeObjectURL 会让下载静默失败
+    expect(src).not.toContain('createObjectURL');
+    expect(src).not.toContain('_download(');
+    expect(src).not.toContain('_safeName');
+    // 取消 → 静默；失败 → 如实提示（不再"无论成败都报成功"）
+    expect(src).toMatch(/if \(!res \|\| res\.canceled\) return;/);
+    expect(src).toContain("_tr('kb.quiz.export_failed'");
   });
 
   it('快捷键：A–D 选择、Enter 提交、←→ 切题、F 提示、S 跳过', () => {

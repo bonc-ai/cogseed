@@ -1219,23 +1219,24 @@ ${rows}
     _toast(_tr('kb.quiz.copy_failed', '复制失败'), { variant: 'warning' });
   }
 
-  function _download(name, text, mime) {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function _safeName() {
-    return (_state.title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
-  }
-
+  /**
+   * 导出 Markdown：走**主进程保存对话框**（与「导出 PDF」同一条通道）。
+   *
+   * 原先用渲染层 Blob + `<a download>`，并且在 a.click() 之后立刻
+   * URL.revokeObjectURL —— 对象 URL 在下载真正开始前就被撤销，Chromium/Electron 里
+   * 可能静默失败；而且无论成功失败都只弹一句「已导出 Markdown」，用户看到的就是
+   * "点了没用、也没有报错"。改成主进程回执：取消 → 静默，失败 → 如实提示。
+   */
   function _exportQuizMarkdown() {
-    _download(`${_safeName()}-${Date.now()}.md`, quizToMarkdown(_state.title, _state.questions, _state.sources), 'text/markdown;charset=utf-8');
-    _toast(_tr('kb.quiz.exported', '已导出 Markdown'), { variant: 'success' });
+    const text = quizToMarkdown(_state.title, _state.questions, _state.sources);
+    Promise.resolve(_invoke('kb.quiz.exportMarkdown', { text, title: _state.title })).then((res) => {
+      if (!res || res.canceled) return;
+      if (res.ok === false) {
+        _toast(_tr('kb.quiz.export_failed', '导出失败，可改用「复制测验」'), { variant: 'warning' });
+        return;
+      }
+      _toast(_tr('kb.quiz.exported', '已导出 Markdown'), { variant: 'success' });
+    }).catch(() => _toast(_tr('kb.quiz.export_failed', '导出失败，可改用「复制测验」'), { variant: 'warning' }));
   }
 
   /** 导出 PDF：渲染层出 A4 打印版 HTML，主进程走 printToPDF（与脑图导出同一链路）。 */

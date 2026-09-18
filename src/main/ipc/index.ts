@@ -4257,6 +4257,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // 测验导出 PDF（线下打印/发团队）：与脑图导出同一条 printToPDF 链路，只是 A4 版式。
+  // 测验「导出 Markdown」：与导出 PDF 同一条通道——主进程弹保存对话框再写文件，
+  // 渲染层据回执提示成功/失败/取消（不再用渲染层 Blob 下载：那条路失败是静默的）。
+  'kb.quiz.exportMarkdown': async ({ text, title }) => {
+    const source = typeof text === 'string' ? text : '';
+    if (!source) return { ok: false };
+    try {
+      const base = String(title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出测验 Markdown',
+        defaultPath: `${base}-${Date.now()}.md`,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, source, 'utf-8');
+      return { ok: true, filePath };
+    } catch (err) {
+      log.warn('kb quiz export markdown failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false };
+    }
+  },
+
   'kb.quiz.exportPdf': async ({ html, title }, ctx) => {
     const source = typeof html === 'string' && html ? html : '';
     if (!source) return { ok: false };
