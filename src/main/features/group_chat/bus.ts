@@ -4856,6 +4856,8 @@ async function runActorTurnBody(
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
+  /** 派发账本要落的持久化消息 id（silent 回合没有消息 → 缺省省略）。 */
+  let dispatchedMessageId: string | undefined;
   // 本回合是否落过 ContextReuseReceipt。三条注入路径（Commander 投影 / 派发
   // 授权 / 出生继承）共用 `turn-<turnId>` 这一个回执键，谁先落谁建，后来的
   // 拿到 'already exists' 就跳过——所以一个回合最多一张。回合收尾时按这个标记
@@ -6945,33 +6947,11 @@ async function runActorTurnBody(
         channel: 'profile_memory',
       })));
     }
-    if (dispatchedUsage.length) {
-      // Commander-dispatched grants ride the same usage ledger so the asset
-      // line stays complete: injected (Commander) vs dispatched (Agent).
-      const dispatchedWrites = await Promise.allSettled(dispatchedUsage.map((grant) => recordRecallUsage(uid, {
-        assetId: grant.assetId,
-        assetVersion: grant.assetVersion,
-        taskRunId: item.turnId,
-        messageId: persistedMsg.id,
-        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
-        boundary: 'real',
-        outcome: 'dispatched',
-      })));
-      const failedDispatchedWrites = dispatchedWrites.filter((result) => result.status === 'rejected');
-      if (failedDispatchedWrites.length) {
-        log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
-      }
-      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
-      await Promise.allSettled(dispatchedUsage.map((grant) => recordInjectionReceipt(uid, {
-        assetId: grant.assetId,
-        assetVersion: grant.assetVersion,
-        taskRunId: item.turnId,
-        messageId: persistedMsg.id,
-        boundary: 'real',
-        status: 'dispatched',
-        channel: 'projection',
-      })));
-    }
+    // 派发授权资产的账（usage + 注入回执）在本回合末尾统一结算（见下方
+    // dispatchedUsage 段）：匿名 worker 走 silent 分支、没有持久化消息，
+    // 此前账写在 visible 分支里 → 授予过的资产从不进使用记录/升档链
+    // （2026-09-18 修）。这里只把消息 id 留给结算用。
+    dispatchedMessageId = persistedMsg.id;
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
     // outcome=silent → bus is NOT going to enqueue a message for this turn.
@@ -6990,6 +6970,36 @@ async function runActorTurnBody(
         ? { reason: "terminal_handoff" as const }
         : {}),
     });
+  }
+
+  // 派发授权资产的结算（2026-09-18 从 visible 分支移出）：Commander 授予的
+  // 资产与宿主注入共用一个使用账本（injected=宿主带入 / dispatched=派给 Agent），
+  // 但匿名 worker 回合是 silent、没有持久化消息——账必须按回合结算，不能挂在
+  // UI 分支上，否则"授予了却从不进统计/升档链"。messageId 只有 visible 回合有。
+  if (dispatchedUsage.length) {
+    const dispatchedWrites = await Promise.allSettled(dispatchedUsage.map((grant) => recordRecallUsage(uid, {
+      assetId: grant.assetId,
+      assetVersion: grant.assetVersion,
+      taskRunId: item.turnId,
+      ...(dispatchedMessageId ? { messageId: dispatchedMessageId } : {}),
+      ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+      boundary: 'real',
+      outcome: 'dispatched',
+    })));
+    const failedDispatchedWrites = dispatchedWrites.filter((result) => result.status === 'rejected');
+    if (failedDispatchedWrites.length) {
+      log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
+    }
+    const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+    await Promise.allSettled(dispatchedUsage.map((grant) => recordInjectionReceipt(uid, {
+      assetId: grant.assetId,
+      assetVersion: grant.assetVersion,
+      taskRunId: item.turnId,
+      ...(dispatchedMessageId ? { messageId: dispatchedMessageId } : {}),
+      boundary: 'real',
+      status: 'dispatched',
+      channel: 'projection',
+    })));
   }
 
   // Ephemeral worker (anonymous run_worker, run via runNestedDispatch) is
@@ -10167,16 +10177,16 @@ const DISPATCHED_ASSET_ERRORS = Object.freeze({
 });
 
 /**
- * Validate an explicit cross-Agent asset grant against the current KSTAR
- * lifecycle before the existing live runtime gate. An omitted or empty grant
- * deliberately bypasses this lookup: delegated work without asset context is
- * independent of whether the conversation has opened a governed task.
+ * Validate an explicit cross-Agent asset grant before the live runtime gate.
  *
- * The Projection is authoritative for membership and the stored version map
- * is authoritative for freshness. Error text is intentionally stable and
- * never includes a requested/allowed id, Projection contents, or live gate
- * reasons; the Commander cannot use an authorization failure as an asset
- * enumeration oracle.
+ * 2026-09-18 放宽（模型自选 / 目录化）：不再要求"必须是已确认投影的子集"——
+ * 资产只要存在、可读、过运行时准入门就能授予。模型现在能看全量目录
+ * （search_ability_assets 目录模式），挑选权归模型；旧的子集限制会让
+ * "目录里看得见、却派不出去"。版本按读取时刻的在用版写进回执（与既有
+ * dispatched 回执同一口径）。
+ *
+ * 保留的不变量：形状、24 条上限、可读/授权、运行时准入门，以及"错误文案
+ * 稳定且绝不回显任何 id"——Commander 不能把授权失败当资产枚举 oracle 用。
  */
 async function resolveDispatchedAbilityAssets(
   uid: string,
@@ -10184,6 +10194,7 @@ async function resolveDispatchedAbilityAssets(
   value: unknown,
   context: AssetRuntimeContext,
 ): Promise<DispatchedAbilityAssetResolution> {
+  void cid;
   if (value === undefined) return { ok: true, assetIds: [] };
   if (!Array.isArray(value)) {
     return { ok: false, error: DISPATCHED_ASSET_ERRORS.malformed };
@@ -10193,29 +10204,6 @@ async function resolveDispatchedAbilityAssets(
     return { ok: false, error: DISPATCHED_ASSET_ERRORS.tooMany };
   }
   if (!rawIds.length) return { ok: true, assetIds: [] };
-
-  let lifecycle: Awaited<ReturnType<typeof import("../kstar/lifecycle-adapter").readKstarTaskLifecycle>>;
-  try {
-    const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
-    lifecycle = await readKstarTaskLifecycle(uid, cid);
-  } catch {
-    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionRequired };
-  }
-  const projection = lifecycle.requirement && lifecycle.projection;
-  if (!projection || projection.status !== "confirmed") {
-    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionRequired };
-  }
-
-  const projectionAssetIds = new Set(projection.assetIds);
-  if (rawIds.some((assetId) => !projectionAssetIds.has(assetId))) {
-    return { ok: false, error: DISPATCHED_ASSET_ERRORS.outsideProjection };
-  }
-  try {
-    const { validateCommittedProjectionAssetVersions } = await import("../recall/context-projection");
-    await validateCommittedProjectionAssetVersions(uid, projection);
-  } catch {
-    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionStale };
-  }
 
   const granted: string[] = [];
   const seen = new Set<string>();
@@ -10229,9 +10217,6 @@ async function resolveDispatchedAbilityAssets(
       return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
     }
     if (!asset) return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
-    if (projection.assetVersions?.[asset.id] !== asset.version) {
-      return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionStale };
-    }
     const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, context);
     if (!gate.eligible) {
       return { ok: false, error: DISPATCHED_ASSET_ERRORS.runtimeDenied };
@@ -10782,6 +10767,124 @@ async function buildCommanderExtraTools(
   });
 
   tools.push(buildSkillSearchTool(uid));
+
+  // 模型自选挂载（2026-09-18）：模型看过目录/取过正文后，把"这次任务要用的
+  // 资产"挂到当前任务上——创建（或复用）一条 authorization='model_selected'
+  // 的 confirmed 投影，并在会话里投一张可撤销的卡。基线（宿主自动投影）不动：
+  // 这是"追加"，不是替换（子安拍板：原算法保留 + 模型自选，两者结合）。
+  tools.push({
+    name: "attach_assets_to_task",
+    description: [
+      "Attach reusable ability assets to THIS task so they keep applying to its later turns and to delegated work.",
+      "Use it after consulting the asset catalog (search_ability_assets) when the task genuinely needs specific assets.",
+      "The host's own preloaded selection stays unchanged; this only ADDS assets for the current task.",
+      "The user sees a card in the conversation and can revoke the whole attachment with one click — so keep the set small and justified.",
+      "At most 6 assets per call.",
+    ].join(" "),
+    executionMode: "parallel",
+    inputSchema: {
+      type: "object",
+      properties: {
+        assetIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Ability asset ids (from search_ability_assets: catalog / full-text results).",
+        },
+        reason: {
+          type: "string",
+          description: "Short reason why this task needs these assets. Shown to the user on the card.",
+        },
+      },
+      required: ["assetIds"],
+      additionalProperties: false,
+    },
+    async execute(input: Record<string, unknown>) {
+      try {
+        const rawIds = Array.isArray(input?.assetIds)
+          ? input.assetIds.map((value) => String(value || "").trim()).filter(Boolean)
+          : [];
+        const uniqueIds = [...new Set(rawIds)];
+        if (!uniqueIds.length) return _toolError("assetIds is required");
+        if (uniqueIds.length > 6) return _toolError("attach at most 6 assets per call");
+        const reason = String(input?.reason || "").trim().slice(0, 500);
+        const turnId = String(w.currentTurnId || "");
+        if (!turnId) return _toolError("attach_assets_to_task requires an active turn");
+
+        const { readAbilityAsset } = await import("../recall/asset-service");
+        const { evaluateRecallAssetRuntimeEligibility } = await import("../recall/prompt-injection");
+        const granted: string[] = [];
+        for (const assetId of uniqueIds) {
+          if (!safeId(assetId)) return _toolError("invalid ability asset id");
+          const asset = await readAbilityAsset(uid, assetId).catch(() => null);
+          if (!asset) return _toolError(DISPATCHED_ASSET_ERRORS.unauthorized);
+          // 与派单/读取同一道运行时准入门；适合度语义（成熟度不进闸，
+          // 诚实性由卡与注入块的标注承担）。
+          const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, {
+            ...currentRecallScope,
+            purpose: reason || "model_selected",
+            ...(reason ? { taskText: reason } : {}),
+            silentDefaultInjection: true,
+          });
+          if (!gate.eligible) return _toolError(DISPATCHED_ASSET_ERRORS.runtimeDenied);
+          granted.push(asset.id);
+        }
+
+        const { listContextProjections, previewContextProjection, confirmContextProjection, appendAssetsToModelSelectedProjection } =
+          await import("../recall/context-projection");
+        // 同一会话只维护一条模型自选投影（挂载是"给这个任务"而不是"给这一回合"）：
+        // 已有就追加，重复挂载不产生第二张卡。
+        // 新建：先落 preview（宿主带回语义选中的那一批 = 基线）→ 追加模型点名
+        // 的几条 → 确认。基线 + 模型追加，两者结合而不是替换。
+        const existing = (await listContextProjections(uid, { conversationId: cid, status: "confirmed", limit: 20 }))
+          .find((projection) => projection.authorization === "model_selected") || null;
+        let projection;
+        if (existing) {
+          projection = await appendAssetsToModelSelectedProjection(uid, existing.id, granted);
+        } else {
+          const base = await previewContextProjection(uid, {
+            taskRunId: turnId,
+            conversationId: cid,
+            ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
+            purpose: "model_selected",
+            ...(reason ? { taskText: reason } : {}),
+            authorization: "model_selected",
+          });
+          await appendAssetsToModelSelectedProjection(uid, base.id, granted);
+          projection = await confirmContextProjection(uid, base.id);
+        }
+        if (!existing) {
+          // 投卡：与用户确认线同一套 sidecar 机制——卡片本身也是注入查找的
+          // 依据，所以"投了卡"才等于"后续回合真的会带上"。
+          try {
+            const { postProjectionCardMessage } = await import("../recall/projection-message");
+            await postProjectionCardMessage(uid, { cid, projectionId: projection.id }, {
+              send: async (payload) => ({
+                id: (await enqueue({
+                  uid,
+                  cid,
+                  fromActorId: COMMANDER_ID,
+                  forceTo: [USER_ID],
+                  text: String(payload.text || ""),
+                  recall_projection_card: { projectionId: payload.card.projectionId },
+                })).id || "",
+              }),
+            });
+          } catch (err) {
+            log.warn(`attach assets card post failed cid=${maskId(cid)}: ${(err as Error).message}`);
+          }
+        }
+        return _toolJson({
+          ok: true,
+          projection_id: projection.id,
+          asset_ids: granted,
+          attached: granted.length,
+          note: "Assets attached to this task; the user can revoke them from the card in the conversation.",
+        });
+      } catch (err) {
+        return _toolError((err as Error).message || "attach assets failed");
+      }
+    },
+  });
 
   tools.push({
     name: "marketplace_request_install",

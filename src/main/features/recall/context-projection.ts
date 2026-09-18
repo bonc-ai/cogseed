@@ -43,7 +43,11 @@ const RUNTIME_OMISSION_REASON: Partial<Record<AssetRuntimeBlockReason, OmittedAs
 const log = createLogger('recall.context-projection');
 let lastProjectionCreatedAtMs = 0;
 
-export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required';
+/** 授权来源（2026-09-18 增 model_selected）：模型自己把资产挂到本任务——
+ *  与宿主自动投影（not_required）、工作区策略（workspace_policy）、用户确认
+ *  （user_confirmed）并列，区别在于"谁做的决定"，界面据此标"模型自选"并
+ *  允许一键撤销。 */
+export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required' | 'model_selected';
 export type ContextProjectionStatus = 'preview' | 'confirmed' | 'deferred' | 'rejected' | 'expired' | 'revoked';
 
 export type ProjectionKnowledgeErrorCode =
@@ -127,6 +131,9 @@ export interface ProjectionInput {
   taskText?: string;
   authorization?: ProjectionAuthorization;
   expiresAt?: string;
+  /** 来源会话 id（2026-09-18）：模型自选投影按会话去重（同一会话只维护一条），
+   *  使用记录/时间线也靠它把事件关联回会话名。 */
+  conversationId?: string;
   /** Auto-confirm on creation (workspace_policy line): the projection is
    *  written as confirmed immediately, skipping the user confirmation card. */
   confirm?: boolean;
@@ -376,22 +383,26 @@ function scopeAppliesToPurpose(scope: string, purpose: string): boolean {
   return scopeIncludes(scope, purpose);
 }
 
-async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose'>): Promise<boolean> {
+async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose' | 'authorization'>): Promise<boolean> {
   if (asset.status !== 'active') throw new Error('context projection asset is not active');
   if (!isAssetScopeAllowed(asset.scopePolicy, {
     purpose: projection.purpose,
     workspaceId: projection.workspaceId,
   })) return false;
+  // scope 词匹配（scope 词要出现在 purpose 文本里）是给宿主自动挑选兜底的启发式；
+  // 模型自选线不再重复这一道（2026-09-18）：模型在目录里看过这条资产声明的范围、
+  // 自己判断过适用性，且挂载时已过运行时准入门（含 scopePolicy）。其余检查一律保留。
+  const requireScopeWordMatch = projection.authorization !== 'model_selected';
   // 资产池全局共享：空间投影可引用整个池子（含其它空间资产与全局资产）。
   // workspace-ref 是可选收紧控制（显式停用 / scope 词），不是前置。
   if (projection.workspaceId) {
     const refs = await listWorkspaceAssetReferences(userId);
     const ref = refs.find((item) => item.assetId === asset.id && item.workspaceId === projection.workspaceId);
     if (ref && !ref.enabled) return false;
-    if (ref && !scopeAppliesToPurpose(ref.scope, projection.purpose)) return false;
+    if (ref && requireScopeWordMatch && !scopeAppliesToPurpose(ref.scope, projection.purpose)) return false;
     return true;
   }
-  return scopeAppliesToPurpose(asset.scope, projection.purpose);
+  return requireScopeWordMatch ? scopeAppliesToPurpose(asset.scope, projection.purpose) : true;
 }
 
 async function readEligibleProjectionAsset(userId: string, assetId: string, projection: ContextProjectionRecord): Promise<RecallAbilityAssetRecord> {
@@ -601,15 +612,16 @@ export async function previewContextProjection(userId: string, input: Projection
   const purpose = normalizeTerm(input.purpose, 'purpose', 120);
   const workspaceId = input.workspaceId === undefined ? undefined : normalizeTerm(input.workspaceId, 'workspace id', 160);
   const taskText = normalizeOptionalTerm(input.taskText, 'task text');
+  const conversationId = input.conversationId === undefined ? undefined : normalizeTerm(input.conversationId, 'conversation id', 160);
   const authorization: ProjectionAuthorization = input.authorization || 'user_confirmed';
-  if (authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') throw new Error('invalid projection authorization');
+  if (authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required' && authorization !== 'model_selected') throw new Error('invalid projection authorization');
   if (input.expiresAt !== undefined && Number.isNaN(Date.parse(input.expiresAt))) throw new Error('invalid projection expiry');
   const view = await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
   const now = projectionNowIso();
   const confirmedAt = input.confirm ? now : undefined;
   const record: ContextProjectionRecord = {
     schemaVersion: 2, ownerId: userId, id: `proj-${genId12()}`,
-    taskRunId, ...(workspaceId ? { workspaceId } : {}), purpose, authorization,
+    taskRunId, ...(workspaceId ? { workspaceId } : {}), ...(conversationId ? { conversationId } : {}), purpose, authorization,
     assetIds: view.assetIds, ...(view.assetVersions ? { assetVersions: view.assetVersions } : {}), ...(view.assetMatches ? { assetMatches: view.assetMatches } : {}), sourceRefs: view.sourceRefs, omittedRefs: view.omittedRefs,
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
     ...(view.degraded ? { selectionDegraded: true } : {}),
@@ -891,7 +903,9 @@ export async function reviseContextProjection(
   userId: string,
   projectionId: string,
   input: ProjectionRevisionInput,
+  options: { allowedStatuses?: ContextProjectionStatus[] } = {},
 ): Promise<ContextProjectionRecord> {
+  const allowedStatuses = options.allowedStatuses || ['preview'];
   const addAssetIds = normalizeProjectionAssetIds(input.addAssetIds, 'addAssetIds');
   const removeAssetIds = normalizeProjectionAssetIds(input.removeAssetIds, 'removeAssetIds');
   const removeSet = new Set(removeAssetIds);
@@ -902,7 +916,7 @@ export async function reviseContextProjection(
   const updated = await updateRecallJsonRecord(userId, 'projections', projectionId, async (raw) => {
     if (!raw) throw new Error('context projection not found');
     const current = asProjection(raw);
-    if (current.status !== 'preview') throw new Error('context projection cannot be revised');
+    if (!allowedStatuses.includes(current.status)) throw new Error('context projection cannot be revised');
     if (current.expiresAt && Date.parse(current.expiresAt) <= Date.now()) throw new Error('context projection is expired');
 
     const addedAssets = new Map<string, RecallAbilityAssetRecord>();
@@ -1042,6 +1056,46 @@ export async function confirmContextProjection(userId: string, projectionId: str
   const projection = asProjection(updated);
   if (projection.status === 'expired') throw new Error('context projection is expired');
   return projection;
+}
+
+/** 模型自选投影的追加（2026-09-18）：同一条投影在任务内可反复追加资产
+ *  （"基线 + 模型追加"里的追加）。只对 authorization='model_selected' 开放，
+ *  且允许在 confirmed 态追加——这是模型自选线独有的编辑面，用户确认的投影
+ *  仍只能在 preview 态改。 */
+export async function appendAssetsToModelSelectedProjection(
+  userId: string,
+  projectionId: string,
+  assetIds: string[],
+): Promise<ContextProjectionRecord> {
+  const projection = await readContextProjection(userId, projectionId);
+  if (projection.authorization !== 'model_selected') {
+    throw new Error('context projection is not model-selected');
+  }
+  return reviseContextProjection(userId, projectionId, { addAssetIds: assetIds }, {
+    allowedStatuses: ['preview', 'confirmed'],
+  });
+}
+
+/** 撤销一条投影（2026-09-18，模型自选线）：把 confirmed 置为 revoked——
+ *  注入查找只认 confirmed，所以撤销后本会话后续回合不再带入这批资产；
+ *  已发生的注入/使用记录保留（历史不可改写）。只允许撤销"模型自选"的投影：
+ *  用户自己确认过的投影走既有的人工流程（避免一键撤销掉用户明确的决定）。 */
+export async function revokeModelSelectedProjection(
+  userId: string,
+  projectionId: string,
+): Promise<ContextProjectionRecord> {
+  if (!safeId(userId) || !safeId(projectionId)) throw new Error('invalid projection revoke input');
+  const updated = await updateRecallJsonRecord(userId, 'projections', projectionId, (raw) => {
+    if (!raw) throw new Error('context projection not found');
+    const current = asProjection(raw);
+    if (current.authorization !== 'model_selected') {
+      throw new Error('context projection is not model-selected');
+    }
+    if (current.status === 'revoked') return current;
+    if (current.status !== 'confirmed') throw new Error('context projection is not revocable');
+    return { ...current, status: 'revoked' as const, decidedAt: new Date().toISOString() };
+  });
+  return asProjection(updated);
 }
 
 export async function confirmAndApproveWake(
