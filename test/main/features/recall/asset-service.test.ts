@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { KstarEpisodeRecord } from '../../../../src/main/features/kstar/types';
+import { KSTAR_EPISODE_MISSING } from '../../../../src/main/features/recall/evidence-resolution';
 
 let tmpDir: string;
 let previousRoot: string | undefined;
@@ -772,6 +774,10 @@ describe('治理动作', () => {
     const tgtOld = await mk('目标条目的旧内容。', '身份B');
     await assets.updateAbilityAsset(U, tgtOld.asset.id, { statement: '更旧的目标。', reason: 'aged', actor: 'user' });
     // 再动一次 source，让它的 updatedAt 晚于 target（sourceNewer=true）。
+    // 两侧写入相隔不足 1ms 时 ISO 时间戳会撞车——merge 的 sourceNewer 是严格
+    // 大于比较，撞上就把"谁更新"判反（本机实测约三分之一概率红）。等一拍把
+    // 它变成确定事实，不靠执行速度。
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await assets.updateAbilityAsset(U, src.asset.id, { statement: '第一版内容的修订。', reason: 'refresh', actor: 'user' });
     const merged = await assets.mergeAbilityAssets(U, src.asset.id, tgtOld.asset.id, userAction('merge'));
     const { readAbilityAssetVersionSnapshot } = await import('../../../../src/main/features/recall/asset-service');
@@ -1052,5 +1058,62 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     expect(await assets.migrateLegacyFreeTextScopes(uid)).toBe(1);
     const stillFrozen = await projections.readContextProjection(uid, expired.id);
     expect(stillFrozen.assetVersions?.[asset.id]).toBe('1');
+  });
+
+  it('marks execution evidence whose KSTAR episode is missing instead of blocking the write (2026-09-18)', async () => {
+    const { candidates, assets } = await modules();
+    const episodes = await import('../../../../src/main/features/kstar/episode-store');
+    // 正例：复盘记录真实存在 → 证据原样保留（写入前解析只标"查无"的）。
+    const episode = (id: string): KstarEpisodeRecord => ({
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id,
+      sessionId: 'gconv-evidence',
+      taskRunId: `run-${id}`,
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+      s: { workspaceId: 'workspace-evidence' },
+      t: { userGoal: `check ${id}`, constraints: [] },
+      a: { toolCalls: [], agentActions: [] },
+      r: { status: 'completed', finalText: 'Done.', producedFiles: [] },
+      evidenceRefs: [{ kind: 'execution', id: `exec-${id}` }],
+      createdAt: '2026-09-18T00:00:00.000Z',
+      updatedAt: '2026-09-18T00:01:00.000Z',
+    });
+    await episodes.writeKstarEpisode('user-a', episode('kse-live1'));
+
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep the verified evidence path.',
+      suggestedType: 'rule',
+      ...RULE_BOUNDARY,
+      suggestedScope: 'general',
+      sourceRefs: [
+        { kind: 'execution', id: 'kse-live1' },
+        { kind: 'execution', id: 'kse-ghost1' },
+        { kind: 'execution', id: 'exec-plain' },
+      ],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const byId = new Map(asset.evidenceRefs.map((ref) => [String(ref.id), ref]));
+    // 乙档口径：写入照常（资产已建），查无的记录标 degraded，不阻断、不丢数据。
+    expect(asset.status).toBe('active');
+    expect(byId.get('kse-live1')?.degraded).toBeUndefined();
+    expect(byId.get('kse-ghost1')).toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
+    // 形状不匹配（非 kse- 前缀）的执行证据不参与判定。
+    expect(byId.get('exec-plain')?.degraded).toBeUndefined();
+    // 版本快照同步带标记（渲染层证据读的就是快照）。
+    const versions = await assets.listAbilityAssetVersions('user-a', asset.id);
+    expect(versions[0].snapshot.evidenceRefs.find((ref) => ref.id === 'kse-ghost1'))
+      .toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
+
+    // update 路径同样生效：新写入的查无证据被标，已有的照旧。
+    const updated = await assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Keep the verified evidence path always.',
+      actor: 'user',
+      reason: 'tighten wording',
+      evidenceRefs: [...asset.evidenceRefs, { kind: 'execution', id: 'kse-ghost2' }],
+    });
+    expect(updated.evidenceRefs.find((ref) => ref.id === 'kse-ghost2'))
+      .toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
+    expect(updated.evidenceRefs.find((ref) => ref.id === 'kse-live1')?.degraded).toBeUndefined();
   });
 });

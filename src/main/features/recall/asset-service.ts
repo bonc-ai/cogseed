@@ -16,6 +16,7 @@ import { readAbilityAssetSemantics } from './asset-semantics';
 import { normalizeAbilityAssetScopePolicy, normalizeAssetScopeValue, isRecallScopeTerm, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { normalizeCausalRule } from './world-model-types';
+import { resolveExecutionEvidenceRefs } from './evidence-resolution';
 import { createLogger } from '../../logger';
 
 const log = createLogger('recall.assets');
@@ -349,6 +350,10 @@ export async function createAbilityAsset(
   if (validated.lifecycleStatus !== expectedLifecycle || validated.maturity !== expectedMaturity || validated.version !== '1') {
     throw new Error('invalid initial ability asset lifecycle');
   }
+  // 执行类证据写入前解析（2026-09-18 乙档）：查无复盘记录的证据如实标
+  // degraded——写入照常，但不让"造出来的 id"冒充 KSTAR 血统（渲染层据此
+  // 显示「来源记录不可用」并排除出归边）。
+  validated.evidenceRefs = (await resolveExecutionEvidenceRefs(userId, validated.evidenceRefs)) || [];
   const stored = asAsset(await updateRecallJsonRecord(
     userId,
     'ability-assets',
@@ -380,6 +385,7 @@ export async function createSystemAbilityAsset(
   }
   const validated = asAsset(input);
   if (validated.ownerId !== userId) throw new Error('ability asset owner mismatch');
+  validated.evidenceRefs = (await resolveExecutionEvidenceRefs(userId, validated.evidenceRefs)) || [];
   const stored = asAsset(await updateRecallJsonRecord(
     userId,
     'ability-assets',
@@ -419,7 +425,9 @@ export async function listAbilityAssetsForSpace(userId: string, spaceId: string)
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
   const action = requireAssetAction(input);
-  const evidenceRefs = input.evidenceRefs === undefined ? undefined : normalizeCognitionSourceRefs(input.evidenceRefs);
+  const evidenceRefs = input.evidenceRefs === undefined
+    ? undefined
+    : await resolveExecutionEvidenceRefs(userId, normalizeCognitionSourceRefs(input.evidenceRefs));
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
   const ontologyRefs = input.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(input as unknown as Record<string, unknown>, assetId);
@@ -503,7 +511,11 @@ export async function mergeAbilityAssetEvidence(
   if (!current) throw new Error('recall ability asset not found');
   assertNotPurged(current);
   if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
-  const merged = mergeRefsDedup(current.evidenceRefs || [], normalizeCognitionSourceRefs(newRefs));
+  // 只解析这批**新**证据（2026-09-18 乙档）：库里既有的引用原样放行——
+  // 旧记录指向已被清理的复盘是既成事实，不该由一次融合触发版本重写；
+  // 它们的诚实态由渲染层的"请求过但没有"兜底。
+  const incoming = (await resolveExecutionEvidenceRefs(userId, normalizeCognitionSourceRefs(newRefs))) || [];
+  const merged = mergeRefsDedup(current.evidenceRefs || [], incoming);
   const sourceSessionIds = [...new Set([
     ...(current.sourceSessionIds || []),
     ...(metadata.sourceSessionIds || []).filter((id) => safeId(id)),
