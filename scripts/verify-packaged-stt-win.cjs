@@ -27,6 +27,7 @@ const MARKER_FIELDS = Object.freeze([
   'finalEventObserved',
   'finalTextLength',
   'failureCount',
+  'failureStage',
 ]);
 
 function expectedWindowsExecutable(root = ROOT) {
@@ -98,8 +99,9 @@ function verifySttSmokeMarker(marker) {
     errors.push('marker must observe a non-empty transcript');
   }
   if (!Number.isInteger(marker.failureCount) || marker.failureCount !== 0) {
-    errors.push('marker must report zero smoke failures');
+    errors.push(`marker must report zero smoke failures (stage: ${String(marker.failureStage || 'unknown')})`);
   }
+  if (marker.failureStage !== 'complete') errors.push('marker must report completed STT smoke stage');
   return errors;
 }
 
