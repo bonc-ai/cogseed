@@ -1615,7 +1615,7 @@
       if (note) {
         note.textContent = t('kb.transcriptCorrect.diff_note', '高亮 = 本次替换，删除线 = 口癖删除；原文从未被改写，回滚只做校验与返回。');
       }
-      const result = await modal.result;
+      const result = await modal;
       if (result?.reason === 'action' && result?.id === 'revert') {
         await runRevert();
       }
@@ -1742,7 +1742,7 @@
       });
       const host = modal?.dialog?.querySelector('[data-atc-notes]');
       if (host) host.textContent = state.notesText;
-      const result = await modal.result;
+      const result = await modal;
       if (result?.reason === 'action' && result?.id === 'save-notes') {
         await saveNotes();
       }
@@ -1996,7 +1996,7 @@
       // 「采用」点了没反应就是这个原因。这里给该 dialog 单独挂一份同样的委托。
       const dialog = modal?.dialog;
       if (dialog) dialog.addEventListener('click', onClick);
-      await modal.result;
+      await modal;
       if (dialog) dialog.removeEventListener('click', onClick);
       render();
     }
