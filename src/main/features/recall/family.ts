@@ -16,6 +16,7 @@
  */
 
 import type { AbilityAssetRelation } from './asset-relations';
+import type { RecallJsonRecord } from './store';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 
 export const FAMILY_SEMANTIC_THRESHOLD = 0.60;
@@ -185,11 +186,11 @@ export async function attachFamilyOnCreate(
       // 对不上 v2 资产）。写入前过 normalize 保形状。
       const { updateRecallJsonRecord } = await import('./store');
       const { normalizeAbilityAssetRelations } = await import('./asset-relations');
-      await updateRecallJsonRecord(userId, 'ability-assets', created.id, (current: Record<string, unknown> | null) => ({
+      await updateRecallJsonRecord(userId, 'ability-assets', created.id, (current) => ({
         ...(current || {}),
         relations: normalizeAbilityAssetRelations([...existing, ...addRelations], created.id),
         updatedAt: new Date().toISOString(),
-      }));
+      } as RecallJsonRecord));
     }
     return addRelations.map((relation) => relation.assetId);
   } catch {
