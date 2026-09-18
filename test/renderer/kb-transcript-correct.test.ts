@@ -694,6 +694,17 @@ describe('查看器集成契约', () => {
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 
+  it('弹窗内的动作必须自带点击委托（弹窗挂 body，面板容器的委托收不到）', () => {
+    // 「拟主题标题」的采用按钮渲染在 uiModal 里（document.body 下，见 ui-modal.js），
+    // 只挂容器委托 = 点「采用」没反应（真机反馈）
+    expect(panelSrc).toMatch(/dialog\.addEventListener\('click', onClick\)/);
+    expect(panelSrc).toMatch(/dialog\.removeEventListener\('click', onClick\)/);
+    // 采用态反馈不得用 textContent 覆盖共享按钮内部结构（会冲掉 label span、
+    // role class 也永远停在 secondary）
+    expect(panelSrc).not.toMatch(/headingAdopt\.textContent =/);
+    expect(panelSrc).toMatch(/headingAdopt\.outerHTML = button\(/);
+  });
+
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {
     expect(viewer).toMatch(/function canCorrect\(\)[\s\S]{0,400}activeView !== 'document'[\s\S]{0,200}activeResult\?\.resolved/);
     // 真机反馈：纠错入口不该出现在所有文本上——非转写文档不提供（判定行为见

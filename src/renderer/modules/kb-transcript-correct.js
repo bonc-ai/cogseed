@@ -1991,7 +1991,13 @@
           host.appendChild(row);
         }
       }
+      // 弹窗是挂在 document.body 上的（ui-modal.js: document.body.appendChild(overlay)），
+      // 不在面板容器内 —— 容器上那份点击委托**收不到弹窗里的按钮**，
+      // 「采用」点了没反应就是这个原因。这里给该 dialog 单独挂一份同样的委托。
+      const dialog = modal?.dialog;
+      if (dialog) dialog.addEventListener('click', onClick);
       await modal.result;
+      if (dialog) dialog.removeEventListener('click', onClick);
       render();
     }
 
@@ -2354,10 +2360,19 @@
       const headingAdopt = event.target.closest('[data-atc-heading-adopt]');
       if (headingAdopt) {
         const start = Number(headingAdopt.getAttribute('data-atc-heading-adopt'));
-        toggleHeading(start, headingAdopt.getAttribute('data-atc-heading-title'));
-        headingAdopt.textContent = state.headings.some((h) => h.start === start)
-          ? t('kb.transcriptCorrect.headings_adopted', '已采用')
-          : t('kb.transcriptCorrect.headings_adopt', '采用');
+        const title = headingAdopt.getAttribute('data-atc-heading-title') || '';
+        toggleHeading(start, title);
+        const adopted = state.headings.some((h) => h.start === start);
+        // 整块重写该按钮：直接改 textContent 会把共享按钮的内部结构（label span）
+        // 冲掉，而且 role class 永远停在 secondary，"已采用"看不出来。
+        headingAdopt.outerHTML = button({
+          label: adopted
+            ? t('kb.transcriptCorrect.headings_adopted', '已采用')
+            : t('kb.transcriptCorrect.headings_adopt', '采用'),
+          role: adopted ? 'primary' : 'secondary',
+          size: 'sm',
+          attrs: { 'data-atc-heading-adopt': String(start), 'data-atc-heading-title': title },
+        });
         return;
       }
       const llmAdopt = event.target.closest('[data-atc-llm-adopt]');
