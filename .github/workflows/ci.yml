@@ -38,6 +38,8 @@ jobs:
       - run: npm run readme:check
       - run: npm run tokens:check
       - run: npm run builtin:manifest:check
+      - name: Packaged macOS launch smoke
+        run: npm run package:dev:mac && npm run verify:package:dev:mac
       - name: Email hygiene gate (release gate)
         if: github.event_name == 'push' || github.base_ref == 'cicd'
         run: |
@@ -116,13 +118,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: node scripts/write-build-info.cjs --channel=ci
       - run: npm run build:win
-      # Known Windows packaged-STT gap: the smoke does not produce its marker
-      # on the hosted runner yet. Keep it visible with the app's captured
-      # stdout/stderr, but do not let this single app-level smoke block the
-      # Windows build/sign/artifact gate while it is tracked separately.
-      - name: Packaged STT smoke (informational)
-        continue-on-error: true
+      - name: Packaged launch smoke
+        run: npm run verify:package:launch
+      - name: Packaged STT smoke
         run: npm run verify:package:stt:win
       - name: Assert packaged Electron fuse baseline
         run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe
