@@ -80,7 +80,9 @@ function issueInputs(value: unknown): Array<{
   suggestion?: string;
 }> {
   if (!Array.isArray(value)) return [];
-  const allowed: transcriptRuns.IssueReason[] = ['unknown_entity', 'ambiguous_name', 'mixed_speech', 'asr_unrecoverable'];
+  const allowed: transcriptRuns.IssueReason[] = [
+    'unknown_entity', 'ambiguous_name', 'mixed_speech', 'asr_unrecoverable', 'model_candidate',
+  ];
   return value.slice(0, 200).map((raw) => {
     const item = raw as Partial<{ span: { start: number; end: number }; text: string; reason: string; suggestion: string }>;
     const start = typeof item?.span?.start === 'number' ? Math.max(0, Math.floor(item.span.start)) : 0;
@@ -336,6 +338,36 @@ export const invokeHandlers = {
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),
   }),
 
+  /**
+   * 候选区（待核）：模型候选的复核清单。**与 `transcript.glossary.list` 分开**——
+   * 词条列表是"已生效的规则"，候选列表是"还没人拍板的东西"，混在一起会让
+   * 面板和用户都分不清哪条在扫描里真的会生效。
+   */
+  'transcript.glossary.candidates': async (payload: Payload, ctx: IpcContext) => ({
+    candidates: transcriptGlossary.listCandidates(ctx.userId, {
+      ...(payload?.state === 'adopted' || payload?.state === 'discarded' || payload?.state === 'pending'
+        ? { state: payload.state as transcriptGlossary.CandidateState }
+        : {}),
+    }),
+    pending: transcriptGlossary.countPendingCandidates(ctx.userId),
+  }),
+
+  /**
+   * 候选 → 词条：**唯一的**人工确认通道。候选本身永远不生效，
+   * 只有人在这里点确认才会按 `source: 'manual'` 建出真词条。
+   */
+  'transcript.glossary.adoptCandidate': async (payload: Payload, ctx: IpcContext) => ({
+    ...transcriptGlossary.adoptCandidate(ctx.userId, requireText(payload?.id, 'id', 128)),
+  }),
+
+  'transcript.glossary.discardCandidate': async (payload: Payload, ctx: IpcContext) => ({
+    candidate: transcriptGlossary.discardCandidate(ctx.userId, requireText(payload?.id, 'id', 128)),
+  }),
+
+  'transcript.glossary.clearCandidates': async (payload: Payload, ctx: IpcContext) => ({
+    removed: transcriptGlossary.clearCandidates(ctx.userId, { includePending: payload?.includePending === true }),
+  }),
+
   'transcript.glossary.upsert': async (payload: Payload, ctx: IpcContext) => {
     const result = transcriptGlossary.upsertEntry(ctx.userId, payload ?? {});
     return result;
@@ -503,8 +535,13 @@ export const invokeHandlers = {
   },
 
   /**
-   * 受约束 LLM 候选（方案 §五 P2-1）：只问"疑似专名"，只认白名单目标，
-   * 低置信只进待确认。**不自动替换**——替换照旧走 apply 的护栏与风险分级。
+   * 模型纠错候选（方案 §五 P2-1）：只问"疑似专名"。
+   *
+   * 「已知写法」名单只是**优先参考**（词表正确写法 + 记忆分组字段值，不含投影里的
+   * 结构标签），模型可以给出名单外的写法并用 `inAllowlist:false` 标出来。
+   * 本 handler **只产出候选、不写任何数据**：候选要落盘必须走
+   * `transcript.correct.flagCandidates`，且只会落进词表文件的候选区（待核），
+   * 绝不进 `entries` ⇒ 不参与扫描/替换。
    */
   'transcript.correct.llmCandidates': async (payload: Payload, ctx: IpcContext) => {
     const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
@@ -517,7 +554,7 @@ export const invokeHandlers = {
     const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
     for (const name of canonical) known.add(name.name);
     const suspects = transcriptAutoCorrect.detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_SUSPECTS);
-    // 白名单 = 词表正确写法 + 记忆分组字段值（**不含**投影里的结构标签）
+    // 优先参考名单 = 词表正确写法 + 记忆分组字段值（**不含**投影里的结构标签）
     const allowed = [
       ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
       ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
@@ -535,8 +572,41 @@ export const invokeHandlers = {
     return {
       ...result,
       suspects: suspects.map((suspect) => ({ text: suspect.text, span: suspect.span })),
-      allowedCount: allowed.length,
+      knownCount: allowed.length,
+      /** 待核候选总数（落盘的那些）。 */
+      pendingCandidates: transcriptGlossary.countPendingCandidates(ctx.userId),
     };
+  },
+
+  /**
+   * 把模型候选**标成待核**：写进词表文件的候选区（`state: 'pending'`）。
+   *
+   * 这是候选唯一的落盘入口，也是"只能标待核"在服务端的落实点：
+   *   - 候选区与 `entries` 是两个数组，本 handler 不碰 `entries`；
+   *   - 想变成扫描规则只能由人显式调 `transcript.glossary.adoptCandidate`；
+   *   - 页面上"标待核"同时会在清理版里插「【转写存疑】」标记（走既有 issues 链路）。
+   */
+  'transcript.correct.flagCandidates': async (payload: Payload, ctx: IpcContext) => {
+    const raw = Array.isArray(payload?.candidates) ? payload.candidates.slice(0, 100) : [];
+    const docId = optionalId(payload?.docId, 'docId');
+    const result = transcriptGlossary.recordCandidates(
+      ctx.userId,
+      raw.map((item) => {
+        const row = item as Record<string, unknown>;
+        return {
+          wrong: row?.wrong,
+          correct: row?.correct,
+          confidence: row?.confidence,
+          reason: row?.reason,
+          context: row?.context,
+          kind: row?.kind ?? 'people',
+          inAllowlist: row?.inAllowlist,
+          start: row?.start,
+          ...(docId ? { docId } : {}),
+        };
+      }),
+    );
+    return { ok: true, ...result };
   },
 
   /**

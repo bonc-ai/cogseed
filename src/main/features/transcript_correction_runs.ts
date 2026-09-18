@@ -94,7 +94,12 @@ export type IssueReason =
   | 'unknown_entity'
   | 'ambiguous_name'
   | 'mixed_speech'
-  | 'asr_unrecoverable';
+  | 'asr_unrecoverable'
+  /**
+   * 模型在纠错里给出的候选：候选**不进词表**、不参与扫描，只是"这里可能有错写，
+   * 需要人看一眼"。单独一种理由，是为了在待核清单里能和"未知实体"区分开。
+   */
+  | 'model_candidate';
 
 export interface OpenIssue {
   id: string;
