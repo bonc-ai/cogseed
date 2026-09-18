@@ -495,6 +495,7 @@ if (_isPackagedSttSmoke) {
       finalEventObserved: false,
       finalTextLength: 0,
       failureCount: 0,
+      failureStage: 'get_user_media',
     };
     let mediaStream = null;
     let audioContext = null;
@@ -526,6 +527,7 @@ if (_isPackagedSttSmoke) {
           video: false,
         });
         metrics.audioTrackLive = mediaStream.getAudioTracks().some((track) => track.readyState === 'live');
+        metrics.failureStage = 'audio_capture';
         const AudioContextConstructor = window.AudioContext;
         audioContext = new AudioContextConstructor({ sampleRate: 16000 });
         if (audioContext.state === 'suspended') await audioContext.resume();
@@ -552,10 +554,12 @@ if (_isPackagedSttSmoke) {
         }), 15_000, 'audio capture');
         metrics.rms = Math.sqrt(metrics.rms / metrics.sampleCount);
 
+        metrics.failureStage = 'stt_start';
         const started = await cogseedApi.invoke('stt.start', {});
         if (!started || started.ok === false || !started.sessionId) throw new Error('stt.start failed');
         sessionId = started.sessionId;
         metrics.sessionCreated = true;
+        metrics.failureStage = 'stt_push_audio';
         resultStream = cogseedApi.stream('stt.results', { sessionId }, (event) => {
           if (event?.type === 'event' && typeof event.event?.final === 'string') {
             metrics.finalEventObserved = true;
@@ -570,10 +574,13 @@ if (_isPackagedSttSmoke) {
           if (!pushed || pushed.ok === false) throw new Error('stt.pushAudio failed');
           metrics.pushAcknowledgements += 1;
         }
+        metrics.failureStage = 'stt_stop';
         const stopped = await cogseedApi.invoke('stt.stop', { sessionId });
         if (!stopped || stopped.ok === false) throw new Error('stt.stop failed');
         metrics.stopAcknowledged = true;
+        metrics.failureStage = 'stt_result';
         await timeout(resultStream.promise, 15_000, 'stt.results');
+        metrics.failureStage = 'complete';
       } catch (_) {
         metrics.failureCount += 1;
       } finally {
