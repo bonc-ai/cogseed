@@ -16,7 +16,7 @@
  */
 
 import type { AbilityAssetRelation } from './asset-relations';
-import type { RecallJsonRecord } from './store';
+import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 
 export const FAMILY_SEMANTIC_THRESHOLD = 0.60;
