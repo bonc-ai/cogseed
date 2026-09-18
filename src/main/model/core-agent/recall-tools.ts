@@ -91,12 +91,40 @@ function formatAsset(asset: PoolEntry, score: number): string {
   ].join('\n');
 }
 
-/** 一句话摘要：正文首句，压掉空白并截断——目录行要短，正文才是按需取的。 */
-function oneLineOf(statement?: string): string {
+/** 一句话摘要：正文首句，压掉空白、按长度截断并去掉截断后残留的标点——
+ *  目录行要短，正文才是按需取的；停在逗号上会读成"半句话"。 */
+function oneLineOf(statement?: string, limit = 22): string {
   const text = String(statement || '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
-  const first = text.split(/[。！？!?]/)[0] || text;
-  return first.length > 80 ? `${first.slice(0, 80)}…` : first;
+  const first = (text.split(/[。！？!?]/)[0] || text).trim();
+  const cut = first.length > limit ? first.slice(0, limit) : first;
+  return cut.replace(/[，、；：,;:\-—\s]+$/, '');
+}
+
+/** 目录用的短标签（2026-09-18 压缩）：内部枚举名长且对模型无信息量。 */
+const CATALOG_TYPE_LABELS: Record<string, string> = {
+  rule: '规则',
+  template: '模板',
+  skill_method: '技能',
+  personal: '偏好',
+};
+const CATALOG_MATURITY_LABELS: Record<string, string> = {
+  seed: '未验证',
+  bud: '已确认',
+  transfer_validated: '已验证',
+  effectiveness_validated: '已验证有效',
+};
+
+function catalogScopeLabel(scope?: string): string {
+  const value = String(scope || '').trim();
+  if (!value || value.toLowerCase() === 'general') return '通用';
+  return value;
+}
+
+function truncateText(value: string, limit: number): string {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).replace(/[，、；：,;:\-—\s]+$/, '')}…`;
 }
 
 interface AssetUsageStat {
@@ -124,26 +152,26 @@ async function loadUsageStats(userId: string): Promise<Map<string, AssetUsageSta
   return stats;
 }
 
-/** 目录条目：一行标题 + 元信息 + 一句话 + 适用/禁用场景（各截前两条）。 */
+/** 目录条目（2026-09-18 压缩为两行制）：一行一条"标题 + 一句话"，第二行给
+ *  短标签元信息与适用场景首条。禁用场景不进目录——它由服务端硬闸执行，
+ *  读取（assetIds）与注入块里都会完整给出，目录里再占一行纯属浪费预算。 */
 function formatCatalogEntry(asset: RecallAbilityAssetRecord, stat: AssetUsageStat | undefined, index: number): string {
+  const type = CATALOG_TYPE_LABELS[String(asset.type || '')] || String(asset.type || '?');
+  const maturity = CATALOG_MATURITY_LABELS[String(asset.maturity || '')] || String(asset.maturity || '?');
   const meta = [
-    `类型:${asset.type || '?'}`,
-    `范围:${asset.scope || 'general'}`,
-    `成熟度:${asset.maturity || '?'}`,
+    type,
+    catalogScopeLabel(asset.scope),
+    maturity,
     `v${asset.activeVersion || asset.version || '1'}`,
-    ...(stat && stat.count ? [`用过 ${stat.count} 次${stat.lastAt ? `（最近 ${stat.lastAt.slice(0, 10)}）` : ''}`] : []),
-    ...(asset.spaceId ? [`空间:${asset.spaceId}`] : []),
-  ].join(' | ');
-  const applies = (asset.applicableWhen || []).slice(0, 2).join('；');
-  const forbids = (asset.forbiddenWhen || []).slice(0, 2).join('；');
+    stat && stat.count ? `用${stat.count}次` : '没用过',
+  ].join('·');
+  const applies = (asset.applicableWhen || [])[0];
   const oneLine = oneLineOf(asset.statement);
+  const head = `${index}. [asset:${asset.id}] ${truncateText(String(asset.title || '(无标题)'), 14)}`;
   return [
-    `${index}. [asset:${asset.id}] ${asset.title || '(无标题)'}`,
-    `   ${meta}`,
-    oneLine ? `   一句话: ${oneLine}` : '',
-    applies ? `   适用于: ${applies}` : '',
-    forbids ? `   禁用: ${forbids}` : '',
-  ].filter(Boolean).join('\n');
+    oneLine ? `${head} — ${oneLine}` : head,
+    ` ${meta}${applies ? `｜适用:${truncateText(String(applies), 12)}` : ''}`,
+  ].join('\n');
 }
 
 /** 准入被拦的原因 → 人话（模型据此决定换一条还是放弃）。 */
@@ -280,9 +308,14 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
       spaceIdFilter ? `spaceId=${spaceIdFilter}` : '',
     ].filter(Boolean).join('，');
     if (!pool.length) {
-      return `认知资产目录为空（在用资产 0 条${filterNote ? `；过滤条件：${filterNote}` : ''}）。`;
+      return `认知资产目录为空（共 0 条${filterNote ? `；过滤条件：${filterNote}` : ''}）。`;
     }
     const page = pool.slice(offset, offset + k);
+    if (!page.length) {
+      // offset 越界：给"已到末尾 + 总数"的明确语义，而不是一个空页（模型据此
+      // 停止翻页，而不是以为目录坏了）。
+      return `已到目录末尾（共 ${pool.length} 条${filterNote ? `；过滤条件：${filterNote}` : ''}，offset 从 0 开始）。用 offset=0 从头看，或去掉过滤条件。`;
+    }
     const stats = await loadUsageStats(userId);
     const more = pool.length - (offset + page.length);
     return [
