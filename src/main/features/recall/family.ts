@@ -61,6 +61,74 @@ export interface SameFamilyRelationPatch {
   addRelations: Array<{ kind: 'same_family'; assetId: string; note?: string }>;
 }
 
+/** 语义聚类族组：静态判不出（无本体组、无 KStar 溯源）的资产两两比 embedding，
+ *  相似 ≥ FAMILY_SEMANTIC_THRESHOLD 并查集成组，组键取组内最小资产 id（稳定）。
+ *  规模保护：参与聚类的资产超过 MAX_SEMANTIC_CLUSTER 时只聚最近更新的
+ *  MAX_SEMANTIC_CLUSTER 条并记 warn——embedding 两两比对是 O(n²)，用户级
+ *  资产库不该无限膨胀这个成本。embedding 不可用时返回空（聚类是兜底路径，
+ *  失败静默，不阻断入库）。 */
+export const MAX_SEMANTIC_CLUSTER = 200;
+
+type ClusterInput = Pick<RecallAbilityAssetRecord, 'id' | 'statement' | 'title' | 'updatedAt' | 'ontologyRefs' | 'learningProvenance'>;
+
+export async function collectSemanticFamilyGroups(
+  userId: string,
+  assets: ReadonlyArray<ClusterInput>,
+  deps: {
+    embedForDedup?: (userId: string, text: string) => Promise<number[] | null>;
+    log?: { warn: (message: string, context?: Record<string, unknown>) => void };
+  } = {},
+): Promise<Map<string, string[]>> {
+  const { embedForDedup } = await import('./similarity');
+  const embed = deps.embedForDedup || embedForDedup;
+  const orphans = assets
+    .filter((asset) => computeStaticFamilyKey(asset) === null)
+    .slice()
+    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+    .slice(0, MAX_SEMANTIC_CLUSTER);
+  const groups = new Map<string, string[]>();
+  if (orphans.length < 2) return groups;
+
+  const vectors = new Map<string, number[]>();
+  for (const asset of orphans) {
+    const vector = await embed(userId, String(asset.statement || asset.title || ''));
+    if (vector) vectors.set(asset.id, vector);
+  }
+  if (vectors.size < 2) return groups;
+
+  const { cosineScore } = await import('./similarity');
+  const parent = new Map(orphans.map((asset) => [asset.id, asset.id]));
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    return root;
+  };
+  const union = (left: string, right: string): void => {
+    const a = find(left);
+    const b = find(right);
+    if (a !== b) parent.set(a > b ? a : b, a > b ? b : a);
+  };
+  const listed = orphans.filter((asset) => vectors.has(asset.id));
+  for (let i = 0; i < listed.length; i += 1) {
+    for (let j = i + 1; j < listed.length; j += 1) {
+      if (cosineScore(vectors.get(listed[i].id)!, vectors.get(listed[j].id)!) >= FAMILY_SEMANTIC_THRESHOLD) {
+        union(listed[i].id, listed[j].id);
+      }
+    }
+  }
+  const clusters = new Map<string, string[]>();
+  for (const asset of listed) {
+    const root = find(asset.id);
+    const members = clusters.get(root) || [];
+    members.push(asset.id);
+    clusters.set(root, members);
+  }
+  for (const [root, members] of clusters) {
+    if (members.length >= 2) groups.set(`sem:${[...members].sort()[0]}`, members);
+  }
+  return groups;
+}
+
 /** 由族组生成每条资产的 same_family 关系补丁（幂等：已有的不重复生成）。 */
 export function buildSameFamilyPatches(
   groups: ReadonlyMap<string, string[]>,

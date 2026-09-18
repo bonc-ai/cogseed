@@ -75,4 +75,40 @@ describe('buildSameFamilyPatches', () => {
     expect(forA?.addRelations.every((rel) => rel.assetId !== 'aa-a')).toBe(true);
     expect(forB?.addRelations).toEqual([{ kind: 'same_family', assetId: 'aa-a' }]);
   });
+
+describe('collectSemanticFamilyGroups', () => {
+  const mk = (id: string, statement: string) => ({
+    id, statement, title: '', updatedAt: '2026-09-19T00:00:00Z',
+    ontologyRefs: undefined, learningProvenance: undefined,
+  });
+
+  it('clusters semantically close orphans and skips statically keyed assets', async () => {
+    const family = await import('../../../../src/main/features/recall/family');
+    // 注入向量：a 与 b 相似（cos=0.96），c 无关。
+    const { _injectEmbeddingForTest, clearEmbedCacheForTest } = await import('../../../../src/main/features/recall/similarity');
+    clearEmbedCacheForTest();
+    _injectEmbeddingForTest('user-fam-sem', '周报三个固定板块。', [1, 0]);
+    _injectEmbeddingForTest('user-fam-sem', '周报固定三个板块：进展、风险、计划。', [0.96, 0.28]);
+    _injectEmbeddingForTest('user-fam-sem', '数据库迁移前必须备份。', [0, 1]);
+    const groups = await family.collectSemanticFamilyGroups('user-fam-sem', [
+      { ...mk('aa-a', '周报三个固定板块。') },
+      { ...mk('aa-b', '周报固定三个板块：进展、风险、计划。') },
+      { ...mk('aa-c', '数据库迁移前必须备份。') },
+      { ...mk('aa-keyed', '周报再提一句。'), ontologyRefs: [{ groupId: 'grp-me' }] },
+    ]);
+    expect(groups.size).toBe(1);
+    const key = [...groups.keys()][0];
+    expect(key.startsWith('sem:')).toBe(true);
+    expect([...groups.get(key)!].sort()).toEqual(['aa-a', 'aa-b']);
+  });
+
+  it('returns empty silently when embedding is unavailable', async () => {
+    const family = await import('../../../../src/main/features/recall/family');
+    const groups = await family.collectSemanticFamilyGroups('user-fam-none', [
+      mk('aa-x', '一句话。'), mk('aa-y', '另一句话。'),
+    ], { embedForDedup: async () => null });
+    expect(groups.size).toBe(0);
+  });
+});
+
 });
