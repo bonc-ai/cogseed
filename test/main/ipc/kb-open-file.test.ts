@@ -111,6 +111,9 @@ describe('kb.openFile › 个人库文本/文档预览', () => {
     expect(res.html).toContain('office-word');
     expect(res.html).toContain('Doc 标题');
     expect(res.html).toContain('段落一');
+    // 图片护栏必须在这条出口上（真机案例：1080px 截图塞进 690px 正文栏 → 溢出）。
+    // 这条针对"知识库整页查看器"的出口断言，防止再次把外壳 CSS 拆成两份。
+    expect(res.html).toMatch(/\.office-word img,[\s\S]{0,80}\.office-word video \{[\s\S]{0,120}max-width: 100%;/);
   });
 
   it('xlsx 转表格化 HTML 预览', async () => {
