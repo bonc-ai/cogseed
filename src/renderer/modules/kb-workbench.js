@@ -5755,8 +5755,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _applyMmTransform();
     });
     window.addEventListener('mouseup', () => { _mmPanning = false; _mmPanStart = null; });
-    document.getElementById('kb-qa-input')?.addEventListener('input', _syncSendState);
-    document.getElementById('kb-qa-input')?.addEventListener('keyup', _syncSendState);
+    const qaInputEl = document.getElementById('kb-qa-input');
+    qaInputEl?.addEventListener('input', () => { _autoGrowQaInput(qaInputEl); _syncSendState(); });
+    qaInputEl?.addEventListener('keyup', _syncSendState);
+    _autoGrowQaInput(qaInputEl);
     _syncSendState();
     _restoreQaModelSelection();
     _renderQaModelChip();
@@ -5976,12 +5978,28 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     send.disabled = !input.value.trim();
   }
 
+  // 问答输入框自动扩容：多行输入随内容增高，避免长文本在单行里向前滚动、
+  // 看不到前面输入的内容。上限与 CSS `.kb-qa-input { max-height }` 对齐，
+  // 超过上限才启用纵向滚动；发送清空后复位到单行高度。
+  const KB_QA_INPUT_MIN_HEIGHT = 26;
+  const KB_QA_INPUT_MAX_HEIGHT = 120;
+  function _autoGrowQaInput(el) {
+    const input = el || document.getElementById('kb-qa-input');
+    if (!input || !input.style) return;
+    input.style.height = 'auto';
+    const contentHeight = Number(input.scrollHeight) || 0;
+    const next = Math.min(Math.max(contentHeight, KB_QA_INPUT_MIN_HEIGHT), KB_QA_INPUT_MAX_HEIGHT);
+    input.style.height = `${next}px`;
+    input.style.overflowY = contentHeight > KB_QA_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  }
+
   function _submitQa() {
     const input = document.getElementById('kb-qa-input');
     if (!input) return;
     const q = input.value;
     if (!q || !q.trim()) return;
     input.value = '';
+    _autoGrowQaInput(input);
     _syncSendState();
     _ask(q);
   }
