@@ -237,13 +237,14 @@ describe('runner › buildRunner auth gate', () => {
     await expect(candidates.listRecallCandidates('runner-teaching-failed')).resolves.toEqual([]);
   });
 
-  it('reports a temporary model pause when the only configured entry has credential cooldown', async () => {
+  it('retries the only configured entry instead of reporting a temporary pause when it is cooled down', async () => {
     const users = await import('../../../src/main/features/users');
     users.activateUser('runnercooldown');
     const i18n = await import('../../../src/main/i18n');
     i18n.setCurrentLang('en');
     const auth = await import('../../../src/main/features/auth');
     const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+    cooldown._clearAll();
 
     const profile = await auth.addApiKey('anthropic', 'k-cooldown-xxxxxxxx');
     await auth.addEntry({
@@ -253,6 +254,13 @@ describe('runner › buildRunner auth gate', () => {
     });
     cooldown.markCooldown(profile.profileId, 'auth', 'invalid key', 30_000);
 
+    // A stale cooldown (e.g. a transient 429/401 during a long stream) must not
+    // hard-block a brand-new user turn: the entry is still resolvable and is
+    // retried once. Only when nothing at all is usable does the clear
+    // "model temporarily unavailable" guard apply.
+    const group = await auth.pickChatEntryGroup();
+    expect(group.map((c) => c.profileId)).toEqual([profile.profileId]);
+
     const { buildRunner } = await loadRunner();
     let message = '';
     try {
@@ -260,8 +268,11 @@ describe('runner › buildRunner auth gate', () => {
     } catch (err) {
       message = (err as Error).message;
     }
-    expect(message).toMatch(/configured model is temporarily unavailable/i);
-    expect(message).not.toMatch(/30s|30 seconds|seconds?/i);
+    // The gate no longer trips, so the build proceeds past auth (the invalid
+    // session id is the next guard to fire).
+    expect(message).not.toMatch(/configured model is temporarily unavailable/i);
+
+    cooldown._clearAll();
   });
 
 });
