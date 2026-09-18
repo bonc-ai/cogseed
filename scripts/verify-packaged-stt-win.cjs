@@ -27,6 +27,7 @@ const MARKER_FIELDS = Object.freeze([
   'finalEventObserved',
   'finalTextLength',
   'failureCount',
+  'failureStage',
 ]);
 
 function expectedWindowsExecutable(root = ROOT) {
@@ -98,8 +99,9 @@ function verifySttSmokeMarker(marker) {
     errors.push('marker must observe a non-empty transcript');
   }
   if (!Number.isInteger(marker.failureCount) || marker.failureCount !== 0) {
-    errors.push('marker must report zero smoke failures');
+    errors.push(`marker must report zero smoke failures (stage: ${String(marker.failureStage || 'unknown')})`);
   }
+  if (marker.failureStage !== 'complete') errors.push('marker must report completed STT smoke stage');
   return errors;
 }
 
@@ -203,7 +205,13 @@ async function launchSmoke(executable) {
   try {
     const marker = await waitForMarker(markerPath, child, configuredSmokeTimeoutMs());
     const errors = verifySttSmokeMarker(marker);
-    if (errors.length) throw new Error(`${errors.join('; ')}${stderr ? `\n${stderr}` : ''}`);
+    // The marker is deliberately limited to booleans and counts. Include it
+    // when validation fails so a Windows runner tells us whether Chromium
+    // reached the permission gate, fake device, or STT transport; never emit
+    // audio, session IDs, or recognized text.
+    if (errors.length) {
+      throw new Error(`${errors.join('; ')}\n--- smoke marker ---\n${JSON.stringify(marker)}${stderr ? `\n${stderr}` : ''}`);
+    }
     return marker;
   } catch (error) {
     // Preserve the packaged app's own diagnostics when the smoke times out or
