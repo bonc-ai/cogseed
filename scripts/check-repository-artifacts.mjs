@@ -9,7 +9,10 @@ const trackedFiles = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' 
   .split('\0')
   .filter(Boolean);
 
-const forbiddenArtifactName = /(?:checklist|audit|scan-report|扫描报告|审计报告)/i;
+// "audit" is also used by legitimate source files (for example, instruction
+// audit prompts and audit implementation modules). Restrict filename blocking
+// to recognizable result/checklist artifacts instead of the generic term.
+const forbiddenArtifactName = /(?:checklist|scan-report|扫描报告|审计报告)/i;
 const documentFile = /(?:^|\/)(?:[^/]+\.(?:md|txt|rst)|CHANGELOG(?:\.[^/]*)?)$/i;
 const localPath = /(?:\/Users\/[^\s`'"<>]+|\/private\/tmp\/[^\s`'"<>]+|[A-Za-z]:\\Users\\[^\s`'"<>]+|[A-Za-z]:\\(?:a|b)\\[^\s`'"<>]+)/;
 const findings = [];
