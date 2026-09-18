@@ -345,4 +345,22 @@ describe('projection card surfaces a drifted confirmed version', () => {
     expect(host.className).toBe('');
     expect(host.dataset.projectionId).toBeUndefined();
   });
+
+  it('撤销失败（可用性）：后端拒绝时给出可见提示，卡片状态不变', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return { ok: true, card: { ...previewCard, status: 'confirmed', authorization: 'model_selected', purpose: 'model_selected' } };
+      }
+      if (channel === 'recall.projections.revoke') return { ok: false, error: 'projection revoke failed upstream' };
+      return { ok: true, assets: [] };
+    });
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+    expect(host.innerHTML).toContain('Revoke');
+
+    await host.handler({ target: { closest: (selector: string) => (String(selector).includes('revoke') ? { disabled: false } : null) } });
+    // 失败要走可见提示（不静默），且卡片仍是 confirmed（没有假装成功）。
+    expect(context.uiAlert).toHaveBeenCalled();
+    expect(String(context.uiAlert.mock.calls[0][0])).toContain('revoke failed');
+    expect(host.innerHTML).toContain('Revoke');
+  });
 });

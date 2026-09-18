@@ -1082,4 +1082,35 @@ describe('committed projection knowledge boundary', () => {
       expect.objectContaining({ assetId: promoted.asset.id, reason: 'workspace_disabled' }),
     ]));
   });
+
+describe('模型自选投影的撤销（2026-09-18）', () => {
+  it('撤销幂等；不存在/非模型自选各给明确拒绝', async () => {
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-revoke01',
+      purpose: 'model_selected',
+      authorization: 'model_selected',
+      confirm: true,
+    });
+    expect(created.status).toBe('confirmed');
+
+    const first = await projection.revokeModelSelectedProjection('user-a', created.id);
+    expect(first.status).toBe('revoked');
+    // 幂等：重复撤销返回同一终态，不报错、不产生第二份状态。
+    const second = await projection.revokeModelSelectedProjection('user-a', created.id);
+    expect(second.status).toBe('revoked');
+
+    await expect(projection.revokeModelSelectedProjection('user-a', 'proj-doesnotexist01'))
+      .rejects.toThrow('not found');
+
+    const userOwned = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-revoke02',
+      purpose: 'conversation_reply',
+      authorization: 'user_confirmed',
+      confirm: true,
+    });
+    await expect(projection.revokeModelSelectedProjection('user-a', userOwned.id))
+      .rejects.toThrow('not model-selected');
+  });
+});
 });

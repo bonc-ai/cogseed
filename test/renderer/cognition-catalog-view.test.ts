@@ -56,6 +56,25 @@ describe('资产目录视图', () => {
     expect(html).toContain('目录视图');
   });
 
+  it('空态（可用性）：没有资产时目录视图给明确空态，而不是空白表头', () => {
+    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: [], proofs: [] });
+    expect(html).toContain('资产目录（模型视角）');
+    expect(html).toContain('还没有正式资产');
+    expect(html).not.toContain('data-go-asset=');
+  });
+
+  it('长列表（可用性）：35 条资产全部渲染，计数与实际条目一致', () => {
+    const many = Array.from({ length: 35 }, (_, index) => ({
+      ...asset,
+      id: `aa-many${String(index).padStart(4, '0')}`,
+      title: `批量资产 ${index + 1}`,
+    }));
+    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: many, proofs: [] });
+    const rows = html.split('data-go-asset=').length - 1;
+    expect(rows).toBe(35);
+    expect(html).toContain('全部 35');
+  });
+
   it('视图切换与分类筛选互不打扰（O7）：目录视图下仍带分类 chips，筛选态在切换后保持', () => {
     const template = { ...asset, id: 'aa-cat0002', title: '复盘模板', type: 'template' };
     const catalog = renderCognition(
