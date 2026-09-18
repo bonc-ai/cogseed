@@ -6,7 +6,7 @@
 
 **Status**: Draft — 客户端侧工程规格，派生自 Hub 侧产品契约 `PV-HUB-OPEN2-001`（`HANDOFF-HUB-OPEN2-001` 于 2026-09-18 获 Owner 接受）。尚未 Plan、Build、验收或发布。本文与 Hub 侧规格发生冲突时以 Hub 侧规格为准，并通过 Change Candidate 回改。
 
-**Input**: MeshSeed 任务 `COGSEED-313`【需求】开源版迭代二：客户端提交与社区贡献 → 子任务 `COGSEED-313.1` 需求 PRD 编写（负责人 樊中扬，阶段 `OpenSource-Hub-v1.3.0`；评论 #89 给出客户端范围、不做清单、依赖与待对齐接口）；Hub 侧规格 cogseed-hub `specs/009-client-contribution/spec.md`（分支 `feat/iter2-client-contribution`）；附件《CogSeed 社区贡献条款 v1.0》正式稿；Owner 2026-09-18 决定：登录即可投稿、单一固定共享条款、撤回经治理角色处置、不做用户反馈；用户指令「按 next_action 执行 speckit-specify」。
+**Input**: MeshSeed 任务 `COGSEED-313`【需求】开源版迭代二：客户端提交与社区贡献 → 子任务 `COGSEED-313.1` 需求 PRD 编写（负责人 樊中扬，阶段 `OpenSource-Hub-v1.3.0`；评论 #89 给出客户端范围、不做清单、依赖与待对齐接口）；Hub 侧规格 cogseed-hub `specs/010-client-contribution/spec.md`（分支 `feat/iter2-client-contribution`）；附件《CogSeed 社区贡献条款 v1.0》正式稿；Owner 2026-09-18 决定：登录即可投稿、单一固定共享条款、撤回经治理角色处置、不做用户反馈；用户指令「按 next_action 执行 speckit-specify」。
 
 ## 一句话说明
 
@@ -43,7 +43,7 @@ Hub 侧规格定义了整条链路（用户故事 1～4、FR-001～FR-027、SC-0
 4. **假如**本地检查发现任一阻断项，**当**检查完成，**那么**客户端展示每个阻断项对应的文件路径或规则名，不进入预览，不发出任何网络请求，贡献者可修改后重试。
 5. **假如**本地检查只发现 `MEDIUM` / `LOW` 级提示项，**当**检查完成，**那么**提示项随预览一并展示，不阻断。
 6. **假如**本地检查通过，**当**检查完成，**那么**客户端进入提交预览（用户故事 2）。
-7. **假如**Hub 侧尚未标记生效的条款版本（C-FR-013），**当**用户选择「贡献到 Hub」，**那么**客户端说明当前未开放贡献，不进入检查。
+7. **假如**Hub 侧尚未标记生效的条款版本（C-FR-007），**当**用户选择「贡献到 Hub」，**那么**客户端说明当前未开放贡献，不进入检查。
 
 ---
 
