@@ -34,6 +34,20 @@ permissions:
   contents: read
 
 jobs:
+  repository-hygiene:
+    # This check is intentionally blocking: audit results, release checklists,
+    # and machine-specific paths must never become repository artifacts.
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run repository:artifact-check
+
   static-gates:
     # 灰度期：只报告不拦截。转阻塞时删掉这一行。
     continue-on-error: true
