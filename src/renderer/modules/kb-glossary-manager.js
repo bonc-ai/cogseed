@@ -324,7 +324,13 @@
             control: { kind: 'select', value: state.filter.status, options: statusOptions },
           }),
         ].join('');
-        if (typeof root.hydrateUiFormSelects === 'function') root.hydrateUiFormSelects(host);
+        if (typeof root.hydrateUiFormSelects === 'function') {
+          root.hydrateUiFormSelects(host, {
+            'glo-kind': (value) => applyFilter('kind', value),
+            'glo-risk': (value) => applyFilter('riskLevel', value),
+            'glo-status': (value) => applyFilter('status', value),
+          });
+        }
       } catch (error) {
         log?.warn('glossary filters render failed', { error: error?.message || String(error) });
       }
@@ -600,7 +606,17 @@
           '</div>',
           '</div>',
         ].join('');
-        if (typeof root.hydrateUiFormSelects === 'function') root.hydrateUiFormSelects(host);
+        if (typeof root.hydrateUiFormSelects === 'function') {
+          root.hydrateUiFormSelects(host, {
+            // 同一个缺陷也波及这里：靠 dialog 委派读值 ⇒ 从未生效，
+            // 「替换」模式根本选不中（选了也回落 merge）。
+            'glo-import-mode': (value) => {
+              state.importMode = value === 'replace' ? 'replace' : 'merge';
+              state.importPreview = null;
+              renderIo();
+            },
+          });
+        }
       } catch (error) {
         log?.warn('glossary io render failed', { error: error?.message || String(error) });
       }
@@ -637,12 +653,21 @@
       }
     }
 
-    function readFilters() {
-      const search = String(dialog.querySelector('#glo-search')?.value || '');
-      const kind = String(dialog.querySelector('#glo-kind')?._uiSelectApi?.getValue?.() || '');
-      const riskLevel = String(dialog.querySelector('#glo-risk')?._uiSelectApi?.getValue?.() || '');
-      const status = String(dialog.querySelector('#glo-status')?._uiSelectApi?.getValue?.() || '');
-      return { search, kind, riskLevel, status };
+    /**
+     * 下拉筛选的写入口。
+     *
+     * 自定义 select（`_aiSelectMount`）**不派发 DOM 事件**，只在选中时调 `onChange`
+     * 回调（见 utils.js `_aiSelectPick`），所以挂在 dialog 上的 input/change 事件委派
+     * 对它永远不触发。唯一可用通道是 `hydrateUiFormSelects(host, { <id>: fn })`
+     * 的按 id 回调。
+     *
+     * 这里原本是一个**没有任何调用方**的 DOM 读函数（readFilters），于是三个筛选下拉
+     * 从头到尾没生效：改了类别/风险/状态，state.filter 不动、列表也不重渲染。
+     */
+    function applyFilter(field, value) {
+      state.filter[field] = String(value || '');
+      renderBulk();
+      renderList();
     }
 
     async function setStatusBulk(status) {
@@ -1078,12 +1103,6 @@
         state.importPreview = null;
         renderIo();
         return;
-      }
-      if (event.target.id === 'glo-import-mode') {
-        const value = String(event.target._uiSelectApi?.getValue?.() || event.target.value || 'merge');
-        state.importMode = value === 'replace' ? 'replace' : 'merge';
-        state.importPreview = null;
-        renderIo();
       }
     }
 

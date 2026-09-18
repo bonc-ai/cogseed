@@ -7,7 +7,8 @@
  *   3. 源码契约：控件走共享原语、只在 transcript.glossary.* 通道上操作、
  *      人名默认不导出、导入前必须先预览；
  *   4. 交互失效防回归：静默 no-op（不告诉用户原因）、busy 卡死导致全部按钮永久
- *      disabled、选中行与悬停同色导致“看不出来选中了”。
+ *      disabled、选中行与悬停同色导致“看不出来选中了”、自定义 select 不接线导致
+ *      筛选下拉动了列表不动。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -228,6 +229,27 @@ describe('交互失效防回归', () => {
     expect(source).toContain('kb.glossary.import_empty');
     expect(source).toContain('kb.glossary.pack_content_required');
     expect(source).toContain('kb.glossary.pack_review_required');
+  });
+
+  it('筛选下拉必须走 hydrateUiFormSelects 的按 id 回调（自定义 select 不发 DOM 事件，靠事件委派必然失效）', () => {
+    const wired = [...source.matchAll(/'(glo-kind|glo-risk|glo-status|glo-import-mode)':\s*\(/g)].map((m) => m[1]);
+    expect(new Set(wired)).toEqual(new Set(['glo-kind', 'glo-risk', 'glo-status', 'glo-import-mode']));
+  });
+
+  it('筛选状态只有一个写入口 applyFilter，三类筛选各自映射到正确的 state.filter 字段', () => {
+    expect(source).toMatch(/state\.filter\[field\] = String\(value \|\| ''\)/);
+    expect(source).toContain("applyFilter('kind', value)");
+    expect(source).toContain("applyFilter('riskLevel', value)");
+    expect(source).toContain("applyFilter('status', value)");
+    // 不该再有“没人调用的 DOM 读函数”这种残骸
+    expect(source).not.toContain('function readFilters');
+  });
+
+  it('筛选变更后必须刷新列表与批量栏（否则下拉动了、列表不动）', () => {
+    const fn = source.match(/function applyFilter\(field, value\) \{([\s\S]*?)\n    \}/);
+    expect(fn).not.toBeNull();
+    expect(fn![1]).toContain('renderBulk()');
+    expect(fn![1]).toContain('renderList()');
   });
 
   it('选中行必须与悬停可区分（悬停是 --surface-card 白；选中不得再用几乎同色的 --surface-subtle）', () => {
