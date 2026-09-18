@@ -727,6 +727,7 @@
   "chat.retry_btn_title": "重试这次失败的回复",
   "chat.retry_no_source": "找不到可重试的上一条用户消息。",
   "chat.retry_running": "执行中",
+  "chat.retry_task_running": "原任务仍在运行，暂时不能重试。状态已重新同步。",
   "chat.retry_user_message": "（重试）",
   "chat.send_failed": "发送失败: {msg}",
   "chat.send_title": "发送",

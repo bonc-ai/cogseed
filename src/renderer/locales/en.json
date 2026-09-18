@@ -727,6 +727,7 @@
   "chat.retry_btn_title": "Retry this failed reply",
   "chat.retry_no_source": "Couldn't find the previous user message to retry.",
   "chat.retry_running": "Running",
+  "chat.retry_task_running": "The original task is still running, so it cannot be retried yet. Its status has been synchronized.",
   "chat.retry_user_message": "(retry)",
   "chat.send_failed": "Send failed: {msg}",
   "chat.send_title": "Send",
