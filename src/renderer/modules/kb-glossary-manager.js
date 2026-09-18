@@ -34,6 +34,20 @@
     }
   }
 
+  /**
+   * 请知识库视图重载目录树：词表导出走 `library.writeText` 直接落盘，
+   * 而库列表（contexts.js / kb-workbench.js）渲染的是各自进入视图时的树快照，
+   * 不显式通知就会出现"已另存：…"却列表里找不到文件（同一个真机问题）。
+   */
+  function notifyLibraryChanged() {
+    try {
+      if (typeof root.loadContexts === 'function') root.loadContexts();
+      if (typeof root.renderKbWorkbench === 'function') root.renderKbWorkbench();
+    } catch (error) {
+      log?.warn('library refresh after export failed', { error: error?.message || String(error) });
+    }
+  }
+
   // ── 纯函数（可测）────────────────────────────────────────────────────
   const KINDS = ['product', 'people', 'org', 'term', 'venue', 'course', 'filler'];
   const RISKS = ['high', 'medium', 'low'];
@@ -696,12 +710,16 @@
         if (result?.ok === false) {
           const duplicate = result.code === 'duplicate_content';
           setStatus(duplicate
-            ? t('kb.glossary.export_duplicate', '库里已有相同内容的导出文件，无需重复保存。')
+            ? (result.existingPath
+              ? t('kb.glossary.export_duplicate_file', '库里已有相同内容的导出文件：{path}，无需重复保存。', { path: String(result.existingPath) })
+              : t('kb.glossary.export_duplicate', '库里已有相同内容的导出文件，无需重复保存。'))
             : t('kb.glossary.export_save_failed', '保存失败：{error}', { error: String(result.error || '') }),
             duplicate ? '' : 'warning');
+          notifyLibraryChanged();
           return;
         }
         setStatus(t('kb.glossary.export_saved', '已另存：{path}', { path: result?.path || targetPath }), '');
+        notifyLibraryChanged();
       } catch (error) {
         log?.warn('glossary export save failed', { error: error?.message || String(error) });
         setStatus(t('kb.glossary.export_save_failed', '保存失败：{error}', { error: error?.message || '' }), 'warning');

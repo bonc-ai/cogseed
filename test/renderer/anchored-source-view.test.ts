@@ -12,6 +12,8 @@ function fakeClassList() {
   const values = new Set<string>();
   return {
     add: (...names: string[]) => names.forEach((name) => values.add(name)),
+    remove: (...names: string[]) => names.forEach((name) => values.delete(name)),
+    contains: (name: string) => values.has(name),
     toggle: (name: string, force?: boolean) => {
       const enabled = force == null ? !values.has(name) : force;
       if (enabled) values.add(name);
@@ -28,11 +30,16 @@ interface LoadOpts {
   richBridge?: (anchor: any) => any;
   /** 注入 loadRendererFeature（按需加载 KB 功能）。 */
   loadFeature?: (name: string) => Promise<void>;
+  /** 注入统一 markdown 管线（真实环境由 utils.js 提供）；省略 = 管线缺席。 */
+  markdown?: (md: string) => string;
+  /** 注入 MathJax 再排版入口（真实环境由 math.js 提供）。 */
+  typesetMath?: (el: any) => void;
 }
 
 function loadViewer(opts: LoadOpts = {}) {
   let toggleHandler: (() => void) | null = null;
   let closeHandler: (() => void) | null = null;
+  let mdSourceHandler: (() => void) | null = null;
   const buttonLabels: string[] = [];
   const richCalls: any[] = [];
   const loadedFeatures: string[] = [];
@@ -48,11 +55,15 @@ function loadViewer(opts: LoadOpts = {}) {
     }),
     // 真实元素一定有 querySelectorAll（工具栏用它挂多档字号按钮的监听）
     querySelectorAll: vi.fn(() => []),
-    querySelector: vi.fn((selector: string) => selector === '[data-anchor-view-toggle]'
-      ? { addEventListener: (_name: string, handler: () => void) => { toggleHandler = handler; } }
-      : selector === 'mark'
-        ? { scrollIntoView: vi.fn() }
-        : null),
+    querySelector: vi.fn((selector: string) => {
+      if (selector === '[data-anchor-view-toggle]') {
+        return { addEventListener: (_name: string, handler: () => void) => { toggleHandler = handler; } };
+      }
+      if (selector === '[data-anchor-view-md-source]') {
+        return { addEventListener: (_name: string, handler: () => void) => { mdSourceHandler = handler; } };
+      }
+      return selector === 'mark' ? { scrollIntoView: vi.fn() } : null;
+    }),
   });
   const elements: Record<string, any> = {
     '[data-anchor-view-meta]': makeElement(),
@@ -85,9 +96,14 @@ function loadViewer(opts: LoadOpts = {}) {
     totalChars: text.length,
   }));
   const uiModal = vi.fn(() => modal);
-  const uiButton = vi.fn(({ label }: { label: string }) => {
+  // 属性照实落到假 HTML 上：工具栏用 data-* 打钩子（视图切换 / md 源码切换 /
+  // 字号），钩子对不上就等于界面上没有这个按钮——mock 不能替它兜底。
+  const uiButton = vi.fn(({ label, attrs }: { label: string; attrs?: Record<string, string> }) => {
     buttonLabels.push(label);
-    return `<span data-anchor-view-toggle>${label}</span>`;
+    const attrHtml = Object.entries(attrs || {})
+      .map(([name, value]) => ` ${name}="${value}"`)
+      .join('');
+    return `<span${attrHtml}>${label}</span>`;
   });
   const windowMock: any = {
     addEventListener: vi.fn(),
@@ -125,6 +141,10 @@ function loadViewer(opts: LoadOpts = {}) {
     requestAnimationFrame: (callback: () => void) => callback(),
     createLogger: () => ({ warn: vi.fn() }),
   };
+  // 统一 markdown 管线 / MathJax 再排版：真实环境是 utils.js、math.js 提供的
+  // 全局函数（classic script 的顶层 const，不在 window 上，只能按裸标识符注入）。
+  if (opts.markdown) context.renderMarkdown = opts.markdown;
+  if (opts.typesetMath) context.typesetMath = opts.typesetMath;
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'anchored-source-view.js' });
   return {
@@ -135,9 +155,11 @@ function loadViewer(opts: LoadOpts = {}) {
     invoke,
     richCalls,
     loadedFeatures,
+    elements,
     resetLabels: () => { buttonLabels.length = 0; },
     labels: () => buttonLabels.slice(),
     getToggleHandler: () => toggleHandler,
+    getMdSourceHandler: () => mdSourceHandler,
     getCloseHandler: () => closeHandler,
   };
 }
@@ -323,5 +345,245 @@ describe('排版类文件不进纯文本阅读器（word/pdf「无法正常查�
 
     expect(viewer.richCalls).toHaveLength(0);
     expect(viewer.uiModal).toHaveBeenCalled();
+  });
+});
+
+/**
+ * 真机反馈：「知识库里打开 .md 还是给机器读的格式」。根因是阅读器把正文
+ * 原文直接塞进 `<pre>`（`# 标题` / `**加粗**` / `| 表 |` 原样可见）。现在
+ * md 文档在「阅读全文」视图走统一 markdown 管线排版，引用定位改为在渲染
+ * 结果里找摘录文本；`.txt` 等仍保持原文（它们本来就是给人读的纯文本）。
+ */
+describe('markdown 文档排版化（md 不再直出原文）', () => {
+  // view = null → 不带 view（等价于默认的"引用片段"视图）
+  const openDoc = (viewer: any, path: string, view: string | null = 'document') => (
+    viewer.windowMock.__openAnchorViewer({
+      source: 'library', scope: 'global', path, chunkIdx: 1, ...(view ? { view } : {}),
+    })
+  );
+
+  it('阅读全文 + .md → 正文是渲染后的 HTML，且上了排版类名与形态标记', async () => {
+    const markdown = vi.fn((md: string) => `<h1>${md.replace(/^#\s*/, '')}</h1>`);
+    const typesetMath = vi.fn();
+    const viewer = loadViewer({ markdown, typesetMath, text: '# 知识库落地计划\n\n- 词表\n- 检索改写' });
+
+    await openDoc(viewer, 'notes/plan.md');
+
+    const pre = viewer.elements['[data-anchor-view-text]'];
+    expect(markdown).toHaveBeenCalledWith('# 知识库落地计划\n\n- 词表\n- 检索改写');
+    expect(pre.innerHTML).toContain('<h1>知识库落地计划');
+    expect(pre.innerHTML).not.toContain('# 知识库落地计划');
+    expect(pre.dataset.md).toBe('rendered');
+    expect(pre.classList.contains('markdown-body')).toBe(true);
+    // $…$ 之类的数学要靠 MathJax 在渲染后补排
+    expect(typesetMath).toHaveBeenCalledWith(pre);
+  });
+
+  it('.markdown 扩展名同样排版（大小写不敏感）', async () => {
+    const markdown = vi.fn((md: string) => `<p>${md}</p>`);
+    const viewer = loadViewer({ markdown, text: '正文' });
+
+    await openDoc(viewer, 'notes/README.MARKDOWN');
+
+    expect(markdown).toHaveBeenCalled();
+    expect(viewer.elements['[data-anchor-view-text]'].dataset.md).toBe('rendered');
+  });
+
+  it('markdown 管线缺席时回落原文（有字可看，不打不开）', async () => {
+    const viewer = loadViewer({ text: '# 标题' });
+
+    await openDoc(viewer, 'notes/plan.md');
+
+    const pre = viewer.elements['[data-anchor-view-text]'];
+    expect(pre.dataset.md).toBeUndefined();
+    expect(pre.innerHTML).toBe('');
+  });
+
+  it('纯文本（.txt）不排版：原文就是给人读的', async () => {
+    const markdown = vi.fn((md: string) => `<p>${md}</p>`);
+    const viewer = loadViewer({ markdown, text: '张三 2026-09-05 19:31:32' });
+
+    await openDoc(viewer, 'notes/meeting.txt');
+
+    expect(markdown).not.toHaveBeenCalled();
+    expect(viewer.elements['[data-anchor-view-text]'].dataset.md).toBeUndefined();
+  });
+
+  it('逐字稿 .md 不排版：对话块（说话人/时间/分段底色）才是它的排版', async () => {
+    const markdown = vi.fn((md: string) => `<p>${md}</p>`);
+    const viewer = loadViewer({ markdown, text: TRANSCRIPT_TEXT });
+
+    await openDoc(viewer, '1/会议录音.md');
+
+    const pre = viewer.elements['[data-anchor-view-text]'];
+    expect(markdown).not.toHaveBeenCalled();
+    expect(pre.dataset.md).toBeUndefined();
+    expect(pre.dataset.blocks).toBe('1');
+  });
+
+  it('引用片段视图不排版：字符偏移精确高亮才是这个视图的主职', async () => {
+    const markdown = vi.fn((md: string) => `<p>${md}</p>`);
+    const viewer = loadViewer({ markdown, text: '# 标题' });
+
+    await openDoc(viewer, 'notes/plan.md', null);
+
+    expect(markdown).not.toHaveBeenCalled();
+    expect(viewer.elements['[data-anchor-view-text]'].dataset.md).toBeUndefined();
+  });
+
+  it('渲染后再切到纯文本文档时，排版类名与形态标记被清掉', async () => {
+    const markdown = vi.fn((md: string) => `<h1>${md}</h1>`);
+    const viewer = loadViewer({ markdown, text: '# 标题' });
+
+    await openDoc(viewer, 'notes/plan.md');
+    await openDoc(viewer, 'notes/meeting.txt');
+
+    const pre = viewer.elements['[data-anchor-view-text]'];
+    expect(pre.dataset.md).toBeUndefined();
+    expect(pre.classList.contains('markdown-body')).toBe(false);
+  });
+});
+
+/**
+ * md 阅读器两种形态都要（不二选一）：默认排版给人读，想看 `#`/`**` 原文、
+ * 或需要按字符偏移核对引用时一键切到源码。入口只在"真会排版"的时候出现
+ * （判据与 renderText 共用 canRenderMarkdown），否则点了像没反应。
+ */
+describe('md 阅读器的「查看源码 / 看排版」切换', () => {
+  const openDoc = (viewer: any, path: string, view: string | null = 'document') => (
+    viewer.windowMock.__openAnchorViewer({
+      source: 'library', scope: 'global', path, chunkIdx: 1, ...(view ? { view } : {}),
+    })
+  );
+  /**
+   * 工具栏上 md 源码切换按钮的 i18n key（最后一次渲染的那个）；
+   * 界面上没有这个按钮 → null。按 key 断言，不受文案/语言影响。
+   */
+  const mdToggleKey = (viewer: any) => {
+    const calls = viewer.windowMock.uiButton.mock.calls as any[][];
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const opts = calls[i][0] || {};
+      if (opts.attrs && opts.attrs['data-anchor-view-md-source']) return opts.attrs['data-i18n'];
+    }
+    return null;
+  };
+
+  it('md + 阅读全文：给「查看源码」入口，正文默认已排版', async () => {
+    const markdown = vi.fn((md: string) => `<h1>${md.replace(/^#\s*/, '')}</h1>`);
+    const viewer = loadViewer({ markdown, text: '# 知识库落地计划' });
+
+    await openDoc(viewer, 'notes/plan.md');
+
+    expect(mdToggleKey(viewer)).toBe('kb.viewer.md_source');
+    expect(viewer.elements['[data-anchor-view-text]'].dataset.md).toBe('rendered');
+  });
+
+  it('点「查看源码」→ 正文回原文、按钮翻成「看排版」；再点回排版', async () => {
+    const markdown = vi.fn((md: string) => `<h1>${md}</h1>`);
+    const viewer = loadViewer({ markdown, text: '# 知识库落地计划' });
+    const pre = viewer.elements['[data-anchor-view-text]'];
+
+    await openDoc(viewer, 'notes/plan.md');
+    viewer.getMdSourceHandler()?.();
+
+    // 源码形态：不再走管线（正文已在手上，直接按原文渲染），排版类名撤下、
+    // 形态标记切成 source（等宽 + 保留空白，缩进与表格竖线才对得齐）
+    expect(markdown).toHaveBeenCalledTimes(1);
+    expect(pre.dataset.md).toBe('source');
+    expect(pre.classList.contains('markdown-body')).toBe(false);
+    expect(mdToggleKey(viewer)).toBe('kb.viewer.md_rendered');
+
+    viewer.getMdSourceHandler()?.();
+
+    expect(markdown).toHaveBeenCalledTimes(2);
+    expect(pre.dataset.md).toBe('rendered');
+    expect(mdToggleKey(viewer)).toBe('kb.viewer.md_source');
+  });
+
+  it('纯文本、片段视图、逐字稿 md 都不给这个入口（与排版判据同一条）', async () => {
+    const plain = loadViewer({ markdown: (md) => `<p>${md}</p>`, text: '会议记录正文' });
+    await openDoc(plain, 'notes/meeting.txt');
+    expect(mdToggleKey(plain)).toBeNull();
+
+    const fragment = loadViewer({ markdown: (md) => `<p>${md}</p>`, text: '# 标题' });
+    await openDoc(fragment, 'notes/plan.md', null);
+    expect(mdToggleKey(fragment)).toBeNull();
+
+    const transcript = loadViewer({ markdown: (md) => `<p>${md}</p>`, text: TRANSCRIPT_TEXT });
+    await openDoc(transcript, '1/会议录音.md');
+    expect(mdToggleKey(transcript)).toBeNull();
+  });
+
+  it('markdown 管线缺席时不给入口（点开也变不出排版）', async () => {
+    const viewer = loadViewer({ text: '# 标题' });
+
+    await openDoc(viewer, 'notes/plan.md');
+
+    expect(mdToggleKey(viewer)).toBeNull();
+  });
+
+  it('换一份文档后回到排版默认（源码模式不粘到下一份）', async () => {
+    const markdown = vi.fn((md: string) => `<h1>${md}</h1>`);
+    const viewer = loadViewer({ markdown, text: '# 标题' });
+
+    await openDoc(viewer, 'notes/plan.md');
+    viewer.getMdSourceHandler()?.();
+    expect(viewer.elements['[data-anchor-view-text]'].dataset.md).toBe('source');
+
+    await openDoc(viewer, 'notes/other.md');
+
+    expect(viewer.elements['[data-anchor-view-text]'].dataset.md).toBe('rendered');
+    expect(mdToggleKey(viewer)).toBe('kb.viewer.md_source');
+  });
+});
+
+describe('排版后引用定位的清洗口径（纯函数）', () => {
+  const utils = (viewer: any) => viewer.windowMock.__kbMdUtils;
+
+  it('识别 markdown 扩展名（.md/.markdown，忽略大小写与目录）', () => {
+    const u = utils(loadViewer());
+
+    expect(u.isMarkdownPath('1/方案.md')).toBe(true);
+    expect(u.isMarkdownPath('归档/A/B.MARKDOWN')).toBe(true);
+    expect(u.isMarkdownPath('1/方案.txt')).toBe(false);
+    expect(u.isMarkdownPath('1/表格.csv')).toBe(false);
+    expect(u.isMarkdownPath('')).toBe(false);
+  });
+
+  it('cleanQuote 去掉行首 md 记号与行内强调符（与渲染后正文形态一致）', () => {
+    const u = utils(loadViewer());
+
+    expect(u.cleanQuote('## 标题\n- **要点**：`code`')).toBe('标题 要点：code');
+    expect(u.cleanQuote('> 引用   行\n| 表 | 头 |')).toBe('引用 行 | 表 | 头 |');
+  });
+
+  it('tokens 去重、滤掉短词（块级兜底按重合词挑块）', () => {
+    const u = utils(loadViewer());
+
+    expect(u.tokens('知识库 检索改写 知识库 ab abc')).toEqual(['知识库', '检索改写', 'abc']);
+  });
+
+  it('单节点匹配不到时退到块级标记，仍然给出可见落点', () => {
+    const u = utils(loadViewer());
+    const added: string[] = [];
+    const block = {
+      textContent: '检索改写与词表：先做词表，再做检索改写。',
+      classList: { add: (name: string) => added.push(name) },
+      scrollIntoView: vi.fn(),
+    };
+    const host = { querySelectorAll: () => [block], childNodes: undefined };
+
+    expect(u.highlight(host, '- **检索改写**：先做词表')).toBe(true);
+    expect(added).toEqual(['anchored-source-mark-block']);
+    expect(block.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('整篇都对不上时返回 false（调用方据此记 warn，不静默）', () => {
+    const u = utils(loadViewer());
+    const host = {
+      querySelectorAll: () => [{ textContent: '完全无关的段落', classList: { add: () => {} } }],
+    };
+
+    expect(u.highlight(host, '这里有一段摘录')).toBe(false);
   });
 });
