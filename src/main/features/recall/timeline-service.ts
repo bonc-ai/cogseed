@@ -280,7 +280,14 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
 
   const relevantTransfers = transferProofs.filter((proof: TransferProofRecord) => proof.assetVersions.some((entry) => entry.assetId === asset.id));
   for (const proof of relevantTransfers) {
-    const projection = await readContextProjection(userId, proof.projectionId);
+    // 兜底（2026-09-18 P0）：证明指向的投影记录可能已不存在（数据手术/清理遗留）。
+    // 一条坏记录不该把整个时间线拖垮——降级为不带投影上下文的事件，而不是抛错。
+    let projection: Awaited<ReturnType<typeof readContextProjection>> | undefined;
+    try {
+      projection = await readContextProjection(userId, proof.projectionId);
+    } catch {
+      projection = undefined;
+    }
     pushSorted(items, {
       id: `${proof.id}-prepared`,
       kind: 'transfer_prepared',
@@ -290,7 +297,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       refs: {
         assetId: asset.id,
         projectionId: proof.projectionId,
-        taskRunId: projection.taskRunId,
+        ...(projection?.taskRunId ? { taskRunId: projection.taskRunId } : {}),
         transferProofId: proof.id,
       },
     });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * 摘要拉取的请求语义（2026-09-18）：
@@ -93,5 +93,42 @@ describe('KSTAR 摘要拉取（2026-09-18）', () => {
     };
     await NS.loadKstarEpisodeSummariesByIds(['kse-retry-later']);
     expect(askedIds()).toHaveLength(1);
+  });
+
+  it('模型挂着标记的加载不得自我触发重画（2026-09-18 P0 回归）', async () => {
+    let projectionsCalls = 0;
+    globalScope.window = {
+      CogAssets: NS as unknown as Record<string, unknown>,
+      cogseed: {
+        invoke: async (channel: string) => {
+          if (channel === 'recall.projections.list') {
+            projectionsCalls += 1;
+            return { ok: true, projections: [{ authorization: 'model_selected', assetIds: ['aa-x', 'aa-y'] }] };
+          }
+          return { ok: true };
+        },
+      },
+    };
+    const before = (NS.store as Record<string, unknown>).modelSelectedAssetIds;
+    await (NS as unknown as { loadModelSelectedAssets: () => Promise<void> }).loadModelSelectedAssets();
+    expect((NS.store as Record<string, unknown>).modelSelectedAssetIds).toEqual(['aa-x', 'aa-y']);
+    // 第二次（同样的数据）：不得再写状态、也不得再触发重画——否则 onChange 会
+    // 再调它，形成"加载→重画→再加载"死循环（真机把整页拖死的那一个）。
+    const notifySpy = vi.fn();
+    (NS as unknown as { notify: () => void }).notify = notifySpy;
+    await (NS as unknown as { loadModelSelectedAssets: () => Promise<void> }).loadModelSelectedAssets();
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect(projectionsCalls).toBe(2);
+    // 数据真的变了才允许再画。
+    globalScope.window = {
+      CogAssets: NS as unknown as Record<string, unknown>,
+      cogseed: {
+        invoke: async () => ({ ok: true, projections: [{ authorization: 'model_selected', assetIds: ['aa-x', 'aa-z'] }] }),
+      },
+    };
+    await (NS as unknown as { loadModelSelectedAssets: () => Promise<void> }).loadModelSelectedAssets();
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect((NS.store as Record<string, unknown>).modelSelectedAssetIds).toEqual(['aa-x', 'aa-z']);
+    void before;
   });
 });

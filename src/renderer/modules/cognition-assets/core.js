@@ -328,7 +328,14 @@
         if (String(projection.authorization || '') !== 'model_selected') continue;
         for (const assetId of projection.assetIds || []) ids.push(String(assetId));
       }
-      store.modelSelectedAssetIds = [...new Set(ids)];
+      const next = [...new Set(ids)];
+      // 防重入（2026-09-18 P0 修复）：onChange 每次 notify 都会调本函数——若
+      // 无条件再 notify 就成了"加载→重画→再加载"死循环，整页被拖死。集合没变
+      // 就直接返回（对照 loadKstarEpisodes 的守卫）。
+      const prev = Array.isArray(store.modelSelectedAssetIds) ? store.modelSelectedAssetIds : [];
+      const changed = prev.length !== next.length || next.some((id) => !prev.includes(id));
+      if (!changed) return;
+      store.modelSelectedAssetIds = next;
       NS.notify();
     } catch (error) {
       // 标记拿不到不影响目录本身。
