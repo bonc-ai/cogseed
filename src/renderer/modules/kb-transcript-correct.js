@@ -1167,6 +1167,7 @@
         ambiguous_name: t('kb.transcriptCorrect.issue_reason_ambiguous_name', '名称存疑'),
         mixed_speech: t('kb.transcriptCorrect.issue_reason_mixed_speech', '中英混杂'),
         asr_unrecoverable: t('kb.transcriptCorrect.issue_reason_asr_unrecoverable', '转写不可辨'),
+        model_candidate: t('kb.transcriptCorrect.issue_reason_model_candidate', '模型候选'),
       };
       return map[reason] || map.unknown_entity;
     }
@@ -1213,7 +1214,7 @@
       buttons.push(button({
         label: state.llmBusy
           ? t('kb.transcriptCorrect.llm_running', '正在问模型…')
-          : t('kb.transcriptCorrect.llm_ask', '让模型给候选（受约束）'),
+          : t('kb.transcriptCorrect.llm_ask', '让模型给候选'),
         icon: 'brain-circuit',
         role: 'ghost',
         size: 'sm',
@@ -1245,7 +1246,7 @@
         body.appendChild(note);
       }
 
-      for (const candidate of state.llmCandidates.slice(0, 20)) {
+      for (const [index, candidate] of state.llmCandidates.slice(0, 20).entries()) {
         const row = document.createElement('div');
         row.className = 'kb-atc__sync-row';
         const main = document.createElement('div');
@@ -1265,20 +1266,32 @@
           why.textContent = candidate.reason;
           main.appendChild(why);
         }
+        // 模型自己想出来的写法（不在已知写法名单里）要说清楚：复核时要一眼看出
+        // "这是词表里已有的写法"还是"模型猜的写法"。
+        if (candidate.inAllowlist === false) {
+          const own = document.createElement('div');
+          own.className = 'kb-atc__sync-note';
+          own.dataset.tone = 'warning';
+          own.textContent = t('kb.transcriptCorrect.llm_outside_allowlist', '该写法不在词表里，属模型自己的判断，务必人工确认。');
+          main.appendChild(own);
+        }
         const acts = document.createElement('div');
         acts.className = 'kb-atc__sync-row-actions';
         acts.innerHTML = button({
-          label: t('kb.transcriptCorrect.llm_adopt', '采纳为词条'),
+          label: t('kb.transcriptCorrect.llm_flag', '标待核'),
           role: 'ghost',
           size: 'sm',
           disabled: state.busy || state.llmBusy,
-          attrs: {
-            'data-atc-llm-adopt': candidate.wrong,
-            'data-atc-llm-correct': candidate.correct,
-          },
+          attrs: { 'data-atc-llm-flag': String(index) },
         });
         row.append(main, acts);
         body.appendChild(row);
+      }
+      if (state.llmCandidates.length) {
+        const scope = document.createElement('div');
+        scope.className = 'kb-atc__sync-note';
+        scope.textContent = t('kb.transcriptCorrect.llm_scope_note', '候选只能标待核：本步不会写入词表，也不参与扫描替换；确认进词表需在词表管理的待核候选里人工复核。');
+        body.appendChild(scope);
       }
       if (state.llmNote) {
         const note = document.createElement('div');
@@ -2210,9 +2223,9 @@
     }
 
     /**
-     * 受约束 LLM 候选（方案 §五 P2-1）：只对"疑似专名"问一次模型，
-     * 目标必须落在词表白名单里；低置信只提示不采纳。
-     * 采纳 = 用户显式点「采纳为词条」，之后重新扫描，替换仍受护栏管。
+     * 模型候选（方案 §五 P2-1）：只对"疑似专名"问一次模型。
+     * 「已知写法」名单只是优先参考，模型可以给出名单外的写法；
+     * 无论哪种，产出都只能「标待核」——不写词表、不参与扫描替换。
      */
     async function runLlmCandidates() {
       if (state.llmBusy || !state.scanned) return;
@@ -2226,22 +2239,24 @@
         });
         state.llmCandidates = Array.isArray(result?.candidates) ? result.candidates : [];
         const rejected = Array.isArray(result?.rejected) ? result.rejected.length : 0;
+        const outside = Number(result?.outsideAllowlist || 0);
         const skipped = String(result?.skipped || '');
         state.llmNote = state.llmCandidates.length
-          ? t('kb.transcriptCorrect.llm_found', '模型给出 {count} 条候选（白名单 {allowed} 个目标{rejected}）', {
+          ? t('kb.transcriptCorrect.llm_found', '模型给出 {count} 条候选（已知写法 {known} 个可参考{outside}{rejected}）', {
             count: state.llmCandidates.length,
-            allowed: Number(result?.allowedCount || 0),
+            known: Number(result?.knownCount || 0),
+            outside: outside
+              ? t('kb.transcriptCorrect.llm_outside_count', '，其中 {count} 条是词表外的写法', { count: outside })
+              : '',
             rejected: rejected
-              ? t('kb.transcriptCorrect.llm_rejected', '，挡掉白名单外的 {count} 条', { count: rejected })
+              ? t('kb.transcriptCorrect.llm_rejected', '，另有 {count} 条定位不到、已丢弃', { count: rejected })
               : '',
           })
           : (skipped === 'no_model'
             ? t('kb.transcriptCorrect.llm_no_model', '还没有配置模型，无法生成候选。')
-            : skipped === 'no_allowed'
-              ? t('kb.transcriptCorrect.llm_no_allowed', '词表与记忆分组里没有可用目标，先补几条正确写法再试。')
-              : skipped === 'no_suspects'
-                ? t('kb.transcriptCorrect.llm_no_suspects', '没有发现疑似专名，不需要问模型。')
-                : t('kb.transcriptCorrect.llm_none', '模型没有给出可信候选（宁可空着，也不硬猜）。'));
+            : skipped === 'no_suspects'
+              ? t('kb.transcriptCorrect.llm_no_suspects', '没有发现疑似专名，不需要问模型。')
+              : t('kb.transcriptCorrect.llm_none', '模型没有给出可信候选（宁可空着，也不硬猜）。'));
       } catch (error) {
         log?.warn('llm candidates failed', { error: error?.message || String(error) });
         state.llmNote = t('kb.transcriptCorrect.llm_failed', '生成候选失败，请稍后重试。');
@@ -2251,19 +2266,53 @@
       }
     }
 
-    /** 采纳一条模型候选：写成词条（错形来自转写，正确写法来自白名单）。 */
-    async function adoptLlmCandidate(wrong, correct) {
-      if (state.busy) return;
+    /**
+     * 把一条模型候选**标成待核**（方案 §五 P2-1 修订）。
+     *
+     * 这里刻意**不写词表**：模型候选只能进候选区（`pending`）+ 在正文里挂一个
+     * 「转写存疑」标记。原因：候选一旦直接入词表就会参与扫描替换，等于让模型的
+     * 判断变成生效规则。要变成规则，只能在词表管理里人工复核后确认。
+     */
+    async function flagLlmCandidate(index) {
+      const candidate = state.llmCandidates[Number(index)];
+      if (state.busy || !candidate) return;
+      const wrong = String(candidate.wrong || '');
+      const start = Number(candidate.start);
+      const span = Number.isFinite(start)
+        ? { start: Math.max(0, start), end: Math.max(0, start) + wrong.length }
+        : null;
+      if (!span) {
+        setStatus(t('kb.transcriptCorrect.llm_flag_no_span', '这条候选没有可定位的位置，无法标待核。'), 'warning');
+        return;
+      }
       try {
-        await root.cogseed.invoke('transcript.glossary.upsert', {
-          wrong, correct, kind: 'people', source: 'manual',
+        // 上下文由面板就地截取（与主进程发给模型的口径一致）：候选本身不带 context，
+        // 但它决定了复核时"凭什么这么改"能不能看懂，落盘时要留下。
+        const context = String(ctx.text || '')
+          .slice(Math.max(0, span.start - 30), Math.min(String(ctx.text || '').length, span.end + 30))
+          .replace(/\n/g, ' ');
+        await root.cogseed.invoke('transcript.correct.flagCandidates', {
+          docId: ctx.docId,
+          candidates: [{
+            wrong,
+            correct: candidate.correct,
+            confidence: candidate.confidence,
+            reason: candidate.reason,
+            context,
+            start: span.start,
+            inAllowlist: candidate.inAllowlist !== false,
+          }],
         });
-        state.llmCandidates = state.llmCandidates.filter((item) => item.wrong !== wrong);
-        setStatus(t('kb.transcriptCorrect.llm_adopted', '已采纳为词条：{wrong} → {correct}', { wrong, correct }), '');
-        await runScan();
+        state.flagged = mergeFlagged(state.flagged, [{
+          span,
+          text: wrong,
+          reason: 'model_candidate',
+        }]);
+        state.llmCandidates = state.llmCandidates.filter((item) => item !== candidate);
+        setStatus(t('kb.transcriptCorrect.llm_flagged', '已标待核：{wrong}（候选不会写入词表，需在词表管理里人工复核）', { wrong }), '');
       } catch (error) {
-        log?.warn('adopt llm candidate failed', { error: error?.message || String(error) });
-        setStatus(t('kb.transcriptCorrect.llm_adopt_failed', '采纳失败，请稍后重试。'), 'warning');
+        log?.warn('flag llm candidate failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.llm_flag_failed', '标待核失败，请稍后重试。'), 'warning');
       } finally {
         render();
       }
@@ -2561,9 +2610,9 @@
           : t('kb.transcriptCorrect.headings_adopt', '采用');
         return;
       }
-      const llmAdopt = event.target.closest('[data-atc-llm-adopt]');
-      if (llmAdopt) {
-        void adoptLlmCandidate(llmAdopt.getAttribute('data-atc-llm-adopt'), llmAdopt.getAttribute('data-atc-llm-correct'));
+      const llmFlag = event.target.closest('[data-atc-llm-flag]');
+      if (llmFlag) {
+        void flagLlmCandidate(llmFlag.getAttribute('data-atc-llm-flag'));
         return;
       }
       const flagSuspectBtn = event.target.closest('[data-atc-flag-suspect]');

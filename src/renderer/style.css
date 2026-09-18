@@ -32661,6 +32661,49 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-glo__preview[data-tone="warning"] {
   color: var(--color-warning-text);
 }
+/* 待核候选区：与词条列表同一套排版，但用一条淡分隔 + 提示语把它明确分成
+   "还没生效的建议"。颜色只留在提示语上，不给整块铺底色。 */
+.kb-glo__candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-glo__candidates-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.kb-glo__candidate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-top: 1px dashed var(--line-subtle);
+}
+.kb-glo__candidate-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kb-glo__candidate-label {
+  font-size: var(--font-size-2);
+}
+.kb-glo__candidate-meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  word-break: break-word;
+}
+.kb-glo__candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
 @media (max-width: 720px) {
   .kb-glo__filters {
     grid-template-columns: 1fr;
