@@ -234,6 +234,39 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).not.toContain('原文查看器：S2 上线（anchor-resolver 已就绪）');
   });
 
+  /**
+   * 真机反馈：「很多文件打开都有返回引用，并且前几行都有橙色高亮」——
+   * 文件列表/摘要/来源跳转这些**打开整篇**的入口塞了占位 chunk 号，主进程把它
+   * 当引用片段定位后，正文前几行被高亮、按钮变成"返回引用位置"。
+   * 契约：只有真引用（搜索命中/问答引用给的 chunkIdx 或 quote）才带定位信息。
+   *
+   * ⚠️ 这组断言曾被人从工作区覆盖掉一次（并行会话写了旧副本），于是占位值复活、
+   * 症状复发——它守的正是"别再退化"，删掉等于把 bug 放回来。
+   */
+  it('打开整篇的入口不带 chunkIdx（不冒充引用跳转）', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const block = (name: string) => source.match(new RegExp(`function ${name}\\([^)]*\\)[\\s\\S]*?\\n  \\}`))?.[0] || '';
+    // 注释里会解释历史包袱（提到 chunkIdx），断言只看代码本身
+    const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    // 文件列表点击、脑图/测验的来源跳转：整篇打开
+    expect(block('_openFile')).toContain("view: 'document'");
+    expect(code(block('_openFile'))).not.toContain('chunkIdx');
+    expect(code(block('_mmOpenSource'))).not.toContain('chunkIdx');
+
+    // 摘要卡片里的文件锚点：摘要只给了文件名，给不出片段
+    const summaryAnchorLine = source.split('\n').find((line) => line.includes('el.dataset.kbAnchor')) || '';
+    expect(summaryAnchorLine).toContain('_openAnchor');
+    expect(summaryAnchorLine).not.toContain('chunkIdx');
+
+    // 真引用那一路必须仍然带过去定位（条件式，不是缺省 0）
+    expect(source).toContain('...(typeof anchor.chunkIdx === \'number\' ? { chunkIdx: anchor.chunkIdx } : {})');
+    expect(source).toContain('...(typeof ref.chunkIdx === \'number\' ? { chunkIdx: ref.chunkIdx } : {})');
+  });
+
   it('reconnects the KB event stream after a previous page stream has ended', async () => {
     const { windowMock } = loadScript();
     windowMock.renderKbWorkbench();

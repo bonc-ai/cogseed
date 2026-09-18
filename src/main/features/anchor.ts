@@ -36,8 +36,16 @@ export async function anchorResolveIpc(userId: string, payload: unknown): Promis
     return { resolved: false, reason: 'bad_input' };
   }
 
+  // chunkIdx 只在调用方**真的给了数字**时才算"引用定位"。此前缺省补 0，
+  // 于是"打开整篇"的调用（文件列表/发现页/来源跳转）都会被定位到第 0 个 chunk
+  // ——正文前几行平白多出一道高亮，还多出"返回引用位置"按钮（真机反馈）。
   const chunkNum = Number(raw.chunkIdx);
-  if (view === 'anchor' && (!Number.isFinite(chunkNum) || chunkNum < 0)) {
+  const hasChunk = Number.isFinite(chunkNum) && chunkNum >= 0;
+  const quote = typeof raw.quote === 'string' && raw.quote.trim()
+    ? boundedString(raw.quote, 'quote', 2000)
+    : undefined;
+  // 片段视图必须有定位依据（chunk 或 quote）；整篇视图可以什么都不给 = 打开整篇
+  if (view === 'anchor' && !hasChunk && !quote) {
     return { resolved: false, reason: 'bad_input' };
   }
 
@@ -47,9 +55,9 @@ export async function anchorResolveIpc(userId: string, payload: unknown): Promis
       source,
       scope,
       path: pathValue,
-      chunkIdx: Number.isFinite(chunkNum) && chunkNum >= 0 ? Math.floor(chunkNum) : 0,
+      ...(hasChunk ? { chunkIdx: Math.floor(chunkNum) } : {}),
       view,
-      ...(typeof raw.quote === 'string' && raw.quote.trim() ? { quote: boundedString(raw.quote, 'quote', 2000)! } : {}),
+      ...(quote ? { quote } : {}),
       ...(typeof raw.cid === 'string' && raw.cid.trim() ? { cid: boundedString(raw.cid, 'cid', 200)! } : {}),
       ...(typeof raw.spaceId === 'string' && raw.spaceId.trim() ? { spaceId: boundedString(raw.spaceId, 'spaceId', 200)! } : {}),
     });
