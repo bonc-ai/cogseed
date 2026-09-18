@@ -184,7 +184,10 @@ import {
   parseStreamEnvelope,
   parseStreamRequestId,
 } from './security';
-import { officeEmptyBodyHtml, officeFragmentHasText } from '../util/office-preview';
+import {
+  officeEmptyBodyHtml, officeFragmentHasText,
+  officePreviewKindForExt, wrapOfficePreviewHtml,
+} from '../util/office-preview';
 
 const log = createLogger('ipc');
 
@@ -490,13 +493,6 @@ async function resolveKbFileAbsPath(
   return { abs: contexts.resolveContextFileAbsPath(relPath), spaceRoot: null };
 }
 
-function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
-  if (ext === '.docx' || ext === '.docm') return 'word';
-  if (ext === '.xlsx' || ext === '.xlsm') return 'spreadsheet';
-  if (ext === '.pptx' || ext === '.pptm') return 'presentation';
-  return null;
-}
-
 // 卡片视图会为可视卡片批量请求 Office 预览：按 path+size+mtime 做进程内
 // LRU 缓存（上限 24 条），同一文件重复预览/卡片来回滚动不重复解析。
 const _officePreviewCache = new Map<string, { at: number; html: string; kind: string }>();
@@ -520,193 +516,6 @@ function _officePreviewCachePut(key: string, html: string, kind: string): void {
   if (oldestKey) _officePreviewCache.delete(oldestKey);
 }
 
-function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string, opts?: { compact?: boolean }): string {
-  const safeTitle = _escapePreviewHtml(title || 'Office preview');
-  // 卡片缩略模式：整页紧贴顶部、小字号、去留白——小卡里「全而不大」。
-  const compactCss = opts?.compact ? `
-  <style>
-    body { background: #fff; font-size: 11px; }
-    .office-preview { padding: 0; min-height: 0; }
-    .office-word { max-width: none; min-height: 0; margin: 0; padding: 12px 14px; border: 0; box-shadow: none; }
-    .office-word h1 { margin: 0 0 8px; font-size: 16px; }
-    .office-word h2 { margin: 12px 0 6px; font-size: 13px; }
-    .office-word h3 { margin: 10px 0 5px; font-size: 12px; }
-    .office-word p, .office-word li { margin: 0 0 6px; font-size: 11px; line-height: 1.5; }
-    .office-word ul, .office-word ol { margin: 0 0 8px 18px; }
-    .office-word table, .office-table-wrap table { margin: 8px 0; font-size: 10px; }
-    .office-word th, .office-word td, .office-table-wrap th, .office-table-wrap td { padding: 3px 5px; }
-    .office-spreadsheet { padding: 6px; }
-    .office-sheet { margin: 0 0 10px; padding: 8px; }
-    .office-sheet h2 { margin: 0 0 8px; font-size: 12px; }
-    .office-table-wrap { max-height: none; }
-    .office-table-wrap td { min-width: 60px; }
-    .office-presentation { padding: 6px; gap: 8px; }
-    .office-slide { width: 100%; padding: 12px 14px; border-radius: 4px; }
-    .office-slide-body p { margin: 0 0 6px; font-size: 12px; }
-    .office-slide-body p:first-child { font-size: 14px; }
-  </style>` : '';
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${safeTitle}</title>
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: #eef2f7;
-      color: #0f172a;
-      font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    .office-preview {
-      width: 100%;
-      min-height: 100vh;
-      margin: 0 auto;
-      padding: 24px;
-    }
-    .office-word {
-      max-width: 820px;
-      background: #fff;
-      min-height: calc(100vh - 48px);
-      margin: 20px auto 32px;
-      padding: 56px 64px;
-      border: 1px solid #e5e7eb;
-      box-shadow: 0 1px 8px rgba(15, 23, 42, 0.06);
-    }
-    .office-spreadsheet {
-      max-width: none;
-      padding: 18px;
-    }
-    .office-word h1, .office-word h2, .office-word h3 {
-      line-height: 1.3;
-      color: #111827;
-    }
-    .office-word h1 {
-      margin: 0 0 22px;
-      font-size: 28px;
-      font-weight: 700;
-    }
-    .office-word h2 {
-      margin: 26px 0 12px;
-      font-size: 21px;
-      font-weight: 650;
-    }
-    .office-word h3 {
-      margin: 22px 0 10px;
-      font-size: 17px;
-      font-weight: 650;
-    }
-    .office-word p,
-    .office-word li {
-      margin: 0 0 13px;
-      font-size: 15px;
-      line-height: 1.72;
-      color: #111827;
-    }
-    .office-word ul,
-    .office-word ol {
-      margin: 0 0 16px 24px;
-      padding: 0;
-    }
-    .office-word table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 16px 0;
-    }
-    .office-word th, .office-word td,
-    .office-table-wrap th, .office-table-wrap td {
-      border: 1px solid #cbd5e1;
-      padding: 7px 9px;
-      vertical-align: top;
-    }
-    .office-sheet {
-      margin: 0 0 22px;
-      padding: 18px;
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
-    }
-    .office-sheet h2 {
-      margin: 0 0 12px;
-      font-size: 15px;
-    }
-    .office-table-wrap {
-      overflow: auto;
-      max-height: 70vh;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-    }
-    .office-table-wrap table {
-      border-collapse: collapse;
-      min-width: 100%;
-      background: #fff;
-      font-size: 13px;
-    }
-    .office-table-wrap td {
-      min-width: 96px;
-      white-space: pre-wrap;
-    }
-    .office-empty-cell, .office-muted { color: #64748b; }
-    .office-presentation {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 24px;
-      padding: 24px;
-    }
-    .office-slide {
-      width: min(1120px, calc(100vw - 64px));
-      aspect-ratio: 16 / 9;
-      margin: 0 auto;
-      padding: clamp(32px, 5vw, 64px);
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
-      display: flex;
-      align-items: center;
-    }
-    .office-slide-body p {
-      margin: 0 0 18px;
-      font-size: clamp(18px, 2vw, 30px);
-      line-height: 1.35;
-    }
-    .office-slide-body p:first-child {
-      font-size: clamp(26px, 3vw, 44px);
-      font-weight: 600;
-      line-height: 1.2;
-    }
-    @media (max-width: 720px) {
-      .office-preview { padding: 12px; }
-      .office-word {
-        margin: 0 auto;
-        min-height: calc(100vh - 24px);
-        padding: 32px 24px;
-      }
-      .office-word h1 { font-size: 24px; }
-      .office-word p,
-      .office-word li { font-size: 14px; }
-      .office-presentation { padding: 12px; gap: 14px; }
-      .office-slide {
-        width: calc(100vw - 24px);
-        padding: 24px;
-      }
-      .office-slide-body p { font-size: 16px; }
-      .office-slide-body p:first-child { font-size: 22px; }
-    }
-  </style>
-  ${compactCss}
-</head>
-<body>
-  <main class="office-preview office-${kind}">
-    ${body}
-  </main>
-</body>
-</html>`;
-}
 
 /** Build the allowed-roots list for the file-class IPC sandbox: workspace ∪
  *  current cid's attachment dir ∪ payload's project-file dir. The actual
@@ -4742,7 +4551,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
         return { ok: true, kind, name, path: display, content: text, ...spaceField };
       }
-      const officeKind = _officePreviewKindForExt(ext);
+      const officeKind = officePreviewKindForExt(ext);
       if (officeKind) {
         // docx / xlsx / pptx → 排版化 HTML 预览（与 produced.officePreviewHtml 同链）
         const st = fs.statSync(abs);
@@ -4768,7 +4577,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           // docx 的"壳文件"等）。这时给一句能照做的说明，而不是空白页——文案
           // 与其它 Office 预览出口（资料面板 / 聊天文件）共用同一份。
           const bodyHtml = officeFragmentHasText(fragment) ? fragment : officeEmptyBodyHtml(officeKind, buf);
-          const html = _wrapOfficePreviewHtml(officeKind, name, bodyHtml);
+          const html = wrapOfficePreviewHtml(officeKind, name, bodyHtml);
           _officePreviewCachePut(cacheKey, html, officeKind);
           return { ok: true, kind: 'office', officeKind, name, path: display, html, ...spaceField };
         } catch (err) {
@@ -6066,7 +5875,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
       throw new Error('path is outside the user workspace');
     }
-    const kind = _officePreviewKindForExt(path.extname(norm).toLowerCase());
+    const kind = officePreviewKindForExt(path.extname(norm).toLowerCase());
     if (!kind) return { ok: false, error: 'unsupported' };
     let st: fs.Stats;
     try { st = fs.statSync(norm); }
@@ -6094,7 +5903,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const { pptxBufferToHtml } = await import('../util/extract-office');
         fragment = pptxBufferToHtml(buf);
       }
-      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
+      const html = wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
       _officePreviewCachePut(cacheKey, html, kind);
       return { ok: true, html, kind, size: st.size };
     } catch (err) {
