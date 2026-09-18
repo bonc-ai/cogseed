@@ -961,6 +961,15 @@ describe('整理详情页', () => {
     expect(rows).toContain('命中既有候选是怎么一个逻辑');
     expect(rows).toContain('data-act="open-kstar-episode" data-id="kse-1"');
     expect(rows).toContain('（未记录目标）');
+    // 收起态不带 open 属性（默认折叠）。
+    expect(rows).not.toContain('class="ca-advanced ca-kstar-episodes" open');
+    // 点开态保持展开（2026-09-17 方案 A）：路由带 kstarEpisodeId 时 <details>
+    // 渲染 open——否则点行触发整页重画会跳回折叠，要点两次才看得到经过。
+    const opened = renderPage('overview', {
+      assets: [], proofs: [], sources: [],
+      kstarEpisodes: [{ id: 'kse-1', goal: '查认知资产是怎么存的', createdAt: '2026-09-17T10:00:00.000Z' }],
+    }, { kstarEpisodeId: 'kse-1' });
+    expect(opened).toContain('class="ca-advanced ca-kstar-episodes" open');
     const empty = renderPage('overview', { assets: [], proofs: [], sources: [], kstarEpisodes: [] });
     expect(empty).toContain('还没有被 KSTAR 复盘过的任务');
   });
