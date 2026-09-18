@@ -33068,6 +33068,29 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   background: var(--status-warning-bg);
   color: var(--text-heading);
 }
+/* md 文档的两种正文形态（工具栏可切）：
+   rendered = 排版阅读（给人读）：沿用 .markdown-body 的排版规则，这里只把
+   "原文 pre"的两个属性改回来——等宽字体与保留空白（pre-wrap 会把渲染 HTML
+   里的换行当成空行显示），以及 .markdown-body 的字面色正文色（深色主题要读得清）；
+   source = 原文源码（给机器读）：回到等宽 + 保留空白，缩进与表格竖线才对得齐。 */
+.anchored-source-text[data-md="rendered"] {
+  color: var(--text-body);
+  font-family: var(--font-sans);
+  white-space: normal;
+}
+.anchored-source-text[data-md="rendered"] > :first-child { margin-top: 0; }
+.anchored-source-text[data-md="rendered"] > :last-child { margin-bottom: 0; }
+.anchored-source-text[data-md="source"] {
+  font-family: var(--font-mono);
+  line-height: 1.75;
+}
+/* 引用高亮的块级兜底：排版后单节点匹配不到摘录时，标出最匹配的整块 */
+.anchored-source-mark-block {
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--color-brand);
+  border-radius: var(--radius-1);
+  background: var(--status-warning-bg);
+}
 .anchored-source-note {
   margin-top: var(--space-4);
   padding: var(--space-3);

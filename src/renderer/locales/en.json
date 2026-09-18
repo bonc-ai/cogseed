@@ -6187,6 +6187,8 @@
   "kb.viewer.description": "Read the knowledge-base source and locate the cited passage.",
   "kb.viewer.loading_document": "Loading source…",
   "kb.viewer.locating": "Locating citation…",
+  "kb.viewer.md_rendered": "Formatted view",
+  "kb.viewer.md_source": "View source",
   "kb.viewer.no_cache": "This file is still being indexed, so the source is not available yet.",
   "kb.viewer.not_found": "The file opened, but the cited passage could not be located.",
   "kb.viewer.out_of_scope": "This file is outside the current source boundary and cannot be opened.",

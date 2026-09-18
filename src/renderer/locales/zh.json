@@ -6187,6 +6187,8 @@
   "kb.viewer.description": "查看知识库原文，并定位到引用片段。",
   "kb.viewer.loading_document": "正在读取原文…",
   "kb.viewer.locating": "正在定位引用…",
+  "kb.viewer.md_rendered": "看排版",
+  "kb.viewer.md_source": "查看源码",
   "kb.viewer.no_cache": "该文件仍在索引中，暂时无法读取原文。",
   "kb.viewer.not_found": "已打开文件，但未找到对应的引用片段。",
   "kb.viewer.out_of_scope": "该文件不在当前资料边界内，无法打开。",
