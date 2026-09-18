@@ -8,9 +8,26 @@ const styleSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/sty
 
 function extractFunction(name: string): string {
   const marker = `function ${name}`;
-  const start = source.indexOf(marker);
-  if (start < 0) throw new Error(`missing ${name}`);
-  const braceStart = source.indexOf('{', start);
+  const markerStart = source.indexOf(marker);
+  if (markerStart < 0) throw new Error(`missing ${name}`);
+  const start = source.slice(Math.max(0, markerStart - 6), markerStart) === 'async '
+    ? markerStart - 6
+    : markerStart;
+  const paramsStart = source.indexOf('(', markerStart + marker.length);
+  if (paramsStart < 0) throw new Error(`missing params for ${name}`);
+  let paramsDepth = 0;
+  let braceStart = -1;
+  for (let i = paramsStart; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '(') paramsDepth += 1;
+    else if (ch === ')') {
+      paramsDepth -= 1;
+      if (paramsDepth === 0) {
+        braceStart = source.indexOf('{', i + 1);
+        break;
+      }
+    }
+  }
   if (braceStart < 0) throw new Error(`missing body for ${name}`);
   let depth = 0;
   for (let i = braceStart; i < source.length; i += 1) {
@@ -46,7 +63,111 @@ function loadModelOutputTracker() {
   `, {});
 }
 
+function loadRuntimeRetryHarness(options: {
+  runtime?: Record<string, unknown> | null;
+  runtimeError?: Error;
+  locallyPending?: boolean;
+} = {}) {
+  const functionSource = [
+    extractFunction('_conversationRuntimeIsActive'),
+    extractFunction('_readConversationRuntime'),
+    extractFunction('_retryFailedAssistantMessage'),
+  ].join('\n');
+  return vm.runInNewContext(`
+    const currentCid = 'retry-cid';
+    const calls = { alerts: [], observers: [], sends: [], fetches: [] };
+    const runtime = ${JSON.stringify(options.runtime === undefined ? {
+      processing: false,
+      backend_active: false,
+      in_flight: [],
+      active_turns: [],
+    } : options.runtime)};
+    const runtimeError = ${options.runtimeError ? `new Error(${JSON.stringify(options.runtimeError.message)})` : 'null'};
+    function apiFetch(url) {
+      calls.fetches.push(url);
+      if (runtimeError) return Promise.reject(runtimeError);
+      return Promise.resolve({ json: async () => runtime });
+    }
+    function isConvPending() { return ${options.locallyPending === true}; }
+    function _observeConversationRunFromPlanAction(cid, opts) { calls.observers.push({ cid, opts }); }
+    async function uiAlert(message) { calls.alerts.push(message); }
+    async function sendInConversation(cid, content, extra) {
+      calls.sends.push({ cid, content, extra });
+      return { started: true, queued: false, errored: false };
+    }
+    function t(key) { return key; }
+    function escapeHtml(value) { return String(value); }
+    ${functionSource}
+    ({ retry: _retryFailedAssistantMessage, isActive: _conversationRuntimeIsActive, calls });
+  `, { encodeURIComponent });
+}
+
 describe('conversation failed assistant retry actions', () => {
+  it('treats every authoritative runtime activity field as active without an age cutoff', () => {
+    const { isActive } = loadRuntimeRetryHarness();
+
+    expect(isActive({ processing: true })).toBe(true);
+    expect(isActive({ backend_active: true })).toBe(true);
+    expect(isActive({ in_flight: ['commander'] })).toBe(true);
+    expect(isActive({ active_turns: [{ actor: 'agent-a' }] })).toBe(true);
+    expect(isActive({ processing: false, backend_active: false, in_flight: [], active_turns: [] })).toBe(false);
+    expect(isActive({ ok: false, processing: true })).toBe(false);
+  });
+
+  it('does not retry while the backend is still active and restores the running observer', async () => {
+    const harness = loadRuntimeRetryHarness({
+      runtime: {
+        processing: true,
+        processing_since: '2020-01-01T00:00:00.000Z',
+        backend_active: false,
+        in_flight: [],
+        active_turns: [],
+      },
+    });
+    const button = { disabled: false, innerHTML: '<svg></svg>' };
+
+    await harness.retry({ dataset: { msgId: 'failed-message-1' } }, button);
+
+    expect(harness.calls.fetches).toEqual(['/api/conversations/retry-cid/runtime']);
+    expect(harness.calls.sends).toEqual([]);
+    expect(harness.calls.observers).toEqual([{
+      cid: 'retry-cid',
+      opts: { attachExisting: true, allowWithController: true },
+    }]);
+    expect(harness.calls.alerts).toEqual(['chat.retry_task_running']);
+    expect(button.disabled).toBe(false);
+    expect(button.innerHTML).toBe('<svg></svg>');
+  });
+
+  it('sends one idempotent retry when the authoritative runtime is idle', async () => {
+    const harness = loadRuntimeRetryHarness();
+
+    await harness.retry({ dataset: { msgId: 'failed-message-1' } }, { disabled: false, innerHTML: 'retry' });
+
+    expect(harness.calls.sends).toHaveLength(1);
+    expect(harness.calls.sends[0]).toMatchObject({
+      cid: 'retry-cid',
+      extra: { retry_message_id: 'failed-message-1' },
+    });
+    expect(harness.calls.alerts).toEqual([]);
+  });
+
+  it('does not queue a retry when status cannot be confirmed and the conversation is locally pending', async () => {
+    const harness = loadRuntimeRetryHarness({ runtimeError: new Error('offline'), locallyPending: true });
+
+    await harness.retry({ dataset: { msgId: 'failed-message-1' } }, { disabled: false, innerHTML: 'retry' });
+
+    expect(harness.calls.sends).toEqual([]);
+    expect(harness.calls.alerts).toEqual(['chat.retry_task_running']);
+  });
+
+  it('keeps retry and edit operations out of the ordinary pending-message queue', () => {
+    const sendBody = extractFunction('sendInConversation');
+
+    expect(sendBody).toContain("extra?.retry_message_id || extra?.edit_message_id");
+    expect(sendBody).toContain("reason: 'busy'");
+  });
+
   it('classifies localized model-call failure text as retryable failure content', () => {
     const isFailed = loadFailedClassifier();
 
@@ -77,6 +198,11 @@ describe('conversation failed assistant retry actions', () => {
     expect(source).toContain("const mode = includeRetry ? 'failed'");
     expect(source).toContain('class="chat-bubble-more-wrap"');
     expect(source).toContain('_attachBubbleRetryBtn(directActions, msgDiv)');
+  });
+
+  it('restores running history from authoritative activity without a 15-minute freshness gate', () => {
+    expect(source).toContain('const processingActive = _conversationRuntimeIsActive(convMeta);');
+    expect(source).not.toContain("< 15 * 60 * 1000");
   });
 
   it('does not send model output error telemetry in the open build', () => {
