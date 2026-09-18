@@ -644,6 +644,7 @@
   "chat.retry_btn_title": "失敗した返信を再試行",
   "chat.retry_no_source": "再試行する直前のユーザーメッセージが見つかりません。",
   "chat.retry_running": "実行中",
+  "chat.retry_task_running": "元のタスクはまだ実行中のため、再試行できません。状態を再同期しました。",
   "chat.retry_user_message": "（再試行）",
   "chat.send_failed": "送信に失敗しました: {msg}",
   "chat.send_title": "送信",
