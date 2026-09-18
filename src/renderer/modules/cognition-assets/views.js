@@ -158,7 +158,13 @@
     }
     const kind = String(ref.kind || '');
     if (refId.startsWith('kse-')) {
+      // 来源诚实状态（2026-09-18 补 kse 支）：复盘记录已不存在时明说不可用，
+      // 不给可点的假入口——两种来源：写入时解析不到被标 degraded（数据层
+      // 口径），或摘要请求回来确实没有这条（历史脏数据）。「还没拉到」不在
+      // 此列：读不到 ≠ 不存在。
+      const settled = (S.kstarSummariesSettled || []).includes(refId);
       const summary = (S.kstarSummaries && S.kstarSummaries[refId]) || null;
+      if (ref.degraded || (settled && !summary)) return chip(T('cognition.source_unavailable_label', '来源记录不可用'), 'line');
       const goal = summary && summary.goal ? String(summary.goal).slice(0, 24) : '';
       const label = T('cognition.evidence_task_review', '任务复盘：{title}', {
         title: goal || T('cognition.evidence_task_review_generic', '一次任务'),
@@ -178,6 +184,11 @@
     return chip(loose || T('cognition.evidence_fallback', '来源记录'), 'line');
   };
   const isKstarEvidenceRef = (ref) => String(ref.kind || '') === 'execution' && String(ref.id || '').startsWith('kse-');
+  /** 血统判据只认"还活着"的证据（2026-09-18 乙档）：被标 degraded 的复盘
+   *  证据（写入时解析不到对应记录）不算 KSTAR 血统——查无的引用不能当出身。
+   *  分组展示仍按形状走 isKstarEvidenceRef：一条脏证据也要显示在它该在的
+   *  组里，只是标明不可用。 */
+  const isLiveKstarEvidenceRef = (ref) => isKstarEvidenceRef(ref) && ref.degraded !== true;
   /** 归边判定（2026-09-17 B 档）：纯渲染层口径，不动主进程——身上挂有
    *  KSTAR 任务复盘证据（kind=execution 且 id 前缀 kse-），或带 KSTAR 学习
    *  信号/溯源（learningSignal.source=review|preference_scan、
@@ -189,12 +200,12 @@
     if (asset.learningProvenance) return true;
     const signal = asset.learningSignal;
     if (signal && ['review', 'preference_scan'].includes(String(signal.source || ''))) return true;
-    return (asset.evidenceRefs || []).some(isKstarEvidenceRef);
+    return (asset.evidenceRefs || []).some(isLiveKstarEvidenceRef);
   };
   NS.isKstarCandidate = function isKstarCandidate(candidate) {
     if (!candidate) return false;
     if (candidate.learningSignal || candidate.learningProvenance) return true;
-    return (candidate.sourceRefs || []).some((ref) => String(ref.id || '').startsWith('kse-'));
+    return (candidate.sourceRefs || []).some((ref) => String(ref.id || '').startsWith('kse-') && ref.degraded !== true);
   };
   /** 证据分组（2026-09-17 B 档两线分开）：KSTAR 任务复盘一组、对话与表态
    *  一组，各带一句来源说明——两线证据混排一排正是"杂揉"观感的来源。 */

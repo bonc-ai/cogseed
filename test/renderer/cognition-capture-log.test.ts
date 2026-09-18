@@ -1001,6 +1001,34 @@ describe('整理详情页', () => {
     expect(html).not.toContain('review_decision');
   });
 
+  it('证据诚实态（2026-09-18）：复盘记录不存在时显示来源不可用，未拉到不误标', () => {
+    const asset = { id: 'aa-kmiss', title: '缺记录的证据', type: 'rule', status: 'active', version: '1', activeVersion: '1', updatedAt: '2026-09-16T00:00:00.000Z' };
+    const versionsWith = (ref) => ({ assetId: 'aa-kmiss', usage: [], versions: [{ assetId: 'aa-kmiss', version: '1', at: '2026-09-16T01:00:00.000Z', snapshot: { title: 'T', statement: 'S', evidenceRefs: [ref] } }] });
+    const kse = (extra = {}) => ({ kind: 'execution', id: 'kse-abc', taxonomyVersion: 1, subtype: 'execution', title: 'KSTAR requirement episode', ...extra });
+    const base = { assets: [asset], proofs: [], sources: [], kstarSummariesSettled: [] };
+    // ① 摘要已拉到 → 正常可点 chip，显示这次任务的目标。
+    const ok = renderPage('overview', { ...base, assetVersions: versionsWith(kse()), kstarSummaries: { 'kse-abc': { id: 'kse-abc', goal: '查认知资产是怎么存的' } } }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(ok).toContain('任务复盘：查认知资产是怎么存的');
+    expect(ok).toContain('data-act="open-kstar-episode" data-id="kse-abc"');
+    expect(ok).not.toContain('来源记录不可用');
+    // ② 已请求过、响应里没有这条 → 诚实显示不可用，且不给可点入口。
+    const gone = renderPage('overview', { ...base, assetVersions: versionsWith(kse()), kstarSummaries: {}, kstarSummariesSettled: ['kse-abc'] }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(gone).toContain('来源记录不可用');
+    expect(gone).not.toContain('data-act="open-kstar-episode"');
+    // ③ 还没请求过（未 settled）→ 维持兜底文案：读不到 ≠ 不存在。
+    const pending = renderPage('overview', { ...base, assetVersions: versionsWith(kse()), kstarSummaries: {} }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(pending).toContain('任务复盘：一次任务');
+    expect(pending).not.toContain('来源记录不可用');
+    // ④ 写入时已标记 degraded（第 3 步入口校验的口径）→ 不等摘要直接不可用。
+    const degraded = renderPage('overview', { ...base, assetVersions: versionsWith(kse({ degraded: true, reason: 'kstar_episode_missing' })), kstarSummaries: {} }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(degraded).toContain('来源记录不可用');
+    // ⑤ 归边（乙）：degraded 的复盘证据不算 KSTAR 血统，干净的照旧算。
+    const { cogAssets: NS2 } = ensureModule();
+    expect(NS2.isKstarAsset({ evidenceRefs: [kse({ degraded: true })] })).toBe(false);
+    expect(NS2.isKstarAsset({ evidenceRefs: [kse()] })).toBe(true);
+    expect(NS2.isKstarCandidate({ sourceRefs: [{ id: 'kse-abc', degraded: true }] })).toBe(false);
+  });
+
   it('候选详情点复盘 chip 就地展开（2026-09-17 修）：不跳页、块出现在证据区下方', () => {
     const cand = {
       id: 'rcand-ep', status: 'pending_review', suggestedType: 'rule', suggestedScope: 'general',

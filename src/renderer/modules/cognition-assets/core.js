@@ -123,6 +123,10 @@
     /** KSTAR 溯源（2026-09-17）：{[episodeId]: {goal,status,at}} 摘要缓存；
      *  kstarEpisode 为点开中的单条详情 {episodeId, episode, review}。 */
     kstarSummaries: null,
+    /** 已请求过且拿到响应的 kse id（2026-09-18）：区分「还没拉到」与「确实
+     *  没有」——前者维持兜底文案，后者如实显示「来源记录不可用」；顺带
+     *  止住缺失 id 永远进不了缓存、每次 notify 重发同一次 IPC 的循环。 */
+    kstarSummariesSettled: [],
     kstarEpisode: null,
     /** KSTAR 任务复盘列表（kstar-episodes tab）：kstar.episodes.list 的记录。 */
     kstarEpisodes: null,
@@ -266,41 +270,55 @@
     NS.notify();
   };
 
-  /** KSTAR 溯源（2026-09-17）：资产详情证据含 kse 引用时批量拉任务目标
-   *  摘要（chip 显示用）；失败静默（chip 退回占位标题）。 */
-  NS.loadKstarEpisodeSummaries = async function loadKstarEpisodeSummaries(assetId) {
-    const asset = store.assets.find((a) => String(a.id) === String(assetId));
-    if (!asset) return;
-    const ids = (asset.evidenceRefs || []).map((ref) => String(ref.id || '')).filter((id) => id.startsWith('kse-'));
-    if (!ids.length) return;
+  /** 批量补 kse 摘要（2026-09-18 抽共用入口）：结果并入缓存；本次请求里
+   *  响应没有的 id 记进 settled——没有就是没有，chip 据此如实显示「来源
+   *  记录不可用」；失败不记（读不到 ≠ 不存在，保持兜底文案）。 */
+  async function fetchKstarEpisodeSummaries(rawIds) {
+    const wanted = [...new Set((rawIds || []).map(String).filter((id) => id.startsWith('kse-')))];
+    if (!wanted.length) return;
     const have = store.kstarSummaries || {};
-    const missing = ids.filter((id) => !have[id]);
+    const settled = store.kstarSummariesSettled || [];
+    const missing = wanted.filter((id) => !have[id] && !settled.includes(id));
     if (!missing.length) return;
     try {
       const result = await api.call('recall.kstar.episodes.summaries', { ids: missing });
-      store.kstarSummaries = { ...have, ...Object.fromEntries(((result && result.summaries) || []).map((s) => [String(s.id), s])) };
+      const summaries = (result && result.summaries) || [];
+      store.kstarSummaries = {
+        ...(store.kstarSummaries || {}),
+        ...Object.fromEntries(summaries.map((s) => [String(s.id), s])),
+      };
+      const returned = new Set(summaries.map((s) => String(s.id)));
+      store.kstarSummariesSettled = [...new Set([...(store.kstarSummariesSettled || []), ...missing.filter((id) => !returned.has(id))])];
       NS.notify();
     } catch (error) {
-      // 摘要缺席只影响 chip 文案，不阻断详情。
+      // 摘要缺席只影响 chip 文案，不阻断详情；失败不记 settled。
     }
+  }
+
+  /** KSTAR 溯源（2026-09-17）：资产详情证据含 kse 引用时批量拉任务目标
+   *  摘要（chip 显示用）；失败静默（chip 退回占位标题）。
+   *  2026-09-18 修：此前只取资产级 evidenceRefs，版本块渲染读的却是
+   *  snapshot.evidenceRefs——历史版本的 kse id 从没拉过摘要，永远命中不了
+   *  缓存。现在把已加载版本的快照证据一并纳入（版本异步到达后，onChange
+   *  会再触发一次，新 id 自然补拉）。 */
+  NS.loadKstarEpisodeSummaries = async function loadKstarEpisodeSummaries(assetId) {
+    const id = String(assetId || '');
+    const asset = store.assets.find((a) => String(a.id) === id);
+    if (!asset) return;
+    const refs = [...(asset.evidenceRefs || [])];
+    if (store.assetVersions && String(store.assetVersions.assetId || '') === id) {
+      for (const version of store.assetVersions.versions || []) {
+        refs.push(...((version.snapshot && version.snapshot.evidenceRefs) || []));
+      }
+    }
+    await fetchKstarEpisodeSummaries(refs.map((ref) => String(ref.id || '')));
   };
 
   /** 按 kse id 批量补复盘摘要（候选详情页用：候选不是资产，走不了
    *  loadKstarEpisodeSummaries 的按资产入口——候选的 kse 引用来自
    *  sourceRefs/evidenceRefs）。 */
   NS.loadKstarEpisodeSummariesByIds = async function loadKstarEpisodeSummariesByIds(ids) {
-    const wanted = (ids || []).map(String).filter((id) => id.startsWith('kse-'));
-    if (!wanted.length) return;
-    const have = store.kstarSummaries || {};
-    const missing = wanted.filter((id) => !have[id]);
-    if (!missing.length) return;
-    try {
-      const result = await api.call('recall.kstar.episodes.summaries', { ids: missing });
-      store.kstarSummaries = { ...have, ...Object.fromEntries(((result && result.summaries) || []).map((s) => [String(s.id), s])) };
-      NS.notify();
-    } catch (error) {
-      // 摘要缺席只影响 chip 文案，不阻断详情。
-    }
+    await fetchKstarEpisodeSummaries(ids);
   };
 
   /** 点开单条任务复盘详情（就地展开块）。 */
