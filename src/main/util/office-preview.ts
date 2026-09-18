@@ -19,8 +19,47 @@ export function officePreviewKindForExt(ext: string): OfficePreviewKind | null {
   return null;
 }
 
-export function wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string): string {
+/**
+ * Office 预览外壳：**全产品唯一一份**（`kb.openFile`、`produced.officePreviewHtml`、
+ * 资料/项目文件预览都走这里）。
+ *
+ * 历史教训（2026-09-16 → 09-18）：本函数与 `src/main/ipc/index.ts` 里曾各有一份
+ * 外壳 CSS，修图片溢出时只改了本文件，而知识库查看器（`kb.openFile`）用的是 ipc
+ * 里那份私有副本 → 真机"依旧溢出"。**不要再复制这份 CSS**，紧凑模式走 `opts.compact`。
+ *
+ * @param opts.compact 卡片缩略模式：小字号、去留白、紧贴顶部（资料卡片/面板预览）。
+ */
+export function wrapOfficePreviewHtml(
+  kind: OfficePreviewKind,
+  title: string,
+  body: string,
+  opts?: { compact?: boolean },
+): string {
   const safeTitle = escapePreviewHtml(title || 'Office preview');
+  // 卡片缩略模式：整页紧贴顶部、小字号、去留白——小卡里「全而不大」。
+  // 只覆盖字号/留白，**不碰图片与表格的限宽护栏**（`.office-word img` 等见下方基础 CSS）。
+  const compactCss = opts?.compact ? `
+  <style>
+    body { background: #fff; font-size: 11px; }
+    .office-preview { padding: 0; min-height: 0; }
+    .office-word { max-width: none; min-height: 0; margin: 0; padding: 12px 14px; border: 0; box-shadow: none; }
+    .office-word h1 { margin: 0 0 8px; font-size: 16px; }
+    .office-word h2 { margin: 12px 0 6px; font-size: 13px; }
+    .office-word h3 { margin: 10px 0 5px; font-size: 12px; }
+    .office-word p, .office-word li { margin: 0 0 6px; font-size: 11px; line-height: 1.5; }
+    .office-word ul, .office-word ol { margin: 0 0 8px 18px; }
+    .office-word table, .office-table-wrap table { margin: 8px 0; font-size: 10px; }
+    .office-word th, .office-word td, .office-table-wrap th, .office-table-wrap td { padding: 3px 5px; }
+    .office-spreadsheet { padding: 6px; }
+    .office-sheet { margin: 0 0 10px; padding: 8px; }
+    .office-sheet h2 { margin: 0 0 8px; font-size: 12px; }
+    .office-table-wrap { max-height: none; }
+    .office-table-wrap td { min-width: 60px; }
+    .office-presentation { padding: 6px; gap: 8px; }
+    .office-slide { width: 100%; padding: 12px 14px; border-radius: 4px; }
+    .office-slide-body p { margin: 0 0 6px; font-size: 12px; }
+    .office-slide-body p:first-child { font-size: 14px; }
+  </style>` : '';
   return `<!doctype html>
 <html>
 <head>
@@ -199,6 +238,7 @@ export function wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, bo
       .office-slide-body p:first-child { font-size: 22px; }
     }
   </style>
+  ${compactCss}
 </head>
 <body>
   <main class="office-preview office-${kind}">
