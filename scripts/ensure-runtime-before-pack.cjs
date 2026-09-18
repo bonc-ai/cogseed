@@ -104,6 +104,25 @@ module.exports = async function ensureRuntimeBeforePack(context) {
     throw new Error(`fetch-embedding-model failed with status ${embedding.status}`);
   }
 
+  // OfficeCLI is an external native engine shipped via extraResources. It is
+  // gitignored, so every real package must provision the target asset here;
+  // relying on a developer's prior `npm start` leaves CI and release packages
+  // silently without document support.
+  const officeCli = spawnSync(process.execPath, [
+    path.join(pcRoot, 'scripts', 'fetch-officecli.cjs'),
+    ...arches.map(targetArch => `--platform=${platform}-${targetArch}`),
+    '--prune',
+  ], {
+    cwd: pcRoot,
+    encoding: 'utf8',
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (officeCli.error) throw officeCli.error;
+  if (officeCli.status !== 0) {
+    throw new Error(`fetch-officecli failed for ${platform}-${arches.join(',')} with status ${officeCli.status}`);
+  }
+
   for (const targetArch of arches) {
     const res = spawnSync(process.execPath, [
       path.join(pcRoot, 'bin', 'ensure-runtime.cjs'),
