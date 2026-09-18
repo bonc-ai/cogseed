@@ -9757,6 +9757,12 @@ function _mountChatInputForm(host, msgDiv, message, opts) {
         return;
       }
       if (!submissionText) return;
+      // Skipped forms carry the semantic marker in `values`; main re-encodes
+      // the text, so re-attach the localized note the renderer owns (main has
+      // no `chat.form.*` locale keys).
+      if (values && values.__skipped === true) {
+        submissionText = `${t('chat.form.skipped_note')}\n\n${submissionText}`;
+      }
       const extra = (Array.isArray(attachments) && attachments.length)
         ? { attachments }
         : undefined;

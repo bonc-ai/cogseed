@@ -560,6 +560,8 @@
   "chat.form.required_select": "请选择",
   "chat.form.required_text": "此项不能为空",
   "chat.form.reset": "重置",
+  "chat.form.skip": "跳过",
+  "chat.form.skipped_note": "（本次未作答，已跳过）",
   "chat.form.streaming_placeholder": "正在准备参数表单…",
   "chat.form.submit": "确认",
   "chat.form.submit_failed": "提交失败",
