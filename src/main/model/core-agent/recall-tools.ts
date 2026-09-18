@@ -214,7 +214,13 @@ async function recordAgentReads(
   entries: Array<{ assetId: string; assetVersion: string }>,
 ): Promise<void> {
   const turnId = String(opts.turnId || '');
-  if (!turnId || !entries.length) return;
+  if (!entries.length) return;
+  if (!turnId) {
+    // 没有回合 id 就记不了账（taskRunId 必填）：如实告警而不是静默丢弃——
+    // 静默丢弃正是"模型自取等于升档黑洞"的成因（2026-09-18 诊断补）。
+    log.warn('agent_read not recorded: tool built without a turn id', { userId: maskId(opts.userId) });
+    return;
+  }
   try {
     const seenThisTurn = new Set(
       (await listInjectionReceipts(opts.userId, turnId))
@@ -317,11 +323,12 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
         purpose: 'agent_read',
         silentDefaultInjection: true,
       });
-      // taskText 缺席（工具在无任务文本的上下文里被调用）→ 不拿"适用场景不符"
-      // 当拒绝理由：判断不了 ≠ 不适用，其余闸门照旧。
-      const reasons = opts.taskText
-        ? eligibility.reasons
-        : eligibility.reasons.filter((reason) => reason !== 'not_applicable_context');
+      // 读取路径不拿"适用场景不符"当拒绝理由（2026-09-18 真机修正）：
+      // applicableWhen 是软提示，模型在目录里看过它、已自行判断适用性——按
+      // 用户消息做词面匹配来否掉模型的明确选择，会把这个功能废掉（真机实测：
+      // 模型按目录取正文被拦）。硬闸照旧：状态 / 来源可用 / scopePolicy /
+      // 禁用场景 / 敏感度 / targetAgents。
+      const reasons = eligibility.reasons.filter((reason) => reason !== 'not_applicable_context');
       if (reasons.length) {
         blocks.push(`- [asset:${id}] ${asset.title || '(无标题)'}：当前不可使用（${blockReasonText(reasons)}）`);
         continue;
