@@ -637,6 +637,44 @@ describe('auth › pickChatEntryGroup + 冷却联动', () => {
     cd._clearAll();
   });
 
+  it('所有可用候选都在冷却 → 返回冷却兜底候选，不把新任务判成模型不可用', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const cd = await import('../../../src/main/model/core-agent/profile-cooldown');
+    cd._clearAll();
+
+    const p1 = await a.addApiKey('anthropic', 'k-only-cold-xx');
+    const e1 = await a.addEntry({ provider: 'anthropic', model: 'claude-opus-4-8', profileId: p1.profileId });
+
+    // 上一次长任务以可轮转失败告终 → profile 进入 10 分钟冷却。
+    // 此时「测试连接」仍会通过（它不走冷却表），任务路径却曾因此拿到空候选集。
+    cd.markCooldown(p1.profileId, 'rate_limit', 'mocked 429 during long stream');
+
+    const group = await a.pickChatEntryGroup();
+    expect(group.length).toBe(1);
+    expect(group[0].entryId).toBe(e1.entryId);
+    expect(group[0].profileId).toBe(p1.profileId);
+
+    cd._clearAll();
+  });
+
+  it('存在健康候选时仍优先健康候选，不使用冷却兜底', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const cd = await import('../../../src/main/model/core-agent/profile-cooldown');
+    cd._clearAll();
+
+    const p1 = await a.addApiKey('anthropic', 'k-cold-2-xxxxxx', 'cold2');
+    const p2 = await a.addApiKey('anthropic', 'k-warm-2-xxxxxx', 'warm2');
+    const e1 = await a.addEntry({ provider: 'anthropic', model: 'claude-opus-4-8', profileId: p1.profileId });
+    const e2 = await a.addEntry({ provider: 'anthropic', model: 'claude-opus-4-8', profileId: p2.profileId });
+
+    cd.markCooldown(p1.profileId, 'rate_limit', 'mocked 429');
+    const group = await a.pickChatEntryGroup();
+    expect(group.map((c) => c.entryId)).toEqual([e2.entryId]);
+    expect(group.map((c) => c.entryId)).not.toContain(e1.entryId);
+
+    cd._clearAll();
+  });
+
   it('addApiKey 成功路径自动清冷却', async () => {
     const a = await import('../../../src/main/features/auth');
     const cd = await import('../../../src/main/model/core-agent/profile-cooldown');
