@@ -1440,4 +1440,47 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     expect(applied.asset?.id).not.toBe('aa-l2-strong');
     expect(applied.asset?.statement).toContain(thinJudgment);
   });
+
+  it('update promote fuses statements instead of overwriting（刀二：融合接线）', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-fuse');
+    const candidates = await service();
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+
+    // 旧资产正文两句：一句会被候选扩展重述，一句无关保持不动。
+    const oldStatement = '周报三个固定板块。数据库迁移前必须先备份。';
+    const now = new Date().toISOString();
+    await assets.createAbilityAsset('user-fuse', {
+      schemaVersion: 2, ownerId: 'user-fuse', id: 'aa-fuse-target', candidateId: 'cand-fuse-seed',
+      sourceCandidateIds: ['cand-fuse-seed'], reviewDecisionId: 'rd_fuseseed_12345678',
+      type: 'rule', title: '周报格式', statement: oldStatement,
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-fuse-seed' }], scope: 'report', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      applicableWhen: ['写周报时'], forbiddenWhen: ['临时日报'],
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'seed for fusion wiring test' });
+
+    // 候选判断：首句是旧句的扩展重述（更长更细），后一句是全新增量。
+    const candidate = await candidates.saveRecallCandidate('user-fuse', {
+      judgment: '周报固定使用三个板块：本周进展、风险与依赖、下周计划。发出前需要核对上周承诺项的完成情况。',
+      value: '补全周报格式规范。',
+      summary: '周报格式完整规范', suggestedType: 'rule', suggestedScope: 'report',
+      applicableWhen: ['写周报时'], forbiddenWhen: ['临时日报'],
+      suggestedAction: 'update', targetAssetId: 'aa-fuse-target',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-fuse-a' }],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-fuse-a' }],
+    });
+
+    const promoted = await candidates.promoteRecallCandidate('user-fuse', candidate.id, { actor: 'user' });
+    const statement = promoted.asset.statement;
+    // 融合而非覆盖：旧正文的无关句保留、扩展重述进位、增量句追加。
+    expect(statement).toContain('数据库迁移前必须先备份。');
+    expect(statement).toContain('周报固定使用三个板块：本周进展、风险与依赖、下周计划。');
+    expect(statement).toContain('发出前需要核对上周承诺项的完成情况。');
+    // 版本推进到 v2，且 reason 带融合标记（可辨识、可回退）。
+    expect(promoted.asset.version).toBe('2');
+    const versions = await assets.listAbilityAssetVersions('user-fuse', 'aa-fuse-target');
+    expect(versions.length).toBe(2);
+    expect(String(versions[1].reason || '')).toContain('semantic-fusion');
+  });
 });

@@ -41,6 +41,7 @@ import {
   updateAbilityAsset,
   type AbilityAssetActor,
 } from './asset-service';
+import { fuseStatements } from './statement-fusion';
 import { evaluateCandidate, isCandidateBlocked } from '../cognition/gate';
 import { isCognitionSourceEnabled } from './source-control';
 import {
@@ -1994,9 +1995,16 @@ export async function promoteRecallCandidate(
           sourceCandidateId: candidate.id,
         });
       } else if (candidate.suggestedAction === 'update' || candidate.suggestedAction === 'limit_scope') {
+        // 融合而非覆盖（2026-09-19 刀二）：update 的正文 = 旧正文为主体 +
+        // 候选判断按句级三档融入（重述留更长/改写新替旧/增量追加）。选择
+        // "融合错了可回退"兜底而不是放弃融合——版本快照保证旧版随时可切回。
+        // limit_scope（范围收窄）不融合：它的判断文本通常是对范围的完整重写。
+        const fused = candidate.suggestedAction === 'update' && String(target.statement || '').trim()
+          ? fuseStatements(String(target.statement), String(candidate.judgment || ''))
+          : null;
         stored = await updateAbilityAsset(userId, target.id, {
           title: candidate.summary || candidate.judgment.slice(0, 120),
-          statement: candidate.judgment,
+          statement: fused ? fused.statement : candidate.judgment,
           scope: candidate.suggestedScope,
           // An update adds evidence to the chain; it must not erase the
           // evidence already supporting the target asset.
@@ -2006,7 +2014,7 @@ export async function promoteRecallCandidate(
           ...semantics,
           ...(scopePolicy ? { scopePolicy } : {}),
           actor: handoffActor,
-          reason: handoffReason,
+          reason: fused ? `${handoffReason};semantic-fusion` : handoffReason,
           reviewDecisionId: decision.decision_id,
           sourceCandidateId: candidate.id,
         });
