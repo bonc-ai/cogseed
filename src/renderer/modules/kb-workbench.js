@@ -2276,7 +2276,9 @@
         source: 'library',
         scope: _state.spaceId ? 'space' : 'global',
         path: relPath,
-        chunkIdx: 1,
+        // 不带 chunkIdx/quote = 打开整篇（不是引用跳转）：主进程据此不做 chunk
+        // 定位，正文不会被高亮、也不会出现"返回引用位置"。
+        // （此前这里塞了占位 chunkIdx: 1，于是每份文件打开都像从引用进来的。）
         ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
         view: 'document',
       });
@@ -2609,7 +2611,9 @@
       _setUiButtonPresentation(btn, open ? '收起' : '展开', open ? 'chevron-up' : 'chevron-down');
     });
     card.querySelectorAll('[data-kb-anchor]').forEach((el) => {
-      el.addEventListener('click', () => _openAnchor({ source: 'library', scope: 'global', path: el.dataset.kbAnchor, chunkIdx: 1 }));
+      // 摘要里提到的文件 = "打开这份文件"，不是引用跳转：不带 chunkIdx（没有真实
+      // 片段可定位，塞占位值只会让正文前几行平白多一道高亮）
+      el.addEventListener('click', () => _openAnchor({ source: 'library', scope: 'global', path: el.dataset.kbAnchor }));
     });
     _state.summary = summary;
     // 同步写入按库缓存（切回时立即恢复，不重新触发 LLM）
@@ -4044,11 +4048,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (hit) {
         // 与列表点击同一条分派：排版类（pdf/office/html/图片）走富查看器保排版，
         // 文本类才回落原文查看器（原先这里一律走文本查看器，PDF 来源跳转就丢排版）。
+        // 来源只给了"文档名"（没有片段依据）⇒ 打开整篇，不带 chunkIdx。
         _openFileViewerForAnchor({
           source: _state.spaceId ? 'space' : 'library',
           scope: _state.spaceId ? 'space' : 'global',
           path: hit,
-          chunkIdx: 0,
           ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
         });
         return;
@@ -4982,7 +4986,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       source: 'library',
       scope: isSpace ? 'space' : 'global',
       path: anchor.path,
-      chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+      // 只有真引用（带 chunkIdx）才带过去定位；"打开整篇"的 ref 不带 = 不高亮、
+      // 也没有"返回引用位置"（此前这里缺省补 0，整篇打开也会被高亮第一章）
+      ...(typeof anchor.chunkIdx === 'number' ? { chunkIdx: anchor.chunkIdx } : {}),
       ...(isSpace ? { spaceId } : {}),
       ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
       view: 'document',
@@ -5013,7 +5019,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           source: isSpace ? 'space' : 'library',
           scope: isSpace ? 'space' : 'global',
           path: anchor.path,
-          chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+          // 同上：没有真实 chunkIdx 就别造一个，否则排版类文件打开也会被"定位到第 1 节"
+          ...(typeof anchor.chunkIdx === 'number' ? { chunkIdx: anchor.chunkIdx } : {}),
           ...(isSpace ? { spaceId } : {}),
           ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
         });
@@ -5038,7 +5045,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         source: ref.source || 'library',
         scope: ref.scope || 'global',
         path: ref.path,
-        chunkIdx: ref.chunkIdx,
+        // 与 quote 同款：没有就整条不给（不给 = 打开整篇，给了 0 就变成"引用"）
+        ...(typeof ref.chunkIdx === 'number' ? { chunkIdx: ref.chunkIdx } : {}),
         ...(ref.quote ? { quote: ref.quote } : {}),
         ...(ref.cid ? { cid: ref.cid } : {}),
         ...(ref.spaceId ? { spaceId: ref.spaceId } : {}),

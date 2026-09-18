@@ -123,7 +123,10 @@ const MINDMAP_ROOT = {
 };
 
 function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string>; mindmapRoot?: unknown } = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+  const source = fs.readFileSync(
+    path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+    'utf8',
+  );
   const els: Record<string, any> = {};
   const created: any[] = [];
   // localStorage：窗口尺寸/位置记忆的真实读写路径（此前 VM 里没有 localStorage，
@@ -228,10 +231,42 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
 
 describe('KB workbench (S1 skeleton)', () => {
   it('opens file rows in the real source viewer instead of the S2 placeholder toast', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
 
     expect(source).toMatch(/function _openFile[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
     expect(source).not.toContain('原文查看器：S2 上线（anchor-resolver 已就绪）');
+  });
+
+  /**
+   * 真机反馈：「很多文件打开都有返回引用，并且前几行都有橙色高亮」——
+   * 文件列表/摘要/来源跳转这些**打开整篇**的入口都塞了占位 chunk 号，
+   * 主进程当引用定位后正文前几行就被高亮，按钮也变成"返回引用位置"。
+   * 契约：只有真引用（搜索命中/问答引用给的 chunkIdx 或 quote）才带定位信息。
+   */
+  it('打开整篇的入口不带 chunkIdx（不冒充引用跳转）', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const block = (name: string) => source.match(new RegExp(`function ${name}\\([^)]*\\)[\\s\\S]*?\\n  \\}`))?.[0] || '';
+    // 注释里会解释历史包袱（提到 chunkIdx），断言只看代码本身
+    const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    // 文件列表点击、脑图/测验的来源跳转：整篇打开
+    expect(block('_openFile')).toContain("view: 'document'");
+    expect(code(block('_openFile'))).not.toContain('chunkIdx');
+    expect(code(block('_mmOpenSource'))).not.toContain('chunkIdx');
+
+    // 摘要卡片里的文件锚点：摘要只给了文件名，给不出片段
+    const summaryAnchorLine = source.split('\n').find((line) => line.includes('el.dataset.kbAnchor')) || '';
+    expect(summaryAnchorLine).toContain('_openAnchor');
+    expect(summaryAnchorLine).not.toContain('chunkIdx');
+
+    // 真引用那一路必须仍然带过去定位（条件式，不是缺省 0）
+    expect(source).toContain('...(typeof anchor.chunkIdx === \'number\' ? { chunkIdx: anchor.chunkIdx } : {})');
   });
 
   it('reconnects the KB event stream after a previous page stream has ended', async () => {
@@ -378,7 +413,7 @@ describe('KB workbench (S1 skeleton)', () => {
     windowMock.renderKbWorkbench();
     // 首屏的按钮必须当场绑上 listener：只把 disabled 拿掉的话点了没反应
     expect(els['kb-wb-analysis-card']).toBeTruthy();
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).toMatch(/_refreshQaModelChipLabel\(\);[\s\S]{0,400}_bindAnalysisActions\(analysisCard\)/);
     const html = els['kb-workbench'].innerHTML;
     const mmIdx = html.indexOf('id="kb-wb-gen-mm"');
@@ -392,7 +427,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('两个入口的可用性只看"库是否为空"，并把解析裁掉的门槛去掉', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).toContain('function _bindAnalysisActions');
     expect(src).toMatch(/_bindAnalysisActions[\s\S]{0,600}_libFileCount\(\) === 0/);
     // 解析结果不再决定按钮可用性（此前 disabled: !(ok && hasMm) / disabled: !ok）
@@ -402,7 +437,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('生成测验有真实实现：调 kb.quiz、渲染缩略卡并打开答题面板', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // 这个入口此前只有调用点、没有实现（点击直接 ReferenceError）
     expect(src).not.toMatch(/_renderQuiz\b/);
     expect(src).toContain('function _genQuiz()');
@@ -419,7 +454,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
     expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\('测验'\)/);
     expect(src).toMatch(/const entry = \{ role: 'assistant', kind: 'quiz', \.\.\.payload, ts: Date\.now\(\) \};[\s\S]{0,200}_state\.qaHistory\.push\(entry\)/);
@@ -446,11 +481,11 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(clauses('1. 先纠错 2. 再检索')).toEqual(['先纠错', '再检索']);
     expect(clauses('')).toEqual([]);
     // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // 纯函数留在 kb-workbench（__kbFvUtils 导出给面板复用），答案块渲染已在测验面板里
     expect(src).toContain('quizAnswerClauses: _quizAnswerClauses');
     expect(src).not.toContain('function _quizAnswerBlock');
-    const panel = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-quiz.js'), 'utf8').replace(/\r\n/g, '\n');
+    const panel = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-quiz.js'), 'utf8');
     expect(panel).toContain("_answerBlock(_tr('kb.quiz.reference'");
     expect(panel).toContain("_answerBlock(_tr('kb.quiz.explain'");
     expect(panel).toContain("_answerBlock(_tr('kb.quiz.correct_answer'");
@@ -465,7 +500,7 @@ describe('KB workbench (S1 skeleton)', () => {
     const html = els['kb-workbench'].innerHTML;
     expect(html).toContain('kb-wb-soon-chip');
     expect(html).toContain('待开发');
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // 开关 + 点击走说明弹层；真弹窗实现保留（翻开关即可恢复）
     expect(src).toContain('const KB_SHARE_READY = false');
     expect(src).toMatch(/if \(!KB_SHARE_READY\) \{ _kbShareSoonOpen\(\); return; \}/);
@@ -474,14 +509,14 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('生成脑图仍走 kb.mindmap（本来就是独立能力）', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).toMatch(/mmBtn\.addEventListener\('click', \(\) => _genMindmap\(\)\)/);
     expect(src).toMatch(/quizBtn\.addEventListener\('click', \(\) => _genQuiz\(\)\)/);
     expect(src).toContain("invoke('kb.mindmap'");
   });
 
   it('文档级脑图：文件菜单给入口，且 doc 作用域下沉到 kb.mindmap', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // 两个入口：个人库文件行右键/… + 共享库文件菜单
     const entries = src.match(/生成脑图（本文档）/g) || [];
     expect(entries.length).toBeGreaterThanOrEqual(2);
@@ -499,7 +534,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('作用域回执校验：主进程没按「本文档」生成时必须丢弃结果并提示重启', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // 请求了 doc 就必须拿到 scope==='doc'；否则不渲染、不存档
     expect(src).toMatch(/const scopeMismatch = Boolean\(doc\) && res\.scope !== 'doc';/);
     expect(src).toMatch(/if \(doc && !_mmSameDoc\(res\.files, doc\)\)/);
@@ -524,7 +559,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('脑图作用域全程不串味：生成/回答/历史恢复三条路径都带上作用域', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     // 存档 key ←→ 作用域 双向可逆
     expect(src).toMatch(/function _mmScopeFromKey\(key\)/);
     expect(src).toMatch(/if \(k\.startsWith\('doc:'\)\) return \{ doc: k\.slice\(4\)\.split\('#'\)\[0\], scope: 'doc' \}/);
@@ -596,8 +631,14 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('uses the shared icon-button seam for the responsive AI panel controls', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const css = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/style.css'),
+      'utf8',
+    );
 
     expect(source).toContain("typeof window.uiIconButton === 'function'");
     expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
@@ -606,7 +647,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('routes every import-menu glyph through the shared icon registry', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
 
     for (const icon of ['file', 'folder', 'book-open', 'link', 'file-text', 'document-pencil', 'upload', 'mic']) {
       expect(source).toContain(`_icon('${icon}', 'kb-wb-import-icon')`);
@@ -615,7 +659,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders knowledge-base file row actions through shared icon buttons', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const fileRows = source.slice(
       source.indexOf('function _renderNodeRows('),
       source.indexOf('function _countFiles('),
@@ -628,7 +675,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders knowledge-base context menu actions through shared buttons and icons', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const menus = source.slice(
       source.indexOf('function _kbMenuShow('),
       source.indexOf('async function _kbRenameSpaceFile('),
@@ -646,15 +696,24 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('keeps the note submenu open when hover is followed by click', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
 
     expect(source).toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = false;/);
     expect(source).not.toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = !importNoteSub\.hidden;/);
   });
 
   it('opens the note submenu toward the available left side', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+    const css = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/style.css'),
+      'utf8',
+    );
 
     expect(source).toContain("_icon('chevron-left', 'kb-import-caret-icon')");
     const submenuRule = css.match(/\.kb-wb-import-sub\s*\{([^}]*)\}/)?.[1] || '';
@@ -663,7 +722,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders mindmap window actions through shared buttons and registered icons', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const mindmapMarkup = source.slice(
       source.indexOf('<div class="kb-mm-overlay"'),
       source.indexOf('// 右列强制 flex column'),
@@ -684,7 +746,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders analysis disclosure, citations, and retry through shared buttons', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const analysis = source.slice(
       source.indexOf('function _renderAnalysis('),
       source.indexOf('function _mmSnapshotKey('),
@@ -699,7 +764,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders QA actions and removable items through shared buttons', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const qaMarkup = source.slice(
       source.indexOf('<div class="kb-qa-session">'),
       source.indexOf('<div class="kb-mm-overlay"'),
@@ -735,7 +803,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders QA sources, answer actions, and model dialog through shared UI seams', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const answerActions = source.slice(
       source.indexOf('function _qaRefsElement('),
       source.indexOf('function _decorateAnswerHtml('),
@@ -763,13 +834,19 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('keeps the QA history panel above the responsive AI drawer', () => {
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
+    const css = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/style.css'),
+      'utf8',
+    );
     const historyRule = css.match(/\.kb-qa-history-panel\s*\{([^}]*)\}/)?.[1] || '';
     expect(historyRule).toContain('z-index: var(--z-modal-popover);');
   });
 
   it('renders the library import dialog with shared controls and recoverable loading state', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const importDialog = source.slice(
       source.indexOf('async function _importSpaceFromLib()'),
       source.indexOf('async function _kbNewFolder()'),
@@ -794,7 +871,10 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('adopts shared controls and modal behavior for knowledge-base sharing dialogs', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
     const createDialog = source.slice(
       source.indexOf('function _createSharedSpace()'),
       source.indexOf('async function _kbShareSubmit()'),
@@ -901,7 +981,7 @@ describe('kb file-viewer highlight pure helpers', () => {
 });
 
 describe('查看器窗口：缩放与调整大小（真机反馈回归）', () => {
-  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
   const css = src.slice(src.indexOf('function _injectFileViewerStyle'));
 
   it('对话框自带定位上下文 —— 否则右下角手柄会跑到屏幕角落上', () => {
@@ -961,7 +1041,7 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
 });
 
 describe('文件查看：按类型分派（#214 回归防护）', () => {
-  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
 
   it('保留富查看器（保排版/缩放）：PDF 走 PDFium iframe，Office 走排版 HTML', () => {
     // 主进程 kb.openFile 的契约 + kb-file:// 协议仍在；渲染层必须有对应实现
@@ -1043,7 +1123,10 @@ describe('KB mindmap centering', () => {
   const CENTERED = { x: 158, y: 90, w: 1123, h: 720 };
 
   function source(): string {
-    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    return fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
   }
 
   // 预置窗口几何 + 生成脑图按钮的绑定，返回可断言的 harness
@@ -1156,7 +1239,7 @@ describe('KB mindmap centering', () => {
   });
 
   it('画布容器跟随 stage 铺满（不再把左上角钉在 stage 中心，图才会真居中）', () => {
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
     const rules = [...css.matchAll(/\.kb-mm-overlay-wrap \{[\s\S]*?\}/g)].map((m) => m[0]);
     expect(rules.length).toBeGreaterThan(0);
     // 基础规则：铺满 + flex 居中
@@ -1206,7 +1289,10 @@ describe('KB mindmap centering', () => {
   });
 
   it('主进程独立窗口按鼠标所在显示器的工作区居中（不是系统默认角落）', () => {
-    const mainSrc = fs.readFileSync(path.join(__dirname, '../../src/main/ipc/index.ts'), 'utf8').replace(/\r\n/g, '\n');
+    const mainSrc = fs.readFileSync(
+      path.join(__dirname, '../../src/main/ipc/index.ts'),
+      'utf8',
+    );
     const start = mainSrc.indexOf("'kb.mindmap.popout'");
     expect(start).toBeGreaterThan(-1);
     const block = mainSrc.slice(start, start + 1400);
@@ -1240,7 +1326,7 @@ describe('KB mindmap layout & typography', () => {
   };
 
   function source(): string {
-    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
   }
 
   // 走真实路径渲染一份脑图 SVG（生成 → 缩略卡 innerHTML）
@@ -1596,13 +1682,13 @@ describe('KB mindmap progressive disclosure', () => {
   });
 
   it('「收拢」幂等（默认就是收拢态，再按一次应维持，而不是反向全部展开）', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).not.toContain('if (_state.mmCollapsed.size >= idxs.length) _state.mmCollapsed.clear();');
     expect(src).toMatch(/function _mmCollapseAll\(\)[\s\S]{0,700}_mmResetFoldToDefault\(root\)/);
   });
 
   it('结构变化后都重新适应画布（展开/收拢/折叠三处都要 fit）', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     const body = (name: string) => {
       const i = src.indexOf(`function ${name}(`);
       return src.slice(i, i + 900);
@@ -1613,7 +1699,7 @@ describe('KB mindmap progressive disclosure', () => {
   });
 
   it('折叠态点节点主体 = 展开（不是聚焦/跳原文），且截断后续监听', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     const i = src.indexOf('function _bindPreviewNodes');
     const block = src.slice(i, i + 1200);
     expect(block).toContain("closest('.kb-mm-fold-badge')");
@@ -1640,7 +1726,7 @@ describe('KB mindmap progressive disclosure', () => {
   });
 
   it('大纲视图沿用折叠态（任意层级折叠都不展开），提示文案同步', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
     expect(src).toContain('if ((n.children || []).length && _state.mmCollapsed.has(cur)) return;');
     expect(src).toContain('折叠的分支不展开');
   });
