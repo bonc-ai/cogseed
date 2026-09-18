@@ -48,6 +48,8 @@ jobs:
           npx electron-builder --mac --publish never
       - name: Assert packaged Electron fuse baseline
         run: node scripts/check-fuses.cjs dist/mac-arm64/CogSeed.app dist/mac/CogSeed.app
+      - name: Packaged launch smoke
+        run: npm run verify:package:launch
       - uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS-manual
