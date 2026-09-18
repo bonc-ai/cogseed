@@ -489,10 +489,9 @@ describe('preload bridge', () => {
     expect(() => api.log({ level: 'info' })).not.toThrow();
   });
 
-  it('does not activate the packaged STT smoke from a renderer argument alone', async () => {
+  it('does not activate the packaged STT smoke without the private renderer argument', async () => {
     const getUserMedia = vi.fn();
     const preload = loadPreload(null, {
-      argv: ['--cogseed-packaged-stt-smoke'],
       navigator: { mediaDevices: { getUserMedia } },
     });
 
@@ -511,7 +510,6 @@ describe('preload bridge', () => {
       argv: ['--cogseed-packaged-stt-smoke'],
       navigator: { mediaDevices: { getUserMedia: vi.fn(async () => { throw new Error('no microphone'); }) } },
       platform: 'win32',
-      resourcesPath: 'C:\\repo\\dist\\win-unpacked\\resources',
     });
 
     await vi.waitFor(() => {
