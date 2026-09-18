@@ -103,32 +103,6 @@
     return { high, other, ignored };
   }
 
-  /**
-   * 场景标签归一（与主进程 transcript_doc_tags.normalizeTags 同规则）：
-   * NFKC + 去首尾空白 + 折叠内部空白、去重（大小写不敏感）、限 8 条 × 24 字。
-   * 渲染层先归一一次，是为了"点了没反应/存进去变样"这种前后端不一致的观感。
-   */
-  const SCENARIO_MAX_TAGS = 8;
-  const SCENARIO_MAX_CHARS = 24;
-
-  function normalizeScenarioTags(input) {
-    const list = Array.isArray(input) ? input : [];
-    const out = [];
-    const seen = new Set();
-    for (const item of list) {
-      let tag = String(item == null ? '' : item).normalize('NFKC').trim().replace(/\s+/g, ' ');
-      if (!tag) continue;
-      tag = Array.from(tag).slice(0, SCENARIO_MAX_CHARS).join('').trim();
-      if (!tag) continue;
-      const key = tag.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(tag);
-      if (out.length >= SCENARIO_MAX_TAGS) break;
-    }
-    return out;
-  }
-
   /** 默认勾选的行：低风险且未被忽略（被忽略的词条降权，不默认重来一遍）。 */
   function defaultAcceptedIds(rows) {
     return (rows || [])
@@ -446,12 +420,6 @@
       headings: [],
       headingBusy: false,
       // 接受的三个动作（方案 §七）：忽略 / 加白 / 改写法
-      // 场景标签（「仅本场景」作用域的前置数据）：初值来自调用方 ctx，
-      // 随后由 transcript.docTags.* 读/写；它是**这一份稿件属于哪个场景**的标注。
-      scenarioTags: normalizeScenarioTags(ctx?.scenarioTags),
-      scenarioSuggestions: [],
-      scenarioBusy: false,
-      scenarioDraft: '',
       // 同人段落合并（方案 §五 P1-2）：默认开——它是"清理版"能不能真正好用的关键
       mergeSpeaker: true,
       rowMenu: '',
@@ -924,124 +892,6 @@
      *   场景标签 = 标签行；拟标题 = 动作 → uiButton；合并同人发言 = 开关 → uiCheckbox。
      * 点击委托仍按 data-atc-action 分派。
      */
-    /**
-     * 场景标签控件（「仅本场景」作用域的前置数据）。
-     *
-     * 为什么要有它：词条作用域支持"只在本场景生效"，但标签此前没有任何来源，
-     * 于是这个选项永远点不动、带场景标签的词条也永远命中不了（真机反馈）。
-     * 这里让用户为**这一份稿件**确认它属于哪个场景：chip 可删、输入可加；
-     * 建议值来自个人本体的分组/分节（设计指定来源），没有就自己命名。
-     */
-    function scenarioControlHtml() {
-      const chips = state.scenarioTags.map((tag) => button({
-        label: tag,
-        iconEnd: 'x',
-        role: 'secondary',
-        size: 'sm',
-        disabled: state.busy || state.scenarioBusy,
-        title: t('kb.transcriptCorrect.scenario_remove', '移除该场景标签'),
-        attrs: { 'data-atc-action': 'scenario-remove', 'data-atc-tag': tag },
-      })).join('');
-      const suggestions = state.scenarioSuggestions
-        .filter((tag) => !state.scenarioTags.some((own) => own.toLowerCase() === String(tag).toLowerCase()))
-        .slice(0, 6)
-        .map((tag) => button({
-          label: tag,
-          icon: 'plus',
-          role: 'ghost',
-          size: 'sm',
-          disabled: state.busy || state.scenarioBusy,
-          title: t('kb.transcriptCorrect.scenario_suggest_hint', '来自个人本体的分组/分节'),
-          attrs: { 'data-atc-action': 'scenario-add', 'data-atc-tag': tag },
-        })).join('');
-      const input = typeof root.uiInput === 'function'
-        ? root.uiInput({
-          id: 'atc-scenario-' + panelId,
-          type: 'text',
-          value: state.scenarioDraft,
-          placeholder: t('kb.transcriptCorrect.scenario_placeholder', '为这份稿件标注场景（如：英语演讲课）'),
-          attrs: { 'data-atc-scenario-input': 'true', autocomplete: 'off', spellcheck: 'false' },
-        })
-        : '';
-      const addBtn = button({
-        label: t('kb.transcriptCorrect.scenario_add', '标注'),
-        icon: 'plus',
-        role: 'secondary',
-        size: 'sm',
-        disabled: state.busy || state.scenarioBusy,
-        loading: state.scenarioBusy,
-        attrs: { 'data-atc-action': 'scenario-add-draft' },
-      });
-      return [
-        '<div class="kb-atc__scenario">',
-        '<span class="kb-atc__scenario-label">' + t('kb.transcriptCorrect.scenario_label', '场景') + '</span>',
-        chips,
-        input,
-        addBtn,
-        suggestions
-          ? '<span class="kb-atc__scenario-suggest-label">'
-            + t('kb.transcriptCorrect.scenario_suggest_label', '来自本体') + '</span>' + suggestions
-          : '',
-        state.scenarioTags.length
-          ? ''
-          : '<span class="kb-atc__scenario-hint">'
-            + t('kb.transcriptCorrect.scenario_hint', '标好场景后「仅本场景」才可用（只在同场景稿件上生效）') + '</span>',
-        '</div>',
-      ].join('');
-    }
-
-    /** 读该文档已存的场景标签（含本体建议）；失败只记日志，不打断面板。 */
-    async function loadScenarioTags() {
-      try {
-        const res = await root.cogseed.invoke('transcript.docTags.get', { docId: ctx.docId });
-        if (res && res.ok !== false && Array.isArray(res.tags) && res.tags.length) {
-          state.scenarioTags = normalizeScenarioTags(res.tags);
-          render();
-        }
-      } catch (error) {
-        log?.warn('scenario tags load failed', { error: error?.message || String(error) });
-      }
-      try {
-        const res = await root.cogseed.invoke('transcript.docTags.suggest', {});
-        const list = Array.isArray(res?.tags) ? normalizeScenarioTags(res.tags) : [];
-        if (list.length) { state.scenarioSuggestions = list; render(); }
-      } catch (error) {
-        log?.warn('scenario tag suggestions failed', { error: error?.message || String(error) });
-      }
-    }
-
-    /**
-     * 保存该文档的场景标签，然后**重扫**：标签决定作用域命中，改了标签不重扫，
-     * "未生效"清单会停在旧标签上（用户会以为设置没生效）。
-     */
-    async function applyScenarioTags(next) {
-      if (state.busy || state.scenarioBusy) return;
-      const wanted = normalizeScenarioTags(next);
-      state.scenarioBusy = true;
-      state.scenarioDraft = '';
-      render();
-      let ok = false;
-      try {
-        const res = await root.cogseed.invoke('transcript.docTags.set', { docId: ctx.docId, tags: wanted });
-        ok = !(res && res.ok === false);
-        if (ok) {
-          state.scenarioTags = Array.isArray(res?.tags) ? normalizeScenarioTags(res.tags) : wanted;
-        }
-      } catch (error) {
-        log?.warn('scenario tags save failed', { error: error?.message || String(error) });
-      }
-      state.scenarioBusy = false;
-      if (!ok) {
-        setStatus(t('kb.transcriptCorrect.scenario_failed', '场景标签保存失败，请稍后重试。'), 'warning');
-        render();
-        return;
-      }
-      setStatus(state.scenarioTags.length
-        ? t('kb.transcriptCorrect.scenario_saved', '已标注场景：{tags}', { tags: state.scenarioTags.join('、') })
-        : t('kb.transcriptCorrect.scenario_cleared', '已清除场景标签，「仅本场景」暂不可用。'), '');
-      await runScan();
-    }
-
     function renderScope() {
       const host = q('[data-atc-scope]');
       if (!host) return;
@@ -1049,7 +899,6 @@
       // 用户得能在这里补标签，而不是对着灰按钮猜（真机反馈）。
       if (!state.scanned || (state.rows.length === 0 && state.denied.length === 0)) { host.textContent = ''; return; }
       host.innerHTML = [
-        scenarioControlHtml(),
         button({
           label: state.headingBusy
             ? t('kb.transcriptCorrect.headings_running', '正在拟标题…')
@@ -1614,7 +1463,6 @@
           // 口癖规则包装进词表后是 action=delete 词条：不带这个开关它们不会出现，
           // 用户会以为"装了规则包却没反应"（真机踩过）。
           includeDelete: true,
-          ...(state.scenarioTags.length ? { scenarioTags: state.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
         state.denied = Array.isArray(result?.denied) ? result.denied : [];
@@ -2486,10 +2334,9 @@
           correct,
           kind,
           source: 'manual',
-          // 创建上下文：未显式给 scope 时，main 侧据此把新词条收窄到本文档/本场景，
+          // 创建上下文：未显式给 scope 时，main 侧据此把新词条收窄到本文档，
           // 而不是静默变成全局规则（「接受范围」控件已删除，护栏移到这里）。
           docId: ctx.docId,
-          scenarioTags: state.scenarioTags,
         });
         if (result?.skippedReason === 'pure_digit_variant') {
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
@@ -2618,20 +2465,6 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'sync-ontology') { void runSyncOntology(); return; }
-      if (kind === 'scenario-add') {
-        void applyScenarioTags(state.scenarioTags.concat([action.getAttribute('data-atc-tag') || '']));
-        return;
-      }
-      if (kind === 'scenario-remove') {
-        const tag = action.getAttribute('data-atc-tag') || '';
-        void applyScenarioTags(state.scenarioTags.filter((own) => own !== tag));
-        return;
-      }
-      if (kind === 'scenario-add-draft') {
-        const input = q('[data-atc-scenario-input]');
-        void applyScenarioTags(state.scenarioTags.concat([(input && input.value) || state.scenarioDraft || '']));
-        return;
-      }
       if (kind === 'toggle-denied') { state.showDenied = !state.showDenied; render(); return; }
       if (kind === 'open-glossary') {
         if (root.KbGlossaryManager && typeof root.KbGlossaryManager.open === 'function') {
@@ -2661,29 +2494,11 @@
     }
 
     container.addEventListener('click', onClick);
-    // 场景输入：草稿进 state（面板频繁重渲染，不这么做输入会被清空），回车即标注
-    const onScenarioInput = (event) => {
-      const input = event.target.closest && event.target.closest('[data-atc-scenario-input]');
-      if (!input) return;
-      state.scenarioDraft = input.value;
-    };
-    const onScenarioKeydown = (event) => {
-      if (event.key !== 'Enter') return;
-      const input = event.target.closest && event.target.closest('[data-atc-scenario-input]');
-      if (!input) return;
-      event.preventDefault();
-      void applyScenarioTags(state.scenarioTags.concat([input.value || '']));
-    };
-    container.addEventListener('input', onScenarioInput);
-    container.addEventListener('keydown', onScenarioKeydown);
     render();
-    void loadScenarioTags(); // 标签是异步到的：先渲染面板，读到再补上并重扫
 
     return {
       destroy() {
         container.removeEventListener('click', onClick);
-        container.removeEventListener('input', onScenarioInput);
-        container.removeEventListener('keydown', onScenarioKeydown);
       },
       getState() { return state; },
     };
@@ -2704,13 +2519,11 @@
         text,
         docId: String(ctx?.docId || ctx?.displayPath || 'transcript'),
         displayPath: String(ctx?.displayPath || ''),
-        scenarioTags: Array.isArray(ctx?.scenarioTags) ? ctx.scenarioTags : [],
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）
     __test: {
       groupCandidates,
-      normalizeScenarioTags,
       groupRowsByConcept,
       flaggedSummary,
       mergeFlagged,
@@ -2732,7 +2545,6 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       groupCandidates,
-      normalizeScenarioTags,
       groupRowsByConcept,
       flaggedSummary,
       mergeFlagged,
