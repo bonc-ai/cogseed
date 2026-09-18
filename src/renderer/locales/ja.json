@@ -4633,6 +4633,8 @@
   "kb.transcriptCorrect.compare_no_source": "（どのチャンクにも一致なし）",
   "kb.transcriptCorrect.panel_hint": "用語集で確認済みの語だけを置換します。原文は変更されず、整形版は別ファイルになります。",
   "kb.transcriptCorrect.meta_full": "フルパス：{path}（{count} 文字）",
+  "kb.viewer.md_rendered": "レイアウト表示",
+  "kb.viewer.md_source": "ソースを表示",
   "kb.viewer.scale_s": "小",
   "kb.viewer.scale_m": "中",
   "kb.viewer.scale_l": "大",
