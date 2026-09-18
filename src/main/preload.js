@@ -476,13 +476,12 @@ function runAfterDomReady(callback) {
 // verifier supplies the private renderer argument. It intentionally exercises
 // the same contextBridge invoke/stream functions as the UI and records only
 // booleans/counts — never captured audio, session ids, or transcript text.
-const _sttSmokeResourcesPath = String(process.resourcesPath || '').replaceAll('\\', '/');
-const _isPackagedSttSmoke = process.platform === 'win32'
-  && _sttSmokeResourcesPath.length > 0
-  && !_sttSmokeResourcesPath.includes('/node_modules/electron/')
-  && String(process.env.COGSEED_PACKAGED_STT_SMOKE_FILE || '').trim().length > 0
-  && String(process.env.COGSEED_PACKAGED_STT_SMOKE_WAV || '').trim().length > 0
-  && process.argv.includes('--cogseed-packaged-stt-smoke');
+// `additionalArguments` is injected only by the main process after it has
+// validated the marker/WAV environment. Do not additionally rely on renderer
+// `process.resourcesPath` or environment inheritance: neither is guaranteed
+// in hardened Electron renderer processes, and either would silently disable
+// this release gate.
+const _isPackagedSttSmoke = process.argv.includes('--cogseed-packaged-stt-smoke');
 if (_isPackagedSttSmoke) {
   runAfterDomReady(() => {
     const metrics = {
@@ -496,6 +495,7 @@ if (_isPackagedSttSmoke) {
       finalEventObserved: false,
       finalTextLength: 0,
       failureCount: 0,
+      failureStage: 'get_user_media',
     };
     let mediaStream = null;
     let audioContext = null;
@@ -527,6 +527,7 @@ if (_isPackagedSttSmoke) {
           video: false,
         });
         metrics.audioTrackLive = mediaStream.getAudioTracks().some((track) => track.readyState === 'live');
+        metrics.failureStage = 'audio_capture';
         const AudioContextConstructor = window.AudioContext;
         audioContext = new AudioContextConstructor({ sampleRate: 16000 });
         if (audioContext.state === 'suspended') await audioContext.resume();
@@ -553,10 +554,12 @@ if (_isPackagedSttSmoke) {
         }), 15_000, 'audio capture');
         metrics.rms = Math.sqrt(metrics.rms / metrics.sampleCount);
 
+        metrics.failureStage = 'stt_start';
         const started = await cogseedApi.invoke('stt.start', {});
         if (!started || started.ok === false || !started.sessionId) throw new Error('stt.start failed');
         sessionId = started.sessionId;
         metrics.sessionCreated = true;
+        metrics.failureStage = 'stt_push_audio';
         resultStream = cogseedApi.stream('stt.results', { sessionId }, (event) => {
           if (event?.type === 'event' && typeof event.event?.final === 'string') {
             metrics.finalEventObserved = true;
@@ -571,10 +574,13 @@ if (_isPackagedSttSmoke) {
           if (!pushed || pushed.ok === false) throw new Error('stt.pushAudio failed');
           metrics.pushAcknowledgements += 1;
         }
+        metrics.failureStage = 'stt_stop';
         const stopped = await cogseedApi.invoke('stt.stop', { sessionId });
         if (!stopped || stopped.ok === false) throw new Error('stt.stop failed');
         metrics.stopAcknowledged = true;
+        metrics.failureStage = 'stt_result';
         await timeout(resultStream.promise, 15_000, 'stt.results');
+        metrics.failureStage = 'complete';
       } catch (_) {
         metrics.failureCount += 1;
       } finally {
