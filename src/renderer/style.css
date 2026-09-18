@@ -30185,7 +30185,8 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-qa-model-pop-manage.ui-button:hover { background: var(--kb-brand-soft, var(--color-brand-soft)); }
 .kb-qa-input {
   flex: 1; min-width: 0; resize: none; font-size: var(--font-size-4); line-height: 1.6;
-  height: 26px; max-height: 120px; padding: 4px 4px; color: var(--kb-text);
+  height: 26px; min-height: 26px; max-height: 120px; overflow-y: hidden;
+  padding: 4px 4px; color: var(--kb-text);
 }
 .kb-qa-input::placeholder { color: var(--kb-text3); opacity: .6; }
 .kb-qa-send.ui-icon-button {
