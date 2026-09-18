@@ -1983,6 +1983,20 @@ export async function promoteRecallCandidate(
         createdAt: now,
         updatedAt: now,
       }, { actor: handoffActor, reason: handoffReason });
+      // 入库自动挂族（2026-09-19 列表 #2）：新资产与既有资产静态同键或语义
+      // ≥ 0.60 → 写 same_family 关系。挂族是增强不是闸门，失败在函数内静默。
+      try {
+        const { listAbilityAssets } = await import('./asset-service');
+        const { attachFamilyOnCreate } = await import('./family');
+        const peers = (await listAbilityAssets(userId))
+          .filter((asset) => asset.id !== stored.id && asset.status === 'active');
+        await attachFamilyOnCreate(userId, stored, peers, {
+          reviewDecisionId: decision.decision_id,
+          sourceCandidateId: candidate.id,
+        });
+      } catch {
+        // 挂族失败不影响入库。
+      }
     } else {
       if (!candidate.targetAssetId) throw new Error('candidate target asset is required');
       const target = await readAbilityAsset(userId, candidate.targetAssetId);

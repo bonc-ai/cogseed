@@ -129,6 +129,72 @@ export async function collectSemanticFamilyGroups(
   return groups;
 }
 
+/** 新资产入库后自动挂族：静态键同组，或与既有资产语义 ≥ 阈值 → 给新资产写
+ *  same_family 关系指向同族成员。返回挂上的成员 id（空=无族可挂）。
+ *  挂族是增强不是闸门：任何失败静默降级为"没挂上"，不阻断入库。 */
+export async function attachFamilyOnCreate(
+  userId: string,
+  created: Pick<RecallAbilityAssetRecord, 'id' | 'statement' | 'title' | 'ontologyRefs' | 'learningProvenance' | 'relations' | 'candidateId'>,
+  peers: ReadonlyArray<Pick<RecallAbilityAssetRecord, 'id' | 'statement' | 'title' | 'ontologyRefs' | 'learningProvenance'>>,
+  reviewHandoff?: { reviewDecisionId: string; sourceCandidateId: string },
+  deps: {
+    embedForDedup?: (userId: string, text: string) => Promise<number[] | null>;
+    writeRelations?: (userId: string, assetId: string, relations: AbilityAssetRelation[]) => Promise<unknown>;
+  } = {},
+): Promise<string[]> {
+  try {
+    const candidates: string[] = [];
+    const createdKey = computeStaticFamilyKey(created);
+    const semanticPeers: string[] = [];
+    if (createdKey) {
+      for (const peer of peers) {
+        if (computeStaticFamilyKey(peer) === createdKey) candidates.push(peer.id);
+      }
+    }
+    if (candidates.length === 0) {
+      const { embedForDedup, cosineScore } = await import('./similarity');
+      const embed = deps.embedForDedup || embedForDedup;
+      const createdVector = await embed(userId, String(created.statement || created.title || ''));
+      if (createdVector) {
+        for (const peer of peers) {
+          const peerVector = await embed(userId, String(peer.statement || peer.title || ''));
+          if (peerVector && cosineScore(createdVector, peerVector) >= FAMILY_SEMANTIC_THRESHOLD) {
+            semanticPeers.push(peer.id);
+          }
+        }
+      }
+      candidates.push(...semanticPeers);
+    }
+    if (candidates.length === 0) return [];
+
+    const existing = created.relations || [];
+    const existingPeerIds = new Set(existing
+      .filter((relation) => relation.kind === 'same_family')
+      .map((relation) => relation.assetId));
+    const addRelations = [...new Set(candidates)]
+      .filter((peerId) => !existingPeerIds.has(peerId))
+      .map((peerId) => ({ kind: 'same_family' as const, assetId: peerId, note: 'auto-attach on ingest' }));
+    if (addRelations.length === 0) return [...existingPeerIds];
+
+    if (deps.writeRelations) {
+      await deps.writeRelations(userId, created.id, [...existing, ...addRelations]);
+    } else {
+      const { updateAbilityAsset } = await import('./asset-service');
+      // system 动作必须带审查回执（asset-service 闸门）：挂族发生在 promote
+      // 内部，复用本次晋升的 decision 与来源候选，满足成对要求。
+      await updateAbilityAsset(userId, created.id, {
+        relations: [...existing, ...addRelations],
+        actor: 'system',
+        reason: 'family:auto-attach',
+        ...(reviewHandoff ? reviewHandoff : {}),
+      });
+    }
+    return addRelations.map((relation) => relation.assetId);
+  } catch {
+    return [];
+  }
+}
+
 /** 由族组生成每条资产的 same_family 关系补丁（幂等：已有的不重复生成）。 */
 export function buildSameFamilyPatches(
   groups: ReadonlyMap<string, string[]>,

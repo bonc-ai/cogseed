@@ -1483,4 +1483,47 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     expect(versions.length).toBe(2);
     expect(String(versions[1].reason || '')).toContain('semantic-fusion');
   });
+
+  it('create promote auto-attaches same_family to a semantically close asset（入库自动挂族）', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-fam');
+    const candidates = await service();
+    const similarity = await import('../../../../src/main/features/recall/similarity');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+
+    const first = await candidates.saveRecallCandidate('user-fam', {
+      judgment: '周报三个固定板块：进展、风险、计划。',
+      value: '周报格式基线。',
+      summary: '周报格式', suggestedType: 'rule', suggestedScope: 'report',
+      applicableWhen: ['写周报时'], forbiddenWhen: ['临时日报'],
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-fam-1' }],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-fam-1' }],
+    });
+    await candidates.promoteRecallCandidate('user-fam', first.id, { actor: 'user' });
+    const firstAsset = await assets.readAbilityAsset('user-fam', (await candidates.readRecallCandidate('user-fam', first.id)).promotedAssetId!);
+
+    // 第二条语义相近（cos≥0.60）→ 入库自动挂 same_family。
+    similarity._injectEmbeddingForTest('user-fam', String(firstAsset.statement), [1, 0]);
+    const secondText = '周报固定使用三个板块，另加风险清单与通俗说明。';
+    const secondValue = '周报格式补充。';
+    // create 后 statement = judgment + '\n' + value，两把 key 都注入以防拼接差异。
+    similarity._injectEmbeddingForTest('user-fam', secondText, [0.85, 0.53]);
+    similarity._injectEmbeddingForTest('user-fam', `${secondText}\n${secondValue}`, [0.85, 0.53]);
+    const second = await candidates.saveRecallCandidate('user-fam', {
+      judgment: secondText,
+      value: secondValue,
+      summary: '周报格式补充', suggestedType: 'rule', suggestedScope: 'report',
+      applicableWhen: ['写周报时'], forbiddenWhen: ['临时日报'],
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-fam-2' }],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-fam-2' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-fam', second.id, { actor: 'user' });
+    // 挂族发生在 create 之后的独立 update，promote 返回的是挂族前快照——重读。
+    const afterAttach = await assets.readAbilityAsset('user-fam', promoted.asset.id);
+    const relations = afterAttach.relations || [];
+    const familyLinks = relations.filter((rel) => rel.kind === 'same_family');
+    expect(familyLinks.map((rel) => rel.assetId)).toContain(firstAsset.id);
+  });
 });
