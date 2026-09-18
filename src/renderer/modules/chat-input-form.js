@@ -637,6 +637,19 @@
     resetBtn.className = 'btn btn-sm';
     resetBtn.dataset.i18n = 'chat.form.reset';
     resetBtn.textContent = t('chat.form.reset');
+    // "Skip / don't answer". Only shown when something is actually required —
+    // an all-optional form can already be submitted blank. Without this a
+    // required single-choice question forces a pick with no way to decline.
+    const skipBtn = form.fields.some((f) => f && f.required)
+      ? document.createElement('button')
+      : null;
+    if (skipBtn) {
+      skipBtn.type = 'button';
+      skipBtn.className = 'btn btn-sm';
+      skipBtn.dataset.i18n = 'chat.form.skip';
+      skipBtn.textContent = t('chat.form.skip');
+      actions.appendChild(skipBtn);
+    }
     actions.appendChild(resetBtn);
     actions.appendChild(submitBtn);
     container.appendChild(actions);
@@ -649,28 +662,24 @@
         else submitBtn.dataset.i18nTitle = 'chat.form.file_uploading_wait';
         submitBtn.title = allReady ? '' : t('chat.form.file_uploading_wait');
       }
+      if (skipBtn && !skipBtn.dataset.locked) skipBtn.disabled = !allReady;
     }
     _refreshSubmitState();
 
-    resetBtn.addEventListener('click', () => {
-      // Clear the draft so re-render falls back to schema defaults rather
-      // than re-hydrating the in-progress values we just wiped from the DOM.
-      _formDrafts.delete(draftKey);
-      container.innerHTML = '';
-      renderChatInputForm(container, message, opts);
-    });
-
-    submitBtn.addEventListener('click', () => {
-      errEl.textContent = '';
-      errEl.__formI18nMessage = null;
-      errEl.__formValidationErrors = null;
-      // Block while any file field is still uploading.
-      if (fields.some((f) => !f.isReady())) {
-        errEl.__formI18nMessage = { key: 'chat.form.file_uploading_wait' };
-        errEl.__formValidationErrors = null;
-        errEl.textContent = t('chat.form.file_uploading_wait');
-        return;
+    function _setLocked(locked) {
+      for (const btn of [skipBtn, resetBtn, submitBtn]) {
+        if (!btn) continue;
+        if (locked) btn.dataset.locked = '1';
+        else delete btn.dataset.locked;
+        btn.disabled = locked;
       }
+      fields.forEach((f) => {
+        const inputs = f.el.querySelectorAll('input, textarea, select, button');
+        inputs.forEach((el) => { el.disabled = locked; });
+      });
+    }
+
+    function _collect() {
       const values = {};
       const errors = [];
       const attachmentNames = [];
@@ -684,7 +693,28 @@
         const err = _validate(f.field, v);
         if (err) errors.push({ id: f.field.id, label: f.field.label, ...err });
       }
-      if (errors.length) {
+      return { values, errors, attachmentNames };
+    }
+
+    // Shared submit path for both "confirm" and "skip": one lock, one encode,
+    // one onSubmit call, identical rollback on failure. `skip` bypasses the
+    // required-field gate and tags the payload so the receiving agent can tell
+    // "user declined" apart from "user answered blank".
+    function _dispatch(skip) {
+      errEl.textContent = '';
+      errEl.__formI18nMessage = null;
+      errEl.__formValidationErrors = null;
+      // Block while any file field is still uploading. Skipping does not wait:
+      // declining a question has no payload worth uploading.
+      if (!skip && fields.some((f) => !f.isReady())) {
+        errEl.__formI18nMessage = { key: 'chat.form.file_uploading_wait' };
+        errEl.__formValidationErrors = null;
+        errEl.textContent = t('chat.form.file_uploading_wait');
+        return;
+      }
+      const { values, errors, attachmentNames } = _collect();
+      if (skip) values.__skipped = true;
+      if (!skip && errors.length) {
         errEl.__formI18nMessage = null;
         errEl.__formValidationErrors = errors;
         errEl.textContent = errors
@@ -695,15 +725,9 @@
           .join(' · ');
         return;
       }
-      // Lock the form immediately so the user can't double-click.
-      submitBtn.dataset.locked = '1';
-      submitBtn.disabled = true;
-      resetBtn.disabled = true;
-      fields.forEach((f) => {
-        const inputs = f.el.querySelectorAll('input, textarea, select, button');
-        inputs.forEach((el) => { el.disabled = true; });
-      });
-      const encoded = encodeChatFormSubmission(form, values);
+      _setLocked(true);
+      const summary = encodeChatFormSubmission(form, values);
+      const encoded = skip ? `${t('chat.form.skipped_note')}\n\n${summary}` : summary;
       // De-dupe attachment names (a file dropped into both the form and the
       // composer would otherwise appear twice on the user message).
       const dedupAttachments = Array.from(new Set(attachmentNames));
@@ -715,13 +739,7 @@
         // already-sent values into a stale form.
         _formDrafts.delete(draftKey);
       } catch (err) {
-        delete submitBtn.dataset.locked;
-        submitBtn.disabled = false;
-        resetBtn.disabled = false;
-        fields.forEach((f) => {
-          const inputs = f.el.querySelectorAll('input, textarea, select, button');
-          inputs.forEach((el) => { el.disabled = false; });
-        });
+        _setLocked(false);
         if (err && err.message) {
           errEl.__formI18nMessage = null;
           errEl.__formValidationErrors = null;
@@ -732,7 +750,18 @@
           errEl.textContent = t('chat.form.submit_failed');
         }
       }
+    }
+
+    resetBtn.addEventListener('click', () => {
+      // Clear the draft so re-render falls back to schema defaults rather
+      // than re-hydrating the in-progress values we just wiped from the DOM.
+      _formDrafts.delete(draftKey);
+      container.innerHTML = '';
+      renderChatInputForm(container, message, opts);
     });
+
+    submitBtn.addEventListener('click', () => _dispatch(false));
+    if (skipBtn) skipBtn.addEventListener('click', () => _dispatch(true));
   }
 
   function _formatFormDate(value) {

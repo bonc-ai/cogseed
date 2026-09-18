@@ -2688,9 +2688,13 @@ export function bumpEntryLastUsed(entryId: string): void {
  * Skips:
  *   - entries whose profile was deleted
  *   - entries whose OAuth expired without a working refresh
- *   - entries in the cooldown map (`profile-cooldown.ts`)
  *
- * Returns `[]` when no entry at all is usable.
+ * Entries in the cooldown map (`profile-cooldown.ts`) are kept aside instead
+ * of dropped: if nothing else is usable they are returned as a last-resort
+ * set so a stale cooldown can never hard-block a brand-new user turn. See the
+ * `cooledFallback` block below for why.
+ *
+ * Returns `[]` only when no entry at all is usable.
  *
  * Does NOT bump `lastUsed` — that's the caller's job (rotating-provider
  * bumps the winning candidate via `onSuccess`).
@@ -2709,21 +2713,29 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
   }
 
   const choices: ChatEntryChoice[] = [];
+  // Rotation prefers keys that did not just fail, so cooled-down profiles are
+  // normally skipped. But if EVERY otherwise-usable candidate is merely cooled
+  // down, returning [] makes the runner hard-fail the turn with "model
+  // temporarily unavailable" even though the credential is fine — this is the
+  // "connectivity test says OK, task shows a red circle, re-testing the
+  // connection fixes it" bug: `testConnection` bypasses the cooldown map and
+  // clears it on success, while the task path honoured it. Keep cooled entries
+  // aside and use them as a last-resort retry set so a stale cooldown can never
+  // block a fresh user turn. Healthy candidates still win, and a fallback that
+  // fails again re-enters cooldown through the normal rotation path.
+  const cooledFallback: ChatEntryChoice[] = [];
   for (const entry of ordered) {
     if (!isEntryAllowed(store, entry)) {
       log.info(`skipping disabled provider/model ${entry.provider}/${entry.model}`);
       continue;
     }
-    if (isCooledDown(entry.profileId)) {
-      log.info(`skipping cooled-down profile ${entry.profileId}`);
-      continue;
-    }
+    const cooled = isCooledDown(entry.profileId);
     const apiKey = await resolveEntryApiKey(store, entry);
     if (!apiKey) continue;
     const prof = store.profiles[entry.profileId];
     const apiProfile = prof?.type === 'api_key' ? prof as ApiKeyProfile : undefined;
     const custom = customProviderForId(store, entry.provider);
-    choices.push({
+    const choice: ChatEntryChoice = {
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
@@ -2734,7 +2746,17 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
       ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
         ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
         : {}),
-    });
+    };
+    if (cooled) {
+      log.info(`holding cooled-down profile ${entry.profileId} as last-resort candidate`);
+      cooledFallback.push(choice);
+      continue;
+    }
+    choices.push(choice);
+  }
+  if (!choices.length && cooledFallback.length) {
+    log.info(`all ${cooledFallback.length} usable candidate(s) are cooled down — retrying them once this turn`);
+    return cooledFallback;
   }
   return choices;
 }

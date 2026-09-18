@@ -108,6 +108,8 @@ function loadFormModule() {
       'chat.form.title': 'Form',
       'chat.form.readonly_title': 'Submitted form',
       'chat.form.submit': 'Submit',
+      'chat.form.skip': 'Skip',
+      'chat.form.skipped_note': '(skipped)',
       'chat.form.reset': 'Reset',
       'chat.form.required_text': 'Required',
       'chat.form.errors_prefix': `${vars?.label}: ${vars?.msg}`,
@@ -119,6 +121,15 @@ function loadFormModule() {
     document: {
       createElement: (tag: string) => new FakeElement(tag),
       createElementNS: (_ns: string, tag: string) => new FakeElement(tag),
+    },
+    // Minimal stand-in for the shared AiSelect widget used by `type: 'select'`.
+    _aiSelectMount: () => {
+      let value = '';
+      return {
+        setOptions: (_options: unknown, opts?: { value?: string }) => { value = (opts && opts.value) || ''; },
+        onChange: () => {},
+        getValue: () => value,
+      };
     },
     window: {},
   };
@@ -196,5 +207,82 @@ describe('chat input form widget', () => {
     expect(encoded).toContain('- Tags：\n');
     expect(encoded).not.toContain('unfilled');
     expect(encoded).not.toContain('undefined');
+  });
+
+  it('lets a required single-choice form be submitted via skip without answering', () => {
+    const context = loadFormModule();
+    const container = new FakeElement('div');
+    const submissions: any[] = [];
+    const message = {
+      form: {
+        form_id: 'abc12345',
+        agent_id: 'agent-a',
+        fields: [
+          {
+            id: 'decision',
+            label: 'Decision',
+            type: 'select',
+            required: true,
+            options: [
+              { value: 'a', label: 'A' },
+              { value: 'b', label: 'B' },
+              { value: 'c', label: 'C' },
+            ],
+          },
+        ],
+      },
+    };
+
+    context.window.renderChatInputForm(container, message, {
+      cid: 'c1',
+      onSubmit: (encoded: string, values: Record<string, unknown>) => submissions.push({ encoded, values }),
+    });
+
+    // Sanity: confirming without a pick is still blocked by required validation.
+    const confirm = container.querySelectorAll('button').find((btn) => btn.textContent === 'Submit');
+    confirm?.dispatch('click');
+    expect(submissions).toEqual([]);
+
+    const skip = container.querySelectorAll('button').find((btn) => btn.textContent === 'Skip');
+    expect(skip).toBeTruthy();
+    skip?.dispatch('click');
+
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0].values.decision).toBe('');
+    expect(submissions[0].values.__skipped).toBe(true);
+    expect(submissions[0].encoded).toContain('(skipped)');
+    expect(submissions[0].encoded).toContain('<agent-input-submission form_id="abc12345" agent_id="agent-a">');
+  });
+
+  it('submits a skipped form once even when skip is double-clicked', () => {
+    const context = loadFormModule();
+    const container = new FakeElement('div');
+    const submissions: any[] = [];
+
+    context.window.renderChatInputForm(container, baseMessage, {
+      cid: 'c1',
+      onSubmit: (encoded: string, values: Record<string, unknown>) => submissions.push({ encoded, values }),
+    });
+
+    const skip = container.querySelectorAll('button').find((btn) => btn.textContent === 'Skip');
+    skip?.dispatch('click');
+    skip?.dispatch('click');
+
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0].values.__skipped).toBe(true);
+  });
+
+  it('does not render a skip action when no field is required', () => {
+    const context = loadFormModule();
+    const container = new FakeElement('div');
+    context.window.renderChatInputForm(container, {
+      form: {
+        form_id: 'abc12345',
+        agent_id: 'agent-a',
+        fields: [{ id: 'note', label: 'Note', type: 'text', required: false }],
+      },
+    }, { cid: 'c1', onSubmit: () => {} });
+
+    expect(container.querySelectorAll('button').some((btn) => btn.textContent === 'Skip')).toBe(false);
   });
 });
