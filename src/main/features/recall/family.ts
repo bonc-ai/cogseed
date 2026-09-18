@@ -179,15 +179,17 @@ export async function attachFamilyOnCreate(
     if (deps.writeRelations) {
       await deps.writeRelations(userId, created.id, [...existing, ...addRelations]);
     } else {
-      const { updateAbilityAsset } = await import('./asset-service');
-      // system 动作必须带审查回执（asset-service 闸门）：挂族发生在 promote
-      // 内部，复用本次晋升的 decision 与来源候选，满足成对要求。
-      await updateAbilityAsset(userId, created.id, {
-        relations: [...existing, ...addRelations],
-        actor: 'system',
-        reason: 'family:auto-attach',
-        ...(reviewHandoff ? reviewHandoff : {}),
-      });
+      // 直写 relations 不走 updateAbilityAsset：挂族是元数据变更不是内容变更
+      // ——经 updateAbilityAsset 会 bump version，撞破投影的版本冻结（transfer
+      // receipt 校验"receipt 必须证明投影钉住的全部版本"，挂族推号让 v1 投影
+      // 对不上 v2 资产）。写入前过 normalize 保形状。
+      const { updateRecallJsonRecord } = await import('./store');
+      const { normalizeAbilityAssetRelations } = await import('./asset-relations');
+      await updateRecallJsonRecord(userId, 'ability-assets', created.id, (current: Record<string, unknown> | null) => ({
+        ...(current || {}),
+        relations: normalizeAbilityAssetRelations([...existing, ...addRelations], created.id),
+        updatedAt: new Date().toISOString(),
+      }));
     }
     return addRelations.map((relation) => relation.assetId);
   } catch {

@@ -1197,10 +1197,27 @@ export async function mergeAbilityAssets(
         updatedAt: new Date().toISOString(),
       };
     }
-    const { status: _s, maturity: _m, version: _v, ...content } = sourceActiveSnapshot;
+    const { status: _s, maturity: _m, version: _v, relations: sourceRelations, derivedFrom: sourceDerivedFrom, ...content } = sourceActiveSnapshot;
+    // 归并把 source 的关系/溯源并入 target：过滤自指（same_family 互指时
+    // source 带着指向 target 的关系，直接搬会撞 normalize 的自指闸），
+    // 指向彼此的 same_family 随归并失效一并丢弃，其余去重保留。
+    const seenRelation = new Set((current.relations || []).map((relation) => `${relation.kind}\0${relation.assetId}`));
+    const mergedRelations = [...(current.relations || [])];
+    for (const relation of sourceRelations || []) {
+      if (relation.assetId === targetAssetId) continue;
+      const key = `${relation.kind}\0${relation.assetId}`;
+      if (seenRelation.has(key)) continue;
+      seenRelation.add(key);
+      mergedRelations.push(relation);
+    }
+    const mergedDerivedFrom = [...new Set([...(current.derivedFrom || []), ...(sourceDerivedFrom || [])])]
+      .filter((id) => id !== targetAssetId)
+      .slice(0, 32);
     return {
       ...current,
       ...content,
+      relations: mergedRelations,
+      ...(mergedDerivedFrom.length ? { derivedFrom: mergedDerivedFrom } : {}),
       evidenceRefs: [...current.evidenceRefs, ...source.evidenceRefs].slice(0, 200),
       version: activeCursor,
       activeVersion: activeCursor,

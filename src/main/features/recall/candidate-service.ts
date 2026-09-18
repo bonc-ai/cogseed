@@ -593,7 +593,7 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   const origin = deriveCandidateOrigin(value, learningProvenance !== undefined);
   const createdAt = requireIsoTimestamp(value.createdAt, 'candidate created at');
   const candidateValue = Object.prototype.hasOwnProperty.call(value, 'value')
-    ? (boundedText(value.value, 'candidate value', 1_000) || '')
+    ? (boundedText(value.value, 'candidate value', 4_000) || '')
     : (boundedText(value.summary, 'candidate summary', 1_000) || value.judgment);
   return {
     ...value,
@@ -772,7 +772,9 @@ export function saveRecallCandidate(userId: string, input: SaveRecallCandidateIn
 
 async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCandidateInput): Promise<RecallCandidateRecord> {
   const judgment = boundedText(input.judgment, 'judgment', 4_000, true)!;
-  const value = boundedText(input.value, 'value', 1_000);
+  // value 上限与 judgment 对齐（2026-09-19）：value 缺省兜底改为 judgment 全文，
+  // 1000 上限会把长 judgment 挡在门外（forecast-commit 实测抓出）。
+  const value = boundedText(input.value, 'value', 4_000);
   const summary = boundedText(input.summary, 'summary', 1_000);
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500) || '';
@@ -812,7 +814,10 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     if (captured) return captured;
   }
   const now = new Date().toISOString();
-  const resolvedValue = hasExplicitValue ? (value || '') : (summary || judgment);
+  // value 缺省兜底用 judgment（正文）而不是 summary（标题）：标题残片拼进
+  // 资产正文是实测过的污染（"可复用经验：数据的文档…"），而 value=judgment
+  // 会被 promote 的防重检查挡掉，不进 statement——调用方从此不必被迫双存。
+  const resolvedValue = hasExplicitValue ? (value || '') : judgment;
   const expiresAt = requireIsoTimestamp(input.expiresAt, 'candidate expiry', new Date(Date.parse(now) + DEFAULT_CANDIDATE_TTL_MS).toISOString());
   const taskRunId = input.taskRunId === undefined ? undefined : boundedText(input.taskRunId, 'task run id', 160, true);
   if (taskRunId && !safeId(taskRunId)) throw new Error('invalid task run id');
@@ -991,7 +996,9 @@ async function assertResolvableNewSourceRefs(
 
 export async function updateRecallCandidate(userId: string, candidateId: string, input: SaveRecallCandidateInput): Promise<RecallCandidateRecord> {
   const judgment = boundedText(input.judgment, 'judgment', 4_000, true)!;
-  const value = boundedText(input.value, 'value', 1_000);
+  // value 上限与 judgment 对齐（2026-09-19）：value 缺省兜底改为 judgment 全文，
+  // 1000 上限会把长 judgment 挡在门外（forecast-commit 实测抓出）。
+  const value = boundedText(input.value, 'value', 4_000);
   const summary = boundedText(input.summary, 'summary', 1_000);
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500) || '';
@@ -1037,7 +1044,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   ]);
   const duplicates = await listRecallCandidates(userId);
   const hasExplicitValue = Object.prototype.hasOwnProperty.call(input, 'value');
-  const resolvedValue = hasExplicitValue ? (value || '') : (summary || currentCandidate.value || judgment);
+  const resolvedValue = hasExplicitValue ? (value || '') : (currentCandidate.value && currentCandidate.value !== currentCandidate.judgment ? currentCandidate.value : judgment);
   const expiresAt = input.expiresAt === undefined
     ? currentCandidate.expiresAt
     : requireIsoTimestamp(input.expiresAt, 'candidate expiry');

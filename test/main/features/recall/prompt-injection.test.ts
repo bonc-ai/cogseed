@@ -52,7 +52,9 @@ async function createAsset() {
     spaceId: 'workspace-a',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
-  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  // forceCreateSimilar：本文件的资产是预算测试数据（长填充串），语义上高度
+  // 相似会被防分裂闸拦——那是闸门的正确行为，但不是这里要测的东西。
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
 }
@@ -74,7 +76,9 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
       scope: 'personal',
     }],
   });
-  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  // forceCreateSimilar：本文件的资产是预算测试数据（长填充串），语义上高度
+  // 相似会被防分裂闸拦——那是闸门的正确行为，但不是这里要测的东西。
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
 }
@@ -283,7 +287,8 @@ describe('confirmed Recall projection prompt injection', () => {
     // Prompt blocks are JSON-escaped: the enriched statement (judgment +
     // value, newline-joined) appears with an escaped backslash-n. The
     // unrelated asset must never leak in.
-    expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.\\nOAuth review workflow');
+    // 2026-09-19 归一化：value 缺省兜底=judgment，标题（summary）不再拼进正文。
+    expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
     // M-3: committed 投影同样带边界条件。
     expect(result.promptBlock).toContain('applicable_when');
@@ -331,7 +336,9 @@ describe('confirmed Recall projection prompt injection', () => {
   it('keeps the prompt envelope valid and citations aligned when assets exceed the block budget', async () => {
     for (let index = 0; index < 12; index += 1) {
       await createAssetWith({
-        judgment: `Rule ${index}: ${'x'.repeat(1_900)}`,
+        // 各条用不同字母填充：正文纯净化（value 兜底=judgment）后，十二条只差
+        // 序号的文本语义相似 ≥0.85，会撞 promote 的防分裂闸——这是闸门的正确行为。
+        judgment: `Rule ${index}: ${String.fromCharCode(97 + (index % 26)).repeat(1_900)}`,
         summary: `Long rule ${index}`,
         sourceId: `conversation-long-${index}`,
       });
