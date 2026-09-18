@@ -10218,7 +10218,10 @@ async function resolveDispatchedAbilityAssets(
     }
     if (!asset) return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
     const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, context);
-    if (!gate.eligible) {
+    // 同 attach：模型明确点名的授予不做软提示否决（"适用场景"由模型在目录里
+    // 自行判断），硬闸保留。
+    const hardBlocks = gate.reasons.filter((reason) => reason !== 'not_applicable_context');
+    if (hardBlocks.length) {
       return { ok: false, error: DISPATCHED_ASSET_ERRORS.runtimeDenied };
     }
     granted.push(asset.id);
@@ -10817,15 +10820,22 @@ async function buildCommanderExtraTools(
           if (!safeId(assetId)) return _toolError("invalid ability asset id");
           const asset = await readAbilityAsset(uid, assetId).catch(() => null);
           if (!asset) return _toolError(DISPATCHED_ASSET_ERRORS.unauthorized);
-          // 与派单/读取同一道运行时准入门；适合度语义（成熟度不进闸，
-          // 诚实性由卡与注入块的标注承担）。
+          // 与派单/读取同一道运行时准入门。软提示不做否决（2026-09-18 真机修正）：
+          // applicableWhen 是给宿主自动注入用的软闸，模型已在目录里看过它并明确
+          // 点名——用一段由模型自己写的 reason 去词面匹配软闸，只会把功能拒死
+          // （真机实测：模型挂载被 "Ability asset is not allowed for this dispatch"
+          // 挡下）。硬闸照旧：状态 / 来源撤权 / scopePolicy / 禁用场景 / 敏感度 /
+          // targetAgents。
           const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, {
             ...currentRecallScope,
             purpose: reason || "model_selected",
-            ...(reason ? { taskText: reason } : {}),
+            ...(typeof currentSourceMessageText === "string" && currentSourceMessageText
+              ? { taskText: currentSourceMessageText.slice(0, 2_000) }
+              : {}),
             silentDefaultInjection: true,
           });
-          if (!gate.eligible) return _toolError(DISPATCHED_ASSET_ERRORS.runtimeDenied);
+          const hardBlocks = gate.reasons.filter((item) => item !== "not_applicable_context");
+          if (hardBlocks.length) return _toolError(DISPATCHED_ASSET_ERRORS.runtimeDenied);
           granted.push(asset.id);
         }
 

@@ -97,7 +97,9 @@
 .ca-footnote { color: var(--ca-ink3); font-size: 12px; margin-top: 14px; }
 .ca-section-head { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; }
 .ca-section-head strong { font-size: var(--font-size-4); }
-.ca-section-right { margin-left: auto; display: flex; gap: 6px; }
+/* 右侧承载「视图切换 + 分类 chips」：窄屏必须能换行，否则整行溢出把面板撑出
+   横向滚动（2026-09-18 真机量测：768 宽下内容 627 > 容器 536）。 */
+.ca-section-right { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .ca-section-head .ca-note { margin-left: 4px; }
 
 /* ── 按钮 ─────────────────────────────────────────────────── */

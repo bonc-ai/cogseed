@@ -476,9 +476,9 @@ export async function buildRecallTurnPromptContext(
   input: RecallTurnPromptInput,
   options: ProjectionSemanticOptions = {},
 ): Promise<RecallTurnPromptContext> {
-  if (input.committedProjectionId) {
-    return buildPromptContextForCommittedProjection(userId, input);
-  }
+  // 会话里确认过的投影（用户确认的 + 模型自选的）**始终**参与装配：committed
+  // 投影是宿主给的基线，不是替代品（2026-09-18 修：此前有 committed 就整条跳过
+  // 会话投影——模型自己挂上的资产在 KStar 任务里永远带不上，真机实测抓出）。
   const projections: ProjectionForPrompt[] = [];
   let manualProjectionIds: string[] = [];
   try {
@@ -495,6 +495,18 @@ export async function buildRecallTurnPromptContext(
     } catch (error) {
       log.warn('read manual projection for Recall turn failed', { projectionId, error: (error as Error).message });
     }
+  }
+  if (input.committedProjectionId) {
+    const committed = await buildPromptContextForCommittedProjection(userId, input);
+    if (!projections.length) return committed;
+    const local = await buildPromptContextForProjections(userId, projections, input);
+    const seen = new Set(committed.citations.map((item) => `${item.assetId}:${item.projectionId}`));
+    const extra = local.citations.filter((item) => !seen.has(`${item.assetId}:${item.projectionId}`));
+    return {
+      ...committed,
+      promptBlock: [committed.promptBlock, local.promptBlock].filter(Boolean).join('\n\n'),
+      citations: [...committed.citations, ...extra],
+    };
   }
 
   try {
