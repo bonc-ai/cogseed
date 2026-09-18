@@ -478,6 +478,8 @@
   "chat.form.required_select": "選択してください",
   "chat.form.required_text": "この項目は空にできません",
   "chat.form.reset": "リセット",
+  "chat.form.skip": "スキップ",
+  "chat.form.skipped_note": "（今回は未回答でスキップしました）",
   "chat.form.streaming_placeholder": "パラメーターフォームを準備中…",
   "chat.form.submit": "確認",
   "chat.form.submit_failed": "送信に失敗しました",
