@@ -191,6 +191,8 @@ describe('fetch-win-vc-runtime', () => {
     );
     expect(ensureDev).toContain("run('Windows VC runtime', 'scripts/fetch-win-vc-runtime.cjs'");
     expect(ensurePack).toContain("path.join(pcRoot, 'scripts', 'fetch-win-vc-runtime.cjs')");
+    expect(ensurePack).toContain("path.join(pcRoot, 'scripts', 'fetch-officecli.cjs')");
+    expect(ensurePack).toContain("...arches.map(targetArch => `--platform=${platform}-${targetArch}`)");
     expect(runCmd).toContain('scripts\\ensure-dev-dependencies.cjs');
     expect(runCmd).not.toContain('fetch-win-vc-runtime');
     expect(runCmd).not.toContain('prepare-dev-win-vc-runtime');
