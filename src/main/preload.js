@@ -480,8 +480,6 @@ const _sttSmokeResourcesPath = String(process.resourcesPath || '').replaceAll('\
 const _isPackagedSttSmoke = process.platform === 'win32'
   && _sttSmokeResourcesPath.length > 0
   && !_sttSmokeResourcesPath.includes('/node_modules/electron/')
-  && String(process.env.COGSEED_PACKAGED_STT_SMOKE_FILE || '').trim().length > 0
-  && String(process.env.COGSEED_PACKAGED_STT_SMOKE_WAV || '').trim().length > 0
   && process.argv.includes('--cogseed-packaged-stt-smoke');
 if (_isPackagedSttSmoke) {
   runAfterDomReady(() => {
