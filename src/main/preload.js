@@ -476,11 +476,12 @@ function runAfterDomReady(callback) {
 // verifier supplies the private renderer argument. It intentionally exercises
 // the same contextBridge invoke/stream functions as the UI and records only
 // booleans/counts — never captured audio, session ids, or transcript text.
-const _sttSmokeResourcesPath = String(process.resourcesPath || '').replaceAll('\\', '/');
-const _isPackagedSttSmoke = process.platform === 'win32'
-  && _sttSmokeResourcesPath.length > 0
-  && !_sttSmokeResourcesPath.includes('/node_modules/electron/')
-  && process.argv.includes('--cogseed-packaged-stt-smoke');
+// `additionalArguments` is injected only by the main process after it has
+// validated the marker/WAV environment. Do not additionally rely on renderer
+// `process.resourcesPath` or environment inheritance: neither is guaranteed
+// in hardened Electron renderer processes, and either would silently disable
+// this release gate.
+const _isPackagedSttSmoke = process.argv.includes('--cogseed-packaged-stt-smoke');
 if (_isPackagedSttSmoke) {
   runAfterDomReady(() => {
     const metrics = {
