@@ -4945,6 +4945,17 @@ async function runActorTurnBody(
       } catch (error) {
         log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
       }
+      // 资产目录可发现性提示（2026-09-18）：注入解决"这一轮相关"，但模型不会
+      // 主动想到"还有别的资产"（真机样本 0/3 会去查目录）。一行提示 + TTL 缓存，
+      // 只讲"目录存在且便宜"，挑哪几条仍归模型。
+      try {
+        const { assetCatalogForPrompt } = await import('../recall/asset-catalog-hint');
+        const catalogBlock = await assetCatalogForPrompt(uid);
+        if (catalogBlock) systemPrompt = `${systemPrompt}\n\n${catalogBlock}`;
+      } catch {
+        // 目录块拿不到不影响回合。
+      }
+
       // Layer 1 routing uplift: deterministic task-intent detection adds an
       // advisory hint so an ordinary user request is not silently skipped.
       // Advisory only — no state writes. The world model owns governance

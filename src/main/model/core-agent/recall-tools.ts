@@ -25,6 +25,11 @@ import { evaluateRecallAssetRuntimeEligibility } from '../../features/recall/pro
 import { recordInjectionReceipt, listInjectionReceipts } from '../../features/recall/injection-receipt';
 import { recordRecallUsage, listRecallUsage } from '../../features/recall/usage-service';
 import { loadOntologyAssets } from '../../features/recall/projection-knowledge';
+import {
+  formatCatalogEntries,
+  loadAssetUsageStatsCached,
+  type AssetUsageStat,
+} from '../../features/recall/asset-catalog';
 import type { RecallAbilityAssetRecord } from '../../features/recall/candidate-service';
 import { safeId } from '../../storage';
 import { logErrorRef, maskId } from '../../util/log-redact';
@@ -88,89 +93,6 @@ function formatAsset(asset: PoolEntry, score: number): string {
     `[asset:${asset.id}] ${asset.title || '(无标题)'} (相关度 ${score.toFixed(2)})`,
     meta,
     `内容: ${(asset.statement || '').slice(0, 500)}`,
-  ].join('\n');
-}
-
-/** 一句话摘要：正文首句，压掉空白、按长度截断并去掉截断后残留的标点——
- *  目录行要短，正文才是按需取的；停在逗号上会读成"半句话"。 */
-function oneLineOf(statement?: string, limit = 22): string {
-  const text = String(statement || '').replace(/\s+/g, ' ').trim();
-  if (!text) return '';
-  const first = (text.split(/[。！？!?]/)[0] || text).trim();
-  const cut = first.length > limit ? first.slice(0, limit) : first;
-  return cut.replace(/[，、；：,;:\-—\s]+$/, '');
-}
-
-/** 目录用的短标签（2026-09-18 压缩）：内部枚举名长且对模型无信息量。 */
-const CATALOG_TYPE_LABELS: Record<string, string> = {
-  rule: '规则',
-  template: '模板',
-  skill_method: '技能',
-  personal: '偏好',
-};
-const CATALOG_MATURITY_LABELS: Record<string, string> = {
-  seed: '未验证',
-  bud: '已确认',
-  transfer_validated: '已验证',
-  effectiveness_validated: '已验证有效',
-};
-
-function catalogScopeLabel(scope?: string): string {
-  const value = String(scope || '').trim();
-  if (!value || value.toLowerCase() === 'general') return '通用';
-  return value;
-}
-
-function truncateText(value: string, limit: number): string {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit).replace(/[，、；：,;:\-—\s]+$/, '')}…`;
-}
-
-interface AssetUsageStat {
-  count: number;
-  lastAt?: string;
-}
-
-/** 每条的取用次数与最近时间（一次流水扫描）：目录里给模型"这条平时用不用得上"的信号。 */
-async function loadUsageStats(userId: string): Promise<Map<string, AssetUsageStat>> {
-  const stats = new Map<string, AssetUsageStat>();
-  try {
-    for (const row of await listRecallUsage(userId)) {
-      const id = String(row.assetId || '');
-      if (!id) continue;
-      const current = stats.get(id) || { count: 0 };
-      current.count += 1;
-      const at = String(row.createdAt || '');
-      if (at && (!current.lastAt || at > current.lastAt)) current.lastAt = at;
-      stats.set(id, current);
-    }
-  } catch (err) {
-    // 统计拿不到不影响目录本身：使用次数只是给模型的参考信号。
-    log.warn('usage stats unavailable for catalog', { userId: maskId(userId), error: logErrorRef(err as Error) });
-  }
-  return stats;
-}
-
-/** 目录条目（2026-09-18 压缩为两行制）：一行一条"标题 + 一句话"，第二行给
- *  短标签元信息与适用场景首条。禁用场景不进目录——它由服务端硬闸执行，
- *  读取（assetIds）与注入块里都会完整给出，目录里再占一行纯属浪费预算。 */
-function formatCatalogEntry(asset: RecallAbilityAssetRecord, stat: AssetUsageStat | undefined, index: number): string {
-  const type = CATALOG_TYPE_LABELS[String(asset.type || '')] || String(asset.type || '?');
-  const maturity = CATALOG_MATURITY_LABELS[String(asset.maturity || '')] || String(asset.maturity || '?');
-  const meta = [
-    type,
-    catalogScopeLabel(asset.scope),
-    maturity,
-    `v${asset.activeVersion || asset.version || '1'}`,
-    stat && stat.count ? `用${stat.count}次` : '没用过',
-  ].join('·');
-  const applies = (asset.applicableWhen || [])[0];
-  const oneLine = oneLineOf(asset.statement);
-  const head = `${index}. [asset:${asset.id}] ${truncateText(String(asset.title || '(无标题)'), 14)}`;
-  return [
-    oneLine ? `${head} — ${oneLine}` : head,
-    ` ${meta}${applies ? `｜适用:${truncateText(String(applies), 12)}` : ''}`,
   ].join('\n');
 }
 
@@ -316,12 +238,12 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
       // 停止翻页，而不是以为目录坏了）。
       return `已到目录末尾（共 ${pool.length} 条${filterNote ? `；过滤条件：${filterNote}` : ''}，offset 从 0 开始）。用 offset=0 从头看，或去掉过滤条件。`;
     }
-    const stats = await loadUsageStats(userId);
+    const stats = await loadAssetUsageStatsCached(userId);
     const more = pool.length - (offset + page.length);
     return [
       `认知资产目录（在用 ${pool.length} 条${filterNote ? `，过滤：${filterNote}` : ''}；本页 ${offset + 1}-${offset + page.length} 条）：`,
       '',
-      ...page.map((asset, index) => formatCatalogEntry(asset, stats.get(asset.id), offset + index + 1)),
+      ...formatCatalogEntries(page, stats, offset + 1),
       '',
       more > 0 ? `还有 ${more} 条：用 offset=${offset + page.length} 继续翻页。` : '这是最后一页。',
       '用法：看中哪条就用 assetIds 取正文（最多 6 条/次）；也可以直接用 query 做语义检索。',
@@ -458,14 +380,15 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
     // 并行安全：embedTexts 在进程级共享 embedder 单例上并发调用安全
     // （与 kb_search 相同结论，见 kb-tools.ts 注释）。
     executionMode: 'parallel',
-    description:
-      '认知资产工具（三种用法）：①**目录**——不给 query、不给 assetIds 时返回全量在用资产目录'
-      + '（id/标题/类型/范围/成熟度/版本/使用次数/适用与禁用场景），先用它判断"这次任务该用哪几条"；'
-      + '②**取正文**——assetIds 传目录里的 id 取完整正文（最多 6 条/次）；'
-      + '③**语义检索**——query 做自然语言检索（覆盖所有空间资产 + 用户画像记忆，画像条目会标注'
-      + '"未经确认、仅供参考"）。当任务可能与过往沉淀的经验、教训、工作方法或用户背景相关时，'
-      + '先看目录再按需取正文，而不是只依赖注入的经验。引用格式 [asset:<id>]。'
-      + '可按适用范围（scope）、空间（spaceId）、类型（type）过滤；目录模式支持 offset 翻页。',
+    description: [
+      '用户的认知资产目录：本 App 里沉淀下来的规则、模板、方法、偏好——用户自己的经验，不是通用知识。',
+      '**任务一开始就先看一眼目录（不带任何参数调一次）**：里面常常有正好适用的模板或教训，照着它做比从零想更快，也更符合这位用户的既定习惯；目录很便宜（每条一行），不必省这一步。',
+      '三种用法：①不带参数 = 全量目录（一行一条，可带 type/scope/spaceId 过滤、offset 翻页）；',
+      '②assetIds = 取某几条的完整正文（最多 6 条/次）——看到目录里有合适的，取正文再动手；',
+      '③query = 语义检索（覆盖所有空间资产 + 用户画像记忆，画像条目会标注"未经确认、仅供参考"）。',
+      '如果这次任务确实要长期用到某几条，用 attach_assets_to_task 把它们挂到本任务上（用户会看到一张可撤销的卡）。',
+      '引用格式 [asset:<id>]，例如 [asset:aa-xxx]。',
+    ].join(''),
     inputSchema: {
       type: 'object',
       properties: {

@@ -399,6 +399,62 @@ describe('recall search_ability_assets tool', () => {
     expect(heads).toBe(1);
   });
 
+  it('使用统计缓存（效率）：同回合复用快照，新回合重算，无回合不缓存', async () => {
+    const asset = await seedAsset('缓存用例：30 秒内不重扫流水。', { scope: 'general' });
+    const catalog = await import('../../../../src/main/features/recall/asset-catalog');
+    const usage = await import('../../../../src/main/features/recall/usage-service');
+    catalog.resetAssetUsageStatsCacheForTest();
+
+    const first = await catalog.loadAssetUsageStatsCached(TEST_UID, 'turn-cache0001');
+    expect(first.get(asset.id)?.count ?? 0).toBe(0);
+    await usage.recordRecallUsage(TEST_UID, { assetId: asset.id, assetVersion: '1', taskRunId: 'turn-cache0001', outcome: 'agent_read', boundary: 'real' });
+
+    // 同一回合：复用快照（不重扫）；新回合：重算，算上刚写入的那条。
+    const sameTurn = await catalog.loadAssetUsageStatsCached(TEST_UID, 'turn-cache0001');
+    expect(sameTurn.get(asset.id)?.count ?? 0).toBe(0);
+    const nextTurn = await catalog.loadAssetUsageStatsCached(TEST_UID, 'turn-cache0002');
+    expect(nextTurn.get(asset.id)?.count).toBe(1);
+    // 没有回合上下文时直读，不缓存（宁可慢，不可错）。
+    const noTurn = await catalog.loadAssetUsageStatsCached(TEST_UID);
+    expect(noTurn.get(asset.id)?.count).toBe(1);
+  });
+
+  it('常驻目录（可发现性）：小库给完整目录且 ≤ 30 条，超限退回一行提示，空池不给块；60 秒缓存', async () => {
+    const hint = await import('../../../../src/main/features/recall/asset-catalog-hint');
+    hint.resetAssetCatalogHintCacheForTest();
+    expect(await hint.assetCatalogForPrompt(TEST_UID)).toBe('');
+
+    for (let index = 0; index < 3; index += 1) {
+      await seedAsset(`常驻目录用例第 ${index + 1} 条：命中时应给出一行目录。`, { scope: 'general' });
+    }
+    hint.resetAssetCatalogHintCacheForTest();
+    const block = await hint.assetCatalogForPrompt(TEST_UID);
+    expect(block).toContain('Asset catalog (3 reusable assets');
+    expect(block).toContain('[asset:');
+    expect(block.split('\n').filter((line) => /^\d+\. \[asset:/.test(line))).toHaveLength(3);
+
+    // 预算：常驻目录不得把提示词撑爆（≤ 30 条 × ~110 字符 + 头尾 ≈ 3.6KB）。
+    expect(block.length).toBeLessThanOrEqual(3600);
+
+    // 缓存：同一用户 60 秒内不重算（第二次调用不读盘也不改变结果）。
+    const cached = await hint.assetCatalogForPrompt(TEST_UID);
+    expect(cached).toBe(block);
+    const afterTtl = await hint.assetCatalogForPrompt(TEST_UID, Date.now() + 61_000);
+    expect(afterTtl).toBe(block);   // 内容一致，但走的是重算路径
+  });
+
+  it('目录体量与常用词（效率）：常驻目录复用同一份紧凑格式，不产生第二套写法', async () => {
+    await seedAsset('格式一致性：工具目录与常驻目录必须是同一套行格式。', { scope: 'general' });
+    const shared = await import('../../../../src/main/features/recall/asset-catalog');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const list = (await assets.listAbilityAssets(TEST_UID)).filter((asset) => asset.status === 'active');
+    const line = shared.formatCatalogEntries(list, new Map(), 1)[0];
+    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallTools({ userId: TEST_UID });
+    const catalog = await tool.execute({ k: 30 }, {} as never);
+    expect(catalog.content).toContain(line);
+  });
+
   it('模式优先级（契约）：同时给 query 与 assetIds 走正文模式；只给 k 走目录模式', async () => {
     const asset = await seedAsset('模式优先级：assetIds 优先于 query。', { scope: 'general' });
     const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
