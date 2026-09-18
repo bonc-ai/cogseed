@@ -418,6 +418,51 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).toMatch(/kind: 'quiz', \.\.\.payload/);
   });
 
+  it('测验「原文依据」带片段打开：文本类高亮该段、排版类翻页并传 hl.quote', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 宿主接住面板给的 (path, { quote })，并走锚点通道（而不是"只打开整篇"的 _openFile）
+    expect(src).toMatch(/onOpenSource: \(path, anchor\) => \{[\s\S]{0,200}_openQuizSource\(String\(path\), anchor\)/);
+    const helper = src.match(/function _openQuizSource\(rawSource, anchor\) \{[\s\S]*?\n  \}/)![0];
+    expect(helper).toMatch(/_openFileViewerForAnchor\(\{/);
+    expect(helper).toMatch(/quote,/);
+    // 没有片段 / 锚点通道没打开 → 退回整篇，不能因为定位失败反而打不开文件
+    expect(helper).toMatch(/if \(!quote\) return _openFile\(relPath\);/);
+    expect(helper).toMatch(/ok \? 'anchor' : _openFile\(relPath\)/);
+    // 排版类（md/Office）把片段传给富查看器的高亮分支；PDF 只有页码
+    expect(src).toMatch(/if \(typeof anchor\.quote === 'string' && anchor\.quote\.trim\(\)\) hl\.quote = anchor\.quote\.trim\(\);/);
+    expect(src).toMatch(/hl\.page = loc\.page/);
+  });
+
+  it('来源名 → 库内真实路径：裸文件名也能定位（否则查看器只会说"不能读取原文"）', () => {
+    const { windowMock } = loadScript();
+    const resolve = windowMock.__kbQuizSourceTest.resolvePath;
+    const lib = ['9.16产物/AAR复盘.md', 'CICD/发版规范.md', 'notes/reader.md'];
+    // 真机事故：模型给的是裸文件名，主进程 path.join(库根, 它) 后 stat → ENOENT → "暂时无法读取该文件的原文"
+    expect(resolve('AAR复盘.md', lib)).toBe('9.16产物/AAR复盘.md');
+    expect(resolve('发版规范.md', lib)).toBe('CICD/发版规范.md');
+    // 已经是完整相对路径时原样命中
+    expect(resolve('CICD/发版规范.md', lib)).toBe('CICD/发版规范.md');
+    // 忽略大小写；后缀必须真匹配（不能用 includes 把 a.md 配到 x-a.md 之类）
+    expect(resolve('READER.MD', lib)).toBe('notes/reader.md');
+    expect(resolve('report.md', lib)).toBe('');
+    // 空输入/空候选不炸
+    expect(resolve('', lib)).toBe('');
+    expect(resolve('AAR复盘.md', [])).toBe('');
+  });
+
+  it('测验「原文依据」打开链路：先解析路径，再带 quote 走锚点通道', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const fn = src.match(/function _openQuizSource\(rawSource, anchor\) \{[\s\S]*?\n  \}/)![0];
+    expect(fn).toMatch(/const matched = _pickKbSourcePath\(rawSource, candidates\);/);
+    // 有候选但都不匹配 → 不开一个只会显示"不能读取原文"的查看器；候选为空则尽力打开
+    expect(fn).toMatch(/if \(!matched && candidates\.length\) \{[\s\S]{0,200}uiToast\(/);
+    expect(fn).toMatch(/const relPath = matched \|\| String\(rawSource \|\| ''\);/);
+    expect(fn).toMatch(/path: relPath,/);
+    expect(fn).toMatch(/_openFileViewerForAnchor\(\{/);
+    // 脑图溯源复用同一套解析（避免两份规则各自漂移）
+    expect(src).toMatch(/function _mmOpenSource\(source, idx\)[\s\S]{0,300}const hit = _resolveKbSourcePath\(name\);/);
+  });
+
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）

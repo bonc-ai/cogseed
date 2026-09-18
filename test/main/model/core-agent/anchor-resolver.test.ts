@@ -107,6 +107,38 @@ describe('anchor_resolver', () => {
     expect(res.charStart).toBe('intro\n\nbeta four five six\noutro'.indexOf('beta four'));
   });
 
+  it('locates a document-view reader by quote — 测验「原文依据」高亮靠这条', async () => {
+    // 知识库测验只给得出"片段文本"（kb.quiz.hint level 2），给不出块号：查看器是以
+    // view:'document' + quote 打开的，必须仍能算出 charStart/charEnd（渲染层才有 <mark>）。
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = `前言\n\n${'铺垫 '.repeat(80)}\n\n这段是题目依据的原文。\n\n后记`;
+    await stageLibraryFile('notes/quiz-src.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/quiz-src.md',
+      chunkIdx: 0,
+      quote: '这段是题目依据的原文。',
+      view: 'document',
+    });
+
+    expect(res.resolved).toBe(true);
+    const expected = content.indexOf('这段是题目依据的原文。');
+    expect(res.charStart).toBe(expected);
+    expect(res.charEnd).toBe(expected + '这段是题目依据的原文。'.length);
+    // 渲染层的算法就是 `charStart - textStart`（anchored-source-view 里 markStart/markEnd），
+    // 只要这个相对区间落在 text 内且内容一致，就会出现 <mark> 并 scrollIntoView。
+    // 短文不截窗（textStart=0），长文档才从命中点前 240 字起截——两种都走同一个减法。
+    expect(typeof res.textStart).toBe('number');
+    const markStart = res.charStart! - res.textStart!;
+    const markEnd = res.charEnd! - res.textStart!;
+    expect(markStart).toBeGreaterThanOrEqual(0);
+    expect(markEnd).toBeLessThanOrEqual(res.text!.length);
+    expect(res.text!.slice(markStart, markEnd)).toBe('这段是题目依据的原文。');
+  });
+
   it('returns a document-reader payload even when no matching chunk exists', async () => {
     const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
     const content = 'document heading\n\nfull source body';

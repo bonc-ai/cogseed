@@ -3065,6 +3065,75 @@
     if (canvas) canvas.addEventListener('click', open);
   }
 
+  /**
+   * 纯函数：从候选路径里挑出与该「来源名」匹配的那一个（"路径以该名结尾"，忽略大小写）。
+   * 单独抽出来是为了能真跑单测（`__kbQuizSourceTest.resolvePath`），而不是只比对源码文本。
+   */
+  function _pickKbSourcePath(name, candidates) {
+    const want = String(name || '').trim().toLowerCase();
+    if (!want) return '';
+    return (Array.isArray(candidates) ? candidates : [])
+      .map((p) => String(p || ''))
+      .find((p) => p.toLowerCase().endsWith(want)) || '';
+  }
+
+  /** 当前库的候选路径：空间库文件表 + 个人库树（两处都可能是空，调用方要判）。 */
+  function _kbSourceCandidates() {
+    const out = [];
+    for (const f of (_state.spaceFiles || [])) if (f && f.path) out.push(String(f.path));
+    const walk = (n) => {
+      if (n && n.path) out.push(String(n.path));
+      for (const c of (n && n.children) || []) walk(c);
+    };
+    walk({ children: _state.tree });
+    return out;
+  }
+
+  /**
+   * 把「来源」解析成知识库里的真实相对路径。
+   *
+   * 为什么必须有这一步：出题/溯源给回来的 source 常常只是**文件名**（"AAR复盘.md"），
+   * 而库里存的是带目录的相对路径（"9.16产物/AAR复盘.md"）。主进程锚点解析是
+   * `path.join(库根, 你给的路径)` 之后直接 stat —— 拿裸文件名去开，只会 ENOENT，
+   * 查看器最后显示"暂时无法读取该文件的原文"（真机日志：
+   * `anchor_resolver: extract failed { abs_path: 'AAR复盘.md' }`）。
+   * 候选 = 当前库树 + 空间库文件表，按"路径以该名结尾"匹配（与脑图溯源同一套规则）。
+   */
+  function _resolveKbSourcePath(name) {
+    if (!String(name || '').trim()) return '';
+    return _pickKbSourcePath(name, _kbSourceCandidates());
+  }
+
+  /**
+   * 测验「原文依据」→ 打开原文并锁定到片段。
+   *
+   * 先解析出真实路径（否则连文件都读不到），再走锚点通道 `_openFileViewerForAnchor`：
+   * 纯文本（md/txt）会命中 charStart/charEnd → 查看器 `<mark>` 高亮 + 滚到该段；
+   * PDF/Office 会解析出页码直接翻页。没有片段时退回"打开整篇"（`_openFile`）。
+   */
+  function _openQuizSource(rawSource, anchor) {
+    const quote = anchor && typeof anchor.quote === 'string' ? anchor.quote.trim() : '';
+    const candidates = _kbSourceCandidates();
+    const matched = _pickKbSourcePath(rawSource, candidates);
+    // 有候选但一个都不匹配 = 这份文档不在当前库里：别去开一个只会显示"不能读取原文"的
+    // 查看器，如实说一句。候选为空（库树还没加载）时不做结论，仍按原样尽力打开。
+    if (!matched && candidates.length) {
+      if (typeof uiToast === 'function') uiToast(`没在当前知识库里找到来源文档：${String(rawSource || '')}`, { variant: 'warning' });
+      return 'missing';
+    }
+    const relPath = matched || String(rawSource || '');
+    if (!relPath) return 'missing';
+    if (!quote) return _openFile(relPath);
+    const spaceId = _state.spaceId || '';
+    return Promise.resolve(_openFileViewerForAnchor({
+      source: 'library',
+      scope: spaceId ? 'space' : 'global',
+      path: relPath,
+      quote,
+      ...(spaceId ? { spaceId } : {}),
+    })).then((ok) => (ok ? 'anchor' : _openFile(relPath)));
+  }
+
   /** 打开测验面板：把"新题生成 / 打开来源 / 关闭"作为宿主能力交给面板。 */
   function _openQuizPanel(entry) {
     const panel = window.KbQuizPanel;
@@ -3100,9 +3169,9 @@
           _qaSaveCurrentSession('测验');
           return next;
         }),
-        onOpenSource: (path) => {
+        onOpenSource: (path, anchor) => {
           if (!path) return false;
-          _openFile(String(path));
+          _openQuizSource(String(path), anchor);
           return true;
         },
       },
@@ -4033,14 +4102,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const name = String(source || '');
     if (!name) return;
     if (typeof window.__openAnchorViewer === 'function') {
-      const candidates = [];
-      for (const f of (_state.spaceFiles || [])) if (f && f.path) candidates.push(String(f.path));
-      const walk = (n) => {
-        if (n && n.path) candidates.push(String(n.path));
-        for (const c of (n && n.children) || []) walk(c);
-      };
-      walk({ children: _state.tree });
-      const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
+      // 与测验「原文依据」共用同一个"来源名 → 库内真实路径"解析（裸文件名很常见）
+      const hit = _resolveKbSourcePath(name);
       if (hit) {
         // 与列表点击同一条分派：排版类（pdf/office/html/图片）走富查看器保排版，
         // 文本类才回落原文查看器（原先这里一律走文本查看器，PDF 来源跳转就丢排版）。
@@ -5020,6 +5083,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (loc && loc.resolved) {
           hl = {};
           if (typeof loc.page === 'number' && loc.page > 0) hl.page = loc.page;
+          // 片段文本一并带给富查看器：md/文本正文与 Office 排版 HTML 都有现成的
+          // `_fvHighlightContainer` / `_fvHighlightFrame` 高亮分支（此前没有任何调用方
+          // 设过 hl.quote，所以那两段代码一直是死的）。PDF 是原生 PDFium iframe，
+          // 只能靠 hl.page 翻页——不给假承诺。
+          if (typeof anchor.quote === 'string' && anchor.quote.trim()) hl.quote = anchor.quote.trim();
         }
       }
     } catch (_) { /* 定位失败不阻断打开整篇 */ }
@@ -7238,6 +7306,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   // 文件查看分派（供渲染层回归测试与自动化验证：返回 'rich'|'anchor'|'unavailable'）
   window.__kbWorkbenchOpenFile = function openFileForTest(relPath) {
     return _openFile(relPath);
+  };
+
+  // 测验「原文依据」的来源解析（同上规矩：让回归测试真跑匹配规则，而不是比对源码文本）
+  window.__kbQuizSourceTest = {
+    resolvePath: (name, candidates) => _pickKbSourcePath(name, candidates),
+    /** 用当前库树 / 空间库文件表解析（与界面同一条路径）。 */
+    resolveInLibrary: (name) => _resolveKbSourcePath(name),
   };
 
   // 脑图折叠/自适应用户可见行为的最小钩子（与 __kbWorkbenchOpenFile 同规矩）：

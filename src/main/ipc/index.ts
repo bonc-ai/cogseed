@@ -4417,10 +4417,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   //   level 1（默认）—— 文档内线索，不给答案（单题小请求，30s 预算）；
   //   level 2        —— **材料片段**：直接从来源文档要点里挑与题干最相关的一段，
   //                     不打模型，因此离线/未配模型也能给，且是逐字原文。
-  'kb.quiz.hint': async ({ question, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
+  'kb.quiz.hint': async ({ question, answer, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
     if (Number(level) === 2) {
       const snip = kbQuiz.kbQuizSnippet(ctx.userId, {
         question: typeof question === 'string' ? question : '',
+        // 答案一起给：它是"材料里哪一段是依据"的最强信号（渲染层从题目带过来）
+        answer: typeof answer === 'string' && answer ? answer : null,
         source: typeof source === 'string' && source ? source : null,
         dir: typeof dir === 'string' && dir ? dir : null,
         spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,

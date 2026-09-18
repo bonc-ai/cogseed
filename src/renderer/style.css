@@ -29867,8 +29867,17 @@ body.is-terminal-resizing {
    不依赖 CogSeed 深绿 --color-* 变量）+ SVG 图标 + 渐变类型色块 + 统一间距。
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* 局部色板：与 HTML 稿 :root 一致 */
-.kb-view {
+/* 局部色板：与 HTML 稿 :root 一致。
+   ⚠️ 挂在 body 下的知识库浮层**不在 .kb-view 里面**（测验面板 / 片段预览 / 选库与
+   链接弹窗都是 document.body.appendChild），必须一并列进这套色板的选择器，否则浮层里
+   每个 var(--kb-*) 都取不到值 → 声明在计算值阶段失效 → 整块退化成"白底无边框、
+   选中态看不见"（真机：测验面板选项无边框、选中项背景与字母圈全白、进度条消失、
+   底部主按钮变成白块）。新增 body 级知识库浮层请补进这里。 */
+.kb-view,
+.kb-qz-overlay,
+.kb-qz-snippet-pop,
+.kb-lib-picker-overlay,
+.kb-link-dlg-overlay {
   /* 对齐开源项目（CogSeed）深绿主题：直接引用全局设计令牌 */
   --kb-bg: var(--color-bg);
   --kb-panel: var(--color-surface);
