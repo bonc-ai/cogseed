@@ -4217,10 +4217,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   //   level 1（默认）—— 文档内线索，不给答案（单题小请求，30s 预算）；
   //   level 2        —— **材料片段**：直接从来源文档要点里挑与题干最相关的一段，
   //                     不打模型，因此离线/未配模型也能给，且是逐字原文。
-  'kb.quiz.hint': async ({ question, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
+  'kb.quiz.hint': async ({ question, answer, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
     if (Number(level) === 2) {
       const snip = kbQuiz.kbQuizSnippet(ctx.userId, {
         question: typeof question === 'string' ? question : '',
+        // 答案一起给：它是"材料里哪一段是依据"的最强信号（渲染层从题目带过来）
+        answer: typeof answer === 'string' && answer ? answer : null,
         source: typeof source === 'string' && source ? source : null,
         dir: typeof dir === 'string' && dir ? dir : null,
         spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
@@ -4255,6 +4257,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // 测验导出 PDF（线下打印/发团队）：与脑图导出同一条 printToPDF 链路，只是 A4 版式。
+  // 测验「导出 Markdown」：与导出 PDF 同一条通道——主进程弹保存对话框再写文件，
+  // 渲染层据回执提示成功/失败/取消（不再用渲染层 Blob 下载：那条路失败是静默的）。
+  'kb.quiz.exportMarkdown': async ({ text, title }) => {
+    const source = typeof text === 'string' ? text : '';
+    if (!source) return { ok: false };
+    try {
+      const base = String(title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出测验 Markdown',
+        defaultPath: `${base}-${Date.now()}.md`,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, source, 'utf-8');
+      return { ok: true, filePath };
+    } catch (err) {
+      log.warn('kb quiz export markdown failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false };
+    }
+  },
+
   'kb.quiz.exportPdf': async ({ html, title }, ctx) => {
     const source = typeof html === 'string' && html ? html : '';
     if (!source) return { ok: false };
