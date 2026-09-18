@@ -14,12 +14,13 @@ const verifier = require('../../scripts/verify-packaged-launch.cjs') as {
 
 describe('packaged launch smoke', () => {
   it('resolves native unpacked executables for Windows and both macOS output directories', () => {
+    const root = process.platform === 'win32' ? 'C:\\repo' : '/repo';
     expect(verifier.executableForMacBundle('/repo/dist/mac/CogSeed.app')).toBe(
       path.join('/repo/dist/mac/CogSeed.app', 'Contents', 'MacOS', 'CogSeed'),
     );
     expect(verifier.resolvePackagedExecutable({
-      root: '/repo', platform: 'win32', exists: (candidate: string) => candidate.endsWith('CogSeed.exe'),
-    })).toBe(path.join('/repo', 'dist', 'win-unpacked', 'CogSeed.exe'));
+      root, platform: 'win32', exists: (candidate: string) => candidate.endsWith('CogSeed.exe'),
+    })).toBe(path.join(root, 'dist', 'win-unpacked', 'CogSeed.exe'));
     expect(verifier.resolvePackagedExecutable({
       root: '/repo', platform: 'darwin', arch: 'arm64', exists: (candidate: string) => candidate.includes('mac-arm64'),
     })).toBe(path.join('/repo', 'dist', 'mac-arm64', 'CogSeed.app', 'Contents', 'MacOS', 'CogSeed'));
