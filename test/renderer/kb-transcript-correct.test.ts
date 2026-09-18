@@ -404,12 +404,16 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
     expect(style).toMatch(/\.kb-atc__row \{[^}]*border-bottom: 1px solid var\(--line-default\)/);
   });
 
-  it('范围/开关走共享组件：uiSegmentedControl + uiCheckbox，且不再有页面级 .ui-button 覆盖', () => {
-    // 互斥范围用共享分段控件，选中态由 value 驱动（不再靠 primary/ghost 互换）
-    expect(source).toContain('root.uiSegmentedControl({');
-    expect(source).toContain("value: state.scopeChoice");
-    // 每个分段项原样透传点击委托所需的 data-* 属性
-    expect(source).toMatch(/attrs: \{ 'data-atc-action': 'scope', 'data-atc-scope'/);
+  it('「接受范围」三档已删除；开关仍走共享组件，且不再有页面级 .ui-button 覆盖', () => {
+    // 分段控件、范围状态、setScope 调用都已移除——它要么是 no-op（默认），
+    // 要么依赖一个从未被发送过的 source（meeting_accept），实际不生效。
+    expect(source).not.toContain('state.scopeChoice');
+    expect(source).not.toContain('root.uiSegmentedControl(');
+    expect(source).not.toContain('transcript.glossary.setScope');
+    expect(source).not.toContain("'data-atc-scope': option.value");
+    // 但宿主容器保留：里面还有场景标签行与「拟主题标题」按钮
+    expect(source).toContain('data-atc-scope>');
+    expect(source).toContain('scenarioControlHtml()');
     // 开关用共享复选框（<label> 包裹，沿用组件预览页的既有用法）
     expect(source).toContain('root.uiCheckbox({');
     expect(source).toContain('kb-atc__scope-toggle');
@@ -521,8 +525,7 @@ describe('locale 覆盖', () => {
     'more', 'restore', 'reopen_row', 'restored', 'ignored_done', 'ignore_failed', 'group_ignored',
     'denied', 'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed',
     'denied_reason_word_boundary', 'denied_reason_overlapping_span', 'denied_reason_protected_region',
-    'scope_label', 'scope_keep', 'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
-    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder', 'add_allow_context',
+    'add_allow', 'add_allow_placeholder', 'add_allow_context',
     'add_allow_need_term', 'add_allow_done', 'add_allow_failed', 'add_allow_existing', 'remove',
     'remove_allow_done', 'remove_allow_failed', 'rename_correct', 'rename_done', 'rename_failed',
     'rename_need_value', 'confirm', 'cancel', 'no_context',
@@ -720,17 +723,12 @@ describe('查看器集成契约', () => {
     expect(panelSrc).toContain("invoke('transcript.docTags.get'");
     expect(panelSrc).toContain("invoke('transcript.docTags.set'");
     expect(panelSrc).toContain("invoke('transcript.docTags.suggest'");
-    // 扫描与设作用域都要带上文档自己的标签，否则 scopeAllows 恒 false
+    // 扫描要带上文档自己的标签，否则 scopeAllows 对「仅本场景」词条恒 false
     expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}scenarioTags: state\.scenarioTags/);
-    expect(panelSrc).toMatch(/choice === 'task' \? \{ scenarioTags: state\.scenarioTags \}/);
-    // 可用性只看标签有没有（不再看 ctx —— ctx 恒为空数组正是"点不动"的原因）
-    expect(panelSrc).not.toContain('ctx.scenarioTags || []).length');
-    expect(panelSrc).toMatch(/disabled: state\.busy \|\| !state\.scenarioTags\.length/);
-  });
-
-  it('置灰必须说明原因：仅本场景带 title（不再只灰不说）', () => {
-    expect(panelSrc).toMatch(/scope_task_hint|scope_need_tags/);
-    expect(panelSrc).toMatch(/option\.title \? \{ title: option\.title \}/);
+    // 建词条时把创建上下文交给 main，由 upsertEntry 兜底收窄作用域
+    // （「接受范围」控件已删除，护栏移到这里；contextmenu 那条路径是采纳 LLM 候选）
+    expect(panelSrc).toMatch(/docId: ctx\.docId,\n\s+scenarioTags: state\.scenarioTags,/);
+    expect(panelSrc).toMatch(/docId: ctx\.docId, scenarioTags: state\.scenarioTags,/);
   });
 
   it('场景标签变更要重扫（否则"未生效"清单停在旧标签上）', () => {
