@@ -892,8 +892,30 @@
       .concat(CATEGORIES.map(([id, key, fallback]) => [id, T(key, fallback), counts[id]]))
       .concat(kstarCount ? [['kstar', T('cognition.assets_kstar_tab', 'KSTAR'), kstarCount]] : [])
       .concat(deletedCount ? [['deleted', T('cognition.assets_deleted_tab', '已删除'), deletedCount]] : []);
-    const listHtml = filtered.length
-      ? filtered.map((asset) => `
+    /** 目录视图行（2026-09-18）：把"模型看到的那份目录"原样搬到面板上——
+     *  标题 + 一句话 + 类型/范围/版本/用没用过。模型看目录挑资产、用户看同一份
+     *  目录核对它的判断，两边看到的是同一件事。 */
+    const catalogRow = (asset) => {
+      const statement = String(asset.statement || '').replace(/\s+/g, ' ').trim();
+      const oneLine = statement.split(/[。！？!?]/)[0] || statement;
+      const used = S.proofs.filter((proof) => proof.kind === 'usage_recorded'
+        && String((proof.refs || {}).assetId || '') === String(asset.id)).length;
+      const meta = [
+        categoryLabel(asset.type),
+        scopeLabelText(asset.scope),
+        `v${String(asset.activeVersion || asset.version || '1')}`,
+        used ? T('cognition.catalog_used_times', '用过 {n} 次', { n: String(used) }) : T('cognition.catalog_never_used', '还没用过'),
+      ].join(' · ');
+      return `<div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
+        <div class="ca-row-main">
+          <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
+          ${oneLine ? `<div class="ca-row-meta">${esc(oneLine.slice(0, 80))}</div>` : ''}
+          <div class="ca-row-meta">${esc(meta)}</div>
+        </div>
+        <div class="ca-row-side">${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
+      </div>`;
+    };
+    const plainRow = (asset) => `
         <div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
           <div class="ca-row-main">
             <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
@@ -903,7 +925,10 @@
             <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.activeVersion || asset.version || '1'))} · ${esc(lastUseText(asset.id))}</div>
           </div>
           <div class="ca-row-side">${NS.isKstarAsset(asset) ? chip(T('cognition.asset_kstar_badge', 'KSTAR'), 'line') : ''}${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
-        </div>`).join('')
+        </div>`;
+    const catalogView = String(route.assetView || '') === 'catalog';
+    const listHtml = filtered.length
+      ? filtered.map((asset) => (catalogView ? catalogRow(asset) : plainRow(asset))).join('')
       : empty(
         T('cognition.tree_empty', '还没有正式资产'),
         T('cognition.tree_empty_hint', '候选被确认为正式资产后会出现在这里；当前还没有已确认的资产。'),
@@ -923,7 +948,11 @@
              开发逻辑，并点明未完成界面对外不应展示——仅向内部学员示范。 -->
         <div class="ca-tree-cap ca-tree-wip">${esc(T('cognition.tree_wip_note', '这部分还是开发中的骨架：先搭出可点的骨架，再按骨架逐步打磨视觉与交互。现阶段仅内部学员使用，所以未完成部分暂时展示；正式对外版本中不会出现。'))}</div>
       </div>
-      ${sectionHead(T('cognition.overview_list_title', '资产明细'), '', chips.map(([id, label, count]) => btn(`${label} ${count}`, 'filter-cat', { id, className: `ca-chip ca-chip-btn${String(route.category || '') === id ? ' is-green' : ''}` })).join(' '))}
+      ${sectionHead(
+        catalogView ? T('cognition.catalog_view_title', '资产目录（模型视角）') : T('cognition.overview_list_title', '资产明细'),
+        catalogView ? T('cognition.catalog_view_hint', '这就是模型挑资产时看的那份目录：一行一条；要看全文点进去。') : '',
+        `${btn(catalogView ? T('cognition.catalog_view_back', '列表视图') : T('cognition.catalog_view_toggle', '目录视图'), 'asset-view', { id: catalogView ? '' : 'catalog', small: true })} ${chips.map(([id, label, count]) => btn(`${label} ${count}`, 'filter-cat', { id, className: `ca-chip ca-chip-btn${String(route.category || '') === id ? ' is-green' : ''}` })).join(' ')}`,
+      )}
       ${listHtml}
       ${kstarEpisodesSection(route)}`;
   }

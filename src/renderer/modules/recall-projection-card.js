@@ -27,6 +27,16 @@
   }
 
 
+  /**
+   * 新控件一律走共享按钮原语（shared-ui-adoption-guard 的规矩）；本模块既有的
+   * 四个历史控件保持原样、由守卫基线冻结。原语缺席（极简渲染上下文）时返回空串，
+   * 不在这里自造控件标记——那又会在基线之外多出一个原始控件。
+   */
+  function _sharedButton(label, attrs) {
+    if (typeof window.uiButton !== 'function') return '';
+    return window.uiButton({ label, size: 'sm', attrs });
+  }
+
   function _assetStatusLabel(status) {
     if (status === 'active') return _label('recall.asset.status.active', 'Active');
     if (status === 'paused') return _label('recall.asset.status.paused', 'Paused');
@@ -80,6 +90,16 @@
 
   function _render(host, card, available, opts, forecastFailure) {
     host.__recallProjectionRenderState = { card, available, opts, forecastFailure };
+    // 模型自选（2026-09-18）：卡片是"模型为这个任务挑的资产"，不是等用户
+    // 确认的预载草稿——所以文案与动作都不同（confirmed + 一键撤销）。
+    const modelSelected = card?.authorization === 'model_selected';
+    if (opts?.onlyModelSelected && !modelSelected) {
+      // 只挂模型自选的卡：其它授权（用户确认/工作区策略）保持"不挂卡"的现状。
+      host.className = '';
+      host.innerHTML = '';
+      delete host.dataset.projectionId;
+      return;
+    }
     const editable = card?.status === 'preview';
     const assets = Array.isArray(card?.assetSummaries) ? card.assetSummaries : [];
     const omitted = Array.isArray(card?.omittedAssetRefs) ? card.omittedAssetRefs : [];
@@ -90,15 +110,26 @@
         : '';
     host.className = 'chat-recall-projection-card';
     host.dataset.projectionId = String(card?.projectionId || opts?.projectionId || '');
+    const revoked = card?.status === 'revoked';
     const actions = forecastFailure
       ? `<div class="chat-recall-projection-forecast-failure" role="alert"><strong>${_escape(_label('recall.projection.forecast_failed', 'Forecast failed; task has not started.'))}</strong><small>${_escape(forecastFailure.message || '')}</small><button type="button" class="btn btn-sm" data-recall-projection-retry="1">${_escape(_label('recall.projection.retry_forecast', 'Retry forecast'))}</button></div>`
       : editable
         ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm assets'))}</button></div>`
-        : '';
-    host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(_label('recall.projection.title', 'Preloaded assets'))}</strong><small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
+        : modelSelected && !revoked
+          ? `<div class="chat-recall-projection-actions">${_sharedButton(_label('recall.projection.revoke', 'Revoke'), { 'data-recall-projection-revoke': '1' })}</div>`
+          : '';
+    const title = modelSelected
+      ? _label('recall.projection.model_selected_title', 'Assets the model picked for this task')
+      : _label('recall.projection.title', 'Preloaded assets');
+    const lockedNote = revoked && modelSelected
+      ? _label('recall.projection.revoked_note', 'Revoked: later turns no longer carry these assets.')
+      : modelSelected
+        ? _label('recall.projection.model_selected_locked', 'The model picked these for the current task; later turns keep carrying them until you revoke.')
+        : _label('recall.projection.locked', 'These preloaded assets are locked.');
+    host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(title)}</strong>${modelSelected ? `<span class="chat-recall-projection-badge">${_escape(_label('recall.projection.model_selected_badge', 'Model-picked'))}</span>` : ''}<small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
       <div class="chat-recall-projection-summary">${_escape(_label('recall.projection.summary', '{count} preloaded assets.', { count: assets.length }))}</div>
       <div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preloaded assets'))}</div>${assets.length ? assets.map((asset) => _assetRow(asset, editable)).join('') : `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_included_assets', 'No preloaded assets selected.'))}</div>`}</div>
-      ${editable ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.add_assets', 'Add asset'))}</div>${availableRows}</div>` : `<div class="chat-recall-projection-locked">${_escape(_label('recall.projection.locked', 'These preloaded assets are locked.'))}</div>`}
+      ${editable ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.add_assets', 'Add asset'))}</div>${availableRows}</div>` : `<div class="chat-recall-projection-locked">${_escape(lockedNote)}</div>`}
       ${actions}
       ${omitted.length ? `<div class="chat-recall-projection-omitted">${_escape(_label('recall.projection.omitted_count', '{count} assets hidden', { count: omitted.length }))}</div>` : ''}`;
   }
@@ -139,22 +170,25 @@
       host.addEventListener('click', async (event) => {
         const confirm = event.target.closest('[data-recall-projection-confirm]');
         const retry = !confirm ? event.target.closest('[data-recall-projection-retry]') : null;
-        const remove = !confirm && !retry ? event.target.closest('[data-recall-projection-remove]') : null;
-        const add = !confirm && !retry && !remove ? event.target.closest('[data-recall-projection-add]') : null;
-        const button = confirm || retry || remove || add;
+        const revoke = !confirm && !retry ? event.target.closest('[data-recall-projection-revoke]') : null;
+        const remove = !confirm && !retry && !revoke ? event.target.closest('[data-recall-projection-remove]') : null;
+        const add = !confirm && !retry && !revoke && !remove ? event.target.closest('[data-recall-projection-add]') : null;
+        const button = confirm || retry || revoke || remove || add;
         if (!button || button.disabled || host.dataset.loading === '1') return;
         const assetId = remove ? remove.dataset.recallProjectionRemove : add?.dataset.recallProjectionAdd;
-        if (!confirm && !retry && !assetId) return;
+        if (!confirm && !retry && !revoke && !assetId) return;
         button.disabled = true;
         try {
           const result = confirm
             ? await window.cogseed.invoke('recall.projections.confirm', { projectionId, ...(cid ? { cid } : {}) })
             : retry
               ? await window.cogseed.invoke('recall.projections.retryForecast', { projectionId, ...(cid ? { cid } : {}) })
-              : await window.cogseed.invoke('recall.projections.revise', remove
-                ? { projectionId, removeAssetIds: [assetId] }
-                : { projectionId, addAssetIds: [assetId] });
-          if (!result?.ok) throw Object.assign(new Error(result?.error || (confirm ? 'projection confirmation failed' : retry ? 'forecast retry failed' : 'projection revision failed')), { code: result?.code });
+              : revoke
+                ? await window.cogseed.invoke('recall.projections.revoke', { projectionId })
+                : await window.cogseed.invoke('recall.projections.revise', remove
+                  ? { projectionId, removeAssetIds: [assetId] }
+                  : { projectionId, addAssetIds: [assetId] });
+          if (!result?.ok) throw Object.assign(new Error(result?.error || (confirm ? 'projection confirmation failed' : retry ? 'forecast retry failed' : revoke ? 'projection revoke failed' : 'projection revision failed')), { code: result?.code });
           forecastFailure = null;
           await refresh();
         } catch (error) {

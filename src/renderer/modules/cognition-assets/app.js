@@ -96,6 +96,9 @@
           case 'refresh': await NS.reload({ tree: true }); await NS.reload(); break;
           case 'tab': router.go({ name: id }); break;
           case 'filter-cat': router.go({ name: 'overview', category: id }); break;
+          // 目录视图切换（2026-09-18）：同一个列表页换一种行形态（模型视角），
+          // 不新增 tab。assetView 必须进 router.go 的归一化白名单，否则被丢弃。
+          case 'asset-view': router.go({ name: 'overview', assetView: id === 'catalog' ? 'catalog' : '' }); break;
           case 'go-review': router.go({ name: 'review' }); break;
           case 'go-organize': router.go({ name: 'organize' }); break;
           case 'go-configure-model': {

@@ -5728,5 +5728,16 @@
   "cognition.proof_version_deleted": "（当時の v{n}、そのバージョンは後に削除されました）",
   "cognition.assets_kstar_tab": "KSTAR",
   "cognition.asset_kstar_badge": "KSTAR",
-  "cognition.evidence_source_processing": "ソース整理中"
+  "cognition.evidence_source_processing": "ソース整理中",
+  "cognition.catalog_view_title": "アセットカタログ（モデル視点）",
+  "cognition.catalog_view_toggle": "カタログ表示",
+  "cognition.catalog_view_back": "リスト表示",
+  "cognition.catalog_view_hint": "モデルがアセットを選ぶときに見るカタログです：1行1件。全文は開いて確認できます。",
+  "cognition.catalog_used_times": "{n} 回使用",
+  "cognition.catalog_never_used": "まだ未使用",
+  "recall.projection.model_selected_title": "モデルがこのタスク用に選んだアセット",
+  "recall.projection.model_selected_badge": "モデル選択",
+  "recall.projection.model_selected_locked": "モデルが現在のタスク用に選んだアセットです。以降のターンでも引き継がれます。「取り消す」で停止します。",
+  "recall.projection.revoke": "取り消す",
+  "recall.projection.revoked_note": "取り消し済み：以降のターンではこれらのアセットを引き継ぎません。"
 }

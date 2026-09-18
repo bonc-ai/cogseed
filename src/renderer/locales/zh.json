@@ -7739,5 +7739,16 @@
   "kb.quiz.share": "分享测验",
   "kb.quiz.wrong_only_flag": "错题重练：只做上一轮答错 / 跳过的题",
   "kb.quiz.next_question": "下一题",
-  "cognition.evidence_source_processing": "来源整理中"
+  "cognition.evidence_source_processing": "来源整理中",
+  "cognition.catalog_view_title": "资产目录（模型视角）",
+  "cognition.catalog_view_toggle": "目录视图",
+  "cognition.catalog_view_back": "列表视图",
+  "cognition.catalog_view_hint": "这就是模型挑资产时看的那份目录：一行一条；要看全文点进去。",
+  "cognition.catalog_used_times": "用过 {n} 次",
+  "cognition.catalog_never_used": "还没用过",
+  "recall.projection.model_selected_title": "模型为这个任务挑的资产",
+  "recall.projection.model_selected_badge": "模型自选",
+  "recall.projection.model_selected_locked": "这是模型为当前任务挑的资产；后续回合会继续带上，点「撤销」即停用。",
+  "recall.projection.revoke": "撤销",
+  "recall.projection.revoked_note": "已撤销：后续回合不再带上这批资产。"
 }

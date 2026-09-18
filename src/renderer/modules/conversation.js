@@ -9629,7 +9629,21 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
 
   // 预载卡片已按产品决策移除（2026-08-17）：引用资产走自动注入 + LLM 主动
   // 检索工具（search_ability_assets），不再展示可交互的预载确认卡片。
-  // 历史消息里的 recall_projection_card 字段保留在数据中，仅以普通文本呈现。
+  // 2026-09-18 例外：**模型自选**的投影重新挂卡——模型用 attach_assets_to_task
+  // 给这个任务挑了资产，用户必须能看见并一键撤销（onlyModelSelected 让其它授权
+  // 的投影维持"不挂卡"的现状，旧决策不动）。
+  if (role === 'assistant' && message.recall_projection_card?.projectionId
+      && typeof window.mountRecallProjectionCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
+      const host = document.createElement('div');
+      bubble.appendChild(host);
+      window.mountRecallProjectionCard(host, message.recall_projection_card, {
+        cid: opts.cid || currentCid,
+        onlyModelSelected: true,
+      });
+    }
+  }
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
   // `<iframe>` over the `chat-app://` protocol, appended after the form so it

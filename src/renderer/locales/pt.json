@@ -5728,5 +5728,16 @@
   "cognition.proof_version_deleted": "(v{n} na época; essa versão foi excluída depois)",
   "cognition.assets_kstar_tab": "KSTAR",
   "cognition.asset_kstar_badge": "KSTAR",
-  "cognition.evidence_source_processing": "Fonte ainda em processamento"
+  "cognition.evidence_source_processing": "Fonte ainda em processamento",
+  "cognition.catalog_view_title": "Catálogo de ativos (visão do modelo)",
+  "cognition.catalog_view_toggle": "Vista de catálogo",
+  "cognition.catalog_view_back": "Vista de lista",
+  "cognition.catalog_view_hint": "Este é o catálogo que o modelo consulta ao escolher ativos: uma linha por ativo; abra para ver o texto completo.",
+  "cognition.catalog_used_times": "usado {n} vezes",
+  "cognition.catalog_never_used": "ainda não usado",
+  "recall.projection.model_selected_title": "Ativos escolhidos pelo modelo para esta tarefa",
+  "recall.projection.model_selected_badge": "Escolhido pelo modelo",
+  "recall.projection.model_selected_locked": "O modelo escolheu estes ativos para a tarefa atual; os próximos turnos continuam a usá-los até você revogar.",
+  "recall.projection.revoke": "Revogar",
+  "recall.projection.revoked_note": "Revogado: os próximos turnos não usam mais estes ativos."
 }

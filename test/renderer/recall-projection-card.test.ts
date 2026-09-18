@@ -17,7 +17,15 @@ function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unkn
     addEventListener(type: string, handler: unknown) { this.handler = handler; this.handlerType = type; },
   };
   const context: any = {
-    window: { cogseed: { invoke } },
+    window: {
+      cogseed: { invoke },
+      // 新控件走共享按钮原语（shared-ui-adoption-guard 的规矩）。这里只 stub
+      // 出本用例需要的最小行为：带 label 与 data-* 的按钮。
+      uiButton: ({ label, attrs }: { label: string; attrs?: Record<string, string> }) => {
+        const extra = Object.entries(attrs || {}).map(([key, value]) => ` ${key}="${String(value)}"`).join('');
+        return `<button type="button" class="btn ui-button"${extra}><span class="ui-button__label">${String(label)}</span></button>`;
+      },
+    },
     document: {},
     escapeHtml: (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     t: (_key: string, varsOrFallback?: unknown) => typeof varsOrFallback === 'string' ? varsOrFallback : _key,
@@ -281,5 +289,60 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     expect(host.innerHTML).not.toContain('Still running the confirmed');
     expect(host.innerHTML).not.toContain('is-stale');
+  });
+
+  it('模型自选（2026-09-18）：标"模型自选"并给撤销；撤销走 recall.projections.revoke 并刷新为已撤销', async () => {
+    const calls: Array<[string, unknown]> = [];
+    let revoked = false;
+    const { context, host } = loadModule(async (channel, payload) => {
+      calls.push([channel, payload]);
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: {
+            ...previewCard,
+            status: revoked ? 'revoked' : 'confirmed',
+            authorization: 'model_selected',
+            purpose: 'model_selected',
+          },
+        };
+      }
+      if (channel === 'recall.projections.revoke') {
+        revoked = true;
+        return { ok: true, projection: { projectionId: 'proj-a', status: 'revoked' } };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+    expect(host.innerHTML).toContain('Assets the model picked for this task');
+    expect(host.innerHTML).toContain('Model-picked');
+    expect(host.innerHTML).toContain('Revoke');
+    // confirmed 态不发确认按钮（它已经生效了，只给撤销）。
+    expect(host.innerHTML).not.toContain('Confirm assets');
+
+    const revokeButton = { disabled: false };
+    await host.handler({
+      target: {
+        closest: (selector: string) => (String(selector).includes('revoke') ? revokeButton : null),
+      },
+    });
+    expect(calls.some(([channel]) => channel === 'recall.projections.revoke')).toBe(true);
+    expect(host.innerHTML).toContain('Revoked: later turns no longer carry these assets.');
+    expect(host.innerHTML).not.toContain('data-recall-projection-revoke');
+  });
+
+  it('onlyModelSelected：非模型自选的投影不挂卡（保留 2026-08-17 的"不挂预载卡"决策）', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return { ok: true, card: { ...previewCard, status: 'confirmed', authorization: 'user_confirmed' } };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+    expect(host.innerHTML).toBe('');
+    expect(host.className).toBe('');
+    expect(host.dataset.projectionId).toBeUndefined();
   });
 });
