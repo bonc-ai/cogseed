@@ -560,6 +560,8 @@
   "chat.form.required_select": "Please select",
   "chat.form.required_text": "This field cannot be empty",
   "chat.form.reset": "Reset",
+  "chat.form.skip": "Skip",
+  "chat.form.skipped_note": "(Skipped — no answer given)",
   "chat.form.streaming_placeholder": "Preparing parameter form…",
   "chat.form.submit": "Confirm",
   "chat.form.submit_failed": "Submit failed",

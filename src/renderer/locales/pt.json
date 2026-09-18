@@ -478,6 +478,8 @@
   "chat.form.required_select": "Selecione",
   "chat.form.required_text": "Este campo não pode ficar vazio",
   "chat.form.reset": "Redefinir",
+  "chat.form.skip": "Pular",
+  "chat.form.skipped_note": "(Ignorado — sem resposta)",
   "chat.form.streaming_placeholder": "Preparando formulário de parâmetro…",
   "chat.form.submit": "Confirmar",
   "chat.form.submit_failed": "Falha no envio",
