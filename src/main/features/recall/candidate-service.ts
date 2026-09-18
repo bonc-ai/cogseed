@@ -107,6 +107,11 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
+  /** 统一来源标记（2026-09-19 候选归一化）：读取时由 learningProvenance/
+   *  captureKey 前缀/教学信号引用惰性推导，不再靠调用方拿前缀猜——
+   *  'kstar'（KStar 沉淀）/ 'teaching'（用户教学）/ 'capture'（复盘·整理·
+   *  capture 等系统提取的统称）。 */
+  origin?: 'kstar' | 'teaching' | 'capture';
   promotedAssetId?: string;
   reviewDecisionId?: string;
   decisionNote?: string;
@@ -585,6 +590,7 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   }
   const learningSignal = normalizeLearningSignal(value.learningSignal);
   const learningProvenance = normalizeLearningProvenance(value.learningProvenance);
+  const origin = deriveCandidateOrigin(value, learningProvenance !== undefined);
   const createdAt = requireIsoTimestamp(value.createdAt, 'candidate created at');
   const candidateValue = Object.prototype.hasOwnProperty.call(value, 'value')
     ? (boundedText(value.value, 'candidate value', 1_000) || '')
@@ -603,7 +609,26 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
     expiresAt: requireIsoTimestamp(value.expiresAt, 'candidate expiry', new Date(Date.parse(createdAt) + DEFAULT_CANDIDATE_TTL_MS).toISOString()),
     ...(learningSignal ? { learningSignal } : {}),
     ...(learningProvenance ? { learningProvenance } : {}),
+    ...(origin ? { origin } : {}),
   } as RecallCandidateRecord;
+}
+
+/** 候选来源的惰性推导（读时附加、不落盘、零迁移）：KStar 溯源最硬，其次
+ *  captureKey 前缀，再次教学信号引用；兜底 capture（复盘/整理/capture 线
+ *  统称）。旧记录读了就有 origin，新写入不改盘上形状。 */
+function deriveCandidateOrigin(
+  value: RecallJsonRecord,
+  hasLearningProvenance: boolean,
+): 'kstar' | 'teaching' | 'capture' | undefined {
+  if (hasLearningProvenance) return 'kstar';
+  const captureKey = typeof value.captureKey === 'string' ? value.captureKey : '';
+  if (captureKey.startsWith('kstar-')) return 'kstar';
+  if (captureKey.startsWith('teaching-')) return 'teaching';
+  if (Array.isArray(value.sourceRefs)
+    && value.sourceRefs.some((ref) => ref && typeof ref === 'object' && (ref as { kind?: unknown }).kind === 'user_teaching_signal')) {
+    return 'teaching';
+  }
+  return 'capture';
 }
 
 function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
@@ -899,7 +924,9 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     ));
   }
   await writeRecallJsonRecord(userId, 'candidates', record.id, record);
-  return record;
+  // 与 captureKey 路径同口径：返回前过 asCandidate，让 origin 等读时推导
+  // 字段在两条路径上一致。
+  return asCandidate(record as unknown as RecallJsonRecord);
 }
 
 /**

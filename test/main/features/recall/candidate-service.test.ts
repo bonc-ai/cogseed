@@ -1526,4 +1526,44 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     const familyLinks = relations.filter((rel) => rel.kind === 'same_family');
     expect(familyLinks.map((rel) => rel.assetId)).toContain(firstAsset.id);
   });
+
+  it('candidate origin is derived on read without touching stored shape（归一化第一步）', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-origin');
+    const candidates = await service();
+    const kstarOne = await candidates.saveRecallCandidate('user-origin', {
+      judgment: 'KStar 沉淀的经验一条。',
+      value: '经验内容。',
+      summary: 'kstar 经验', suggestedType: 'rule', suggestedScope: 'general',
+      applicableWhen: ['通用时'], forbiddenWhen: ['无关场景'],
+      suggestedAction: 'create',
+      captureKey: 'kstar-ksreq-test-0',
+      sourceRefs: [{ kind: 'execution', id: 'exec-origin-1' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-origin-1' }],
+    });
+    expect(kstarOne.origin).toBe('kstar');
+    const teachingOne = await candidates.saveRecallCandidate('user-origin', {
+      judgment: '用户教过的偏好一条。',
+      value: '偏好内容。',
+      summary: '教学偏好', suggestedType: 'personal', suggestedScope: 'personal',
+      suggestedAction: 'create',
+      captureKey: 'teaching-teach-origin-1',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-origin-2' }],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-origin-2' }],
+    });
+    expect(teachingOne.origin).toBe('teaching');
+    const plainOne = await candidates.saveRecallCandidate('user-origin', {
+      judgment: '复盘提取的观察一条。',
+      value: '观察内容。',
+      summary: '复盘观察', suggestedType: 'rule', suggestedScope: 'general',
+      applicableWhen: ['通用时'], forbiddenWhen: ['无关场景'],
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-origin-3' }],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-origin-3' }],
+    });
+    expect(plainOne.origin).toBe('capture');
+    // 读回来的旧形状不受影响（盘上无 origin 字段，读取时推导）。
+    const reread = await candidates.readRecallCandidate('user-origin', kstarOne.id);
+    expect(reread.origin).toBe('kstar');
+  });
 });
