@@ -32615,7 +32615,9 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   background: var(--surface-card);
 }
 .kb-glo__row.is-selected {
-  background: var(--surface-subtle);
+  /* 选中必须与悬停可分：悬停是 --surface-card(#FFFFFF)，选中用品牌淡绿 + 左侧色条。 */
+  background: var(--primary-soft);
+  box-shadow: inset 3px 0 var(--primary);
 }
 .kb-glo__row[data-paused="1"] .kb-glo__pair {
   color: var(--text-muted);

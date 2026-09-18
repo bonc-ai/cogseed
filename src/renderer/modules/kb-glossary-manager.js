@@ -130,6 +130,33 @@
   }
 
   // ── 面板 ─────────────────────────────────────────────────────────────
+  /**
+   * 前置条件预检（纯函数，可单测）。
+   *
+   * 返回 null = 可以继续；否则返回一个必须展示给用户的原因。
+   * 存在的意义：杜绝“点了没反应也不说为什么”。每一个拦截都必须带原因，
+   * 否则用户无法区分“按钮坏了”和“前置条件没满足”。
+   */
+  function guardReason(action, snapshot) {
+    const s = snapshot || {};
+    switch (action) {
+      case 'bulk-status':
+        return s.selectedCount > 0
+          ? null
+          : { key: 'kb.glossary.select_required', fallback: '请先选择要操作的词条。' };
+      case 'save-export':
+        return s.hasExportText
+          ? null
+          : { key: 'kb.glossary.export_generate_required', fallback: '请先点「生成导出内容」，再另存。' };
+      case 'apply-import':
+        return s.hasImportPreview
+          ? null
+          : { key: 'kb.glossary.import_preview_required', fallback: '请先点「预览」确认新增/更新条数，再应用导入。' };
+      default:
+        return null;
+    }
+  }
+
   function open(options) {
     const opts = options || {};
     if (typeof root.uiModal !== 'function') throw new Error('kb glossary manager: uiModal unavailable');
@@ -671,8 +698,8 @@
     // ── 数据动作 ────────────────────────────────────────────────────────
     async function reload() {
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.list', {});
         state.entries = Array.isArray(result?.entries) ? result.entries : [];
         // 候选区独立通道：词条列表只含已生效规则，候选不在其中。
@@ -708,11 +735,17 @@
     }
 
     async function setStatusBulk(status) {
-      if (state.busy || state.selected.size === 0) return;
+      if (state.busy) return;
+      const blocked = guardReason('bulk-status', { selectedCount: state.selected.size });
+      if (blocked) {
+        setStatus(t(blocked.key, blocked.fallback), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       let updated = 0;
       try {
+        render();
         for (const id of state.selected) {
           await root.cogseed.invoke('transcript.glossary.setStatus', { id, status });
           updated += 1;
@@ -731,11 +764,17 @@
     async function deleteOne(id) {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
-        await root.cogseed.invoke('transcript.glossary.delete', { id });
+        render();
+        const result = await root.cogseed.invoke('transcript.glossary.delete', { id });
         state.selected.delete(id);
-        setStatus(t('kb.glossary.deleted', '已删除词条。'), '');
+        const missing = result?.deleted === false;
+        setStatus(
+          missing
+            ? t('kb.glossary.delete_missing', '没有删除任何词条：该词条已不存在，列表已刷新。')
+            : t('kb.glossary.deleted', '已删除词条。'),
+          missing ? 'warning' : '',
+        );
       } catch (error) {
         log?.warn('glossary delete failed', { error: error?.message || String(error) });
         setStatus(t('kb.glossary.delete_failed', '删除失败，请稍后重试。'), 'warning');
@@ -749,12 +788,22 @@
     async function toggleStatus(id, current) {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
-        await root.cogseed.invoke('transcript.glossary.setStatus', {
+        render();
+        const result = await root.cogseed.invoke('transcript.glossary.setStatus', {
           id,
           status: current === 'paused' ? 'active' : 'paused',
         });
+        if (!result?.entry) {
+          setStatus(t('kb.glossary.entry_missing', '该词条已不存在（可能已在别处删除），列表已刷新。'), 'warning');
+        } else {
+          setStatus(
+            current === 'paused'
+              ? t('kb.glossary.status_resumed_one', '已启用该词条。')
+              : t('kb.glossary.status_paused_one', '已暂停该词条。'),
+            '',
+          );
+        }
       } catch (error) {
         log?.warn('glossary status failed', { error: error?.message || String(error) });
         setStatus(t('kb.glossary.bulk_status_failed', '批量更新失败，请稍后重试。'), 'warning');
@@ -816,8 +865,8 @@
     async function generateExport() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.export', {
           includePeople: state.exportIncludePeople,
         });
@@ -837,10 +886,16 @@
     }
 
     async function saveExport() {
-      if (state.busy || !state.exportText) return;
+      if (state.busy) return;
+      const blocked = guardReason('save-export', { hasExportText: Boolean(state.exportText) });
+      if (blocked) {
+        setStatus(t(blocked.key, blocked.fallback), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const stamp = new Date().toISOString().slice(0, 10);
         const targetPath = t('kb.glossary.export_filename', '转写词表-{date}.json', { date: stamp });
         const result = await root.cogseed.invoke('library.writeText', { content: state.exportText, targetPath });
@@ -888,6 +943,7 @@
       }
       if (!parsed) {
         state.importPreview = null;
+        setStatus(t('kb.glossary.import_empty', '这段内容里没有可导入的词条。'), 'warning');
         render();
         return;
       }
@@ -904,10 +960,16 @@
         setStatus(t('kb.glossary.import_invalid_json', '导入内容不是合法 JSON。'), 'warning');
         return;
       }
-      if (!parsed || !state.importPreview) return;
+      if (!parsed) return;
+      const blocked = guardReason('apply-import', { hasImportPreview: Boolean(state.importPreview) });
+      if (blocked) {
+        setStatus(t(blocked.key, blocked.fallback), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.import', {
           payload: parsed,
           mode: state.importMode,
@@ -940,8 +1002,8 @@
     async function exportPack() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.exportPack', {
           includePeople: state.exportIncludePeople,
           ownerScope: state.packScope,
@@ -967,10 +1029,14 @@
     /** 贡献包导入预览（治理闸门：先看新增/冲突/高风险/人名）。 */
     async function reviewPack() {
       const parsed = parseImportText();
-      if (!parsed) return;
+      if (!parsed) {
+        setStatus(t('kb.glossary.pack_content_required', '请先把贡献包 JSON 粘贴到下面的输入框。'), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.reviewPack', { pack: parsed });
         state.packReview = result?.review ?? null;
         setStatus('', '');
@@ -986,12 +1052,21 @@
 
     /** 导入贡献包（优先级 组织 > 团队 > 个人；本地更高时保留本地并如实计数）。 */
     async function importPack() {
-      if (state.busy || !state.packReview) return;
+      if (state.busy) return;
       const parsed = parseImportText();
-      if (!parsed) return;
+      if (!parsed) {
+        setStatus(t('kb.glossary.pack_content_required', '请先把贡献包 JSON 粘贴到下面的输入框。'), 'warning');
+        render();
+        return;
+      }
+      if (!state.packReview) {
+        setStatus(t('kb.glossary.pack_review_required', '请先点「复核」检查这份贡献包，再导入。'), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.importPack', { pack: parsed });
         setStatus(t('kb.glossary.pack_imported', '贡献包已导入：新增 {added} · 更新 {updated} · 覆盖 {overwritten} · 保留本地 {keptLocal}', {
           added: Number(result?.added || 0),
@@ -1014,8 +1089,8 @@
     async function toggleQueryRewrite() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.queryRewrite.set', { enabled: !state.queryRewrite });
         state.queryRewrite = result?.enabled === true;
         setStatus(state.queryRewrite
@@ -1033,8 +1108,8 @@
     async function seedInitial() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.seedInitial', {});
         const excluded = Array.isArray(result?.excluded) ? result.excluded : [];
         setStatus(t('kb.glossary.seed_initial_done', '初始词表已补全：新增 {created} 条、更新 {updated} 条{excluded}', {
@@ -1166,12 +1241,12 @@
   const api = {
     open,
     // 测试桥（仅纯函数）
-    __test: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf },
-    _internals: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf },
+    __test: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason },
+    _internals: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason },
   };
 
   root.KbGlossaryManager = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf };
+    module.exports = { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason };
   }
 })(typeof window !== 'undefined' ? window : globalThis);
