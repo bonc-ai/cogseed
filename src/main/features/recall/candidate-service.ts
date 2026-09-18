@@ -798,6 +798,14 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
   const captureKey = input.captureKey === undefined
     ? undefined
     : boundedText(input.captureKey, 'capture key', 160, true);
+  const persistedOrigin = deriveCandidateOrigin(
+    {
+      captureKey,
+      learningProvenance,
+      sourceRefs,
+    } as unknown as RecallJsonRecord,
+    learningProvenance !== undefined,
+  );
   if (captureKey && !safeId(captureKey)) throw new Error('invalid capture key');
   if (captureKey) {
     const captured = (await listRecallCandidates(userId)).find((candidate) => candidate.captureKey === captureKey);
@@ -907,6 +915,10 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     ...(learningSignal ? { learningSignal } : {}),
     ...(learningProvenance ? { learningProvenance } : {}),
     ...(captureKey ? { captureKey } : {}),
+    // 写入侧显式落 origin（2026-09-19 归一化第二步）：新记录落盘即带统一
+    // 来源标记，读时推导只服务旧记录；与推导规则同源（provenance > 前缀 >
+    // 教学引用 > capture），两处规则由 deriveCandidateOrigin 单点维护。
+    ...(persistedOrigin ? { origin: persistedOrigin } : {}),
     ...(input.spaceId && safeId(input.spaceId) ? { spaceId: input.spaceId } : {}),
     ...(taskRunId ? { taskRunId } : {}),
     ...(targetAssetId ? { targetAssetId } : {}),
