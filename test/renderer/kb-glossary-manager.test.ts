@@ -5,7 +5,9 @@
  *   1. 纯函数不变量：搜索/筛选/排序、导入预览（尤其是 replace 的破坏性提示）；
  *   2. 4 份 locale 都定义了全部键（缺键界面会露 key）；
  *   3. 源码契约：控件走共享原语、只在 transcript.glossary.* 通道上操作、
- *      人名默认不导出、导入前必须先预览。
+ *      人名默认不导出、导入前必须先预览；
+ *   4. 交互失效防回归：静默 no-op（不告诉用户原因）、busy 卡死导致全部按钮永久
+ *      disabled、选中行与悬停同色导致“看不出来选中了”。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -23,6 +25,7 @@ const manager = require('../../src/renderer/modules/kb-glossary-manager.js') as 
   };
   kindKey: (kind: string) => string;
   riskKeyOf: (risk: string) => string;
+  guardReason: (action: string, snapshot: Record<string, unknown>) => { key: string; fallback: string } | null;
 };
 
 const entry = (over: Record<string, unknown> = {}) => ({
@@ -117,6 +120,9 @@ describe('locale 覆盖（词表管理页）', () => {
     'export_duplicate', 'export_save_failed', 'import', 'import_mode', 'import_merge', 'import_replace',
     'import_preview', 'import_replace_hint', 'import_preview_btn', 'import_apply', 'import_done',
     'import_failed', 'import_invalid_json', 'unavailable',
+    'select_required', 'entry_missing', 'delete_missing', 'status_paused_one', 'status_resumed_one',
+    'export_generate_required', 'import_preview_required', 'import_empty',
+    'pack_review_required', 'pack_content_required',
     'seed_initial', 'seed_initial_done', 'seed_initial_excluded', 'seed_initial_failed',
     'qrw_on', 'qrw_off', 'qrw_enabled', 'qrw_disabled', 'qrw_failed',
     'pack_export', 'pack_exported', 'pack_export_failed', 'pack_review', 'pack_review_result',
@@ -163,5 +169,72 @@ describe('源码契约', () => {
     expect(source).toMatch(/exportIncludePeople: false/);
     // 导入按钮在拿到预览前必须是禁用的
     expect(source).toMatch(/disabled: state\.busy \|\| !state\.importText \|\| !preview/);
+  });
+});
+
+describe('前置条件预检（静默失效防回归）', () => {
+  it('未选择词条时批量动作给出原因，而不是静默无效', () => {
+    const blocked = manager.guardReason('bulk-status', { selectedCount: 0 });
+    expect(blocked?.key).toBe('kb.glossary.select_required');
+    expect(blocked?.fallback).toBeTruthy();
+  });
+
+  it('已选择时放行', () => {
+    expect(manager.guardReason('bulk-status', { selectedCount: 3 })).toBeNull();
+  });
+
+  it('另存前必须先有导出内容，否则说明原因', () => {
+    expect(manager.guardReason('save-export', { hasExportText: false })?.key)
+      .toBe('kb.glossary.export_generate_required');
+    expect(manager.guardReason('save-export', { hasExportText: true })).toBeNull();
+  });
+
+  it('应用导入前必须先预览，否则说明原因', () => {
+    expect(manager.guardReason('apply-import', { hasImportPreview: false })?.key)
+      .toBe('kb.glossary.import_preview_required');
+    expect(manager.guardReason('apply-import', { hasImportPreview: true })).toBeNull();
+  });
+
+  it('未知动作不拦截', () => {
+    expect(manager.guardReason('nope', {})).toBeNull();
+  });
+});
+
+describe('交互失效防回归', () => {
+  const source = readSrc('renderer/modules/kb-glossary-manager.js');
+
+  it('busy 置位后的首次 render 不得留在 try 之外（render 抛异常会让所有按钮永久 disabled）', () => {
+    expect(source).not.toMatch(/state\.busy = true;\s*\n\s*render\(\);/);
+  });
+
+  it('删除必须尊重 main 的 {deleted}，不得在未命中时假报“已删除”', () => {
+    expect(source).toContain('result?.deleted === false');
+    expect(source).toContain('kb.glossary.delete_missing');
+  });
+
+  it('暂停/启用必须尊重 main 的 {entry}，不得静默 no-op', () => {
+    expect(source).toMatch(/if \(!result\?\.entry\)/);
+    expect(source).toContain('kb.glossary.entry_missing');
+    expect(source).toContain('kb.glossary.status_paused_one');
+  });
+
+  it('预检判定只有一份：守卫必须走 guardReason，避免抄成第二份后漂移', () => {
+    expect(source).toMatch(/guardReason\('bulk-status'/);
+    expect(source).toMatch(/guardReason\('save-export'/);
+    expect(source).toMatch(/guardReason\('apply-import'/);
+  });
+
+  it('空内容导入必须说明原因，不得静默返回', () => {
+    expect(source).toContain('kb.glossary.import_empty');
+    expect(source).toContain('kb.glossary.pack_content_required');
+    expect(source).toContain('kb.glossary.pack_review_required');
+  });
+
+  it('选中行必须与悬停可区分（悬停是 --surface-card 白；选中不得再用几乎同色的 --surface-subtle）', () => {
+    const css = readSrc('renderer/style.css');
+    const rule = css.match(/\.kb-glo__row\.is-selected \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).not.toContain('--surface-subtle');
+    expect(rule![1]).toContain('--primary-soft');
   });
 });
