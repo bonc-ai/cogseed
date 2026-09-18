@@ -229,6 +229,13 @@ export function installMainRendererAudioPermissionGate(
   rendererUrl: string,
 ): { checkCount: number; requestCount: number } {
   const observation = { checkCount: 0, requestCount: 0 };
+  // Chromium reports the local file origin as `file://` in some permission
+  // callbacks and `file:///` in others on Windows. They denote the same
+  // local-file origin; the renderer identity checks below remain the actual
+  // trust boundary.
+  const isLocalFileOrigin = (origin: unknown): boolean => (
+    origin === 'file://' || origin === 'file:///'
+  );
   const isMainRendererRequest = (
     webContents: WebContents | null,
     details: { isMainFrame: boolean; requestingUrl?: string },
@@ -238,7 +245,7 @@ export function installMainRendererAudioPermissionGate(
 
   targetSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     observation.checkCount += 1;
-    if (requestingOrigin !== 'file://' || !isMainRendererRequest(webContents, details)) return false;
+    if (!isLocalFileOrigin(requestingOrigin) || !isMainRendererRequest(webContents, details)) return false;
     if (permission === 'media') return details.mediaType === 'audio';
     return permission === 'clipboard-read' || permission === 'clipboard-sanitized-write';
   });
@@ -248,7 +255,7 @@ export function installMainRendererAudioPermissionGate(
     if (permission === 'media') {
       allowed = allowed
         && 'securityOrigin' in details
-        && details.securityOrigin === 'file://'
+        && isLocalFileOrigin(details.securityOrigin)
         && details.mediaTypes?.length === 1
         && details.mediaTypes[0] === 'audio';
     } else {

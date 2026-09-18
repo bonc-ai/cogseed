@@ -78,6 +78,8 @@ jobs:
           npx electron-builder --mac --publish never
       - name: Assert packaged Electron fuse baseline
         run: node scripts/check-fuses.cjs dist/mac-arm64/CogSeed.app dist/mac/CogSeed.app
+      - name: Packaged launch smoke
+        run: npm run verify:package:launch
       - uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS-${{ needs.gate.outputs.peeled-sha }}
@@ -106,6 +108,10 @@ jobs:
       - run: npm run build:win
       - name: Assert packaged Electron fuse baseline
         run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe
+      - name: Packaged launch smoke
+        run: npm run verify:package:launch
+      - name: Packaged STT smoke
+        run: npm run verify:package:stt:win
       - uses: actions/upload-artifact@v4
         with:
           name: CogSeed-windows-x64-${{ needs.gate.outputs.peeled-sha }}

@@ -13,6 +13,8 @@ describe('packaged Windows STT smoke integration', () => {
 
     expect(mainSource).toContain('COGSEED_PACKAGED_STT_SMOKE_FILE');
     expect(mainSource).toContain('COGSEED_PACKAGED_STT_SMOKE_WAV');
+    expect(mainSource).toContain('show: !IS_PACKAGED_SMOKE || IS_PACKAGED_STT_SMOKE');
+    expect(mainSource).toContain('backgroundThrottling: !IS_PACKAGED_STT_SMOKE');
     expect(fakeDevice).toBeGreaterThanOrEqual(0);
     expect(fakeAudio).toBeGreaterThan(fakeDevice);
     expect(fakeAudio).toBeLessThan(whenReady);
@@ -26,6 +28,7 @@ describe('packaged Windows STT smoke integration', () => {
     expect(mainSource).toContain('permissionCheckCount');
     expect(mainSource).toContain('permissionRequestCount');
     expect(mainSource).toContain('schemaErrorCode');
+    expect(mainSource).toContain('failureStage');
     expect(mainSource).toContain('numericPayloadValid');
     expect(mainSource).not.toContain('Number(value) >= 0 ? Number(value) : 0');
     expect(mainSource).toContain('finalTextLength:');
