@@ -48,7 +48,6 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
   defaultAcceptedIds: (rows: unknown[]) => string[];
-  normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
@@ -411,9 +410,10 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
     expect(source).not.toContain('root.uiSegmentedControl(');
     expect(source).not.toContain('transcript.glossary.setScope');
     expect(source).not.toContain("'data-atc-scope': option.value");
-    // 但宿主容器保留：里面还有场景标签行与「拟主题标题」按钮
+    // 「拟主题标题」按钮仍保留在同一个宿主容器里（场景标签行已整体删除）
     expect(source).toContain('data-atc-scope>');
-    expect(source).toContain('scenarioControlHtml()');
+    expect(source).toContain("data-atc-action': 'suggest-headings'");
+    expect(source).not.toContain('scenarioControlHtml');
     // 开关用共享复选框（<label> 包裹，沿用组件预览页的既有用法）
     expect(source).toContain('root.uiCheckbox({');
     expect(source).toContain('kb-atc__scope-toggle');
@@ -679,28 +679,19 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('destroyCorrection()');
   });
 
-  it('场景标签：归一规则与主进程一致（纯函数）', () => {
-    expect(panel.normalizeScenarioTags([' 英语演讲课 '])).toEqual(['英语演讲课']);
-    expect(panel.normalizeScenarioTags(['Cogseed', 'cogseed'])).toEqual(['Cogseed']);
-    expect(panel.normalizeScenarioTags('英语演讲课')).toEqual([]);
-    expect(panel.normalizeScenarioTags(Array.from({ length: 12 }, (_, i) => `场景${i}`))).toHaveLength(8);
-  });
-
-  it('场景标签接线：「仅本场景」的前置数据有读有写、全程带上', () => {
-    // 读/写/建议三条 IPC 都要用到（此前标签没有任何来源，选项永远点不动）
-    expect(panelSrc).toContain("invoke('transcript.docTags.get'");
-    expect(panelSrc).toContain("invoke('transcript.docTags.set'");
-    expect(panelSrc).toContain("invoke('transcript.docTags.suggest'");
-    // 扫描要带上文档自己的标签，否则 scopeAllows 对「仅本场景」词条恒 false
-    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}scenarioTags: state\.scenarioTags/);
-    // 建词条时把创建上下文交给 main，由 upsertEntry 兜底收窄作用域
-    // （「接受范围」控件已删除，护栏移到这里；contextmenu 那条路径是采纳 LLM 候选）
-    expect(panelSrc).toMatch(/docId: ctx\.docId,\n\s+scenarioTags: state\.scenarioTags,/);
-    expect(panelSrc).toMatch(/docId: ctx\.docId, scenarioTags: state\.scenarioTags,/);
-  });
-
-  it('场景标签变更要重扫（否则"未生效"清单停在旧标签上）', () => {
-    expect(panelSrc).toMatch(/async function applyScenarioTags[\s\S]{0,2200}await runScan\(\)/);
+  it('场景标签已整体删除（控件、归一函数、docTags 接线一并移除）', () => {
+    expect(panelSrc).not.toContain('scenarioControlHtml');
+    expect(panelSrc).not.toContain('normalizeScenarioTags');
+    expect(panelSrc).not.toContain('state.scenarioTags');
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
+    // 建词条仍带创建上下文（护栏留在 upsertEntry）：两个 upsert 调用点都要带 docId
+    const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(upserts).toHaveLength(2);
+    for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
+    // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
+    expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {
