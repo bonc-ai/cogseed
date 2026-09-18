@@ -1343,4 +1343,101 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     await expect(candidates.promoteRecallCandidate('user-sim', updateCandidate.id, { actor: 'user' }))
       .resolves.toMatchObject({ asset: { id: 'aa-sim-existing' } });
   });
+
+  it('L2 related+clearly-better: a high-quality related candidate is rewritten as an update instead of a new asset（查重金字塔）', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-l2');
+    const candidates = await service();
+    const similarity = await import('../../../../src/main/features/recall/similarity');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+
+    // 低质量资产：短正文、单证据、无边界的"周报格式"雏形。
+    const weakStatement = '周报格式：三个固定板块。';
+    const now = new Date().toISOString();
+    await assets.createAbilityAsset('user-l2', {
+      schemaVersion: 2, ownerId: 'user-l2', id: 'aa-l2-weak', candidateId: 'cand-l2-seed',
+      sourceCandidateIds: ['cand-l2-seed'], reviewDecisionId: 'rd_l2seed_1234567890',
+      type: 'rule', title: '周报格式', statement: weakStatement,
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-l2-seed' }], scope: 'report', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'seed for L2 pyramid test' });
+
+    // 相关但非重复（cosine 0.8 ∈ [0.70,0.85)）：高质量候选 vs 弱资产。
+    similarity._injectEmbeddingForTest('user-l2', weakStatement, [0.8, 0.6]);
+    const betterJudgment = '周报格式：三个固定板块（本周进展、风险与依赖、下周计划）。'
+      + '第一板块必须列出风险清单并给出责任人与期限；每个板块旁附一句通俗说明解释板块用途；'
+      + '固定于每周五晚发出，发出前需核对上一周的承诺项完成情况。';
+    similarity._injectEmbeddingForTest('user-l2', betterJudgment, [1, 0]);
+
+    const candidate = await candidates.saveRecallCandidate('user-l2', {
+      judgment: betterJudgment,
+      value: '把周报格式从雏形补成完整规范。',
+      summary: '周报格式完整规范', suggestedType: 'rule', suggestedScope: 'report',
+      applicableWhen: ['写周报时'], forbiddenWhen: ['临时日报'],
+      suggestedAction: 'create',
+      sourceRefs: [
+        { kind: 'conversation', id: 'conv-l2-a' }, { kind: 'execution', id: 'exec-l2-a' },
+        { kind: 'memory', id: 'mem-l2-a' }, { kind: 'conversation', id: 'conv-l2-b' },
+        { kind: 'execution', id: 'exec-l2-b' },
+      ],
+      evidenceRefs: [
+        { kind: 'conversation', id: 'conv-l2-a' }, { kind: 'execution', id: 'exec-l2-a' },
+        { kind: 'memory', id: 'mem-l2-a' },
+      ],
+    });
+
+    const applied = await candidates.autoApplyRecallCandidate('user-l2', candidate.id);
+    // 质量显著更优 → 改写为更新既有资产，不新开零散条目。
+    expect(applied.asset).toBeUndefined();
+    expect(applied.candidate.suggestedAction).toBe('update');
+    expect(applied.candidate.targetAssetId).toBe('aa-l2-weak');
+    expect(applied.mergedIntoAssetId).toBe('aa-l2-weak');
+  });
+
+  it('L2 related but not better: candidate promotes as its own asset（差距不足放行）', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-l2');
+    const candidates = await service();
+    const similarity = await import('../../../../src/main/features/recall/similarity');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+
+    // 高质量资产：完整规范（长正文、三类证据）。
+    const strongStatement = '周报格式：三个固定板块（本周进展、风险与依赖、下周计划）。'
+      + '第一板块必须列出风险清单并给出责任人与期限；每个板块旁附一句通俗说明解释板块用途；'
+      + '固定于每周五晚发出，发出前需核对上一周的承诺项完成情况。';
+    const now = new Date().toISOString();
+    await assets.createAbilityAsset('user-l2', {
+      schemaVersion: 2, ownerId: 'user-l2', id: 'aa-l2-strong', candidateId: 'cand-l2-seed2',
+      sourceCandidateIds: ['cand-l2-seed2'], reviewDecisionId: 'rd_l2strong_12345678',
+      type: 'rule', title: '周报格式', statement: strongStatement,
+      evidenceRefs: [
+        { kind: 'conversation', id: 'conv-l2-s1' }, { kind: 'execution', id: 'exec-l2-s1' },
+        { kind: 'memory', id: 'mem-l2-s1' },
+      ], scope: 'report', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'seed for L2 pyramid test 2' });
+
+    // 相关（0.8）但更短的候选——质量分更低，差距不足。
+    similarity._injectEmbeddingForTest('user-l2', strongStatement, [0.8, 0.6]);
+    const thinJudgment = '周报记得每周五前发出。';
+    similarity._injectEmbeddingForTest('user-l2', thinJudgment, [1, 0]);
+
+    const candidate = await candidates.saveRecallCandidate('user-l2', {
+      judgment: thinJudgment,
+      value: '周报发出时间提醒。',
+      summary: '周报时限', suggestedType: 'rule', suggestedScope: 'report',
+      applicableWhen: ['写周报时'], forbiddenWhen: ['临时日报'],
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-l2-c' }],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-l2-c' }],
+    });
+
+    const applied = await candidates.autoApplyRecallCandidate('user-l2', candidate.id);
+    // 差距不足 → 不是重复也不是更优 → 照常新开（归族提示由 L3/面板层负责）。
+    expect(applied.asset).toBeDefined();
+    expect(applied.asset?.id).not.toBe('aa-l2-strong');
+    expect(applied.asset?.statement).toContain(thinJudgment);
+  });
 });

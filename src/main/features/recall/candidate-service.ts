@@ -1318,7 +1318,42 @@ async function loadDedupPools(userId: string): Promise<{
   };
 }
 
-/** 晋升前资产语义查重（设计 §4.7/§4.9）。
+/** 把候选改写为"更新目标资产"形态（L1 重复命中与 L2 质量更优共用）。
+ *  不直接改资产——update 候选仍要过确认闸门，由融合路径合成新版本。 */
+async function rewriteCandidateAsAssetUpdate(
+  userId: string,
+  candidate: RecallCandidateRecord,
+  asset: RecallAbilityAssetRecord,
+): Promise<RecallCandidateRecord> {
+  const updateCandidate = await updateRecallCandidate(userId, candidate.id, {
+    judgment: candidate.judgment,
+    value: candidate.value,
+    summary: candidate.summary,
+    uncertainty: candidate.uncertainty,
+    suggestedType: candidate.suggestedType,
+    suggestedScope: candidate.suggestedScope,
+    suggestedAction: 'update',
+    risk: candidate.risk,
+    targetAssetId: asset.id,
+    sourceRefs: candidate.sourceRefs,
+    evidenceRefs: candidate.evidenceRefs,
+    expiresAt: candidate.expiresAt,
+    taskRunId: candidate.taskRunId,
+    ...(candidate.applicableWhen !== undefined
+      ? { applicableWhen: candidate.applicableWhen }
+      : asset.applicableWhen !== undefined ? { applicableWhen: asset.applicableWhen } : {}),
+    ...(candidate.forbiddenWhen !== undefined
+      ? { forbiddenWhen: candidate.forbiddenWhen }
+      : asset.forbiddenWhen !== undefined ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+  });
+  await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => ({
+    ...(current || updateCandidate),
+    mergedIntoAssetId: asset.id,
+  }));
+  return readRecallCandidate(userId, candidate.id);
+}
+
+/** 晋升前资产语义查重（设计 §4.7/§4.9 ＋ 2026-09-19 查重金字塔 L2）。
  *  返回 null 表示无语义重复 → 调用方继续正常 promote。
  *  命中正式资产时只生成 update 候选，不能在没有 ReviewDecision 和交接回执的
  *  情况下直接改资产；命中候选时合并证据并正常结束重复候选。 */
@@ -1332,7 +1367,7 @@ async function semanticDedupBeforePromote(
   mergedIntoCandidateId?: string;
   updateCandidate?: RecallCandidateRecord;
 } | null> {
-  const { findSemanticDuplicate } = await import('./similarity');
+  const { findSemanticDuplicate, assetQualityScore, QUALITY_GAP } = await import('./similarity');
   const pools = await loadDedupPools(userId);
   const outcome = await findSemanticDuplicate(userId, {
     text: String(candidate.judgment || ''),
@@ -1347,37 +1382,50 @@ async function semanticDedupBeforePromote(
   if (outcome.status === 'degraded') {
     throw new SemanticDedupUnavailableError(outcome.reason);
   }
-  if (outcome.status === 'no_match') return null;
+  if (outcome.status === 'no_match') {
+    // L2 相关层（查重金字塔）：0.70–0.85 的相关资产不是重复，但当新内容
+    // 质量显著更优（差 ≥ QUALITY_GAP）时，它的增量值得并入旧资产——走与
+    // 重复命中相同的 update 候选路径，由确认闸门与融合生成器合成新版本，
+    // 而不是放任新开一条讲相关事情的零散资产。差距不足的相关命中留给 L3
+    // 归族，此轮放行。
+    const related = outcome.related;
+    if (related?.kind === 'asset') {
+      const relatedAsset = await readAbilityAssetSafe(userId, related.id);
+      if (relatedAsset) {
+        const now = Date.now();
+        const candidateScore = assetQualityScore({
+          text: String(candidate.judgment || ''),
+          id: candidate.id,
+          kind: 'candidate',
+          evidenceCount: (candidate.evidenceRefs || []).length,
+          sourceKinds: new Set((candidate.evidenceRefs || []).map((ref) => ref.kind)),
+          ageMs: now - Date.parse(candidate.createdAt || ''),
+          risk: candidate.risk,
+          structureBonus: Boolean(candidate.applicableWhen?.length || candidate.forbiddenWhen?.length),
+        });
+        const assetScore = assetQualityScore({
+          text: String(relatedAsset.statement || relatedAsset.title || ''),
+          id: relatedAsset.id,
+          kind: 'asset',
+          evidenceCount: (relatedAsset.evidenceRefs || []).length,
+          sourceKinds: new Set((relatedAsset.evidenceRefs || []).map((ref) => ref.kind)),
+          ageMs: now - Date.parse(relatedAsset.updatedAt || ''),
+          maturity: relatedAsset.maturity,
+          structureBonus: Boolean(relatedAsset.applicableWhen?.length || relatedAsset.forbiddenWhen?.length),
+        });
+        if (candidateScore - assetScore >= QUALITY_GAP) {
+          const linked = await rewriteCandidateAsAssetUpdate(userId, candidate, relatedAsset);
+          return { candidate: linked, updateCandidate: linked, mergedIntoAssetId: relatedAsset.id };
+        }
+      }
+    }
+    return null;
+  }
   const match = outcome.match;
   if (match.kind === 'asset') {
     const asset = await readAbilityAssetSafe(userId, match.id);
     if (!asset) return null;
-    const updateCandidate = await updateRecallCandidate(userId, candidate.id, {
-      judgment: candidate.judgment,
-      value: candidate.value,
-      summary: candidate.summary,
-      uncertainty: candidate.uncertainty,
-      suggestedType: candidate.suggestedType,
-      suggestedScope: candidate.suggestedScope,
-      suggestedAction: 'update',
-      risk: candidate.risk,
-      targetAssetId: asset.id,
-      sourceRefs: candidate.sourceRefs,
-      evidenceRefs: candidate.evidenceRefs,
-      expiresAt: candidate.expiresAt,
-      taskRunId: candidate.taskRunId,
-      ...(candidate.applicableWhen !== undefined
-        ? { applicableWhen: candidate.applicableWhen }
-        : asset.applicableWhen !== undefined ? { applicableWhen: asset.applicableWhen } : {}),
-      ...(candidate.forbiddenWhen !== undefined
-        ? { forbiddenWhen: candidate.forbiddenWhen }
-        : asset.forbiddenWhen !== undefined ? { forbiddenWhen: asset.forbiddenWhen } : {}),
-    });
-    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => ({
-      ...(current || updateCandidate),
-      mergedIntoAssetId: asset.id,
-    }));
-    const linked = await readRecallCandidate(userId, candidate.id);
+    const linked = await rewriteCandidateAsAssetUpdate(userId, candidate, asset);
     return { candidate: linked, updateCandidate: linked, mergedIntoAssetId: asset.id };
   }
   // 命中候选：证据并入已有候选（语义合并），候选标记 mergedInto
