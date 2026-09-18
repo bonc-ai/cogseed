@@ -55,4 +55,25 @@ describe('资产目录视图', () => {
     expect(html).not.toContain('资产目录（模型视角）');
     expect(html).toContain('目录视图');
   });
+
+  it('视图切换与分类筛选互不打扰（O7）：目录视图下仍带分类 chips，筛选态在切换后保持', () => {
+    const template = { ...asset, id: 'aa-cat0002', title: '复盘模板', type: 'template' };
+    const catalog = renderCognition(
+      { name: 'overview', assetView: 'catalog', category: 'rule' },
+      { assets: [asset, template], proofs: [] },
+    );
+    // 目录视图照样有分类 chips，且当前分类高亮（筛选未被视图切换清掉）。
+    expect(catalog).toContain('data-act="filter-cat"');
+    expect(catalog).toContain('is-green');
+    // 筛选生效：只出 rule，不出 template。
+    expect(catalog).toContain('性能归因规则');
+    expect(catalog).not.toContain('复盘模板');
+
+    const list = renderCognition(
+      { name: 'overview', assetView: '', category: 'rule' },
+      { assets: [asset, template], proofs: [] },
+    );
+    expect(list).toContain('资产明细');
+    expect(list).not.toContain('复盘模板');
+  });
 });
