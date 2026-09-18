@@ -182,6 +182,43 @@ const TRANSCRIPT_TEXT = [
   '哈喽哈喽能听到吗？',
 ].join('\n');
 
+/**
+ * 真机事故夹具（2026-09-18）：腾讯会议「相对时钟」导出——整点前只给 `mm:ss`
+ * （`牛保康 02:45`），整点后才变成 `刘海运 01:00:35`。块头判定只认 `hh:mm:ss` 时，
+ * 首个被识别的块头之前的内容从不进 DOM（实测一份 77 分钟的稿子丢了 77%）。
+ */
+const RELATIVE_CLOCK_TRANSCRIPT = [
+  '牛保康 02:45',
+  '喂海运哥能听到吗？喂我这。',
+  '尹镇宇 02:56',
+  '我这边能听到？',
+  '刘海运 57:59',
+  '行没问题，后边就是还有两页是啥？',
+  '刘海运 01:00:35',
+  '对，然后下边就是实现的现状与缺口。',
+].join('\n');
+
+/**
+ * 从假 DOM 里回收「对话块正文」文本：正文装在 `.anchored-source-block-body`
+ * 里（可能含高亮 `<mark>`），块头是独立 meta 行、不算正文。
+ */
+function renderedBlockBodies(pre: any): string {
+  const textOf = (node: any): string => {
+    const children = (node?.appendChild?.mock?.calls || []).map((call: any[]) => call[0]);
+    if (!children.length) return typeof node?.textContent === 'string' ? node.textContent : '';
+    return children.map(textOf).join('');
+  };
+  const out: string[] = [];
+  const walk = (node: any) => {
+    for (const child of (node?.appendChild?.mock?.calls || []).map((call: any[]) => call[0])) {
+      if (child?.className === 'anchored-source-block-body') out.push(textOf(child));
+      else walk(child);
+    }
+  };
+  walk(pre);
+  return out.join('');
+}
+
 describe('anchored source viewer', () => {
   it('opens files through the shared modal and reuses the active viewer', async () => {
     const viewer = loadViewer();
@@ -495,6 +532,56 @@ describe('markdown 文档排版化（md 不再直出原文）', () => {
     const pre = viewer.elements['[data-anchor-view-text]'];
     expect(pre.dataset.md).toBeUndefined();
     expect(pre.classList.contains('markdown-body')).toBe(false);
+  });
+});
+
+/**
+ * 不变量：**块头认不出只该影响排版，绝不能让内容消失**。
+ * 真机事故（2026-09-18）：相对时钟转写稿（整点前 `牛保康 02:45`）在查看器里只剩
+ * 整点之后的内容，用户看到的是"原文被删了"——实际是首个被识别的块头之前的内容
+ * 从不进 DOM（一份 77 分钟的稿子丢了 77%）。
+ */
+describe('对话块渲染不得丢内容（相对时钟转写稿）', () => {
+  /** 「打开整篇」：不给 chunkIdx/quote，与用户从知识库列表点开文件一致。 */
+  const openWholeDoc = (viewer: any, path: string) => viewer.windowMock.__openAnchorViewer({
+    source: 'library', scope: 'global', path, view: 'document',
+  });
+
+  it('整点前的 mm:ss 发言也渲染出来，正文覆盖全文', async () => {
+    const viewer = loadViewer({ text: RELATIVE_CLOCK_TRANSCRIPT });
+
+    await openWholeDoc(viewer, '1/9.15用户故事与认知资产模块对齐转写例会-(1).txt');
+
+    const pre = viewer.elements['[data-anchor-view-text]'];
+    // 走的是对话块形态（4 个块头全部识别）
+    expect(pre.dataset.blocks).toBe('1');
+    // 正文 = 原文里除块头行外的全部内容，一字不少、顺序不变
+    expect(renderedBlockBodies(pre)).toBe([
+      '喂海运哥能听到吗？喂我这。',
+      '我这边能听到？',
+      '行没问题，后边就是还有两页是啥？',
+      '对，然后下边就是实现的现状与缺口。',
+    ].join('\n'));
+  });
+
+  it('首块之前还有无法识别的散行时，那段文字照样渲染（不静默吞）', async () => {
+    const text = [
+      '会议已开启实时转写，机器识别结果仅供参考',
+      '（这段没人名没时间，属于块外文本）',
+      '牛保康 02:45',
+      '喂海运哥能听到吗？',
+      '尹镇宇 02:56',
+      '我这边能听到？',
+    ].join('\n');
+    const viewer = loadViewer({ text });
+
+    await openWholeDoc(viewer, '1/文字转写_站会.txt');
+
+    const bodies = renderedBlockBodies(viewer.elements['[data-anchor-view-text]']);
+    expect(bodies).toContain('会议已开启实时转写，机器识别结果仅供参考');
+    expect(bodies).toContain('（这段没人名没时间，属于块外文本）');
+    expect(bodies).toContain('喂海运哥能听到吗？');
+    expect(bodies).toContain('我这边能听到？');
   });
 });
 
