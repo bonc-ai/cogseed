@@ -128,6 +128,9 @@
      *  止住缺失 id 永远进不了缓存、每次 notify 重发同一次 IPC 的循环。 */
     kstarSummariesSettled: [],
     kstarEpisode: null,
+    /** 正被"模型自选"挂着的资产 id（2026-09-18）：面板目录视图据此标"模型挂着"，
+     *  用户不必翻会话才知道模型给哪个任务挂了东西。 */
+    modelSelectedAssetIds: [],
     /** KSTAR 任务复盘列表（kstar-episodes tab）：kstar.episodes.list 的记录。 */
     kstarEpisodes: null,
     sources: [],
@@ -312,6 +315,24 @@
       }
     }
     await fetchKstarEpisodeSummaries(refs.map((ref) => String(ref.id || '')));
+  };
+
+  /** 模型自选挂载的资产（2026-09-18）：confirmed 的 model_selected 投影里
+   *  出现的资产 id 集合；失败静默（标记缺席不影响目录）。 */
+  NS.loadModelSelectedAssets = async function loadModelSelectedAssets() {
+    try {
+      const result = await api.call('recall.projections.list', { status: 'confirmed', limit: 100 });
+      const projections = (result && result.projections) || [];
+      const ids = [];
+      for (const projection of projections) {
+        if (String(projection.authorization || '') !== 'model_selected') continue;
+        for (const assetId of projection.assetIds || []) ids.push(String(assetId));
+      }
+      store.modelSelectedAssetIds = [...new Set(ids)];
+      NS.notify();
+    } catch (error) {
+      // 标记拿不到不影响目录本身。
+    }
   };
 
   /** 按 kse id 批量补复盘摘要（候选详情页用：候选不是资产，走不了

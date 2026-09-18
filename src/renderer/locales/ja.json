@@ -5739,5 +5739,7 @@
   "recall.projection.model_selected_badge": "モデル選択",
   "recall.projection.model_selected_locked": "モデルが現在のタスク用に選んだアセットです。以降のターンでも引き継がれます。「取り消す」で停止します。",
   "recall.projection.revoke": "取り消す",
-  "recall.projection.revoked_note": "取り消し済み：以降のターンではこれらのアセットを引き継ぎません。"
+  "recall.projection.revoked_note": "取り消し済み：以降のターンではこれらのアセットを引き継ぎません。",
+  "cognition.catalog_model_attached": "モデル装着中",
+  "cognition.proof_sentence_attachment_revoked": "{when}、{where}のこの装着は取り消されました（以降のターンでは引き継ぎません）"
 }

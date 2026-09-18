@@ -18,6 +18,7 @@ export type RecallAssetTimelineKind =
   | 'asset_maturity_downgraded'
   | 'asset_version'
   | 'projection_confirmed'
+  | 'projection_revoked'
   | 'usage_recorded'
   | 'transfer_prepared'
   | 'transfer_completed'
@@ -70,6 +71,7 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
+    case 'projection_revoked': return 'Attachment revoked';
     case 'usage_recorded': return 'Usage recorded';
     case 'transfer_prepared': return 'Transfer prepared';
     case 'transfer_completed': return extra ? `Transfer ${extra}` : 'Transfer completed';
@@ -181,7 +183,30 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   }
 
   for (const projection of await listContextProjections(userId)) {
-    if (projection.status !== 'confirmed' || !projection.assetIds.includes(asset.id)) continue;
+    // 撤销的模型自选投影同样入时间线（2026-09-18）：用户撤销后原本"这件事消失
+    // 得无影无踪"，只剩注入回执——现在给一条"已撤销"事件，撤销动作可追溯。
+    const isRevokedAttachment = projection.status === 'revoked' && projection.authorization === 'model_selected';
+    if (projection.status !== 'confirmed' && !isRevokedAttachment) continue;
+    if (!projection.assetIds.includes(asset.id)) continue;
+    if (isRevokedAttachment) {
+      const revokedAt = String(projection.decidedAt || projection.createdAt || '');
+      const revokedConversationId = projection.conversationId
+        || episodeConversationByRun.get(String(projection.taskRunId || ''));
+      pushSorted(items, {
+        id: `${projection.id}-revoked`,
+        kind: 'projection_revoked',
+        occurredAt: revokedAt,
+        title: itemTitle('projection_revoked'),
+        summary: projection.purpose,
+        refs: {
+          assetId: asset.id,
+          projectionId: projection.id,
+          taskRunId: projection.taskRunId,
+          ...(revokedConversationId ? { conversationId: revokedConversationId } : {}),
+        },
+      });
+      continue;
+    }
     const occurredAt = projection.confirmedAt || projection.decidedAt || projection.createdAt;
     const projectionConversationId = projection.conversationId
       || episodeConversationByRun.get(String(projection.taskRunId || ''));

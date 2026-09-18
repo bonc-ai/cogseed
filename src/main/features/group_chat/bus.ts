@@ -4950,7 +4950,7 @@ async function runActorTurnBody(
       // 只讲"目录存在且便宜"，挑哪几条仍归模型。
       try {
         const { assetCatalogForPrompt } = await import('../recall/asset-catalog-hint');
-        const catalogBlock = await assetCatalogForPrompt(uid);
+        const catalogBlock = await assetCatalogForPrompt(uid, cid);
         if (catalogBlock) systemPrompt = `${systemPrompt}\n\n${catalogBlock}`;
       } catch {
         // 目录块拿不到不影响回合。

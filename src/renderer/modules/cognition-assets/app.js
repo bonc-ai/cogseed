@@ -446,6 +446,8 @@
     // KSTAR 复盘折叠区（2026-09-17 二次定调）：复盘历史随「我的认知」页
     // 懒加载一次（折叠区默认收起，数据先备好，展开即渲染）。
     if (String(S.route.name || '') === 'overview') void NS.loadKstarEpisodes();
+    // 模型自选标记随「我的认知」一起刷新（2026-09-18）：目录视图据此标"模型挂着"。
+    if (String(S.route.name || '') === 'overview') void NS.loadModelSelectedAssets();
   });
 
   /** 静默刷新指示：同页 reload（操作后/轮询）期间顶部走一条细进度条。

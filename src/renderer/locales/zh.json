@@ -7750,5 +7750,7 @@
   "recall.projection.model_selected_badge": "模型自选",
   "recall.projection.model_selected_locked": "这是模型为当前任务挑的资产；后续回合会继续带上，点「撤销」即停用。",
   "recall.projection.revoke": "撤销",
-  "recall.projection.revoked_note": "已撤销：后续回合不再带上这批资产。"
+  "recall.projection.revoked_note": "已撤销：后续回合不再带上这批资产。",
+  "cognition.catalog_model_attached": "模型挂着",
+  "cognition.proof_sentence_attachment_revoked": "{when}，{where}的这次挂载被你撤销（此后的回合不再带上）"
 }

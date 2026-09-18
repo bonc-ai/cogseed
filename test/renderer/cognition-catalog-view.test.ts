@@ -56,6 +56,19 @@ describe('资产目录视图', () => {
     expect(html).toContain('目录视图');
   });
 
+  it('模型挂着标记（2026-09-18）：被模型自选的资产在目录行上可辨认', () => {
+    const other = { ...asset, id: 'aa-cat0003', title: '没被挂的资产' };
+    const html = renderCognition(
+      { name: 'overview', assetView: 'catalog' },
+      { assets: [asset, other], proofs: [], modelSelectedAssetIds: ['aa-cat0001'] },
+    );
+    const marked = html.split('模型挂着').length - 1;
+    expect(marked).toBe(1);
+    const [rowWith, rowWithout] = html.split('data-go-asset=').slice(1);
+    expect(rowWith).toContain('模型挂着');
+    expect(rowWithout).not.toContain('模型挂着');
+  });
+
   it('空态（可用性）：没有资产时目录视图给明确空态，而不是空白表头', () => {
     const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: [], proofs: [] });
     expect(html).toContain('资产目录（模型视角）');

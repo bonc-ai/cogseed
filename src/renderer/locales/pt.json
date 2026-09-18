@@ -5739,5 +5739,7 @@
   "recall.projection.model_selected_badge": "Escolhido pelo modelo",
   "recall.projection.model_selected_locked": "O modelo escolheu estes ativos para a tarefa atual; os próximos turnos continuam a usá-los até você revogar.",
   "recall.projection.revoke": "Revogar",
-  "recall.projection.revoked_note": "Revogado: os próximos turnos não usam mais estes ativos."
+  "recall.projection.revoked_note": "Revogado: os próximos turnos não usam mais estes ativos.",
+  "cognition.catalog_model_attached": "Anexado pelo modelo",
+  "cognition.proof_sentence_attachment_revoked": "{when}: você revogou este anexo {where} (os próximos turnos não o usam mais)"
 }

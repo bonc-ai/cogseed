@@ -473,6 +473,11 @@
     if (kind === 'projection_confirmed') {
       return T('cognition.proof_sentence_projected', '{when}，在{where}被带入任务{version}', { when, where, version });
     }
+    if (kind === 'projection_revoked') {
+      // 模型自选的撤销要在使用记录里看得见（2026-09-18）：否则"我撤过它"没有
+      // 任何痕迹，只剩一堆"被带入任务"。
+      return T('cognition.proof_sentence_attachment_revoked', '{when}，{where}的这次挂载被你撤销（此后的回合不再带上）', { when, where });
+    }
     if (kind === 'asset_created') {
       return T('cognition.proof_sentence_created', '{when}，这条内容被创建', { when });
     }
@@ -912,7 +917,7 @@
           ${oneLine ? `<div class="ca-row-meta">${esc(oneLine.slice(0, 80))}</div>` : ''}
           <div class="ca-row-meta">${esc(meta)}</div>
         </div>
-        <div class="ca-row-side">${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
+        <div class="ca-row-side">${(S.modelSelectedAssetIds || []).includes(String(asset.id)) ? chip(T('cognition.catalog_model_attached', '模型挂着'), 'line') : ''}${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
       </div>`;
     };
     const plainRow = (asset) => `

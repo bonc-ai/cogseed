@@ -419,6 +419,20 @@ describe('recall search_ability_assets tool', () => {
     expect(noTurn.get(asset.id)?.count).toBe(1);
   });
 
+  it('常驻目录超限（可扩展性）：>30 条时退回"一行提示 + 工具"，不再整份进提示词', async () => {
+    for (let index = 0; index < 31; index += 1) {
+      await seedAsset(`超限用例第 ${index + 1} 条：库里很大时提示词不应被目录撑爆。`, { scope: 'general' });
+    }
+    const hint = await import('../../../../src/main/features/recall/asset-catalog-hint');
+    hint.resetAssetCatalogHintCacheForTest();
+    const block = await hint.assetCatalogForPrompt(TEST_UID);
+    expect(block).toContain('31 reusable assets');
+    expect(block).toContain('search_ability_assets with no arguments');
+    // 关键：不再整份目录进上下文（没有条目行）。
+    expect(block.split('\n').filter((line) => /^\d+\. \[asset:/.test(line))).toHaveLength(0);
+    expect(block.length).toBeLessThanOrEqual(600);
+  });
+
   it('常驻目录（可发现性）：小库给完整目录且 ≤ 30 条，超限退回一行提示，空池不给块；60 秒缓存', async () => {
     const hint = await import('../../../../src/main/features/recall/asset-catalog-hint');
     hint.resetAssetCatalogHintCacheForTest();

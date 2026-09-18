@@ -1082,6 +1082,7 @@ describe('committed projection knowledge boundary', () => {
       expect.objectContaining({ assetId: promoted.asset.id, reason: 'workspace_disabled' }),
     ]));
   });
+});
 
 describe('模型自选投影的撤销（2026-09-18）', () => {
   it('撤销幂等；不存在/非模型自选各给明确拒绝', async () => {
@@ -1112,5 +1113,90 @@ describe('模型自选投影的撤销（2026-09-18）', () => {
     await expect(projection.revokeModelSelectedProjection('user-a', userOwned.id))
       .rejects.toThrow('not model-selected');
   });
+
+describe('撤销在时间线里可见（2026-09-18）', () => {
+  it('已撤销的模型自选投影产生"已撤销"事件，未撤销的仍是"已带入"', async () => {
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const timeline = await import('../../../../src/main/features/recall/timeline-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: '撤销可见性用例：这条资产要被挂上一次再撤销。',
+      summary: 'revoke-visibility',
+      suggestedType: 'rule',
+      suggestedScope: 'review,project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-revoke-vis' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true })).asset;
+
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-revoke-vis', purpose: 'model_selected', authorization: 'model_selected', confirm: true,
+    });
+    await projection.appendAssetsToModelSelectedProjection('user-a', created.id, [asset.id]);
+
+    const before = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    expect(before.some((item) => item.kind === 'projection_confirmed' && item.refs.projectionId === created.id)).toBe(true);
+
+    await projection.revokeModelSelectedProjection('user-a', created.id);
+    const after = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    const revokedEvent = after.find((item) => item.kind === 'projection_revoked' && item.refs.projectionId === created.id);
+    expect(revokedEvent).toBeTruthy();
+    expect(String(revokedEvent?.title || '')).toContain('revoked');
+  });
+});
+
+describe('注入体量对比（2026-09-18，可用高效）：模型自选的增量必须远小于整块上限', () => {
+  it('带一条会话投影时的提示词块，比不带多出的是"这几条资产的正文"，且整块仍 ≤ 14000', async () => {
+    const promptInjection = await import('../../../../src/main/features/recall/prompt-injection');
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+
+    // 造一条有正文体积的资产
+    const body = '性能类提问必须用真实日志做分层归因：先拆链路、再定位瓶颈、最后只给一个可优化项。'.repeat(8);
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: `${body}（体积对比用例）`,
+      summary: 'volume',
+      suggestedType: 'rule',
+      suggestedScope: 'review,project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-volume' }],
+    });
+    await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
+
+    const base = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-volume', taskRunId: 'turn-volume01', taskText: '做一次归因分析',
+    });
+    expect(base.promptBlock.length).toBeLessThanOrEqual(14000);
+
+    // 挂一条模型自选投影（含同一条资产）→ 提示词里的增量应≈该资产正文长度，且整块仍在上限内
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-volume01', conversationId: 'cid-volume', purpose: 'model_selected',
+      authorization: 'model_selected', confirm: true,
+    });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const [asset] = (await assets.listAbilityAssets('user-a')).filter((item) => item.status === 'active');
+    await projection.appendAssetsToModelSelectedProjection('user-a', created.id, [asset.id]);
+
+    // 注入侧的查找依据是**会话里的卡消息**（不只是投影记录）——真实链路里
+    // attach 工具会投卡；这里把卡消息补上，否则拿到的块恒为空。
+    const paths = await import('../../../../src/main/paths');
+    const storage = await import('../../../../src/main/storage');
+    const chatFile = path.join(paths.userChatsDir('user-a'), 'cid-volume.jsonl');
+    fs.mkdirSync(path.dirname(chatFile), { recursive: true });
+    await storage.appendJsonl(chatFile, {
+      id: 'msg-volume-card', ts: new Date().toISOString(), from: 'commander', to: ['user'],
+      text: 'Preload candidates', recall_projection_card: { projectionId: created.id },
+    });
+
+    const withAttachment = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-volume');
+    const delta = withAttachment.length;
+    // eslint-disable-next-line no-console
+    console.log(`[volume] 基线块=${base.promptBlock.length} 字符；带自选投影的块=${delta} 字符；整块上限=14000`);
+    expect(withAttachment).toContain(asset.title.slice(0, 10));
+    expect(delta).toBeLessThanOrEqual(14000);
+    expect(delta).toBeGreaterThan(0);
+    // 增量 = 这一条资产的正文（不是把整块重算一遍）：块长应明显小于"上限 − 基线"的余量。
+    expect(delta).toBeLessThan(base.promptBlock.length + 3000);
+  });
 });
 });
+

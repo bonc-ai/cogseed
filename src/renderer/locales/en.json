@@ -7750,5 +7750,7 @@
   "recall.projection.model_selected_badge": "Model-picked",
   "recall.projection.model_selected_locked": "The model picked these for the current task; later turns keep carrying them until you revoke.",
   "recall.projection.revoke": "Revoke",
-  "recall.projection.revoked_note": "Revoked: later turns no longer carry these assets."
+  "recall.projection.revoked_note": "Revoked: later turns no longer carry these assets.",
+  "cognition.catalog_model_attached": "Model-attached",
+  "cognition.proof_sentence_attachment_revoked": "{when}: you revoked this attachment {where} (later turns no longer carry it)"
 }

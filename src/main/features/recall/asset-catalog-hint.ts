@@ -24,6 +24,7 @@ export const INLINE_CATALOG_MAX_ENTRIES = 30;
 
 interface CatalogPromptCache {
   userId: string;
+  cid: string;
   at: number;
   count: number;
   text: string;
@@ -34,7 +35,42 @@ export function resetAssetCatalogHintCacheForTest(): void {
   cache = null;
 }
 
-async function buildCatalogPrompt(userId: string): Promise<{ count: number; text: string }> {
+/**
+ * 跨会话复用提示（2026-09-18）：模型自选挂在单会话上——换会话就不再生效。与其
+ * 让宿主偷偷继承（会在无关会话里冒出你没要的资产），不如把"上次挂过这些"说给
+ * 模型听，由它决定要不要再挂一次（挂上你依然会看到卡、随时可撤销）。
+ */
+async function recentAttachmentLine(userId: string, cid: string): Promise<string> {
+  if (!cid) return '';
+  try {
+    const { listContextProjections } = await import('./context-projection');
+    const projections = await listContextProjections(userId, { status: 'confirmed', limit: 50 });
+    const others = projections.filter((item) => item.authorization === 'model_selected' && item.conversationId && item.conversationId !== cid);
+    if (!others.length) return '';
+    const newest = others.sort((left, right) => String(right.decidedAt || right.createdAt || '').localeCompare(String(left.decidedAt || left.createdAt || '')))[0];
+    const ids = newest.assetIds.slice(0, 6);
+    if (!ids.length) return '';
+    const titles: string[] = [];
+    for (const assetId of ids) {
+      try {
+        const { readAbilityAsset } = await import('./asset-service');
+        const asset = await readAbilityAsset(userId, assetId);
+        if (asset) titles.push(String(asset.title || assetId).slice(0, 24));
+      } catch {
+        // 读不到就跳过（只影响提示文案）。
+      }
+    }
+    if (!titles.length) return '';
+    return [
+      `Recently attached in another conversation: ${titles.join('、')}.`,
+      'If this task needs them too, attach them again with attach_assets_to_task (the user sees a revocable card).',
+    ].join(' ');
+  } catch {
+    return '';
+  }
+}
+
+async function buildCatalogPrompt(userId: string, cid: string): Promise<{ count: number; text: string }> {
   const { listAbilityAssets } = await import('./asset-service');
   const assets = await listAbilityAssets(userId);
   const active = assets.filter((asset) => asset.status === 'active');
@@ -68,12 +104,14 @@ async function buildCatalogPrompt(userId: string): Promise<{ count: number; text
 }
 
 /** 目录文本（带 60 秒 TTL 缓存）；读不到或没有资产时返回空串。 */
-export async function assetCatalogForPrompt(userId: string, now = Date.now()): Promise<string> {
-  if (cache && cache.userId === userId && now - cache.at < CACHE_TTL_MS) return cache.text;
+export async function assetCatalogForPrompt(userId: string, cid = '', now = Date.now()): Promise<string> {
+  if (cache && cache.userId === userId && cache.cid === cid && now - cache.at < CACHE_TTL_MS) return cache.text;
   try {
-    const built = await buildCatalogPrompt(userId);
-    cache = { userId, at: now, count: built.count, text: built.text };
-    return built.text;
+    const built = await buildCatalogPrompt(userId, cid);
+    const reuse = await recentAttachmentLine(userId, cid);
+    const text = [built.text, reuse].filter(Boolean).join('\n\n');
+    cache = { userId, cid, at: now, count: built.count, text };
+    return text;
   } catch (error) {
     // 读不到就什么都不加（而不是加一句"0 条"——那会让模型以为用户没有资产）。
     log.warn('asset catalog prompt unavailable', { userId: maskId(userId), error: logErrorRef(error as Error) });
