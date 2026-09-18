@@ -4633,6 +4633,8 @@
   "kb.transcriptCorrect.compare_no_source": "(nenhum trecho correspondido)",
   "kb.transcriptCorrect.panel_hint": "Só termos confirmados no glossário são substituídos; o original nunca é alterado e a versão limpa é outro arquivo.",
   "kb.transcriptCorrect.meta_full": "Caminho completo: {path} ({count} caracteres)",
+  "kb.viewer.md_rendered": "Ver formatado",
+  "kb.viewer.md_source": "Ver código-fonte",
   "kb.viewer.scale_s": "P",
   "kb.viewer.scale_m": "M",
   "kb.viewer.scale_l": "G",
