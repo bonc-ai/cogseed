@@ -17208,7 +17208,7 @@ async function dispatch(client, config2, command, p) {
       const result = await getChallenge(client, id);
       return { ...base, ...result };
     }
-        // [2026-09-14 Bug2] 挑战目录名清洗（与 nseap-mcp 源 sanitizeDirSegment 同构；源重建时随 bundle 再生成）
+        // [2026-09-14 Bug2] 挑战目录名清洗。
     function __sanitizeDirSeg(t) {
       const raw = String(t ?? "").normalize("NFC");
       const parts = raw.split(/[\\/:*?"<>|\u0000-\u001f\u007f]+/).map((seg) => seg.replace(/^\.+/, "").replace(/[. ]+$/g, "").trim()).filter((seg) => seg.length > 0);

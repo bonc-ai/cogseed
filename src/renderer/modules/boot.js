@@ -237,23 +237,26 @@ function _showStaleMainBanner(env) {
     el.className = 'model-guard-banner';
     el.id = 'stale-main-banner';
     el.dataset.staleSince = changedAt;
+    // 控件走共享原语（护栏禁止裸控件）；本处晚于 ui-button.js 加载，原语必已就绪
     el.innerHTML = `
-      <button type="button" class="model-guard-dismiss" title="本次运行内忽略">×</button>
+      ${window.uiIconButton({ label: '本次运行内忽略', icon: 'x', className: 'model-guard-dismiss', attrs: { title: '本次运行内忽略' } })}
       <span class="model-guard-icon" aria-hidden="true"></span>
       <span class="model-guard-copy">
         <strong class="model-guard-title">主进程代码已过期（改动未生效）</strong>
         <span class="model-guard-text">磁盘上的 src/main 代码在 ${escapeHtml(changedAt)} 有更新，比当前进程启动更晚。此时界面已是新代码、主进程还是旧代码：新功能的参数会被静默忽略（例如"生成脑图（本文档）"可能退回整库）。点右侧重启即可生效。</span>
       </span>
-      <button type="button" class="btn btn-sm btn-primary model-guard-cta">立即重启</button>
+      ${window.uiButton({ label: '立即重启', role: 'primary', size: 'sm', className: 'model-guard-cta' })}
     `;
-    el.querySelector('.model-guard-cta').addEventListener('click', () => {
+    const ctaButton = el.querySelector('.model-guard-cta');
+    if (ctaButton) ctaButton.addEventListener('click', () => {
       // 走应用自己的 dev 重启通道（shell 出 run.sh/run.cmd，带上依赖自愈），
       // 而不是本模块直接杀进程。
       if (window.cogseed && typeof window.cogseed.invoke === 'function') {
         window.cogseed.invoke('cogseed.relaunch').catch(() => { /* 失败则用户手动重启 */ });
       }
     });
-    el.querySelector('.model-guard-dismiss').addEventListener('click', () => {
+    const dismissButton = el.querySelector('.model-guard-dismiss');
+    if (dismissButton) dismissButton.addEventListener('click', () => {
       try { sessionStorage.setItem('stale-main-banner-dismissed', '1'); } catch (_) { /* ignore */ }
       el.remove();
     });

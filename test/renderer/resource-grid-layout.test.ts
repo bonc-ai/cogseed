@@ -6,7 +6,8 @@ import { resolve } from 'node:path';
 const require = createRequire(import.meta.url);
 
 describe('shared resource grids in Chromium', () => {
-  it('switches at content-width breakpoints, fills tracks and stays overflow-free', () => {
+  // Windows hosted Chromium exits with STATUS_BREAKPOINT (0x80000003).
+  it.skipIf(process.platform === 'win32')('switches at content-width breakpoints, fills tracks and stays overflow-free', () => {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
     const result = spawnSync(require('electron'), [resolve(__dirname, 'fixtures/resource-grid-layout.cjs')], {

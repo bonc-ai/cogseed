@@ -1303,4 +1303,44 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     expect(await refs.listWorkspaceAssetReferences('user-a')).toHaveLength(1);
   });
+
+  it('user promote of a create candidate with a similar asset asks first（2026-09-16 版本组防分裂）', async () => {
+    const candidates = await service();
+    const similarity = await import('../../../../src/main/features/recall/similarity');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    // 已有资产与新候选"说的是同一件事"（相同 embedding → cosine 1.0 ≥ 0.85）。
+    const vector = Array.from({ length: 8 }, (_, i) => (i === 0 ? 1 : 0));
+    similarity._injectEmbeddingForTest('user-sim', '接口变更后必须同步更新对应文档。', vector);
+    similarity._injectEmbeddingForTest('user-sim', '接口变更之后要把文档一起更新掉。', vector);
+    const now = new Date().toISOString();
+    await assets.createAbilityAsset('user-sim', {
+      schemaVersion: 2, ownerId: 'user-sim', id: 'aa-sim-existing', candidateId: 'cand-seed-sim',
+      sourceCandidateIds: ['cand-seed-sim'], reviewDecisionId: 'rd_sim_seed_12345678',
+      type: 'rule', title: '接口变更同步文档', statement: '接口变更后必须同步更新对应文档。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-sim-seed' }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'seed for similar gate test' });
+
+    const candidate = await candidates.saveRecallCandidate('user-sim', {
+      judgment: '接口变更之后要把文档一起更新掉。',
+      summary: '接口变更文档同步', suggestedType: 'rule', suggestedScope: 'general',
+      suggestedAction: 'create', sourceRefs: [{ kind: 'conversation', id: 'conv-sim-gate' }],
+    });
+    // 用户确认路径：命中相似资产 → 专用错误码（前端据此提示"新条目还是改为更新"）。
+    await expect(candidates.promoteRecallCandidate('user-sim', candidate.id, { actor: 'user' }))
+      .rejects.toMatchObject({ code: 'recall_candidate_similar_asset' });
+    // 明确 forceCreate（用户选了"仍保存为新条目"）→ 跳过闸门正常晋升。
+    const promoted = await candidates.promoteRecallCandidate('user-sim', candidate.id, { actor: 'user', forceCreateSimilar: true });
+    expect(promoted.asset.statement).toContain('接口变更之后要把文档一起更新掉');
+    // 候选本身带 update 目标时不拦（那本来就是归组路径）。
+    const updateCandidate = await candidates.saveRecallCandidate('user-sim', {
+      judgment: '接口变更之后要把文档一起更新掉，并通知下游。',
+      summary: '接口变更文档同步修订', suggestedType: 'rule', suggestedScope: 'general',
+      suggestedAction: 'update', targetAssetId: 'aa-sim-existing',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-sim-gate-2' }],
+    });
+    await expect(candidates.promoteRecallCandidate('user-sim', updateCandidate.id, { actor: 'user' }))
+      .resolves.toMatchObject({ asset: { id: 'aa-sim-existing' } });
+  });
 });

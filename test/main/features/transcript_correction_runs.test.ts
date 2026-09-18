@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   annotateRun,
@@ -70,7 +71,7 @@ describe('创建产物', () => {
   });
 
   it('sourcePath 只是记录，不会被写入（原文不变）', () => {
-    const docPath = path.join('/tmp', `transcript-${Date.now()}.txt`);
+    const docPath = path.join(os.tmpdir(), `transcript-${Date.now()}.txt`);
     fs.writeFileSync(docPath, '用 coxy 上课', 'utf8');
     const before = fs.readFileSync(docPath, 'utf8');
     const run = createRun(uid, { docId: 'doc-x', sourcePath: docPath, sourceText: before, result: pipeline(before) });
@@ -91,7 +92,7 @@ describe('创建产物', () => {
   });
 
   it('存在未确认高危候选 → 状态 draft（pendingTotal 沿用引擎结果）', () => {
-    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Forge', riskLevel: 'high' };
+    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' };
     const text = '用在 for 里';
     const result = pipeline(text, [coxy, risky]);
     const run = createRun(uid, { docId: 'doc-1', sourceText: text, result });
@@ -229,7 +230,7 @@ describe('未决项与报告', () => {
   });
 
   it('仍有未确认候选时解决未决项也不会把 draft 提成 applied', () => {
-    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Forge', riskLevel: 'high' };
+    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' };
     const text = '用在 for 里';
     const run = createRun(uid, {
       docId: 'doc-1', sourceText: text, result: pipeline(text, [coxy, risky]),

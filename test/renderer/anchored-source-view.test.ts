@@ -166,7 +166,7 @@ function loadViewer(opts: LoadOpts = {}) {
 
 // 两段「说话人 + 时间」块头 = 逐字稿特征（纠错面板的服务对象）
 const TRANSCRIPT_TEXT = [
-  'Richard 2026-09-05 19:31:32',
+  'SpeakerA 2026-09-05 19:31:32',
   'Hello.',
   '张浩 2026-09-05 19:31:34',
   '哈喽哈喽能听到吗？',

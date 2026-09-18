@@ -19,22 +19,22 @@ import {
 } from '../../../src/main/features/transcript_speaker_merge';
 
 const SAMPLE = [
-  'Richard 2026-09-05 19:31:32 ',
+  'SpeakerA 2026-09-05 19:31:32 ',
   'Hello.  ',
-  'Richard 2026-09-05 19:31:34 ',
+  'SpeakerA 2026-09-05 19:31:34 ',
   '能听到吗？ ',
   '张浩 2026-09-05 19:31:36 ',
   '哈喽。 ',
   '张浩 2026-09-05 19:31:40 ',
   '我这边可以。 ',
-  'Richard 2026-09-05 19:31:45 ',
+  'SpeakerA 2026-09-05 19:31:45 ',
   '那我们开始。 ',
 ].join('\n');
 
 describe('块头解析（格式尽量宽）', () => {
   it('名字 + 日期 + 时间', () => {
-    expect(parseHeaderLine('Richard 2026-09-05 19:31:32 ')).toEqual({
-      speaker: 'Richard', at: '2026-09-05 19:31:32', clock: '19:31:32',
+    expect(parseHeaderLine('SpeakerA 2026-09-05 19:31:32 ')).toEqual({
+      speaker: 'SpeakerA', at: '2026-09-05 19:31:32', clock: '19:31:32',
     });
   });
 
@@ -54,9 +54,9 @@ describe('块切分', () => {
   it('块头与正文范围首尾相接，正文逐字不丢', () => {
     const blocks = parseTranscriptBlocks(SAMPLE);
     expect(blocks).toHaveLength(5);
-    expect(SAMPLE.slice(blocks[0].headerStart, blocks[0].headerEnd)).toBe('Richard 2026-09-05 19:31:32 ');
+    expect(SAMPLE.slice(blocks[0].headerStart, blocks[0].headerEnd)).toBe('SpeakerA 2026-09-05 19:31:32 ');
     expect(SAMPLE.slice(blocks[0].bodyStart, blocks[0].bodyEnd).trim()).toBe('Hello.');
-    expect(blocks[1].speaker).toBe('Richard');
+    expect(blocks[1].speaker).toBe('SpeakerA');
     expect(blocks[2].speaker).toBe('张浩');
   });
 });
@@ -66,20 +66,20 @@ describe('合并编辑集', () => {
     const result = mergeSpeakerEdits(SAMPLE);
     expect(result.blocksBefore).toBe(5);
     expect(result.blocksAfter).toBe(3);
-    expect(result.speakers).toEqual(['Richard', '张浩']);
-    // Richard 段（第 1-2 块）：插 —19:31:34，删第 2 个块头
+    expect(result.speakers).toEqual(['SpeakerA', '张浩']);
+    // SpeakerA 段（第 1-2 块）：插 —19:31:34，删第 2 个块头
     expect(result.edits[0]).toMatchObject({
       action: 'replace', correct: '—19:31:34', reason: 'insert_time_range',
     });
     expect(result.edits[1]).toMatchObject({ action: 'delete', reason: 'merge_header' });
-    expect(result.edits[1].wrong).toContain('Richard 2026-09-05 19:31:34');
+    expect(result.edits[1].wrong).toContain('SpeakerA 2026-09-05 19:31:34');
     // 张浩段同理
     expect(result.edits[2]).toMatchObject({ action: 'replace', correct: '—19:31:40' });
     expect(result.edits[3]).toMatchObject({ action: 'delete' });
   });
 
   it('重复发言不产生编辑（已经是一个块）', () => {
-    const once = 'Richard 2026-09-05 19:31:32 \nHello.\n';
+    const once = 'SpeakerA 2026-09-05 19:31:32 \nHello.\n';
     const result = mergeSpeakerEdits(once);
     expect(result.edits).toEqual([]);
     expect(result.blocksAfter).toBe(1);
@@ -96,7 +96,7 @@ describe('合并编辑集', () => {
   it('时间锚点覆盖原文范围，可回查（§4.2）', () => {
     const result = mergeSpeakerEdits(SAMPLE);
     expect(result.anchors).toHaveLength(3);
-    expect(result.anchors[0]).toMatchObject({ speaker: 'Richard', at: '2026-09-05 19:31:32', endAt: '2026-09-05 19:31:34' });
+    expect(result.anchors[0]).toMatchObject({ speaker: 'SpeakerA', at: '2026-09-05 19:31:32', endAt: '2026-09-05 19:31:34' });
     const span = result.anchors[0].sourceSpan;
     expect(SAMPLE.slice(span.start, span.end)).toContain('Hello.');
     expect(SAMPLE.slice(span.start, span.end)).toContain('能听到吗？');
@@ -104,7 +104,7 @@ describe('合并编辑集', () => {
 
   it('预览块头是 `名字 日期 起—止`', () => {
     const [first] = mergeSpeakerEdits(SAMPLE).anchors;
-    expect(previewMergedHeader(first)).toBe('Richard 2026-09-05 19:31:32—19:31:34');
+    expect(previewMergedHeader(first)).toBe('SpeakerA 2026-09-05 19:31:32—19:31:34');
   });
 });
 

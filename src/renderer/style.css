@@ -30388,6 +30388,10 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-mm-msg-head {
   font-size: var(--font-size-2); font-weight: 600; color: var(--kb-text2); margin-bottom: 8px;
 }
+/* 文档级脑图：标题行右侧标注作用域（避免误以为画的是整库） */
+.kb-mm-msg-scope {
+  margin-left: 6px; font-weight: 400; font-size: var(--font-size-2); color: var(--kb-text3);
+}
 /* ─── 测验卡（kb.quiz 产物）：与脑图卡同区同风格 ─────────────────────── */
 .kb-quiz-msg { max-width: 620px; }
 .kb-quiz-canvas {
@@ -32876,6 +32880,28 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   gap: var(--space-1);
 }
 .kb-atc__scope-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+}
+/* 场景标签（「仅本场景」的前置数据）：与接受范围同一行的紧凑控件 */
+.kb-atc__scenario {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  width: 100%;
+}
+.kb-atc__scenario-label,
+.kb-atc__scenario-suggest-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  flex: 0 0 auto;
+}
+.kb-atc__scenario .ui-input {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+.kb-atc__scenario-hint {
   color: var(--text-muted);
   font-size: var(--font-size-1);
 }

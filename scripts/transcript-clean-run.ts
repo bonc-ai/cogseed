@@ -126,7 +126,8 @@ async function prepare(args: string[]): Promise<void> {
   // ① 冻结与解析
   const source = parseSource(raw);
   writeJson(path.join(outDir, '01-source.json'), {
-    source: path.basename(src), sha1, count: source.length, utterances: source,
+    source: path.basename(src), sourceDir: path.dirname(path.resolve(src)),
+    sha1, count: source.length, utterances: source,
   });
 
   // ② 结构与口癖
@@ -411,14 +412,15 @@ async function chunkcheck(args: string[]): Promise<void> {
 // ── compare ─────────────────────────────────────────────────────────────
 
 async function compare(args: string[]): Promise<void> {
-  const [outDir, reference, srcDirArg] = args;
-  if (!outDir || !reference) { console.error('compare 需要 <out目录> <参考清理版.md> [原文目录]'); process.exitCode = 1; return; }
+  const [outDir, reference] = args;
+  if (!outDir || !reference) { console.error('compare 需要 <out目录> <参考清理版.md>'); process.exitCode = 1; return; }
   const mine = fs.readFileSync(path.join(outDir, '清理版.md'), 'utf-8');
   const ref = fs.readFileSync(reference, 'utf-8');
-  // 原文目录从参数/环境变量取，**不要**在源码里写本地绝对路径：审计门禁 PRIVACY_USER_PATH
-  // 会把个人目录当成隐私泄漏（一旦提交就进了公开仓库历史）。默认取 outDir 的上一级，换机也能跑。
-  const srcDir = srcDirArg || process.env.TRANSCRIPT_SRC_DIR || path.dirname(path.resolve(outDir));
-  const sourceText = fs.readFileSync(path.join(srcDir, readJson(path.join(outDir, '01-source.json')).source), 'utf-8');
+  // 源文件与 outDir 未必同目录：prepare 会把源目录记进 01-source.json；
+  // 旧产物没有该字段时用 --source-dir / 环境变量 / 当前目录兜底（不再硬编码个人路径）。
+  const meta = readJson(path.join(outDir, '01-source.json'));
+  const sourceDir = meta.sourceDir || process.env.COGSEED_TRANSCRIPT_SOURCE_DIR || process.cwd();
+  const sourceText = fs.readFileSync(path.join(sourceDir, meta.source), 'utf-8');
   const rows: Array<[string, string, string]> = [];
   /**
    * 只统计**正文**（去掉「整理附记」段）里的错形残留。

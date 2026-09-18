@@ -498,7 +498,7 @@ export function mapOffset(offsetMap: OffsetSegment[], inputOffset: number): numb
 //   1. `detectSuspectEntities`：**保守**地找出"疑似专名但词表/记忆分组都没有"的
 //      拉丁串。保守的含义是"宁漏勿噪"——只认长度 ≥4 且（含内部大写 或 全大写）
 //      的串：`KSTAR`/`NoteBookLM` 会被认出，`Hello`/`OK`/`API` 不会。
-//      真正的语义级"未知实体"（`roadmap` 可能指 Raymond）留给 P2 的 LLM 候选，
+//      真正的语义级"未知实体"（`roadmap` 可能指 SpeakerA）留给 P2 的 LLM 候选，
 //      本引擎不假装能做。
 //   2. `insertIssueMarkers`：把标记插进清理版，并返回插入后的新 span
 //      （从后往前插，避免前面的插入让后面的偏移失效）。

@@ -115,14 +115,14 @@ describe('护栏：边界 / 语境 / 作用域 / 保护区域', () => {
 
   it('作用域：global=false 的词条只在指定文档/场景生效', () => {
     const scoped = entry({
-      wrong: '雷蒙德', correct: 'Raymond',
+      wrong: '示例人物', correct: 'SpeakerA',
       scope: { docIds: ['doc-a'], scenarioTags: ['组会'], global: false },
       boundary: 'substring',
     });
-    expect(scanText('雷蒙德', [scoped], { docId: 'doc-b' }).candidates).toHaveLength(0);
-    expect(scanText('雷蒙德', [scoped], { docId: 'doc-b' }).denied[0].reason).toBe('out_of_scope');
-    expect(scanText('雷蒙德', [scoped], { docId: 'doc-a' }).candidates).toHaveLength(1);
-    expect(scanText('雷蒙德', [scoped], { scenarioTags: ['组会'] }).candidates).toHaveLength(1);
+    expect(scanText('示例人物', [scoped], { docId: 'doc-b' }).candidates).toHaveLength(0);
+    expect(scanText('示例人物', [scoped], { docId: 'doc-b' }).denied[0].reason).toBe('out_of_scope');
+    expect(scanText('示例人物', [scoped], { docId: 'doc-a' }).candidates).toHaveLength(1);
+    expect(scanText('示例人物', [scoped], { scenarioTags: ['组会'] }).candidates).toHaveLength(1);
   });
 
   it('保护区域：code / 行内 code / URL 内不替换', () => {
@@ -179,7 +179,7 @@ describe('替换与偏移映射', () => {
   });
 
   it('高危（high）候选默认不进结果，计入 pendingTotal 且状态为 draft', () => {
-    const risky = entry({ id: 'g_for', wrong: 'for', correct: 'Forge', riskLevel: 'high' });
+    const risky = entry({ id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' });
     const text = '用在 for 循环里';
     const scan = scanText(text, [risky]);
     expect(scan.candidates).toHaveLength(1);
@@ -190,11 +190,11 @@ describe('替换与偏移映射', () => {
   });
 
   it('显式接受 high 候选后才会替换', () => {
-    const risky = entry({ id: 'g_for', wrong: 'for', correct: 'Forge', riskLevel: 'high' });
+    const risky = entry({ id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' });
     const text = '用在 for 循环里';
     const scan = scanText(text, [risky]);
     const result = applyCorrections(text, scan.candidates, { acceptedIds: ['g_for'] });
-    expect(result.text).toBe('用在 Forge 循环里');
+    expect(result.text).toBe('用在 Foo 循环里');
     expect(result.status).toBe('applied');
   });
 

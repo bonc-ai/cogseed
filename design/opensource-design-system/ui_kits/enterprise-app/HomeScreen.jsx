@@ -11,7 +11,7 @@ const HOME_SCENARIOS = [
 ];
 const SUGGESTIONS=['空间模式','继续之前的工作',...HOME_SCENARIOS.map(s=>s.label)];
 function HomeScreen({ collapsed, onExpand, onOpenTask, onSubmit, onConnectAgent, spaces = [] }) {
-  const [txt,setTxt]=React.useState(''), [effort,setEffort]=React.useState('自动'), [recipient,setRecipient]=React.useState({id:'raymond',name:'cogseed',kind:'agent'}), [spaceId,setSpaceId]=React.useState('');
+  const [txt,setTxt]=React.useState(''), [effort,setEffort]=React.useState('自动'), [recipient,setRecipient]=React.useState({id:'cogseed',name:'cogseed',kind:'agent'}), [spaceId,setSpaceId]=React.useState('');
   const [continueOpen,setContinueOpen]=React.useState(false), [selection,setSelection]=React.useState(null), [hour,setHour]=React.useState(()=>new Date().getHours());
   React.useEffect(()=>{const timer=setInterval(()=>setHour(new Date().getHours()),60000);return()=>clearInterval(timer);},[]);
   const greeting=hour<6?'起得真早':hour<12?'早上好':hour<18?'下午好':'晚上好';

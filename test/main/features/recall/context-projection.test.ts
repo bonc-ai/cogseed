@@ -23,7 +23,7 @@ async function elevateToTransferVerified(assetId: string) {
 }
 
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
-async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', applicableWhen: ['Formal review with traceable evidence'], forbiddenWhen: ['Informal discussion without a review decision'], suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', applicableWhen: ['Formal review with traceable evidence'], forbiddenWhen: ['Informal discussion without a review decision'], suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
 
   await elevateToTransferVerified(promoted.asset.id);
   return promoted; }
@@ -40,7 +40,7 @@ async function createAssetWith(input: { judgment: string; summary: string; scope
     ...(input.spaceId ? { spaceId: input.spaceId } : {}),
     sourceRefs: [{ kind: 'execution', id: input.sourceId }],
   });
-  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
 }
@@ -70,7 +70,7 @@ async function createAutomaticAssetWith(input: {
       scope: 'personal',
     }],
   });
-  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
 }
@@ -97,7 +97,7 @@ describe('Recall context projection scope policy', () => {
       spaceId: 'workspace-a',
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
   }
@@ -505,7 +505,7 @@ describe('Recall projection auto-confirm and semantic Top-N', () => {
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
   }
@@ -609,7 +609,7 @@ describe('Recall retrieval quality regression', () => {
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
   }
@@ -820,7 +820,7 @@ describe('Recall retrieval refinement', () => {
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
   }
@@ -975,7 +975,7 @@ describe('committed projection knowledge boundary', () => {
       spaceId: 'workspace-a',
       sourceRefs: [{ kind: 'execution', id: 'exec-space-owned' }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
     await elevateToTransferVerified(promoted.asset.id);
     // 去掉 promote 自动挂载的 ref，验证"空间归属资产免登记卡"的兜底
     await refs.removeWorkspaceAssetReference('user-a', `war-${promoted.asset.id}-workspace-a`);
@@ -1001,7 +1001,7 @@ describe('committed projection knowledge boundary', () => {
       spaceId: 'workspace-b',
       sourceRefs: [{ kind: 'execution', id: 'exec-foreign' }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
     await elevateToTransferVerified(promoted.asset.id);
     await refs.removeWorkspaceAssetReference('user-a', `war-${promoted.asset.id}-workspace-b`);
 
@@ -1070,7 +1070,7 @@ describe('committed projection knowledge boundary', () => {
       spaceId: 'workspace-a',
       sourceRefs: [{ kind: 'execution', id: 'exec-disabled' }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
     await elevateToTransferVerified(promoted.asset.id);
     await refs.updateWorkspaceAssetReference('user-a', `war-${promoted.asset.id}-workspace-a`, { enabled: false });
 
