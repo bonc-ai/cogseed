@@ -32890,10 +32890,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   flex-wrap: wrap;
   gap: var(--space-1);
 }
-.kb-atc__scope-label {
-  color: var(--text-muted);
-  font-size: var(--font-size-1);
-}
 /* 场景标签（「仅本场景」的前置数据）：与接受范围同一行的紧凑控件 */
 .kb-atc__scenario {
   display: flex;

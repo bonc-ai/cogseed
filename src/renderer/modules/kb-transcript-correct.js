@@ -445,8 +445,7 @@
       llmNote: '',
       headings: [],
       headingBusy: false,
-      // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
-      scopeChoice: 'keep',
+      // 接受的三个动作（方案 §七）：忽略 / 加白 / 改写法
       // 场景标签（「仅本场景」作用域的前置数据）：初值来自调用方 ctx，
       // 随后由 transcript.docTags.* 读/写；它是**这一份稿件属于哪个场景**的标注。
       scenarioTags: normalizeScenarioTags(ctx?.scenarioTags),
@@ -910,13 +909,20 @@
     }
 
     /**
-     * 接受范围（方案 §七：接受（范围：本文档 / 当前任务））。
-     * 只影响"接受时把词条作用域改成什么"；默认 keep = 不动词条原有作用域。
+     * 场景标签行（词条作用域的前置数据）。
+     *
+     * 「接受范围」三档（默认 / 仅本文档 / 仅本场景）已删除。它名不副实：
+     *   - 「默认」是纯 no-op（`applyScopeChoice` 首行就 return，不发 IPC 也不改盘）；
+     *   - 是否收窄实际取决于 `source === 'meeting_accept'`，而**全仓库没有任何调用方
+     *     发送过该 source**（面板发 'manual'、本体桥接发 'ontology_seed'），判断恒真
+     *     ⇒ 新词条一律是全局规则——正是 transcript_auto_correct 里记录的那起事故
+     *     （一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）。
+     * 作用域改在**创建词条时**按当前文档/场景自动收窄，见
+     * `transcript_glossary.upsertEntry` 的兜底规则。
      *
      * 控件分工（全部走共享原语，不建页面局部变体）：
-     *   范围 = 互斥选择 → uiSegmentedControl；拟标题 = 动作 → uiButton；
-     *   合并同人发言 = 开关 → uiCheckbox。
-     * 点击委托仍按 data-atc-action / data-atc-scope 分派，故 attrs 原样透传给每个分段项。
+     *   场景标签 = 标签行；拟标题 = 动作 → uiButton；合并同人发言 = 开关 → uiCheckbox。
+     * 点击委托仍按 data-atc-action 分派。
      */
     /**
      * 场景标签控件（「仅本场景」作用域的前置数据）。
@@ -1020,7 +1026,6 @@
         ok = !(res && res.ok === false);
         if (ok) {
           state.scenarioTags = Array.isArray(res?.tags) ? normalizeScenarioTags(res.tags) : wanted;
-          if (!state.scenarioTags.length && state.scopeChoice === 'task') state.scopeChoice = 'keep';
         }
       } catch (error) {
         log?.warn('scenario tags save failed', { error: error?.message || String(error) });
@@ -1043,32 +1048,7 @@
       // 有"未生效（out_of_scope）"条目时也要显示：很可能是这份稿子没标场景，
       // 用户得能在这里补标签，而不是对着灰按钮猜（真机反馈）。
       if (!state.scanned || (state.rows.length === 0 && state.denied.length === 0)) { host.textContent = ''; return; }
-      const scopeOptions = [
-        { value: 'keep', label: t('kb.transcriptCorrect.scope_keep', '默认'), disabled: state.busy },
-        { value: 'doc', label: t('kb.transcriptCorrect.scope_doc', '仅本文档'), disabled: state.busy },
-        {
-          value: 'task',
-          label: t('kb.transcriptCorrect.scope_task', '仅本场景'),
-          disabled: state.busy || !state.scenarioTags.length,
-          // 置灰必须说明原因与出路：此前只灰不说，那句现成的提示实际是死文案
-          title: state.scenarioTags.length
-            ? t('kb.transcriptCorrect.scope_task_hint', '只在带同一场景标签的稿件上生效')
-            : t('kb.transcriptCorrect.scope_need_tags', '当前文档没有场景标签，请先标注场景，或改用「仅本文档」。'),
-        },
-      ];
       host.innerHTML = [
-        '<span class="kb-atc__scope-label">' + t('kb.transcriptCorrect.scope_label', '接受范围') + '</span>',
-        root.uiSegmentedControl({
-          ariaLabel: t('kb.transcriptCorrect.scope_label', '接受范围'),
-          value: state.scopeChoice,
-          className: 'kb-atc__scope-control',
-          items: scopeOptions.map((option) => ({
-            label: option.label,
-            value: option.value,
-            disabled: option.disabled,
-            attrs: { 'data-atc-action': 'scope', 'data-atc-scope': option.value, ...(option.title ? { title: option.title } : {}) },
-          })),
-        }),
         scenarioControlHtml(),
         button({
           label: state.headingBusy
@@ -2038,37 +2018,6 @@
       }
     }
 
-    /** 接受范围（方案 §七）：把已接受的词条限定到本文档 / 本场景。 */
-    async function applyScopeChoice(entryRef) {
-      const choice = state.scopeChoice;
-      if (choice === 'keep') return;
-      if (choice === 'task' && !state.scenarioTags.length) {
-        setStatus(t('kb.transcriptCorrect.scope_need_tags', '当前文档没有场景标签，请改用「本文档」。'), 'warning');
-        return;
-      }
-      try {
-        const result = await root.cogseed.invoke('transcript.glossary.setScope', {
-          ids: [entryRef],
-          choice,
-          docId: ctx.docId,
-          ...(choice === 'task' ? { scenarioTags: state.scenarioTags } : {}),
-        });
-        const refused = Array.isArray(result?.refused) ? result.refused : [];
-        if (refused.length) {
-          setStatus(t('kb.transcriptCorrect.scope_refused', '高危词条不能设为全局（会误伤无关稿件），已保持原作用域。'), 'warning');
-          return;
-        }
-        setStatus(t('kb.transcriptCorrect.scope_applied', '已限定作用域：{scope}', {
-          scope: choice === 'doc'
-            ? t('kb.transcriptCorrect.scope_doc', '仅本文档')
-            : t('kb.transcriptCorrect.scope_task', '仅本场景'),
-        }), '');
-      } catch (error) {
-        log?.warn('scope apply failed', { error: error?.message || String(error) });
-        setStatus(t('kb.transcriptCorrect.scope_failed', '设置作用域失败，请稍后重试。'), 'warning');
-      }
-    }
-
     /**
      * 检索命中对比（方案 §五 P2-4 / §8.1-9，人工基线要求）：
      * 同一份库里"搜错形"和"搜正确写法"各命中多少，如实并列。
@@ -2257,6 +2206,7 @@
       try {
         await root.cogseed.invoke('transcript.glossary.upsert', {
           wrong, correct, kind: 'people', source: 'manual',
+          docId: ctx.docId, scenarioTags: state.scenarioTags,
         });
         state.llmCandidates = state.llmCandidates.filter((item) => item.wrong !== wrong);
         setStatus(t('kb.transcriptCorrect.llm_adopted', '已采纳为词条：{wrong} → {correct}', { wrong, correct }), '');
@@ -2468,6 +2418,10 @@
           correct,
           kind,
           source: 'manual',
+          // 创建上下文：未显式给 scope 时，main 侧据此把新词条收窄到本文档/本场景，
+          // 而不是静默变成全局规则（「接受范围」控件已删除，护栏移到这里）。
+          docId: ctx.docId,
+          scenarioTags: state.scenarioTags,
         });
         if (result?.skippedReason === 'pure_digit_variant') {
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
@@ -2497,8 +2451,6 @@
         else {
           state.accepted.add(ref);
           state.ignored.delete(ref);
-          // 接受时按当前范围选择落到词条（本文档 / 本场景），keep = 不动
-          void applyScopeChoice(ref);
         }
         render();
         return;
@@ -2598,12 +2550,6 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'sync-ontology') { void runSyncOntology(); return; }
-      if (kind === 'scope') {
-        const value = action.getAttribute('data-atc-scope') || 'keep';
-        state.scopeChoice = value === 'doc' || value === 'task' ? value : 'keep';
-        render();
-        return;
-      }
       if (kind === 'scenario-add') {
         void applyScenarioTags(state.scenarioTags.concat([action.getAttribute('data-atc-tag') || '']));
         return;
@@ -2680,8 +2626,8 @@
       if (!container) throw new Error('kb transcript correct: container required');
       if (!root.cogseed || typeof root.cogseed.invoke !== 'function') throw new Error('kb transcript correct: ipc unavailable');
       if (typeof root.uiButton !== 'function') throw new Error('kb transcript correct: shared ui primitives unavailable');
-      if (typeof root.uiSegmentedControl !== 'function' || typeof root.uiCheckbox !== 'function') {
-        throw new Error('kb transcript correct: shared ui primitives unavailable (uiSegmentedControl / uiCheckbox)');
+      if (typeof root.uiCheckbox !== 'function') {
+        throw new Error('kb transcript correct: shared ui primitives unavailable (uiCheckbox)');
       }
       const text = String(ctx?.text || '');
       if (!text) throw new Error('kb transcript correct: text required');
