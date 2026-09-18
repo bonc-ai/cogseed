@@ -63,6 +63,16 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`${path.basename(command)} failed with status ${result.status}`);
 }
 
+function signPackagedDevApp(appPath) {
+  // electron-builder applies Electron fuses after its afterPack hook. That hook
+  // performs the local ad-hoc signature used by this development package, so
+  // the fuse write invalidates the signature unless we sign once more here.
+  // Release builds use their official signing stage, which already runs after
+  // fuses; this is deliberately limited to the local packaged-dev verifier.
+  run('codesign', ['--force', '--deep', '--sign', '-', appPath]);
+  run('codesign', ['--verify', '--deep', appPath]);
+}
+
 function main() {
   if (process.platform !== 'darwin') throw new Error('package:dev:mac is supported only on macOS');
   run(process.execPath, [path.join(ROOT, 'scripts', 'write-build-info.cjs'), '--channel=packaged-dev']);
@@ -82,10 +92,11 @@ function main() {
   run(process.execPath, [builderCli, '--config', configPath, '--mac', 'dir', `--${arch}`, '--publish', 'never']);
   const appPath = expectedDevAppPath(ROOT, arch);
   if (!fs.existsSync(appPath)) throw new Error(`development app was not produced: ${appPath}`);
+  signPackagedDevApp(appPath);
   process.stdout.write(`${appPath}\n`);
 }
 
-module.exports = { createDevBuilderConfig, expectedDevAppPath, resolveLocalElectronDist };
+module.exports = { createDevBuilderConfig, expectedDevAppPath, resolveLocalElectronDist, signPackagedDevApp };
 
 if (require.main === module) {
   try { main(); }

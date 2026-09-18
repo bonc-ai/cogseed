@@ -185,8 +185,10 @@ import {
   parseStreamRequestId,
 } from './security';
 import {
-  officeEmptyBodyHtml, officeFragmentHasText,
-  officePreviewKindForExt, wrapOfficePreviewHtml,
+  officeEmptyBodyHtml,
+  officeFragmentHasText,
+  officePreviewKindForExt,
+  wrapOfficePreviewHtml,
 } from '../util/office-preview';
 
 const log = createLogger('ipc');
@@ -456,16 +458,6 @@ function _projectFileScopeForUser(userId: string, projectId: string | undefined)
   return path.resolve(projectFilesDir(userId, projectId));
 }
 
-function _escapePreviewHtml(s: string): string {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-type OfficePreviewKind = 'word' | 'spreadsheet' | 'presentation';
-
 /**
  * 知识库文件 → 磁盘绝对路径，供 `kb.openFile`（预览）与 `kb.openExternal`
  * （用系统默认应用打开）共用。
@@ -515,7 +507,6 @@ function _officePreviewCachePut(key: string, html: string, kind: string): void {
   }
   if (oldestKey) _officePreviewCache.delete(oldestKey);
 }
-
 
 /** Build the allowed-roots list for the file-class IPC sandbox: workspace ∪
  *  current cid's attachment dir ∪ payload's project-file dir. The actual
