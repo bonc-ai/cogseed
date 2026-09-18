@@ -107,6 +107,38 @@ describe('anchor_resolver', () => {
     expect(res.charStart).toBe('intro\n\nbeta four five six\noutro'.indexOf('beta four'));
   });
 
+  it('locates a document-view reader by quote — 测验「原文依据」高亮靠这条', async () => {
+    // 知识库测验只给得出"片段文本"（kb.quiz.hint level 2），给不出块号：查看器是以
+    // view:'document' + quote 打开的，必须仍能算出 charStart/charEnd（渲染层才有 <mark>）。
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = `前言\n\n${'铺垫 '.repeat(80)}\n\n这段是题目依据的原文。\n\n后记`;
+    await stageLibraryFile('notes/quiz-src.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/quiz-src.md',
+      chunkIdx: 0,
+      quote: '这段是题目依据的原文。',
+      view: 'document',
+    });
+
+    expect(res.resolved).toBe(true);
+    const expected = content.indexOf('这段是题目依据的原文。');
+    expect(res.charStart).toBe(expected);
+    expect(res.charEnd).toBe(expected + '这段是题目依据的原文。'.length);
+    // 渲染层的算法就是 `charStart - textStart`（anchored-source-view 里 markStart/markEnd），
+    // 只要这个相对区间落在 text 内且内容一致，就会出现 <mark> 并 scrollIntoView。
+    // 短文不截窗（textStart=0），长文档才从命中点前 240 字起截——两种都走同一个减法。
+    expect(typeof res.textStart).toBe('number');
+    const markStart = res.charStart! - res.textStart!;
+    const markEnd = res.charEnd! - res.textStart!;
+    expect(markStart).toBeGreaterThanOrEqual(0);
+    expect(markEnd).toBeLessThanOrEqual(res.text!.length);
+    expect(res.text!.slice(markStart, markEnd)).toBe('这段是题目依据的原文。');
+  });
+
   it('returns a document-reader payload even when no matching chunk exists', async () => {
     const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
     const content = 'document heading\n\nfull source body';
@@ -126,6 +158,53 @@ describe('anchor_resolver', () => {
     expect(res.text).toBe(content);
     expect(res.totalChars).toBe(content.length);
     expect(res.truncated).toBe(false);
+  });
+
+  /**
+   * 真机反馈：「很多文件打开都有返回引用，并且前几行都有橙色高亮」。
+   * 根因：文件列表/发现页这类"打开整篇"的调用塞了占位 chunkIdx（1 或 0），
+   * 主进程于是把那个 chunk 当引用片段定位，返回 charStart/charEnd —— 渲染层
+   * 照单高亮正文前几行，按钮判据也把有限的 chunkIdx 当成"从引用进来的"。
+   * 契约：**没给 chunkIdx/quote = 不是引用，不做定位**；给了才定位。
+   */
+  it('打开整篇（不给 chunkIdx/quote）不返回字符区间——文件列表打开不该自带高亮', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = 'prefix text\n\nalpha one two three\nsuffix text';
+    await stageLibraryFile('notes/whole.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/whole.md',
+      view: 'document',
+    });
+
+    expect(res.resolved).toBe(true);
+    expect(res.text).toBe(content);
+    // 没有 charStart/charEnd ⇒ 渲染层算不出 <mark>，也就没有那道橙色高亮
+    expect(res.charStart).toBeUndefined();
+    expect(res.charEnd).toBeUndefined();
+    expect(res.page).toBeUndefined();
+  });
+
+  it('只给 quote（不给 chunkIdx）仍然定位——引用意图由 quote 表达', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = 'prefix text\n\nalpha one two three\nsuffix text';
+    await stageLibraryFile('notes/quote-only.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/quote-only.md',
+      quote: 'alpha one two three',
+      view: 'document',
+    });
+
+    expect(res.resolved).toBe(true);
+    expect(res.charStart).toBe(content.indexOf('alpha one two three'));
+    expect(res.charEnd).toBe(content.indexOf('alpha one two three') + 'alpha one two three'.length);
   });
 
   it('includes context before the highlighted citation range', async () => {
