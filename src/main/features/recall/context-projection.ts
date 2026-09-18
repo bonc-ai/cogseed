@@ -712,7 +712,14 @@ export async function createAutomaticContextProjection(
   }
   if (!eligibleAssets.length) return undefined;
 
-  const selection = await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId);
+  // 基线开关（2026-09-18 对照实验）：COGSEED_RECALL_BASELINE_TOP=0 关闭宿主
+  // 自动注入（正文一条都不进）——用来测"只留常驻目录 + 工具取用"是否站得住。
+  const baselineTopEnv = process.env.COGSEED_RECALL_BASELINE_TOP;
+  const baselineTop = baselineTopEnv === undefined || baselineTopEnv.trim() === '' ? Number.NaN : Number(baselineTopEnv);
+  const baselineDisabled = Number.isFinite(baselineTop) && baselineTop <= 0;
+  const selection = baselineDisabled
+    ? { assets: [] as RecallAbilityAssetRecord[], degraded: false }
+    : await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId);
   const selectedAssets = selection.assets;
   if (!selectedAssets.length) return undefined;
 
