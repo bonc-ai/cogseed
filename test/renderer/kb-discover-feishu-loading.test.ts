@@ -50,6 +50,23 @@ describe('KB discovery Feishu document action', () => {
     expect(source).toMatch(/function _openSource[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
   });
 
+  /**
+   * 真机反馈：「很多文件打开都有返回引用，并且前几行都有橙色高亮」——
+   * 发现页只是"打开这份来源文档"，给不出片段依据，塞占位 chunk 号就会被
+   * 主进程当引用定位。契约：不带 chunkIdx = 打开整篇。
+   */
+  it('打开来源文档不带 chunkIdx（打开整篇，不冒充引用跳转）', () => {
+    const source = read('src/renderer/modules/kb-discover.js');
+    const body = source.slice(source.indexOf('function _openSource'));
+    const code = body
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
+      .slice(0, body.indexOf('\n  }'));
+
+    expect(code).toContain("view: 'document'");
+    expect(code).not.toContain('chunkIdx');
+  });
+
   it('排版类来源先走富查看器桥（PDF/Word 不能又只剩纯文本）', () => {
     const source = read('src/renderer/modules/kb-discover.js');
     const body = source.slice(source.indexOf('function _openSource'));
