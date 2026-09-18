@@ -14,6 +14,11 @@
   let activeView = 'anchor';
   let activeResult = null;
   let requestSequence = 0;
+  /**
+   * md 文档的正文形态：false = 排版阅读（默认，给人读），true = 原文源码
+   * （给机器读，但字符偏移精确高亮只有在原文里才成立）。每打开一份文档重置。
+   */
+  let mdSourceMode = false;
   // 转写纠错面板（宿主 A）：只在"阅读全文"且拿到文本时可用；原文只读。
   let activeCorrection = null;
   let correctionOpen = false;
@@ -124,6 +129,20 @@
         attrs: { 'data-anchor-view-toggle': 'true' },
       }));
     }
+    // md 文档：排版阅读 ⇄ 原文源码。默认排版（给人读），想看 `#`/`**` 原文或
+    // 需要按字符偏移精确核对引用时切到源码——两种能力都留着，不二选一。
+    if (canRenderMarkdown()) {
+      const mdSourceKey = mdSourceMode ? 'kb.viewer.md_rendered' : 'kb.viewer.md_source';
+      buttons.push(root.uiButton({
+        label: mdSourceMode
+          ? t('kb.viewer.md_rendered', '看排版')
+          : t('kb.viewer.md_source', '查看源码'),
+        icon: mdSourceMode ? 'file-text' : 'code',
+        role: mdSourceMode ? 'primary' : 'secondary',
+        size: 'sm',
+        attrs: { 'data-anchor-view-md-source': 'true', 'data-i18n': mdSourceKey },
+      }));
+    }
     if (canCorrect()) {
       buttons.push(root.uiButton({
         label: correctionOpen
@@ -163,6 +182,12 @@
     }
     host.querySelector('[data-anchor-view-correct-toggle]')?.addEventListener('click', () => {
       void toggleCorrection();
+    });
+    host.querySelector('[data-anchor-view-md-source]')?.addEventListener('click', () => {
+      mdSourceMode = !mdSourceMode;
+      // 正文形态一变就重画正文（不重新取文档：内容本来就在手上）
+      if (activeResult) renderText(activeResult);
+      renderActions();
     });
   }
 
@@ -296,6 +321,222 @@
 
   root.__kbRichPreviewExts = RICH_PREVIEW_EXTS;
   root.__kbIsRichPath = isRichPreviewPath;
+
+  // ── Markdown 文档：正文排版化（给人读），不再直出原文（给机器读） ──────
+  /**
+   * `.md / .markdown` **不进**富查看器——它要留住阅读器的两个能力：引用高亮、
+   * 转写纠错面板（见上方 RICH_PREVIEW_EXTS 注释）。但正文必须排版化：此前
+   * 是把原文直接塞进 `<pre>`，用户看到的是 `# 标题`、`**加粗**`、`| 表 |`、
+   * `` `代码` `` 这些"给机器读"的记号（真机反馈：「知识库里打开 md 还是机器
+   * 格式」）。现在改走 utils.js 的统一 markdown 管线（`renderMarkdown`，
+   * 自带 sanitize / 代码块 / 表格 / 数学保护），与聊天侧 md 预览同一套排版。
+   *
+   * 只对「阅读全文」（document 视图）排版：引用片段视图按**字符偏移**做精确
+   * 高亮，排版化会让偏移失效——那是给引用定位用的视图，全文视图另有排版。
+   */
+  const MARKDOWN_EXTS = new Set(['.md', '.markdown']);
+
+  /** 该路径是否是 markdown 文档（渲染型文本：需要排版）。 */
+  function isMarkdownPath(relPath) {
+    return MARKDOWN_EXTS.has(richExtOf(relPath));
+  }
+
+  /**
+   * 当前正文是否"可排版"：md 文档 + 渲染管线在场 + 阅读全文 + 不是逐字稿。
+   *
+   * `renderText`（决定排版还是原文）与 `renderActions`（"查看源码"入口）共用
+   * 这一条判据——两边各写一份必然漂移：一边给了按钮、另一边却不排版（或反之），
+   * 用户点下去像没反应。
+   *
+   * `useBlocks` 由 renderText 传入（它已经算过一次对话块）；工具栏现算即可。
+   */
+  function canRenderMarkdown(result = activeResult, useBlocks = null) {
+    if (activeView !== 'document') return false;
+    if (typeof renderMarkdown !== 'function') return false;
+    if (!String(result?.text || '')) return false;
+    if (!isMarkdownPath(activeAnchor?.path || result?.displayPath)) return false;
+    const blocks = useBlocks == null
+      ? splitDialogueBlocks(String(result?.text || '')).length >= 2
+      : useBlocks;
+    return !blocks;
+  }
+
+  // ── 排版后正文里的引用定位 ─────────────────────────────────────────────
+  /**
+   * 原文偏移（charStart/charEnd）在 markdown 渲染后不再对应 DOM 字符位置，
+   * 于是改用「摘录文本 → 文本节点搜索」：清洗 md 记号 + 归一化空白后匹配。
+   * 单节点匹配不到（一条引用被标题/加粗/列表拆到多个节点）时退到「整块标记」
+   * ——保证点开引用总能落到可见位置，而不是静默停在第 1 屏。
+   */
+  function mdNormSpace(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  /** 去掉行首 md 记号（标题/引用/列表序号/代码围栏）与行内强调符。 */
+  function mdStripMarks(value) {
+    return String(value || '').split('\n').map((line) => line
+      .replace(/^\s*(?:#{1,6}[ \t]+|>[\t ]?|[-*+•][ \t]+|\d+[.、)][ \t]+|```+[^\n]*|~~~+)/, ''))
+      .join(' ');
+  }
+
+  /** 高亮前清洗：行首记号 + 行内强调符 + 空白归一（与渲染后正文的形态一致）。 */
+  function mdCleanQuote(value) {
+    return mdNormSpace(mdStripMarks(value).replace(/\*\*|__|`|~~/g, ''));
+  }
+
+  /**
+   * 归一化后的下标 → 原文下标（空白被折叠成一个空格，两边要各自换算）。
+   * 找不到精确位置时给文档尾——只用于"近似窗口"，不追求逐字对齐。
+   */
+  function mdApproxRawStart(raw, normIndex) {
+    let position = 0;
+    let inWhitespace = false;
+    for (let i = 0; i < raw.length; i++) {
+      if (/\s/.test(raw[i])) {
+        if (!inWhitespace) {
+          if (position === normIndex) return i;
+          position++;
+          inWhitespace = true;
+        }
+      } else {
+        inWhitespace = false;
+        if (position === normIndex) return i;
+        position++;
+      }
+    }
+    return Math.max(0, raw.length - 1);
+  }
+
+  /** 正文里的可见文本节点（手写递归：不依赖 TreeWalker，测试沙箱也能跑）。 */
+  function mdTextNodes(host) {
+    const out = [];
+    const walk = (node) => {
+      const children = node && node.childNodes;
+      if (!children) return;
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        if (child.nodeType === 3) {
+          if (String(child.nodeValue || '').trim()) out.push(child);
+        } else if (child.nodeType === 1) {
+          walk(child);
+        }
+      }
+    };
+    walk(host);
+    return out;
+  }
+
+  /** 在单个文本节点里包一个 `<mark>`（Range 不可用时返回 null，交给块级兜底）。 */
+  function mdMarkRange(node, start, length) {
+    if (typeof document.createRange !== 'function') return null;
+    const end = Math.min(String(node.nodeValue || '').length, start + Math.max(length, 1));
+    if (start < 0 || start >= end) return null;
+    const owner = node.ownerDocument || document;
+    const range = owner.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    const mark = document.createElement('mark');
+    try {
+      range.surroundContents(mark);
+    } catch (_) {
+      return null; // 跨节点/非法 Range：不阻断阅读
+    }
+    return mark;
+  }
+
+  /** 摘录里的显著词（长度 ≥3、去重）：块级兜底按重合词数挑最像的那一块。 */
+  function mdTokens(value) {
+    const seen = new Set();
+    const out = [];
+    String(value || '').split(/[^\p{L}\p{N}]+/u).forEach((token) => {
+      const cleaned = token.replace(/[^\p{L}\p{N}_-]/gu, '');
+      if (cleaned && cleaned.length >= 3 && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        out.push(cleaned);
+      }
+    });
+    return out;
+  }
+
+  /** 兜底：按重合词挑出最匹配的块级元素，整块标记 + 滚动到视野。 */
+  function mdBlockFallback(host, cleaned) {
+    const blocks = host && typeof host.querySelectorAll === 'function'
+      ? Array.from(host.querySelectorAll('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,dd,dt,summary'))
+      : [];
+    const tokens = mdTokens(cleaned);
+    if (!blocks.length || !tokens.length) return false;
+    let best = null;
+    let bestScore = 0;
+    for (const block of blocks) {
+      const text = mdNormSpace(block.textContent || '');
+      if (!text) continue;
+      let score = 0;
+      for (const token of tokens) if (text.includes(token)) score++;
+      if (score > bestScore) {
+        bestScore = score;
+        best = block;
+      }
+    }
+    if (!best || bestScore < 1) return false;
+    best.classList?.add?.('anchored-source-mark-block');
+    try {
+      best.scrollIntoView?.({ block: 'center' });
+    } catch (_) {
+      /* 滚动失败不影响阅读 */
+    }
+    return true;
+  }
+
+  /**
+   * 在**已排版**的正文里定位并高亮一段摘录。返回 true = 已给出可见落点
+   * （精确 `<mark>` 或块级标记）。
+   */
+  function mdHighlight(host, quote) {
+    if (!host || !quote) return false;
+    const cleaned = mdCleanQuote(quote);
+    if (!cleaned) return false;
+    const needles = [];
+    const push = (candidate) => {
+      const value = mdNormSpace(candidate);
+      if (value.length >= 2 && !needles.includes(value)) needles.push(value);
+    };
+    push(cleaned.slice(0, 140));
+    if (cleaned.length > 140) push(cleaned.slice(0, 80));
+    push((cleaned.match(/^[^\n。！？!?；;，,]{0,60}/) || [''])[0]);
+    const nodes = mdTextNodes(host);
+    for (const needle of needles) {
+      for (const node of nodes) {
+        const raw = String(node.nodeValue || '');
+        if (!raw.trim()) continue;
+        let rawStart = -1;
+        const index = mdNormSpace(raw).indexOf(needle);
+        if (index >= 0) {
+          rawStart = mdApproxRawStart(raw, index);
+        } else {
+          // 空白/标点归一化后仍匹配不上时，退到首个"实词"命中
+          const word = (needle.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
+          if (!word) continue;
+          const at = raw.indexOf(word);
+          if (at < 0) continue;
+          rawStart = at;
+        }
+        if (rawStart < 0) continue;
+        if (mdMarkRange(node, rawStart, needle.length * 2 + 8)) return true;
+      }
+    }
+    return mdBlockFallback(host, cleaned);
+  }
+
+  // 纯函数出口：渲染层回归测试锁定清洗/归一化口径（与 kb-workbench 的
+  // `__kbFvUtils` 同款做法，避免测试去复制一遍实现）。
+  root.__kbMdUtils = {
+    isMarkdownPath,
+    normSpace: mdNormSpace,
+    stripMarks: mdStripMarks,
+    cleanQuote: mdCleanQuote,
+    tokens: mdTokens,
+    highlight: mdHighlight,
+  };
 
   // ── 「文字转写」判定：纠错面板的准入条件 ────────────────────────────────
   /**
@@ -500,6 +741,12 @@
     const note = element('[data-anchor-view-note]');
     if (!pre || !note) return;
     pre.textContent = '';
+    // 上一次渲染的形态标记要清掉（md 排版 / 对话块），否则切文档时样式会串
+    if (pre.dataset) {
+      delete pre.dataset.md;
+      delete pre.dataset.blocks;
+    }
+    pre.classList?.remove?.('markdown-body');
     note.hidden = true;
     note.textContent = '';
 
@@ -521,6 +768,46 @@
     // 认不出块头（普通文档）时退回原来的整段渲染，不动任何既有行为。
     const blocks = splitDialogueBlocks(text);
     const useBlocks = blocks.length >= 2;
+
+    // 阅读全文 + markdown 文档 + 未切到"源码"→ 排版渲染（`.markdown-body`
+    // 那套排版规则）。逐字稿除外：它有专门的"对话块"渲染（说话人/时间/分段
+    // 底色），排版成 HTML 会把块头结构冲成普通段落（转写稿的 .md 也走对话块）。
+    // 渲染管线缺席（utils.js 未加载的异常加载序）时静默回落原文，读者至少
+    // 有字可看，不会因为排版件缺失就打不开文件。
+    const markdownDoc = canRenderMarkdown(result, useBlocks);
+    if (!mdSourceMode && markdownDoc) {
+      const html = String(renderMarkdown(text) || '');
+      if (html.trim()) {
+        pre.classList?.add?.('markdown-body');
+        pre.dataset.md = 'rendered';
+        pre.innerHTML = html;
+        // 引用高亮：原文偏移在排版后失效，改按摘录文本在渲染结果里找落点
+        const quote = markEnd > markStart ? text.slice(markStart, markEnd) : String(activeAnchor?.quote || '');
+        if (quote && !mdHighlight(pre, quote)) {
+          log?.warn('markdown highlight miss', { path: String(activeAnchor?.path || ''), quote: quote.slice(0, 40) });
+        }
+        if (result.truncated) {
+          note.hidden = false;
+          note.textContent = t('kb.viewer.truncated', '文档较长，当前显示包含引用位置的部分内容。');
+        }
+        // markdown 里的 $…$ 需要 MathJax 再排一次（管线只做保护，不负责排版）
+        if (typeof typesetMath === 'function') {
+          try {
+            typesetMath(pre);
+          } catch (_) {
+            /* 数学排版失败不影响正文阅读 */
+          }
+        }
+        requestAnimationFrame(() => pre.querySelector('mark')?.scrollIntoView({ block: 'center' }));
+        return;
+      }
+    }
+
+    // 走到这里还是 md 文档 + 用户手选了"源码" ⇒ 按原文渲染（等宽、保留空白的
+    // `[data-md="source"]`），字符偏移精确高亮在这一形态下也重新成立。
+    if (markdownDoc && mdSourceMode) pre.dataset.md = 'source';
+
+    // 逐字稿（useBlocks）走对话块；普通文档继续走下面的整段/原文渲染
     if (useBlocks) {
       const speakers = [];
       for (const block of blocks) {
@@ -673,6 +960,8 @@
       return Promise.resolve();
     }
     activeAnchor = { ...anchor, path: String(anchor?.path || '').trim() };
+    // 新文档 ⇒ 回到"排版阅读"默认（源码模式是这一份文档的临时选择，不粘到下一份）
+    mdSourceMode = false;
     return loadView(anchor?.view === 'document' ? 'document' : 'anchor');
   }
 

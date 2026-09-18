@@ -15,7 +15,7 @@ vi.mock('../../../src/main/features/kb_summary', () => ({
   collectReadyDocLines: vi.fn(() => []),
 }));
 
-import { kbQuizHint, parseHintJson, collectQuizSources, HINT_SYSTEM_PROMPT, HINT_LLM_TIMEOUT_MS, _internals } from '../../../src/main/features/kb_quiz';
+import { kbQuizHint, kbQuizSnippet, parseHintJson, collectQuizSources, HINT_SYSTEM_PROMPT, QUIZ_SYSTEM_PROMPT, HINT_LLM_TIMEOUT_MS, _internals } from '../../../src/main/features/kb_quiz';
 import { collectReadyDocLines } from '../../../src/main/features/kb_summary';
 
 const collectMock = vi.mocked(collectReadyDocLines);
@@ -133,5 +133,93 @@ describe('kb_quiz 来源收集', () => {
       { id: 3, type: 'single', question: 'c', options: [], answer: 'z', explain: '', source: '报告.md' } as never,
       { id: 4, type: 'single', question: 'd', options: [], answer: 'w', explain: '', source: '计划.md' } as never,
     ])).toEqual(['报告.md', '计划.md']);
+  });
+});
+
+describe('原文片段要能当 needle 用（「原文依据」高亮）', () => {
+  it('清掉 `## 路径` 头与合成标题前缀，留下逐字正文', () => {
+    const { quizQuoteText } = _internals;
+    // sampleDocLines 用 withTitle 拼出来的形状：## 路径 + 标题：正文
+    expect(quizQuoteText('## 9.16产物/报告.md\n权限模型：管理员分两类角色，访客只读。'))
+      .toBe('管理员分两类角色，访客只读。');
+    // 真句子自带冒号：砍掉的也是原文前缀，剩余照样逐字（不损失可定位性）
+    expect(quizQuoteText('发版清理：以 CSV 文件为准')).toBe('以 CSV 文件为准');
+    // 没有合成前缀的原样保留
+    expect(quizQuoteText('正文第一句。正文第二句。')).toBe('正文第一句。正文第二句。');
+    // 长前缀不砍：超过 40 字的头是句子，不是块标题
+    const long = `${'长'.repeat(45)}：后面是正文`;
+    expect(quizQuoteText(long)).toBe(long);
+  });
+
+  it('kbQuizSnippet 返回的片段直接可定位（不再带标题／路径前缀）', () => {
+    collectMock.mockReturnValue(['## 9.16产物/报告.md\n权限模型：管理员分两类角色，访客只读。\n\n发版规范：清理以 CSV 为准。']);
+    const res = kbQuizSnippet('u1', { question: '管理员分几类角色？', source: '报告.md' });
+    expect(res.ok).toBe(true);
+    expect(res.snippet).toBe('管理员分两类角色，访客只读。');
+    // needle 的首词必须在片段开头：主进程三级匹配的兜底就是从首词开始
+    expect(res.snippet.startsWith('管理员')).toBe(true);
+  });
+});
+
+describe('定位到"哪一段"要准（真机反馈：文档对，段落不对）', () => {
+  const { pickSnippet } = _internals;
+
+  it('答案原文命中的那一段胜出，而不是"题干词命中更多"的废话段', () => {
+    const noise = '发版清理时需要注意很多事项，清理流程、清理范围、清理时间都要提前确认，具体以团队约定为准，建议参考过往经验并做好记录。';
+    const evidence = '发版清理必须以 CSV 文件为准。';
+    const picked = pickSnippet([noise, evidence], '发版清理应以什么为准？', { answer: 'CSV 文件' });
+    expect(picked?.snippet).toBe(evidence);
+    expect(picked?.line).toBe(1);
+  });
+
+  it('返回句级窗口：命中句在窗口里，且从整段第一句之前不截断（不再只给段落前 320 字）', () => {
+    const para = `铺垫第一句与本题无关。铺垫第二句同样无关。${'铺垫'.repeat(200)}。真正的依据在这里：清理以 CSV 为准。结尾无关的一句。`;
+    const picked = pickSnippet([para], '发版清理以什么为准？', { answer: 'CSV 文件' });
+    expect(picked).toBeTruthy();
+    // 命中句必须落在窗口里，且窗口不能是从段落开头切的一大块
+    expect(picked!.snippet).toContain('清理以 CSV 为准');
+    expect(picked!.snippet.length).toBeLessThan(para.length / 2);
+    expect(picked!.snippet.startsWith('铺垫第一句')).toBe(false);
+    // 句界对齐：窗口以句号收尾（逐字取原文，不切半句）
+    expect(picked!.snippet.endsWith('。')).toBe(true);
+  });
+
+  it('IDF：每段都有的词不做区分，只在少数段出现的词才算证据', () => {
+    const common = '文档说明：这份材料围绕发版流程展开，包含若干注意事项与经验总结，供团队参考使用。';
+    const rare = '发版清理必须以 CSV 文件为准，提示词里那份只是速览。';
+    const other = '文档说明：这份材料围绕测试用例展开，包含若干注意事项与经验总结，供团队参考使用。';
+    const picked = pickSnippet([common, other, rare], '发版清理以什么为准？');
+    expect(picked?.line).toBe(2);
+    expect(picked?.snippet).toContain('CSV');
+  });
+
+  it('问句虚词不参与检索：只有"什么/哪些/如何"这种题不硬凑一段出来', () => {
+    const { queryTerms } = _internals;
+    const terms = queryTerms('以下说法哪个正确？');
+    expect(terms).not.toContain('什么');
+    expect(terms).not.toContain('以下');
+    expect(terms).not.toContain('哪个');
+    // 题干全是虚词 → 选不出来就如实返回 null，不乱给一段
+    expect(pickSnippet(['一段与题目无关的材料。'], '以下哪个正确？')).toBeNull();
+  });
+
+  it('答案进检索：kbQuizSnippet 用 answer 选段（拿到 answer 才可能选对）', () => {
+    collectMock.mockReturnValue([
+      '## CICD/发版规范.md\n发布流程：每周二冻结 develop 分支，由发版负责人确认版本号。\n\n发版清理：提示词里的清单只是速览，必须以 CSV 文件为准。',
+    ]);
+    const res = kbQuizSnippet('u1', { question: '发版清理以什么为准？', answer: 'CSV 文件', source: '发版规范.md' });
+    expect(res.ok).toBe(true);
+    expect(res.snippet).toContain('CSV');
+  });
+});
+
+describe('解析（explain）必须落到材料事实', () => {
+  it('prompt 明确禁止空话，并要求写出支撑答案的事实／原话', () => {
+    expect(QUIZ_SYSTEM_PROMPT).toContain('必须落到材料的具体事实');
+    expect(QUIZ_SYSTEM_PROMPT).toContain('根据材料可知');
+    expect(QUIZ_SYSTEM_PROMPT).toContain('这符合题意');
+    expect(QUIZ_SYSTEM_PROMPT).toContain('禁止');
+    // 来源不得编造
+    expect(QUIZ_SYSTEM_PROMPT).toContain('不要编造');
   });
 });

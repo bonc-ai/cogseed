@@ -258,15 +258,28 @@
 /* hover：整行浅底（点哪儿都算这一项，命中率更高） */
 .kb-qz-option:hover { background: var(--kb-hover); border-color: var(--kb-blue-line); }
 
-/* 选中：字母圈填充 + 行高亮（点完立刻看得见，不必等提交） */
+/* 选中：字母圈填充 + 行高亮 + 内描边（点完立刻看得见，不必等提交）。
+   内描边用 inset box-shadow 而不是加粗 border：不改变行高、不引起选项跳动。 */
 .kb-qz-option.is-selected {
   border-color: var(--kb-green);
   background: var(--kb-accent-weak);
+  box-shadow: inset 0 0 0 1px var(--kb-green);
 }
 
-/* 即时解析模式下已提交：正确项绿、选错的项红 */
-.kb-qz-option.is-right { border-color: var(--kb-green); background: var(--status-success-bg); }
-.kb-qz-option.is-wrong { border-color: var(--kb-red); background: var(--color-warning-soft); }
+/* 即时解析模式下已提交：正确项绿、选错的项红（对错都要一眼看出，不能都是"近白"） */
+.kb-qz-option.is-right {
+  border-color: var(--kb-green);
+  background: var(--status-success-bg);
+  box-shadow: inset 0 0 0 1px var(--kb-green);
+}
+.kb-qz-option.is-wrong {
+  border-color: var(--kb-red);
+  /* 原先用 --color-warning-soft（奶黄 #FBF1E2）：在白色面板上"看着还是白的"，
+     且答错是本该最刺眼的一档。改为红色淡染，与 .is-right 同权重。 */
+  background: color-mix(in srgb, var(--kb-red) 8%, var(--color-white));
+  box-shadow: inset 0 0 0 1px var(--kb-red);
+}
+
 .kb-qz-option:disabled { cursor: default; }
 
 .kb-qz-option-letter {
@@ -289,6 +302,17 @@
   background: var(--kb-green);
   color: var(--color-white);
 }
+
+/* 揭晓后字母圈也填状态色：哪项对、哪项错一眼看出。
+   ⚠️ 必须排在上面的 :hover / .is-selected 之后——同为 0,3,0 特异性时靠顺序取胜，
+   否则"既选中又答错"的选项会保留选中态的绿色圈（真机踩过：答错显示成绿色）。 */
+.kb-qz-option.is-right .kb-qz-option-letter,
+.kb-qz-option.is-wrong .kb-qz-option-letter {
+  color: var(--color-white);
+  border-color: transparent;
+}
+.kb-qz-option.is-right .kb-qz-option-letter { background: var(--kb-green); }
+.kb-qz-option.is-wrong .kb-qz-option-letter { background: var(--kb-red); }
 
 .kb-qz-option-text { flex: 1; min-width: 0; }
 
@@ -416,28 +440,10 @@
 .kb-qz-textbtn:disabled { color: var(--kb-text3); cursor: not-allowed; background: transparent; }
 .kb-qz-hint-more { align-self: flex-start; flex: none; }
 
-.kb-qz-btn {
-  height: var(--control-height);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--kb-border);
-  border-radius: var(--radius-2);
-  background: var(--color-white);
-  color: var(--kb-text);
-  font-size: var(--font-size-3);
-  cursor: pointer;
-}
-
-.kb-qz-btn:hover { background: var(--kb-hover); }
-.kb-qz-btn:disabled { color: var(--kb-text3); cursor: not-allowed; background: var(--surface-subtle); }
-
-.kb-qz-btn.is-primary {
-  background: var(--kb-green);
-  border-color: var(--kb-green);
-  color: var(--color-white);
-}
-
-.kb-qz-btn.is-primary:hover { background: var(--color-brand-hover); }
-
+/* 底部/弹层里的按钮一律穿共享皮肤（ui-button ui-button--primary|secondary ui-button--sm）：
+   本文件由 lazy-features 追加到 <head> 末尾，若在这里再写一遍 background/border/color，
+   会**盖掉** ui-components.css 里后加载顺序不占优的共享皮肤——真机表现就是主按钮变成
+   "白底、无边框"的白块，和次要按钮分不出来。故这里只留布局钩子 .kb-qz-btn，不再自造皮肤。 */
 .kb-qz-skip-btn { margin-right: auto; }
 
 .kb-qz-selfmark { display: inline-flex; gap: var(--space-1); margin-left: var(--space-2); }
@@ -615,11 +621,14 @@
 }
 
 /* ── 防误关：确认条 ── */
+/* 左侧琥珀色导轨：这是"要不要关"的一次决策，不能看起来像一段普通灰色说明
+   （真机反馈：内容换成了确认条但用户没认出来，以为右上角的 X 坏了）。 */
 .kb-qz-confirm {
   padding: var(--space-4);
   border: 1px solid var(--kb-border);
+  border-left: 3px solid var(--kb-amber);
   border-radius: var(--radius-3);
-  background: var(--surface-subtle);
+  background: var(--color-warning-soft);
 }
 
 .kb-qz-confirm-title {
