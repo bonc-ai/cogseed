@@ -726,6 +726,17 @@ describe('查看器集成契约', () => {
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 
+  it('弹窗结果只能 await 弹窗本身（uiModal 没有 .result；await undefined 会立即通过）', () => {
+    // 真因：`await modal.result` === `await undefined` ⇒ 弹窗还开着就被当成"用户已关闭"，
+    // 于是「对照」里的回滚、「清理附记」里的另存、「拟主题标题」里的采用全都不执行
+    // ——真机表现统一为"按钮点了没反应"。
+    expect(panelSrc).not.toMatch(/modal\.result/);
+    expect(panelSrc).toMatch(/await modal;/);
+    // 把契约钉在 uiModal 上：它返回 Promise 本体（带 close/overlay/dialog），没有 result 字段
+    expect(readSrc('renderer/modules/ui-modal.js'))
+      .toMatch(/Object\.assign\(result, \{ close, overlay, dialog \}\)/);
+  });
+
   it('弹窗内的动作必须自带点击委托（弹窗挂 body，面板容器的委托收不到）', () => {
     // 「拟主题标题」的采用按钮渲染在 uiModal 里（document.body 下，见 ui-modal.js），
     // 只挂容器委托 = 点「采用」没反应（真机反馈）
