@@ -80,6 +80,7 @@ describe('Windows packaged STT smoke', () => {
       finalEventObserved: true,
       finalTextLength: 8,
       failureCount: 0,
+      failureStage: 'complete',
     };
 
     expect(verifier.verifySttSmokeMarker(valid)).toEqual([]);
@@ -110,6 +111,7 @@ describe('Windows packaged STT smoke', () => {
       finalEventObserved: true,
       finalTextLength: 8,
       failureCount: 0,
+      failureStage: 'complete',
     };
 
     expect(verifier.verifySttSmokeMarker({ ...valid, sampleCount: 89_783 }).join('\n'))
