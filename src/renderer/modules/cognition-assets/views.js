@@ -754,6 +754,8 @@
       ${fieldHtml(T('cognition.asset_edit_field_statement', '正文'), window.uiTextarea({ id: fid('statement'), value: String(asset.statement || ''), attrs: { 'data-f': 'statement' } }))}
       ${fieldHtml(T('cognition.asset_edit_field_applicable', '适用场景（多条用顿号分隔）'), window.uiInput({ id: fid('applicable'), value: joinList(asset.applicableWhen), attrs: { 'data-f': 'applicable' } }))}
       ${fieldHtml(T('cognition.asset_edit_field_forbidden', '禁用场景（多条用顿号分隔）'), window.uiInput({ id: fid('forbidden'), value: joinList(asset.forbiddenWhen), attrs: { 'data-f': 'forbidden' } }))}
+      ${fieldHtml(T('cognition.asset_edit_field_visible_agents', '谁能看见·Agent（id 用顿号分隔，留空＝不限制）'), window.uiInput({ id: fid('visible-agents'), value: joinList(asset.scopePolicy && asset.scopePolicy.agentIds), attrs: { 'data-f': 'visible-agents' } }))}
+      ${fieldHtml(T('cognition.asset_edit_field_visible_spaces', '谁能看见·空间（id 用顿号分隔，留空＝不限制）'), window.uiInput({ id: fid('visible-spaces'), value: joinList(asset.scopePolicy && asset.scopePolicy.workspaceIds), attrs: { 'data-f': 'visible-spaces' } }))}
       <div class="ca-actions ca-actions-right">
         ${btn(T('common.cancel', '取消'), 'asset-edit-cancel', { id: asset.id })}
         ${btn(T('cognition.asset_edit_save', '保存为新版本'), 'asset-edit-save', { id: asset.id, primary: true })}

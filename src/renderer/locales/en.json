@@ -7752,5 +7752,7 @@
   "recall.projection.revoke": "Revoke",
   "recall.projection.revoked_note": "Revoked: later turns no longer carry these assets.",
   "cognition.catalog_model_attached": "Model-attached",
-  "cognition.proof_sentence_attachment_revoked": "{when}: you revoked this attachment {where} (later turns no longer carry it)"
+  "cognition.proof_sentence_attachment_revoked": "{when}: you revoked this attachment {where} (later turns no longer carry it)",
+  "cognition.asset_edit_field_visible_agents": "Visible to · agents (ids separated by 、; empty = no restriction)",
+  "cognition.asset_edit_field_visible_spaces": "Visible to · spaces (ids separated by 、; empty = no restriction)"
 }

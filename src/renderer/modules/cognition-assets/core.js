@@ -721,10 +721,24 @@
         applicableWhen: splitList(raw('applicable')),
         forbiddenWhen: splitList(raw('forbidden')),
       };
+      // 谁能看见（2026-09-19 刀一·面板暴露）：scopePolicy 白名单的 Agent/空间
+      // 维度在此编辑；与现值不同才随保存提交（不产空版本），空输入＝清除限制。
+      const policy = asset.scopePolicy || {};
+      const visibleAgents = splitList(raw('visible-agents'));
+      const visibleSpaces = splitList(raw('visible-spaces'));
+      const visibilityChanged = JSON.stringify(visibleAgents) !== JSON.stringify(policy.agentIds || [])
+        || JSON.stringify(visibleSpaces) !== JSON.stringify(policy.workspaceIds || []);
+      if (visibilityChanged) {
+        payload.scopePolicy = {
+          ...(visibleAgents.length ? { agentIds: visibleAgents } : {}),
+          ...(visibleSpaces.length ? { workspaceIds: visibleSpaces } : {}),
+        };
+      }
       const unchanged = payload.title === String(asset.title || '')
         && payload.statement === String(asset.statement || '')
         && JSON.stringify(payload.applicableWhen) === JSON.stringify((asset.applicableWhen || []))
-        && JSON.stringify(payload.forbiddenWhen) === JSON.stringify((asset.forbiddenWhen || []));
+        && JSON.stringify(payload.forbiddenWhen) === JSON.stringify((asset.forbiddenWhen || []))
+        && !visibilityChanged;
       const exitEdit = () => router.go({ name: 'overview', assetId, assetEdit: '' }, { replace: true });
       if (unchanged) {
         toast(T('cognition.asset_edit_unchanged', '内容没有变化，未保存'));

@@ -5741,5 +5741,7 @@
   "recall.projection.revoke": "取り消す",
   "recall.projection.revoked_note": "取り消し済み：以降のターンではこれらのアセットを引き継ぎません。",
   "cognition.catalog_model_attached": "モデル装着中",
-  "cognition.proof_sentence_attachment_revoked": "{when}、{where}のこの装着は取り消されました（以降のターンでは引き継ぎません）"
+  "cognition.proof_sentence_attachment_revoked": "{when}、{where}のこの装着は取り消されました（以降のターンでは引き継ぎません）",
+  "cognition.asset_edit_field_visible_agents": "閲覧可能エージェント（IDを「、」区切り、空欄＝制限なし）",
+  "cognition.asset_edit_field_visible_spaces": "閲覧可能スペース（IDを「、」区切り、空欄＝制限なし）"
 }
