@@ -735,16 +735,26 @@ export async function appendFieldValueToRef(
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
 
-  return mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
+  let existingSnapshot: string[] = [];
+  let appended = false;
+  const result = await mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
     if (!sec) return { ok: false, error: 'section not found' };
     const values = sec.fields[name] || (sec.fields[name] = []);
+    existingSnapshot = values.map((fv) => fv.value);
     if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 同值同源同项目去重
     }
     values.push({ value: val, source: src, ...(proj ? { project: proj } : {}), ...(validAsOf ? { asOf: validAsOf } : {}) });
+    appended = true;
     return { changed: true };
   });
+  if (result.ok && appended && existingSnapshot.length) {
+    void import('./recall/ontology-conflicts')
+      .then((m) => m.checkNewValueAgainst(uid, groupId, name, val, existingSnapshot))
+      .catch(() => {});
+  }
+  return result;
 }
 
 /**

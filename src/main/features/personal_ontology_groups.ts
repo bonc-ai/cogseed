@@ -624,14 +624,26 @@ export async function appendFieldValue(
   const proj = project ? String(project).trim() : undefined;
   const validAsOf = asOf && /^((?:19|20)\d{2})-(0[1-9]|1[0-2])$/.test(asOf) ? asOf : undefined;
 
-  return mutateGroupContent(uid, groupId, (content) => {
+  let existingSnapshot: string[] = [];
+  let appended = false;
+  const result = await mutateGroupContent(uid, groupId, (content) => {
     const values = content.fields[name] || (content.fields[name] = []);
+    existingSnapshot = values.map((fv) => fv.value);
     if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 完全匹配去重
     }
     values.push({ value: val, source: src, ...(proj ? { project: proj } : {}), ...(validAsOf ? { asOf: validAsOf } : {}) });
+    appended = true;
     return { changed: true };
   });
+  // 写后矛盾检查（Richard R32）：保存与检查互相独立——fire-and-forget，保存
+  // 的「成功」从不承诺「查过没问题」，检查结论只报忧不报喜（台账+界面标记）。
+  if (result.ok && appended && existingSnapshot.length) {
+    void import('./recall/ontology-conflicts')
+      .then((m) => m.checkNewValueAgainst(uid, groupId, name, val, existingSnapshot))
+      .catch(() => {});
+  }
+  return result;
 }
 
 /** 字段区：按值匹配替换那一行（保留原来源标记）。 */
