@@ -136,7 +136,7 @@ export async function collectSemanticFamilyGroups(
 export async function attachFamilyOnCreate(
   userId: string,
   created: Pick<RecallAbilityAssetRecord, 'id' | 'statement' | 'title' | 'ontologyRefs' | 'learningProvenance' | 'relations' | 'candidateId'>,
-  peers: ReadonlyArray<Pick<RecallAbilityAssetRecord, 'id' | 'statement' | 'title' | 'ontologyRefs' | 'learningProvenance'>>,
+  peers: ReadonlyArray<Pick<RecallAbilityAssetRecord, 'id' | 'statement' | 'title' | 'ontologyRefs' | 'learningProvenance' | 'familyName'>>,
   reviewHandoff?: { reviewDecisionId: string; sourceCandidateId: string },
   deps: {
     embedForDedup?: (userId: string, text: string) => Promise<number[] | null>;
@@ -186,9 +186,12 @@ export async function attachFamilyOnCreate(
       // 对不上 v2 资产）。写入前过 normalize 保形状。
       const { updateRecallJsonRecord } = await import('./store');
       const { normalizeAbilityAssetRelations } = await import('./asset-relations');
+      // 族名继承（2026-09-22 族可命名）：同族成员已有名字则新成员跟随。
+      const inheritedFamilyName = peers.find((peer) => peer.id === addRelations[0]?.assetId)?.familyName;
       await updateRecallJsonRecord(userId, 'ability-assets', created.id, (current) => ({
         ...(current || {}),
         relations: normalizeAbilityAssetRelations([...existing, ...addRelations], created.id),
+        ...(inheritedFamilyName ? { familyName: inheritedFamilyName } : {}),
         updatedAt: new Date().toISOString(),
       } as RecallJsonRecord));
     }
@@ -222,4 +225,48 @@ export function buildSameFamilyPatches(
     }
   }
   return [...patches.entries()].map(([assetId, addRelations]) => ({ assetId, addRelations }));
+}
+
+
+/** 族改名（2026-09-22）：以锚资产为起点按 same_family 连通分量找出全部成员，
+ *  批量直写 familyName（元数据变更不 bump 内容版本，与挂族写入同口径）。
+ *  返回更新的成员 id 列表；name 清空 = 恢复默认短名。 */
+export async function renameAssetFamily(
+  userId: string,
+  anchorAssetId: string,
+  name: string,
+): Promise<string[]> {
+  const trimmed = String(name || '').trim().slice(0, 40);
+  const { listAbilityAssets } = await import('./asset-service');
+  const assets = (await listAbilityAssets(userId))
+    .filter((asset) => asset.status !== 'purged' && asset.status !== 'deleted');
+  const byId = new Map(assets.map((asset) => [asset.id, asset]));
+  const parent = new Map(assets.map((asset) => [asset.id, asset.id]));
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    return root;
+  };
+  for (const asset of assets) {
+    for (const relation of asset.relations || []) {
+      if (relation.kind !== 'same_family') continue;
+      if (!byId.has(relation.assetId)) continue;
+      const a = find(asset.id);
+      const b = find(relation.assetId);
+      if (a !== b) parent.set(a > b ? a : b, a > b ? b : a);
+    }
+  }
+  const root = byId.has(anchorAssetId) ? find(anchorAssetId) : null;
+  if (!root) throw new Error('family anchor asset not found');
+  const members = assets.filter((asset) => find(asset.id) === root).map((asset) => asset.id);
+  if (members.length < 2) throw new Error('asset does not belong to a family');
+  const { updateRecallJsonRecord } = await import('./store');
+  for (const assetId of members) {
+    await updateRecallJsonRecord(userId, 'ability-assets', assetId, (current) => ({
+      ...(current || {}),
+      ...(trimmed ? { familyName: trimmed } : { familyName: undefined }),
+      updatedAt: new Date().toISOString(),
+    } as unknown as import('./types').RecallJsonRecord));
+  }
+  return members;
 }

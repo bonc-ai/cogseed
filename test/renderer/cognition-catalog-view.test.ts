@@ -139,4 +139,33 @@ describe('family-grouped asset list', () => {
   });
 });
 
+
+describe('origin chip on the detail header', () => {
+  it('shows the model-written chip and a confirm button for an unverified origin', async () => {
+    const { renderCognition } = await import('./helpers/cognition-renderer');
+    const html = renderCognition({ name: 'overview', assetId: 'aa-origin-1' }, {
+      assets: [{
+        id: 'aa-origin-1', type: 'personal', title: '模型记的偏好', statement: '内容。',
+        status: 'active', version: '1', lifecycleStatus: 'automatically_extracted_unverified',
+        updatedAt: '2026-09-19T00:00:00Z',
+      }],
+    });
+    expect(html).toContain('模型记的');
+    expect(html).toContain('转正');
+  });
+
+  it('shows no origin chip for a user-confirmed asset', async () => {
+    const { renderCognition } = await import('./helpers/cognition-renderer');
+    const html = renderCognition({ name: 'overview', assetId: 'aa-origin-2' }, {
+      assets: [{
+        id: 'aa-origin-2', type: 'personal', title: '你确认过的偏好', statement: '内容。',
+        status: 'active', version: '1', lifecycleStatus: 'user_confirmed_unverified',
+        updatedAt: '2026-09-19T00:00:00Z',
+      }],
+    });
+    expect(html).not.toContain('模型记的');
+    expect(html).not.toContain('>转正<');
+  });
+});
+
 });

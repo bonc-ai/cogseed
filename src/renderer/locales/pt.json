@@ -5750,5 +5750,9 @@
   "cognition.asset_confirm_origin": "Confirmar",
   "cognition.asset_confirm_origin_done": "Confirmado como verificado por você",
   "cognition.candidate_fusion_note": "Ao confirmar, este conteúdo se funde com a versão atual abaixo em uma nova versão (a antiga permanece e pode ser restaurada) — não é substituição.",
-  "cognition.candidate_merged_into": "Esta se parece com um ativo existente: ao confirmar, ela é mesclada naquele ativo (fundida como nova versão), sem criar outra."
+  "cognition.candidate_merged_into": "Esta se parece com um ativo existente: ao confirmar, ela é mesclada naquele ativo (fundida como nova versão), sem criar outra.",
+  "cognition.family_rename": "Nomear",
+  "cognition.family_rename_done": "Renomear",
+  "cognition.family_renamed": "Renomeado para \"{name}\"",
+  "cognition.family_name_cleared": "Nome padrão restaurado"
 }

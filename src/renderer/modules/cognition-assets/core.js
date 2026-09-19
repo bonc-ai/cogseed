@@ -142,7 +142,7 @@
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '' },
     backStack: [],
   };
   NS.store = store;
@@ -403,7 +403,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '' }, next);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
@@ -714,6 +714,22 @@
         await NS.reload();
       }
       router.go({ name: 'overview', assetId, assetVersionId: '', assetVersionDiff: '', assetEdit: '1' }, { replace: true });
+    },
+    /** 族改名（2026-09-22 快赢）：组头内联输入 → recall.families.rename
+     *  批量写族内全部成员的 familyName；空名=恢复默认短名。 */
+    async renameFamily(anchorAssetId) {
+      const input = document.querySelector(`[data-family-name]`);
+      const name = input ? String(input.value || '').trim() : '';
+      await api.call('recall.families.rename', { anchorAssetId, name });
+      toast(name ? T('cognition.family_renamed', '已命名为「{name}」', { name }) : T('cognition.family_name_cleared', '已恢复默认名'));
+      router.go({ name: 'overview', familyRename: '' }, { replace: true });
+      await NS.reload();
+    },
+    async enterFamilyRename(anchorAssetId) {
+      router.go({ name: 'overview', familyRename: anchorAssetId }, { replace: true });
+    },
+    async exitFamilyRename() {
+      router.go({ name: 'overview', familyRename: '' }, { replace: true });
     },
     /** 转正（2026-09-22 清单 #10）：把「模型记的/系统沉淀的」标成你确认过的。
      *  单向、只动出身标记，不 bump 版本链（内容没变就不产空版本）。 */

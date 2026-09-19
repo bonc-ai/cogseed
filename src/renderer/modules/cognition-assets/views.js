@@ -812,7 +812,7 @@
           <h3>${esc(asset.title || asset.id)}</h3>
           ${switchable ? `<div class="ca-sub">${esc(switchHint)}</div>` : ''}
         </div>
-        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${originChip(asset) && ['active', 'paused'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_confirm_origin', '转正'), 'asset-confirm', { id: asset.id, small: true, primary: true }) : ''}</div>
+        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${originChip(asset)}${originChip(asset) && ['active', 'paused'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_confirm_origin', '转正'), 'asset-confirm', { id: asset.id, small: true, primary: true }) : ''}</div>
       </div>
       ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}
@@ -878,14 +878,20 @@
     let unsorted = [];
     for (const bucket of groups.values()) {
       if (bucket.length >= 2) {
-        const newest = bucket.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
-        named.push({ title: String(newest.title || ''), assets: bucket });
+        // 组名（2026-09-22 族可命名）：用户起的名优先；默认短名=用得最多的
+        // 资产标题截 10 字（比“最新标题截 40 字”可读——走查时子安嫌长）。
+        const namedOne = bucket.find((a) => String(a.familyName || '').trim());
+        const fallback = bucket.slice().sort((a, b) => String(b.title || '').length - String(a.title || '').length)[0];
+        const title = namedOne
+          ? String(namedOne.familyName).trim()
+          : String(fallback?.title || '').slice(0, 10);
+        named.push({ title, anchorId: String(bucket[0].id), named: Boolean(namedOne), assets: bucket });
       } else {
         unsorted = unsorted.concat(bucket);
       }
     }
     named.sort((a, b) => String(b.assets.length).localeCompare(String(a.assets.length)));
-    if (unsorted.length) named.push({ title: '', assets: unsorted });
+    if (unsorted.length) named.push({ title: '', anchorId: '', named: false, assets: unsorted });
     return named;
   }
 
@@ -993,13 +999,18 @@
     // 默认列表视图按大类分组渲染（目录视图=模型视角保持平铺）。
     if (filtered.length && !catalogView) {
       const groups = familyGroupsOf(filtered);
-      listHtml = groups.map((group) => `
+      listHtml = groups.map((group) => {
+        const renaming = String(route.familyRename || '') === group.anchorId && group.anchorId;
+        return `
         <div class="ca-family-group">
-          <div class="ca-family-head">${group.title
-            ? `${esc(group.title)} <span class="ca-family-count">${esc(T('cognition.family_group_count', '{n} 条同类', { n: String(group.assets.length) }))}</span>`
-            : `<span class="ca-family-count">${esc(T('cognition.family_unsorted', '未归类'))}</span>`}</div>
+          <div class="ca-family-head">${renaming
+            ? `${window.uiInput({ id: `ca-family-name-${esc(group.anchorId)}`, value: esc(group.title || ''), attrs: { 'data-family-name': '1', maxlength: '40' } })}${btn(T('common.save', '保存'), 'family-rename-save', { id: group.anchorId, small: true, primary: true })}${btn(T('common.cancel', '取消'), 'family-rename-cancel', { small: true })}`
+            : group.title
+              ? `${esc(group.title)} <span class="ca-family-count">${esc(T('cognition.family_group_count', '{n} 条同类', { n: String(group.assets.length) }))}</span>${group.anchorId ? btn(group.named ? T('cognition.family_rename_done', '改名') : T('cognition.family_rename', '命名'), 'family-rename', { id: group.anchorId, small: true, className: 'ca-family-rename-btn' }) : ''}`
+              : `<span class="ca-family-count">${esc(T('cognition.family_unsorted', '未归类'))}</span>`}</div>
           ${group.assets.map((asset) => plainRow(asset)).join('')}
-        </div>`).join('');
+        </div>`;
+      }).join('');
     }
     return `${heroHtml}
       <div class="ca-card ca-tree-card">

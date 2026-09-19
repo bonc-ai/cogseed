@@ -159,6 +159,9 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   causalRule?: CausalRule;
   ontologyRefs?: AbilityAssetOntologyRef[];
   relations?: AbilityAssetRelation[];
+  /** 大类名（2026-09-22 族可命名）：挂族时继承族内已有名，用户可改
+   *  （recall.families.rename 批量写族内全部成员）；元数据，不 bump 内容版本。 */
+  familyName?: string;
   derivedFrom?: string[];
   /** 适用/禁用条件。缺失=没记录过，**不是**「无限制」。 */
   applicableWhen?: string[];

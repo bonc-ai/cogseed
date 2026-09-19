@@ -7761,5 +7761,9 @@
   "cognition.asset_confirm_origin": "转正",
   "cognition.asset_confirm_origin_done": "已转正：标记为你确认的",
   "cognition.candidate_fusion_note": "确认后会把这段内容与下面的当前版本融合成一个新版本（旧内容保留、可随时切回），不是覆盖。",
-  "cognition.candidate_merged_into": "这条与已有资产相似：确认后会并入那条资产（融合出新版本），不会另开一条。"
+  "cognition.candidate_merged_into": "这条与已有资产相似：确认后会并入那条资产（融合出新版本），不会另开一条。",
+  "cognition.family_rename": "命名",
+  "cognition.family_rename_done": "改名",
+  "cognition.family_renamed": "已命名为「{name}」",
+  "cognition.family_name_cleared": "已恢复默认名"
 }

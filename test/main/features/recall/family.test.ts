@@ -111,4 +111,55 @@ describe('collectSemanticFamilyGroups', () => {
   });
 });
 
+
+describe('renameAssetFamily', () => {
+  it('renames every same_family member and empty name clears it', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-family-rename');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const family = await import('../../../../src/main/features/recall/family');
+    const now = new Date().toISOString();
+    const mk = async (id: string) => assets.createAbilityAsset('user-family-rename', {
+      schemaVersion: 2, ownerId: 'user-family-rename', id, candidateId: `cand-${id}`,
+      sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_familyren${id.slice(-8)}`.padEnd(16, 'x'),
+      type: 'personal', title: `条目${id.slice(-2)}`, statement: `同族内容 ${id}。`,
+      evidenceRefs: [{ kind: 'conversation', id: `conv-${id}` }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      relations: [{ kind: 'same_family', assetId: id === 'aa-fr-1' ? 'aa-fr-2' : 'aa-fr-1' }],
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'family rename seed' });
+    await mk('aa-fr-1');
+    await mk('aa-fr-2');
+
+    const updated = await family.renameAssetFamily('user-family-rename', 'aa-fr-1', '沟通偏好');
+    expect(updated.sort()).toEqual(['aa-fr-1', 'aa-fr-2']);
+    const after = await assets.readAbilityAsset('user-family-rename', 'aa-fr-2');
+    expect(after.familyName).toBe('沟通偏好');
+
+    // 清空恢复默认
+    await family.renameAssetFamily('user-family-rename', 'aa-fr-2', '');
+    const cleared = await assets.readAbilityAsset('user-family-rename', 'aa-fr-1');
+    expect(cleared.familyName || '').toBe('');
+  });
+
+  it('rejects a lone asset that has no family', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-family-lone');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const family = await import('../../../../src/main/features/recall/family');
+    const now = new Date().toISOString();
+    await assets.createAbilityAsset('user-family-lone', {
+      schemaVersion: 2, ownerId: 'user-family-lone', id: 'aa-lone-1', candidateId: 'cand-lone',
+      sourceCandidateIds: ['cand-lone'], reviewDecisionId: 'rd_familylone00000',
+      type: 'personal', title: '孤条', statement: '无族内容。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-lone' }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'lone seed' });
+    await expect(family.renameAssetFamily('user-family-lone', 'aa-lone-1', 'x'))
+      .rejects.toThrow('does not belong to a family');
+  });
+});
+
 });

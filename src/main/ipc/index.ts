@@ -2607,6 +2607,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // 存量记忆迁移手动口（2026-09-19 清单 #6）：dryRun=盘点；否则立即迁移
   //（备份→入库→按文件清空）。启动任务之外的可控触发（验收/补跑）。
+  // 族改名（2026-09-22 快赢·族可命名）：锚资产起按 same_family 连通分量批量写。
+  'recall.families.rename': async ({ anchorAssetId, name } = {}, ctx) => {
+    if (typeof anchorAssetId !== 'string' || !anchorAssetId.trim()) throw new Error('invalid family anchor asset id');
+    const { renameAssetFamily } = await import('../features/recall/family');
+    const updated = await renameAssetFamily(ctx.userId, anchorAssetId.trim(), String(name ?? ''));
+    return { ok: true, updated };
+  },
   'recall.memory.migrate': async ({ dryRun } = {}, ctx) => {
     const { migrateLegacyMemoryToAssets } = await import('../features/recall/memory-migration');
     return migrateLegacyMemoryToAssets(ctx.userId, { dryRun: dryRun === true });
