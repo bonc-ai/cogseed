@@ -15,11 +15,16 @@ vi.mock('../../../../src/main/features/search', () => ({
 
 // embedding 受控替身：文本 → 二维向量，用真实余弦算相似。
 // 「北京/上海」一对在谈同一件事（高相似），「旅行」无关（低相似）。
+// 并发回归测试用 city-N 系列制造 N 对高相似值。
 const VECTORS: Record<string, [number, number]> = {
   常住北京: [1, 0],
   常住上海: [0.99, 0.02],
   喜欢旅行: [0, 1],
 };
+for (let i = 0; i < 8; i += 1) {
+  VECTORS[`城东${i}`] = [1, 0.001 * i];
+  VECTORS[`城西${i}`] = [0.99, 0.02 + 0.001 * i];
+}
 let embeddingAvailable = true;
 vi.mock('../../../../src/main/features/recall/similarity', () => ({
   embedForDedup: async (_uid: string, text: string): Promise<number[] | null> => {
@@ -146,8 +151,7 @@ describe('ontology-conflicts › wired into appendFieldValue + self-heal', () =>
     expect(Array.isArray(live)).toBe(true); // LLM 缺席时不制造假冲突（空数组）
   });
 
-  it('self-heals ledger rows whose values the user already deleted', async () => {
-    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+  it('self-heals ledger rows whose values the user already deleted', async () => {    const groups = await import('../../../../src/main/features/personal_ontology_groups');
     const m = await loadModule();
     const created = await groups.createGroup(UID, '自愈验证组');
     const gid = created.group!.group_id;
@@ -175,5 +179,77 @@ describe('ontology-conflicts › wired into appendFieldValue + self-heal', () =>
     await groups.removeFieldValue(UID, gid, '居住地', '常住上海');
     expect((await m.listConflicts(UID, gid)).length).toBe(0);
     expect(fs.readFileSync(ledgerPath, 'utf8')).not.toContain('oc-test0001');
+  });
+});
+
+// ── 遗留修复回归（2026-09-20）：并发覆盖丢行 + 判定悬挂 ───────────────────
+describe('ontology-conflicts › concurrency and judge timeout', () => {
+  it('concurrent recordings interleaved with self-healing reads lose nothing', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const m = await loadModule();
+    const created = await groups.createGroup(UID, '并发回归组');
+    const gid = created.group!.group_id;
+    // 值对两条都要写进组：自愈校验「两条值仍在组里」——新值缺席会被正确地
+    // 判为「冲突不再成立」而清除（这正是自愈的语义）。
+    for (let i = 0; i < 6; i += 1) {
+      await groups.appendFieldValue(UID, gid, `城市${i}`, `城东${i}`, '手动');
+    }
+    for (let i = 0; i < 6; i += 1) {
+      await groups.appendFieldValue(UID, gid, `城市${i}`, `城西${i}`, '智能');
+    }
+    // 造值触发的后台检查走真实 LLM 路径（测试环境不可用→跳过），等一拍清空
+    // 它们的尾巴，下面的并发段用注入 judge 精确控制。
+    await new Promise((r) => setTimeout(r, 60));
+    // 埋一条死记录（值已不在组里）：自愈读到它才会触发写回——丢行的真机
+    // 场景正是「死行 + 并发新活记录」混合，活记录全在时自愈不写回、无覆盖。
+    const ledgerSeed = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', 'conflicts.md');
+    fs.mkdirSync(path.dirname(ledgerSeed), { recursive: true });
+    fs.writeFileSync(ledgerSeed, [
+      '# 本体分组字段值冲突台账', '',
+      '### oc-dead0001',
+      `- 分组: ${gid}`,
+      '- 字段: 城市X',
+      '- 值A: 已删除的值一',
+      '- 值B: 已删除的值二',
+      `- 检出: ${new Date().toISOString()}`,
+      '',
+    ].join('\n'), 'utf8');
+
+    // 6 路记账与 3 次自愈读并发交错。judge 带差分延迟让记账段落进自愈读的
+    // 时间窗——旧实现（无串行队列）下 read→write 交错互相覆盖（真机曾观察
+    // 到「检测记账后、轮询窗口内被自愈写回抹掉」）；串行队列保证不丢。
+    const checks = [];
+    for (let i = 0; i < 6; i += 1) {
+      const delayedJudge: typeof JUDGE_CONFLICT = async (...args) => {
+        await new Promise((r) => setTimeout(r, i * 4));
+        return JUDGE_CONFLICT(...args);
+      };
+      checks.push(m.checkNewValueAgainst(UID, gid, `城市${i}`, `城西${i}`, [`城东${i}`], { judgeFn: delayedJudge }));
+    }
+    const heals = [0, 1, 2].map((k) => new Promise((r) => setTimeout(r, 3 * k + 1))
+      .then(() => m.listConflicts(UID, gid)));
+    await Promise.all([...checks, ...heals]);
+
+    const final = await m.listConflicts(UID, gid);
+    expect(final.length).toBe(6); // 一条不丢：串行队列保证每个事务读到最新
+  });
+
+  it('a hung judge resolves as unavailable via timeout instead of blocking forever', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const m = await loadModule();
+    const created = await groups.createGroup(UID, '超时回归组');
+    const gid = created.group!.group_id;
+    await groups.appendFieldValue(UID, gid, '居住地', '常住北京', '手动');
+
+    const hungJudge: typeof JUDGE_CONFLICT = () => new Promise(() => {}) as never;
+    const started = Date.now();
+    await m.checkNewValueAgainst(UID, gid, '居住地', '常住上海', ['常住北京'], {
+      judgeFn: hungJudge,
+      judgeTimeoutMs: 80,
+    });
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(2000); // 没悬挂：超时兜底返回
+    // 超时按 unavailable 处理 → 不记账（不制造假冲突）
+    expect((await m.listConflicts(UID, gid)).length).toBe(0);
   });
 });

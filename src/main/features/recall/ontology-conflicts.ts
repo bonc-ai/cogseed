@@ -156,7 +156,28 @@ async function llmJudgeMutuallyExclusive(
 export interface ConflictCheckOptions {
   /** Test seam（先例：semantic-review 的 buildRunnerFn）。 */
   judgeFn?: typeof llmJudgeMutuallyExclusive;
+  /** 判定超时上限（测试缝；默认 180s——真机实测模型队列 3~90s 波动）。 */
+  judgeTimeoutMs?: number;
 }
+
+/**
+ * 台账串行队列（per-uid）：记账（read→push→write）与自愈（read→heal→write）
+ * 都是读改写三步，并发交错时后写者会覆盖掉先写者刚落的记录——真机验证曾
+ * 观察到「检测记账后、长轮询窗口内被自愈写回抹掉」的丢行。单主进程内一条
+ * promise 链即可保证任意时刻每个用户只有一个台账事务在跑。
+ */
+const ledgerQueues = new Map<string, Promise<unknown>>();
+
+function withLedger<T>(uid: string, task: () => Promise<T> | T): Promise<T> {
+  const prev = ledgerQueues.get(uid) || Promise.resolve();
+  const next = prev.then(task, task);
+  ledgerQueues.set(uid, next.catch(() => {}));
+  return next;
+}
+
+/** 判定超时上限：模型队列忙时 runReflection 可能吊数分钟——超时按
+ *  unavailable 处理（跳过、不记账、不悬挂检测链）。 */
+export const CONFLICT_JUDGE_TIMEOUT_MS = 180_000;
 
 /**
  * 写值后的矛盾检查（fire-and-forget 调用，本函数自身也永不 throw）。
@@ -182,12 +203,18 @@ export async function checkNewValueAgainst(
       return;
     }
     const judge = opts.judgeFn ?? llmJudgeMutuallyExclusive;
+    const timeoutMs = opts.judgeTimeoutMs ?? CONFLICT_JUDGE_TIMEOUT_MS;
     for (const existing of others.slice(0, MAX_PAIRS_PER_CHECK)) {
       const existingVec = await embedForDedup(userId, existing);
       if (!existingVec) continue;
       if (cosineScore(newVec, existingVec) < CONFLICT_SEMANTIC_THRESHOLD) continue;
-      const verdict = await Promise.resolve(judge(userId, fieldName, existing, newValue))
-        .catch(() => 'unavailable' as const);
+      const verdict = await Promise.race([
+        Promise.resolve(judge(userId, fieldName, existing, newValue))
+          .catch(() => 'unavailable' as const),
+        new Promise<'unavailable'>((resolve) => {
+          setTimeout(() => resolve('unavailable'), timeoutMs).unref?.();
+        }),
+      ]);
       if (verdict !== 'conflict') continue;
       const record: OntologyConflictRecord = {
         conflict_id: `oc-${genId12()}`,
@@ -198,11 +225,13 @@ export async function checkNewValueAgainst(
         detected_at: nowIso(),
         status: 'open',
       };
-      const current = readConflicts(userId);
-      const key = dedupeKey(record);
-      if (current.some((r) => dedupeKey(r) === key)) continue; // 同值对不重复记账
-      current.push(record);
-      writeConflicts(userId, current);
+      await withLedger(userId, () => {
+        const current = readConflicts(userId);
+        const key = dedupeKey(record);
+        if (current.some((r) => dedupeKey(r) === key)) return; // 同值对不重复记账
+        current.push(record);
+        writeConflicts(userId, current);
+      });
       log.info('ontology field conflict recorded', { userId, groupId, field: fieldName, conflictId: record.conflict_id });
     }
   } catch (err) {
@@ -218,29 +247,32 @@ export async function listConflicts(
   userId: string,
   groupId?: string,
 ): Promise<OntologyConflictRecord[]> {
-  const all = readConflicts(userId);
-  if (!all.length) return [];
-  const live: OntologyConflictRecord[] = [];
-  let healed = 0;
-  for (const record of all) {
-    if (groupId && record.group_id !== groupId) continue;
-    let values: string[] = [];
-    try {
-      const content = await readGroupContent(userId, record.group_id);
-      values = content.content
-        ? (parseGroupContent(content.content).fields[record.field] || []).map((fv) => fv.value)
-        : [];
-    } catch {
-      values = [];
+  // 自愈的读改写与记账并发会互相覆盖（见 withLedger 注释）——整段进队列。
+  return withLedger(userId, async () => {
+    const all = readConflicts(userId);
+    if (!all.length) return [];
+    const live: OntologyConflictRecord[] = [];
+    let healed = 0;
+    for (const record of all) {
+      if (groupId && record.group_id !== groupId) continue;
+      let values: string[] = [];
+      try {
+        const content = await readGroupContent(userId, record.group_id);
+        values = content.content
+          ? (parseGroupContent(content.content).fields[record.field] || []).map((fv) => fv.value)
+          : [];
+      } catch {
+        values = [];
+      }
+      const stillThere = values.includes(record.value_a) && values.includes(record.value_b);
+      if (stillThere) live.push(record);
+      else healed += 1;
     }
-    const stillThere = values.includes(record.value_a) && values.includes(record.value_b);
-    if (stillThere) live.push(record);
-    else healed += 1;
-  }
-  if (healed > 0) {
-    const liveKeys = new Set(live.map(dedupeKey));
-    writeConflicts(userId, all.filter((r) => liveKeys.has(dedupeKey(r))));
-    log.info('conflict ledger self-healed', { userId, healed });
-  }
-  return live;
+    if (healed > 0) {
+      const liveKeys = new Set(live.map(dedupeKey));
+      writeConflicts(userId, all.filter((r) => liveKeys.has(dedupeKey(r))));
+      log.info('conflict ledger self-healed', { userId, healed });
+    }
+    return live;
+  });
 }
