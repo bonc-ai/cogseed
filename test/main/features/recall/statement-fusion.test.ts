@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diceOverlap, fuseStatements, overlapCoefficient } from '../../../../src/main/features/recall/statement-fusion';
+import { diceOverlap, fuseStatements, makeDisplayTitle, overlapCoefficient } from '../../../../src/main/features/recall/statement-fusion';
 
 // 融合生成器（查重金字塔 L1/L2 落点）：update 的正文从"覆盖"改为"合成"。
 // 纯函数测试，全部离线。
@@ -83,4 +83,18 @@ describe('fuseStatements', () => {
     expect(result.statement.length).toBe(4_000);
     expect(result.truncated).toBe(true);
   });
+
+describe('makeDisplayTitle', () => {
+  it('uses the first complete sentence as the title', () => {
+    expect(makeDisplayTitle('替用户改写其自有底稿类材料时，数字与事实必须零新增。但凡涉及口径升级，需要先确认。'))
+      .toBe('替用户改写其自有底稿类材料时，数字与事实必须零新增。');
+  });
+
+  it('truncates with an ellipsis only when a single sentence exceeds the cap', () => {
+    const long = '周'.repeat(100) + '。';
+    expect(makeDisplayTitle(long, 60)).toBe('周'.repeat(59) + '…');
+    expect(makeDisplayTitle(long, 60)).not.toContain('。');
+  });
+});
+
 });

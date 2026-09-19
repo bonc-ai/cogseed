@@ -76,6 +76,16 @@ function splitSentences(text: string): string[] {
     .filter(Boolean);
 }
 
+/** 展示标题：取首个完整句子（含句读），超长才截断并加省略号——禁止"正文
+ *  前 N 字裸截断"的残片模式（实测过 22 字半句标题）。 */
+export function makeDisplayTitle(statement: string, max = 60): string {
+  const sentences = splitSentences(statement);
+  const first = sentences[0] || String(statement || '').trim();
+  if (!first) return '';
+  if (first.length <= max) return first;
+  return `${first.slice(0, max - 1)}…`;
+}
+
 /** 融合：旧正文为主体，新内容按句级三档融入。旧正文为空时直接采用新内容。 */
 export function fuseStatements(oldStatement: string, incoming: string): StatementFusionResult {
   const oldSentences = splitSentences(oldStatement);
