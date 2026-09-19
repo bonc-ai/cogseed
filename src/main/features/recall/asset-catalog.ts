@@ -22,11 +22,13 @@ const TYPE_LABELS: Record<string, string> = {
   skill_method: '技能',
   personal: '偏好',
 };
+/** 成熟度显示两态（2026-09-22 刀三）：seed/bud=未验证、transfer+=已实证；
+ *  正式的档位命名（认知树映射层）后置统一再定，这里先用工作名。 */
 const MATURITY_LABELS: Record<string, string> = {
   seed: '未验证',
-  bud: '已确认',
-  transfer_validated: '已验证',
-  effectiveness_validated: '已验证有效',
+  bud: '未验证',
+  transfer_validated: '已实证',
+  effectiveness_validated: '已实证',
 };
 
 export function catalogOneLine(statement?: string, limit = 22): string {

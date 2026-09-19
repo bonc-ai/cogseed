@@ -97,9 +97,11 @@
   };
   const assetStatusChip = (asset) => {
     const [label, tone] = ASSET_STATUS[String(asset.status || 'active')] || [T('cognition.asset_status_unknown', '状态未知'), ''];
-    const maturity = asset.maturity === 'effectiveness_validated'
-      ? chip(T('cognition.maturity_validated', '已验证'), 'green')
-      : (asset.maturity === 'transfer_validated' ? chip(T('cognition.maturity_transferred', '已成功带入'), 'green') : '');
+    // 刀三（2026-09-22）：成熟度章收敛两态——transfer+ 统一「已实证」，未验证
+    // 不摆章；工作名待认知树映射层统一定名。
+    const maturity = ['transfer_validated', 'effectiveness_validated'].includes(String(asset.maturity || ''))
+      ? chip(T('cognition.maturity_validated', '已实证'), 'green')
+      : '';
     return chip(label, tone) + maturity + originChip(asset);
   };
   /** 「谁写的」（2026-09-22 清单 #10）：你确认的=无章（正常态不摆章）；

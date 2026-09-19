@@ -121,7 +121,7 @@ describe('recall search_ability_assets tool', () => {
     expect(catalog.content).toContain('规则');
     expect(catalog.content).toContain('space');
     expect(catalog.content).toMatch(/v\d/);
-    expect(catalog.content).toContain('已确认');   // bud 的短标签
+    expect(catalog.content).toContain('未验证');   // 刀三两态：bud 也显示未验证
     expect(catalog.content).toContain('没用过');
     expect(catalog.content).toContain('适用:正式评审与架构决策时');
     // 禁用场景不进目录（由服务端硬闸执行；读取与注入块里完整给出）。
