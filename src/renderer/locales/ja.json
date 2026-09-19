@@ -5748,5 +5748,7 @@
   "cognition.origin_model_written": "モデル記録",
   "cognition.origin_system_precipitated": "システム抽出",
   "cognition.asset_confirm_origin": "確定",
-  "cognition.asset_confirm_origin_done": "確定済み：ユーザー確認扱いにしました"
+  "cognition.asset_confirm_origin_done": "確定済み：ユーザー確認扱いにしました",
+  "cognition.candidate_fusion_note": "確定すると下の現行版とこの内容を融合して新バージョンになります（旧内容は残り、いつでも戻せます）。上書きではありません。",
+  "cognition.candidate_merged_into": "既存資産と似ています：確定するとその資産へ統合（融合して新バージョン）され、別条目にはなりません。"
 }

@@ -1201,7 +1201,10 @@
       const mismatch = usedVersion && usedVersion !== activeVersion
         ? `<div class="ca-warn">${esc(T('cognition.candidate_version_mismatch', '核对改进对象：任务当时使用的是 v{used}，该资产当前在用 v{active}——确认这次更新应作用在当前在用版上。', { used: usedVersion, active: activeVersion }))}</div>`
         : '';
-      return `${mismatch}<div class="ca-field"><span>${esc(T('cognition.candidate_current_version', '当前版本（v{n}）', { n: activeVersion }))}</span><p class="ca-note">${esc(target.statement || '')}</p></div>`;
+      // 融合语义说明（2026-09-22 刀二）：确认后新旧内容融合出新版本，旧版
+      // 保留可切回——不让用户误以为"新内容会覆盖旧内容"。
+      const fusionNote = `<div class="ca-note">${esc(T('cognition.candidate_fusion_note', '确认后会把这段内容与下面的当前版本融合成一个新版本（旧内容保留、可随时切回），不是覆盖。'))}</div>`;
+      return `${mismatch}${fusionNote}<div class="ca-field"><span>${esc(T('cognition.candidate_current_version', '当前版本（v{n}）', { n: activeVersion }))}</span><p class="ca-note">${esc(target.statement || '')}</p></div>`;
     })();
     const actionsHtml = `<div class="ca-actions ca-actions-right">
         ${(candidate.capabilities && candidate.capabilities.canPromote) ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
@@ -1210,6 +1213,7 @@
       </div>`;
     return `
       ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>` : ''}
+      ${candidate.mergedIntoAssetId ? `<div class="ca-note">${esc(T('cognition.candidate_merged_into', '这条与已有资产相似：确认后会并入那条资产（融合出新版本），不会另开一条。'))}</div>` : ''}
       ${reviewSignalBlock(candidate)}
       ${updateDiff}
       ${edit ? `

@@ -7759,5 +7759,7 @@
   "cognition.origin_model_written": "model-written",
   "cognition.origin_system_precipitated": "system-precipitated",
   "cognition.asset_confirm_origin": "Confirm",
-  "cognition.asset_confirm_origin_done": "Confirmed as user-verified"
+  "cognition.asset_confirm_origin_done": "Confirmed as user-verified",
+  "cognition.candidate_fusion_note": "Confirming fuses this content with the current version below into a new version (the old one stays and can be restored) — it does not overwrite.",
+  "cognition.candidate_merged_into": "This resembles an existing asset: confirming merges it into that asset (fused as a new version) instead of creating another one."
 }

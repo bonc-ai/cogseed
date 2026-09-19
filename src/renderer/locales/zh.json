@@ -7759,5 +7759,7 @@
   "cognition.origin_model_written": "模型记的",
   "cognition.origin_system_precipitated": "系统沉淀",
   "cognition.asset_confirm_origin": "转正",
-  "cognition.asset_confirm_origin_done": "已转正：标记为你确认的"
+  "cognition.asset_confirm_origin_done": "已转正：标记为你确认的",
+  "cognition.candidate_fusion_note": "确认后会把这段内容与下面的当前版本融合成一个新版本（旧内容保留、可随时切回），不是覆盖。",
+  "cognition.candidate_merged_into": "这条与已有资产相似：确认后会并入那条资产（融合出新版本），不会另开一条。"
 }
