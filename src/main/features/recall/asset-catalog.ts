@@ -55,6 +55,7 @@ export function formatCatalogEntry(
   asset: RecallAbilityAssetRecord,
   stat: AssetUsageStat | undefined,
   index: number,
+  relevant = false,
 ): string {
   const type = TYPE_LABELS[String(asset.type || '')] || String(asset.type || '?');
   const maturity = MATURITY_LABELS[String(asset.maturity || '')] || String(asset.maturity || '?');
@@ -67,7 +68,7 @@ export function formatCatalogEntry(
   ].join('·');
   const applies = (asset.applicableWhen || [])[0];
   const oneLine = catalogOneLine(asset.statement);
-  const head = `${index}. [asset:${asset.id}] ${catalogTruncate(String(asset.title || '(无标题)'), 14)}`;
+  const head = `${index}. ${relevant ? '★' : ''}[asset:${asset.id}] ${catalogTruncate(String(asset.title || '(无标题)'), 14)}`;
   return [
     oneLine ? `${head} — ${oneLine}` : head,
     ` ${meta}${applies ? `｜适用:${catalogTruncate(String(applies), 12)}` : ''}`,
@@ -75,12 +76,14 @@ export function formatCatalogEntry(
 }
 
 /** 目录正文（不含页眉页脚）：工具与提示词共用。 */
+/** 目录正文（不含页眉页脚）：工具与提示词共用。relevantIds＝当轮相关条（★ 标记）。 */
 export function formatCatalogEntries(
   assets: RecallAbilityAssetRecord[],
   stats: Map<string, AssetUsageStat>,
   startIndex = 1,
+  relevantIds?: ReadonlySet<string>,
 ): string[] {
-  return assets.map((asset, index) => formatCatalogEntry(asset, stats.get(asset.id), startIndex + index));
+  return assets.map((asset, index) => formatCatalogEntry(asset, stats.get(asset.id), startIndex + index, relevantIds?.has(asset.id) === true));
 }
 
 /** 每条的取用次数与最近时间（一次流水扫描）。消费方各自缓存（提示词侧 60 秒

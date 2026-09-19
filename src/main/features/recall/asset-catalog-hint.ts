@@ -70,7 +70,26 @@ async function recentAttachmentLine(userId: string, cid: string): Promise<string
   }
 }
 
-async function buildCatalogPrompt(userId: string, cid: string): Promise<{ count: number; text: string }> {
+/** 当轮相关度（2026-09-22 砍注入后的算法落点）：拿当轮任务文本与资产算
+ *  余弦，相关 ≥0.40 标 ★、相关分参与排序——只当参谋帮模型定位，不注入正文。
+ *  embedding 不可用回退纯使用次数排序（目录本身不受影响）。 */
+const CATALOG_RELEVANT_MARK = 0.40;
+
+async function relevanceScores(userId: string, taskText: string, assets: Array<{ id: string; statement: string; title: string }>): Promise<Map<string, number>> {
+  const scores = new Map<string, number>();
+  try {
+    const { embedForDedup, cosineScore } = await import('./similarity');
+    const query = await embedForDedup(userId, taskText);
+    if (!query) return scores;
+    for (const asset of assets) {
+      const vector = await embedForDedup(userId, String(asset.statement || asset.title || ''));
+      if (vector) scores.set(asset.id, cosineScore(query, vector));
+    }
+  } catch { /* 相关度是增强：拿不到就按使用次数排 */ }
+  return scores;
+}
+
+async function buildCatalogPrompt(userId: string, cid: string, taskText = ''): Promise<{ count: number; text: string }> {
   const { listAbilityAssets } = await import('./asset-service');
   const assets = await listAbilityAssets(userId);
   const active = assets.filter((asset) => asset.status === 'active');
@@ -82,24 +101,33 @@ async function buildCatalogPrompt(userId: string, cid: string): Promise<{ count:
     // 使用次数拿不到不影响目录本身。
   }
   const total = active.length;
-  // 大库（>30 条）也**给一段目录**：按"用得多 + 最近用过"取前 20 条内联，其余交给
-  // 工具。真机样本已经证明"只给一句提示"模型多半不会去查（0-1/3），所以在预算内
-  // 尽量让目录可见；超出部分用 offset 翻页拿。
-  const inline = total > INLINE_CATALOG_MAX_ENTRIES
-    ? [...active].sort((left, right) => {
-      const leftStat = stats.get(left.id);
-      const rightStat = stats.get(right.id);
-      const byCount = (rightStat?.count || 0) - (leftStat?.count || 0);
-      if (byCount !== 0) return byCount;
-      return String(rightStat?.lastAt || right.updatedAt || '').localeCompare(String(leftStat?.lastAt || left.updatedAt || ''));
-    }).slice(0, 20)
-    : active;
-  const lines = formatCatalogEntries(inline, stats);
+  // 当轮相关度（有任务文本才算）：★ 标记 + 排序加权（相关优先于使用次数）。
+  const relevance = taskText ? await relevanceScores(userId, taskText, active) : new Map<string, number>();
+  const relevantIds = new Set([...relevance.entries()].filter(([, score]) => score >= CATALOG_RELEVANT_MARK).map(([id]) => id));
+  const relevanceRank = (asset: typeof active[number]): number => (relevantIds.has(asset.id) ? 1 : 0);
+  const relevanceScore = (asset: typeof active[number]): number => (relevance.get(asset.id) || 0);
+  const usageRank = (left: typeof active[number], right: typeof active[number]): number => {
+    const byCount = (stats.get(right.id)?.count || 0) - (stats.get(left.id)?.count || 0);
+    if (byCount !== 0) return byCount;
+    return String(stats.get(right.id)?.lastAt || right.updatedAt || '').localeCompare(String(stats.get(left.id)?.lastAt || left.updatedAt || ''));
+  };
+  // 大库（>30 条）：相关条优先占位，余量按"用得多 + 最近用过"；目录可见性
+  // 优先于页码顺序（当轮相关的资产不能翻到第二页才被看见）。
+  const sorted = [...active].sort((left, right) => {
+    const byRelevanceClass = relevanceRank(right) - relevanceRank(left);
+    if (byRelevanceClass !== 0) return byRelevanceClass;
+    const byRelevanceScore = relevanceScore(right) - relevanceScore(left);
+    if (byRelevanceScore !== 0) return byRelevanceScore;
+    return usageRank(left, right);
+  });
+  const inline = total > INLINE_CATALOG_MAX_ENTRIES ? sorted.slice(0, 20) : sorted;
+  const lines = formatCatalogEntries(inline, stats, 1, relevantIds);
   const more = total - inline.length;
+  const marked = relevantIds.size;
   return {
     count: total,
     text: [
-      `Asset catalog (${total} reusable assets; one compact line each — pull the full text with`,
+      `Asset catalog (${total} reusable assets${marked ? `, ${marked} look relevant to this turn (★)` : ''}; one compact line each — pull the full text with`,
       'search_ability_assets + assetIds when one fits, and attach_assets_to_task to keep using it):',
       ...lines,
       ...(more > 0
@@ -109,14 +137,16 @@ async function buildCatalogPrompt(userId: string, cid: string): Promise<{ count:
   };
 }
 
-/** 目录文本（带 60 秒 TTL 缓存）；读不到或没有资产时返回空串。 */
-export async function assetCatalogForPrompt(userId: string, cid = '', now = Date.now()): Promise<string> {
-  if (cache && cache.userId === userId && cache.cid === cid && now - cache.at < CACHE_TTL_MS) return cache.text;
+/** 目录文本（带 60 秒 TTL 缓存）；读不到或没有资产时返回空串。
+ *  taskText 非空时按当轮相关度排序＋★标记，**不落缓存**（任务文本每轮变，
+ *  缓存住相关排序等于把上一轮的判断塞给下一轮）。 */
+export async function assetCatalogForPrompt(userId: string, cid = '', now = Date.now(), taskText = ''): Promise<string> {
+  if (!taskText && cache && cache.userId === userId && cache.cid === cid && now - cache.at < CACHE_TTL_MS) return cache.text;
   try {
-    const built = await buildCatalogPrompt(userId, cid);
+    const built = await buildCatalogPrompt(userId, cid, taskText);
     const reuse = await recentAttachmentLine(userId, cid);
     const text = [built.text, reuse].filter(Boolean).join('\n\n');
-    cache = { userId, cid, at: now, count: built.count, text };
+    if (!taskText) cache = { userId, cid, at: now, count: built.count, text };
     return text;
   } catch (error) {
     // 读不到就什么都不加（而不是加一句"0 条"——那会让模型以为用户没有资产）。

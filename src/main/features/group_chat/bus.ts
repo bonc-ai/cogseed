@@ -4887,10 +4887,11 @@ async function runActorTurnBody(
             // 生命周期读取失败不阻断回合——回退 automatic projection。
           }
         }
+        const taskText = String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000);
         const recallContext = await buildRecallTurnPromptContext(uid, {
           cid,
           taskRunId: item.turnId,
-          taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          taskText,
           agentId: actor.id,
           ...(turnProjectId ? { projectId: turnProjectId } : {}),
           ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
@@ -4950,7 +4951,9 @@ async function runActorTurnBody(
       // 只讲"目录存在且便宜"，挑哪几条仍归模型。
       try {
         const { assetCatalogForPrompt } = await import('../recall/asset-catalog-hint');
-        const catalogBlock = await assetCatalogForPrompt(uid, cid);
+        // 目录带当轮相关度（★标记+排序，2026-09-22 砍注入后的算法落点）：
+        // 复用上面 recallContext 同源的当轮任务文本。
+        const catalogBlock = await assetCatalogForPrompt(uid, cid, Date.now(), String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000));
         if (catalogBlock) systemPrompt = `${systemPrompt}\n\n${catalogBlock}`;
       } catch {
         // 目录块拿不到不影响回合。

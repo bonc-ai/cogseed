@@ -501,4 +501,21 @@ describe('recall search_ability_assets tool', () => {
     expect(catalog.content.length * 3).toBeLessThanOrEqual(14000);
     expect(fullText.content.length).toBeGreaterThan(catalog.content.length);
   });
+
+// 目录相关度标记（2026-09-22）：★ 标记 + 相关优先排序（在 hint 侧，工具目录
+// 模式共条目格式——此测试锁 formatCatalogEntry 的标记输出）。
+describe('catalog relevance mark', () => {
+  it('formatCatalogEntry marks relevant assets with a star', async () => {
+    const { formatCatalogEntry } = await import('../../../../src/main/features/recall/asset-catalog');
+    const asset = {
+      id: 'aa-rel-1', type: 'rule', title: '周报格式', statement: '周报三个板块。',
+      scope: 'report', maturity: 'bud', version: '1', status: 'active',
+    } as never;
+    const plain = formatCatalogEntry(asset, undefined, 1, false);
+    const marked = formatCatalogEntry(asset, undefined, 1, true);
+    expect(plain).not.toContain('★');
+    expect(marked).toContain('★[asset:aa-rel-1]');
+  });
+});
+
 });
