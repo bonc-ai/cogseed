@@ -3813,6 +3813,7 @@
   "cognition.tree_empty": "Ainda não há ativos formais",
   "cognition.tree_empty_hint": "Candidatos confirmados aparecem aqui; você ainda não tem ativos confirmados.",
   "cognition.tree_panel_title": "Minha árvore de cognição",
+  "personalOntology.confirmed": "Confirmado",
   "cognition.assets_back_to_tree": "Voltar à árvore de cognição",
   "cognition.tree_panel_caption": "Do solo à copa: registros → candidatos → ativos → validados",
   "cognition.tree_click_hint": "Clique em qualquer parte para abrir a lista correspondente",

@@ -150,7 +150,7 @@
   function _pocProfileSections() {
     const grouped = new Map(_pocOntologySections.map((section) => [section.id, []]));
     _pocProfile.entries.forEach((entry) => {
-      grouped.get(_pocClassifyProfileEntry(entry)).push(entry);
+      grouped.get(_pocClassifyProfileEntry(entry.text)).push(entry);
     });
     return _pocOntologySections
       .map((section) => ({ ...section, entries: grouped.get(section.id) || [] }))
@@ -200,16 +200,18 @@
       if (ts && now - ts < RECENT_MS) return 3;
       return asset && asset.lifecycleStatus === 'user_confirmed_unverified' ? 2 : 1;
     };
-    const confirmedPrefix = `[${_t('personalOntology.confirmed', '已确认')}] `;
-    const modelPrefix = `[${_t('cognition.origin_model_written', '模型记的')}] `;
+    // entries 存 { text, confirmed }：数据层保持裸文本（桥匹配、分节归组都用
+    // 原文），出身前缀只在显示层拼——前缀进了数据会破坏「已匹配字段」比对。
     _pocProfile = {
       entries: res.assets
         .filter((asset) => asset && asset.type === 'personal' && asset.status === 'active')
         .sort((a, b) => tierOf(b) - tierOf(a)
           || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-        .map((asset) => (asset.lifecycleStatus === 'user_confirmed_unverified' ? confirmedPrefix : modelPrefix)
-          + String(asset.statement || '').trim())
-        .filter(Boolean),
+        .map((asset) => ({
+          text: String(asset.statement || '').trim(),
+          confirmed: asset.lifecycleStatus === 'user_confirmed_unverified',
+        }))
+        .filter((e) => e.text),
       loaded: true,
       loadError: '',
     };
@@ -322,10 +324,19 @@
   // A role template is a narrower projection than the general personal
   // profile. Keep confirmed statements visible while routing is unavailable
   // or ambiguous, but never pretend they belong to a template field.
+  /** 显示层出身前缀（数据层裸文本，见 _pocLoadProfile 注释）。 */
+  function _pocProfileEntryLabel(entry) {
+    const prefix = entry && entry.confirmed
+      ? `[${_t('personalOntology.confirmed', '已确认')}] `
+      : `[${_t('cognition.origin_model_written', '模型记的')}] `;
+    return prefix + String(entry && entry.text ? entry.text : '');
+  }
+
   function _pocRenderTemplateProfileBridge(ed) {
     if (!ed || !ed.loaded || ed.loadError || !_pocProfile.entries.length) return '';
     const content = String(ed.content || '');
-    const pending = _pocProfile.entries.filter((entry) => !content.includes(entry));
+    // 比对用裸文本：出身前缀是显示层的装饰，不参与「是否已匹配字段」判定。
+    const pending = _pocProfile.entries.filter((entry) => !content.includes(entry.text));
     if (!pending.length) return '';
     return `<section class="personal-onto-template-profile-bridge" aria-label="${escapeHtml(_t('personalOntology.template_profile_bridge_title', '会话沉淀'))}">
       <div class="personal-onto-template-profile-bridge-head">
@@ -338,7 +349,7 @@
       <div class="personal-onto-template-profile-bridge-list">
         ${pending.map((entry) => `<div class="personal-onto-template-profile-bridge-entry">
           <span class="personal-onto-profile-entry-icon">${_icon('file-text', 'ui-icon')}</span>
-          <span>${escapeHtml(entry)}</span>
+          <span>${escapeHtml(_pocProfileEntryLabel(entry))}</span>
         </div>`).join('')}
       </div>
     </section>`;
@@ -464,7 +475,7 @@
           <div class="personal-onto-profile-list">
             ${section.entries.map((entry) => `<div class="personal-onto-profile-entry">
               <span class="personal-onto-profile-entry-icon">${_icon('file-text', 'ui-icon')}</span>
-              <span class="personal-onto-profile-entry-text">${escapeHtml(entry)}</span>
+              <span class="personal-onto-profile-entry-text">${escapeHtml(_pocProfileEntryLabel(entry))}</span>
             </div>`).join('')}
           </div>
         </section>`).join('')}
