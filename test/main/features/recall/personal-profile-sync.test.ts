@@ -92,10 +92,14 @@ describe('Recall personal profile projection', () => {
     const originalAssets = JSON.parse(JSON.stringify(assets));
 
     const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => assets,
       routeAsset,
     });
     const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => assets,
       routeAsset,
     });
@@ -139,11 +143,15 @@ describe('Recall personal profile projection', () => {
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
 
     const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       listCatalog: async () => [],
       routeAsset,
     });
     const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       listCatalog: async () => [],
       routeAsset,
@@ -178,11 +186,15 @@ describe('Recall personal profile projection', () => {
       });
 
     const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       listCatalog: async () => [],
       writeProfileEntry,
     });
     const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       listCatalog: async () => [],
       writeProfileEntry,
@@ -199,6 +211,8 @@ describe('Recall personal profile projection', () => {
     const personal = asset('aa-personal-catalog-retry', 'personal', '我偏好先看结论。');
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       listCatalog: async () => { throw new Error('template catalog offline'); },
     });
@@ -227,6 +241,8 @@ describe('Recall personal profile projection', () => {
     ];
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => assets,
       routeAsset,
     });
@@ -253,6 +269,8 @@ describe('Recall personal profile projection', () => {
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [linked],
       routeAsset,
     });
@@ -281,6 +299,8 @@ describe('Recall personal profile projection', () => {
     });
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [automatic, system],
       listCatalog: async () => [],
     });
@@ -358,6 +378,8 @@ describe('Recall personal profile projection', () => {
     const personal = asset('aa-personal-b', 'personal', '硕士');
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset: async () => ({ action: 'field', group_title: '学习背景', field_name: '教育阶段', confidence: 'high' }),
     });
@@ -376,6 +398,8 @@ describe('Recall personal profile projection', () => {
     const personal = asset('aa-personal-c', 'personal', '我今天状态不错。');
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset: async () => ({ action: 'flow' }),
     });
@@ -402,6 +426,8 @@ describe('Recall personal profile projection', () => {
     });
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset,
     });
@@ -423,6 +449,8 @@ describe('Recall personal profile projection', () => {
     const personal = asset('aa-personal-deleted-field', 'personal', '硕士阶段。');
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset: async () => {
         expect((await templates.removeFieldToRef(UID, ref, '教育阶段')).ok).toBe(true);
@@ -464,10 +492,14 @@ describe('Recall personal profile projection', () => {
     }));
 
     const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [initial],
       routeAsset,
     });
     const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [changed],
       routeAsset,
     });
@@ -492,10 +524,14 @@ describe('Recall personal profile projection', () => {
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
 
     const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset,
     });
     const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset,
     });
@@ -519,10 +555,14 @@ describe('Recall personal profile projection', () => {
       });
 
     const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset,
     });
     const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [personal],
       routeAsset,
     });
@@ -551,6 +591,8 @@ describe('Recall personal profile projection', () => {
     const healthy = asset('aa-personal-healthy', 'personal', '研究方向是机器学习。');
 
     await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [damaged],
       routeAsset: async () => ({ action: 'flow' }),
     });
@@ -564,6 +606,8 @@ describe('Recall personal profile projection', () => {
     fs.writeFileSync(path.join(receiptDir, receiptName), '{not valid json', 'utf8');
 
     const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      // 2026-09-22 退役：默认写入已 no-op（背景块改读资产库），单测注入 legacy 锁旧单元行为。
+      writeProfileEntry: (await import('../../../../src/main/features/memory')).ensurePersonalProfileEntry,
       listAssets: async () => [damaged, healthy],
       routeAsset: async () => ({
         action: 'field',
@@ -605,14 +649,11 @@ describe('personal profile projection is driven from the main process', () => {
 
     const promoted = await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
 
-    expect(promoted.profileProjection).toMatchObject({
-      eligible: 1,
-      profileWritten: 1,
-      profileFailed: [],
-    });
+    // 2026-09-22 记忆退役：画像投影桥默认 no-op——USER.md 不再被 promote 投影
+    // （背景块改读资产库），资产本体在库里即全部事实。
+    expect(promoted.profileProjection).toMatchObject({ eligible: 1 });
     const memory = await import('../../../../src/main/features/memory');
-    expect(memory.listEntries(UID, 'user').entries).toEqual([promoted.asset.statement]);
-    expect(memory.findPersonalProfileEntry(UID, promoted.asset.id)?.text).toBe(promoted.asset.statement);
+    expect(memory.listEntries(UID, 'user').entries).toEqual([]);
   });
 
   it('schedules a projection after a personal asset is promoted', async () => {

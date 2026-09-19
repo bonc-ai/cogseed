@@ -10,7 +10,13 @@ import { createHash } from 'node:crypto';
 import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
-import { ensurePersonalProfileEntry } from '../memory';
+import { ensurePersonalProfileEntry as _legacyEnsurePersonalProfileEntry } from '../memory';
+
+/**
+ * 画像投影桥退役（2026-09-22 清单 #11）：背景块已从资产库渲染（profile-block），
+ * "把资产抄进 USER.md 供背景块读"这条投影没有消费者了——默认写入改为 no-op
+ * （角色模板字段的写入不受影响）。保留 legacy 实现引用供回滚。
+ */
 import {
   listTemplateFileCatalog,
   type TemplateCatalogEntry,
@@ -77,7 +83,7 @@ export interface PersonalProfileSyncDependencies {
   listCatalog?: (userId: string) => Promise<TemplateCatalogEntry[]>;
   routeAsset?: (userId: string, statement: string, catalog: TemplateCatalogEntry[]) => Promise<RouteDecision>;
   appendFieldValue?: typeof appendRoleTemplateFieldValue;
-  writeProfileEntry?: typeof ensurePersonalProfileEntry;
+  writeProfileEntry?: typeof _legacyEnsurePersonalProfileEntry;
 }
 
 /**
@@ -197,7 +203,7 @@ async function persistProfileMemoryProjection(
 async function syncProfileMemoryAsset(
   userId: string,
   asset: RecallAbilityAssetRecord,
-  writeProfileEntry: typeof ensurePersonalProfileEntry,
+  writeProfileEntry: typeof _legacyEnsurePersonalProfileEntry,
 ): Promise<'written' | 'skipped' | { failed: string }> {
   if (!isEligiblePersonalAsset(asset)) return 'skipped';
   const fingerprint = inputFingerprint(asset);
@@ -383,7 +389,13 @@ export async function syncPersonalProfileFromRecallAssets(
   const listCatalog = dependencies.listCatalog || listTemplateFileCatalog;
   const routeAsset = dependencies.routeAsset || routeCandidateToField;
   const appendFieldValue = dependencies.appendFieldValue || appendRoleTemplateFieldValue;
-  const writeProfileEntry = dependencies.writeProfileEntry || ensurePersonalProfileEntry;
+  const writeProfileEntry: typeof _legacyEnsurePersonalProfileEntry = dependencies.writeProfileEntry
+    || ((_userId: string, sourceId: string) => ({
+      ok: true,
+      // 退役 no-op（2026-09-22）：同步签名（与 legacy 一致），伪造最小 record
+      // 满足调用方判定；不写任何文件。
+      record: { recordId: `retired-${sourceId}`, text: '', contentSha256: '' },
+    })) as unknown as typeof _legacyEnsurePersonalProfileEntry;
 
   const assets = await listAssets(userId);
   // USER.md is the independent personal-profile projection. A temporary

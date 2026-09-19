@@ -135,10 +135,11 @@ function formatReadEntry(asset: RecallAbilityAssetRecord, version: string): stri
   ].filter(Boolean).join('\n');
 }
 
-/** 画像记忆 → 检索池条目（不参与 status/spaceId 过滤——没有这些治理态）。 */
-function profilePoolEntries(userId: string): PoolEntry[] {
+/** 画像记忆 → 检索池条目（不参与 status/spaceId 过滤——没有这些治理态）。
+ *  2026-09-22 起画像来源为资产库（loadOntologyAssets 已 async）。 */
+async function profilePoolEntries(userId: string): Promise<PoolEntry[]> {
   try {
-    return loadOntologyAssets(userId).map((asset) => ({
+    return (await loadOntologyAssets(userId)).map((asset) => ({
       id: asset.id,
       title: asset.title,
       statement: asset.statement,
@@ -334,7 +335,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
         version: String(asset.activeVersion || asset.version || '1'),
         ...(asset.spaceId ? { spaceId: asset.spaceId } : {}),
       }));
-    const profileEntries = profilePoolEntries(userId);
+    const profileEntries = await profilePoolEntries(userId);
     if (!spaceIdFilter) pool = [...pool, ...profileEntries];
     if (scopeFilter) pool = pool.filter((asset) => asset.scope === scopeFilter);
     if (spaceIdFilter) pool = pool.filter((asset) => asset.spaceId === spaceIdFilter);
