@@ -6,6 +6,10 @@ let accessPassword = '';
 // current view: 'new-chat' | 'conversation' | 'agents'
 let currentView = 'new-chat';
 let currentCid = null;
+// 最近进入过的会话（2026-09-19 用户主动使用）：切到认知资产等面板时
+// currentCid 会被清空，但「用到当前对话」需要知道用户刚在哪个会话——
+// 独立记录、不清空，null=本会话还没进过任何对话。
+let lastConversationCid = null;
 let conversations = [];
 let _pendingTaskNotificationNavigation = null;
 

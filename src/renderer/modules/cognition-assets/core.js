@@ -731,6 +731,20 @@
     async exitFamilyRename() {
       router.go({ name: 'overview', familyRename: '' }, { replace: true });
     },
+    /** 用户主动使用（2026-09-19）：把这条资产钉到最近会话——confirmed 投影
+     *  + 投影卡，下一轮起注入命中，卡上可撤销。lastConversationCid 由
+     *  state.js 记录（切面板不清空）；还没进过任何对话时给出口径提示。 */
+    async attachAssetToConversation(assetId) {
+      const cid = (typeof lastConversationCid !== 'undefined' && lastConversationCid) ? String(lastConversationCid) : '';
+      if (!cid) {
+        toast(T('cognition.asset_use_in_chat_no_chat', '还没有可用的对话——先在任意会话里说一句话，再回来钉它。'));
+        return;
+      }
+      const result = await api.call('recall.projections.attachToConversation', { assetId, conversationId: cid });
+      if (result && result.ok) {
+        toast(T('cognition.asset_use_in_chat_done', '已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。'));
+      }
+    },
     /** 转正（2026-09-22 清单 #10）：把「模型记的/系统沉淀的」标成你确认过的。
      *  单向、只动出身标记，不 bump 版本链（内容没变就不产空版本）。 */
     async confirmAssetOrigin(assetId) {

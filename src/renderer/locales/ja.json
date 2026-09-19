@@ -5760,5 +5760,8 @@
   "cognition.asset_status.deleted": "削除済み",
   "cognition.asset_status.purged": "完全削除済み",
   "cognition.asset_status.paused": "一時停止中",
-  "cognition.asset_status.revoked": "取り消し済み"
+  "cognition.asset_status.revoked": "取り消し済み",
+  "cognition.asset_use_in_chat": "この会話で使う",
+  "cognition.asset_use_in_chat_no_chat": "利用可能な会話がありません——まずどこかの会話で一言発話してから改めて指定してください。",
+  "cognition.asset_use_in_chat_done": "現在の会話に固定しました：次ターンから有効、会話内のカードからいつでも取り消せます。"
 }

@@ -7771,5 +7771,8 @@
   "cognition.asset_status.deleted": "Deleted",
   "cognition.asset_status.purged": "Purged",
   "cognition.asset_status.paused": "Paused",
-  "cognition.asset_status.revoked": "Revoked"
+  "cognition.asset_status.revoked": "Revoked",
+  "cognition.asset_use_in_chat": "Use in current chat",
+  "cognition.asset_use_in_chat_no_chat": "No conversation yet — say something in any chat first, then pin it here.",
+  "cognition.asset_use_in_chat_done": "Pinned to the current chat: effective next turn, revocable from the card in the chat."
 }

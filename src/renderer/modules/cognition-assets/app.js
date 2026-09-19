@@ -179,6 +179,7 @@
           }
           case 'asset-edit-save': await A.editAsset(id); break;
           case 'asset-confirm': await A.confirmAssetOrigin(id); break;
+          case 'asset-use-in-chat': await A.attachAssetToConversation(id); break;
           case 'family-rename': await A.enterFamilyRename(id); break;
           case 'family-rename-save': await A.renameFamily(id); break;
           case 'family-rename-cancel': await A.exitFamilyRename(); break;

@@ -821,7 +821,7 @@
           <h3>${esc(asset.title || asset.id)}</h3>
           ${switchable ? `<div class="ca-sub">${esc(switchHint)}</div>` : ''}
         </div>
-        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${originChip(asset)}${originChip(asset) && ['active', 'paused'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_confirm_origin', '转正'), 'asset-confirm', { id: asset.id, small: true, primary: true }) : ''}</div>
+        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${originChip(asset)}${originChip(asset) && ['active', 'paused'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_confirm_origin', '转正'), 'asset-confirm', { id: asset.id, small: true, primary: true }) : ''}${['active'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_use_in_chat', '用到当前对话'), 'asset-use-in-chat', { id: asset.id, small: true }) : ''}</div>
       </div>
       ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}

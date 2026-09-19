@@ -5760,5 +5760,8 @@
   "cognition.asset_status.deleted": "Excluído",
   "cognition.asset_status.purged": "Expurgado",
   "cognition.asset_status.paused": "Pausado",
-  "cognition.asset_status.revoked": "Revogado"
+  "cognition.asset_status.revoked": "Revogado",
+  "cognition.asset_use_in_chat": "Usar na conversa atual",
+  "cognition.asset_use_in_chat_no_chat": "Ainda não há conversa — diga algo em qualquer conversa primeiro e depois fixe aqui.",
+  "cognition.asset_use_in_chat_done": "Fixado na conversa atual: vale do próximo turno, revogável pelo card na conversa."
 }

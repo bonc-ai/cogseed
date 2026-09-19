@@ -7771,5 +7771,8 @@
   "cognition.asset_status.deleted": "已删除",
   "cognition.asset_status.purged": "已清除",
   "cognition.asset_status.paused": "已暂停",
-  "cognition.asset_status.revoked": "已撤回"
+  "cognition.asset_status.revoked": "已撤回",
+  "cognition.asset_use_in_chat": "用到当前对话",
+  "cognition.asset_use_in_chat_no_chat": "还没有可用的对话——先在任意会话里说一句话，再回来钉它。",
+  "cognition.asset_use_in_chat_done": "已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。"
 }

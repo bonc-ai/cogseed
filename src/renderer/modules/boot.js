@@ -555,6 +555,7 @@ function setView(view, cid, opts = {}) {
   }
   if (view === 'conversation' && cid) {
     currentCid = cid;
+    lastConversationCid = cid;
     if (typeof onEnterConversationView === 'function') onEnterConversationView();
     if (opts.openRunContext && window.ConversationInfo?.openAndSetTab) {
       window.ConversationInfo.openAndSetTab(opts.openRunContext);

@@ -134,6 +134,10 @@ export interface ProjectionInput {
   /** 来源会话 id（2026-09-18）：模型自选投影按会话去重（同一会话只维护一条），
    *  使用记录/时间线也靠它把事件关联回会话名。 */
   conversationId?: string;
+  /** 显式资产（2026-09-19 用户主动使用）：用户点「用到当前对话」钉住的资产
+   *  ——绕过语义选择（用户已经挑好了），但仍过状态硬门（必须 active）并
+   *  钉住当前在用版。与 taskText 语义选互斥，显式优先。 */
+  explicitAssetIds?: string[];
   /** Auto-confirm on creation (workspace_policy line): the projection is
    *  written as confirmed immediately, skipping the user confirmation card. */
   confirm?: boolean;
@@ -607,6 +611,28 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   };
 }
 
+/** 显式资产视图（2026-09-19 用户主动使用）：绕过语义选择，逐条校验存在且
+ *  active、钉住当前在用版——用户指定即是意图，语义门不该再筛一遍。 */
+async function buildExplicitAssetView(userId: string, assetIds: string[]) {
+  const ids = [...new Set(assetIds)].slice(0, 12);
+  if (!ids.length) throw new Error('explicit projection requires at least one asset');
+  const { readAbilityAsset } = await import('./asset-service');
+  const assets = [];
+  for (const id of ids) {
+    const asset = await readAbilityAsset(userId, id);
+    if (asset.status !== 'active') throw new Error(`explicit projection asset is not active: ${id}`);
+    assets.push(asset);
+  }
+  return {
+    assetIds: assets.map((asset) => asset.id),
+    assetVersions: Object.fromEntries(assets.map((asset) => [asset.id, String(asset.activeVersion || asset.version || '1')])),
+    sourceRefs: assets.flatMap((asset) => (asset.evidenceRefs || []).slice(0, 3).map((ref) => ({ kind: ref.kind, id: ref.id }))),
+    omittedRefs: [] as OmittedAssetRef[],
+    assetMatches: assets.map((asset) => ({ assetId: asset.id, matchScore: 1, matchMethod: 'manual' as const })),
+    degraded: false,
+  };
+}
+
 export async function previewContextProjection(userId: string, input: ProjectionInput, options: ProjectionSemanticOptions = {}): Promise<ContextProjectionRecord> {
   const taskRunId = normalizeTerm(input.taskRunId, 'task run id', 160);
   const purpose = normalizeTerm(input.purpose, 'purpose', 120);
@@ -616,7 +642,9 @@ export async function previewContextProjection(userId: string, input: Projection
   const authorization: ProjectionAuthorization = input.authorization || 'user_confirmed';
   if (authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required' && authorization !== 'model_selected') throw new Error('invalid projection authorization');
   if (input.expiresAt !== undefined && Number.isNaN(Date.parse(input.expiresAt))) throw new Error('invalid projection expiry');
-  const view = await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
+  const view = input.explicitAssetIds?.length
+    ? await buildExplicitAssetView(userId, input.explicitAssetIds)
+    : await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
   const now = projectionNowIso();
   const confirmedAt = input.confirm ? now : undefined;
   const record: ContextProjectionRecord = {
