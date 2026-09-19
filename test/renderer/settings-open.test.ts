@@ -82,6 +82,8 @@ function loadRendererNavigation() {
 
   const loadRendererFeature = vi.fn(async () => undefined);
   const loadSettings = vi.fn(async () => undefined);
+  const initConnections = vi.fn();
+  const activateConnectionsTab = vi.fn();
   const noop = () => undefined;
   const window = {
     addEventListener: noop,
@@ -102,6 +104,8 @@ function loadRendererNavigation() {
     createLogger: () => ({ info: noop, warn: noop, error: noop, debug: noop }),
     loadRendererFeature,
     loadSettings,
+    initConnections,
+    activateConnectionsTab,
     renderMessageQueue: noop,
     _bindGlobalSearch: noop,
     handleNewChatSubmit: noop,
@@ -117,7 +121,14 @@ function loadRendererNavigation() {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8');
     vm.runInContext(source, context, { filename: file });
   }
-  return { context, elements, loadRendererFeature, loadSettings };
+  return {
+    context,
+    elements,
+    loadRendererFeature,
+    loadSettings,
+    initConnections,
+    activateConnectionsTab,
+  };
 }
 
 describe('settings sidebar navigation (merged footer panel)', () => {
@@ -142,5 +153,24 @@ describe('settings sidebar navigation (merged footer panel)', () => {
     // 离开设置视图时取消高亮。
     context.window.setView('new-chat');
     expect(setChipSettingsActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it('routes the legacy Agent view to Connections without opening Settings', async () => {
+    const {
+      context,
+      elements,
+      loadSettings,
+      initConnections,
+      activateConnectionsTab,
+    } = loadRendererNavigation();
+
+    context.window.setView('agents');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(elements.get('panel-connections')!.classList.contains('active')).toBe(true);
+    expect(elements.get('panel-settings')!.classList.contains('active')).toBe(false);
+    expect(initConnections).toHaveBeenCalledOnce();
+    expect(activateConnectionsTab).toHaveBeenCalledWith('agents');
+    expect(loadSettings).not.toHaveBeenCalled();
   });
 });
