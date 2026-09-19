@@ -41,6 +41,7 @@ import {
   removeEntryTransactional,
   listEntries,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
+  type MemoryOpResult,
   type MemoryScope,
 } from '../../features/memory';
 import { listActiveCognitionSourceIds } from '../../features/cognition';
@@ -640,8 +641,28 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       }
       return result;
     };
+    // 即时模式直投（2026-09-19 方案甲·清单 #3）：user/shared 档的写入不再落
+    // 记忆文件，直投第二段入库（查重金字塔＋挂族＋正规回执），产出「模型记
+    // 的·未验证」资产，入库即可用。agent/space 档保持记忆文件路径——它们的
+    // 退役与搬迁在阶段 D 统一处理。改道档位的教学信号桥随之退役（写入本身
+    // 就产候选，不再另发 teaching 信号）。直投失败（注入拒收/内部错误）回退
+    // 记忆文件路径——工具不能因为新通道故障而对模型失声。
+    const ingestImmediate = async (tier: 'user' | 'shared', content: string): Promise<MemoryOpResult> => {
+      try {
+        const { ingestImmediateKnowledge } = await import('../../features/recall/candidate-service');
+        await ingestImmediateKnowledge(uid, {
+          text: content,
+          ...(params.sessionId ? { conversationId: String(params.sessionId) } : {}),
+        });
+        return { ok: true, entries: [], usage: { current: 0, limit: 0 } };
+      } catch {
+        return addEntryTransactional(uid, toScope(tier), content);
+      }
+    };
     const memoryHandler: MemoryToolHandler = {
-      add: async (tier, content) => recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
+      add: async (tier, content) => (tier === 'user' || tier === 'shared')
+        ? ingestImmediate(tier, content)
+        : recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
       replace: async (tier, oldText, content) => recordTeaching(tier, content, await replaceEntryTransactional(uid, toScope(tier), oldText, content)),
       remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
     };
