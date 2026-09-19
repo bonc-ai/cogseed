@@ -92,6 +92,16 @@ export const SUGGEST_MIN_SIMILARITY = DEFAULT_MIN_SIMILARITY;
 const MAX_WINDOW_TOKENS = 3;
 /** 长度守卫：归一化串长度差超过此值不做模糊比较（长度差是错形的强下界）。 */
 const MAX_KEY_LENGTH_DELTA = 2;
+/**
+ * 多词形态的**逐词下限**：多词长串做整串相似度会被"共同前缀"抬分
+ * （`personal ontology` 与 `personal college` 整串 0.86，但逐词 `ontology`↔`college`
+ * 只有 ~0.13）。因此对"词数相同且都 >1"的形态，额外要求**每个词**都够近。
+ * 0.6 的依据：`ontology`↔`oncology` = 0.75（真实错形，必须放行）；
+ * `code`↔`car` = 0.50（词数相同但首词差太远，挡掉）。
+ * 注：词数**不同**时不适用本规则（`code seat` 与 `coseat`、`car seat` 都属真实变体，
+ * 不能因为切词不同就否决——见 metrics 脚本里的逐条上下文核对）。
+ */
+const PER_WORD_FLOOR = 0.6;
 
 /** ASCII 音形骨架：辅音归并 + 元音占位。 */
 const PHONETIC_CONSONANTS: Record<string, string> = {
@@ -146,6 +156,8 @@ export interface RecallCandidate {
   entryRef: string;
   /** 文本里实际出现的形态（原样，未改写）。 */
   wrong: string;
+  /** 命中词条的 `wrong` 形态（诊断用：`coseat` 命中的是词条 `code seat`）。 */
+  matchedWrong: string;
   /** 词条已确认的规范写法。 */
   correct: string;
   channel: RecallChannel;
@@ -259,12 +271,30 @@ export function similarity(a: string, b: string): number {
   return 1 - editDistance(a, b) / max;
 }
 
+/**
+ * 多词形态的逐词否决：词数相同且都 >1 时，任一词离得太远即整体否决。
+ * 返回 true = 通过（或本规则不适用）。
+ */
+function perWordOk(winWords: string[], entWords: string[]): boolean {
+  if (winWords.length < 2 || winWords.length !== entWords.length) return true;
+  for (let i = 0; i < winWords.length; i += 1) {
+    const a = winWords[i];
+    const b = entWords[i];
+    if (!a || !b) return true;
+    const sim = Math.max(similarity(a, b), similarity(phoneticKey(a), phoneticKey(b)));
+    if (sim < PER_WORD_FLOOR) return false;
+  }
+  return true;
+}
+
 // ── 词表索引 ────────────────────────────────────────────────────────────
 
 interface IndexedEntry {
   entry: GlossaryEntry;
   key: string;
   phonetic: string;
+  /** 逐词归一化键（多词形态的逐词下限判定用）。 */
+  words: string[];
   firstKey: string;
   firstPhonetic: string;
   boundary: GlossaryEntry['boundary'];
@@ -347,6 +377,7 @@ export function recallCandidates(
     maxTokens = Math.min(MAX_WINDOW_TOKENS, Math.max(maxTokens, Math.max(1, countTokens(entry.wrong))));
     index.push({
       entry, key, phonetic,
+      words: (entry.wrong.match(/[0-9A-Za-z]+/g) ?? []).map((w) => normalizeKey(w)),
       firstKey: key[0] ?? '',
       firstPhonetic: phonetic[0] ?? '',
       boundary: entry.boundary,
@@ -396,6 +427,7 @@ export function recallCandidates(
       }
       windowsScanned += 1;
 
+      const windowWords = surface.match(/[0-9A-Za-z]+/g)?.map((w) => normalizeKey(w)) ?? [];
       const ctx = { window, options, domainKeys, trapKeys, foldedText, protectedRanges };
       const candidates: RecallCandidate[] = [];
 
@@ -423,6 +455,7 @@ export function recallCandidates(
             seen.add(ie.entry.id);
             if (initialStrict && ie.firstKey !== key[0] && ie.firstPhonetic !== firstSkel) continue;
             if (containsOtherWord(key, ie.key)) { noteDenied('contains_other_word'); continue; }
+            if (!perWordOk(windowWords, ie.words)) { noteDenied('per_word_floor'); continue; }
             let channel: RecallChannel = 'edit';
             let sim = similarity(key, ie.key);
             if (skel.length > 1 && ie.phonetic.length > 1) {
@@ -554,6 +587,15 @@ function build(
     return null;
   }
 
+  // 逐字符已是规范写法 → 纯 no-op，不产出候选。
+  // 注意判据必须是**精确相等（含大小写）**，不能用归一化键：`K-STAR` 与 `KSTAR`
+  // 归一化后相等，但前者是需要纠正的写法；`openclaw` 与 `OpenClaw` 差大小写，
+  // 那是**有效的写法归一**（人工清理版就做了这一步），不该被挡掉。
+  if (surface === entry.correct) {
+    noteDenied('already_correct');
+    return null;
+  }
+
   const inDomain = ctx.domainKeys.has(normalizeKey(entry.correct));
   const isTrap = ctx.trapKeys.has(normalizeKey(surface));
   const disposition: RecallCandidate['disposition'] =
@@ -570,6 +612,7 @@ function build(
   return {
     entryRef: entry.id,
     wrong: surface,
+    matchedWrong: entry.wrong,
     correct: entry.correct,
     channel,
     similarity: sim,
