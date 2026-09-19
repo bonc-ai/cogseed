@@ -60,6 +60,11 @@ function userProfilePath(): string {
   return path.join(tmpDir, UID, 'cloud', 'memory', 'USER.md');
 }
 
+/** 模板记忆独立文件（2026-09-22 搬迁后 role_template 条目的落点）。 */
+function roleTemplateMemoryPath(templateId = 'student'): string {
+  return path.join(tmpDir, UID, 'cloud', 'memory', 'role-templates', `${templateId}.md`);
+}
+
 function sharedMemoryPath(): string {
   return path.join(tmpDir, UID, 'cloud', 'memory', 'MEMORY.md');
 }
@@ -202,14 +207,13 @@ describe('personal_ontology_candidates › confirmCandidate writes to real memor
     const res = await poc.confirmCandidate(UID, 'cand-role-1', { toGroupIds: [groupId] });
     expect(res.ok).toBe(true);
 
-    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
-    // 正文零污染：文本照常出现
-    expect(userMd).toContain('喜欢阅读研究方法论文献');
-    // 元数据头带 role_template 来源标记
-    expect(userMd).toMatch(/cogseed-agent-memory:v1.*role_template.*student/);
-    // 不带标签的裸条目不出现（这条是带标签写入的）
-    expect(userMd).toContain('"kind":"role_template"');
-    expect(userMd).toContain('"sourceId":"student"');
+    // 2026-09-22 搬迁：role_template 条目写模板独立文件（不再进 USER.md）。
+    const templateMd = fs.readFileSync(roleTemplateMemoryPath('student'), 'utf8');
+    expect(templateMd).toContain('喜欢阅读研究方法论文献');
+    expect(templateMd).toMatch(/cogseed-agent-memory:v1.*role_template.*student/);
+    expect(templateMd).toContain('"kind":"role_template"');
+    expect(templateMd).toContain('"sourceId":"student"');
+    expect(fs.existsSync(userProfilePath())).toBe(false);
   });
 
   it('confirming without a role destination writes a plain (untagged) global-memory entry', async () => {
@@ -673,9 +677,9 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     // 用户显式选角色（纯 group_id，无分节）→ LLM 2b 分支收窄到分节
     const res = await poc.confirmCandidate(UID, 'cand-llm-5', { toGroupIds: [row.group_id] }, { routeWithLlm: true });
     expect(res.ok).toBe(true);
-    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
-    expect(userMd).toContain('role_template');
-    expect(userMd).toContain('"sourceId":"student"');
+    const templateMd = fs.readFileSync(roleTemplateMemoryPath('student'), 'utf8');
+    expect(templateMd).toContain('role_template');
+    expect(templateMd).toContain('"sourceId":"student"');
     expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
   });
 });

@@ -861,18 +861,19 @@ describe('memory › space tier', () => {
 // ── Role-template tagged entries: corruption resilience & metadata retention ──
 
 describe('memory › role-template tags survive edits', () => {
-  it('A-1: hand-edited entry (sha mismatch) degrades to readable legacy instead of being silently deleted', async () => {
+  it('A-1（搬后语义）：手改的模板条目在同模板后续写入时不被静默删除', async () => {
     const mem = await loadMemory();
     await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '喜欢大白话解释');
-    const file = path.join(process.env.COGSEED_WORKSPACE_ROOT!, 'u1', 'cloud', 'memory', 'USER.md');
+    const file = path.join(process.env.COGSEED_WORKSPACE_ROOT!, 'u1', 'cloud', 'memory', 'role-templates', 'student.md');
     let raw = fs.readFileSync(file, 'utf8');
     raw = raw.replace('喜欢大白话解释', '喜欢大白话解释（改）'); // 模拟用户手改
     fs.writeFileSync(file, raw);
-    await mem.addEntry('u1', 'user', '新条目xyz');
+    // 搬迁后（2026-09-22）：普通写入（user 档）走 USER.md，与模板文件互不
+    // 干扰；同模板再写一条时，手改条目（sha 不匹配）降级保留、不静默删除。
+    await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '第二条模板条目');
     const after = fs.readFileSync(file, 'utf8');
-    // 手改条目不能被下一次普通写入静默删除
     expect(after).toContain('喜欢大白话解释（改）');
-    expect(after).toContain('新条目xyz');
+    expect(after).toContain('第二条模板条目');
   });
 
   it('A-2: ordinary user-scope writes keep existing role_template tags', async () => {
@@ -892,12 +893,14 @@ describe('memory › role-template tags survive edits', () => {
     expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(1);
   });
 
-  it('A-2: remove one role\'s entry keeps the other role\'s tags intact', async () => {
+  it('A-2（搬后语义）：普通 remove 不碰模板文件，各模板计数互不影响', async () => {
     const mem = await loadMemory();
     await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '会主动核查工具执行过程');
     await mem.addRoleTemplateMemoryEntry('u1', 'user', 'scholar', '喜欢阅读文献');
+    // 搬迁后 removeEntry 只作用于记忆文件（user/memory 档），模板独立文件
+    // 不受普通删除影响——这是搬出来的隔离收益。
     await mem.removeEntry('u1', 'user', '会主动核查');
-    expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(0);
+    expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(1);
     expect(mem.countRoleTemplateMemoryEntries('u1', 'scholar')).toBe(1);
   });
 });
