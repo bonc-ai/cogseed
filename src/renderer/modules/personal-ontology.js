@@ -1546,6 +1546,11 @@
     _pocTemplatesLoadError = '';
     _pocProfile = { entries: [], loaded: false, loadError: '' };
     _pocGroupEditor = null;
+    // 分组与候选池一并重读（2026-09-20 分组迁入）：否则外部造组（如脚本/
+    // 其他入口）后刷新不重读列表，nav 永远显示旧集合。
+    _pocGroups = { list: [], loaded: false, loadError: '' };
+    _pocCandidatesLoaded = false;
+    _pocGroupDetail = null;
     return renderPersonalOntology();
   }
 
