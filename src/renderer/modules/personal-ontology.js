@@ -77,9 +77,6 @@
   let _pocLibraryReturnFocus = null;
   let _pocLibrarySelectedId = ''; // 模板库弹窗当前选中的模板（左列表右详情布局）
   const _pocActionLocks = new Set();
-  let _pocRecallSyncAttempted = false;
-  let _pocRecallSyncPromise = null;
-  let _pocRecallSyncWarningSignature = '';
   // 右栏展示会话沉淀出的基础画像和角色模板；旧候选审核仍由 Recall 正式资产页面负责。
   let _pocSelected = { kind: 'profile', id: 'user-profile' };
   // 模板文件编辑器 { groupId, templateId, sections, content, view:'form'|'raw' }
@@ -182,9 +179,13 @@
     return true;
   }
 
+  // 画像源（2026-09-19 记忆退役）：读资产库 personal 正式资产，与对话注入
+  // （profile-block.ts）同源同口径——旧 USER.md 档已清空，读它只会得到假空态。
+  // 排序对齐 profile-block 三档：72h 内新沉淀 > 用户确认过 > 其余；出身前缀
+  // 让「谁说的」在页面上可见。
   async function _pocLoadProfile() {
-    const res = await _pocInvoke('memory.list', { target: 'user' });
-    if (!res || res.ok === false || !Array.isArray(res.entries)) {
+    const res = await _pocInvoke('recall.assets.list', {});
+    if (!res || res.ok === false || !Array.isArray(res.assets)) {
       _pocProfile = {
         entries: [],
         loaded: true,
@@ -192,9 +193,22 @@
       };
       return false;
     }
+    const RECENT_MS = 72 * 60 * 60 * 1000;
+    const now = Date.now();
+    const tierOf = (asset) => {
+      const ts = asset && asset.updatedAt ? Date.parse(asset.updatedAt) : 0;
+      if (ts && now - ts < RECENT_MS) return 3;
+      return asset && asset.lifecycleStatus === 'user_confirmed_unverified' ? 2 : 1;
+    };
+    const confirmedPrefix = `[${_t('personalOntology.confirmed', '已确认')}] `;
+    const modelPrefix = `[${_t('cognition.origin_model_written', '模型记的')}] `;
     _pocProfile = {
-      entries: res.entries
-        .map((entry) => String(entry || '').trim())
+      entries: res.assets
+        .filter((asset) => asset && asset.type === 'personal' && asset.status === 'active')
+        .sort((a, b) => tierOf(b) - tierOf(a)
+          || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+        .map((asset) => (asset.lifecycleStatus === 'user_confirmed_unverified' ? confirmedPrefix : modelPrefix)
+          + String(asset.statement || '').trim())
         .filter(Boolean),
       loaded: true,
       loadError: '',
@@ -233,49 +247,6 @@
       const message = vars ? _tv(key, vars, fallback) : _t(key, fallback);
       if (typeof uiToast === 'function') uiToast(message, { variant: variant || 'success' });
     } catch (_) {}
-  }
-
-  // “关于我”只投影正式 PersonalOntology 资产。主进程会过滤 Rule / Template /
-  // Skill，且仅高置信字段匹配才会追加，不覆盖用户已填的值。
-  function _pocWarnRecallProfileSync(result) {
-    const failedCount = Array.isArray(result && result.failed) ? result.failed.length : 0;
-    const error = result instanceof Error
-      ? result.message
-      : (result && result.error) || '';
-    const signature = `${error || 'profile-sync-failed'}:${failedCount}`;
-    if (_pocRecallSyncWarningSignature === signature) return;
-    _pocRecallSyncWarningSignature = signature;
-    const message = _t(
-      'personalOntology.profile_sync_warning',
-      '个人画像自动更新未完成，稍后可重试。',
-    );
-    try {
-      if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
-      else console.warn('[personal-ontology]', message, error);
-    } catch (_) {}
-  }
-
-  function _pocSyncRecallProfileInBackground() {
-    if (_pocRecallSyncAttempted || _pocRecallSyncPromise) return;
-    _pocRecallSyncAttempted = true;
-    _pocRecallSyncPromise = _pocInvoke('personalOntology.profile.syncRecall', {})
-      .then(async (res) => {
-        const hasFailures = Array.isArray(res && res.failed) && res.failed.length > 0;
-        if (!res || res.ok === false || hasFailures) _pocWarnRecallProfileSync(res);
-        else _pocRecallSyncWarningSignature = '';
-        if (Number(res && res.written) > 0 || Number(res && res.profileWritten) > 0) {
-          _pocTemplatesLoaded = false;
-          _pocProfile = { entries: [], loaded: false, loadError: '' };
-          _pocGroupEditor = null;
-          await renderPersonalOntology();
-        }
-      })
-      .catch((err) => {
-        _pocWarnRecallProfileSync(err);
-      })
-      .finally(() => {
-        _pocRecallSyncPromise = null;
-      });
   }
 
   // 模板文件分节解析（渲染层简易版，格式与主进程 parseTemplateContent 一致）：
@@ -581,7 +552,6 @@
     const installed = _pocTemplates.find((t) => t.installed && t.template_id === templateId);
     if (installed) _pocSelected = { kind: 'template', id: installed.group_id };
     _pocGroupEditor = null;
-    _pocRecallSyncAttempted = false;
     renderPersonalOntology();
   }
 
@@ -1100,7 +1070,6 @@
         _pocRenderNav();
         _pocBindNav();
         _pocRenderMain();
-        _pocSyncRecallProfileInBackground();
         return;
       }
       let selected = installed.find((t) => t.group_id === _pocSelected.id);
@@ -1120,7 +1089,6 @@
       _pocRenderNav();
       _pocBindNav();
       _pocRenderMain();
-      _pocSyncRecallProfileInBackground();
     } catch (err) {
       console.error('[personal-ontology] render failed', err);
       bodyEl.innerHTML = '<div class="personal-onto-empty">' + _t('personalOntology.load_error', '加载失败') + ': ' + escapeHtml((err && err.message) || String(err)) + '</div>';
@@ -1135,7 +1103,6 @@
     _pocTemplatesLoadError = '';
     _pocProfile = { entries: [], loaded: false, loadError: '' };
     _pocGroupEditor = null;
-    _pocRecallSyncAttempted = false;
     return renderPersonalOntology();
   }
 

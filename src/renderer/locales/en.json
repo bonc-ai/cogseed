@@ -4089,6 +4089,7 @@
   "cognition.tree_empty": "No formal assets yet",
   "cognition.tree_empty_hint": "Confirmed candidates appear here; you have no confirmed assets yet.",
   "cognition.tree_panel_title": "My cognition tree",
+  "cognition.assets_back_to_tree": "Back to cognition tree",
   "cognition.tree_panel_caption": "From soil to crown: records → candidates → assets → validated",
   "cognition.tree_click_hint": "Click any part to open its list",
   "cognition.tree_soil_label": "Soil · {s} sources · {c} captures",

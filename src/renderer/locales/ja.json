@@ -3813,6 +3813,7 @@
   "cognition.tree_empty": "まだ正式な資産がありません",
   "cognition.tree_empty_hint": "候補が正式資産として確認されるとここに表示されます。まだ確認済みの資産はありません。",
   "cognition.tree_panel_title": "私の認知ツリー",
+  "cognition.assets_back_to_tree": "認知ツリーに戻る",
   "cognition.tree_panel_caption": "土壌から樹冠へ：記録 → 候補 → 正式資産 → 検証済み",
   "cognition.tree_click_hint": "各部分をクリックすると対応する一覧を開きます",
   "cognition.tree_soil_label": "土壌 · ソース {s} · 取り込み {c}",

@@ -4092,6 +4092,7 @@
   "cognition.tree_empty": "还没有正式资产",
   "cognition.tree_empty_hint": "候选被确认为正式资产后会出现在这里；当前还没有已确认的资产。",
   "cognition.tree_panel_title": "我的认知树",
+  "cognition.assets_back_to_tree": "返回认知树",
   "cognition.tree_panel_caption": "从土壤到树冠：记录 → 候选 → 正式资产 → 已验证",
   "cognition.tree_click_hint": "点击任意部位进入对应清单",
   "cognition.tree_soil_label": "土壤 · 来源 {s} · 采集 {c}",
