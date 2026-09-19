@@ -84,6 +84,7 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
+import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -3732,6 +3733,35 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.profile.syncRecall': async (_payload, ctx) => {
     return { ok: true, ...(await recallProfileSync.schedulePersonalProfileSync(ctx.userId)) };
+  },
+  // 冲突台账（2026-09-20 本体界面）：读取自带自愈——值已被用户删除的
+  // 冲突行顺手清除，返回的每一条都仍然成立。
+  'personalOntology.conflicts.list': async ({ groupId } = {}, ctx) => {
+    const { listConflicts } = await import('../features/recall/ontology-conflicts');
+    const conflicts = await listConflicts(ctx.userId, typeof groupId === 'string' && groupId ? groupId : undefined);
+    return { ok: true, conflicts };
+  },
+  // ── 本体候选池（2026-09-20 首次暴露）：此前只有写入方（转写桥/onboarding/
+  // 资产回流），读取与确认零暴露零 UI——回流闭环的确认端在这里补齐。 ──
+  'personalOntology.candidates.list': async (_payload, ctx) => {
+    const data = await personalOntologyCandidates.listCandidates(ctx.userId);
+    return { ok: true, candidates: data.candidate_updates || [] };
+  },
+  'personalOntology.candidates.confirm': async ({ candidateId, dest } = {}, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.confirmCandidate(
+      ctx.userId,
+      candidateId,
+      dest && typeof dest === 'object' ? dest : {},
+    );
+  },
+  'personalOntology.candidates.reject': async ({ candidateId, reason } = {}, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.rejectCandidate(
+      ctx.userId,
+      candidateId,
+      typeof reason === 'string' ? reason : undefined,
+    );
   },
   'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
     if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');

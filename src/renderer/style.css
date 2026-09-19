@@ -24589,6 +24589,149 @@ body:has(#panel-settings.active) .main-top-actions {
   border-top: 1px solid var(--personal-onto-border, #e2e8f0);
 }
 
+/* ─── 本体分组子页（2026-09-20 自记忆页迁入，结构化编辑）─── */
+
+.personal-onto-backflow-badge {
+  color: #a5601a;
+  font-weight: 600;
+}
+
+.personal-onto-group-new-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  font-size: 13.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.personal-onto-group-new-btn:hover { border-color: #94a3b8; color: #334155; }
+
+.personal-onto-group-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.personal-onto-group-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.personal-onto-group-actions { display: flex; gap: 6px; }
+.personal-onto-group-action {
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #475569;
+  font-size: 13px;
+  cursor: pointer;
+}
+.personal-onto-group-action:hover { background: #f8fafc; }
+.personal-onto-group-action.is-danger { color: #b03024; border-color: #eac3be; }
+.personal-onto-group-action.is-ghost { border-color: transparent; color: #94a3b8; }
+
+.personal-onto-field-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.personal-onto-field-block {
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.personal-onto-field-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  margin-bottom: 7px;
+  color: #1a1a2e;
+}
+.personal-onto-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+.personal-onto-value-row.is-conflicted {
+  background: #fdecea;
+  border: 1px solid #f2b8b2;
+}
+.personal-onto-value-text { color: #1a1a2e; }
+.personal-onto-value-meta {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.personal-onto-value-remove {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 2px;
+}
+.personal-onto-value-remove:hover { color: #b03024; }
+.personal-onto-value-empty { font-size: 13.5px; padding: 4px 8px; }
+.personal-onto-value-add {
+  margin-top: 7px;
+  border: none;
+  background: transparent;
+  color: #2a5db0;
+  font-size: 13.5px;
+  cursor: pointer;
+  padding: 3px 8px;
+  text-align: left;
+}
+.personal-onto-value-add:hover { text-decoration: underline; }
+
+.personal-onto-flow-zone { margin-top: 4px; }
+.personal-onto-flow-row {
+  padding: 6px 8px;
+  border-bottom: 1px dashed #e2e8f0;
+  font-size: 14px;
+  color: #475569;
+}
+
+.personal-onto-group-note-entry { display: flex; gap: 8px; margin-top: 6px; }
+.personal-onto-note-input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.personal-onto-backflow-zone {
+  border: 1.5px dashed #e0b25e;
+  background: #fffdf6;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.personal-onto-backflow-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+.personal-onto-backflow-text { flex: 1; color: #1a1a2e; min-width: 180px; }
+.personal-onto-backflow-actions { display: flex; gap: 6px; }
+
+
 /* ─── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）─── */
 /* 布局镜像 AI 团队页（agents）：固定顶栏 + chips 条 + 独立滚动卡片网格 */
 

@@ -1838,4 +1838,7 @@
     if (main && restoreScroll) main.scrollTop = restoreScroll;
   }
   NS.render = render;
+  // 共享渲染件（2026-09-20 本体界面重构）：个人本体页复用资产页同一套
+  // 章/行形态，避免两处各画一套 chip。只读闭包，无状态。
+  NS.ui = { chip, assetStatusChip, originChip, plainRow, catalogRow };
 })();

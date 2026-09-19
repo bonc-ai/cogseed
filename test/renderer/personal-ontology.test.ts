@@ -129,8 +129,13 @@ describe('personal ontology renderer integration', () => {
     expect(ontology).toContain("_pocInvoke('personalOntology.groups.read'");
     expect(ontology).toContain("_pocGroupAction('personalOntology.groups.write'");
     expect(ontology).toContain("_pocGroupAction('personalOntology.groups.fields.append'");
-    expect(ontology).not.toContain('personalOntology.candidates.');
-    expect(ontology).not.toContain("'personalOntology.groups.create'");
+    // 2026-09-20 本体分组迁入 + 回流确认首次暴露：groups.create（建组）与
+    // personalOntology.candidates.*（本体候选池确认端）成为本页正式通道。
+    // 旧约束（候选 UI 不得回本体页）随分组功能落地而过时——那条约束防的是
+    // 旧的 recall 候选审核 UI 复活，不是防回流确认。
+    expect(ontology).toContain("_pocInvoke('personalOntology.groups.create'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.candidates.confirm'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.conflicts.list'");
     expect(ontology).not.toContain("_pocInvoke('memory.add'");
     expect(ontology).not.toContain("_pocInvoke('memory.replace'");
     expect(ontology).not.toContain('renderDestinationPanel');
@@ -404,6 +409,91 @@ describe('personal ontology renderer integration', () => {
     expect(ontology).toContain("personalOntology.field_value_added");
     expect(ontology).toContain("personalOntology.field_value_updated");
     expect(ontology).toContain("personalOntology.field_value_removed");
+  });
+
+  it('renders the ontology-groups subpage with structured fields, as-of chips, conflict marks and backflow zone', async () => {
+    const invoke = vi.fn(async (channel: string, payload?: any) => {
+      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'recall.assets.list') return { ok: true, assets: [] };
+      if (channel === 'personalOntology.groups.list') {
+        return {
+          ok: true,
+          groups: [{ group_id: 'grp-9', title: '基本情况', created_at: '', updated_at: '', rel_path: 'grp-9.md' }],
+        };
+      }
+      if (channel === 'personalOntology.candidates.list') {
+        return {
+          ok: true,
+          candidates: [{
+            candidate_id: 'asset-backflow-aa-1',
+            kind: 'preference',
+            memory_scope: 'user',
+            summary: '偏好表格旁附通俗说明',
+            memory_text: '偏好表格旁附通俗说明。',
+          }],
+        };
+      }
+      if (channel === 'personalOntology.groups.fields.list' && payload && payload.groupId === 'grp-9') {
+        return {
+          ok: true,
+          fields: [
+            { name: '居住地', values: [{ value: '常住北京', source: '手动' }, { value: '常住上海', source: '智能', project: 'p1' }] },
+            { name: '就读状态', values: [{ value: '目前大四', source: '手动', asOf: '2025-01' }] },
+          ],
+        };
+      }
+      if (channel === 'personalOntology.groups.read') {
+        return { ok: true, content: '# 基本情况\n\n## 字段区\n\n### 居住地\n\n- 常住北京 [手动]\n\n## 流水区\n\n§ 2026-09 追加了某条内容\n' };
+      }
+      if (channel === 'personalOntology.conflicts.list') {
+        return {
+          ok: true,
+          conflicts: [{
+            conflict_id: 'oc-x', group_id: 'grp-9', field: '居住地',
+            value_a: '常住北京', value_b: '常住上海', detected_at: '', status: 'open',
+          }],
+        };
+      }
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+    // 分组行 mock 必须在首次渲染前就位（_pocBindNav 在渲染时对当时的
+    // querySelectorAll 结果绑定监听）。
+    const nav = elements.get('personal-onto-nav') as any;
+    const groupRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'group' : name === 'data-poc-id' ? 'grp-9' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    nav.querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [groupRow] : [];
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    // 子导航出现分组区 + 回流角标
+    const navHtml = elements.get('personal-onto-nav')?.innerHTML || '';
+    expect(navHtml).toContain('本体分组');
+    expect(navHtml).toContain('基本情况');
+    expect(navHtml).toContain('回流 1');
+
+    const click = groupRow.listeners.get('click');
+    expect(click).toBeTypeOf('function');
+    await click({ stopPropagation() {} });
+    await settleBackgroundWork();
+
+    const body = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(body).toContain('personal-onto-field-block');
+    expect(body).toContain('常住北京');
+    expect(body).toContain('常住上海');
+    expect(body).toContain('data-poc-group-op="remove-value"'); // 结构化删值入口
+    expect(body).toContain('截至 2025-01');          // as-of 时间锚
+    expect(body).toContain('可能过时');               // 超龄提醒（>12 个月）
+    expect(body).toContain('is-conflicted');         // 冲突红框
+    expect(body).toContain('与同字段另一条值矛盾');   // 冲突章
+    expect(body).toContain('待确认回流');             // 回流确认区
+    expect(body).toContain('偏好表格旁附通俗说明。');
+    expect(body).toContain('2026-09 追加了某条内容'); // 流水区
+    expect(body).toContain('写入本组');               // 回流确认按钮
   });
 
   it('retires the legacy profile-sync bridge entirely: no calls, no warnings', async () => {
