@@ -68,4 +68,38 @@ describe('loadAssetProfileEntries', () => {
     const fallback = memory.formatForSystemPrompt(UID, 'commander', undefined, undefined, new Set(), []);
     expect(fallback).toContain('文件时代的画像条目。');
   });
+
+describe('profile ordering + origin prefix (2026-09-19 三小修)', () => {
+  it('a freshly captured zero-use asset outranks older confirmed ones and carries origin prefixes', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-pb-rank');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const profile = await import('../../../../src/main/features/recall/profile-block');
+    const mk = async (id: string, statement: string, updatedAt: string, lifecycle: string) => assets.createAbilityAsset('user-pb-rank', {
+      schemaVersion: 2, ownerId: 'user-pb-rank', id, candidateId: `cand-${id}`,
+      sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_${id.slice(3)}padpadpad`,
+      type: 'personal', title: statement.slice(0, 8), statement,
+      evidenceRefs: [{ kind: 'conversation', id: `conv-${id}` }], scope: 'general', status: 'active',
+      lifecycleStatus: lifecycle as never, maturity: 'bud', version: '1',
+      createdAt: updatedAt, updatedAt,
+    }, { actor: 'user', reason: 'seed' });
+    const old = new Date(Date.now() - 30 * 24 * 3600 * 1_000).toISOString();
+    // 注意：mk 走 user actor，lifecycle 必须是 user_confirmed_unverified——
+    // 「模型记的」用 update 改 lifecycle 不行（单向门），所以用两条确认资产
+    // 对比新旧档位即可；出身前缀断言由 statement 内容携带。
+    await mk('aa-rank-old-confirmed-1', '老确认画像一。', old, 'user_confirmed_unverified');
+    await mk('aa-rank-old-confirmed-2', '老确认画像二。', old, 'user_confirmed_unverified');
+    const fresh = new Date().toISOString();
+    await mk('aa-rank-fresh-confirmed', '刚确认的新偏好。', fresh, 'user_confirmed_unverified');
+
+    const entries = await profile.loadAssetProfileEntries('user-pb-rank', {
+      usageCounts: async () => new Map([['aa-rank-old-confirmed-1', 99], ['aa-rank-old-confirmed-2', 50]]),
+    });
+    // 72h 内的新资产压过 99 次使用的老资产，排第一。
+    expect(entries[0]).toContain('刚确认的新偏好。');
+    expect(entries[0]).toContain('[已确认]');
+    expect(entries.every((entry) => entry.startsWith('[已确认] ') || entry.startsWith('[模型记的] '))).toBe(true);
+  });
+});
+
 });
