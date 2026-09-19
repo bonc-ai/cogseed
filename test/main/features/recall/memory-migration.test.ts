@@ -28,7 +28,7 @@ async function loaded() {
   // files 注入直接控制迁移源文件。
   const userFile = path.join(tmpDir, 'USER.md');
   const sharedFile = path.join(tmpDir, 'MEMORY.md');
-  const run = (opts: { dryRun?: boolean } = {}) => migration.migrateLegacyMemoryToAssets('user-mig', { ...opts, files: { user: userFile, shared: sharedFile } });
+  const run = (uid: string, opts: { dryRun?: boolean } = {}) => migration.migrateLegacyMemoryToAssets(uid, { ...opts, files: { user: userFile, shared: sharedFile } });
   return { userFile, sharedFile, run, migration };
 }
 
@@ -37,7 +37,7 @@ describe('migrateLegacyMemoryToAssets', () => {
     const { userFile, run } = await loaded();
     fs.mkdirSync(path.dirname(userFile), { recursive: true });
     fs.writeFileSync(userFile, '第一条画像。\n§\n第二条画像。', 'utf8');
-    const report = await run({ dryRun: true });
+    const report = await run('user-mig', { dryRun: true });
     expect(report.scannedUser).toBe(2);
     expect(report.migrated).toBe(0);
     expect(fs.readFileSync(userFile, 'utf8')).toContain('第一条画像。');
@@ -51,7 +51,7 @@ describe('migrateLegacyMemoryToAssets', () => {
     fs.writeFileSync(userFile, '用户是开发者。', 'utf8');
     fs.writeFileSync(sharedFile, '接口变更必须同步文档。', 'utf8');
 
-    const report = await run();
+    const report = await run('user-mig2');
     expect(report.migrated).toBe(2);
     expect(report.failed).toBe(0);
     expect(fs.readFileSync(userFile, 'utf8')).toBe('');
@@ -74,8 +74,8 @@ describe('migrateLegacyMemoryToAssets', () => {
     const { userFile, run } = await loaded();
     fs.mkdirSync(path.dirname(userFile), { recursive: true });
     fs.writeFileSync(userFile, '唯一一条。', 'utf8');
-    await run();
-    const again = await run();
+    await run('user-mig3');
+    const again = await run('user-mig3');
     expect(again.scannedUser).toBe(0);
     expect(again.migrated).toBe(0);
   });
