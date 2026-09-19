@@ -330,12 +330,23 @@
   // A role template is a narrower projection than the general personal
   // profile. Keep confirmed statements visible while routing is unavailable
   // or ambiguous, but never pretend they belong to a template field.
-  /** 显示层出身前缀（数据层裸文本，见 _pocLoadProfile 注释）。 */
-  function _pocProfileEntryLabel(entry) {
-    const prefix = entry && entry.confirmed
+  /** 显示层出身章（数据层裸文本，见 _pocLoadProfile 注释）。资产页渲染件
+   *  可用时用同款 chip（视觉与资产明细一致）；vm 测试等未加载 cognition
+   *  assets 的环境回退纯文本前缀。 */
+  function _pocProfileEntryHtml(entry) {
+    const text = escapeHtml(String(entry && entry.text ? entry.text : ''));
+    const confirmed = !!(entry && entry.confirmed);
+    const ns = window.CogAssets && window.CogAssets.ui;
+    if (ns && typeof ns.chip === 'function') {
+      const chip = confirmed
+        ? ns.chip(_t('personalOntology.confirmed', '已确认'), 'green')
+        : ns.chip(_t('cognition.origin_model_written', '模型记的'), '');
+      return `${chip} ${text}`;
+    }
+    const prefix = confirmed
       ? `[${_t('personalOntology.confirmed', '已确认')}] `
       : `[${_t('cognition.origin_model_written', '模型记的')}] `;
-    return prefix + String(entry && entry.text ? entry.text : '');
+    return escapeHtml(prefix) + text;
   }
 
   function _pocRenderTemplateProfileBridge(ed) {
@@ -355,7 +366,7 @@
       <div class="personal-onto-template-profile-bridge-list">
         ${pending.map((entry) => `<div class="personal-onto-template-profile-bridge-entry">
           <span class="personal-onto-profile-entry-icon">${_icon('file-text', 'ui-icon')}</span>
-          <span>${escapeHtml(_pocProfileEntryLabel(entry))}</span>
+          <span>${_pocProfileEntryHtml(entry)}</span>
         </div>`).join('')}
       </div>
     </section>`;
@@ -481,7 +492,7 @@
           <div class="personal-onto-profile-list">
             ${section.entries.map((entry) => `<div class="personal-onto-profile-entry">
               <span class="personal-onto-profile-entry-icon">${_icon('file-text', 'ui-icon')}</span>
-              <span class="personal-onto-profile-entry-text">${escapeHtml(_pocProfileEntryLabel(entry))}</span>
+              <span class="personal-onto-profile-entry-text">${_pocProfileEntryHtml(entry)}</span>
             </div>`).join('')}
           </div>
         </section>`).join('')}
@@ -831,6 +842,10 @@
       </div>
       ${groupRows || `<div class="personal-onto-nav-empty muted">${escapeHtml(_t('personalOntology.groups_empty', '还没有分组'))}</div>`}
       <button type="button" class="personal-onto-group-new-btn" data-poc-nav="new-group">＋ ${escapeHtml(_t('personalOntology.group_new', '新建分组'))}</button>
+      <div class="personal-onto-group-io">
+        <button type="button" class="personal-onto-group-io-btn" data-poc-nav="memory-export">${escapeHtml(_t('personalOntology.memory_export', '导出记忆'))}</button>
+        <button type="button" class="personal-onto-group-io-btn" data-poc-nav="memory-import">${escapeHtml(_t('personalOntology.memory_import', '导入记忆'))}</button>
+      </div>
     </div>`;
     const profileNav = `<div class="personal-onto-nav-section personal-onto-profile-nav-section">
       <div class="personal-onto-nav-section-head">
@@ -1292,6 +1307,15 @@
         else if (action === 'new-group') {
           e.stopPropagation();
           _pocCreateGroupPrompt();
+        }
+        else if (action === 'memory-export' || action === 'memory-import') {
+          e.stopPropagation();
+          // 记忆页退役（2026-09-20）：导出/导入功能保留，工具实现在 memory.js
+          // （_memOpenExport/_memOpenImport），经 window.MemoryTools 暴露复用。
+          const tools = window.MemoryTools || {};
+          const fn = action === 'memory-export' ? tools.openExport : tools.openImport;
+          if (typeof fn === 'function') fn();
+          else _pocToast('personalOntology.op_failed', _t('personalOntology.io_unavailable', '导出/导入工具未就绪'), 'error');
         }
         else if (action === 'template') { _pocOpenGroup(id); }
         else if (action === 'template-library') {

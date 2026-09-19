@@ -942,16 +942,9 @@ function _memInitSettingsEntry() {
   if (card && card.dataset.bound !== '1') {
     card.dataset.bound = '1';
     card.addEventListener('click', () => {
-      if (typeof setView === 'function') setView('memory');
+      // 记忆页退役（2026-09-20）：入口改跳认知资产（个人画像/本体分组的新家）。
+      if (typeof setView === 'function') setView('recall');
     });
-  }
-  // Fill the entry-card description (with live count) on first paint.
-  _memRefreshEntryCount();
-
-  const tabBtn = document.querySelector('[data-settings-tab="data"]');
-  if (tabBtn && tabBtn.dataset.memoryBound !== '1') {
-    tabBtn.dataset.memoryBound = '1';
-    tabBtn.addEventListener('click', _memRefreshEntryCount);
   }
 }
 
@@ -963,25 +956,9 @@ if (document.readyState === 'loading') {
   _memInitSettingsEntry();
 }
 
-// Re-render the page + close any open modal on language switch so dynamic copy
-// follows the active language (static data-i18n is handled by applyDomI18n).
-window.addEventListener('i18n-change', () => {
-  _memCloseModal();
-  const panel = document.getElementById('panel-memory');
-  if (panel && panel.classList.contains('active')) renderMemoryPage();
-  // Refresh the entry-card count regardless (it lives in the settings pane).
-  _memRefreshEntryCount();
-});
-
-async function _memRefreshEntryCount() {
-  const desc = document.getElementById('memory-entry-desc');
-  if (!desc) return;
-  // Settings memory count mirrors this page: user + global shared only.
-  const info = await _memInvoke('memory.exportInfo', {});
-  let n = 0;
-  if (info && info.ok && info.files) {
-    n += (info.files.user && info.files.user.count) || 0;
-    n += (info.files.shared && info.files.shared.count) || 0;
-  }
-  desc.textContent = t('memory.entry_desc', { n });
-}
+// 记忆页退役后的存量职责（2026-09-20）：本模块保留为「导出/导入记忆」工具
+// ——用户数据出口不随页面退役（拍板 ⑤）。个人本体页经此入口复用，逻辑不搬家。
+window.MemoryTools = {
+  openExport: () => _memOpenExport(),
+  openImport: (mode) => _memOpenImport(mode),
+};

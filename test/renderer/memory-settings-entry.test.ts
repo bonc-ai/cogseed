@@ -54,8 +54,6 @@ describe('settings memory entry', () => {
 
   it('binds immediately when the lazy feature loads after DOMContentLoaded', async () => {
     const card = clickable();
-    const dataTab = clickable();
-    const desc = { textContent: '' };
     const setView = vi.fn();
     const invoke = vi.fn(async () => ({
       ok: true,
@@ -67,17 +65,16 @@ describe('settings memory entry', () => {
         readyState: 'complete',
         getElementById(id: string) {
           if (id === 'memory-entry-card') return card;
-          if (id === 'memory-entry-desc') return desc;
           return null;
         },
-        querySelector(selector: string) {
-          return selector === '[data-settings-tab="data"]' ? dataTab : null;
+        querySelector() {
+          return null;
         },
         addEventListener() {},
       },
       window: { cogseed: { invoke }, addEventListener() {} },
       setView,
-      t: (key: string, vars?: { n?: number }) => key === 'memory.entry_desc' ? `count:${vars?.n || 0}` : key,
+      t: (key: string, vars?: { n?: number }) => key,
       setTimeout,
       clearTimeout,
     });
@@ -85,11 +82,14 @@ describe('settings memory entry', () => {
     loadMemoryModule(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // 记忆页退役（2026-09-20）：设置卡改跳认知资产；计数填充随页面退役移除。
     card.click();
-    expect(setView).toHaveBeenCalledWith('memory');
-    expect(desc.textContent).toBe('count:5');
+    expect(setView).toHaveBeenCalledWith('recall');
     expect(card.dataset.bound).toBe('1');
-    expect(dataTab.dataset.memoryBound).toBe('1');
+    // 导出/导入工具经 window.MemoryTools 暴露（个人本体页复用）。
+    expect((context as any).window.MemoryTools).toBeTruthy();
+    expect(typeof (context as any).window.MemoryTools.openExport).toBe('function');
+    expect(typeof (context as any).window.MemoryTools.openImport).toBe('function');
   });
 });
 
