@@ -452,6 +452,70 @@ function isSuppressedTerminalCandidate(status: RecallCandidateStatus): boolean {
  * 产品要的，这里放开则等于让系统跳过用户确认自动晋升弱证据候选。两条线
  * 必须分开，不要因为 UI 收敛顺手合并。
  */
+export type ImmediateIngestMode = 'created' | 'merged' | 'fused-update-pending' | 'pending-review';
+
+export interface ImmediateIngestResult {
+  mode: ImmediateIngestMode;
+  /** created 时的落库资产 id；其余模式为空。 */
+  assetId?: string;
+  /** 候选 id（各模式都有——即时直投也留候选痕迹，可审计可撤销）。 */
+  candidateId: string;
+}
+
+/** 即时模式直投（2026-09-19 方案甲·清单 #3）：模型对话中主动记的知识不再
+ *  写记忆文件，直投第二段入库——存候选 → 统一晋升出口（autoApply 自带查重
+ *  金字塔 L1/L2、判族挂族、正规 ReviewDecision），产出「模型记的·未验证」
+ *  资产，入库即可用。
+ *  类型约定：即时记忆是画像/偏好/身份类（原记忆 USER/共享档的语义），统一
+ *  personal；rule/template/skill_method 留给批量线（提取器补边界）。
+ *  embedding 不可用等异常不抛给对话——候选留在「待我处理」，返回
+ *  pending-review。 */
+export async function ingestImmediateKnowledge(
+  userId: string,
+  input: { text: string; conversationId?: string; messageId?: string },
+): Promise<ImmediateIngestResult> {
+  const text = boundedText(String(input.text || '').trim(), 'immediate knowledge', 4_000, true);
+  if (!text) throw new Error('immediate knowledge text is required');
+  const { scanForInjection } = await import('../memory');
+  const threat = scanForInjection(text);
+  if (threat) throw new Error(`immediate knowledge blocked: suspicious content (${threat})`);
+  const { makeDisplayTitle } = await import('./statement-fusion');
+  const refId = input.conversationId
+    ? `immediate-${input.conversationId}${input.messageId ? `-${input.messageId}` : ''}`
+    : `immediate-${createHash('sha256').update(text).digest('hex').slice(0, 12)}`;
+  const refs = [{
+    kind: 'conversation' as const,
+    id: refId.slice(0, 160),
+    ...(input.conversationId ? { scope: 'conversation' as const, subtype: 'session' as const } : {}),
+  }];
+  const candidate = await saveRecallCandidate(userId, {
+    judgment: text,
+    value: text,
+    summary: makeDisplayTitle(text),
+    suggestedType: 'personal',
+    suggestedScope: 'general',
+    suggestedAction: 'create',
+    sourceRefs: refs,
+    evidenceRefs: refs,
+  });
+  try {
+    const applied = await autoApplyRecallCandidate(userId, candidate.id, { provenance: 'capture' });
+    if (applied.asset?.id) return { mode: 'created', assetId: applied.asset.id, candidateId: candidate.id };
+    // 查重命中既有资产（L1/L2）→ 已改写为 update 候选，等你确认后融合出新版本。
+    if (applied.updateCandidate?.targetAssetId) {
+      return { mode: 'fused-update-pending', candidateId: candidate.id };
+    }
+    return { mode: 'merged', candidateId: applied.candidate.id };
+  } catch (error) {
+    // embedding 不可用等硬阻塞：候选已落池，交给「待我处理」，不打断对话。
+    if (error instanceof SemanticDedupUnavailableError
+      || (error as { code?: string }).code === 'semantic_dedup_unavailable') {
+      return { mode: 'pending-review', candidateId: candidate.id };
+    }
+    throw error;
+  }
+}
+
 export function isAutoCaptureEligible(candidate: Pick<RecallCandidateRecord, 'status'>): boolean {
   return candidate.status === 'pending_review' || candidate.status === 'failed';
 }
