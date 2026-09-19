@@ -108,4 +108,35 @@ describe('资产目录视图', () => {
     expect(list).toContain('资产明细');
     expect(list).not.toContain('复盘模板');
   });
+
+// 大类分组视图（2026-09-22 清单 #2）：same_family 连通分量成组、组头带计数、
+// 未归类合并；目录视图（模型视角）保持平铺。
+describe('family-grouped asset list', () => {
+  it('groups same_family assets under one head with a count, others under unsorted', async () => {
+    const { renderCognition } = await import('./helpers/cognition-renderer');
+    const html = renderCognition({ name: 'overview' }, {
+      assets: [
+        { id: 'aa-1', type: 'personal', title: '不用比喻', statement: '内容一。', status: 'active', version: '1', updatedAt: '2026-09-22T01:00:00Z', relations: [{ kind: 'same_family', assetId: 'aa-2' }] },
+        { id: 'aa-2', type: 'personal', title: '标识符括号解释', statement: '内容二。', status: 'active', version: '1', updatedAt: '2026-09-22T02:00:00Z', relations: [{ kind: 'same_family', assetId: 'aa-1' }] },
+        { id: 'aa-3', type: 'rule', title: '接口变更同步文档', statement: '内容三。', status: 'active', version: '1', updatedAt: '2026-09-22T03:00:00Z' },
+      ],
+    });
+    expect(html).toContain('ca-family-group');
+    expect(html).toContain('标识符括号解释'); // 组名取组内最新
+    expect(html).toContain('2 条同类');
+    expect(html).toContain('未归类');
+  });
+
+  it('catalog view stays flat (model perspective)', async () => {
+    const { renderCognition } = await import('./helpers/cognition-renderer');
+    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, {
+      assets: [
+        { id: 'aa-1', type: 'personal', title: 'A', statement: '一。', status: 'active', version: '1', relations: [{ kind: 'same_family', assetId: 'aa-2' }] },
+        { id: 'aa-2', type: 'personal', title: 'B', statement: '二。', status: 'active', version: '1', relations: [{ kind: 'same_family', assetId: 'aa-1' }] },
+      ],
+    });
+    expect(html).not.toContain('ca-family-group');
+  });
+});
+
 });

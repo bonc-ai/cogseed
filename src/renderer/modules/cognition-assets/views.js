@@ -841,6 +841,43 @@
 
   /* ────────────────────────── 视图：我的认知 ────────────────────────── */
 
+  /** 大类分组（2026-09-22 清单 #2·面板侧）：按 same_family 关系做连通分量，
+ *  一组＝一个大类；组名默认取组内最近更新的资产标题（族命名功能挂本体分组，
+ *  后续轮接）；无族关系的资产归入「未归类」组。视图与筛选都保留原行为——
+ *  分组只改变排列，不改变可见性。 */
+  function familyGroupsOf(assets) {
+    const parent = new Map(assets.map((asset) => [String(asset.id), String(asset.id)]));
+    const find = (id) => { let root = id; while (parent.get(root) !== root) root = parent.get(root); return root; };
+    const union = (a, b) => { const ra = find(a); const rb = find(b); if (ra !== rb) parent.set(ra > rb ? rb : ra, ra > rb ? ra : rb); };
+    const byId = new Map(assets.map((asset) => [String(asset.id), asset]));
+    for (const asset of assets) {
+      for (const relation of asset.relations || []) {
+        if (relation.kind !== 'same_family') continue;
+        if (byId.has(String(relation.assetId))) union(String(asset.id), String(relation.assetId));
+      }
+    }
+    const groups = new Map();
+    for (const asset of assets) {
+      const root = find(String(asset.id));
+      const bucket = groups.get(root) || [];
+      bucket.push(asset);
+      groups.set(root, bucket);
+    }
+    const named = [];
+    let unsorted = [];
+    for (const bucket of groups.values()) {
+      if (bucket.length >= 2) {
+        const newest = bucket.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
+        named.push({ title: String(newest.title || ''), assets: bucket });
+      } else {
+        unsorted = unsorted.concat(bucket);
+      }
+    }
+    named.sort((a, b) => String(b.assets.length).localeCompare(String(a.assets.length)));
+    if (unsorted.length) named.push({ title: '', assets: unsorted });
+    return named;
+  }
+
   function viewOverview(route) {
     const stats = NS.stats();
     // 两线不拆列表（2026-09-17 二次定调）：全量列表+每条 KSTAR 资产打徽章
@@ -934,7 +971,7 @@
           <div class="ca-row-side">${NS.isKstarAsset(asset) ? chip(T('cognition.asset_kstar_badge', 'KSTAR'), 'line') : ''}${assetStatusChip(asset)}<span class="ca-chevron" aria-hidden="true">${uiIcon('chevron-right', 'ca-chevron-svg', '›')}</span></div>
         </div>`;
     const catalogView = String(route.assetView || '') === 'catalog';
-    const listHtml = filtered.length
+    let listHtml = filtered.length
       ? filtered.map((asset) => (catalogView ? catalogRow(asset) : plainRow(asset))).join('')
       : empty(
         T('cognition.tree_empty', '还没有正式资产'),
@@ -942,6 +979,17 @@
         // 条件与按钮数字同口径（stats.pending），避免出现「查看 0 条」。
         stats.pending ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { primary: true }) : '',
       );
+    // 默认列表视图按大类分组渲染（目录视图=模型视角保持平铺）。
+    if (filtered.length && !catalogView) {
+      const groups = familyGroupsOf(filtered);
+      listHtml = groups.map((group) => `
+        <div class="ca-family-group">
+          <div class="ca-family-head">${group.title
+            ? `${esc(group.title)} <span class="ca-family-count">${esc(T('cognition.family_group_count', '{n} 条同类', { n: String(group.assets.length) }))}</span>`
+            : `<span class="ca-family-count">${esc(T('cognition.family_unsorted', '未归类'))}</span>`}</div>
+          ${group.assets.map((asset) => plainRow(asset)).join('')}
+        </div>`).join('');
+    }
     return `${heroHtml}
       <div class="ca-card ca-tree-card">
         <div class="ca-line">

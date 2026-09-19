@@ -585,3 +585,12 @@
   .ca-btn.is-pending::after, .ca-skel-row, .ca-app.is-refreshing::before { animation: none; }
   .ca-drawer, .ca-drawer > .ca-drawer-inner, .ca-btn, .ca-chip, .ca-row.is-flat { transition: none; }
 }
+
+/* 大类分组（2026-09-22 清单 #2）：组头轻量、不抢资产行的层级。 */
+.ca-family-group { margin-bottom: 14px; }
+.ca-family-head {
+  font-size: 12px; font-weight: 600; color: var(--ca-ink-soft, #6b7280);
+  padding: 4px 10px; border-left: 3px solid var(--ca-accent, #4a6fa5);
+  margin-bottom: 4px; background: rgba(74, 111, 165, 0.06); border-radius: 0 6px 6px 0;
+}
+.ca-family-count { font-weight: 400; opacity: 0.75; margin-left: 6px; }

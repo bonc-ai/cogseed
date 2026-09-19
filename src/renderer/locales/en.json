@@ -7754,5 +7754,7 @@
   "cognition.catalog_model_attached": "Model-attached",
   "cognition.proof_sentence_attachment_revoked": "{when}: you revoked this attachment {where} (later turns no longer carry it)",
   "cognition.asset_edit_field_visible_agents": "Visible to · agents (ids separated by 、; empty = no restriction)",
-  "cognition.asset_edit_field_visible_spaces": "Visible to · spaces (ids separated by 、; empty = no restriction)"
+  "cognition.asset_edit_field_visible_spaces": "Visible to · spaces (ids separated by 、; empty = no restriction)",
+  "cognition.family_group_count": "{n} in this family",
+  "cognition.family_unsorted": "Unsorted"
 }
