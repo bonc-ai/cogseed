@@ -2605,6 +2605,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 存量记忆迁移手动口（2026-09-19 清单 #6）：dryRun=盘点；否则立即迁移
+  //（备份→入库→按文件清空）。启动任务之外的可控触发（验收/补跑）。
+  'recall.memory.migrate': async ({ dryRun } = {}, ctx) => {
+    const { migrateLegacyMemoryToAssets } = await import('../features/recall/memory-migration');
+    return migrateLegacyMemoryToAssets(ctx.userId, { dryRun: dryRun === true });
+  },
   'recall.captures.settings.get': async (_input, ctx) => {
     const [settings, model] = await Promise.all([
       recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
