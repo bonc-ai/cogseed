@@ -1304,6 +1304,7 @@
     asset_updated: ['cognition.proof_event_updated', '资产已更新'],
     projection_confirmed: ['cognition.proof_event_projection', '被带入一次任务'],
     usage_recorded: ['cognition.proof_event_usage', '任务中被实际使用'],
+    catalog_hint_unused: ['cognition.proof_event_catalog_hint_unused', '相关而未被用'],
   };
   const EVENT_TITLE_BY_TEXT = {
     'Asset created': EVENT_TITLES.asset_created,

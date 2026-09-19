@@ -22,7 +22,7 @@ export type RecallAssetTimelineKind =
   | 'usage_recorded'
   | 'transfer_prepared'
   | 'transfer_completed'
-  | 'effectiveness_recorded';
+  | 'effectiveness_recorded' | 'catalog_hint_unused';
 
 export interface RecallAssetTimelineItem {
   id: string;
@@ -57,6 +57,7 @@ export interface RecallAssetTimelineItem {
 
 function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
   switch (kind) {
+    case 'catalog_hint_unused': return 'Marked relevant but not used';
     case 'asset_created': return 'Asset created';
     case 'asset_updated': return 'Asset updated';
     case 'asset_paused': return 'Asset paused';
@@ -223,6 +224,30 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         ...(projectionConversationId ? { conversationId: projectionConversationId } : {}),
       },
     });
+  }
+
+  // 漏取审计行（2026-09-19）：catalog_hint 回执（目录标★相关但该回合未被
+  // 使用）→「相关而未被用」时间线行。只列该资产的，读回执流全量后过滤。
+  try {
+    const { listInjectionReceipts } = await import('./injection-receipt');
+    for (const receipt of await listInjectionReceipts(userId)) {
+      if (receipt.channel !== 'catalog_hint' || receipt.status !== 'omitted') continue;
+      if (String(receipt.assetId) !== asset.id) continue;
+      pushSorted(items, {
+        id: `catalog-hint-${receipt.id}`,
+        kind: 'catalog_hint_unused',
+        occurredAt: receipt.createdAt,
+        title: itemTitle('catalog_hint_unused'),
+        summary: '目录标注了「本轮相关」，但这一轮没有被注入或取用',
+        refs: {
+          assetId: asset.id,
+          taskRunId: receipt.taskRunId,
+          ...(receipt.messageId ? { messageId: receipt.messageId } : {}),
+        },
+      });
+    }
+  } catch {
+    // 回执流读不到就少几行审计，不影响其余时间线。
   }
 
   // usage → 来源会话：usage 只带 projectionId，会话 id 在投影记录上——

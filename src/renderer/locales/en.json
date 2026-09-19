@@ -7774,5 +7774,6 @@
   "cognition.asset_status.revoked": "Revoked",
   "cognition.asset_use_in_chat": "Use in current chat",
   "cognition.asset_use_in_chat_no_chat": "No conversation yet — say something in any chat first, then pin it here.",
-  "cognition.asset_use_in_chat_done": "Pinned to the current chat: effective next turn, revocable from the card in the chat."
+  "cognition.asset_use_in_chat_done": "Pinned to the current chat: effective next turn, revocable from the card in the chat.",
+  "cognition.proof_event_catalog_hint_unused": "Marked relevant but not used"
 }

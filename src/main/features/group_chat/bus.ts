@@ -4334,6 +4334,9 @@ async function runActorTurnBody(
   coordinator: CoordinatorTurnContext,
   chatCollector: ProcessCollector,
 ): Promise<ActorTurnResult> {
+  // 目录★集合（2026-09-19 漏取审计）：commander 目录块赋值、回合收尾算差集，
+  // 跨两个分支所以放函数体顶层。
+  let catalogRelevantIds: ReadonlySet<string> = new Set();
   const { uid, cid, actor } = w;
   const { processItems, lease: coordinatorLease } = coordinator;
   const sessionId = actorSessionId(cid, actor);
@@ -4950,11 +4953,12 @@ async function runActorTurnBody(
       // 主动想到"还有别的资产"（真机样本 0/3 会去查目录）。一行提示 + TTL 缓存，
       // 只讲"目录存在且便宜"，挑哪几条仍归模型。
       try {
-        const { assetCatalogForPrompt } = await import('../recall/asset-catalog-hint');
+        const { assetCatalogForPromptWithRelevance } = await import('../recall/asset-catalog-hint');
         // 目录带当轮相关度（★标记+排序，2026-09-22 砍注入后的算法落点）：
         // 复用上面 recallContext 同源的当轮任务文本。
-        const catalogBlock = await assetCatalogForPrompt(uid, cid, Date.now(), String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000));
-        if (catalogBlock) systemPrompt = `${systemPrompt}\n\n${catalogBlock}`;
+        const catalog = await assetCatalogForPromptWithRelevance(uid, cid, Date.now(), String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000));
+        if (catalog.text) systemPrompt = `${systemPrompt}\n\n${catalog.text}`;
+        catalogRelevantIds = catalog.relevantIds;
       } catch {
         // 目录块拿不到不影响回合。
       }
@@ -6960,6 +6964,32 @@ async function runActorTurnBody(
         status: 'injected',
         channel: 'profile_memory',
       })));
+    }
+    // 漏取审计（2026-09-19）：目录标了★（提示模型"这些相关"）但本回合既没
+    // 注入也没被模型取用/派发的资产——每条记一条 omitted/catalog_hint 回执，
+    // 时间线透出"相关而未被用"。判断质量可见可追责，不替模型做决定。
+    if (catalogRelevantIds.size > 0) {
+      try {
+        const usedThisTurn = new Set<string>(persistedRecallCitations.map((citation) => String((citation as { asset_id?: string }).asset_id || (citation as { assetId?: string }).assetId || '')));
+        const { listInjectionReceipts, recordInjectionReceipt } = await import('../recall/injection-receipt');
+        for (const receipt of await listInjectionReceipts(uid, item.turnId)) {
+          if (receipt.status === 'injected' && (receipt.channel === 'agent_read' || receipt.channel === 'dispatched' as never)) {
+            usedThisTurn.add(String(receipt.assetId));
+          }
+        }
+        const unused = [...catalogRelevantIds].filter((assetId) => !usedThisTurn.has(assetId));
+        await Promise.allSettled(unused.map((assetId) => recordInjectionReceipt(uid, {
+          assetId,
+          assetVersion: '0',
+          taskRunId: item.turnId,
+          messageId: persistedMsg.id,
+          boundary: 'real',
+          status: 'omitted',
+          channel: 'catalog_hint',
+        })));
+      } catch {
+        // 审计是增强：写不进不影响回合。
+      }
     }
     // 派发授权资产的账（usage + 注入回执）在本回合末尾统一结算（见下方
     // dispatchedUsage 段）：匿名 worker 走 silent 分支、没有持久化消息，

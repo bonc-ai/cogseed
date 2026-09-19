@@ -89,11 +89,11 @@ async function relevanceScores(userId: string, taskText: string, assets: Array<{
   return scores;
 }
 
-async function buildCatalogPrompt(userId: string, cid: string, taskText = ''): Promise<{ count: number; text: string }> {
+async function buildCatalogPrompt(userId: string, cid: string, taskText = ''): Promise<{ count: number; text: string; relevantIds: Set<string> }> {
   const { listAbilityAssets } = await import('./asset-service');
   const assets = await listAbilityAssets(userId);
   const active = assets.filter((asset) => asset.status === 'active');
-  if (!active.length) return { count: 0, text: '' };
+  if (!active.length) return { count: 0, text: '', relevantIds: new Set<string>() };
   let stats = new Map<string, AssetUsageStat>();
   try {
     stats = await loadAssetUsageStatsCached(userId);
@@ -126,6 +126,7 @@ async function buildCatalogPrompt(userId: string, cid: string, taskText = ''): P
   const marked = relevantIds.size;
   return {
     count: total,
+    relevantIds,
     text: [
       `Asset catalog (${total} reusable assets${marked ? `, ${marked} look relevant to this turn (★)` : ''}; one compact line each — pull the full text with`,
       'search_ability_assets + assetIds when one fits, and attach_assets_to_task to keep using it):',
@@ -141,16 +142,27 @@ async function buildCatalogPrompt(userId: string, cid: string, taskText = ''): P
  *  taskText 非空时按当轮相关度排序＋★标记，**不落缓存**（任务文本每轮变，
  *  缓存住相关排序等于把上一轮的判断塞给下一轮）。 */
 export async function assetCatalogForPrompt(userId: string, cid = '', now = Date.now(), taskText = ''): Promise<string> {
-  if (!taskText && cache && cache.userId === userId && cache.cid === cid && now - cache.at < CACHE_TTL_MS) return cache.text;
+  return (await assetCatalogForPromptWithRelevance(userId, cid, now, taskText)).text;
+}
+
+/** 带当轮★集合的目录构建（2026-09-19 漏取审计）：text 同上，relevantIds 供
+ *  回合收尾计算"标了★但没被用"的差集（缓存路径返回空集合——缓存本就不含
+ *  相关排序）。 */
+export async function assetCatalogForPromptWithRelevance(
+  userId: string, cid = '', now = Date.now(), taskText = '',
+): Promise<{ text: string; relevantIds: Set<string> }> {
+  if (!taskText && cache && cache.userId === userId && cache.cid === cid && now - cache.at < CACHE_TTL_MS) {
+    return { text: cache.text, relevantIds: new Set<string>() };
+  }
   try {
     const built = await buildCatalogPrompt(userId, cid, taskText);
     const reuse = await recentAttachmentLine(userId, cid);
     const text = [built.text, reuse].filter(Boolean).join('\n\n');
     if (!taskText) cache = { userId, cid, at: now, count: built.count, text };
-    return text;
+    return { text, relevantIds: taskText ? built.relevantIds : new Set<string>() };
   } catch (error) {
     // 读不到就什么都不加（而不是加一句"0 条"——那会让模型以为用户没有资产）。
     log.warn('asset catalog prompt unavailable', { userId: maskId(userId), error: logErrorRef(error as Error) });
-    return '';
+    return { text: '', relevantIds: new Set<string>() };
   }
 }
