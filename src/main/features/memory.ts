@@ -973,9 +973,18 @@ export function formatForSystemPrompt(
   spaceId?: string,
   legacyProjectId?: string,
   activeCognitionSourceIds: ReadonlySet<string> = new Set(),
+  /** 资产库画像源（2026-09-19 清单 #7）：非空时 user/shared 两节改由资产库
+   *  渲染（画像=personal 资产）；空数组=资产库还没有画像资产，回退文件。
+   *  存量迁移完成后文件为空，这里自然切换，无需一次性硬切。 */
+  assetProfileEntries: string[] = [],
 ): string {
-  const userEntries = loadEntries(userProfileFile(userId));     // cross-agent profile
-  const sharedEntries = loadMemoryRecords(userMemoryFile(userId))
+  const profileFromAssets = assetProfileEntries.length > 0;
+  const userEntries = profileFromAssets
+    ? assetProfileEntries.map((text) => ({ text }))
+    : loadEntries(userProfileFile(userId));     // cross-agent profile
+  const sharedEntries = profileFromAssets
+    ? [] // 画像已由资产库渲染；共享档文件留待迁移清空（阶段 D 退役）。
+    : loadMemoryRecords(userMemoryFile(userId))
     .filter((record) => record.independent || record.sources.length === 0
       || record.sources.some((source) => activeCognitionSourceIds.has(source.sourceId))
       // role_template 来源 = 角色画像（长期事实），常驻可见；cognition asset 才受 active 门控

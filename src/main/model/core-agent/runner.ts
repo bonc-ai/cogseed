@@ -1109,8 +1109,23 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       });
     }
   }
+  // 背景块内容源（2026-09-19 清单 #7）：画像从资产库渲染（personal 资产按
+  //  使用次数取头部），资产库还没有画像资产时回退记忆文件——存量迁移完成后
+  //  文件为空，这里无感切换。agent/space 档仍在文件（阶段 D 退役）。
+  const formatMemoryBlockWithAssetProfile = async (
+    userId: string, agentId: string, spaceId?: string, projectId?: string, activeIds: ReadonlySet<string> = new Set(),
+  ): Promise<string> => {
+    let assetProfileEntries: string[] = [];
+    try {
+      const { loadAssetProfileEntries } = await import('../../features/recall/profile-block');
+      assetProfileEntries = await loadAssetProfileEntries(userId);
+    } catch {
+      assetProfileEntries = []; // 资产库读取失败回退文件渲染
+    }
+    return formatMemoryForSystemPrompt(userId, agentId, spaceId, projectId, activeIds, assetProfileEntries);
+  };
   const memoryBlock = (uid && memoryAgentScope)
-    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
+    ? await formatMemoryBlockWithAssetProfile(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
     : '';
   if (memoryBlock) parts.push(memoryBlock);
   // 二期「空间 = 角色」：会话挂空间 → 注入该角色模板画像（个人本体角色模板文件，
