@@ -611,6 +611,9 @@ export async function appendFieldValue(
   value: string,
   source: string,
   project?: string,
+  /** 信息截至年月（YYYY-MM，落 `@asof:`）。候选确认等智能写入自动带当前月
+   *  ——Richard R26：确认时刻认为正确，就该有时间锚。用户手写不带，不强制。 */
+  asOf?: string,
 ): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const name = String(fieldName || '').trim();
@@ -619,13 +622,14 @@ export async function appendFieldValue(
   if (!val) return { ok: false, error: 'empty value' };
   const src = normalizeSource(source);
   const proj = project ? String(project).trim() : undefined;
+  const validAsOf = asOf && /^((?:19|20)\d{2})-(0[1-9]|1[0-2])$/.test(asOf) ? asOf : undefined;
 
   return mutateGroupContent(uid, groupId, (content) => {
     const values = content.fields[name] || (content.fields[name] = []);
     if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 完全匹配去重
     }
-    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}), ...(validAsOf ? { asOf: validAsOf } : {}) });
     return { changed: true };
   });
 }

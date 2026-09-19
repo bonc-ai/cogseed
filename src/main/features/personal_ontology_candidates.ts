@@ -636,6 +636,10 @@ async function writeCandidateToDestinations(
 ): Promise<ConfirmCandidateResult> {
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { ok: false, error: 'candidate has no memory text' };
+  // 确认时刻的 asof（Richard R26）：用户此刻认可这条值正确 → 落时间锚，
+  // 12 个月后超龄提示自然生效。仅字段值路径携带；流水区条目本就是带时间
+  // 语义的追加日志，不重复标。
+  const confirmAsOf = new Date().toISOString().slice(0, 7);
 
   const wantsGlobal = dest.toGlobalMemory !== false; // default true — back-compat
   const groupIds = Array.isArray(dest.toGroupIds) ? dest.toGroupIds.filter(Boolean) : [];
@@ -644,23 +648,76 @@ async function writeCandidateToDestinations(
   let anySucceeded = false;
 
   if (wantsGlobal) {
-    const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
-    // 角色标签：只有**用户显式选了角色模板**（去向含模板组）时，全局记忆条目才附带
-    // 来源标记；LLM 自动加入的模板去向（userPickedRole=false）不打标签 —— 否则
-    // 用户从未关联的角色会在卸载时连带归档/删除其全局记忆（A-4）。
-    let roleTemplateId: string | undefined;
-    if (userPickedRole) {
-      for (const gid of groupIds) {
-        const tpl = await resolveTemplateGroupSections(uid, gid.split('::')[0]);
-        if (tpl) { roleTemplateId = tpl.template_id; break; }
+    // 双轨（2026-09-19 记忆退役衔接债收口）：画像主源已切资产库——已有
+    // personal 生效资产时 USER.md 不再被注入，确认内容写旧文件=白确认。
+    // 有画像资产 → 投 recall 候选并立即以用户身份晋升（走 promote 的语义
+    // 查重门，与 09-19 认知资产终态同链路）；空 → 回退旧文件路径（新用户
+    // 兼容，与 formatForSystemPrompt 的自然切换同哲学）。
+    let assetTrack: { ok: boolean; error?: string } | null = null;
+    try {
+      const { listAbilityAssets } = await import('./recall/asset-service');
+      const hasPersonal = (await listAbilityAssets(uid))
+        .some((a) => a && a.type === 'personal' && a.status === 'active');
+      if (hasPersonal) {
+        const { saveRecallCandidate, promoteRecallCandidate } =
+          await import('./recall/candidate-service');
+        // 候选 kind → 资产 type：规则类成 rule（R-Box 断言形状），其余
+        // （偏好/实例/属性/关系）都归 personal 画像（A-Box 断言形状）。
+        const suggestedType = candidate.kind === 'rule' ? 'rule' : 'personal';
+        const saved = await saveRecallCandidate(uid, {
+          judgment: text,
+          value: text,
+          suggestedType,
+          suggestedScope: 'general',
+          suggestedAction: 'create',
+          sourceRefs: [{ kind: 'memory', id: 'ontology-candidate', title: '个人本体候选确认' }],
+        });
+        try {
+          await promoteRecallCandidate(uid, saved.id, { actor: 'user' });
+          assetTrack = { ok: true };
+        } catch (promoteErr) {
+          const errCode = (promoteErr as { code?: string })?.code;
+          if (errCode === 'recall_candidate_similar_asset') {
+            // 语义查重拦下：库里已有讲同一件事的资产（回流候选确认必然
+            // 撞上源资产）。用户意图是「内容进全局记忆」——已有资产承载
+            // 即意图已满足，不重复建第二条散资产。
+            log.info('candidate confirm merged into existing asset by semantic gate', {
+              uid, candidateId: candidate.candidate_id,
+            });
+            assetTrack = { ok: true };
+          } else if (errCode) {
+            assetTrack = { ok: false, error: (promoteErr as Error).message || errCode };
+          } else {
+            throw promoteErr;
+          }
+        }
       }
+    } catch (err) {
+      assetTrack = { ok: false, error: (err as Error)?.message || String(err) };
     }
-    const res = roleTemplateId
-      ? addRoleTemplateMemoryEntry(uid, target, roleTemplateId, text)
-      : addMemoryEntry(uid, target, text);
-    result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
-    if (res.ok) anySucceeded = true;
-    else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
+    if (assetTrack) {
+      result.globalMemory = assetTrack;
+      if (assetTrack.ok) anySucceeded = true;
+      else log.warn('candidate asset-track confirm failed', { uid, candidateId: candidate.candidate_id, error: assetTrack.error });
+    } else {
+      const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
+      // 角色标签：只有**用户显式选了角色模板**（去向含模板组）时，全局记忆条目才附带
+      // 来源标记；LLM 自动加入的模板去向（userPickedRole=false）不打标签 —— 否则
+      // 用户从未关联的角色会在卸载时连带归档/删除其全局记忆（A-4）。
+      let roleTemplateId: string | undefined;
+      if (userPickedRole) {
+        for (const gid of groupIds) {
+          const tpl = await resolveTemplateGroupSections(uid, gid.split('::')[0]);
+          if (tpl) { roleTemplateId = tpl.template_id; break; }
+        }
+      }
+      const res = roleTemplateId
+        ? addRoleTemplateMemoryEntry(uid, target, roleTemplateId, text)
+        : addMemoryEntry(uid, target, text);
+      result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
+      if (res.ok) anySucceeded = true;
+      else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
+    }
   }
 
   if (groupIds.length) {
@@ -684,7 +741,7 @@ async function writeCandidateToDestinations(
             ? undefined
             : tpl.sections.find((x) => has(x) && x.title === target.section) || tpl.sections.find(has);
           if (sec) {
-            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, target.fieldName, text, source, dest.projectId ?? candidate.project_id);
+            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, target.fieldName, text, source, dest.projectId ?? candidate.project_id, confirmAsOf);
             result.fieldWrites.push({
               groupId,
               fieldName: dest.targetField as string,
@@ -725,7 +782,7 @@ async function writeCandidateToDestinations(
           fieldExists = false;
         }
         if (fieldExists) {
-          const res = await appendFieldValueToRef(uid, target.ref, target.fieldName, text, source, dest.projectId ?? candidate.project_id);
+          const res = await appendFieldValueToRef(uid, target.ref, target.fieldName, text, source, dest.projectId ?? candidate.project_id, confirmAsOf);
           result.fieldWrites.push({
             groupId,
             fieldName: dest.targetField as string,

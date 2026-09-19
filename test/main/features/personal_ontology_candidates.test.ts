@@ -926,3 +926,105 @@ describe('personal_ontology_candidates › project source marker via confirm', (
     expect(fs.readFileSync(groupFile, 'utf8')).not.toContain('p_pool_old');
   });
 });
+
+// ── 双轨（2026-09-19 记忆退役衔接债收口）────────────────────────────────────
+// 资产库已有 personal 生效资产时，确认的「全局记忆」去向改走资产库（投 recall
+// 候选 + 用户晋升，走 promote 语义查重门）；空资产库回退旧 USER.md 路径。
+describe('personal_ontology_candidates › confirmCandidate asset track (dual-rail)', () => {
+  async function seedPersonalAsset(statement: string): Promise<void> {
+    const cs = await import('../../../../src/main/features/recall/candidate-service');
+    const saved = await cs.saveRecallCandidate(UID, {
+      judgment: statement,
+      suggestedType: 'personal',
+      suggestedScope: 'general',
+      sourceRefs: [{ kind: 'memory', id: 'dual-rail-seed' }],
+    });
+    await cs.promoteRecallCandidate(UID, saved.id, { actor: 'user' });
+  }
+
+  it('confirms into the asset library when personal assets exist, leaving USER.md untouched', async () => {
+    await seedPersonalAsset('既有画像：文转理本科生。');
+    const poc = await loadModule();
+    await poc.addCandidate(UID, {
+      candidate_id: 'cand-dual-1',
+      kind: 'preference',
+      memory_scope: 'user',
+      summary: '偏好中文简洁',
+      memory_text: '偏好中文简洁。',
+    });
+    const res = await poc.confirmCandidate(UID, 'cand-dual-1');
+    expect(res.globalMemory?.ok).toBe(true);
+
+    const userMd = fs.existsSync(userProfilePath())
+      ? fs.readFileSync(userProfilePath(), 'utf8') : '';
+    expect(userMd).not.toContain('偏好中文简洁');
+
+    const { listAbilityAssets } = await import('../../../../src/main/features/recall/asset-service');
+    const assets = await listAbilityAssets(UID);
+    const created = assets.find((a) => a.statement === '偏好中文简洁。');
+    expect(created).toBeTruthy();
+    expect(created?.type).toBe('personal');
+    expect(created?.lifecycleStatus).toBe('user_confirmed_unverified');
+  });
+
+  it('maps rule-kind candidates to rule assets on the asset track', async () => {
+    await seedPersonalAsset('既有画像：偏好书面沟通。');
+    const poc = await loadModule();
+    await poc.addCandidate(UID, {
+      candidate_id: 'cand-dual-2',
+      kind: 'rule',
+      memory_scope: 'shared',
+      summary: '评审规则',
+      memory_text: '评审必须先讲产品模型。',
+    });
+    const res = await poc.confirmCandidate(UID, 'cand-dual-2');
+    expect(res.globalMemory?.ok).toBe(true);
+    const { listAbilityAssets } = await import('../../../../src/main/features/recall/asset-service');
+    const created = (await listAbilityAssets(UID)).find((a) => a.statement === '评审必须先讲产品模型。');
+    expect(created?.type).toBe('rule');
+  });
+
+  it('semantic duplicate on the asset track satisfies intent without a second asset', async () => {
+    await seedPersonalAsset('偏好中文简洁。');
+    const poc = await loadModule();
+    await poc.addCandidate(UID, {
+      candidate_id: 'cand-dual-3',
+      kind: 'preference',
+      memory_scope: 'user',
+      summary: '重复偏好',
+      memory_text: '偏好中文简洁。',
+    });
+    const res = await poc.confirmCandidate(UID, 'cand-dual-3');
+    // 语义查重拦下（库里已有同义资产）→ 意图已满足，ok 且不建第二条
+    expect(res.globalMemory?.ok).toBe(true);
+    const { listAbilityAssets } = await import('../../../../src/main/features/recall/asset-service');
+    const matches = (await listAbilityAssets(UID)).filter((a) => a.statement === '偏好中文简洁。');
+    expect(matches.length).toBe(1);
+  });
+
+  it('field writes on confirm carry the as-of anchor of the confirmation moment', async () => {
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, 'asof 确认锚点组');
+    const groupId = created.group!.group_id;
+    // 先建字段坑（确认路径只填既有坑，不建坑——白名单约束）
+    await groups.appendFieldValue(UID, groupId, '就读状态', '旧值占位', '手动');
+    const poc = await loadModule();
+    await poc.addCandidate(UID, {
+      candidate_id: 'cand-dual-4',
+      kind: 'instance',
+      memory_scope: 'user',
+      summary: '就读状态',
+      memory_text: '目前大二在读。',
+    });
+    const res = await poc.confirmCandidate(UID, 'cand-dual-4', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '就读状态',
+    });
+    expect(res.ok).toBe(true);
+    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    const text = fs.readFileSync(groupFile, 'utf8');
+    const now = new Date().toISOString().slice(0, 7);
+    expect(text).toContain(`- 目前大二在读。 [候选] @asof:${now}`);
+  });
+});

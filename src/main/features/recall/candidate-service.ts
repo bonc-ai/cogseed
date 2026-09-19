@@ -2110,6 +2110,15 @@ export async function promoteRecallCandidate(
       } catch {
         // 挂族失败不影响入库。
       }
+      // 学习回流本体（2026-09-19 本体增强）：新资产投本体候选池等用户确认
+      // （Richard R13 提议-确认）。只挂 create 落点——融合/更新路径（merged/
+      // fused）内容已在资产里，回流只会重复。白名单与防洪在 backflow 模块内。
+      try {
+        const { backflowAssetToOntologyPool } = await import('./ontology-backflow');
+        await backflowAssetToOntologyPool(userId, stored);
+      } catch {
+        // 回流失败不影响入库。
+      }
     } else {
       if (!candidate.targetAssetId) throw new Error('candidate target asset is required');
       const target = await readAbilityAsset(userId, candidate.targetAssetId);
