@@ -57,6 +57,9 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
 }
 
 export interface UpdateAbilityAssetInput {
+  /** 转正（2026-09-22 清单 #10）：唯一合法值 'user_confirmed_unverified'——
+   *  把「模型记的/系统沉淀的」标成你确认过的；只许 unverified→confirmed 单向。 */
+  lifecycleStatus?: 'user_confirmed_unverified';
   title?: string;
   statement?: string;
   scope?: string;
@@ -428,6 +431,13 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
   // 刀一（2026-09-19）：scope 写入点归一——词条放行、场景描述句兜底 general。
   if (input.scope !== undefined) input = { ...input, scope: resolveScopeForAsset(input.scope) };
+  // 转正（2026-09-22）：单向、不可逆、只作用于未确认出身。
+  if (input.lifecycleStatus !== undefined) {
+    if (input.lifecycleStatus !== 'user_confirmed_unverified') throw new Error('invalid asset lifecycle promotion');
+    if (input.lifecycleStatus === 'user_confirmed_unverified' && input.actor !== 'user') {
+      throw new Error('asset lifecycle promotion requires a user actor');
+    }
+  }
   const action = requireAssetAction(input);
   const evidenceRefs = input.evidenceRefs === undefined
     ? undefined
@@ -467,6 +477,9 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     clearedRecommendation = Boolean(current.recommendedAction && input.acknowledgeRecommendation);
     const next: RecallAbilityAssetRecord = {
       ...current,
+      ...(input.lifecycleStatus !== undefined && current.lifecycleStatus !== 'user_confirmed_unverified'
+        ? { lifecycleStatus: input.lifecycleStatus }
+        : {}),
       ...(input.title !== undefined ? { title: bounded(input.title, 'title', 120) } : {}),
       ...(input.statement !== undefined ? { statement: bounded(input.statement, 'statement', 4_000) } : {}),
       ...(input.scope !== undefined ? { scope: bounded(input.scope, 'scope', 500) } : {}),

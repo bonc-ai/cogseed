@@ -100,7 +100,16 @@
     const maturity = asset.maturity === 'effectiveness_validated'
       ? chip(T('cognition.maturity_validated', '已验证'), 'green')
       : (asset.maturity === 'transfer_validated' ? chip(T('cognition.maturity_transferred', '已成功带入'), 'green') : '');
-    return chip(label, tone) + maturity;
+    return chip(label, tone) + maturity + originChip(asset);
+  };
+  /** 「谁写的」（2026-09-22 清单 #10）：你确认的=无章（正常态不摆章）；
+   *  模型记的/系统沉淀的=灰章提示出身，详情页给转正。字段访问走 core 的
+   *  originKindOf（守卫：本文件不出现内部枚举名）。 */
+  const originChip = (asset) => {
+    const kind = typeof NS.originKindOf === 'function' ? NS.originKindOf(asset) : 'user';
+    if (kind === 'model') return chip(T('cognition.origin_model_written', '模型记的'), '');
+    if (kind === 'system') return chip(T('cognition.origin_system_precipitated', '系统沉淀'), '');
+    return '';
   };
   /** 详情页头部章（2026-09-17 用户视角重构）：正常状态（active）不摆任何
    *  章——自己确认过的资产不需要解释；只有异常状态（暂停/删除/撤回等）
@@ -801,7 +810,7 @@
           <h3>${esc(asset.title || asset.id)}</h3>
           ${switchable ? `<div class="ca-sub">${esc(switchHint)}</div>` : ''}
         </div>
-        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}</div>
+        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${originChip(asset) && ['active', 'paused'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_confirm_origin', '转正'), 'asset-confirm', { id: asset.id, small: true, primary: true }) : ''}</div>
       </div>
       ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}

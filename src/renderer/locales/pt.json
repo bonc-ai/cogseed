@@ -5745,5 +5745,9 @@
   "cognition.asset_edit_field_visible_agents": "Visível para · agentes (ids separados por 、; vazio = sem restrição)",
   "cognition.asset_edit_field_visible_spaces": "Visível para · espaços (ids separados por 、; vazio = sem restrição)",
   "cognition.family_group_count": "{n} nesta família",
-  "cognition.family_unsorted": "Sem grupo"
+  "cognition.family_unsorted": "Sem grupo",
+  "cognition.origin_model_written": "escrito pelo modelo",
+  "cognition.origin_system_precipitated": "precipitado pelo sistema",
+  "cognition.asset_confirm_origin": "Confirmar",
+  "cognition.asset_confirm_origin_done": "Confirmado como verificado por você"
 }

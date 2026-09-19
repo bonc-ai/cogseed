@@ -516,6 +516,15 @@
     resume: 'recall.candidates.resume',
   };
 
+  /** 出身归类（2026-09-22 清单 #10）：'user'|'model'|'system'——渲染层守卫
+   *  禁止 views.js 出现内部枚举字段名，字段访问集中在此。 */
+  NS.originKindOf = function originKindOf(asset) {
+    const lifecycle = String((asset || {}).lifecycleStatus || 'user_confirmed_unverified');
+    if (lifecycle === 'automatically_extracted_unverified') return 'model';
+    if (lifecycle === 'system_precipitated_unverified') return 'system';
+    return 'user';
+  }
+
   const actions = {
     /** 采纳：可选携带编辑后的字段（adjust=true 时从表单读取）。 */
     async adoptCandidate(candidateId, formValues) {
@@ -705,6 +714,19 @@
         await NS.reload();
       }
       router.go({ name: 'overview', assetId, assetVersionId: '', assetVersionDiff: '', assetEdit: '1' }, { replace: true });
+    },
+    /** 转正（2026-09-22 清单 #10）：把「模型记的/系统沉淀的」标成你确认过的。
+     *  单向、只动出身标记，不 bump 版本链（内容没变就不产空版本）。 */
+    async confirmAssetOrigin(assetId) {
+      const result = await api.call('recall.assets.update', {
+        assetId,
+        lifecycleStatus: 'user_confirmed_unverified',
+        reason: 'user confirmed the origin of a model-written/system-precipitated asset',
+      });
+      if (result && result.ok) {
+        toast(T('cognition.asset_confirm_origin_done', '已转正：标记为你确认的'));
+        await NS.reload();
+      }
     },
     /** 手动编辑资产（2026-09-17 报告建议 A）：改动自己写的话不该以"系统先
      *  产候选"为前提。与现值逐字段比对，无实际修改不提交——后端没有内容
