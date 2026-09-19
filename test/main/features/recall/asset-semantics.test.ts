@@ -51,8 +51,9 @@ describe('ability asset semantics normalization', () => {
   it('leaves absent fields absent rather than defaulting to empty arrays', async () => {
     const { semantics } = await modules();
     expect(semantics.readAbilityAssetSemantics({})).toEqual({});
-    // 空数组要原样保留：「写过、但一条也没有」和「没写过」不是一回事。
-    expect(semantics.readAbilityAssetSemantics({ forbiddenWhen: [] })).toEqual({ forbiddenWhen: [] });
+    // 2026-09-19 归一化：空数组折叠为缺席——下游（runtime 的 declared-applicable
+    // 判定按 length>0）对两者等价，三态并存只留读数据的混乱，不留语义收益。
+    expect(semantics.readAbilityAssetSemantics({ forbiddenWhen: [] })).toEqual({});
   });
 
   it('only admits L0..L2 — L3 can never be an asset', async () => {
