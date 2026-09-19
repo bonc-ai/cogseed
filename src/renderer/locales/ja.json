@@ -5795,5 +5795,8 @@
   "cognition.proof_event_catalog_hint_unused": "関連判定ありだが未使用",
   "personalOntology.memory_export": "メモリをエクスポート",
   "personalOntology.memory_import": "メモリをインポート",
-  "personalOntology.io_unavailable": "エクスポート/インポートツールが利用できません"
+  "personalOntology.io_unavailable": "エクスポート/インポートツールが利用できません",
+  "personalOntology.verified_chip": "確認済み",
+  "personalOntology.verify_tip": "確認済みとしてマーク",
+  "personalOntology.unverify_tip": "確認を解除"
 }

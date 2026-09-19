@@ -340,3 +340,49 @@ describe('personal_ontology_groups › @asof field value marker', () => {
     expect(groups.isStaleAsOf(undefined, now)).toBe(false);
   });
 });
+
+describe('personal_ontology_groups › @verified field value marker', () => {
+  it('parses the bare verified marker alone and combined with proj + asof', async () => {
+    const groups = await loadModule();
+    expect(groups.parseFieldValueLine('- 常住北京 [手动] @verified'))
+      .toEqual({ value: '常住北京', source: '手动', verified: true });
+    expect(groups.parseFieldValueLine('- 值 [智能] @proj:p1 @asof:2026-09 @verified'))
+      .toEqual({ value: '值', source: '智能', project: 'p1', asOf: '2026-09', verified: true });
+    // verified 是裸标记：不许掉进 project（误当项目 id）
+    expect(groups.parseFieldValueLine('- 值 [手动] @verified').project).toBeUndefined();
+  });
+
+  it('serialize round-trips verified with all other markers', async () => {
+    const groups = await loadModule();
+    const line = groups.serializeFieldValueLine({ value: '值', source: '导入', project: 'p1', asOf: '2026-09', verified: true });
+    expect(line).toBe('- 值 [导入] @proj:p1 @asof:2026-09 @verified');
+    expect(groups.parseFieldValueLine(line))
+      .toEqual({ value: '值', source: '导入', project: 'p1', asOf: '2026-09', verified: true });
+    expect(groups.serializeFieldValueLine({ value: '值', source: '手动' })).toBe('- 值 [手动]');
+  });
+
+  it('setFieldValueVerified toggles without touching other markers, and is idempotent', async () => {
+    const groups = await loadModule();
+    const created = await groups.createGroup('test-user-groups', '核实档组');
+    const gid = created.group!.group_id;
+    await groups.appendFieldValue('test-user-groups', gid, '居住地', '常住北京', '手动', 'p1', '2026-09');
+
+    const on = await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', true);
+    expect(on.ok).toBe(true);
+    let fields = await groups.listGroupFields('test-user-groups', gid);
+    expect(fields.fields?.[0].values[0])
+      .toMatchObject({ value: '常住北京', source: '手动', project: 'p1', asOf: '2026-09', verified: true });
+
+    // 再点一次（幂等）与取消：其余标记原样保留
+    await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', true);
+    const off = await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', false);
+    expect(off.ok).toBe(true);
+    fields = await groups.listGroupFields('test-user-groups', gid);
+    expect(fields.fields?.[0].values[0])
+      .toMatchObject({ value: '常住北京', source: '手动', project: 'p1', asOf: '2026-09' });
+    expect(fields.fields?.[0].values[0].verified).toBeUndefined();
+
+    const missing = await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '不存在的值', true);
+    expect(missing.ok).toBe(false);
+  });
+});

@@ -7805,5 +7805,8 @@
   "cognition.proof_event_catalog_hint_unused": "相关而未被用",
   "personalOntology.memory_export": "导出记忆",
   "personalOntology.memory_import": "导入记忆",
-  "personalOntology.io_unavailable": "导出/导入工具未就绪"
+  "personalOntology.io_unavailable": "导出/导入工具未就绪",
+  "personalOntology.verified_chip": "已核实",
+  "personalOntology.verify_tip": "标记为已核实",
+  "personalOntology.unverify_tip": "取消核实"
 }

@@ -437,7 +437,7 @@ describe('personal ontology renderer integration', () => {
         return {
           ok: true,
           fields: [
-            { name: '居住地', values: [{ value: '常住北京', source: '手动' }, { value: '常住上海', source: '智能', project: 'p1' }] },
+            { name: '居住地', values: [{ value: '常住北京', source: '手动', verified: true }, { value: '常住上海', source: '智能', project: 'p1' }] },
             { name: '就读状态', values: [{ value: '目前大四', source: '手动', asOf: '2025-01' }] },
           ],
         };
@@ -490,6 +490,8 @@ describe('personal ontology renderer integration', () => {
     expect(body).toContain('可能过时');               // 超龄提醒（>12 个月）
     expect(body).toContain('is-conflicted');         // 冲突红框
     expect(body).toContain('与同字段另一条值矛盾');   // 冲突章
+    expect(body).toContain('已核实');                 // 核实章（verified 值）
+    expect(body).toContain('data-poc-group-op="verify-value"'); // 核实 toggle 按钮（含未核实行）
     expect(body).toContain('待确认回流');             // 回流确认区
     expect(body).toContain('偏好表格旁附通俗说明。');
     expect(body).toContain('2026-09 追加了某条内容'); // 流水区

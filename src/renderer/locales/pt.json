@@ -5795,5 +5795,8 @@
   "cognition.proof_event_catalog_hint_unused": "Marcado como relevante mas não usado",
   "personalOntology.memory_export": "Exportar memória",
   "personalOntology.memory_import": "Importar memória",
-  "personalOntology.io_unavailable": "Ferramenta de exportação/importação indisponível"
+  "personalOntology.io_unavailable": "Ferramenta de exportação/importação indisponível",
+  "personalOntology.verified_chip": "Verificado",
+  "personalOntology.verify_tip": "Marcar como verificado",
+  "personalOntology.unverify_tip": "Remover verificação"
 }

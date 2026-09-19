@@ -93,7 +93,9 @@ export interface GroupContentResult {
 /** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5），
  *  可选信息截至时间标记 `@asof:<YYYY-MM>`（2026-09-19 本体增强：值正确时
  *  所属的年月，对应 Richard R26 时间完整性——相对表述保留原词，超龄标
- *  needs-refresh，机器不自动判死）。 */
+ *  needs-refresh，机器不自动判死），可选核实标记 `@verified`（2026-09-20
+ *  断言核实维度：用户亲手验证过这条值，对应 Richard 五维度的核实状态。
+ *  单档手动——只由用户点，确认写入不自动带，无使用回执不自动升）。 */
 export interface FieldValue {
   value: string;
   source: string;
@@ -101,6 +103,8 @@ export interface FieldValue {
   project?: string;
   /** 可选：信息截至年月（落盘 `@asof:YYYY-MM`）。缺省 = 未标注（不参与时效判断）。 */
   asOf?: string;
+  /** 可选：用户已核实（落盘 `@verified` 裸标记）。缺省 = 未核实。 */
+  verified?: boolean;
 }
 
 /** `@asof:` 合法年月：1900-2099 年 + 01-12 月。写错的（如 2026-13）不认作
@@ -188,18 +192,20 @@ export function splitFlowEntries(text: string): string[] {
  *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
  *  `@proj:` 前缀剥离存 pid；`asof:` 前缀合法年月存 asOf、写错忽略（笔误的
  *  时间不该落进 project 冒充项目 id）；其他形态宽容保留原样（原行为）。 */
-export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string } | null {
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string; verified?: boolean } | null {
   if (typeof line !== 'string') return null;
   const withSource = line.match(/^- (.+) \[(\S+)\]((?: @\S+)*)$/);
   if (withSource) {
-    const out: { value: string; source: string; project?: string; asOf?: string } = {
+    const out: { value: string; source: string; project?: string; asOf?: string; verified?: boolean } = {
       value: withSource[1].replace(/\\\[/g, '['),
       source: withSource[2],
     };
     const markers = withSource[3].match(/@(\S+)/g) || [];
     for (const raw of markers) {
       const marker = raw.slice(1);
-      if (marker.startsWith('proj:')) {
+      if (marker === 'verified') {
+        out.verified = true; // 裸标记，无值——先于前缀判断，防掉进 project
+      } else if (marker.startsWith('proj:')) {
         out.project = marker.slice('proj:'.length);
       } else if (marker.startsWith('asof:')) {
         if (ASOF_MARKER_RE.test(marker)) out.asOf = marker.slice('asof:'.length);
@@ -215,11 +221,12 @@ export function parseFieldValueLine(line: string): { value: string; source: stri
 }
 
 /** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目/截至
- *  时间则依次追加 `@proj:<pid>`、`@asof:<YYYY-MM>`。 */
+ *  时间/核实则依次追加 `@proj:<pid>`、`@asof:<YYYY-MM>`、`@verified`。 */
 export function serializeFieldValueLine(fv: FieldValue): string {
   const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
   const withProject = fv.project ? `${base} @proj:${fv.project}` : base;
-  return fv.asOf ? `${withProject} @asof:${fv.asOf}` : withProject;
+  const withAsOf = fv.asOf ? `${withProject} @asof:${fv.asOf}` : withProject;
+  return fv.verified ? `${withAsOf} @verified` : withAsOf;
 }
 
 /** 解析字段区文本（`## 字段区` 与 `## 流水区` 之间的部分）为字段表。 */
@@ -667,6 +674,40 @@ export async function setFieldValue(
     if (idx === -1) return { ok: false, error: 'field value not found' };
     values[idx] = { ...values[idx], value: next };
     return { changed: true };
+  });
+}
+
+/** 字段值核实档 toggle（2026-09-20 断言核实维度）：用户亲手标记/取消
+ *  「已核实」。同值多行一起切（同值行的核实语义本就一致）；值不存在报错。
+ *  只改 verified 位，不动 value/source/project/asOf——去重键不含 verified，
+ *  toggle 天然不产生新行。 */
+export async function setFieldValueVerified(
+  uid: string,
+  groupId: string,
+  fieldName: string,
+  value: string,
+  verified: boolean,
+): Promise<SimpleResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name) return { ok: false, error: 'field name required' };
+  if (!val) return { ok: false, error: 'empty value' };
+
+  return mutateGroupContent(uid, groupId, (content) => {
+    const values = content.fields[name];
+    if (!values || !values.some((fv) => fv.value === val)) {
+      return { ok: false, error: 'field value not found' };
+    }
+    let changed = false;
+    for (const fv of values) {
+      if (fv.value !== val) continue;
+      const nextVerified = verified ? true : undefined;
+      if ((fv.verified === true) !== (nextVerified === true)) changed = true;
+      if (nextVerified) fv.verified = true;
+      else delete fv.verified;
+    }
+    return changed ? { changed: true } : { changed: false };
   });
 }
 

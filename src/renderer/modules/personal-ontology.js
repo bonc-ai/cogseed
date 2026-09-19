@@ -977,9 +977,11 @@
             ${fv.project ? `<span class="muted">@${escapeHtml(String(fv.project))}</span>` : ''}
             ${fv.asOf ? `<span class="ca-chip">${escapeHtml(_tv('personalOntology.asof_chip', { m: fv.asOf }, '截至 {m}'))}</span>` : ''}
             ${fv.asOf && _pocIsStaleAsOf(fv.asOf) ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.stale_chip', '可能过时'))}</span>` : ''}
+            ${fv.verified ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '已核实'))}</span>` : ''}
             ${conflict.html}
           </span>
-          ${_iconButton({ label: _t('personalOntology.value_remove_tip', '删除这条值'), icon: 'x', size: 'sm', className: 'personal-onto-value-remove', attrs: { 'data-poc-group-op': 'remove-value', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || '') } })}
+          ${_iconButton({ label: fv.verified ? _t('personalOntology.unverify_tip', '取消核实') : _t('personalOntology.verify_tip', '标记为已核实'), icon: fv.verified ? 'x' : 'check', size: 'sm', className: 'personal-onto-value-verify', attrs: { 'data-poc-group-op': 'verify-value', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || ''), 'data-poc-verified': fv.verified ? '0' : '1' } })}
+          ${_iconButton({ label: _t('personalOntology.value_remove_tip', '删除这条值'), icon: 'trash-2', size: 'sm', className: 'personal-onto-value-remove', attrs: { 'data-poc-group-op': 'remove-value', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || '') } })}
         </div>`;
       }).join('') : `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.field_no_values', '尚无值'))}</div>`;
       return `<div class="personal-onto-field-block">
@@ -1050,6 +1052,7 @@
         const value = el.getAttribute('data-poc-value');
         if (op === 'append-value') await _pocAppendValuePrompt(field);
         else if (op === 'remove-value') await _pocRemoveValue(field, value);
+        else if (op === 'verify-value') await _pocToggleValueVerified(el, field, value);
         else if (op === 'add-field') await _pocAddFieldPrompt();
         else if (op === 'rename-group') await _pocRenameGroupPrompt();
         else if (op === 'delete-group') await _pocDeleteGroupConfirm();
@@ -1177,6 +1180,22 @@
     }
     // 矛盾台账自愈在下次读取发生；值删掉后红标随重开消失。
     await _pocOpenGroupDetail(_pocGroupDetail.groupId);
+  }
+
+  /** 核实档 toggle（2026-09-20 断言核实维度）：章只由用户这一下产生。 */
+  async function _pocToggleValueVerified(el, fieldName, value) {
+    if (!_pocGroupDetail) return;
+    const nextVerified = el.getAttribute('data-poc-verified') === '1';
+    await _pocRunOnce(`verify:${fieldName}:${value}`, el, async () => {
+      const res = await _pocInvoke('personalOntology.groups.fields.verify', {
+        groupId: _pocGroupDetail.groupId, fieldName, value, verified: nextVerified,
+      });
+      if (!res || res.ok === false) {
+        _pocToast('personalOntology.op_failed', (res && res.error) || '操作失败', 'error');
+        return;
+      }
+      await _pocOpenGroupDetail(_pocGroupDetail.groupId);
+    });
   }
 
   async function _pocAppendEntryNote() {
