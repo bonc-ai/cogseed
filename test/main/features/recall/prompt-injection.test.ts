@@ -196,7 +196,7 @@ describe('confirmed Recall projection prompt injection', () => {
         title: oauth.asset.title,
         type: 'rule',
         version: '1',
-        scope: 'global',
+        scope: 'general',
         matchMethod: 'semantic',
         matchScore: 1,
       }),

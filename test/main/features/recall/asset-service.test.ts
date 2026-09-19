@@ -979,6 +979,13 @@ describe('版本真删（2026-09-17）：物理删除 + 引用快照冻结', () 
 });
 
 describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
+  async function seedLegacyScope(uid: string, legacyScope: string) {
+    const seeded = await seedWithScope(uid, 'general');
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await updateRecallJsonRecord(uid, 'ability-assets', seeded.asset.id, (raw) => ({ ...raw, scope: legacyScope }));
+    return seeded;
+  }
+
   async function seedWithScope(uid: string, scope: string) {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
@@ -991,8 +998,9 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
   }
 
   it('可归一的自由文本 scope 改写为词表值并递增版本；词表值幂等跳过；不可归一的保留', async () => {
-    const { assets, asset } = await seedWithScope('user-scope-mig', '用户全局画像');
-    expect(asset.scope).toBe('用户全局画像');
+    // 刀一后写入点即归一，真实存量须绕过写入直改盘模拟。
+    const { assets, asset } = await seedLegacyScope('user-scope-mig', '用户全局画像');
+    expect((await assets.readAbilityAsset('user-scope-mig', asset.id))!.scope).toBe('用户全局画像');
 
     const first = await assets.migrateLegacyFreeTextScopes('user-scope-mig');
     expect(first).toBe(1);
@@ -1017,7 +1025,7 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     // 不刷新的话，requirement 存续期内每回合注入整体失败
     // （projection_asset_version_changed）且无回退。
     const uid = 'user-scope-committed';
-    const { assets, asset } = await seedWithScope(uid, '用户全局画像');
+    const { assets, asset } = await seedLegacyScope(uid, '用户全局画像');
     const store = await import('../../../../src/main/features/recall/store');
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const projection = {
@@ -1115,5 +1123,33 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     expect(updated.evidenceRefs.find((ref) => ref.id === 'kse-ghost2'))
       .toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
     expect(updated.evidenceRefs.find((ref) => ref.id === 'kse-live1')?.degraded).toBeUndefined();
+  });
+
+  it('刀一：scope 写入点归一——场景描述句兜底 general、自定义词条放行', async () => {
+    const { assets } = await modules();
+    const now = new Date().toISOString();
+    const dirty = await assets.createAbilityAsset('user-scope-hard', {
+      schemaVersion: 2, ownerId: 'user-scope-hard', id: 'aa-scope-dirty', candidateId: 'cand-scope-dirty',
+      sourceCandidateIds: ['cand-scope-dirty'], reviewDecisionId: 'rd_scopedirty_123456',
+      type: 'rule', title: '脏范围资产', statement: '测试脏范围归一的一条规则。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-scope-dirty' }],
+      scope: '新增、审核、晋升认知资产条目时', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      applicableWhen: ['通用时'], forbiddenWhen: ['无关场景'],
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'dirty scope seed' });
+    expect(dirty.scope).toBe('general');
+    // 自定义词条（≤20 字、无句读、非"…时"句式）原样放行。
+    const custom = await assets.createAbilityAsset('user-scope-hard', {
+      schemaVersion: 2, ownerId: 'user-scope-hard', id: 'aa-scope-custom', candidateId: 'cand-scope-custom',
+      sourceCandidateIds: ['cand-scope-custom'], reviewDecisionId: 'rd_scopecustom_123456',
+      type: 'rule', title: '自定义词条资产', statement: '自定义词条范围的一条规则。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-scope-custom' }],
+      scope: 'architecture-review', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      applicableWhen: ['架构评审时'], forbiddenWhen: ['无关场景'],
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'custom term seed' });
+    expect(custom.scope).toBe('architecture-review');
   });
 });

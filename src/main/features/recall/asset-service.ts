@@ -13,7 +13,7 @@ import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord, RecallAbilityAssetLifecycleStatus } from './candidate-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
 import { readAbilityAssetSemantics } from './asset-semantics';
-import { normalizeAbilityAssetScopePolicy, normalizeAssetScopeValue, isRecallScopeTerm, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import { normalizeAbilityAssetScopePolicy, resolveScopeForAsset, normalizeAssetScopeValue, isRecallScopeTerm, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { normalizeCausalRule } from './world-model-types';
 import { resolveExecutionEvidenceRefs } from './evidence-resolution';
@@ -320,6 +320,8 @@ export async function createAbilityAsset(
   metadata: { reason: string; actor: AbilityAssetActor },
 ): Promise<RecallAbilityAssetRecord> {
   if (metadata.actor !== 'user' && metadata.actor !== 'system') throw new Error('invalid ability asset creation actor');
+  // 刀一（2026-09-19）：scope 写入点归一——词条放行、场景描述句兜底 general。
+  if (input.scope !== undefined) input = { ...input, scope: resolveScopeForAsset(input.scope) };
   bounded(metadata.reason, 'reason', 1_000);
   assertNotForbiddenToPersist([
     input.title,
@@ -424,6 +426,8 @@ export async function listAbilityAssetsForSpace(userId: string, spaceId: string)
 
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
+  // 刀一（2026-09-19）：scope 写入点归一——词条放行、场景描述句兜底 general。
+  if (input.scope !== undefined) input = { ...input, scope: resolveScopeForAsset(input.scope) };
   const action = requireAssetAction(input);
   const evidenceRefs = input.evidenceRefs === undefined
     ? undefined
