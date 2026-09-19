@@ -841,10 +841,10 @@
         <span class="muted">${_pocGroups.list.length}${_pocPendingCandidates.length ? ` · <span class="personal-onto-backflow-badge">${escapeHtml(_tv('personalOntology.backflow_badge', { n: _pocPendingCandidates.length }, '回流 {n}'))}</span>` : ''}</span>
       </div>
       ${groupRows || `<div class="personal-onto-nav-empty muted">${escapeHtml(_t('personalOntology.groups_empty', '还没有分组'))}</div>`}
-      <button type="button" class="personal-onto-group-new-btn" data-poc-nav="new-group">＋ ${escapeHtml(_t('personalOntology.group_new', '新建分组'))}</button>
+      ${_button({ label: `＋ ${_t('personalOntology.group_new', '新建分组')}`, size: 'sm', className: 'personal-onto-group-new-btn', attrs: { 'data-poc-nav': 'new-group' } })}
       <div class="personal-onto-group-io">
-        <button type="button" class="personal-onto-group-io-btn" data-poc-nav="memory-export">${escapeHtml(_t('personalOntology.memory_export', '导出记忆'))}</button>
-        <button type="button" class="personal-onto-group-io-btn" data-poc-nav="memory-import">${escapeHtml(_t('personalOntology.memory_import', '导入记忆'))}</button>
+        ${_button({ label: _t('personalOntology.memory_export', '导出记忆'), size: 'sm', className: 'personal-onto-group-io-btn', attrs: { 'data-poc-nav': 'memory-export' } })}
+        ${_button({ label: _t('personalOntology.memory_import', '导入记忆'), size: 'sm', className: 'personal-onto-group-io-btn', attrs: { 'data-poc-nav': 'memory-import' } })}
       </div>
     </div>`;
     const profileNav = `<div class="personal-onto-nav-section personal-onto-profile-nav-section">
@@ -979,13 +979,13 @@
             ${fv.asOf && _pocIsStaleAsOf(fv.asOf) ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.stale_chip', '可能过时'))}</span>` : ''}
             ${conflict.html}
           </span>
-          <button type="button" class="personal-onto-value-remove" data-poc-group-op="remove-value" data-poc-field="${escapeHtml(field.name)}" data-poc-value="${escapeHtml(String(fv.value || ''))}" title="${escapeHtml(_t('personalOntology.value_remove_tip', '删除这条值'))}">${_icon('x', 'ui-icon')}</button>
+          ${_iconButton({ label: _t('personalOntology.value_remove_tip', '删除这条值'), icon: 'x', size: 'sm', className: 'personal-onto-value-remove', attrs: { 'data-poc-group-op': 'remove-value', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || '') } })}
         </div>`;
       }).join('') : `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.field_no_values', '尚无值'))}</div>`;
       return `<div class="personal-onto-field-block">
         <div class="personal-onto-field-name">${escapeHtml(field.name)}</div>
         ${valueRows}
-        <button type="button" class="personal-onto-value-add" data-poc-group-op="append-value" data-poc-field="${escapeHtml(field.name)}">＋ ${escapeHtml(_t('personalOntology.value_add', '添加值'))}</button>
+        ${_button({ label: `＋ ${_t('personalOntology.value_add', '添加值')}`, size: 'sm', className: 'personal-onto-value-add', attrs: { 'data-poc-group-op': 'append-value', 'data-poc-field': field.name } })}
       </div>`;
     }).join('') : `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.group_no_fields', '这个分组还没有字段。用下面的“记一笔”开始积累。'))}</div>`;
 
@@ -997,21 +997,21 @@
       <div class="personal-onto-group-detail-head">
         <span class="personal-onto-main-title">${escapeHtml(d.title)}</span>
         <span class="personal-onto-group-actions">
-          <button type="button" class="personal-onto-group-action" data-poc-group-op="rename-group">${escapeHtml(_t('personalOntology.group_rename', '重命名'))}</button>
-          <button type="button" class="personal-onto-group-action is-danger" data-poc-group-op="delete-group">${escapeHtml(_t('personalOntology.group_delete', '删除分组'))}</button>
+          ${_button({ label: _t('personalOntology.group_rename', '重命名'), size: 'sm', className: 'personal-onto-group-action', attrs: { 'data-poc-group-op': 'rename-group' } })}
+          ${_button({ label: _t('personalOntology.group_delete', '删除分组'), size: 'sm', className: 'personal-onto-group-action is-danger', attrs: { 'data-poc-group-op': 'delete-group' } })}
         </span>
       </div>
       <div class="personal-onto-group-detail-sub muted">${escapeHtml(_t('personalOntology.group_fields_hint', '字段区：一条值一行，来源与时间直接可见'))}</div>
       <div class="personal-onto-field-zone">${fieldBlocks}
-        <button type="button" class="personal-onto-value-add" data-poc-group-op="add-field">${escapeHtml(_t('personalOntology.field_add', '＋ 新字段'))}</button>
+        ${_button({ label: _t('personalOntology.field_add', '＋ 新字段'), size: 'sm', className: 'personal-onto-value-add', attrs: { 'data-poc-group-op': 'add-field' } })}
       </div>
       ${flowRows ? `<div class="personal-onto-flow-zone">
         <div class="personal-onto-field-name">${escapeHtml(_t('personalOntology.flow_zone', '流水区'))}</div>
         ${flowRows}
       </div>` : ''}
       <div class="personal-onto-group-note-entry">
-        <input type="text" class="personal-onto-note-input" id="personal-onto-note-input" placeholder="${escapeHtml(_t('personalOntology.note_placeholder', '记一笔（追加到流水区）'))}">
-        <button type="button" class="personal-onto-group-action" data-poc-group-op="append-entry">${escapeHtml(_t('personalOntology.note_append', '追加'))}</button>
+        ${_input({ id: 'personal-onto-note-input', placeholder: _t('personalOntology.note_placeholder', '记一笔（追加到流水区）'), className: 'personal-onto-note-input' })}
+        ${_button({ label: _t('personalOntology.note_append', '追加'), size: 'sm', className: 'personal-onto-group-action', attrs: { 'data-poc-group-op': 'append-entry' } })}
       </div>
     </section>`;
   }
@@ -1028,8 +1028,8 @@
         <span class="ca-chip">${escapeHtml(_t('personalOntology.backflow_chip', '回流候选'))}</span>
         <span class="personal-onto-backflow-text">${escapeHtml(text)}</span>
         <span class="personal-onto-backflow-actions">
-          <button type="button" class="personal-onto-group-action" data-poc-candidate-op="confirm" data-poc-candidate-id="${escapeHtml(id)}">${escapeHtml(_t('personalOntology.backflow_confirm', '写入本组'))}</button>
-          <button type="button" class="personal-onto-group-action is-ghost" data-poc-candidate-op="reject" data-poc-candidate-id="${escapeHtml(id)}">${escapeHtml(_t('personalOntology.backflow_reject', '不用了'))}</button>
+          ${_button({ label: _t('personalOntology.backflow_confirm', '写入本组'), size: 'sm', className: 'personal-onto-group-action', attrs: { 'data-poc-candidate-op': 'confirm', 'data-poc-candidate-id': id } })}
+          ${_button({ label: _t('personalOntology.backflow_reject', '不用了'), size: 'sm', className: 'personal-onto-group-action is-ghost', attrs: { 'data-poc-candidate-op': 'reject', 'data-poc-candidate-id': id } })}
         </span>
       </div>`;
     }).join('');
