@@ -164,6 +164,7 @@ describe('confirmed Recall projection prompt injection', () => {
   });
 
   it('builds automatic turn context with structured citations and no irrelevant fallback', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const oauth = await createAssetWith({
       judgment: 'Review OAuth callback and token exchange security.',
       summary: 'OAuth review workflow',
@@ -334,6 +335,7 @@ describe('confirmed Recall projection prompt injection', () => {
   });
 
   it('keeps the prompt envelope valid and citations aligned when assets exceed the block budget', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     for (let index = 0; index < 12; index += 1) {
       await createAssetWith({
         // 各条用不同字母填充：正文纯净化（value 兜底=judgment）后，十二条只差

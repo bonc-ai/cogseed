@@ -712,14 +712,16 @@ export async function createAutomaticContextProjection(
   }
   if (!eligibleAssets.length) return undefined;
 
-  // 基线开关（2026-09-18 对照实验）：COGSEED_RECALL_BASELINE_TOP=0 关闭宿主
-  // 自动注入（正文一条都不进）——用来测"只留常驻目录 + 工具取用"是否站得住。
+  // 基线开关（2026-09-22 起默认反转）：正文自动注入默认**关闭**——查重与
+  // 知识发现由常驻目录＋模型自取承担（A/B 对照实验：注入抑制自取 5↔10 次、
+  // 命中增益仅 5/12↔3/12，砍注入的决策依据）。COGSEED_RECALL_BASELINE_TOP=N>0
+  // 显式恢复旧的"自动挑 N 条塞正文"行为（回滚通道与实验复跑都保留）。
   const baselineTopEnv = process.env.COGSEED_RECALL_BASELINE_TOP;
   const baselineTop = baselineTopEnv === undefined || baselineTopEnv.trim() === '' ? Number.NaN : Number(baselineTopEnv);
-  const baselineDisabled = Number.isFinite(baselineTop) && baselineTop <= 0;
-  const selection = baselineDisabled
-    ? { assets: [] as RecallAbilityAssetRecord[], degraded: false }
-    : await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId);
+  const baselineEnabled = Number.isFinite(baselineTop) && baselineTop > 0;
+  const selection = baselineEnabled
+    ? await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId)
+    : { assets: [] as RecallAbilityAssetRecord[], degraded: false };
   const selectedAssets = selection.assets;
   if (!selectedAssets.length) return undefined;
 

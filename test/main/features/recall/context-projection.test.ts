@@ -210,7 +210,26 @@ describe('RecallView and ContextProjection', () => {
     expect(preview.assetIds).not.toContain(scopeMismatch.asset.id);
   });
 
+  it('automatic full-text injection stays OFF by default (2026-09-22 反转)', async () => {
+    const { createAutomaticContextProjection } = await import('../../../../src/main/features/recall/context-projection');
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-baseline-off');
+    await createAutomaticAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-baseline-off',
+    });
+    const projection = await createAutomaticContextProjection('user-baseline-off', {
+      taskRunId: 'turn-baseline-off',
+      taskText: 'Audit OAuth login callback handling',
+    });
+    expect(projection).toBeUndefined();
+  });
+
   it('creates one confirmed automatic projection from only high-relevance active assets', async () => {
+    // 2026-09-22 起正文自动注入默认关闭；这两条锁定选择机制本身的测试显式
+    // 打开旧行为（COGSEED_RECALL_BASELINE_TOP>0），机制代码保留作回滚通道。
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const oauth = await createAutomaticAssetWith({
       judgment: 'Review OAuth callback and token exchange security.',
       summary: 'OAuth review workflow',
@@ -281,6 +300,7 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('space conversations auto-inject from the GLOBAL pool (资产池全局共享，含其它空间资产)', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const own = await createAutomaticAssetWith({
       judgment: 'Review OAuth callback and token exchange security in workspace-a.',
       summary: 'OAuth review workflow',
