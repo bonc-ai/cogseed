@@ -4012,7 +4012,7 @@
   "cognition.capture_trigger_note": "3つのタイミングのうち同時に有効なのは1つだけ",
   "cognition.maturity_validated": "実証済み",
   "cognition.overview_list_title": "資産明細",
-  "cognition.overview_stat_confirmed": "確定済み資産",
+  "cognition.overview_stat_confirmed": "使用中の資産",
   "cognition.overview_stat_pending": "確認待ち候補",
   "cognition.overview_stat_validated": "検証済み",
   "cognition.overview_title": "私の認知資産",
@@ -5754,5 +5754,11 @@
   "cognition.family_rename": "名前をつける",
   "cognition.family_rename_done": "名前変更",
   "cognition.family_renamed": "「{name}」に変更しました",
-  "cognition.family_name_cleared": "既定名に戻しました"
+  "cognition.family_name_cleared": "既定名に戻しました",
+  "cognition.asset_status.active": "使用中",
+  "cognition.asset_status.archived": "アーカイブ済み",
+  "cognition.asset_status.deleted": "削除済み",
+  "cognition.asset_status.purged": "完全削除済み",
+  "cognition.asset_status.paused": "一時停止中",
+  "cognition.asset_status.revoked": "取り消し済み"
 }

@@ -4288,7 +4288,7 @@
   "cognition.capture_trigger_note": "Only one of the three timings is in effect at a time",
   "cognition.maturity_validated": "verified in practice",
   "cognition.overview_list_title": "Asset details",
-  "cognition.overview_stat_confirmed": "Confirmed assets",
+  "cognition.overview_stat_confirmed": "Active assets",
   "cognition.overview_stat_pending": "Candidates to confirm",
   "cognition.overview_stat_validated": "Validated",
   "cognition.overview_title": "My cognitive assets",
@@ -7765,5 +7765,11 @@
   "cognition.family_rename": "Name",
   "cognition.family_rename_done": "Rename",
   "cognition.family_renamed": "Renamed to \"{name}\"",
-  "cognition.family_name_cleared": "Default name restored"
+  "cognition.family_name_cleared": "Default name restored",
+  "cognition.asset_status.active": "Active",
+  "cognition.asset_status.archived": "Archived",
+  "cognition.asset_status.deleted": "Deleted",
+  "cognition.asset_status.purged": "Purged",
+  "cognition.asset_status.paused": "Paused",
+  "cognition.asset_status.revoked": "Revoked"
 }

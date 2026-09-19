@@ -4291,7 +4291,7 @@
   "cognition.capture_trigger_note": "三种时机同时只有一种生效",
   "cognition.maturity_validated": "已实证",
   "cognition.overview_list_title": "资产明细",
-  "cognition.overview_stat_confirmed": "已确认资产",
+  "cognition.overview_stat_confirmed": "生效中资产",
   "cognition.overview_stat_pending": "待确认候选",
   "cognition.overview_stat_validated": "已验证",
   "cognition.overview_title": "我的认知资产",
@@ -7765,5 +7765,11 @@
   "cognition.family_rename": "命名",
   "cognition.family_rename_done": "改名",
   "cognition.family_renamed": "已命名为「{name}」",
-  "cognition.family_name_cleared": "已恢复默认名"
+  "cognition.family_name_cleared": "已恢复默认名",
+  "cognition.asset_status.active": "生效中",
+  "cognition.asset_status.archived": "已归档",
+  "cognition.asset_status.deleted": "已删除",
+  "cognition.asset_status.purged": "已清除",
+  "cognition.asset_status.paused": "已暂停",
+  "cognition.asset_status.revoked": "已撤回"
 }

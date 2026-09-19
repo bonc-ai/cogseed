@@ -91,12 +91,20 @@
     return hit ? T(hit[1], hit[2]) : T('cognition.asset_category_other', '其他');
   };
 
+  // 状态章（2026-09-22 快赢）：active 从「已确认」改为「生效中」——与出身章
+  // 「模型记的」并置时旧词读起来像"被确认过"，实际语义只是"当前在用"。
+  // 顺带走 T() 补四语（此前硬编码中文，四语界面也显示中文）。
   const ASSET_STATUS = {
-    active: ['已确认', 'green'], paused: ['已暂停', 'amber'], archived: ['已归档', ''],
-    deleted: ['已删除', 'red'], purged: ['已清除', 'red'], revoked: ['已撤回', 'red'],
+    active: [() => T('cognition.asset_status.active', '生效中'), 'green'],
+    paused: [() => T('cognition.asset_status.paused', '已暂停'), 'amber'],
+    archived: [() => T('cognition.asset_status.archived', '已归档'), ''],
+    deleted: [() => T('cognition.asset_status.deleted', '已删除'), 'red'],
+    purged: [() => T('cognition.asset_status.purged', '已清除'), 'red'],
+    revoked: [() => T('cognition.asset_status.revoked', '已撤回'), 'red'],
   };
   const assetStatusChip = (asset) => {
-    const [label, tone] = ASSET_STATUS[String(asset.status || 'active')] || [T('cognition.asset_status_unknown', '状态未知'), ''];
+    const entry = ASSET_STATUS[String(asset.status || 'active')];
+    const [label, tone] = entry ? [entry[0](), entry[1]] : [T('cognition.asset_status_unknown', '状态未知'), ''];
     // 刀三（2026-09-22）：成熟度章收敛两态——transfer+ 统一「已实证」，未验证
     // 不摆章；工作名待认知树映射层统一定名。
     const maturity = ['transfer_validated', 'effectiveness_validated'].includes(String(asset.maturity || ''))
@@ -119,7 +127,8 @@
   const detailStatusChip = (asset) => {
     const status = String(asset.status || 'active');
     if (status === 'active') return '';
-    const [label, tone] = ASSET_STATUS[status] || [status, ''];
+    const entry = ASSET_STATUS[status];
+    const [label, tone] = entry ? [entry[0](), entry[1]] : [status, ''];
     return chip(label, tone);
   };
 

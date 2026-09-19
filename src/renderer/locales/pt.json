@@ -4012,7 +4012,7 @@
   "cognition.capture_trigger_note": "Apenas um dos três modos está ativo por vez",
   "cognition.maturity_validated": "verificado na prática",
   "cognition.overview_list_title": "Detalhes dos ativos",
-  "cognition.overview_stat_confirmed": "Ativos confirmados",
+  "cognition.overview_stat_confirmed": "Ativos ativos",
   "cognition.overview_stat_pending": "Candidatos a confirmar",
   "cognition.overview_stat_validated": "Validados",
   "cognition.overview_title": "Meus ativos cognitivos",
@@ -5754,5 +5754,11 @@
   "cognition.family_rename": "Nomear",
   "cognition.family_rename_done": "Renomear",
   "cognition.family_renamed": "Renomeado para \"{name}\"",
-  "cognition.family_name_cleared": "Nome padrão restaurado"
+  "cognition.family_name_cleared": "Nome padrão restaurado",
+  "cognition.asset_status.active": "Ativo",
+  "cognition.asset_status.archived": "Arquivado",
+  "cognition.asset_status.deleted": "Excluído",
+  "cognition.asset_status.purged": "Expurgado",
+  "cognition.asset_status.paused": "Pausado",
+  "cognition.asset_status.revoked": "Revogado"
 }

@@ -168,4 +168,19 @@ describe('origin chip on the detail header', () => {
   });
 });
 
+
+describe('asset status chip wording (2026-09-22 快赢)', () => {
+  it('active reads 生效中 and the old 已确认 wording is gone from rows', async () => {
+    const { renderCognition } = await import('./helpers/cognition-renderer');
+    const html = renderCognition({ name: 'overview' }, {
+      assets: [{
+        id: 'aa-wording-1', type: 'personal', title: '偏好条目', statement: '内容。',
+        status: 'active', version: '1', updatedAt: '2026-09-22T00:00:00Z',
+      }],
+    });
+    expect(html).toContain('生效中');
+    expect(html).not.toContain('已确认');
+  });
+});
+
 });
