@@ -641,7 +641,7 @@ ${rows}
     link.className = 'kb-qz-qsource-link';
     link.setAttribute('data-qz-source', q.source);
     link.textContent = String(q.source);
-    link.addEventListener('click', () => _openSource(String(q.source)));
+    link.addEventListener('click', () => _openSourceAtQuestion(q));
     link.addEventListener('mouseenter', () => _previewSnippet(q, link));
     link.addEventListener('focus', () => _previewSnippet(q, link));
     link.addEventListener('mouseleave', _hideSnippetPreview);
@@ -975,7 +975,7 @@ ${rows}
 
   function _fetchSnippet(q) {
     return Promise.resolve(_invoke('kb.quiz.hint', {
-      question: q.question, source: q.source || '', dir: _state.dir, spaceId: _state.spaceId, qid: q.id, level: 2,
+      question: q.question, answer: q.answer || '', source: q.source || '', dir: _state.dir, spaceId: _state.spaceId, qid: q.id, level: 2,
     })).then((res) => {
       const text = res && typeof res.snippet === 'string' ? res.snippet.trim() : '';
       const entry = text ? { text, covered: res.covered !== false } : null;
@@ -990,10 +990,32 @@ ${rows}
     return Promise.resolve(invoke(channel, payload));
   }
 
-  function _openSource(pathText) {
+  function _openSource(pathText, quote) {
     const host = _state.host;
-    if (host && typeof host.onOpenSource === 'function' && host.onOpenSource(pathText) !== false) return;
+    const anchorArg = quote ? { quote } : undefined;
+    if (host && typeof host.onOpenSource === 'function' && host.onOpenSource(pathText, anchorArg) !== false) return;
     _toast(_tr('kb.quiz.source_open_failed', '打不开这份来源文档（可能已被移动或删除）'), { variant: 'warning' });
+  }
+
+  /**
+   * 「原文依据」点击 = 打开原文**并锁定到这一题的片段**（不再是"只报一个文件名"）。
+   *
+   * 片段来自 `kb.quiz.hint` level 2（主进程从材料要点里挑最相关的一段，逐字原文、不打模型），
+   * 查看器侧用 quote → charStart/charEnd → `<mark>` + scrollIntoView，所以是真高亮、真滚动。
+   * 悬停预览已经取过一次时直接复用缓存，点开即到。
+   *
+   * 拿不到片段（材料未覆盖 / 模型没标来源）时不假装能定位：照旧打开整篇，并如实说一句。
+   */
+  function _openSourceAtQuestion(q) {
+    if (!q || !q.source) return;
+    const path = String(q.source);
+    const cached = _state.snippets[q.id];
+    const openIt = (quote) => {
+      _openSource(path, quote);
+      if (!quote) _toast(_tr('kb.quiz.source_no_anchor', '没在材料里定位到这一题的原文片段，已打开整篇原文'), { variant: 'info' });
+    };
+    if (cached) { openIt(String(cached.text || '')); return; }
+    Promise.resolve(_fetchSnippet(q)).then((entry) => openIt(String((entry && entry.text) || ''))).catch(() => openIt(''));
   }
 
   // ── 结果页 ──────────────────────────────────────────────────────────
@@ -1087,7 +1109,10 @@ ${rows}
       foot.appendChild(_footButton('kb-qz-back-skipped', _tr('kb.quiz.back_skipped', `回到跳过的题（${summary.skipped}）`, { count: summary.skipped }), () => _backToSkipped(summary)));
     }
     foot.appendChild(_footButton('kb-qz-retest', _tr('kb.quiz.retest', '再测一次'), () => _retest()));
-    foot.appendChild(_footButton('kb-qz-regen', _tr('kb.quiz.regenerate', '生成后续测验'), () => _regenerate(), true));
+    // 正在重新出题时置灰：出题要等本地模型，按钮必须有"在做"的样子（否则像点不动）
+    const regenBtn = _footButton('kb-qz-regen', _tr('kb.quiz.regenerate', '生成后续测验'), () => _regenerate(), true);
+    regenBtn.disabled = Boolean(_state.retesting);
+    foot.appendChild(regenBtn);
     foot.appendChild(_footButton('kb-qz-results-close', _tr('kb.quiz.finish', '完成'), () => close()));
   }
 
@@ -1158,6 +1183,9 @@ ${rows}
       return;
     }
     _state.retesting = true;
+    // 本地模型要跑 30–60 秒：当场把按钮换成禁用态，别让用户对着一个"点了没反应"的按钮
+    // 反复点（重复点击原本也会被 _state.retesting 静默吞掉，读起来还是"按钮坏了"）。
+    _render();
     _toast(_tr('kb.quiz.regenerating', '正在基于同一份材料生成一套新题…'), { variant: 'info' });
     Promise.resolve(host.onRegenerate()).then((payload) => {
       _state.retesting = false;
@@ -1166,6 +1194,12 @@ ${rows}
         return;
       }
       _applyPayload(payload);
+      // _applyPayload 只换状态、不渲染（open() 里是它之后紧跟 _render()）。少了这一步，
+      // 面板会一直停在上一轮的结果页：用户点了「生成后续测验」看不到任何变化，只会以为
+      // 按钮坏了，而且每点一次都真的又打了一遍模型（真浏览器复现：calls=1 但 DOM 仍是旧结果页）。
+      _render();
+      const body = document.getElementById('kb-qz-body');
+      if (body && body.scrollTo) body.scrollTo({ top: 0 });
       _toast(_tr('kb.quiz.regenerate_done', '新一套测验已生成'), { variant: 'success' });
     }).catch(() => {
       _state.retesting = false;
@@ -1185,23 +1219,24 @@ ${rows}
     _toast(_tr('kb.quiz.copy_failed', '复制失败'), { variant: 'warning' });
   }
 
-  function _download(name, text, mime) {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function _safeName() {
-    return (_state.title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
-  }
-
+  /**
+   * 导出 Markdown：走**主进程保存对话框**（与「导出 PDF」同一条通道）。
+   *
+   * 原先用渲染层 Blob + `<a download>`，并且在 a.click() 之后立刻
+   * URL.revokeObjectURL —— 对象 URL 在下载真正开始前就被撤销，Chromium/Electron 里
+   * 可能静默失败；而且无论成功失败都只弹一句「已导出 Markdown」，用户看到的就是
+   * "点了没用、也没有报错"。改成主进程回执：取消 → 静默，失败 → 如实提示。
+   */
   function _exportQuizMarkdown() {
-    _download(`${_safeName()}-${Date.now()}.md`, quizToMarkdown(_state.title, _state.questions, _state.sources), 'text/markdown;charset=utf-8');
-    _toast(_tr('kb.quiz.exported', '已导出 Markdown'), { variant: 'success' });
+    const text = quizToMarkdown(_state.title, _state.questions, _state.sources);
+    Promise.resolve(_invoke('kb.quiz.exportMarkdown', { text, title: _state.title })).then((res) => {
+      if (!res || res.canceled) return;
+      if (res.ok === false) {
+        _toast(_tr('kb.quiz.export_failed', '导出失败，可改用「复制测验」'), { variant: 'warning' });
+        return;
+      }
+      _toast(_tr('kb.quiz.exported', '已导出 Markdown'), { variant: 'success' });
+    }).catch(() => _toast(_tr('kb.quiz.export_failed', '导出失败，可改用「复制测验」'), { variant: 'warning' }));
   }
 
   /** 导出 PDF：渲染层出 A4 打印版 HTML，主进程走 printToPDF（与脑图导出同一链路）。 */
@@ -1219,6 +1254,11 @@ ${rows}
 
   // ── 关闭与确认 ──────────────────────────────────────────────────────
   function _requestClose() {
+    // 已经停在"确定关闭吗"这一屏上，再点一次 X / 遮罩 = 用户确认关闭。
+    // 不能原地再渲染一次确认条：那样第二次点 X 屏幕毫无变化，用户读到的是
+    // "右上角的 X 坏了"（真机反馈）。第一次点仍按防误关走确认，progress 也已
+    // 自动保存，所以第二次点直接关掉不丢作答。
+    if (_state.closeConfirm) { _state.closeConfirm = false; close(); return; }
     if (_hasUnfinished()) {
       _state.closeConfirm = true;
       _renderCloseConfirm();

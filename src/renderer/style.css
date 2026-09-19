@@ -29867,8 +29867,17 @@ body.is-terminal-resizing {
    不依赖 CogSeed 深绿 --color-* 变量）+ SVG 图标 + 渐变类型色块 + 统一间距。
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* 局部色板：与 HTML 稿 :root 一致 */
-.kb-view {
+/* 局部色板：与 HTML 稿 :root 一致。
+   ⚠️ 挂在 body 下的知识库浮层**不在 .kb-view 里面**（测验面板 / 片段预览 / 选库与
+   链接弹窗都是 document.body.appendChild），必须一并列进这套色板的选择器，否则浮层里
+   每个 var(--kb-*) 都取不到值 → 声明在计算值阶段失效 → 整块退化成"白底无边框、
+   选中态看不见"（2026-09-18 真机：测验面板选项无边框、选中项背景与字母圈全白、
+   进度条消失、底部主按钮变成白块）。新增 body 级知识库浮层请补进这里。 */
+.kb-view,
+.kb-qz-overlay,
+.kb-qz-snippet-pop,
+.kb-lib-picker-overlay,
+.kb-link-dlg-overlay {
   /* 对齐开源项目（CogSeed）深绿主题：直接引用全局设计令牌 */
   --kb-bg: var(--color-bg);
   --kb-panel: var(--color-surface);
@@ -30176,7 +30185,8 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-qa-model-pop-manage.ui-button:hover { background: var(--kb-brand-soft, var(--color-brand-soft)); }
 .kb-qa-input {
   flex: 1; min-width: 0; resize: none; font-size: var(--font-size-4); line-height: 1.6;
-  height: 26px; max-height: 120px; padding: 4px 4px; color: var(--kb-text);
+  height: 26px; min-height: 26px; max-height: 120px; overflow-y: hidden;
+  padding: 4px 4px; color: var(--kb-text);
 }
 .kb-qa-input::placeholder { color: var(--kb-text3); opacity: .6; }
 .kb-qa-send.ui-icon-button {
@@ -33067,6 +33077,29 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   border-radius: var(--radius-1);
   background: var(--status-warning-bg);
   color: var(--text-heading);
+}
+/* md 文档的两种正文形态（工具栏可切）：
+   rendered = 排版阅读（给人读）：沿用 .markdown-body 的排版规则，这里只把
+   "原文 pre"的两个属性改回来——等宽字体与保留空白（pre-wrap 会把渲染 HTML
+   里的换行当成空行显示），以及 .markdown-body 的字面色正文色（深色主题要读得清）；
+   source = 原文源码（给机器读）：回到等宽 + 保留空白，缩进与表格竖线才对得齐。 */
+.anchored-source-text[data-md="rendered"] {
+  color: var(--text-body);
+  font-family: var(--font-sans);
+  white-space: normal;
+}
+.anchored-source-text[data-md="rendered"] > :first-child { margin-top: 0; }
+.anchored-source-text[data-md="rendered"] > :last-child { margin-bottom: 0; }
+.anchored-source-text[data-md="source"] {
+  font-family: var(--font-mono);
+  line-height: 1.75;
+}
+/* 引用高亮的块级兜底：排版后单节点匹配不到摘录时，标出最匹配的整块 */
+.anchored-source-mark-block {
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--color-brand);
+  border-radius: var(--radius-1);
+  background: var(--status-warning-bg);
 }
 .anchored-source-note {
   margin-top: var(--space-4);
