@@ -90,12 +90,37 @@ export interface GroupContentResult {
   error?: string;
 }
 
-/** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5）。 */
+/** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5），
+ *  可选信息截至时间标记 `@asof:<YYYY-MM>`（2026-09-19 本体增强：值正确时
+ *  所属的年月，对应 Richard R26 时间完整性——相对表述保留原词，超龄标
+ *  needs-refresh，机器不自动判死）。 */
 export interface FieldValue {
   value: string;
   source: string;
   /** 可选：来源项目 id（落盘 `@proj:<pid>`，展示层映射项目名）。缺省 = 全局/手动。 */
   project?: string;
+  /** 可选：信息截至年月（落盘 `@asof:YYYY-MM`）。缺省 = 未标注（不参与时效判断）。 */
+  asOf?: string;
+}
+
+/** `@asof:` 合法年月：1900-2099 年 + 01-12 月。写错的（如 2026-13）不认作
+ *  asOf 也不落 project——它显然是想写时间，落 project 会把笔误当项目 id。 */
+const ASOF_MARKER_RE = /^asof:((?:19|20)\d{2})-(0[1-9]|1[0-2])$/;
+
+/** asof 超龄判定（月差 > 12 = 可能过时）。12 个月是提醒阈值不是判死：稳定的
+ *  事实（出生年）到龄也只标不改，删除/刷新权在用户。 */
+export const ASOF_STALE_MONTHS = 12;
+
+/** 纯函数：某条 asOf（YYYY-MM）距今是否超龄。非法输入返回 false（无从判断
+ *  就不制造噪音，与"无 asof 不标"同一原则）。 */
+export function isStaleAsOf(asOf: string | undefined, now: Date = new Date()): boolean {
+  if (typeof asOf !== 'string') return false;
+  const match = asOf.match(/^((?:19|20)\d{2})-(0[1-9]|1[0-2])$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const monthsSince = (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
+  return monthsSince > ASOF_STALE_MONTHS;
 }
 
 /** 组内容文件的结构化视图：字段区（多值）+ 流水区（条目数组）。 */
@@ -158,19 +183,30 @@ export function splitFlowEntries(text: string): string[] {
     .filter(Boolean);
 }
 
-/** 匹配 `- <值> [<来源>]`（可选 `@proj:<pid>` 来源项目标记）；值内的 `\\[` 转义在此还原为 `[`。
+/** 匹配 `- <值> [<来源>]`（可选多个 `@` 标记：`@proj:<pid>` 项目、
+ *  `@asof:<YYYY-MM>` 信息截至时间，顺序不限）；值内的 `\\[` 转义在此还原为 `[`。
  *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
- *  `@` 标记以 `proj:` 前缀剥离存 pid；其他形态（理论无）宽容保留原样。 */
-export function parseFieldValueLine(line: string): { value: string; source: string; project?: string } | null {
+ *  `@proj:` 前缀剥离存 pid；`asof:` 前缀合法年月存 asOf、写错忽略（笔误的
+ *  时间不该落进 project 冒充项目 id）；其他形态宽容保留原样（原行为）。 */
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string } | null {
   if (typeof line !== 'string') return null;
-  const withSource = line.match(/^- (.+) \[(\S+)\](?: @([^\s]+))?$/);
+  const withSource = line.match(/^- (.+) \[(\S+)\]((?: @\S+)*)$/);
   if (withSource) {
-    const out: { value: string; source: string; project?: string } = {
+    const out: { value: string; source: string; project?: string; asOf?: string } = {
       value: withSource[1].replace(/\\\[/g, '['),
       source: withSource[2],
     };
-    const marker = withSource[3];
-    if (marker) out.project = marker.startsWith('proj:') ? marker.slice('proj:'.length) : marker;
+    const markers = withSource[3].match(/@(\S+)/g) || [];
+    for (const raw of markers) {
+      const marker = raw.slice(1);
+      if (marker.startsWith('proj:')) {
+        out.project = marker.slice('proj:'.length);
+      } else if (marker.startsWith('asof:')) {
+        if (ASOF_MARKER_RE.test(marker)) out.asOf = marker.slice('asof:'.length);
+      } else {
+        out.project = marker;
+      }
+    }
     return out;
   }
   const bare = line.match(/^- (.+)$/);
@@ -178,10 +214,12 @@ export function parseFieldValueLine(line: string): { value: string; source: stri
   return { value: bare[1].replace(/\\\[/g, '['), source: '手动' };
 }
 
-/** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目则追加 `@proj:<pid>`。 */
+/** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目/截至
+ *  时间则依次追加 `@proj:<pid>`、`@asof:<YYYY-MM>`。 */
 export function serializeFieldValueLine(fv: FieldValue): string {
   const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
-  return fv.project ? `${base} @proj:${fv.project}` : base;
+  const withProject = fv.project ? `${base} @proj:${fv.project}` : base;
+  return fv.asOf ? `${withProject} @asof:${fv.asOf}` : withProject;
 }
 
 /** 解析字段区文本（`## 字段区` 与 `## 流水区` 之间的部分）为字段表。 */

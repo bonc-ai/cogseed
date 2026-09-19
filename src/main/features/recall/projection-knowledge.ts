@@ -6,7 +6,7 @@ import { loadOntologyRules } from './ontology-rules';
 import { loadOntologyTaxonomy } from './ontology-taxonomy';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { readAbilityAsset } from './asset-service';
-import { readGroups, listGroupFields } from '../personal_ontology_groups';
+import { readGroups, listGroupFields, isStaleAsOf } from '../personal_ontology_groups';
 import { splitScopeTerms } from './scope-policy';
 import {
   readContextProjection,
@@ -77,6 +77,7 @@ async function loadOntologyFacts(
           value,
           source: 'personal_ontology',
           ...(entry.project ? { projectId: entry.project } : {}),
+          ...(entry.asOf ? { asOf: entry.asOf, ...(isStaleAsOf(entry.asOf) ? { needsRefresh: true } : {}) } : {}),
         });
         if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
       }

@@ -285,3 +285,58 @@ describe('personal_ontology_groups › groups.md template line', () => {
     expect(parsed[0].template_id).toBeUndefined();
   });
 });
+
+describe('personal_ontology_groups › @asof field value marker', () => {
+  it('parses a lone asof marker', async () => {
+    const groups = await loadModule();
+    const parsed = groups.parseFieldValueLine('- 目前大四 [手动] @asof:2026-09');
+    expect(parsed).toEqual({ value: '目前大四', source: '手动', asOf: '2026-09' });
+  });
+
+  it('parses proj + asof markers in both orders', async () => {
+    const groups = await loadModule();
+    expect(groups.parseFieldValueLine('- 值 [智能] @proj:p1 @asof:2026-09'))
+      .toEqual({ value: '值', source: '智能', project: 'p1', asOf: '2026-09' });
+    expect(groups.parseFieldValueLine('- 值 [智能] @asof:2026-09 @proj:p1'))
+      .toEqual({ value: '值', source: '智能', project: 'p1', asOf: '2026-09' });
+  });
+
+  it('legacy single proj marker still parses unchanged', async () => {
+    const groups = await loadModule();
+    expect(groups.parseFieldValueLine('- 值 [手动] @proj:p1'))
+      .toEqual({ value: '值', source: '手动', project: 'p1' });
+    expect(groups.parseFieldValueLine('- 值 [手动]'))
+      .toEqual({ value: '值', source: '手动' });
+  });
+
+  it('malformed asof is ignored, never promoted to project', async () => {
+    const groups = await loadModule();
+    // 13 月 / 9 月补零缺失 / 非 asof 前缀杂项：前者忽略，后者保留原样（原行为）
+    expect(groups.parseFieldValueLine('- 值 [手动] @asof:2026-13'))
+      .toEqual({ value: '值', source: '手动' });
+    expect(groups.parseFieldValueLine('- 值 [手动] @asof:2026-9'))
+      .toEqual({ value: '值', source: '手动' });
+    expect(groups.parseFieldValueLine('- 值 [手动] @weird:x'))
+      .toEqual({ value: '值', source: '手动', project: 'weird:x' });
+  });
+
+  it('serialize round-trips value + source + proj + asof', async () => {
+    const groups = await loadModule();
+    const line = groups.serializeFieldValueLine({ value: '值[含括号', source: '导入', project: 'p1', asOf: '2026-09' });
+    expect(line).toBe('- 值\\[含括号 [导入] @proj:p1 @asof:2026-09');
+    expect(groups.parseFieldValueLine(line))
+      .toEqual({ value: '值[含括号', source: '导入', project: 'p1', asOf: '2026-09' });
+    expect(groups.serializeFieldValueLine({ value: '值', source: '手动' })).toBe('- 值 [手动]');
+  });
+
+  it('isStaleAsOf: exactly 12 months is fresh, 13 is stale, invalid never flags', async () => {
+    const groups = await loadModule();
+    const now = new Date('2027-10-05T00:00:00Z');
+    expect(groups.isStaleAsOf('2026-10', now)).toBe(false); // 恰 12 个月
+    expect(groups.isStaleAsOf('2026-09', now)).toBe(true);  // 13 个月
+    expect(groups.isStaleAsOf('2025-01', now)).toBe(true);  // 跨年远期
+    expect(groups.isStaleAsOf('2027-10', now)).toBe(false); // 当月
+    expect(groups.isStaleAsOf('2026-13', now)).toBe(false); // 非法输入不制造噪音
+    expect(groups.isStaleAsOf(undefined, now)).toBe(false);
+  });
+});
