@@ -131,7 +131,7 @@ async function buildCatalogPrompt(userId: string, cid: string, taskText = ''): P
       'search_ability_assets + assetIds when one fits, and attach_assets_to_task to keep using it):',
       ...lines,
       ...(more > 0
-        ? [`…还有 ${more} 条：用 search_ability_assets（不带参数，可带 offset）翻页查看更多。`]
+        ? [`…还有 ${more} 条：可用 search_ability_assets 带 query 语义检索（比翻页快），或不带参数（可带 offset）翻页查看更多。`]
         : []),
     ].join('\n'),
   };

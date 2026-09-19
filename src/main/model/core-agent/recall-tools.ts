@@ -387,6 +387,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
       '三种用法：①不带参数 = 全量目录（一行一条，可带 type/scope/spaceId 过滤、offset 翻页）；',
       '②assetIds = 取某几条的完整正文（最多 6 条/次）——看到目录里有合适的，取正文再动手；',
       '③query = 语义检索（覆盖所有空间资产 + 用户画像记忆，画像条目会标注"未经确认、仅供参考"）。',
+      '目录很长或翻页找不动时，直接带 query 语义检索（比翻页快），命中再取正文。',
       '如果这次任务确实要长期用到某几条，用 attach_assets_to_task 把它们挂到本任务上（用户会看到一张可撤销的卡）。',
       '引用格式 [asset:<id>]，例如 [asset:aa-xxx]。',
     ].join(''),

@@ -432,6 +432,8 @@ describe('recall search_ability_assets tool', () => {
     const inline = block.split('\n').filter((line) => /^\d+\. \[asset:/.test(line));
     expect(inline).toHaveLength(20);
     expect(block).toContain('还有 11 条');
+    // 大库两跳策略（2026-09-22 快赢）：超限行提示 query 语义检索优先于翻页。
+    expect(block).toContain('query');
     expect(block).toContain('search_ability_assets');
     // 预算：20 条 × ~110 + 头尾，仍远小于注入块上限。
     expect(block.length).toBeLessThanOrEqual(3000);
