@@ -345,7 +345,7 @@
 /* ═══════════════════ 数据（唯一源，四页联动） ═══════════════════ */
 let assets = [
   {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',scope:'全局',app:'程序配置、数值排查、技术方案讨论',forbid:'对外部客户沟通的场景',vis:'不限制',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,
-   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',scope:'全局',app:'程序配置、数值排查',forbid:'对客户沟通',how:'你手动补了学生身份背景',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'程序配置、数值排查',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'从旧记忆文件搬过来',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
+   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',scope:'全局',app:'程序配置、数值排查',forbid:'对客户沟通',how:'你手动补了学生身份背景',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'程序配置、数值排查',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'系统迁移：从旧数据里搬过来',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
    proofs:[{k:'usage',when:'今天',where:'对话《时间线记录标注来源》',ver:3,rate:null},{k:'carry',when:'昨天',where:'对话《对话中引用认知资产》',ver:3},{k:'usage',when:'昨天',where:'对话《企业版打包发布》',ver:3,rate:'有用'},{k:'version',when:'昨天',ver:3},{k:'create',when:'上个月',ver:1}]},
   {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按内部技术排查口径回答，不按终端用户口径；必要时补基础原理但不降技术深度。',scope:'全局',app:'排查类问题',forbid:'—',vis:'不限制',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
    vers:[{v:1,inuse:true,src:'确认沉淀',when:'昨天',scope:'全局',app:'排查类问题',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'程序配置、数值类问题按内部技术排查口径回答。',note:'首次确认',eff:null}],
@@ -425,7 +425,7 @@ let otoProposal = {id:'op1',g:'事实',f:'常用工具',t:'你和团队日常用
 let otoConflict = {field:'常住地',keep:null};
 let pendingSrc = true, myView = 'list', myCat = 'all', orgBucket = 'all', orgExpand = false, orgSettings = false;
 let curAsset = null, editing = null, openVer = null, curCand = null, curCap = null;
-let famEdit = null, openKse = null, openProof = null, showVers = false, diffV = null, otoMenu = null, teachHint = false, orgActive = null, selSpot = null, openCandId = null;
+let famEdit = null, openKse = null, openProof = null, showVers = false, diffV = null, otoMenu = null, teachHint = false, orgActive = null, selSpot = null, openCandId = null, candKse = null;
 let nid = 100;
 
 /* ═══════ 工具 ═══════ */
@@ -437,7 +437,7 @@ function confirmBox(t2,b,ok){$('c-t').textContent=t2;$('c-b').innerHTML=b;$('c-o
 document.querySelectorAll('.ovl').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')}));
 function pendCount(){return cands.filter(c=>!c.snoozed).length}
 function refreshBadges(){const n=pendCount();$('rev-bdg').textContent=n;$('rev-bdg').dataset.n=n;
-  const rn=$('root-n'); if(rn) rn.textContent=n?'待你处理 '+n+' 条':'暂无待处理';}
+  const rn=$('root-n'); if(rn) rn.textContent=n?'待确认 '+n+' 条':'暂无待确认';}
 
 /* ═══════ Tab 切换（归位到各页根） ═══════ */
 function tab(t){
@@ -453,8 +453,6 @@ function tab(t){
   if(t==='org')renderOrg();
   if(t==='tree')drawTree();
 }
-function onQ(v){ q = v.trim(); if(curTab!=='mine'){tab('mine');return} myCat='all'; renderMine(); }
-
 /* ═══════ Tab1 认知树：真树形——光斑长在枝上，标签常显 ═══════ */
 const BR = [
   {cat:'技能与方法',label:'技能与方法',side:-1,lift:250},
@@ -523,7 +521,7 @@ function drawTree(){
     <path d="M ${cx+5} ${groundY-30} C ${cx+30} ${groundY-16}, ${cx+52} ${groundY-10}, ${cx+74} ${groundY+2}"/>
     <path d="M ${cx} ${groundY-24} C ${cx-4} ${groundY-12}, ${cx+4} ${groundY-6}, ${cx} ${groundY+4}"/></g>`;
   g+=`<rect x="${cx-7}" y="${groundY-40}" width="14" height="42" fill="var(--trunk)" opacity=".35"/>`;
-  g+=spotSvg({kind:'root',id:'root',x:cx,y:groundY-52,r:12,color:'var(--amber-dot)',glow:true,title:'待你处理 '+pendCount()+' 条',tid:'root-n',tx:cx,ty:groundY-72});
+  g+=spotSvg({kind:'root',id:'root',x:cx,y:groundY-52,r:12,color:'var(--amber-dot)',glow:true,title:'待确认 '+pendCount()+' 条',tid:'root-n',tx:cx,ty:groundY-72});
   g+=`<rect x="${cx-7}" y="${groundY-24}" width="14" height="26" fill="var(--trunk)" opacity=".35"/>`;
   /* 土壤 */
   g+=`<g class="spot" onclick="treeGo('soil')">
@@ -575,7 +573,7 @@ function rootInner(){
   if(!cands.length) return '<div class="empt"><div class="e">🌤</div><div class="t">当前没有待处理的候选</div><div class="s">AI 在对话里学到东西、或整理出候选时会出现在这里</div></div>';
   const ok=cands.filter(c=>c.ev==='ok'&&!c.snoozed), bad=cands.filter(c=>c.ev==='bad'), sn=cands.filter(c=>c.snoozed);
   const sec=(t,arr)=>arr.length?`<div class="sect" style="margin-top:14px"><span style="font-size:13.5px">${t}</span><span class="n">${arr.length}</span><span class="sp"></span></div>`
-    +arr.map(c=>`<div class="card" style="margin-bottom:7px;cursor:pointer" onclick="openCandId='${c.id}';document.getElementById('dw-bd').innerHTML=rootInner()"><div style="padding:11px 14px">
+    +arr.map(c=>`<div class="card" style="margin-bottom:7px;cursor:pointer" onclick="openCandId='${c.id}';candKse=null;document.getElementById('dw-bd').innerHTML=rootInner()"><div style="padding:11px 14px">
       <div style="font-size:13px;font-weight:600">${esc(c.title)}</div>
       <div class="note" style="font-size:11.5px;margin-top:3px">${esc(c.src)} · ${esc(c.value||'')}</div></div></div>`).join(''):'';
   return sec('等待你确认',ok)+sec('来源已删除的候选',bad)+sec('已稍后处理',sn)
@@ -679,7 +677,6 @@ function kstarSection(){
         <div><b>实际发生：</b>${esc(e.review.actual)}</div>
         <div><b>结果：</b>${esc(e.review.result)} · <b>为什么：</b>${esc(e.review.why)}</div>
         <div class="kv"><span>KSTAR 复盘</span><span>${e.at}</span></div>
-        <div class="vr-acts"><button class="b2 sm" onclick="toast('已打开原任务')">打开这次任务</button><button class="b2 sm" onclick="toast('已把复盘结论收进「待我处理」')">从复盘再提炼一条候选</button></div>
       </div></div>`:''}
     </div>`;
   });
@@ -850,7 +847,7 @@ function renderReview(){
 }
 function srcAct(i,what){srcIssues.splice(i,1);toast(what==='重试'?'已重试读取这个来源':'已恢复采集');renderReview()}
 function candCard(c){
-  return `<div class="cand" onclick="curCand='${c.id}';renderReview();$('scrolly').scrollTop=0">
+  return `<div class="cand" onclick="curCand='${c.id}';candKse=null;renderReview();$('scrolly').scrollTop=0">
     <div class="c1">${esc(c.title)}<span class="chev">›</span></div>
     <div class="c2">${c.ev==='bad'?'<span class="tag amber">来源已删</span>':'<span class="tag green">证据充足</span>'}${c.snoozed?'<span class="tag gray">已稍后处理</span>':''}<span class="tag gray">${esc(c.cat)}</span><span class="tag gray">${esc(c.src)}</span>${c.kstar?'<span class="tag blue">任务复盘</span>':''}</div>
     <div class="c3">${esc(c.body)}</div>
@@ -875,7 +872,10 @@ function candDetailHtml(c){
   <div class="card" style="padding:13px 16px;margin-bottom:13px"><div style="font-size:13.5px">${esc(c.body)}</div>
     <div class="note" style="margin-top:9px">用途：${esc(c.value)} · 范围：${esc(c.scope||'全局（未指定）')}<br>建议动作：${esc(c.action)}</div>
     <div class="note" style="margin-top:9px">证据引用</div>
-    <div style="margin-top:5px">${c.srcLine.map(s=>`<div class="evrow"><span class="tag gray">${esc(c.src)}</span>${esc(s)}</div>`).join('')}</div></div>
+    <div style="margin-top:5px">${c.srcLine.map(s=>`<div class="evrow">${c.kse?`<button class="tag blue" style="border:none;cursor:pointer" onclick="candKse=candKse?'':1;refreshCandView()">${esc(c.src)}</button>`:`<span class="tag gray">${esc(c.src)}</span>`}${esc(s)}</div>`).join('')}
+    ${c.kse&&candKse?`<div class="vr-detail" style="margin-top:9px"><b>这次任务的经过</b>
+      <div style="margin-top:5px">任务：${esc(c.kse.task)} · 结果：${esc(c.kse.result)}</div>
+      <div style="margin-top:3px">${esc(c.kse.actual)}</div></div>`:''}</div></div>
   <div class="typchips">${['关于我','规则与偏好','模板与范例','技能与方法'].map(t=>`<button class="${t===c.cat?'on':''}" onclick="candSetType('${c.id}','${t}')">${t}</button>`).join('')}</div>
   <div class="ed-form card" style="padding:14px 16px;margin-bottom:13px">
     <div class="fld"><label>具体内容</label><textarea id="cd-t">${esc(c.body)}</textarea></div>
@@ -890,7 +890,11 @@ function candDetailHtml(c){
     <button class="btn o" style="color:var(--red);border-color:var(--red)" onclick="candRej('${c.id}')">不保存</button>
   </div>`;
 }
-function candSetType(id,t){const c=cands.find(x=>x.id===id);c.cat=t;renderReview();if($('drawer').classList.contains('open'))$('dw-bd').innerHTML=candDetailInner(id)}
+function candSetType(id,t){const c=cands.find(x=>x.id===id);c.cat=t;refreshCandView()}
+function refreshCandView(){
+  if(curTab==='review') renderReview();
+  if($('drawer').classList.contains('open')) $('dw-bd').innerHTML = openCandId ? rootInner() : (curCand ? candDetailInner(curCand) : $('dw-bd').innerHTML);
+}
 let candPend=null;
 function candSave(id){
   const c=cands.find(x=>x.id===id); const text=$('cd-t')?.value.trim()||c.body; const scope=$('cd-s')?.value.trim();
