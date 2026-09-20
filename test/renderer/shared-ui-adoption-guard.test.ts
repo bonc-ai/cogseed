@@ -51,7 +51,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   'model-guard.js': 2,
   'onboarding.js': 21,
   'oss.js': 1,
-  'personal-ontology.js': 6, // 2026-09-20 分组迁入：分组行加入导航选中行家族（+1）
+  'personal-ontology.js': 7, // 2026-09-20 分组迁入+三盒总览导航行（+2）
   'plugins.js': 2,
   'queue-draft.js': 5,
   'recall-projection-card.js': 4,

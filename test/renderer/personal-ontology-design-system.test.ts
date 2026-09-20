@@ -17,9 +17,9 @@ describe('personal ontology design-system integration', () => {
   });
 
   it('keeps only tabs and navigation selection rows as native composite controls', () => {
-    // 2026-09-20 本体分组迁入：分组行加入导航选中行家族（与模板行/画像行
-    // 同类），基线 5 → 6。其余控件全部走共享原语（_button/_iconButton/_input）。
-    expect((source.match(/<(?:button|input|textarea|select)\b/gi) || [])).toHaveLength(6);
+    // 2026-09-20 本体分组迁入+三盒总览：分组行/总览行加入导航选中行家族
+    // （与模板行/画像行同类），基线 5 → 7。其余控件全部走共享原语。
+    expect((source.match(/<(?:button|input|textarea|select)\b/gi) || [])).toHaveLength(7);
     expect(source).toContain('class="memory-group-editor-tab');
     expect(source).toContain('class="personal-onto-library-row');
     expect(source).toContain('class="personal-onto-nav-row is-file');

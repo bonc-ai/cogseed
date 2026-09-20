@@ -35,7 +35,7 @@
 
 ## Phase 4: 收尾
 
-- [ ] T401 全量测试两遍一致（唯二 develop 基线除外）+ lint + tsc
-- [ ] T402 真机 CDP 四场景（三盒分区+关系值 / 总览 / 核实两档+候选归组 / restricted+历史）
+- [x] T401 全量测试两遍一致（唯二 develop 基线除外）+ lint + tsc
+- [x] T402 真机 CDP 四场景（三盒分区+关系值 / 总览 / 核实两档+候选归组 / restricted+历史）
 - [ ] T403 specs/003-006 回填（已实施功能：记忆并入 / 主动使用+漏取审计 / 本体增强三件 / 出身收敛——素材：终态图、全景图、goal-loop 账本 1-45 轮、测试反推）
-- [ ] T404 推送分支（不提 PR），spec 状态改 Implemented
+- [x] T404 推送分支（不提 PR），spec 状态改 Implemented
