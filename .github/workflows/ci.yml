@@ -44,10 +44,11 @@ jobs:
         if: github.event_name == 'push' || github.base_ref == 'cicd'
         run: |
           set -euo pipefail
-          # Author allowlist: GitHub noreply + team address + the single
-          # historical web-merge exception (2f5a490e / PR #288, recorded
-          # 2026-09-20 in .github/workflows/email-gate.yml). Mergers must enable
-          # "Keep my email addresses private" — see CONTRIBUTING.md item 4.
+          # Author allowlist: GitHub noreply + team address + one TEMPORARY
+          # web-merge exception (2f5a490e / PR #288; recorded 2026-09-20 in
+          # .github/workflows/email-gate.yml — delete both once cicd contains
+          # that commit). Mergers must enable "Keep my email addresses private"
+          # — see CONTRIBUTING.md item 4.
           bad=$(git log --format='%h|%an|%ae' "origin/cicd..HEAD" 2>/dev/null \
             | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|184377817@qq\.com)$' \
             || true)
