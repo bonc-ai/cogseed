@@ -1081,7 +1081,18 @@
   function candidateFormBody(candidate) {
     const refs = evidenceRefs(candidate);
     const broken = evidenceMostlyUnavailable(candidate);
-    const edit = candidate.capabilities && candidate.capabilities.canEdit;
+    // 能力一律按主进程下发的 capability 判定，**缺失即视为只读**——与旧模块
+    // "treats a candidate without capabilities as read-only instead of guessing"
+    // 的口径一致。2026-09-20 统一：此前同一函数里并存三种读法（canEdit 用
+    // `capabilities && …`、canPromote 用真值、canDefer/canReject 用 `!== false`），
+    // 于是"capabilities 缺失"时仍会渲染出「稍后处理 / 拒绝」——正是本 PR 要消灭的
+    // 那类必然失败的按钮。
+    const caps = candidate.capabilities || {};
+    const canEdit = !!caps.canEdit;
+    const canPromote = !!caps.canPromote;
+    const canDefer = !!caps.canDefer;
+    const canReject = !!caps.canReject;
+    const edit = canEdit;
     const field = (label, inner) => `<label class="ca-field"><span>${esc(label)}</span>${inner}</label>`;
     // 更新候选的差异确认卡（2026-09-16 版本组）：旧版全文对照 + 版本核对
     // 提示——任务所用版与当前在用版不一致时，确认前先核对改进对象。
@@ -1097,17 +1108,13 @@
         : '';
       return `${mismatch}<div class="ca-field"><span>${esc(T('cognition.candidate_current_version', '当前版本（v{n}）', { n: activeVersion }))}</span><p class="ca-note">${esc(target.statement || '')}</p></div>`;
     })();
-    // 决策动作按主进程下发的 capability 收敛（2026-09-20 修）：终态候选
-    // （confirmed / rejected / ignored）的映射是 canDefer=false、canReject=false、
-    // isTerminal=true，此前这两个按钮**无条件**渲染，用户点下去必然被后端状态机
-    // 拒绝——旧 skills.js 模块有一条 "never renders decision actions for terminal
-    // candidates" 的用例守着，2026-09-15 #266 重写时没带过来。
-    // 口径：capability 明确为 false 才隐藏；capabilities 缺失时保持原行为（不猜）。
-    const caps = candidate.capabilities || {};
-    const canDefer = caps.canDefer !== false;
-    const canReject = caps.canReject !== false;
+    // 决策动作同样按 capability 收敛（2026-09-20 修）：终态候选（confirmed /
+    // rejected / ignored）的映射是 canDefer=false、canReject=false、isTerminal=true，
+    // 此前这两个按钮**无条件**渲染，用户点下去必然被后端状态机拒绝——旧 skills.js
+    // 模块有一条 "never renders decision actions for terminal candidates" 的用例守着，
+    // 2026-09-15 #266 重写时没带过来。口径见函数开头：缺失 capabilities 即只读。
     const actionsHtml = `<div class="ca-actions ca-actions-right">
-        ${caps.canPromote ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
+        ${canPromote ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
         ${canDefer ? btn(T('cognition.candidate_defer_action', '稍后处理'), 'cand-decide', { id: candidate.id, data: { action: 'defer' } }) : ''}
         ${canReject ? btn(T('cognition.candidate_reject', '拒绝'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true }) : ''}
       </div>`;

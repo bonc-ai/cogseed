@@ -167,8 +167,8 @@ describe('认知资产 · 候选行的就地处理', () => {
     countsAsPending: true, isSnoozed: false, isTerminal: false,
   };
 
-  function candidate(id: string, status: string, capabilities: Record<string, unknown>) {
-    return {
+  function candidate(id: string, status: string, capabilities?: Record<string, unknown>) {
+    const base = {
       id,
       status,
       summary: `候选 ${id}`,
@@ -179,8 +179,10 @@ describe('认知资产 · 候选行的就地处理', () => {
       risk: 'low',
       sourceRefs: [{ kind: 'memory', id: `mem-${id}` }],
       evidenceRefs: [{ kind: 'memory', id: `mem-${id}` }],
-      capabilities,
     };
+    // capabilities 传 undefined 时**整个字段不出现**：这是"缺失"与"空对象"两种形态
+    // 里更极端的一种，也是旧模块那条 read-only 用例真正要覆盖的状态。
+    return capabilities ? { ...base, capabilities } : base;
   }
 
   it('候选详情里就地提供「稍后处理 / 拒绝」，动作带候选 id（不跳页、走 IPC）', () => {
@@ -205,5 +207,20 @@ describe('认知资产 · 候选行的就地处理', () => {
     });
     expect([...html.matchAll(/<button[^>]*data-action="defer"[^>]*>/g)].length).toBe(0);
     expect([...html.matchAll(/<button[^>]*data-action="reject"[^>]*>/g)].length).toBe(0);
+  });
+
+  it('capabilities 缺失（或为空对象）时按只读处理：一个决策入口都不渲染', () => {
+    // 这条覆盖的是"缺失 ⇒ 只读"这一分支——也是同一函数里原来三种读法唯一能分出
+    // 差别的地方：`!== false` 那种写法在这里仍会渲染出「稍后处理 / 拒绝」，即点下去
+    // 必然被后端拒绝的死按钮。口径与旧模块
+    // "treats a candidate without capabilities as read-only instead of guessing" 一致。
+    for (const caps of [undefined, {}] as const) {
+      const html = renderAssets({ name: 'review', candidateId: 'c-legacy' }, (store) => {
+        store.candidates = [candidate('c-legacy', 'pending_review', caps)];
+      });
+      expect([...html.matchAll(/<button[^>]*data-action="(defer|reject)"[^>]*>/g)].length).toBe(0);
+      expect(html).not.toContain(zh['cognition.candidate_defer_action']);
+      expect(html).not.toContain(zh['cognition.candidate_save_and_use']);
+    }
   });
 });
