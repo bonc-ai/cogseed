@@ -7797,7 +7797,7 @@
   "personalOntology.memory_export": "导出记忆",
   "personalOntology.memory_import": "导入记忆",
   "personalOntology.io_unavailable": "导出/导入工具未就绪",
-  "personalOntology.verified_chip": "已核实",
+  "personalOntology.verified_chip": "有来源支持",
   "personalOntology.verify_tip": "标记为已核实",
   "personalOntology.unverify_tip": "取消核实",
   "kb.transcriptCorrect.issue_reason_model_candidate": "模型候选",
@@ -7821,5 +7821,17 @@
   "cognition.source_immediate": "对话中记",
   "personalOntology.zone_facts": "事实",
   "personalOntology.zone_rules": "规则（写成 A → B）",
-  "personalOntology.rule_saved": "已按规则保存（A → B）：将作为规则进入世界模型"
+  "personalOntology.rule_saved": "已按规则保存（A → B）：将作为规则进入世界模型",
+  "personalOntology.verified_independent_chip": "独立核实过",
+  "personalOntology.verify_up_tip": "升级为独立核实",
+  "personalOntology.tribox_title": "三盒总览",
+  "personalOntology.tribox_vocab": "词汇（T）",
+  "personalOntology.tribox_facts": "事实（A）",
+  "personalOntology.tribox_rules": "规则（R）",
+  "personalOntology.tribox_asset_side": "资产",
+  "personalOntology.tribox_empty": "暂无内容",
+  "personalOntology.tribox_groups_unit": "组",
+  "personalOntology.tribox_fields_unit": "字段",
+  "personalOntology.tribox_rel_unit": "关系字段",
+  "personalOntology.tribox_vocab_hint": "词汇即各组字段名与模板声明——在组详情里维护"
 }

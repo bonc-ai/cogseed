@@ -411,6 +411,62 @@ describe('personal ontology renderer integration', () => {
     expect(ontology).toContain("personalOntology.field_value_removed");
   });
 
+  it('renders the tri-box overview merging group values with library assets', async () => {
+    const invoke = vi.fn(async (channel: string, payload?: any) => {
+      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'recall.assets.list') return { ok: true, assets: [] };
+      if (channel === 'personalOntology.groups.list') {
+        return {
+          ok: true,
+          groups: [{ group_id: 'grp-t1', title: '总览验证组', rel_path: 'x.md', created_at: '', updated_at: '' }],
+        };
+      }
+      if (channel === 'personalOntology.candidates.list') return { ok: true, candidates: [] };
+      if (channel === 'personalOntology.groups.fields.list' && payload && payload.groupId === 'grp-t1') {
+        return {
+          ok: true,
+          fields: [
+            { name: '居住地', values: [{ value: '常住北京', source: '手动', verified: 'independent' }] },
+            { name: '工作流程', values: [{ value: '评审 → 先讲产品模型', source: '手动' }] },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    const nav = elements.get('personal-onto-nav') as any;
+    const triRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'tri' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    nav.querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [triRow] : [];
+    // 渲染后绑定已发生但 mock 行不在原绑定集内——直接调 tri 数据与视图：
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+    const click = triRow.listeners.get('click');
+    expect(click).toBeTypeOf('function');
+    await click({ stopPropagation() {} });
+    await settleBackgroundWork();
+
+    const body = elements.get('personal-onto-main-body')?.innerHTML || '';
+    // 三盒区头都在
+    expect(body).toContain('词汇（T）');
+    expect(body).toContain('事实（A）');
+    expect(body).toContain('规则（R）');
+    // A 盒合并：组值（带 independent 章）+ personal 资产（mock 空，至少组侧在）
+    expect(body).toContain('居住地：常住北京');
+    expect(body).toContain('独立核实过');
+    // R 盒合并：组关系值
+    expect(body).toContain('工作流程：评审 → 先讲产品模型');
+    // T 盒统计
+    expect(body).toContain('总览验证组');
+  });
+
   it('renders the ontology-groups subpage with structured fields, as-of chips, conflict marks and backflow zone', async () => {
     const invoke = vi.fn(async (channel: string, payload?: any) => {
       if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };

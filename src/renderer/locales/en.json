@@ -7797,7 +7797,7 @@
   "personalOntology.memory_export": "Export memory",
   "personalOntology.memory_import": "Import memory",
   "personalOntology.io_unavailable": "Export/import tool unavailable",
-  "personalOntology.verified_chip": "Verified",
+  "personalOntology.verified_chip": "source-supported",
   "personalOntology.verify_tip": "Mark as verified",
   "personalOntology.unverify_tip": "Remove verification",
   "kb.transcriptCorrect.issue_reason_model_candidate": "Model candidate",
@@ -7821,5 +7821,17 @@
   "cognition.source_immediate": "Noted in chat",
   "personalOntology.zone_facts": "Facts",
   "personalOntology.zone_rules": "Rules (written as A → B)",
-  "personalOntology.rule_saved": "Saved as a rule (A → B): it will enter the world model as a rule"
+  "personalOntology.rule_saved": "Saved as a rule (A → B): it will enter the world model as a rule",
+  "personalOntology.verified_independent_chip": "independently verified",
+  "personalOntology.verify_up_tip": "Upgrade to independently verified",
+  "personalOntology.tribox_title": "Tri-box overview",
+  "personalOntology.tribox_vocab": "Vocabulary (T)",
+  "personalOntology.tribox_facts": "Facts (A)",
+  "personalOntology.tribox_rules": "Rules (R)",
+  "personalOntology.tribox_asset_side": "asset",
+  "personalOntology.tribox_empty": "empty",
+  "personalOntology.tribox_groups_unit": "groups",
+  "personalOntology.tribox_fields_unit": "fields",
+  "personalOntology.tribox_rel_unit": "relation fields",
+  "personalOntology.tribox_vocab_hint": "Vocabulary = group field names and template declarations — maintained in group detail"
 }

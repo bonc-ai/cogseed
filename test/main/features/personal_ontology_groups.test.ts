@@ -385,4 +385,30 @@ describe('personal_ontology_groups › @verified field value marker', () => {
     const missing = await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '不存在的值', true);
     expect(missing.ok).toBe(false);
   });
+
+  it('independent tier round-trips and cycles: none → source → independent → none', async () => {
+    const groups = await loadModule();
+    // 落盘解析：两档 marker 各自认出，裸标兼容
+    expect(groups.parseFieldValueLine('- 值 [手动] @verified:independent'))
+      .toEqual({ value: '值', source: '手动', verified: 'independent' });
+    const line = groups.serializeFieldValueLine({ value: '值', source: '导入', verified: 'independent' });
+    expect(line).toBe('- 值 [导入] @verified:independent');
+    expect(groups.parseFieldValueLine(line)).toEqual({ value: '值', source: '导入', verified: 'independent' });
+    // 裸标记仍是 source 档（存量兼容），不被 independent 覆盖
+    expect(groups.parseFieldValueLine('- 值 [手动] @verified').verified).toBe(true);
+
+    // toggle 三态：none → source → independent → none
+    const created = await groups.createGroup('test-user-groups', '两档核实组');
+    const gid = created.group!.group_id;
+    await groups.appendFieldValue('test-user-groups', gid, '居住地', '常住北京', '手动');
+    await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', true);
+    let fields = await groups.listGroupFields('test-user-groups', gid);
+    expect(fields.fields?.[0].values[0].verified).toBe(true);
+    await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', 'independent');
+    fields = await groups.listGroupFields('test-user-groups', gid);
+    expect(fields.fields?.[0].values[0].verified).toBe('independent');
+    await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', false);
+    fields = await groups.listGroupFields('test-user-groups', gid);
+    expect(fields.fields?.[0].values[0].verified).toBeUndefined();
+  });
 });

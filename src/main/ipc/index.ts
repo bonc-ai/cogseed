@@ -3596,13 +3596,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof value !== 'string') throw new Error('invalid value');
     return personalOntologyTemplateFiles.setFieldValueToRef(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
   },
-  // 断言核实档（2026-09-20）：用户亲手标记/取消一条值「已核实」。
+  // 断言核实档（2026-09-20；spec 007 升两档）：标记/取消一条值的核实状态。
+  // verified: false 取消 / true 有来源支持 / 'independent' 独立核实过。
   'personalOntology.groups.fields.verify': async ({ groupId, fieldName, value, verified }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('invalid value');
+    const level: boolean | 'independent' = verified === 'independent' ? 'independent' : verified === true;
     return personalOntologyGroups.setFieldValueVerified(
-      ctx.userId, groupId, fieldName, value, verified === true,
+      ctx.userId, groupId, fieldName, value, level,
     );
   },
   'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {

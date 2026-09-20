@@ -103,8 +103,9 @@ export interface FieldValue {
   project?: string;
   /** 可选：信息截至年月（落盘 `@asof:YYYY-MM`）。缺省 = 未标注（不参与时效判断）。 */
   asOf?: string;
-  /** 可选：用户已核实（落盘 `@verified` 裸标记）。缺省 = 未核实。 */
-  verified?: boolean;
+  /** 可选：用户已核实（落盘 `@verified` 裸标记=有来源支持；`@verified:independent`
+   *  =独立核实过——spec 007 两档，存量裸标向后兼容）。缺省 = 未核实。 */
+  verified?: boolean | 'independent';
 }
 
 /** `@asof:` 合法年月：1900-2099 年 + 01-12 月。写错的（如 2026-13）不认作
@@ -192,11 +193,11 @@ export function splitFlowEntries(text: string): string[] {
  *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
  *  `@proj:` 前缀剥离存 pid；`asof:` 前缀合法年月存 asOf、写错忽略（笔误的
  *  时间不该落进 project 冒充项目 id）；其他形态宽容保留原样（原行为）。 */
-export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string; verified?: boolean } | null {
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent' } | null {
   if (typeof line !== 'string') return null;
   const withSource = line.match(/^- (.+) \[(\S+)\]((?: @\S+)*)$/);
   if (withSource) {
-    const out: { value: string; source: string; project?: string; asOf?: string; verified?: boolean } = {
+    const out: { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent' } = {
       value: withSource[1].replace(/\\\[/g, '['),
       source: withSource[2],
     };
@@ -204,7 +205,9 @@ export function parseFieldValueLine(line: string): { value: string; source: stri
     for (const raw of markers) {
       const marker = raw.slice(1);
       if (marker === 'verified') {
-        out.verified = true; // 裸标记，无值——先于前缀判断，防掉进 project
+        out.verified = true; // 裸标记=有来源支持（存量兼容）；先于前缀判断，防掉进 project
+      } else if (marker === 'verified:independent') {
+        out.verified = 'independent'; // 独立核实过（两档中更强的一档）
       } else if (marker.startsWith('proj:')) {
         out.project = marker.slice('proj:'.length);
       } else if (marker.startsWith('asof:')) {
@@ -226,6 +229,7 @@ export function serializeFieldValueLine(fv: FieldValue): string {
   const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
   const withProject = fv.project ? `${base} @proj:${fv.project}` : base;
   const withAsOf = fv.asOf ? `${withProject} @asof:${fv.asOf}` : withProject;
+  if (fv.verified === 'independent') return `${withAsOf} @verified:independent`;
   return fv.verified ? `${withAsOf} @verified` : withAsOf;
 }
 
@@ -677,16 +681,15 @@ export async function setFieldValue(
   });
 }
 
-/** 字段值核实档 toggle（2026-09-20 断言核实维度）：用户亲手标记/取消
- *  「已核实」。同值多行一起切（同值行的核实语义本就一致）；值不存在报错。
- *  只改 verified 位，不动 value/source/project/asOf——去重键不含 verified，
- *  toggle 天然不产生新行。 */
+/** 字段值核实档 toggle（2026-09-20 断言核实维度；spec 007 升两档）：
+ *  level = false 取消 / true 有来源支持（裸 @verified）/ 'independent' 独立
+ *  核实过。同值多行一起切；只改 verified 位，不动其他标记。 */
 export async function setFieldValueVerified(
   uid: string,
   groupId: string,
   fieldName: string,
   value: string,
-  verified: boolean,
+  level: boolean | 'independent',
 ): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const name = String(fieldName || '').trim();
@@ -700,12 +703,12 @@ export async function setFieldValueVerified(
       return { ok: false, error: 'field value not found' };
     }
     let changed = false;
+    const next: boolean | 'independent' | undefined = level === false ? undefined : level;
     for (const fv of values) {
       if (fv.value !== val) continue;
-      const nextVerified = verified ? true : undefined;
-      if ((fv.verified === true) !== (nextVerified === true)) changed = true;
-      if (nextVerified) fv.verified = true;
-      else delete fv.verified;
+      if (fv.verified !== next) changed = true;
+      if (next === undefined) delete fv.verified;
+      else fv.verified = next;
     }
     return changed ? { changed: true } : { changed: false };
   });

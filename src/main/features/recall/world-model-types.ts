@@ -57,10 +57,11 @@ export interface WorldModelOntologyFact {
    *  when the value carries no time marker). Richard R26 temporal integrity:
    *  the as-of date is when the VALUE was correct, never the read date. */
   asOf?: string;
-  /** True when the user personally verified this value (bare `@verified`
-   *  marker, 2026-09-20 assertion-verification dimension). Manual-only: the
+  /** User verification level (2026-09-20 assertion-verification; spec 007 two
+   *  tiers): true = source-supported (bare `@verified`), 'independent' =
+   *  independently verified (`@verified:independent`). Manual-only: the
    *  confirmation write path never sets it and no receipt chain promotes it. */
-  verified?: boolean;
+  verified?: boolean | 'independent';
   /** True when asOf is more than 12 months old — a refresh hint, not a
    *  verdict: stable facts (birth year) also age past the threshold and are
    *  only flagged, never auto-removed. Absent when asOf is absent. */

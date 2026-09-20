@@ -83,6 +83,8 @@
   let _pocPendingCandidates = [];
   /** 当前打开的普通组详情 { groupId, title, fields, entries, conflicts, loaded, loadError } */
   let _pocGroupDetail = null;
+  /** 三盒总览（spec 007 T201）：A/R 盒合并视图数据源——组字段值 + 资产两侧。 */
+  let _pocTriBox = { loaded: false, loadError: '', groups: [], assets: [] };
   // 右栏展示会话沉淀出的基础画像和角色模板；旧候选审核仍由 Recall 正式资产页面负责。
   let _pocSelected = { kind: 'profile', id: 'user-profile' };
   // 模板文件编辑器 { groupId, templateId, sections, content, view:'form'|'raw' }
@@ -833,7 +835,14 @@
         ${_button({ label: _t('personalOntology.memory_import', '导入记忆'), size: 'sm', className: 'personal-onto-group-io-btn', attrs: { 'data-poc-nav': 'memory-import' } })}
       </div>
     </div>`;
-    const profileNav = `<div class="personal-onto-nav-section personal-onto-profile-nav-section">
+    const triSelected = _pocSelected.kind === 'tri';
+    const triNav = `<div class="personal-onto-nav-section">
+      <button type="button" class="personal-onto-nav-row${triSelected ? ' is-active' : ''}" data-poc-nav="tri" data-poc-id="tri">
+        <span class="personal-onto-nav-file-icon">${_icon('database', 'ui-icon')}</span>
+        <span class="personal-onto-nav-row-text">${escapeHtml(_t('personalOntology.tribox_title', '三盒总览'))}</span>
+      </button>
+    </div>`;
+    const profileNav = `${triNav}<div class="personal-onto-nav-section personal-onto-profile-nav-section">
       <div class="personal-onto-nav-section-head">
         <span>${escapeHtml(_t('personalOntology.profile_title', '个人画像'))}</span>
         <span class="muted">${escapeHtml(String(profileCount))}</span>
@@ -889,8 +898,97 @@
   }
 
   /** 本体候选池（回流候选在这里确认）。 */
-  async function _pocLoadPendingCandidates() {
-    const res = await _pocInvoke('personalOntology.candidates.list', {});
+  /** 三盒总览数据（spec 007 T201）：资产库（A: personal / R: rule+causalRule）
+   *  与全组字段（A: 普通值 / R: 关系值形状）并行取齐。 */
+  async function _pocLoadTriBox() {
+    const assetsRes = await _pocInvoke('recall.assets.list', {});
+    const assets = assetsRes && Array.isArray(assetsRes.assets)
+      ? assetsRes.assets.filter((a) => a && a.status === 'active')
+      : [];
+    const groupsWithFields = [];
+    if (_pocGroups.loaded || await _pocLoadGroups()) {
+      for (const g of _pocGroups.list) {
+        const res = await _pocInvoke('personalOntology.groups.fields.list', { groupId: g.group_id });
+        groupsWithFields.push({
+          gid: g.group_id,
+          title: g.title || g.group_id,
+          fields: res && Array.isArray(res.fields) ? res.fields : [],
+        });
+      }
+    }
+    _pocTriBox = { loaded: true, loadError: '', groups: groupsWithFields, assets };
+    return true;
+  }
+
+  /** 三盒总览视图：T 词汇统计 / A 事实合并（组值 + personal 资产）/
+   *  R 规则合并（关系值 + rule 资产）。同一性质内容一屏看全（spec US2）。 */
+  function _pocRenderTriBoxView() {
+    if (!_pocTriBox.loaded) {
+      return `<div class="personal-onto-empty">${escapeHtml(_t('personalOntology.loading', '加载中...'))}</div>`;
+    }
+    const isRel = (v) => /→|->/.test(String(v || ''));
+    // A 盒：组普通值（非关系形状）+ personal 资产
+    const aRows = [];
+    for (const g of _pocTriBox.groups) {
+      for (const field of g.fields) {
+        for (const fv of (field.values || [])) {
+          if (isRel(fv.value)) continue;
+          aRows.push({ text: `${field.name}：${fv.value}`, side: g.title, verified: fv.verified, asOf: fv.asOf });
+        }
+      }
+    }
+    for (const a of _pocTriBox.assets) {
+      if (a.type !== 'personal') continue;
+      aRows.push({ text: String(a.statement || ''), side: _t('personalOntology.tribox_asset_side', '资产'), verified: undefined, asOf: undefined });
+    }
+    // R 盒：组关系值 + rule 资产（含因果规则）
+    const rRows = [];
+    for (const g of _pocTriBox.groups) {
+      for (const field of g.fields) {
+        for (const fv of (field.values || [])) {
+          if (!isRel(fv.value)) continue;
+          rRows.push({ text: `${field.name}：${fv.value}`, side: g.title });
+        }
+      }
+    }
+    for (const a of _pocTriBox.assets) {
+      if (a.type !== 'rule') continue;
+      rRows.push({ text: String(a.statement || ''), side: _t('personalOntology.tribox_asset_side', '资产') });
+    }
+    // T 盒：词汇统计（组数 / 字段数 / 关系字段数）
+    const fieldCount = _pocTriBox.groups.reduce((n, g) => n + g.fields.length, 0);
+    const relFieldCount = _pocTriBox.groups.reduce((n, g) =>
+      n + g.fields.filter((f) => f.isRelation === true || (f.values || []).some((fv) => isRel(fv.value))).length, 0);
+
+    const zoneBlock = (titleKey, fallback, rowsHtml, count) => `
+      <div class="personal-onto-zone">
+        <div class="personal-onto-zone-head">${escapeHtml(_t(titleKey, fallback))} <span class="muted">${count}</span></div>
+        ${rowsHtml || `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.tribox_empty', '暂无内容'))}</div>`}
+      </div>`;
+    const aHtml = aRows.map((r) => `<div class="personal-onto-value-row">
+        <span class="personal-onto-value-text">${escapeHtml(r.text)}</span>
+        <span class="personal-onto-value-meta">
+          <span class="muted">${escapeHtml(String(r.side))}</span>
+          ${r.asOf ? `<span class="ca-chip">${escapeHtml(_tv('personalOntology.asof_chip', { m: r.asOf }, '截至 {m}'))}</span>` : ''}
+          ${r.verified === 'independent' ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_independent_chip', '独立核实过'))}</span>` : r.verified === true ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '有来源支持'))}</span>` : ''}
+        </span>
+      </div>`).join('');
+    const rHtml = rRows.map((r) => `<div class="personal-onto-value-row">
+        <span class="personal-onto-value-text">${escapeHtml(r.text)}</span>
+        <span class="personal-onto-value-meta"><span class="muted">${escapeHtml(String(r.side))}</span></span>
+      </div>`).join('');
+
+    return `<section class="personal-onto-tribox">
+      <div class="personal-onto-zone">
+        <div class="personal-onto-zone-head">${escapeHtml(_t('personalOntology.tribox_vocab', '词汇（T）'))} <span class="muted">${_pocTriBox.groups.length} ${escapeHtml(_t('personalOntology.tribox_groups_unit', '组'))} · ${fieldCount} ${escapeHtml(_t('personalOntology.tribox_fields_unit', '字段'))} · ${relFieldCount} ${escapeHtml(_t('personalOntology.tribox_rel_unit', '关系字段'))}</span></div>
+        <div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.tribox_vocab_hint', '词汇即各组字段名与模板声明——在组详情里维护'))}</div>
+      </div>
+      ${zoneBlock('personalOntology.tribox_facts', '事实（A）', aHtml, aRows.length)}
+      ${zoneBlock('personalOntology.tribox_rules', '规则（R）', rHtml, rRows.length)}
+    </section>`;
+  }
+
+  async function _pocLoadPendingCandidates() {    const res = await _pocInvoke('personalOntology.candidates.list', {});
     _pocCandidatesLoaded = true;
     _pocPendingCandidates = res && Array.isArray(res.candidates) ? res.candidates : [];
     return true;
@@ -975,10 +1073,25 @@
             ${fv.project ? `<span class="muted">@${escapeHtml(String(fv.project))}</span>` : ''}
             ${fv.asOf ? `<span class="ca-chip">${escapeHtml(_tv('personalOntology.asof_chip', { m: fv.asOf }, '截至 {m}'))}</span>` : ''}
             ${fv.asOf && _pocIsStaleAsOf(fv.asOf) ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.stale_chip', '可能过时'))}</span>` : ''}
-            ${fv.verified ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '已核实'))}</span>` : ''}
+            ${fv.verified === 'independent' ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_independent_chip', '独立核实过'))}</span>` : fv.verified === true ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '有来源支持'))}</span>` : ''}
             ${conflict.html}
           </span>
-          ${_iconButton({ label: fv.verified ? _t('personalOntology.unverify_tip', '取消核实') : _t('personalOntology.verify_tip', '标记为已核实'), icon: fv.verified ? 'x' : 'check', size: 'sm', className: 'personal-onto-value-verify', attrs: { 'data-poc-group-op': 'verify-value', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || ''), 'data-poc-verified': fv.verified ? '0' : '1' } })}
+          ${_iconButton({
+            label: fv.verified === 'independent'
+              ? _t('personalOntology.unverify_tip', '取消核实')
+              : fv.verified === true
+                ? _t('personalOntology.verify_up_tip', '升级为独立核实')
+                : _t('personalOntology.verify_tip', '标记为已核实'),
+            icon: fv.verified === 'independent' ? 'x' : 'check',
+            size: 'sm',
+            className: 'personal-onto-value-verify',
+            attrs: {
+              'data-poc-group-op': 'verify-value',
+              'data-poc-field': field.name,
+              'data-poc-value': String(fv.value || ''),
+              'data-poc-verified': fv.verified === 'independent' ? '0' : fv.verified === true ? 'independent' : '1',
+            },
+          })}
           ${_iconButton({ label: _t('personalOntology.value_remove_tip', '删除这条值'), icon: 'trash-2', size: 'sm', className: 'personal-onto-value-remove', attrs: { 'data-poc-group-op': 'remove-value', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || '') } })}
         </div>`;
       }).join('') : `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.field_no_values', '尚无值'))}</div>`;
@@ -1202,10 +1315,12 @@
     await _pocOpenGroupDetail(_pocGroupDetail.groupId);
   }
 
-  /** 核实档 toggle（2026-09-20 断言核实维度）：章只由用户这一下产生。 */
+  /** 核实档 toggle（2026-09-20 断言核实维度；spec 007 两档三态循环）：
+   *  未核实 → 有来源支持 → 独立核实 → 取消。章只由用户这一下产生。 */
   async function _pocToggleValueVerified(el, fieldName, value) {
     if (!_pocGroupDetail) return;
-    const nextVerified = el.getAttribute('data-poc-verified') === '1';
+    const raw = el.getAttribute('data-poc-verified');
+    const nextVerified = raw === 'independent' ? 'independent' : raw === '1';
     await _pocRunOnce(`verify:${fieldName}:${value}`, el, async () => {
       const res = await _pocInvoke('personalOntology.groups.fields.verify', {
         groupId: _pocGroupDetail.groupId, fieldName, value, verified: nextVerified,
@@ -1272,6 +1387,12 @@
     const bodyEl = document.getElementById('personal-onto-main-body');
     if (!headerEl || !bodyEl) return;
 
+    if (_pocSelected.kind === 'tri') {
+      headerEl.classList.remove('is-profile');
+      headerEl.innerHTML = '';
+      bodyEl.innerHTML = _pocRenderTriBoxView();
+      return;
+    }
     if (_pocSelected.kind === 'profile') {
       headerEl.innerHTML = '';
       headerEl.classList.add('is-profile');
@@ -1337,7 +1458,13 @@
       el.addEventListener('click', async (e) => {
         const action = el.getAttribute('data-poc-nav');
         const id = el.getAttribute('data-poc-id');
-        if (action === 'profile') {
+        if (action === 'tri') {
+          _pocSelected = { kind: 'tri', id: 'tri' };
+          _pocGroupEditor = null;
+          _pocGroupDetail = null;
+          _pocTriBox = { loaded: false, loadError: '', groups: [], assets: [] };
+          renderPersonalOntology();
+        } else if (action === 'profile') {
           _pocSelected = { kind: 'profile', id: 'user-profile' };
           _pocGroupEditor = null;
           _pocGroupDetail = null;
@@ -1528,6 +1655,18 @@
 
     try {
       const installed = _pocTemplates.filter((t) => t.installed && t.group_id);
+      // 三盒总览（spec 007 T201）：独立视图，数据自取。
+      if (_pocSelected.kind === 'tri') {
+        if (!_pocTriBox.loaded) {
+          nav.innerHTML = '<div class="personal-onto-nav-empty muted">' + _t('personalOntology.loading', '加载中...') + '</div>';
+          bodyEl.innerHTML = '<div class="personal-onto-empty">' + _t('personalOntology.loading', '加载中...') + '</div>';
+          await _pocLoadTriBox();
+        }
+        _pocRenderNav();
+        _pocBindNav();
+        _pocRenderMain();
+        return;
+      }
       // 本体分组子页（2026-09-20 迁入）：group 视图先于画像/模板链——
       // _pocOpenGroupDetail 已渲染，这里只负责刷新 nav 状态。
       if (_pocSelected.kind === 'group' && _pocGroupDetail && _pocGroupDetail.groupId === _pocSelected.id) {
@@ -1590,6 +1729,7 @@
     _pocGroups = { list: [], loaded: false, loadError: '' };
     _pocCandidatesLoaded = false;
     _pocGroupDetail = null;
+    _pocTriBox = { loaded: false, loadError: '', groups: [], assets: [] };
     return renderPersonalOntology();
   }
 

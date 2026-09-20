@@ -5785,7 +5785,7 @@
   "personalOntology.memory_export": "Exportar memória",
   "personalOntology.memory_import": "Importar memória",
   "personalOntology.io_unavailable": "Ferramenta de exportação/importação indisponível",
-  "personalOntology.verified_chip": "Verificado",
+  "personalOntology.verified_chip": "com fonte confirmada",
   "personalOntology.verify_tip": "Marcar como verificado",
   "personalOntology.unverify_tip": "Remover verificação",
   "kb.transcriptCorrect.issue_reason_model_candidate": "Candidato do modelo",
@@ -5809,5 +5809,17 @@
   "cognition.source_immediate": "Anotado no chat",
   "personalOntology.zone_facts": "Fatos",
   "personalOntology.zone_rules": "Regras (escritas como A → B)",
-  "personalOntology.rule_saved": "Salvo como regra (A → B): entrará no world model como regra"
+  "personalOntology.rule_saved": "Salvo como regra (A → B): entrará no world model como regra",
+  "personalOntology.verified_independent_chip": "verificado de forma independente",
+  "personalOntology.verify_up_tip": "Elevar a verificação independente",
+  "personalOntology.tribox_title": "Visão de três caixas",
+  "personalOntology.tribox_vocab": "Vocabulário (T)",
+  "personalOntology.tribox_facts": "Fatos (A)",
+  "personalOntology.tribox_rules": "Regras (R)",
+  "personalOntology.tribox_asset_side": "ativo",
+  "personalOntology.tribox_empty": "vazio",
+  "personalOntology.tribox_groups_unit": "grupos",
+  "personalOntology.tribox_fields_unit": "campos",
+  "personalOntology.tribox_rel_unit": "campos de relação",
+  "personalOntology.tribox_vocab_hint": "Vocabulário = nomes de campos e declarações de modelo — mantidos no detalhe do grupo"
 }

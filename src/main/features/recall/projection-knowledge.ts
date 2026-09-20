@@ -78,7 +78,7 @@ async function loadOntologyFacts(
           source: 'personal_ontology',
           ...(entry.project ? { projectId: entry.project } : {}),
           ...(entry.asOf ? { asOf: entry.asOf, ...(isStaleAsOf(entry.asOf) ? { needsRefresh: true } : {}) } : {}),
-          ...(entry.verified ? { verified: true } : {}),
+          ...(entry.verified ? { verified: entry.verified } : {}),
         });
         if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
       }

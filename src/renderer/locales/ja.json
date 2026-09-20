@@ -5785,7 +5785,7 @@
   "personalOntology.memory_export": "メモリをエクスポート",
   "personalOntology.memory_import": "メモリをインポート",
   "personalOntology.io_unavailable": "エクスポート/インポートツールが利用できません",
-  "personalOntology.verified_chip": "確認済み",
+  "personalOntology.verified_chip": "出所サポートあり",
   "personalOntology.verify_tip": "確認済みとしてマーク",
   "personalOntology.unverify_tip": "確認を解除",
   "kb.transcriptCorrect.issue_reason_model_candidate": "モデル候補",
@@ -5809,5 +5809,17 @@
   "cognition.source_immediate": "会話中に記録",
   "personalOntology.zone_facts": "事実",
   "personalOntology.zone_rules": "ルール（A → B と書く）",
-  "personalOntology.rule_saved": "ルールとして保存しました（A → B）：世界モデルにルールとして反映されます"
+  "personalOntology.rule_saved": "ルールとして保存しました（A → B）：世界モデルにルールとして反映されます",
+  "personalOntology.verified_independent_chip": "独立に確認済み",
+  "personalOntology.verify_up_tip": "独立確認に昇格",
+  "personalOntology.tribox_title": "三ボックス概覧",
+  "personalOntology.tribox_vocab": "語彙（T）",
+  "personalOntology.tribox_facts": "事実（A）",
+  "personalOntology.tribox_rules": "ルール（R）",
+  "personalOntology.tribox_asset_side": "資産",
+  "personalOntology.tribox_empty": "内容なし",
+  "personalOntology.tribox_groups_unit": "組",
+  "personalOntology.tribox_fields_unit": "フィールド",
+  "personalOntology.tribox_rel_unit": "関係フィールド",
+  "personalOntology.tribox_vocab_hint": "語彙=各グループのフィールド名とテンプレート宣言。グループ詳細で管理"
 }
