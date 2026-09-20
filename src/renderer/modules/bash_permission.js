@@ -112,9 +112,14 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
 
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay';
+    overlay.className = 'ui-modal-overlay';
     const initialTitle = localizedTitle();
-    const titleHtml = initialTitle ? `<div class="modal-title ui-dialog-title">${_bashEscapeHtml(initialTitle)}</div>` : '';
+    const titleHtml = initialTitle
+      ? `<header class="ui-modal__header"><div class="ui-modal__heading"><h2 class="ui-modal__title" id="bash-permission-title">${_bashEscapeHtml(initialTitle)}</h2></div></header>`
+      : '';
+    const titleAttr = initialTitle
+      ? 'aria-labelledby="bash-permission-title"'
+      : `aria-label="${_bashEscapeHtml(modeTitle())}"`;
     const msgHtml = _bashEscapeHtml(localizedMessage()).replace(/\n/g, '<br />');
     let selectedModeValue = safeCurrentMode;
     const selectedItem = () => modes.find((item) => item.mode === selectedModeValue) || modes.find((item) => item.mode === safeCurrentMode) || modes[0];
@@ -133,11 +138,11 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
       : '<span class="bash-permission-mode-trigger-caret" aria-hidden="true">⌄</span>';
 
     overlay.innerHTML = `
-      <div class="modal modal-standard ui-dialog bash-permission-dialog" role="dialog" aria-modal="true">
+      <section class="ui-modal ui-modal--lg bash-permission-dialog" role="dialog" aria-modal="true" ${titleAttr}>
         ${titleHtml}
-        <div class="modal-body ui-dialog-message bash-permission-message">${msgHtml}</div>
-        <div class="bash-permission-footer">
-          <div class="modal-actions bash-permission-actions">
+        <div class="ui-modal__body ui-dialog-message bash-permission-message">${msgHtml}</div>
+        <footer class="ui-modal__footer bash-permission-footer">
+          <div class="bash-permission-actions">
             <div class="bash-permission-mode-control">
               <button class="btn bash-permission-mode-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
                 <span class="bash-permission-mode-trigger-label">${_bashEscapeHtml(initialItem ? initialItem.label : modeTitle())}</span>
@@ -145,13 +150,13 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
               </button>
             </div>
             <span class="bash-permission-actions-spacer" aria-hidden="true"></span>
-            <button class="btn" data-act="cancel">${_bashEscapeHtml(t('bash.permission.deny'))}</button>
-            <button class="btn btn-primary" data-act="choice" data-id="allow_once">${_bashEscapeHtml(t('bash.permission.allow_once'))}</button>
-            <button class="btn" data-act="choice" data-id="allow_run">${_bashEscapeHtml(t('bash.permission.allow_run'))}</button>
+            ${uiButton({ label: t('bash.permission.deny'), role: 'secondary', attrs: { 'data-act': 'cancel' } })}
+            ${uiButton({ label: t('bash.permission.allow_once'), role: 'primary', attrs: { 'data-act': 'choice', 'data-id': 'allow_once' } })}
+            ${uiButton({ label: t('bash.permission.allow_run'), role: 'secondary', attrs: { 'data-act': 'choice', 'data-id': 'allow_run' } })}
           </div>
           <div class="bash-permission-mode-hint">${_bashEscapeHtml(modeHint())}</div>
-        </div>
-      </div>
+        </footer>
+      </section>
       <div class="bash-permission-mode-menu" role="listbox" hidden>
         ${modeHtml}
       </div>
@@ -272,19 +277,23 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
     });
     const cancelBtn = overlay.querySelector('[data-act="cancel"]');
     cancelBtn.addEventListener('click', () => finish('deny'));
+    const setActionLabel = (button, text) => {
+      const label = button && button.querySelector('.ui-button__label');
+      if (label) label.textContent = text;
+    };
     document.addEventListener('keydown', onKey, true);
     document.addEventListener('click', onDocClick, true);
     const onI18nChange = () => {
       modes = _bashPermissionModeOptions();
-      const titleEl = overlay.querySelector('.ui-dialog-title');
+      const titleEl = overlay.querySelector('.ui-modal__title');
       if (titleEl) titleEl.textContent = localizedTitle() || '';
       const messageEl = overlay.querySelector('.bash-permission-message');
       if (messageEl) messageEl.innerHTML = _bashEscapeHtml(localizedMessage()).replace(/\n/g, '<br />');
       const hintEl = overlay.querySelector('.bash-permission-mode-hint');
       if (hintEl) hintEl.textContent = modeHint();
-      cancelBtn.textContent = t('bash.permission.deny');
-      overlay.querySelector('[data-id="allow_once"]').textContent = t('bash.permission.allow_once');
-      overlay.querySelector('[data-id="allow_run"]').textContent = t('bash.permission.allow_run');
+      setActionLabel(cancelBtn, t('bash.permission.deny'));
+      setActionLabel(overlay.querySelector('[data-id="allow_once"]'), t('bash.permission.allow_once'));
+      setActionLabel(overlay.querySelector('[data-id="allow_run"]'), t('bash.permission.allow_run'));
       updateModeUi();
       if (modeMenu && !modeMenu.hidden) positionMenu();
     };

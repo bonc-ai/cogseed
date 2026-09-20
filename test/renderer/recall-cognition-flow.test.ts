@@ -236,7 +236,7 @@ describe('asset governance actions', () => {
     expect(core).toContain("restore: 'recall.assets.restore'");
     // 2026-09-17 重构：暂停/恢复合并为标题旁总开关（data-action 动态二值），
     // 归档操作已从界面移除（子安拍板）；IPC 通道名不变。
-    expect(views).toContain("data-action=\"${statusOn ? 'pause' : 'resume'}\"");
+    expect(views).toContain("'data-action': statusOn ? 'pause' : 'resume'");
   });
 
   it('confirms destructive asset actions before sending', () => {

@@ -16,8 +16,7 @@
   /* ────────────────────────── 共享零件 ────────────────────────── */
 
   /* 按钮一律走共享 uiButton 工厂（shared-ui-adoption-guard 约束：本模块不落
-   * 裸控件）。视觉仍由 .ca-btn 系列类驱动（cognition-assets.css 内
-   * .ca-app 前缀覆盖全局 .btn 默认）。 */
+   * 裸控件）。页面类只负责业务布局与复合交互，不覆盖共享按钮基础皮肤。 */
   const btn = (label, act, options) => {
     const opts = options || {};
     const classes = ['ca-btn', opts.primary ? 'is-primary' : '', opts.danger ? 'is-danger' : '', opts.small ? 'is-sm' : '', opts.className || ''].filter(Boolean).join(' ');
@@ -32,6 +31,7 @@
     return window.uiButton({
       label,
       className: classes,
+      role: opts.danger ? 'danger' : opts.primary ? 'primary' : 'secondary',
       size: opts.small ? 'sm' : 'md',
       ...(opts.disabled ? { disabled: true } : {}),
       attrs: Object.assign(
@@ -69,13 +69,15 @@
     ? window.uiIconHtml(name, className)
     : fallback);
 
-  const empty = (title, hint, actionHtml) => `
-    <div class="ca-empty">
-      <div class="ca-empty-icon" aria-hidden="true">${uiIcon('circle', 'ca-empty-glyph', '◎')}</div>
-      <strong>${esc(title)}</strong>
-      ${hint ? `<span>${esc(hint)}</span>` : ''}
-      ${actionHtml || ''}
-    </div>`;
+  const empty = (title, hint, action) => {
+    if (typeof window.uiEmptyState !== 'function') throw new Error('cognition assets require uiEmptyState');
+    return window.uiEmptyState({
+      kind: action ? 'actionable' : hint ? 'explained' : 'quiet',
+      title,
+      ...(hint ? { hint, icon: 'circle' } : {}),
+      ...(action ? { action } : {}),
+    });
+  };
 
   const sectionHead = (title, note, right) => `
     <div class="ca-section-head"><strong>${esc(title)}</strong>${note ? `<span class="ca-note">${esc(note)}</span>` : ''}${right ? `<span class="ca-section-right">${right}</span>` : ''}</div>`;
@@ -757,9 +759,15 @@
     const statusKind = String(asset.status || 'active');
     const statusOn = statusKind === 'active';
     const switchable = statusKind === 'active' || statusKind === 'paused';
-    const switchEl = `<button type="button" class="ca-switch${statusOn ? ' is-on' : ''}" role="switch" aria-checked="${statusOn ? 'true' : 'false'}" data-act="asset-action" data-id="${esc(asset.id)}" data-action="${statusOn ? 'pause' : 'resume'}" aria-label="${esc(T('cognition.asset_switch_label', '自动带入新任务'))}">
-        <span class="ca-switch-knob" aria-hidden="true"></span>
-      </button>`;
+    const switchEl = window.uiSwitch({
+      label: T('cognition.asset_switch_label', '自动带入新任务'),
+      checked: statusOn,
+      attrs: {
+        'data-act': 'asset-action',
+        'data-id': asset.id,
+        'data-action': statusOn ? 'pause' : 'resume',
+      },
+    });
     const switchHint = statusOn
       ? T('cognition.asset_switch_on_hint', '使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI')
       : T('cognition.asset_switch_off_hint', '已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开');
@@ -897,7 +905,10 @@
         T('cognition.tree_empty', '还没有正式资产'),
         T('cognition.tree_empty_hint', '候选被确认为正式资产后会出现在这里；当前还没有已确认的资产。'),
         // 条件与按钮数字同口径（stats.pending），避免出现「查看 0 条」。
-        stats.pending ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { primary: true }) : '',
+        stats.pending ? {
+          label: T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }),
+          attrs: { 'data-act': 'go-review' },
+        } : null,
       );
     return `${heroHtml}
       <div class="ca-card ca-tree-card">
@@ -1216,7 +1227,7 @@
         <div class="ca-sub">${esc(T('cognition.nightly_capture_hint', '夜间在所选时间自动整理当天结束的会话（消耗模型额度）；产出的内容进入「待我处理」，等你批准或调整。'))}</div>
       </div>
       ${nightlyOn ? `<label class="ca-setting-time"><span>${esc(T('cognition.nightly_capture_time', '开始时间'))}</span>${window.uiInput({ id: 'ca-nightly-start', type: 'time', value: nightlyStart, attrs: { 'data-act': 'nightly-time' } })}</label>` : ''}
-      ${window.uiSwitch({ label: T('cognition.nightly_capture_title', '夜间自动沉淀'), checked: nightlyOn, className: 'ca-switch', attrs: { 'data-act': 'nightly-toggle' } })}
+      ${window.uiSwitch({ label: T('cognition.nightly_capture_title', '夜间自动沉淀'), checked: nightlyOn, attrs: { 'data-act': 'nightly-toggle' } })}
     </div>
     <div class="ca-card ca-setcard">
       <div class="ca-line">
