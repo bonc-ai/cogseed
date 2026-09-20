@@ -16,6 +16,14 @@
  * What it asserts:
  *   - clean clone / CI: the committed `AGENTS.md` is the injected file and carries the rules → green;
  *   - locally replaced `AGENTS.md` that lost the rules → red, with the concrete remediation.
+ *
+ * Choosing the markers (two false verdicts already observed, both on 2026-09-20):
+ *   - too loose: `Shared Renderer primitives` / `cogseed-component-change` also appear in prose that
+ *     merely *talks about* the rules — a replacement file that discusses them but no longer states
+ *     them passed. So the markers below are **rule body** strings (the primitive list, the named
+ *     primitives, the frozen-baseline clause), which plain prose about the rules does not contain.
+ *   - too eager: a marker quoted in a doc example looked like a truncated block. Code spans and
+ *     fenced blocks are stripped before the pairing check (see `withoutCodeSpans`).
  */
 
 import { execFileSync } from 'node:child_process';
@@ -28,8 +36,18 @@ const root = path.resolve(import.meta.dirname, '../..');
 /** Files an AI harness may auto-inject as instructions. `CLAUDE.md` is a pointer in this repo. */
 const INJECTED_FILES = ['AGENTS.md', 'CLAUDE.md'];
 
-/** The shared Renderer contract: the primitive list plus the mandatory component-change skill pointer. */
-const REQUIRED_RULE_MARKERS = ['Shared Renderer primitives', 'cogseed-component-change'];
+/**
+ * The shared Renderer contract, as **rule body** text (not concept names): the primitive list, two
+ * named primitives, the frozen raw-control baseline clause, and the mandatory component-change skill
+ * pointer. All four are literal lines of the committed `## Renderer` section; a document that only
+ * *mentions* these concepts must not satisfy the check (see the self-check test).
+ */
+const REQUIRED_RULE_MARKERS = [
+  'Shared Renderer primitives are',
+  'uiModalController(',
+  'freezes the legacy raw-control baseline',
+  'cogseed-component-change',
+];
 
 function readIfExists(relativePath: string): string {
   const file = path.join(root, relativePath);
@@ -53,9 +71,20 @@ function committedAgentsMd(): string | null {
   }
 }
 
-/** Parenthesised marker names worth pairing, e.g. `<!-- BEGIN: some-block -->`. */
+/**
+ * Documentation examples are not markers: strip fenced code blocks and inline code spans
+ * before scanning. Without this, a doc that merely *mentions* a marker (e.g. an instruction
+ * file explaining its own sync block) looks like a truncated block and turns this test red.
+ * Found the hard way on 2026-09-20: the same working copy passed in a clean clone and failed
+ * once a local instruction file quoted the marker inline.
+ */
+function withoutCodeSpans(text: string): string {
+  return text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+}
+
+/** Paired marker names worth checking, e.g. `<!-- BEGIN: some-block -->` on its own line. */
 function beginMarkerNames(text: string): string[] {
-  return [...text.matchAll(/<!--\s*BEGIN:\s*([A-Za-z0-9_.-]+)/g)].map((m) => m[1]!);
+  return [...withoutCodeSpans(text).matchAll(/<!--\s*BEGIN:\s*([A-Za-z0-9_.-]+)/g)].map((m) => m[1]!);
 }
 
 describe('AI 注入文件必须带上共享组件规范', () => {
@@ -116,12 +145,34 @@ describe('AI 注入文件必须带上共享组件规范', () => {
     // 规则判据：缺任一标记即为违规
     expect(hasAllRules('Renderer buttons go through uiButton(...)')).toBe(false);
     expect(
-      hasAllRules('Shared Renderer primitives are `uiButton(...)` … see `.agents/skills/cogseed-component-change/SKILL.md`'),
+      hasAllRules(
+        'Shared Renderer primitives are `uiButton(...)`, `uiIconButton(...)`, … `uiModalController(...)`, '
+          + '`uiPageHeader(...)`; … follow `.agents/skills/cogseed-component-change/SKILL.md`; … '
+          + '`test/renderer/shared-ui-adoption-guard.test.ts` freezes the legacy raw-control baseline;',
+      ),
     ).toBe(true);
+    // **最关键的一条**：只是"谈论"规则的文件不算带规则。文档里引用概念名（甚至引用原语名）不足以
+    // 满足判据——否则讲解规则的文档自己就会把红灯骗成绿灯（2026-09-20 实测：v0.9/v0.10 手册正文
+    // 引用了 Shared Renderer primitives 与 cogseed-component-change，于是"没装同步"也被判绿）
+    expect(
+      hasAllRules(
+        '公开 AGENTS.md 里混着对内工程约束：`## Renderer`（共享组件原语清单、checkbox 规则）、`## i18n`；'
+          + '实测本地手册里 `Shared Renderer primitives`、`cogseed-component-change` 命中 0 次。',
+      ),
+    ).toBe(false);
     // 成对标记判据：只有 BEGIN 的文件必须被识别为半截
     expect(beginMarkerNames('<!-- BEGIN: public-agents-sync --> body <!-- END: public-agents-sync -->')).toEqual([
       'public-agents-sync',
     ]);
     expect(beginMarkerNames('<!-- BEGIN: some-block（带说明后缀） --> body')).toEqual(['some-block']);
+    // 文档里的"示例"不是标记：行内代码与围栏代码块内的 BEGIN 必须被忽略，否则讲解自己的同步块
+    // 就会变成假红（2026-09-20 实测：干净 clone 绿、装了本地指令文件后反而红）
+    expect(beginMarkerNames('说明：`<!-- BEGIN: x -->` 必须有对应 END')).toEqual([]);
+    expect(beginMarkerNames('```markdown\n<!-- BEGIN: demo -->\n```\n')).toEqual([]);
+    expect(beginMarkerNames('> 引用里的示例 `<!-- BEGIN: y -->` 同样忽略')).toEqual([]);
+    // 但真标记（不在代码里）仍必须被发现
+    expect(beginMarkerNames('# 文档\n<!-- BEGIN: real-block -->\n正文\n<!-- END: real-block -->')).toEqual([
+      'real-block',
+    ]);
   });
 });
