@@ -4430,8 +4430,6 @@
   "kb.transcriptCorrect.applied_pending": "未確認 {count} 件",
   "kb.transcriptCorrect.retention": "文字保持率 {percent}%",
   "kb.transcriptCorrect.over_rewrite": "過剰な改写の疑い",
-  "kb.transcriptCorrect.preview": "整文版をプレビュー",
-  "kb.transcriptCorrect.preview_title": "整文版プレビュー",
   "kb.transcriptCorrect.save": "ライブラリに保存",
   "kb.transcriptCorrect.saved": "ライブラリに保存しました：{name}",
   "kb.transcriptCorrect.save_failed": "保存に失敗しました。",

@@ -936,13 +936,6 @@
       }));
       if (state.cleanedText) {
         buttons.push(button({
-          label: t('kb.transcriptCorrect.preview', '预览清理版'),
-          icon: 'file-text',
-          role: 'secondary',
-          size: 'sm',
-          attrs: { 'data-atc-action': 'preview' },
-        }));
-        buttons.push(button({
           label: t('kb.transcriptCorrect.diff', '对照原文'),
           icon: 'split',
           role: 'secondary',
@@ -976,14 +969,6 @@
           size: 'sm',
           disabled: !state.runId,
           attrs: { 'data-atc-action': 'notes' },
-        }));
-        buttons.push(button({
-          label: t('kb.transcriptCorrect.revert', '回滚'),
-          icon: 'x-circle',
-          // 次要操作 → 线框按钮（规范 §三-1）
-          role: 'secondary',
-          size: 'sm',
-          attrs: { 'data-atc-action': 'revert' },
         }));
       }
       host.innerHTML = buttons.join('');
@@ -1616,7 +1601,7 @@
         note.textContent = t('kb.transcriptCorrect.diff_note', '高亮 = 本次替换，删除线 = 口癖删除；原文从未被改写，回滚只做校验与返回。');
       }
       const result = await modal;
-      if (result?.reason === 'action' && result?.id === 'revert') {
+      if (result?.reason === 'action' && result?.value === 'revert') {
         await runRevert();
       }
     }
@@ -1743,7 +1728,7 @@
       const host = modal?.dialog?.querySelector('[data-atc-notes]');
       if (host) host.textContent = state.notesText;
       const result = await modal;
-      if (result?.reason === 'action' && result?.id === 'save-notes') {
+      if (result?.reason === 'action' && result?.value === 'save-notes') {
         await saveNotes();
       }
     }
@@ -2431,11 +2416,9 @@
       if (kind === 'scan') void runScan();
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
       else if (kind === 'apply') void runApply();
-      else if (kind === 'preview') openTextModal(t('kb.transcriptCorrect.preview_title', '清理版预览'), state.cleanedText);
       else if (kind === 'diff') void openDiffModal();
       else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
-      else if (kind === 'revert') void runRevert();
       else if (kind === 'add') void runAddEntry();
       else if (kind === 'seed-fillers') void runSeedFillers();
     }

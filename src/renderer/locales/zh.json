@@ -6323,8 +6323,6 @@
   "kb.transcriptCorrect.applied_pending": "待确认 {count} 条",
   "kb.transcriptCorrect.retention": "字符保留率 {percent}%",
   "kb.transcriptCorrect.over_rewrite": "疑似过度改写",
-  "kb.transcriptCorrect.preview": "预览清理版",
-  "kb.transcriptCorrect.preview_title": "清理版预览",
   "kb.transcriptCorrect.save": "另存到知识库",
   "kb.transcriptCorrect.saved": "已保存到知识库：{name}",
   "kb.transcriptCorrect.save_failed": "保存失败，请稍后重试。",

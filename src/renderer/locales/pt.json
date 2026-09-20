@@ -4430,8 +4430,6 @@
   "kb.transcriptCorrect.applied_pending": "{count} pendentes",
   "kb.transcriptCorrect.retention": "Retenção {percent}%",
   "kb.transcriptCorrect.over_rewrite": "Possível reescrita excessiva",
-  "kb.transcriptCorrect.preview": "Pré-visualizar versão limpa",
-  "kb.transcriptCorrect.preview_title": "Pré-visualização",
   "kb.transcriptCorrect.save": "Salvar na biblioteca",
   "kb.transcriptCorrect.saved": "Salvo na biblioteca: {name}",
   "kb.transcriptCorrect.save_failed": "Falha ao salvar.",
