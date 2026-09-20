@@ -783,6 +783,64 @@ export function clearCandidates(userId: string, opts: { includePending?: boolean
   return removed;
 }
 
+/**
+ * 把**已确认应用**的 `wrong → correct` 对记进词表（source: meeting_accept）。
+ *
+ * 为什么放在这里：'meeting_accept' 这个 source 一直是"词表里预留、但全仓库没人发过"
+ * 的值（见 upsertEntry 里那段注释——它曾经因此让每个新词条都变成全局规则）。
+ * 现在由"扫描里勾选并应用了模型候选"来发它：人点了勾、正文里真的换了，才算确认。
+ *
+ * 作用域刻意收窄到**当前文档**（传 `docId` ⇒ upsertEntry 走"仅本文档"分支）：
+ * 一次会议里确认的写法不等于全局规则，这正是那份事故注释要防的事。
+ */
+export function rememberConfirmedPairs(
+  userId: string,
+  pairs: Array<{ wrong: string; correct: string }>,
+  context: { docId?: string } = {},
+): { created: number; updated: number; skipped: number } {
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  const docId = typeof context.docId === 'string' ? context.docId.trim() : '';
+  // 作用域必须**显式给**。`upsertEntry` 里 `source === 'meeting_accept'` 只会把
+  // `global` 置为 false，却不动 `docIds`/`scenarioTags`——那样得到的条目
+  // `scopeAllows` 恒为 false，等于一条**永不命中的死规则**（这也正是
+  // 'meeting_accept' 这个 source 一直没有任何调用方的真正原因）。
+  if (!docId) {
+    // 没有文档作用域时宁可如实跳过，也不要写死条目。
+    return { created: 0, updated: 0, skipped: (pairs || []).length };
+  }
+  const scope = { docIds: [docId], scenarioTags: [] as string[], global: false };
+  const seen = new Set<string>();
+  for (const pair of pairs || []) {
+    const wrong = String(pair?.wrong ?? '').trim();
+    const correct = String(pair?.correct ?? '').trim();
+    if (!wrong || !correct) {
+      skipped += 1;
+      continue;
+    }
+    const key = `${foldText(wrong).trim()}|${foldText(correct).trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const result = upsertEntry(userId, {
+        wrong,
+        correct,
+        source: 'meeting_accept',
+        scope,
+      });
+      if (!result.entry) skipped += 1;
+      else if (result.created) created += 1;
+      else updated += 1;
+    } catch (error) {
+      // 单条不合法（超长/空）不该让整次应用失败：如实计入 skipped。
+      log.warn('remember confirmed pair failed', { error: (error as Error).message });
+      skipped += 1;
+    }
+  }
+  return { created, updated, skipped };
+}
+
 /** 作用域选择（面板「接受」动作的范围，方案 §七）。 */
 export type ScopeChoice = 'keep' | 'doc' | 'task' | 'global';
 

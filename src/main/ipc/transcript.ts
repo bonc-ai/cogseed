@@ -687,11 +687,51 @@ export const invokeHandlers = {
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-    const allCandidates = [...scan.candidates, ...mergeCandidates, ...headingCandidates];
+    // 模型建议（方案 §五 P2-1，与扫描合并后）：按 headings 同款"合成 ref"接入，
+    // 复用同一条替换/偏移/回滚管道，不另起第二套改写逻辑。
+    //
+    // 两条硬要求：
+    //   1. **span 必须与正文逐字对上**（折叠后比较，容忍大小写/全角）。扫描到 apply
+    //      之间可能重扫或换稿，旧坐标会错位——对不上就丢弃，绝不按脏坐标改正文。
+    //   2. **必须显式勾选才应用**：模型候选不进 `syntheticRefs` 那套"给了就一定应用"，
+    //      只能从 acceptedIds 里来；没传 acceptedIds 时一条都不应用（否则
+    //      applyCorrections 的"缺省=全部非 high"会让模型建议被静默全量应用）。
+    const modelInputs = Array.isArray(payload?.models) ? payload.models.slice(0, 200) : [];
+    const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = modelInputs
+      .map((raw, index): transcriptAutoCorrect.CorrectionCandidate | null => {
+        const item = raw as Partial<{ start: unknown; wrong: unknown; correct: unknown; confidence: unknown; reason: unknown }>;
+        const start = typeof item?.start === 'number' && Number.isFinite(item.start)
+          ? Math.max(0, Math.min(Math.floor(item.start), text.length))
+          : -1;
+        const wrong = typeof item?.wrong === 'string' ? item.wrong.trim() : '';
+        const correct = typeof item?.correct === 'string' ? item.correct.trim() : '';
+        if (start < 0 || !wrong || !correct) return null;
+        const end = start + wrong.length;
+        if (end > text.length) return null;
+        if (transcriptGlossary.foldText(text.slice(start, end)) !== transcriptGlossary.foldText(wrong)) return null;
+        const confidenceRaw = Number(item?.confidence);
+        return {
+          entryRef: `model_${index}`,
+          wrong,
+          correct,
+          action: 'replace' as const,
+          confidence: Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0,
+          // medium：不预勾（面板只预勾 low），但也不计进"未处理高危"。
+          riskLevel: 'medium' as const,
+          context: typeof item?.reason === 'string' ? item.reason.slice(0, 200) : '',
+          span: { start, end },
+          ignoredCount: 0,
+          contextAllow: [] as string[],
+        };
+      })
+      .filter((item): item is transcriptAutoCorrect.CorrectionCandidate => item !== null);
+    const droppedModels = modelInputs.length - modelCandidates.length;
+
+    const allCandidates = [...scan.candidates, ...mergeCandidates, ...headingCandidates, ...modelCandidates];
     const syntheticRefs = [...mergeCandidates, ...headingCandidates].map((c) => c.entryRef);
     const acceptedAll = syntheticRefs.length
       ? [...(acceptedIds ?? []), ...syntheticRefs]
-      : acceptedIds;
+      : (acceptedIds ?? (modelCandidates.length ? [] : undefined));
     const applied0 = transcriptAutoCorrect.applyCorrections(text, allCandidates, {
       ...(acceptedAll ? { acceptedIds: acceptedAll } : {}),
       ...(riskLevels(payload?.acceptRiskLevels) ? { acceptRiskLevels: riskLevels(payload?.acceptRiskLevels)! } : {}),
@@ -723,7 +763,15 @@ export const invokeHandlers = {
       result.applied.map((a) => a.entryRef),
       { docId, runId: run.runId },
     );
-    return { run, result, denied: scan.denied };
+    // 「勾选并应用 = 确认」：把**真的被应用**的模型建议记进词表（source: meeting_accept，
+    // 作用域收窄到本文档）。只认 result.applied——勾了但被护栏挡掉的不算确认。
+    // 词表命中的候选（g_*）本来就在表里，这里的 ref 只筛 model_*。
+    const appliedModelRefs = new Set(result.applied.map((a) => a.entryRef));
+    const confirmedPairs = modelCandidates
+      .filter((candidate) => appliedModelRefs.has(candidate.entryRef))
+      .map((candidate) => ({ wrong: candidate.wrong, correct: candidate.correct }));
+    const glossaryWrites = transcriptGlossary.rememberConfirmedPairs(ctx.userId, confirmedPairs, { docId });
+    return { run, result, denied: scan.denied, glossaryWrites, droppedModels };
   },
 
   // ── 产物 ──────────────────────────────────────────────────────────────
