@@ -59,6 +59,8 @@
         ignoredCount: Number(candidate.ignoredCount || 0),
         contextAllow: Array.isArray(candidate.contextAllow) ? candidate.contextAllow.map(String) : [],
         context: String(candidate.context || ''),
+        // 来源：模型读正文给的建议（不是词表命中）。面板据此标来源、且永不预勾。
+        fromModel: candidate.fromModel === true,
         count: 0,
         spans: [],
       };
@@ -133,7 +135,56 @@
   function defaultAcceptedIds(rows) {
     return (rows || [])
       .filter((row) => row.riskLevel === 'low' && Number(row.ignoredCount || 0) === 0)
+      // 模型建议**永不预勾**：它的风险等级虽然给的是 medium，但不能只靠这点兜底——
+      // 一旦以后有人调整分级，模型判断就会被一键写进正文。
+      .filter((row) => row.fromModel !== true)
       .map((row) => row.entryRef);
+  }
+
+  /**
+   * 取出**被勾选**的模型建议，转成主进程 `apply` 需要的形状（纯函数）。
+   * 只取勾选的：没勾的一条都不该进正文，也不该被记进词表。
+   */
+  function checkedModelCandidates(rows, acceptedIds) {
+    const accepted = acceptedIds instanceof Set ? acceptedIds : new Set(acceptedIds || []);
+    return (rows || [])
+      .filter((row) => row.fromModel === true && accepted.has(row.entryRef))
+      .map((row) => ({
+        start: Number(row.spans?.[0]?.start ?? 0),
+        wrong: String(row.wrong || ''),
+        correct: String(row.correct || ''),
+        confidence: 1,
+        reason: String(row.context || ''),
+      }))
+      .filter((item) => item.wrong && item.correct);
+  }
+
+  /**
+   * AI 复核结果的展示摘要（纯函数）：「读到哪了 / 有没有失败 / 给出多少建议」。
+   * 模型这一层的成本与失败必须**可见**——否则用户只会看到"候选里没有"，
+   * 分不清是模型没配、调用失败，还是确实没发现错写。
+   */
+  function reviewSummary(review) {
+    if (!review) return '';
+    const parts = [];
+    const found = Number(review.modelCandidates || 0);
+    const failed = Number(review.failedChunks || 0);
+    if (found > 0) parts.push(t('kb.transcriptCorrect.review_found', '；模型给出 {count} 条建议', { count: found }));
+    else if (review.skipped === 'no_model') parts.push(t('kb.transcriptCorrect.review_no_model', '；未配置模型，没做 AI 复核'));
+    else if (review.skipped === 'model_failed') parts.push(t('kb.transcriptCorrect.review_failed', '；模型调用失败（{count} 段都没成功）', { count: failed }));
+    else parts.push(t('kb.transcriptCorrect.review_none', '；模型读完没有发现错写'));
+    if (review.truncated) {
+      parts.push(t('kb.transcriptCorrect.review_truncated', '；正文较长，只读了前 {scanned}/{total} 段', {
+        scanned: Number(review.chunksScanned || 0), total: Number(review.chunksTotal || 0),
+      }));
+    }
+    if (failed > 0 && review.skipped !== 'model_failed') {
+      parts.push(t('kb.transcriptCorrect.review_chunks_failed', '；有 {count} 段调用失败，结果可能不全', { count: failed }));
+    }
+    if (Number(review.outsideAllowlist || 0) > 0) {
+      parts.push(t('kb.transcriptCorrect.review_outside', '；其中 {count} 条是词表外写法，请重点核对', { count: Number(review.outsideAllowlist) }));
+    }
+    return parts.join('');
   }
 
   /**
@@ -423,6 +474,10 @@
       scenarioDraft: '',
       // 同人段落合并（方案 §五 P1-2）：默认开——它是"清理版"能不能真正好用的关键
       mergeSpeaker: true,
+      // 「扫描时同时让模型读一遍」：默认关——它会产生多次模型调用，成本必须由用户显式选择
+      scanWithReview: false,
+      // 最近一次 AI 复核的元信息（段数/失败数/建议数），仅用于说明"读到哪了"
+      review: null,
       rowMenu: '',
       allowOpen: '',
       allowDraft: '',
@@ -493,7 +548,13 @@
           size: 'sm',
           disabled: state.busy,
           attrs: { 'data-atc-action': 'scan' },
-        }) + button({
+        }) + '<label class="kb-atc__scope-toggle">' + root.uiCheckbox({
+          // 「模型建议并入候选列表」的开关：默认关——它会产生多次模型调用，成本由用户选
+          id: 'kb-atc-scan-review-' + panelId,
+          checked: state.scanWithReview,
+          disabled: state.busy,
+          attrs: { 'data-atc-action': 'toggle-scan-review' },
+        }) + '<span>' + t('kb.transcriptCorrect.scan_with_review', '同时让模型读一遍') + '</span></label>' + button({
           label: t('kb.transcriptCorrect.add_entry', '新增词条'),
           role: 'ghost',
           size: 'sm',
@@ -539,6 +600,16 @@
         badge.className = 'kb-atc__badge';
         badge.textContent = t(`kb.transcriptCorrect.${riskKey(row.riskLevel)}`, row.riskLevel === 'high' ? '高危' : '谨慎');
         main.appendChild(badge);
+      }
+
+      if (row.fromModel) {
+        // 来源必须一眼可辨：这一条不是词表命中，是模型读正文给的判断，
+        // 而且它**不会被预勾**。理由（模型给的一句话）挂在 title 上按需可见。
+        const src = document.createElement('span');
+        src.className = 'kb-atc__badge kb-atc__badge--model';
+        src.textContent = t('kb.transcriptCorrect.row_from_model', '模型建议');
+        if (row.context) src.title = String(row.context);
+        main.appendChild(src);
       }
 
       const count = document.createElement('span');
@@ -1382,6 +1453,8 @@
           // 口癖规则包装进词表后是 action=delete 词条：不带这个开关它们不会出现，
           // 用户会以为"装了规则包却没反应"（真机踩过）。
           includeDelete: true,
+          // 「同时让模型读一遍」：模型建议会**并进同一个候选列表**（不是另开一套面板）
+          includeReview: state.scanWithReview === true,
           ...(state.scenarioTags.length ? { scenarioTags: state.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
@@ -1397,11 +1470,13 @@
         state.scanDoneAt = Date.now();
         const stats = summarizeRows(state.rows, state.accepted);
         state.truncated = Boolean(result?.stats?.truncated);
+        state.review = result?.review ?? null;
+        const reviewNote = reviewSummary(state.review);
         setStatus(stats.total === 0
-          ? ''
+          ? reviewNote
           : (state.truncated
-            ? t('kb.transcriptCorrect.scan_truncated', '扫描完成：{total} 条候选（已达上限，可能还有更多；建议先暂停部分词条）', { total: stats.total })
-            : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选', { total: stats.total })), '');
+            ? t('kb.transcriptCorrect.scan_truncated', '扫描完成：{total} 条候选（已达上限，可能还有更多；建议先暂停部分词条）{review}', { total: stats.total, review: reviewNote })
+            : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选{review}', { total: stats.total, review: reviewNote })), '');
       } catch (error) {
         log?.warn('transcript scan failed', { error: error?.message || String(error) });
         state.scanned = true;
@@ -1429,13 +1504,24 @@
           // 附记要能说清"这份清理版是从哪份转写来的"
           ...(ctx.displayPath ? { sourcePath: ctx.displayPath } : {}),
           acceptedIds: [...state.accepted],
+          // 模型建议是**本轮的临时候选**（没有词表条目），apply 时得跟着请求走；
+          // 只传被勾选的那些——主进程还会按 span 逐字校验。
+          ...(checkedModelCandidates(state.rows, state.accepted).length
+            ? { models: checkedModelCandidates(state.rows, state.accepted) }
+            : {}),
         });
         state.apply = result?.result || null;
         state.mergedBlocks = Number(result?.run?.mergedBlocks || 0);
         reportMetrics(result?.result);
         state.runId = String(result?.run?.runId || '');
         state.cleanedText = String(result?.result?.text || '');
-        setStatus(t('kb.transcriptCorrect.apply_done', '清理版已生成（原文未改动）'), '');
+        // 勾选并应用 = 确认：主进程会把被应用的模型建议记进词表（source: meeting_accept，
+        // 只对本文档生效）。这件事必须说出来——否则用户不知道词表被改了。
+        const written = Number(result?.glossaryWrites?.created || 0) + Number(result?.glossaryWrites?.updated || 0);
+        const dropped = Number(result?.droppedModels || 0);
+        setStatus(t('kb.transcriptCorrect.apply_done', '清理版已生成（原文未改动）', {})
+          + (written ? t('kb.transcriptCorrect.apply_wrote_glossary', '；已把 {count} 条模型建议记入词表（仅本文档生效）', { count: written }) : '')
+          + (dropped ? t('kb.transcriptCorrect.apply_dropped_models', '；{count} 条模型建议因位置对不上被丢弃', { count: dropped }) : ''), '');
       } catch (error) {
         log?.warn('transcript apply failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.apply_failed', '生成失败，请稍后重试。'), 'warning');
@@ -2242,6 +2328,7 @@
       if (kind === 'suggest-headings') { void runSuggestHeadings(); return; }
       if (kind === 'compare-search') { void runCompareSearch(); return; }
       if (kind === 'toggle-merge') { state.mergeSpeaker = !state.mergeSpeaker; render(); return; }
+      if (kind === 'toggle-scan-review') { state.scanWithReview = !state.scanWithReview; render(); return; }
       if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }
       if (kind === 'scan') void runScan();
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
@@ -2313,6 +2400,8 @@
       summarizeRows,
       splitByRisk,
       defaultAcceptedIds,
+      reviewSummary,
+      checkedModelCandidates,
       applySummary,
       cleanedFileName,
       nextCandidateName,
@@ -2333,6 +2422,8 @@
       summarizeRows,
       splitByRisk,
       defaultAcceptedIds,
+      reviewSummary,
+      checkedModelCandidates,
       applySummary,
       cleanedFileName,
       nextCandidateName,

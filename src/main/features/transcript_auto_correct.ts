@@ -89,6 +89,12 @@ export interface CorrectionCandidate {
    * 标记后不会被计进 `deletedFillers`（否则 365 个块头会污染口癖计数）。
    */
   structure?: boolean;
+  /**
+   * 来自**模型读正文**的建议（`entryRef` 形如 `model_<i>`），不是词表命中。
+   * 面板据此标出来源、且**永不预勾**——模型判断要逐条人工确认；
+   * 确认应用时按 `meeting_accept` 记进词表（见 ipc/transcript.ts 的 apply）。
+   */
+  fromModel?: boolean;
 }
 
 export interface DeniedMatch {

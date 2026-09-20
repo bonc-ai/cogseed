@@ -7709,5 +7709,16 @@
   "kb.quiz.wrong_only_flag": "错题重练：只做上一轮答错 / 跳过的题",
   "kb.quiz.next_question": "下一题",
   "cognition.evidence_source_processing": "来源整理中",
-  "kb.glossary.candidates_title": "待核候选（{count} 条）"
+  "kb.glossary.candidates_title": "待核候选（{count} 条）",
+  "kb.transcriptCorrect.scan_with_review": "同时让模型读一遍",
+  "kb.transcriptCorrect.review_found": "；模型给出 {count} 条建议",
+  "kb.transcriptCorrect.review_no_model": "；未配置模型，没做 AI 复核",
+  "kb.transcriptCorrect.review_failed": "；模型调用失败（{count} 段都没成功）",
+  "kb.transcriptCorrect.review_none": "；模型读完没有发现错写",
+  "kb.transcriptCorrect.review_truncated": "；正文较长，只读了前 {scanned}/{total} 段",
+  "kb.transcriptCorrect.review_chunks_failed": "；有 {count} 段调用失败，结果可能不全",
+  "kb.transcriptCorrect.review_outside": "；其中 {count} 条是词表外写法，请重点核对",
+  "kb.transcriptCorrect.row_from_model": "模型建议",
+  "kb.transcriptCorrect.apply_wrote_glossary": "；已把 {count} 条模型建议记入词表（仅本文档生效）",
+  "kb.transcriptCorrect.apply_dropped_models": "；{count} 条模型建议因位置对不上被丢弃"
 }

@@ -25,6 +25,7 @@ import * as transcriptOntology from '../features/transcript_ontology_bridge';
 import * as transcriptFillers from '../features/transcript_filler_rules';
 import * as transcriptMerge from '../features/transcript_speaker_merge';
 import * as transcriptSeed from '../features/transcript_glossary_seed';
+import * as transcriptLlm from '../features/transcript_llm_candidates';
 import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
@@ -378,15 +379,81 @@ export const invokeHandlers = {
   }),
 
   // ── 扫描与替换 ────────────────────────────────────────────────────────
+  /**
+   * 扫描 = **一个候选清单**：词表命中（含作用域/护栏/口癖）+ 可选的模型复核。
+   *
+   * `includeReview: true` 时再让模型读一遍正文，把它的建议转成同构候选
+   * （`entryRef: model_<i>`、`fromModel: true`、`riskLevel: 'medium'`）**追加在
+   * 同一个列表后面**——不另开一套 UI，也没有第二条"待核"状态线。
+   *
+   * 风险等级给 `medium` 的用意：面板只预勾 `low`，所以模型建议**永远不会被预勾**，
+   * 必须逐条人工确认；同时它又不算"未处理的高危候选"，不会把产物误标成 draft。
+   */
   'transcript.correct.scan': async (payload: Payload, ctx: IpcContext) => {
     const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
+    const docId = optionalId(payload?.docId, 'docId');
+    const scenarioTags = stringList(payload?.scenarioTags, 20);
     const entries = transcriptGlossary.listEntries(ctx.userId, { status: 'active' });
     const scan = transcriptAutoCorrect.scanText(text, entries, {
-      ...(optionalId(payload?.docId, 'docId') ? { docId: optionalId(payload?.docId, 'docId')! } : {}),
-      ...(stringList(payload?.scenarioTags, 20) ? { scenarioTags: stringList(payload?.scenarioTags, 20)! } : {}),
+      ...(docId ? { docId } : {}),
+      ...(scenarioTags ? { scenarioTags } : {}),
       includeDelete: payload?.includeDelete === true,
     });
-    return scan;
+    if (payload?.includeReview !== true) return { ...scan, review: null };
+
+    // 优先参考名单 = 词表正确写法 + 记忆分组字段值（不含投影里的结构标签）
+    const known = new Set<string>();
+    for (const entry of entries) {
+      known.add(entry.wrong);
+      known.add(entry.correct);
+    }
+    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
+    for (const name of canonical) known.add(name.name);
+    const allowed = [
+      ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
+      ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
+    ].filter((value) => !!value && value.length <= 60);
+    // 词形可疑的位置只作为"重点线索"提示模型，不决定要不要问
+    const hints = transcriptAutoCorrect
+      .detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_HINTS)
+      .map((suspect) => ({ text: suspect.text, start: suspect.span.start }));
+    const review = await transcriptLlm.generateReviewCandidates(ctx.userId, text, {
+      knownTargets: allowed,
+      hints,
+      sessionKey: docId,
+    });
+    const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = review.candidates.map((candidate, index) => ({
+      entryRef: `model_${index}`,
+      wrong: candidate.wrong,
+      correct: candidate.correct,
+      action: 'replace' as const,
+      confidence: candidate.confidence,
+      riskLevel: 'medium' as const,
+      context: candidate.reason,
+      span: { start: candidate.start, end: candidate.start + candidate.wrong.length },
+      ignoredCount: 0,
+      contextAllow: [],
+      fromModel: true,
+    }));
+    return {
+      ...scan,
+      candidates: [...scan.candidates, ...modelCandidates],
+      stats: {
+        ...scan.stats,
+        candidates: scan.candidates.length + modelCandidates.length,
+      },
+      review: {
+        modelCandidates: modelCandidates.length,
+        chunksScanned: review.chunksScanned,
+        chunksTotal: review.chunksTotal,
+        truncated: review.truncated,
+        failedChunks: review.failedChunks,
+        outsideAllowlist: review.outsideAllowlist,
+        rejected: review.rejected.length,
+        skipped: review.skipped ?? '',
+        knownCount: allowed.length,
+      },
+    };
   },
 
   /**

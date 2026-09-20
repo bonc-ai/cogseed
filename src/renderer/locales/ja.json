@@ -5696,5 +5696,16 @@
   "cognition.assets_kstar_tab": "KSTAR",
   "cognition.asset_kstar_badge": "KSTAR",
   "cognition.evidence_source_processing": "ソース整理中",
-  "kb.glossary.candidates_title": "未確認の候補（{count} 件）"
+  "kb.glossary.candidates_title": "未確認の候補（{count} 件）",
+  "kb.transcriptCorrect.scan_with_review": "同時にモデルにも読ませる",
+  "kb.transcriptCorrect.review_found": "／モデルが {count} 件の修正案を提示",
+  "kb.transcriptCorrect.review_no_model": "／モデル未設定のため AI 確認は未実施",
+  "kb.transcriptCorrect.review_failed": "／モデル呼び出しに失敗（{count} 段落とも失敗）",
+  "kb.transcriptCorrect.review_none": "／モデルが読んだ結果、誤変換は見つかりませんでした",
+  "kb.transcriptCorrect.review_truncated": "／本文が長いため、最初の {scanned}/{total} 段落のみ読了",
+  "kb.transcriptCorrect.review_chunks_failed": "／{count} 段落が失敗したため、結果が不完全な可能性があります",
+  "kb.transcriptCorrect.review_outside": "／うち {count} 件は用語集外の表記です。重点的に確認してください",
+  "kb.transcriptCorrect.row_from_model": "モデル提案",
+  "kb.transcriptCorrect.apply_wrote_glossary": "／モデル提案 {count} 件を用語集に登録しました（本文書のみ有効）",
+  "kb.transcriptCorrect.apply_dropped_models": "／{count} 件は位置が一致しないため破棄しました"
 }

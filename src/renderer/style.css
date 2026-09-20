@@ -32465,6 +32465,12 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-size: var(--font-size-1);
   background: var(--color-line);
 }
+/* 来源徽标（模型建议）：与风险徽标并列，用中性色说明"这条不是词表命中" */
+.kb-atc__badge--model {
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  border: 1px solid var(--line-default);
+}
 .kb-atc__row[data-risk="high"] .kb-atc__badge {
   color: var(--color-warning-text);
   background: var(--color-warning-soft);

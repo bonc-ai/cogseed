@@ -7709,5 +7709,16 @@
   "kb.quiz.wrong_only_flag": "Wrong-answer drill: only the questions you missed or skipped last round",
   "kb.quiz.next_question": "Next question",
   "cognition.evidence_source_processing": "Source still processing",
-  "kb.glossary.candidates_title": "Pending candidates ({count})"
+  "kb.glossary.candidates_title": "Pending candidates ({count})",
+  "kb.transcriptCorrect.scan_with_review": "Also let the model read it",
+  "kb.transcriptCorrect.review_found": "; the model proposed {count} corrections",
+  "kb.transcriptCorrect.review_no_model": "; no model configured, AI review skipped",
+  "kb.transcriptCorrect.review_failed": "; the model call failed ({count} segments unsuccessful)",
+  "kb.transcriptCorrect.review_none": "; the model read it and found no mis-transcriptions",
+  "kb.transcriptCorrect.review_truncated": "; long transcript, only the first {scanned}/{total} segments were read",
+  "kb.transcriptCorrect.review_chunks_failed": "; {count} segments failed, so the result may be incomplete",
+  "kb.transcriptCorrect.review_outside": "; {count} of them are spellings outside the glossary — review carefully",
+  "kb.transcriptCorrect.row_from_model": "Model suggestion",
+  "kb.transcriptCorrect.apply_wrote_glossary": "; {count} model suggestions were added to the glossary (this document only)",
+  "kb.transcriptCorrect.apply_dropped_models": "; {count} model suggestions were dropped because their positions no longer matched"
 }

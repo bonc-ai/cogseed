@@ -46,6 +46,8 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
   defaultAcceptedIds: (rows: unknown[]) => string[];
+  reviewSummary: (review: unknown) => string;
+  checkedModelCandidates: (rows: unknown[], accepted: Iterable<string>) => Array<{ start: number; wrong: string; correct: string }>;
   normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
@@ -618,5 +620,58 @@ describe('查看器集成契约', () => {
     const viewerIdx = html.indexOf('anchored-source-view.js');
     expect(panelIdx).toBeGreaterThan(0);
     expect(panelIdx).toBeLessThan(viewerIdx);
+  });
+});
+
+/**
+ * 「模型建议跟扫描合并」之后的界面契约（待核那套并行状态已整体移除）。
+ */
+describe('模型建议并入候选列表', () => {
+  const src = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('模型建议**永不预勾**：连风险分级都不参与', () => {
+    const rows = [
+      { entryRef: 'g_1', riskLevel: 'low', ignoredCount: 0 },
+      { entryRef: 'model_0', riskLevel: 'low', ignoredCount: 0, fromModel: true },
+    ];
+    expect(panel.defaultAcceptedIds(rows)).toEqual(['g_1']);
+  });
+
+  it('只有勾选的模型建议才随 apply 提交（没勾的不进正文、不进词表）', () => {
+    const rows = [
+      { entryRef: 'model_0', wrong: '付平', correct: '傅平', context: '姓氏同音', fromModel: true, spans: [{ start: 5, end: 7 }] },
+      { entryRef: 'model_1', wrong: 'coxyx', correct: 'Cogseed', fromModel: true, spans: [{ start: 20, end: 25 }] },
+    ];
+    expect(panel.checkedModelCandidates(rows, ['model_1'])).toEqual([
+      { start: 20, wrong: 'coxyx', correct: 'Cogseed', confidence: 1, reason: '' },
+    ]);
+    expect(panel.checkedModelCandidates(rows, [])).toEqual([]);
+    // 词表命中的行不算"模型建议"，不会被重复提交
+    expect(panel.checkedModelCandidates(
+      [{ entryRef: 'g_1', wrong: 'a', correct: 'b', spans: [{ start: 0, end: 1 }] }], ['g_1'],
+    )).toEqual([]);
+  });
+
+  it('复核摘要说清"读到哪了 / 失没失败"，不和"确实没错写"混为一谈', () => {
+    expect(panel.reviewSummary(null)).toBe('');
+    expect(panel.reviewSummary({ modelCandidates: 3 })).toContain('3');
+    expect(panel.reviewSummary({ modelCandidates: 0, skipped: 'model_failed', failedChunks: 2 })).toContain('2');
+    expect(panel.reviewSummary({ modelCandidates: 0, skipped: 'no_model' })).toBeTruthy();
+    const truncated = panel.reviewSummary({ modelCandidates: 1, truncated: true, chunksScanned: 8, chunksTotal: 12 });
+    expect(truncated).toContain('8');
+    expect(truncated).toContain('12');
+  });
+
+  it('扫描带 includeReview 开关，且默认关（花钱的调用必须由用户显式选）', () => {
+    expect(src).toMatch(/includeReview: state\.scanWithReview === true/);
+    expect(src).toMatch(/scanWithReview: false/);
+    expect(src).toContain("'toggle-scan-review'");
+    // 行上有来源徽标，说明"这条不是词表命中"
+    expect(src).toMatch(/kb-atc__badge--model/);
+  });
+
+  it('应用后必须说出"词表被写了"——改了词表却不说，用户无从察觉', () => {
+    expect(src).toMatch(/apply_wrote_glossary/);
+    expect(src).toMatch(/glossaryWrites/);
   });
 });

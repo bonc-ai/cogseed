@@ -5696,5 +5696,16 @@
   "cognition.assets_kstar_tab": "KSTAR",
   "cognition.asset_kstar_badge": "KSTAR",
   "cognition.evidence_source_processing": "Fonte ainda em processamento",
-  "kb.glossary.candidates_title": "Candidatos pendentes ({count})"
+  "kb.glossary.candidates_title": "Candidatos pendentes ({count})",
+  "kb.transcriptCorrect.scan_with_review": "Deixar o modelo ler também",
+  "kb.transcriptCorrect.review_found": "; o modelo propôs {count} correções",
+  "kb.transcriptCorrect.review_no_model": "; modelo não configurado, revisão por IA ignorada",
+  "kb.transcriptCorrect.review_failed": "; a chamada ao modelo falhou ({count} segmentos sem sucesso)",
+  "kb.transcriptCorrect.review_none": "; o modelo leu e não encontrou erros de transcrição",
+  "kb.transcriptCorrect.review_truncated": "; transcrição longa: apenas os primeiros {scanned}/{total} segmentos foram lidos",
+  "kb.transcriptCorrect.review_chunks_failed": "; {count} segmentos falharam, então o resultado pode estar incompleto",
+  "kb.transcriptCorrect.review_outside": "; {count} delas são grafias fora do glossário — revise com atenção",
+  "kb.transcriptCorrect.row_from_model": "Sugestão do modelo",
+  "kb.transcriptCorrect.apply_wrote_glossary": "; {count} sugestões do modelo foram adicionadas ao glossário (somente neste documento)",
+  "kb.transcriptCorrect.apply_dropped_models": "; {count} sugestões foram descartadas porque as posições não correspondem mais"
 }
