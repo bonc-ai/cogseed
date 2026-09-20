@@ -5835,5 +5835,17 @@
   "personalOntology.group_history": "Histórico",
   "personalOntology.group_restore": "Restaurar esta versão",
   "personalOntology.group_history_empty": "Sem histórico ainda — versões são arquivadas automaticamente após edições",
-  "personalOntology.group_restored": "Restaurado (a versão substituída foi arquivada automaticamente)"
+  "personalOntology.group_restored": "Restaurado (a versão substituída foi arquivada automaticamente)",
+  "personalOntology.nav_tbox": "Vocabulário",
+  "personalOntology.nav_abox": "Fatos",
+  "personalOntology.nav_rbox": "Regras",
+  "personalOntology.abox_profile_group": "Precipitados da sessão",
+  "personalOntology.abox_groups": "Fatos dos grupos",
+  "personalOntology.abox_asset_src": "ativo",
+  "personalOntology.rbox_rules": "Regras",
+  "personalOntology.rbox_from_assets": "Regras precipitadas como ativos",
+  "personalOntology.tbox_groups": "Vocabulário dos grupos",
+  "personalOntology.tbox_relation_flag": "campo de relação",
+  "personalOntology.backflow_to": "escrever em: {g}",
+  "personalOntology.group_created": "Grupo criado — gerencie campos na caixa de vocabulário"
 }

@@ -7847,5 +7847,17 @@
   "personalOntology.group_history": "History",
   "personalOntology.group_restore": "Restore this version",
   "personalOntology.group_history_empty": "No history yet — snapshots are kept automatically after edits",
-  "personalOntology.group_restored": "Restored (the replaced version was archived automatically)"
+  "personalOntology.group_restored": "Restored (the replaced version was archived automatically)",
+  "personalOntology.nav_tbox": "Vocabulary",
+  "personalOntology.nav_abox": "Facts",
+  "personalOntology.nav_rbox": "Rules",
+  "personalOntology.abox_profile_group": "Session precipitates",
+  "personalOntology.abox_groups": "Group facts",
+  "personalOntology.abox_asset_src": "asset",
+  "personalOntology.rbox_rules": "Rules",
+  "personalOntology.rbox_from_assets": "Rules precipitated as assets",
+  "personalOntology.tbox_groups": "Group vocabulary",
+  "personalOntology.tbox_relation_flag": "relation field",
+  "personalOntology.backflow_to": "write to: {g}",
+  "personalOntology.group_created": "Group created — manage fields in the vocabulary box"
 }

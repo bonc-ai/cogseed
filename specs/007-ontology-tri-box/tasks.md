@@ -33,6 +33,17 @@
 - [x] T304 组版本回滚：写入前快照 `.history/<groupId>/`（上限滚动）+ IPC history.list/restore + 界面「历史」入口
 - [x] T305 测试：分类筛选 / restricted 零注入（注入块与 ontologyFacts 双查）/ 快照恢复一致性
 
+
+## Phase 5: 盒子化界面重构（导航即三盒，2026-09-20 追加）
+
+- [x] T501 nav 收敛为三盒行（词汇/事实/规则）+ 底部导出导入；画像/分组/总览/模板区头退役
+- [x] T502 A 盒：回流候选（带目标组选择）+ 会话沉淀伪组（六分节）+ 组小节按字段分节 + 极简值行（内容+来源+状态点）
+- [x] T503 R 盒：分类筛选 + 组关系值 + 规则资产合并
+- [x] T504 T 盒：组词汇卡（字段+描述+组操作+历史）+ 模板入口 + 模板库
+- [x] T505 值行点击展开：标记 chip + 核实/分类/受限/删除操作（key 用 encodeURIComponent 防 NUL 被 DOM 吞）
+- [x] T506 旧视图退役（tri/profile/group 详情 + _pocOpenGroupDetail/_pocBindGroupDetail 等）；操作函数 gid 化
+- [x] T507 测试 16 用例改三盒口径 + 守卫基线 7→5；全量 11955 绿（唯二 develop 基线）；真机 CDP 全场景过（nav 三盒/极简值行/状态点/展开/R 筛选/T 模板）
+
 ## Phase 4: 收尾
 
 - [x] T401 全量测试两遍一致（唯二 develop 基线除外）+ lint + tsc

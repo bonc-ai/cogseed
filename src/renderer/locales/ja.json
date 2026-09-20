@@ -5835,5 +5835,17 @@
   "personalOntology.group_history": "履歴",
   "personalOntology.group_restore": "この版に戻す",
   "personalOntology.group_history_empty": "履歴はまだありません。編集すると自動的に保存されます",
-  "personalOntology.group_restored": "復元しました（戻す前の版も自動保存済み）"
+  "personalOntology.group_restored": "復元しました（戻す前の版も自動保存済み）",
+  "personalOntology.nav_tbox": "語彙",
+  "personalOntology.nav_abox": "事実",
+  "personalOntology.nav_rbox": "ルール",
+  "personalOntology.abox_profile_group": "セッションの沉淀",
+  "personalOntology.abox_groups": "グループの事実",
+  "personalOntology.abox_asset_src": "資産",
+  "personalOntology.rbox_rules": "ルール",
+  "personalOntology.rbox_from_assets": "資産として沉淀したルール",
+  "personalOntology.tbox_groups": "グループ語彙",
+  "personalOntology.tbox_relation_flag": "関係フィールド",
+  "personalOntology.backflow_to": "書き込み先：{g}",
+  "personalOntology.group_created": "グループを作成しました。語彙ボックスでフィールドを管理できます"
 }

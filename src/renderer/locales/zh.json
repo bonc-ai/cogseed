@@ -7847,5 +7847,17 @@
   "personalOntology.group_history": "历史",
   "personalOntology.group_restore": "恢复这版",
   "personalOntology.group_history_empty": "还没有历史版本——修改分组内容后自动留档",
-  "personalOntology.group_restored": "已恢复到该版本（当前版已自动留档）"
+  "personalOntology.group_restored": "已恢复到该版本（当前版已自动留档）",
+  "personalOntology.nav_tbox": "词汇",
+  "personalOntology.nav_abox": "事实",
+  "personalOntology.nav_rbox": "规则",
+  "personalOntology.abox_profile_group": "会话沉淀",
+  "personalOntology.abox_groups": "分组事实",
+  "personalOntology.abox_asset_src": "资产",
+  "personalOntology.rbox_rules": "规则",
+  "personalOntology.rbox_from_assets": "资产沉淀的规则",
+  "personalOntology.tbox_groups": "分组词汇",
+  "personalOntology.tbox_relation_flag": "关系字段",
+  "personalOntology.backflow_to": "写入：{g}",
+  "personalOntology.group_created": "分组已创建，可在词汇盒维护字段"
 }

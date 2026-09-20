@@ -24622,6 +24622,50 @@ body:has(#panel-settings.active) .main-top-actions {
 .personal-onto-history-time { white-space: nowrap; font-weight: 600; color: #475569; }
 .personal-onto-history-preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 盒子化重构：极简值行 + 状态点 + 展开详情 */
+.personal-onto-value-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 14px;
+  cursor: pointer;
+  background: #fff;
+}
+.personal-onto-value-line:hover { background: #f8fafc; }
+.personal-onto-value-line.is-expanded { background: #f1f5f9; }
+.personal-onto-value-line.is-conflicted { border-left: 3px solid #d98a82; }
+.personal-onto-value-src { font-size: 12px; flex-shrink: 0; }
+.personal-onto-status-dot {
+  width: 8px; height: 8px; border-radius: 999px;
+  align-self: center; flex-shrink: 0;
+}
+.personal-onto-status-dot.is-red { background: #d9534f; }
+.personal-onto-status-dot.is-amber { background: #e0a13e; }
+.personal-onto-status-dot.is-green { background: #4a9d6f; }
+.personal-onto-value-detail {
+  padding: 8px 10px 10px 14px;
+  border-left: 2px solid #e2e8f0;
+  margin: 2px 0 6px 8px;
+}
+.personal-onto-value-detail-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.personal-onto-value-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.personal-onto-abox-group { margin-bottom: 14px; }
+.personal-onto-abox-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px;
+}
+.personal-onto-abox-subsec { margin-bottom: 8px; }
+.personal-onto-abox-subsec-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  margin-bottom: 4px;
+}
+.personal-onto-tbox-field {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 8px; font-size: 14px;
+}
+
 /* 总览 R 盒分类筛选（spec 007 T301） */
 .personal-onto-filter-row {
   display: flex;

@@ -17,13 +17,12 @@ describe('personal ontology design-system integration', () => {
   });
 
   it('keeps only tabs and navigation selection rows as native composite controls', () => {
-    // 2026-09-20 本体分组迁入+三盒总览：分组行/总览行加入导航选中行家族
-    // （与模板行/画像行同类），基线 5 → 7。其余控件全部走共享原语。
-    expect((source.match(/<(?:button|input|textarea|select)\b/gi) || [])).toHaveLength(7);
-    expect(source).toContain('class="memory-group-editor-tab');
+    // 2026-09-20 盒子化重构：nav 收敛为三盒行（原生导航行），组行/画像行
+    // 退役；T 盒内保留模板行与模板库按钮两个原生导航行。基线 7 → 5（编辑器 tab、库行、三盒 nav 行、模板行、库按钮）。
+    expect((source.match(/<(?:button|input|textarea|select)\b/gi) || [])).toHaveLength(5);
     expect(source).toContain('class="personal-onto-library-row');
-    expect(source).toContain('class="personal-onto-nav-row is-file');
-    expect(source).toContain('class="personal-onto-nav-row${profileSelected');
+    expect(source).toContain('class="personal-onto-nav-row is-file'); // T 盒模板行
+    expect(source).toContain('personal-onto-nav-row${active'); // 三盒 nav 行（active 拼接）
     expect(source).toContain('class="personal-onto-template-library-btn');
   });
 
