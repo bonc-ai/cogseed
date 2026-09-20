@@ -2116,6 +2116,10 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   // 本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下
   // 会话连续性由 P3394 session 承担。网关侧 PID 数据源与探活语义列入
   // 后续增强（见 docs/design 设计文档第 5 节），补齐后恢复本用例。
+  //
+  // 2026-09-20：本用例是 develop 上**唯一保留**的硬跳过，已登记在
+  // test/skip-allowlist.json（含理由与恢复条件），nightly 的 skip 检查会盯着它；
+  // 同日复核确认它恢复后确实会红（同类另外 3 条恢复后均直接通过）。
   it.skip("CLI process-info accepts only a positive integer number as the in-memory PID", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -7234,7 +7238,7 @@ describe("group_chat bus integration › Task 5 anonymous resume", () => {
 });
 
 describe("group_chat bus integration › Commander KSTAR dispatch narration", () => {
-  it.skip("declares task, plan, and expected result only after wake authorization", async () => {
+  it("declares task, plan, and expected result only after wake authorization", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -7298,7 +7302,7 @@ describe("group_chat bus integration › Commander KSTAR dispatch narration", ()
 });
 
 describe("group_chat bus integration › wake-gated dispatch continuation", () => {
-  it.skip("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
+  it("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -7371,7 +7375,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
     unsubscribe();
   }, 12_000);
 
-  it.skip("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
+  it("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
