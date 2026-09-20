@@ -520,7 +520,7 @@ describe('locale 覆盖', () => {
     'issue_suspects_found', 'issue_suspects_none', 'issue_suspects_failed', 'issue_suspect_row',
     'issue_mark', 'issue_unmark', 'issue_badge', 'issue_cancel', 'issue_at', 'issue_empty',
     'issue_list_title', 'issue_summary', 'issue_reason_unknown_entity', 'issue_reason_ambiguous_name',
-    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable',
+    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable', 'issue_reason_model_candidate',
     // 接受的三个动作 + 对照视图
     'more', 'restore', 'reopen_row', 'restored', 'ignored_done', 'ignore_failed', 'group_ignored',
     'denied', 'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed',
@@ -534,9 +534,12 @@ describe('locale 覆盖', () => {
     'merge_on', 'merge_off', 'merged_blocks',
     'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
     'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
-    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_adopt', 'llm_found', 'llm_rejected',
-    'llm_no_model', 'llm_no_allowed', 'llm_no_suspects', 'llm_none', 'llm_failed',
-    'llm_adopted', 'llm_adopt_failed',
+    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_flag', 'llm_found', 'llm_rejected',
+    'llm_no_model', 'llm_none', 'llm_failed',
+    'llm_flagged', 'llm_flag_failed', 'llm_flag_no_span', 'llm_outside_allowlist',
+    'llm_outside_count', 'llm_scope_note',
+    // 「结果可能不全」必须能说出来（分段上限 / 单段调用失败）
+    'llm_empty_text', 'llm_model_failed', 'llm_truncated', 'llm_chunks_failed',
     'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
     // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
@@ -580,6 +583,35 @@ describe('源码契约', () => {
     // 清理版文本只来自主进程：面板不得自己往文本里拼标记
     expect(source).not.toMatch(/cleanedText\s*=\s*[^;]*【转写存疑】/);
     expect(source).toMatch(/state\.cleanedText = String\(result\?\.result\?\.text/);
+  });
+
+  /**
+   * 模型候选只能"标待核"——这条是本次改动的核心，必须钉死：
+   * 面板里**任何**把模型候选写进词表的路径都不允许存在。此前
+   * 「采纳为词条」直接调 `transcript.glossary.upsert`，等于让模型的判断
+   * 立刻变成扫描规则。
+   */
+  it('模型候选只标待核：走 flagCandidates + 挂 model_candidate，且不再有"采纳为词条"', () => {
+    expect(source).toContain("'transcript.correct.flagCandidates'");
+    expect(source).toMatch(/reason: 'model_candidate'/);
+    // 旧的采纳路径必须彻底消失（属性、函数、按钮文案三处）
+    expect(source).not.toContain('data-atc-llm-adopt');
+    expect(source).not.toContain('adoptLlmCandidate');
+    expect(source).not.toContain("llm_adopt'");
+    // 模型候选那一行的动作按钮 = 标待核
+    expect(source).toMatch(/data-atc-llm-flag/);
+  });
+
+  it('候选落词表必须由人显式确认：面板不提供任何"候选直接入表"的通道', () => {
+    // 面板里唯一允许的 upsert 是**人工新增词条**表单（runAddEntry）。
+    // 把 upsert 调用点逐个找出来，确认里面没有候选相关的调用。
+    const upsertCalls = source.match(/'transcript\.glossary\.upsert',\s*\{[\s\S]{0,400}?\}\)/g) || [];
+    expect(upsertCalls.length).toBeGreaterThanOrEqual(1);
+    for (const call of upsertCalls) {
+      expect(call).not.toMatch(/candidate/i);
+    }
+    // 候选的入表动作只存在于词表管理页，面板里不得出现
+    expect(source).not.toContain('adoptCandidate');
   });
 
   it('对照视图在模态内提供回滚，且分段只吃 offsetMap（不另算 diff）', () => {
@@ -685,10 +717,14 @@ describe('查看器集成契约', () => {
     expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
     expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
     expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
-    // 建词条仍带创建上下文（护栏留在 upsertEntry）：两个 upsert 调用点都要带 docId
+    // 建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId
     const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
-    expect(upserts).toHaveLength(2);
+    expect(upserts).toHaveLength(1);
     for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
+    // 模型候选那条路已改走候选区：只标待核、绝不写词表（原先它也走 upsert），同样要带 docId
+    const flags = [...panelSrc.matchAll(/transcript\.correct\.flagCandidates', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(flags).toHaveLength(1);
+    for (const payload of flags) expect(payload).toContain('docId: ctx.docId');
     // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
@@ -699,7 +735,6 @@ describe('查看器集成契约', () => {
     expect(panelSrc).not.toContain('compareBusy');
     expect(panelSrc).not.toContain('transcript.query.compare');
   });
-
   it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
     expect(panelSrc).not.toContain("data-atc-action': 'preview'");
     expect(panelSrc).not.toMatch(/kind === 'preview'/);

@@ -180,7 +180,12 @@ export function computeProtectedRanges(text: string): Span[] {
   return ranges;
 }
 
-function isProtected(ranges: Span[], span: Span): boolean {
+/**
+ * 保护区判据：代码块 / 行内代码 / URL 一律不参与纠错。
+ * 导出给"模型读正文提候选"复用——提候选和做替换必须用**同一套**保护区判断，
+ * 否则会出现"这里提了候选、那里又拒绝替换"的自相矛盾。
+ */
+export function isProtected(ranges: Span[], span: Span): boolean {
   return ranges.some((r) => span.start < r.end && span.end > r.start);
 }
 

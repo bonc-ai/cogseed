@@ -130,6 +130,10 @@ describe('locale 覆盖（词表管理页）', () => {
     'pack_conflict_hint', 'pack_import', 'pack_imported', 'pack_import_failed', 'pack_invalid',
     'metrics_runs', 'metrics_no_latency', 'metrics_latency', 'metrics_ok', 'metrics_over',
     'metrics_retention', 'metrics_glossary', 'metrics_reached', 'metrics_not_reached', 'metrics_not_measurable',
+    // 待核候选区（模型候选的唯一出口：不确认不入表）
+    'candidates_title', 'candidates_hint', 'candidate_pair', 'candidate_in_allowlist',
+    'candidate_outside_allowlist', 'candidate_adopt', 'candidate_discard', 'candidate_adopted',
+    'candidate_adopt_failed', 'candidate_not_pending', 'candidate_discarded', 'candidate_discard_failed',
   ];
 
   for (const lang of locales) {
@@ -159,10 +163,32 @@ describe('源码契约', () => {
       'transcript.glossary.setStatus', 'transcript.glossary.delete', 'transcript.glossary.setOwnerNote',
       'transcript.glossary.seedInitial', 'transcript.queryRewrite.set',
       'transcript.glossary.exportPack', 'transcript.glossary.reviewPack', 'transcript.glossary.importPack',
+      'transcript.glossary.candidates', 'transcript.glossary.adoptCandidate', 'transcript.glossary.discardCandidate',
       'transcript.metrics.summary',
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);
+  });
+
+  /**
+   * 待核候选区：模型候选的唯一出口。这里的关键是"候选与词条分开"——
+   * 候选必须单独渲染、单独确认，且**没有**任何自动入表路径。
+   */
+  it('候选走独立通道，且入表只由人点「确认入表」触发', () => {
+    expect(source).toContain("'transcript.glossary.candidates'");
+    expect(source).toContain("'transcript.glossary.adoptCandidate'");
+    expect(source).toContain("'transcript.glossary.discardCandidate'");
+    // 两个动作都必须挂在按钮上，没有"自动采纳"的旁路
+    expect(source).toMatch(/data-glo-candidate-adopt/);
+    expect(source).toMatch(/data-glo-candidate-discard/);
+    // 候选不能混进词条列表：只喂 state.candidates，不 push 进 state.entries
+    expect(source).toMatch(/state\.candidates = Array\.isArray\(cand\?\.candidates\)/);
+    expect(source).not.toMatch(/state\.entries\.push\(.*candidate/i);
+  });
+
+  it('候选区明确告知"当前不生效"，避免被误当成已生效规则', () => {
+    expect(source).toMatch(/candidates_hint/);
+    expect(source).toMatch(/candidate_outside_allowlist/);
   });
 
   it('人名默认不导出，导入必须先预览再确认', () => {

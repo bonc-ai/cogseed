@@ -30185,7 +30185,8 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-qa-model-pop-manage.ui-button:hover { background: var(--kb-brand-soft, var(--color-brand-soft)); }
 .kb-qa-input {
   flex: 1; min-width: 0; resize: none; font-size: var(--font-size-4); line-height: 1.6;
-  height: 26px; max-height: 120px; padding: 4px 4px; color: var(--kb-text);
+  height: 26px; min-height: 26px; max-height: 120px; overflow-y: hidden;
+  padding: 4px 4px; color: var(--kb-text);
 }
 .kb-qa-input::placeholder { color: var(--kb-text3); opacity: .6; }
 .kb-qa-send.ui-icon-button {
@@ -31515,8 +31516,20 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-wb-side-expand .ui-icon { width: 16px; height: 16px; }
 .kb-wb-side-expand[hidden] { display: none; }
 
-.kb-wb-right-expand,
-.kb-wb-right-collapse { display: none; }
+/* 右侧 AI 列的展开/收起按钮：显隐只由 hidden 属性驱动（JS 按 _state.rightPanelOpen 设置）。
+   ⚠️ 必须带 .kb-wb 前缀提升权重：ui-components.css 在 index.html 里**晚于**本文件加载，
+   其 `.ui-icon-button{display:inline-flex}` 与单类选择器同权重（0,1,0）→ 后加载者胜，
+   会把这里的 display 连同浏览器 UA 的 `[hidden]{display:none}` 一起压掉（作者样式永远
+   优先于 UA 样式）。真机事故：宽屏下「生成测验」正上方的 × 常驻可见、点了完全没反应。 */
+.kb-wb .kb-wb-right-expand,
+.kb-wb .kb-wb-right-collapse { display: inline-flex; }
+.kb-wb .kb-wb-right-expand[hidden],
+.kb-wb .kb-wb-right-collapse[hidden] { display: none; }
+/* 收起右侧 AI 列：宽屏下把让出的宽度交给中间列（窄屏抽屉规则见下方 media query）。 */
+.kb-wb.right-panel-collapsed { grid-template-columns: var(--kb-c1, 236px) 4px minmax(0, 1fr) 0 0; }
+.kb-wb.side-collapsed.right-panel-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
+.kb-wb.right-panel-collapsed .kb-wb-right { display: none !important; }
+.kb-wb.right-panel-collapsed .kb-wb-divider[data-wb-divider="2"] { visibility: hidden; pointer-events: none; }
 
 @media (max-width: 1100px) {
   .kb-wb {
@@ -32662,6 +32675,49 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 }
 .kb-glo__preview[data-tone="warning"] {
   color: var(--color-warning-text);
+}
+/* 待核候选区：与词条列表同一套排版，但用一条淡分隔 + 提示语把它明确分成
+   "还没生效的建议"。颜色只留在提示语上，不给整块铺底色。 */
+.kb-glo__candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line-default);
+}
+.kb-glo__candidates-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.kb-glo__candidate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-top: 1px dashed var(--line-subtle);
+}
+.kb-glo__candidate-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kb-glo__candidate-label {
+  font-size: var(--font-size-2);
+}
+.kb-glo__candidate-meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  word-break: break-word;
+}
+.kb-glo__candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex-shrink: 0;
 }
 @media (max-width: 720px) {
   .kb-glo__filters {
