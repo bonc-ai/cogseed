@@ -137,6 +137,8 @@
 
     const state = {
       entries: [],
+      /** 待核候选（模型给的）：与词条分开存、分开显示——候选不参与扫描。 */
+      candidates: [],
       meta: { ownerNote: '', lastReconcileAt: 0 },
       filter: { search: '', kind: '', riskLevel: '', status: '' },
       selected: new Set(),
@@ -165,6 +167,7 @@
         '  <div class="kb-glo__filters" data-glo-filters></div>',
         '  <div class="kb-glo__status" data-glo-status hidden></div>',
         '  <div class="kb-glo__bulk" data-glo-bulk></div>',
+        '  <div class="kb-glo__candidates" data-glo-candidates hidden></div>',
         '  <div class="kb-glo__list" data-glo-list></div>',
         '  <details class="kb-glo__io" data-glo-io>',
         '    <summary data-glo-io-summary></summary>',
@@ -433,6 +436,82 @@
       return el;
     }
 
+    /**
+     * 待核候选区（模型候选的唯一出口）。
+     *
+     * 为什么单独一块、且明确写"当前不生效"：候选与词条长得像（都是一对
+     * wrong → correct），但语义完全不同——词条是扫描规则，候选只是一句建议。
+     * 混进词条列表会让用户以为它已经生效了。这里只提供两个动作：
+     * 「确认入表」（变成真词条，此后才参与扫描）与「丢弃」。
+     */
+    function renderCandidates() {
+      const host = q('[data-glo-candidates]');
+      if (!host) return;
+      const pending = (state.candidates || []).filter((c) => c.state === 'pending');
+      host.textContent = '';
+      host.hidden = pending.length === 0;
+      if (!pending.length) return;
+
+      const head = document.createElement('div');
+      head.className = 'kb-glo__candidates-head';
+      const title = document.createElement('strong');
+      title.textContent = t('kb.glossary.candidates_title', '待核候选（{count} 条）', { count: pending.length });
+      head.appendChild(title);
+      const hint = document.createElement('div');
+      hint.className = 'kb-glo__preview';
+      hint.textContent = t(
+        'kb.glossary.candidates_hint',
+        '这些是模型在转写纠错里给出的候选，当前不生效、不参与扫描替换；确认入表后才会成为词条。',
+      );
+      head.appendChild(hint);
+      host.appendChild(head);
+
+      for (const candidate of pending.slice(0, 50)) {
+        const row = document.createElement('div');
+        row.className = 'kb-glo__candidate-row';
+        const main = document.createElement('div');
+        main.className = 'kb-glo__candidate-main';
+        const label = document.createElement('span');
+        label.className = 'kb-glo__candidate-label';
+        label.textContent = t('kb.glossary.candidate_pair', '{wrong} → {correct}（置信 {percent}%）', {
+          wrong: candidate.wrong,
+          correct: candidate.correct,
+          percent: Math.round((Number(candidate.confidence) || 0) * 100),
+        });
+        main.appendChild(label);
+        const meta = document.createElement('div');
+        meta.className = 'kb-glo__candidate-meta';
+        meta.textContent = [
+          candidate.inAllowlist === false
+            ? t('kb.glossary.candidate_outside_allowlist', '词表外写法')
+            : t('kb.glossary.candidate_in_allowlist', '词表已有写法'),
+          candidate.reason ? String(candidate.reason) : '',
+          candidate.context ? String(candidate.context) : '',
+        ].filter(Boolean).join(' · ');
+        main.appendChild(meta);
+        const acts = document.createElement('div');
+        acts.className = 'kb-glo__candidate-actions';
+        acts.innerHTML = [
+          button({
+            label: t('kb.glossary.candidate_adopt', '确认入表'),
+            role: 'primary',
+            size: 'sm',
+            disabled: state.busy,
+            attrs: { 'data-glo-candidate-adopt': candidate.id },
+          }),
+          button({
+            label: t('kb.glossary.candidate_discard', '丢弃'),
+            role: 'ghost',
+            size: 'sm',
+            disabled: state.busy,
+            attrs: { 'data-glo-candidate-discard': candidate.id },
+          }),
+        ].join('');
+        row.append(main, acts);
+        host.appendChild(row);
+      }
+    }
+
     function renderList() {
       const host = q('[data-glo-list]');
       if (!host) return;
@@ -580,7 +659,9 @@
     }
 
     function render() {
-      for (const step of [renderMeta, renderMetrics, renderFilters, renderStatus, renderBulk, renderList, renderIo]) {
+      for (const step of [
+        renderMeta, renderMetrics, renderFilters, renderStatus, renderBulk, renderCandidates, renderList, renderIo,
+      ]) {
         try { step(); } catch (error) {
           log?.warn('glossary manager render step failed', { step: step.name, error: error?.message || String(error) });
         }
@@ -594,6 +675,14 @@
       try {
         const result = await root.cogseed.invoke('transcript.glossary.list', {});
         state.entries = Array.isArray(result?.entries) ? result.entries : [];
+        // 候选区独立通道：词条列表只含已生效规则，候选不在其中。
+        try {
+          const cand = await root.cogseed.invoke('transcript.glossary.candidates', {});
+          state.candidates = Array.isArray(cand?.candidates) ? cand.candidates : [];
+        } catch (error) {
+          log?.warn('glossary candidates load failed', { error: error?.message || String(error) });
+          state.candidates = [];
+        }
         state.meta = result?.meta && typeof result.meta === 'object'
           ? result.meta
           : { ownerNote: '', lastReconcileAt: 0 };
@@ -669,6 +758,54 @@
       } catch (error) {
         log?.warn('glossary status failed', { error: error?.message || String(error) });
         setStatus(t('kb.glossary.bulk_status_failed', '批量更新失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        await reload();
+        opts.onChanged?.();
+      }
+    }
+
+    /**
+     * 候选 → 词条（人工确认）。这是候选唯一能影响扫描的动作，必须由人点。
+     * 采纳后重新扫描才可能替换——**候选本身在此之前一直不生效**。
+     */
+    async function adoptCandidate(id) {
+      if (state.busy) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('transcript.glossary.adoptCandidate', { id });
+        if (!result?.entry) {
+          const reason = String(result?.skippedReason || '');
+          setStatus(reason === 'not_pending'
+            ? t('kb.glossary.candidate_not_pending', '该候选已经处理过了。')
+            : t('kb.glossary.candidate_adopt_failed', '确认入表失败，请稍后重试。'), 'warning');
+        } else {
+          setStatus(t('kb.glossary.candidate_adopted', '已入表：{wrong} → {correct}（之后参与扫描替换）', {
+            wrong: result.entry.wrong,
+            correct: result.entry.correct,
+          }), '');
+        }
+      } catch (error) {
+        log?.warn('candidate adopt failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.candidate_adopt_failed', '确认入表失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        await reload();
+        opts.onChanged?.();
+      }
+    }
+
+    async function discardCandidate(id) {
+      if (state.busy) return;
+      state.busy = true;
+      render();
+      try {
+        await root.cogseed.invoke('transcript.glossary.discardCandidate', { id });
+        setStatus(t('kb.glossary.candidate_discarded', '已丢弃该候选（不会进词表；模型再报同一对也不会重新翻出来）。'), '');
+      } catch (error) {
+        log?.warn('candidate discard failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.candidate_discard_failed', '丢弃失败，请稍后重试。'), 'warning');
       } finally {
         state.busy = false;
         await reload();
@@ -952,6 +1089,10 @@
       }
       const del = event.target.closest('[data-glo-delete]');
       if (del) { void deleteOne(del.getAttribute('data-glo-delete')); return; }
+      const candAdopt = event.target.closest('[data-glo-candidate-adopt]');
+      if (candAdopt) { void adoptCandidate(candAdopt.getAttribute('data-glo-candidate-adopt')); return; }
+      const candDiscard = event.target.closest('[data-glo-candidate-discard]');
+      if (candDiscard) { void discardCandidate(candDiscard.getAttribute('data-glo-candidate-discard')); return; }
       const action = event.target.closest('[data-glo-action]');
       if (!action) return;
       const kind = action.getAttribute('data-glo-action');
