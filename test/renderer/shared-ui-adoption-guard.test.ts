@@ -94,6 +94,91 @@ function rawControlCount(source: string): number {
   return (source.match(/<(?:button|input|textarea|select)\b/gi) || []).length;
 }
 
+/**
+ * 另外三个渲染层维度——**此前没有任何闸门**，所以存量可以无限增长而套件全绿：
+ *   1. 用 emoji 当图标（规范：图标必须来自 `modules/icons.js`）；
+ *   2. 内联 `<svg>` 画图标（同上）；
+ *   3. 字面 `z-index`（规范：层序只能用 tokens.css 的 `--z-*`）。
+ * 口径与裸控件一致：**冻结存量、禁止新增**。
+ * 这些快照是"当前树的实测值"；合并了别的分支后需要按新树**重算**，
+ * 但**不许为了过闸门而抬高**——抬高就等于绕过迁移与评审（与裸控件基线同一条纪律）。
+ */
+const emojiAsIconBaseline: Record<string, number> = {
+  'bash_permission.js': 2,
+  'chat-artifact.js': 1,
+  'conversation.js': 3,
+  'import-check-modal.js': 1,
+  'kb-notes.js': 21,
+  'kb-quiz.js': 1,
+  'kb-workbench.js': 25,
+  'model-authorization.js': 2,
+  'onboarding.js': 8,
+  'settings.js': 1,
+  'skills.js': 1,
+  'touchpoint-settings.js': 1,
+  'workspace.js': 11,
+};
+
+/**
+ * 内联 `<svg>` 的冻结值。**`icons.js` 豁免**：它就是图标的唯一合法源头，
+ * 往它里面加图标正是规范要求的做法，冻死它等于堵掉正确路径。
+ */
+const inlineSvgBaseline: Record<string, number> = {
+  'avatar.js': 4,
+  'cognition/pages.js': 1,
+  'cognition-assets/views.js': 1,
+  'dashboard.js': 2,
+  'import-check-modal.js': 1,
+  'kb-workbench.js': 4,
+  'marketplace.js': 1,
+  'utils.js': 3,
+};
+const iconSourceFiles = new Set(['icons.js']);
+
+const literalZIndexBaseline: Record<string, number> = {
+  'kb-workbench.js': 3,
+  'utils.js': 1,
+};
+/**
+ * 各 CSS 文件的字面 z-index 存量（层序应走 tokens.css 的 `--z-*`）。
+ * `tokens.css` 豁免：它就是层序的唯一定义处；`vendor/**` 豁免：第三方样式不改。
+ * 说明：这份快照是逐文件实测出来的——第一次跑这条闸门就抓到了此前无人量的
+ * `cognition-assets.css`，正好证明"没闸门 = 没人知道有多少"。
+ */
+const styleZIndexBaseline: Record<string, number> = {
+  'cognition-assets.css': 1,
+  'component-gallery.css': 1,
+  'kb-quiz.css': 3,
+  'onboarding.css': 4,
+  'recall-local.css': 1,
+  'resource-pages.css': 1,
+  'shell-navigation.css': 2,
+  'style.css': 104,
+  'ui-components.css': 5,
+  'workspace.css': 12,
+};
+const styleTokensFile = 'tokens.css';
+const styleVendorPrefix = 'vendor/';
+
+const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]/u;
+
+/** 含 emoji 的**行数**（一行里多个只算一次：关心的是"这处 UI 用了 emoji"）。 */
+function emojiLineCount(source: string): number {
+  return source.split('\n').filter((line) => EMOJI_RE.test(line)).length;
+}
+
+function inlineSvgCount(source: string): number {
+  return (source.match(/<svg\b/gi) || []).length;
+}
+
+function literalZIndexCount(source: string): number {
+  return (source.match(/z-index/gi) || []).length;
+}
+
+function styleZIndexDeclarationCount(source: string): number {
+  return (source.match(/z-index\s*:/gi) || []).length;
+}
+
 describe('renderer shared UI adoption guard', () => {
   it('does not increase legacy raw-control usage or introduce it in new modules', () => {
     for (const relativePath of rendererModules(modulesRoot)) {
@@ -111,6 +196,98 @@ describe('renderer shared UI adoption guard', () => {
         + rawControlCount(fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8')), 0);
       expect(actual, `${group.label} adds raw controls; use the shared Renderer primitives instead`)
         .toBeLessThanOrEqual(group.limit);
+    }
+  });
+
+  it('does not use emoji as UI icons (icons must come from icons.js)', () => {
+    for (const relativePath of rendererModules(modulesRoot)) {
+      const source = fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8');
+      const actual = emojiLineCount(source);
+      const allowed = emojiAsIconBaseline[relativePath] || 0;
+      expect(
+        actual,
+        `${relativePath} adds emoji used as UI icons (${actual} > ${allowed}); `
+        + 'add an icon name to modules/icons.js and render it through uiIconHtml/hydrateUiIcons instead',
+      ).toBeLessThanOrEqual(allowed);
+    }
+  });
+
+  it('does not inline <svg> icons outside icons.js', () => {
+    for (const relativePath of rendererModules(modulesRoot)) {
+      if (iconSourceFiles.has(relativePath)) continue;
+      const source = fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8');
+      const actual = inlineSvgCount(source);
+      const allowed = inlineSvgBaseline[relativePath] || 0;
+      expect(
+        actual,
+        `${relativePath} inlines <svg> icons (${actual} > ${allowed}); `
+        + 'define the icon in modules/icons.js and render it through uiIconHtml instead',
+      ).toBeLessThanOrEqual(allowed);
+    }
+  });
+
+  it('does not add literal z-index values outside tokens.css', () => {
+    for (const relativePath of rendererModules(modulesRoot)) {
+      const source = fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8');
+      const actual = literalZIndexCount(source);
+      const allowed = literalZIndexBaseline[relativePath] || 0;
+      expect(
+        actual,
+        `${relativePath} adds a literal z-index (${actual} > ${allowed}); `
+        + 'use the --z-* layer tokens from tokens.css',
+      ).toBeLessThanOrEqual(allowed);
+    }
+    const stylesRoot = path.join(root, 'src/renderer');
+    const cssFiles = fs.readdirSync(stylesRoot, { withFileTypes: true })
+      .flatMap((entry) => {
+        if (entry.isFile() && entry.name.endsWith('.css')) return [entry.name];
+        if (entry.isDirectory() && entry.name === 'vendor') {
+          return fs.readdirSync(path.join(stylesRoot, entry.name))
+            .filter((n) => n.endsWith('.css'))
+            .map((n) => `${entry.name}/${n}`);
+        }
+        return [];
+      });
+    // vendor 下的第三方样式（xterm 等）不改，也不纳入冻结
+    const vendorCss = new Set(cssFiles.filter((f) => f.startsWith(styleVendorPrefix)));
+    for (const file of cssFiles) {
+      if (file === styleTokensFile || vendorCss.has(file)) continue;
+      const source = fs.readFileSync(path.join(stylesRoot, file), 'utf8');
+      const actual = styleZIndexDeclarationCount(source);
+      const allowed = styleZIndexBaseline[file] || 0;
+      expect(
+        actual,
+        `${file} adds literal z-index declarations (${actual} > ${allowed}); `
+        + 'use the --z-* layer tokens from tokens.css',
+      ).toBeLessThanOrEqual(allowed);
+    }
+  });
+
+  /**
+   * 绊线自检：**确认这些计数器真的能抓到违规**。
+   * 一个写坏的正则会让闸门静默放行一切——那比没有闸门更危险（看着是绿的）。
+   */
+  it('the counters actually detect violations (a broken regex must not pass silently)', () => {
+    expect(emojiLineCount('<span>📁 库根</span>')).toBe(1);
+    expect(emojiLineCount('<span>普通文案</span>')).toBe(0);
+    expect(emojiLineCount('💡 一句话\n💡 又一句')).toBe(2);
+    expect(inlineSvgCount('a<svg viewBox="0 0 1 1"></svg>b')).toBe(1);
+    expect(inlineSvgCount('<svgViewer>')).toBe(0); // 不是 svg 标签，别误伤
+    expect(literalZIndexCount('.a { z-index: 40; }')).toBe(1);
+    expect(styleZIndexDeclarationCount('.a { z-index: 40; }')).toBe(1);
+    expect(styleZIndexDeclarationCount('.a { --x: z-index-ish; }')).toBe(0);
+    // 冻结值必须覆盖当前树的实测值，否则下面的"不得增长"就是空话
+    for (const [file, count] of Object.entries(emojiAsIconBaseline)) {
+      const source = fs.readFileSync(path.join(modulesRoot, file), 'utf8');
+      expect(emojiLineCount(source), `${file} 基线高于实测，说明已被清理：请下调基线`).toBe(count);
+    }
+    for (const [file, count] of Object.entries(inlineSvgBaseline)) {
+      const source = fs.readFileSync(path.join(modulesRoot, file), 'utf8');
+      expect(inlineSvgCount(source), `${file} 基线高于实测，说明已被清理：请下调基线`).toBe(count);
+    }
+    for (const [file, count] of Object.entries(literalZIndexBaseline)) {
+      const source = fs.readFileSync(path.join(modulesRoot, file), 'utf8');
+      expect(literalZIndexCount(source), `${file} 基线高于实测，说明已被清理：请下调基线`).toBe(count);
     }
   });
 });
