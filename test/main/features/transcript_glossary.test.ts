@@ -23,10 +23,16 @@ import {
   isPureDigits,
   isSingleSurnameHonorific,
   listEntries,
+  listCandidates,
+  countPendingCandidates,
   loadGlossary,
   markVerified,
   migrateGlossaryV1ToV2,
   addContextAllow,
+  adoptCandidate,
+  clearCandidates,
+  discardCandidate,
+  recordCandidates,
   recordReplacement,
   removeContextAllow,
   retargetEntry,
@@ -37,6 +43,7 @@ import {
   deleteEntry,
   upsertEntry,
 } from '../../../src/main/features/transcript_glossary';
+import { scanText } from '../../../src/main/features/transcript_auto_correct';
 import { userTranscriptGlossaryFile } from '../../../src/main/paths';
 
 let uid = '';
@@ -268,7 +275,7 @@ describe('CRUD 与不变量', () => {
 });
 
 describe('迁移与降级', () => {
-  it('v1 文件 → v2（补作用域/风险/台账，且落盘为 v2）', () => {
+  it('v1 文件 → 当前版本（补作用域/风险/台账/候选区，且落盘为新版本）', () => {
     const v1 = {
       version: 1,
       entries: [
@@ -281,14 +288,16 @@ describe('迁移与降级', () => {
     fs.writeFileSync(userTranscriptGlossaryFile(uid), JSON.stringify(v1), 'utf8');
 
     const loaded = loadGlossary(uid);
-    expect(loaded.version).toBe(2);
+    // 当前文件版本 = 3（v2 加了候选区）。老文件升到新版本，但**不造占位候选**。
+    expect(loaded.version).toBe(3);
+    expect(loaded.candidates).toEqual([]);
     expect(loaded.entries).toHaveLength(1);
     expect(loaded.entries[0].action).toBe('replace');
     expect(loaded.entries[0].scope.global).toBe(true);
     expect(loaded.entries[0].scope.scenarioTags).toEqual(['组会']);
     expect(loaded.entries[0].replacedIn).toEqual([]);
     expect(loaded.meta.lastReconcileAt).toBe(9);
-    expect(JSON.parse(fs.readFileSync(userTranscriptGlossaryFile(uid), 'utf8')).version).toBe(2);
+    expect(JSON.parse(fs.readFileSync(userTranscriptGlossaryFile(uid), 'utf8')).version).toBe(3);
   });
 
   it('纯函数迁移不依赖磁盘', () => {
@@ -367,5 +376,159 @@ describe('entryId', () => {
     }));
     saveGlossary(uid, file);
     expect(loadGlossary(uid).entries.length).toBe(2000);
+  });
+});
+
+/**
+ * 候选区（模型候选）——本任务的核心不变量。
+ *
+ * 绊线测试：**模型候选绝不允许进入扫描**。哪天有人图省事把候选塞进
+ * `entries`（或给 `scanText` 喂候选数组），下面第一条就会红。
+ */
+describe('模型候选区：只待核，不进扫描', () => {
+  const cand = (wrong: string, correct: string, extra: Record<string, unknown> = {}) => ({
+    wrong, correct, confidence: 0.9, reason: '读音相近', context: `…${wrong}…`, kind: 'people', ...extra,
+  });
+
+  it('绊线：候选落盘后，扫描结果、listEntries、导出包里都没有它', () => {
+    recordCandidates(uid, [cand('roadmap', 'SpeakerA'), cand('coxyx', 'Cogseed')]);
+    // 落盘了、也确实在候选区里
+    expect(countPendingCandidates(uid)).toBe(2);
+    // 但词的"生效"视图里一条都没有
+    expect(listEntries(uid, { status: 'active' })).toEqual([]);
+    expect(listEntries(uid)).toEqual([]);
+    const scan = scanText('这块是 roadmap 在跟，语速有点快。', listEntries(uid, { status: 'active' }));
+    expect(scan.candidates).toHaveLength(0);
+    // 导出包只带词条，候选不外泄
+    expect(exportGlossary(uid, { includePeople: true }).entries).toEqual([]);
+    // 磁盘上候选与词条是两个数组：候选不可能被当成词条读回来
+    const onDisk = JSON.parse(fs.readFileSync(userTranscriptGlossaryFile(uid), 'utf8'));
+    expect(onDisk.version).toBe(3);
+    expect(onDisk.candidates).toHaveLength(2);
+    expect(onDisk.entries).toEqual([]);
+  });
+
+  it('候选也不会借 includePaused 之类的逃生口混进扫描（结构隔离，不靠 status 过滤）', () => {
+    recordCandidates(uid, [cand('roadmap', 'SpeakerA')]);
+    const entries = listEntries(uid, { status: 'active' });
+    expect(scanText('这块是 roadmap 在跟', entries, { includePaused: true }).candidates).toHaveLength(0);
+    // 即便有人把整个文件对象当 entries 传，候选数组也不是 GlossaryEntry[]
+    const file = loadGlossary(uid);
+    expect(file.candidates[0]).not.toHaveProperty('status');
+    expect(file.candidates[0]).not.toHaveProperty('scope');
+  });
+
+  it('采纳是候选能影响扫描的唯一通道：采纳前 0 命中，采纳后才命中', () => {
+    recordCandidates(uid, [cand('roadmap', 'SpeakerA')]);
+    const before = listCandidates(uid, { state: 'pending' });
+    expect(before).toHaveLength(1);
+    expect(scanText('这块是 roadmap 在跟', listEntries(uid, { status: 'active' })).candidates).toHaveLength(0);
+
+    const adopted = adoptCandidate(uid, before[0].id);
+    expect(adopted.entry).not.toBeNull();
+    expect(adopted.entry?.wrong).toBe('roadmap');
+    // 人拍的板 → 按人工词条入册，并留下追溯链路
+    expect(adopted.entry?.source).toBe('manual');
+    expect(adopted.entry?.createdBy).toBe('manual');
+    expect(adopted.candidate?.state).toBe('adopted');
+    expect(adopted.candidate?.adoptedEntryId).toBe(adopted.entry?.id);
+
+    const after = scanText('这块是 roadmap 在跟', listEntries(uid, { status: 'active' }));
+    expect(after.candidates).toHaveLength(1);
+    expect(after.candidates[0].correct).toBe('SpeakerA');
+    // 采纳过的候选不再是待核
+    expect(countPendingCandidates(uid)).toBe(0);
+  });
+
+  it('已经处理过的候选不能再采纳一次（终态不可回退）', () => {
+    recordCandidates(uid, [cand('roadmap', 'SpeakerA'), cand('kstar', 'KSTAR')]);
+    const target = listCandidates(uid, { state: 'pending' }).find((c) => c.wrong === 'roadmap')!;
+    expect(adoptCandidate(uid, target.id).entry).not.toBeNull();
+    // 已采纳 → 再点一次不该重复入册
+    expect(adoptCandidate(uid, target.id)).toMatchObject({ entry: null, skippedReason: 'not_pending' });
+    // 丢弃过的同样不可回退
+    const second = listCandidates(uid, { state: 'pending' })[0];
+    discardCandidate(uid, second.id);
+    expect(adoptCandidate(uid, second.id)).toMatchObject({ entry: null, skippedReason: 'not_pending' });
+    // 不存在的 id 如实回报，不静默成功
+    expect(adoptCandidate(uid, 'c_not_exist')).toMatchObject({ entry: null, skippedReason: 'not_found' });
+    expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
+  });
+
+  it('丢弃是终态：模型下一轮再报同一对不会重新翻出来', () => {
+    recordCandidates(uid, [cand('coxyx', 'Cogseed')]);
+    const target = listCandidates(uid, { state: 'pending' })[0];
+    expect(discardCandidate(uid, target.id)?.state).toBe('discarded');
+    const again = recordCandidates(uid, [cand('coxyx', 'Cogseed')]);
+    expect(again).toMatchObject({ added: 0, updated: 0, pending: 0 });
+    expect(again.skipped[0]).toMatchObject({ why: 'already_discarded' });
+    expect(listEntries(uid, { status: 'active' })).toEqual([]);
+  });
+
+  it('同一对重复上报只留一条，置信取更高的一次', () => {
+    expect(recordCandidates(uid, [cand('roadmap', 'SpeakerA', { confidence: 0.5 })])).toMatchObject({ added: 1, pending: 1 });
+    expect(recordCandidates(uid, [cand('ROADMAP', 'speakera', { confidence: 0.8 })])).toMatchObject({ added: 0, updated: 1, pending: 1 });
+    const list = listCandidates(uid);
+    expect(list).toHaveLength(1);
+    expect(list[0].confidence).toBe(0.8);
+  });
+
+  it('挡掉：空目标 / 自反 / 纯数字变体 / 已在词表中的对', () => {
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    const result = recordCandidates(uid, [
+      { wrong: '', correct: 'X' },
+      cand('same', 'same'),
+      cand('2024', 'Cogseed'),
+      cand('coxy', 'Cogseed'),
+    ]);
+    expect(result.added).toBe(0);
+    expect(result.skipped.map((s) => s.why)).toEqual([
+      'empty_target', 'identical_pair', 'pure_digit_variant', 'already_in_glossary',
+    ]);
+  });
+
+  it('落盘往返：候选的置信/理由/上下文/来源文档/是否名单外都保住', () => {
+    recordCandidates(uid, [cand('roadmap', '某位老师', {
+      confidence: 0.42, reason: '读音接近', context: '上下文片段', docId: 'doc_1',
+      start: 12, inAllowlist: false,
+    })]);
+    const [saved] = listCandidates(uid, { state: 'pending' });
+    expect(saved).toMatchObject({
+      wrong: 'roadmap', correct: '某位老师', confidence: 0.42, reason: '读音接近',
+      context: '上下文片段', docId: 'doc_1', start: 12, inAllowlist: false,
+      kind: 'people', origin: 'llm', state: 'pending',
+    });
+    // 重新从磁盘读一遍（模拟重启）
+    expect(listCandidates(uid, { state: 'pending' })[0].id).toBe(saved.id);
+  });
+
+  it('旧文件（v2，没有候选区）照常读得回来，不因缺字段丢词条', () => {
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    const file = userTranscriptGlossaryFile(uid);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete raw.candidates;
+    raw.version = 2;
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2), 'utf8');
+    const reloaded = loadGlossary(uid);
+    expect(reloaded.candidates).toEqual([]);
+    expect(reloaded.entries).toHaveLength(1);
+  });
+
+  it('候选区独立限长：候选再多也挤不掉词条', () => {
+    upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
+    recordCandidates(uid, Array.from({ length: 600 }, (_, i) => cand(`w${i}`, `c${i}`)));
+    expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
+    expect(listCandidates(uid).length).toBeLessThanOrEqual(500);
+  });
+
+  it('清空候选：默认只清终态，显式才连待核一起清', () => {
+    recordCandidates(uid, [cand('a1', 'b1')]);
+    const done = listCandidates(uid, { state: 'pending' })[0];
+    adoptCandidate(uid, done.id);
+    recordCandidates(uid, [cand('a2', 'b2')]);
+    expect(clearCandidates(uid)).toBe(1);
+    expect(countPendingCandidates(uid)).toBe(1);
+    expect(clearCandidates(uid, { includePending: true })).toBe(1);
+    expect(listCandidates(uid)).toEqual([]);
   });
 });
