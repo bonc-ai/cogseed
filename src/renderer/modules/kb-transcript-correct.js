@@ -103,32 +103,6 @@
     return { high, other, ignored };
   }
 
-  /**
-   * 场景标签归一（与主进程 transcript_doc_tags.normalizeTags 同规则）：
-   * NFKC + 去首尾空白 + 折叠内部空白、去重（大小写不敏感）、限 8 条 × 24 字。
-   * 渲染层先归一一次，是为了"点了没反应/存进去变样"这种前后端不一致的观感。
-   */
-  const SCENARIO_MAX_TAGS = 8;
-  const SCENARIO_MAX_CHARS = 24;
-
-  function normalizeScenarioTags(input) {
-    const list = Array.isArray(input) ? input : [];
-    const out = [];
-    const seen = new Set();
-    for (const item of list) {
-      let tag = String(item == null ? '' : item).normalize('NFKC').trim().replace(/\s+/g, ' ');
-      if (!tag) continue;
-      tag = Array.from(tag).slice(0, SCENARIO_MAX_CHARS).join('').trim();
-      if (!tag) continue;
-      const key = tag.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(tag);
-      if (out.length >= SCENARIO_MAX_TAGS) break;
-    }
-    return out;
-  }
-
   /** 默认勾选的行：低风险且未被忽略（被忽略的词条降权，不默认重来一遍）。 */
   function defaultAcceptedIds(rows) {
     return (rows || [])
@@ -445,14 +419,7 @@
       llmNote: '',
       headings: [],
       headingBusy: false,
-      // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
-      scopeChoice: 'keep',
-      // 场景标签（「仅本场景」作用域的前置数据）：初值来自调用方 ctx，
-      // 随后由 transcript.docTags.* 读/写；它是**这一份稿件属于哪个场景**的标注。
-      scenarioTags: normalizeScenarioTags(ctx?.scenarioTags),
-      scenarioSuggestions: [],
-      scenarioBusy: false,
-      scenarioDraft: '',
+      // 接受的三个动作（方案 §七）：忽略 / 加白 / 改写法
       // 同人段落合并（方案 §五 P1-2）：默认开——它是"清理版"能不能真正好用的关键
       mergeSpeaker: true,
       rowMenu: '',
@@ -910,166 +877,28 @@
     }
 
     /**
-     * 接受范围（方案 §七：接受（范围：本文档 / 当前任务））。
-     * 只影响"接受时把词条作用域改成什么"；默认 keep = 不动词条原有作用域。
+     * 场景标签行（词条作用域的前置数据）。
+     *
+     * 「接受范围」三档（默认 / 仅本文档 / 仅本场景）已删除。它名不副实：
+     *   - 「默认」是纯 no-op（`applyScopeChoice` 首行就 return，不发 IPC 也不改盘）；
+     *   - 是否收窄实际取决于 `source === 'meeting_accept'`，而**全仓库没有任何调用方
+     *     发送过该 source**（面板发 'manual'、本体桥接发 'ontology_seed'），判断恒真
+     *     ⇒ 新词条一律是全局规则——正是 transcript_auto_correct 里记录的那起事故
+     *     （一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）。
+     * 作用域改在**创建词条时**按当前文档/场景自动收窄，见
+     * `transcript_glossary.upsertEntry` 的兜底规则。
      *
      * 控件分工（全部走共享原语，不建页面局部变体）：
-     *   范围 = 互斥选择 → uiSegmentedControl；拟标题 = 动作 → uiButton；
-     *   合并同人发言 = 开关 → uiCheckbox。
-     * 点击委托仍按 data-atc-action / data-atc-scope 分派，故 attrs 原样透传给每个分段项。
+     *   场景标签 = 标签行；拟标题 = 动作 → uiButton；合并同人发言 = 开关 → uiCheckbox。
+     * 点击委托仍按 data-atc-action 分派。
      */
-    /**
-     * 场景标签控件（「仅本场景」作用域的前置数据）。
-     *
-     * 为什么要有它：词条作用域支持"只在本场景生效"，但标签此前没有任何来源，
-     * 于是这个选项永远点不动、带场景标签的词条也永远命中不了（真机反馈）。
-     * 这里让用户为**这一份稿件**确认它属于哪个场景：chip 可删、输入可加；
-     * 建议值来自个人本体的分组/分节（设计指定来源），没有就自己命名。
-     */
-    function scenarioControlHtml() {
-      const chips = state.scenarioTags.map((tag) => button({
-        label: tag,
-        iconEnd: 'x',
-        role: 'secondary',
-        size: 'sm',
-        disabled: state.busy || state.scenarioBusy,
-        title: t('kb.transcriptCorrect.scenario_remove', '移除该场景标签'),
-        attrs: { 'data-atc-action': 'scenario-remove', 'data-atc-tag': tag },
-      })).join('');
-      const suggestions = state.scenarioSuggestions
-        .filter((tag) => !state.scenarioTags.some((own) => own.toLowerCase() === String(tag).toLowerCase()))
-        .slice(0, 6)
-        .map((tag) => button({
-          label: tag,
-          icon: 'plus',
-          role: 'ghost',
-          size: 'sm',
-          disabled: state.busy || state.scenarioBusy,
-          title: t('kb.transcriptCorrect.scenario_suggest_hint', '来自个人本体的分组/分节'),
-          attrs: { 'data-atc-action': 'scenario-add', 'data-atc-tag': tag },
-        })).join('');
-      const input = typeof root.uiInput === 'function'
-        ? root.uiInput({
-          id: 'atc-scenario-' + panelId,
-          type: 'text',
-          value: state.scenarioDraft,
-          placeholder: t('kb.transcriptCorrect.scenario_placeholder', '为这份稿件标注场景（如：英语演讲课）'),
-          attrs: { 'data-atc-scenario-input': 'true', autocomplete: 'off', spellcheck: 'false' },
-        })
-        : '';
-      const addBtn = button({
-        label: t('kb.transcriptCorrect.scenario_add', '标注'),
-        icon: 'plus',
-        role: 'secondary',
-        size: 'sm',
-        disabled: state.busy || state.scenarioBusy,
-        loading: state.scenarioBusy,
-        attrs: { 'data-atc-action': 'scenario-add-draft' },
-      });
-      return [
-        '<div class="kb-atc__scenario">',
-        '<span class="kb-atc__scenario-label">' + t('kb.transcriptCorrect.scenario_label', '场景') + '</span>',
-        chips,
-        input,
-        addBtn,
-        suggestions
-          ? '<span class="kb-atc__scenario-suggest-label">'
-            + t('kb.transcriptCorrect.scenario_suggest_label', '来自本体') + '</span>' + suggestions
-          : '',
-        state.scenarioTags.length
-          ? ''
-          : '<span class="kb-atc__scenario-hint">'
-            + t('kb.transcriptCorrect.scenario_hint', '标好场景后「仅本场景」才可用（只在同场景稿件上生效）') + '</span>',
-        '</div>',
-      ].join('');
-    }
-
-    /** 读该文档已存的场景标签（含本体建议）；失败只记日志，不打断面板。 */
-    async function loadScenarioTags() {
-      try {
-        const res = await root.cogseed.invoke('transcript.docTags.get', { docId: ctx.docId });
-        if (res && res.ok !== false && Array.isArray(res.tags) && res.tags.length) {
-          state.scenarioTags = normalizeScenarioTags(res.tags);
-          render();
-        }
-      } catch (error) {
-        log?.warn('scenario tags load failed', { error: error?.message || String(error) });
-      }
-      try {
-        const res = await root.cogseed.invoke('transcript.docTags.suggest', {});
-        const list = Array.isArray(res?.tags) ? normalizeScenarioTags(res.tags) : [];
-        if (list.length) { state.scenarioSuggestions = list; render(); }
-      } catch (error) {
-        log?.warn('scenario tag suggestions failed', { error: error?.message || String(error) });
-      }
-    }
-
-    /**
-     * 保存该文档的场景标签，然后**重扫**：标签决定作用域命中，改了标签不重扫，
-     * "未生效"清单会停在旧标签上（用户会以为设置没生效）。
-     */
-    async function applyScenarioTags(next) {
-      if (state.busy || state.scenarioBusy) return;
-      const wanted = normalizeScenarioTags(next);
-      state.scenarioBusy = true;
-      state.scenarioDraft = '';
-      render();
-      let ok = false;
-      try {
-        const res = await root.cogseed.invoke('transcript.docTags.set', { docId: ctx.docId, tags: wanted });
-        ok = !(res && res.ok === false);
-        if (ok) {
-          state.scenarioTags = Array.isArray(res?.tags) ? normalizeScenarioTags(res.tags) : wanted;
-          if (!state.scenarioTags.length && state.scopeChoice === 'task') state.scopeChoice = 'keep';
-        }
-      } catch (error) {
-        log?.warn('scenario tags save failed', { error: error?.message || String(error) });
-      }
-      state.scenarioBusy = false;
-      if (!ok) {
-        setStatus(t('kb.transcriptCorrect.scenario_failed', '场景标签保存失败，请稍后重试。'), 'warning');
-        render();
-        return;
-      }
-      setStatus(state.scenarioTags.length
-        ? t('kb.transcriptCorrect.scenario_saved', '已标注场景：{tags}', { tags: state.scenarioTags.join('、') })
-        : t('kb.transcriptCorrect.scenario_cleared', '已清除场景标签，「仅本场景」暂不可用。'), '');
-      await runScan();
-    }
-
     function renderScope() {
       const host = q('[data-atc-scope]');
       if (!host) return;
       // 有"未生效（out_of_scope）"条目时也要显示：很可能是这份稿子没标场景，
       // 用户得能在这里补标签，而不是对着灰按钮猜（真机反馈）。
       if (!state.scanned || (state.rows.length === 0 && state.denied.length === 0)) { host.textContent = ''; return; }
-      const scopeOptions = [
-        { value: 'keep', label: t('kb.transcriptCorrect.scope_keep', '默认'), disabled: state.busy },
-        { value: 'doc', label: t('kb.transcriptCorrect.scope_doc', '仅本文档'), disabled: state.busy },
-        {
-          value: 'task',
-          label: t('kb.transcriptCorrect.scope_task', '仅本场景'),
-          disabled: state.busy || !state.scenarioTags.length,
-          // 置灰必须说明原因与出路：此前只灰不说，那句现成的提示实际是死文案
-          title: state.scenarioTags.length
-            ? t('kb.transcriptCorrect.scope_task_hint', '只在带同一场景标签的稿件上生效')
-            : t('kb.transcriptCorrect.scope_need_tags', '当前文档没有场景标签，请先标注场景，或改用「仅本文档」。'),
-        },
-      ];
       host.innerHTML = [
-        '<span class="kb-atc__scope-label">' + t('kb.transcriptCorrect.scope_label', '接受范围') + '</span>',
-        root.uiSegmentedControl({
-          ariaLabel: t('kb.transcriptCorrect.scope_label', '接受范围'),
-          value: state.scopeChoice,
-          className: 'kb-atc__scope-control',
-          items: scopeOptions.map((option) => ({
-            label: option.label,
-            value: option.value,
-            disabled: option.disabled,
-            attrs: { 'data-atc-action': 'scope', 'data-atc-scope': option.value, ...(option.title ? { title: option.title } : {}) },
-          })),
-        }),
-        scenarioControlHtml(),
         button({
           label: state.headingBusy
             ? t('kb.transcriptCorrect.headings_running', '正在拟标题…')
@@ -1107,13 +936,6 @@
       }));
       if (state.cleanedText) {
         buttons.push(button({
-          label: t('kb.transcriptCorrect.preview', '预览清理版'),
-          icon: 'file-text',
-          role: 'secondary',
-          size: 'sm',
-          attrs: { 'data-atc-action': 'preview' },
-        }));
-        buttons.push(button({
           label: t('kb.transcriptCorrect.diff', '对照原文'),
           icon: 'split',
           role: 'secondary',
@@ -1147,14 +969,6 @@
           size: 'sm',
           disabled: !state.runId,
           attrs: { 'data-atc-action': 'notes' },
-        }));
-        buttons.push(button({
-          label: t('kb.transcriptCorrect.revert', '回滚'),
-          icon: 'x-circle',
-          // 次要操作 → 线框按钮（规范 §三-1）
-          role: 'secondary',
-          size: 'sm',
-          attrs: { 'data-atc-action': 'revert' },
         }));
       }
       host.innerHTML = buttons.join('');
@@ -1634,7 +1448,6 @@
           // 口癖规则包装进词表后是 action=delete 词条：不带这个开关它们不会出现，
           // 用户会以为"装了规则包却没反应"（真机踩过）。
           includeDelete: true,
-          ...(state.scenarioTags.length ? { scenarioTags: state.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
         state.denied = Array.isArray(result?.denied) ? result.denied : [];
@@ -1800,8 +1613,8 @@
       if (note) {
         note.textContent = t('kb.transcriptCorrect.diff_note', '高亮 = 本次替换，删除线 = 口癖删除；原文从未被改写，回滚只做校验与返回。');
       }
-      const result = await modal.result;
-      if (result?.reason === 'action' && result?.id === 'revert') {
+      const result = await modal;
+      if (result?.reason === 'action' && result?.value === 'revert') {
         await runRevert();
       }
     }
@@ -1927,8 +1740,8 @@
       });
       const host = modal?.dialog?.querySelector('[data-atc-notes]');
       if (host) host.textContent = state.notesText;
-      const result = await modal.result;
-      if (result?.reason === 'action' && result?.id === 'save-notes') {
+      const result = await modal;
+      if (result?.reason === 'action' && result?.value === 'save-notes') {
         await saveNotes();
       }
     }
@@ -2048,37 +1861,6 @@
       } finally {
         state.busy = false;
         render();
-      }
-    }
-
-    /** 接受范围（方案 §七）：把已接受的词条限定到本文档 / 本场景。 */
-    async function applyScopeChoice(entryRef) {
-      const choice = state.scopeChoice;
-      if (choice === 'keep') return;
-      if (choice === 'task' && !state.scenarioTags.length) {
-        setStatus(t('kb.transcriptCorrect.scope_need_tags', '当前文档没有场景标签，请改用「本文档」。'), 'warning');
-        return;
-      }
-      try {
-        const result = await root.cogseed.invoke('transcript.glossary.setScope', {
-          ids: [entryRef],
-          choice,
-          docId: ctx.docId,
-          ...(choice === 'task' ? { scenarioTags: state.scenarioTags } : {}),
-        });
-        const refused = Array.isArray(result?.refused) ? result.refused : [];
-        if (refused.length) {
-          setStatus(t('kb.transcriptCorrect.scope_refused', '高危词条不能设为全局（会误伤无关稿件），已保持原作用域。'), 'warning');
-          return;
-        }
-        setStatus(t('kb.transcriptCorrect.scope_applied', '已限定作用域：{scope}', {
-          scope: choice === 'doc'
-            ? t('kb.transcriptCorrect.scope_doc', '仅本文档')
-            : t('kb.transcriptCorrect.scope_task', '仅本场景'),
-        }), '');
-      } catch (error) {
-        log?.warn('scope apply failed', { error: error?.message || String(error) });
-        setStatus(t('kb.transcriptCorrect.scope_failed', '设置作用域失败，请稍后重试。'), 'warning');
       }
     }
 
@@ -2207,7 +1989,13 @@
           host.appendChild(row);
         }
       }
-      await modal.result;
+      // 弹窗是挂在 document.body 上的（ui-modal.js: document.body.appendChild(overlay)），
+      // 不在面板容器内 —— 容器上那份点击委托**收不到弹窗里的按钮**，
+      // 「采用」点了没反应就是这个原因。这里给该 dialog 单独挂一份同样的委托。
+      const dialog = modal?.dialog;
+      if (dialog) dialog.addEventListener('click', onClick);
+      await modal;
+      if (dialog) dialog.removeEventListener('click', onClick);
       render();
     }
 
@@ -2537,6 +2325,9 @@
           correct,
           kind,
           source: 'manual',
+          // 创建上下文：未显式给 scope 时，main 侧据此把新词条收窄到本文档，
+          // 而不是静默变成全局规则（「接受范围」控件已删除，护栏移到这里）。
+          docId: ctx.docId,
         });
         if (result?.skippedReason === 'pure_digit_variant') {
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
@@ -2566,8 +2357,6 @@
         else {
           state.accepted.add(ref);
           state.ignored.delete(ref);
-          // 接受时按当前范围选择落到词条（本文档 / 本场景），keep = 不动
-          void applyScopeChoice(ref);
         }
         render();
         return;
@@ -2624,10 +2413,19 @@
       const headingAdopt = event.target.closest('[data-atc-heading-adopt]');
       if (headingAdopt) {
         const start = Number(headingAdopt.getAttribute('data-atc-heading-adopt'));
-        toggleHeading(start, headingAdopt.getAttribute('data-atc-heading-title'));
-        headingAdopt.textContent = state.headings.some((h) => h.start === start)
-          ? t('kb.transcriptCorrect.headings_adopted', '已采用')
-          : t('kb.transcriptCorrect.headings_adopt', '采用');
+        const title = headingAdopt.getAttribute('data-atc-heading-title') || '';
+        toggleHeading(start, title);
+        const adopted = state.headings.some((h) => h.start === start);
+        // 整块重写该按钮：直接改 textContent 会把共享按钮的内部结构（label span）
+        // 冲掉，而且 role class 永远停在 secondary，"已采用"看不出来。
+        headingAdopt.outerHTML = button({
+          label: adopted
+            ? t('kb.transcriptCorrect.headings_adopted', '已采用')
+            : t('kb.transcriptCorrect.headings_adopt', '采用'),
+          role: adopted ? 'primary' : 'secondary',
+          size: 'sm',
+          attrs: { 'data-atc-heading-adopt': String(start), 'data-atc-heading-title': title },
+        });
         return;
       }
       const llmFlag = event.target.closest('[data-atc-llm-flag]');
@@ -2667,26 +2465,6 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'sync-ontology') { void runSyncOntology(); return; }
-      if (kind === 'scope') {
-        const value = action.getAttribute('data-atc-scope') || 'keep';
-        state.scopeChoice = value === 'doc' || value === 'task' ? value : 'keep';
-        render();
-        return;
-      }
-      if (kind === 'scenario-add') {
-        void applyScenarioTags(state.scenarioTags.concat([action.getAttribute('data-atc-tag') || '']));
-        return;
-      }
-      if (kind === 'scenario-remove') {
-        const tag = action.getAttribute('data-atc-tag') || '';
-        void applyScenarioTags(state.scenarioTags.filter((own) => own !== tag));
-        return;
-      }
-      if (kind === 'scenario-add-draft') {
-        const input = q('[data-atc-scenario-input]');
-        void applyScenarioTags(state.scenarioTags.concat([(input && input.value) || state.scenarioDraft || '']));
-        return;
-      }
       if (kind === 'toggle-denied') { state.showDenied = !state.showDenied; render(); return; }
       if (kind === 'open-glossary') {
         if (root.KbGlossaryManager && typeof root.KbGlossaryManager.open === 'function') {
@@ -2706,39 +2484,19 @@
       if (kind === 'scan') void runScan();
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
       else if (kind === 'apply') void runApply();
-      else if (kind === 'preview') openTextModal(t('kb.transcriptCorrect.preview_title', '清理版预览'), state.cleanedText);
       else if (kind === 'diff') void openDiffModal();
       else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
-      else if (kind === 'revert') void runRevert();
       else if (kind === 'add') void runAddEntry();
       else if (kind === 'seed-fillers') void runSeedFillers();
     }
 
     container.addEventListener('click', onClick);
-    // 场景输入：草稿进 state（面板频繁重渲染，不这么做输入会被清空），回车即标注
-    const onScenarioInput = (event) => {
-      const input = event.target.closest && event.target.closest('[data-atc-scenario-input]');
-      if (!input) return;
-      state.scenarioDraft = input.value;
-    };
-    const onScenarioKeydown = (event) => {
-      if (event.key !== 'Enter') return;
-      const input = event.target.closest && event.target.closest('[data-atc-scenario-input]');
-      if (!input) return;
-      event.preventDefault();
-      void applyScenarioTags(state.scenarioTags.concat([input.value || '']));
-    };
-    container.addEventListener('input', onScenarioInput);
-    container.addEventListener('keydown', onScenarioKeydown);
     render();
-    void loadScenarioTags(); // 标签是异步到的：先渲染面板，读到再补上并重扫
 
     return {
       destroy() {
         container.removeEventListener('click', onClick);
-        container.removeEventListener('input', onScenarioInput);
-        container.removeEventListener('keydown', onScenarioKeydown);
       },
       getState() { return state; },
     };
@@ -2749,8 +2507,8 @@
       if (!container) throw new Error('kb transcript correct: container required');
       if (!root.cogseed || typeof root.cogseed.invoke !== 'function') throw new Error('kb transcript correct: ipc unavailable');
       if (typeof root.uiButton !== 'function') throw new Error('kb transcript correct: shared ui primitives unavailable');
-      if (typeof root.uiSegmentedControl !== 'function' || typeof root.uiCheckbox !== 'function') {
-        throw new Error('kb transcript correct: shared ui primitives unavailable (uiSegmentedControl / uiCheckbox)');
+      if (typeof root.uiCheckbox !== 'function') {
+        throw new Error('kb transcript correct: shared ui primitives unavailable (uiCheckbox)');
       }
       const text = String(ctx?.text || '');
       if (!text) throw new Error('kb transcript correct: text required');
@@ -2759,13 +2517,11 @@
         text,
         docId: String(ctx?.docId || ctx?.displayPath || 'transcript'),
         displayPath: String(ctx?.displayPath || ''),
-        scenarioTags: Array.isArray(ctx?.scenarioTags) ? ctx.scenarioTags : [],
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）
     __test: {
       groupCandidates,
-      normalizeScenarioTags,
       groupRowsByConcept,
       flaggedSummary,
       mergeFlagged,
@@ -2787,7 +2543,6 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       groupCandidates,
-      normalizeScenarioTags,
       groupRowsByConcept,
       flaggedSummary,
       mergeFlagged,
