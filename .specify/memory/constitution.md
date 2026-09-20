@@ -56,12 +56,12 @@ LLM 提示词遵循既有内容及 Runtime injection 约束，用户终止不能
 
 ## Governance
 
-本文件首次将已有仓库规则整理为 1.0.0 候选，正式采纳日期由本次 MR 审核确定。
+本文件将已有仓库规则整理为 1.0.0，采纳日期记录在下方版本行。
 它不替代 AGENTS.md，也不授予提交、外部发送、生产写入、发布或权限变更等操作的额外授权。
 修订必须在 MR 中说明理由、影响与验证：不兼容原则变化提升主版本，新增原则提升次版本，
 文字澄清提升修订版本。发生规则冲突时先核实权威来源和当前任务授权，不能静默放宽边界。
 
-**Version**: 1.0.0 | **Ratified**: TODO(RATIFICATION_DATE): 由本次 MR 审核确定 | **Last Amended**: 2026-09-17
+**Version**: 1.0.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-09-19
 
 ## AI Product Method Addendum
 
