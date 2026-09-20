@@ -109,31 +109,35 @@ describe('枚举兜底', () => {
 describe('locale 覆盖（词表管理页）', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [
-    'title', 'count', 'owner_named', 'owner_unnamed', 'maintained_at', 'owner_note', 'owner_prompt',
-    'search', 'search_placeholder', 'kind', 'risk', 'status', 'all_kinds', 'all_risks', 'all_status',
-    'status_active', 'status_paused', 'select', 'selected', 'select_all', 'clear_selection',
-    'pause', 'resume', 'pause_selected', 'resume_selected', 'delete', 'deleted', 'delete_failed',
-    'bulk_status_done', 'bulk_status_failed', 'load_failed', 'no_match', 'empty', 'freq',
-    'owner_scope', 'source_manual', 'source_import', 'source_meeting', 'source_ontology',
-    'updated_at', 'scope_global', 'scope_limited', 'allow_listed', 'ignored_times',
-    'io', 'export', 'export_placeholder', 'export_generate', 'export_generated', 'export_failed',
-    'include_people', 'exclude_people', 'export_save', 'export_filename', 'export_saved',
-    'export_duplicate', 'export_save_failed', 'import', 'import_mode', 'import_merge', 'import_replace',
-    'import_preview', 'import_replace_hint', 'import_preview_btn', 'import_apply', 'import_done',
-    'import_failed', 'import_invalid_json', 'unavailable',
+    'title', 'count', 'owner_named', 'owner_unnamed',
+    'maintained_at', 'owner_note', 'owner_prompt', 'search',
+    'search_placeholder', 'kind', 'risk', 'status',
+    'all_kinds', 'all_risks', 'all_status', 'status_active',
+    'status_paused', 'select', 'selected', 'select_all',
+    'clear_selection', 'pause', 'resume', 'pause_selected',
+    'resume_selected', 'delete', 'deleted', 'delete_failed',
+    'bulk_status_done', 'bulk_status_failed', 'load_failed', 'no_match',
+    'empty', 'freq', 'owner_scope', 'source_manual',
+    'source_import', 'source_meeting', 'source_ontology', 'updated_at',
+    'scope_global', 'scope_limited', 'allow_listed', 'ignored_times',
+    'io', 'export', 'export_placeholder', 'export_generate',
+    'export_generated', 'export_failed', 'include_people', 'exclude_people',
+    'export_save', 'export_filename', 'export_saved', 'export_duplicate',
+    'export_save_failed', 'import', 'import_mode', 'import_merge',
+    'import_replace', 'import_preview', 'import_replace_hint', 'import_preview_btn',
+    'import_apply', 'import_done', 'import_failed', 'import_invalid_json',
+    'unavailable', 'seed_initial', 'seed_initial_done', 'seed_initial_excluded',
+    'seed_initial_failed', 'qrw_on', 'qrw_off', 'qrw_enabled',
+    'qrw_disabled', 'qrw_failed', 'pack_export', 'pack_exported',
+    'pack_export_failed', 'pack_review', 'pack_review_result', 'pack_conflict_hint',
+    'pack_import', 'pack_imported', 'pack_import_failed', 'pack_invalid',
+    'metrics_runs', 'metrics_no_latency', 'metrics_latency', 'metrics_ok',
+    'metrics_over', 'metrics_retention', 'metrics_glossary', 'metrics_reached',
+    'metrics_not_reached', 'metrics_not_measurable', 'candidates_title',
+    // develop #307 的拦截原因（guardReason）：合并后代码仍会发出这些文案，必须四语齐全
     'select_required', 'entry_missing', 'delete_missing', 'status_paused_one', 'status_resumed_one',
     'export_generate_required', 'import_preview_required', 'import_empty',
     'pack_review_required', 'pack_content_required',
-    'seed_initial', 'seed_initial_done', 'seed_initial_excluded', 'seed_initial_failed',
-    'qrw_on', 'qrw_off', 'qrw_enabled', 'qrw_disabled', 'qrw_failed',
-    'pack_export', 'pack_exported', 'pack_export_failed', 'pack_review', 'pack_review_result',
-    'pack_conflict_hint', 'pack_import', 'pack_imported', 'pack_import_failed', 'pack_invalid',
-    'metrics_runs', 'metrics_no_latency', 'metrics_latency', 'metrics_ok', 'metrics_over',
-    'metrics_retention', 'metrics_glossary', 'metrics_reached', 'metrics_not_reached', 'metrics_not_measurable',
-    // 待核候选区（模型候选的唯一出口：不确认不入表）
-    'candidates_title', 'candidates_hint', 'candidate_pair', 'candidate_in_allowlist',
-    'candidate_outside_allowlist', 'candidate_adopt', 'candidate_discard', 'candidate_adopted',
-    'candidate_adopt_failed', 'candidate_not_pending', 'candidate_discarded', 'candidate_discard_failed',
   ];
 
   for (const lang of locales) {
@@ -163,33 +167,16 @@ describe('源码契约', () => {
       'transcript.glossary.setStatus', 'transcript.glossary.delete', 'transcript.glossary.setOwnerNote',
       'transcript.glossary.seedInitial', 'transcript.queryRewrite.set',
       'transcript.glossary.exportPack', 'transcript.glossary.reviewPack', 'transcript.glossary.importPack',
-      'transcript.glossary.candidates', 'transcript.glossary.adoptCandidate', 'transcript.glossary.discardCandidate',
       'transcript.metrics.summary',
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);
   });
 
-  /**
-   * 待核候选区：模型候选的唯一出口。这里的关键是"候选与词条分开"——
-   * 候选必须单独渲染、单独确认，且**没有**任何自动入表路径。
-   */
-  it('候选走独立通道，且入表只由人点「确认入表」触发', () => {
-    expect(source).toContain("'transcript.glossary.candidates'");
-    expect(source).toContain("'transcript.glossary.adoptCandidate'");
-    expect(source).toContain("'transcript.glossary.discardCandidate'");
-    // 两个动作都必须挂在按钮上，没有"自动采纳"的旁路
-    expect(source).toMatch(/data-glo-candidate-adopt/);
-    expect(source).toMatch(/data-glo-candidate-discard/);
-    // 候选不能混进词条列表：只喂 state.candidates，不 push 进 state.entries
-    expect(source).toMatch(/state\.candidates = Array\.isArray\(cand\?\.candidates\)/);
-    expect(source).not.toMatch(/state\.entries\.push\(.*candidate/i);
-  });
-
-  it('候选区明确告知"当前不生效"，避免被误当成已生效规则', () => {
-    expect(source).toMatch(/candidates_hint/);
-    expect(source).toMatch(/candidate_outside_allowlist/);
-  });
+  // 原先这里还有两条「待核候选区」契约（候选走 transcript.glossary.candidates /
+  // adoptCandidate / discardCandidate 独立通道）。该候选区已随「模型建议并入扫描」
+  // 整体移除：模型候选现在是扫描结果里的一行，在转写纠错面板里勾选即确认，
+  // 词表管理页不再有候选区，故这两条契约随之删除。
 
   it('人名默认不导出，导入必须先预览再确认', () => {
     expect(source).toContain('includePeople: state.exportIncludePeople');
