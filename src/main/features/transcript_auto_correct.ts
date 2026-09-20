@@ -89,6 +89,12 @@ export interface CorrectionCandidate {
    * 标记后不会被计进 `deletedFillers`（否则 365 个块头会污染口癖计数）。
    */
   structure?: boolean;
+  /**
+   * 来自**模型读正文**的建议（`entryRef` 形如 `model_<i>`），不是词表命中。
+   * 面板据此标出来源、且**永不预勾**——模型判断要逐条人工确认；
+   * 确认应用时按 `meeting_accept` 记进词表（见 ipc/transcript.ts 的 apply）。
+   */
+  fromModel?: boolean;
 }
 
 export interface DeniedMatch {
@@ -496,20 +502,16 @@ export function mapOffset(offsetMap: OffsetSegment[], inputOffset: number): numb
   return null;
 }
 
-// ── 未决项（待核）：疑似专名探测 + 可见标记 ───────────────────────────────
+// ── 疑似专名探测（模型复核的重点线索）────────────────────────────────────
 //
-// 方案 §4.3 要求：无法确定该不该纠的地方**不猜**，而是标出来给人看
-// （`OpenIssue` + `【转写存疑】` 写回清理版）。这里只做两件纯文本事：
-//   1. `detectSuspectEntities`：**保守**地找出"疑似专名但词表/记忆分组都没有"的
-//      拉丁串。保守的含义是"宁漏勿噪"——只认长度 ≥4 且（含内部大写 或 全大写）
-//      的串：`KSTAR`/`NoteBookLM` 会被认出，`Hello`/`OK`/`API` 不会。
-//      真正的语义级"未知实体"（`roadmap` 可能指 SpeakerA）留给 P2 的 LLM 候选，
-//      本引擎不假装能做。
-//   2. `insertIssueMarkers`：把标记插进清理版，并返回插入后的新 span
-//      （从后往前插，避免前面的插入让后面的偏移失效）。
-
-/** 写回清理版的可见标记（方案 §4.3 固定文案）。 */
-export const ISSUE_MARKER = '【转写存疑】';
+// `detectSuspectEntities`：**保守**地找出"疑似专名但词表/记忆分组都没有"的拉丁串。
+// 保守的含义是"宁漏勿噪"——只认长度 ≥4 且（含内部大写 或 全大写）的串：
+// `KSTAR`/`NoteBookLM` 会被认出，`Hello`/`OK`/`API` 不会。
+//
+// 注意它**不再是"要不要问模型"的闸门**：词形判据对中文稿几乎必然 0 命中
+// （`roadmap`/`SpeakerA` 都过不了），拿它当准入条件会让模型永远收不到问题。
+// 现在它只作为"重点线索"提示给模型，真正的语义判断由模型读正文完成
+// （见 transcript_llm_candidates）。待核/【转写存疑】那套可见标记已随之移除。
 
 export interface SuspectEntity {
   span: Span;
@@ -553,38 +555,4 @@ export function detectSuspectEntities(
     if (out.length >= limit) break;
   }
   return out;
-}
-
-/**
- * 把 `ISSUE_MARKER` 插到每个 span 之前（同一位置只插一次），返回新文本与**插入后**
- * 的 span（含标记本身）。从后往前插入，保证前面的偏移不受影响。
- */
-export function insertIssueMarkers(
-  text: string,
-  spans: Span[],
-): { text: string; spans: Span[]; byStart: Map<number, Span> } {
-  const starts = [...new Set(
-    (spans ?? [])
-      .map((s) => Math.max(0, Math.min(Number(s?.start) || 0, text.length)))
-      .filter((n) => Number.isFinite(n)),
-  )].sort((a, b) => a - b);
-  if (starts.length === 0) return { text, spans: [], byStart: new Map() };
-
-  const markerLen = ISSUE_MARKER.length;
-  let out = text;
-  const shifted: Span[] = [];
-  // 从后往前：插入点之后的旧内容整体后移，而更靠前的插入点不受已插入内容影响。
-  for (let i = starts.length - 1; i >= 0; i -= 1) {
-    const start = starts[i];
-    out = out.slice(0, start) + ISSUE_MARKER + out.slice(start);
-  }
-  // 第 i 个标记前面还插了 i 个标记（0..i-1），所以它的最终起点是 p_i + i*markerLen。
-  const byStart = new Map<number, Span>();
-  for (let i = 0; i < starts.length; i += 1) {
-    const start = starts[i] + markerLen * i;
-    const span = { start, end: start + markerLen };
-    shifted.push(span);
-    byStart.set(starts[i], span);
-  }
-  return { text: out, spans: shifted, byStart };
 }

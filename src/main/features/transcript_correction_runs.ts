@@ -4,7 +4,7 @@
  * 三件套（方案 v0.2 §三）：
  *   A. 原文            —— **本模块永不改写**；只读入参、记 sha1（"原文件保持不变"）
  *   B. 清理版          —— after.txt（替换 + 口癖删除后的文本）
- *   C. 对照表/未决项    —— diff.json / issues.json / report（术语对照、待核清单、参数）
+ *   C. 对照表          —— diff.json / report（术语对照、依据、参数）
  *
  * 落盘：`<uid>/local/cogseed/transcript/runs/<runId>/`（机器私有派生物，见 paths.ts）
  *   run.json        —— 元数据：sourceSha1 / 参数 / 统计 / 状态
@@ -12,7 +12,6 @@
  *   after.txt       —— 清理版
  *   diff.json       —— 逐条已应用编辑（entryRef / wrong / correct / count / spans）
  *   offset-map.json —— 偏移映射（keep/replace/delete 段），供时间戳与锚点重算
- *   issues.json     —— 未决项（待核），有 open 项时产物只能标 draft
  *
  * 回滚语义：`revertRun` 只**返回**原文并校验 sha1，不去写任何文档——把"恢复"
  * 交给调用方（宿主视图/文件层），避免这里再引入一条隐蔽的写路径。
@@ -90,32 +89,11 @@ export interface RunDelivery {
   at: number;
 }
 
-export type IssueReason =
-  | 'unknown_entity'
-  | 'ambiguous_name'
-  | 'mixed_speech'
-  | 'asr_unrecoverable'
-  /**
-   * 模型在纠错里给出的候选：候选**不进词表**、不参与扫描，只是"这里可能有错写，
-   * 需要人看一眼"。单独一种理由，是为了在待核清单里能和"未知实体"区分开。
-   */
-  | 'model_candidate';
-
-export interface OpenIssue {
-  id: string;
-  runId: string;
-  docId: string;
-  span: { start: number; end: number };
-  text: string;
-  reason: IssueReason;
-  suggestion?: string;
-  /** 写回清理版的可见标记。 */
-  marker: '【转写存疑】';
-  status: 'open' | 'resolved';
-  createdAt: number;
-  resolvedAt?: number;
-  resolution?: string;
-}
+/*
+ * 未决项（待核 / `issues.json` / 「【转写存疑】」标记）已随"模型候选并入扫描"整体移除：
+ * 扫描结果本身就是唯一的候选清单，勾选即确认，不再有并行的"待核"状态。
+ * 历史 run 目录里残留的 issues.json 不再被读取（其余产物照旧可回看/回滚）。
+ */
 
 export interface CreateRunInput {
   docId: string;
@@ -124,7 +102,6 @@ export interface CreateRunInput {
   result: ApplyResult;
   params?: CorrectionRunParams;
   mergedBlocks?: number;
-  issues?: Array<Omit<OpenIssue, 'id' | 'runId' | 'docId' | 'marker' | 'status' | 'createdAt'>>;
   /** 时间/说话人锚点（方案 §4.2：删除与合并后时间锚点必须可重算）。 */
   anchors?: unknown[];
 }
@@ -172,8 +149,9 @@ export function createRun(userId: string, input: CreateRunInput): CorrectionRun 
     retention: input.result.retention,
     overRewriteSuspected: input.result.overRewriteSuspected,
     pendingTotal: input.result.pendingTotal,
-    // 有未决项/未确认高危候选时，产物只能标 draft（方案 §8.1-7）。
-    status: input.result.status === 'applied' && (input.issues?.length ?? 0) === 0 ? 'applied' : 'draft',
+    // 没勾选的候选仍存在时产物只能标 draft（方案 §8.1-7）：`ApplyResult.status`
+    // 已经按"未处理的高危候选数"算过。
+    status: input.result.status === 'applied' ? 'applied' : 'draft',
     createdAt: Date.now(),
   };
 
@@ -193,23 +171,6 @@ export function createRun(userId: string, input: CreateRunInput): CorrectionRun 
     // 锚点：原稿块 → 合并块的时间区间与原文范围，供引用/时间戳回查
     anchors: Array.isArray(input.anchors) ? input.anchors : [],
   });
-
-  if (input.issues && input.issues.length) {
-    const now = Date.now();
-    const issues: OpenIssue[] = input.issues.map((issue, idx) => ({
-      id: `isu_${sha1(`${runId}|${idx}|${issue.text}`).slice(0, 10)}`,
-      runId,
-      docId: run.docId,
-      span: issue.span,
-      text: issue.text,
-      reason: issue.reason,
-      ...(issue.suggestion ? { suggestion: issue.suggestion } : {}),
-      marker: '【转写存疑】',
-      status: 'open' as const,
-      createdAt: now,
-    }));
-    writeJson(path.join(dir, 'issues.json'), issues);
-  }
   return run;
 }
 
@@ -294,47 +255,6 @@ export function annotateRun(
   return next;
 }
 
-// ── 未决项（待核）──────────────────────────────────────────────────────
-
-export function listIssues(
-  userId: string,
-  filter: { runId?: string; status?: 'open' | 'resolved' } = {},
-): OpenIssue[] {
-  const runs = filter.runId
-    ? (getRun(userId, filter.runId) ? [filter.runId] : [])
-    : listRuns(userId).map((r) => r.runId);
-  const out: OpenIssue[] = [];
-  for (const runId of runs) {
-    const issues = readJson<OpenIssue[]>(path.join(runDir(userId, runId), 'issues.json')) ?? [];
-    for (const issue of issues) {
-      if (filter.status && issue.status !== filter.status) continue;
-      out.push(issue);
-    }
-  }
-  return out;
-}
-
-export function resolveIssue(userId: string, runId: string, issueId: string, resolution: string): OpenIssue | null {
-  const file = path.join(runDir(userId, runId), 'issues.json');
-  const issues = readJson<OpenIssue[]>(file);
-  if (!issues) return null;
-  const target = issues.find((i) => i.id === issueId);
-  if (!target) return null;
-  target.status = 'resolved';
-  target.resolvedAt = Date.now();
-  target.resolution = resolution.slice(0, 500);
-  writeJson(file, issues);
-  // 队列清空后才允许把 run 从 draft 提升为 applied。
-  const remaining = issues.filter((i) => i.status === 'open').length;
-  const run = getRun(userId, runId);
-  if (run && remaining === 0 && run.pendingTotal === 0 && run.status === 'draft') {
-    writeJson(path.join(runDir(userId, runId), 'run.json'), { ...run, status: 'applied' });
-  }
-  return target;
-}
-
-// ── 三件套之 C：对照表 / 报告 ───────────────────────────────────────────
-
 export interface TerminologyRow {
   wrong: string;
   correct: string;
@@ -358,7 +278,6 @@ export interface CorrectionReport {
   run: CorrectionRun;
   /** 术语对照表：清理后用词 ← 原始转写典型形式（← 次数）。 */
   terminology: TerminologyRow[];
-  issues: OpenIssue[];
   params: CorrectionRunParams;
   contextMaterials: string[];
   /** 上下文材料清单（方案 §七：附记要列清这次依据了哪些东西）。 */
@@ -371,11 +290,9 @@ export interface CorrectionReport {
 export function buildReport(userId: string, runId: string): CorrectionReport {
   const run = getRun(userId, runId);
   if (!run) throw new Error('transcript runs: run not found');
-  const issues = listIssues(userId, { runId });
   const notes: string[] = [];
   if (run.overRewriteSuspected) notes.push(`字符保留率 ${(run.retention * 100).toFixed(1)}% 低于阈值，疑似过度改写`);
   if (run.pendingTotal > 0) notes.push(`还有 ${run.pendingTotal} 条候选未确认`);
-  if (issues.some((i) => i.status === 'open')) notes.push(`还有 ${issues.filter((i) => i.status === 'open').length} 处待核`);
   // 依据来自**当前**词表（词条可能事后被改/被删，那就如实标 missingInGlossary）
   const glossary = loadGlossary(userId);
   const byId = new Map(glossary.entries.map((entry) => [entry.id, entry]));
@@ -417,7 +334,6 @@ export function buildReport(userId: string, runId: string): CorrectionReport {
   return {
     run,
     terminology,
-    issues,
     params: run.params,
     contextMaterials,
     materials,
@@ -437,7 +353,6 @@ export function renderRunNotes(report: CorrectionReport, opts: { generatedAt?: n
   const run = report.run;
   const when = new Date(opts.generatedAt ?? Date.now()).toISOString().replace('T', ' ').slice(0, 19);
   const retention = (Number(run.retention) || 0) * 100;
-  const openIssues = report.issues.filter((issue) => issue.status === 'open');
   const lines: string[] = [];
 
   lines.push('# 转写清理附记');
@@ -452,7 +367,7 @@ export function renderRunNotes(report: CorrectionReport, opts: { generatedAt?: n
   lines.push('');
   if (run.status === 'draft') {
     lines.push('> ⚠️ 本次产物是草稿：' + (report.notes.length ? report.notes.join('；') : '存在未确认项')
-      + '。未决项清零前不得宣称清理完成。');
+      + '。未确认项清零前不得宣称清理完成。');
     lines.push('');
   }
 
@@ -486,22 +401,7 @@ export function renderRunNotes(report: CorrectionReport, opts: { generatedAt?: n
   }
   lines.push('');
 
-  lines.push('## 三、未决项清单');
-  lines.push('');
-  if (report.issues.length === 0) {
-    lines.push('本次没有未决项。');
-  } else {
-    lines.push(`共 ${report.issues.length} 条（未解决 ${openIssues.length} 条）：`);
-    lines.push('');
-    lines.push('| 标记 | 原文片段 | 理由 | 状态 |');
-    lines.push('|---|---|---|---|');
-    for (const issue of report.issues) {
-      lines.push(`| ${issue.marker} | ${issue.text} | ${issue.reason} | ${issue.status === 'open' ? '待核' : '已解决'} |`);
-    }
-  }
-  lines.push('');
-
-  lines.push('## 四、上下文材料');
+  lines.push('## 三、上下文材料');
   lines.push('');
   if (report.materials.length === 0) lines.push('（无）');
   else for (const item of report.materials) lines.push(`- ${item}`);
