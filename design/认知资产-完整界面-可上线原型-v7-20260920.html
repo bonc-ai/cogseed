@@ -344,7 +344,7 @@
 <script>
 /* ═══════════════════ 数据（唯一源，四页联动） ═══════════════════ */
 let assets = [
-  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',scope:'全局',app:'程序配置、数值排查、技术方案讨论',forbid:'对外部客户沟通的场景',vis:'不限制',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,
+  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',scope:'全局',app:'程序配置、数值排查、技术方案讨论',forbid:'对外部客户沟通的场景',vis:'不限制',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,mounted:true,
    vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',scope:'全局',app:'程序配置、数值排查',forbid:'对客户沟通',how:'你手动补了学生身份背景',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'程序配置、数值排查',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'系统迁移：从旧数据里搬过来',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
    proofs:[{k:'usage',when:'今天',where:'对话《时间线记录标注来源》',ver:3,rate:null},{k:'carry',when:'昨天',where:'对话《对话中引用认知资产》',ver:3},{k:'usage',when:'昨天',where:'对话《企业版打包发布》',ver:3,rate:'有用'},{k:'version',when:'昨天',ver:3},{k:'create',when:'上个月',ver:1}]},
   {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按内部技术排查口径回答，不按终端用户口径；必要时补基础原理但不降技术深度。',scope:'全局',app:'排查类问题',forbid:'—',vis:'不限制',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
@@ -356,7 +356,7 @@ let assets = [
   {id:'a4',cat:'规则与偏好',fam:'',title:'评审 → 先讲产品模型',v:1,vv:['v1'],stmt:'评审 → 先讲产品模型，再谈实现细节；避免过早陷入实现讨论。',scope:'产品评审',app:'方案评审',forbid:'—',vis:'不限制',uses:3,last:'上周',status:'active',mat:'未验证',kstar:false,
    vers:[{v:1,inuse:true,src:'确认沉淀',when:'上周',scope:'产品评审',app:'方案评审',forbid:'—',how:'你在对话里教它的',prev:'评审 → 先讲产品模型，再谈实现细节。',note:'你教它的',eff:null}],
    proofs:[{k:'carry',when:'上周',where:'对话《本体增强方案讨论》',ver:1},{k:'create',when:'上周',ver:1}]},
-  {id:'a5',cat:'规则与偏好',fam:'',title:'术语白话化',v:2,vv:['v1','v2'],stmt:'专业术语首次出现时，用一句话白话解释，不额外展开。',scope:'全局',app:'所有对话',forbid:'—',vis:'不限制',uses:21,last:'今天',status:'active',mat:'已实证',kstar:false,
+  {id:'a5',cat:'规则与偏好',fam:'',title:'术语白话化',v:2,vv:['v1','v2'],stmt:'专业术语首次出现时，用一句话白话解释，不额外展开。',scope:'全局',app:'所有对话',forbid:'—',vis:'不限制',uses:21,last:'今天',status:'active',mat:'已实证',kstar:false,mounted:true,
    vers:[{v:2,inuse:true,src:'手动编辑',when:'上周',scope:'全局',app:'所有对话',forbid:'—',how:'你手动补了示例写法',prev:'专业术语首次出现时用一句话白话解释。',note:'补示例写法',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上个月',scope:'全局',app:'所有对话',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'专业术语首次出现时用一句话白话解释。',note:'首次确认',eff:null}],
    proofs:[{k:'usage',when:'今天',where:'几乎每次对话（自动带入）',ver:2,rate:'有用'},{k:'version',when:'上周',ver:2},{k:'create',when:'上个月',ver:1}]},
   {id:'a6',cat:'技能与方法',fam:'',title:'先跑测试再提交',v:1,vv:['v1'],stmt:'改动后先跑相关测试再提交；全量口径 npm run test:js 两遍一致。',scope:'代码任务',app:'改动前验证',forbid:'—',vis:'不限制',uses:5,last:'2 周前',status:'active',mat:'未验证',kstar:false,
@@ -382,8 +382,8 @@ let cands = [
    kse:{task:'认知资产面板改版',expect:'一屏说清改了什么',actual:'先讲背景，你要求先说结论',result:'比预期差',why:'缺「结论先行」这条偏好',orig:'口头提醒 AI 先讲结论',diff:'把一次性提醒变成长期偏好'}},
   {id:'c5',title:'常用分支名用中文',cat:'技能与方法',src:'会话整理',ev:'ok',snoozed:true,value:'分支命名',action:'一周后会再提醒你',
    body:'你的开发分支名用中文描述（如「认知资产迭代」）。',srcLine:['认知资产迭代']},
-  {id:'c6',title:'术语要白话解释',cat:'规则与偏好',src:'会话整理',ev:'ok',value:'表达的通俗程度',action:'确认后会与已有那条融合成新版本',
-   body:'专业术语首次出现时用一句话白话解释，不额外展开，也不要堆括号注释。',srcLine:['认知资产迭代','本体增强方案讨论']},
+  {id:'c6',title:'术语要白话解释',cat:'规则与偏好',src:'KSTAR 偏好',ev:'ok',value:'表达的通俗程度',action:'确认后会与已有那条融合成新版本',
+   body:'专业术语首次出现时用一句话白话解释，不额外展开，也不要堆括号注释。',srcLine:['你的一次明确表态','对话《认知资产迭代》']},
 ];
 let proc = [
   {when:'今天',txt:'「术语白话化」相关候选——已保存',r:'已保存'},
@@ -699,7 +699,7 @@ function plainRow(a){
 function catalogRow(a){
   const used = a.uses?`用过 ${a.uses} 次`:'还没用过';
   return `<div class="row" onclick="goAsset('${a.id}')"><div class="tw"><div class="tt">${esc(a.title)}</div><div class="catline">${esc(a.stmt.slice(0,60))}…</div><div class="mm">${a.cat} · ${used} · v${a.v}</div></div>
-    <div class="sd">${a.kstar?'<span class="tag blue">模型挂着</span>':''}<span class="chev">›</span></div></div>`;
+    <div class="sd">${a.mounted?'<span class="tag blue">模型挂着</span>':''}<span class="chev">›</span></div></div>`;
 }
 function assetDetailHtml(a){
   const on = a.status==='active';

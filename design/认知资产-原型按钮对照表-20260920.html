@@ -70,7 +70,7 @@
   <table>
     <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
     <tr><td class="c">四格统计（生效中资产 / 待确认候选 / 已验证 / 需要关注）</td><td>—</td><td>stats.confirmed / pending / transferOk / attention R1:153-172</td><td>②</td></tr>
-    <tr><td class="c">目录视图 ⇄ 列表视图</td><td>切换行形态</td><td>asset-view R3:101；目录行 R2:990-1008</td><td>④</td></tr>
+    <tr><td class="c">目录视图 ⇄ 列表视图（目录行带「模型挂着」）</td><td>切换行形态</td><td>asset-view R3:101；目录行 R2:990-1008；「模型挂着」＝该会话里被模型真拉进投影的资产（<code>recall.projections.list</code> 的 model_selected，R1:322-343 + R2:1007）</td><td>④</td></tr>
     <tr><td class="c">筛选 chip（全部 / 四类 / KSTAR / 已删除，带计数）</td><td>客户端筛选</td><td>filter-cat R3:98；KSTAR 档 R2:985 · 已删除档 R2:976-982</td><td>②</td></tr>
     <tr><td class="c">家族分组 + 「改名」内联输入</td><td>批改族名（单条组并入「未归类」）</td><td><code>recall.families.rename</code> 2412 · R1:714-721；分组＝<code>same_family</code> 连通分量、≥2 成组 R2:890-927</td><td>②</td></tr>
     <tr><td class="c">资产行（标题 + 类型·vN·最近使用 + KSTAR / 已实证 / 状态章）</td><td>开详情</td><td>状态章六态 R2:97-114；成熟度只显示「已实证」R2:110-112</td><td>②⑤</td></tr>
@@ -94,7 +94,7 @@
     <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
     <tr><td class="c">关注条「N 条来源记录需要处理」→ 处理 / 收起；行内 重试 / 恢复</td><td>按来源的可执行动作出按钮</td><td><code>recall.sources.list</code> 2212 + <code>retry</code> 2244 / <code>resume</code> 2237 · R2:1113-1140</td><td>⑧</td></tr>
     <tr><td class="c">关注条「N 个整理任务需要重试」→ 处理</td><td>跳整理页</td><td><code>recall.captures.batchRetry</code> 2383 · R2:1202</td><td>⑧</td></tr>
-    <tr><td class="c">候选卡（标题 + 证据充足/来源已删/已稍后处理 + 分类 + 来源 + 用途·范围·建议动作 + 证据行）</td><td>开详情</td><td><code>recall.candidates.list</code> 2201 + capabilities（<code>evidenceMostlyUnavailable</code> R2:167-182；已稍后处理＝isSnoozed R2:1089）</td><td>②（五要素）</td></tr>
+    <tr><td class="c">候选卡（标题 + 证据充足/来源已删/已稍后处理 + 分类 + 来源徽章四族 + 用途·范围·建议动作 + 证据行）</td><td>开详情</td><td><code>recall.candidates.list</code> 2201 + capabilities（<code>evidenceMostlyUnavailable</code> R2:167-182；已稍后处理＝isSnoozed R2:1089）；来源徽章四族（KSTAR 偏好 / KSTAR 复盘 / 对话中记 / 会话整理）R2:332-340</td><td>②（五要素）</td></tr>
     <tr><td class="c">类型 chip（关于我 / 规则与偏好 / 模板与范例 / 技能与方法）</td><td>改类型，保存时提交</td><td><code>recall.candidates.update</code> 2474 · R3:78-89</td><td>③</td></tr>
     <tr><td class="c">具体内容 / 作用范围（不填＝全局）/ 高级选项·摘要</td><td>保存时提交</td><td>update 的 judgment / suggestedScope / summary 2474；作用范围必填校验 R1:539-541</td><td>③</td></tr>
     <tr><td class="c"><b>保存</b></td><td>生成 v1 并跳到该资产；提示「已保存，尚未验证后续效果。」</td><td><code>recall.candidates.promote</code> 2521 · R1:553；文案按 09-15 一条线流程口径修正（原「保存并使用」）</td><td>③</td></tr>
