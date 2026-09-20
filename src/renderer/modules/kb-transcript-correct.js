@@ -413,7 +413,6 @@
       truncated: false,
       scanDoneAt: 0,
       notesText: '',
-      compareBusy: false,
       llmCandidates: [],
       llmBusy: false,
       llmNote: '',
@@ -949,17 +948,6 @@
           role: 'secondary',
           size: 'sm',
           attrs: { 'data-atc-action': 'save' },
-        }));
-        buttons.push(button({
-          label: state.compareBusy
-            ? t('kb.transcriptCorrect.compare_running', '正在检索…')
-            : t('kb.transcriptCorrect.compare', '检索对比'),
-          icon: 'search',
-          role: 'ghost',
-          size: 'sm',
-          loading: state.compareBusy,
-          disabled: state.compareBusy,
-          attrs: { 'data-atc-action': 'compare-search' },
         }));
         buttons.push(button({
           label: t('kb.transcriptCorrect.notes', '清理附记'),
@@ -1852,70 +1840,6 @@
     }
 
     /**
-     * 检索命中对比（方案 §五 P2-4 / §8.1-9，人工基线要求）：
-     * 同一份库里"搜错形"和"搜正确写法"各命中多少，如实并列。
-     * 这是**自测口径**，不宣称因果（库里本来有没有清理版会影响数字）。
-     */
-    async function runCompareSearch() {
-      if (state.compareBusy) return;
-      const suggestion = state.apply?.applied?.[0]?.wrong
-        || state.rows.find((row) => row.riskLevel === 'low')?.wrong
-        || '';
-      let query = null;
-      if (typeof root.uiPrompt === 'function') {
-        query = await root.uiPrompt(t('kb.transcriptCorrect.compare_prompt', '要对比的检索词（用转写里的错形）'), suggestion);
-      } else if (typeof root.prompt === 'function') {
-        query = root.prompt(t('kb.transcriptCorrect.compare_prompt', '要对比的检索词（用转写里的错形）'), suggestion);
-      }
-      const text = String(query || '').trim();
-      if (!text) return;
-      state.compareBusy = true;
-      render();
-      try {
-        const result = await root.cogseed.invoke('transcript.query.compare', { query: text, k: 10 });
-        if (!result?.compareAvailable) {
-          setStatus(t('kb.transcriptCorrect.compare_no_rewrite', '「{query}」没有可改写的词表命中，无法对比。', { query: text }), '');
-          return;
-        }
-        const applied = (result.applied || []).map((item) => `${item.wrong} → ${item.correct}`).join('；');
-        // 落台账：让"替换前后命中数"进入 run（方案 §五 P0-5），附记里可回看
-        if (state.runId) {
-          try {
-            await root.cogseed.invoke('transcript.run.recordSearchCompare', {
-              runId: state.runId,
-              query: result.query,
-              rewritten: result.rewritten,
-              beforeHits: Number(result.beforeHits || 0),
-              afterHits: Number(result.afterHits || 0),
-              beforeSources: result.beforeSources || [],
-              afterSources: result.afterSources || [],
-              applied: result.applied || [],
-            });
-          } catch (error) {
-            log?.warn('record search compare failed', { error: error?.message || String(error) });
-          }
-        }
-        // 显示的是"命中片段（该段首行）"，不是文档名——如实这么叫
-        const sources = (list) => (Array.isArray(list) && list.length ? list.slice(0, 2).join('、') : t('kb.transcriptCorrect.compare_no_source', '（未命中任何片段）'));
-        setStatus(t('kb.transcriptCorrect.compare_result', '命中对比：搜「{before}」{beforeHits} 段（首行：{beforeSrc}）/ 搜「{after}」{afterHits} 段（首行：{afterSrc}）· {applied}', {
-          before: result.query,
-          beforeHits: Number(result.beforeHits || 0),
-          beforeSrc: sources(result.beforeSources),
-          after: result.rewritten,
-          afterHits: Number(result.afterHits || 0),
-          afterSrc: sources(result.afterSources),
-          applied,
-        }), '');
-      } catch (error) {
-        log?.warn('compare search failed', { error: error?.message || String(error) });
-        setStatus(t('kb.transcriptCorrect.compare_failed', '检索对比失败，请稍后重试。'), 'warning');
-      } finally {
-        state.compareBusy = false;
-        render();
-      }
-    }
-
-    /**
      * 主题标题候选（方案 §五 P2-2）：**只提议**。用户在弹层里逐条"采用"，
      * 采用的标题进入 state.headings，生成清理版时作为结构编辑插入（不改正文语义）。
      */
@@ -2409,7 +2333,6 @@
       if (kind === 'find-suspects') { void runDetectSuspects(); return; }
       if (kind === 'llm-candidates') { void runLlmCandidates(); return; }
       if (kind === 'suggest-headings') { void runSuggestHeadings(); return; }
-      if (kind === 'compare-search') { void runCompareSearch(); return; }
       if (kind === 'toggle-merge') { state.mergeSpeaker = !state.mergeSpeaker; render(); return; }
       if (kind === 'clear-issues') { state.flagged = []; render(); return; }
       if (kind === 'seed-close') { state.seedOpen = ''; render(); return; }

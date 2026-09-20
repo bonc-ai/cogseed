@@ -396,7 +396,6 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
     // 「回滚」已并入「对照原文」：不再有独立按钮（其入口在对照弹窗底部）
     expect(source).not.toContain("data-atc-action': 'revert'");
     expect(roles('notes')).toContain('ghost');
-    expect(roles('compare-search')).toContain('ghost');
   });
 
   it('条目留白 + 极淡分隔线', () => {
@@ -540,7 +539,6 @@ describe('locale 覆盖', () => {
     'llm_adopted', 'llm_adopt_failed',
     'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
-    'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
     // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
     'panel_hint', 'meta_full',
     // 另存去重时指出确切已有文件（2026-09-16：只说目录级，用户找不到）
@@ -693,6 +691,13 @@ describe('查看器集成契约', () => {
     for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
     // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
+  });
+
+  it('「检索对比」已删除（按钮、函数、状态与分支一并移除）', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'compare-search'");
+    expect(panelSrc).not.toContain('runCompareSearch');
+    expect(panelSrc).not.toContain('compareBusy');
+    expect(panelSrc).not.toContain('transcript.query.compare');
   });
 
   it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
