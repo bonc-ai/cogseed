@@ -175,6 +175,22 @@
   .fb button{border:1px solid var(--line);background:#fff;border-radius:var(--rs);font-size:12px;padding:4px 12px;color:var(--ink2)}
   .fb button:hover{border-color:var(--green);color:var(--green-t)}
 
+  /* ═══ 个人本体抽屉 ═══ */
+  .teach{display:flex;gap:8px;margin-top:12px}
+  .teach input{flex:1;border:1px solid var(--line);border-radius:var(--rs);padding:8px 11px;font-size:13px;outline:none}
+  .teach input:focus{border-color:var(--green-line)}
+  .oto-item{display:flex;align-items:flex-start;gap:9px;padding:9px 2px;border-bottom:1px solid var(--hair);font-size:13px;position:relative}
+  .oto-item:last-child{border:none}
+  .oto-item .txt{flex:1;min-width:0}
+  .oto-item .pin{font-size:10.5px;font-weight:600;color:var(--amber-t);background:var(--amber-bg);border-radius:4px;padding:1px 6px}
+  .omenu{position:absolute;right:34px;top:26px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--s2);padding:4px;z-index:30;min-width:140px}
+  .omenu button{display:block;width:100%;text-align:left;border:none;background:none;font-size:12.5px;padding:6px 10px;border-radius:6px;color:var(--ink2)}
+  .omenu button:hover{background:var(--paper);color:var(--ink)}
+  .omenu button.dg{color:var(--red)}
+  .conflict-card{background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:var(--rm);padding:11px 14px;margin-top:12px}
+  .litxt{border:1px solid var(--line);border-radius:var(--rs);padding:7px 10px;font-size:13px;width:100%;outline:none}
+  .litxt:focus{border-color:var(--green-line)}
+
   /* ═══ 待我处理 ═══ */
   .cand{background:#fff;border:1px solid var(--line);border-radius:var(--rl);box-shadow:var(--s1);padding:14px 17px;margin-bottom:10px;cursor:pointer;transition:all .13s}
   .cand:hover{border-color:#cfd4d0;box-shadow:var(--s2)}
@@ -259,23 +275,13 @@
       <button class="tab" data-t="mine" onclick="tab('mine')">我的认知</button>
       <button class="tab" data-t="review" onclick="tab('review')">待我处理<span class="bdg" id="rev-bdg"></span></button>
       <button class="tab" data-t="org" onclick="tab('org')">整理</button>
-      <div class="tools">
-        <div class="search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input id="q" placeholder="搜索记住的内容…" oninput="onQ(this.value)">
-        </div>
-        <button class="tbtn" onclick="op('ov-tpl')">模板库</button>
-      </div>
     </div>
 
     <div class="scrolly" id="scrolly">
-      <!-- ═══ Tab1：认知树（整页真树） ═══ -->
       <div class="tree-stage" id="v-tree">
         <div class="fl-top">
           <div class="ft ft-title">认知树</div>
-          <div class="ft">土壤 → 根芽 → 枝上资产 → 树冠已验证 · 每个光斑是一条内容，点开看全文</div>
-          <div style="flex:1"></div>
-          <button class="ft" onclick="tab('review')" id="tree-go-review" style="display:none">查看 <b id="tree-gn">0</b> 条待确认候选</button>
+          <div class="ft">土壤 → 根芽 → 枝上资产 → 树冠已验证 · 点光斑看全文</div>
         </div>
         <svg id="tree-svg" preserveAspectRatio="xMidYMid meet"></svg>
         <div class="fl-bottom">
@@ -283,18 +289,13 @@
             <span class="k"><span class="dt" style="background:var(--green)"></span>已验证</span>
             <span class="k"><span class="dt" style="background:var(--green-line)"></span>资产</span>
             <span class="k"><span class="dt" style="background:var(--blue)"></span>KSTAR</span>
-            <span class="k"><span class="dt" style="background:var(--amber-dot)"></span>待确认芽</span>
+            <span class="k"><span class="dt" style="background:var(--amber-dot)"></span>待处理（根）</span>
             <span style="color:var(--ink3)">光斑大小 = 使用次数 · 悬停看详情 · 点开全文</span>
-          </div>
-          <div class="todo" id="tree-todo" onclick="tab('review')" style="display:none">
-            <div class="tt">⚠ 等你处理 <span class="n" id="todo-n">0</span></div>
-            <div class="td" id="todo-d"></div>
           </div>
         </div>
         <div class="drawer" id="drawer">
           <div class="dw-hd"><div style="flex:1"><div class="nm" id="dw-nm"></div><div class="ds" id="dw-ds"></div></div><button class="dw-x" onclick="closeDrawer()">✕</button></div>
           <div class="dw-bd" id="dw-bd"></div>
-          <div class="dw-foot"><span class="hint">改动即时保存，自动去重合并</span><button class="b2 sm" onclick="toast('历史快照已留档（内部）')">历史</button></div>
         </div>
         <div class="tip" id="tip"></div>
       </div>
@@ -305,15 +306,6 @@
       <div class="wrap" id="v-review" hidden></div>
       <!-- ═══ Tab4：整理 ═══ -->
       <div class="wrap" id="v-org" hidden></div>
-    </div>
-
-    <div style="border-top:1px solid var(--line);background:#fff;padding:9px 22px;display:flex;align-items:center;gap:14px;flex-shrink:0">
-      <div style="display:flex;align-items:center;gap:10px;flex:1">
-        <button class="switch on" id="msw" onclick="mswClick(this)"></button>
-        <span style="font-size:12.5px;color:var(--ink2)"><b style="color:var(--ink)">记忆</b> —— AI 自动记住对话中的信息</span>
-      </div>
-      <button class="tbtn" onclick="toast('已导出全部记忆为文件')">导出</button>
-      <button class="tbtn" onclick="toast('选择要导入的文件…')">导入</button>
     </div>
   </main>
 </div>
@@ -338,12 +330,13 @@
 </div></div>
 
 <div class="ovl" id="ov-tpl"><div class="mod">
-  <div class="mh">角色模板</div>
-  <div class="mb"><div class="note" style="margin:0 0 8px">模板是一套预填的内容包，装好后它就懂这类角色的基本信息。</div>
-    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px;border-bottom:1px solid var(--line)"><div style="width:38px;height:38px;border-radius:11px;background:#eef2f8;display:flex;align-items:center;justify-content:center;font-size:18px">🎓</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">学生</div><div style="font-size:12px;color:var(--ink3)">学业阶段、课程、学习偏好</div></div><button class="b2 sm" onclick="toast('已安装「学生」，内容出现在「我的认知」')">安装</button></div>
-    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px;border-bottom:1px solid var(--line)"><div style="width:38px;height:38px;border-radius:11px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:18px">💼</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">开发者</div><div style="font-size:12px;color:var(--ink3)">技术栈、项目经历、工作习惯</div></div><button class="b2 sm" onclick="toast('已卸载「开发者」（内容归档保留）')">卸载</button></div>
-    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px"><div style="width:38px;height:38px;border-radius:11px;background:var(--amber-bg);display:flex;align-items:center;justify-content:center;font-size:18px">🏠</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">生活</div><div style="font-size:12px;color:var(--ink3)">饮食、居住、健康、家庭</div></div><button class="b2 sm" onclick="toast('已安装「生活」')">安装</button></div>
+  <div class="mh">角色模板库</div>
+  <div class="mb"><div class="note" style="margin:0 0 8px">模板是一套预填的内容包，装好后这类角色的基本信息就进「个人本体」。最多同时装 3 个。</div>
+    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px;border-bottom:1px solid var(--line)"><div style="width:38px;height:38px;border-radius:11px;background:#eef2f8;display:flex;align-items:center;justify-content:center;font-size:18px">🎓</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">学生</div><div style="font-size:12px;color:var(--ink3)">学业阶段、课程、学习偏好</div></div><button class="b2 sm" onclick="toast('已安装「学生」，可到「个人本体」里改')">安装</button></div>
+    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px;border-bottom:1px solid var(--line)"><div style="width:38px;height:38px;border-radius:11px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:18px">💼</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">开发者 <span class="tag green">已安装</span></div><div style="font-size:12px;color:var(--ink3)">技术栈、项目经历、工作习惯</div></div><button class="b2 sm" onclick="confirmBox('卸载「开发者」？','模板数据会归档保留（重新安装可恢复），不影响你已经改过的条目。',()=>toast('已卸载「开发者」，数据已归档'))">卸载</button></div>
+    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px"><div style="width:38px;height:38px;border-radius:11px;background:var(--amber-bg);display:flex;align-items:center;justify-content:center;font-size:18px">🏠</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">生活</div><div style="font-size:12px;color:var(--ink3)">饮食、居住、健康、家庭</div></div><button class="b2 sm" onclick="toast('已安装「生活」，可到「个人本体」里改')">安装</button></div>
   </div>
+  <div class="mf"><button class="b2" onclick="cl('ov-tpl')">关闭</button></div>
 </div></div>
 
 <div class="toast" id="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg><span id="toast-t"></span></div>
@@ -351,45 +344,88 @@
 <script>
 /* ═══════════════════ 数据（唯一源，四页联动） ═══════════════════ */
 let assets = [
-  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,
-   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
-   proofs:[{when:'今天',txt:'在对话《时间线记录标注来源》里被实际使用（v3）',rate:null},{when:'昨天',txt:'在对话《对话中引用认知资产》里被实际使用（v3）',rate:'有用'}]},
-  {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按内部技术排查口径回答，不按终端用户口径；必要时补基础原理但不降技术深度。',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:1,inuse:true,src:'确认沉淀',when:'昨天',prev:'程序配置、数值类问题按内部技术排查口径回答。',note:'首次确认',eff:null}],proofs:[]},
-  {id:'a3',cat:'关于我',fam:'回复风格',title:'偏好中文简洁回复',v:2,vv:['v1','v2'],stmt:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',uses:8,last:'3 天前',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:2,inuse:true,src:'版本合并',when:'周三',prev:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',note:'并入原来两条',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上周',prev:'偏好中文简洁回复。',note:'首次确认',eff:null}],
-   proofs:[{when:'3 天前',txt:'在对话《关于我的了解程度》里被实际使用（v2）',rate:'没差别'}]},
-  {id:'a4',cat:'规则与偏好',fam:'',title:'评审 → 先讲产品模型',v:1,vv:['v1'],stmt:'评审 → 先讲产品模型，再谈实现细节；避免过早陷入实现讨论。',uses:3,last:'上周',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:1,inuse:true,src:'确认沉淀',when:'上周',prev:'评审 → 先讲产品模型，再谈实现细节。',note:'你教它的',eff:null}],proofs:[]},
-  {id:'a5',cat:'规则与偏好',fam:'',title:'术语白话化',v:2,vv:['v1','v2'],stmt:'专业术语首次出现时，用一句话白话解释，不额外展开。',uses:21,last:'今天',status:'active',mat:'已实证',kstar:false,
-   vers:[{v:2,inuse:true,src:'手动编辑',when:'上周',prev:'专业术语首次出现时用一句话白话解释。',note:'补示例写法',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上个月',prev:'专业术语首次出现时用一句话白话解释。',note:'首次确认',eff:null}],
-   proofs:[{when:'今天',txt:'几乎每次对话——自动带入（v2）',rate:'有用'}]},
-  {id:'a6',cat:'技能与方法',fam:'',title:'先跑测试再提交',v:1,vv:['v1'],stmt:'改动后先跑相关测试再提交；全量口径 npm run test:js 两遍一致。',uses:5,last:'2 周前',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:1,inuse:true,src:'确认沉淀',when:'2 周前',prev:'改动后先跑测试再提交。',note:'首次确认',eff:null}],proofs:[]},
-  {id:'a7',cat:'模板与范例',fam:'',title:'学业方向：计算机科学',v:1,vv:['v1'],stmt:'学业方向：计算机科学，大二在读（来自「学生」模板）。',uses:0,last:'',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:1,inuse:true,src:'系统迁移',when:'上个月',prev:'学业方向：计算机科学，大二在读。',note:'模板安装带入',eff:null}],proofs:[]},
+  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',scope:'全局',app:'程序配置、数值排查、技术方案讨论',forbid:'对外部客户沟通的场景',vis:'不限制',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,
+   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',scope:'全局',app:'程序配置、数值排查',forbid:'对客户沟通',how:'你手动补了学生身份背景',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'程序配置、数值排查',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'从旧记忆文件搬过来',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
+   proofs:[{k:'usage',when:'今天',where:'对话《时间线记录标注来源》',ver:3,rate:null},{k:'carry',when:'昨天',where:'对话《对话中引用认知资产》',ver:3},{k:'usage',when:'昨天',where:'对话《企业版打包发布》',ver:3,rate:'有用'},{k:'version',when:'昨天',ver:3},{k:'create',when:'上个月',ver:1}]},
+  {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按内部技术排查口径回答，不按终端用户口径；必要时补基础原理但不降技术深度。',scope:'全局',app:'排查类问题',forbid:'—',vis:'不限制',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'昨天',scope:'全局',app:'排查类问题',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'程序配置、数值类问题按内部技术排查口径回答。',note:'首次确认',eff:null}],
+   proofs:[{k:'carry',when:'昨天',where:'对话《本体增强方案讨论》',ver:1},{k:'create',when:'昨天',ver:1}]},
+  {id:'a3',cat:'关于我',fam:'回复风格',title:'偏好中文简洁回复',v:2,vv:['v1','v2'],stmt:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',scope:'全局',app:'所有对话',forbid:'—',vis:'不限制',uses:8,last:'3 天前',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:2,inuse:true,src:'版本合并',when:'周三',scope:'全局',app:'所有对话',forbid:'—',how:'两条说法接近的资产合并成一个版本组',prev:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',note:'并入原来两条',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'所有对话',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'偏好中文简洁回复。',note:'首次确认',eff:null}],
+   proofs:[{k:'usage',when:'3 天前',where:'对话《关于我的了解程度》',ver:2,rate:'没差别'},{k:'select',when:'周三',ver:2},{k:'create',when:'上周',ver:1}]},
+  {id:'a4',cat:'规则与偏好',fam:'',title:'评审 → 先讲产品模型',v:1,vv:['v1'],stmt:'评审 → 先讲产品模型，再谈实现细节；避免过早陷入实现讨论。',scope:'产品评审',app:'方案评审',forbid:'—',vis:'不限制',uses:3,last:'上周',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'上周',scope:'产品评审',app:'方案评审',forbid:'—',how:'你在对话里教它的',prev:'评审 → 先讲产品模型，再谈实现细节。',note:'你教它的',eff:null}],
+   proofs:[{k:'carry',when:'上周',where:'对话《本体增强方案讨论》',ver:1},{k:'create',when:'上周',ver:1}]},
+  {id:'a5',cat:'规则与偏好',fam:'',title:'术语白话化',v:2,vv:['v1','v2'],stmt:'专业术语首次出现时，用一句话白话解释，不额外展开。',scope:'全局',app:'所有对话',forbid:'—',vis:'不限制',uses:21,last:'今天',status:'active',mat:'已实证',kstar:false,
+   vers:[{v:2,inuse:true,src:'手动编辑',when:'上周',scope:'全局',app:'所有对话',forbid:'—',how:'你手动补了示例写法',prev:'专业术语首次出现时用一句话白话解释。',note:'补示例写法',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上个月',scope:'全局',app:'所有对话',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'专业术语首次出现时用一句话白话解释。',note:'首次确认',eff:null}],
+   proofs:[{k:'usage',when:'今天',where:'几乎每次对话（自动带入）',ver:2,rate:'有用'},{k:'version',when:'上周',ver:2},{k:'create',when:'上个月',ver:1}]},
+  {id:'a6',cat:'技能与方法',fam:'',title:'先跑测试再提交',v:1,vv:['v1'],stmt:'改动后先跑相关测试再提交；全量口径 npm run test:js 两遍一致。',scope:'代码任务',app:'改动前验证',forbid:'—',vis:'不限制',uses:5,last:'2 周前',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'2 周前',scope:'代码任务',app:'改动前验证',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'改动后先跑测试再提交。',note:'首次确认',eff:null}],
+   proofs:[{k:'carry',when:'2 周前',where:'对话《企业版打包发布》',ver:1},{k:'create',when:'2 周前',ver:1}]},
+  {id:'a7',cat:'模板与范例',fam:'',title:'学业方向：计算机科学',v:1,vv:['v1'],stmt:'学业方向：计算机科学，大二在读（来自「学生」模板）。',scope:'全局',app:'—',forbid:'—',vis:'不限制',uses:0,last:'',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'安装「学生」模板带入',prev:'学业方向：计算机科学，大二在读。',note:'模板安装带入',eff:null}],proofs:[]},
+  {id:'a8',cat:'技能与方法',fam:'',title:'每周五汇总周报素材',v:1,vv:['v1'],stmt:'每周五下午汇总本周日报素材成一份周报草稿。',scope:'日报任务',app:'周报',forbid:'—',vis:'不限制',uses:1,last:'2 周前',status:'deleted',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'2 周前',scope:'日报任务',app:'周报',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'每周五汇总周报素材。',note:'首次确认',eff:null}],
+   proofs:[{k:'create',when:'2 周前',ver:1}]},
+  {id:'a9',cat:'关于我',fam:'',title:'配置问题按技术口径回答',v:1,vv:['v1'],stmt:'配置问题按技术口径回答。',scope:'全局',app:'—',forbid:'—',vis:'不限制',uses:2,last:'上个月',status:'archived',mat:'未验证',kstar:false,mergedInto:'a2',
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'配置问题按技术口径回答。',note:'首次确认',eff:null}],proofs:[]},
 ];
 let cands = [
-  {id:'c1',title:'用户对花生过敏',cat:'关于我',src:'对话中记',ev:'ok',body:'用户对花生过敏，饮食推荐要避开花生和花生油。来源：昨天的对话。',srcLine:['对话中当场记（无独立会话出处）']},
-  {id:'c2',title:'团队在用 GitLab 托管代码',cat:'模板与范例',src:'会话整理',ev:'ok',body:'用户的团队在用 GitLab 做代码托管，MR 流程为主。来源：「企业版打包发布」对话。',srcLine:['企业版打包发布','认知资产迭代']},
-  {id:'c3',title:'时间线默认按时间倒序',cat:'规则与偏好',src:'会话整理',ev:'bad',body:'时间线视图默认按时间倒序排列，最新的在最上面。',srcLine:['来源记录不可用']},
+  {id:'c1',title:'用户对花生过敏',cat:'关于我',src:'对话中记',ev:'ok',value:'饮食推荐、餐厅选择',action:'保存后自动带入新任务',
+   body:'用户对花生过敏，饮食推荐要避开花生和花生油。',srcLine:['对话中当场记（无独立会话出处）']},
+  {id:'c2',title:'团队在用 GitLab 托管代码',cat:'模板与范例',src:'会话整理',ev:'ok',value:'代码托管与 MR 流程说明',action:'保存后自动带入新任务',
+   body:'用户的团队在用 GitLab 做代码托管，MR 流程为主。',srcLine:['企业版打包发布','认知资产迭代']},
+  {id:'c3',title:'时间线默认按时间倒序',cat:'规则与偏好',src:'会话整理',ev:'bad',value:'列表展示顺序',action:'保存后自动带入新任务',
+   body:'时间线视图默认按时间倒序排列，最新的在最上面。',srcLine:['来源记录不可用']},
+  {id:'c4',title:'回复先给结论再给细节',cat:'规则与偏好',src:'KSTAR 复盘',kstar:true,ev:'ok',value:'回答顺序：结论先行',action:'保存后会并入「偏好中文简洁回复」所在家族',
+   body:'你在「认知资产面板改版」任务里明确要求先说结论再展开细节。',srcLine:['任务复盘：认知资产面板改版','你的一次明确表态'],
+   kse:{task:'认知资产面板改版',expect:'一屏说清改了什么',actual:'先讲背景，你要求先说结论',result:'比预期差',why:'缺「结论先行」这条偏好',orig:'口头提醒 AI 先讲结论',diff:'把一次性提醒变成长期偏好'}},
+  {id:'c5',title:'常用分支名用中文',cat:'技能与方法',src:'会话整理',ev:'ok',snoozed:true,value:'分支命名',action:'一周后会再提醒你',
+   body:'你的开发分支名用中文描述（如「认知资产迭代」）。',srcLine:['认知资产迭代']},
+  {id:'c6',title:'术语要白话解释',cat:'规则与偏好',src:'会话整理',ev:'ok',value:'表达的通俗程度',action:'确认后会与已有那条融合成新版本',
+   body:'专业术语首次出现时用一句话白话解释，不额外展开，也不要堆括号注释。',srcLine:['认知资产迭代','本体增强方案讨论']},
 ];
 let proc = [
   {when:'今天',txt:'「术语白话化」相关候选——已保存',r:'已保存'},
   {when:'昨天',txt:'「git 身份 Zian-Anson」——已并入既有资产',r:'已忽略'},
   {when:'昨天',txt:'「周末整理重要发现」——未保存',r:'未保存'},
+  {when:'周三',txt:'「常用分支名用中文」——已稍后处理',r:'已稍后处理'},
 ];
 let caps = [
-  {id:'p1',n:'时间线记录标注来源',when:'22 小时前',bucket:'attention',status:'待确认',reason:'候选已就绪，等你确认',pend:2,step:4},
-  {id:'p2',n:'对话中引用认知资产',when:'1 天前',bucket:'done',status:'已完成 · 已保存',reason:'整理完成，候选已确认',pend:0,step:5},
-  {id:'p3',n:'你当前同一个或一个…',when:'1 天前',bucket:'active',status:'模型提炼中',reason:'正在提炼内容',pend:0,step:3},
-  {id:'p4',n:'对 AI 比喻式回答的…',when:'2 天前',bucket:'done',status:'已完成 · 已保存',reason:'整理完成',pend:0,step:5},
-  {id:'p5',n:'Saying hello',when:'5 天前',bucket:'excluded',status:'—',reason:'纯寒暄',pend:0,step:0,chatty:true},
-  {id:'p6',n:'关于你的已知信息',when:'2 天前',bucket:'done',status:'已完成 · 未保存',reason:'没有值得留存的内容',pend:0,step:5},
+  {id:'p1',n:'时间线记录标注来源',when:'22 小时前',bucket:'attention',status:'待确认',reason:'候选已就绪，等你确认',pend:2,step:4,acts:['review_candidates'],receipts:[]},
+  {id:'p2',n:'对话中引用认知资产',when:'1 天前',bucket:'done',status:'已完成 · 已保存',reason:'整理完成，候选已确认',pend:0,step:5,acts:['view_assets'],receipts:[{type:'personal',title:'你偏好先看结论再看细节',v:1}]},
+  {id:'p3',n:'你当前同一个或一个…',when:'1 天前',bucket:'active',status:'模型提炼中',reason:'正在提炼内容',pend:0,step:3,acts:['pause','cancel'],receipts:[]},
+  {id:'p4',n:'对 AI 比喻式回答的…',when:'2 天前',bucket:'done',status:'已完成 · 已保存',reason:'整理完成',pend:0,step:5,acts:['view_assets'],receipts:[{type:'rule',title:'不用比喻，改成白话',v:1}]},
+  {id:'p5',n:'Saying hello',when:'5 天前',bucket:'excluded',status:'—',reason:'纯寒暄',pend:0,step:0,chatty:true,acts:[],receipts:[]},
+  {id:'p6',n:'关于你的已知信息',when:'2 天前',bucket:'done',status:'已完成 · 未保存',reason:'没有值得留存的内容',pend:0,step:5,acts:['run_now','view_assets'],receipts:[]},
+  {id:'p7',n:'企业版打包发布',when:'1 天前',bucket:'attention',status:'失败',reason:'模型调用失败，可重试',pend:0,step:2,acts:['retry','cancel'],receipts:[]},
 ];
-let srcIssues = [{n:'飞书连接器',k:'连接器',w:'连接器已断开，需要重新连接'},{n:'GitLab 令牌',k:'连接器',w:'令牌过期，需要重新授权'}];
-let pendingSrc = true, q = '', myView = 'list', myCat = 'all', orgBucket = 'all', orgExpand = false, orgSettings = false;
+let srcIssues = [{n:'飞书连接器',k:'连接器',w:'读取失败',act:['retry']},{n:'GitLab 令牌',k:'连接器',w:'已暂停：你暂停了这个来源的采集',act:['resume']}];
+/* 个人本体：分组 → 字段 → 值（与资产是两套数据，各自有各自的动作） */
+let oto = [
+  {g:'身份',items:[
+    {id:'o1',f:'身份',t:'CogSeed 的开发者，大二在读实习生',src:'会话沉淀'},
+    {id:'o2',f:'学业方向',t:'计算机科学',src:'模板安装'},
+  ]},
+  {g:'偏好',items:[
+    {id:'o3',f:'回复风格',t:'中文简洁回复，表格旁附通俗说明，不用比喻',src:'会话沉淀'},
+    {id:'o4',f:'表达方式',t:'专业术语首次出现时用一句话白话解释',src:'你教的'},
+  ]},
+  {g:'规矩',items:[
+    {id:'o5',f:'工作方式',t:'评审 → 先讲产品模型，再谈实现细节',src:'你教的'},
+    {id:'o6',f:'回答口径',t:'配置或数值问题 → 按内部技术口径回答，不按终端用户口径',src:'会话沉淀'},
+  ]},
+  {g:'事实',items:[
+    {id:'o7',f:'饮食禁忌',t:'对花生过敏',src:'对话里记的'},
+    {id:'o8',f:'常住地',t:'通常在北京，偶尔上海出差',src:'对话里记的',priv:true},
+    {id:'o9',f:'常住地',t:'常住上海',src:'对话里记的'},
+  ]},
+];
+let otoProposal = {id:'op1',g:'事实',f:'常用工具',t:'你和团队日常用飞书沟通'};
+let otoConflict = {field:'常住地',keep:null};
+let pendingSrc = true, myView = 'list', myCat = 'all', orgBucket = 'all', orgExpand = false, orgSettings = false;
 let curAsset = null, editing = null, openVer = null, curCand = null, curCap = null;
+let famEdit = null, openKse = null, openProof = null, showVers = false, diffV = null, otoMenu = null, teachHint = false, orgActive = null, selSpot = null, openCandId = null;
 let nid = 100;
 
 /* ═══════ 工具 ═══════ */
@@ -399,11 +435,9 @@ let tt; function toast(m){$('toast-t').textContent=m;$('toast').classList.add('s
 function op(id){$(id).classList.add('open')} function cl(id){$(id).classList.remove('open')}
 function confirmBox(t2,b,ok){$('c-t').textContent=t2;$('c-b').innerHTML=b;$('c-ok').onclick=()=>{cl('ov-c');ok()};op('ov-c')}
 document.querySelectorAll('.ovl').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')}));
-function pendCount(){return cands.length}
+function pendCount(){return cands.filter(c=>!c.snoozed).length}
 function refreshBadges(){const n=pendCount();$('rev-bdg').textContent=n;$('rev-bdg').dataset.n=n;
-  $('tree-go-review').style.display=n?'':'none';$('tree-gn').textContent=n;
-  $('tree-todo').style.display=n?'':'none';$('todo-n').textContent=n;
-  if(n)$('todo-d').textContent=cands[0]?.title||'';}
+  const rn=$('root-n'); if(rn) rn.textContent=n?'待你处理 '+n+' 条':'暂无待处理';}
 
 /* ═══════ Tab 切换（归位到各页根） ═══════ */
 function tab(t){
@@ -427,42 +461,30 @@ const BR = [
   {cat:'规则与偏好',label:'规则与偏好',side:-1,lift:390},
   {cat:'模板与范例',label:'模板与范例',side:1,lift:390},
 ];
-function spotSvg(o){
-  const sel = selSpot===o.kind+':'+o.id ? ' sel' : '';
-  const kstar = o.kstar ? `<circle cx="${o.x+o.r*0.72}" cy="${o.y-o.r*0.72}" r="4" fill="var(--blue)" stroke="#fff" stroke-width="1.4"/>` : '';
-  return `<g class="spot${sel}" data-kind="${o.kind}" data-id="${o.id}" data-title="${esc(o.title)}" data-sub="${esc(o.sub||'')}">
-    ${o.glow?`<circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r*2}" fill="${o.color}" opacity=".2" filter="url(#gl)"/>`:''}
-    <circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r+5}" fill="${o.color}" opacity=".1"/>
-    <circle class="core" cx="${o.x}" cy="${o.y}" r="${o.r}" fill="${o.color}" stroke="#fff" stroke-width="1.8"/>
-    ${kstar}
-    <text x="${o.tx!==undefined?o.tx:o.x}" y="${o.ty!==undefined?o.ty:o.y-o.r-8}" text-anchor="${o.anchor||'middle'}" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="#fff" stroke-width="3" style="pointer-events:none">${esc(o.title.length>15?o.title.slice(0,14)+'…':o.title)}</text>
-  </g>`;
-}
 function drawTree(){
   const svg=$('tree-svg'); const W=svg.clientWidth||1240, H=svg.clientHeight||760;
   svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   const cx=W/2;
-  const groundY=H-96;
+  const groundY=H-148;
   const validated=assets.filter(a=>a.mat!=='未验证'&&a.status==='active');
-  const about=assets.filter(a=>a.cat==='关于我'&&a.status==='active');
   let g='<defs><filter id="gl" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>';
   /* 树冠云（覆盖面更大、三层） */
-  g+=`<g>
-    <ellipse cx="${cx-190}" cy="96" rx="170" ry="62" fill="var(--green-fill)" stroke="var(--green-l2)"/>
-    <ellipse cx="${cx+190}" cy="96" rx="170" ry="62" fill="var(--green-fill)" stroke="var(--green-l2)"/>
-    <ellipse cx="${cx}" cy="58" rx="215" ry="72" fill="var(--green-fill)" stroke="var(--green-line)"/>
-    <text x="${cx}" y="52" text-anchor="middle" font-size="14.5" font-weight="800" fill="var(--green-t)">🌳 已验证 ${validated.length}</text>
-    <text x="${cx}" y="71" text-anchor="middle" font-size="10.5" fill="var(--green-t)" opacity=".8">被真实复用或验证有效的资产 · 点击进入</text></g>`;
+  g+=`<g class="spot" onclick="treeGo('validated')">
+    <ellipse cx="${cx-190}" cy="140" rx="170" ry="62" fill="var(--green-fill)" stroke="var(--green-l2)"/>
+    <ellipse cx="${cx+190}" cy="140" rx="170" ry="62" fill="var(--green-fill)" stroke="var(--green-l2)"/>
+    <ellipse cx="${cx}" cy="104" rx="215" ry="72" fill="var(--green-fill)" stroke="var(--green-line)"/>
+    <text x="${cx}" y="96" text-anchor="middle" font-size="14.5" font-weight="800" fill="var(--green-t)">🌳 已验证 ${validated.length}</text>
+    <text x="${cx}" y="115" text-anchor="middle" font-size="10.5" fill="var(--green-t)" opacity=".8">被真实复用或验证有效的资产 · 点击进入</text></g>`;
   /* 冠内：已验证资产光斑（横向排布，光斑+名称） */
   validated.slice(0,6).forEach((a,i)=>{
     const span=(i-(Math.min(validated.length,6)-1)/2);
-    const x=cx+span*130, y=(i%2? 96:118);
+    const x=cx+span*130, y=(i%2? 140:162);
     g+=spotSvg({id:a.id,kind:'asset',x,y,r:9,color:'var(--green)',glow:true,kstar:a.kstar,title:a.title});
   });
   /* 树干（完整一根） */
-  g+=`<rect x="${cx-11}" y="120" width="22" height="${groundY-120-52}" rx="6" fill="var(--trunk)" opacity=".55"/>`;
+  g+=`<rect x="${cx-11}" y="164" width="22" height="${groundY-164-52}" rx="6" fill="var(--trunk)" opacity=".55"/>`;
   /* 枝条贝塞尔（两侧伸出） */
-  const branchY1=groundY-290, branchY2=groundY-200;
+  const branchY1=groundY-340, branchY2=groundY-255;
   g+=`<path d="M ${cx-5} ${branchY1+60} C ${cx-140} ${branchY1+30}, ${cx-200} ${branchY1+10}, ${cx-300} ${branchY1}" stroke="var(--trunk)" stroke-width="8" fill="none" opacity=".55" stroke-linecap="round"/>`;
   g+=`<path d="M ${cx+5} ${branchY2+50} C ${cx+150} ${branchY2+20}, ${cx+210} ${branchY2}, ${cx+300} ${branchY2}" stroke="var(--trunk)" stroke-width="8" fill="none" opacity=".55" stroke-linecap="round"/>`;
   g+=`<path d="M ${cx-5} ${branchY2+40} C ${cx-130} ${branchY2+16}, ${cx-190} ${branchY2}, ${cx-290} ${branchY2}" stroke="var(--trunk)" stroke-width="8" fill="none" opacity=".5" stroke-linecap="round"/>`;
@@ -472,11 +494,11 @@ function drawTree(){
     const by=b.lift===390?branchY2:branchY1;
     g+=`<g class="spot" onclick="treeGo('cat:${b.cat}')">
       <rect x="${b.side===-1?bx-108:bx-84}" y="${by-24}" width="192" height="46" rx="10" fill="var(--green-bg)" stroke="var(--green-line)"/>
-      <text x="${bx}" y="${by+4}" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--green-t)">${b.label} · ${assets.filter(a=>a.cat===b.cat&&a.status!=='deleted').length}</text></g>`;
+      <text x="${bx}" y="${by+4}" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--green-t)">${b.label} · ${assets.filter(a=>a.cat===b.cat&&a.status==='active').length}</text></g>`;
   });
   /* 枝上资产光斑：沿枝分布、贴枝、标签常显 */
   BR.forEach(b=>{
-    const items=assets.filter(a=>a.cat===b.cat&&a.status!=='deleted');
+    const items=assets.filter(a=>a.cat===b.cat&&a.status==='active');
     const bx=cx+(b.side===-1?-1:1)*300, by=(b.lift===390?branchY2:branchY1);
     items.forEach((a,i)=>{
       const x=bx+(b.side===-1?1:-1)*(120+Math.floor(i/2)*36)*(i%2?1:1.6)/1.4;
@@ -488,26 +510,20 @@ function drawTree(){
       g+=spotSvg({id:a.id,kind:'asset',x,y,r,color,glow:a.mat!=='未验证',kstar:a.kstar,title:a.title,tx,ty:y+4,anchor});
     });
   });
-  /* 干：个人本体牌 + 关于我资产光斑（绕干两侧、带标签） */
+  /* 干：个人本体牌（点开＝关于我一条一句；关于我类资产在树冠与「我的认知」里） */
   g+=`<g class="spot" onclick="treeGo('trunk')">
-    <rect x="${cx-86}" y="${groundY-150}" width="172" height="52" rx="11" fill="var(--trunk)"/>
-    <text x="${cx}" y="${groundY-128}" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">个人本体 · 关于我</text>
-    <text x="${cx}" y="${groundY-111}" text-anchor="middle" font-size="10.5" fill="#fff" opacity=".85">${about.length} 条画像</text></g>`;
-  about.forEach((a,i)=>{
-    const side=i%2?1:-1, k=Math.floor(i/2);
-    const x=cx+side*(118+k*10), y=groundY-168+k*44;
-    const r=6+Math.min(5,Math.sqrt(a.uses)*1.4);
-    const anchor=side===1?'start':'end';
-    const tx=side===1? x+r+6 : x-r-6;
-    g+=spotSvg({id:a.id,kind:'asset',x,y,r,color:'var(--trunk)',kstar:a.kstar,title:a.title,tx,ty:y+4,anchor});
-  });
-  /* 根：待确认芽（琥珀光斑、常显标题） */
-  const芽= Math.max(cands.length,1);
-  cands.forEach((c,i)=>{
-    const x=cx-(cands.length-1)*55+i*110, y=groundY-38;
-    g+=spotSvg({id:c.id,kind:'cand',x,y,r:9,color:'var(--amber-dot)',glow:true,title:c.title});
-  });
-  if(!cands.length) g+=`<circle cx="${cx}" cy="${groundY-38}" r="7" fill="var(--paper)" stroke="var(--amber-line)" stroke-dasharray="2 3"/>`;
+    <rect x="${cx-92}" y="${groundY-152}" width="184" height="54" rx="11" fill="var(--trunk)"/>
+    <text x="${cx}" y="${groundY-129}" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">个人本体 · 关于我</text>
+    <text x="${cx}" y="${groundY-112}" text-anchor="middle" font-size="10.5" fill="#fff" opacity=".88">${otoCount()} 条记住的事 · 点开看全文</text></g>`;
+  /* 根：根须图案 + 唯一一个光斑（点开才是候选清单） */
+  g+=`<g stroke="var(--trunk)" stroke-width="5" fill="none" stroke-linecap="round" opacity=".45">
+    <path d="M ${cx-5} ${groundY-36} C ${cx-42} ${groundY-26}, ${cx-78} ${groundY-20}, ${cx-118} ${groundY-6}"/>
+    <path d="M ${cx-5} ${groundY-30} C ${cx-30} ${groundY-16}, ${cx-52} ${groundY-10}, ${cx-74} ${groundY+2}"/>
+    <path d="M ${cx+5} ${groundY-36} C ${cx+42} ${groundY-26}, ${cx+78} ${groundY-20}, ${cx+118} ${groundY-6}"/>
+    <path d="M ${cx+5} ${groundY-30} C ${cx+30} ${groundY-16}, ${cx+52} ${groundY-10}, ${cx+74} ${groundY+2}"/>
+    <path d="M ${cx} ${groundY-24} C ${cx-4} ${groundY-12}, ${cx+4} ${groundY-6}, ${cx} ${groundY+4}"/></g>`;
+  g+=`<rect x="${cx-7}" y="${groundY-40}" width="14" height="42" fill="var(--trunk)" opacity=".35"/>`;
+  g+=spotSvg({kind:'root',id:'root',x:cx,y:groundY-52,r:12,color:'var(--amber-dot)',glow:true,title:'待你处理 '+pendCount()+' 条',tid:'root-n',tx:cx,ty:groundY-72});
   g+=`<rect x="${cx-7}" y="${groundY-24}" width="14" height="26" fill="var(--trunk)" opacity=".35"/>`;
   /* 土壤 */
   g+=`<g class="spot" onclick="treeGo('soil')">
@@ -526,7 +542,7 @@ function spotSvg(o){
     <circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r+5}" fill="${o.color}" opacity=".12"/>
     <circle class="core" cx="${o.x}" cy="${o.y}" r="${o.r}" fill="${o.color}" stroke="#fff" stroke-width="1.8"/>
     ${kstar}
-    ${hasLabel?`<text x="${o.tx}" y="${o.ty!==undefined?o.ty:o.y+4}" text-anchor="${o.anchor||'middle'}" font-size="10.5" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="#fff" stroke-width="3" style="pointer-events:none">${esc(o.title.length>16?o.title.slice(0,15)+'…':o.title)}</text>`:''}
+    ${hasLabel?`<text ${o.tid?`id="${o.tid}"`:''} x="${o.tx}" y="${o.ty!==undefined?o.ty:o.y+4}" text-anchor="${o.anchor||'middle'}" font-size="10.5" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="#fff" stroke-width="3" style="pointer-events:none">${esc(o.title.length>16?o.title.slice(0,15)+'…':o.title)}</text>`:''}
   </g>`;
 }
 function bindSpots(){
@@ -548,12 +564,29 @@ function spotClick(kind,id){
   selSpot=kind+':'+id; drawTree();
   if(kind==='asset'){ const a=assets.find(x=>x.id===id); if(a) openDrawer(a.title,'资产详情 · '+a.cat, assetDetailInner(id)); }
   if(kind==='cand'){ const c=cands.find(x=>x.id===id); if(c) openDrawer(c.title,'确认内容，也确认它该在什么范围生效', candDetailInner(id)); }
+  if(kind==='root') openRoot();
 }
+function openRoot(){
+  curAsset=null;curCand=null;openCandId=null;
+  openDrawer('待处理的候选','点开一条看全文、做决定',rootInner());
+}
+function rootInner(){
+  if(openCandId) return candDetailInner(openCandId);
+  if(!cands.length) return '<div class="empt"><div class="e">🌤</div><div class="t">当前没有待处理的候选</div><div class="s">AI 在对话里学到东西、或整理出候选时会出现在这里</div></div>';
+  const ok=cands.filter(c=>c.ev==='ok'&&!c.snoozed), bad=cands.filter(c=>c.ev==='bad'), sn=cands.filter(c=>c.snoozed);
+  const sec=(t,arr)=>arr.length?`<div class="sect" style="margin-top:14px"><span style="font-size:13.5px">${t}</span><span class="n">${arr.length}</span><span class="sp"></span></div>`
+    +arr.map(c=>`<div class="card" style="margin-bottom:7px;cursor:pointer" onclick="openCandId='${c.id}';document.getElementById('dw-bd').innerHTML=rootInner()"><div style="padding:11px 14px">
+      <div style="font-size:13px;font-weight:600">${esc(c.title)}</div>
+      <div class="note" style="font-size:11.5px;margin-top:3px">${esc(c.src)} · ${esc(c.value||'')}</div></div></div>`).join(''):'';
+  return sec('等待你确认',ok)+sec('来源已删除的候选',bad)+sec('已稍后处理',sn)
+   +`<div style="margin-top:16px"><button class="btn g sm" onclick="closeDrawer();tab('review')">去「待我处理」统一处理</button></div>`;
+}
+function backFromCand(){ if(openCandId){openCandId=null;$('dw-bd').innerHTML=rootInner()} else closeDrawer() }
 function openDrawer(nm,ds,html){
   $('dw-nm').textContent=nm; $('dw-ds').textContent=ds;
   $('dw-bd').innerHTML=html; $('drawer').classList.add('open');
 }
-function closeDrawer(){ $('drawer').classList.remove('open'); selSpot=null; drawTree(); }
+function closeDrawer(){ $('drawer').classList.remove('open'); selSpot=null; curAsset=null; curCand=null; otoMenu=null; otoEditId=null; openCandId=null; drawTree(); }
 document.addEventListener('click',e=>{ const d=$('drawer'); if(d.classList.contains('open')&&!d.contains(e.target)&&!e.target.closest('.spot')) closeDrawer(); });
 /* 抽屉内复用详情渲染 */
 function assetDetailInner(id){
@@ -563,31 +596,36 @@ function assetDetailInner(id){
   return assetDetailHtml(a).replace(/onclick="goBack\(\)"/,'onclick="closeDrawer()"').replace('<button class="backlink" style="display:none"','<button class="backlink" hidden');
 }
 function candDetailInner(id){
-  if(curCand!==id){}
   curCand=id;
   const c=cands.find(x=>x.id===id); if(!c) return '<div class="empt"><div class="e">🌱</div><div class="t">已成为正式资产</div></div>';
-  return candDetailHtml(c).replace(/onclick="goReview\(\)"/,'onclick="closeDrawer()"');
+  return candDetailHtml(c).replace(/onclick="goReview\(\)"/,'onclick="backFromCand()"');
 }
 /* 面板内操作后：若抽屉开着刷新抽屉，否则刷新页 */
 function afterMut(){ drawTree(); if($('drawer').classList.contains('open')){ if(curAsset)$('dw-bd').innerHTML=assetDetailInner(curAsset); else if(curCand)$('dw-bd').innerHTML=candDetailInner(curCand); } else { if(curTab==='mine')renderMine(); } refreshBadges(); }
 function treeGo(w){
-  if(w==='root'||w==='soil'){tab('review');return}
-  if(w==='trunk'){tab('mine');myCat='关于我';myView='list';renderMine();return}
-  if(w==='validated'){tab('mine');myCat='all';myView='list';renderMine();toast('带绿环的光斑 = 已验证资产');return}
+  if(w==='soil'){tab('review');return}
+  if(w==='root'){openRoot();return}
+  if(w==='trunk'){curAsset=null;curCand=null;selSpot='trunk';drawTree();
+    openDrawer('个人本体 · 关于我','一条一句；点「···」改、删或设为仅自己可见',otoInner());return}
+  if(w==='validated'){tab('mine');myView='list';myCat='all';renderMine();toast('带绿环的光斑 = 已验证资产');return}
   if(w.startsWith('cat:')){tab('mine');myCat=w.slice(4);myView='list';renderMine();return}
 }
 
 /* ═══════ Tab2 我的认知 ═══════ */
-function famGroups(){
-  const map={}; assets.forEach(a=>{const k=a.fam||'未归类';(map[k]=map[k]||[]).push(a)});
-  return Object.entries(map);
+function catMatch(a){
+  if(myCat==='all') return a.status!=='deleted';
+  if(myCat==='deleted') return a.status==='deleted';
+  if(myCat==='KSTAR') return a.kstar&&a.status!=='deleted';
+  return a.cat===myCat&&a.status!=='deleted';
 }
+function chipHtml(k,label,n){return `<button class="chip ${myCat===k?'on':''}" onclick="myCat='${k}';myView='list';renderMine()">${label} ${n}</button>`}
 function renderMine(){
   const w=$('v-mine');
   if(curAsset){ const a=assets.find(x=>x.id===curAsset); if(a){w.innerHTML=assetDetailHtml(a);return} curAsset=null; }
-  const list = assets.filter(a=>(myCat==='all'||a.cat===myCat)&&(a.status!=='deleted')&&(!q||a.title.includes(q)||a.stmt.includes(q)));
-  const validated = assets.filter(a=>a.mat!=='未验证').length;
-  const attention = assets.filter(a=>a.status!=='active').length;
+  const list = assets.filter(catMatch);
+  const validated = assets.filter(a=>a.mat!=='未验证'&&a.status!=='deleted').length;
+  const attention = assets.filter(a=>a.status==='paused'||a.status==='archived').length;
+  const cntOf=c=>assets.filter(a=>c==='deleted'?a.status==='deleted':(c==='KSTAR'?a.kstar:a.cat===c)&&a.status!=='deleted').length;
   let h = `<div class="hero"><h2>我的认知资产</h2><div class="sub">这棵树是你的认知全景：土壤是记录与来源，根部是待确认的候选，枝上是正式资产，树冠是被真实复用验证过的。</div>
     <div class="stats">
       <div class="stat"><div class="v g">${assets.filter(a=>a.status!=='archived').length}</div><div class="l">生效中资产</div></div>
@@ -598,27 +636,68 @@ function renderMine(){
     <div class="sect"><span style="font-size:14px">${myView==='list'?'资产明细':'资产目录（模型视角）'}</span><span class="n">${list.length}</span><span class="sp"></span>
       <button class="b2 sm" onclick="myView=myView==='list'?'catalog':'list';renderMine()">${myView==='list'?'目录视图':'列表视图'}</button></div>
     ${myView==='catalog'?'<div class="note" style="margin:-6px 0 12px">这就是模型挑资产时看的那份目录：一行一条；要看全文点进去。</div>':''}
-    <div class="pillbox">${['all','关于我','规则与偏好','模板与范例','技能与方法'].map(c=>`<button class="chip ${myCat===c?'on':''}" onclick="myCat='${c}';renderMine()">${c==='all'?'全部':c}</button>`).join('')}<button class="chip" onclick="toast('没有已删除的资产')">已删除</button></div>`;
-  if(!list.length){h+=`<div class="empt"><div class="e">🌱</div><div class="t">还没有正式资产</div><div class="s">候选被确认为正式资产后会出现在这里</div><button class="btn sm" style="margin-top:10px" onclick="tab('review')">查看 ${pendCount()} 条待确认候选</button></div>`;w.innerHTML=h;return}
+    <div class="pillbox">${chipHtml('all','全部',assets.filter(a=>a.status!=='deleted').length)}${['关于我','规则与偏好','模板与范例','技能与方法'].map(c=>chipHtml(c,c,cntOf(c))).join('')}${chipHtml('KSTAR','KSTAR',cntOf('KSTAR'))}${chipHtml('deleted','已删除',cntOf('deleted'))}</div>`;
+  if(!list.length){h+=`<div class="empt"><div class="e">🌱</div><div class="t">${myCat==='deleted'?'没有已删除的资产':'还没有正式资产'}</div><div class="s">${myCat==='deleted'?'删除的资产在保留期内会出现在这里，可以恢复。':'候选被确认为正式资产后会出现在这里'}</div>${myCat==='deleted'?'':`<button class="btn sm" style="margin-top:10px" onclick="tab('review')">查看 ${pendCount()} 条待确认候选</button>`}</div>`;w.innerHTML=h;return}
   if(myView==='catalog'){
     h+=list.map(catalogRow).join('');
   } else {
-    for(const [fam,items] of famGroups().map(([k,v])=>[k,v.filter(a=>list.includes(a))]).filter(([,v])=>v.length)){
-      h+=`<div class="fam-hd"><span class="nm">${esc(fam)}</span><span class="n">${items.length} 条同类</span><button class="rnm" onclick="toast('已命名为「${esc(fam)}」')">命名</button><span class="sp"></span></div>`;
+    const fams={};
+    list.filter(a=>a.status!=='deleted').forEach(a=>{const k=a.fam||'未归类';(fams[k]=fams[k]||[]).push(a)});
+    Object.keys(fams).forEach(k=>{if(k!=='未归类'&&fams[k].length<2){fams['未归类']=(fams['未归类']||[]).concat(fams[k]);delete fams[k]}});
+    for(const [fam,items] of Object.entries(fams)){
+      const renaming = famEdit===fam;
+      h+=`<div class="fam-hd"><span class="nm">${esc(fam)}</span><span class="n">${items.length} 条同类</span>
+        ${(fam==='未归类'||items.length<2)?'':(renaming
+          ?`<input id="fam-in" maxlength="40" value="${esc(fam)}" style="border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:12px;width:150px"><button class="rnm" onclick="renameFamily('${esc(fam)}')">保存</button><button class="rnm" style="color:var(--ink3)" onclick="famEdit=null;renderMine()">取消</button>`
+          :`<button class="rnm" onclick="famEdit='${esc(fam)}';renderMine()">改名</button>`)}
+        <span class="sp"></span></div>`;
       h+=items.map(plainRow).join('');
     }
+    h+=list.filter(a=>a.status==='deleted').map(plainRow).join('');
   }
-  h+=`<div class="sect"><span style="font-size:14px">KSTAR 任务复盘</span><span class="sp"></span></div>
-    <details class="card" style="margin-bottom:9px"><summary>「时间线记录标注来源」的复盘 <span class="note" style="display:inline">22 小时前</span></summary>
-    <div class="dbody"><div class="vr-detail"><div><b>当时的任务：</b>给时间线记录补来源标注</div><div><b>期望的结果：</b>每条记录可追溯到对话</div><div><b>实际发生：</b>标注完成，漏了 2 条附件类</div><div><b>沉淀的经验：</b>列表类需求先定排序再动 UI</div>
-    <div class="vr-acts"><span class="tag blue">KSTAR</span></div></div></div></details>
-    <div class="note">还没有更多被 KSTAR 复盘过的任务</div>`;
+  h+=kstarSection();
   w.innerHTML=h;
 }
+function renameFamily(fam){
+  const name=($('fam-in')?.value||'').trim();
+  assets.filter(a=>a.fam===fam).forEach(a=>a.fam=name||'');
+  famEdit=null;renderMine();
+  toast(name?'已命名为「'+name+'」':'已恢复默认名');
+}
+function kstarSection(){
+  if(!kseList.length) return '<div class="sect"><span style="font-size:14px">KSTAR 任务复盘</span><span class="sp"></span></div><div class="note">还没有被 KSTAR 复盘过的任务</div>';
+  let h=`<div class="sect"><span style="font-size:14px">KSTAR 任务复盘</span><span class="n">${kseList.length}</span><span class="sp"></span></div>
+    <div class="note" style="margin:-4px 0 10px">任务完结后 KSTAR 复盘学到的内容；点开看这次任务的经过</div>`;
+  kseList.forEach(e=>{
+    const open=openKse===e.id;
+    h+=`<div class="card" style="margin-bottom:7px">
+      <div class="vrow" onclick="openKse=openKse==='${e.id}'?null:'${e.id}';renderMine()">
+        <div class="vt"><div class="v1">${esc(e.goal)}</div><div class="v2">${e.at} · ${esc(e.statusText)}</div></div>
+        <span class="chev">${open?'▾':'›'}</span></div>
+      ${open?`<div style="padding:2px 15px 13px"><div class="vr-detail">
+        <div><b>期望的结果：</b>${esc(e.review.expect)}</div>
+        <div><b>实际发生：</b>${esc(e.review.actual)}</div>
+        <div><b>结果：</b>${esc(e.review.result)} · <b>为什么：</b>${esc(e.review.why)}</div>
+        <div class="kv"><span>KSTAR 复盘</span><span>${e.at}</span></div>
+        <div class="vr-acts"><button class="b2 sm" onclick="toast('已打开原任务')">打开这次任务</button><button class="b2 sm" onclick="toast('已把复盘结论收进「待我处理」')">从复盘再提炼一条候选</button></div>
+      </div></div>`:''}
+    </div>`;
+  });
+  return h;
+}
+let kseList=[{id:'k1',goal:'时间线记录标注来源',at:'22 小时前',statusText:'已完成',review:{expect:'每条记录可追溯到对话',actual:'标注完成，漏了 2 条附件类',result:'比预期差',why:'列表类需求先定排序再动 UI 这条经验没沉淀下来'}}];
+function stTagOf(a){
+  return a.status==='active'?'<span class="tag green">生效中</span>'
+   :a.status==='paused'?'<span class="tag amber">已暂停</span>'
+   :a.status==='deleted'?'<span class="tag red">已删除</span>'
+   :a.status==='archived'?'<span class="tag gray">已归档</span>'
+   :a.status==='revoked'?'<span class="tag amber">已撤回</span>'
+   :a.status==='purged'?'<span class="tag red">已清除</span>'
+   :'<span class="tag gray">状态未知</span>';
+}
 function plainRow(a){
-  const stTag = a.status==='active'?'<span class="tag green">生效中</span>':a.status==='paused'?'<span class="tag amber">已暂停</span>':'<span class="tag red">已归档</span>';
   return `<div class="row" onclick="goAsset('${a.id}')"><div class="tw"><div class="tt">${esc(a.title)}</div><div class="mm">${a.cat} · v${a.v} · ${a.last?'最近使用 '+a.last:'最近无使用记录'}</div></div>
-    <div class="sd">${a.kstar?'<span class="tag blue">KSTAR</span>':''}${a.mat!=='未验证'?'<span class="tag green">已实证</span>':''}${stTag}<span class="chev">›</span></div></div>`;
+    <div class="sd">${a.kstar?'<span class="tag blue">KSTAR</span>':''}${a.mat!=='未验证'&&a.status==='active'?'<span class="tag green">已实证</span>':''}${stTagOf(a)}<span class="chev">›</span></div></div>`;
 }
 function catalogRow(a){
   const used = a.uses?`用过 ${a.uses} 次`:'还没用过';
@@ -627,82 +706,138 @@ function catalogRow(a){
 }
 function assetDetailHtml(a){
   const on = a.status==='active';
+  const stText = {active:'使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI。',
+    paused:'已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开。',
+    deleted:'已删除的资产在保留期内可以恢复（30 天）；历史与使用记录保留。',
+    archived:'已归并：这条资产已并入另一条资产，历史版本完整保留。',
+    purged:'已清除：正文、版本与证据都已删除，只剩这一条动作记录。',
+    revoked:'已撤回使用：不再带入任何任务，历史记录保留。'}[a.status]||'状态未知。';
   let h = `<button class="backlink" onclick="goBack()">← 返回列表</button>
   <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px">
     <div style="flex:1"><div style="font-size:17px;font-weight:700">${esc(a.title)}</div>
-      <div class="note" style="margin-top:3px">${on?'使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI':'已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开'}</div></div>
-    <button class="switch ${on?'on':''}" onclick="toggleAsset('${a.id}')" title="自动带入新任务"></button>
-    ${on?`<button class="btn g sm" onclick="toast('已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。')">用到当前对话</button>`:''}
+      <div class="note" style="margin-top:3px">${stText}</div></div>
+    ${(on||a.status==='paused')?`<button class="switch ${on?'on':''}" onclick="toggleAsset('${a.id}')" title="自动带入新任务"></button>`:''}
+    ${a.status==='deleted'?`<button class="btn g sm" onclick="restoreAsset('${a.id}')">恢复</button>`:''}
+    ${a.status==='archived'&&a.mergedInto?`<button class="btn g sm" onclick="goAsset('${a.mergedInto}')">看并入的那条</button>`:''}
+    ${on?`<button class="btn g sm" onclick="useInChat('${a.id}')">用到当前对话</button>`:''}
   </div>
-  ${a.status!=='active'?'<div class="warn" style="margin-bottom:12px">已归并：这条资产已并入另一条资产，历史版本完整保留。</div>':''}
-  <div class="card" style="padding:13px 16px;font-size:13.5px;line-height:1.65">${esc(a.stmt)}</div>`;
+  <div class="card" style="padding:13px 16px;font-size:13.5px;line-height:1.65">${esc(a.stmt)}</div>
+  <div class="note" style="margin:8px 2px 0">适用范围：${esc(a.scope||'全局')} · 适用场景：${esc(a.app||'—')} · 禁用场景：${esc(a.forbid||'—')} · 谁能看见：${esc(a.vis||'不限制')}</div>`;
   if(editing===a.id){
     h+=`<div class="sect"><span style="font-size:14px">修改这条资产</span><span class="sp"></span></div>
-    <div class="note" style="margin:-4px 0 10px">修改内容或适用范围会生成新版本，旧版本仍可回滚。</div>
+    <div class="note" style="margin:-4px 0 10px">改内容或范围会生成新版本；内容一样就不提交。</div>
     <div class="ed-form card" style="padding:14px 16px">
       <div class="fld"><label>标题</label><input id="e-title" value="${esc(a.title)}"></div>
       <div class="fld"><label>正文</label><textarea id="e-stmt">${esc(a.stmt)}</textarea></div>
-      <div class="fld"><label>适用场景（多条用顿号分隔）</label><input id="e-ap" value="评审与架构决策"></div>
-      <div style="display:flex;gap:8px"><button class="btn" onclick="edSave('${a.id}')">保存为新版本</button><button class="btn o" onclick="editing=null;renderMine()">取消</button></div>
+      <div class="fld"><label>适用范围</label><input id="e-sc" value="${esc(a.scope||'')}" placeholder="例如：产品评审 / 全局"></div>
+      <div class="fld"><label>适用场景（多条用顿号分隔）</label><input id="e-ap" value="${esc(a.app||'')}"></div>
+      <div class="fld"><label>禁用场景（多条用顿号分隔）</label><input id="e-fb" value="${esc(a.forbid==='—'?'':(a.forbid||''))}"></div>
+      <div class="fld"><label>谁能看见 · Agent</label><input id="e-ag" value="${esc(a.ag||'')}" placeholder="留空 = 不限制"></div>
+      <div class="fld"><label>谁能看见 · 空间</label><input id="e-sp2" value="${esc(a.sp2||'')}" placeholder="留空 = 不限制"></div>
+      <div style="display:flex;gap:8px"><button class="btn" onclick="edSave('${a.id}')">保存为新版本</button><button class="btn o" onclick="editing=null;diffV=null;renderMine()">取消</button></div>
     </div>`;
   } else {
     h+=`<div style="display:flex;gap:8px;margin:12px 0 4px"><button class="btn g sm" onclick="editing='${a.id}';renderMine()">编辑</button></div>`;
   }
   const noise = a.vers.filter(v=>v.noise);
   h+=`<div class="sect"><span style="font-size:14px">版本记录</span><span class="n">${a.vers.length}</span><span class="sp"></span></div>`;
-  h+=a.vers.filter(v=>!v.noise).map(v=>{
+  h+=a.vers.filter(v=>!v.noise||showVers).map(v=>{
     const open = openVer===a.id+'-'+v.v;
     return `<div class="card" style="margin-bottom:7px">
-      <div class="vrow" onclick="openVer=openVer==='${a.id}-${v.v}'?null:'${a.id}-${v.v}';renderMine()">
-        <div class="vt"><div class="v1">v${v.v} · ${esc(a.title)} ${v.inuse?'<span class="inuse">在用</span>':''}</div>
-        <div class="v2">${esc(v.prev.slice(0,50))}… · ${v.when} · <span class="tag gray">${v.src}</span></div></div>
+      <div class="vrow" onclick="openVer=openVer==='${a.id}-${v.v}'?null:'${a.id}-${v.v}';diffV=null;renderMine()">        <div class="vt"><div class="v1">v${v.v} · ${esc(a.title)} ${v.inuse?'<span class="inuse">在用</span>':''}</div>
+        <div class="v2">${esc(v.prev.slice(0,50))}… · ${v.when} · <span class="tag gray">${v.src}</span>${v.noise?' · <span class="tag gray">内容未变（系统迁移/搬运）</span>':''}</div></div>
         <span class="chev">${open?'▾':'›'}</span></div>
-      ${open?`<div style="padding:2px 15px 13px"><div class="vr-detail">${esc(v.prev)}<div class="kv"><span>来源：${v.src}</span><span>${v.when}</span><span>变更：${v.note}</span>${v.eff?`<span>使用效果：${v.eff}</span>`:''}</div>
-      <div class="vr-acts">${v.inuse?'<span class="note">当前在用版本不可删除；先选用其他版本，再删除它。</span>':`<button class="btn sm" onclick="toast('已切回 v${v.v} 为在用版')">切回此版</button><button class="btn g sm" onclick="toast('已基于 v${v.v} 打开编辑')">基于此版修改</button><button class="btn o sm" onclick="toast('两版内容一致。')">与在用版对比</button><button class="btn o sm" onclick="toast('已合并为新版本')">与在用版合并为新版</button><button class="btn o sm" style="color:var(--red);border-color:var(--red)" onclick="toast('该版本已删除')">删除此版本</button>`}</div></div></div>`:''}
+      ${open?`<div style="padding:2px 15px 13px"><div class="vr-detail">${esc(v.prev)}
+      <div class="kv"><span>适用范围：${esc(v.scope||'全局')}</span><span>适用场景：${esc(v.app||'—')}</span><span>禁用场景：${esc(v.forbid||'—')}</span><span>怎么来的：${esc(v.how||v.src)}</span>${v.eff?`<span>使用效果：${v.eff}</span>`:''}</div>
+      ${diffV===a.id+'-'+v.v?`<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:9px"><b>版本对比：v${a.v}（在用） → v${v.v}</b>
+        <div style="margin-top:6px">${v.prev===a.stmt?'两版内容一致。':'在用版正文：'+esc(a.stmt)+'<br>这一版正文：'+esc(v.prev)}</div>
+        <div style="margin-top:8px"><button class="b2 sm" onclick="diffV=null;renderMine()">收起对比</button></div></div>`:''}
+      <div class="vr-acts">${v.inuse?'<span class="note">当前在用版本不可删除；先选用其他版本，再删除它。</span>':`<button class="btn sm" onclick="selectVer('${a.id}',${v.v})">切回此版</button><button class="btn g sm" onclick="editFromVer('${a.id}',${v.v})">基于此版修改</button><button class="btn o sm" onclick="diffV=diffV===null?'${a.id}-${v.v}':null;renderMine()">${diffV===a.id+'-'+v.v?'收起对比':'与在用版对比'}</button><button class="btn o sm" onclick="mergeVer('${a.id}',${v.v})">与在用版合并为新版</button><button class="btn o sm" style="color:var(--red);border-color:var(--red)" onclick="delVer('${a.id}',${v.v})">删除此版本</button>`}</div></div></div>`:''}
     </div>`;
   }).join('');
-  if(noise.length) h+=`<div class="note" style="margin:-2px 0 10px"><span style="color:var(--green-t);cursor:pointer" onclick="toast('已显示 ${noise.length} 条系统迁移产生的空版本')">显示 ${noise.length} 条系统迁移产生的空版本</span></div>`;
-  h+=`<div class="sect"><span style="font-size:14px">使用记录</span><span class="sp"></span></div>`;
-  h+= a.proofs.length ? a.proofs.map(p=>`
-    <div class="card" style="margin-bottom:7px"><div style="padding:11px 15px">
-      <div style="font-size:12.5px">${esc(p.txt)}</div>
-      <div style="margin-top:7px;font-size:11.5px;color:var(--ink3)">这次用得怎么样？${p.rate?` <span class="tag green">${p.rate}</span>`:''}</div>
-      ${p.rate?'':`<div class="fb" style="margin-top:7px">${['有用','没用对','没差别','说不清'].map(f=>`<button onclick="toast('已记录反馈：${f}')">${f}</button>`).join('')}</div>`}
-    </div></div>`).join('')
+  if(noise.length) h+=`<div class="note" style="margin:-2px 0 10px"><span style="color:var(--green-t);cursor:pointer" onclick="showVers=!showVers;renderMine()">${showVers?'收起系统迁移版本':'显示 '+noise.length+' 条系统迁移产生的空版本'}</span></div>`;
+  const usage = a.proofs.filter(p=>p.k==='usage').length, carried = a.proofs.filter(p=>p.k==='carry').length;
+  h+=`<div class="sect"><span style="font-size:14px">使用记录</span>${a.proofs.length?`<span class="n">被实际使用 ${usage} 次 · 被带入任务 ${carried} 次</span>`:''}<span class="sp"></span></div>`;
+  h+= a.proofs.length ? a.proofs.map((p,i)=>{
+    const txt = p.k==='usage'?`${p.when}，在${p.where}被实际使用（当时的 v${p.ver}）`
+      : p.k==='carry'?`${p.when}，在${p.where}被带入任务（v${p.ver}）`
+      : p.k==='revoke'?`${p.when}，在${p.where}的挂载被你撤销`
+      : p.k==='version'?`${p.when}，保存了新版本 v${p.ver}`
+      : p.k==='select'?`${p.when}，选用 v${p.ver} 为在用版本`
+      : `${p.when}，这条内容被创建`;
+    const canRate = p.k==='usage';
+    const key = a.id+'-p'+i;
+    return `<div class="card" style="margin-bottom:7px"><div style="padding:11px 15px">
+      <div style="font-size:12.5px">${esc(txt)}</div>
+      ${canRate?`<div style="margin-top:7px;font-size:11.5px;color:var(--ink3)">这次用得怎么样？${p.rate?` <span class="tag green">${p.rate}</span>`:''}</div>
+      ${p.rate||openProof!==key?'':`<div class="fb" style="margin-top:7px">${[['有用','positive'],['没用对','rework'],['没差别','neutral'],['说不清','invalid']].map(([f,code])=>`<button onclick="rateProof('${a.id}',${i},'${f}')">${f}</button>`).join('')}</div>`}
+      ${p.rate||openProof===key?'':`<div class="fb" style="margin-top:7px"><button onclick="openProof='${key}';renderMine()">评价这次使用</button></div>`}`:''}
+    </div></div>`}).join('')
    : `<div class="note">还没有被真实使用过。资产在任务中被真正使用、并留下可核对的记录后，会出现在这里。</div>`;
   h+=`<details class="details" style="margin-top:14px"><summary>更多操作</summary><div class="dbody">
-    <div class="vrow" style="cursor:pointer" onclick="confirmBox('删除这条资产？','从资产列表移除，历史记录保留。',()=>{toast('已删除，30 天内可在「已删除」中恢复')})"><div class="vt"><div class="v1" style="color:var(--red)">删除</div><div class="v2">从资产列表移除，历史记录保留</div></div></div>
-    <div class="vrow" style="cursor:pointer" onclick="confirmBox('撤回使用？','只影响未来的任务。',()=>toast('已撤回'))"><div class="vt"><div class="v1">撤回使用</div><div class="v2">只影响未来的任务</div></div></div>
-    <div class="vrow" style="cursor:pointer" onclick="confirmBox('彻底清除？','删除全部历史与证据，不可恢复。',()=>toast('已彻底清除'))"><div class="vt"><div class="v1" style="color:var(--red)">彻底清除</div><div class="v2">删除全部历史与证据，不可恢复</div></div></div>
+    ${a.status!=='deleted'?`<div class="vrow" style="cursor:pointer" onclick="confirmBox('删除这条资产？','从资产列表移除，历史记录保留。',()=>delAsset('${a.id}'))"><div class="vt"><div class="v1" style="color:var(--red)">删除</div><div class="v2">从资产列表移除，历史记录保留</div></div></div>`:''}
+    ${a.status==='active'?`<div class="vrow" style="cursor:pointer" onclick="confirmBox('撤回使用？','只影响未来的任务。',()=>revokeAsset('${a.id}'))"><div class="vt"><div class="v1">撤回使用</div><div class="v2">只影响未来的任务</div></div></div>`:''}
+    <div class="vrow" style="cursor:pointer" onclick="confirmBox('彻底清除？','删除全部历史与证据，不可恢复。',()=>purgeAsset('${a.id}'))"><div class="vt"><div class="v1" style="color:var(--red)">彻底清除</div><div class="v2">删除全部历史与证据，不可恢复</div></div></div>
   </div></details>
   <details class="details"><summary>与另一条合并（同一认知的重复条目）</summary><div class="dbody">
-    ${assets.filter(x=>x.id!==a.id&&x.cat===a.cat).map(x=>`<div class="vrow" onclick="confirmBox('并入这条？','「${esc(a.title)}」将并入「${esc(x.title)}」，历史版本完整保留。',()=>toast('已合并为同一版本组'))"><div class="vt"><div class="v1">${esc(x.title)}</div><div class="v2">${x.cat} · v${x.v}</div></div><span class="tag gray">并入这条</span></div>`).join('')}
+    ${assets.filter(x=>x.id!==a.id&&x.cat===a.cat&&x.status==='active').slice(0,8).map(x=>`<div class="vrow" onclick="confirmBox('并入这条？','「${esc(a.title)}」将并入「${esc(x.title)}」，历史版本完整保留。',()=>mergeInto('${a.id}','${x.id}'))"><div class="vt"><div class="v1">${esc(x.title)}</div><div class="v2">${x.cat} · v${x.v}</div></div><span class="tag gray">并入这条</span></div>`).join('')||'<div class="note">没有可以并入的同类型资产</div>'}
   </div></details>`;
   return h;
 }
-function goAsset(id){curAsset=id;editing=null;openVer=null;renderMine();$('scrolly').scrollTop=0}
-function goBack(){curAsset=null;editing=null;renderMine()}
+function goAsset(id){curAsset=id;editing=null;openVer=null;diffV=null;openProof=null;renderMine();$('scrolly').scrollTop=0}
+function goBack(){curAsset=null;editing=null;openVer=null;diffV=null;openProof=null;renderMine()}
 function toggleAsset(id){const a=assets.find(x=>x.id===id);a.status=a.status==='active'?'paused':'active';renderMine();toast(a.status==='active'?'已恢复自动带入':'已暂停：新任务不再自动带入')}
-function edSave(id){const a=assets.find(x=>x.id===id);a.title=$('e-title').value;a.stmt=$('e-stmt').value;a.v++;a.vv.push('v'+a.v);a.vers.unshift({v:a.v,inuse:true,src:'手动编辑',when:'刚刚',prev:a.stmt,note:'手动修改',eff:null});a.vers.forEach(v=>v.inuse=v.v===a.v);editing=null;openVer=null;renderMine();afterMut();toast('已保存为新版本 v'+a.v)}
+function restoreAsset(id){const a=assets.find(x=>x.id===id);a.status='active';renderMine();toast('已恢复，回到资产列表')}
+function delAsset(id){const a=assets.find(x=>x.id===id);a.status='deleted';curAsset=null;renderMine();toast('已删除，30 天内可在「已删除」中恢复')}
+function revokeAsset(id){const a=assets.find(x=>x.id===id);a.status='revoked';renderMine();toast('已撤回使用：不再带入新任务，历史记录保留')}
+function purgeAsset(id){const a=assets.find(x=>x.id===id);a.status='purged';a.stmt='（已清除）';curAsset=null;renderMine();toast('已彻底清除：正文、版本与证据都已删除')}
+function mergeInto(id,tid){const a=assets.find(x=>x.id===id);a.status='archived';a.mergedInto=tid;curAsset=tid;renderMine();toast('已并入「'+assets.find(x=>x.id===tid).title+'」，历史版本完整保留')}
+function useInChat(id){toast('已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。')}
+function selectVer(id,v){const a=assets.find(x=>x.id===id);a.v=v;a.vers.forEach(x=>x.inuse=x.v===v);renderMine();toast('已切回 v'+v+' 为在用版（不产生新版本）')}
+function editFromVer(id,v){const a=assets.find(x=>x.id===id);if(a.v!==v)selectVer(id,v);editing=id;renderMine()}
+function mergeVer(id,v){const a=assets.find(x=>x.id===id);const old=a.vers.find(x=>x.v===v);if(old.prev===a.stmt){toast('两版内容一样，不用合并');return}
+  a.v++;a.vers.forEach(x=>x.inuse=false);
+  a.vers.unshift({v:a.v,inuse:true,src:'版本合并',when:'刚刚',scope:a.scope,app:a.app,forbid:a.forbid,how:'把 v'+v+' 的内容接在在用版后面',prev:a.stmt+' '+old.prev,note:'与 v'+v+' 合并',eff:null});
+  renderMine();toast('已合并为新版本 v'+a.v)}
+function delVer(id,v){const a=assets.find(x=>x.id===id);a.vers=a.vers.filter(x=>x.v!==v);renderMine();toast('该版本已删除（不可恢复）')}
+function rateProof(id,i,f){const a=assets.find(x=>x.id===id);a.proofs[i].rate=f;openProof=null;renderMine();toast('已记下这次评价')}
+function edSave(id){const a=assets.find(x=>x.id===id);
+  const t=$('e-title').value,s=$('e-stmt').value,sc=$('e-sc').value.trim()||'全局',ap=$('e-ap').value.trim(),fb=$('e-fb').value.trim(),ag=$('e-ag').value.trim(),sp2=$('e-sp2').value.trim();
+  if(t===a.title&&s===a.stmt&&sc===a.scope&&ap===(a.app||'')&&fb===(a.forbid==='—'?'':(a.forbid||''))&&ag===(a.ag||'')&&sp2===(a.sp2||'')){editing=null;renderMine();toast('内容没变，没有生成新版本');return}
+  a.title=t;a.stmt=s;a.scope=sc;a.app=ap||'—';a.forbid=fb||'—';a.ag=ag;a.sp2=sp2;a.vis=(ag||sp2)?[ag&&('Agent '+ag),sp2&&('空间 '+sp2)].filter(Boolean).join(' / '):'不限制';
+  a.v++;a.vv.push('v'+a.v);a.vers.forEach(x=>x.inuse=false);
+  a.vers.unshift({v:a.v,inuse:true,src:'手动编辑',when:'刚刚',scope:sc,app:ap||'—',forbid:fb||'—',how:'你手动改了这条',prev:s,note:'手动修改',eff:null});
+  editing=null;openVer=null;renderMine();afterMut();toast('已保存为新版本 v'+a.v)}
 
 /* ═══════ Tab3 待我处理 ═══════ */
 function renderReview(){
   const w=$('v-review');
   if(curCand){ const c=cands.find(x=>x.id===curCand); w.innerHTML=c?candDetailHtml(c):`<button class="backlink" onclick="goReview()">← 返回</button><div class="empt"><div class="e">🌱</div><div class="t">已成为正式资产</div></div>`; return; }
-  const ok = cands.filter(c=>c.ev==='ok'), bad = cands.filter(c=>c.ev==='bad');
+  const ok = cands.filter(c=>c.ev==='ok'&&!c.snoozed), bad = cands.filter(c=>c.ev==='bad'), snoozed = cands.filter(c=>c.snoozed);
+  const retryCaps = caps.filter(c=>c.status.includes('失败'));
   let h=`<div class="hero"><h2>待我处理</h2><div class="sub">每条只需要一个决定：保存，还是不保存。</div>
     <div class="stats"><div class="stat"><div class="v a">${ok.length}</div><div class="l">等待确认</div></div>
     <div class="stat"><div class="v">${bad.length}</div><div class="l">来源已删</div></div></div></div>`;
   if(pendingSrc&&srcIssues.length){
     h+=`<div class="card" style="padding:11px 15px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
       <span style="font-size:12.5px;color:var(--amber-t);font-weight:600">${srcIssues.length} 条来源记录需要处理</span>
-      <span style="flex:1"></span><button class="b2 sm" onclick="const n=this.closest('.card').nextElementSibling; n.hidden=!n.hidden; this.textContent=this.textContent==='处理'?'收起':'处理'">处理</button></div>
-      <div class="card" style="padding:6px 15px;margin-bottom:16px" hidden>
-      ${srcIssues.map(s=>`<div class="sourcerow"><b>${esc(s.n)}</b><span class="tag gray">${s.k}</span><span style="flex:1;color:var(--ink3)">${esc(s.w)}</span><button class="b2 sm" onclick="toast('已发起重连')">重试</button></div>`).join('')}</div>`;
+      <span style="flex:1"></span><button class="b2 sm" onclick="pendingSrc='open';renderReview()">处理</button></div>`;
+    if(pendingSrc==='open'){
+      h+=`<div class="card" style="padding:6px 15px;margin-bottom:16px">
+      ${srcIssues.map((s,i)=>`<div class="sourcerow"><b>${esc(s.n)}</b><span class="tag gray">${esc(s.k)}</span><span style="flex:1;color:var(--ink3)">${esc(s.w)}</span>
+        ${s.act.includes('retry')?`<button class="b2 sm" onclick="srcAct(${i},'重试')">重试</button>`:''}
+        ${s.act.includes('resume')?`<button class="b2 sm" onclick="srcAct(${i},'恢复')">恢复</button>`:''}</div>`).join('')}
+      <div style="padding:8px 2px"><button class="b2 sm" onclick="pendingSrc=true;renderReview()">收起</button></div></div>`;
+    }
   }
-  h+=`<div class="sect"><span style="font-size:14px">等待你确认</span><span class="n">${ok.length}</span><span class="sp"></span></div>
+  if(retryCaps.length){
+    h+=`<div class="card" style="padding:11px 15px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:12.5px;color:var(--amber-t);font-weight:600">${retryCaps.length} 个整理任务需要重试</span>
+      <span style="flex:1"></span><button class="b2 sm" onclick="tab('org')">处理</button></div>`;
+  }
+  h+=`<div class="sect"><span style="font-size:14px">等待你确认</span><span class="n">${ok.length+snoozed.length}</span><span class="sp"></span></div>
     <div class="note" style="margin:-4px 0 10px">确认后会创建 v1，并保留来源与撤销入口</div>`;
-  h+= ok.length?ok.map(candCard).join(''):`<div class="empt"><div class="e">🌤</div><div class="t">当前没有等待确认的候选</div></div>`;
+  h+= (ok.length+snoozed.length)?(ok.concat(snoozed)).map(candCard).join(''):`<div class="empt"><div class="e">🌤</div><div class="t">当前没有等待确认的候选</div></div>`;
   if(bad.length){
     h+=`<div class="sect"><span style="font-size:14px">来源已删除的候选</span><span class="n">${bad.length}</span><span class="sp"></span></div>
     <div class="note" style="margin:-4px 0 10px">这些候选引用的会话已不存在；可以点开确认后仍要保存，或选择不保存。（「对话中当场记」的候选不属于这里——它们本来就没有独立出处，不是被删除。）</div>`;
@@ -713,12 +848,13 @@ function renderReview(){
   </div></details>`;
   w.innerHTML=h;
 }
+function srcAct(i,what){srcIssues.splice(i,1);toast(what==='重试'?'已重试读取这个来源':'已恢复采集');renderReview()}
 function candCard(c){
   return `<div class="cand" onclick="curCand='${c.id}';renderReview();$('scrolly').scrollTop=0">
     <div class="c1">${esc(c.title)}<span class="chev">›</span></div>
-    <div class="c2">${c.ev==='bad'?'<span class="tag amber">来源已删</span>':'<span class="tag green">证据充足</span>'}<span class="tag gray">${c.cat}</span><span class="tag gray">${c.src}</span></div>
+    <div class="c2">${c.ev==='bad'?'<span class="tag amber">来源已删</span>':'<span class="tag green">证据充足</span>'}${c.snoozed?'<span class="tag gray">已稍后处理</span>':''}<span class="tag gray">${esc(c.cat)}</span><span class="tag gray">${esc(c.src)}</span>${c.kstar?'<span class="tag blue">任务复盘</span>':''}</div>
     <div class="c3">${esc(c.body)}</div>
-    <div class="c4">来源：${c.srcLine.map(esc).join(' · ')}</div>
+    <div class="c4">用途：${esc(c.value)} · 范围：${esc(c.scope||'全局（未指定）')}<br>建议动作：${esc(c.action)}<br>来源：${c.srcLine.map(esc).join(' · ')}</div>
     ${c.ev==='bad'?'<div class="warn" style="margin-top:9px">这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。</div>':''}
   </div>`;
 }
@@ -727,26 +863,40 @@ function candDetailHtml(c){
   return `<button class="backlink" onclick="goReview()">← 返回</button>
   <div class="hero"><h2>确认内容，也确认它该在什么范围生效</h2><div class="sub">确认后会创建正式资产的第一个版本，并保留来源与撤销入口。</div></div>
   ${c.ev==='bad'?'<div class="warn" style="margin-bottom:13px">这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。</div>':''}
+  ${c.snoozed?'<div class="warn" style="margin-bottom:13px">你之前选了「稍后处理」：它不再占用待确认数量，一周后会再提醒你。</div>':''}
+  ${c.kse?`<div class="card" style="padding:13px 16px;margin-bottom:13px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:7px">复盘依据</div>
+    <div class="vr-detail" style="margin:0">
+      <div><b>期望的结果：</b>${esc(c.kse.expect)}</div>
+      <div><b>实际发生：</b>${esc(c.kse.actual)}</div>
+      <div><b>结果：</b>${esc(c.kse.result)} · <b>为什么：</b>${esc(c.kse.why)}</div>
+      <div class="kv"><span>原方法：${esc(c.kse.orig)}</span><span>这次的差异：${esc(c.kse.diff)}</span><span>来自任务：${esc(c.kse.task)}</span></div>
+    </div></div>`:''}
   <div class="card" style="padding:13px 16px;margin-bottom:13px"><div style="font-size:13.5px">${esc(c.body)}</div>
+    <div class="note" style="margin-top:9px">用途：${esc(c.value)} · 范围：${esc(c.scope||'全局（未指定）')}<br>建议动作：${esc(c.action)}</div>
     <div class="note" style="margin-top:9px">证据引用</div>
-    <div style="margin-top:5px">${c.srcLine.map(s=>`<div class="evrow"><span class="tag gray">${c.src}</span>${esc(s)}</div>`).join('')}</div></div>
-  <div class="typchips">${['关于我','规则与偏好','模板与范例','技能与方法'].map(t=>`<button class="${t===c.cat?'on':''}" onclick="cands.find(x=>x.id==='${c.id}').cat='${t}';renderReview();if(document.getElementById('drawer').classList.contains('open'))document.getElementById('dw-bd').innerHTML=candDetailInner('${c.id}')">${t}</button>`).join('')}</div>
+    <div style="margin-top:5px">${c.srcLine.map(s=>`<div class="evrow"><span class="tag gray">${esc(c.src)}</span>${esc(s)}</div>`).join('')}</div></div>
+  <div class="typchips">${['关于我','规则与偏好','模板与范例','技能与方法'].map(t=>`<button class="${t===c.cat?'on':''}" onclick="candSetType('${c.id}','${t}')">${t}</button>`).join('')}</div>
   <div class="ed-form card" style="padding:14px 16px;margin-bottom:13px">
     <div class="fld"><label>具体内容</label><textarea id="cd-t">${esc(c.body)}</textarea></div>
-    <div class="fld"><label>作用范围</label><input id="cd-s" placeholder="例如：仅产品工作空间"><div class="note">不填 = 全局生效</div></div>
+    <div class="fld"><label>作用范围</label><input id="cd-s" value="${esc(c.scope||'')}" placeholder="例如：仅产品工作空间"><div class="note">不填 = 全局生效</div></div>
+    <details class="details" style="margin:0"><summary>高级选项（通常不用改）</summary><div class="dbody" style="padding:10px 0 2px">
+      <div class="fld"><label>摘要（列表里显示的标题）</label><input id="cd-sum" value="${esc(c.title)}"></div>
+    </div></details>
   </div>
   <div style="display:flex;gap:9px">
-    <button class="btn" onclick="candSave('${c.id}')">保存并使用</button>
+    <button class="btn" onclick="candSave('${c.id}')">保存</button>
     <button class="btn o" onclick="candDefer('${c.id}')">稍后处理</button>
     <button class="btn o" style="color:var(--red);border-color:var(--red)" onclick="candRej('${c.id}')">不保存</button>
   </div>`;
 }
-function candSetCat(){}
-let candChoice=null,candPend=null;
+function candSetType(id,t){const c=cands.find(x=>x.id===id);c.cat=t;renderReview();if($('drawer').classList.contains('open'))$('dw-bd').innerHTML=candDetailInner(id)}
+let candPend=null;
 function candSave(id){
   const c=cands.find(x=>x.id===id); const text=$('cd-t')?.value.trim()||c.body; const scope=$('cd-s')?.value.trim();
+  const sum=$('cd-sum')?.value.trim(); if(sum) c.title=sum;
   if(!scope){toast('先填写作用范围：例如「仅产品工作空间」');return}
-  const old=assets.find(a=>a.cat===c.cat&&a.stmt.includes(text.slice(0,6)));
+  const old=assets.find(a=>a.status!=='deleted'&&a.cat===c.cat&&a.stmt.includes(text.slice(0,6)));
   if(old){
     candPend={id,text,scope};
     $('ch-new').textContent=text.slice(0,18);$('ch-old').textContent=old.title;
@@ -758,10 +908,13 @@ function candSave(id){
 function chDispatch(label,old,text,scope){
   if(label==='先不动'){toast('先不动，候选还在待处理列表');return}
   if(label==='存为新条目'){finishCand(candPend.id,text,scope,null);return}
-  old.stmt+=` ${text}`;old.v++;old.vv.push('v'+old.v);
+  old.stmt+=` ${text}`;old.v++;old.vv.push('v'+old.v);old.vers.forEach(x=>x.inuse=false);
+  old.vers.unshift({v:old.v,inuse:true,src:'版本合并',when:'刚刚',scope:old.scope,app:old.app,forbid:old.forbid,how:'新候选与旧内容融合成新版本',prev:old.stmt,note:'新内容与旧内容融合',eff:null});
   cands=cands.filter(x=>x.id!==candPend.id);
   proc.unshift({when:'今天',txt:`「${candPend.text.slice(0,12)}…」——已并入既有资产`,r:'已保存'});
-  afterMut(); if(curTab==='review')renderReview();
+  curCand=null;refreshBadges();
+  if($('drawer').classList.contains('open')){tabSoft('mine');curAsset=old.id;$('drawer').classList.add('open');$('dw-bd').innerHTML=assetDetailInner(old.id);drawTree()}
+  else{tab('mine');curAsset=old.id;renderMine();$('scrolly').scrollTop=0}
   toast('已并入「'+old.title+'」（融合出新版本）');
 }
 function finishCand(id,text,scope,mode){
@@ -769,16 +922,18 @@ function finishCand(id,text,scope,mode){
   cands=cands.filter(x=>x.id!==id);
   proc.unshift({when:'今天',txt:`「${c.title}」——已保存`,r:'已保存'});
   const nid2='n'+(nid++);
-  assets.unshift({id:nid2,cat:c.cat,fam:'',title:c.title,v:1,vv:['v1'],stmt:text,uses:0,last:'刚刚',status:'active',mat:'未验证',kstar:false,
-    vers:[{v:1,inuse:true,src:'确认沉淀',when:'刚刚',prev:text,note:'首次确认',eff:null}],proofs:[]});
+  assets.unshift({id:nid2,cat:c.cat,fam:'',title:c.title,v:1,vv:['v1'],stmt:text,scope:scope||'全局',app:'—',forbid:'—',vis:'不限制',uses:0,last:'',status:'active',mat:'未验证',kstar:!!c.kstar,
+    vers:[{v:1,inuse:true,src:'确认沉淀',when:'刚刚',scope:scope||'全局',app:'—',forbid:'—',how:c.kstar?'从 KSTAR 复盘提炼':'你在「待我处理」确认了这条候选',prev:text,note:'首次确认',eff:null}],
+    proofs:[{k:'create',when:'刚刚',ver:1}]});
   curCand=null;refreshBadges();
   const drawer=$('drawer');
   if(drawer.classList.contains('open')){ tabSoft('mine'); curAsset=nid2; drawer.classList.add('open'); $('dw-bd').innerHTML=assetDetailInner(nid2); drawTree(); }
   else { tab('mine'); curAsset=nid2; renderMine(); $('scrolly').scrollTop=0; }
-  toast('已成为正式资产');
+  toast('已保存，尚未验证后续效果。');
 }
-function candDefer(id){ const wasDrawer=$('drawer').classList.contains('open'); curCand=null; if(wasDrawer){closeDrawer();drawTree()} else renderReview(); toast('稍后会再提醒你'); }
-function candRej(id){ const wasDrawer=$('drawer').classList.contains('open'); const c=cands.find(x=>x.id===id); cands=cands.filter(x=>x.id!==id); proc.unshift({when:'今天',txt:`「${c.title}」——未保存`,r:'未保存'}); curCand=null; refreshBadges(); if(wasDrawer){closeDrawer();drawTree()} else renderReview(); toast('好的，这条不会保留'); }
+function candDefer(id){ const wasDrawer=$('drawer').classList.contains('open'); const c=cands.find(x=>x.id===id); c.snoozed=true; curCand=null; refreshBadges();
+  if(wasDrawer){closeDrawer();drawTree()} else renderReview(); }
+function candRej(id){ const wasDrawer=$('drawer').classList.contains('open'); const c=cands.find(x=>x.id===id); cands=cands.filter(x=>x.id!==id); proc.unshift({when:'今天',txt:`「${c.title}」——未保存`,r:'未保存'}); curCand=null; refreshBadges(); if(wasDrawer){closeDrawer();drawTree()} else renderReview(); toast('已拒绝'); }
 function goReview(){curCand=null;renderReview()}
 
 /* ═══════ Tab4 整理 ═══════ */
@@ -788,7 +943,7 @@ function renderOrg(){
   if(orgSettings){w.innerHTML=orgSettingsHtml();return}
   const inB=b=>caps.filter(c=>c.bucket===b).length;
   const failed=caps.filter(c=>c.status.includes('失败')).length;
-  const runnable=caps.filter(c=>c.bucket==='attention'||c.bucket==='active').length;
+  const runnable=caps.filter(c=>(c.acts||[]).includes('run_now')).length;
   const list=caps.filter(c=>orgBucket==='all'||c.bucket===orgBucket);
   const shown=orgExpand?list:list.slice(0,5);
   w.innerHTML=`<div class="hero" style="display:flex;align-items:flex-start;gap:12px">
@@ -806,63 +961,160 @@ function renderOrg(){
   ${!list.length?`<div class="empt"><div class="e">🗒</div><div class="t">这个筛选下没有整理记录</div><div class="s">一轮会话结束后，系统会在静默期结束后创建整理任务。</div></div>`:''}
   <div class="note" style="margin-top:14px">口径说明：分桶按每个会话最相关的一次整理任务计算；「无需沉淀」是寒暄会话或最近一轮失败且无任务的会话。</div>`;
 }
+function capStatusTag(c){
+  return c.status.includes('已完成')?'<span class="tag green">已完成</span>'
+   :c.status.includes('失败')?'<span class="tag red">失败</span>'
+   :c.status.includes('整理中')?'<span class="tag amber">整理中</span>'
+   :c.status.includes('待确认')?'<span class="tag amber">待确认</span>'
+   :`<span class="tag gray">${esc(c.status)}</span>`;
+}
 function capRow(c){
-  const stTag = c.status.includes('已完成')?'<span class="tag green">已完成</span>':c.status.includes('失败')?'<span class="tag red">失败</span>':c.status.includes('整理中')?'<span class="tag amber">整理中</span>':`<span class="tag amber">${esc(c.status)}</span>`;
+  const a=c.acts||[];
+  const openDetail=`curCap='${c.id}';renderOrg();$('scrolly').scrollTop=0`;
   return `<div class="cap-row">
-    <div class="tw"><div class="tt" onclick="curCap='${c.id}';renderOrg();$('scrolly').scrollTop=0">${esc(c.n)}</div>
+    <div class="tw"><div class="tt" onclick="${c.bucket==='excluded'?"toast('已打开这个会话')":openDetail}" ${c.bucket==='excluded'?'title="打开会话"':''}>${esc(c.n)}</div>
       <div class="mm"><span>${esc(c.reason)}</span>${c.pend?`<span>${c.pend} 条待确认</span>`:''}<span>${c.when}</span></div></div>
-    <div class="sd">${c.chatty?'<span class="tag amber">纯寒暄</span>':c.bucket==='excluded'?'<span class="tag amber">无需整理</span>':''}
-      ${c.status.includes('待确认')?`<button class="btn g sm" onclick="curCap='${c.id}';renderOrg()">去确认</button>`:''}
+    <div class="sd">${c.chatty?'<span class="tag amber">纯寒暄</span>':c.bucket==='excluded'?'<span class="tag amber">无需整理</span>':''}${capStatusTag(c)}
+      ${a.includes('review_candidates')?`<button class="btn g sm" onclick="${openDetail}">去确认</button>`:''}
+      ${a.includes('run_now')?`<button class="b2 sm" onclick="runCap('${c.id}')">立即整理</button>`:''}
+      ${a.includes('retry')?`<button class="b2 sm" onclick="retryCap('${c.id}')">重试</button>`:''}
+      ${c.status==='—'&&!c.chatty?`<button class="btn o sm" onclick="runCap('${c.id}')">开始整理</button>`:''}
+      ${a.includes('view_assets')?`<button class="b2 sm" onclick="${openDetail}">查看</button>`:''}
       ${c.status.includes('模型提炼中')?'<button class="b2 sm" disabled style="opacity:.5">整理中</button>':''}
-      ${c.status.includes('已完成')?`<button class="b2 sm" onclick="curCap='${c.id}';renderOrg()">查看</button>`:''}
-      ${c.status==='—'&&!c.chatty?`<button class="btn o sm" onclick="toast('已开始整理')">立即整理</button>`:''}
     </div></div>`;
 }
+function runCap(id){const c=caps.find(x=>x.id===id);if(c.status==='—'&&!c.chatty){c.status='模型提炼中';c.bucket='active';c.reason='正在提炼内容';c.step=3;c.acts=['pause','cancel'];toast('开始整理：可随时取消')}else{c.status='模型提炼中';c.step=3;c.acts=['pause','cancel'];toast('已开始整理')}renderOrg()}
+function retryCap(id){const c=caps.find(x=>x.id===id);c.status='模型提炼中';c.step=3;c.acts=['pause','cancel'];toast('已重试');renderOrg()}
 function capDetailHtml(c){
+  const a=c.acts||[];
+  const prim=a.includes('review_candidates')?['去确认',"tab('review')"]:a.includes('run_now')?['立即整理',`runCap('${c.id}')`]:a.includes('retry')?['重试',`retryCap('${c.id}')`]:a.includes('view_assets')?['查看资产',"tab('mine')"]:null;
+  const receipts=c.receipts||[];
+  const stepDone=c.status.includes('已完成')?6:c.step;
   return `<button class="backlink" onclick="curCap=null;renderOrg()">← 返回整理</button>
-  <div class="hero"><h2>${esc(c.n)}</h2><div class="sub">${esc(c.reason)} · ${esc(c.when)}</div>
+  <div class="hero"><h2>${esc(c.n)}</h2><div class="sub">${esc(c.reason)} · ${esc(c.when)} ${capStatusTag(c)}</div>
     <div class="stats"><div class="stat"><div class="v a">${c.pend}</div><div class="l">待确认</div></div>
-    <div class="stat"><div class="v g">1</div><div class="l">已沉淀资产</div></div>
-    <div class="stat"><div class="v">2</div><div class="l">尝试次数</div></div></div></div>
+    <div class="stat"><div class="v g">${receipts.length}</div><div class="l">已沉淀资产</div></div>
+    <div class="stat"><div class="v">${c.status.includes('失败')?2:1}</div><div class="l">尝试次数</div></div></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      ${prim?`<button class="btn" onclick="${prim[1]}">${prim[0]}</button>`:''}
+      ${a.includes('pause')?`<button class="b2 sm" onclick="toast('已暂停这个整理任务')">暂停</button>`:''}
+      <button class="b2 sm" onclick="toast('已打开原会话')">打开会话</button>
+      ${a.includes('cancel')?`<button class="b2 sm" onclick="confirmBox('确认取消这个整理任务？','取消后这轮不会沉淀任何内容。',()=>{const x=caps.find(y=>y.id==='${c.id}');x.status='已取消';x.acts=['retry'];renderOrg();toast('已取消')})">取消任务</button>`:''}
+    </div></div>
   <div class="sect"><span style="font-size:14px">整理结果</span><span class="sp"></span></div>
   ${c.pend?`<div class="card" style="padding:13px 16px;margin-bottom:9px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">有 ${c.pend} 条内容等你确认</div>
     <div class="note">逐条确认后会成为正式资产；也可以直接去「待我处理」统一处理。</div>
     <div style="margin-top:10px"><button class="btn g sm" onclick="tab('review')">去确认</button></div></div>`:''}
-  <div class="card" style="padding:13px 16px;margin-bottom:9px"><div style="font-size:12.5px;line-height:1.6">模型从这轮会话里提炼出了「用户偏好先看结论再看细节」，与已有资产相似，已并入。</div>
-    <div class="note" style="margin-top:6px">来自消息「消息 14 · 20:31」</div></div>
+  ${receipts.length?`<div class="card" style="padding:13px 16px;margin-bottom:9px">
+    <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">已沉淀资产 ${receipts.length}</div>
+    ${receipts.map(r=>`<div class="evrow"><span class="tag gray">${esc(r.type)}</span><span style="flex:1">${esc(r.title)}</span><span class="note">v${r.v}</span><button class="b2 sm" onclick="tab('mine')">查看资产</button></div>`).join('')}
+    <div class="note" style="margin-top:6px">来自消息「消息 14 · 20:31」</div></div>`:''}
+  ${(!c.pend&&!receipts.length)?`<div class="card" style="padding:13px 16px;margin-bottom:9px"><div style="font-size:12.5px">没有发现值得留存的内容。</div>
+    <div class="note" style="margin-top:6px">筛选原因：一次性请求 / 项目临时事实 / 附件里他人的信息 不入长期资产。</div></div>`:''}
   <div class="sect"><span style="font-size:14px">对话上下文</span><span class="sp"></span></div>
   <div class="card" style="padding:12px 15px"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><span class="tag gray">有价值信号：决策 ×2</span><span class="tag gray">参与者：你 · AI</span></div>
     <div class="note">消息时间线已加载</div></div>
   <div class="sect"><span style="font-size:14px">执行信息</span><span class="sp"></span></div>
   <div class="card" style="padding:13px 16px">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px"><span class="tag green">${esc(c.status)}</span><span class="note">创建于 ${esc(c.when)} · 耗时 42 秒 · 模型用量 3.1k tokens</span></div>
-    <div class="steps">${[1,2,3,4,5].map(i=>`<div class="step ${i<c.step?'done':i===c.step?'cur':''}"></div>`).join('')}</div>
-    <div class="stepn"><span>检查模型</span><span>读取会话</span><span>模型提炼</span><span>保存候选</span><span>写入资产</span></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">${capStatusTag(c)}<span class="note">创建于 ${esc(c.when)} · 开始时间 ${esc(c.when)} · 结束时间 ${c.status.includes('已完成')?'刚刚':'—'} · 耗时 42 秒 · 模型用量 3.1k tokens</span></div>
+    <div class="steps">${[1,2,3,4,5].map(i=>`<div class="step ${i<stepDone?'done':i===stepDone?'cur':''}"></div>`).join('')}</div>
+    <div class="stepn"><span>检查模型</span><span>整理会话</span><span>提取内容</span><span>整理结果</span><span>写入资产</span></div>
+    ${c.status.includes('失败')?`<div style="display:flex;gap:8px;margin-top:12px"><button class="b2 sm" onclick="retryCap('${c.id}')">重试</button></div>`:''}
     ${c.pend?`<div class="sect" style="font-size:13px;margin-top:14px"><span>待确认内容</span></div>
     <div class="ed-form card" style="padding:13px 15px">
       <div class="fld"><label>具体内容</label><textarea>展示列表时给每条标注来源对话</textarea></div>
       <div class="fld"><label>作用范围</label><input placeholder="不填 = 全局生效"></div>
-      <div style="display:flex;gap:8px"><button class="btn" onclick="toast('已成为正式资产')">保存并使用</button><button class="btn o" onclick="toast('稍后会再提醒你')">稍后处理</button><button class="btn o" style="color:var(--red);border-color:var(--red)" onclick="toast('好的，这条不会保留')">不保存</button></div>
+      <div style="display:flex;gap:8px"><button class="btn" onclick="toast('已保存，尚未验证后续效果。')">保存</button><button class="btn o" onclick="toast('稍后会再提醒你')">稍后处理</button><button class="btn o" style="color:var(--red);border-color:var(--red)" onclick="toast('已拒绝')">不保存</button></div>
     </div>`:''}
-    <div style="display:flex;gap:8px;margin-top:12px"><button class="b2 sm" onclick="toast('已打开原会话')">打开会话</button><button class="b2 sm" onclick="confirmBox('确认取消这个整理任务？','',()=>toast('已取消'))">取消任务</button></div>
   </div>`;
 }
 function orgSettingsHtml(){
   return `<button class="backlink" onclick="orgSettings=false;renderOrg()">← 返回整理</button>
   <div class="hero"><h2>沉淀设置</h2></div>
   <div class="card" style="padding:6px 16px">
-    <div class="setrow"><div class="sl"><div class="st">夜间自动沉淀</div><div class="ss">每晚自动整理当天的会话</div></div><button class="switch on" onclick="this.classList.toggle('on');toast(this.classList.contains('on')?'已开启夜间自动沉淀':'已关闭')"></button></div>
-    <div class="setrow"><div class="sl"><div class="st">整理功能</div><div class="ss">关闭后不再创建整理任务</div></div><button class="switch on" onclick="this.classList.toggle('on')"></button></div>
+    <div class="setrow"><div class="sl"><div class="st">夜间自动沉淀</div><div class="ss">每晚自动整理当天的会话；开会用模型额度</div></div><button class="switch on" id="nightly" onclick="nightlyToggle(this)"></button></div>
+    <div class="setrow" id="nightly-time-row"><div class="sl"><div class="st">开始时间</div><div class="ss">到点后按静默情况排队</div></div><input type="time" value="02:00" style="border:1px solid var(--line);border-radius:8px;padding:4px 8px" onchange="toast('已改为 '+this.value+' 开始')"></div>
+    <div class="setrow"><div class="sl"><div class="st">整理功能</div><div class="ss">关掉后不再创建整理任务，「我的认知」里的资产不受影响</div></div><button class="switch on" onclick="this.classList.toggle('on');toast(this.classList.contains('on')?'已开启整理功能':'已关闭整理功能：不再创建整理任务')"></button></div>
     <div class="setrow"><div class="sl"><div class="st">候选怎么确认</div><div class="ss">自动采纳：学到的直接进「我的认知」；先问我：进「待我处理」等你拿主意</div></div>
       <div style="display:flex;gap:6px"><button class="chip" onclick="toast('已切换为自动采纳')">自动采纳</button><button class="chip on" onclick="toast('已切换为先问我')">先问我</button></div></div>
   </div>`;
 }
-function onQ(v){
-  q = v.trim();
-  if(curTab!=='mine'){ tab('mine'); return; }
-  myCat='all'; renderMine();
+function nightlyToggle(sw){
+  if(sw.classList.contains('on')){
+    confirmBox('开启夜间自动沉淀？','每晚会自动整理当天的会话，整理会消耗模型额度。',()=>{sw.classList.remove('on');$('nightly-time-row').hidden=true;toast('已关闭')});
+  } else {
+    sw.classList.add('on');$('nightly-time-row').hidden=false;toast('已开启夜间自动沉淀：先确认额度后生效');
+  }
 }
-function mswClick(sw){ if(sw.classList.contains('on')){confirmBox('关闭记忆？','关闭后，<b>已有内容会保留</b>（随时可以重新打开），但 AI 不再在对话里自动使用它们，也不再记新的内容。',()=>{sw.classList.remove('on');toast('记忆已关闭：已有内容保留，不再自动使用')})} else {sw.classList.add('on');toast('记忆已开启')} }
+
+/* ═══════ 个人本体（树干点开）：教它一件事 · 冲突浮出 · 一条一句带菜单 ═══════ */
+let oid=50, otoEditId=null;
+function otoCount(){return oto.reduce((n,g)=>n+g.items.length,0)}
+function otoItem(id){for(const g of oto){const it=g.items.find(i=>i.id===id);if(it)return it}return null}
+function otoGroupOf(id){for(const g of oto){if(g.items.some(i=>i.id===id))return g}return null}
+function renderOto(){ if($('drawer').classList.contains('open'))$('dw-bd').innerHTML=otoInner(); }
+function otoInner(){
+  let h=`<div class="teach"><input id="teach-in" placeholder="教它一件事，例如：评审 → 先讲产品模型" onkeydown="if(event.key==='Enter')teachSave()"><button class="btn sm" onclick="teachSave()">记住</button></div>
+  <div class="note" style="margin:6px 2px 0">写「A → B」会成为一条规矩（它会照着做）</div>`;
+  if(otoProposal){
+    h+=`<div class="card" style="padding:11px 14px;margin-top:12px;border-color:var(--amber-line);background:var(--amber-bg)">
+      <div style="font-size:12.5px;font-weight:700;color:var(--amber-t)">AI 想记住这条，可以吗？</div>
+      <div style="font-size:13px;margin-top:5px">${esc(otoProposal.t)}</div>
+      <div class="note" style="margin-top:3px">会写进「${esc(otoProposal.g)}」组的「${esc(otoProposal.f)}」</div>
+      <div style="display:flex;gap:8px;margin-top:9px"><button class="btn sm" onclick="otoAcceptProposal()">好，记住</button><button class="b2 sm" onclick="otoRejectProposal()">不要</button></div></div>`;
+  }
+  if(!otoConflict.keep){
+    const pair=oto.find(g=>g.g==='事实').items.filter(i=>i.f===otoConflict.field);
+    h+=`<div class="conflict-card">
+      <div style="font-size:12.5px;font-weight:700;color:var(--amber-t)">这两条说法冲突了，留哪条？</div>
+      ${pair.map(i=>`<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-top:7px"><input type="radio" name="cf" value="${i.id}" style="margin-top:4px">${esc(i.t)}</label>`).join('')}
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn sm" onclick="otoResolveConflict()">就留选中的那条</button><button class="b2 sm" onclick="otoConflict.keep='both';renderOto();toast('两条都留着，以后按上下文判断')">都留着</button></div></div>`;
+  }
+  oto.forEach(g=>{
+    h+=`<div class="sect" style="margin-top:16px"><span style="font-size:13.5px">${esc(g.g)}</span><span class="n">${g.items.length}</span><span class="sp"></span></div>`;
+    if(!g.items.length){h+=`<div class="note">这一组还是空的</div>`;return}
+    h+=`<div class="card" style="padding:2px 14px">`+g.items.map(otoRow).join('')+`</div>`;
+  });
+  h+=`<div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+    <button class="b2 sm" onclick="op('ov-tpl')">角色模板库</button>
+    <button class="b2 sm" onclick="toast('已把全部记住的内容导出成文件，可自己备份')">导出</button>
+    <button class="b2 sm" onclick="toast('选择要导入的文件，导进来的会先给你确认')">导入</button>
+    <button class="b2 sm" onclick="closeDrawer();tab('mine');myCat='关于我';renderMine()">看这类资产 ${assets.filter(a=>a.cat==='关于我'&&a.status!=='deleted').length} 条</button></div>`;
+  return h;
+}
+function otoRow(i){
+  return `<div class="oto-item"><div class="txt">
+    ${otoEditId===i.id?`<input class="litxt" id="oto-in" value="${esc(i.t)}" onkeydown="if(event.key==='Enter')otoSaveEdit('${i.id}')">`
+      :`${esc(i.t)}${i.priv?' <span class="pin">仅自己可见</span>':''}`}
+    <div class="note" style="font-size:11px">${esc(i.f)} · ${esc(i.src)}</div>
+    ${otoEditId===i.id?`<div style="display:flex;gap:7px;margin-top:6px"><button class="btn sm" onclick="otoSaveEdit('${i.id}')">保存</button><button class="b2 sm" onclick="otoEditId=null;renderOto()">取消</button></div>`:''}
+    </div>
+    <button class="dw-x" style="width:26px;height:26px" onclick="otoMenu=otoMenu==='${i.id}'?null:'${i.id}';renderOto()">···</button>
+    ${otoMenu===i.id?`<div class="omenu">
+      <button onclick="otoEditId='${i.id}';otoMenu=null;renderOto()">改</button>
+      <button onclick="otoPriv('${i.id}')">${i.priv?'不再仅自己可见':'仅自己可见'}</button>
+      <button class="dg" onclick="otoDel('${i.id}')">删除</button></div>`:''}
+  </div>`;
+}
+function teachSave(){
+  const el=$('teach-in'); const v=(el.value||'').trim();
+  if(!v){toast('先写点什么');return}
+  const isRule=/→|->/.test(v), g=isRule?'规矩':'事实';
+  oto.find(x=>x.g===g).items.push({id:'o'+(oid++),f:isRule?'工作方式':'新记的',t:v,src:'你教的'});
+  el.value='';renderOto();
+  toast(isRule?'已按规则保存（A → B）：将作为规则进入世界模型':'已记住');
+}
+function otoSaveEdit(id){const it=otoItem(id);const v=($('oto-in')?.value||'').trim();if(!v)return;it.t=v;it.src='你改的';otoEditId=null;renderOto();toast('已更新')}
+function otoPriv(id){const it=otoItem(id);it.priv=!it.priv;otoMenu=null;renderOto();toast(it.priv?'已设为仅自己可见：不再进入任务自动注入与世界模型':'已取消仅自己可见')}
+function otoDel(id){const g=otoGroupOf(id);g.items=g.items.filter(i=>i.id!==id);otoMenu=null;renderOto();toast('已删除，不再影响以后的对话')}
+function otoAcceptProposal(){oto.find(g=>g.g===otoProposal.g).items.push({id:'o'+(oid++),f:otoProposal.f,t:otoProposal.t,src:'对话里记的'});otoProposal=null;renderOto();toast('已写进「事实」组')}
+function otoRejectProposal(){otoProposal=null;renderOto();toast('好的，这条不留')}
+function otoResolveConflict(){
+  const sel=document.querySelector('input[name=cf]:checked'); if(!sel){toast('先选一条');return}
+  const g=oto.find(x=>x.g==='事实');
+  g.items=g.items.filter(i=>i.f!==otoConflict.field||i.id===sel.value);
+  otoConflict.keep='one'; renderOto(); toast('已留下你选的那条');
+}
 
 /* init */
 let curTab='tree';
