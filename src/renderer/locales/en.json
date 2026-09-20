@@ -6326,8 +6326,6 @@
   "kb.transcriptCorrect.applied_pending": "{count} pending",
   "kb.transcriptCorrect.retention": "Retention {percent}%",
   "kb.transcriptCorrect.over_rewrite": "Possible over-rewrite",
-  "kb.transcriptCorrect.preview": "Preview cleaned copy",
-  "kb.transcriptCorrect.preview_title": "Cleaned copy preview",
   "kb.transcriptCorrect.save": "Save to library",
   "kb.transcriptCorrect.saved": "Saved to library: {name}",
   "kb.transcriptCorrect.save_failed": "Save failed. Try again later.",

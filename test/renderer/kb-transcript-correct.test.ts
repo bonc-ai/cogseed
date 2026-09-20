@@ -393,7 +393,8 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
       return found.length ? found[found.length - 1] : '';
     };
     expect(roles('apply')).toContain('primary');
-    expect(roles('revert')).toContain('secondary');
+    // 「回滚」已并入「对照原文」：不再有独立按钮（其入口在对照弹窗底部）
+    expect(source).not.toContain("data-atc-action': 'revert'");
     expect(roles('notes')).toContain('ghost');
     expect(roles('compare-search')).toContain('ghost');
   });
@@ -502,7 +503,7 @@ describe('locale 覆盖', () => {
     'title', 'meta', 'scan', 'scanning', 'rescan', 'scan_done', 'scan_failed',
     'accept', 'accepted', 'ignore', 'apply', 'applying', 'apply_done', 'apply_failed',
     'summary', 'pending_high', 'applied_summary', 'applied_deleted', 'applied_pending',
-    'retention', 'over_rewrite', 'preview', 'preview_title', 'save', 'saved', 'save_failed',
+    'retention', 'over_rewrite', 'save', 'saved', 'save_failed',
     'revert', 'revert_title', 'revert_ok', 'revert_mismatch', 'revert_failed',
     'add_entry', 'wrong', 'correct', 'kind', 'add', 'added', 'add_failed', 'need_both', 'reject_digits',
     'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
@@ -724,6 +725,20 @@ describe('查看器集成契约', () => {
     for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
     // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
+  });
+
+  it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'preview'");
+    expect(panelSrc).not.toMatch(/kind === 'preview'/);
+    // openTextModal 仍被「回滚」复用（回滚后展示原文），不能连坐删除
+    expect(panelSrc).toMatch(/function openTextModal\(title, text\)/);
+    expect(panelSrc).toMatch(/openTextModal\(\s*\n\s*t\('kb\.transcriptCorrect\.revert_title'/);
+    // 「回滚」只剩对照弹窗底部这一个入口
+    expect(panelSrc).toMatch(/\{ id: 'revert', label: t\('kb\.transcriptCorrect\.revert', '回滚'\), role: 'ghost', size: 'sm' \}/);
+    // 弹窗 resolve 的是 { value, reason }：写成 result.id 恒为 undefined ⇒ 动作永不执行
+    expect(panelSrc).not.toMatch(/'action' && result\?\.id/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'revert'/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'save-notes'/);
   });
 
   it('弹窗结果只能 await 弹窗本身（uiModal 没有 .result；await undefined 会立即通过）', () => {
