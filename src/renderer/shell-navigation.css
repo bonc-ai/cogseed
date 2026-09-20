@@ -17,11 +17,6 @@
   gap: var(--space-1);
 }
 
-.sidebar-tools > .ui-icon-button {
-  width: var(--control-height-sm);
-  height: var(--control-height-sm);
-}
-
 .app-shell-tools {
   position: fixed;
   top: 0;

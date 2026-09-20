@@ -16,17 +16,36 @@ function _dialogLabel(key, zhFallback) {
 // 统一弹窗运行时：动态创建 overlay/dialog 后交给 uiModalController 复用
 // ESC、背景滚动锁定、焦点陷阱与焦点回归（四项行为只存在一处）；业务按钮的
 // 结算值和初始焦点由调用方提供。uiModalController 缺失时走最小降级路径。
-function _uiMountDialog({ title, bodyHtml, actionsHtml, initialFocus, cancelValue, onAction, afterMount, dialogClass = '' }) {
+let _uiDialogSequence = 0;
+
+function _dialogButton({ label, role = 'secondary', action, className = '', i18nKey = '' }) {
+  if (typeof uiButton !== 'function') throw new Error('shared dialogs require uiButton');
+  return uiButton({
+    label,
+    role,
+    className,
+    attrs: {
+      'data-act': action,
+      ...(i18nKey ? { 'data-i18n': i18nKey } : {}),
+    },
+  });
+}
+
+function _uiMountDialog({ title, ariaLabel, bodyHtml, actionsHtml, initialFocus, cancelValue, onAction, afterMount, dialogClass = '' }) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay';
-    const titleHtml = title ? `<div class="modal-title ui-dialog-title">${escapeHtml(String(title))}</div>` : '';
+    overlay.className = 'ui-modal-overlay';
+    const titleId = title ? `ui-dialog-title-${++_uiDialogSequence}` : '';
+    const titleHtml = title ? `<header class="ui-modal__header"><div class="ui-modal__heading"><h2 class="ui-modal__title" id="${titleId}">${escapeHtml(String(title))}</h2></div></header>` : '';
+    const accessibleName = title
+      ? ` aria-labelledby="${titleId}"`
+      : ` aria-label="${escapeHtml(String(ariaLabel || '').trim())}"`;
     overlay.innerHTML = `
-      <div class="modal ui-dialog modal-standard${dialogClass}" role="dialog" aria-modal="true">
+      <section class="ui-modal ui-modal--sm${dialogClass}" role="dialog" aria-modal="true"${accessibleName}>
         ${titleHtml}
-        <div class="modal-body ui-dialog-message">${bodyHtml}</div>
-        <div class="modal-actions">${actionsHtml}</div>
-      </div>
+        <div class="ui-modal__body ui-dialog-message">${bodyHtml}</div>
+        <footer class="ui-modal__footer">${actionsHtml}</footer>
+      </section>
     `;
     document.body.appendChild(overlay);
 
@@ -38,10 +57,17 @@ function _uiMountDialog({ title, bodyHtml, actionsHtml, initialFocus, cancelValu
           overlay,
           dialog,
           initialFocus,
-          onClose: () => settle(cancelValue),
+          onClose: () => {
+            overlay.remove();
+            settle(cancelValue);
+          },
         })
       : null;
-    const finish = (value) => { settle(value); if (controller) controller.close('action'); };
+    const finish = (value) => {
+      settle(value);
+      if (controller) controller.close('action');
+      else overlay.remove();
+    };
 
     if (typeof afterMount === 'function') afterMount(overlay, dialog, finish);
 
@@ -74,14 +100,16 @@ function _uiMountDialog({ title, bodyHtml, actionsHtml, initialFocus, cancelValu
 }
 
 function _uiShowDialog({ message, showCancel, okLabel, cancelLabel }) {
-  const msgHtml = escapeHtml(String(message || '')).replace(/\n/g, '<br />');
-  const cancelText = escapeHtml(cancelLabel || _dialogLabel('common.cancel', 'Cancel'));
-  const okText = escapeHtml(okLabel || _dialogLabel('common.confirm', 'Confirm'));
+  const plainMessage = String(message || '');
+  const msgHtml = escapeHtml(plainMessage).replace(/\n/g, '<br />');
+  const cancelText = cancelLabel || _dialogLabel('common.cancel', 'Cancel');
+  const okText = okLabel || _dialogLabel('common.confirm', 'Confirm');
   const actionsHtml = `
-    ${showCancel ? `<button class="btn" data-act="cancel"${cancelLabel ? '' : ' data-i18n="common.cancel"'}>${cancelText}</button>` : ''}
-    <button class="btn btn-primary" data-act="ok"${okLabel ? '' : ' data-i18n="common.confirm"'}>${okText}</button>
+    ${showCancel ? _dialogButton({ label: cancelText, action: 'cancel', i18nKey: cancelLabel ? '' : 'common.cancel' }) : ''}
+    ${_dialogButton({ label: okText, role: 'primary', action: 'ok', i18nKey: okLabel ? '' : 'common.confirm' })}
   `;
   return _uiMountDialog({
+    ariaLabel: plainMessage,
     bodyHtml: msgHtml,
     actionsHtml,
     initialFocus: '[data-act="ok"]',
@@ -192,11 +220,11 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 // cancel / Esc.
 function uiConfirmDanger({ title, message, dangerLabel, cancelLabel } = {}) {
   const msgHtml = escapeHtml(String(message || '')).replace(/\n/g, '<br />');
-  const cancelText = escapeHtml(cancelLabel || _dialogLabel('common.cancel', 'Cancel'));
-  const dangerText = escapeHtml(dangerLabel || _dialogLabel('common.confirm', 'Confirm'));
+  const cancelText = cancelLabel || _dialogLabel('common.cancel', 'Cancel');
+  const dangerText = dangerLabel || _dialogLabel('common.confirm', 'Confirm');
   const actionsHtml = `
-    <button class="btn" data-act="cancel"${cancelLabel ? '' : ' data-i18n="common.cancel"'}>${cancelText}</button>
-    <button class="btn btn-danger" data-act="ok"${dangerLabel ? '' : ' data-i18n="common.confirm"'}>${dangerText}</button>
+    ${_dialogButton({ label: cancelText, action: 'cancel', i18nKey: cancelLabel ? '' : 'common.cancel' })}
+    ${_dialogButton({ label: dangerText, role: 'danger', action: 'ok', i18nKey: dangerLabel ? '' : 'common.confirm' })}
   `;
   // 危险确认：默认聚焦「取消」而非危险按钮——Enter 不会误触发不可逆动作。
   return _uiMountDialog({
@@ -205,7 +233,8 @@ function uiConfirmDanger({ title, message, dangerLabel, cancelLabel } = {}) {
     actionsHtml,
     initialFocus: '[data-act="cancel"]',
     cancelValue: false,
-    dialogClass: ' ui-dialog-danger',
+    ariaLabel: String(message || ''),
+    dialogClass: ' ui-modal--danger',
   });
 }
 
@@ -220,23 +249,26 @@ function uiConfirmDanger({ title, message, dangerLabel, cancelLabel } = {}) {
 // or more neutral/contextual choices on the left edge of the actions row.
 function uiChoice({ title, message, choices = [], leadingChoices = [], cancelLabel } = {}) {
   const msgHtml = escapeHtml(String(message || '')).replace(/\n/g, '<br />');
-  const cancelText = escapeHtml(cancelLabel || _dialogLabel('common.cancel', 'Cancel'));
+  const cancelText = cancelLabel || _dialogLabel('common.cancel', 'Cancel');
   const renderChoice = (c, extraClass = '') => {
-    const cls = c.style === 'danger' ? 'btn btn-danger'
-      : c.style === '' ? 'btn'
-      : 'btn btn-primary';
-    const className = `${cls}${extraClass ? ` ${extraClass}` : ''}`;
-    return `<button class="${className}" data-act="choice" data-id="${escapeHtml(String(c.id))}">${escapeHtml(String(c.label || c.id))}</button>`;
+    const role = c.style === 'danger' ? 'danger' : c.style === '' ? 'secondary' : 'primary';
+    return uiButton({
+      label: String(c.label || c.id),
+      role,
+      className: extraClass,
+      attrs: { 'data-act': 'choice', 'data-id': String(c.id) },
+    });
   };
   const leadingChoiceHtml = leadingChoices.map((c) => renderChoice(c, 'ui-choice-leading')).join('');
   const choiceHtml = choices.map((c) => renderChoice(c)).join('');
   const actionsHtml = `
     ${leadingChoiceHtml}
-    <button class="btn" data-act="cancel"${cancelLabel ? '' : ' data-i18n="common.cancel"'}>${cancelText}</button>
+    ${_dialogButton({ label: cancelText, action: 'cancel', i18nKey: cancelLabel ? '' : 'common.cancel' })}
     ${choiceHtml}
   `;
   return _uiMountDialog({
     title,
+    ariaLabel: String(message || ''),
     bodyHtml: msgHtml,
     actionsHtml,
     cancelValue: null,
@@ -247,23 +279,26 @@ function uiChoice({ title, message, choices = [], leadingChoices = [], cancelLab
 // Text-input prompt with cancel / confirm buttons. Returns the entered string, or
 // null on cancel. Mirrors native `prompt()` semantics.
 function uiPrompt(message, defaultValue = '', options = {}) {
-  const msgHtml = escapeHtml(String(message || '')).replace(/\n/g, '<br />');
-  const cancelText = escapeHtml(_dialogLabel('common.cancel', 'Cancel'));
-  const okText = escapeHtml(_dialogLabel('common.confirm', 'Confirm'));
-  const bodyHtml = `${msgHtml}<div class="form-row" style="margin-top:12px;margin-bottom:0"><input type="text" class="ui-dialog-input" /></div>`;
+  const plainMessage = String(message || '');
+  const msgHtml = escapeHtml(plainMessage).replace(/\n/g, '<br />');
+  const cancelText = _dialogLabel('common.cancel', 'Cancel');
+  const okText = _dialogLabel('common.confirm', 'Confirm');
+  const inputId = `ui-dialog-input-${++_uiDialogSequence}`;
+  const bodyHtml = `${msgHtml}<div class="ui-dialog-form">${uiInput({ id: inputId, label: plainMessage, attrs: { 'aria-label': plainMessage } })}</div>`;
   const actionsHtml = `
-    <button class="btn" data-act="cancel" data-i18n="common.cancel">${cancelText}</button>
-    <button class="btn btn-primary" data-act="ok" data-i18n="common.confirm">${okText}</button>
+    ${_dialogButton({ label: cancelText, action: 'cancel', i18nKey: 'common.cancel' })}
+    ${_dialogButton({ label: okText, role: 'primary', action: 'ok', i18nKey: 'common.confirm' })}
   `;
   let promptInput = null;
   return _uiMountDialog({
+    ariaLabel: plainMessage,
     bodyHtml,
     actionsHtml,
-    initialFocus: '.ui-dialog-input',
+    initialFocus: `#${inputId}`,
     cancelValue: null,
     onAction: (btn) => (btn.dataset.act === 'ok' ? (promptInput ? promptInput.value : '') : null),
     afterMount: (overlay, _dialog, finish) => {
-      promptInput = overlay.querySelector('.ui-dialog-input');
+      promptInput = overlay.querySelector(`#${inputId}`);
       promptInput.value = defaultValue;
       if (options && options.nameLimit && typeof window.bindNameLimitControl === 'function') {
         window.bindNameLimitControl(promptInput);

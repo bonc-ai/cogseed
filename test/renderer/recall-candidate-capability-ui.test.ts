@@ -215,7 +215,8 @@ describe('governance page carries the asset revision entry', () => {
   it('shows the edit entry for an asset whose content can still change', () => {
     // 2026-09-17 重构：暂停/恢复合并为标题旁总开关（data-action 动态二值），
     // 恢复入口保留在 deleted 态；编辑入口=版本行的「基于此版修改」。
-    expect(viewsSource).toContain("data-action=\"${statusOn ? 'pause' : 'resume'}\"");
+    expect(viewsSource).toContain('const switchEl = window.uiSwitch({');
+    expect(viewsSource).toContain("'data-action': statusOn ? 'pause' : 'resume'");
     expect(viewsSource).toContain("data: { action: 'restore' }");
   });
 
