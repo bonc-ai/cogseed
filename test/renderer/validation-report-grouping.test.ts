@@ -68,6 +68,19 @@ const v = (rule: string, level: string, field: string): Violation => ({
 });
 
 describe('validation report › grouping', () => {
+  it('uses the shared modal and button contracts', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src', 'renderer', 'modules', 'validation-report-view.js'),
+      'utf8',
+    );
+
+    expect(source).toContain("overlay.className = 'ui-modal-overlay'");
+    expect(source).toContain('class="ui-modal ui-modal--lg quality-report-dialog"');
+    expect(source).toContain('class="ui-modal__footer"');
+    expect(source).toContain("uiButton({ label: ok, role: 'primary'");
+    expect(source).not.toMatch(/<button\b/);
+  });
+
   it('collapses repeats of one rule into a single group', () => {
     const { _groupViolationsByRule } = loadReportView();
     const groups = _groupViolationsByRule([

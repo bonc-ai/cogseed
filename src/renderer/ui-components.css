@@ -219,6 +219,14 @@
     background-color var(--duration-control) var(--easing-ui),
     border-color var(--duration-control) var(--easing-ui);
 }
+.ui-icon-button--sm {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+}
+.ui-icon-button--lg {
+  width: var(--control-height-lg);
+  height: var(--control-height-lg);
+}
 .ui-icon-button:hover,
 .ui-icon-button[data-preview-state="hover"],
 .ui-icon-button:active,
@@ -813,6 +821,93 @@ body.ui-modal-open { overflow: hidden; }
   line-height: var(--line-height-body);
   resize: vertical;
 }
+.ui-checkbox {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-1);
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-content: center;
+  background: var(--surface-card);
+  color: var(--control-primary-text);
+  box-sizing: border-box;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-control) var(--easing-ui),
+    border-color var(--duration-control) var(--easing-ui),
+    box-shadow var(--duration-control) var(--easing-ui);
+}
+.ui-checkbox::before {
+  width: 4px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  content: '';
+  transform: rotate(45deg) scale(0);
+  transform-origin: center;
+  transition: transform var(--duration-control) var(--easing-ui);
+}
+.ui-checkbox:hover:not(:disabled) { border-color: var(--color-line-control); }
+.ui-checkbox:checked {
+  border-color: var(--color-accent);
+  background: var(--control-primary-bg);
+}
+.ui-checkbox:checked::before { transform: rotate(45deg) scale(1); }
+.ui-checkbox:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
+}
+.ui-checkbox:disabled {
+  border-color: transparent;
+  background: var(--color-overlay-disabled);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+.ui-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  background: var(--color-overlay-disabled);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-control) var(--easing-ui),
+    border-color var(--duration-control) var(--easing-ui),
+    box-shadow var(--duration-control) var(--easing-ui);
+}
+.ui-switch__knob {
+  position: absolute;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--duration-control) var(--easing-ui);
+}
+.ui-switch:hover:not(:disabled) { border-color: var(--color-line-control); }
+.ui-switch.is-on {
+  border-color: var(--color-accent);
+  background: var(--control-primary-bg);
+}
+.ui-switch.is-on .ui-switch__knob { transform: translateX(20px); }
+.ui-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
+}
+.ui-switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .ui-select-host.ai-select {
   width: 100%;
   min-width: 0;
@@ -1020,41 +1115,6 @@ body.ui-modal-open { overflow: hidden; }
   color: var(--text, var(--color-ink));
   cursor: pointer;
   user-select: none;
-}
-.settings-check-chip input { position: absolute; opacity: 0; pointer-events: none; }
-.settings-check-chips .settings-check-chip__box {
-  /* display 显式声明：即便祖先布局异常（非 flex），宽高也照常生效，
-     不会再退化成一条边框竖线。 */
-  display: inline-block;
-  flex: none;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-1);
-  border: 1.5px solid var(--color-faint);
-  background: var(--color-white);
-  position: relative;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-/* 勾选态由 input:checked 伪类驱动（2026-09-13 交互失效修复）：此前外观
-   挂在静态 is-checked 类上，点击后 checkbox 状态翻转但类不更新——
-   视觉毫无反应。伪类直接跟随控件状态，点击立即生效，无 JS 同步。 */
-.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box {
-  background: var(--color-ink);
-  border-color: var(--color-ink);
-}
-.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box::after {
-  content: '';
-  position: absolute;
-  left: 4.5px;
-  top: 1.5px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--color-white);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-.settings-check-chips .settings-check-chip input:not(:checked):disabled + .settings-check-chip__box {
-  opacity: 0.55;
 }
 .settings-check-chip.is-locked { background: var(--color-surface-2); color: var(--color-muted); cursor: default; }
 .settings-check-chip__lock { display: inline-flex; color: var(--color-faint); }

@@ -20,7 +20,6 @@
     const search = collapsed ? '' : root.uiIconButton({
       icon: 'search',
       label: label('sidebar.search_title', '全局搜索 (Cmd/Ctrl+K)'),
-      variant: 'quiet',
       size: 'sm',
       attrs: attrs('sidebar-search-btn', 'sidebar.search_title'),
     });
@@ -30,7 +29,6 @@
     const collapse = root.uiIconButton({
       icon: 'panel',
       label: label(collapseKey, collapsed ? '展开侧边栏' : '收起侧边栏'),
-      variant: 'quiet',
       size: 'sm',
       attrs: {
         ...attrs('sidebar-collapse-btn', collapseKey),

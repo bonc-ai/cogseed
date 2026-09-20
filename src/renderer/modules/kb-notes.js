@@ -9,6 +9,54 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  function _uiEmptyState(options) {
+    if (typeof window.uiEmptyState !== 'function') throw new Error('knowledge base notes require uiEmptyState');
+    return window.uiEmptyState(options);
+  }
+
+  function _uiButton(options) {
+    if (typeof window.uiButton !== 'function') throw new Error('knowledge base notes require uiButton');
+    return window.uiButton(options);
+  }
+
+  function _uiIconButton(options) {
+    if (typeof window.uiIconButton !== 'function') throw new Error('knowledge base notes require uiIconButton');
+    return window.uiIconButton(options);
+  }
+
+  function _uiInput(options) {
+    if (typeof window.uiInput !== 'function') throw new Error('knowledge base notes require uiInput');
+    return window.uiInput(options);
+  }
+
+  function _mountNotesDialog({ overlay, dialogSelector, initialFocus, fallbackFocus, trigger, onClose }) {
+    const dialog = overlay.querySelector(dialogSelector);
+    let removed = false;
+    const cleanup = () => {
+      if (removed) return;
+      removed = true;
+      overlay.remove();
+      if (typeof onClose === 'function') onClose();
+    };
+    const controller = typeof window.uiModalController === 'function'
+      ? window.uiModalController({ overlay, dialog, initialFocus, fallbackFocus, onClose: cleanup })
+      : null;
+    const close = (reason = 'close') => {
+      if (controller && controller.isOpen()) controller.close(reason);
+      else cleanup();
+    };
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close('backdrop');
+    });
+    if (controller) controller.open(trigger);
+    else {
+      overlay.hidden = false;
+      overlay.style.display = 'flex';
+      setTimeout(() => overlay.querySelector(initialFocus)?.focus(), 0);
+    }
+    return { close, controller };
+  }
+
   const _state = { rendered: false, notes: [], current: '', filter: 'all', selRange: null };
 
   function _toast(msg, variant) {
@@ -397,7 +445,10 @@
       .filter((n) => !cutoff || (Number(n.mtime) || 0) * 1000 >= cutoff)
       .sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0));
     if (!notes.length) {
-      box.innerHTML = `<div class="kb-notes-empty">${_state.filter === '30d' ? '过去 30 天没有笔记' : '暂无笔记，点击 ＋ 新建'}</div>`;
+      box.innerHTML = _uiEmptyState({
+        kind: 'quiet',
+        title: _state.filter === '30d' ? '过去 30 天没有笔记' : '暂无笔记，点击 ＋ 新建',
+      });
       return;
     }
     box.innerHTML = '';
@@ -493,12 +544,20 @@
 
   // ── 添加到知识库（对齐 ima「选择要添加的知识库」：个人库 + 共享库分组）──
   let _libPicker = null;
+  let _libPickerClose = null;
 
-  function _closeLibPicker() {
-    if (_libPicker) { _libPicker.remove(); _libPicker = null; }
+  function _closeLibPicker(reason = 'close') {
+    if (_libPickerClose) {
+      _libPickerClose(reason);
+      return;
+    }
+    if (_libPicker) {
+      _libPicker.remove();
+      _libPicker = null;
+    }
   }
 
-  async function _addToLib() {
+  async function _addToLib(event) {
     if (!_state.current) { _toast('请先打开一篇笔记', 'warning'); return; }
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     const [treeRes, spacesRes] = await Promise.all([
@@ -512,29 +571,47 @@
 
     _closeLibPicker();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-lib-picker-overlay';
+    overlay.className = 'ui-modal-overlay kb-lib-picker-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <div class="kb-lib-picker">
-        <div class="kb-lib-picker-title">选择要添加的知识库</div>
-        <div class="kb-lib-picker-groups">
-          ${personal.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">个人知识库</div>${personal.map((l) =>
-            `<div class="kb-lib-picker-item" data-kind="lib" data-id="${_esc(l.id)}"><span class="kb-lib-picker-ico">📚</span><span>${_esc(l.name)}</span></div>`
-          ).join('')}</div>` : ''}
-          ${spaces.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">共享知识库</div>${spaces.map((s) =>
-            `<div class="kb-lib-picker-item" data-kind="space" data-id="${_esc(s.space_id)}"><span class="kb-lib-picker-ico">🌐</span><span>${_esc(s.name || s.space_id)}</span></div>`
-          ).join('')}</div>` : ''}
+      <section class="ui-modal ui-modal--sm kb-lib-picker" role="dialog" aria-modal="true" aria-labelledby="kb-lib-picker-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="kb-lib-picker-title">选择要添加的知识库</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭知识库选择弹窗', icon: 'x', className: 'kb-lib-picker-close' })}
+        </header>
+        <div class="ui-modal__body kb-lib-picker-body">
+          <div class="kb-lib-picker-groups">
+            ${personal.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">个人知识库</div>${personal.map((l) =>
+              `<button type="button" class="kb-lib-picker-item" data-kind="lib" data-id="${_esc(l.id)}"><span class="kb-lib-picker-ico">📚</span><span>${_esc(l.name)}</span></button>`
+            ).join('')}</div>` : ''}
+            ${spaces.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">共享知识库</div>${spaces.map((s) =>
+              `<button type="button" class="kb-lib-picker-item" data-kind="space" data-id="${_esc(s.space_id)}"><span class="kb-lib-picker-ico">🌐</span><span>${_esc(s.name || s.space_id)}</span></button>`
+            ).join('')}</div>` : ''}
+          </div>
         </div>
-      </div>`;
+      </section>`;
     document.body.appendChild(overlay);
     _libPicker = overlay;
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) _closeLibPicker();
+    const mounted = _mountNotesDialog({
+      overlay,
+      dialogSelector: '.kb-lib-picker',
+      initialFocus: '.kb-lib-picker-item',
+      fallbackFocus: '#kb-notes-to-lib',
+      trigger: event && event.currentTarget,
+      onClose: () => {
+        _libPicker = null;
+        _libPickerClose = null;
+      },
     });
+    _libPickerClose = mounted.close;
+    overlay.querySelector('.kb-lib-picker-close').addEventListener('click', () => _closeLibPicker('close-button'));
     overlay.querySelectorAll('.kb-lib-picker-item').forEach((item) => {
       item.addEventListener('click', () => {
         const kind = item.dataset.kind;
         const id = item.dataset.id;
-        _closeLibPicker();
+        _closeLibPicker('select');
         _copyNoteToLib(kind, id);
       });
     });
@@ -694,52 +771,77 @@
   }
 
   // 🔗 插入链接弹窗（对齐 ima：文本 + 链接 双输入）
+  let _linkDialogClose = null;
+
   function _openLinkDialog() {
     _closeLinkDialog();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-link-dlg-overlay';
     // 预填：当前有选中文字 → 作为链接文本
     let selText = '';
     try {
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && sel.toString()) selText = sel.toString().slice(0, 80);
     } catch (_) { /* ignore */ }
+    overlay.className = 'ui-modal-overlay kb-link-dlg-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <div class="kb-link-dlg">
-        <div class="kb-link-dlg-title">插入链接</div>
-        <div class="kb-link-field"><label>文本</label><input type="text" class="kb-link-input" id="kb-link-text" placeholder="请输入文本" value="${_esc(selText)}" autocomplete="off" spellcheck="false" /></div>
-        <div class="kb-link-field"><label>链接</label><input type="text" class="kb-link-input" id="kb-link-url" placeholder="请输入或粘贴链接" value="https://" autocomplete="off" spellcheck="false" /></div>
-        <div class="kb-link-actions">
-          <button type="button" class="kb-link-btn kb-link-ghost" id="kb-link-cancel">取消</button>
-          <button type="button" class="kb-link-btn kb-link-primary" id="kb-link-ok" disabled>确定</button>
+      <section class="ui-modal ui-modal--sm kb-link-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-link-dlg-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="kb-link-dlg-title">插入链接</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭插入链接弹窗', icon: 'x', className: 'kb-link-close' })}
+        </header>
+        <div class="ui-modal__body kb-link-dlg-body">
+          <div class="kb-link-field"><label for="kb-link-text">文本</label>${_uiInput({ id: 'kb-link-text', className: 'kb-link-input', placeholder: '请输入文本', value: selText, attrs: { autocomplete: 'off', spellcheck: 'false' } })}</div>
+          <div class="kb-link-field"><label for="kb-link-url">链接</label>${_uiInput({ id: 'kb-link-url', className: 'kb-link-input', placeholder: '请输入或粘贴链接', value: 'https://', attrs: { autocomplete: 'off', spellcheck: 'false' } })}</div>
         </div>
-      </div>`;
+        <footer class="ui-modal__footer kb-link-actions">
+          ${_uiButton({ label: '取消', role: 'secondary', size: 'sm', className: 'kb-link-cancel', attrs: { id: 'kb-link-cancel' } })}
+          ${_uiButton({ label: '确定', role: 'primary', size: 'sm', disabled: true, className: 'kb-link-ok', attrs: { id: 'kb-link-ok' } })}
+        </footer>
+      </section>`;
     document.body.appendChild(overlay);
     const urlInput = overlay.querySelector('#kb-link-url');
     const textInput = overlay.querySelector('#kb-link-text');
     const okBtn = overlay.querySelector('#kb-link-ok');
-    const syncOk = () => { okBtn.disabled = !/^https?:\/\/\S+$/i.test(String(urlInput.value || '').trim()); };
+    const syncOk = () => {
+      const disabled = !/^https?:\/\/\S+$/i.test(String(urlInput.value || '').trim());
+      okBtn.disabled = disabled;
+      okBtn.classList.toggle('is-disabled', disabled);
+    };
     urlInput.addEventListener('input', syncOk);
     urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !okBtn.disabled) _linkOk(); });
     textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !okBtn.disabled) _linkOk(); });
-    overlay.querySelector('#kb-link-cancel').addEventListener('click', _closeLinkDialog);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeLinkDialog(); });
+    overlay.querySelector('#kb-link-cancel').addEventListener('click', () => _closeLinkDialog('cancel'));
+    overlay.querySelector('.kb-link-close').addEventListener('click', () => _closeLinkDialog('close-button'));
     okBtn.addEventListener('click', _linkOk);
-    setTimeout(() => { if (!selText) textInput.focus(); else urlInput.focus(); }, 50);
+    const mounted = _mountNotesDialog({
+      overlay,
+      dialogSelector: '.kb-link-dlg',
+      initialFocus: selText ? '#kb-link-url' : '#kb-link-text',
+      fallbackFocus: '#kb-notes-edit',
+      onClose: () => { _linkDialogClose = null; },
+    });
+    _linkDialogClose = mounted.close;
 
     function _linkOk() {
       const url = String(urlInput.value || '').trim();
       if (!/^https?:\/\//i.test(url)) return;
       const text = String(textInput.value || '').trim() || url;
-      _closeLinkDialog();
+      _closeLinkDialog('submit');
       _execHtml(`<a href="${_esc(url)}">${_esc(text)}</a>`);
       document.getElementById('kb-notes-edit')?.focus();
     }
   }
 
-  function _closeLinkDialog() {
-    const el = document.querySelector('.kb-link-dlg-overlay');
-    if (el) el.remove();
+  function _closeLinkDialog(reason = 'close') {
+    if (_linkDialogClose) {
+      _linkDialogClose(reason);
+      return;
+    }
+    const overlay = document.querySelector('.kb-link-dlg-overlay');
+    if (overlay) overlay.remove();
   }
 
   // 📎 附件上传：文件 → base64 → contexts.upload 存到 notes/attachments/ → 插入附件引用卡片
