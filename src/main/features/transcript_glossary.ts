@@ -19,16 +19,11 @@
  * 本模块只做"词表数据 + 归一化 + 风险分级 + 迁移"，不含扫描/替换
  * （见 transcript_auto_correct.ts）与产物/回滚（见 transcript_correction_runs.ts）。
  *
- * ── 候选区（`candidates`）与词条区（`entries`）的硬隔离 ──────────────────
- * 模型在纠错里给出的候选**只能进候选区**，且只能是 `pending`：
- *   - `entries` 是扫描/替换的唯一输入（`transcript_auto_correct.scanText` 只吃
- *     `GlossaryEntry[]`；IPC 也一律 `listEntries(uid, { status: 'active' })`）。
- *     候选存在另一个数组里，**结构上不可能**被扫描到——这不是靠调用方自觉过滤。
- *     不用 `status: 'pending'` 的原因：`scanText` 有 `includePaused` 逃生口，
- *     同一个 status 字段迟早会被那个开关连带放开，等于把闸门交给调用方。
- *   - 候选 → 词条的唯一通道是 `adoptCandidate`，且必须由人显式调用；
- *     采纳时按 `source: 'manual'` / `createdBy: 'manual'` 建条，留 `adoptedEntryId`
- *     以便追溯"这条规则当初是哪次模型候选、谁点的确认"。
+ * ── 关于"模型候选"（2026-09-20 起）────────────────────────────────────
+ * 候选区（`candidates` 数组 / `adoptCandidate` 等）已**整体移除**：模型候选改为直接
+ * 并入扫描候选列表，人勾选即确认；确认应用时经 `rememberConfirmedPairs` 以
+ * `source: 'meeting_accept'` 记入词表（作用域收窄到当前文档）。
+ * 于是词表里只剩一种东西：**人确认过的** `wrong → correct`。
  */
 
 import * as fs from 'node:fs';
@@ -50,11 +45,6 @@ export type EntryStatus = 'active' | 'paused';
 export type OwnerScope = 'personal' | 'team' | 'org';
 export type EntrySource = 'manual' | 'meeting_accept' | 'ontology_seed' | 'import';
 export type CreatedBy = 'manual' | 'harvest' | 'import';
-/** 候选来源。目前只有模型：人工输入走 `upsertEntry` 直接建词条，不进候选区。 */
-export type CandidateOrigin = 'llm';
-/** 候选状态：`pending` 待核 → `adopted` 已入表 / `discarded` 已丢弃（终态可复习）。 */
-export type CandidateState = 'pending' | 'adopted' | 'discarded';
-
 export interface GlossaryScope {
   /** 允许生效的文档 id（空数组 = 不按文档限制）。 */
   docIds: string[];
@@ -110,15 +100,9 @@ export interface GlossaryEntry {
 }
 
 export interface GlossaryFile {
-  version: 3;
+  version: 4;
   uid: string;
   entries: GlossaryEntry[];
-  /**
-   * 候选区：模型的"我觉得这里应该是 X"只落在这里，**永远不参与扫描**。
-   * 与 `entries` 是两个数组——扫描入口拿到的类型就是 `GlossaryEntry[]`，
-   * 候选结构上到不了扫描器。
-   */
-  candidates: GlossaryCandidate[];
   meta: {
     lastReconcileAt: number;
     ownerNote: string;
@@ -127,72 +111,6 @@ export interface GlossaryFile {
   };
 }
 
-/**
- * 一条待核候选：模型给出的 `wrong → correct` 建议 + 它凭什么这么说。
- * 关键约束：**没有 `status: 'active'` 这种状态**。候选就是候选，
- * 想生效必须先 `adoptCandidate` 变成真词条（人工确认）。
- */
-export interface GlossaryCandidate {
-  id: string;
-  /** 转写里被怀疑写错的那段原文。 */
-  wrong: string;
-  /** 模型建议的写法。**允许不在词表里**（放开白名单后这是常态）。 */
-  correct: string;
-  /** 模型自报置信度（0~1，仅用于排序与展示，不构成任何自动动作）。 */
-  confidence: number;
-  /** 模型给的一句理由。 */
-  reason: string;
-  /** 给出该候选时的上下文片段（截断），供人工复核判断。 */
-  context: string;
-  kind: GlossaryKind;
-  origin: CandidateOrigin;
-  /** 来源文档（有则记，便于"这条候选是哪份稿子里的"）。 */
-  docId?: string;
-  /** 原文偏移；只在该次扫描的坐标下有意义，仅作展示线索。 */
-  start?: number;
-  /**
-   * 该建议是否落在"允许目标"提示名单里。放开白名单后模型可以提议表外写法，
-   * 这一位用来在复核时区分"词表已有的写法"与"模型自己想的写法"。
-   */
-  inAllowlist: boolean;
-  state: CandidateState;
-  createdAt: number;
-  /** 终态时间（采纳/丢弃）。 */
-  resolvedAt?: number;
-  /** 采纳后生成的词条 id —— 用来追溯"哪条规则来自哪次模型候选"。 */
-  adoptedEntryId?: string;
-}
-
-export interface RecordCandidateInput {
-  wrong?: unknown;
-  correct?: unknown;
-  confidence?: unknown;
-  reason?: unknown;
-  context?: unknown;
-  kind?: unknown;
-  docId?: unknown;
-  start?: unknown;
-  inAllowlist?: unknown;
-}
-
-export interface RecordCandidatesResult {
-  /** 本次新记入的候选 id（已存在的 pending 只更新置信/理由，不重复入库）。 */
-  added: number;
-  updated: number;
-  /** 被挡掉的：空 wrong/correct、纯数字变体、已是词条、超长。 */
-  skipped: Array<{ wrong: string; correct: string; why: string }>;
-  /** 记入后的待核总数。 */
-  pending: number;
-}
-
-export interface AdoptCandidateResult {
-  candidate: GlossaryCandidate | null;
-  entry: GlossaryEntry | null;
-  /** 词条是否新建（false = 更新已有词条）。 */
-  created: boolean;
-  /** 未入表的原因。 */
-  skippedReason?: 'not_found' | 'not_pending' | 'pure_digit_variant' | 'invalid_target';
-}
 
 export interface UpsertEntryInput {
   wrong?: unknown;
@@ -225,11 +143,8 @@ export interface UpsertResult {
   skippedReason?: 'pure_digit_variant';
 }
 
-const GLOSSARY_VERSION = 3 as const;
+const GLOSSARY_VERSION = 4 as const;
 const MAX_ENTRIES = 2000;
-/** 候选区上限：只留最近这么多条，防止长期使用把文件撑大。 */
-const MAX_CANDIDATES = 500;
-const MAX_CANDIDATE_CONTEXT_LEN = 200;
 const MAX_WRONG_LEN = 80;
 const MAX_CORRECT_LEN = 200;
 
@@ -373,8 +288,6 @@ export function migrateGlossaryV1ToV2(raw: { entries?: unknown; meta?: unknown }
     version: GLOSSARY_VERSION,
     uid,
     entries,
-    // v1 没有候选区；迁移出来的表就是"没有待核候选"，不造占位数据。
-    candidates: [],
     meta: {
       lastReconcileAt: typeof meta.lastReconcileAt === 'number' ? meta.lastReconcileAt : 0,
       ownerNote: typeof meta.ownerNote === 'string' ? meta.ownerNote : '',
@@ -405,7 +318,7 @@ function normalizeSource(v: unknown): EntrySource {
 // ── 存储 ────────────────────────────────────────────────────────────────
 
 export function emptyGlossary(uid: string): GlossaryFile {
-  return { version: GLOSSARY_VERSION, uid, entries: [], candidates: [], meta: { lastReconcileAt: 0, ownerNote: '' } };
+  return { version: GLOSSARY_VERSION, uid, entries: [], meta: { lastReconcileAt: 0, ownerNote: '' } };
 }
 
 export function loadGlossary(userId: string): GlossaryFile {
@@ -440,10 +353,6 @@ export function loadGlossary(userId: string): GlossaryFile {
     version: GLOSSARY_VERSION,
     uid: userId,
     entries: Array.isArray(file2.entries) ? file2.entries.map(normalizeStoredEntry).filter(isEntry) : [],
-    // v2 文件没有候选区 → 空数组，读取路径不需要迁移动作（写回时统一升到 v3）。
-    candidates: Array.isArray(file2.candidates)
-      ? file2.candidates.map(normalizeStoredCandidate).filter(isCandidate)
-      : [],
     meta: {
       lastReconcileAt: typeof file2.meta?.lastReconcileAt === 'number' ? file2.meta.lastReconcileAt : 0,
       ownerNote: typeof file2.meta?.ownerNote === 'string' ? file2.meta.ownerNote : '',
@@ -454,44 +363,6 @@ export function loadGlossary(userId: string): GlossaryFile {
 
 function isEntry(e: GlossaryEntry | null): e is GlossaryEntry {
   return !!e;
-}
-
-function isCandidate(c: GlossaryCandidate | null): c is GlossaryCandidate {
-  return !!c;
-}
-
-/**
- * 候选区的磁盘归一化。这里刻意**不**复用 `normalizeStoredEntry`：
- * 候选没有 scope/riskLevel/boundary 这些"生效语义"，任何一条被改坏就整条丢掉，
- * 绝不把可疑数据补成一个看起来合法的词条。
- */
-function normalizeStoredCandidate(input: unknown): GlossaryCandidate | null {
-  const c = input as Partial<GlossaryCandidate> | null;
-  if (!c || typeof c.wrong !== 'string' || typeof c.correct !== 'string') return null;
-  const wrong = c.wrong.trim();
-  const correct = c.correct.trim();
-  if (!wrong || !correct) return null;
-  const state: CandidateState = c.state === 'adopted' || c.state === 'discarded' ? c.state : 'pending';
-  const confidenceRaw = Number(c.confidence);
-  const createdAt = typeof c.createdAt === 'number' ? c.createdAt : Date.now();
-  return {
-    id: typeof c.id === 'string' && c.id ? c.id : candidateId(wrong, correct),
-    wrong: wrong.slice(0, MAX_WRONG_LEN),
-    correct: correct.slice(0, MAX_CORRECT_LEN),
-    confidence: Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0,
-    reason: typeof c.reason === 'string' ? c.reason.slice(0, 200) : '',
-    context: typeof c.context === 'string' ? c.context.slice(0, MAX_CANDIDATE_CONTEXT_LEN) : '',
-    kind: normalizeKind(c.kind),
-    // 目前只有模型会写候选区；手工改文件写别的来源也归到 llm，宁可保守。
-    origin: 'llm',
-    ...(typeof c.docId === 'string' && c.docId ? { docId: c.docId.slice(0, 200) } : {}),
-    ...(typeof c.start === 'number' && Number.isFinite(c.start) ? { start: Math.max(0, Math.floor(c.start)) } : {}),
-    inAllowlist: c.inAllowlist === true,
-    state,
-    createdAt,
-    ...(typeof c.resolvedAt === 'number' ? { resolvedAt: c.resolvedAt } : {}),
-    ...(typeof c.adoptedEntryId === 'string' && c.adoptedEntryId ? { adoptedEntryId: c.adoptedEntryId } : {}),
-  };
 }
 
 /** 磁盘上可能残留手工改坏的字段；逐字段收敛到合法值，避免扫描器拿到野值。 */
@@ -568,8 +439,6 @@ export function saveGlossary(userId: string, file: GlossaryFile): void {
     version: GLOSSARY_VERSION,
     uid: userId,
     entries: file.entries.slice(0, MAX_ENTRIES),
-    // 候选区独立落盘、独立限长：候选再多也不会挤掉词条（词条是扫描依据，候选不是）。
-    candidates: (file.candidates || []).slice(-MAX_CANDIDATES),
     meta: file.meta,
   };
   const tmp = `${target}.${process.pid}.tmp`;
@@ -602,191 +471,62 @@ export function findEntry(userId: string, id: string): GlossaryEntry | null {
   return loadGlossary(userId).entries.find((e) => e.id === id) ?? null;
 }
 
-// ── 候选区 CRUD（模型候选只在这里，永不进扫描）───────────────────────────
-
-export function candidateId(wrong: string, correct: string): string {
-  return `c_${createHash('sha1').update(`${foldText(wrong).trim()}|${foldText(correct).trim()}`).digest('hex').slice(0, 16)}`;
-}
-
-export function listCandidates(
-  userId: string,
-  filter: { state?: CandidateState } = {},
-): GlossaryCandidate[] {
-  const list = loadGlossary(userId).candidates || [];
-  // 待核优先、新在前：复核界面第一眼要看到"还没处理过的"。
-  return list
-    .filter((c) => !filter.state || c.state === filter.state)
-    .sort((a, b) => {
-      if (a.state !== b.state) return a.state === 'pending' ? -1 : 1;
-      return b.createdAt - a.createdAt;
-    });
-}
-
-export function countPendingCandidates(userId: string): number {
-  return (loadGlossary(userId).candidates || []).filter((c) => c.state === 'pending').length;
-}
-
 /**
- * 记入模型候选。这是**唯一**写入候选区的入口，且它只碰 `candidates`：
- * 任何情况下都不会往 `entries` 里写东西——扫描依据因此完全不受模型输出影响。
+ * 把**已确认应用**的 `wrong → correct` 对记进词表（source: meeting_accept）。
  *
- * 去重口径：同一 `wrong → correct` 只留一条。
- *   - 已有 `pending` → 更新置信/理由/上下文（模型第二次说得更有理，采纳的是新信息）；
- *   - 已是 `adopted` / `discarded` → **跳过**。人已经拍过板的事，模型下一轮不该
- *     把它重新翻出来，否则「丢弃」等于没有效果。
+ * 为什么放在这里：'meeting_accept' 这个 source 一直是"词表里预留、但全仓库没人发过"
+ * 的值（见 upsertEntry 里那段注释——它曾经因此让每个新词条都变成全局规则）。
+ * 现在由"扫描里勾选并应用了模型候选"来发它：人点了勾、正文里真的换了，才算确认。
+ *
+ * 作用域刻意收窄到**当前文档**（传 `docId` ⇒ upsertEntry 走"仅本文档"分支）：
+ * 一次会议里确认的写法不等于全局规则，这正是那份事故注释要防的事。
  */
-export function recordCandidates(userId: string, inputs: RecordCandidateInput[]): RecordCandidatesResult {
-  const skipped: RecordCandidatesResult['skipped'] = [];
-  const file = loadGlossary(userId);
-  const actives = new Set(
-    file.entries
-      .filter((e) => e.status === 'active')
-      .map((e) => `${foldText(e.wrong).trim()}|${foldText(e.correct).trim()}`),
-  );
-  const byKey = new Map(file.candidates.map((c) => [`${foldText(c.wrong).trim()}|${foldText(c.correct).trim()}`, c]));
-  let added = 0;
+export function rememberConfirmedPairs(
+  userId: string,
+  pairs: Array<{ wrong: string; correct: string }>,
+  context: { docId?: string } = {},
+): { created: number; updated: number; skipped: number } {
+  let created = 0;
   let updated = 0;
-  const now = Date.now();
-
-  for (const input of inputs || []) {
-    const wrong = typeof input?.wrong === 'string' ? input.wrong.trim().slice(0, MAX_WRONG_LEN) : '';
-    const correct = typeof input?.correct === 'string' ? input.correct.trim().slice(0, MAX_CORRECT_LEN) : '';
+  let skipped = 0;
+  const docId = typeof context.docId === 'string' ? context.docId.trim() : '';
+  // 作用域必须**显式给**。`upsertEntry` 里 `source === 'meeting_accept'` 只会把
+  // `global` 置为 false，却不动 `docIds`/`scenarioTags`——那样得到的条目
+  // `scopeAllows` 恒为 false，等于一条**永不命中的死规则**（这也正是
+  // 'meeting_accept' 这个 source 一直没有任何调用方的真正原因）。
+  if (!docId) {
+    // 没有文档作用域时宁可如实跳过，也不要写死条目。
+    return { created: 0, updated: 0, skipped: (pairs || []).length };
+  }
+  const scope = { docIds: [docId], scenarioTags: [] as string[], global: false };
+  const seen = new Set<string>();
+  for (const pair of pairs || []) {
+    const wrong = String(pair?.wrong ?? '').trim();
+    const correct = String(pair?.correct ?? '').trim();
     if (!wrong || !correct) {
-      skipped.push({ wrong, correct, why: 'empty_target' });
-      continue;
-    }
-    // 与词条入册同一条红线：纯数字变体无法与真实数字区分。
-    if (isPureDigits(wrong)) {
-      skipped.push({ wrong, correct, why: 'pure_digit_variant' });
-      continue;
-    }
-    // 只有**逐字相同**才算自相矛盾。这里不能按折叠值比：`kstar → KSTAR`
-    // 是合法的纠错对（模型改的是大小写/全角），折叠后会被误判成"没错"。
-    if (wrong === correct) {
-      skipped.push({ wrong, correct, why: 'identical_pair' });
+      skipped += 1;
       continue;
     }
     const key = `${foldText(wrong).trim()}|${foldText(correct).trim()}`;
-    // 已经是生效词条 → 没什么可复核的，不进候选区。
-    if (actives.has(key)) {
-      skipped.push({ wrong, correct, why: 'already_in_glossary' });
-      continue;
-    }
-    const confidenceRaw = Number(input?.confidence);
-    const confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0;
-    const patch = {
-      confidence,
-      reason: typeof input?.reason === 'string' ? input.reason.slice(0, 200) : '',
-      context: typeof input?.context === 'string' ? input.context.slice(0, MAX_CANDIDATE_CONTEXT_LEN) : '',
-      kind: normalizeKind(input?.kind),
-      inAllowlist: input?.inAllowlist === true,
-      ...(typeof input?.docId === 'string' && input.docId ? { docId: input.docId.slice(0, 200) } : {}),
-      ...(typeof input?.start === 'number' && Number.isFinite(input.start)
-        ? { start: Math.max(0, Math.floor(input.start)) }
-        : {}),
-    };
-    const current = byKey.get(key);
-    if (!current) {
-      const candidate: GlossaryCandidate = {
-        id: candidateId(wrong, correct),
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const result = upsertEntry(userId, {
         wrong,
         correct,
-        origin: 'llm',
-        state: 'pending',
-        createdAt: now,
-        ...patch,
-      };
-      file.candidates.push(candidate);
-      byKey.set(key, candidate);
-      added += 1;
-      continue;
+        source: 'meeting_accept',
+        scope,
+      });
+      if (!result.entry) skipped += 1;
+      else if (result.created) created += 1;
+      else updated += 1;
+    } catch (error) {
+      // 单条不合法（超长/空）不该让整次应用失败：如实计入 skipped。
+      log.warn('remember confirmed pair failed', { error: (error as Error).message });
+      skipped += 1;
     }
-    if (current.state !== 'pending') {
-      skipped.push({ wrong, correct, why: `already_${current.state}` });
-      continue;
-    }
-    // 保留更可信的一次读数：第二次报低了不该把信息量冲掉。
-    current.confidence = Math.max(current.confidence, patch.confidence);
-    if (patch.reason) current.reason = patch.reason;
-    if (patch.context) current.context = patch.context;
-    if (patch.docId) current.docId = patch.docId;
-    if (typeof patch.start === 'number') current.start = patch.start;
-    if (patch.inAllowlist) current.inAllowlist = true;
-    updated += 1;
   }
-
-  if (added || updated) saveGlossary(userId, file);
-  return {
-    added,
-    updated,
-    skipped,
-    pending: file.candidates.filter((c) => c.state === 'pending').length,
-  };
-}
-
-/**
- * 候选 → 词条。**人工确认后才走这条路**，也是候选唯一能影响扫描的通道。
- * 采纳出的词条按 `source: 'manual'` / `createdBy: 'manual'` 建（人拍的板就是人工词条），
- * 并回写 `adoptedEntryId`，于是"这条规则当初来自哪次模型候选"在文件里可追溯。
- */
-export function adoptCandidate(userId: string, id: string): AdoptCandidateResult {
-  const file = loadGlossary(userId);
-  const candidate = file.candidates.find((c) => c.id === id);
-  if (!candidate) return { candidate: null, entry: null, created: false, skippedReason: 'not_found' };
-  if (candidate.state !== 'pending') {
-    return { candidate, entry: null, created: false, skippedReason: 'not_pending' };
-  }
-  const result = upsertEntry(userId, {
-    wrong: candidate.wrong,
-    correct: candidate.correct,
-    kind: candidate.kind,
-    source: 'manual',
-    ...(candidate.docId ? { docId: candidate.docId } : {}),
-  });
-  if (!result.entry) {
-    return {
-      candidate,
-      entry: null,
-      created: false,
-      skippedReason: result.skippedReason === 'pure_digit_variant' ? 'pure_digit_variant' : 'invalid_target',
-    };
-  }
-  // 词条先落盘成功，再改候选状态：中途失败时候选仍是 pending，不会出现
-  // "标记成已采纳但词表里什么都没有"的假象。
-  const after = loadGlossary(userId);
-  const target = after.candidates.find((c) => c.id === id);
-  if (target) {
-    target.state = 'adopted';
-    target.resolvedAt = Date.now();
-    target.adoptedEntryId = result.entry.id;
-    saveGlossary(userId, after);
-  }
-  return { candidate: target ?? candidate, entry: result.entry, created: result.created };
-}
-
-/** 丢弃一条待核候选（终态留痕，不删记录：避免模型下一轮又把它翻出来）。 */
-export function discardCandidate(userId: string, id: string): GlossaryCandidate | null {
-  const file = loadGlossary(userId);
-  const target = file.candidates.find((c) => c.id === id);
-  if (!target) return null;
-  if (target.state === 'pending') {
-    target.state = 'discarded';
-    target.resolvedAt = Date.now();
-    saveGlossary(userId, file);
-  }
-  return target;
-}
-
-/** 清空候选区（只清终态；`pending` 有待核标记挂着，要一起清得调用方明说）。 */
-export function clearCandidates(userId: string, opts: { includePending?: boolean } = {}): number {
-  const file = loadGlossary(userId);
-  const keep = opts.includePending ? [] : file.candidates.filter((c) => c.state === 'pending');
-  const removed = file.candidates.length - keep.length;
-  if (removed > 0) {
-    file.candidates = keep;
-    saveGlossary(userId, file);
-  }
-  return removed;
+  return { created, updated, skipped };
 }
 
 /** 作用域选择（面板「接受」动作的范围，方案 §七）。 */
