@@ -26,7 +26,7 @@
 
 import { createLogger } from '../logger';
 import { buildRunner } from '../model/core-agent/runner';
-import { hasConfiguredModel } from './auth';
+import { hasConfiguredModelForUser } from './auth';
 import { computeProtectedRanges, isProtected } from './transcript_auto_correct';
 import { foldText } from './transcript_glossary';
 
@@ -312,7 +312,9 @@ export async function generateReviewCandidates(
   base.chunksTotal = totalChunks;
   base.truncated = truncated;
   if (chunks.length === 0) return { ...base, skipped: 'empty_text' };
-  if (!options.runModel && !hasConfiguredModel().configured) {
+  // 按**传入的 uid** 判断，不用"当前活动用户"：本模块的调用方已经拿着 uid，
+  // 依赖活动用户指针会在指针过期/多账号切换时误报"未配置模型"。
+  if (!options.runModel && !hasConfiguredModelForUser(userId).configured) {
     return { ...base, skipped: 'no_model' };
   }
 
@@ -361,6 +363,17 @@ export async function generateReviewCandidates(
     const parsed = parseReviewResponse(raw, chunk.text, chunk.start, knownTargets);
     rejectedAll.push(...parsed.rejected);
     base.chunksScanned += 1;
+    // 只记**计数**，不记模型输出或正文（正文是用户内容，不进日志）。
+    // 这一步是"模型到底答了没、答的东西能不能解析"的唯一可观测点：
+    // rawChars>0 而 parsed=0 时，要么模型确实说"没有"，要么输出没被解析出来。
+    if (parsed.candidates.length === 0 && parsed.rejected.length === 0) {
+      log.info('review chunk yielded nothing', {
+        rawChars: String(raw || '').length,
+        looksLikeJson: /\[\s*[{[]/.test(String(raw || '')),
+      });
+    } else {
+      log.info('review chunk parsed', { rawChars: String(raw || '').length, parsed: parsed.candidates.length });
+    }
     for (const candidate of parsed.candidates) {
       const span = { start: candidate.start, end: candidate.start + candidate.wrong.length };
       // 保护区（代码块 / URL）：与扫描器同一套判据，不在这里提候选。
