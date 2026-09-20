@@ -163,7 +163,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       'kb.workbench.external_source': '外部来源',
       'kb.workbench.group_external': '外部来源',
       'kb.workbench.group_personal': '个人知识库',
-      'kb.workbench.group_shared': '共享知识库',
+      'kb.workbench.group_shared': '待开发',
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
@@ -286,7 +286,9 @@ describe('KB workbench (S1 skeleton)', () => {
     });
     expect(els['kb-wb-tree'].innerHTML).toContain('挑战资料');
     expect(els['kb-wb-tree'].innerHTML).toContain('个人知识库');
-    expect(els['kb-wb-tree'].innerHTML).toContain('共享知识库');
+    // 共享知识库已暂停：库树里的这个**分组标签**统一标"待开发"（9.17 会议 P1）
+    expect(els['kb-wb-tree'].innerHTML).toMatch(/kb-tree-group-name">待开发</);
+    // 注：分组右侧的「+ 创建共享知识库」按钮本轮不动（它是动作入口，不在本次两条 P1 范围内）
     expect(els['kb-wb-tree'].innerHTML).toContain('外部来源');
     expect(els['kb-wb-tree'].innerHTML).toContain('飞书 Wiki');
     expect(els['kb-wb-tree'].innerHTML).not.toContain('data-kb-lib="external"');
@@ -307,7 +309,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-lib-name'].textContent).toBe('飞书 Wiki');
     expect(els['kb-wb-lib-tag'].textContent).toBe('外部来源');
     expect(els['kb-wb-owner-name'].textContent).toBe('飞书 Wiki');
-    expect(els['kb-wb-share'].style.display).toBe('none');
+    // 外部来源只读：分享/双人整块（按钮 + chip）一并收掉
+    expect(els['kb-wb-share-wrap'].style.display).toBe('none');
     expect(els['kb-wb-more-btn'].style.display).toBe('none');
     expect(els['kb-wb-import'].style.display).toBe('none');
   });
@@ -623,8 +626,26 @@ describe('KB workbench (S1 skeleton)', () => {
       expect(els['kb-wb-tree'].innerHTML).toContain('团队空间');
     });
     expect(els['kb-wb-tree'].innerHTML).toContain('data-kb-space="sp1"');
-    expect(els['kb-wb-tree'].innerHTML).toContain('共享');
+    expect(els['kb-wb-tree'].innerHTML).toContain('待开发');
     expect(els['kb-wb-tree'].innerHTML).not.toContain('空间库 · S4 上线');
+  });
+
+  it('个人知识库下不出现"分享/双人"入口，共享知识库下保留（9.17 会议 P1）', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    // 默认选中的是个人库 → 分享/双人整块收起（个人库单用户，挂着只会误导）
+    await vi.waitFor(() => {
+      expect(els['kb-wb-lib-tag'].textContent).toBe('个人知识库');
+    });
+    expect(els['kb-wb-share-wrap'].style.display).toBe('none');
+
+    // 切到共享知识库（空间）：入口回来，且库头标签统一标"待开发"
+    const [spaceRow] = els['kb-wb-tree'].querySelectorAll('[data-kb-space]');
+    spaceRow._listeners.click();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-lib-tag'].textContent).toBe('待开发');
+    });
+    expect(els['kb-wb-share-wrap'].style.display).toBe('');
   });
 
   it('collapses the side panel and reveals the floating expand handle (round trip)', async () => {

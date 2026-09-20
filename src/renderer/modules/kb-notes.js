@@ -520,7 +520,7 @@
           ${personal.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">个人知识库</div>${personal.map((l) =>
             `<div class="kb-lib-picker-item" data-kind="lib" data-id="${_esc(l.id)}"><span class="kb-lib-picker-ico">📚</span><span>${_esc(l.name)}</span></div>`
           ).join('')}</div>` : ''}
-          ${spaces.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">共享知识库</div>${spaces.map((s) =>
+          ${spaces.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">待开发</div>${spaces.map((s) =>
             `<div class="kb-lib-picker-item" data-kind="space" data-id="${_esc(s.space_id)}"><span class="kb-lib-picker-ico">🌐</span><span>${_esc(s.name || s.space_id)}</span></div>`
           ).join('')}</div>` : ''}
         </div>
