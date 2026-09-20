@@ -75,7 +75,7 @@ export function personalStatementsToProposals(
       deltaA: 'unknown',
       outcome: 'met_expected',
       confidence: 0.9,
-      source: 'review',
+      source: 'preference_scan',
     },
   }));
 }

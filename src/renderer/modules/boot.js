@@ -209,12 +209,59 @@ async function bootApp() {
 // via `document.body.classList.contains('is-dev')`. Used by skills / agents
 // grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
 // item on custom cards.
+//
+// 顺带做 dev 半更新检测：main 侧 `src/main/**/*.ts` 是进程启动时由 tsx 加载的
+// （无编译步骤），而本渲染层的 .js 每次刷新窗口都会重读磁盘。若磁盘上的 main
+// 源码比主进程启动还新，就会出现"界面是新代码、主进程是旧代码"——新参数会被
+// 旧主进程静默忽略（真机事故：kb.mindmap 的 doc 参数被忽略 → 整库脑图冒充
+// "本文档脑图"）。这里显式提示 + 一键重启，把静默故障变成可见问题。
 async function _stampSettingsVersion() {
   if (!window.cogseed || typeof window.cogseed.env !== 'function') return;
   try {
     const env = await window.cogseed.env();
     if (env && env.isDev) document.body.classList.add('is-dev');
+    if (env && env.mainSourceStale) _showStaleMainBanner(env);
   } catch (_) { /* ignore — non-critical */ }
+}
+
+// Dev-only 提示条：复用 model-guard 的横幅样式与插槽（同一位置、同一视觉语言，
+// 不新增样式与 i18n key）。文案是开发态信息，按本仓库既有 dev 文案惯例用中文。
+function _showStaleMainBanner(env) {
+  try {
+    if (sessionStorage.getItem('stale-main-banner-dismissed') === '1') return;
+    if (document.getElementById('stale-main-banner')) return;
+    const slot = document.querySelector('#model-guard-slot');
+    if (!slot) return;
+    const changedAt = env.mainSourceChangedAt ? String(env.mainSourceChangedAt).slice(11, 19) : '?';
+    const el = document.createElement('div');
+    el.className = 'model-guard-banner';
+    el.id = 'stale-main-banner';
+    el.dataset.staleSince = changedAt;
+    // 控件走共享原语（护栏禁止裸控件）；本处晚于 ui-button.js 加载，原语必已就绪
+    el.innerHTML = `
+      ${window.uiIconButton({ label: '本次运行内忽略', icon: 'x', className: 'model-guard-dismiss', attrs: { title: '本次运行内忽略' } })}
+      <span class="model-guard-icon" aria-hidden="true"></span>
+      <span class="model-guard-copy">
+        <strong class="model-guard-title">主进程代码已过期（改动未生效）</strong>
+        <span class="model-guard-text">磁盘上的 src/main 代码在 ${escapeHtml(changedAt)} 有更新，比当前进程启动更晚。此时界面已是新代码、主进程还是旧代码：新功能的参数会被静默忽略（例如"生成脑图（本文档）"可能退回整库）。点右侧重启即可生效。</span>
+      </span>
+      ${window.uiButton({ label: '立即重启', role: 'primary', size: 'sm', className: 'model-guard-cta' })}
+    `;
+    const ctaButton = el.querySelector('.model-guard-cta');
+    if (ctaButton) ctaButton.addEventListener('click', () => {
+      // 走应用自己的 dev 重启通道（shell 出 run.sh/run.cmd，带上依赖自愈），
+      // 而不是本模块直接杀进程。
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        window.cogseed.invoke('cogseed.relaunch').catch(() => { /* 失败则用户手动重启 */ });
+      }
+    });
+    const dismissButton = el.querySelector('.model-guard-dismiss');
+    if (dismissButton) dismissButton.addEventListener('click', () => {
+      try { sessionStorage.setItem('stale-main-banner-dismissed', '1'); } catch (_) { /* ignore */ }
+      el.remove();
+    });
+    slot.appendChild(el);
+  } catch (_) { /* 提示条失败绝不能影响启动 */ }
 }
 
 // One-shot rename of legacy brand-prefixed localStorage keys
@@ -417,20 +464,20 @@ function setView(view, cid, opts = {}) {
   if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
   const openPersonalOntology = view === 'personal-ontology';
   const openLegacyAgentDashboard = view === 'dashboard';
-  const openLegacyAgentSettings = view === 'agents';
+  const openLegacyAgentConnections = view === 'agents';
   // Keep deep links and persisted callers using the pre-unification routes
   // inside Run Center. The Run Center controller owns the secondary mode/tab
   // mapping, while boot only needs to select the shared panel.
   const legacyRunCenterView = ['overview', 'board', 'runs', 'tasks', 'sessions', 'history', 'execution', 'collaboration'].includes(view)
     ? view : null;
-  // Keep `agents` out of the direct-route list because that route still owns
-  // the global Connections/Agents surface outside Run Center.
+  // Keep `agents` out of the direct-route list because that route opens the
+  // global Connections/Agents surface outside Run Center.
   const requestedRunCenterView = openLegacyAgentDashboard ? 'agents' : opts.runCenterView;
   const runCenterInitialView = legacyRunCenterView || requestedRunCenterView;
   if (openPersonalOntology) view = 'recall';
   if (openLegacyAgentDashboard) view = 'run-center';
   if (legacyRunCenterView) view = 'run-center';
-  if (openLegacyAgentSettings) view = 'settings';
+  if (openLegacyAgentConnections) view = 'connections';
   if (view === 'evolution') view = 'skills';
   if (view !== 'run-center' && typeof window.stopRunCenterWatch === 'function') {
     window.stopRunCenterWatch();
@@ -610,7 +657,9 @@ function setView(view, cid, opts = {}) {
       if (currentView !== 'connections' && currentView !== 'connectors') return;
       if (typeof initConnections === 'function') initConnections();
       else if (typeof window.initConnections === 'function') window.initConnections();
-      if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
+      if (openLegacyAgentConnections && typeof activateConnectionsTab === 'function') {
+        activateConnectionsTab('agents');
+      } else if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
         activateConnectionsTab('mcp');
       }
     });
@@ -654,9 +703,7 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('settings-tab-load', () => {
       _loadViewFeature('settings', 'settings', () => {
         if (typeof loadSettings === 'function') {
-          const settingsTab = openLegacyAgentSettings ? 'configuration' : opts.settingsTab;
-          const settingsAnchor = openLegacyAgentSettings ? 'agents' : opts.settingsAnchor;
-          Promise.resolve(loadSettings({ tab: settingsTab, anchor: settingsAnchor }))
+          Promise.resolve(loadSettings({ tab: opts.settingsTab, anchor: opts.settingsAnchor }))
             .catch((e) => _bootLog.warn('settings page load failed', { error: (e && e.message) || String(e) }));
         }
       });

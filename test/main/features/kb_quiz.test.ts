@@ -184,7 +184,7 @@ describe('kbQuiz', () => {
       let resolveCompletion: (v: any) => void = () => {};
       const complete = vi.fn(() => new Promise((resolve) => { resolveCompletion = resolve; }));
       const pending = kbQuiz('u1', { dir: 'lib' }, { complete });
-      await vi.advanceTimersByTimeAsync(120 * 1000 + 10);
+      await vi.advanceTimersByTimeAsync(180 * 1000 + 10);
       const res = await pending;
       expect(res.source).toBe('degraded');
       expect(res.reason).toBe('timeout');

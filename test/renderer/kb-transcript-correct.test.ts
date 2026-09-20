@@ -19,6 +19,7 @@ import type { GlossaryEntry } from '../../src/main/features/transcript_glossary'
 
 const root = path.resolve(__dirname, '../..');
 const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'utf8');
+const panelSrc = readSrc('renderer/modules/kb-transcript-correct.js');
 
 const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as {
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
@@ -50,7 +51,7 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
-  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; message?: string };
+  classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; existingPath?: string; message?: string };
   riskKey: (l: string) => string;
 };
 
@@ -170,6 +171,40 @@ describe('清理版保存路径与命名', () => {
     expect(panel.nextCandidateName(base, 0)).toBe(base);
     expect(panel.nextCandidateName(base, 1)).toBe('1/站会-清理版-2.txt');
     expect(panel.nextCandidateName(base, 2)).toBe('1/站会-清理版-3.txt');
+  });
+});
+
+describe('另存后的库列表刷新与"已有文件"告知（真机反馈：另存了却找不到）', () => {
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('去重命中时把已有文件的确切路径带出来（只说"在某个目录下"用户照样找不到）', () => {
+    const verdict = panel.classifySaveResult({
+      ok: false,
+      code: 'duplicate_content',
+      error: '相同内容已存在',
+      existingDir: '文字转写',
+      existingPath: '文字转写/文字转写_ECS9点30早会_36696491729-清理版.txt',
+    });
+    expect(verdict.kind).toBe('duplicate');
+    expect(verdict.existingPath).toBe('文字转写/文字转写_ECS9点30早会_36696491729-清理版.txt');
+    expect(verdict.existingDir).toBe('文字转写');
+  });
+
+  it('main 没给 existingPath 时不编造，缺省为空串', () => {
+    expect(panel.classifySaveResult({ ok: false, code: 'duplicate_content' }).existingPath).toBe('');
+  });
+
+  it('写入方保存成功后必须显式请知识库重载（列表渲染的是旧树快照）', () => {
+    // 两处另存（清理版 / 附记）都得通知，否则"已另存：…"和列表对不上
+    const notifyCalls = source.match(/notifyLibraryChanged\(\);/g) || [];
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(3); // 成功 / 去重 / 附记
+    expect(source).toMatch(/function notifyLibraryChanged\(\)[\s\S]{0,600}root\.loadContexts/);
+    expect(source).toMatch(/function notifyLibraryChanged\(\)[\s\S]{0,600}root\.renderKbWorkbench/);
+  });
+
+  it('去重提示优先给文件名，拿不到才退回目录级文案', () => {
+    expect(source).toContain("t('kb.transcriptCorrect.save_duplicate_file'");
+    expect(source).toContain("t('kb.transcriptCorrect.save_duplicate_dir'");
   });
 });
 
@@ -358,7 +393,8 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
       return found.length ? found[found.length - 1] : '';
     };
     expect(roles('apply')).toContain('primary');
-    expect(roles('revert')).toContain('secondary');
+    // 「回滚」已并入「对照原文」：不再有独立按钮（其入口在对照弹窗底部）
+    expect(source).not.toContain("data-atc-action': 'revert'");
     expect(roles('notes')).toContain('ghost');
     expect(roles('compare-search')).toContain('ghost');
   });
@@ -368,12 +404,17 @@ describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
     expect(style).toMatch(/\.kb-atc__row \{[^}]*border-bottom: 1px solid var\(--line-default\)/);
   });
 
-  it('范围/开关走共享组件：uiSegmentedControl + uiCheckbox，且不再有页面级 .ui-button 覆盖', () => {
-    // 互斥范围用共享分段控件，选中态由 value 驱动（不再靠 primary/ghost 互换）
-    expect(source).toContain('root.uiSegmentedControl({');
-    expect(source).toContain("value: state.scopeChoice");
-    // 每个分段项原样透传点击委托所需的 data-* 属性
-    expect(source).toMatch(/attrs: \{ 'data-atc-action': 'scope', 'data-atc-scope'/);
+  it('「接受范围」三档已删除；开关仍走共享组件，且不再有页面级 .ui-button 覆盖', () => {
+    // 分段控件、范围状态、setScope 调用都已移除——它要么是 no-op（默认），
+    // 要么依赖一个从未被发送过的 source（meeting_accept），实际不生效。
+    expect(source).not.toContain('state.scopeChoice');
+    expect(source).not.toContain('root.uiSegmentedControl(');
+    expect(source).not.toContain('transcript.glossary.setScope');
+    expect(source).not.toContain("'data-atc-scope': option.value");
+    // 「拟主题标题」按钮仍保留在同一个宿主容器里（场景标签行已整体删除）
+    expect(source).toContain('data-atc-scope>');
+    expect(source).toContain("data-atc-action': 'suggest-headings'");
+    expect(source).not.toContain('scenarioControlHtml');
     // 开关用共享复选框（<label> 包裹，沿用组件预览页的既有用法）
     expect(source).toContain('root.uiCheckbox({');
     expect(source).toContain('kb-atc__scope-toggle');
@@ -462,7 +503,7 @@ describe('locale 覆盖', () => {
     'title', 'meta', 'scan', 'scanning', 'rescan', 'scan_done', 'scan_failed',
     'accept', 'accepted', 'ignore', 'apply', 'applying', 'apply_done', 'apply_failed',
     'summary', 'pending_high', 'applied_summary', 'applied_deleted', 'applied_pending',
-    'retention', 'over_rewrite', 'preview', 'preview_title', 'save', 'saved', 'save_failed',
+    'retention', 'over_rewrite', 'save', 'saved', 'save_failed',
     'revert', 'revert_title', 'revert_ok', 'revert_mismatch', 'revert_failed',
     'add_entry', 'wrong', 'correct', 'kind', 'add', 'added', 'add_failed', 'need_both', 'reject_digits',
     'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
@@ -480,13 +521,12 @@ describe('locale 覆盖', () => {
     'issue_suspects_found', 'issue_suspects_none', 'issue_suspects_failed', 'issue_suspect_row',
     'issue_mark', 'issue_unmark', 'issue_badge', 'issue_cancel', 'issue_at', 'issue_empty',
     'issue_list_title', 'issue_summary', 'issue_reason_unknown_entity', 'issue_reason_ambiguous_name',
-    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable',
+    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable', 'issue_reason_model_candidate',
     // 接受的三个动作 + 对照视图
     'more', 'restore', 'reopen_row', 'restored', 'ignored_done', 'ignore_failed', 'group_ignored',
     'denied', 'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed',
     'denied_reason_word_boundary', 'denied_reason_overlapping_span', 'denied_reason_protected_region',
-    'scope_label', 'scope_keep', 'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
-    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder', 'add_allow_context',
+    'add_allow', 'add_allow_placeholder', 'add_allow_context',
     'add_allow_need_term', 'add_allow_done', 'add_allow_failed', 'add_allow_existing', 'remove',
     'remove_allow_done', 'remove_allow_failed', 'rename_correct', 'rename_done', 'rename_failed',
     'rename_need_value', 'confirm', 'cancel', 'no_context',
@@ -495,14 +535,19 @@ describe('locale 覆盖', () => {
     'merge_on', 'merge_off', 'merged_blocks',
     'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
     'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
-    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_adopt', 'llm_found', 'llm_rejected',
-    'llm_no_model', 'llm_no_allowed', 'llm_no_suspects', 'llm_none', 'llm_failed',
-    'llm_adopted', 'llm_adopt_failed',
+    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_flag', 'llm_found', 'llm_rejected',
+    'llm_no_model', 'llm_none', 'llm_failed',
+    'llm_flagged', 'llm_flag_failed', 'llm_flag_no_span', 'llm_outside_allowlist',
+    'llm_outside_count', 'llm_scope_note',
+    // 「结果可能不全」必须能说出来（分段上限 / 单段调用失败）
+    'llm_empty_text', 'llm_model_failed', 'llm_truncated', 'llm_chunks_failed',
     'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
     'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
     // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
     'panel_hint', 'meta_full',
+    // 另存去重时指出确切已有文件（2026-09-16：只说目录级，用户找不到）
+    'save_duplicate_file',
   ];
 
   for (const lang of locales) {
@@ -540,6 +585,35 @@ describe('源码契约', () => {
     // 清理版文本只来自主进程：面板不得自己往文本里拼标记
     expect(source).not.toMatch(/cleanedText\s*=\s*[^;]*【转写存疑】/);
     expect(source).toMatch(/state\.cleanedText = String\(result\?\.result\?\.text/);
+  });
+
+  /**
+   * 模型候选只能"标待核"——这条是本次改动的核心，必须钉死：
+   * 面板里**任何**把模型候选写进词表的路径都不允许存在。此前
+   * 「采纳为词条」直接调 `transcript.glossary.upsert`，等于让模型的判断
+   * 立刻变成扫描规则。
+   */
+  it('模型候选只标待核：走 flagCandidates + 挂 model_candidate，且不再有"采纳为词条"', () => {
+    expect(source).toContain("'transcript.correct.flagCandidates'");
+    expect(source).toMatch(/reason: 'model_candidate'/);
+    // 旧的采纳路径必须彻底消失（属性、函数、按钮文案三处）
+    expect(source).not.toContain('data-atc-llm-adopt');
+    expect(source).not.toContain('adoptLlmCandidate');
+    expect(source).not.toContain("llm_adopt'");
+    // 模型候选那一行的动作按钮 = 标待核
+    expect(source).toMatch(/data-atc-llm-flag/);
+  });
+
+  it('候选落词表必须由人显式确认：面板不提供任何"候选直接入表"的通道', () => {
+    // 面板里唯一允许的 upsert 是**人工新增词条**表单（runAddEntry）。
+    // 把 upsert 调用点逐个找出来，确认里面没有候选相关的调用。
+    const upsertCalls = source.match(/'transcript\.glossary\.upsert',\s*\{[\s\S]{0,400}?\}\)/g) || [];
+    expect(upsertCalls.length).toBeGreaterThanOrEqual(1);
+    for (const call of upsertCalls) {
+      expect(call).not.toMatch(/candidate/i);
+    }
+    // 候选的入表动作只存在于词表管理页，面板里不得出现
+    expect(source).not.toContain('adoptCandidate');
   });
 
   it('对照视图在模态内提供回滚，且分段只吃 offsetMap（不另算 diff）', () => {
@@ -636,6 +710,61 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('data-anchor-view-correct');
     expect(viewer).toContain('KbTranscriptCorrect?.mount');
     expect(viewer).toContain('destroyCorrection()');
+  });
+
+  it('场景标签已整体删除（控件、归一函数、docTags 接线一并移除）', () => {
+    expect(panelSrc).not.toContain('scenarioControlHtml');
+    expect(panelSrc).not.toContain('normalizeScenarioTags');
+    expect(panelSrc).not.toContain('state.scenarioTags');
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
+    // 建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId
+    const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(upserts).toHaveLength(1);
+    for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
+    // 模型候选那条路已改走候选区：只标待核、绝不写词表（原先它也走 upsert），同样要带 docId
+    const flags = [...panelSrc.matchAll(/transcript\.correct\.flagCandidates', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(flags).toHaveLength(1);
+    for (const payload of flags) expect(payload).toContain('docId: ctx.docId');
+    // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
+    expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
+  });
+
+  it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'preview'");
+    expect(panelSrc).not.toMatch(/kind === 'preview'/);
+    // openTextModal 仍被「回滚」复用（回滚后展示原文），不能连坐删除
+    expect(panelSrc).toMatch(/function openTextModal\(title, text\)/);
+    expect(panelSrc).toMatch(/openTextModal\(\s*\n\s*t\('kb\.transcriptCorrect\.revert_title'/);
+    // 「回滚」只剩对照弹窗底部这一个入口
+    expect(panelSrc).toMatch(/\{ id: 'revert', label: t\('kb\.transcriptCorrect\.revert', '回滚'\), role: 'ghost', size: 'sm' \}/);
+    // 弹窗 resolve 的是 { value, reason }：写成 result.id 恒为 undefined ⇒ 动作永不执行
+    expect(panelSrc).not.toMatch(/'action' && result\?\.id/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'revert'/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'save-notes'/);
+  });
+
+  it('弹窗结果只能 await 弹窗本身（uiModal 没有 .result；await undefined 会立即通过）', () => {
+    // 真因：`await modal.result` === `await undefined` ⇒ 弹窗还开着就被当成"用户已关闭"，
+    // 于是「对照」里的回滚、「清理附记」里的另存、「拟主题标题」里的采用全都不执行
+    // ——真机表现统一为"按钮点了没反应"。
+    expect(panelSrc).not.toMatch(/modal\.result/);
+    expect(panelSrc).toMatch(/await modal;/);
+    // 把契约钉在 uiModal 上：它返回 Promise 本体（带 close/overlay/dialog），没有 result 字段
+    expect(readSrc('renderer/modules/ui-modal.js'))
+      .toMatch(/Object\.assign\(result, \{ close, overlay, dialog \}\)/);
+  });
+
+  it('弹窗内的动作必须自带点击委托（弹窗挂 body，面板容器的委托收不到）', () => {
+    // 「拟主题标题」的采用按钮渲染在 uiModal 里（document.body 下，见 ui-modal.js），
+    // 只挂容器委托 = 点「采用」没反应（真机反馈）
+    expect(panelSrc).toMatch(/dialog\.addEventListener\('click', onClick\)/);
+    expect(panelSrc).toMatch(/dialog\.removeEventListener\('click', onClick\)/);
+    // 采用态反馈不得用 textContent 覆盖共享按钮内部结构（会冲掉 label span、
+    // role class 也永远停在 secondary）
+    expect(panelSrc).not.toMatch(/headingAdopt\.textContent =/);
+    expect(panelSrc).toMatch(/headingAdopt\.outerHTML = button\(/);
   });
 
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {

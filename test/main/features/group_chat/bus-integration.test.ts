@@ -362,6 +362,10 @@ async function createDelegatedAbilityAsset(
   });
   const asset = (await candidates.promoteRecallCandidate(TEST_UID, promoted.id, {
     actor: "user",
+    // forceCreateSimilar（2026-09-17 修）：本分支新增的防分裂闸门会拦下
+    // 同模板造数（语义相似≈0.9+）。这里就是"用户已确认要新条目"的造数
+    // 语义，走闸门的正当逃生口，而不是给闸门开洞。
+    forceCreateSimilar: true,
     ...(scopePolicy ? { scopePolicy } : {}),
   })).asset;
   // Explicit grants are an active runtime path, so the fixture must be above
