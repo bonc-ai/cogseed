@@ -135,15 +135,16 @@ describe('recall candidate pool renders from capability, not raw status', () => 
   });
 
   it('treats a candidate without capabilities as read-only instead of guessing', () => {
-    // 编辑/晋升/决策入口都以 capabilities 为前置条件，缺能力不渲染。
-    // 2026-09-20：canPromote / canDefer / canReject 统一走 core 里的 `caps` 归一化
-    // （capability 明确为 false 才隐藏，缺失时不猜）；这三个语义的真实渲染结果由
-    // recall-asset-rating-gate.test.ts 用真实现驱动断言。
-    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canEdit');
+    // 编辑/晋升/决策入口都以 capabilities 为前置条件，**缺失即只读**。
+    // 2026-09-20：同一函数里原来的三种读法（`capabilities && …` / 真值 / `!== false`）
+    // 统一成一组 canX 常量——`!== false` 那种写法在 capabilities 缺失时会渲染出
+    // 「稍后处理 / 拒绝」，正是它要防的死按钮。真实渲染结果（含"缺失"这一分支）
+    // 由 recall-asset-rating-gate.test.ts 用真实现驱动断言。
     expect(viewsSource).toContain('const caps = candidate.capabilities || {}');
-    expect(viewsSource).toContain('caps.canPromote');
-    expect(viewsSource).toContain('caps.canDefer !== false');
-    expect(viewsSource).toContain('caps.canReject !== false');
+    expect(viewsSource).toContain('const canEdit = !!caps.canEdit');
+    expect(viewsSource).toContain('const canPromote = !!caps.canPromote');
+    expect(viewsSource).toContain('const canDefer = !!caps.canDefer');
+    expect(viewsSource).toContain('const canReject = !!caps.canReject');
   });
 });
 
@@ -188,7 +189,7 @@ describe('recall candidate detail renders from capability', () => {
   });
 
   it('keeps an expired candidate read-only', () => {
-    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canEdit');
+    expect(viewsSource).toContain('const canEdit = !!caps.canEdit');
   });
 
   it('blocks confirmation while evidence is insufficient and says why', () => {
@@ -197,7 +198,7 @@ describe('recall candidate detail renders from capability', () => {
   });
 
   it('keeps the save-only entry away from read-only candidates', () => {
-    expect(viewsSource).toContain('caps.canPromote');
+    expect(viewsSource).toContain('const canPromote = !!caps.canPromote');
   });
 
   it('says why a failed candidate failed instead of showing a dead button', () => {
