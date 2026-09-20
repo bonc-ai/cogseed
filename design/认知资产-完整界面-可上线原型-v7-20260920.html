@@ -404,21 +404,21 @@ let srcIssues = [{n:'飞书连接器',k:'连接器',w:'读取失败',act:['retry
 /* 个人本体：分组 → 字段 → 值（与资产是两套数据，各自有各自的动作） */
 let oto = [
   {g:'身份',items:[
-    {id:'o1',f:'身份',t:'CogSeed 的开发者，大二在读实习生',src:'会话沉淀'},
-    {id:'o2',f:'学业方向',t:'计算机科学',src:'模板安装'},
+    {id:'o1',f:'身份',t:'CogSeed 的开发者，大二在读实习生',src:'候选'},
+    {id:'o2',f:'学业方向',t:'计算机科学',src:'导入'},
   ]},
   {g:'偏好',items:[
-    {id:'o3',f:'回复风格',t:'中文简洁回复，表格旁附通俗说明，不用比喻',src:'会话沉淀'},
-    {id:'o4',f:'表达方式',t:'专业术语首次出现时用一句话白话解释',src:'你教的'},
+    {id:'o3',f:'回复风格',t:'中文简洁回复，表格旁附通俗说明，不用比喻',src:'候选'},
+    {id:'o4',f:'表达方式',t:'专业术语首次出现时用一句话白话解释',src:'手动'},
   ]},
   {g:'规矩',items:[
-    {id:'o5',f:'工作方式',t:'评审 → 先讲产品模型，再谈实现细节',src:'你教的'},
-    {id:'o6',f:'回答口径',t:'配置或数值问题 → 按内部技术口径回答，不按终端用户口径',src:'会话沉淀'},
+    {id:'o5',f:'工作方式',t:'评审 → 先讲产品模型，再谈实现细节',src:'手动'},
+    {id:'o6',f:'回答口径',t:'配置或数值问题 → 按内部技术口径回答，不按终端用户口径',src:'候选'},
   ]},
   {g:'事实',items:[
-    {id:'o7',f:'饮食禁忌',t:'对花生过敏',src:'对话里记的'},
-    {id:'o8',f:'常住地',t:'通常在北京，偶尔上海出差',src:'对话里记的',priv:true},
-    {id:'o9',f:'常住地',t:'常住上海',src:'对话里记的'},
+    {id:'o7',f:'饮食禁忌',t:'对花生过敏',src:'候选'},
+    {id:'o8',f:'常住地',t:'通常在北京，偶尔上海出差',src:'候选',priv:true},
+    {id:'o9',f:'常住地',t:'常住上海',src:'候选'},
   ]},
 ];
 let otoProposal = {id:'op1',g:'事实',f:'常用工具',t:'你和团队日常用飞书沟通'};
@@ -1105,14 +1105,14 @@ function teachSave(){
   const el=$('teach-in'); const v=(el.value||'').trim();
   if(!v){toast('先写点什么');return}
   const isRule=/→|->/.test(v), g=isRule?'规矩':'事实';
-  oto.find(x=>x.g===g).items.push({id:'o'+(oid++),f:isRule?'工作方式':'新记的',t:v,src:'你教的'});
+  oto.find(x=>x.g===g).items.push({id:'o'+(oid++),f:isRule?'工作方式':'新记的',t:v,src:'手动'});
   el.value='';renderOto();
   toast(isRule?'已按规则保存（A → B）：将作为规则进入世界模型':'已记住');
 }
-function otoSaveEdit(id){const it=otoItem(id);const v=($('oto-in')?.value||'').trim();if(!v)return;it.t=v;it.src='你改的';otoEditId=null;renderOto();toast('已更新')}
+function otoSaveEdit(id){const it=otoItem(id);const v=($('oto-in')?.value||'').trim();if(!v)return;it.t=v;it.src='手动';otoEditId=null;renderOto();toast('已更新')}
 function otoPriv(id){const it=otoItem(id);it.priv=!it.priv;otoMenu=null;renderOto();toast(it.priv?'已设为仅自己可见：不再进入任务自动注入与世界模型':'已取消仅自己可见')}
 function otoDel(id){const g=otoGroupOf(id);g.items=g.items.filter(i=>i.id!==id);otoMenu=null;renderOto();toast('已删除，不再影响以后的对话')}
-function otoAcceptProposal(){oto.find(g=>g.g===otoProposal.g).items.push({id:'o'+(oid++),f:otoProposal.f,t:otoProposal.t,src:'对话里记的'});otoProposal=null;renderOto();toast('已写进「事实」组')}
+function otoAcceptProposal(){oto.find(g=>g.g===otoProposal.g).items.push({id:'o'+(oid++),f:otoProposal.f,t:otoProposal.t,src:'候选'});otoProposal=null;renderOto();toast('已写进「事实」组')}
 function otoRejectProposal(){otoProposal=null;renderOto();toast('好的，这条不留')}
 function otoResolveConflict(){
   const sel=document.querySelector('input[name=cf]:checked'); if(!sel){toast('先选一条');return}

@@ -55,7 +55,8 @@
   <h3>A2 · 个人本体抽屉（树干点开）</h3>
   <table>
     <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
-    <tr><td class="c">教它一件事 + 记住</td><td>含「→」存成规矩，其余存事实</td><td><code>personalOntology.groups.fields.append</code> 3587（source=手动）；规则值提示「已按规则保存（A → B）」R4:1133</td><td>③</td></tr>
+    <tr><td class="c">每条的一句正文 + 来源小字（候选 / 手动 / 导入 / 智能）+ 字段名</td><td>—</td><td>值行＝值 + 来源 + 一个状态点 R4:876-903；来源词表固定四值 <code>FIELD_VALUE_SOURCES=['候选','手动','导入','智能']</code>（<code>personal_ontology_groups.ts:59</code>，非法值归一成「手动」）</td><td>②</td></tr>
+    <tr><td class="c">教它一件事 + 记住</td><td>含「→」存成规矩，其余存事实（来源落「手动」）</td><td><code>personalOntology.groups.fields.append</code> 3587 · R4:1133；规则值提示「已按规则保存（A → B）」</td><td>③</td></tr>
     <tr><td class="c">「AI 想记住这条，可以吗？」好，记住 / 不要</td><td>写入该组 / 丢弃</td><td><code>candidates.confirm</code> 3550（写进指定组）/ <code>candidates.reject</code> 3558 · R4:1285-1316</td><td>②③</td></tr>
     <tr><td class="c">冲突卡「这两条说法冲突了，留哪条？」就留选中的那条 / 都留着</td><td>删掉没被选的那条值 / 保留两条</td><td>冲突台账 <code>conflicts.list</code> 3539；消解＝<code>groups.fields.removeValue</code> 3636（台账自愈 <code>ontology-conflicts.ts:246-278</code>）</td><td>内部化（只浮一句人话）</td></tr>
     <tr><td class="c">每条的「···」→ 改</td><td>就地改这条</td><td><code>groups.fields.setValue</code> 3593</td><td>③改</td></tr>
