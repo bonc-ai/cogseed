@@ -64,6 +64,32 @@ jobs:
         run: npm run builtin:manifest:check
       - name: README link gate
         run: npm run readme:check
+      # 仓库级静态不变量：test/static/ 用 fs 直接读源码，在模块图里没有边，
+      # 因此 affected-tests 的 --changed 永远选不中它们（实测 #311 改了 15 个 src 文件、
+      # 选中 369 个测试，test/static 只贡献了它自己新增的那个）。不显式跑的话，
+      # "删掉公开 AGENTS.md 的 ## Renderer 规则""KSTAR 语义又回到本地算"这类回归
+      # 只有 nightly 与 cicd 全量能发现——PR 上是绿的。实测 3 files / 16 tests ≈ 0.6s。
+      #
+      # 先查在册守卫是否还在：删守卫 = 关闸门，而 vitest 少一个文件照跑照绿
+      # （实测：删掉一个只跑剩下 2 个、exit 0），--passWithNoTests 也只挡得住"全删光"。
+      # 这份在册清单必须放在 workflow 里——放进测试文件本身是可以被一起删掉的。
+      - name: Static invariant tests
+        run: |
+          set -euo pipefail
+          inventory=(
+            test/static/agents-rules-visibility.test.ts
+            test/static/kstar-single-core.test.ts
+            test/static/task-runtime-scope-boundary.test.ts
+          )
+          missing=0
+          for f in "${inventory[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::静态守卫缺失：$f —— 删守卫等于关闸门；确需移除请在 PR 里说明并同步本清单"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+          node scripts/run-tests.mjs run test/static/ --maxWorkers=1
 
   affected-tests:
     runs-on: macos-latest
