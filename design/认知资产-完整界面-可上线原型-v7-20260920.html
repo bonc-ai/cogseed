@@ -949,6 +949,7 @@ function renderOrg(){
   w.innerHTML=`<div class="hero" style="display:flex;align-items:flex-start;gap:12px">
     <div style="flex:1"><h2>整理</h2><div class="sub">整理会使用模型额度，随时可以取消</div></div>
     <button class="tbtn" onclick="orgSettings=true;renderOrg()">⚙ 沉淀设置</button></div>
+  ${caps.some(c=>c.bucket==='active')?`<div class="note" style="margin:-10px 0 12px">有任务正在跑：这一页每 4 秒自动刷新一次。</div>`:''}
   <div class="pillbox">
     ${[['all','全部'],['attention','需要我处理'],['active','进行中'],['done','已完成'],['excluded','无需沉淀']].map(([k,l])=>`<button class="chip ${orgBucket===k?'on':''}" onclick="orgBucket='${k}';renderOrg()">${l} ${k==='all'?caps.length:inB(k)}</button>`).join('')}
   </div>
