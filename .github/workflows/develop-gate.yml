@@ -64,6 +64,11 @@ jobs:
         run: npm run builtin:manifest:check
       - name: README link gate
         run: npm run readme:check
+      # 2026-09-20 新增：硬跳过（it/test/describe.skip）必须逐条登记在
+      # test/skip-allowlist.json，未登记的一律判失败。放在 L1 是为了在**源头**
+      # 挡住"用 skip 静音"——nightly 里的同名步骤（同一份脚本）作为 L2 兜底。
+      - name: Skip 残留检查（硬跳过必须登记）
+        run: node scripts/check-skipped-tests.mjs --strict
 
   affected-tests:
     runs-on: macos-latest
