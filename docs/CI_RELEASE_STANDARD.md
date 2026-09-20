@@ -26,6 +26,8 @@
 1. 先读 `.github/workflows/develop-gate.yml`、`.github/workflows/ci.yml` 以及受影响脚本；不要凭“本地 `npm start` 正常”判断安装包正常。
 2. 运行至少 `npm run typecheck`、`npm run lint`，以及覆盖本次改动的测试文件。测试输入、路径和断言必须同时兼容 macOS 与 Windows。
 3. 提交作者邮箱只能使用 GitHub noreply 或 `business@bonc.com.cn`；提交信息、Co-authored-by 等 trailer 也不能含个人邮箱。
+   - **合并人注意**：网页 UI 生成的合并提交，其**作者邮箱取自"点合并的人"的账号设置**，与 PR 作者无关，且事后无法 amend。点合并前请开启 GitHub → Settings → Emails → **Keep my email addresses private**。见 `CONTRIBUTING.md` 的 Merge requirements 第 4 条。
+   - **已记录的唯一例外（2026-09-20）**：`184377817@qq.com` **仅对作者邮箱放行**，来源是上面那类网页合并提交（`2f5a490e` / PR #288）。它已在公开历史中且无法重写，故记入 `.github/workflows/email-gate.yml` 的允许清单；**消息体与 Co-authored-by 检查对所有提交（含合并提交）照常生效**。除该地址外不放行任何个人邮箱。
 4. PR 描述必须写明：目标分支、是否影响安装包、实际运行过的命令、尚未验证的目标平台。
 5. 不把无关功能、Dependabot 更新或大范围格式化夹带进 `develop → cicd` 晋级 PR。
 
