@@ -154,17 +154,17 @@ jobs:
       - if: steps.gate.outputs.should_run != 'false'
         run: npm run builtin:manifest:check
 
-      - name: Skip 残留检查（防 it.skip 静音）
+      # 2026-09-20 改版：原来这条只数文件数、只 ::warning、末尾恒 exit 0，且只认
+      # `.skip(`——"用 skip 静音"因此没有任何一道会自动变红的关卡（审计 ⑧6 / C9）。
+      # 现在口径：
+      #   · 硬跳过（it/test/describe.skip）必须逐条登记在 test/skip-allowlist.json，
+      #     白名单之外出现一处就判失败 —— nightly 变红，当天必须处理；
+      #   · skipIf / 条件跳过只统计并打印（平台条件跳过是正当用法，但要"看得见"）；
+      #   · 白名单里的过期条目会被提示，提醒顺手清理。
+      # 本步骤**不使用** continue-on-error：它就是那个"该红就红"的关卡。
+      - name: Skip 残留检查（防 it.skip 静音，可失败）
         if: steps.gate.outputs.should_run != 'false'
-        run: |
-          # 只告警不失败：目的是让"有人用 skip 静音"这件事当天下班前被看见
-          n=$(git grep -cE '\b(it|test|describe)\.skip\s*\(' -- test/ | wc -l | tr -d ' ')
-          echo "develop 上 it.skip / describe.skip 命中文件数：$n"
-          if [ "$n" -gt 0 ]; then
-            echo "::warning::develop 上存在 skip，请确认每一处都有正当理由并在 PR 里留痕"
-            git grep -nE '\b(it|test|describe)\.skip\s*\(' -- test/
-          fi
-          exit 0
+        run: node scripts/check-skipped-tests.mjs --strict
 
       - name: 测试用例数快照（覆盖度趋势）
         if: always() && steps.gate.outputs.should_run != 'false'
