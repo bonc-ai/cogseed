@@ -124,18 +124,23 @@ describe('模型候选：标待核 ≠ 进词表', () => {
     expect(await discard({ id: 'c_missing' }, ctx())).toMatchObject({ candidate: null });
   });
 
-  it('llmCandidates 只读不写：问完模型后词表和候选区都没变化', async () => {
+  it('llmCandidates 只读不写：模型读完给出候选，但词表和候选区都没变化', async () => {
     vi.doMock('../../../src/main/features/transcript_llm_candidates', async () => {
       const actual = await vi.importActual<any>('../../../src/main/features/transcript_llm_candidates');
       return {
         ...actual,
-        generateCandidates: async () => ({
+        // 新形态：模型读正文，返回带段数/失败数的完整结果
+        generateReviewCandidates: async () => ({
           candidates: [{
             wrong: 'roadmap', correct: 'SpeakerA', confidence: 0.9,
             reason: '人名', start: 3, pending: false, inAllowlist: true,
           }],
           rejected: [],
           outsideAllowlist: 0,
+          chunksScanned: 1,
+          chunksTotal: 1,
+          truncated: false,
+          failedChunks: 0,
         }),
       };
     });
@@ -145,6 +150,9 @@ describe('模型候选：标待核 ≠ 进词表', () => {
       { text: TEXT, docId: 'doc_1' }, ctx(),
     );
     expect(result.candidates).toHaveLength(1);
+    // 段数与已知写法数量要如实回传（UI 据此说明"读到哪了"）
+    expect(result).toMatchObject({ chunksScanned: 1, chunksTotal: 1, truncated: false, failedChunks: 0 });
+    expect(typeof result.knownCount).toBe('number');
     // 关键：产出候选不等于记账——候选区仍然是空的，词表也仍然是空的
     const listed = await (invokeHandlers['transcript.glossary.candidates'] as (p: unknown, c: unknown) => Promise<any>)({}, ctx());
     expect(listed.pending).toBe(0);

@@ -1213,8 +1213,8 @@
       })];
       buttons.push(button({
         label: state.llmBusy
-          ? t('kb.transcriptCorrect.llm_running', '正在问模型…')
-          : t('kb.transcriptCorrect.llm_ask', '让模型给候选'),
+          ? t('kb.transcriptCorrect.llm_running', '正在读正文…')
+          : t('kb.transcriptCorrect.llm_ask', '让模型读一遍找错写'),
         icon: 'brain-circuit',
         role: 'ghost',
         size: 'sm',
@@ -2223,9 +2223,13 @@
     }
 
     /**
-     * 模型候选（方案 §五 P2-1）：只对"疑似专名"问一次模型。
-     * 「已知写法」名单只是优先参考，模型可以给出名单外的写法；
-     * 无论哪种，产出都只能「标待核」——不写词表、不参与扫描替换。
+     * 模型候选（方案 §五 P2-1）：**让模型读正文找错写**。
+     *
+     * 此前是"先用词形判据挑疑似专名，挑不出就不发请求"——中文稿几乎必然挑不出，
+     * 于是模型压根没被问到，界面却像"模型给不出候选"。现在正文分段直接交给模型，
+     * 词形判据只当重点线索。
+     * 「已知写法」名单只是优先参考；无论哪种，产出都只能「标待核」——不写词表、
+     * 不参与扫描替换。
      */
     async function runLlmCandidates() {
       if (state.llmBusy || !state.scanned) return;
@@ -2241,8 +2245,22 @@
         const rejected = Array.isArray(result?.rejected) ? result.rejected.length : 0;
         const outside = Number(result?.outsideAllowlist || 0);
         const skipped = String(result?.skipped || '');
+        const scanned = Number(result?.chunksScanned || 0);
+        const total = Number(result?.chunksTotal || 0);
+        const failed = Number(result?.failedChunks || 0);
+        // 「结果可能不全」必须说出来：达到分段上限 / 有段落调用失败，都不能装作全看过。
+        const caveats = [
+          result?.truncated
+            ? t('kb.transcriptCorrect.llm_truncated', '；正文较长，本次只读到前 {scanned}/{total} 段，可再点一次继续', { scanned, total })
+            : '',
+          failed
+            ? t('kb.transcriptCorrect.llm_chunks_failed', '；有 {count} 段调用失败，结果可能不全', { count: failed })
+            : '',
+        ].join('');
         state.llmNote = state.llmCandidates.length
-          ? t('kb.transcriptCorrect.llm_found', '模型给出 {count} 条候选（已知写法 {known} 个可参考{outside}{rejected}）', {
+          ? t('kb.transcriptCorrect.llm_found', '模型读了 {scanned}/{total} 段，给出 {count} 条候选（已知写法 {known} 个可参考{outside}{rejected}）', {
+            scanned,
+            total,
             count: state.llmCandidates.length,
             known: Number(result?.knownCount || 0),
             outside: outside
@@ -2251,12 +2269,14 @@
             rejected: rejected
               ? t('kb.transcriptCorrect.llm_rejected', '，另有 {count} 条定位不到、已丢弃', { count: rejected })
               : '',
-          })
+          }) + caveats
           : (skipped === 'no_model'
             ? t('kb.transcriptCorrect.llm_no_model', '还没有配置模型，无法生成候选。')
-            : skipped === 'no_suspects'
-              ? t('kb.transcriptCorrect.llm_no_suspects', '没有发现疑似专名，不需要问模型。')
-              : t('kb.transcriptCorrect.llm_none', '模型没有给出可信候选（宁可空着，也不硬猜）。'));
+            : skipped === 'empty_text'
+              ? t('kb.transcriptCorrect.llm_empty_text', '正文是空的，没有可读的内容。')
+              : skipped === 'model_failed'
+                ? t('kb.transcriptCorrect.llm_model_failed', '模型调用失败（{count} 段都没成功），请检查模型配置后重试。', { count: failed })
+                : t('kb.transcriptCorrect.llm_none', '模型读完这几段没有发现错写（宁可空着，也不硬猜）。') + caveats);
       } catch (error) {
         log?.warn('llm candidates failed', { error: error?.message || String(error) });
         state.llmNote = t('kb.transcriptCorrect.llm_failed', '生成候选失败，请稍后重试。');
