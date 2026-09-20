@@ -54,10 +54,15 @@ export interface SpeakerMergeResult {
   speakers: string[];
 }
 
-/** 块头识别：名字（≤24 字，不含换行）+ 时间（可带日期）。 */
-const HEADER_WITH_DATE = /^(.{1,24}?)\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*$/;
-const HEADER_PIPE = /^(.{1,24}?)\s*[｜|]\s*(\d{2}:\d{2}:\d{2})\s*$/;
-const HEADER_PLAIN_TIME = /^(.{1,24}?)\s+(\d{2}:\d{2}:\d{2})\s*$/;
+/**
+ * 块头识别：名字（≤24 字，不含换行）+ 时间（可带日期）。
+ * 时间允许 **1~3 段**：腾讯会议同一份导出里整点前是相对时钟（`牛保康 02:45`），
+ * 整点后才是 `刘海运 01:00:35`。只认三段会把整点前的发言整段漏掉，与 renderer
+ * `anchored-source-view.splitDialogueBlocks` 必须保持同一套规则（两边各存一份）。
+ */
+const HEADER_WITH_DATE = /^(.{1,24}?)\s+(\d{4}-\d{2}-\d{2})[ T](\d{1,2}(?::\d{2}){1,2})\s*$/;
+const HEADER_PIPE = /^(.{1,24}?)\s*[｜|]\s*(\d{1,2}(?::\d{2}){1,2})\s*$/;
+const HEADER_PLAIN_TIME = /^(.{1,24}?)\s+(\d{1,2}(?::\d{2}){1,2})\s*$/;
 
 /** 把一行解析成块头（认不出返回 null）。 */
 export function parseHeaderLine(line: string): { speaker: string; at: string; clock: string } | null {
