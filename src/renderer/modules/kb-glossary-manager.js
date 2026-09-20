@@ -130,6 +130,33 @@
   }
 
   // ── 面板 ─────────────────────────────────────────────────────────────
+  /**
+   * 前置条件预检（纯函数，可单测）。
+   *
+   * 返回 null = 可以继续；否则返回一个必须展示给用户的原因。
+   * 存在的意义：杜绝“点了没反应也不说为什么”。每一个拦截都必须带原因，
+   * 否则用户无法区分“按钮坏了”和“前置条件没满足”。
+   */
+  function guardReason(action, snapshot) {
+    const s = snapshot || {};
+    switch (action) {
+      case 'bulk-status':
+        return s.selectedCount > 0
+          ? null
+          : { key: 'kb.glossary.select_required', fallback: '请先选择要操作的词条。' };
+      case 'save-export':
+        return s.hasExportText
+          ? null
+          : { key: 'kb.glossary.export_generate_required', fallback: '请先点「生成导出内容」，再另存。' };
+      case 'apply-import':
+        return s.hasImportPreview
+          ? null
+          : { key: 'kb.glossary.import_preview_required', fallback: '请先点「预览」确认新增/更新条数，再应用导入。' };
+      default:
+        return null;
+    }
+  }
+
   function open(options) {
     const opts = options || {};
     if (typeof root.uiModal !== 'function') throw new Error('kb glossary manager: uiModal unavailable');
@@ -137,6 +164,8 @@
 
     const state = {
       entries: [],
+      /** 待核候选（模型给的）：与词条分开存、分开显示——候选不参与扫描。 */
+      candidates: [],
       meta: { ownerNote: '', lastReconcileAt: 0 },
       filter: { search: '', kind: '', riskLevel: '', status: '' },
       selected: new Set(),
@@ -165,6 +194,7 @@
         '  <div class="kb-glo__filters" data-glo-filters></div>',
         '  <div class="kb-glo__status" data-glo-status hidden></div>',
         '  <div class="kb-glo__bulk" data-glo-bulk></div>',
+        '  <div class="kb-glo__candidates" data-glo-candidates hidden></div>',
         '  <div class="kb-glo__list" data-glo-list></div>',
         '  <details class="kb-glo__io" data-glo-io>',
         '    <summary data-glo-io-summary></summary>',
@@ -297,7 +327,13 @@
             control: { kind: 'select', value: state.filter.status, options: statusOptions },
           }),
         ].join('');
-        if (typeof root.hydrateUiFormSelects === 'function') root.hydrateUiFormSelects(host);
+        if (typeof root.hydrateUiFormSelects === 'function') {
+          root.hydrateUiFormSelects(host, {
+            'glo-kind': (value) => applyFilter('kind', value),
+            'glo-risk': (value) => applyFilter('riskLevel', value),
+            'glo-status': (value) => applyFilter('status', value),
+          });
+        }
       } catch (error) {
         log?.warn('glossary filters render failed', { error: error?.message || String(error) });
       }
@@ -431,6 +467,82 @@
 
       el.append(main, actions);
       return el;
+    }
+
+    /**
+     * 待核候选区（模型候选的唯一出口）。
+     *
+     * 为什么单独一块、且明确写"当前不生效"：候选与词条长得像（都是一对
+     * wrong → correct），但语义完全不同——词条是扫描规则，候选只是一句建议。
+     * 混进词条列表会让用户以为它已经生效了。这里只提供两个动作：
+     * 「确认入表」（变成真词条，此后才参与扫描）与「丢弃」。
+     */
+    function renderCandidates() {
+      const host = q('[data-glo-candidates]');
+      if (!host) return;
+      const pending = (state.candidates || []).filter((c) => c.state === 'pending');
+      host.textContent = '';
+      host.hidden = pending.length === 0;
+      if (!pending.length) return;
+
+      const head = document.createElement('div');
+      head.className = 'kb-glo__candidates-head';
+      const title = document.createElement('strong');
+      title.textContent = t('kb.glossary.candidates_title', '待核候选（{count} 条）', { count: pending.length });
+      head.appendChild(title);
+      const hint = document.createElement('div');
+      hint.className = 'kb-glo__preview';
+      hint.textContent = t(
+        'kb.glossary.candidates_hint',
+        '这些是模型在转写纠错里给出的候选，当前不生效、不参与扫描替换；确认入表后才会成为词条。',
+      );
+      head.appendChild(hint);
+      host.appendChild(head);
+
+      for (const candidate of pending.slice(0, 50)) {
+        const row = document.createElement('div');
+        row.className = 'kb-glo__candidate-row';
+        const main = document.createElement('div');
+        main.className = 'kb-glo__candidate-main';
+        const label = document.createElement('span');
+        label.className = 'kb-glo__candidate-label';
+        label.textContent = t('kb.glossary.candidate_pair', '{wrong} → {correct}（置信 {percent}%）', {
+          wrong: candidate.wrong,
+          correct: candidate.correct,
+          percent: Math.round((Number(candidate.confidence) || 0) * 100),
+        });
+        main.appendChild(label);
+        const meta = document.createElement('div');
+        meta.className = 'kb-glo__candidate-meta';
+        meta.textContent = [
+          candidate.inAllowlist === false
+            ? t('kb.glossary.candidate_outside_allowlist', '词表外写法')
+            : t('kb.glossary.candidate_in_allowlist', '词表已有写法'),
+          candidate.reason ? String(candidate.reason) : '',
+          candidate.context ? String(candidate.context) : '',
+        ].filter(Boolean).join(' · ');
+        main.appendChild(meta);
+        const acts = document.createElement('div');
+        acts.className = 'kb-glo__candidate-actions';
+        acts.innerHTML = [
+          button({
+            label: t('kb.glossary.candidate_adopt', '确认入表'),
+            role: 'primary',
+            size: 'sm',
+            disabled: state.busy,
+            attrs: { 'data-glo-candidate-adopt': candidate.id },
+          }),
+          button({
+            label: t('kb.glossary.candidate_discard', '丢弃'),
+            role: 'ghost',
+            size: 'sm',
+            disabled: state.busy,
+            attrs: { 'data-glo-candidate-discard': candidate.id },
+          }),
+        ].join('');
+        row.append(main, acts);
+        host.appendChild(row);
+      }
     }
 
     function renderList() {
@@ -573,14 +685,26 @@
           '</div>',
           '</div>',
         ].join('');
-        if (typeof root.hydrateUiFormSelects === 'function') root.hydrateUiFormSelects(host);
+        if (typeof root.hydrateUiFormSelects === 'function') {
+          root.hydrateUiFormSelects(host, {
+            // 同一个缺陷也波及这里：靠 dialog 委派读值 ⇒ 从未生效，
+            // 「替换」模式根本选不中（选了也回落 merge）。
+            'glo-import-mode': (value) => {
+              state.importMode = value === 'replace' ? 'replace' : 'merge';
+              state.importPreview = null;
+              renderIo();
+            },
+          });
+        }
       } catch (error) {
         log?.warn('glossary io render failed', { error: error?.message || String(error) });
       }
     }
 
     function render() {
-      for (const step of [renderMeta, renderMetrics, renderFilters, renderStatus, renderBulk, renderList, renderIo]) {
+      for (const step of [
+        renderMeta, renderMetrics, renderFilters, renderStatus, renderBulk, renderCandidates, renderList, renderIo,
+      ]) {
         try { step(); } catch (error) {
           log?.warn('glossary manager render step failed', { step: step.name, error: error?.message || String(error) });
         }
@@ -590,10 +714,18 @@
     // ── 数据动作 ────────────────────────────────────────────────────────
     async function reload() {
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.list', {});
         state.entries = Array.isArray(result?.entries) ? result.entries : [];
+        // 候选区独立通道：词条列表只含已生效规则，候选不在其中。
+        try {
+          const cand = await root.cogseed.invoke('transcript.glossary.candidates', {});
+          state.candidates = Array.isArray(cand?.candidates) ? cand.candidates : [];
+        } catch (error) {
+          log?.warn('glossary candidates load failed', { error: error?.message || String(error) });
+          state.candidates = [];
+        }
         state.meta = result?.meta && typeof result.meta === 'object'
           ? result.meta
           : { ownerNote: '', lastReconcileAt: 0 };
@@ -610,20 +742,35 @@
       }
     }
 
-    function readFilters() {
-      const search = String(dialog.querySelector('#glo-search')?.value || '');
-      const kind = String(dialog.querySelector('#glo-kind')?._uiSelectApi?.getValue?.() || '');
-      const riskLevel = String(dialog.querySelector('#glo-risk')?._uiSelectApi?.getValue?.() || '');
-      const status = String(dialog.querySelector('#glo-status')?._uiSelectApi?.getValue?.() || '');
-      return { search, kind, riskLevel, status };
+    /**
+     * 下拉筛选的写入口。
+     *
+     * 自定义 select（`_aiSelectMount`）**不派发 DOM 事件**，只在选中时调 `onChange`
+     * 回调（见 utils.js `_aiSelectPick`），所以挂在 dialog 上的 input/change 事件委派
+     * 对它永远不触发。唯一可用通道是 `hydrateUiFormSelects(host, { <id>: fn })`
+     * 的按 id 回调。
+     *
+     * 这里原本是一个**没有任何调用方**的 DOM 读函数（readFilters），于是三个筛选下拉
+     * 从头到尾没生效：改了类别/风险/状态，state.filter 不动、列表也不重渲染。
+     */
+    function applyFilter(field, value) {
+      state.filter[field] = String(value || '');
+      renderBulk();
+      renderList();
     }
 
     async function setStatusBulk(status) {
-      if (state.busy || state.selected.size === 0) return;
+      if (state.busy) return;
+      const blocked = guardReason('bulk-status', { selectedCount: state.selected.size });
+      if (blocked) {
+        setStatus(t(blocked.key, blocked.fallback), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       let updated = 0;
       try {
+        render();
         for (const id of state.selected) {
           await root.cogseed.invoke('transcript.glossary.setStatus', { id, status });
           updated += 1;
@@ -642,11 +789,17 @@
     async function deleteOne(id) {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
-        await root.cogseed.invoke('transcript.glossary.delete', { id });
+        render();
+        const result = await root.cogseed.invoke('transcript.glossary.delete', { id });
         state.selected.delete(id);
-        setStatus(t('kb.glossary.deleted', '已删除词条。'), '');
+        const missing = result?.deleted === false;
+        setStatus(
+          missing
+            ? t('kb.glossary.delete_missing', '没有删除任何词条：该词条已不存在，列表已刷新。')
+            : t('kb.glossary.deleted', '已删除词条。'),
+          missing ? 'warning' : '',
+        );
       } catch (error) {
         log?.warn('glossary delete failed', { error: error?.message || String(error) });
         setStatus(t('kb.glossary.delete_failed', '删除失败，请稍后重试。'), 'warning');
@@ -660,12 +813,22 @@
     async function toggleStatus(id, current) {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
-        await root.cogseed.invoke('transcript.glossary.setStatus', {
+        render();
+        const result = await root.cogseed.invoke('transcript.glossary.setStatus', {
           id,
           status: current === 'paused' ? 'active' : 'paused',
         });
+        if (!result?.entry) {
+          setStatus(t('kb.glossary.entry_missing', '该词条已不存在（可能已在别处删除），列表已刷新。'), 'warning');
+        } else {
+          setStatus(
+            current === 'paused'
+              ? t('kb.glossary.status_resumed_one', '已启用该词条。')
+              : t('kb.glossary.status_paused_one', '已暂停该词条。'),
+            '',
+          );
+        }
       } catch (error) {
         log?.warn('glossary status failed', { error: error?.message || String(error) });
         setStatus(t('kb.glossary.bulk_status_failed', '批量更新失败，请稍后重试。'), 'warning');
@@ -676,11 +839,59 @@
       }
     }
 
+    /**
+     * 候选 → 词条（人工确认）。这是候选唯一能影响扫描的动作，必须由人点。
+     * 采纳后重新扫描才可能替换——**候选本身在此之前一直不生效**。
+     */
+    async function adoptCandidate(id) {
+      if (state.busy) return;
+      state.busy = true;
+      try {
+        render();
+        const result = await root.cogseed.invoke('transcript.glossary.adoptCandidate', { id });
+        if (!result?.entry) {
+          const reason = String(result?.skippedReason || '');
+          setStatus(reason === 'not_pending'
+            ? t('kb.glossary.candidate_not_pending', '该候选已经处理过了。')
+            : t('kb.glossary.candidate_adopt_failed', '确认入表失败，请稍后重试。'), 'warning');
+        } else {
+          setStatus(t('kb.glossary.candidate_adopted', '已入表：{wrong} → {correct}（之后参与扫描替换）', {
+            wrong: result.entry.wrong,
+            correct: result.entry.correct,
+          }), '');
+        }
+      } catch (error) {
+        log?.warn('candidate adopt failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.candidate_adopt_failed', '确认入表失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        await reload();
+        opts.onChanged?.();
+      }
+    }
+
+    async function discardCandidate(id) {
+      if (state.busy) return;
+      state.busy = true;
+      try {
+        render();
+        await root.cogseed.invoke('transcript.glossary.discardCandidate', { id });
+        setStatus(t('kb.glossary.candidate_discarded', '已丢弃该候选（不会进词表；模型再报同一对也不会重新翻出来）。'), '');
+      } catch (error) {
+        log?.warn('candidate discard failed', { error: error?.message || String(error) });
+        setStatus(t('kb.glossary.candidate_discard_failed', '丢弃失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        await reload();
+        opts.onChanged?.();
+      }
+    }
+
     async function generateExport() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.export', {
           includePeople: state.exportIncludePeople,
         });
@@ -700,10 +911,16 @@
     }
 
     async function saveExport() {
-      if (state.busy || !state.exportText) return;
+      if (state.busy) return;
+      const blocked = guardReason('save-export', { hasExportText: Boolean(state.exportText) });
+      if (blocked) {
+        setStatus(t(blocked.key, blocked.fallback), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const stamp = new Date().toISOString().slice(0, 10);
         const targetPath = t('kb.glossary.export_filename', '转写词表-{date}.json', { date: stamp });
         const result = await root.cogseed.invoke('library.writeText', { content: state.exportText, targetPath });
@@ -751,6 +968,7 @@
       }
       if (!parsed) {
         state.importPreview = null;
+        setStatus(t('kb.glossary.import_empty', '这段内容里没有可导入的词条。'), 'warning');
         render();
         return;
       }
@@ -767,10 +985,16 @@
         setStatus(t('kb.glossary.import_invalid_json', '导入内容不是合法 JSON。'), 'warning');
         return;
       }
-      if (!parsed || !state.importPreview) return;
+      if (!parsed) return;
+      const blocked = guardReason('apply-import', { hasImportPreview: Boolean(state.importPreview) });
+      if (blocked) {
+        setStatus(t(blocked.key, blocked.fallback), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.import', {
           payload: parsed,
           mode: state.importMode,
@@ -803,8 +1027,8 @@
     async function exportPack() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.exportPack', {
           includePeople: state.exportIncludePeople,
           ownerScope: state.packScope,
@@ -830,10 +1054,14 @@
     /** 贡献包导入预览（治理闸门：先看新增/冲突/高风险/人名）。 */
     async function reviewPack() {
       const parsed = parseImportText();
-      if (!parsed) return;
+      if (!parsed) {
+        setStatus(t('kb.glossary.pack_content_required', '请先把贡献包 JSON 粘贴到下面的输入框。'), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.reviewPack', { pack: parsed });
         state.packReview = result?.review ?? null;
         setStatus('', '');
@@ -849,12 +1077,21 @@
 
     /** 导入贡献包（优先级 组织 > 团队 > 个人；本地更高时保留本地并如实计数）。 */
     async function importPack() {
-      if (state.busy || !state.packReview) return;
+      if (state.busy) return;
       const parsed = parseImportText();
-      if (!parsed) return;
+      if (!parsed) {
+        setStatus(t('kb.glossary.pack_content_required', '请先把贡献包 JSON 粘贴到下面的输入框。'), 'warning');
+        render();
+        return;
+      }
+      if (!state.packReview) {
+        setStatus(t('kb.glossary.pack_review_required', '请先点「复核」检查这份贡献包，再导入。'), 'warning');
+        render();
+        return;
+      }
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.importPack', { pack: parsed });
         setStatus(t('kb.glossary.pack_imported', '贡献包已导入：新增 {added} · 更新 {updated} · 覆盖 {overwritten} · 保留本地 {keptLocal}', {
           added: Number(result?.added || 0),
@@ -877,8 +1114,8 @@
     async function toggleQueryRewrite() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.queryRewrite.set', { enabled: !state.queryRewrite });
         state.queryRewrite = result?.enabled === true;
         setStatus(state.queryRewrite
@@ -896,8 +1133,8 @@
     async function seedInitial() {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.seedInitial', {});
         const excluded = Array.isArray(result?.excluded) ? result.excluded : [];
         setStatus(t('kb.glossary.seed_initial_done', '初始词表已补全：新增 {created} 条、更新 {updated} 条{excluded}', {
@@ -952,6 +1189,10 @@
       }
       const del = event.target.closest('[data-glo-delete]');
       if (del) { void deleteOne(del.getAttribute('data-glo-delete')); return; }
+      const candAdopt = event.target.closest('[data-glo-candidate-adopt]');
+      if (candAdopt) { void adoptCandidate(candAdopt.getAttribute('data-glo-candidate-adopt')); return; }
+      const candDiscard = event.target.closest('[data-glo-candidate-discard]');
+      if (candDiscard) { void discardCandidate(candDiscard.getAttribute('data-glo-candidate-discard')); return; }
       const action = event.target.closest('[data-glo-action]');
       if (!action) return;
       const kind = action.getAttribute('data-glo-action');
@@ -1004,12 +1245,6 @@
         renderIo();
         return;
       }
-      if (event.target.id === 'glo-import-mode') {
-        const value = String(event.target._uiSelectApi?.getValue?.() || event.target.value || 'merge');
-        state.importMode = value === 'replace' ? 'replace' : 'merge';
-        state.importPreview = null;
-        renderIo();
-      }
     }
 
     dialog.addEventListener('click', onClick);
@@ -1025,12 +1260,12 @@
   const api = {
     open,
     // 测试桥（仅纯函数）
-    __test: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf },
-    _internals: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf },
+    __test: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason },
+    _internals: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason },
   };
 
   root.KbGlossaryManager = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf };
+    module.exports = { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -5,7 +5,10 @@
  *   1. 纯函数不变量：搜索/筛选/排序、导入预览（尤其是 replace 的破坏性提示）；
  *   2. 4 份 locale 都定义了全部键（缺键界面会露 key）；
  *   3. 源码契约：控件走共享原语、只在 transcript.glossary.* 通道上操作、
- *      人名默认不导出、导入前必须先预览。
+ *      人名默认不导出、导入前必须先预览；
+ *   4. 交互失效防回归：静默 no-op（不告诉用户原因）、busy 卡死导致全部按钮永久
+ *      disabled、选中行与悬停同色导致“看不出来选中了”、自定义 select 不接线导致
+ *      筛选下拉动了列表不动。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -23,6 +26,7 @@ const manager = require('../../src/renderer/modules/kb-glossary-manager.js') as 
   };
   kindKey: (kind: string) => string;
   riskKeyOf: (risk: string) => string;
+  guardReason: (action: string, snapshot: Record<string, unknown>) => { key: string; fallback: string } | null;
 };
 
 const entry = (over: Record<string, unknown> = {}) => ({
@@ -117,12 +121,19 @@ describe('locale 覆盖（词表管理页）', () => {
     'export_duplicate', 'export_save_failed', 'import', 'import_mode', 'import_merge', 'import_replace',
     'import_preview', 'import_replace_hint', 'import_preview_btn', 'import_apply', 'import_done',
     'import_failed', 'import_invalid_json', 'unavailable',
+    'select_required', 'entry_missing', 'delete_missing', 'status_paused_one', 'status_resumed_one',
+    'export_generate_required', 'import_preview_required', 'import_empty',
+    'pack_review_required', 'pack_content_required',
     'seed_initial', 'seed_initial_done', 'seed_initial_excluded', 'seed_initial_failed',
     'qrw_on', 'qrw_off', 'qrw_enabled', 'qrw_disabled', 'qrw_failed',
     'pack_export', 'pack_exported', 'pack_export_failed', 'pack_review', 'pack_review_result',
     'pack_conflict_hint', 'pack_import', 'pack_imported', 'pack_import_failed', 'pack_invalid',
     'metrics_runs', 'metrics_no_latency', 'metrics_latency', 'metrics_ok', 'metrics_over',
     'metrics_retention', 'metrics_glossary', 'metrics_reached', 'metrics_not_reached', 'metrics_not_measurable',
+    // 待核候选区（模型候选的唯一出口：不确认不入表）
+    'candidates_title', 'candidates_hint', 'candidate_pair', 'candidate_in_allowlist',
+    'candidate_outside_allowlist', 'candidate_adopt', 'candidate_discard', 'candidate_adopted',
+    'candidate_adopt_failed', 'candidate_not_pending', 'candidate_discarded', 'candidate_discard_failed',
   ];
 
   for (const lang of locales) {
@@ -152,10 +163,32 @@ describe('源码契约', () => {
       'transcript.glossary.setStatus', 'transcript.glossary.delete', 'transcript.glossary.setOwnerNote',
       'transcript.glossary.seedInitial', 'transcript.queryRewrite.set',
       'transcript.glossary.exportPack', 'transcript.glossary.reviewPack', 'transcript.glossary.importPack',
+      'transcript.glossary.candidates', 'transcript.glossary.adoptCandidate', 'transcript.glossary.discardCandidate',
       'transcript.metrics.summary',
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);
+  });
+
+  /**
+   * 待核候选区：模型候选的唯一出口。这里的关键是"候选与词条分开"——
+   * 候选必须单独渲染、单独确认，且**没有**任何自动入表路径。
+   */
+  it('候选走独立通道，且入表只由人点「确认入表」触发', () => {
+    expect(source).toContain("'transcript.glossary.candidates'");
+    expect(source).toContain("'transcript.glossary.adoptCandidate'");
+    expect(source).toContain("'transcript.glossary.discardCandidate'");
+    // 两个动作都必须挂在按钮上，没有"自动采纳"的旁路
+    expect(source).toMatch(/data-glo-candidate-adopt/);
+    expect(source).toMatch(/data-glo-candidate-discard/);
+    // 候选不能混进词条列表：只喂 state.candidates，不 push 进 state.entries
+    expect(source).toMatch(/state\.candidates = Array\.isArray\(cand\?\.candidates\)/);
+    expect(source).not.toMatch(/state\.entries\.push\(.*candidate/i);
+  });
+
+  it('候选区明确告知"当前不生效"，避免被误当成已生效规则', () => {
+    expect(source).toMatch(/candidates_hint/);
+    expect(source).toMatch(/candidate_outside_allowlist/);
   });
 
   it('人名默认不导出，导入必须先预览再确认', () => {
@@ -163,5 +196,93 @@ describe('源码契约', () => {
     expect(source).toMatch(/exportIncludePeople: false/);
     // 导入按钮在拿到预览前必须是禁用的
     expect(source).toMatch(/disabled: state\.busy \|\| !state\.importText \|\| !preview/);
+  });
+});
+
+describe('前置条件预检（静默失效防回归）', () => {
+  it('未选择词条时批量动作给出原因，而不是静默无效', () => {
+    const blocked = manager.guardReason('bulk-status', { selectedCount: 0 });
+    expect(blocked?.key).toBe('kb.glossary.select_required');
+    expect(blocked?.fallback).toBeTruthy();
+  });
+
+  it('已选择时放行', () => {
+    expect(manager.guardReason('bulk-status', { selectedCount: 3 })).toBeNull();
+  });
+
+  it('另存前必须先有导出内容，否则说明原因', () => {
+    expect(manager.guardReason('save-export', { hasExportText: false })?.key)
+      .toBe('kb.glossary.export_generate_required');
+    expect(manager.guardReason('save-export', { hasExportText: true })).toBeNull();
+  });
+
+  it('应用导入前必须先预览，否则说明原因', () => {
+    expect(manager.guardReason('apply-import', { hasImportPreview: false })?.key)
+      .toBe('kb.glossary.import_preview_required');
+    expect(manager.guardReason('apply-import', { hasImportPreview: true })).toBeNull();
+  });
+
+  it('未知动作不拦截', () => {
+    expect(manager.guardReason('nope', {})).toBeNull();
+  });
+});
+
+describe('交互失效防回归', () => {
+  const source = readSrc('renderer/modules/kb-glossary-manager.js');
+
+  it('busy 置位后的首次 render 不得留在 try 之外（render 抛异常会让所有按钮永久 disabled）', () => {
+    expect(source).not.toMatch(/state\.busy = true;\s*\n\s*render\(\);/);
+  });
+
+  it('删除必须尊重 main 的 {deleted}，不得在未命中时假报“已删除”', () => {
+    expect(source).toContain('result?.deleted === false');
+    expect(source).toContain('kb.glossary.delete_missing');
+  });
+
+  it('暂停/启用必须尊重 main 的 {entry}，不得静默 no-op', () => {
+    expect(source).toMatch(/if \(!result\?\.entry\)/);
+    expect(source).toContain('kb.glossary.entry_missing');
+    expect(source).toContain('kb.glossary.status_paused_one');
+  });
+
+  it('预检判定只有一份：守卫必须走 guardReason，避免抄成第二份后漂移', () => {
+    expect(source).toMatch(/guardReason\('bulk-status'/);
+    expect(source).toMatch(/guardReason\('save-export'/);
+    expect(source).toMatch(/guardReason\('apply-import'/);
+  });
+
+  it('空内容导入必须说明原因，不得静默返回', () => {
+    expect(source).toContain('kb.glossary.import_empty');
+    expect(source).toContain('kb.glossary.pack_content_required');
+    expect(source).toContain('kb.glossary.pack_review_required');
+  });
+
+  it('筛选下拉必须走 hydrateUiFormSelects 的按 id 回调（自定义 select 不发 DOM 事件，靠事件委派必然失效）', () => {
+    const wired = [...source.matchAll(/'(glo-kind|glo-risk|glo-status|glo-import-mode)':\s*\(/g)].map((m) => m[1]);
+    expect(new Set(wired)).toEqual(new Set(['glo-kind', 'glo-risk', 'glo-status', 'glo-import-mode']));
+  });
+
+  it('筛选状态只有一个写入口 applyFilter，三类筛选各自映射到正确的 state.filter 字段', () => {
+    expect(source).toMatch(/state\.filter\[field\] = String\(value \|\| ''\)/);
+    expect(source).toContain("applyFilter('kind', value)");
+    expect(source).toContain("applyFilter('riskLevel', value)");
+    expect(source).toContain("applyFilter('status', value)");
+    // 不该再有“没人调用的 DOM 读函数”这种残骸
+    expect(source).not.toContain('function readFilters');
+  });
+
+  it('筛选变更后必须刷新列表与批量栏（否则下拉动了、列表不动）', () => {
+    const fn = source.match(/function applyFilter\(field, value\) \{([\s\S]*?)\n    \}/);
+    expect(fn).not.toBeNull();
+    expect(fn![1]).toContain('renderBulk()');
+    expect(fn![1]).toContain('renderList()');
+  });
+
+  it('选中行必须与悬停可区分（悬停是 --surface-card 白；选中不得再用几乎同色的 --surface-subtle）', () => {
+    const css = readSrc('renderer/style.css');
+    const rule = css.match(/\.kb-glo__row\.is-selected \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).not.toContain('--surface-subtle');
+    expect(rule![1]).toContain('--primary-soft');
   });
 });

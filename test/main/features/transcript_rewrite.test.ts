@@ -94,6 +94,34 @@ describe('① 冻结解析 parseSource', () => {
     expect(out).toHaveLength(2);
     expect(out[0].text).toBe('第一行第二行');
   });
+
+  it('相对时钟导出（无日期）同样解析出全部发言，`at` 沿用原文时钟', () => {
+    // 真机事故（2026-09-18）：旧正则硬要日期，这类稿子解析出 0 条发言 →
+    // 整条清理管线静默失效（77 分钟的稿子清理版为空）。
+    const text = [
+      '牛保康 02:45',
+      '喂海运哥能听到吗？',
+      '尹镇宇 02:56',
+      '我这边能听到？',
+      '刘海运 01:00:35',
+      '然后下边就是实现的现状与缺口。',
+    ].join('\n');
+    const out = parseSource(text);
+    expect(out).toHaveLength(3);
+    expect(out.map((u) => u.speaker)).toEqual(['牛保康', '尹镇宇', '刘海运']);
+    expect(out.map((u) => u.at)).toEqual(['02:45', '02:56', '01:00:35']);
+    expect(out[0].text).toBe('喂海运哥能听到吗？');
+    expect(out[2].text).toBe('然后下边就是实现的现状与缺口。');
+    // id 仍是稳定锚点
+    expect(out.map((u) => u.id)).toEqual(['U0001', 'U0002', 'U0003']);
+  });
+
+  it('相对时钟导出不带日期的转写声明横幅也跳过', () => {
+    const out = parseSource('00:00:00 会议已开启实时转写，机器识别结果仅供参考\n牛保康 02:45\n喂海运哥能听到吗？\n');
+    expect(out).toHaveLength(1);
+    expect(out[0].speaker).toBe('牛保康');
+    expect(out[0].text).toBe('喂海运哥能听到吗？');
+  });
 });
 
 describe('② 口癖删除 removeFillers', () => {
