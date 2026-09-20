@@ -977,9 +977,11 @@
       </div>`).join('');
     const filter = _pocTriBoxRuleFilter || 'all';
     const KINDS = ['operation', 'preference', 'constraint'];
-    const kindLabel = (k) => _t('personalOntology.rulekind_' + k, k === 'operation' ? '操作规则' : k === 'preference' ? '偏好' : '约束');
+    const kindLabel = (k) => (k === 'operation' ? _t('personalOntology.rulekind_operation', '操作规则')
+      : k === 'preference' ? _t('personalOntology.rulekind_preference', '偏好')
+      : _t('personalOntology.rulekind_constraint', '约束'));
     const filterChips = ['all', ...KINDS].map((k) =>
-      `<button type="button" class="personal-onto-filter-chip${filter === k ? ' is-on' : ''}" data-poc-tri-filter="${k}">${escapeHtml(k === 'all' ? _t('personalOntology.tribox_filter_all', '全部') : kindLabel(k))}</button>`).join('');
+      _button({ label: k === 'all' ? _t('personalOntology.tribox_filter_all', '全部') : kindLabel(k), size: 'sm', className: `personal-onto-filter-chip${filter === k ? ' is-on' : ''}`, attrs: { 'data-poc-tri-filter': k } })).join('');
     const visibleR = filter === 'all' ? rRows : rRows.filter((r) => r.ruleKind === filter);
     const rHtml = visibleR.map((r) => `<div class="personal-onto-value-row">
         <span class="personal-onto-value-text">${escapeHtml(r.text)}</span>
@@ -1096,7 +1098,7 @@
             ${fv.asOf ? `<span class="ca-chip">${escapeHtml(_tv('personalOntology.asof_chip', { m: fv.asOf }, '截至 {m}'))}</span>` : ''}
             ${fv.asOf && _pocIsStaleAsOf(fv.asOf) ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.stale_chip', '可能过时'))}</span>` : ''}
             ${fv.verified === 'independent' ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_independent_chip', '独立核实过'))}</span>` : fv.verified === true ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '有来源支持'))}</span>` : ''}
-            ${fv.ruleKind ? `<span class="ca-chip">${escapeHtml(_t('personalOntology.rulekind_' + fv.ruleKind, fv.ruleKind === 'operation' ? '操作规则' : fv.ruleKind === 'preference' ? '偏好' : '约束'))}</span>` : ''}
+            ${fv.ruleKind === 'operation' ? `<span class="ca-chip">${escapeHtml(_t('personalOntology.rulekind_operation', '操作规则'))}</span>` : fv.ruleKind === 'preference' ? `<span class="ca-chip">${escapeHtml(_t('personalOntology.rulekind_preference', '偏好'))}</span>` : fv.ruleKind === 'constraint' ? `<span class="ca-chip">${escapeHtml(_t('personalOntology.rulekind_constraint', '约束'))}</span>` : ''}
             ${fv.sensitivity === 'restricted' ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.restricted_chip', '受限·不自动注入'))}</span>` : ''}
             ${conflict.html}
           </span>
