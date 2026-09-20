@@ -4095,7 +4095,7 @@
   "cognition.candidate_evidence_weak": "ソース削除済み",
   "cognition.review_stat_evidence": "ソース削除済み",
   "cognition.review_group_evidence": "ソースが削除された候補",
-  "cognition.review_group_evidence_note": "これらの候補の原本は削除済みです。開いて確認して保存するか、保存しないかを選べます。",
+  "cognition.review_group_evidence_note": "これらの候補が参照する会話はもう存在しません。開いて確認のうえ保存することも、保存しないこともできます。（「会話中にその場で記録」した候補はここには含まれません——もともと独立した出所がなく、削除されたわけではないため。）",
   "cognition.proof_rate_question": "今回はどうでしたか？",
   "cognition.candidate_advanced": "詳細設定（通常は変更不要）",
   "cognition.overview_stat_attention": "要対応",
@@ -5804,5 +5804,10 @@
   "kb.transcriptCorrect.llm_empty_text": "本文が空のため、読む内容がありません。",
   "kb.transcriptCorrect.llm_model_failed": "モデル呼び出しに失敗しました（{count} 段落とも失敗）。モデル設定を確認して再試行してください。",
   "kb.transcriptCorrect.llm_truncated": "／本文が長いため、今回は最初の {scanned}/{total} 段落のみ読みました。もう一度押すと続きを読めます",
-  "kb.transcriptCorrect.llm_chunks_failed": "／{count} 段落が失敗したため、結果が不完全な可能性があります"
+  "kb.transcriptCorrect.llm_chunks_failed": "／{count} 段落が失敗したため、結果が不完全な可能性があります",
+  "cognition.evidence_immediate_note": "会話中にその場で記録（独立した会話の出所なし）",
+  "cognition.source_immediate": "会話中に記録",
+  "personalOntology.zone_facts": "事実",
+  "personalOntology.zone_rules": "ルール（A → B と書く）",
+  "personalOntology.rule_saved": "ルールとして保存しました（A → B）：世界モデルにルールとして反映されます"
 }

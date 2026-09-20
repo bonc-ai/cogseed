@@ -1583,6 +1583,13 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     expect(asset.type).toBe('personal');
     expect(asset.lifecycleStatus).toBe('user_confirmed_unverified');
     expect(asset.statement).toContain('标识符');
+    // 2026-09-20 修复「来源已删」误判：引用 id 必须是裸会话 id（来源目录
+    // 按裸 cid 命中），不许再拼 immediate- 合成前缀；captureKey 带 immediate:
+    // 前缀作「对话中记」身份标记。
+    const saved = await candidates.readRecallCandidate('user-ingest', result.candidateId!);
+    expect(saved.sourceRefs.map((r) => r.id)).toEqual(['conv-ingest-1']);
+    expect(saved.sourceRefs.every((r) => !r.id.startsWith('immediate-'))).toBe(true);
+    expect(String(saved.captureKey || '').startsWith('immediate-')).toBe(true);
 
     // 同一句再投：指纹幂等（不产生第二条候选/资产）。
     const again = await candidates.ingestImmediateKnowledge('user-ingest', {

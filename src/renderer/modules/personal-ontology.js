@@ -952,6 +952,18 @@
         <span>${escapeHtml(_t('personalOntology.profile_load_error', '个人画像加载失败'))}: ${escapeHtml(d.loadError)}</span>
       </div>`;
     }
+    // 三盒分区（spec 007 Phase 1）：字段值含 → / -> 形状，或模板声明 isRelation
+    // → 归「规则」区（R 盒，值形状驱动——Richard 文档同款原则）；其余归
+    // 「事实」区（A 盒）；字段名与说明即词汇（T 盒），跟字段块走。
+    const isRelationShape = (v) => /→|->/.test(String(v || ''));
+    const relationFields = [];
+    const factFields = [];
+    for (const field of d.fields) {
+      const byShape = (field.values || []).some((fv) => isRelationShape(fv.value));
+      if (field.isRelation === true || byShape) relationFields.push(field);
+      else factFields.push(field);
+    }
+
     const fieldBlocks = d.fields.length ? d.fields.map((field) => {
       const valueRows = (field.values || []).length
         ? (field.values || []).map((fv) => {
@@ -971,11 +983,25 @@
         </div>`;
       }).join('') : `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.field_no_values', '尚无值'))}</div>`;
       return `<div class="personal-onto-field-block">
-        <div class="personal-onto-field-name">${escapeHtml(field.name)}</div>
+        <div class="personal-onto-field-name">${escapeHtml(field.name)}${field.description ? ` <span class="personal-onto-field-desc muted">${escapeHtml(String(field.description))}</span>` : ''}</div>
         ${valueRows}
         ${_button({ label: `＋ ${_t('personalOntology.value_add', '添加值')}`, size: 'sm', className: 'personal-onto-value-add', attrs: { 'data-poc-group-op': 'append-value', 'data-poc-field': field.name } })}
       </div>`;
     }).join('') : `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.group_no_fields', '这个分组还没有字段。用下面的“记一笔”开始积累。'))}</div>`;
+
+    // 按 zone 归属重排 fieldBlocks：fields.map 的产物与 d.fields 同序，这里
+    // 按分类索引拆开重拼（不做二次渲染，保证值行事件属性不变）。
+    const blockByField = new Map();
+    if (d.fields.length) {
+      const blocks = fieldBlocks.split(/(?=<div class="personal-onto-field-block")/g).filter((b) => b.includes('personal-onto-field-block'));
+      d.fields.forEach((field, i) => { blockByField.set(field, blocks[i] || ''); });
+    }
+    const zone = (titleKey, titleFallback, fields) => fields.length
+      ? `<div class="personal-onto-zone">
+          <div class="personal-onto-zone-head">${escapeHtml(_t(titleKey, titleFallback))} <span class="muted">${fields.length}</span></div>
+          ${fields.map((f) => blockByField.get(f)).join('')}
+        </div>`
+      : '';
 
     const flowRows = d.entries.length ? d.entries.map((entry) => `
       <div class="personal-onto-flow-row">${escapeHtml(entry)}</div>`).join('') : '';
@@ -990,7 +1016,10 @@
         </span>
       </div>
       <div class="personal-onto-group-detail-sub muted">${escapeHtml(_t('personalOntology.group_fields_hint', '字段区：一条值一行，来源与时间直接可见'))}</div>
-      <div class="personal-onto-field-zone">${fieldBlocks}
+      <div class="personal-onto-field-zone">
+        ${zone('personalOntology.zone_facts', '事实', factFields)}
+        ${zone('personalOntology.zone_rules', '规则（写成 A → B）', relationFields)}
+        ${!d.fields.length ? fieldBlocks : ''}
         ${_button({ label: _t('personalOntology.field_add', '＋ 新字段'), size: 'sm', className: 'personal-onto-value-add', attrs: { 'data-poc-group-op': 'add-field' } })}
       </div>
       ${flowRows ? `<div class="personal-onto-flow-zone">
@@ -1128,13 +1157,18 @@
       _pocToast('personalOntology.op_failed', (res && res.error) || '操作失败', 'error');
       return;
     }
+    // 关系值形状提示（spec 007 T103）：A → B 形状的值保存即成规则，读取侧
+    // ontology-rules 自动解析进世界模型——用户第一次有 R 盒的界面入口。
+    if (/→|->/.test(trimmed)) {
+      _pocToast('personalOntology.rule_saved', '已按规则保存（A → B）：将作为规则进入世界模型', 'success');
+    }
     await _pocOpenGroupDetail(_pocGroupDetail.groupId);
   }
 
   async function _pocAddFieldPrompt() {
     if (!_pocGroupDetail) return;
     const fieldName = (typeof uiPrompt === 'function')
-      ? await uiPrompt(_t('personalOntology.field_name_prompt', '字段名（如：居住地 / 就读状态）'), '')
+      ? await uiPrompt(_t('personalOntology.field_name_prompt', '字段名（如：居住地 / 就读状态）· 值可写 A → B 成为规则'), '')
       : null;
     if (fieldName === null) return;
     const trimmedName = String(fieldName || '').trim();

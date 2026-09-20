@@ -4095,7 +4095,7 @@
   "cognition.candidate_evidence_weak": "Fonte excluída",
   "cognition.review_stat_evidence": "Fonte excluída",
   "cognition.review_group_evidence": "Candidatos cuja fonte foi excluída",
-  "cognition.review_group_evidence_note": "A fonte original destes candidatos foi excluída; abra para confirmar antes de salvar, ou escolha não salvar.",
+  "cognition.review_group_evidence_note": "As sessões que estes candidatos referenciam não existem mais. Abra para confirmar e manter mesmo assim, ou escolha não salvar. (Candidatos \"anotados durante a conversa\" não pertencem aqui — nunca tiveram fonte separada; nada foi excluído.)",
   "cognition.proof_rate_question": "Como foi desta vez?",
   "cognition.candidate_advanced": "Avançado (geralmente não precisa mudar)",
   "cognition.overview_stat_attention": "Precisa de atenção",
@@ -5804,5 +5804,10 @@
   "kb.transcriptCorrect.llm_empty_text": "A transcrição está vazia; não há nada para ler.",
   "kb.transcriptCorrect.llm_model_failed": "A chamada ao modelo falhou ({count} segmentos sem sucesso). Verifique a configuração do modelo e tente novamente.",
   "kb.transcriptCorrect.llm_truncated": "; a transcrição é longa, então apenas os primeiros {scanned}/{total} segmentos foram lidos — clique de novo para continuar",
-  "kb.transcriptCorrect.llm_chunks_failed": "; {count} segmentos falharam, então o resultado pode estar incompleto"
+  "kb.transcriptCorrect.llm_chunks_failed": "; {count} segmentos falharam, então o resultado pode estar incompleto",
+  "cognition.evidence_immediate_note": "Anotado durante a conversa (sem fonte de sessão separada)",
+  "cognition.source_immediate": "Anotado no chat",
+  "personalOntology.zone_facts": "Fatos",
+  "personalOntology.zone_rules": "Regras (escritas como A → B)",
+  "personalOntology.rule_saved": "Salvo como regra (A → B): entrará no world model como regra"
 }

@@ -4345,7 +4345,7 @@
   "cognition.candidate_evidence_weak": "Source deleted",
   "cognition.review_stat_evidence": "Source deleted",
   "cognition.review_group_evidence": "Candidates whose source was deleted",
-  "cognition.review_group_evidence_note": "The original source of these candidates was deleted; open to confirm before saving, or choose not to save.",
+  "cognition.review_group_evidence_note": "The sessions these candidates referenced no longer exist. Open one to confirm and keep it anyway, or choose not to save. (Candidates \"noted during the conversation\" do not belong here — they never had a separate source; nothing was deleted.)",
   "cognition.proof_rate_question": "How did it go this time?",
   "cognition.candidate_advanced": "Advanced (usually fine as is)",
   "cognition.overview_stat_attention": "Needs attention",
@@ -7816,5 +7816,10 @@
   "kb.transcriptCorrect.llm_empty_text": "The transcript is empty, so there is nothing to read.",
   "kb.transcriptCorrect.llm_model_failed": "The model call failed ({count} segments unsuccessful). Check the model configuration and retry.",
   "kb.transcriptCorrect.llm_truncated": "; the transcript is long, so only the first {scanned}/{total} segments were read — click again to continue",
-  "kb.transcriptCorrect.llm_chunks_failed": "; {count} segments failed, so the result may be incomplete"
+  "kb.transcriptCorrect.llm_chunks_failed": "; {count} segments failed, so the result may be incomplete",
+  "cognition.evidence_immediate_note": "Noted during the conversation (no separate session source)",
+  "cognition.source_immediate": "Noted in chat",
+  "personalOntology.zone_facts": "Facts",
+  "personalOntology.zone_rules": "Rules (written as A → B)",
+  "personalOntology.rule_saved": "Saved as a rule (A → B): it will enter the world model as a rule"
 }

@@ -135,24 +135,50 @@
     }
     return index;
   }
-  function sourceRefUnavailable(ref) {
-    if (!ref) return true;
+  // 来源三态（2026-09-20 修复「来源已删」误判）：available=目录命中/整理中；
+  // immediate=对话中当场记（无独立会话出处——不是被删，诚实标注不计弱证据）；
+  // unavailable=目录查无（引用的会话已不存在或无处核对）。
+  function sourceRefKind(ref) {
+    if (!ref) return 'unavailable';
     const title = String(ref.title || ref.conversationTitle || ref.name || '').trim();
-    if (title) return false;
+    if (title) return 'available';
     const id = String(ref.id || ref.conversationId || ref.ref || '').trim();
-    if (!id) return true;
+    if (!id) return 'unavailable';
+    if (id.startsWith('immediate-')) return 'immediate'; // 存量合成 id（渲染兼容）
     const item = sourceIndex().get(id);
-    if (item && String(item.title || '').trim()) return false;
-    if (item && (item.status === 'pending' || item.status === 'processing')) return false;
-    return true;
+    if (item && String(item.title || '').trim()) return 'available';
+    if (item && (item.status === 'pending' || item.status === 'processing')) return 'available';
+    return 'unavailable';
+  }
+  // 「对话中记」候选身份：captureKey `immediate-` 前缀（新）或引用 id 的
+  // `immediate-` 前缀（存量）——两个信号源同前缀。
+  function isImmediateCandidate(candidate) {
+    if (candidate && typeof candidate.captureKey === 'string' && candidate.captureKey.startsWith('immediate-')) return true;
+    return evidenceRefs(candidate).some((ref) => String(ref && ref.id || '').startsWith('immediate-'));
+  }
+  function sourceRefUnavailable(ref) {
+    return sourceRefKind(ref) === 'unavailable';
   }
   function evidenceRefs(candidate) {
     return candidate.evidenceRefs || candidate.sourceRefs || [];
   }
+  // 归组口径：按 id 去重（sourceRefs/evidenceRefs 存储上就是同内容双份），
+  // 且「对话中当场记」不计弱证据——只有目录真查无的才算。
   function evidenceMostlyUnavailable(candidate) {
     const refs = evidenceRefs(candidate);
     if (!refs.length) return false;
-    return refs.filter(sourceRefUnavailable).length * 2 > refs.length;
+    const seen = new Set();
+    let unavailable = 0;
+    let total = 0;
+    for (const ref of refs) {
+      const id = String(ref && (ref.id || ref.conversationId || ref.ref) || '').trim();
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      total += 1;
+      if (sourceRefKind(ref) === 'unavailable') unavailable += 1;
+    }
+    if (!total) return false;
+    return unavailable * 2 > total;
   }
   const evidenceChip = (ref) => {
     // 证据条目按类型说人话（2026-09-17，子安"看不懂"口径）：此前裸问句
@@ -163,7 +189,9 @@
     // 删/整理中"吞成泛化 chip——不可读就明说不可读（防裸 id 的底线之上
     // 还要可诊断），整理中如实说整理中。
     const refId = String(ref.id || '');
-    if (sourceRefUnavailable(ref)) return chip(T('cognition.source_unavailable_label', '来源记录不可用'), 'line');
+    const refKind = sourceRefKind(ref);
+    if (refKind === 'immediate') return chip(T('cognition.evidence_immediate_note', '对话中当场记（无独立会话出处）'), 'line');
+    if (refKind === 'unavailable') return chip(T('cognition.source_unavailable_label', '来源记录不可用'), 'line');
     const catalogItem = sourceIndex().get(refId);
     if (catalogItem && !String(catalogItem.title || '').trim()
       && ['pending', 'processing'].includes(String(catalogItem.status || ''))) {
@@ -307,6 +335,7 @@
       return chip(T('cognition.source_pref_scan', 'KSTAR 偏好'));
     }
     if (signal || candidate.learningProvenance) return chip(T('cognition.source_kstar_review', 'KSTAR 复盘'));
+    if (isImmediateCandidate(candidate)) return chip(T('cognition.source_immediate', '对话中记'));
     return chip(T('cognition.source_capture', '会话整理'));
   }
   /** KSTAR 候选的复盘依据块（2026-09-16）：预期/实际/结果四行——知道"这条
@@ -1041,9 +1070,12 @@
   function candidateCard(candidate, broken) {
     const refs = evidenceRefs(candidate);
     const refsHtml = refs.length
-      ? `<div class="ca-src">${esc(T('cognition.candidate_source', '来源'))}：${refs.slice(0, 4).map((ref) => esc(sourceRefUnavailable(ref)
-        ? T('cognition.source_unavailable_label', '来源记录不可用')
-        : String(ref.title || ref.conversationTitle || '').trim() || T('cognition.source_resolved', '会话记录'))).join(' · ')}</div>`
+      ? `<div class="ca-src">${esc(T('cognition.candidate_source', '来源'))}：${refs.slice(0, 4).map((ref) => {
+        const refKind = sourceRefKind(ref);
+        if (refKind === 'immediate') return esc(T('cognition.evidence_immediate_note', '对话中当场记（无独立会话出处）'));
+        if (refKind === 'unavailable') return esc(T('cognition.source_unavailable_label', '来源记录不可用'));
+        return esc(String(ref.title || ref.conversationTitle || '').trim() || T('cognition.source_resolved', '会话记录'));
+      }).join(' · ')}</div>`
       : '';
     const warnHtml = broken
       ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>`

@@ -4348,7 +4348,7 @@
   "cognition.candidate_evidence_weak": "来源已删",
   "cognition.review_stat_evidence": "来源已删",
   "cognition.review_group_evidence": "来源已删除的候选",
-  "cognition.review_group_evidence_note": "这些候选的原始出处已被删除；可以点开确认后仍要保存，或选择不保存",
+  "cognition.review_group_evidence_note": "这些候选引用的会话已不存在；可以点开确认后仍要保存，或选择不保存。（「对话中当场记」的候选不属于这里——它们本来就没有独立出处，不是被删除。）",
   "cognition.proof_rate_question": "这次用得怎么样？",
   "cognition.candidate_advanced": "高级选项（通常不用改）",
   "cognition.overview_stat_attention": "需要关注",
@@ -7816,5 +7816,10 @@
   "kb.transcriptCorrect.llm_empty_text": "正文是空的，没有可读的内容。",
   "kb.transcriptCorrect.llm_model_failed": "模型调用失败（{count} 段都没成功），请检查模型配置后重试。",
   "kb.transcriptCorrect.llm_truncated": "；正文较长，本次只读到前 {scanned}/{total} 段，可再点一次继续",
-  "kb.transcriptCorrect.llm_chunks_failed": "；有 {count} 段调用失败，结果可能不全"
+  "kb.transcriptCorrect.llm_chunks_failed": "；有 {count} 段调用失败，结果可能不全",
+  "cognition.evidence_immediate_note": "对话中当场记（无独立会话出处）",
+  "cognition.source_immediate": "对话中记",
+  "personalOntology.zone_facts": "事实",
+  "personalOntology.zone_rules": "规则（写成 A → B）",
+  "personalOntology.rule_saved": "已按规则保存（A → B）：将作为规则进入世界模型"
 }

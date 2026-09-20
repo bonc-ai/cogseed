@@ -652,7 +652,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
         const { ingestImmediateKnowledge } = await import('../../features/recall/candidate-service');
         await ingestImmediateKnowledge(uid, {
           text: content,
-          ...(params.sessionId ? { conversationId: String(params.sessionId) } : {}),
+          // 真实会话 id 是 cid（消息所在聊天会话；来源目录按裸 cid 命中）——
+          // 此前误传 runner 内部 sessionId，拼出的合成引用 id 永远查不到，
+          // 候选被误标「来源已删」（2026-09-20 修复）。传法与上方 teaching 线同款。
+          ...(params.cid ? { conversationId: String(params.cid) } : {}),
+          ...(params.cid && params.sourceMessageId ? { messageId: String(params.sourceMessageId) } : {}),
         });
         return { ok: true, entries: [], usage: { current: 0, limit: 0 } };
       } catch {

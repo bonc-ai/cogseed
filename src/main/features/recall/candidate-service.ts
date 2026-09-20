@@ -483,14 +483,26 @@ export async function ingestImmediateKnowledge(
   const threat = scanForInjection(text);
   if (threat) throw new Error(`immediate knowledge blocked: suspicious content (${threat})`);
   const { makeDisplayTitle } = await import('./statement-fusion');
-  const refId = input.conversationId
-    ? `immediate-${input.conversationId}${input.messageId ? `-${input.messageId}` : ''}`
-    : `immediate-${createHash('sha256').update(text).digest('hex').slice(0, 12)}`;
-  const refs = [{
-    kind: 'conversation' as const,
-    id: refId.slice(0, 160),
-    ...(input.conversationId ? { scope: 'conversation' as const, subtype: 'session' as const } : {}),
-  }];
+  // 来源引用直接用真实会话 id（来源目录会话级条目按裸 cid 命中）——此前拼
+  // `immediate-` 前缀合成 id，目录永远查不到，候选被渲染层误标「来源已删」
+  // （2026-09-20 修复）。证据粒度到会话：目录消息级条目用另一套 stableId
+  // 编码，不在此拼。无会话场景保留内容哈希 id（无独立出处，由渲染层如实
+  // 标注「对话中当场记」）。
+  const refs = input.conversationId
+    ? [{
+      kind: 'conversation' as const,
+      id: String(input.conversationId).slice(0, 160),
+      scope: 'conversation' as const,
+      subtype: 'session' as const,
+    }]
+    : [{
+      kind: 'conversation' as const,
+      id: `immediate-${createHash('sha256').update(text).digest('hex').slice(0, 12)}`,
+    }];
+  // captureKey：候选池确定幂等 + 「对话中记」的身份标记（safeId 白名单不许
+  // 冒号，统一 immediate- 连字符前缀；渲染层徽章与证据文案据此识别，并兼容
+  // 存量 immediate- 引用 id）。
+  const immediateCaptureKey = `immediate-${createHash('sha256').update(text).digest('hex').slice(0, 24)}`;
   const candidate = await saveRecallCandidate(userId, {
     judgment: text,
     value: text,
@@ -500,6 +512,7 @@ export async function ingestImmediateKnowledge(
     suggestedAction: 'create',
     sourceRefs: refs,
     evidenceRefs: refs,
+    captureKey: immediateCaptureKey,
   });
   try {
     const applied = await autoApplyRecallCandidate(userId, candidate.id, { provenance: 'capture' });
