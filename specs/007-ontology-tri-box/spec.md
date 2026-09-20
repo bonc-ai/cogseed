@@ -2,7 +2,7 @@
 
 **Feature Branch**: `认知资产迭代`
 **Created**: 2026-09-20
-**Status**: In Progress
+**Status**: Implemented（授权切片交互方案待拍板：authorization-slicing-options.md——敏感性地基已入，注入裁剪未动）
 **Input**: 用户需求原话：「我理解的是三个盒子是三个大的分类方式，也就是在大的还有小的本体部分都按这三个进行分类。就像个人本体，你直接对应一个 A box、R box 还有 T box，直接就有这三个分类，然后里面再有具体的内容。」随后拍板：「直接三档一起做，按 spec kit 规范来。」
 
 **Source**: Richard《Personal Ontology v0.1.0（2026-09-08）》三盒蓝图（T-Box 概念 / A-Box 限定断言 / R-Box 规则）对照当前实现的差距分析（design/本体增强两天开发前后对比-20260920.html 与对话探索记录）。
