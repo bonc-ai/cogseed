@@ -22,8 +22,8 @@ describe('packaged launch smoke', () => {
       root, platform: 'win32', exists: (candidate: string) => candidate.endsWith('CogSeed.exe'),
     })).toBe(path.join(root, 'dist', 'win-unpacked', 'CogSeed.exe'));
     expect(verifier.resolvePackagedExecutable({
-      root: '/repo', platform: 'darwin', arch: 'arm64', exists: (candidate: string) => candidate.includes('mac-arm64'),
-    })).toBe(path.join('/repo', 'dist', 'mac-arm64', 'CogSeed.app', 'Contents', 'MacOS', 'CogSeed'));
+      root, platform: 'darwin', arch: 'arm64', exists: (candidate: string) => candidate.includes('mac-arm64'),
+    })).toBe(path.join(root, 'dist', 'mac-arm64', 'CogSeed.app', 'Contents', 'MacOS', 'CogSeed'));
   });
 
   it('accepts only the app-provided main/preload/renderer/IPC proof', () => {
