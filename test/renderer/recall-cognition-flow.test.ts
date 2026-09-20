@@ -163,7 +163,12 @@ describe('candidate pool rendering', () => {
     expect(caps.canPromote).toBe(true);
     expect(caps.canEdit).toBe(true);
     expect(caps.canDefer).toBe(true);
-    expect(views).toContain('candidate.capabilities && candidate.capabilities.canPromote');
+    // 2026-09-20：晋升/决策入口统一读 views.js 里的归一化 `caps`
+    // （capability 明确为 false 才隐藏；终态候选的 canDefer/canReject 正是 false）。
+    expect(views).toContain('const caps = candidate.capabilities || {}');
+    expect(views).toContain('caps.canPromote');
+    expect(views).toContain('caps.canDefer !== false');
+    expect(views).toContain('caps.canReject !== false');
     expect(views).toContain('candidate.capabilities && candidate.capabilities.canEdit');
   });
 });
