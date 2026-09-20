@@ -111,6 +111,7 @@ export interface GlossaryFile {
   };
 }
 
+
 export interface UpsertEntryInput {
   wrong?: unknown;
   correct?: unknown;
@@ -122,6 +123,12 @@ export interface UpsertEntryInput {
   contextDeny?: unknown;
   contextAllow?: unknown;
   scope?: unknown;
+  /**
+   * 创建上下文：未显式给 `scope` 时用它决定默认作用域（本文档 / 本场景）。
+   * 不给就会被兜底成全局规则——那正是作用域机制要防的事故，所以调用方应当传。
+   */
+  docId?: unknown;
+  scenarioTags?: unknown;
   source?: unknown;
   ownerScope?: unknown;
   ontologyRef?: unknown;
@@ -743,9 +750,34 @@ export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResu
 
   const source = normalizeSource(input.source);
   const scope = normalizeScope(input.scope);
-  // 会议中"顺手确认"的词条默认只在本次文档/场景生效；显式 hand-add 的才算全局。
   if (!input.scope) {
-    scope.global = source !== 'meeting_accept';
+    if (existingIndex >= 0) {
+      // 更新已有词条时保持其原有作用域：一次编辑不该把它悄悄放宽成全局。
+      Object.assign(scope, file.entries[existingIndex].scope);
+    } else {
+      // 未显式给作用域时的兜底：有文档 → 仅本文档；有场景标签 → 仅本场景；
+      // 两者都没有才退到全局。
+      //
+      // 此前这里判断 `source !== 'meeting_accept'`，但全仓库没有任何调用方发送过该
+      // source（面板发 'manual'、本体桥接发 'ontology_seed'）⇒ 判断恒真 ⇒ 每个新词条
+      // 都成了全局规则，等于把 transcript_auto_correct 记录的事故重新引入
+      // （一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）。
+      const contextDocId = typeof input.docId === 'string' && input.docId.trim() ? input.docId.trim() : '';
+      const contextTags = Array.isArray(input.scenarioTags)
+        ? input.scenarioTags.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 50)
+        : [];
+      if (contextDocId) {
+        scope.docIds = [contextDocId];
+        scope.scenarioTags = [];
+        scope.global = false;
+      } else if (contextTags.length) {
+        scope.docIds = [];
+        scope.scenarioTags = contextTags;
+        scope.global = false;
+      } else {
+        scope.global = true;
+      }
+    }
   }
 
   const entry: GlossaryEntry = {

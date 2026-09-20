@@ -251,6 +251,10 @@ export const invokeHandlers = {
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),
   }),
 
+  // 候选区（待核）的 IPC（candidates / adoptCandidate / discardCandidate / clearCandidates）
+  // 已随「模型建议并入扫描」整体移除：模型候选现在是扫描结果里的一行，勾选即确认。
+  // 见 src/main/features/transcript_glossary.ts 顶部说明与 dev/cx677-candidate-gate 的设计。
+
   'transcript.glossary.upsert': async (payload: Payload, ctx: IpcContext) => {
     const result = transcriptGlossary.upsertEntry(ctx.userId, payload ?? {});
     return result;

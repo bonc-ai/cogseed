@@ -30185,7 +30185,8 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-qa-model-pop-manage.ui-button:hover { background: var(--kb-brand-soft, var(--color-brand-soft)); }
 .kb-qa-input {
   flex: 1; min-width: 0; resize: none; font-size: var(--font-size-4); line-height: 1.6;
-  height: 26px; max-height: 120px; padding: 4px 4px; color: var(--kb-text);
+  height: 26px; min-height: 26px; max-height: 120px; overflow-y: hidden;
+  padding: 4px 4px; color: var(--kb-text);
 }
 .kb-qa-input::placeholder { color: var(--kb-text3); opacity: .6; }
 .kb-qa-send.ui-icon-button {
@@ -31515,8 +31516,20 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-wb-side-expand .ui-icon { width: 16px; height: 16px; }
 .kb-wb-side-expand[hidden] { display: none; }
 
-.kb-wb-right-expand,
-.kb-wb-right-collapse { display: none; }
+/* 右侧 AI 列的展开/收起按钮：显隐只由 hidden 属性驱动（JS 按 _state.rightPanelOpen 设置）。
+   ⚠️ 必须带 .kb-wb 前缀提升权重：ui-components.css 在 index.html 里**晚于**本文件加载，
+   其 `.ui-icon-button{display:inline-flex}` 与单类选择器同权重（0,1,0）→ 后加载者胜，
+   会把这里的 display 连同浏览器 UA 的 `[hidden]{display:none}` 一起压掉（作者样式永远
+   优先于 UA 样式）。真机事故：宽屏下「生成测验」正上方的 × 常驻可见、点了完全没反应。 */
+.kb-wb .kb-wb-right-expand,
+.kb-wb .kb-wb-right-collapse { display: inline-flex; }
+.kb-wb .kb-wb-right-expand[hidden],
+.kb-wb .kb-wb-right-collapse[hidden] { display: none; }
+/* 收起右侧 AI 列：宽屏下把让出的宽度交给中间列（窄屏抽屉规则见下方 media query）。 */
+.kb-wb.right-panel-collapsed { grid-template-columns: var(--kb-c1, 236px) 4px minmax(0, 1fr) 0 0; }
+.kb-wb.side-collapsed.right-panel-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
+.kb-wb.right-panel-collapsed .kb-wb-right { display: none !important; }
+.kb-wb.right-panel-collapsed .kb-wb-divider[data-wb-divider="2"] { visibility: hidden; pointer-events: none; }
 
 @media (max-width: 1100px) {
   .kb-wb {
@@ -32608,7 +32621,9 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   background: var(--surface-card);
 }
 .kb-glo__row.is-selected {
-  background: var(--surface-subtle);
+  /* 选中必须与悬停可分：悬停是 --surface-card(#FFFFFF)，选中用品牌淡绿 + 左侧色条。 */
+  background: var(--primary-soft);
+  box-shadow: inset 3px 0 var(--primary);
 }
 .kb-glo__row[data-paused="1"] .kb-glo__pair {
   color: var(--text-muted);
@@ -32816,32 +32831,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-1);
-}
-.kb-atc__scope-label {
-  color: var(--text-muted);
-  font-size: var(--font-size-1);
-}
-/* 场景标签（「仅本场景」的前置数据）：与接受范围同一行的紧凑控件 */
-.kb-atc__scenario {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  width: 100%;
-}
-.kb-atc__scenario-label,
-.kb-atc__scenario-suggest-label {
-  color: var(--text-muted);
-  font-size: var(--font-size-1);
-  flex: 0 0 auto;
-}
-.kb-atc__scenario .ui-input {
-  flex: 1 1 200px;
-  min-width: 160px;
-}
-.kb-atc__scenario-hint {
-  color: var(--text-muted);
-  font-size: var(--font-size-1);
 }
 .kb-atc__row-menu {
   display: flex;

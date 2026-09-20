@@ -392,7 +392,8 @@ describe('locale 覆盖', () => {
     'accepted', 'ignore', 'apply', 'applying',
     'apply_done', 'apply_failed', 'summary', 'pending_high',
     'applied_summary', 'applied_deleted', 'applied_pending', 'retention',
-    'over_rewrite', 'preview', 'preview_title', 'save',
+    // develop #307 删掉了「预览清理版」与「接受范围」三档：preview / scope_* 已无定义，不再必填
+    'over_rewrite', 'save',
     'saved', 'save_failed', 'revert', 'revert_title',
     'revert_ok', 'revert_mismatch', 'revert_failed', 'add_entry',
     'wrong', 'correct', 'kind', 'add',
@@ -411,9 +412,8 @@ describe('locale 覆盖', () => {
     'more', 'restore', 'reopen_row', 'restored',
     'ignored_done', 'ignore_failed', 'group_ignored', 'denied',
     'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed', 'denied_reason_word_boundary',
-    'denied_reason_overlapping_span', 'denied_reason_protected_region', 'scope_label', 'scope_keep',
-    'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
-    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder',
+    'denied_reason_overlapping_span', 'denied_reason_protected_region',
+    'add_allow', 'add_allow_placeholder',
     'add_allow_context', 'add_allow_need_term', 'add_allow_done', 'add_allow_failed',
     'add_allow_existing', 'remove', 'remove_allow_done', 'remove_allow_failed',
     'rename_correct', 'rename_done', 'rename_failed', 'rename_need_value',
@@ -579,33 +579,59 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('destroyCorrection()');
   });
 
-  it('场景标签：归一规则与主进程一致（纯函数）', () => {
-    expect(panel.normalizeScenarioTags([' 英语演讲课 '])).toEqual(['英语演讲课']);
-    expect(panel.normalizeScenarioTags(['Cogseed', 'cogseed'])).toEqual(['Cogseed']);
-    expect(panel.normalizeScenarioTags('英语演讲课')).toEqual([]);
-    expect(panel.normalizeScenarioTags(Array.from({ length: 12 }, (_, i) => `场景${i}`))).toHaveLength(8);
+  it('场景标签已整体删除（控件、归一函数、docTags 接线一并移除）', () => {
+    expect(panelSrc).not.toContain('scenarioControlHtml');
+    expect(panelSrc).not.toContain('normalizeScenarioTags');
+    expect(panelSrc).not.toContain('state.scenarioTags');
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
+    // 建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId
+    const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(upserts).toHaveLength(1);
+    for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
+    // 模型候选这条路已改走「并入扫描」：面板不再单独标待核（没有 flagCandidates 通道），
+    // 而是把 includeReview 交给 scan，模型建议并进同一个候选列表，仍带 docId 收窄作用域。
+    expect(panelSrc).not.toContain("invoke('transcript.correct.flagCandidates'");
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}?includeReview: state\.scanWithReview === true/);
+    // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
+    expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 
-  it('场景标签接线：「仅本场景」的前置数据有读有写、全程带上', () => {
-    // 读/写/建议三条 IPC 都要用到（此前标签没有任何来源，选项永远点不动）
-    expect(panelSrc).toContain("invoke('transcript.docTags.get'");
-    expect(panelSrc).toContain("invoke('transcript.docTags.set'");
-    expect(panelSrc).toContain("invoke('transcript.docTags.suggest'");
-    // 扫描与设作用域都要带上文档自己的标签，否则 scopeAllows 恒 false
-    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}scenarioTags: state\.scenarioTags/);
-    expect(panelSrc).toMatch(/choice === 'task' \? \{ scenarioTags: state\.scenarioTags \}/);
-    // 可用性只看标签有没有（不再看 ctx —— ctx 恒为空数组正是"点不动"的原因）
-    expect(panelSrc).not.toContain('ctx.scenarioTags || []).length');
-    expect(panelSrc).toMatch(/disabled: state\.busy \|\| !state\.scenarioTags\.length/);
+  it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'preview'");
+    expect(panelSrc).not.toMatch(/kind === 'preview'/);
+    // openTextModal 仍被「回滚」复用（回滚后展示原文），不能连坐删除
+    expect(panelSrc).toMatch(/function openTextModal\(title, text\)/);
+    expect(panelSrc).toMatch(/openTextModal\(\s*\n\s*t\('kb\.transcriptCorrect\.revert_title'/);
+    // 「回滚」只剩对照弹窗底部这一个入口
+    expect(panelSrc).toMatch(/\{ id: 'revert', label: t\('kb\.transcriptCorrect\.revert', '回滚'\), role: 'ghost', size: 'sm' \}/);
+    // 弹窗 resolve 的是 { value, reason }：写成 result.id 恒为 undefined ⇒ 动作永不执行
+    expect(panelSrc).not.toMatch(/'action' && result\?\.id/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'revert'/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'save-notes'/);
   });
 
-  it('置灰必须说明原因：仅本场景带 title（不再只灰不说）', () => {
-    expect(panelSrc).toMatch(/scope_task_hint|scope_need_tags/);
-    expect(panelSrc).toMatch(/option\.title \? \{ title: option\.title \}/);
+  it('弹窗结果只能 await 弹窗本身（uiModal 没有 .result；await undefined 会立即通过）', () => {
+    // 真因：`await modal.result` === `await undefined` ⇒ 弹窗还开着就被当成"用户已关闭"，
+    // 于是「对照」里的回滚、「清理附记」里的另存、「拟主题标题」里的采用全都不执行
+    // ——真机表现统一为"按钮点了没反应"。
+    expect(panelSrc).not.toMatch(/modal\.result/);
+    expect(panelSrc).toMatch(/await modal;/);
+    // 把契约钉在 uiModal 上：它返回 Promise 本体（带 close/overlay/dialog），没有 result 字段
+    expect(readSrc('renderer/modules/ui-modal.js'))
+      .toMatch(/Object\.assign\(result, \{ close, overlay, dialog \}\)/);
   });
 
-  it('场景标签变更要重扫（否则"未生效"清单停在旧标签上）', () => {
-    expect(panelSrc).toMatch(/async function applyScenarioTags[\s\S]{0,2200}await runScan\(\)/);
+  it('弹窗内的动作必须自带点击委托（弹窗挂 body，面板容器的委托收不到）', () => {
+    // 「拟主题标题」的采用按钮渲染在 uiModal 里（document.body 下，见 ui-modal.js），
+    // 只挂容器委托 = 点「采用」没反应（真机反馈）
+    expect(panelSrc).toMatch(/dialog\.addEventListener\('click', onClick\)/);
+    expect(panelSrc).toMatch(/dialog\.removeEventListener\('click', onClick\)/);
+    // 采用态反馈不得用 textContent 覆盖共享按钮内部结构（会冲掉 label span、
+    // role class 也永远停在 secondary）
+    expect(panelSrc).not.toMatch(/headingAdopt\.textContent =/);
+    expect(panelSrc).toMatch(/headingAdopt\.outerHTML = button\(/);
   });
 
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {

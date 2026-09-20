@@ -23,10 +23,16 @@ import {
   isPureDigits,
   isSingleSurnameHonorific,
   listEntries,
+  listCandidates,
+  countPendingCandidates,
   loadGlossary,
   markVerified,
   migrateGlossaryV1ToV2,
   addContextAllow,
+  adoptCandidate,
+  clearCandidates,
+  discardCandidate,
+  recordCandidates,
   recordReplacement,
   rememberConfirmedPairs,
   removeContextAllow,
@@ -423,5 +429,41 @@ describe('rememberConfirmedPairs：确认的对才进词表，且只对本文档
     ], { docId: 'doc_1' });
     expect(r).toMatchObject({ created: 1, skipped: 1 });
     expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
+  });
+});
+
+describe('新词条默认作用域（不得静默成为全局规则）', () => {
+  it('给了 docId → 仅本文档', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', source: 'manual', docId: 'doc-A' });
+    expect(created.created).toBe(true);
+    expect(created.entry!.scope).toEqual({ docIds: ['doc-A'], scenarioTags: [], global: false });
+  });
+
+  it('只给场景标签 → 仅本场景（空白标签被丢弃，保留会永久失配）', () => {
+    const created = upsertEntry(uid, {
+      wrong: 'kstar', correct: 'K star', source: 'manual', scenarioTags: ['教研会', '   '],
+    });
+    expect(created.entry!.scope).toEqual({ docIds: [], scenarioTags: ['教研会'], global: false });
+  });
+
+  it('docId 与标签都没有（如本体同步）才退到全局', () => {
+    const created = upsertEntry(uid, { wrong: 'foo term', correct: 'Foo Term', source: 'ontology_seed' });
+    expect(created.entry!.scope.global).toBe(true);
+  });
+
+  it('调用方显式给 scope 时以调用方为准', () => {
+    const created = upsertEntry(uid, {
+      wrong: 'bar term', correct: 'Bar Term', scope: { docIds: [], scenarioTags: ['x'], global: false },
+    });
+    expect(created.entry!.scope).toEqual({ docIds: [], scenarioTags: ['x'], global: false });
+  });
+
+  it('更新已有词条不因一次编辑就把作用域放宽成全局', () => {
+    const first = upsertEntry(uid, { wrong: 'baz term', correct: 'Baz Term', docId: 'doc-A' }).entry!;
+    expect(first.scope.global).toBe(false);
+    // 同词条再 upsert 一次，且这次不带任何创建上下文
+    const again = upsertEntry(uid, { wrong: 'baz term', correct: 'Baz Term' }).entry!;
+    expect(again.id).toBe(first.id);
+    expect(again.scope).toEqual({ docIds: ['doc-A'], scenarioTags: [], global: false });
   });
 });
