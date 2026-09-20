@@ -67,7 +67,7 @@ export interface SourceUtterance {
   /** 稳定 id（`U0001` 起，按原文顺序）。这是锚点，**不随清理变化**。 */
   id: string;
   speaker: string;
-  /** `YYYY-MM-DD HH:mm:ss` 或仅 `HH:mm:ss`（沿用原文）。 */
+  /** `YYYY-MM-DD HH:mm:ss`、`HH:mm:ss` 或仅 `mm:ss`（沿用原文，相对时钟导出只给后者）。 */
   at: string;
   text: string;
 }
