@@ -32478,6 +32478,12 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-size: var(--font-size-1);
   background: var(--color-line);
 }
+/* 来源徽标（模型建议）：与风险徽标并列，用中性色说明"这条不是词表命中" */
+.kb-atc__badge--model {
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  border: 1px solid var(--line-default);
+}
 .kb-atc__row[data-risk="high"] .kb-atc__badge {
   color: var(--color-warning-text);
   background: var(--color-warning-soft);
@@ -32676,58 +32682,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-glo__preview[data-tone="warning"] {
   color: var(--color-warning-text);
 }
-/* 待核候选区：与词条列表同一套排版，但用一条淡分隔 + 提示语把它明确分成
-   "还没生效的建议"。颜色只留在提示语上，不给整块铺底色。 */
-.kb-glo__candidates {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--line-default);
-}
-.kb-glo__candidates-head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.kb-glo__candidate-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-1) 0;
-  border-top: 1px dashed var(--line-subtle);
-}
-.kb-glo__candidate-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.kb-glo__candidate-label {
-  font-size: var(--font-size-2);
-}
-.kb-glo__candidate-meta {
-  color: var(--text-muted);
-  font-size: var(--font-size-1);
-  word-break: break-word;
-}
-.kb-glo__candidate-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  flex-shrink: 0;
-}
-@media (max-width: 720px) {
-  .kb-glo__filters {
-    grid-template-columns: 1fr;
-  }
-}
-/* ─── 视觉规范落地（2026-09-15）────────────────────────────────────────
-   §一-3 条目上下留白 + 极淡分隔线；§二-1 状态色四件套（低饱和墨绿 / 暖橙 /
-   浅灰蓝 / 中性灰）；§三-2 开关热区；§五-2 hover 柔和反馈。
-   颜色只表达状态，不大面积铺色。 */
 .kb-atc__row {
   padding-block: var(--space-2);
   border-bottom: 1px solid var(--line-default);
@@ -32755,10 +32709,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   background: var(--state-review-bg);
   color: var(--state-review-text);
 }
-.kb-atc__badge--issue {
-  background: var(--state-review-bg);
-  color: var(--state-review-text);
-}
 .kb-atc__row[data-risk="high"] .kb-atc__badge {
   background: var(--state-caution-bg);
   color: var(--state-caution-text);
@@ -32780,35 +32730,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   cursor: pointer;
 }
 /* §四-1 折叠块给箭头提示（details 默认 marker 拿掉，自己画一个） */
-.kb-atc__issues > summary,
-.kb-atc__sync > summary,
-.kb-atc__add > summary,
-.kb-glo__io > summary {
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-.kb-atc__issues > summary::-webkit-details-marker,
-.kb-atc__sync > summary::-webkit-details-marker,
-.kb-atc__add > summary::-webkit-details-marker,
-.kb-glo__io > summary::-webkit-details-marker {
-  display: none;
-}
-.kb-atc__issues > summary::before,
-.kb-atc__sync > summary::before,
-.kb-atc__add > summary::before,
-.kb-glo__io > summary::before {
-  content: '\25B8';
-  color: var(--text-faint);
-  font-size: var(--font-size-1);
-}
-.kb-atc__issues[open] > summary::before,
-.kb-atc__sync[open] > summary::before,
-.kb-atc__add[open] > summary::before,
-.kb-glo__io[open] > summary::before {
-  content: '\25BE';
-}
 /* 面板标题下的说明：弱化，不与标题抢视线（§二-3） */
 .kb-atc__hint {
   margin-top: 2px;
@@ -32823,41 +32744,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   opacity: 0.9;
 }
 
-/* 待核块：唯一"需要人看一眼"的状态，用一次强调色；其余仍走弱化色。 */
-.kb-atc__issues {
-  border-top: 1px solid var(--line-default);
-  padding-top: var(--space-2);
-}
-.kb-atc__issues summary {
-  color: var(--text-muted);
-  font-size: var(--font-size-2);
-  cursor: pointer;
-}
-.kb-atc__issues-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-}
-.kb-atc__issues-hint {
-  color: var(--text-muted);
-  font-size: var(--font-size-2);
-  line-height: 1.5;
-}
-.kb-atc__issues-list {
-  color: var(--color-warning-text);
-  font-size: var(--font-size-2);
-}
-.kb-atc__badge--issue {
-  color: var(--color-warning-text);
-  background: var(--status-warning-bg);
-}
-.kb-atc__row.is-flagged {
-  background: var(--status-warning-bg);
-}
-.kb-atc__row.is-flagged:hover {
-  background: var(--status-warning-bg);
-}
 /* 本体/记忆同步：整块都是"建议"，用弱化色；只有需要注意的状态（无来源/失败）才用色。 */
 .kb-atc__sync {
   border-top: 1px solid var(--line-default);
