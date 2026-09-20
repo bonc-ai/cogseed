@@ -2778,6 +2778,27 @@ function _stopGroupEventObserver(cid) {
   try { ctrl.abort(); } catch (_) {}
 }
 
+function _conversationRuntimeIsActive(data) {
+  if (!data || data.ok === false) return false;
+  const inFlight = Array.isArray(data.in_flight) ? data.in_flight.filter(Boolean) : [];
+  const activeTurns = Array.isArray(data.active_turns) ? data.active_turns.filter(Boolean) : [];
+  return data.processing === true
+    || data.backend_active === true
+    || inFlight.length > 0
+    || activeTurns.length > 0;
+}
+
+async function _readConversationRuntime(cid) {
+  if (!cid) return null;
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
+    const data = await res.json();
+    return data && data.ok !== false ? data : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function _syncPendingActorsFromRuntime(cid, opts = {}) {
   if (!cid || !isConvPending(cid)) return false;
   const state = pendingConvs.get(cid);
@@ -2790,14 +2811,8 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
   const hasLiveController = !!state.controller && _convChatCtrls.has(cid);
   if (hasLiveController && !allowController) return false;
   const loadingEl = state.loadingEl;
-  let data = null;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
-    data = await res.json();
-  } catch (_) {
-    return false;
-  }
-  if (!data || data.ok === false) return false;
+  const data = await _readConversationRuntime(cid);
+  if (!data) return false;
   if (cid === currentCid) _mountCollaborationStatusCard(document.getElementById('chat-history'), data.collaboration || null);
   if (!isConvPending(cid) || pendingConvs.get(cid)?.aborted) return false;
   const inFlight = Array.isArray(data.in_flight)
@@ -2805,13 +2820,7 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
     : [];
   const hasActiveTurnsField = Array.isArray(data.active_turns);
   const activeTurns = _normaliseActiveTurns(data.active_turns);
-  // backend_active: a CogSeed Backend (Mate / local-CLI) task for this cid
-  // is still executing outside the group-chat bus. Treat it as processing —
-  // otherwise the recovery poll would finalize the run while the turn is
-  // genuinely still working (imported-session continuation dispatches long
-  // work there), making the conversation look "stopped".
-  const processing = data.processing === true || data.backend_active === true
-    || inFlight.length > 0 || activeTurns.length > 0;
+  const processing = _conversationRuntimeIsActive(data);
   if (window.ConversationInfo) {
     try { window.ConversationInfo.refreshFiles(cid, { silent: true }); } catch (_) {}
   }
@@ -8298,10 +8307,8 @@ async function loadConversationHistory(cid, opts = {}) {
     await _evaluateAutoRecipient(cid);
 
     // Detect unanswered user message (e.g. after page refresh while server was processing).
-    // Only show the "thinking…" bubble if the server *really* still has this
-    // conversation in processing state AND the work started recently — a stale
-    // `processing: true` from a crashed prior run is swept on boot, but we
-    // also belt-and-braces check the flag here so no flash occurs.
+    // Only show the "thinking…" bubble while the authoritative runtime still
+    // reports active work. Elapsed time is display-only and cannot end a task.
     const lastMsg = history[history.length - 1];
     // Cache the conv-bound agent's enabled state so _updateConvSendUI can
     // grey out the input without a second IPC round trip. Backend stamps
@@ -8309,9 +8316,7 @@ async function loadConversationHistory(cid, opts = {}) {
     convAgentEnabledByCid.set(cid, convMeta.agent_enabled !== false);
     _renderConvDisabledBanner(cid);
     _renderPermissionModeSelect(convMeta);
-    const processingFresh = convMeta.processing === true
-      && convMeta.processing_since
-      && (Date.now() - new Date(convMeta.processing_since).getTime()) < 15 * 60 * 1000;
+    const processingActive = _conversationRuntimeIsActive(convMeta);
     const inFlightActors = Array.isArray(convMeta.in_flight)
       ? convMeta.in_flight.filter(Boolean).map(String)
       : [];
@@ -8320,7 +8325,7 @@ async function loadConversationHistory(cid, opts = {}) {
     // Sweep live placeholders whose turn finished while the user was away:
     // their final message is part of the history rendered above, so keeping
     // the entry would let a later annex revive it into a duplicate bubble.
-    if (processingFresh || Array.isArray(convMeta.active_turns) || Array.isArray(convMeta.in_flight)) {
+    if (processingActive || Array.isArray(convMeta.active_turns) || Array.isArray(convMeta.in_flight)) {
       const runningActorIds = new Set(
         (hasActiveTurnsField ? activeTurns.map((t) => String(t.actor)) : inFlightActors).filter(Boolean),
       );
@@ -8333,7 +8338,7 @@ async function loadConversationHistory(cid, opts = {}) {
       }
     }
     const wasPendingBeforeHistoryRecovery = isConvPending(cid);
-    if (processingFresh && !wasPendingBeforeHistoryRecovery) {
+    if (processingActive && !wasPendingBeforeHistoryRecovery) {
       setGroupConversationBusy(cid, true);
       _latestInFlight.set(cid, inFlightActors);
       _updateConvSidebarBadge(cid, true);
@@ -8341,8 +8346,11 @@ async function loadConversationHistory(cid, opts = {}) {
       if (cid === currentCid) _updateConvSendUI(cid);
     }
     const shouldRecoverRunningUi = !wasPendingBeforeHistoryRecovery
-      && processingFresh
-      && (lastMsg?.role === 'user' || inFlightActors.length > 0);
+      && processingActive
+      && (lastMsg?.role === 'user'
+        || inFlightActors.length > 0
+        || activeTurns.length > 0
+        || convMeta.backend_active === true);
     if (shouldRecoverRunningUi) {
       pollMsgCounts.set(cid, String(lastMsg?._msg_id || ''));
       const loadingEl = _createStreamingAssistantMessage(container, { hiddenUntilActor: true });
@@ -9763,6 +9771,12 @@ function _mountChatInputForm(host, msgDiv, message, opts) {
         return;
       }
       if (!submissionText) return;
+      // Skipped forms carry the semantic marker in `values`; main re-encodes
+      // the text, so re-attach the localized note the renderer owns (main has
+      // no `chat.form.*` locale keys).
+      if (values && values.__skipped === true) {
+        submissionText = `${t('chat.form.skipped_note')}\n\n${submissionText}`;
+      }
       const extra = (Array.isArray(attachments) && attachments.length)
         ? { attachments }
         : undefined;
@@ -11720,6 +11734,15 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
   if (btn) btn.disabled = true;
   const orig = btn ? btn.innerHTML : '';
   try {
+    const runtime = await _readConversationRuntime(currentCid);
+    if (_conversationRuntimeIsActive(runtime) || (!runtime && isConvPending(currentCid))) {
+      _observeConversationRunFromPlanAction(currentCid, {
+        attachExisting: true,
+        allowWithController: true,
+      });
+      await uiAlert(t('chat.retry_task_running'));
+      return;
+    }
     const failedMessageId = String(msgDiv.dataset.msgId || '').trim();
     let payload;
     if (failedMessageId) {
@@ -11742,7 +11765,8 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
       }
     }
     if (btn) btn.innerHTML = `<span class="bubble-action-spinner" aria-hidden="true"></span><span>${escapeHtml(t('chat.retry_running'))}</span>`;
-    await sendInConversation(currentCid, payload.content, payload.extra);
+    const result = await sendInConversation(currentCid, payload.content, payload.extra);
+    if (result?.reason === 'busy') await uiAlert(t('chat.retry_task_running'));
   } finally {
     if (btn) {
       btn.innerHTML = orig || escapeHtml(t('chat.retry_btn'));
@@ -13114,11 +13138,17 @@ async function sendInConversation(cid, content, extra, options = {}) {
   let taskStarted = false;
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
   if (isConvPending(cid)) {
-    // Historical replacement is a destructive linear-history operation. It
-    // must never enter the ordinary FIFO queue after a race with a new turn;
-    // the main side will reject it while the conversation is running.
-    if (extra && typeof extra.edit_message_id === 'string' && extra.edit_message_id.trim()) {
-      return { started: false, queued: false, aborted: false, errored: true, result: 'failure' };
+    // Historical retry/replacement operations must never enter the ordinary
+    // FIFO queue after a race with a new turn.
+    if (isInternalReplay) {
+      return {
+        started: false,
+        queued: false,
+        aborted: false,
+        errored: true,
+        result: 'failure',
+        reason: 'busy',
+      };
     }
     // Queued input starts a new execution stream after the current one ends,
     // so it must not be merged into the active task-turn sample.
@@ -14557,19 +14587,12 @@ function _scheduleBackendRunRediscovery(cid) {
 
 async function _rediscoverBackendRun(cid) {
   if (!cid || isConvPending(cid)) return;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
-    const data = await res.json();
-    if (!data || data.ok === false) return;
-    const processing = data.processing === true || data.backend_active === true
-      || (Array.isArray(data.in_flight) && data.in_flight.length > 0)
-      || (Array.isArray(data.active_turns) && data.active_turns.length > 0);
-    if (!processing || isConvPending(cid)) return;
-    // Re-establish the run: pending state, streaming placeholder, group event
-    // observer (untilIdle — ends when the Backend task's terminal projection
-    // clears backendTurns and the bus goes quiescent) and history polling.
-    _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
-  } catch (_) { /* best effort — no rediscovery */ }
+  const data = await _readConversationRuntime(cid);
+  if (!_conversationRuntimeIsActive(data) || isConvPending(cid)) return;
+  // Re-establish the run: pending state, streaming placeholder, group event
+  // observer (untilIdle — ends when the Backend task's terminal projection
+  // clears backendTurns and the bus goes quiescent) and history polling.
+  _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
 }
 
 // Scroll the given message to the top of the visible chat area.

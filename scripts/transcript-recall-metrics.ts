@@ -55,9 +55,7 @@ async function main(): Promise<void> {
     if (!fs.existsSync(abs)) { console.warn(`[metrics] 跳过不存在的路径：${abs}`); continue; }
     const st = fs.statSync(abs);
     if (st.isDirectory()) {
-      for (const name of fs.readdirSync(abs)) {
-        if (name.toLowerCase().endsWith('.txt') && !name.includes('清理版')) files.push(path.join(abs, name));
-      }
+      files.push(...walkTxt(abs));
     } else {
       files.push(abs);
     }
@@ -128,10 +126,17 @@ async function main(): Promise<void> {
     静雯: { canonical: '静雯', variants: ['静文'] },
   };
 
-  /** 域内概念：本次样本里真实讨论过的概念（模拟"从本体/会议主题拿到域先验"）。 */
+  /**
+   * 域内概念：本次样本里真实讨论过的概念（模拟"从本体/会议主题拿到域先验"）。
+   * 判据必须是"规范形**或其任一已知错形**出现"——规范形本身常常在正文里一次都不出现
+   * （实测：Cogseed 在原文里 0 次，全是 coxy/cox 等形态），只查规范形会把域判空。
+   */
   const domainTerms: string[] = [];
-  for (const { canonical } of Object.values(GOLD)) {
-    if (docs.some((d) => d.text.toLowerCase().includes(canonical.toLowerCase()))) domainTerms.push(canonical);
+  for (const { canonical, variants } of Object.values(GOLD)) {
+    const hay = docs.map((d) => d.text.toLowerCase()).join('\n');
+    if (hay.includes(canonical.toLowerCase()) || variants.some((v) => hay.includes(v.toLowerCase()))) {
+      domainTerms.push(canonical);
+    }
   }
   console.log(`域内概念（由样本正文自动推定）：${domainTerms.join('、')}\n`);
 
@@ -140,7 +145,7 @@ async function main(): Promise<void> {
   const recalledVariants = new Set<string>();
   const channels = { normalized: 0, phonetic: 0, edit: 0, weak: 0 };
   const disposition = { suggest: 0, review: 0 };
-  const allCandidateSurfaces = new Set<string>();
+  const suggestedSurfaces = new Map<string, string>();
   const byVariant = new Map<string, { literal: number; recall: number; total: number }>();
   const residuals = new Map<string, number>();
   let literalCandidateTotal = 0;
@@ -157,7 +162,12 @@ async function main(): Promise<void> {
     recallCandidateTotal += rec.candidates.length;
     for (const c of rec.candidates) {
       recalledVariants.add(normalizeKey(c.wrong));
-      allCandidateSurfaces.add(normalizeKey(c.wrong));
+      if (c.disposition === 'suggest') {
+        suggestedSurfaces.set(
+          normalizeKey(c.wrong),
+          `${c.wrong} → ${c.correct}［命中词条 "  ${c.matchedWrong}  "］（${c.channel} ${c.similarity.toFixed(2)}）`,
+        );
+      }
       channels[c.channel] += 1;
       disposition[c.disposition] += 1;
     }
@@ -218,18 +228,31 @@ async function main(): Promise<void> {
   const missedForms = new Map<string, number>();
   for (const r of conceptRows) for (const [v, n] of r.missed) missedForms.set(v, n);
 
-  const WHY = {
-    需拼音表: [] as string[],
-    相似度不足只能入册: [] as string[],
-    阈值或守卫拦下需排查: [] as string[],
+  /** 概念 → 该概念在词表里的全部错形键（用于判断"相似度够不够"）。 */
+  const entryKeysByCanonical = new Map<string, string[]>();
+  for (const e of entries) {
+    const list = entryKeysByCanonical.get(normalizeKey(e.correct)) ?? [];
+    list.push(normalizeKey(e.wrong));
+    entryKeysByCanonical.set(normalizeKey(e.correct), list);
+  }
+  const WHY: Record<string, string[]> = {
+    '词表缺条目（只能先入册）': [],
+    '需拼音表（中文音近）': [],
+    '相似度不足（只能入册或域先验）': [],
+    '阈值或守卫拦下（需排查）': [],
   };
   for (const [v] of missedForms) {
     const canonical = variantCanonical.get(v) ?? '';
-    const kSim = similarity(normalizeKey(v), normalizeKey(canonical));
+    const keys = entryKeysByCanonical.get(normalizeKey(canonical));
+    if (!keys || !keys.length) { WHY['词表缺条目（只能先入册）'].push(v); continue; }
+    const vKey = normalizeKey(v);
+    const vSkel = phoneticKey(v);
+    let best = 0;
+    for (const k of keys) best = Math.max(best, similarity(vKey, k), similarity(vSkel, phoneticKey(k)));
     const hasCjk = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(v);
-    if (hasCjk && hasCjk && kSim < 0.9) WHY.需拼音表.push(v);
-    else if (Math.max(kSim, similarity(phoneticKey(v), phoneticKey(canonical))) >= 0.65) WHY.阈值或守卫拦下需排查.push(v);
-    else WHY.相似度不足只能入册.push(v);
+    if (hasCjk && best < 0.9) WHY['需拼音表（中文音近）'].push(v);
+    else if (best < 0.65) WHY['相似度不足（只能入册或域先验）'].push(v);
+    else WHY['阈值或守卫拦下（需排查）'].push(v);
   }
   console.log('\n表② 仍未召回的形态 —— 按"为什么没召回"归类（本层只报告，不给建议映射）');
   const missedTotal = [...missedForms.values()].reduce((a, b) => a + b, 0);
@@ -250,16 +273,76 @@ async function main(): Promise<void> {
   // 精度代理：被判为 suggest、但不在 gold 错形清单里的形态 = 潜在误推荐
   const goldKeys = new Set<string>();
   for (const { variants } of Object.values(GOLD)) for (const v of variants) goldKeys.add(normalizeKey(v));
-  const unexpectedSuggestions = [...allCandidateSurfaces].filter((s) => !goldKeys.has(s));
-  console.log(`  潜在误推荐（suggest 但不在 gold 清单的形态）：${unexpectedSuggestions.length}`
-    + (unexpectedSuggestions.length ? ` → ${unexpectedSuggestions.slice(0, 20).join(', ')}` : ''));
+  // 精度代理：被判为 suggest、但形态不在 gold 错形清单里的候选 = 需要逐条核对的"新形态"。
+  //
+  // ⚠️ 这一节**不是误替换计数**。首轮跑出来的 10 条经逐条读上下文核对，**全部是真实变体**
+  // （证据见脚本下方 EXTRA_VERIFIED 的引文），说明"不在 gold 里"只代表 gold 不全，
+  // 不代表模型错了。真精度必须靠人工标注的 gold 集，故此处只负责把"该看的东西"摆出来。
+  const unexpected = [...suggestedSurfaces.entries()].filter(([k]) => !goldKeys.has(k));
+  console.log(`  不在 gold 清单的 suggest 候选：${unexpected.length} 条（需逐条核对；见 EXTRA_VERIFIED 已验证结论）`);
+  let verified = 0;
+  for (const [key, detail] of unexpected.slice(0, 20)) {
+    const note = EXTRA_VERIFIED[key] ? '  ← 已核对：真实变体' : '  ← 待核对';
+    if (EXTRA_VERIFIED[key]) verified += 1;
+    console.log(`    · ${detail}${note}`);
+  }
+  console.log(`    其中已人工核对为真实变体的：${verified}/${unexpected.length}`
+    + `（引文见 scripts/transcript-recall-metrics.ts 的 EXTRA_VERIFIED）`);
 
   // ── 表④ 建议入册清单 ─────────────────────────────────────────────
-  console.log('\n表④ residual 高频形态 TOP 20（"必须入册或靠域先验"的行动清单候选；需人工确认后入册）');
-  const topResidual = [...residuals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
-  for (const [surface, count] of topResidual) console.log(`  ${pad(surface, 24)} ×${count}`);
+  console.log(`\n表④ 建议入册清单（由表① 未召回形态生成；**入册需人工确认**，本脚本不自动改词表）`);
+  const needEntry: Array<{ concept: string; form: string; count: number; why: string }> = [];
+  for (const [v, n] of missedForms) {
+    const concept = variantCanonical.get(v) ?? '';
+    let why = '需入册';
+    for (const [label, list] of Object.entries(WHY)) if (list.includes(v)) why = label;
+    needEntry.push({ concept, form: v, count: n, why });
+  }
+  needEntry.sort((a, b) => b.count - a.count);
+  for (const r of needEntry) console.log(`  ${pad(r.concept, 20)} ${pad(r.form, 16)} ×${r.count}  ${r.why}`);
+  console.log(`  合计 ${needEntry.length} 种 / ${needEntry.reduce((a, b) => a + b.count, 0)} 处`);
+  console.log(`  （residual 原始清单另有 ${residuals.size} 种"不属于任何词条 correct 形态"的串，`
+    + `但其中混有正常词汇——判定哪些是真错形需要词典，本脚本不做这一猜测。）`);
 
   console.log('\n[metrics] 完成（只读；未写入任何文件）\n');
+}
+
+/**
+ * 首轮"不在 gold 清单的 suggest 候选"的**逐条上下文核对结果**。
+ *
+ * 结论：全部 10 条都是**真实变体**，不是误替换。之所以要写在这里，是因为
+ * 该判断只能靠读原文上下文得出，必须让证据跟着代码走、可被复核。
+ * 这也直接说明了为什么"字面/音形相似度"类的启发式护栏要慎加——
+ * 我曾基于"这些都是误推荐"的错误判断加过一道音形字面地板，撤回。
+ */
+// 键 = normalizeKey(形态)（去空格、小写），与查表口径一致。
+const EXTRA_VERIFIED: Record<string, string> = {
+  'carseat': '「咱们 cox seed 是一个是你的个人的大管家…这同一个 car seat 它可以对后面无数个不同的 task agent」→ 指 Cogseed',
+  'cockseed': '「你的这个 cock seed 的话，实际上是针对的是一个个人的角度来说」→ 指 Cogseed',
+  'coseat': '「我在我的 coseat 里面，我说一个提交」→ 指 Cogseed',
+  'codeset': '「当我在用 codeset 的过程中，比如说触发了一些假设」→ 指 Cogseed',
+  'cocet': '「我可以让我的 codex 让 cocet 也能生成插麦的图」→ 指 Cogseed',
+  'cocket': '「咱俩的 cocket 都是我们的 AI 工具之间去沟通」→ 指 Cogseed',
+  'personalcollege': '「我的 personal college 只要有这东西的话，我自动的给你填了」→ 指 Personal Ontology',
+  'personalquality': '「我觉得就是 personal quality 的话，其实按理说也应该是自己在」→ 指 Personal Ontology',
+  'personalholiday': '「What is in my personal holiday?」→ 上下文在讲 Personal Ontology',
+  'openclaw': '「大家经常提 OpenClaw、Claude Code 这些词」→ 本身就是正确写法，属大小写归一',
+  'personaloncology': '「如果是就是怎么说呢？人力资源管理啊，或者说 personal oncology 啊」→ 同句列举的都是资产/权限类概念，指 Personal Ontology',
+};
+
+/** 递归收集目录下的 .txt 转写（会议目录是多层嵌套的）。 */
+function walkTxt(dir: string, depth = 0): string[] {
+  if (depth > 4) return [];
+  const out: string[] = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (name.startsWith('.')) continue;
+    const full = path.join(dir, name);
+    let st: fs.Stats;
+    try { st = fs.statSync(full); } catch { continue; }
+    if (st.isDirectory()) out.push(...walkTxt(full, depth + 1));
+    else if (name.toLowerCase().endsWith('.txt') && !name.includes('清理版')) out.push(full);
+  }
+  return out;
 }
 
 function countOccurrences(text: string, needle: string): number {

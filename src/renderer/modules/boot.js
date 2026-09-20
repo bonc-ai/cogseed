@@ -463,20 +463,20 @@ function setView(view, cid, opts = {}) {
   if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
   const openPersonalOntology = view === 'personal-ontology';
   const openLegacyAgentDashboard = view === 'dashboard';
-  const openLegacyAgentSettings = view === 'agents';
+  const openLegacyAgentConnections = view === 'agents';
   // Keep deep links and persisted callers using the pre-unification routes
   // inside Run Center. The Run Center controller owns the secondary mode/tab
   // mapping, while boot only needs to select the shared panel.
   const legacyRunCenterView = ['overview', 'board', 'runs', 'tasks', 'sessions', 'history', 'execution', 'collaboration'].includes(view)
     ? view : null;
-  // Keep `agents` out of the direct-route list because that route still owns
-  // the global Connections/Agents surface outside Run Center.
+  // Keep `agents` out of the direct-route list because that route opens the
+  // global Connections/Agents surface outside Run Center.
   const requestedRunCenterView = openLegacyAgentDashboard ? 'agents' : opts.runCenterView;
   const runCenterInitialView = legacyRunCenterView || requestedRunCenterView;
   if (openPersonalOntology) view = 'recall';
   if (openLegacyAgentDashboard) view = 'run-center';
   if (legacyRunCenterView) view = 'run-center';
-  if (openLegacyAgentSettings) view = 'settings';
+  if (openLegacyAgentConnections) view = 'connections';
   if (view === 'evolution') view = 'skills';
   if (view !== 'run-center' && typeof window.stopRunCenterWatch === 'function') {
     window.stopRunCenterWatch();
@@ -652,7 +652,9 @@ function setView(view, cid, opts = {}) {
       if (currentView !== 'connections' && currentView !== 'connectors') return;
       if (typeof initConnections === 'function') initConnections();
       else if (typeof window.initConnections === 'function') window.initConnections();
-      if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
+      if (openLegacyAgentConnections && typeof activateConnectionsTab === 'function') {
+        activateConnectionsTab('agents');
+      } else if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
         activateConnectionsTab('mcp');
       }
     });
@@ -696,9 +698,7 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('settings-tab-load', () => {
       _loadViewFeature('settings', 'settings', () => {
         if (typeof loadSettings === 'function') {
-          const settingsTab = openLegacyAgentSettings ? 'configuration' : opts.settingsTab;
-          const settingsAnchor = openLegacyAgentSettings ? 'agents' : opts.settingsAnchor;
-          Promise.resolve(loadSettings({ tab: settingsTab, anchor: settingsAnchor }))
+          Promise.resolve(loadSettings({ tab: opts.settingsTab, anchor: opts.settingsAnchor }))
             .catch((e) => _bootLog.warn('settings page load failed', { error: (e && e.message) || String(e) }));
         }
       });

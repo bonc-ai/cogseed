@@ -273,13 +273,17 @@ function createWindow(): BrowserWindow {
       // titlebar, on the same axis as the shell navigation tools.
       trafficLightPosition: { x: 12, y: 19 },
     } : {}),
-    show: !IS_PACKAGED_SMOKE,
+    // Windows Chromium can deny or throttle fake media capture in a fully
+    // hidden background window. The STT verifier is a CI-only, short-lived
+    // run, so keep that window active until it records its private marker.
+    show: !IS_PACKAGED_SMOKE || IS_PACKAGED_STT_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),
     webPreferences: hardenedWebPreferences({
       // preload sits next to index.ts in PC/src/main/ — just __dirname + 'preload.js'.
       preload: path.join(__dirname, 'preload.js'),
       devTools: dev,
+      backgroundThrottling: !IS_PACKAGED_STT_SMOKE,
       additionalArguments: IS_PACKAGED_STT_SMOKE
         ? ['--cogseed-packaged-stt-smoke']
         : (IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : []),
@@ -471,6 +475,9 @@ function registerIpc(): void {
         && isNonNegativeInteger(payload?.failureCount);
       const safeInteger = (value: unknown): number => (isNonNegativeInteger(value) ? value : 0);
       const safeNumber = (value: unknown): number => (isNonNegativeNumber(value) ? value : 0);
+      const safeFailureStage = (value: unknown): string => (
+        typeof value === 'string' && /^[a-z_]+$/.test(value) ? value : 'invalid'
+      );
       const record = {
         schemaErrorCode: numericPayloadValid ? 0 : 1,
         appIsPackaged: app.isPackaged,
@@ -486,6 +493,7 @@ function registerIpc(): void {
         finalEventObserved: payload?.finalEventObserved === true,
         finalTextLength: safeInteger(payload?.finalTextLength),
         failureCount: safeInteger(payload?.failureCount),
+        failureStage: safeFailureStage(payload?.failureStage),
       };
       const marker = path.resolve(PACKAGED_STT_SMOKE_FILE);
       const temp = `${marker}.${process.pid}.tmp`;

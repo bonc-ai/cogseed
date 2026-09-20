@@ -30,6 +30,56 @@ function deferred<T>() {
 }
 
 describe('conversation polling cancellation', () => {
+  it('keeps polling when the authoritative runtime is still active regardless of elapsed time', async () => {
+    const callbacks = new Map<number, () => Promise<void>>();
+    const recovered: unknown[] = [];
+    let nextTimer = 0;
+
+    const context: any = {
+      Map,
+      Date,
+      pollTimers: new Map(),
+      pollMsgCounts: new Map([['c1', 'u1']]),
+      setInterval(fn: () => Promise<void>) {
+        nextTimer += 1;
+        callbacks.set(nextTimer, fn);
+        return nextTimer;
+      },
+      clearInterval(id: number) {
+        callbacks.delete(id);
+      },
+      apiFetch: async () => ({
+        json: async () => ({
+          ok: true,
+          history: [{ id: 'u1', from: 'user', text: 'long running task' }],
+          conversation: {
+            processing: true,
+            processing_since: '2020-01-01T00:00:00.000Z',
+          },
+        }),
+      }),
+      isGroupConversationBusy: () => true,
+      isConvPending: () => true,
+      _isPolledAssistantMsg: (message: any) => !!message && message.from !== 'user',
+      _isPolledUserMsg: (message: any) => !!message && message.from === 'user',
+      _onPolledResponse: (...args: unknown[]) => recovered.push(args),
+      t: (key: string) => key,
+      window: { ConversationRuntime: {} },
+    };
+    vm.createContext(context);
+    vm.runInContext([
+      extractFunction('_polledMessageKey'),
+      extractFunction('startPolling'),
+      extractFunction('stopPolling'),
+    ].join('\n'), context);
+
+    context.startPolling('c1');
+    await callbacks.get(1)!();
+
+    expect(recovered).toEqual([]);
+    expect(context.pollTimers.get('c1')).toBe(1);
+  });
+
   it('discards an in-flight history response after the live stream stops polling', async () => {
     const fetchResult = deferred<any>();
     const callbacks = new Map<number, () => Promise<void>>();

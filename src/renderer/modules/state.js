@@ -208,17 +208,9 @@ function startPolling(cid) {
         return;
       }
 
-      // Server crashed mid-request: processing=true but stuck longer than the
-      // model idle watchdog (30 min) + a small buffer. Shorter thresholds would
-      // trip on genuine long agent runs.
-      const since = data.conversation?.processing_since;
-      if (_isPolledUserMsg(last) && data.conversation?.processing === true && since) {
-        const elapsedSec = (Date.now() - new Date(since).getTime()) / 1000;
-        if (elapsedSec > 2100) {
-          stopPolling(cid);
-          _onPolledResponse(cid, t('chat.reply_timeout'), true);
-        }
-      }
+      // `processing_since` is only a display timer anchor. The renderer must
+      // not manufacture a terminal result while the server still owns an
+      // active task, regardless of elapsed wall-clock time.
     } catch (_) {}
   }, 3000);
   pollTimers.set(cid, timer);
