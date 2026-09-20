@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CogSeed · 认知资产完整界面原型 v7（树即界面 · 逐件复刻现役）</title>
+<style>
+  :root{
+    --green:#189a5c; --green-d:#0f7a47; --green-t:#1c7d50; --green-bg:#e9f5ee; --green-fill:#ddf0e4;
+    --green-line:#8fcfae; --green-l2:#cfe7d7;
+    --ink:#1d1f1e; --ink2:#54595e; --ink3:#8a9098; --line:#e8eae8; --paper:#fafaf9;
+    --amber-bg:#fdf6e7; --amber-t:#96690f; --amber-line:#f0dcb2; --amber-dot:#e2a33f;
+    --red:#cf4a42; --red-bg:#fdf0ef;
+    --blue:#3b74c4; --blue-bg:#eef4fb; --trunk:#c3a179; --soil:#eceae4;
+    --rs:8px; --rm:12px; --rl:16px;
+    --s1:0 1px 2px rgba(20,24,20,.05); --s2:0 2px 10px rgba(20,24,20,.09); --s3:0 14px 40px rgba(20,24,20,.18);
+    --E:cubic-bezier(.32,.72,0,1);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--paper);color:var(--ink);font-size:13px;line-height:1.6;overflow:hidden;height:100vh;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer} input,textarea{font-family:inherit} svg{display:block}
+  [hidden]{display:none!important}
+
+  /* ═══ CogSeed 外壳 ═══ */
+  .shell{display:flex;height:100vh}
+  .dock{width:196px;background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px 9px;flex-shrink:0}
+  .brand{display:flex;align-items:center;gap:8px;padding:4px 8px 14px;font-weight:700;font-size:14.5px}
+  .brand .lg{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#189a5c,#57b98a);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800}
+  .dn{display:flex;align-items:center;gap:9px;width:100%;padding:7.5px 10px;border:none;background:none;border-radius:var(--rs);font-size:13.5px;color:var(--ink2);text-align:left;margin-bottom:1px}
+  .dn.off{opacity:.45;cursor:not-allowed}
+  .dn.on{background:var(--green-bg);color:var(--green-t);font-weight:600}
+  .recents{margin-top:12px;flex:1;overflow:hidden}
+  .recents .rh{font-size:11px;font-weight:700;color:var(--ink3);letter-spacing:.6px;padding:4px 10px}
+  .rc{display:flex;gap:8px;padding:6px 10px;font-size:12.5px;color:var(--ink2);opacity:.45}
+  .rc .tm{font-size:10.5px;color:var(--ink3);margin-left:auto}
+  .userchip{display:flex;align-items:center;gap:9px;padding:9px 10px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink2)}
+  .userchip .av{width:26px;height:26px;border-radius:99px;background:var(--green-bg);color:var(--green-t);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+
+  .panel{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+  .tabs{height:46px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:stretch;padding:0 18px;gap:2px;flex-shrink:0}
+  .tab{border:none;background:none;font-size:13.5px;color:var(--ink2);padding:0 14px;position:relative;transition:color .12s}
+  .tab:hover{color:var(--ink)}
+  .tab.on{color:var(--ink);font-weight:600}
+  .tab.on::after{content:'';position:absolute;left:11px;right:11px;bottom:-1px;height:2.5px;background:var(--green);border-radius:3px 3px 0 0}
+  .tab .bdg{display:inline-block;min-width:15px;background:var(--amber-dot);color:#fff;font-size:10px;border-radius:99px;padding:0 5px;line-height:15px;margin-left:5px;font-weight:600;text-align:center}
+  .tools{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .search{display:flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--line);border-radius:var(--rm);padding:5.5px 11px;width:200px;transition:all .15s}
+  .search:focus-within{border-color:var(--green-line);box-shadow:0 0 0 3px rgba(24,154,92,.08)}
+  .search svg{width:13px;height:13px;color:var(--ink3);flex-shrink:0}
+  .search input{border:none;outline:none;background:none;font-size:12.5px;width:100%}
+  .tbtn{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:var(--rs);font-size:12.5px;padding:5px 13px;transition:all .12s}
+  .tbtn:hover{background:var(--paper);color:var(--ink)}
+  .scrolly{flex:1;overflow-y:auto;position:relative}
+  .wrap{max-width:780px;margin:0 auto;padding:24px 24px 90px}
+
+  /* ═══ 通用件 ═══ */
+  .card{background:#fff;border:1px solid var(--line);border-radius:var(--rm);box-shadow:var(--s1)}
+  .hero{margin-bottom:20px}
+  .hero h2{font-size:20px;font-weight:700;letter-spacing:-.2px}
+  .hero .sub{font-size:12.5px;color:var(--ink3);margin-top:3px}
+  .stats{display:flex;gap:10px;margin-top:14px}
+  .stat{flex:1;background:#fff;border:1px solid var(--line);border-radius:var(--rm);padding:11px 14px;box-shadow:var(--s1)}
+  .stat .v{font-size:21px;font-weight:800}
+  .stat .v.g{color:var(--green-t)} .stat .v.a{color:var(--amber-t)} .stat .v.b{color:var(--blue)}
+  .stat .l{font-size:11.5px;color:var(--ink3)}
+  .btn{border:none;border-radius:var(--rs);font-size:13px;font-weight:600;padding:7px 16px;background:var(--green);color:#fff;transition:all .12s}
+  .btn:hover{background:var(--green-d)}
+  .btn.g{background:var(--green-bg);color:var(--green-t)} .btn.g:hover{background:var(--green-fill)}
+  .btn.d{background:var(--red);color:#fff}
+  .btn.o{background:#fff;color:var(--ink2);border:1px solid var(--line)} .btn.o:hover{border-color:var(--ink3);color:var(--ink)}
+  .btn.sm{padding:4px 12px;font-size:12px}
+  .chip{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:999px;font-size:12px;padding:3.5px 13px;transition:all .12s;font-weight:500}
+  .chip:hover{border-color:var(--ink3);color:var(--ink)}
+  .chip.on{background:var(--green-bg);border-color:var(--green-line);color:var(--green-t);font-weight:600}
+  .tag{font-size:10.5px;font-weight:600;border-radius:4px;padding:1.5px 7px;white-space:nowrap}
+  .tag.green{background:var(--green-bg);color:var(--green-t)}
+  .tag.amber{background:var(--amber-bg);color:var(--amber-t)}
+  .tag.red{background:var(--red-bg);color:var(--red)}
+  .tag.gray{background:#eef0ee;color:var(--ink2)}
+  .tag.blue{background:var(--blue-bg);color:var(--blue)}
+  .tag.vio{background:#f3effa;color:#7d5bb5}
+  .backlink{display:inline-flex;align-items:center;gap:5px;border:none;background:none;color:var(--ink3);font-size:12.5px;padding:2px 0;margin-bottom:10px}
+  .backlink:hover{color:var(--ink)}
+  .sect{font-size:13px;font-weight:700;margin:20px 0 9px;display:flex;align-items:center;gap:9px}
+  .sect .n{font-size:11px;color:var(--ink3);font-weight:500}
+  .sect .sp{flex:1;height:1px;background:var(--line)}
+  .note{font-size:12px;color:var(--ink3);line-height:1.55}
+  .warn{background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:var(--rs);padding:9px 13px;font-size:12.5px;color:var(--amber-t)}
+  .empt{text-align:center;padding:44px 0;color:var(--ink3)}
+  .empt .e{font-size:27px;margin-bottom:7px}
+  .empt .t{font-size:13.5px;color:var(--ink2)} .empt .s{font-size:12px;margin-top:2px}
+
+  /* ═══ Tab1 认知树：真树形整页 ═══ */
+  .tree-stage{height:calc(100vh - 46px);position:relative;overflow:hidden;background:linear-gradient(180deg,#fcfdfc 0%,var(--paper) 55%,#f0efe9 100%)}
+  .tree-stage svg{width:100%;height:100%;display:block}
+  .spot{cursor:pointer}
+  .spot .halo{transition:all .2s var(--E);transform-origin:center;transform-box:fill-box}
+  .spot:hover .halo{opacity:.55;transform:scale(1.35)}
+  .spot text{pointer-events:none}
+  .fl-top{position:absolute;top:14px;left:18px;right:18px;display:flex;align-items:center;gap:9px;z-index:5;pointer-events:none}
+  .fl-top>*{pointer-events:auto}
+  .ft{display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.92);border:1px solid var(--line);color:var(--ink2);border-radius:999px;font-size:12.5px;padding:6px 14px;backdrop-filter:blur(6px)}
+  .ft-title{font-size:13.5px;font-weight:700;color:var(--ink)}
+  .fl-bottom{position:absolute;bottom:15px;left:18px;right:18px;display:flex;align-items:flex-end;gap:10px;z-index:5;pointer-events:none}
+  .fl-bottom>*{pointer-events:auto}
+  .legend{display:flex;gap:13px;align-items:center;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:999px;padding:7px 16px;font-size:11.5px;color:var(--ink2);backdrop-filter:blur(6px);flex-wrap:wrap}
+  .legend .k{display:flex;align-items:center;gap:5px}
+  .legend .dt{width:8px;height:8px;border-radius:99px}
+  .todo{margin-left:auto;background:#fff;border:1px solid var(--amber-line);border-radius:var(--rl);padding:10px 15px;width:264px;box-shadow:var(--s2);cursor:pointer;transition:all .15s}
+  .todo:hover{transform:translateY(-2px);box-shadow:var(--s3)}
+  .todo .tt{font-size:12px;color:var(--amber-t);font-weight:700;display:flex;align-items:center;gap:7px}
+  .todo .tt .n{background:var(--amber-dot);color:#fff;border-radius:99px;padding:0 7px;font-size:11px;line-height:16px}
+  .todo .td{font-size:12.5px;color:var(--ink2);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 抽屉 */
+  .drawer{position:absolute;top:0;right:0;bottom:0;width:470px;max-width:92vw;background:#fff;border-left:1px solid var(--line);box-shadow:-14px 0 40px rgba(20,24,20,.14);z-index:20;transform:translateX(103%);transition:transform .26s var(--E);display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .dw-hd{padding:14px 18px 10px;display:flex;align-items:flex-start;gap:11px;border-bottom:1px solid var(--line)}
+  .dw-hd .nm{font-size:15px;font-weight:700;flex:1}
+  .dw-hd .ds{font-size:11.5px;color:var(--ink3);margin-top:2px}
+  .dw-x{border:none;background:none;color:var(--ink3);width:29px;height:29px;border-radius:var(--rs);font-size:15px}
+  .dw-x:hover{background:var(--paper)}
+  .dw-bd{flex:1;overflow-y:auto;padding:12px 18px 26px}
+  .dw-foot{padding:11px 18px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;background:#fff}
+  .dw-foot .hint{font-size:11.5px;color:var(--ink3);flex:1}
+  .tip{position:fixed;z-index:60;background:var(--ink);color:#fff;font-size:11.5px;border-radius:var(--rs);padding:5px 10px;pointer-events:none;opacity:0;transition:opacity .12s;max-width:240px;line-height:1.45}
+  .tip.show{opacity:1}
+
+  /* ═══ 我的认知 ═══ */
+  .fam-hd{display:flex;align-items:center;gap:9px;margin:17px 2px 8px}
+  .fam-hd .nm{font-size:12.5px;font-weight:700;color:var(--ink2)}
+  .fam-hd .n{font-size:11px;color:var(--ink3)}
+  .fam-hd .rnm{border:none;background:none;color:var(--green-t);font-size:11.5px;padding:0}
+  .fam-hd .rnm:hover{text-decoration:underline}
+  .fam-hd .sp{flex:1;height:1px;background:var(--line)}
+  .row{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:var(--rm);padding:11.5px 15px;margin-bottom:7px;box-shadow:var(--s1);cursor:pointer;transition:all .13s}
+  .row:hover{border-color:#cfd4d0;box-shadow:var(--s2)}
+  .row .tw{flex:1;min-width:0}
+  .row .tt{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .mm{font-size:11.5px;color:var(--ink3);margin-top:2px}
+  .row .sd{display:flex;align-items:center;gap:6px;flex-shrink:0}
+  .row .chev{color:var(--ink3);font-size:13px}
+  .catline{font-size:12.5px;color:var(--ink2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+  .switch{width:34px;height:20px;border-radius:99px;background:#dadce0;border:none;position:relative;transition:background .16s;flex-shrink:0}
+  .switch::after{content:'';position:absolute;width:14px;height:14px;border-radius:99px;background:#fff;top:3px;left:3px;transition:left .16s var(--E);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+  .switch.on{background:var(--green)} .switch.on::after{left:17px}
+  .pillbox{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:15px}
+  .details{border:1px solid var(--line);border-radius:var(--rm);background:#fff;margin-bottom:9px}
+  .details summary{list-style:none;padding:11px 15px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px}
+  .details summary::-webkit-details-marker{display:none}
+  .details summary::before{content:'▸';color:var(--ink3);transition:transform .15s}
+  .details[open] summary::before{transform:rotate(90deg)}
+  .details .dbody{padding:2px 15px 13px;border-top:1px solid var(--line)}
+  .vrow{display:flex;align-items:center;gap:11px;padding:9px 2px;border-bottom:1px solid var(--hair,#f0f1f3);cursor:pointer}
+  .vrow:last-child{border:none}
+  .vrow:hover{background:var(--paper)}
+  .vrow .vt{flex:1;min-width:0}
+  .vrow .v1{font-size:13px;font-weight:600;display:flex;gap:8px;align-items:center}
+  .vrow .v2{font-size:11.5px;color:var(--ink3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vrow .inuse{font-size:10.5px;font-weight:700;color:var(--green-t);background:var(--green-bg);border-radius:4px;padding:1px 7px}
+  .vr-detail{background:var(--paper);border:1px solid var(--line);border-radius:var(--rs);padding:11px 13px;margin:8px 0;font-size:12.5px;line-height:1.6}
+  .vr-detail .kv{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .vr-detail .kv span{font-size:10.5px;background:#fff;border:1px solid var(--line);border-radius:4px;padding:1.5px 8px;color:var(--ink2)}
+  .vr-acts{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap}
+  .ed-form .fld{margin-bottom:10px}
+  .ed-form label{display:block;font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px}
+  .ed-form input,.ed-form textarea{width:100%;border:1px solid var(--line);border-radius:var(--rs);padding:8px 11px;font-size:13px;outline:none;transition:border .12s}
+  .ed-form textarea{min-height:74px;resize:vertical;line-height:1.55}
+  .ed-form input:focus,.ed-form textarea:focus{border-color:var(--green-line)}
+  .use-row{display:flex;gap:11px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--hair);font-size:12.5px}
+  .use-row:last-child{border:none}
+  .use-row .when{color:var(--ink3);font-size:11.5px;width:64px;flex-shrink:0}
+  .rate-box{background:var(--paper);border:1px solid var(--line);border-radius:var(--rs);padding:10px 12px;margin:8px 0 4px}
+  .rate-box .qq{font-size:12px;font-weight:600;margin-bottom:7px}
+  .fb{display:flex;gap:6px;flex-wrap:wrap}
+  .fb button{border:1px solid var(--line);background:#fff;border-radius:var(--rs);font-size:12px;padding:4px 12px;color:var(--ink2)}
+  .fb button:hover{border-color:var(--green);color:var(--green-t)}
+
+  /* ═══ 待我处理 ═══ */
+  .cand{background:#fff;border:1px solid var(--line);border-radius:var(--rl);box-shadow:var(--s1);padding:14px 17px;margin-bottom:10px;cursor:pointer;transition:all .13s}
+  .cand:hover{border-color:#cfd4d0;box-shadow:var(--s2)}
+  .cand .c1{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .cand .c1 .chev{margin-left:auto;color:var(--ink3)}
+  .cand .c2{display:flex;gap:7px;margin-top:7px;flex-wrap:wrap}
+  .cand .c3{font-size:12.5px;color:var(--ink2);margin-top:8px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .cand .c4{font-size:11.5px;color:var(--ink3);margin-top:7px}
+  .typchips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:11px}
+  .typchips button{border:1px solid var(--line);background:#fff;border-radius:999px;font-size:12px;padding:3.5px 14px;color:var(--ink2)}
+  .typchips button.on{background:var(--green-bg);border-color:var(--green-line);color:var(--green-t);font-weight:600}
+  .evrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink2);padding:5px 0;border-bottom:1px solid var(--hair)}
+  .evrow:last-child{border:none}
+  .sourcerow{display:flex;align-items:center;gap:9px;padding:8px 2px;border-bottom:1px solid var(--hair);font-size:12.5px}
+  .sourcerow:last-child{border:none}
+  .proc-row{display:flex;gap:10px;font-size:12.5px;padding:6px 2px;border-bottom:1px solid var(--hair);align-items:baseline}
+  .proc-row:last-child{border:none}
+  .proc-row .when{color:var(--ink3);font-size:11px;width:56px;flex-shrink:0}
+
+  /* ═══ 整理 ═══ */
+  .cap-row{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:var(--rm);padding:12px 15px;margin-bottom:7px;box-shadow:var(--s1)}
+  .cap-row .tw{flex:1;min-width:0}
+  .cap-row .tt{font-size:13.5px;font-weight:600;cursor:pointer}
+  .cap-row .tt:hover{color:var(--green-t)}
+  .cap-row .mm{font-size:11.5px;color:var(--ink3);margin-top:2px;display:flex;gap:9px;flex-wrap:wrap}
+  .cap-row .sd{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .steps{display:flex;gap:4px;margin-top:9px}
+  .step{flex:1;height:5px;border-radius:99px;background:var(--line)}
+  .step.done{background:var(--green)} .step.cur{background:var(--amber-dot)}
+  .stepn{display:flex;gap:4px;margin-top:5px}
+  .stepn span{flex:1;font-size:9.5px;color:var(--ink3);text-align:center}
+  .setrow{display:flex;align-items:center;gap:11px;padding:11px 2px;border-bottom:1px solid var(--hair)}
+  .setrow:last-child{border:none}
+  .setrow .sl{flex:1}
+  .setrow .st{font-size:13px;font-weight:600}
+  .setrow .ss{font-size:11.5px;color:var(--ink3)}
+
+  /* ═══ 弹层 ═══ */
+  .ovl{position:fixed;inset:0;background:rgba(20,24,20,.44);z-index:100;display:none;align-items:center;justify-content:center}
+  .ovl.open{display:flex;animation:oi .15s var(--E)}
+  @keyframes oi{from{opacity:0}}
+  .mod{background:#fff;border-radius:var(--rl);box-shadow:var(--s3);width:440px;max-width:calc(100vw - 44px);overflow:hidden;animation:mdi .16s var(--E)}
+  @keyframes mdi{from{opacity:0;transform:scale(.96) translateY(8px)}}
+  .mh{padding:17px 20px 4px;font-size:14.5px;font-weight:700}
+  .mb{padding:8px 20px 6px;font-size:13px;color:var(--ink2);line-height:1.6}
+  .mf{padding:12px 20px 17px;display:flex;justify-content:flex-end;gap:8px}
+  .b2{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:var(--rm);font-size:13px;padding:8px 17px;font-weight:500}
+  .b2:hover{background:var(--paper)}
+  .b2.pri{background:var(--green);border-color:var(--green);color:#fff;font-weight:600}
+  .b2.dng{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+  .b2.sm{padding:5px 14px;font-size:12.5px}
+  .toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(10px);background:var(--ink);color:#fff;font-size:13px;border-radius:999px;padding:8px 20px;box-shadow:var(--s3);opacity:0;pointer-events:none;transition:all .2s var(--E);z-index:200;display:flex;gap:8px;align-items:center}
+  .toast.show{opacity:1;transform:translateX(-50%)}
+  .toast svg{width:13px;height:13px;color:#7ddbaf}
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="dock">
+    <div class="brand"><div class="lg">C</div>CogSeed</div>
+    <button class="dn off">＋ 新建任务</button>
+    <button class="dn off">▦ 工作空间</button>
+    <button class="dn off">▤ 知识库</button>
+    <button class="dn on">❋ 认知资产</button>
+    <button class="dn off">◔ 自动化</button>
+    <button class="dn off">⚔ 智能体·技能·连接</button>
+    <div class="recents">
+      <div class="rh">最近任务</div>
+      <div class="rc"><span>时间线记录标注来源…</span><span class="tm">22小时</span></div>
+      <div class="rc"><span>对话中引用认知资产…</span><span class="tm">1天</span></div>
+      <div class="rc"><span>你当前同一个或一…</span><span class="tm">1天</span></div>
+      <div class="rc"><span>对 AI 比喻式回答的…</span><span class="tm">2天</span></div>
+      <div class="rc"><span>关于你的已知信息</span><span class="tm">2天</span></div>
+    </div>
+    <div class="userchip"><div class="av">子</div>本地用户 · 个人工作空间</div>
+  </aside>
+
+  <main class="panel">
+    <div class="tabs">
+      <button class="tab on" data-t="tree" onclick="tab('tree')">认知树</button>
+      <button class="tab" data-t="mine" onclick="tab('mine')">我的认知</button>
+      <button class="tab" data-t="review" onclick="tab('review')">待我处理<span class="bdg" id="rev-bdg"></span></button>
+      <button class="tab" data-t="org" onclick="tab('org')">整理</button>
+      <div class="tools">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" placeholder="搜索记住的内容…" oninput="onQ(this.value)">
+        </div>
+        <button class="tbtn" onclick="op('ov-tpl')">模板库</button>
+      </div>
+    </div>
+
+    <div class="scrolly" id="scrolly">
+      <!-- ═══ Tab1：认知树（整页真树） ═══ -->
+      <div class="tree-stage" id="v-tree">
+        <div class="fl-top">
+          <div class="ft ft-title">认知树</div>
+          <div class="ft">土壤 → 根芽 → 枝上资产 → 树冠已验证 · 每个光斑是一条内容，点开看全文</div>
+          <div style="flex:1"></div>
+          <button class="ft" onclick="tab('review')" id="tree-go-review" style="display:none">查看 <b id="tree-gn">0</b> 条待确认候选</button>
+        </div>
+        <svg id="tree-svg" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="fl-bottom">
+          <div class="legend">
+            <span class="k"><span class="dt" style="background:var(--green)"></span>已验证</span>
+            <span class="k"><span class="dt" style="background:var(--green-line)"></span>资产</span>
+            <span class="k"><span class="dt" style="background:var(--blue)"></span>KSTAR</span>
+            <span class="k"><span class="dt" style="background:var(--amber-dot)"></span>待确认芽</span>
+            <span style="color:var(--ink3)">光斑大小 = 使用次数 · 悬停看详情 · 点开全文</span>
+          </div>
+          <div class="todo" id="tree-todo" onclick="tab('review')" style="display:none">
+            <div class="tt">⚠ 等你处理 <span class="n" id="todo-n">0</span></div>
+            <div class="td" id="todo-d"></div>
+          </div>
+        </div>
+        <div class="drawer" id="drawer">
+          <div class="dw-hd"><div style="flex:1"><div class="nm" id="dw-nm"></div><div class="ds" id="dw-ds"></div></div><button class="dw-x" onclick="closeDrawer()">✕</button></div>
+          <div class="dw-bd" id="dw-bd"></div>
+          <div class="dw-foot"><span class="hint">改动即时保存，自动去重合并</span><button class="b2 sm" onclick="toast('历史快照已留档（内部）')">历史</button></div>
+        </div>
+        <div class="tip" id="tip"></div>
+      </div>
+
+      <!-- ═══ Tab2：我的认知 ═══ -->
+      <div class="wrap" id="v-mine" hidden></div>
+      <!-- ═══ Tab3：待我处理 ═══ -->
+      <div class="wrap" id="v-review" hidden></div>
+      <!-- ═══ Tab4：整理 ═══ -->
+      <div class="wrap" id="v-org" hidden></div>
+    </div>
+
+    <div style="border-top:1px solid var(--line);background:#fff;padding:9px 22px;display:flex;align-items:center;gap:14px;flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:10px;flex:1">
+        <button class="switch on" id="msw" onclick="mswClick(this)"></button>
+        <span style="font-size:12.5px;color:var(--ink2)"><b style="color:var(--ink)">记忆</b> —— AI 自动记住对话中的信息</span>
+      </div>
+      <button class="tbtn" onclick="toast('已导出全部记忆为文件')">导出</button>
+      <button class="tbtn" onclick="toast('选择要导入的文件…')">导入</button>
+    </div>
+  </main>
+</div>
+
+<!-- ═══ 弹层 ═══ -->
+<div class="ovl" id="ov-c"><div class="mod">
+  <div class="mh" id="c-t">确认</div>
+  <div class="mb" id="c-b"></div>
+  <div class="mf"><button class="b2" onclick="cl('ov-c')">取消</button><button class="b2 pri" id="c-ok">确认</button></div>
+</div></div>
+
+<div class="ovl" id="ov-choice"><div class="mod">
+  <div class="mh">检测到与现有资产高度相似</div>
+  <div class="mb">「<b id="ch-new"></b>」与已有资产「<b id="ch-old"></b>」说的是同一件事。怎么处理？</div>
+  <div class="mf" style="justify-content:space-between">
+    <button class="b2" onclick="cl('ov-choice');toast('先不动，候选还在待处理列表')">先不动</button>
+    <div style="display:flex;gap:8px">
+      <button class="b2" onclick="cl('ov-choice');toast('已存为新条目')">存为新条目</button>
+      <button class="b2 pri" onclick="cl('ov-choice');toast('已更新到该条资产（融合出新版本）')">更新到该条资产</button>
+    </div>
+  </div>
+</div></div>
+
+<div class="ovl" id="ov-tpl"><div class="mod">
+  <div class="mh">角色模板</div>
+  <div class="mb"><div class="note" style="margin:0 0 8px">模板是一套预填的内容包，装好后它就懂这类角色的基本信息。</div>
+    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px;border-bottom:1px solid var(--line)"><div style="width:38px;height:38px;border-radius:11px;background:#eef2f8;display:flex;align-items:center;justify-content:center;font-size:18px">🎓</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">学生</div><div style="font-size:12px;color:var(--ink3)">学业阶段、课程、学习偏好</div></div><button class="b2 sm" onclick="toast('已安装「学生」，内容出现在「我的认知」')">安装</button></div>
+    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px;border-bottom:1px solid var(--line)"><div style="width:38px;height:38px;border-radius:11px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:18px">💼</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">开发者</div><div style="font-size:12px;color:var(--ink3)">技术栈、项目经历、工作习惯</div></div><button class="b2 sm" onclick="toast('已卸载「开发者」（内容归档保留）')">卸载</button></div>
+    <div style="display:flex;align-items:center;gap:13px;padding:11px 2px"><div style="width:38px;height:38px;border-radius:11px;background:var(--amber-bg);display:flex;align-items:center;justify-content:center;font-size:18px">🏠</div><div style="flex:1"><div style="font-size:13.5px;font-weight:600">生活</div><div style="font-size:12px;color:var(--ink3)">饮食、居住、健康、家庭</div></div><button class="b2 sm" onclick="toast('已安装「生活」')">安装</button></div>
+  </div>
+</div></div>
+
+<div class="toast" id="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg><span id="toast-t"></span></div>
+
+<script>
+/* ═══════════════════ 数据（唯一源，四页联动） ═══════════════════ */
+let assets = [
+  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,
+   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
+   proofs:[{when:'今天',txt:'在对话《时间线记录标注来源》里被实际使用（v3）',rate:null},{when:'昨天',txt:'在对话《对话中引用认知资产》里被实际使用（v3）',rate:'有用'}]},
+  {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按内部技术排查口径回答，不按终端用户口径；必要时补基础原理但不降技术深度。',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'昨天',prev:'程序配置、数值类问题按内部技术排查口径回答。',note:'首次确认',eff:null}],proofs:[]},
+  {id:'a3',cat:'关于我',fam:'回复风格',title:'偏好中文简洁回复',v:2,vv:['v1','v2'],stmt:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',uses:8,last:'3 天前',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:2,inuse:true,src:'版本合并',when:'周三',prev:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',note:'并入原来两条',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上周',prev:'偏好中文简洁回复。',note:'首次确认',eff:null}],
+   proofs:[{when:'3 天前',txt:'在对话《关于我的了解程度》里被实际使用（v2）',rate:'没差别'}]},
+  {id:'a4',cat:'规则与偏好',fam:'',title:'评审 → 先讲产品模型',v:1,vv:['v1'],stmt:'评审 → 先讲产品模型，再谈实现细节；避免过早陷入实现讨论。',uses:3,last:'上周',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'上周',prev:'评审 → 先讲产品模型，再谈实现细节。',note:'你教它的',eff:null}],proofs:[]},
+  {id:'a5',cat:'规则与偏好',fam:'',title:'术语白话化',v:2,vv:['v1','v2'],stmt:'专业术语首次出现时，用一句话白话解释，不额外展开。',uses:21,last:'今天',status:'active',mat:'已实证',kstar:false,
+   vers:[{v:2,inuse:true,src:'手动编辑',when:'上周',prev:'专业术语首次出现时用一句话白话解释。',note:'补示例写法',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上个月',prev:'专业术语首次出现时用一句话白话解释。',note:'首次确认',eff:null}],
+   proofs:[{when:'今天',txt:'几乎每次对话——自动带入（v2）',rate:'有用'}]},
+  {id:'a6',cat:'技能与方法',fam:'',title:'先跑测试再提交',v:1,vv:['v1'],stmt:'改动后先跑相关测试再提交；全量口径 npm run test:js 两遍一致。',uses:5,last:'2 周前',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'2 周前',prev:'改动后先跑测试再提交。',note:'首次确认',eff:null}],proofs:[]},
+  {id:'a7',cat:'模板与范例',fam:'',title:'学业方向：计算机科学',v:1,vv:['v1'],stmt:'学业方向：计算机科学，大二在读（来自「学生」模板）。',uses:0,last:'',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'系统迁移',when:'上个月',prev:'学业方向：计算机科学，大二在读。',note:'模板安装带入',eff:null}],proofs:[]},
+];
+let cands = [
+  {id:'c1',title:'用户对花生过敏',cat:'关于我',src:'对话中记',ev:'ok',body:'用户对花生过敏，饮食推荐要避开花生和花生油。来源：昨天的对话。',srcLine:['对话中当场记（无独立会话出处）']},
+  {id:'c2',title:'团队在用 GitLab 托管代码',cat:'模板与范例',src:'会话整理',ev:'ok',body:'用户的团队在用 GitLab 做代码托管，MR 流程为主。来源：「企业版打包发布」对话。',srcLine:['企业版打包发布','认知资产迭代']},
+  {id:'c3',title:'时间线默认按时间倒序',cat:'规则与偏好',src:'会话整理',ev:'bad',body:'时间线视图默认按时间倒序排列，最新的在最上面。',srcLine:['来源记录不可用']},
+];
+let proc = [
+  {when:'今天',txt:'「术语白话化」相关候选——已保存',r:'已保存'},
+  {when:'昨天',txt:'「git 身份 Zian-Anson」——已并入既有资产',r:'已忽略'},
+  {when:'昨天',txt:'「周末整理重要发现」——未保存',r:'未保存'},
+];
+let caps = [
+  {id:'p1',n:'时间线记录标注来源',when:'22 小时前',bucket:'attention',status:'待确认',reason:'候选已就绪，等你确认',pend:2,step:4},
+  {id:'p2',n:'对话中引用认知资产',when:'1 天前',bucket:'done',status:'已完成 · 已保存',reason:'整理完成，候选已确认',pend:0,step:5},
+  {id:'p3',n:'你当前同一个或一个…',when:'1 天前',bucket:'active',status:'模型提炼中',reason:'正在提炼内容',pend:0,step:3},
+  {id:'p4',n:'对 AI 比喻式回答的…',when:'2 天前',bucket:'done',status:'已完成 · 已保存',reason:'整理完成',pend:0,step:5},
+  {id:'p5',n:'Saying hello',when:'5 天前',bucket:'excluded',status:'—',reason:'纯寒暄',pend:0,step:0,chatty:true},
+  {id:'p6',n:'关于你的已知信息',when:'2 天前',bucket:'done',status:'已完成 · 未保存',reason:'没有值得留存的内容',pend:0,step:5},
+];
+let srcIssues = [{n:'飞书连接器',k:'连接器',w:'连接器已断开，需要重新连接'},{n:'GitLab 令牌',k:'连接器',w:'令牌过期，需要重新授权'}];
+let pendingSrc = true, q = '', myView = 'list', myCat = 'all', orgBucket = 'all', orgExpand = false, orgSettings = false;
+let curAsset = null, editing = null, openVer = null, curCand = null, curCap = null;
+let nid = 100;
+
+/* ═══════ 工具 ═══════ */
+const $ = id => document.getElementById(id);
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+let tt; function toast(m){$('toast-t').textContent=m;$('toast').classList.add('show');clearTimeout(tt);tt=setTimeout(()=>$('toast').classList.remove('show'),2300)}
+function op(id){$(id).classList.add('open')} function cl(id){$(id).classList.remove('open')}
+function confirmBox(t2,b,ok){$('c-t').textContent=t2;$('c-b').innerHTML=b;$('c-ok').onclick=()=>{cl('ov-c');ok()};op('ov-c')}
+document.querySelectorAll('.ovl').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')}));
+function pendCount(){return cands.length}
+function refreshBadges(){const n=pendCount();$('rev-bdg').textContent=n;$('rev-bdg').dataset.n=n;
+  $('tree-go-review').style.display=n?'':'none';$('tree-gn').textContent=n;
+  $('tree-todo').style.display=n?'':'none';$('todo-n').textContent=n;
+  if(n)$('todo-d').textContent=cands[0]?.title||'';}
+
+/* ═══════ Tab 切换（归位到各页根） ═══════ */
+function tab(t){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.t===t));
+  $('v-tree').hidden = t!=='tree';
+  $('v-mine').hidden = t!=='mine';
+  $('v-review').hidden = t!=='review';
+  $('v-org').hidden = t!=='org';
+  curAsset=null;editing=null;openVer=null;curCand=null;curCap=null;
+  const d=$('drawer'); if(d)d.classList.remove('open');
+  if(t==='mine')renderMine();
+  if(t==='review')renderReview();
+  if(t==='org')renderOrg();
+  if(t==='tree')drawTree();
+}
+function onQ(v){ q = v.trim(); if(curTab!=='mine'){tab('mine');return} myCat='all'; renderMine(); }
+
+/* ═══════ Tab1 认知树：真树形——光斑长在枝上，标签常显 ═══════ */
+const BR = [
+  {cat:'技能与方法',label:'技能与方法',side:-1,lift:250},
+  {cat:'规则与偏好',label:'规则与偏好',side:-1,lift:390},
+  {cat:'模板与范例',label:'模板与范例',side:1,lift:390},
+];
+function spotSvg(o){
+  const sel = selSpot===o.kind+':'+o.id ? ' sel' : '';
+  const kstar = o.kstar ? `<circle cx="${o.x+o.r*0.72}" cy="${o.y-o.r*0.72}" r="4" fill="var(--blue)" stroke="#fff" stroke-width="1.4"/>` : '';
+  return `<g class="spot${sel}" data-kind="${o.kind}" data-id="${o.id}" data-title="${esc(o.title)}" data-sub="${esc(o.sub||'')}">
+    ${o.glow?`<circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r*2}" fill="${o.color}" opacity=".2" filter="url(#gl)"/>`:''}
+    <circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r+5}" fill="${o.color}" opacity=".1"/>
+    <circle class="core" cx="${o.x}" cy="${o.y}" r="${o.r}" fill="${o.color}" stroke="#fff" stroke-width="1.8"/>
+    ${kstar}
+    <text x="${o.tx!==undefined?o.tx:o.x}" y="${o.ty!==undefined?o.ty:o.y-o.r-8}" text-anchor="${o.anchor||'middle'}" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="#fff" stroke-width="3" style="pointer-events:none">${esc(o.title.length>15?o.title.slice(0,14)+'…':o.title)}</text>
+  </g>`;
+}
+function drawTree(){
+  const svg=$('tree-svg'); const W=svg.clientWidth||1240, H=svg.clientHeight||760;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const cx=W/2;
+  const groundY=H-96;
+  const validated=assets.filter(a=>a.mat!=='未验证'&&a.status==='active');
+  const about=assets.filter(a=>a.cat==='关于我'&&a.status==='active');
+  let g='<defs><filter id="gl" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>';
+  /* 树冠云（覆盖面更大、三层） */
+  g+=`<g>
+    <ellipse cx="${cx-190}" cy="96" rx="170" ry="62" fill="var(--green-fill)" stroke="var(--green-l2)"/>
+    <ellipse cx="${cx+190}" cy="96" rx="170" ry="62" fill="var(--green-fill)" stroke="var(--green-l2)"/>
+    <ellipse cx="${cx}" cy="58" rx="215" ry="72" fill="var(--green-fill)" stroke="var(--green-line)"/>
+    <text x="${cx}" y="52" text-anchor="middle" font-size="14.5" font-weight="800" fill="var(--green-t)">🌳 已验证 ${validated.length}</text>
+    <text x="${cx}" y="71" text-anchor="middle" font-size="10.5" fill="var(--green-t)" opacity=".8">被真实复用或验证有效的资产 · 点击进入</text></g>`;
+  /* 冠内：已验证资产光斑（横向排布，光斑+名称） */
+  validated.slice(0,6).forEach((a,i)=>{
+    const span=(i-(Math.min(validated.length,6)-1)/2);
+    const x=cx+span*130, y=(i%2? 96:118);
+    g+=spotSvg({id:a.id,kind:'asset',x,y,r:9,color:'var(--green)',glow:true,kstar:a.kstar,title:a.title});
+  });
+  /* 树干（完整一根） */
+  g+=`<rect x="${cx-11}" y="120" width="22" height="${groundY-120-52}" rx="6" fill="var(--trunk)" opacity=".55"/>`;
+  /* 枝条贝塞尔（两侧伸出） */
+  const branchY1=groundY-290, branchY2=groundY-200;
+  g+=`<path d="M ${cx-5} ${branchY1+60} C ${cx-140} ${branchY1+30}, ${cx-200} ${branchY1+10}, ${cx-300} ${branchY1}" stroke="var(--trunk)" stroke-width="8" fill="none" opacity=".55" stroke-linecap="round"/>`;
+  g+=`<path d="M ${cx+5} ${branchY2+50} C ${cx+150} ${branchY2+20}, ${cx+210} ${branchY2}, ${cx+300} ${branchY2}" stroke="var(--trunk)" stroke-width="8" fill="none" opacity=".55" stroke-linecap="round"/>`;
+  g+=`<path d="M ${cx-5} ${branchY2+40} C ${cx-130} ${branchY2+16}, ${cx-190} ${branchY2}, ${cx-290} ${branchY2}" stroke="var(--trunk)" stroke-width="8" fill="none" opacity=".5" stroke-linecap="round"/>`;
+  /* 枝端分类牌（枝末梢） */
+  BR.forEach(b=>{
+    const bx=cx+(b.side===-1?-1:1)*300;
+    const by=b.lift===390?branchY2:branchY1;
+    g+=`<g class="spot" onclick="treeGo('cat:${b.cat}')">
+      <rect x="${b.side===-1?bx-108:bx-84}" y="${by-24}" width="192" height="46" rx="10" fill="var(--green-bg)" stroke="var(--green-line)"/>
+      <text x="${bx}" y="${by+4}" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--green-t)">${b.label} · ${assets.filter(a=>a.cat===b.cat&&a.status!=='deleted').length}</text></g>`;
+  });
+  /* 枝上资产光斑：沿枝分布、贴枝、标签常显 */
+  BR.forEach(b=>{
+    const items=assets.filter(a=>a.cat===b.cat&&a.status!=='deleted');
+    const bx=cx+(b.side===-1?-1:1)*300, by=(b.lift===390?branchY2:branchY1);
+    items.forEach((a,i)=>{
+      const x=bx+(b.side===-1?1:-1)*(120+Math.floor(i/2)*36)*(i%2?1:1.6)/1.4;
+      const y=by+(i%2?-26:18)-Math.floor(i/2)*20;
+      const r=6+Math.min(5.5,Math.sqrt(a.uses)*1.5);
+      const color=a.mat!=='未验证'?'var(--green)':(a.cat==='模板与范例'?'#a78bfa':'var(--green-line)');
+      const anchor=b.side===-1?'start':'end';
+      const tx=b.side===-1? x+r+6 : x-r-6;
+      g+=spotSvg({id:a.id,kind:'asset',x,y,r,color,glow:a.mat!=='未验证',kstar:a.kstar,title:a.title,tx,ty:y+4,anchor});
+    });
+  });
+  /* 干：个人本体牌 + 关于我资产光斑（绕干两侧、带标签） */
+  g+=`<g class="spot" onclick="treeGo('trunk')">
+    <rect x="${cx-86}" y="${groundY-150}" width="172" height="52" rx="11" fill="var(--trunk)"/>
+    <text x="${cx}" y="${groundY-128}" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">个人本体 · 关于我</text>
+    <text x="${cx}" y="${groundY-111}" text-anchor="middle" font-size="10.5" fill="#fff" opacity=".85">${about.length} 条画像</text></g>`;
+  about.forEach((a,i)=>{
+    const side=i%2?1:-1, k=Math.floor(i/2);
+    const x=cx+side*(118+k*10), y=groundY-168+k*44;
+    const r=6+Math.min(5,Math.sqrt(a.uses)*1.4);
+    const anchor=side===1?'start':'end';
+    const tx=side===1? x+r+6 : x-r-6;
+    g+=spotSvg({id:a.id,kind:'asset',x,y,r,color:'var(--trunk)',kstar:a.kstar,title:a.title,tx,ty:y+4,anchor});
+  });
+  /* 根：待确认芽（琥珀光斑、常显标题） */
+  const芽= Math.max(cands.length,1);
+  cands.forEach((c,i)=>{
+    const x=cx-(cands.length-1)*55+i*110, y=groundY-38;
+    g+=spotSvg({id:c.id,kind:'cand',x,y,r:9,color:'var(--amber-dot)',glow:true,title:c.title});
+  });
+  if(!cands.length) g+=`<circle cx="${cx}" cy="${groundY-38}" r="7" fill="var(--paper)" stroke="var(--amber-line)" stroke-dasharray="2 3"/>`;
+  g+=`<rect x="${cx-7}" y="${groundY-24}" width="14" height="26" fill="var(--trunk)" opacity=".35"/>`;
+  /* 土壤 */
+  g+=`<g class="spot" onclick="treeGo('soil')">
+    <rect x="${cx-330}" y="${groundY+2}" width="660" height="58" rx="12" fill="var(--soil)"/>
+    <text x="${cx}" y="${groundY+27}" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink2)">土壤 · 来源 ${srcIssues.length+6} · 采集任务 ${caps.length}</text>
+    <text x="${cx}" y="${groundY+46}" text-anchor="middle" font-size="10.5" fill="var(--ink3)">会话与采集记录在这里生根；来源异常会出现在「待我处理」</text></g>`;
+  svg.innerHTML=g;
+  bindSpots(); refreshBadges();
+}
+function spotSvg(o){
+  const sel = selSpot===o.kind+':'+o.id ? ' sel' : '';
+  const kstar = o.kstar ? `<circle cx="${o.x+o.r*0.72}" cy="${o.y-o.r*0.72}" r="4" fill="var(--blue)" stroke="#fff" stroke-width="1.4"/>` : '';
+  const hasLabel = o.tx!==undefined;
+  return `<g class="spot${sel}" data-kind="${o.kind}" data-id="${o.id}" data-title="${esc(o.title)}" data-sub="${esc(o.sub||'')}">
+    ${o.glow?`<circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r*2.1}" fill="${o.color}" opacity=".24" filter="url(#gl)"/>`:''}
+    <circle class="halo" cx="${o.x}" cy="${o.y}" r="${o.r+5}" fill="${o.color}" opacity=".12"/>
+    <circle class="core" cx="${o.x}" cy="${o.y}" r="${o.r}" fill="${o.color}" stroke="#fff" stroke-width="1.8"/>
+    ${kstar}
+    ${hasLabel?`<text x="${o.tx}" y="${o.ty!==undefined?o.ty:o.y+4}" text-anchor="${o.anchor||'middle'}" font-size="10.5" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="#fff" stroke-width="3" style="pointer-events:none">${esc(o.title.length>16?o.title.slice(0,15)+'…':o.title)}</text>`:''}
+  </g>`;
+}
+function bindSpots(){
+  document.querySelectorAll('#tree-svg .spot').forEach(el=>{
+    if(!el.dataset.id) return;
+    el.addEventListener('click',e=>{e.stopPropagation();spotClick(el.dataset.kind,el.dataset.id)});
+    el.addEventListener('mouseenter',e=>{
+      const t=$('tip'); t.textContent=el.dataset.title+(el.dataset.sub?' — '+el.dataset.sub:'');
+      t.classList.add('show');
+      const r=t.getBoundingClientRect();
+      t.style.left=Math.min(e.clientX+14,innerWidth-r.width-12)+'px';
+      t.style.top=(e.clientY-40)+'px';
+    });
+    el.addEventListener('mouseleave',()=>$('tip').classList.remove('show'));
+  });
+  document.querySelectorAll('#tree-svg .spot:not([data-id])').forEach(el=>el.addEventListener('mouseenter',()=>$('tip').classList.remove('show')));
+}
+function spotClick(kind,id){
+  selSpot=kind+':'+id; drawTree();
+  if(kind==='asset'){ const a=assets.find(x=>x.id===id); if(a) openDrawer(a.title,'资产详情 · '+a.cat, assetDetailInner(id)); }
+  if(kind==='cand'){ const c=cands.find(x=>x.id===id); if(c) openDrawer(c.title,'确认内容，也确认它该在什么范围生效', candDetailInner(id)); }
+}
+function openDrawer(nm,ds,html){
+  $('dw-nm').textContent=nm; $('dw-ds').textContent=ds;
+  $('dw-bd').innerHTML=html; $('drawer').classList.add('open');
+}
+function closeDrawer(){ $('drawer').classList.remove('open'); selSpot=null; drawTree(); }
+document.addEventListener('click',e=>{ const d=$('drawer'); if(d.classList.contains('open')&&!d.contains(e.target)&&!e.target.closest('.spot')) closeDrawer(); });
+/* 抽屉内复用详情渲染 */
+function assetDetailInner(id){
+  if(curAsset!==id){ editing=null; openVer=null; }
+  curAsset=id;
+  const a=assets.find(x=>x.id===id); if(!a) return '<div class="empt"><div class="t">资产不存在</div></div>';
+  return assetDetailHtml(a).replace(/onclick="goBack\(\)"/,'onclick="closeDrawer()"').replace('<button class="backlink" style="display:none"','<button class="backlink" hidden');
+}
+function candDetailInner(id){
+  if(curCand!==id){}
+  curCand=id;
+  const c=cands.find(x=>x.id===id); if(!c) return '<div class="empt"><div class="e">🌱</div><div class="t">已成为正式资产</div></div>';
+  return candDetailHtml(c).replace(/onclick="goReview\(\)"/,'onclick="closeDrawer()"');
+}
+/* 面板内操作后：若抽屉开着刷新抽屉，否则刷新页 */
+function afterMut(){ drawTree(); if($('drawer').classList.contains('open')){ if(curAsset)$('dw-bd').innerHTML=assetDetailInner(curAsset); else if(curCand)$('dw-bd').innerHTML=candDetailInner(curCand); } else { if(curTab==='mine')renderMine(); } refreshBadges(); }
+function treeGo(w){
+  if(w==='root'||w==='soil'){tab('review');return}
+  if(w==='trunk'){tab('mine');myCat='关于我';myView='list';renderMine();return}
+  if(w==='validated'){tab('mine');myCat='all';myView='list';renderMine();toast('带绿环的光斑 = 已验证资产');return}
+  if(w.startsWith('cat:')){tab('mine');myCat=w.slice(4);myView='list';renderMine();return}
+}
+
+/* ═══════ Tab2 我的认知 ═══════ */
+function famGroups(){
+  const map={}; assets.forEach(a=>{const k=a.fam||'未归类';(map[k]=map[k]||[]).push(a)});
+  return Object.entries(map);
+}
+function renderMine(){
+  const w=$('v-mine');
+  if(curAsset){ const a=assets.find(x=>x.id===curAsset); if(a){w.innerHTML=assetDetailHtml(a);return} curAsset=null; }
+  const list = assets.filter(a=>(myCat==='all'||a.cat===myCat)&&(a.status!=='deleted')&&(!q||a.title.includes(q)||a.stmt.includes(q)));
+  const validated = assets.filter(a=>a.mat!=='未验证').length;
+  const attention = assets.filter(a=>a.status!=='active').length;
+  let h = `<div class="hero"><h2>我的认知资产</h2><div class="sub">这棵树是你的认知全景：土壤是记录与来源，根部是待确认的候选，枝上是正式资产，树冠是被真实复用验证过的。</div>
+    <div class="stats">
+      <div class="stat"><div class="v g">${assets.filter(a=>a.status!=='archived').length}</div><div class="l">生效中资产</div></div>
+      <div class="stat"><div class="v a">${pendCount()}</div><div class="l">待确认候选</div></div>
+      <div class="stat"><div class="v b">${validated}</div><div class="l">已验证</div></div>
+      <div class="stat"><div class="v">${attention}</div><div class="l">需要关注</div></div>
+    </div></div>
+    <div class="sect"><span style="font-size:14px">${myView==='list'?'资产明细':'资产目录（模型视角）'}</span><span class="n">${list.length}</span><span class="sp"></span>
+      <button class="b2 sm" onclick="myView=myView==='list'?'catalog':'list';renderMine()">${myView==='list'?'目录视图':'列表视图'}</button></div>
+    ${myView==='catalog'?'<div class="note" style="margin:-6px 0 12px">这就是模型挑资产时看的那份目录：一行一条；要看全文点进去。</div>':''}
+    <div class="pillbox">${['all','关于我','规则与偏好','模板与范例','技能与方法'].map(c=>`<button class="chip ${myCat===c?'on':''}" onclick="myCat='${c}';renderMine()">${c==='all'?'全部':c}</button>`).join('')}<button class="chip" onclick="toast('没有已删除的资产')">已删除</button></div>`;
+  if(!list.length){h+=`<div class="empt"><div class="e">🌱</div><div class="t">还没有正式资产</div><div class="s">候选被确认为正式资产后会出现在这里</div><button class="btn sm" style="margin-top:10px" onclick="tab('review')">查看 ${pendCount()} 条待确认候选</button></div>`;w.innerHTML=h;return}
+  if(myView==='catalog'){
+    h+=list.map(catalogRow).join('');
+  } else {
+    for(const [fam,items] of famGroups().map(([k,v])=>[k,v.filter(a=>list.includes(a))]).filter(([,v])=>v.length)){
+      h+=`<div class="fam-hd"><span class="nm">${esc(fam)}</span><span class="n">${items.length} 条同类</span><button class="rnm" onclick="toast('已命名为「${esc(fam)}」')">命名</button><span class="sp"></span></div>`;
+      h+=items.map(plainRow).join('');
+    }
+  }
+  h+=`<div class="sect"><span style="font-size:14px">KSTAR 任务复盘</span><span class="sp"></span></div>
+    <details class="card" style="margin-bottom:9px"><summary>「时间线记录标注来源」的复盘 <span class="note" style="display:inline">22 小时前</span></summary>
+    <div class="dbody"><div class="vr-detail"><div><b>当时的任务：</b>给时间线记录补来源标注</div><div><b>期望的结果：</b>每条记录可追溯到对话</div><div><b>实际发生：</b>标注完成，漏了 2 条附件类</div><div><b>沉淀的经验：</b>列表类需求先定排序再动 UI</div>
+    <div class="vr-acts"><span class="tag blue">KSTAR</span></div></div></div></details>
+    <div class="note">还没有更多被 KSTAR 复盘过的任务</div>`;
+  w.innerHTML=h;
+}
+function plainRow(a){
+  const stTag = a.status==='active'?'<span class="tag green">生效中</span>':a.status==='paused'?'<span class="tag amber">已暂停</span>':'<span class="tag red">已归档</span>';
+  return `<div class="row" onclick="goAsset('${a.id}')"><div class="tw"><div class="tt">${esc(a.title)}</div><div class="mm">${a.cat} · v${a.v} · ${a.last?'最近使用 '+a.last:'最近无使用记录'}</div></div>
+    <div class="sd">${a.kstar?'<span class="tag blue">KSTAR</span>':''}${a.mat!=='未验证'?'<span class="tag green">已实证</span>':''}${stTag}<span class="chev">›</span></div></div>`;
+}
+function catalogRow(a){
+  const used = a.uses?`用过 ${a.uses} 次`:'还没用过';
+  return `<div class="row" onclick="goAsset('${a.id}')"><div class="tw"><div class="tt">${esc(a.title)}</div><div class="catline">${esc(a.stmt.slice(0,60))}…</div><div class="mm">${a.cat} · ${used} · v${a.v}</div></div>
+    <div class="sd">${a.kstar?'<span class="tag blue">模型挂着</span>':''}<span class="chev">›</span></div></div>`;
+}
+function assetDetailHtml(a){
+  const on = a.status==='active';
+  let h = `<button class="backlink" onclick="goBack()">← 返回列表</button>
+  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px">
+    <div style="flex:1"><div style="font-size:17px;font-weight:700">${esc(a.title)}</div>
+      <div class="note" style="margin-top:3px">${on?'使用中：这条资产会自动带入你的新任务，作为背景知识提供给 AI':'已暂停：新任务不再自动带入这条资产；历史与使用记录全部保留，随时可打开'}</div></div>
+    <button class="switch ${on?'on':''}" onclick="toggleAsset('${a.id}')" title="自动带入新任务"></button>
+    ${on?`<button class="btn g sm" onclick="toast('已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。')">用到当前对话</button>`:''}
+  </div>
+  ${a.status!=='active'?'<div class="warn" style="margin-bottom:12px">已归并：这条资产已并入另一条资产，历史版本完整保留。</div>':''}
+  <div class="card" style="padding:13px 16px;font-size:13.5px;line-height:1.65">${esc(a.stmt)}</div>`;
+  if(editing===a.id){
+    h+=`<div class="sect"><span style="font-size:14px">修改这条资产</span><span class="sp"></span></div>
+    <div class="note" style="margin:-4px 0 10px">修改内容或适用范围会生成新版本，旧版本仍可回滚。</div>
+    <div class="ed-form card" style="padding:14px 16px">
+      <div class="fld"><label>标题</label><input id="e-title" value="${esc(a.title)}"></div>
+      <div class="fld"><label>正文</label><textarea id="e-stmt">${esc(a.stmt)}</textarea></div>
+      <div class="fld"><label>适用场景（多条用顿号分隔）</label><input id="e-ap" value="评审与架构决策"></div>
+      <div style="display:flex;gap:8px"><button class="btn" onclick="edSave('${a.id}')">保存为新版本</button><button class="btn o" onclick="editing=null;renderMine()">取消</button></div>
+    </div>`;
+  } else {
+    h+=`<div style="display:flex;gap:8px;margin:12px 0 4px"><button class="btn g sm" onclick="editing='${a.id}';renderMine()">编辑</button></div>`;
+  }
+  const noise = a.vers.filter(v=>v.noise);
+  h+=`<div class="sect"><span style="font-size:14px">版本记录</span><span class="n">${a.vers.length}</span><span class="sp"></span></div>`;
+  h+=a.vers.filter(v=>!v.noise).map(v=>{
+    const open = openVer===a.id+'-'+v.v;
+    return `<div class="card" style="margin-bottom:7px">
+      <div class="vrow" onclick="openVer=openVer==='${a.id}-${v.v}'?null:'${a.id}-${v.v}';renderMine()">
+        <div class="vt"><div class="v1">v${v.v} · ${esc(a.title)} ${v.inuse?'<span class="inuse">在用</span>':''}</div>
+        <div class="v2">${esc(v.prev.slice(0,50))}… · ${v.when} · <span class="tag gray">${v.src}</span></div></div>
+        <span class="chev">${open?'▾':'›'}</span></div>
+      ${open?`<div style="padding:2px 15px 13px"><div class="vr-detail">${esc(v.prev)}<div class="kv"><span>来源：${v.src}</span><span>${v.when}</span><span>变更：${v.note}</span>${v.eff?`<span>使用效果：${v.eff}</span>`:''}</div>
+      <div class="vr-acts">${v.inuse?'<span class="note">当前在用版本不可删除；先选用其他版本，再删除它。</span>':`<button class="btn sm" onclick="toast('已切回 v${v.v} 为在用版')">切回此版</button><button class="btn g sm" onclick="toast('已基于 v${v.v} 打开编辑')">基于此版修改</button><button class="btn o sm" onclick="toast('两版内容一致。')">与在用版对比</button><button class="btn o sm" onclick="toast('已合并为新版本')">与在用版合并为新版</button><button class="btn o sm" style="color:var(--red);border-color:var(--red)" onclick="toast('该版本已删除')">删除此版本</button>`}</div></div></div>`:''}
+    </div>`;
+  }).join('');
+  if(noise.length) h+=`<div class="note" style="margin:-2px 0 10px"><span style="color:var(--green-t);cursor:pointer" onclick="toast('已显示 ${noise.length} 条系统迁移产生的空版本')">显示 ${noise.length} 条系统迁移产生的空版本</span></div>`;
+  h+=`<div class="sect"><span style="font-size:14px">使用记录</span><span class="sp"></span></div>`;
+  h+= a.proofs.length ? a.proofs.map(p=>`
+    <div class="card" style="margin-bottom:7px"><div style="padding:11px 15px">
+      <div style="font-size:12.5px">${esc(p.txt)}</div>
+      <div style="margin-top:7px;font-size:11.5px;color:var(--ink3)">这次用得怎么样？${p.rate?` <span class="tag green">${p.rate}</span>`:''}</div>
+      ${p.rate?'':`<div class="fb" style="margin-top:7px">${['有用','没用对','没差别','说不清'].map(f=>`<button onclick="toast('已记录反馈：${f}')">${f}</button>`).join('')}</div>`}
+    </div></div>`).join('')
+   : `<div class="note">还没有被真实使用过。资产在任务中被真正使用、并留下可核对的记录后，会出现在这里。</div>`;
+  h+=`<details class="details" style="margin-top:14px"><summary>更多操作</summary><div class="dbody">
+    <div class="vrow" style="cursor:pointer" onclick="confirmBox('删除这条资产？','从资产列表移除，历史记录保留。',()=>{toast('已删除，30 天内可在「已删除」中恢复')})"><div class="vt"><div class="v1" style="color:var(--red)">删除</div><div class="v2">从资产列表移除，历史记录保留</div></div></div>
+    <div class="vrow" style="cursor:pointer" onclick="confirmBox('撤回使用？','只影响未来的任务。',()=>toast('已撤回'))"><div class="vt"><div class="v1">撤回使用</div><div class="v2">只影响未来的任务</div></div></div>
+    <div class="vrow" style="cursor:pointer" onclick="confirmBox('彻底清除？','删除全部历史与证据，不可恢复。',()=>toast('已彻底清除'))"><div class="vt"><div class="v1" style="color:var(--red)">彻底清除</div><div class="v2">删除全部历史与证据，不可恢复</div></div></div>
+  </div></details>
+  <details class="details"><summary>与另一条合并（同一认知的重复条目）</summary><div class="dbody">
+    ${assets.filter(x=>x.id!==a.id&&x.cat===a.cat).map(x=>`<div class="vrow" onclick="confirmBox('并入这条？','「${esc(a.title)}」将并入「${esc(x.title)}」，历史版本完整保留。',()=>toast('已合并为同一版本组'))"><div class="vt"><div class="v1">${esc(x.title)}</div><div class="v2">${x.cat} · v${x.v}</div></div><span class="tag gray">并入这条</span></div>`).join('')}
+  </div></details>`;
+  return h;
+}
+function goAsset(id){curAsset=id;editing=null;openVer=null;renderMine();$('scrolly').scrollTop=0}
+function goBack(){curAsset=null;editing=null;renderMine()}
+function toggleAsset(id){const a=assets.find(x=>x.id===id);a.status=a.status==='active'?'paused':'active';renderMine();toast(a.status==='active'?'已恢复自动带入':'已暂停：新任务不再自动带入')}
+function edSave(id){const a=assets.find(x=>x.id===id);a.title=$('e-title').value;a.stmt=$('e-stmt').value;a.v++;a.vv.push('v'+a.v);a.vers.unshift({v:a.v,inuse:true,src:'手动编辑',when:'刚刚',prev:a.stmt,note:'手动修改',eff:null});a.vers.forEach(v=>v.inuse=v.v===a.v);editing=null;openVer=null;renderMine();afterMut();toast('已保存为新版本 v'+a.v)}
+
+/* ═══════ Tab3 待我处理 ═══════ */
+function renderReview(){
+  const w=$('v-review');
+  if(curCand){ const c=cands.find(x=>x.id===curCand); w.innerHTML=c?candDetailHtml(c):`<button class="backlink" onclick="goReview()">← 返回</button><div class="empt"><div class="e">🌱</div><div class="t">已成为正式资产</div></div>`; return; }
+  const ok = cands.filter(c=>c.ev==='ok'), bad = cands.filter(c=>c.ev==='bad');
+  let h=`<div class="hero"><h2>待我处理</h2><div class="sub">每条只需要一个决定：保存，还是不保存。</div>
+    <div class="stats"><div class="stat"><div class="v a">${ok.length}</div><div class="l">等待确认</div></div>
+    <div class="stat"><div class="v">${bad.length}</div><div class="l">来源已删</div></div></div></div>`;
+  if(pendingSrc&&srcIssues.length){
+    h+=`<div class="card" style="padding:11px 15px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:12.5px;color:var(--amber-t);font-weight:600">${srcIssues.length} 条来源记录需要处理</span>
+      <span style="flex:1"></span><button class="b2 sm" onclick="const n=this.closest('.card').nextElementSibling; n.hidden=!n.hidden; this.textContent=this.textContent==='处理'?'收起':'处理'">处理</button></div>
+      <div class="card" style="padding:6px 15px;margin-bottom:16px" hidden>
+      ${srcIssues.map(s=>`<div class="sourcerow"><b>${esc(s.n)}</b><span class="tag gray">${s.k}</span><span style="flex:1;color:var(--ink3)">${esc(s.w)}</span><button class="b2 sm" onclick="toast('已发起重连')">重试</button></div>`).join('')}</div>`;
+  }
+  h+=`<div class="sect"><span style="font-size:14px">等待你确认</span><span class="n">${ok.length}</span><span class="sp"></span></div>
+    <div class="note" style="margin:-4px 0 10px">确认后会创建 v1，并保留来源与撤销入口</div>`;
+  h+= ok.length?ok.map(candCard).join(''):`<div class="empt"><div class="e">🌤</div><div class="t">当前没有等待确认的候选</div></div>`;
+  if(bad.length){
+    h+=`<div class="sect"><span style="font-size:14px">来源已删除的候选</span><span class="n">${bad.length}</span><span class="sp"></span></div>
+    <div class="note" style="margin:-4px 0 10px">这些候选引用的会话已不存在；可以点开确认后仍要保存，或选择不保存。（「对话中当场记」的候选不属于这里——它们本来就没有独立出处，不是被删除。）</div>`;
+    h+=bad.map(candCard).join('');
+  }
+  h+=`<details class="details" style="margin-top:16px"><summary>处理记录 <span class="note" style="display:inline">按处理时间倒序，只显示已处理的决定</span></summary><div class="dbody">
+    ${proc.map(p=>`<div class="proc-row"><span class="when">${p.when}</span><span style="flex:1">${esc(p.txt)}</span><span class="tag ${p.r==='已保存'?'green':p.r==='未保存'?'red':'gray'}">${p.r}</span></div>`).join('')}
+  </div></details>`;
+  w.innerHTML=h;
+}
+function candCard(c){
+  return `<div class="cand" onclick="curCand='${c.id}';renderReview();$('scrolly').scrollTop=0">
+    <div class="c1">${esc(c.title)}<span class="chev">›</span></div>
+    <div class="c2">${c.ev==='bad'?'<span class="tag amber">来源已删</span>':'<span class="tag green">证据充足</span>'}<span class="tag gray">${c.cat}</span><span class="tag gray">${c.src}</span></div>
+    <div class="c3">${esc(c.body)}</div>
+    <div class="c4">来源：${c.srcLine.map(esc).join(' · ')}</div>
+    ${c.ev==='bad'?'<div class="warn" style="margin-top:9px">这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。</div>':''}
+  </div>`;
+}
+function candDetailHtml(c){
+  if(!c) return '<div class="empt"><div class="t">这条候选已不在待处理列表中</div></div>';
+  return `<button class="backlink" onclick="goReview()">← 返回</button>
+  <div class="hero"><h2>确认内容，也确认它该在什么范围生效</h2><div class="sub">确认后会创建正式资产的第一个版本，并保留来源与撤销入口。</div></div>
+  ${c.ev==='bad'?'<div class="warn" style="margin-bottom:13px">这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。</div>':''}
+  <div class="card" style="padding:13px 16px;margin-bottom:13px"><div style="font-size:13.5px">${esc(c.body)}</div>
+    <div class="note" style="margin-top:9px">证据引用</div>
+    <div style="margin-top:5px">${c.srcLine.map(s=>`<div class="evrow"><span class="tag gray">${c.src}</span>${esc(s)}</div>`).join('')}</div></div>
+  <div class="typchips">${['关于我','规则与偏好','模板与范例','技能与方法'].map(t=>`<button class="${t===c.cat?'on':''}" onclick="cands.find(x=>x.id==='${c.id}').cat='${t}';renderReview();if(document.getElementById('drawer').classList.contains('open'))document.getElementById('dw-bd').innerHTML=candDetailInner('${c.id}')">${t}</button>`).join('')}</div>
+  <div class="ed-form card" style="padding:14px 16px;margin-bottom:13px">
+    <div class="fld"><label>具体内容</label><textarea id="cd-t">${esc(c.body)}</textarea></div>
+    <div class="fld"><label>作用范围</label><input id="cd-s" placeholder="例如：仅产品工作空间"><div class="note">不填 = 全局生效</div></div>
+  </div>
+  <div style="display:flex;gap:9px">
+    <button class="btn" onclick="candSave('${c.id}')">保存并使用</button>
+    <button class="btn o" onclick="candDefer('${c.id}')">稍后处理</button>
+    <button class="btn o" style="color:var(--red);border-color:var(--red)" onclick="candRej('${c.id}')">不保存</button>
+  </div>`;
+}
+function candSetCat(){}
+let candChoice=null,candPend=null;
+function candSave(id){
+  const c=cands.find(x=>x.id===id); const text=$('cd-t')?.value.trim()||c.body; const scope=$('cd-s')?.value.trim();
+  if(!scope){toast('先填写作用范围：例如「仅产品工作空间」');return}
+  const old=assets.find(a=>a.cat===c.cat&&a.stmt.includes(text.slice(0,6)));
+  if(old){
+    candPend={id,text,scope};
+    $('ch-new').textContent=text.slice(0,18);$('ch-old').textContent=old.title;
+    $('ov-choice').querySelectorAll('button').forEach(b=>{ b.onclick=()=>{ cl('ov-choice'); chDispatch(b.textContent,old,text,scope); }; });
+    op('ov-choice'); return;
+  }
+  finishCand(id,text,scope,null);
+}
+function chDispatch(label,old,text,scope){
+  if(label==='先不动'){toast('先不动，候选还在待处理列表');return}
+  if(label==='存为新条目'){finishCand(candPend.id,text,scope,null);return}
+  old.stmt+=` ${text}`;old.v++;old.vv.push('v'+old.v);
+  cands=cands.filter(x=>x.id!==candPend.id);
+  proc.unshift({when:'今天',txt:`「${candPend.text.slice(0,12)}…」——已并入既有资产`,r:'已保存'});
+  afterMut(); if(curTab==='review')renderReview();
+  toast('已并入「'+old.title+'」（融合出新版本）');
+}
+function finishCand(id,text,scope,mode){
+  const c=cands.find(x=>x.id===id);
+  cands=cands.filter(x=>x.id!==id);
+  proc.unshift({when:'今天',txt:`「${c.title}」——已保存`,r:'已保存'});
+  const nid2='n'+(nid++);
+  assets.unshift({id:nid2,cat:c.cat,fam:'',title:c.title,v:1,vv:['v1'],stmt:text,uses:0,last:'刚刚',status:'active',mat:'未验证',kstar:false,
+    vers:[{v:1,inuse:true,src:'确认沉淀',when:'刚刚',prev:text,note:'首次确认',eff:null}],proofs:[]});
+  curCand=null;refreshBadges();
+  const drawer=$('drawer');
+  if(drawer.classList.contains('open')){ tabSoft('mine'); curAsset=nid2; drawer.classList.add('open'); $('dw-bd').innerHTML=assetDetailInner(nid2); drawTree(); }
+  else { tab('mine'); curAsset=nid2; renderMine(); $('scrolly').scrollTop=0; }
+  toast('已成为正式资产');
+}
+function candDefer(id){ const wasDrawer=$('drawer').classList.contains('open'); curCand=null; if(wasDrawer){closeDrawer();drawTree()} else renderReview(); toast('稍后会再提醒你'); }
+function candRej(id){ const wasDrawer=$('drawer').classList.contains('open'); const c=cands.find(x=>x.id===id); cands=cands.filter(x=>x.id!==id); proc.unshift({when:'今天',txt:`「${c.title}」——未保存`,r:'未保存'}); curCand=null; refreshBadges(); if(wasDrawer){closeDrawer();drawTree()} else renderReview(); toast('好的，这条不会保留'); }
+function goReview(){curCand=null;renderReview()}
+
+/* ═══════ Tab4 整理 ═══════ */
+function renderOrg(){
+  const w=$('v-org');
+  if(curCap){ const c=caps.find(x=>x.id===curCap); w.innerHTML=c?capDetailHtml(c):'<div class="empt"><div class="t">任务不存在</div></div>'; return; }
+  if(orgSettings){w.innerHTML=orgSettingsHtml();return}
+  const inB=b=>caps.filter(c=>c.bucket===b).length;
+  const failed=caps.filter(c=>c.status.includes('失败')).length;
+  const runnable=caps.filter(c=>c.bucket==='attention'||c.bucket==='active').length;
+  const list=caps.filter(c=>orgBucket==='all'||c.bucket===orgBucket);
+  const shown=orgExpand?list:list.slice(0,5);
+  w.innerHTML=`<div class="hero" style="display:flex;align-items:flex-start;gap:12px">
+    <div style="flex:1"><h2>整理</h2><div class="sub">整理会使用模型额度，随时可以取消</div></div>
+    <button class="tbtn" onclick="orgSettings=true;renderOrg()">⚙ 沉淀设置</button></div>
+  <div class="pillbox">
+    ${[['all','全部'],['attention','需要我处理'],['active','进行中'],['done','已完成'],['excluded','无需沉淀']].map(([k,l])=>`<button class="chip ${orgBucket===k?'on':''}" onclick="orgBucket='${k}';renderOrg()">${l} ${k==='all'?caps.length:inB(k)}</button>`).join('')}
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:14px">
+    ${failed?`<button class="b2" onclick="confirmBox('确认重试 ${failed} 条失败的整理任务？','',()=>toast('已重试'))">重试失败（${failed}）</button>`:''}
+    ${runnable?`<button class="btn" onclick="confirmBox('将立即整理 ${runnable} 个会话，每条都会消耗模型额度。确认开始？','',()=>toast('已开始整理'))">立即整理（${runnable}）</button>`:''}
+  </div>
+  ${shown.map(capRow).join('')}
+  ${list.length>5?`<div style="text-align:center;margin:10px 0"><button class="b2 sm" onclick="orgExpand=!orgExpand;renderOrg()">${orgExpand?'收起':'查看全部 '+list.length+' 个会话'}</button></div>`:''}
+  ${!list.length?`<div class="empt"><div class="e">🗒</div><div class="t">这个筛选下没有整理记录</div><div class="s">一轮会话结束后，系统会在静默期结束后创建整理任务。</div></div>`:''}
+  <div class="note" style="margin-top:14px">口径说明：分桶按每个会话最相关的一次整理任务计算；「无需沉淀」是寒暄会话或最近一轮失败且无任务的会话。</div>`;
+}
+function capRow(c){
+  const stTag = c.status.includes('已完成')?'<span class="tag green">已完成</span>':c.status.includes('失败')?'<span class="tag red">失败</span>':c.status.includes('整理中')?'<span class="tag amber">整理中</span>':`<span class="tag amber">${esc(c.status)}</span>`;
+  return `<div class="cap-row">
+    <div class="tw"><div class="tt" onclick="curCap='${c.id}';renderOrg();$('scrolly').scrollTop=0">${esc(c.n)}</div>
+      <div class="mm"><span>${esc(c.reason)}</span>${c.pend?`<span>${c.pend} 条待确认</span>`:''}<span>${c.when}</span></div></div>
+    <div class="sd">${c.chatty?'<span class="tag amber">纯寒暄</span>':c.bucket==='excluded'?'<span class="tag amber">无需整理</span>':''}
+      ${c.status.includes('待确认')?`<button class="btn g sm" onclick="curCap='${c.id}';renderOrg()">去确认</button>`:''}
+      ${c.status.includes('模型提炼中')?'<button class="b2 sm" disabled style="opacity:.5">整理中</button>':''}
+      ${c.status.includes('已完成')?`<button class="b2 sm" onclick="curCap='${c.id}';renderOrg()">查看</button>`:''}
+      ${c.status==='—'&&!c.chatty?`<button class="btn o sm" onclick="toast('已开始整理')">立即整理</button>`:''}
+    </div></div>`;
+}
+function capDetailHtml(c){
+  return `<button class="backlink" onclick="curCap=null;renderOrg()">← 返回整理</button>
+  <div class="hero"><h2>${esc(c.n)}</h2><div class="sub">${esc(c.reason)} · ${esc(c.when)}</div>
+    <div class="stats"><div class="stat"><div class="v a">${c.pend}</div><div class="l">待确认</div></div>
+    <div class="stat"><div class="v g">1</div><div class="l">已沉淀资产</div></div>
+    <div class="stat"><div class="v">2</div><div class="l">尝试次数</div></div></div></div>
+  <div class="sect"><span style="font-size:14px">整理结果</span><span class="sp"></span></div>
+  ${c.pend?`<div class="card" style="padding:13px 16px;margin-bottom:9px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">有 ${c.pend} 条内容等你确认</div>
+    <div class="note">逐条确认后会成为正式资产；也可以直接去「待我处理」统一处理。</div>
+    <div style="margin-top:10px"><button class="btn g sm" onclick="tab('review')">去确认</button></div></div>`:''}
+  <div class="card" style="padding:13px 16px;margin-bottom:9px"><div style="font-size:12.5px;line-height:1.6">模型从这轮会话里提炼出了「用户偏好先看结论再看细节」，与已有资产相似，已并入。</div>
+    <div class="note" style="margin-top:6px">来自消息「消息 14 · 20:31」</div></div>
+  <div class="sect"><span style="font-size:14px">对话上下文</span><span class="sp"></span></div>
+  <div class="card" style="padding:12px 15px"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><span class="tag gray">有价值信号：决策 ×2</span><span class="tag gray">参与者：你 · AI</span></div>
+    <div class="note">消息时间线已加载</div></div>
+  <div class="sect"><span style="font-size:14px">执行信息</span><span class="sp"></span></div>
+  <div class="card" style="padding:13px 16px">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px"><span class="tag green">${esc(c.status)}</span><span class="note">创建于 ${esc(c.when)} · 耗时 42 秒 · 模型用量 3.1k tokens</span></div>
+    <div class="steps">${[1,2,3,4,5].map(i=>`<div class="step ${i<c.step?'done':i===c.step?'cur':''}"></div>`).join('')}</div>
+    <div class="stepn"><span>检查模型</span><span>读取会话</span><span>模型提炼</span><span>保存候选</span><span>写入资产</span></div>
+    ${c.pend?`<div class="sect" style="font-size:13px;margin-top:14px"><span>待确认内容</span></div>
+    <div class="ed-form card" style="padding:13px 15px">
+      <div class="fld"><label>具体内容</label><textarea>展示列表时给每条标注来源对话</textarea></div>
+      <div class="fld"><label>作用范围</label><input placeholder="不填 = 全局生效"></div>
+      <div style="display:flex;gap:8px"><button class="btn" onclick="toast('已成为正式资产')">保存并使用</button><button class="btn o" onclick="toast('稍后会再提醒你')">稍后处理</button><button class="btn o" style="color:var(--red);border-color:var(--red)" onclick="toast('好的，这条不会保留')">不保存</button></div>
+    </div>`:''}
+    <div style="display:flex;gap:8px;margin-top:12px"><button class="b2 sm" onclick="toast('已打开原会话')">打开会话</button><button class="b2 sm" onclick="confirmBox('确认取消这个整理任务？','',()=>toast('已取消'))">取消任务</button></div>
+  </div>`;
+}
+function orgSettingsHtml(){
+  return `<button class="backlink" onclick="orgSettings=false;renderOrg()">← 返回整理</button>
+  <div class="hero"><h2>沉淀设置</h2></div>
+  <div class="card" style="padding:6px 16px">
+    <div class="setrow"><div class="sl"><div class="st">夜间自动沉淀</div><div class="ss">每晚自动整理当天的会话</div></div><button class="switch on" onclick="this.classList.toggle('on');toast(this.classList.contains('on')?'已开启夜间自动沉淀':'已关闭')"></button></div>
+    <div class="setrow"><div class="sl"><div class="st">整理功能</div><div class="ss">关闭后不再创建整理任务</div></div><button class="switch on" onclick="this.classList.toggle('on')"></button></div>
+    <div class="setrow"><div class="sl"><div class="st">候选怎么确认</div><div class="ss">自动采纳：学到的直接进「我的认知」；先问我：进「待我处理」等你拿主意</div></div>
+      <div style="display:flex;gap:6px"><button class="chip" onclick="toast('已切换为自动采纳')">自动采纳</button><button class="chip on" onclick="toast('已切换为先问我')">先问我</button></div></div>
+  </div>`;
+}
+function onQ(v){
+  q = v.trim();
+  if(curTab!=='mine'){ tab('mine'); return; }
+  myCat='all'; renderMine();
+}
+function mswClick(sw){ if(sw.classList.contains('on')){confirmBox('关闭记忆？','关闭后，<b>已有内容会保留</b>（随时可以重新打开），但 AI 不再在对话里自动使用它们，也不再记新的内容。',()=>{sw.classList.remove('on');toast('记忆已关闭：已有内容保留，不再自动使用')})} else {sw.classList.add('on');toast('记忆已开启')} }
+
+/* init */
+let curTab='tree';
+const _tab = tab; tab = function(t){ curTab=t; _tab(t); };
+// 抽屉感知 renderMine：抽屉开着时版本展开等操作刷新抽屉而非隐藏页面
+const _renderMine = renderMine;
+renderMine = function(){
+  const d = $('drawer');
+  if(d && d.classList.contains('open') && curAsset){
+    $('dw-bd').innerHTML = assetDetailInner(curAsset);
+  } else { _renderMine(); }
+};
+drawTree(); refreshBadges();
+</script>
+</body>
+</html>
