@@ -8,6 +8,25 @@
 # This gate is fast (<5s): it inspects commit author emails **and** any email
 # appearing in the commit message / Co-authored-by trailers, no build.
 # It runs on every PR targeting develop (and is also wired into cicd's verify).
+#
+# TEMPORARY EXCEPTION (recorded 2026-09-20) — 184377817@qq.com, **author emails only**:
+#   Source: the GitHub web-UI merge commit `2f5a490e` ("Merge pull request #288"),
+#   whose author email is taken from the account that clicked merge. A PR author
+#   can neither control nor amend that address, and it is already part of the
+#   public history (rewriting develop is not an option). It is the only
+#   non-allowlisted author email across all **merged** history (develop / main /
+#   cicd); unmerged side branches and some tags still carry personal addresses,
+#   but those never enter this gate's range.
+#   Scope: applies to the author check only. The message / Co-authored-by scan
+#   below still covers **every** commit, merges included.
+#
+#   ⚠️ DELETE THIS ENTRY once the cicd branch contains `2f5a490e`. From that point
+#   the commit is an ancestor of both check ranges (`base..head` on PRs and
+#   `origin/cicd..HEAD` in ci.yml), so the address is no longer needed here — and
+#   leaving it in place would permanently allowlist this account's webpage merges,
+#   which is exactly the scenario CONTRIBUTING.md → "Merge requirements" item 4
+#   exists to prevent.
+#   Root cause + prevention: mergers must enable "Keep my email addresses private".
 
 name: email-gate
 
@@ -30,8 +49,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # Author allowlist: GitHub noreply + team address + the single
+          # historical web-merge exception documented in the file header.
           bad=$(git log --format='%h|%an|%ae' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
-            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn)$' \
+            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|184377817@qq\.com)$' \
             || true)
           if [ -n "$bad" ]; then
             echo "::error::PR contains commits with non-noreply author emails:"
