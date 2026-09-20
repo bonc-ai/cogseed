@@ -1097,10 +1097,19 @@
         : '';
       return `${mismatch}<div class="ca-field"><span>${esc(T('cognition.candidate_current_version', '当前版本（v{n}）', { n: activeVersion }))}</span><p class="ca-note">${esc(target.statement || '')}</p></div>`;
     })();
+    // 决策动作按主进程下发的 capability 收敛（2026-09-20 修）：终态候选
+    // （confirmed / rejected / ignored）的映射是 canDefer=false、canReject=false、
+    // isTerminal=true，此前这两个按钮**无条件**渲染，用户点下去必然被后端状态机
+    // 拒绝——旧 skills.js 模块有一条 "never renders decision actions for terminal
+    // candidates" 的用例守着，2026-09-15 #266 重写时没带过来。
+    // 口径：capability 明确为 false 才隐藏；capabilities 缺失时保持原行为（不猜）。
+    const caps = candidate.capabilities || {};
+    const canDefer = caps.canDefer !== false;
+    const canReject = caps.canReject !== false;
     const actionsHtml = `<div class="ca-actions ca-actions-right">
-        ${(candidate.capabilities && candidate.capabilities.canPromote) ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
-        ${btn(T('cognition.candidate_defer_action', '稍后处理'), 'cand-decide', { id: candidate.id, data: { action: 'defer' } })}
-        ${btn(T('cognition.candidate_reject', '拒绝'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
+        ${caps.canPromote ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
+        ${canDefer ? btn(T('cognition.candidate_defer_action', '稍后处理'), 'cand-decide', { id: candidate.id, data: { action: 'defer' } }) : ''}
+        ${canReject ? btn(T('cognition.candidate_reject', '拒绝'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true }) : ''}
       </div>`;
     return `
       ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>` : ''}
