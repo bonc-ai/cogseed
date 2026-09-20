@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CogSeed · 技能贡献</title>
+  <link rel="stylesheet" href="./prototype.css">
+  <script src="./prototype.js" defer></script>
+</head>
+<body>
+  <div class="prototype-frame">
+  <header class="prototype-nav" aria-label="原型功能导览">
+    <div class="prototype-nav-title"><strong>原型导览</strong><span>模拟数据 · 点击阶段直达</span></div>
+    <nav class="prototype-nav-links" aria-label="功能阶段">
+      <button type="button" data-tour="skills">技能库</button>
+      <button type="button" data-tour="guest">未登录入口</button>
+      <button type="button" data-tour="login">登录提示弹窗</button>
+      <button type="button" data-tour="complete">资料补齐</button>
+      <button type="button" data-tour="check">本地校验</button>
+      <button type="button" data-tour="blocked">阻断示例</button>
+      <button type="button" data-tour="unavailable">检查不可用</button>
+      <button type="button" data-tour="preview">预览与声明</button>
+      <button type="button" data-tour="sending">提交中</button>
+      <button type="button" data-tour="history">我的贡献</button>
+      <button type="button" data-tour="version">提交新版本</button>
+      <button type="button" data-tour="withdraw">撤回申请</button>
+    </nav>
+  </header>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="brand"><img src="./prototype-assets/logo.png" alt=""><span>CogSeed</span></div>
+      <nav class="side-nav">
+        <button type="button" class="side-link"><span class="side-symbol">＋</span>新建任务</button>
+        <button type="button" class="side-link"><span class="side-symbol">▣</span>工作空间</button>
+        <button type="button" class="side-link"><span class="side-symbol">▥</span>知识库</button>
+        <button type="button" class="side-link"><span class="side-symbol">⌘</span>认知资产</button>
+        <button type="button" class="side-link"><span class="side-symbol">◷</span>自动化</button>
+        <button type="button" class="side-link active" id="side-skills"><span class="side-symbol">♧</span>智能体 / 技能 / 连接</button>
+      </nav>
+      <div class="side-section-label">最近任务</div>
+      <div class="recent-task">项目周报整理 <span>2天</span></div>
+      <div class="recent-task">调研材料核对 <span>2天</span></div>
+      <div class="recent-task">技能说明优化 <span>3天</span></div>
+      <button type="button" class="account-row" id="account-button"><span class="avatar" id="account-avatar">F</span><span><strong id="account-name">fzy</strong><small id="account-subtitle">个人工作空间</small></span><span class="account-caret">⌄</span></button>
+    </aside>
+
+    <main class="main-shell">
+      <header class="page-header">
+        <div class="page-header-title"><button type="button" class="icon-button sidebar-toggle" aria-label="收起侧边栏"><span class="icon i-panel-left"></span></button><span>智能体 / 技能 / 连接</span></div>
+        <div class="page-header-actions"><button type="button" class="icon-button" aria-label="搜索"><span class="icon i-search"></span></button><button type="button" class="icon-button" aria-label="活动"><span class="activity-symbol">⌁</span></button></div>
+      </header>
+
+      <div class="workspace">
+        <nav class="main-tabs" aria-label="智能体 / 技能 / 连接">
+          <button type="button">智能体</button><button type="button">MCP与工具</button><button type="button" class="selected" aria-current="page">技能</button><button type="button">资料库</button><button type="button">IM</button>
+        </nav>
+
+        <section class="view" id="view-skills" aria-label="技能库">
+          <div class="skills-toolbar">
+            <div class="segmented" role="group" aria-label="技能分类"><button type="button" class="selected" data-category="全部">全部</button><button type="button" data-category="数据">数据</button><button type="button" data-category="通用">通用</button></div>
+            <div class="toolbar-right">
+              <label class="search-field"><span class="icon i-search"></span><input id="skills-search" type="search" placeholder="搜索技能" aria-label="搜索技能"></label>
+              <button type="button" class="button button-secondary" id="create-button"><span class="button-plus">＋</span>创建</button>
+              <button type="button" class="button button-secondary" id="my-contributions-button">我的贡献</button>
+              <button type="button" class="button button-secondary" id="more-button">更多</button>
+            </div>
+          </div>
+          <div class="security-summary"><span>安检 · 57 个技能已通过安检 · 1 个有提示</span><button type="button" class="button button-quiet" id="security-button">重新检查</button></div>
+          <div id="skills-groups"></div>
+        </section>
+
+        <section class="view" id="view-contribute" aria-label="贡献技能" hidden>
+          <div class="view-backline"><button type="button" class="text-button" id="back-to-skills"><span class="icon i-chevron-left"></span>返回技能</button><span class="backline-separator">/</span><span>贡献技能</span></div>
+          <div class="feature-heading"><div><h1 id="contrib-heading">贡献技能</h1><p id="contrib-subtitle"></p></div><span class="status-pill status-neutral">仅提交到待审核</span></div>
+          <div class="flow-steps" aria-label="贡献流程"><div class="flow-step current" id="step-complete"><span>1</span>补齐资料</div><div class="flow-line"></div><div class="flow-step" id="step-check"><span>2</span>本地检查</div><div class="flow-line"></div><div class="flow-step" id="step-preview"><span>3</span>预览与声明</div><div class="flow-line"></div><div class="flow-step" id="step-send"><span>4</span>提交审核</div></div>
+
+          <section class="completion-panel" id="completion-panel" aria-labelledby="completion-title" hidden>
+            <div class="section-head"><div><h2 id="completion-title">补齐本次提交资料</h2><p>缺失或冲突的字段需确认后才能检查。这里的修改只写入本次提交副本。</p></div><span class="status-pill status-pending" id="completion-status">待补齐</span></div>
+            <div class="completion-alert" id="completion-alert" role="alert" hidden></div>
+            <div class="completion-grid">
+              <label>技能名称 <span>写入本次提交的 SKILL.md</span><input id="draft-name" type="text" autocomplete="off"></label>
+              <label>版本号 <span>必填 · 标准 SemVer</span><input id="draft-version" type="text" placeholder="例如 1.0.0" autocomplete="off"></label>
+              <label class="wide">技能说明 <span>写入本次提交的 SKILL.md</span><textarea id="draft-description" rows="2"></textarea></label>
+            </div>
+            <div class="completion-divider"></div>
+            <div class="section-head"><div><h2>安全声明</h2><p>请按实际行为填写；不能用默认的“无权限”或“无网络访问”代替确认。</p></div><span class="status-pill status-neutral">声明预检</span></div>
+            <div class="completion-grid">
+              <label>文件权限 <span>本次技能实际需要的访问范围</span><select id="draft-permission"><option value="">请选择</option><option value="selected-files">仅读取用户选择的文件</option><option value="none">不读取本机文件</option><option value="command">执行经用户确认的本地命令</option></select></label>
+              <label>网络访问 <span>是否访问外部服务</span><select id="draft-network"><option value="">请选择</option><option value="none">不访问网络</option><option value="authorized">仅访问用户授权的服务</option></select></label>
+              <label class="wide">用途与边界 <span>说明上述权限用于什么</span><textarea id="draft-boundary" rows="2" placeholder="例如：只处理当前任务中用户选定的图片文件"></textarea></label>
+            </div>
+            <p class="completion-optional">分类按 Hub 提交要求核对；图标为可选项，最低兼容版本留空表示不限。账号显示名与条款版本来自账号及 Hub，不能在这里手填。</p>
+            <div class="completion-actions"><p>已有信息会预填；包内版本与填写值冲突时需先修正。补齐后将对最终副本重新执行全部检查。</p><button type="button" class="button button-primary" id="complete-submit">保存并重新检查</button></div>
+          </section>
+
+          <section class="check-panel" id="check-panel" aria-labelledby="check-panel-title">
+            <div class="section-head"><div><h2 id="check-panel-title">本地检查</h2><p id="check-message">正在检查技能文件与内容</p></div><span class="status-pill status-running" id="check-status">检查中</span></div>
+            <div class="progress-track" aria-hidden="true"><span id="check-progress"></span></div>
+            <div class="check-list" id="check-list"></div>
+            <div class="check-actions"><span id="check-footnote">检查完成前，文件不会离开本机。</span><button type="button" class="button button-secondary" id="cancel-check-button">取消检查</button><button type="button" class="button button-secondary" id="recheck-button" hidden>重新检查</button></div>
+          </section>
+
+          <div id="preview-wrap" hidden>
+            <div class="section-heading-row"><div><h2>提交预览</h2><p>下列文件和信息会随这次贡献发给 Hub。你可以逐个查看文件内容。</p></div><span class="status-pill status-success"><span class="icon i-check"></span>只读预览</span></div>
+            <div class="preview-layout">
+              <section class="file-panel" aria-label="提交文件清单">
+                <div class="panel-heading"><span>文件清单</span><span id="file-count">4 个文件</span></div>
+                <div id="preview-files"></div>
+                <div class="file-panel-foot">只包含这次预览的文件</div>
+              </section>
+              <section class="content-panel" aria-label="文件内容预览"><div class="content-panel-head"><span class="icon i-file-text"></span><strong id="file-title">SKILL.md</strong><span id="file-size"></span></div><pre id="file-content"></pre></section>
+            </div>
+
+            <section class="metadata-section" aria-labelledby="metadata-title"><div class="section-head"><div><h2 id="metadata-title">将提交的信息</h2><p>文件和信息均来自已重新检查的本次提交副本。</p></div><button type="button" class="button button-secondary" id="edit-draft">修改提交资料</button></div><div class="metadata-grid"><div><span>技能名称</span><strong id="meta-name"></strong></div><div><span>版本</span><strong id="meta-version"></strong></div><div><span>贡献者显示名</span><strong>fzy</strong></div><div><span>条款版本</span><strong>v1.0</strong></div></div><div class="metadata-description"><span>说明</span><p id="meta-desc"></p></div></section>
+
+            <section class="declarations-section" aria-labelledby="declarations-title">
+              <h2 id="declarations-title">提交声明</h2>
+              <div class="declaration-field"><label for="source-type">来源声明</label><select id="source-type"><option value="">选择来源</option><option value="original">原创</option><option value="hub">派生自 Hub 内容</option><option value="third-party">基于第三方材料</option></select><p id="source-hint">请如实说明技能的来源。</p><textarea id="source-note" rows="2" placeholder="补充来源说明（选填）" aria-label="补充来源说明"></textarea></div>
+              <div class="check-choice"><input type="checkbox" id="accept-terms"><span><label for="accept-terms">我已阅读并接受</label> <button type="button" class="inline-link" id="read-terms">《CogSeed 社区贡献条款》v1.0</button></span></div>
+              <label class="check-choice"><input type="checkbox" id="accept-maintenance"><span>我愿意维护后续版本；这是一项社区协作承诺，不构成强制义务。</span></label>
+              <p class="privacy-note"><span class="icon i-shield"></span>安装清单、用户设置、任务正文、设备信息和其他技能不会随本次提交发出。</p>
+            </section>
+            <div class="submit-bar"><div><strong>提交后进入待审核</strong><span>审核接受后仍需发布，才能进入 Hub 目录。</span></div><div class="submit-actions"><button type="button" class="button button-secondary" id="cancel-submit" hidden>取消提交</button><button type="button" class="button button-primary" id="submit-contribution" disabled><span class="icon i-upload"></span>提交审核</button></div></div>
+          </div>
+        </section>
+
+        <section class="view" id="view-contributions" aria-label="我的贡献" hidden>
+          <div class="view-backline"><button type="button" class="text-button" id="history-back"><span class="icon i-chevron-left"></span>返回技能</button></div>
+          <div class="feature-heading history-heading"><div><h1>我的贡献</h1><p>查看提交与审核状态，维护已发布的技能。</p></div><button type="button" class="button button-secondary" id="refresh-history"><span class="icon i-clock"></span>刷新状态</button></div>
+          <div class="history-summary"><span><strong id="history-total">4</strong>项贡献</span><span><strong id="history-pending">1</strong>项待审核</span><span><strong id="history-published">2</strong>项已发布</span><small id="sync-time">最近同步 09:42</small></div>
+          <div class="history-toolbar"><div class="history-filters" role="group" aria-label="筛选贡献状态"><button type="button" class="selected" data-filter="all">全部</button><button type="button" data-filter="pending">待审核</button><button type="button" data-filter="rejected">已退回</button><button type="button" data-filter="published">已发布</button><button type="button" data-filter="withdrawal">撤回申请</button></div><label class="search-field history-search"><span class="icon i-search"></span><input id="history-search" type="search" placeholder="搜索我的贡献" aria-label="搜索我的贡献"></label></div>
+          <div class="history-layout"><section class="history-list" aria-label="贡献列表"><div class="history-column-head"><span>技能</span><span>最近提交</span><span>当前发布版本</span></div><div id="history-rows"></div><div class="empty-state" id="history-empty" hidden><span class="icon i-list"></span><strong>没有匹配的贡献</strong><p>调整筛选条件后再查看。</p></div></section><aside class="history-detail" id="history-detail" aria-label="贡献详情"></aside></div>
+        </section>
+      </div>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+  <div class="menu-popover" id="card-menu" role="menu" hidden></div>
+  <dialog id="app-dialog" aria-labelledby="dialog-title"><div class="dialog-head"><h2 id="dialog-title"></h2><button type="button" class="icon-button" id="dialog-close" aria-label="关闭"><span class="icon i-x"></span></button></div><div id="dialog-body"></div><div class="dialog-actions" id="dialog-actions"></div></dialog>
+  </div>
+</body>
+</html>
