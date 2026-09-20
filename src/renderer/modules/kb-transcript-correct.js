@@ -9,8 +9,12 @@
  *   - 本面板**只调用** transcript.* IPC；不直接读写文件、不改原文
  *     （主进程的 apply 只产出清理版 + run 快照，回滚也只返回原文）。
  *   - 高危（high）候选**不会**默认进清理版：必须显式勾选，并计入「待确认」。
- *   - 「另存到知识库」走既有的 library.writeText 通道，文件名带 runId 短号，
- *     永不覆盖原文件。
+ *   - 「另存到知识库」走既有的 library.writeText 通道：落在原文**同一个目录**、
+ *     文件名加 i18n 后缀（zh `清理版`），永不覆盖原文件；内容级 sha1 去重命中时
+ *     不重复写盘，并把已有文件的确切路径告知用户。
+ *   - 另存成功后由本面板**显式**请求库视图重载目录树（`notifyLibraryChanged`）：
+ *     库列表渲染的是进入视图时的树快照，不通知就会出现"另存了却找不到文件"
+ *     （2026-09-16 真机反馈）。
  *
  * Renderer 约束：classic script（无 JSX/bundler）、可见文案走 i18n、
  * 控件用共享原语（uiButton/uiField/uiEmptyState/uiModal）、图标来自 icons.js。
@@ -292,11 +296,35 @@
     if (!result || result.ok !== false) return { kind: 'saved', path: String(result?.path || '') };
     const code = String(result.code || '');
     if (code === 'duplicate_content') {
-      return { kind: 'duplicate', existingDir: String(result.existingDir || '') };
+      return {
+        kind: 'duplicate',
+        existingDir: String(result.existingDir || ''),
+        // 去重命中时把**已有文件的确切路径**带出来：只说"在某个目录下"用户还是
+        // 找不到（真机反馈），必须能给到一个可以直接去看的文件。
+        existingPath: String(result.existingPath || ''),
+      };
     }
     const message = String(result.error || '');
     if (/同名文件已存在|already exists|exist/i.test(message)) return { kind: 'retry', message };
     return { kind: 'failed', message };
+  }
+
+  /**
+   * 请知识库视图重载它的目录树。
+   *
+   * 库列表（`contexts.js` 的资源树 / `kb-workbench.js` 的个人知识库文件列表）
+   * 渲染的是**各自进入视图时拍的树快照**，main 侧写盘只回一条全局 kb.events
+   * 状态事件。本面板另存的文件因此不会自己出现在列表里——真机反馈就是
+   * 「另存到知识库了却找不到文件」。写入方负责显式通知，才能立刻看到。
+   * 用内联的 typeof 守卫而不是固定引用：两个模块可能未加载（其他视图下面板也可用）。
+   */
+  function notifyLibraryChanged() {
+    try {
+      if (typeof root.loadContexts === 'function') root.loadContexts();
+      if (typeof root.renderKbWorkbench === 'function') root.renderKbWorkbench();
+    } catch (error) {
+      log?.warn('library refresh after save failed', { error: error?.message || String(error) });
+    }
   }
 
   function riskKey(level) {
@@ -391,8 +419,7 @@
       llmNote: '',
       headings: [],
       headingBusy: false,
-      // 接受的三个动作（方案 §七）：范围 / 忽略 / 加白 / 改写法
-      scopeChoice: 'keep',
+      // 接受的三个动作（方案 §七）：忽略 / 加白 / 改写法
       // 同人段落合并（方案 §五 P1-2）：默认开——它是"清理版"能不能真正好用的关键
       mergeSpeaker: true,
       rowMenu: '',
@@ -850,40 +877,28 @@
     }
 
     /**
-     * 接受范围（方案 §七：接受（范围：本文档 / 当前任务））。
-     * 只影响"接受时把词条作用域改成什么"；默认 keep = 不动词条原有作用域。
+     * 场景标签行（词条作用域的前置数据）。
+     *
+     * 「接受范围」三档（默认 / 仅本文档 / 仅本场景）已删除。它名不副实：
+     *   - 「默认」是纯 no-op（`applyScopeChoice` 首行就 return，不发 IPC 也不改盘）；
+     *   - 是否收窄实际取决于 `source === 'meeting_accept'`，而**全仓库没有任何调用方
+     *     发送过该 source**（面板发 'manual'、本体桥接发 'ontology_seed'），判断恒真
+     *     ⇒ 新词条一律是全局规则——正是 transcript_auto_correct 里记录的那起事故
+     *     （一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）。
+     * 作用域改在**创建词条时**按当前文档/场景自动收窄，见
+     * `transcript_glossary.upsertEntry` 的兜底规则。
      *
      * 控件分工（全部走共享原语，不建页面局部变体）：
-     *   范围 = 互斥选择 → uiSegmentedControl；拟标题 = 动作 → uiButton；
-     *   合并同人发言 = 开关 → uiCheckbox。
-     * 点击委托仍按 data-atc-action / data-atc-scope 分派，故 attrs 原样透传给每个分段项。
+     *   场景标签 = 标签行；拟标题 = 动作 → uiButton；合并同人发言 = 开关 → uiCheckbox。
+     * 点击委托仍按 data-atc-action 分派。
      */
     function renderScope() {
       const host = q('[data-atc-scope]');
       if (!host) return;
-      if (!state.scanned || state.rows.length === 0) { host.textContent = ''; return; }
-      const scopeOptions = [
-        { value: 'keep', label: t('kb.transcriptCorrect.scope_keep', '默认'), disabled: state.busy },
-        { value: 'doc', label: t('kb.transcriptCorrect.scope_doc', '仅本文档'), disabled: state.busy },
-        {
-          value: 'task',
-          label: t('kb.transcriptCorrect.scope_task', '仅本场景'),
-          disabled: state.busy || !(ctx.scenarioTags || []).length,
-        },
-      ];
+      // 有"未生效（out_of_scope）"条目时也要显示：很可能是这份稿子没标场景，
+      // 用户得能在这里补标签，而不是对着灰按钮猜（真机反馈）。
+      if (!state.scanned || (state.rows.length === 0 && state.denied.length === 0)) { host.textContent = ''; return; }
       host.innerHTML = [
-        '<span class="kb-atc__scope-label">' + t('kb.transcriptCorrect.scope_label', '接受范围') + '</span>',
-        root.uiSegmentedControl({
-          ariaLabel: t('kb.transcriptCorrect.scope_label', '接受范围'),
-          value: state.scopeChoice,
-          className: 'kb-atc__scope-control',
-          items: scopeOptions.map((option) => ({
-            label: option.label,
-            value: option.value,
-            disabled: option.disabled,
-            attrs: { 'data-atc-action': 'scope', 'data-atc-scope': option.value },
-          })),
-        }),
         button({
           label: state.headingBusy
             ? t('kb.transcriptCorrect.headings_running', '正在拟标题…')
@@ -921,13 +936,6 @@
       }));
       if (state.cleanedText) {
         buttons.push(button({
-          label: t('kb.transcriptCorrect.preview', '预览清理版'),
-          icon: 'file-text',
-          role: 'secondary',
-          size: 'sm',
-          attrs: { 'data-atc-action': 'preview' },
-        }));
-        buttons.push(button({
           label: t('kb.transcriptCorrect.diff', '对照原文'),
           icon: 'split',
           role: 'secondary',
@@ -962,14 +970,6 @@
           disabled: !state.runId,
           attrs: { 'data-atc-action': 'notes' },
         }));
-        buttons.push(button({
-          label: t('kb.transcriptCorrect.revert', '回滚'),
-          icon: 'x-circle',
-          // 次要操作 → 线框按钮（规范 §三-1）
-          role: 'secondary',
-          size: 'sm',
-          attrs: { 'data-atc-action': 'revert' },
-        }));
       }
       host.innerHTML = buttons.join('');
     }
@@ -981,6 +981,7 @@
         ambiguous_name: t('kb.transcriptCorrect.issue_reason_ambiguous_name', '名称存疑'),
         mixed_speech: t('kb.transcriptCorrect.issue_reason_mixed_speech', '中英混杂'),
         asr_unrecoverable: t('kb.transcriptCorrect.issue_reason_asr_unrecoverable', '转写不可辨'),
+        model_candidate: t('kb.transcriptCorrect.issue_reason_model_candidate', '模型候选'),
       };
       return map[reason] || map.unknown_entity;
     }
@@ -1026,8 +1027,8 @@
       })];
       buttons.push(button({
         label: state.llmBusy
-          ? t('kb.transcriptCorrect.llm_running', '正在问模型…')
-          : t('kb.transcriptCorrect.llm_ask', '让模型给候选（受约束）'),
+          ? t('kb.transcriptCorrect.llm_running', '正在读正文…')
+          : t('kb.transcriptCorrect.llm_ask', '让模型读一遍找错写'),
         icon: 'brain-circuit',
         role: 'ghost',
         size: 'sm',
@@ -1059,7 +1060,7 @@
         body.appendChild(note);
       }
 
-      for (const candidate of state.llmCandidates.slice(0, 20)) {
+      for (const [index, candidate] of state.llmCandidates.slice(0, 20).entries()) {
         const row = document.createElement('div');
         row.className = 'kb-atc__sync-row';
         const main = document.createElement('div');
@@ -1079,20 +1080,32 @@
           why.textContent = candidate.reason;
           main.appendChild(why);
         }
+        // 模型自己想出来的写法（不在已知写法名单里）要说清楚：复核时要一眼看出
+        // "这是词表里已有的写法"还是"模型猜的写法"。
+        if (candidate.inAllowlist === false) {
+          const own = document.createElement('div');
+          own.className = 'kb-atc__sync-note';
+          own.dataset.tone = 'warning';
+          own.textContent = t('kb.transcriptCorrect.llm_outside_allowlist', '该写法不在词表里，属模型自己的判断，务必人工确认。');
+          main.appendChild(own);
+        }
         const acts = document.createElement('div');
         acts.className = 'kb-atc__sync-row-actions';
         acts.innerHTML = button({
-          label: t('kb.transcriptCorrect.llm_adopt', '采纳为词条'),
+          label: t('kb.transcriptCorrect.llm_flag', '标待核'),
           role: 'ghost',
           size: 'sm',
           disabled: state.busy || state.llmBusy,
-          attrs: {
-            'data-atc-llm-adopt': candidate.wrong,
-            'data-atc-llm-correct': candidate.correct,
-          },
+          attrs: { 'data-atc-llm-flag': String(index) },
         });
         row.append(main, acts);
         body.appendChild(row);
+      }
+      if (state.llmCandidates.length) {
+        const scope = document.createElement('div');
+        scope.className = 'kb-atc__sync-note';
+        scope.textContent = t('kb.transcriptCorrect.llm_scope_note', '候选只能标待核：本步不会写入词表，也不参与扫描替换；确认进词表需在词表管理的待核候选里人工复核。');
+        body.appendChild(scope);
       }
       if (state.llmNote) {
         const note = document.createElement('div');
@@ -1435,7 +1448,6 @@
           // 口癖规则包装进词表后是 action=delete 词条：不带这个开关它们不会出现，
           // 用户会以为"装了规则包却没反应"（真机踩过）。
           includeDelete: true,
-          ...(Array.isArray(ctx.scenarioTags) && ctx.scenarioTags.length ? { scenarioTags: ctx.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
         state.denied = Array.isArray(result?.denied) ? result.denied : [];
@@ -1601,8 +1613,8 @@
       if (note) {
         note.textContent = t('kb.transcriptCorrect.diff_note', '高亮 = 本次替换，删除线 = 口癖删除；原文从未被改写，回滚只做校验与返回。');
       }
-      const result = await modal.result;
-      if (result?.reason === 'action' && result?.id === 'revert') {
+      const result = await modal;
+      if (result?.reason === 'action' && result?.value === 'revert') {
         await runRevert();
       }
     }
@@ -1659,12 +1671,18 @@
           if (verdict.kind === 'saved' || verdict.kind === 'duplicate' || verdict.kind === 'failed') break;
         }
         if (verdict.kind === 'duplicate') {
-          state.savedPath = verdict.existingDir ? `${verdict.existingDir}/` : '';
+          const existing = verdict.existingPath;
+          // 已有文件优先按"确切文件"告知；拿不到路径时才退回目录级提示。
+          state.savedPath = existing || (verdict.existingDir ? `${verdict.existingDir}/` : '');
           setStatus(t('kb.transcriptCorrect.save_duplicate', '库里已有相同内容的清理版{where}，无需重复保存。', {
-            where: verdict.existingDir
-              ? t('kb.transcriptCorrect.save_duplicate_dir', '（在「{dir}」目录下）', { dir: verdict.existingDir })
-              : '',
+            where: existing
+              ? t('kb.transcriptCorrect.save_duplicate_file', '（已有文件：{path}）', { path: existing })
+              : (verdict.existingDir
+                ? t('kb.transcriptCorrect.save_duplicate_dir', '（在「{dir}」目录下）', { dir: verdict.existingDir })
+                : ''),
           }), '');
+          // 没有新文件可"看"，但用户要的是那份已有文件——列表得刷出来。
+          notifyLibraryChanged();
           return;
         }
         if (verdict.kind === 'failed') throw new Error(verdict.message || 'write failed');
@@ -1676,6 +1694,8 @@
         }
         state.savedPath = targetPath;
         toast(t('kb.transcriptCorrect.saved', '已保存到知识库：{name}', { name: targetPath }));
+        // 保存成功即刻刷新库列表：别让用户对着"已保存"的提示却找不到文件。
+        notifyLibraryChanged();
       } catch (error) {
         log?.warn('cleaned transcript save failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.save_failed', '保存失败，请稍后重试。'), 'warning');
@@ -1720,8 +1740,8 @@
       });
       const host = modal?.dialog?.querySelector('[data-atc-notes]');
       if (host) host.textContent = state.notesText;
-      const result = await modal.result;
-      if (result?.reason === 'action' && result?.id === 'save-notes') {
+      const result = await modal;
+      if (result?.reason === 'action' && result?.value === 'save-notes') {
         await saveNotes();
       }
     }
@@ -1743,6 +1763,7 @@
           return;
         }
         setStatus(t('kb.transcriptCorrect.notes_saved', '附记已另存：{path}', { path: result?.path || targetPath }), '');
+        notifyLibraryChanged();
       } catch (error) {
         log?.warn('save notes failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.notes_save_failed', '保存失败：{error}', { error: error?.message || '' }), 'warning');
@@ -1840,37 +1861,6 @@
       } finally {
         state.busy = false;
         render();
-      }
-    }
-
-    /** 接受范围（方案 §七）：把已接受的词条限定到本文档 / 本场景。 */
-    async function applyScopeChoice(entryRef) {
-      const choice = state.scopeChoice;
-      if (choice === 'keep') return;
-      if (choice === 'task' && !(ctx.scenarioTags || []).length) {
-        setStatus(t('kb.transcriptCorrect.scope_need_tags', '当前文档没有场景标签，请改用「本文档」。'), 'warning');
-        return;
-      }
-      try {
-        const result = await root.cogseed.invoke('transcript.glossary.setScope', {
-          ids: [entryRef],
-          choice,
-          docId: ctx.docId,
-          ...(choice === 'task' ? { scenarioTags: ctx.scenarioTags } : {}),
-        });
-        const refused = Array.isArray(result?.refused) ? result.refused : [];
-        if (refused.length) {
-          setStatus(t('kb.transcriptCorrect.scope_refused', '高危词条不能设为全局（会误伤无关稿件），已保持原作用域。'), 'warning');
-          return;
-        }
-        setStatus(t('kb.transcriptCorrect.scope_applied', '已限定作用域：{scope}', {
-          scope: choice === 'doc'
-            ? t('kb.transcriptCorrect.scope_doc', '仅本文档')
-            : t('kb.transcriptCorrect.scope_task', '仅本场景'),
-        }), '');
-      } catch (error) {
-        log?.warn('scope apply failed', { error: error?.message || String(error) });
-        setStatus(t('kb.transcriptCorrect.scope_failed', '设置作用域失败，请稍后重试。'), 'warning');
       }
     }
 
@@ -1999,7 +1989,13 @@
           host.appendChild(row);
         }
       }
-      await modal.result;
+      // 弹窗是挂在 document.body 上的（ui-modal.js: document.body.appendChild(overlay)），
+      // 不在面板容器内 —— 容器上那份点击委托**收不到弹窗里的按钮**，
+      // 「采用」点了没反应就是这个原因。这里给该 dialog 单独挂一份同样的委托。
+      const dialog = modal?.dialog;
+      if (dialog) dialog.addEventListener('click', onClick);
+      await modal;
+      if (dialog) dialog.removeEventListener('click', onClick);
       render();
     }
 
@@ -2015,9 +2011,13 @@
     }
 
     /**
-     * 受约束 LLM 候选（方案 §五 P2-1）：只对"疑似专名"问一次模型，
-     * 目标必须落在词表白名单里；低置信只提示不采纳。
-     * 采纳 = 用户显式点「采纳为词条」，之后重新扫描，替换仍受护栏管。
+     * 模型候选（方案 §五 P2-1）：**让模型读正文找错写**。
+     *
+     * 此前是"先用词形判据挑疑似专名，挑不出就不发请求"——中文稿几乎必然挑不出，
+     * 于是模型压根没被问到，界面却像"模型给不出候选"。现在正文分段直接交给模型，
+     * 词形判据只当重点线索。
+     * 「已知写法」名单只是优先参考；无论哪种，产出都只能「标待核」——不写词表、
+     * 不参与扫描替换。
      */
     async function runLlmCandidates() {
       if (state.llmBusy || !state.scanned) return;
@@ -2031,22 +2031,40 @@
         });
         state.llmCandidates = Array.isArray(result?.candidates) ? result.candidates : [];
         const rejected = Array.isArray(result?.rejected) ? result.rejected.length : 0;
+        const outside = Number(result?.outsideAllowlist || 0);
         const skipped = String(result?.skipped || '');
+        const scanned = Number(result?.chunksScanned || 0);
+        const total = Number(result?.chunksTotal || 0);
+        const failed = Number(result?.failedChunks || 0);
+        // 「结果可能不全」必须说出来：达到分段上限 / 有段落调用失败，都不能装作全看过。
+        const caveats = [
+          result?.truncated
+            ? t('kb.transcriptCorrect.llm_truncated', '；正文较长，本次只读到前 {scanned}/{total} 段，可再点一次继续', { scanned, total })
+            : '',
+          failed
+            ? t('kb.transcriptCorrect.llm_chunks_failed', '；有 {count} 段调用失败，结果可能不全', { count: failed })
+            : '',
+        ].join('');
         state.llmNote = state.llmCandidates.length
-          ? t('kb.transcriptCorrect.llm_found', '模型给出 {count} 条候选（白名单 {allowed} 个目标{rejected}）', {
+          ? t('kb.transcriptCorrect.llm_found', '模型读了 {scanned}/{total} 段，给出 {count} 条候选（已知写法 {known} 个可参考{outside}{rejected}）', {
+            scanned,
+            total,
             count: state.llmCandidates.length,
-            allowed: Number(result?.allowedCount || 0),
-            rejected: rejected
-              ? t('kb.transcriptCorrect.llm_rejected', '，挡掉白名单外的 {count} 条', { count: rejected })
+            known: Number(result?.knownCount || 0),
+            outside: outside
+              ? t('kb.transcriptCorrect.llm_outside_count', '，其中 {count} 条是词表外的写法', { count: outside })
               : '',
-          })
+            rejected: rejected
+              ? t('kb.transcriptCorrect.llm_rejected', '，另有 {count} 条定位不到、已丢弃', { count: rejected })
+              : '',
+          }) + caveats
           : (skipped === 'no_model'
             ? t('kb.transcriptCorrect.llm_no_model', '还没有配置模型，无法生成候选。')
-            : skipped === 'no_allowed'
-              ? t('kb.transcriptCorrect.llm_no_allowed', '词表与记忆分组里没有可用目标，先补几条正确写法再试。')
-              : skipped === 'no_suspects'
-                ? t('kb.transcriptCorrect.llm_no_suspects', '没有发现疑似专名，不需要问模型。')
-                : t('kb.transcriptCorrect.llm_none', '模型没有给出可信候选（宁可空着，也不硬猜）。'));
+            : skipped === 'empty_text'
+              ? t('kb.transcriptCorrect.llm_empty_text', '正文是空的，没有可读的内容。')
+              : skipped === 'model_failed'
+                ? t('kb.transcriptCorrect.llm_model_failed', '模型调用失败（{count} 段都没成功），请检查模型配置后重试。', { count: failed })
+                : t('kb.transcriptCorrect.llm_none', '模型读完这几段没有发现错写（宁可空着，也不硬猜）。') + caveats);
       } catch (error) {
         log?.warn('llm candidates failed', { error: error?.message || String(error) });
         state.llmNote = t('kb.transcriptCorrect.llm_failed', '生成候选失败，请稍后重试。');
@@ -2056,19 +2074,53 @@
       }
     }
 
-    /** 采纳一条模型候选：写成词条（错形来自转写，正确写法来自白名单）。 */
-    async function adoptLlmCandidate(wrong, correct) {
-      if (state.busy) return;
+    /**
+     * 把一条模型候选**标成待核**（方案 §五 P2-1 修订）。
+     *
+     * 这里刻意**不写词表**：模型候选只能进候选区（`pending`）+ 在正文里挂一个
+     * 「转写存疑」标记。原因：候选一旦直接入词表就会参与扫描替换，等于让模型的
+     * 判断变成生效规则。要变成规则，只能在词表管理里人工复核后确认。
+     */
+    async function flagLlmCandidate(index) {
+      const candidate = state.llmCandidates[Number(index)];
+      if (state.busy || !candidate) return;
+      const wrong = String(candidate.wrong || '');
+      const start = Number(candidate.start);
+      const span = Number.isFinite(start)
+        ? { start: Math.max(0, start), end: Math.max(0, start) + wrong.length }
+        : null;
+      if (!span) {
+        setStatus(t('kb.transcriptCorrect.llm_flag_no_span', '这条候选没有可定位的位置，无法标待核。'), 'warning');
+        return;
+      }
       try {
-        await root.cogseed.invoke('transcript.glossary.upsert', {
-          wrong, correct, kind: 'people', source: 'manual',
+        // 上下文由面板就地截取（与主进程发给模型的口径一致）：候选本身不带 context，
+        // 但它决定了复核时"凭什么这么改"能不能看懂，落盘时要留下。
+        const context = String(ctx.text || '')
+          .slice(Math.max(0, span.start - 30), Math.min(String(ctx.text || '').length, span.end + 30))
+          .replace(/\n/g, ' ');
+        await root.cogseed.invoke('transcript.correct.flagCandidates', {
+          docId: ctx.docId,
+          candidates: [{
+            wrong,
+            correct: candidate.correct,
+            confidence: candidate.confidence,
+            reason: candidate.reason,
+            context,
+            start: span.start,
+            inAllowlist: candidate.inAllowlist !== false,
+          }],
         });
-        state.llmCandidates = state.llmCandidates.filter((item) => item.wrong !== wrong);
-        setStatus(t('kb.transcriptCorrect.llm_adopted', '已采纳为词条：{wrong} → {correct}', { wrong, correct }), '');
-        await runScan();
+        state.flagged = mergeFlagged(state.flagged, [{
+          span,
+          text: wrong,
+          reason: 'model_candidate',
+        }]);
+        state.llmCandidates = state.llmCandidates.filter((item) => item !== candidate);
+        setStatus(t('kb.transcriptCorrect.llm_flagged', '已标待核：{wrong}（候选不会写入词表，需在词表管理里人工复核）', { wrong }), '');
       } catch (error) {
-        log?.warn('adopt llm candidate failed', { error: error?.message || String(error) });
-        setStatus(t('kb.transcriptCorrect.llm_adopt_failed', '采纳失败，请稍后重试。'), 'warning');
+        log?.warn('flag llm candidate failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.llm_flag_failed', '标待核失败，请稍后重试。'), 'warning');
       } finally {
         render();
       }
@@ -2273,6 +2325,9 @@
           correct,
           kind,
           source: 'manual',
+          // 创建上下文：未显式给 scope 时，main 侧据此把新词条收窄到本文档，
+          // 而不是静默变成全局规则（「接受范围」控件已删除，护栏移到这里）。
+          docId: ctx.docId,
         });
         if (result?.skippedReason === 'pure_digit_variant') {
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
@@ -2302,8 +2357,6 @@
         else {
           state.accepted.add(ref);
           state.ignored.delete(ref);
-          // 接受时按当前范围选择落到词条（本文档 / 本场景），keep = 不动
-          void applyScopeChoice(ref);
         }
         render();
         return;
@@ -2360,15 +2413,24 @@
       const headingAdopt = event.target.closest('[data-atc-heading-adopt]');
       if (headingAdopt) {
         const start = Number(headingAdopt.getAttribute('data-atc-heading-adopt'));
-        toggleHeading(start, headingAdopt.getAttribute('data-atc-heading-title'));
-        headingAdopt.textContent = state.headings.some((h) => h.start === start)
-          ? t('kb.transcriptCorrect.headings_adopted', '已采用')
-          : t('kb.transcriptCorrect.headings_adopt', '采用');
+        const title = headingAdopt.getAttribute('data-atc-heading-title') || '';
+        toggleHeading(start, title);
+        const adopted = state.headings.some((h) => h.start === start);
+        // 整块重写该按钮：直接改 textContent 会把共享按钮的内部结构（label span）
+        // 冲掉，而且 role class 永远停在 secondary，"已采用"看不出来。
+        headingAdopt.outerHTML = button({
+          label: adopted
+            ? t('kb.transcriptCorrect.headings_adopted', '已采用')
+            : t('kb.transcriptCorrect.headings_adopt', '采用'),
+          role: adopted ? 'primary' : 'secondary',
+          size: 'sm',
+          attrs: { 'data-atc-heading-adopt': String(start), 'data-atc-heading-title': title },
+        });
         return;
       }
-      const llmAdopt = event.target.closest('[data-atc-llm-adopt]');
-      if (llmAdopt) {
-        void adoptLlmCandidate(llmAdopt.getAttribute('data-atc-llm-adopt'), llmAdopt.getAttribute('data-atc-llm-correct'));
+      const llmFlag = event.target.closest('[data-atc-llm-flag]');
+      if (llmFlag) {
+        void flagLlmCandidate(llmFlag.getAttribute('data-atc-llm-flag'));
         return;
       }
       const flagSuspectBtn = event.target.closest('[data-atc-flag-suspect]');
@@ -2403,12 +2465,6 @@
       if (!action) return;
       const kind = action.getAttribute('data-atc-action');
       if (kind === 'sync-ontology') { void runSyncOntology(); return; }
-      if (kind === 'scope') {
-        const value = action.getAttribute('data-atc-scope') || 'keep';
-        state.scopeChoice = value === 'doc' || value === 'task' ? value : 'keep';
-        render();
-        return;
-      }
       if (kind === 'toggle-denied') { state.showDenied = !state.showDenied; render(); return; }
       if (kind === 'open-glossary') {
         if (root.KbGlossaryManager && typeof root.KbGlossaryManager.open === 'function') {
@@ -2428,11 +2484,9 @@
       if (kind === 'scan') void runScan();
       else if (kind === 'toggle-other') { state.collapsedOther = !state.collapsedOther; render(); }
       else if (kind === 'apply') void runApply();
-      else if (kind === 'preview') openTextModal(t('kb.transcriptCorrect.preview_title', '清理版预览'), state.cleanedText);
       else if (kind === 'diff') void openDiffModal();
       else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
-      else if (kind === 'revert') void runRevert();
       else if (kind === 'add') void runAddEntry();
       else if (kind === 'seed-fillers') void runSeedFillers();
     }
@@ -2441,7 +2495,9 @@
     render();
 
     return {
-      destroy() { container.removeEventListener('click', onClick); },
+      destroy() {
+        container.removeEventListener('click', onClick);
+      },
       getState() { return state; },
     };
   }
@@ -2451,8 +2507,8 @@
       if (!container) throw new Error('kb transcript correct: container required');
       if (!root.cogseed || typeof root.cogseed.invoke !== 'function') throw new Error('kb transcript correct: ipc unavailable');
       if (typeof root.uiButton !== 'function') throw new Error('kb transcript correct: shared ui primitives unavailable');
-      if (typeof root.uiSegmentedControl !== 'function' || typeof root.uiCheckbox !== 'function') {
-        throw new Error('kb transcript correct: shared ui primitives unavailable (uiSegmentedControl / uiCheckbox)');
+      if (typeof root.uiCheckbox !== 'function') {
+        throw new Error('kb transcript correct: shared ui primitives unavailable (uiCheckbox)');
       }
       const text = String(ctx?.text || '');
       if (!text) throw new Error('kb transcript correct: text required');
@@ -2461,7 +2517,6 @@
         text,
         docId: String(ctx?.docId || ctx?.displayPath || 'transcript'),
         displayPath: String(ctx?.displayPath || ''),
-        scenarioTags: Array.isArray(ctx?.scenarioTags) ? ctx.scenarioTags : [],
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）

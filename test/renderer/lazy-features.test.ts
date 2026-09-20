@@ -244,15 +244,15 @@ describe('renderer lazy feature loader', () => {
     expect(source).not.toContain('primeProjectDetailShell');
   });
 
-  it('routes the legacy Agent entry into Settings and upgrades the startup summary there', () => {
+  it('routes the legacy Agent entry into the Connections Agent tab', () => {
     const boot = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf8');
     const settings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/run-center-settings.js'), 'utf8');
 
-    expect(boot).toContain("const openLegacyAgentSettings = view === 'agents'");
-    expect(boot).toContain("if (openLegacyAgentSettings) view = 'settings'");
+    expect(boot).toContain("const openLegacyAgentConnections = view === 'agents'");
+    expect(boot).toContain("if (openLegacyAgentConnections) view = 'connections'");
     expect(boot).not.toContain("} else if (view === 'agents')");
-    expect(boot).toContain("const settingsTab = openLegacyAgentSettings ? 'configuration' : opts.settingsTab");
-    expect(boot).toContain("const settingsAnchor = openLegacyAgentSettings ? 'agents' : opts.settingsAnchor");
+    expect(boot).toContain("activateConnectionsTab('agents')");
+    expect(boot).not.toContain("openLegacyAgentSettings");
     expect(settings).toContain('async function refreshAgentManagement()');
     expect(settings).toContain('await loadAgents(false)');
   });

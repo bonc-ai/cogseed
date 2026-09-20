@@ -40,6 +40,10 @@ const legacyRawControlBaseline: Record<string, number> = {
   'interactive-cli.js': 5,
   'interactive-tour.js': 4,
   'kb-eco.js': 1,
+  // cognition-assets/views.js: 资产详情总开关（role="switch"，无文字 label）。
+  // uiButton 强制可见文字 label，表达不了纯状态控件——与 run-center 的
+  // 复合控件豁免同构（2026-09-17 认知资产迭代）。
+  'cognition-assets/views.js': 1,
   'kb-notes.js': 24,
   'kb-workbench.js': 13,
   'library-transfer.js': 7,
