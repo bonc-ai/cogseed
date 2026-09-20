@@ -65,6 +65,9 @@ async function loadOntologyFacts(
     for (const field of fields.fields) {
       for (const entry of field.values) {
         if (entry.project && entry.project !== context.workspaceId) continue;
+        // 敏感性（spec 007 T302）：restricted 值不进任务自动上下文与世界模型
+        // （用户在对话里显式 @ 该组仍会带全文——显式选择即授权）。
+        if (entry.sensitivity === 'restricted') continue;
         const value = String(entry.value || '').replace(/\s+/g, ' ').trim().slice(0, MAX_ONTOLOGY_FACT_VALUE);
         if (!value) continue;
         const factKey = createHash('sha256')

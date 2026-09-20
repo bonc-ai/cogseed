@@ -5821,5 +5821,19 @@
   "personalOntology.tribox_groups_unit": "組",
   "personalOntology.tribox_fields_unit": "フィールド",
   "personalOntology.tribox_rel_unit": "関係フィールド",
-  "personalOntology.tribox_vocab_hint": "語彙=各グループのフィールド名とテンプレート宣言。グループ詳細で管理"
+  "personalOntology.tribox_vocab_hint": "語彙=各グループのフィールド名とテンプレート宣言。グループ詳細で管理",
+  "personalOntology.rulekind_operation": "運用ルール",
+  "personalOntology.rulekind_preference": "偏好",
+  "personalOntology.rulekind_constraint": "制約",
+  "personalOntology.rulekind_cycle_tip": "ルール分類を切替",
+  "personalOntology.restricted_chip": "制限付き",
+  "personalOntology.restrict_tip": "制限付きにする（自動注入なし）",
+  "personalOntology.unrestrict_tip": "制限を解除",
+  "personalOntology.restricted_on": "制限付き：タスク自動注入と世界モデルから除外されます",
+  "personalOntology.restricted_off": "制限を解除しました",
+  "personalOntology.tribox_filter_all": "すべて",
+  "personalOntology.group_history": "履歴",
+  "personalOntology.group_restore": "この版に戻す",
+  "personalOntology.group_history_empty": "履歴はまだありません。編集すると自動的に保存されます",
+  "personalOntology.group_restored": "復元しました（戻す前の版も自動保存済み）"
 }

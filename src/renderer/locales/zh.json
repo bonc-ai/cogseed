@@ -7833,5 +7833,19 @@
   "personalOntology.tribox_groups_unit": "组",
   "personalOntology.tribox_fields_unit": "字段",
   "personalOntology.tribox_rel_unit": "关系字段",
-  "personalOntology.tribox_vocab_hint": "词汇即各组字段名与模板声明——在组详情里维护"
+  "personalOntology.tribox_vocab_hint": "词汇即各组字段名与模板声明——在组详情里维护",
+  "personalOntology.rulekind_operation": "操作规则",
+  "personalOntology.rulekind_preference": "偏好",
+  "personalOntology.rulekind_constraint": "约束",
+  "personalOntology.rulekind_cycle_tip": "切换规则分类",
+  "personalOntology.restricted_chip": "受限·不自动注入",
+  "personalOntology.restrict_tip": "设为受限（不自动注入）",
+  "personalOntology.unrestrict_tip": "取消受限",
+  "personalOntology.restricted_on": "已设为受限：不再进入任务自动注入与世界模型",
+  "personalOntology.restricted_off": "已取消受限",
+  "personalOntology.tribox_filter_all": "全部",
+  "personalOntology.group_history": "历史",
+  "personalOntology.group_restore": "恢复这版",
+  "personalOntology.group_history_empty": "还没有历史版本——修改分组内容后自动留档",
+  "personalOntology.group_restored": "已恢复到该版本（当前版已自动留档）"
 }

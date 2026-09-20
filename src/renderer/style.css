@@ -24611,6 +24611,39 @@ body:has(#panel-settings.active) .main-top-actions {
   font-weight: 400;
 }
 
+.personal-onto-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed #e8e8ee;
+  font-size: 13.5px;
+}
+.personal-onto-history-time { white-space: nowrap; font-weight: 600; color: #475569; }
+.personal-onto-history-preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 总览 R 盒分类筛选（spec 007 T301） */
+.personal-onto-filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.personal-onto-filter-chip {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #64748b;
+  font-size: 12.5px;
+  padding: 2px 11px;
+  cursor: pointer;
+}
+.personal-onto-filter-chip.is-on {
+  background: #334155;
+  border-color: #334155;
+  color: #fff;
+}
+
 .personal-onto-group-new-btn {
   width: 100%;
   margin-top: 6px;

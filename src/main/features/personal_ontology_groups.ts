@@ -106,6 +106,12 @@ export interface FieldValue {
   /** 可选：用户已核实（落盘 `@verified` 裸标记=有来源支持；`@verified:independent`
    *  =独立核实过——spec 007 两档，存量裸标向后兼容）。缺省 = 未核实。 */
   verified?: boolean | 'independent';
+  /** 可选：规则分类（spec 007 T301，关系值/规则用）：operation 操作规则 /
+   *  preference 偏好 / constraint 约束。落盘 `@kind:<v>`。缺省 = 未分类。 */
+  ruleKind?: 'operation' | 'preference' | 'constraint';
+  /** 可选：敏感性（spec 007 T302）：restricted 的值不进任务注入与世界模型
+   *  ontologyFacts（授权切片地基）。落盘 `@restricted`。缺省 = standard。 */
+  sensitivity?: 'restricted';
 }
 
 /** `@asof:` 合法年月：1900-2099 年 + 01-12 月。写错的（如 2026-13）不认作
@@ -193,11 +199,11 @@ export function splitFlowEntries(text: string): string[] {
  *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
  *  `@proj:` 前缀剥离存 pid；`asof:` 前缀合法年月存 asOf、写错忽略（笔误的
  *  时间不该落进 project 冒充项目 id）；其他形态宽容保留原样（原行为）。 */
-export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent' } | null {
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent'; ruleKind?: 'operation' | 'preference' | 'constraint'; sensitivity?: 'restricted' } | null {
   if (typeof line !== 'string') return null;
   const withSource = line.match(/^- (.+) \[(\S+)\]((?: @\S+)*)$/);
   if (withSource) {
-    const out: { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent' } = {
+    const out: { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent'; ruleKind?: 'operation' | 'preference' | 'constraint'; sensitivity?: 'restricted' } = {
       value: withSource[1].replace(/\\\[/g, '['),
       source: withSource[2],
     };
@@ -212,6 +218,10 @@ export function parseFieldValueLine(line: string): { value: string; source: stri
         out.project = marker.slice('proj:'.length);
       } else if (marker.startsWith('asof:')) {
         if (ASOF_MARKER_RE.test(marker)) out.asOf = marker.slice('asof:'.length);
+      } else if (marker === 'kind:operation' || marker === 'kind:preference' || marker === 'kind:constraint') {
+        out.ruleKind = marker.slice('kind:'.length) as 'operation' | 'preference' | 'constraint';
+      } else if (marker === 'restricted') {
+        out.sensitivity = 'restricted';
       } else {
         out.project = marker;
       }
@@ -229,8 +239,12 @@ export function serializeFieldValueLine(fv: FieldValue): string {
   const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
   const withProject = fv.project ? `${base} @proj:${fv.project}` : base;
   const withAsOf = fv.asOf ? `${withProject} @asof:${fv.asOf}` : withProject;
-  if (fv.verified === 'independent') return `${withAsOf} @verified:independent`;
-  return fv.verified ? `${withAsOf} @verified` : withAsOf;
+  let withVerified = withAsOf;
+  if (fv.verified === 'independent') withVerified = `${withVerified} @verified:independent`;
+  else if (fv.verified) withVerified = `${withVerified} @verified`;
+  if (fv.ruleKind) withVerified = `${withVerified} @kind:${fv.ruleKind}`;
+  if (fv.sensitivity === 'restricted') withVerified = `${withVerified} @restricted`;
+  return withVerified;
 }
 
 /** 解析字段区文本（`## 字段区` 与 `## 流水区` 之间的部分）为字段表。 */
@@ -433,6 +447,77 @@ export { notifyGroupUpserted, notifyGroupDeleted };
 
 type Mutator = (content: GroupContent) => { changed?: boolean; ok?: boolean; error?: string };
 
+const HISTORY_DIR = '.history';
+const HISTORY_MAX_PER_GROUP = 50;
+
+function groupHistoryDir(uid: string, groupId: string): string {
+  return path.join(userOntologyGroupsDir(uid), HISTORY_DIR, groupId);
+}
+
+function snapshotGroupHistory(uid: string, groupId: string, text: string): void {
+  try {
+    if (!text.trim()) return; // 首次创建（原文为空）不留快照
+    const dir = groupHistoryDir(uid, groupId);
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(dir, `${stamp}.md`), text, 'utf8');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
+    while (files.length > HISTORY_MAX_PER_GROUP) {
+      fs.rmSync(path.join(dir, files.shift() as string));
+    }
+  } catch {
+    // 历史快照失败不阻塞写入（尽力而为的审计层）。
+  }
+}
+
+/** 组变更历史（新→旧）：[{ id, savedAt, bytes, preview }]。 */
+export function listGroupHistory(uid: string, groupId: string): Array<{ id: string; savedAt: string; bytes: number; preview: string }> {
+  if (!safeId(uid) || !safeId(groupId)) return [];
+  try {
+    const dir = groupHistoryDir(uid, groupId);
+    return fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .sort()
+      .reverse()
+      .map((f) => {
+        const text = fs.readFileSync(path.join(dir, f), 'utf8');
+        return {
+          id: f.slice(0, -3),
+          savedAt: f.slice(0, -3).replace(/-/g, (m, i) => (i === 4 || i === 7 ? '-' : i >= 13 ? (i === 16 ? ':' : i === 19 ? ':' : '.') : m)),
+          bytes: Buffer.byteLength(text, 'utf8'),
+          preview: text.replace(/\s+/g, ' ').slice(0, 80),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** 恢复某版快照：当前文本先快照（可再回滚回来），再写回快照内容。 */
+export async function restoreGroupSnapshot(uid: string, groupId: string, snapshotId: string): Promise<SimpleResult> {
+  if (!safeId(uid) || !safeId(groupId)) return { ok: false, error: 'invalid uid or groupId' };
+  if (!/^[0-9TZ-]+$/.test(snapshotId)) return { ok: false, error: 'invalid snapshot id' };
+  const snapPath = path.join(groupHistoryDir(uid, groupId), `${snapshotId}.md`);
+  if (!fs.existsSync(snapPath)) return { ok: false, error: 'snapshot not found' };
+  return mutateGroupContent(uid, groupId, () => ({ changed: false })) // 走常规校验取 abs
+    .then(async () => {
+      const groups = readGroups(uid);
+      const meta = groups.find((g) => g.group_id === groupId);
+      if (!meta) return { ok: false, error: 'group not found' };
+      const abs = resolveGroupFileAbsPathFromMeta(uid, meta);
+      snapshotGroupHistory(uid, groupId, readTextSafe(abs)); // 当前版留档
+      writeTextAtomicSync(abs, fs.readFileSync(snapPath, 'utf8'));
+      groups[idxOf(groups, groupId)] = { ...groups[idxOf(groups, groupId)], updated_at: nowIso() };
+      writeGroups(uid, groups);
+      notifyGroupUpserted(uid, meta.rel_path);
+      return { ok: true };
+    });
+}
+
+function idxOf(groups: GroupMeta[], groupId: string): number {
+  return groups.findIndex((g) => g.group_id === groupId);
+}
+
 async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const groups = readGroups(uid);
@@ -443,7 +528,8 @@ async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator
   try { abs = resolveGroupFileAbsPathFromMeta(uid, groups[idx]); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
 
-  const content = parseGroupContent(readTextSafe(abs));
+  const previousText = readTextSafe(abs);
+  const content = parseGroupContent(previousText);
   const outcome = mutator(content);
   if (outcome.error || outcome.ok === false) return { ok: false, error: outcome.error || 'failed' };
 
@@ -451,6 +537,12 @@ async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator
   const bytes = Buffer.byteLength(next, 'utf8');
   if (bytes > MAX_FILE_BYTES) {
     return { ok: false, error: `file exceeds ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB limit` };
+  }
+
+  if (next !== previousText) {
+    // 变更历史（spec 007 T304，Richard「变更集可回滚」）：覆盖前把原文快照进
+    // .history/<groupId>/，上限滚动删最旧；恢复走 restoreGroupSnapshot。
+    snapshotGroupHistory(uid, groupId, previousText);
   }
 
   try {
@@ -709,6 +801,70 @@ export async function setFieldValueVerified(
       if (fv.verified !== next) changed = true;
       if (next === undefined) delete fv.verified;
       else fv.verified = next;
+    }
+    return changed ? { changed: true } : { changed: false };
+  });
+}
+
+/** 规则分类循环 toggle（spec 007 T301）：无 → operation → preference →
+ *  constraint → 无。仅关系值形状的行有分类语义（普通值标了也不影响解析）。 */
+export async function cycleFieldValueRuleKind(
+  uid: string,
+  groupId: string,
+  fieldName: string,
+  value: string,
+): Promise<SimpleResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name || !val) return { ok: false, error: 'field name or value required' };
+  const ORDER: Array<'operation' | 'preference' | 'constraint' | undefined> =
+    [undefined, 'operation', 'preference', 'constraint'];
+
+  return mutateGroupContent(uid, groupId, (content) => {
+    const values = content.fields[name];
+    if (!values || !values.some((fv) => fv.value === val)) {
+      return { ok: false, error: 'field value not found' };
+    }
+    let changed = false;
+    for (const fv of values) {
+      if (fv.value !== val) continue;
+      const idx = ORDER.indexOf(fv.ruleKind);
+      const next = ORDER[(idx + 1) % ORDER.length];
+      if (fv.ruleKind !== next) changed = true;
+      if (next === undefined) delete fv.ruleKind;
+      else fv.ruleKind = next;
+    }
+    return changed ? { changed: true } : { changed: false };
+  });
+}
+
+/** 敏感性 toggle（spec 007 T302）：standard ⇄ restricted。restricted 的值
+ *  由注入侧过滤（projection-knowledge），不进任务上下文与世界模型。 */
+export async function setFieldValueSensitivity(
+  uid: string,
+  groupId: string,
+  fieldName: string,
+  value: string,
+  restricted: boolean,
+): Promise<SimpleResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name || !val) return { ok: false, error: 'field name or value required' };
+
+  return mutateGroupContent(uid, groupId, (content) => {
+    const values = content.fields[name];
+    if (!values || !values.some((fv) => fv.value === val)) {
+      return { ok: false, error: 'field value not found' };
+    }
+    let changed = false;
+    for (const fv of values) {
+      if (fv.value !== val) continue;
+      const next = restricted ? 'restricted' as const : undefined;
+      if (fv.sensitivity !== next) changed = true;
+      if (next === undefined) delete fv.sensitivity;
+      else fv.sensitivity = next;
     }
     return changed ? { changed: true } : { changed: false };
   });

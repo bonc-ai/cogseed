@@ -7833,5 +7833,19 @@
   "personalOntology.tribox_groups_unit": "groups",
   "personalOntology.tribox_fields_unit": "fields",
   "personalOntology.tribox_rel_unit": "relation fields",
-  "personalOntology.tribox_vocab_hint": "Vocabulary = group field names and template declarations — maintained in group detail"
+  "personalOntology.tribox_vocab_hint": "Vocabulary = group field names and template declarations — maintained in group detail",
+  "personalOntology.rulekind_operation": "operation rule",
+  "personalOntology.rulekind_preference": "preference",
+  "personalOntology.rulekind_constraint": "constraint",
+  "personalOntology.rulekind_cycle_tip": "cycle rule kind",
+  "personalOntology.restricted_chip": "restricted",
+  "personalOntology.restrict_tip": "mark restricted (no auto-injection)",
+  "personalOntology.unrestrict_tip": "remove restriction",
+  "personalOntology.restricted_on": "Restricted: excluded from task auto-injection and the world model",
+  "personalOntology.restricted_off": "Restriction removed",
+  "personalOntology.tribox_filter_all": "all",
+  "personalOntology.group_history": "History",
+  "personalOntology.group_restore": "Restore this version",
+  "personalOntology.group_history_empty": "No history yet — snapshots are kept automatically after edits",
+  "personalOntology.group_restored": "Restored (the replaced version was archived automatically)"
 }

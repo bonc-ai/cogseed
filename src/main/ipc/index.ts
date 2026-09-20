@@ -3607,6 +3607,32 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, groupId, fieldName, value, level,
     );
   },
+  // 规则分类循环（spec 007 T301）：无 → operation → preference → constraint → 无。
+  'personalOntology.groups.fields.cycleRuleKind': async ({ groupId, fieldName, value }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    return personalOntologyGroups.cycleFieldValueRuleKind(ctx.userId, groupId, fieldName, value);
+  },
+  // 组变更历史（spec 007 T304）：快照列表与恢复。
+  'personalOntology.groups.history.list': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return { ok: true, history: personalOntologyGroups.listGroupHistory(ctx.userId, groupId) };
+  },
+  'personalOntology.groups.history.restore': async ({ groupId, snapshotId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!snapshotId || typeof snapshotId !== 'string') throw new Error('missing snapshotId');
+    return personalOntologyGroups.restoreGroupSnapshot(ctx.userId, groupId, snapshotId);
+  },
+  // 敏感性（spec 007 T302）：restricted 不进任务自动注入与世界模型。
+  'personalOntology.groups.fields.sensitivity': async ({ groupId, fieldName, value, restricted }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    return personalOntologyGroups.setFieldValueSensitivity(
+      ctx.userId, groupId, fieldName, value, restricted === true,
+    );
+  },
   'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');

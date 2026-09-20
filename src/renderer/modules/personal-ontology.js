@@ -85,6 +85,8 @@
   let _pocGroupDetail = null;
   /** 三盒总览（spec 007 T201）：A/R 盒合并视图数据源——组字段值 + 资产两侧。 */
   let _pocTriBox = { loaded: false, loadError: '', groups: [], assets: [] };
+  /** 总览 R 盒分类筛选（spec 007 T301）：'all' | 'operation' | 'preference' | 'constraint' */
+  let _pocTriBoxRuleFilter = 'all';
   // 右栏展示会话沉淀出的基础画像和角色模板；旧候选审核仍由 Recall 正式资产页面负责。
   let _pocSelected = { kind: 'profile', id: 'user-profile' };
   // 模板文件编辑器 { groupId, templateId, sections, content, view:'form'|'raw' }
@@ -973,10 +975,26 @@
           ${r.verified === 'independent' ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_independent_chip', '独立核实过'))}</span>` : r.verified === true ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '有来源支持'))}</span>` : ''}
         </span>
       </div>`).join('');
-    const rHtml = rRows.map((r) => `<div class="personal-onto-value-row">
+    const filter = _pocTriBoxRuleFilter || 'all';
+    const KINDS = ['operation', 'preference', 'constraint'];
+    const kindLabel = (k) => _t('personalOntology.rulekind_' + k, k === 'operation' ? '操作规则' : k === 'preference' ? '偏好' : '约束');
+    const filterChips = ['all', ...KINDS].map((k) =>
+      `<button type="button" class="personal-onto-filter-chip${filter === k ? ' is-on' : ''}" data-poc-tri-filter="${k}">${escapeHtml(k === 'all' ? _t('personalOntology.tribox_filter_all', '全部') : kindLabel(k))}</button>`).join('');
+    const visibleR = filter === 'all' ? rRows : rRows.filter((r) => r.ruleKind === filter);
+    const rHtml = visibleR.map((r) => `<div class="personal-onto-value-row">
         <span class="personal-onto-value-text">${escapeHtml(r.text)}</span>
-        <span class="personal-onto-value-meta"><span class="muted">${escapeHtml(String(r.side))}</span></span>
+        <span class="personal-onto-value-meta"><span class="muted">${escapeHtml(String(r.side))}</span>${r.ruleKind ? `<span class="ca-chip">${escapeHtml(kindLabel(r.ruleKind))}</span>` : ''}</span>
       </div>`).join('');
+    // R 行数据带 ruleKind（组侧解析；rule 资产暂无分类——归全部）
+    for (const g of _pocTriBox.groups) {
+      for (const field of g.fields) {
+        for (const fv of (field.values || [])) {
+          if (!isRel(fv.value)) continue;
+          const row = rRows.find((r) => r.text === `${field.name}：${fv.value}`);
+          if (row) row.ruleKind = fv.ruleKind;
+        }
+      }
+    }
 
     return `<section class="personal-onto-tribox">
       <div class="personal-onto-zone">
@@ -984,7 +1002,11 @@
         <div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.tribox_vocab_hint', '词汇即各组字段名与模板声明——在组详情里维护'))}</div>
       </div>
       ${zoneBlock('personalOntology.tribox_facts', '事实（A）', aHtml, aRows.length)}
-      ${zoneBlock('personalOntology.tribox_rules', '规则（R）', rHtml, rRows.length)}
+      <div class="personal-onto-zone">
+        <div class="personal-onto-zone-head">${escapeHtml(_t('personalOntology.tribox_rules', '规则（R）'))} <span class="muted">${visibleR.length}/${rRows.length}</span></div>
+        <div class="personal-onto-filter-row">${filterChips}</div>
+        ${rHtml || `<div class="muted personal-onto-value-empty">${escapeHtml(_t('personalOntology.tribox_empty', '暂无内容'))}</div>`}
+      </div>
     </section>`;
   }
 
@@ -1074,8 +1096,12 @@
             ${fv.asOf ? `<span class="ca-chip">${escapeHtml(_tv('personalOntology.asof_chip', { m: fv.asOf }, '截至 {m}'))}</span>` : ''}
             ${fv.asOf && _pocIsStaleAsOf(fv.asOf) ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.stale_chip', '可能过时'))}</span>` : ''}
             ${fv.verified === 'independent' ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_independent_chip', '独立核实过'))}</span>` : fv.verified === true ? `<span class="ca-chip is-green">${escapeHtml(_t('personalOntology.verified_chip', '有来源支持'))}</span>` : ''}
+            ${fv.ruleKind ? `<span class="ca-chip">${escapeHtml(_t('personalOntology.rulekind_' + fv.ruleKind, fv.ruleKind === 'operation' ? '操作规则' : fv.ruleKind === 'preference' ? '偏好' : '约束'))}</span>` : ''}
+            ${fv.sensitivity === 'restricted' ? `<span class="ca-chip is-amber">${escapeHtml(_t('personalOntology.restricted_chip', '受限·不自动注入'))}</span>` : ''}
             ${conflict.html}
           </span>
+          ${/→|->/.test(String(fv.value || '')) ? _iconButton({ label: _t('personalOntology.rulekind_cycle_tip', '切换规则分类'), icon: 'tag', size: 'sm', className: 'personal-onto-value-rulekind', attrs: { 'data-poc-group-op': 'cycle-rulekind', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || '') } }) : ''}
+          ${_iconButton({ label: fv.sensitivity === 'restricted' ? _t('personalOntology.unrestrict_tip', '取消受限') : _t('personalOntology.restrict_tip', '设为受限（不自动注入）'), icon: 'lock', size: 'sm', className: 'personal-onto-value-sensitivity', attrs: { 'data-poc-group-op': 'toggle-restricted', 'data-poc-field': field.name, 'data-poc-value': String(fv.value || ''), 'data-poc-restricted': fv.sensitivity === 'restricted' ? '0' : '1' } })}
           ${_iconButton({
             label: fv.verified === 'independent'
               ? _t('personalOntology.unverify_tip', '取消核实')
@@ -1125,6 +1151,7 @@
         <span class="personal-onto-main-title">${escapeHtml(d.title)}</span>
         <span class="personal-onto-group-actions">
           ${_button({ label: _t('personalOntology.group_rename', '重命名'), size: 'sm', className: 'personal-onto-group-action', attrs: { 'data-poc-group-op': 'rename-group' } })}
+          ${_button({ label: _t('personalOntology.group_history', '历史'), size: 'sm', className: 'personal-onto-group-action', attrs: { 'data-poc-group-op': 'show-history' } })}
           ${_button({ label: _t('personalOntology.group_delete', '删除分组'), size: 'sm', className: 'personal-onto-group-action is-danger', attrs: { 'data-poc-group-op': 'delete-group' } })}
         </span>
       </div>
@@ -1181,6 +1208,10 @@
         if (op === 'append-value') await _pocAppendValuePrompt(field);
         else if (op === 'remove-value') await _pocRemoveValue(field, value);
         else if (op === 'verify-value') await _pocToggleValueVerified(el, field, value);
+        else if (op === 'cycle-rulekind') await _pocCycleRuleKind(el, field, value);
+        else if (op === 'show-history') await _pocShowGroupHistory();
+        else if (op === 'restore-snapshot') await _pocRestoreSnapshot(el);
+        else if (op === 'toggle-restricted') await _pocToggleRestricted(el, field, value);
         else if (op === 'add-field') await _pocAddFieldPrompt();
         else if (op === 'rename-group') await _pocRenameGroupPrompt();
         else if (op === 'delete-group') await _pocDeleteGroupConfirm();
@@ -1315,6 +1346,82 @@
     await _pocOpenGroupDetail(_pocGroupDetail.groupId);
   }
 
+  /** 组变更历史（spec 007 T304）：列表 + 恢复（当前版自动留档可再回滚）。 */
+  async function _pocShowGroupHistory() {
+    if (!_pocGroupDetail) return;
+    const res = await _pocInvoke('personalOntology.groups.history.list', { groupId: _pocGroupDetail.groupId });
+    const history = res && Array.isArray(res.history) ? res.history : [];
+    const rows = history.length ? history.map((h) => `
+      <div class="personal-onto-history-row">
+        <span class="personal-onto-history-time">${escapeHtml(String(h.savedAt || h.id))}</span>
+        <span class="personal-onto-history-preview muted">${escapeHtml(String(h.preview || ''))}</span>
+        ${_button({ label: _t('personalOntology.group_restore', '恢复这版'), size: 'sm', className: 'personal-onto-group-action', attrs: { 'data-poc-group-op': 'restore-snapshot', 'data-poc-snapshot': String(h.id) } })}
+      </div>`).join('')
+      : `<div class="muted">${escapeHtml(_t('personalOntology.group_history_empty', '还没有历史版本——修改分组内容后自动留档'))}</div>`;
+    // 复用模板库弹层骨架：独立简易 modal
+    const overlay = document.getElementById('personal-onto-modal');
+    const body = document.querySelector('.personal-onto-modal-body');
+    if (!overlay || !body) return;
+    body.innerHTML = `<div class="personal-onto-history-list">
+      <div class="personal-onto-field-name">${escapeHtml(_t('personalOntology.group_history', '历史'))} <span class="muted">${history.length}</span></div>
+      ${rows}
+    </div>`;
+    overlay.style.display = 'flex';
+    _pocBindGroupDetail(body);
+  }
+
+  async function _pocRestoreSnapshot(el) {
+    if (!_pocGroupDetail) return;
+    const snapshotId = el.getAttribute('data-poc-snapshot');
+    if (!snapshotId) return;
+    await _pocRunOnce(`restore:${snapshotId}`, el, async () => {
+      const res = await _pocInvoke('personalOntology.groups.history.restore', {
+        groupId: _pocGroupDetail.groupId, snapshotId,
+      });
+      if (!res || res.ok === false) {
+        _pocToast('personalOntology.op_failed', (res && res.error) || '操作失败', 'error');
+        return;
+      }
+      _pocToast('personalOntology.group_restored', '已恢复到该版本（当前版已自动留档）', 'success');
+      const overlay = document.getElementById('personal-onto-modal');
+      if (overlay) overlay.style.display = 'none';
+      await _pocOpenGroupDetail(_pocGroupDetail.groupId);
+    });
+  }
+
+  /** 规则分类循环（spec 007 T301）：无 → 操作规则 → 偏好 → 约束 → 无。 */
+  async function _pocCycleRuleKind(el, fieldName, value) {
+    if (!_pocGroupDetail) return;
+    await _pocRunOnce(`rulekind:${fieldName}:${value}`, el, async () => {
+      const res = await _pocInvoke('personalOntology.groups.fields.cycleRuleKind', {
+        groupId: _pocGroupDetail.groupId, fieldName, value,
+      });
+      if (!res || res.ok === false) {
+        _pocToast('personalOntology.op_failed', (res && res.error) || '操作失败', 'error');
+        return;
+      }
+      await _pocOpenGroupDetail(_pocGroupDetail.groupId);
+    });
+  }
+
+  /** 敏感性 toggle（spec 007 T302）：受限值不进任务自动注入与世界模型。 */
+  async function _pocToggleRestricted(el, fieldName, value) {
+    if (!_pocGroupDetail) return;
+    const next = el.getAttribute('data-poc-restricted') === '1';
+    await _pocRunOnce(`restricted:${fieldName}:${value}`, el, async () => {
+      const res = await _pocInvoke('personalOntology.groups.fields.sensitivity', {
+        groupId: _pocGroupDetail.groupId, fieldName, value, restricted: next,
+      });
+      if (!res || res.ok === false) {
+        _pocToast('personalOntology.op_failed', (res && res.error) || '操作失败', 'error');
+        return;
+      }
+      _pocToast('personalOntology.restricted_' + (next ? 'on' : 'off'),
+        next ? '已设为受限：不再进入任务自动注入与世界模型' : '已取消受限', 'success');
+      await _pocOpenGroupDetail(_pocGroupDetail.groupId);
+    });
+  }
+
   /** 核实档 toggle（2026-09-20 断言核实维度；spec 007 两档三态循环）：
    *  未核实 → 有来源支持 → 独立核实 → 取消。章只由用户这一下产生。 */
   async function _pocToggleValueVerified(el, fieldName, value) {
@@ -1391,6 +1498,12 @@
       headerEl.classList.remove('is-profile');
       headerEl.innerHTML = '';
       bodyEl.innerHTML = _pocRenderTriBoxView();
+      bodyEl.querySelectorAll('[data-poc-tri-filter]').forEach((el) => {
+        el.addEventListener('click', () => {
+          _pocTriBoxRuleFilter = el.getAttribute('data-poc-tri-filter') || 'all';
+          _pocRenderMain();
+        });
+      });
       return;
     }
     if (_pocSelected.kind === 'profile') {

@@ -5821,5 +5821,19 @@
   "personalOntology.tribox_groups_unit": "grupos",
   "personalOntology.tribox_fields_unit": "campos",
   "personalOntology.tribox_rel_unit": "campos de relação",
-  "personalOntology.tribox_vocab_hint": "Vocabulário = nomes de campos e declarações de modelo — mantidos no detalhe do grupo"
+  "personalOntology.tribox_vocab_hint": "Vocabulário = nomes de campos e declarações de modelo — mantidos no detalhe do grupo",
+  "personalOntology.rulekind_operation": "regra de operação",
+  "personalOntology.rulekind_preference": "preferência",
+  "personalOntology.rulekind_constraint": "restrição",
+  "personalOntology.rulekind_cycle_tip": "alternar tipo de regra",
+  "personalOntology.restricted_chip": "restrito",
+  "personalOntology.restrict_tip": "marcar como restrito (sem injeção automática)",
+  "personalOntology.unrestrict_tip": "remover restrição",
+  "personalOntology.restricted_on": "Restrito: excluído da injeção automática e do world model",
+  "personalOntology.restricted_off": "Restrição removida",
+  "personalOntology.tribox_filter_all": "todos",
+  "personalOntology.group_history": "Histórico",
+  "personalOntology.group_restore": "Restaurar esta versão",
+  "personalOntology.group_history_empty": "Sem histórico ainda — versões são arquivadas automaticamente após edições",
+  "personalOntology.group_restored": "Restaurado (a versão substituída foi arquivada automaticamente)"
 }

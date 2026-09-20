@@ -27,11 +27,11 @@
 
 ## Phase 3: 结构对齐（逐项小方案先行）
 
-- [ ] T301 R 盒规则分类（operation/preference/constraint）+ 状态（proposed/active）落盘与筛选
-- [ ] T302 敏感性分档：FieldValue.sensitivity + `@restricted` marker + 注入侧过滤（restricted 零注入）
-- [ ] T303 授权切片交互小方案文档（任务关键词/空间绑定/手动选择）交用户拍板——未拍板不动注入裁剪
-- [ ] T304 组版本回滚：写入前快照 `.history/<groupId>/`（上限滚动）+ IPC history.list/restore + 界面「历史」入口
-- [ ] T305 测试：分类筛选 / restricted 零注入（注入块与 ontologyFacts 双查）/ 快照恢复一致性
+- [x] T301 R 盒规则分类（operation/preference/constraint）+ 状态（proposed/active）落盘与筛选
+- [x] T302 敏感性分档：FieldValue.sensitivity + `@restricted` marker + 注入侧过滤（restricted 零注入）
+- [x] T303 授权切片交互小方案文档（任务关键词/空间绑定/手动选择）交用户拍板——未拍板不动注入裁剪
+- [x] T304 组版本回滚：写入前快照 `.history/<groupId>/`（上限滚动）+ IPC history.list/restore + 界面「历史」入口
+- [x] T305 测试：分类筛选 / restricted 零注入（注入块与 ontologyFacts 双查）/ 快照恢复一致性
 
 ## Phase 4: 收尾
 
