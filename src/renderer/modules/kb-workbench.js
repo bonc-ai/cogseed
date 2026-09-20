@@ -5447,15 +5447,21 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     let rightPanelNarrow = Boolean(rightPanelMedia && rightPanelMedia.matches);
     _state.rightPanelOpen = !rightPanelNarrow;
     const applyRightPanel = () => {
-      const open = !rightPanelNarrow || _state.rightPanelOpen;
-      wb?.classList.toggle('right-panel-open', open);
+      // 单一事实源：_state.rightPanelOpen。此前写成
+      // `!rightPanelNarrow || _state.rightPanelOpen`，宽屏（>1100px）下左半恒为
+      // true → 点「关闭 AI 解析与问答」（生成测验正上方的 ×）后 open 仍为 true，
+      // DOM 被强制回展开态，真机上表现就是"按钮点了完全没反应"（9.17 P0）。
+      const open = _state.rightPanelOpen;
+      // 只有窄屏才把右列做成覆盖式抽屉；宽屏是常驻第三栏（收起后让宽度给中间列）。
+      const drawer = rightPanelNarrow && open;
+      wb?.classList.toggle('right-panel-open', drawer);
       wb?.classList.toggle('right-panel-collapsed', !open);
       if (rightPanel) rightPanel.setAttribute('aria-hidden', String(!open));
       if (rightExpandBtn) {
-        rightExpandBtn.hidden = !rightPanelNarrow || open;
+        rightExpandBtn.hidden = open;
         rightExpandBtn.setAttribute('aria-expanded', String(open));
       }
-      if (rightCollapseBtn) rightCollapseBtn.hidden = !rightPanelNarrow || !open;
+      if (rightCollapseBtn) rightCollapseBtn.hidden = !open;
     };
     rightExpandBtn?.addEventListener('click', () => {
       _state.rightPanelOpen = true;
@@ -5836,8 +5842,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _applyMmTransform();
     });
     window.addEventListener('mouseup', () => { _mmPanning = false; _mmPanStart = null; });
-    document.getElementById('kb-qa-input')?.addEventListener('input', _syncSendState);
-    document.getElementById('kb-qa-input')?.addEventListener('keyup', _syncSendState);
+    const qaInputEl = document.getElementById('kb-qa-input');
+    qaInputEl?.addEventListener('input', () => { _autoGrowQaInput(qaInputEl); _syncSendState(); });
+    qaInputEl?.addEventListener('keyup', _syncSendState);
+    _autoGrowQaInput(qaInputEl);
     _syncSendState();
     _restoreQaModelSelection();
     _renderQaModelChip();
@@ -6057,12 +6065,28 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     send.disabled = !input.value.trim();
   }
 
+  // 问答输入框自动扩容：多行输入随内容增高，避免长文本在单行里向前滚动、
+  // 看不到前面输入的内容。上限与 CSS `.kb-qa-input { max-height }` 对齐，
+  // 超过上限才启用纵向滚动；发送清空后复位到单行高度。
+  const KB_QA_INPUT_MIN_HEIGHT = 26;
+  const KB_QA_INPUT_MAX_HEIGHT = 120;
+  function _autoGrowQaInput(el) {
+    const input = el || document.getElementById('kb-qa-input');
+    if (!input || !input.style) return;
+    input.style.height = 'auto';
+    const contentHeight = Number(input.scrollHeight) || 0;
+    const next = Math.min(Math.max(contentHeight, KB_QA_INPUT_MIN_HEIGHT), KB_QA_INPUT_MAX_HEIGHT);
+    input.style.height = `${next}px`;
+    input.style.overflowY = contentHeight > KB_QA_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  }
+
   function _submitQa() {
     const input = document.getElementById('kb-qa-input');
     if (!input) return;
     const q = input.value;
     if (!q || !q.trim()) return;
     input.value = '';
+    _autoGrowQaInput(input);
     _syncSendState();
     _ask(q);
   }

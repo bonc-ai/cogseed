@@ -387,6 +387,36 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(ai.el.classList.contains('is-typing')).toBe(false);
   });
 
+  it('auto-grows the Q&A input up to the cap and resets after send', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+
+    const input = els['kb-qa-input'];
+    // 初始单行高度
+    expect(input.style.height).toBe('26px');
+    expect(input.style.overflowY).toBe('hidden');
+
+    // 多行内容 → 高度跟随内容增长，不出现滚动条
+    input.scrollHeight = 60;
+    input._listeners.input();
+    expect(input.style.height).toBe('60px');
+    expect(input.style.overflowY).toBe('hidden');
+
+    // 超过上限 → 封顶并启用纵向滚动
+    input.scrollHeight = 400;
+    input._listeners.input();
+    expect(input.style.height).toBe('120px');
+    expect(input.style.overflowY).toBe('auto');
+
+    // 发送后清空并复位到单行高度
+    input.value = 'alpha protocol?';
+    input.scrollHeight = 26;
+    els['kb-qa-send']._listeners.click();
+    expect(input.value).toBe('');
+    expect(input.style.height).toBe('26px');
+    expect(input.style.overflowY).toBe('hidden');
+  });
+
   it('renders the S3 analysis card (docs + one-liner + mindmap action)', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
