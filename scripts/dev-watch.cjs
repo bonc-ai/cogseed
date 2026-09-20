@@ -86,17 +86,23 @@ function scheduleRestart(reason) {
     restarting = true;
     const pid = child.pid;
     log(`检测到 ${pendingReason} 改动 → 重启主进程（pid ${pid}）`);
+    // ⚠️ 必须固定住"这一次要杀的实例"：done() 里会把 child 指向新实例，
+    // 若兜底计时器仍读模块级 child，就会在 3s 后拿 SIGKILL 打死刚起来的新实例
+    //（真机事故：新实例 0.3s 内 boot 成功，3s 后被兜底杀掉，守护进程随之退出）。
+    const dying = child;
     const done = () => {
       restarting = false;
-      child = null;
+      if (child === dying) child = null;
       if (shuttingDown) return;
       startApp();
     };
-    child.once('exit', done);
-    try { child.kill('SIGTERM'); } catch { done(); }
-    // 兜底：3s 内没退出就强杀，避免守护进程卡死
+    dying.once('exit', done);
+    try { dying.kill('SIGTERM'); } catch { done(); }
+    // 兜底：3s 内没退出就强杀，避免守护进程卡死（只杀这一次的实例）
     setTimeout(() => {
-      if (child) { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+      if (dying.exitCode === null && dying.signalCode === null) {
+        try { dying.kill('SIGKILL'); } catch { /* already gone */ }
+      }
     }, 3000);
   }, DEBOUNCE_MS);
 }
