@@ -24596,6 +24596,21 @@ body:has(#panel-settings.active) .main-top-actions {
   font-weight: 600;
 }
 
+/* 三盒分区（spec 007 Phase 1）：事实 / 规则 区块头与字段说明 */
+.personal-onto-zone { margin-bottom: 14px; }
+.personal-onto-zone-head {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: #334155;
+  border-left: 3px solid #94a3b8;
+  padding-left: 8px;
+  margin: 4px 0 8px;
+}
+.personal-onto-field-desc {
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
 .personal-onto-group-new-btn {
   width: 100%;
   margin-top: 6px;

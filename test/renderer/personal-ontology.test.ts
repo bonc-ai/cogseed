@@ -438,7 +438,10 @@ describe('personal ontology renderer integration', () => {
           ok: true,
           fields: [
             { name: '居住地', values: [{ value: '常住北京', source: '手动', verified: true }, { value: '常住上海', source: '智能', project: 'p1' }] },
-            { name: '就读状态', values: [{ value: '目前大四', source: '手动', asOf: '2025-01' }] },
+            { name: '就读状态', values: [{ value: '目前大四', source: '手动', asOf: '2025-01' }], description: '当前的学业阶段' },
+            // 关系字段（模板声明 isRelation）+ 值形状（→）双来源——都应归「规则」区
+            { name: '工作流程', isRelation: true, values: [{ value: '评审 → 先讲产品模型', source: '手动' }] },
+            { name: '备选规则', values: [{ value: '周报 -> 用中文写', source: '手动' }] },
           ],
         };
       }
@@ -486,6 +489,13 @@ describe('personal ontology renderer integration', () => {
     expect(body).toContain('常住北京');
     expect(body).toContain('常住上海');
     expect(body).toContain('data-poc-group-op="remove-value"'); // 结构化删值入口
+    // 三盒分区（spec 007 Phase 1）：事实区与规则区各自出现；模板声明 isRelation
+    // 与值含 → 的字段都归规则区；字段说明（T 盒定义）显示。
+    expect(body).toContain('事实');
+    expect(body).toContain('规则（写成 A → B）');
+    expect(body).toContain('评审 → 先讲产品模型');
+    expect(body).toContain('周报 -&gt; 用中文写'); // HTML 转义形态
+    expect(body).toContain('当前的学业阶段');
     expect(body).toContain('截至 2025-01');          // as-of 时间锚
     expect(body).toContain('可能过时');               // 超龄提醒（>12 个月）
     expect(body).toContain('is-conflicted');         // 冲突红框
