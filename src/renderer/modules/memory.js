@@ -621,8 +621,8 @@ function _memOpenModal(width, innerHtml) {
   _memCloseModal();
   const host = document.createElement('div');
   host.id = 'memory-modal-host';
-  host.className = 'memory-modal-overlay';
-  host.innerHTML = `<div class="memory-modal" style="width:${width}px" role="dialog" aria-modal="true">${innerHtml}</div>`;
+  host.className = 'ui-modal-overlay memory-modal-overlay';
+  host.innerHTML = `<div class="ui-modal memory-modal" style="width:${width}px" role="dialog" aria-modal="true">${innerHtml}</div>`;
   document.body.appendChild(host);
   if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(host);
   // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
@@ -641,13 +641,13 @@ function _memOpenModal(width, innerHtml) {
 
 function _memModalHeader(title, step, sub) {
   return `
-    <div class="memory-modal-head">
+    <div class="ui-modal__header memory-modal-head">
       <div class="memory-modal-head-main">
         <div class="memory-modal-head-titlerow">
-          <h2 class="memory-modal-title">${escapeHtml(title)}</h2>
+          <h2 class="ui-modal__title memory-modal-title">${escapeHtml(title)}</h2>
           ${step ? `<span class="memory-modal-step">${escapeHtml(step)}</span>` : ''}
         </div>
-        ${sub ? `<p class="memory-modal-sub">${escapeHtml(sub)}</p>` : ''}
+        ${sub ? `<p class="ui-modal__description memory-modal-sub">${escapeHtml(sub)}</p>` : ''}
       </div>
       ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn', attrs: { 'data-mem-action': 'modal-close' } })}
     </div>
@@ -661,7 +661,7 @@ let _memImportItems = []; // [{ text, target:'user'|'shared', kind, threat, keep
 function _memOpenImport(mode) {
   const host = _memOpenModal(560, `
     ${_memModalHeader(t('memory.import_title'), '1 / 2', t('memory.import_step1_sub'))}
-    <div class="memory-modal-body">
+    <div class="ui-modal__body memory-modal-body">
       <div class="memory-import-tabs">
         ${uiSegmentedControl({
           ariaLabel: t('memory.import_title'),
@@ -677,7 +677,7 @@ function _memOpenImport(mode) {
       </div>
       ${uiTextarea({ id: 'memory-import-text', className: 'memory-import-textarea', placeholder: t('memory.import_placeholder') })}
     </div>
-    <div class="memory-modal-foot">
+    <div class="ui-modal__footer memory-modal-foot">
       <span class="memory-import-stat muted" id="memory-import-stat"></span>
       <span class="memory-flex"></span>
       ${uiButton({ label: t('memory.cancel'), size: 'sm', attrs: { 'data-mem-action': 'modal-close' } })}
@@ -763,11 +763,11 @@ function _memOpenImportReview() {
 
   const host = _memOpenModal(620, `
     ${_memModalHeader(t('memory.review_title'), '2 / 2', t('memory.review_sub'))}
-    <div class="memory-modal-body">
+    <div class="ui-modal__body memory-modal-body">
       ${banner}
       ${rows}
     </div>
-    <div class="memory-modal-foot">
+    <div class="ui-modal__footer memory-modal-foot">
       <span class="memory-import-stat" id="memory-merge-summary"></span>
       <span class="memory-flex"></span>
       ${uiButton({ label: t('memory.back'), size: 'sm', attrs: { id: 'memory-review-back' } })}
@@ -895,7 +895,7 @@ async function _memOpenExport() {
 
   const host = _memOpenModal(460, `
     ${_memModalHeader(t('memory.export_title'), '', t('memory.export_sub'))}
-    <div class="memory-modal-body memory-export-body">
+    <div class="ui-modal__body memory-modal-body memory-export-body">
       ${row('user', files.user, t('memory.section_user'), t('memory.kind_group_user'))}
       ${row('shared', files.shared, t('memory.section_shared'), t('memory.kind_group_shared'))}
     </div>

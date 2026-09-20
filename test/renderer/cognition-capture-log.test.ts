@@ -65,6 +65,7 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
   domRoot = { innerHTML: '' };
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { uiInput, uiSwitch, uiTextarea } = require('../../src/renderer/modules/ui-form.js');
+  const { uiEmptyState } = require('../../src/renderer/modules/ui-empty.js');
   globalScope.window = {
     CogAssets: cogAssets,
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -78,6 +79,7 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
     uiInput,
     uiSwitch,
     uiTextarea,
+    uiEmptyState,
   };
   globalScope.document = { getElementById: () => domRoot };
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -230,12 +232,12 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     expect(off).toContain('等你批准或调整');
     // 关闭态：开关未亮、无时间选择器。
     expect(off).toContain('data-act="nightly-toggle"');
-    expect(off).not.toContain('ca-switch is-on');
+    expect(off).toContain('class="ui-switch" role="switch" aria-checked="false"');
     expect(off).not.toContain('type="time"');
 
     const on = renderPage('organize-settings', { captureSettings: { enabled: true, executionPolicy: 'nightly', reviewPolicy: 'manual', nightlyStart: '02:30' } });
     // 开启态：开关亮、时间选择器出现且带当前值。
-    expect(on).toContain('ca-switch is-on');
+    expect(on).toContain('class="ui-switch is-on" role="switch" aria-checked="true"');
     expect(on).toContain('type="time"');
     expect(on).toContain('value="02:30"');
     expect(on).toContain('开始时间');
