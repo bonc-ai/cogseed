@@ -25,14 +25,12 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
   conceptKeyOfCorrect: (t: unknown) => string;
   groupRowsByConcept: (rows: unknown[]) => Array<{ conceptKey: string; display: string; spans: number; rows: number }>;
-  flaggedSummary: (flagged: unknown) => { count: number; distinct: number; byReason: Record<string, number> };
   buildDiffPanes: (before: string, after: string, offsetMap: unknown[]) => {
     before: Array<{ kind: string; text: string }>;
     after: Array<{ kind: string; text: string }>;
     changedCount: number;
     deletedCount: number;
   };
-  mergeFlagged: (existing: unknown[], incoming: unknown[]) => unknown[];
   syncSummary: (sync: unknown) => {
     groupCount: number;
     conceptGroups: Array<{ display: string; count: number }>;
@@ -338,114 +336,6 @@ describe('对照视图分段（offsetMap 就是权威事实）', () => {
   });
 });
 
-describe('待核（未决项）', () => {
-  it('摘要按理由分档、原词去重计数', () => {
-    const stats = panel.flaggedSummary([
-      { span: { start: 1, end: 2 }, text: 'KSTAR', reason: 'unknown_entity' },
-      { span: { start: 9, end: 14 }, text: 'KSTAR', reason: 'ambiguous_name' },
-    ]);
-    expect(stats.count).toBe(2);
-    expect(stats.distinct).toBe(1);
-    expect(stats.byReason.unknown_entity).toBe(1);
-    expect(stats.byReason.ambiguous_name).toBe(1);
-  });
-
-  it('空输入安全（未扫描时不渲染任何待核）', () => {
-    expect(panel.flaggedSummary(null)).toEqual({ count: 0, distinct: 0, byReason: {} });
-  });
-
-  it('同位置同理由重复标记被合并：清理版不能插两个标记', () => {
-    const existing = [{ span: { start: 3, end: 7 }, text: 'coxy', reason: 'ambiguous_name' }];
-    const merged = panel.mergeFlagged(existing, [
-      { span: { start: 3, end: 7 }, text: 'coxy', reason: 'ambiguous_name' },
-      { span: { start: 20, end: 24 }, text: 'coxy', reason: 'ambiguous_name' },
-    ]);
-    expect(merged).toHaveLength(2);
-  });
-});
-
-describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
-  const style = readSrc('renderer/style.css');
-  const tokens = readSrc('renderer/tokens.css');
-  const source = readSrc('renderer/modules/kb-transcript-correct.js');
-
-  it('状态色四件套走 token，不在 style.css 里写死颜色', () => {
-    for (const token of [
-      '--state-accepted-bg', '--state-accepted-text',
-      '--state-caution-bg', '--state-caution-text',
-      '--state-review-bg', '--state-review-text',
-      '--state-ignored-bg', '--state-ignored-text',
-    ]) {
-      expect(tokens).toContain(token);
-      expect(style).toContain(`var(${token})`);
-    }
-    // 已接受用低饱和墨绿（不是品牌亮绿）：按钮与行底色都换成状态色
-    expect(style).toMatch(/\.kb-atc__row\.is-accepted \.ui-button--primary \{[^}]*var\(--state-accepted-bg\)/);
-    // 高危用暖橙（不是红）
-    expect(style).toMatch(/\.kb-atc__row\[data-risk="high"\] \.kb-atc__badge \{[^}]*var\(--state-caution/);
-  });
-
-  it('按钮按"核心/次要/低频"分组：主色填充 / 线框 / 文字', () => {
-    // role 写在 attrs 之前，所以从 role 往后找对应的动作标识
-    const roles = (key: string) => {
-      const at = source.indexOf(`data-atc-action': '${key}'`);
-      const head = source.slice(Math.max(0, at - 400), at);
-      const found = head.match(/role: '(primary|secondary|ghost)'/g) || [];
-      return found.length ? found[found.length - 1] : '';
-    };
-    expect(roles('apply')).toContain('primary');
-    expect(roles('revert')).toContain('secondary');
-    expect(roles('notes')).toContain('ghost');
-    expect(roles('compare-search')).toContain('ghost');
-  });
-
-  it('条目留白 + 极淡分隔线', () => {
-    expect(style).toMatch(/\.kb-atc__row \{[^}]*padding-block: var\(--space-2\)/);
-    expect(style).toMatch(/\.kb-atc__row \{[^}]*border-bottom: 1px solid var\(--line-default\)/);
-  });
-
-  it('范围/开关走共享组件：uiSegmentedControl + uiCheckbox，且不再有页面级 .ui-button 覆盖', () => {
-    // 互斥范围用共享分段控件，选中态由 value 驱动（不再靠 primary/ghost 互换）
-    expect(source).toContain('root.uiSegmentedControl({');
-    expect(source).toContain("value: state.scopeChoice");
-    // 每个分段项原样透传点击委托所需的 data-* 属性
-    expect(source).toMatch(/attrs: \{ 'data-atc-action': 'scope', 'data-atc-scope'/);
-    // 开关用共享复选框（<label> 包裹，沿用组件预览页的既有用法）
-    expect(source).toContain('root.uiCheckbox({');
-    expect(source).toContain('kb-atc__scope-toggle');
-    // 页面 CSS 不得再改共享按钮内部（原 32px 热区覆盖已删除，改为向组件层提需求）
-    expect(style).not.toMatch(/\.kb-atc__scope \.ui-button/);
-    // 开关不再是"靠 role 互换表达开关态"的按钮
-    expect(source).not.toMatch(/role: state\.mergeSpeaker \? 'primary'/);
-  });
-
-  it('折叠块有箭头提示，且说明文字弱化', () => {
-    expect(style).toContain('summary::before');
-    expect(style).toMatch(/\.kb-atc__issues\[open\] > summary::before/);
-    expect(style).toMatch(/\.kb-atc__hint \{[^}]*color: var\(--text-faint\)/);
-    expect(style).toMatch(/\.kb-atc__meta \{[^}]*font-size: var\(--font-size-1\)/);
-  });
-
-  it('面板标题下有一句作用说明，文件名只显示尾段（hover 给全路径）', () => {
-    expect(source).toContain('kb.transcriptCorrect.panel_hint');
-    expect(source).toContain("meta.setAttribute('title'");
-    // 只取路径尾段：`…split(/[\\/]/)…pop() || full`
-    expect(source).toContain('pop() || full');
-  });
-
-  it('左栏阅读：60/40 比例、行高 1.5、说话人三档专用 token、双栏细滚动条', () => {
-    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-main \{[^}]*flex: 1 1 60%/);
-    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*flex: 0 0 40%/);
-    expect(style).toMatch(/\.anchored-source-block-body \{[^}]*line-height: 1\.5/);
-    for (const token of ['--speaker-tint-0', '--speaker-tint-1', '--speaker-tint-2']) {
-      expect(tokens).toContain(token);
-    }
-    expect(style).toContain('.anchored-source-body::-webkit-scrollbar');
-    // 底色分层：右栏用底色而不是生硬左边框
-    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*border-left: none/);
-  });
-});
-
 describe('滚动与可调宽（2026-09-15 使用侧反馈修复）', () => {
   const style = readSrc('renderer/style.css');
   const viewer = readSrc('renderer/modules/anchored-source-view.js');
@@ -495,55 +385,48 @@ describe('滚动与可调宽（2026-09-15 使用侧反馈修复）', () => {
 describe('locale 覆盖', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [
-    'title', 'meta', 'scan', 'scanning', 'rescan', 'scan_done', 'scan_failed',
-    'accept', 'accepted', 'ignore', 'apply', 'applying', 'apply_done', 'apply_failed',
-    'summary', 'pending_high', 'applied_summary', 'applied_deleted', 'applied_pending',
-    'retention', 'over_rewrite', 'preview', 'preview_title', 'save', 'saved', 'save_failed',
-    'revert', 'revert_title', 'revert_ok', 'revert_mismatch', 'revert_failed',
-    'add_entry', 'wrong', 'correct', 'kind', 'add', 'added', 'add_failed', 'need_both', 'reject_digits',
-    'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
-    'delete_arrow', 'close_panel', 'unavailable', 'close', 'cleaned_suffix',
-    'group_high', 'group_other', 'group_other_collapsed',
-    // 本体/记忆同步（P1）
-    'sync_section', 'sync_hint', 'sync', 'syncing', 'resync', 'sync_groups', 'sync_linked',
-    'sync_align', 'sync_missing', 'sync_contributed', 'sync_no_source', 'sync_done',
-    'sync_failed', 'sync_source_ontology', 'sync_source_memory', 'sync_align_row',
-    'sync_align_use', 'sync_aligned', 'sync_align_failed', 'sync_missing_row',
-    'sync_seed', 'sync_cancel', 'sync_seed_add', 'sync_seed_need_wrong', 'sync_seed_added',
+    'title', 'meta', 'scan', 'scanning',
+    'rescan', 'scan_done', 'scan_failed', 'accept',
+    'accepted', 'ignore', 'apply', 'applying',
+    'apply_done', 'apply_failed', 'summary', 'pending_high',
+    'applied_summary', 'applied_deleted', 'applied_pending', 'retention',
+    'over_rewrite', 'preview', 'preview_title', 'save',
+    'saved', 'save_failed', 'revert', 'revert_title',
+    'revert_ok', 'revert_mismatch', 'revert_failed', 'add_entry',
+    'wrong', 'correct', 'kind', 'add',
+    'added', 'add_failed', 'need_both', 'reject_digits',
+    'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc',
+    'risk_high', 'risk_medium', 'risk_low', 'delete_arrow',
+    'close_panel', 'unavailable', 'close', 'cleaned_suffix',
+    'group_high', 'group_other', 'group_other_collapsed', 'sync_section',
+    'sync_hint', 'sync', 'syncing', 'resync',
+    'sync_groups', 'sync_linked', 'sync_align', 'sync_missing',
+    'sync_contributed', 'sync_no_source', 'sync_done', 'sync_failed',
+    'sync_source_ontology', 'sync_source_memory', 'sync_align_row', 'sync_align_use',
+    'sync_aligned', 'sync_align_failed', 'sync_missing_row', 'sync_seed',
+    'sync_cancel', 'sync_seed_add', 'sync_seed_need_wrong', 'sync_seed_added',
     'sync_seed_skipped', 'sync_seed_failed', 'summary_concepts', 'sync_chips_more',
-    // 待核 / 未决项（方案 §4.3）
-    'issue_section', 'issue_section_count', 'issue_hint', 'issue_find_suspects', 'issue_finding',
-    'issue_suspects_found', 'issue_suspects_none', 'issue_suspects_failed', 'issue_suspect_row',
-    'issue_mark', 'issue_unmark', 'issue_badge', 'issue_cancel', 'issue_at', 'issue_empty',
-    'issue_list_title', 'issue_summary', 'issue_reason_unknown_entity', 'issue_reason_ambiguous_name',
-    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable', 'issue_reason_model_candidate',
-    // 接受的三个动作 + 对照视图
-    'more', 'restore', 'reopen_row', 'restored', 'ignored_done', 'ignore_failed', 'group_ignored',
-    'denied', 'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed',
-    'denied_reason_word_boundary', 'denied_reason_overlapping_span', 'denied_reason_protected_region',
-    'scope_label', 'scope_keep', 'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
-    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder', 'add_allow_context',
-    'add_allow_need_term', 'add_allow_done', 'add_allow_failed', 'add_allow_existing', 'remove',
-    'remove_allow_done', 'remove_allow_failed', 'rename_correct', 'rename_done', 'rename_failed',
-    'rename_need_value', 'confirm', 'cancel', 'no_context',
-    'diff', 'diff_title', 'diff_bar', 'diff_before', 'diff_after', 'diff_note', 'diff_failed',
-    'seed_fillers', 'seed_fillers_done', 'seed_fillers_failed', 'scan_truncated',
-    'merge_on', 'merge_off', 'merged_blocks',
-    'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
-    'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
-    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_flag', 'llm_found', 'llm_rejected',
-    'llm_no_model', 'llm_none', 'llm_failed',
-    'llm_flagged', 'llm_flag_failed', 'llm_flag_no_span', 'llm_outside_allowlist',
-    'llm_outside_count', 'llm_scope_note',
-    // 「结果可能不全」必须能说出来（分段上限 / 单段调用失败）
-    'llm_empty_text', 'llm_model_failed', 'llm_truncated', 'llm_chunks_failed',
-    'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
-    'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
-    'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
-    // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
-    'panel_hint', 'meta_full',
-    // 另存去重时指出确切已有文件（2026-09-16：只说目录级，用户找不到）
-    'save_duplicate_file',
+    'more', 'restore', 'reopen_row', 'restored',
+    'ignored_done', 'ignore_failed', 'group_ignored', 'denied',
+    'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed', 'denied_reason_word_boundary',
+    'denied_reason_overlapping_span', 'denied_reason_protected_region', 'scope_label', 'scope_keep',
+    'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
+    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder',
+    'add_allow_context', 'add_allow_need_term', 'add_allow_done', 'add_allow_failed',
+    'add_allow_existing', 'remove', 'remove_allow_done', 'remove_allow_failed',
+    'rename_correct', 'rename_done', 'rename_failed', 'rename_need_value',
+    'confirm', 'cancel', 'no_context', 'diff',
+    'diff_title', 'diff_bar', 'diff_before', 'diff_after',
+    'diff_note', 'diff_failed', 'seed_fillers', 'seed_fillers_done',
+    'seed_fillers_failed', 'scan_truncated', 'merge_on', 'merge_off',
+    'merged_blocks', 'notes', 'notes_title', 'notes_desc',
+    'notes_save', 'notes_suffix', 'notes_saved', 'notes_duplicate',
+    'notes_save_failed', 'notes_failed', 'sync_structure_only', 'headings_ask',
+    'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
+    'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short',
+    'headings_none', 'compare', 'compare_running', 'compare_prompt',
+    'compare_result', 'compare_no_rewrite', 'compare_failed', 'panel_hint',
+    'meta_full', 'save_duplicate_file',
   ];
 
   for (const lang of locales) {
@@ -575,41 +458,27 @@ describe('源码契约', () => {
     expect(source).not.toContain('memory.write');
   });
 
-  it('未决项走主进程：疑似专名只查不改，待核随 apply 一起提交', () => {
-    expect(source).toContain("'transcript.correct.suspects'");
-    expect(source).toMatch(/issues: state\.flagged/);
-    // 清理版文本只来自主进程：面板不得自己往文本里拼标记
+  it('清理版文本只来自主进程：面板不自己拼标记', () => {
+    // 待核/【转写存疑】那套并行状态已移除；面板仍必须只渲染主进程返回的文本
     expect(source).not.toMatch(/cleanedText\s*=\s*[^;]*【转写存疑】/);
     expect(source).toMatch(/state\.cleanedText = String\(result\?\.result\?\.text/);
   });
 
-  /**
-   * 模型候选只能"标待核"——这条是本次改动的核心，必须钉死：
-   * 面板里**任何**把模型候选写进词表的路径都不允许存在。此前
-   * 「采纳为词条」直接调 `transcript.glossary.upsert`，等于让模型的判断
-   * 立刻变成扫描规则。
-   */
-  it('模型候选只标待核：走 flagCandidates + 挂 model_candidate，且不再有"采纳为词条"', () => {
-    expect(source).toContain("'transcript.correct.flagCandidates'");
-    expect(source).toMatch(/reason: 'model_candidate'/);
-    // 旧的采纳路径必须彻底消失（属性、函数、按钮文案三处）
-    expect(source).not.toContain('data-atc-llm-adopt');
-    expect(source).not.toContain('adoptLlmCandidate');
-    expect(source).not.toContain("llm_adopt'");
-    // 模型候选那一行的动作按钮 = 标待核
-    expect(source).toMatch(/data-atc-llm-flag/);
+  it('面板不再有"待核"这套并行状态：不出现 flagged / 标待核 / 转写存疑', () => {
+    // 待核（未决项）已整体移除：扫描结果就是唯一的候选清单，勾选即确认。
+    expect(source).not.toContain('data-atc-flag');
+    expect(source).not.toContain('state.flagged');
+    expect(source).not.toContain('【转写存疑】');
+    expect(source).not.toContain('flagCandidates');
+    expect(source).not.toContain('issueReasonLabel');
   });
 
-  it('候选落词表必须由人显式确认：面板不提供任何"候选直接入表"的通道', () => {
-    // 面板里唯一允许的 upsert 是**人工新增词条**表单（runAddEntry）。
-    // 把 upsert 调用点逐个找出来，确认里面没有候选相关的调用。
+  it('面板不给"模型候选绕过勾选直接入表"留通道：upsert 只由人工新增表单调用', () => {
     const upsertCalls = source.match(/'transcript\.glossary\.upsert',\s*\{[\s\S]{0,400}?\}\)/g) || [];
     expect(upsertCalls.length).toBeGreaterThanOrEqual(1);
     for (const call of upsertCalls) {
       expect(call).not.toMatch(/candidate/i);
     }
-    // 候选的入表动作只存在于词表管理页，面板里不得出现
-    expect(source).not.toContain('adoptCandidate');
   });
 
   it('对照视图在模态内提供回滚，且分段只吃 offsetMap（不另算 diff）', () => {

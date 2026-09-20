@@ -1,10 +1,10 @@
 /**
- * transcript_correction_runs — 三件套产物 / 回滚 / 未决项 / uid 隔离
+ * transcript_correction_runs — 三件套产物 / 回滚 / uid 隔离
  *
  * 关键不变量（方案 v0.2 §八）：
  *   - 原文永不就地改写：run 只**记录** sourcePath，产物落在 local 域的 runs 目录；
  *   - 回滚以 sha1 为准（快照被动过时必须报出来，而不是假装成功）；
- *   - 有未决项或未确认高危候选时产物只能标 draft；
+ *   - 有未确认高危候选时产物只能标 draft；
  *   - runId 必须过白名单（防路径穿越）；
  *   - 跨 uid 不可见。
  */
@@ -18,20 +18,16 @@ import {
   buildReport,
   createRun,
   getRun,
-  listIssues,
   listRuns,
   recordSearchCompare,
   renderRunNotes,
   readOffsetMap,
   readRunText,
-  resolveIssue,
   revertRun,
   sha1,
 } from '../../../src/main/features/transcript_correction_runs';
 import {
   applyCorrections,
-  insertIssueMarkers,
-  ISSUE_MARKER,
   scanText,
   type CorrectionCandidate,
 } from '../../../src/main/features/transcript_auto_correct';
@@ -80,17 +76,6 @@ describe('创建产物', () => {
     fs.rmSync(docPath, { force: true });
   });
 
-  it('存在未决项 → 状态 draft，即使替换本身已应用', () => {
-    const text = '用 coxy 上课';
-    const run = createRun(uid, {
-      docId: 'doc-1', sourceText: text, result: pipeline(text),
-      issues: [{ span: { start: 0, end: 1 }, text: '某名称', reason: 'unknown_entity' }],
-    });
-    expect(run.status).toBe('draft');
-    expect(listIssues(uid, { runId: run.runId })[0].marker).toBe('【转写存疑】');
-    expect(listIssues(uid, { runId: run.runId })[0].status).toBe('open');
-  });
-
   it('存在未确认高危候选 → 状态 draft（pendingTotal 沿用引擎结果）', () => {
     const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' };
     const text = '用在 for 里';
@@ -137,26 +122,6 @@ describe('列表与隔离', () => {
 });
 
 describe('回滚', () => {
-  it('有未决项时必须标 draft，且标记留在清理版里（方案 §8.1-7）', () => {
-    const text = 'coxy 与 KSTAR 都要核';
-    const result = applyCorrections(text, [
-      { entryRef: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', confidence: 1, riskLevel: 'low', context: '', span: { start: 0, end: 4 } },
-    ] as CorrectionCandidate[], { acceptedIds: ['g_coxy'] });
-    const marked = insertIssueMarkers(result.text, [{ start: 7, end: 12 }]);
-    const run = createRun(uid, {
-      docId: 'doc-issue',
-      sourceText: text,
-      result: { ...result, text: marked.text, charsOut: marked.text.length },
-      issues: [{ span: marked.spans[0], text: 'KSTAR', reason: 'unknown_entity' }],
-    });
-    expect(run.status).toBe('draft');
-    expect(readRunText(uid, run.runId, 'after')).toContain(ISSUE_MARKER);
-    const issues = listIssues(uid, { runId: run.runId });
-    expect(issues).toHaveLength(1);
-    expect(issues[0].marker).toBe(ISSUE_MARKER);
-    expect(issues[0].status).toBe('open');
-  });
-
   it('回滚返回原文且 sha1 校验通过，状态置 reverted', () => {
     const text = '用 coxy 上课';
     const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });
@@ -214,39 +179,12 @@ describe('交付台账（另存到知识库的反查依据）', () => {
   });
 });
 
-describe('未决项与报告', () => {
-  it('解决全部未决项且无待确认候选时，run 由 draft 提升为 applied', () => {
-    const text = '用 coxy 上课';
-    const run = createRun(uid, {
-      docId: 'doc-1', sourceText: text, result: pipeline(text),
-      issues: [{ span: { start: 0, end: 1 }, text: '某名称', reason: 'unknown_entity', suggestion: '是否指 Vibe Coding' }],
-    });
-    expect(run.status).toBe('draft');
-    const issue = listIssues(uid, { runId: run.runId, status: 'open' })[0];
-    expect(issue.suggestion).toBe('是否指 Vibe Coding');
-    resolveIssue(uid, run.runId, issue.id, '确认为某名称');
-    expect(listIssues(uid, { runId: run.runId, status: 'open' })).toHaveLength(0);
-    expect(getRun(uid, run.runId)?.status).toBe('applied');
-  });
-
-  it('仍有未确认候选时解决未决项也不会把 draft 提成 applied', () => {
-    const risky: GlossaryEntry = { ...coxy, id: 'g_for', wrong: 'for', correct: 'Foo', riskLevel: 'high' };
-    const text = '用在 for 里';
-    const run = createRun(uid, {
-      docId: 'doc-1', sourceText: text, result: pipeline(text, [coxy, risky]),
-      issues: [{ span: { start: 0, end: 1 }, text: '某名称', reason: 'unknown_entity' }],
-    });
-    const issue = listIssues(uid, { runId: run.runId })[0];
-    resolveIssue(uid, run.runId, issue.id, '已确认');
-    expect(getRun(uid, run.runId)?.status).toBe('draft');
-  });
-
-  it('报告含术语对照、未决项与告警', () => {
+describe('报告', () => {
+  it('报告含术语对照与告警', () => {
     const text = '用 coxy 上课';
     const run = createRun(uid, {
       docId: 'doc-1', sourceText: text, result: pipeline(text),
       params: { glossaryVersion: 2, contextMaterials: ['原始转写：a.txt', '产品故事：b.md'] },
-      issues: [{ span: { start: 0, end: 1 }, text: '某名称', reason: 'ambiguous_name' }],
     });
     const report = buildReport(uid, run.runId);
     expect(report.terminology.map((row) => ({
@@ -255,8 +193,7 @@ describe('未决项与报告', () => {
     // 依据：词表里查不到这条合成词条 → 如实标 missingInGlossary，不编来源
     expect(report.terminology[0].basis.missingInGlossary).toBe(true);
     expect(report.contextMaterials).toHaveLength(2);
-    expect(report.issues).toHaveLength(1);
-    expect(report.notes.some((n) => n.includes('待核'))).toBe(true);
+    expect(report.notes).toBeInstanceOf(Array);
   });
 
   it('报告对不存在的 run 抛错', () => {
@@ -265,7 +202,7 @@ describe('未决项与报告', () => {
 });
 
 describe('清理附记（方案 §五 P1-3 / §七）', () => {
-  it('五个段落齐全：对照表 / 口癖 / 未决项 / 材料 / 参数', () => {
+  it('段落齐全：对照表 / 口癖 / 材料 / 参数', () => {
     const text = 'coxy 与 K star 都在。嗯，就这些。';
     const scan = scanText(text, [
       { id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', kind: 'product', riskLevel: 'low', boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true }, freq: 3, source: 'manual', status: 'active', ownerScope: 'personal', replacedIn: [], createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1 },
@@ -276,8 +213,7 @@ describe('清理附记（方案 §五 P1-3 / §七）', () => {
     expect(notes).toContain('# 转写清理附记');
     expect(notes).toContain('## 一、术语对照表');
     expect(notes).toContain('## 二、口癖与填充词删除');
-    expect(notes).toContain('## 三、未决项清单');
-    expect(notes).toContain('## 四、上下文材料');
+    expect(notes).toContain('## 三、上下文材料');
     expect(notes).toContain('## 六、本次参数');
     expect(notes).toContain('coxy');
     expect(notes).toContain('原文从未被就地改写');
@@ -311,15 +247,22 @@ describe('清理附记（方案 §五 P1-3 / §七）', () => {
     const scan = scanText(text, [
       { id: 'g_coxy', wrong: 'coxy', correct: 'Cogseed', action: 'replace', kind: 'product', riskLevel: 'low', boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true }, freq: 1, source: 'manual', status: 'active', ownerScope: 'personal', replacedIn: [], createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1 },
     ] as never);
-    const result = applyCorrections(text, scan.candidates, { acceptedIds: ['g_coxy'] });
-    const run = createRun(uid, {
-      docId: 'doc-draft', sourceText: text, result,
-      issues: [{ span: { start: 0, end: 4 }, text: 'coxy', reason: 'ambiguous_name' }],
-    });
+    // draft 的触发改成"存在未确认的高危候选"（未决项那套已随待核整体移除）
+    const risky = {
+      id: 'g_for', wrong: 'for', correct: 'Foo', action: 'replace', kind: 'term', riskLevel: 'high',
+      boundary: 'word', contextDeny: [], contextAllow: [], scope: { docIds: [], scenarioTags: [], global: true },
+      freq: 0, source: 'manual', status: 'active', ownerScope: 'personal', replacedIn: [],
+      createdBy: 'manual', createdAt: 1, updatedAt: 1, lastVerifiedAt: 1,
+    };
+    const text2 = `${text} 用在 for 里。`;
+    const scan2 = scanText(text2, [risky] as never);
+    const result = applyCorrections(text2, scan2.candidates, { acceptedIds: ['g_coxy'] });
+    expect(result.pendingTotal).toBeGreaterThan(0);
+    const run = createRun(uid, { docId: 'doc-draft', sourceText: text2, result });
     expect(run.status).toBe('draft');
     const notes = renderRunNotes(buildReport(uid, run.runId));
     expect(notes).toContain('草稿（draft）');
-    expect(notes).toContain('未决项清零前不得宣称清理完成');
+    expect(notes).toContain('未确认项清零前不得宣称清理完成');
   });
 
   it('对照表带"依据"，且结构性编辑（merge_*）不进术语表', () => {

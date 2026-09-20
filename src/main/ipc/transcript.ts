@@ -10,7 +10,6 @@
  *   transcript.correct.scan        —— 只读扫描，产出候选 + 拒绝原因
  *   transcript.correct.apply       —— 按确认结果替换，落 run 快照，原文不可变
  *   transcript.run.list / get / report / notes / revert
- *   transcript.issues.list / resolve
  *
  * 本体接线（P1，2026-09-15）：
  *   transcript.glossary.syncOntology —— 归组 + 挂 ontologyRef + 出建议（+可选反哺候选）
@@ -26,7 +25,6 @@ import * as transcriptOntology from '../features/transcript_ontology_bridge';
 import * as transcriptFillers from '../features/transcript_filler_rules';
 import * as transcriptMerge from '../features/transcript_speaker_merge';
 import * as transcriptSeed from '../features/transcript_glossary_seed';
-import * as transcriptLlm from '../features/transcript_llm_candidates';
 import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
@@ -71,92 +69,6 @@ function riskLevels(value: unknown): Array<'low' | 'medium' | 'high'> | undefine
   const list = stringList(value, 3);
   if (!list) return undefined;
   return list.filter((v): v is 'low' | 'medium' | 'high' => v === 'low' || v === 'medium' || v === 'high');
-}
-
-function issueInputs(value: unknown): Array<{
-  span: { start: number; end: number };
-  text: string;
-  reason: transcriptRuns.IssueReason;
-  suggestion?: string;
-}> {
-  if (!Array.isArray(value)) return [];
-  const allowed: transcriptRuns.IssueReason[] = [
-    'unknown_entity', 'ambiguous_name', 'mixed_speech', 'asr_unrecoverable', 'model_candidate',
-  ];
-  return value.slice(0, 200).map((raw) => {
-    const item = raw as Partial<{ span: { start: number; end: number }; text: string; reason: string; suggestion: string }>;
-    const start = typeof item?.span?.start === 'number' ? Math.max(0, Math.floor(item.span.start)) : 0;
-    const end = typeof item?.span?.end === 'number' ? Math.max(start, Math.floor(item.span.end)) : start;
-    const reason = allowed.includes(item?.reason as transcriptRuns.IssueReason)
-      ? (item!.reason as transcriptRuns.IssueReason)
-      : 'unknown_entity';
-    return {
-      span: { start, end },
-      text: typeof item?.text === 'string' ? item.text.slice(0, 500) : '',
-      reason,
-      ...(typeof item?.suggestion === 'string' ? { suggestion: item.suggestion.slice(0, 300) } : {}),
-    };
-  });
-}
-
-/**
- * 把"待核"标记真正写进清理版，并返回插入后的 span。
- * 输入 span 必须是**清理版**坐标（调用方先用 mapOffset 从原文坐标换算过来）；
- * 映射不到的（落在被删除区域且无对应位置）直接丢弃，不假装标上了。
- */
-function withIssueMarkers(
-  applied: transcriptAutoCorrect.ApplyResult,
-  issues: Array<{
-    span: { start: number; end: number };
-    text: string;
-    reason: transcriptRuns.IssueReason;
-    suggestion?: string;
-  }>,
-): {
-  result: transcriptAutoCorrect.ApplyResult;
-  issues: Array<{
-    span: { start: number; end: number };
-    text: string;
-    reason: transcriptRuns.IssueReason;
-    suggestion?: string;
-  }>;
-} {
-  if (issues.length === 0) return { result: applied, issues: [] };
-  const resolved = issues
-    .map((issue) => {
-      const at = transcriptAutoCorrect.mapOffset(applied.offsetMap, issue.span.start);
-      if (at === null) return null;
-      const start = Math.max(0, Math.min(at, applied.text.length));
-      const end = Math.max(start, Math.min(
-        transcriptAutoCorrect.mapOffset(applied.offsetMap, issue.span.end) ?? start + 1,
-        applied.text.length,
-      ));
-      return { ...issue, span: { start, end } };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-  if (resolved.length === 0) return { result: applied, issues: [] };
-
-  const marked = transcriptAutoCorrect.insertIssueMarkers(applied.text, resolved.map((i) => i.span));
-  // byStart 以**输入**插入点为键，同一位置多条待核共用同一个标记 span
-  const withSpans = resolved
-    .map((issue) => {
-      const span = marked.byStart.get(issue.span.start);
-      return span ? { ...issue, span } : null;
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-  const charsOut = marked.text.length;
-  const charsIn = applied.charsIn;
-  const retention = charsIn > 0 ? charsOut / charsIn : 1;
-  return {
-    result: {
-      ...applied,
-      text: marked.text,
-      charsOut,
-      retention,
-      overRewriteSuspected: retention < transcriptAutoCorrect.OVER_REWRITE_THRESHOLD,
-    },
-    issues: withSpans,
-  };
 }
 
 export const invokeHandlers = {
@@ -338,36 +250,6 @@ export const invokeHandlers = {
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),
   }),
 
-  /**
-   * 候选区（待核）：模型候选的复核清单。**与 `transcript.glossary.list` 分开**——
-   * 词条列表是"已生效的规则"，候选列表是"还没人拍板的东西"，混在一起会让
-   * 面板和用户都分不清哪条在扫描里真的会生效。
-   */
-  'transcript.glossary.candidates': async (payload: Payload, ctx: IpcContext) => ({
-    candidates: transcriptGlossary.listCandidates(ctx.userId, {
-      ...(payload?.state === 'adopted' || payload?.state === 'discarded' || payload?.state === 'pending'
-        ? { state: payload.state as transcriptGlossary.CandidateState }
-        : {}),
-    }),
-    pending: transcriptGlossary.countPendingCandidates(ctx.userId),
-  }),
-
-  /**
-   * 候选 → 词条：**唯一的**人工确认通道。候选本身永远不生效，
-   * 只有人在这里点确认才会按 `source: 'manual'` 建出真词条。
-   */
-  'transcript.glossary.adoptCandidate': async (payload: Payload, ctx: IpcContext) => ({
-    ...transcriptGlossary.adoptCandidate(ctx.userId, requireText(payload?.id, 'id', 128)),
-  }),
-
-  'transcript.glossary.discardCandidate': async (payload: Payload, ctx: IpcContext) => ({
-    candidate: transcriptGlossary.discardCandidate(ctx.userId, requireText(payload?.id, 'id', 128)),
-  }),
-
-  'transcript.glossary.clearCandidates': async (payload: Payload, ctx: IpcContext) => ({
-    removed: transcriptGlossary.clearCandidates(ctx.userId, { includePending: payload?.includePending === true }),
-  }),
-
   'transcript.glossary.upsert': async (payload: Payload, ctx: IpcContext) => {
     const result = transcriptGlossary.upsertEntry(ctx.userId, payload ?? {});
     return result;
@@ -508,22 +390,6 @@ export const invokeHandlers = {
   },
 
   /**
-   * 疑似专名探测（只读）：找出"词表与记忆分组里都没有"的混合大小写/全大写拉丁串。
-   * 保守设计（宁漏勿噪）：不产出任何替换，只给"标待核"当输入。
-   */
-  'transcript.correct.suspects': async (payload: Payload, ctx: IpcContext) => {
-    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
-    const known = new Set<string>();
-    for (const entry of transcriptGlossary.listEntries(ctx.userId, { status: 'active' })) {
-      known.add(entry.wrong);
-      known.add(entry.correct);
-    }
-    for (const name of transcriptOntology.collectCanonicalNames(ctx.userId)) known.add(name.name);
-    const limit = typeof payload?.limit === 'number' ? Math.max(1, Math.min(500, Math.floor(payload.limit))) : 200;
-    return { suspects: transcriptAutoCorrect.detectSuspectEntities(text, known, limit) };
-  },
-
-  /**
    * 主题标题候选（方案 §五 P2-2）：只提议，不改正文；用户点「采用」后
    * 才在 apply 时作为结构编辑插入 `## 标题`。
    */
@@ -532,84 +398,6 @@ export const invokeHandlers = {
     return transcriptHeadings.suggestHeadings(ctx.userId, text, {
       sessionKey: optionalId(payload?.docId, 'docId'),
     });
-  },
-
-  /**
-   * 模型纠错候选（方案 §五 P2-1）：**让模型读正文找错写**。
-   *
-   * 「已知写法」名单只是**优先参考**（词表正确写法 + 记忆分组字段值，不含投影里的
-   * 结构标签）；词形判据（`detectSuspectEntities`）降级为**重点线索**，
-   * 不再是"挑不出可疑词就不发请求"的准入闸门——那正是中文稿永远拿不到候选的原因。
-   *
-   * 本 handler **只产出候选、不写任何数据**：候选要落盘必须走
-   * `transcript.correct.flagCandidates`，且只会落进词表文件的候选区（待核），
-   * 绝不进 `entries` ⇒ 不参与扫描/替换。
-   */
-  'transcript.correct.llmCandidates': async (payload: Payload, ctx: IpcContext) => {
-    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
-    const entries = transcriptGlossary.listEntries(ctx.userId, { status: 'active' });
-    const known = new Set<string>();
-    for (const entry of entries) {
-      known.add(entry.wrong);
-      known.add(entry.correct);
-    }
-    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
-    for (const name of canonical) known.add(name.name);
-    // 词形可疑的位置只作为"重点线索"提示给模型，不决定要不要问
-    const hints = transcriptAutoCorrect
-      .detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_HINTS)
-      .map((suspect) => ({ text: suspect.text, start: suspect.span.start }));
-    // 优先参考名单 = 词表正确写法 + 记忆分组字段值（**不含**投影里的结构标签）
-    const allowed = [
-      ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
-      ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
-    ].filter((value) => !!value && value.length <= 60);
-    const result = await transcriptLlm.generateReviewCandidates(ctx.userId, text, {
-      knownTargets: allowed,
-      hints,
-      ...(typeof payload?.maxChunks === 'number' && payload.maxChunks > 0
-        ? { maxChunks: Math.min(transcriptLlm.REVIEW_MAX_CHUNKS, Math.floor(payload.maxChunks)) }
-        : {}),
-      sessionKey: optionalId(payload?.docId, 'docId'),
-    });
-    return {
-      ...result,
-      hints: hints.slice(0, transcriptLlm.LLM_CANDIDATE_MAX_HINTS),
-      knownCount: allowed.length,
-      /** 待核候选总数（落盘的那些）。 */
-      pendingCandidates: transcriptGlossary.countPendingCandidates(ctx.userId),
-    };
-  },
-
-  /**
-   * 把模型候选**标成待核**：写进词表文件的候选区（`state: 'pending'`）。
-   *
-   * 这是候选唯一的落盘入口，也是"只能标待核"在服务端的落实点：
-   *   - 候选区与 `entries` 是两个数组，本 handler 不碰 `entries`；
-   *   - 想变成扫描规则只能由人显式调 `transcript.glossary.adoptCandidate`；
-   *   - 页面上"标待核"同时会在清理版里插「【转写存疑】」标记（走既有 issues 链路）。
-   */
-  'transcript.correct.flagCandidates': async (payload: Payload, ctx: IpcContext) => {
-    const raw = Array.isArray(payload?.candidates) ? payload.candidates.slice(0, 100) : [];
-    const docId = optionalId(payload?.docId, 'docId');
-    const result = transcriptGlossary.recordCandidates(
-      ctx.userId,
-      raw.map((item) => {
-        const row = item as Record<string, unknown>;
-        return {
-          wrong: row?.wrong,
-          correct: row?.correct,
-          confidence: row?.confidence,
-          reason: row?.reason,
-          context: row?.context,
-          kind: row?.kind ?? 'people',
-          inAllowlist: row?.inAllowlist,
-          start: row?.start,
-          ...(docId ? { docId } : {}),
-        };
-      }),
-    );
-    return { ok: true, ...result };
   },
 
   /**
@@ -736,9 +524,7 @@ export const invokeHandlers = {
       ...(acceptedAll ? { acceptedIds: acceptedAll } : {}),
       ...(riskLevels(payload?.acceptRiskLevels) ? { acceptRiskLevels: riskLevels(payload?.acceptRiskLevels)! } : {}),
     });
-    // 未决项（方案 §4.3/§8.1-7）：用户标的 span 在**原文**坐标系，先按偏移映射
-    // 落到清理版，再插「【转写存疑】」。有未决项时 createRun 会把产物标 draft。
-    const { result, issues } = withIssueMarkers(applied0, issueInputs(payload?.issues));
+    const result = applied0;
     const params = {
       glossaryVersion: 2,
       ...(optionalText(payload?.fillerRulePack, 'fillerRulePack', 40)
@@ -749,7 +535,6 @@ export const invokeHandlers = {
     const run = transcriptRuns.createRun(ctx.userId, {
       docId,
       sourceText: text,
-      ...(issues.length ? { issues } : {}),
       ...(optionalText(payload?.sourcePath, 'sourcePath', 500)
         ? { sourcePath: optionalText(payload?.sourcePath, 'sourcePath', 500)! }
         : {}),
@@ -840,20 +625,4 @@ export const invokeHandlers = {
   'transcript.run.revert': async (payload: Payload, ctx: IpcContext) =>
     transcriptRuns.revertRun(ctx.userId, requireText(payload?.runId, 'runId', 128)),
 
-  // ── 未决项（待核）────────────────────────────────────────────────────
-  'transcript.issues.list': async (payload: Payload, ctx: IpcContext) => ({
-    issues: transcriptRuns.listIssues(ctx.userId, {
-      ...(optionalId(payload?.runId, 'runId') ? { runId: optionalId(payload?.runId, 'runId')! } : {}),
-      ...(payload?.status === 'open' || payload?.status === 'resolved' ? { status: payload.status } : {}),
-    }),
-  }),
-
-  'transcript.issues.resolve': async (payload: Payload, ctx: IpcContext) => ({
-    issue: transcriptRuns.resolveIssue(
-      ctx.userId,
-      requireText(payload?.runId, 'runId', 128),
-      requireText(payload?.issueId, 'issueId', 128),
-      typeof payload?.resolution === 'string' ? payload.resolution : '',
-    ),
-  }),
 };
