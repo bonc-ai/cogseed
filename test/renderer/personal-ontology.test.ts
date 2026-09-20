@@ -487,7 +487,7 @@ describe('personal ontology renderer integration', () => {
     expect(body).toContain('规则');
     expect(body).toContain('全部');
     expect(body).toContain('操作规则');
-    expect(body).toContain('工作流程'); // 组名小节
+    expect(body).toContain('总览验证组'); // 组小节（值行极简，字段名不占行）
     expect(body).toContain('评审 → 先讲产品模型');
     expect(body).toContain('评审先讲产品模型再谈实现。'); // 规则资产合并
   });
@@ -544,7 +544,7 @@ describe('personal ontology renderer integration', () => {
     // 点击值行 → 展开详情：标记 chip + 操作按钮出现
     const bodyEl = elements.get('personal-onto-main-body') as any;
     const lineRow: any = {
-      getAttribute: (name: string) => name === 'data-poc-line-key' ? 'grp-9\u0000居住地\u0000常住北京' : null,
+      getAttribute: (name: string) => name === 'data-poc-line-key' ? encodeURIComponent('grp-9\u0001居住地\u0001常住北京') : null,
       addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
       listeners: new Map<string, (...args: any[]) => any>(),
     };
