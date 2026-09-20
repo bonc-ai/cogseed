@@ -1,0 +1,24 @@
+schema_version: "1.0"
+kind: evidence
+id: EV-CLIENT-OPEN2-BASELINE-001
+title: "客户端 Marketplace 基线静态核查（本仓库重跑，对应 Hub 侧 EV-HUB-OPEN1-CLIENT-BASELINE-001）"
+source_type: real
+claim_type: fact
+source_ref: "cogseed-source@fc3b9c19（feat/iter2-client-contribution）src/main/ 与 resources/guardrail/ 静态检索；核查维度取自 specs/001-hub-skill-contribution/spec.md「假设」第 1 条所列 5 项（Hub 目录协议 A-01/A-02、forked_from §7.7、内容级停用 §6.7、自动更新 §7.5、来源标识）。Hub 侧原记录 EV-HUB-OPEN1-CLIENT-BASELINE-001 存放于 cogseed-hub 仓库，本次未重新读取其正文。"
+observed_at: "2026-09-20T16:38:32+08:00"
+supports:
+  - "forked_from：src/main 中 `forked_from` / `forkedFrom` 零命中；无派生副本字段，C-FR-006 派生预填无可复用基础。"
+  - "来源标识：src/main/features/marketplace.ts:1010-1012、1185-1187 仅按 `create_uid === '0'` 二分为 official / community，无贡献者显示名、无 content_id 级来源标识字段；不满足迭代一 G-B「社区贡献 + 贡献者显示名」口径。"
+  - "内容级停用 §6.7：src/main/features/marketplace*.ts 中无 disabled / delisted / withdrawn / 下架 等内容状态字段或处理分支；仅有安全扫描阻断（marketplace.ts:91-96）。"
+  - "自动更新 §7.5：src/main/features/marketplace-update-policy.ts 存在单调版本更新策略（严格更新版本或同版本更新 freshness 才替换内容）；是否与 Hub §7.5 一致未比对。"
+  - "Hub 目录协议 A-01/A-02：hub_account 与 marketplace 模块的接口路径为 /account /me /login /consent /devices 等账号接口及 list/detail 目录接口，未见 A-01/A-02 协议标识；协议差异逐项内容需对照 Hub PRD doc-v0.5 才能确认。"
+  - "账号侧：src/main/features/hub_account/types.ts:75 已含 `community_profile: { display_name: string | null; is_contributor: boolean }`，贡献者显示名数据来源存在。"
+  - "本地检查基线：src/main/features/skills.ts:1545-1546 IMPORT_MAX_FILES=200、IMPORT_MAX_BYTES=10 MiB；marketplace_bundle.ts:11 MAX_MARKETPLACE_BUNDLE_BYTES=8 MiB；quality/types.ts Level 为 EXTREME/MEDIUM/LOW 且仅 EXTREME 阻断；resources/guardrail/skill-sentry/engine/VERSION=2.1.0，ruleset 目录 v1.0.0；resources/guardrail/skill-declaration-core/VERSION=1.3.0。与 spec.md「本地检查复用既有能力」所述基线一致。"
+does_not_prove:
+  - "未证明 Hub 侧 EV-HUB-OPEN1-CLIENT-BASELINE-001 所列 5 项协议差异的原文与本次结论逐项等价；本次未读取该记录。"
+  - "未证明 marketplace-update-policy.ts 的更新语义与 Hub PRD §7.5 一致，仅证明存在更新策略实现。"
+  - "未证明既有扫描能识别「用户任务正文 / Prompt / 私人实例 ID」；未证明 skill-sentry / declaration-core 已接入贡献流程。"
+  - "8 MiB 上限位于 marketplace_bundle（下载方向），未证明导入/上传方向已应用压缩后 8 MiB 限制。"
+  - "静态检索结论，未运行任何代码；未证明真实用户验收、生产结果或业务价值。"
+verification: Submitted
+reviewer: null

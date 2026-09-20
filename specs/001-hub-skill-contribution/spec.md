@@ -231,7 +231,7 @@ Hub 侧规格定义了整条链路（用户故事 1～4、FR-001～FR-027、SC-0
 
 ## 假设
 
-- **迭代一客户端切片是前置依赖**：本文所有「沿用迭代一」处依赖 cogseed-hub PRD doc-v0.5 的客户端实现（Hub 目录协议 A-01/A-02、`forked_from` 派生副本 §7.7、内容级停用 §6.7、自动更新 §7.5、来源标识）。截至 2026-09-18，本仓库尚无这些能力的规格与实现（`EV-HUB-OPEN1-CLIENT-BASELINE-001` 记录了 5 项协议差异，`src/main` 中无 `forked_from`）；迭代一 G-A / G-B 未关闭。因此 C-FR-006 的派生预填、C-FR-030、C-FR-031 以及 Hub 侧 SC-001 / SC-005 / SC-006 在迭代一客户端切片交付前不能验收。Plan 阶段需决定先补迭代一客户端切片还是并行。
+- **迭代一客户端切片是前置依赖**：本文所有「沿用迭代一」处依赖 cogseed-hub PRD doc-v0.5 的客户端实现（Hub 目录协议 A-01/A-02、`forked_from` 派生副本 §7.7、内容级停用 §6.7、自动更新 §7.5、来源标识）。截至 2026-09-20，本仓库尚无这些能力的规格与实现（本地记录 `EV-CLIENT-OPEN2-BASELINE-001` 于 `fc3b9c19` 重跑核查：`src/main` 中无 `forked_from`，来源标识仅按 `create_uid` 二分 official / community，无内容级停用字段，`marketplace-update-policy.ts` 的更新语义未与 §7.5 比对；Hub 侧 `EV-HUB-OPEN1-CLIENT-BASELINE-001` 记录的 5 项协议差异原文未在本仓库重读）；迭代一 G-A / G-B 未关闭。因此 C-FR-006 的派生预填、C-FR-030、C-FR-031 以及 Hub 侧 SC-001 / SC-005 / SC-006 在迭代一客户端切片交付前不能验收。Plan 阶段需决定先补迭代一客户端切片还是并行。
 - **上传方向契约在 Plan 阶段冻结**：提交 / 新版本 / 撤回申请的接口契约与幂等键、本地检查结果的结构、条款版本与全文的获取方式、「我的贡献」状态同步方式，Hub 侧规格未定义，由客户端 RD 与 Hub RD 在 Plan 的 contracts/ 中冻结并以合同测试覆盖。本文只约束行为，不约束契约形态。
 - **条款后台开关是运行时闸门**：Hub 侧未配置并标记生效条款版本前，客户端不开放贡献入口（用户故事 1 场景 7）；「是否开放」的判定依据在 Plan 阶段与条款获取方式一并冻结。
 - **本地检查复用既有能力**：客户端已有的导入检查（8 MiB / 200 文件 / 10 MiB 上限、`EXTREME` 阻断级、深度扫描、安全阈值社区档）作为 C-FR-003 的基础；禁止内容清单中「用户任务正文」「Prompt」「私人实例 ID」的识别规则若既有扫描未覆盖，Plan 阶段补充并记录识别边界。不做自动脱敏。
@@ -245,7 +245,7 @@ Hub 侧规格定义了整条链路（用户故事 1～4、FR-001～FR-027、SC-0
 
 ### Evidence baseline
 
-- Evidence IDs and source types：`EV-HUB-OPEN2-ROUTE-001`、`EV-HUB-OPEN2-QUALIFY-001`（Hub 侧路由与资格判定，real）；`EV-HUB-OPEN1-CLIENT-BASELINE-001`（客户端 Marketplace 现状跨仓静态核查，E1 real）；MeshSeed `COGSEED-313.1` 正文与评论 #89（self-report）。
+- Evidence IDs and source types：`EV-HUB-OPEN2-ROUTE-001`、`EV-HUB-OPEN2-QUALIFY-001`（Hub 侧路由与资格判定，real）；`EV-CLIENT-OPEN2-BASELINE-001`（客户端 Marketplace 现状本仓库静态核查，real，见 `.ai-product/evidence/`；取代 Hub 侧跨仓记录 `EV-HUB-OPEN1-CLIENT-BASELINE-001` 作为本仓库代码事实的依据）；MeshSeed `COGSEED-313.1` 正文与评论 #89（self-report）。
 - Facts and direct quotes：Owner 2026-09-18 三项决定与范围决定；Hub 侧 Handoff `accepted_at: 2026-09-18T14:17:47+08:00`，`blocking_gaps: []`；客户端 `src/main` 无 `forked_from`；账号服务类型已含 `community_profile.display_name`。
 - Stakeholder views and hypotheses：客户端改动可在「复用 Marketplace 定点改造」内完成（Handoff open assumption）；贡献者能在预览中自查敏感内容（Hub 侧假设）。
 - What current evidence does **not** prove：客户端既有扫描能识别「用户任务正文 / Prompt / 私人实例 ID」；上传方向契约可行；迭代一客户端切片的交付时间。
