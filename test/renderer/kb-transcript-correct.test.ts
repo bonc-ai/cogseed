@@ -532,9 +532,11 @@ describe('locale 覆盖', () => {
     'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
     'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
     'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_flag', 'llm_found', 'llm_rejected',
-    'llm_no_model', 'llm_no_suspects', 'llm_none', 'llm_failed',
+    'llm_no_model', 'llm_none', 'llm_failed',
     'llm_flagged', 'llm_flag_failed', 'llm_flag_no_span', 'llm_outside_allowlist',
     'llm_outside_count', 'llm_scope_note',
+    // 「结果可能不全」必须能说出来（分段上限 / 单段调用失败）
+    'llm_empty_text', 'llm_model_failed', 'llm_truncated', 'llm_chunks_failed',
     'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
     'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',

@@ -535,10 +535,12 @@ export const invokeHandlers = {
   },
 
   /**
-   * 模型纠错候选（方案 §五 P2-1）：只问"疑似专名"。
+   * 模型纠错候选（方案 §五 P2-1）：**让模型读正文找错写**。
    *
    * 「已知写法」名单只是**优先参考**（词表正确写法 + 记忆分组字段值，不含投影里的
-   * 结构标签），模型可以给出名单外的写法并用 `inAllowlist:false` 标出来。
+   * 结构标签）；词形判据（`detectSuspectEntities`）降级为**重点线索**，
+   * 不再是"挑不出可疑词就不发请求"的准入闸门——那正是中文稿永远拿不到候选的原因。
+   *
    * 本 handler **只产出候选、不写任何数据**：候选要落盘必须走
    * `transcript.correct.flagCandidates`，且只会落进词表文件的候选区（待核），
    * 绝不进 `entries` ⇒ 不参与扫描/替换。
@@ -553,25 +555,26 @@ export const invokeHandlers = {
     }
     const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
     for (const name of canonical) known.add(name.name);
-    const suspects = transcriptAutoCorrect.detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_SUSPECTS);
+    // 词形可疑的位置只作为"重点线索"提示给模型，不决定要不要问
+    const hints = transcriptAutoCorrect
+      .detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_HINTS)
+      .map((suspect) => ({ text: suspect.text, start: suspect.span.start }));
     // 优先参考名单 = 词表正确写法 + 记忆分组字段值（**不含**投影里的结构标签）
     const allowed = [
       ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
       ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
     ].filter((value) => !!value && value.length <= 60);
-    const result = await transcriptLlm.generateCandidates(
-      ctx.userId,
-      suspects.map((suspect) => ({
-        text: suspect.text,
-        context: text.slice(Math.max(0, suspect.span.start - 30), Math.min(text.length, suspect.span.end + 30)).replace(/\n/g, ' '),
-        start: suspect.span.start,
-      })),
-      allowed,
-      { sessionKey: optionalId(payload?.docId, 'docId') },
-    );
+    const result = await transcriptLlm.generateReviewCandidates(ctx.userId, text, {
+      knownTargets: allowed,
+      hints,
+      ...(typeof payload?.maxChunks === 'number' && payload.maxChunks > 0
+        ? { maxChunks: Math.min(transcriptLlm.REVIEW_MAX_CHUNKS, Math.floor(payload.maxChunks)) }
+        : {}),
+      sessionKey: optionalId(payload?.docId, 'docId'),
+    });
     return {
       ...result,
-      suspects: suspects.map((suspect) => ({ text: suspect.text, span: suspect.span })),
+      hints: hints.slice(0, transcriptLlm.LLM_CANDIDATE_MAX_HINTS),
       knownCount: allowed.length,
       /** 待核候选总数（落盘的那些）。 */
       pendingCandidates: transcriptGlossary.countPendingCandidates(ctx.userId),
