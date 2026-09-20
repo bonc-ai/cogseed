@@ -719,10 +719,14 @@ describe('查看器集成契约', () => {
     expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
     expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
     expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
-    // 建词条仍带创建上下文（护栏留在 upsertEntry）：两个 upsert 调用点都要带 docId
+    // 建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId
     const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
-    expect(upserts).toHaveLength(2);
+    expect(upserts).toHaveLength(1);
     for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
+    // 模型候选那条路已改走候选区：只标待核、绝不写词表（原先它也走 upsert），同样要带 docId
+    const flags = [...panelSrc.matchAll(/transcript\.correct\.flagCandidates', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(flags).toHaveLength(1);
+    for (const payload of flags) expect(payload).toContain('docId: ctx.docId');
     // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });

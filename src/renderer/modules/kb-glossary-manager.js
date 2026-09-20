@@ -846,8 +846,8 @@
     async function adoptCandidate(id) {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         const result = await root.cogseed.invoke('transcript.glossary.adoptCandidate', { id });
         if (!result?.entry) {
           const reason = String(result?.skippedReason || '');
@@ -873,8 +873,8 @@
     async function discardCandidate(id) {
       if (state.busy) return;
       state.busy = true;
-      render();
       try {
+        render();
         await root.cogseed.invoke('transcript.glossary.discardCandidate', { id });
         setStatus(t('kb.glossary.candidate_discarded', '已丢弃该候选（不会进词表；模型再报同一对也不会重新翻出来）。'), '');
       } catch (error) {
