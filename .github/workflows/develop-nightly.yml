@@ -6,13 +6,18 @@ name: Develop Nightly
 #   GitHub 的 schedule 事件**只在仓库默认分支上运行**。
 #   本仓库默认分支是 main，而 main 是"发版镜像"（只从 cicd 同步过来、零夹带），
 #   把 develop 的工具放到 main 上会破坏这个约定。
-#   所以这里改用 push 触发 + 每日一次门控：
+#   所以这里改用 push 触发 + 覆盖门控：
 #     - push 事件读的是**被 push 分支上的 workflow 文件**，develop 上可以生效；
-#     - 门控步骤检查"今天是否已经跑过全量"，跑过就跳过，保证每天最多一次。
-#   净效果 = 每天在 develop 的第一次提交上跑一次全量。
+#     - 门控步骤检查"**当前 head SHA 是否已被一次完成的全量覆盖**"，覆盖过才跳过。
+#   净效果 = 每个 develop 尖端都被一次全量覆盖；连续 push 由 concurrency 收敛到最后一次。
 #
-#   代价（可接受）：当天更晚合入的代码，要等第二天那一次才能覆盖到。
-#   如果觉得不够及时，把下面门控的"今天"改成"最近 12 小时"即可变成一天两次。
+# 【门控口径为什么从"今天是否跑过"改成"当前 head SHA 是否被覆盖"】
+#   旧口径（2026-09-16 上线当天暴露的缺陷 2，规范 ⓪2 记为"假绿"）：
+#   门控判的是"今天是否已经跑过全量"，而当天早先那次（缺陷 1 的失败运行）已被算作
+#   "跑过" → 之后 push 进来的代码**一次都没被验证**，但打开 Actions 看到的是一个
+#   success 的、什么都没跑的 job —— 这正是整件事要治的"看起来正常"。
+#   新口径下"跳过"只有一个含义：**这个 commit 已经被一次完成的全量覆盖过**，
+#   因此绿色不再可能掩盖"未验证的代码"。
 #
 # 【门控为什么是 fail-open —— 2026-09-16 教训，必读】
 #   第一版把门控写成了"失败就报错"，结果门控步骤自己抛错、后续 14 个步骤
@@ -40,6 +45,11 @@ on:
   # 保留手动触发：想立刻验证时不必等下一次 push。手动触发不做门控。
   workflow_dispatch:
 
+# 连续 push 时取消上一次未跑完的，让最终 tip 一定被覆盖，而不是排队跑一串旧 tip。
+concurrency:
+  group: develop-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   actions: read        # 门控要读本 workflow 的历史运行记录
@@ -49,7 +59,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
-      - name: 每日一次门控（fail-open：出任何问题都照常跑）
+      - name: 覆盖门控（fail-open：出任何问题都照常跑）
         id: gate
         # 双保险：即使脚本本身抛错，也不会顶掉后面的全量
         continue-on-error: true
@@ -58,18 +68,18 @@ jobs:
         run: |
           # 注意：这里不用 set -e —— 门控绝不应该是"能失败"的东西
           SHOULD_RUN=true
+          SKIP_REASON=""
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "手动触发，不做门控"
           else
-            TODAY=$(date -u +%Y-%m-%d)
-            echo "查询 UTC $TODAY 已完成的运行次数（workflow=develop-nightly.yml）"
+            echo "查询本 commit（${GITHUB_SHA}）是否已被一次完成的全量覆盖"
 
-            # 直接用 API 拿 total_count，比 gh run list + jq length 更明确
+            # 按 head_sha 查询而不是按日期：口径 = "这个 commit 跑过没有"
             RESP=$(curl -sS --max-time 30 \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/develop-nightly.yml/runs?created=${TODAY}&status=completed&per_page=1" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/develop-nightly.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=1" \
               2>&1) || true
             echo "---- API 原始返回 ----"
             echo "$RESP" | head -c 1500
@@ -80,21 +90,35 @@ jobs:
 
             case "$COUNT" in
               ''|*[!0-9]*)
-                echo "::warning::拿不到运行次数（返回：[${COUNT}]），按应当执行处理，本次正常跑全量"
+                echo "::warning::拿不到覆盖情况（返回：[${COUNT}]），按应当执行处理，本次正常跑全量"
                 SHOULD_RUN=true
                 ;;
               0)
-                echo "今天还没跑过全量，正常执行"
+                echo "本 commit 还没有完成过的全量，正常执行"
                 SHOULD_RUN=true
                 ;;
               *)
-                echo "今天已经跑过 $COUNT 次全量，本次跳过"
+                echo "本 commit 已被 $COUNT 次完成的全量覆盖，本次跳过"
                 SHOULD_RUN=false
+                SKIP_REASON="该 commit ${GITHUB_SHA} 已有 $COUNT 次完成的全量运行"
                 ;;
             esac
           fi
 
           echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+
+          # 让"跳过"在 run summary 里自解释：跳过 = 这个 commit 已被覆盖，
+          # 不是"今天跑过了所以不跑"——后者正是规范 ⓪2 记录的假绿。
+          {
+            echo "### Develop Nightly 覆盖门控"
+            echo ""
+            if [ "$SHOULD_RUN" = "false" ]; then
+              echo "- 结论：**跳过**（${SKIP_REASON}）"
+              echo "- 含义：本 commit 已被一次完成的全量覆盖，本次绿色不掩盖任何未验证的代码。"
+            else
+              echo "- 结论：**执行全量**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/checkout@v4
         if: steps.gate.outputs.should_run != 'false'
