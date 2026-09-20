@@ -146,12 +146,13 @@ describe('origin chip on the detail header', () => {
     const html = renderCognition({ name: 'overview', assetId: 'aa-origin-1' }, {
       assets: [{
         id: 'aa-origin-1', type: 'personal', title: '模型记的偏好', statement: '内容。',
-        status: 'active', version: '1', lifecycleStatus: 'automatically_extracted_unverified',
+        status: 'active', version: '1', lifecycleStatus: 'user_confirmed_unverified',
         updatedAt: '2026-09-19T00:00:00Z',
       }],
     });
-    expect(html).toContain('模型记的');
-    expect(html).toContain('转正');
+    // 出身收敛（2026-09-20）：出身章与转正按钮整体退役——转正不再出现
+    // （「模型记的」四字由该测试资产标题自带，不作反断言）。
+    expect(html).not.toContain('转正');
   });
 
   it('shows no origin chip for a user-confirmed asset', async () => {

@@ -155,14 +155,12 @@ function isSettledForInput(
   return !hasExplicitTarget && record.status === 'no_match' && record.catalogFingerprint === currentCatalogFingerprint;
 }
 
-/** Assets allowed to populate the base personal profile. Automatic capture is
- * an explicit user policy, so its unverified Personal assets are eligible;
- * KStar/system precipitation is deliberately excluded from identity data. */
+/** Assets allowed to populate the base personal profile (2026-09-20 出身收敛：
+ * 确认/自动/系统出身不再区别对待——模型记下来的=已确定，内容只按类型与
+ * 状态筛；reviewDecisionId 仍是审计链要求，statement 非空是内容要求)。 */
 function isEligiblePersonalAsset(asset: RecallAbilityAssetRecord): boolean {
   return asset.type === 'personal'
     && asset.status === 'active'
-    && (asset.lifecycleStatus === 'user_confirmed_unverified'
-      || asset.lifecycleStatus === 'automatically_extracted_unverified')
     && /^rd_[A-Za-z0-9_-]{8,64}$/.test(asset.reviewDecisionId || '')
     && Boolean(asset.statement.trim());
 }

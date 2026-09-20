@@ -110,17 +110,10 @@
     const maturity = ['transfer_validated', 'effectiveness_validated'].includes(String(asset.maturity || ''))
       ? chip(T('cognition.maturity_validated', '已实证'), 'green')
       : '';
-    return chip(label, tone) + maturity + originChip(asset);
+    return chip(label, tone) + maturity;
   };
-  /** 「谁写的」（2026-09-22 清单 #10）：你确认的=无章（正常态不摆章）；
-   *  模型记的/系统沉淀的=灰章提示出身，详情页给转正。字段访问走 core 的
-   *  originKindOf（守卫：本文件不出现内部枚举名）。 */
-  const originChip = (asset) => {
-    const kind = typeof NS.originKindOf === 'function' ? NS.originKindOf(asset) : 'user';
-    if (kind === 'model') return chip(T('cognition.origin_model_written', '模型记的'), '');
-    if (kind === 'system') return chip(T('cognition.origin_system_precipitated', '系统沉淀'), '');
-    return '';
-  };
+  // originChip（出身章「模型记的/系统沉淀」）已随出身收敛退役（2026-09-20）：
+  // 模型记下来的=已确定，出身不再是显示维度；详情页转正按钮同批移除。
   /** 详情页头部章（2026-09-17 用户视角重构）：正常状态（active）不摆任何
    *  章——自己确认过的资产不需要解释；只有异常状态（暂停/删除/撤回等）
    *  才出章提醒。成熟度章只在列表行显示（快速识别），不进详情头部。 */
@@ -821,7 +814,7 @@
           <h3>${esc(asset.title || asset.id)}</h3>
           ${switchable ? `<div class="ca-sub">${esc(switchHint)}</div>` : ''}
         </div>
-        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${originChip(asset)}${originChip(asset) && ['active', 'paused'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_confirm_origin', '转正'), 'asset-confirm', { id: asset.id, small: true, primary: true }) : ''}${['active'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_use_in_chat', '用到当前对话'), 'asset-use-in-chat', { id: asset.id, small: true }) : ''}</div>
+        <div class="ca-right">${switchable ? switchEl : detailStatusChip(asset)}${['active'].includes(String(asset.status || 'active')) ? btn(T('cognition.asset_use_in_chat', '用到当前对话'), 'asset-use-in-chat', { id: asset.id, small: true }) : ''}</div>
       </div>
       ${editing ? assetEditForm(asset) : `<p class="ca-content-text">${esc(asset.statement || '')}</p>`}
       ${topControl}
@@ -1841,5 +1834,5 @@
   // 共享渲染件（2026-09-20 本体界面重构）：个人本体页复用资产页同一套
   // 章/行形态。只有 IIFE 顶层的件可导出——plainRow/catalogRow 定义在
   // render 内部（闭包捕获每帧状态），不在此列。
-  NS.ui = { chip, assetStatusChip, originChip };
+  NS.ui = { chip, assetStatusChip };
 })();

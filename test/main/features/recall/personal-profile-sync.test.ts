@@ -287,13 +287,15 @@ describe('Recall personal profile projection', () => {
     expect(memory.listEntries(UID, 'user').entries).toEqual([linked.statement]);
   });
 
-  it('projects automatic conversation Personal assets but excludes system-precipitated identity claims', async () => {
+  it('projects all active personal assets regardless of former origin lineage', async () => {
+    // 出身收敛（2026-09-20）：确认/自动/系统出身不再区别对待——内容只按
+    // 类型与状态筛（旧断言「排除 system 线」随判据删除而过时）。
     const sync = await loadSync();
     const automatic = asset('aa-personal-automatic', 'personal', '我习惯使用 TypeScript。', {
       lifecycleStatus: 'automatically_extracted_unverified',
       maturity: 'seed',
     });
-    const system = asset('aa-personal-system', 'personal', '系统推断出的身份不应自动进入画像。', {
+    const system = asset('aa-personal-system', 'personal', '系统沉淀的画像内容同样入选。', {
       lifecycleStatus: 'system_precipitated_unverified',
       maturity: 'seed',
     });
@@ -305,9 +307,9 @@ describe('Recall personal profile projection', () => {
       listCatalog: async () => [],
     });
 
-    expect(result).toMatchObject({ eligible: 1, profileWritten: 1, failed: [] });
+    expect(result).toMatchObject({ eligible: 2, profileWritten: 2, failed: [] });
     const memory = await import('../../../../src/main/features/memory');
-    expect(memory.listEntries(UID, 'user').entries).toEqual([automatic.statement]);
+    expect(memory.listEntries(UID, 'user').entries).toEqual([automatic.statement, system.statement]);
   });
 
   it('writes a user-selected template field during the same projection pass', async () => {

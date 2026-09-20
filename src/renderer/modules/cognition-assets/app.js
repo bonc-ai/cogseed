@@ -19,7 +19,7 @@
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
-    'asset-action', 'select-asset-version', 'delete-asset-version', 'asset-edit-save', 'asset-confirm', 'family-rename', 'family-rename-save', 'family-rename-cancel', 'edit-from-version', 'merge-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
+    'asset-action', 'select-asset-version', 'delete-asset-version', 'asset-edit-save', 'family-rename', 'family-rename-save', 'family-rename-cancel', 'edit-from-version', 'merge-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
     'capture-toggle', 'capture-review-toggle', 'proof-rate',
     'capture-batch',
   ]);
@@ -178,7 +178,6 @@
             break;
           }
           case 'asset-edit-save': await A.editAsset(id); break;
-          case 'asset-confirm': await A.confirmAssetOrigin(id); break;
           case 'asset-use-in-chat': await A.attachAssetToConversation(id); break;
           case 'family-rename': await A.enterFamilyRename(id); break;
           case 'family-rename-save': await A.renameFamily(id); break;

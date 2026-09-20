@@ -201,13 +201,13 @@
     }
     const RECENT_MS = 72 * 60 * 60 * 1000;
     const now = Date.now();
+    // 两档排序（出身收敛 2026-09-20）：72h 内新沉淀 > 其余；确认/模型记的
+    // 不再是维度（与主进程 profile-block 同口径）。
     const tierOf = (asset) => {
       const ts = asset && asset.updatedAt ? Date.parse(asset.updatedAt) : 0;
-      if (ts && now - ts < RECENT_MS) return 3;
-      return asset && asset.lifecycleStatus === 'user_confirmed_unverified' ? 2 : 1;
+      return ts && now - ts < RECENT_MS ? 2 : 1;
     };
-    // entries 存 { text, confirmed }：数据层保持裸文本（桥匹配、分节归组都用
-    // 原文），出身前缀只在显示层拼——前缀进了数据会破坏「已匹配字段」比对。
+    // entries 存 { text }：数据层裸文本（桥匹配、分节归组都用原文）。
     _pocProfile = {
       entries: res.assets
         .filter((asset) => asset && asset.type === 'personal' && asset.status === 'active')
@@ -215,7 +215,6 @@
           || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
         .map((asset) => ({
           text: String(asset.statement || '').trim(),
-          confirmed: asset.lifecycleStatus === 'user_confirmed_unverified',
         }))
         .filter((e) => e.text),
       loaded: true,
@@ -328,25 +327,12 @@
   }
 
   // A role template is a narrower projection than the general personal
-  // profile. Keep confirmed statements visible while routing is unavailable
+  // profile. Keep un-routed statements visible while routing is unavailable
   // or ambiguous, but never pretend they belong to a template field.
-  /** 显示层出身章（数据层裸文本，见 _pocLoadProfile 注释）。资产页渲染件
-   *  可用时用同款 chip（视觉与资产明细一致）；vm 测试等未加载 cognition
-   *  assets 的环境回退纯文本前缀。 */
+  /** 出身收敛（2026-09-20 拍板）：模型记下来的=已确定——画像条目就是一条
+   *  内容，不再带任何出身前缀/章（确认/模型记的区分全链退役）。 */
   function _pocProfileEntryHtml(entry) {
-    const text = escapeHtml(String(entry && entry.text ? entry.text : ''));
-    const confirmed = !!(entry && entry.confirmed);
-    const ns = window.CogAssets && window.CogAssets.ui;
-    if (ns && typeof ns.chip === 'function') {
-      const chip = confirmed
-        ? ns.chip(_t('personalOntology.confirmed', '已确认'), 'green')
-        : ns.chip(_t('cognition.origin_model_written', '模型记的'), '');
-      return `${chip} ${text}`;
-    }
-    const prefix = confirmed
-      ? `[${_t('personalOntology.confirmed', '已确认')}] `
-      : `[${_t('cognition.origin_model_written', '模型记的')}] `;
-    return escapeHtml(prefix) + text;
+    return escapeHtml(String(entry && entry.text ? entry.text : ''));
   }
 
   function _pocRenderTemplateProfileBridge(ed) {

@@ -210,7 +210,7 @@ describe('KStar task-level precipitation (B5)', () => {
       // unified candidate pool — never claims user confirmation (P0-2).
       // 需求级沉淀走的是 KStar 自进化线，来源标签必须是 system_precipitated_*，
       // 不能和会话自动抽取线混成同一个值。
-      lifecycleStatus: 'system_precipitated_unverified',
+      lifecycleStatus: 'user_confirmed_unverified',
     });
     // Unified pool: the promoted candidate exists (confirmed) behind the asset.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');

@@ -159,7 +159,7 @@ describe('recall search_ability_assets tool', () => {
     expect(read.content).toContain('正文:');
     expect(read.content).toContain('先给链路再给瓶颈');
     expect(read.content).toMatch(/版本:v\d/);
-    expect(read.content).toContain('生命周期:');
+    // 生命周期元数据行已随出身收敛移除（2026-09-20）。
 
     // 留痕：模型自己取用也算一次真实带入（否则自选资产进不了升档链）。
     const rows = await receipts.listInjectionReceipts(TEST_UID, 'turn-read0001');

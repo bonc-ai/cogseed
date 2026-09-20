@@ -121,7 +121,6 @@ function formatReadEntry(asset: RecallAbilityAssetRecord, version: string): stri
     `范围:${asset.scope || 'general'}`,
     `成熟度:${asset.maturity || '?'}`,
     `版本:v${version}`,
-    `生命周期:${asset.lifecycleStatus || '?'}`,
   ].join(' | ');
   const applies = (asset.applicableWhen || []).join('；');
   const forbids = (asset.forbiddenWhen || []).join('；');

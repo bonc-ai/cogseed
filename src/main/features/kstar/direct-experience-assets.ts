@@ -116,8 +116,7 @@ export async function precipitateDirectExperienceFromSource(
 
       // 2. Unified promotion exit: semantic dedup + quality fusion against
       //    the asset library, then promote (or generate an update candidate).
-      //    `provenance: 'kstar'` 让资产落成 system_precipitated_unverified，
-      //    与会话自动抽取线区分开——两者都没有用户确认，但可信度来源不同。
+      //    `provenance: 'kstar'` 仅作审计提示（出身收敛后不再产生行为差异）。
       const outcome = await autoApplyRecallCandidate(userId, candidate.id, { provenance: 'kstar' });
       if (outcome.asset) {
         result.createdAssetIds.push(outcome.asset.id);

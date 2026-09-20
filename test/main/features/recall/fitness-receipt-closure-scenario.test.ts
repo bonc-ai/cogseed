@@ -124,7 +124,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     const asset = await assets.readAbilityAsset(UID, result.createdAssetIds[0]);
     expect(asset.type).toBe('rule');
     expect(asset.maturity).toBe('seed');
-    expect(asset.lifecycleStatus).toBe('system_precipitated_unverified');
+    expect(asset.lifecycleStatus).toBe('user_confirmed_unverified');
     expect(asset.statement).toContain('写城市资料时应先收集数据再成文');
     // statement 纯净：value=judgment 时不再拼接标题残片
     expect(asset.statement).not.toContain('可复用经验：');

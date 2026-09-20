@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { evaluatePromotionPolicy } from './promotion-policy';
-import { resolveAssetLifecycle } from './formal-assets/policy';
+
 import { describePromotionBlock, validatePromotionByAssetType, type PromotionBlockReason } from './formal-assets/promotion';
 import { genId12, safeId } from '../../storage';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
@@ -2022,15 +2022,10 @@ export async function promoteRecallCandidate(
       decisionId: options.decisionId,
     });
     const handoffActor: AbilityAssetActor = decision.actor === 'system' ? 'system' : 'user';
-    // lifecycleStatus 记录的是"这条资产是谁写进来的"，与成熟度（验证到哪一步）
-    // 正交。三个值必须都能写出来，否则 KStar 自进化沉淀会被伪装成会话自动抽取。
-    const handoffLifecycleStatus: RecallAbilityAssetLifecycleStatus = handoffActor === 'user'
-      ? 'user_confirmed_unverified'
-      : resolveAssetLifecycle({
-        lifecycleStatus: options.provenance === 'kstar'
-          ? 'system_precipitated_unverified'
-          : 'automatically_extracted_unverified',
-      });
+    // 出身收敛（2026-09-20 拍板）：模型记下来的=已确定——晋升一律落
+    // user_confirmed_unverified（=确定、未实证），不再区分 user/kstar/auto
+    // 三条出身线；provenance 保留为审计提示，不产生任何行为差异。
+    const handoffLifecycleStatus: RecallAbilityAssetLifecycleStatus = 'user_confirmed_unverified';
     const now = new Date().toISOString();
     let stored: RecallAbilityAssetRecord;
     const handoffReason = `review_decision:${decision.decision_id}`;

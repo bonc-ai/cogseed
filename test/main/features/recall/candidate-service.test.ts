@@ -216,7 +216,7 @@ describe('Recall candidate governance', () => {
     expect(result.asset).toMatchObject({
       candidateId: candidate.id,
       status: 'active',
-      lifecycleStatus: 'automatically_extracted_unverified',
+      lifecycleStatus: 'user_confirmed_unverified',
       maturity: 'seed',
       version: '1',
     });
@@ -261,7 +261,7 @@ describe('Recall candidate governance', () => {
       sourceCandidateIds: [candidate.id], reviewDecisionId: decision.decision_id,
       type: candidate.suggestedType, title: candidate.summary!, statement: candidate.judgment,
       evidenceRefs: candidate.evidenceRefs, scope: candidate.suggestedScope, status: 'active',
-      lifecycleStatus: 'automatically_extracted_unverified', maturity: 'seed', version: '1',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'seed', version: '1',
       createdAt: now, updatedAt: now,
     }, { actor: 'system', reason: `review_decision:${decision.decision_id}` });
     const store = await import('../../../../src/main/features/recall/store');
@@ -271,7 +271,7 @@ describe('Recall candidate governance', () => {
     }));
 
     const retried = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
-    expect(retried.asset).toMatchObject({ id: assetId, lifecycleStatus: 'automatically_extracted_unverified' });
+    expect(retried.asset).toMatchObject({ id: assetId, lifecycleStatus: 'user_confirmed_unverified' });
     expect(retried.decision).toMatchObject({ decision_id: decision.decision_id, actor: 'system', outcome: 'asset_created' });
     await expect(assets.listAbilityAssets('user-a')).resolves.toHaveLength(1);
   });
@@ -1094,7 +1094,7 @@ describe('Recall candidate governance', () => {
     fs.unlinkSync(recallJsonRecordPath('user-a', 'ability-assets', first.asset.id));
 
     const repaired = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
-    expect(repaired.asset).toMatchObject({ id: first.asset.id, lifecycleStatus: 'automatically_extracted_unverified' });
+    expect(repaired.asset).toMatchObject({ id: first.asset.id, lifecycleStatus: 'user_confirmed_unverified' });
     expect(repaired.candidate.status).toBe('confirmed');
     await expect((await import('../../../../src/main/features/recall/asset-service')).listAbilityAssets('user-a'))
       .resolves.toHaveLength(1);
@@ -1581,7 +1581,7 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     expect(result.mode).toBe('created');
     const asset = await assets.readAbilityAsset('user-ingest', result.assetId!);
     expect(asset.type).toBe('personal');
-    expect(asset.lifecycleStatus).toBe('automatically_extracted_unverified');
+    expect(asset.lifecycleStatus).toBe('user_confirmed_unverified');
     expect(asset.statement).toContain('标识符');
 
     // 同一句再投：指纹幂等（不产生第二条候选/资产）。

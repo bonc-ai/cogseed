@@ -96,9 +96,9 @@ describe('profile ordering + origin prefix (2026-09-19 三小修)', () => {
       usageCounts: async () => new Map([['aa-rank-old-confirmed-1', 99], ['aa-rank-old-confirmed-2', 50]]),
     });
     // 72h 内的新资产压过 99 次使用的老资产，排第一。
-    expect(entries[0]).toContain('刚确认的新偏好。');
-    expect(entries[0]).toContain('[已确认]');
-    expect(entries.every((entry) => entry.startsWith('[已确认] ') || entry.startsWith('[模型记的] '))).toBe(true);
+    expect(entries[0]).toBe('刚确认的新偏好。');
+    // 出身收敛（2026-09-20）：模型记的=已确定——条目是纯内容，无出身前缀。
+    expect(entries.every((entry) => !entry.startsWith('['))).toBe(true);
   });
 });
 

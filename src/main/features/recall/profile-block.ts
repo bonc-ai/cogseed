@@ -31,16 +31,14 @@ export async function loadAssetProfileEntries(
 
   const assets = (await listAssets(userId))
     .filter((asset) => asset.type === 'personal' && asset.status === 'active');
-  // 三档排序（2026-09-19 画像三小修）：刚沉淀/确认的（72h 内）最优先——刚教
-  // 的偏好立即生效，不被"用得少"压出块；其次用户确认过的；最后模型记的
-  // 未验证。同档内使用次数为主、新近为辅。装不下的由常驻目录兜底。
+  // 两档排序（2026-09-20 出身收敛）：刚沉淀的（72h 内）最优先——刚教的偏好
+  // 立即生效，不被"用得少"压出块；其余一档。同档内使用次数为主、新近为辅。
+  // 出身（确认/模型记的）不再是排序或显示维度：模型记下来的=已确定。
   const RECENT_MS = 72 * 3600 * 1_000;
   const now = Date.now();
   const tierOf = (asset: RecallAbilityAssetRecord): number => {
     const updatedAt = Date.parse(asset.updatedAt || '') || 0;
-    const confirmed = asset.lifecycleStatus === 'user_confirmed_unverified';
-    if (now - updatedAt < RECENT_MS) return 3; // 新近沉淀/确认：最高档
-    return confirmed ? 2 : 1;
+    return now - updatedAt < RECENT_MS ? 2 : 1;
   };
   const scoreOf = (asset: RecallAbilityAssetRecord): number => {
     const uses = usageCounts.get(asset.id) || 0;
@@ -51,11 +49,7 @@ export async function loadAssetProfileEntries(
     .slice()
     .sort((left, right) => (tierOf(right) - tierOf(left)) || (scoreOf(right) - scoreOf(left)))
     .slice(0, PROFILE_BLOCK_MAX_ENTRIES)
-    .map((asset) => {
-      const origin = asset.lifecycleStatus === 'user_confirmed_unverified' ? '[已确认] ' : '[模型记的] ';
-      const text = String(asset.statement || '').replace(/\s+/g, ' ').trim();
-      return text ? origin + text : '';
-    })
+    .map((asset) => String(asset.statement || '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
     .map((text) => (text.length > PROFILE_ENTRY_MAX_CHARS ? `${text.slice(0, PROFILE_ENTRY_MAX_CHARS - 1)}…` : text))
     .reduce<{ entries: string[]; total: number }>((acc, text) => {

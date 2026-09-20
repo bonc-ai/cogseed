@@ -65,7 +65,7 @@ describe('migrateLegacyMemoryToAssets', () => {
     const migrated = (await assets.listAbilityAssets('user-mig2'))
       .filter((asset) => asset.statement.includes('用户是开发者') || asset.statement.includes('接口变更'));
     expect(migrated.length).toBe(2);
-    expect(migrated.every((asset) => asset.type === 'personal' && asset.lifecycleStatus === 'automatically_extracted_unverified')).toBe(true);
+    expect(migrated.every((asset) => asset.type === 'personal' && asset.lifecycleStatus === 'user_confirmed_unverified')).toBe(true);
   });
 
   it('re-running after a successful migration is a no-op (idempotent)', async () => {
