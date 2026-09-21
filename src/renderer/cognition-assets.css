@@ -309,34 +309,14 @@
 .ca-source-card .ca-line { align-items: center; }
 
 /* ── 空态与加载 ───────────────────────────────────────────── */
-.ca-empty { text-align: center; padding: 34px 24px 30px; color: var(--ca-ink2); display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.ca-empty-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--color-ca-fill-empty); color: var(--color-ca-green-dim); display: flex; align-items: center; justify-content: center; font-size: var(--font-size-6); }
-.ca-empty-icon .ca-empty-glyph { width: 20px; height: 20px; }
-.ca-empty strong { color: var(--ca-ink); font-size: var(--font-size-5); }
-.ca-empty > span { max-width: 620px; font-size: var(--font-size-3); line-height: 1.7; }
-.ca-empty .ca-actions { justify-content: center; }
 .ca-steps { color: var(--ca-ink3); font-size: 12px; margin: 4px 0; }
 .ca-loading { text-align: center; color: var(--ca-ink3); padding: 40px; }
 
 /* ── 窄窗 ─────────────────────────────────────────────────── */
 
-/* ── 共享控件工厂适配（uiButton / uiInput / uiTextarea 落位） ──────────
-   本页按钮与输入走共享工厂（shared-ui-adoption-guard 约束：新模块零裸控件），
-   工厂产物带全局 .btn / .ui-button / .form-input 默认样式且 ui-components.css
-   加载在最后；面板内以 ca 视觉为准，统一用 .ca-app 前缀在此覆盖。 */
-.ca-app .ui-button {
-  display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--ca-line); background: var(--ca-card); color: var(--ca-ink);
-  padding: 6px 13px; border-radius: 8px; font-size: var(--font-size-3); font-weight: 400;
-  cursor: pointer; font-family: inherit; transition: none;
-}
-.ca-app .ui-button:hover { background: var(--color-ca-hover); }
-.ca-app .ui-button[disabled] { opacity: .5; cursor: default; }
-.ca-app .ui-button.ca-btn.is-primary { background: var(--ca-green); border-color: var(--ca-green); color: var(--color-white); font-weight: 600; }
-.ca-app .ui-button.ca-btn.is-primary:hover { background: var(--ca-green-d); }
-.ca-app .ui-button.ca-btn.is-danger { color: var(--ca-red); border-color: var(--color-ca-red-line); }
-.ca-app .ui-button.ca-btn.is-danger:hover { background: var(--color-ca-red-bg); }
-.ca-app .ui-button.ca-btn.is-sm { padding: 4px 10px; font-size: 12px; border-radius: var(--radius-2); }
+/* ── 共享控件的页面语义变体 ─────────────────────────────────────
+   基础外观由 ui-components.css 统一拥有；这里只保留返回链接、筛选 chip 等
+   业务语义明确的复合形态。 */
 /* 文字型按钮（返回链接 / 更多操作 / 刷新） */
 .ca-app .ui-button.ca-backlink {
   display: inline-flex; align-items: center; gap: 4px; margin: 0 0 10px;
@@ -365,14 +345,6 @@
 }
 .ca-app .ui-button.ca-pill:hover { border-color: var(--color-ca-green-line-2); background: var(--ca-card); }
 .ca-app .ui-button.ca-pill.is-on { background: var(--ca-green-bg); border-color: var(--ca-green-line); color: var(--color-ca-green-text-deep); font-weight: 600; }
-/* 输入 / 多行输入（工厂类 form-input ui-control ui-input/ui-textarea） */
-.ca-app .ui-input, .ca-app .ui-textarea {
-  border: 1px solid var(--ca-line); border-radius: 8px; padding: 7px 11px;
-  font-size: var(--font-size-3); font-family: inherit; font-weight: 400;
-  background: var(--color-ca-paper); color: var(--ca-ink); width: 100%; box-sizing: border-box;
-}
-.ca-app .ui-textarea { min-height: 96px; resize: vertical; line-height: 1.65; }
-.ca-app .ui-input:focus, .ca-app .ui-textarea:focus { outline: none; border-color: var(--ca-green-line); background: var(--color-white); }
 /* 候选类型 chip 单选（div[role=button]，键盘激活走 app.js 委托） */
 .ca-app .ca-chip-opt { cursor: pointer; }
 .ca-app .ca-chip-opt:hover { filter: brightness(.97); }
@@ -425,20 +397,6 @@
   border: 1px solid var(--ca-line); border-radius: 8px; padding: 5px 8px;
   background: var(--ca-card); color: var(--ca-ink); font-family: inherit; font-size: var(--font-size-3);
 }
-
-/* toggle 开关：44×24 滑块，键盘可达（role=switch + aria-checked）。 */
-.ca-switch {
-  flex: 0 0 auto; width: 44px; height: 24px; border-radius: 999px;
-  border: 1px solid var(--ca-line); background: var(--color-ca-hover);
-  position: relative; cursor: pointer; padding: 0; transition: background-color .2s ease, border-color .2s ease;
-}
-.ca-switch .ui-switch__knob {
-  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--color-white); box-shadow: 0 1px 2px var(--color-shadow-soft); transition: transform .2s ease;
-}
-.ca-switch.is-on { background: var(--ca-green); border-color: var(--ca-green-line); }
-.ca-switch.is-on .ui-switch__knob { transform: translateX(20px); }
-.ca-switch:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: 2px; }
 
 /* ── 交互反馈与过渡（2026-09-15 全面交互优化） ────────────────── */
 

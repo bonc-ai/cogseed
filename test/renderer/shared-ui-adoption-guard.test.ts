@@ -70,6 +70,39 @@ const legacyRawControlBaseline: Record<string, number> = {
   'workspace.js': 11,
 };
 
+const legacyDynamicControlBaseline: Record<string, number> = {
+  'chat-artifact.js': 1,
+  'chat-citation.js': 1,
+  'chat-input-form.js': 9,
+  'chat-stream.js': 5,
+  'conversation.js': 4,
+  'expense-agent-cards.js': 5,
+  'interactive-cli.js': 1,
+  'kb-notes.js': 2,
+  'kb-quiz.js': 19,
+  'kb-workbench.js': 10,
+  'messaging-settings.js': 27,
+  'model-chip.js': 6,
+  'settings.js': 3,
+  'user-workspace.js': 3,
+  'utils.js': 1,
+};
+
+const legacyRawCheckboxBaseline: Record<string, number> = {
+  'chat-input-form.js': 2,
+  'hub-account.js': 1,
+  'interactive-cli.js': 1,
+  'kb-workbench.js': 1,
+  'messaging-settings.js': 1,
+  'onboarding.js': 12,
+  'settings.js': 4,
+  'touchpoint-settings.js': 1,
+  'utils.js': 1,
+};
+
+const legacyIndexRawControlBaseline = 191;
+const legacyIndexRawCheckboxBaseline = 3;
+
 // Detail extraction moved legacy markup out of run-center.js. Freeze the two
 // files as one owner so the extraction cannot raise the former 52-control
 // budget. The remaining raw detail controls are composite, roving-tab widgets
@@ -94,6 +127,16 @@ function rawControlCount(source: string): number {
   return (source.match(/<(?:button|input|textarea|select)\b/gi) || []).length;
 }
 
+function dynamicControlCount(source: string): number {
+  return (source.match(/\b(?:document\.)?createElement\(\s*['"](?:button|input|textarea|select)['"]\s*\)/gi) || []).length
+    + (source.match(/\bel\(\s*['"](?:button|input|textarea|select)['"]/gi) || []).length;
+}
+
+function rawCheckboxCount(source: string): number {
+  return (source.match(/<input\b[^>]*\btype\s*=\s*['"]checkbox['"]/gi) || []).length
+    + (source.match(/\.type\s*=\s*['"]checkbox['"]/gi) || []).length;
+}
+
 /**
  * 另外三个渲染层维度——**此前没有任何闸门**，所以存量可以无限增长而套件全绿：
  *   1. 用 emoji 当图标（规范：图标必须来自 `modules/icons.js`）；
@@ -107,7 +150,6 @@ const emojiAsIconBaseline: Record<string, number> = {
   'bash_permission.js': 2,
   'chat-artifact.js': 1,
   'conversation.js': 3,
-  'import-check-modal.js': 1,
   'kb-notes.js': 21,
   'kb-quiz.js': 1,
   'kb-workbench.js': 25,
@@ -196,6 +238,36 @@ describe('renderer shared UI adoption guard', () => {
         + rawControlCount(fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8')), 0);
       expect(actual, `${group.label} adds raw controls; use the shared Renderer primitives instead`)
         .toBeLessThanOrEqual(group.limit);
+    }
+  });
+
+  it('does not hide new raw controls behind createElement or local element helpers', () => {
+    for (const relativePath of rendererModules(modulesRoot)) {
+      if (sharedControlFactories.has(relativePath)) continue;
+      const source = fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8');
+      const allowed = legacyDynamicControlBaseline[relativePath] || 0;
+      expect(
+        dynamicControlCount(source),
+        `${relativePath} adds dynamically-created controls; use the shared Renderer primitives instead`,
+      ).toBeLessThanOrEqual(allowed);
+    }
+  });
+
+  it('freezes raw controls in index.html and native checkbox debt across the Renderer', () => {
+    const indexSource = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
+    expect(rawControlCount(indexSource), 'index.html adds raw controls; migrate through shared Renderer primitives')
+      .toBeLessThanOrEqual(legacyIndexRawControlBaseline);
+    expect(rawCheckboxCount(indexSource), 'index.html adds native checkboxes; use uiCheckbox or uiSwitch')
+      .toBeLessThanOrEqual(legacyIndexRawCheckboxBaseline);
+
+    for (const relativePath of rendererModules(modulesRoot)) {
+      if (sharedControlFactories.has(relativePath)) continue;
+      const source = fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8');
+      const allowed = legacyRawCheckboxBaseline[relativePath] || 0;
+      expect(
+        rawCheckboxCount(source),
+        `${relativePath} adds native checkboxes; use uiCheckbox or uiSwitch`,
+      ).toBeLessThanOrEqual(allowed);
     }
   });
 
