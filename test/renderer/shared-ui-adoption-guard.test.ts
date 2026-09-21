@@ -47,15 +47,14 @@ const legacyRawControlBaseline: Record<string, number> = {
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
   'kb-notes.js': 24,
-  // kb-workbench.js：13 → 6（2026-09-21）。本批删除模块自带的 uiIconButton/uiButton/
-  // uiInput/uiTextarea 四份"降级模板"——等于在页面里维护第二套原语实现，既被本条闸门计为
-  // 裸控件、又让"缺原语"静默通过；现在改为缺原语即抛错（与 kb-notes 同风格）。
-  // 剩余 6 处是真实页面控件，各有归属：
-  //   · 分享弹层的隐藏 file input、权限触发按钮（M-1）
-  //   · 导入对话框裸复选框（B3-b 已迁，见 PR #336）
-  //   · 问答引用 chip、模型 chip（M-9）；问答输入框 textarea（B3-b 已迁）
-  // 注：原基线 13 含 3 处余量，本批按实测收紧到 6。
-  'kb-workbench.js': 6,
+  // kb-workbench.js：**实测 5**（2026-09-21，与 develop 的 KB 结构迁移 #346 合并后重算）。
+  // 本批删除了模块自带的 uiIconButton/uiButton/uiInput/uiTextarea 四份"降级模板"——那等于在页面里
+  // 维护第二套原语实现：既被本条闸门计为裸控件、又让"缺原语"静默通过。现在改为缺原语即抛错
+  // （`_requirePrimitive`）。
+  // 剩余 5 处都是真实页面控件，各有归属：分享弹层隐藏 file input、权限触发按钮（M-1）；
+  // 问答引用 chip、模型 chip（M-9）；以及一处问答输入框（B3-b 走 uiTextarea）。
+  // ⚠️ 基线按**合并后实测**填：单独照抄任一支的自测值都会留出空档。
+  'kb-workbench.js': 5,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
@@ -105,7 +104,6 @@ const legacyRawCheckboxBaseline: Record<string, number> = {
   'chat-input-form.js': 2,
   'hub-account.js': 1,
   'interactive-cli.js': 1,
-  'kb-workbench.js': 1,
   'messaging-settings.js': 1,
   'onboarding.js': 12,
   'settings.js': 4,
@@ -165,7 +163,7 @@ const emojiAsIconBaseline: Record<string, number> = {
   'conversation.js': 3,
   'kb-notes.js': 21,
   'kb-quiz.js': 1,
-  'kb-workbench.js': 25,
+  'kb-workbench.js': 24,
   'model-authorization.js': 2,
   'onboarding.js': 8,
   'settings.js': 1,
@@ -190,9 +188,7 @@ const inlineSvgBaseline: Record<string, number> = {
 };
 const iconSourceFiles = new Set(['icons.js']);
 
-const literalZIndexBaseline: Record<string, number> = {
-  'kb-workbench.js': 3,
-};
+const literalZIndexBaseline: Record<string, number> = {};
 /**
  * 各 CSS 文件的字面 z-index 存量（层序应走 tokens.css 的 `--z-*`）。
  * `tokens.css` 豁免：它就是层序的唯一定义处；`vendor/**` 豁免：第三方样式不改。
@@ -345,6 +341,9 @@ describe('renderer shared UI adoption guard', () => {
    * 一个写坏的正则会让闸门静默放行一切——那比没有闸门更危险（看着是绿的）。
    */
   it('the counters actually detect violations (a broken regex must not pass silently)', () => {
+    expect(dynamicControlCount("document.createElement('button')")).toBe(1);
+    expect(dynamicControlCount('el("input", "field")')).toBe(1);
+    expect(dynamicControlCount("createElement('div')")).toBe(0);
     expect(emojiLineCount('<span>📁 库根</span>')).toBe(1);
     expect(emojiLineCount('<span>普通文案</span>')).toBe(0);
     expect(emojiLineCount('💡 一句话\n💡 又一句')).toBe(2);
