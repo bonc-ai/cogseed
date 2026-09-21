@@ -993,16 +993,16 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(createDialog).toContain('class="ui-modal__header"');
     expect(createDialog).toContain('class="ui-modal__body kb-share-dlg-body"');
     expect(createDialog).toContain('class="ui-modal__footer kb-share-dlg-actions"');
-    expect(createDialog).toContain("_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x'");
-    expect(createDialog).toContain("_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil'");
+    expect(createDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.create_shared_close', '关闭创建共享知识库弹窗'), icon: 'x'");
+    expect(createDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.cover_upload', '上传或更换知识库封面'), icon: 'edit-pencil'");
     expect(createDialog).toContain("_uiInput({ id: 'kb-share-name', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiSelect({");
     expect(createDialog).toContain("id: 'kb-share-join'");
     expect(createDialog).toContain("window.hydrateUiFormSelects(overlay)");
-    expect(createDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
-    expect(createDialog).toContain("_uiButton({ label: '确定', role: 'primary'");
+    expect(createDialog).toContain("_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary'");
+    expect(createDialog).toContain("_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary'");
     expect(createDialog).not.toMatch(/[✕📁✎▾✓]/u);
     expect(membersDialog).toContain("overlay.className = 'ui-modal-overlay kb-members-overlay'");
     expect(membersDialog).toContain('class="ui-modal ui-modal--sm kb-members-dlg"');
@@ -1016,7 +1016,7 @@ describe('KB workbench (S1 skeleton)', () => {
     // 断言钉在 i18n 键上（文案随语言变，键不变）
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', icon: 'link'");
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_gen_code', '生成知识码'), role: 'secondary', icon: 'qr-code'");
-    expect(shareDialogs).toContain("_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary', className: 'kb-share-pop-btn'");
     expect((shareDialogs.match(/class="ui-modal__header"/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__body/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__footer/g) || [])).toHaveLength(7);
@@ -1031,14 +1031,14 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).not.toContain('class="kb-empty"');
     expect(source).not.toMatch(/kb-(?:qa-model|qa-history|import-dlg|share-manage|share-cogseed-members)-empty/);
     expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })");
-    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无待审申请' })");
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.cogseed_members_empty', '暂无待审申请') })");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
     expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary'");
-    expect(shareDialogs).toContain("_uiButton({ label: '撤销', role: 'danger', size: 'sm'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_revoke', '撤销'), role: 'danger', size: 'sm'");
     expect(shareDialogs).toContain("id: 'kb-perm-member'");
     expect(shareDialogs).toContain("id: 'kb-perm-join'");
     expect(shareDialogs).not.toMatch(/<select\b/);
