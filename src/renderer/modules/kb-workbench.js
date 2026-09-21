@@ -76,40 +76,32 @@
     return !_state.spaceId && !!_currentExternalSource();
   }
 
-  // 统一图标：优先 icons.js 的 uiIconHtml（仓库规范），缺的名走内联 SVG。
+  // 统一图标：一律走 icons.js 的 uiIconHtml（仓库规范：图标只来自 icons.js）。
+  // 2026-09-21 迁移：此前这里还有一套自带的 svg path 表（_SVGS，22 条）与 _svg()，
+  // 属"硬编码 svg 路径"违规；实测那张表只被 3 个名字用到（sparkles/search/chevron-down），
+  // 且这三个名字 icons.js 里都有 → 整表删除，_svg() 改为转发共享注册表。
   function _icon(name, cls) {
     if (typeof window.uiIconHtml === 'function') {
       return window.uiIconHtml(name, cls || 'kb-ico');
     }
-    return `<svg class="${cls || 'kb-ico'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg>`;
+    // 无 icons.js 的环境（部分单测的 window mock）：不再退回手写 svg（规范禁止），
+    // 返回空串由调用方降级，避免"缺图标就自己画一个"的老路。
+    return '';
   }
 
-  const _SVGS = {
-    sort: '<path d="M8 6h13M8 12h9M8 18h5M3 6h.01M3 12h.01M3 18h.01"/>',
-    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
-    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>',
-    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
-    send: '<path d="M3.6 4.4 20.6 12 3.6 19.6l2.4-7.6z"/><path d="M6 12h14.6"/>',
-    plus: '<rect x="4" y="4" width="16" height="16" rx="4.5"/><path d="M12 8v8M8 12h8"/>',
-    trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
-    more: '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>',
-    share: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    chip: '<rect x="5" y="7" width="14" height="10" rx="2.5"/><path d="M9 7V4.5M15 7V4.5M9 19.5V17M15 19.5V17M10.5 12h3"/>',
-    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
-    'chevron-right': '<path d="m9 6 6 6-6 6"/>',
-    'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-    'qrcode': '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM21 14h.01M14 21h.01"/>',
-    'lock': '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
-    'panel-collapse': '<rect x="4" y="5" width="6" height="14" rx="1.5"/><rect x="14" y="5" width="6" height="14" rx="1.5"/>',
-    'popout': '<path d="M15 3h6v6"/><path d="m10 14 11-11"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
-    'history': '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
-    'close': '<path d="M18 6 6 18M6 6l12 12"/>',
-    'paperclip': '<path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/>',
-    'tools': '<path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14.5 12l-2.5-2.5z"/>',
-    'more-h': '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>',
+  // 旧调用名 → 共享注册表名的别名（保持调用点不变）
+  const _ICON_ALIAS = {
+    more: 'more-horizontal',
+    'more-h': 'more-horizontal',
+    share: 'share-2',
+    chip: 'cpu',
+    qrcode: 'qr-code',
+    close: 'x',
+    popout: 'external',
   };
+
   function _svg(name) {
-    return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
+    return _icon(_ICON_ALIAS[name] || name, 'kb-ico-svg');
   }
 
   function _uiIconButton(options) {
