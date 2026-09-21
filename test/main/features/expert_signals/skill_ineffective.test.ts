@@ -17,7 +17,43 @@ activateUser(UID);
 import { createSkillTurnBuffer } from '../../../../src/main/features/expert_signals/turn_hooks';
 import { querySignals } from '../../../../src/main/features/expert_signals';
 
-async function wait() { return new Promise((r) => setTimeout(r, 30)); }
+/**
+ * 信号写入是异步 `appendJsonl`：固定 30ms 在满载并发下会读到 0 条。
+ * 改成有界条件等待真实条数——期望值一旦满足就立刻返回，超时才失败。
+ */
+async function waitForSignals(
+  probe: () => Promise<Array<{ turn_id?: string }>>,
+  expected: number,
+  timeoutMs = 5_000,
+): Promise<Array<{ turn_id?: string }>> {
+  const deadline = Date.now() + timeoutMs;
+  let sigs = await probe();
+  while (sigs.length !== expected && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+    sigs = await probe();
+  }
+  return sigs;
+}
+
+/**
+ * 负例的非空洞写法：在同一个 cid 上再发一条「必然产出」的对照信号，等到
+ * 它落地后断言只有它一条。否则「读到 0 条」可能只是那次写入还没落盘。
+ */
+async function expectOnlyControlSignal(cid: string, turnId: string): Promise<void> {
+  const control = createSkillTurnBuffer();
+  control.recordInvoked('control-skill', 'A.custom', 'read_file');
+  control.drainAndEmit({
+    uid: UID, cid, aid: 'agent_x',
+    turn_id: turnId, msg_ids: [turnId],
+    errText: 'permanent control failure',
+  });
+  const sigs = await waitForSignals(
+    () => querySignals({ types: ['skill_ineffective'], cid }),
+    1,
+  );
+  expect(sigs).toHaveLength(1);
+  expect(sigs[0].turn_id).toBe(turnId);
+}
 
 // Per CLAUDE.md §9: text-munging / extractor / decision branches must have
 // fixture coverage for shapes that MUST emit (set A) AND shapes that MUST
@@ -33,9 +69,10 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set A (emits)',
       turn_id: 'm_a1', msg_ids: ['m_a1'],
       errText: 'agent specification missing — file vanished mid-turn',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
+    const sigs = await waitForSignals(
+      () => querySignals({ types: ['skill_ineffective'], cid }),
+      1,
+    );
     expect(sigs.length).toBe(1);
     expect(sigs[0].delta!.system).toBe('A.custom');
     expect(sigs[0].delta!.skill_id).toBe('search-docs');
@@ -55,9 +92,10 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set A (emits)',
       turn_id: 'm_a2', msg_ids: ['m_a2'],
       errText: 'parse failure: invalid JSON in tool output',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
+    const sigs = await waitForSignals(
+      () => querySignals({ types: ['skill_ineffective'], cid }),
+      3,
+    );
     expect(sigs.length).toBe(3);
     const bySkill = new Map(sigs.map((s) => [s.delta!.skill_id, s.delta!.system]));
     expect(bySkill.get('skill-a')).toBe('A.custom');
@@ -75,9 +113,10 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set A (emits)',
       turn_id: 'm_a3', msg_ids: ['m_a3'],
       errText: longErr,
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
+    const sigs = await waitForSignals(
+      () => querySignals({ types: ['skill_ineffective'], cid }),
+      1,
+    );
     expect(sigs.length).toBe(1);
     expect((sigs[0].metadata!.error_excerpt as string).length).toBe(200);
   });
@@ -93,10 +132,7 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set B (does NOT
       turn_id: 'm_b1', msg_ids: ['m_b1'],
       errText: 'permanent: spec missing',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlSignal(cid, 'm_ctrl-b1');
   });
 
   it('invoked + empty errText → 0 signals (clean turn)', async () => {
@@ -108,10 +144,7 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set B (does NOT
       turn_id: 'm_b2', msg_ids: ['m_b2'],
       // errText omitted
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlSignal(cid, 'm_ctrl-b2');
   });
 
   it('invoked + transient errText (ECONNRESET) → 0 signals', async () => {
@@ -123,10 +156,7 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set B (does NOT
       turn_id: 'm_b3', msg_ids: ['m_b3'],
       errText: 'request failed: ECONNRESET',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlSignal(cid, 'm_ctrl-b3');
   });
 
   it('invoked + transient errText (fetch failed) → 0 signals', async () => {
@@ -138,10 +168,7 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set B (does NOT
       turn_id: 'm_b4', msg_ids: ['m_b4'],
       errText: 'fetch failed at provider',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlSignal(cid, 'm_ctrl-b4');
   });
 
   it('invoked + permanent errText + aborted=true → 0 signals (user-cancelled is not the skill\'s fault)', async () => {
@@ -154,10 +181,7 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set B (does NOT
       errText: 'aborted by user',
       aborted: true,
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_ineffective'], cid });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlSignal(cid, 'm_ctrl-b5');
   });
 
   it('legacy call (no errText / aborted args) keeps the old skill_invoked behavior', async () => {
@@ -168,11 +192,9 @@ describe('SkillTurnBuffer.drainAndEmit › skill_ineffective — set B (does NOT
       uid: UID, cid, aid: 'agent_x',
       turn_id: 'm_b6', msg_ids: ['m_b6'],
     });
-    await wait();
-
-    const ineff = await querySignals({ types: ['skill_ineffective'], cid });
-    expect(ineff.length).toBe(0);
-    const inv = await querySignals({ types: ['skill_invoked'], cid });
-    expect(inv.length).toBe(1);  // legacy emit still fires
+    await expectOnlyControlSignal(cid, 'm_ctrl-b6');
+    // 对照信号自己也带一条 skill_invoked，所以这里等两条：对照 + 本用例自己。
+    const inv = await waitForSignals(() => querySignals({ types: ['skill_invoked'], cid }), 2);
+    expect(inv.some((row) => row.turn_id === 'm_b6')).toBe(true);  // legacy emit still fires
   });
 });
