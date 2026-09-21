@@ -791,7 +791,7 @@ describe('KB workbench (S1 skeleton)', () => {
 
     expect(fileRows).toContain("_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn'");
     expect(fileRows).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn'");
-    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? '折叠' : '展开', icon: open \? 'chevron-down' : 'chevron-right'/);
+    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? _tr\('kb\.workbench\.collapse', '收起'\) : _tr\('kb\.workbench\.expand', '展开'\), icon: open \? 'chevron-down' : 'chevron-right'/);
     expect(fileRows).not.toMatch(/<button\b/);
   });
 
@@ -862,7 +862,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(analysis).toContain("_uiButton({ label: _tr('kb.workbench.expand', '展开'), role: 'ghost', size: 'sm', iconEnd: 'chevron-down'");
     expect(analysis).toContain("_uiButton({ label: `${d.file}#chunk 1`, role: 'ghost', size: 'sm', className: 'kb-qa-chip'");
     expect(analysis).toContain("_setUiButtonPresentation(btn, open ? _tr('kb.workbench.collapse', '收起') : _tr('kb.workbench.expand', '展开'), open ? 'chevron-up' : 'chevron-down')");
-    expect(analysis).toContain("_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh'");
+    expect(analysis).toContain("_uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh'");
     expect(analysis).not.toMatch(/<button\b/);
     expect(analysis).not.toMatch(/[▾▴↗🔄]/u);
   });
@@ -891,7 +891,7 @@ describe('KB workbench (S1 skeleton)', () => {
     }
     expect((qaMarkup.match(/<button\b/g) || [])).toHaveLength(1);
     expect(qaMarkup).toContain('class="kb-qa-model-chip"');
-    expect(attachments).toContain("_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger'");
+    expect(attachments).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_attach_remove', '移除附件'), icon: 'x', variant: 'danger'");
     expect(historyPanel).toContain("_uiButton({ label: _tr('kb.workbench.qa_new_session', '新建对话')");
     expect(historyPanel).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_history_delete', '删除会话'), icon: 'trash-2', variant: 'danger'");
     expect(askMarkup).toContain("_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-qa-more-btn'");
