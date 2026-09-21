@@ -54,6 +54,15 @@ const legacyRawControlBaseline: Record<string, number> = {
   //   · 两处隐藏 file input（共享层无 file 原语）。
   'kb-notes.js': 21,
   'kb-workbench.js': 9,
+  'kb-notes.js': 24,
+  // kb-workbench.js：**实测 5**（2026-09-21，与 develop 的 KB 结构迁移 #346 合并后重算）。
+  // 本批删除了模块自带的 uiIconButton/uiButton/uiInput/uiTextarea 四份"降级模板"——那等于在页面里
+  // 维护第二套原语实现：既被本条闸门计为裸控件、又让"缺原语"静默通过。现在改为缺原语即抛错
+  // （`_requirePrimitive`）。
+  // 剩余 5 处都是真实页面控件，各有归属：分享弹层隐藏 file input、权限触发按钮（M-1）；
+  // 问答引用 chip、模型 chip（M-9）；以及一处问答输入框（B3-b 走 uiTextarea）。
+  // ⚠️ 基线按**合并后实测**填：单独照抄任一支的自测值都会留出空档。
+  'kb-workbench.js': 5,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
