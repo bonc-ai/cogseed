@@ -112,6 +112,20 @@
     return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
   }
 
+  /**
+   * 共享按钮的"禁用"是**类**：`.ui-button.is-disabled` / `.ui-icon-button.is-disabled`
+   * 带 `pointer-events: none`。只改 `.disabled` 属性不够 —— 一个"模板里就 disabled"的按钮
+   * （渲染时已带 `is-disabled`）后来被启用时，类还在 ⇒ 按钮**永远点不动**。
+   * 真机事故：问答「发送」按钮输入文字后仍点不动（导入弹窗的「导入」同因）。
+   * 因此凡是要改按钮可用状态，一律走这个函数，属性与类一起改。
+   */
+  function _setDisabled(el, disabled) {
+    if (!el) return;
+    const off = Boolean(disabled);
+    el.disabled = off;
+    el.classList.toggle('is-disabled', off);
+  }
+
   function _uiIconButton(options) {
     if (typeof window.uiIconButton === 'function') return window.uiIconButton(options);
     const attrs = options.attrs || {};
@@ -719,9 +733,7 @@
     const nameInput = overlay.querySelector('#kb-share-name');
     const okBtn = overlay.querySelector('#kb-share-ok');
     const syncOk = () => {
-      const disabled = !String(nameInput.value || '').trim();
-      okBtn.disabled = disabled;
-      okBtn.classList.toggle('is-disabled', disabled);
+      _setDisabled(okBtn, !String(nameInput.value || '').trim());
     };
     nameInput.addEventListener('input', syncOk);
     nameInput.addEventListener('keydown', (e) => {
@@ -987,7 +999,7 @@
     const countEl = overlay.querySelector('.kb-import-dlg-count');
     const okBtn = overlay.querySelector('.kb-import-dlg-ok');
     if (countEl) countEl.textContent = `已选中 ${_dlgSelected.size} 个文件`;
-    if (okBtn) okBtn.disabled = _dlgSelected.size === 0;
+    if (okBtn) _setDisabled(okBtn, _dlgSelected.size === 0);
   }
 
   function _bindImportDlgEvents(overlay) {
@@ -1113,7 +1125,7 @@
           okBtn.classList.remove('is-loading');
           okBtn.removeAttribute('aria-busy');
           _setUiButtonPresentation(okBtn, '导入', 'upload');
-          okBtn.disabled = _dlgSelected.size === 0;
+          _setDisabled(okBtn, _dlgSelected.size === 0);
         }
       }
     });
@@ -6385,7 +6397,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const input = document.getElementById('kb-qa-input');
     const send = document.getElementById('kb-qa-send');
     if (!input || !send) return;
-    send.disabled = !input.value.trim();
+    _setDisabled(send, !input.value.trim());
   }
 
   // 问答输入框自动扩容：多行输入随内容增高，避免长文本在单行里向前滚动、

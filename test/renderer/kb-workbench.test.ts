@@ -938,7 +938,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(importDialog).not.toMatch(/[✕←→]/u);
     expect(importBinding).toContain("initialFocus: '#kb-import-dlg-search-input'");
     expect(importBinding).toContain("controller.open(trigger)");
-    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?okBtn\.disabled = _dlgSelected\.size === 0/);
+    // 收尾：先去 loading、再按选择数同步可用状态（必须是属性 + is-disabled 类一起改）
+    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?_setDisabled\(okBtn, _dlgSelected\.size === 0\)/);
     expect(source).toMatch(/getElementById\('kb-qa-history-panel'\) \|\| document\.querySelector\('\.kb-import-dlg-overlay'\)/);
   });
 
@@ -2160,6 +2161,35 @@ describe('KB 解析卡按钮接线（防"死按钮"）', () => {
       if (typeof btn._listeners.click !== 'function') unwired.push(id);
     }
     expect(unwired).toEqual([]);
+  });
+});
+
+/**
+ * 共享按钮的"禁用"是**类**（`.is-disabled` → `pointer-events:none`），不是属性。
+ *
+ * 真机事故：问答「发送」按钮在模板里就是 `disabled: true`（渲染时已带 `is-disabled`），
+ * 输入文字后代码只把 `.disabled` 置回 false、类还在 ⇒ **按钮永远点不动**（导入弹窗的「导入」同因）。
+ * 这里钉住：这几条启用路径必须走统一 helper（同时改属性与类）。
+ */
+describe('共享按钮禁用状态必须属性 + 类同步', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+
+  it('存在同时改 disabled 与 is-disabled 的统一 helper', () => {
+    expect(src).toMatch(/function _setDisabled\(el, disabled\) \{[\s\S]{0,240}el\.disabled = off;[\s\S]{0,160}classList\.toggle\('is-disabled', off\)/);
+  });
+
+  it('问答发送 / 导入弹窗 / 分享弹窗都不再只改属性', () => {
+    expect(src).toContain('_setDisabled(send, !input.value.trim())');
+    expect(src).toMatch(/_setDisabled\(okBtn, _dlgSelected\.size === 0\)/);
+    expect(src).toMatch(/_setDisabled\(okBtn, !String\(nameInput\.value \|\| ''\)\.trim\(\)\)/);
+    // 反例：下面这两种写法就是当初的 bug
+    expect(src).not.toMatch(/send\.disabled = !input\.value\.trim\(\)/);
+    expect(src).not.toMatch(/okBtn\.disabled = _dlgSelected\.size === 0/);
+  });
+
+  it('模板里创建即 disabled 的三个按钮仍然存在（防误删后本条测试失去意义）', () => {
+    for (const id of ['kb-share-ok', 'kb-import-dlg-ok', 'kb-qa-send']) expect(src).toContain(id);
+    expect((src.match(/disabled: true/g) || []).length).toBeGreaterThanOrEqual(3);
   });
 });
 
