@@ -747,15 +747,15 @@
 
   // 共享库创建/重命名错误码 → 友好中文（name_dup 等英文码对用户不可读）
   function _kbSpaceErrText(raw) {
-    if (!raw) return '未知错误';
+    if (!raw) return _tr('kb.workbench.unknown_error', '未知错误');
     const m = String(raw);
-    if (m.includes('name_dup') || m.includes('duplicate')) return '名称已存在，请换一个名称';
-    if (m.includes('name_empty')) return '名称不能为空';
-    if (m.includes('too_long')) return '名称或描述过长';
-    if (m.includes('invalid_space_type')) return '空间类型无效';
-    if (m.includes('not_found')) return '目标不存在';
-    if (m.includes('invalid')) return '参数无效';
-    if (m.includes('network') || m.includes('timed out')) return '网络超时，请重试';
+    if (m.includes('name_dup') || m.includes('duplicate')) return _tr('kb.workbench.rename_err_exists', '该名称已存在，请换一个名称');
+    if (m.includes('name_empty')) return _tr('kb.workbench.space_err_name_empty', '名称不能为空');
+    if (m.includes('too_long')) return _tr('kb.workbench.space_err_too_long', '名称或描述过长');
+    if (m.includes('invalid_space_type')) return _tr('kb.workbench.space_err_type', '空间类型无效');
+    if (m.includes('not_found')) return _tr('kb.workbench.space_err_not_found', '目标不存在');
+    if (m.includes('invalid')) return _tr('kb.workbench.space_err_invalid', '参数无效');
+    if (m.includes('network') || m.includes('timed out')) return _tr('kb.workbench.space_err_network', '网络超时，请重试');
     return m;
   }
 
@@ -1185,34 +1185,34 @@
   // 导入菜单「个人知识库」：把其他个人库的内容复制进当前库
   async function _kbMigrateLib() {
     if (!_state.currentLib) {
-      if (typeof uiToast === 'function') uiToast('请先选择目标知识库', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.migrate_pick_target', '请先选择目标知识库'), { variant: 'warning' });
       return;
     }
     const sources = (_state.libs || []).map((l) => l.name).filter((n) => n !== _state.currentLib);
     if (!sources.length) {
-      if (typeof uiToast === 'function') uiToast('没有其他可迁移的个人知识库', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.migrate_no_source', '没有其他可迁移的个人知识库'), { variant: 'warning' });
       return;
     }
     const prompt = typeof uiPrompt === 'function' ? uiPrompt : (m, d) => Promise.resolve(window.prompt(m, d));
-    const src = await prompt(`从哪个个人知识库迁移内容到「${_state.currentLib}」？\n可选：${sources.join('、')}`, '');
+    const src = await prompt(_tr('kb.workbench.migrate_prompt', '从哪个个人知识库迁移内容到「{target}」？\n可选：{sources}', { target: _state.currentLib, sources: sources.join(_tr('kb.workbench.list_separator', '、')) }), '');
     if (!src || !src.trim()) return;
     const clean = String(src).trim();
     if (!sources.includes(clean)) {
-      if (typeof uiToast === 'function') uiToast('源知识库不存在', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.migrate_source_missing', '源知识库不存在'), { variant: 'warning' });
       return;
     }
     try {
       const res = await window.cogseed.invoke('kb.migrateLib', { from: clean, to: _state.currentLib });
       if (!res || res.ok === false) {
-        if (typeof uiToast === 'function') uiToast('迁移失败：' + ((res && res.error) || 'unknown'), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.migrate_failed', '迁移失败：') + ((res && res.error) || 'unknown'), { variant: 'error' });
         return;
       }
-      if (typeof uiToast === 'function') uiToast(`已从「${clean}」迁移到「${_state.currentLib}」，正在重新索引…`, { variant: 'success', timeoutMs: 2500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.migrate_done', '已从「{from}」迁移到「{to}」，正在重新索引…', { from: clean, to: _state.currentLib }), { variant: 'success', timeoutMs: 2500 });
       await _loadAll();
       window.cogseed.invoke('kb.reconcile', {}).catch(() => {});
     } catch (err) {
       _log.warn('migrate lib failed', err);
-      if (typeof uiToast === 'function') uiToast('迁移失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.migrate_failed', '迁移失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -1554,7 +1554,7 @@
     dialog.setAttribute('aria-modal', 'true');
     const head = el('header', 'kb-fv-head');
     const headMain = el('div', 'kb-fv-head-main');
-    const title = el('span', 'kb-fv-title', '原文查看');
+    const title = el('span', 'kb-fv-title', _tr('kb.workbench.viewer_title', '原文查看'));
     title.id = 'kb-fv-title';
     const scope = el('span', 'kb-fv-scope');
     scope.id = 'kb-fv-scope';
@@ -1563,42 +1563,42 @@
     // 缩放控件：− / 百分比(可点重置) / ＋
     const zoomOutBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '−');
     zoomOutBtn.type = 'button';
-    zoomOutBtn.title = '缩小';
+    zoomOutBtn.title = _tr('kb.workbench.viewer_zoom_out', '缩小');
     const zoomLabel = el('button', 'kb-fv-zoom-label', '100%');
     zoomLabel.type = 'button';
-    zoomLabel.title = '重置缩放（点击回到 100%）';
+    zoomLabel.title = _tr('kb.workbench.viewer_zoom_reset', '重置缩放（点击回到 100%）');
     const zoomInBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '＋');
     zoomInBtn.type = 'button';
-    zoomInBtn.title = '放大';
+    zoomInBtn.title = _tr('kb.workbench.viewer_zoom_in', '放大');
     // HTML 专用：默认渲染页面，一键切回源码（两种能力都保留）
-    const sourceBtn = el('button', 'kb-fv-btn', '</> 查看源码');
+    const sourceBtn = el('button', 'kb-fv-btn', _tr('kb.workbench.viewer_source', '</> 查看源码'));
     sourceBtn.type = 'button';
     sourceBtn.id = 'kb-fv-source';
-    sourceBtn.title = '在"渲染页面"和"HTML 源码"之间切换';
+    sourceBtn.title = _tr('kb.workbench.viewer_source_tip', '在“渲染页面”和“HTML 源码”之间切换');
     sourceBtn.hidden = true;
     // 交给系统应用：查看器只做只读预览，PDF 批注编辑 / 旧版或嵌入对象 Office
     // 文件要动本机原生应用时走这里（主进程 kb.openExternal，同一套防穿越解析）
-    const externalBtn = el('button', 'kb-fv-btn', '↗ 在系统中打开');
+    const externalBtn = el('button', 'kb-fv-btn', _tr('kb.workbench.viewer_external', '↗ 在系统中打开'));
     externalBtn.type = 'button';
     externalBtn.id = 'kb-fv-external';
-    externalBtn.title = '用本机默认应用打开（可编辑/批注/打印）';
+    externalBtn.title = _tr('kb.workbench.viewer_external_tip', '用本机默认应用打开（可编辑/批注/打印）');
     externalBtn.hidden = true;
-    const readerBtn = el('button', 'kb-fv-btn', '⇱ 阅读模式');
+    const readerBtn = el('button', 'kb-fv-btn', _tr('kb.workbench.viewer_reader', '⇱ 阅读模式'));
     readerBtn.type = 'button';
     readerBtn.id = 'kb-fv-reader';
-    readerBtn.title = '切换阅读宽度';
+    readerBtn.title = _tr('kb.workbench.viewer_reader_tip', '切换阅读宽度');
     const closeBtn = el('button', 'kb-fv-close');
     closeBtn.innerHTML = _icon('x', 'kb-fv-close-ico');
-    closeBtn.setAttribute('aria-label', '关闭文件阅读器');
-    closeBtn.title = '关闭文件阅读器';
+    closeBtn.setAttribute('aria-label', _tr('kb.workbench.viewer_close', '关闭文件阅读器'));
+    closeBtn.title = _tr('kb.workbench.viewer_close', '关闭文件阅读器');
     closeBtn.type = 'button';
     closeBtn.id = 'kb-fv-close';
-    closeBtn.title = '关闭（Esc）';
+    closeBtn.title = _tr('kb.workbench.viewer_close_esc', '关闭（Esc）');
     headActions.append(zoomOutBtn, zoomLabel, zoomInBtn, sourceBtn, externalBtn, readerBtn, closeBtn);
     head.append(headMain, headActions);
 
     const body = el('div', 'kb-fv-body');
-    const loading = el('div', 'kb-fv-loading', '正在读取文件…');
+    const loading = el('div', 'kb-fv-loading', _tr('kb.workbench.viewer_loading', '正在读取文件…'));
     loading.id = 'kb-fv-loading';
     loading.hidden = true;
     const errorEl = el('div', 'kb-fv-error');
@@ -1613,7 +1613,7 @@
     body.append(loading, errorEl, textEl, mdEl);
 
     const resizeHandle = el('div', 'kb-fv-resize');
-    resizeHandle.title = '拖动调整窗口大小';
+    resizeHandle.title = _tr('kb.workbench.viewer_resize', '拖动调整窗口大小');
 
     dialog.append(head, body, resizeHandle);
     overlay.appendChild(dialog);
@@ -1629,7 +1629,7 @@
     closeBtn.addEventListener('click', () => { _fvHide(); });
     readerBtn.addEventListener('click', () => {
       const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
-      readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
+      readerBtn.textContent = isReader ? _tr('kb.workbench.viewer_reader_back', '⇱ 返回') : _tr('kb.workbench.viewer_reader', '⇱ 阅读模式');
       _fvSaveWindowRect();
     });
     overlay.tabIndex = -1;
@@ -1646,7 +1646,7 @@
       if (!payload) return;
       void window.cogseed.invoke('kb.openExternal', payload).then((r) => {
         if (r && r.ok === false && typeof uiToast === 'function') {
-          uiToast('打开失败：' + (r.error || '未知原因'), { variant: 'warning' });
+          uiToast(_tr('kb.workbench.viewer_open_failed', '打开失败') + '：' + (r.error || _tr('kb.workbench.unknown_reason', '未知原因')), { variant: 'warning' });
         }
       }).catch(() => { /* ignore */ });
     });
