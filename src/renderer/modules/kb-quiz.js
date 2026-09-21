@@ -236,7 +236,7 @@ ${rows}
           <div class="kb-qz-sources" id="kb-qz-sources" hidden></div>
         </div>
         <div class="kb-qz-progress" id="kb-qz-progress">
-          <div class="kb-qz-progress-track"><span class="kb-qz-progress-fill" id="kb-qz-progress-fill"></span></div>
+          ${window.uiProgressBar({ ariaLabel: _tr('kb.quiz.title', '测验'), value: 0, className: 'kb-qz-progress-track', attrs: { id: 'kb-qz-progress-track' } })}
           <span class="kb-qz-progress-text" id="kb-qz-progress-text"></span>
         </div>
         <div class="kb-qz-body" id="kb-qz-body"></div>
@@ -444,14 +444,18 @@ ${rows}
   }
 
   function _renderProgress(summary) {
-    const fill = document.getElementById('kb-qz-progress-fill');
+    const progress = document.getElementById('kb-qz-progress-track');
     const text = document.getElementById('kb-qz-progress-text');
     const pct = Math.max(0, Math.min(100, _progressPercent(summary)));
-    if (fill) fill.style.width = `${pct}%`;
     if (text) {
       text.textContent = _state.phase === 'results'
         ? _tr('kb.quiz.progress_done', `已完成 · 共 ${_state.questions.length} 题`, { total: _state.questions.length })
         : `${_tr('kb.quiz.progress', `第 ${_state.index + 1} / ${_state.questions.length} 题`, { current: _state.index + 1, total: _state.questions.length })} · ${typeLabel(_current())}`;
+    }
+    if (progress) {
+      progress.style.setProperty('--ui-progress-value', `${pct}%`);
+      progress.setAttribute('aria-valuenow', String(pct));
+      if (text?.textContent) progress.setAttribute('aria-label', text.textContent);
     }
   }
 

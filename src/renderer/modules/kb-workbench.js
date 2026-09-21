@@ -5186,7 +5186,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           streamBody.innerHTML = _decorateAnswerHtml(text, ev.evidence);
           // 系统状态行（如“已读取知识库信息”）→ 浅灰小字置于回答顶部
           if (ev.sysNote) {
-            streamBody.insertAdjacentHTML('afterbegin', `<div class="kb-qa-sysnote">${_esc(ev.sysNote)}</div>`);
+            const sysNoteIcon = typeof window.uiIconHtml === 'function'
+              ? window.uiIconHtml('check', 'kb-qa-sysnote-icon')
+              : '';
+            streamBody.insertAdjacentHTML('afterbegin', `<div class="kb-qa-sysnote">${sysNoteIcon}<span>${_esc(ev.sysNote)}</span></div>`);
           }
           // 复制用“可读正文”：渲染后已去掉 markdown 标记与行内溯源锚点
           const readableText = streamBody.textContent || text;          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
@@ -5237,15 +5240,15 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           // 轻工具条：复制回答全文（可读正文，不含行内溯源锚点）
           const tools = document.createElement('div');
           tools.className = 'kb-qa-tools';
-          // 走共享按钮原语，不手搓 <button>：shared-ui-adoption-guard 冻结裸控件债务
           const copyBtn = _elementFromHtml(_uiButton({
-            label: '⧉ 复制',
+            label: _tr('kb.qa.copy_answer', '复制'),
             role: 'ghost',
             size: 'sm',
+            icon: 'copy',
             className: 'kb-qa-tools-btn',
-            attrs: { title: '复制回答全文' },
+            attrs: { title: _tr('kb.qa.copy_answer_title', '复制回答全文') },
           }));
-          copyBtn.addEventListener('click', () => _copyText(readableText, '已复制回答全文'));
+          copyBtn.addEventListener('click', () => _copyText(readableText, _tr('kb.qa.copy_answer_done', '已复制回答全文')));
           tools.appendChild(copyBtn);
           streamBody.appendChild(tools);
           box.scrollTop = box.scrollHeight;
