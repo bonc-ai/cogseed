@@ -20,7 +20,7 @@ describe('legacy ability-asset title migration', () => {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-legacy-lesson-000000000001', candidateId: 'cand-legacy-lesson-1',
       title: 'Reusable experience lesson (requirement-level)', type: 'rule', scope: 'general',
       statement: '处理“N 字资料”类请求时，在交付开头注明实际字数。', evidenceRefs: [{ kind: 'conversation', id: 'c1' }],
-      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'system_precipitated_unverified',
+      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'user_confirmed_unverified',
       status: 'active', maturity: 'seed', version: '1',
       createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
     } as never, 'test');
@@ -28,7 +28,7 @@ describe('legacy ability-asset title migration', () => {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-legacy-gap-00000000000001', candidateId: 'cand-legacy-gap-1',
       title: 'KSTAR rule gap candidate (requirement-level)', type: 'rule', scope: 'general',
       statement: 'For similar tasks, address this rule gap: 用户纠正格式要求后应清理旧文件。', evidenceRefs: [{ kind: 'conversation', id: 'c2' }],
-      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'system_precipitated_unverified',
+      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'user_confirmed_unverified',
       status: 'active', maturity: 'seed', version: '1',
       createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
     } as never, 'test');
@@ -36,7 +36,7 @@ describe('legacy ability-asset title migration', () => {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-fine-0000000000000000000001', candidateId: 'cand-fine-1',
       title: '只读审查方法', type: 'skill_method', scope: 'review',
       statement: '该审查方法可复用。', evidenceRefs: [{ kind: 'conversation', id: 'c3' }],
-      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'automatically_extracted_unverified',
+      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'user_confirmed_unverified',
       status: 'active', maturity: 'seed', version: '1',
       createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
     } as never, 'test');

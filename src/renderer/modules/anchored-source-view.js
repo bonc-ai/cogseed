@@ -672,13 +672,18 @@
    * 与主进程 `transcript_speaker_merge.parseTranscriptBlocks` 同一套识别规则
    * （名字 + 日期时间 / 名字｜时间 / 名字 时间），但这里只用于**阅读着色**，
    * 不改任何文本、不做任何替换。
+   *
+   * 时间**必须允许 1~3 段**（`02:45` / `1:00:35` / `01:00:35`）：腾讯会议同一份
+   * 导出里，整点前给的是相对时钟 `王伟 02:45`，整点后才变成 `李强 01:00:35`。
+   * 只认三段会把整点前的块头全部漏掉（真机事故 2026-09-18：一份 77 分钟的稿子，
+   * 首个被识别的块头落在 `01:00:35`，前面 77% 的内容从不进 DOM，看着像被删了）。
    */
   function splitDialogueBlocks(text) {
     const raw = String(text || '');
     const lines = raw.split('\n');
-    const headerRe = /^(?<speaker>.{1,24}?)\s+(?<date>\d{4}-\d{2}-\d{2})[ T](?<clock>\d{2}:\d{2}:\d{2})\s*$/;
-    const pipeRe = /^(?<speaker>.{1,24}?)\s*[｜|]\s*(?<clock>\d{2}:\d{2}:\d{2})\s*$/;
-    const plainRe = /^(?<speaker>.{1,24}?)\s+(?<clock>\d{2}:\d{2}:\d{2})\s*$/;
+    const headerRe = /^(?<speaker>.{1,24}?)\s+(?<date>\d{4}-\d{2}-\d{2})[ T](?<clock>\d{1,2}(?::\d{2}){1,2})\s*$/;
+    const pipeRe = /^(?<speaker>.{1,24}?)\s*[｜|]\s*(?<clock>\d{1,2}(?::\d{2}){1,2})\s*$/;
+    const plainRe = /^(?<speaker>.{1,24}?)\s+(?<clock>\d{1,2}(?::\d{2}){1,2})\s*$/;
     const blocks = [];
     let cursor = 0;
     let current = null;
@@ -814,18 +819,17 @@
         if (!speakers.includes(block.speaker)) speakers.push(block.speaker);
       }
       pre.dataset.blocks = '1';
-      for (const block of blocks) {
+      /** 渲染一个字符区间；speaker 为空 = 块外文本（首块之前 / 末块之后）。 */
+      const renderRange = (from, to, speaker, clock) => {
         const node = document.createElement('div');
         node.className = 'anchored-source-block';
         // 只用 3 档极淡底色循环（多人时不会变成调色盘）
-        node.dataset.speakerIndex = String(speakers.indexOf(block.speaker) % 3);
+        node.dataset.speakerIndex = String(Math.max(0, speakers.indexOf(speaker)) % 3);
         const head = document.createElement('div');
         head.className = 'anchored-source-block-meta';
-        head.textContent = [block.speaker, block.clock].filter(Boolean).join(' · ');
+        head.textContent = [speaker, clock].filter(Boolean).join(' · ');
         const body = document.createElement('div');
         body.className = 'anchored-source-block-body';
-        const from = Math.max(block.bodyStart ?? block.start, 0);
-        const to = Math.min(block.end, text.length);
         const localStart = Math.max(0, markStart - from);
         const localEnd = Math.max(0, markEnd - from);
         const slice = text.slice(from, to);
@@ -838,10 +842,25 @@
         } else {
           body.appendChild(document.createTextNode(slice));
         }
-        node.appendChild(head);
+        // 块外文本（首块之前 / 末块之后）没有说话人，不挂空 meta 行
+        if (speaker || clock) node.appendChild(head);
         node.appendChild(body);
         pre.appendChild(node);
+      };
+      // 不变量：块头认不出只该影响**排版**，绝不能让内容静默消失。首块之前与
+      // 末块之后的文本同样渲染出来——否则一次正则漏配就是整段原文"被删除"。
+      const headEnd = Math.max(0, Math.min(text.length, blocks[0].start));
+      if (text.slice(0, headEnd).trim()) renderRange(0, headEnd, '', '');
+      for (const block of blocks) {
+        renderRange(
+          Math.max(block.bodyStart ?? block.start, 0),
+          Math.min(block.end, text.length),
+          block.speaker,
+          block.clock,
+        );
       }
+      const tailStart = Math.max(0, Math.min(text.length, blocks[blocks.length - 1].end));
+      if (text.slice(tailStart).trim()) renderRange(tailStart, text.length, '', '');
     } else {
       pre.appendChild(document.createTextNode(text.slice(0, markStart)));
       if (markEnd > markStart) {

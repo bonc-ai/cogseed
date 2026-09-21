@@ -400,14 +400,12 @@
    覆盖在它上面的弹窗按钮的鼠标事件（典型：新建空间弹窗右上角叉号，弹窗顶满
    高时叉号落进顶部拖拽带，点了没反应、连 mousedown 都进不了页面）。
    no-drag 让整个弹窗子树退出拖拽命中，保证弹窗内所有控件可点。 */
-.ws-scrim { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center; padding: var(--space-5); background: var(--color-scrim); -webkit-app-region: no-drag; }
-.ws-dialog { display: flex; flex-direction: column; width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: hidden; border: 1px solid var(--line-hairline); border-radius: var(--radius-dialog); background: var(--surface-raised); box-shadow: var(--shadow-dialog); }
-.ws-dialog-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 var(--space-5); border-bottom: 1px solid var(--line-default); }
+.ws-scrim { z-index: var(--z-modal); -webkit-app-region: no-drag; }
+.ws-dialog-head { justify-content: space-between; }
 .ws-dialog-head > div { display: flex; align-items: center; gap: var(--space-3); }
 .ws-dialog-head h2 { font-size: 17px; font-weight: var(--font-weight-semibold); color: var(--text-heading); }
 .ws-dialog-head span { padding: var(--space-1) var(--space-2); border-radius: var(--radius-chip); color: var(--color-brand-hover); background: var(--color-brand-soft); font-size: var(--font-size-1); font-weight: var(--font-weight-medium); }
 .ws-dialog-head > .ui-icon-button { flex: none; }
-.ws-dialog-body { padding: var(--space-5); overflow-y: auto; }
 .ws-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
 .ws-form-grid label { display: block; }
 .ws-form-grid label.full { grid-column: 1 / -1; }
@@ -431,7 +429,7 @@
 .ws-cap-top span { padding: 2px 6px; border-radius: 99px; color: #5d7568; background: #edf4f0; font-size: var(--font-size-1); }
 .ws-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .ws-chips i { padding: 3px 6px; border: 1px solid #e1e8e4; border-radius: 5px; color: #5f6c64; background: #f5f8f6; font-size: var(--font-size-1); font-style: normal; }
-.ws-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-height: 60px; padding: 0 var(--space-5); border-top: 1px solid var(--line-default); background: var(--surface-subtle); }
+.ws-dialog-foot { align-items: center; justify-content: space-between; gap: var(--space-4); }
 .ws-dialog-foot small { max-width: 430px; color: var(--text-muted); font-size: var(--font-size-1); line-height: 1.5; }
 .ws-dialog-foot > div { display: flex; gap: var(--space-2); }
 @media (max-width: 560px) {
@@ -440,13 +438,12 @@
   .ws-dialog-foot button { flex-shrink: 0; white-space: nowrap; }
 }
 
-.ws-ability-scrim { z-index: var(--z-modal); background: rgba(25,36,30,.46); }
-.ws-ability-dialog { display: flex; flex-direction: column; width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); overflow: hidden; border: 1px solid var(--line-hairline); border-radius: var(--radius-dialog); background: var(--surface-raised); box-shadow: var(--shadow-dialog); }
-.ws-ability-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 var(--space-5); border-bottom: 1px solid var(--line-default); }
+.ws-ability-dialog { width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); }
+.ws-ability-head { justify-content: space-between; }
 .ws-ability-head h2 { font-size: 16px; font-weight: var(--font-weight-semibold); color: var(--text-heading); }
 .ws-ability-head p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--font-size-1); }
 .ws-ability-head > .ui-icon-button { flex: none; }
-.ws-ability-main { display: grid; grid-template-columns: 176px minmax(0,1fr); flex: 1; min-height: 0; }
+.ws-ability-main { display: grid; grid-template-columns: 176px minmax(0,1fr); flex: 1; min-height: 0; padding: 0; }
 /* 无侧栏单列布局：详情页「调整能力 / 主技能」弹窗没有 nav，复用 ws-ability-main
    但去掉 176px 左列，内容占满整行（否则左侧空列、内容被挤右）。 */
 .ws-ability-main.ws-ability-main-solo { grid-template-columns: minmax(0, 1fr); }
@@ -478,15 +475,14 @@
 .ws-option-card.is-secondary > div { padding-right: 58px; }
 .ws-chip-tag { margin-right: 4px; padding: 1px 4px; border-radius: 4px; color: #fff; background: #20a965; font-size: var(--font-size-1); font-style: normal; font-weight: 650; }
 .ws-config-ability-chips span .ws-chip-tag, .ws-chips i .ws-chip-tag { display: inline-block; }
-.ws-ability-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); min-height: 60px; padding: 0 var(--space-5); border-top: 1px solid var(--line-default); background: var(--surface-subtle); }
+.ws-ability-foot { align-items: center; justify-content: flex-end; }
 
 /* ── 加载 / 空态 / 错误态 ── */
 .ws-loading { display: grid; place-items: center; min-height: 60vh; color: #7b857f; font-size: 13px; }
 .ws-detail-loading { display: grid; place-items: center; min-height: 160px; color: var(--muted); font-size: 13px; }
 .ws-recovery-page { width: 100%; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 12px; box-sizing: border-box; }
 .ws-refresh-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: var(--control-height-lg); box-sizing: border-box; padding: var(--space-1) var(--space-4); color: var(--muted); font-size: 13px; }
-.ws-empty { padding: 40px 20px; border: 1px dashed var(--ws-line-strong); border-radius: 12px; color: #87918b; background: #fafcfb; text-align: center; font-size: 12px; line-height: 1.6; }
-.ws-empty small { display: block; margin-top: 6px; color: #a4aca7; font-size: 11px; }
+.ws-option-grid > .ui-empty-state { grid-column: 1 / -1; }
 .ws-load-error { display: grid; place-items: center; gap: 14px; min-height: 60vh; text-align: center; }
 .ws-load-error p { margin: 0; color: #8a6a36; font-size: 12px; }
 
@@ -496,11 +492,6 @@
 .ws-new-task-welcome > div .ui-icon { width: 24px; height: 24px; }
 .ws-new-task-welcome h1 { font-size: 19px; color: #2c3731; }
 .ws-new-task-welcome p { margin: 10px auto 0; max-width: 480px; color: #7d8781; font-size: 11px; line-height: 1.7; }
-.ws-empty-current { padding: 52px 12px; border: 1px dashed #dce4df; border-radius: 9px; background: #fbfdfc; text-align: center; }
-.ws-empty-current > span { display: grid; place-items: center; width: 42px; height: 42px; margin: 0 auto; border-radius: 12px; color: #7ba28e; background: #edf6f1; }
-.ws-empty-current > span .ui-icon { width: 22px; height: 22px; }
-.ws-empty-current strong { display: block; margin: 10px 0 4px; color: #68746d; font-size: 11px; }
-.ws-empty-current p { max-width: 190px; margin: 0 auto; color: #9aa39e; font-size: var(--font-size-1); line-height: 1.65; }
 
 /* ── toast ── */
 .ws-toast {

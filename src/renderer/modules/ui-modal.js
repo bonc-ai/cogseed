@@ -100,7 +100,8 @@
         if (value.dismissible !== false) {
           event.preventDefault();
           event.stopImmediatePropagation();
-          close('escape');
+          if (typeof value.onRequestClose === 'function') value.onRequestClose('escape');
+          else close('escape');
         }
         return;
       }

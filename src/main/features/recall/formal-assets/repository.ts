@@ -35,6 +35,8 @@ function payloadFor(record: RecallAbilityAssetRecord): FormalAssetPayload {
       return { kind: 'personal' };
     case 'template':
       return { kind: 'template' };
+    case 'fact':
+      return { kind: 'fact' };
     default:
       return { kind: 'rule' };
   }

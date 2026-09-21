@@ -37,7 +37,7 @@ import * as path from 'node:path';
 import { isSystemTmpDir } from '../../util/path-sandbox';
 import { getWorkspacePath } from '../user_workspace';
 import { getConversation } from '../chats';
-import { readState, setWorkspaceDirOnce } from './state';
+import { readState, replaceWorkspaceDir, setWorkspaceDirOnce } from './state';
 import { PLACEHOLDER_TITLES } from './conv_title';
 import { createLogger } from '../../logger';
 
@@ -145,7 +145,7 @@ function uniquifySlug(workspaceRoot: string, slug: string): string {
 /** 会话工作区随空间归属迁移（方案 Y：解绑/换空间/删空间都不丢文件）。
  *  fromSpaceId/toSpaceId：null = userWorkSpace 根；非空 = 空间工作区目录。
  *  依据 state.workspace_dir（相对 slug）计算新旧落点；同盘 rename，跨设备 copy+rm。
- *  幂等：源不存在 / 目标已存在（slug 冲突，别的会话占了）→ 跳过不搬，避免覆盖/串目录。
+ *  幂等：源不存在 → 跳过不搬；目标 slug 被占用 → 选择唯一后缀，避免覆盖/串目录。
  *  失败只告警（文件留旧位置，由惰性迁移兜底）。 */
 export async function migrateConversationWorkspace(
   uid: string,
@@ -164,30 +164,44 @@ export async function migrateConversationWorkspace(
   const from = fromSpaceId
     ? path.join(spaceWorkspaceDir(uid, fromSpaceId), workspaceDir)
     : path.join(getWorkspacePath(uid), workspaceDir);
-  const to = toSpaceId
-    ? path.join(spaceWorkspaceDir(uid, toSpaceId), workspaceDir)
-    : path.join(getWorkspacePath(uid), workspaceDir);
-  if (path.resolve(from) === path.resolve(to)) return { moved: false };
+  const destinationRoot = toSpaceId
+    ? spaceWorkspaceDir(uid, toSpaceId)
+    : getWorkspacePath(uid);
+  const intendedTo = path.join(destinationRoot, workspaceDir);
+  if (path.resolve(from) === path.resolve(intendedTo)) return { moved: false };
   if (!fs.existsSync(from)) return { moved: false };
-  if (fs.existsSync(to)) return { moved: false }; // 目标被别的会话占用 → 不覆盖
+  const destinationSlug = uniquifySlug(destinationRoot, workspaceDir);
+  const to = path.join(destinationRoot, destinationSlug);
 
   try {
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.renameSync(from, to);
-    log.info(`migrated conv workspace uid=${uid} cid=${cid} ${fromSpaceId ?? 'user'}->${toSpaceId ?? 'user'} dir=${workspaceDir}`);
-    return { moved: true };
   } catch (err) {
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.cpSync(from, to, { recursive: true });
+      fs.cpSync(from, to, { recursive: true, errorOnExist: true, force: false });
       fs.rmSync(from, { recursive: true, force: true });
-      log.info(`migrated conv workspace (copy) uid=${uid} cid=${cid} dir=${workspaceDir}`);
-      return { moved: true };
     } catch (err2) {
       log.warn(`migrate conv workspace failed cid=${cid}: ${(err2 as Error).message}`);
       return { moved: false };
     }
   }
+
+  if (destinationSlug !== workspaceDir) {
+    try {
+      const persisted = await replaceWorkspaceDir(uid, cid, workspaceDir, destinationSlug);
+      if (persisted.workspace_dir !== destinationSlug) {
+        log.warn(`workspace slug changed during migration cid=${cid}; moved files remain at dir=${destinationSlug}`);
+        return { moved: false };
+      }
+    } catch (err) {
+      log.warn(`persist migrated workspace slug failed cid=${cid}: ${(err as Error).message}`);
+      return { moved: false };
+    }
+  }
+
+  log.info(`migrated conv workspace uid=${uid} cid=${cid} ${fromSpaceId ?? 'user'}->${toSpaceId ?? 'user'} dir=${destinationSlug}`);
+  return { moved: true };
 }
 
 export async function getConversationWorkspacePath(uid: string, cid: string): Promise<string> {

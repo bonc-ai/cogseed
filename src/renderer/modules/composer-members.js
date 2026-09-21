@@ -903,24 +903,29 @@
     return rows.filter((row) => `${row.name} ${row.description}`.toLowerCase().includes(q));
   }
 
-  /** 成员行：DOM 构建（图标仍走 icons.js），新模块不引入裸控件字面量。 */
+  /** 成员行：勾选控件必须来自共享原语（shared-ui-adoption-guard），
+   *  行本身只是 agents.js 绑定的点击目标，因此用 div 承载、由 uiCheckbox
+   *  提供勾选状态与可访问名（tabindex=-1：焦点仍由选择器输入框统一托管，
+   *  Enter 走 .active 行的既有键盘路径）。 */
   function createMemberRow(row, mode) {
-    const item = document.createElement('button');
-    item.type = 'button';
+    const item = document.createElement('div');
     item.className = `skill-picker-item composer-member-row${row.checked ? ' is-checked' : ''}`;
     item.dataset.composerMember = row.key;
     item.dataset.memberKind = row.kind;
     item.dataset.memberName = row.name;
-    item.setAttribute('aria-pressed', row.checked ? 'true' : 'false');
-    item.setAttribute('aria-label', mode === 'mentions'
+    const rowLabel = mode === 'mentions'
       ? tr('composer.members.mention_aria', '点名 {name}', { name: row.name })
-      : tr('composer.members.member_aria', '选择会话成员 {name}', { name: row.name }));
+      : tr('composer.members.member_aria', '选择会话成员 {name}', { name: row.name });
 
     const check = document.createElement('span');
     check.className = 'composer-member-check';
-    check.setAttribute('aria-hidden', 'true');
-    if (typeof window.uiIconHtml === 'function') {
-      check.innerHTML = window.uiIconHtml('check', 'composer-member-tick');
+    if (typeof root.uiCheckbox === 'function') {
+      check.innerHTML = root.uiCheckbox({
+        id: `composer-member-${String(row.key).replace(/[^A-Za-z0-9_-]/g, '-')}`,
+        label: rowLabel,
+        checked: !!row.checked,
+        attrs: { 'data-composer-member-check': row.key, tabindex: '-1' },
+      });
     }
     item.appendChild(check);
 

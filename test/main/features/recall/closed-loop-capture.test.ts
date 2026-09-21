@@ -128,6 +128,7 @@ const semanticOptions = {
 
 describe('Recall selected-conversation closed loop', () => {
   it('keeps historical selection manual until explicit extraction and confirmation', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const { capture, candidates, assets, promptInjection, settings } = await modules();
     await settings.updateRecallCaptureSettings(USER_ID, { reviewPolicy: 'manual' });
 

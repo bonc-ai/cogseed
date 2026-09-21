@@ -1,0 +1,81 @@
+{
+  "message": "success",
+  "data": {
+    "code": 0,
+    "minutes": {
+      "audio_detect": 1,
+      "keywords": [
+        "确认",
+        "认知种子",
+        "复用"
+      ],
+      "lang": "zh",
+      "paragraphs": [
+        {
+          "end_time": "00:10",
+          "lang": "zh",
+          "pid": "0",
+          "sentences": [
+            {
+              "end_time": "00:10",
+              "sid": "0",
+              "start_time": "00:01",
+              "words": [
+                {
+                  "end_time": "00:10",
+                  "start_time": "00:01",
+                  "text": "（示例文本，已脱敏）",
+                  "wid": "0"
+                }
+              ]
+            }
+          ],
+          "speaker": {
+            "user_id": "000000000000000012",
+            "user_name": "赵丽霞"
+          },
+          "start_time": "00:01"
+        },
+        {
+          "end_time": "00:14",
+          "lang": "zh",
+          "pid": "1",
+          "sentences": [
+            {
+              "end_time": "00:07",
+              "sid": "1",
+              "start_time": "00:04",
+              "words": [
+                {
+                  "end_time": "00:07",
+                  "start_time": "00:04",
+                  "text": "（示例文本，已脱敏）",
+                  "wid": "1"
+                }
+              ]
+            },
+            {
+              "end_time": "00:14",
+              "sid": "2",
+              "start_time": "00:10",
+              "words": [
+                {
+                  "end_time": "00:14",
+                  "start_time": "00:10",
+                  "text": "（示例文本，已脱敏）",
+                  "wid": "2"
+                }
+              ]
+            }
+          ],
+          "speaker": {
+            "user_id": "00000000000000000000001",
+            "user_name": "Example User"
+          },
+          "start_time": "00:04"
+        }
+      ]
+    },
+    "more": false
+  }
+}

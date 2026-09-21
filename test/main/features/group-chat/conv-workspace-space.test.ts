@@ -18,6 +18,13 @@ beforeEach(async () => {
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
+  const userWorkspace = await import('../../../../src/main/features/user_workspace');
+  const selectedWorkspace = path.join(tmpDir, 'user-workspace');
+  fs.mkdirSync(selectedWorkspace, { recursive: true });
+  expect(userWorkspace.setWorkspacePath(UID, selectedWorkspace)).toEqual({
+    ok: true,
+    path: selectedWorkspace,
+  });
 });
 
 afterEach(() => {
@@ -106,6 +113,25 @@ describe('conv_workspace › 方案 Y：归属变更工作区随迁（不丢文�
     const p2 = await convWs.getConversationWorkspacePath(UID, cid);
     expect(p2).toBe(path.join(getWorkspacePath(UID), '任务'));
     expect(fs.existsSync(path.join(p2, '成果.docx'))).toBe(true); // 文件随迁
+  });
+
+  it('目标 slug 已占用时迁到唯一目录并更新会话工作区状态', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const { getWorkspacePath } = await import('../../../../src/main/features/user_workspace');
+    const { cid } = await makeBoundConv('冲突空间');
+    const occupied = path.join(getWorkspacePath(UID), '任务');
+    fs.mkdirSync(occupied, { recursive: true });
+    fs.writeFileSync(path.join(occupied, '已有.txt'), 'keep');
+
+    await chats.setConversationSpace(UID, cid, null);
+
+    const migrated = path.join(getWorkspacePath(UID), '任务-2');
+    expect(await convWs.getConversationWorkspacePath(UID, cid)).toBe(migrated);
+    expect(fs.readFileSync(path.join(occupied, '已有.txt'), 'utf8')).toBe('keep');
+    expect(fs.readFileSync(path.join(migrated, '成果.docx'), 'utf8')).toBe('x');
+    expect((await state.readState(UID, cid)).workspace_dir).toBe('任务-2');
   });
 
   it('换空间 A→B → 工作区从 A 迁到 B（文件不丢）', async () => {
