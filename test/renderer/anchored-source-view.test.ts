@@ -809,4 +809,93 @@ describe('原文依据高亮的落点口径（真机：高亮多涂半句）', (
 
     expect(highlightedText(viewer, raw, '改写计划（第 2 版）')).toBe('改写计划');
   });
+
+  /**
+   * 行内元素会把一句话切成多个文本节点（`**要点**：先做词表` 渲染成
+   * `<strong>要点</strong>：先做词表`）。这类摘录此前匹配不上整句，掉到"首个实词"
+   * 兜底，真机上看到的就是"只涂了半句"。
+   */
+  describe('摘录被行内元素切开（跨文本节点）', () => {
+    /** 假 DOM：若干文本节点（可选包一层行内元素）+ 只记区间的 Range。 */
+    function buildTree(parts: Array<{ tag?: string; text: string }>) {
+      const flat: any[] = [];
+      const children: any[] = [];
+      let lastRange: any = null;
+      const ownerDocument: any = {
+        createRange: () => {
+          const range: any = { startNode: null, startOffset: 0, endNode: null, endOffset: 0 };
+          range.setStart = (node: any, offset: number) => { range.startNode = node; range.startOffset = offset; };
+          range.setEnd = (node: any, offset: number) => { range.endNode = node; range.endOffset = offset; };
+          // 与真实 DOM 一致：跨节点时 surroundContents 抛错，必须走 extractContents
+          range.surroundContents = () => {
+            if (range.startNode !== range.endNode) throw new Error('InvalidStateError');
+          };
+          range.extractContents = () => ({ nodeType: 11 });
+          range.insertNode = () => {};
+          lastRange = range;
+          return range;
+        },
+      };
+      for (const part of parts) {
+        const textNode: any = { nodeType: 3, nodeValue: part.text, ownerDocument };
+        flat.push(textNode);
+        if (!part.tag) {
+          children.push(textNode);
+          continue;
+        }
+        children.push({ nodeType: 1, childNodes: [textNode], querySelectorAll: () => [] });
+      }
+      const host: any = { nodeType: 1, childNodes: children, querySelectorAll: () => [] };
+      /** 按记录的区间从假树上切出被标记的原文（测试自己算，不复用被测映射）。 */
+      const marked = () => {
+        if (!lastRange || !lastRange.startNode || !lastRange.endNode) return null;
+        const from = flat.indexOf(lastRange.startNode);
+        const to = flat.indexOf(lastRange.endNode);
+        if (from < 0 || to < 0) return null;
+        let out = '';
+        for (let i = from; i <= to; i++) {
+          const raw = String(flat[i].nodeValue || '');
+          out += raw.slice(i === from ? lastRange.startOffset : 0, i === to ? lastRange.endOffset : raw.length);
+        }
+        return out;
+      };
+      return { host, marked };
+    }
+
+    it('跨 <strong> 的摘录整句都被涂上（不再只涂首个实词）', () => {
+      const viewer = loadViewer();
+      const { host, marked } = buildTree([
+        { text: '前置说明一句话。' },
+        { tag: 'strong', text: '要点' },
+        { text: '：先做词表，再改检索。后面还有很多别的说明文字。' },
+      ]);
+
+      expect(utils(viewer).highlight(host, '**要点**：先做词表，再改检索')).toBe(true);
+      expect(marked()).toBe('要点：先做词表，再改检索');
+    });
+
+    it('精确命中优先于实词兜底：前面段落里出现同名词也不许抢落点', () => {
+      const viewer = loadViewer();
+      const { host, marked } = buildTree([
+        { text: '先做词表这句话在前面另一个段落里出现过。' },
+        { text: '真正的摘录是：' },
+        { tag: 'strong', text: '要点' },
+        { text: '：先做词表，再改检索。' },
+      ]);
+
+      expect(utils(viewer).highlight(host, '**要点**：先做词表，再改检索')).toBe(true);
+      expect(marked()).toBe('要点：先做词表，再改检索');
+    });
+
+    it('单节点内的摘录仍然走单节点精确路径（跨节点逻辑不抢单节点结果）', () => {
+      const viewer = loadViewer();
+      const { host, marked } = buildTree([
+        { text: '前置说明一句话。' },
+        { text: '检索改写要先用词表兜住转写错词。' },
+      ]);
+
+      expect(utils(viewer).highlight(host, '检索改写要先用词表兜住转写错词')).toBe(true);
+      expect(marked()).toBe('检索改写要先用词表兜住转写错词');
+    });
+  });
 });
