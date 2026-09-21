@@ -35,6 +35,7 @@ Promote a new shared component only when multiple pages need the same stable rol
 5. Add the smallest state and interaction matrix that makes the changed contract observable. Include relevant default, hover, active, focus, disabled, loading, error, empty, destructive, keyboard, narrow-layout, or recovery states; do not add irrelevant matrix cells mechanically.
 6. Add tests at public component or page-integration seams. Cover the changed invariant and its failure or recovery path where applicable; avoid assertions tied only to private implementation structure.
 7. Integrate into a real business page only when the target contract has been confirmed or the current request explicitly activates that integration. Reuse the shared component while preserving the page's existing data, validation, scheduling, and IPC behavior.
+8. Before adding page-local structure, read `docs/renderer-structural-registry.md`. A structure that is not in the shared API needs an entry there (new ID) in the same change; when a shared seam later takes over, mark the entry `Migrated` instead of deleting it, and lower the matching baseline in `test/renderer/shared-ui-adoption-guard.test.ts`.
 
 ## Verify proportionately
 
