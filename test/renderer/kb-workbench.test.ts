@@ -892,11 +892,11 @@ describe('KB workbench (S1 skeleton)', () => {
     expect((qaMarkup.match(/<button\b/g) || [])).toHaveLength(1);
     expect(qaMarkup).toContain('class="kb-qa-model-chip"');
     expect(attachments).toContain("_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger'");
-    expect(historyPanel).toContain("_uiButton({ label: '新建对话'");
-    expect(historyPanel).toContain("_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger'");
-    expect(askMarkup).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-qa-more-btn'");
-    expect(askMarkup).toContain("_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost'");
-    expect(askMarkup).toContain("_uiButton({ label: '删除', icon: 'trash-2', role: 'danger'");
+    expect(historyPanel).toContain("_uiButton({ label: _tr('kb.workbench.qa_new_session', '新建对话')");
+    expect(historyPanel).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_history_delete', '删除会话'), icon: 'trash-2', variant: 'danger'");
+    expect(askMarkup).toContain("_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-qa-more-btn'");
+    expect(askMarkup).toContain("_uiButton({ label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', role: 'ghost'");
+    expect(askMarkup).toContain("_uiButton({ label: _tr('kb.workbench.menu_delete', '删除'), icon: 'trash-2', role: 'danger'");
     expect(`${attachments}\n${historyPanel}`).not.toMatch(/[✕🗑＋]/u);
     expect(historyPanel).toMatch(/onHistoryKeydown[\s\S]*?event\.key !== 'Escape'/);
     expect(historyPanel).toMatch(/closePanel\(restoreFocus = true\)[\s\S]*?trigger\?\.focus\(\)/);
@@ -925,8 +925,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).not.toContain("const copyBtn = document.createElement('button')");
     expect(source).toContain("window.uiIconHtml('check', 'kb-qa-sysnote-icon')");
 
-    expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
-    expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
+    expect(modelPicker).toContain("_uiIconButton({\n      label: _tr('kb.workbench.qa_model_close', '关闭模型选择弹窗'),\n      icon: 'x'");
+    expect(modelPicker).toContain("_uiButton({\n      label: _tr('kb.workbench.qa_model_manage', '去设置管理模型'),\n      role: 'secondary'");
     expect(modelPicker).toContain("_mountKbDialog({");
     expect(modelPicker).toContain("initialFocus: '[aria-pressed=\"true\"]'");
     expect(modelPicker).toContain("fallbackFocus: '#kb-qa-tools'");
@@ -1030,7 +1030,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).toContain("throw new Error('knowledge base requires uiEmptyState')");
     expect(source).not.toContain('class="kb-empty"');
     expect(source).not.toMatch(/kb-(?:qa-model|qa-history|import-dlg|share-manage|share-cogseed-members)-empty/);
-    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })");
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.qa_history_empty', '暂无历史对话') })");
     expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.cogseed_members_empty', '暂无待审申请') })");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");

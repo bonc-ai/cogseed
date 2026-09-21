@@ -4798,17 +4798,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     panel.id = 'kb-qa-history-panel';
     panel.innerHTML = `
       <div class="kb-qa-history-head">
-        <span>会话历史</span>
-        ${_uiIconButton({ label: '关闭会话历史', icon: 'x', className: 'kb-qa-history-close' })}
+        <span>${_esc(_tr('kb.workbench.qa_history', '会话历史'))}</span>
+        ${_uiIconButton({ label: _tr('kb.workbench.qa_history_close', '关闭会话历史'), icon: 'x', className: 'kb-qa-history-close' })}
       </div>
-      ${_uiButton({ label: '新建对话', role: 'secondary', size: 'sm', icon: 'plus', className: 'kb-qa-history-new', attrs: { id: 'kb-qa-history-new' } })}
+      ${_uiButton({ label: _tr('kb.workbench.qa_new_session', '新建对话'), role: 'secondary', size: 'sm', icon: 'plus', className: 'kb-qa-history-new', attrs: { id: 'kb-qa-history-new' } })}
       <div class="kb-qa-history-list">${_state.qaSessions.length
         ? _state.qaSessions.map((s) => `<div class="kb-qa-history-item${s.id === _state.qaSessionId ? ' is-active' : ''}" data-hist-id="${_esc(s.id)}">
-            <span class="kb-qa-history-title">${_esc(s.title || '新对话')}</span>
-            <span class="kb-qa-history-meta">${s.msgs ? s.msgs.length : 0} 条 · ${_qaFmtTime(s.ts)}</span>
-            ${_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger', className: 'kb-qa-history-del', attrs: { 'data-hist-del': s.id } })}
+            <span class="kb-qa-history-title">${_esc(s.title || _tr('kb.workbench.qa_history_untitled', '新对话'))}</span>
+            <span class="kb-qa-history-meta">${_esc(_tr('kb.workbench.qa_history_meta', '{count} 条 · {time}', { count: s.msgs ? s.msgs.length : 0, time: _qaFmtTime(s.ts) }))}</span>
+            ${_uiIconButton({ label: _tr('kb.workbench.qa_history_delete', '删除会话'), icon: 'trash-2', variant: 'danger', className: 'kb-qa-history-del', attrs: { 'data-hist-del': s.id } })}
           </div>`).join('')
-        : _uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })}
+        : _uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.qa_history_empty', '暂无历史对话') })}
       </div>`;
     document.body.appendChild(panel);
     const trigger = document.getElementById('kb-qa-history');
@@ -5134,10 +5134,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     user.className = 'kb-qa-msg is-user';
     user.innerHTML = `<div class="kb-qa-msg-body">${_esc(q)}</div>
       <div class="kb-qa-msg-more">
-        ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-qa-more-btn' })}
+        ${_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-qa-more-btn' })}
         <div class="kb-qa-msg-menu" hidden>
-          ${_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-qa-msg-menu-item', attrs: { 'data-qa-act': 'rename' } })}
-          ${_uiButton({ label: '删除', icon: 'trash-2', role: 'danger', size: 'sm', className: 'kb-qa-msg-menu-item', attrs: { 'data-qa-act': 'delete' } })}
+          ${_uiButton({ label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-qa-msg-menu-item', attrs: { 'data-qa-act': 'rename' } })}
+          ${_uiButton({ label: _tr('kb.workbench.menu_delete', '删除'), icon: 'trash-2', role: 'danger', size: 'sm', className: 'kb-qa-msg-menu-item', attrs: { 'data-qa-act': 'delete' } })}
         </div>
       </div>`;
     box.appendChild(user);
@@ -5163,7 +5163,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           _maybeShowQaHint();
         } else if (act === 'rename') {
           let next = null;
-          try { next = typeof uiPrompt === 'function' ? await uiPrompt('重命名问题：', body.textContent) : window.prompt('重命名问题：', body.textContent); }
+          try { next = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.qa_rename_prompt', '重命名问题：'), body.textContent) : window.prompt(_tr('kb.workbench.qa_rename_prompt', '重命名问题：'), body.textContent); }
           catch (_) { return; }
           if (next && next.trim()) body.textContent = next.trim();
         }
@@ -5182,7 +5182,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
     if (!window.cogseed || typeof window.cogseed.stream !== 'function') {
       ai.classList.remove('is-typing');
-      streamBody.textContent = '问答服务不可用';
+      streamBody.textContent = _tr('kb.workbench.qa_unavailable', '问答服务不可用');
       return;
     }
     let text = '';
@@ -5254,9 +5254,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             card.className = 'kb-qa-suggest';
             const txt = document.createElement('span');
             txt.className = 'kb-qa-suggest-txt';
-            txt.innerHTML = `${_icon('folder')} 当前库未找到，可能在「<b>${_esc(sug.dir)}</b>」：<code>${_esc(sug.path)}</code>`;
+            txt.innerHTML = _tr('kb.workbench.qa_lib_missing', '{icon} 当前库未找到，可能在「<b>{dir}</b>」：<code>{path}</code>', { icon: _icon('folder'), dir: _esc(sug.dir), path: _esc(sug.path) });
             const goBtn = _elementFromHtml(_uiButton({
-              label: '前往该库提问',
+              label: _tr('kb.workbench.qa_go_library', '前往该库提问'),
               role: 'primary',
               size: 'sm',
               iconEnd: 'arrow-right',
@@ -5287,13 +5287,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'error') {
           ai.classList.remove('is-typing');
-          streamBody.textContent = '出错了：' + (ev.text || 'unknown');
+          streamBody.textContent = _tr('kb.workbench.qa_error', '出错了：') + (ev.text || 'unknown');
         }
       });
       if (handle && handle.promise) handle.promise.catch(() => { /* ignore */ });
     } catch (err) {
       ai.classList.remove('is-typing');
-      streamBody.textContent = '出错了：' + ((err && err.message) || String(err));
+      streamBody.textContent = _tr('kb.workbench.qa_error', '出错了：') + ((err && err.message) || String(err));
     }
   }
 
@@ -6213,14 +6213,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     pop.setAttribute('aria-modal', 'true');
     pop.setAttribute('aria-labelledby', 'kb-qa-model-pop-title');
     const head = el('div', 'kb-qa-model-pop-head');
-    const title = el('span', 'kb-qa-model-pop-title', '选择问答模型');
+    const title = el('span', 'kb-qa-model-pop-title', _tr('kb.workbench.qa_pick_model', '选择问答模型'));
     title.id = 'kb-qa-model-pop-title';
-    head.append(title, el('span', 'kb-qa-model-pop-hint', '已配置模型，点击即切换'));
+    head.append(title, el('span', 'kb-qa-model-pop-hint', _tr('kb.workbench.qa_model_hint', '已配置模型，点击即切换')));
     const closeBtn = _elementFromHtml(_uiIconButton({
-      label: '关闭模型选择弹窗',
+      label: _tr('kb.workbench.qa_model_close', '关闭模型选择弹窗'),
       icon: 'x',
       className: 'kb-qa-model-pop-close',
-      title: '关闭（Esc）',
+      title: _tr('kb.workbench.viewer_close_esc', '关闭（Esc）'),
     }));
     head.appendChild(closeBtn);
     pop.appendChild(head);
@@ -6235,15 +6235,15 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const defIco = el('span', 'kb-qa-model-item-check');
     if (!currentId) defIco.innerHTML = _icon('check', 'ui-icon');
     const defMain = el('span', 'kb-qa-model-item-main');
-    defMain.append(el('span', 'kb-qa-model-item-name', '默认模型'), el('span', 'kb-qa-model-item-sub', '系统配置的默认问答模型'));
+    defMain.append(el('span', 'kb-qa-model-item-name', _tr('kb.workbench.qa_default_model', '默认模型')), el('span', 'kb-qa-model-item-sub', _tr('kb.workbench.qa_model_default_sub', '系统配置的默认问答模型')));
     defRow.append(defIco, defMain);
     list.appendChild(defRow);
 
     if (!entries.length) {
       list.appendChild(_elementFromHtml(_uiEmptyState({
         kind: 'explained',
-        title: '尚未配置模型',
-        hint: '到设置中配置一次 API Key 后即可在此选择',
+        title: _tr('kb.workbench.qa_model_none_title', '尚未配置模型'),
+        hint: _tr('kb.workbench.qa_model_none_hint', '到设置中配置一次 API Key 后即可在此选择'),
       })));
     } else {
       for (const e of entries) {
@@ -6266,7 +6266,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
     const foot = el('div', 'kb-qa-model-pop-foot');
     const manageBtn = _elementFromHtml(_uiButton({
-      label: '去设置管理模型',
+      label: _tr('kb.workbench.qa_model_manage', '去设置管理模型'),
       role: 'secondary',
       icon: 'settings',
       className: 'kb-qa-model-pop-manage',
