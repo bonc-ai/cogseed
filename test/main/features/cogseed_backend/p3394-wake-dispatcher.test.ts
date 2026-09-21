@@ -186,6 +186,52 @@ describe('CogSeed P3394 wake dispatcher', () => {
     expect(recordRunDispatch).not.toHaveBeenCalled();
   });
 
+  it('admits a dispatched actor whose run has no actor row yet', async () => {
+    // Real-run shape: the user typed the @names (so the run snapshot has no
+    // members/mentions) and the Commander then dispatched to that agent, which
+    // staged this Wake. recordRunDispatch is the durable admission seam and
+    // already creates the missing actor row; the pre-check must not mistake
+    // "no row yet" for "stopped" and refuse the approval forever.
+    const before = { run_id: 'run-no-actor', status: 'running', actors: [] };
+    const after = {
+      ...before,
+      actors: [{
+        agent_id: 'agent-1',
+        terminal: 'pending',
+        dispatched: ['turn-wake-wake-no-actor'],
+      }],
+    };
+    readGroupChatRun.mockResolvedValueOnce(before);
+    recordRunDispatch.mockResolvedValueOnce(after);
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    await cogseedWakeDispatcher.dispatch('user-1', {
+      id: 'wake-no-actor',
+      conversation_id: 'cid-1',
+      execution_domain: 'group_chat',
+      execution_scope_id: 'cid-1',
+      agent_id: 'agent-1',
+      source: 'dispatch_to',
+      source_actor_id: 'commander',
+      objective: 'Admit on first approval',
+      context_scope: ['conversation:cid-1'],
+      behavior_scope: ['dispatch_to'],
+      dispatch_payload: { text: 'Admit on first approval', run_id: 'run-no-actor' },
+      status: 'approved',
+      created_at: '2026-09-22T00:00:00.000Z',
+      updated_at: '2026-09-22T00:00:00.000Z',
+    });
+
+    expect(recordRunDispatch).toHaveBeenCalledWith(
+      'user-1',
+      'cid-1',
+      'run-no-actor',
+      'agent-1',
+      'turn-wake-wake-no-actor',
+    );
+    expect(startCogSeedTask).toHaveBeenCalled();
+  });
+
   it('fails closed when a Wake references a missing or unreadable run', async () => {
     readGroupChatRun.mockResolvedValueOnce(null);
     const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
