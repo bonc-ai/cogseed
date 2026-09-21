@@ -6582,7 +6582,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       ${_uiButton({ label: _tr('kb.workbench.menu_pin', '置顶'), icon: 'pin', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'pin' } })}
       ${_uiButton({ label: _tr('kb.workbench.menu_tag', '编辑标签'), icon: 'tag', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'tag' } })}
       ${_uiButton({ label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'rename' } })}
-      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm" role="button" tabindex="0">${_icon('lock', 'kb-ctx-menu-icon')}<span>${_tr('kb.workbench.menu_perm', '成员权限')}</span><span class="kb-import-caret">${_icon('chevron-right', 'kb-ctx-menu-caret-icon')}</span>
+      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm" role="button" tabindex="0">${_icon('lock', 'kb-ctx-menu-icon')}<span>${_esc(_tr('kb.workbench.menu_perm', '成员权限'))}</span><span class="kb-import-caret">${_icon('chevron-right', 'kb-ctx-menu-caret-icon')}</span>
         <div class="kb-ctx-sub" data-sub="perm">
           ${_uiButton({ label: _tr('kb.workbench.perm_view_export', '内容可查看和导出'), icon: 'check', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item is-selected', attrs: { 'data-perm': 'view_export' } })}
           ${_uiButton({ label: _tr('kb.workbench.perm_view_only', '内容可查看但不可导出'), role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'view_only' } })}
@@ -7374,9 +7374,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
               <div class="kb-share-manage-item" data-idx="${idx}">
                 <div class="kb-share-manage-item-head">
                   <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
-                  <span class="kb-share-manage-item-badge is-${item.access}">${{ anyone: _tr('kb.workbench.share_access_anyone', '公开'), tenant: _tr('kb.workbench.share_access_tenant', '组织内'), private: _tr('kb.workbench.share_access_private', '私密') }[item.access] || item.access}</span>
+                  <span class="kb-share-manage-item-badge is-${item.access}">${_esc({ anyone: _tr('kb.workbench.share_access_anyone', '公开'), tenant: _tr('kb.workbench.share_access_tenant', '组织内'), private: _tr('kb.workbench.share_access_private', '私密') }[item.access] || item.access)}</span>
                 </div>
-                <div class="kb-share-manage-item-meta">${_tr('kb.workbench.share_manage_item_meta', '{count} 个文档 · {url}', { count: item.fileCount, url: _esc(item.url) })}</div>
+                <div class="kb-share-manage-item-meta">${_esc(_tr('kb.workbench.share_manage_item_meta', '{count} 个文档 · {url}', { count: item.fileCount, url: item.url }))}</div>
                 <div class="kb-share-manage-item-actions">
                   ${_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
                   ${_uiButton({ label: _tr('kb.workbench.share_code_short', '知识码'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
