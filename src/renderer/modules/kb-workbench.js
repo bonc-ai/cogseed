@@ -2211,7 +2211,7 @@
     style.id = 'kb-file-viewer-style';
     style.textContent = `
       .kb-fv-overlay {
-        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(15, 23, 42, .5);
         display: flex; align-items: center; justify-content: center; padding: 24px;
       }
       .kb-fv-overlay[hidden] { display: none; }
@@ -2252,7 +2252,7 @@
       .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
       .kb-fv-resize {
         position: absolute; right: 0; bottom: 0;
-        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: var(--z-raised);
       }
       .kb-fv-resize::after {
         content: ''; position: absolute; right: 5px; bottom: 5px;
@@ -2263,7 +2263,7 @@
       .kb-fv-resize:hover::after { border-color: #0E9F6E; }
       /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
          （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
-      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: var(--z-sticky); }
       body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
       .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
       .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
