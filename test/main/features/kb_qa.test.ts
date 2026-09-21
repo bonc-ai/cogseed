@@ -90,9 +90,14 @@ describe('kb_qa kbAskStream', () => {
     const events = await collect(kbAskStream('u1', { question: '这个知识库讲的什么', dir: '班级建设资料' }, { stream } as any));
     const final = events[events.length - 1];
     expect(final.type).toBe('final');
-    expect(final.text).toContain('一句话概括：这个库主要沉淀班级建设与复盘资料。');
-    expect(final.text).toContain('班级建设资料');
-    expect(final.text).toContain('a.pdf');
+    expect(final.sysNote).toBe('已读取知识库信息');
+    // 知识库助手式模板：总览 → 📚 文档内容（编号+加粗文件名+——）→ 💡 一句话总结
+    expect(final.text).toContain('「班级建设资料」共收录 2 份已解析文档');
+    expect(final.text).toContain('📚 文档内容');
+    expect(final.text).toContain('1. **a.pdf** —— 班级建设要点');
+    expect(final.text).toContain('2. **b.md** —— 复盘记录');
+    expect(final.text).toContain('💡 一句话总结');
+    expect(final.text).toContain('这个库主要沉淀班级建设与复盘资料。');
     expect(askMaterialsMock).not.toHaveBeenCalled();
     expect(kbSummarizeMock).toHaveBeenCalledWith(
       'u1',
