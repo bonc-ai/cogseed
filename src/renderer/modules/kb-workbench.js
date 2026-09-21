@@ -72,6 +72,7 @@
    * - `data-wb-title`       → title 属性
    * - `data-wb-placeholder` → placeholder 属性（uiInput / uiTextarea）
    * - `data-wb-label`       → 共享按钮的可见文字（uiButton 的 label span / 图标按钮的 aria-label）
+   * - `data-wb-aria`        → aria-label 属性
    *
    * 注意：**动态文案不挂钩子**。库名、标签、描述、头像由 `_renderRight()` 按当前库与
    * 语言重写，挂静态钩子会让重标签把它们覆盖掉（描述会变回占位符）。那几处改为在
@@ -83,6 +84,7 @@
     scope.querySelectorAll('[data-wb-text]').forEach((el) => { el.textContent = _tr(el.dataset.wbText); });
     scope.querySelectorAll('[data-wb-title]').forEach((el) => { el.title = _tr(el.dataset.wbTitle); });
     scope.querySelectorAll('[data-wb-placeholder]').forEach((el) => { el.placeholder = _tr(el.dataset.wbPlaceholder); });
+    scope.querySelectorAll('[data-wb-aria]').forEach((el) => { el.setAttribute('aria-label', _tr(el.dataset.wbAria)); });
     scope.querySelectorAll('[data-wb-label]').forEach((el) => {
       const label = _tr(el.dataset.wbLabel);
       const span = el.querySelector && el.querySelector('.ui-button__label');
@@ -2516,7 +2518,7 @@
     const sub = document.getElementById('kb-wb-analysis-sub');
     if (sub) {
       const count = isSpace ? _state.spaceFiles.length : (_findLibNode(_state.currentLib) ? _countFiles(_findLibNode(_state.currentLib)) : 0);
-      sub.textContent = `当前库：${_esc(dispName)} · ${count} 个内容`;
+      sub.textContent = _tr('kb.workbench.right_lib_summary', '当前库：{name} · {count} 个内容', { name: dispName, count });
     }
     _maybeShowQaHint();
     // 文件树/空间文件是异步到的：这里按最新的文件数刷一次两个生成入口的可用性
@@ -2536,13 +2538,13 @@
     if (!card) return;
     card.innerHTML = `
       <div class="kb-wb-right-card-title">
-        <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
+        <span><span class="kb-wb-ai-chip"></span><span data-wb-text="kb.workbench.analysis_title"></span></span>
         <span class="kb-wb-card-actions">
           ${_uiButton({ label: _tr('kb.workbench.gen_mindmap', '生成脑图'), role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
           ${_uiButton({ label: _tr('kb.workbench.gen_quiz', '生成测验'), role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}        </span>
       </div>
-      <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
-      <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>`;
+      <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">${_esc(_tr('kb.workbench.right_lib_placeholder', '当前库：—'))}</div>
+      <div class="kb-wb-right-placeholder">${_uiButton({ label: _tr('kb.workbench.analysis_generate', '生成 AI 解析'), role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn', 'data-wb-label': 'kb.workbench.analysis_generate' } })}</div>`;
     // 重新绑定手动解析按钮（原按钮随 innerHTML 替换销毁）
     const analyzeBtn = card.querySelector('#kb-analyze-btn');
     if (analyzeBtn) analyzeBtn.addEventListener('click', () => _loadSummary());
@@ -3576,7 +3578,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const btn = document.getElementById('kb-mm-mode-btn');
     if (dlg) dlg.classList.toggle('is-preview', _mmPreviewMode);
     if (btn) {
-      _setUiButtonPresentation(btn, _mmPreviewMode ? '编辑' : '预览', _mmPreviewMode ? 'edit-pencil' : 'eye');
+      _setUiButtonPresentation(btn, _mmPreviewMode ? _tr('kb.workbench.mm_edit', '编辑') : _tr('kb.workbench.mm_preview', '预览'), _mmPreviewMode ? 'edit-pencil' : 'eye');
       btn.setAttribute('aria-pressed', String(_mmPreviewMode));
     }
     const undo = document.getElementById('kb-mm-undo');
@@ -5429,7 +5431,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         ${_uiIconButton({ label: _tr('kb.workbench.side_expand', '展开知识库列表'), icon: 'chevron-right', className: 'kb-wb-side-expand', attrs: { id: 'kb-wb-side-expand', hidden: true, 'data-wb-label': 'kb.workbench.side_expand' } })}
         <aside class="kb-wb-side">
           <div class="kb-wb-side-head">
-            <h2 data-wb-text="kb.workbench.side_title">知识库列表</h2>
+            <h2 data-wb-text="kb.workbench.side_title"></h2>
             <div class="kb-wb-side-actions">
               ${_uiIconButton({ label: _tr('kb.workbench.side_collapse', '收起知识库列表'), icon: 'panel-list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-collapse', 'data-wb-label': 'kb.workbench.side_collapse' } })}
               ${_uiIconButton({ label: _tr('kb.workbench.side_search', '搜索知识库'), icon: 'search', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-search-btn', 'data-wb-label': 'kb.workbench.side_search' } })}
@@ -5447,12 +5449,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             <div class="kb-wb-lib-head">
               <div class="kb-wb-lib-cover" id="kb-wb-lib-cover"><svg class="kb-wb-cover-svg" viewBox="0 0 24 24" fill="rgba(255,255,255,.96)" stroke="rgba(255,255,255,.96)" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4.2l1.8 2.2h7a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></div>
               <div class="kb-wb-lib-meta">
-                <div class="kb-wb-lib-name" id="kb-wb-lib-name">知识库</div>
+                <div class="kb-wb-lib-name" id="kb-wb-lib-name">${_esc(_tr('kb.workbench.untitled_lib', '知识库'))}</div>
                 <div class="kb-wb-lib-owner" id="kb-wb-lib-owner"><span class="kb-wb-owner-avatar" id="kb-wb-owner-avatar">我</span><span class="kb-wb-owner-name" id="kb-wb-owner-name">我</span></div>
-                <div class="kb-wb-lib-desc" id="kb-wb-lib-desc">快来填写描述吧~</div>
+                <div class="kb-wb-lib-desc" id="kb-wb-lib-desc">${_esc(_tr('kb.workbench.lib_desc_placeholder', '快来填写描述吧~'))}</div>
                 <div class="kb-wb-lib-sub">
-                  <span class="kb-wb-tag" id="kb-wb-lib-tag">个人知识库</span>
-                  <span class="kb-wb-members" id="kb-wb-members">1 加入</span>
+                  <span class="kb-wb-tag" id="kb-wb-lib-tag">${_esc(_tr('kb.workbench.group_personal', '个人知识库'))}</span>
+                  <span class="kb-wb-members" id="kb-wb-members">${_esc(_tr('kb.workbench.members_joined', '1 加入'))}</span>
                 </div>
               </div>
               <div class="kb-wb-lib-actions">
@@ -5464,7 +5466,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 })}
                 <span class="kb-wb-share-wrap" id="kb-wb-share-wrap">
                   ${_uiIconButton({ label: _tr('kb.workbench.share_soon', '分享知识库（待开发）'), icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share', 'data-wb-label': 'kb.workbench.share_soon' } })}
-                  <span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon">待开发</span>
+                  <span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon"></span>
                 </span>
                 <div class="kb-wb-more">
                   ${_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-more-btn', 'data-wb-label': 'kb.workbench.more' } })}
@@ -5516,7 +5518,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         </section>
         <div class="kb-wb-divider" data-wb-divider="2" data-wb-title="kb.workbench.divider_drag"></div>
         <section class="kb-wb-right" id="kb-wb-right-panel">
-          <div class="kb-wb-right-head"><span class="kb-wb-chip">${_icon('book-open', 'kb-wb-chip-icon')}<span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span>本地推理 · 资料不上云</span>${_uiIconButton({
+          <div class="kb-wb-right-head"><span class="kb-wb-chip">${_icon('book-open', 'kb-wb-chip-icon')}<span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span><span data-wb-text="kb.workbench.right_local"></span></span>${_uiIconButton({
             label: _tr('kb.workbench.close_ai_panel', '关闭 AI 解析与问答'),
             icon: 'x',
             className: 'kb-wb-right-collapse',
@@ -5525,119 +5527,119 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           <div class="kb-wb-right-body" id="kb-wb-right">
             <div class="kb-wb-right-card" id="kb-wb-analysis-card">
               <div class="kb-wb-right-card-title">
-                <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
+                <span><span class="kb-wb-ai-chip"></span><span data-wb-text="kb.workbench.analysis_title"></span></span>
                 <span class="kb-wb-card-actions">
                   ${_uiButton({ label: _tr('kb.workbench.gen_mindmap', '生成脑图'), role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
                   ${_uiButton({ label: _tr('kb.workbench.gen_quiz', '生成测验'), role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}                </span>
               </div>
-              <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
-              <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>
+              <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">${_esc(_tr('kb.workbench.right_lib_placeholder', '当前库：—'))}</div>
+              <div class="kb-wb-right-placeholder">${_uiButton({ label: _tr('kb.workbench.analysis_generate', '生成 AI 解析'), role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn', 'data-wb-label': 'kb.workbench.analysis_generate' } })}</div>
             </div>
             <div class="kb-qa-session">
               <div class="kb-qa-session-head">
                 <span class="kb-qa-session-date" id="kb-qa-session-date"></span>
                 <div class="kb-qa-session-actions">
-                  ${_uiIconButton({ label: '新建对话', icon: 'plus', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-popout' } })}
-                  ${_uiIconButton({ label: '会话历史', icon: 'history', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-history' } })}
-                  ${_uiIconButton({ label: '清空当前对话', icon: 'x', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-clear' } })}
+                  ${_uiIconButton({ label: _tr('kb.workbench.qa_new_session', '新建对话'), icon: 'plus', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-popout', 'data-wb-label': 'kb.workbench.qa_new_session' } })}
+                  ${_uiIconButton({ label: _tr('kb.workbench.qa_history', '会话历史'), icon: 'history', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-history', 'data-wb-label': 'kb.workbench.qa_history' } })}
+                  ${_uiIconButton({ label: _tr('kb.workbench.qa_clear', '清空当前对话'), icon: 'x', className: 'kb-qa-session-btn', attrs: { id: 'kb-qa-clear', 'data-wb-label': 'kb.workbench.qa_clear' } })}
                 </div>
               </div>
               <div class="kb-qa-messages" id="kb-qa-messages"></div>
             </div>
           </div>
           <div class="kb-wb-right-input">
-            <div class="kb-qa-degraded-note" id="kb-qa-degraded-note" hidden>当前解析降级，问答能力受限</div>
+            <div class="kb-qa-degraded-note" id="kb-qa-degraded-note" data-wb-text="kb.workbench.qa_degraded" hidden></div>
             <div class="kb-qa-attach-strip" id="kb-qa-attach-strip" hidden></div>
             <div class="kb-qa-box">
-              <button type="button" class="kb-qa-model-chip" id="kb-qa-tools" title="选择问答模型">
+              <button type="button" class="kb-qa-model-chip" id="kb-qa-tools" data-wb-title="kb.workbench.qa_pick_model" title="">
                 ${_icon('brain-circuit', 'kb-qa-model-chip-ico')}
-                <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
+                <span class="kb-qa-model-chip-name" id="kb-qa-model-name">${_esc(_tr('kb.workbench.qa_default_model', '默认模型'))}</span>
                 <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
               </button>
-              ${_uiTextarea({ id: 'kb-qa-input', className: 'kb-qa-input', placeholder: '基于知识库提问', attrs: { rows: 1 } })}
+              ${_uiTextarea({ id: 'kb-qa-input', className: 'kb-qa-input', placeholder: _tr('kb.workbench.qa_placeholder', '基于知识库提问'), attrs: { rows: 1, 'data-wb-placeholder': 'kb.workbench.qa_placeholder' } })}
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
-                ${_uiIconButton({ label: '上传附件', icon: 'paperclip', className: 'kb-qa-icon-btn', attrs: { id: 'kb-qa-attach' } })}
+                ${_uiIconButton({ label: _tr('kb.workbench.qa_attach', '上传附件'), icon: 'paperclip', className: 'kb-qa-icon-btn', attrs: { id: 'kb-qa-attach', 'data-wb-label': 'kb.workbench.qa_attach' } })}
                 <div class="kb-qa-attach-tip" id="kb-qa-attach-tip" hidden>
-                  <div class="kb-qa-attach-tip-title">支持上传附件</div>
-                  <div class="kb-qa-attach-tip-item">• 文件数量：最多支持 5 个</div>
-                  <div class="kb-qa-attach-tip-item">• 文件类型：pdf、doc、docx、ppt、pptx、xls、xlsx、csv、jpg、jpeg、png、webp、md、txt、xmind、mp3、m4a、wav、aac、html、epub</div>
-                  <div class="kb-qa-attach-tip-item">• 文本类附件会作为本次提问的补充上下文</div>
+                  <div class="kb-qa-attach-tip-title" data-wb-text="kb.workbench.qa_attach_tip_title"></div>
+                  <div class="kb-qa-attach-tip-item" data-wb-text="kb.workbench.qa_attach_tip_count"></div>
+                  <div class="kb-qa-attach-tip-item" data-wb-text="kb.workbench.qa_attach_tip_types"></div>
+                  <div class="kb-qa-attach-tip-item" data-wb-text="kb.workbench.qa_attach_tip_context"></div>
                 </div>
               </div>
-              ${_uiIconButton({ label: '发送', icon: 'send', className: 'kb-qa-send', disabled: true, attrs: { id: 'kb-qa-send' } })}
+              ${_uiIconButton({ label: _tr('kb.workbench.qa_send', '发送'), icon: 'send', className: 'kb-qa-send', disabled: true, attrs: { id: 'kb-qa-send', 'data-wb-label': 'kb.workbench.qa_send' } })}
             </div>
-            <div class="kb-qa-note">内容由 AI 生成仅供参考 · 引用均已核验锚点</div>
+            <div class="kb-qa-note" data-wb-text="kb.workbench.qa_note"></div>
           </div>
         </section>
       </div>
       <div class="kb-mm-overlay" id="kb-mm-overlay" hidden>
-        <div class="kb-mm-dlg" id="kb-mm-dlg" role="dialog" aria-modal="true" aria-label="脑图预览">
+        <div class="kb-mm-dlg" id="kb-mm-dlg" role="dialog" aria-modal="true" data-wb-aria="kb.workbench.mm_title" aria-label="">
         <div class="kb-mm-titlebar" id="kb-mm-titlebar">
           <span class="kb-mm-titlebar-ico">${_icon('brain-circuit', 'kb-mm-titlebar-icon')}</span>
-          ${_uiInput({ id: 'kb-mm-title-input', className: 'kb-mm-title-input', value: '脑图预览', attrs: { title: '双击修改标题', spellcheck: 'false' } })}
+          ${_uiInput({ id: 'kb-mm-title-input', className: 'kb-mm-title-input', value: _tr('kb.workbench.mm_title', '脑图预览'), attrs: { title: _tr('kb.workbench.mm_title_dblclick', '双击修改标题'), spellcheck: 'false' } })}
           <span class="kb-mm-save-state" id="kb-mm-save-state"></span>
           <div class="kb-mm-titlebar-actions">
-            ${_uiButton({ label: '预览', role: 'secondary', size: 'sm', icon: 'eye', className: 'kb-mm-titlebar-btn', attrs: { id: 'kb-mm-mode-btn', title: '切换预览/编辑模式', 'aria-pressed': 'false' } })}
-            ${_uiButton({ label: '独立窗口', role: 'secondary', size: 'sm', icon: 'external', className: 'kb-mm-titlebar-btn', attrs: { id: 'kb-mm-popout-btn', title: '弹出独立窗口' } })}
-            ${_uiIconButton({ label: '关闭脑图预览', icon: 'x', className: 'kb-mm-overlay-close', attrs: { id: 'kb-mm-overlay-close', title: '关闭（Esc）' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_preview', '预览'), role: 'secondary', size: 'sm', icon: 'eye', className: 'kb-mm-titlebar-btn', attrs: { id: 'kb-mm-mode-btn', title: _tr('kb.workbench.mm_mode_tip', '切换预览/编辑模式'), 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_popout', '独立窗口'), role: 'secondary', size: 'sm', icon: 'external', className: 'kb-mm-titlebar-btn', attrs: { id: 'kb-mm-popout-btn', title: _tr('kb.workbench.mm_popout_tip', '弹出独立窗口'), 'data-wb-label': 'kb.workbench.mm_popout', 'data-wb-title': 'kb.workbench.mm_popout_tip' } })}
+            ${_uiIconButton({ label: _tr('kb.workbench.mm_close', '关闭脑图预览'), icon: 'x', className: 'kb-mm-overlay-close', attrs: { id: 'kb-mm-overlay-close', title: _tr('kb.workbench.viewer_close_esc', '关闭（Esc）'), 'data-wb-label': 'kb.workbench.mm_close', 'data-wb-title': 'kb.workbench.viewer_close_esc' } })}
           </div>
         </div>
         <div class="kb-mm-overlay-toolbar">
           <div class="kb-mm-tb-group">
-            ${_uiButton({ label: '撤销', role: 'ghost', size: 'sm', icon: 'undo', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-undo', title: '撤销' } })}
-            ${_uiButton({ label: '刷新', role: 'ghost', size: 'sm', icon: 'refresh', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-refresh', title: '重新生成脑图' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_undo', '撤销'), role: 'ghost', size: 'sm', icon: 'undo', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-undo', title: _tr('kb.workbench.mm_undo', '撤销'), 'data-wb-label': 'kb.workbench.mm_undo', 'data-wb-title': 'kb.workbench.mm_undo' } })}
+            ${_uiButton({ label: _tr('kb.workbench.refresh', '刷新'), role: 'ghost', size: 'sm', icon: 'refresh', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-refresh', title: _tr('kb.workbench.mm_refresh_tip', '重新生成脑图'), 'data-wb-label': 'kb.workbench.refresh', 'data-wb-title': 'kb.workbench.mm_refresh_tip' } })}
           </div>
           <div class="kb-mm-tb-group">
-            ${_uiButton({ label: '保存', role: 'ghost', size: 'sm', icon: 'archive', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-save', title: '保存到知识库' } })}
+            ${_uiButton({ label: _tr('kb.workbench.save_short', '保存'), role: 'ghost', size: 'sm', icon: 'archive', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-save', title: _tr('kb.workbench.mm_save_tip', '保存到知识库'), 'data-wb-label': 'kb.workbench.save_short', 'data-wb-title': 'kb.workbench.mm_save_tip' } })}
             <div class="kb-mm-open">
-              ${_uiButton({ label: '存档', role: 'ghost', size: 'sm', icon: 'folder-open', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-open-btn', title: '打开已保存的脑图' } })}
+              ${_uiButton({ label: _tr('kb.workbench.mm_open', '存档'), role: 'ghost', size: 'sm', icon: 'folder-open', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-open-btn', title: _tr('kb.workbench.mm_open_tip', '打开已保存的脑图'), 'data-wb-label': 'kb.workbench.mm_open', 'data-wb-title': 'kb.workbench.mm_open_tip' } })}
               <div class="kb-mm-open-menu" id="kb-mm-open-menu" hidden></div>
             </div>
             <div class="kb-mm-export">
-              ${_uiButton({ label: '导出', role: 'ghost', size: 'sm', icon: 'download', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-export-btn', title: '导出' } })}
+              ${_uiButton({ label: _tr('kb.workbench.mm_export', '导出'), role: 'ghost', size: 'sm', icon: 'download', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-export-btn', title: _tr('kb.workbench.mm_export', '导出'), 'data-wb-label': 'kb.workbench.mm_export', 'data-wb-title': 'kb.workbench.mm_export' } })}
               <div class="kb-mm-export-menu" id="kb-mm-export-menu" hidden>
-                <div class="kb-mm-export-item" data-export="png">${_icon('image', 'kb-mm-menu-icon')}<span>下载 PNG 图片</span></div>
-                <div class="kb-mm-export-item" data-export="svg">${_icon('code', 'kb-mm-menu-icon')}<span>下载 SVG 矢量图</span></div>
-                <div class="kb-mm-export-item" data-export="pdf">${_icon('file-text', 'kb-mm-menu-icon')}<span>下载 PDF 文档</span></div>
-                <div class="kb-mm-export-item" data-export="md">${_icon('list', 'kb-mm-menu-icon')}<span>导出 Markdown 大纲</span></div>
-                <div class="kb-mm-export-item" data-export="copy">${_icon('copy', 'kb-mm-menu-icon')}<span>复制到剪贴板</span></div>
+                <div class="kb-mm-export-item" data-export="png">${_icon('image', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_export_png"></span></div>
+                <div class="kb-mm-export-item" data-export="svg">${_icon('code', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_export_svg"></span></div>
+                <div class="kb-mm-export-item" data-export="pdf">${_icon('file-text', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_export_pdf"></span></div>
+                <div class="kb-mm-export-item" data-export="md">${_icon('list', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_export_md"></span></div>
+                <div class="kb-mm-export-item" data-export="copy">${_icon('copy', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_export_copy"></span></div>
               </div>
             </div>
           </div>
           <div class="kb-mm-tb-group kb-mm-tb-view">
             <div class="kb-mm-layout">
-              ${_uiButton({ label: '布局', role: 'ghost', size: 'sm', icon: 'layout-grid', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-layout-btn', title: '切换布局' } })}
+              ${_uiButton({ label: _tr('kb.workbench.mm_layout', '布局'), role: 'ghost', size: 'sm', icon: 'layout-grid', iconEnd: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-layout-btn', title: _tr('kb.workbench.mm_layout_tip', '切换布局') } })}
               <div class="kb-mm-layout-menu" id="kb-mm-layout-menu" hidden>
-                <div class="kb-mm-layout-item" data-mode="mind">${_icon('brain-circuit', 'kb-mm-menu-icon')}<span>思维导图（双向放射）</span></div>
-                <div class="kb-mm-layout-item" data-mode="org">${_icon('layout-grid', 'kb-mm-menu-icon')}<span>组织结构图（单向）</span></div>
+                <div class="kb-mm-layout-item" data-mode="mind">${_icon('brain-circuit', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_layout_mind"></span></div>
+                <div class="kb-mm-layout-item" data-mode="org">${_icon('layout-grid', 'kb-mm-menu-icon')}<span data-wb-text="kb.workbench.mm_layout_org"></span></div>
               </div>
             </div>
-            ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', icon: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-expand-all', title: '全部展开' } })}
-            ${_uiButton({ label: '收拢', role: 'ghost', size: 'sm', icon: 'chevron-up', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-collapse-all', title: '全部收拢' } })}
-            ${_uiButton({ label: '聚焦', role: 'ghost', size: 'sm', icon: 'target', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-focus-btn', title: '聚焦分支', 'aria-pressed': 'false' } })}
-            ${_uiButton({ label: '大纲', role: 'ghost', size: 'sm', icon: 'list', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-outline-btn', title: '大纲视图切换', 'aria-pressed': 'false' } })}
-            ${_uiButton({ label: '背景', role: 'ghost', size: 'sm', icon: 'palette', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-bg-btn', title: '背景切换' } })}
-            ${_uiButton({ label: '点阵', role: 'ghost', size: 'sm', icon: 'dot', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-dots-btn', title: '点阵开关', 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: _tr('kb.workbench.expand', '展开'), role: 'ghost', size: 'sm', icon: 'chevron-down', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-expand-all', title: _tr('kb.workbench.mm_expand_all_tip', '全部展开'), 'data-wb-label': 'kb.workbench.expand', 'data-wb-title': 'kb.workbench.mm_expand_all_tip' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_collapse_all', '收拢'), role: 'ghost', size: 'sm', icon: 'chevron-up', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-collapse-all', title: _tr('kb.workbench.mm_collapse_all_tip', '全部收拢'), 'data-wb-label': 'kb.workbench.mm_collapse_all', 'data-wb-title': 'kb.workbench.mm_collapse_all_tip' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_focus', '聚焦'), role: 'ghost', size: 'sm', icon: 'target', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-focus-btn', title: _tr('kb.workbench.mm_focus_off_tip', '聚焦分支：点击一级分支只看该分支'), 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_outline', '大纲'), role: 'ghost', size: 'sm', icon: 'list', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-outline-btn', title: _tr('kb.workbench.mm_outline_toggle', '大纲视图切换'), 'data-wb-label': 'kb.workbench.mm_outline', 'data-wb-title': 'kb.workbench.mm_outline_toggle', 'aria-pressed': 'false' } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_bg', '背景'), role: 'ghost', size: 'sm', icon: 'palette', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-bg-btn', title: _tr('kb.workbench.mm_bg_tip', '背景切换（点阵/纯白/无）') } })}
+            ${_uiButton({ label: _tr('kb.workbench.mm_dots', '点阵'), role: 'ghost', size: 'sm', icon: 'dot', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-dots-btn', title: _tr('kb.workbench.mm_dots_tip', '点阵开关'), 'data-wb-label': 'kb.workbench.mm_dots', 'data-wb-title': 'kb.workbench.mm_dots_tip', 'aria-pressed': 'false' } })}
           </div>
           <div class="kb-mm-tb-group kb-mm-tb-more">
-            ${_uiInput({ id: 'kb-mm-search', type: 'search', className: 'kb-mm-search', placeholder: '搜索节点…' })}
+            ${_uiInput({ id: 'kb-mm-search', type: 'search', className: 'kb-mm-search', placeholder: _tr('kb.workbench.mm_search', '搜索节点…'), attrs: { 'data-wb-placeholder': 'kb.workbench.mm_search' } })}
             <div class="kb-mm-overlay-zoom">
-              ${_uiIconButton({ label: '缩小', icon: 'minus', className: 'kb-mm-zoom-btn', attrs: { id: 'kb-mm-zoom-out' } })}
+              ${_uiIconButton({ label: _tr('kb.workbench.viewer_zoom_out', '缩小'), icon: 'minus', className: 'kb-mm-zoom-btn', attrs: { id: 'kb-mm-zoom-out', 'data-wb-label': 'kb.workbench.viewer_zoom_out' } })}
               <span id="kb-mm-zoom-label">100%</span>
-              ${_uiIconButton({ label: '放大', icon: 'plus', className: 'kb-mm-zoom-btn', attrs: { id: 'kb-mm-zoom-in' } })}
-              ${_uiButton({ label: '适应', role: 'ghost', size: 'sm', icon: 'maximize', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-reset', title: '适应画布' } })}
+              ${_uiIconButton({ label: _tr('kb.workbench.viewer_zoom_in', '放大'), icon: 'plus', className: 'kb-mm-zoom-btn', attrs: { id: 'kb-mm-zoom-in', 'data-wb-label': 'kb.workbench.viewer_zoom_in' } })}
+              ${_uiButton({ label: _tr('kb.workbench.mm_fit', '适应'), role: 'ghost', size: 'sm', icon: 'maximize', className: 'kb-mm-tool-btn', attrs: { id: 'kb-mm-reset', title: _tr('kb.workbench.mm_fit_tip', '适应画布'), 'data-wb-label': 'kb.workbench.mm_fit', 'data-wb-title': 'kb.workbench.mm_fit_tip' } })}
             </div>
             <div class="kb-mm-more">
-              ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mm-more-btn', attrs: { id: 'kb-mm-more-btn' } })}
+              ${_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-mm-more-btn', attrs: { id: 'kb-mm-more-btn', 'data-wb-label': 'kb.workbench.more' } })}
               <div class="kb-mm-more-menu" id="kb-mm-more-menu" hidden></div>
             </div>
           </div>
         </div>
         <div class="kb-mm-overlay-stage" id="kb-mm-overlay-stage">
           <div class="kb-mm-overlay-wrap" id="kb-mm-overlay-wrap"></div>
-          <div class="kb-mm-overlay-stage-hint">滚轮缩放｜拖拽平移｜点击聚焦｜−/+折叠｜双击重命名</div>
+          <div class="kb-mm-overlay-stage-hint" data-wb-text="kb.workbench.mm_stage_hint"></div>
         </div>
-        <div class="kb-mm-resize" id="kb-mm-resize" title="拖动调整窗口大小"></div>
+        <div class="kb-mm-resize" id="kb-mm-resize" data-wb-title="kb.workbench.viewer_resize"></div>
         </div>
       </div>`;
     // 首渲染即套用当前语言：与 i18n-change 走**同一个**函数（一处文案来源）
@@ -5648,7 +5650,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _kbRightEl.style.display = 'flex';
       _kbRightEl.style.flexDirection = 'column';
     }
-    document.getElementById('kb-wb-lib-name').textContent = _state.currentLib || '知识库';
+    document.getElementById('kb-wb-lib-name').textContent = _state.currentLib || _tr('kb.workbench.untitled_lib', '知识库');
     document.getElementById('kb-wb-right-lib').textContent = _state.currentLib || '—';
     // 知识库列表搜索：点击放大镜展开输入框，实时过滤全部库（个人+共享）
     const sideSearch = document.getElementById('kb-wb-side-search');
@@ -5925,7 +5927,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const _qaDate = document.getElementById('kb-qa-session-date');
     if (_qaDate) {
       const d = new Date();
-      _qaDate.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+      _qaDate.textContent = _tr('kb.workbench.qa_date', '{year}年{month}月{day}日', { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() });
     }
     document.getElementById('kb-qa-popout')?.addEventListener('click', () => {
       _qaNewSession(); // 独立窗口按钮 = 新建会话（保留历史，开启新上下文）
@@ -6153,7 +6155,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!nameEl) return;
     nameEl.textContent = _qaModelEntry && _qaModelEntry.entryId && _qaModelEntry.modelName
       ? `${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}`
-      : '默认模型';
+      : _tr('kb.workbench.qa_default_model', '默认模型');
     nameEl.title = nameEl.textContent;
   }
 
@@ -6751,7 +6753,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon">待开发</span></h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon"></span></h2>
           </div>
           ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
         </header>
@@ -7657,6 +7659,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 外壳只渲染一次 ⇒ 静态 chrome（侧栏/工具栏/菜单）靠定点重标签换语言；
     // 树与右列本来就能重渲染，顺手一起刷新。
     _relabelWorkbench();
+    // 脑图里那几个「文案随状态变」的按钮（预览/编辑、聚焦/聚焦中、布局模式、背景）：
+    // 静态钩子会把它们刷回初始文案，所以就地按当前状态重刷一遍。
+    const _modeBtn = document.getElementById('kb-mm-mode-btn');
+    if (_modeBtn) {
+      _setUiButtonPresentation(_modeBtn, _mmPreviewMode ? _tr('kb.workbench.mm_edit', '编辑') : _tr('kb.workbench.mm_preview', '预览'), _mmPreviewMode ? 'edit-pencil' : 'eye');
+    }
+    _mmUpdateToolbarState();
     _renderTree();
     _renderRight();
   });
