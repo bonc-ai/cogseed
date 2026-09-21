@@ -1010,26 +1010,26 @@
       okBtn.setAttribute('aria-busy', 'true');
       const okIcon = okBtn.querySelector('.ui-button__icon');
       if (okIcon) okIcon.hidden = true;
-      _setUiButtonPresentation(okBtn, '导入中…');
+      _setUiButtonPresentation(okBtn, _tr('kb.workbench.import_busy', '导入中…'));
       try {
         const res = await window.cogseed.invoke('spaces.files.importFromLibFiles', { spaceId: _state.spaceId, paths: files });
         if (!res || res.ok === false) {
-          if (typeof uiToast === 'function') uiToast('导入失败：' + ((res && res.error) || 'unknown'), { variant: 'error' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_failed', '导入失败：') + ((res && res.error) || 'unknown'), { variant: 'error' });
           return;
         }
         if (typeof uiToast === 'function') {
-          uiToast(`已导入 ${Number(res.imported) || 0} 个文件`, { variant: 'success', timeoutMs: 2500 });
+          uiToast(_tr('kb.workbench.import_done', '已导入 {count} 个文件', { count: Number(res.imported) || 0 }), { variant: 'success', timeoutMs: 2500 });
         }
         closeImportDialog();
         _loadSpaceFiles(_state.spaceId);
       } catch (err) {
         _log.warn('import dlg files failed', err);
-        if (typeof uiToast === 'function') uiToast('导入失败', { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_failed_short', '导入失败'), { variant: 'error' });
       } finally {
         if (overlay.isConnected) {
           okBtn.classList.remove('is-loading');
           okBtn.removeAttribute('aria-busy');
-          _setUiButtonPresentation(okBtn, '导入', 'upload');
+          _setUiButtonPresentation(okBtn, _tr('kb.workbench.import_confirm', '导入'), 'upload');
           okBtn.disabled = _dlgSelected.size === 0;
         }
       }
@@ -1162,10 +1162,10 @@
 
   // 导入菜单「网页链接」：抓取网页 → 存为 Markdown 到当前库
   async function _kbImportWebUrl() {
-    const url = typeof uiPrompt === 'function' ? await uiPrompt('输入网页链接（http/https）：', 'https://') : window.prompt('输入网页链接：', 'https://');
+    const url = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.web_url_prompt', '输入网页链接（http/https）：'), 'https://') : window.prompt(_tr('kb.workbench.web_url_prompt', '输入网页链接（http/https）：'), 'https://');
     if (!url || !url.trim()) return;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
-    if (typeof uiToast === 'function') uiToast('正在抓取网页内容…', { variant: 'info' });
+    if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.web_url_fetching', '正在抓取网页内容…'), { variant: 'info' });
     try {
       const res = await window.cogseed.invoke('kb.importWebUrl', {
         dir: _state.spaceId ? null : (_state.currentLib || null),
@@ -1173,14 +1173,14 @@
         url: String(url).trim(),
       });
       if (!res || res.ok === false) {
-        if (typeof uiToast === 'function') uiToast('导入失败：' + ((res && res.error) || 'unknown'), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_failed', '导入失败：') + ((res && res.error) || 'unknown'), { variant: 'error' });
         return;
       }
-      if (typeof uiToast === 'function') uiToast(`已导入网页：${res.fileName || ''}`, { variant: 'success', timeoutMs: 2500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.web_url_done', '已导入网页：{name}', { name: res.fileName || '' }), { variant: 'success', timeoutMs: 2500 });
       if (_state.spaceId) _loadSpaceFiles(_state.spaceId); else _loadAll();
     } catch (err) {
       _log.warn('web import failed', err);
-      if (typeof uiToast === 'function') uiToast('导入失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_failed', '导入失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -6492,16 +6492,16 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     let ok = false;
     try {
       ok = typeof uiConfirmDanger === 'function'
-        ? await uiConfirmDanger({ title: '删除到回收站', message: `确认删除「${name}」？删除后可在回收站恢复。`, dangerLabel: '删除', cancelLabel: '取消' })
-        : window.confirm(`确认删除「${name}」？`);
+        ? await uiConfirmDanger({ title: _tr('kb.workbench.delete_to_trash', '删除到回收站'), message: _tr('kb.workbench.delete_confirm', '确认删除「{name}」？删除后可在回收站恢复。', { name }), dangerLabel: _tr('kb.workbench.menu_delete', '删除'), cancelLabel: _tr('kb.workbench.cancel', '取消') })
+        : window.confirm(_tr('kb.workbench.delete_confirm_short', '确认删除「{name}」？', { name }));
     } catch (_) { return; }
     if (!ok) return;
     try {
       const res = await window.cogseed.invoke('contexts.delete', { path });
-      if (res && res.ok === false) { if (typeof uiToast === 'function') uiToast('删除失败：' + _esc(res.error || 'unknown'), { variant: 'error' }); return; }
-      if (typeof uiToast === 'function') uiToast('已删除到回收站（设置 → 回收站可恢复）', { variant: 'success', timeoutMs: 3000 });
+      if (res && res.ok === false) { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.delete_failed', '删除失败：') + _esc(res.error || 'unknown'), { variant: 'error' }); return; }
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.delete_done', '已删除到回收站（设置 → 回收站可恢复）'), { variant: 'success', timeoutMs: 3000 });
       _loadAll();
-    } catch (err) { _log.warn('delete failed', err); if (typeof uiToast === 'function') uiToast('删除失败', { variant: 'error' }); }
+    } catch (err) { _log.warn('delete failed', err); if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.delete_failed_short', '删除失败'), { variant: 'error' }); }
   }
 
   function _kbReveal(path) {
@@ -6661,7 +6661,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     try {
       ok = typeof uiConfirmDanger === 'function'
         ? await uiConfirmDanger({ title: '删除文件', message: `确认删除「${name}」？`, dangerLabel: '删除', cancelLabel: '取消' })
-        : window.confirm(`确认删除「${name}」？`);
+        : window.confirm(_tr('kb.workbench.delete_confirm_short', '确认删除「{name}」？', { name }));
     } catch (_) { return; }
     if (!ok) return;
     try {
@@ -6689,17 +6689,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-members-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-members-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>知识库成员</span></h2>
+            <h2 class="ui-modal__title kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>${_esc(_tr('kb.workbench.members_title', '知识库成员'))}</span></h2>
           </div>
-          ${_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x', className: 'kb-members-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.members_close', '关闭知识库成员弹窗'), icon: 'x', className: 'kb-members-close' })}
         </header>
         <div class="ui-modal__body kb-members-body">
-          <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: '搜索知识库成员', attrs: { autocomplete: 'off' } })}</div>
+          <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: _tr('kb.workbench.members_search', '搜索知识库成员'), attrs: { autocomplete: 'off' } })}</div>
           <div class="kb-members-list">
             <div class="kb-members-item">
-              <span class="kb-members-avatar">我</span>
-              <span class="kb-members-name">我</span>
-              <span class="kb-members-role">创建者</span>
+              <span class="kb-members-avatar">${_esc(_tr('kb.workbench.me', '我'))}</span>
+              <span class="kb-members-name">${_esc(_tr('kb.workbench.me', '我'))}</span>
+              <span class="kb-members-role">${_esc(_tr('kb.workbench.members_owner_role', '创建者'))}</span>
             </div>
           </div>
         </div>
@@ -7165,19 +7165,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const res = await window.cogseed.invoke('kb.share.toFeishu', { spaceId: sp.space_id, access: 'anyone' });
       if (res && res.ok) {
         if (!opts.silent && typeof uiToast === 'function') {
-          uiToast('已发布到飞书', { variant: 'success', timeoutMs: 2000 });
+          uiToast(_tr('kb.workbench.publish_done', '已发布到飞书'), { variant: 'success', timeoutMs: 2000 });
         }
         _kbRefreshShareStatus(sp);
         return res.state;
       }
       if (res && res.code === 'need_reauthorize') {
         const go = typeof uiConfirm === 'function'
-          ? await uiConfirm('分享到飞书需要文档写权限，是否现在重新授权？', '重新授权')
-          : window.confirm('分享到飞书需要文档写权限，是否现在重新授权？');
+          ? await uiConfirm(_tr('kb.workbench.publish_need_scope', '分享到飞书需要文档写权限，是否现在重新授权？'), _tr('kb.workbench.publish_reauthorize', '重新授权'))
+          : window.confirm(_tr('kb.workbench.publish_need_scope', '分享到飞书需要文档写权限，是否现在重新授权？'));
         if (go) {
           try {
             await window.cogseed.invoke('kb.share.authorize', {});
-            if (typeof uiToast === 'function') uiToast('请在浏览器完成飞书授权，完成后点击「复制链接」重试', { variant: 'info', timeoutMs: 4000 });
+            if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.publish_browser_hint', '请在浏览器完成飞书授权，完成后点击「复制链接」重试'), { variant: 'info', timeoutMs: 4000 });
           } catch (err) {
             _log.warn('kb share authorize failed', err);
           }
@@ -7190,10 +7190,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         return null;
       }
       if (res && res.code === 'enterprise_share_disabled') {
-        if (typeof uiToast === 'function') uiToast(res.error || '企业禁止组织外分享，请在飞书管理后台开启', { variant: 'error', timeoutMs: 5000 });
+        if (typeof uiToast === 'function') uiToast(res.error || _tr('kb.workbench.publish_blocked', '企业禁止组织外分享，请在飞书管理后台开启'), { variant: 'error', timeoutMs: 5000 });
         return null;
       }
-      if (typeof uiToast === 'function') uiToast('分享失败：' + ((res && res.error) || '未知错误'), { variant: 'error', timeoutMs: 4000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_failed', '分享失败：') + ((res && res.error) || _tr('kb.workbench.unknown_error', '未知错误')), { variant: 'error', timeoutMs: 4000 });
       return null;
     } catch (err) {
       _log.warn('kb share publish failed', err);
@@ -7286,19 +7286,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--qr" role="dialog" aria-modal="true" aria-labelledby="kb-share-qr-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>知识码</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.qr_title', '知识码'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭知识码弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.qr_close', '关闭知识码弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
           <div class="kb-share-qr-body">
             <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
-            <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
+            <div class="kb-share-qr-name">${_esc(name || _tr('kb.workbench.share_shared_lib', '共享知识库'))}</div>
             <div class="kb-share-qr-url">${_esc(url)}</div>
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions">
-          ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-qr-copy' } })}
+          ${_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-qr-copy' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -7321,11 +7321,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const svg = host.querySelector('svg');
         if (svg) { svg.style.width = '160px'; svg.style.height = '160px'; }
       } else {
-        host.innerHTML = '<span class="kb-share-qr-fallback">扫码功能不可用</span>';
+        host.innerHTML = `<span class="kb-share-qr-fallback">${_esc(_tr('kb.workbench.qr_unavailable', '扫码功能不可用'))}</span>`;
       }
     } catch (err) {
       _log.warn('kb qr generate failed', err);
-      host.innerHTML = '<span class="kb-share-qr-fallback">扫码功能不可用</span>';
+      host.innerHTML = `<span class="kb-share-qr-fallback">${_esc(_tr('kb.workbench.qr_unavailable', '扫码功能不可用'))}</span>`;
     }
     overlay.querySelector('#kb-share-qr-copy').addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -7333,7 +7333,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         await navigator.clipboard.writeText(url);
         if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_link_copied_short', '链接已复制'), { variant: 'success', timeoutMs: 1500 });
       } catch {
-        if (typeof uiToast === 'function') uiToast('复制失败，请手动复制', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.qr_copy_failed', '复制失败，请手动复制'), { variant: 'warning' });
       }
     });
   }

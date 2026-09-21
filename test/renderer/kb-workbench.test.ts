@@ -1009,7 +1009,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(membersDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-members-title"');
     expect(membersDialog).toContain('class="ui-modal__header"');
     expect(membersDialog).toContain('class="ui-modal__body kb-members-body"');
-    expect(membersDialog).toContain("_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x'");
+    expect(membersDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.members_close', '关闭知识库成员弹窗'), icon: 'x'");
     expect(membersDialog).toContain("_uiInput({ id: 'kb-members-search-input', type: 'search'");
     expect(membersDialog).toContain("_icon('users', 'kb-members-title-icon')");
     expect(membersDialog).not.toMatch(/[✕👥]/u);
@@ -1034,7 +1034,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.cogseed_members_empty', '暂无待审申请') })");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.qr_close', '关闭知识码弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.cogseed_config_save', '保存并发布'), role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary'");
