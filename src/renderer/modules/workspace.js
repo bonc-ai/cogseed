@@ -491,6 +491,8 @@
   let _artifactSort = 'newest';    // 排序：'newest' | 'oldest' | 'name'
   let _artifactView = 'list';      // 视图：'list' 列表（默认） | 'grid' 卡片
   let _artDrawerId = null;         // 打开的预览抽屉产物 key（path）
+  let _artDrawerController = null; // 共享 Drawer 控制器（焦点、ESC、遮罩、滚动锁）
+  let _artDrawerTrigger = null;    // 关闭后恢复焦点的触发元素
   let _artMenuId = null;           // 展开「更多」菜单的产物 key
   let _artMenuEl = null;           // 展开中的菜单元素（键盘导航用）
   // ── 虚拟滚动（列表视图，飞书/Notion 同款窗口化渲染）────────────────────
@@ -1771,8 +1773,8 @@
       : `${escapeHtml(_t('ws.art_from_task', '来自「{title}」', { title: a.sourceTitle || _t('ws.art_source_deleted', '原任务已删除') }))} · ${escapeHtml(a.agents)} · ${escapeHtml(a.timeLabel)}`;
     const brokenHint = a.broken ? `<p class="ws-art-drawer-broken">${escapeHtml(_t('ws.art_broken_meta', '文件已移动或失效'))}</p>` : '';
     return `
-    <div class="ws-art-drawer-backdrop open" data-ws="art-drawer-close" role="dialog" aria-modal="true" aria-labelledby="ws-art-drawer-name">
-      <aside class="ws-art-drawer" data-ws="noop">
+    <div class="ws-art-drawer-backdrop open">
+      <aside class="ws-art-drawer" data-ws="noop" role="dialog" aria-modal="true" aria-labelledby="ws-art-drawer-name">
         <div class="ws-art-drawer-head">
           <div class="ws-art-file-icon ext-${escapeHtml(a.ext.replace(/^\./, '').toLowerCase())}">${escapeHtml(_artifactExtBadge(a.ext))}</div>
           <div class="ws-art-drawer-title">
@@ -1961,19 +1963,60 @@
     if (_artPreviewBlobUrl) { try { URL.revokeObjectURL(_artPreviewBlobUrl); } catch (_) { /* ignore */ } _artPreviewBlobUrl = ''; }
   }
 
+  function _artifactEntry(id) {
+    if (!id) return null;
+    try {
+      const escaped = CSS.escape(id);
+      return document.querySelector(`[data-ws="art-open"][data-id="${escaped}"]`)
+        || document.querySelector(`[data-ws="art-row-open"][data-id="${escaped}"]`);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _mountArtifactDrawer(trigger) {
+    if (!_artDrawerId || typeof window.uiDrawerController !== 'function') return;
+    const overlay = document.querySelector('.ws-art-drawer-backdrop');
+    const drawer = overlay && overlay.querySelector('.ws-art-drawer');
+    if (!overlay || !drawer) return;
+    _artDrawerController = window.uiDrawerController({
+      overlay,
+      drawer,
+      initialFocus: '.ws-art-drawer-close',
+      fallbackFocus: () => _artifactEntry(_artDrawerId),
+      onClose(reason) {
+        const closedArtifactId = _artDrawerId;
+        _artDrawerController = null;
+        if (reason === 'rerender') return;
+        _artDrawerId = null;
+        _artDrawerTrigger = null;
+        _revokeArtPreviewBlob();
+        _reRender();
+        const returnTarget = _artifactEntry(closedArtifactId);
+        if (returnTarget && typeof returnTarget.focus === 'function') returnTarget.focus();
+      },
+    });
+    _artDrawerController.open(trigger || _artDrawerTrigger);
+    _artDrawerTrigger = null;
+  }
+
   function _openArtifactDrawer(id) {
     const a = _artifactById(id);
     if (!a) return;
+    _artDrawerTrigger = document.activeElement;
     _artDrawerId = id;
     _artMenuId = null;
     _reRender(); // _reRender 检测到抽屉开启会自动装载预览内容
-    const closeBtn = document.querySelector('.ws-art-drawer-close');
-    if (closeBtn) closeBtn.focus();
   }
 
   function _closeArtifactDrawer() {
     if (!_artDrawerId) return;
+    if (_artDrawerController) {
+      _artDrawerController.close('business-action');
+      return;
+    }
     _artDrawerId = null;
+    _artDrawerTrigger = null;
     _revokeArtPreviewBlob();
     _reRender();
   }
@@ -3355,6 +3398,7 @@
     if (_renderedHtml === html) return;
     // 卡片预览的 blob URL 随旧 DOM 一并作废（每次重建前吊销，防内存堆积）
     _revokeArtCardBlobs();
+    if (_artDrawerController) _artDrawerController.close('rerender', { restoreFocus: false });
     root.innerHTML = html;
     _renderedHtml = html;
     _bind(root);
@@ -3377,6 +3421,7 @@
     }
     // 抽屉开着时，任何重建都会清空预览容器 → 容器为空则重新装载预览内容
     if (_artDrawerId && _view === 'space' && _spaceTab === 'artifacts') {
+      _mountArtifactDrawer(_artDrawerTrigger);
       const a = _artifactById(_artDrawerId);
       if (a) {
         const body = document.getElementById('ws-art-preview-body');
