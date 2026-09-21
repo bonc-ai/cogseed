@@ -47,6 +47,38 @@ afterEach(() => {
 });
 
 describe('group_chat › durable run finalization (FR-018)', () => {
+  it('收口时把从未派发的 actor 落成 blocked(no_terminal)，并让它可被重试', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const conversation = await chats.createConversation(UID, { title: 'Run finalization never-dispatched' });
+    const cid = conversation.conversation_id;
+    const store = await import('../../../../src/main/features/group_chat/run_store');
+    const run = await store.createRun({
+      uid: UID,
+      cid,
+      submittedText: '先由甲给出方案，再由乙验证',
+      memberAgentIds: ['agent-done', 'agent-never'],
+      mentionAgentIds: ['agent-done', 'agent-never'],
+    });
+    expect(run).not.toBeNull();
+    // 甲正常派发并产出；乙从未被派发（例如停在审批门后 run 就收口了）。
+    await store.recordRunDispatch(UID, cid, run!.run_id, 'agent-done', 'turn-1');
+    await store.recordRunActorTerminal(UID, cid, run!.run_id, 'agent-done', {
+      terminal: 'done',
+      messages: 1,
+      artifacts: [],
+    });
+
+    const finalized = await store.finalizeRun(UID, cid, run!.run_id);
+    const never = finalized?.actors.find((actor) => actor.agent_id === 'agent-never');
+    // 契约：收口后不应残留 pending；从未派发的成员是「未完成」，要落到可重试终态。
+    expect(never).toMatchObject({ terminal: 'blocked', reason: 'no_terminal' });
+    expect(finalized?.summary?.missing).toContainEqual({
+      agent_id: 'agent-never',
+      reason: 'no_terminal',
+    });
+    expect(store.retryableRunActorIds(finalized!)).toContain('agent-never');
+  });
+
   it('总结 append 故障保留 pending outbox，重启后重试并只落一条消息', async () => {
     const chats = await import('../../../../src/main/features/chats');
     const conversation = await chats.createConversation(UID, { title: 'Run finalization once' });
