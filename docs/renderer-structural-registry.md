@@ -50,6 +50,24 @@ adoption baselines in `test/renderer/shared-ui-adoption-guard.test.ts` must be l
 | M-10 | Literal `z-index` in KB modules | `--z-*` tokens | **Migrated** (kb-workbench reader overlay/handle/drag shield → `--z-modal` / `--z-raised` / `--z-sticky`) |
 | M-11 | Emoji used as icons in KB modules | `modules/icons.js` | **Migrated** (kb-notes / kb-quiz / kb-workbench → `uiIconHtml`) |
 
+## No shared seam yet (registered)
+
+Structures that **cannot** migrate to a shared seam because none exists. They stay page-owned but still owe
+tokens, native semantics and accessible keyboard behavior; each becomes a shared-layer proposal once a second
+page needs the same contract.
+
+| Surface | Owner file | Why there is no seam | Proposal trigger |
+| --- | --- | --- | --- |
+| File pickers (`<input type="file">` for image insert and attachment upload) | `src/renderer/modules/kb-notes.js` | No shared file-picker primitive; every page would otherwise hand-roll one | Propose `uiFilePicker` when a second page needs it |
+| Reader drag / resize | `src/renderer/modules/kb-workbench.js` | See PV-3 | Propose a shared drag/resize helper if a second page needs it |
+
+### Migration note for imperative controls
+
+`uiInput(...)` and `uiTextarea(...)` return **markup strings and require an `id`**, so imperative call sites
+(`document.createElement('input' | 'textarea')` followed by property assignment) cannot be swapped one-for-one:
+they need a refactor that renders the shared markup, then reads/writes through the rendered node. Migrating them
+carries real behavior risk and therefore needs the component-change skill's real-page acceptance, not only tests.
+
 ## Known non-icon inline SVG
 
 Business graphics render `<svg>` legitimately and stay page-owned (the shared adoption guard counts
