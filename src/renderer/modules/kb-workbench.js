@@ -373,7 +373,9 @@
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
     const personalLabel = _tr('kb.workbench.group_personal', '个人知识库');
-    const sharedLabel = _tr('kb.workbench.group_shared', '共享知识库');
+    // 共享知识库已暂停：分组/标签统一标"待开发"（9.17 会议 P1），别再给自己起
+    // "共享知识库"这种像能用的名字
+    const sharedLabel = _tr('kb.workbench.group_shared', '待开发');
     const externalLabel = _tr('kb.workbench.group_external', '外部来源');
     const externalItems = _state.externalSources
       .filter((source) => {
@@ -2444,7 +2446,7 @@
         : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
     const tagEl = document.getElementById('kb-wb-lib-tag');
     if (tagEl) tagEl.textContent = isSpace
-      ? _tr('kb.workbench.group_shared', '共享知识库')
+      ? _tr('kb.workbench.group_shared', '待开发')
       : isExternal
         ? _tr('kb.workbench.external_source', '外部来源')
         : _tr('kb.workbench.group_personal', '个人知识库');
@@ -2462,8 +2464,11 @@
       descEl.textContent = desc || '快来填写描述吧~';
       descEl.classList.toggle('is-empty', !desc);
     }
-    const shareBtn = document.getElementById('kb-wb-share');
-    if (shareBtn) shareBtn.style.display = isExternal ? 'none' : '';
+    // 分享/双人入口只对「共享知识库」有意义（个人库单用户、外部来源只读），
+    // 挂在个人知识库上只会误导 —— 整块（按钮 + "待开发" chip）一起收掉。
+    // 9.17 会议 P1：去掉个人知识库里无实际作用的"分享/双人"引导入口。
+    const shareWrap = document.getElementById('kb-wb-share-wrap');
+    if (shareWrap) shareWrap.style.display = isSpace ? '' : 'none';
     const moreBtn = document.getElementById('kb-wb-more-btn');
     if (moreBtn) moreBtn.style.display = isExternal ? 'none' : '';
     const moreMenu = document.getElementById('kb-wb-more-menu');
@@ -5267,7 +5272,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                   className: 'kb-wb-right-expand',
                   attrs: { id: 'kb-wb-right-expand', 'aria-controls': 'kb-wb-right-panel', 'aria-expanded': 'false' },
                 })}
-                <span class="kb-wb-share-wrap">
+                <span class="kb-wb-share-wrap" id="kb-wb-share-wrap">
                   ${_uiIconButton({ label: '分享知识库（待开发）', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
                   <span class="kb-wb-soon-chip">待开发</span>
                 </span>
