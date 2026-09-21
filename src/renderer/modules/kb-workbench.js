@@ -5049,6 +5049,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           ai.classList.remove('is-typing');
           text = ev.text || text;
           streamBody.innerHTML = _decorateAnswerHtml(text);
+          // 系统状态行（如“已读取知识库信息”）→ 浅灰小字置于回答顶部
+          if (ev.sysNote) {
+            streamBody.insertAdjacentHTML('afterbegin', `<div class="kb-qa-sysnote">${_esc(ev.sysNote)}</div>`);
+          }
+          // 复制用“可读正文”：渲染后已去掉 markdown 标记与行内溯源锚点
+          const readableText = streamBody.textContent || text;
           // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
           if (ev.notFound) streamBody.classList.add('is-notfound');
           // 多轮上下文：回答入 history + 持久化当前会话（AI 回答额外存引用锚点，
@@ -5092,6 +5098,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             card.appendChild(goBtn);
             streamBody.appendChild(card);
           }
+          // 轻工具条：复制回答全文（可读正文，不含行内溯源锚点）
+          const tools = document.createElement('div');
+          tools.className = 'kb-qa-tools';
+          const copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.className = 'kb-qa-tools-btn';
+          copyBtn.textContent = '⧉ 复制';
+          copyBtn.title = '复制回答全文';
+          copyBtn.addEventListener('click', () => _copyText(readableText, '已复制回答全文'));
+          tools.appendChild(copyBtn);
+          streamBody.appendChild(tools);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'error') {
           ai.classList.remove('is-typing');
