@@ -29,9 +29,20 @@ describe('conversation shared UI integration', () => {
 
     expect(operation).toContain("uiInput({\n            id: 'conversation-operation-title-input'");
     expect(operation).toContain("uiButton({ label: confirmLabel, role: 'primary'");
+    expect(operation).toContain("overlay.className = 'ui-modal-overlay conversation-operation-overlay'");
+    expect(operation).toContain('class="ui-modal conversation-operation-dialog"');
+    expect(operation).toContain('class="ui-modal__footer"');
     expect(mergePicker).toContain("uiIconButton({ label: t('common.close'), icon: 'x'");
     expect(mergePicker).toContain("id: 'conversation-merge-picker-search'");
+    expect(mergePicker).toContain("overlay.className = 'ui-modal-overlay conversation-merge-picker-overlay'");
+    expect(mergePicker).toContain('class="ui-modal ui-modal--lg conversation-merge-picker-dialog"');
+    expect(mergePicker).toContain('class="ui-modal__body conversation-merge-picker-body"');
+    expect(mergePicker).toContain('class="ui-modal__footer conversation-merge-picker-footer"');
+    expect(mergePicker).not.toContain('modal-close-btn');
     expect(spacePicker).toContain("className: 'conversation-space-unbind'");
+    expect(spacePicker).toContain("overlay.className = 'ui-modal-overlay conversation-operation-overlay'");
+    expect(spacePicker).toContain('class="ui-modal conversation-operation-dialog"');
+    expect(`${operation}${spacePicker}`).not.toContain('modal-standard ui-dialog conversation-operation-dialog');
     expect(`${operation}${mergePicker}`).not.toMatch(/<(?:input|button)\b/);
   });
 });

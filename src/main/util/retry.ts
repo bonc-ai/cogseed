@@ -25,14 +25,51 @@ export function setFetchImplementation(impl: FetchImplementation | null): void {
   fetchImplementation = impl;
 }
 
+/**
+ * Server error envelope shape shared by the marketplace endpoints.
+ * `error.retryable` is advisory only — see `RetriableHttpStatusError`.
+ */
+export interface ServerErrorEnvelope {
+  code?: number;
+  msg?: string;
+  error?: { code?: string; message?: string; retryable?: boolean };
+}
+
+/** Cap the error body we parse; an error envelope is small, a stray HTML page is not. */
+const MAX_ERROR_ENVELOPE_CHARS = 64 * 1024;
+
+async function readServerErrorEnvelope(res: Response): Promise<ServerErrorEnvelope | null> {
+  try {
+    const parsed: unknown = JSON.parse((await res.text()).slice(0, MAX_ERROR_ENVELOPE_CHARS));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as ServerErrorEnvelope;
+  } catch {
+    // A non-JSON, truncated, or already-consumed body degrades to "no envelope";
+    // it must never turn a retriable status into a different failure.
+    return null;
+  }
+}
+
 export class RetriableHttpStatusError extends Error {
   status: number;
 
-  constructor(status: number, label = 'request') {
+  /**
+   * Envelope captured before the throw so the reason code survives retry exhaustion (FR-006).
+   * Null when the body was absent or not JSON.
+   */
+  envelope: ServerErrorEnvelope | null;
+
+  constructor(status: number, label = 'request', envelope: ServerErrorEnvelope | null = null) {
     super(`${label} http ${status}`);
     this.name = 'RetriableHttpStatusError';
     this.status = status;
+    this.envelope = envelope;
   }
+}
+
+/** Reason code lookup for callers normalizing failures after the retries are spent. */
+export function serverErrorEnvelopeOf(err: unknown): ServerErrorEnvelope | null {
+  return err instanceof RetriableHttpStatusError ? err.envelope : null;
 }
 
 export function isRetriableHttpStatus(status: number): boolean {
@@ -136,7 +173,10 @@ export async function fetchAndReadWithRetry<T>(
     try {
       const res = await (fetchImplementation || fetch)(input, { ...init, signal: composed.signal });
       if (isRetriableHttpStatus(res.status)) {
-        throw new RetriableHttpStatusError(res.status, label);
+        // Retriability is decided by the HTTP status alone. The body is read only so the
+        // server's reason code outlives retry exhaustion (FR-006); `error.retryable` is
+        // never fed back into the retry decision.
+        throw new RetriableHttpStatusError(res.status, label, await readServerErrorEnvelope(res));
       }
       return { response: res, body: await readBody(res, composed.signal) };
     } catch (err) {

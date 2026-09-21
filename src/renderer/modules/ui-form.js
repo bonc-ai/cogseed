@@ -15,10 +15,15 @@
       .replace(/'/g, '&#39;');
   }
 
+  function translatedLabel(key, fallback) {
+    const translated = typeof root.t === 'function' ? root.t(key) : '';
+    return translated && translated !== key ? translated : fallback;
+  }
+
   function renderAttrs(attrs) {
     const safe = [];
     for (const [key, rawValue] of Object.entries(attrs || {})) {
-      if (!/^(name|title|autocomplete|inputmode|min|max|minlength|maxlength|rows|spellcheck|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
+      if (!/^(id|name|title|autocomplete|inputmode|min|max|minlength|maxlength|rows|spellcheck|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
       if (rawValue == null || rawValue === false) continue;
       safe.push(`${key}="${escapeText(rawValue === true ? '' : rawValue)}"`);
     }
@@ -49,8 +54,23 @@
     const value = options || {};
     const id = String(value.id || '').trim();
     if (!id) throw new TypeError('uiCheckbox requires an id');
-    const classes = ['ui-control', 'ui-checkbox', value.className || ''].filter(Boolean).join(' ');
-    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="checkbox"${value.name ? ` name="${escapeText(value.name)}"` : ''}${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.checked ? ' checked' : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+    const attrs = { ...(value.attrs || {}) };
+    const label = String(value.label || '').trim();
+    if (label && !attrs['aria-label'] && !attrs['aria-labelledby']) attrs['aria-label'] = label;
+    if (!attrs['aria-label'] && !attrs['aria-labelledby']) {
+      throw new TypeError('uiCheckbox requires an accessible label');
+    }
+    const classes = ['ui-checkbox', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="checkbox"${value.name ? ` name="${escapeText(value.name)}"` : ''}${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.checked ? ' checked' : ''}${controlStateAttrs(value)}${renderAttrs(attrs)} />`;
+  }
+
+  function switchStateAttrs(value) {
+    return [
+      value.disabled ? ' disabled' : '',
+      value.invalid ? ' aria-invalid="true"' : '',
+      value.describedBy ? ` aria-describedby="${escapeText(value.describedBy)}"` : '',
+      value.previewState ? ` data-preview-state="${escapeText(value.previewState)}"` : '',
+    ].join('');
   }
 
   function uiSwitch(options) {
@@ -59,7 +79,10 @@
     if (!label) throw new TypeError('uiSwitch requires an accessible label');
     const checked = Boolean(value.checked);
     const classes = ['ui-switch', value.className || '', checked ? 'is-on' : ''].filter(Boolean).join(' ');
-    return `<button type="button" class="${escapeText(classes)}" role="switch" aria-checked="${checked ? 'true' : 'false'}" aria-label="${escapeText(label)}"${controlStateAttrs(value)}${renderAttrs(value.attrs)}><span class="ui-switch__knob" aria-hidden="true"></span></button>`;
+    const attrs = { ...(value.attrs || {}) };
+    if (value.id && !attrs.id) attrs.id = value.id;
+    if (!attrs['aria-label'] && !attrs['aria-labelledby']) attrs['aria-label'] = label;
+    return `<button type="button" class="${escapeText(classes)}" role="switch" aria-checked="${checked ? 'true' : 'false'}"${switchStateAttrs(value)}${renderAttrs(attrs)}><span class="ui-switch__knob" aria-hidden="true"></span></button>`;
   }
 
   function uiTextarea(options) {
@@ -158,6 +181,14 @@
     const value = options || {};
     const id = String(value.id || '').trim();
     if (!id) throw new TypeError('uiDateRangePicker requires an id');
+    const startLabel = String(value.startLabel || '').trim();
+    const endLabel = String(value.endLabel || '').trim();
+    const ariaLabel = String(value.ariaLabel || '').trim();
+    const labelledBy = String(value.labelledBy || '').trim();
+    const separator = String(value.separator || '').trim();
+    if (!startLabel || !endLabel || (!ariaLabel && !labelledBy) || !separator) {
+      throw new TypeError('uiDateRangePicker requires localized labels and separator');
+    }
     const startId = `${id}-start`;
     const endId = `${id}-end`;
     const classes = ['date-range-picker', value.className || ''].filter(Boolean).join(' ');
@@ -167,9 +198,11 @@
       className: 'ui-date-control',
       value: value.start || '',
       disabled: value.disabled,
+      required: value.required,
       invalid: value.invalidStart,
+      describedBy: value.describedBy,
       previewState: value.startPreviewState,
-      attrs: { 'aria-label': value.startLabel || 'Start date' },
+      attrs: { 'aria-label': startLabel },
     });
     const end = uiInput({
       id: endId,
@@ -177,16 +210,39 @@
       className: 'ui-date-control',
       value: value.end || '',
       disabled: value.disabled,
+      required: value.required,
       invalid: value.invalidEnd,
+      describedBy: value.describedBy,
       previewState: value.endPreviewState,
-      attrs: { 'aria-label': value.endLabel || 'End date' },
+      attrs: { 'aria-label': endLabel },
     });
-    return `<div class="${escapeText(classes)}" id="${escapeText(id)}" role="group" aria-label="${escapeText(value.ariaLabel || 'Date range')}">${start}<span class="date-range-picker__separator" aria-hidden="true">${escapeText(value.separator || 'to')}</span>${end}</div>`;
+    const groupLabel = labelledBy
+      ? ` aria-labelledby="${escapeText(labelledBy)}"`
+      : ` aria-label="${escapeText(ariaLabel)}"`;
+    const groupState = [
+      value.describedBy ? ` aria-describedby="${escapeText(value.describedBy)}"` : '',
+      value.invalid || value.invalidStart || value.invalidEnd ? ' aria-invalid="true"' : '',
+    ].join('');
+    return `<div class="${escapeText(classes)}" id="${escapeText(id)}" role="group"${groupLabel}${groupState}>${start}<span class="date-range-picker__separator" aria-hidden="true">${escapeText(separator)}</span>${end}</div>`;
   }
 
   function renderControl(options) {
     if (options.kind === 'textarea') return uiTextarea(options);
     if (options.kind === 'select') return uiSelect(options);
+    if (options.kind === 'checkbox') return uiCheckbox({ ...options, label: options.accessibleLabel || options.label });
+    if (options.kind === 'switch') {
+      return uiSwitch({
+        ...options,
+        label: options.accessibleLabel || options.label,
+        attrs: { ...(options.attrs || {}), id: options.id, 'aria-labelledby': options.labelId },
+      });
+    }
+    if (options.kind === 'date-range') {
+      return uiDateRangePicker({
+        ...options,
+        labelledBy: options.labelId,
+      });
+    }
     return uiInput(options);
   }
 
@@ -198,11 +254,13 @@
     const hintId = value.hint ? `${id}-hint` : '';
     const errorId = value.error ? `${id}-error` : '';
     const describedBy = [hintId, errorId].filter(Boolean).join(' ');
-    const isSelect = value.control && value.control.kind === 'select';
-    const labelId = isSelect ? `${id}-label` : '';
+    const kind = value.control && value.control.kind;
+    const usesLabelId = kind === 'select' || kind === 'switch' || kind === 'date-range';
+    const labelId = usesLabelId ? `${id}-label` : '';
     const control = renderControl({
       ...(value.control || {}),
       id,
+      label,
       required: Boolean(value.required),
       invalid: Boolean(value.error),
       describedBy,
@@ -215,8 +273,8 @@
     const requirement = value.showRequirement === false
       ? ''
       : value.required
-        ? '<span class="ui-field__requirement">必填</span>'
-        : '<span class="ui-field__requirement">选填</span>';
+        ? `<span class="ui-field__requirement">${escapeText(value.requiredLabel || translatedLabel('common.required', 'Required'))}</span>`
+        : `<span class="ui-field__requirement">${escapeText(value.optionalLabel || translatedLabel('common.optional', 'Optional'))}</span>`;
     const hint = value.hint
       ? `<p class="ui-field__hint" id="${escapeText(hintId)}">${escapeText(value.hint)}</p>`
       : '';
@@ -226,7 +284,7 @@
     return [
       `<div class="ui-field${value.error ? ' is-error' : ''}">`,
       '<div class="ui-field__label-row">',
-      isSelect
+      usesLabelId
         ? `<span class="ui-field__label" id="${escapeText(labelId)}">${escapeText(label)}</span>`
         : `<label for="${escapeText(id)}">${escapeText(label)}</label>`,
       requirement,

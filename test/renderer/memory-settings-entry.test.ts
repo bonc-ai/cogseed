@@ -41,7 +41,12 @@ describe('settings memory entry', () => {
     expect(rendererCss).toMatch(/\.memory-col\s*{[^}]*width:\s*var\(--layout-thread-width\);[^}]*padding:\s*var\(--space-5\) var\(--space-6\) var\(--space-page\);/s);
     expect(rendererCss).toMatch(/\.memory-entry\s*{[^}]*border-radius:\s*var\(--radius-card\);[^}]*box-shadow:\s*var\(--shadow-card\);/s);
     expect(rendererCss).toMatch(/\.memory-entry-textarea\s*{[^}]*border:\s*1px solid var\(--line-field\);[^}]*border-radius:\s*var\(--radius-field\);/s);
-    expect(rendererCss).toMatch(/\.memory-modal\s*{[^}]*border-radius:\s*var\(--radius-dialog\);[^}]*box-shadow:\s*var\(--shadow-dialog\);/s);
+    expect(source).toContain("host.className = 'ui-modal-overlay memory-modal-overlay'");
+    expect(source).toContain('class="ui-modal memory-modal"');
+    expect(source).toContain('class="ui-modal__header memory-modal-head"');
+    expect(source).toContain('class="ui-modal__body memory-modal-body');
+    expect(source).toContain('class="ui-modal__footer memory-modal-foot"');
+    expect(rendererCss).not.toMatch(/\.memory-modal\s*\{[^}]*(?:background|border-radius|box-shadow):/s);
   });
 
   it('routes ordinary memory controls through shared renderer primitives', () => {

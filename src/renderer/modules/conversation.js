@@ -5974,7 +5974,7 @@ function _conversationById(cid) {
 function _conversationOperationDialog(options = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay';
+    overlay.className = 'ui-modal-overlay conversation-operation-overlay';
     const title = escapeHtml(options.title || '');
     const message = escapeHtml(options.message || '').replace(/\n/g, '<br />');
     const confirmLabel = options.confirmLabel || t('common.confirm');
@@ -5998,19 +5998,23 @@ function _conversationOperationDialog(options = {}) {
         </div>`
       : '';
     overlay.innerHTML = `
-      <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
-        <div class="modal-title ui-dialog-title" id="conversation-operation-title">${title}</div>
-        <div class="modal-body">
+      <section class="ui-modal conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="conversation-operation-title">${title}</h2>
+          </div>
+        </header>
+        <div class="ui-modal__body">
           <div class="ui-dialog-message">${message}</div>
           ${inputHtml}
           ${sourcesHtml}
           <div class="conversation-operation-error" data-operation-error hidden></div>
         </div>
-        <div class="modal-actions">
+        <footer class="ui-modal__footer">
           ${uiButton({ label: cancelLabel, attrs: { 'data-operation-cancel': '' } })}
           ${uiButton({ label: confirmLabel, role: 'primary', attrs: { 'data-operation-confirm': '' } })}
-        </div>
-      </div>`;
+        </footer>
+      </section>`;
     document.body.appendChild(overlay);
     const input = overlay.querySelector('[data-operation-title]');
     const cancel = overlay.querySelector('[data-operation-cancel]');
@@ -6287,31 +6291,35 @@ function _openConversationMergePicker(initialCid) {
 
   const overlay = document.createElement('div');
   overlay.id = 'conversation-merge-picker';
-  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay';
+  overlay.className = 'ui-modal-overlay conversation-merge-picker-overlay';
   overlay.innerHTML = `
-    <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
-      <div class="conversation-merge-picker-header">
-        <h2 id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
-        ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn', attrs: { 'data-merge-picker-close': '' } })}
+    <section class="ui-modal ui-modal--lg conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
+      <header class="ui-modal__header conversation-merge-picker-header">
+        <div class="ui-modal__heading">
+          <h2 class="ui-modal__title" id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
+        </div>
+        ${uiIconButton({ label: t('common.close'), icon: 'x', attrs: { 'data-merge-picker-close': '' } })}
+      </header>
+      <div class="ui-modal__body conversation-merge-picker-body">
+        <div class="conversation-merge-picker-search-wrap">
+          <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
+          ${uiInput({
+            id: 'conversation-merge-picker-search',
+            type: 'search',
+            className: 'conversation-merge-picker-search',
+            placeholder: t('chat.merge.picker_search'),
+            attrs: { 'data-merge-picker-search': '', autocomplete: 'off' },
+          })}
+        </div>
+        <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
+        <div class="conversation-merge-picker-list" data-merge-picker-list></div>
+        <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
       </div>
-      <div class="conversation-merge-picker-search-wrap">
-        <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
-        ${uiInput({
-          id: 'conversation-merge-picker-search',
-          type: 'search',
-          className: 'conversation-merge-picker-search',
-          placeholder: t('chat.merge.picker_search'),
-          attrs: { 'data-merge-picker-search': '', autocomplete: 'off' },
-        })}
-      </div>
-      <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
-      <div class="conversation-merge-picker-list" data-merge-picker-list></div>
-      <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
-      <div class="conversation-merge-picker-footer">
+      <footer class="ui-modal__footer conversation-merge-picker-footer">
         ${uiButton({ label: t('common.cancel'), className: 'conversation-merge-picker-cancel', attrs: { 'data-merge-picker-cancel': '' } })}
         ${uiButton({ label: t('chat.merge.action'), role: 'primary', className: 'conversation-merge-picker-confirm', disabled: true, attrs: { 'data-merge-picker-confirm': '' } })}
-      </div>
-    </div>`;
+      </footer>
+    </section>`;
   document.body.appendChild(overlay);
 
   const list = overlay.querySelector('[data-merge-picker-list]');
@@ -6523,7 +6531,7 @@ async function _openConversationSpacePicker(cid) {
   const currentSpace = spaceList.find((s) => s && s.space_id === currentSpaceId) || null;
 
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay open';
+  overlay.className = 'ui-modal-overlay conversation-operation-overlay';
   const rows = spaceList.length
     ? spaceList.map((s) => {
       const displayName = _conversationSpaceDisplayName(s);
@@ -6539,18 +6547,22 @@ async function _openConversationSpacePicker(cid) {
     ? uiButton({ label: t('chat.conv_space_unbind'), className: 'conversation-space-unbind', attrs: { 'data-space-unbind': '' } })
     : '';
   overlay.innerHTML = `
-    <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-space-title">
-      <div class="modal-title ui-dialog-title" id="conversation-space-title">${escapeHtml(t(currentSpaceId ? 'chat.conv_space_title_move' : 'chat.conv_space_title_set'))}</div>
-      <div class="modal-body">
+    <section class="ui-modal conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-space-title">
+      <header class="ui-modal__header">
+        <div class="ui-modal__heading">
+          <h2 class="ui-modal__title" id="conversation-space-title">${escapeHtml(t(currentSpaceId ? 'chat.conv_space_title_move' : 'chat.conv_space_title_set'))}</h2>
+        </div>
+      </header>
+      <div class="ui-modal__body">
         <div class="ui-dialog-message">${escapeHtml(t('chat.conv_space_hint', { title: (conv && conv.title) || '' }))}</div>
         <div class="conversation-space-list">${rows}</div>
         <div class="conversation-operation-error" data-space-error hidden></div>
       </div>
-      <div class="modal-actions">
+      <footer class="ui-modal__footer">
         ${unbindHtml}
         ${uiButton({ label: t('common.cancel'), attrs: { 'data-space-cancel': '' } })}
-      </div>
-    </div>`;
+      </footer>
+    </section>`;
   document.body.appendChild(overlay);
 
   let busy = false;
@@ -11204,7 +11216,11 @@ function _messageReferencePayload(msgDiv) {
 }
 
 function _closeReferenceTargetPicker() {
-  document.getElementById('chat-reference-target-overlay')?.remove();
+  const overlay = document.getElementById('chat-reference-target-overlay');
+  if (!overlay) return;
+  const controller = overlay._uiModalController;
+  if (controller && controller.isOpen()) controller.close('action');
+  else overlay.remove();
 }
 
 async function _transferSelectedReferences(targetCid, payloads, opts = {}) {
@@ -11274,13 +11290,15 @@ async function _openReferenceTargetPicker(payloads) {
   _closeReferenceTargetPicker();
   const overlay = document.createElement('div');
   overlay.id = 'chat-reference-target-overlay';
-  overlay.className = 'modal-overlay open chat-reference-target-overlay';
-  overlay.innerHTML = `<div class="modal-standard chat-reference-target-modal" role="dialog" aria-modal="true" aria-labelledby="chat-reference-target-title">
-    <div class="modal-header chat-reference-target-header">
-      <h2 class="modal-title" id="chat-reference-target-title">${escapeHtml(t('chat.reference_target_title', { count: payloads.length }))}</h2>
-      ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn chat-reference-target-close' })}
-    </div>
-    <div class="modal-body chat-reference-target-body">
+  overlay.className = 'ui-modal-overlay chat-reference-target-overlay';
+  overlay.innerHTML = `<section class="ui-modal ui-modal--sm chat-reference-target-modal" role="dialog" aria-modal="true" aria-labelledby="chat-reference-target-title">
+    <header class="ui-modal__header chat-reference-target-header">
+      <div class="ui-modal__heading">
+        <h2 class="ui-modal__title" id="chat-reference-target-title">${escapeHtml(t('chat.reference_target_title', { count: payloads.length }))}</h2>
+      </div>
+      ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'chat-reference-target-close' })}
+    </header>
+    <div class="ui-modal__body chat-reference-target-body">
       <button type="button" class="chat-reference-new-task" data-new-task="1">
         <span class="chat-reference-leading-plus" aria-hidden="true">+</span>
         <span class="chat-reference-new-task-label">${escapeHtml(t('chat.reference_new_task'))}</span>
@@ -11297,8 +11315,18 @@ async function _openReferenceTargetPicker(payloads) {
         <div class="chat-reference-target-list"></div>
       </section>
     </div>
-  </div>`;
+  </section>`;
   document.body.appendChild(overlay);
+  const dialog = overlay.querySelector('[role="dialog"]');
+  const controller = typeof uiModalController === 'function'
+    ? uiModalController({
+        overlay,
+        dialog,
+        initialFocus: '#chat-reference-target-search',
+        onClose: () => overlay.remove(),
+      })
+    : null;
+  overlay._uiModalController = controller;
   const list = overlay.querySelector('.chat-reference-target-list');
   const search = overlay.querySelector('.chat-reference-target-search');
   const hint = overlay.querySelector('[data-reference-list-hint]');
@@ -11331,9 +11359,10 @@ async function _openReferenceTargetPicker(payloads) {
     _stageReferencesForNewTask(payloads);
   });
   overlay.querySelector('.chat-reference-target-close')?.addEventListener('click', _closeReferenceTargetPicker);
-  overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') _closeReferenceTargetPicker(); });
   search.addEventListener('input', render);
   render();
+  if (controller) controller.open();
+  else search.focus();
 }
 
 function _updateMessageSelectionToolbar() {
