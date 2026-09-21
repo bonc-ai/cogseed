@@ -47,7 +47,10 @@ const legacyRawControlBaseline: Record<string, number> = {
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
   'kb-notes.js': 24,
-  'kb-workbench.js': 13,
+  // kb-workbench.js：13 → 8（2026-09-21：导入对话框的裸复选框 → uiCheckbox，问答输入框 → uiTextarea）。
+  // 剩余 8 处 = 4 处模块自带的原语降级模板（应改为“缺失即抛错”，见内部《B3 控件迁移分类》B3-c）
+  //         + 4 处真实页面控件（隐藏 file input / 权限触发按钮 / 问答引用 chip / 模型 chip，归属 M-1、M-9）。
+  'kb-workbench.js': 8,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
@@ -97,7 +100,7 @@ const legacyRawCheckboxBaseline: Record<string, number> = {
   'chat-input-form.js': 2,
   'hub-account.js': 1,
   'interactive-cli.js': 1,
-  'kb-workbench.js': 1,
+  // kb-workbench.js 的裸复选框已迁到 uiCheckbox（2026-09-21），条目删除 → 再出现即红。
   'messaging-settings.js': 1,
   'onboarding.js': 12,
   'settings.js': 4,
