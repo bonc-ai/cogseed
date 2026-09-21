@@ -6,7 +6,7 @@ import { loadOntologyRules } from './ontology-rules';
 import { loadOntologyTaxonomy } from './ontology-taxonomy';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { readAbilityAsset } from './asset-service';
-import { readGroups, listGroupFields } from '../personal_ontology_groups';
+import { readGroups, listGroupFields, isStaleAsOf } from '../personal_ontology_groups';
 import { splitScopeTerms } from './scope-policy';
 import {
   readContextProjection,
@@ -65,6 +65,9 @@ async function loadOntologyFacts(
     for (const field of fields.fields) {
       for (const entry of field.values) {
         if (entry.project && entry.project !== context.workspaceId) continue;
+        // 敏感性（spec 007 T302）：restricted 值不进任务自动上下文与世界模型
+        // （用户在对话里显式 @ 该组仍会带全文——显式选择即授权）。
+        if (entry.sensitivity === 'restricted') continue;
         const value = String(entry.value || '').replace(/\s+/g, ' ').trim().slice(0, MAX_ONTOLOGY_FACT_VALUE);
         if (!value) continue;
         const factKey = createHash('sha256')
@@ -77,6 +80,8 @@ async function loadOntologyFacts(
           value,
           source: 'personal_ontology',
           ...(entry.project ? { projectId: entry.project } : {}),
+          ...(entry.asOf ? { asOf: entry.asOf, ...(isStaleAsOf(entry.asOf) ? { needsRefresh: true } : {}) } : {}),
+          ...(entry.verified ? { verified: entry.verified } : {}),
         });
         if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
       }
@@ -138,24 +143,36 @@ function ontologyAssetFromEntry(
  *  导出供检索侧复用（search_ability_assets 把画像纳入检索池并标来源）；
  *  条目不落盘、不进投影授权链——只作为背景通道存在（见 prompt-injection
  *  的 <durable-profile-memory> 独立块）。 */
-export function loadOntologyAssets(userId: string): WorldModelAbilityAsset[] {
+/** 画像资产来源（2026-09-22 记忆退役）：personal 类正式资产取代 USER/MEMORY
+ *  文件条目——onto-* 虚拟资产形态保留（committed 画像通道不进授权链的契约
+ *  不变），条目文本换为资产正文。读不到资产库时回退文件（迁移前过渡）。 */
+export async function loadOntologyAssets(userId: string): Promise<WorldModelAbilityAsset[]> {
   const assets: WorldModelAbilityAsset[] = [];
-  const sources = [
-    { file: userProfileFile(userId), name: 'user_profile' as const },
-    { file: userMemoryFile(userId), name: 'shared_memory' as const },
-  ];
-  for (const { file, name } of sources) {
-    let entries: Array<{ text: string }> = [];
-    try {
-      entries = loadEntries(file);
-    } catch {
-      continue; // missing/corrupt memory is not a forecast blocker
+  let statements: Array<{ text: string; name: 'user_profile' | 'shared_memory' }> = [];
+  try {
+    const { listAbilityAssets } = await import('./asset-service');
+    const personal = (await listAbilityAssets(userId))
+      .filter((asset) => asset.type === 'personal' && asset.status === 'active');
+    statements = personal.map((asset) => ({ text: String(asset.statement || ''), name: 'user_profile' as const }));
+  } catch {
+    statements = [];
+  }
+  if (!statements.length) {
+    // 过渡回退：资产库还没有画像（迁移未跑）时读文件。
+    for (const { file, name } of [
+      { file: userProfileFile(userId), name: 'user_profile' as const },
+      { file: userMemoryFile(userId), name: 'shared_memory' as const },
+    ]) {
+      try {
+        for (const entry of loadEntries(file)) {
+          statements.push({ text: entry.text, name });
+        }
+      } catch { /* missing file is not a forecast blocker */ }
     }
-    for (const entry of entries) {
-      const asset = ontologyAssetFromEntry(entry.text, name);
-      if (asset) assets.push(asset);
-      if (assets.length >= MAX_ONTOLOGY_ASSETS) break;
-    }
+  }
+  for (const entry of statements) {
+    const asset = ontologyAssetFromEntry(entry.text, entry.name);
+    if (asset) assets.push(asset);
     if (assets.length >= MAX_ONTOLOGY_ASSETS) break;
   }
   return assets;
@@ -196,7 +213,7 @@ export async function loadCommittedProjectionKnowledge(
         }]
       : []
   ));
-  const ontologyAssets = loadOntologyAssets(userId);
+  const ontologyAssets = await loadOntologyAssets(userId);
   return {
     projectionId: projection.id,
     projectionConfirmedAt: projection.confirmedAt || projection.decidedAt || projection.createdAt,

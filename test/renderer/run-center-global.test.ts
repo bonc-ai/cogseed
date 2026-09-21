@@ -202,7 +202,7 @@ describe('resident Run Center global surface', () => {
   it('mounts a named shared icon trigger, announces the full count, and bounds the visual badge', async () => {
     const harness = loadGlobal({ tasks: Array.from({ length: 101 }, (_, i) => task('attention', i)), groups: [] }, true);
     await harness.waitFor(() => harness.badge.dataset.state === 'attention');
-    expect(harness.triggerHtml()).toContain('class="ui-icon-button run-center-global-btn"');
+    expect(harness.triggerHtml()).toContain('class="ui-icon-button ui-icon-button--md run-center-global-btn"');
     expect(harness.triggerHtml()).toContain('aria-controls="run-center-quick-panel"');
     expect(harness.triggerHtml()).toContain('aria-haspopup="dialog"');
     expect(harness.triggerHtml()).not.toContain('ui-button__label');

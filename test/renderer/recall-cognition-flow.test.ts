@@ -61,18 +61,22 @@ describe('cognition-assets snapshot and routing', () => {
     expect(core).toContain('return fallback;');
   });
 
-  it('routes the three task views through one router', () => {
-    expect(core).toContain("route: { name: 'overview'");
+  it('routes the five views through one router', () => {
+    // 2026-09-21 五页签迁移:认知树/个人本体是独立路由,默认落地认知树。
+    expect(core).toContain("route: { name: 'tree'");
     expect(core).toContain("router.go({ name: 'review' })");
+    expect(core).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree'");
+    expect(core).toContain("{ id: 'ontology', titleKey: 'cognition.tab_ontology'");
     expect(core).toContain("{ id: 'organize', titleKey: 'cognition.tab_organize'");
-    // organize 路由由 views.js 的 tab 分派驱动（route.name === 'organize'）。
+    // organize / tree 路由由 views.js 的 tab 分派驱动（route.name === 'organize'）。
     expect(views).toContain("route.name === 'organize'");
+    expect(views).toContain("route.name === 'tree'");
     expect(core).toContain('store.backStack.push');
     expect(core).toContain('back()');
   });
 
-  it('lands on overview without auto-redirecting when the inbox is empty', () => {
-    expect(core).toContain("Object.assign({ name: 'overview'");
+  it('lands on the cognition tree without auto-redirecting when the inbox is empty', () => {
+    expect(core).toContain("Object.assign({ name: 'tree'");
     expect(core).not.toContain('switchSkillsCognitionPage');
   });
 
@@ -151,7 +155,7 @@ describe('candidate pool rendering', () => {
 
   it('keeps confirmed/rejected/ignored candidates in the processed fold only', () => {
     expect(views).toContain("['confirmed', 'rejected', 'ignored']");
-    expect(views).toContain('ca-processed-fold');
+    expect(views).toContain('fold-processed');
     expect(views).toContain("T('cognition.candidate_status_promoted'");
     expect(views).toContain("T('cognition.candidate_status_rejected'");
     expect(views).toContain("T('cognition.candidate_status_ignored'");
@@ -163,8 +167,13 @@ describe('candidate pool rendering', () => {
     expect(caps.canPromote).toBe(true);
     expect(caps.canEdit).toBe(true);
     expect(caps.canDefer).toBe(true);
-    expect(views).toContain('candidate.capabilities && candidate.capabilities.canPromote');
-    expect(views).toContain('candidate.capabilities && candidate.capabilities.canEdit');
+    // 2026-09-20：晋升/编辑/决策入口统一读 views.js 里归一化的一组 canX 常量，
+    // **capabilities 缺失即只读**（终态候选的 canDefer/canReject 正是 false）。
+    expect(views).toContain('const caps = candidate.capabilities || {}');
+    expect(views).toContain('const canPromote = !!caps.canPromote');
+    expect(views).toContain('const canDefer = !!caps.canDefer');
+    expect(views).toContain('const canReject = !!caps.canReject');
+    expect(views).toContain('const canEdit = !!caps.canEdit');
   });
 });
 
@@ -190,7 +199,9 @@ describe('capture tasks', () => {
   it('maps capture actions to typed channels', () => {
     expect(core).toContain("retry: 'recall.captures.retry'");
     expect(core).toContain('recall.captures.batchRetry');
-    expect(core).toContain('recall.captures.batchRunNow');
+    // 批量「立即整理」前端不暴露(2026-09-21 原型 v7 定调):后端能力保留,
+    // 渲染层不再触达 batchRunNow。
+    expect(core).not.toContain("'recall.captures.batchRunNow'");
   });
 
   it('localizes capture errors through captureErrorText', () => {
@@ -236,7 +247,7 @@ describe('asset governance actions', () => {
     expect(core).toContain("restore: 'recall.assets.restore'");
     // 2026-09-17 重构：暂停/恢复合并为标题旁总开关（data-action 动态二值），
     // 归档操作已从界面移除（子安拍板）；IPC 通道名不变。
-    expect(views).toContain("data-action=\"${statusOn ? 'pause' : 'resume'}\"");
+    expect(views).toContain("'data-action': statusOn ? 'pause' : 'resume'");
   });
 
   it('confirms destructive asset actions before sending', () => {
@@ -250,7 +261,10 @@ describe('asset governance actions', () => {
 describe('app boot and polling', () => {
   it('mounts into panel-recall > ca-root and renders on change', () => {
     expect(app).toContain("getElementById('ca-root')");
-    expect(app).toContain('NS.onChange(NS.render)');
+    // 2026-09-21 Phase 10:订阅体是带焦点保持的渲染包装(内部调 NS.render()),
+    // 不再是裸的 NS.onChange(NS.render)。
+    expect(app).toContain('NS.onChange(() => {');
+    expect(app).toContain('NS.render();');
     expect(app).toContain('NS.reload()');
   });
 

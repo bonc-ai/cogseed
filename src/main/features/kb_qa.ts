@@ -62,6 +62,8 @@ export interface KbEvidenceRef {
   chunkIdx: number;
   snippet: string;
   score: number;
+  /** 共享库（scope='space'）引用跳转原文所需；个人库留空。 */
+  spaceId?: string;
 }
 
 /** 跨库引导：当前个人库目录没找到，但另一个个人库目录有对应内容。 */
@@ -84,13 +86,15 @@ export interface KbAskEvent {
   notFound?: boolean;
   /** 未找到时若其它个人库目录有对应内容，渲染层展示“前往该库提问”引导。 */
   suggestion?: KbCrossLibSuggestion | null;
+  /** 系统状态行（如“已读取知识库信息”），渲染层以浅灰小字置于回答顶部。 */
+  sysNote?: string | null;
 }
 
 const KB_SYSTEM_PROMPT = `你是知识库问答助手。只依据提供的 ask_materials 证据回答；每条结论都标注引用 \`path#chunk N\`；资料里没有的内容明确归入「资料未说明」，不编造、不联网。
 
 回答结构请遵循：
 1. 开头先用一句话直接给出结论或一句话概括（如问“X 是什么”，第一句就给定义与定位，不要埋在大段中间）。
-2. 再按信息类型分节组织（如「是什么 / 任务要求 / 评分规则 / 复盘要求」）；同类型多条用列表逐条列出，每条一行为宜，避免长句堆砌、整段照抄原文。
+2. 再按信息类型分节组织（如「是什么 / 任务要求 / 评分规则 / 复盘要求」）；同类型多条用列表逐条列出，每条一行为宜，避免长句堆砌、整段照抄原文。需要区分类型时可用 emoji 前缀，如 📋 规则 / 📎 提交证据 / 📝 复盘要求。
 3. 对关键概念与指标做必要的解读：它要求什么、与问题或其它概念的关系，用自己的话简短说明，不只做摘录搬运。
 4. 全文先结论后细节；确实未找到的信息单列「资料未说明：…」如实说明，不脑补未给出的维度或定义。`;
 
@@ -120,6 +124,59 @@ const PIN_CHUNK_CAP = 2;
 /** 可被当作“文件名提问”识别的扩展名。 */
 const FILE_EXT = '(?:pdf|md|markdown|docx?|xlsx?|pptx?|doc|xls|ppt|txt|csv|html?|htm|json|png|jpe?g|gif|svg)';
 const FILE_NAME_RE = new RegExp(`([^\\s，。？！?！、,;:：;'"“”‘’（）()\\[\\]【】<>]+?\\.${FILE_EXT})\\b`, 'i');
+
+/**
+ * 库级"构成"线索（硬）：这些词只在"整个库"层面成立——没有任何一个 chunk 会写
+ * "本知识库的整体定位/覆盖范围"，单点检索结构上必然答不出来。因此命中即直接
+ * 走全库概览，不再浪费一轮检索 + 证据作答。
+ */
+const LIBRARY_META_CUE_RE = /(定位|覆盖范围|覆盖|范围|涵盖|收录|概览|综述|主题分布|题材分布|类型分布|分类|体系|结构|清单|目录|都放|放了些什么|收纳)/;
+/**
+ * 库级"问法"线索（软）：中文里"问整个库"和"问库内某个主题"没有干净的词边界
+ * （「这个知识库是干什么用的」和「这个知识库有哪些关于冒烟测试的内容」都含
+ * 库级主体），所以这些词**不用于抢先路由**，只作为"证据作答失败之后"的兜底判据。
+ */
+const LIBRARY_SOFT_CUE_RE = /(目的|用途|目标|干什么|做什么|涉及|是否包含|包含|讲什么|讲了什么|说的是什么|什么内容|内容|主题|介绍|总结|概括|是什么|有什么|有哪些)/;
+/** 指向"某一份具体文档"的线索：命中说明是文档级问题，不能被库级路由抢走。 */
+const DOC_LEVEL_CUE_RE = new RegExp(
+  `${FILE_NAME_RE.source}|《[^》]{1,40}》|这(份|篇|个|些)?(文档|文件|资料|材料|报告)|该(文档|文件)|第\\s*\\d+\\s*[章节]`,
+);
+/** 库级主体：明确指向"整个库"而非某份文档。 */
+const LIBRARY_SCOPE_RE = /(知识库|资料库|这个库|该库|当前库|全库|整个库|所有资料|全部资料)/;
+
+/**
+ * 是否属于"全库概览"类问题（→ 直接走 AI 解析 kb.summary，不走单点检索）。
+ *
+ * 为什么必须做这条判定：库级元问题（整体定位 / 覆盖范围 / 建设目的 / 主题分布）
+ * 的答案不由任何单个 chunk 承载。这类问题落到检索路由后，模型受证据作答契约
+ * 约束（只依据证据、不编造），只能逐条回「资料未说明」，用户看到的就是"答非所问"。
+ *
+ * 判定顺序：先做"文档级"硬排除，再用原有口径，最后用「库级主体 + 库级构成线索」
+ * 补足自然表述（原口径要求关键词紧跟"知识库"之后，"这个知识库的整体定位是什么"
+ * 「这个知识库是干什么用的」都识别不到）。
+ */
+export function isLibraryOverviewQuestion(question: string): boolean {
+  const q = String(question || '').trim();
+  if (!q) return false;
+  if (DOC_LEVEL_CUE_RE.test(q)) return false;
+  if (LIBRARY_OVERVIEW_RE.test(q)) return true;
+  return LIBRARY_SCOPE_RE.test(q) && LIBRARY_META_CUE_RE.test(q);
+}
+
+/**
+ * 是否属于"在问整个库"（软判据，**仅用于证据作答失败后的兜底**）。
+ *
+ * 与 isLibraryOverviewQuestion 的区别：它判得更宽（把「干什么用的」「主要涉及
+ * 什么内容」「是否包含 X」这类自然问法也算进来），但只在两条失败路径上使用——
+ * 检索空手而归、或模型回答整体是「资料未说明」。此时不动手的结果是用户拿到一句
+ * 无用回答，动手最差也只是给一份全库概览，因此放宽是划算的。
+ */
+export function isLibraryScopeQuestion(question: string): boolean {
+  const q = String(question || '').trim();
+  if (!q) return false;
+  if (DOC_LEVEL_CUE_RE.test(q)) return false;
+  return LIBRARY_SCOPE_RE.test(q) && (LIBRARY_META_CUE_RE.test(q) || LIBRARY_SOFT_CUE_RE.test(q));
+}
 
 function toEvidenceRefs(hits: MaterialHit[]): KbEvidenceRef[] {
   return hits.map((h) => ({
@@ -288,7 +345,26 @@ export async function* kbAskStream(
 
   // 全库概览类问题：复用「AI 解析」能力（一句话总结 + 逐文档要点），
   // 避免单点检索对“整个库讲什么”必然空手而归。
-  if (LIBRARY_OVERVIEW_RE.test(question)) {
+  if (isLibraryOverviewQuestion(question)) {
+    const reply = await buildOverviewReply();
+    if (reply) {
+      // 记一条路由决策：否则"直达概览"这条路径在日志里完全静默，出问题时
+      // 没法判断用户问的到底走了哪条路（2026-09 验收排查吃过这个亏）。
+      log.info('kb library question routed to overview (no retrieval)', {
+        user_id: maskId(userId),
+        dir: dirScope,
+        query: question.slice(0, 120),
+      });
+      yield reply;
+      return;
+    }
+  }
+  /**
+   * 全库概览答复（复用「AI 解析」kb.summary）。
+   * 返回 null = 摘要不可用，调用方应回落到单点检索。
+   * 之所以抽成函数：它有两个使用点——库级问题直接走它；以及"证据作答失败后"的兜底。
+   */
+  async function buildOverviewReply(): Promise<KbAskEvent | null> {
     try {
       const kbSummaryMod = await import('./kb_summary');
       const overview = await kbSummaryMod.kbSummarize(userId, {
@@ -311,23 +387,40 @@ export async function* kbAskStream(
         },
       });
       const docs = Array.isArray(overview.docs) ? overview.docs : [];
-      let text = overview.oneLiner
-        ? `一句话概括：${overview.oneLiner}`
-        : '未能生成一句话总结。';
+      const scope = dirScope ? `「${dirScope}」` : '个人知识库';
+      let text: string;
       if (docs.length) {
-        const scope = dirScope ? `「${dirScope}」` : '个人知识库';
-        text += `\n\n${scope}当前共解析 ${docs.length} 份文档，例如：`;
-        text += `\n${docs.slice(0, 8).map((d, i) => `${i + 1}. ${d.name}${d.text ? `：${d.text}` : ''}`).join('\n')}`;
+        const rows = docs.slice(0, 10).map((d, i) => {
+          const point = d.text && d.text.trim() ? d.text.trim() : '（暂无要点）';
+          return `${i + 1}. **${d.name}** —— ${point}`;
+        }).join('\n');
+        text = `${scope}共收录 ${docs.length} 份已解析文档，以下是核心内容概览：\n\n📚 文档内容\n${rows}\n\n💡 一句话总结\n${overview.oneLiner || '（未能生成总结）'}`;
       } else {
-        text += '\n\n（当前还没有可索引文档，导入资料后可再次总结。）';
+        text = `${scope}当前还没有可索引文档，导入资料后可再次总结。`;
       }
-      yield { type: 'final', text, evidence: [] };
-      return;
+      // 概览回答同样必须可溯源：把实际参与总结的文档挂成证据，渲染层的底部
+      // 「资料来源」据此渲染可点路径（与 AI 解析卡的 `路径#chunk 1 ↗` 同源字段）。
+      // 此前这里恒返回 `evidence: []`，用户看到"某文档：某要点"却无从点开原文。
+      const evidence: KbEvidenceRef[] = docs
+        .filter((d) => d && d.file)
+        .slice(0, 12)
+        .map((d) => ({
+          source: 'library' as const,
+          scope: (input.spaceId ? 'space' : 'global') as KbEvidenceRef['scope'],
+          path: String(d.file),
+          chunkIdx: 1,
+          snippet: String(d.text || ''),
+          score: 1,
+          ...(input.spaceId ? { spaceId: String(input.spaceId) } : {}),
+        }));
+      // 状态行与正文分离：渲染层以浅灰小字置于回答顶部（sysNote 随事件回传，见调用点 yield）
+      return { type: 'final', text, evidence, sysNote: '已读取知识库信息' };
     } catch (err) {
       log.warn('library-overview summary failed; falling back to normal retrieval', {
         user_id: maskId(userId),
         error: (err as Error).message,
       });
+      return null;
     }
   }
   const finalK = typeof input.k === 'number' && input.k > 0 ? Math.floor(input.k) : DEFAULT_K;
@@ -375,6 +468,20 @@ export async function* kbAskStream(
   }
 
   if (!res.hasEvidence) {
+    // 库级兜底①：检索空手而归、而问题在问"整个库"时，改用全库概览。
+    // 单点检索结构上答不出库级问题，直接回"未找到"属于答非所问。
+    if (isLibraryScopeQuestion(question)) {
+      const overviewReply = await buildOverviewReply();
+      if (overviewReply) {
+        log.info('kb library-scope question answered via overview (retrieval empty)', {
+          user_id: maskId(userId),
+          dir,
+          query: question.slice(0, 120),
+        });
+        yield overviewReply;
+        return;
+      }
+    }
     const weakEvidence = diversifyHits(res.hits, DIVERSIFY_PER_FILE, finalK);
     log.info('kbqa retrieval observed', {
       user_id: maskId(userId),
@@ -442,6 +549,21 @@ export async function* kbAskStream(
     return;
   }
   if (isNotFoundAnswer(answer)) {
+    // 库级兜底②：检索**有**证据、但模型逐条回「资料未说明」——这是库级元问题的
+    // 典型结局（问题问的是"整个库的定位/覆盖/目的"，而证据里只有零散 chunk）。
+    // 此时若问题在问"整个库"，改用全库概览整体回答；否则保留原本的诚实声明。
+    if (isLibraryScopeQuestion(question)) {
+      const overviewReply = await buildOverviewReply();
+      if (overviewReply) {
+        log.info('kb library-scope question answered via overview (evidence answered nothing)', {
+          user_id: maskId(userId),
+          dir,
+          query: question.slice(0, 120),
+        });
+        yield overviewReply;
+        return;
+      }
+    }
     const suggestion = await resolveCrossLibSuggestion(userId, { question, dir, spaceId: input.spaceId });
     log.info('kb answer reports nothing found; suppressing citation chips', {
       user_id: maskId(userId),
@@ -469,6 +591,8 @@ export const _internals = {
   findReadyByBasename,
   pinnedHitsForFile,
   topDirOf,
+  isLibraryOverviewQuestion,
+  isLibraryScopeQuestion,
 };
 
 /** 多轮对话历史拼进 systemPrompt（只保留最近 6 轮，防上下文溢出）。 */

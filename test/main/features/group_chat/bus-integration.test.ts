@@ -2889,7 +2889,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     });
   }, BUS_TEST_TIMEOUT_MS);
 
-  it("rejects dispatch with an explicit ability asset when no confirmed Projection exists", async () => {
+  it("授予不存在的资产 id 仍被拒（2026-09-18 放宽后守住可读性闸），且错误不回显 id", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -2912,12 +2912,54 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const toolResult = _recordedToolResults.find((r) => r.name === "dispatch_to");
     expect(toolResult?.isError).toBe(true);
     expect(JSON.parse(toolResult!.content).error).toBe(
-      "Ability assets require a current confirmed Projection.",
+      "Unknown ability asset or unauthorized ability asset.",
     );
     expect(toolResult!.content).not.toContain("aa-does-not-exist");
     // The agent never started.
     expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
   }, BUS_TEST_TIMEOUT_MS);
+
+  it("没有投影也能授予目录内资产（2026-09-18 放宽：目录化 + 模型自选）", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const assetService = await import("../../../../src/main/features/recall/asset-service");
+
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Delegated turns can use any catalog asset the Commander picks.",
+      summary: "catalog-wide dispatch grant",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-catalog" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    await assetService.setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "audit the flow", ability_assets: [asset.id] },
+      },
+      { type: "final", text: "Synthesised." },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "final", text: "AGENT-OK-CAT" }]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    // 会话里没有任何 confirmed 投影，派单仍成立：被派发者只看到显式授予块。
+    const agentCall = _recordedCalls.find((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID));
+    expect(agentCall).toBeTruthy();
+    expect(agentCall!.systemPrompt).toContain("<commander-dispatched-assets>");
+    expect(agentCall!.systemPrompt).toContain(asset.title);
+    expect(agentCall!.systemPrompt).not.toContain("<confirmed-ability-assets>");
+    const usage = await import("../../../../src/main/features/recall/usage-service");
+    const dispatched = (await usage.listRecallUsage(TEST_UID, asset.id))
+      .filter((record) => record.outcome === "dispatched");
+    expect(dispatched.length).toBeGreaterThanOrEqual(1);
+  }, 10_000);
 
   it.each(["agent_idle", "tool_idle"] as const)(
     "run_worker classifies coordinator %s aborts as retryable without claiming a user stop",
@@ -3088,6 +3130,10 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   // 本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下
   // 会话连续性由 P3394 session 承担。网关侧 PID 数据源与探活语义列入
   // 后续增强（见 docs/design 设计文档第 5 节），补齐后恢复本用例。
+  //
+  // 2026-09-20：本用例是 develop 上**唯一保留**的硬跳过，已登记在
+  // test/skip-allowlist.json（含理由与恢复条件），nightly 的 skip 检查会盯着它；
+  // 同日复核确认它恢复后确实会红（同类另外 3 条恢复后均直接通过）。
   it.skip("CLI process-info accepts only a positive integer number as the in-memory PID", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -6798,8 +6844,17 @@ describe("group_chat bus integration › delegated ability asset Projection subs
     },
   );
 
+  /** 2026-09-18 放宽：授予不再要求"投影子集"——目录里（存在、可读、过闸）
+   *  的资产都能派。保住的不变量是"授予精确"：被派发者只看到被授予的那几条，
+   *  看不到投影里的其他资产与投影 id。 */
+  function delegatedTargetPrompt(run: { targetSessionId?: string }): string | undefined {
+    return run.targetSessionId
+      ? _recordedCalls.find((call) => call.sid === run.targetSessionId)?.systemPrompt
+      : _recordedCalls.find((call) => call.sid.startsWith("gworker-"))?.systemPrompt;
+  }
+
   it.each(delegatedAssetSurfaces)(
-    "%s rejects an active asset outside the current confirmed Projection without revealing the asset set",
+    "%s allows an active asset outside the current confirmed Projection, and grants it precisely (2026-09-18)",
     async (surface) => {
       const cid = newCid();
       const seeded = await seedDelegatedProjection(
@@ -6809,21 +6864,18 @@ describe("group_chat bus integration › delegated ability asset Projection subs
       const external = await createDelegatedAbilityAsset(`external-${surface}`);
       const run = await runDelegatedSurface(cid, surface, [external.id]);
 
-      genericAuthorizationError(run.result, [
-        external.id,
-        external.title,
-        seeded.asset.id,
-        seeded.asset.title,
-        seeded.projection.id,
-      ]);
-      expect(run.targetSessionId
-        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
-        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+      expect(run.result?.isError).not.toBe(true);
+      const prompt = delegatedTargetPrompt(run);
+      expect(prompt).toContain("<commander-dispatched-assets>");
+      expect(prompt).toContain(external.title);
+      // 精确授予：投影里那条不出现（该看不到的就看不到）；投影 id 也不泄露。
+      expect(prompt).not.toContain(seeded.asset.title);
+      expect(prompt).not.toContain(seeded.projection.id);
     },
   );
 
   it.each(delegatedAssetSurfaces)(
-    "%s rejects an explicit grant when the current Projection is not confirmed",
+    "%s still stops at the host approval gate when the current Projection is not confirmed — the asset relax does not reopen it (2026-09-18)",
     async (surface) => {
       const cid = newCid();
       const seeded = await seedDelegatedProjection(
@@ -6833,12 +6885,12 @@ describe("group_chat bus integration › delegated ability asset Projection subs
       );
       const run = await runDelegatedSurface(cid, surface, [seeded.asset.id]);
 
-      genericAuthorizationError(run.result, [
-        seeded.asset.id,
-        seeded.asset.title,
-        seeded.projection.id,
-        "assetIds",
-      ]);
+      // 资产授予的放宽只针对"成员资格"，宿主审批门（KStar 投影未确认 →
+      // 暂停特权派单）原样保留：这是产品决定，不由本次放宽放开。
+      expect(run.result?.isError).toBe(true);
+      const payload = JSON.parse(run.result!.content) as { error_code?: string; error?: string };
+      expect(payload.error_code).toBe("kstar_projection_not_confirmed");
+      expect(run.result!.content).not.toContain(seeded.asset.id);
       expect(run.targetSessionId
         ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
         : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
@@ -6846,7 +6898,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
   );
 
   it.each(delegatedAssetSurfaces)(
-    "%s rejects an explicit grant when the frozen Projection version has drifted",
+    "%s allows an explicit grant when the Projection version has drifted — the receipt pins the version read at dispatch time (2026-09-18)",
     async (surface) => {
       const cid = newCid();
       const seeded = await seedDelegatedProjection(
@@ -6861,29 +6913,26 @@ describe("group_chat bus integration › delegated ability asset Projection subs
       });
       const run = await runDelegatedSurface(cid, surface, [seeded.asset.id]);
 
-      genericAuthorizationError(run.result, [
-        drifted.id,
-        drifted.title,
-        seeded.projection.id,
-        "assetVersions",
-      ]);
-      expect(run.targetSessionId
-        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
-        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+      expect(run.result?.isError).not.toBe(true);
+      expect(delegatedTargetPrompt(run)).toContain(drifted.title);
+      // 版本按派单/读取时刻的在用版记录（不再是投影冻结版本）。
+      const usage = await import("../../../../src/main/features/recall/usage-service");
+      const dispatched = (await usage.listRecallUsage(TEST_UID, drifted.id))
+        .filter((record) => record.outcome === "dispatched");
+      expect(dispatched.length).toBeGreaterThanOrEqual(1);
+      expect(dispatched[0].assetVersion).toBe(drifted.version);
     },
   );
 
   it.each(delegatedAssetSurfaces)(
-    "%s rejects an explicit grant when no current Requirement exists",
+    "%s allows an explicit grant when no current Requirement exists (2026-09-18)",
     async (surface) => {
       const cid = newCid();
       const asset = await createDelegatedAbilityAsset(`without-requirement-${surface}`);
       const run = await runDelegatedSurface(cid, surface, [asset.id]);
 
-      genericAuthorizationError(run.result, [asset.id, asset.title, "assetIds", "projectionId"]);
-      expect(run.targetSessionId
-        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
-        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+      expect(run.result?.isError).not.toBe(true);
+      expect(delegatedTargetPrompt(run)).toContain(asset.title);
     },
   );
 
@@ -9259,7 +9308,7 @@ describe("group_chat bus integration › Task 5 anonymous resume", () => {
 });
 
 describe("group_chat bus integration › Commander KSTAR dispatch narration", () => {
-  it.skip("declares task, plan, and expected result only after wake authorization", async () => {
+  it("declares task, plan, and expected result only after wake authorization", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -9323,7 +9372,7 @@ describe("group_chat bus integration › Commander KSTAR dispatch narration", ()
 });
 
 describe("group_chat bus integration › wake-gated dispatch continuation", () => {
-  it.skip("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
+  it("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -9396,7 +9445,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
     unsubscribe();
   }, BUS_TEST_TIMEOUT_MS);
 
-  it.skip("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
+  it("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -11263,4 +11312,129 @@ describe("group_chat bus › desktop message broadcaster", () => {
     // Reaching here without a throw is the assertion: an unset broadcaster
     // is the pre-fix steady state for external inbound paths.
   });
+});
+
+describe("group_chat bus integration › model-selected asset attachment (2026-09-18)", () => {
+  async function seedCatalogAsset(tag: string) {
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const assetService = await import("../../../../src/main/features/recall/asset-service");
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: `Catalog asset for ${tag}: keep the attached set small and justified.`,
+      summary: `catalog-${tag}`,
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: `exec-attach-${tag}` }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    await assetService.setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
+    return asset;
+  }
+
+  it("attaches catalog assets to the task: one model-selected projection + a revocable card; re-attach reuses it", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const asset = await seedCatalogAsset("attach1");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "attach_assets_to_task",
+        input: { assetIds: [asset.id], reason: "this task needs the attached rule" },
+      },
+      { type: "final", text: "Attached." },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const toolResult = _recordedToolResults.find((r) => r.name === "attach_assets_to_task");
+    expect(toolResult?.isError).not.toBe(true);
+    expect(JSON.parse(toolResult!.content)).toMatchObject({ ok: true, attached: 1 });
+
+    const projection = await import("../../../../src/main/features/recall/context-projection");
+    const created = (await projection.listContextProjections(TEST_UID, { status: "confirmed" }))
+      .filter((item) => item.authorization === "model_selected");
+    expect(created).toHaveLength(1);
+    expect(created[0].assetIds).toContain(asset.id);
+
+    // 会话里投了卡（sidecar 字段）——卡片既是给用户看的，也是后续回合注入的查找依据。
+    const cardMessages = (await readConversationMessages(cid))
+      .filter((message) => message?.recall_projection_card?.projectionId === created[0].id);
+    expect(cardMessages).toHaveLength(1);
+    expect(cardMessages[0]?.recall_projection_card).toMatchObject({
+      projectionId: created[0].id,
+      authorization: 'model_selected',
+      presentation: 'sidecar',
+    });
+    const firstFinal = (await readConversationMessages(cid))
+      .find((message) => message?.turn_end === true && message?.text === 'Attached.');
+    expect(firstFinal?.projection_receipt).toMatchObject({
+      projectionId: created[0].id,
+      authorization: 'model_selected',
+    });
+
+    // 再挂一次：复用同一条投影（追加），不产生第二张卡。
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "attach_assets_to_task",
+        input: { assetIds: [asset.id], reason: "again" },
+      },
+      { type: "final", text: "Still attached." },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "继续" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+    const after = (await projection.listContextProjections(TEST_UID, { status: "confirmed" }))
+      .filter((item) => item.authorization === "model_selected");
+    expect(after).toHaveLength(1);
+    const messagesAfterRepeat = await readConversationMessages(cid);
+    expect(messagesAfterRepeat
+      .filter((message) => message?.recall_projection_card?.projectionId === created[0].id)).toHaveLength(1);
+    const repeatFinal = messagesAfterRepeat
+      .find((message) => message?.turn_end === true && message?.text === 'Still attached.');
+    expect(repeatFinal?.projection_receipt).toMatchObject({
+      projectionId: created[0].id,
+      authorization: 'model_selected',
+    });
+  }, 20_000);
+
+  it("revokes a model-selected projection (confirmed → revoked) and refuses other authorizations", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const asset = await seedCatalogAsset("revoke1");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "attach_assets_to_task",
+        input: { assetIds: [asset.id], reason: "attach then revoke" },
+      },
+      { type: "final", text: "Attached." },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const projection = await import("../../../../src/main/features/recall/context-projection");
+    const created = (await projection.listContextProjections(TEST_UID, { status: "confirmed" }))
+      .find((item) => item.authorization === "model_selected");
+    expect(created).toBeTruthy();
+
+    const revoked = await projection.revokeModelSelectedProjection(TEST_UID, created!.id);
+    expect(revoked.status).toBe("revoked");
+    // 撤销后不再参与注入：confirmed 列表里查不到它。
+    expect((await projection.listContextProjections(TEST_UID, { status: "confirmed" }))
+      .some((item) => item.id === created!.id)).toBe(false);
+
+    // 用户自己确认过的投影（user_confirmed）不在这条撤销线上：避免一键撤销掉
+    // 用户明确的决定。
+    const userOwned = await projection.previewContextProjection(TEST_UID, {
+      taskRunId: "turn-userowned01",
+      purpose: "conversation_reply",
+      authorization: "user_confirmed",
+      confirm: true,
+    });
+    await expect(projection.revokeModelSelectedProjection(TEST_UID, userOwned.id))
+      .rejects.toThrow("not model-selected");
+  }, 20_000);
 });

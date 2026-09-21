@@ -25,14 +25,12 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   groupCandidates: (c: unknown[]) => Array<{ entryRef: string; wrong: string; correct: string; riskLevel: string; count: number }>;
   conceptKeyOfCorrect: (t: unknown) => string;
   groupRowsByConcept: (rows: unknown[]) => Array<{ conceptKey: string; display: string; spans: number; rows: number }>;
-  flaggedSummary: (flagged: unknown) => { count: number; distinct: number; byReason: Record<string, number> };
   buildDiffPanes: (before: string, after: string, offsetMap: unknown[]) => {
     before: Array<{ kind: string; text: string }>;
     after: Array<{ kind: string; text: string }>;
     changedCount: number;
     deletedCount: number;
   };
-  mergeFlagged: (existing: unknown[], incoming: unknown[]) => unknown[];
   syncSummary: (sync: unknown) => {
     groupCount: number;
     conceptGroups: Array<{ display: string; count: number }>;
@@ -48,6 +46,8 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   summarizeRows: (rows: unknown[], accepted: Iterable<string>) => { total: number; selected: number; spans: number; pendingHigh: number };
   splitByRisk: (rows: Array<{ riskLevel: string; ignoredCount?: number }>) => { high: unknown[]; other: unknown[]; ignored: unknown[] };
   defaultAcceptedIds: (rows: unknown[]) => string[];
+  reviewSummary: (review: unknown) => string;
+  checkedModelCandidates: (rows: unknown[], accepted: Iterable<string>) => Array<{ start: number; wrong: string; correct: string }>;
   normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
   cleanedFileName: (p: string, suffix?: string) => string;
@@ -338,114 +338,6 @@ describe('对照视图分段（offsetMap 就是权威事实）', () => {
   });
 });
 
-describe('待核（未决项）', () => {
-  it('摘要按理由分档、原词去重计数', () => {
-    const stats = panel.flaggedSummary([
-      { span: { start: 1, end: 2 }, text: 'KSTAR', reason: 'unknown_entity' },
-      { span: { start: 9, end: 14 }, text: 'KSTAR', reason: 'ambiguous_name' },
-    ]);
-    expect(stats.count).toBe(2);
-    expect(stats.distinct).toBe(1);
-    expect(stats.byReason.unknown_entity).toBe(1);
-    expect(stats.byReason.ambiguous_name).toBe(1);
-  });
-
-  it('空输入安全（未扫描时不渲染任何待核）', () => {
-    expect(panel.flaggedSummary(null)).toEqual({ count: 0, distinct: 0, byReason: {} });
-  });
-
-  it('同位置同理由重复标记被合并：清理版不能插两个标记', () => {
-    const existing = [{ span: { start: 3, end: 7 }, text: 'coxy', reason: 'ambiguous_name' }];
-    const merged = panel.mergeFlagged(existing, [
-      { span: { start: 3, end: 7 }, text: 'coxy', reason: 'ambiguous_name' },
-      { span: { start: 20, end: 24 }, text: 'coxy', reason: 'ambiguous_name' },
-    ]);
-    expect(merged).toHaveLength(2);
-  });
-});
-
-describe('视觉规范契约（2026-09-15 使用侧反馈）', () => {
-  const style = readSrc('renderer/style.css');
-  const tokens = readSrc('renderer/tokens.css');
-  const source = readSrc('renderer/modules/kb-transcript-correct.js');
-
-  it('状态色四件套走 token，不在 style.css 里写死颜色', () => {
-    for (const token of [
-      '--state-accepted-bg', '--state-accepted-text',
-      '--state-caution-bg', '--state-caution-text',
-      '--state-review-bg', '--state-review-text',
-      '--state-ignored-bg', '--state-ignored-text',
-    ]) {
-      expect(tokens).toContain(token);
-      expect(style).toContain(`var(${token})`);
-    }
-    // 已接受用低饱和墨绿（不是品牌亮绿）：按钮与行底色都换成状态色
-    expect(style).toMatch(/\.kb-atc__row\.is-accepted \.ui-button--primary \{[^}]*var\(--state-accepted-bg\)/);
-    // 高危用暖橙（不是红）
-    expect(style).toMatch(/\.kb-atc__row\[data-risk="high"\] \.kb-atc__badge \{[^}]*var\(--state-caution/);
-  });
-
-  it('按钮按"核心/次要/低频"分组：主色填充 / 线框 / 文字', () => {
-    // role 写在 attrs 之前，所以从 role 往后找对应的动作标识
-    const roles = (key: string) => {
-      const at = source.indexOf(`data-atc-action': '${key}'`);
-      const head = source.slice(Math.max(0, at - 400), at);
-      const found = head.match(/role: '(primary|secondary|ghost)'/g) || [];
-      return found.length ? found[found.length - 1] : '';
-    };
-    expect(roles('apply')).toContain('primary');
-    expect(roles('revert')).toContain('secondary');
-    expect(roles('notes')).toContain('ghost');
-    expect(roles('compare-search')).toContain('ghost');
-  });
-
-  it('条目留白 + 极淡分隔线', () => {
-    expect(style).toMatch(/\.kb-atc__row \{[^}]*padding-block: var\(--space-2\)/);
-    expect(style).toMatch(/\.kb-atc__row \{[^}]*border-bottom: 1px solid var\(--line-default\)/);
-  });
-
-  it('范围/开关走共享组件：uiSegmentedControl + uiCheckbox，且不再有页面级 .ui-button 覆盖', () => {
-    // 互斥范围用共享分段控件，选中态由 value 驱动（不再靠 primary/ghost 互换）
-    expect(source).toContain('root.uiSegmentedControl({');
-    expect(source).toContain("value: state.scopeChoice");
-    // 每个分段项原样透传点击委托所需的 data-* 属性
-    expect(source).toMatch(/attrs: \{ 'data-atc-action': 'scope', 'data-atc-scope'/);
-    // 开关用共享复选框（<label> 包裹，沿用组件预览页的既有用法）
-    expect(source).toContain('root.uiCheckbox({');
-    expect(source).toContain('kb-atc__scope-toggle');
-    // 页面 CSS 不得再改共享按钮内部（原 32px 热区覆盖已删除，改为向组件层提需求）
-    expect(style).not.toMatch(/\.kb-atc__scope \.ui-button/);
-    // 开关不再是"靠 role 互换表达开关态"的按钮
-    expect(source).not.toMatch(/role: state\.mergeSpeaker \? 'primary'/);
-  });
-
-  it('折叠块有箭头提示，且说明文字弱化', () => {
-    expect(style).toContain('summary::before');
-    expect(style).toMatch(/\.kb-atc__issues\[open\] > summary::before/);
-    expect(style).toMatch(/\.kb-atc__hint \{[^}]*color: var\(--text-faint\)/);
-    expect(style).toMatch(/\.kb-atc__meta \{[^}]*font-size: var\(--font-size-1\)/);
-  });
-
-  it('面板标题下有一句作用说明，文件名只显示尾段（hover 给全路径）', () => {
-    expect(source).toContain('kb.transcriptCorrect.panel_hint');
-    expect(source).toContain("meta.setAttribute('title'");
-    // 只取路径尾段：`…split(/[\\/]/)…pop() || full`
-    expect(source).toContain('pop() || full');
-  });
-
-  it('左栏阅读：60/40 比例、行高 1.5、说话人三档专用 token、双栏细滚动条', () => {
-    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-main \{[^}]*flex: 1 1 60%/);
-    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*flex: 0 0 40%/);
-    expect(style).toMatch(/\.anchored-source-block-body \{[^}]*line-height: 1\.5/);
-    for (const token of ['--speaker-tint-0', '--speaker-tint-1', '--speaker-tint-2']) {
-      expect(tokens).toContain(token);
-    }
-    expect(style).toContain('.anchored-source-body::-webkit-scrollbar');
-    // 底色分层：右栏用底色而不是生硬左边框
-    expect(style).toMatch(/\.anchored-source-modal--reader \.anchored-source-correct \{[^}]*border-left: none/);
-  });
-});
-
 describe('滚动与可调宽（2026-09-15 使用侧反馈修复）', () => {
   const style = readSrc('renderer/style.css');
   const viewer = readSrc('renderer/modules/anchored-source-view.js');
@@ -495,52 +387,47 @@ describe('滚动与可调宽（2026-09-15 使用侧反馈修复）', () => {
 describe('locale 覆盖', () => {
   const locales = ['zh', 'en', 'ja', 'pt'];
   const required = [
-    'title', 'meta', 'scan', 'scanning', 'rescan', 'scan_done', 'scan_failed',
-    'accept', 'accepted', 'ignore', 'apply', 'applying', 'apply_done', 'apply_failed',
-    'summary', 'pending_high', 'applied_summary', 'applied_deleted', 'applied_pending',
-    'retention', 'over_rewrite', 'preview', 'preview_title', 'save', 'saved', 'save_failed',
-    'revert', 'revert_title', 'revert_ok', 'revert_mismatch', 'revert_failed',
-    'add_entry', 'wrong', 'correct', 'kind', 'add', 'added', 'add_failed', 'need_both', 'reject_digits',
-    'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc', 'risk_high', 'risk_medium', 'risk_low',
-    'delete_arrow', 'close_panel', 'unavailable', 'close', 'cleaned_suffix',
-    'group_high', 'group_other', 'group_other_collapsed',
-    // 本体/记忆同步（P1）
-    'sync_section', 'sync_hint', 'sync', 'syncing', 'resync', 'sync_groups', 'sync_linked',
-    'sync_align', 'sync_missing', 'sync_contributed', 'sync_no_source', 'sync_done',
-    'sync_failed', 'sync_source_ontology', 'sync_source_memory', 'sync_align_row',
-    'sync_align_use', 'sync_aligned', 'sync_align_failed', 'sync_missing_row',
-    'sync_seed', 'sync_cancel', 'sync_seed_add', 'sync_seed_need_wrong', 'sync_seed_added',
+    'title', 'meta', 'scan', 'scanning',
+    'rescan', 'scan_done', 'scan_failed', 'accept',
+    'accepted', 'ignore', 'apply', 'applying',
+    'apply_done', 'apply_failed', 'summary', 'pending_high',
+    'applied_summary', 'applied_deleted', 'applied_pending', 'retention',
+    // develop #307 删掉了「预览清理版」与「接受范围」三档：preview / scope_* 已无定义，不再必填
+    'over_rewrite', 'save',
+    'saved', 'save_failed', 'revert', 'revert_title',
+    'revert_ok', 'revert_mismatch', 'revert_failed', 'add_entry',
+    'wrong', 'correct', 'kind', 'add',
+    'added', 'add_failed', 'need_both', 'reject_digits',
+    'idle_title', 'idle_desc', 'no_hits', 'no_hits_desc',
+    'risk_high', 'risk_medium', 'risk_low', 'delete_arrow',
+    'close_panel', 'unavailable', 'close', 'cleaned_suffix',
+    'group_high', 'group_other', 'group_other_collapsed', 'sync_section',
+    'sync_hint', 'sync', 'syncing', 'resync',
+    'sync_groups', 'sync_linked', 'sync_align', 'sync_missing',
+    'sync_contributed', 'sync_no_source', 'sync_done', 'sync_failed',
+    'sync_source_ontology', 'sync_source_memory', 'sync_align_row', 'sync_align_use',
+    'sync_aligned', 'sync_align_failed', 'sync_missing_row', 'sync_seed',
+    'sync_cancel', 'sync_seed_add', 'sync_seed_need_wrong', 'sync_seed_added',
     'sync_seed_skipped', 'sync_seed_failed', 'summary_concepts', 'sync_chips_more',
-    // 待核 / 未决项（方案 §4.3）
-    'issue_section', 'issue_section_count', 'issue_hint', 'issue_find_suspects', 'issue_finding',
-    'issue_suspects_found', 'issue_suspects_none', 'issue_suspects_failed', 'issue_suspect_row',
-    'issue_mark', 'issue_unmark', 'issue_badge', 'issue_cancel', 'issue_at', 'issue_empty',
-    'issue_list_title', 'issue_summary', 'issue_reason_unknown_entity', 'issue_reason_ambiguous_name',
-    'issue_reason_mixed_speech', 'issue_reason_asr_unrecoverable',
-    // 接受的三个动作 + 对照视图
-    'more', 'restore', 'reopen_row', 'restored', 'ignored_done', 'ignore_failed', 'group_ignored',
-    'denied', 'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed',
-    'denied_reason_word_boundary', 'denied_reason_overlapping_span', 'denied_reason_protected_region',
-    'scope_label', 'scope_keep', 'scope_doc', 'scope_task', 'scope_applied', 'scope_refused',
-    'scope_failed', 'scope_need_tags', 'add_allow', 'add_allow_placeholder', 'add_allow_context',
-    'add_allow_need_term', 'add_allow_done', 'add_allow_failed', 'add_allow_existing', 'remove',
-    'remove_allow_done', 'remove_allow_failed', 'rename_correct', 'rename_done', 'rename_failed',
-    'rename_need_value', 'confirm', 'cancel', 'no_context',
-    'diff', 'diff_title', 'diff_bar', 'diff_before', 'diff_after', 'diff_note', 'diff_failed',
-    'seed_fillers', 'seed_fillers_done', 'seed_fillers_failed', 'scan_truncated',
-    'merge_on', 'merge_off', 'merged_blocks',
-    'notes', 'notes_title', 'notes_desc', 'notes_save', 'notes_suffix', 'notes_saved',
-    'notes_duplicate', 'notes_save_failed', 'notes_failed', 'sync_structure_only',
-    'llm_ask', 'llm_running', 'llm_row', 'llm_pending', 'llm_adopt', 'llm_found', 'llm_rejected',
-    'llm_no_model', 'llm_no_allowed', 'llm_no_suspects', 'llm_none', 'llm_failed',
-    'llm_adopted', 'llm_adopt_failed',
-    'headings_ask', 'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
-    'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short', 'headings_none',
-    'compare', 'compare_running', 'compare_prompt', 'compare_result', 'compare_no_rewrite', 'compare_failed',
-    // 视觉规范（2026-09-15）：面板说明 + 文件名 hover 全路径
-    'panel_hint', 'meta_full',
-    // 另存去重时指出确切已有文件（2026-09-16：只说目录级，用户找不到）
-    'save_duplicate_file',
+    'more', 'restore', 'reopen_row', 'restored',
+    'ignored_done', 'ignore_failed', 'group_ignored', 'denied',
+    'denied_reason_out_of_scope', 'denied_reason_context_denied', 'denied_reason_context_allowed', 'denied_reason_word_boundary',
+    'denied_reason_overlapping_span', 'denied_reason_protected_region',
+    'add_allow', 'add_allow_placeholder',
+    'add_allow_context', 'add_allow_need_term', 'add_allow_done', 'add_allow_failed',
+    'add_allow_existing', 'remove', 'remove_allow_done', 'remove_allow_failed',
+    'rename_correct', 'rename_done', 'rename_failed', 'rename_need_value',
+    'confirm', 'cancel', 'no_context', 'diff',
+    'diff_title', 'diff_bar', 'diff_before', 'diff_after',
+    'diff_note', 'diff_failed', 'seed_fillers', 'seed_fillers_done',
+    'seed_fillers_failed', 'scan_truncated', 'merge_on', 'merge_off',
+    'merged_blocks', 'notes', 'notes_title', 'notes_desc',
+    'notes_save', 'notes_suffix', 'notes_saved', 'notes_duplicate',
+    'notes_save_failed', 'notes_failed', 'sync_structure_only', 'headings_ask',
+    'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
+    'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short',
+    'headings_none', 'panel_hint',
+    'meta_full', 'save_duplicate_file',
   ];
 
   for (const lang of locales) {
@@ -572,12 +459,27 @@ describe('源码契约', () => {
     expect(source).not.toContain('memory.write');
   });
 
-  it('未决项走主进程：疑似专名只查不改，待核随 apply 一起提交', () => {
-    expect(source).toContain("'transcript.correct.suspects'");
-    expect(source).toMatch(/issues: state\.flagged/);
-    // 清理版文本只来自主进程：面板不得自己往文本里拼标记
+  it('清理版文本只来自主进程：面板不自己拼标记', () => {
+    // 待核/【转写存疑】那套并行状态已移除；面板仍必须只渲染主进程返回的文本
     expect(source).not.toMatch(/cleanedText\s*=\s*[^;]*【转写存疑】/);
     expect(source).toMatch(/state\.cleanedText = String\(result\?\.result\?\.text/);
+  });
+
+  it('面板不再有"待核"这套并行状态：不出现 flagged / 标待核 / 转写存疑', () => {
+    // 待核（未决项）已整体移除：扫描结果就是唯一的候选清单，勾选即确认。
+    expect(source).not.toContain('data-atc-flag');
+    expect(source).not.toContain('state.flagged');
+    expect(source).not.toContain('【转写存疑】');
+    expect(source).not.toContain('flagCandidates');
+    expect(source).not.toContain('issueReasonLabel');
+  });
+
+  it('面板不给"模型候选绕过勾选直接入表"留通道：upsert 只由人工新增表单调用', () => {
+    const upsertCalls = source.match(/'transcript\.glossary\.upsert',\s*\{[\s\S]{0,400}?\}\)/g) || [];
+    expect(upsertCalls.length).toBeGreaterThanOrEqual(1);
+    for (const call of upsertCalls) {
+      expect(call).not.toMatch(/candidate/i);
+    }
   });
 
   it('对照视图在模态内提供回滚，且分段只吃 offsetMap（不另算 diff）', () => {
@@ -676,33 +578,66 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('destroyCorrection()');
   });
 
-  it('场景标签：归一规则与主进程一致（纯函数）', () => {
-    expect(panel.normalizeScenarioTags([' 英语演讲课 '])).toEqual(['英语演讲课']);
-    expect(panel.normalizeScenarioTags(['Cogseed', 'cogseed'])).toEqual(['Cogseed']);
-    expect(panel.normalizeScenarioTags('英语演讲课')).toEqual([]);
-    expect(panel.normalizeScenarioTags(Array.from({ length: 12 }, (_, i) => `场景${i}`))).toHaveLength(8);
+  it('场景标签已整体删除（控件、归一函数、docTags 接线一并移除）', () => {
+    expect(panelSrc).not.toContain('scenarioControlHtml');
+    expect(panelSrc).not.toContain('normalizeScenarioTags');
+    expect(panelSrc).not.toContain('state.scenarioTags');
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
+    // 建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId
+    const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
+    expect(upserts).toHaveLength(1);
+    for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
+    // 模型候选这条路已改走「并入扫描」：面板不再单独标待核（没有 flagCandidates 通道），
+    // 而是把 includeReview 交给 scan，模型建议并进同一个候选列表，仍带 docId 收窄作用域。
+    expect(panelSrc).not.toContain("invoke('transcript.correct.flagCandidates'");
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}?includeReview: state\.scanWithReview === true/);
+    // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
+    expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 
-  it('场景标签接线：「仅本场景」的前置数据有读有写、全程带上', () => {
-    // 读/写/建议三条 IPC 都要用到（此前标签没有任何来源，选项永远点不动）
-    expect(panelSrc).toContain("invoke('transcript.docTags.get'");
-    expect(panelSrc).toContain("invoke('transcript.docTags.set'");
-    expect(panelSrc).toContain("invoke('transcript.docTags.suggest'");
-    // 扫描与设作用域都要带上文档自己的标签，否则 scopeAllows 恒 false
-    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}scenarioTags: state\.scenarioTags/);
-    expect(panelSrc).toMatch(/choice === 'task' \? \{ scenarioTags: state\.scenarioTags \}/);
-    // 可用性只看标签有没有（不再看 ctx —— ctx 恒为空数组正是"点不动"的原因）
-    expect(panelSrc).not.toContain('ctx.scenarioTags || []).length');
-    expect(panelSrc).toMatch(/disabled: state\.busy \|\| !state\.scenarioTags\.length/);
+  it('「检索对比」已删除（按钮、函数、状态与分支一并移除）', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'compare-search'");
+    expect(panelSrc).not.toContain('runCompareSearch');
+    expect(panelSrc).not.toContain('compareBusy');
+    expect(panelSrc).not.toContain('transcript.query.compare');
   });
 
-  it('置灰必须说明原因：仅本场景带 title（不再只灰不说）', () => {
-    expect(panelSrc).toMatch(/scope_task_hint|scope_need_tags/);
-    expect(panelSrc).toMatch(/option\.title \? \{ title: option\.title \}/);
+  it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'preview'");
+    expect(panelSrc).not.toMatch(/kind === 'preview'/);
+    // openTextModal 仍被「回滚」复用（回滚后展示原文），不能连坐删除
+    expect(panelSrc).toMatch(/function openTextModal\(title, text\)/);
+    expect(panelSrc).toMatch(/openTextModal\(\s*\n\s*t\('kb\.transcriptCorrect\.revert_title'/);
+    // 「回滚」只剩对照弹窗底部这一个入口
+    expect(panelSrc).toMatch(/\{ id: 'revert', label: t\('kb\.transcriptCorrect\.revert', '回滚'\), role: 'ghost', size: 'sm' \}/);
+    // 弹窗 resolve 的是 { value, reason }：写成 result.id 恒为 undefined ⇒ 动作永不执行
+    expect(panelSrc).not.toMatch(/'action' && result\?\.id/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'revert'/);
+    expect(panelSrc).toMatch(/'action' && result\?\.value === 'save-notes'/);
   });
 
-  it('场景标签变更要重扫（否则"未生效"清单停在旧标签上）', () => {
-    expect(panelSrc).toMatch(/async function applyScenarioTags[\s\S]{0,2200}await runScan\(\)/);
+  it('弹窗结果只能 await 弹窗本身（uiModal 没有 .result；await undefined 会立即通过）', () => {
+    // 真因：`await modal.result` === `await undefined` ⇒ 弹窗还开着就被当成"用户已关闭"，
+    // 于是「对照」里的回滚、「清理附记」里的另存、「拟主题标题」里的采用全都不执行
+    // ——真机表现统一为"按钮点了没反应"。
+    expect(panelSrc).not.toMatch(/modal\.result/);
+    expect(panelSrc).toMatch(/await modal;/);
+    // 把契约钉在 uiModal 上：它返回 Promise 本体（带 close/overlay/dialog），没有 result 字段
+    expect(readSrc('renderer/modules/ui-modal.js'))
+      .toMatch(/Object\.assign\(result, \{ close, overlay, dialog \}\)/);
+  });
+
+  it('弹窗内的动作必须自带点击委托（弹窗挂 body，面板容器的委托收不到）', () => {
+    // 「拟主题标题」的采用按钮渲染在 uiModal 里（document.body 下，见 ui-modal.js），
+    // 只挂容器委托 = 点「采用」没反应（真机反馈）
+    expect(panelSrc).toMatch(/dialog\.addEventListener\('click', onClick\)/);
+    expect(panelSrc).toMatch(/dialog\.removeEventListener\('click', onClick\)/);
+    // 采用态反馈不得用 textContent 覆盖共享按钮内部结构（会冲掉 label span、
+    // role class 也永远停在 secondary）
+    expect(panelSrc).not.toMatch(/headingAdopt\.textContent =/);
+    expect(panelSrc).toMatch(/headingAdopt\.outerHTML = button\(/);
   });
 
   it('入口只在"阅读全文 + 已解析文本 + 是文字转写"时出现', () => {
@@ -717,5 +652,58 @@ describe('查看器集成契约', () => {
     const viewerIdx = html.indexOf('anchored-source-view.js');
     expect(panelIdx).toBeGreaterThan(0);
     expect(panelIdx).toBeLessThan(viewerIdx);
+  });
+});
+
+/**
+ * 「模型建议跟扫描合并」之后的界面契约（待核那套并行状态已整体移除）。
+ */
+describe('模型建议并入候选列表', () => {
+  const src = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('模型建议**永不预勾**：连风险分级都不参与', () => {
+    const rows = [
+      { entryRef: 'g_1', riskLevel: 'low', ignoredCount: 0 },
+      { entryRef: 'model_0', riskLevel: 'low', ignoredCount: 0, fromModel: true },
+    ];
+    expect(panel.defaultAcceptedIds(rows)).toEqual(['g_1']);
+  });
+
+  it('只有勾选的模型建议才随 apply 提交（没勾的不进正文、不进词表）', () => {
+    const rows = [
+      { entryRef: 'model_0', wrong: '付平', correct: '傅平', context: '姓氏同音', fromModel: true, spans: [{ start: 5, end: 7 }] },
+      { entryRef: 'model_1', wrong: 'coxyx', correct: 'Cogseed', fromModel: true, spans: [{ start: 20, end: 25 }] },
+    ];
+    expect(panel.checkedModelCandidates(rows, ['model_1'])).toEqual([
+      { start: 20, wrong: 'coxyx', correct: 'Cogseed', confidence: 1, reason: '' },
+    ]);
+    expect(panel.checkedModelCandidates(rows, [])).toEqual([]);
+    // 词表命中的行不算"模型建议"，不会被重复提交
+    expect(panel.checkedModelCandidates(
+      [{ entryRef: 'g_1', wrong: 'a', correct: 'b', spans: [{ start: 0, end: 1 }] }], ['g_1'],
+    )).toEqual([]);
+  });
+
+  it('复核摘要说清"读到哪了 / 失没失败"，不和"确实没错写"混为一谈', () => {
+    expect(panel.reviewSummary(null)).toBe('');
+    expect(panel.reviewSummary({ modelCandidates: 3 })).toContain('3');
+    expect(panel.reviewSummary({ modelCandidates: 0, skipped: 'model_failed', failedChunks: 2 })).toContain('2');
+    expect(panel.reviewSummary({ modelCandidates: 0, skipped: 'no_model' })).toBeTruthy();
+    const truncated = panel.reviewSummary({ modelCandidates: 1, truncated: true, chunksScanned: 8, chunksTotal: 12 });
+    expect(truncated).toContain('8');
+    expect(truncated).toContain('12');
+  });
+
+  it('扫描带 includeReview 开关，且默认关（花钱的调用必须由用户显式选）', () => {
+    expect(src).toMatch(/includeReview: state\.scanWithReview === true/);
+    expect(src).toMatch(/scanWithReview: false/);
+    expect(src).toContain("'toggle-scan-review'");
+    // 行上有来源徽标，说明"这条不是词表命中"
+    expect(src).toMatch(/kb-atc__badge--model/);
+  });
+
+  it('应用后必须说出"词表被写了"——改了词表却不说，用户无从察觉', () => {
+    expect(src).toMatch(/apply_wrote_glossary/);
+    expect(src).toMatch(/glossaryWrites/);
   });
 });

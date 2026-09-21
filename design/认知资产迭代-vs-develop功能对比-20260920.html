@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>认知资产模块 · 功能变化总结（迭代分支 vs develop）</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --ink:#0f172a; --ink-2:#334155; --ink-3:#64748b;
+    --line:#e2e8f0; --primary:#4f46e5; --primary-soft:#eef2ff;
+    --old:#64748b; --old-bg:#f1f5f9; --new:#059669; --new-bg:#ecfdf5;
+    --warn:#b45309; --warn-bg:#fffbeb; --danger:#be123c;
+    --radius:16px; --shadow:0 1px 3px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75;font-size:15px}
+
+  /* ===== 顶部横幅 ===== */
+  .hero{background:linear-gradient(135deg,#1e1b4b 0%,#312e81 45%,#4338ca 100%);color:#fff;padding:52px 24px 88px;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;right:-120px;top:-120px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(129,140,248,.35),transparent 70%)}
+  .hero::before{content:"";position:absolute;left:-80px;bottom:-160px;width:360px;height:360px;border-radius:50%;background:radial-gradient(circle,rgba(196,181,253,.22),transparent 70%)}
+  .hero-inner{max-width:1120px;margin:0 auto;position:relative;z-index:1}
+  .hero-tag{display:inline-block;font-size:12.5px;letter-spacing:.14em;padding:5px 14px;border:1px solid rgba(255,255,255,.35);border-radius:999px;margin-bottom:18px;color:#c7d2fe}
+  .hero h1{font-size:34px;font-weight:700;letter-spacing:.02em;margin-bottom:10px}
+  .hero p.sub{color:#c7d2fe;font-size:15px;max-width:760px}
+  .hero p.sub code{background:rgba(255,255,255,.14);padding:1px 8px;border-radius:6px;font-size:13px}
+
+  /* ===== 统计卡 ===== */
+  .stats{max-width:1120px;margin:-52px auto 0;padding:0 24px;display:grid;grid-template-columns:repeat(6,1fr);gap:14px;position:relative;z-index:2}
+  .stat{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 16px;text-align:center;border:1px solid var(--line)}
+  .stat .num{font-size:26px;font-weight:700;color:var(--primary);font-variant-numeric:tabular-nums}
+  .stat .num small{font-size:14px;font-weight:600}
+  .stat .lbl{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+  .stat .delta{font-size:11.5px;color:var(--new);font-weight:600}
+
+  /* ===== 布局与导航 ===== */
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+  nav.toc{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);margin-top:34px}
+  nav.toc .wrap{display:flex;gap:6px;overflow-x:auto;padding:10px 24px}
+  nav.toc a{flex:none;font-size:13.5px;color:var(--ink-2);text-decoration:none;padding:6px 14px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  nav.toc a:hover{background:var(--primary-soft);color:var(--primary);border-color:#c7d2fe}
+
+  section{padding:44px 0 8px}
+  .sec-head{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  .sec-num{flex:none;width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--primary),#7c3aed);color:#fff;font-weight:700;font-size:16px;display:flex;align-items:center;justify-content:center}
+  .sec-head h2{font-size:22px;font-weight:700}
+  .sec-desc{color:var(--ink-3);font-size:14px;margin:0 0 22px 46px;max-width:860px}
+
+  /* ===== 结论卡 ===== */
+  .conclusion{background:linear-gradient(135deg,#eef2ff,#faf5ff);border:1px solid #ddd6fe;border-radius:var(--radius);padding:26px 30px;box-shadow:var(--shadow)}
+  .conclusion p{font-size:16px;color:var(--ink-2)}
+  .conclusion p b{color:var(--primary)}
+  .conclusion .kp{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+  .conclusion .kp span{background:#fff;border:1px solid #e0e7ff;border-radius:999px;padding:6px 16px;font-size:13.5px;color:var(--ink-2)}
+  .conclusion .kp span b{color:var(--primary)}
+
+  /* ===== 前后对照行 ===== */
+  .shift{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden}
+  .shift-row{display:grid;grid-template-columns:180px 1fr 46px 1fr;align-items:stretch}
+  .shift-row .dim{display:flex;align-items:center;padding:16px 18px;font-weight:600;font-size:14.5px;background:#fafbff;border-right:1px dashed var(--line);color:var(--ink)}
+  .shift-row .old,.shift-row .new{padding:14px 18px;font-size:13.8px;color:var(--ink-2)}
+  .shift-row .old{background:var(--old-bg)}
+  .shift-row .new{background:var(--new-bg)}
+  .shift-row .arr{display:flex;align-items:center;justify-content:center;color:var(--primary);font-size:20px;font-weight:700}
+  .shift-row .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.08em;border-radius:5px;padding:1px 7px;margin-bottom:6px}
+  .shift-row .old .tag{background:#e2e8f0;color:var(--old)}
+  .shift-row .new .tag{background:#a7f3d0;color:#065f46}
+
+  /* ===== 功能板块卡 ===== */
+  .cap{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:22px;overflow:hidden}
+  .cap-head{display:flex;align-items:flex-start;gap:14px;padding:20px 26px 14px;border-bottom:1px solid var(--line)}
+  .cap-ico{flex:none;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;background:var(--primary-soft)}
+  .cap-head h3{font-size:17.5px;font-weight:700;padding-top:2px}
+  .cap-head .meta{margin-left:auto;flex:none;text-align:right;font-size:12px;color:var(--ink-3);line-height:1.5}
+  .cap-body{padding:18px 26px 20px}
+  .plain{background:var(--warn-bg);border-left:3px solid #f59e0b;border-radius:0 10px 10px 0;padding:12px 16px;font-size:13.8px;color:#78350f;margin-bottom:16px}
+  .plain b{color:var(--warn)}
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .ba .col{border-radius:12px;padding:16px 18px;font-size:13.8px}
+  .ba .col.old{background:var(--old-bg);border:1px solid #e2e8f0}
+  .ba .col.new{background:var(--new-bg);border:1px solid #a7f3d0}
+  .ba .col h4{font-size:12px;letter-spacing:.1em;font-weight:700;margin-bottom:8px}
+  .ba .col.old h4{color:var(--old)}
+  .ba .col.new h4{color:#065f46}
+  .ba ul{list-style:none}
+  .ba li{position:relative;padding-left:16px;margin-bottom:6px;color:var(--ink-2)}
+  .ba .col.old li::before{content:"";position:absolute;left:2px;top:10px;width:6px;height:6px;border-radius:50%;background:#94a3b8}
+  .ba .col.new li::before{content:"";position:absolute;left:2px;top:7px;width:7px;height:7px;border-radius:2px;background:var(--new)}
+  .commits{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .commits .cl{font-size:12px;color:var(--ink-3);margin-right:4px}
+  .hash{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:#f1f5f9;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--ink-2)}
+
+  /* ===== 时间轴 ===== */
+  .timeline{position:relative;margin-left:14px;padding-left:28px;border-left:3px solid #c7d2fe}
+  .tl-item{position:relative;padding-bottom:26px}
+  .tl-item::before{content:"";position:absolute;left:-37.5px;top:6px;width:16px;height:16px;border-radius:50%;background:#fff;border:4px solid var(--primary)}
+  .tl-item.dim::before{border-color:#a5b4fc}
+  .tl-date{font-size:13px;font-weight:700;color:var(--primary);letter-spacing:.05em}
+  .tl-item h4{font-size:16px;font-weight:700;margin:2px 0 6px}
+  .tl-item p{font-size:13.8px;color:var(--ink-2);max-width:880px}
+  .tl-item .cnt{display:inline-block;background:var(--primary-soft);color:var(--primary);border-radius:999px;font-size:12px;font-weight:700;padding:1px 12px;margin-left:8px;vertical-align:2px}
+
+  /* ===== 数字盘点 ===== */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px 26px}
+  .panel h3{font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13.8px}
+  .kv .k{color:var(--ink-3);white-space:nowrap}
+  .kv .v{color:var(--ink-2)}
+  .kv .v b{color:var(--primary)}
+  .modlist{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .modlist code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--primary-soft);color:var(--primary);border:1px solid #e0e7ff;border-radius:8px;padding:4px 10px}
+
+  /* ===== 规划卡 ===== */
+  .plan{background:linear-gradient(135deg,#fffbeb,#fefce8);border:1px solid #fde68a;border-radius:var(--radius);box-shadow:var(--shadow);padding:24px 28px}
+  .plan h3{font-size:17px;font-weight:700;color:#92400e;margin-bottom:8px}
+  .plan p{font-size:13.8px;color:#78350f;margin-bottom:12px}
+  .plan .items{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+  .plan .it{font-size:13.5px;color:#78350f;position:relative;padding-left:20px}
+  .plan .it::before{content:"◻";position:absolute;left:0;color:#d97706}
+  .plan .it.done::before{content:"✔";color:#059669}
+  .plan .it.done{color:#065f46}
+
+  footer{margin-top:52px;border-top:1px solid var(--line);padding:26px 24px 40px;text-align:center;font-size:12.5px;color:var(--ink-3)}
+  footer code{font-family:ui-monospace,Menlo,monospace;background:#f1f5f9;border-radius:6px;padding:1px 7px;font-size:11.5px}
+
+  @media (max-width:920px){
+    .stats{grid-template-columns:repeat(3,1fr)}
+    .shift-row{grid-template-columns:1fr}
+    .shift-row .dim{border-right:none;border-bottom:1px dashed var(--line)}
+    .shift-row .arr{display:none}
+    .ba{grid-template-columns:1fr}
+    .grid2,.plan .items{grid-template-columns:1fr}
+    .cap-head .meta{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= 顶部 ================= -->
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-tag">COGSEED · 认知资产迭代分支</div>
+    <h1>认知资产模块功能变化总结</h1>
+    <p class="sub">本地 <code>认知资产迭代</code> 分支 相对于 <code>develop</code> 主线的全部功能变化 · 统计截至 2026-09-20 分支快照 <code>0701d934</code></p>
+  </div>
+</div>
+
+<!-- ================= 统计卡 ================= -->
+<div class="stats">
+  <div class="stat"><div class="num">73</div><div class="lbl">分支独有提交</div></div>
+  <div class="stat"><div class="num">101</div><div class="lbl">变更文件</div></div>
+  <div class="stat"><div class="num"><small>+</small>7804<small> / </small><small>−</small>1071</div><div class="lbl">新增 / 删除行数</div></div>
+  <div class="stat"><div class="num">9</div><div class="lbl">主进程新模块</div></div>
+  <div class="stat"><div class="num">13</div><div class="lbl">新增测试文件</div></div>
+  <div class="stat"><div class="num">3</div><div class="lbl">天密集开发<br><span class="delta">09-18 → 09-20</span></div></div>
+</div>
+
+<!-- ================= 导航 ================= -->
+<nav class="toc">
+  <div class="wrap">
+    <a href="#conclusion">结论先行</a>
+    <a href="#shift">核心转变一览</a>
+    <a href="#caps">九大功能板块</a>
+    <a href="#timeline">开发时间轴</a>
+    <a href="#numbers">数字与验证</a>
+    <a href="#next">下一步规划</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ================= 1 结论 ================= -->
+<section id="conclusion">
+  <div class="sec-head"><div class="sec-num">1</div><h2>结论先行</h2></div>
+  <p class="sec-desc">先说结果：这次迭代把认知资产从「文件记忆 + 整段注入」的旧模式，升级成一条统一的资产管线。</p>
+  <div class="conclusion">
+    <p>develop 上（合入 PR #291 后的现状）的认知资产是：<b>记忆写在 USER.md / MEMORY.md 文件里</b>，模型开始任务时<b>自动整段注入</b>一部分资产全文，资产平铺展示，模型很少主动去查；更新资产等于<b>新内容整段覆盖旧内容</b>；本体组（用户长期画像的结构化分组）只能手改文件。</p>
+    <p style="margin-top:12px">迭代分支把它升级为：<b>① 模型通过「目录 + 按 id 取用」主动查资产，每次取用留审计记录</b>；<b>② 模型写记忆直投统一资产管线，旧记忆文件自动迁入，记忆页退役</b>；<b>③ 写入线带语义去重与语句级融合，更新不再粗暴覆盖</b>；<b>④ 同类资产自动成族、可命名</b>；<b>⑤ 本体组获得界面化结构编辑、矛盾检测台账、时间锚与回流确认</b>；<b>⑥ 出身区分全链退役，只留单一「已确定」状态</b>。</p>
+    <div class="kp">
+      <span><b>对模型：</b>资产从「被塞进上下文」变为「按需查目录、按 id 取全文」</span>
+      <span><b>对用户：</b>记忆页退役，本体组可视化编辑，资产面板新增目录视图与模型选用卡片</span>
+      <span><b>对数据：</b>旧记忆文件已自动迁入资产库（真机验证 USER.md 清零）</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 2 核心转变 ================= -->
+<section id="shift">
+  <div class="sec-head"><div class="sec-num">2</div><h2>核心转变一览</h2></div>
+  <p class="sec-desc">六个维度上「原来怎么做 → 现在怎么做」的一屏对照。</p>
+
+  <div class="shift">
+    <div class="shift-row">
+      <div class="dim">模型看资产</div>
+      <div class="old"><span class="tag">DEVELOP 现状</span><br>任务开始时自动把语义最相关的 Top-N 资产<b>全文注入</b>上下文；行为采样显示模型几乎不会主动去查（3 个短任务只自发取用 0–1 次）。</div>
+      <div class="arr">→</div>
+      <div class="new"><span class="tag">迭代分支</span><br>一份紧凑<b>资产目录</b>随提示词进入上下文（一行一条：标题 / 类型 / 作用域 / 使用次数）；模型用工具<b>按 id 取全文</b>（每次 6 条、单条上限 2000 字）；目录按<b>本轮相关性排序</b>，余弦相似度 ≥ 0.40 的打星标。</div>
+    </div>
+    <div class="shift-row">
+      <div class="dim">记忆存放</div>
+      <div class="old"><span class="tag">DEVELOP 现状</span><br>用户级 / 共享级记忆写在 USER.md、MEMORY.md 文件里，由独立「记忆页」管理。</div>
+      <div class="arr">→</div>
+      <div class="new"><span class="tag">迭代分支</span><br>模型写记忆<b>直投统一资产管线</b>（入库即过查重、自动归族、留候选痕迹）；存量文件<b>自动迁移</b>进资产库；记忆页退役，设置入口指向认知资产。</div>
+    </div>
+    <div class="shift-row">
+      <div class="dim">更新资产</div>
+      <div class="old"><span class="tag">DEVELOP 现状</span><br>确认一条更新候选 = 新内容<b>整段覆盖</b>旧内容，旧表述直接丢失。</div>
+      <div class="arr">→</div>
+      <div class="new"><span class="tag">迭代分支</span><br>更新晋升走<b>语句级融合</b>：复述取更完整的版本、同主题改写做替换、真增量才追加；版本记录带 semantic-fusion 标记，可回溯；旧版本仍可恢复。</div>
+    </div>
+    <div class="shift-row">
+      <div class="dim">资产组织</div>
+      <div class="old"><span class="tag">DEVELOP 现状</span><br>资产平铺列表，同主题资产散落多处。</div>
+      <div class="arr">→</div>
+      <div class="new"><span class="tag">迭代分支</span><br>自动建立 same_family（同族）关系：按本体组 / KSTAR 剧集静态归组，静态键没有的再按<b>嵌入相似度 ≥ 0.60 聚类</b>；新资产入库自动挂族；列表按族折叠显示，<b>族可命名</b>。</div>
+    </div>
+    <div class="shift-row">
+      <div class="dim">本体维护</div>
+      <div class="old"><span class="tag">DEVELOP 现状</span><br>本体组字段值只能<b>手改文件</b>；没有矛盾检测、没有时间信息、转正资产与本体互不相通。</div>
+      <div class="arr">→</div>
+      <div class="new"><span class="tag">迭代分支</span><br>本体组子页<b>结构化编辑</b>（fields.list/append/remove/verify 接口）；<b>@asof:YYYY-MM 时间锚</b>标注信息截至时间，过期在世界模型里给提示；同字段出现矛盾值时进<b>异步台账</b>等用户判定，读取侧自愈不被坏数据卡死；转正资产<b>回流</b>本体候选池。</div>
+    </div>
+    <div class="shift-row">
+      <div class="dim">出身区分</div>
+      <div class="old"><span class="tag">DEVELOP 现状</span><br>资产带「模型写 / 系统沉淀 / 用户确认」三档出身：列表灰章、画像条目前缀、一键转正按钮贯穿全链。</div>
+      <div class="arr">→</div>
+      <div class="new"><span class="tag">迭代分支</span><br><b>出身区分全链退役</b>（09-20 拍板）：资产只有单一「已确定」状态；出身章、转正按钮、画像前缀全部移除，四语言各删 7 个文案键；旧数据读兼容。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 3 九大板块 ================= -->
+<section id="caps">
+  <div class="sec-head"><div class="sec-num">3</div><h2>九大功能板块</h2></div>
+  <p class="sec-desc">按「模型侧 / 写入侧 / 用户侧 / 治理侧」展开的全部功能变化，每块附白话说明与关键提交哈希（括号内为该提交做了什么）。</p>
+
+  <!-- 板块 1 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">📚</div>
+      <h3>① 目录化召回 —— 模型怎么看见资产</h3>
+      <div class="meta">09-18 为主<br>召回 / 注入链</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>原来是「开始任务前先塞一摞资料给模型」，模型自己基本不翻；现在是「给模型一份目录，要哪条按编号取哪条」，而且取了什么都有账可查。开关实验发现：自动注入反而让模型更懒（开注入 12 轮里自发取用 3 轮，关掉后 5 轮），所以默认关注入、目录为主通道。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>Top-N 语义投影整段注入资产全文</li>
+          <li>模型不主动查询（工具说明改写后仍 0–1/3）</li>
+          <li>取用行为无逐条记录，账目对不上</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>资产目录进提示词：≤30 条全量内联（约 1KB）；大库取最常用 20 条 + 剩余数量提示，单条从 228 字压到 109 字，页头页尾 &lt;250 字</li>
+          <li>工具双模式：无参数返回整本目录（可筛选 / 翻页）；传 assetIds 返回全文（一次 6 条、单条 2000 字）</li>
+          <li>目录按本轮任务文本做相关性排序，余弦 ≥ 0.40 打星；大库「两跳策略」（先查目录、再语义检索）写进工具说明</li>
+          <li>内容真正进入模型上下文才记 agent_read 回执 + 使用记录（每轮幂等），显式读取不再被「适用场景」软提示否决</li>
+          <li>自动全文注入默认关闭；COGSEED_RECALL_BASELINE_TOP&gt;0 可开回（回退通道与实验复现保留）</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">5523629b</span><span class="hash">787208fc</span><span class="hash">dd4db775</span><span class="hash">d8db2914</span><span class="hash">b7bc9134</span><span class="hash">0db2f78b</span><span class="hash">dc044f10</span><span class="hash">0f3caba8</span><span class="hash">8b961249（注入总开关）</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 2 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🎛️</div>
+      <h3>② 取用控制与审计 —— 谁把资产带进了会话</h3>
+      <div class="meta">09-19<br>可见性 / 可撤销</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>原来资产怎么被带进对话是黑箱；现在三种带入方式（指挥官挂载、用户钉入、模型自选）都看得见、都能撤，没被用上的星标资产还会被点名。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>只有「确认投影」一条正式带入路径，无卡片展示</li>
+          <li>模型自选资产不可见、不可撤</li>
+          <li>资产被标了相关却没用，无人知道</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>指挥官可把目录资产挂载到任务（attach_assets_to_task 工具），匿名子智能体的使用也计入台账（原来只在可见分支记账）</li>
+          <li>资产详情页新增「在当前会话使用」按钮：用户显式钉入，绕过语义选择但仍受生效状态与在用版本约束；附卡片可撤销</li>
+          <li>模型自选资产在会话里显示「模型选用」卡片，一键撤销；撤销留 projection_revoked 时间线事件，不再凭空消失</li>
+          <li>漏用审计：回合结束盘点「标了相关但未被使用」的星标资产，时间线出现「标记相关但未使用」行</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">bf0363e6</span><span class="hash">81a2c459</span><span class="hash">d514c252</span><span class="hash">c125d0ff</span><span class="hash">ffee93c4</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 3 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🧠</div>
+      <h3>③ 记忆并入认知资产 —— 记忆页退役</h3>
+      <div class="meta">09-19<br>统一写入线</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>原来「记忆」是另一套东西（两个 md 文件 + 一个独立页面）；现在记忆就是认知资产的一种。模型随手记的偏好、存量文件里的旧记忆，全部汇进同一条资产管线，走同样的查重和归族。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>用户 / 共享记忆写 USER.md、MEMORY.md 文件</li>
+          <li>独立记忆页，手动整理</li>
+          <li>角色模板条目混在 USER.md 里</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>即时直投：模型写的记忆当场进入统一第二阶段管线（保存 + 自动套用，过查重金字塔、自动挂族），落成「未验证个人资产」并留候选痕迹；注入扫描拦截敌意文本；嵌入服务故障时降级进评审队列而不是断会话</li>
+          <li>跨会话记忆工具的 user / shared 两档改走统一管线；写入失败自动回退旧文件路径，模型侧永不静默丢写</li>
+          <li>存量迁移：启动后台任务自动迁 + 手动 IPC（支持 dryRun 只盘点不写）；逐文件备份、逐文件清空、全量幂等（真机验证：7 条迁移 = 4 新建 + 3 融合并入，USER.md 清零）</li>
+          <li>持久记忆块改从资产库渲染（限量）：72 小时内新沉淀的条目排最前——刚教的偏好立即生效，不被「用得少」压出块；同档内按使用次数、新近程度排序；旧文件兜底直到迁移清空</li>
+          <li>角色模板搬到独立文件 cloud/memory/role-templates/&lt;id&gt;.md，卸载 / 重装两头兼容</li>
+          <li>记忆页退役，设置入口改指认知资产；画像投影桥默认停用，本体画像资产改从个人资产库加载</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">4f29a7bd</span><span class="hash">47722241</span><span class="hash">f4ee62ca</span><span class="hash">08cbc593</span><span class="hash">06aa2ea2</span><span class="hash">ad11cda8</span><span class="hash">9e6378d2</span><span class="hash">ac821e74</span><span class="hash">dfaf791f</span><span class="hash">4be6ef8e</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 4 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">✒️</div>
+      <h3>④ 写入线升级 —— 去重金字塔与语句级融合</h3>
+      <div class="meta">09-19<br>更新不再覆盖</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>原来确认一条「更新」，新句子直接换掉旧句子，旧内容说没就没；现在先判断新内容和已有资产是什么关系——完全重复就不入库、高度相关就并进旧资产、确认更新就逐句融合（说得一样的取更全的版本，真有新信息才加进来），每一步可回溯。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>更新候选确认 = 整段覆盖旧 statement</li>
+          <li>查重只判「是不是重复」，重复与相关之间没有处理</li>
+          <li>同主题资产越攒越散</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>去重金字塔 L1/L2：语义查重同时报告最佳「相关命中」（相似度 0.70–0.85 区间）；相关候选若质量明显更高，改写为「对既有资产的更新」而不是新建散资产（首次接通资产质量分门槛）</li>
+          <li>语句级融合生成器（纯函数）：复述取更长的变体、同主题改写做替换、真增量才追加；复述判定用重合系数（中文长短句对不被句长稀释）</li>
+          <li>更新晋升 = 融合而非覆盖，版本记录 reason 标 semantic-fusion，可识别可回退；限定范围的更新保留整段替换语义</li>
+          <li>兜底修正：候选没有显式值时回退到判定文本而不是把标题泄进正文；家族关系直写不顶版本号，投影版本冻结不再被破坏</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">c2049752</span><span class="hash">e3c52d55</span><span class="hash">fd501040</span><span class="hash">b26bb243</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 5 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🌳</div>
+      <h3>⑤ 资产族（family）—— 同主题自动成组</h3>
+      <div class="meta">09-19<br>组织方式</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>同一件事的资产（比如「用户的答辩偏好」的 5 条记录）自动归到一个「族」里，列表里折叠显示一个族头；族可以起名。模型看到的目录仍然是平的，不受影响。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>资产平铺，无任何分组概念</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>same_family 关系类型落在既有关系容器上；静态族键两级：本体组优先、KSTAR 剧集次之</li>
+          <li>静态键归不了组的，按嵌入相似度 ≥ 0.60 两两聚类、union-find 合并成 sem: 族（只取最近 200 条，嵌入不可用时静默跳过——聚类是兜底不是门槛）</li>
+          <li>新资产入库（晋升创建）后自动挂族；挂族失败静默，绝不阻断入库</li>
+          <li>面板列表按族分组：同族折叠在一个轻量族头下（带成员数），无族资产进「未整理」组；目录视图保持平铺（与模型读到的一致）</li>
+          <li>族可命名：familyName 随成员继承，改名走专用通道批量写整族、不顶内容版本；族头默认取最多使用成员标题前 10 字（原来是无意义截断 40 字）</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">20878566</span><span class="hash">376106e0</span><span class="hash">e4051790</span><span class="hash">4f278274</span><span class="hash">9ab97f41</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 6 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🏛️</div>
+      <h3>⑥ 本体组增强 —— 画像的界面化治理</h3>
+      <div class="meta">09-19 下午→夜间<br>结构化编辑 / 矛盾 / 回流</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>本体组是「关于用户的长期事实」的结构化存放处（比如沟通偏好、答辩习惯，按字段一条条存）。原来改它要手改文件；现在有完整界面：增删改字段值、标时间、标核实，同一字段出现打架的两个值时进台账等用户裁决，转正的资产还能回流成本体候选。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>组字段值只能手改文件</li>
+          <li>无矛盾检测：同字段新旧值打架无感知</li>
+          <li>无时间信息：不知道这条「事实」是什么时候的</li>
+          <li>资产转正与本体互不相通</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>本体组子页：结构化编辑（字段列表 / 追加 / 移除 / 核实 IPC），矛盾标记、回流确认内嵌在界面里；组改名统一「本体组」；刷新后重拉状态，外部新建的组也能看到</li>
+          <li>@asof:YYYY-MM 时间锚：字段值可标「信息截至年月」，世界模型消费时对过期值给 stale 提示</li>
+          <li>同字段矛盾检测：发现冲突进异步台账，等用户判定；台账事务串行化 + 判定超时守卫，坏台账不拖垮读取（读时自愈）</li>
+          <li>回流双轨：资产转正后回流本体候选池，确认时可选择去向</li>
+          <li>用户核实标记透出给世界模型；画像条目改裸文本存储（出身前缀只在显示层）；画像块来源修正为资产库并补齐四语文案</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">5d2fe300</span><span class="hash">3946a0d4</span><span class="hash">63a3a567</span><span class="hash">bb960e14</span><span class="hash">f0a2bd2e</span><span class="hash">41121aa5</span><span class="hash">91f5da32</span><span class="hash">175ad762</span><span class="hash">11460c12</span><span class="hash">bcdf9b22</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 7 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🏷️</div>
+      <h3>⑦ 出身收敛 —— 只留「已确定」一个状态</h3>
+      <div class="meta">09-20<br>全链退役出身区分</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>09-20 拍板：「模型记下来的 = 已经确定的」。原来界面上区分这条是谁写的（模型 / 系统 / 用户确认），还有一键转正按钮；现在这些全部退役，资产只有「已确定」一种状态，界面更干净，旧数据仍能读。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状（含 09-19 短暂上线的出身章）</h4><ul>
+          <li>列表灰色出身章：模型写 / 系统沉淀</li>
+          <li>详情页一键转正按钮（晋升为用户确认）</li>
+          <li>画像条目带 [已确认]/[模型写入] 前缀</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>全栈单一「已确定」状态：出身章、转正按钮、画像前缀、晋升单值全部退役</li>
+          <li>四语言（中 / 英 / 日 / 葡）各删 7 个文案键；资产服务瘦身约 90 行</li>
+          <li>lifecycle 三值类型与存量磁盘数据保留（读兼容，不迁移不破坏）</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">6128c076</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 8 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🔗</div>
+      <h3>⑧ KSTAR 溯源可靠 + 候选池体验</h3>
+      <div class="meta">09-19<br>死链修复 / 状态收敛</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>KSTAR 剧集（系统自动沉淀资产的来源记录）被删掉后，引用它的徽章原来是个点了没反应的死链；现在老实显示「不可用」。候选卡片的话也说明白了：确认这条会「融合」而不是「覆盖」。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>kse- 徽章指向不存在的剧集也渲染成可点的任务评审（死链）</li>
+          <li>晋升不校验剧集 id，编造的 id 也算 KSTAR 出身</li>
+          <li>成熟度四档徽章、状态文案硬编码中文</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>引用的剧集不存在时存 degraded + kstar_episode_missing 原因；KSTAR 出身判定忽略 degraded 引用</li>
+          <li>证据徽章对缺失引用显示「不可用」态；摘要查询覆盖版本快照（原来只读资产级引用）；查过为空的 id 不再反复查</li>
+          <li>成熟度收敛两档：未验证（种子 / 芽）/ 实践中验证（转移及以上）；状态章改「生效中」，四语走统一翻译函数</li>
+          <li>候选卡片预告语义：「确认将融合而非覆盖（旧版本可恢复）」「查重改写将并入既有资产」</li>
+          <li>候选标题取第一个完整句（原来截前 80 字出半句）；workspace-policy 投影带会话 id，时间线可定位发生在哪</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">9484960b</span><span class="hash">4d4c781f</span><span class="hash">5295832d</span><span class="hash">f8afe566</span><span class="hash">9cbbbd65</span><span class="hash">e6de8c7f</span><span class="hash">5b903aaf</span><span class="hash">22f7560e</span></div>
+    </div>
+  </div>
+
+  <!-- 板块 9 -->
+  <div class="cap">
+    <div class="cap-head">
+      <div class="cap-ico">🛡️</div>
+      <h3>⑨ 作用域收严 + 稳定性 P0 修复</h3>
+      <div class="meta">09-18 → 09-19<br>scope / 防炸</div>
+    </div>
+    <div class="cap-body">
+      <div class="plain"><b>白话版：</b>两件事：一是「谁能看见这条资产」（作用域）原来随便填句子，现在写入时自动归一成规范词，编辑器里有白名单输入框；二是修了两个能让整个面板卡死的 P0 缺陷——打开总览页就死循环、一条坏记录拖垮整条时间线。</div>
+      <div class="ba">
+        <div class="col old"><h4>DEVELOP 现状</h4><ul>
+          <li>scope 自由文本，「适用场景」句子混进受控词</li>
+          <li>applicableWhen / forbiddenWhen 允许存空数组（三态歧义）</li>
+          <li>模型挂载徽章每次通知都重渲染并再通知 → 打开总览页死循环冻结整面板</li>
+          <li>一条投影记录被删的转移证明能让整条时间线抛错</li>
+        </ul></div>
+        <div class="col new"><h4>迭代分支</h4><ul>
+          <li>scope 写入三档归一：受控词自动规范；顿号 / 逗号组合词逐段校验；「……时」类用途句回退 general；读取侧不动，旧数据兼容</li>
+          <li>资产编辑器新增「谁可以看」白名单输入（agent / space，走既有 scopePolicy，留空即解除限制），四语齐全</li>
+          <li>空数组折叠为「未声明」，三态归二态</li>
+          <li>P0 修复：徽章加载只在集合真变化时重渲染（带「旧代码必挂」的回归测试）；缺失投影降级为单事件灰色提示，不再炸整条时间线</li>
+          <li>语义评审会话 id 加注册前缀，一次性评审会话不再每次被拒</li>
+          <li>清理两份不该入库的发版审计遗留文件（CI 已有门禁阻挡）</li>
+        </ul></div>
+      </div>
+      <div class="commits"><span class="cl">关键提交：</span><span class="hash">6641eab9</span><span class="hash">bb438ad2</span><span class="hash">38fe21ef</span><span class="hash">8f0928d3</span><span class="hash">2845942c</span><span class="hash">71a93c3b</span><span class="hash">4cd96f4c</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 4 时间轴 ================= -->
+<section id="timeline">
+  <div class="sec-head"><div class="sec-num">4</div><h2>开发时间轴</h2></div>
+  <p class="sec-desc">73 个提交（含 1 次与 develop 的同步合并）在三天里的分布。</p>
+  <div class="timeline">
+    <div class="tl-item">
+      <div class="tl-date">09-18<span class="cnt">17 提交</span></div>
+      <h4>召回链目录化收口 + 面板 P0 修复</h4>
+      <p>目录进提示词、目录工具双模式、读取审计、目录视图进面板、模型选用卡片可撤销；发现并修掉「面板自杀循环」「坏记录炸时间线」两个 P0；加入注入总开关为 A/B 对照铺路。</p>
+    </div>
+    <div class="tl-item">
+      <div class="tl-date">09-19<span class="cnt">51 提交</span></div>
+      <h4>统一管线日：记忆并入 + 写入线 + 族 + 本体组重构</h4>
+      <p>当天完成：记忆直投与存量迁移（真机验证 USER.md 清零）、去重金字塔与语句融合、资产族引擎与分组界面、候选出身标记、scope 收严、KSTAR 溯源修复；下午起本体组连续九件：子页结构化编辑 → 记忆页退役 → 画像裸文本 → @asof 时间锚 → 回流双轨 → 矛盾台账 → 台账事务化 → 用户核实标记。</p>
+    </div>
+    <div class="tl-item">
+      <div class="tl-date">09-20<span class="cnt">5 提交</span></div>
+      <h4>出身收敛 + 规格化</h4>
+      <p>拍板「模型记的 = 已确定」：出身区分全链退役（6128c076）；建立 specs/007-ontology-tri-box 三盒规格（41f068cb）；清理发版审计遗留文件；傍晚首个 007 场景落地——即时直投来源误判修复（0701d934，「来源已删除」误报不再出现）。</p>
+    </div>
+    <div class="tl-item dim">
+      <div class="tl-date">进行中</div>
+      <h4>specs/007「本体三盒归位」实施（截至本文生成仍在推进）</h4>
+      <p>按 《Personal Ontology v0.1.0》三盒蓝图（T 盒词汇 / A 盒事实 / R 盒规则）推进：来源误判场景已修（0701d934）；18:32 Phase 1 落地——组详情按三盒分区呈现、关系值界面入口与字段说明（3616e58e）；Phase 2/3（总览合并视图、两档核实、规则分类、敏感分档、组历史快照）在分支上继续开发。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 5 数字与验证 ================= -->
+<section id="numbers">
+  <div class="sec-head"><div class="sec-num">5</div><h2>数字与验证</h2></div>
+  <p class="sec-desc">规模数据取自 git diff（develop…分支快照 0701d934）；验证情况为开发过程中的实际记录。</p>
+  <div class="grid2">
+    <div class="panel">
+      <h3>📦 代码规模</h3>
+      <div class="kv">
+        <div class="k">变更文件</div><div class="v"><b>101</b> 个，+7804 / −1071 行</div>
+        <div class="k">主进程</div><div class="v">features/recall 模块 <b>9 个新文件</b> + 13 个修改</div>
+        <div class="k">渲染层</div><div class="v">cognition-assets 与 personal-ontology 合计 <b>+834 行</b></div>
+        <div class="k">文案</div><div class="v">中 / 英 / 日 / 葡四语言同步增删</div>
+      </div>
+      <div class="modlist">
+        <code>asset-catalog.ts 资产目录</code><code>asset-catalog-hint.ts 目录提示</code><code>statement-fusion.ts 语句融合</code><code>family.ts 资产族</code><code>memory-migration.ts 记忆迁移</code><code>ontology-conflicts.ts 矛盾台账</code><code>ontology-backflow.ts 本体回流</code><code>profile-block.ts 画像块</code><code>evidence-resolution.ts 证据解析</code>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>✅ 验证情况</h3>
+      <div class="kv">
+        <div class="k">测试规模</div><div class="v">新增 <b>13 个测试文件</b>，测试目录共 44 文件 +3262 行；关键行为都有防回归守卫（如「旧徽章加载器必挂」的回归用例）</div>
+        <div class="k">全量测试</div><div class="v">09-20 本体增强完成时点：<b>11950 项两遍全部通过</b>（此后的出身收敛与来源误判修复各带回归测试）</div>
+        <div class="k">真机验证</div><div class="v">09-19：记忆迁移 7 条（4 新建 + 3 融合并入）、教学链全链路、USER.md 清零；出身收敛后经真机核验</div>
+        <div class="k">A/B 对照</div><div class="v">注入开关对照 12 轮：开注入模型自发取用 3 轮、零注入 5 轮 → 注入抑制自取，成为默认关闭注入的决策依据（代码注释留档）</div>
+      </div>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:18px">
+    <h3>🔀 与 develop 的关系</h3>
+    <div class="kv">
+      <div class="k">基点</div><div class="v">合并基 <code style="font-size:12px">f8a86db3</code>（09-20 09:26 的 develop）；分支已含此前全部主线内容，无落后</div>
+      <div class="k">develop 同期动态</div><div class="v">基点之后 develop 新增 12 个提交，全部是宪法文档采纳、CI 门禁调整、Windows 打包测试修复，<b>均不涉及认知资产模块</b>，与本分支无冲突</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 6 下一步 ================= -->
+<section id="next">
+  <div class="sec-head"><div class="sec-num">6</div><h2>下一步规划（specs/007 已立，实施中）</h2></div>
+  <p class="sec-desc">「本体三盒归位与打通」：按蓝图把本体分成 T 盒（词汇 / 字段定义）、A 盒（事实断言）、R 盒（规则）三个分区统一呈现与打通。</p>
+  <div class="plan">
+    <h3>specs/007-ontology-tri-box · 本体三盒归位与打通</h3>
+    <p>三盒骨架在代码中已同源存在，差距集中在：R 盒用户侧入口为零、A 盒双存储分裂（本体组字段值与资产库 personal 资产两处两屏）、结构层缺口（核实一档、来源误判、规则无分类无状态、无敏感分档、组文件无历史）。</p>
+    <div class="items">
+      <div class="it done">来源误判修复：即时直投候选不再被误归「来源已删除」（0701d934 已落）</div>
+      <div class="it done">组详情按「词汇 / 事实 / 规则」分区呈现，界面上亲手创建关系值（R 盒入口）—— Phase 1 已落地（3616e58e）</div>
+      <div class="it">三盒总览页：A 盒一屏看全全部事实（组字段值 + personal 资产合并），R 盒一屏看全全部规则</div>
+      <div class="it">断言核实升两档：「有来源支持」/「独立核实过」，双档透出世界模型</div>
+      <div class="it">规则轻量分类（操作 / 偏好 / 约束）与状态（提议中 / 生效中），可筛选</div>
+      <div class="it">本体值敏感性分档：restricted 值不进任务注入（授权切片第一块地基）</div>
+      <div class="it">本体组文件变更历史：每次写入留版本快照，可查可恢复</div>
+      <div class="it">specs/003–006 已完成功能的规格回填（随 007 收尾）</div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  认知资产迭代分支（<code>认知资产迭代@0701d934</code>）对比 develop（合并基 <code>f8a86db3</code>） · 统计生成于 2026-09-20 · 依据 git 提交与差异逐条核实 · CogSeed 内部文档
+</footer>
+
+</body>
+</html>

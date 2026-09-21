@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   compareMarketplaceSemver,
   decideMarketplaceContentUpdate,
+  shouldConsultFreshness,
 } from '../../../src/main/features/marketplace-update-policy';
 
 describe('marketplace content update policy', () => {
@@ -66,5 +67,46 @@ describe('marketplace content update policy', () => {
       { version: 'custom-a', published_at: 100 },
       { version: 'custom-a', published_at: 200 },
     )).toEqual({ action: 'replace_content', reason: 'newer_freshness' });
+  });
+});
+
+describe('⭐ T059 Q4 断言：Hub 来源不咨询新鲜度（FR-036）', () => {
+  const local = { version: '1.0.4', published_at: 100, updated_at: 100 };
+
+  it('输入① 版本号**字符串相等**且服务端 updated_at 更新 → 不走 freshness 替换分支', () => {
+    expect(decideMarketplaceContentUpdate(
+      local, { version: '1.0.4', published_at: 100, updated_at: 999 }, 'hub',
+    )).toEqual({ action: 'preserve_content', reason: 'freshness_not_consulted' });
+  });
+
+  it('输入② **语义等价但拼写不同**（v1.0.4 对 1.0.4）且 updated_at 更新 → 同样不走替换', () => {
+    // ⚠️ 这是比原报告更宽的那条落入路径：`localVersion !== serverVersion` 为真，
+    // 但 semver 比较判定相等，于是整段跳过、直接落到新鲜度。两种输入必须同样处置。
+    expect(decideMarketplaceContentUpdate(
+      local, { version: 'v1.0.4', published_at: 100, updated_at: 999 }, 'hub',
+    )).toEqual({ action: 'preserve_content', reason: 'freshness_not_consulted' });
+    expect(decideMarketplaceContentUpdate(
+      { version: 'v1.0.4', published_at: 100, updated_at: 100 },
+      { version: '1.0.4', published_at: 100, updated_at: 999 },
+      'hub',
+    )).toEqual({ action: 'preserve_content', reason: 'freshness_not_consulted' });
+  });
+
+  it('Hub 来源仍然遵守版本单调：更高版本照常替换，更低版本照常保留', () => {
+    expect(decideMarketplaceContentUpdate(local, { version: '2.0.0', published_at: 100 }, 'hub'))
+      .toEqual({ action: 'replace_content', reason: 'newer_version' });
+    expect(decideMarketplaceContentUpdate(local, { version: '1.0.0', published_at: 999 }, 'hub'))
+      .toEqual({ action: 'preserve_content', reason: 'older_version' });
+  });
+
+  it('非 Hub 来源（默认）行为不变——本轮不改既有语义', () => {
+    expect(decideMarketplaceContentUpdate(
+      local, { version: '1.0.4', published_at: 100, updated_at: 999 },
+    )).toEqual({ action: 'replace_content', reason: 'newer_freshness' });
+  });
+
+  it('决策点是显式的，可被单独检查', () => {
+    expect(shouldConsultFreshness('hub')).toBe(false);
+    expect(shouldConsultFreshness('other')).toBe(true);
   });
 });

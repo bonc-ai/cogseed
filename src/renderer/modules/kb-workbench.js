@@ -159,6 +159,35 @@
     return `<textarea class="form-input ui-control ui-textarea ${_esc(options.className || '')}" id="${_esc(options.id)}"${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>${_esc(options.value || '')}</textarea>`;
   }
 
+  function _uiCheckbox(options) {
+    if (typeof window.uiCheckbox !== 'function') throw new Error('knowledge base requires uiCheckbox');
+    return window.uiCheckbox(options);
+  }
+
+  function _uiSwitch(options) {
+    if (typeof window.uiSwitch !== 'function') throw new Error('knowledge base requires uiSwitch');
+    return window.uiSwitch(options);
+  }
+
+  function _uiSelect(options) {
+    if (typeof window.uiSelect !== 'function') throw new Error('knowledge base requires uiSelect');
+    return window.uiSelect(options);
+  }
+
+  function _uiSelectValue(scope, id, fallback) {
+    const host = scope && scope.querySelector(`#${id}`);
+    if (!host) return fallback;
+    if (host._uiSelectApi && typeof host._uiSelectApi.getValue === 'function') {
+      return host._uiSelectApi.getValue() || fallback;
+    }
+    return host.dataset.value || fallback;
+  }
+
+  function _uiEmptyState(options) {
+    if (typeof window.uiEmptyState !== 'function') throw new Error('knowledge base requires uiEmptyState');
+    return window.uiEmptyState(options);
+  }
+
   function _elementFromHtml(markup) {
     const host = document.createElement('div');
     host.innerHTML = String(markup || '').trim();
@@ -349,72 +378,144 @@
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
     const personalLabel = _tr('kb.workbench.group_personal', '个人知识库');
-    const sharedLabel = _tr('kb.workbench.group_shared', '共享知识库');
+    // 共享知识库已暂停：分组/标签统一标"待开发"（9.17 会议 P1），别再给自己起
+    // "共享知识库"这种像能用的名字
+    const sharedLabel = _tr('kb.workbench.group_shared', '待开发');
     const externalLabel = _tr('kb.workbench.group_external', '外部来源');
+    const sharedTreeAvailable = typeof window.uiTree === 'function'
+      && typeof window.hydrateUiTrees === 'function';
+    const nodeMeta = new Map();
+    const node = (kind, key, label, options = {}) => {
+      const id = `${kind}:${nodeMeta.size}`;
+      nodeMeta.set(id, { kind, key, ...options });
+      return { id, label, selected: options.selected === true };
+    };
     const externalItems = _state.externalSources
       .filter((source) => {
         if (!_state.treeFilter) return true;
         const query = _state.treeFilter.toLowerCase();
         return source.id.toLowerCase().includes(query) || _externalSourceLabel(source).toLowerCase().includes(query);
       })
-      .map((source) =>
-        `<div class="kb-tree-item${source.path === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-external-source="${_esc(source.path)}">
-          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(_externalSourceLabel(source))}</span></div>`
-      ).join('');
+      .map((source) => node('external', source.path, _externalSourceLabel(source), {
+        icon: 'book-open',
+        selected: source.path === _state.currentLib && !_state.spaceId,
+      }));
     const groups = [
-      { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
-        `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
-          ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
-      ).join('') || '<div class="kb-tree-empty">暂无知识库，可使用右侧按钮创建</div>' },
-      { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
-        `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
-      ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
-      { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
+      {
+        key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib',
+        btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'),
+        items: _state.libs.filter((lib) => !_state.treeFilter || lib.name.toLowerCase().includes(_state.treeFilter))
+          .map((lib) => node('lib', lib.name, lib.name, {
+            icon: 'folder', selected: lib.name === _state.currentLib && !_state.spaceId,
+          })),
+        empty: '暂无知识库，可使用右侧按钮创建',
+      },
+      {
+        key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space',
+        btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'),
+        items: _state.spaces.filter((space) => !_state.treeFilter || (space.name || space.space_id).toLowerCase().includes(_state.treeFilter))
+          .map((space) => node('space', space.space_id, space.name || space.space_id, {
+            icon: 'folder', shared: true, selected: space.space_id === _state.spaceId,
+          })),
+        empty: _state.treeFilter ? '无匹配知识库' : '暂无共享空间',
+      },
+      {
+        key: 'external', label: externalLabel, plus: false, items: externalItems,
+        empty: _state.treeFilter
+          ? _tr('kb.workbench.no_matching_sources', '无匹配来源')
+          : _tr('kb.workbench.external_empty', '暂无外部来源'),
+      },
     ];
-    const groupHtml = groups.map((g) => {
-      const open = !_state.treeGroups.has(g.key);
-      return `<div class="kb-tree-group">
-        <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${open ? '收起' : '展开'}">
-          <span class="kb-tree-caret">${_icon(open ? 'chevron-down' : 'chevron-right', 'kb-tree-caret-icon')}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
-          ${g.plus ? _uiIconButton({
-            label: g.btnTitle || '创建',
-            icon: 'plus',
-            className: 'kb-tree-plus',
-            attrs: { id: g.btnId || 'kb-new-lib' },
-          }) : ''}
-        </div>
-        ${open ? `<div class="kb-tree-items">${g.html}</div>` : ''}
-      </div>`;
-    }).join('');
-    tree.innerHTML = groupHtml;
-    tree.querySelectorAll('[data-kb-group]').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        if (e.target.closest('.kb-tree-plus')) return;
-        const key = el.dataset.kbGroup;
-        if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
-        else _state.treeGroups.add(key);
-        _renderTree();
-      });
+    const treeItems = groups.map((group) => {
+      const children = group.items.length
+        ? group.items
+        : [node('placeholder', group.key, group.empty, { placeholder: true })];
+      const id = `group:${nodeMeta.size}`;
+      nodeMeta.set(id, { kind: 'group', key: group.key, group });
+      return { id, label: group.label, expanded: !_state.treeGroups.has(group.key), children };
     });
-    tree.querySelectorAll('[data-kb-lib]').forEach((el) => {
-      el.addEventListener('click', () => _selectLib(el.dataset.kbLib));
-      // 个人库行：右键 → 重命名 / 删除
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        _kbRowMenu(el.dataset.kbLib, true, e.clientX, e.clientY);
+    if (sharedTreeAvailable) {
+      tree.innerHTML = window.uiTree({
+        ariaLabel: _tr('kb.workbench.library_tree', '知识库列表'),
+        items: treeItems,
+        className: 'kb-library-tree',
       });
-    });
-    tree.querySelectorAll('[data-kb-space]').forEach((el) => {
-      el.addEventListener('click', () => _selectSpace(el.dataset.kbSpace));
-      // 共享库行：右键 → 重命名 / 删除
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
+    }
+    const treeRoot = sharedTreeAvailable ? tree.querySelector('[data-ui-tree]') : null;
+    if (!treeRoot) {
+      tree.innerHTML = groups.map((group) => {
+        const open = !_state.treeGroups.has(group.key);
+        const rows = group.items.map((item) => {
+          const meta = nodeMeta.get(item.id);
+          const attr = meta.kind === 'lib' ? 'data-kb-lib'
+            : meta.kind === 'space' ? 'data-kb-space' : 'data-kb-external-source';
+          return `<div class="kb-tree-item${meta.selected ? ' active' : ''}" ${attr}="${_esc(meta.key)}">${_icon(meta.icon, `kb-tree-ico${meta.shared ? ' kb-tree-ico-space' : ''}`)}<span class="kb-tree-name">${_esc(item.label)}</span></div>`;
+        }).join('') || `<div class="kb-tree-placeholder">${_esc(group.empty)}</div>`;
+        return `<div class="kb-tree-group"><div class="kb-tree-group-label" data-kb-group="${_esc(group.key)}"><span class="kb-tree-group-name">${_esc(group.label)}</span>${group.plus ? _uiIconButton({ label: group.btnTitle, icon: 'plus', className: 'kb-tree-plus', attrs: { id: group.btnId } }) : ''}</div>${open ? `<div class="kb-tree-items">${rows}</div>` : ''}</div>`;
+      }).join('');
+      tree.querySelectorAll('[data-kb-group]').forEach((element) => {
+        element.addEventListener('click', (event) => {
+          if (event.target.closest('.kb-tree-plus')) return;
+          const key = element.dataset.kbGroup;
+          if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
+          else _state.treeGroups.add(key);
+          _renderTree();
+        });
       });
+      tree.querySelectorAll('[data-kb-lib]').forEach((element) => element.addEventListener('click', () => _selectLib(element.dataset.kbLib)));
+      tree.querySelectorAll('[data-kb-space]').forEach((element) => element.addEventListener('click', () => _selectSpace(element.dataset.kbSpace)));
+      tree.querySelectorAll('[data-kb-external-source]').forEach((element) => element.addEventListener('click', () => _selectLib(element.dataset.kbExternalSource)));
+      tree.querySelector('#kb-new-lib')?.addEventListener('click', (event) => { event.stopPropagation(); _createLib(); });
+      tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (event) => { event.stopPropagation(); _createSharedSpace(); });
+      return;
+    }
+    window.hydrateUiTrees(treeRoot);
+    treeRoot.querySelectorAll('[data-ui-tree-item]').forEach((item) => {
+      const meta = nodeMeta.get(item.dataset.uiTreeItem);
+      const label = item.querySelector(':scope > [data-ui-tree-select]');
+      if (!meta || !label) return;
+      if (meta.kind === 'group') {
+        item.classList.add('kb-tree-group');
+        label.classList.add('kb-tree-group-label');
+        if (meta.group.plus) {
+          const add = _elementFromHtml(_uiIconButton({
+            label: meta.group.btnTitle || '创建', icon: 'plus', className: 'kb-tree-plus',
+            attrs: { id: meta.group.btnId },
+          }));
+          item.appendChild(add);
+        }
+        return;
+      }
+      label.classList.add(meta.placeholder ? 'kb-tree-placeholder' : 'kb-tree-item');
+      if (meta.placeholder) {
+        label.disabled = true;
+        return;
+      }
+      label.classList.toggle('active', meta.selected === true);
+      label.innerHTML = `${_icon(meta.icon, `kb-tree-ico${meta.shared ? ' kb-tree-ico-space' : ''}`)}<span class="kb-tree-name">${_esc(label.textContent)}</span>${meta.shared ? `<span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span>` : ''}`;
+      if (meta.kind === 'lib') {
+        label.addEventListener('contextmenu', (event) => {
+          event.preventDefault(); event.stopPropagation();
+          _kbRowMenu(meta.key, true, event.clientX, event.clientY);
+        });
+      } else if (meta.kind === 'space') {
+        label.addEventListener('contextmenu', (event) => {
+          event.preventDefault(); event.stopPropagation();
+          _kbSpaceMenu(meta.key, event.clientX, event.clientY);
+        });
+      }
     });
-    tree.querySelectorAll('[data-kb-external-source]').forEach((el) => {
-      el.addEventListener('click', () => _selectLib(el.dataset.kbExternalSource));
+    treeRoot.addEventListener('ui-tree-toggle', (event) => {
+      const meta = nodeMeta.get(event.detail?.id);
+      if (!meta || meta.kind !== 'group') return;
+      if (event.detail.expanded) _state.treeGroups.delete(meta.key);
+      else _state.treeGroups.add(meta.key);
+    });
+    treeRoot.addEventListener('ui-tree-change', (event) => {
+      const meta = nodeMeta.get(event.detail?.id);
+      if (!meta) return;
+      if (meta.kind === 'lib' || meta.kind === 'external') _selectLib(meta.key);
+      else if (meta.kind === 'space') _selectSpace(meta.key);
     });
     tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
     tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
@@ -532,60 +633,72 @@
     const trigger = document.activeElement;
     _kbShareCloseDialog();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-dlg-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-dlg-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title">
-        ${_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x', className: 'kb-share-dlg-close' })}
-        <h3 class="kb-share-dlg-title" id="kb-share-dlg-title">创建共享知识库</h3>
-        <div class="kb-share-form">
-          <div class="kb-share-field">
-            <label class="kb-share-label">名称 <span class="kb-share-required">*</span></label>
-            ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: '请输入知识库名称', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      <section class="ui-modal kb-share-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="kb-share-dlg-title">创建共享知识库</h2>
           </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">封面</label>
-            <div class="kb-share-cover">
-              <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">${_icon('folder', 'kb-share-cover-default-icon')}</span></div>
-              ${_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
-              <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
+          ${_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x', className: 'kb-share-dlg-close' })}
+        </header>
+        <div class="ui-modal__body kb-share-dlg-body">
+          <div class="kb-share-form">
+            <div class="kb-share-field">
+              <label class="kb-share-label" for="kb-share-name">名称 <span class="kb-share-required">*</span></label>
+              ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: '请输入知识库名称', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
             </div>
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">描述</label>
-            ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: '为你的共享知识库填写描述', attrs: { rows: 3 } })}
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">加入方式</label>
-            <div class="kb-share-select-wrap">
-              <select class="kb-share-select" id="kb-share-join">
-                <option value="direct">直接加入</option>
-                <option value="apply">申请加入（管理员批准）</option>
-                <option value="invite">仅邀请加入</option>
-              </select>
-            </div>
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">成员权限</label>
-            <div class="kb-share-perm" id="kb-share-perm">
-              <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger">
-                <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
-              </button>
-              <div class="kb-share-perm-menu" id="kb-share-perm-menu" data-ui-modal-popover data-trigger-id="kb-share-perm-trigger" data-open="false" hidden>
-                <div class="kb-share-perm-item is-selected" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>内容可查看和导出</div>
-                <div class="kb-share-perm-item" data-perm="view_only">内容可查看但不可导出</div>
-                <div class="kb-share-perm-item" data-perm="hidden">内容不可查看</div>
+            <div class="kb-share-field">
+              <span class="kb-share-label">封面</span>
+              <div class="kb-share-cover">
+                <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">${_icon('folder', 'kb-share-cover-default-icon')}</span></div>
+                ${_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
+                <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
               </div>
             </div>
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">设置推荐问题</label>
-            ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: '为你的知识库预设推荐问题（每行一个）', attrs: { rows: 2 } })}
+            <div class="kb-share-field">
+              <label class="kb-share-label" for="kb-share-desc">描述</label>
+              ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: '为你的共享知识库填写描述', attrs: { rows: 3 } })}
+            </div>
+            <div class="kb-share-field">
+              <span class="kb-share-label" id="kb-share-join-label">加入方式</span>
+              <div class="kb-share-select-wrap">
+                ${_uiSelect({
+                  id: 'kb-share-join',
+                  value: 'direct',
+                  labelId: 'kb-share-join-label',
+                  options: [
+                    { value: 'direct', label: '直接加入' },
+                    { value: 'apply', label: '申请加入（管理员批准）' },
+                    { value: 'invite', label: '仅邀请加入' },
+                  ],
+                })}
+              </div>
+            </div>
+            <div class="kb-share-field">
+              <span class="kb-share-label" id="kb-share-perm-field-label">成员权限</span>
+              <div class="kb-share-perm" id="kb-share-perm">
+                <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger" aria-labelledby="kb-share-perm-field-label kb-share-perm-label" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
+                </button>
+                <div class="kb-share-perm-menu" id="kb-share-perm-menu" role="listbox" aria-labelledby="kb-share-perm-field-label" data-ui-modal-popover data-trigger-id="kb-share-perm-trigger" data-open="false" hidden>
+                  <div class="kb-share-perm-item is-selected" role="option" aria-selected="true" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>内容可查看和导出</div>
+                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="view_only">内容可查看但不可导出</div>
+                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="hidden">内容不可查看</div>
+                </div>
+              </div>
+            </div>
+            <div class="kb-share-field">
+              <label class="kb-share-label" for="kb-share-questions">设置推荐问题</label>
+              ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: '为你的知识库预设推荐问题（每行一个）', attrs: { rows: 2 } })}
+            </div>
           </div>
         </div>
-        <div class="kb-share-dlg-actions">
+        <footer class="ui-modal__footer kb-share-dlg-actions">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-btn', attrs: { id: 'kb-share-cancel' } })}
           ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-btn', disabled: true, attrs: { id: 'kb-share-ok' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbShareDialog = overlay;
@@ -601,10 +714,15 @@
         _kbShareDialogController = null;
       },
     });
+    if (typeof window.hydrateUiFormSelects === 'function') window.hydrateUiFormSelects(overlay);
 
     const nameInput = overlay.querySelector('#kb-share-name');
     const okBtn = overlay.querySelector('#kb-share-ok');
-    const syncOk = () => { okBtn.disabled = !String(nameInput.value || '').trim(); };
+    const syncOk = () => {
+      const disabled = !String(nameInput.value || '').trim();
+      okBtn.disabled = disabled;
+      okBtn.classList.toggle('is-disabled', disabled);
+    };
     nameInput.addEventListener('input', syncOk);
     nameInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !okBtn.disabled) _kbShareSubmit();
@@ -632,19 +750,23 @@
 
     // 成员权限下拉
     const permMenu = overlay.querySelector('#kb-share-perm-menu');
-    overlay.querySelector('#kb-share-perm-trigger').addEventListener('click', (e) => {
+    const permTrigger = overlay.querySelector('#kb-share-perm-trigger');
+    permTrigger.addEventListener('click', (e) => {
       e.stopPropagation();
       permMenu.hidden = !permMenu.hidden;
       permMenu.dataset.open = permMenu.hidden ? 'false' : 'true';
+      permTrigger.setAttribute('aria-expanded', permMenu.hidden ? 'false' : 'true');
     });
     permMenu.querySelectorAll('.kb-share-perm-item').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         permMenu.querySelectorAll('.kb-share-perm-item').forEach((x) => x.classList.remove('is-selected'));
+        permMenu.querySelectorAll('.kb-share-perm-item').forEach((x) => x.setAttribute('aria-selected', x === item ? 'true' : 'false'));
         item.classList.add('is-selected');
         overlay.querySelector('#kb-share-perm-label').textContent = item.textContent.trim();
         permMenu.hidden = true;
         permMenu.dataset.open = 'false';
+        permTrigger.setAttribute('aria-expanded', 'false');
       });
     });
 
@@ -654,6 +776,7 @@
       if (!e.target.closest('#kb-share-perm')) {
         permMenu.hidden = true;
         permMenu.dataset.open = 'false';
+        permTrigger.setAttribute('aria-expanded', 'false');
       }
     });
     okBtn.addEventListener('click', _kbShareSubmit);
@@ -665,7 +788,7 @@
     const name = String(overlay.querySelector('#kb-share-name').value || '').trim();
     if (!name) return;
     const desc = String(overlay.querySelector('#kb-share-desc').value || '').trim();
-    const joinMode = overlay.querySelector('#kb-share-join').value;
+    const joinMode = _uiSelectValue(overlay, 'kb-share-join', 'direct');
     const permItem = overlay.querySelector('.kb-share-perm-item.is-selected');
     const memberPermission = permItem ? permItem.dataset.perm : 'view_export';
     const questions = String(overlay.querySelector('#kb-share-questions').value || '')
@@ -723,15 +846,18 @@
   // 空态：居中插图 + 大号主按钮（保留库头部骨架，不一片白板）
   // 空库（左侧无库）→ 创建知识库；库内无内容 → 「添加内容」打开与工具栏一致的导入菜单
   function _emptyStateHtml(kind) {
-    const createBtn = kind === 'lib'
-      ? _uiButton({ label: '创建知识库', role: 'primary', icon: 'plus', className: 'kb-empty-btn', attrs: { id: 'kb-empty-create' } })
-      : _uiButton({ label: '添加内容', role: 'primary', icon: 'plus', className: 'kb-empty-btn', attrs: { id: 'kb-empty-add' } });
-    return `<div class="kb-empty">
-      <div class="kb-empty-illus">${_icon('book-open', 'kb-empty-ico')}</div>
-      <div class="kb-empty-title">${kind === 'lib' ? '还没有知识库' : '知识库什么也没有，去这里添加'}</div>
-      <div class="kb-empty-sub">${kind === 'lib' ? '创建一个知识库，或导入资料开始使用' : '支持文件、文件夹、网页、笔记等多种方式导入'}</div>
-      <div class="kb-empty-actions">${createBtn}</div>
-    </div>`;
+    const isLibrary = kind === 'lib';
+    return _uiEmptyState({
+      kind: 'actionable',
+      title: isLibrary ? '还没有知识库' : '知识库什么也没有，去这里添加',
+      hint: isLibrary ? '创建一个知识库，或导入资料开始使用' : '支持文件、文件夹、网页、笔记等多种方式导入',
+      icon: 'book-open',
+      action: {
+        label: isLibrary ? '创建知识库' : '添加内容',
+        icon: 'plus',
+        attrs: { id: isLibrary ? 'kb-empty-create' : 'kb-empty-add' },
+      },
+    });
   }
 
   // 空态按钮绑定：空库 → 创建；库内空 → 「添加内容」打开导入菜单（与工具栏同一入口）
@@ -830,18 +956,24 @@
         <span class="kb-import-dlg-meta">文件夹</span>
       </div>`;
     }
-    for (const f of files) {
+    files.forEach((f, index) => {
       const rel = _importDlgRelPath(_dlgLib, _dlgDir.split('/').filter(Boolean), f.name);
-      const checked = _dlgSelected.has(rel) ? ' checked' : '';
-      html += `<div class="kb-import-dlg-row${checked}" data-import-file="${_esc(rel)}">
-        <input type="checkbox" class="kb-import-dlg-check" data-import-check="${_esc(rel)}" ${checked ? 'checked' : ''} />
+      const checked = _dlgSelected.has(rel);
+      html += `<div class="kb-import-dlg-row${checked ? ' checked' : ''}" data-import-file="${_esc(rel)}">
+        ${_uiCheckbox({
+          id: `kb-import-check-${index}`,
+          label: `选择 ${f.name}`,
+          className: 'kb-import-dlg-check',
+          checked,
+          attrs: { 'data-import-check': rel },
+        })}
         <span class="kb-import-dlg-icon is-${_extClass(f.name)}">${_extLabel(f.name)}</span>
         <span class="kb-import-dlg-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
         <span class="kb-import-dlg-meta">${_esc(_extLabel(f.name))}</span>
       </div>`;
-    }
+    });
     if (!dirs.length && !files.length) {
-      html = '<div class="kb-import-dlg-empty">' + (q ? '无匹配文件' : '此目录为空') + '</div>';
+      html = _uiEmptyState({ kind: 'quiet', title: q ? '无匹配文件' : '此目录为空' });
     }
     overlay.querySelector('.kb-import-dlg-files').innerHTML = html;
     // 路径栏
@@ -860,17 +992,22 @@
 
   function _bindImportDlgEvents(overlay) {
     const trigger = document.getElementById('kb-wb-import');
+    const dialog = overlay.querySelector('[role="dialog"]');
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay,
+          dialog,
+          initialFocus: '#kb-import-dlg-search-input',
+          onClose: () => overlay.remove(),
+        })
+      : null;
     function closeImportDialog(restoreFocus = true) {
-      document.removeEventListener('keydown', onImportDialogKeydown);
-      overlay.remove();
-      if (restoreFocus) trigger?.focus();
+      if (controller) controller.close('action', { restoreFocus });
+      else {
+        overlay.remove();
+        if (restoreFocus) trigger?.focus();
+      }
     }
-    function onImportDialogKeydown(event) {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      closeImportDialog();
-    }
-    document.addEventListener('keydown', onImportDialogKeydown);
     overlay.querySelector('.kb-import-dlg-close')?.addEventListener('click', () => closeImportDialog());
     overlay.querySelector('.kb-import-dlg-cancel')?.addEventListener('click', () => closeImportDialog());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeImportDialog(); });
@@ -980,6 +1117,7 @@
         }
       }
     });
+    if (controller) controller.open(trigger);
   }
 
   function _pushImportDlgHistory(loc) {
@@ -1016,44 +1154,47 @@
     const libItems = _state.libs.map((l, i) =>
       `<div class="kb-import-dlg-lib${i === 0 ? ' active' : ''}" data-import-lib="${_esc(l.name)}">
         ${_icon('folder', 'kb-import-dlg-ico')}<span class="kb-import-dlg-name">${_esc(l.name)}</span>
-      </div>`).join('') || '<div class="kb-import-dlg-empty">暂无个人知识库</div>';
+      </div>`).join('') || _uiEmptyState({ kind: 'quiet', title: '暂无个人知识库' });
     const overlay = document.createElement('div');
-    overlay.className = 'kb-import-dlg-overlay';
+    overlay.className = 'ui-modal-overlay kb-import-dlg-overlay';
     overlay.innerHTML = `
-      <div class="kb-import-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title">
-        <div class="kb-import-dlg-head">
-          <div class="kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>导入内容</div>
+      <section class="ui-modal ui-modal--lg kb-import-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title">
+        <header class="ui-modal__header kb-import-dlg-head">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>导入内容</h2>
+          </div>
           <div class="kb-import-dlg-search">
             <span class="kb-import-dlg-search-ico">${_icon('search', 'kb-import-dlg-search-icon')}</span>
             ${_uiInput({ id: 'kb-import-dlg-search-input', type: 'search', placeholder: '搜索', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           ${_uiIconButton({ label: '关闭导入弹窗', icon: 'x', className: 'kb-import-dlg-close' })}
-        </div>
-        <div class="kb-import-dlg-nav">
-          ${_uiIconButton({ label: '返回', icon: 'chevron-left', className: 'kb-import-dlg-back' })}
-          ${_uiIconButton({ label: '前进', icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
-          <span class="kb-import-dlg-path"></span>
-        </div>
-        <div class="kb-import-dlg-body">
-          <div class="kb-import-dlg-tree">
-            <div class="kb-import-dlg-group">个人知识库</div>
-            <div class="kb-import-dlg-libs">${libItems}</div>
+        </header>
+        <div class="ui-modal__body kb-import-dlg-content">
+          <div class="kb-import-dlg-nav">
+            ${_uiIconButton({ label: '返回', icon: 'chevron-left', className: 'kb-import-dlg-back' })}
+            ${_uiIconButton({ label: '前进', icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
+            <span class="kb-import-dlg-path"></span>
           </div>
-          <div class="kb-import-dlg-files"></div>
+          <div class="kb-import-dlg-body">
+            <div class="kb-import-dlg-tree">
+              <div class="kb-import-dlg-group">个人知识库</div>
+              <div class="kb-import-dlg-libs">${libItems}</div>
+            </div>
+            <div class="kb-import-dlg-files"></div>
+          </div>
         </div>
-        <div class="kb-import-dlg-foot">
+        <footer class="ui-modal__footer kb-import-dlg-foot">
           <span class="kb-import-dlg-count">已选中 0 个文件</span>
           <div class="kb-import-dlg-actions">
             ${_uiButton({ label: '取消', role: 'secondary', size: 'sm', className: 'kb-import-dlg-cancel' })}
             ${_uiButton({ label: '导入', role: 'primary', size: 'sm', icon: 'upload', disabled: true, className: 'kb-import-dlg-ok' })}
           </div>
-        </div>
-      </div>`;
+        </footer>
+      </section>`;
     document.body.appendChild(overlay);
     _bindImportDlgEvents(overlay);
     _renderImportDlgList();
     _syncImportDlgNav(overlay);
-    overlay.querySelector('.kb-import-dlg-search input')?.focus();
   }
 
   // 导入菜单「新建文件夹」：个人库 contexts.mkdir / 空间 spaces.files.mkdir
@@ -1178,7 +1319,12 @@
     const endTip = parts.length ? '<div class="kb-files-end">没有更多内容了</div>' : '';
     if (!parts.length && q) {
       // 搜索无结果：显示"无匹配"占位，不显示空库引导（避免误导为新库）
-      list.innerHTML = '<div class="kb-empty"><div class="kb-empty-title">无匹配文档</div><div class="kb-empty-sub">换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）</div></div>';
+      list.innerHTML = _uiEmptyState({
+        kind: 'explained',
+        title: '无匹配文档',
+        hint: '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）',
+        icon: 'search',
+      });
     } else {
       list.innerHTML = (parts.join('') + endTip) || _emptyStateHtml('file');
       if (!parts.length) _bindEmptyActions();
@@ -1340,7 +1486,12 @@
     if (files.length) html += '<div class="kb-files-end">没有更多内容了</div>';
     if (!html && q) {
       // 搜索无结果：不显示空库引导
-      list.innerHTML = '<div class="kb-empty"><div class="kb-empty-title">无匹配文档</div><div class="kb-empty-sub">换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）</div></div>';
+      list.innerHTML = _uiEmptyState({
+        kind: 'explained',
+        title: '无匹配文档',
+        hint: '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）',
+        icon: 'search',
+      });
       _renderCount(0);
       _renderRight();
       return;
@@ -1433,7 +1584,8 @@
     // 先显示再恢复上次的窗口尺寸/位置：overlay 关着时是 display:none，量出来的
     // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
     // 之后尤其明显），用户既看不全也抓不到右下角手柄。
-    overlay.hidden = false;
+    if (_fileViewerController) _fileViewerController.open(document.activeElement);
+    else overlay.hidden = false;
     if (dialog) _fvApplyWindowRect(dialog);
     _fvResetZoom(dialog);
     _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
@@ -1467,6 +1619,7 @@
   // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
   // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
   let _fileViewerOverlay = null;
+  let _fileViewerController = null;
   let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
   function _ensureFileViewerOverlay() {
     if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
@@ -1551,18 +1704,24 @@
     let pressedOnOverlay = false;
     overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+      if (e.target === overlay && pressedOnOverlay) {
+        if (_fileViewerController) _fileViewerController.close('backdrop');
+        else overlay.hidden = true;
+      }
     });
     document.body.appendChild(overlay);
-    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    _fileViewerController = typeof uiModalController === 'function'
+      ? uiModalController({ overlay, dialog, initialFocus: '#kb-fv-close' })
+      : null;
+    closeBtn.addEventListener('click', () => {
+      if (_fileViewerController) _fileViewerController.close('action');
+      else overlay.hidden = true;
+    });
     readerBtn.addEventListener('click', () => {
       const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
       readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
       _fvSaveWindowRect();
     });
-    // Esc 关闭
-    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
-    overlay.tabIndex = -1;
     zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
     sourceBtn.addEventListener('click', () => {
       const cur = _fvCur;
@@ -2128,7 +2287,6 @@
       errorEl.textContent = '暂不支持预览该文件';
       return;
     }
-    overlay.focus();
   }
 
   let _fvStyleInjected = false;
@@ -2141,7 +2299,7 @@
     style.id = 'kb-file-viewer-style';
     style.textContent = `
       .kb-fv-overlay {
-        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(15, 23, 42, .5);
         display: flex; align-items: center; justify-content: center; padding: 24px;
       }
       .kb-fv-overlay[hidden] { display: none; }
@@ -2182,7 +2340,7 @@
       .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
       .kb-fv-resize {
         position: absolute; right: 0; bottom: 0;
-        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: var(--z-raised);
       }
       .kb-fv-resize::after {
         content: ''; position: absolute; right: 5px; bottom: 5px;
@@ -2193,7 +2351,7 @@
       .kb-fv-resize:hover::after { border-color: #0E9F6E; }
       /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
          （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
-      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: var(--z-modal-popover); }
       body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
       .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
       .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
@@ -2376,7 +2534,7 @@
         : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
     const tagEl = document.getElementById('kb-wb-lib-tag');
     if (tagEl) tagEl.textContent = isSpace
-      ? _tr('kb.workbench.group_shared', '共享知识库')
+      ? _tr('kb.workbench.group_shared', '待开发')
       : isExternal
         ? _tr('kb.workbench.external_source', '外部来源')
         : _tr('kb.workbench.group_personal', '个人知识库');
@@ -2394,8 +2552,11 @@
       descEl.textContent = desc || '快来填写描述吧~';
       descEl.classList.toggle('is-empty', !desc);
     }
-    const shareBtn = document.getElementById('kb-wb-share');
-    if (shareBtn) shareBtn.style.display = isExternal ? 'none' : '';
+    // 分享/双人入口只对「共享知识库」有意义（个人库单用户、外部来源只读），
+    // 挂在个人知识库上只会误导 —— 整块（按钮 + "待开发" chip）一起收掉。
+    // 9.17 会议 P1：去掉个人知识库里无实际作用的"分享/双人"引导入口。
+    const shareWrap = document.getElementById('kb-wb-share-wrap');
+    if (shareWrap) shareWrap.style.display = isSpace ? '' : 'none';
     const moreBtn = document.getElementById('kb-wb-more-btn');
     if (moreBtn) moreBtn.style.display = isExternal ? 'none' : '';
     const moreMenu = document.getElementById('kb-wb-more-menu');
@@ -2440,8 +2601,7 @@
    * 注意：**脑图/测验入口与解析无关**（真机反馈"为什么只在 AI 解析后才能打开"）——
    * 它们各自独立取库内 ready 文档生成（kb.mindmap / kb.quiz），所以这里直接可用，
    * 只有"库是空的"才禁用。解析只是同一张卡上的另一个入口。
-   */
-  function _resetAnalysisCard() {
+   */  function _resetAnalysisCard() {
     const card = document.getElementById('kb-wb-analysis-card');
     if (!card) return;
     card.innerHTML = `
@@ -2449,8 +2609,7 @@
         <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
         <span class="kb-wb-card-actions">
           ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-        </span>
+          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}        </span>
       </div>
       <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
       <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>`;
@@ -2547,7 +2706,7 @@
       });
   }
 
-  // AI 解析卡：操作组（展开/生成脑图/生成测验）归卡片标题行右侧；
+  // AI 解析卡：操作组（展开/生成脑图）归卡片标题行右侧；
   // 一句话总结 = 只读文本（左绿条，无输入框感）；降级态按钮置灰不可用。
   function _renderAnalysis(summary) {
     const card = document.getElementById('kb-wb-analysis-card');
@@ -2564,8 +2723,7 @@
     const actions = `<span class="kb-wb-card-actions">
       ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
       ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}
-    </span>`;
+      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}    </span>`;
 
     let html = `<div class="kb-wb-right-card-title">
       <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库${srcTag}<span class="kb-wb-card-src">（${docs.length} 个文档）</span></span>
@@ -2600,8 +2758,7 @@
     const degNote = document.getElementById('kb-qa-degraded-note');
     if (degNote && ok) degNote.hidden = true;
 
-    _bindAnalysisActions(card);
-    card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
+    _bindAnalysisActions(card);    card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
       const body = card.querySelector('#kb-wb-analysis-body');
       const btn = card.querySelector('#kb-wb-analysis-toggle');
       if (!body || !btn) return;
@@ -3365,6 +3522,7 @@
   // 原文查看器（kb-fv）：PDF/Office 走这里以保证排版与缩放（#214 曾把它删掉，
 // 主进程 kb.openFile / kb-file:// 一直在，缺的就是这一层）；变量随查看器代码块一起恢复。
 let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
+  let _mmModalController = null;
   let _mmGenerating = false; // 生成中防重复点击
   let _mmPreheatedKey = '';  // 已后台预热脑图缓存的库 key
   const _mmUndoStack = [];   // 重命名撤销栈 [{idx, old}]，上限 20
@@ -3381,7 +3539,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _mmBindTitleDrag();
     // 先显示再套用尺寸/位置记忆：display:none 时量不到布局尺寸，居中位会被算成 0
     // （全程同步执行，同一帧内完成，不会看到窗口跳动）
-    overlay.hidden = false;
+    if (_mmModalController) _mmModalController.open(document.activeElement);
+    else overlay.hidden = false;
     _mmApplyWindowRect();
     _mmUpdateSaveState();
     _renderOverlay();
@@ -3774,13 +3933,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const titleEl = document.getElementById('kb-mm-title-input');
         const overlay = document.getElementById('kb-mm-overlay');
         if (titleEl && overlay) {
-          overlay.hidden = false;
+          _openMindPreview();
           const scopeLabel = key.startsWith('space:')
             ? `共享空间 ${key.slice(6)}`
             : isDocKey
               ? `文档 ${String(key.slice(4).split('#')[0]).split('/').pop()}`
               : `个人库 ${key.slice(4)}`;
-          titleEl.textContent = `🧠 脑图预览 - ${scopeLabel}（已保存）`;
+          titleEl.value = `${scopeLabel}（已保存）`;
         }
         _rerenderMindmaps();
         _mmFitToStage();
@@ -4664,7 +4823,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const body = document.createElement('div');
       body.className = 'kb-qa-msg-body';
       if (m.role === 'user') body.textContent = m.content || '';
-      else body.innerHTML = _decorateAnswerHtml(m.content || '');
+      else body.innerHTML = _decorateAnswerHtml(m.content || '', m.evidence);
       el.appendChild(body);
       prevAi = null;
       // 历史恢复：AI 回答重建引用 chips 与「生成脑图/重新生成脑图」按钮
@@ -4706,7 +4865,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             <span class="kb-qa-history-meta">${s.msgs ? s.msgs.length : 0} 条 · ${_qaFmtTime(s.ts)}</span>
             ${_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger', className: 'kb-qa-history-del', attrs: { 'data-hist-del': s.id } })}
           </div>`).join('')
-        : '<div class="kb-qa-history-empty">暂无历史对话</div>'}
+        : _uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })}
       </div>`;
     document.body.appendChild(panel);
     const trigger = document.getElementById('kb-qa-history');
@@ -4853,30 +5012,168 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     return row;
   }
 
-  // AI 回答正文 → “人读友好”HTML：
-  //  - 剔除行内 `path#chunk N` 溯源锚点（统一收敛到底部「资料来源」区，正文不再打断）
-  //  - 渲染 **加粗** 与 `行内代码`
-  //  - 空行分段；`-`/编号列表结构化
-  function _decorateAnswerHtml(text) {
-    let t = String(text || '');
-    t = t
-      .replace(/`[^`\n]+?#chunk\s*\d+`/g, '') // 反引号包裹的完整锚点
-      .replace(/[^\s，。；：、！？?（）()【】"'“”‘’]+?#chunk\s*\d+/g, ''); // 裸锚点
-    let html = _esc(t);
-    html = html.replace(/(^|[^`])`([^`\n]+)`/g, '$1<code>$2</code>'); // 行内代码
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'); // **加粗**
-    const blocks = html.split(/\n{2,}/);
-    return blocks.map((block) => {
-      const lines = block.split('\n');
-      const out = [];
-      for (const ln of lines) {
-        let m;
-        if ((m = ln.match(/^\s*[-*•]\s+(.*)$/))) out.push(`<div class="kb-a-li">${m[1] || ''}</div>`);
-        else if ((m = ln.match(/^\s*(\d+)[.、]\s+(.*)$/))) out.push(`<div class="kb-a-li is-num">${m[1]}. ${m[2] || ''}</div>`);
-        else if (ln.trim()) out.push(`<div class="kb-a-line">${ln}</div>`);
+  // ── 回答正文：行内引用 chip + 统一 Markdown 渲染 ────────────────────────
+  //
+  // 契约（2026-09 验收修订）：**正文里的引用要看得见、点得开**——模型标注的
+  // `path#chunk N` 还原成行内可点 chip（`来源：1 ↗`），点击直接打开原文并定位；
+  // 底部「资料来源」折叠区同时保留（机器/溯源用途）。
+  //
+  // 历史：#191 曾把行内引用整体删掉、只留底部折叠区，结果正文里既看不到引用、
+  // 又残留 `[来源：1]()` 空壳（URL 被掏空、点不动），验收单据此判为缺陷。
+  //
+  // 解析分三层——因为「路径」没有可靠边界（真实路径含中文与空格，如
+  // `external/feishu-wiki/SM 的交接.md`，而中文正文之间无词边界）：
+  //   • 语法自带边界的形态（markdown 链接 / 括号 / 反引号 / 【】）→ 整体识别；
+  //   • 裸锚点 → 只认 ASCII 路径集（中文正文因此天然不会被吞）；
+  //   • 中文与含空格路径交给证据索引（final 阶段拿得到 evidence）精确匹配。
+  //
+  // 解析不出来的锚点（模型自创、不在证据里）**不留 chip**——宁可删掉也不给
+  // 一个点开是"找不到"的死 chip。
+  const _CITE_LABEL = '(?:来源|引用|source)';
+  // 标签 + 括号包裹的锚点（全/半角、圆/方括号）
+  const _CITE_LABEL_PAREN_RE = new RegExp(
+    `${_CITE_LABEL}\\s*[：:]?\\s*\\d*\\s*[【\\[（(][^】\\]）)\\n]*#chunk\\s*\\d+[^】\\]）)\\n]*[】\\]）)]`, 'gi');
+  // 【…锚点…】
+  const _CITE_BRACKET_RE = /【[^】\n]*?#chunk\s*\d+[^】\n]*?】/g;
+  // markdown 链接/图片：[label](target)——语法有界；非引用链接原样交给渲染管线
+  const _CITE_LINK_RE = /!?\[([^\]\n]*)\]\(\s*([^)\n]*)\)/g;
+  // 反引号包裹的锚点（允许路径含空格）
+  const _CITE_TICK_RE = /`([^`\n]*?#chunk\s*\d+)`/g;
+  // 裸锚点：ASCII 路径集，不吞中文正文
+  const _CITE_BARE_RE = /([A-Za-z0-9][A-Za-z0-9._/-]*)#chunk\s*(\d+)/g;
+  // chip 占位符：markdown 不会改写 `⟦…⟧`，渲染后再换成真 chip HTML
+  const _citeToken = (i) => `⟦KBCITE:${i}⟧`;
+
+  /**
+   * 证据索引：锚点文本变体（全路径 + 文件名，口径对齐主进程 kb_qa.isAnchorCited）
+   * → 证据条目。长串优先，避免短串（文件名）先命中而留下路径尾巴。
+   */
+  function _citationVariants(evidence) {
+    const out = [];
+    for (const r of evidence || []) {
+      const p = String((r && r.path) || '');
+      if (!p) continue;
+      const base = p.slice(p.lastIndexOf('/') + 1);
+      for (const name of [p, base]) {
+        out.push([`${name}#chunk ${r.chunkIdx}`, r]);
+        out.push([`${name}#chunk${r.chunkIdx}`, r]);
       }
-      return out.length ? `<div class="kb-a-block">${out.join('')}</div>` : '';
-    }).join('');
+    }
+    out.sort((a, b) => b[0].length - a[0].length);
+    return out;
+  }
+
+  /** 行内引用 chip：可点 → 打开原文并定位该 chunk。 */
+  function _citeChipHtml(ref, label) {
+    const path = String(ref.path || '');
+    const chunkIdx = Number(ref.chunkIdx) || 0;
+    const text = String(label || '').trim() || path.slice(path.lastIndexOf('/') + 1);
+    const title = `${path}#chunk ${chunkIdx} — 打开原文`;
+    return '<button type="button" class="kb-qa-chip kb-qa-cite" data-kb-cite="1"'
+      + ` data-cite-path="${_esc(path)}" data-cite-chunk="${chunkIdx}"`
+      + ` data-cite-scope="${_esc(ref.scope || 'global')}"`
+      + ` data-cite-source="${_esc(ref.source || 'library')}"`
+      + (ref.spaceId ? ` data-cite-space="${_esc(ref.spaceId)}"` : '')
+      + ` title="${_esc(title)}">${_esc(text)} ↗</button>`;
+  }
+
+  /**
+   * 把正文里的引用锚点换成 chip 占位符。
+   * 返回 { text, chips }：text 交给 markdown 渲染，chips[i] 对应占位符 i。
+   * 只有在证据索引里命中的锚点才出 chip —— 模型自创路径、或流式阶段尚未拿到
+   * evidence 的，一律不留（宁可不显示，也不给点开是"找不到"的死 chip）。
+   */
+  function _chipifyCitationAnchors(text, evidence) {
+    const variants = _citationVariants(evidence); // [[anchorText, ref], …]，长串优先
+    const byAnchor = new Map();
+    for (const [anchor, ref] of variants) if (!byAnchor.has(anchor)) byAnchor.set(anchor, ref);
+
+    const chips = [];
+    const emit = (anchorText, label) => {
+      const ref = byAnchor.get(String(anchorText || '').trim());
+      if (!ref) return '';
+      const token = _citeToken(chips.length);
+      chips.push(_citeChipHtml(ref, label));
+      return token;
+    };
+    /** 从"标签+括号"或"【】"整段里取回锚点原文。 */
+    const anchorIn = (whole, excluded) => {
+      const m = new RegExp(`([^\\s${excluded}]*#chunk\\s*\\d+)`).exec(whole);
+      return m ? m[1] : '';
+    };
+
+    let t = String(text || '');
+    // ① 有界形态：标签+括号 / 【】 / markdown 链接 / 反引号
+    t = t.replace(_CITE_LABEL_PAREN_RE, (whole) => emit(anchorIn(whole, '【[（('), ''));
+    t = t.replace(_CITE_BRACKET_RE, (whole) => emit(anchorIn(whole, '【】'), ''));
+    t = t.replace(_CITE_LINK_RE, (whole, label, target) => {
+      if (/#chunk\s*\d+/.test(target)) return emit(target, label);
+      if (/#chunk\s*\d+/.test(label)) return emit(label, '');
+      return whole; // 非引用链接：保留，交给统一管线渲染成真链接
+    });
+    t = t.replace(_CITE_TICK_RE, (whole, anchor) => emit(anchor, ''));
+    // ② 证据精确串（中文 / 含空格路径）——必须早于裸锚点正则，否则会被从
+    //    `md#chunk N` 处截断，留下 `…SM 的交接.` 这类路径残尾。
+    //    先吃掉"整对括号只包着锚点"的形态（`（锚点）` / `【锚点】`），
+    //    否则 chip 会被一对空括号夹住、正文多出 `（）` 壳。
+    for (const [anchor] of variants) {
+      for (const [open, close] of [['（', '）'], ['(', ')'], ['【', '】'], ['[', ']']]) {
+        const wrapped = `${open}${anchor}${close}`;
+        if (t.includes(wrapped)) t = t.split(wrapped).join(emit(anchor, ''));
+      }
+      if (t.includes(anchor)) t = t.split(anchor).join(emit(anchor, ''));
+    }
+    // ③ 裸锚点兜底（ASCII）：证据命中出 chip，否则删除
+    t = t.replace(_CITE_BARE_RE, (whole) => emit(whole, ''));
+    // 空壳归一：引用标签已被换成 chip，这里只清残留的空括号/空方括号形态
+    t = t
+      .replace(/[（(]\s*[）)]/g, '')
+      .replace(/[【[]\s*(?:来源|引用|source)\s*[：:]?\s*\d*\s*[】\]]/gi, '')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]+(?=\n|$)/g, '')
+      .replace(/[ \t]+(?=[，。；：、！？）】])/g, '');
+    return { text: t, chips };
+  }
+
+  // AI 回答正文 → HTML：引用锚点还原成可点 chip，再交给渲染层统一 Markdown 管线
+  // （标题/列表/链接/表格/代码一次到位，末尾由 utils.js 的 sanitizeHtml 收口 XSS；
+  // DOMPurify 由 index.html 在 utils.js 之前加载）。用法与 chat-stream 一致。
+  function _decorateAnswerHtml(text, evidence) {
+    const { text: withTokens, chips } = _chipifyCitationAnchors(text, evidence);
+    let html = (typeof renderMarkdownFull === 'function')
+      ? renderMarkdownFull(withTokens)
+      // 理论不可达（index.html 先加载 utils.js）；保留纯文本兜底，避免正文空白
+      : _esc(withTokens);
+    // chip HTML 由 _citeChipHtml 构造（path/label 均经 _esc），且在 sanitize 之后
+    // 注入，所以此处绝不能引入任何未转义的模型文本。
+    for (let i = 0; i < chips.length; i++) html = html.split(_citeToken(i)).join(chips[i]);
+    return `<div class="markdown-body kb-a-md">${html}</div>`;
+  }
+
+  /**
+   * 正文行内引用 chip 的点击处置：事件委托挂在消息容器上（只挂一次）。
+   * 用委托而不是逐元素绑定——流式回答每个 delta 都会重写 innerHTML，
+   * 逐元素绑定会反复失效。
+   */
+  function _wireCitationChips() {
+    const box = document.getElementById('kb-qa-messages');
+    if (!box || box._kbCiteWired) return;
+    box._kbCiteWired = true;
+    box.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const el = target.closest('[data-kb-cite]');
+      if (!el) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _openAnchor({
+        source: el.dataset.citeSource || 'library',
+        scope: el.dataset.citeScope || 'global',
+        path: el.dataset.citePath || '',
+        chunkIdx: Number(el.dataset.citeChunk) || 0,
+        ...(el.dataset.citeSpace ? { spaceId: el.dataset.citeSpace } : {}),
+      });
+    });
   }
 
   function _ask(question) {
@@ -4970,13 +5267,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
+          // 流式期间证据尚未下发：先走常规消解，final 会用 evidence 白名单重渲染一遍
           streamBody.innerHTML = _decorateAnswerHtml(text);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'final') {
           ai.classList.remove('is-typing');
           text = ev.text || text;
-          streamBody.innerHTML = _decorateAnswerHtml(text);
-          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
+          streamBody.innerHTML = _decorateAnswerHtml(text, ev.evidence);
+          // 系统状态行（如“已读取知识库信息”）→ 浅灰小字置于回答顶部
+          if (ev.sysNote) {
+            const sysNoteIcon = typeof window.uiIconHtml === 'function'
+              ? window.uiIconHtml('check', 'kb-qa-sysnote-icon')
+              : '';
+            streamBody.insertAdjacentHTML('afterbegin', `<div class="kb-qa-sysnote">${sysNoteIcon}<span>${_esc(ev.sysNote)}</span></div>`);
+          }
+          // 复制用“可读正文”：渲染后已去掉 markdown 标记与行内溯源锚点
+          const readableText = streamBody.textContent || text;          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
           if (ev.notFound) streamBody.classList.add('is-notfound');
           // 多轮上下文：回答入 history + 持久化当前会话（AI 回答额外存引用锚点，
           // 供“打开历史会话”时恢复引用 chips 与脑图按钮）
@@ -4984,12 +5290,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           _state.qaHistory.push(asstMsg);
           const evidence = Array.isArray(ev.evidence) ? ev.evidence : [];
           if (evidence.length) {
-            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项）
+            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项；
+            // spaceId 不能省——共享库引用缺它会在跳转时报"缺少空间信息"）
             asstMsg.evidence = evidence.slice(0, 12).map((r) => ({
               source: r.source || 'library',
               scope: r.scope || 'global',
               path: r.path,
               chunkIdx: r.chunkIdx,
+              ...(r.spaceId ? { spaceId: r.spaceId } : {}),
             }));
             streamBody.appendChild(_qaRefsElement(asstMsg.evidence));
           }
@@ -5019,6 +5327,20 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             card.appendChild(goBtn);
             streamBody.appendChild(card);
           }
+          // 轻工具条：复制回答全文（可读正文，不含行内溯源锚点）
+          const tools = document.createElement('div');
+          tools.className = 'kb-qa-tools';
+          const copyBtn = _elementFromHtml(_uiButton({
+            label: _tr('kb.qa.copy_answer', '复制'),
+            role: 'ghost',
+            size: 'sm',
+            icon: 'copy',
+            className: 'kb-qa-tools-btn',
+            attrs: { title: _tr('kb.qa.copy_answer_title', '复制回答全文') },
+          }));
+          copyBtn.addEventListener('click', () => _copyText(readableText, _tr('kb.qa.copy_answer_done', '已复制回答全文')));
+          tools.appendChild(copyBtn);
+          streamBody.appendChild(tools);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'error') {
           ai.classList.remove('is-typing');
@@ -5199,7 +5521,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                   className: 'kb-wb-right-expand',
                   attrs: { id: 'kb-wb-right-expand', 'aria-controls': 'kb-wb-right-panel', 'aria-expanded': 'false' },
                 })}
-                <span class="kb-wb-share-wrap">
+                <span class="kb-wb-share-wrap" id="kb-wb-share-wrap">
                   ${_uiIconButton({ label: '分享知识库（待开发）', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
                   <span class="kb-wb-soon-chip">待开发</span>
                 </span>
@@ -5265,8 +5587,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
                 <span class="kb-wb-card-actions">
                   ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-                </span>
+                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}                </span>
               </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
               <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>
@@ -5442,15 +5763,21 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     let rightPanelNarrow = Boolean(rightPanelMedia && rightPanelMedia.matches);
     _state.rightPanelOpen = !rightPanelNarrow;
     const applyRightPanel = () => {
-      const open = !rightPanelNarrow || _state.rightPanelOpen;
-      wb?.classList.toggle('right-panel-open', open);
+      // 单一事实源：_state.rightPanelOpen。此前写成
+      // `!rightPanelNarrow || _state.rightPanelOpen`，宽屏（>1100px）下左半恒为
+      // true → 点「关闭 AI 解析与问答」（生成测验正上方的 ×）后 open 仍为 true，
+      // DOM 被强制回展开态，真机上表现就是"按钮点了完全没反应"（9.17 P0）。
+      const open = _state.rightPanelOpen;
+      // 只有窄屏才把右列做成覆盖式抽屉；宽屏是常驻第三栏（收起后让宽度给中间列）。
+      const drawer = rightPanelNarrow && open;
+      wb?.classList.toggle('right-panel-open', drawer);
       wb?.classList.toggle('right-panel-collapsed', !open);
       if (rightPanel) rightPanel.setAttribute('aria-hidden', String(!open));
       if (rightExpandBtn) {
-        rightExpandBtn.hidden = !rightPanelNarrow || open;
+        rightExpandBtn.hidden = open;
         rightExpandBtn.setAttribute('aria-expanded', String(open));
       }
-      if (rightCollapseBtn) rightCollapseBtn.hidden = !rightPanelNarrow || !open;
+      if (rightCollapseBtn) rightCollapseBtn.hidden = !open;
     };
     rightExpandBtn?.addEventListener('click', () => {
       _state.rightPanelOpen = true;
@@ -5644,6 +5971,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       });
     }
     document.getElementById('kb-qa-send')?.addEventListener('click', () => _submitQa());
+    _wireCitationChips();
     document.getElementById('kb-qa-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -5730,9 +6058,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const im = document.getElementById('kb-wb-import-menu');
       if (im) im.hidden = true;
     });
+    const mmOverlay = document.getElementById('kb-mm-overlay');
+    const mmDialog = document.getElementById('kb-mm-dlg');
+    _mmModalController = mmOverlay && mmDialog && typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay: mmOverlay,
+          dialog: mmDialog,
+          initialFocus: '#kb-mm-overlay-close',
+          onClose: _mmRestoreThumbs,
+        })
+      : null;
     document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => {
-      document.getElementById('kb-mm-overlay').hidden = true;
-      _mmRestoreThumbs();
+      if (_mmModalController) _mmModalController.close('action');
+      else {
+        document.getElementById('kb-mm-overlay').hidden = true;
+        _mmRestoreThumbs();
+      }
     });
     document.getElementById('kb-mm-zoom-in')?.addEventListener('click', () => { _mmZoom = Math.min(4, _mmZoom * 1.25); _applyMmTransform(); });
     document.getElementById('kb-mm-zoom-out')?.addEventListener('click', () => { _mmZoom = Math.max(0.2, _mmZoom / 1.25); _applyMmTransform(); });
@@ -5758,7 +6099,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     document.getElementById('kb-mm-focus-btn')?.addEventListener('click', _mmToggleFocus);
     document.getElementById('kb-mm-outline-btn')?.addEventListener('click', _mmToggleOutline);
     document.getElementById('kb-mm-bg-btn')?.addEventListener('click', _mmCycleBg);
-    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击 / ESC 关闭
+    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击
     document.getElementById('kb-mm-mode-btn')?.addEventListener('click', _mmToggleMode);
     document.getElementById('kb-mm-dots-btn')?.addEventListener('click', _mmToggleDots);
     document.getElementById('kb-mm-more-btn')?.addEventListener('click', (e) => {
@@ -5780,12 +6121,6 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (t) titleInput.value = t;
       else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '脑图');
       _mmMarkDirty();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const ov = document.getElementById('kb-mm-overlay');
-        if (ov && !ov.hidden) ov.hidden = true;
-      }
     });
     const mmSearchInput = document.getElementById('kb-mm-search');
     let mmSearchTimer = null;
@@ -5831,8 +6166,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _applyMmTransform();
     });
     window.addEventListener('mouseup', () => { _mmPanning = false; _mmPanStart = null; });
-    document.getElementById('kb-qa-input')?.addEventListener('input', _syncSendState);
-    document.getElementById('kb-qa-input')?.addEventListener('keyup', _syncSendState);
+    const qaInputEl = document.getElementById('kb-qa-input');
+    qaInputEl?.addEventListener('input', () => { _autoGrowQaInput(qaInputEl); _syncSendState(); });
+    qaInputEl?.addEventListener('keyup', _syncSendState);
+    _autoGrowQaInput(qaInputEl);
     _syncSendState();
     _restoreQaModelSelection();
     _renderQaModelChip();
@@ -5960,12 +6297,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     list.appendChild(defRow);
 
     if (!entries.length) {
-      const empty = el('div', 'kb-qa-model-empty');
-      empty.append(
-        el('div', 'kb-qa-model-empty-title', '尚未配置模型'),
-        el('div', 'kb-qa-model-empty-sub', '到设置中配置一次 API Key 后即可在此选择'),
-      );
-      list.appendChild(empty);
+      list.appendChild(_elementFromHtml(_uiEmptyState({
+        kind: 'explained',
+        title: '尚未配置模型',
+        hint: '到设置中配置一次 API Key 后即可在此选择',
+      })));
     } else {
       for (const e of entries) {
         const row = el('button', 'kb-qa-model-item');
@@ -6052,12 +6388,28 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     send.disabled = !input.value.trim();
   }
 
+  // 问答输入框自动扩容：多行输入随内容增高，避免长文本在单行里向前滚动、
+  // 看不到前面输入的内容。上限与 CSS `.kb-qa-input { max-height }` 对齐，
+  // 超过上限才启用纵向滚动；发送清空后复位到单行高度。
+  const KB_QA_INPUT_MIN_HEIGHT = 26;
+  const KB_QA_INPUT_MAX_HEIGHT = 120;
+  function _autoGrowQaInput(el) {
+    const input = el || document.getElementById('kb-qa-input');
+    if (!input || !input.style) return;
+    input.style.height = 'auto';
+    const contentHeight = Number(input.scrollHeight) || 0;
+    const next = Math.min(Math.max(contentHeight, KB_QA_INPUT_MIN_HEIGHT), KB_QA_INPUT_MAX_HEIGHT);
+    input.style.height = `${next}px`;
+    input.style.overflowY = contentHeight > KB_QA_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  }
+
   function _submitQa() {
     const input = document.getElementById('kb-qa-input');
     if (!input) return;
     const q = input.value;
     if (!q || !q.trim()) return;
     input.value = '';
+    _autoGrowQaInput(input);
     _syncSendState();
     _ask(q);
   }
@@ -6388,17 +6740,24 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const trigger = document.activeElement;
     _kbMenuHide();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-members-overlay';
+    overlay.className = 'ui-modal-overlay kb-members-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-members-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-members-title">
-        ${_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x', className: 'kb-members-close' })}
-        <div class="kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>知识库成员</span></div>
-        <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: '搜索知识库成员', attrs: { autocomplete: 'off' } })}</div>
-        <div class="kb-members-list">
-          <div class="kb-members-item">
-            <span class="kb-members-avatar">我</span>
-            <span class="kb-members-name">我</span>
-            <span class="kb-members-role">创建者</span>
+      <section class="ui-modal ui-modal--sm kb-members-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-members-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>知识库成员</span></h2>
+          </div>
+          ${_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x', className: 'kb-members-close' })}
+        </header>
+        <div class="ui-modal__body kb-members-body">
+          <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: '搜索知识库成员', attrs: { autocomplete: 'off' } })}</div>
+          <div class="kb-members-list">
+            <div class="kb-members-item">
+              <span class="kb-members-avatar">我</span>
+              <span class="kb-members-name">我</span>
+              <span class="kb-members-role">创建者</span>
+            </div>
           </div>
         </div>
       </section>`;
@@ -6445,18 +6804,25 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _kbMenuHide();
     _kbPermDlgClose();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
-        ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></div>
-        <div class="kb-wb-right-placeholder kb-share-soon-body">
-          共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
-          当前可以用「成员」把库内资料共享给同一空间的同事。
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></h2>
+          </div>
+          ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-wb-right-placeholder kb-share-soon-body">
+            共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
+            当前可以用「成员」把库内资料共享给同一空间的同事。
+          </div>
         </div>
-        <div class="kb-share-pop-actions">
+        <footer class="ui-modal__footer kb-share-pop-actions">
           ${_uiButton({ label: '知道了', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbShareDlg = overlay;
@@ -6486,35 +6852,42 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
     _kbPermDlgClose();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop" role="dialog" aria-modal="true" aria-labelledby="kb-share-pop-title">
-        ${_uiIconButton({ label: '关闭分享弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享</div>
-        <div class="kb-share-pop-card">
-          <span class="kb-share-pop-folder">${_icon('folder', 'kb-share-pop-folder-icon')}</span>
-          <div class="kb-share-pop-card-meta">
-            <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
-            <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
+      <section class="ui-modal ui-modal--sm kb-share-pop" role="dialog" aria-modal="true" aria-labelledby="kb-share-pop-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭分享弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body kb-share-pop-body">
+          <div class="kb-share-pop-card">
+            <span class="kb-share-pop-folder">${_icon('folder', 'kb-share-pop-folder-icon')}</span>
+            <div class="kb-share-pop-card-meta">
+              <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
+              <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
+            </div>
+          </div>
+          <div class="kb-share-pop-row" id="kb-share-pop-perm-row" role="button" tabindex="0">
+            <span class="kb-share-pop-row-label">选择分享方式</span>
+            <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
+          </div>
+          <div class="kb-share-pop-row" id="kb-share-pop-status-row" role="button" tabindex="0">
+            <span class="kb-share-pop-row-label">分享到飞书</span>
+            <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
+          </div>
+          <div class="kb-share-pop-row" id="kb-share-cogseed-row" role="button" tabindex="0">
+            <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
+            <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
           </div>
         </div>
-        <div class="kb-share-pop-row" id="kb-share-pop-perm-row">
-          <span class="kb-share-pop-row-label">选择分享方式</span>
-          <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
-        </div>
-        <div class="kb-share-pop-row" id="kb-share-pop-status-row">
-          <span class="kb-share-pop-row-label">分享到飞书</span>
-          <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
-        </div>
-        <div class="kb-share-pop-row" id="kb-share-cogseed-row">
-          <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
-          <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
-        </div>
-        <div class="kb-share-pop-actions">
+        <footer class="ui-modal__footer kb-share-pop-actions">
           ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-pop-copy-link' } })}
           ${_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code', className: 'kb-share-pop-btn is-code', attrs: { id: 'kb-share-pop-code' } })}
           ${_uiButton({ label: '管理', role: 'secondary', icon: 'settings', className: 'kb-share-pop-btn is-manage', attrs: { id: 'kb-share-pop-manage', hidden: true } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbShareDlg = overlay;
@@ -6530,6 +6903,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       },
     });
     overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => _kbShareDlgClose());
+    overlay.querySelectorAll('.kb-share-pop-row[role="button"]').forEach((row) => {
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        row.click();
+      });
+    });
     // 点分享方式行 → 跳权限设置弹窗
     overlay.querySelector('#kb-share-pop-perm-row').addEventListener('click', () => {
       _kbShareDlgClose({ restoreFocus: false });
@@ -6665,24 +7045,31 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbCogseedConfigDialog(sp) {
     const trigger = document.activeElement;
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-config-title">
-        ${_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置 CogSeed 共享服务</div>
-        <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">服务地址</label>
-          ${_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input', placeholder: 'https://share.cogseed.dev', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-config-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置 CogSeed 共享服务</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-cogseed-baseurl">服务地址</label>
+            ${_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input', placeholder: 'https://share.cogseed.dev', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-cogseed-apikey">API Key</label>
+            ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: '服务方发放的密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
         </div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">API Key</label>
-          ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: '服务方发放的密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
-        </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-cancel' } })}
           ${_uiButton({ label: '保存并发布', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-save' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6735,38 +7122,45 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     } catch { /* 成员拉取失败不阻断 */ }
     const pending = members.filter((m) => m.status === 'pending');
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-manage-title">
-        ${_uiIconButton({ label: '关闭 CogSeed 问答分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>CogSeed 问答分享管理</div>
-        ${state ? `<div class="kb-share-manage-item">
-          <div class="kb-share-manage-item-head">
-            <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
-            <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-manage-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>CogSeed 问答分享管理</h2>
           </div>
-          <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
-          <div class="kb-share-manage-item-actions">
-            ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
-            ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
+          ${_uiIconButton({ label: '关闭 CogSeed 问答分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          ${state ? `<div class="kb-share-manage-item">
+            <div class="kb-share-manage-item-head">
+              <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
+              <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+            </div>
+            <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
+            <div class="kb-share-manage-item-actions">
+              ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
+              ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
+            </div>
+          </div>` : _uiEmptyState({ kind: 'quiet', title: '未发布' })}
+          <div class="kb-share-cogseed-members">
+            <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
+            ${pending.length === 0 ? _uiEmptyState({ kind: 'quiet', title: '暂无待审申请' }) : ''}
+            ${pending.map((m) => `
+              <div class="kb-share-manage-item" data-member-id="${m.id}">
+                <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
+                <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
+                <div class="kb-share-manage-item-actions">
+                  ${_uiButton({ label: '通过', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
+                  ${_uiButton({ label: '拒绝', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
+                </div>
+              </div>`).join('')}
           </div>
-        </div>` : '<div class="kb-share-manage-empty">未发布</div>'}
-        <div class="kb-share-cogseed-members">
-          <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
-          ${pending.length === 0 ? '<div class="kb-share-cogseed-members-empty">暂无待审申请</div>' : ''}
-          ${pending.map((m) => `
-            <div class="kb-share-manage-item" data-member-id="${m.id}">
-              <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
-              <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
-              <div class="kb-share-manage-item-actions">
-                ${_uiButton({ label: '通过', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
-                ${_uiButton({ label: '拒绝', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
-              </div>
-            </div>`).join('')}
         </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-manage-close' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6869,25 +7263,32 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbShareConfigDialog(sp) {
     const trigger = document.activeElement;
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-share-config-title">
-        ${_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置飞书分享</div>
-        <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">App ID</label>
-          ${_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input', placeholder: 'cli_xxxxxxxx', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-share-config-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置飞书分享</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-share-config-appid">App ID</label>
+            ${_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input', placeholder: 'cli_xxxxxxxx', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-share-config-secret">App Secret</label>
+            ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: '应用密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
+          <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
         </div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">App Secret</label>
-          ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: '应用密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
-        </div>
-        <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-cancel' } })}
           ${_uiButton({ label: '保存并授权', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-save' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6936,19 +7337,26 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbQrCodeShow(url, name) {
     const trigger = document.activeElement;
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--qr" role="dialog" aria-modal="true" aria-labelledby="kb-share-qr-title">
-        ${_uiIconButton({ label: '关闭知识码弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>知识码</div>
-        <div class="kb-share-qr-body">
-          <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
-          <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
-          <div class="kb-share-qr-url">${_esc(url)}</div>
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--qr" role="dialog" aria-modal="true" aria-labelledby="kb-share-qr-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>知识码</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭知识码弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-qr-body">
+            <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
+            <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
+            <div class="kb-share-qr-url">${_esc(url)}</div>
+          </div>
         </div>
-        <div class="kb-share-pop-actions">
+        <footer class="ui-modal__footer kb-share-pop-actions">
           ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-qr-copy' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6999,31 +7407,42 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _log.warn('kb share list failed', err);
     }
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-share-manage-title">
-        ${_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享管理</div>
-        <div class="kb-share-manage-list" id="kb-share-manage-list">
-          ${items.length === 0 ? '<div class="kb-share-manage-empty">还没有分享到飞书的知识库<br><span>打开知识库 → 分享 → 复制链接</span></div>' : ''}
-          ${items.map((item, idx) => `
-            <div class="kb-share-manage-item" data-idx="${idx}">
-              <div class="kb-share-manage-item-head">
-                <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
-                <span class="kb-share-manage-item-badge is-${item.access}">${({ anyone: '公开', tenant: '组织内', private: '私密' })[item.access] || item.access}</span>
-              </div>
-              <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
-              <div class="kb-share-manage-item-actions">
-                ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
-                ${_uiButton({ label: '知识码', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
-                ${_uiButton({ label: '更新内容', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
-                ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
-              </div>
-            </div>`).join('')}
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-share-manage-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享管理</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-manage-list" id="kb-share-manage-list">
+            ${items.length === 0 ? _uiEmptyState({
+              kind: 'explained',
+              title: '还没有分享到飞书的知识库',
+              hint: '打开知识库 → 分享 → 复制链接',
+            }) : ''}
+            ${items.map((item, idx) => `
+              <div class="kb-share-manage-item" data-idx="${idx}">
+                <div class="kb-share-manage-item-head">
+                  <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
+                  <span class="kb-share-manage-item-badge is-${item.access}">${({ anyone: '公开', tenant: '组织内', private: '私密' })[item.access] || item.access}</span>
+                </div>
+                <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
+                <div class="kb-share-manage-item-actions">
+                  ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
+                  ${_uiButton({ label: '知识码', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
+                  ${_uiButton({ label: '更新内容', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
+                  ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
+                </div>
+              </div>`).join('')}
+          </div>
         </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-manage-close' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -7129,49 +7548,64 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const perm = sp.member_permission || 'view_export';
     const join = sp.join_mode || 'direct';
     const isPrivate = sp.shared !== true;
-    const permLabel = { view_export: '内容可查看和导出', view_only: '内容可查看但不可导出', hidden: '内容不可查看' }[perm] || '内容可查看和导出';
-    const joinLabel = { direct: '直接加入', apply: '申请加入（管理员批准）', invite: '仅邀请加入' }[join] || '直接加入';
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--perm" role="dialog" aria-modal="true" aria-labelledby="kb-perm-title">
-        ${_uiIconButton({ label: '关闭权限设置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>权限设置</div>
-        <div class="kb-share-perm-block">
-          <div class="kb-share-perm-row">
-            <div class="kb-share-perm-texts">
-              <div class="kb-share-perm-title">设为私密</div>
-              <div class="kb-share-perm-desc">开启后知识库仅自己可见</div>
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--perm" role="dialog" aria-modal="true" aria-labelledby="kb-perm-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>权限设置</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭权限设置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-perm-block">
+            <div class="kb-share-perm-row">
+              <div class="kb-share-perm-texts">
+                <div class="kb-share-perm-title">设为私密</div>
+                <div class="kb-share-perm-desc">开启后知识库仅自己可见</div>
+              </div>
+              ${_uiSwitch({ label: '设为私密', checked: isPrivate, attrs: { id: 'kb-perm-private' } })}
             </div>
-            <button type="button" class="kb-share-toggle${isPrivate ? ' is-on' : ''}" id="kb-perm-private" role="switch" aria-checked="${isPrivate ? 'true' : 'false'}"><span class="kb-share-toggle-dot"></span></button>
+          </div>
+          <div class="kb-share-perm-block">
+            <div class="kb-share-perm-row">
+              <span class="kb-share-perm-title" id="kb-perm-member-label">成员权限</span>
+              <div class="kb-share-select-wrap">
+                ${_uiSelect({
+                  id: 'kb-perm-member',
+                  value: perm,
+                  labelId: 'kb-perm-member-label',
+                  options: [
+                    { value: 'view_export', label: '内容可查看和导出' },
+                    { value: 'view_only', label: '内容可查看但不可导出' },
+                    { value: 'hidden', label: '内容不可查看' },
+                  ],
+                })}
+              </div>
+            </div>
+            <div class="kb-share-perm-row">
+              <span class="kb-share-perm-title" id="kb-perm-join-label">加入方式</span>
+              <div class="kb-share-select-wrap">
+                ${_uiSelect({
+                  id: 'kb-perm-join',
+                  value: join,
+                  labelId: 'kb-perm-join-label',
+                  options: [
+                    { value: 'direct', label: '直接加入' },
+                    { value: 'apply', label: '申请加入（管理员批准）' },
+                    { value: 'invite', label: '仅邀请加入' },
+                  ],
+                })}
+              </div>
+            </div>
           </div>
         </div>
-        <div class="kb-share-perm-block">
-          <div class="kb-share-perm-row">
-            <span class="kb-share-perm-title">成员权限</span>
-            <div class="kb-share-select-wrap">
-              <select class="kb-share-select" id="kb-perm-member">
-                <option value="view_export"${perm === 'view_export' ? ' selected' : ''}>内容可查看和导出</option>
-                <option value="view_only"${perm === 'view_only' ? ' selected' : ''}>内容可查看但不可导出</option>
-                <option value="hidden"${perm === 'hidden' ? ' selected' : ''}>内容不可查看</option>
-              </select>
-            </div>
-          </div>
-          <div class="kb-share-perm-row">
-            <span class="kb-share-perm-title">加入方式</span>
-            <div class="kb-share-select-wrap">
-              <select class="kb-share-select" id="kb-perm-join">
-                <option value="direct"${join === 'direct' ? ' selected' : ''}>直接加入</option>
-                <option value="apply"${join === 'apply' ? ' selected' : ''}>申请加入（管理员批准）</option>
-                <option value="invite"${join === 'invite' ? ' selected' : ''}>仅邀请加入</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-cancel' } })}
           ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-ok' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbPermDlg = overlay;
@@ -7186,6 +7620,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _kbPermDlgController = null;
       },
     });
+    if (typeof window.hydrateUiFormSelects === 'function') window.hydrateUiFormSelects(overlay);
     const privateBtn = overlay.querySelector('#kb-perm-private');
     const setPrivate = (on) => {
       privateBtn.classList.toggle('is-on', on);
@@ -7195,8 +7630,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => _kbPermDlgClose());
     overlay.querySelector('#kb-perm-cancel').addEventListener('click', _kbPermDlgClose);
     overlay.querySelector('#kb-perm-ok').addEventListener('click', async () => {
-      const nextPerm = overlay.querySelector('#kb-perm-member').value;
-      const nextJoin = overlay.querySelector('#kb-perm-join').value;
+      const nextPerm = _uiSelectValue(overlay, 'kb-perm-member', 'view_export');
+      const nextJoin = _uiSelectValue(overlay, 'kb-perm-join', 'direct');
       const nextPrivate = privateBtn.classList.contains('is-on');
       const okBtn = overlay.querySelector('#kb-perm-ok');
       okBtn.disabled = true;
@@ -7358,6 +7793,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return Promise.resolve(false);
     if (!_isRichPreview(anchor.path)) return Promise.resolve(false);
     return Promise.resolve(_openRichForAnchor(anchor)).then((opened) => opened !== false, () => false);
+  };
+
+  // 回答正文渲染纯函数（供回归测试锁定引用 chip / 残片 / 标题渲染，A02 修复）
+  window.__kbAnswerUtils = {
+    chipifyCitationAnchors: _chipifyCitationAnchors,
+    citationVariants: _citationVariants,
+    citeChipHtml: _citeChipHtml,
+    decorateAnswerHtml: _decorateAnswerHtml,
   };
 
   // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：

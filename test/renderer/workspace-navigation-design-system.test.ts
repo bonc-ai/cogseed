@@ -49,6 +49,9 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceSource).toContain("throw new Error('workspace requires uiInput')");
     expect(workspaceSource).toContain("throw new Error('workspace requires uiTextarea')");
     expect(workspaceSource).toContain("throw new Error('workspace requires uiSelect')");
+    expect(workspaceSource).not.toContain('class="ws-empty"');
+    expect(workspaceSource).toContain("title: _t('ws.assets_empty_title', '暂无沉淀资产')");
+    expect(workspaceCss).not.toContain('.ws-empty {');
   });
 
   it('uses shared buttons for workspace detail header actions', () => {
@@ -87,8 +90,14 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceSource).not.toContain('<textarea data-ws="create-instruction"');
     expect(workspaceSource).not.toContain('<button data-ws="close-create"');
     expect(workspaceSource).not.toContain('<button class="ws-secondary" data-ws="close-ability"');
-    expect(workspaceCss).toMatch(/\.ws-dialog\s*\{[^}]*border:\s*1px solid var\(--line-hairline\);[^}]*border-radius:\s*var\(--radius-dialog\);[^}]*background:\s*var\(--surface-raised\);[^}]*box-shadow:\s*var\(--shadow-dialog\);/s);
-    expect(workspaceCss).toMatch(/\.ws-ability-dialog\s*\{[^}]*border:\s*1px solid var\(--line-hairline\);[^}]*border-radius:\s*var\(--radius-dialog\);[^}]*background:\s*var\(--surface-raised\);[^}]*box-shadow:\s*var\(--shadow-dialog\);/s);
+    expect(workspaceSource).toContain('class="ui-modal-overlay ws-scrim"');
+    expect(workspaceSource).toContain('class="ui-modal ui-modal--lg ws-dialog"');
+    expect(workspaceSource).toContain('class="ui-modal ws-ability-dialog"');
+    expect(workspaceSource).toContain('class="ui-modal__header ws-ability-head"');
+    expect(workspaceSource).toContain('class="ui-modal__body ws-ability-main');
+    expect(workspaceSource).toContain('class="ui-modal__footer ws-ability-foot"');
+    expect(workspaceCss).not.toMatch(/\.ws-dialog\s*\{[^}]*(?:border|background|box-shadow):/s);
+    expect(workspaceCss).not.toMatch(/\.ws-ability-dialog\s*\{[^}]*(?:border|background|box-shadow):/s);
     expect(workspaceCss).toContain('.ws-form-grid .ui-input, .ws-form-grid .ui-textarea');
     expect(workspaceCss).toContain('.ws-role-primary-btn.ui-button');
   });
@@ -106,6 +115,13 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceSource).toContain("className: 'ws-art-open'");
     expect(workspaceSource).toContain("className: 'ws-art-more'");
     expect(workspaceSource).toContain("className: 'ws-art-drawer-close'");
+    expect(workspaceSource).toContain('window.uiDrawerController({');
+    expect(workspaceSource).toContain("initialFocus: '.ws-art-drawer-close'");
+    expect(workspaceSource).toContain('fallbackFocus: () => _artifactEntry(_artDrawerId)');
+    expect(workspaceSource).toContain('const returnTarget = _artifactEntry(closedArtifactId)');
+    expect(workspaceSource).toContain("_artDrawerController.close('business-action')");
+    expect(workspaceSource).toContain('<aside class="ws-art-drawer" data-ws="noop" role="dialog" aria-modal="true"');
+    expect(workspaceSource).not.toContain('data-ws="art-drawer-close" role="dialog"');
     expect(workspaceSource).toContain("label: _t('ws.art_open_full', '打开完整文件'), role: 'primary'");
     expect(workspaceSource).not.toContain('<button class="ws-more-action"');
     expect(workspaceSource).not.toContain('<button type="button" class="ws-art-open"');
