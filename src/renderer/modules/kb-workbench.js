@@ -48,7 +48,8 @@
     qaSessionId: null, // 当前会话 id
   };
 
-  const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: '图片', word: 'WORD', txt: 'TXT' };  // img 在 _fileTypeLabel() 里取词
+  // 文件类型徽标：只有 img 需要翻译（其余是格式缩写，各语言一致）
+  const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: _tr('kb.workbench.type_img', '图片'), word: 'WORD', txt: 'TXT' };
 
   function _esc(s) {
     return String(s == null ? '' : s)
@@ -3276,7 +3277,7 @@
   // 使该回答的按钮变为「重新生成脑图」（可覆盖式再生成）。
   function _genMindmapFromText(text, btn, entry) {
     if (!text || !text.trim()) {
-      if (typeof uiToast === 'function') uiToast('回答内容为空，无法生成脑图', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_empty_answer', '回答内容为空，无法生成脑图'), { variant: 'warning' });
       return;
     }
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
@@ -3290,7 +3291,7 @@
     const holder = document.createElement('div');
     holder.className = 'kb-mm-msg';
     holder.innerHTML = '<div class="kb-wb-mm-canvas">'
-      + '<div class="kb-mm-loading">正在生成脑图（本地模型推理中，约 10–30 秒）…</div></div>';
+      + `<div class="kb-mm-loading">${_esc(_tr('kb.workbench.mm_generating_short', '正在生成脑图（本地模型推理中，约 10–30 秒）…'))}</div></div>`;
     if (anchor) anchor.appendChild(holder);
     const canvas = holder.querySelector('.kb-wb-mm-canvas');
     window.cogseed.invoke('kb.mindmap', { dir: null, spaceId: null, text })
@@ -3318,8 +3319,8 @@
         canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
         if (res.source === 'generated') {
-          _setUiButtonPresentation(btn, '重新生成脑图', 'brain-circuit');
-          btn.title = '重新生成该回答的脑图';
+          _setUiButtonPresentation(btn, _tr('kb.workbench.mm_regenerate', '重新生成脑图'), 'brain-circuit');
+          btn.title = _tr('kb.workbench.mm_regenerate_answer_tip', '重新生成该回答的脑图');
           if (entry && typeof entry === 'object') _recordAnswerMindmap(res.root, entry);
           else _mmRecordToHistory(res.root);
         }
@@ -3563,10 +3564,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const el = document.getElementById('kb-mm-save-state');
     if (!el) return;
     if (_mmDirty) {
-      el.textContent = '● 未保存';
+      el.textContent = '● ' + _tr('kb.workbench.mm_unsaved', '未保存');
       el.className = 'kb-mm-save-state is-dirty';
     } else {
-      el.innerHTML = `${_icon('check')} 已保存`;
+      el.innerHTML = `${_icon('check')} ${_esc(_tr('kb.workbench.mm_saved', '已保存'))}`;
       el.className = 'kb-mm-save-state is-saved';
     }
   }
@@ -3598,10 +3599,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!menu || menu.dataset.built) return;
     menu.dataset.built = '1';
     const items = [
-      { k: 'fit', label: '适应画布', icon: 'maximize', fn: () => _mmFitToStage() },
-      { k: 'center', label: '居中根节点', icon: 'target', fn: () => _mmCenterNode(0) },
-      { k: 'center-window', label: '窗口居中', icon: 'panel-collapse', fn: () => _mmCenterWindow() },
-      { k: 'copy', label: '复制 SVG', icon: 'copy', fn: () => _mmCopySvg() },
+      { k: 'fit', label: _tr('kb.workbench.mm_fit_tip', '适应画布'), icon: 'maximize', fn: () => _mmFitToStage() },
+      { k: 'center', label: _tr('kb.workbench.mm_center_root', '居中根节点'), icon: 'target', fn: () => _mmCenterNode(0) },
+      { k: 'center-window', label: _tr('kb.workbench.mm_center_window', '窗口居中'), icon: 'panel-collapse', fn: () => _mmCenterWindow() },
+      { k: 'copy', label: _tr('kb.workbench.mm_copy_svg', '复制 SVG'), icon: 'copy', fn: () => _mmCopySvg() },
     ];
     menu.innerHTML = items.map((it) => `<div class="kb-mm-more-item" data-more="${it.k}">${_icon(it.icon, 'kb-mm-menu-icon')}<span>${it.label}</span></div>`).join('');
     menu.querySelectorAll('[data-more]').forEach((el) => {
@@ -3616,19 +3617,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   async function _mmPopout() {
     const root = _state.lastMind;
     if (!root || typeof window.cogseed?.invoke !== 'function') {
-      if (typeof uiToast === 'function') uiToast('暂无可弹出的脑图', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_popout_none', '暂无可弹出的脑图'), { variant: 'warning' });
       return;
     }
     try {
       const svg = _mmTreeSvg(root, new Set(), _mmRenderOpts());
       // 独立窗口：SVG 撑满窗口内容盒，靠 preserveAspectRatio（默认 xMidYMid meet）居中缩放。
       // 此前 body 用 flex 居中 + min-height:100vh，图比窗口大时会被裁掉左上角且无法滚动（看着就没居中）。
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>脑图</title><style>html,body{height:100%}body{margin:0;box-sizing:border-box;padding:24px;background:#fff}svg{display:block;width:100%;height:100%}</style></head><body>${svg}</body></html>`;
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>${_esc(_tr('kb.workbench.mm_title', '脑图预览'))}</title><style>html,body{height:100%}body{margin:0;box-sizing:border-box;padding:24px;background:#fff}svg{display:block;width:100%;height:100%}</style></head><body>${svg}</body></html>`;
       const res = await window.cogseed.invoke('kb.mindmap.popout', { html });
-      if (res && res.ok === false && typeof uiToast === 'function') uiToast('独立窗口暂不可用', { variant: 'info' });
+      if (res && res.ok === false && typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_popout_unavailable', '独立窗口暂不可用'), { variant: 'info' });
     } catch (err) {
       _log.warn('mindmap popout failed', err);
-      if (typeof uiToast === 'function') uiToast('独立窗口暂不可用', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_popout_unavailable', '独立窗口暂不可用'), { variant: 'info' });
     }
   }
   function _mmBindTitleDrag() {
@@ -3745,7 +3746,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _mmSaveMindmap() {
     const root = _state.lastMind;
     if (!root || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      if (typeof uiToast === 'function') uiToast('暂无可保存的脑图', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_save_none', '暂无可保存的脑图'), { variant: 'warning' });
       return;
     }
     const key = _mmCurrentKey();
@@ -3755,13 +3756,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (r && r.ok) {
           _mmMarkSaved();
           if (typeof uiToast === 'function') {
-            uiToast(isDoc ? '脑图已保存到这份文档' : '脑图已保存到知识库（下次打开可直接读取）', { variant: 'success' });
+            uiToast(isDoc ? _tr('kb.workbench.mm_saved_to_doc', '脑图已保存到这份文档') : _tr('kb.workbench.mm_saved_to_lib', '脑图已保存到知识库（下次打开可直接读取）'), { variant: 'success' });
           }
         } else if (typeof uiToast === 'function') {
-          uiToast('保存失败', { variant: 'warning' });
+          uiToast(_tr('kb.workbench.save_failed_short', '保存失败'), { variant: 'warning' });
         }
       })
-      .catch(() => { if (typeof uiToast === 'function') uiToast('保存失败', { variant: 'warning' }); });
+      .catch(() => { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.save_failed_short', '保存失败'), { variant: 'warning' }); });
   }
 
   // ⟳ 刷新：强制重新生成脑图（不走缓存）。**沿用当前作用域**——文档级脑图刷新后
@@ -3791,8 +3792,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (s && s.doc && res.scope !== 'doc') {
           const w = document.getElementById('kb-mm-overlay-wrap');
           if (w) {
-            w.innerHTML = '<div class="kb-mm-fail">主进程未按「本文档」作用域重新生成（返回：' + _esc(res.scope || '未知') + '），已丢弃。请完全退出 CogSeed 后重启再试。'
-              + '<div class="kb-mm-refresh-hint" style="font-size:12px;margin-top:8px">原脑图已保留，未受影响</div></div>';
+            w.innerHTML = _esc(_tr('kb.workbench.mm_refresh_scope_mismatch_dot', '主进程未按「本文档」作用域重新生成（返回：{scope}），已丢弃。请完全退出 CogSeed 后重启再试。', { scope: res.scope || _tr('kb.workbench.unknown', '未知') }))
+              + `<div class="kb-mm-refresh-hint" style="font-size:12px;margin-top:8px">${_esc(_tr('kb.workbench.mm_original_kept', '原脑图已保留，未受影响'))}</div></div>`;
           }
           if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_refresh_scope_mismatch', '重新生成未按本文档作用域，已保留原脑图'), { variant: 'warning' });
           return;
@@ -3801,7 +3802,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           const wrap = document.getElementById('kb-mm-overlay-wrap');
           if (wrap) {
             wrap.innerHTML = _mmDegradedHtml(res.reason)
-              + '<div class="kb-mm-refresh-hint" style="color:var(--kb-muted,#6E8578);font-size:12px;margin-top:8px">原脑图已保留，未受影响</div>';
+              + `<div class="kb-mm-refresh-hint" style="color:var(--kb-muted,#6E8578);font-size:12px;margin-top:8px">${_esc(_tr('kb.workbench.mm_original_kept', '原脑图已保留，未受影响'))}</div>`;
             const retryBtn = wrap.querySelector('.kb-mm-retry-btn');
             if (retryBtn) retryBtn.addEventListener('click', _mmRefreshMindmap);
           }
@@ -3829,7 +3830,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const menu = document.getElementById('kb-mm-open-menu');
     if (!menu) return;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      menu.innerHTML = '<div class="kb-mm-open-item is-empty">存档服务不可用</div>';
+      menu.innerHTML = `<div class="kb-mm-open-item is-empty">${_esc(_tr('kb.workbench.mm_archive_unavailable_dot', '存档服务不可用'))}</div>`;
       return;
     }
     window.cogseed.invoke('kb.mindmap.list').then((r) => {
@@ -3838,13 +3839,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         .filter((m) => !String(m.key || '').includes('#'))
         .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
       if (!items.length) {
-        menu.innerHTML = '<div class="kb-mm-open-item is-empty">还没有保存的脑图</div>';
+        menu.innerHTML = `<div class="kb-mm-open-item is-empty">${_esc(_tr('kb.workbench.mm_archive_empty', '还没有保存的脑图'))}</div>`;
         return;
       }
       menu.innerHTML = items.map((m) => {
         const d = new Date(m.savedAt || Date.now());
         const time = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        const pretty = m.key.startsWith('space:') ? `共享空间 ${m.key.slice(6)}` : `个人库 ${m.key.slice(4)}`;
+        const pretty = m.key.startsWith('space:') ? _tr('kb.workbench.mm_scope_space', '共享空间 {name}', { name: m.key.slice(6) }) : _tr('kb.workbench.mm_scope_lib', '个人库 {name}', { name: m.key.slice(4) });
         return `<div class="kb-mm-open-item" data-key="${_esc(m.key)}">${_icon('brain-circuit', 'kb-mm-menu-icon')}<span class="kb-mm-open-item-name">${_esc(pretty)}</span><span class="kb-mm-open-item-time">${time}</span></div>`;
       }).join('');
       menu.querySelectorAll('.kb-mm-open-item[data-key]').forEach((el) => {
@@ -3854,7 +3855,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         });
       });
     }).catch(() => {
-      menu.innerHTML = '<div class="kb-mm-open-item is-empty">读取存档失败</div>';
+      menu.innerHTML = `<div class="kb-mm-open-item is-empty">${_esc(_tr('kb.workbench.mm_archive_read_failed', '读取存档失败'))}</div>`;
     });
   }
 
@@ -3946,8 +3947,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         let next = null;
         try {
           next = typeof uiPrompt === 'function'
-            ? await uiPrompt('重命名节点：', _mmLabelAt(root, idx))
-            : window.prompt('重命名节点：', _mmLabelAt(root, idx));
+            ? await uiPrompt(_tr('kb.workbench.mm_rename_node', '重命名节点：'), _mmLabelAt(root, idx))
+            : window.prompt(_tr('kb.workbench.mm_rename_node', '重命名节点：'), _mmLabelAt(root, idx));
         } catch (_) { return; }
         if (!next || !next.trim()) return;
         _mmUndoStack.push({ idx, old: _mmLabelAt(root, idx) });
@@ -4050,16 +4051,16 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const icon = ln.depth === 0 ? _icon('brain-circuit', 'kb-mm-outline-ico') : ln.depth === 1 ? '▸' : '·';
       return `<div class="kb-mm-outline-row${hit}" data-mm-idx="${ln.idx}" style="padding-left:${16 + ln.depth * 22}px">${ln.depth === 0 ? '' : `<span class="kb-mm-outline-dot"></span>`}<span class="kb-mm-outline-label">${icon} ${_esc(ln.label)}</span>${src}</div>`;
     }).join('');
-    return `<div class="kb-mm-outline">${lines || '<div class="kb-mm-outline-empty">（空脑图）</div>'}</div>`;
+    return `<div class="kb-mm-outline">${lines || `<div class="kb-mm-outline-empty">${_esc(_tr('kb.workbench.mm_outline_empty', '（空脑图）'))}</div>`}</div>`;
   }
 
   function _mmOutlineMd(root) {
     const lines = _mmOutlineLines(root).map((ln) => {
       const prefix = ln.depth === 0 ? '# ' : '  '.repeat(ln.depth - 1) + '- ';
-      const src = ln.source ? ` （来源：${ln.source}）` : '';
+      const src = ln.source ? _tr('kb.workbench.mm_outline_source', ' （来源：{source}）', { source: ln.source }) : '';
       return prefix + ln.label + src;
     });
-    return `# 脑图大纲\n\n${lines.join('\n')}\n`;
+    return `# ${_tr('kb.workbench.mm_outline_heading', '脑图大纲')}\n\n${lines.join('\n')}\n`;
   }
 
   function _mmExportMd() {
@@ -4069,16 +4070,16 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `mindmap-大纲-${Date.now()}.md`; a.click();
+    a.href = url; a.download = `mindmap-${_tr('kb.workbench.mm_outline_heading', '脑图大纲')}-${Date.now()}.md`; a.click();
     URL.revokeObjectURL(url);
-    if (typeof uiToast === 'function') uiToast('已导出 Markdown 大纲', { variant: 'success' });
+    if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_export_md_done', '已导出 Markdown 大纲'), { variant: 'success' });
   }
 
   function _mmPdfHtml() {
     const svg = _mmCurrentSvg();
     if (!svg) return '';
     const titleEl = document.getElementById('kb-mm-title-input');
-    const title = titleEl ? titleEl.textContent.replace(/^\s+/, '') : '知识库脑图';
+    const title = titleEl ? titleEl.textContent.replace(/^\s+/, '') : _tr('kb.workbench.mm_default_title', '知识库脑图');
     const clone = svg.cloneNode(true);
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;font-family:-apple-system,"PingFang SC",sans-serif}h1{font-size:15px;padding:14px 18px 6px;color:#14281E;border-bottom:1px solid #E5EDE8}svg{width:100%;height:auto}</style></head><body><h1>${_esc(title)}</h1>${new XMLSerializer().serializeToString(clone)}</body></html>`;
@@ -4088,22 +4089,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!_mmNeedGraph()) return;
     const html = _mmPdfHtml();
     if (!html || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      if (typeof uiToast === 'function') uiToast('PDF 导出暂不可用', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_pdf_unavailable', 'PDF 导出暂不可用'), { variant: 'warning' });
       return;
     }
     window.cogseed.invoke('kb.mindmap.exportPdf', { html })
       .then((r) => {
-        if (r && r.ok) { if (typeof uiToast === 'function') uiToast('PDF 已导出', { variant: 'success' }); }
+        if (r && r.ok) { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_pdf_done', 'PDF 已导出'), { variant: 'success' }); }
         else if (r && r.canceled) { /* 用户取消 */ }
-        else if (typeof uiToast === 'function') uiToast('PDF 导出失败', { variant: 'warning' });
+        else if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_pdf_failed', 'PDF 导出失败'), { variant: 'warning' });
       })
-      .catch(() => { if (typeof uiToast === 'function') uiToast('PDF 导出失败', { variant: 'warning' }); });
+      .catch(() => { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_pdf_failed', 'PDF 导出失败'), { variant: 'warning' }); });
   }
 
   /** 全部展开：清空折叠集 → 整图铺开（结构巨变，必须重新适应画布）。 */
   function _mmExpandAll() {
     if (!_state.lastMind) {
-      if (typeof uiToast === 'function') uiToast('请先生成脑图', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_generate_first', '请先生成脑图'), { variant: 'info' });
       return;
     }
     _state.mmCollapsed.clear();
@@ -4121,11 +4122,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _mmCollapseAll() {
     const root = _state.lastMind;
     if (!root) {
-      if (typeof uiToast === 'function') uiToast('请先生成脑图', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_generate_first', '请先生成脑图'), { variant: 'info' });
       return;
     }
     if (!_mmDefaultCollapsedFor(root).size) {
-      if (typeof uiToast === 'function') uiToast('当前脑图没有可折叠的分支', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_no_branches', '当前脑图没有可折叠的分支'), { variant: 'info' });
       return;
     }
     _mmResetFoldToDefault(root);
@@ -4166,7 +4167,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     else {
       const stage = document.getElementById('kb-mm-overlay-stage');
       const hint = stage ? stage.querySelector('.kb-mm-overlay-stage-hint') : null;
-      if (hint) hint.textContent = '点击行可跳转到对应节点 · 折叠的分支不展开';
+      if (hint) hint.textContent = _tr('kb.workbench.mm_outline_tip', '点击行可跳转到对应节点 · 折叠的分支不展开');
     }
   }
 
@@ -4199,7 +4200,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       } else {
         _mmCenterNode(first);
       }
-      if (typeof uiToast === 'function') uiToast(`匹配 ${hits.size} 个节点`, { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_hits', '匹配 {count} 个节点', { count: hits.size }), { variant: 'info' });
     }
   }
 
@@ -4224,7 +4225,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       }
       return;
     }
-    if (typeof uiToast === 'function') uiToast(`未在知识库中找到来源文档：${name}`, { variant: 'warning' });
+    if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_source_missing', '未在知识库中找到来源文档：{name}', { name }), { variant: 'warning' });
   }
 
   // 工具栏状态同步（布局/聚焦/背景/大纲按钮）
@@ -4298,7 +4299,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   }
   function _mmNeedGraph() {
     if (_state.mmViewMode === 'outline') {
-      if (typeof uiToast === 'function') uiToast('请先切回图形视图再导出图片', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_switch_to_graph', '请先切回图形视图再导出图片'), { variant: 'info' });
       return false;
     }
     return true;
@@ -4343,10 +4344,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const xml = new XMLSerializer().serializeToString(svg);
     if (navigator.clipboard && navigator.clipboard.write) {
       navigator.clipboard.write([new ClipboardItem({ 'image/svg+xml': new Blob([xml], { type: 'image/svg+xml' }) })])
-        .then(() => { if (typeof uiToast === 'function') uiToast('已复制脑图 SVG', { variant: 'success' }); })
-        .catch(() => { if (typeof uiToast === 'function') uiToast('复制失败（剪贴板不支持 SVG）', { variant: 'warning' }); });
+        .then(() => { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_svg_copied', '已复制脑图 SVG'), { variant: 'success' }); })
+        .catch(() => { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_svg_copy_failed', '复制失败（剪贴板不支持 SVG）'), { variant: 'warning' }); });
     } else if (typeof uiToast === 'function') {
-      uiToast('当前环境不支持剪贴板复制', { variant: 'warning' });
+      uiToast(_tr('kb.workbench.clipboard_unsupported', '当前环境不支持剪贴板复制'), { variant: 'warning' });
     }
   }
 
@@ -4683,7 +4684,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!_state.qaSessionId) {
       _state.qaSessionId = 's' + now;
       const msgs = _state.qaHistory.map((m) => ({ ...m }));
-      _state.qaSessions.unshift({ id: _state.qaSessionId, title: String(firstQuestion || '新对话').slice(0, 30), msgs, ts: now });
+      _state.qaSessions.unshift({ id: _state.qaSessionId, title: String(firstQuestion || _tr('kb.workbench.qa_history_untitled', '新对话')).slice(0, 30), msgs, ts: now });
       _qaPersist();
       return;
     }
@@ -4700,7 +4701,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _state.qaSessionId = null;
     _state.qaHistory = [];
     _clearQa();
-    if (typeof uiToast === 'function') uiToast('已新建对话', { variant: 'info' });
+    if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.qa_new_session_done', '已新建对话'), { variant: 'info' });
   }
   // 载入历史会话：恢复消息区 + 上下文（脑图消息按 kind 走快照读档渲染）
   function _qaLoadSession(id) {
@@ -4734,8 +4735,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const refreshAiMm = (ai) => {
       const btn = ai.row.querySelector('.kb-qa-mm-btn');
       if (btn) {
-        _setUiButtonPresentation(btn, '重新生成脑图', 'brain-circuit');
-        btn.title = '重新生成该回答的脑图';
+        _setUiButtonPresentation(btn, _tr('kb.workbench.mm_regenerate', '重新生成脑图'), 'brain-circuit');
+        btn.title = _tr('kb.workbench.mm_regenerate_answer_tip', '重新生成该回答的脑图');
       }
       if (ai.msg.mm && ai.msg.mm.key) _qaSnapshotInto(ai.row, ai.msg.mm.key);
     };
@@ -4864,7 +4865,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   function _copyText(text, okMsg) {
     const done = () => {
-      if (typeof uiToast === 'function') uiToast(okMsg || '已复制', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(okMsg || _tr('kb.workbench.copied', '已复制'), { variant: 'success', timeoutMs: 1500 });
     };
     const fallback = () => {
       try {
@@ -4890,7 +4891,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     box.className = 'kb-qa-src';
     const n = evidence.length;
     const toggle = _elementFromHtml(_uiButton({
-      label: `资料来源 · ${n}`,
+      label: _tr('kb.workbench.qa_sources', '资料来源 · {count}', { count: n }),
       role: 'ghost',
       size: 'sm',
       iconEnd: 'chevron-down',
@@ -4901,7 +4902,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     list.className = 'kb-qa-src-list';
     list.hidden = true;
     const setLabel = (open) => {
-      _setUiButtonPresentation(toggle, `资料来源 · ${n}`, open ? 'chevron-up' : 'chevron-down');
+      _setUiButtonPresentation(toggle, _tr('kb.workbench.qa_sources', '资料来源 · {count}', { count: n }), open ? 'chevron-up' : 'chevron-down');
       toggle.setAttribute('aria-expanded', String(open));
     };
     setLabel(false);
@@ -4913,17 +4914,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         role: 'ghost',
         size: 'sm',
         className: 'kb-qa-src-path',
-        attrs: { title: '跳转到原文' },
+        attrs: { title: _tr('kb.workbench.qa_jump_source', '跳转到原文') },
       }));
       pathBtn.addEventListener('click', () => _openAnchor(r));
       const copy = _elementFromHtml(_uiIconButton({
-        label: '复制引用路径',
+        label: _tr('kb.workbench.qa_copy_ref_path', '复制引用路径'),
         icon: 'copy',
         className: 'kb-qa-src-copy',
       }));
       copy.addEventListener('click', (e) => {
         e.stopPropagation();
-        _copyText(`${r.path}#chunk ${r.chunkIdx}`, '已复制引用路径');
+        _copyText(`${r.path}#chunk ${r.chunkIdx}`, _tr('kb.workbench.qa_ref_path_copied', '已复制引用路径'));
       });
       row.appendChild(pathBtn);
       row.appendChild(copy);
@@ -4943,12 +4944,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     row.className = 'kb-qa-mm-action';
     const hasMm = !!(entry && entry.mm && entry.mm.key);
     const btn = _elementFromHtml(_uiButton({
-      label: hasMm ? '重新生成脑图' : '生成脑图',
+      label: hasMm ? _tr('kb.workbench.mm_regenerate', '重新生成脑图') : _tr('kb.workbench.gen_mindmap', '生成脑图'),
       role: 'primary',
       size: 'sm',
       icon: 'brain-circuit',
       className: 'kb-qa-mm-btn',
-      attrs: { title: hasMm ? '重新生成该回答的脑图' : '基于本条回答内容生成脑图' },
+      attrs: { title: hasMm ? _tr('kb.workbench.mm_regenerate_answer_tip', '重新生成该回答的脑图') : _tr('kb.workbench.mm_answer_tip', '基于本条回答内容生成脑图') },
     }));
     btn.addEventListener('click', () => _genMindmapFromText(answerText, btn, entry));
     row.appendChild(btn);
