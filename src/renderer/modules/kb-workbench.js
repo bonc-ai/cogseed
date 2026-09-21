@@ -1537,6 +1537,7 @@
   // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
   // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
   let _fileViewerOverlay = null;
+  let _mmController = null; // 共享 modal controller：媒体管理器外壳的焦点/Escape/焦点归还
   let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
   function _ensureFileViewerOverlay() {
     if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
@@ -3451,6 +3452,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 先显示再套用尺寸/位置记忆：display:none 时量不到布局尺寸，居中位会被算成 0
     // （全程同步执行，同一帧内完成，不会看到窗口跳动）
     overlay.hidden = false;
+    if (_mmController) _mmController.open(document.activeElement);
     _mmApplyWindowRect();
     _mmUpdateSaveState();
     _renderOverlay();
@@ -3465,6 +3467,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   }
 
   // 打开弹窗时隐藏对话区缩略脑图卡，避免"两个悬浮窗"叠加（关闭时恢复）
+  /** 关闭媒体管理器：优先走共享 controller（释放焦点陷阱并归还焦点），无 controller 时退回自管隐藏。 */
+  function _mmClose() {
+    const overlay = document.getElementById('kb-mm-overlay');
+    if (!overlay) return;
+    if (_mmController && _mmController.isOpen()) _mmController.close('close');
+    else {
+      overlay.hidden = true;
+      _mmRestoreThumbs();
+    }
+  }
+
   function _mmRestoreThumbs() {
     document.querySelectorAll('.kb-qa-mm-action .kb-mm-msg').forEach((el) => { el.style.display = ''; });
   }
@@ -3844,6 +3857,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const overlay = document.getElementById('kb-mm-overlay');
         if (titleEl && overlay) {
           overlay.hidden = false;
+          if (_mmController) _mmController.open(document.activeElement);
           const scopeLabel = key.startsWith('space:')
             ? `共享空间 ${key.slice(6)}`
             : isDocKey
@@ -5540,7 +5554,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         </section>
       </div>
       <div class="kb-mm-overlay" id="kb-mm-overlay" hidden>
-        <div class="kb-mm-dlg" id="kb-mm-dlg">
+        <div class="kb-mm-dlg" id="kb-mm-dlg" role="dialog" aria-modal="true" aria-label="脑图预览">
         <div class="kb-mm-titlebar" id="kb-mm-titlebar">
           <span class="kb-mm-titlebar-ico">${_icon('brain-circuit', 'kb-mm-titlebar-icon')}</span>
           ${_uiInput({ id: 'kb-mm-title-input', className: 'kb-mm-title-input', value: '脑图预览', attrs: { title: '双击修改标题', spellcheck: 'false' } })}
@@ -5968,10 +5982,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const im = document.getElementById('kb-wb-import-menu');
       if (im) im.hidden = true;
     });
-    document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => {
-      document.getElementById('kb-mm-overlay').hidden = true;
-      _mmRestoreThumbs();
-    });
+    document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => { _mmClose(); });
     document.getElementById('kb-mm-zoom-in')?.addEventListener('click', () => { _mmZoom = Math.min(4, _mmZoom * 1.25); _applyMmTransform(); });
     document.getElementById('kb-mm-zoom-out')?.addEventListener('click', () => { _mmZoom = Math.max(0.2, _mmZoom / 1.25); _applyMmTransform(); });
     document.getElementById('kb-mm-reset')?.addEventListener('click', () => _mmFitToStage());
@@ -6019,12 +6030,20 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '脑图');
       _mmMarkDirty();
     });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const ov = document.getElementById('kb-mm-overlay');
-        if (ov && !ov.hidden) ov.hidden = true;
-      }
-    });
+    // 媒体管理器外壳交给共享层（M-3）：焦点陷阱 / Escape / 关闭后焦点归还。
+    // 原先这里自己监听 document 的 Escape，且面板没有 role="dialog"。
+    const mmOverlay = document.getElementById('kb-mm-overlay');
+    const mmDialog = document.getElementById('kb-mm-dlg');
+    if (mmOverlay && mmDialog && typeof uiModalController === 'function') {
+      _mmController = uiModalController({
+        overlay: mmOverlay,
+        dialog: mmDialog,
+        initialFocus: '#kb-mm-overlay-close',
+        // 关闭后恢复对话区缩略脑图卡：此前只有"关闭按钮"这条路径做了恢复，Escape 关闭会漏，
+        // 统一走 onClose 后两条路径行为一致。
+        onClose: () => { mmOverlay.hidden = true; _mmRestoreThumbs(); },
+      });
+    }
     const mmSearchInput = document.getElementById('kb-mm-search');
     let mmSearchTimer = null;
     mmSearchInput?.addEventListener('input', () => {
