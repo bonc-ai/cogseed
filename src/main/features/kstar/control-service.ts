@@ -527,6 +527,9 @@ async function requestProjection(
   ));
   const projection = existing || await previewContextProjection(context.userId, {
     taskRunId: task.id,
+    // conversationId（2026-09-22 清单 #16）：时间线要能看出投影发生在哪个
+    // 对话——宿主上下文一直带着，此前创建投影时漏传。
+    conversationId: context.conversationId,
     ...(workspaceId ? { workspaceId } : {}),
     purpose: proposal.purpose,
     taskText: proposal.taskText || requirement.goalText,

@@ -110,7 +110,7 @@ describe('processed history shows semantic candidate records', () => {
       },
     );
 
-    expect(html).toContain('ca-processed-fold');
+    expect(html).toContain('fold-processed');
     expect(visibleText(html)).toContain('架构决策要留可追溯记录');
     expect(visibleText(html)).not.toContain('cand-processed');
   });
@@ -118,7 +118,7 @@ describe('processed history shows semantic candidate records', () => {
   it('does not fabricate a processed record for a candidate absent from the snapshot', () => {
     const html = renderCognition({ name: 'review' }, { candidates: [] });
 
-    expect(html).not.toContain('ca-processed-fold');
+    expect(html).not.toContain('fold-processed');
     expect(visibleText(html)).toContain('当前没有等待确认的候选');
   });
 });

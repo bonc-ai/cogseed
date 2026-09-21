@@ -35,7 +35,7 @@ export interface ChatUseSelection {
 export interface RecallMessageCitation {
   asset_id: string;
   title: string;
-  type: 'personal' | 'rule' | 'template' | 'skill_method';
+  type: 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
   version: string;
   scope: string;
   projection_id: string;
@@ -130,7 +130,9 @@ export interface GroupMessage {
   /** P3394 approval gates created instead of immediately waking an Agent. */
   wake_requests?: WakeRequestSummary[];
   /** Recall projection card metadata used to recover confirmed assets for prompt injection. */
-  recall_projection_card?: { projectionId: string };
+  recall_projection_card?: { projectionId: string; authorization?: string; presentation?: 'sidecar' };
+  /** Explicit projection receipt ownership on the final user-visible turn message. */
+  projection_receipt?: { projectionId: string; authorization: string };
   /** Host-verified Recall assets supplied to the model for this persisted reply. */
   recall_citations?: RecallMessageCitation[];
   /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */

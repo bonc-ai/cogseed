@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { KstarEpisodeRecord } from '../../../../src/main/features/kstar/types';
+import { KSTAR_EPISODE_MISSING } from '../../../../src/main/features/recall/evidence-resolution';
 
 let tmpDir: string;
 let previousRoot: string | undefined;
@@ -40,6 +42,27 @@ describe('Recall ability assets', () => {
 
     const audit = await assets.listAbilityAssetAudit('user-a', asset.id);
     expect(audit.map((entry) => entry.action)).toEqual(['created', 'updated', 'paused', 'revoked']);
+  });
+
+  it('clears boundary conditions when an update passes empty arrays', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Load the exact committed knowledge before execution.',
+      suggestedType: 'rule', ...RULE_BOUNDARY,
+      suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-clear' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(asset.applicableWhen).toEqual(['performing governed work']);
+
+    // 修复前（2026-09-21 审查）：readAbilityAssetSemantics 把 [] 折叠为键缺席，
+    // `...semantics` 展开合并后旧条件静默复活——用户在编辑界面删光所有
+    // 适用/禁用条件保存，条件会原样回来。
+    const cleared = await assets.updateAbilityAsset('user-a', asset.id, {
+      applicableWhen: [], forbiddenWhen: [], actor: 'user', reason: 'conditions removed',
+    });
+    expect(cleared.applicableWhen).toBeUndefined();
+    expect(cleared.forbiddenWhen).toBeUndefined();
+    expect(cleared.statement).toBe(asset.statement); // 没传的维度不受影响
   });
 
   it('keeps learning provenance in immutable version snapshots', async () => {
@@ -772,6 +795,10 @@ describe('治理动作', () => {
     const tgtOld = await mk('目标条目的旧内容。', '身份B');
     await assets.updateAbilityAsset(U, tgtOld.asset.id, { statement: '更旧的目标。', reason: 'aged', actor: 'user' });
     // 再动一次 source，让它的 updatedAt 晚于 target（sourceNewer=true）。
+    // 两侧写入相隔不足 1ms 时 ISO 时间戳会撞车——merge 的 sourceNewer 是严格
+    // 大于比较，撞上就把"谁更新"判反（本机实测约三分之一概率红）。等一拍把
+    // 它变成确定事实，不靠执行速度。
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await assets.updateAbilityAsset(U, src.asset.id, { statement: '第一版内容的修订。', reason: 'refresh', actor: 'user' });
     const merged = await assets.mergeAbilityAssets(U, src.asset.id, tgtOld.asset.id, userAction('merge'));
     const { readAbilityAssetVersionSnapshot } = await import('../../../../src/main/features/recall/asset-service');
@@ -806,6 +833,40 @@ describe('治理动作', () => {
       .rejects.toThrow('revoked ability asset cannot be changed');
     await expect(assets.rollbackAbilityAsset(U, rev.asset.id, '1', userAction('x')))
       .rejects.toThrow('revoked ability asset cannot be changed');
+  });
+
+  it('merge 不丢族关系（2026-09-21 审查修复）：source 较旧也并入、挂族直写读 live', async () => {
+    const { assets } = await modules();
+    const U = 'user-mrg-family';
+    const base = Date.now();
+    const iso = (offset: number) => new Date(base + offset).toISOString();
+    const mk = async (seq: number, statement: string, updatedAt: string) => assets.createAbilityAsset(U, {
+      schemaVersion: 2, ownerId: U, id: `aa-fam-${String(seq).padStart(2, '0')}xxxxxxxxxxxxxxxx`,
+      candidateId: `cand-fam-${seq}`, sourceCandidateIds: [`cand-fam-${seq}`],
+      reviewDecisionId: `rd_fam_${String(seq).padStart(4, '0')}`,
+      type: 'rule', title: `fam-${seq}`, statement,
+      evidenceRefs: [{ kind: 'conversation', id: `conv-fam-${seq}` }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: updatedAt, updatedAt,
+    }, { actor: 'user', reason: 'family merge seed' });
+    const srcOld = await mk(1, '较旧的源内容。', iso(0));
+    const tgtNew = await mk(2, '较新的目标内容。', iso(10));
+    const famPeer = await mk(3, '族内第三条。', iso(20));
+
+    // 模拟挂族直写（family.ts 行为）：relations 只落 live 记录，不 bump 版本、
+    // 不进版本快照——merge 若按快照搬关系，这条就会静默丢失。
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await updateRecallJsonRecord(U, 'ability-assets', srcOld.id, (raw) => ({
+      ...raw,
+      relations: [...((raw as { relations?: Array<{ kind: string; assetId: string }> }).relations || []),
+        { kind: 'same_family', assetId: famPeer.id }],
+    }));
+
+    // 修复前（source 较旧方向）：关系完全不并入，source 归档后族成员凭空少。
+    const mergedOld = await assets.mergeAbilityAssets(U, srcOld.id, tgtNew.id, userAction('merge family'));
+    expect(mergedOld.relations?.some((r) => r.kind === 'same_family' && r.assetId === famPeer.id)).toBe(true);
+    // 在用内容不动（较旧方向语义不变）。
+    expect(mergedOld.statement).toBe('较新的目标内容。');
   });
 
   it('归并去重空版本（2026-09-16 修）：源资产的迁移垫版不占新号', async () => {
@@ -973,6 +1034,13 @@ describe('版本真删（2026-09-17）：物理删除 + 引用快照冻结', () 
 });
 
 describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
+  async function seedLegacyScope(uid: string, legacyScope: string) {
+    const seeded = await seedWithScope(uid, 'general');
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await updateRecallJsonRecord(uid, 'ability-assets', seeded.asset.id, (raw) => ({ ...raw, scope: legacyScope }));
+    return seeded;
+  }
+
   async function seedWithScope(uid: string, scope: string) {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
@@ -985,8 +1053,9 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
   }
 
   it('可归一的自由文本 scope 改写为词表值并递增版本；词表值幂等跳过；不可归一的保留', async () => {
-    const { assets, asset } = await seedWithScope('user-scope-mig', '用户全局画像');
-    expect(asset.scope).toBe('用户全局画像');
+    // 刀一后写入点即归一，真实存量须绕过写入直改盘模拟。
+    const { assets, asset } = await seedLegacyScope('user-scope-mig', '用户全局画像');
+    expect((await assets.readAbilityAsset('user-scope-mig', asset.id))!.scope).toBe('用户全局画像');
 
     const first = await assets.migrateLegacyFreeTextScopes('user-scope-mig');
     expect(first).toBe(1);
@@ -1011,7 +1080,7 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     // 不刷新的话，requirement 存续期内每回合注入整体失败
     // （projection_asset_version_changed）且无回退。
     const uid = 'user-scope-committed';
-    const { assets, asset } = await seedWithScope(uid, '用户全局画像');
+    const { assets, asset } = await seedLegacyScope(uid, '用户全局画像');
     const store = await import('../../../../src/main/features/recall/store');
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const projection = {
@@ -1052,5 +1121,90 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     expect(await assets.migrateLegacyFreeTextScopes(uid)).toBe(1);
     const stillFrozen = await projections.readContextProjection(uid, expired.id);
     expect(stillFrozen.assetVersions?.[asset.id]).toBe('1');
+  });
+
+  it('marks execution evidence whose KSTAR episode is missing instead of blocking the write (2026-09-18)', async () => {
+    const { candidates, assets } = await modules();
+    const episodes = await import('../../../../src/main/features/kstar/episode-store');
+    // 正例：复盘记录真实存在 → 证据原样保留（写入前解析只标"查无"的）。
+    const episode = (id: string): KstarEpisodeRecord => ({
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id,
+      sessionId: 'gconv-evidence',
+      taskRunId: `run-${id}`,
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+      s: { workspaceId: 'workspace-evidence' },
+      t: { userGoal: `check ${id}`, constraints: [] },
+      a: { toolCalls: [], agentActions: [] },
+      r: { status: 'completed', finalText: 'Done.', producedFiles: [] },
+      evidenceRefs: [{ kind: 'execution', id: `exec-${id}` }],
+      createdAt: '2026-09-18T00:00:00.000Z',
+      updatedAt: '2026-09-18T00:01:00.000Z',
+    });
+    await episodes.writeKstarEpisode('user-a', episode('kse-live1'));
+
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep the verified evidence path.',
+      suggestedType: 'rule',
+      ...RULE_BOUNDARY,
+      suggestedScope: 'general',
+      sourceRefs: [
+        { kind: 'execution', id: 'kse-live1' },
+        { kind: 'execution', id: 'kse-ghost1' },
+        { kind: 'execution', id: 'exec-plain' },
+      ],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const byId = new Map(asset.evidenceRefs.map((ref) => [String(ref.id), ref]));
+    // 乙档口径：写入照常（资产已建），查无的记录标 degraded，不阻断、不丢数据。
+    expect(asset.status).toBe('active');
+    expect(byId.get('kse-live1')?.degraded).toBeUndefined();
+    expect(byId.get('kse-ghost1')).toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
+    // 形状不匹配（非 kse- 前缀）的执行证据不参与判定。
+    expect(byId.get('exec-plain')?.degraded).toBeUndefined();
+    // 版本快照同步带标记（渲染层证据读的就是快照）。
+    const versions = await assets.listAbilityAssetVersions('user-a', asset.id);
+    expect(versions[0].snapshot.evidenceRefs.find((ref) => ref.id === 'kse-ghost1'))
+      .toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
+
+    // update 路径同样生效：新写入的查无证据被标，已有的照旧。
+    const updated = await assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Keep the verified evidence path always.',
+      actor: 'user',
+      reason: 'tighten wording',
+      evidenceRefs: [...asset.evidenceRefs, { kind: 'execution', id: 'kse-ghost2' }],
+    });
+    expect(updated.evidenceRefs.find((ref) => ref.id === 'kse-ghost2'))
+      .toMatchObject({ degraded: true, reason: KSTAR_EPISODE_MISSING });
+    expect(updated.evidenceRefs.find((ref) => ref.id === 'kse-live1')?.degraded).toBeUndefined();
+  });
+
+  it('刀一：scope 写入点归一——场景描述句兜底 general、自定义词条放行', async () => {
+    const { assets } = await modules();
+    const now = new Date().toISOString();
+    const dirty = await assets.createAbilityAsset('user-scope-hard', {
+      schemaVersion: 2, ownerId: 'user-scope-hard', id: 'aa-scope-dirty', candidateId: 'cand-scope-dirty',
+      sourceCandidateIds: ['cand-scope-dirty'], reviewDecisionId: 'rd_scopedirty_123456',
+      type: 'rule', title: '脏范围资产', statement: '测试脏范围归一的一条规则。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-scope-dirty' }],
+      scope: '新增、审核、晋升认知资产条目时', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      applicableWhen: ['通用时'], forbiddenWhen: ['无关场景'],
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'dirty scope seed' });
+    expect(dirty.scope).toBe('general');
+    // 自定义词条（≤20 字、无句读、非"…时"句式）原样放行。
+    const custom = await assets.createAbilityAsset('user-scope-hard', {
+      schemaVersion: 2, ownerId: 'user-scope-hard', id: 'aa-scope-custom', candidateId: 'cand-scope-custom',
+      sourceCandidateIds: ['cand-scope-custom'], reviewDecisionId: 'rd_scopecustom_123456',
+      type: 'rule', title: '自定义词条资产', statement: '自定义词条范围的一条规则。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-scope-custom' }],
+      scope: 'architecture-review', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      applicableWhen: ['架构评审时'], forbiddenWhen: ['无关场景'],
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'custom term seed' });
+    expect(custom.scope).toBe('architecture-review');
   });
 });
