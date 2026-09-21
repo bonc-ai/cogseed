@@ -1067,6 +1067,11 @@ async function executeDirectCogSeedCli(
       finishFromChunks(code);
     });
 
+    // A child that exits before consuming stdin makes the socket write fail with
+    // EPIPE (observed in the full suite as an unhandled stream error). That is
+    // not a tool failure we can act on — the `error`/`close` handlers above own
+    // the result — so the stdin stream must absorb it instead of escaping.
+    child.stdin.on('error', () => {});
     child.stdin.end(invocation.stdin ?? '');
   });
 }

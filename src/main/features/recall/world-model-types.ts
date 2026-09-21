@@ -53,6 +53,19 @@ export interface WorldModelOntologyFact {
   value: string;
   source: 'personal_ontology' | 'user_profile' | 'shared_memory';
   projectId?: string;
+  /** 信息截至年月（`@asof:YYYY-MM` marker on the group field value; absent
+   *  when the value carries no time marker). Blueprint R26 temporal integrity:
+   *  the as-of date is when the VALUE was correct, never the read date. */
+  asOf?: string;
+  /** User verification level (2026-09-20 assertion-verification; spec 007 two
+   *  tiers): true = source-supported (bare `@verified`), 'independent' =
+   *  independently verified (`@verified:independent`). Manual-only: the
+   *  confirmation write path never sets it and no receipt chain promotes it. */
+  verified?: boolean | 'independent';
+  /** True when asOf is more than 12 months old — a refresh hint, not a
+   *  verdict: stable facts (birth year) also age past the threshold and are
+   *  only flagged, never auto-removed. Absent when asOf is absent. */
+  needsRefresh?: boolean;
 }
 
 export interface CausalRule {

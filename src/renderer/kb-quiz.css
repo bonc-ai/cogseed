@@ -72,19 +72,9 @@
 .kb-qz-progress-track {
   flex: 1 1 auto;
   height: 4px;
-  border-radius: var(--radius-pill);
   background: var(--kb-hover);
-  overflow: hidden;
 }
-
-.kb-qz-progress-fill {
-  display: block;
-  height: 100%;
-  width: 0;
-  border-radius: var(--radius-pill);
-  background: var(--kb-green);
-  transition: width 0.18s ease-out;
-}
+.kb-qz-progress-track .ui-progress__fill { background: var(--kb-green); }
 
 /* 进度文字是"当前状态"，比题型标签重一档 */
 .kb-qz-progress-text {

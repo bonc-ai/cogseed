@@ -98,6 +98,16 @@ describe('renderer bash permission prompt', () => {
     expect(code).toContain('${caretHtml}');
   });
 
+  it('uses the shared modal and standard action buttons', () => {
+    const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/bash_permission.js'), 'utf8');
+
+    expect(code).toContain("overlay.className = 'ui-modal-overlay'");
+    expect(code).toContain('class="ui-modal ui-modal--lg bash-permission-dialog"');
+    expect(code).toContain('class="ui-modal__footer bash-permission-footer"');
+    expect(code).toContain("uiButton({ label: t('bash.permission.allow_once'), role: 'primary'");
+    expect(code).not.toContain('class="modal modal-standard ui-dialog bash-permission-dialog"');
+  });
+
   it('renders permission levels + settings hint and persists all_files_auto before allowing', async () => {
     const h = loadHarness({ choice: 'allow_once', mode: 'all_files_auto' });
 
@@ -141,7 +151,7 @@ describe('renderer bash permission prompt', () => {
       request_id: 'req-mode',
       agent_name: 'Agent',
       operation: 'read_file',
-      subject: '/Users/me/.ssh/id_rsa',
+      subject: '/Users/test/.ssh/id_rsa',
       reasons: ['network_egress'],
     });
     await flush();

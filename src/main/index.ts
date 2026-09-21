@@ -72,7 +72,22 @@ if (IS_PACKAGED_STT_SMOKE) {
   app.commandLine.appendSwitch('use-file-for-fake-audio-capture', PACKAGED_STT_SMOKE_WAV);
 }
 const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
-const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+// ── Hub 内容检查节奏（specs/010 FR-034 `[FROZEN]`；PRD doc-v0.5 §7.3 第 212 行）──
+// 契约原文：「启动后 60 秒、在线期间每 6 小时、用户打开目录页时……失败 30 分钟后重试一次，
+// 再失败等下一周期。检查不打断用户，不弹阻断式窗口。」
+// ⚠️ 基线实测为 12 小时且无周期定时器、无失败重试——**未满足该冻结要求**，此处改为契约值。
+const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** 启动后首次检查的延迟。 */
+const MARKETPLACE_STARTUP_CHECK_DELAY_MS = 60 * 1000;
+/** 失败后**只**重试一次；再失败等下一周期。 */
+const MARKETPLACE_CHECK_RETRY_DELAY_MS = 30 * 60 * 1000;
+/**
+ * 版本副本回收的启动期延迟。
+ *
+ * 刻意排在检查之后：`specs/010` FR-052 要求**不在检查周期或使用高峰内触发**，
+ * 回收是纯磁盘清理，没有任何时效性。
+ */
+const MARKETPLACE_VERSION_GC_DELAY_MS = 5 * 60 * 1000;
 const MARKETPLACE_DEFAULTS_RETRY_DELAYS_MS = [3_000, 3_000, 3_000] as const;
 
 const RUNTIME_IDENTITY = resolveRuntimeIdentity(app.isPackaged);
@@ -741,9 +756,31 @@ let marketplaceReconcileStatusSubscribed = false;
 let marketplaceReconcileInFlight: Promise<void> | null = null;
 let marketplaceReconcileInFlightKey = '';
 const marketplaceDefaultsRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 已安排的「失败后 30 分钟重试」定时器。同一时间最多一个，避免失败叠加成重试风暴。 */
+let marketplaceCheckRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 安排一次失败重试（FR-034）。
+ *
+ * **只重试一次**：重试自身产生的失败不再安排新的重试，等下一个 6 小时周期。
+ */
+function scheduleMarketplaceCheckRetry(reason: string): void {
+  if (reason === 'retry') return;
+  if (marketplaceCheckRetryTimer) return;
+  marketplaceCheckRetryTimer = setTimeout(() => {
+    marketplaceCheckRetryTimer = null;
+    runMarketplaceInstallReconcile('retry').catch(() => {
+      // 重试失败只记在该函数内部的日志里；不再安排下一次。
+    });
+  }, MARKETPLACE_CHECK_RETRY_DELAY_MS);
+  marketplaceCheckRetryTimer.unref?.();
+}
 const marketplaceDefaultsRetryAttempts = new Map<string, number>();
 
 function subscribeMarketplaceReconcileStatus(m: typeof import('./features/marketplace_reconcile')): void {
+  // 目录页打开时的检查触发点（FR-034）：编排在本文件，IPC 够不到，故在此注册进接缝。
+  // 与状态订阅同一时机注册——两者都只需要「reconcile 模块已装载」这一个前提。
+  m.setInstallReconcileRunner((reason) => runMarketplaceInstallReconcile(reason));
   if (marketplaceReconcileStatusSubscribed) return;
   marketplaceReconcileStatusSubscribed = true;
   m.subscribeReconcileStatus((status) => {
@@ -927,6 +964,9 @@ async function runMarketplaceInstallReconcile(reason: string): Promise<void> {
         reason,
         error: (err as Error).message,
       });
+      // 失败 30 分钟后重试**一次**；重试本身再失败就等下一周期，不再叠加。
+      // 不弹窗、不打断用户——失败只体现在日志与下一次检查。
+      scheduleMarketplaceCheckRetry(reason);
     }
   })().finally(() => {
     if (marketplaceReconcileInFlightKey === runKey) {
@@ -1550,7 +1590,39 @@ if (!gotLock) {
       const m = await import('./features/marketplace_biz');
       await m.primeCategoryCache({ localOnly: true });
     });
-    registerDeferred('marketplace:reconcile', () => runMarketplaceInstallReconcile('startup'));
+    // 启动后 60 秒首次检查；随后在线期间每 6 小时一次。两者都不打断用户，
+    // 失败只记日志并在 30 分钟后重试一次（见 `runMarketplaceInstallReconcile`）。
+    registerDeferred(
+      'marketplace:reconcile',
+      () => runMarketplaceInstallReconcile('startup'),
+      'parallel',
+      MARKETPLACE_STARTUP_CHECK_DELAY_MS,
+    );
+    // 保守回收：启动期一次。**不挂在 6 小时检查周期上**——回收无时效性，
+    // 且三条删除条件任一不满足即不删、任何异常本轮删 0（FR-052 / FR-053）。
+    registerDeferred(
+      'marketplace:version-gc',
+      async () => {
+        const gc = await import('./features/marketplace/version-gc');
+        const uid = users.getActiveUserId();
+        const report = await gc.runVersionGc(uid);
+        if (report.deleted.length || report.aborted) {
+          marketplaceBootLog.info('hub version copy gc finished', {
+            deleted: report.deleted.length, kept: report.kept.length, aborted: report.aborted,
+          });
+        }
+      },
+      'parallel',
+      MARKETPLACE_VERSION_GC_DELAY_MS,
+    );
+    registerDeferred('marketplace:reconcile-interval', () => {
+      const timer = setInterval(() => {
+        runMarketplaceInstallReconcile('interval').catch(() => {
+          // `runMarketplaceInstallReconcile` 自己记录并安排重试；这里不再重复处理。
+        });
+      }, MARKETPLACE_SERVER_CHECK_INTERVAL_MS);
+      timer.unref?.();
+    });
 
     // Heal cc-switch providers synced before the auto-bind fix: bind the first
     // declared model of each synced provider to an entry so chat dispatch can
@@ -1564,13 +1636,8 @@ if (!gotLock) {
       void uid;
     });
 
-    // 修正 33a16ad 之前 promote 出来的资产：lifecycleStatus 说「用户已确认」，
-    // maturity 却归在 seed（候选档）。那个矛盾会让它们永远进不了任何 Agent，
-    // 而 seed→bud 没有别的路径。幂等，修完就空转。
-    registerDeferred('recall:correct-seed-maturity', async () => {
-      const { correctMisfiledSeedMaturity } = await import('./features/recall/asset-service');
-      await correctMisfiledSeedMaturity(users.getActiveUserId());
-    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // recall:correct-seed-maturity 已随出身收敛退役（2026-09-20）：一次性
+    // 历史归档修正早已空转，出身单值化后判据不复存在（见 asset-service 注释）。
     // 2026-08-15 UI 优化：旧 KStar 线资产带英文技术标题（'Reusable experience
     // lesson (requirement-level)' 等），迁移为中文可读。幂等，修完空转。
     registerDeferred('recall:migrate-legacy-titles', async () => {
@@ -1585,6 +1652,16 @@ if (!gotLock) {
     registerDeferred('recall:migrate-legacy-scopes', async () => {
       const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
       await migrateLegacyFreeTextScopes(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // 存量记忆迁移（2026-09-19 合并实施·清单 #6）：USER.md/MEMORY.md 条目过
+    // 第二段入库，迁移前自动备份，全部落库后按文件清空（幂等——文件空则零
+    // 副作用；单条失败保留文件等下次启动重跑）。
+    registerDeferred('recall:migrate-legacy-memory', async () => {
+      const { migrateLegacyMemoryToAssets } = await import('./features/recall/memory-migration');
+      const report = await migrateLegacyMemoryToAssets(users.getActiveUserId());
+      if (report.migrated > 0 || report.failed > 0) {
+        console.log(`[memory-migration] migrated=${report.migrated} failed=${report.failed} backup=${report.backupDir || 'none'}`);
+      }
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);

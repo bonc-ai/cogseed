@@ -19,6 +19,7 @@
 (function () {
   const PROGRESS_KEY = 'cogseed.kb.quiz.progress.v1';
   const RATE_ICON = { good: 'thumbs-up', bad: 'thumbs-down' };
+  let _modalController = null;
 
   const _state = {
     open: false,
@@ -226,7 +227,13 @@ ${rows}
         <div class="kb-qz-head">
           <span class="kb-qz-head-ico">${_iconHtml('check-circle', 'kb-qz-head-icon')}</span>
           <span class="kb-qz-title" id="kb-qz-title-text">${_esc(_tr('kb.quiz.title', '测验'))}</span>
-          <span class="kb-qz-source-chip" id="kb-qz-sources-chip" role="button" tabindex="0"></span>
+          ${window.uiButton({
+            label: _tr('kb.quiz.view_sources', '查看来源', { count: 0 }),
+            role: 'ghost',
+            size: 'sm',
+            className: 'kb-qz-source-chip',
+            attrs: { id: 'kb-qz-sources-chip', 'aria-expanded': 'false' },
+          })}
           <span class="kb-qz-head-actions">
             ${_iconButtonHtml('kb-qz-max', _tr('kb.quiz.maximize', '放大'), 'maximize')}
             ${_iconButtonHtml('kb-qz-more', _tr('kb.quiz.more', '更多'), 'more-horizontal')}
@@ -236,13 +243,23 @@ ${rows}
           <div class="kb-qz-sources" id="kb-qz-sources" hidden></div>
         </div>
         <div class="kb-qz-progress" id="kb-qz-progress">
-          <div class="kb-qz-progress-track"><span class="kb-qz-progress-fill" id="kb-qz-progress-fill"></span></div>
+          ${window.uiProgressBar({ ariaLabel: _tr('kb.quiz.title', '测验'), value: 0, className: 'kb-qz-progress-track', attrs: { id: 'kb-qz-progress-track' } })}
           <span class="kb-qz-progress-text" id="kb-qz-progress-text"></span>
         </div>
         <div class="kb-qz-body" id="kb-qz-body"></div>
         <div class="kb-qz-foot" id="kb-qz-foot"></div>
       </div>`;
     document.body.appendChild(el);
+    const panel = document.getElementById('kb-qz-panel');
+    _modalController = panel && typeof window.uiModalController === 'function'
+      ? window.uiModalController({
+          overlay: el,
+          dialog: panel,
+          initialFocus: '#kb-qz-close',
+          onRequestClose: (reason) => _requestClose(reason),
+          onClose: () => _finishClose(),
+        })
+      : null;
     _bindShell(el);
     return el;
   }
@@ -273,7 +290,6 @@ ${rows}
     const chip = document.getElementById('kb-qz-sources-chip');
     const toggleSources = (e) => { e.stopPropagation(); _state.sourcesOpen = !_state.sourcesOpen; _renderSources(); };
     chip?.addEventListener('click', toggleSources);
-    chip?.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') toggleSources(e); });
 
     el.addEventListener('click', (e) => {
       const target = e.target;
@@ -291,15 +307,9 @@ ${rows}
   /** 快捷键：A–D 选项、Enter 提交、←→/J K 切题、F 提示、S 跳过、Esc 关闭。 */
   function _onKeydown(e) {
     if (!_state.open) return;
+    if (e.isComposing || e.keyCode === 229) return;
     const tag = (e.target && e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || Boolean(e.target && e.target.isContentEditable);
-    if (e.key === 'Escape') {
-      if (_state.closeConfirm) { _state.closeConfirm = false; _render(); return; }
-      if (_state.menuOpen) { _state.menuOpen = false; _renderMenu(); return; }
-      if (_state.sourcesOpen) { _state.sourcesOpen = false; _renderSources(); return; }
-      _requestClose();
-      return;
-    }
     if (typing) return;
     const q = _current();
     if (_state.phase === 'answering' && q) {
@@ -346,7 +356,10 @@ ${rows}
     const list = Array.isArray(_state.sources) ? _state.sources : [];
     if (chip) {
       chip.hidden = !list.length;
-      chip.textContent = _tr('kb.quiz.view_sources', `查看 ${list.length} 个来源`, { count: list.length });
+      const label = _tr('kb.quiz.view_sources', `查看 ${list.length} 个来源`, { count: list.length });
+      const labelEl = chip.querySelector('.ui-button__label');
+      if (labelEl) labelEl.textContent = label;
+      else chip.textContent = label;
       chip.setAttribute('aria-expanded', String(_state.sourcesOpen));
     }
     if (!box) return;
@@ -444,14 +457,18 @@ ${rows}
   }
 
   function _renderProgress(summary) {
-    const fill = document.getElementById('kb-qz-progress-fill');
+    const progress = document.getElementById('kb-qz-progress-track');
     const text = document.getElementById('kb-qz-progress-text');
     const pct = Math.max(0, Math.min(100, _progressPercent(summary)));
-    if (fill) fill.style.width = `${pct}%`;
     if (text) {
       text.textContent = _state.phase === 'results'
         ? _tr('kb.quiz.progress_done', `已完成 · 共 ${_state.questions.length} 题`, { total: _state.questions.length })
         : `${_tr('kb.quiz.progress', `第 ${_state.index + 1} / ${_state.questions.length} 题`, { current: _state.index + 1, total: _state.questions.length })} · ${typeLabel(_current())}`;
+    }
+    if (progress) {
+      progress.style.setProperty('--ui-progress-value', `${pct}%`);
+      progress.setAttribute('aria-valuenow', String(pct));
+      if (text?.textContent) progress.setAttribute('aria-label', text.textContent);
     }
   }
 
@@ -1253,7 +1270,12 @@ ${rows}
   }
 
   // ── 关闭与确认 ──────────────────────────────────────────────────────
-  function _requestClose() {
+  function _requestClose(reason = 'action') {
+    if (reason === 'escape') {
+      if (_state.menuOpen) { _state.menuOpen = false; _renderMenu(); return; }
+      if (_state.sourcesOpen) { _state.sourcesOpen = false; _renderSources(); return; }
+      if (_state.closeConfirm) { _state.closeConfirm = false; _render(); return; }
+    }
     // 已经停在"确定关闭吗"这一屏上，再点一次 X / 遮罩 = 用户确认关闭。
     // 不能原地再渲染一次确认条：那样第二次点 X 屏幕毫无变化，用户读到的是
     // "右上角的 X 坏了"（真机反馈）。第一次点仍按防误关走确认，progress 也已
@@ -1328,7 +1350,8 @@ ${rows}
     _root();
     const restored = _loadProgress();
     const el = document.getElementById('kb-qz-overlay');
-    if (el) el.hidden = false;
+    if (_modalController) _modalController.open(document.activeElement);
+    else if (el) el.hidden = false;
     _state.open = true;
     const panel = document.getElementById('kb-qz-panel');
     if (panel) panel.classList.toggle('is-max', _state.maximize);
@@ -1337,6 +1360,14 @@ ${rows}
   }
 
   function close() {
+    if (_modalController && _modalController.isOpen()) {
+      _modalController.close('action');
+      return;
+    }
+    _finishClose();
+  }
+
+  function _finishClose() {
     _hideSnippetPreview();
     const el = document.getElementById('kb-qz-overlay');
     if (el) el.hidden = true;

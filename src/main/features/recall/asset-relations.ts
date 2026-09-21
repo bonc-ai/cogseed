@@ -7,7 +7,10 @@ export type AbilityAssetRelationKind =
   | 'depends_on'
   | 'replaces'
   | 'conflicts_with'
-  | 'related_to';
+  | 'related_to'
+  /** 同族（2026-09-19 判族引擎）：同一个大类的资产互指，由族键判定产生，
+   *  面板按 same_family 关系聚合成大类分组视图。 */
+  | 'same_family';
 
 export interface AbilityAssetRelation {
   kind: AbilityAssetRelationKind;
@@ -27,6 +30,7 @@ const RELATION_KINDS = new Set<AbilityAssetRelationKind>([
   'replaces',
   'conflicts_with',
   'related_to',
+  'same_family',
 ]);
 
 function assetIdOrThrow(value: unknown, field: string): string {

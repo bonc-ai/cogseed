@@ -249,3 +249,93 @@ describe('cognition pages', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-09-21 认知资产迁移:HTML 原型 v7 的五页签结构守护(源码级契约,
+// 与上方旧模块 require 测试并存——旧模块仍被 personal-ontology 懒加载组使用)。
+// 迁移终态:tree / ontology / overview / review / organize,默认路由 tree。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('cognition-assets 五页签结构(迁移终态)', () => {
+  const core2 = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf8');
+  const views2 = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
+  const html2 = readFileSync(resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+  /** 解析 core.js 的 TABS 数组为 [{id, titleKey}]。 */
+  function parseTabs(source: string): Array<{ id: string; titleKey: string }> {
+    const start = source.indexOf('const TABS = [');
+    const end = source.indexOf('];', start);
+    const block = source.slice(start, end);
+    const tabs: Array<{ id: string; titleKey: string }> = [];
+    for (const m of block.matchAll(/\{ id: '([a-z-]+)', titleKey: '([A-Za-z_.]+)'/g)) {
+      tabs.push({ id: m[1], titleKey: m[2] });
+    }
+    return tabs;
+  }
+
+  it('TABS 是五页签且顺序固定:认知树 / 个人本体 / 我的认知 / 待我处理 / 整理', () => {
+    const tabs = parseTabs(core2);
+    expect(tabs.map((t) => t.id)).toEqual(['tree', 'ontology', 'overview', 'review', 'organize']);
+    expect(tabs.map((t) => t.titleKey)).toEqual([
+      'cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview',
+      'cognition.tab_review', 'cognition.tab_organize',
+    ]);
+  });
+
+  it('默认路由是认知树,深链归一化键保留', () => {
+    expect(core2).toContain("route: { name: 'tree'");
+    expect(core2).toContain("Object.assign({ name: 'tree'");
+    // 深链兼容:既有详情路由键一个都不能少(资产/候选/整理/版本/KSTAR)。
+    for (const key of ['assetId', 'candidateId', 'captureId', 'assetVersionId', 'kstarEpisodeId', 'assetEdit']) {
+      expect(core2).toContain(`${key}: ''`);
+    }
+  });
+
+  it('认知树与我的认知拆分为独立页面,overview 不再承载树图主界面', () => {
+    expect(views2).toContain('function viewTree(');
+    expect(views2).toContain("route.name === 'tree'");
+    expect(views2).toContain('function viewOntology(');
+    // viewOverview 函数体内不再调用 treeBlocks——树整卡搬去了独立页。
+    const start = views2.indexOf('function viewOverview');
+    const end = views2.indexOf('\n  function ', start + 10);
+    const overviewBlock = views2.slice(start, end);
+    expect(overviewBlock).not.toContain('treeBlocks(');
+  });
+
+  it('页面壳只建一次:持久壳 + 内容区局部重绘', () => {
+    expect(views2).toContain('ca-ontology-mount');
+    expect(views2).toContain('unmountPersonalOntology');
+    expect(views2).toContain('ca-banner-slot');
+    expect(html2).toContain('id="ca-ontology-parking"');
+    expect(core2).toContain('ca-ontology-parking');
+    expect(core2).toContain('renderPersonalOntology');
+  });
+
+  it('五页签标题四语齐全', () => {
+    for (const locale of ['zh', 'en', 'ja', 'pt'] as const) {
+      const table = JSON.parse(readFileSync(resolve(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf8'));
+      for (const key of ['cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview', 'cognition.tab_review', 'cognition.tab_organize']) {
+        expect(table[key], `${locale}:${key}`).toBeTruthy();
+      }
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-09-21 Phase 10 a11y:tab 方向键漫游与重绘焦点保持(源码级契约)。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('cognition-assets a11y(Phase 10)', () => {
+  const app3 = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/app.js'), 'utf8');
+
+  it('tab 行支持 ←/→/Home/End 方向键漫游(委托到 root)', () => {
+    expect(app3).toContain('ArrowLeft');
+    expect(app3).toContain("event.target.closest('.ca-tabs')");
+    expect(app3).toContain("event.target.closest('.ca-tab')");
+  });
+
+  it('内容区重绘后焦点不落 body:按特征找回或回落首个可聚焦控件', () => {
+    expect(app3).toContain('#ca-scroll');
+    expect(app3).toMatch(/preventScroll/);
+    expect(app3).toContain('data-go-asset="${CSS.escape');
+    expect(app3).toContain('scroll.querySelector(\'button, [role="button"]\')');
+  });
+});

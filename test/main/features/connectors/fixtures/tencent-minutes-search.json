@@ -1,0 +1,25 @@
+{
+  "message": "success",
+  "data": {
+    "has_more": true,
+    "minutes": [
+      {
+        "meeting_id": "8510129880540746171",
+        "minute_id": "dhoOCaoRkbsAAAAAarCnEAAAAAAG_Z7t",
+        "minute_start_time": "2026-09-21T11:46:28+08:00",
+        "q_fields": [
+          "SUMMARY_POINTS"
+        ],
+        "snippets": [
+          {
+            "source": "SUMMARY_POINTS",
+            "text": "续修复。\n- **腾讯MCP调研**：发现较多问题，需抽空与海英哥单独沟通。\n\n#### 3. 多智能体测试与推送\n- **深度扫描修复**：发现部分任务无法深度执行的问题，正在修复中。\n- **全量测试与推送**：修复后将进行全量测试，打测试包发给海运哥测试，没问题则推至仓库。\n\n#### 4. <mark>认知资产</mark>管理与UI优化\n- **认知资产调用收敛**：对调用进行收敛及进入"
+          }
+        ],
+        "subject": "例会 - P3394 Scrum Team"
+      }
+    ],
+    "next_page_token": "tm_ptk_v1_AcJE2SaEXtr7Ub--TAZF0Lxzc6d1r88q2ergVSCueVEhyewhbTFeirLhbqP1w3H3I8vLajkWfac7ilzBQo14EoxW8KYVm73_X55Wxd14mwVjYn69Z34dWCG0tXZ7TDJMUpABkbVYkiQG1kqH_6aEW4Mptq0diYCwkyFGh7vRWxdOdkrUdysTdw",
+    "total_count": 73
+  }
+}
