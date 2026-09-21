@@ -272,6 +272,7 @@ window.closeKbPicker = closeKbPicker;
 // double-weight so a single budget gives ~50 chars to Chinese filenames and
 // ~100 chars to English filenames.
 const _KB_NAME_MAX_WEIGHT = 100;
+// CJK/谚文/假名的**全角字符区间**：用于名称宽度度量，与语言无关（三种语言都按宽字符算）。
 const _KB_NAME_DOUBLE_WIDTH_RE = /[㐀-鿿가-힯぀-ゟ゠-ヿ]/;
 function _kbNameWeight(s) {
   let w = 0;
