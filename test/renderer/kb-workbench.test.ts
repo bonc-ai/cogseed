@@ -1112,7 +1112,8 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
     expect(src).toMatch(/pressedOnOverlay/);
     expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
-    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+    // 关闭路径改走 _fvHide()（共享 uiModalController 接管焦点/Escape，2026-09-21）
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) _fvHide\(\)/);
   });
 
   it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
@@ -1131,7 +1132,8 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
     expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
     // 先显示再恢复：overlay 关着时量不到真实尺寸
-    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+    // 先显示再恢复位置；中间可插入 controller.open（共享层接管焦点/Escape）
+    expect(src).toMatch(/overlay\.hidden = false;\n[\s\S]{0,160}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
   });
 });
 
