@@ -63,9 +63,9 @@
   function showImportCheckResult(opts) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
-      overlay.className = 'modal-overlay imp-overlay';
+      overlay.className = 'ui-modal-overlay imp-overlay';
       const modal = document.createElement('div');
-      modal.className = 'modal imp-modal';
+      modal.className = 'ui-modal ui-modal--sm imp-modal';
       modal.setAttribute('role', 'dialog');
       modal.setAttribute('aria-modal', 'true');
       overlay.appendChild(modal);
@@ -143,40 +143,44 @@
         let foot = '';
         if (def.actions) {
           const a = def.actions;
-          foot += a.primary ? `<button type="button" class="btn imp-btn-primary" data-act="${a.primary.id}">${esc(actionLabel(a.primary))}</button>` : '';
-          (a.secondary || []).forEach((s) => { foot += `<button type="button" class="btn" data-act="${s.id}">${esc(actionLabel(s))}</button>`; });
+          foot += a.primary ? uiButton({ label: actionLabel(a.primary), role: 'primary', attrs: { 'data-act': a.primary.id } }) : '';
+          (a.secondary || []).forEach((s) => { foot += uiButton({ label: actionLabel(s), role: 'secondary', attrs: { 'data-act': s.id } }); });
           foot += '<span class="imp-spacer"></span>';
-          if (a.danger) foot += `<button type="button" class="btn imp-btn-danger" data-act="${a.danger.id}">${esc(actionLabel(a.danger))}</button>`;
-          if (a.ghost) foot += `<button type="button" class="btn imp-btn-ghost" data-act="${a.ghost.id}">${esc(actionLabel(a.ghost))}</button>`;
+          if (a.danger) foot += uiButton({ label: actionLabel(a.danger), role: 'danger', attrs: { 'data-act': a.danger.id } });
+          if (a.ghost) foot += uiButton({ label: actionLabel(a.ghost), role: 'ghost', attrs: { 'data-act': a.ghost.id } });
         }
 
         modal.innerHTML = `
-          <div class="modal-header">
-            <div>
-              <div class="modal-title">${esc(t('import_check.title'))}</div>
+          <header class="ui-modal__header">
+            <div class="ui-modal__heading">
+              <h2 class="ui-modal__title">${esc(t('import_check.title'))}</h2>
               <div class="imp-sub"><span>${esc(opts.skillName || '')}</span><span class="imp-src-badge">${esc(srcLabel)}</span></div>
             </div>
-            <button type="button" class="modal-close-btn imp-close" data-act="close" title="${esc(t('import_check.close'))}">✕</button>
-          </div>
-          <div class="imp-status ${def.cls}">
-            <div class="imp-status-icon">${ICONS[def.ic]}</div>
-            <div class="imp-status-main">
-              <div class="imp-status-title">${esc(def.title())}${score != null && def.score ? `<span class="imp-score-chip">${esc(t('import_check.score', { n: score }))}</span>` : ''}</div>
-              <div class="imp-status-desc">${esc(opts.description || def.desc())}</div>
+            ${uiIconButton({ label: t('import_check.close'), icon: 'x', className: 'imp-close', attrs: { 'data-act': 'close' } })}
+          </header>
+          <div class="ui-modal__body">
+            <div class="imp-status ${def.cls}">
+              <div class="imp-status-icon">${ICONS[def.ic]}</div>
+              <div class="imp-status-main">
+                <div class="imp-status-title">${esc(def.title())}${score != null && def.score ? `<span class="imp-score-chip">${esc(t('import_check.score', { n: score }))}</span>` : ''}</div>
+                <div class="imp-status-desc">${esc(opts.description || def.desc())}</div>
+              </div>
             </div>
+            ${surface ? `<div class="imp-surface">
+              <span class="imp-surface-chip">${esc(t('import_check.egress'))} <b>${surface.egressPoints ?? 0}</b></span>
+              <span class="imp-surface-chip">${esc(t('import_check.dynexec'))} <b>${surface.dynamicExecPoints ?? 0}</b></span>
+              <span class="imp-surface-chip">${esc(t('import_check.persist'))} <b>${surface.persistencePoints ?? 0}</b></span>
+            </div>` : ''}
+            ${findings.length ? `<div class="imp-findings-title">${esc(t('import_check.findings_title'))}</div>
+            <div class="imp-findings">
+              ${findings.map((f) => findingRow(f.level || 'LOW', f.text, f.loc)).join('')}
+              ${more ? `<div class="imp-findings-more">${esc(t('import_check.more_findings', { n: more }))}</div>` : ''}
+            </div>` : ''}
           </div>
-          ${surface ? `<div class="imp-surface">
-            <span class="imp-surface-chip">${esc(t('import_check.egress'))} <b>${surface.egressPoints ?? 0}</b></span>
-            <span class="imp-surface-chip">${esc(t('import_check.dynexec'))} <b>${surface.dynamicExecPoints ?? 0}</b></span>
-            <span class="imp-surface-chip">${esc(t('import_check.persist'))} <b>${surface.persistencePoints ?? 0}</b></span>
-          </div>` : ''}
-          ${findings.length ? `<div class="imp-findings-title">${esc(t('import_check.findings_title'))}</div>
-          <div class="imp-findings">
-            ${findings.map((f) => findingRow(f.level || 'LOW', f.text, f.loc)).join('')}
-            ${more ? `<div class="imp-findings-more">${esc(t('import_check.more_findings', { n: more }))}</div>` : ''}
-          </div>` : ''}
-          <div class="imp-foot">${foot}</div>
-          <div class="imp-note">${esc(t('import_check.note'))}</div>`;
+          <footer class="ui-modal__footer imp-footer">
+            <div class="imp-foot">${foot}</div>
+            <div class="imp-note">${esc(t('import_check.note'))}</div>
+          </footer>`;
 
         modal.querySelectorAll('[data-act]').forEach((btn) => {
           btn.addEventListener('click', () => {

@@ -451,9 +451,10 @@ function buildHarness() {
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
   context.uiButton = windowObj.uiButton;
   context.uiIconButton = windowObj.uiIconButton;
-  context.uiInput = windowObj.uiInput;
-  context.uiCheckbox = windowObj.uiCheckbox;
-  context.uiTextarea = windowObj.uiTextarea;
+    context.uiInput = windowObj.uiInput;
+    context.uiCheckbox = windowObj.uiCheckbox;
+    context.uiSwitch = windowObj.uiSwitch;
+    context.uiTextarea = windowObj.uiTextarea;
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8'), context, { filename: 'settings.js' });
   return { context, registry, invoke, windowObj, documentListeners, aiSelectMount };
 }
@@ -680,7 +681,7 @@ describe('settings model providers surface', () => {
     const { context, registry, invoke } = buildHarness();
     const provider = {
       id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
-      enabled: true, apiKey: 'must-never-render', apiKeyMasked: 'sk-***',
+      enabled: true, apiKey: 'test-token', apiKeyMasked: 'sk-***',
       models: [{ id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 }],
     };
 
@@ -688,7 +689,7 @@ describe('settings model providers surface', () => {
     vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
     const rendered = registry.get('settings-custom-provider-modal-body')!.innerHTML;
     expect(rendered).toContain('sk-***');
-    expect(rendered).not.toContain('must-never-render');
+    expect(rendered).not.toContain('test-token');
 
     await vm.runInContext('_settingsSetCustomProviderEnabled(__provider, false)', context);
     await vm.runInContext("_settingsTestCustomProviderModel(__provider, __provider.models[0])", context);
@@ -713,8 +714,7 @@ describe('settings model providers surface', () => {
     vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
     const detailList = registry.get('settings-custom-provider-detail-model-list')!;
     const rowChildren = detailList.children[0].children[1].children;
-    // 行内动作仍是三个图标钮（测试/编辑/删除），行尾另有每模型开关（label 容器，
-    // 不是按钮）——两类控件分开数，避免把开关也当成图标钮。
+    // 行内动作仍是三个图标钮（测试/编辑/删除），行尾另有共享 Switch。
     const actionButtons = rowChildren.filter((child: any) => child.className.includes('icon-btn'));
     expect(actionButtons).toHaveLength(3);
     expect(rowChildren.filter((child: any) => child.className.includes('settings-custom-provider-model-toggle')))
@@ -958,10 +958,11 @@ describe('settings model providers surface', () => {
     expect(body.innerHTML).toContain('settings-model-form__smart');
     const smartToggle = body.querySelector('#settings-model-form-smart') as any;
     expect(smartToggle).toBeTruthy();
-    // 渲染即默认开（harness 不解析无值裸属性，用 HTML 串锁定 checked）。
-    expect(body.innerHTML).toContain('id="settings-model-form-smart" type="checkbox" checked');
-    // FakeElement 不把 checked 属性反映为 .checked 属性（浏览器行为），显式置真。
-    smartToggle.checked = true;
+    expect(body.innerHTML).toContain('class="ui-switch is-on" role="switch" aria-checked="true"');
+    await smartToggle.click();
+    expect(smartToggle.getAttribute('aria-checked')).toBe('false');
+    await smartToggle.click();
+    expect(smartToggle.getAttribute('aria-checked')).toBe('true');
     const addIdInput = body.querySelector('#settings-custom-provider-model-edit-id') as any;
     addIdInput.value = 'gpt-4.1-mini';
     await addIdInput.dispatch('blur');
@@ -1128,7 +1129,7 @@ describe('settings model providers surface', () => {
 
     vm.runInContext('_settingsOpenCustomProviderModal()', context);
     const secret = registry.get('settings-custom-provider-api-key')!;
-    secret.value = 'sk-ephemeral-secret';
+    secret.value = 'test-token';
     vm.runInContext("_settingsCloseModal(document.getElementById('settings-custom-provider-modal'))", context);
 
     expect(secret.value).toBe('');
@@ -1462,11 +1463,9 @@ describe('settings model providers surface', () => {
     expect(Array.from(row.querySelectorAll('.settings-custom-provider-model-badge'), (el: any) => el.textContent))
       .toEqual(['1M', '384K', 'settings.custom_providers.badge_vision', 'settings.custom_providers.badge_reasoning']);
 
-    const toggleLabel = row.querySelector('.settings-custom-provider-model-toggle')!;
-    const toggle = toggleLabel.children[0] as any;
-    expect(toggle.checked).toBe(true);
-    toggle.checked = false;
-    await toggle.dispatch('change');
+    const toggle = row.querySelector('.settings-custom-provider-model-toggle') as any;
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    await toggle.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     // 有绑定条目 → 先确认（把副作用讲在动手之前）
     expect(context.uiConfirm).toHaveBeenCalled();
@@ -1488,12 +1487,11 @@ describe('settings model providers surface', () => {
     };
     vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
     const row = registry.get('settings-custom-provider-detail-model-list')!.children[0];
-    const toggle = row.querySelector('.settings-custom-provider-model-toggle')!.children[0] as any;
-    toggle.checked = false;
-    await toggle.dispatch('change');
+    const toggle = row.querySelector('.settings-custom-provider-model-toggle') as any;
+    await toggle.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     // 失败回滚到原状态 + 弹窗状态行报错
-    expect(toggle.checked).toBe(true);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
     expect(registry.get('settings-custom-provider-modal-status')!.textContent).toBe('boom');
   });
 

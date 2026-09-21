@@ -159,6 +159,30 @@
     return `<textarea class="form-input ui-control ui-textarea ${_esc(options.className || '')}" id="${_esc(options.id)}"${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>${_esc(options.value || '')}</textarea>`;
   }
 
+  function _uiSwitch(options) {
+    if (typeof window.uiSwitch !== 'function') throw new Error('knowledge base requires uiSwitch');
+    return window.uiSwitch(options);
+  }
+
+  function _uiSelect(options) {
+    if (typeof window.uiSelect !== 'function') throw new Error('knowledge base requires uiSelect');
+    return window.uiSelect(options);
+  }
+
+  function _uiSelectValue(scope, id, fallback) {
+    const host = scope && scope.querySelector(`#${id}`);
+    if (!host) return fallback;
+    if (host._uiSelectApi && typeof host._uiSelectApi.getValue === 'function') {
+      return host._uiSelectApi.getValue() || fallback;
+    }
+    return host.dataset.value || fallback;
+  }
+
+  function _uiEmptyState(options) {
+    if (typeof window.uiEmptyState !== 'function') throw new Error('knowledge base requires uiEmptyState');
+    return window.uiEmptyState(options);
+  }
+
   function _elementFromHtml(markup) {
     const host = document.createElement('div');
     host.innerHTML = String(markup || '').trim();
@@ -532,60 +556,72 @@
     const trigger = document.activeElement;
     _kbShareCloseDialog();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-dlg-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-dlg-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title">
-        ${_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x', className: 'kb-share-dlg-close' })}
-        <h3 class="kb-share-dlg-title" id="kb-share-dlg-title">创建共享知识库</h3>
-        <div class="kb-share-form">
-          <div class="kb-share-field">
-            <label class="kb-share-label">名称 <span class="kb-share-required">*</span></label>
-            ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: '请输入知识库名称', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      <section class="ui-modal kb-share-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="kb-share-dlg-title">创建共享知识库</h2>
           </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">封面</label>
-            <div class="kb-share-cover">
-              <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">${_icon('folder', 'kb-share-cover-default-icon')}</span></div>
-              ${_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
-              <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
+          ${_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x', className: 'kb-share-dlg-close' })}
+        </header>
+        <div class="ui-modal__body kb-share-dlg-body">
+          <div class="kb-share-form">
+            <div class="kb-share-field">
+              <label class="kb-share-label" for="kb-share-name">名称 <span class="kb-share-required">*</span></label>
+              ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: '请输入知识库名称', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
             </div>
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">描述</label>
-            ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: '为你的共享知识库填写描述', attrs: { rows: 3 } })}
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">加入方式</label>
-            <div class="kb-share-select-wrap">
-              <select class="kb-share-select" id="kb-share-join">
-                <option value="direct">直接加入</option>
-                <option value="apply">申请加入（管理员批准）</option>
-                <option value="invite">仅邀请加入</option>
-              </select>
-            </div>
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">成员权限</label>
-            <div class="kb-share-perm" id="kb-share-perm">
-              <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger">
-                <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
-              </button>
-              <div class="kb-share-perm-menu" id="kb-share-perm-menu" data-ui-modal-popover data-trigger-id="kb-share-perm-trigger" data-open="false" hidden>
-                <div class="kb-share-perm-item is-selected" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>内容可查看和导出</div>
-                <div class="kb-share-perm-item" data-perm="view_only">内容可查看但不可导出</div>
-                <div class="kb-share-perm-item" data-perm="hidden">内容不可查看</div>
+            <div class="kb-share-field">
+              <span class="kb-share-label">封面</span>
+              <div class="kb-share-cover">
+                <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">${_icon('folder', 'kb-share-cover-default-icon')}</span></div>
+                ${_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
+                <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
               </div>
             </div>
-          </div>
-          <div class="kb-share-field">
-            <label class="kb-share-label">设置推荐问题</label>
-            ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: '为你的知识库预设推荐问题（每行一个）', attrs: { rows: 2 } })}
+            <div class="kb-share-field">
+              <label class="kb-share-label" for="kb-share-desc">描述</label>
+              ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: '为你的共享知识库填写描述', attrs: { rows: 3 } })}
+            </div>
+            <div class="kb-share-field">
+              <span class="kb-share-label" id="kb-share-join-label">加入方式</span>
+              <div class="kb-share-select-wrap">
+                ${_uiSelect({
+                  id: 'kb-share-join',
+                  value: 'direct',
+                  labelId: 'kb-share-join-label',
+                  options: [
+                    { value: 'direct', label: '直接加入' },
+                    { value: 'apply', label: '申请加入（管理员批准）' },
+                    { value: 'invite', label: '仅邀请加入' },
+                  ],
+                })}
+              </div>
+            </div>
+            <div class="kb-share-field">
+              <span class="kb-share-label" id="kb-share-perm-field-label">成员权限</span>
+              <div class="kb-share-perm" id="kb-share-perm">
+                <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger" aria-labelledby="kb-share-perm-field-label kb-share-perm-label" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
+                </button>
+                <div class="kb-share-perm-menu" id="kb-share-perm-menu" role="listbox" aria-labelledby="kb-share-perm-field-label" data-ui-modal-popover data-trigger-id="kb-share-perm-trigger" data-open="false" hidden>
+                  <div class="kb-share-perm-item is-selected" role="option" aria-selected="true" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>内容可查看和导出</div>
+                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="view_only">内容可查看但不可导出</div>
+                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="hidden">内容不可查看</div>
+                </div>
+              </div>
+            </div>
+            <div class="kb-share-field">
+              <label class="kb-share-label" for="kb-share-questions">设置推荐问题</label>
+              ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: '为你的知识库预设推荐问题（每行一个）', attrs: { rows: 2 } })}
+            </div>
           </div>
         </div>
-        <div class="kb-share-dlg-actions">
+        <footer class="ui-modal__footer kb-share-dlg-actions">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-btn', attrs: { id: 'kb-share-cancel' } })}
           ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-btn', disabled: true, attrs: { id: 'kb-share-ok' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbShareDialog = overlay;
@@ -601,10 +637,15 @@
         _kbShareDialogController = null;
       },
     });
+    if (typeof window.hydrateUiFormSelects === 'function') window.hydrateUiFormSelects(overlay);
 
     const nameInput = overlay.querySelector('#kb-share-name');
     const okBtn = overlay.querySelector('#kb-share-ok');
-    const syncOk = () => { okBtn.disabled = !String(nameInput.value || '').trim(); };
+    const syncOk = () => {
+      const disabled = !String(nameInput.value || '').trim();
+      okBtn.disabled = disabled;
+      okBtn.classList.toggle('is-disabled', disabled);
+    };
     nameInput.addEventListener('input', syncOk);
     nameInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !okBtn.disabled) _kbShareSubmit();
@@ -632,19 +673,23 @@
 
     // 成员权限下拉
     const permMenu = overlay.querySelector('#kb-share-perm-menu');
-    overlay.querySelector('#kb-share-perm-trigger').addEventListener('click', (e) => {
+    const permTrigger = overlay.querySelector('#kb-share-perm-trigger');
+    permTrigger.addEventListener('click', (e) => {
       e.stopPropagation();
       permMenu.hidden = !permMenu.hidden;
       permMenu.dataset.open = permMenu.hidden ? 'false' : 'true';
+      permTrigger.setAttribute('aria-expanded', permMenu.hidden ? 'false' : 'true');
     });
     permMenu.querySelectorAll('.kb-share-perm-item').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         permMenu.querySelectorAll('.kb-share-perm-item').forEach((x) => x.classList.remove('is-selected'));
+        permMenu.querySelectorAll('.kb-share-perm-item').forEach((x) => x.setAttribute('aria-selected', x === item ? 'true' : 'false'));
         item.classList.add('is-selected');
         overlay.querySelector('#kb-share-perm-label').textContent = item.textContent.trim();
         permMenu.hidden = true;
         permMenu.dataset.open = 'false';
+        permTrigger.setAttribute('aria-expanded', 'false');
       });
     });
 
@@ -654,6 +699,7 @@
       if (!e.target.closest('#kb-share-perm')) {
         permMenu.hidden = true;
         permMenu.dataset.open = 'false';
+        permTrigger.setAttribute('aria-expanded', 'false');
       }
     });
     okBtn.addEventListener('click', _kbShareSubmit);
@@ -665,7 +711,7 @@
     const name = String(overlay.querySelector('#kb-share-name').value || '').trim();
     if (!name) return;
     const desc = String(overlay.querySelector('#kb-share-desc').value || '').trim();
-    const joinMode = overlay.querySelector('#kb-share-join').value;
+    const joinMode = _uiSelectValue(overlay, 'kb-share-join', 'direct');
     const permItem = overlay.querySelector('.kb-share-perm-item.is-selected');
     const memberPermission = permItem ? permItem.dataset.perm : 'view_export';
     const questions = String(overlay.querySelector('#kb-share-questions').value || '')
@@ -723,15 +769,18 @@
   // 空态：居中插图 + 大号主按钮（保留库头部骨架，不一片白板）
   // 空库（左侧无库）→ 创建知识库；库内无内容 → 「添加内容」打开与工具栏一致的导入菜单
   function _emptyStateHtml(kind) {
-    const createBtn = kind === 'lib'
-      ? _uiButton({ label: '创建知识库', role: 'primary', icon: 'plus', className: 'kb-empty-btn', attrs: { id: 'kb-empty-create' } })
-      : _uiButton({ label: '添加内容', role: 'primary', icon: 'plus', className: 'kb-empty-btn', attrs: { id: 'kb-empty-add' } });
-    return `<div class="kb-empty">
-      <div class="kb-empty-illus">${_icon('book-open', 'kb-empty-ico')}</div>
-      <div class="kb-empty-title">${kind === 'lib' ? '还没有知识库' : '知识库什么也没有，去这里添加'}</div>
-      <div class="kb-empty-sub">${kind === 'lib' ? '创建一个知识库，或导入资料开始使用' : '支持文件、文件夹、网页、笔记等多种方式导入'}</div>
-      <div class="kb-empty-actions">${createBtn}</div>
-    </div>`;
+    const isLibrary = kind === 'lib';
+    return _uiEmptyState({
+      kind: 'actionable',
+      title: isLibrary ? '还没有知识库' : '知识库什么也没有，去这里添加',
+      hint: isLibrary ? '创建一个知识库，或导入资料开始使用' : '支持文件、文件夹、网页、笔记等多种方式导入',
+      icon: 'book-open',
+      action: {
+        label: isLibrary ? '创建知识库' : '添加内容',
+        icon: 'plus',
+        attrs: { id: isLibrary ? 'kb-empty-create' : 'kb-empty-add' },
+      },
+    });
   }
 
   // 空态按钮绑定：空库 → 创建；库内空 → 「添加内容」打开导入菜单（与工具栏同一入口）
@@ -841,7 +890,7 @@
       </div>`;
     }
     if (!dirs.length && !files.length) {
-      html = '<div class="kb-import-dlg-empty">' + (q ? '无匹配文件' : '此目录为空') + '</div>';
+      html = _uiEmptyState({ kind: 'quiet', title: q ? '无匹配文件' : '此目录为空' });
     }
     overlay.querySelector('.kb-import-dlg-files').innerHTML = html;
     // 路径栏
@@ -860,17 +909,22 @@
 
   function _bindImportDlgEvents(overlay) {
     const trigger = document.getElementById('kb-wb-import');
+    const dialog = overlay.querySelector('[role="dialog"]');
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay,
+          dialog,
+          initialFocus: '#kb-import-dlg-search-input',
+          onClose: () => overlay.remove(),
+        })
+      : null;
     function closeImportDialog(restoreFocus = true) {
-      document.removeEventListener('keydown', onImportDialogKeydown);
-      overlay.remove();
-      if (restoreFocus) trigger?.focus();
+      if (controller) controller.close('action', { restoreFocus });
+      else {
+        overlay.remove();
+        if (restoreFocus) trigger?.focus();
+      }
     }
-    function onImportDialogKeydown(event) {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      closeImportDialog();
-    }
-    document.addEventListener('keydown', onImportDialogKeydown);
     overlay.querySelector('.kb-import-dlg-close')?.addEventListener('click', () => closeImportDialog());
     overlay.querySelector('.kb-import-dlg-cancel')?.addEventListener('click', () => closeImportDialog());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeImportDialog(); });
@@ -980,6 +1034,7 @@
         }
       }
     });
+    if (controller) controller.open(trigger);
   }
 
   function _pushImportDlgHistory(loc) {
@@ -1016,44 +1071,47 @@
     const libItems = _state.libs.map((l, i) =>
       `<div class="kb-import-dlg-lib${i === 0 ? ' active' : ''}" data-import-lib="${_esc(l.name)}">
         ${_icon('folder', 'kb-import-dlg-ico')}<span class="kb-import-dlg-name">${_esc(l.name)}</span>
-      </div>`).join('') || '<div class="kb-import-dlg-empty">暂无个人知识库</div>';
+      </div>`).join('') || _uiEmptyState({ kind: 'quiet', title: '暂无个人知识库' });
     const overlay = document.createElement('div');
-    overlay.className = 'kb-import-dlg-overlay';
+    overlay.className = 'ui-modal-overlay kb-import-dlg-overlay';
     overlay.innerHTML = `
-      <div class="kb-import-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title">
-        <div class="kb-import-dlg-head">
-          <div class="kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>导入内容</div>
+      <section class="ui-modal ui-modal--lg kb-import-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title">
+        <header class="ui-modal__header kb-import-dlg-head">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>导入内容</h2>
+          </div>
           <div class="kb-import-dlg-search">
             <span class="kb-import-dlg-search-ico">${_icon('search', 'kb-import-dlg-search-icon')}</span>
             ${_uiInput({ id: 'kb-import-dlg-search-input', type: 'search', placeholder: '搜索', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           ${_uiIconButton({ label: '关闭导入弹窗', icon: 'x', className: 'kb-import-dlg-close' })}
-        </div>
-        <div class="kb-import-dlg-nav">
-          ${_uiIconButton({ label: '返回', icon: 'chevron-left', className: 'kb-import-dlg-back' })}
-          ${_uiIconButton({ label: '前进', icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
-          <span class="kb-import-dlg-path"></span>
-        </div>
-        <div class="kb-import-dlg-body">
-          <div class="kb-import-dlg-tree">
-            <div class="kb-import-dlg-group">个人知识库</div>
-            <div class="kb-import-dlg-libs">${libItems}</div>
+        </header>
+        <div class="ui-modal__body kb-import-dlg-content">
+          <div class="kb-import-dlg-nav">
+            ${_uiIconButton({ label: '返回', icon: 'chevron-left', className: 'kb-import-dlg-back' })}
+            ${_uiIconButton({ label: '前进', icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
+            <span class="kb-import-dlg-path"></span>
           </div>
-          <div class="kb-import-dlg-files"></div>
+          <div class="kb-import-dlg-body">
+            <div class="kb-import-dlg-tree">
+              <div class="kb-import-dlg-group">个人知识库</div>
+              <div class="kb-import-dlg-libs">${libItems}</div>
+            </div>
+            <div class="kb-import-dlg-files"></div>
+          </div>
         </div>
-        <div class="kb-import-dlg-foot">
+        <footer class="ui-modal__footer kb-import-dlg-foot">
           <span class="kb-import-dlg-count">已选中 0 个文件</span>
           <div class="kb-import-dlg-actions">
             ${_uiButton({ label: '取消', role: 'secondary', size: 'sm', className: 'kb-import-dlg-cancel' })}
             ${_uiButton({ label: '导入', role: 'primary', size: 'sm', icon: 'upload', disabled: true, className: 'kb-import-dlg-ok' })}
           </div>
-        </div>
-      </div>`;
+        </footer>
+      </section>`;
     document.body.appendChild(overlay);
     _bindImportDlgEvents(overlay);
     _renderImportDlgList();
     _syncImportDlgNav(overlay);
-    overlay.querySelector('.kb-import-dlg-search input')?.focus();
   }
 
   // 导入菜单「新建文件夹」：个人库 contexts.mkdir / 空间 spaces.files.mkdir
@@ -1178,7 +1236,12 @@
     const endTip = parts.length ? '<div class="kb-files-end">没有更多内容了</div>' : '';
     if (!parts.length && q) {
       // 搜索无结果：显示"无匹配"占位，不显示空库引导（避免误导为新库）
-      list.innerHTML = '<div class="kb-empty"><div class="kb-empty-title">无匹配文档</div><div class="kb-empty-sub">换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）</div></div>';
+      list.innerHTML = _uiEmptyState({
+        kind: 'explained',
+        title: '无匹配文档',
+        hint: '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）',
+        icon: 'search',
+      });
     } else {
       list.innerHTML = (parts.join('') + endTip) || _emptyStateHtml('file');
       if (!parts.length) _bindEmptyActions();
@@ -1340,7 +1403,12 @@
     if (files.length) html += '<div class="kb-files-end">没有更多内容了</div>';
     if (!html && q) {
       // 搜索无结果：不显示空库引导
-      list.innerHTML = '<div class="kb-empty"><div class="kb-empty-title">无匹配文档</div><div class="kb-empty-sub">换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）</div></div>';
+      list.innerHTML = _uiEmptyState({
+        kind: 'explained',
+        title: '无匹配文档',
+        hint: '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）',
+        icon: 'search',
+      });
       _renderCount(0);
       _renderRight();
       return;
@@ -4706,7 +4774,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             <span class="kb-qa-history-meta">${s.msgs ? s.msgs.length : 0} 条 · ${_qaFmtTime(s.ts)}</span>
             ${_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger', className: 'kb-qa-history-del', attrs: { 'data-hist-del': s.id } })}
           </div>`).join('')
-        : '<div class="kb-qa-history-empty">暂无历史对话</div>'}
+        : _uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })}
       </div>`;
     document.body.appendChild(panel);
     const trigger = document.getElementById('kb-qa-history');
@@ -5968,12 +6036,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     list.appendChild(defRow);
 
     if (!entries.length) {
-      const empty = el('div', 'kb-qa-model-empty');
-      empty.append(
-        el('div', 'kb-qa-model-empty-title', '尚未配置模型'),
-        el('div', 'kb-qa-model-empty-sub', '到设置中配置一次 API Key 后即可在此选择'),
-      );
-      list.appendChild(empty);
+      list.appendChild(_elementFromHtml(_uiEmptyState({
+        kind: 'explained',
+        title: '尚未配置模型',
+        hint: '到设置中配置一次 API Key 后即可在此选择',
+      })));
     } else {
       for (const e of entries) {
         const row = el('button', 'kb-qa-model-item');
@@ -6412,17 +6479,24 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const trigger = document.activeElement;
     _kbMenuHide();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-members-overlay';
+    overlay.className = 'ui-modal-overlay kb-members-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-members-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-members-title">
-        ${_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x', className: 'kb-members-close' })}
-        <div class="kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>知识库成员</span></div>
-        <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: '搜索知识库成员', attrs: { autocomplete: 'off' } })}</div>
-        <div class="kb-members-list">
-          <div class="kb-members-item">
-            <span class="kb-members-avatar">我</span>
-            <span class="kb-members-name">我</span>
-            <span class="kb-members-role">创建者</span>
+      <section class="ui-modal ui-modal--sm kb-members-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-members-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-members-title" id="kb-members-title">${_icon('users', 'kb-members-title-icon')}<span>知识库成员</span></h2>
+          </div>
+          ${_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x', className: 'kb-members-close' })}
+        </header>
+        <div class="ui-modal__body kb-members-body">
+          <div class="kb-members-search">${_uiInput({ id: 'kb-members-search-input', type: 'search', placeholder: '搜索知识库成员', attrs: { autocomplete: 'off' } })}</div>
+          <div class="kb-members-list">
+            <div class="kb-members-item">
+              <span class="kb-members-avatar">我</span>
+              <span class="kb-members-name">我</span>
+              <span class="kb-members-role">创建者</span>
+            </div>
           </div>
         </div>
       </section>`;
@@ -6469,18 +6543,25 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _kbMenuHide();
     _kbPermDlgClose();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
-        ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></div>
-        <div class="kb-wb-right-placeholder kb-share-soon-body">
-          共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
-          当前可以用「成员」把库内资料共享给同一空间的同事。
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></h2>
+          </div>
+          ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-wb-right-placeholder kb-share-soon-body">
+            共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
+            当前可以用「成员」把库内资料共享给同一空间的同事。
+          </div>
         </div>
-        <div class="kb-share-pop-actions">
+        <footer class="ui-modal__footer kb-share-pop-actions">
           ${_uiButton({ label: '知道了', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbShareDlg = overlay;
@@ -6510,35 +6591,42 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
     _kbPermDlgClose();
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop" role="dialog" aria-modal="true" aria-labelledby="kb-share-pop-title">
-        ${_uiIconButton({ label: '关闭分享弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享</div>
-        <div class="kb-share-pop-card">
-          <span class="kb-share-pop-folder">${_icon('folder', 'kb-share-pop-folder-icon')}</span>
-          <div class="kb-share-pop-card-meta">
-            <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
-            <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
+      <section class="ui-modal ui-modal--sm kb-share-pop" role="dialog" aria-modal="true" aria-labelledby="kb-share-pop-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭分享弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body kb-share-pop-body">
+          <div class="kb-share-pop-card">
+            <span class="kb-share-pop-folder">${_icon('folder', 'kb-share-pop-folder-icon')}</span>
+            <div class="kb-share-pop-card-meta">
+              <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
+              <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
+            </div>
+          </div>
+          <div class="kb-share-pop-row" id="kb-share-pop-perm-row" role="button" tabindex="0">
+            <span class="kb-share-pop-row-label">选择分享方式</span>
+            <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
+          </div>
+          <div class="kb-share-pop-row" id="kb-share-pop-status-row" role="button" tabindex="0">
+            <span class="kb-share-pop-row-label">分享到飞书</span>
+            <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
+          </div>
+          <div class="kb-share-pop-row" id="kb-share-cogseed-row" role="button" tabindex="0">
+            <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
+            <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
           </div>
         </div>
-        <div class="kb-share-pop-row" id="kb-share-pop-perm-row">
-          <span class="kb-share-pop-row-label">选择分享方式</span>
-          <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
-        </div>
-        <div class="kb-share-pop-row" id="kb-share-pop-status-row">
-          <span class="kb-share-pop-row-label">分享到飞书</span>
-          <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
-        </div>
-        <div class="kb-share-pop-row" id="kb-share-cogseed-row">
-          <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
-          <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
-        </div>
-        <div class="kb-share-pop-actions">
+        <footer class="ui-modal__footer kb-share-pop-actions">
           ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-pop-copy-link' } })}
           ${_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code', className: 'kb-share-pop-btn is-code', attrs: { id: 'kb-share-pop-code' } })}
           ${_uiButton({ label: '管理', role: 'secondary', icon: 'settings', className: 'kb-share-pop-btn is-manage', attrs: { id: 'kb-share-pop-manage', hidden: true } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbShareDlg = overlay;
@@ -6554,6 +6642,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       },
     });
     overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => _kbShareDlgClose());
+    overlay.querySelectorAll('.kb-share-pop-row[role="button"]').forEach((row) => {
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        row.click();
+      });
+    });
     // 点分享方式行 → 跳权限设置弹窗
     overlay.querySelector('#kb-share-pop-perm-row').addEventListener('click', () => {
       _kbShareDlgClose({ restoreFocus: false });
@@ -6689,24 +6784,31 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbCogseedConfigDialog(sp) {
     const trigger = document.activeElement;
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-config-title">
-        ${_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置 CogSeed 共享服务</div>
-        <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">服务地址</label>
-          ${_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input', placeholder: 'https://share.cogseed.dev', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-config-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置 CogSeed 共享服务</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-cogseed-baseurl">服务地址</label>
+            ${_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input', placeholder: 'https://share.cogseed.dev', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-cogseed-apikey">API Key</label>
+            ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: '服务方发放的密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
         </div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">API Key</label>
-          ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: '服务方发放的密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
-        </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-cancel' } })}
           ${_uiButton({ label: '保存并发布', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-save' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6759,38 +6861,45 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     } catch { /* 成员拉取失败不阻断 */ }
     const pending = members.filter((m) => m.status === 'pending');
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-manage-title">
-        ${_uiIconButton({ label: '关闭 CogSeed 问答分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>CogSeed 问答分享管理</div>
-        ${state ? `<div class="kb-share-manage-item">
-          <div class="kb-share-manage-item-head">
-            <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
-            <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-manage-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>CogSeed 问答分享管理</h2>
           </div>
-          <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
-          <div class="kb-share-manage-item-actions">
-            ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
-            ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
+          ${_uiIconButton({ label: '关闭 CogSeed 问答分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          ${state ? `<div class="kb-share-manage-item">
+            <div class="kb-share-manage-item-head">
+              <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
+              <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+            </div>
+            <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
+            <div class="kb-share-manage-item-actions">
+              ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
+              ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
+            </div>
+          </div>` : _uiEmptyState({ kind: 'quiet', title: '未发布' })}
+          <div class="kb-share-cogseed-members">
+            <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
+            ${pending.length === 0 ? _uiEmptyState({ kind: 'quiet', title: '暂无待审申请' }) : ''}
+            ${pending.map((m) => `
+              <div class="kb-share-manage-item" data-member-id="${m.id}">
+                <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
+                <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
+                <div class="kb-share-manage-item-actions">
+                  ${_uiButton({ label: '通过', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
+                  ${_uiButton({ label: '拒绝', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
+                </div>
+              </div>`).join('')}
           </div>
-        </div>` : '<div class="kb-share-manage-empty">未发布</div>'}
-        <div class="kb-share-cogseed-members">
-          <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
-          ${pending.length === 0 ? '<div class="kb-share-cogseed-members-empty">暂无待审申请</div>' : ''}
-          ${pending.map((m) => `
-            <div class="kb-share-manage-item" data-member-id="${m.id}">
-              <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
-              <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
-              <div class="kb-share-manage-item-actions">
-                ${_uiButton({ label: '通过', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
-                ${_uiButton({ label: '拒绝', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
-              </div>
-            </div>`).join('')}
         </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-manage-close' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6893,25 +7002,32 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbShareConfigDialog(sp) {
     const trigger = document.activeElement;
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-share-config-title">
-        ${_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置飞书分享</div>
-        <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">App ID</label>
-          ${_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input', placeholder: 'cli_xxxxxxxx', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-share-config-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置飞书分享</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-share-config-appid">App ID</label>
+            ${_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input', placeholder: 'cli_xxxxxxxx', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
+          <div class="kb-share-config-field">
+            <label class="kb-share-config-label" for="kb-share-config-secret">App Secret</label>
+            ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: '应用密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+          </div>
+          <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
         </div>
-        <div class="kb-share-config-field">
-          <label class="kb-share-config-label">App Secret</label>
-          ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: '应用密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
-        </div>
-        <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-cancel' } })}
           ${_uiButton({ label: '保存并授权', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-save' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -6960,19 +7076,26 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbQrCodeShow(url, name) {
     const trigger = document.activeElement;
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--qr" role="dialog" aria-modal="true" aria-labelledby="kb-share-qr-title">
-        ${_uiIconButton({ label: '关闭知识码弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>知识码</div>
-        <div class="kb-share-qr-body">
-          <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
-          <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
-          <div class="kb-share-qr-url">${_esc(url)}</div>
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--qr" role="dialog" aria-modal="true" aria-labelledby="kb-share-qr-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-qr-title"><span class="kb-share-pop-head-ico">${_icon('qr-code', 'kb-share-pop-head-icon')}</span>知识码</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭知识码弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-qr-body">
+            <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
+            <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
+            <div class="kb-share-qr-url">${_esc(url)}</div>
+          </div>
         </div>
-        <div class="kb-share-pop-actions">
+        <footer class="ui-modal__footer kb-share-pop-actions">
           ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-qr-copy' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -7023,31 +7146,42 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _log.warn('kb share list failed', err);
     }
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-share-manage-title">
-        ${_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享管理</div>
-        <div class="kb-share-manage-list" id="kb-share-manage-list">
-          ${items.length === 0 ? '<div class="kb-share-manage-empty">还没有分享到飞书的知识库<br><span>打开知识库 → 分享 → 复制链接</span></div>' : ''}
-          ${items.map((item, idx) => `
-            <div class="kb-share-manage-item" data-idx="${idx}">
-              <div class="kb-share-manage-item-head">
-                <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
-                <span class="kb-share-manage-item-badge is-${item.access}">${({ anyone: '公开', tenant: '组织内', private: '私密' })[item.access] || item.access}</span>
-              </div>
-              <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
-              <div class="kb-share-manage-item-actions">
-                ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
-                ${_uiButton({ label: '知识码', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
-                ${_uiButton({ label: '更新内容', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
-                ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
-              </div>
-            </div>`).join('')}
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-share-manage-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享管理</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-manage-list" id="kb-share-manage-list">
+            ${items.length === 0 ? _uiEmptyState({
+              kind: 'explained',
+              title: '还没有分享到飞书的知识库',
+              hint: '打开知识库 → 分享 → 复制链接',
+            }) : ''}
+            ${items.map((item, idx) => `
+              <div class="kb-share-manage-item" data-idx="${idx}">
+                <div class="kb-share-manage-item-head">
+                  <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
+                  <span class="kb-share-manage-item-badge is-${item.access}">${({ anyone: '公开', tenant: '组织内', private: '私密' })[item.access] || item.access}</span>
+                </div>
+                <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
+                <div class="kb-share-manage-item-actions">
+                  ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
+                  ${_uiButton({ label: '知识码', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
+                  ${_uiButton({ label: '更新内容', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
+                  ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
+                </div>
+              </div>`).join('')}
+          </div>
         </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-manage-close' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     const modal = _mountKbDialog({
@@ -7153,49 +7287,64 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const perm = sp.member_permission || 'view_export';
     const join = sp.join_mode || 'direct';
     const isPrivate = sp.shared !== true;
-    const permLabel = { view_export: '内容可查看和导出', view_only: '内容可查看但不可导出', hidden: '内容不可查看' }[perm] || '内容可查看和导出';
-    const joinLabel = { direct: '直接加入', apply: '申请加入（管理员批准）', invite: '仅邀请加入' }[join] || '直接加入';
     const overlay = document.createElement('div');
-    overlay.className = 'kb-share-pop-overlay';
+    overlay.className = 'ui-modal-overlay kb-share-pop-overlay';
+    overlay.hidden = true;
     overlay.innerHTML = `
-      <section class="kb-share-pop kb-share-pop--perm" role="dialog" aria-modal="true" aria-labelledby="kb-perm-title">
-        ${_uiIconButton({ label: '关闭权限设置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
-        <div class="kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>权限设置</div>
-        <div class="kb-share-perm-block">
-          <div class="kb-share-perm-row">
-            <div class="kb-share-perm-texts">
-              <div class="kb-share-perm-title">设为私密</div>
-              <div class="kb-share-perm-desc">开启后知识库仅自己可见</div>
+      <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--perm" role="dialog" aria-modal="true" aria-labelledby="kb-perm-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>权限设置</h2>
+          </div>
+          ${_uiIconButton({ label: '关闭权限设置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+        </header>
+        <div class="ui-modal__body">
+          <div class="kb-share-perm-block">
+            <div class="kb-share-perm-row">
+              <div class="kb-share-perm-texts">
+                <div class="kb-share-perm-title">设为私密</div>
+                <div class="kb-share-perm-desc">开启后知识库仅自己可见</div>
+              </div>
+              ${_uiSwitch({ label: '设为私密', checked: isPrivate, attrs: { id: 'kb-perm-private' } })}
             </div>
-            <button type="button" class="kb-share-toggle${isPrivate ? ' is-on' : ''}" id="kb-perm-private" role="switch" aria-checked="${isPrivate ? 'true' : 'false'}"><span class="kb-share-toggle-dot"></span></button>
+          </div>
+          <div class="kb-share-perm-block">
+            <div class="kb-share-perm-row">
+              <span class="kb-share-perm-title" id="kb-perm-member-label">成员权限</span>
+              <div class="kb-share-select-wrap">
+                ${_uiSelect({
+                  id: 'kb-perm-member',
+                  value: perm,
+                  labelId: 'kb-perm-member-label',
+                  options: [
+                    { value: 'view_export', label: '内容可查看和导出' },
+                    { value: 'view_only', label: '内容可查看但不可导出' },
+                    { value: 'hidden', label: '内容不可查看' },
+                  ],
+                })}
+              </div>
+            </div>
+            <div class="kb-share-perm-row">
+              <span class="kb-share-perm-title" id="kb-perm-join-label">加入方式</span>
+              <div class="kb-share-select-wrap">
+                ${_uiSelect({
+                  id: 'kb-perm-join',
+                  value: join,
+                  labelId: 'kb-perm-join-label',
+                  options: [
+                    { value: 'direct', label: '直接加入' },
+                    { value: 'apply', label: '申请加入（管理员批准）' },
+                    { value: 'invite', label: '仅邀请加入' },
+                  ],
+                })}
+              </div>
+            </div>
           </div>
         </div>
-        <div class="kb-share-perm-block">
-          <div class="kb-share-perm-row">
-            <span class="kb-share-perm-title">成员权限</span>
-            <div class="kb-share-select-wrap">
-              <select class="kb-share-select" id="kb-perm-member">
-                <option value="view_export"${perm === 'view_export' ? ' selected' : ''}>内容可查看和导出</option>
-                <option value="view_only"${perm === 'view_only' ? ' selected' : ''}>内容可查看但不可导出</option>
-                <option value="hidden"${perm === 'hidden' ? ' selected' : ''}>内容不可查看</option>
-              </select>
-            </div>
-          </div>
-          <div class="kb-share-perm-row">
-            <span class="kb-share-perm-title">加入方式</span>
-            <div class="kb-share-select-wrap">
-              <select class="kb-share-select" id="kb-perm-join">
-                <option value="direct"${join === 'direct' ? ' selected' : ''}>直接加入</option>
-                <option value="apply"${join === 'apply' ? ' selected' : ''}>申请加入（管理员批准）</option>
-                <option value="invite"${join === 'invite' ? ' selected' : ''}>仅邀请加入</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+        <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
           ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-cancel' } })}
           ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-ok' } })}
-        </div>
+        </footer>
       </section>`;
     document.body.appendChild(overlay);
     _kbPermDlg = overlay;
@@ -7210,6 +7359,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _kbPermDlgController = null;
       },
     });
+    if (typeof window.hydrateUiFormSelects === 'function') window.hydrateUiFormSelects(overlay);
     const privateBtn = overlay.querySelector('#kb-perm-private');
     const setPrivate = (on) => {
       privateBtn.classList.toggle('is-on', on);
@@ -7219,8 +7369,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => _kbPermDlgClose());
     overlay.querySelector('#kb-perm-cancel').addEventListener('click', _kbPermDlgClose);
     overlay.querySelector('#kb-perm-ok').addEventListener('click', async () => {
-      const nextPerm = overlay.querySelector('#kb-perm-member').value;
-      const nextJoin = overlay.querySelector('#kb-perm-join').value;
+      const nextPerm = _uiSelectValue(overlay, 'kb-perm-member', 'view_export');
+      const nextJoin = _uiSelectValue(overlay, 'kb-perm-join', 'direct');
       const nextPrivate = privateBtn.classList.contains('is-on');
       const okBtn = overlay.querySelector('#kb-perm-ok');
       okBtn.disabled = true;

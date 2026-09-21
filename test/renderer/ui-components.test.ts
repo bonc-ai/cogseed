@@ -7,7 +7,11 @@ const root = path.join(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 function loadFactories() {
-  const context: any = { window: {}, document: undefined };
+  const labels: Record<string, string> = {
+    'common.required': '必填',
+    'common.optional': '选填',
+  };
+  const context: any = { window: { t: (key: string) => labels[key] || key }, document: undefined };
   vm.createContext(context);
   for (const file of [
     'src/renderer/modules/icons.js',
@@ -55,6 +59,7 @@ describe('first-version renderer components', () => {
 
     expect(() => uiIconButton({ icon: 'x' })).toThrow(/accessible label/);
     expect(uiIconButton({ icon: 'x', label: '关闭弹窗' })).toContain('aria-label="关闭弹窗"');
+    expect(uiIconButton({ icon: 'x', label: '关闭弹窗', size: 'sm' })).toContain('ui-icon-button--sm');
   });
 
   it('keeps shell search before collapse and exposes one recovery entry', () => {
@@ -175,27 +180,30 @@ describe('first-version renderer components', () => {
 
     const checkbox = uiCheckbox({
       id: 'capability-search',
+      label: '启用联网搜索',
       name: 'capability',
       value: '<search>',
       checked: true,
       disabled: true,
     });
-    expect(checkbox).toContain('class="ui-control ui-checkbox"');
+    expect(checkbox).toContain('class="ui-checkbox"');
     expect(checkbox).toContain('id="capability-search" type="checkbox"');
+    expect(checkbox).toContain('aria-label="启用联网搜索"');
     expect(checkbox).toContain('name="capability" value="&lt;search&gt;"');
     expect(checkbox).toContain(' checked disabled');
 
     const switchControl = uiSwitch({
       label: '夜间自动沉淀',
       checked: true,
-      className: 'ca-switch',
-      attrs: { 'data-act': 'nightly-toggle' },
+      attrs: { id: 'nightly-toggle', 'data-act': 'nightly-toggle' },
     });
-    expect(switchControl).toContain('class="ui-switch ca-switch is-on"');
+    expect(switchControl).toContain('class="ui-switch is-on"');
     expect(switchControl).toContain('role="switch" aria-checked="true"');
     expect(switchControl).toContain('aria-label="夜间自动沉淀"');
     expect(switchControl).toContain('data-act="nightly-toggle"');
+    expect(switchControl).toContain('id="nightly-toggle"');
     expect(switchControl).toContain('class="ui-switch__knob"');
+    expect(() => uiCheckbox({ id: 'missing-label' })).toThrow(/accessible label/);
 
     const textarea = uiField({ id: 'task-content', label: '任务内容', control: { kind: 'textarea' } });
     expect(textarea).toContain('ui-textarea');
@@ -227,6 +235,7 @@ describe('first-version renderer components', () => {
       ariaLabel: '报告日期范围',
       startLabel: '开始日期',
       endLabel: '结束日期',
+      separator: '至',
       start: '2026-09-01',
       end: '2026-09-14',
       invalidEnd: true,
@@ -237,6 +246,32 @@ describe('first-version renderer components', () => {
     expect(range).toContain('id="report-range-end"');
     expect(range).toContain('aria-label="报告日期范围"');
     expect(range).toContain('aria-invalid="true"');
+    expect(() => uiDateRangePicker({ id: 'missing-copy' })).toThrow(/localized labels/);
+
+    const checkboxField = uiField({
+      id: 'notify',
+      label: '发送通知',
+      control: { kind: 'checkbox', checked: true },
+    });
+    expect(checkboxField).toContain('type="checkbox"');
+    expect(checkboxField).toContain('aria-label="发送通知"');
+
+    const switchField = uiField({
+      id: 'auto-sync',
+      label: '自动同步',
+      control: { kind: 'switch', checked: true },
+    });
+    expect(switchField).toContain('id="auto-sync"');
+    expect(switchField).toContain('aria-labelledby="auto-sync-label"');
+
+    const rangeField = uiField({
+      id: 'active-range',
+      label: '有效日期',
+      required: true,
+      control: { kind: 'date-range', startLabel: '开始日期', endLabel: '结束日期', separator: '至' },
+    });
+    expect(rangeField).toContain('aria-labelledby="active-range-label"');
+    expect(rangeField.match(/ required/g)).toHaveLength(2);
   });
 
   it('lets a field drop the per-field requirement marker without losing required semantics', () => {

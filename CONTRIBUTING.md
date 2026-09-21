@@ -84,6 +84,7 @@ We use a **three-line branch model**:
 1. At least **1 approving review** from a designated reviewer (see CODEOWNERS / `@bonc-ai/reviewers`).
 2. Required checks pass: on `develop` that is the email-hygiene gate (`check-commit-emails`); on `cicd` it is the full `verify` + `verify-windows` + `compliance` pipeline.
 3. You cannot approve or merge your own pull request.
+4. **Before you click merge, enable "Keep my email addresses private"** (GitHub → Settings → Emails). ⚠️ A merge commit created by the web UI takes its **author email from the account that clicks merge** — not from the PR author. If that setting is off, a personal address is written into public history, and nobody can amend or rebase it away; it then blocks the `develop → cicd` sync and the release gate. This already happened once (merge commit `2f5a490e` / PR #288 blocked PR #312 and had to be recorded as a **temporary** allowlist exception in `.github/workflows/email-gate.yml` — temporary because that entry must be deleted once `cicd` contains the commit, otherwise it would keep allowing that account's webpage merges forever). Enabling the setting takes 10 seconds and prevents the whole class of problem.
 
 ### Commit messages
 
@@ -94,6 +95,8 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 ```
 
 Example: `fix(messaging): route wechat group messages correctly`.
+
+**Never write an email address into a commit message or trailer** — including one you are quoting from a CI log or discussing in the change itself. The email-hygiene gate scans the message body of every commit and only permits GitHub noreply addresses, `business@bonc.com.cn` and `support@github.com`; a quoted address fails the gate even when the author check passes. Describe the address instead of reproducing it.
 
 ## License
 

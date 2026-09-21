@@ -102,13 +102,18 @@ describe('conversation cross-task message reference UI', () => {
     expect(conversationSource).not.toContain('_referenceTargetAreaLabel(conv).toLowerCase().includes(needle)');
   });
 
-  it('keeps search inside the existing-task section and uses compact picker typography', () => {
+  it('keeps search inside the existing-task section and uses the shared modal shell', () => {
     const existingStart = conversationSource.indexOf('class="chat-reference-existing"');
     const searchStart = conversationSource.indexOf('class="chat-reference-target-search-wrap"');
     expect(existingStart).toBeGreaterThanOrEqual(0);
     expect(searchStart).toBeGreaterThan(existingStart);
     expect(styleSource).toContain('width: min(468px, calc(100vw - 40px));');
-    expect(styleSource).toContain('.chat-reference-target-header h2');
+    expect(conversationSource).toContain("overlay.className = 'ui-modal-overlay chat-reference-target-overlay'");
+    expect(conversationSource).toContain('class="ui-modal ui-modal--sm chat-reference-target-modal"');
+    expect(conversationSource).toContain('class="ui-modal__header chat-reference-target-header"');
+    expect(conversationSource).toContain('class="ui-modal__body chat-reference-target-body"');
+    expect(conversationSource).toContain("initialFocus: '#chat-reference-target-search'");
+    expect(styleSource).not.toContain('.chat-reference-target-header h2');
     expect(styleSource).toContain('font-size: 13px;');
     expect(styleSource).toContain('height: 38px;');
     expect(conversationSource).not.toContain('chat-reference-new-task-icon');
