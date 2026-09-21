@@ -87,7 +87,7 @@ describe('KSTAR learning evidence', () => {
       schemaVersion: 1, ownerId: 'user-a', id: 'asset-created-later', candidateId: candidate.id,
       title: 'Recoverable validation asset', statement: candidate.judgment, type: 'rule', scope: 'review',
       evidenceRefs: [{ kind: 'execution', id: 'episode-replay' }], reviewDecisionId: 'legacy-replay',
-      lifecycleStatus: 'system_precipitated_unverified', status: 'active', maturity: 'seed', version: '1',
+      lifecycleStatus: 'user_confirmed_unverified', status: 'active', maturity: 'seed', version: '1',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }, 'replay test asset');
 
@@ -139,7 +139,7 @@ describe('KSTAR learning evidence', () => {
       schemaVersion: 1, ownerId: 'user-a', id: 'asset-repeatability', candidateId: candidate.id,
       title: 'Repeatable review method', statement: candidate.judgment, type: 'rule', scope: 'review',
       evidenceRefs: [{ kind: 'execution', id: 'episode-repeatability' }], reviewDecisionId: 'legacy-untracked',
-      lifecycleStatus: 'system_precipitated_unverified', status: 'active', maturity: 'seed', version: '1',
+      lifecycleStatus: 'user_confirmed_unverified', status: 'active', maturity: 'seed', version: '1',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }, 'test validation asset');
 

@@ -351,12 +351,20 @@ describe('skills renderer frontmatter parsing', () => {
   });
 
   it('renders assets as tree-first integrated rows instead of nested cards', () => {
+    // 2026-09-21 五页签迁移:树是独立页;「我的认知」页只保留列表/目录与筛选,
+    // 资产以整行(数据驱动导航)呈现,不再回到嵌套卡片。
     const html = renderCognition(
       { name: 'overview' },
       { assets: [cognitionAsset(), cognitionAsset({ id: 'asset-template', type: 'template', title: 'Review template' })] },
     );
 
-    expect(html).toContain('ca-tree-card');
+    const treePage = renderCognition(
+      { name: 'tree' },
+      { assets: [cognitionAsset(), cognitionAsset({ id: 'asset-template', type: 'template', title: 'Review template' })] },
+    );
+    // 树页是整页画布（原型 .tree-stage），不再是列表页里的卡片。
+    expect(treePage).toContain('tree-stage');
+    expect(html).not.toContain('tree-stage');
     expect(html).toContain('data-act="filter-cat"');
     expect(html).toContain('data-go-asset="asset-rule"');
     expect(html).toContain('data-go-asset="asset-template"');
@@ -369,7 +377,7 @@ describe('skills renderer frontmatter parsing', () => {
       { candidates: [cognitionCandidate(), cognitionCandidate({ id: 'cand-second', judgment: 'Second candidate' })] },
     );
 
-    expect(html.match(/class="ca-card ca-candidate/g)).toHaveLength(2);
+    expect(html.match(/class="cand"/g)).toHaveLength(2);
     expect(html.match(/data-act="open-candidate"/g)).toHaveLength(2);
     expect(html).not.toContain('data-act="cand-adopt-with-form"');
     expect(html).not.toContain('data-act="cand-decide"');
@@ -386,13 +394,19 @@ describe('skills renderer frontmatter parsing', () => {
   });
 
   it('lets users view empty ability asset categories from the accounting cards', () => {
+    // 2026-09-21 五页签迁移:空分类的可达入口在两处——「我的认知」的筛选 chips
+    // 与「认知树」页的分类块(空分类标 is-empty,仍可点进列表)。
     const html = renderCognition({ name: 'overview' }, { assets: [] });
+    const treePage = renderCognition({ name: 'tree' }, { assets: [] });
 
     expect(html.match(/data-act="filter-cat"/g)?.length || 0).toBeGreaterThanOrEqual(4);
     for (const categoryId of ['personal', 'rule', 'template', 'skill_method']) {
       expect(html).toContain(`data-act="filter-cat" data-id="${categoryId}"`);
     }
-    expect(html.match(/is-empty/g)?.length || 0).toBeGreaterThanOrEqual(4);
+    // 空分类在树上照常出枝（计数 0，标签与光斑照画），不会消失——原型口径。
+    for (const categoryId of ['skill_method', 'fact', 'rule', 'template']) {
+      expect(treePage).toContain(`data-id="${categoryId}"`);
+    }
   });
 
   it('renders the selected ability asset detail instead of always using the first asset', () => {
@@ -406,8 +420,31 @@ describe('skills renderer frontmatter parsing', () => {
       },
     );
 
-    expect(html).toContain('<h3>Second Method</h3>');
+    expect(html).toContain('<h1>Second Method</h1>');
     expect(visibleText(html)).not.toContain('First Rule');
+  });
+
+  it('normalizes structured evidence refs and only marks longer audit histories as truncated', () => {
+    const html = renderCognition(
+      { name: 'overview', assetId: 'asset-rule' },
+      {
+        assets: [cognitionAsset({
+          evidenceRefs: [
+            { kind: 'kstar_episode', id: 'kse-episode-1' },
+            { kind: 'conversation', id: 'conversation-1' },
+          ],
+          audit: Array.from({ length: 12 }, (_, index) => ({
+            action: 'updated',
+            at: `2026-09-15T10:${String(index).padStart(2, '0')}:00.000Z`,
+          })),
+        })],
+      },
+    );
+
+    expect(visibleText(html)).toContain('kse-episode-1');
+    expect(visibleText(html)).toContain('conversation-1');
+    expect(visibleText(html)).not.toContain('[object Object]');
+    expect(visibleText(html)).not.toContain('仅显示最近 12 条');
   });
 
   it('filters the integrated asset list by the selected tree category', () => {

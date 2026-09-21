@@ -120,15 +120,22 @@ describe('personal ontology renderer integration', () => {
   });
 
   it('keeps the profile projection read-only and role-template editing on existing channels', () => {
-    expect(ontology).toContain("_pocInvoke('memory.list', { target: 'user' })");
-    expect(ontology).toContain("_pocInvoke('personalOntology.profile.syncRecall'");
+    // 2026-09-19 记忆退役：画像源 = 资产库 personal 资产（recall.assets.list），
+    // 旧的 USER.md 投影桥（profile.syncRecall）整体退役。
+    expect(ontology).toContain("_pocInvoke('recall.assets.list', {})");
+    expect(ontology).not.toContain("personalOntology.profile.syncRecall");
     expect(ontology).toContain("_pocInvoke('personalOntology.templates.list'");
     expect(ontology).toContain("_pocInvoke('personalOntology.templates.install'");
     expect(ontology).toContain("_pocInvoke('personalOntology.groups.read'");
     expect(ontology).toContain("_pocGroupAction('personalOntology.groups.write'");
     expect(ontology).toContain("_pocGroupAction('personalOntology.groups.fields.append'");
-    expect(ontology).not.toContain('personalOntology.candidates.');
-    expect(ontology).not.toContain("'personalOntology.groups.create'");
+    // 2026-09-20 本体分组迁入 + 回流确认首次暴露：groups.create（建组）与
+    // personalOntology.candidates.*（本体候选池确认端）成为本页正式通道。
+    // 旧约束（候选 UI 不得回本体页）随分组功能落地而过时——那条约束防的是
+    // 旧的 recall 候选审核 UI 复活，不是防回流确认。
+    expect(ontology).toContain("_pocInvoke('personalOntology.groups.create'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.candidates.confirm'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.conflicts.list'");
     expect(ontology).not.toContain("_pocInvoke('memory.add'");
     expect(ontology).not.toContain("_pocInvoke('memory.replace'");
     expect(ontology).not.toContain('renderDestinationPanel');
@@ -138,8 +145,7 @@ describe('personal ontology renderer integration', () => {
   it('shows the profile empty state and role-template library when no template is installed', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
-      if (channel === 'memory.list') return { ok: true, entries: [] };
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
+      if (channel === 'recall.assets.list') return { ok: true, assets: [] };
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
@@ -147,22 +153,33 @@ describe('personal ontology renderer integration', () => {
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
 
-    expect(elements.get('personal-onto-nav')?.innerHTML).toContain('个人画像');
-    expect(elements.get('personal-onto-nav')?.innerHTML).toContain('角色模板库');
+    const nav4 = elements.get('personal-onto-nav')?.innerHTML || '';
+    expect(nav4).toContain('词汇');
+    expect(nav4).toContain('事实');
+    expect(nav4).toContain('规则');
+    expect(nav4).toContain('导出记忆');
+    // 默认落在 A 盒（事实），画像空态在盒内呈现
     expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('完成会话沉淀后');
-    expect(elements.get('personal-onto-nav')?.innerHTML).not.toContain('候选');
-    expect(elements.get('personal-onto-nav')?.innerHTML).not.toContain('记忆分组');
+    expect(nav4).not.toContain('候选');
+    expect(nav4).not.toContain('记忆分组');
   });
 
-  it('shows conversation-extracted USER.md entries as the default personal profile', async () => {
+  it('shows personal assets from the library as the default personal profile', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') {
         return { ok: true, templates: [{ template_id: 'student', group_id: 'group-1', name: '学生', installed: true, sections: [] }] };
       }
-      if (channel === 'memory.list') {
-        return { ok: true, entries: ['用户是一名拥有 10 年经验的程序员。'] };
+      if (channel === 'recall.assets.list') {
+        return {
+          ok: true,
+          assets: [{
+            id: 'aa-1', type: 'personal', status: 'active',
+            lifecycleStatus: 'user_confirmed_unverified',
+            statement: '用户是一名拥有 10 年经验的程序员。',
+            updatedAt: new Date().toISOString(),
+          }],
+        };
       }
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
@@ -170,31 +187,34 @@ describe('personal ontology renderer integration', () => {
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
 
-    expect(invoke).toHaveBeenCalledWith('memory.list', { target: 'user' });
-    expect(elements.get('personal-onto-nav')?.innerHTML).toContain('个人画像');
-    // 右侧标题栏（个人画像/会话沉淀）已隐藏，不再显示标题文字
-    expect(elements.get('personal-onto-main-header')?.classList.contains('is-profile')).toBe(true);
-    expect(elements.get('personal-onto-main-header')?.innerHTML).not.toContain('个人画像');
-    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('用户是一名拥有 10 年经验的程序员。');
-    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('data-poc-ontology-section="identity"');
-    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('身份与角色');
-    expect(invoke).not.toHaveBeenCalledWith('personalOntology.groups.read', expect.anything());
+    expect(invoke).toHaveBeenCalledWith('recall.assets.list', {});
+    // 默认 A 盒：画像资产作为「会话沉淀」伪组呈现（六分节保留）
+    const body5 = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(body5).toContain('会话沉淀');
+    expect(body5).toContain('用户是一名拥有 10 年经验的程序员。');
+    expect(body5).toContain('data-poc-ontology-section="identity"');
+    expect(body5).toContain('身份与角色');
   });
 
   it('groups confirmed profile statements into a visible personal ontology without dropping unknown entries', async () => {
+    const statements = [
+      '我的工作方式是先明确目标和验收标准，再开始实现。',
+      '我偏好界面简洁、信息层次清晰，先给结论再展开细节。',
+      '周末会整理本周的重要发现。',
+    ];
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
-      if (channel === 'memory.list') {
+      if (channel === 'recall.assets.list') {
         return {
           ok: true,
-          entries: [
-            '我的工作方式是先明确目标和验收标准，再开始实现。',
-            '我偏好界面简洁、信息层次清晰，先给结论再展开细节。',
-            '周末会整理本周的重要发现。',
-          ],
+          assets: statements.map((statement, i) => ({
+            id: `aa-${i}`, type: 'personal', status: 'active',
+            lifecycleStatus: 'user_confirmed_unverified',
+            statement,
+            updatedAt: new Date().toISOString(),
+          })),
         };
       }
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
@@ -223,17 +243,21 @@ describe('personal ontology renderer integration', () => {
           }],
         };
       }
-      if (channel === 'memory.list') {
+      if (channel === 'recall.assets.list') {
         return {
           ok: true,
-          entries: ['我目前在读本科。', '我偏好先看结论，再看实现细节。'],
+          assets: ['我目前在读本科。', '我偏好先看结论，再看实现细节。'].map((statement, i) => ({
+            id: `aa-${i}`, type: 'personal', status: 'active',
+            lifecycleStatus: 'user_confirmed_unverified',
+            statement,
+            updatedAt: new Date().toISOString(),
+          })),
         };
       }
       if (channel === 'personalOntology.groups.read') {
         return { ok: true, content: '# 学习背景\n教育阶段: 我目前在读本科。' };
       }
       if (channel === 'projects.list') return { ok: true, projects: [] };
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
@@ -263,48 +287,66 @@ describe('personal ontology renderer integration', () => {
     expect(body).toContain('这些信息已确认，但暂未匹配到当前角色模板字段');
   });
 
-  it('reloads USER.md after a background Recall projection writes the profile', async () => {
-    let profileReads = 0;
+  it('does one library read per render and never wakes the retired profile-sync bridge', async () => {
+    let assetReads = 0;
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
-      if (channel === 'memory.list') {
-        profileReads += 1;
-        return profileReads === 1
-          ? { ok: true, entries: [] }
-          : { ok: true, entries: ['用户偏好先看结论，再看实现细节。'] };
-      }
-      if (channel === 'personalOntology.profile.syncRecall') {
-        return { ok: true, written: 0, profileWritten: 1, failed: [] };
+      if (channel === 'recall.assets.list') {
+        assetReads += 1;
+        return {
+          ok: true,
+          assets: [{
+            id: 'aa-1', type: 'personal', status: 'active',
+            lifecycleStatus: 'user_confirmed_unverified',
+            statement: '用户偏好先看结论，再看实现细节。',
+            updatedAt: new Date().toISOString(),
+          }],
+        };
       }
       return { ok: true };
     });
-    const { sandbox, elements } = loadPersonalOntology(invoke);
+    const { sandbox, elements, uiToast } = loadPersonalOntology(invoke);
 
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
 
-    expect(profileReads).toBe(2);
+    // 旧投影桥已退役。默认 A 盒：画像加载与盒数据加载各读一次资产库（语义独立）。
+    expect(assetReads).toBe(2);
+    expect(invoke).not.toHaveBeenCalledWith('personalOntology.profile.syncRecall', expect.anything());
+    expect(uiToast).not.toHaveBeenCalled();
     expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('用户偏好先看结论，再看实现细节。');
   });
 
-  it('keeps installed role templates available when profile memory cannot be read', async () => {
+  it('keeps role-template entries reachable from the vocabulary box when profile read fails', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') {
         return { ok: true, templates: [{ template_id: 'role-1', group_id: 'group-1', name: '默认角色', installed: true, sections: [] }] };
       }
-      if (channel === 'memory.list') return { ok: false, error: 'profile offline' };
+      if (channel === 'recall.assets.list') return { ok: false, error: 'profile offline' };
       if (channel === 'personalOntology.groups.read') return { ok: true, content: '# 默认角色' };
       if (channel === 'projects.list') return { ok: true, projects: [] };
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
+    // 模板行点击由 T 盒渲染——nav mock 需给 tbox 行；切 T 盒后模板可见可点。
+    const nav = elements.get('personal-onto-nav') as any;
+    const tboxRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'tbox' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    nav.querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [tboxRow] : [];
 
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
+    const clickT = tboxRow.listeners.get('click');
+    expect(clickT).toBeTypeOf('function');
+    await clickT({ stopPropagation() {} });
+    await settleBackgroundWork();
 
-    expect(invoke).toHaveBeenCalledWith('personalOntology.groups.read', { groupId: 'group-1' });
-    expect(elements.get('personal-onto-main-header')?.innerHTML).toContain('默认角色');
+    const body9 = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(body9).toContain('默认角色');
+    expect(body9).toContain('角色模板库');
   });
 
   it('shows a recoverable error instead of mistaking a template-list failure for an empty library', async () => {
@@ -322,15 +364,14 @@ describe('personal ontology renderer integration', () => {
     expect(elements.get('personal-onto-main-body')?.innerHTML).not.toContain('模板库为空');
   });
 
-  it('keeps the empty personal profile visible before installed role templates', async () => {
+  it('defaults to the facts box even with installed templates (no template auto-jump)', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') {
         return { ok: true, templates: [{ template_id: 'role-1', group_id: 'group-1', name: '默认角色', installed: true, sections: [] }] };
       }
-      if (channel === 'memory.list') return { ok: true, entries: [] };
+      if (channel === 'recall.assets.list') return { ok: true, assets: [] };
       if (channel === 'personalOntology.groups.read') return { ok: true, content: '# 默认角色' };
       if (channel === 'projects.list') return { ok: true, projects: [] };
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
@@ -338,9 +379,9 @@ describe('personal ontology renderer integration', () => {
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
 
-    expect(elements.get('personal-onto-nav')?.innerHTML).toContain('默认角色');
-    // 默认仍是画像视图（标题栏已隐藏），而不是跳到模板编辑器
-    expect(elements.get('personal-onto-main-header')?.classList.contains('is-profile')).toBe(true);
+    // 盒子化：默认落在 A 盒（事实）——画像空态在盒内，不自动跳模板编辑器
+    const nav11 = elements.get('personal-onto-nav')?.innerHTML || '';
+    expect(nav11).toContain('词汇');
     expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('完成会话沉淀后');
     expect(invoke).not.toHaveBeenCalledWith('personalOntology.groups.read', expect.anything());
   });
@@ -363,8 +404,29 @@ describe('personal ontology renderer integration', () => {
       return { ok: true };
     });
     const { sandbox, elements } = loadPersonalOntology(invoke);
+    const nav = elements.get('personal-onto-nav') as any;
+    const tboxRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'tbox' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    // 模板行在 T 盒 body 内渲染——mock 必须在渲染前就位（绑定时采集）
+    const tmplRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'template' : name === 'data-poc-id' ? 'group-1' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    nav.querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [tboxRow] : [];
+    (elements.get('personal-onto-main-body') as any).querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [tmplRow] : [];
 
     await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+    const clickT = tboxRow.listeners.get('click');
+    await clickT({ stopPropagation() {} });
+    await settleBackgroundWork();
+    const clickTmpl = tmplRow.listeners.get('click');
+    expect(clickTmpl).toBeTypeOf('function');
+    await clickTmpl({ stopPropagation() {} });
     await settleBackgroundWork();
     await settleBackgroundWork();
 
@@ -384,10 +446,129 @@ describe('personal ontology renderer integration', () => {
     expect(ontology).toContain("personalOntology.field_value_removed");
   });
 
-  it('shows one non-blocking warning for repeated profile-sync failures', async () => {
+  it('renders the rules box with filters, relation values and rule assets', async () => {
+    const invoke = vi.fn(async (channel: string, payload?: any) => {
+      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'recall.assets.list') {
+        return { ok: true, assets: [{ id: 'ra-1', type: 'rule', status: 'active', statement: '评审先讲产品模型再谈实现。', updatedAt: new Date().toISOString() }] };
+      }
+      if (channel === 'personalOntology.groups.list') {
+        return { ok: true, groups: [{ group_id: 'grp-t1', title: '总览验证组', rel_path: 'x.md', created_at: '', updated_at: '' }] };
+      }
+      if (channel === 'personalOntology.candidates.list') return { ok: true, candidates: [] };
+      if (channel === 'personalOntology.groups.fields.list' && payload && payload.groupId === 'grp-t1') {
+        return {
+          ok: true,
+          fields: [
+            { name: '工作流程', values: [{ value: '评审 → 先讲产品模型', source: '手动', ruleKind: 'operation' }] },
+          ],
+        };
+      }
+      if (channel === 'personalOntology.groups.read') return { ok: true, content: '' };
+      if (channel === 'personalOntology.conflicts.list') return { ok: true, conflicts: [] };
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+    const nav = elements.get('personal-onto-nav') as any;
+    const rboxRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'rbox' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    nav.querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [rboxRow] : [];
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+    const click = rboxRow.listeners.get('click');
+    await click({ stopPropagation() {} });
+    await settleBackgroundWork();
+
+    const body = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(body).toContain('规则');
+    expect(body).toContain('全部');
+    expect(body).toContain('操作规则');
+    expect(body).toContain('总览验证组'); // 组小节（值行极简，字段名不占行）
+    expect(body).toContain('评审 → 先讲产品模型');
+    expect(body).toContain('评审先讲产品模型再谈实现。'); // 规则资产合并
+  });
+  it('renders the facts box with terse value rows and expandable detail actions', async () => {
+    const invoke = vi.fn(async (channel: string, payload?: any) => {
+      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'recall.assets.list') return { ok: true, assets: [] };
+      if (channel === 'personalOntology.groups.list') {
+        return { ok: true, groups: [{ group_id: 'grp-9', title: '基本情况', rel_path: 'g.md', created_at: '', updated_at: '' }] };
+      }
+      if (channel === 'personalOntology.candidates.list') {
+        return { ok: true, candidates: [{ candidate_id: 'asset-backflow-aa-1', kind: 'preference', memory_scope: 'user', summary: '偏好表格旁附通俗说明', memory_text: '偏好表格旁附通俗说明。' }] };
+      }
+      if (channel === 'personalOntology.groups.fields.list' && payload && payload.groupId === 'grp-9') {
+        return {
+          ok: true,
+          fields: [
+            { name: '居住地', values: [{ value: '常住北京', source: '手动', verified: true }, { value: '常住上海', source: '智能', project: 'p1' }] },
+            { name: '就读状态', values: [{ value: '目前大四', source: '手动', asOf: '2025-01' }] },
+            { name: '工作流程', isRelation: true, values: [{ value: '评审 → 先讲产品模型', source: '手动' }] },
+          ],
+        };
+      }
+      if (channel === 'personalOntology.groups.read') {
+        return { ok: true, content: '# 基本情况\n\n## 字段区\n\n### 居住地\n\n- 常住北京 [手动]\n\n## 流水区\n\n§ 2026-09 追加了某条内容\n' };
+      }
+      if (channel === 'personalOntology.conflicts.list') {
+        return { ok: true, conflicts: [{ conflict_id: 'oc-x', group_id: 'grp-9', field: '居住地', value_a: '常住北京', value_b: '常住上海', detected_at: '', status: 'open' }] };
+      }
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    // 默认即 A 盒：组小节 + 极简值行（内容+来源，无 chip 糊脸）+ 状态点
+    const body = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(body).toContain('基本情况');
+    expect(body).toContain('居住地'); // 字段小节名
+    expect(body).toContain('常住北京');
+    expect(body).toContain('personal-onto-status-dot'); // 状态点在（矛盾红）
+    // 标记与操作不在默认渲染里（收进展开）
+    expect(body).not.toContain('与同字段另一条值矛盾');
+    expect(body).not.toContain('data-poc-group-op="remove-value"');
+    // 回流候选区与组选择按钮
+    expect(body).toContain('待确认回流');
+    expect(body).toContain('写入：基本情况');
+    // 关系值不在 A 盒（归 R 盒）
+    expect(body).not.toContain('评审 → 先讲产品模型');
+    // 流水区
+    expect(body).toContain('2026-09 追加了某条内容');
+
+    // 点击值行 → 展开详情：标记 chip + 操作按钮出现
+    const bodyEl = elements.get('personal-onto-main-body') as any;
+    const lineRow: any = {
+      getAttribute: (name: string) => name === 'data-poc-line-key' ? encodeURIComponent('grp-9\u0001居住地\u0001常住北京') : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) { this.listeners.set(event, handler); },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    bodyEl.querySelectorAll = (selector: string) => selector === '[data-poc-line-key]' ? [lineRow] : [];
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+    const clickLine = lineRow.listeners.get('click');
+    expect(clickLine).toBeTypeOf('function');
+    await clickLine({ stopPropagation() {} });
+    await settleBackgroundWork();
+    const expanded = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(expanded).toContain('有来源支持');
+    expect(expanded).toContain('data-poc-group-op="verify-value"');
+    expect(expanded).toContain('data-poc-group-op="remove-value"');
+  });
+
+
+  it('retires the legacy profile-sync bridge entirely: no calls, no warnings', async () => {
+    // 2026-09-19 记忆退役：画像投影桥（资产→USER.md 反向同步）整体移除。
+    // 无论它曾经怎么失败（rejected / partial write），界面都不再调用、不再告警。
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: false, error: 'temporarily unavailable' };
+      if (channel === 'recall.assets.list') return { ok: true, assets: [] };
+      if (channel === 'personalOntology.profile.syncRecall') throw new Error('transport failed');
       return { ok: true };
     });
     const { sandbox, uiToast } = loadPersonalOntology(invoke);
@@ -397,36 +578,7 @@ describe('personal ontology renderer integration', () => {
     await sandbox.window.refreshPersonalOntology();
     await settleBackgroundWork();
 
-    expect(uiToast).toHaveBeenCalledTimes(1);
-    expect(uiToast).toHaveBeenCalledWith('profile sync warning', { variant: 'warning' });
-  });
-
-  it('warns after a thrown profile-sync request', async () => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
-      if (channel === 'personalOntology.profile.syncRecall') throw new Error('transport failed');
-      return { ok: true };
-    });
-    const { sandbox, uiToast } = loadPersonalOntology(invoke);
-
-    await sandbox.window.renderPersonalOntology();
-    await settleBackgroundWork();
-
-    expect(uiToast).toHaveBeenCalledWith('profile sync warning', { variant: 'warning' });
-  });
-
-  it('refreshes written profile data while warning about partial failures', async () => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
-      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 1, failed: [{ assetId: 'asset-2' }] };
-      return { ok: true };
-    });
-    const { sandbox, uiToast } = loadPersonalOntology(invoke);
-
-    await sandbox.window.renderPersonalOntology();
-    await settleBackgroundWork();
-
-    expect(uiToast).toHaveBeenCalledWith('profile sync warning', { variant: 'warning' });
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'personalOntology.templates.list')).toHaveLength(2);
+    expect(invoke).not.toHaveBeenCalledWith('personalOntology.profile.syncRecall', expect.anything());
+    expect(uiToast).not.toHaveBeenCalled();
   });
 });

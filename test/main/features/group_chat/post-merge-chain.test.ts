@@ -205,7 +205,7 @@ describe('post-merge full-chain scenario (Commander-centric KStar on merged tree
     // Lesson became the asset body; honest lifecycle (P0-2) survives the
     // merged normalization (develop renamed the enum, both values preserved).
     expect(asset.statement).toContain('N 字资料');
-    expect(['system_precipitated_unverified', 'automatically_extracted_unverified']).toContain(asset.lifecycleStatus);
+    expect(['user_confirmed_unverified', 'user_confirmed_unverified']).toContain(asset.lifecycleStatus);
     expect(asset.maturity).toBe('seed');
   });
 });

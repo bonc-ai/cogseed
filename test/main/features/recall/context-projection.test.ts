@@ -210,7 +210,26 @@ describe('RecallView and ContextProjection', () => {
     expect(preview.assetIds).not.toContain(scopeMismatch.asset.id);
   });
 
+  it('automatic full-text injection stays OFF by default (2026-09-22 反转)', async () => {
+    const { createAutomaticContextProjection } = await import('../../../../src/main/features/recall/context-projection');
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-baseline-off');
+    await createAutomaticAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-baseline-off',
+    });
+    const projection = await createAutomaticContextProjection('user-baseline-off', {
+      taskRunId: 'turn-baseline-off',
+      taskText: 'Audit OAuth login callback handling',
+    });
+    expect(projection).toBeUndefined();
+  });
+
   it('creates one confirmed automatic projection from only high-relevance active assets', async () => {
+    // 2026-09-22 起正文自动注入默认关闭；这两条锁定选择机制本身的测试显式
+    // 打开旧行为（COGSEED_RECALL_BASELINE_TOP>0），机制代码保留作回滚通道。
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const oauth = await createAutomaticAssetWith({
       judgment: 'Review OAuth callback and token exchange security.',
       summary: 'OAuth review workflow',
@@ -281,6 +300,7 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('space conversations auto-inject from the GLOBAL pool (资产池全局共享，含其它空间资产)', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const own = await createAutomaticAssetWith({
       judgment: 'Review OAuth callback and token exchange security in workspace-a.',
       summary: 'OAuth review workflow',
@@ -340,6 +360,8 @@ describe('RecallView and ContextProjection', () => {
       removeAssetIds: [first.asset.id, first.asset.id],
     });
     expect(revised.assetIds).toEqual([second.asset.id]);
+    expect(revised.modelSelectedAssetIds).toBeUndefined();
+    expect(revised.modelSelectionEvents).toBeUndefined();
 
     await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: ['../bad'] }))
       .rejects.toThrow(/invalid projection asset/i);
@@ -1081,5 +1103,167 @@ describe('committed projection knowledge boundary', () => {
     expect(preview.omittedRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ assetId: promoted.asset.id, reason: 'workspace_disabled' }),
     ]));
+  });
+});
+
+describe('模型自选投影的撤销（2026-09-18）', () => {
+  it('撤销幂等；不存在/非模型自选各给明确拒绝', async () => {
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-revoke01',
+      purpose: 'model_selected',
+      authorization: 'model_selected',
+      confirm: true,
+    });
+    expect(created.status).toBe('confirmed');
+
+    const first = await projection.revokeModelSelectedProjection('user-a', created.id);
+    expect(first.status).toBe('revoked');
+    // 幂等：重复撤销返回同一终态，不报错、不产生第二份状态。
+    const second = await projection.revokeModelSelectedProjection('user-a', created.id);
+    expect(second.status).toBe('revoked');
+
+    await expect(projection.revokeModelSelectedProjection('user-a', 'proj-doesnotexist01'))
+      .rejects.toThrow('not found');
+
+    const userOwned = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-revoke02',
+      purpose: 'conversation_reply',
+      authorization: 'user_confirmed',
+      confirm: true,
+    });
+    await expect(projection.revokeModelSelectedProjection('user-a', userOwned.id))
+      .rejects.toThrow('not model-selected');
+  });
+
+describe('撤销在时间线里可见（2026-09-18）', () => {
+  it('已撤销的模型自选投影产生"已撤销"事件，未撤销的仍是"已带入"', async () => {
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const timeline = await import('../../../../src/main/features/recall/timeline-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: '撤销可见性用例：这条资产要被挂上一次再撤销。',
+      summary: 'revoke-visibility',
+      suggestedType: 'rule',
+      suggestedScope: 'review,project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-revoke-vis' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true })).asset;
+
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-revoke-vis', purpose: 'model_selected', authorization: 'model_selected', confirm: true,
+    });
+    await projection.appendAssetsToModelSelectedProjection('user-a', created.id, [asset.id]);
+
+    const before = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    expect(before.some((item) => item.kind === 'projection_confirmed' && item.refs.projectionId === created.id)).toBe(true);
+
+    await projection.revokeModelSelectedProjection('user-a', created.id);
+    const after = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    const revokedEvent = after.find((item) => item.kind === 'projection_revoked' && item.refs.projectionId === created.id);
+    expect(revokedEvent).toBeTruthy();
+    expect(String(revokedEvent?.title || '')).toContain('revoked');
+  });
+});
+
+describe('注入体量对比（2026-09-18，可用高效）：模型自选的增量必须远小于整块上限', () => {
+  it('带一条会话投影时的提示词块，比不带多出的是"这几条资产的正文"，且整块仍 ≤ 14000', async () => {
+    const promptInjection = await import('../../../../src/main/features/recall/prompt-injection');
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+
+    // 造一条有正文体积的资产
+    const body = '性能类提问必须用真实日志做分层归因：先拆链路、再定位瓶颈、最后只给一个可优化项。'.repeat(8);
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: `${body}（体积对比用例）`,
+      summary: 'volume',
+      suggestedType: 'rule',
+      suggestedScope: 'review,project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-volume' }],
+    });
+    await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
+
+    const base = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-volume', taskRunId: 'turn-volume01', taskText: '做一次归因分析',
+    });
+    expect(base.promptBlock.length).toBeLessThanOrEqual(14000);
+
+    // 挂一条模型自选投影（含同一条资产）→ 提示词里的增量应≈该资产正文长度，且整块仍在上限内
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-volume01', conversationId: 'cid-volume', purpose: 'model_selected',
+      authorization: 'model_selected', confirm: true,
+    });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const [asset] = (await assets.listAbilityAssets('user-a')).filter((item) => item.status === 'active');
+    await projection.appendAssetsToModelSelectedProjection('user-a', created.id, [asset.id]);
+
+    // 注入侧的查找依据是**会话里的卡消息**（不只是投影记录）——真实链路里
+    // attach 工具会投卡；这里把卡消息补上，否则拿到的块恒为空。
+    const paths = await import('../../../../src/main/paths');
+    const storage = await import('../../../../src/main/storage');
+    const chatFile = path.join(paths.userChatsDir('user-a'), 'cid-volume.jsonl');
+    fs.mkdirSync(path.dirname(chatFile), { recursive: true });
+    await storage.appendJsonl(chatFile, {
+      id: 'msg-volume-card', ts: new Date().toISOString(), from: 'commander', to: ['user'],
+      text: 'Preload candidates', recall_projection_card: { projectionId: created.id },
+    });
+
+    const withAttachment = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-volume');
+    const delta = withAttachment.length;
+    // eslint-disable-next-line no-console
+    console.log(`[volume] 基线块=${base.promptBlock.length} 字符；带自选投影的块=${delta} 字符；整块上限=14000`);
+    expect(withAttachment).toContain(asset.title.slice(0, 10));
+    expect(delta).toBeLessThanOrEqual(14000);
+    expect(delta).toBeGreaterThan(0);
+    // 增量 = 这一条资产的正文（不是把整块重算一遍）：块长应明显小于"上限 − 基线"的余量。
+    expect(delta).toBeLessThan(base.promptBlock.length + 3000);
+  });
+});
+});
+
+
+
+describe('model-selected projection accounting', () => {
+  it('records only newly attached model assets and keeps repeated calls idempotent', async () => {
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const first = await createAssetWith({ judgment: 'Model-selected accounting rule one', summary: 'model-one', sourceId: 'exec-model-one' });
+    const second = await createAssetWith({ judgment: 'Model-selected accounting rule two', summary: 'model-two', sourceId: 'exec-model-two' });
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-model-base', purpose: 'model_selected', authorization: 'model_selected', confirm: true,
+    });
+
+    const attached = await projection.appendAssetsToModelSelectedProjection(
+      'user-a', created.id, [first.asset.id, second.asset.id], { taskRunId: 'turn-model-a' },
+    );
+    expect(attached.modelSelectedAssetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(attached.modelSelectionEvents).toHaveLength(1);
+    expect(attached.modelSelectionEvents?.[0]).toMatchObject({
+      taskRunId: 'turn-model-a',
+      assetIds: [first.asset.id, second.asset.id],
+      addedAssetIds: [first.asset.id, second.asset.id],
+    });
+
+    const repeated = await projection.appendAssetsToModelSelectedProjection(
+      'user-a', attached.id, [second.asset.id], { taskRunId: 'turn-model-b' },
+    );
+    expect(repeated.assetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(repeated.modelSelectedAssetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(repeated.modelSelectionEvents).toHaveLength(2);
+    expect(repeated.modelSelectionEvents?.[1]).toMatchObject({
+      taskRunId: 'turn-model-b',
+      assetIds: [second.asset.id],
+      addedAssetIds: [],
+    });
+
+    const { buildProjectionCard } = await import('../../../../src/main/features/recall/projection-card');
+    const card = await buildProjectionCard('user-a', repeated.id);
+    expect(card.modelSelectedAssetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(card.modelSelectedCount).toBe(2);
+    expect(card.totalAssetCount).toBe(2);
+
+    await projection.revokeModelSelectedProjection('user-a', repeated.id);
+    const revokedCard = await buildProjectionCard('user-a', repeated.id);
+    expect(revokedCard.status).toBe('revoked');
   });
 });

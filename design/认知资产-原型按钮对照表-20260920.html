@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>认知资产原型 · 按钮 × 真实能力对照表（2026-09-20）</title>
+<style>
+  :root{--g:#189a5c;--gt:#1c7d50;--gbg:#e9f5ee;--line:#e6e8e6;--ink:#1d1f1e;--ink2:#54595e;--ink3:#8a9098;--amber:#96690f;--abg:#fdf6e7;--alin:#f0dcb2;--red:#cf4a42;--rbg:#fdf0ef;--blue:#3b74c4;--bbg:#eef4fb;--paper:#fafaf9}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;background:var(--paper);color:var(--ink);font-size:13.5px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:34px 26px 90px}
+  h1{font-size:23px;letter-spacing:-.2px}
+  .sub{color:var(--ink3);font-size:13px;margin-top:6px}
+  h2{font-size:16px;margin:34px 0 10px;display:flex;align-items:center;gap:10px}
+  h2 .n{font-size:11.5px;font-weight:600;color:#fff;background:var(--g);border-radius:99px;padding:1px 9px}
+  h3{font-size:14px;margin:20px 0 8px;color:var(--ink2)}
+  .note{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 15px;font-size:12.5px;color:var(--ink2);margin:14px 0}
+  .note b{color:var(--ink)}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:12.5px}
+  th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+  th{background:#f4f6f4;font-size:12px;color:var(--ink2);font-weight:700;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.c{white-space:nowrap}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:#f2f4f2;border-radius:4px;padding:1px 5px}
+  .tag{display:inline-block;font-size:11px;font-weight:600;border-radius:4px;padding:1px 7px}
+  .tag.g{background:var(--gbg);color:var(--gt)} .tag.a{background:var(--abg);color:var(--amber)}
+  .tag.r{background:var(--rbg);color:var(--red)} .tag.b{background:var(--bbg);color:var(--blue)}
+  .tag.gr{background:#eef0ee;color:var(--ink2)}
+  .ok{color:var(--gt);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>认知资产界面原型 · 按钮 × 真实能力对照表</h1>
+  <div class="sub">2026-09-20 · 原型文件：design/认知资产-完整界面-可上线原型-v7-20260920.html · 验证方式：CDP 交互自测 78 项 ×2 遍 + 健壮性 15 项 ×2 遍 + 15 张截图逐张核验</div>
+
+  <div class="note">
+    <b>这张表干什么用的</b>：原型上每个能点的东西，都要在产品代码里找到对应的真实能力（IPC 通道 = 界面发给主程序的指令）。找到的→表 A；找不到的→删掉（表 B）；后端有但故意不做的→表 C；原型为演示做的简化→表 D。
+    <br><b>产品侧文件</b>：R1 <code>cognition-assets/core.js</code>（状态与写操作）· R2 <code>cognition-assets/views.js</code>（渲染）· R3 <code>cognition-assets/app.js</code>（事件）· R4 <code>personal-ontology.js</code> · R5 <code>memory.js</code> · IPC = <code>src/main/ipc/index.ts</code>
+  </div>
+
+  <h2><span class="n">A</span>每个按钮对到哪</h2>
+
+  <h3>A1 · 认知树（整页）</h3>
+  <table>
+    <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
+    <tr><td class="c">土壤条</td><td>跳「待我处理」</td><td><code>recall.sources.list</code> 2212 / <code>recall.captures.list</code> 2318 计数；树块 go-review R2:445-448</td><td>②</td></tr>
+    <tr><td class="c"><b>根部唯一光斑</b>（待确认 N 条）</td><td>右侧抽屉＝候选清单，按「等待你确认 / 来源已删除 / 已稍后处理」分组；再点一条进确认界面</td><td><code>recall.candidates.list</code> 2201 + 能力 DTO（<code>candidate-capabilities.ts:87-119</code>）；产品里树根是跳「待我处理」R2:450-454</td><td>②③</td></tr>
+    <tr><td class="c">树干牌「个人本体 · 关于我」</td><td>开「关于我」一条一句清单</td><td><code>personalOntology.groups.*</code> 3478-3654；产品 open-ontology R3:167</td><td>②③⑤</td></tr>
+    <tr><td class="c">三条枝（技能与方法 / 规则与偏好 / 模板与范例）</td><td>跳「我的认知」按该类筛选</td><td>filter-cat R3:98 + <code>recall.assets.list</code> 2551</td><td>②</td></tr>
+    <tr><td class="c">树冠「已验证 N」</td><td>跳「我的认知」列表</td><td>成熟度 <code>maturity ∈ {transfer_validated, effectiveness_validated}</code> R2:110-112 · stats.transferOk R1:159</td><td>⑤</td></tr>
+    <tr><td class="c">枝上资产光斑（大小=使用次数、绿环=已实证、蓝点=KSTAR、标签常显）</td><td>开资产详情抽屉</td><td>使用次数＝<code>usage_recorded</code> 计数 R2:995-1000 · 已实证＝成熟度章 R2:110-112 · KSTAR＝isKstarAsset R2:239-245</td><td>⑤</td></tr>
+    <tr><td class="c">图例 / 待确认徽章</td><td>说明颜色；徽章＝待确认条数（不含已稍后处理）</td><td><code>countsAsPending &amp;&amp; !isSnoozed</code> R1:157</td><td>③</td></tr>
+  </table>
+
+  <h3>A2 · 个人本体抽屉（树干点开）</h3>
+  <table>
+    <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
+    <tr><td class="c">每条的一句正文 + 来源小字（候选 / 手动 / 导入 / 智能）+ 字段名</td><td>—</td><td>值行＝值 + 来源 + 一个状态点 R4:876-903；来源词表固定四值 <code>FIELD_VALUE_SOURCES=['候选','手动','导入','智能']</code>（<code>personal_ontology_groups.ts:59</code>，非法值归一成「手动」）</td><td>②</td></tr>
+    <tr><td class="c">教它一件事 + 记住</td><td>含「→」存成规矩，其余存事实（来源落「手动」）</td><td><code>personalOntology.groups.fields.append</code> 3587 · R4:1133；规则值提示「已按规则保存（A → B）」</td><td>③</td></tr>
+    <tr><td class="c">「AI 想记住这条，可以吗？」好，记住 / 不要</td><td>写入该组 / 丢弃</td><td><code>candidates.confirm</code> 3550（写进指定组）/ <code>candidates.reject</code> 3558 · R4:1285-1316</td><td>②③</td></tr>
+    <tr><td class="c">冲突卡「这两条说法冲突了，留哪条？」就留选中的那条 / 都留着</td><td>删掉没被选的那条值 / 保留两条</td><td>冲突台账 <code>conflicts.list</code> 3539；消解＝<code>groups.fields.removeValue</code> 3636（台账自愈 <code>ontology-conflicts.ts:246-278</code>）</td><td>内部化（只浮一句人话）</td></tr>
+    <tr><td class="c">每条的「···」→ 改</td><td>就地改这条</td><td><code>groups.fields.setValue</code> 3593</td><td>③改</td></tr>
+    <tr><td class="c">「···」→ 仅自己可见</td><td>打/取消标记</td><td><code>groups.fields.sensitivity</code> 3628（<code>@restricted</code>：不再自动注入与世界模型）R4:1244-1247</td><td>⑤</td></tr>
+    <tr><td class="c">「···」→ 删除</td><td>删这条</td><td><code>groups.fields.removeValue</code> 3636</td><td>③删</td></tr>
+    <tr><td class="c">角色模板库（弹窗内：安装 / 卸载）</td><td>装、卸模板（上限 3）</td><td><code>templates.list</code> 3531 / <code>install</code> 3566 / <code>uninstall</code> 3577（数据归档保留）/ <code>hasArchive</code> 3570 · R4:475-589</td><td>—</td></tr>
+    <tr><td class="c">导出 / 导入</td><td>备份、恢复文件</td><td><code>MemoryTools.openExport/openImport</code> R5:958-964；产品入口 R4:781-782</td><td>—</td></tr>
+    <tr><td class="c">看这类资产 N 条</td><td>跳「我的认知」该类</td><td><code>recall.assets.list</code> 2551 + filter-cat</td><td>—</td></tr>
+  </table>
+
+  <h3>A3 · 我的认知</h3>
+  <table>
+    <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
+    <tr><td class="c">四格统计（生效中资产 / 待确认候选 / 已验证 / 需要关注）</td><td>—</td><td>stats.confirmed / pending / transferOk / attention R1:153-172</td><td>②</td></tr>
+    <tr><td class="c">目录视图 ⇄ 列表视图（目录行带「模型挂着」）</td><td>切换行形态</td><td>asset-view R3:101；目录行 R2:990-1008；「模型挂着」＝该会话里被模型真拉进投影的资产（<code>recall.projections.list</code> 的 model_selected，R1:322-343 + R2:1007）</td><td>④</td></tr>
+    <tr><td class="c">筛选 chip（全部 / 四类 / KSTAR / 已删除，带计数）</td><td>客户端筛选</td><td>filter-cat R3:98；KSTAR 档 R2:985 · 已删除档 R2:976-982</td><td>②</td></tr>
+    <tr><td class="c">家族分组 + 「改名」内联输入</td><td>批改族名（单条组并入「未归类」）</td><td><code>recall.families.rename</code> 2412 · R1:714-721；分组＝<code>same_family</code> 连通分量、≥2 成组 R2:890-927</td><td>②</td></tr>
+    <tr><td class="c">资产行（标题 + 类型·vN·最近使用 + KSTAR / 已实证 / 状态章）</td><td>开详情</td><td>状态章六态 R2:97-114；成熟度只显示「已实证」R2:110-112</td><td>②⑤</td></tr>
+    <tr><td class="c">详情：自动带入开关</td><td>暂停 / 恢复自动带入</td><td><code>recall.assets.pause</code> 2586 / <code>resume</code> 2587 · R1:651-654</td><td>⑧</td></tr>
+    <tr><td class="c">详情：用到当前对话</td><td>挂到当前会话，下一轮生效</td><td><code>recall.projections.attachToConversation</code> 2816 · R1:731-741</td><td>④</td></tr>
+    <tr><td class="c">详情：恢复（已删除时）</td><td>从保留期恢复</td><td><code>recall.assets.restore</code> 2596 · R2:827</td><td>⑧</td></tr>
+    <tr><td class="c">详情：编辑（标题 / 正文 / 适用范围 / 适用场景 / 禁用场景 / 谁能看见·Agent / 空间）</td><td>保存生成新版本；内容没变不提交</td><td><code>recall.assets.update</code> 2568 · R1:747-782（含 scopePolicy 可见范围；「内容一样不提交」R1:772-782）</td><td>③⑦</td></tr>
+    <tr><td class="c">版本：切回此版 / 基于此版修改</td><td>切在用指针（不产生新版本）</td><td><code>recall.assets.versions.select</code> 2605 · R1:678-679, 701-705</td><td>⑦</td></tr>
+    <tr><td class="c">版本：与在用版对比</td><td>就地展开差异（一致就说一致）</td><td>前端本地比快照 R2:635-655（recall 侧无 diff 通道）</td><td>⑦</td></tr>
+    <tr><td class="c">版本：与在用版合并为新版 / 删除此版本</td><td>生成新版本 / 真删该版本</td><td><code>recall.assets.update</code> R1:793-811（正文相同拒绝）· <code>versions.delete</code> 2611 R1:686-690</td><td>⑦</td></tr>
+    <tr><td class="c">版本：系统迁移空版本折叠 · 版本详情四项（适用范围/适用场景/禁用场景/怎么来的）</td><td>展开收起</td><td><code>versionSourceKind==='migration'</code> R2:742-745 · 快照字段 + 来源标签 R2:708-717, 613-629</td><td>②⑦</td></tr>
+    <tr><td class="c">使用记录：句子（被实际使用 / 被带入任务 / 挂载被你撤销 / 选用 vN 为在用版）</td><td>—</td><td><code>recall.timeline.list</code> 2899 事件族 R2:502-533</td><td>⑤</td></tr>
+    <tr><td class="c">使用记录：评价四档（有用 / 没用对 / 没差别 / 说不清）</td><td>写评价</td><td><code>recall.proofs.effectiveness.feedback</code> 2838（positive/rework/neutral/invalid）；只对「被实际使用」事件开放 R2:571-579</td><td>⑤</td></tr>
+    <tr><td class="c">更多操作：删除 / 撤回使用 / 彻底清除</td><td>三档不同销毁程度</td><td><code>assets.delete</code> 2594 / <code>revoke</code> 2588 / <code>purge</code> 2595 · R2:855-857</td><td>⑧</td></tr>
+    <tr><td class="c">与另一条合并（同类型、排除已归档/删除/清除/撤回，最多 8 条）</td><td>并入另一条，源归档</td><td><code>recall.assets.merge</code> 2619 · R2:867-876</td><td>⑦</td></tr>
+    <tr><td class="c">KSTAR 任务复盘（行可展开）</td><td>展开看「期望的结果 / 实际发生 / 结果 / 为什么」</td><td><code>kstar.episodes.list</code> 2768 / <code>recall.kstar.episode.read</code> 2640 · R2:1145-1171, 295-325</td><td>⑥</td></tr>
+  </table>
+
+  <h3>A4 · 待我处理</h3>
+  <table>
+    <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
+    <tr><td class="c">关注条「N 条来源记录需要处理」→ 处理 / 收起；行内 重试 / 恢复</td><td>按来源的可执行动作出按钮</td><td><code>recall.sources.list</code> 2212 + <code>retry</code> 2244 / <code>resume</code> 2237 · R2:1113-1140</td><td>⑧</td></tr>
+    <tr><td class="c">关注条「N 个整理任务需要重试」→ 处理</td><td>跳整理页</td><td><code>recall.captures.batchRetry</code> 2383 · R2:1202</td><td>⑧</td></tr>
+    <tr><td class="c">候选卡（标题 + 证据充足/来源已删/已稍后处理 + 分类 + 来源徽章四族 + 用途·范围·建议动作 + 证据行）</td><td>开详情</td><td><code>recall.candidates.list</code> 2201 + capabilities（<code>evidenceMostlyUnavailable</code> R2:167-182；已稍后处理＝isSnoozed R2:1089）；来源徽章四族（KSTAR 偏好 / KSTAR 复盘 / 对话中记 / 会话整理）R2:332-340</td><td>②（五要素）</td></tr>
+    <tr><td class="c">类型 chip（关于我 / 规则与偏好 / 模板与范例 / 技能与方法）</td><td>改类型，保存时提交</td><td><code>recall.candidates.update</code> 2474 · R3:78-89</td><td>③</td></tr>
+    <tr><td class="c">具体内容 / 作用范围（不填＝全局）/ 高级选项·摘要</td><td>保存时提交</td><td>update 的 judgment / suggestedScope / summary 2474；作用范围必填校验 R1:539-541</td><td>③</td></tr>
+    <tr><td class="c"><b>保存</b></td><td>生成 v1 并跳到该资产；提示「已保存，尚未验证后续效果。」</td><td><code>recall.candidates.promote</code> 2521 · R1:553；文案按 09-15 一条线流程口径修正（原「保存并使用」）</td><td>③</td></tr>
+    <tr><td class="c">稍后处理</td><td>静默回列表，条上打「已稍后处理」，不占待确认数</td><td><code>candidates.defer</code> 2487（静默口径 R1:632-640）</td><td>③</td></tr>
+    <tr><td class="c">不保存</td><td>移出候选池（提示「已拒绝」）</td><td><code>candidates.reject</code> 2498 · R1:516</td><td>③</td></tr>
+    <tr><td class="c">相似三选（先不动 / 存为新条目 / 更新到该条资产）</td><td>撞相似资产时问一句</td><td>错误码 <code>recall_candidate_similar_asset</code>（<code>candidate-capabilities.ts:365-367</code>）→ promote(forceCreateSimilar) 或 update(targetAssetId) R1:549-583</td><td>⑦</td></tr>
+    <tr><td class="c">KSTAR 候选：复盘依据块 + 证据 chip 点开「这次任务的经过」</td><td>就地展开</td><td>learningSignal/learningProvenance R2:343-363 · kse chip 就地展开 R2:213, 295-325</td><td>⑥</td></tr>
+    <tr><td class="c">处理记录（倒序，只显示已处理）</td><td>折叠</td><td>候选终态 R2:1217</td><td>—</td></tr>
+  </table>
+
+  <h3>A5 · 整理</h3>
+  <table>
+    <tr><th>原型元素</th><th>点了会怎样</th><th>产品真实能力</th><th>用户故事</th></tr>
+    <tr><td class="c">桶 chip（全部 / 需要我处理 / 进行中 / 已完成 / 无需沉淀）</td><td>客户端筛选</td><td>capture-filter R3:143；无需沉淀＝寒暄或最近一轮失败且无任务 R2:1440-1479</td><td>②</td></tr>
+    <tr><td class="c">重试失败（N）/ 立即整理（N）</td><td>批量按可执行行</td><td><code>captures.batchRetry</code> 2383 / <code>batchRunNow</code> 2387 · R1:867-868</td><td>—</td></tr>
+    <tr><td class="c">行：去确认 / 立即整理 / 重试 / 开始整理 / 查看 / 整理中（禁用）</td><td>按 actions 出按钮</td><td><code>runNow</code> 2378 / <code>retry</code> 2358 / <code>historicalAutoStart</code> 2401 · R2:1504-1513</td><td>②</td></tr>
+    <tr><td class="c">低价值行标题</td><td>打开会话</td><td>open-conversation R1:927-936</td><td>—</td></tr>
+    <tr><td class="c">详情：主按钮（去确认 / 立即整理 / 重试 / 查看资产）+ 暂停 + 打开会话 + 取消任务</td><td>按 actions 优先级</td><td><code>pause</code> 2363 / <code>resume</code> 2368 / <code>cancel</code> 2373；主按钮优先级 R2:386-405</td><td>⑧</td></tr>
+    <tr><td class="c">详情：整理结果（待确认条数 / 已沉淀资产 + 查看资产 / 空态＋筛选原因）</td><td>—</td><td>reviewSummary.pending · confirmedAssetReceipts · filterReason R2:1586-1640, 1767-1779</td><td>②⑤</td></tr>
+    <tr><td class="c">详情：对话上下文 · 五步进度（检查模型→整理会话→提取内容→整理结果→写入资产）</td><td>—</td><td><code>recall.captures.context</code> 2353 · 由 workflowStatus/displayStatus/actions 派生（<code>capture-service.ts:1099-1127</code>；文案 R2:1697-1705）</td><td>⑥</td></tr>
+    <tr><td class="c">详情：待确认内容内联三动作（保存 / 稍后处理 / 不保存）</td><td>就地确认</td><td>同 A4（R2:1730 复用候选表单）</td><td>③</td></tr>
+    <tr><td class="c">沉淀设置：夜间自动沉淀（开前弹额度确认）+ 开始时间 + 整理功能开关 + 候选怎么确认（自动采纳 / 先问我）</td><td>—</td><td><code>captures.settings.update</code> 2438：executionPolicy:'nightly' + nightlyStart / enabled / reviewPolicy:'auto'|'manual' · R3:119-142, 234-270</td><td>①④</td></tr>
+    <tr><td class="c">有任务在跑时的「每 4 秒自动刷新」提示</td><td>—</td><td>产品对进行中任务做 4 秒轮询 <code>app.js:348-365</code>（整理三模块重构设计「4s 轮询保留」）</td><td>—</td></tr>
+  </table>
+
+  <h2><span class="n">B</span>删掉的（产品没有对应能力，留着就是假按钮）</h2>
+  <table>
+    <tr><th>删掉的</th><th>为什么删</th></tr>
+    <tr><td class="c">顶部搜索框「搜索记住的内容…」</td><td>产品没有资产搜索：无 <code>recall.assets.search</code> 通道，<code>search.global</code> 也不覆盖资产；用户故事里也没有搜索</td></tr>
+    <tr><td class="c">底部「记忆 —— AI 自动记住对话中的信息」开关</td><td>「记忆」作为独立概念已退役（09-17 口径）；它的真实功能就是「沉淀设置 · 整理功能」，同一件事不做两个入口</td></tr>
+    <tr><td class="c">底部「导出」「导入」</td><td>位置错（产品在个人本体页）→ 移进个人本体抽屉，并去掉「记忆」字样</td></tr>
+    <tr><td class="c">树页右下「等你处理 N」卡 + 右上「查看 N 条待确认候选」</td><td>与根部那个光斑是同一件事，重复入口（用户 09-20：树上就是按钮）</td></tr>
+    <tr><td class="c">抽屉底部「历史」按钮</td><td>资产没有「历史快照」这个能力（快照历史属于本体分组），点了只能弹提示</td></tr>
+    <tr><td class="c">KSTAR 复盘区两个自造按钮（打开这次任务 / 从复盘再提炼一条候选）</td><td>产品 KSTAR 行只有「就地展开」，改进行为由 KSTAR 自动产候选，不需要按钮</td></tr>
+    <tr><td class="c">家族「命名」假按钮（原来只弹提示）</td><td>改成真改名 <code>recall.families.rename</code>；单条组不显示（产品口径：≥2 条才成族）</td></tr>
+    <tr><td class="c">「已删除」chip 假按钮（原来只弹「没有已删除的资产」）</td><td>改成真筛选（六态里的「已删除」+ 恢复），并且并入家族分组逻辑修好了「筛出来整片空白」</td></tr>
+    <tr><td class="c">候选详情「保存并使用」文案</td><td>与规则「保存≠使用授权」冲突（09-15 缺口核对点名）→ 改「保存」</td></tr>
+    <tr><td class="c">死代码：重复 <code>onQ</code>、重复 <code>spotSvg</code>、<code>candSetCat()</code>、<code>candChoice</code>、<code>about</code> 数组</td><td>合并残留；两个同名定义会让后写的悄悄覆盖前面的</td></tr>
+  </table>
+
+  <h2><span class="n">C</span>后端有、原型故意没做</h2>
+  <table>
+    <tr><th>能力</th><th>通道</th><th>为什么不在原型里</th></tr>
+    <tr><td class="c">批量确认候选</td><td><code>recall.candidates.promoteBatch</code> 2516</td><td>产品前端也没有入口；与用户故事③「每条只需要一个决定」相反</td></tr>
+    <tr><td class="c">资产归档按钮</td><td><code>recall.assets.archive</code> 2593</td><td>归档在产品里只由「并入这条」隐式产生，没有独立按钮</td></tr>
+    <tr><td class="c">资产回滚</td><td><code>recall.assets.rollback</code> 2597</td><td>与「切回此版」语义重叠（回滚＝用旧快照生成新版本）；前端用的是切指针</td></tr>
+    <tr><td class="c">跨作用域确认 / 系统治理建议</td><td><code>assets.crossScope</code> 2842 / <code>assets.recommend</code> 2589</td><td>治理概念，按 09-20 口径内部化，不暴露给用户</td></tr>
+    <tr><td class="c">来源移除（含影响预览）</td><td><code>sources.removeImpact/remove</code> 2258/2265</td><td>危险动作，产品前端也没接</td></tr>
+    <tr><td class="c">教学信号撤回 / KSTAR 失败与经验清单 / 单资产时间线 / 履历链</td><td><code>teaching.revoke</code> 等</td><td>属于会话侧与诊断侧的能力，不属于认知资产面板</td></tr>
+    <tr><td class="c">本体字段「核实两档 / 规则分类 / 组历史快照恢复」</td><td><code>fields.verify</code> 3601 / <code>cycleRuleKind</code> 3611 / <code>history.restore</code> 3622</td><td>治理概念（09-20：核实/分类/时间锚/矛盾/回流全部内部化，不做成界面概念）；能力不删，只是不露出来</td></tr>
+    <tr><td class="c">回流候选确认区（资产→本体回流）</td><td><code>personalOntology.candidates.list/confirm/reject</code> 3546-3558</td><td>回流是系统内部动作；原型里只保留「AI 想记住这条，可以吗？」这一句人话</td></tr>
+    <tr><td class="c">本体模板字段清单 / 画像同步 / 条目 @ 选择器</td><td><code>templates.fieldTargets</code> 3525 / <code>profile.syncRecall</code> 3534 / <code>entries.list</code> 3518</td><td>由别的界面（@ 选择器等）使用，本页不用</td></tr>
+  </table>
+
+  <h2><span class="n">D</span>原型简化处（照实标注，不是产品行为）</h2>
+  <table>
+    <tr><th>位置</th><th>原型怎么做的</th><th>产品实际</th></tr>
+    <tr><td class="c">「相似资产」判定</td><td>候选正文前 6 个字包含在已有资产正文里就算相似</td><td>语义查重：embedding 相似度 ≥0.85，L2 档 0.70-0.85 再加质量差 ≥0.10</td></tr>
+    <tr><td class="c">家族分组</td><td>按数据里的 <code>fam</code> 字段分组</td><td>按 <code>relations[].kind==='same_family'</code> 连通分量；族名来自 familyName，没有就用族内最长标题截断</td></tr>
+    <tr><td class="c">使用次数 / 最近使用</td><td>假数据字段 <code>uses</code> / <code>last</code></td><td>proofs 里 <code>usage_recorded</code> 计数与最大 occurredAt</td></tr>
+    <tr><td class="c">版本对比</td><td>两版正文串起来比较</td><td>前端比快照字段（标题/正文/适用范围/证据数量），语义字段（relations/applicableWhen）比不了</td></tr>
+    <tr><td class="c">树的光斑</td><td>按分类沿枝手工排布，每条内容一个光斑</td><td>产品里树是分类块 + 计数（逐条光斑是这一版原型提出的新形态）</td></tr>
+    <tr><td class="c">本体分组（身份 / 偏好 / 规矩 / 事实）</td><td>原型固定四组</td><td>组由 <code>groups.list</code> 返回，可自建、重命名、删</td></tr>
+    <tr><td class="c">五步进度条</td><td>按状态推出来的</td><td>后端由 workflowStatus / displayStatus / actions 派生，没有独立「步骤」字段</td></tr>
+    <tr><td class="c">整理页轮询提示</td><td>静态一行提示</td><td>产品是真轮询（4 秒一次，仅停在整理页且有进行中任务时）</td></tr>
+  </table>
+</div>
+</body>
+</html>
