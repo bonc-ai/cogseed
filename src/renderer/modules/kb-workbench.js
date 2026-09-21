@@ -2513,8 +2513,7 @@
    * 注意：**脑图/测验入口与解析无关**（真机反馈"为什么只在 AI 解析后才能打开"）——
    * 它们各自独立取库内 ready 文档生成（kb.mindmap / kb.quiz），所以这里直接可用，
    * 只有"库是空的"才禁用。解析只是同一张卡上的另一个入口。
-   */
-  function _resetAnalysisCard() {
+   */  function _resetAnalysisCard() {
     const card = document.getElementById('kb-wb-analysis-card');
     if (!card) return;
     card.innerHTML = `
@@ -2522,8 +2521,7 @@
         <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
         <span class="kb-wb-card-actions">
           ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-        </span>
+          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}        </span>
       </div>
       <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
       <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>`;
@@ -2620,7 +2618,7 @@
       });
   }
 
-  // AI 解析卡：操作组（展开/生成脑图/生成测验）归卡片标题行右侧；
+  // AI 解析卡：操作组（展开/生成脑图）归卡片标题行右侧；
   // 一句话总结 = 只读文本（左绿条，无输入框感）；降级态按钮置灰不可用。
   function _renderAnalysis(summary) {
     const card = document.getElementById('kb-wb-analysis-card');
@@ -2637,8 +2635,7 @@
     const actions = `<span class="kb-wb-card-actions">
       ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
       ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}
-    </span>`;
+      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}    </span>`;
 
     let html = `<div class="kb-wb-right-card-title">
       <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库${srcTag}<span class="kb-wb-card-src">（${docs.length} 个文档）</span></span>
@@ -2673,8 +2670,7 @@
     const degNote = document.getElementById('kb-qa-degraded-note');
     if (degNote && ok) degNote.hidden = true;
 
-    _bindAnalysisActions(card);
-    card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
+    _bindAnalysisActions(card);    card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
       const body = card.querySelector('#kb-wb-analysis-body');
       const btn = card.querySelector('#kb-wb-analysis-toggle');
       if (!body || !btn) return;
@@ -4737,7 +4733,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const body = document.createElement('div');
       body.className = 'kb-qa-msg-body';
       if (m.role === 'user') body.textContent = m.content || '';
-      else body.innerHTML = _decorateAnswerHtml(m.content || '');
+      else body.innerHTML = _decorateAnswerHtml(m.content || '', m.evidence);
       el.appendChild(body);
       prevAi = null;
       // 历史恢复：AI 回答重建引用 chips 与「生成脑图/重新生成脑图」按钮
@@ -4926,30 +4922,168 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     return row;
   }
 
-  // AI 回答正文 → “人读友好”HTML：
-  //  - 剔除行内 `path#chunk N` 溯源锚点（统一收敛到底部「资料来源」区，正文不再打断）
-  //  - 渲染 **加粗** 与 `行内代码`
-  //  - 空行分段；`-`/编号列表结构化
-  function _decorateAnswerHtml(text) {
-    let t = String(text || '');
-    t = t
-      .replace(/`[^`\n]+?#chunk\s*\d+`/g, '') // 反引号包裹的完整锚点
-      .replace(/[^\s，。；：、！？?（）()【】"'“”‘’]+?#chunk\s*\d+/g, ''); // 裸锚点
-    let html = _esc(t);
-    html = html.replace(/(^|[^`])`([^`\n]+)`/g, '$1<code>$2</code>'); // 行内代码
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'); // **加粗**
-    const blocks = html.split(/\n{2,}/);
-    return blocks.map((block) => {
-      const lines = block.split('\n');
-      const out = [];
-      for (const ln of lines) {
-        let m;
-        if ((m = ln.match(/^\s*[-*•]\s+(.*)$/))) out.push(`<div class="kb-a-li">${m[1] || ''}</div>`);
-        else if ((m = ln.match(/^\s*(\d+)[.、]\s+(.*)$/))) out.push(`<div class="kb-a-li is-num">${m[1]}. ${m[2] || ''}</div>`);
-        else if (ln.trim()) out.push(`<div class="kb-a-line">${ln}</div>`);
+  // ── 回答正文：行内引用 chip + 统一 Markdown 渲染 ────────────────────────
+  //
+  // 契约（2026-09 验收修订）：**正文里的引用要看得见、点得开**——模型标注的
+  // `path#chunk N` 还原成行内可点 chip（`来源：1 ↗`），点击直接打开原文并定位；
+  // 底部「资料来源」折叠区同时保留（机器/溯源用途）。
+  //
+  // 历史：#191 曾把行内引用整体删掉、只留底部折叠区，结果正文里既看不到引用、
+  // 又残留 `[来源：1]()` 空壳（URL 被掏空、点不动），验收单据此判为缺陷。
+  //
+  // 解析分三层——因为「路径」没有可靠边界（真实路径含中文与空格，如
+  // `external/feishu-wiki/SM 的交接.md`，而中文正文之间无词边界）：
+  //   • 语法自带边界的形态（markdown 链接 / 括号 / 反引号 / 【】）→ 整体识别；
+  //   • 裸锚点 → 只认 ASCII 路径集（中文正文因此天然不会被吞）；
+  //   • 中文与含空格路径交给证据索引（final 阶段拿得到 evidence）精确匹配。
+  //
+  // 解析不出来的锚点（模型自创、不在证据里）**不留 chip**——宁可删掉也不给
+  // 一个点开是"找不到"的死 chip。
+  const _CITE_LABEL = '(?:来源|引用|source)';
+  // 标签 + 括号包裹的锚点（全/半角、圆/方括号）
+  const _CITE_LABEL_PAREN_RE = new RegExp(
+    `${_CITE_LABEL}\\s*[：:]?\\s*\\d*\\s*[【\\[（(][^】\\]）)\\n]*#chunk\\s*\\d+[^】\\]）)\\n]*[】\\]）)]`, 'gi');
+  // 【…锚点…】
+  const _CITE_BRACKET_RE = /【[^】\n]*?#chunk\s*\d+[^】\n]*?】/g;
+  // markdown 链接/图片：[label](target)——语法有界；非引用链接原样交给渲染管线
+  const _CITE_LINK_RE = /!?\[([^\]\n]*)\]\(\s*([^)\n]*)\)/g;
+  // 反引号包裹的锚点（允许路径含空格）
+  const _CITE_TICK_RE = /`([^`\n]*?#chunk\s*\d+)`/g;
+  // 裸锚点：ASCII 路径集，不吞中文正文
+  const _CITE_BARE_RE = /([A-Za-z0-9][A-Za-z0-9._/-]*)#chunk\s*(\d+)/g;
+  // chip 占位符：markdown 不会改写 `⟦…⟧`，渲染后再换成真 chip HTML
+  const _citeToken = (i) => `⟦KBCITE:${i}⟧`;
+
+  /**
+   * 证据索引：锚点文本变体（全路径 + 文件名，口径对齐主进程 kb_qa.isAnchorCited）
+   * → 证据条目。长串优先，避免短串（文件名）先命中而留下路径尾巴。
+   */
+  function _citationVariants(evidence) {
+    const out = [];
+    for (const r of evidence || []) {
+      const p = String((r && r.path) || '');
+      if (!p) continue;
+      const base = p.slice(p.lastIndexOf('/') + 1);
+      for (const name of [p, base]) {
+        out.push([`${name}#chunk ${r.chunkIdx}`, r]);
+        out.push([`${name}#chunk${r.chunkIdx}`, r]);
       }
-      return out.length ? `<div class="kb-a-block">${out.join('')}</div>` : '';
-    }).join('');
+    }
+    out.sort((a, b) => b[0].length - a[0].length);
+    return out;
+  }
+
+  /** 行内引用 chip：可点 → 打开原文并定位该 chunk。 */
+  function _citeChipHtml(ref, label) {
+    const path = String(ref.path || '');
+    const chunkIdx = Number(ref.chunkIdx) || 0;
+    const text = String(label || '').trim() || path.slice(path.lastIndexOf('/') + 1);
+    const title = `${path}#chunk ${chunkIdx} — 打开原文`;
+    return '<button type="button" class="kb-qa-chip kb-qa-cite" data-kb-cite="1"'
+      + ` data-cite-path="${_esc(path)}" data-cite-chunk="${chunkIdx}"`
+      + ` data-cite-scope="${_esc(ref.scope || 'global')}"`
+      + ` data-cite-source="${_esc(ref.source || 'library')}"`
+      + (ref.spaceId ? ` data-cite-space="${_esc(ref.spaceId)}"` : '')
+      + ` title="${_esc(title)}">${_esc(text)} ↗</button>`;
+  }
+
+  /**
+   * 把正文里的引用锚点换成 chip 占位符。
+   * 返回 { text, chips }：text 交给 markdown 渲染，chips[i] 对应占位符 i。
+   * 只有在证据索引里命中的锚点才出 chip —— 模型自创路径、或流式阶段尚未拿到
+   * evidence 的，一律不留（宁可不显示，也不给点开是"找不到"的死 chip）。
+   */
+  function _chipifyCitationAnchors(text, evidence) {
+    const variants = _citationVariants(evidence); // [[anchorText, ref], …]，长串优先
+    const byAnchor = new Map();
+    for (const [anchor, ref] of variants) if (!byAnchor.has(anchor)) byAnchor.set(anchor, ref);
+
+    const chips = [];
+    const emit = (anchorText, label) => {
+      const ref = byAnchor.get(String(anchorText || '').trim());
+      if (!ref) return '';
+      const token = _citeToken(chips.length);
+      chips.push(_citeChipHtml(ref, label));
+      return token;
+    };
+    /** 从"标签+括号"或"【】"整段里取回锚点原文。 */
+    const anchorIn = (whole, excluded) => {
+      const m = new RegExp(`([^\\s${excluded}]*#chunk\\s*\\d+)`).exec(whole);
+      return m ? m[1] : '';
+    };
+
+    let t = String(text || '');
+    // ① 有界形态：标签+括号 / 【】 / markdown 链接 / 反引号
+    t = t.replace(_CITE_LABEL_PAREN_RE, (whole) => emit(anchorIn(whole, '【[（('), ''));
+    t = t.replace(_CITE_BRACKET_RE, (whole) => emit(anchorIn(whole, '【】'), ''));
+    t = t.replace(_CITE_LINK_RE, (whole, label, target) => {
+      if (/#chunk\s*\d+/.test(target)) return emit(target, label);
+      if (/#chunk\s*\d+/.test(label)) return emit(label, '');
+      return whole; // 非引用链接：保留，交给统一管线渲染成真链接
+    });
+    t = t.replace(_CITE_TICK_RE, (whole, anchor) => emit(anchor, ''));
+    // ② 证据精确串（中文 / 含空格路径）——必须早于裸锚点正则，否则会被从
+    //    `md#chunk N` 处截断，留下 `…SM 的交接.` 这类路径残尾。
+    //    先吃掉"整对括号只包着锚点"的形态（`（锚点）` / `【锚点】`），
+    //    否则 chip 会被一对空括号夹住、正文多出 `（）` 壳。
+    for (const [anchor] of variants) {
+      for (const [open, close] of [['（', '）'], ['(', ')'], ['【', '】'], ['[', ']']]) {
+        const wrapped = `${open}${anchor}${close}`;
+        if (t.includes(wrapped)) t = t.split(wrapped).join(emit(anchor, ''));
+      }
+      if (t.includes(anchor)) t = t.split(anchor).join(emit(anchor, ''));
+    }
+    // ③ 裸锚点兜底（ASCII）：证据命中出 chip，否则删除
+    t = t.replace(_CITE_BARE_RE, (whole) => emit(whole, ''));
+    // 空壳归一：引用标签已被换成 chip，这里只清残留的空括号/空方括号形态
+    t = t
+      .replace(/[（(]\s*[）)]/g, '')
+      .replace(/[【[]\s*(?:来源|引用|source)\s*[：:]?\s*\d*\s*[】\]]/gi, '')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]+(?=\n|$)/g, '')
+      .replace(/[ \t]+(?=[，。；：、！？）】])/g, '');
+    return { text: t, chips };
+  }
+
+  // AI 回答正文 → HTML：引用锚点还原成可点 chip，再交给渲染层统一 Markdown 管线
+  // （标题/列表/链接/表格/代码一次到位，末尾由 utils.js 的 sanitizeHtml 收口 XSS；
+  // DOMPurify 由 index.html 在 utils.js 之前加载）。用法与 chat-stream 一致。
+  function _decorateAnswerHtml(text, evidence) {
+    const { text: withTokens, chips } = _chipifyCitationAnchors(text, evidence);
+    let html = (typeof renderMarkdownFull === 'function')
+      ? renderMarkdownFull(withTokens)
+      // 理论不可达（index.html 先加载 utils.js）；保留纯文本兜底，避免正文空白
+      : _esc(withTokens);
+    // chip HTML 由 _citeChipHtml 构造（path/label 均经 _esc），且在 sanitize 之后
+    // 注入，所以此处绝不能引入任何未转义的模型文本。
+    for (let i = 0; i < chips.length; i++) html = html.split(_citeToken(i)).join(chips[i]);
+    return `<div class="markdown-body kb-a-md">${html}</div>`;
+  }
+
+  /**
+   * 正文行内引用 chip 的点击处置：事件委托挂在消息容器上（只挂一次）。
+   * 用委托而不是逐元素绑定——流式回答每个 delta 都会重写 innerHTML，
+   * 逐元素绑定会反复失效。
+   */
+  function _wireCitationChips() {
+    const box = document.getElementById('kb-qa-messages');
+    if (!box || box._kbCiteWired) return;
+    box._kbCiteWired = true;
+    box.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const el = target.closest('[data-kb-cite]');
+      if (!el) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _openAnchor({
+        source: el.dataset.citeSource || 'library',
+        scope: el.dataset.citeScope || 'global',
+        path: el.dataset.citePath || '',
+        chunkIdx: Number(el.dataset.citeChunk) || 0,
+        ...(el.dataset.citeSpace ? { spaceId: el.dataset.citeSpace } : {}),
+      });
+    });
   }
 
   function _ask(question) {
@@ -5043,19 +5177,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
+          // 流式期间证据尚未下发：先走常规消解，final 会用 evidence 白名单重渲染一遍
           streamBody.innerHTML = _decorateAnswerHtml(text);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'final') {
           ai.classList.remove('is-typing');
           text = ev.text || text;
-          streamBody.innerHTML = _decorateAnswerHtml(text);
+          streamBody.innerHTML = _decorateAnswerHtml(text, ev.evidence);
           // 系统状态行（如“已读取知识库信息”）→ 浅灰小字置于回答顶部
           if (ev.sysNote) {
             streamBody.insertAdjacentHTML('afterbegin', `<div class="kb-qa-sysnote">${_esc(ev.sysNote)}</div>`);
           }
           // 复制用“可读正文”：渲染后已去掉 markdown 标记与行内溯源锚点
-          const readableText = streamBody.textContent || text;
-          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
+          const readableText = streamBody.textContent || text;          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
           if (ev.notFound) streamBody.classList.add('is-notfound');
           // 多轮上下文：回答入 history + 持久化当前会话（AI 回答额外存引用锚点，
           // 供“打开历史会话”时恢复引用 chips 与脑图按钮）
@@ -5063,12 +5197,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           _state.qaHistory.push(asstMsg);
           const evidence = Array.isArray(ev.evidence) ? ev.evidence : [];
           if (evidence.length) {
-            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项）
+            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项；
+            // spaceId 不能省——共享库引用缺它会在跳转时报"缺少空间信息"）
             asstMsg.evidence = evidence.slice(0, 12).map((r) => ({
               source: r.source || 'library',
               scope: r.scope || 'global',
               path: r.path,
               chunkIdx: r.chunkIdx,
+              ...(r.spaceId ? { spaceId: r.spaceId } : {}),
             }));
             streamBody.appendChild(_qaRefsElement(asstMsg.evidence));
           }
@@ -5355,8 +5491,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
                 <span class="kb-wb-card-actions">
                   ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-                </span>
+                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}                </span>
               </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
               <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>
@@ -5740,6 +5875,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       });
     }
     document.getElementById('kb-qa-send')?.addEventListener('click', () => _submitQa());
+    _wireCitationChips();
     document.getElementById('kb-qa-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -7554,6 +7690,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return Promise.resolve(false);
     if (!_isRichPreview(anchor.path)) return Promise.resolve(false);
     return Promise.resolve(_openRichForAnchor(anchor)).then((opened) => opened !== false, () => false);
+  };
+
+  // 回答正文渲染纯函数（供回归测试锁定引用 chip / 残片 / 标题渲染，A02 修复）
+  window.__kbAnswerUtils = {
+    chipifyCitationAnchors: _chipifyCitationAnchors,
+    citationVariants: _citationVariants,
+    citeChipHtml: _citeChipHtml,
+    decorateAnswerHtml: _decorateAnswerHtml,
   };
 
   // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：
