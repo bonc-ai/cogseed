@@ -6,6 +6,7 @@
   const BUTTON_ROLES = new Set(['primary', 'secondary', 'danger', 'ghost']);
   const BUTTON_SIZES = new Set(['md', 'sm', 'lg']);
   const ICON_VARIANTS = new Set(['plain', 'danger']);
+  const ICON_SIZES = new Set(['md', 'sm', 'lg']);
 
   function escapeText(value) {
     return String(value == null ? '' : value)
@@ -72,9 +73,11 @@
     if (!icon) throw new TypeError('uiIconButton requires an icon name from icons.js');
 
     const variant = ICON_VARIANTS.has(value.variant) ? value.variant : 'plain';
+    const size = ICON_SIZES.has(value.size) ? value.size : 'md';
     const disabled = Boolean(value.disabled);
     const classes = [
       'ui-icon-button',
+      `ui-icon-button--${size}`,
       variant === 'danger' ? 'ui-icon-button--danger' : '',
       disabled ? 'is-disabled' : '',
       value.className || '',
