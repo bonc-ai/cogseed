@@ -914,9 +914,9 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _selectQaModel('),
     );
 
-    expect(answerActions).toContain("_uiButton({\n      label: `资料来源 · ${n}`");
+    expect(answerActions).toContain("_uiButton({\n      label: _tr('kb.workbench.qa_sources', '资料来源 · {count}', { count: n })");
     expect(answerActions).toContain("_uiButton({\n        label: `${r.path}#chunk ${r.chunkIdx}`");
-    expect(answerActions).toContain("_uiIconButton({\n        label: '复制引用路径',\n        icon: 'copy'");
+    expect(answerActions).toContain("_uiIconButton({\n        label: _tr('kb.workbench.qa_copy_ref_path', '复制引用路径'),\n        icon: 'copy'");
     expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
@@ -1427,7 +1427,7 @@ describe('KB mindmap centering', () => {
 
   it('更多菜单提供「窗口居中」，一键把窗口拉回正中', () => {
     const src = source();
-    expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
+    expect(src).toContain("{ k: 'center-window', label: _tr('kb.workbench.mm_center_window', '窗口居中')");
     expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
   });
 });
