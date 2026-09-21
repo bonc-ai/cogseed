@@ -420,6 +420,18 @@ describe('memory › formatForSystemPrompt', () => {
     const block = mem.formatForSystemPrompt('u1');
     expect(block).toContain('先查证再下结论');
   });
+
+  it('W1 回归（2026-09-21 审查）：资产画像模式下 live role_template 条目仍渲染', async () => {
+    const mem = await loadMemory();
+    mem.addRoleTemplateMemoryEntry('u1', 'memory', 'student', '模板画像：讲白话');
+    // profileFromAssets=true：USER/MEMORY.md 的 user/shared 两节改由资产库渲染，
+    // 文件整体不再被读取——修复前 live 里的模板画像随之静默消失（老用户
+    // 原地升级后装着的模板失效）。
+    const block = mem.formatForSystemPrompt('u1', undefined, undefined, undefined, undefined, ['资产画像条目']);
+    expect(block).toContain('资产画像条目');
+    expect(block).toContain('模板画像：讲白话');
+    expect(block).toContain('Role profiles (installed templates)');
+  });
 });
 
 // ── Security: injection scanning ────────────────────────────────

@@ -1062,17 +1062,39 @@ export function formatForSystemPrompt(
     }
   }
   const agentEntries = agentId ? loadAgentEntries(userId, agentId) : []; // this agent only
-  // 角色模板画像（2026-09-22 搬迁后）：从模板独立文件渲染（文件在=模板装着），
-  // 常驻可见——与此前从记忆文件 sources 过滤的行为对齐。
+  // 角色模板画像：独立文件（2026-09-22 搬迁后的主落点）+ 存量 live 记忆里
+  // 带 role_template 来源的条目。双源是必须的：老用户原地升级时装着的模板
+  // 画像还在 USER/MEMORY.md，而 profileFromAssets 模式下这两份文件不再被
+  // 读取——不收 live 条目，装着的模板画像会静默消失。文本去重、独立文件
+  // 优先（与卸载归档 collectRoleTemplateMemoryEntries 同口径）。
   let roleTemplateEntries: MemoryEntry[] = [];
+  const seenRoleTemplateText = new Set<string>();
   try {
     const templateDir = path.join(path.dirname(userMemoryFile(userId)), 'role-templates');
     if (fs.existsSync(templateDir)) {
       roleTemplateEntries = fs.readdirSync(templateDir)
         .filter((name) => name.endsWith('.md'))
-        .flatMap((name) => loadEntries(path.join(templateDir, name)));
+        .flatMap((name) => loadEntries(path.join(templateDir, name)))
+        .filter((entry) => {
+          if (seenRoleTemplateText.has(entry.text)) return false;
+          seenRoleTemplateText.add(entry.text);
+          return true;
+        });
     }
   } catch { /* 模板画像读不到不阻塞背景块 */ }
+  try {
+    const legacyRoleTemplate = [
+      ...loadMemoryRecords(userProfileFile(userId)),
+      ...loadMemoryRecords(userMemoryFile(userId)),
+    ]
+      .filter((record) => record.sources.some((source) => source.kind === 'role_template'))
+      .map(({ text }) => ({ text }));
+    for (const entry of legacyRoleTemplate) {
+      if (seenRoleTemplateText.has(entry.text)) continue;
+      seenRoleTemplateText.add(entry.text);
+      roleTemplateEntries.push(entry);
+    }
+  } catch { /* live 文件读不到不阻塞背景块 */ }
   if (userEntries.length === 0 && sharedEntries.length === 0 && spaceEntries.length === 0 && agentEntries.length === 0 && roleTemplateEntries.length === 0) return '';
 
   // Preamble: keep the non-space wording byte-identical to the legacy shape
