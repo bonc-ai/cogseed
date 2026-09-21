@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const requireCjs = createRequire(import.meta.url);
 
+// Resolve from THIS file, never `process.cwd()`: another suite sharing the worker may chdir, which
+// makes cwd-relative paths pass in isolation and fail only in a full run.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, '../../../..');
+
 /** Real tmeet v1.0.18 responses, captured from a live account and sanitized (trace_id stripped). */
 function fixture(name: string): any {
-  return JSON.parse(
-    fs.readFileSync(path.join(process.cwd(), 'test/main/features/connectors/fixtures', name), 'utf8'),
-  );
+  return JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', name), 'utf8'));
 }
 
 type Adapter = {
@@ -21,7 +25,7 @@ type Adapter = {
 };
 
 function loadAdapter(): Adapter {
-  const full = path.join(process.cwd(), 'bin', 'tencent-meeting-mcp-server.cjs');
+  const full = path.join(REPO_ROOT, 'bin', 'tencent-meeting-mcp-server.cjs');
   delete requireCjs.cache[full];
   current = requireCjs(full) as Adapter;
   return current;
