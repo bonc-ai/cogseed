@@ -29862,6 +29862,11 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-wb-icon-btn:hover { background: var(--kb-hover); color: var(--kb-text); }
 .kb-wb-icon-btn[hidden] { display: none; }
 .kb-wb-tree { flex: 1; overflow: auto; padding: 0 8px 12px; }
+.kb-library-tree > [role="treeitem"] { position: relative; margin-top: 6px; }
+.kb-library-tree > [role="treeitem"] > .kb-tree-group-label { padding-right: 32px; }
+.kb-library-tree > [role="treeitem"] > .kb-tree-plus { position: absolute; top: 4px; right: 4px; }
+.kb-library-tree .kb-tree-item { width: 100%; min-height: var(--control-height-sm); }
+.kb-library-tree .kb-tree-placeholder { width: 100%; text-align: left; cursor: default; }
 .kb-tree-group { margin-top: 6px; }
 .kb-tree-group-label { display: flex; align-items: center; gap: 4px; padding: 6px 8px; font-size: var(--font-size-2); color: var(--kb-text3); border-radius: 6px; }
 .kb-tree-group-label:hover { background: var(--kb-hover); color: var(--kb-text2); cursor: pointer; }
@@ -30713,7 +30718,7 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--kb-bg); }
 
 /* 脑图放大预览层（缩放/平移/双击重命名） */
-.kb-mm-overlay { position: fixed; inset: 0; z-index: var(--z-overlay); background: color-mix(in srgb, var(--color-overlay-ink) 55%, transparent); display: flex; align-items: center; justify-content: center; }
+.kb-mm-overlay { position: fixed; inset: 0; z-index: var(--z-modal); background: color-mix(in srgb, var(--color-overlay-ink) 55%, transparent); display: flex; align-items: center; justify-content: center; }
 .kb-mm-overlay[hidden] { display: none; }
 /* 脑图窗口：默认 78vw×80vh（可拖右下角调整，尺寸记忆在 localStorage） */
 .kb-mm-dlg {
