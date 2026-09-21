@@ -1,0 +1,18 @@
+{
+  "message": "success",
+  "data": {
+    "has_more": false,
+    "meeting_id": "",
+    "minute_id": "dhoOCaoRkbsAAAAAarCnEAAAAAAG9CDh",
+    "minutes": [
+      {
+        "created_at": "2026-09-20T17:13:19+08:00",
+        "minute_id": "dhoOCaoRkbsAAAAAarCnEAAAAAAG9CDh",
+        "overview": "",
+        "summary_points": "本次会议确立了将现有COC能力串联成完整用户故事链路的核心目标，旨在通过展示整体能力链路，为后续的用户宣传与业务推广奠定基础。 小结 1. 整体用户故事与能力串联规划 确立核心目标：需要从“用户故事”的视角出发，将现有的COC各项能力尽可能完整地展现出来。 构建完整链路：过程中需调用当前各个模块的能力，将其串成一个完整的整体链路，而非孤立展示单点功能。 明确应用场景：该整体链路的形成旨在为用户宣传提供素材，并服务于未来的市场推广工作，以提升推广效果。",
+        "todos": []
+      }
+    ],
+    "subject": "例会 - P3394 Scrum Team"
+  }
+}
