@@ -141,6 +141,14 @@
     return `<input class="form-input ui-control ui-input ${_esc(options.className || '')}" id="${_esc(options.id)}" type="${_esc(options.type || 'text')}"${options.value == null ? '' : ` value="${_esc(options.value)}"`}${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>`;
   }
 
+  // 复选框一律走共享 uiCheckbox（规范原文：不得手写原生 checkbox 元素）。
+  // 注意：这里**刻意不做本地降级模板**——降级就是把被禁止的裸 checkbox 标记再抄一份，
+  // 缺原语时直接抛错，让问题暴露而不是静默绕过。
+  function _uiCheckbox(options) {
+    if (typeof window.uiCheckbox !== 'function') throw new Error('knowledge base workbench requires uiCheckbox');
+    return window.uiCheckbox(options);
+  }
+
   function _uiTextarea(options) {
     if (typeof window.uiTextarea === 'function') return window.uiTextarea(options);
     const attrs = options.attrs || {};
@@ -5608,7 +5616,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
                 <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
               </button>
-              <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
+              ${_uiTextarea({ id: 'kb-qa-input', className: 'kb-qa-input', placeholder: '基于知识库提问', attrs: { rows: 1 } })}
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
                 ${_uiIconButton({ label: '上传附件', icon: 'paperclip', className: 'kb-qa-icon-btn', attrs: { id: 'kb-qa-attach' } })}
                 <div class="kb-qa-attach-tip" id="kb-qa-attach-tip" hidden>
