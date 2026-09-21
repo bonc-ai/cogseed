@@ -2162,3 +2162,77 @@ describe('KB 解析卡按钮接线（防"死按钮"）', () => {
     expect(unwired).toEqual([]);
   });
 });
+
+/**
+ * 真机事故（2026-09-21）：点「原文依据」后正文高亮的是**半句多**——摘录 31 字，
+ * 涂了 70 字窗口（被 `needleNorm.length * 2 + 8` 的估算长度放大），摘录末尾之后
+ * 的正文跟着变色，看起来像"引错了位置"。
+ * 排版类（HTML/Office 转出的正文）走的就是这条 `_fvHighlightContainer`，
+ * 所以它和 markdown 那条路径一起锁"涂出来的就是摘录本身"。
+ */
+describe('排版类原文依据高亮的落点口径（真机：高亮多涂半句）', () => {
+  /** 假 iframe 正文：一个文本节点 + 只记区间的 Range，返回被标记的原文片段。 */
+  function frameHost(text: string) {
+    const node: any = { nodeType: 3, nodeValue: text };
+    const marked: string[] = [];
+    let walked = false;
+    node.ownerDocument = {
+      createTreeWalker: () => ({
+        nextNode: () => {
+          if (walked) return null;
+          walked = true;
+          return node;
+        },
+      }),
+      createRange: () => {
+        const range: any = { start: 0, end: 0 };
+        range.setStart = (_n: any, start: number) => { range.start = start; };
+        range.setEnd = (_n: any, end: number) => { range.end = end; };
+        range.surroundContents = () => { marked.push(text.slice(range.start, range.end)); };
+        return range;
+      },
+      createElement: () => ({ className: '', scrollIntoView: () => {} }),
+    };
+    const container: any = {
+      nodeType: 1,
+      ownerDocument: node.ownerDocument,
+      childNodes: [node],
+      querySelectorAll: () => [],
+    };
+    return { container, marked };
+  }
+
+  it('rawSpan 把归一化区间反算成原始区间（与 markdown 路径同一口径）', () => {
+    const { windowMock } = loadScript();
+
+    expect(windowMock.__kbFvUtils.rawSpan('   abc  def   ', 1, 4)).toEqual({ start: 4, end: 8 });
+    expect(windowMock.__kbFvUtils.rawSpan('\n    前导空白后的正文', 0, 2)).toEqual({ start: 5, end: 7 });
+  });
+
+  it('31 字摘录只涂 31 字（旧实现会涂满 70 字窗口）', () => {
+    const { windowMock } = loadScript();
+    const quote = '这段原文依据摘录一共三十一个字，用来验证高亮落点是否准确无误。';
+    const { container, marked } = frameHost(`${quote}后面还有一整句本不该变色。`);
+
+    expect([...quote].length).toBe(31);
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('段落中间的摘录也只涂摘录本身（不清洗前后的正文）', () => {
+    const { windowMock } = loadScript();
+    const quote = '检索改写要先用词表兜住转写错词';
+    const { container, marked } = frameHost(`第三章 方案\n\n前置说明一句话。${quote}，再往下就是别的段落了。`);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('归一化后仍匹配不上时退到首个实词，只涂那个词（不猜长度）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameHost('正文里出现了一处改写计划，其余内容不动。');
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '改写计划（第 2 版）')).toBe(true);
+    expect(marked).toEqual(['改写计划']);
+  });
+});

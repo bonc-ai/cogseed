@@ -385,26 +385,39 @@
   }
 
   /**
-   * 归一化后的下标 → 原文下标（空白被折叠成一个空格，两边要各自换算）。
-   * 找不到精确位置时给文档尾——只用于"近似窗口"，不追求逐字对齐。
+   * 归一化区间 → 原文区间（`[normStart, normEnd)` → `[start, end)`）。
+   *
+   * 归一化规则必须与 `mdNormSpace` 完全一致：空白折叠成一个空格 + 去掉首尾空白。
+   * 高亮落点必须用这个真实区间 —— 早先用 `needle.length * 2 + 8` 估算长度，
+   * 真机上表现为"高亮多涂半句"（31 字的摘录被涂了 68 字，后面正文跟着变色）。
    */
-  function mdApproxRawStart(raw, normIndex) {
+  function mdRawSpan(raw, normStart, normEnd) {
+    const text = String(raw == null ? '' : raw);
+    const lead = (text.match(/^\s*/) || [''])[0].length;
+    const trail = (text.match(/\s*$/) || [''])[0].length;
+    const stop = Math.max(lead, text.length - trail);
     let position = 0;
     let inWhitespace = false;
-    for (let i = 0; i < raw.length; i++) {
-      if (/\s/.test(raw[i])) {
-        if (!inWhitespace) {
-          if (position === normIndex) return i;
-          position++;
-          inWhitespace = true;
-        }
-      } else {
-        inWhitespace = false;
-        if (position === normIndex) return i;
-        position++;
-      }
+    let start = -1;
+    for (let i = lead; i < stop; i++) {
+      const isWhitespace = /\s/.test(text[i]);
+      if (isWhitespace && inWhitespace) continue; // 空白连成一段只算一个位置
+      inWhitespace = isWhitespace;
+      if (start < 0 && position === normStart) start = i;
+      if (position === normEnd) return { start, end: i };
+      position++;
     }
-    return Math.max(0, raw.length - 1);
+    return { start, end: stop };
+  }
+
+  /**
+   * 归一化后的下标 → 原文下标（空白被折叠成一个空格，两边要各自换算）。
+   * 找不到精确位置时给文档尾——只用于"近似窗口"，不追求逐字对齐。
+   * 内部定位已改用 `mdRawSpan`（一次拿到起点与终点），这里保留单点口径。
+   */
+  function mdApproxRawStart(raw, normIndex) {
+    const span = mdRawSpan(raw, normIndex, normIndex + 1);
+    return span.start >= 0 ? span.start : Math.max(0, String(raw == null ? '' : raw).length - 1);
   }
 
   /** 正文里的可见文本节点（手写递归：不依赖 TreeWalker，测试沙箱也能跑）。 */
@@ -509,19 +522,26 @@
         const raw = String(node.nodeValue || '');
         if (!raw.trim()) continue;
         let rawStart = -1;
+        let rawLength = 0;
         const index = mdNormSpace(raw).indexOf(needle);
         if (index >= 0) {
-          rawStart = mdApproxRawStart(raw, index);
+          // 精确命中：按归一化区间反算原文区间，标记长度 = 真实匹配长度
+          const span = mdRawSpan(raw, index, index + needle.length);
+          if (span.start >= 0 && span.end > span.start) {
+            rawStart = span.start;
+            rawLength = span.end - span.start;
+          }
         } else {
-          // 空白/标点归一化后仍匹配不上时，退到首个"实词"命中
+          // 空白/标点归一化后仍匹配不上时，退到首个"实词"命中：只标这个词
           const word = (needle.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
           if (!word) continue;
           const at = raw.indexOf(word);
           if (at < 0) continue;
           rawStart = at;
+          rawLength = word.length;
         }
-        if (rawStart < 0) continue;
-        if (mdMarkRange(node, rawStart, needle.length * 2 + 8)) return true;
+        if (rawStart < 0 || rawLength <= 0) continue;
+        if (mdMarkRange(node, rawStart, rawLength)) return true;
       }
     }
     return mdBlockFallback(host, cleaned);
@@ -532,6 +552,7 @@
   root.__kbMdUtils = {
     isMarkdownPath,
     normSpace: mdNormSpace,
+    rawSpan: mdRawSpan,
     stripMarks: mdStripMarks,
     cleanQuote: mdCleanQuote,
     tokens: mdTokens,

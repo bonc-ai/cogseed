@@ -137,6 +137,13 @@ function loadViewer(opts: LoadOpts = {}) {
     body: { contains: vi.fn(() => true) },
     createTextNode: vi.fn((t: string) => ({ textContent: t })),
     createElement: vi.fn(() => makeElement()),
+    // 高亮落点会真开 Range：`mdMarkRange` 首先看环境有没有 createRange。
+    // 这里给一个假 Range（只记区间，不建 DOM），断言的是"涂了原文的哪一段"。
+    createRange: vi.fn(() => ({
+      setStart: vi.fn(),
+      setEnd: vi.fn(),
+      surroundContents: vi.fn(),
+    })),
   };
   /** 正文里真的插了几个 `<mark>`（橙色高亮）——"打开整篇不该自带高亮"用它断言。 */
   const markCount = () => (documentMock.createElement as any).mock.calls
@@ -726,5 +733,80 @@ describe('排版后引用定位的清洗口径（纯函数）', () => {
     };
 
     expect(u.highlight(host, '这里有一段摘录')).toBe(false);
+  });
+});
+
+/**
+ * 真机事故（2026-09-21）：点「原文依据」后正文里高亮的是**半句多**——摘录 31 字，
+ * 涂了 68 字，摘录末尾之后的正文跟着变色，用户以为"引的位置不对"。
+ * 根因：标记长度用的是 `needle.length * 2 + 8` 估算值，而不是真实匹配长度。
+ * 这里锁死"涂出来的就是摘录本身"。
+ */
+describe('原文依据高亮的落点口径（真机：高亮多涂半句）', () => {
+  const utils = (viewer: any) => viewer.windowMock.__kbMdUtils;
+
+  /** 用假文本节点跑真高亮分支，返回被 `<mark>` 包住的原文片段（涂错即暴露）。 */
+  function highlightedText(viewer: any, raw: string, quote: string): string | null {
+    let marked: string | null = null;
+    const node: any = {
+      nodeType: 3,
+      nodeValue: raw,
+      ownerDocument: {
+        createRange: () => {
+          const range: any = { start: 0, end: 0 };
+          range.setStart = (_node: any, start: number) => { range.start = start; };
+          range.setEnd = (_node: any, end: number) => { range.end = end; };
+          range.surroundContents = () => { marked = raw.slice(range.start, range.end); };
+          return range;
+        },
+      },
+    };
+    const host: any = { childNodes: [node], querySelectorAll: () => [] };
+
+    utils(viewer).highlight(host, quote);
+    return marked;
+  }
+
+  it('rawSpan 把归一化区间反算成原文区间（首尾空白跳过、空白连成一段只算一个位置）', () => {
+    const u = utils(loadViewer());
+
+    expect(u.rawSpan('   abc  def   ', 1, 4)).toEqual({ start: 4, end: 8 });
+    // 摘录落在段首：下标 0 要落在第一个非空白字符上，不能从行首空白起涂
+    expect(u.rawSpan('\n    前导空白后的正文', 0, 2)).toEqual({ start: 5, end: 7 });
+  });
+
+  it('31 字摘录只涂 31 字，不再向外多涂半句', () => {
+    const viewer = loadViewer();
+    const quote = '这段原文依据摘录一共三十一个字，用来验证高亮落点是否准确无误。';
+    const raw = `${quote}后面还有一整句本不该变色。`;
+
+    expect([...quote].length).toBe(31); // 夹具自检：与真机那 31 字摘录同量级
+    const marked = highlightedText(viewer, raw, quote);
+
+    expect(marked).toBe(quote);
+    expect(marked).not.toContain('后面还有一整句');
+  });
+
+  it('段中摘录（前面有正文）也只涂摘录本身', () => {
+    const viewer = loadViewer();
+    const quote = '检索改写要先用词表兜住转写错词';
+    const raw = `第三章 方案\n\n前置说明一句话。${quote}，再往下就是别的段落了。`;
+
+    expect(highlightedText(viewer, raw, quote)).toBe(quote);
+  });
+
+  it('归一化后才匹配上时（多空白/换行）仍按归一化区间反算真实区间', () => {
+    const viewer = loadViewer();
+    const raw = '开头   中间    结尾';
+    const marked = highlightedText(viewer, raw, '开头 中间    结尾');
+
+    expect(marked).toBe(raw); // 摘录覆盖整段 → 涂的就是整段（含段内空白）
+  });
+
+  it('归一化后仍匹配不上时退到首个实词，只涂那个词（不猜长度）', () => {
+    const viewer = loadViewer();
+    const raw = '正文里出现了一处改写计划，其余内容不动。';
+
+    expect(highlightedText(viewer, raw, '改写计划（第 2 版）')).toBe('改写计划');
   });
 });

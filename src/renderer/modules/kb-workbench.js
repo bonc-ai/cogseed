@@ -2021,21 +2021,32 @@
     try { range.surroundContents(mark); } catch (_) { return null; }
     return mark;
   }
-  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
-  function _fvApproxRawStart(raw, normIdx) {
+  // 归一化区间 → 原始文本区间（空白折叠为单个空格）。与 `_fvNormSpace` 口径一致：
+  // 折叠空白 + 去掉首尾空白，因此下标换算要跳过首尾空白、空白连成一段只算一个位置。
+  // 高亮落点必须用真实区间——早先用 `needleNorm.length * 2 + 8` 估算长度，真机上
+  // 表现为"高亮多涂半句"（摘录末尾之后的正文跟着变色）。
+  function _fvRawSpan(raw, normStart, normEnd) {
+    const text = String(raw == null ? '' : raw);
+    const lead = (text.match(/^\s*/) || [''])[0].length;
+    const trail = (text.match(/\s*$/) || [''])[0].length;
+    const stop = Math.max(lead, text.length - trail);
     let p = 0;
     let inWS = false;
-    for (let i = 0; i < raw.length; i++) {
-      const ws = /\s/.test(raw[i]);
-      if (ws) {
-        if (!inWS) { if (p === normIdx) return i; p++; inWS = true; }
-      } else {
-        inWS = false;
-        if (p === normIdx) return i;
-        p++;
-      }
+    let start = -1;
+    for (let i = lead; i < stop; i++) {
+      const ws = /\s/.test(text[i]);
+      if (ws && inWS) continue;
+      inWS = ws;
+      if (start < 0 && p === normStart) start = i;
+      if (p === normEnd) return { start, end: i };
+      p++;
     }
-    return Math.max(0, raw.length - 1);
+    return { start, end: stop };
+  }
+  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
+  function _fvApproxRawStart(raw, normIdx) {
+    const span = _fvRawSpan(raw, normIdx, normIdx + 1);
+    return span.start >= 0 ? span.start : Math.max(0, String(raw == null ? '' : raw).length - 1);
   }
   // 去掉行首 md 标记（标题/引用/无序与有序列表编号），便于与渲染后 DOM 比对
   function _fvStripMdMarks(s) {
@@ -2080,17 +2091,24 @@
         const rawNorm = _fvNormSpace(raw);
         const idx = rawNorm.indexOf(needleNorm);
         let rawStart = -1;
+        let rawLen = 0;
         if (idx >= 0) {
-          rawStart = _fvApproxRawStart(raw, idx);
+          // 精确命中：按归一化区间反算原始区间，标记长度 = 真实匹配长度
+          const span = _fvRawSpan(raw, idx, idx + needleNorm.length);
+          if (span.start >= 0 && span.end > span.start) {
+            rawStart = span.start;
+            rawLen = span.end - span.start;
+          }
         } else {
           const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
           if (!word) continue;
           const w = raw.indexOf(word);
           if (w < 0) continue;
           rawStart = w;
+          rawLen = word.length;
         }
-        if (rawStart < 0) continue;
-        const mark = _fvWrapRaw(node, rawStart, Math.min(needleNorm.length * 2 + 8, 200));
+        if (rawStart < 0 || rawLen <= 0) continue;
+        const mark = _fvWrapRaw(node, rawStart, rawLen);
         if (mark) {
           try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
           return true;
@@ -7780,6 +7798,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     stripMdMarks: _fvStripMdMarks,
     cleanQuote: _fvCleanQuote,
     normSpace: _fvNormSpace,
+    rawSpan: _fvRawSpan,
+    highlightContainer: _fvHighlightContainer,
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
     pdfSrcAt: _fvPdfSrcAt,
