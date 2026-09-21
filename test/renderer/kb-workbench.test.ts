@@ -570,7 +570,7 @@ describe('KB workbench (S1 skeleton)', () => {
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
-    expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\('测验'\)/);
+    expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\(_tr\('kb\.workbench\.quiz_title', '测验'\)\)/);
     expect(src).toMatch(/const entry = \{ role: 'assistant', kind: 'quiz', \.\.\.payload, ts: Date\.now\(\) \};[\s\S]{0,200}_state\.qaHistory\.push\(entry\)/);
     // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
     expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);

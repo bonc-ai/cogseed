@@ -2730,13 +2730,13 @@
   function _mmDegradedHtml(reason, doc) {
     const texts = {
       empty: doc
-        ? '这份文档还没有解析好的要点，无法生成脑图（仅显示中心节点）。请等索引完成后再试。'
-        : '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。',
+        ? _tr('kb.workbench.mm_degraded_doc_unparsed', '这份文档还没有解析好的要点，无法生成脑图（仅显示中心节点）。请等索引完成后再试。')
+        : _tr('kb.workbench.mm_degraded_lib_empty', '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。'),
       'not-found': doc
-        ? '这份文档不在「当前知识库」的已索引列表里：可能还在索引中、刚被移动/改名，或者它属于另一个库（例如你在看共享库、文件却在个人库）。请切到它所在的库再试。'
-        : '指定的文档不在当前知识库的已索引列表里。',
-      timeout: '脑图生成超时：本地模型排队/推理超过 3 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。',
-      'model-failed': '脑图生成失败（模型暂不可用），已降级为仅中心节点。请稍后点击重试。',
+        ? _tr('kb.workbench.mm_degraded_doc_missing', '这份文档不在「当前知识库」的已索引列表里：可能还在索引中、刚被移动/改名，或者它属于另一个库（例如你在看共享库、文件却在个人库）。请切到它所在的库再试。')
+        : _tr('kb.workbench.mm_degraded_doc_missing_short', '指定的文档不在当前知识库的已索引列表里。'),
+      timeout: _tr('kb.workbench.mm_degraded_timeout', '脑图生成超时：本地模型排队/推理超过 3 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。'),
+      'model-failed': _tr('kb.workbench.mm_degraded_model_failed', '脑图生成失败（模型暂不可用），已降级为仅中心节点。请稍后点击重试。'),
     };
     const tip = texts[reason] || texts['model-failed'];
     const withRetry = reason !== 'empty' && reason !== 'not-found';
@@ -2807,7 +2807,7 @@
     const headLabel = m && m.label ? ' · ' + String(m.label).slice(0, 20) : '';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-mm-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' 脑图预览' + _esc(headLabel) + '</div>'
+    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' ' + _esc(_tr('kb.workbench.mm_title', '脑图预览')) + _esc(headLabel) + '</div>'
       + '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
     ai.appendChild(body);
     if (box) box.appendChild(ai);
@@ -2879,11 +2879,11 @@
     ai.className = 'kb-qa-msg is-ai';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-mm-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' 脑图预览'
-      + (docName ? `<span class="kb-mm-msg-scope">本文档：${_esc(docName)}</span>` : '')
+    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' ' + _esc(_tr('kb.workbench.mm_title', '脑图预览'))
+      + (docName ? `<span class="kb-mm-msg-scope">${_esc(_tr('kb.workbench.mm_scope_doc', '本文档：{name}', { name: docName }))}</span>` : '')
       + '</div>'
       + '<div class="kb-wb-mm-canvas" id="kb-wb-mm-canvas">'
-      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–90 秒，长文档最长约 3 分钟）…</div></div>';
+      + `<div class="kb-mm-loading">${_esc(_tr('kb.workbench.mm_generating', '正在生成多级脑图（本地模型推理中，约 30–90 秒，长文档最长约 3 分钟）…'))}</div></div>`;
     ai.appendChild(body);
     box.appendChild(ai);
     const canvas = body.querySelector('.kb-wb-mm-canvas');
@@ -2914,13 +2914,13 @@
         const scopeMismatch = Boolean(doc) && res.scope !== 'doc';
         if (scopeMismatch) {
           canvas.innerHTML = '<div class="kb-mm-fail">'
-            + '主进程没有按「本文档」作用域生成（返回作用域：' + _esc(res.scope || '未知') + '），已丢弃这次结果。'
-            + '<br>常见原因是应用主进程仍是旧代码（只刷新了界面，没重启进程）：请**完全退出 CogSeed 后重新启动**再试。'
+            + _esc(_tr('kb.workbench.mm_scope_mismatch', '主进程没有按「本文档」作用域生成（返回作用域：{scope}），已丢弃这次结果。', { scope: res.scope || _tr('kb.workbench.unknown', '未知') }))
+            + '<br>' + _esc(_tr('kb.workbench.mm_stale_process', '常见原因是应用主进程仍是旧代码（只刷新了界面，没重启进程）：请**完全退出 CogSeed 后重新启动**再试。'))
             + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
             + '</div>';
           // 标题行不能还挂着「本文档：xxx」——否则用户在错误提示上方仍看到"这是本文档的图"
           const scopeTag = body.querySelector('.kb-mm-msg-scope');
-          if (scopeTag) scopeTag.textContent = '作用域不匹配，已丢弃';
+          if (scopeTag) scopeTag.textContent = _tr('kb.workbench.mm_scope_discarded', '作用域不匹配，已丢弃');
           const retry = canvas.querySelector('.kb-mm-retry-btn');
           if (retry) retry.addEventListener('click', () => { ai.remove(); _genMindmap(doc); });
           return;
@@ -2940,7 +2940,7 @@
         // 本文档图"，不是比对字节）。
         if (doc && !_mmSameDoc(res.files, doc)) {
           canvas.innerHTML = '<div class="kb-mm-fail">'
-            + '主进程读取的文件与请求的不是同一份（请求：' + _esc(doc) + '；实际：' + _esc(Array.isArray(res.files) ? res.files.join('、') : '未知') + '），已丢弃这次结果。'
+            + _esc(_tr('kb.workbench.mm_file_mismatch', '主进程读取的文件与请求的不是同一份（请求：{asked}；实际：{actual}），已丢弃这次结果。', { asked: doc, actual: Array.isArray(res.files) ? res.files.join(_tr('kb.workbench.list_separator', '、')) : _tr('kb.workbench.unknown', '未知') }))
             + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
             + '</div>';
           const retry2 = canvas.querySelector('.kb-mm-retry-btn');
@@ -2960,7 +2960,7 @@
       })
       .catch(() => {
         _mmGenerating = false;
-        canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
+        canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_generate_failed', '脑图生成失败，请稍后重试'))}</div>`;
       });
     box.scrollTop = box.scrollHeight;
   }
@@ -2999,12 +2999,12 @@
 
   function _quizFailHtml(reason) {
     const texts = {
-      empty: '当前知识库还没有已解析的文档，无法出题。请先导入内容并等索引完成。',
-      timeout: '出题超时：本地模型排队/推理超过 2 分钟未返回。模型通道繁忙，请稍后重试。',
-      'model-failed': '出题失败（模型暂不可用），请稍后重试。',
-      unparsable: '模型返回的内容不是有效题目，请重试（或换个更聚焦的库）。',
+      empty: _tr('kb.workbench.quiz_fail_empty', '当前知识库还没有已解析的文档，无法出题。请先导入内容并等索引完成。'),
+      timeout: _tr('kb.workbench.quiz_fail_timeout', '出题超时：本地模型排队/推理超过 2 分钟未返回。模型通道繁忙，请稍后重试。'),
+      'model-failed': _tr('kb.workbench.quiz_fail_model', '出题失败（模型暂不可用），请稍后重试。'),
+      unparsable: _tr('kb.workbench.quiz_fail_unparsable', '模型返回的内容不是有效题目，请重试（或换个更聚焦的库）。'),
     };
-    const tip = texts[reason] || '测验生成失败，请稍后重试。';
+    const tip = texts[reason] || _tr('kb.workbench.quiz_generate_failed_dot', '测验生成失败，请稍后重试。');
     return '<div class="kb-mm-fail">' + tip
       + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-quiz-retry-btn' })
       + '</div>';
@@ -3041,7 +3041,7 @@
     const box = document.getElementById('kb-qa-messages');
     if (!box) return;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      if (typeof uiToast === 'function') uiToast('测验服务不可用', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.quiz_unavailable', '测验服务不可用'), { variant: 'warning' });
       return;
     }
     _quizGenerating = true;
@@ -3049,8 +3049,8 @@
     ai.className = 'kb-qa-msg is-ai';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-quiz-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' 测验</div>'
-      + '<div class="kb-quiz-canvas"><div class="kb-mm-loading">正在生成测验题（本地模型推理中，约 30–60 秒）…</div></div>';
+    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' ' + _esc(_tr('kb.workbench.quiz_title', '测验')) + '</div>'
+      + `<div class="kb-quiz-canvas"><div class="kb-mm-loading">${_esc(_tr('kb.workbench.quiz_generating', '正在生成测验题（本地模型推理中，约 30–60 秒）…'))}</div></div>`;
     ai.appendChild(body);
     box.appendChild(ai);
     box.scrollTop = box.scrollHeight;
@@ -3075,7 +3075,7 @@
         _quizGenerating = false;
         const questions = Array.isArray(res && res.questions) ? res.questions : [];
         if (!res || res.source === 'degraded' || !questions.length) {
-          const nb = replaceCard('<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' 测验</div>'
+          const nb = replaceCard('<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' ' + _esc(_tr('kb.workbench.quiz_title', '测验')) + '</div>'
             + '<div class="kb-quiz-canvas">' + _quizFailHtml(res && res.reason) + '</div>');
           nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
             nb.parentElement?.remove();
@@ -3095,15 +3095,15 @@
         const entry = { role: 'assistant', kind: 'quiz', ...payload, ts: Date.now() };
         _state.qaHistory.push(entry);
         if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
-        _qaSaveCurrentSession('测验');
+        _qaSaveCurrentSession(_tr('kb.workbench.quiz_title', '测验'));
         _bindQuizLauncher(nb, entry);
         // 生成完直接进入答题界面（NotebookLM 也是生成即答），卡片留在会话里可随时重开
         _openQuizPanel(entry);
       })
       .catch(() => {
         _quizGenerating = false;
-        const nb = replaceCard('<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' 测验</div>'
-          + '<div class="kb-quiz-canvas"><div class="kb-mm-fail">测验生成失败，请稍后重试</div></div>');
+        const nb = replaceCard('<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' ' + _esc(_tr('kb.workbench.quiz_title', '测验')) + '</div>'
+          + `<div class="kb-quiz-canvas"><div class="kb-mm-fail">${_esc(_tr('kb.workbench.quiz_generate_failed', '测验生成失败，请稍后重试'))}</div></div>`);
         nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
           nb.parentElement?.remove();
           _genQuiz();
@@ -3259,7 +3259,7 @@
           entry.sources = next.sources;
           entry.fingerprint = next.fingerprint;
           entry.ts = Date.now();
-          _qaSaveCurrentSession('测验');
+          _qaSaveCurrentSession(_tr('kb.workbench.quiz_title', '测验'));
           return next;
         }),
         onOpenSource: (path, anchor) => {
@@ -3326,7 +3326,7 @@
       })
       .catch(() => {
         btn.disabled = false;
-        canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
+        canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_generate_failed', '脑图生成失败，请稍后重试'))}</div>`;
       });
   }
 
@@ -3863,7 +3863,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     window.cogseed.invoke('kb.mindmap.load', { key })
       .then((r) => {
         if (!r || !r.ok || !r.root) {
-          if (typeof uiToast === 'function') uiToast('存档不存在或已损坏', { variant: 'warning' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_archive_missing', '存档不存在或已损坏'), { variant: 'warning' });
           return;
         }
         _state.lastMind = r.root;
@@ -3878,17 +3878,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           overlay.hidden = false;
           if (_mmController) _mmController.open(document.activeElement);
           const scopeLabel = key.startsWith('space:')
-            ? `共享空间 ${key.slice(6)}`
+            ? _tr('kb.workbench.mm_scope_space', '共享空间 {name}', { name: key.slice(6) })
             : isDocKey
-              ? `文档 ${String(key.slice(4).split('#')[0]).split('/').pop()}`
-              : `个人库 ${key.slice(4)}`;
-          titleEl.textContent = `脑图预览 - ${scopeLabel}（已保存）`;
+              ? _tr('kb.workbench.mm_scope_file', '文档 {name}', { name: String(key.slice(4).split('#')[0]).split('/').pop() })
+              : _tr('kb.workbench.mm_scope_lib', '个人库 {name}', { name: key.slice(4) });
+          titleEl.textContent = _tr('kb.workbench.mm_title_saved', '脑图预览 - {scope}（已保存）', { scope: scopeLabel });
         }
         _rerenderMindmaps();
         _mmFitToStage();
-        if (typeof uiToast === 'function') uiToast('已载入保存的脑图', { variant: 'success' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_loaded', '已载入保存的脑图'), { variant: 'success' });
       })
-      .catch(() => { if (typeof uiToast === 'function') uiToast('载入失败', { variant: 'warning' }); });
+      .catch(() => { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_load_failed', '载入失败'), { variant: 'warning' }); });
   }
 
   // 预览层内：节点点击=逐层展开/聚焦；徽章点击=折叠；双击节点重命名
