@@ -46,14 +46,21 @@ const legacyRawControlBaseline: Record<string, number> = {
   // uiButton 强制可见文字 label，表达不了纯状态控件——与 run-center 的
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
-  // kb-notes.js：24 → 21（2026-09-21，新建/保存/更多三个简单按钮已迁到 uiButton/uiIconButton）。
+  // kb-notes.js：裸控件 24 → **实测 19**（2026-09-21 集成彩排：新建/保存/更多三个简单按钮已迁到 uiButton/uiIconButton，其余为已登记的富内容/内容型/hidden input）。
   // 剩余 19 处裸控件 + 2 处动态控件的分类（见内部《B3 控件迁移分类》）：
   //   · 编辑器工具栏 data-cmd 按钮（富内容：kb-caret / kb-color-bar 子元素 + 命令委托）
   //     —— uiButton 只有 label+icon，无法表达该契约，需 owner 裁定豁免或补 seam；
   //   · 库选择器条目（两段式内容，内容型而非控件）；
   //   · 两处隐藏 file input（共享层无 file 原语）。
-  'kb-notes.js': 21,
-  'kb-workbench.js': 13,
+  'kb-notes.js': 19,
+  // kb-workbench.js：裸控件 **实测 4**（2026-09-21 集成彩排：多个降债 PR 合并后的真实计数）。
+  // 组成 = 4 处真实页面控件：隐藏 file input / 权限触发按钮 kb-share-perm-trigger /
+  //        问答引用 chip kb-qa-cite / 模型 chip kb-qa-tools（归属 M-1、M-9）。
+  // 已生效的两笔降债：导入对话框裸复选框 → uiCheckbox、问答输入框 → uiTextarea（#336）；
+  //        模块自带的 4 份"共享原语降级模板"删除、改为缺原语即抛错（#340）。
+  // ⚠️ 此值必须等于**合并后树**的实测值：单独照抄某一个 PR 的测量值会留出空档
+  //    （#336 报 8、#340 报 6，两者叠加后的真实值是 4）。
+  'kb-workbench.js': 4,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
@@ -103,7 +110,6 @@ const legacyRawCheckboxBaseline: Record<string, number> = {
   'chat-input-form.js': 2,
   'hub-account.js': 1,
   'interactive-cli.js': 1,
-  'kb-workbench.js': 1,
   'messaging-settings.js': 1,
   'onboarding.js': 12,
   'settings.js': 4,
