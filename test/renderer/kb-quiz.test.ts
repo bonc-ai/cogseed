@@ -245,7 +245,7 @@ describe('kb-quiz 契约', () => {
     expect(src).toContain("_iconButtonHtml('kb-qz-max'");
     expect(src).toContain("_iconButtonHtml('kb-qz-more'");
     expect(src).toContain("_iconButtonHtml('kb-qz-close'");
-    expect(src).toContain('id="kb-qz-sources-chip"');
+    expect(src).toContain("id: 'kb-qz-sources-chip'");
     expect(src).toContain("_tr('kb.quiz.menu_copy'");
     expect(src).toContain("_tr('kb.quiz.menu_export_md'");
     expect(src).toContain("_tr('kb.quiz.menu_export_pdf'");
@@ -387,7 +387,7 @@ describe('kb-quiz 契约', () => {
     expect(src).toMatch(/function _saveProgress\(\)[\s\S]{0,600}localStorage\.setItem\(PROGRESS_KEY/);
     expect(src).toMatch(/function _loadProgress\(\)/);
     expect(src).toContain('cogseed.kb.quiz.progress.v1');
-    expect(src).toMatch(/function _requestClose\(\)[\s\S]{0,400}_hasUnfinished\(\)/);
+    expect(src).toMatch(/function _requestClose\(reason = 'action'\)[\s\S]{0,700}_hasUnfinished\(\)/);
     expect(src).toContain("_tr('kb.quiz.close_confirm_note'");
     expect(src).toContain('kb-qz-confirm-keep');
   });
@@ -396,7 +396,7 @@ describe('kb-quiz 契约', () => {
     const src = source();
     // 第一次点 X 走确认；第二次点必须真的关掉，不能原地再渲染一次确认条
     expect(src).toMatch(
-      /function _requestClose\(\) \{[\s\S]{0,600}if \(_state\.closeConfirm\) \{ _state\.closeConfirm = false; close\(\); return; \}[\s\S]{0,400}_hasUnfinished\(\)/,
+      /function _requestClose\(reason = 'action'\) \{[\s\S]{0,900}if \(_state\.closeConfirm\) \{ _state\.closeConfirm = false; close\(\); return; \}[\s\S]{0,400}_hasUnfinished\(\)/,
     );
     // 遮罩点击同一条路径（点遮罩两次也能关）
     expect(src).toMatch(/if \(target === el\) \{ _requestClose\(\); return; \}/);
@@ -455,7 +455,8 @@ describe('kb-quiz 契约', () => {
 
   it('Esc 关闭、点遮罩关闭、i18n-change 重刷', () => {
     const src = source();
-    expect(src).toMatch(/e\.key === 'Escape'[\s\S]{0,600}_requestClose\(\)/);
+    expect(src).toContain('onRequestClose: (reason) => _requestClose(reason)');
+    expect(src).not.toMatch(/if \(e\.key === 'Escape'\)/);
     expect(src).toMatch(/if \(target === el\) \{ _requestClose\(\); return; \}/);
     expect(src).toContain("window.addEventListener('i18n-change'");
   });

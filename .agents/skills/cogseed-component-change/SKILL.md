@@ -17,6 +17,16 @@ Change CogSeed components without letting the product contract, production imple
 
 ## Classify the change before editing
 
+Read `docs/renderer-structural-registry.md` before classifying page-local structural work. Treat it
+as the authoritative decision log for approved Provisional boundaries and required migrations:
+
+- Reference an existing registry ID when the change stays inside an approved boundary.
+- Add a `Proposed` record in the same PR when no shared seam or existing decision fits. Do not infer
+  approval from the current page implementation, visual similarity, selector counts or this Skill.
+- Only `@bonc-ai/reviewers` approval promotes a proposal to `Approved Provisional` or establishes a
+  migration decision. Keep unresolved entries `Proposed` and report the implementation as blocked.
+- Never delete completed records; move them to `Migrated` or `Superseded` and link the implementing PR.
+
 Choose the smallest matching class and state it in the working update:
 
 1. **Component contract change**: changes a shared component's role, API, states, behavior, wording rules, accessibility contract, or acceptance criteria. Update the product checklist before or together with implementation when the current request authorizes the formal component adjustment. If the request is source-only, describe the required product delta and do not present the implementation as accepted contract truth.
