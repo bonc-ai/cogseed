@@ -159,6 +159,11 @@
     return `<textarea class="form-input ui-control ui-textarea ${_esc(options.className || '')}" id="${_esc(options.id)}"${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>${_esc(options.value || '')}</textarea>`;
   }
 
+  function _uiCheckbox(options) {
+    if (typeof window.uiCheckbox !== 'function') throw new Error('knowledge base requires uiCheckbox');
+    return window.uiCheckbox(options);
+  }
+
   function _uiSwitch(options) {
     if (typeof window.uiSwitch !== 'function') throw new Error('knowledge base requires uiSwitch');
     return window.uiSwitch(options);
@@ -377,70 +382,140 @@
     // "共享知识库"这种像能用的名字
     const sharedLabel = _tr('kb.workbench.group_shared', '待开发');
     const externalLabel = _tr('kb.workbench.group_external', '外部来源');
+    const sharedTreeAvailable = typeof window.uiTree === 'function'
+      && typeof window.hydrateUiTrees === 'function';
+    const nodeMeta = new Map();
+    const node = (kind, key, label, options = {}) => {
+      const id = `${kind}:${nodeMeta.size}`;
+      nodeMeta.set(id, { kind, key, ...options });
+      return { id, label, selected: options.selected === true };
+    };
     const externalItems = _state.externalSources
       .filter((source) => {
         if (!_state.treeFilter) return true;
         const query = _state.treeFilter.toLowerCase();
         return source.id.toLowerCase().includes(query) || _externalSourceLabel(source).toLowerCase().includes(query);
       })
-      .map((source) =>
-        `<div class="kb-tree-item${source.path === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-external-source="${_esc(source.path)}">
-          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(_externalSourceLabel(source))}</span></div>`
-      ).join('');
+      .map((source) => node('external', source.path, _externalSourceLabel(source), {
+        icon: 'book-open',
+        selected: source.path === _state.currentLib && !_state.spaceId,
+      }));
     const groups = [
-      { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
-        `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
-          ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
-      ).join('') || '<div class="kb-tree-empty">暂无知识库，可使用右侧按钮创建</div>' },
-      { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
-        `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
-      ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
-      { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
+      {
+        key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib',
+        btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'),
+        items: _state.libs.filter((lib) => !_state.treeFilter || lib.name.toLowerCase().includes(_state.treeFilter))
+          .map((lib) => node('lib', lib.name, lib.name, {
+            icon: 'folder', selected: lib.name === _state.currentLib && !_state.spaceId,
+          })),
+        empty: '暂无知识库，可使用右侧按钮创建',
+      },
+      {
+        key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space',
+        btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'),
+        items: _state.spaces.filter((space) => !_state.treeFilter || (space.name || space.space_id).toLowerCase().includes(_state.treeFilter))
+          .map((space) => node('space', space.space_id, space.name || space.space_id, {
+            icon: 'folder', shared: true, selected: space.space_id === _state.spaceId,
+          })),
+        empty: _state.treeFilter ? '无匹配知识库' : '暂无共享空间',
+      },
+      {
+        key: 'external', label: externalLabel, plus: false, items: externalItems,
+        empty: _state.treeFilter
+          ? _tr('kb.workbench.no_matching_sources', '无匹配来源')
+          : _tr('kb.workbench.external_empty', '暂无外部来源'),
+      },
     ];
-    const groupHtml = groups.map((g) => {
-      const open = !_state.treeGroups.has(g.key);
-      return `<div class="kb-tree-group">
-        <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${open ? '收起' : '展开'}">
-          <span class="kb-tree-caret">${_icon(open ? 'chevron-down' : 'chevron-right', 'kb-tree-caret-icon')}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
-          ${g.plus ? _uiIconButton({
-            label: g.btnTitle || '创建',
-            icon: 'plus',
-            className: 'kb-tree-plus',
-            attrs: { id: g.btnId || 'kb-new-lib' },
-          }) : ''}
-        </div>
-        ${open ? `<div class="kb-tree-items">${g.html}</div>` : ''}
-      </div>`;
-    }).join('');
-    tree.innerHTML = groupHtml;
-    tree.querySelectorAll('[data-kb-group]').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        if (e.target.closest('.kb-tree-plus')) return;
-        const key = el.dataset.kbGroup;
-        if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
-        else _state.treeGroups.add(key);
-        _renderTree();
-      });
+    const treeItems = groups.map((group) => {
+      const children = group.items.length
+        ? group.items
+        : [node('placeholder', group.key, group.empty, { placeholder: true })];
+      const id = `group:${nodeMeta.size}`;
+      nodeMeta.set(id, { kind: 'group', key: group.key, group });
+      return { id, label: group.label, expanded: !_state.treeGroups.has(group.key), children };
     });
-    tree.querySelectorAll('[data-kb-lib]').forEach((el) => {
-      el.addEventListener('click', () => _selectLib(el.dataset.kbLib));
-      // 个人库行：右键 → 重命名 / 删除
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        _kbRowMenu(el.dataset.kbLib, true, e.clientX, e.clientY);
+    if (sharedTreeAvailable) {
+      tree.innerHTML = window.uiTree({
+        ariaLabel: _tr('kb.workbench.library_tree', '知识库列表'),
+        items: treeItems,
+        className: 'kb-library-tree',
       });
-    });
-    tree.querySelectorAll('[data-kb-space]').forEach((el) => {
-      el.addEventListener('click', () => _selectSpace(el.dataset.kbSpace));
-      // 共享库行：右键 → 重命名 / 删除
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
+    }
+    const treeRoot = sharedTreeAvailable ? tree.querySelector('[data-ui-tree]') : null;
+    if (!treeRoot) {
+      tree.innerHTML = groups.map((group) => {
+        const open = !_state.treeGroups.has(group.key);
+        const rows = group.items.map((item) => {
+          const meta = nodeMeta.get(item.id);
+          const attr = meta.kind === 'lib' ? 'data-kb-lib'
+            : meta.kind === 'space' ? 'data-kb-space' : 'data-kb-external-source';
+          return `<div class="kb-tree-item${meta.selected ? ' active' : ''}" ${attr}="${_esc(meta.key)}">${_icon(meta.icon, `kb-tree-ico${meta.shared ? ' kb-tree-ico-space' : ''}`)}<span class="kb-tree-name">${_esc(item.label)}</span></div>`;
+        }).join('') || `<div class="kb-tree-placeholder">${_esc(group.empty)}</div>`;
+        return `<div class="kb-tree-group"><div class="kb-tree-group-label" data-kb-group="${_esc(group.key)}"><span class="kb-tree-group-name">${_esc(group.label)}</span>${group.plus ? _uiIconButton({ label: group.btnTitle, icon: 'plus', className: 'kb-tree-plus', attrs: { id: group.btnId } }) : ''}</div>${open ? `<div class="kb-tree-items">${rows}</div>` : ''}</div>`;
+      }).join('');
+      tree.querySelectorAll('[data-kb-group]').forEach((element) => {
+        element.addEventListener('click', (event) => {
+          if (event.target.closest('.kb-tree-plus')) return;
+          const key = element.dataset.kbGroup;
+          if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
+          else _state.treeGroups.add(key);
+          _renderTree();
+        });
       });
+      tree.querySelectorAll('[data-kb-lib]').forEach((element) => element.addEventListener('click', () => _selectLib(element.dataset.kbLib)));
+      tree.querySelectorAll('[data-kb-space]').forEach((element) => element.addEventListener('click', () => _selectSpace(element.dataset.kbSpace)));
+      tree.querySelectorAll('[data-kb-external-source]').forEach((element) => element.addEventListener('click', () => _selectLib(element.dataset.kbExternalSource)));
+      tree.querySelector('#kb-new-lib')?.addEventListener('click', (event) => { event.stopPropagation(); _createLib(); });
+      tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (event) => { event.stopPropagation(); _createSharedSpace(); });
+      return;
+    }
+    window.hydrateUiTrees(treeRoot);
+    treeRoot.querySelectorAll('[data-ui-tree-item]').forEach((item) => {
+      const meta = nodeMeta.get(item.dataset.uiTreeItem);
+      const label = item.querySelector(':scope > [data-ui-tree-select]');
+      if (!meta || !label) return;
+      if (meta.kind === 'group') {
+        item.classList.add('kb-tree-group');
+        label.classList.add('kb-tree-group-label');
+        if (meta.group.plus) {
+          const add = _elementFromHtml(_uiIconButton({
+            label: meta.group.btnTitle || '创建', icon: 'plus', className: 'kb-tree-plus',
+            attrs: { id: meta.group.btnId },
+          }));
+          item.appendChild(add);
+        }
+        return;
+      }
+      label.classList.add(meta.placeholder ? 'kb-tree-placeholder' : 'kb-tree-item');
+      if (meta.placeholder) {
+        label.disabled = true;
+        return;
+      }
+      label.classList.toggle('active', meta.selected === true);
+      label.innerHTML = `${_icon(meta.icon, `kb-tree-ico${meta.shared ? ' kb-tree-ico-space' : ''}`)}<span class="kb-tree-name">${_esc(label.textContent)}</span>${meta.shared ? `<span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span>` : ''}`;
+      if (meta.kind === 'lib') {
+        label.addEventListener('contextmenu', (event) => {
+          event.preventDefault(); event.stopPropagation();
+          _kbRowMenu(meta.key, true, event.clientX, event.clientY);
+        });
+      } else if (meta.kind === 'space') {
+        label.addEventListener('contextmenu', (event) => {
+          event.preventDefault(); event.stopPropagation();
+          _kbSpaceMenu(meta.key, event.clientX, event.clientY);
+        });
+      }
     });
-    tree.querySelectorAll('[data-kb-external-source]').forEach((el) => {
-      el.addEventListener('click', () => _selectLib(el.dataset.kbExternalSource));
+    treeRoot.addEventListener('ui-tree-toggle', (event) => {
+      const meta = nodeMeta.get(event.detail?.id);
+      if (!meta || meta.kind !== 'group') return;
+      if (event.detail.expanded) _state.treeGroups.delete(meta.key);
+      else _state.treeGroups.add(meta.key);
+    });
+    treeRoot.addEventListener('ui-tree-change', (event) => {
+      const meta = nodeMeta.get(event.detail?.id);
+      if (!meta) return;
+      if (meta.kind === 'lib' || meta.kind === 'external') _selectLib(meta.key);
+      else if (meta.kind === 'space') _selectSpace(meta.key);
     });
     tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
     tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
@@ -881,16 +956,22 @@
         <span class="kb-import-dlg-meta">文件夹</span>
       </div>`;
     }
-    for (const f of files) {
+    files.forEach((f, index) => {
       const rel = _importDlgRelPath(_dlgLib, _dlgDir.split('/').filter(Boolean), f.name);
-      const checked = _dlgSelected.has(rel) ? ' checked' : '';
-      html += `<div class="kb-import-dlg-row${checked}" data-import-file="${_esc(rel)}">
-        <input type="checkbox" class="kb-import-dlg-check" data-import-check="${_esc(rel)}" ${checked ? 'checked' : ''} />
+      const checked = _dlgSelected.has(rel);
+      html += `<div class="kb-import-dlg-row${checked ? ' checked' : ''}" data-import-file="${_esc(rel)}">
+        ${_uiCheckbox({
+          id: `kb-import-check-${index}`,
+          label: `选择 ${f.name}`,
+          className: 'kb-import-dlg-check',
+          checked,
+          attrs: { 'data-import-check': rel },
+        })}
         <span class="kb-import-dlg-icon is-${_extClass(f.name)}">${_extLabel(f.name)}</span>
         <span class="kb-import-dlg-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
         <span class="kb-import-dlg-meta">${_esc(_extLabel(f.name))}</span>
       </div>`;
-    }
+    });
     if (!dirs.length && !files.length) {
       html = _uiEmptyState({ kind: 'quiet', title: q ? '无匹配文件' : '此目录为空' });
     }
@@ -1503,7 +1584,8 @@
     // 先显示再恢复上次的窗口尺寸/位置：overlay 关着时是 display:none，量出来的
     // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
     // 之后尤其明显），用户既看不全也抓不到右下角手柄。
-    overlay.hidden = false;
+    if (_fileViewerController) _fileViewerController.open(document.activeElement);
+    else overlay.hidden = false;
     if (dialog) _fvApplyWindowRect(dialog);
     _fvResetZoom(dialog);
     _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
@@ -1537,6 +1619,7 @@
   // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
   // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
   let _fileViewerOverlay = null;
+  let _fileViewerController = null;
   let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
   function _ensureFileViewerOverlay() {
     if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
@@ -1621,18 +1704,24 @@
     let pressedOnOverlay = false;
     overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+      if (e.target === overlay && pressedOnOverlay) {
+        if (_fileViewerController) _fileViewerController.close('backdrop');
+        else overlay.hidden = true;
+      }
     });
     document.body.appendChild(overlay);
-    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    _fileViewerController = typeof uiModalController === 'function'
+      ? uiModalController({ overlay, dialog, initialFocus: '#kb-fv-close' })
+      : null;
+    closeBtn.addEventListener('click', () => {
+      if (_fileViewerController) _fileViewerController.close('action');
+      else overlay.hidden = true;
+    });
     readerBtn.addEventListener('click', () => {
       const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
       readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
       _fvSaveWindowRect();
     });
-    // Esc 关闭
-    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
-    overlay.tabIndex = -1;
     zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
     sourceBtn.addEventListener('click', () => {
       const cur = _fvCur;
@@ -2198,7 +2287,6 @@
       errorEl.textContent = '暂不支持预览该文件';
       return;
     }
-    overlay.focus();
   }
 
   let _fvStyleInjected = false;
@@ -2211,7 +2299,7 @@
     style.id = 'kb-file-viewer-style';
     style.textContent = `
       .kb-fv-overlay {
-        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(15, 23, 42, .5);
         display: flex; align-items: center; justify-content: center; padding: 24px;
       }
       .kb-fv-overlay[hidden] { display: none; }
@@ -2252,7 +2340,7 @@
       .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
       .kb-fv-resize {
         position: absolute; right: 0; bottom: 0;
-        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: var(--z-raised);
       }
       .kb-fv-resize::after {
         content: ''; position: absolute; right: 5px; bottom: 5px;
@@ -2263,7 +2351,7 @@
       .kb-fv-resize:hover::after { border-color: #0E9F6E; }
       /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
          （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
-      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: var(--z-modal-popover); }
       body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
       .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
       .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
@@ -2513,8 +2601,7 @@
    * 注意：**脑图/测验入口与解析无关**（真机反馈"为什么只在 AI 解析后才能打开"）——
    * 它们各自独立取库内 ready 文档生成（kb.mindmap / kb.quiz），所以这里直接可用，
    * 只有"库是空的"才禁用。解析只是同一张卡上的另一个入口。
-   */
-  function _resetAnalysisCard() {
+   */  function _resetAnalysisCard() {
     const card = document.getElementById('kb-wb-analysis-card');
     if (!card) return;
     card.innerHTML = `
@@ -2522,8 +2609,7 @@
         <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
         <span class="kb-wb-card-actions">
           ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-        </span>
+          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}        </span>
       </div>
       <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
       <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>`;
@@ -2620,7 +2706,7 @@
       });
   }
 
-  // AI 解析卡：操作组（展开/生成脑图/生成测验）归卡片标题行右侧；
+  // AI 解析卡：操作组（展开/生成脑图）归卡片标题行右侧；
   // 一句话总结 = 只读文本（左绿条，无输入框感）；降级态按钮置灰不可用。
   function _renderAnalysis(summary) {
     const card = document.getElementById('kb-wb-analysis-card');
@@ -2637,8 +2723,7 @@
     const actions = `<span class="kb-wb-card-actions">
       ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
       ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}
-    </span>`;
+      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}    </span>`;
 
     let html = `<div class="kb-wb-right-card-title">
       <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库${srcTag}<span class="kb-wb-card-src">（${docs.length} 个文档）</span></span>
@@ -2673,8 +2758,7 @@
     const degNote = document.getElementById('kb-qa-degraded-note');
     if (degNote && ok) degNote.hidden = true;
 
-    _bindAnalysisActions(card);
-    card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
+    _bindAnalysisActions(card);    card.querySelector('#kb-wb-analysis-toggle')?.addEventListener('click', () => {
       const body = card.querySelector('#kb-wb-analysis-body');
       const btn = card.querySelector('#kb-wb-analysis-toggle');
       if (!body || !btn) return;
@@ -3438,6 +3522,7 @@
   // 原文查看器（kb-fv）：PDF/Office 走这里以保证排版与缩放（#214 曾把它删掉，
 // 主进程 kb.openFile / kb-file:// 一直在，缺的就是这一层）；变量随查看器代码块一起恢复。
 let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
+  let _mmModalController = null;
   let _mmGenerating = false; // 生成中防重复点击
   let _mmPreheatedKey = '';  // 已后台预热脑图缓存的库 key
   const _mmUndoStack = [];   // 重命名撤销栈 [{idx, old}]，上限 20
@@ -3454,7 +3539,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _mmBindTitleDrag();
     // 先显示再套用尺寸/位置记忆：display:none 时量不到布局尺寸，居中位会被算成 0
     // （全程同步执行，同一帧内完成，不会看到窗口跳动）
-    overlay.hidden = false;
+    if (_mmModalController) _mmModalController.open(document.activeElement);
+    else overlay.hidden = false;
     _mmApplyWindowRect();
     _mmUpdateSaveState();
     _renderOverlay();
@@ -3847,13 +3933,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const titleEl = document.getElementById('kb-mm-title-input');
         const overlay = document.getElementById('kb-mm-overlay');
         if (titleEl && overlay) {
-          overlay.hidden = false;
+          _openMindPreview();
           const scopeLabel = key.startsWith('space:')
             ? `共享空间 ${key.slice(6)}`
             : isDocKey
               ? `文档 ${String(key.slice(4).split('#')[0]).split('/').pop()}`
               : `个人库 ${key.slice(4)}`;
-          titleEl.textContent = `🧠 脑图预览 - ${scopeLabel}（已保存）`;
+          titleEl.value = `${scopeLabel}（已保存）`;
         }
         _rerenderMindmaps();
         _mmFitToStage();
@@ -4737,7 +4823,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const body = document.createElement('div');
       body.className = 'kb-qa-msg-body';
       if (m.role === 'user') body.textContent = m.content || '';
-      else body.innerHTML = _decorateAnswerHtml(m.content || '');
+      else body.innerHTML = _decorateAnswerHtml(m.content || '', m.evidence);
       el.appendChild(body);
       prevAi = null;
       // 历史恢复：AI 回答重建引用 chips 与「生成脑图/重新生成脑图」按钮
@@ -4926,30 +5012,168 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     return row;
   }
 
-  // AI 回答正文 → “人读友好”HTML：
-  //  - 剔除行内 `path#chunk N` 溯源锚点（统一收敛到底部「资料来源」区，正文不再打断）
-  //  - 渲染 **加粗** 与 `行内代码`
-  //  - 空行分段；`-`/编号列表结构化
-  function _decorateAnswerHtml(text) {
-    let t = String(text || '');
-    t = t
-      .replace(/`[^`\n]+?#chunk\s*\d+`/g, '') // 反引号包裹的完整锚点
-      .replace(/[^\s，。；：、！？?（）()【】"'“”‘’]+?#chunk\s*\d+/g, ''); // 裸锚点
-    let html = _esc(t);
-    html = html.replace(/(^|[^`])`([^`\n]+)`/g, '$1<code>$2</code>'); // 行内代码
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'); // **加粗**
-    const blocks = html.split(/\n{2,}/);
-    return blocks.map((block) => {
-      const lines = block.split('\n');
-      const out = [];
-      for (const ln of lines) {
-        let m;
-        if ((m = ln.match(/^\s*[-*•]\s+(.*)$/))) out.push(`<div class="kb-a-li">${m[1] || ''}</div>`);
-        else if ((m = ln.match(/^\s*(\d+)[.、]\s+(.*)$/))) out.push(`<div class="kb-a-li is-num">${m[1]}. ${m[2] || ''}</div>`);
-        else if (ln.trim()) out.push(`<div class="kb-a-line">${ln}</div>`);
+  // ── 回答正文：行内引用 chip + 统一 Markdown 渲染 ────────────────────────
+  //
+  // 契约（2026-09 验收修订）：**正文里的引用要看得见、点得开**——模型标注的
+  // `path#chunk N` 还原成行内可点 chip（`来源：1 ↗`），点击直接打开原文并定位；
+  // 底部「资料来源」折叠区同时保留（机器/溯源用途）。
+  //
+  // 历史：#191 曾把行内引用整体删掉、只留底部折叠区，结果正文里既看不到引用、
+  // 又残留 `[来源：1]()` 空壳（URL 被掏空、点不动），验收单据此判为缺陷。
+  //
+  // 解析分三层——因为「路径」没有可靠边界（真实路径含中文与空格，如
+  // `external/feishu-wiki/SM 的交接.md`，而中文正文之间无词边界）：
+  //   • 语法自带边界的形态（markdown 链接 / 括号 / 反引号 / 【】）→ 整体识别；
+  //   • 裸锚点 → 只认 ASCII 路径集（中文正文因此天然不会被吞）；
+  //   • 中文与含空格路径交给证据索引（final 阶段拿得到 evidence）精确匹配。
+  //
+  // 解析不出来的锚点（模型自创、不在证据里）**不留 chip**——宁可删掉也不给
+  // 一个点开是"找不到"的死 chip。
+  const _CITE_LABEL = '(?:来源|引用|source)';
+  // 标签 + 括号包裹的锚点（全/半角、圆/方括号）
+  const _CITE_LABEL_PAREN_RE = new RegExp(
+    `${_CITE_LABEL}\\s*[：:]?\\s*\\d*\\s*[【\\[（(][^】\\]）)\\n]*#chunk\\s*\\d+[^】\\]）)\\n]*[】\\]）)]`, 'gi');
+  // 【…锚点…】
+  const _CITE_BRACKET_RE = /【[^】\n]*?#chunk\s*\d+[^】\n]*?】/g;
+  // markdown 链接/图片：[label](target)——语法有界；非引用链接原样交给渲染管线
+  const _CITE_LINK_RE = /!?\[([^\]\n]*)\]\(\s*([^)\n]*)\)/g;
+  // 反引号包裹的锚点（允许路径含空格）
+  const _CITE_TICK_RE = /`([^`\n]*?#chunk\s*\d+)`/g;
+  // 裸锚点：ASCII 路径集，不吞中文正文
+  const _CITE_BARE_RE = /([A-Za-z0-9][A-Za-z0-9._/-]*)#chunk\s*(\d+)/g;
+  // chip 占位符：markdown 不会改写 `⟦…⟧`，渲染后再换成真 chip HTML
+  const _citeToken = (i) => `⟦KBCITE:${i}⟧`;
+
+  /**
+   * 证据索引：锚点文本变体（全路径 + 文件名，口径对齐主进程 kb_qa.isAnchorCited）
+   * → 证据条目。长串优先，避免短串（文件名）先命中而留下路径尾巴。
+   */
+  function _citationVariants(evidence) {
+    const out = [];
+    for (const r of evidence || []) {
+      const p = String((r && r.path) || '');
+      if (!p) continue;
+      const base = p.slice(p.lastIndexOf('/') + 1);
+      for (const name of [p, base]) {
+        out.push([`${name}#chunk ${r.chunkIdx}`, r]);
+        out.push([`${name}#chunk${r.chunkIdx}`, r]);
       }
-      return out.length ? `<div class="kb-a-block">${out.join('')}</div>` : '';
-    }).join('');
+    }
+    out.sort((a, b) => b[0].length - a[0].length);
+    return out;
+  }
+
+  /** 行内引用 chip：可点 → 打开原文并定位该 chunk。 */
+  function _citeChipHtml(ref, label) {
+    const path = String(ref.path || '');
+    const chunkIdx = Number(ref.chunkIdx) || 0;
+    const text = String(label || '').trim() || path.slice(path.lastIndexOf('/') + 1);
+    const title = `${path}#chunk ${chunkIdx} — 打开原文`;
+    return '<button type="button" class="kb-qa-chip kb-qa-cite" data-kb-cite="1"'
+      + ` data-cite-path="${_esc(path)}" data-cite-chunk="${chunkIdx}"`
+      + ` data-cite-scope="${_esc(ref.scope || 'global')}"`
+      + ` data-cite-source="${_esc(ref.source || 'library')}"`
+      + (ref.spaceId ? ` data-cite-space="${_esc(ref.spaceId)}"` : '')
+      + ` title="${_esc(title)}">${_esc(text)} ↗</button>`;
+  }
+
+  /**
+   * 把正文里的引用锚点换成 chip 占位符。
+   * 返回 { text, chips }：text 交给 markdown 渲染，chips[i] 对应占位符 i。
+   * 只有在证据索引里命中的锚点才出 chip —— 模型自创路径、或流式阶段尚未拿到
+   * evidence 的，一律不留（宁可不显示，也不给点开是"找不到"的死 chip）。
+   */
+  function _chipifyCitationAnchors(text, evidence) {
+    const variants = _citationVariants(evidence); // [[anchorText, ref], …]，长串优先
+    const byAnchor = new Map();
+    for (const [anchor, ref] of variants) if (!byAnchor.has(anchor)) byAnchor.set(anchor, ref);
+
+    const chips = [];
+    const emit = (anchorText, label) => {
+      const ref = byAnchor.get(String(anchorText || '').trim());
+      if (!ref) return '';
+      const token = _citeToken(chips.length);
+      chips.push(_citeChipHtml(ref, label));
+      return token;
+    };
+    /** 从"标签+括号"或"【】"整段里取回锚点原文。 */
+    const anchorIn = (whole, excluded) => {
+      const m = new RegExp(`([^\\s${excluded}]*#chunk\\s*\\d+)`).exec(whole);
+      return m ? m[1] : '';
+    };
+
+    let t = String(text || '');
+    // ① 有界形态：标签+括号 / 【】 / markdown 链接 / 反引号
+    t = t.replace(_CITE_LABEL_PAREN_RE, (whole) => emit(anchorIn(whole, '【[（('), ''));
+    t = t.replace(_CITE_BRACKET_RE, (whole) => emit(anchorIn(whole, '【】'), ''));
+    t = t.replace(_CITE_LINK_RE, (whole, label, target) => {
+      if (/#chunk\s*\d+/.test(target)) return emit(target, label);
+      if (/#chunk\s*\d+/.test(label)) return emit(label, '');
+      return whole; // 非引用链接：保留，交给统一管线渲染成真链接
+    });
+    t = t.replace(_CITE_TICK_RE, (whole, anchor) => emit(anchor, ''));
+    // ② 证据精确串（中文 / 含空格路径）——必须早于裸锚点正则，否则会被从
+    //    `md#chunk N` 处截断，留下 `…SM 的交接.` 这类路径残尾。
+    //    先吃掉"整对括号只包着锚点"的形态（`（锚点）` / `【锚点】`），
+    //    否则 chip 会被一对空括号夹住、正文多出 `（）` 壳。
+    for (const [anchor] of variants) {
+      for (const [open, close] of [['（', '）'], ['(', ')'], ['【', '】'], ['[', ']']]) {
+        const wrapped = `${open}${anchor}${close}`;
+        if (t.includes(wrapped)) t = t.split(wrapped).join(emit(anchor, ''));
+      }
+      if (t.includes(anchor)) t = t.split(anchor).join(emit(anchor, ''));
+    }
+    // ③ 裸锚点兜底（ASCII）：证据命中出 chip，否则删除
+    t = t.replace(_CITE_BARE_RE, (whole) => emit(whole, ''));
+    // 空壳归一：引用标签已被换成 chip，这里只清残留的空括号/空方括号形态
+    t = t
+      .replace(/[（(]\s*[）)]/g, '')
+      .replace(/[【[]\s*(?:来源|引用|source)\s*[：:]?\s*\d*\s*[】\]]/gi, '')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]+(?=\n|$)/g, '')
+      .replace(/[ \t]+(?=[，。；：、！？）】])/g, '');
+    return { text: t, chips };
+  }
+
+  // AI 回答正文 → HTML：引用锚点还原成可点 chip，再交给渲染层统一 Markdown 管线
+  // （标题/列表/链接/表格/代码一次到位，末尾由 utils.js 的 sanitizeHtml 收口 XSS；
+  // DOMPurify 由 index.html 在 utils.js 之前加载）。用法与 chat-stream 一致。
+  function _decorateAnswerHtml(text, evidence) {
+    const { text: withTokens, chips } = _chipifyCitationAnchors(text, evidence);
+    let html = (typeof renderMarkdownFull === 'function')
+      ? renderMarkdownFull(withTokens)
+      // 理论不可达（index.html 先加载 utils.js）；保留纯文本兜底，避免正文空白
+      : _esc(withTokens);
+    // chip HTML 由 _citeChipHtml 构造（path/label 均经 _esc），且在 sanitize 之后
+    // 注入，所以此处绝不能引入任何未转义的模型文本。
+    for (let i = 0; i < chips.length; i++) html = html.split(_citeToken(i)).join(chips[i]);
+    return `<div class="markdown-body kb-a-md">${html}</div>`;
+  }
+
+  /**
+   * 正文行内引用 chip 的点击处置：事件委托挂在消息容器上（只挂一次）。
+   * 用委托而不是逐元素绑定——流式回答每个 delta 都会重写 innerHTML，
+   * 逐元素绑定会反复失效。
+   */
+  function _wireCitationChips() {
+    const box = document.getElementById('kb-qa-messages');
+    if (!box || box._kbCiteWired) return;
+    box._kbCiteWired = true;
+    box.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const el = target.closest('[data-kb-cite]');
+      if (!el) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _openAnchor({
+        source: el.dataset.citeSource || 'library',
+        scope: el.dataset.citeScope || 'global',
+        path: el.dataset.citePath || '',
+        chunkIdx: Number(el.dataset.citeChunk) || 0,
+        ...(el.dataset.citeSpace ? { spaceId: el.dataset.citeSpace } : {}),
+      });
+    });
   }
 
   function _ask(question) {
@@ -5043,13 +5267,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
+          // 流式期间证据尚未下发：先走常规消解，final 会用 evidence 白名单重渲染一遍
           streamBody.innerHTML = _decorateAnswerHtml(text);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'final') {
           ai.classList.remove('is-typing');
           text = ev.text || text;
-          streamBody.innerHTML = _decorateAnswerHtml(text);
-          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
+          streamBody.innerHTML = _decorateAnswerHtml(text, ev.evidence);
+          // 系统状态行（如“已读取知识库信息”）→ 浅灰小字置于回答顶部
+          if (ev.sysNote) {
+            const sysNoteIcon = typeof window.uiIconHtml === 'function'
+              ? window.uiIconHtml('check', 'kb-qa-sysnote-icon')
+              : '';
+            streamBody.insertAdjacentHTML('afterbegin', `<div class="kb-qa-sysnote">${sysNoteIcon}<span>${_esc(ev.sysNote)}</span></div>`);
+          }
+          // 复制用“可读正文”：渲染后已去掉 markdown 标记与行内溯源锚点
+          const readableText = streamBody.textContent || text;          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
           if (ev.notFound) streamBody.classList.add('is-notfound');
           // 多轮上下文：回答入 history + 持久化当前会话（AI 回答额外存引用锚点，
           // 供“打开历史会话”时恢复引用 chips 与脑图按钮）
@@ -5057,12 +5290,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           _state.qaHistory.push(asstMsg);
           const evidence = Array.isArray(ev.evidence) ? ev.evidence : [];
           if (evidence.length) {
-            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项）
+            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项；
+            // spaceId 不能省——共享库引用缺它会在跳转时报"缺少空间信息"）
             asstMsg.evidence = evidence.slice(0, 12).map((r) => ({
               source: r.source || 'library',
               scope: r.scope || 'global',
               path: r.path,
               chunkIdx: r.chunkIdx,
+              ...(r.spaceId ? { spaceId: r.spaceId } : {}),
             }));
             streamBody.appendChild(_qaRefsElement(asstMsg.evidence));
           }
@@ -5092,6 +5327,20 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             card.appendChild(goBtn);
             streamBody.appendChild(card);
           }
+          // 轻工具条：复制回答全文（可读正文，不含行内溯源锚点）
+          const tools = document.createElement('div');
+          tools.className = 'kb-qa-tools';
+          const copyBtn = _elementFromHtml(_uiButton({
+            label: _tr('kb.qa.copy_answer', '复制'),
+            role: 'ghost',
+            size: 'sm',
+            icon: 'copy',
+            className: 'kb-qa-tools-btn',
+            attrs: { title: _tr('kb.qa.copy_answer_title', '复制回答全文') },
+          }));
+          copyBtn.addEventListener('click', () => _copyText(readableText, _tr('kb.qa.copy_answer_done', '已复制回答全文')));
+          tools.appendChild(copyBtn);
+          streamBody.appendChild(tools);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'error') {
           ai.classList.remove('is-typing');
@@ -5338,8 +5587,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
                 <span class="kb-wb-card-actions">
                   ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-                </span>
+                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}                </span>
               </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
               <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>
@@ -5723,6 +5971,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       });
     }
     document.getElementById('kb-qa-send')?.addEventListener('click', () => _submitQa());
+    _wireCitationChips();
     document.getElementById('kb-qa-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -5809,9 +6058,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const im = document.getElementById('kb-wb-import-menu');
       if (im) im.hidden = true;
     });
+    const mmOverlay = document.getElementById('kb-mm-overlay');
+    const mmDialog = document.getElementById('kb-mm-dlg');
+    _mmModalController = mmOverlay && mmDialog && typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay: mmOverlay,
+          dialog: mmDialog,
+          initialFocus: '#kb-mm-overlay-close',
+          onClose: _mmRestoreThumbs,
+        })
+      : null;
     document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => {
-      document.getElementById('kb-mm-overlay').hidden = true;
-      _mmRestoreThumbs();
+      if (_mmModalController) _mmModalController.close('action');
+      else {
+        document.getElementById('kb-mm-overlay').hidden = true;
+        _mmRestoreThumbs();
+      }
     });
     document.getElementById('kb-mm-zoom-in')?.addEventListener('click', () => { _mmZoom = Math.min(4, _mmZoom * 1.25); _applyMmTransform(); });
     document.getElementById('kb-mm-zoom-out')?.addEventListener('click', () => { _mmZoom = Math.max(0.2, _mmZoom / 1.25); _applyMmTransform(); });
@@ -5837,7 +6099,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     document.getElementById('kb-mm-focus-btn')?.addEventListener('click', _mmToggleFocus);
     document.getElementById('kb-mm-outline-btn')?.addEventListener('click', _mmToggleOutline);
     document.getElementById('kb-mm-bg-btn')?.addEventListener('click', _mmCycleBg);
-    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击 / ESC 关闭
+    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击
     document.getElementById('kb-mm-mode-btn')?.addEventListener('click', _mmToggleMode);
     document.getElementById('kb-mm-dots-btn')?.addEventListener('click', _mmToggleDots);
     document.getElementById('kb-mm-more-btn')?.addEventListener('click', (e) => {
@@ -5859,12 +6121,6 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (t) titleInput.value = t;
       else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '脑图');
       _mmMarkDirty();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const ov = document.getElementById('kb-mm-overlay');
-        if (ov && !ov.hidden) ov.hidden = true;
-      }
     });
     const mmSearchInput = document.getElementById('kb-mm-search');
     let mmSearchTimer = null;
@@ -7537,6 +7793,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return Promise.resolve(false);
     if (!_isRichPreview(anchor.path)) return Promise.resolve(false);
     return Promise.resolve(_openRichForAnchor(anchor)).then((opened) => opened !== false, () => false);
+  };
+
+  // 回答正文渲染纯函数（供回归测试锁定引用 chip / 残片 / 标题渲染，A02 修复）
+  window.__kbAnswerUtils = {
+    chipifyCitationAnchors: _chipifyCitationAnchors,
+    citationVariants: _citationVariants,
+    citeChipHtml: _citeChipHtml,
+    decorateAnswerHtml: _decorateAnswerHtml,
   };
 
   // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { AgentRunner, partitionToolBatches } from "../src/agent/runner.js";
 import { createConfig } from "../src/config/loader.js";
 import { ProviderRegistry } from "../src/providers/registry.js";
+import { createPiProvider } from "../src/providers/pi-provider.js";
 import { defineTool } from "../src/tools/base.js";
 import type { LLMProvider, CompletionParams, CompletionResult } from "../src/providers/base.js";
 
@@ -127,6 +128,88 @@ function tracker() {
   return { tool, log, get max() { return max; } };
 }
 
+function imageTool(name: string, mode: "parallel" | "sequential" | undefined) {
+  return defineTool({
+    name,
+    description: name,
+    inputSchema: { type: "object", properties: {} },
+    ...(mode ? { executionMode: mode } : {}),
+    async execute() {
+      return {
+        content: `${name}-ok`,
+        images: [{ data: `${name}-image`, mediaType: "image/png" as const }],
+      };
+    },
+  });
+}
+
+function expectToolResultsBeforeImages(messages: CompletionParams["messages"], callIds: string[]) {
+  const assistantIndex = messages.findIndex((message) =>
+    message.role === "assistant"
+    && message.content.some((content) => content.type === "tool_use"),
+  );
+  expect(assistantIndex).toBeGreaterThanOrEqual(0);
+
+  const tail = messages.slice(assistantIndex + 1);
+  const toolResultIndexes = callIds.map((callId) => tail.findIndex((message) =>
+    message.content.some((content) => content.type === "tool_result" && content.toolUseId === callId),
+  ));
+  const firstImageIndex = tail.findIndex((message) =>
+    message.content.some((content) => content.type === "image"),
+  );
+
+  expect(toolResultIndexes.every((index) => index >= 0)).toBe(true);
+  expect(firstImageIndex).toBeGreaterThan(Math.max(...toolResultIndexes));
+  expect(tail.slice(firstImageIndex + 1).some((message) =>
+    message.content.some((content) => content.type === "tool_result"),
+  )).toBe(false);
+}
+
+async function captureOpenAiPayload(messages: CompletionParams["messages"]) {
+  let captured: {
+    messages?: Array<{ role?: string; tool_call_id?: string }>;
+    input?: Array<{ role?: string; type?: string; call_id?: string }>;
+  } | undefined;
+  const provider = createPiProvider({
+    provider: "openai",
+    model: "gpt-4o",
+    apiKey: "test",
+    onPayload(payload) {
+      captured = payload as typeof captured;
+      throw new Error("payload captured");
+    },
+  });
+
+  await provider.complete({ messages, model: "gpt-4o" }).catch(() => undefined);
+  expect(captured).toBeDefined();
+  return captured!;
+}
+
+function expectOpenAiToolOutputsBeforeImage(
+  payload: Awaited<ReturnType<typeof captureOpenAiPayload>>,
+  callIds: string[],
+) {
+  expect(JSON.stringify(payload)).not.toContain("No result provided");
+  if (payload.messages) {
+    const assistantIndex = payload.messages.findIndex((message) => message.role === "assistant");
+    const tail = payload.messages.slice(assistantIndex + 1);
+    expect(tail.map((message) => message.role)).toEqual(["tool", "tool", "tool", "user"]);
+    expect(tail
+      .filter((message) => message.role === "tool")
+      .map((message) => message.tool_call_id)).toEqual(callIds);
+    return;
+  }
+
+  const input = payload.input ?? [];
+  const outputIndexes = callIds.map((callId) => input.findIndex((item) =>
+    item.type === "function_call_output" && item.call_id === callId,
+  ));
+  const imageUserIndex = input.findLastIndex((item) => item.role === "user");
+  expect(outputIndexes.every((index) => index >= 0)).toBe(true);
+  expect(imageUserIndex).toBeGreaterThan(Math.max(...outputIndexes));
+  expect(input.slice(imageUserIndex + 1).some((item) => item.type === "function_call_output")).toBe(false);
+}
+
 function toolUseResponse(blocks: Array<{ id: string; name: string }>): CompletionResult {
   return {
     content: blocks.map((b) => ({ type: "tool_use" as const, id: b.id, name: b.name, input: {} })),
@@ -155,6 +238,44 @@ async function runCollect(tools: ReturnType<typeof defineTool>[], provider: LLMP
 }
 
 describe("AgentRunner — parallel tool execution (G4)", () => {
+  it.each([
+    ["first", ["image_a", "text_b", "text_c"]],
+    ["middle", ["text_a", "image_b", "text_c"]],
+    ["last", ["text_a", "text_b", "image_c"]],
+  ] as const)("keeps all parallel tool results before an image returned %s", async (_position, names) => {
+    const callIds = ["a", "b", "c"];
+    const { provider, calls } = recordingProvider([
+      toolUseResponse(names.map((name, index) => ({ id: callIds[index], name }))),
+      finalResponse,
+    ]);
+    const tools = names.map((name) => name.startsWith("image_")
+      ? imageTool(name, "parallel")
+      : tracker().tool(name, "parallel"));
+
+    await runCollect(tools, provider);
+
+    expectToolResultsBeforeImages(calls[1].messages, callIds);
+    expectOpenAiToolOutputsBeforeImage(await captureOpenAiPayload(calls[1].messages), callIds);
+  });
+
+  it("keeps sequential mixed tool results before tool-produced images", async () => {
+    const { provider, calls } = recordingProvider([
+      toolUseResponse([
+        { id: "image", name: "image_seq" },
+        { id: "text", name: "text_seq" },
+      ]),
+      finalResponse,
+    ]);
+    const textTracker = tracker();
+
+    await runCollect([
+      imageTool("image_seq", "sequential"),
+      textTracker.tool("text_seq", "sequential"),
+    ], provider);
+
+    expectToolResultsBeforeImages(calls[1].messages, ["image", "text"]);
+  });
+
   it("runs an adjacent parallel batch concurrently and commits results in declared order", async () => {
     const { provider, calls } = recordingProvider([
       toolUseResponse([

@@ -42,7 +42,9 @@
   }
 
   function _navBtn(item, active) {
-    const badge = item.status === 'soon' ? '<span class="kb-eco-tab-soon">待开发</span>' : '';
+    const badge = item.status === 'soon'
+      ? window.uiBadge({ label: _tr('kb.eco.coming_soon', '待开发'), className: 'kb-eco-tab-soon' })
+      : '';
     return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
       title="${item.label}" aria-label="${item.label}">
       <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(item.label)}</span>${badge}</button>`;

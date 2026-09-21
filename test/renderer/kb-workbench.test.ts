@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+// 渲染层统一 Markdown 管线（index.html 在 kb-workbench 之前加载 utils.js）。
+// 这里注入真函数而不是替身，保证 chip/标题断言跑在真管线上。
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { renderMarkdown: realRenderMarkdown } = require('../../src/renderer/modules/utils.js') as {
+  renderMarkdown: (md: string) => string;
+};
 import * as vm from 'node:vm';
 
 function fakeClassList() {
@@ -122,7 +128,7 @@ const MINDMAP_ROOT = {
   ],
 };
 
-function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string>; mindmapRoot?: unknown } = {}) {
+function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string>; mindmapRoot?: unknown; extraGlobals?: Record<string, unknown> } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
   const els: Record<string, any> = {};
   const created: any[] = [];
@@ -221,6 +227,10 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     document: documentMock,
     window: windowMock,
     localStorage: localStorageMock,
+    // 渲染层统一 Markdown 管线（index.html 在 kb-workbench 之前加载 utils.js）。
+    // extraGlobals 允许用例把它改成 undefined，以覆盖纯文本兜底路径。
+    renderMarkdownFull: realRenderMarkdown,
+    ...(options.extraGlobals || {}),
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'kb-workbench.js' });
@@ -881,6 +891,10 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
+    expect(source).toContain("label: _tr('kb.qa.copy_answer', '复制')");
+    expect(source).toContain("icon: 'copy',\n            className: 'kb-qa-tools-btn'");
+    expect(source).not.toContain("const copyBtn = document.createElement('button')");
+    expect(source).toContain("window.uiIconHtml('check', 'kb-qa-sysnote-icon')");
 
     expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
     expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
@@ -1098,13 +1112,13 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
     expect(src).toMatch(/pressedOnOverlay/);
     expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
-    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) \{[\s\S]{0,180}_fileViewerController\.close\('backdrop'\)/);
   });
 
   it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
     // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
     // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
-    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: var\(--z-modal-popover\); \}/);
     expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
     // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
     expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
@@ -1804,5 +1818,347 @@ describe('KB mindmap progressive disclosure', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toContain('if ((n.children || []).length && _state.mmCollapsed.has(cur)) return;');
     expect(src).toContain('折叠的分支不展开');
+  });
+});
+
+// ── A02 回归：回答正文的引用渲染与标题 ────────────────────────────────────
+//
+// 线上缺陷（2026-09 验收）：① 正文多处出现 `[来源：1]()` 残片、标题原样显示 `#`；
+// ② 正文紧贴引用路径时，旧正则把前置正文一并删除（静默丢内容）。
+// 根因是旧迷你渲染器只支持加粗/行内代码/列表，且用惰性扩张字符类剥裸锚点。
+//
+// 修复后的契约（2026-09 验收修订）：**正文里的引用要看得见、点得开** ——
+// 证据里命中过的锚点还原成行内可点 chip；命中不了的（模型自创）直接删除，
+// 不给点开是"找不到"的死 chip。底部「资料来源」折叠区同时保留。
+describe('kb answer body rendering (引用 chip / 标题)', () => {
+  const EVIDENCE = [
+    { path: 'official/product-discovery/interview-synthesis.md', chunkIdx: 1 },
+    { path: 'external/feishu-wiki/SM 的交接.md', chunkIdx: 4 },
+    { path: '班级建设资料/a.pdf', chunkIdx: 1 },
+  ];
+  const PATH = EVIDENCE[0].path;
+
+  function answerUtils(extraGlobals?: Record<string, unknown>) {
+    const { windowMock } = loadScript({ extraGlobals });
+    return windowMock.__kbAnswerUtils as {
+      chipifyCitationAnchors: (t: string, e: unknown[]) => { text: string; chips: string[] };
+      citationVariants: (e: unknown[]) => Array<[string, unknown]>;
+      citeChipHtml: (ref: unknown, label?: string) => string;
+      decorateAnswerHtml: (t: string, e?: unknown[]) => string;
+    };
+  }
+
+  /**
+   * 去掉 chip 与标签后的可见"正文"文本。
+   * chip 的标签就是文件名（无标签形态会回落到文件名），所以判断残片时必须
+   * 先把 chip 摘掉——否则会把合规的 chip 误判成"路径残片"。
+   */
+  function visibleText(html: string) {
+    return String(html)
+      .replace(/<button[^>]*data-kb-cite="1"[\s\S]*?<\/button>/g, '')
+      .replace(/<[^>]*>/g, '');
+  }
+
+  /** 残片断言：正文里不应残留空壳、锚点或裸路径。 */
+  function expectNoCitationResidue(html: string) {
+    for (const bad of [']()', '()', '（）', '【', '】', '⟦', '⟧']) {
+      expect(html).not.toContain(bad);
+    }
+    const text = visibleText(html);
+    for (const bad of ['#chunk', 'interview-synthesis', '的交接', '班级建设资料/a.pdf']) {
+      expect(text).not.toContain(bad);
+    }
+  }
+
+  /** 从渲染结果里取出 chip 的 data-* 描述。 */
+  function chipsIn(html: string) {
+    return Array.from(String(html).matchAll(/<button[^>]*data-kb-cite="1"[^>]*>/g)).map((m) => {
+      const tag = m[0];
+      const attr = (name: string) => (new RegExp(`${name}="([^"]*)"`).exec(tag) || [])[1];
+      return {
+        path: attr('data-cite-path'),
+        chunk: attr('data-cite-chunk'),
+        scope: attr('data-cite-scope'),
+        source: attr('data-cite-source'),
+        label: (/<button[^>]*>([^<]*)<\/button>/.exec(String(html).slice(m.index)) || [])[1],
+        tag,
+      };
+    });
+  }
+
+  it('renders a markdown-link citation as a clickable chip (regression: `[来源：1]()`)', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`- 访谈记录 [来源：1](${PATH}#chunk 1)`, EVIDENCE);
+    const chips = chipsIn(html);
+    expect(chips).toHaveLength(1);
+    // 解析到的是证据里的真实文档（全路径），chunk 保持 1
+    expect(chips[0]).toMatchObject({ path: PATH, chunk: '1', scope: 'global', source: 'library' });
+    // 标签沿用模型写的「来源：1」
+    expect(chips[0].label).toContain('来源：1');
+    expect(html).toContain('访谈记录');
+    expectNoCitationResidue(html);
+  });
+
+  it('renders 【来源：N】（…） and 来源：N（…） forms as chips', () => {
+    const u = answerUtils();
+    for (const answer of [
+      `- 访谈记录【来源：1】（${PATH}#chunk 1）`,
+      `- 访谈记录 来源：1（${PATH}#chunk 1）`,
+    ]) {
+      const html = u.decorateAnswerHtml(answer, EVIDENCE);
+      expect(chipsIn(html)).toHaveLength(1);
+      expect(html).toContain('访谈记录');
+      expectNoCitationResidue(html);
+    }
+  });
+
+  it('keeps the prose that directly abuts the anchor (regression: 正文被静默删除)', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`以下是访谈记录${PATH}#chunk 1`, EVIDENCE);
+    expect(visibleText(html)).toContain('以下是访谈记录');
+    expect(chipsIn(html)).toHaveLength(1);
+  });
+
+  it('resolves anchors on paths containing spaces or CJK to the full evidence path', () => {
+    const u = answerUtils();
+    const spacey = 'external/feishu-wiki/SM 的交接.md';
+    // 裸锚点（含空格+中文路径）
+    const a = chipsIn(u.decorateAnswerHtml(`见 ${spacey}#chunk 4`, EVIDENCE));
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ path: spacey, chunk: '4' });
+    // markdown 链接形态
+    const b = chipsIn(u.decorateAnswerHtml(`见 [来源：4](${spacey}#chunk 4)`, EVIDENCE));
+    expect(b).toHaveLength(1);
+    expect(b[0]).toMatchObject({ path: spacey, chunk: '4' });
+    // 中文路径夹在正文中：正文不能被吞
+    const html = u.decorateAnswerHtml('依据 班级建设资料/a.pdf#chunk 1 的结论', EVIDENCE);
+    expect(visibleText(html)).toContain('依据');
+    expect(visibleText(html)).toContain('的结论');
+    expect(chipsIn(html)).toHaveLength(1);
+  });
+
+  it('renders the prompt-mandated backtick anchor form as a chip', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`- 访谈记录 \`${PATH}#chunk 1\``, EVIDENCE);
+    const chips = chipsIn(html);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].path).toBe(PATH);
+    // 无标签形态 → 回落到文件名
+    expect(chips[0].label).toContain('interview-synthesis.md');
+    expectNoCitationResidue(html);
+  });
+
+  it('drops anchors that are absent from the evidence (no dead chip)', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml('见 mystery/unknown.md#chunk 9 的说明', EVIDENCE);
+    expect(chipsIn(html)).toHaveLength(0);
+    expect(visibleText(html)).toContain('见');
+    expect(visibleText(html)).toContain('的说明');
+    expect(visibleText(html)).not.toContain('mystery');
+  });
+
+  it('does not create chips while streaming (no evidence yet), then resolves at final', () => {
+    const u = answerUtils();
+    const answer = `- 访谈记录 [来源：1](${PATH}#chunk 1)`;
+    // 流式阶段没有 evidence：不出 chip，也不留残片
+    const streamed = u.chipifyCitationAnchors(answer, []);
+    expect(streamed.chips).toHaveLength(0);
+    expectNoCitationResidue(streamed.text);
+    // final 带上 evidence：出 chip
+    expect(chipsIn(u.decorateAnswerHtml(answer, EVIDENCE))).toHaveLength(1);
+  });
+
+  it('does not damage ordinary prose or legitimate links', () => {
+    const u = answerUtils();
+    const prose = '本库共有 来源：3 个文档，全部已解析';
+    expect(visibleText(u.decorateAnswerHtml(prose, EVIDENCE))).toBe(prose);
+    const html = u.decorateAnswerHtml('- 参考 [文档](https://ex.com) 说明', EVIDENCE);
+    expect(html).toContain('href="https://ex.com"'); // 非引用链接仍是真链接
+    expect(chipsIn(html)).toHaveLength(0);
+  });
+
+  it('renders markdown headings instead of showing literal `#`', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`### 一、先整理的信息\n\n- 访谈记录\n\n## 二、聚类原则`, EVIDENCE);
+    expect(html).toContain('<h3>一、先整理的信息</h3>');
+    expect(html).toContain('<h2>二、聚类原则</h2>');
+    expect(html).not.toContain('###');
+  });
+
+  it('renders a full realistic answer: chips + headings, no fragments, no lost prose', () => {
+    const u = answerUtils();
+    const answer = [
+      '访谈结束后建议先整理访谈记录与用户画像。',
+      '',
+      '### 一、先整理的信息',
+      `- 访谈记录与录音转写：见 [来源：1](${PATH}#chunk 1)`,
+      '- 用户画像与角色标签：见 external/feishu-wiki/SM 的交接.md#chunk 4',
+      '',
+      '### 二、聚类原则',
+      `- 按主题相似度聚类 见 ${PATH}#chunk 1`,
+    ].join('\n');
+    const html = u.decorateAnswerHtml(answer, EVIDENCE);
+    const text = visibleText(html);
+    expect(text).toContain('访谈结束后建议先整理访谈记录与用户画像。');
+    expect(text).toContain('访谈记录与录音转写：见');
+    expect(text).toContain('用户画像与角色标签：见');
+    expect(text).toContain('按主题相似度聚类');
+    expect(html).toContain('<h3>');
+    expect(chipsIn(html)).toHaveLength(3);
+    expectNoCitationResidue(html);
+  });
+
+  it('escapes model text inside the chip (chips bypass the sanitizer on purpose)', () => {
+    const u = answerUtils();
+    // chip 在 renderMarkdownFull/sanitizeHtml 之后注入，所以标签必须自己转义
+    const html = u.decorateAnswerHtml(`- 见 [<img src=x onerror=alert(1)>](${PATH}#chunk 1)`, EVIDENCE);
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('escapes text when the markdown pipeline is unavailable (fallback path)', () => {
+    const u = answerUtils({ renderMarkdownFull: undefined });
+    const html = u.decorateAnswerHtml('<img src=x onerror=alert(1)>\n### 标题', EVIDENCE);
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain('<img');
+  });
+
+  it('renders the chip in the streaming final (端到端，无残片)', async () => {
+    const { windowMock, els, created } = loadScript();
+    windowMock.renderKbWorkbench();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-files'].innerHTML).toContain('a.pdf');
+    });
+    els['kb-qa-input'].value = '聚类原则是什么？';
+    els['kb-qa-send']._listeners.click();
+    const kbCall = windowMock.cogseed.stream.mock.calls.find((c: any[]) => c[0] === 'kbqa.askStream');
+    const cb = kbCall[2];
+    const answer = `- 访谈记录 [来源：1](${PATH}#chunk 1)`;
+    // 先发一个 delta 以捕获 AI 气泡（final 会额外创建引用区元素，created 尾部会变）
+    cb({ type: 'delta', text: '- 访谈' });
+    const streamBody = created[created.length - 1].el.querySelector('.kb-qa-stream');
+    cb({ type: 'final', text: answer, evidence: [{ source: 'library', scope: 'global', path: PATH, chunkIdx: 1 }] });
+    expect(streamBody.innerHTML).toContain('访谈记录');
+    expect(chipsIn(streamBody.innerHTML)).toHaveLength(1);
+    expectNoCitationResidue(streamBody.innerHTML);
+  });
+
+  it('clicking an inline citation chip opens the source viewer (事件委托)', async () => {
+    const { windowMock, els } = loadScript();
+    const opened: any[] = [];
+    windowMock.__openAnchorViewer = vi.fn(async (anchor: any) => { opened.push(anchor); });
+    windowMock.renderKbWorkbench();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-files'].innerHTML).toContain('a.pdf');
+    });
+    const box = els['kb-qa-messages'];
+    expect(typeof box._listeners.click).toBe('function');
+
+    // 模拟点中一个 chip：事件目标提供 closest()，命中 [data-kb-cite]
+    const chip = {
+      dataset: {
+        citePath: PATH,
+        citeChunk: '1',
+        citeScope: 'global',
+        citeSource: 'library',
+      },
+    };
+    box._listeners.click({
+      target: { closest: (sel: string) => (sel === '[data-kb-cite]' ? chip : null) },
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+    await vi.waitFor(() => { expect(opened.length).toBe(1); });
+    expect(opened[0]).toMatchObject({ path: PATH, chunkIdx: 1, view: 'document' });
+  });
+
+});
+
+// ── A01 根因防回归：解析卡上的按钮必须真的能点 ──────────────────────────────
+//
+// A01 的根因不是"功能没做"，而是"按钮接到了不存在的函数"：`📝 生成测验` 的
+// 监听器调用 `_renderQuiz`（全仓无定义），点击抛 ReferenceError，被全局 error
+// 捕获（logger.js 只写日志不提示用户）静默吞掉 → 用户看到的是"点了没反应"。
+//
+// 原有的 `innerHTML).toContain('生成测验')` 断言只看文案、不看接线，所以坏在
+// 线上很久没人发现。这里改成**逐个真点**：任何按钮接线到未定义标识符、或拿着
+// 监听器却什么都没挂，都在这里当场变红。
+//
+// 注：默认测试桩的 `querySelector` 恒返回 null（监听器压根挂不上），所以本用例
+// 自己装一个按 id 取元素的 querySelector，模拟真实 DOM。
+describe('KB 解析卡按钮接线（防"死按钮"）', () => {
+  /** 渲染解析卡，并把卡片 querySelector 换成能按 id 返回可点元素的版本。 */
+  async function mountAnalysisCard() {
+    const { context, windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    let analyzeBtn: any;
+    await vi.waitFor(() => {
+      analyzeBtn = els['kb-analyze-btn'];
+      expect(analyzeBtn).toBeTruthy();
+    });
+    // 卡片元素要显式取一次才会被桩创建（document.getElementById 会记忆实例），
+    // 且必须早于点击——_renderAnalysis 是"先写 innerHTML 再按 id 查按钮"。
+    const card = context.document.getElementById('kb-wb-analysis-card');
+    expect(card).toBeTruthy();
+    const cache = new Map<string, any>();
+    card.querySelector = (sel: string) => {
+      const m = /^#(.+)$/.exec(String(sel));
+      if (!m) return null;
+      if (!cache.has(m[1])) {
+        const el = fakeEl(m[1]);
+        // 按卡片当前 HTML 判定 disabled（_renderAnalysis 先写 innerHTML 再查询）
+        el.disabled = new RegExp(`id="${m[1]}"[^>]*\\sdisabled`).test(String(card.innerHTML));
+        cache.set(m[1], el);
+      }
+      return cache.get(m[1]);
+    };
+    analyzeBtn._listeners.click();
+    await vi.waitFor(() => {
+      expect(card.innerHTML).toContain('A 要点');
+    });
+    return { card, windowMock };
+  }
+
+  it('clicking every wired control in the analysis card throws nothing', async () => {
+    const { card } = await mountAnalysisCard();
+    const failures: string[] = [];
+    const clickOnce = (label: string, el: any) => {
+      const handler = el && el._listeners ? el._listeners.click : null;
+      if (typeof handler !== 'function') {
+        failures.push(`${label}: 没有注册 click 监听器`);
+        return;
+      }
+      try {
+        handler();
+      } catch (err) {
+        failures.push(`${label}: ${(err as Error).name}: ${(err as Error).message}`);
+      }
+    };
+
+    const ids = Array.from(String(card.innerHTML).matchAll(/<button[^>]*\sid="([^"]+)"/g)).map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0); // 解析卡上应当有可点控件
+    for (const id of ids) {
+      const btn = card.querySelector(`#${id}`);
+      if (!btn || btn.disabled) continue;
+      clickOnce(id, btn);
+    }
+    // 文档引用锚点 chip 同样逐个点（走 _openAnchor → 原文查看器）
+    for (const chip of card.querySelectorAll('[data-kb-anchor]')) {
+      clickOnce(`chip:${chip.dataset.kbAnchor}`, chip);
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it('every enabled button in the analysis card has a click handler', async () => {
+    const { card } = await mountAnalysisCard();
+    const unwired: string[] = [];
+    const ids = Array.from(String(card.innerHTML).matchAll(/<button[^>]*\sid="([^"]+)"/g)).map((m) => m[1]);
+    for (const id of ids) {
+      const btn = card.querySelector(`#${id}`);
+      if (!btn || btn.disabled) continue;
+      if (typeof btn._listeners.click !== 'function') unwired.push(id);
+    }
+    expect(unwired).toEqual([]);
   });
 });

@@ -30027,10 +30027,8 @@ body.is-terminal-resizing {
 .kb-eco-tab.is-ok .kb-sdot { background: var(--kb-green); }
 .kb-eco-tab.is-soon .kb-sdot { background: var(--color-line-strong); }
 .kb-eco-tab .kb-eco-tab-soon {
-  font-size: var(--font-size-1); line-height: 1; padding: 2px 5px; border-radius: var(--radius-1);
-  background: var(--kb-hover); color: var(--kb-text3); font-weight: 500;
+  flex: none;
 }
-.kb-eco-tab.active .kb-eco-tab-soon { background: var(--kb-accent-weak); color: var(--kb-accent); }
 .kb-eco--compact .kb-eco-tab-soon { display: none; }
 .kb-eco-compact { flex: none; }
 .kb-eco--compact .kb-eco-tab { padding: 6px 9px; }
@@ -30099,6 +30097,11 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-wb-icon-btn:hover { background: var(--kb-hover); color: var(--kb-text); }
 .kb-wb-icon-btn[hidden] { display: none; }
 .kb-wb-tree { flex: 1; overflow: auto; padding: 0 8px 12px; }
+.kb-library-tree > [role="treeitem"] { position: relative; margin-top: 6px; }
+.kb-library-tree > [role="treeitem"] > .kb-tree-group-label { padding-right: 32px; }
+.kb-library-tree > [role="treeitem"] > .kb-tree-plus { position: absolute; top: 4px; right: 4px; }
+.kb-library-tree .kb-tree-item { width: 100%; min-height: var(--control-height-sm); }
+.kb-library-tree .kb-tree-placeholder { width: 100%; text-align: left; cursor: default; }
 .kb-tree-group { margin-top: 6px; }
 .kb-tree-group-label { display: flex; align-items: center; gap: 4px; padding: 6px 8px; font-size: var(--font-size-2); color: var(--kb-text3); border-radius: 6px; }
 .kb-tree-group-label:hover { background: var(--kb-hover); color: var(--kb-text2); cursor: pointer; }
@@ -30950,7 +30953,7 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--kb-bg); }
 
 /* 脑图放大预览层（缩放/平移/双击重命名） */
-.kb-mm-overlay { position: fixed; inset: 0; z-index: var(--z-overlay); background: color-mix(in srgb, var(--color-overlay-ink) 55%, transparent); display: flex; align-items: center; justify-content: center; }
+.kb-mm-overlay { position: fixed; inset: 0; z-index: var(--z-modal); background: color-mix(in srgb, var(--color-overlay-ink) 55%, transparent); display: flex; align-items: center; justify-content: center; }
 .kb-mm-overlay[hidden] { display: none; }
 /* 脑图窗口：默认 78vw×80vh（可拖右下角调整，尺寸记忆在 localStorage） */
 .kb-mm-dlg {
@@ -33060,6 +33063,21 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
     animation-duration: 1.4s;
   }
 }
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num { padding-left: 0; }
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num::before { content: none; }
+
+/* 系统状态行 + AI 回答轻工具条 */
+.kb-qa-sysnote {
+  font-size: var(--font-size-1); color: var(--text-faint); margin: calc(var(--space-1) / 2) 0 var(--space-2);
+  display: flex; align-items: center; gap: var(--space-1);
+}
+.kb-qa-sysnote-icon { width: var(--icon-size-sm); height: var(--icon-size-sm); color: var(--status-success-text); }
+.kb-qa-tools {
+  margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line-default);
+  display: flex; align-items: center; gap: var(--space-1);
+}
+.kb-qa-tools-btn.ui-button { color: var(--text-muted); }
+.kb-qa-tools-btn.ui-button:hover { color: var(--text-heading); }
 
 /* ── Recall projection receipt ───────────────────────────────────────────
    Model-selected assets are governance events, not assistant prose. Keep the

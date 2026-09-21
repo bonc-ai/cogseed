@@ -90,15 +90,56 @@ describe('kb_qa kbAskStream', () => {
     const events = await collect(kbAskStream('u1', { question: '这个知识库讲的什么', dir: '班级建设资料' }, { stream } as any));
     const final = events[events.length - 1];
     expect(final.type).toBe('final');
-    expect(final.text).toContain('一句话概括：这个库主要沉淀班级建设与复盘资料。');
-    expect(final.text).toContain('班级建设资料');
-    expect(final.text).toContain('a.pdf');
+    expect(final.sysNote).toBe('已读取知识库信息');
+    // 知识库助手式模板：总览 → 📚 文档内容（编号+加粗文件名+——）→ 💡 一句话总结
+    expect(final.text).toContain('「班级建设资料」共收录 2 份已解析文档');
+    expect(final.text).toContain('📚 文档内容');
+    expect(final.text).toContain('1. **a.pdf** —— 班级建设要点');
+    expect(final.text).toContain('2. **b.md** —— 复盘记录');
+    expect(final.text).toContain('💡 一句话总结');
+    expect(final.text).toContain('这个库主要沉淀班级建设与复盘资料。');
     expect(askMaterialsMock).not.toHaveBeenCalled();
     expect(kbSummarizeMock).toHaveBeenCalledWith(
       'u1',
       expect.objectContaining({ dir: '班级建设资料' }),
       expect.any(Object),
     );
+    // 概览回答也要可溯源：此前恒返回 evidence: []，渲染层因此不挂底部「资料来源」，
+    // 用户看到"a.pdf：班级建设要点"却无从点开原文。
+    expect(final.evidence).toEqual([
+      {
+        source: 'library',
+        scope: 'global',
+        path: 'a.pdf',
+        chunkIdx: 1,
+        snippet: '班级建设要点',
+        score: 1,
+      },
+      {
+        source: 'library',
+        scope: 'global',
+        path: 'b.md',
+        chunkIdx: 1,
+        snippet: '复盘记录',
+        score: 1,
+      },
+    ]);
+  });
+
+  it('carries spaceId on overview evidence so shared-library citations can open', async () => {
+    kbSummarizeMock.mockResolvedValue({
+      docs: [{ name: 'a.pdf', file: 'a.pdf', text: '要点' }],
+      oneLiner: '共享库概览。',
+      source: 'generated',
+      fingerprint: 'fp',
+    } as any);
+    const events = await collect(
+      kbAskStream('u1', { question: '这个知识库讲的什么', spaceId: 'sp1' }, { stream: fakeStream('x') } as any),
+    );
+    const final = events[events.length - 1];
+    expect(final.evidence).toEqual([
+      expect.objectContaining({ scope: 'space', path: 'a.pdf', chunkIdx: 1, spaceId: 'sp1' }),
+    ]);
   });
 
   it('says plainly there is no material instead of fabricating', async () => {
@@ -108,8 +149,7 @@ describe('kb_qa kbAskStream', () => {
     const events = await collect(kbAskStream('u1', { question: 'q' }, { stream: fakeStream() } as any));
     const final = events[events.length - 1];
     expect(final.type).toBe('final');
-    expect(final.noMaterial).toBe(true);
-    expect(final.reason).toBe('no_material');
+    expect(final.noMaterial).toBe(true);    expect(final.reason).toBe('no_material');
     expect(final.text).toContain('资料中未找到');
     expect(events.some((e) => e.type === 'delta')).toBe(false);
   });
@@ -345,5 +385,137 @@ describe('kb_qa filename-target & cross-lib suggestion', () => {
     const final = events[events.length - 1];
     expect(final.noMaterial).toBe(true);
     expect(final.suggestion).toBeNull();
+  });
+});
+
+// ── 库级问题路由（"为什么答不了：资料未说明"）──────────────────────────────
+//
+// 库级元问题（整体定位 / 覆盖范围 / 建设目的 / 主题分布）的答案不由任何单个
+// chunk 承载。落到单点检索路由后，模型受证据作答契约约束（只依据证据、不编造），
+// 只能逐条回「资料未说明」——用户看到的是"答非所问"。
+// 修复：硬线索直接走全库概览；软线索在"检索空手"与"证据答不出"两条失败路径上兜底。
+describe('kb_qa library-scope routing', () => {
+  const OVERVIEW = {
+    docs: [
+      { name: '鲸影智流.md', file: '鲸影智流.md', text: '迭代记录' },
+      { name: '发版扫描.md', file: '发版扫描.md', text: '清理任务' },
+    ],
+    oneLiner: '这个库沉淀海报迭代记录与发版前清理任务提示。',
+    source: 'generated',
+    fingerprint: 'fp',
+  };
+
+  it('routes library-composition questions to the overview without retrieval', async () => {
+    kbSummarizeMock.mockResolvedValue(OVERVIEW as any);
+    const events = await collect(kbAskStream(
+      'u1',
+      { question: '这个知识库的整体定位、覆盖范围、建设目的是什么' },
+      { stream: fakeStream('x') } as any,
+    ));
+    const final = events[events.length - 1];
+    // 新模板：正文分「📚 文档内容」与「💡 一句话总结」两段（此前是一句话概括平铺）
+    expect(final.text).toContain('💡 一句话总结');
+    expect(final.text).toContain('这个库沉淀海报迭代记录与发版前清理任务提示。');
+    expect(final.text).toContain('共收录 2 份已解析文档');
+    // 库里 2 份文档都作为可溯源证据返回
+    expect(final.evidence).toHaveLength(2);
+    // 关键：不再走单点检索（否则必然"资料未说明"）
+    expect(askMaterialsMock).not.toHaveBeenCalled();
+  });
+
+  it('document-level questions still go to retrieval (no overview hijack)', async () => {
+    askMaterialsMock.mockResolvedValue({
+      hasEvidence: true, hits: [HIT], query: 'q', summary: ['evidence ready'],
+    } as any);
+    const events = await collect(kbAskStream(
+      'u1',
+      { question: '这个知识库里的《挽救计划》讲了什么' },
+      { stream: fakeStream('notes/a.md#chunk 2 说明一切') } as any,
+    ));
+    expect(kbSummarizeMock).not.toHaveBeenCalled();
+    expect(askMaterialsMock).toHaveBeenCalled();
+    expect(events[events.length - 1].evidence).toHaveLength(1);
+  });
+
+  it('falls back to the overview when retrieval finds nothing for a library question', async () => {
+    kbSummarizeMock.mockResolvedValue(OVERVIEW as any);
+    askMaterialsMock
+      .mockResolvedValueOnce({ hasEvidence: false, reason: 'no_material', hits: [], query: 'q', summary: [] } as any)
+      .mockResolvedValueOnce({ hasEvidence: false, reason: 'no_material', hits: [], query: 'q', summary: [] } as any);
+    listFilesMock.mockReturnValue([] as any);
+    readChunksMock.mockReturnValue([] as any);
+    const events = await collect(kbAskStream(
+      'u1',
+      { question: '这个知识库是干什么用的' },
+      { stream: fakeStream('x') } as any,
+    ));
+    const final = events[events.length - 1];
+    expect(final.text).toContain('💡 一句话总结');
+    expect(final.text).toContain('共收录 2 份已解析文档');
+    expect(final.noMaterial).toBeFalsy();
+  });
+
+  it('falls back to the overview when the evidence answers nothing (资料未说明)', async () => {
+    kbSummarizeMock.mockResolvedValue(OVERVIEW as any);
+    askMaterialsMock.mockResolvedValue({
+      hasEvidence: true, hits: [HIT], query: 'q', summary: ['evidence ready'],
+    } as any);
+    // 模型逐条回「资料未说明」——库级元问题的典型结局
+    const notFoundAnswer = '「资料未说明」\n资料未说明：这个知识库的整体定位、覆盖范围、建设目的。\n知识库中没有相关文件说明。';
+    const events = await collect(kbAskStream(
+      'u1',
+      { question: '这个知识库是否包含视频迭代、PR 清理、任务提示词' },
+      { stream: fakeStream(notFoundAnswer) } as any,
+    ));
+    const final = events[events.length - 1];
+    expect(final.text).toContain('💡 一句话总结');
+    expect(final.text).toContain('共收录 2 份已解析文档');
+    expect(final.notFound).toBeFalsy();
+    expect(final.evidence).toHaveLength(2);
+  });
+
+  it('keeps the honest 未找到 answer for document-level questions answered as 资料未说明', async () => {
+    askMaterialsMock.mockResolvedValue({
+      hasEvidence: true, hits: [HIT], query: 'q', summary: ['evidence ready'],
+    } as any);
+    const notFoundAnswer = '资料未说明：该文档没有提到这一点。';
+    const events = await collect(kbAskStream(
+      'u1',
+      { question: 'notes/a.md 里有没有写部署步骤' },
+      { stream: fakeStream(notFoundAnswer) } as any,
+    ));
+    const final = events[events.length - 1];
+    expect(kbSummarizeMock).not.toHaveBeenCalled();
+    expect(final.notFound).toBe(true);
+    expect(final.text).toContain('资料未说明');
+  });
+
+  it('routing predicate separates library-level from document-level questions', () => {
+    const { isLibraryOverviewQuestion, isLibraryScopeQuestion } = _internals;
+    for (const q of [
+      '这个知识库的整体定位、覆盖范围、建设目的是什么',
+      '这个知识库的定位是什么',
+      '这个知识库的文档主题分布',
+      '这个知识库涵盖了哪些类型的文档',
+      '这个知识库包含什么',
+      '总结一下这个知识库',
+    ]) {
+      expect(isLibraryOverviewQuestion(q), `应走概览: ${q}`).toBe(true);
+    }
+    for (const q of [
+      '这个知识库里的《挽救计划》讲了什么',
+      '发版扫描清理任务提示词这份文档的定位是什么',
+      'AST.pdf 讲了什么',
+      '鲸影智流过程证据材料记录了哪些版本',
+      '这个知识库怎么配置模型通道',
+    ]) {
+      expect(isLibraryOverviewQuestion(q), `不应走概览: ${q}`).toBe(false);
+    }
+    // 软判据更宽（覆盖自然问法），但硬判据仍不放过文档级问题
+    for (const q of ['这个知识库是干什么用的', '这个知识库主要涉及什么内容']) {
+      expect(isLibraryOverviewQuestion(q)).toBe(false);
+      expect(isLibraryScopeQuestion(q)).toBe(true);
+    }
+    expect(isLibraryScopeQuestion('notes/a.md 里有没有写部署步骤')).toBe(false);
   });
 });
