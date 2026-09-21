@@ -361,7 +361,8 @@
     byId('input-control-states').innerHTML = inputStates.map(([label, options], index) => (
       `<div class="gallery-control-state"><span>${label}</span>${uiInput({ id: `gallery-input-${index}`, ...options })}</div>`
     )).join('')
-      + `<div class="gallery-control-state"><span>复选框</span><label>${uiCheckbox({ id: 'gallery-checkbox', name: 'gallery-capability', value: 'search', checked: true })}启用联网搜索</label></div>`
+      + `<div class="gallery-control-state"><span>复选框</span><label class="gallery-inline-control">${uiCheckbox({ id: 'gallery-checkbox', label: '启用联网搜索', name: 'gallery-capability', value: 'search', checked: true })}启用联网搜索</label></div>`
+      + `<div class="gallery-control-state"><span>开关</span><span class="gallery-inline-control">${uiSwitch({ label: '夜间自动沉淀', checked: true })}夜间自动沉淀</span></div>`
       + `<div class="gallery-control-state gallery-control-state--wide"><span>多行</span>${uiTextarea({ id: 'gallery-textarea', placeholder: '描述希望自动执行的工作' })}</div>`;
 
     const frequencyOptions = [

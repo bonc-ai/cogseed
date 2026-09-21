@@ -167,6 +167,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
+    uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3>${options.hint ? `<p>${String(options.hint)}</p>` : ''}${options.action ? `<button id="${String(options.action.attrs?.id || '')}">${String(options.action.label || '')}</button>` : ''}</section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string) => {
         if (ch === 'contexts.tree') return { tree: TREE };
@@ -909,6 +910,10 @@ describe('KB workbench (S1 skeleton)', () => {
     );
 
     expect(importDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title"');
+    expect(importDialog).toContain("overlay.className = 'ui-modal-overlay kb-import-dlg-overlay'");
+    expect(importDialog).toContain('class="ui-modal ui-modal--lg kb-import-dlg"');
+    expect(importDialog).toContain('class="ui-modal__body kb-import-dlg-content"');
+    expect(importDialog).toContain('class="ui-modal__footer kb-import-dlg-foot"');
     expect(importDialog).toContain("_uiIconButton({ label: '关闭导入弹窗', icon: 'x'");
     expect(importDialog).toContain("_uiIconButton({ label: '返回', icon: 'chevron-left'");
     expect(importDialog).toContain("_uiInput({ id: 'kb-import-dlg-search-input', type: 'search'");
@@ -917,7 +922,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(importDialog).not.toMatch(/<button\b/);
     expect(importDialog).not.toMatch(/<input\b/);
     expect(importDialog).not.toMatch(/[✕←→]/u);
-    expect(importBinding).toMatch(/onImportDialogKeydown[\s\S]*?event\.key !== 'Escape'/);
+    expect(importBinding).toContain("initialFocus: '#kb-import-dlg-search-input'");
+    expect(importBinding).toContain("controller.open(trigger)");
     expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?okBtn\.disabled = _dlgSelected\.size === 0/);
     expect(source).toMatch(/getElementById\('kb-qa-history-panel'\) \|\| document\.querySelector\('\.kb-import-dlg-overlay'\)/);
   });
@@ -938,16 +944,28 @@ describe('KB workbench (S1 skeleton)', () => {
     );
 
     expect(source).toMatch(/function _mountKbDialog[\s\S]*?uiModalController\(\{ overlay, dialog, initialFocus, fallbackFocus/);
+    expect(createDialog).toContain("overlay.className = 'ui-modal-overlay kb-share-dlg-overlay'");
+    expect(createDialog).toContain('class="ui-modal kb-share-dlg"');
     expect(createDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title"');
+    expect(createDialog).toContain('class="ui-modal__header"');
+    expect(createDialog).toContain('class="ui-modal__body kb-share-dlg-body"');
+    expect(createDialog).toContain('class="ui-modal__footer kb-share-dlg-actions"');
     expect(createDialog).toContain("_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x'");
     expect(createDialog).toContain("_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil'");
     expect(createDialog).toContain("_uiInput({ id: 'kb-share-name', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input'");
+    expect(createDialog).toContain("_uiSelect({");
+    expect(createDialog).toContain("id: 'kb-share-join'");
+    expect(createDialog).toContain("window.hydrateUiFormSelects(overlay)");
     expect(createDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
     expect(createDialog).toContain("_uiButton({ label: '确定', role: 'primary'");
     expect(createDialog).not.toMatch(/[✕📁✎▾✓]/u);
+    expect(membersDialog).toContain("overlay.className = 'ui-modal-overlay kb-members-overlay'");
+    expect(membersDialog).toContain('class="ui-modal ui-modal--sm kb-members-dlg"');
     expect(membersDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-members-title"');
+    expect(membersDialog).toContain('class="ui-modal__header"');
+    expect(membersDialog).toContain('class="ui-modal__body kb-members-body"');
     expect(membersDialog).toContain("_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x'");
     expect(membersDialog).toContain("_uiInput({ id: 'kb-members-search-input', type: 'search'");
     expect(membersDialog).toContain("_icon('users', 'kb-members-title-icon')");
@@ -955,10 +973,21 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(shareDialogs).toContain("_uiButton({ label: '复制链接', role: 'secondary', icon: 'link'");
     expect(shareDialogs).toContain("_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code'");
     expect(shareDialogs).toContain("_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn'");
+    expect((shareDialogs.match(/class="ui-modal__header"/g) || [])).toHaveLength(7);
+    expect((shareDialogs.match(/class="ui-modal__body/g) || [])).toHaveLength(7);
+    expect((shareDialogs.match(/class="ui-modal__footer/g) || [])).toHaveLength(7);
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x'");
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input'");
+    expect(source).not.toContain("overlay.className = 'kb-share-pop-overlay'");
+    expect((source.match(/overlay\.className = 'ui-modal-overlay kb-share-pop-overlay'/g) || [])).toHaveLength(8);
+    expect((source.match(/class="ui-modal ui-modal--sm kb-share-pop/g) || [])).toHaveLength(8);
+    expect(source).toContain("throw new Error('knowledge base requires uiEmptyState')");
+    expect(source).not.toContain('class="kb-empty"');
+    expect(source).not.toMatch(/kb-(?:qa-model|qa-history|import-dlg|share-manage|share-cogseed-members)-empty/);
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })");
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无待审申请' })");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
@@ -966,6 +995,9 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: '保存并授权', role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: '撤销', role: 'danger', size: 'sm'");
+    expect(shareDialogs).toContain("id: 'kb-perm-member'");
+    expect(shareDialogs).toContain("id: 'kb-perm-join'");
+    expect(shareDialogs).not.toMatch(/<select\b/);
     expect(shareDialogs).toMatch(/_kbShareDlgClose\(\{ restoreFocus: false \}\)[\s\S]*?_kbPermDialogOpen\(\)/);
     expect(shareDialogs).toMatch(/_kbShareDlgController\.close\('close', options\)/);
     expect(shareDialogs).not.toMatch(/[✕›]/u);

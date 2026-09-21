@@ -35,7 +35,7 @@ const TREE_WITH_NOTES = {
   ],
 };
 
-function loadScript() {
+function loadScript(tree = TREE_WITH_NOTES) {
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-notes.js'), 'utf8');
   const els: Record<string, any> = {};
   const created: any[] = [];
@@ -54,10 +54,11 @@ function loadScript() {
     uiToast: vi.fn(),
     uiConfirm: vi.fn(() => Promise.resolve(true)),
     uiPrompt: vi.fn(() => Promise.resolve('新笔记')),
+    uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3></section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string, payload: any) => {
         invokeCalls.push({ ch, payload });
-        if (ch === 'contexts.tree') return TREE_WITH_NOTES;
+        if (ch === 'contexts.tree') return tree;
         if (ch === 'contexts.read') {
           return { ok: true, content: payload.path === 'notes/周记.md' ? '# 周记\n内容' : '# 复盘\n内容' };
         }
@@ -82,6 +83,27 @@ function loadScript() {
 }
 
 describe('KB notes panel (S4)', () => {
+  it('uses shared modal, input, and button primitives for note dialogs', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-notes.js'), 'utf8').replace(/\r\n/g, '\n');
+    const picker = source.slice(source.indexOf('async function _addToLib'), source.indexOf('async function _copyNoteToLib'));
+    const linkDialog = source.slice(source.indexOf('function _openLinkDialog'), source.indexOf('function _closeLinkDialog'));
+
+    expect(source).toContain("window.uiModalController({ overlay, dialog, initialFocus, fallbackFocus, onClose: cleanup })");
+    expect(picker).toContain("overlay.className = 'ui-modal-overlay kb-lib-picker-overlay'");
+    expect(picker).toContain('class="ui-modal ui-modal--sm kb-lib-picker"');
+    expect(picker).toContain('class="ui-modal__header"');
+    expect(picker).toContain('class="ui-modal__body kb-lib-picker-body"');
+    expect(picker).toContain("_uiIconButton({ label: '关闭知识库选择弹窗', icon: 'x'");
+    expect(linkDialog).toContain("overlay.className = 'ui-modal-overlay kb-link-dlg-overlay'");
+    expect(linkDialog).toContain('class="ui-modal ui-modal--sm kb-link-dlg"');
+    expect(linkDialog).toContain('class="ui-modal__header"');
+    expect(linkDialog).toContain('class="ui-modal__body kb-link-dlg-body"');
+    expect(linkDialog).toContain('class="ui-modal__footer kb-link-actions"');
+    expect(linkDialog).toContain("_uiInput({ id: 'kb-link-text'");
+    expect(linkDialog).toContain("_uiButton({ label: '确定', role: 'primary'");
+    expect(linkDialog).not.toMatch(/<input\b/);
+  });
+
   it('renders the notes list from the contexts notes/ dir', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbNotes();
@@ -90,6 +112,15 @@ describe('KB notes panel (S4)', () => {
     });
     // 列表项来自 notes/ 目录（周记/复盘 两个文件）
     expect(els['kb-notes-items'].appendChild).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders the shared quiet empty state when there are no notes', async () => {
+    const { windowMock, els } = loadScript([]);
+    windowMock.renderKbNotes();
+    await vi.waitFor(() => {
+      expect(els['kb-notes-items'].innerHTML).toContain('ui-empty-state--quiet');
+    });
+    expect(els['kb-notes-items'].innerHTML).toContain('暂无笔记，点击 ＋ 新建');
   });
 
   it('creates a new note: ensures notes/ dir then writes the file', async () => {

@@ -163,8 +163,13 @@ describe('candidate pool rendering', () => {
     expect(caps.canPromote).toBe(true);
     expect(caps.canEdit).toBe(true);
     expect(caps.canDefer).toBe(true);
-    expect(views).toContain('candidate.capabilities && candidate.capabilities.canPromote');
-    expect(views).toContain('candidate.capabilities && candidate.capabilities.canEdit');
+    // 2026-09-20：晋升/编辑/决策入口统一读 views.js 里归一化的一组 canX 常量，
+    // **capabilities 缺失即只读**（终态候选的 canDefer/canReject 正是 false）。
+    expect(views).toContain('const caps = candidate.capabilities || {}');
+    expect(views).toContain('const canPromote = !!caps.canPromote');
+    expect(views).toContain('const canDefer = !!caps.canDefer');
+    expect(views).toContain('const canReject = !!caps.canReject');
+    expect(views).toContain('const canEdit = !!caps.canEdit');
   });
 });
 
@@ -236,7 +241,7 @@ describe('asset governance actions', () => {
     expect(core).toContain("restore: 'recall.assets.restore'");
     // 2026-09-17 重构：暂停/恢复合并为标题旁总开关（data-action 动态二值），
     // 归档操作已从界面移除（子安拍板）；IPC 通道名不变。
-    expect(views).toContain("data-action=\"${statusOn ? 'pause' : 'resume'}\"");
+    expect(views).toContain("'data-action': statusOn ? 'pause' : 'resume'");
   });
 
   it('confirms destructive asset actions before sending', () => {
