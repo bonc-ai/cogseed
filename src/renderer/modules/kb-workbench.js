@@ -1496,6 +1496,7 @@
     // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
     // 之后尤其明显），用户既看不全也抓不到右下角手柄。
     overlay.hidden = false;
+    if (_fvController) _fvController.open(document.activeElement);
     if (dialog) _fvApplyWindowRect(dialog);
     _fvResetZoom(dialog);
     _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
@@ -1529,6 +1530,7 @@
   // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
   // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
   let _fileViewerOverlay = null;
+  let _fvController = null; // 共享 modal controller：焦点陷阱/焦点返回/Escape 归共享层
   let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
   function _ensureFileViewerOverlay() {
     if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
@@ -1616,17 +1618,15 @@
     let pressedOnOverlay = false;
     overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+      if (e.target === overlay && pressedOnOverlay) _fvHide();
     });
     document.body.appendChild(overlay);
-    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    closeBtn.addEventListener('click', () => { _fvHide(); });
     readerBtn.addEventListener('click', () => {
       const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
       readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
       _fvSaveWindowRect();
     });
-    // Esc 关闭
-    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
     overlay.tabIndex = -1;
     zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
     sourceBtn.addEventListener('click', () => {
@@ -1653,6 +1653,16 @@
     }, { passive: false });
     _fvBindTitleDrag(dialog, head);
     _fvBindResize(dialog, resizeHandle);
+    // 弹层外壳交给共享层：焦点陷阱、Escape、关闭后焦点返回（规范：seam 存在时不重复键盘/焦点行为）
+    // 类名与可见性仍由本模块持有（不改 CSS），controller 只接管交互语义。
+    if (typeof uiModalController === 'function') {
+      _fvController = uiModalController({
+        overlay,
+        dialog,
+        initialFocus: '#kb-fv-close',
+        onClose: () => { overlay.hidden = true; },
+      });
+    }
     _fileViewerOverlay = overlay;
     _injectFileViewerStyle();
     return overlay;
@@ -1669,6 +1679,14 @@
    * 右下拉能变大（指针落在窗口外的遮罩上），往左上拉完全没反应——也就是用户说的
    * "能移动，但不能调整大小"。罩子把指针事件截在主窗口里，拖拽才跟手。
    */
+  /** 关闭阅读器：优先走共享 controller（释放焦点陷阱并归还焦点），无 controller 时退回自管隐藏。 */
+  function _fvHide() {
+    const overlay = document.getElementById('kb-file-viewer');
+    if (!overlay) return;
+    if (_fvController && _fvController.isOpen()) _fvController.close('close');
+    else overlay.hidden = true;
+  }
+
   function _fvOverlayOf(el) {
     return el?.closest?.('.kb-fv-overlay') || null;
   }
