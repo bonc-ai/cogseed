@@ -1500,6 +1500,11 @@ if (!gotLock) {
       updatesIpc.initAutoUpdateBridge((channel, payload) => {
         ipc.broadcastToRenderer(channel, payload);
       });
+      // Manual download phase changes (downloading / paused / failed / idle) —
+      // the settings pane renders these instead of tracking its own flag.
+      updatesIpc.initDownloadStateBridge((channel, payload) => {
+        ipc.broadcastToRenderer(channel, payload);
+      });
     }
     registerDeferred('messaging:start', () => messagingFeature.startForUser(users.getActiveUserId()), 'serial', CONNECTORS_BOOTSTRAP_DELAY_MS, {
       resourceClass: 'network',
