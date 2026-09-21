@@ -33,7 +33,13 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
       const run = await readRun(userId, request.conversation_id, runIdForLedger);
       if (!run) throw new Error(`collaboration run unavailable: ${runIdForLedger}`);
       const actor = run?.actors.find((entry) => entry.agent_id === request.agent_id);
-      if (run.status !== 'running' || actor?.terminal !== 'pending') {
+      // 没有 actor 行 ≠ 已停止：Commander 对一个「快照里没有成员/点名」的 run
+      // 发起 dispatch 时（例如用户手打 @名字，那只是正文），这条 Wake 是第一
+      // 次批准，actor 行本来就还不存在。recordRunDispatch 才是耐久准入的
+      // chokepoint，并且它自己会补建 actor 行、也会拒绝 stopped/removed。
+      // 因此这里只拦「已存在且非 pending 的行」与「run 不是 running」，
+      // 否则一次合法批准会永远无法通过。
+      if (run.status !== 'running' || (actor && actor.terminal !== 'pending')) {
         const reason = actor?.terminal === 'removed' ? 'removed' : 'stopped';
         throw new Error(`collaboration run ${reason}: ${runIdForLedger}`);
       }
