@@ -6,6 +6,12 @@ Describe the change and why it is needed.
 
 Fixes #(issue)
 
+## Renderer structural policy (when applicable)
+
+- Shared API(s) reused:
+- Registry entry/entries from `docs/renderer-structural-registry.md`:
+- New page-local structural composition: none / describe the proposed boundary
+
 ## Checklist
 
 - [ ] `npm run typecheck` passes

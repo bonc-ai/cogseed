@@ -558,6 +558,7 @@ const modal = read('src/renderer/modules/ui-modal.js');
     expect(modal).toContain("document.body.style.overflow = 'hidden'");
     expect(modal).toContain('previousFocus.focus()');
     expect(modal).toContain('closeTopPopover()');
+    expect(modal).toContain("typeof value.onRequestClose === 'function'");
     expect(modal).toContain("icon: 'x'");
     expect(modal).not.toContain("icon: 'close'");
   });
