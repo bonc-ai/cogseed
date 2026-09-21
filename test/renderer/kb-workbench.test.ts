@@ -849,7 +849,7 @@ describe('KB workbench (S1 skeleton)', () => {
     }
     expect(mindmapMarkup).not.toMatch(/<button\b/);
     expect(mindmapMarkup).not.toMatch(/[🧠👁💾📂📥🖼📐📄📝📋🏢⤢⤡◎☰▦▤＋⋯✕↩⟳]/u);
-    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? '编辑' : '预览'");
+    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? _tr('kb.workbench.mm_edit', '编辑') : _tr('kb.workbench.mm_preview', '预览')");
   });
 
   it('renders analysis disclosure, citations, and retry through shared buttons', () => {
@@ -2293,8 +2293,10 @@ describe('kb-workbench 外壳语言切换', () => {
     expect(source).toContain("_tr('kb.workbench.untitled_lib'");
     // 重标签 + 树 + 右列三件套都在同一个 i18n-change 处理器里
     const handler = source.slice(source.indexOf("window.addEventListener('i18n-change'"));
-    expect(handler.slice(0, 320)).toContain('_relabelWorkbench()');
-    expect(handler.slice(0, 320)).toContain('_renderRight()');
+    expect(handler.slice(0, 900)).toContain('_relabelWorkbench()');
+    expect(handler.slice(0, 900)).toContain('_renderRight()');
+    // 文案随状态变的脑图按钮就地重刷（否则静态钩子会把「组织结构」刷回「布局」）
+    expect(handler.slice(0, 900)).toContain('_mmUpdateToolbarState()');
   });
 
   it('用到的每个 kb.workbench.* 键在 4 份 locale 里都存在（缺键会静默回退中文）', () => {
