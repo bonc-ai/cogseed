@@ -53,7 +53,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   //   · 库选择器条目（两段式内容，内容型而非控件）；
   //   · 两处隐藏 file input（共享层无 file 原语）。
   'kb-notes.js': 21,
-  'kb-workbench.js': 13,
+  'kb-workbench.js': 9,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
@@ -103,7 +103,6 @@ const legacyRawCheckboxBaseline: Record<string, number> = {
   'chat-input-form.js': 2,
   'hub-account.js': 1,
   'interactive-cli.js': 1,
-  'kb-workbench.js': 1,
   'messaging-settings.js': 1,
   'onboarding.js': 12,
   'settings.js': 4,
@@ -163,7 +162,7 @@ const emojiAsIconBaseline: Record<string, number> = {
   'conversation.js': 3,
   'kb-notes.js': 21,
   'kb-quiz.js': 1,
-  'kb-workbench.js': 25,
+  'kb-workbench.js': 24,
   'model-authorization.js': 2,
   'onboarding.js': 8,
   'settings.js': 1,
@@ -188,9 +187,7 @@ const inlineSvgBaseline: Record<string, number> = {
 };
 const iconSourceFiles = new Set(['icons.js']);
 
-const literalZIndexBaseline: Record<string, number> = {
-  'kb-workbench.js': 3,
-};
+const literalZIndexBaseline: Record<string, number> = {};
 /**
  * 各 CSS 文件的字面 z-index 存量（层序应走 tokens.css 的 `--z-*`）。
  * `tokens.css` 豁免：它就是层序的唯一定义处；`vendor/**` 豁免：第三方样式不改。
@@ -343,6 +340,9 @@ describe('renderer shared UI adoption guard', () => {
    * 一个写坏的正则会让闸门静默放行一切——那比没有闸门更危险（看着是绿的）。
    */
   it('the counters actually detect violations (a broken regex must not pass silently)', () => {
+    expect(dynamicControlCount("document.createElement('button')")).toBe(1);
+    expect(dynamicControlCount('el("input", "field")')).toBe(1);
+    expect(dynamicControlCount("createElement('div')")).toBe(0);
     expect(emojiLineCount('<span>📁 库根</span>')).toBe(1);
     expect(emojiLineCount('<span>普通文案</span>')).toBe(0);
     expect(emojiLineCount('💡 一句话\n💡 又一句')).toBe(2);
