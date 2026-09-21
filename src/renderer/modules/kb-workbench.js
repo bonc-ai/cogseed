@@ -560,65 +560,65 @@
       <section class="ui-modal kb-share-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title" id="kb-share-dlg-title">创建共享知识库</h2>
+            <h2 class="ui-modal__title" id="kb-share-dlg-title">${_esc(_tr('kb.workbench.create_shared_title', '创建共享知识库'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x', className: 'kb-share-dlg-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.create_shared_close', '关闭创建共享知识库弹窗'), icon: 'x', className: 'kb-share-dlg-close' })}
         </header>
         <div class="ui-modal__body kb-share-dlg-body">
           <div class="kb-share-form">
             <div class="kb-share-field">
-              <label class="kb-share-label" for="kb-share-name">名称 <span class="kb-share-required">*</span></label>
-              ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: '请输入知识库名称', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+              <label class="kb-share-label" for="kb-share-name">${_esc(_tr('kb.workbench.field_name', '名称'))} <span class="kb-share-required">*</span></label>
+              ${_uiInput({ id: 'kb-share-name', className: 'kb-share-input', placeholder: _tr('kb.workbench.field_name_placeholder', '请输入知识库名称'), attrs: { autocomplete: 'off', spellcheck: 'false' } })}
             </div>
             <div class="kb-share-field">
-              <span class="kb-share-label">封面</span>
+              <span class="kb-share-label">${_esc(_tr('kb.workbench.field_cover', '封面'))}</span>
               <div class="kb-share-cover">
                 <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">${_icon('folder', 'kb-share-cover-default-icon')}</span></div>
-                ${_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
+                ${_uiIconButton({ label: _tr('kb.workbench.cover_upload', '上传或更换知识库封面'), icon: 'edit-pencil', className: 'kb-share-cover-edit', attrs: { id: 'kb-share-cover-edit' } })}
                 <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
               </div>
             </div>
             <div class="kb-share-field">
-              <label class="kb-share-label" for="kb-share-desc">描述</label>
-              ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: '为你的共享知识库填写描述', attrs: { rows: 3 } })}
+              <label class="kb-share-label" for="kb-share-desc">${_esc(_tr('kb.workbench.field_desc', '描述'))}</label>
+              ${_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input', placeholder: _tr('kb.workbench.field_desc_placeholder', '为你的共享知识库填写描述'), attrs: { rows: 3 } })}
             </div>
             <div class="kb-share-field">
-              <span class="kb-share-label" id="kb-share-join-label">加入方式</span>
+              <span class="kb-share-label" id="kb-share-join-label">${_esc(_tr('kb.workbench.field_join_mode', '加入方式'))}</span>
               <div class="kb-share-select-wrap">
                 ${_uiSelect({
                   id: 'kb-share-join',
                   value: 'direct',
                   labelId: 'kb-share-join-label',
                   options: [
-                    { value: 'direct', label: '直接加入' },
-                    { value: 'apply', label: '申请加入（管理员批准）' },
-                    { value: 'invite', label: '仅邀请加入' },
+                    { value: 'direct', label: _tr('kb.workbench.join_direct', '直接加入') },
+                    { value: 'apply', label: _tr('kb.workbench.join_apply', '申请加入（管理员批准）') },
+                    { value: 'invite', label: _tr('kb.workbench.join_invite', '仅邀请加入') },
                   ],
                 })}
               </div>
             </div>
             <div class="kb-share-field">
-              <span class="kb-share-label" id="kb-share-perm-field-label">成员权限</span>
+              <span class="kb-share-label" id="kb-share-perm-field-label">${_esc(_tr('kb.workbench.menu_perm', '成员权限'))}</span>
               <div class="kb-share-perm" id="kb-share-perm">
                 <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger" aria-labelledby="kb-share-perm-field-label kb-share-perm-label" aria-haspopup="listbox" aria-expanded="false">
-                  <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
+                  <span class="kb-share-perm-label" id="kb-share-perm-label">${_esc(_tr('kb.workbench.perm_view_export', '内容可查看和导出'))}</span><span class="kb-share-caret">${_icon('chevron-down', 'kb-share-caret-icon')}</span>
                 </button>
                 <div class="kb-share-perm-menu" id="kb-share-perm-menu" role="listbox" aria-labelledby="kb-share-perm-field-label" data-ui-modal-popover data-trigger-id="kb-share-perm-trigger" data-open="false" hidden>
-                  <div class="kb-share-perm-item is-selected" role="option" aria-selected="true" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>内容可查看和导出</div>
-                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="view_only">内容可查看但不可导出</div>
-                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="hidden">内容不可查看</div>
+                  <div class="kb-share-perm-item is-selected" role="option" aria-selected="true" data-perm="view_export"><span class="kb-share-perm-check">${_icon('check', 'kb-share-perm-check-icon')}</span>${_esc(_tr('kb.workbench.perm_view_export', '内容可查看和导出'))}</div>
+                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="view_only">${_esc(_tr('kb.workbench.perm_view_only', '内容可查看但不可导出'))}</div>
+                  <div class="kb-share-perm-item" role="option" aria-selected="false" data-perm="hidden">${_esc(_tr('kb.workbench.perm_hidden', '内容不可查看'))}</div>
                 </div>
               </div>
             </div>
             <div class="kb-share-field">
-              <label class="kb-share-label" for="kb-share-questions">设置推荐问题</label>
-              ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: '为你的知识库预设推荐问题（每行一个）', attrs: { rows: 2 } })}
+              <label class="kb-share-label" for="kb-share-questions">${_esc(_tr('kb.workbench.field_questions', '设置推荐问题'))}</label>
+              ${_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input', placeholder: _tr('kb.workbench.field_questions_placeholder', '为你的知识库预设推荐问题（每行一个）'), attrs: { rows: 2 } })}
             </div>
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-dlg-actions">
-          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-btn', attrs: { id: 'kb-share-cancel' } })}
-          ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-btn', disabled: true, attrs: { id: 'kb-share-ok' } })}
+          ${_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary', className: 'kb-share-btn', attrs: { id: 'kb-share-cancel' } })}
+          ${_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary', className: 'kb-share-btn', disabled: true, attrs: { id: 'kb-share-ok' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -656,7 +656,7 @@
       const f = coverFile.files && coverFile.files[0];
       if (!f) return;
       if (f.size > 3 * 1024 * 1024) {
-        if (typeof uiToast === 'function') uiToast('封面图片过大，请选择 3MB 以内的图片', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.cover_too_large', '封面图片过大，请选择 3MB 以内的图片'), { variant: 'warning' });
         return;
       }
       const reader = new FileReader();
@@ -7069,38 +7069,38 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-manage-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>CogSeed 问答分享管理</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.cogseed_manage_title', 'CogSeed 问答分享管理'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭 CogSeed 问答分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.cogseed_manage_close', '关闭 CogSeed 问答分享管理弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
           ${state ? `<div class="kb-share-manage-item">
             <div class="kb-share-manage-item-head">
               <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
-              <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+              <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: _tr('kb.workbench.join_direct', '直接加入'), apply: _tr('kb.workbench.join_badge_apply', '需申请'), invite: _tr('kb.workbench.join_badge_invite', '仅邀请') }[state.joinMode] || state.joinMode)}</span>
             </div>
             <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
             <div class="kb-share-manage-item-actions">
-              ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
-              ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
+              ${_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'copy' } })}
+              ${_uiButton({ label: _tr('kb.workbench.share_revoke', '撤销'), role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-cogseed-act': 'revoke' } })}
             </div>
-          </div>` : _uiEmptyState({ kind: 'quiet', title: '未发布' })}
+          </div>` : _uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.share_status_unpublished', '未发布') })}
           <div class="kb-share-cogseed-members">
-            <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
-            ${pending.length === 0 ? _uiEmptyState({ kind: 'quiet', title: '暂无待审申请' }) : ''}
+            <div class="kb-share-cogseed-members-title">${_esc(_tr('kb.workbench.cogseed_members_title', '成员申请'))}${pending.length ? _esc(_tr('kb.workbench.cogseed_members_pending', '（{count} 待审）', { count: pending.length })) : ''}</div>
+            ${pending.length === 0 ? _uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.cogseed_members_empty', '暂无待审申请') }) : ''}
             ${pending.map((m) => `
               <div class="kb-share-manage-item" data-member-id="${m.id}">
-                <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
-                <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
+                <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || _tr('kb.workbench.anonymous_guest', '匿名访客'))}</span></div>
+                <div class="kb-share-manage-item-meta">${_esc(m.note || _tr('kb.workbench.no_reason', '无理由'))} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
                 <div class="kb-share-manage-item-actions">
-                  ${_uiButton({ label: '通过', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
-                  ${_uiButton({ label: '拒绝', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.approve', '通过'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'approve' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.reject', '拒绝'), role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-member-act': 'reject' } })}
                 </div>
               </div>`).join('')}
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
-          ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-manage-close' } })}
+          ${_uiButton({ label: _tr('kb.workbench.close', '关闭'), role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-manage-close' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -7122,7 +7122,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           catch { uiToast && uiToast(_tr('kb.workbench.share_copy_failed', '复制失败'), { variant: 'warning' }); }
         } else if (act === 'revoke') {
           const res = await window.cogseed.invoke('kb.share.cogseed.revoke', { spaceId: sp.space_id });
-          if (res && res.ok) { uiToast && uiToast('已撤销', { variant: 'success' }); modal.close('revoke', { restoreFocus: false }); _kbShareDialogOpen(); }
+          if (res && res.ok) { uiToast && uiToast(_tr('kb.workbench.cogseed_revoked', '已撤销'), { variant: 'success' }); modal.close('revoke', { restoreFocus: false }); _kbShareDialogOpen(); }
           else uiToast && uiToast(_tr('kb.workbench.share_revoke_failed', '撤销失败'), { variant: 'error' });
         }
         return;
@@ -7134,8 +7134,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const verdict = memberBtn.dataset.memberAct;
         memberBtn.disabled = true;
         const res = await window.cogseed.invoke('kb.share.cogseed.review', { spaceId: sp.space_id, memberId, verdict });
-        if (res && res.ok) { uiToast && uiToast(verdict === 'approve' ? '已通过' : '已拒绝', { variant: 'success', timeoutMs: 1500 }); modal.close('review', { restoreFocus: false }); _kbCogseedManageOpen(); }
-        else { uiToast && uiToast('操作失败', { variant: 'error' }); memberBtn.disabled = false; }
+        if (res && res.ok) { uiToast && uiToast(verdict === 'approve' ? _tr('kb.workbench.approved', '已通过') : _tr('kb.workbench.rejected', '已拒绝'), { variant: 'success', timeoutMs: 1500 }); modal.close('review', { restoreFocus: false }); _kbCogseedManageOpen(); }
+        else { uiToast && uiToast(_tr('kb.workbench.action_failed', '操作失败'), { variant: 'error' }); memberBtn.disabled = false; }
       }
     });
   }
@@ -7496,47 +7496,47 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--perm" role="dialog" aria-modal="true" aria-labelledby="kb-perm-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>权限设置</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-perm-title"><span class="kb-share-pop-head-ico">${_icon('lock', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.perm_title', '权限设置'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭权限设置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.perm_close', '关闭权限设置弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
           <div class="kb-share-perm-block">
             <div class="kb-share-perm-row">
               <div class="kb-share-perm-texts">
-                <div class="kb-share-perm-title">设为私密</div>
-                <div class="kb-share-perm-desc">开启后知识库仅自己可见</div>
+                <div class="kb-share-perm-title">${_esc(_tr('kb.workbench.perm_private', '设为私密'))}</div>
+                <div class="kb-share-perm-desc">${_esc(_tr('kb.workbench.perm_private_hint', '开启后知识库仅自己可见'))}</div>
               </div>
-              ${_uiSwitch({ label: '设为私密', checked: isPrivate, attrs: { id: 'kb-perm-private' } })}
+              ${_uiSwitch({ label: _tr('kb.workbench.perm_private', '设为私密'), checked: isPrivate, attrs: { id: 'kb-perm-private' } })}
             </div>
           </div>
           <div class="kb-share-perm-block">
             <div class="kb-share-perm-row">
-              <span class="kb-share-perm-title" id="kb-perm-member-label">成员权限</span>
+              <span class="kb-share-perm-title" id="kb-perm-member-label">${_esc(_tr('kb.workbench.menu_perm', '成员权限'))}</span>
               <div class="kb-share-select-wrap">
                 ${_uiSelect({
                   id: 'kb-perm-member',
                   value: perm,
                   labelId: 'kb-perm-member-label',
                   options: [
-                    { value: 'view_export', label: '内容可查看和导出' },
-                    { value: 'view_only', label: '内容可查看但不可导出' },
-                    { value: 'hidden', label: '内容不可查看' },
+                    { value: 'view_export', label: _tr('kb.workbench.perm_view_export', '内容可查看和导出') },
+                    { value: 'view_only', label: _tr('kb.workbench.perm_view_only', '内容可查看但不可导出') },
+                    { value: 'hidden', label: _tr('kb.workbench.perm_hidden', '内容不可查看') },
                   ],
                 })}
               </div>
             </div>
             <div class="kb-share-perm-row">
-              <span class="kb-share-perm-title" id="kb-perm-join-label">加入方式</span>
+              <span class="kb-share-perm-title" id="kb-perm-join-label">${_esc(_tr('kb.workbench.field_join_mode', '加入方式'))}</span>
               <div class="kb-share-select-wrap">
                 ${_uiSelect({
                   id: 'kb-perm-join',
                   value: join,
                   labelId: 'kb-perm-join-label',
                   options: [
-                    { value: 'direct', label: '直接加入' },
-                    { value: 'apply', label: '申请加入（管理员批准）' },
-                    { value: 'invite', label: '仅邀请加入' },
+                    { value: 'direct', label: _tr('kb.workbench.join_direct', '直接加入') },
+                    { value: 'apply', label: _tr('kb.workbench.join_apply', '申请加入（管理员批准）') },
+                    { value: 'invite', label: _tr('kb.workbench.join_invite', '仅邀请加入') },
                   ],
                 })}
               </div>
@@ -7544,8 +7544,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
-          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-cancel' } })}
-          ${_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-ok' } })}
+          ${_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-cancel' } })}
+          ${_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-perm-ok' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -7591,14 +7591,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           local.member_permission = nextPerm;
           local.join_mode = nextJoin;
         }
-        if (typeof uiToast === 'function') uiToast(nextPrivate ? '已设为私密' : '权限设置已更新', { variant: 'success', timeoutMs: 1500 });
+        if (typeof uiToast === 'function') uiToast(nextPrivate ? _tr('kb.workbench.perm_private_set', '已设为私密') : _tr('kb.workbench.perm_updated', '权限设置已更新'), { variant: 'success', timeoutMs: 1500 });
         _kbPermDlgClose();
         _loadAll();
         // 同步到 CogSeed 问答后端（权限弹窗设置真实生效；静默失败不打扰）
         void window.cogseed.invoke('kb.share.cogseed.syncPolicy', { spaceId: sp.space_id })
           .then((r) => {
             if (r && r.ok === false && typeof uiToast === 'function') {
-              uiToast('已保存到 CogSeed 分享（权限待同步）：' + (r.error || ''), { variant: 'info', timeoutMs: 3000 });
+              uiToast(_tr('kb.workbench.perm_sync_pending', '已保存到 CogSeed 分享（权限待同步）：') + (r.error || ''), { variant: 'info', timeoutMs: 3000 });
             }
           })
           .catch(() => { /* 未发布/未配置：无需同步 */ });
