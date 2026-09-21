@@ -67,6 +67,7 @@ import {
   normalizeMarketplaceCategoryCode,
 } from './marketplace_biz';
 import { normalizeInstallVersion } from './marketplace_installs';
+import { installedVersionOf } from './marketplace/installed-version';
 import { NAME_DISPLAY_MAX_UNITS, nameDisplayWidth } from '../util/name-limit';
 import { captureSkillTree, normalizeSkillSnapshotPath } from './skills/snapshot-service';
 import { createProcessCollector } from './chat_events/process-persist';
@@ -392,6 +393,14 @@ export interface SkillChatMeta { session_id?: string; [k: string]: unknown }
 
 export interface SkillCogSeedMeta {
   category?: string;
+  /**
+   * Provenance of a skill forked out of a Hub official copy (specs/010 FR-057).
+   *
+   * Written once, at fork time, and **never read back by lifecycle logic** in iteration one:
+   * nothing re-links the fork to Hub through it, so Hub updates, disable and usage events
+   * cannot reach the copy. Client-only — it never travels to Hub.
+   */
+  forked_from?: { content_id: string; version: string };
   descriptions?: { zh?: string; en?: string; [lang: string]: string | undefined };
   description_zh?: string;
   description_en?: string;
@@ -576,6 +585,21 @@ function _stripSkillSidecarDescriptions(meta: SkillCogSeedMeta): SkillCogSeedMet
 
 function writeSkillCogSeedMetaFullSync(dir: string, meta: SkillCogSeedMeta): void {
   writeJsonSync(skillMetaFile(dir), _stripSkillSidecarDescriptions(meta));
+}
+
+/**
+ * Stamp `forked_from` onto a forked custom skill's sidecar (specs/010 FR-057).
+ *
+ * Same read-merge-write shape as `markSkillImportDraftSync`: `writeSkillCogSeedMetaSync` only
+ * carries the keys it knows about, and this one is deliberately not one of them — the fork
+ * provenance is written here, in one place, and by nothing else.
+ */
+export function markSkillForkedFromSync(
+  dir: string,
+  forkedFrom: { content_id: string; version: string },
+): void {
+  const current = readSkillCogSeedMetaSync(dir);
+  writeJsonSync(skillMetaFile(dir), { ...current, forked_from: forkedFrom });
 }
 
 function markSkillImportDraftSync(dir: string, source: 'url' | 'dir'): void {
@@ -842,11 +866,17 @@ async function _allSkillListingsCached(): Promise<SkillListing[]> {
         // be present for install/reconcile compatibility, but the global UI intentionally does
         // not surface it.
         if (isMarketplaceSource(source)) {
+          // ⚠️ specs/010 FR-019/FR-020/FR-067：列表里的 `version` 是**本机实际已安装版本**，
+          // 必须经 `installed-version.ts` 这一单一判定入口取得——目录页的「有更新」状态就是拿
+          // 它和目录版本比的。此处**不再自行解释** `_install.json.version`：落盘未完成或标记
+          // 损坏时该入口返回 null（判不出），而直接读文件会把一个未落地的版本当成已装版本。
+          // 其余字段（发布时间、默认安装、停用状态）仍来自同一个标记文件，语义不同、各取各的。
+          const actualVersion = installedVersionOf(getActiveUserId(), name);
+          version = actualVersion ? normalizeInstallVersion(actualVersion) : undefined;
           try {
             const metaFile = path.join(baseDir, name, '_install.json');
             if (fs.existsSync(metaFile)) {
               const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-              if (meta) version = normalizeInstallVersion(meta.version);
               if (meta && typeof meta.published_at === 'number') marketplacePublishedAt = meta.published_at;
               if (meta && typeof meta.updated_at === 'number') marketplaceUpdatedAt = meta.updated_at;
               if (meta && typeof meta.default_install === 'boolean') defaultInstall = meta.default_install;
@@ -1330,19 +1360,103 @@ async function _listSkillFilesAt(skillDir: string): Promise<SkillFileInfo[]> {
   return out;
 }
 
+/**
+ * The client's same-id prohibition, in one place.
+ *
+ * A custom skill's id IS its directory name under `<uid>/cloud/skills/`, and the registry
+ * resolves the two skill roots marketplace-first, first-wins (`_allSkillListings`). So an id
+ * already taken by a marketplace install would be silently shadowed rather than shown — the
+ * create is rejected instead, so the user renames up front.
+ *
+ * Extracted from `createCustomSkill` so every path that brings a custom skill into existence
+ * passes the same two gates. specs/010 FR-055 leans on this prohibition: it is what makes the
+ * fork order ("uninstall the official copy first, then copy") a hard requirement.
+ */
+export function assertCustomSkillIdAvailable(name: string): void {
+  if (fs.existsSync(customSkillDir(name))) throw new Error(t('skills.errors.skill_exists', { name }));
+  if (fs.existsSync(path.join(userMarketplaceSkillsDir(getActiveUserId()), name))) {
+    throw new Error(t('skills.errors.builtin_conflict', { name }));
+  }
+}
+
+/** A free custom-skill id derived from `baseName`, using the existing import dedupe rule. */
+export function reserveFreeCustomSkillId(baseName: string): string {
+  return _dedupeImportName(baseName, new Set<string>());
+}
+
+/**
+ * Ids of custom skills whose **display name** equals `displayName`.
+ *
+ * The prohibition above is an id-space rule, and a marketplace install's id is its
+ * `content_id` — so it cannot see that an installed Hub skill and a custom skill show the
+ * same name to the user. specs/010 FR-060 needs exactly that comparison when the official
+ * copy is reinstalled next to a fork, so it is made here, over the same frontmatter `name`
+ * the list renders.
+ */
+export function findCustomSkillIdsByDisplayName(displayName: string): string[] {
+  const wanted = (displayName || '').trim();
+  if (!wanted) return [];
+  const root = CUSTOM_SKILLS_DIR();
+  let entries: import('node:fs').Dirent[];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  const out: string[] = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    const dir = path.join(root, e.name);
+    if (!hasSkillMd(dir)) continue;
+    let name = e.name;
+    try {
+      const meta = parseSkillFrontmatter(fs.readFileSync(skillMdFile(dir), 'utf8'));
+      if (typeof meta.name === 'string' && meta.name.trim()) name = meta.name.trim();
+    } catch { /* fall back to the dir name */ }
+    if (name === wanted) out.push(e.name);
+  }
+  return out;
+}
+
+/**
+ * Promote an already-materialized skill tree into `<uid>/cloud/skills/<id>/`.
+ *
+ * The single atomic step of the fork flow (specs/010 FR-055–FR-057): the tree is copied
+ * elsewhere first, and only this rename makes it a custom skill — so a crash can never leave
+ * a half-built skill where the loader would see it. Passes the same two gates as
+ * `createCustomSkill`, which is what refuses the reversed order while the official copy is
+ * still installed.
+ *
+ * `desiredId` must already be free and must match the staged SKILL.md `name`; the caller owns
+ * dedupe, because the rename it may imply is a user-facing decision.
+ */
+export async function adoptCustomSkillFromStagedTree(opts: {
+  stagingDir: string;
+  desiredId: string;
+  forkedFrom?: { content_id: string; version: string };
+}): Promise<CustomSkill | null> {
+  const { stagingDir, desiredId, forkedFrom } = opts;
+  const err = validateSkillName(desiredId);
+  if (err) throw new Error(err);
+  if (!hasSkillMd(stagingDir)) throw new Error(t('skills.errors.create_missing_skill_md'));
+  assertCustomSkillIdAvailable(desiredId);
+
+  const d = customSkillDir(desiredId);
+  fs.mkdirSync(path.dirname(d), { recursive: true });
+  fs.renameSync(stagingDir, d);
+  if (forkedFrom) markSkillForkedFromSync(d, forkedFrom);
+  // Same sync-tombstone guard as `createCustomSkill`: stamp mtime to now so a recent delete
+  // tombstone for this id cannot make the next sync pass re-delete the adopted tree.
+  try { fs.utimesSync(skillMdFile(d), new Date(), new Date()); } catch { /* best effort */ }
+  log.info(`adopted custom skill id=${desiredId}${forkedFrom ? ` forked_from=${forkedFrom.content_id}@${forkedFrom.version}` : ''}`);
+  _invalidateSkillListCache();
+  invalidateCoreAgentSkills().catch(() => { /* runner may not be loaded yet */ });
+  return getCustomSkill(desiredId);
+}
+
 export async function createCustomSkill(
   name: string, description: string, category = '',
 ): Promise<CustomSkill | null> {
   const err = validateSkillName(name);
   if (err) throw new Error(err);
   const d = customSkillDir(name);
-  if (fs.existsSync(d)) throw new Error(t('skills.errors.skill_exists', { name }));
-  // Custom skills would silently shadow a same-named builtin in the
-  // skill-registry first-wins resolution. Reject the create so the user
-  // renames up front.
-  if (fs.existsSync(path.join(userMarketplaceSkillsDir(getActiveUserId()), name))) {
-    throw new Error(t('skills.errors.builtin_conflict', { name }));
-  }
+  assertCustomSkillIdAvailable(name);
   fs.mkdirSync(d, { recursive: true });
   const skillMdPath = path.join(d, 'SKILL.md');
   writeTextAtomicSync(skillMdPath, skillMdContent(name, description, '', category, 'approved'));
