@@ -48,7 +48,7 @@
     qaSessionId: null, // 当前会话 id
   };
 
-  const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: '图片', word: 'WORD', txt: 'TXT' };
+  const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: '图片', word: 'WORD', txt: 'TXT' };  // img 在 _fileTypeLabel() 里取词
 
   function _esc(s) {
     return String(s == null ? '' : s)
@@ -312,12 +312,12 @@
 
   function _statusChip(relPath) {
     const st = _state.kbStatus.get(relPath);
-    if (!st) return '<span class="kb-file-status is-none">未索引</span>';
-    if (st.status === 'ready') return `<span class="kb-file-status is-ready" title="chunks: ${st.chunks ?? 0}">${_icon('check')} 已索引</span>`;
+    if (!st) return `<span class="kb-file-status is-none">${_esc(_tr('kb.workbench.file_unindexed', '未索引'))}</span>`;
+    if (st.status === 'ready') return `<span class="kb-file-status is-ready" title="chunks: ${st.chunks ?? 0}">${_icon('check')} ${_esc(_tr('kb.workbench.file_indexed', '已索引'))}</span>`;
     if (st.status === 'processing') return `<span class="kb-file-status is-run">${_esc(_tr('kb.workbench.file_indexing', '索引中…'))}</span>`;
     if (st.status === 'pending') return `<span class="kb-file-status is-run">${_esc(_tr('kb.workbench.file_queued', '排队中'))}</span>`;
     if (st.status === 'failed') return '<span class="kb-file-status is-failed" title="' + _esc(st.error || '') + '">' + _esc(_tr('kb.workbench.file_failed', '失败')) + '</span>';
-    return '<span class="kb-file-status is-none">未索引</span>';
+    return `<span class="kb-file-status is-none">${_esc(_tr('kb.workbench.file_unindexed', '未索引'))}</span>`;
   }
 
   // ── 数据加载 ──
@@ -389,20 +389,20 @@
       { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
         `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
           ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
-      ).join('') || '<div class="kb-tree-empty">暂无知识库，可使用右侧按钮创建</div>' },
+      ).join('') || `<div class="kb-tree-empty">${_esc(_tr('kb.workbench.tree_empty', '暂无知识库，可使用右侧按钮创建'))}</div>` },
       { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
         `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
           ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
-      ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
+      ).join('') || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.tree_no_match', '无匹配知识库') : _tr('kb.workbench.tree_no_space', '暂无共享空间'))}</div>` },
       { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
     ];
     const groupHtml = groups.map((g) => {
       const open = !_state.treeGroups.has(g.key);
       return `<div class="kb-tree-group">
-        <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${open ? '收起' : '展开'}">
+        <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${_esc(open ? _tr('kb.workbench.collapse', '收起') : _tr('kb.workbench.expand', '展开'))}">
           <span class="kb-tree-caret">${_icon(open ? 'chevron-down' : 'chevron-right', 'kb-tree-caret-icon')}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
           ${g.plus ? _uiIconButton({
-            label: g.btnTitle || '创建',
+            label: g.btnTitle || _tr('kb.workbench.tree_create', '创建'),
             icon: 'plus',
             className: 'kb-tree-plus',
             attrs: { id: g.btnId || 'kb-new-lib' },
@@ -533,7 +533,7 @@
   async function _createLib() {
     let name = null;
     try {
-      name = typeof uiPrompt === 'function' ? await uiPrompt('新建个人知识库名称：') : window.prompt('新建个人知识库名称：');
+      name = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.create_lib_prompt', '新建个人知识库名称：')) : window.prompt(_tr('kb.workbench.create_lib_prompt', '新建个人知识库名称：'));
     } catch (_) { /* cancelled */ }
     if (!name || !name.trim()) return;
     const clean = name.trim().replace(/[\/\\]/g, '-');
@@ -543,7 +543,7 @@
       _selectLib(clean);
     } catch (err) {
       _log.warn('create lib failed', err);
-      if (typeof uiToast === 'function') uiToast('创建失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.create_failed', '创建失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -720,7 +720,7 @@
     okBtn.disabled = true;
     okBtn.classList.add('is-loading');
     okBtn.setAttribute('aria-busy', 'true');
-    _setUiButtonPresentation(okBtn, '创建中…');
+    _setUiButtonPresentation(okBtn, _tr('kb.workbench.creating', '创建中…'));
     try {
       const res = await window.cogseed.invoke('spaces.create', {
         name,
@@ -733,7 +733,7 @@
       });
       if (res && res.ok === false) throw new Error(res.error || 'create failed');
       _kbShareCloseDialog();
-      if (typeof uiToast === 'function') uiToast('共享知识库已创建', { variant: 'success', timeoutMs: 2000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.space_created', '共享知识库已创建'), { variant: 'success', timeoutMs: 2000 });
       await _loadAll();
       if (res && res.space && res.space.space_id) _selectSpace(res.space.space_id);
     } catch (err) {
@@ -741,9 +741,9 @@
       okBtn.disabled = false;
       okBtn.classList.remove('is-loading');
       okBtn.removeAttribute('aria-busy');
-      _setUiButtonPresentation(okBtn, '确定');
+      _setUiButtonPresentation(okBtn, _tr('kb.workbench.confirm', '确定'));
       const raw = String((err && err.message) || err || '');
-      if (typeof uiToast === 'function') uiToast(`创建失败：${_kbSpaceErrText(raw)}`, { variant: 'error', timeoutMs: 3000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.create_failed', '创建失败：') + _kbSpaceErrText(raw), { variant: 'error', timeoutMs: 3000 });
     }
   }
 
@@ -772,11 +772,11 @@
     const isLibrary = kind === 'lib';
     return _uiEmptyState({
       kind: 'actionable',
-      title: isLibrary ? '还没有知识库' : '知识库什么也没有，去这里添加',
-      hint: isLibrary ? '创建一个知识库，或导入资料开始使用' : '支持文件、文件夹、网页、笔记等多种方式导入',
+      title: isLibrary ? _tr('kb.workbench.empty_no_library', '还没有知识库') : _tr('kb.workbench.empty_library', '知识库什么也没有，去这里添加'),
+      hint: isLibrary ? _tr('kb.workbench.empty_no_library_hint', '创建一个知识库，或导入资料开始使用') : _tr('kb.workbench.empty_library_hint', '支持文件、文件夹、网页、笔记等多种方式导入'),
       icon: 'book-open',
       action: {
-        label: isLibrary ? '创建知识库' : '添加内容',
+        label: isLibrary ? _tr('kb.workbench.empty_create_library', '创建知识库') : _tr('kb.workbench.empty_add_content', '添加内容'),
         icon: 'plus',
         attrs: { id: isLibrary ? 'kb-empty-create' : 'kb-empty-add' },
       },
@@ -802,14 +802,14 @@
     try {
       const res = await window.cogseed.invoke('spaces.files.pickAndUpload', { spaceId: _state.spaceId, targetDir: '' });
       if (res && res.ok === false) {
-        if (typeof uiToast === 'function') uiToast('上传失败：' + _esc(res.error || 'unknown'), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.upload_failed', '上传失败：') + _esc(res.error || 'unknown'), { variant: 'error' });
         return;
       }
-      if (typeof uiToast === 'function') uiToast('已上传，开始索引…', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.upload_done', '已上传，开始索引…'), { variant: 'success', timeoutMs: 1500 });
       _loadSpaceFiles(_state.spaceId);
     } catch (err) {
       _log.warn('space upload failed', err);
-      if (typeof uiToast === 'function') uiToast('上传取消或失败', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.upload_cancelled', '上传取消或失败'), { variant: 'warning' });
     }
   }
 
@@ -824,14 +824,14 @@
       const imported = Number(res.imported) || 0;
       const scanned = Number(res.scanned) || 0;
       if (typeof uiToast === 'function') {
-        uiToast(imported ? `已导入 ${imported} 个文件（扫描 ${scanned}）` : '所选文件夹没有可导入的文件', {
+        uiToast(imported ? _tr('kb.workbench.dir_import_done', '已导入 {count} 个文件（扫描 {scanned}）', { count: imported, scanned }) : _tr('kb.workbench.dir_import_none', '所选文件夹没有可导入的文件'), {
           variant: imported ? 'success' : 'warning', timeoutMs: 2500,
         });
       }
       _loadSpaceFiles(_state.spaceId);
     } catch (err) {
       _log.warn('space import dir failed', err);
-      if (typeof uiToast === 'function') uiToast('导入文件夹失败', { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.dir_import_failed', '导入文件夹失败'), { variant: 'error' });
     }
   }
 
@@ -876,7 +876,7 @@
       html += `<div class="kb-import-dlg-row is-dir" data-import-dir="${_esc(d.name)}">
         ${_icon('folder', 'kb-import-dlg-ico')}
         <span class="kb-import-dlg-name">${_esc(d.name)}</span>
-        <span class="kb-import-dlg-meta">文件夹</span>
+        <span class="kb-import-dlg-meta">${_esc(_tr('kb.workbench.node_folder', '文件夹'))}</span>
       </div>`;
     }
     for (const [fileIndex, f] of files.entries()) {
@@ -890,7 +890,7 @@
       </div>`;
     }
     if (!dirs.length && !files.length) {
-      html = _uiEmptyState({ kind: 'quiet', title: q ? '无匹配文件' : '此目录为空' });
+      html = _uiEmptyState({ kind: 'quiet', title: q ? _tr('kb.workbench.files_no_match', '无匹配文档') : _tr('kb.workbench.dir_empty', '此目录为空') });
     }
     overlay.querySelector('.kb-import-dlg-files').innerHTML = html;
     // 路径栏
@@ -903,7 +903,7 @@
   function _syncImportDlgFooter(overlay) {
     const countEl = overlay.querySelector('.kb-import-dlg-count');
     const okBtn = overlay.querySelector('.kb-import-dlg-ok');
-    if (countEl) countEl.textContent = `已选中 ${_dlgSelected.size} 个文件`;
+    if (countEl) countEl.textContent = _tr('kb.workbench.import_selected_count', '已选中 {count} 个文件', { count: _dlgSelected.size });
     if (okBtn) okBtn.disabled = _dlgSelected.size === 0;
   }
 
@@ -1116,7 +1116,7 @@
 
   // 导入菜单「新建文件夹」：个人库 contexts.mkdir / 空间 spaces.files.mkdir
   async function _kbNewFolder() {
-    const name = typeof uiPrompt === 'function' ? await uiPrompt('新建文件夹名称：', '') : window.prompt('新建文件夹名称：', '');
+    const name = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.new_folder_prompt', '新建文件夹名称：'), '') : window.prompt(_tr('kb.workbench.new_folder_prompt', '新建文件夹名称：'), '');
     if (!name || !name.trim()) return;
     const clean = String(name).trim().replace(/[\\/:*?"<>|]/g, '_');
     try {
@@ -1129,18 +1129,18 @@
         if (res && res.ok === false) throw new Error(res.error || 'mkdir failed');
         _state.expanded.add(_state.currentLib || '');
       }
-      if (typeof uiToast === 'function') uiToast('文件夹已创建', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.folder_created', '文件夹已创建'), { variant: 'success', timeoutMs: 1500 });
       _loadAll();
     } catch (err) {
       _log.warn('new folder failed', err);
-      if (typeof uiToast === 'function') uiToast('创建失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.create_failed', '创建失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
   // 导入菜单「新建笔记」：在库内创建一篇 Markdown 笔记
   async function _kbNewNote() {
-    const title = typeof uiPrompt === 'function' ? await uiPrompt('笔记标题：', '') : window.prompt('笔记标题：', '');
-    const name = (title && title.trim()) ? String(title).trim() : `笔记-${Date.now()}`;
+    const title = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.note_title_prompt', '笔记标题：'), '') : window.prompt(_tr('kb.workbench.note_title_prompt', '笔记标题：'), '');
+    const name = (title && title.trim()) ? String(title).trim() : _tr('kb.workbench.note_untitled', '笔记-{ts}', { ts: Date.now() });
     const fileName = `${name.replace(/[\\/:*?"<>|]/g, '_')}.md`;
     const content = `# ${name}\n\n`;
     try {
@@ -1152,11 +1152,11 @@
         const res = await window.cogseed.invoke('contexts.write', { path, content });
         if (res && res.ok === false) throw new Error(res.error || 'create failed');
       }
-      if (typeof uiToast === 'function') uiToast(`笔记「${fileName}」已创建`, { variant: 'success', timeoutMs: 2000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.note_created', '笔记「{name}」已创建', { name: fileName }), { variant: 'success', timeoutMs: 2000 });
       _loadAll();
     } catch (err) {
       _log.warn('new note failed', err);
-      if (typeof uiToast === 'function') uiToast('创建笔记失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.note_create_failed', '创建笔记失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -1233,7 +1233,7 @@
     const parts = [];
     if (lib) _renderNodeRows(parts, lib.children || [], 0, lib.path || _state.currentLib, q);
     // 底部：没有更多内容了（对齐 ima 列表结束提示）
-    const endTip = parts.length ? '<div class="kb-files-end">没有更多内容了</div>' : '';
+    const endTip = parts.length ? `<div class="kb-files-end">${_esc(_tr('kb.workbench.files_end', '没有更多内容了'))}</div>` : '';
     if (!parts.length && q) {
       // 搜索无结果：显示"无匹配"占位，不显示空库引导（避免误导为新库）
       list.innerHTML = _uiEmptyState({
@@ -1297,7 +1297,7 @@
     const cur = String(_state.currentLib || '');
     const base = cur ? new RegExp('^' + _escReg(cur) + '(?:/|$)') : null;
     const rel = base ? String(parentPath || '').replace(base, '').replace(/\/+$/, '') : String(parentPath || '');
-    return rel ? `${_icon('folder')} ${rel}` : '库根';
+    return rel ? `${_icon('folder')} ${rel}` : _tr('kb.workbench.lib_root', '库根');
   }
 
   function _escReg(s) {
@@ -1319,8 +1319,8 @@
           ${_icon('chevron-right', 'kb-mini-ico kb-dir-caret')}
           ${_icon('folder-open', 'kb-file-icon-svg is-dir')}
           <span class="kb-file-name">${_esc(d.name)}</span>
-          <span class="kb-file-meta">${_countFiles(d)} 项</span>
-          <span class="kb-file-actions">${_uiIconButton({ label: '展开', icon: 'chevron-right', className: 'kb-mini-btn', attrs: { 'data-kb-dir-toggle': path } })}</span>
+          <span class="kb-file-meta">${_esc(_tr('kb.workbench.node_count', '{count} 项', { count: _countFiles(d) }))}</span>
+          <span class="kb-file-actions">${_uiIconButton({ label: _tr('kb.workbench.expand', '展开'), icon: 'chevron-right', className: 'kb-mini-btn', attrs: { 'data-kb-dir-toggle': path } })}</span>
         </div>`);
       }
       for (const f of files) {
@@ -1354,8 +1354,8 @@
         ${caret}
         ${_icon('folder-open', 'kb-file-icon-svg is-dir')}
         <span class="kb-file-name">${_esc(d.name)}</span>
-        <span class="kb-file-meta">${_countFiles(d)} 项</span>
-        <span class="kb-file-actions">${_uiIconButton({ label: open ? '折叠' : '展开', icon: open ? 'chevron-down' : 'chevron-right', className: 'kb-mini-btn', attrs: { 'data-kb-dir-toggle': path } })}</span>
+        <span class="kb-file-meta">${_esc(_tr('kb.workbench.node_count', '{count} 项', { count: _countFiles(d) }))}</span>
+        <span class="kb-file-actions">${_uiIconButton({ label: open ? _tr('kb.workbench.collapse', '收起') : _tr('kb.workbench.expand', '展开'), icon: open ? 'chevron-down' : 'chevron-right', className: 'kb-mini-btn', attrs: { 'data-kb-dir-toggle': path } })}</span>
       </div>`);
       if (open) _renderNodeRows(parts, d.children || [], level + 1, path, q);
     }
@@ -1841,7 +1841,7 @@
       pre.hidden = true;
       pre.textContent = '';
       frame.hidden = false;
-      if (srcBtn) srcBtn.textContent = '</> 查看源码';
+      if (srcBtn) srcBtn.textContent = _tr('kb.workbench.viewer_source', '</> 查看源码');
       _fvCur = { mode: 'html', el: frame, src: content.src, rel: content.rel, spaceId: content.spaceId };
       return;
     }
@@ -1855,16 +1855,16 @@
         const res = await window.cogseed.invoke('kb.openFile', payload);
         const text = res && res.ok ? String(res.content || '') : '';
         if (!text) {
-          if (typeof uiToast === 'function') uiToast('读取源码失败，请用"在系统中打开"查看', { variant: 'warning' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.viewer_source_failed', '读取源码失败，请在系统中打开查看'), { variant: 'warning' });
           return;
         }
         frame.hidden = true;
         pre.hidden = false;
         pre.textContent = text;
-        if (srcBtn) srcBtn.textContent = '⇲ 渲染视图';
+        if (srcBtn) srcBtn.textContent = _tr('kb.workbench.viewer_render', '⇲ 渲染视图');
         _fvCur = { mode: 'text', el: pre };
       } catch (_) {
-        if (typeof uiToast === 'function') uiToast('读取源码失败，请用"在系统中打开"查看', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.viewer_source_failed', '读取源码失败，请在系统中打开查看'), { variant: 'warning' });
       }
     })();
   }
@@ -2089,9 +2089,9 @@
     mdEl.hidden = true; mdEl.innerHTML = '';
     if (st.title) overlay.querySelector('#kb-fv-title').textContent = st.title;
     const scopeEl = overlay.querySelector('#kb-fv-scope');
-    scopeEl.textContent = st.scope ? `来自「${st.scope}」` : '';
+    scopeEl.textContent = st.scope ? _tr('kb.workbench.viewer_scope', '来自「{scope}」', { scope: st.scope }) : '';
     scopeEl.hidden = !st.scope;
-    overlay.querySelector('#kb-fv-reader').textContent = '⇱ 阅读模式';
+    overlay.querySelector('#kb-fv-reader').textContent = _tr('kb.workbench.viewer_reader', '⇱ 阅读模式');
     const srcBtn = overlay.querySelector('#kb-fv-source');
     if (srcBtn) srcBtn.hidden = !(st.content && st.content.kind === 'html');
     // "在系统中打开"的当前文件上下文（follow 每次内容视图变化；无内容时隐藏按钮）
@@ -2107,7 +2107,7 @@
     const c = st.content;
     if (!c || !c.kind) {
       errorEl.hidden = false;
-      errorEl.textContent = '文件内容为空';
+      errorEl.textContent = _tr('kb.workbench.viewer_empty', '文件内容为空');
       return;
     }
     if (c.kind === 'markdown') {
@@ -2215,7 +2215,7 @@
       });
     } else {
       errorEl.hidden = false;
-      errorEl.textContent = '暂不支持预览该文件';
+      errorEl.textContent = _tr('kb.workbench.viewer_unsupported', '暂不支持预览该文件');
       return;
     }
     overlay.focus();
@@ -2376,7 +2376,7 @@
     }
     if (typeof uiToast === 'function') {
       const translated = typeof window.t === 'function' ? window.t('kb.viewer.ui_unavailable') : '';
-      uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : '原文查看器暂时不可用', { variant: 'warning' });
+      uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : _tr('kb.workbench.viewer_unavailable', '原文查看器暂时不可用'), { variant: 'warning' });
     }
     return 'unavailable';
   }
@@ -2391,8 +2391,8 @@
       const h = document.createElement('div');
       h.className = 'kb-qa-hint';
       h.innerHTML = `<div class="kb-qa-hint-ico">${_svg('sparkles')}</div>
-        <div class="kb-qa-hint-title">基于知识库问答</div>
-        <div class="kb-qa-hint-sub">提问后回答只引用库内资料并标注锚点</div>`;
+        <div class="kb-qa-hint-title">${_esc(_tr('kb.workbench.qa_hint_title', '基于知识库问答'))}</div>
+        <div class="kb-qa-hint-sub">${_esc(_tr('kb.workbench.qa_hint_sub', '提问后回答只引用库内资料并标注锚点'))}</div>`;
       box.appendChild(h);
     } else if (hasMsg && hint) {
       hint.remove();
@@ -2421,7 +2421,7 @@
         <span class="kb-qa-attach-ico is-${String(ext).toLowerCase()}">${_esc(ext)}</span>
         <span class="kb-qa-attach-name" title="${_esc(a.name)}">${_esc(a.name)}</span>
         <span class="kb-qa-attach-meta">${_esc(ext)} ${_esc(size)}</span>
-        ${_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger', className: 'kb-qa-attach-rm', attrs: { 'data-attach-idx': i } })}
+        ${_uiIconButton({ label: _tr('kb.workbench.qa_attach_remove', '移除附件'), icon: 'x', variant: 'danger', className: 'kb-qa-attach-rm', attrs: { 'data-attach-idx': i } })}
       </div>`;
     }).join('');
     strip.querySelectorAll('[data-attach-idx]').forEach((btn) => {
@@ -2572,7 +2572,7 @@
     const mmBtn = card.querySelector('#kb-wb-gen-mm');
     if (mmBtn) {
       mmBtn.disabled = empty;
-      mmBtn.title = empty ? '当前知识库还没有内容' : '基于当前库文档生成多级脑图（不依赖 AI 解析）';
+      mmBtn.title = empty ? _tr('kb.workbench.lib_empty_short', '当前知识库还没有内容') : _tr('kb.workbench.gen_mm_tip', '基于当前库文档生成多级脑图（不依赖 AI 解析）');
       if (!mmBtn.dataset.kbGenBound) {
         mmBtn.dataset.kbGenBound = '1';
         mmBtn.addEventListener('click', () => _genMindmap());
@@ -2581,7 +2581,7 @@
     const quizBtn = card.querySelector('#kb-wb-gen-quiz');
     if (quizBtn) {
       quizBtn.disabled = empty;
-      quizBtn.title = empty ? '当前知识库还没有内容' : '基于当前库文档生成测验题（不依赖 AI 解析）';
+      quizBtn.title = empty ? _tr('kb.workbench.lib_empty_short', '当前知识库还没有内容') : _tr('kb.workbench.gen_quiz_tip', '基于当前库文档生成测验题（不依赖 AI 解析）');
       if (!quizBtn.dataset.kbGenBound) {
         quizBtn.dataset.kbGenBound = '1';
         quizBtn.addEventListener('click', () => _genQuiz());
@@ -2604,7 +2604,7 @@
     }
     _state.summaryLib = key;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      card.innerHTML = '<div class="kb-wb-right-card-title"><span class="kb-wb-ai-chip"></span>AI 解析本知识库</div><div class="kb-wb-right-placeholder">解析服务不可用</div>';
+      card.innerHTML = `<div class="kb-wb-right-card-title"><span class="kb-wb-ai-chip"></span>${_esc(_tr('kb.workbench.analysis_title', 'AI 解析本知识库'))}</div><div class="kb-wb-right-placeholder">${_esc(_tr('kb.workbench.analysis_unavailable', '解析服务不可用'))}</div>`;
       return;
     }
     const holder = card.querySelector('.kb-wb-right-placeholder');
@@ -2612,7 +2612,7 @@
       const isSpace = !!_state.spaceId;
       const count = isSpace ? _state.spaceFiles.length
         : (_findLibNode(_state.currentLib) ? _countFiles(_findLibNode(_state.currentLib)) : 0);
-      holder.textContent = isSpace ? '正在解析…' : `正在解析… 共 ${count} 个文件`;
+      holder.textContent = isSpace ? _tr('kb.workbench.analysis_running', '正在解析…') : _tr('kb.workbench.analysis_running_files', '正在解析… 共 {count} 个文件', { count });
     }
     window.cogseed.invoke('kb.summary', {
       dir: _state.spaceId ? null : (lib || null),
@@ -2634,7 +2634,7 @@
         const b2 = document.getElementById('kb-analyze-btn');
         if (b2) b2.disabled = false;
         const h = card.querySelector('.kb-wb-right-placeholder');
-        if (h) h.textContent = '解析失败，请点击「生成 AI 解析」重试。';
+        if (h) h.textContent = _tr('kb.workbench.analysis_retry_hint', '解析失败，请点击「生成 AI 解析」重试。');
       });
   }
 
@@ -2741,7 +2741,7 @@
     const tip = texts[reason] || texts['model-failed'];
     const withRetry = reason !== 'empty' && reason !== 'not-found';
     return '<div class="kb-mm-fail">' + tip
-      + (withRetry ? `<br>${_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })}` : '')
+      + (withRetry ? `<br>${_uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })}` : '')
       + '</div>';
   }
 
@@ -2808,19 +2808,19 @@
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-mm-msg';
     body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' ' + _esc(_tr('kb.workbench.mm_title', '脑图预览')) + _esc(headLabel) + '</div>'
-      + '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
+      + `<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">${_esc(_tr('kb.workbench.mm_loading', '正在载入脑图…'))}</div></div>`;
     ai.appendChild(body);
     if (box) box.appendChild(ai);
     const canvas = body.querySelector('.kb-wb-mm-canvas');
     if (!m || !m.key || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图存档不可用</div>';
+      if (canvas) canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_archive_unavailable', '脑图存档不可用'))}</div>`;
       return;
     }
     window.cogseed.invoke('kb.mindmap.load', { key: m.key })
       .then((r) => {
         if (!canvas) return;
         if (!r || !r.ok || !r.root) {
-          canvas.innerHTML = '<div class="kb-mm-fail">脑图存档已失效（可能已被删除）</div>';
+          canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_archive_stale', '脑图存档已失效（可能已被删除）'))}</div>`;
           return;
         }
         const root = r.root;
@@ -2830,7 +2830,7 @@
         canvas._mmScope = _mmScopeFromKey(m.key); // 恢复存档也要带回作用域，否则刷新/保存会串味
         _bindMindCanvas(canvas);
       })
-      .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
+      .catch(() => { if (canvas) canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_load_failed_dot', '脑图载入失败'))}</div>`; });
   }
 
   // 历史恢复时，在答案的「重新生成脑图」按钮下方异步载入该答案已存的脑图快照
@@ -2838,14 +2838,14 @@
     if (!row || !key || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     const holder = document.createElement('div');
     holder.className = 'kb-mm-msg';
-    holder.innerHTML = '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
+    holder.innerHTML = `<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">${_esc(_tr('kb.workbench.mm_loading', '正在载入脑图…'))}</div></div>`;
     row.appendChild(holder);
     const canvas = holder.querySelector('.kb-wb-mm-canvas');
     window.cogseed.invoke('kb.mindmap.load', { key })
       .then((r) => {
         if (!canvas) return;
         if (!r || !r.ok || !r.root) {
-          canvas.innerHTML = '<div class="kb-mm-fail">脑图存档已失效（可能已被删除）</div>';
+          canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_archive_stale', '脑图存档已失效（可能已被删除）'))}</div>`;
           return;
         }
         const root = r.root;
@@ -2855,7 +2855,7 @@
         canvas._mmScope = _mmScopeFromKey(key);
         _bindMindCanvas(canvas);
       })
-      .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
+      .catch(() => { if (canvas) canvas.innerHTML = `<div class="kb-mm-fail">${_esc(_tr('kb.workbench.mm_load_failed_dot', '脑图载入失败'))}</div>`; });
   }
 
   // 生成脑图 → 作为产物追加到**对话消息区**（kb-qa-messages），
@@ -2916,7 +2916,7 @@
           canvas.innerHTML = '<div class="kb-mm-fail">'
             + _esc(_tr('kb.workbench.mm_scope_mismatch', '主进程没有按「本文档」作用域生成（返回作用域：{scope}），已丢弃这次结果。', { scope: res.scope || _tr('kb.workbench.unknown', '未知') }))
             + '<br>' + _esc(_tr('kb.workbench.mm_stale_process', '常见原因是应用主进程仍是旧代码（只刷新了界面，没重启进程）：请**完全退出 CogSeed 后重新启动**再试。'))
-            + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
+            + '<br>' + _uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
             + '</div>';
           // 标题行不能还挂着「本文档：xxx」——否则用户在错误提示上方仍看到"这是本文档的图"
           const scopeTag = body.querySelector('.kb-mm-msg-scope');
@@ -2941,7 +2941,7 @@
         if (doc && !_mmSameDoc(res.files, doc)) {
           canvas.innerHTML = '<div class="kb-mm-fail">'
             + _esc(_tr('kb.workbench.mm_file_mismatch', '主进程读取的文件与请求的不是同一份（请求：{asked}；实际：{actual}），已丢弃这次结果。', { asked: doc, actual: Array.isArray(res.files) ? res.files.join(_tr('kb.workbench.list_separator', '、')) : _tr('kb.workbench.unknown', '未知') }))
-            + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
+            + '<br>' + _uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-mm-retry-btn' })
             + '</div>';
           const retry2 = canvas.querySelector('.kb-mm-retry-btn');
           if (retry2) retry2.addEventListener('click', () => { ai.remove(); _genMindmap(doc); });
@@ -3006,7 +3006,7 @@
     };
     const tip = texts[reason] || _tr('kb.workbench.quiz_generate_failed_dot', '测验生成失败，请稍后重试。');
     return '<div class="kb-mm-fail">' + tip
-      + '<br>' + _uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-quiz-retry-btn' })
+      + '<br>' + _uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh', className: 'kb-quiz-retry-btn' })
       + '</div>';
   }
 
@@ -3211,7 +3211,7 @@
     // 有候选但一个都不匹配 = 这份文档不在当前库里：别去开一个只会显示"不能读取原文"的
     // 查看器，如实说一句。候选为空（库树还没加载）时不做结论，仍按原样尽力打开。
     if (!matched && candidates.length) {
-      if (typeof uiToast === 'function') uiToast(`没在当前知识库里找到来源文档：${String(rawSource || '')}`, { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.qa_source_missing', '没在当前知识库里找到来源文档：{name}', { name: String(rawSource || '') }), { variant: 'warning' });
       return 'missing';
     }
     const relPath = matched || String(rawSource || '');
@@ -3231,7 +3231,7 @@
   function _openQuizPanel(entry) {
     const panel = window.KbQuizPanel;
     if (!panel || typeof panel.open !== 'function') {
-      if (typeof uiToast === 'function') uiToast('测验面板没能加载，请刷新后重试', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.quiz_panel_failed', '测验面板没能加载，请刷新后重试'), { variant: 'warning' });
       return;
     }
     panel.open({
@@ -6370,14 +6370,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const imported = Number(res.imported) || 0;
       const scanned = Number(res.scanned) || 0;
       if (typeof uiToast === 'function') {
-        uiToast(imported ? `已导入 ${imported} 个文件（扫描 ${scanned}）` : '所选文件夹没有可导入的文件', {
+        uiToast(imported ? _tr('kb.workbench.dir_import_done', '已导入 {count} 个文件（扫描 {scanned}）', { count: imported, scanned }) : _tr('kb.workbench.dir_import_none', '所选文件夹没有可导入的文件'), {
           variant: imported ? 'success' : 'warning', timeoutMs: 2500,
         });
       }
       _loadAll();
     } catch (err) {
       _log.warn('import dir failed', err);
-      if (typeof uiToast === 'function') uiToast('导入文件夹失败', { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.dir_import_failed', '导入文件夹失败'), { variant: 'error' });
     }
   }
 
