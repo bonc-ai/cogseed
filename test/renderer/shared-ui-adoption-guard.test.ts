@@ -46,7 +46,13 @@ const legacyRawControlBaseline: Record<string, number> = {
   // uiButton 强制可见文字 label，表达不了纯状态控件——与 run-center 的
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
-  'kb-notes.js': 24,
+  // kb-notes.js：24 → 21（2026-09-21，新建/保存/更多三个简单按钮已迁到 uiButton/uiIconButton）。
+  // 剩余 19 处裸控件 + 2 处动态控件的分类（见内部《B3 控件迁移分类》）：
+  //   · 编辑器工具栏 data-cmd 按钮（富内容：kb-caret / kb-color-bar 子元素 + 命令委托）
+  //     —— uiButton 只有 label+icon，无法表达该契约，需 owner 裁定豁免或补 seam；
+  //   · 库选择器条目（两段式内容，内容型而非控件）；
+  //   · 两处隐藏 file input（共享层无 file 原语）。
+  'kb-notes.js': 21,
   'kb-workbench.js': 13,
   'library-transfer.js': 7,
   'marketplace.js': 7,
