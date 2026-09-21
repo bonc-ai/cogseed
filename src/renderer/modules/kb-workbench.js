@@ -130,6 +130,11 @@
   function _uiTextarea(options) { return _requirePrimitive('uiTextarea')(options); }
 
 
+  function _uiCheckbox(options) {
+    if (typeof window.uiCheckbox !== 'function') throw new Error('knowledge base requires uiCheckbox');
+    return window.uiCheckbox(options);
+  }
+
   function _uiSwitch(options) {
     if (typeof window.uiSwitch !== 'function') throw new Error('knowledge base requires uiSwitch');
     return window.uiSwitch(options);
@@ -348,70 +353,140 @@
     // "共享知识库"这种像能用的名字
     const sharedLabel = _tr('kb.workbench.group_shared', '待开发');
     const externalLabel = _tr('kb.workbench.group_external', '外部来源');
+    const sharedTreeAvailable = typeof window.uiTree === 'function'
+      && typeof window.hydrateUiTrees === 'function';
+    const nodeMeta = new Map();
+    const node = (kind, key, label, options = {}) => {
+      const id = `${kind}:${nodeMeta.size}`;
+      nodeMeta.set(id, { kind, key, ...options });
+      return { id, label, selected: options.selected === true };
+    };
     const externalItems = _state.externalSources
       .filter((source) => {
         if (!_state.treeFilter) return true;
         const query = _state.treeFilter.toLowerCase();
         return source.id.toLowerCase().includes(query) || _externalSourceLabel(source).toLowerCase().includes(query);
       })
-      .map((source) =>
-        `<div class="kb-tree-item${source.path === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-external-source="${_esc(source.path)}">
-          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(_externalSourceLabel(source))}</span></div>`
-      ).join('');
+      .map((source) => node('external', source.path, _externalSourceLabel(source), {
+        icon: 'book-open',
+        selected: source.path === _state.currentLib && !_state.spaceId,
+      }));
     const groups = [
-      { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
-        `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
-          ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
-      ).join('') || '<div class="kb-tree-empty">暂无知识库，可使用右侧按钮创建</div>' },
-      { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
-        `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
-      ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
-      { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
+      {
+        key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib',
+        btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'),
+        items: _state.libs.filter((lib) => !_state.treeFilter || lib.name.toLowerCase().includes(_state.treeFilter))
+          .map((lib) => node('lib', lib.name, lib.name, {
+            icon: 'folder', selected: lib.name === _state.currentLib && !_state.spaceId,
+          })),
+        empty: '暂无知识库，可使用右侧按钮创建',
+      },
+      {
+        key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space',
+        btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'),
+        items: _state.spaces.filter((space) => !_state.treeFilter || (space.name || space.space_id).toLowerCase().includes(_state.treeFilter))
+          .map((space) => node('space', space.space_id, space.name || space.space_id, {
+            icon: 'folder', shared: true, selected: space.space_id === _state.spaceId,
+          })),
+        empty: _state.treeFilter ? '无匹配知识库' : '暂无共享空间',
+      },
+      {
+        key: 'external', label: externalLabel, plus: false, items: externalItems,
+        empty: _state.treeFilter
+          ? _tr('kb.workbench.no_matching_sources', '无匹配来源')
+          : _tr('kb.workbench.external_empty', '暂无外部来源'),
+      },
     ];
-    const groupHtml = groups.map((g) => {
-      const open = !_state.treeGroups.has(g.key);
-      return `<div class="kb-tree-group">
-        <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${open ? '收起' : '展开'}">
-          <span class="kb-tree-caret">${_icon(open ? 'chevron-down' : 'chevron-right', 'kb-tree-caret-icon')}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
-          ${g.plus ? _uiIconButton({
-            label: g.btnTitle || '创建',
-            icon: 'plus',
-            className: 'kb-tree-plus',
-            attrs: { id: g.btnId || 'kb-new-lib' },
-          }) : ''}
-        </div>
-        ${open ? `<div class="kb-tree-items">${g.html}</div>` : ''}
-      </div>`;
-    }).join('');
-    tree.innerHTML = groupHtml;
-    tree.querySelectorAll('[data-kb-group]').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        if (e.target.closest('.kb-tree-plus')) return;
-        const key = el.dataset.kbGroup;
-        if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
-        else _state.treeGroups.add(key);
-        _renderTree();
-      });
+    const treeItems = groups.map((group) => {
+      const children = group.items.length
+        ? group.items
+        : [node('placeholder', group.key, group.empty, { placeholder: true })];
+      const id = `group:${nodeMeta.size}`;
+      nodeMeta.set(id, { kind: 'group', key: group.key, group });
+      return { id, label: group.label, expanded: !_state.treeGroups.has(group.key), children };
     });
-    tree.querySelectorAll('[data-kb-lib]').forEach((el) => {
-      el.addEventListener('click', () => _selectLib(el.dataset.kbLib));
-      // 个人库行：右键 → 重命名 / 删除
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        _kbRowMenu(el.dataset.kbLib, true, e.clientX, e.clientY);
+    if (sharedTreeAvailable) {
+      tree.innerHTML = window.uiTree({
+        ariaLabel: _tr('kb.workbench.library_tree', '知识库列表'),
+        items: treeItems,
+        className: 'kb-library-tree',
       });
-    });
-    tree.querySelectorAll('[data-kb-space]').forEach((el) => {
-      el.addEventListener('click', () => _selectSpace(el.dataset.kbSpace));
-      // 共享库行：右键 → 重命名 / 删除
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
+    }
+    const treeRoot = sharedTreeAvailable ? tree.querySelector('[data-ui-tree]') : null;
+    if (!treeRoot) {
+      tree.innerHTML = groups.map((group) => {
+        const open = !_state.treeGroups.has(group.key);
+        const rows = group.items.map((item) => {
+          const meta = nodeMeta.get(item.id);
+          const attr = meta.kind === 'lib' ? 'data-kb-lib'
+            : meta.kind === 'space' ? 'data-kb-space' : 'data-kb-external-source';
+          return `<div class="kb-tree-item${meta.selected ? ' active' : ''}" ${attr}="${_esc(meta.key)}">${_icon(meta.icon, `kb-tree-ico${meta.shared ? ' kb-tree-ico-space' : ''}`)}<span class="kb-tree-name">${_esc(item.label)}</span></div>`;
+        }).join('') || `<div class="kb-tree-placeholder">${_esc(group.empty)}</div>`;
+        return `<div class="kb-tree-group"><div class="kb-tree-group-label" data-kb-group="${_esc(group.key)}"><span class="kb-tree-group-name">${_esc(group.label)}</span>${group.plus ? _uiIconButton({ label: group.btnTitle, icon: 'plus', className: 'kb-tree-plus', attrs: { id: group.btnId } }) : ''}</div>${open ? `<div class="kb-tree-items">${rows}</div>` : ''}</div>`;
+      }).join('');
+      tree.querySelectorAll('[data-kb-group]').forEach((element) => {
+        element.addEventListener('click', (event) => {
+          if (event.target.closest('.kb-tree-plus')) return;
+          const key = element.dataset.kbGroup;
+          if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
+          else _state.treeGroups.add(key);
+          _renderTree();
+        });
       });
+      tree.querySelectorAll('[data-kb-lib]').forEach((element) => element.addEventListener('click', () => _selectLib(element.dataset.kbLib)));
+      tree.querySelectorAll('[data-kb-space]').forEach((element) => element.addEventListener('click', () => _selectSpace(element.dataset.kbSpace)));
+      tree.querySelectorAll('[data-kb-external-source]').forEach((element) => element.addEventListener('click', () => _selectLib(element.dataset.kbExternalSource)));
+      tree.querySelector('#kb-new-lib')?.addEventListener('click', (event) => { event.stopPropagation(); _createLib(); });
+      tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (event) => { event.stopPropagation(); _createSharedSpace(); });
+      return;
+    }
+    window.hydrateUiTrees(treeRoot);
+    treeRoot.querySelectorAll('[data-ui-tree-item]').forEach((item) => {
+      const meta = nodeMeta.get(item.dataset.uiTreeItem);
+      const label = item.querySelector(':scope > [data-ui-tree-select]');
+      if (!meta || !label) return;
+      if (meta.kind === 'group') {
+        item.classList.add('kb-tree-group');
+        label.classList.add('kb-tree-group-label');
+        if (meta.group.plus) {
+          const add = _elementFromHtml(_uiIconButton({
+            label: meta.group.btnTitle || '创建', icon: 'plus', className: 'kb-tree-plus',
+            attrs: { id: meta.group.btnId },
+          }));
+          item.appendChild(add);
+        }
+        return;
+      }
+      label.classList.add(meta.placeholder ? 'kb-tree-placeholder' : 'kb-tree-item');
+      if (meta.placeholder) {
+        label.disabled = true;
+        return;
+      }
+      label.classList.toggle('active', meta.selected === true);
+      label.innerHTML = `${_icon(meta.icon, `kb-tree-ico${meta.shared ? ' kb-tree-ico-space' : ''}`)}<span class="kb-tree-name">${_esc(label.textContent)}</span>${meta.shared ? `<span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span>` : ''}`;
+      if (meta.kind === 'lib') {
+        label.addEventListener('contextmenu', (event) => {
+          event.preventDefault(); event.stopPropagation();
+          _kbRowMenu(meta.key, true, event.clientX, event.clientY);
+        });
+      } else if (meta.kind === 'space') {
+        label.addEventListener('contextmenu', (event) => {
+          event.preventDefault(); event.stopPropagation();
+          _kbSpaceMenu(meta.key, event.clientX, event.clientY);
+        });
+      }
     });
-    tree.querySelectorAll('[data-kb-external-source]').forEach((el) => {
-      el.addEventListener('click', () => _selectLib(el.dataset.kbExternalSource));
+    treeRoot.addEventListener('ui-tree-toggle', (event) => {
+      const meta = nodeMeta.get(event.detail?.id);
+      if (!meta || meta.kind !== 'group') return;
+      if (event.detail.expanded) _state.treeGroups.delete(meta.key);
+      else _state.treeGroups.add(meta.key);
+    });
+    treeRoot.addEventListener('ui-tree-change', (event) => {
+      const meta = nodeMeta.get(event.detail?.id);
+      if (!meta) return;
+      if (meta.kind === 'lib' || meta.kind === 'external') _selectLib(meta.key);
+      else if (meta.kind === 'space') _selectSpace(meta.key);
     });
     tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
     tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
@@ -852,16 +927,22 @@
         <span class="kb-import-dlg-meta">文件夹</span>
       </div>`;
     }
-    for (const f of files) {
+    files.forEach((f, index) => {
       const rel = _importDlgRelPath(_dlgLib, _dlgDir.split('/').filter(Boolean), f.name);
-      const checked = _dlgSelected.has(rel) ? ' checked' : '';
-      html += `<div class="kb-import-dlg-row${checked}" data-import-file="${_esc(rel)}">
-        <input type="checkbox" class="kb-import-dlg-check" data-import-check="${_esc(rel)}" ${checked ? 'checked' : ''} />
+      const checked = _dlgSelected.has(rel);
+      html += `<div class="kb-import-dlg-row${checked ? ' checked' : ''}" data-import-file="${_esc(rel)}">
+        ${_uiCheckbox({
+          id: `kb-import-check-${index}`,
+          label: `选择 ${f.name}`,
+          className: 'kb-import-dlg-check',
+          checked,
+          attrs: { 'data-import-check': rel },
+        })}
         <span class="kb-import-dlg-icon is-${_extClass(f.name)}">${_extLabel(f.name)}</span>
         <span class="kb-import-dlg-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
         <span class="kb-import-dlg-meta">${_esc(_extLabel(f.name))}</span>
       </div>`;
-    }
+    });
     if (!dirs.length && !files.length) {
       html = _uiEmptyState({ kind: 'quiet', title: q ? '无匹配文件' : '此目录为空' });
     }
@@ -1474,7 +1555,8 @@
     // 先显示再恢复上次的窗口尺寸/位置：overlay 关着时是 display:none，量出来的
     // 宽高全是 0，位置就夹不住——保存的位置会带着窗口跑到当前可视区外（窗口变小
     // 之后尤其明显），用户既看不全也抓不到右下角手柄。
-    overlay.hidden = false;
+    if (_fileViewerController) _fileViewerController.open(document.activeElement);
+    else overlay.hidden = false;
     if (dialog) _fvApplyWindowRect(dialog);
     _fvResetZoom(dialog);
     _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
@@ -1508,6 +1590,7 @@
   // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
   // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
   let _fileViewerOverlay = null;
+  let _fileViewerController = null;
   let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
   function _ensureFileViewerOverlay() {
     if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
@@ -1592,18 +1675,24 @@
     let pressedOnOverlay = false;
     overlay.addEventListener('mousedown', (e) => { pressedOnOverlay = e.target === overlay; });
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay && pressedOnOverlay) overlay.hidden = true;
+      if (e.target === overlay && pressedOnOverlay) {
+        if (_fileViewerController) _fileViewerController.close('backdrop');
+        else overlay.hidden = true;
+      }
     });
     document.body.appendChild(overlay);
-    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    _fileViewerController = typeof uiModalController === 'function'
+      ? uiModalController({ overlay, dialog, initialFocus: '#kb-fv-close' })
+      : null;
+    closeBtn.addEventListener('click', () => {
+      if (_fileViewerController) _fileViewerController.close('action');
+      else overlay.hidden = true;
+    });
     readerBtn.addEventListener('click', () => {
       const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
       readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
       _fvSaveWindowRect();
     });
-    // Esc 关闭
-    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
-    overlay.tabIndex = -1;
     zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
     sourceBtn.addEventListener('click', () => {
       const cur = _fvCur;
@@ -2169,7 +2258,6 @@
       errorEl.textContent = '暂不支持预览该文件';
       return;
     }
-    overlay.focus();
   }
 
   let _fvStyleInjected = false;
@@ -2182,7 +2270,7 @@
     style.id = 'kb-file-viewer-style';
     style.textContent = `
       .kb-fv-overlay {
-        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(15, 23, 42, .5);
         display: flex; align-items: center; justify-content: center; padding: 24px;
       }
       .kb-fv-overlay[hidden] { display: none; }
@@ -2223,7 +2311,7 @@
       .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
       .kb-fv-resize {
         position: absolute; right: 0; bottom: 0;
-        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: var(--z-raised);
       }
       .kb-fv-resize::after {
         content: ''; position: absolute; right: 5px; bottom: 5px;
@@ -2234,7 +2322,7 @@
       .kb-fv-resize:hover::after { border-color: #0E9F6E; }
       /* 拖拽事件罩：拖窗口/调大小时盖住整个查看器，避免指针划到内嵌 iframe
          （PDF 插件是独立进程）上后主窗口收不到 mousemove。 */
-      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: 40; }
+      .kb-fv-drag-shield { position: absolute; inset: 0; z-index: var(--z-modal-popover); }
       body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
       .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
       .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
@@ -3405,6 +3493,7 @@
   // 原文查看器（kb-fv）：PDF/Office 走这里以保证排版与缩放（#214 曾把它删掉，
 // 主进程 kb.openFile / kb-file:// 一直在，缺的就是这一层）；变量随查看器代码块一起恢复。
 let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = null;
+  let _mmModalController = null;
   let _mmGenerating = false; // 生成中防重复点击
   let _mmPreheatedKey = '';  // 已后台预热脑图缓存的库 key
   const _mmUndoStack = [];   // 重命名撤销栈 [{idx, old}]，上限 20
@@ -3421,7 +3510,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _mmBindTitleDrag();
     // 先显示再套用尺寸/位置记忆：display:none 时量不到布局尺寸，居中位会被算成 0
     // （全程同步执行，同一帧内完成，不会看到窗口跳动）
-    overlay.hidden = false;
+    if (_mmModalController) _mmModalController.open(document.activeElement);
+    else overlay.hidden = false;
     _mmApplyWindowRect();
     _mmUpdateSaveState();
     _renderOverlay();
@@ -3814,13 +3904,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const titleEl = document.getElementById('kb-mm-title-input');
         const overlay = document.getElementById('kb-mm-overlay');
         if (titleEl && overlay) {
-          overlay.hidden = false;
+          _openMindPreview();
           const scopeLabel = key.startsWith('space:')
             ? `共享空间 ${key.slice(6)}`
             : isDocKey
               ? `文档 ${String(key.slice(4).split('#')[0]).split('/').pop()}`
               : `个人库 ${key.slice(4)}`;
-          titleEl.textContent = `🧠 脑图预览 - ${scopeLabel}（已保存）`;
+          titleEl.value = `${scopeLabel}（已保存）`;
         }
         _rerenderMindmaps();
         _mmFitToStage();
@@ -5939,9 +6029,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const im = document.getElementById('kb-wb-import-menu');
       if (im) im.hidden = true;
     });
+    const mmOverlay = document.getElementById('kb-mm-overlay');
+    const mmDialog = document.getElementById('kb-mm-dlg');
+    _mmModalController = mmOverlay && mmDialog && typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay: mmOverlay,
+          dialog: mmDialog,
+          initialFocus: '#kb-mm-overlay-close',
+          onClose: _mmRestoreThumbs,
+        })
+      : null;
     document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => {
-      document.getElementById('kb-mm-overlay').hidden = true;
-      _mmRestoreThumbs();
+      if (_mmModalController) _mmModalController.close('action');
+      else {
+        document.getElementById('kb-mm-overlay').hidden = true;
+        _mmRestoreThumbs();
+      }
     });
     document.getElementById('kb-mm-zoom-in')?.addEventListener('click', () => { _mmZoom = Math.min(4, _mmZoom * 1.25); _applyMmTransform(); });
     document.getElementById('kb-mm-zoom-out')?.addEventListener('click', () => { _mmZoom = Math.max(0.2, _mmZoom / 1.25); _applyMmTransform(); });
@@ -5967,7 +6070,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     document.getElementById('kb-mm-focus-btn')?.addEventListener('click', _mmToggleFocus);
     document.getElementById('kb-mm-outline-btn')?.addEventListener('click', _mmToggleOutline);
     document.getElementById('kb-mm-bg-btn')?.addEventListener('click', _mmCycleBg);
-    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击 / ESC 关闭
+    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击
     document.getElementById('kb-mm-mode-btn')?.addEventListener('click', _mmToggleMode);
     document.getElementById('kb-mm-dots-btn')?.addEventListener('click', _mmToggleDots);
     document.getElementById('kb-mm-more-btn')?.addEventListener('click', (e) => {
@@ -5989,12 +6092,6 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (t) titleInput.value = t;
       else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '脑图');
       _mmMarkDirty();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const ov = document.getElementById('kb-mm-overlay');
-        if (ov && !ov.hidden) ov.hidden = true;
-      }
     });
     const mmSearchInput = document.getElementById('kb-mm-search');
     let mmSearchTimer = null;
