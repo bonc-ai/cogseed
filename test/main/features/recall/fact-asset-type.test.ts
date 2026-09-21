@@ -31,9 +31,9 @@ async function modules() {
 
 function factCandidate() {
   return {
-    judgment: '团队长期使用 GitLab 托管代码，MR 是主要协作入口。',
+    judgment: '团队长期使用自托管 Git 服务，MR 是主要协作入口。',
     value: '后续讨论代码协作、MR 流程和仓库归属时直接沿用这个环境事实。',
-    summary: '团队使用 GitLab 托管代码',
+    summary: '团队使用自托管 Git 服务',
     suggestedType: 'fact' as const,
     suggestedScope: 'code',
     suggestedAction: 'create' as const,
@@ -69,7 +69,7 @@ describe('fact ability asset type', () => {
 
     const updated = await candidates.updateRecallCandidate('user-fact', saved.id, {
       ...factCandidate(),
-      judgment: '团队长期使用 GitLab 托管代码；MR 审查是必须流程。',
+      judgment: '团队长期使用自托管 Git 服务；MR 审查是必须流程。',
     });
     expect(updated.suggestedType).toBe('fact');
 

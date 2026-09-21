@@ -943,7 +943,7 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
   }
 
   it('confirms into the asset library when personal assets exist, leaving USER.md untouched', async () => {
-    await seedPersonalAsset('既有画像：文转理本科生。');
+    await seedPersonalAsset('既有画像：理工科本科生。');
     const poc = await loadModule();
     await poc.addCandidate(UID, {
       candidate_id: 'cand-dual-1',
@@ -1014,7 +1014,7 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
       kind: 'instance',
       memory_scope: 'user',
       summary: '就读状态',
-      memory_text: '目前大二在读。',
+      memory_text: '目前在校就读。',
     });
     const res = await poc.confirmCandidate(UID, 'cand-dual-4', {
       toGlobalMemory: false,
@@ -1025,6 +1025,6 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
     const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
     const text = fs.readFileSync(groupFile, 'utf8');
     const now = new Date().toISOString().slice(0, 7);
-    expect(text).toContain(`- 目前大二在读。 [候选] @asof:${now}`);
+    expect(text).toContain(`- 目前在校就读。 [候选] @asof:${now}`);
   });
 });

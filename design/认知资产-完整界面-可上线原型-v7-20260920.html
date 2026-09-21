@@ -373,8 +373,8 @@ let assets = [
 let cands = [
   {id:'c1',title:'用户对花生过敏',cat:'关于我',src:'对话中记',ev:'ok',value:'饮食推荐、餐厅选择',action:'保存后自动带入新任务',
    body:'用户对花生过敏，饮食推荐要避开花生和花生油。',srcLine:['对话中当场记（无独立会话出处）']},
-  {id:'c2',title:'团队在用 GitLab 托管代码',cat:'模板与范例',src:'会话整理',ev:'ok',value:'代码托管与 MR 流程说明',action:'保存后自动带入新任务',
-   body:'用户的团队在用 GitLab 做代码托管，MR 流程为主。',srcLine:['企业版打包发布','认知资产迭代']},
+  {id:'c2',title:'团队在用自托管 Git 服务',cat:'模板与范例',src:'会话整理',ev:'ok',value:'代码托管与 MR 流程说明',action:'保存后自动带入新任务',
+   body:'用户的团队用自托管 Git 服务做代码托管，MR 流程为主。',srcLine:['企业版打包发布','认知资产迭代']},
   {id:'c3',title:'时间线默认按时间倒序',cat:'规则与偏好',src:'会话整理',ev:'bad',value:'列表展示顺序',action:'保存后自动带入新任务',
    body:'时间线视图默认按时间倒序排列，最新的在最上面。',srcLine:['来源记录不可用']},
   {id:'c4',title:'回复先给结论再给细节',cat:'规则与偏好',src:'KSTAR 复盘',kstar:true,ev:'ok',value:'回答顺序：结论先行',action:'保存后会并入「偏好中文简洁回复」所在家族',
@@ -400,7 +400,7 @@ let caps = [
   {id:'p6',n:'关于你的已知信息',when:'2 天前',bucket:'done',status:'已完成 · 未保存',reason:'没有值得留存的内容',pend:0,step:5,acts:['run_now','view_assets'],receipts:[]},
   {id:'p7',n:'企业版打包发布',when:'1 天前',bucket:'attention',status:'失败',reason:'模型调用失败，可重试',pend:0,step:2,acts:['retry','cancel'],receipts:[]},
 ];
-let srcIssues = [{n:'飞书连接器',k:'连接器',w:'读取失败',act:['retry']},{n:'GitLab 令牌',k:'连接器',w:'已暂停：你暂停了这个来源的采集',act:['resume']}];
+let srcIssues = [{n:'IM 连接器',k:'连接器',w:'读取失败',act:['retry']},{n:'代码托管令牌',k:'连接器',w:'已暂停：你暂停了这个来源的采集',act:['resume']}];
 /* 个人本体：分组 → 字段 → 值（与资产是两套数据，各自有各自的动作） */
 let oto = [
   {g:'身份',items:[
@@ -421,7 +421,7 @@ let oto = [
     {id:'o9',f:'常住地',t:'常住上海',src:'候选'},
   ]},
 ];
-let otoProposal = {id:'op1',g:'事实',f:'常用工具',t:'你和团队日常用飞书沟通'};
+let otoProposal = {id:'op1',g:'事实',f:'常用工具',t:'你和团队日常用即时通讯工具沟通'};
 let otoConflict = {field:'常住地',keep:null};
 let pendingSrc = true, myView = 'list', myCat = 'all', orgBucket = 'all', orgExpand = false, orgSettings = false;
 let curAsset = null, editing = null, openVer = null, curCand = null, curCap = null;
