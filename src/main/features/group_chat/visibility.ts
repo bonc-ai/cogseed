@@ -137,6 +137,33 @@ export interface GroupMessage {
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   /** Plain `@token` list (raw text mentions). */
   mentions?: string[];
+  /** 多 Agent 提交快照（PRD FR-016）：当次提交的会话成员、本条点名对象与按来源的
+   *  模型配置。冻结在用户消息上，后续修改成员/配置不改变已提交运行的记录。 */
+  member_snapshot?: {
+    member_agent_ids: string[];
+    mention_agent_ids?: string[];
+    /** 点名在正文出现的顺序：顺序依赖的方向依据（设计 §4.4）。 */
+    mention_order?: string[];
+    /** 本条是否含顺序意图（确定性检测，设计 §4.4）。 */
+    requires_sequential?: boolean;
+    /** 外接实例 id：不可见其他成员，且只认自己那份配置（设计 §4.2/§4.3）。 */
+    external_agent_ids?: string[];
+    execution_configs?: Record<string, {
+      provider?: string;
+      model?: string;
+      effort?: 'off' | 'low' | 'high';
+    }>;
+  };
+  /** 本条属于哪一次协作运行（设计 §4.1）。用户消息与 actor 终态回复都记录，
+   *  用于把多次回合归到一次提交上（汇总/停止/重试的作用域依据）。 */
+  run_id?: string;
+  /** Host-generated, durable final accounting for one collaboration run. */
+  run_summary?: {
+    run_id: string;
+    status: 'completed' | 'failed' | 'blocked' | 'stopped';
+    contributed: Array<{ agent_id: string; messages: number; artifacts: string[] }>;
+    missing: Array<{ agent_id: string; reason: string; terminal?: string }>;
+  };
   /** Host-owned P3394 delivery metadata. Epochs are scoped to the persisted
    * message and recipient so a replay/re-dispatch reuses the original value. */
   p3394?: { recipient_epochs: Record<string, number> };
@@ -344,6 +371,46 @@ function isVisibleTo(actorId: string, msg: GroupMessage): boolean {
   return false;
 }
 
+type ActorExecutionConfigs = NonNullable<GroupMessage['member_snapshot']>['execution_configs'];
+
+/** External members are a security boundary, not merely another replay
+ * audience. Project a user submission to the exact recipient so the external
+ * runtime cannot infer other members, recipients, mention ordering, shared
+ * source configuration, or unrelated orchestration metadata. */
+export function projectMessageForActorSlice(
+  actorId: string,
+  msg: GroupMessage,
+  externalActorIds: Iterable<string> = [],
+  authoritativeExecutionConfigs?: ActorExecutionConfigs,
+): GroupMessage {
+  const snapshot = msg.member_snapshot;
+  const isExternal = new Set(externalActorIds).has(actorId)
+    || !!snapshot?.external_agent_ids?.includes(actorId);
+  if (!isExternal) return msg;
+  const ownConfig = authoritativeExecutionConfigs?.[actorId]
+    || snapshot?.execution_configs?.[actorId];
+  const ownEpoch = msg.p3394?.recipient_epochs?.[actorId];
+  // This is deliberately a whitelist. New main-transcript fields do not
+  // silently cross the external-runtime boundary merely because they were
+  // added to GroupMessage later.
+  return {
+    id: msg.id,
+    ts: msg.ts,
+    from: msg.from,
+    to: [actorId],
+    text: msg.text,
+    ...(msg.deleted_at ? { deleted_at: msg.deleted_at } : {}),
+    ...(msg.deleted_by_user ? { deleted_by_user: true as const } : {}),
+    ...(msg._v !== undefined ? { _v: msg._v } : {}),
+    ...(ownEpoch !== undefined ? { p3394: { recipient_epochs: { [actorId]: ownEpoch } } } : {}),
+    member_snapshot: {
+      member_agent_ids: [actorId],
+      external_agent_ids: [actorId],
+      ...(ownConfig ? { execution_configs: { [actorId]: { ...ownConfig } } } : {}),
+    },
+  };
+}
+
 /** Append the message to every actor's slice that should see it. Throws on
  * a write failure so callers that own a durable projection can retry without
  * marking their terminal state complete. */
@@ -353,13 +420,18 @@ export async function appendVisibleStrict(
   msg: GroupMessage,
   actorIds: string[],
   projectIdHint?: string | null,
+  externalActorIds: Iterable<string> = [],
+  authoritativeExecutionConfigs?: ActorExecutionConfigs,
 ): Promise<void> {
   const layout = conversationLayout(uid, cid, projectIdHint);
   fs.mkdirSync(layout.visibilityDir, { recursive: true });
   for (const actorId of actorIds) {
     if (actorId === USER_ID) continue; // user reads main jsonl
     if (!isVisibleTo(actorId, msg)) continue;
-    await appendJsonlAtomic<GroupMessage>(layout.visibilityFile(actorId), msg);
+    await appendJsonlAtomic<GroupMessage>(
+      layout.visibilityFile(actorId),
+      projectMessageForActorSlice(actorId, msg, externalActorIds, authoritativeExecutionConfigs),
+    );
   }
 }
 
@@ -372,6 +444,8 @@ export async function appendVisible(
   msg: GroupMessage,
   actorIds: string[],
   projectIdHint?: string | null,
+  externalActorIds: Iterable<string> = [],
+  authoritativeExecutionConfigs?: ActorExecutionConfigs,
 ): Promise<void> {
   const layout = conversationLayout(uid, cid, projectIdHint);
   fs.mkdirSync(layout.visibilityDir, { recursive: true });
@@ -379,7 +453,10 @@ export async function appendVisible(
     if (actorId === USER_ID) continue;
     if (!isVisibleTo(actorId, msg)) continue;
     try {
-      await appendJsonlAtomic<GroupMessage>(layout.visibilityFile(actorId), msg);
+      await appendJsonlAtomic<GroupMessage>(
+        layout.visibilityFile(actorId),
+        projectMessageForActorSlice(actorId, msg, externalActorIds, authoritativeExecutionConfigs),
+      );
     } catch (err) {
       log.warn(
         `append visible failed user=${uid} cid=${cid} actor=${actorId}: ${(err as Error).message}`,

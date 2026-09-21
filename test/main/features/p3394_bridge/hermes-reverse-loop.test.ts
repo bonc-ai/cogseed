@@ -206,8 +206,6 @@ describe('P3394 Hermes → CogSeed → Hermes 反向闭环 (V-04)', () => {
     gateway.stderr.setEncoding('utf8');
     gateway.stderr.on('data', (chunk: string) => { stderr += chunk; });
 
-    // gateway 已启动（首次发送必然失败）；此刻才起 CogSeed 监听器。
-    await new Promise((resolve) => setTimeout(resolve, 700));
     const bridge = new P3394BridgeKernel();
     bridge.registry.register({ identity: { agent_id: 'cogseed', display_name: 'CogSeed' }, manifest: manifestOf('cogseed') });
     bridge.registry.register({ identity: { agent_id: 'hermes', display_name: 'Hermes' }, manifest: manifestOf('hermes') });
@@ -245,6 +243,11 @@ describe('P3394 Hermes → CogSeed → Hermes 反向闭环 (V-04)', () => {
     });
     channel.setLocalManifest(manifestOf('cogseed'));
     channel.subscribe((envelope) => { executor.execute(envelope); });
+
+    // 先等「首次发送已失败」这个可观察信号（gateway 把 retrying 写到 stderr），
+    // 再起 CogSeed 监听器。用固定等待猜 gateway 启动时长时，满载下 gateway 可能
+    // 监听起来之后才发第一次，于是没有断线重试窗口，stderr 也永远为空。
+    await waitFor(() => stderr.includes('retrying'), 20_000);
     await channel.listen();
     openChannels.push(channel);
 
