@@ -659,7 +659,19 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
           ...(params.cid && params.sourceMessageId ? { messageId: String(params.sourceMessageId) } : {}),
         });
         return { ok: true, entries: [], usage: { current: 0, limit: 0 } };
-      } catch {
+      } catch (error) {
+        // L3 敏感内容（凭据等）绝不落盘——资产管线的敏感闸拒绝的内容，不能
+        // 经由回退路径用更松的闸（记忆文件只有注入扫描）收下，否则两条写入
+        // 线的处置纪律互相矛盾（capture 线同款口径：丢弃并留痕，见
+        // capture-service 的 per-candidate 处理）。返回失败让模型知道写入被拒。
+        const messageText = error instanceof Error ? error.message : String(error);
+        if (messageText.includes('forbidden to persist')) {
+          log.warn('immediate ingest rejected: sensitive content not persisted', {
+            conversation_id: maskId(params.cid),
+            error: logErrorSummary(error),
+          });
+          return { ok: false, error: messageText, entries: [], usage: { current: 0, limit: 0 } };
+        }
         return addEntryTransactional(uid, toScope(tier), content);
       }
     };
