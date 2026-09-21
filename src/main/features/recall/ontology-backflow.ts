@@ -1,7 +1,7 @@
 /**
  * ontology-backflow — 资产晋升 → 个人本体候选池的回流（2026-09-19 本体增强）。
  *
- * 对应 Richard R13 evolution_policy：学习成果（正式资产）反哺个人本体——
+ * 对应蓝图 R13 evolution_policy：学习成果（正式资产）反哺个人本体——
  * 但只「提议」不「写入」：投进本体候选池等用户确认（update change set 的
  * 提议半段），未确认候选不可被用是硬红线。
  *
@@ -10,7 +10,7 @@
  *   personal → preference / user   （个人偏好与画像，A-Box 断言形状）
  *   rule     → rule       / shared （操作规则，R-Box 规则形状）
  *   template → instance   / user   （实例化信息，A-Box 断言形状）
- *   skill_method → 不回流。Richard T-Box 里 Skill/MetaSkill 是独立概念族，
+ *   skill_method → 不回流。蓝图 T-Box 里 Skill/MetaSkill 是独立概念族，
  *   技能的家是认知资产库本身，不进个人本体断言（拍板 2026-09-19）。
  *
  * 幂等：candidate_id 恒为 `asset-backflow-<assetId>`，addCandidate 同 id

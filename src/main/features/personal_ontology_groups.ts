@@ -92,9 +92,9 @@ export interface GroupContentResult {
 
 /** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5），
  *  可选信息截至时间标记 `@asof:<YYYY-MM>`（2026-09-19 本体增强：值正确时
- *  所属的年月，对应 Richard R26 时间完整性——相对表述保留原词，超龄标
+ *  所属的年月，对应蓝图 R26 时间完整性——相对表述保留原词，超龄标
  *  needs-refresh，机器不自动判死），可选核实标记 `@verified`（2026-09-20
- *  断言核实维度：用户亲手验证过这条值，对应 Richard 五维度的核实状态。
+ *  断言核实维度：用户亲手验证过这条值，对应蓝图五维度的核实状态。
  *  单档手动——只由用户点，确认写入不自动带，无使用回执不自动升）。 */
 export interface FieldValue {
   value: string;
@@ -540,7 +540,7 @@ async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator
   }
 
   if (next !== previousText) {
-    // 变更历史（spec 007 T304，Richard「变更集可回滚」）：覆盖前把原文快照进
+    // 变更历史（spec 007 T304，蓝图「变更集可回滚」）：覆盖前把原文快照进
     // .history/<groupId>/，上限滚动删最旧；恢复走 restoreGroupSnapshot。
     snapshotGroupHistory(uid, groupId, previousText);
   }
@@ -715,7 +715,7 @@ export async function appendFieldValue(
   source: string,
   project?: string,
   /** 信息截至年月（YYYY-MM，落 `@asof:`）。候选确认等智能写入自动带当前月
-   *  ——Richard R26：确认时刻认为正确，就该有时间锚。用户手写不带，不强制。 */
+   *  ——蓝图 R26：确认时刻认为正确，就该有时间锚。用户手写不带，不强制。 */
   asOf?: string,
 ): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
@@ -739,7 +739,7 @@ export async function appendFieldValue(
     appended = true;
     return { changed: true };
   });
-  // 写后矛盾检查（Richard R32）：保存与检查互相独立——fire-and-forget，保存
+  // 写后矛盾检查（蓝图 R32）：保存与检查互相独立——fire-and-forget，保存
   // 的「成功」从不承诺「查过没问题」，检查结论只报忧不报喜（台账+界面标记）。
   if (result.ok && appended && existingSnapshot.length) {
     void import('./recall/ontology-conflicts')

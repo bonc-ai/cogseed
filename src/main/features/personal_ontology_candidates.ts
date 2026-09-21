@@ -636,7 +636,7 @@ async function writeCandidateToDestinations(
 ): Promise<ConfirmCandidateResult> {
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { ok: false, error: 'candidate has no memory text' };
-  // 确认时刻的 asof（Richard R26）：用户此刻认可这条值正确 → 落时间锚，
+  // 确认时刻的 asof（蓝图 R26）：用户此刻认可这条值正确 → 落时间锚，
   // 12 个月后超龄提示自然生效。仅字段值路径携带；流水区条目本就是带时间
   // 语义的追加日志，不重复标。
   const confirmAsOf = new Date().toISOString().slice(0, 7);
