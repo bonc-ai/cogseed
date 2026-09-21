@@ -820,6 +820,10 @@ function batchRecallCaptures(
   return run(ctx.userId, captureIds);
 }
 
+function _isRecipientOrigin(value: unknown): value is 'user_selection' | 'cli_fallback' | 'active_floor' {
+  return value === 'user_selection' || value === 'cli_fallback' || value === 'active_floor';
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
   // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
   // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
@@ -1964,7 +1968,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const refs = Array.isArray(references) ? references : [];
     if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
       && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
-        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+        || !_isRecipientOrigin(recipient_origin))) {
       throw new Error('invalid recipient route');
     }
     return groupChat.send({
@@ -2182,11 +2186,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!request || request.conversation_id !== cid) throw new Error('wake request not found');
     const kstarProjectionError = await ensureKstarWakeProjectionConfirmed(ctx.userId, cid, requestId, decision, request);
     if (kstarProjectionError) return kstarProjectionError;
-    return p3394.decideWakeRequest(ctx.userId, {
+    const result = await p3394.decideWakeRequest(ctx.userId, {
       requestId,
       decision,
       ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}),
     });
+    if (decision === 'reject' && request.dispatch_payload.run_id) {
+      await groupChat.reconcileRun(ctx.userId, cid, request.dispatch_payload.run_id);
+    }
+    return result;
   },
 
   'p3394.listProtocolEvents': async ({ cid }, ctx) => {
@@ -3022,9 +3030,40 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }) };
   },
 
-  'groupChat.abort': async ({ cid }, ctx) => {
+  'groupChat.abort': async ({ cid, run_id, agent_ids, reason }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
-    return groupChat.abort(ctx.userId, cid);
+    if (run_id === undefined) return groupChat.abort(ctx.userId, cid);
+    if (!safeId(run_id)) throw new Error('invalid run id');
+    const ids = Array.isArray(agent_ids) ? agent_ids : [];
+    if (ids.some((id: unknown) => typeof id !== 'string' || !safeId(id))) {
+      throw new Error('invalid run abort actors');
+    }
+    if (reason !== undefined && reason !== 'member_removed' && reason !== 'user_stopped') {
+      throw new Error('invalid run abort reason');
+    }
+    return groupChat.abort(ctx.userId, cid, {
+      runId: run_id,
+      ...(ids.length ? { agentIds: ids } : {}),
+      ...(reason ? { reason } : {}),
+    });
+  },
+
+  'groupChat.retryRun': async ({ cid, run_id, agent_ids, request_id }, ctx) => {
+    if (!safeId(cid) || !safeId(run_id) || !safeId(request_id)) {
+      throw new Error('invalid run retry request');
+    }
+    if (!Array.isArray(agent_ids)
+      || !agent_ids.length
+      || agent_ids.some((id: unknown) => typeof id !== 'string' || !safeId(id))) {
+      throw new Error('invalid run retry actors');
+    }
+    return groupChat.retryRun({
+      userId: ctx.userId,
+      cid,
+      runId: run_id,
+      agentIds: agent_ids,
+      requestId: request_id,
+    });
   },
 
   'groupChat.deleteMessages': async ({ cid, message_ids }, ctx) => {
@@ -6062,6 +6101,18 @@ setInteractionBroadcast((uid, event) => {
   if (push) push(event);
 });
 
+/** 多 Agent 名单的形状检查：`undefined` → 缺省；非法项 → null（调用方拒绝整条）。 */
+function _safeAgentIdList(raw: unknown): string[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > 20) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string' || !safeId(item)) return null;
+    if (!out.includes(item)) out.push(item);
+  }
+  return out;
+}
+
 const streamHandlers: Record<string, StreamHandler> = {
   'stt.results': async function* ({ sessionId }, ctx, signal) {
     if (typeof sessionId !== 'string' || !safeId(sessionId)) {
@@ -6194,7 +6245,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, member_agent_ids, mention_agent_ids, execution_configs, submit_request_id, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -6209,7 +6260,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     const refs = Array.isArray(references) ? references : [];
     if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
       && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
-        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+        || !_isRecipientOrigin(recipient_origin))) {
       yield { type: 'error', text: 'invalid recipient route' };
       return;
     }
@@ -6225,6 +6276,27 @@ const streamHandlers: Record<string, StreamHandler> = {
         yield { type: 'error', text: 'invalid execution config' };
         return;
       }
+    }
+    // 多 Agent（PRD FR-016）：只有形状在这里检查；「已启用 + 可派发」的逐个核验
+    // 在 group-chat facade 内完成（任一失效即整条拒绝，不静默降级）。
+    const memberIds = _safeAgentIdList(member_agent_ids);
+    const mentionIds = _safeAgentIdList(mention_agent_ids);
+    if ((member_agent_ids !== undefined && memberIds === null)
+      || (mention_agent_ids !== undefined && mentionIds === null)) {
+      yield { type: 'error', text: 'invalid member selection' };
+      return;
+    }
+    if (execution_configs !== undefined
+      && (!execution_configs || typeof execution_configs !== 'object' || Array.isArray(execution_configs))) {
+      yield { type: 'error', text: 'invalid execution configs' };
+      return;
+    }
+    // 提交幂等键（EC-07）：只做形状检查，语义在 group-chat facade。
+    if (submit_request_id !== undefined
+      && (typeof submit_request_id !== 'string' || !safeId(submit_request_id)
+        || submit_request_id.length > 64)) {
+      yield { type: 'error', text: 'invalid submit request id' };
+      return;
     }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
@@ -6270,6 +6342,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     let processCount = 0;
     let firstProcessLogged = false;
     let sendDone = false;
+    let acceptanceRelayed = false;
     let sendRes: Awaited<ReturnType<typeof groupChat.send>>
       | Awaited<ReturnType<typeof groupChat.retryFailedTurn>>
       | null = null;
@@ -6305,6 +6378,10 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(refs.length ? { references: refs } : {}),
                 ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
                 ...(execution_config ? { execution_config } : {}),
+                ...(memberIds && memberIds.length ? { member_agent_ids: memberIds } : {}),
+                ...(mentionIds && mentionIds.length ? { mention_agent_ids: mentionIds } : {}),
+                ...(execution_configs ? { execution_configs } : {}),
+                ...(submit_request_id ? { submit_request_id } : {}),
               });
       } catch (err) {
         sendErr = err;
@@ -6343,6 +6420,24 @@ const streamHandlers: Record<string, StreamHandler> = {
           if (!sendRes?.ok) {
             yield { type: 'error', text: sendRes?.error || 'send failed' };
             return;
+          }
+          const receipt = sendRes as {
+            accepted?: unknown;
+            cid?: unknown;
+            submit_request_id?: unknown;
+          };
+          if (!acceptanceRelayed
+            && receipt.accepted === true
+            && receipt.cid === cid
+            && typeof receipt.submit_request_id === 'string'
+            && receipt.submit_request_id === submit_request_id) {
+            acceptanceRelayed = true;
+            yield {
+              type: 'accepted',
+              accepted: true,
+              cid,
+              submit_request_id: receipt.submit_request_id,
+            };
           }
           if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
         }

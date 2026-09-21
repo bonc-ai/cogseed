@@ -1950,7 +1950,12 @@ describe('CogSeed Runtime controller', () => {
       expect.objectContaining({ payload: { text: 'fresh recovered result' } }),
     ]);
     expect(JSON.stringify(projectTaskEvent.mock.calls)).not.toContain('stale result must be fenced');
-    await expect(deliveries.cogseedResultDeliveryStore.read(USER, task.executionId!)).resolves.toBeNull();
+    // The retained-result record is removed by the reconciliation that follows
+    // the durable delivery; wait for that observable instead of racing it.
+    await eventually(
+      async () => expect(await deliveries.cogseedResultDeliveryStore.read(USER, task.executionId!)).toBeNull(),
+      15_000,
+    );
   });
 
   it('drops a stale progress event when recoverable persists between map precheck and append', async () => {
