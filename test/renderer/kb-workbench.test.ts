@@ -1112,13 +1112,13 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
     expect(src).toMatch(/pressedOnOverlay/);
     expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
-    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) \{[\s\S]{0,180}_fileViewerController\.close\('backdrop'\)/);
   });
 
   it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
     // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
     // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
-    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: var\(--z-modal-popover\); \}/);
     expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
     // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
     expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
