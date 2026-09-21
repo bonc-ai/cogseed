@@ -157,7 +157,7 @@ const emojiAsIconBaseline: Record<string, number> = {
   'conversation.js': 3,
   // kb-notes.js / kb-quiz.js 的 emoji 已全部迁移到 icons.js（2026-09-21），基线随之删除：
   // 这两个文件再出现 emoji 就会直接红。
-  'kb-workbench.js': 25,
+  // kb-workbench.js 的 emoji 已全部迁移到 icons.js（2026-09-21），基线随之删除。
   'model-authorization.js': 2,
   'onboarding.js': 8,
   'settings.js': 1,
