@@ -163,10 +163,14 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       .map(([key, value]) => ` ${key}="${value === true ? '' : String(value)}"`)
       .join('');
 
+  // 捕获式 addEventListener：i18n-change 处理器要能被测试真的 dispatch 到
+  const winHandlers: Record<string, Array<(...a: any[]) => void>> = {};
   const windowMock: any = {
     innerWidth: options.width ?? 1440,
     innerHeight: options.height ?? 900,
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((name: string, fn: (...a: any[]) => void) => {
+      (winHandlers[name] = winHandlers[name] || []).push(fn);
+    }),
     matchMedia: vi.fn(() => ({
       matches: Boolean(options.narrow),
       addEventListener: vi.fn(),
@@ -255,7 +259,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'kb-workbench.js' });
-  return { context, els, windowMock, created, localStorage: localStorageMock };
+  return { context, els, windowMock, created, localStorage: localStorageMock, winHandlers };
 }
 
 describe('KB workbench (S1 skeleton)', () => {
@@ -2188,5 +2192,121 @@ describe('KB 解析卡按钮接线（防"死按钮"）', () => {
       if (typeof btn._listeners.click !== 'function') unwired.push(id);
     }
     expect(unwired).toEqual([]);
+  });
+});
+
+/**
+ * 外壳语言切换（B6-d 首批：左侧栏 + 内容区工具栏/菜单）。
+ *
+ * `renderKbWorkbench()` 有 `_state.rendered` 守卫 —— 外壳只注入一次；右列里还住着
+ * 问答输入框（用户可能已打了一半问题）。所以语言切换只能**定点重标签**：
+ * 只改文本节点与属性，绝不重建 innerHTML。
+ */
+describe('kb-workbench 外壳语言切换', () => {
+  function hookedText(key: string) {
+    const el: any = { textContent: '旧', dataset: { wbText: key }, setAttribute: () => {}, title: '' };
+    return el;
+  }
+  function hookedTitle(key: string) {
+    return { title: '旧', dataset: { wbTitle: key }, textContent: '', setAttribute: () => {} } as any;
+  }
+  function hookedLabel(key: string) {
+    const span = { textContent: '旧' };
+    return {
+      dataset: { wbLabel: key }, title: '', textContent: '',
+      setAttribute: () => {}, querySelector: (sel: string) => (sel === '.ui-button__label' ? span : null),
+      _span: span,
+    } as any;
+  }
+  function hookedPlaceholder(key: string) {
+    return { placeholder: '旧', dataset: { wbPlaceholder: key }, textContent: '', title: '', setAttribute: () => {} } as any;
+  }
+
+  function mountShell() {
+    const env = loadScript();
+    const texts = [hookedText('kb.workbench.side_title')];
+    const titles = [hookedTitle('kb.workbench.divider_drag')];
+    const labels = [hookedLabel('kb.workbench.more')];
+    const placeholders = [hookedPlaceholder('kb.workbench.search_docs_placeholder')];
+    let html = '';
+    let writes = 0;
+    // 元素是 getElementById 惰性创建的：先取出来再加计数器，避免漏掉首次渲染
+    const host = env.context.document.getElementById('kb-workbench');
+    Object.defineProperty(host, 'innerHTML', {
+      get: () => html,
+      set: (v: string) => { writes += 1; html = v; },
+    });
+    host.querySelectorAll = (sel: string) => {
+      if (sel === '[data-wb-text]') return texts;
+      if (sel === '[data-wb-title]') return titles;
+      if (sel === '[data-wb-label]') return labels;
+      if (sel === '[data-wb-placeholder]') return placeholders;
+      return [];
+    };
+    // 语言字典：先全中文，切换后全英文
+    const dict: Record<string, string> = {
+      'kb.workbench.side_title': '知识库列表',
+      'kb.workbench.divider_drag': '拖动调整宽度',
+      'kb.workbench.more': '更多',
+      'kb.workbench.search_docs_placeholder': '搜索文档…',
+    };
+    env.windowMock.t.mockImplementation((key: string) => dict[key] || key);
+    env.windowMock.renderKbWorkbench();
+    return {
+      env, texts, titles, labels, placeholders, dict, host,
+      writes: () => writes,
+      fire: () => (env.winHandlers['i18n-change'] || []).forEach((fn) => fn()),
+    };
+  }
+
+  it('i18n-change 后侧栏/工具栏文案换语言；且不重建外壳 innerHTML', () => {
+    const env = mountShell();
+    expect(env.texts[0].textContent).toBe('知识库列表');
+    expect(env.labels[0]._span.textContent).toBe('更多');
+    expect(env.placeholders[0].placeholder).toBe('搜索文档…');
+    expect((env.env.winHandlers['i18n-change'] || []).length).toBeGreaterThan(0);
+
+    const writesAfterRender = env.writes();
+    env.dict['kb.workbench.side_title'] = 'Knowledge bases';
+    env.dict['kb.workbench.divider_drag'] = 'Drag to resize';
+    env.dict['kb.workbench.more'] = 'More';
+    env.dict['kb.workbench.search_docs_placeholder'] = 'Search documents…';
+    env.fire();
+
+    expect(env.texts[0].textContent).toBe('Knowledge bases');
+    expect(env.titles[0].title).toBe('Drag to resize');
+    expect(env.labels[0]._span.textContent).toBe('More');
+    expect(env.placeholders[0].placeholder).toBe('Search documents…');
+    // 重建 innerHTML = 问答输入框里打了一半的问题没了
+    expect(env.writes()).toBe(writesAfterRender);
+  });
+
+  it('动态文案不能被静态钩子覆盖；运行时渲染走 _tr（_renderRight 已在 i18n-change 里重跑）', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 库名/标签/描述/头像由 _renderRight 按当前库与语言重写 ⇒ 绝不能挂静态文字钩子
+    for (const key of ['kb.workbench.personal_tag', 'kb.workbench.lib_desc_placeholder', 'kb.workbench.me']) {
+      expect(source).not.toContain(`data-wb-text="${key}"`);
+    }
+    expect(source).toContain("descEl.textContent = desc || _tr('kb.workbench.lib_desc_placeholder'");
+    expect(source).toContain("_tr('kb.workbench.untitled_lib'");
+    // 重标签 + 树 + 右列三件套都在同一个 i18n-change 处理器里
+    const handler = source.slice(source.indexOf("window.addEventListener('i18n-change'"));
+    expect(handler.slice(0, 320)).toContain('_relabelWorkbench()');
+    expect(handler.slice(0, 320)).toContain('_renderRight()');
+  });
+
+  it('用到的每个 kb.workbench.* 键在 4 份 locale 里都存在（缺键会静默回退中文）', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const used = [...new Set([...source.matchAll(/_tr\('(kb\.workbench\.[a-z0-9_]+)'/g)].map((m) => m[1]))];
+    expect(used.length).toBeGreaterThan(40);
+    for (const lang of ['zh', 'en', 'ja', 'pt']) {
+      const dict = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${lang}.json`), 'utf8'));
+      const missing = used.filter((k) => !dict[k]);
+      expect(missing, `${lang} 缺 ${missing.length} 个键`).toEqual([]);
+    }
+    // 表里挂的钩子键也必须存在（钩子键写错 = 界面露 key）
+    const hooked = [...new Set([...source.matchAll(/data-wb-(?:text|title|label|placeholder)="([^"]+)"/g)].map((m) => m[1]))];
+    const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf8'));
+    expect(hooked.filter((k) => !zh[k])).toEqual([]);
   });
 });
