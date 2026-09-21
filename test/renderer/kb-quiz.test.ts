@@ -263,9 +263,11 @@ describe('kb-quiz 契约', () => {
 
   it('顶部有进度条（不只文字），进度文字是"当前状态"一档', () => {
     const src = source();
+    expect(src).toContain('window.uiProgressBar({');
     expect(src).toContain('kb-qz-progress-track');
-    expect(src).toContain('kb-qz-progress-fill');
-    expect(src).toMatch(/fill\.style\.width = `\$\{pct\}%`/);
+    expect(src).not.toContain('kb-qz-progress-fill');
+    expect(src).toContain("progress.style.setProperty('--ui-progress-value', `${pct}%`)");
+    expect(src).toContain("progress.setAttribute('aria-valuenow', String(pct))");
     for (const key of ['kb.quiz.progress', 'kb.quiz.progress_done']) expect(src).toContain(key);
   });
 
