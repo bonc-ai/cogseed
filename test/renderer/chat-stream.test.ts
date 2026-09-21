@@ -221,6 +221,22 @@ describe('chat-stream module', () => {
     expect(flow.querySelector('.cs-badge-stop')).toBeNull();
   });
 
+  it('运行态徽章持续显示工具计数，模型重试与恢复输出更新可见状态', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    const flow = inserts[0].node;
+    const badge = flow.querySelector('.cs-badge')!;
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('工具执行中');
+    expect(badge.querySelector('.cs-badge-tools')!.textContent).toBe('1 次工具调用');
+    expect(badge.querySelector('.cs-badge-elapsed')).toBeTruthy();
+
+    g.window.chatStreamSetRuntimeStatus('c-1', anchor, { type: 'retry', attempt: 2 });
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('模型连接中断，正在重试（第 2 次）');
+
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'text1', kind: 'text', status: 'inProgress', payload: { delta: '继续' } });
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('继续生成中');
+  });
+
   it('徽章点击收起/展开时间线正文', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     const flow = inserts[0].node;

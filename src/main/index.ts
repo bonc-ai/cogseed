@@ -1636,13 +1636,8 @@ if (!gotLock) {
       void uid;
     });
 
-    // 修正 33a16ad 之前 promote 出来的资产：lifecycleStatus 说「用户已确认」，
-    // maturity 却归在 seed（候选档）。那个矛盾会让它们永远进不了任何 Agent，
-    // 而 seed→bud 没有别的路径。幂等，修完就空转。
-    registerDeferred('recall:correct-seed-maturity', async () => {
-      const { correctMisfiledSeedMaturity } = await import('./features/recall/asset-service');
-      await correctMisfiledSeedMaturity(users.getActiveUserId());
-    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // recall:correct-seed-maturity 已随出身收敛退役（2026-09-20）：一次性
+    // 历史归档修正早已空转，出身单值化后判据不复存在（见 asset-service 注释）。
     // 2026-08-15 UI 优化：旧 KStar 线资产带英文技术标题（'Reusable experience
     // lesson (requirement-level)' 等），迁移为中文可读。幂等，修完空转。
     registerDeferred('recall:migrate-legacy-titles', async () => {
@@ -1657,6 +1652,16 @@ if (!gotLock) {
     registerDeferred('recall:migrate-legacy-scopes', async () => {
       const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
       await migrateLegacyFreeTextScopes(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // 存量记忆迁移（2026-09-19 合并实施·清单 #6）：USER.md/MEMORY.md 条目过
+    // 第二段入库，迁移前自动备份，全部落库后按文件清空（幂等——文件空则零
+    // 副作用；单条失败保留文件等下次启动重跑）。
+    registerDeferred('recall:migrate-legacy-memory', async () => {
+      const { migrateLegacyMemoryToAssets } = await import('./features/recall/memory-migration');
+      const report = await migrateLegacyMemoryToAssets(users.getActiveUserId());
+      if (report.migrated > 0 || report.failed > 0) {
+        console.log(`[memory-migration] migrated=${report.migrated} failed=${report.failed} backup=${report.backupDir || 'none'}`);
+      }
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
