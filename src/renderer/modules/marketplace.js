@@ -52,6 +52,12 @@ function _mpUnknownCategoryLabel() {
   return raw && raw !== 'marketplace.category_unknown' ? raw : 'Unknown';
 }
 
+/** `category` 字段缺席时的分类名（FR-068）。与「取值不认得」的 `_mpUnknownCategoryLabel` 分开。 */
+function _mpUncategorizedLabel() {
+  const raw = t('marketplace.category_uncategorized');
+  return raw && raw !== 'marketplace.category_uncategorized' ? raw : 'Uncategorized';
+}
+
 function _mpCanonicalCategoryCode(code) {
   const c = String(code || '').trim();
   return c === 'writing' ? 'creation' : c;
@@ -436,6 +442,21 @@ const _mpListingsCache = new Map();
 let _mpListingsHydrated = false;
 function _mpListingsKey(kind, category, status, q) { return `${kind}|${category || ''}|${status || ''}|${q || ''}`; }
 
+/**
+ * 该 tab 当前这批行在缓存里的键。**唯一的一条键规则**——取行、续页、水合都用它。
+ *
+ * 本地过滤的 tab（Skill，FR-068）取回的是整份目录，q / category 不进键：否则每换一次
+ * 分类或搜索词就会指向一个空槽，把已经取回的整份目录判成「没有缓存」。
+ */
+function _mpCacheKeyFor(kind, opts = {}) {
+  const cat = opts.cat !== undefined ? opts.cat : _mpState.category;
+  const status = opts.status !== undefined ? opts.status : _mpState.status;
+  const q = opts.q !== undefined ? opts.q : _mpState.q;
+  return _mpUsesLocalFilter(kind)
+    ? _mpListingsKey(kind, '', status, '')
+    : _mpListingsKey(kind, cat, status, q);
+}
+
 async function _mpHydrateListingsCache() {
   if (_mpListingsHydrated) return;
   _mpListingsHydrated = true;
@@ -458,6 +479,18 @@ function _mpPersistListingsCache() {
 }
 
 
+/**
+ * 告诉主进程「用户打开了目录页」（FR-034）。
+ *
+ * 刻意不 await、不展示结果：检查不打断用户。主进程按 6 小时最小间隔决定是否真的去查。
+ */
+function _mpRequestServerCheck() {
+  try {
+    const p = window.cogseed?.invoke('marketplace.requestCheck');
+    if (p && typeof p.catch === 'function') p.catch(() => { /* 检查失败不打断用户 */ });
+  } catch { /* 通道在极早期启动阶段可能还不在 */ }
+}
+
 function isMarketplaceOpen() {
   return document.getElementById('panel-marketplace')?.classList.contains('active') === true;
 }
@@ -469,6 +502,10 @@ function openMarketplace(initialTab = 'agent', opts = {}) {
   // Idempotent; normally already started at module load so the Agents/Skills pages can show
   // boot-time default-install progress before the user opens Marketplace.
   _mpInitReconcileWatch();
+  // specs/010 FR-034 `[FROZEN]`：「用户打开目录页时」是一个检查触发时机（另两个是启动后
+  // 60 秒与在线期间每 6 小时，都在主进程）。这里只转达时机，不等结果、不显示进度、
+  // 失败不打断用户——频率闸门在主进程，重复开关面板不会变成重复请求。
+  _mpRequestServerCheck();
 
   _mpReturnView = (typeof currentView === 'string' && currentView !== 'marketplace')
     ? currentView : 'agents';
@@ -1138,8 +1175,8 @@ function _mpRenderStatusSelect(panel) {
 // (Stale-response protection lives in `_mpLoadListingsPage`'s per-kind generation token.)
 function _mpHydrateFromCache() {
   const cat = _mpState.category, status = _mpState.status, q = _mpState.q;
-  const cachedA = _mpListingsCache.get(_mpListingsKey('agent', cat, status, q));
-  const cachedS = _mpListingsCache.get(_mpListingsKey('skill', cat, status, q));
+  const cachedA = _mpListingsCache.get(_mpCacheKeyFor('agent', { cat, status, q }));
+  const cachedS = _mpListingsCache.get(_mpCacheKeyFor('skill', { cat, status, q }));
   // No cache for this (kind, cat, q) → clear that list rather than leave the previous
   // tab/category's rows on screen; the caller's `loading` flag (set from
   // `_mpVisibleItems().length`) then decides spinner vs empty-state for the now-empty tab.
@@ -1184,11 +1221,17 @@ async function _mpLoadListingsPage(kind, { append, page }) {
   if (!_mpState._loadGen) _mpState._loadGen = { agent: 0, skill: 0 };
   const myGen = ++_mpState._loadGen[kind];
   const cat = _mpState.category, status = _mpState.status, q = _mpState.q;
-  const key = _mpListingsKey(kind, cat, status, q);
+  // specs/010 FR-068 `[FROZEN]`：Skill 目录页的搜索框与分类条 **只做本地过滤**，
+  // 因此 skill 这一路不再把 q / category 发给服务端——取回整份目录，过滤在 `_mpVisibleItems`
+  // 里做。agent 一路**逐字不变**（FR-070：Agents tab 不得改动）。
+  const localFilter = _mpUsesLocalFilter(kind);
+  const sentCat = localFilter ? null : (cat || null);
+  const sentQ = localFilter ? null : (q || null);
+  const key = _mpCacheKeyFor(kind, { cat, status, q });
   const channel = kind === 'agent' ? 'marketplace.listAgents' : 'marketplace.listSkills';
   try {
     const r = await window.cogseed.invoke(channel, {
-      category: cat || null, status: status || null, q: q || null, page, size: MP_LISTINGS_PAGE_SIZE,
+      category: sentCat, status: status || null, q: sentQ, page, size: MP_LISTINGS_PAGE_SIZE,
     });
     if (_mpState._loadGen[kind] !== myGen) return;
     const rows = (r && r.list) || [];
@@ -1210,7 +1253,7 @@ async function _mpLoadListingsPage(kind, { append, page }) {
     if (kind === 'agent') _mpState.agents = merged;
     else _mpState.skills = merged;
     // "All" tab feeds per-category caches one-way.
-    if (!cat) _mpSpreadAllIntoCategoryCaches(kind, rows, q);
+    if (!cat && !localFilter) _mpSpreadAllIntoCategoryCaches(kind, rows, q);
     _mpPersistListingsCache();
   } catch (err) {
     if (_mpState._loadGen[kind] !== myGen) return;
@@ -1236,7 +1279,7 @@ async function _mpLoadMoreCurrentKind() {
   if (_mpLoadMoreInflight) return;
   const kind = _mpState.tab;
   const cat = _mpState.category, status = _mpState.status, q = _mpState.q;
-  const cached = _mpListingsCache.get(_mpListingsKey(kind, cat, status, q));
+  const cached = _mpListingsCache.get(_mpCacheKeyFor(kind, { cat, status, q }));
   if (!cached || cached.exhausted) return;
   _mpLoadMoreInflight = true;
   try {
@@ -1247,10 +1290,42 @@ async function _mpLoadMoreCurrentKind() {
   }
 }
 
+/**
+ * Which tabs filter locally. specs/010 FR-068 `[FROZEN]` requires it for the Skill catalog;
+ * `agent` keeps server-side filtering untouched (FR-070) and `oss` has its own path entirely.
+ */
+function _mpUsesLocalFilter(kind) {
+  return kind === 'skill';
+}
+
+/** Case-insensitive match over the fields the card actually shows: name, id, both descriptions. */
+function _mpMatchesQuery(item, q) {
+  const needle = String(q || '').trim().toLowerCase();
+  if (!needle) return true;
+  return [item?.name, item?.id, item?.description_zh, item?.description_en, item?.description]
+    .some((field) => typeof field === 'string' && field.toLowerCase().includes(needle));
+}
+
+/**
+ * Local filtering for the Skill catalog (FR-068). Category compares canonical codes so a
+ * spelling variant still matches; an item with no category only shows under 全部, which is
+ * what listing it as 未分类 means on the chip strip.
+ */
+function _mpFilterItemsLocally(items) {
+  const cat = _mpCanonicalCategoryCode(_mpState.category);
+  const q = _mpState.q;
+  return items.filter((item) => {
+    if (cat && _mpCanonicalCategoryCode(item?.category) !== cat) return false;
+    return _mpMatchesQuery(item, q);
+  });
+}
+
 // The list the user is currently looking at — the basis for "is the page empty → show
 // loading", and for rendering / finding cards on the active tab.
 function _mpVisibleItems() {
-  return _mpState.tab === 'agent' ? _mpState.agents : _mpState.skills;
+  if (_mpState.tab === 'agent') return _mpState.agents;
+  const skills = _mpState.skills;
+  return _mpUsesLocalFilter('skill') ? _mpFilterItemsLocally(skills) : skills;
 }
 
 // ─── Grid view rendering ───
@@ -1307,7 +1382,13 @@ function _mpRender() {
     return;
   }
   if (_mpState.error) {
-    body.innerHTML = `<div class="empty">${escapeHtml(t('marketplace.load_failed'))}: ${escapeHtml(_mpState.error)}</div>`;
+    // specs/010 FR-069 `[FROZEN]`：Hub 不可达时面板显示「市场暂时不可用」。
+    // 复用既有文案键（动作失败路径一直用的就是它），**不新造第二句**；原始错误只进
+    // 控制台，不抛给用户。已安装 Skill 不受影响——这里只画面板，不碰安装状态。
+    // 只改 Skill tab（FR-070：Agents tab 的既有「加载失败: 原因」不动）。
+    body.innerHTML = _mpState.tab === 'skill'
+      ? `<div class="empty">${escapeHtml(t('marketplace.action_failed_retry_later'))}</div>`
+      : `<div class="empty">${escapeHtml(t('marketplace.load_failed'))}: ${escapeHtml(_mpState.error)}</div>`;
     return;
   }
   // Order comes from the server: relevance for searches, name sort otherwise.
@@ -1515,6 +1596,12 @@ function _mpCardHtml(item, lang) {
   const catLabel = _mpCategoryLabel(item.category, lang);
   const statusLabel = '';
   const versionLabel = t('marketplace.version').replace('{version}', String(item.version || ''));
+  // specs/010 FR-067：目录页卡片状态「有更新」——本机**实际版本**（`skills.list` 的 version，
+  // 经主进程 `installed-version.ts` 单一入口判定）低于目录版本时出现。呈现由客户端自定，
+  // 这里是一枚 chip；按钮文案仍是既有的「更新」。只挂 Skill tab（FR-070：Agents tab 不动）。
+  const updateChip = kind === 'skill' && status.updateAvailable
+    ? `<span class="marketplace-card-chip is-update" data-mp-state="update-available">${escapeHtml(t('marketplace.state_update_available'))}</span>`
+    : '';
   const avatar = kind === 'agent'
     ? renderAvatarHtml(item.icon, item.color, { size: 32, seed: item.id, extraClass: 'marketplace-card-avatar' })
     : '';
@@ -1551,6 +1638,7 @@ function _mpCardHtml(item, lang) {
         <div class="marketplace-card-meta">
           ${item.version && kind !== 'skill' ? `<span class="marketplace-card-chip is-version">${escapeHtml(versionLabel)}</span>` : ''}
           ${catLabel ? `<span class="marketplace-card-chip">${escapeHtml(catLabel)}</span>` : ''}
+          ${updateChip}
           ${statusLabel ? `<span class="marketplace-card-chip is-status">${escapeHtml(statusLabel)}</span>` : ''}
         </div>
         <div class="marketplace-card-actions">
@@ -1561,9 +1649,35 @@ function _mpCardHtml(item, lang) {
   `;
 }
 
+/**
+ * 发布时间（FR-068）。取 `published_at`，缺席时退到 `updated_at`；两者都没有就说「未知」
+ * —— **不猜一个日期**。主进程已把 RFC 3339 转成 epoch 毫秒（FR-007），这里不见时间字符串。
+ */
+function _mpPublishedAtLabel(item) {
+  const raw = item?.published_at ?? item?.marketplace_published_at
+    ?? item?.updated_at ?? item?.marketplace_updated_at;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+    return t('marketplace.detail_published_unknown');
+  }
+  const locale = (typeof getLang === 'function' && getLang() === 'en') ? 'en-US' : 'zh-CN';
+  return t('marketplace.detail_published_at').replace('{date}', new Date(raw).toLocaleDateString(locale));
+}
+
+/** 最低兼容版本（FR-068）。**字段缺席 = 无下限**（FR-005），显示为「无下限」而不是留空。 */
+function _mpMinAppLabel(item) {
+  const min = _mpMinAppVersion(item);
+  return min
+    ? t('marketplace.detail_min_app').replace('{version}', min)
+    : t('marketplace.detail_min_app_none');
+}
+
 function _mpCategoryLabel(code, lang) {
   const canonical = _mpCanonicalCategoryCode(code);
-  if (!canonical) return '';
+  // specs/010 FR-068 `[FROZEN]`：`category` 缺省时**列为未分类**，不是留空。
+  // 与 `_mpUnknownCategoryLabel()`（认得字段但不认得这个取值）分开：**字段缺席**和
+  // **取值不认得**是两回事，共用一句会把两种情况混成一种。
+  // 只对 Skill 生效——Agents tab 的既有留空行为不动（FR-070）。
+  if (!canonical) return _mpState?.tab === 'skill' ? _mpUncategorizedLabel() : '';
   _mpMaybeRefreshCategoriesForCodes([canonical]);
   const stateCats = Array.isArray(_mpState?.categories) ? _mpState.categories : [];
   const cacheCats = Array.isArray(_mpCategoriesCache) ? _mpCategoriesCache : [];
@@ -1662,7 +1776,12 @@ function _mpRenderDetail() {
   // expose marketplace version even when the title is long.
   panel.querySelector('[data-mp-detail-name]').textContent = item.name || item.id;
   panel.querySelector('[data-mp-detail-meta]').innerHTML = [
+    // specs/010 FR-068 `[FROZEN]`：Skill 详情页必须有版本、发布时间、最低兼容版本。
+    // Agent 详情页沿用既有的版本 chip（FR-070）。
     item.version && kind !== 'skill' ? `<span class="marketplace-card-chip is-version">${escapeHtml(versionLabel)}</span>` : '',
+    kind === 'skill' && item.version ? `<span class="marketplace-card-chip is-version" data-mp-detail-version>${escapeHtml(versionLabel)}</span>` : '',
+    kind === 'skill' ? `<span class="marketplace-card-chip" data-mp-detail-published>${escapeHtml(_mpPublishedAtLabel(item))}</span>` : '',
+    kind === 'skill' ? `<span class="marketplace-card-chip" data-mp-detail-min-app>${escapeHtml(_mpMinAppLabel(item))}</span>` : '',
     catLabel ? `<span class="marketplace-card-chip">${escapeHtml(catLabel)}</span>` : '',
     statusLabel ? `<span class="marketplace-card-chip is-status">${escapeHtml(statusLabel)}</span>` : '',
   ].filter(Boolean).join(' ');
