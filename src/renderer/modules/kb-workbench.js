@@ -312,9 +312,9 @@
     const st = _state.kbStatus.get(relPath);
     if (!st) return '<span class="kb-file-status is-none">未索引</span>';
     if (st.status === 'ready') return `<span class="kb-file-status is-ready" title="chunks: ${st.chunks ?? 0}">${_icon('check')} 已索引</span>`;
-    if (st.status === 'processing') return '<span class="kb-file-status is-run">索引中…</span>';
-    if (st.status === 'pending') return '<span class="kb-file-status is-run">排队中</span>';
-    if (st.status === 'failed') return '<span class="kb-file-status is-failed" title="' + _esc(st.error || '') + '">失败</span>';
+    if (st.status === 'processing') return `<span class="kb-file-status is-run">${_esc(_tr('kb.workbench.file_indexing', '索引中…'))}</span>`;
+    if (st.status === 'pending') return `<span class="kb-file-status is-run">${_esc(_tr('kb.workbench.file_queued', '排队中'))}</span>`;
+    if (st.status === 'failed') return '<span class="kb-file-status is-failed" title="' + _esc(st.error || '') + '">' + _esc(_tr('kb.workbench.file_failed', '失败')) + '</span>';
     return '<span class="kb-file-status is-none">未索引</span>';
   }
 
@@ -1057,7 +1057,7 @@
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     // 确保个人库树已加载
     if (!_state.libs.length) {
-      if (typeof uiToast === 'function') uiToast('没有可导入的个人知识库', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_no_library', '没有可导入的个人知识库'), { variant: 'warning' });
       return;
     }
     _dlgLib = _state.libs[0].name;
@@ -1069,40 +1069,40 @@
     const libItems = _state.libs.map((l, i) =>
       `<div class="kb-import-dlg-lib${i === 0 ? ' active' : ''}" data-import-lib="${_esc(l.name)}">
         ${_icon('folder', 'kb-import-dlg-ico')}<span class="kb-import-dlg-name">${_esc(l.name)}</span>
-      </div>`).join('') || _uiEmptyState({ kind: 'quiet', title: '暂无个人知识库' });
+      </div>`).join('') || _uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.import_no_library_empty', '暂无个人知识库') });
     const overlay = document.createElement('div');
     overlay.className = 'ui-modal-overlay kb-import-dlg-overlay';
     overlay.innerHTML = `
       <section class="ui-modal ui-modal--lg kb-import-dlg" role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title">
         <header class="ui-modal__header kb-import-dlg-head">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>导入内容</h2>
+            <h2 class="ui-modal__title kb-import-dlg-title" id="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_icon('upload', 'kb-import-dlg-title-icon')}</span>${_esc(_tr('kb.workbench.import_title', '导入内容'))}</h2>
           </div>
           <div class="kb-import-dlg-search">
             <span class="kb-import-dlg-search-ico">${_icon('search', 'kb-import-dlg-search-icon')}</span>
-            ${_uiInput({ id: 'kb-import-dlg-search-input', type: 'search', placeholder: '搜索', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+            ${_uiInput({ id: 'kb-import-dlg-search-input', type: 'search', placeholder: _tr('kb.workbench.search_short', '搜索'), attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
-          ${_uiIconButton({ label: '关闭导入弹窗', icon: 'x', className: 'kb-import-dlg-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.import_close', '关闭导入弹窗'), icon: 'x', className: 'kb-import-dlg-close' })}
         </header>
         <div class="ui-modal__body kb-import-dlg-content">
           <div class="kb-import-dlg-nav">
-            ${_uiIconButton({ label: '返回', icon: 'chevron-left', className: 'kb-import-dlg-back' })}
-            ${_uiIconButton({ label: '前进', icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
+            ${_uiIconButton({ label: _tr('kb.workbench.import_back', '返回'), icon: 'chevron-left', className: 'kb-import-dlg-back' })}
+            ${_uiIconButton({ label: _tr('kb.workbench.import_forward', '前进'), icon: 'chevron-right', className: 'kb-import-dlg-forward' })}
             <span class="kb-import-dlg-path"></span>
           </div>
           <div class="kb-import-dlg-body">
             <div class="kb-import-dlg-tree">
-              <div class="kb-import-dlg-group">个人知识库</div>
+              <div class="kb-import-dlg-group">${_esc(_tr('kb.workbench.import_personal_group', '个人知识库'))}</div>
               <div class="kb-import-dlg-libs">${libItems}</div>
             </div>
             <div class="kb-import-dlg-files"></div>
           </div>
         </div>
         <footer class="ui-modal__footer kb-import-dlg-foot">
-          <span class="kb-import-dlg-count">已选中 0 个文件</span>
+          <span class="kb-import-dlg-count" data-kb-import-count>${_esc(_tr('kb.workbench.import_selected_count', '已选中 {count} 个文件', { count: 0 }))}</span>
           <div class="kb-import-dlg-actions">
-            ${_uiButton({ label: '取消', role: 'secondary', size: 'sm', className: 'kb-import-dlg-cancel' })}
-            ${_uiButton({ label: '导入', role: 'primary', size: 'sm', icon: 'upload', disabled: true, className: 'kb-import-dlg-ok' })}
+            ${_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary', size: 'sm', className: 'kb-import-dlg-cancel' })}
+            ${_uiButton({ label: _tr('kb.workbench.import_confirm', '导入'), role: 'primary', size: 'sm', icon: 'upload', disabled: true, className: 'kb-import-dlg-ok' })}
           </div>
         </footer>
       </section>`;
@@ -1236,8 +1236,8 @@
       // 搜索无结果：显示"无匹配"占位，不显示空库引导（避免误导为新库）
       list.innerHTML = _uiEmptyState({
         kind: 'explained',
-        title: '无匹配文档',
-        hint: '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）',
+        title: _tr('kb.workbench.files_no_match', '无匹配文档'),
+        hint: _tr('kb.workbench.files_no_match_hint', '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）'),
         icon: 'search',
       });
     } else {
@@ -1329,7 +1329,7 @@
           <span class="kb-file-meta">${_esc(_relDirLabel(parentPath))}</span>
           <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
           ${_statusChip(rel)}
-          <span class="kb-file-actions">${_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
+          <span class="kb-file-actions">${_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
         </div>`);
       }
       for (const d of (children || []).filter((n) => n.type === 'dir')) {
@@ -1365,7 +1365,7 @@
         <span class="kb-file-meta">${_esc(_extLabel(f.name))}</span>
         <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
         ${_statusChip(rel)}
-        <span class="kb-file-actions">${_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
+        <span class="kb-file-actions">${_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
       </div>`);
     }
   }
@@ -1384,27 +1384,27 @@
     for (const f of files) {
       const status = f.status || 'pending';
       const chip = status === 'ready'
-        ? `<span class="kb-file-status is-ready" title="chunks: ${f.chunks ?? 0}">${_icon('check')} 已索引</span>`
-        : status === 'processing' ? '<span class="kb-file-status is-run">索引中…</span>'
-          : status === 'failed' ? '<span class="kb-file-status is-failed" title="' + _esc(f.error || '') + '">失败</span>'
-            : '<span class="kb-file-status is-run">排队中</span>';
+        ? `<span class="kb-file-status is-ready" title="chunks: ${f.chunks ?? 0}">${_icon('check')} ${_esc(_tr('kb.workbench.file_indexed', '已索引'))}</span>`
+        : status === 'processing' ? `<span class="kb-file-status is-run">${_esc(_tr('kb.workbench.file_indexing', '索引中…'))}</span>`
+          : status === 'failed' ? '<span class="kb-file-status is-failed" title="' + _esc(f.error || '') + '">' + _esc(_tr('kb.workbench.file_failed', '失败')) + '</span>'
+            : `<span class="kb-file-status is-run">${_esc(_tr('kb.workbench.file_queued', '排队中'))}</span>`;
       html += `<div class="kb-file-row" data-kb-space-file="${_esc(f.path || f.name)}">
         <span class="kb-file-icon is-${_extClass(f.name || f.path)}">${_extLabel(f.name || f.path)}</span>
         <span class="kb-file-name">${_esc(f.name || f.path)}</span>
         <span class="kb-file-meta">${_esc(_extLabel(f.name || f.path))}</span>
         <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
         ${chip}
-        <span class="kb-file-actions">${_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
+        <span class="kb-file-actions">${_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn' })}${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn' })}</span>
       </div>`;
     }
     // 底部：没有更多内容了（对齐 ima 列表结束提示）
-    if (files.length) html += '<div class="kb-files-end">没有更多内容了</div>';
+    if (files.length) html += `<div class="kb-files-end">${_esc(_tr('kb.workbench.files_end', '没有更多内容了'))}</div>`;
     if (!html && q) {
       // 搜索无结果：不显示空库引导
       list.innerHTML = _uiEmptyState({
         kind: 'explained',
-        title: '无匹配文档',
-        hint: '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）',
+        title: _tr('kb.workbench.files_no_match', '无匹配文档'),
+        hint: _tr('kb.workbench.files_no_match_hint', '换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）'),
         icon: 'search',
       });
       _renderCount(0);
@@ -1503,31 +1503,31 @@
     if (_fvController) _fvController.open(document.activeElement);
     if (dialog) _fvApplyWindowRect(dialog);
     _fvResetZoom(dialog);
-    _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
+    _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || _tr('kb.workbench.viewer_title', '原文查看'), scope });
     try {
       const res = await window.cogseed.invoke('kb.openFile', payload);
       if (!res || !res.ok) {
-        const errMsg = (res && res.error) || '打开失败';
+        const errMsg = (res && res.error) || _tr('kb.workbench.viewer_open_failed', '打开失败');
         const friendly = errMsg === 'too_large'
-          ? `文件超过 2MB 预览上限（${res && res.size ? Math.round(res.size / 1024 / 1024) : ''}MB），暂不支持在线预览`
-          : errMsg === 'file not found' ? '文件不存在或已被移动'
+          ? _tr('kb.workbench.viewer_too_large', '文件超过 2MB 预览上限（{size}MB），暂不支持在线预览', { size: res && res.size ? Math.round(res.size / 1024 / 1024) : '' })
+          : errMsg === 'file not found' ? _tr('kb.workbench.viewer_missing', '文件不存在或已被移动')
             : /暂不支持预览/.test(errMsg) ? errMsg : errMsg;
         _setFileViewerState(overlay, {
           error: friendly,
-          title: (payload && payload.path || '').split('/').pop() || '原文查看',
+          title: (payload && payload.path || '').split('/').pop() || _tr('kb.workbench.viewer_title', '原文查看'),
           scope,
         });
-        if (typeof uiToast === 'function') uiToast('无法预览该文件', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.viewer_cannot_preview', '无法预览该文件'), { variant: 'warning' });
         return;
       }
       _setFileViewerState(overlay, { content: res, title: res.name || (payload && payload.path || '').split('/').pop(), scope }, hl);
     } catch (err) {
       _setFileViewerState(overlay, {
         error: (err && err.message) || String(err),
-        title: (payload && payload.path || '').split('/').pop() || '原文查看',
+        title: (payload && payload.path || '').split('/').pop() || _tr('kb.workbench.viewer_title', '原文查看'),
         scope,
       });
-      if (typeof uiToast === 'function') uiToast('打开文件失败', { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.viewer_open_error', '打开文件失败'), { variant: 'error' });
     }
   }
 
@@ -6992,24 +6992,24 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-cogseed-config-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置 CogSeed 共享服务</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-cogseed-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.cogseed_config_title', '配置 CogSeed 共享服务'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.cogseed_config_close', '关闭 CogSeed 共享服务配置弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
-          <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
+          <div class="kb-share-config-tip">${_esc(_tr('kb.workbench.cogseed_config_tip', '发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：'))}</div>
           <div class="kb-share-config-field">
-            <label class="kb-share-config-label" for="kb-cogseed-baseurl">服务地址</label>
+            <label class="kb-share-config-label" for="kb-cogseed-baseurl">${_esc(_tr('kb.workbench.cogseed_config_baseurl', '服务地址'))}</label>
             ${_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input', placeholder: 'https://share.cogseed.dev', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           <div class="kb-share-config-field">
             <label class="kb-share-config-label" for="kb-cogseed-apikey">API Key</label>
-            ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: '服务方发放的密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+            ${_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input', placeholder: _tr('kb.workbench.cogseed_config_apikey', '服务方发放的密钥'), attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
-          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-cancel' } })}
-          ${_uiButton({ label: '保存并发布', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-save' } })}
+          ${_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-cancel' } })}
+          ${_uiButton({ label: _tr('kb.workbench.cogseed_config_save', '保存并发布'), role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-cogseed-config-save' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -7026,14 +7026,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const baseUrl = overlay.querySelector('#kb-cogseed-baseurl').value.trim();
       const apiKey = overlay.querySelector('#kb-cogseed-apikey').value.trim();
       if (!baseUrl || !apiKey) {
-        if (typeof uiToast === 'function') uiToast('请填写服务地址与 API Key', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.cogseed_config_need_credentials', '请填写服务地址与 API Key'), { variant: 'warning' });
         return;
       }
       const btn = e.currentTarget;
       btn.disabled = true;
       btn.classList.add('is-loading');
       btn.setAttribute('aria-busy', 'true');
-      _setUiButtonPresentation(btn, '保存并发布');
+      _setUiButtonPresentation(btn, _tr('kb.workbench.cogseed_config_save', '保存并发布'));
       try {
         const res = await window.cogseed.invoke('kb.share.cogseed.config.set', { baseUrl, apiKey });
         if (!res || res.ok !== true) throw new Error((res && res.error) || _tr('kb.workbench.save_failed', '保存失败'));

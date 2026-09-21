@@ -789,7 +789,7 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _countFiles('),
     );
 
-    expect(fileRows).toContain("_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn'");
+    expect(fileRows).toContain("_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn'");
     expect(fileRows).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn'");
     expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? '折叠' : '展开', icon: open \? 'chevron-down' : 'chevron-right'/);
     expect(fileRows).not.toMatch(/<button\b/);
@@ -957,11 +957,11 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(importDialog).toContain('class="ui-modal ui-modal--lg kb-import-dlg"');
     expect(importDialog).toContain('class="ui-modal__body kb-import-dlg-content"');
     expect(importDialog).toContain('class="ui-modal__footer kb-import-dlg-foot"');
-    expect(importDialog).toContain("_uiIconButton({ label: '关闭导入弹窗', icon: 'x'");
-    expect(importDialog).toContain("_uiIconButton({ label: '返回', icon: 'chevron-left'");
+    expect(importDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.import_close', '关闭导入弹窗'), icon: 'x'");
+    expect(importDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.import_back', '返回'), icon: 'chevron-left'");
     expect(importDialog).toContain("_uiInput({ id: 'kb-import-dlg-search-input', type: 'search'");
-    expect(importDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
-    expect(importDialog).toContain("_uiButton({ label: '导入', role: 'primary'");
+    expect(importDialog).toContain("_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary'");
+    expect(importDialog).toContain("_uiButton({ label: _tr('kb.workbench.import_confirm', '导入'), role: 'primary'");
     expect(importDialog).not.toMatch(/<button\b/);
     expect(importDialog).not.toMatch(/<input\b/);
     expect(importDialog).not.toMatch(/[✕←→]/u);
@@ -1020,7 +1020,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect((shareDialogs.match(/class="ui-modal__header"/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__body/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__footer/g) || [])).toHaveLength(7);
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.cogseed_config_close', '关闭 CogSeed 共享服务配置弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.feishu_config_close', '关闭飞书分享配置弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input'");
@@ -1036,7 +1036,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
     expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x'");
-    expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.cogseed_config_save', '保存并发布'), role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_revoke', '撤销'), role: 'danger', size: 'sm'");
     expect(shareDialogs).toContain("id: 'kb-perm-member'");
