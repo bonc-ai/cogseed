@@ -1,7 +1,7 @@
 /**
  * ontology-conflicts — 本体分组同字段值矛盾检测（2026-09-19 本体增强）。
  *
- * 对应 Richard R32 conflict_policy：矛盾暴露成复核项，不静默消解——本模块
+ * 对应蓝图 R32 conflict_policy：矛盾暴露成复核项，不静默消解——本模块
  * 只「查出并记账」，永不改写/删除任何字段值，删除权在用户。
  *
  * 检测两级（计划拍板 ④）：
@@ -30,7 +30,12 @@ import { createLogger } from '../../logger';
 import { userOntologyGroupsDir } from '../../paths';
 import { safeId, nowIso, genId12, writeTextAtomicSync } from '../../storage';
 // groups 不反向依赖本模块（写值挂点用动态 import），这里静态单向依赖安全。
-import { parseGroupContent, readGroupContent } from '../personal_ontology_groups';
+import {
+  collectTemplateFileFields,
+  isTemplateFileText,
+  parseGroupContent,
+  readGroupContent,
+} from '../personal_ontology_groups';
 
 const log = createLogger('ontology-conflicts');
 
@@ -252,25 +257,45 @@ export async function listConflicts(
     const all = readConflicts(userId);
     if (!all.length) return [];
     const live: OntologyConflictRecord[] = [];
+    // 写回集合必须包含「本次未校验」的其它组记录：按 groupId 过滤读时它们
+    // 不在自愈范围内，写回若只按 live 过滤，打开任一组的子页就会清空其它
+    // 组的冲突台账（live 只装了本组记录）。
+    const keep: OntologyConflictRecord[] = [];
     let healed = 0;
     for (const record of all) {
-      if (groupId && record.group_id !== groupId) continue;
+      if (groupId && record.group_id !== groupId) {
+        keep.push(record);
+        continue;
+      }
       let values: string[] = [];
       try {
         const content = await readGroupContent(userId, record.group_id);
-        values = content.content
-          ? (parseGroupContent(content.content).fields[record.field] || []).map((fv) => fv.value)
-          : [];
+        if (content.content) {
+          // 模板组文件是 `## 分节`+`### 字段` 结构，parseGroupContent 只认
+          // 双区格式、对分节式解出空 fields（自愈会永远判失效，模板组的
+          // 冲突记上就被下次读取清掉）。按文件标记分流，字段名跨分节合并，
+          // 与记账挂点同口径。
+          if (isTemplateFileText(content.content)) {
+            for (const f of collectTemplateFileFields(content.content)) {
+              if (f.name === record.field) values.push(...f.values.map((fv) => fv.value));
+            }
+          } else {
+            values = (parseGroupContent(content.content).fields[record.field] || []).map((fv) => fv.value);
+          }
+        }
       } catch {
         values = [];
       }
       const stillThere = values.includes(record.value_a) && values.includes(record.value_b);
-      if (stillThere) live.push(record);
-      else healed += 1;
+      if (stillThere) {
+        live.push(record);
+        keep.push(record);
+      } else {
+        healed += 1;
+      }
     }
     if (healed > 0) {
-      const liveKeys = new Set(live.map(dedupeKey));
-      writeConflicts(userId, all.filter((r) => liveKeys.has(dedupeKey(r))));
+      writeConflicts(userId, keep);
       log.info('conflict ledger self-healed', { userId, healed });
     }
     return live;

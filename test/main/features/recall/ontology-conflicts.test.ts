@@ -182,6 +182,97 @@ describe('ontology-conflicts › wired into appendFieldValue + self-heal', () =>
   });
 });
 
+// ── 审查修复回归（2026-09-21）：按组过滤误删他组记录 + 模板组自愈误清 ────
+describe('ontology-conflicts › scoped self-heal keeps other groups intact', () => {
+  it('healing one group does not wipe another group\'s records from the ledger', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const m = await loadModule();
+    const gidA = (await groups.createGroup(UID, '触发自愈组')).group!.group_id;
+    const gidB = (await groups.createGroup(UID, '无辜旁观组')).group!.group_id;
+    await groups.appendFieldValue(UID, gidA, '居住地', '常住北京', '手动');
+    await groups.appendFieldValue(UID, gidA, '居住地', '常住上海', '手动');
+    await groups.appendFieldValue(UID, gidB, '工作地', '城东0', '手动');
+    await groups.appendFieldValue(UID, gidB, '工作地', '城西0', '手动');
+
+    const ledgerPath = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', 'conflicts.md');
+    const rec = (id: string, gid: string, field: string, a: string, b: string) => [
+      `### ${id}`,
+      `- 分组: ${gid}`,
+      `- 字段: ${field}`,
+      `- 值A: ${a}`,
+      `- 值B: ${b}`,
+      `- 检出: ${new Date().toISOString()}`,
+    ].join('\n');
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    fs.writeFileSync(ledgerPath, [
+      '# 本体分组字段值冲突台账', '',
+      rec('oc-keepA001', gidA, '居住地', '常住北京', '常住上海'), '',
+      rec('oc-keepB001', gidB, '工作地', '城东0', '城西0'), '',
+    ].join('\n'), 'utf8');
+
+    // 触发条件：带 groupId 读、且该组有一条已失效（用户删了值）→ 写回发生。
+    // 修复前：写回只保留 live（=组 A 的记录），组 B 的 oc-keepB001 被连带抹掉。
+    await groups.removeFieldValue(UID, gidA, '居住地', '常住上海');
+    expect((await m.listConflicts(UID, gidA)).length).toBe(0);
+    const after = fs.readFileSync(ledgerPath, 'utf8');
+    expect(after).not.toContain('oc-keepA001'); // 失效的本组记录照常自愈
+    expect(after).toContain('oc-keepB001'); // 未校验的他组记录必须原样保留
+    expect((await m.listConflicts(UID, gidB)).length).toBe(1);
+  });
+});
+
+describe('ontology-conflicts › template group self-heal', () => {
+  it('keeps conflicts whose values live in a template file (sectioned format)', async () => {
+    const m = await loadModule();
+    // 手工构造一个已安装模板组：groups.md meta 指向模板文件，内容为
+    // `## 分节`+`### 字段` 结构（无 `## 字段区` 头）。
+    const dir = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups');
+    fs.mkdirSync(dir, { recursive: true });
+    const tplId = 'test-tpl-x';
+    const tplGid = 'tplgrp-test0001';
+    fs.writeFileSync(path.join(dir, `${tplId}.md`), [
+      '# 测试角色（模板）',
+      `> 模板: ${tplId}@1.0.0 | 已安装: ${new Date().toISOString()}`,
+      '',
+      '## 基本情况',
+      '',
+      '### 居住地',
+      '- 常住北京 [手动]',
+      '- 常住上海 [手动]',
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(dir, 'groups.md'), [
+      '# 记忆分组', '',
+      `> 最后更新: ${new Date().toISOString()} | 共 1 个分组`, '',
+      `### ${tplGid}`,
+      '- 标题: 测试角色',
+      `- 文件: .personal_ontology_groups/${tplId}.md`,
+      `- 创建时间: ${new Date().toISOString()}`,
+      `- 更新时间: ${new Date().toISOString()}`,
+      `- 模板: ${tplId}@1.0.0`,
+      '',
+    ].join('\n'), 'utf8');
+    const ledgerPath = path.join(dir, 'conflicts.md');
+    fs.writeFileSync(ledgerPath, [
+      '# 本体分组字段值冲突台账', '',
+      '### oc-tpl0001',
+      `- 分组: ${tplGid}`,
+      '- 字段: 居住地',
+      '- 值A: 常住北京',
+      '- 值B: 常住上海',
+      `- 检出: ${new Date().toISOString()}`,
+      '',
+    ].join('\n'), 'utf8');
+
+    // 修复前：parseGroupContent 对分节式文件解出空 fields → 两条值都「不存在」
+    // → 每次读取都把模板组的冲突整批清掉（模板组矛盾检测整体失效）。
+    const live = await m.listConflicts(UID);
+    expect(live.length).toBe(1);
+    expect(live[0].conflict_id).toBe('oc-tpl0001');
+    expect(fs.readFileSync(ledgerPath, 'utf8')).toContain('oc-tpl0001');
+  });
+});
+
 // ── 遗留修复回归（2026-09-20）：并发覆盖丢行 + 判定悬挂 ───────────────────
 describe('ontology-conflicts › concurrency and judge timeout', () => {
   it('concurrent recordings interleaved with self-healing reads lose nothing', async () => {
