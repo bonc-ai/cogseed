@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -104,6 +105,76 @@ export async function readMarketplaceBundleBody(
     throw err;
   } finally {
     reader.releaseLock();
+  }
+}
+
+/**
+ * Stream an HTTP body straight to disk under the same byte cap, cancellation and
+ * `assertContinue` guards as `readMarketplaceBundleBody`, **without ever holding the
+ * whole archive in memory** (specs/010 FR-012).
+ *
+ * The digest is computed while the bytes go past, so the caller can verify
+ * `artifact.sha256` without a second pass over the file.
+ *
+ * On any failure the partial file is removed: a rejected download must leave nothing
+ * behind for a later step to mistake for a complete archive.
+ */
+export async function streamMarketplaceBundleToFile(
+  response: Response,
+  destPath: string,
+  opts: {
+    maxBytes?: number;
+    signal?: AbortSignal;
+    assertContinue?: () => void;
+  } = {},
+): Promise<{ bytesWritten: number; sha256: string }> {
+  const maxBytes = opts.maxBytes ?? MAX_MARKETPLACE_BUNDLE_BYTES;
+  const declaredText = response.headers.get('content-length')?.trim() || '';
+  if (/^\d+$/.test(declaredText)) {
+    const declared = Number(declaredText);
+    if (!Number.isSafeInteger(declared) || declared > maxBytes) {
+      throw new MarketplaceBundleSizeError(`bundle compressed size exceeds ${maxBytes} bytes`);
+    }
+  }
+
+  const hash = createHash('sha256');
+  let total = 0;
+
+  if (!response.body) {
+    await fs.promises.writeFile(destPath, Buffer.alloc(0));
+    return { bytesWritten: 0, sha256: hash.digest('hex') };
+  }
+
+  const handle = await fs.promises.open(destPath, 'w');
+  const reader = response.body.getReader();
+  let completed = false;
+  try {
+    while (true) {
+      opts.assertContinue?.();
+      const { done, value } = await _readChunk(reader, opts.signal);
+      if (done) break;
+      opts.assertContinue?.();
+      if (!value?.byteLength) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new MarketplaceBundleSizeError(`bundle compressed size exceeds ${maxBytes} bytes`);
+      }
+      const chunk = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+      hash.update(chunk);
+      // One chunk at a time reaches the file; nothing accumulates across iterations.
+      await handle.write(chunk);
+    }
+    completed = true;
+    return { bytesWritten: total, sha256: hash.digest('hex') };
+  } catch (err) {
+    try { await reader.cancel(err); } catch { /* the stream may already be aborted */ }
+    throw err;
+  } finally {
+    reader.releaseLock();
+    await handle.close().catch(() => { /* closing a failed handle must not mask the cause */ });
+    // Size cap, abort, or a mid-stream error all land here with a partial file on disk.
+    // Nothing downstream may mistake that prefix for a complete archive.
+    if (!completed) await fs.promises.rm(destPath, { force: true }).catch(() => {});
   }
 }
 

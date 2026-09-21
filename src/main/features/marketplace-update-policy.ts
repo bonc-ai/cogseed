@@ -11,7 +11,28 @@
 
 export type MarketplaceContentDecision =
   | { action: 'replace_content'; reason: 'newer_version' | 'newer_freshness' }
-  | { action: 'preserve_content'; reason: 'older_version' | 'stale_freshness' | 'unparsable_version' };
+  | {
+    action: 'preserve_content';
+    reason: 'older_version' | 'stale_freshness' | 'unparsable_version' | 'freshness_not_consulted';
+  };
+
+/** 内容来源。Hub 官方副本与其余来源在新鲜度这一步上的处置不同。 */
+export type MarketplaceContentSource = 'hub' | 'other';
+
+/**
+ * 新鲜度分支的**显式决策点**（specs/010 FR-036）。
+ *
+ * ⚠️ 这里曾是一条隐式落入的路径：`if (localVersion !== serverVersion)` 为假时，
+ * **整段 semver 比较被跳过**，直接落到新鲜度比较——而且落入的不只是「字符串完全相同」，
+ * **语义等价但拼写不同**（`v1.0.4` 对 `1.0.4`）同样落入（`research.md` V-6）。
+ *
+ * **Q4 内部默认值 = 「Hub 的 `updated_at` 不会在版本不变时变化」**，因此对 Hub 来源
+ * **不咨询新鲜度**：同版本即不替换。这是**实现假设，不是 Hub 的答复**；Q4 收口后
+ * 只改本函数的返回值，调用方不动。
+ */
+export function shouldConsultFreshness(source: MarketplaceContentSource): boolean {
+  return source !== 'hub';
+}
 
 export interface MarketplaceVersionedRow {
   version: string;
@@ -77,6 +98,7 @@ function freshnessAt(row: MarketplaceVersionedRow): number {
 export function decideMarketplaceContentUpdate(
   local: MarketplaceVersionedRow,
   server: MarketplaceVersionedRow,
+  source: MarketplaceContentSource = 'other',
 ): MarketplaceContentDecision {
   const localVersion = local.version.trim();
   const serverVersion = server.version.trim();
@@ -88,7 +110,12 @@ export function decideMarketplaceContentUpdate(
       return { action: 'preserve_content', reason: 'unparsable_version' };
     }
     // Equal semver with different spellings (e.g. 'v1.0.4' vs '1.0.4'):
-    // fall through to freshness comparison.
+    // fall through to the freshness decision point below.
+  }
+  // 显式决策点：Hub 来源不咨询新鲜度（Q4 内部默认值）。两种落入方式——
+  // 版本字符串完全相同、以及语义等价但拼写不同——在这里汇合，处置一致。
+  if (!shouldConsultFreshness(source)) {
+    return { action: 'preserve_content', reason: 'freshness_not_consulted' };
   }
   if (freshnessAt(server) > freshnessAt(local)) {
     return { action: 'replace_content', reason: 'newer_freshness' };
