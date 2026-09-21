@@ -183,7 +183,9 @@ const inlineSvgBaseline: Record<string, number> = {
 const iconSourceFiles = new Set(['icons.js']);
 
 const literalZIndexBaseline: Record<string, number> = {
-  'kb-workbench.js': 3,
+  // kb-workbench.js 的 3 处（文件阅读器 overlay / 缩放把手 / 拖拽罩）已迁移到
+  // `--z-modal` / `--z-raised` / `--z-sticky`（2026-09-21），基线随之降为 0：
+  // 现在任何文件新增字面 z-index 都会直接红。
 };
 /**
  * 各 CSS 文件的字面 z-index 存量（层序应走 tokens.css 的 `--z-*`）。
