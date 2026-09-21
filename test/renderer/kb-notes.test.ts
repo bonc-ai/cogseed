@@ -54,6 +54,7 @@ function loadScript(tree = TREE_WITH_NOTES) {
     uiToast: vi.fn(),
     uiConfirm: vi.fn(() => Promise.resolve(true)),
     uiPrompt: vi.fn(() => Promise.resolve('新笔记')),
+    uiIconHtml: (name: string) => `<svg class="ui-icon is-${name}"></svg>`,
     uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3></section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string, payload: any) => {
@@ -75,6 +76,7 @@ function loadScript(tree = TREE_WITH_NOTES) {
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (v: unknown) => String(v ?? ''),
     uiToast: windowMock.uiToast, uiPrompt: windowMock.uiPrompt, uiConfirm: windowMock.uiConfirm,
+    uiIconHtml: windowMock.uiIconHtml,
     document: documentMock, window: windowMock,
   };
   vm.createContext(context);

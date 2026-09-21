@@ -155,9 +155,9 @@ const emojiAsIconBaseline: Record<string, number> = {
   'bash_permission.js': 2,
   'chat-artifact.js': 1,
   'conversation.js': 3,
-  'kb-notes.js': 21,
-  'kb-quiz.js': 1,
-  'kb-workbench.js': 25,
+  // kb-notes.js / kb-quiz.js 的 emoji 已全部迁移到 icons.js（2026-09-21），基线随之删除：
+  // 这两个文件再出现 emoji 就会直接红。
+  // kb-workbench.js 的 emoji 已全部迁移到 icons.js（2026-09-21），基线随之删除。
   'model-authorization.js': 2,
   'onboarding.js': 8,
   'settings.js': 1,
@@ -176,7 +176,12 @@ const inlineSvgBaseline: Record<string, number> = {
   'cognition-assets/views.js': 1,
   'dashboard.js': 2,
   'import-check-modal.js': 1,
-  'kb-workbench.js': 4,
+  // kb-workbench.js：4 → 2（2026-09-21）。删掉的 2 处是页面自带的一套 svg path 表
+  // （`_SVGS`）与 `_icon()` 的空 svg 兜底，属"硬编码 svg 路径"，已改为转发 icons.js。
+  // 剩下 2 处是业务图形：脑图画布 `_mmCurrentSvg()` 与库封面 `kb-wb-cover-svg`——
+  // 政策允许业务画布由页面自有，但闸门只能按 `<svg>` 计数、无法区分图标与画布，
+  // 已在《Renderer structural registry》的 "Known non-icon inline SVG" 一节登记。
+  'kb-workbench.js': 2,
   'marketplace.js': 1,
   'utils.js': 3,
 };

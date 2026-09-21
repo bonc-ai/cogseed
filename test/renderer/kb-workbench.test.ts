@@ -173,6 +173,9 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
+    // 共享图标注册表：给出与 icons.js 同形的输出（含 is-<name> 类名），
+    // 让 _icon() 走真实路径而不是空 svg 兜底。
+    uiIconHtml: (name: string, cls?: string) => `<svg class="${cls || 'ui-icon'} is-${name}"></svg>`,
     uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3>${options.hint ? `<p>${String(options.hint)}</p>` : ''}${options.action ? `<button id="${String(options.action.attrs?.id || '')}">${String(options.action.label || '')}</button>` : ''}</section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string) => {
@@ -222,6 +225,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     performance,
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (v: unknown) => String(v ?? ''),
+    uiIconHtml: windowMock.uiIconHtml,
     uiToast: windowMock.uiToast,
     uiPrompt: windowMock.uiPrompt,
     document: documentMock,
@@ -334,8 +338,10 @@ describe('KB workbench (S1 skeleton)', () => {
     });
     // 默认选中第一个库（班级建设资料）
     expect(els['kb-wb-lib-name'].textContent).toBe('班级建设资料');
-    // ready → ✓ 已索引；processing → 索引中…
-    expect(els['kb-wb-files'].innerHTML).toContain('✓ 已索引');
+    // ready → [check 图标] 已索引；processing → 索引中…
+    // 图标改由 icons.js 提供（2026-09-21），断言文字 + 共享图标类名，不再断言 emoji
+    expect(els['kb-wb-files'].innerHTML).toContain('已索引');
+    expect(els['kb-wb-files'].innerHTML).toContain('is-check');
     expect(els['kb-wb-files'].innerHTML).toContain('索引中…');
     // 子目录行（可下钻）
     expect(els['kb-wb-files'].innerHTML).toContain('子目录');
@@ -1032,7 +1038,8 @@ describe('KB workbench (S1 skeleton)', () => {
     input.value = '子文件';
     input._listeners.input({ target: input });
     expect(els['kb-wb-files'].innerHTML).toContain('子文件.txt');
-    expect(els['kb-wb-files'].innerHTML).toContain('📁 子目录');
+    expect(els['kb-wb-files'].innerHTML).toContain('子目录');
+    expect(els['kb-wb-files'].innerHTML).toContain('is-folder');
     // 搜索根目录文件：meta 显示「库根」
     input.value = 'a.pdf';
     input._listeners.input({ target: input });
