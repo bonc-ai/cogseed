@@ -4973,6 +4973,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   //
   // 解析不出来的锚点（模型自创、不在证据里）**不留 chip**——宁可删掉也不给
   // 一个点开是"找不到"的死 chip。
+  // 注意：这条是**解析用**的引用标记正则，必须同时认中英文（来源/引用/source）——
+  // 它不是界面文案，不走 i18n；若按语言改，切到英文后中文标题里的引用就解析不出来了。
   const _CITE_LABEL = '(?:来源|引用|source)';
   // 标签 + 括号包裹的锚点（全/半角、圆/方括号）
   const _CITE_LABEL_PAREN_RE = new RegExp(
@@ -5012,7 +5014,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const path = String(ref.path || '');
     const chunkIdx = Number(ref.chunkIdx) || 0;
     const text = String(label || '').trim() || path.slice(path.lastIndexOf('/') + 1);
-    const title = `${path}#chunk ${chunkIdx} — 打开原文`;
+    const title = _tr('kb.workbench.open_original_title', '{path}#chunk {chunk} — 打开原文', { path, chunk: chunkIdx });
     return '<button type="button" class="kb-qa-chip kb-qa-cite" data-kb-cite="1"'
       + ` data-cite-path="${_esc(path)}" data-cite-chunk="${chunkIdx}"`
       + ` data-cite-scope="${_esc(ref.scope || 'global')}"`
@@ -5304,7 +5306,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const isSpace = anchor.source === 'space' || anchor.scope === 'space';
     const spaceId = isSpace ? String(anchor.spaceId || '') : '';
     if (isSpace && !spaceId) {
-      if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.open_source_no_space', '缺少空间信息，无法打开原文'), { variant: 'warning' });
       return false;
     }
     // 排版类文件（pdf/office/…）用富查看器打开，并把页码/引用片段带过去定位；
@@ -5338,7 +5340,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const isSpace = anchor.source === 'space' || anchor.scope === 'space';
     const spaceId = isSpace ? String(anchor.spaceId || '') : '';
     if (isSpace && !spaceId) {
-      if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.open_source_no_space', '缺少空间信息，无法打开原文'), { variant: 'warning' });
       return false;
     }
     let hl = null;
@@ -5387,7 +5389,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       });
       return;
     }
-    if (typeof uiToast === 'function') uiToast('原文查看器未就绪（anchored-source-view 未加载）', { variant: 'warning' });
+    if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.viewer_not_ready', '原文查看器未就绪（anchored-source-view 未加载）'), { variant: 'warning' });
   }
 
   // ── kb 状态实时流 ──
@@ -5451,7 +5453,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
               <div class="kb-wb-lib-cover" id="kb-wb-lib-cover"><svg class="kb-wb-cover-svg" viewBox="0 0 24 24" fill="rgba(255,255,255,.96)" stroke="rgba(255,255,255,.96)" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4.2l1.8 2.2h7a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></div>
               <div class="kb-wb-lib-meta">
                 <div class="kb-wb-lib-name" id="kb-wb-lib-name">${_esc(_tr('kb.workbench.untitled_lib', '知识库'))}</div>
-                <div class="kb-wb-lib-owner" id="kb-wb-lib-owner"><span class="kb-wb-owner-avatar" id="kb-wb-owner-avatar">我</span><span class="kb-wb-owner-name" id="kb-wb-owner-name">我</span></div>
+                <div class="kb-wb-lib-owner" id="kb-wb-lib-owner"><span class="kb-wb-owner-avatar" id="kb-wb-owner-avatar">${_esc(_tr('kb.workbench.me', '我'))}</span><span class="kb-wb-owner-name" id="kb-wb-owner-name">我</span></div>
                 <div class="kb-wb-lib-desc" id="kb-wb-lib-desc">${_esc(_tr('kb.workbench.lib_desc_placeholder', '快来填写描述吧~'))}</div>
                 <div class="kb-wb-lib-sub">
                   <span class="kb-wb-tag" id="kb-wb-lib-tag">${_esc(_tr('kb.workbench.group_personal', '个人知识库'))}</span>
@@ -6185,7 +6187,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   // 弹出模型选择：列出所有已配置（可用）模型；空态引导去设置一次配好 key
   function _openQaModelPicker() {
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      if (typeof uiToast === 'function') uiToast('问答服务不可用', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.qa_unavailable', '问答服务不可用'), { variant: 'warning' });
       return;
     }
     const trigger = document.activeElement;
@@ -6195,7 +6197,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _buildQaModelPicker(entries, trigger);
       })
       .catch(() => {
-        if (typeof uiToast === 'function') uiToast('获取模型列表失败', { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.qa_model_list_failed', '获取模型列表失败'), { variant: 'error' });
       });
   }
 
@@ -6320,7 +6322,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     } catch (_) { /* localStorage 不可用 */ }
     _renderQaModelChip();
     if (typeof uiToast === 'function') {
-      uiToast(_qaModelEntry ? `问答模型已切换：${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}` : '已切回默认模型', { variant: 'success', timeoutMs: 2000 });
+      uiToast(_qaModelEntry ? _tr('kb.workbench.qa_model_switched', '问答模型已切换：{model}', { model: `${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}` }) : _tr('kb.workbench.qa_model_default_restored', '已切回默认模型'), { variant: 'success', timeoutMs: 2000 });
     }
   }
 
@@ -6389,14 +6391,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     try {
       const res = await window.cogseed.invoke('contexts.pickAndUpload', { targetDir });
       if (res && res.ok === false) {
-        if (typeof uiToast === 'function') uiToast('导入失败：' + _esc(res.error || 'unknown'), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_failed', '导入失败：') + _esc(res.error || 'unknown'), { variant: 'error' });
         return;
       }
-      if (typeof uiToast === 'function') uiToast('已导入，开始索引…', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_done_indexing', '已导入，开始索引…'), { variant: 'success', timeoutMs: 1500 });
       _loadAll();
     } catch (err) {
       _log.warn('import failed', err);
-      if (typeof uiToast === 'function') uiToast('导入取消或失败', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_cancelled', '导入取消或失败'), { variant: 'warning' });
     }
   }
 
@@ -6432,11 +6434,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   // 重命名名字预校验：返回错误提示（'' 表示合法）
   function _kbValidateName(name, isFile) {
-    if (_KB_FORBIDDEN_CHARS.test(name)) return '名称不能包含 / \\ : * ? " < > | 字符';
-    if (name.startsWith('.')) return '名称不能以 . 开头';
+    if (_KB_FORBIDDEN_CHARS.test(name)) return _tr('kb.workbench.name_forbidden_chars', '名称不能包含 / \\ : * ? " < > | 字符');
+    if (name.startsWith('.')) return _tr('kb.workbench.rename_err_hidden', '名称不能以 . 开头');
     if (isFile) {
       const ext = '.' + String(name).split('.').pop().toLowerCase();
-      if (!_KB_ALLOWED_EXTS.has(ext)) return '文件名需保留支持的扩展名（.md .txt .pdf .docx .xlsx .pptx 等）';
+      if (!_KB_ALLOWED_EXTS.has(ext)) return _tr('kb.workbench.name_need_ext', '文件名需保留支持的扩展名（.md .txt .pdf .docx .xlsx .pptx 等）');
     }
     let w = 0;
     for (const ch of name) w += /[\u4e00-\u9fff\uac00-\ud7af\u3040-\u30ff]/.test(ch) ? 2 : 1;
@@ -6483,9 +6485,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       }
       // 重命名的是当前选中的库 → 同步选中态，避免跳回第一个库
       if (!_state.spaceId && _state.currentLib === path) _state.currentLib = dst;
-      if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.renamed', '已重命名'), { variant: 'success', timeoutMs: 1500 });
       _loadAll();
-    } catch (err) { _log.warn('rename failed', err); if (typeof uiToast === 'function') uiToast('重命名失败', { variant: 'error' }); }
+    } catch (err) { _log.warn('rename failed', err); if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_failed_short', '重命名失败'), { variant: 'error' }); }
   }
 
   async function _kbDelete(path) {
@@ -6545,13 +6547,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   function _kbRowMenu(path, isDir, x, y) {
     const items = [
-      { key: 'rename', label: '重命名', icon: 'edit-pencil', fn: () => _kbRename(path, isDir) },
-      { key: 'delete', label: '删除到回收站', icon: 'trash-2', danger: true, fn: () => _kbDelete(path) },
+      { key: 'rename', label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', fn: () => _kbRename(path, isDir) },
+      { key: 'delete', label: _tr('kb.workbench.delete_to_trash', '删除到回收站'), icon: 'trash-2', danger: true, fn: () => _kbDelete(path) },
     ];
-    if (!isDir) items.push({ key: 'reveal', label: '在文件夹中显示', icon: 'folder-open', fn: () => _kbReveal(path) });
+    if (!isDir) items.push({ key: 'reveal', label: _tr('kb.workbench.reveal_file', '在文件夹中显示'), icon: 'folder-open', fn: () => _kbReveal(path) });
     // 文档级脑图：以这一份文档为中心主题（整库脑图是按目录聚合的，多文档库里
     // 根主题会变成"这个库是什么"，一级分支按文件分而不是按内容主题分）。
-    if (!isDir) items.unshift({ key: 'mindmap', label: '生成脑图（本文档）', icon: 'brain-circuit', fn: () => _kbMindmapForDoc(path) });
+    if (!isDir) items.unshift({ key: 'mindmap', label: _tr('kb.workbench.menu_mindmap', '生成脑图（本文档）'), icon: 'brain-circuit', fn: () => _kbMindmapForDoc(path) });
     _kbMenuShow(items, x, y);
   }
 
@@ -6564,9 +6566,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   // ── 共享知识库（空间）重命名 / 删除（spaces.update / spaces.delete）──
   function _kbSpaceMenu(spaceId, x, y) {
     _kbMenuShow([
-      { key: 'rename', label: '重命名', icon: 'edit-pencil', fn: () => _kbRenameSpace(spaceId) },
-      { key: 'members', label: '知识库成员', icon: 'users', fn: () => _kbMembersDialog(spaceId) },
-      { key: 'delete', label: '删除共享知识库', icon: 'trash-2', danger: true, fn: () => _kbDeleteSpace(spaceId) },
+      { key: 'rename', label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', fn: () => _kbRenameSpace(spaceId) },
+      { key: 'members', label: _tr('kb.workbench.members_title', '知识库成员'), icon: 'users', fn: () => _kbMembersDialog(spaceId) },
+      { key: 'delete', label: _tr('kb.workbench.delete_shared_lib', '删除共享知识库'), icon: 'trash-2', danger: true, fn: () => _kbDeleteSpace(spaceId) },
     ], x, y);
   }
 
@@ -6606,7 +6608,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         subItem.closest('.kb-ctx-sub').querySelectorAll('.kb-ctx-menu-item').forEach((x) => x.classList.remove('is-selected'));
         subItem.classList.add('is-selected');
         close();
-        if (typeof uiToast === 'function') uiToast(`已设置成员权限：${permLabel[perm] || perm}`, { variant: 'success', timeoutMs: 2000 });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.perm_set', '已设置成员权限：{perm}', { perm: permLabel[perm] || perm }), { variant: 'success', timeoutMs: 2000 });
         return;
       }
       const item = e.target.closest('.kb-ctx-menu-item');
@@ -6614,11 +6616,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const act = item.dataset.fm;
       close();
       if (act === 'mind') _kbMindmapForDoc(path);
-      else if (act === 'pin') { if (typeof uiToast === 'function') uiToast('置顶：即将上线', { variant: 'info' }); }
-      else if (act === 'tag') { if (typeof uiToast === 'function') uiToast('编辑标签：即将上线', { variant: 'info' }); }
+      else if (act === 'pin') { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.soon_pin', '置顶：即将上线'), { variant: 'info' }); }
+      else if (act === 'tag') { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.soon_tag', '编辑标签：即将上线'), { variant: 'info' }); }
       else if (act === 'rename') _kbRenameSpaceFile(path);
-      else if (act === 'move') { if (typeof uiToast === 'function') uiToast('移动到：即将上线', { variant: 'info' }); }
-      else if (act === 'copy') { if (typeof uiToast === 'function') uiToast('复制到：即将上线', { variant: 'info' }); }
+      else if (act === 'move') { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.soon_move', '移动到：即将上线'), { variant: 'info' }); }
+      else if (act === 'copy') { if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.soon_copy', '复制到：即将上线'), { variant: 'info' }); }
       else if (act === 'del') _kbDeleteSpaceFile(path);
     });
     const hasSub = el.querySelector('.kb-has-sub');
@@ -6635,7 +6637,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   async function _kbRenameSpaceFile(path) {
     const cur = String(path || '').split('/').pop() || '';
-    const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名文件：', cur) : window.prompt('重命名文件：', cur);
+    const next = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.rename_file_prompt', '重命名文件：'), cur) : window.prompt(_tr('kb.workbench.rename_file_prompt', '重命名文件：'), cur);
     if (!next || !next.trim() || next.trim() === cur) return;
     try {
       const res = await window.cogseed.invoke('spaces.files.rename', { spaceId: _state.spaceId, oldName: path, name: String(next).trim() });
@@ -6649,10 +6651,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         return f;
       });
       _renderFiles();
-      if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.renamed', '已重命名'), { variant: 'success', timeoutMs: 1500 });
       _loadSpaceFiles(_state.spaceId); // 后台校正（合并逻辑保证不消失）
     } catch (err) {
-      if (typeof uiToast === 'function') uiToast('重命名失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_failed', '重命名失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -6661,7 +6663,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     let ok = false;
     try {
       ok = typeof uiConfirmDanger === 'function'
-        ? await uiConfirmDanger({ title: '删除文件', message: `确认删除「${name}」？`, dangerLabel: '删除', cancelLabel: '取消' })
+        ? await uiConfirmDanger({ title: _tr('kb.workbench.delete_file_title', '删除文件'), message: _tr('kb.workbench.delete_file_message', '确认删除「{name}」？', { name }), dangerLabel: _tr('kb.workbench.menu_delete', '删除'), cancelLabel: _tr('kb.workbench.cancel', '取消') })
         : window.confirm(_tr('kb.workbench.delete_confirm_short', '确认删除「{name}」？', { name }));
     } catch (_) { return; }
     if (!ok) return;
@@ -6672,10 +6674,10 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _state.pendingDelete.add(path);
       _state.spaceFiles = _state.spaceFiles.filter((f) => (f.path || f.name) !== path);
       _renderFiles();
-      if (typeof uiToast === 'function') uiToast('已删除', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.deleted', '已删除'), { variant: 'success', timeoutMs: 1500 });
       _loadSpaceFiles(_state.spaceId);
     } catch (err) {
-      if (typeof uiToast === 'function') uiToast('删除失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.delete_failed', '删除失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -6754,18 +6756,18 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon"></span></h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.share_title', '分享'))}<span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon"></span></h2>
           </div>
-          ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.share_soon_close', '关闭分享说明'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
           <div class="kb-wb-right-placeholder kb-share-soon-body">
-            共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。<br>
-            当前可以用「成员」把库内资料共享给同一空间的同事。
+            ${_esc(_tr('kb.workbench.share_soon_body1', '共享知识库的分享（分享方式 / 飞书分享 / 复制链接 / 知识码）还在开发中，暂未开放。'))}<br>
+            ${_esc(_tr('kb.workbench.share_soon_body2', '当前可以用「成员」把库内资料共享给同一空间的同事。'))}
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions">
-          ${_uiButton({ label: '知道了', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
+          ${_uiButton({ label: _tr('kb.workbench.share_soon_ok', '知道了'), role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-soon-ok' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -6959,7 +6961,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (state) {
       hint.innerHTML = `${_esc(state.url)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
     } else {
-      hint.innerHTML = `未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
+      hint.innerHTML = `${_esc(_tr('kb.workbench.share_status_unpublished', '未发布'))} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
     }
   }
 
@@ -6967,7 +6969,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     try {
       const res = await window.cogseed.invoke('kb.share.cogseed.publish', { spaceId: sp.space_id });
       if (res && res.ok) {
-        if (typeof uiToast === 'function') uiToast('已发布到 CogSeed 问答', { variant: 'success', timeoutMs: 2000 });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.cogseed_published', '已发布到 CogSeed 问答'), { variant: 'success', timeoutMs: 2000 });
         _kbRefreshCogseedStatus(sp);
         return res.state;
       }
@@ -6976,11 +6978,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _kbCogseedConfigDialog(sp);
         return null;
       }
-      if (typeof uiToast === 'function') uiToast('发布失败：' + ((res && res.error) || '未知错误'), { variant: 'error', timeoutMs: 4000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.publish_failed', '发布失败：') + ((res && res.error) || _tr('kb.workbench.unknown_error', '未知错误')), { variant: 'error', timeoutMs: 4000 });
       return null;
     } catch (err) {
       _log.warn('kb cogseed publish failed', err);
-      if (typeof uiToast === 'function') uiToast('发布失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.publish_failed', '发布失败：') + ((err && err.message) || String(err)), { variant: 'error' });
       return null;
     }
   }
@@ -7151,11 +7153,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const state = await _kbShareStateOf(sp.space_id);
     if (!hint || !manage) return;
     if (state) {
-      const accessText = { anyone: '互联网可读', tenant: '组织内可读', private: '已关闭' }[state.access] || state.access;
+      const accessText = { anyone: _tr('kb.workbench.access_anyone', '互联网可读'), tenant: _tr('kb.workbench.access_tenant', '组织内可读'), private: _tr('kb.workbench.access_private', '已关闭') }[state.access] || state.access;
       hint.innerHTML = `${_esc(accessText)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span>`;
       manage.hidden = false;
     } else {
-      hint.textContent = '未分享';
+      hint.textContent = _tr('kb.workbench.share_status_none', '未分享');
       manage.hidden = true;
     }
   }
@@ -7469,8 +7471,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _kbSharePermSummary(sp) {
     const perm = sp.member_permission || 'view_export';
     const join = sp.join_mode || 'direct';
-    const permText = { view_export: '成员可查看导出', view_only: '成员仅可查看', hidden: '成员不可查看' }[perm] || '成员可查看导出';
-    const joinText = { direct: '加入无需确认', apply: '加入需管理员确认', invite: '仅邀请加入' }[join] || '加入无需确认';
+    const permText = { view_export: _tr('kb.workbench.perm_text_view_export', '成员可查看导出'), view_only: _tr('kb.workbench.perm_text_view_only', '成员仅可查看'), hidden: _tr('kb.workbench.perm_text_hidden', '成员不可查看') }[perm] || _tr('kb.workbench.perm_text_view_export', '成员可查看导出');
+    const joinText = { direct: _tr('kb.workbench.join_text_direct', '加入无需确认'), apply: _tr('kb.workbench.join_text_apply', '加入需管理员确认'), invite: _tr('kb.workbench.join_invite', '仅邀请加入') }[join] || _tr('kb.workbench.join_text_direct', '加入无需确认');
     return `${permText}，${joinText}`;
   }
 
@@ -7615,17 +7617,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   async function _kbRenameSpace(spaceId) {    const sp = _state.spaces.find((s) => s.space_id === spaceId);
     const cur = (sp && sp.name) || '';
-    const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名共享知识库：', cur) : window.prompt('重命名共享知识库：', cur);
+    const next = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.rename_space_prompt', '重命名共享知识库：'), cur) : window.prompt(_tr('kb.workbench.rename_space_prompt', '重命名共享知识库：'), cur);
     if (!next || !next.trim() || next.trim() === cur) return;
     try {
       const res = await window.cogseed.invoke('spaces.update', { spaceId, name: String(next).trim() });
       if (res && res.ok === false) throw new Error(res.error || 'rename failed');
       if (_state.spaceId === spaceId) _state.spaceName = String(next).trim();
-      if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.renamed', '已重命名'), { variant: 'success', timeoutMs: 1500 });
       _loadAll();
     } catch (err) {
       _log.warn('rename space failed', err);
-      if (typeof uiToast === 'function') uiToast('重命名失败：' + _kbSpaceErrText((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_failed', '重命名失败：') + _kbSpaceErrText((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
@@ -7635,8 +7637,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     let ok = false;
     try {
       ok = typeof uiConfirmDanger === 'function'
-        ? await uiConfirmDanger({ title: '删除共享知识库', message: `确认删除共享知识库「${name}」及其全部内容？删除后不可恢复。`, dangerLabel: '删除', cancelLabel: '取消' })
-        : window.confirm(`确认删除共享知识库「${name}」及其全部内容？删除后不可恢复。`);
+        ? await uiConfirmDanger({ title: _tr('kb.workbench.delete_shared_lib', '删除共享知识库'), message: _tr('kb.workbench.delete_space_message', '确认删除共享知识库「{name}」及其全部内容？删除后不可恢复。', { name }), dangerLabel: _tr('kb.workbench.menu_delete', '删除'), cancelLabel: _tr('kb.workbench.cancel', '取消') })
+        : window.confirm(_tr('kb.workbench.delete_space_message', '确认删除共享知识库「{name}」及其全部内容？删除后不可恢复。', { name }));
     } catch (_) { return; }
     if (!ok) return;
     try {
@@ -7647,11 +7649,11 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _state.spaceName = '';
         _state.spaceFiles = [];
       }
-      if (typeof uiToast === 'function') uiToast('已删除共享知识库', { variant: 'success', timeoutMs: 2000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.space_deleted', '已删除共享知识库'), { variant: 'success', timeoutMs: 2000 });
       _loadAll();
     } catch (err) {
       _log.warn('delete space failed', err);
-      if (typeof uiToast === 'function') uiToast('删除失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.delete_failed', '删除失败：') + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
