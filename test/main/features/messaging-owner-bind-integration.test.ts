@@ -427,10 +427,13 @@ describe('wechat_personal end-to-end', () => {
       await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1), { timeout: 10000 });
       // 回复必须绑定批次中最后一条消息的 tokenRef，而不是第一条
       expect(sendMessage.mock.calls[0][3]).toMatchObject({ contextTokenRef: 'ref-new' });
-      expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
-        status: 'sent',
-        contextTokenRef: 'ref-new',
-      });
+      // 记账在发送返回后才落 `sent`：等这个可观察状态，不要抢在它之前断言。
+      await vi.waitFor(async () => {
+        expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+          status: 'sent',
+          contextTokenRef: 'ref-new',
+        });
+      }, { timeout: 10000 });
 
       await manager.stopForUser('uid-1');
     } finally {

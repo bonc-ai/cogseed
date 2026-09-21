@@ -33,7 +33,7 @@ interface InvokeLog {
   payload: unknown;
 }
 
-function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown; hasConfiguredModel?: boolean } = {}) {
+function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown; hasConfiguredModel?: boolean; composerMentionIds?: string[] } = {}) {
   const invokeLog: InvokeLog[] = [];
   const toasts: Array<{ message: string; opts: unknown }> = [];
   const recipientByCid: Record<string, unknown> = {};
@@ -70,6 +70,16 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
     // conversation.js 中该正则定义在抽取段起点之前，这里按源码镜像补上。
     _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
+    // chooser 边车判定的真实实现也定义在抽取段起点之前，按源码镜像补上。
+    // 本沙箱没有 window.composerMembers，等价于「手打/粘贴、无 chooser 身份」，
+    // 因此这里必须返回空数组，才能证明显式点名一律不享有路由权限。
+    _composerMentionIdsIn: (target: string, text: string) => {
+      const cm = (sandbox as any).window?.composerMembers;
+      if (!cm) return [];
+      return typeof cm.mentionIdsForTarget === 'function'
+        ? cm.mentionIdsForTarget(target, text)
+        : [];
+    },
     // 慢切换检测在 vm 里不会真的发射定时器；注入一个记数桩，供
     // 验证「外部智能体 → arm，收到输出 → clear」的时序分支。
     setTimeout: (fn: unknown, ms: number) => {
@@ -87,6 +97,14 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
           return route;
         },
       },
+      // chooser 侧车身份：只有它才让一次真实点名生效（Task 8 契约）。
+      ...(opts.composerMentionIds
+        ? {
+            composerMembers: {
+              mentionIdsForTarget: () => [...opts.composerMentionIds!],
+            },
+          }
+        : {}),
     },
   };
   (sandbox as any)._slowTimers = [];
@@ -299,9 +317,10 @@ describe('commander CLI fallback', () => {
     expect(await sandbox._mentionTargetsExternalAgent('@指挥官 你好')).toBe(false);
   });
 
-  it('never triggers the non-silent model guard (no popup/navigation) when sending to an external agent without a model', async () => {
+  it('only bypasses the non-silent model guard for chooser-backed or already-selected external agents', async () => {
     // 回归：消息发出后「瞬间跳转 API 配置页」= 非 silent 的 ensureModelConfigured
-    // 被调用。@ 外部智能体的发送必须只走 silent 探测，非 silent 调用次数为 0。
+    // 被调用。Task 8 契约：手打/粘贴的 `@name` 没有路由权限，所以真正能跳过
+    // 模型守卫的只有「chooser 侧车身份」和「当前 recipient 已是外部 agent」两条路。
     const { sandbox, nonSilentModelGuardCalls } = buildSandbox(
       {
         'agents.list': {
@@ -313,10 +332,26 @@ describe('commander CLI fallback', () => {
       { hasConfiguredModel: false },
     );
 
-    // 直接测 send 门使用的判定路径（_ensureModelOrCliFallback 的 @mention 分支）。
-    const ok = await sandbox._ensureModelOrCliFallback('cid-send', 'conversation', '@ClaudeCode 帮我写个测试');
+    // 手打的 `@ClaudeCode` 只是正文：它不再授权外部路由，因此按 commander
+    // 无模型处理，会走非 silent 引导（这正是「粘贴名字不能派发」的语义）。
+    const typedOnly = await sandbox._ensureModelOrCliFallback('cid-typed', 'conversation', '@ClaudeCode 帮我写个测试');
+    expect(typedOnly).toBe(false);
+    expect(nonSilentModelGuardCalls).toHaveLength(1);
+
+    // chooser 侧车身份（真实点名）才放行，且只走 silent 探测。
+    const { sandbox: sbChooser, nonSilentModelGuardCalls: callsChooser } = buildSandbox(
+      {
+        'agents.list': {
+          agents: [
+            { agent_id: 'agent-claude-1', name: 'ClaudeCode', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+          ],
+        },
+      },
+      { hasConfiguredModel: false, composerMentionIds: ['agent-claude-1'] },
+    );
+    const ok = await sbChooser._ensureModelOrCliFallback('cid-send', 'conversation', '@ClaudeCode 帮我写个测试');
     expect(ok).toBe(true);
-    expect(nonSilentModelGuardCalls).toHaveLength(0);
+    expect(callsChooser).toHaveLength(0);
 
     // recipient 已是外部 agent 的路径同样零非 silent 调用。
     const { sandbox: sb2, nonSilentModelGuardCalls: calls2 } = buildSandbox(

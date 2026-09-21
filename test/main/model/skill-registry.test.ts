@@ -626,6 +626,8 @@ describe('skill-registry › trust withholding', () => {
     writeSkill(builtinDir(), 'fresh', 'fresh', 'F');
     let resolveDeep: (v: { loadable: string[]; withheld: string[] }) => void = () => {};
     const gate = new Promise<{ loadable: string[]; withheld: string[] }>((res) => { resolveDeep = res; });
+    let deepPassSettled = false;
+    void gate.then(() => { deepPassSettled = true; });
     const partitionSkillsByTrustDeep = vi.fn(() => gate);
     vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
       ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
@@ -633,12 +635,13 @@ describe('skill-registry › trust withholding', () => {
     }));
 
     const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
-    const text = await Promise.race([
-      getSystemPromptBlock(),
-      new Promise<string>((_, reject) => setTimeout(
-        () => reject(new Error('prompt path blocked on the deep scan')), 300,
-      )),
-    ]);
+    // Non-blocking is an ordering property, not a latency budget: the deep pass
+    // is still pending when the listing returns. A wall-clock race (formerly
+    // 300ms) turns correct-but-slow suite runs into false regressions; if the
+    // prompt path ever awaits the deep scan this await never returns and the
+    // test fails instead of passing on a lucky clock.
+    const text = await getSystemPromptBlock();
+    expect(deepPassSettled).toBe(false);
     expect(text).toContain('fresh');
 
     // The deep pass was scheduled, not awaited — settle it and drain.

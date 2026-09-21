@@ -3955,11 +3955,14 @@ async function refreshAgentPickerContext(anchorId) {
   _renderAgentPickerList(search ? search.value : '');
 }
 
-async function _openAgentPicker(anchorBtn) {
+async function _openAgentPicker(anchorBtn, opts = {}) {
   const picker = document.getElementById('agent-picker');
   if (!anchorBtn || !picker) return;
   if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('agent');
   picker.dataset.anchorId = anchorBtn.id;
+  // 多 Agent 选择：`members` = 底部入口管理会话成员；`mentions` = 正文 `@`
+  // 点名。两种模式下 Agents 页签渲染成可勾选名单（PRD FR-001）。
+  picker.dataset.composerMode = opts.mode === 'members' || opts.mode === 'mentions' ? opts.mode : '';
   const openSeq = ++_agentPickerOpenSeq;
   _agentPickerLoadedTabs = new Set();
   // 产物/资产目录按 picker 会话重置（防上次会话残留旧空间行可点）
@@ -3996,7 +3999,24 @@ async function _openAgentPicker(anchorBtn) {
 function _closeAgentPicker({ returnFocus = false } = {}) {
   const picker = document.getElementById('agent-picker');
   const anchorId = picker?.dataset.anchorId || '';
-  if (picker) picker.style.display = 'none';
+  const composerMode = picker?.dataset.composerMode || '';
+  if (picker) {
+    picker.style.display = 'none';
+    picker.dataset.composerMode = '';
+    const foot = picker.querySelector('.composer-members-foot');
+    if (foot) foot.hidden = true;
+  }
+  // 多选模式关闭后焦点回到输入框：用户刚选完成员，下一步就是写任务。
+  if (composerMode && window.composerMembers) {
+    const target = _targetFromPickerAnchor(anchorId);
+    const inputId = window.composerMembers.inputIdOf(target);
+    const input = document.getElementById(inputId);
+    if (input && typeof focusChatRichComposer === 'function') {
+      try { if (focusChatRichComposer(input)) return; } catch (_) {}
+    }
+    if (input) { try { input.focus(); } catch (_) {} }
+    return;
+  }
   if (returnFocus && anchorId) document.getElementById(anchorId)?.focus();
   // NOTE: callers that close-without-selection (Esc / click-outside) must
   // also clear `_atKeyMark` — otherwise the next picker open would consume
@@ -4020,6 +4040,19 @@ function _renderAgentPickerList(filterText) {
     _agentPickerTab = 'agents';
   }
   _updateAgentPickerChrome();
+  // 多 Agent 选择模式：Agents 页签改为可勾选名单（会话成员 / 本条点名）。
+  const composerMode = picker?.dataset.composerMode || '';
+  if (composerMode && _agentPickerTab === 'agents' && window.composerMembers) {
+    const target = _targetFromPickerAnchor(anchorId);
+    listEl.replaceChildren(window.composerMembers.buildPickerList(target, composerMode, filterText));
+    _bindComposerMemberRows(listEl, target, composerMode);
+    window.composerMembers.updatePickerChrome(picker, target, composerMode);
+    return;
+  }
+  if (picker) {
+    const foot = picker.querySelector('.composer-members-foot');
+    if (foot) foot.hidden = true;
+  }
   if (_agentPickerTab === 'skills') {
     if (typeof loadSkills !== 'function') {
       listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
@@ -4491,6 +4524,40 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
   _bindAgentPickerListItems(listEl, anchorId);
 }
 
+/** 多选模式：勾选会话成员 / 插入本条点名标记。点选不关闭列表（FR-001 连续多选）。 */
+function _bindComposerMemberRows(listEl, target, mode) {
+  const members = window.composerMembers;
+  if (!members) return;
+  for (const el of listEl.querySelectorAll('[data-composer-member]')) {
+    el.addEventListener('click', () => {
+      const key = el.dataset.composerMember || '';
+      const kind = el.dataset.memberKind || 'agent';
+      const name = el.dataset.memberName || key;
+      const member = kind === 'commander' ? members.commanderMember() : { kind: 'agent', id: key, name };
+      const picker = document.getElementById('agent-picker');
+      if (mode === 'mentions') {
+        // 本条点名：先确保是本条有效对象（点名已有成员；选新成员时加入会话）。
+        if (!members.isMember(target, key)) members.addMember(target, member);
+        const pendingAt = (_atKeyMark && _atKeyMark.inputId === members.inputIdOf(target))
+          ? _atKeyMark.posAfter - 1
+          : null;
+        members.insertMention(target, member, { pendingAt });
+        _atKeyMark = null;
+      } else if (members.isMember(target, key)) {
+        members.removeMember(target, key);
+        members.removeMentions(target, key);
+      } else {
+        members.addMember(target, member);
+        members.insertMention(target, member);
+      }
+      const search = document.getElementById('agent-picker-search');
+      _renderAgentPickerList(search ? search.value : '');
+      if (mode === 'members') search?.focus();
+    });
+  }
+  _setAgentPickerActive(0);
+}
+
 function _bindAgentPickerListItems(listEl, anchorId) {
   for (const el of listEl.querySelectorAll('[data-id]')) {
     el.addEventListener('click', async () => {
@@ -4515,10 +4582,15 @@ function _bindAgentPickerListItems(listEl, anchorId) {
 
 // ── Agent picker keyboard navigation ─────────────────────────────────────
 
+// 可选行选择器：既有 tab 行是 [data-id]，多 Agent 成员行是 [data-composer-member]。
+// active 变体单独写死——用字符串拼接会拼出非法的双点选择器（querySelector 抛错）。
+const _PICKER_ROW_SELECTOR = '.skill-picker-item[data-id], .composer-member-row[data-composer-member]';
+const _PICKER_ROW_ACTIVE_SELECTOR = '.skill-picker-item.active[data-id], .composer-member-row.active[data-composer-member]';
+
 function _setAgentPickerActive(idx) {
   const listEl = document.getElementById('agent-picker-list');
   if (!listEl) return;
-  const items = listEl.querySelectorAll('.skill-picker-item[data-id]');
+  const items = listEl.querySelectorAll(_PICKER_ROW_SELECTOR);
   if (!items.length) return;
   const clamped = Math.max(0, Math.min(items.length - 1, idx));
   items.forEach((el, i) => el.classList.toggle('active', i === clamped));
@@ -4528,7 +4600,7 @@ function _setAgentPickerActive(idx) {
 function _moveAgentPickerActive(delta) {
   const listEl = document.getElementById('agent-picker-list');
   if (!listEl) return;
-  const items = listEl.querySelectorAll('.skill-picker-item[data-id]');
+  const items = listEl.querySelectorAll(_PICKER_ROW_SELECTOR);
   if (!items.length) return;
   let cur = -1;
   items.forEach((el, i) => { if (el.classList.contains('active')) cur = i; });
@@ -5127,9 +5199,19 @@ function _atKeyOpener(chipId) {
         inputId: ta.id || '',
         posAfter: typeof ta.selectionStart === 'number' ? ta.selectionStart : 0,
       };
-      _openAgentPicker(btn);
+      // 正文 `@`：本条点名模式（勾选即插入点名标记，不再改写接收者）。
+      const composerMode = _composerMemberModeForChip(chipId);
+      if (composerMode) _openAgentPicker(btn, { mode: 'mentions' });
+      else _openAgentPicker(btn);
     }, 0);
   };
+}
+
+/** auto 弹窗的接收者入口保持旧的单选语义（它有自己的接收者状态与回调）；
+ *  两个主 composer（会话 / 新建任务）才走多 Agent 模式。 */
+function _composerMemberModeForChip(chipId) {
+  if (chipId === 'auto-recipient-chip') return false;
+  return typeof window.composerMembers === 'object' && window.composerMembers !== null;
 }
 
 // Wire (chip → click opens picker) + (textarea → `@` opens picker,
@@ -5148,7 +5230,8 @@ function bindRecipientAnchor(chipId, inputId) {
       if (picker && picker.style.display !== 'none' && picker.dataset.anchorId === chipId) {
         _closeAgentPicker();
       } else {
-        _openAgentPicker(btn);
+        // 底部 Agent 入口管理「会话成员」（多选）。
+        _openAgentPicker(btn, _composerMemberModeForChip(chipId) ? { mode: 'members' } : {});
       }
     });
   }
@@ -5174,6 +5257,20 @@ if (typeof window !== 'undefined') {
   window.commitNewChatTaskRefs = commitNewChatTaskRefs;
   window.clearChatTaskRefChips = clearChatTaskRefChips;
   window.updateAgentPickerPlaceholders = updateAgentPickerPlaceholders;
+  // 多 Agent 选择（composer-members.js）需要的只读 Agent 目录：身份解析、
+  // 点名标记、按来源分组都读它（**不过滤**——否则跨会话恢复的成员会被误判成
+  // 内部成员）。候选列表单独走下面的 candidates，与既有 Agents 页签同口径。
+  window.getComposerAgentList = () => (Array.isArray(_agentsCache) ? _agentsCache : []);
+  // 候选列表：套用 picker 既有的「项目绑定 Agent」过滤（与 Agents 页签一致）。
+  window.getComposerAgentCandidates = () => {
+    const list = Array.isArray(_agentsCache) ? _agentsCache : [];
+    if (!_pickerBoundAgentIds) return list;
+    return list.filter((a) => a && _pickerBoundAgentIds.has(a.agent_id));
+  };
+  // 项目没有任何绑定 Agent 时，候选列表要给出与 Agents 页签相同的提示。
+  window.getComposerMemberScopeHint = () => (
+    _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0 ? t('agents.no_project_agents') : ''
+  );
 }
 
 function bindAgentPickers() {
@@ -5211,11 +5308,21 @@ function bindAgentPickers() {
     if (e.key === 'ArrowUp')   { _moveAgentPickerActive(-1); e.preventDefault(); return; }
     if (e.key === 'Enter') {
       const listEl = document.getElementById('agent-picker-list');
-      const active = listEl?.querySelector('.skill-picker-item.active[data-id]')
-        || listEl?.querySelector('.skill-picker-item[data-id]');
+      const active = listEl?.querySelector(_PICKER_ROW_ACTIVE_SELECTOR)
+        || listEl?.querySelector(_PICKER_ROW_SELECTOR);
       if (active) { active.click(); e.preventDefault(); }
     }
   });
+  // 多选模式的底部「完成」：收起列表并把焦点还给输入框（PRD FR-006）。
+  const pickerEl = document.getElementById('agent-picker');
+  if (pickerEl && pickerEl.dataset.membersFootBound !== '1') {
+    pickerEl.dataset.membersFootBound = '1';
+    pickerEl.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-composer-members-done]')) return;
+      e.stopPropagation();
+      _closeAgentPicker({ returnFocus: true });
+    });
+  }
   for (const { chip, input } of _RECIPIENT_ANCHOR_PAIRS) {
     bindRecipientAnchor(chip, input);
   }
