@@ -2162,3 +2162,22 @@ describe('KB 解析卡按钮接线（防"死按钮"）', () => {
     expect(unwired).toEqual([]);
   });
 });
+
+/**
+ * 侧栏「知识库列表」在 uiTree 迁移后曾被压成 16px 宽（库名不可见）——回归防护。
+ *
+ * 根因：共享树的 li 是 `grid-template-columns: 28px minmax(0,1fr)`，页面渲染时把库名
+ * 放进 `.kb-tree-name`（`overflow:hidden`）；子级 `ul[role=group]` 未指定列会被自动放进
+ * **第一列（28px）**，于是整棵子树只有 ~28px、名字宽度归零 —— 真机表现就是"列表空白"。
+ * 这里钉住那三条让它撑开的规则（jsdom 没有布局，只能钉契约；真机已用 CDP 量过宽高）。
+ */
+describe('知识库侧栏树宽度契约（uiTree 迁移回归）', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+
+  it('子级 group 必须横跨两列，行与名字必须可伸缩', () => {
+    expect(css).toMatch(/\.kb-library-tree \[role="treeitem"\] > \[role="group"\] \{ grid-column: 1 \/ -1; width: 100%; \}/);
+    // `.kb-tree-item` 原本就有 width:100%（在 .kb-library-tree 作用域内），这里守它的存在
+    expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \{ width: 100%;/);
+    expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \.kb-tree-name \{ flex: 1 1 auto; min-width: 0; \}/);
+  });
+});
