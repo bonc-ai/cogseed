@@ -1528,6 +1528,53 @@ describe('Recall conversation capture', () => {
     expect(completed.autoWrite).toBeUndefined();
   });
 
+  it('drops a credential-shaped candidate instead of failing the whole capture', async () => {
+    // 2026-09-21 真机抓出：候选文本是凭据赋值样式（token: xxx）时，保存侧
+    // L3 敏感闸对它抛 forbidden to persist——此前整次整理被打成 failed
+    // （candidate_save_failed），重试永远撞同一堵墙。正确口径：只丢弃这
+    // 一条候选并留痕，其余候选照常入库（与解析层"单个坏候选不毁整批"
+    // 同一纪律）。
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [
+          {
+            judgment: 'The gateway token: AKIAIOSFODNN7EXAMPLE stays in the vault.',
+            value: 'token: AKIAIOSFODNN7EXAMPLE',
+            summary: 'Gateway credential',
+            suggestedType: 'fact',
+            suggestedScope: 'project',
+            evidence: ['m1'],
+          },
+          {
+            judgment: 'Keep a traceable decision log.',
+            ...reviewableCandidateContract,
+            summary: 'Decision traceability',
+            suggestedType: 'rule',
+            suggestedScope: 'project',
+            evidence: ['m1'],
+          },
+        ],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+    let saveCalls = 0;
+    mocks.saveCandidate.mockImplementation(async (_userId: string, input: { captureKey: string }) => {
+      saveCalls += 1;
+      if (saveCalls === 1) throw new Error('cognition is forbidden to persist: credential_assignment');
+      return { id: `cand-${input.captureKey.slice(-1)}`, status: 'pending_review', ...input };
+    });
+
+    const capture = await captureModule();
+    const queued = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    await capture.runRecallCaptureNow('capture-user', queued.id);
+    const completed = await capture.runRecallCapture('capture-user', queued.id);
+
+    expect(mocks.saveCandidate).toHaveBeenCalledTimes(2);
+    expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-1'] });
+    expect(completed.errorCode ?? '').toBe('');
+  });
+
   it('keeps an automatic write failure visible and retryable', async () => {
     mocks.runModel.mockResolvedValueOnce({
       text: JSON.stringify({

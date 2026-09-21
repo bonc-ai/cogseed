@@ -4,6 +4,8 @@ import * as path from 'node:path';
 import vm from 'node:vm';
 
 const ROOT = path.resolve(__dirname, '../..');
+const conversationSource = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
+const styleSource = fs.readFileSync(path.join(ROOT, 'src/renderer/style.css'), 'utf8');
 
 function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unknown>) {
   const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/recall-projection-card.js'), 'utf8');
@@ -17,7 +19,15 @@ function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unkn
     addEventListener(type: string, handler: unknown) { this.handler = handler; this.handlerType = type; },
   };
   const context: any = {
-    window: { cogseed: { invoke } },
+    window: {
+      cogseed: { invoke },
+      // 新控件走共享按钮原语（shared-ui-adoption-guard 的规矩）。这里只 stub
+      // 出本用例需要的最小行为：带 label 与 data-* 的按钮。
+      uiButton: ({ label, attrs }: { label: string; attrs?: Record<string, string> }) => {
+        const extra = Object.entries(attrs || {}).map(([key, value]) => ` ${key}="${String(value)}"`).join('');
+        return `<button type="button" class="btn ui-button"${extra}><span class="ui-button__label">${String(label)}</span></button>`;
+      },
+    },
     document: {},
     escapeHtml: (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     t: (_key: string, varsOrFallback?: unknown) => typeof varsOrFallback === 'string' ? varsOrFallback : _key,
@@ -281,5 +291,249 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     expect(host.innerHTML).not.toContain('Still running the confirmed');
     expect(host.innerHTML).not.toContain('is-stale');
+  });
+
+  it('模型自选（2026-09-18）：标"模型自选"并给撤销；撤销走 recall.projections.revoke 并刷新为已撤销', async () => {
+    const calls: Array<[string, unknown]> = [];
+    let revoked = false;
+    const { context, host } = loadModule(async (channel, payload) => {
+      calls.push([channel, payload]);
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: {
+            ...previewCard,
+            status: revoked ? 'revoked' : 'confirmed',
+            authorization: 'model_selected',
+            purpose: 'model_selected',
+          },
+        };
+      }
+      if (channel === 'recall.projections.revoke') {
+        revoked = true;
+        return { ok: true, projection: { projectionId: 'proj-a', status: 'revoked' } };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+    expect(host.innerHTML).toContain('Model-selected projection · 1 cognition assets');
+    expect(host.innerHTML).toContain('Model-picked');
+    expect(host.innerHTML).toContain('Revoke');
+    // confirmed 态不发确认按钮（它已经生效了，只给撤销）。
+    expect(host.innerHTML).not.toContain('Confirm assets');
+
+    const revokeButton = { disabled: false };
+    await host.handler({
+      target: {
+        closest: (selector: string) => (String(selector).includes('revoke') ? revokeButton : null),
+      },
+    });
+    expect(calls.some(([channel]) => channel === 'recall.projections.revoke')).toBe(true);
+    expect(host.innerHTML).toContain('Revoked: later turns no longer carry these assets.');
+    expect(host.innerHTML).not.toContain('data-recall-projection-revoke');
+  });
+
+  it('模型自选卡片区分模型新挂数量、投影总数、模型点名与语义基线', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: {
+            ...previewCard,
+            status: 'confirmed',
+            authorization: 'model_selected',
+            purpose: 'model_selected',
+            modelSelectedAssetIds: ['asset-model'],
+            modelSelectedCount: 1,
+            totalAssetCount: 2,
+            assetSummaries: [
+              { assetId: 'asset-model', title: 'Model rule', type: 'rule', status: 'active', scope: 'review', version: '1' },
+              { assetId: 'asset-base', title: 'Semantic base', type: 'rule', status: 'active', scope: 'review', version: '1' },
+            ],
+          },
+        };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+
+    expect(host.innerHTML).toContain('Model attached 1 cognition assets · 2 in projection');
+    expect(host.innerHTML).toContain('Model-selected assets');
+    expect(host.innerHTML).toContain('Semantic baseline assets');
+    expect(host.innerHTML).toContain('Model rule');
+    expect(host.innerHTML).toContain('Semantic base');
+  });
+
+  it('旧模型自选投影没有点名历史时显示中性总数，不编造模型新挂数量', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: {
+            ...previewCard,
+            status: 'confirmed',
+            authorization: 'model_selected',
+            purpose: 'model_selected',
+            totalAssetCount: 2,
+            assetSummaries: [
+              { assetId: 'asset-old-a', title: 'Old A', type: 'rule', status: 'active', scope: 'review', version: '1' },
+              { assetId: 'asset-old-b', title: 'Old B', type: 'rule', status: 'active', scope: 'review', version: '1' },
+            ],
+          },
+        };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+
+    expect(host.innerHTML).toContain('Model-selected projection · 2 cognition assets');
+    expect(host.innerHTML).not.toContain('Model-selected assets');
+    expect(host.innerHTML).toContain('Old A');
+  });
+
+  it('模型自选默认渲染低干扰回执：明细渐进展开，撤销留在摘要层', async () => {
+    const assets = Array.from({ length: 8 }, (_, index) => ({
+      assetId: `asset-${index + 1}`,
+      title: `Asset ${index + 1}`,
+      type: 'rule',
+      status: 'active',
+      maturity: 'leaf',
+      scope: 'review',
+      version: '1',
+    }));
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: {
+            ...previewCard,
+            status: 'confirmed',
+            authorization: 'model_selected',
+            purpose: 'model_selected',
+            assetSummaries: assets,
+          },
+        };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    const prose = { hidden: false };
+    host.closest = vi.fn(() => ({ querySelector: (selector: string) => selector === '.markdown-body' ? prose : null }));
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+
+    expect(prose.hidden).toBe(false);
+    expect(host.className).toContain('is-model-selected');
+    expect(host.innerHTML).toContain('Model-selected projection · 8 cognition assets');
+    expect(host.innerHTML).toContain('View details');
+    expect(host.innerHTML).toContain('Revoke');
+    expect(host.innerHTML).toContain('<details class="chat-recall-projection-details"');
+    expect(host.innerHTML).not.toContain('<details class="chat-recall-projection-details" open');
+    expect(host.innerHTML.match(/data-recall-projection-asset=/g)).toHaveLength(8);
+    expect(host.innerHTML.indexOf('data-recall-projection-revoke')).toBeLessThan(host.innerHTML.indexOf('<details'));
+  });
+
+  it('旧传输 sidecar 才隐藏 fallback 正文；最终回复挂卡不隐藏正文', async () => {
+    const load = async (transportSidecar: boolean) => {
+      const { context, host } = loadModule(async (channel) => {
+        if (channel === 'recall.projections.card') {
+          return {
+            ok: true,
+            card: {
+              ...previewCard,
+              status: 'confirmed',
+              authorization: 'model_selected',
+              purpose: 'model_selected',
+            },
+          };
+        }
+        return { ok: true, assets: [] };
+      });
+      const prose = { hidden: false };
+      host.closest = vi.fn(() => ({ querySelector: (selector: string) => selector === '.markdown-body' ? prose : null }));
+      if (transportSidecar) host.dataset.recallProjectionTransport = 'sidecar';
+      await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+      return prose;
+    };
+
+    expect((await load(false)).hidden).toBe(false);
+    expect((await load(true)).hidden).toBe(true);
+  });
+
+  it('模型自选回执撤销后保持紧凑并保留可审计明细', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: {
+            ...previewCard,
+            status: 'revoked',
+            authorization: 'model_selected',
+            purpose: 'model_selected',
+          },
+        };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+
+    expect(host.className).toContain('is-model-selected');
+    expect(host.innerHTML).toContain('Revoked: later turns no longer carry these assets.');
+    expect(host.innerHTML).toContain('<details class="chat-recall-projection-details"');
+    expect(host.innerHTML).not.toContain('data-recall-projection-revoke');
+  });
+
+  it('projection sidecar 消息隐藏传输 fallback 文本，不让治理回执伪装成模型正文', () => {
+    expect(conversationSource).toContain("message?.recall_projection_card?.projectionId\n      && message.recall_projection_card.authorization === 'model_selected'\n      && !coalescedProjectionCard,");
+    expect(conversationSource).toContain("suppressProjectionTransportProse\n    ? ''\n    : isHtmlSnippet");
+  });
+
+  it('revoked projection status has localized keys in all supported languages', () => {
+    for (const lang of ['zh', 'en', 'ja', 'pt']) {
+      const locale = JSON.parse(fs.readFileSync(path.join(ROOT, `src/renderer/locales/${lang}.json`), 'utf8'));
+      expect(locale['recall.projection.status.revoked']).toBeTruthy();
+    }
+  });
+
+  it('投影卡片有顶层样式，而不只有结果块内的嵌套重置', () => {
+    expect(styleSource).toMatch(/^\.chat-recall-projection-card \{$/m);
+    expect(styleSource).toMatch(/^\.chat-recall-projection-details \{$/m);
+    expect(styleSource).toMatch(/^\.chat-recall-projection-head \{$/m);
+    expect(fs.readFileSync(path.join(ROOT, 'src/renderer/modules/recall-projection-card.js'), 'utf8')).toContain("recall.projection.status.revoked");
+  });
+
+  it('onlyModelSelected：非模型自选的投影不挂卡（保留 2026-08-17 的"不挂预载卡"决策）', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return { ok: true, card: { ...previewCard, status: 'confirmed', authorization: 'user_confirmed' } };
+      }
+      return { ok: true, assets: [] };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+    expect(host.innerHTML).toBe('');
+    expect(host.className).toBe('');
+    expect(host.dataset.projectionId).toBeUndefined();
+  });
+
+  it('撤销失败（可用性）：后端拒绝时给出可见提示，卡片状态不变', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return { ok: true, card: { ...previewCard, status: 'confirmed', authorization: 'model_selected', purpose: 'model_selected' } };
+      }
+      if (channel === 'recall.projections.revoke') return { ok: false, error: 'projection revoke failed upstream' };
+      return { ok: true, assets: [] };
+    });
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
+    expect(host.innerHTML).toContain('Revoke');
+
+    await host.handler({ target: { closest: (selector: string) => (String(selector).includes('revoke') ? { disabled: false } : null) } });
+    // 失败要走可见提示（不静默），且卡片仍是 confirmed（没有假装成功）。
+    expect(context.uiAlert).toHaveBeenCalled();
+    expect(String(context.uiAlert.mock.calls[0][0])).toContain('revoke failed');
+    expect(host.innerHTML).toContain('Revoke');
   });
 });

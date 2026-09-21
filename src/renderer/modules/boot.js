@@ -365,8 +365,7 @@ function _loadViewFeature(feature, view, run) {
 }
 
 function _lazyFeaturePanel(view) {
-  const panelId = view === 'memory' ? 'panel-memory'
-    : view === 'skills' ? 'panel-connections'
+  const panelId = view === 'skills' ? 'panel-connections'
     : view === 'recall' ? 'panel-recall'
     : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
     : view === 'kb' ? 'panel-kb'
@@ -519,7 +518,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'kb' ? 'panel-kb'
                 : view === 'settings' ? 'panel-settings'
-                : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
                 : view === 'marketplace' ? 'panel-marketplace'
                 : 'panel-conversation';
@@ -541,13 +539,9 @@ function setView(view, cid, opts = {}) {
     it.classList.toggle('active', view === 'conversation' && it.dataset.cid === cid);
   });
 
-  // Memory lives in the Settings feature bundle. Reached only from Settings,
-  // so loading it here keeps its 32 KB parser/evaluator cost off chat first paint.
-  if (view === 'memory') {
-    _loadViewFeature('settings', 'memory', () => {
-      if (typeof renderMemoryPage === 'function') renderMemoryPage();
-    });
-  }
+  // Memory page retired (2026-09-20): its entry card now routes to the
+  // cognition-assets view; memory.js stays loaded as the export/import tool
+  // (window.MemoryTools), reused from the personal-ontology subpage.
   if (view === 'run-center') {
     _loadViewFeature('run-center', 'run-center', () => {
       if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView, opts.runCenterOptions || {});
@@ -555,6 +549,7 @@ function setView(view, cid, opts = {}) {
   }
   if (view === 'conversation' && cid) {
     currentCid = cid;
+    lastConversationCid = cid;
     if (typeof onEnterConversationView === 'function') onEnterConversationView();
     if (opts.openRunContext && window.ConversationInfo?.openAndSetTab) {
       window.ConversationInfo.openAndSetTab(opts.openRunContext);

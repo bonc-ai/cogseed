@@ -717,10 +717,12 @@ export async function appendFieldValueToRef(
   value: string,
   source: string,
   project?: string,
+  /** 信息截至年月（YYYY-MM，落 `@asof:`），普通组路径透传给 appendFieldValue。 */
+  asOf?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const { groupId, section } = splitContentRef(ref);
-  if (!section) return appendFieldValue(uid, groupId, fieldName, value, source, project);
+  if (!section) return appendFieldValue(uid, groupId, fieldName, value, source, project, asOf);
 
   const name = String(fieldName || '').trim();
   const val = String(value ?? '').trim();
@@ -728,20 +730,31 @@ export async function appendFieldValueToRef(
   if (!val) return { ok: false, error: 'empty value' };
   const src = normalizeSource(source);
   const proj = project ? String(project).trim() : undefined;
+  const validAsOf = asOf && /^((?:19|20)\d{2})-(0[1-9]|1[0-2])$/.test(asOf) ? asOf : undefined;
 
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
 
-  return mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
+  let existingSnapshot: string[] = [];
+  let appended = false;
+  const result = await mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
     if (!sec) return { ok: false, error: 'section not found' };
     const values = sec.fields[name] || (sec.fields[name] = []);
+    existingSnapshot = values.map((fv) => fv.value);
     if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 同值同源同项目去重
     }
-    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}), ...(validAsOf ? { asOf: validAsOf } : {}) });
+    appended = true;
     return { changed: true };
   });
+  if (result.ok && appended && existingSnapshot.length) {
+    void import('./recall/ontology-conflicts')
+      .then((m) => m.checkNewValueAgainst(uid, groupId, name, val, existingSnapshot))
+      .catch(() => {});
+  }
+  return result;
 }
 
 /**
