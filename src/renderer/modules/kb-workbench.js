@@ -61,6 +61,36 @@
     return translated && translated !== key ? translated : fallback;
   }
 
+  /**
+   * 定点重标签：把 `data-wb-*` 钩子上的文案按当前语言重刷一遍。
+   *
+   * 为什么必须"定点"而不是重渲染：`renderKbWorkbench()` 有 `_state.rendered` 守卫
+   * ——外壳只注入一次；而且右列里住着问答输入框（用户可能已经打了一半问题）。
+   * 重建 = 丢掉这些即时状态。
+   *
+   * - `data-wb-text`        → 元素整段文字（textContent）
+   * - `data-wb-title`       → title 属性
+   * - `data-wb-placeholder` → placeholder 属性（uiInput / uiTextarea）
+   * - `data-wb-label`       → 共享按钮的可见文字（uiButton 的 label span / 图标按钮的 aria-label）
+   *
+   * 注意：**动态文案不挂钩子**。库名、标签、描述、头像由 `_renderRight()` 按当前库与
+   * 语言重写，挂静态钩子会让重标签把它们覆盖掉（描述会变回占位符）。那几处改为在
+   * `_renderRight()` 里走 `_tr(...)`，并依靠它本来就在 i18n-change 里被重跑。
+   */
+  function _relabelWorkbench(root) {
+    const scope = root || document.getElementById('kb-workbench');
+    if (!scope || typeof scope.querySelectorAll !== 'function') return;
+    scope.querySelectorAll('[data-wb-text]').forEach((el) => { el.textContent = _tr(el.dataset.wbText); });
+    scope.querySelectorAll('[data-wb-title]').forEach((el) => { el.title = _tr(el.dataset.wbTitle); });
+    scope.querySelectorAll('[data-wb-placeholder]').forEach((el) => { el.placeholder = _tr(el.dataset.wbPlaceholder); });
+    scope.querySelectorAll('[data-wb-label]').forEach((el) => {
+      const label = _tr(el.dataset.wbLabel);
+      const span = el.querySelector && el.querySelector('.ui-button__label');
+      if (span) span.textContent = label;
+      else el.setAttribute('aria-label', label);
+    });
+  }
+
   function _externalSourceLabel(source) {
     if (source && source.id === 'feishu-wiki') {
       return _tr('kb.workbench.external_feishu', '飞书 Wiki');
@@ -2423,7 +2453,7 @@
     const isSpace = !!_state.spaceId;
     const externalSource = _currentExternalSource();
     const isExternal = !isSpace && !!externalSource;
-    const dispName = isSpace ? _state.spaceName : (isExternal ? _externalSourceLabel(externalSource) : (_state.currentLib || '知识库'));
+    const dispName = isSpace ? _state.spaceName : (isExternal ? _externalSourceLabel(externalSource) : (_state.currentLib || _tr('kb.workbench.untitled_lib', '知识库')));
     const nameEl = document.getElementById('kb-wb-lib-name');
     if (nameEl) nameEl.textContent = dispName;
     const cover = document.getElementById('kb-wb-lib-cover');
@@ -2440,16 +2470,16 @@
         : _tr('kb.workbench.group_personal', '个人知识库');
     // 创建者（单用户客户端 = 本人）+ 描述（共享库有 description，否则占位提示）
     const ownerEl = document.getElementById('kb-wb-owner-name');
-    if (ownerEl) ownerEl.textContent = isExternal ? _externalSourceLabel(externalSource) : '我';
+    if (ownerEl) ownerEl.textContent = isExternal ? _externalSourceLabel(externalSource) : _tr('kb.workbench.me', '我');
     const avatarEl = document.getElementById('kb-wb-owner-avatar');
-    if (avatarEl) avatarEl.textContent = (dispName || '我').trim().charAt(0);
+    if (avatarEl) avatarEl.textContent = (dispName || _tr('kb.workbench.me', '我')).trim().charAt(0);
     const descEl = document.getElementById('kb-wb-lib-desc');
     if (descEl) {
       const sp = isSpace ? _state.spaces.find((x) => x.space_id === _state.spaceId) : null;
       const desc = isExternal
         ? _tr('kb.workbench.external_description', '通过已授权的外部来源导入，内容由来源同步管理。')
         : (sp && sp.description ? String(sp.description) : '');
-      descEl.textContent = desc || '快来填写描述吧~';
+      descEl.textContent = desc || _tr('kb.workbench.lib_desc_placeholder', '快来填写描述吧~');
       descEl.classList.toggle('is-empty', !desc);
     }
     // 分享/双人入口只对「共享知识库」有意义（个人库单用户、外部来源只读），
@@ -2470,7 +2500,7 @@
       // 成员入口仅共享知识库显示（个人知识库单用户，无成员概念）
       membersEl.style.display = isSpace ? '' : 'none';
       if (isSpace) {
-        membersEl.textContent = '1 加入';
+        membersEl.textContent = _tr('kb.workbench.members_joined', '1 加入');
         if (!membersEl.dataset.bound) {
           membersEl.dataset.bound = '1';
           membersEl.style.cursor = 'pointer';
@@ -3206,7 +3236,7 @@
       questions: Array.isArray(entry.questions) ? entry.questions : [],
       sources: Array.isArray(entry.sources) ? entry.sources : [],
       fingerprint: String(entry.fingerprint || ''),
-      title: _tr('kb.quiz.panel_title', '{lib} · 测验', { lib: _state.spaceId ? (_state.spaceName || '共享库') : (_state.currentLib || '知识库') }),
+      title: _tr('kb.quiz.panel_title', '{lib} · 测验', { lib: _state.spaceId ? (_state.spaceName || '共享库') : (_state.currentLib || _tr('kb.workbench.untitled_lib', '知识库')) }),
       dir: _state.spaceId ? null : (_state.currentLib || null),
       spaceId: _state.spaceId || null,
       host: {
@@ -3444,7 +3474,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _mmUpdateSaveState();
     _renderOverlay();
     const titleInput = document.getElementById('kb-mm-title-input');
-    if (titleInput) titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '知识库');
+    if (titleInput) titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || _tr('kb.workbench.untitled_lib', '知识库'));
     _mmUpdateSaveState();
     if (_state.mmViewMode === 'graph') {
       _mmPinStageSvg();
@@ -5396,22 +5426,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     _state.rendered = true;
     host.innerHTML = `
       <div class="kb-wb">
-        ${_uiIconButton({ label: '展开知识库列表', icon: 'chevron-right', className: 'kb-wb-side-expand', attrs: { id: 'kb-wb-side-expand', hidden: true } })}
+        ${_uiIconButton({ label: _tr('kb.workbench.side_expand', '展开知识库列表'), icon: 'chevron-right', className: 'kb-wb-side-expand', attrs: { id: 'kb-wb-side-expand', hidden: true, 'data-wb-label': 'kb.workbench.side_expand' } })}
         <aside class="kb-wb-side">
           <div class="kb-wb-side-head">
-            <h2>知识库列表</h2>
+            <h2 data-wb-text="kb.workbench.side_title">知识库列表</h2>
             <div class="kb-wb-side-actions">
-              ${_uiIconButton({ label: '收起知识库列表', icon: 'panel-list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-collapse' } })}
-              ${_uiIconButton({ label: '搜索知识库', icon: 'search', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-search-btn' } })}
+              ${_uiIconButton({ label: _tr('kb.workbench.side_collapse', '收起知识库列表'), icon: 'panel-list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-collapse', 'data-wb-label': 'kb.workbench.side_collapse' } })}
+              ${_uiIconButton({ label: _tr('kb.workbench.side_search', '搜索知识库'), icon: 'search', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-side-search-btn', 'data-wb-label': 'kb.workbench.side_search' } })}
             </div>
           </div>
           <div class="kb-wb-side-search" id="kb-wb-side-search" hidden>
             <span class="kb-wb-side-search-ico">${_svg('search')}</span>
-            ${_uiInput({ id: 'kb-wb-side-search-input', type: 'search', placeholder: '搜索知识库…', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+            ${_uiInput({ id: 'kb-wb-side-search-input', type: 'search', placeholder: _tr('kb.workbench.side_search_placeholder', '搜索知识库…'), attrs: { 'data-wb-placeholder': 'kb.workbench.side_search_placeholder', autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           <div class="kb-wb-tree" id="kb-wb-tree"></div>
         </aside>
-        <div class="kb-wb-divider" data-wb-divider="1" title="拖动调整宽度"></div>
+        <div class="kb-wb-divider" data-wb-divider="1" data-wb-title="kb.workbench.divider_drag"></div>
         <section class="kb-wb-mid">
           <div class="kb-wb-mid-head">
             <div class="kb-wb-lib-head">
@@ -5433,49 +5463,49 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                   attrs: { id: 'kb-wb-right-expand', 'aria-controls': 'kb-wb-right-panel', 'aria-expanded': 'false' },
                 })}
                 <span class="kb-wb-share-wrap" id="kb-wb-share-wrap">
-                  ${_uiIconButton({ label: '分享知识库（待开发）', icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share' } })}
-                  <span class="kb-wb-soon-chip">待开发</span>
+                  ${_uiIconButton({ label: _tr('kb.workbench.share_soon', '分享知识库（待开发）'), icon: 'users', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-share', 'data-wb-label': 'kb.workbench.share_soon' } })}
+                  <span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon">待开发</span>
                 </span>
                 <div class="kb-wb-more">
-                  ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-more-btn' } })}
+                  ${_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-more-btn', 'data-wb-label': 'kb.workbench.more' } })}
                   <div class="kb-wb-more-menu" id="kb-wb-more-menu" hidden>
-                    <div class="kb-wb-more-item" data-more="refresh">刷新</div>
-                    <div class="kb-wb-more-item" data-more="rename">重命名</div>
-                    <div class="kb-wb-more-item is-danger" data-more="delete">删除到回收站</div>
+                    <div class="kb-wb-more-item" data-more="refresh"><span data-wb-text="kb.workbench.refresh"></span></div>
+                    <div class="kb-wb-more-item" data-more="rename"><span data-wb-text="kb.workbench.rename"></span></div>
+                    <div class="kb-wb-more-item is-danger" data-more="delete"><span data-wb-text="kb.workbench.delete_to_trash"></span></div>
                   </div>
                 </div>
               </div>
             </div>
             <div class="kb-wb-mid-sub">
-              <div class="kb-wb-content-title">内容(<span id="kb-wb-count">0</span>)</div>
-              ${_uiInput({ id: 'kb-wb-search-input', type: 'search', placeholder: '搜索文档…', attrs: { autocomplete: 'off' } })}
+              <div class="kb-wb-content-title"><span data-wb-text="kb.workbench.content"></span>(<span id="kb-wb-count">0</span>)</div>
+              ${_uiInput({ id: 'kb-wb-search-input', type: 'search', placeholder: _tr('kb.workbench.search_docs_placeholder', '搜索文档…'), attrs: { 'data-wb-placeholder': 'kb.workbench.search_docs_placeholder', autocomplete: 'off' } })}
               <div class="kb-wb-tools">
                 <div class="kb-wb-sort">
-                  ${_uiIconButton({ label: '排序', icon: 'list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-sort' } })}
+                  ${_uiIconButton({ label: _tr('kb.workbench.sort', '排序'), icon: 'list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-sort', 'data-wb-label': 'kb.workbench.sort' } })}
                   <div class="kb-wb-sort-menu" id="kb-wb-sort-menu" hidden>
-                    <div class="kb-wb-sort-item is-selected" data-sort="updated">${_icon('check')} 更新时间</div>
-                    <div class="kb-wb-sort-item" data-sort="size">大小</div>
-                    <div class="kb-wb-sort-item" data-sort="type">类型</div>
-                    <div class="kb-wb-sort-item" data-sort="name">名称</div>
+                    <div class="kb-wb-sort-item is-selected" data-sort="updated">${_icon('check')} <span data-wb-text="kb.workbench.sort_updated"></span></div>
+                    <div class="kb-wb-sort-item" data-sort="size"><span data-wb-text="kb.workbench.sort_size"></span></div>
+                    <div class="kb-wb-sort-item" data-sort="type"><span data-wb-text="kb.workbench.sort_type"></span></div>
+                    <div class="kb-wb-sort-item" data-sort="name"><span data-wb-text="kb.workbench.sort_name"></span></div>
                   </div>
                 </div>
-                ${_uiIconButton({ label: '重置排序并刷新', icon: 'refresh', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-refresh' } })}
+                ${_uiIconButton({ label: _tr('kb.workbench.reset_sort', '重置排序并刷新'), icon: 'refresh', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-refresh', 'data-wb-label': 'kb.workbench.reset_sort' } })}
                 <div class="kb-wb-import-wrap">
-                  ${_uiIconButton({ label: '导入内容', icon: 'upload', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-import' } })}
+                  ${_uiIconButton({ label: _tr('kb.workbench.import', '导入内容'), icon: 'upload', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-import', 'data-wb-label': 'kb.workbench.import' } })}
                   <div class="kb-wb-import-menu" id="kb-wb-import-menu" hidden>
-                    <div class="kb-wb-import-item" data-imp="file">${_icon('file', 'kb-wb-import-icon')}<span>本地文件</span></div>
-                    <div class="kb-wb-import-item" data-imp="dir">${_icon('folder', 'kb-wb-import-icon')}<span>本地文件夹</span></div>
-                    <div class="kb-wb-import-item" data-imp="kblib">${_icon('book-open', 'kb-wb-import-icon')}<span>个人知识库</span></div>
-                    <div class="kb-wb-import-item" data-imp="url">${_icon('link', 'kb-wb-import-icon')}<span>网页链接</span></div>
+                    <div class="kb-wb-import-item" data-imp="file">${_icon('file', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_file"></span></div>
+                    <div class="kb-wb-import-item" data-imp="dir">${_icon('folder', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_dir"></span></div>
+                    <div class="kb-wb-import-item" data-imp="kblib">${_icon('book-open', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_kblib"></span></div>
+                    <div class="kb-wb-import-item" data-imp="url">${_icon('link', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_url"></span></div>
                     <div class="kb-wb-import-has-sub">
-                      <div class="kb-wb-import-item" data-imp="note">${_icon('file-text', 'kb-wb-import-icon')}<span>笔记</span><span class="kb-import-caret">${_icon('chevron-left', 'kb-import-caret-icon')}</span></div>
+                      <div class="kb-wb-import-item" data-imp="note">${_icon('file-text', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_note"></span><span class="kb-import-caret">${_icon('chevron-left', 'kb-import-caret-icon')}</span></div>
                       <div class="kb-wb-import-sub" id="kb-wb-import-note-sub" hidden>
-                        <div class="kb-wb-import-item" data-imp="note-new">${_icon('document-pencil', 'kb-wb-import-icon')}<span>新建笔记</span></div>
-                        <div class="kb-wb-import-item" data-imp="note-import">${_icon('upload', 'kb-wb-import-icon')}<span>导入笔记</span></div>
+                        <div class="kb-wb-import-item" data-imp="note-new">${_icon('document-pencil', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_note_new"></span></div>
+                        <div class="kb-wb-import-item" data-imp="note-import">${_icon('upload', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_note_import"></span></div>
                       </div>
                     </div>
-                    <div class="kb-wb-import-item" data-imp="audio">${_icon('mic', 'kb-wb-import-icon')}<span>录音纪要</span></div>
-                    <div class="kb-wb-import-item" data-imp="folder">${_icon('folder', 'kb-wb-import-icon')}<span>新建文件夹</span></div>
+                    <div class="kb-wb-import-item" data-imp="audio">${_icon('mic', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_audio"></span></div>
+                    <div class="kb-wb-import-item" data-imp="folder">${_icon('folder', 'kb-wb-import-icon')}<span data-wb-text="kb.workbench.import_folder"></span></div>
                   </div>
                 </div>
               </div>
@@ -5484,7 +5514,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           </div>
           <div class="kb-wb-files" id="kb-wb-files"></div>
         </section>
-        <div class="kb-wb-divider" data-wb-divider="2" title="拖动调整宽度"></div>
+        <div class="kb-wb-divider" data-wb-divider="2" data-wb-title="kb.workbench.divider_drag"></div>
         <section class="kb-wb-right" id="kb-wb-right-panel">
           <div class="kb-wb-right-head"><span class="kb-wb-chip">${_icon('book-open', 'kb-wb-chip-icon')}<span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span>本地推理 · 资料不上云</span>${_uiIconButton({
             label: _tr('kb.workbench.close_ai_panel', '关闭 AI 解析与问答'),
@@ -5610,6 +5640,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         <div class="kb-mm-resize" id="kb-mm-resize" title="拖动调整窗口大小"></div>
         </div>
       </div>`;
+    // 首渲染即套用当前语言：与 i18n-change 走**同一个**函数（一处文案来源）
+    _relabelWorkbench(host);
     // 右列强制 flex column（JS 兜底：个别环境下样式表规则未应用时保证输入栏贴底）
     const _kbRightEl = document.getElementById('kb-wb-right');
     if (_kbRightEl) {
@@ -5789,8 +5821,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         item.classList.add('is-selected');
         if (sortMenu) sortMenu.hidden = true;
         _renderFiles();
-        const label = { updated: '更新时间', size: '大小', type: '类型', name: '名称' }[_state.sort] || _state.sort;
-        if (typeof uiToast === 'function') uiToast(`排序：${label}`, { variant: 'info' });
+        const label = { updated: _tr('kb.workbench.sort_updated', '更新时间'), size: _tr('kb.workbench.sort_size', '大小'), type: _tr('kb.workbench.sort_type', '类型'), name: _tr('kb.workbench.sort_name', '名称') }[_state.sort] || _state.sort;
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.sorted', '排序：{name}', { name: label }), { variant: 'info' });
       });
     });
     // 分享 + 更多菜单
@@ -5811,7 +5843,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         if (moreMenu) moreMenu.hidden = true;
         if (_isExternalSourceSelected()) return;
         const act = item.dataset.more;
-        if (act === 'refresh') { _loadAll(); if (typeof uiToast === 'function') uiToast('已刷新', { variant: 'info' }); }
+        if (act === 'refresh') { _loadAll(); if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.refreshed', '已刷新'), { variant: 'info' }); }
         else if (act === 'rename') {
           if (_state.spaceId) _kbRenameSpace(_state.spaceId);
           else if (_state.currentLib) _kbRename(_state.currentLib, true);
@@ -5820,7 +5852,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           if (_state.spaceId) _kbDeleteSpace(_state.spaceId);
           else if (_state.currentLib) _kbDelete(_state.currentLib);
         }
-        else if (typeof uiToast === 'function') uiToast('该操作暂不可用', { variant: 'info' });
+        else if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.action_unavailable', '该操作暂不可用'), { variant: 'info' });
       });
     });
     // 重置按钮：恢复默认排序（更新时间）+ 刷新数据 + 提示（对齐 ima 重置语义）
@@ -5830,7 +5862,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const def = document.querySelector('.kb-wb-sort-item[data-sort="updated"]');
       if (def) def.classList.add('is-selected');
       _loadAll();
-      if (typeof uiToast === 'function') uiToast('已重置排序（更新时间）并刷新', { variant: 'info', timeoutMs: 2000 });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.sort_reset', '已重置排序（更新时间）并刷新'), { variant: 'info', timeoutMs: 2000 });
     });
     // 导入按钮 → 多级导入菜单（对齐 ima：本地文件/文件夹/网页/笔记/新建文件夹等）
     const importMenu = document.getElementById('kb-wb-import-menu');
@@ -5855,7 +5887,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         else if (act === 'note-new') _kbNewNote();
         else if (act === 'note-import') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
         else if (act === 'folder') _kbNewFolder();
-        else if (typeof uiToast === 'function') uiToast('该导入渠道即将上线', { variant: 'info' });
+        else if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.import_soon', '该导入渠道即将上线'), { variant: 'info' });
       });
     });
     // 笔记 → 二级子菜单（悬浮展开 + 点击保持展开，向左弹出以避开窗口右边界）
@@ -5904,7 +5936,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 关闭会话：清空当前对话内容（保留历史）
     document.getElementById('kb-qa-clear')?.addEventListener('click', () => {
       _clearQa();
-      if (typeof uiToast === 'function') uiToast('会话已清空', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.session_cleared', '会话已清空'), { variant: 'info' });
     });
     // 载入历史会话列表（初始化）
     _qaLoadSessions();
@@ -5915,7 +5947,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     attachWrap?.addEventListener('mouseleave', () => { if (attachTip) attachTip.hidden = true; });
     document.getElementById('kb-qa-attach')?.addEventListener('click', async () => {
       if (_state.qaAttachments.length >= 5) {
-        if (typeof uiToast === 'function') uiToast('最多支持 5 个附件', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.attach_limit', '最多支持 5 个附件'), { variant: 'warning' });
         return;
       }
       if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
@@ -5931,7 +5963,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _renderQaAttachments();
       } catch (err) {
         _log.warn('attach pick failed', err);
-        if (typeof uiToast === 'function') uiToast('选择附件失败', { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.attach_pick_failed', '选择附件失败'), { variant: 'error' });
       }
     });
     // 模型配置：点击模型 chip 打开已配置模型选择弹层（不用填 key，key 在设置里配）
@@ -6014,7 +6046,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     titleInput?.addEventListener('change', () => {
       const t = String(titleInput.value || '').trim();
       if (t) titleInput.value = t;
-      else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '脑图');
+      else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || _tr('kb.workbench.untitled_mindmap', '脑图'));
       _mmMarkDirty();
     });
     // 媒体管理器外壳交给共享层（M-3）：焦点陷阱 / Escape / 关闭后焦点归还。
@@ -6041,13 +6073,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const root = _state.lastMind;
       const step = _mmUndoStack.pop();
       if (!root || !step) {
-        if (typeof uiToast === 'function') uiToast('没有可撤销的重命名', { variant: 'info' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_undo_none', '没有可撤销的重命名'), { variant: 'info' });
         return;
       }
       _mmSetLabelAt(root, step.idx, step.old);
       _rerenderMindmaps();
       _mmFitToStage();
-      if (typeof uiToast === 'function') uiToast('已撤销重命名', { variant: 'info' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_undone', '已撤销重命名'), { variant: 'info' });
     });
     document.getElementById('kb-mm-refresh')?.addEventListener('click', _mmRefreshMindmap);
     document.getElementById('kb-mm-save')?.addEventListener('click', _mmSaveMindmap);
@@ -6719,7 +6751,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--soon" role="dialog" aria-modal="true" aria-labelledby="kb-share-soon-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip">待开发</span></h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-soon-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享<span class="kb-wb-soon-chip" data-wb-text="kb.workbench.coming_soon">待开发</span></h2>
           </div>
           ${_uiIconButton({ label: '关闭分享说明', icon: 'x', className: 'kb-share-pop-close' })}
         </header>
@@ -7622,6 +7654,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
 
   window.addEventListener('i18n-change', () => {
     if (!_state.rendered) return;
+    // 外壳只渲染一次 ⇒ 静态 chrome（侧栏/工具栏/菜单）靠定点重标签换语言；
+    // 树与右列本来就能重渲染，顺手一起刷新。
+    _relabelWorkbench();
     _renderTree();
     _renderRight();
   });
