@@ -1371,7 +1371,7 @@
         return `
         <div class="fam-hd">
           <span class="nm">${renaming
-            ? `${window.uiInput({ id: `ca-family-name-${esc(group.anchorId)}`, value: esc(group.title || ''), attrs: { 'data-family-name': '1', maxlength: '40' }, className: 'litxt' })}${btn(T('common.save', '保存'), 'family-rename-save', { id: group.anchorId, className: 'rnm' })}${btn(T('common.cancel', '取消'), 'family-rename-cancel', { className: 'rnm is-muted' })}`
+            ? `${window.uiInput({ id: `ca-family-name-${esc(group.anchorId)}`, value: group.title || '', attrs: { 'data-family-name': '1', maxlength: '40' }, className: 'litxt' })}${btn(T('common.save', '保存'), 'family-rename-save', { id: group.anchorId, className: 'rnm' })}${btn(T('common.cancel', '取消'), 'family-rename-cancel', { className: 'rnm is-muted' })}`
             : group.title
               ? `${esc(group.title)} <span class="n">${esc(T('cognition.family_group_count', '{n} 条同类', { n: String(group.assets.length) }))}</span>${group.anchorId ? btn(group.named ? T('cognition.family_rename_done', '改名') : T('cognition.family_rename', '命名'), 'family-rename', { id: group.anchorId, className: 'rnm' }) : ''}`
               : `<span class="n">${esc(T('cognition.family_unsorted', '未归类'))}</span>`}</span>
