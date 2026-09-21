@@ -748,6 +748,32 @@ export const userMarketplaceAgentSkillsDir = (uid: string, id: string) =>
 export const userMarketplaceSkillDir   = (uid: string, id: string) =>
   path.join(userMarketplaceSkillsDir(uid), id);
 
+// ── Hub immutable version copies (`<uid>/local/marketplace/versions/`) ──
+// **A second tree, deliberately separate from `skills/` above.** `skills/<content_id>/` is the
+// one version the user currently sees; `versions/<content_id>/<version>/` holds copies that a
+// still-running Task has pinned. Keeping them apart is what lets a pinned run keep reading the
+// version it started on while the current install moves ahead (specs/010, route C).
+// Unrelated to the authoring-flow version envelope under `cloud/skills/versions/`.
+export const userMarketplaceVersionsDir = (uid: string) =>
+  path.join(userMarketplaceDir(uid), 'versions');
+export const userMarketplaceContentVersionsDir = (uid: string, contentId: string) =>
+  path.join(userMarketplaceVersionsDir(uid), contentId);
+export const userMarketplaceVersionDir = (uid: string, contentId: string, version: string) =>
+  path.join(userMarketplaceContentVersionsDir(uid, contentId), version);
+export const userMarketplaceVersionTreeDir = (uid: string, contentId: string, version: string) =>
+  path.join(userMarketplaceVersionDir(uid, contentId, version), 'tree');
+export const userMarketplaceVersionMetaFile = (uid: string, contentId: string, version: string) =>
+  path.join(userMarketplaceVersionDir(uid, contentId, version), 'meta.json');
+
+// ── Fork-to-custom intent journal (specs/010 FR-055) ──────────────────────
+// Written BEFORE the official copy is uninstalled and cleared only once the custom copy exists.
+// It records **intent only** — never content — so the frozen order (uninstall, then copy) is
+// untouched while a crash in the gap between them stays recoverable: boot recovery finds the
+// journal, sees the version copy is still there, and finishes the fork instead of leaving the
+// user with neither copy. Dot-prefixed so it can never be mistaken for a content dir.
+export const userMarketplaceForkIntentFile = (uid: string, contentId: string) =>
+  path.join(userMarketplaceDir(uid), `.fork-intent-${contentId}.json`);
+
 // ── Marketplace install manifest (cloud-synced) ────────────────────────
 // `<uid>/cloud/marketplace/installs.json` — the only marketplace state that crosses devices.
 // Format: { version, agents:[{id, version, published_at, agent_json_url, installed_at}],

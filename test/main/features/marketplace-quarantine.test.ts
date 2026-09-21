@@ -35,6 +35,12 @@ vi.mock('../../../src/main/logger', () => ({
 // retry helper is the seam, not the module export.
 vi.mock('../../../src/main/util/retry', () => ({
   fetchWithRetry: fetchMock,
+  // 取字节路径的 seam；本用例预置了缓存，不应走到它——留一个会爆的实现把这件事钉死。
+  fetchAndReadWithRetry: vi.fn(async () => {
+    throw new Error('byte fetch must not run: this test pre-seeds the cache');
+  }),
+  // `marketplace/errors.ts` 在装载期就引用它（FR-006 的信封归一化）。
+  serverErrorEnvelopeOf: () => null,
 }));
 
 let tmpDir = '';
@@ -80,23 +86,33 @@ afterEach(() => {
   vi.resetModules();
 });
 
-/** Mock only the detail endpoint; the install re-reads it when the cache hit
- *  returns no bundle_url. */
-function mockBundleDetail(skillId: string, createUid = '0'): void {
+/**
+ * Mock the A-01 catalog endpoint; the install re-reads it when the cache hit carries
+ * no artifact identity.
+ *
+ * ⚠️ 本函数原先 mock 的是 `/marketplace/skills/bundle` 并返回 JSON 详情（含 `bundle_url`）。
+ * A-02 按 F4 收口为**只回不可变字节**后那个形态已废止，故改为按新契约 mock A-01 目录。
+ * **不是为了让旧测试变绿而恢复旧语义**——旧语义已不存在。
+ */
+function mockBundleDetail(skillId: string, createUid = '0', version = '2.0.0'): void {
   fetchMock.mockImplementation(async (_key: string, url: string) => {
-    if (url.endsWith('/marketplace/skills/bundle')) {
+    if (url.endsWith('/marketplace/skills/list')) {
       return {
         status: 200,
         text: async () => JSON.stringify({
           code: 0,
-          bundle_url: `https://cdn.test/${skillId}.zip`,
-          version: '2.0.0',
-          published_at: 100,
-          updated_at: 200,
-          create_uid: createUid,
-          default_install: false,
-          status: 'approved',
-          name: skillId,
+          total: 1,
+          list: [{
+            content_id: skillId,
+            version,
+            published_at: 100,
+            updated_at: 200,
+            create_uid: createUid,
+            default_install: false,
+            status: 'approved',
+            name: skillId,
+            artifact: { sha256: 'a'.repeat(64), size_bytes: 1024, format: 'skill-tree-v1' },
+          }],
         }),
       };
     }
@@ -104,9 +120,10 @@ function mockBundleDetail(skillId: string, createUid = '0'): void {
   });
 }
 
-async function installSkill(skillId: string) {
+async function installSkill(skillId: string, version = '2.0.0') {
   const marketplace = await import('../../../src/main/features/marketplace');
-  await marketplace.installMarketplaceSkill(skillId, { version: '2.0.0', published_at: 100 });
+  // `expect` 是调用方从目录行带来的目标版本，缓存命中分支据它给出 detail.version。
+  await marketplace.installMarketplaceSkill(skillId, { version, published_at: 100 });
 }
 
 function stagingResidue(): string[] {
@@ -138,9 +155,12 @@ describe('marketplace install quarantine (W2)', () => {
 
     // Poisoned update: the cache is re-seeded with a credential-exfiltration
     // payload, and the re-install must refuse without touching the live tree.
+    // ⚠️ 必须是**更高版本**：§7.5 的单调更新规则对「等于或低于本机版本」直接不替换，
+    // 同版重装会在进入隔离区之前就返回，本用例要守的 W2 promote 路径便不会被走到。
+    // 用例自述的场景本来就是「Poisoned **update**」，这里让它名副其实。
     await seedCache('qa-clean', HIGH_FILES);
-    mockBundleDetail('qa-clean');
-    await expect(installSkill('qa-clean')).rejects.toThrow();
+    mockBundleDetail('qa-clean', '0', '3.0.0');
+    await expect(installSkill('qa-clean', '3.0.0')).rejects.toThrow();
 
     // The old content survives: the previous flow deleted the directory before
     // scanning the replacement, leaving the user with nothing on refusal.
