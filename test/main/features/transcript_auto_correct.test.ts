@@ -15,8 +15,6 @@ import {
   applyCorrections,
   computeProtectedRanges,
   detectSuspectEntities,
-  insertIssueMarkers,
-  ISSUE_MARKER,
   mapOffset,
   scanText,
   verifyEditsRebuild,
@@ -271,7 +269,7 @@ describe('语境白名单（加白，方案 §七）', () => {
   });
 });
 
-describe('未决项：疑似专名探测（保守，宁漏勿噪）', () => {
+describe('疑似专名探测（保守，宁漏勿噪；仅作模型重点线索）', () => {
   it('含内部大写/全大写的长串才算疑似专名，常见词不打扰', () => {
     const text = 'Hello 大家，KSTAR 和 NoteBookLM 都在，API 与 OK 不算。';
     const found = detectSuspectEntities(text, []).map((s) => s.text);
@@ -299,33 +297,5 @@ describe('未决项：疑似专名探测（保守，宁漏勿噪）', () => {
     const text = '前 KSTAR 后';
     const [first] = detectSuspectEntities(text, []);
     expect(text.slice(first.span.start, first.span.end)).toBe('KSTAR');
-  });
-});
-
-describe('未决项：标记写回清理版', () => {
-  it('标记插到 span 之前，且返回插入后的新 span', () => {
-    const text = 'coxy 和 KSTAR 都要核';
-    const marked = insertIssueMarkers(text, [{ start: 0, end: 4 }, { start: 7, end: 12 }]);
-    expect(marked.text).toBe(`${ISSUE_MARKER}coxy 和 ${ISSUE_MARKER}KSTAR 都要核`);
-    for (const span of marked.spans) {
-      expect(marked.text.slice(span.start, span.end)).toBe(ISSUE_MARKER);
-    }
-    expect(marked.byStart.get(0)).toEqual({ start: 0, end: ISSUE_MARKER.length });
-    expect(marked.byStart.get(7)).toEqual({
-      start: 7 + ISSUE_MARKER.length,
-      end: 7 + ISSUE_MARKER.length * 2,
-    });
-  });
-
-  it('同一位置标两次只插一个标记（否则清理版会出现两个标记）', () => {
-    const marked = insertIssueMarkers('abc', [{ start: 1, end: 2 }, { start: 1, end: 2 }]);
-    expect(marked.text).toBe(`a${ISSUE_MARKER}bc`);
-    expect(marked.spans).toHaveLength(1);
-  });
-
-  it('空输入原样返回，不产生标记', () => {
-    const marked = insertIssueMarkers('abc', []);
-    expect(marked.text).toBe('abc');
-    expect(marked.spans).toEqual([]);
   });
 });

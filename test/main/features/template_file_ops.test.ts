@@ -367,10 +367,10 @@ describe('template_file_ops › uninstall / archive / reinstall-restore', () => 
     expect(res.archived_memory_count).toBe(1);
     // 归档文件存在
     expect(fs.existsSync(path.join(res.archive_dir!, 'student.memory.md'))).toBe(true);
-    // 全局记忆已移除
+    // 搬迁后（2026-09-22）：条目在模板独立文件，卸载后独立文件删除。
     expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(0);
-    const userMd = fs.readFileSync(path.join(tmpDir, UID, 'cloud', 'memory', 'USER.md'), 'utf8');
-    expect(userMd).not.toContain('会主动核查工具执行过程');
+    const ownFile = path.join(tmpDir, UID, 'cloud', 'memory', 'role-templates', 'student.md');
+    expect(fs.existsSync(ownFile)).toBe(false);
   });
 
   it('reinstall with restoreData restores archived global memory', async () => {
@@ -384,9 +384,9 @@ describe('template_file_ops › uninstall / archive / reinstall-restore', () => 
     expect(again.ok).toBe(true);
     expect(again.restored_memory_count).toBe(1);
     expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
-    const userMd = fs.readFileSync(path.join(tmpDir, UID, 'cloud', 'memory', 'USER.md'), 'utf8');
-    expect(userMd).toContain('会主动核查工具执行过程');
-    expect(userMd).toContain('role_template');
+    const templateMd = fs.readFileSync(path.join(tmpDir, UID, 'cloud', 'memory', 'role-templates', 'student.md'), 'utf8');
+    expect(templateMd).toContain('会主动核查工具执行过程');
+    expect(templateMd).toContain('role_template');
   });
 
   it('reinstall without restoreData does not restore archived memory', async () => {

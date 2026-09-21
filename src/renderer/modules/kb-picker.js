@@ -21,6 +21,34 @@ let _kbPickerScope = { type: 'global' };
 let _kbPickerTitleKey = 'kb_picker.title';
 let _kbPickerCustomTitle = '';
 let _kbPickerMessage = null;
+let _kbPickerController = null;
+let _kbPickerPendingResult = null;
+
+function _kbPickerSettle(result) {
+  if (!_kbPickerResolve) return;
+  const resolve = _kbPickerResolve;
+  _kbPickerResolve = null;
+  resolve(result);
+}
+
+function _kbPickerEnsureController(modal) {
+  if (_kbPickerController || typeof window.uiModalController !== 'function') return;
+  const dialog = modal.querySelector('[role="dialog"]');
+  if (!dialog) return;
+  _kbPickerController = window.uiModalController({
+    overlay: modal,
+    dialog,
+    initialFocus: '#kb-picker-name',
+    onClose: () => {
+      const result = _kbPickerPendingResult;
+      _kbPickerPendingResult = null;
+      _kbPickerSettle(result);
+    },
+  });
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) closeKbPicker();
+  });
+}
 
 function _kbPickerUiIconHtml(name, className) {
   if (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') {
@@ -59,6 +87,7 @@ async function pickKbLocation(opts = {}) {
   }
 
   const modal = document.getElementById('kb-picker-modal');
+  _kbPickerEnsureController(modal);
   _kbPickerTitleKey = typeof opts.titleKey === 'string'
     ? opts.titleKey
     : (opts.title ? '' : 'kb_picker.title');
@@ -70,8 +99,11 @@ async function pickKbLocation(opts = {}) {
   _kbPickerRenderMessage();
   _kbPickerRenderTree();
   _kbPickerRenderTarget();
-  modal.classList.add('open');
-  setTimeout(() => document.getElementById('kb-picker-name')?.focus(), 40);
+  if (_kbPickerController) _kbPickerController.open(document.activeElement);
+  else {
+    modal.classList.add('open');
+    setTimeout(() => document.getElementById('kb-picker-name')?.focus(), 40);
+  }
 
   return new Promise((resolve) => { _kbPickerResolve = resolve; });
 }
@@ -216,11 +248,11 @@ function _kbPickerSetMessage(key, params, error = true) {
 }
 
 function closeKbPicker() {
-  document.getElementById('kb-picker-modal').classList.remove('open');
-  if (_kbPickerResolve) {
-    const resolve = _kbPickerResolve;
-    _kbPickerResolve = null;
-    resolve(null);
+  _kbPickerPendingResult = null;
+  if (_kbPickerController && _kbPickerController.isOpen()) _kbPickerController.close('cancel');
+  else {
+    document.getElementById('kb-picker-modal').classList.remove('open');
+    _kbPickerSettle(null);
   }
 }
 window.closeKbPicker = closeKbPicker;
@@ -265,11 +297,12 @@ async function confirmKbPicker() {
     localStorage.setItem(_kbPickerLastDirKey(_kbPickerScope), _kbPickerCurrentDir);
   } catch { /* private-mode / quota — non-fatal */ }
 
-  document.getElementById('kb-picker-modal').classList.remove('open');
-  if (_kbPickerResolve) {
-    const resolve = _kbPickerResolve;
-    _kbPickerResolve = null;
-    resolve({ path: fullPath });
+  _kbPickerPendingResult = { path: fullPath };
+  if (_kbPickerController && _kbPickerController.isOpen()) _kbPickerController.close('confirm');
+  else {
+    document.getElementById('kb-picker-modal').classList.remove('open');
+    _kbPickerSettle(_kbPickerPendingResult);
+    _kbPickerPendingResult = null;
   }
 }
 window.confirmKbPicker = confirmKbPicker;

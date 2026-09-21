@@ -37,6 +37,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   try {
     const manager = await import('../../../src/main/features/messaging/manager');
     await manager.stopForUser('user-1');
@@ -46,7 +47,6 @@ afterEach(async () => {
     await Promise.all(userBindings.map((binding) => bus.abort('user-1', binding.cid)));
     await drainMainRuntimeForTest('user-1');
   } catch { /* cleanup assertions below still report real filesystem leaks */ }
-  vi.useRealTimers();
   vi.unstubAllGlobals();
   if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
@@ -54,7 +54,9 @@ afterEach(async () => {
 });
 
 async function seededFeishu(uid: string, allowUserIds: string[] = []) {
-  vi.useFakeTimers();
+  // Only the binding-window deadline needs a controllable clock. Keep timers
+  // real so burst flushing and Windows filesystem retry sleeps can settle.
+  vi.useFakeTimers({ toFake: ['Date'] });
   const adapter = connectedAdapter();
   vi.doMock('../../../src/main/features/messaging/adapters', () => ({ createAdapter: vi.fn(() => adapter) }));
   const groupSend = vi.fn(async () => ({ ok: true }));
@@ -96,8 +98,7 @@ function envelope(instanceId: string, overrides: Record<string, unknown> = {}) {
 }
 
 async function drain(groupSend: ReturnType<typeof vi.fn>) {
-  await vi.advanceTimersByTimeAsync(600);
-  await vi.waitFor(() => expect(groupSend).toHaveBeenCalled());
+  await vi.waitFor(() => expect(groupSend).toHaveBeenCalled(), { timeout: 5_000 });
 }
 
 describe('messaging owner auto-bind from direct message', () => {
@@ -115,8 +116,8 @@ describe('messaging owner auto-bind from direct message', () => {
       ownerExternalUserName: 'Sender One',
       ownerIdentitySource: 'auto',
     });
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 
   it('auto-opens the binding window when the bot is enabled', async () => {
@@ -132,8 +133,8 @@ describe('messaging owner auto-bind from direct message', () => {
       ownerExternalUserId: 'ou_sender_1',
       ownerIdentitySource: 'auto',
     });
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 
   it('ignores group messages inside the window', async () => {
@@ -141,26 +142,25 @@ describe('messaging owner auto-bind from direct message', () => {
     const { manager, registry, instanceId } = await seededFeishu(uid, ['ou_sender_1']);
     manager.openOwnerBindingWindow(uid, instanceId);
     const inbound = manager.enqueueInbound(uid, envelope(instanceId, { isGroup: true, externalChatId: 'oc_group_1' }));
-    await vi.advanceTimersByTimeAsync(600);
     await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).not.toHaveProperty('ownerExternalUserId');
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 
   it('does not bind after the window expires', async () => {
     const uid = 'user-1';
     const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
     manager.openOwnerBindingWindow(uid, instanceId);
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1000);
     const inbound = manager.enqueueInbound(uid, envelope(instanceId));
     await drain(groupSend);
     await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).not.toHaveProperty('ownerExternalUserId');
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 
   it('does not overwrite an existing owner', async () => {
@@ -177,8 +177,8 @@ describe('messaging owner auto-bind from direct message', () => {
     await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).toMatchObject({ ownerExternalUserId: 'ou_existing' });
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 
   it('closes the window after a successful bind', async () => {
@@ -191,12 +191,11 @@ describe('messaging owner auto-bind from direct message', () => {
     // Second message from a different sender must not rebind; the allowlist
     // only admits the original sender, so no dispatch is expected here.
     const secondInbound = manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-2', externalUserId: 'ou_other' }));
-    await vi.advanceTimersByTimeAsync(600);
     await secondInbound;
 
     expect(await registry.getInstance(uid, instanceId)).toMatchObject({ ownerExternalUserId: 'ou_sender_1' });
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 
   it('reports live binding-window status and clears it on expiry', async () => {
@@ -207,9 +206,9 @@ describe('messaging owner auto-bind from direct message', () => {
     expect(live).toMatchObject({ binding: true });
     expect(live?.remainingMs).toBeGreaterThan(0);
     expect(live?.remainingMs).toBeLessThanOrEqual(5 * 60 * 1000);
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1000);
     expect(manager.getOwnerBindingStatus(uid, instanceId)).toBeNull();
-    await manager.stopForUser(uid);
     vi.useRealTimers();
+    await manager.stopForUser(uid);
   });
 });

@@ -6,6 +6,10 @@ let accessPassword = '';
 // current view: 'new-chat' | 'conversation' | 'agents'
 let currentView = 'new-chat';
 let currentCid = null;
+// 最近进入过的会话（2026-09-19 用户主动使用）：切到认知资产等面板时
+// currentCid 会被清空，但「用到当前对话」需要知道用户刚在哪个会话——
+// 独立记录、不清空，null=本会话还没进过任何对话。
+let lastConversationCid = null;
 let conversations = [];
 let _pendingTaskNotificationNavigation = null;
 
@@ -204,17 +208,9 @@ function startPolling(cid) {
         return;
       }
 
-      // Server crashed mid-request: processing=true but stuck longer than the
-      // model idle watchdog (30 min) + a small buffer. Shorter thresholds would
-      // trip on genuine long agent runs.
-      const since = data.conversation?.processing_since;
-      if (_isPolledUserMsg(last) && data.conversation?.processing === true && since) {
-        const elapsedSec = (Date.now() - new Date(since).getTime()) / 1000;
-        if (elapsedSec > 2100) {
-          stopPolling(cid);
-          _onPolledResponse(cid, t('chat.reply_timeout'), true);
-        }
-      }
+      // `processing_since` is only a display timer anchor. The renderer must
+      // not manufacture a terminal result while the server still owns an
+      // active task, regardless of elapsed wall-clock time.
     } catch (_) {}
   }, 3000);
   pollTimers.set(cid, timer);

@@ -1,4 +1,5 @@
 import { createLogger } from '../../logger';
+import { makeDisplayTitle } from '../recall/statement-fusion';
 import type { KstarCandidateProposal } from './types';
 
 const log = createLogger('kstar.personal-assets');
@@ -64,7 +65,8 @@ export function personalStatementsToProposals(
 ): KstarCandidateProposal[] {
   return statements.map((statement) => ({
     judgment: statement,
-    summary: statement.slice(0, 80),
+    // 标题取首个完整句（禁残片裸截断，2026-09-19 候选归一化）。
+    summary: makeDisplayTitle(statement),
     uncertainty: '基于用户长期偏好陈述生成，使用前可复核。',
     suggestedType: 'personal',
     suggestedScope: 'personal',

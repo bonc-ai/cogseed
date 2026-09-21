@@ -90,12 +90,48 @@ export interface GroupContentResult {
   error?: string;
 }
 
-/** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5）。 */
+/** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5），
+ *  可选信息截至时间标记 `@asof:<YYYY-MM>`（2026-09-19 本体增强：值正确时
+ *  所属的年月，对应蓝图 R26 时间完整性——相对表述保留原词，超龄标
+ *  needs-refresh，机器不自动判死），可选核实标记 `@verified`（2026-09-20
+ *  断言核实维度：用户亲手验证过这条值，对应蓝图五维度的核实状态。
+ *  单档手动——只由用户点，确认写入不自动带，无使用回执不自动升）。 */
 export interface FieldValue {
   value: string;
   source: string;
   /** 可选：来源项目 id（落盘 `@proj:<pid>`，展示层映射项目名）。缺省 = 全局/手动。 */
   project?: string;
+  /** 可选：信息截至年月（落盘 `@asof:YYYY-MM`）。缺省 = 未标注（不参与时效判断）。 */
+  asOf?: string;
+  /** 可选：用户已核实（落盘 `@verified` 裸标记=有来源支持；`@verified:independent`
+   *  =独立核实过——spec 007 两档，存量裸标向后兼容）。缺省 = 未核实。 */
+  verified?: boolean | 'independent';
+  /** 可选：规则分类（spec 007 T301，关系值/规则用）：operation 操作规则 /
+   *  preference 偏好 / constraint 约束。落盘 `@kind:<v>`。缺省 = 未分类。 */
+  ruleKind?: 'operation' | 'preference' | 'constraint';
+  /** 可选：敏感性（spec 007 T302）：restricted 的值不进任务注入与世界模型
+   *  ontologyFacts（授权切片地基）。落盘 `@restricted`。缺省 = standard。 */
+  sensitivity?: 'restricted';
+}
+
+/** `@asof:` 合法年月：1900-2099 年 + 01-12 月。写错的（如 2026-13）不认作
+ *  asOf 也不落 project——它显然是想写时间，落 project 会把笔误当项目 id。 */
+const ASOF_MARKER_RE = /^asof:((?:19|20)\d{2})-(0[1-9]|1[0-2])$/;
+
+/** asof 超龄判定（月差 > 12 = 可能过时）。12 个月是提醒阈值不是判死：稳定的
+ *  事实（出生年）到龄也只标不改，删除/刷新权在用户。 */
+export const ASOF_STALE_MONTHS = 12;
+
+/** 纯函数：某条 asOf（YYYY-MM）距今是否超龄。非法输入返回 false（无从判断
+ *  就不制造噪音，与"无 asof 不标"同一原则）。 */
+export function isStaleAsOf(asOf: string | undefined, now: Date = new Date()): boolean {
+  if (typeof asOf !== 'string') return false;
+  const match = asOf.match(/^((?:19|20)\d{2})-(0[1-9]|1[0-2])$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const monthsSince = (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
+  return monthsSince > ASOF_STALE_MONTHS;
 }
 
 /** 组内容文件的结构化视图：字段区（多值）+ 流水区（条目数组）。 */
@@ -158,19 +194,38 @@ export function splitFlowEntries(text: string): string[] {
     .filter(Boolean);
 }
 
-/** 匹配 `- <值> [<来源>]`（可选 `@proj:<pid>` 来源项目标记）；值内的 `\\[` 转义在此还原为 `[`。
+/** 匹配 `- <值> [<来源>]`（可选多个 `@` 标记：`@proj:<pid>` 项目、
+ *  `@asof:<YYYY-MM>` 信息截至时间，顺序不限）；值内的 `\\[` 转义在此还原为 `[`。
  *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
- *  `@` 标记以 `proj:` 前缀剥离存 pid；其他形态（理论无）宽容保留原样。 */
-export function parseFieldValueLine(line: string): { value: string; source: string; project?: string } | null {
+ *  `@proj:` 前缀剥离存 pid；`asof:` 前缀合法年月存 asOf、写错忽略（笔误的
+ *  时间不该落进 project 冒充项目 id）；其他形态宽容保留原样（原行为）。 */
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent'; ruleKind?: 'operation' | 'preference' | 'constraint'; sensitivity?: 'restricted' } | null {
   if (typeof line !== 'string') return null;
-  const withSource = line.match(/^- (.+) \[(\S+)\](?: @([^\s]+))?$/);
+  const withSource = line.match(/^- (.+) \[(\S+)\]((?: @\S+)*)$/);
   if (withSource) {
-    const out: { value: string; source: string; project?: string } = {
+    const out: { value: string; source: string; project?: string; asOf?: string; verified?: boolean | 'independent'; ruleKind?: 'operation' | 'preference' | 'constraint'; sensitivity?: 'restricted' } = {
       value: withSource[1].replace(/\\\[/g, '['),
       source: withSource[2],
     };
-    const marker = withSource[3];
-    if (marker) out.project = marker.startsWith('proj:') ? marker.slice('proj:'.length) : marker;
+    const markers = withSource[3].match(/@(\S+)/g) || [];
+    for (const raw of markers) {
+      const marker = raw.slice(1);
+      if (marker === 'verified') {
+        out.verified = true; // 裸标记=有来源支持（存量兼容）；先于前缀判断，防掉进 project
+      } else if (marker === 'verified:independent') {
+        out.verified = 'independent'; // 独立核实过（两档中更强的一档）
+      } else if (marker.startsWith('proj:')) {
+        out.project = marker.slice('proj:'.length);
+      } else if (marker.startsWith('asof:')) {
+        if (ASOF_MARKER_RE.test(marker)) out.asOf = marker.slice('asof:'.length);
+      } else if (marker === 'kind:operation' || marker === 'kind:preference' || marker === 'kind:constraint') {
+        out.ruleKind = marker.slice('kind:'.length) as 'operation' | 'preference' | 'constraint';
+      } else if (marker === 'restricted') {
+        out.sensitivity = 'restricted';
+      } else {
+        out.project = marker;
+      }
+    }
     return out;
   }
   const bare = line.match(/^- (.+)$/);
@@ -178,10 +233,18 @@ export function parseFieldValueLine(line: string): { value: string; source: stri
   return { value: bare[1].replace(/\\\[/g, '['), source: '手动' };
 }
 
-/** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目则追加 `@proj:<pid>`。 */
+/** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目/截至
+ *  时间/核实则依次追加 `@proj:<pid>`、`@asof:<YYYY-MM>`、`@verified`。 */
 export function serializeFieldValueLine(fv: FieldValue): string {
   const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
-  return fv.project ? `${base} @proj:${fv.project}` : base;
+  const withProject = fv.project ? `${base} @proj:${fv.project}` : base;
+  const withAsOf = fv.asOf ? `${withProject} @asof:${fv.asOf}` : withProject;
+  let withVerified = withAsOf;
+  if (fv.verified === 'independent') withVerified = `${withVerified} @verified:independent`;
+  else if (fv.verified) withVerified = `${withVerified} @verified`;
+  if (fv.ruleKind) withVerified = `${withVerified} @kind:${fv.ruleKind}`;
+  if (fv.sensitivity === 'restricted') withVerified = `${withVerified} @restricted`;
+  return withVerified;
 }
 
 /** 解析字段区文本（`## 字段区` 与 `## 流水区` 之间的部分）为字段表。 */
@@ -384,6 +447,80 @@ export { notifyGroupUpserted, notifyGroupDeleted };
 
 type Mutator = (content: GroupContent) => { changed?: boolean; ok?: boolean; error?: string };
 
+const HISTORY_DIR = '.history';
+const HISTORY_MAX_PER_GROUP = 50;
+
+function groupHistoryDir(uid: string, groupId: string): string {
+  return path.join(userOntologyGroupsDir(uid), HISTORY_DIR, groupId);
+}
+
+function snapshotGroupHistory(uid: string, groupId: string, text: string): void {
+  try {
+    if (!text.trim()) return; // 首次创建（原文为空）不留快照
+    const dir = groupHistoryDir(uid, groupId);
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(dir, `${stamp}.md`), text, 'utf8');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
+    while (files.length > HISTORY_MAX_PER_GROUP) {
+      fs.rmSync(path.join(dir, files.shift() as string));
+    }
+  } catch {
+    // 历史快照失败不阻塞写入（尽力而为的审计层）。
+  }
+}
+
+/** 组变更历史（新→旧）：[{ id, savedAt, bytes, preview }]。 */
+export function listGroupHistory(uid: string, groupId: string): Array<{ id: string; savedAt: string; bytes: number; preview: string }> {
+  if (!safeId(uid) || !safeId(groupId)) return [];
+  try {
+    const dir = groupHistoryDir(uid, groupId);
+    return fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .sort()
+      .reverse()
+      .map((f) => {
+        const text = fs.readFileSync(path.join(dir, f), 'utf8');
+        return {
+          id: f.slice(0, -3),
+          // 文件名把 ISO 的 `[:.]` 全换成 `-`；反解按位置还原：4/7 是日期
+          // 分隔，13/16 是时:分与分:秒的冒号，19 是毫秒点。此前 13↔19 写反，
+          // 还原出 `T12.34:56:789Z` 这类无效时间，前端 new Date() 得 NaN。
+          savedAt: f.slice(0, -3).replace(/-/g, (m, i) => (i === 4 || i === 7 ? '-' : i === 13 || i === 16 ? ':' : i === 19 ? '.' : m)),
+          bytes: Buffer.byteLength(text, 'utf8'),
+          preview: text.replace(/\s+/g, ' ').slice(0, 80),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** 恢复某版快照：当前文本先快照（可再回滚回来），再写回快照内容。 */
+export async function restoreGroupSnapshot(uid: string, groupId: string, snapshotId: string): Promise<SimpleResult> {
+  if (!safeId(uid) || !safeId(groupId)) return { ok: false, error: 'invalid uid or groupId' };
+  if (!/^[0-9TZ-]+$/.test(snapshotId)) return { ok: false, error: 'invalid snapshot id' };
+  const snapPath = path.join(groupHistoryDir(uid, groupId), `${snapshotId}.md`);
+  if (!fs.existsSync(snapPath)) return { ok: false, error: 'snapshot not found' };
+  return mutateGroupContent(uid, groupId, () => ({ changed: false })) // 走常规校验取 abs
+    .then(async () => {
+      const groups = readGroups(uid);
+      const meta = groups.find((g) => g.group_id === groupId);
+      if (!meta) return { ok: false, error: 'group not found' };
+      const abs = resolveGroupFileAbsPathFromMeta(uid, meta);
+      snapshotGroupHistory(uid, groupId, readTextSafe(abs)); // 当前版留档
+      writeTextAtomicSync(abs, fs.readFileSync(snapPath, 'utf8'));
+      groups[idxOf(groups, groupId)] = { ...groups[idxOf(groups, groupId)], updated_at: nowIso() };
+      writeGroups(uid, groups);
+      notifyGroupUpserted(uid, meta.rel_path);
+      return { ok: true };
+    });
+}
+
+function idxOf(groups: GroupMeta[], groupId: string): number {
+  return groups.findIndex((g) => g.group_id === groupId);
+}
+
 async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const groups = readGroups(uid);
@@ -394,7 +531,8 @@ async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator
   try { abs = resolveGroupFileAbsPathFromMeta(uid, groups[idx]); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
 
-  const content = parseGroupContent(readTextSafe(abs));
+  const previousText = readTextSafe(abs);
+  const content = parseGroupContent(previousText);
   const outcome = mutator(content);
   if (outcome.error || outcome.ok === false) return { ok: false, error: outcome.error || 'failed' };
 
@@ -402,6 +540,12 @@ async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator
   const bytes = Buffer.byteLength(next, 'utf8');
   if (bytes > MAX_FILE_BYTES) {
     return { ok: false, error: `file exceeds ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB limit` };
+  }
+
+  if (next !== previousText) {
+    // 变更历史（spec 007 T304，蓝图「变更集可回滚」）：覆盖前把原文快照进
+    // .history/<groupId>/，上限滚动删最旧；恢复走 restoreGroupSnapshot。
+    snapshotGroupHistory(uid, groupId, previousText);
   }
 
   try {
@@ -573,6 +717,9 @@ export async function appendFieldValue(
   value: string,
   source: string,
   project?: string,
+  /** 信息截至年月（YYYY-MM，落 `@asof:`）。候选确认等智能写入自动带当前月
+   *  ——蓝图 R26：确认时刻认为正确，就该有时间锚。用户手写不带，不强制。 */
+  asOf?: string,
 ): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const name = String(fieldName || '').trim();
@@ -581,15 +728,28 @@ export async function appendFieldValue(
   if (!val) return { ok: false, error: 'empty value' };
   const src = normalizeSource(source);
   const proj = project ? String(project).trim() : undefined;
+  const validAsOf = asOf && /^((?:19|20)\d{2})-(0[1-9]|1[0-2])$/.test(asOf) ? asOf : undefined;
 
-  return mutateGroupContent(uid, groupId, (content) => {
+  let existingSnapshot: string[] = [];
+  let appended = false;
+  const result = await mutateGroupContent(uid, groupId, (content) => {
     const values = content.fields[name] || (content.fields[name] = []);
+    existingSnapshot = values.map((fv) => fv.value);
     if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 完全匹配去重
     }
-    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}), ...(validAsOf ? { asOf: validAsOf } : {}) });
+    appended = true;
     return { changed: true };
   });
+  // 写后矛盾检查（蓝图 R32）：保存与检查互相独立——fire-and-forget，保存
+  // 的「成功」从不承诺「查过没问题」，检查结论只报忧不报喜（台账+界面标记）。
+  if (result.ok && appended && existingSnapshot.length) {
+    void import('./recall/ontology-conflicts')
+      .then((m) => m.checkNewValueAgainst(uid, groupId, name, val, existingSnapshot))
+      .catch(() => {});
+  }
+  return result;
 }
 
 /** 字段区：按值匹配替换那一行（保留原来源标记）。 */
@@ -613,6 +773,103 @@ export async function setFieldValue(
     if (idx === -1) return { ok: false, error: 'field value not found' };
     values[idx] = { ...values[idx], value: next };
     return { changed: true };
+  });
+}
+
+/** 字段值核实档 toggle（2026-09-20 断言核实维度；spec 007 升两档）：
+ *  level = false 取消 / true 有来源支持（裸 @verified）/ 'independent' 独立
+ *  核实过。同值多行一起切；只改 verified 位，不动其他标记。 */
+export async function setFieldValueVerified(
+  uid: string,
+  groupId: string,
+  fieldName: string,
+  value: string,
+  level: boolean | 'independent',
+): Promise<SimpleResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name) return { ok: false, error: 'field name required' };
+  if (!val) return { ok: false, error: 'empty value' };
+
+  return mutateGroupContent(uid, groupId, (content) => {
+    const values = content.fields[name];
+    if (!values || !values.some((fv) => fv.value === val)) {
+      return { ok: false, error: 'field value not found' };
+    }
+    let changed = false;
+    const next: boolean | 'independent' | undefined = level === false ? undefined : level;
+    for (const fv of values) {
+      if (fv.value !== val) continue;
+      if (fv.verified !== next) changed = true;
+      if (next === undefined) delete fv.verified;
+      else fv.verified = next;
+    }
+    return changed ? { changed: true } : { changed: false };
+  });
+}
+
+/** 规则分类循环 toggle（spec 007 T301）：无 → operation → preference →
+ *  constraint → 无。仅关系值形状的行有分类语义（普通值标了也不影响解析）。 */
+export async function cycleFieldValueRuleKind(
+  uid: string,
+  groupId: string,
+  fieldName: string,
+  value: string,
+): Promise<SimpleResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name || !val) return { ok: false, error: 'field name or value required' };
+  const ORDER: Array<'operation' | 'preference' | 'constraint' | undefined> =
+    [undefined, 'operation', 'preference', 'constraint'];
+
+  return mutateGroupContent(uid, groupId, (content) => {
+    const values = content.fields[name];
+    if (!values || !values.some((fv) => fv.value === val)) {
+      return { ok: false, error: 'field value not found' };
+    }
+    let changed = false;
+    for (const fv of values) {
+      if (fv.value !== val) continue;
+      const idx = ORDER.indexOf(fv.ruleKind);
+      const next = ORDER[(idx + 1) % ORDER.length];
+      if (fv.ruleKind !== next) changed = true;
+      if (next === undefined) delete fv.ruleKind;
+      else fv.ruleKind = next;
+    }
+    return changed ? { changed: true } : { changed: false };
+  });
+}
+
+/** 敏感性 toggle（spec 007 T302）：standard ⇄ restricted。restricted 的值
+ *  由注入侧过滤（projection-knowledge），不进任务上下文与世界模型。 */
+export async function setFieldValueSensitivity(
+  uid: string,
+  groupId: string,
+  fieldName: string,
+  value: string,
+  restricted: boolean,
+): Promise<SimpleResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name || !val) return { ok: false, error: 'field name or value required' };
+
+  return mutateGroupContent(uid, groupId, (content) => {
+    const values = content.fields[name];
+    if (!values || !values.some((fv) => fv.value === val)) {
+      return { ok: false, error: 'field value not found' };
+    }
+    let changed = false;
+    for (const fv of values) {
+      if (fv.value !== val) continue;
+      const next = restricted ? 'restricted' as const : undefined;
+      if (fv.sensitivity !== next) changed = true;
+      if (next === undefined) delete fv.sensitivity;
+      else fv.sensitivity = next;
+    }
+    return changed ? { changed: true } : { changed: false };
   });
 }
 

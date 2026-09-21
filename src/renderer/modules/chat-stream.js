@@ -233,6 +233,26 @@ function _csUpgradeFlowForLive(flow, startedAtMs) {
 }
 
 /** 收起/展开时间线正文（徽章点击唯一入口；aria 同步）。 */
+function _csUpdateRunningBadge(flow, label) {
+  if (!flow || flow.dataset.csTerminal === '1' || !flow._csBadge) return;
+  const labelEl = flow._csBadge.querySelector('.cs-badge-label');
+  if (labelEl && label) labelEl.textContent = String(label);
+  let tools = flow._csBadge.querySelector('.cs-badge-tools');
+  if (!tools) {
+    tools = document.createElement('span');
+    tools.className = 'cs-badge-tools';
+    flow._csBadge.appendChild(tools);
+  }
+  const body = flow.querySelector('.cs-flow-body');
+  let toolCount = 0;
+  if (body && body.children) {
+    for (let i = 0; i < body.children.length; i += 1) {
+      if (String(body.children[i].className || '').includes('cs-toolExecution')) toolCount += 1;
+    }
+  }
+  tools.textContent = toolCount > 0 ? `${toolCount} 次工具调用` : '';
+}
+
 function _csSetCollapsed(flow, collapsed) {
   const body = flow.querySelector('.cs-flow-body');
   if (!body) return;
@@ -939,6 +959,32 @@ window.chatStreamFinalize = function chatStreamFinalize(cid) {
 
 // ── 事件入口（conversation.js 调用） ───────────────────────────────────────
 
+/** Keep provider retries visible on the always-present badge even when the
+ * detailed process timeline is collapsed. Partial text is never cleared. */
+window.chatStreamSetRuntimeStatus = function chatStreamSetRuntimeStatus(cid, anchor, status) {
+  let flow = anchor && typeof anchor.querySelector === 'function'
+    ? anchor.querySelector('.cs-flow') : null;
+  if (!flow && anchor && anchor.parentNode && anchor.parentNode.children) {
+    flow = Array.from(anchor.parentNode.children)
+      .find((child) => String(child.className || '').includes('cs-flow')) || null;
+  }
+  if (!flow) {
+    const running = [];
+    for (const [key, candidate] of _csPanels.entries()) {
+      if (!key.startsWith(`${cid}::`) || !candidate.isConnected || !candidate.classList.contains('running')) continue;
+      running.push(candidate);
+    }
+    flow = running.length === 1 ? running[0] : null;
+  }
+  if (!flow) return;
+  if (status && status.type === 'retry') {
+    const attempt = Math.max(1, Math.round(Number(status.attempt) || 1));
+    _csUpdateRunningBadge(flow, attempt > 1
+      ? `模型连接中断，正在重试（第 ${attempt} 次）`
+      : '模型连接中断，正在重试');
+  }
+};
+
 window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatEvent) {
   if (!chatEvent || typeof chatEvent !== 'object') return;
   try {
@@ -976,6 +1022,7 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
         const last = kids[kids.length - 1];
         let seg = (last && last.className && String(last.className).includes('cs-text')
           && last.dataset.csClosed !== '1') ? last : null;
+        _csUpdateRunningBadge(flow, '继续生成中');
         if (!seg) {
           // 投影器在工具行后会补发 '\n\n' 分隔 delta（供 markdown 段落分隔）；
           // 时间线段剥掉段首空白（行间距已分隔），否则渲染出一块空行。
@@ -1029,7 +1076,10 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       }
       _csCloseThinkRow(body);
       const row = _csEnsureItemRow(body, itemId, kind);
-      if (kind === 'toolExecution') _csRenderToolRow(row, payload, status);
+      if (kind === 'toolExecution') {
+        _csRenderToolRow(row, payload, status);
+        _csUpdateRunningBadge(flow, '工具执行中');
+      }
       else if (kind === 'fileChange') _csRenderDiffRow(row, payload);
       else if (kind === 'usage') _csRenderUsageRow(row, payload);
       return;

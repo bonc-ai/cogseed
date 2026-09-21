@@ -44,16 +44,25 @@ function call(channel: string, payload: unknown = {}) {
 }
 
 describe('ipc › personal ontology templates', () => {
-  it('does not register the retired personal ontology candidate channels', async () => {
-    const retiredChannels = [
+  it('re-exposes single-item candidate channels for backflow confirmation while keeping batch channels retired', async () => {
+    // 2026-09-20 本体分组迁入：回流候选的确认端需要 list/confirm/reject 三个
+    // 单条通道——旧候选审核面板退役时的「全禁」约束随之收窄（防的是面板复活，
+    // 不是防回流确认这个窄入口）。批量与 onboarding 通道保持退役。
+    const liveChannels = [
       'personalOntology.candidates.list',
       'personalOntology.candidates.confirm',
       'personalOntology.candidates.reject',
+    ];
+    for (const channel of liveChannels) {
+      const res = await call(channel);
+      expect(res).not.toEqual({ ok: false, error: `unknown channel: ${channel}` });
+    }
+
+    const retiredChannels = [
       'personalOntology.candidates.confirmBatch',
       'personalOntology.candidates.rejectBatch',
       'personalOntology.candidates.addFromOnboarding',
     ];
-
     for (const channel of retiredChannels) {
       await expect(call(channel)).resolves.toEqual({
         ok: false,

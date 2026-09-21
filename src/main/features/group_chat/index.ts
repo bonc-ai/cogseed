@@ -436,7 +436,7 @@ async function _retitleAfterFirstUserMessageEdit(
 
 
 export async function sendCommanderMessage(
-  input: { userId: string; cid: string; text: string; recall_projection_card?: { projectionId: string } },
+  input: { userId: string; cid: string; text: string; recall_projection_card?: { projectionId: string; authorization?: string; presentation?: 'sidecar' } },
 ): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
   const { userId, cid, text, recall_projection_card } = input;
   if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
@@ -466,7 +466,9 @@ export interface SendInput {
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: Array<{ source_cid: string; source_msg_id: string }>;
-  recall_projection_card?: { projectionId: string };
+  recall_projection_card?: { projectionId: string; authorization?: string; presentation?: 'sidecar' };
+  /** Explicit projection receipt ownership on the final user-visible turn message. */
+  projection_receipt?: { projectionId: string; authorization: string };
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   recipient_agent_id?: string;
   recipient_origin?: 'user_selection' | 'cli_fallback' | 'active_floor';

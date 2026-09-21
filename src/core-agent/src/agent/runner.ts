@@ -1392,6 +1392,16 @@ export class AgentRunner {
         let endTurnRequested = false;
         let terminalBatchIndex = -1;
         const terminalSkipMessage = "A prior terminal tool ended this turn before this tool could run.";
+        const deferredToolImages: NonNullable<ToolResult["images"]>[] = [];
+        const commitToolResult = (call: ToolUseCall, toolResult: ToolResult) => {
+          this.session.addToolResult(call.id, toolResult.content, undefined, toolResult.isError);
+          if (toolResult.images?.length) deferredToolImages.push(toolResult.images);
+        };
+        const flushDeferredToolImages = () => {
+          for (const images of deferredToolImages.splice(0)) {
+            this.session.addToolImages(images);
+          }
+        };
 
         for (let batchIndex = 0; batchIndex < toolBatches.length; batchIndex++) {
           const batch = toolBatches[batchIndex];
@@ -1402,7 +1412,7 @@ export class AgentRunner {
             if (!tool) {
               yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
               const msg = `Unknown tool: ${call.name}`;
-              this.session.addToolResult(call.id, msg, undefined, true);
+              commitToolResult(call, { content: msg, isError: true });
               recordCompletedToolWork(
                 this.session,
                 call,
@@ -1458,7 +1468,7 @@ export class AgentRunner {
             }
             timings.toolMs += Math.max(0, Date.now() - sequentialToolStartedAt);
             const toolResult = outcome.result;
-            this.session.addToolResult(call.id, toolResult.content, toolResult.images, toolResult.isError);
+            commitToolResult(call, toolResult);
             recordCompletedToolWork(
               this.session,
               call,
@@ -1471,6 +1481,7 @@ export class AgentRunner {
               endTurnRequested = true;
             }
             if (outcome.aborted) {
+              flushDeferredToolImages();
               throw new Error("Run aborted");
             }
             if (outcome.stalled) {
@@ -1553,7 +1564,7 @@ export class AgentRunner {
           let parallelAborted = false;
           for (const call of batch) {
             const c = pResults.get(call.id)!;
-            this.session.addToolResult(call.id, c.result.content, c.result.images, c.result.isError);
+            commitToolResult(call, c.result);
             recordCompletedToolWork(
               this.session,
               call,
@@ -1582,6 +1593,7 @@ export class AgentRunner {
             }
           }
           if (parallelAborted) {
+            flushDeferredToolImages();
             throw new Error("Run aborted");
           }
           if (endTurnRequested) {
@@ -1594,7 +1606,7 @@ export class AgentRunner {
           for (let i = terminalBatchIndex + 1; i < toolBatches.length; i++) {
             for (const call of toolBatches[i]) {
               yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
-              this.session.addToolResult(call.id, terminalSkipMessage, undefined, true);
+              commitToolResult(call, { content: terminalSkipMessage, isError: true });
               recordCompletedToolWork(
                 this.session,
                 call,
@@ -1613,6 +1625,11 @@ export class AgentRunner {
             }
           }
         }
+
+        // Tool-result messages for one assistant tool-call turn must stay
+        // contiguous. Providers represent tool-produced images as a later user
+        // message, so append them only after every real or synthetic result.
+        flushDeferredToolImages();
 
         // Terminal tool: a tool requested endTurn. Stop the run now — the text
         // streamed this round (`turnText`) is the final reply; we skip the

@@ -23,11 +23,18 @@ import {
   isPureDigits,
   isSingleSurnameHonorific,
   listEntries,
+  listCandidates,
+  countPendingCandidates,
   loadGlossary,
   markVerified,
   migrateGlossaryV1ToV2,
   addContextAllow,
+  adoptCandidate,
+  clearCandidates,
+  discardCandidate,
+  recordCandidates,
   recordReplacement,
+  rememberConfirmedPairs,
   removeContextAllow,
   retargetEntry,
   setIgnored,
@@ -37,6 +44,7 @@ import {
   deleteEntry,
   upsertEntry,
 } from '../../../src/main/features/transcript_glossary';
+import { scanText } from '../../../src/main/features/transcript_auto_correct';
 import { userTranscriptGlossaryFile } from '../../../src/main/paths';
 
 let uid = '';
@@ -268,7 +276,7 @@ describe('CRUD 与不变量', () => {
 });
 
 describe('迁移与降级', () => {
-  it('v1 文件 → v2（补作用域/风险/台账，且落盘为 v2）', () => {
+  it('v1 文件 → 当前版本（补作用域/风险/台账，且落盘为新版本）', () => {
     const v1 = {
       version: 1,
       entries: [
@@ -281,14 +289,15 @@ describe('迁移与降级', () => {
     fs.writeFileSync(userTranscriptGlossaryFile(uid), JSON.stringify(v1), 'utf8');
 
     const loaded = loadGlossary(uid);
-    expect(loaded.version).toBe(2);
+    // 当前文件版本 = 4（v3 的候选区已移除）。老文件升到新版本即可。
+    expect(loaded.version).toBe(4);
     expect(loaded.entries).toHaveLength(1);
     expect(loaded.entries[0].action).toBe('replace');
     expect(loaded.entries[0].scope.global).toBe(true);
     expect(loaded.entries[0].scope.scenarioTags).toEqual(['组会']);
     expect(loaded.entries[0].replacedIn).toEqual([]);
     expect(loaded.meta.lastReconcileAt).toBe(9);
-    expect(JSON.parse(fs.readFileSync(userTranscriptGlossaryFile(uid), 'utf8')).version).toBe(2);
+    expect(JSON.parse(fs.readFileSync(userTranscriptGlossaryFile(uid), 'utf8')).version).toBe(4);
   });
 
   it('纯函数迁移不依赖磁盘', () => {
@@ -367,5 +376,94 @@ describe('entryId', () => {
     }));
     saveGlossary(uid, file);
     expect(loadGlossary(uid).entries.length).toBe(2000);
+  });
+});
+
+/**
+ * 「勾选并应用 = 确认」的落表路径（D1=B：模型建议被采纳后成为词表规则）。
+ *
+ * 这里钉的是一个**真实陷阱**：`upsertEntry` 里 `source === 'meeting_accept'`
+ * 只会把 `global` 置 false，却不动 `docIds` ⇒ 条目 `scopeAllows` 恒为 false，
+ * 是一条永不命中的死规则（'meeting_accept' 一直没有调用方的原因）。
+ */
+describe('rememberConfirmedPairs：确认的对才进词表，且只对本文档生效', () => {
+  it('按 meeting_accept 入册，作用域收窄到当前文档（不是全局）', () => {
+    const r = rememberConfirmedPairs(uid, [{ wrong: '付平', correct: '傅平' }], { docId: 'doc_1' });
+    expect(r).toMatchObject({ created: 1, skipped: 0 });
+    const entry = listEntries(uid, { status: 'active' })[0];
+    expect(entry).toMatchObject({ wrong: '付平', correct: '傅平', source: 'meeting_accept' });
+    expect(entry.scope.global).toBe(false);
+    expect(entry.scope.docIds).toEqual(['doc_1']);
+  });
+
+  it('该规则真的会命中本文档、且不影响别的文档（这条曾经是死规则）', () => {
+    rememberConfirmedPairs(uid, [{ wrong: '付平', correct: '傅平' }], { docId: 'doc_1' });
+    const entries = listEntries(uid, { status: 'active' });
+    const text = '这个方案要付平老师确认。';
+    const here = scanText(text, entries, { docId: 'doc_1' });
+    expect(here.candidates.map((c) => [c.wrong, c.correct])).toEqual([['付平', '傅平']]);
+    const other = scanText(text, entries, { docId: 'doc_2' });
+    expect(other.candidates).toEqual([]);
+  });
+
+  it('没有 docId 时如实跳过，不写"永不命中"的死条目', () => {
+    const r = rememberConfirmedPairs(uid, [{ wrong: 'a', correct: 'b' }], {});
+    expect(r).toMatchObject({ created: 0, skipped: 1 });
+    expect(listEntries(uid)).toEqual([]);
+  });
+
+  it('重复确认同一对是幂等更新，且同一批里的重复只算一条', () => {
+    rememberConfirmedPairs(uid, [{ wrong: '付平', correct: '傅平' }], { docId: 'doc_1' });
+    const again = rememberConfirmedPairs(uid, [
+      { wrong: '付平', correct: '傅平' },
+      { wrong: '付平', correct: '傅平' },
+    ], { docId: 'doc_1' });
+    expect(again).toMatchObject({ created: 0, updated: 1 });
+    expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
+  });
+
+  it('空目标不写脏数据，且不因单条不合法让整批失败', () => {
+    const r = rememberConfirmedPairs(uid, [
+      { wrong: '', correct: 'x' },
+      { wrong: '付平', correct: '傅平' },
+    ], { docId: 'doc_1' });
+    expect(r).toMatchObject({ created: 1, skipped: 1 });
+    expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
+  });
+});
+
+describe('新词条默认作用域（不得静默成为全局规则）', () => {
+  it('给了 docId → 仅本文档', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', source: 'manual', docId: 'doc-A' });
+    expect(created.created).toBe(true);
+    expect(created.entry!.scope).toEqual({ docIds: ['doc-A'], scenarioTags: [], global: false });
+  });
+
+  it('只给场景标签 → 仅本场景（空白标签被丢弃，保留会永久失配）', () => {
+    const created = upsertEntry(uid, {
+      wrong: 'kstar', correct: 'K star', source: 'manual', scenarioTags: ['教研会', '   '],
+    });
+    expect(created.entry!.scope).toEqual({ docIds: [], scenarioTags: ['教研会'], global: false });
+  });
+
+  it('docId 与标签都没有（如本体同步）才退到全局', () => {
+    const created = upsertEntry(uid, { wrong: 'foo term', correct: 'Foo Term', source: 'ontology_seed' });
+    expect(created.entry!.scope.global).toBe(true);
+  });
+
+  it('调用方显式给 scope 时以调用方为准', () => {
+    const created = upsertEntry(uid, {
+      wrong: 'bar term', correct: 'Bar Term', scope: { docIds: [], scenarioTags: ['x'], global: false },
+    });
+    expect(created.entry!.scope).toEqual({ docIds: [], scenarioTags: ['x'], global: false });
+  });
+
+  it('更新已有词条不因一次编辑就把作用域放宽成全局', () => {
+    const first = upsertEntry(uid, { wrong: 'baz term', correct: 'Baz Term', docId: 'doc-A' }).entry!;
+    expect(first.scope.global).toBe(false);
+    // 同词条再 upsert 一次，且这次不带任何创建上下文
+    const again = upsertEntry(uid, { wrong: 'baz term', correct: 'Baz Term' }).entry!;
+    expect(again.id).toBe(first.id);
+    expect(again.scope).toEqual({ docIds: ['doc-A'], scenarioTags: [], global: false });
   });
 });

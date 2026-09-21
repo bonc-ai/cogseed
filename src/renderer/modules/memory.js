@@ -621,8 +621,8 @@ function _memOpenModal(width, innerHtml) {
   _memCloseModal();
   const host = document.createElement('div');
   host.id = 'memory-modal-host';
-  host.className = 'memory-modal-overlay';
-  host.innerHTML = `<div class="memory-modal" style="width:${width}px" role="dialog" aria-modal="true">${innerHtml}</div>`;
+  host.className = 'ui-modal-overlay memory-modal-overlay';
+  host.innerHTML = `<div class="ui-modal memory-modal" style="width:${width}px" role="dialog" aria-modal="true">${innerHtml}</div>`;
   document.body.appendChild(host);
   if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(host);
   // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
@@ -641,13 +641,13 @@ function _memOpenModal(width, innerHtml) {
 
 function _memModalHeader(title, step, sub) {
   return `
-    <div class="memory-modal-head">
+    <div class="ui-modal__header memory-modal-head">
       <div class="memory-modal-head-main">
         <div class="memory-modal-head-titlerow">
-          <h2 class="memory-modal-title">${escapeHtml(title)}</h2>
+          <h2 class="ui-modal__title memory-modal-title">${escapeHtml(title)}</h2>
           ${step ? `<span class="memory-modal-step">${escapeHtml(step)}</span>` : ''}
         </div>
-        ${sub ? `<p class="memory-modal-sub">${escapeHtml(sub)}</p>` : ''}
+        ${sub ? `<p class="ui-modal__description memory-modal-sub">${escapeHtml(sub)}</p>` : ''}
       </div>
       ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn', attrs: { 'data-mem-action': 'modal-close' } })}
     </div>
@@ -661,7 +661,7 @@ let _memImportItems = []; // [{ text, target:'user'|'shared', kind, threat, keep
 function _memOpenImport(mode) {
   const host = _memOpenModal(560, `
     ${_memModalHeader(t('memory.import_title'), '1 / 2', t('memory.import_step1_sub'))}
-    <div class="memory-modal-body">
+    <div class="ui-modal__body memory-modal-body">
       <div class="memory-import-tabs">
         ${uiSegmentedControl({
           ariaLabel: t('memory.import_title'),
@@ -677,7 +677,7 @@ function _memOpenImport(mode) {
       </div>
       ${uiTextarea({ id: 'memory-import-text', className: 'memory-import-textarea', placeholder: t('memory.import_placeholder') })}
     </div>
-    <div class="memory-modal-foot">
+    <div class="ui-modal__footer memory-modal-foot">
       <span class="memory-import-stat muted" id="memory-import-stat"></span>
       <span class="memory-flex"></span>
       ${uiButton({ label: t('memory.cancel'), size: 'sm', attrs: { 'data-mem-action': 'modal-close' } })}
@@ -763,11 +763,11 @@ function _memOpenImportReview() {
 
   const host = _memOpenModal(620, `
     ${_memModalHeader(t('memory.review_title'), '2 / 2', t('memory.review_sub'))}
-    <div class="memory-modal-body">
+    <div class="ui-modal__body memory-modal-body">
       ${banner}
       ${rows}
     </div>
-    <div class="memory-modal-foot">
+    <div class="ui-modal__footer memory-modal-foot">
       <span class="memory-import-stat" id="memory-merge-summary"></span>
       <span class="memory-flex"></span>
       ${uiButton({ label: t('memory.back'), size: 'sm', attrs: { id: 'memory-review-back' } })}
@@ -895,7 +895,7 @@ async function _memOpenExport() {
 
   const host = _memOpenModal(460, `
     ${_memModalHeader(t('memory.export_title'), '', t('memory.export_sub'))}
-    <div class="memory-modal-body memory-export-body">
+    <div class="ui-modal__body memory-modal-body memory-export-body">
       ${row('user', files.user, t('memory.section_user'), t('memory.kind_group_user'))}
       ${row('shared', files.shared, t('memory.section_shared'), t('memory.kind_group_shared'))}
     </div>
@@ -942,16 +942,9 @@ function _memInitSettingsEntry() {
   if (card && card.dataset.bound !== '1') {
     card.dataset.bound = '1';
     card.addEventListener('click', () => {
-      if (typeof setView === 'function') setView('memory');
+      // 记忆页退役（2026-09-20）：入口改跳认知资产（个人画像/本体分组的新家）。
+      if (typeof setView === 'function') setView('recall');
     });
-  }
-  // Fill the entry-card description (with live count) on first paint.
-  _memRefreshEntryCount();
-
-  const tabBtn = document.querySelector('[data-settings-tab="data"]');
-  if (tabBtn && tabBtn.dataset.memoryBound !== '1') {
-    tabBtn.dataset.memoryBound = '1';
-    tabBtn.addEventListener('click', _memRefreshEntryCount);
   }
 }
 
@@ -963,25 +956,9 @@ if (document.readyState === 'loading') {
   _memInitSettingsEntry();
 }
 
-// Re-render the page + close any open modal on language switch so dynamic copy
-// follows the active language (static data-i18n is handled by applyDomI18n).
-window.addEventListener('i18n-change', () => {
-  _memCloseModal();
-  const panel = document.getElementById('panel-memory');
-  if (panel && panel.classList.contains('active')) renderMemoryPage();
-  // Refresh the entry-card count regardless (it lives in the settings pane).
-  _memRefreshEntryCount();
-});
-
-async function _memRefreshEntryCount() {
-  const desc = document.getElementById('memory-entry-desc');
-  if (!desc) return;
-  // Settings memory count mirrors this page: user + global shared only.
-  const info = await _memInvoke('memory.exportInfo', {});
-  let n = 0;
-  if (info && info.ok && info.files) {
-    n += (info.files.user && info.files.user.count) || 0;
-    n += (info.files.shared && info.files.shared.count) || 0;
-  }
-  desc.textContent = t('memory.entry_desc', { n });
-}
+// 记忆页退役后的存量职责（2026-09-20）：本模块保留为「导出/导入记忆」工具
+// ——用户数据出口不随页面退役（拍板 ⑤）。个人本体页经此入口复用，逻辑不搬家。
+window.MemoryTools = {
+  openExport: () => _memOpenExport(),
+  openImport: (mode) => _memOpenImport(mode),
+};

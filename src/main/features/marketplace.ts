@@ -120,7 +120,7 @@ import {
   userSkillsDir,
   userMarketplaceAgentDir, userMarketplaceAgentSkillsDir, userMarketplaceSkillDir,
   userMarketplaceAgentsDir, userMarketplaceSkillsDir,
-  marketplaceCacheAgentDir, marketplaceCacheSkillDir,
+  marketplaceCacheAgentDir, marketplaceCacheSkillDir, marketplaceCacheSkillsDir,
   userMarketplaceInstallsFile, marketplaceDefaultsSeededFile,
   userMarketplaceDirCloud,
 } from '../paths';
@@ -142,6 +142,33 @@ export function quarantineStagingName(hex: string): string {
   return `.staging-${hex}`;
 }
 
+/**
+ * Trash dir name for the promote swap.
+ *
+ * The `content_id` is part of the name on purpose: a crash between the two renames leaves the
+ * previous version's ONLY copy in here, and boot-time recovery has to know which install it
+ * belongs to. The old `.trash-<hex>` shape carried no such information, so recovery was
+ * impossible and the dir could only be deleted — which is exactly how a crashed update made
+ * both the old and the new version disappear (specs/010 发现 15).
+ */
+export function quarantineTrashName(contentId: string, hex: string): string {
+  return `.trash-${contentId}-${hex}`;
+}
+
+/** Trailing random suffix produced by `randomBytes(6).toString('hex')`. */
+const TRASH_SUFFIX = /^(.+)-([0-9a-f]{12})$/;
+
+/**
+ * Recover the `content_id` a trash dir belongs to, or `null` when the name predates the
+ * id-bearing shape. `null` means "cannot know the target" — the caller deletes instead of
+ * guessing, because restoring content into the wrong install would be worse than losing it.
+ */
+export function contentIdFromTrashName(name: string): string | null {
+  if (!name.startsWith('.trash-')) return null;
+  const match = TRASH_SUFFIX.exec(name.slice('.trash-'.length));
+  return match ? match[1] : null;
+}
+
 export function cleanupOrphanedStagingDirs(uid: string): void {
   const root = userMarketplaceSkillsDir(uid);
   let entries: fs.Dirent[];
@@ -149,12 +176,52 @@ export function cleanupOrphanedStagingDirs(uid: string): void {
   for (const e of entries) {
     if (!e.isDirectory()) continue;
     if (!e.name.startsWith('.staging-') && !e.name.startsWith('.trash-')) continue;
+    const full = path.join(root, e.name);
     try {
-      fs.rmSync(path.join(root, e.name), { recursive: true, force: true });
+      // `.staging-*` holds content that never passed the quality gate or the deep scan.
+      // It is deleted unconditionally: restoring it would install unverified bytes.
+      //
+      // `.trash-*` holds the PREVIOUS, already-verified version, parked there by the promote
+      // swap. When the process died between `rename(target → trash)` and
+      // `rename(staging → target)`, this is the only surviving copy — deleting it is what made
+      // a crashed update lose both versions (specs/010 发现 15, PRD §7.5).
+      if (e.name.startsWith('.trash-') && _restoreCrashedPromote(uid, root, e.name, full)) continue;
+      fs.rmSync(full, { recursive: true, force: true });
       log.info('cleaned orphaned staging dir', { dir: e.name });
     } catch (err) {
       log.warn('failed to clean orphaned staging dir', { dir: e.name, error: String(err) });
     }
+  }
+}
+
+/**
+ * Put a trashed previous version back when the install it belongs to is missing.
+ *
+ * Returns `true` only when the content was restored; every other case falls through to the
+ * unconditional delete. The three ways it declines are all "we cannot prove this is a usable
+ * copy of that install", and guessing is worse than deleting:
+ *   - the name predates the id-bearing shape, so the target is unknown;
+ *   - the install already exists, so the trash is genuinely leftover;
+ *   - the tree has no `SKILL.md`, so it is not a loadable skill.
+ */
+function _restoreCrashedPromote(uid: string, root: string, name: string, full: string): boolean {
+  const contentId = contentIdFromTrashName(name);
+  if (!contentId) return false;
+  const target = userMarketplaceSkillDir(uid, contentId);
+  if (path.dirname(target) !== root) return false;
+  if (fs.existsSync(target)) return false;
+  if (!fs.existsSync(path.join(full, 'SKILL.md'))) return false;
+  try {
+    // Restored under its real name: the dot prefix exists to keep crash residue invisible to
+    // the loader, and this content is no longer residue — it is the live version again.
+    fs.renameSync(full, target);
+    log.info('restored previous version after a crashed promote', { contentId, from: name });
+    return true;
+  } catch (err) {
+    log.warn('failed to restore previous version after a crashed promote', {
+      contentId, from: name, error: String(err),
+    });
+    return false;
   }
 }
 
@@ -163,6 +230,25 @@ registerDeferred('marketplace:cleanup-staging', () => {
     cleanupOrphanedStagingDirs(getActiveUserId());
   } catch {
     // No active user yet — nothing to clean.
+  }
+});
+
+/**
+ * Finish a fork ("convert to my version") that a crash interrupted between uninstalling the
+ * official copy and adopting the custom one (specs/010 FR-055). Boot-phase work for the same
+ * reason as the staging sweep: it is disk-only, has no deadline, and must never block startup.
+ */
+registerDeferred('marketplace:fork-recovery', async () => {
+  try {
+    const fork = await import('./marketplace/fork-to-custom');
+    const report = await fork.recoverInterruptedForks(getActiveUserId());
+    if (report.completed.length || report.discarded.length) {
+      log.info('fork recovery finished', {
+        completed: report.completed.length, discarded: report.discarded.length,
+      });
+    }
+  } catch {
+    // No active user yet, or nothing to recover — startup carries on either way.
   }
 });
 import { withCommonHeaders } from './api_common';
@@ -178,6 +264,12 @@ import {
 } from './marketplace_installs';
 import { withMarketplaceCacheLock, withMarketplaceInstallLock } from './marketplace_locks';
 import { agentPrivateSkillIdsFromBundle } from './marketplace_private_skills';
+import { MarketplaceError } from './marketplace/errors';
+import { readInstalledVersion } from './marketplace/installed-version';
+import { getSkillMetadata, type SkillMetadata } from './marketplace/metadata-adapter';
+import { decideMarketplaceContentUpdate } from './marketplace-update-policy';
+import { fetchImmutableSource } from './marketplace/source-fetch';
+import { writeVersionCopy } from './marketplace/version-store';
 import {
   downloadMarketplaceBundle,
   extractBundleSafely,
@@ -317,8 +409,15 @@ export interface SkillDetail {
   /** Local filesystem path to the cache directory (caller can walk it to render the file tree
    *  + read SKILL.md). The cache may also be wiped between calls — re-fetch via this function. */
   cache_dir: string;
-  /** COS URL of the skill bundle zip — recorded in installs.json for reconcile. */
+  /**
+   * @deprecated Hub 内容不再使用它。A-02 按 F4 收口为只回不可变字节后，对象存储地址
+   * 既不是下载 authority 也不是版本身份；字节一律经 `source-fetch.ts` 按
+   * `{content_id, version}` 从 Hub 源站取得。该字段对 Hub 内容恒为空串，仅为不改动
+   * 既有类型形状而保留。**不得据它判定版本或发起下载。**
+   */
   bundle_url: string;
+  /** 不可变发布物标识。**完整性校验的唯一依据**（FR-011 / FR-025）。 */
+  artifact?: SkillMetadata['artifact'];
   /** Same as `AgentDetail.create_uid`. */
   create_uid: string;
   default_install?: boolean;
@@ -813,41 +912,49 @@ export async function getSkillDetail(
       ...(_normalizeMarketplaceMinAppVersion(expect) ? { min_app_version: _normalizeMarketplaceMinAppVersion(expect) } : {}),
     };
   }
-  // Miss → fetch + write.
-  const meta = await postJson<{ bundle_url: string; version: string; category: string; published_at: number; updated_at?: number; create_uid: string; default_install?: boolean; is_open_source?: boolean; name?: string; status?: string; state?: string; min_app_version?: string; minAppVersion?: string }>(
-    '/marketplace/skills/bundle', { id: skillId },
-  );
+  // Miss → metadata from the adapter; bytes from the Hub origin by {content_id, version}.
+  // The byte endpoint is no longer asked for JSON, and no object-storage URL is involved.
+  const meta = await getSkillMetadata(skillId);
+  if (!meta) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
   await _fetchAndCacheSkill(skillId, meta);
-  const minAppVersion = _normalizeMarketplaceMinAppVersion(meta);
   return {
-    id: skillId, name: meta.name || '', version: meta.version, category: meta.category,
+    id: skillId, name: meta.name, version: meta.version, category: meta.category,
     published_at: meta.published_at, updated_at: meta.updated_at,
-    cache_dir: getSkillCacheDir(skillId), bundle_url: meta.bundle_url,
-    create_uid: meta.create_uid || '', default_install: meta.default_install === true,
-    is_open_source: meta.is_open_source === true, status: meta.status || meta.state || '',
-    ...(minAppVersion ? { min_app_version: minAppVersion } : {}),
+    cache_dir: getSkillCacheDir(skillId), bundle_url: '', artifact: meta.artifact,
+    create_uid: meta.create_uid, default_install: meta.default_install,
+    is_open_source: meta.is_open_source, status: meta.status,
+    ...(meta.min_app_version ? { min_app_version: meta.min_app_version } : {}),
   };
 }
 
-/** Fetch a skill .zip from COS and extract into the local cache (idempotent: wipe-and-replace). */
+/**
+ * Fetch the immutable artifact **from the Hub origin** and extract it into the local cache
+ * (idempotent: wipe-and-replace).
+ *
+ * The former object-storage (COS) direct download is gone: bytes are requested by
+ * `{content_id, version}`, streamed into a staging file and verified against
+ * `artifact.sha256` + `size_bytes` before anything is unpacked (specs/010 FR-008～FR-012).
+ */
 async function _fetchAndCacheSkill(
-  skillId: string, meta: { bundle_url: string; version: string; published_at: number; updated_at?: number },
+  skillId: string,
+  meta: { version: string; published_at: number; updated_at?: number; artifact: SkillMetadata['artifact'] },
 ): Promise<void> {
-  let res: Response;
-  let zipBuf: Buffer | null;
+  const stagingRoot = marketplaceCacheSkillsDir(getActiveUserId());
+  await fsp.mkdir(stagingRoot, { recursive: true });
+  const staging = path.join(stagingRoot, `.staging-${skillId}-${randomBytes(6).toString('hex')}.zip`);
   try {
-    const downloaded = await downloadMarketplaceBundle(`marketplace:skill-bundle:${skillId}`, meta.bundle_url);
-    res = downloaded.response;
-    zipBuf = downloaded.buffer;
-  } catch (err) {
-    throw new Error(`download bundle failed from ${_bundleHost(meta.bundle_url)}: ${(err as Error)?.message || String(err)}`);
+    await fetchImmutableSource({
+      contentId: skillId, version: meta.version, artifact: meta.artifact, destPath: staging,
+    });
+    // The file on disk is already digest- and size-verified; reading it back is bounded by
+    // the same compressed-size cap that governed the download.
+    const zip = parseMarketplaceBundle(await fsp.readFile(staging));
+    await writeSkillCache(skillId, async (dir) => {
+      extractBundleSafely(zip, dir);
+    }, { version: meta.version, published_at: meta.published_at, updated_at: meta.updated_at });
+  } finally {
+    await fsp.rm(staging, { force: true }).catch(() => { /* staging is best-effort cleanup */ });
   }
-  if (!res.ok) throw new Error(`download bundle failed from ${_bundleHost(meta.bundle_url)} (${res.status})`);
-  if (!zipBuf) throw new Error(`download bundle failed from ${_bundleHost(meta.bundle_url)} (empty response)`);
-  const zip = parseMarketplaceBundle(zipBuf);
-  await writeSkillCache(skillId, async (dir) => {
-    extractBundleSafely(zip, dir);
-  }, { version: meta.version, published_at: meta.published_at, updated_at: meta.updated_at });
 }
 
 async function _fetchAgentPrivateSkillsBundle(agentId: string, bundleUrl: string): Promise<ReturnType<typeof parseMarketplaceBundle> | null> {
@@ -941,18 +1048,21 @@ async function _installMarketplaceAgentLocked(
       await Promise.all(missingSkillIds.map(async (sid) => {
         let depSkillName = depSkillNames.get(sid) || '';
         try {
-          // Direct hit on /skills/bundle for meta — avoids paging /skills/list (O(catalog) lookup
-          // that breaks once the catalog grows past 500 skills).
-          const meta = await postJson<{ bundle_url: string; version: string; category: string; published_at: number; updated_at?: number; name?: string; status?: string; state?: string; min_app_version?: string; minAppVersion?: string }>(
-            '/marketplace/skills/bundle', { id: sid },
-          );
+          // Metadata comes from the adapter, never from the byte endpoint. `/skills/bundle`
+          // returns immutable bytes only once F4 lands, so treating it as a detail endpoint
+          // is on its way out regardless of how Q1 is answered (specs/010 FR-001 / FR-002).
+          // The adapter already normalized time, `min_app_version` absence and `status`.
+          const meta = await getSkillMetadata(sid);
+          if (!meta) {
+            throw new MarketplaceInstallError('skill', sid, depSkillName || sid, 'content_not_found');
+          }
           depSkillName = meta.name || depSkillName;
-          _assertApprovedDependencySkill(sid, depSkillName, meta);
+          _assertApprovedDependencySkill(sid, depSkillName, { status: meta.status });
           await installMarketplaceSkill(sid, {
             version: meta.version,
             published_at: meta.published_at,
-            updated_at: meta.updated_at,
-            ...(_normalizeMarketplaceMinAppVersion(meta) ? { min_app_version: _normalizeMarketplaceMinAppVersion(meta) } : {}),
+            ...(meta.updated_at !== undefined ? { updated_at: meta.updated_at } : {}),
+            ...(meta.min_app_version ? { min_app_version: meta.min_app_version } : {}),
           }, { force: opts.force === true, name: depSkillName });
           log.info(`  dep-installed skill ${sid}`);
         } catch (err) {
@@ -1109,30 +1219,86 @@ async function _installMarketplaceSkillLocked(
   try {
     let detail = await getSkillDetail(skillId, expect);
     skillName = skillName || detail.name || '';
-    if (!detail.bundle_url) {
-      const fresh = await postJson<{ bundle_url: string; version: string; category: string; published_at: number; updated_at?: number; create_uid: string; default_install?: boolean; is_open_source?: boolean; name?: string; status?: string; state?: string; min_app_version?: string; minAppVersion?: string }>(
-        '/marketplace/skills/bundle', { id: skillId },
-      );
-      skillName = skillName || fresh.name || '';
-      const minAppVersion = _normalizeMarketplaceMinAppVersion(fresh);
+    if (!detail.artifact) {
+      // The cache-fresh branch of `getSkillDetail` carries no artifact identity, and the
+      // install path needs one to verify the bytes. This used to top up `bundle_url` from
+      // the byte endpoint; it now tops up `{sha256, size_bytes}` from the metadata adapter.
+      const fresh = await getSkillMetadata(skillId);
+      if (!fresh) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
+      skillName = skillName || fresh.name;
       detail = {
         ...detail,
         name: fresh.name || detail.name,
         published_at: fresh.published_at,
         updated_at: fresh.updated_at,
-        bundle_url: fresh.bundle_url,
-        create_uid: fresh.create_uid || '',
-        default_install: fresh.default_install === true,
-        is_open_source: fresh.is_open_source === true,
-        status: fresh.status || fresh.state || '',
-        ...(minAppVersion ? { min_app_version: minAppVersion } : {}),
+        bundle_url: '',
+        artifact: fresh.artifact,
+        create_uid: fresh.create_uid,
+        default_install: fresh.default_install,
+        is_open_source: fresh.is_open_source,
+        status: fresh.status,
+        ...(fresh.min_app_version ? { min_app_version: fresh.min_app_version } : {}),
       };
     }
     _assertMarketplaceAppCompatible('skill', skillId, skillName, detail.min_app_version || '');
 
+    // ── FR-060：重新安装官方版时，若与本机某个自定义 Skill（典型是派生副本）同名，
+    //    **先提示为派生副本改名**，而不是装出两条同名内容。
+    //
+    //    只在 `force: true`（用户显式点「重新安装官方版」）时判定：自动撒种与周期更新
+    //    路径不受影响——否则一次同名就会让默认内容再也装不进来。
+    //
+    //    判据是**显示名称**：安装目录名是 `content_id`，`skills.ts` 的 id 级同名把关
+    //    结构上看不到这组冲突。**不读 `forked_from`**——它在迭代一只写不读（FR-057）。
+    if (opts.force === true && skillName) {
+      const fork = await import('./marketplace/fork-to-custom');
+      await fork.assertOfficialReinstallNameIsFree(skillName);
+    }
+
     const cacheDir = getSkillCacheDir(skillId);
     const uid = getActiveUserId();
     const target = userMarketplaceSkillDir(uid, skillId);
+
+    // ── FR-022 / PRD §7.4：本机已存在同 ID 内容（如随包种子）时，安装按 §7.5 的
+    //    版本规则处理，**不产生第二份**。既有 promote 的 trash-swap 已保证「不产生第二份」；
+    //    这里补的是「单调更新」——等于或低于本机版本时不替换内容。
+    //
+    //    复用既有 `decideMarketplaceContentUpdate`，**不另写一套版本比较**：它已经处理了
+    //    「语义等价但拼写不同」（`v1.0.4` 对 `1.0.4`）落到新鲜度比较的分支。
+    //
+    //    `force: true`（「重新安装官方版」）仍然替换——那是用户的显式意图，不受单调规则约束。
+    //
+    //    ⚠️ 本机版本取自 `installed-version.ts` 这一**单一判定入口**（FR-019/FR-020）：
+    //    读的是已成功原子落盘的本地事实，**不是**安装清单里的目标版本。
+    const localFact = readInstalledVersion(uid, skillId);
+    if (localFact.version && opts.force !== true) {
+      const decision = decideMarketplaceContentUpdate(
+        {
+          version: localFact.version,
+          published_at: localFact.publishedAt ?? 0,
+          ...(typeof localFact.updatedAt === 'number' ? { updated_at: localFact.updatedAt } : {}),
+        },
+        {
+          version: detail.version,
+          published_at: detail.published_at,
+          ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : {}),
+        },
+        // Hub 来源：不咨询新鲜度（Q4 内部默认值，见 `shouldConsultFreshness`）。
+        'hub',
+      );
+      if (decision.action === 'preserve_content') {
+        log.info('install kept the local copy per the monotonic version rule', {
+          skillId, local: localFact.version, incoming: detail.version, reason: decision.reason,
+        });
+        return { ok: true, id: skillId };
+      }
+    }
+
+    // ── Q2（发布侧同 ID 冲突拦截）的**单一兜底插入点** ─────────────────────────
+    // Q2 归 Hub，**未收口**。内部默认值按「发布侧已拦截」实现，因此此处不做额外阻断。
+    // 若 Q2 答案为「未拦截」，兜底逻辑**只加在这一处**（例如同 ID 且来源非 Hub 时拒绝安装
+    // 或显著告警），不得散落到 promote、对账或撒种路径——否则来源判定会扩散。
+    // 依据：specs/010 FR-049、`research.md` R-08。**当前为实现假设，不是 Hub 的答复。**
     // Quarantine (W2): materialize into a dot-prefixed staging dir beside the
     // final location, gate it there, and only `rename` it into place on pass.
     // The previous flow wrote to the final path and `rm -rf`'d on refusal — a
@@ -1215,7 +1381,9 @@ async function _installMarketplaceSkillLocked(
       // Promote: swap the verified tree into the final location. An existing
       // install moves to a dot-prefixed trash first, so `rename` onto a
       // non-empty directory cannot silently nest the new tree inside the old.
-      const trash = path.join(skillsRoot, `.trash-${randomBytes(6).toString('hex')}`);
+      // The name carries the content id so boot-time recovery can put it back if the process
+      // dies before the second rename (发现 15).
+      const trash = path.join(skillsRoot, quarantineTrashName(skillId, randomBytes(6).toString('hex')));
       if (fs.existsSync(target)) await fsp.rename(target, trash);
       await fsp.rename(staging, target);
       await fsp.rm(trash, { recursive: true, force: true });
@@ -1254,7 +1422,11 @@ async function _installMarketplaceSkillLocked(
           version: detail.version,
           published_at: detail.published_at,
           ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : {}),
-          bundle_url: detail.bundle_url,
+          // Hub 内容不再有对象存储地址；保留字段形状但恒为空，版本身份见 artifact_*。
+          bundle_url: '',
+          ...(detail.artifact?.sha256 ? { artifact_sha256: detail.artifact.sha256 } : {}),
+          ...(typeof detail.artifact?.size_bytes === 'number'
+            ? { artifact_size_bytes: detail.artifact.size_bytes } : {}),
           installed_at: installedAt,
           create_uid: detail.create_uid || '',
           ...(typeof detail.default_install === 'boolean' ? { default_install: detail.default_install } : {}),
@@ -1264,6 +1436,22 @@ async function _installMarketplaceSkillLocked(
           ...(skillContentSha ? { content_sha: skillContentSha } : {}),
           ...(skillTreeHash ? { content_tree_hash: skillTreeHash } : {}),
         }, null, 2), 'utf8');
+      // T035：安装成功后写一份不可变版本副本。写在 success marker 之后，所以副本只在
+      // 内容确实落盘之后才出现；写副本失败不回滚安装——副本是钉固用的冗余，不是安装的前提。
+      if (detail.artifact?.sha256) {
+        try {
+          await writeVersionCopy(uid, {
+            contentId: skillId,
+            version: detail.version,
+            sha256: detail.artifact.sha256,
+            sizeBytes: detail.artifact.size_bytes,
+          }, target);
+        } catch (err) {
+          log.warn('immutable version copy not written; install itself is unaffected', {
+            skillId, version: detail.version, error: (err as Error).message,
+          });
+        }
+      }
       await touchCacheEntry('skill', skillId);
       invalidateCoreAgentSkills();
     } catch (err) {
@@ -1419,11 +1607,10 @@ async function _seedAgentSkillDependencies(
       return { seeded, blocked: true };
     }
     try {
-      const meta = await postJson<{ bundle_url: string; version: string; published_at: number; updated_at?: number; create_uid?: string; default_install?: boolean; status?: string; state?: string; name?: string; min_app_version?: string; minAppVersion?: string }>(
-        '/marketplace/skills/bundle', { id: sid },
-      );
-      _assertApprovedDependencySkill(sid, meta.name || sid, meta);
-      const minAppVersion = _normalizeMarketplaceMinAppVersion(meta);
+      const meta = await getSkillMetadata(sid);
+      if (!meta) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${sid}`);
+      _assertApprovedDependencySkill(sid, meta.name || sid, { status: meta.status });
+      const minAppVersion = meta.min_app_version;
       if (!_isMarketplaceAppCompatible(minAppVersion)) {
         throw new Error(`requires CogSeed >= ${minAppVersion}; current ${_currentAppVersion() || 'unknown'}`);
       }
@@ -1433,10 +1620,11 @@ async function _seedAgentSkillDependencies(
         version: meta.version || '1.0.0',
         published_at: meta.published_at || 0,
         ...(typeof meta.updated_at === 'number' ? { updated_at: meta.updated_at } : {}),
-        bundle_url: meta.bundle_url || '',
-        create_uid: meta.create_uid || '',
-        ...((meta.status || meta.state) ? { status: meta.status || meta.state } : {}),
-        default_install: meta.default_install === true,
+        // 种子行不再携带对象存储地址；内容由对账阶段按 {content_id, version} 取字节。
+        bundle_url: '',
+        create_uid: meta.create_uid,
+        ...(meta.status ? { status: meta.status } : {}),
+        default_install: meta.default_install,
         ...(minAppVersion ? { min_app_version: minAppVersion } : {}),
       });
       seeded++;
@@ -1696,6 +1884,42 @@ export async function uninstallMarketplaceAgent(agentId: string): Promise<{ ok: 
   });
 }
 
+/**
+ * Uninstall a Hub official copy.
+ *
+ * ## 边界（specs/010 FR-048）
+ *
+ * 只删三样：**current install 内容树、下载缓存、安装清单行**（清单行的移除顺带写下墓碑）。
+ *
+ * ⚠️ **不可变版本副本不删** —— 它们可能仍被非终态 Task 钉固，删掉会中止进行中的使用。
+ * 副本落在 `<uid>/local/marketplace/versions/`，与这里删的 `.../skills/<id>/` 是**两棵树**，
+ * 因此「不删」由路径结构保证，不依赖这里记得跳过。副本的回收交给 `version-gc.ts` 的三条件。
+ *
+ * ⚠️ **墓碑只表达「不自动装回官方副本」的用户意图**，不是删除历史版本副本的依据。
+ *
+ * ⚠️ **authority boundary**：本函数只碰 marketplace 安装树。用户自定义 Skill 在
+ * `<uid>/cloud/skills/`、派生副本转为 custom 之后同样在那里——本函数**触碰不到**它们。
+ */
+/**
+ * 卸载后触发一轮保守回收。
+ *
+ * 与卸载解耦：回收是磁盘清理，成败都不改变卸载结果，故不 await、不向调用方抛错。
+ * 回收的三条删除条件与 fail-safe 语义完全由 `version-gc.ts` 决定，这里不传任何策略。
+ */
+async function runVersionGcAfterUninstall(uid: string): Promise<void> {
+  try {
+    const gc = await import('./marketplace/version-gc');
+    const report = await gc.runVersionGc(uid);
+    log.info('hub version copy gc after uninstall', {
+      deleted: report.deleted.length, kept: report.kept.length, aborted: report.aborted,
+    });
+  } catch (err) {
+    log.warn('hub version copy gc after uninstall failed; uninstall itself is unaffected', {
+      error: (err as Error).message,
+    });
+  }
+}
+
 export async function uninstallMarketplaceSkill(skillId: string): Promise<{ ok: true; id: string }> {
   if (!skillId) throw new Error('skillId required');
   const uid = getActiveUserId();
@@ -1707,6 +1931,10 @@ export async function uninstallMarketplaceSkill(skillId: string): Promise<{ ok: 
     await removeSkillInstall(uid, skillId);
     invalidateCoreAgentSkills();
     log.info(`uninstalled marketplace skill ${skillId} (local + cache + manifest)`);
+    // 卸载后跑一轮保守回收（FR-052 的第二个触发点）。**不在这里删任何副本**——
+    // 回收自己判断三条件，仍被钉固、仍是 current、或未过宽限期的一概保留；
+    // 任何异常本轮删 0。回收失败不影响卸载本身已经完成的事实。
+    void runVersionGcAfterUninstall(uid);
     return { ok: true, id: skillId };
   });
 }
