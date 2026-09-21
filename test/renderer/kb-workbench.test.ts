@@ -806,8 +806,9 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(menus).toContain("icon: 'edit-pencil'");
     expect(menus).toContain("icon: 'users'");
     expect(menus).toContain("icon: 'trash-2'");
-    expect(menus).toContain("_uiButton({ label: '置顶', icon: 'pin'");
-    expect(menus).toContain("_uiButton({ label: '编辑标签', icon: 'tag'");
+    // 断言钉在 i18n 键上（文案随语言变，键不变）
+    expect(menus).toContain("_uiButton({ label: _tr('kb.workbench.menu_pin', '置顶'), icon: 'pin'");
+    expect(menus).toContain("_uiButton({ label: _tr('kb.workbench.menu_tag', '编辑标签'), icon: 'tag'");
     expect(menus).toContain("_icon('lock', 'kb-ctx-menu-icon')");
     expect(menus).not.toMatch(/[✏️🗑📂👥📌🏷🔐➡⧉▸✓]/u);
     expect(menus).not.toMatch(/<button\b/);

@@ -6437,13 +6437,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     }
     let w = 0;
     for (const ch of name) w += /[\u4e00-\u9fff\uac00-\ud7af\u3040-\u30ff]/.test(ch) ? 2 : 1;
-    if (w > 100) return '名称过长，请缩短';
+    if (w > 100) return _tr('kb.workbench.rename_err_too_long', '名称过长，请缩短');
     return '';
   }
 
   async function _kbRename(path, isDir) {
     const cur = String(path || '').split('/').pop() || '';
-    const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名：', cur) : window.prompt('重命名：', cur);
+    const next = typeof uiPrompt === 'function' ? await uiPrompt(_tr('kb.workbench.rename_prompt', '重命名：'), cur) : window.prompt(_tr('kb.workbench.rename_prompt', '重命名：'), cur);
     if (!next || !next.trim() || next.trim() === cur) return;
     // 父路径：仅当 path 含斜杠时才取前缀；顶层条目（如库 "2"）父路径为空
     const slashIdx = String(path || '').lastIndexOf('/');
@@ -6452,13 +6452,13 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     // 名字预校验：非法字符 / 点开头 / 文件扩展名 / 长度
     const bad = _kbValidateName(newName, !isDir);
     if (bad) {
-      if (typeof uiToast === 'function') uiToast('重命名失败：' + bad, { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_failed', '重命名失败：') + bad, { variant: 'warning' });
       return;
     }
     const dst = parent ? `${parent}/${newName}` : newName;
     // 预检查：同级已有同名条目 → 直接提示，不发 IPC
     if (_kbSiblingExists(parent, newName)) {
-      if (typeof uiToast === 'function') uiToast('重命名失败：该名称已存在，请换一个名称', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.rename_failed', '重命名失败：') + _tr('kb.workbench.rename_err_exists', '该名称已存在，请换一个名称'), { variant: 'warning' });
       return;
     }
     try {
@@ -6467,14 +6467,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         const msg = String(res.error || '');
         if (typeof uiToast === 'function') {
           let friendly = null;
-          if (/already exists|exists|eexist|enotempty/i.test(msg)) friendly = '该名称已存在，请换一个名称';
-          else if (/unsupported extension/i.test(msg)) friendly = '文件名需保留支持的扩展名（.md .txt .pdf .docx 等）';
-          else if (/invalid character/i.test(msg)) friendly = '名称含非法字符';
-          else if (/invalid path segment/i.test(msg)) friendly = '名称无效，请检查是否包含非法路径';
-          else if (/hidden entries are reserved/i.test(msg)) friendly = '名称不能以 . 开头';
-          else if (/too long/i.test(msg)) friendly = '名称过长，请缩短';
-          else if (/eacces|eperm/i.test(msg)) friendly = '没有权限重命名';
-          uiToast(friendly ? '重命名失败：' + friendly : '重命名失败：' + _esc(msg), { variant: 'error' });
+          if (/already exists|exists|eexist|enotempty/i.test(msg)) friendly = _tr('kb.workbench.rename_err_exists', '该名称已存在，请换一个名称');
+          else if (/unsupported extension/i.test(msg)) friendly = _tr('kb.workbench.rename_err_extension', '文件名需保留支持的扩展名（.md .txt .pdf .docx 等）');
+          else if (/invalid character/i.test(msg)) friendly = _tr('kb.workbench.rename_err_invalid_char', '名称含非法字符');
+          else if (/invalid path segment/i.test(msg)) friendly = _tr('kb.workbench.rename_err_invalid_path', '名称无效，请检查是否包含非法路径');
+          else if (/hidden entries are reserved/i.test(msg)) friendly = _tr('kb.workbench.rename_err_hidden', '名称不能以 . 开头');
+          else if (/too long/i.test(msg)) friendly = _tr('kb.workbench.rename_err_too_long', '名称过长，请缩短');
+          else if (/eacces|eperm/i.test(msg)) friendly = _tr('kb.workbench.rename_err_no_permission', '没有权限重命名');
+          uiToast(_tr('kb.workbench.rename_failed', '重命名失败：') + (friendly || _esc(msg)), { variant: 'error' });
         }
         return;
       }
@@ -6573,26 +6573,26 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const el = document.createElement('div');
     el.className = 'kb-ctx-menu kb-file-menu';
     el.innerHTML = `
-      ${_uiButton({ label: '生成脑图（本文档）', icon: 'brain-circuit', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'mind' } })}
-      ${_uiButton({ label: '置顶', icon: 'pin', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'pin' } })}
-      ${_uiButton({ label: '编辑标签', icon: 'tag', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'tag' } })}
-      ${_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'rename' } })}
-      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm" role="button" tabindex="0">${_icon('lock', 'kb-ctx-menu-icon')}<span>成员权限</span><span class="kb-import-caret">${_icon('chevron-right', 'kb-ctx-menu-caret-icon')}</span>
+      ${_uiButton({ label: _tr('kb.workbench.menu_mindmap', '生成脑图（本文档）'), icon: 'brain-circuit', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'mind' } })}
+      ${_uiButton({ label: _tr('kb.workbench.menu_pin', '置顶'), icon: 'pin', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'pin' } })}
+      ${_uiButton({ label: _tr('kb.workbench.menu_tag', '编辑标签'), icon: 'tag', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'tag' } })}
+      ${_uiButton({ label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'rename' } })}
+      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm" role="button" tabindex="0">${_icon('lock', 'kb-ctx-menu-icon')}<span>${_tr('kb.workbench.menu_perm', '成员权限')}</span><span class="kb-import-caret">${_icon('chevron-right', 'kb-ctx-menu-caret-icon')}</span>
         <div class="kb-ctx-sub" data-sub="perm">
-          ${_uiButton({ label: '内容可查看和导出', icon: 'check', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item is-selected', attrs: { 'data-perm': 'view_export' } })}
-          ${_uiButton({ label: '内容可查看但不可导出', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'view_only' } })}
-          ${_uiButton({ label: '内容不可查看', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'hidden' } })}
+          ${_uiButton({ label: _tr('kb.workbench.perm_view_export', '内容可查看和导出'), icon: 'check', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item is-selected', attrs: { 'data-perm': 'view_export' } })}
+          ${_uiButton({ label: _tr('kb.workbench.perm_view_only', '内容可查看但不可导出'), role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'view_only' } })}
+          ${_uiButton({ label: _tr('kb.workbench.perm_hidden', '内容不可查看'), role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-perm': 'hidden' } })}
         </div>
       </div>
-      ${_uiButton({ label: '移动到', icon: 'arrow-right', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'move' } })}
-      ${_uiButton({ label: '复制到', icon: 'copy', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'copy' } })}
-      ${_uiButton({ label: '删除', icon: 'trash-2', role: 'danger', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'del' } })}`;
+      ${_uiButton({ label: _tr('kb.workbench.menu_move', '移动到'), icon: 'arrow-right', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'move' } })}
+      ${_uiButton({ label: _tr('kb.workbench.menu_copy', '复制到'), icon: 'copy', role: 'ghost', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'copy' } })}
+      ${_uiButton({ label: _tr('kb.workbench.menu_delete', '删除'), icon: 'trash-2', role: 'danger', size: 'sm', className: 'kb-ctx-menu-item', attrs: { 'data-fm': 'del' } })}`;
     el.style.left = Math.min(x, window.innerWidth - 200) + 'px';
     el.style.top = Math.min(y, window.innerHeight - 300) + 'px';
     document.body.appendChild(el);
     _kbMenuEl = el;
     const close = () => { el.remove(); _kbMenuEl = null; };
-    const permLabel = { view_export: '内容可查看和导出', view_only: '内容可查看但不可导出', hidden: '内容不可查看' };
+    const permLabel = { view_export: _tr('kb.workbench.perm_view_export', '内容可查看和导出'), view_only: _tr('kb.workbench.perm_view_only', '内容可查看但不可导出'), hidden: _tr('kb.workbench.perm_hidden', '内容不可查看') };
     el.addEventListener('click', (e) => {
       const subItem = e.target.closest('.kb-ctx-sub .kb-ctx-menu-item');
       if (subItem) {
