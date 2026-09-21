@@ -2858,8 +2858,14 @@ describe('messaging session reset (/new)', () => {
 });
 
 describe('messaging burst merge on inbound', () => {
-  async function seededInstance(uid: string): Promise<{ manager: typeof import('../../../src/main/features/messaging/manager'); groupSend: ReturnType<typeof vi.fn> }> {
-    vi.useFakeTimers();
+  async function seededInstance(
+    uid: string,
+    options: { useFakeTimers?: boolean } = {},
+  ): Promise<{
+    manager: typeof import('../../../src/main/features/messaging/manager');
+    groupSend: ReturnType<typeof vi.fn>;
+  }> {
+    if (options.useFakeTimers !== false) vi.useFakeTimers();
     const groupSend = vi.fn(async () => ({ ok: true }));
     // Same adapter mock shape as the rest of this file: start reports
     // 'connected' through onStatus so the seeded runtime is live.
@@ -2957,23 +2963,26 @@ describe('messaging burst merge on inbound', () => {
 
   it('dispatches synthetic envelopes immediately, bypassing the merger', async () => {
     const uid = 'user-1';
-    const { manager, groupSend } = await seededInstance(uid);
-    const instanceId = (await (await import('../../../src/main/features/messaging/registry')).listInstances(uid))[0].id;
-    await manager.enqueueInbound(uid, {
-      platform: 'feishu_lark',
-      instanceId,
-      externalMessageId: 'evt-1',
-      externalChatId: 'oc_1',
-      externalUserId: uid,
-      text: 'reaction:added:THUMBSUP',
-      isGroup: true,
-      mentionPresent: true,
-      synthetic: true,
-      receivedAt: new Date().toISOString(),
-    });
-    expect(groupSend).toHaveBeenCalledTimes(1);
-    await manager.stopForUser(uid);
-    vi.useRealTimers();
+    const { manager, groupSend } = await seededInstance(uid, { useFakeTimers: false });
+    try {
+      const instanceId = (await (await import('../../../src/main/features/messaging/registry')).listInstances(uid))[0].id;
+      await manager.enqueueInbound(uid, {
+        platform: 'feishu_lark',
+        instanceId,
+        externalMessageId: 'evt-1',
+        externalChatId: 'oc_1',
+        externalUserId: uid,
+        text: 'reaction:added:THUMBSUP',
+        isGroup: true,
+        mentionPresent: true,
+        synthetic: true,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(groupSend).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.stopForUser(uid);
+      vi.useRealTimers();
+    }
   });
 
   it('releases trailing ids for redelivery when the merged dispatch fails', async () => {
@@ -3132,4 +3141,3 @@ describe('iLink URL trust split (API base vs scan URL)', () => {
     expect(isTrustedIlinkBaseUrl('https://ilinkai.weixin.qq.com')).toBe(true);
   });
 });
-
