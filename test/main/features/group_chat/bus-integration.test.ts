@@ -9338,6 +9338,17 @@ describe("group_chat bus integration › model-selected asset attachment (2026-0
     const cardMessages = (await readConversationMessages(cid))
       .filter((message) => message?.recall_projection_card?.projectionId === created[0].id);
     expect(cardMessages).toHaveLength(1);
+    expect(cardMessages[0]?.recall_projection_card).toMatchObject({
+      projectionId: created[0].id,
+      authorization: 'model_selected',
+      presentation: 'sidecar',
+    });
+    const firstFinal = (await readConversationMessages(cid))
+      .find((message) => message?.turn_end === true && message?.text === 'Attached.');
+    expect(firstFinal?.projection_receipt).toMatchObject({
+      projectionId: created[0].id,
+      authorization: 'model_selected',
+    });
 
     // 再挂一次：复用同一条投影（追加），不产生第二张卡。
     _setScript(state.buildGconvSessionId(cid), [
@@ -9353,8 +9364,15 @@ describe("group_chat bus integration › model-selected asset attachment (2026-0
     const after = (await projection.listContextProjections(TEST_UID, { status: "confirmed" }))
       .filter((item) => item.authorization === "model_selected");
     expect(after).toHaveLength(1);
-    expect((await readConversationMessages(cid))
+    const messagesAfterRepeat = await readConversationMessages(cid);
+    expect(messagesAfterRepeat
       .filter((message) => message?.recall_projection_card?.projectionId === created[0].id)).toHaveLength(1);
+    const repeatFinal = messagesAfterRepeat
+      .find((message) => message?.turn_end === true && message?.text === 'Still attached.');
+    expect(repeatFinal?.projection_receipt).toMatchObject({
+      projectionId: created[0].id,
+      authorization: 'model_selected',
+    });
   }, 20_000);
 
   it("revokes a model-selected projection (confirmed → revoked) and refuses other authorizations", async () => {

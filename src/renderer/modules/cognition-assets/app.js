@@ -19,7 +19,7 @@
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide',
-    'asset-action', 'select-asset-version', 'delete-asset-version', 'asset-edit-save', 'family-rename', 'family-rename-save', 'family-rename-cancel', 'edit-from-version', 'merge-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
+    'asset-action', 'asset-recommend-ack', 'select-asset-version', 'delete-asset-version', 'asset-edit-save', 'family-rename', 'family-rename-save', 'family-rename-cancel', 'edit-from-version', 'merge-asset-version', 'merge-asset', 'source-action', 'capture-action', 'organize-conv',
     'capture-toggle', 'capture-review-toggle', 'proof-rate',
     'capture-batch',
   ]);
@@ -150,17 +150,15 @@
           case 'capture-batch': {
             // 批量动作的条数在渲染时写死进按钮（只数当前已加载且该动作可执行
             // 的行）；这里再次从 store 收敛同一口径，防止路由/数据在确认弹窗
-            // 与执行之间变动后多发。
+            // 与执行之间变动后多发。只保留批量重试（2026-09-21 原型 v7 定调：
+            // 批量「立即整理」入口不迁移，单条任务行的立即整理保留）。
             const runnable = (S.captures || []).filter((capture) => (
               Array.isArray(capture.actions) && capture.actions.includes(el.dataset.batch || '')
             ));
-            if (!runnable.length) break;
-            const action = el.dataset.batch === 'retry' ? 'retry' : 'run_now';
-            const ok = action === 'retry'
-              ? await NS.confirmUser(T('cognition.capture_batch_retry_confirm', '确认重试 {n} 条失败的整理任务？', { n: String(runnable.length) }))
-              : await NS.confirmUser(T('cognition.capture_batch_run_confirm', '将立即整理 {n} 个会话，每条都会消耗模型额度。确认开始？', { n: String(runnable.length) }));
+            if (!runnable.length || el.dataset.batch !== 'retry') break;
+            const ok = await NS.confirmUser(T('cognition.capture_batch_retry_confirm', '确认重试 {n} 条失败的整理任务？', { n: String(runnable.length) }));
             if (!ok) break;
-            await A.captureBatch(action, runnable.map((capture) => capture.id));
+            await A.captureBatch('retry', runnable.map((capture) => capture.id));
             break;
           }
           case 'open-candidate': router.go({ name: 'review', candidateId: id }); break;
@@ -170,6 +168,7 @@
           case 'cand-adopt-with-form': await A.adoptCandidate(id, readCandidateForm(el) || undefined); break;
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
+          case 'asset-recommend-ack': await A.acknowledgeAssetRecommendation(id); break;
           case 'select-asset-version': await A.selectAssetVersion(id, el.dataset.version || ''); break;
           case 'delete-asset-version': await A.deleteAssetVersion(id, el.dataset.version || ''); break;
           case 'edit-asset': {
@@ -312,6 +311,32 @@
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && S.route.assetId) router.back();
     });
+    // 树光斑悬停提示（原型 #tip 行为）：.spot 自带 data-title/data-sub，
+    // 鼠标进出示一条跟随光标的黑底提示——树上节点密度高，常显标签会糊。
+    const treeTip = () => document.getElementById('ca-tree-tip');
+    root.addEventListener('mouseover', (event) => {
+      const spot = event.target.closest && event.target.closest('.spot[data-title]');
+      const tip = treeTip();
+      if (!tip) return;
+      if (!spot) { tip.classList.remove('show'); return; }
+      const sub = spot.dataset.sub || '';
+      tip.textContent = spot.dataset.title + (sub ? ` — ${sub}` : '');
+      tip.classList.add('show');
+      /* 坐标相对树画布（.tip 是 absolute，且 .ca-scroll 有 contain:paint，
+         fixed 的视口坐标在这里整体漂移——2026-09-21 真机抓出）。 */
+      const stage = tip.closest('.tree-stage');
+      if (!stage) return;
+      const stageRect = stage.getBoundingClientRect();
+      const rect = tip.getBoundingClientRect();
+      tip.style.left = `${Math.min(event.clientX - stageRect.left + 14, stageRect.width - rect.width - 12)}px`;
+      tip.style.top = `${Math.max(8, event.clientY - stageRect.top - 40)}px`;
+    });
+    root.addEventListener('mouseout', (event) => {
+      const spot = event.target.closest && event.target.closest('.spot[data-title]');
+      if (!spot) return;
+      const tip = treeTip();
+      if (tip) tip.classList.remove('show');
+    });
     // div[role=button] 控件（行、chip 单选、tab、折叠头）不含原生 button 的
     // 键盘激活，Enter/Space 在委托层统一转成 click，保持键盘可达。
     root.addEventListener('keydown', (event) => {
@@ -320,6 +345,22 @@
       if (!el || el.getAttribute('aria-disabled') === 'true') return;
       event.preventDefault();
       el.click();
+    });
+    // tab 行方向键漫游（2026-09-21 原型 v7 a11y 契约）：←/→ 移动焦点，
+    // Home/End 跳首尾；tab 是 div[role=button]，无原生方向键语义。
+    // 挂 root 委托——bindEvents 先于持久壳首次构建执行，挂 .ca-tabs 会落空。
+    root.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const tabsNav = event.target.closest && event.target.closest('.ca-tabs');
+      if (!tabsNav || !(event.target.closest && event.target.closest('.ca-tab'))) return;
+      const items = Array.from(tabsNav.querySelectorAll('.ca-tab'));
+      const idx = items.indexOf(document.activeElement);
+      if (idx < 0) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : (idx + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length;
+      if (items[next] && typeof items[next].focus === 'function') items[next].focus();
     });
     // 表单类控件的 change 委托（time input 等）：与 click 同一套 data-act 语义。
     root.addEventListener('change', async (event) => {
@@ -376,7 +417,30 @@
     if (!root) return;
     booted = true;
     bindEvents(root);
-    NS.onChange(NS.render);
+    // 焦点保持（2026-09-21 原型 v7 a11y 契约）：内容区整体重绘后键盘焦点会
+    // 静默落到 body，键盘用户得重新 Tab 整页。渲染前记录焦点控件的定位特征
+    // （data-act/data-id/data-go-asset），渲染后按特征找回同一控件；找不到时
+    // 回落到当前页第一个可聚焦控件——焦点永不落 body。
+    NS.onChange(() => {
+      const active = document.activeElement;
+      const inScroll = active && active.closest && active.closest('#ca-scroll');
+      const signature = inScroll ? {
+        act: active.dataset ? active.dataset.act || '' : '',
+        id: active.dataset ? active.dataset.id || '' : '',
+        goAsset: active.dataset ? active.dataset.goAsset || '' : '',
+      } : null;
+      NS.render();
+      const scroll = document.getElementById('ca-scroll');
+      if (!scroll || !signature) return;
+      let next = null;
+      if (signature.goAsset) next = scroll.querySelector(`[data-go-asset="${CSS.escape(signature.goAsset)}"]`);
+      else if (signature.act) {
+        const candidates = Array.from(scroll.querySelectorAll(`[data-act="${CSS.escape(signature.act)}"]`));
+        next = candidates.find((el) => !signature.id || (el.dataset && el.dataset.id === signature.id)) || candidates[0];
+      }
+      if (!next) next = scroll.querySelector('button, [role="button"]');
+      if (next && typeof next.focus === 'function') next.focus({ preventScroll: true });
+    });
     // tab 自适应：3 个中文 tab 在窄窗口仍可能折行。检测用 Range 取
     // 主标题的**文本行**数（flex 子元素被 blockify，元素级 getClientRects
     // 恒为 1，测不出折行；Range 量的是文本自身），>1 即切紧凑模式
@@ -393,11 +457,25 @@
       tabs.classList.toggle('is-compact', folded);
     };
     NS.onChange(() => requestAnimationFrame(fitTabs));
+    // 认知树按容器实测像素作画（原型 drawTree 同款）：宽度变了必须重画，
+    // 否则 viewBox 与容器对不上，树会被拉伸。rAF 合帧 + 抖动守卫避免拖拽
+    // 窗口时每像素一次全量重绘。
+    let treeResizeFrame = 0;
+    let lastTreeWidth = 0;
+    window.addEventListener('resize', () => {
+      if (S.route.name !== 'tree') return;
+      const svg = document.getElementById('ca-tree-svg');
+      const width = svg ? svg.clientWidth : 0;
+      if (!width || width === lastTreeWidth) return;
+      lastTreeWidth = width;
+      if (treeResizeFrame) cancelAnimationFrame(treeResizeFrame);
+      treeResizeFrame = requestAnimationFrame(() => { treeResizeFrame = 0; NS.render(); });
+    });
     window.addEventListener('resize', () => requestAnimationFrame(fitTabs));
     NS.render();
     await NS.reload();
-    // 概览是树的第一眼：快照落地后按需补一次树。
-    if (!treeRequested && S.route.name === 'overview') { treeRequested = true; await NS.reload({ tree: true }); }
+    // 认知树是默认落地页:快照落地后按需补一次树(overview 页也保留补树)。
+    if (!treeRequested && (S.route.name === 'tree' || S.route.name === 'overview')) { treeRequested = true; await NS.reload({ tree: true }); }
     NS.notify();
   }
 
@@ -412,9 +490,9 @@
     if (panelVisible()) boot();
   }
 
-  // 数据变化时：概览页没树就补树。
+  // 数据变化时：树页/概览页没树就补树。
   NS.onChange(() => {
-    if (S.route.name === 'overview' && !treeRequested && S.loaded) {
+    if ((S.route.name === 'tree' || S.route.name === 'overview') && !treeRequested && S.loaded) {
       treeRequested = true;
       void NS.reload({ tree: true });
     }
@@ -469,7 +547,8 @@
     scheduleBoot();
   }
 
-  // 语言切换：视图全部在渲染时取文案，整页重画即可跟上（旧实现曾在
-  // skills-bindings.js 里重画，随瘦身丢失）。
-  window.addEventListener('i18n-change', () => { if (booted) NS.render(); });
+  // 语言切换：视图全部在渲染时取文案。持久壳的页签标题也是渲染产物，
+  // 传 rebuild 让壳整体重建跟上新语言（旧实现曾在 skills-bindings.js 里
+  // 重画，随瘦身丢失）。
+  window.addEventListener('i18n-change', () => { if (booted) NS.render({ rebuild: true }); });
 })();

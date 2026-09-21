@@ -1379,6 +1379,9 @@ interface WorkerState {
    *  metadata such as agent avatar tokens without relying on the model to
    *  copy every field back. */
   marketplaceSearchResults?: Map<string, Partial<MarketplaceInstallRequest>>;
+  /** Set by attach_assets_to_task during the active turn; runActorTurn persists
+   * it on the final user-visible message instead of exposing a second bubble. */
+  projectionReceipt?: { projectionId: string; authorization: string };
 }
 
 interface CidState {
@@ -2341,7 +2344,9 @@ export interface EnqueueParams {
   references?: ChatMessageReference[];
   /** 空间任务引用（@ 资产）可见反馈：随 user 消息落 space_asset_refs，UI 气泡显示 chips。 */
   space_asset_refs?: Array<{ name: string; asset_type?: string }>;
-  recall_projection_card?: { projectionId: string };
+  recall_projection_card?: { projectionId: string; authorization?: string; presentation?: 'sidecar' };
+  /** Explicit projection receipt ownership on the final user-visible turn message. */
+  projection_receipt?: { projectionId: string; authorization: string };
   recall_citations?: RecallMessageCitation[];
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   produced?: string[];
@@ -2992,6 +2997,7 @@ async function _enqueueBody(
       ? { space_asset_refs: params.space_asset_refs }
       : {}),
     ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
+    ...(params.projection_receipt ? { projection_receipt: params.projection_receipt } : {}),
     ...(params.recall_citations && params.recall_citations.length
       ? { recall_citations: params.recall_citations }
       : {}),
@@ -3944,6 +3950,9 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
     w.currentMsgId = item.msgId;
     w.currentTurnOrder = ++state.nextTurnOrder;
     w.currentTurnStartedAtMs = Date.now();
+    // A receipt is turn-scoped. Without this reset a later turn on the same
+    // worker could inherit a stale projection receipt from the previous turn.
+    w.projectionReceipt = undefined;
     try {
       await runTurn(state, w, item);
     } catch (err) {
@@ -6897,6 +6906,9 @@ async function runActorTurnBody(
         : {}),
       ...(persistedRecallCitations.length
         ? { recall_citations: persistedRecallCitations }
+        : {}),
+      ...(w.projectionReceipt
+        ? { projection_receipt: w.projectionReceipt }
         : {}),
       ...((tailProcessItems.length || chatCollector.entries.length)
         ? { process: mergeProcessTrail(tailProcessItems, chatCollector.entries) }
@@ -10893,7 +10905,7 @@ async function buildCommanderExtraTools(
           .find((projection) => projection.authorization === "model_selected") || null;
         let projection;
         if (existing) {
-          projection = await appendAssetsToModelSelectedProjection(uid, existing.id, granted);
+          projection = await appendAssetsToModelSelectedProjection(uid, existing.id, granted, { taskRunId: turnId });
         } else {
           const base = await previewContextProjection(uid, {
             taskRunId: turnId,
@@ -10903,9 +10915,13 @@ async function buildCommanderExtraTools(
             ...(reason ? { taskText: reason } : {}),
             authorization: "model_selected",
           });
-          await appendAssetsToModelSelectedProjection(uid, base.id, granted);
+          await appendAssetsToModelSelectedProjection(uid, base.id, granted, { taskRunId: turnId });
           projection = await confirmContextProjection(uid, base.id);
         }
+        w.projectionReceipt = {
+          projectionId: projection.id,
+          authorization: projection.authorization,
+        };
         if (!existing) {
           // 投卡：与用户确认线同一套 sidecar 机制——卡片本身也是注入查找的
           // 依据，所以"投了卡"才等于"后续回合真的会带上"。
@@ -10919,7 +10935,11 @@ async function buildCommanderExtraTools(
                   fromActorId: COMMANDER_ID,
                   forceTo: [USER_ID],
                   text: String(payload.text || ""),
-                  recall_projection_card: { projectionId: payload.card.projectionId },
+                  recall_projection_card: {
+                    projectionId: payload.card.projectionId,
+                    authorization: payload.card.authorization,
+                    presentation: 'sidecar',
+                  },
                 })).id || "",
               }),
             });

@@ -131,7 +131,7 @@ describe('recall candidate pool renders from capability, not raw status', () => 
   it('never renders decision actions for terminal candidates', () => {
     // 已处理（confirmed/rejected/ignored）只出现在处理记录折叠区，无决策按钮。
     expect(viewsSource).toContain("['confirmed', 'rejected', 'ignored']");
-    expect(viewsSource).toContain('ca-processed-fold');
+    expect(viewsSource).toContain('fold-processed');
   });
 
   it('treats a candidate without capabilities as read-only instead of guessing', () => {
@@ -202,7 +202,7 @@ describe('recall candidate detail renders from capability', () => {
   });
 
   it('says why a failed candidate failed instead of showing a dead button', () => {
-    expect(viewsSource).toContain('ca-warn');
+    expect(viewsSource).toContain('class="warn"');
     expect(viewsSource).toContain('cognition.candidate_evidence_all_unavailable');
   });
 });

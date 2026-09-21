@@ -77,7 +77,7 @@ export type RecallCandidateStatus =
   | 'expired'
   | 'failed'
   | 'superseded';
-export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
+export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
 export type RecallCandidateAction = 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
 export type RecallCandidateRisk = 'low' | 'medium' | 'high';
 export type RecallAbilityAssetLifecycleStatus = 'user_confirmed_unverified' | 'automatically_extracted_unverified' | 'system_precipitated_unverified';
@@ -403,7 +403,7 @@ function boundedText(value: unknown, field: string, max: number, required = fals
 }
 
 function requireAssetType(value: unknown): AbilityAssetType {
-  if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method') return value;
+  if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method' || value === 'fact') return value;
   throw new Error('invalid suggested type');
 }
 

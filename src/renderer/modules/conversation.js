@@ -3719,6 +3719,48 @@ function _collapseSupersededInterruptionRecords(records) {
   return out.filter(Boolean);
 }
 
+function _projectionReceiptForMessage(message) {
+  return message?.projection_receipt?.projectionId
+    && message?.projection_receipt?.authorization === 'model_selected'
+    ? message.projection_receipt
+    : null;
+}
+
+function _projectionIdsFromCitations(citations) {
+  const ids = [];
+  const seen = new Set();
+  for (const citation of Array.isArray(citations) ? citations : []) {
+    const id = String(citation?.projection_id || citation?.projectionId || '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function _findProjectionSidecar(container, message) {
+  if (!container || typeof container.querySelector !== 'function') return null;
+  for (const projectionId of _projectionIdsFromCitations(message?.recall_citations)) {
+    try {
+      const sidecar = container.querySelector(
+        `.chat-message[data-recall-projection-id="${CSS.escape(projectionId)}"]`,
+      );
+      if (sidecar) return { projectionId, sidecar };
+    } catch (_) {
+      // A malformed persisted id must not break the whole conversation render.
+    }
+  }
+  return null;
+}
+
+function _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard) {
+  return Boolean(
+    message?.recall_projection_card?.projectionId
+      && message.recall_projection_card.authorization === 'model_selected'
+      && !coalescedProjectionCard,
+  );
+}
+
 function _groupMsgToLegacy(gm) {
   if (!gm || typeof gm !== 'object') return gm;
   if (gm.role !== undefined) return gm; // already legacy shape
@@ -3754,6 +3796,7 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
+    ...(gm.projection_receipt ? { projection_receipt: gm.projection_receipt } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
     ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
     ...(gm.welcome_pending === true ? { welcome_pending: true } : {}),
@@ -9402,6 +9445,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const role = message.role === 'assistant' ? 'assistant' : 'user';
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
+  if (message?.recall_projection_card?.presentation === 'sidecar') {
+    msgDiv.hidden = true;
+    msgDiv.classList.add('is-sidecar');
+  }
   // Sender id stamp — used by `_ensureConvCreateAgentInline` to detect
   // whether any agent (≠ user / commander) has spoken in this conversation.
   // Empty when unknown (e.g. stale records lacking _from); the inline button
@@ -9432,9 +9479,35 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       p3394BadgeHtml = `<div class="p3394-node-badge"><span class="p3394-node-badge-icon">🤖</span><span class="p3394-node-badge-name">${escapeHtml(nodeName)}</span><span class="p3394-node-badge-tag">P3394</span></div>`;
     }
   }
-  const contentHtml = isHtmlSnippet
-    ? sanitizeHtml(rawContent)
-    : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
+  // A projection card is a governed sidecar, not assistant prose. The main-process
+  // transport still carries an English fallback string for older clients and
+  // search/history compatibility; rendering both would duplicate the receipt.
+  // A model-selected projection is posted as a durable sidecar so prompt
+  // injection can discover it across turns. Once the final reply arrives, the
+  // visible receipt belongs on that reply—not as a second Cogseed message.
+  const explicitProjectionReceipt = _projectionReceiptForMessage(message);
+  const citationProjectionIds = explicitProjectionReceipt
+    ? []
+    : _projectionIdsFromCitations(message.recall_citations);
+  const coalescedProjectionMatch = role === 'assistant' && !explicitProjectionReceipt
+    ? _findProjectionSidecar(container, message)
+    : null;
+  const coalescedProjectionSidecar = coalescedProjectionMatch?.sidecar || null;
+  const coalescedProjectionCard = coalescedProjectionMatch
+    ? { projectionId: coalescedProjectionMatch.projectionId, authorization: 'model_selected' }
+    : null;
+  const hasProjectionCard = Boolean(
+    explicitProjectionReceipt
+    || (message.recall_projection_card?.projectionId
+        && message.recall_projection_card.authorization === 'model_selected')
+    || coalescedProjectionCard,
+  );
+  const suppressProjectionTransportProse = _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard);
+  const contentHtml = suppressProjectionTransportProse
+    ? ''
+    : isHtmlSnippet
+      ? sanitizeHtml(rawContent)
+      : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
   // 空间构建师的 space-draft 块 → 渲染「创建空间」按钮（用户确认后调 spaces.create）。
   const spaceDraft = (!isHtmlSnippet && role === 'assistant')
     ? _extractSpaceDraft(displayContent)
@@ -9489,7 +9562,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
         bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
       })
     : '';
-  const recallCitationsHtml = role === 'assistant'
+  const recallCitationsHtml = role === 'assistant' && !hasProjectionCard
     ? _renderRecallCitationsHtml(message.recall_citations)
     : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
@@ -9550,6 +9623,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
   if (message._msg_id) msgDiv.dataset.msgId = String(message._msg_id);
+  if (message.recall_projection_card?.projectionId) {
+    msgDiv.dataset.recallProjectionId = String(message.recall_projection_card.projectionId);
+  }
+  if (coalescedProjectionSidecar) {
+    coalescedProjectionSidecar.hidden = true;
+    coalescedProjectionSidecar.classList.add('is-coalesced');
+  }
   if (message._from) msgDiv.dataset.fromActor = String(message._from);
   // Sender label rendered from a stale roster cache: keep the bubble marked
   // so _repaintPendingActorHeaders can upgrade the chip (and avatar) as soon
@@ -9652,13 +9732,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // 2026-09-18 例外：**模型自选**的投影重新挂卡——模型用 attach_assets_to_task
   // 给这个任务挑了资产，用户必须能看见并一键撤销（onlyModelSelected 让其它授权
   // 的投影维持"不挂卡"的现状，旧决策不动）。
-  if (role === 'assistant' && message.recall_projection_card?.projectionId
+  const projectionCardForBubble = _projectionReceiptForMessage(message)
+    || message.recall_projection_card
+    || coalescedProjectionCard;
+  if (role === 'assistant' && projectionCardForBubble?.projectionId
+      && message.recall_projection_card?.presentation !== 'sidecar'
       && typeof window.mountRecallProjectionCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
       const host = document.createElement('div');
+      if (message.recall_projection_card) host.dataset.recallProjectionTransport = 'sidecar';
       bubble.appendChild(host);
-      window.mountRecallProjectionCard(host, message.recall_projection_card, {
+      window.mountRecallProjectionCard(host, projectionCardForBubble, {
         cid: opts.cid || currentCid,
         onlyModelSelected: true,
       });
@@ -14385,6 +14470,9 @@ function _streamingUpdateActivityFromEvent(msg, evt) {
   const phase = String(data.phase || data.status || '').toLowerCase();
   if (stream === 'runtime' && phase === 'retrying') {
     const attempt = Math.max(1, Math.round(Number(data.attempt) || 1));
+    if (typeof window.chatStreamSetRuntimeStatus === 'function') {
+      window.chatStreamSetRuntimeStatus(msg?.dataset?.cid, msg, { type: 'retry', attempt });
+    }
     _streamingUpdateActivity(msg, attempt > 1
       ? t('model.retrying_n', { attempt })
       : t('model.retrying'));

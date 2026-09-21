@@ -20,6 +20,7 @@ import {
 
 type ConversationMessage = {
   recall_projection_card?: Pick<RecallProjectionCard, 'projectionId'>;
+  projection_receipt?: Pick<RecallProjectionCard, 'projectionId'>;
 };
 
 const log = createLogger('recall.prompt-injection');
@@ -43,7 +44,7 @@ const PROFILE_MEMORY_PREFIX_LINES = [
 export interface RecallPromptCitation {
   assetId: string;
   title: string;
-  type: 'personal' | 'rule' | 'template' | 'skill_method';
+  type: 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
   version: string;
   scope: string;
   projectionId: string;
@@ -369,7 +370,8 @@ export async function projectionIdsForConversation(userId: string, cid: string):
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const message of messages.reverse()) {
-    const projectionId = message?.recall_projection_card?.projectionId;
+    const projectionId = message?.projection_receipt?.projectionId
+      || message?.recall_projection_card?.projectionId;
     if (typeof projectionId !== 'string' || !projectionId || seen.has(projectionId)) continue;
     seen.add(projectionId);
     ids.push(projectionId);

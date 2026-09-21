@@ -51,12 +51,70 @@
   }
 
   function _statusLabel(status) {
+    if (status === 'revoked') return _label('recall.projection.status.revoked', 'Revoked');
     if (status === 'confirmed') return _label('recall.projection.status.confirmed', 'Confirmed');
     if (status === 'preview') return _label('recall.projection.status.preview', 'Preview');
     if (status === 'deferred') return _label('recall.projection.status.deferred', 'Deferred');
     if (status === 'rejected') return _label('recall.projection.status.rejected', 'Rejected');
     if (status === 'expired') return _label('recall.projection.status.expired', 'Expired');
     return String(status || '');
+  }
+
+  function _renderModelSelectedReceipt(host, card) {
+    // Only a transport sidecar owns fallback prose. A receipt mounted on the
+    // final reply must never hide that reply's markdown body.
+    if (host.dataset.recallProjectionTransport === 'sidecar') {
+      const bubble = typeof host.closest === 'function' ? host.closest('.chat-bubble') : null;
+      const prose = bubble && typeof bubble.querySelector === 'function' ? bubble.querySelector('.markdown-body') : null;
+      if (prose) prose.hidden = true;
+    }
+    const assets = Array.isArray(card?.assetSummaries) ? card.assetSummaries : [];
+    const omitted = Array.isArray(card?.omittedAssetRefs) ? card.omittedAssetRefs : [];
+    const revoked = card?.status === 'revoked';
+    const status = _statusLabel(card?.status);
+    const primaryNote = revoked
+      ? _label('recall.projection.revoked_note', 'Revoked: later turns no longer carry these assets.')
+      : _label('recall.projection.model_selected_locked', 'The model picked these for the current task; later turns keep carrying them until you revoke.');
+    const modelIds = Array.isArray(card?.modelSelectedAssetIds) ? card.modelSelectedAssetIds : null;
+    const hasModelLedger = Boolean(modelIds);
+    const modelIdSet = new Set(modelIds || []);
+    const modelAssets = hasModelLedger ? assets.filter((asset) => modelIdSet.has(String(asset?.assetId || asset?.id || ''))) : assets;
+    const baselineAssets = hasModelLedger ? assets.filter((asset) => !modelIdSet.has(String(asset?.assetId || asset?.id || ''))) : [];
+    const summary = hasModelLedger
+      ? _label('recall.projection.model_selected_summary_precise', 'Model attached {count} cognition assets · {total} in projection', {
+          count: Number(card?.modelSelectedCount ?? modelIds?.length ?? 0),
+          total: Number(card?.totalAssetCount ?? assets.length),
+        })
+      : _label('recall.projection.model_selected_summary_legacy', 'Model-selected projection · {total} cognition assets', {
+          total: Number(card?.totalAssetCount ?? assets.length),
+        });
+    const assetRows = (rows, emptyLabel) => rows.length
+      ? rows.map((asset) => _assetRow(asset, false)).join('')
+      : `<div class="chat-recall-projection-empty">${_escape(emptyLabel)}</div>`;
+    const detailSections = hasModelLedger
+      ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.model_selected_assets', 'Model-selected assets'))}</div>${assetRows(modelAssets, _label('recall.projection.no_included_assets', 'No preloaded assets selected.'))}</div>
+          ${baselineAssets.length ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.semantic_baseline_assets', 'Semantic baseline assets'))}</div>${assetRows(baselineAssets, _label('recall.projection.no_included_assets', 'No preloaded assets selected.'))}</div>` : ''}`
+      : `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preloaded assets'))}</div>${assetRows(assets, _label('recall.projection.no_included_assets', 'No preloaded assets selected.'))}</div>`;
+    host.className = `chat-recall-projection-card is-model-selected is-${revoked ? 'revoked' : String(card?.status || 'unknown')}`;
+    host.dataset.projectionId = String(card?.projectionId || '');
+    host.innerHTML = `<div class="chat-recall-projection-head">
+        <div class="chat-recall-projection-title">
+          <strong>${_escape(summary)}</strong>
+          <small>${_escape(primaryNote)}</small>
+        </div>
+        <span class="chat-recall-projection-badge">${_escape(_label('recall.projection.model_selected_badge', 'Model-picked'))}</span>
+        <span class="chat-recall-projection-status">${_escape(status)}</span>
+      </div>
+      <div class="chat-recall-projection-summary-actions">
+        ${revoked ? '' : _sharedButton(_label('recall.projection.revoke', 'Revoke'), { 'data-recall-projection-revoke': '1' })}
+      </div>
+      <details class="chat-recall-projection-details">
+        <summary>${_escape(_label('recall.projection.view_details', 'View details'))}</summary>
+        <div class="chat-recall-projection-body">
+          ${detailSections}
+          ${omitted.length ? `<div class="chat-recall-projection-omitted">${_escape(_label('recall.projection.omitted_count', '{count} assets hidden', { count: omitted.length }))}</div>` : ''}
+        </div>
+      </details>`;
   }
 
   function _assetRow(asset, editable) {
@@ -108,6 +166,10 @@
       : editable
         ? `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_available_assets', 'No more assets to add.'))}</div>`
         : '';
+    if (modelSelected) {
+      _renderModelSelectedReceipt(host, card);
+      return;
+    }
     host.className = 'chat-recall-projection-card';
     host.dataset.projectionId = String(card?.projectionId || opts?.projectionId || '');
     const revoked = card?.status === 'revoked';

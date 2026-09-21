@@ -360,6 +360,8 @@ describe('RecallView and ContextProjection', () => {
       removeAssetIds: [first.asset.id, first.asset.id],
     });
     expect(revised.assetIds).toEqual([second.asset.id]);
+    expect(revised.modelSelectedAssetIds).toBeUndefined();
+    expect(revised.modelSelectionEvents).toBeUndefined();
 
     await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: ['../bad'] }))
       .rejects.toThrow(/invalid projection asset/i);
@@ -1220,3 +1222,48 @@ describe('注入体量对比（2026-09-18，可用高效）：模型自选的增
 });
 });
 
+
+
+describe('model-selected projection accounting', () => {
+  it('records only newly attached model assets and keeps repeated calls idempotent', async () => {
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const first = await createAssetWith({ judgment: 'Model-selected accounting rule one', summary: 'model-one', sourceId: 'exec-model-one' });
+    const second = await createAssetWith({ judgment: 'Model-selected accounting rule two', summary: 'model-two', sourceId: 'exec-model-two' });
+    const created = await projection.previewContextProjection('user-a', {
+      taskRunId: 'turn-model-base', purpose: 'model_selected', authorization: 'model_selected', confirm: true,
+    });
+
+    const attached = await projection.appendAssetsToModelSelectedProjection(
+      'user-a', created.id, [first.asset.id, second.asset.id], { taskRunId: 'turn-model-a' },
+    );
+    expect(attached.modelSelectedAssetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(attached.modelSelectionEvents).toHaveLength(1);
+    expect(attached.modelSelectionEvents?.[0]).toMatchObject({
+      taskRunId: 'turn-model-a',
+      assetIds: [first.asset.id, second.asset.id],
+      addedAssetIds: [first.asset.id, second.asset.id],
+    });
+
+    const repeated = await projection.appendAssetsToModelSelectedProjection(
+      'user-a', attached.id, [second.asset.id], { taskRunId: 'turn-model-b' },
+    );
+    expect(repeated.assetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(repeated.modelSelectedAssetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(repeated.modelSelectionEvents).toHaveLength(2);
+    expect(repeated.modelSelectionEvents?.[1]).toMatchObject({
+      taskRunId: 'turn-model-b',
+      assetIds: [second.asset.id],
+      addedAssetIds: [],
+    });
+
+    const { buildProjectionCard } = await import('../../../../src/main/features/recall/projection-card');
+    const card = await buildProjectionCard('user-a', repeated.id);
+    expect(card.modelSelectedAssetIds).toEqual([first.asset.id, second.asset.id]);
+    expect(card.modelSelectedCount).toBe(2);
+    expect(card.totalAssetCount).toBe(2);
+
+    await projection.revokeModelSelectedProjection('user-a', repeated.id);
+    const revokedCard = await buildProjectionCard('user-a', repeated.id);
+    expect(revokedCard.status).toBe('revoked');
+  });
+});

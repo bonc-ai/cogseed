@@ -95,6 +95,13 @@ export interface RecallAssetMatch {
   matchMethod: RecallAssetMatchMethod;
 }
 
+export interface ModelSelectionEvent {
+  taskRunId: string;
+  assetIds: string[];
+  addedAssetIds: string[];
+  addedAt: string;
+}
+
 export interface ContextProjectionRecord extends RecallJsonRecord {
   taskRunId: string;
   conversationId?: string;
@@ -108,6 +115,10 @@ export interface ContextProjectionRecord extends RecallJsonRecord {
    *  删除前一致。仅为删除时的兜底缓存，不是投影本体的必填结构。 */
   assetVersionSnapshots?: Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }>;
   assetMatches?: RecallAssetMatch[];
+  /** Cumulative assets added because the model explicitly named them. */
+  modelSelectedAssetIds?: string[];
+  /** Per tool-call ledger for model-selected additions. */
+  modelSelectionEvents?: ModelSelectionEvent[];
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
   expiresAt?: string;
@@ -429,13 +440,49 @@ function sourceRefsForAssets(assets: RecallAbilityAssetRecord[]): CognitionSourc
   return sourceRefs;
 }
 
+function validateModelSelectedAssetIds(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('malformed model-selected assets');
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const id = String(item || '');
+    if (!id || seen.has(id)) throw new Error('malformed model-selected assets');
+    seen.add(id); out.push(id);
+  }
+  return out;
+}
+
+function validateModelSelectionEvents(value: unknown): ModelSelectionEvent[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('malformed model selection events');
+  return value.map((event) => {
+    if (!event || typeof event !== 'object') throw new Error('malformed model selection event');
+    const row = event as Record<string, unknown>;
+    const taskRunId = String(row.taskRunId || '');
+    const addedAt = String(row.addedAt || '');
+    if (!taskRunId || !addedAt) throw new Error('malformed model selection event');
+    return {
+      taskRunId,
+      assetIds: validateModelSelectedAssetIds(row.assetIds) || [],
+      addedAssetIds: validateModelSelectedAssetIds(row.addedAssetIds) || [],
+      addedAt,
+    };
+  });
+}
+
 function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   if (!Array.isArray(value.assetIds) || !Array.isArray(value.sourceRefs) || !Array.isArray(value.omittedRefs) || typeof value.taskRunId !== 'string' || typeof value.purpose !== 'string' || typeof value.authorization !== 'string' || typeof value.createdAt !== 'string') throw new Error('malformed context projection');
   if (value.selectionDegraded !== undefined && typeof value.selectionDegraded !== 'boolean') throw new Error('malformed context projection');
   const assetMatches = validateAssetMatches(value.assetMatches);
   const assetVersions = validateAssetVersions(value.assetVersions);
   const assetVersionSnapshots = validateAssetVersionSnapshots(value.assetVersionSnapshots);
-  return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}), ...(assetVersionSnapshots ? { assetVersionSnapshots } : {}) } as ContextProjectionRecord;
+  const modelSelectedAssetIds = validateModelSelectedAssetIds(value.modelSelectedAssetIds);
+  const modelSelectionEvents = validateModelSelectionEvents(value.modelSelectionEvents);
+  return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}), ...(assetVersionSnapshots ? { assetVersionSnapshots } : {}),
+    ...(modelSelectedAssetIds ? { modelSelectedAssetIds } : {}),
+    ...(modelSelectionEvents ? { modelSelectionEvents } : {}),
+  } as ContextProjectionRecord;
 }
 
 /** Default semantic HARD FLOOR (dual-signal selection): scores below this
@@ -940,7 +987,7 @@ export async function reviseContextProjection(
   userId: string,
   projectionId: string,
   input: ProjectionRevisionInput,
-  options: { allowedStatuses?: ContextProjectionStatus[] } = {},
+  options: { allowedStatuses?: ContextProjectionStatus[]; modelSelection?: { taskRunId: string } } = {},
 ): Promise<ContextProjectionRecord> {
   const allowedStatuses = options.allowedStatuses || ['preview'];
   const addAssetIds = normalizeProjectionAssetIds(input.addAssetIds, 'addAssetIds');
@@ -988,10 +1035,28 @@ export async function reviseContextProjection(
       else if (addAssetIds.includes(assetId)) assetMatches.push({ assetId, matchScore: 1, matchMethod: 'manual' });
     }
 
+    const priorModelIds = current.modelSelectedAssetIds || [];
+    const newlyAddedModelIds = options.modelSelection
+      ? addAssetIds.filter((assetId) => !current.assetIds.includes(assetId))
+      : [];
+    const nextModelIds = [...new Set([...priorModelIds, ...newlyAddedModelIds])]
+      .filter((assetId) => finalAssetIdSet.has(assetId));
+    const modelSelectionEvents = [
+      ...(current.modelSelectionEvents || []),
+      ...(options.modelSelection ? [{
+        taskRunId: options.modelSelection.taskRunId,
+        assetIds: addAssetIds,
+        addedAssetIds: newlyAddedModelIds,
+        addedAt: new Date().toISOString(),
+      }] : []),
+    ];
+
     return {
       ...current,
       ...(input.purpose ? { purpose: normalizeTerm(input.purpose, 'purpose', 120) } : {}),
       ...(input.decisionNote ? { decisionNote: normalizeTerm(input.decisionNote, 'decision note', 1000) } : {}),
+      ...(nextModelIds.length ? { modelSelectedAssetIds: nextModelIds } : { modelSelectedAssetIds: undefined }),
+      ...(modelSelectionEvents.length ? { modelSelectionEvents } : { modelSelectionEvents: undefined }),
       assetIds: nextAssetIds,
       assetVersions: Object.fromEntries(finalAssets.map((asset) => [asset.id, asset.version])),
       ...(assetMatches.length ? { assetMatches } : { assetMatches: undefined }),
@@ -1103,13 +1168,17 @@ export async function appendAssetsToModelSelectedProjection(
   userId: string,
   projectionId: string,
   assetIds: string[],
+  options: { taskRunId?: string } = {},
 ): Promise<ContextProjectionRecord> {
   const projection = await readContextProjection(userId, projectionId);
   if (projection.authorization !== 'model_selected') {
     throw new Error('context projection is not model-selected');
   }
+  const taskRunId = String(options.taskRunId || projection.taskRunId || '');
+  if (!taskRunId) throw new Error('model selection task run is required');
   return reviseContextProjection(userId, projectionId, { addAssetIds: assetIds }, {
     allowedStatuses: ['preview', 'confirmed'],
+    modelSelection: { taskRunId },
   });
 }
 

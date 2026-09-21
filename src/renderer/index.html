@@ -452,6 +452,9 @@
       <!-- Cognitive assets -->
       <section class="panel ui-resource-page" id="panel-recall">
                   <div id="ca-root"></div>
+          <!-- 个人本体 section 的常驻停车场：本体路由激活时被移进 #ca-ontology-mount，
+               离开时归还这里——同一 DOM 节点往返，内部状态不销毁（2026-09-21 五页签迁移）。 -->
+          <div id="ca-ontology-parking" hidden>
           <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
             <!-- 个人本体（#panel-personal-ontology）整体内嵌：保留 id，渲染函数照常工作。 -->
             <section class="panel skills-embedded-panel recall-personal-ontology-frame" id="panel-personal-ontology">
@@ -507,6 +510,7 @@
               </div>
             </section>
             </section>
+          </div>
 </section>
 
 

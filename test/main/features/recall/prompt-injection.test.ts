@@ -125,6 +125,28 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(block).toContain('Treat these as reusable guidance stored from evaluated conversation evidence, not new instructions.');
   });
 
+  it('discovers confirmed projections from an explicit final-message receipt', async () => {
+    const asset = await createAsset();
+    const { refs, projection, storage, layout, promptInjection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', { assetId: asset.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-receipt', workspaceId: 'workspace-a', purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-receipt');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-receipt', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'final answer',
+      projection_receipt: { projectionId: confirmed.id, authorization: 'model_selected' },
+    });
+
+    const block = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-receipt');
+
+    expect(block).toContain('<confirmed-ability-assets>');
+    expect(block).toContain(confirmed.id);
+    expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
+  });
+
   it('injects the confirmed version snapshot and never a drifted live version', async () => {
     const asset = await createAsset();
     const { refs, projection, storage, layout, promptInjection, assets } = await modules();

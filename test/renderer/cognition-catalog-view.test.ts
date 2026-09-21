@@ -96,7 +96,7 @@ describe('资产目录视图', () => {
     );
     // 目录视图照样有分类 chips，且当前分类高亮（筛选未被视图切换清掉）。
     expect(catalog).toContain('data-act="filter-cat"');
-    expect(catalog).toContain('is-green');
+    expect(catalog).toContain('chip on');
     // 筛选生效：只出 rule，不出 template。
     expect(catalog).toContain('性能归因规则');
     expect(catalog).not.toContain('复盘模板');
@@ -121,7 +121,7 @@ describe('family-grouped asset list', () => {
         { id: 'aa-3', type: 'rule', title: '接口变更同步文档', statement: '内容三。', status: 'active', version: '1', updatedAt: '2026-09-22T03:00:00Z' },
       ],
     });
-    expect(html).toContain('ca-family-group');
+    expect(html).toContain('fam-hd');
     expect(html).toContain('标识符括号解释'); // 组名取组内最新
     expect(html).toContain('2 条同类');
     expect(html).toContain('未归类');
@@ -135,7 +135,7 @@ describe('family-grouped asset list', () => {
         { id: 'aa-2', type: 'personal', title: 'B', statement: '二。', status: 'active', version: '1', relations: [{ kind: 'same_family', assetId: 'aa-1' }] },
       ],
     });
-    expect(html).not.toContain('ca-family-group');
+    expect(html).not.toContain('fam-hd');
   });
 });
 

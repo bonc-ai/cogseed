@@ -46,6 +46,109 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;'));
   NS.esc = esc;
 
+  /* ── 显示截断（对齐后端 catalogTruncate）：截断、去尾标点、省略号 ── */
+  function truncateText(value, limit) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= limit) return text;
+    return text.slice(0, limit).replace(/[，、；：,;:\-—\s]+$/, '') + '…';
+  }
+  NS.truncateText = truncateText;
+
+  /* ── 语义融合（移植自 statement-fusion.ts）：句级三档融入 ──
+   * 重述（重叠≥0.50 且新句更长/近全等）→ 保留更长；
+   * 改写（重叠≥0.45）→ 新替旧；
+   * 增量 → 追加到尾部。截断 4000 字。 */
+  const FUSION_STATEMENT_LIMIT = 4000;
+  const RESTATED_OVERLAP = 0.50;
+  const RESTATED_LENGTH_RATIO = 1.8;
+  const RESTATED_NEAR_TOTAL = 0.75;
+  const REWRITE_OVERLAP = 0.45;
+
+  function fusionBigrams(text) {
+    const normalized = String(text || '').replace(/\s+/g, '');
+    const grams = new Set();
+    for (let i = 0; i + 1 < normalized.length; i += 1) grams.add(normalized.slice(i, i + 2));
+    return grams;
+  }
+  function fusionOverlapCoefficient(left, right) {
+    const a = fusionBigrams(left), b = fusionBigrams(right);
+    if (!a.size || !b.size) return 0;
+    let shared = 0;
+    a.forEach(function (g) { if (b.has(g)) shared += 1; });
+    return shared / Math.min(a.size, b.size);
+  }
+  function fusionSplitSentences(text) {
+    return String(text || '').replace(/([。！？!?；;\n])/g, '$1\u0001').split('\u0001').map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  function fuseStatements(oldStatement, incoming) {
+    const oldSentences = fusionSplitSentences(oldStatement);
+    const newSentences = fusionSplitSentences(incoming);
+    if (!oldSentences.length) {
+      const statement = String(incoming || '').trim().slice(0, FUSION_STATEMENT_LIMIT);
+      return { statement: statement, added: statement ? [statement] : [], replaced: [], keptCount: 0, truncated: (incoming || '').trim().length > FUSION_STATEMENT_LIMIT };
+    }
+    if (!newSentences.length) return { statement: oldStatement, added: [], replaced: [], keptCount: oldSentences.length, truncated: false };
+    const working = oldSentences.slice();
+    for (const sentence of newSentences) {
+      let bestIndex = -1, bestOverlap = 0;
+      for (let i = 0; i < working.length; i += 1) {
+        const overlap = fusionOverlapCoefficient(sentence, working[i]);
+        if (overlap > bestOverlap) { bestOverlap = overlap; bestIndex = i; }
+      }
+      if (bestIndex === -1) { working.push(sentence); continue; }
+      const lengthRatio = sentence.length / working[bestIndex].length;
+      if ((bestOverlap >= RESTATED_OVERLAP && lengthRatio >= RESTATED_LENGTH_RATIO) || bestOverlap >= RESTATED_NEAR_TOTAL) {
+        if (sentence.length > working[bestIndex].length) working[bestIndex] = sentence;
+      } else if (bestOverlap >= REWRITE_OVERLAP) {
+        working[bestIndex] = sentence;
+      } else {
+        working.push(sentence);
+      }
+    }
+    const joined = working.join('');
+    return { statement: joined.slice(0, FUSION_STATEMENT_LIMIT), replaced: [], keptCount: working.length, truncated: joined.length > FUSION_STATEMENT_LIMIT };
+  }
+  NS.fuseStatements = fuseStatements;
+  NS.resolveMergeChainTarget = resolveMergeChainTarget;
+  NS.isAutoCaptureEligible = isAutoCaptureEligible;
+  NS.dedupRefs = dedupRefs;
+
+  /* ── 归并链跟随（对齐后端 promote 实时语义查重）：目标 archived 时 ──
+   * 落到 mergedIntoAssetId 指向的最终存活目标，防止链式归并死循环。 */
+  function resolveMergeChainTarget(asset, allAssets) {
+    let cur = asset;
+    const seen = new Set([String(cur.id)]);
+    while (cur.mergedIntoAssetId) {
+      const next = (allAssets || []).find(function (a) { return String(a.id) === String(cur.mergedIntoAssetId); });
+      if (!next || seen.has(String(next.id))) break;
+      seen.add(String(next.id));
+      cur = next;
+    }
+    return cur;
+  }
+
+  /* ── 自动采纳门禁（对齐 isAutoCaptureEligible）：只有 pending_review ──
+   * 且非高风险的候选可自动写入；其余转待确认由用户手动处理。 */
+  function isAutoCaptureEligible(candidate) {
+    const caps = candidate.capabilities || {};
+    return String(candidate.status || '') === 'pending_review'
+      && String(candidate.risk || 'low') !== 'high'
+      && (caps.canConfirm !== false);
+  }
+
+  /* ── 证据引用去重（对齐 normalizeCognitionSourceRefs seen-set）── */
+  function dedupRefs(refs) {
+    const seen = new Set();
+    const out = [];
+    for (const ref of refs || []) {
+      const key = String(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(ref);
+    }
+    return out;
+  }
+
   const toArr = (value, keys) => {
     if (Array.isArray(value)) return value;
     for (const key of keys || []) {
@@ -142,8 +245,10 @@
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '' },
+    route: { name: 'tree', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '', ontologyBox: '' },
     backStack: [],
+    /** 上一帧的路由名：渲染层据此判断「离开 ontology 页」需要先归还本体 section。 */
+    prevRouteName: 'tree',
   };
   NS.store = store;
 
@@ -384,11 +489,14 @@
 
   /* ────────────────────────── 路由 ────────────────────────── */
 
-  /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab——我的认知 / 待我处理 /
-   * 整理。「我的认知」固定首位（子安拍板）。tab 只留标题（描述小字已删）。
-   * 使用记录并入资产详情、经验（KSTAR）与来源健康常态页砍除（来源改为
-   * 异常驱动，只在待我处理出现）。 */
+  /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab;使用记录并入资产详情、
+   * 经验(KSTAR)与来源健康常态页砍除(来源改为异常驱动,只在待我处理出现)。 */
+  /* 2026-09-21 HTML 原型 v7 迁移：三页签扩成五页签——认知树 / 个人本体 /
+   * 我的认知 / 待我处理 / 整理。默认落地认知树(原型的信息架构：树是第一眼)。
+   * 「我的认知」不再承载树图主界面,树拆成独立全屏页(Phase 3)。 */
   const TABS = [
+    { id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树' },
+    { id: 'ontology', titleKey: 'cognition.tab_ontology', title: '个人本体' },
     { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
     { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
     { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
@@ -403,7 +511,7 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '' }, next);
+      const merged = Object.assign({ name: 'tree', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '', ontologyBox: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
@@ -469,6 +577,12 @@
       '这段判断是在评价这条候选本身，不是可复用的内容。'],
     type_conflicts_with_existing: ['cognition.candidate_block_type_conflicts_with_existing',
       '同一句话已经以另一种类型存在，分类不可信；先裁定它到底属于哪一类。'],
+  };
+
+  /** 单条晋升阻断原因 → 用户文案（候选确认卡内联说明用）。 */
+  NS.promotionBlockText = function promotionBlockText(reason) {
+    const entry = RECALL_PROMOTION_BLOCK_TEXTS[reason];
+    return entry ? T(entry[0], entry[1]) : '';
   };
 
   /** 把 IPC 失败体（{code, error, promotionReasons}）翻成给用户看的话。 */
@@ -787,6 +901,20 @@
       exitEdit();
       await NS.reload();
     },
+    /** 推荐卡「知道了」（2026-09-21 Phase 5 闭环）：确认已了解系统建议
+     *  （暂停/返工），后端清除 recommendedAction 并写 recommendation_cleared
+     *  审计。推荐是告知不是强制——确认只清卡，不改变资产状态。 */
+    async acknowledgeAssetRecommendation(assetId) {
+      const result = await api.call('recall.assets.update', {
+        assetId,
+        acknowledgeRecommendation: true,
+        reason: 'user acknowledged recommendation',
+      });
+      if (!result || !result.ok) return;
+      toast(T('cognition.asset_recommend_cleared', '已确认，推荐卡已清除'));
+      store.assetVersions = null;
+      await NS.reload();
+    },
     /** 两版合并为新版（2026-09-17 报告建议 H）：把所选版正文接在在用版正文
      *  之后存为新版本（只合并正文，标题/范围取在用版）；合并后可用「编辑」
      *  整理措辞。合成结果与在用版相同则不提交（后端无内容等价检查）。 */
@@ -862,12 +990,13 @@
       toast(T('common.done', '已完成'));
       await NS.reload();
     },
-    /** 批量控制：ids 由调用方收敛到「当前已加载且该动作可执行」的行（每条
-     *  立即整理都是一次模型额度消耗），确认弹窗在 app.js 写死条数。 */
+    /** 批量控制：ids 由调用方收敛到「当前已加载且该动作可执行」的行。只做
+     *  批量重试（2026-09-21 原型 v7 定调）：批量「立即整理」入口不迁移——
+     *  每次立即整理都是一次模型额度消耗，用户旅程只需逐条处理；后端
+     *  batchRunNow 能力保留但前端不再触达。 */
     async captureBatch(action, ids) {
-      const channel = action === 'retry' ? 'recall.captures.batchRetry' : 'recall.captures.batchRunNow';
-      if (!channel || !ids.length) return;
-      const result = await api.call(channel, { captureIds: ids });
+      if (action !== 'retry' || !ids.length) return;
+      const result = await api.call('recall.captures.batchRetry', { captureIds: ids });
       const outcome = (result && result.result) || { succeeded: [], failed: [] };
       if (outcome.failed && outcome.failed.length) {
         toast(T('cognition.capture_batch_partial', '已处理 {ok} 条，{fail} 条没有成功（多为状态已变化）', { ok: String(outcome.succeeded.length), fail: String(outcome.failed.length) }), 'warning');
@@ -942,21 +1071,35 @@
     back.addEventListener('click', () => { NS.closePersonalOntology(); });
   }
 
-  NS.openPersonalOntology = async function openPersonalOntology() {
-    showRecallPanel();
+  /* ───────────── 个人本体独立页(2026-09-21 五页签迁移) ───────────── */
+  /* 本体不再是"隐藏 ca-root + 整屏替换"的独立形态,而是五页签里的一个路由:
+   * 渲染层在 ca-scroll 里放 #ca-ontology-mount,再由这里把 index.html 的
+   * #skills-cognition-personal-ontology section 从 parking 容器移进 mount,
+   * 调 renderPersonalOntology()。离开路由时先归还 parking 再擦除内容区——
+   * section 始终是同一个 DOM 节点,本体内部状态(_pocSelected 等)不销毁。 */
+
+  NS.unmountPersonalOntology = function unmountPersonalOntology() {
     const section = document.getElementById('skills-cognition-personal-ontology');
     if (!section) return;
-    // 深链可能早于 recall 特性组加载完成：渲染函数不在时按需补载再画。
+    const parking = document.getElementById('ca-ontology-parking');
+    if (parking && section.parentElement !== parking) parking.appendChild(section);
+    section.hidden = true;
+    section.classList.remove('is-standalone');
+  };
+
+  NS.mountPersonalOntology = async function mountPersonalOntology() {
+    showRecallPanel();
+    const section = document.getElementById('skills-cognition-personal-ontology');
+    const mount = document.getElementById('ca-ontology-mount');
+    if (!section || !mount) return;
+    // 深链可能早于特性组加载完成:渲染函数不在时按需补载再画。
     if (typeof window.renderPersonalOntology !== 'function') {
       const load = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
       if (typeof load === 'function') {
         try { await load('personal-ontology'); } catch (_) { /* 渲染函数缺席时下面跳过 */ }
       }
     }
-    // 独立界面（2026-09-14）：本体工作台独占内容区——收起新 UI 主体
-    // （认知树/资产列表），不再以"树下方半页卡片"的形式共存。
-    const appRoot = document.getElementById('ca-root');
-    if (appRoot) appRoot.hidden = true;
+    if (mount.parentElement && section.parentElement !== mount) mount.appendChild(section);
     section.hidden = false;
     section.classList.add('is-standalone');
     wireOntologyBackButton(section);
@@ -965,15 +1108,11 @@
     }
   };
 
+  NS.openPersonalOntology = function openPersonalOntology() {
+    NS.router.go({ name: 'ontology' });
+  };
+
   NS.closePersonalOntology = function closePersonalOntology() {
-    const section = document.getElementById('skills-cognition-personal-ontology');
-    if (section) {
-      section.hidden = true;
-      section.classList.remove('is-standalone');
-    }
-    const appRoot = document.getElementById('ca-root');
-    if (appRoot) appRoot.hidden = false;
-    const main = document.getElementById('ca-scroll');
-    if (main) main.scrollTop = 0;
+    NS.router.go({ name: 'tree' });
   };
 })();
