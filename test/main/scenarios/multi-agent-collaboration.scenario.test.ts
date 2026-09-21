@@ -151,4 +151,130 @@ describe.skipIf(!enabled)('scenario › 多 Agent 协作（真机）', () => {
 
     log('场景结论：run 记录、顺序识别、成员派发三项已核对；请人工确认最终交付是否点名了未完成成员。');
   }, 600_000);
+
+  // 第二例：结构化成员 + Wake 门禁。它自动「扮演用户」批准唤醒，因此可以在
+  // 无人值守的情况下跑完真实链路，同时把两条 PRD 约束钉死：
+  //   1. 批准前绝不派发（no approval bypass）；
+  //   2. 收口后 run 必须有终态 + 权威汇总（summary_publication=publish 过的）。
+  // 成员选择故意把「进程内 Agent」排在前、把需要审批的外接 Agent 排在后，
+  // 保证这一例一定会走一次 Wake 审批门。
+  it('结构化成员 + Wake 门禁：批准前不派发，批准后顺序执行并发布权威汇总', async () => {
+    const users = await import('../../../src/main/features/users');
+    if (!users.hasActiveUser()) {
+      const explicitUid = String(process.env.COGSEED_SCENARIO_UID || '').trim();
+      if (explicitUid) {
+        users.activateUser(explicitUid);
+      } else {
+        users.setUseDevCurrentUserId(true);
+        users.initActiveUser();
+      }
+    }
+    const chats = await import('../../../src/main/features/chats');
+    const agents = await import('../../../src/main/features/agents');
+    const groupChat = await import('../../../src/main/features/group_chat');
+    const runStore = await import('../../../src/main/features/group_chat/run_store');
+    const wake = await import('../../../src/main/features/p3394/wake-service');
+    // 审批必须走应用侧同一条入口：wake-controller 先 approveWakeRequest，
+    // 再驱动 dispatcher，成功后才 markWakeRequestExecuted。只调 service 的
+    // approve 会把请求留在 workflow_transition=approving、永不派发。
+    const p3394 = await import('../../../src/main/features/p3394');
+
+    const uid = users.getActiveUserId();
+    expect(uid, '当前没有登录用户；请先在应用里登录').toBeTruthy();
+
+    const kindOf = (a: { runtime?: { kind?: string } }) => a.runtime?.kind || 'in-process';
+    const roster = (await agents.listAgents()).filter((a: { enabled?: boolean }) => a.enabled !== false);
+    const ordered = [...roster].sort((x, y) => (
+      (kindOf(x) === 'in-process' ? 0 : 1) - (kindOf(y) === 'in-process' ? 0 : 1)
+    ));
+    const chosen = ordered.slice(0, 2);
+    expect(chosen.length, '至少需要两个可用 Agent').toBeGreaterThanOrEqual(2);
+    const memberIds = chosen.map((a: { agent_id: string }) => a.agent_id);
+    const nameOf = (a: { name?: string; agent_id: string }) => a.name || a.agent_id;
+    const text = `先由 @${nameOf(chosen[0])} 给出实现方案，再由 @${nameOf(chosen[1])} 按方案做验证，最后汇总。`;
+    log('[wake-gate] members =', memberIds.join(', '));
+    log('[wake-gate] kinds =', chosen.map((a: { runtime?: { kind?: string } }) => kindOf(a)).join(', '));
+
+    const conv = await chats.createConversation(uid, { title: '多Agent 场景测试·Wake门禁' });
+    const cid = conv.conversation_id;
+    log('[wake-gate] conversation =', cid);
+
+    const sent = await groupChat.send({
+      userId: uid,
+      cid,
+      text,
+      member_agent_ids: memberIds,
+      mention_agent_ids: memberIds,
+    });
+    expect(sent.ok, `send 未被接受：${sent.error || ''}`).toBe(true);
+
+    const runId = await waitFor(async () => {
+      const ids = await runStore.listRunIds(uid, cid);
+      return ids.length ? ids[ids.length - 1] : null;
+    }, 30_000);
+    expect(runId, 'run 记录未落盘').toBeTruthy();
+
+    // 等待第一条需要审批的 Wake 出现，并验证「还没批准就不许派发」。
+    const pending = await waitFor(async () => {
+      const list = await wake.listWakeRequests(uid, cid);
+      return list.find((r: { status: string }) => r.status === 'pending') || null;
+    }, Number(process.env.COGSEED_SCENARIO_WAKE_TIMEOUT_MS || 120_000));
+    expect(pending, '没有等到待审批的 Wake：外接成员可能不需要审批，或派发未发生').toBeTruthy();
+    const beforeApproval = await runStore.readRun(uid, cid, runId!);
+    const gated = beforeApproval?.actors.find((a) => a.agent_id === (pending as { agent_id: string }).agent_id);
+    expect(
+      gated?.dispatched?.length || 0,
+      '批准前就已经派发：Wake 门禁被绕过',
+    ).toBe(0);
+    log('[wake-gate] 批准前 dispatched =', gated?.dispatched?.length || 0);
+
+    // 扮演用户批准：顺序场景可能有多次门（每个外接成员一次），循环处理。
+    const timeoutMs = Number(process.env.COGSEED_SCENARIO_TIMEOUT_MS || 600_000);
+    const deadline = Date.now() + timeoutMs;
+    let settled = null as Awaited<ReturnType<typeof runStore.readRun>>;
+    while (Date.now() < deadline) {
+      const list = await wake.listWakeRequests(uid, cid);
+      const next = list.find((r: { status: string }) => r.status === 'pending');
+      if (next) {
+        log('[wake-gate] approve =', (next as { id: string }).id, (next as { agent_name?: string }).agent_name || '');
+        const decided = await p3394.decideWakeRequest(uid, {
+          requestId: (next as { id: string }).id,
+          decision: 'approve',
+        });
+        log('[wake-gate] decision =', JSON.stringify(decided).slice(0, 200));
+        expect(decided.ok, `批准未被接受：${decided.ok ? '' : decided.error}`).toBe(true);
+      }
+      const rec = await runStore.readRun(uid, cid, runId!);
+      if (rec && rec.status !== 'running') { settled = rec; break; }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    const latest = settled || await runStore.readRun(uid, cid, runId!);
+    log('[wake-gate] --- run record ---');
+    log(JSON.stringify(latest, null, 2));
+    expect(latest, '未找到 run 记录').not.toBeNull();
+    expect(latest!.status, 'run 未收口（没有终态）').not.toBe('running');
+    expect(latest!.summary, '缺少权威汇总').toBeTruthy();
+    expect(
+      latest!.summary_publication?.status,
+      '汇总未发布（summary_publication 不是 published）',
+    ).toBe('published');
+    // 契约：每个 actor 要么自己走到终态，要么被权威汇总记为 missing
+    //（reason=no_terminal 表示它从未拿到终态）。两者必居其一，
+    // 不允许出现「既没有终态、也没有入账」的 actor。
+    const missingIds = new Set((latest!.summary?.missing || []).map((m) => m.agent_id));
+    for (const actor of latest!.actors) {
+      const accounted = actor.terminal !== 'pending' || missingIds.has(actor.agent_id);
+      expect(accounted, `actor ${actor.agent_id} 既没有终态也没有进 missing`).toBe(true);
+    }
+    // 只记录、不判失败：从未派发的 actor 目前不在 RETRYABLE_TERMINALS
+    //（只含 failed/blocked/stopped/removed）里，所以汇总说它「缺失」，
+    // 但「重试未完成」不会带上它 —— 这是待产品确认的缺口。
+    const neverDispatched = latest!.actors
+      .filter((actor) => actor.terminal === 'pending')
+      .map((actor) => actor.agent_id);
+    if (neverDispatched.length) {
+      log('[wake-gate] ⚠ 未派发 actor 目前不可重试（RETRYABLE_TERMINALS 不含 pending）：', neverDispatched.join(', '));
+    }
+    log('[wake-gate] 场景结论：门禁未绕过、run 已收口、汇总已发布、每个 actor 都入了账。');
+  }, 900_000);
 });
