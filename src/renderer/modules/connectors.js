@@ -1065,7 +1065,7 @@ function _parseEnvLines(text) {
 // single validated IPC route `connectors.add_custom`.
 function _openAddCustomDialog() {
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay ui-dialog-overlay';
+  overlay.className = 'ui-modal-overlay';
   const formHtml = uiForm({
     ariaLabel: t('connectors.custom.title'),
     fields: [
@@ -1155,12 +1155,16 @@ function _openAddCustomDialog() {
     ],
   });
   overlay.innerHTML = `
-    <div class="modal modal-standard ui-dialog connector-custom-dialog" role="dialog" aria-modal="true" aria-labelledby="connector-custom-title">
-      <div class="modal-title ui-dialog-title" id="connector-custom-title">${escapeHtml(t('connectors.custom.title'))}</div>
-      <div class="modal-body">
+    <section class="ui-modal connector-custom-dialog" role="dialog" aria-modal="true" aria-labelledby="connector-custom-title">
+      <header class="ui-modal__header">
+        <div class="ui-modal__heading">
+          <h2 class="ui-modal__title" id="connector-custom-title">${escapeHtml(t('connectors.custom.title'))}</h2>
+        </div>
+      </header>
+      <div class="ui-modal__body">
         ${formHtml}
       </div>
-    </div>
+    </section>
   `;
   document.body.appendChild(overlay);
 

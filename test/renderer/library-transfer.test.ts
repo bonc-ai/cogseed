@@ -65,6 +65,11 @@ describe('shared Library transfer dialog', () => {
     expect(contextFileMenu.indexOf("action: 'open_in_system'")).toBeGreaterThan(contextFileMenu.indexOf("action: 'organize'"));
     expect(dialog).toContain("data-transfer-mode=\"move\"");
     expect(dialog).toContain("data-transfer-mode=\"copy\"");
+    expect(dialog).toContain("overlay.className = 'ui-modal-overlay library-transfer-overlay'");
+    expect(dialog).toContain('class="ui-modal ui-modal--lg library-transfer-dialog"');
+    expect(dialog).toContain('class="ui-modal__footer library-transfer-footer"');
+    expect(dialog).toContain("_iconButton({ label: t('common.close'), icon: 'x'");
+    expect(dialog).toContain("_button({ label: t('contexts.transfer.move'), role: 'primary'");
     expect(dialog).toContain("root.cogseed.invoke('library.transfer'");
     expect(dialog).toContain("apiFetch('/api/contexts/tree')");
     expect(dialog).toContain('32 + row.depth * 18');

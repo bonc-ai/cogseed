@@ -789,7 +789,7 @@
           ? root.uiEmptyState({
             kind: 'actionable',
             title: t('kb.transcriptCorrect.idle_title', '扫描这份逐字稿里需要纠正的词'),
-            description: t('kb.transcriptCorrect.idle_desc', '只会替换你词表里确认过的词；原文不会被改动。'),
+            hint: t('kb.transcriptCorrect.idle_desc', '只会替换你词表里确认过的词；原文不会被改动。'),
             action: { label: t('kb.transcriptCorrect.scan', '扫描'), attrs: { 'data-atc-action': 'scan' } },
           })
           : '';
@@ -800,7 +800,7 @@
           ? root.uiEmptyState({
             kind: 'quiet',
             title: t('kb.transcriptCorrect.no_hits', '没有发现需要纠正的词'),
-            description: t('kb.transcriptCorrect.no_hits_desc', '可以在下方新增词条后再扫描。'),
+            hint: t('kb.transcriptCorrect.no_hits_desc', '可以在下方新增词条后再扫描。'),
           })
           : '';
         return;
@@ -927,6 +927,7 @@
         }),
         '<label class="kb-atc__scope-toggle">' + root.uiCheckbox({
           id: 'kb-atc-merge-speaker-' + panelId,
+          label: t('kb.transcriptCorrect.merge_on', '合并同人发言'),
           checked: state.mergeSpeaker,
           disabled: state.busy,
           attrs: { 'data-atc-action': 'toggle-merge' },

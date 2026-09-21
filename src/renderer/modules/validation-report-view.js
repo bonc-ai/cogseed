@@ -5,10 +5,8 @@
 //   - marketplace.js: when install is rejected by the quality validator
 //   - (future) skill / agent inline edit chats
 //
-// Reuses the dialog overlay chrome from dialogs.js (.modal-overlay /
-// .ui-dialog / .modal-actions / .btn) per CLAUDE.md §8 "Reuse UI
-// components" — the only new structure is the per-violation card list,
-// which is layout-specific.
+// Reuses the shared Modal and Button contracts; the only feature-owned
+// structure is the per-violation card list, which is layout-specific.
 //
 // API:
 //   showValidationReport({ title, report, okLabel?, forceLabel? }): Promise<'close'|'force'>
@@ -150,7 +148,7 @@ function _moreLabel(n) {
 function showValidationReport({ title, titleKey, titleParams, report, okLabel, okLabelKey, forceLabel, forceLabelKey } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay';
+    overlay.className = 'ui-modal-overlay';
 
     const violations = (report && Array.isArray(report.violations)) ? report.violations : [];
     // Sort: EXTREME first, then MEDIUM, then LOW. Within a level keep
@@ -174,16 +172,20 @@ function showValidationReport({ title, titleKey, titleParams, report, okLabel, o
     const force = forceLabel ? escapeHtml(forceLabel) : '';
 
     overlay.innerHTML = `
-      <div class="modal modal-standard ui-dialog quality-report-dialog" role="dialog" aria-modal="true" aria-labelledby="quality-report-title" style="max-width:640px;width:90vw;">
-        <div class="modal-title ui-dialog-title" id="quality-report-title">${titleText}</div>
-        <div class="modal-body quality-report-body" style="max-height:60vh;overflow-y:auto;">
+      <section class="ui-modal ui-modal--lg quality-report-dialog" role="dialog" aria-modal="true" aria-labelledby="quality-report-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="quality-report-title">${titleText}</h2>
+          </div>
+        </header>
+        <div class="ui-modal__body quality-report-body">
           ${bodyHtml}
         </div>
-        <div class="modal-actions">
-          ${force ? `<button class="btn" data-act="force">${force}</button>` : ''}
-          <button class="btn btn-primary" data-act="ok">${ok}</button>
-        </div>
-      </div>
+        <footer class="ui-modal__footer">
+          ${force ? uiButton({ label: force, role: 'secondary', attrs: { 'data-act': 'force' } }) : ''}
+          ${uiButton({ label: ok, role: 'primary', attrs: { 'data-act': 'ok' } })}
+        </footer>
+      </section>
     `;
     document.body.appendChild(overlay);
 
@@ -228,9 +230,15 @@ function showValidationReport({ title, titleKey, titleParams, report, okLabel, o
           ? _groupViolationsByRule(sorted).map(_renderViolationGroup).join('')
           : `<div class="muted" style="text-align:center;padding:20px;">${escapeHtml(t('quality.empty'))}</div>`;
       }
-      if (!okLabel || okLabelKey) okBtn.textContent = t(okLabelKey || 'common.close');
+      if (!okLabel || okLabelKey) {
+        const label = okBtn.querySelector('.ui-button__label');
+        if (label) label.textContent = t(okLabelKey || 'common.close');
+      }
       const forceBtn = overlay.querySelector('[data-act="force"]');
-      if (forceBtn && forceLabelKey) forceBtn.textContent = t(forceLabelKey);
+      if (forceBtn && forceLabelKey) {
+        const label = forceBtn.querySelector('.ui-button__label');
+        if (label) label.textContent = t(forceLabelKey);
+      }
     };
     window.addEventListener('i18n-change', onI18nChange);
     if (controller) controller.open();

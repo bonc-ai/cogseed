@@ -356,10 +356,10 @@ describe('Recall cognition workspace layout', () => {
     // 没有 switchSkillsCognitionPage 这类强制跳转残留。
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     expect(skills).not.toContain('switchSkillsCognitionPage');
-    // overview 空态给「去处理」入口（ca-empty + go-review），不自动跳页。
+    // overview 空态给共享 EmptyState 的「去处理」入口，不自动跳页。
     const views = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf-8');
-    expect(views).toContain('ca-empty');
-    expect(views).toContain('data-act="go-review"');
+    expect(views).toContain("throw new Error('cognition assets require uiEmptyState')");
+    expect(views).toContain("'data-act': 'go-review'");
   });
 
   it('routes retired deep links into the new views', () => {
