@@ -860,8 +860,8 @@
     const isBg = mode === 'bg';
     menu.classList.add('show');
     menu.innerHTML = `
-      <div class="kb-color-title">${isBg ? _t('kb.notes.color_background') : _t('kb.notes.color_text')}</div>
-      <div class="kb-color-clear">${isBg ? _t('kb.notes.color_none') : _t('kb.notes.color_default')}</div>
+      <div class="kb-color-title">${_esc(isBg ? _t('kb.notes.color_background') : _t('kb.notes.color_text'))}</div>
+      <div class="kb-color-clear">${_esc(isBg ? _t('kb.notes.color_none') : _t('kb.notes.color_default'))}</div>
       <div class="kb-color-grid">
         ${KB_COLOR_PANEL.map((row) => row.map((c) =>
           `<div class="kb-color-cell${isBg && c === '#FFE58A' ? ' is-selected' : ''}" data-color="${c}" style="background:${c}" title="${c}"></div>`
