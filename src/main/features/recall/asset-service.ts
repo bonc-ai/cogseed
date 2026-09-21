@@ -491,6 +491,11 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       delete next.recommendationReason;
       delete next.recommendationAt;
     }
+    // 边界条件清空语义：readAbilityAssetSemantics 把空数组折叠为键缺席，
+    // `...semantics` 展开后「删光所有条件」的更新会静默变回旧值。传了键却
+    // 没折出值的维度 = 显式清空（盘上形态：键缺席），把现值从记录上拿掉。
+    if (input.applicableWhen !== undefined && !semantics.applicableWhen) delete next.applicableWhen;
+    if (input.forbiddenWhen !== undefined && !semantics.forbiddenWhen) delete next.forbiddenWhen;
     return next;
   });
   const asset = asAsset(updated);
@@ -1146,41 +1151,54 @@ export async function mergeAbilityAssets(
       snapshot: sourceActiveSnapshot,
     } as AbilityAssetVersionRecord);
   }
+  // 归并前的 live source 重读：函数开头读的 source 经过版本流搬运（多次
+  // await）后可能已不是最新，且挂族是直写不 bump 版本——版本快照里的
+  // relations 恒滞后于 live 记录，按快照搬会把自动挂上的族关系丢掉。
+  const sourceLive = await readAbilityAsset(userId, sourceAssetId);
   const merged = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', targetAssetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
     assertNotPurged(current);
-    if (!sourceNewer) {
-      // source 较旧：在用内容不动，但版本计数器必须推进到 cursor——否则后续
-      // 更新的 nextVersion 会与并入的快照撞号（JSONL 追加不去重，撞号后
-      // rollback/select 按号查到错误内容）。activeVersion 显式钉在原在用版
-      // （缺省跟随会指向并入的 source 快照，与在用内容分叉）。
-      return {
-        ...current,
-        version: activeCursor,
-        activeVersion: String(current.activeVersion || target.version),
-        updatedAt: new Date().toISOString(),
-      };
-    }
-    const { status: _s, maturity: _m, version: _v, relations: sourceRelations, derivedFrom: sourceDerivedFrom, ...content } = sourceActiveSnapshot;
-    // 归并把 source 的关系/溯源并入 target：过滤自指（same_family 互指时
-    // source 带着指向 target 的关系，直接搬会撞 normalize 的自指闸），
-    // 指向彼此的 same_family 随归并失效一并丢弃，其余去重保留。
+    // 关系/溯源并入不挑 source 新旧：source 随即归档，不搬就净丢失（族成员
+    // 凭空少）。过滤自指（same_family 互指时 source 带着指向 target 的关系，
+    // 直接搬会撞 normalize 的自指闸），指向彼此的 same_family 随归并失效一并
+    // 丢弃，其余去重保留。
     const seenRelation = new Set((current.relations || []).map((relation) => `${relation.kind}\0${relation.assetId}`));
     const mergedRelations = [...(current.relations || [])];
-    for (const relation of sourceRelations || []) {
+    for (const relation of sourceLive.relations || []) {
       if (relation.assetId === targetAssetId) continue;
       const key = `${relation.kind}\0${relation.assetId}`;
       if (seenRelation.has(key)) continue;
       seenRelation.add(key);
       mergedRelations.push(relation);
     }
-    const mergedDerivedFrom = [...new Set([...(current.derivedFrom || []), ...(sourceDerivedFrom || [])])]
+    const mergedDerivedFrom = [...new Set([...(current.derivedFrom || []), ...(sourceLive.derivedFrom || [])])]
       .filter((id) => id !== targetAssetId)
       .slice(0, 32);
+    if (!sourceNewer) {
+      // source 较旧：在用内容不动，但版本计数器必须推进到 cursor——否则后续
+      // 更新的 nextVersion 会与并入的快照撞号（JSONL 追加不去重，撞号后
+      // rollback/select 按号查到错误内容）。activeVersion 显式钉在原在用版
+      // （缺省跟随会指向并入的 source 快照，与在用内容分叉）。关系上面已并入。
+      return {
+        ...current,
+        relations: mergedRelations,
+        ...(mergedDerivedFrom.length ? { derivedFrom: mergedDerivedFrom } : {}),
+        version: activeCursor,
+        activeVersion: String(current.activeVersion || target.version),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    // scope 单独摘出且不倒退（与 rollback/select 同款守卫）：旧快照可能带
+    // 词表化前的自由文本 scope，原样铺上会再触发 legacy 迁移垫空版本。
+    const { status: _s, maturity: _m, version: _v, relations: _r, derivedFrom: _d, scope: snapshotScope, ...content } = sourceActiveSnapshot;
+    const mergedScope = isRecallScopeTerm(String(snapshotScope || ''))
+      ? String(snapshotScope)
+      : (normalizeAssetScopeValue(String(snapshotScope || '')) || current.scope);
     return {
       ...current,
       ...content,
+      scope: mergedScope,
       relations: mergedRelations,
       ...(mergedDerivedFrom.length ? { derivedFrom: mergedDerivedFrom } : {}),
       evidenceRefs: [...current.evidenceRefs, ...source.evidenceRefs].slice(0, 200),

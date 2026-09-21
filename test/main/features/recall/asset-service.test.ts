@@ -44,6 +44,27 @@ describe('Recall ability assets', () => {
     expect(audit.map((entry) => entry.action)).toEqual(['created', 'updated', 'paused', 'revoked']);
   });
 
+  it('clears boundary conditions when an update passes empty arrays', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Load the exact committed knowledge before execution.',
+      suggestedType: 'rule', ...RULE_BOUNDARY,
+      suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-clear' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(asset.applicableWhen).toEqual(['performing governed work']);
+
+    // 修复前（2026-09-21 审查）：readAbilityAssetSemantics 把 [] 折叠为键缺席，
+    // `...semantics` 展开合并后旧条件静默复活——用户在编辑界面删光所有
+    // 适用/禁用条件保存，条件会原样回来。
+    const cleared = await assets.updateAbilityAsset('user-a', asset.id, {
+      applicableWhen: [], forbiddenWhen: [], actor: 'user', reason: 'conditions removed',
+    });
+    expect(cleared.applicableWhen).toBeUndefined();
+    expect(cleared.forbiddenWhen).toBeUndefined();
+    expect(cleared.statement).toBe(asset.statement); // 没传的维度不受影响
+  });
+
   it('keeps learning provenance in immutable version snapshots', async () => {
     const { candidates, assets } = await modules();
     const learningProvenance = {
@@ -812,6 +833,40 @@ describe('治理动作', () => {
       .rejects.toThrow('revoked ability asset cannot be changed');
     await expect(assets.rollbackAbilityAsset(U, rev.asset.id, '1', userAction('x')))
       .rejects.toThrow('revoked ability asset cannot be changed');
+  });
+
+  it('merge 不丢族关系（2026-09-21 审查修复）：source 较旧也并入、挂族直写读 live', async () => {
+    const { assets } = await modules();
+    const U = 'user-mrg-family';
+    const base = Date.now();
+    const iso = (offset: number) => new Date(base + offset).toISOString();
+    const mk = async (seq: number, statement: string, updatedAt: string) => assets.createAbilityAsset(U, {
+      schemaVersion: 2, ownerId: U, id: `aa-fam-${String(seq).padStart(2, '0')}xxxxxxxxxxxxxxxx`,
+      candidateId: `cand-fam-${seq}`, sourceCandidateIds: [`cand-fam-${seq}`],
+      reviewDecisionId: `rd_fam_${String(seq).padStart(4, '0')}`,
+      type: 'rule', title: `fam-${seq}`, statement,
+      evidenceRefs: [{ kind: 'conversation', id: `conv-fam-${seq}` }], scope: 'general', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      createdAt: updatedAt, updatedAt,
+    }, { actor: 'user', reason: 'family merge seed' });
+    const srcOld = await mk(1, '较旧的源内容。', iso(0));
+    const tgtNew = await mk(2, '较新的目标内容。', iso(10));
+    const famPeer = await mk(3, '族内第三条。', iso(20));
+
+    // 模拟挂族直写（family.ts 行为）：relations 只落 live 记录，不 bump 版本、
+    // 不进版本快照——merge 若按快照搬关系，这条就会静默丢失。
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await updateRecallJsonRecord(U, 'ability-assets', srcOld.id, (raw) => ({
+      ...raw,
+      relations: [...((raw as { relations?: Array<{ kind: string; assetId: string }> }).relations || []),
+        { kind: 'same_family', assetId: famPeer.id }],
+    }));
+
+    // 修复前（source 较旧方向）：关系完全不并入，source 归档后族成员凭空少。
+    const mergedOld = await assets.mergeAbilityAssets(U, srcOld.id, tgtNew.id, userAction('merge family'));
+    expect(mergedOld.relations?.some((r) => r.kind === 'same_family' && r.assetId === famPeer.id)).toBe(true);
+    // 在用内容不动（较旧方向语义不变）。
+    expect(mergedOld.statement).toBe('较新的目标内容。');
   });
 
   it('归并去重空版本（2026-09-16 修）：源资产的迁移垫版不占新号', async () => {
