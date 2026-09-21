@@ -36,6 +36,24 @@ export interface DownloadedUpdate {
 }
 
 /**
+ * Bookkeeping for a partially downloaded installer, persisted so a paused
+ * download survives an app restart instead of throwing away hundreds of MB.
+ *
+ * `received` is the byte count that was on disk when the download stopped; the
+ * resume path re-stats the `.part` file and trusts the on-disk size, so this
+ * field is a hint for the UI, not the resume offset.
+ */
+export interface PartialDownload {
+  version: string;
+  /** Strong validator of the artifact as served (ETag), replayed as `If-Range`. */
+  etag?: string;
+  received: number;
+  /** Full artifact size when the server reported it; 0 while unknown. */
+  total: number;
+  updated_at: number;
+}
+
+/**
  * Machine-private update state, persisted at
  * `<uid>/local/config/updater.json`. Never synced: reminder throttling and
  * skip choices are per-device behaviour, and the downloaded installer path
@@ -55,6 +73,8 @@ export interface UpdaterState {
   dismissed_version?: string;
   /** Most recent verified download. */
   downloaded?: DownloadedUpdate;
+  /** Resumable partial download, if the last attempt paused or was interrupted. */
+  partial?: PartialDownload;
 }
 
 /** Byte-level progress of a running download. */
@@ -77,4 +97,38 @@ export interface CheckResult {
 
 export type DownloadResult =
   | { ok: true; path: string; version: string; size: number; sha256: string }
-  | { ok: false; error: string };
+  | {
+    ok: false;
+    error: string;
+    /** User asked to pause: the `.part` file is kept for a later resume. */
+    paused?: boolean;
+    /** User asked to cancel: the `.part` file was discarded. */
+    canceled?: boolean;
+    /** True when a later `resume` can continue from `received` instead of restarting. */
+    resumable?: boolean;
+    received?: number;
+    total?: number;
+  };
+
+/**
+ * Download runtime state owned by main and rendered by the settings pane.
+ *
+ * The renderer must never infer this from its own click bookkeeping: the
+ * 2026-09-21 report ("clicking download twice makes the progress bar vanish")
+ * came from exactly that — a second click hit `already_downloading`, the
+ * renderer treated it as a failure, and every later progress push was dropped
+ * because its local "downloading" flag had been cleared.
+ */
+export type DownloadPhase = 'idle' | 'downloading' | 'paused' | 'verifying' | 'failed';
+
+export interface DownloadRuntimeState {
+  phase: DownloadPhase;
+  version?: string;
+  received: number;
+  total: number;
+  percent: number;
+  /** `failed` only: last error (user-facing copy is resolved in the renderer). */
+  error?: string;
+  /** `failed` only: whether `resume` can continue from `received`. */
+  resumable?: boolean;
+}

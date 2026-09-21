@@ -1397,7 +1397,7 @@
                   </div>
                   <div class="settings-about-actions">
                     <button class="btn ui-button ui-button--secondary ui-button--sm" id="updater-check-btn" type="button"><span class="ui-button__label" data-i18n="settings.updates.check">检查更新</span></button>
-                    <a class="btn btn-sm btn-plain" href="https://cogseed-open.bonc.com.cn/#view=changelog" target="_blank" rel="noopener noreferrer" data-i18n="settings.updates.view_intro">版本介绍</a>
+                    <a class="btn btn-sm btn-plain" href="https://cogseed-open.bonc.com.cn/changelog/" target="_blank" rel="noopener noreferrer" data-i18n="settings.updates.view_intro">更新日志</a>
                   </div>
                 </div>
                 <div class="settings-about-rows">
@@ -1416,6 +1416,11 @@
                   <div class="settings-row settings-updater-row" id="updater-progress-row" hidden>
                     <div class="updater-progress-track"><div class="updater-progress-bar" id="updater-progress-bar"></div></div>
                     <span class="muted" id="updater-progress-text"></span>
+                    <!-- 传输控件（暂停 / 继续下载 / 取消下载）的挂载点：按钮由
+                         modules/updater.js 走共享 uiButton() 生成后注入这里。
+                         不在此处写死 button 元素——裸控件计数已被
+                         test/renderer/shared-ui-adoption-guard.test.ts 冻结。 -->
+                    <span class="settings-updater-actions" id="updater-progress-actions"></span>
                   </div>
                 </div>
               </div>
