@@ -1013,14 +1013,15 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(membersDialog).toContain("_uiInput({ id: 'kb-members-search-input', type: 'search'");
     expect(membersDialog).toContain("_icon('users', 'kb-members-title-icon')");
     expect(membersDialog).not.toMatch(/[✕👥]/u);
-    expect(shareDialogs).toContain("_uiButton({ label: '复制链接', role: 'secondary', icon: 'link'");
-    expect(shareDialogs).toContain("_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code'");
+    // 断言钉在 i18n 键上（文案随语言变，键不变）
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', icon: 'link'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_gen_code', '生成知识码'), role: 'secondary', icon: 'qr-code'");
     expect(shareDialogs).toContain("_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn'");
     expect((shareDialogs.match(/class="ui-modal__header"/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__body/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__footer/g) || [])).toHaveLength(7);
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.feishu_config_close', '关闭飞书分享配置弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input'");
     expect(source).not.toContain("overlay.className = 'kb-share-pop-overlay'");
@@ -1034,9 +1035,9 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
-    expect(shareDialogs).toContain("_uiButton({ label: '保存并授权', role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary'");
     expect(shareDialogs).toContain("_uiButton({ label: '撤销', role: 'danger', size: 'sm'");
     expect(shareDialogs).toContain("id: 'kb-perm-member'");
     expect(shareDialogs).toContain("id: 'kb-perm-join'");

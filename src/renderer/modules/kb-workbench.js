@@ -6788,7 +6788,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const sp = _kbCurSpace();
     const isSpace = !!_state.spaceId;
     if (!isSpace || !sp) {
-      if (typeof uiToast === 'function') uiToast('请先选择共享知识库', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_pick_first', '请先选择共享知识库'), { variant: 'warning' });
       return;
     }
     _kbPermDlgClose();
@@ -6799,35 +6799,35 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop" role="dialog" aria-modal="true" aria-labelledby="kb-share-pop-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-pop-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.share_title', '分享'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭分享弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.share_close', '关闭分享弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body kb-share-pop-body">
           <div class="kb-share-pop-card">
             <span class="kb-share-pop-folder">${_icon('folder', 'kb-share-pop-folder-icon')}</span>
             <div class="kb-share-pop-card-meta">
-              <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
-              <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
+              <div class="kb-share-pop-count">${_esc(sp.name || _tr('kb.workbench.share_shared_lib', '共享知识库'))}</div>
+              <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">${_esc(_tr('kb.workbench.me', '我'))}</span>${_esc(_tr('kb.workbench.share_creator_me', '我创建'))}</div>
             </div>
           </div>
           <div class="kb-share-pop-row" id="kb-share-pop-perm-row" role="button" tabindex="0">
-            <span class="kb-share-pop-row-label">选择分享方式</span>
+            <span class="kb-share-pop-row-label">${_esc(_tr('kb.workbench.share_way', '选择分享方式'))}</span>
             <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
           </div>
           <div class="kb-share-pop-row" id="kb-share-pop-status-row" role="button" tabindex="0">
-            <span class="kb-share-pop-row-label">分享到飞书</span>
-            <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
+            <span class="kb-share-pop-row-label">${_esc(_tr('kb.workbench.share_to_feishu', '分享到飞书'))}</span>
+            <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">${_esc(_tr('kb.workbench.share_status_none', '未分享'))} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
           </div>
           <div class="kb-share-pop-row" id="kb-share-cogseed-row" role="button" tabindex="0">
-            <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
-            <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
+            <span class="kb-share-pop-row-label">${_esc(_tr('kb.workbench.share_to_cogseed', '发布到 CogSeed 问答'))}</span>
+            <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">${_esc(_tr('kb.workbench.share_status_unpublished', '未发布'))} <span class="kb-share-pop-row-arrow">${_icon('chevron-right', 'kb-share-row-arrow-icon')}</span></span>
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions">
-          ${_uiButton({ label: '复制链接', role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-pop-copy-link' } })}
-          ${_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code', className: 'kb-share-pop-btn is-code', attrs: { id: 'kb-share-pop-code' } })}
-          ${_uiButton({ label: '管理', role: 'secondary', icon: 'settings', className: 'kb-share-pop-btn is-manage', attrs: { id: 'kb-share-pop-manage', hidden: true } })}
+          ${_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', icon: 'link', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-pop-copy-link' } })}
+          ${_uiButton({ label: _tr('kb.workbench.share_gen_code', '生成知识码'), role: 'secondary', icon: 'qr-code', className: 'kb-share-pop-btn is-code', attrs: { id: 'kb-share-pop-code' } })}
+          ${_uiButton({ label: _tr('kb.workbench.share_manage', '管理'), role: 'secondary', icon: 'settings', className: 'kb-share-pop-btn is-manage', attrs: { id: 'kb-share-pop-manage', hidden: true } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -6883,22 +6883,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       btn.disabled = true;
       btn.classList.add('is-loading');
       btn.setAttribute('aria-busy', 'true');
-      _setUiButtonPresentation(btn, '分享中…');
+      _setUiButtonPresentation(btn, _tr('kb.workbench.share_busy', '分享中…'));
       try {
         let state = await _kbShareStateOf(sp.space_id);
         if (!state) state = await _kbSharePublish(sp, { silent: true });
         if (!state) return;
         await navigator.clipboard.writeText(state.url);
-        if (typeof uiToast === 'function') uiToast('飞书分享链接已复制', { variant: 'success', timeoutMs: 2000 });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_link_copied', '飞书分享链接已复制'), { variant: 'success', timeoutMs: 2000 });
         _kbRefreshShareStatus(sp);
       } catch (err) {
         _log.warn('kb share copy failed', err);
-        if (typeof uiToast === 'function') uiToast('分享失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_failed', '分享失败：') + ((err && err.message) || String(err)), { variant: 'error' });
       } finally {
         btn.disabled = false;
         btn.classList.remove('is-loading');
         btn.removeAttribute('aria-busy');
-        _setUiButtonPresentation(btn, '复制链接', 'link');
+        _setUiButtonPresentation(btn, _tr('kb.workbench.share_copy_link', '复制链接'), 'link');
       }
     });
     // 生成知识码（二维码）：先确保已分享
@@ -6913,7 +6913,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _kbQrCodeShow(state.url, sp.name);
       } catch (err) {
         _log.warn('kb share qr failed', err);
-        if (typeof uiToast === 'function') uiToast('生成知识码失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_code_failed', '生成知识码失败：') + ((err && err.message) || String(err)), { variant: 'error' });
       } finally {
         btn.disabled = false;
       }
@@ -7036,12 +7036,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       _setUiButtonPresentation(btn, '保存并发布');
       try {
         const res = await window.cogseed.invoke('kb.share.cogseed.config.set', { baseUrl, apiKey });
-        if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
+        if (!res || res.ok !== true) throw new Error((res && res.error) || _tr('kb.workbench.save_failed', '保存失败'));
         modal.close('submit', { restoreFocus: false });
         await _kbCogseedPublish(sp);
       } catch (err) {
         _log.warn('kb cogseed config save failed', err);
-        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.save_failed_prefix', '保存失败：') + ((err && err.message) || String(err)), { variant: 'error' });
         btn.disabled = false;
         btn.classList.remove('is-loading');
         btn.removeAttribute('aria-busy');
@@ -7118,12 +7118,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (actBtn) {
         const act = actBtn.dataset.cogseedAct;
         if (act === 'copy') {
-          try { await navigator.clipboard.writeText(state.url); uiToast && uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 }); }
-          catch { uiToast && uiToast('复制失败', { variant: 'warning' }); }
+          try { await navigator.clipboard.writeText(state.url); uiToast && uiToast(_tr('kb.workbench.share_link_copied_short', '链接已复制'), { variant: 'success', timeoutMs: 1500 }); }
+          catch { uiToast && uiToast(_tr('kb.workbench.share_copy_failed', '复制失败'), { variant: 'warning' }); }
         } else if (act === 'revoke') {
           const res = await window.cogseed.invoke('kb.share.cogseed.revoke', { spaceId: sp.space_id });
           if (res && res.ok) { uiToast && uiToast('已撤销', { variant: 'success' }); modal.close('revoke', { restoreFocus: false }); _kbShareDialogOpen(); }
-          else uiToast && uiToast('撤销失败', { variant: 'error' });
+          else uiToast && uiToast(_tr('kb.workbench.share_revoke_failed', '撤销失败'), { variant: 'error' });
         }
         return;
       }
@@ -7195,7 +7195,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       return null;
     } catch (err) {
       _log.warn('kb share publish failed', err);
-      if (typeof uiToast === 'function') uiToast('分享失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_failed', '分享失败：') + ((err && err.message) || String(err)), { variant: 'error' });
       return null;
     }
   }
@@ -7210,25 +7210,25 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--config" role="dialog" aria-modal="true" aria-labelledby="kb-share-config-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>配置飞书分享</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-config-title"><span class="kb-share-pop-head-ico">${_icon('link', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.feishu_config_title', '配置飞书分享'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.feishu_config_close', '关闭飞书分享配置弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
-          <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
+          <div class="kb-share-config-tip">${_tr('kb.workbench.feishu_config_tip', '分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：')}</div>
           <div class="kb-share-config-field">
             <label class="kb-share-config-label" for="kb-share-config-appid">App ID</label>
             ${_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input', placeholder: 'cli_xxxxxxxx', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
           <div class="kb-share-config-field">
             <label class="kb-share-config-label" for="kb-share-config-secret">App Secret</label>
-            ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: '应用密钥', attrs: { autocomplete: 'off', spellcheck: 'false' } })}
+            ${_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input', placeholder: _tr('kb.workbench.feishu_config_secret', '应用密钥'), attrs: { autocomplete: 'off', spellcheck: 'false' } })}
           </div>
-          <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
+          <div class="kb-share-config-tip is-warn">${_tr('kb.workbench.feishu_config_scopes', '应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only')}</div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
-          ${_uiButton({ label: '取消', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-cancel' } })}
-          ${_uiButton({ label: '保存并授权', role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-save' } })}
+          ${_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-cancel' } })}
+          ${_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-config-save' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -7245,7 +7245,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const appId = overlay.querySelector('#kb-share-config-appid').value.trim();
       const appSecret = overlay.querySelector('#kb-share-config-secret').value.trim();
       if (!appId || !appSecret) {
-        if (typeof uiToast === 'function') uiToast('请填写 App ID 与 App Secret', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.feishu_config_need_credentials', '请填写 App ID 与 App Secret'), { variant: 'warning' });
         return;
       }
       const btn = e.currentTarget;
@@ -7254,19 +7254,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       btn.setAttribute('aria-busy', 'true');
       try {
         const res = await window.cogseed.invoke('kb.share.appConfig.set', { appId, appSecret });
-        if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
+        if (!res || res.ok !== true) throw new Error((res && res.error) || _tr('kb.workbench.save_failed', '保存失败'));
         modal.close('submit', { restoreFocus: false });
-        if (typeof uiToast === 'function') uiToast('应用凭据已保存，正在发起授权…', { variant: 'info', timeoutMs: 2500 });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.feishu_config_saved', '应用凭据已保存，正在发起授权…'), { variant: 'info', timeoutMs: 2500 });
         // 保存后触发重新授权（分享写权限 scope，走分享专用凭据）
         try {
           await window.cogseed.invoke('kb.share.authorize', {});
-          if (typeof uiToast === 'function') uiToast('请在浏览器完成飞书授权，完成后重新点击「复制链接」', { variant: 'info', timeoutMs: 5000 });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.feishu_config_browser_hint', '请在浏览器完成飞书授权，完成后重新点击「复制链接」'), { variant: 'info', timeoutMs: 5000 });
         } catch (err) {
           _log.warn('kb share authorize after config failed', err);
         }
       } catch (err) {
         _log.warn('kb share app config save failed', err);
-        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.save_failed_prefix', '保存失败：') + ((err && err.message) || String(err)), { variant: 'error' });
         btn.disabled = false;
         btn.classList.remove('is-loading');
         btn.removeAttribute('aria-busy');
@@ -7329,7 +7329,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       e.stopPropagation();
       try {
         await navigator.clipboard.writeText(url);
-        if (typeof uiToast === 'function') uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_link_copied_short', '链接已复制'), { variant: 'success', timeoutMs: 1500 });
       } catch {
         if (typeof uiToast === 'function') uiToast('复制失败，请手动复制', { variant: 'warning' });
       }
@@ -7354,35 +7354,35 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       <section class="ui-modal ui-modal--sm kb-share-pop kb-share-pop--manage" role="dialog" aria-modal="true" aria-labelledby="kb-share-manage-title">
         <header class="ui-modal__header">
           <div class="ui-modal__heading">
-            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>分享管理</h2>
+            <h2 class="ui-modal__title kb-share-pop-head" id="kb-share-manage-title"><span class="kb-share-pop-head-ico">${_icon('share-2', 'kb-share-pop-head-icon')}</span>${_esc(_tr('kb.workbench.share_manage_title', '分享管理'))}</h2>
           </div>
-          ${_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x', className: 'kb-share-pop-close' })}
+          ${_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x', className: 'kb-share-pop-close' })}
         </header>
         <div class="ui-modal__body">
           <div class="kb-share-manage-list" id="kb-share-manage-list">
             ${items.length === 0 ? _uiEmptyState({
               kind: 'explained',
-              title: '还没有分享到飞书的知识库',
-              hint: '打开知识库 → 分享 → 复制链接',
+              title: _tr('kb.workbench.share_manage_empty_title', '还没有分享到飞书的知识库'),
+              hint: _tr('kb.workbench.share_manage_empty_hint', '打开知识库 → 分享 → 复制链接'),
             }) : ''}
             ${items.map((item, idx) => `
               <div class="kb-share-manage-item" data-idx="${idx}">
                 <div class="kb-share-manage-item-head">
                   <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
-                  <span class="kb-share-manage-item-badge is-${item.access}">${({ anyone: '公开', tenant: '组织内', private: '私密' })[item.access] || item.access}</span>
+                  <span class="kb-share-manage-item-badge is-${item.access}">${{ anyone: _tr('kb.workbench.share_access_anyone', '公开'), tenant: _tr('kb.workbench.share_access_tenant', '组织内'), private: _tr('kb.workbench.share_access_private', '私密') }[item.access] || item.access}</span>
                 </div>
-                <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
+                <div class="kb-share-manage-item-meta">${_tr('kb.workbench.share_manage_item_meta', '{count} 个文档 · {url}', { count: item.fileCount, url: _esc(item.url) })}</div>
                 <div class="kb-share-manage-item-actions">
-                  ${_uiButton({ label: '复制链接', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
-                  ${_uiButton({ label: '知识码', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
-                  ${_uiButton({ label: '更新内容', role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
-                  ${_uiButton({ label: '撤销', role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'copy' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.share_code_short', '知识码'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'qr' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.share_update', '更新内容'), role: 'secondary', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'update' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.share_revoke', '撤销'), role: 'danger', size: 'sm', className: 'kb-share-manage-btn', attrs: { 'data-act': 'revoke' } })}
                 </div>
               </div>`).join('')}
           </div>
         </div>
         <footer class="ui-modal__footer kb-share-pop-actions kb-share-pop-actions--right">
-          ${_uiButton({ label: '关闭', role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-manage-close' } })}
+          ${_uiButton({ label: _tr('kb.workbench.close', '关闭'), role: 'secondary', className: 'kb-share-pop-btn', attrs: { id: 'kb-share-manage-close' } })}
         </footer>
       </section>`;
     document.body.appendChild(overlay);
@@ -7404,9 +7404,9 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (act === 'copy') {
         try {
           await navigator.clipboard.writeText(item.url);
-          if (typeof uiToast === 'function') uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_link_copied_short', '链接已复制'), { variant: 'success', timeoutMs: 1500 });
         } catch {
-          if (typeof uiToast === 'function') uiToast('复制失败', { variant: 'warning' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_copy_failed', '复制失败'), { variant: 'warning' });
         }
       } else if (act === 'qr') {
         modal.close('qr', { restoreFocus: false });
@@ -7415,47 +7415,47 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         btn.disabled = true;
         btn.classList.add('is-loading');
         btn.setAttribute('aria-busy', 'true');
-        _setUiButtonPresentation(btn, '更新中…');
+        _setUiButtonPresentation(btn, _tr('kb.workbench.share_updating', '更新中…'));
         try {
           const res = await window.cogseed.invoke('kb.share.update', { spaceId: item.spaceId });
           if (res && res.ok) {
-            if (typeof uiToast === 'function') uiToast('内容已更新', { variant: 'success', timeoutMs: 1500 });
+            if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_updated', '内容已更新'), { variant: 'success', timeoutMs: 1500 });
             modal.close('update', { restoreFocus: false });
             _kbShareManageOpen(); // 刷新面板
           } else {
-            if (typeof uiToast === 'function') uiToast('更新失败：' + ((res && res.error) || '未知错误'), { variant: 'error' });
+            if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_update_failed_prefix', '更新失败：') + ((res && res.error) || _tr('kb.workbench.unknown_error', '未知错误')), { variant: 'error' });
             btn.disabled = false;
             btn.classList.remove('is-loading');
             btn.removeAttribute('aria-busy');
-            _setUiButtonPresentation(btn, '更新内容');
+            _setUiButtonPresentation(btn, _tr('kb.workbench.share_update', '更新内容'));
           }
         } catch (err) {
           _log.warn('kb share update failed', err);
-          if (typeof uiToast === 'function') uiToast('更新失败', { variant: 'error' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_update_failed', '更新失败'), { variant: 'error' });
           btn.disabled = false;
           btn.classList.remove('is-loading');
           btn.removeAttribute('aria-busy');
-          _setUiButtonPresentation(btn, '更新内容');
+          _setUiButtonPresentation(btn, _tr('kb.workbench.share_update', '更新内容'));
         }
       } else if (act === 'revoke') {
         const mode = typeof uiConfirm === 'function'
-          ? await uiConfirm('撤销后链接将失效。同时删除飞书云端副本吗？', '仅关闭链接', '删除云端副本')
-          : (window.confirm('撤销后链接将失效。是否同时删除飞书云端副本？') ? 'delete_space' : 'close_link');
+          ? await uiConfirm(_tr('kb.workbench.share_revoke_confirm', '撤销后链接将失效。同时删除飞书云端副本吗？'), _tr('kb.workbench.share_revoke_close_only', '仅关闭链接'), _tr('kb.workbench.share_revoke_delete_copy', '删除云端副本'))
+          : (window.confirm(_tr('kb.workbench.share_revoke_confirm_plain', '撤销后链接将失效。是否同时删除飞书云端副本？')) ? 'delete_space' : 'close_link');
         if (!mode) return;
         btn.disabled = true;
         try {
           const res = await window.cogseed.invoke('kb.share.revoke', { spaceId: item.spaceId, mode });
           if (res && res.ok) {
-            if (typeof uiToast === 'function') uiToast('已撤销分享', { variant: 'success', timeoutMs: 1500 });
+            if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_revoked', '已撤销分享'), { variant: 'success', timeoutMs: 1500 });
             modal.close('revoke', { restoreFocus: false });
             _kbShareManageOpen();
           } else {
-            if (typeof uiToast === 'function') uiToast('撤销失败：' + ((res && res.error) || '未知错误'), { variant: 'error' });
+            if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_revoke_failed_prefix', '撤销失败：') + ((res && res.error) || _tr('kb.workbench.unknown_error', '未知错误')), { variant: 'error' });
             btn.disabled = false;
           }
         } catch (err) {
           _log.warn('kb share revoke failed', err);
-          if (typeof uiToast === 'function') uiToast('撤销失败', { variant: 'error' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.share_revoke_failed', '撤销失败'), { variant: 'error' });
           btn.disabled = false;
         }
       }
@@ -7604,7 +7604,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           .catch(() => { /* 未发布/未配置：无需同步 */ });
       } catch (err) {
         _log.warn('update space perm failed', err);
-        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.save_failed_prefix', '保存失败：') + ((err && err.message) || String(err)), { variant: 'error' });
         okBtn.disabled = false;
       }
     });
