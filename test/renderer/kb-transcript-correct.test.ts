@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 import {
   applyCorrections,
   scanText,
@@ -705,5 +706,81 @@ describe('模型建议并入候选列表', () => {
   it('应用后必须说出"词表被写了"——改了词表却不说，用户无从察觉', () => {
     expect(src).toMatch(/apply_wrote_glossary/);
     expect(src).toMatch(/glossaryWrites/);
+  });
+});
+
+/**
+ * 语言切换响应（i18n-change）。
+ *
+ * 面板挂载后自己持有 DOM，视图不会重建它：不监听 i18n-change 就会一直停在旧语言，
+ * 要关掉面板重开才生效。仓库里没有 jsdom，这里用最小 DOM 假体（元素存在即可、
+ * 只记录 textContent）真的挂一次面板，观察 render() 有没有跟着事件重跑。
+ */
+function fakeElement(): any {
+  const el: any = {
+    textContent: '', innerHTML: '', outerHTML: '', hidden: false, value: '', checked: false,
+    dataset: {}, style: {}, children: [], isConnected: true,
+    classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => false },
+    addEventListener: () => {}, removeEventListener: () => {},
+    appendChild: (child: any) => child, insertBefore: () => {}, removeChild: () => {},
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+    setAttribute: () => {}, getAttribute: () => null, removeAttribute: () => {},
+    insertAdjacentHTML: () => {}, focus: () => {}, remove: () => {}, replaceWith: () => {},
+  };
+  return el;
+}
+
+function loadTranscriptPanelForI18n() {
+  const source = fs.readFileSync(path.join(root, 'src/renderer/modules/kb-transcript-correct.js'), 'utf8');
+  const nodes = new Map<string, any>();
+  const container = fakeElement();
+  container.querySelector = (selector: string) => {
+    if (!nodes.has(selector)) nodes.set(selector, fakeElement());
+    return nodes.get(selector);
+  };
+  const handlers: Record<string, Array<() => void>> = {};
+  const strings: Record<string, string> = { 'kb.transcriptCorrect.title': '转写纠错' };
+  const windowMock: any = {
+    addEventListener: (name: string, fn: () => void) => { (handlers[name] = handlers[name] || []).push(fn); },
+    removeEventListener: (name: string, fn: () => void) => {
+      handlers[name] = (handlers[name] || []).filter((h) => h !== fn);
+    },
+    t: (key: string) => strings[key] || '',
+    uiButton: () => '<button type="button" class="ui-button">x</button>',
+    uiCheckbox: () => '<input type="checkbox" class="ui-checkbox">',
+    cogseed: { invoke: async () => ({}) },
+  };
+  const context: any = {
+    console, setTimeout, clearTimeout, document: {
+      createElement: () => fakeElement(), body: fakeElement(),
+      addEventListener: () => {}, removeEventListener: () => {},
+    },
+    window: windowMock,
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: 'kb-transcript-correct.js' });
+  const instance = windowMock.KbTranscriptCorrect.mount(container, {
+    text: '甲说：付平来了。', docId: 'doc-1', displayPath: '1/9.15站会.txt',
+  });
+  const fire = () => (handlers['i18n-change'] || []).forEach((h) => h());
+  return { instance, nodes, fire, strings, listenerCount: () => (handlers['i18n-change'] || []).length };
+}
+
+describe('语言切换（i18n-change）', () => {
+  it('面板挂载后响应 i18n-change 重渲染取新语言；卸载时解绑', () => {
+    const env = loadTranscriptPanelForI18n();
+    const title = env.nodes.get('[data-atc-title]');
+    expect(title.textContent).toBe('转写纠错');
+
+    env.strings['kb.transcriptCorrect.title'] = 'Transcript correction';
+    env.fire();
+    expect(title.textContent).toBe('Transcript correction');
+
+    // 卸载必须解绑：否则面板关掉后监听器还在，语言一切换就对已脱离的 DOM 重渲染
+    env.instance.destroy();
+    expect(env.listenerCount()).toBe(0);
+    env.strings['kb.transcriptCorrect.title'] = '不该出现';
+    env.fire();
+    expect(title.textContent).toBe('Transcript correction');
   });
 });
