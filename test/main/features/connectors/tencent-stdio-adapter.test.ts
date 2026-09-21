@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const requireCjs = createRequire(import.meta.url);
+
+/** Real tmeet v1.0.18 responses, captured from a live account and sanitized (trace_id stripped). */
+function fixture(name: string): any {
+  return JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), 'test/main/features/connectors/fixtures', name), 'utf8'),
+  );
+}
 
 type Adapter = {
   TOOLS: Array<{ name: string; description: string; inputSchema: { required?: string[] } }>;
@@ -72,31 +80,51 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     }
   });
 
-  it('splits 云录制 from 文字转写 so the model cannot feed a media id to the transcript tools', async () => {
+  it('reads the real data.record_meetings carrier and flags records with no record_files', async () => {
+    // Real envelope: rows live at data.record_meetings, and `record_file_id` is nested inside
+    // record_files[] — a row-level read returns undefined.
     const { adapter, calls } = stubTmeet(() => ({
-      records: [
-        { meeting_record_id: '7001', record_file_id: '5001', record_type: '云录制', subject: '周会' },
-        { meeting_record_id: '7001', record_file_id: '5002', record_type: '文字转写', subject: '周会' },
-      ],
-      page_token: 'next-1',
+      trace_id: 'x',
+      message: 'success',
+      data: {
+        current_page: 1, current_size: 3, has_more: true, next_page_token: 'tok-2', total_page: 2,
+        record_meetings: [
+          { meeting_record_id: 'r1', record_type: '云录制', subject: 'A',
+            record_files: [{ record_file_id: 'f1', record_start_time: '2026-08-18T13:58:36+08:00' }] },
+          { meeting_record_id: 'r2', record_type: '文字转写', subject: '转写_A',
+            record_files: [{ record_file_id: 'f2' }] },
+          { meeting_record_id: 'r3', record_type: '文字转写', subject: '转写_B', record_files: [] },
+        ],
+      },
     }));
 
     const res = await adapter.callTool('list_recordings', {
-      start: '2026-03-12T00:00+08:00',
-      end: '2026-03-12T23:59+08:00',
+      start: '2026-08-01T00:00+08:00', end: '2026-08-20T00:00+08:00',
     });
 
-    expect(res.recordCount).toBe(2);
-    expect(res.transcriptRecordCount).toBe(1);
-    expect(res.transcript_records).toEqual([
-      expect.objectContaining({ record_file_id: '5002', record_type: '文字转写' }),
-    ]);
-    expect(res.page_token).toBe('next-1');
+    expect(res.recordCount).toBe(3);
+    expect(res.records[0].record_file_ids).toEqual(['f1']);
+    // record_files is legitimately empty for some records — those cannot drive a transcript call.
+    expect(res.records[2].usable_for_transcript).toBe(false);
+    expect(res.unusable_records).toEqual(['r3']);
+    // Preference hint only: a 云录制 file id can also yield transcript content (verified against a
+    // live account), so the 文字转写 subset must not be treated as the only valid input.
+    expect(res.preferred_transcript_records.map((r: any) => r.meeting_record_id)).toEqual(['r2']);
+    // Pagination cursor lives at data.*, not on the envelope top level.
+    expect(res.next_page_token).toBe('tok-2');
+    expect(res.has_more).toBe(true);
     expect(calls[0]).toEqual([
-      'record', 'list',
-      '--start', '2026-03-12T00:00+08:00',
-      '--end', '2026-03-12T23:59+08:00',
+      'record', 'list', '--start', '2026-08-01T00:00+08:00', '--end', '2026-08-20T00:00+08:00',
     ]);
+  });
+
+  it('maps a real captured record-list fixture without losing rows', async () => {
+    const payload = fixture('tencent-record-list.json');
+    const { adapter } = stubTmeet(() => payload);
+    const res = await adapter.callTool('list_recordings', { meeting_id: '1' });
+    expect(res.recordCount).toBe(payload.data.record_meetings.length);
+    expect(res.records[0]).toHaveProperty('record_file_ids');
+    expect(res.records[0]).toHaveProperty('media_start_time');
   });
 
   it('rejects a bare local time with an actionable message instead of the CLI format error', async () => {
@@ -125,22 +153,56 @@ describe('Tencent Meeting stdio CLI adapter', () => {
       .rejects.toThrow(/page_size must be a positive number/);
   });
 
-  it('passes pid/limit through as strings and reports the transcript text with pagination info', async () => {
+  it('extracts speaker + 3-level nested text from the real transcript shape', async () => {
+    // Verified layout: data.minutes.paragraphs[].sentences[].words[].text, speaker per paragraph.
     const { adapter, calls } = stubTmeet(() => ({
-      paragraphs: [{ text: '第一段' }, { text: '第二段' }],
-      pid: '120',
+      trace_id: 'x', message: 'success',
+      data: {
+        code: 0, more: false,
+        minutes: {
+          audio_detect: 1, lang: 'zh', keywords: ['全局共享记忆', '沉淀'],
+          paragraphs: [
+            { pid: '0', start_time: '00:01', end_time: '00:10', lang: 'zh',
+              speaker: { user_id: '144115217163301631', user_name: '赵丽霞', avatar_url: 'https://x' },
+              sentences: [{ sid: '0', start_time: '00:01', end_time: '00:10',
+                words: [{ wid: '0', start_time: '00:01', end_time: '00:10', text: '我直接申请了吧，' }] }] },
+            { pid: '1', start_time: '00:12', end_time: '00:36', lang: 'zh',
+              speaker: { user_id: '144115389859725620', user_name: '东方国信学院' },
+              sentences: [
+                { sid: '1', words: [{ wid: '1', text: '第一部分。' }] },
+                { sid: '2', words: [{ wid: '2', text: '第二部分。' }] },
+              ] },
+          ],
+        },
+      },
     }));
 
-    const res = await adapter.callTool('get_transcript', { record_file_id: '5002', pid: '100', limit: '50' });
+    const res = await adapter.callTool('get_transcript', { record_file_id: 'f2', pid: '100', limit: '50' });
 
     expect(calls[0]).toEqual([
-      'record', 'transcript-get',
-      '--record-file-id', '5002',
-      '--pid', '100',
-      '--limit', '50',
+      'record', 'transcript-get', '--record-file-id', 'f2', '--pid', '100', '--limit', '50',
     ]);
-    expect(res.text).toBe('第一段\n第二段');
-    expect(res.pid).toBe('120');
+    expect(res.paragraphCount).toBe(2);
+    // user_id is the stable key; user_name is display-only (sometimes a shared/room account).
+    expect(res.paragraphs[0]).toMatchObject({
+      pid: '0', speaker_id: '144115217163301631', speaker_name: '赵丽霞', text: '我直接申请了吧，',
+    });
+    // Multiple sentences concatenate into one paragraph.
+    expect(res.paragraphs[1].text).toBe('第一部分。第二部分。');
+    // avatar_url is dropped, keywords survive, relative-clock caveat is surfaced.
+    expect(JSON.stringify(res.paragraphs[0])).not.toContain('avatar_url');
+    expect(res.keywords).toEqual(['全局共享记忆', '沉淀']);
+    expect(res.timestamps_are_relative).toBe(true);
+    expect(res.text.split('\n')[0]).toBe('[00:01] 赵丽霞: 我直接申请了吧，');
+  });
+
+  it('maps a real captured transcript fixture', async () => {
+    const payload = fixture('tencent-transcript.json');
+    const { adapter } = stubTmeet(() => payload);
+    const res = await adapter.callTool('get_transcript', { record_file_id: 'f3' });
+    expect(res.paragraphCount).toBe(payload.data.minutes.paragraphs.length);
+    expect(res.charCount).toBeGreaterThan(0);
+    expect(res.paragraphs[0].speaker_name).toBeTruthy();
   });
 
   it('requires record_file_id for every transcript tool, and text for search', async () => {
@@ -153,12 +215,22 @@ describe('Tencent Meeting stdio CLI adapter', () => {
 
   it('stops a runaway transcript at the char cap and flags the truncation', async () => {
     const huge = 'x'.repeat(250000);
-    const { adapter } = stubTmeet(() => ({ transcript: huge }));
+    const { adapter } = stubTmeet(() => ({
+      message: 'success',
+      data: { minutes: { paragraphs: [{ pid: '0', sentences: [{ words: [{ text: huge }] }] }] } },
+    }));
 
-    const res = await adapter.callTool('get_transcript', { record_file_id: '5002' });
+    const res = await adapter.callTool('get_transcript', { record_file_id: 'f4' });
     expect(res.truncated).toBe(true);
     expect(res.charCount).toBe(250000);
     expect(res.text.length).toBe(200000);
+  });
+
+  it('turns an empty-transcript response into a clear error instead of empty text', async () => {
+    // Real failure mode: error_code 30002 "纪要无内容" for a record whose transcript never generated.
+    const { adapter } = stubTmeet(() => ({ message: '纪要无内容', data: { code: 30002 } }));
+    await expect(adapter.callTool('get_transcript', { record_file_id: 'f5' }))
+      .rejects.toThrow(/no transcript for record_file_id f5/);
   });
 
   it('preview_record_permission uses meeting_record_id and states that commit is unavailable', async () => {

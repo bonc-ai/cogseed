@@ -27,9 +27,21 @@ require('./proxy-bootstrap.cjs');
 // 1. TWO DIFFERENT IDS. Transcript tools need `--record-file-id`; `record address` and
 //    `record permission-apply-prepare` need `--meeting-record-id`. They are not
 //    interchangeable. `list_recordings` returns both so the model cannot mix them up.
-// 2. ONE MEETING, TWO RECORDS. A meeting yields a `云录制` (audio/video) record and a
-//    `文字转写` (transcript) record. Transcript commands only work with the `文字转写` one's
-//    `record_file_id`; passing the `云录制` id fails. `list_recordings` splits them out.
+// 2. A ROW'S FILE ID IS NESTED, AND MAY BE ABSENT. `record_file_id` does not exist at row level —
+//    it lives in `record_files[]`, which is legitimately EMPTY for some records (a 转写 record with
+//    no file yet). Those records cannot drive any transcript call, so `list_recordings` marks them
+//    `usable_for_transcript: false` and lists them under `unusable_records`.
+//
+//    CORRECTION worth keeping: an earlier revision of this file asserted that a `云录制` record's
+//    id is rejected by the transcript tools. Real responses disprove that — a `云录制` file id can
+//    return transcript content. `record_type` is therefore a PREFERENCE hint
+//    (`preferred_transcript_records`), never a gate.
+//
+// ── Transcript shape (verified) ──────────────────────────────────────────────
+// Text is three levels down: `data.minutes.paragraphs[].sentences[].words[].text`, with
+// `speaker.user_id` (stable) + `speaker.user_name` (display only) per paragraph, and timestamps
+// that are RELATIVE clocks (`02:45`). `get_transcript` returns both the structured paragraphs and
+// a flattened speaker-prefixed `text`.
 //
 // ── Time format ──────────────────────────────────────────────────────────────
 // `record list` takes ISO 8601 *with an offset* (`--start 2026-03-12T14:00+08:00`). A bare local
@@ -118,11 +130,11 @@ const TOOLS = [
   {
     name: 'list_recordings',
     description:
-      'List Tencent Meeting recording records the signed-in account can read. Each meeting usually ' +
-      'returns two records: a `云录制` (audio/video) record and a `文字转写` (transcript) record. ' +
-      'ONLY the `文字转写` record\'s record_file_id works with the transcript tools — use the ' +
-      '`transcript_records` array this tool returns, not `records`. Supply one of: start+end, ' +
-      'meeting_id, or meeting_code.',
+      'List Tencent Meeting recording records the signed-in account can read. A meeting usually ' +
+      'returns a `云录制` (audio/video) record and a `文字转写` (transcript) record. Each record ' +
+      'carries record_files[], and ONLY records with at least one file can drive the transcript ' +
+      'tools — prefer `preferred_transcript_records`, and treat `unusable_records` as a dead end. ' +
+      'Supply one of: start+end, meeting_id, or meeting_code. Time ranges are capped at 31 days.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,14 +156,15 @@ const TOOLS = [
   {
     name: 'get_transcript',
     description:
-      'Get the full transcript of one recording. Needs the `文字转写` record\'s record_file_id from ' +
-      'list_recordings. Large transcripts are paginated: pass `pid` and `limit` from a previous ' +
-      'response to continue. Returned text is the source transcript — it is NOT corrected, and any ' +
-      'speaker/timestamp fields present are only what the platform actually provides.',
+      'Get the transcript of one recording, as structured paragraphs plus a flattened text. Pass a ' +
+      'record_file_id from list_recordings. Each paragraph carries pid, relative start/end clocks, ' +
+      'speaker_id (stable) and speaker_name (display only), so quotes can be attributed without ' +
+      'guessing. Timestamps are RELATIVE to the recording start, not absolute meeting times. ' +
+      'Long transcripts paginate: pass pid/limit from a previous response to continue.',
     inputSchema: {
       type: 'object',
       properties: {
-        record_file_id: { type: 'string', description: 'The `文字转写` record file id from list_recordings. Required.' },
+        record_file_id: { type: 'string', description: 'A record_file_id from list_recordings. Required.' },
         pid: { type: 'string', description: 'Start paragraph id for pagination (string, per the CLI).' },
         limit: { type: 'string', description: 'Number of paragraphs to fetch (string, per the CLI).' },
       },
@@ -161,12 +174,13 @@ const TOOLS = [
   {
     name: 'get_transcript_paragraphs',
     description:
-      'List the paragraph ids of a transcript so a long transcript can be walked page by page with ' +
-      'get_transcript. Needs the `文字转写` record\'s record_file_id.',
+      'List the paragraph ids (pid + relative start/end clocks) of a transcript so a long ' +
+      'transcript can be walked page by page with get_transcript. Pass a record_file_id from ' +
+      'list_recordings.',
     inputSchema: {
       type: 'object',
       properties: {
-        record_file_id: { type: 'string', description: 'The `文字转写` record file id. Required.' },
+        record_file_id: { type: 'string', description: 'A record_file_id from list_recordings. Required.' },
       },
       required: ['record_file_id'],
     },
@@ -269,15 +283,17 @@ function _requireOffsetIso(value, label) {
 // ── Record shape helpers ──────────────────────────────────────────────
 
 /**
- * The CLI's JSON envelope keys are INFERRED, not verified: this adapter was written without an
- * authenticated Tencent Meeting account, so no real response could be captured. Accept every
- * plausible carrier rather than betting on one — and re-check this list against a real
- * `tmeet record list` / `transcript-get` response before trusting the field mapping.
+ * Row-carrier keys, verified against real tmeet v1.0.18 responses:
+ *   `tmeet record list`              → data.record_meetings[]
+ *   `tmeet record transcript-get`    → data.minutes.paragraphs[]
+ *   `tmeet record transcript-paragraphs` → data.pids[]
+ * `data` is in the list purely as a descent step (it is an object, never returned as rows).
+ * The generic tail keeps an older/newer envelope from silently yielding zero rows.
  */
 const _LIST_KEYS = [
-  'records', 'record_list', 'recording_list', 'recordings',
-  'paragraphs', 'paragraph_list', 'sentences',
-  'items', 'list', 'data',
+  'record_meetings', 'pids',
+  'records', 'record_list', 'recordings',
+  'paragraphs', 'items', 'list', 'data',
 ];
 
 /** Pull the row array out of whichever carrier the current CLI version used. */
@@ -295,6 +311,13 @@ function _rows(payload) {
   return [];
 }
 
+/** `data` holds the real fields; the page token lives inside it, not at the envelope top level. */
+function _data(payload) {
+  return payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object'
+    ? payload.data
+    : (payload || {});
+}
+
 function _field(row, ...names) {
   for (const n of names) {
     const v = row[n];
@@ -303,24 +326,53 @@ function _field(row, ...names) {
   return undefined;
 }
 
-/** `record_type` is the field the platform uses: `云录制` (media) vs `文字转写` (transcript). */
-function _isTranscriptRecord(row) {
-  const type = String(_field(row, 'record_type', 'recordType', 'type_name') || '');
-  if (type) return type.includes('文字转写') || type.includes('转写');
-  // Fallback: transcript records are the ones transcript commands accept.
-  return Boolean(_field(row, 'record_file_id', 'recordFileId'));
+/** Pagination cursor: real key is `data.next_page_token`; `data.more`/`data.has_more` flag the end. */
+function _pagination(payload) {
+  const d = _data(payload);
+  return {
+    next_page_token: _field(d, 'next_page_token', 'page_token'),
+    has_more: _field(d, 'has_more', 'more'),
+    total_page: _field(d, 'total_page'),
+  };
 }
 
+/**
+ * `record_type` is the platform's own discriminator: `云录制` (media) vs `文字转写` (transcript).
+ * VERIFIED against real data — but so is the fact that a `云录制` record's `record_file_id` can
+ * ALSO return transcript content, so this must not be used to hard-reject a record.
+ */
+function _isTranscriptRecord(row) {
+  const type = String(_field(row, 'record_type', 'recordType') || '');
+  return type.includes('文字转写') || type.includes('转写');
+}
+
+/**
+ * A record row carries `record_files[]` (0..n). `record_file_id` does NOT exist at row level, and
+ * `record_files` is legitimately EMPTY for some records (e.g. a 转写 record with no file yet) — such
+ * a record cannot drive any transcript call, so surface that explicitly instead of returning null.
+ */
 function _normalizeRecord(row) {
+  const files = Array.isArray(row.record_files) ? row.record_files : [];
   return {
-    meeting_record_id: _field(row, 'meeting_record_id', 'meetingRecordId', 'record_id'),
-    record_file_id: _field(row, 'record_file_id', 'recordFileId'),
-    record_type: _field(row, 'record_type', 'recordType'),
-    meeting_id: _field(row, 'meeting_id', 'meetingId'),
-    meeting_code: _field(row, 'meeting_code', 'meetingCode'),
-    subject: _field(row, 'subject', 'meeting_subject', 'title'),
-    start_time: _field(row, 'start_time', 'startTime', 'meeting_start_time'),
-    end_time: _field(row, 'end_time', 'endTime', 'meeting_end_time'),
+    meeting_record_id: _field(row, 'meeting_record_id'),
+    record_type: _field(row, 'record_type'),
+    record_file_ids: files.map((f) => _field(f, 'record_file_id')).filter(Boolean),
+    record_files: files.map((f) => ({
+      record_file_id: _field(f, 'record_file_id'),
+      record_start_time: _field(f, 'record_start_time'),
+      record_end_time: _field(f, 'record_end_time'),
+      record_size: _field(f, 'record_size'),
+      sharing_url: _field(f, 'sharing_url'),
+    })),
+    usable_for_transcript: files.length > 0,
+    meeting_id: _field(row, 'meeting_id'),
+    meeting_code: _field(row, 'meeting_code'),
+    subject: _field(row, 'subject'),
+    // The row-level clock is `media_start_time`; per-file start/end live inside record_files.
+    media_start_time: _field(row, 'media_start_time'),
+    state: _field(row, 'state'),
+    state_int: _field(row, 'state_int'),
+    host_user_id: _field(row, 'host_user_id'),
   };
 }
 
@@ -352,15 +404,17 @@ async function callTool(name, args = {}) {
     );
     const rows = _rows(payload);
     const all = rows.map(_normalizeRecord);
-    const transcripts = all.filter((r) => _isTranscriptRecord(r) && r.record_file_id);
+    // Records whose `record_files` is empty cannot drive any transcript call — `usable_for_transcript`
+    // marks them so the model stops retrying a dead id.
+    const transcripts = all.filter((r) => _isTranscriptRecord(r) && r.usable_for_transcript);
     return {
-      // `records` keeps every record; `transcript_records` is the only subset the transcript
-      // tools accept — the split exists so the model stops passing a 云录制 id to them.
       records: all,
-      transcript_records: transcripts,
+      // Preference order only — a `云录制` record's file id CAN also yield transcript content
+      // (verified), so this is a hint, not a gate.
+      preferred_transcript_records: transcripts,
+      unusable_records: all.filter((r) => !r.usable_for_transcript).map((r) => r.meeting_record_id),
       recordCount: all.length,
-      transcriptRecordCount: transcripts.length,
-      page_token: _field(payload, 'page_token', 'pageToken', 'next_page_token'),
+      ..._pagination(payload),
       raw: payload,
     };
   }
@@ -373,13 +427,23 @@ async function callTool(name, args = {}) {
       ..._opt('--pid', args.pid),
       ..._opt('--limit', args.limit),
     );
-    const text = _transcriptText(payload);
+    if (payload && payload.message && payload.message !== 'success' && !_data(payload).minutes) {
+      throw new Error(`Tencent Meeting returned no transcript for record_file_id ${id}: ${payload.message}`);
+    }
+    const paragraphs = _transcriptParagraphs(payload);
+    const text = _transcriptText(paragraphs);
     return {
       record_file_id: id,
+      paragraphCount: paragraphs.length,
+      // Structured first: speaker_id / relative timestamps are what the correction + attribution
+      // pipeline needs. `text` is the same content flattened for convenience.
+      paragraphs,
       text: text.length > MAX_TRANSCRIPT_CHARS ? text.slice(0, MAX_TRANSCRIPT_CHARS) : text,
       truncated: text.length > MAX_TRANSCRIPT_CHARS,
       charCount: text.length,
-      pid: _field(payload, 'pid', 'paragraph_id'),
+      keywords: (_data(payload).minutes && _data(payload).minutes.keywords) || [],
+      more: _data(payload).more,
+      timestamps_are_relative: true,
       raw: payload,
     };
   }
@@ -388,7 +452,17 @@ async function callTool(name, args = {}) {
     const id = _requireArg(args, 'record_file_id');
     const payload = await tmeet('record', 'transcript-paragraphs', '--record-file-id', id);
     const rows = _rows(payload);
-    return { record_file_id: id, paragraphCount: rows.length, paragraphs: rows, raw: payload };
+    return {
+      record_file_id: id,
+      audio_detect: _data(payload).audio_detect,
+      paragraphCount: rows.length,
+      paragraphs: rows.map((r) => ({
+        pid: _field(r, 'pid'),
+        start_time: _field(r, 'start_time'),
+        end_time: _field(r, 'end_time'),
+      })),
+      raw: payload,
+    };
   }
 
   if (name === 'search_transcript') {
@@ -421,22 +495,71 @@ function _requireArg(args, key) {
   return String(v);
 }
 
-/** Transcript payloads are either a plain string or an object holding a list of paragraphs. */
-function _transcriptText(payload) {
-  if (typeof payload === 'string') return payload;
-  if (!payload || typeof payload !== 'object') return '';
-  for (const key of ['transcript', 'text', 'content', 'full_text']) {
-    const v = payload[key];
-    if (typeof v === 'string' && v) return v;
+/**
+ * Transcript payload layout, VERIFIED against a real response:
+ *
+ *   data.minutes.paragraphs[] = {
+ *     pid, start_time, end_time, lang,
+ *     speaker: { user_id, user_name },                       // avatar_url dropped — not useful
+ *     sentences: [ { sid, start_time, end_time, words: [ { wid, start_time, end_time, text } ] } ]
+ *   }
+ *   data.minutes.keywords[]  — platform-extracted keywords
+ *   data.more                — pagination flag
+ *
+ * Text therefore lives THREE levels down (`paragraphs[].sentences[].words[].text`); a naive
+ * "look for a `text` field" reader returns nothing. Timestamps are RELATIVE clocks (`02:45`) —
+ * the same shape that already caused a real incident in this repo's transcript pipeline — so they
+ * are passed through as-is and must not be presented as absolute meeting times.
+ */
+function _paragraphsOf(payload) {
+  const d = _data(payload);
+  const minutes = d.minutes && typeof d.minutes === 'object' ? d.minutes : null;
+  const list = minutes && Array.isArray(minutes.paragraphs) ? minutes.paragraphs : _rows(payload);
+  return Array.isArray(list) ? list : [];
+}
+
+function _paragraphText(p) {
+  const sentences = Array.isArray(p.sentences) ? p.sentences : [];
+  const pieces = [];
+  for (const s of sentences) {
+    if (typeof s === 'string') { pieces.push(s); continue; }
+    const words = Array.isArray(s.words) ? s.words : null;
+    if (words) {
+      pieces.push(words.map((w) => (typeof w === 'string' ? w : String(_field(w, 'text') ?? ''))).join(''));
+    } else {
+      const t = _field(s, 'text', 'content');
+      if (t) pieces.push(String(t));
+    }
   }
-  const rows = _rows(payload);
-  if (rows.length) {
-    return rows
-      .map((r) => (typeof r === 'string' ? r : _field(r, 'text', 'content', 'sentence', 'paragraph') || ''))
-      .filter(Boolean)
-      .join('\n');
-  }
-  return '';
+  return pieces.join('');
+}
+
+function _transcriptParagraphs(payload) {
+  return _paragraphsOf(payload).map((p) => {
+    const sp = p.speaker && typeof p.speaker === 'object' ? p.speaker : {};
+    return {
+      pid: _field(p, 'pid'),
+      start_time: _field(p, 'start_time'),
+      end_time: _field(p, 'end_time'),
+      // user_id is a STABLE identifier; user_name is only a display name (and is sometimes a room
+      // or shared account, e.g. "东方国信学院"), so downstream attribution should key on user_id.
+      speaker_id: _field(sp, 'user_id'),
+      speaker_name: _field(sp, 'user_name'),
+      text: _paragraphText(p),
+    };
+  });
+}
+
+/** Flat transcript: one line per paragraph, speaker-prefixed so a reader can attribute quotes. */
+function _transcriptText(paragraphs) {
+  return paragraphs
+    .map((p) => {
+      const who = p.speaker_name ? `${p.speaker_name}: ` : '';
+      const at = p.start_time ? `[${p.start_time}] ` : '';
+      return `${at}${who}${p.text}`;
+    })
+    .filter((line) => line.trim())
+    .join('\n');
 }
 
 // ── MCP server wiring ─────────────────────────────────────────────────
