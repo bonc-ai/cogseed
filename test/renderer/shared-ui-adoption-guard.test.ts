@@ -47,7 +47,15 @@ const legacyRawControlBaseline: Record<string, number> = {
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
   'kb-notes.js': 24,
-  'kb-workbench.js': 13,
+  // kb-workbench.js：13 → 6（2026-09-21）。本批删除模块自带的 uiIconButton/uiButton/
+  // uiInput/uiTextarea 四份"降级模板"——等于在页面里维护第二套原语实现，既被本条闸门计为
+  // 裸控件、又让"缺原语"静默通过；现在改为缺原语即抛错（与 kb-notes 同风格）。
+  // 剩余 6 处是真实页面控件，各有归属：
+  //   · 分享弹层的隐藏 file input、权限触发按钮（M-1）
+  //   · 导入对话框裸复选框（B3-b 已迁，见 PR #336）
+  //   · 问答引用 chip、模型 chip（M-9）；问答输入框 textarea（B3-b 已迁）
+  // 注：原基线 13 含 3 处余量，本批按实测收紧到 6。
+  'kb-workbench.js': 6,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,

@@ -112,52 +112,23 @@
     return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
   }
 
-  function _uiIconButton(options) {
-    if (typeof window.uiIconButton === 'function') return window.uiIconButton(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    const disabled = options.disabled ? ' disabled' : '';
-    const variantClass = options.variant === 'danger' ? ' ui-icon-button--danger' : '';
-    return `<button type="button" class="ui-icon-button${variantClass} ${_esc(options.className || '')}" aria-label="${_esc(options.label)}" title="${_esc(options.title || options.label)}"${disabled}${attrHtml}>${_icon(options.icon, 'ui-icon')}</button>`;
+  // 共享原语包装：**不再自带降级模板**（2026-09-21）。此前这里把 uiIconButton / uiButton /
+  // uiInput / uiTextarea 的标记各抄了一份作为兜底 —— 等于在页面里维护第二套原语实现：
+  // 既被共享组件闸门计为"裸控件"，也让"缺原语"静默通过。现在缺失即抛错（与 kb-notes 同风格），
+  // 让缺原语的事实当场暴露，而不是各自画一份。
+  function _requirePrimitive(name) {
+    if (typeof window[name] !== 'function') throw new Error(`knowledge base workbench requires ${name}`);
+    return window[name];
   }
 
-  function _uiButton(options) {
-    if (typeof window.uiButton === 'function') return window.uiButton(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    const disabled = options.disabled ? ' disabled' : '';
-    const role = options.role || 'secondary';
-    const size = options.size || 'md';
-    const leadingIcon = options.icon ? _icon(options.icon, 'ui-button__icon') : '';
-    const trailingIcon = options.iconEnd ? _icon(options.iconEnd, 'ui-button__icon') : '';
-    return `<button type="button" class="btn ui-button ui-button--${_esc(role)} ui-button--${_esc(size)} ${_esc(options.className || '')}"${disabled}${attrHtml}>${leadingIcon}<span class="ui-button__label">${_esc(options.label)}</span>${trailingIcon}</button>`;
-  }
+  function _uiIconButton(options) { return _requirePrimitive('uiIconButton')(options); }
 
-  function _uiInput(options) {
-    if (typeof window.uiInput === 'function') return window.uiInput(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    return `<input class="form-input ui-control ui-input ${_esc(options.className || '')}" id="${_esc(options.id)}" type="${_esc(options.type || 'text')}"${options.value == null ? '' : ` value="${_esc(options.value)}"`}${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>`;
-  }
+  function _uiButton(options) { return _requirePrimitive('uiButton')(options); }
 
-  function _uiTextarea(options) {
-    if (typeof window.uiTextarea === 'function') return window.uiTextarea(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    return `<textarea class="form-input ui-control ui-textarea ${_esc(options.className || '')}" id="${_esc(options.id)}"${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>${_esc(options.value || '')}</textarea>`;
-  }
+  function _uiInput(options) { return _requirePrimitive('uiInput')(options); }
+
+  function _uiTextarea(options) { return _requirePrimitive('uiTextarea')(options); }
+
 
   function _uiSwitch(options) {
     if (typeof window.uiSwitch !== 'function') throw new Error('knowledge base requires uiSwitch');
