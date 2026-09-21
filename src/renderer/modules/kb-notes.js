@@ -134,7 +134,7 @@
       host.innerHTML = `
         <div class="kb-notes">
           <aside class="kb-notes-list">
-            <div class="kb-notes-list-head"><h2>笔记</h2><button type="button" class="kb-wb-icon-btn" id="kb-notes-new" title="新建笔记">＋</button></div>
+            <div class="kb-notes-list-head"><h2>笔记</h2>${_uiIconButton({ label: '新建笔记', icon: 'plus', className: 'kb-wb-icon-btn', attrs: { id: 'kb-notes-new' } })}</div>
             <div class="kb-notes-filter">
               <span class="kb-notes-filter-tag${_state.filter === 'all' ? ' is-active' : ''}" data-nf="all">全部</span>
               <span class="kb-notes-filter-tag${_state.filter === '30d' ? ' is-active' : ''}" data-nf="30d">过去30天</span>
@@ -207,9 +207,9 @@
               <div class="kb-notes-toolbar-right">
                 <button type="button" class="kb-wb-a-btn" id="kb-notes-to-lib" title="把当前笔记添加到个人或共享知识库">${_iconHtml('book-open')} 添加到知识库</button>
                 <button type="button" class="kb-wb-a-btn" id="kb-notes-ai" title="基于知识库生成/续写">${_iconHtml('sparkles')} AI帮写</button>
-                <button type="button" class="kb-wb-a-btn" id="kb-notes-save" title="保存 (Cmd/Ctrl+S)">保存</button>
+                ${_uiButton({ label: '保存', className: 'kb-wb-a-btn', attrs: { id: 'kb-notes-save', title: '保存 (Cmd/Ctrl+S)' } })}
                 <div class="kb-ed-dropdown">
-                  <button type="button" class="kb-wb-a-btn" id="kb-notes-more-btn" title="更多">⋯</button>
+                  ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-wb-a-btn', attrs: { id: 'kb-notes-more-btn' } })}
                   <div class="kb-ed-menu kb-notes-more-menu" id="kb-notes-more-menu">
                     <div class="kb-ed-mi" data-more="clear">清除格式</div>
                     <div class="kb-ed-mi kb-danger" data-more="del">删除笔记</div>
