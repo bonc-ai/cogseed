@@ -2211,3 +2211,169 @@ describe('知识库侧栏树宽度契约（uiTree 迁移回归）', () => {
     expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \.kb-tree-name \{ flex: 1 1 auto; min-width: 0; \}/);
   });
 });
+
+/**
+ * 真机事故（2026-09-21）：点「原文依据」后正文高亮的是**半句多**——摘录 31 字，
+ * 涂了 70 字窗口（被 `needleNorm.length * 2 + 8` 的估算长度放大），摘录末尾之后
+ * 的正文跟着变色，看起来像"引错了位置"。
+ * 排版类（HTML/Office 转出的正文）走的就是这条 `_fvHighlightContainer`，
+ * 所以它和 markdown 那条路径一起锁"涂出来的就是摘录本身"。
+ */
+describe('排版类原文依据高亮的落点口径（真机：高亮多涂半句）', () => {
+  /** 假 iframe 正文：一个文本节点 + 只记区间的 Range，返回被标记的原文片段。 */
+  function frameHost(text: string) {
+    const node: any = { nodeType: 3, nodeValue: text };
+    const marked: string[] = [];
+    let walked = false;
+    node.ownerDocument = {
+      createTreeWalker: () => ({
+        nextNode: () => {
+          if (walked) return null;
+          walked = true;
+          return node;
+        },
+      }),
+      createRange: () => {
+        const range: any = { start: 0, end: 0 };
+        range.setStart = (_n: any, start: number) => { range.start = start; };
+        range.setEnd = (_n: any, end: number) => { range.end = end; };
+        range.surroundContents = () => { marked.push(text.slice(range.start, range.end)); };
+        return range;
+      },
+      createElement: () => ({ className: '', scrollIntoView: () => {} }),
+    };
+    const container: any = {
+      nodeType: 1,
+      ownerDocument: node.ownerDocument,
+      childNodes: [node],
+      querySelectorAll: () => [],
+    };
+    return { container, marked };
+  }
+
+  it('rawSpan 把归一化区间反算成原始区间（与 markdown 路径同一口径）', () => {
+    const { windowMock } = loadScript();
+
+    expect(windowMock.__kbFvUtils.rawSpan('   abc  def   ', 1, 4)).toEqual({ start: 4, end: 8 });
+    expect(windowMock.__kbFvUtils.rawSpan('\n    前导空白后的正文', 0, 2)).toEqual({ start: 5, end: 7 });
+  });
+
+  it('31 字摘录只涂 31 字（旧实现会涂满 70 字窗口）', () => {
+    const { windowMock } = loadScript();
+    const quote = '这段原文依据摘录一共三十一个字，用来验证高亮落点是否准确无误。';
+    const { container, marked } = frameHost(`${quote}后面还有一整句本不该变色。`);
+
+    expect([...quote].length).toBe(31);
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('段落中间的摘录也只涂摘录本身（不清洗前后的正文）', () => {
+    const { windowMock } = loadScript();
+    const quote = '检索改写要先用词表兜住转写错词';
+    const { container, marked } = frameHost(`第三章 方案\n\n前置说明一句话。${quote}，再往下就是别的段落了。`);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('归一化后仍匹配不上时退到首个实词，只涂那个词（不猜长度）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameHost('正文里出现了一处改写计划，其余内容不动。');
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '改写计划（第 2 版）')).toBe(true);
+    expect(marked).toEqual(['改写计划']);
+  });
+});
+
+/**
+ * 行内元素会把一句话切成多个文本节点（Office/HTML 转出的正文里 `<strong>`/`<span>`
+ * 很常见）。这类摘录此前匹配不上整句，掉到"首个实词"兜底 —— 真机看到的就是
+ * "高亮只涂了半句/涂在别的地方"。
+ */
+describe('排版类原文依据高亮：摘录被行内元素切开（跨文本节点）', () => {
+  /** 假 iframe 正文：若干文本节点（可包行内元素）+ 只记区间的 Range。 */
+  function frameTree(parts: Array<{ tag?: string; text: string }>) {
+    const flat: any[] = [];
+    const childNodes: any[] = [];
+    let lastRange: any = null;
+    const ownerDocument: any = {
+      createTreeWalker: () => {
+        let index = 0;
+        return { nextNode: () => (index < flat.length ? flat[index++] : null) };
+      },
+      createRange: () => {
+        const range: any = { startNode: null, startOffset: 0, endNode: null, endOffset: 0 };
+        range.setStart = (node: any, offset: number) => { range.startNode = node; range.startOffset = offset; };
+        range.setEnd = (node: any, offset: number) => { range.endNode = node; range.endOffset = offset; };
+        range.surroundContents = () => {
+          if (range.startNode !== range.endNode) throw new Error('InvalidStateError');
+        };
+        range.extractContents = () => ({ nodeType: 11 });
+        range.insertNode = () => {};
+        lastRange = range;
+        return range;
+      },
+      createElement: () => ({ className: '', appendChild: () => {}, scrollIntoView: () => {} }),
+    };
+    for (const part of parts) {
+      const textNode: any = { nodeType: 3, nodeValue: part.text, ownerDocument };
+      flat.push(textNode);
+      if (!part.tag) {
+        childNodes.push(textNode);
+        continue;
+      }
+      childNodes.push({ nodeType: 1, childNodes: [textNode], querySelectorAll: () => [] });
+    }
+    const container: any = { nodeType: 1, ownerDocument, childNodes, querySelectorAll: () => [] };
+    const marked = () => {
+      if (!lastRange || !lastRange.startNode || !lastRange.endNode) return null;
+      const from = flat.indexOf(lastRange.startNode);
+      const to = flat.indexOf(lastRange.endNode);
+      if (from < 0 || to < 0) return null;
+      let out = '';
+      for (let i = from; i <= to; i++) {
+        const raw = String(flat[i].nodeValue || '');
+        out += raw.slice(i === from ? lastRange.startOffset : 0, i === to ? lastRange.endOffset : raw.length);
+      }
+      return out;
+    };
+    return { container, marked };
+  }
+
+  it('跨 <strong> 的摘录整句都被涂上（不再只涂首个实词）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '前置说明一句话。' },
+      { tag: 'strong', text: '要点' },
+      { text: '：先做词表，再改检索。后面还有很多别的说明文字。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '**要点**：先做词表，再改检索')).toBe(true);
+    expect(marked()).toBe('要点：先做词表，再改检索');
+  });
+
+  it('精确命中优先于实词兜底：前面段落里出现同名词也不许抢落点', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '先做词表这句话在前面另一个段落里出现过。' },
+      { text: '真正的摘录是：' },
+      { tag: 'strong', text: '要点' },
+      { text: '：先做词表，再改检索。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '**要点**：先做词表，再改检索')).toBe(true);
+    expect(marked()).toBe('要点：先做词表，再改检索');
+  });
+
+  it('单节点内的摘录仍然走单节点精确路径', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '前置说明一句话。' },
+      { text: '检索改写要先用词表兜住转写错词。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '检索改写要先用词表兜住转写错词')).toBe(true);
+    expect(marked()).toBe('检索改写要先用词表兜住转写错词');
+  });
+});
