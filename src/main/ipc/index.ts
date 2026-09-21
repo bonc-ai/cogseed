@@ -84,6 +84,7 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
+import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -2405,6 +2406,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 存量记忆迁移手动口（2026-09-19 清单 #6）：dryRun=盘点；否则立即迁移
+  //（备份→入库→按文件清空）。启动任务之外的可控触发（验收/补跑）。
+  // 族改名（2026-09-22 快赢·族可命名）：锚资产起按 same_family 连通分量批量写。
+  'recall.families.rename': async ({ anchorAssetId, name } = {}, ctx) => {
+    if (typeof anchorAssetId !== 'string' || !anchorAssetId.trim()) throw new Error('invalid family anchor asset id');
+    const { renameAssetFamily } = await import('../features/recall/family');
+    const updated = await renameAssetFamily(ctx.userId, anchorAssetId.trim(), String(name ?? ''));
+    return { ok: true, updated };
+  },
+  'recall.memory.migrate': async ({ dryRun } = {}, ctx) => {
+    const { migrateLegacyMemoryToAssets } = await import('../features/recall/memory-migration');
+    return migrateLegacyMemoryToAssets(ctx.userId, { dryRun: dryRun === true });
+  },
   'recall.captures.settings.get': async (_input, ctx) => {
     const [settings, model] = await Promise.all([
       recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
@@ -2439,9 +2453,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, targetVersionUsed, spaceId, applicableWhen, forbiddenWhen } = {}, ctx) => {
     if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
     if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
-    if (value !== undefined && (typeof value !== 'string' || value.length > 1_000)) throw new Error('invalid recall candidate value');
+    if (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) throw new Error('invalid recall candidate value');
     if (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) throw new Error('invalid recall candidate uncertainty');
-    if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') throw new Error('invalid recall candidate type');
+    if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') throw new Error('invalid recall candidate type');
     if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
     if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
     if (spaceId !== undefined && !safeId(spaceId)) throw new Error('invalid space id');
@@ -2458,7 +2472,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'recall.candidates.update': async ({ candidateId, judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, applicableWhen, forbiddenWhen } = {}, ctx) => {
-    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (value !== undefined && (typeof value !== 'string' || value.length > 1_000)) || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
+    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
     if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
     if (suggestedAction !== undefined && !['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject'].includes(suggestedAction)) throw new Error('invalid recall candidate action');
     if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) throw new Error('invalid recall candidate risk');
@@ -2558,7 +2572,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (statement !== undefined && (typeof statement !== 'string' || statement.length > 4_000)) throw new Error('invalid recall asset statement');
     if (scope !== undefined && (typeof scope !== 'string' || scope.length > 500)) throw new Error('invalid recall asset scope');
     if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall asset scope policy');
-    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method'].includes(type)) throw new Error('invalid recall asset type');
+    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method', 'fact'].includes(type)) throw new Error('invalid recall asset type');
     if (evidenceRefs !== undefined && !Array.isArray(evidenceRefs)) throw new Error('invalid recall asset evidence');
     if (ontologyRefs !== undefined && !Array.isArray(ontologyRefs)) throw new Error('invalid recall asset ontology refs');
     if (relations !== undefined && !Array.isArray(relations)) throw new Error('invalid recall asset relations');
@@ -2708,6 +2722,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.projections.confirm': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection confirm'); return { ok: true, ...(await kstarProjectionDecision.confirmProjectionAndResumeCommander(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.retryForecast': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection retry'); return { ok: true, ...(await kstarProjectionDecision.retryProjectionInCommander(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
+  'recall.projections.revoke': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.revokeModelSelectedProjection(ctx.userId, projectionId) }; },
   'recall.projections.availableAssets': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, assets: await recallProjection.listAvailableProjectionAssets(ctx.userId, projectionId) }; },
   'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },
   'recall.projections.defer': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.deferContextProjection(ctx.userId, projectionId, note) }; },
@@ -2791,10 +2806,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
-  'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
-  'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
-  'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })), }; },
-  'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
+  'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } } : {}) })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })), }; },
+  'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })) }; },
+  // 用户主动使用（2026-09-19）：把用户钉住的资产以 confirmed 投影挂到指定会话
+  //  并发投影卡——下一轮起注入命中，卡上可撤销。显式资产模式（绕语义门、
+  //  过状态硬门），authorization=user_confirmed（IPC 白名单内）。
+  'recall.projections.attachToConversation': async ({ assetId, conversationId } = {}, ctx) => {
+    if (!safeId(assetId) || !safeId(conversationId)) throw new Error('invalid recall projection attach');
+    const projection = await recallProjection.previewContextProjection(ctx.userId, {
+      taskRunId: `user-attach-${assetId}-${conversationId}`.slice(0, 160),
+      purpose: 'user_pinned',
+      authorization: 'user_confirmed',
+      conversationId,
+      confirm: true,
+      explicitAssetIds: [assetId],
+    });
+    return {
+      ok: true,
+      projection: { id: projection.id, assetIds: projection.assetIds, status: projection.status },
+      ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid: conversationId, projectionId: projection.id }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid: conversationId, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })),
+    };
+  },
   'recall.projections.read': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.readContextProjection(ctx.userId, projectionId) }; },
 
   'recall.proofs.transfer.prepare': async ({ projectionId, executionId, expectedResultSnapshot } = {}, ctx) => { if (!safeId(projectionId) || !safeId(executionId) || typeof expectedResultSnapshot !== 'string' || expectedResultSnapshot.length > 4_000) throw new Error('invalid transfer proof'); return { ok: true, proof: await recallProofs.prepareTransferProof(ctx.userId, { projectionId, executionId, expectedResultSnapshot }) }; },
@@ -3500,6 +3534,35 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.profile.syncRecall': async (_payload, ctx) => {
     return { ok: true, ...(await recallProfileSync.schedulePersonalProfileSync(ctx.userId)) };
   },
+  // 冲突台账（2026-09-20 本体界面）：读取自带自愈——值已被用户删除的
+  // 冲突行顺手清除，返回的每一条都仍然成立。
+  'personalOntology.conflicts.list': async ({ groupId } = {}, ctx) => {
+    const { listConflicts } = await import('../features/recall/ontology-conflicts');
+    const conflicts = await listConflicts(ctx.userId, typeof groupId === 'string' && groupId ? groupId : undefined);
+    return { ok: true, conflicts };
+  },
+  // ── 本体候选池（2026-09-20 首次暴露）：此前只有写入方（转写桥/onboarding/
+  // 资产回流），读取与确认零暴露零 UI——回流闭环的确认端在这里补齐。 ──
+  'personalOntology.candidates.list': async (_payload, ctx) => {
+    const data = await personalOntologyCandidates.listCandidates(ctx.userId);
+    return { ok: true, candidates: data.candidate_updates || [] };
+  },
+  'personalOntology.candidates.confirm': async ({ candidateId, dest } = {}, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.confirmCandidate(
+      ctx.userId,
+      candidateId,
+      dest && typeof dest === 'object' ? dest : {},
+    );
+  },
+  'personalOntology.candidates.reject': async ({ candidateId, reason } = {}, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.rejectCandidate(
+      ctx.userId,
+      candidateId,
+      typeof reason === 'string' ? reason : undefined,
+    );
+  },
   'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
     if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
     return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, restoreData === true);
@@ -3530,8 +3593,45 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.groups.fields.setValue': async ({ groupId, fieldName, value, oldValue }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
-    if (typeof value !== 'string') throw new Error('missing value');
+    if (typeof value !== 'string') throw new Error('invalid value');
     return personalOntologyTemplateFiles.setFieldValueToRef(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
+  },
+  // 断言核实档（2026-09-20；spec 007 升两档）：标记/取消一条值的核实状态。
+  // verified: false 取消 / true 有来源支持 / 'independent' 独立核实过。
+  'personalOntology.groups.fields.verify': async ({ groupId, fieldName, value, verified }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    const level: boolean | 'independent' = verified === 'independent' ? 'independent' : verified === true;
+    return personalOntologyGroups.setFieldValueVerified(
+      ctx.userId, groupId, fieldName, value, level,
+    );
+  },
+  // 规则分类循环（spec 007 T301）：无 → operation → preference → constraint → 无。
+  'personalOntology.groups.fields.cycleRuleKind': async ({ groupId, fieldName, value }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    return personalOntologyGroups.cycleFieldValueRuleKind(ctx.userId, groupId, fieldName, value);
+  },
+  // 组变更历史（spec 007 T304）：快照列表与恢复。
+  'personalOntology.groups.history.list': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return { ok: true, history: personalOntologyGroups.listGroupHistory(ctx.userId, groupId) };
+  },
+  'personalOntology.groups.history.restore': async ({ groupId, snapshotId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!snapshotId || typeof snapshotId !== 'string') throw new Error('missing snapshotId');
+    return personalOntologyGroups.restoreGroupSnapshot(ctx.userId, groupId, snapshotId);
+  },
+  // 敏感性（spec 007 T302）：restricted 不进任务自动注入与世界模型。
+  'personalOntology.groups.fields.sensitivity': async ({ groupId, fieldName, value, restricted }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    return personalOntologyGroups.setFieldValueSensitivity(
+      ctx.userId, groupId, fieldName, value, restricted === true,
+    );
   },
   'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');

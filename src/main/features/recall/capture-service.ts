@@ -655,7 +655,7 @@ function optionalText(value: unknown, max: number): string | undefined {
 }
 
 function parseCandidateType(value: unknown): AbilityAssetType {
-  if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method') return value;
+  if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method' || value === 'fact') return value;
   throw new CaptureFailure('invalid_model_output', 'invalid suggestedType');
 }
 
@@ -824,7 +824,7 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method|fact","suggestedScope":"general|report|code|review|product","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates.',
     // scope 枚举约束（A 轨道）：自由文本 scope（"用户全局画像"）在自动投影
     // 里永远匹配不上任务词，用户确认的资产会全部失配。general=跨对话/跨
@@ -844,6 +844,7 @@ function extractionSystemPrompt(): string {
     // 词自行猜测，项目事实会被写成 personal、原文件会被写成 template。
     'suggestedType must answer one of four questions, and each has contents that are explicitly excluded:',
     '- personal: "What is durably true about this user?" Identity, role, long-term preference, stable relationship, long-term environment, boundary. EXCLUDED: current task progress, the current sprint or milestone, a meeting or schedule, a temporary contact relationship, any project fact. Those stay with the project, not with the person.',
+    '- fact: "Is this a durable fact about a project or environment?" A stable repository, tool, organisation, workflow, or long-lived environment statement that future tasks can rely on. EXCLUDED: transient task state, current progress, a one-off failure, schedules, and facts likely to change soon.',
     '- rule: "Under what condition should which judgment or behaviour hold?" A complete rule has a condition, a principle, and a boundary. EXCLUDED: a bare preference with no condition ("likes concise"), and one-off instructions for this task only.',
     'For a rule candidate you MUST also return applicableWhen and forbiddenWhen: short concrete phrases for when it applies and where it must not be used. A rule without both cannot become a formal asset. Do not invent a boundary the messages do not support — drop the candidate instead.',
     '- template: "Is there a structure that can be applied again next time?" Document skeletons, checklists, section structures, reusable fragments, output schemas. EXCLUDED: the source file itself. A PRD.docx stays a source file; only the reusable structure extracted from it can be a template.',
@@ -851,7 +852,7 @@ function extractionSystemPrompt(): string {
     'When the content does not satisfy the type it would need, drop it rather than forcing it into the closest type.',
     'judgment must BE the reusable content itself, never a verdict about the candidate. "Useful and reusable" or "valuable, shows what the user expects" are judgements about your own extraction, not knowledge — drop those instead of emitting them.',
     'Never emit the same judgment under two different suggestedType values. Pick the one type it actually satisfies, or drop it.',
-    'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
+    'Only extract reusable preferences, constraints, decisions, templates, methods, or durable facts supported by the supplied messages.',
     'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
     'Every candidate must cite at least one user message. Short acknowledgements, greetings, status checks, and failed work are not candidates.',
     'Write candidate text in the same language as the conversation.',
@@ -937,12 +938,12 @@ async function extractCaptureViaCli(
   const prompt =
     `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
     `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
-    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
+    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method|fact","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
     `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
     `suggestedScope must be one of the five controlled terms: "general" (across all conversations and spaces — identity, durable preferences) or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes.\n` +
     `summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation. Never a full sentence or a prefix copied from judgment.\n` +
     `When the conversation corrects an existing asset (see "existingAssets" in the input), emit it with suggestedAction "update", targetAssetId set, and judgment as a merged revision of that asset's current statement plus the new information.\n` +
-    `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
+    `Only extract reusable preferences, constraints, decisions, templates, methods, or durable facts supported by the supplied messages.\n` +
     `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
     `Write candidate text in the same language as the conversation.\n\n` +
     `## Conversation JSON\n${input}`;
@@ -2226,7 +2227,28 @@ export async function runRecallCapture(
           if (quality.automaticEligible) automaticallyEligibleCandidateIds.add(storedCandidate.id);
           else automaticallyEligibleCandidateIds.delete(storedCandidate.id);
         }
-      } catch {
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        // L3 敏感内容（凭据等）绝不落盘——闸门在 saveRecallCandidate 内部。
+        // 这里只丢弃**这一条**候选并留痕，其余候选照常保存：此前直接把整次
+        // 整理打成失败，重试又撞同一堵墙，会话永远整理不了（2026-09-21
+        // 真机抓出：candidate_save_failed 背后是 credential_assignment）。
+        if (messageText.includes('forbidden to persist')) {
+          log.warn('recall capture candidate dropped (sensitive)', {
+            capture_id: capture.id,
+            candidate_index: index,
+            error: messageText,
+          });
+          continue;
+        }
+        // 其他保存错误必须落日志：真实错误此前被整体吞掉，真机上只留下
+        // candidate_save_failed 一个码，定位全靠猜。
+        log.warn('recall capture candidate save threw', {
+          capture_id: capture.id,
+          candidate_index: index,
+          suggested_type: candidate.suggestedType,
+          error: messageText,
+        });
         throw new CaptureFailure('candidate_save_failed', 'candidate could not be saved');
       }
     }

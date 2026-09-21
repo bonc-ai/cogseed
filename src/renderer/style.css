@@ -24470,6 +24470,241 @@ body:has(#panel-settings.active) .main-top-actions {
   border-top: 1px solid var(--personal-onto-border, #e2e8f0);
 }
 
+/* ─── 本体分组子页（2026-09-20 自记忆页迁入，结构化编辑）─── */
+
+.personal-onto-backflow-badge {
+  color: var(--color-warning-text);
+  font-weight: 600;
+}
+
+/* 三盒分区（spec 007 Phase 1）：事实 / 规则 区块头与字段说明 */
+.personal-onto-zone { margin-bottom: 14px; }
+.personal-onto-zone-head {
+  font-size: var(--font-size-title);
+  font-weight: 700;
+  color: var(--text-2);
+  border-left: 3px solid var(--muted);
+  padding-left: 8px;
+  margin: 4px 0 8px;
+}
+.personal-onto-field-desc {
+  font-size: var(--font-size-caption);
+  font-weight: 400;
+}
+
+.personal-onto-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: var(--font-size-3);
+}
+.personal-onto-history-time { white-space: nowrap; font-weight: 600; color: var(--text-2); }
+.personal-onto-history-preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 盒子化重构：极简值行 + 状态点 + 展开详情 */
+.personal-onto-value-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  cursor: pointer;
+  background: var(--surface);
+}
+.personal-onto-value-line:hover { background: var(--surface-subtle); }
+.personal-onto-value-line.is-expanded { background: var(--surface-2); }
+.personal-onto-value-line.is-conflicted { border-left: 3px solid var(--danger); }
+.personal-onto-value-src { font-size: 12px; flex-shrink: 0; }
+.personal-onto-status-dot {
+  width: 8px; height: 8px; border-radius: 999px;
+  align-self: center; flex-shrink: 0;
+}
+.personal-onto-status-dot.is-red { background: var(--danger); }
+.personal-onto-status-dot.is-amber { background: var(--color-warning); }
+.personal-onto-status-dot.is-green { background: var(--success); }
+.personal-onto-value-detail {
+  padding: 8px 10px 10px 14px;
+  border-left: 2px solid var(--border);
+  margin: 2px 0 6px 8px;
+}
+.personal-onto-value-detail-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.personal-onto-value-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.personal-onto-abox-group { margin-bottom: 14px; }
+.personal-onto-abox-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px;
+}
+.personal-onto-abox-subsec { margin-bottom: 8px; }
+.personal-onto-abox-subsec-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  margin-bottom: 4px;
+}
+.personal-onto-tbox-field {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 8px; font-size: 14px;
+}
+
+/* 总览 R 盒分类筛选（spec 007 T301） */
+.personal-onto-filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.personal-onto-filter-chip {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  padding: 2px 11px;
+  cursor: pointer;
+}
+.personal-onto-filter-chip.is-on {
+  background: var(--text-2);
+  border-color: var(--text-2);
+  color: var(--surface);
+}
+
+.personal-onto-group-new-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--font-size-3);
+  cursor: pointer;
+  text-align: left;
+}
+.personal-onto-group-new-btn:hover { border-color: var(--muted); color: var(--text-2); }
+
+.personal-onto-group-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.personal-onto-group-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.personal-onto-group-actions { display: flex; gap: 6px; }
+.personal-onto-group-action {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.personal-onto-group-action:hover { background: var(--surface-subtle); }
+.personal-onto-group-action.is-danger { color: var(--danger); border-color: var(--color-danger-line); }
+.personal-onto-group-action.is-ghost { border-color: transparent; color: var(--muted); }
+
+.personal-onto-field-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.personal-onto-field-block {
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-3);
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.personal-onto-field-name {
+  font-size: var(--font-size-title);
+  font-weight: 700;
+  margin-bottom: 7px;
+  color: var(--text);
+}
+.personal-onto-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+.personal-onto-value-row.is-conflicted {
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger-line);
+}
+.personal-onto-value-text { color: var(--text); }
+.personal-onto-value-meta {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.personal-onto-value-remove {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+}
+.personal-onto-value-remove:hover { color: var(--danger); }
+.personal-onto-value-empty { font-size: var(--font-size-3); padding: 4px 8px; }
+.personal-onto-value-add {
+  margin-top: 7px;
+  border: none;
+  background: transparent;
+  color: var(--color-info);
+  font-size: var(--font-size-3);
+  cursor: pointer;
+  padding: 3px 8px;
+  text-align: left;
+}
+.personal-onto-value-add:hover { text-decoration: underline; }
+
+.personal-onto-flow-zone { margin-top: 4px; }
+.personal-onto-flow-row {
+  padding: 6px 8px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.personal-onto-group-note-entry { display: flex; gap: 8px; margin-top: 6px; }
+.personal-onto-note-input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.personal-onto-backflow-zone {
+  border: 1.5px dashed var(--color-warning);
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-3);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.personal-onto-backflow-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+.personal-onto-backflow-text { flex: 1; color: var(--text); min-width: 180px; }
+.personal-onto-backflow-actions { display: flex; gap: 6px; }
+
+
 /* ─── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）─── */
 /* 布局镜像 AI 团队页（agents）：固定顶栏 + chips 条 + 独立滚动卡片网格 */
 
@@ -32843,3 +33078,142 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 }
 .kb-qa-tools-btn.ui-button { color: var(--text-muted); }
 .kb-qa-tools-btn.ui-button:hover { color: var(--text-heading); }
+
+/* ── Recall projection receipt ───────────────────────────────────────────
+   Model-selected assets are governance events, not assistant prose. Keep the
+   receipt compact in the chat timeline and disclose details progressively. */
+.chat-recall-projection-card {
+  margin: 6px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
+  box-shadow: none;
+}
+.chat-message.is-sidecar {
+  display: none !important;
+}
+.chat-message.is-coalesced {
+  display: none !important;
+}
+.chat-recall-projection-card.is-model-selected {
+  max-width: 620px;
+}
+.chat-recall-projection-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.chat-recall-projection-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-recall-projection-title strong {
+  display: block;
+  color: var(--text);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+}
+.chat-recall-projection-title small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+}
+.chat-recall-projection-badge,
+.chat-recall-projection-status {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.chat-recall-projection-badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  font-size: var(--font-size-1);
+  font-weight: var(--font-weight-semibold);
+}
+.chat-recall-projection-status {
+  color: var(--muted);
+  font-size: var(--font-size-1);
+}
+.chat-recall-projection-summary-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.chat-recall-projection-details {
+  margin-top: 7px;
+  border-top: 1px solid var(--border);
+}
+.chat-recall-projection-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  color: var(--primary);
+  font-size: var(--font-size-1);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.chat-recall-projection-details > summary::-webkit-details-marker { display: none; }
+.chat-recall-projection-details > summary::before { content: '▸'; }
+.chat-recall-projection-details[open] > summary::before { content: '▾'; }
+.chat-recall-projection-body {
+  margin-top: 6px;
+}
+.chat-recall-projection-section {
+  padding: 2px 0 6px;
+}
+.chat-recall-projection-section-title {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+  font-weight: var(--font-weight-semibold);
+}
+.chat-recall-projection-asset {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.chat-recall-projection-asset:last-child { border-bottom: none; }
+.chat-recall-projection-asset > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-recall-projection-asset strong {
+  display: block;
+  color: var(--text);
+  font-size: var(--font-size-2);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.chat-recall-projection-asset small,
+.chat-recall-projection-asset em {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+  font-style: normal;
+}
+.chat-recall-projection-empty,
+.chat-recall-projection-locked,
+.chat-recall-projection-omitted {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+}
+.chat-recall-projection-card.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+}
