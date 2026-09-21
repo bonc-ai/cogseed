@@ -134,12 +134,22 @@
   }
 
   function renderTabs() {
-    const tab = (label, selected, count = '') => `<button type="button" class="ui-tab${selected ? ' is-active' : ''}" role="tab" aria-selected="${selected ? 'true' : 'false'}" tabindex="${selected ? '0' : '-1'}" data-gallery-tab>${label}${count === '' ? '' : ` <span class="ui-segmented-control__count">${count}</span>`}</button>`;
     byId('tabs-specimens').innerHTML = specimen(
       '主页面导航',
       '单一 Tab 入口 · 下划线选中 · 绿色键盘焦点',
-      `<div class="ui-tabs" role="tablist" aria-label="能力页面">${tab('智能体', true, 6)}${tab('MCP 与工具', false, 4)}${tab('技能', false, 18)}${tab('资料库', false)}${tab('IM', false)}</div>`,
+      uiTabs({
+        ariaLabel: '能力页面',
+        value: 'agents',
+        items: [
+          { value: 'agents', label: '智能体', count: 6 },
+          { value: 'tools', label: 'MCP 与工具', count: 4 },
+          { value: 'skills', label: '技能', count: 18 },
+          { value: 'library', label: '资料库' },
+          { value: 'im', label: 'IM' },
+        ],
+      }),
     );
+    hydrateUiTabs(byId('tabs-specimens'));
   }
 
   function renderResourcePages() {
@@ -173,24 +183,61 @@
   }
 
   function renderResourceCards() {
-    const card = ({ title, description, icon, status, action, row = false }) => `
-      <article class="ui-resource-card${row ? ' ui-resource-card--row' : ''}">
-        <div class="ui-resource-card__header">
-          <span class="ui-resource-card__icon"><span data-ui-icon="${icon}"></span></span>
-          <div class="ui-resource-card__heading"><h3 class="ui-resource-card__title">${title}</h3></div>
-        </div>
-        <p class="ui-resource-card__description">${description}</p>
-        <div class="ui-resource-card__footer"><span class="ui-resource-card__status">${status}</span>${uiButton({ label: action, role: 'primary', size: 'sm' })}</div>
-      </article>`;
     byId('resource-card-specimens').innerHTML = [
-      card({ title: '产品研发', description: '组织需求、设计与研发交付，保留最近任务上下文。', icon: 'folder', status: '刚刚更新', action: '继续工作' }),
-      card({ title: '每日工作收尾', description: '下班前整理当天进展、风险和明日待办。', icon: 'clock', status: '每天 18:00', action: '使用模板' }),
-      card({ title: '项目分析师', description: '核对材料并整理风险线索，适用于通用分析任务。', icon: 'users', status: '可使用', action: '使用智能体' }),
-      card({ title: '需求证据整理', description: '把多来源反馈整理成可追溯的问题主题与证据账本。', icon: 'database', status: '已启用', action: '使用技能' }),
-      card({ title: 'GitHub', description: '查找和管理代码仓库、Issue、PR、文件与代码。', icon: 'globe', status: '未连接', action: '连接账户' }),
-      card({ title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', row: true }),
-    ].join('');
+      { title: '产品研发', description: '组织需求、设计与研发交付，保留最近任务上下文。', icon: 'folder', status: '刚刚更新', action: '继续工作' },
+      { title: '每日工作收尾', description: '下班前整理当天进展、风险和明日待办。', icon: 'clock', status: '每天 18:00', action: '使用模板' },
+      { title: '项目分析师', description: '核对材料并整理风险线索，适用于通用分析任务。', icon: 'users', status: '可使用', action: '使用智能体' },
+      { title: '需求证据整理', description: '把多来源反馈整理成可追溯的问题主题与证据账本。', icon: 'database', status: '已启用', action: '使用技能' },
+      { title: 'GitHub', description: '查找和管理代码仓库、Issue、PR、文件与代码。', icon: 'globe', status: '未连接', action: '连接账户' },
+      { title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', layout: 'row' },
+    ].map((item) => uiResourceCard({ ...item, action: { label: item.action } })).join('');
     hydrateUiIcons(byId('resource-card-specimens'));
+  }
+
+  function renderStatusDisplay() {
+    byId('status-display-specimens').innerHTML = [
+      specimen('标签与筛选', 'Tag 不交互 · Chip 使用原生按钮', `<div class="gallery-inline-row">${uiTag({ label: '知识库', variant: 'solid' })}${uiTag({ label: 'v1.0.2', variant: 'version' })}${uiTag({ label: '已合规', variant: 'success' })}${uiChip({ label: '只看已引用', selected: true, icon: 'check' })}${uiChip({ label: '包含归档' })}</div>`),
+      specimen('状态语义', '列表用状态点 · 标题或摘要用胶囊', `<div class="gallery-inline-row">${uiStatusDot({ label: '运行中', tone: 'attention' })}${uiStatusPill({ label: '已完成', tone: 'success', check: true })}${uiStatusPill({ label: '需要处理', tone: 'critical' })}${uiBadge({ label: '待开发', tone: 'neutral' })}</div>`),
+      specimen('加载反馈', '能估算用进度条 · 未知耗时用骨架', `<div class="gallery-loading-stack">${uiProgressBar({ ariaLabel: '索引进度', value: 64 })}${uiSkeleton({ ariaLabel: '正在载入资料卡片', lines: [48, 92], withMedia: true })}</div>`),
+    ].join('');
+    hydrateUiIcons(byId('status-display-specimens'));
+  }
+
+  function renderStructuredData() {
+    const table = uiDataTable({
+      label: '知识来源状态',
+      columns: [
+        { key: 'name', label: '来源', primary: true },
+        { key: 'status', label: '状态' },
+        { key: 'count', label: '资料数', align: 'right', sortable: true },
+      ],
+      rows: [
+        { name: '飞书 Wiki', status: '已连接', count: 18 },
+        { name: '个人资料库', status: '可检索', count: 42 },
+      ],
+      sortKey: 'count',
+      sortDir: -1,
+    });
+    const accordion = uiAccordion({
+      items: [
+        { title: '索引范围', meta: '3 项', bodyHtml: '<p>正文、标题与来源元数据。</p>' },
+        { title: '同步记录', meta: '12:40', bodyHtml: '<p>最近一次同步成功。</p>' },
+      ],
+    });
+    const tree = uiTree({
+      ariaLabel: '知识库目录',
+      items: [
+        { id: 'personal', label: '个人资料库', expanded: true, children: [{ id: 'handoff', label: 'SM 交接', selected: true }, { id: 'notes', label: '会议笔记' }] },
+        { id: 'shared', label: '共享资料库', children: [{ id: 'team', label: '团队资料' }] },
+      ],
+    });
+    byId('structured-data-specimens').innerHTML = [
+      specimen('DataTable', '原生表格 · 可排序表头 · 数值右对齐', table),
+      specimen('Accordion', '独立展开 · 左侧恒定箭头 · 右侧元数据', accordion),
+      specimen('Tree', '方向键导航 · 展开/收起 · 单一 Tab 入口', tree),
+    ].join('');
+    hydrateUiIcons(byId('structured-data-specimens'));
+    hydrateUiTrees(byId('structured-data-specimens'));
   }
 
   function renderSettingsSections() {
@@ -602,7 +649,18 @@
       ['long', 'MOD-04', '长内容', '正文独立滚动'],
       ['popover', 'MOD-05', '内嵌选择器', '浮层位于 Modal 之上'],
     ];
-    byId('modal-launchers').innerHTML = cases.map(([id, code, title, note]) => `<article class="gallery-modal-launcher"><span>${code}</span><strong>${title}</strong><p>${note}</p>${uiButton({ label: '打开', role: 'secondary', size: 'sm', attrs: { 'data-modal-demo': id } })}</article>`).join('');
+    byId('modal-launchers').innerHTML = cases.map(([id, code, title, note]) => `<article class="gallery-modal-launcher"><span>${code}</span><strong>${title}</strong><p>${note}</p>${uiButton({ label: '打开', role: 'secondary', size: 'sm', attrs: { 'data-modal-demo': id } })}</article>`).join('')
+      + `<article class="gallery-modal-launcher"><span>DRW-01</span><strong>侧边抽屉</strong><p>焦点约束、遮罩与 Escape 关闭</p>${uiButton({ label: '打开', role: 'secondary', size: 'sm', attrs: { 'data-drawer-demo': 'detail' } })}</article>`;
+  }
+
+  function openDrawerDemo(trigger) {
+    uiDrawer({
+      title: '产物详情',
+      closeLabel: '关闭抽屉',
+      trigger,
+      bodyHtml: '<p>抽屉承载补充信息或辅助操作，不替代需要用户决策的 Modal。</p><p>按 Escape、点击遮罩或关闭按钮均可返回触发位置。</p>',
+      footerHtml: uiButton({ label: '完成', role: 'primary', size: 'sm', attrs: { 'data-ui-drawer-close': 'true' } }),
+    });
   }
 
   const automationStates = [
@@ -662,39 +720,12 @@
         group.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', item === button ? 'true' : 'false'));
       });
     });
-    document.querySelectorAll('.ui-tabs').forEach((group) => {
-      const tabs = Array.from(group.querySelectorAll('[data-gallery-tab]'));
-      if (!tabs.length) return;
-      const activate = (tab) => {
-        tabs.forEach((item) => {
-          const selected = item === tab;
-          item.classList.toggle('is-active', selected);
-          item.setAttribute('aria-selected', selected ? 'true' : 'false');
-          item.tabIndex = selected ? 0 : -1;
-        });
-        tab.focus();
-        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      };
-      group.addEventListener('click', (event) => {
-        const tab = event.target.closest('[data-gallery-tab]');
-        if (tab && group.contains(tab)) activate(tab);
-      });
-      group.addEventListener('keydown', (event) => {
-        if (event.isComposing || event.keyCode === 229) return;
-        const current = event.target.closest('[data-gallery-tab]');
-        const index = tabs.indexOf(current);
-        if (index < 0) return;
-        let next = -1;
-        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
-        else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
-        else if (event.key === 'Home') next = 0;
-        else if (event.key === 'End') next = tabs.length - 1;
-        if (next < 0) return;
-        event.preventDefault();
-        activate(tabs[next]);
-      });
-    });
     document.addEventListener('click', (event) => {
+      const drawerTrigger = event.target.closest('[data-drawer-demo]');
+      if (drawerTrigger) {
+        openDrawerDemo(drawerTrigger);
+        return;
+      }
       const modalTrigger = event.target.closest('[data-modal-demo]');
       if (modalTrigger) {
         openModalDemo(modalTrigger.dataset.modalDemo);
@@ -737,6 +768,8 @@
   renderUserMenus();
   renderResourcePages();
   renderTabs();
+  renderStatusDisplay();
+  renderStructuredData();
   renderResourceCards();
   renderSettingsSections();
   renderButtons();

@@ -7579,6 +7579,7 @@
   "kb.workbench.close_ai_panel": "关闭 AI 解析与问答",
   "kb.eco.hide_labels": "仅显示图标",
   "kb.eco.show_labels": "显示图标和文字",
+  "kb.eco.coming_soon": "待开发",
   "cognition.kstar_episodes_hint": "每场任务完结后 KSTAR 自动复盘：当时的任务、实际发生、为什么、学到的经验。点开看完整复盘。",
   "cognition.kstar_episodes_empty": "还没有被 KSTAR 复盘过的任务",
   "cognition.kstar_episodes_loading": "正在读取任务复盘列表…",
@@ -7711,5 +7712,8 @@
   "kb.transcriptCorrect.review_outside": "；其中 {count} 条是词表外写法，请重点核对",
   "kb.transcriptCorrect.row_from_model": "模型建议",
   "kb.transcriptCorrect.apply_wrote_glossary": "；已把 {count} 条模型建议记入词表（仅本文档生效）",
-  "kb.transcriptCorrect.apply_dropped_models": "；{count} 条模型建议因位置对不上被丢弃"
+  "kb.transcriptCorrect.apply_dropped_models": "；{count} 条模型建议因位置对不上被丢弃",
+  "kb.qa.copy_answer": "复制",
+  "kb.qa.copy_answer_title": "复制回答全文",
+  "kb.qa.copy_answer_done": "已复制回答全文"
 }
