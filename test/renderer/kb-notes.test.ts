@@ -55,6 +55,8 @@ function loadScript(tree = TREE_WITH_NOTES) {
     uiConfirm: vi.fn(() => Promise.resolve(true)),
     uiPrompt: vi.fn(() => Promise.resolve('新笔记')),
     uiIconHtml: (name: string) => `<svg class="ui-icon is-${name}"></svg>`,
+    uiButton: (o: any) => `<button type="button" class="btn ui-button ${o.className || ''}" id="${o.attrs?.id || ''}" title="${o.attrs?.title || ''}">${o.label}</button>`,
+    uiIconButton: (o: any) => `<button type="button" class="ui-icon-button ${o.className || ''}" id="${o.attrs?.id || ''}" aria-label="${o.label}"></button>`,
     uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3></section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string, payload: any) => {
