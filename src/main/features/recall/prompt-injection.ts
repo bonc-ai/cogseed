@@ -170,6 +170,7 @@ async function buildPromptContextForProjections(
   userId: string,
   projections: ProjectionForPrompt[],
   runtimeContext: AssetRuntimeContext = {},
+  excludeAssetIds: ReadonlySet<string> = new Set(),
 ): Promise<RecallTurnPromptContext> {
   const records: Array<Record<string, unknown>> = [];
   const citations: RecallPromptCitation[] = [];
@@ -179,7 +180,7 @@ async function buildPromptContextForProjections(
     if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) continue;
     const matches = new Map((projection.assetMatches || []).map((match) => [match.assetId, match]));
     for (const assetId of projection.assetIds) {
-      if (seenAssets.has(assetId) || records.length >= MAX_ASSETS) continue;
+      if (seenAssets.has(assetId) || excludeAssetIds.has(assetId) || records.length >= MAX_ASSETS) continue;
       try {
         const confirmedVersion = projection.assetVersions?.[assetId];
         const liveAsset = await readAbilityAsset(userId, assetId);
@@ -501,13 +502,17 @@ export async function buildRecallTurnPromptContext(
   if (input.committedProjectionId) {
     const committed = await buildPromptContextForCommittedProjection(userId, input);
     if (!projections.length) return committed;
-    const local = await buildPromptContextForProjections(userId, projections, input);
-    const seen = new Set(committed.citations.map((item) => `${item.assetId}:${item.projectionId}`));
-    const extra = local.citations.filter((item) => !seen.has(`${item.assetId}:${item.projectionId}`));
+    // 同一资产已在 committed 块注入的不重复注入。去重按 assetId（此前键含
+    // projectionId，committed 投影与会话投影 id 必不相同，过滤从未生效——同一
+    // 资产 statement 双份注入、usage 流水双计）。排除下沉到装配层执行：
+    // promptBlock 与 citations 同源去重，不会出现 citations 减了、正文还是
+    // 两份的劈叉。committed 是宿主基线，重叠时以 committed 冻结内容为准。
+    const committedAssets = new Set(committed.citations.map((item) => item.assetId));
+    const local = await buildPromptContextForProjections(userId, projections, input, committedAssets);
     return {
       ...committed,
       promptBlock: [committed.promptBlock, local.promptBlock].filter(Boolean).join('\n\n'),
-      citations: [...committed.citations, ...extra],
+      citations: [...committed.citations, ...local.citations],
     };
   }
 

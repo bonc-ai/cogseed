@@ -341,6 +341,49 @@ describe('confirmed Recall projection prompt injection', () => {
     })).rejects.toMatchObject({ code: 'projection_asset_version_changed' });
   });
 
+  it('injects an asset only once when it sits in both the committed and the conversation projection', async () => {
+    const oauth = await createAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-overlap-oauth',
+    });
+    const { projection, storage, layout, promptInjection } = await modules();
+    // 两条确认投影含同一资产：任务 committed 挂载 + 会话消息卡片。
+    const committedPreview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-overlap-committed',
+      purpose: 'global',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions);
+    const committed = await projection.confirmContextProjection('user-a', committedPreview.id);
+
+    const sessionPreview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-overlap-session',
+      purpose: 'global',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions);
+    const session = await projection.confirmContextProjection('user-a', sessionPreview.id);
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-overlap');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-overlap', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'overlap',
+      recall_projection_card: { projectionId: session.id },
+    });
+
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-overlap',
+      taskRunId: 'turn-overlap',
+      taskText: 'Audit OAuth login callback handling',
+      committedProjectionId: committed.id,
+    }, fakeSemanticOptions);
+
+    // 修复前：合并去重键含 projectionId，两条投影 id 必不相同 → 过滤永不生效，
+    // 同一资产 statement 双份注入、usage 流水双计（升档链输入被虚增）。
+    expect(result.citations.filter((c) => c.assetId === oauth.asset.id)).toHaveLength(1);
+    expect(result.citations[0].projectionId).toBe(committed.id);
+    const occurrences = result.promptBlock.match(new RegExp(oauth.asset.id, 'g')) || [];
+    expect(occurrences).toHaveLength(1);
+  });
+
   it('returns no turn context when no approved memory is relevant', async () => {
     await createAssetWith({
       judgment: 'Plan database migrations with rollback windows.',
