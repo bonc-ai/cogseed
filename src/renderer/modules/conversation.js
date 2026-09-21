@@ -3016,6 +3016,27 @@ function _stopGroupEventObserver(cid) {
   try { ctrl.abort(); } catch (_) {}
 }
 
+function _conversationRuntimeIsActive(data) {
+  if (!data || data.ok === false) return false;
+  const inFlight = Array.isArray(data.in_flight) ? data.in_flight.filter(Boolean) : [];
+  const activeTurns = Array.isArray(data.active_turns) ? data.active_turns.filter(Boolean) : [];
+  return data.processing === true
+    || data.backend_active === true
+    || inFlight.length > 0
+    || activeTurns.length > 0;
+}
+
+async function _readConversationRuntime(cid) {
+  if (!cid) return null;
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
+    const data = await res.json();
+    return data && data.ok !== false ? data : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function _syncPendingActorsFromRuntime(cid, opts = {}) {
   if (!cid || !isConvPending(cid)) return false;
   const state = pendingConvs.get(cid);
@@ -3028,14 +3049,8 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
   const hasLiveController = !!state.controller && _convChatCtrls.has(cid);
   if (hasLiveController && !allowController) return false;
   const loadingEl = state.loadingEl;
-  let data = null;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
-    data = await res.json();
-  } catch (_) {
-    return false;
-  }
-  if (!data || data.ok === false) return false;
+  const data = await _readConversationRuntime(cid);
+  if (!data) return false;
   if (cid === currentCid) _mountCollaborationStatusCard(document.getElementById('chat-history'), data.collaboration || null);
   if (!isConvPending(cid) || pendingConvs.get(cid)?.aborted) return false;
   const inFlight = Array.isArray(data.in_flight)
@@ -3043,13 +3058,7 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
     : [];
   const hasActiveTurnsField = Array.isArray(data.active_turns);
   const activeTurns = _normaliseActiveTurns(data.active_turns);
-  // backend_active: a CogSeed Backend (Mate / local-CLI) task for this cid
-  // is still executing outside the group-chat bus. Treat it as processing —
-  // otherwise the recovery poll would finalize the run while the turn is
-  // genuinely still working (imported-session continuation dispatches long
-  // work there), making the conversation look "stopped".
-  const processing = data.processing === true || data.backend_active === true
-    || inFlight.length > 0 || activeTurns.length > 0;
+  const processing = _conversationRuntimeIsActive(data);
   if (window.ConversationInfo) {
     try { window.ConversationInfo.refreshFiles(cid, { silent: true }); } catch (_) {}
   }
@@ -3951,6 +3960,48 @@ function _collapseSupersededInterruptionRecords(records) {
   return out.filter(Boolean);
 }
 
+function _projectionReceiptForMessage(message) {
+  return message?.projection_receipt?.projectionId
+    && message?.projection_receipt?.authorization === 'model_selected'
+    ? message.projection_receipt
+    : null;
+}
+
+function _projectionIdsFromCitations(citations) {
+  const ids = [];
+  const seen = new Set();
+  for (const citation of Array.isArray(citations) ? citations : []) {
+    const id = String(citation?.projection_id || citation?.projectionId || '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function _findProjectionSidecar(container, message) {
+  if (!container || typeof container.querySelector !== 'function') return null;
+  for (const projectionId of _projectionIdsFromCitations(message?.recall_citations)) {
+    try {
+      const sidecar = container.querySelector(
+        `.chat-message[data-recall-projection-id="${CSS.escape(projectionId)}"]`,
+      );
+      if (sidecar) return { projectionId, sidecar };
+    } catch (_) {
+      // A malformed persisted id must not break the whole conversation render.
+    }
+  }
+  return null;
+}
+
+function _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard) {
+  return Boolean(
+    message?.recall_projection_card?.projectionId
+      && message.recall_projection_card.authorization === 'model_selected'
+      && !coalescedProjectionCard,
+  );
+}
+
 function _groupMsgToLegacy(gm) {
   if (!gm || typeof gm !== 'object') return gm;
   if (gm.role !== undefined) return gm; // already legacy shape
@@ -3986,6 +4037,7 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
+    ...(gm.projection_receipt ? { projection_receipt: gm.projection_receipt } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
     ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
     ...(gm.welcome_pending === true ? { welcome_pending: true } : {}),
@@ -6278,7 +6330,7 @@ function _conversationById(cid) {
 function _conversationOperationDialog(options = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay';
+    overlay.className = 'ui-modal-overlay conversation-operation-overlay';
     const title = escapeHtml(options.title || '');
     const message = escapeHtml(options.message || '').replace(/\n/g, '<br />');
     const confirmLabel = options.confirmLabel || t('common.confirm');
@@ -6302,19 +6354,23 @@ function _conversationOperationDialog(options = {}) {
         </div>`
       : '';
     overlay.innerHTML = `
-      <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
-        <div class="modal-title ui-dialog-title" id="conversation-operation-title">${title}</div>
-        <div class="modal-body">
+      <section class="ui-modal conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
+        <header class="ui-modal__header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title" id="conversation-operation-title">${title}</h2>
+          </div>
+        </header>
+        <div class="ui-modal__body">
           <div class="ui-dialog-message">${message}</div>
           ${inputHtml}
           ${sourcesHtml}
           <div class="conversation-operation-error" data-operation-error hidden></div>
         </div>
-        <div class="modal-actions">
+        <footer class="ui-modal__footer">
           ${uiButton({ label: cancelLabel, attrs: { 'data-operation-cancel': '' } })}
           ${uiButton({ label: confirmLabel, role: 'primary', attrs: { 'data-operation-confirm': '' } })}
-        </div>
-      </div>`;
+        </footer>
+      </section>`;
     document.body.appendChild(overlay);
     const input = overlay.querySelector('[data-operation-title]');
     const cancel = overlay.querySelector('[data-operation-cancel]');
@@ -6591,31 +6647,35 @@ function _openConversationMergePicker(initialCid) {
 
   const overlay = document.createElement('div');
   overlay.id = 'conversation-merge-picker';
-  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay';
+  overlay.className = 'ui-modal-overlay conversation-merge-picker-overlay';
   overlay.innerHTML = `
-    <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
-      <div class="conversation-merge-picker-header">
-        <h2 id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
-        ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn', attrs: { 'data-merge-picker-close': '' } })}
+    <section class="ui-modal ui-modal--lg conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
+      <header class="ui-modal__header conversation-merge-picker-header">
+        <div class="ui-modal__heading">
+          <h2 class="ui-modal__title" id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
+        </div>
+        ${uiIconButton({ label: t('common.close'), icon: 'x', attrs: { 'data-merge-picker-close': '' } })}
+      </header>
+      <div class="ui-modal__body conversation-merge-picker-body">
+        <div class="conversation-merge-picker-search-wrap">
+          <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
+          ${uiInput({
+            id: 'conversation-merge-picker-search',
+            type: 'search',
+            className: 'conversation-merge-picker-search',
+            placeholder: t('chat.merge.picker_search'),
+            attrs: { 'data-merge-picker-search': '', autocomplete: 'off' },
+          })}
+        </div>
+        <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
+        <div class="conversation-merge-picker-list" data-merge-picker-list></div>
+        <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
       </div>
-      <div class="conversation-merge-picker-search-wrap">
-        <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
-        ${uiInput({
-          id: 'conversation-merge-picker-search',
-          type: 'search',
-          className: 'conversation-merge-picker-search',
-          placeholder: t('chat.merge.picker_search'),
-          attrs: { 'data-merge-picker-search': '', autocomplete: 'off' },
-        })}
-      </div>
-      <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
-      <div class="conversation-merge-picker-list" data-merge-picker-list></div>
-      <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
-      <div class="conversation-merge-picker-footer">
+      <footer class="ui-modal__footer conversation-merge-picker-footer">
         ${uiButton({ label: t('common.cancel'), className: 'conversation-merge-picker-cancel', attrs: { 'data-merge-picker-cancel': '' } })}
         ${uiButton({ label: t('chat.merge.action'), role: 'primary', className: 'conversation-merge-picker-confirm', disabled: true, attrs: { 'data-merge-picker-confirm': '' } })}
-      </div>
-    </div>`;
+      </footer>
+    </section>`;
   document.body.appendChild(overlay);
 
   const list = overlay.querySelector('[data-merge-picker-list]');
@@ -6827,7 +6887,7 @@ async function _openConversationSpacePicker(cid) {
   const currentSpace = spaceList.find((s) => s && s.space_id === currentSpaceId) || null;
 
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay open';
+  overlay.className = 'ui-modal-overlay conversation-operation-overlay';
   const rows = spaceList.length
     ? spaceList.map((s) => {
       const displayName = _conversationSpaceDisplayName(s);
@@ -6843,18 +6903,22 @@ async function _openConversationSpacePicker(cid) {
     ? uiButton({ label: t('chat.conv_space_unbind'), className: 'conversation-space-unbind', attrs: { 'data-space-unbind': '' } })
     : '';
   overlay.innerHTML = `
-    <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-space-title">
-      <div class="modal-title ui-dialog-title" id="conversation-space-title">${escapeHtml(t(currentSpaceId ? 'chat.conv_space_title_move' : 'chat.conv_space_title_set'))}</div>
-      <div class="modal-body">
+    <section class="ui-modal conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-space-title">
+      <header class="ui-modal__header">
+        <div class="ui-modal__heading">
+          <h2 class="ui-modal__title" id="conversation-space-title">${escapeHtml(t(currentSpaceId ? 'chat.conv_space_title_move' : 'chat.conv_space_title_set'))}</h2>
+        </div>
+      </header>
+      <div class="ui-modal__body">
         <div class="ui-dialog-message">${escapeHtml(t('chat.conv_space_hint', { title: (conv && conv.title) || '' }))}</div>
         <div class="conversation-space-list">${rows}</div>
         <div class="conversation-operation-error" data-space-error hidden></div>
       </div>
-      <div class="modal-actions">
+      <footer class="ui-modal__footer">
         ${unbindHtml}
         ${uiButton({ label: t('common.cancel'), attrs: { 'data-space-cancel': '' } })}
-      </div>
-    </div>`;
+      </footer>
+    </section>`;
   document.body.appendChild(overlay);
 
   let busy = false;
@@ -8611,10 +8675,8 @@ async function loadConversationHistory(cid, opts = {}) {
     await _evaluateAutoRecipient(cid);
 
     // Detect unanswered user message (e.g. after page refresh while server was processing).
-    // Only show the "thinking…" bubble if the server *really* still has this
-    // conversation in processing state AND the work started recently — a stale
-    // `processing: true` from a crashed prior run is swept on boot, but we
-    // also belt-and-braces check the flag here so no flash occurs.
+    // Only show the "thinking…" bubble while the authoritative runtime still
+    // reports active work. Elapsed time is display-only and cannot end a task.
     const lastMsg = history[history.length - 1];
     // Cache the conv-bound agent's enabled state so _updateConvSendUI can
     // grey out the input without a second IPC round trip. Backend stamps
@@ -8622,9 +8684,7 @@ async function loadConversationHistory(cid, opts = {}) {
     convAgentEnabledByCid.set(cid, convMeta.agent_enabled !== false);
     _renderConvDisabledBanner(cid);
     _renderPermissionModeSelect(convMeta);
-    const processingFresh = convMeta.processing === true
-      && convMeta.processing_since
-      && (Date.now() - new Date(convMeta.processing_since).getTime()) < 15 * 60 * 1000;
+    const processingActive = _conversationRuntimeIsActive(convMeta);
     const inFlightActors = Array.isArray(convMeta.in_flight)
       ? convMeta.in_flight.filter(Boolean).map(String)
       : [];
@@ -8633,7 +8693,7 @@ async function loadConversationHistory(cid, opts = {}) {
     // Sweep live placeholders whose turn finished while the user was away:
     // their final message is part of the history rendered above, so keeping
     // the entry would let a later annex revive it into a duplicate bubble.
-    if (processingFresh || Array.isArray(convMeta.active_turns) || Array.isArray(convMeta.in_flight)) {
+    if (processingActive || Array.isArray(convMeta.active_turns) || Array.isArray(convMeta.in_flight)) {
       const runningActorIds = new Set(
         (hasActiveTurnsField ? activeTurns.map((t) => String(t.actor)) : inFlightActors).filter(Boolean),
       );
@@ -8646,7 +8706,7 @@ async function loadConversationHistory(cid, opts = {}) {
       }
     }
     const wasPendingBeforeHistoryRecovery = isConvPending(cid);
-    if (processingFresh && !wasPendingBeforeHistoryRecovery) {
+    if (processingActive && !wasPendingBeforeHistoryRecovery) {
       setGroupConversationBusy(cid, true);
       _latestInFlight.set(cid, inFlightActors);
       _updateConvSidebarBadge(cid, true);
@@ -8654,8 +8714,11 @@ async function loadConversationHistory(cid, opts = {}) {
       if (cid === currentCid) _updateConvSendUI(cid);
     }
     const shouldRecoverRunningUi = !wasPendingBeforeHistoryRecovery
-      && processingFresh
-      && (lastMsg?.role === 'user' || inFlightActors.length > 0);
+      && processingActive
+      && (lastMsg?.role === 'user'
+        || inFlightActors.length > 0
+        || activeTurns.length > 0
+        || convMeta.backend_active === true);
     if (shouldRecoverRunningUi) {
       pollMsgCounts.set(cid, String(lastMsg?._msg_id || ''));
       const loadingEl = _createStreamingAssistantMessage(container, { hiddenUntilActor: true });
@@ -9703,6 +9766,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   }
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
+  if (message?.recall_projection_card?.presentation === 'sidecar') {
+    msgDiv.hidden = true;
+    msgDiv.classList.add('is-sidecar');
+  }
   // Sender id stamp — used by `_ensureConvCreateAgentInline` to detect
   // whether any agent (≠ user / commander) has spoken in this conversation.
   // Empty when unknown (e.g. stale records lacking _from); the inline button
@@ -9733,9 +9800,35 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       p3394BadgeHtml = `<div class="p3394-node-badge"><span class="p3394-node-badge-icon">🤖</span><span class="p3394-node-badge-name">${escapeHtml(nodeName)}</span><span class="p3394-node-badge-tag">P3394</span></div>`;
     }
   }
-  const contentHtml = isHtmlSnippet
-    ? sanitizeHtml(rawContent)
-    : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
+  // A projection card is a governed sidecar, not assistant prose. The main-process
+  // transport still carries an English fallback string for older clients and
+  // search/history compatibility; rendering both would duplicate the receipt.
+  // A model-selected projection is posted as a durable sidecar so prompt
+  // injection can discover it across turns. Once the final reply arrives, the
+  // visible receipt belongs on that reply—not as a second Cogseed message.
+  const explicitProjectionReceipt = _projectionReceiptForMessage(message);
+  const citationProjectionIds = explicitProjectionReceipt
+    ? []
+    : _projectionIdsFromCitations(message.recall_citations);
+  const coalescedProjectionMatch = role === 'assistant' && !explicitProjectionReceipt
+    ? _findProjectionSidecar(container, message)
+    : null;
+  const coalescedProjectionSidecar = coalescedProjectionMatch?.sidecar || null;
+  const coalescedProjectionCard = coalescedProjectionMatch
+    ? { projectionId: coalescedProjectionMatch.projectionId, authorization: 'model_selected' }
+    : null;
+  const hasProjectionCard = Boolean(
+    explicitProjectionReceipt
+    || (message.recall_projection_card?.projectionId
+        && message.recall_projection_card.authorization === 'model_selected')
+    || coalescedProjectionCard,
+  );
+  const suppressProjectionTransportProse = _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard);
+  const contentHtml = suppressProjectionTransportProse
+    ? ''
+    : isHtmlSnippet
+      ? sanitizeHtml(rawContent)
+      : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
   // 空间构建师的 space-draft 块 → 渲染「创建空间」按钮（用户确认后调 spaces.create）。
   const spaceDraft = (!isHtmlSnippet && role === 'assistant')
     ? _extractSpaceDraft(displayContent)
@@ -9793,7 +9886,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
         bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
       })
     : '';
-  const recallCitationsHtml = role === 'assistant'
+  const recallCitationsHtml = role === 'assistant' && !hasProjectionCard
     ? _renderRecallCitationsHtml(message.recall_citations)
     : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
@@ -9854,6 +9947,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
   if (message._msg_id) msgDiv.dataset.msgId = String(message._msg_id);
+  if (message.recall_projection_card?.projectionId) {
+    msgDiv.dataset.recallProjectionId = String(message.recall_projection_card.projectionId);
+  }
+  if (coalescedProjectionSidecar) {
+    coalescedProjectionSidecar.hidden = true;
+    coalescedProjectionSidecar.classList.add('is-coalesced');
+  }
   if (message._from) msgDiv.dataset.fromActor = String(message._from);
   // Sender label rendered from a stale roster cache: keep the bubble marked
   // so _repaintPendingActorHeaders can upgrade the chip (and avatar) as soon
@@ -9954,7 +10054,26 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
 
   // 预载卡片已按产品决策移除（2026-08-17）：引用资产走自动注入 + LLM 主动
   // 检索工具（search_ability_assets），不再展示可交互的预载确认卡片。
-  // 历史消息里的 recall_projection_card 字段保留在数据中，仅以普通文本呈现。
+  // 2026-09-18 例外：**模型自选**的投影重新挂卡——模型用 attach_assets_to_task
+  // 给这个任务挑了资产，用户必须能看见并一键撤销（onlyModelSelected 让其它授权
+  // 的投影维持"不挂卡"的现状，旧决策不动）。
+  const projectionCardForBubble = _projectionReceiptForMessage(message)
+    || message.recall_projection_card
+    || coalescedProjectionCard;
+  if (role === 'assistant' && projectionCardForBubble?.projectionId
+      && message.recall_projection_card?.presentation !== 'sidecar'
+      && typeof window.mountRecallProjectionCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
+      const host = document.createElement('div');
+      if (message.recall_projection_card) host.dataset.recallProjectionTransport = 'sidecar';
+      bubble.appendChild(host);
+      window.mountRecallProjectionCard(host, projectionCardForBubble, {
+        cid: opts.cid || currentCid,
+        onlyModelSelected: true,
+      });
+    }
+  }
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
   // `<iframe>` over the `chat-app://` protocol, appended after the form so it
@@ -10076,6 +10195,12 @@ function _mountChatInputForm(host, msgDiv, message, opts) {
         return;
       }
       if (!submissionText) return;
+      // Skipped forms carry the semantic marker in `values`; main re-encodes
+      // the text, so re-attach the localized note the renderer owns (main has
+      // no `chat.form.*` locale keys).
+      if (values && values.__skipped === true) {
+        submissionText = `${t('chat.form.skipped_note')}\n\n${submissionText}`;
+      }
       const extra = {
         ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}),
         ...(submissionAgentId ? {
@@ -11507,7 +11632,11 @@ function _messageReferencePayload(msgDiv) {
 }
 
 function _closeReferenceTargetPicker() {
-  document.getElementById('chat-reference-target-overlay')?.remove();
+  const overlay = document.getElementById('chat-reference-target-overlay');
+  if (!overlay) return;
+  const controller = overlay._uiModalController;
+  if (controller && controller.isOpen()) controller.close('action');
+  else overlay.remove();
 }
 
 async function _transferSelectedReferences(targetCid, payloads, opts = {}) {
@@ -11577,13 +11706,15 @@ async function _openReferenceTargetPicker(payloads) {
   _closeReferenceTargetPicker();
   const overlay = document.createElement('div');
   overlay.id = 'chat-reference-target-overlay';
-  overlay.className = 'modal-overlay open chat-reference-target-overlay';
-  overlay.innerHTML = `<div class="modal-standard chat-reference-target-modal" role="dialog" aria-modal="true" aria-labelledby="chat-reference-target-title">
-    <div class="modal-header chat-reference-target-header">
-      <h2 class="modal-title" id="chat-reference-target-title">${escapeHtml(t('chat.reference_target_title', { count: payloads.length }))}</h2>
-      ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'modal-close-btn chat-reference-target-close' })}
-    </div>
-    <div class="modal-body chat-reference-target-body">
+  overlay.className = 'ui-modal-overlay chat-reference-target-overlay';
+  overlay.innerHTML = `<section class="ui-modal ui-modal--sm chat-reference-target-modal" role="dialog" aria-modal="true" aria-labelledby="chat-reference-target-title">
+    <header class="ui-modal__header chat-reference-target-header">
+      <div class="ui-modal__heading">
+        <h2 class="ui-modal__title" id="chat-reference-target-title">${escapeHtml(t('chat.reference_target_title', { count: payloads.length }))}</h2>
+      </div>
+      ${uiIconButton({ label: t('common.close'), icon: 'x', className: 'chat-reference-target-close' })}
+    </header>
+    <div class="ui-modal__body chat-reference-target-body">
       <button type="button" class="chat-reference-new-task" data-new-task="1">
         <span class="chat-reference-leading-plus" aria-hidden="true">+</span>
         <span class="chat-reference-new-task-label">${escapeHtml(t('chat.reference_new_task'))}</span>
@@ -11600,8 +11731,18 @@ async function _openReferenceTargetPicker(payloads) {
         <div class="chat-reference-target-list"></div>
       </section>
     </div>
-  </div>`;
+  </section>`;
   document.body.appendChild(overlay);
+  const dialog = overlay.querySelector('[role="dialog"]');
+  const controller = typeof uiModalController === 'function'
+    ? uiModalController({
+        overlay,
+        dialog,
+        initialFocus: '#chat-reference-target-search',
+        onClose: () => overlay.remove(),
+      })
+    : null;
+  overlay._uiModalController = controller;
   const list = overlay.querySelector('.chat-reference-target-list');
   const search = overlay.querySelector('.chat-reference-target-search');
   const hint = overlay.querySelector('[data-reference-list-hint]');
@@ -11634,9 +11775,10 @@ async function _openReferenceTargetPicker(payloads) {
     _stageReferencesForNewTask(payloads);
   });
   overlay.querySelector('.chat-reference-target-close')?.addEventListener('click', _closeReferenceTargetPicker);
-  overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') _closeReferenceTargetPicker(); });
   search.addEventListener('input', render);
   render();
+  if (controller) controller.open();
+  else search.focus();
 }
 
 function _updateMessageSelectionToolbar() {
@@ -12037,6 +12179,15 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
   if (btn) btn.disabled = true;
   const orig = btn ? btn.innerHTML : '';
   try {
+    const runtime = await _readConversationRuntime(currentCid);
+    if (_conversationRuntimeIsActive(runtime) || (!runtime && isConvPending(currentCid))) {
+      _observeConversationRunFromPlanAction(currentCid, {
+        attachExisting: true,
+        allowWithController: true,
+      });
+      await uiAlert(t('chat.retry_task_running'));
+      return;
+    }
     const failedMessageId = String(msgDiv.dataset.msgId || '').trim();
     let payload;
     if (failedMessageId) {
@@ -12059,7 +12210,8 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
       }
     }
     if (btn) btn.innerHTML = `<span class="bubble-action-spinner" aria-hidden="true"></span><span>${escapeHtml(t('chat.retry_running'))}</span>`;
-    await sendInConversation(currentCid, payload.content, payload.extra);
+    const result = await sendInConversation(currentCid, payload.content, payload.extra);
+    if (result?.reason === 'busy') await uiAlert(t('chat.retry_task_running'));
   } finally {
     if (btn) {
       btn.innerHTML = orig || escapeHtml(t('chat.retry_btn'));
@@ -12437,7 +12589,7 @@ function _composerIntentText(text, target = 'conversation') {
       out = out.slice(0, token.start) + out.slice(token.end);
     }
   }
-  // 只看空白与标点；emoji 等符号（\p{S}）本身可以是有效意图（例如「👍」）。
+  // 只看空白与标点；emoji 等符号（\p{S}）本身可以是有效意图（例如单独的点赞表情）。
   return out.replace(/[\s\p{P}]/gu, '');
 }
 
@@ -13703,11 +13855,17 @@ async function sendInConversation(cid, content, extra, options = {}) {
   };
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
   if (isConvPending(cid)) {
-    // Historical replacement is a destructive linear-history operation. It
-    // must never enter the ordinary FIFO queue after a race with a new turn;
-    // the main side will reject it while the conversation is running.
-    if (extra && typeof extra.edit_message_id === 'string' && extra.edit_message_id.trim()) {
-      return { started: false, queued: false, aborted: false, errored: true, result: 'failure' };
+    // Historical retry/replacement operations must never enter the ordinary
+    // FIFO queue after a race with a new turn.
+    if (isInternalReplay) {
+      return {
+        started: false,
+        queued: false,
+        aborted: false,
+        errored: true,
+        result: 'failure',
+        reason: 'busy',
+      };
     }
     // Queued input starts a new execution stream after the current one ends,
     // so it must not be merged into the active task-turn sample.
@@ -14918,6 +15076,9 @@ function _streamingUpdateActivityFromEvent(msg, evt) {
   const phase = String(data.phase || data.status || '').toLowerCase();
   if (stream === 'runtime' && phase === 'retrying') {
     const attempt = Math.max(1, Math.round(Number(data.attempt) || 1));
+    if (typeof window.chatStreamSetRuntimeStatus === 'function') {
+      window.chatStreamSetRuntimeStatus(msg?.dataset?.cid, msg, { type: 'retry', attempt });
+    }
     _streamingUpdateActivity(msg, attempt > 1
       ? t('model.retrying_n', { attempt })
       : t('model.retrying'));
@@ -15149,19 +15310,12 @@ function _scheduleBackendRunRediscovery(cid) {
 
 async function _rediscoverBackendRun(cid) {
   if (!cid || isConvPending(cid)) return;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
-    const data = await res.json();
-    if (!data || data.ok === false) return;
-    const processing = data.processing === true || data.backend_active === true
-      || (Array.isArray(data.in_flight) && data.in_flight.length > 0)
-      || (Array.isArray(data.active_turns) && data.active_turns.length > 0);
-    if (!processing || isConvPending(cid)) return;
-    // Re-establish the run: pending state, streaming placeholder, group event
-    // observer (untilIdle — ends when the Backend task's terminal projection
-    // clears backendTurns and the bus goes quiescent) and history polling.
-    _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
-  } catch (_) { /* best effort — no rediscovery */ }
+  const data = await _readConversationRuntime(cid);
+  if (!_conversationRuntimeIsActive(data) || isConvPending(cid)) return;
+  // Re-establish the run: pending state, streaming placeholder, group event
+  // observer (untilIdle — ends when the Backend task's terminal projection
+  // clears backendTurns and the bus goes quiescent) and history polling.
+  _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
 }
 
 // Scroll the given message to the top of the visible chat area.

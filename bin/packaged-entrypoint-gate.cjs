@@ -60,7 +60,17 @@ const PACKAGED_BIN_HELPERS = Object.freeze([
   'proxy-bootstrap.cjs',
 ]);
 
-const DORMANT_BIN_FILES = Object.freeze([]);
+// Shipped in source but deliberately NOT packaged: nothing in the app can reach these yet, so
+// packaging them would add executable surface with no consumer — the exact thing this contract
+// exists to prevent. A file belongs here only while it has no consumer; promote it into
+// CONNECTOR_CATALOG_ENTRYPOINTS (or INTERNAL_ENTRYPOINT_CONSUMERS) in the same change that wires
+// it up.
+const DORMANT_BIN_FILES = Object.freeze([
+  // Tencent Meeting read-only adapter: implemented and verified against a live account, but not yet
+  // registered in the connector catalog — that needs a third auth_mode. Promote out of DORMANT in
+  // the same change that adds the catalog entry.
+  'tencent-meeting-mcp-server.cjs',
+]);
 
 const BUILD_ONLY_BIN_FILES = Object.freeze([
   'builtin-resource-gate.cjs',

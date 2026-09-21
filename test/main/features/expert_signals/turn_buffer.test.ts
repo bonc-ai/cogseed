@@ -17,7 +17,26 @@ activateUser(UID);
 import { createSkillTurnBuffer } from '../../../../src/main/features/expert_signals/turn_hooks';
 import { querySignals } from '../../../../src/main/features/expert_signals';
 
-async function wait() { return new Promise((r) => setTimeout(r, 30)); }
+/**
+ * Signal writes are fire-and-forget (`appendJsonl`), so the only sound way to
+ * observe them is to wait for the real condition. A fixed 30 ms sleep read a
+ * partial batch under full-suite parallelism (3 expected, 1 observed); this
+ * polls until the expected count holds and fails on the deadline instead, so no
+ * assertion is weakened.
+ */
+async function waitForSignals(
+  read: () => Promise<Array<{ turn_id?: string }>>,
+  expected: number,
+  timeoutMs = 5000,
+): Promise<Array<{ turn_id?: string }>> {
+  const deadline = Date.now() + timeoutMs;
+  let sigs = await read();
+  while (sigs.length !== expected && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+    sigs = await read();
+  }
+  return sigs;
+}
 
 describe('expert_signals.turn_hooks › SkillTurnBuffer', () => {
   it('groups advertised by system, dedups duplicates, emits one signal per system', async () => {
@@ -34,9 +53,10 @@ describe('expert_signals.turn_hooks › SkillTurnBuffer', () => {
       uid: UID, cid, aid: 'agent_x',
       turn_id: 'm_42', msg_ids: ['m_42'],
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_advertised'], cid });
+    const sigs = await waitForSignals(
+      () => querySignals({ types: ['skill_advertised'], cid }),
+      3,
+    );
     expect(sigs.length).toBe(3);
     const bySystem = new Map(sigs.map((s) => [s.delta!.system, s]));
     expect(bySystem.get('A.custom')!.delta!.skill_ids!.sort()).toEqual(['search-docs', 'summary-writer']);
@@ -60,9 +80,10 @@ describe('expert_signals.turn_hooks › SkillTurnBuffer', () => {
       uid: UID, cid, aid: 'agent_x',
       turn_id: 'm_43', msg_ids: ['m_43'],
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['skill_invoked'], cid });
+    const sigs = await waitForSignals(
+      () => querySignals({ types: ['skill_invoked'], cid }),
+      3,
+    );
     expect(sigs.length).toBe(3);
     for (const s of sigs) {
       expect(s.delta!.trigger).toBe('read_file');
@@ -78,10 +99,19 @@ describe('expert_signals.turn_hooks › SkillTurnBuffer', () => {
       uid: UID, cid, aid: 'agent_x',
       turn_id: '', msg_ids: [],
     });
-    await wait();
+    // Control emit on the same cid: it proves the writer flushed past the
+    // dropped drain above, and that the dropped turn contributed nothing.
+    // Without it a bare `length === 0` could pass before any write had a chance.
+    const control = createSkillTurnBuffer();
+    control.recordAdvertised('control-skill', 'A.custom');
+    control.drainAndEmit({
+      uid: UID, cid, aid: 'agent_x',
+      turn_id: 'm_control', msg_ids: ['m_control'],
+    });
 
-    const sigs = await querySignals({ cid });
-    expect(sigs.length).toBe(0);
+    const sigs = await waitForSignals(() => querySignals({ cid }), 1);
+    expect(sigs).toHaveLength(1);
+    expect(sigs[0].turn_id).toBe('m_control');
   });
 
   it('clears buffer after drain (second drain emits nothing for the same data)', async () => {
@@ -90,10 +120,16 @@ describe('expert_signals.turn_hooks › SkillTurnBuffer', () => {
     const cid = 'cid-buf-clear';
     buf.drainAndEmit({ uid: UID, cid, aid: null, turn_id: 'm1', msg_ids: ['m1'] });
     buf.drainAndEmit({ uid: UID, cid, aid: null, turn_id: 'm2', msg_ids: ['m2'] });
-    await wait();
+    // Same control-emit trick: exactly one signal from the first drain plus the
+    // control proves the second drain emitted nothing for the cleared buffer.
+    const control = createSkillTurnBuffer();
+    control.recordAdvertised('control-skill', 'A.custom');
+    control.drainAndEmit({ uid: UID, cid, aid: null, turn_id: 'm_ctrl', msg_ids: ['m_ctrl'] });
 
-    const sigs = await querySignals({ types: ['skill_advertised'], cid });
-    expect(sigs.length).toBe(1);
-    expect(sigs[0].turn_id).toBe('m1');
+    const sigs = await waitForSignals(
+      () => querySignals({ types: ['skill_advertised'], cid }),
+      2,
+    );
+    expect(sigs.map((s) => s.turn_id).sort()).toEqual(['m1', 'm_ctrl']);
   });
 });

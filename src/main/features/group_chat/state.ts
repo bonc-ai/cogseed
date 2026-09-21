@@ -1263,6 +1263,24 @@ export async function setWorkspaceDirOnce(uid: string, cid: string, dir: string)
   });
 }
 
+/** Replace a frozen workspace slug after a successful ownership migration.
+ * The expected value prevents a stale migration from overwriting a newer one. */
+export async function replaceWorkspaceDir(
+  uid: string,
+  cid: string,
+  expectedDir: string,
+  nextDir: string,
+): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    if (s.workspace_dir !== expectedDir) return s;
+    s.workspace_dir = nextDir;
+    s.last_active_at = nowIso();
+    await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
 /** Set / clear the per-conversation coding-agent project directory.
  *  Pass `''` (or missing) to clear; an absolute path otherwise.
  *  Caller is responsible for absolute-path validation — we only do

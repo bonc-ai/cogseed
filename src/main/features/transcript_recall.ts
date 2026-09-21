@@ -48,8 +48,8 @@
  *
  * 两条已知边界（显式声明，不假装覆盖）：
  *   1. **零新增依赖**（方案红线 + sbom/compliance 门禁）→ 内置骨架只覆盖 ASCII。
- *      中文音近（`静文`↔`静雯`、`健全`↔`鉴权`、`联盟德`↔`雷蒙德`）需要拼音表，
- *      通过 `extraPhonetic` 注入（`{ 静: 'jing', 雯: 'wen', 文: 'wen' }`）。
+ *      中文音近（`王晶`↔`王婧`、`健全`↔`鉴权`、`联盟德`↔`雷蒙德`）需要拼音表，
+ *      通过 `extraPhonetic` 注入（`{ 王: 'wang', 晶: 'jing', 婧: 'jing' }`）。
  *      是否内联紧凑拼音表、还是把中文人名降级为"人工确认 + ASR 热词下发"，
  *      属 Owner 决策，本层不裁定。
  *   2. 首字母约束（`initialStrict`，Soundex 式）：实测不影响目标样本
@@ -146,7 +146,7 @@ export interface RecallOptions extends ScanTarget {
   initialStrict?: boolean;
   /**
    * 额外音形映射：字符 → 音形键。**中文音近的唯一接入口**（零依赖下的拼音表挂点）。
-   * 例：`{ 静: 'jing', 雯: 'wen', 文: 'wen' }`。缺省不启用（CJK 只走归一化/弱通道）。
+   * 例：`{ 王: 'wang', 晶: 'jing', 婧: 'jing' }`。缺省不启用（CJK 只走归一化/弱通道）。
    */
   extraPhonetic?: Record<string, string>;
 }
@@ -302,8 +302,8 @@ interface IndexedEntry {
   contextAllow: string[];
 }
 
-// 拉丁词整段成 token；**CJK 逐字成 token**——否则「静文说了这句话」会变成一个 token，
-// 词条「静雯」永远无法通过窗口切出来（实测发现：中文召回恒为 0 就是这个原因）。
+// 拉丁词整段成 token；**CJK 逐字成 token**——否则「王晶说了这句话」会变成一个 token，
+// 词条「王婧」永远无法通过窗口切出来（实测发现：中文召回恒为 0 就是这个原因）。
 const TOKEN_RE = new RegExp(`[0-9A-Za-z]+(?:[._\\-][0-9A-Za-z]+)*|[${CJK_CLASS}]`, 'g');
 /** 窗口允许的 token 间分隔符（仅空白/点/连字符/间隔号；出现句读即视为跨句，不成窗）。 */
 const GAP_RE = /^[ ._\-·]*$/;

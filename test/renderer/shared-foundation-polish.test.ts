@@ -37,6 +37,12 @@ describe('open-source shared foundation polish', () => {
     expect(rule(sharedCss, '.ui-tab')).toContain('border-bottom: 1.5px solid transparent;');
     expect(rule(sharedCss, '.ui-settings-section > .settings-group-head')).not.toContain('display: flex;');
     expect(rule(sharedCss, '.ui-settings-section__header')).toContain('display: flex;');
+    expect(cognitionAssetsView).toContain("throw new Error('cognition assets require uiEmptyState')");
+    expect(cognitionAssetsView).not.toContain('class="ca-empty"');
+    expect(cognitionAssetsView).toContain("role: opts.danger ? 'danger' : opts.primary ? 'primary' : 'secondary'");
+    const cognitionCss = read('src/renderer/cognition-assets.css');
+    expect(cognitionCss).not.toContain('.ca-app .ui-button {');
+    expect(cognitionCss).not.toContain('.ca-app .ui-input, .ca-app .ui-textarea');
   });
 
   it('removes legacy purple focus halos from interactive fields and controls', () => {

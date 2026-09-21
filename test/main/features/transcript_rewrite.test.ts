@@ -62,24 +62,24 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
 }
 
 const SRC: SourceUtterance[] = [
-  { id: 'U0001', speaker: 'Richard', at: '2026-09-05 19:31:32', text: 'Hello。' },
-  { id: 'U0002', speaker: '张浩', at: '2026-09-05 19:31:34', text: '哈喽哈喽能听到吗？' },
-  { id: 'U0003', speaker: 'Richard', at: '2026-09-05 19:35:24', text: '长期来说的话，你应该是，就是你的身份，实际上是你的个人本体。' },
-  { id: 'U0004', speaker: 'Richard', at: '2026-09-05 19:35:36', text: '那你要是你比如说你从静雯，比如换成保康的话，那他就应该那什么了呀。' },
+  { id: 'U0001', speaker: 'Alex', at: '2026-09-05 19:31:32', text: 'Hello。' },
+  { id: 'U0002', speaker: '张磊', at: '2026-09-05 19:31:34', text: '哈喽哈喽能听到吗？' },
+  { id: 'U0003', speaker: 'Alex', at: '2026-09-05 19:35:24', text: '长期来说的话，你应该是，就是你的身份，实际上是你的个人本体。' },
+  { id: 'U0004', speaker: 'Alex', at: '2026-09-05 19:35:36', text: '那你要是你比如说你从李静，比如换成王健的话，那他就应该那什么了呀。' },
 ];
 
 describe('① 冻结解析 parseSource', () => {
   it('逐条拆出发言，id 从 U0001 起按序稳定', () => {
     const text = [
       '2026-09-05 19:26:04 会议已开启实时转写，机器识别结果仅供参考 ',
-      'Richard 2026-09-05 19:31:32 ',
+      'Alex 2026-09-05 19:31:32 ',
       'Hello.  ',
-      '张浩 2026-09-05 19:31:34 ',
+      '张磊 2026-09-05 19:31:34 ',
       '哈喽哈喽能听到吗？ ',
     ].join('\n');
     const out = parseSource(text);
     expect(out.map((u) => u.id)).toEqual(['U0001', 'U0002']);
-    expect(out[0].speaker).toBe('Richard');
+    expect(out[0].speaker).toBe('Alex');
     expect(out[0].at).toBe('2026-09-05 19:31:32');
     expect(out[1].text).toBe('哈喽哈喽能听到吗？');
   });
@@ -90,9 +90,37 @@ describe('① 冻结解析 parseSource', () => {
   });
 
   it('同一条发言跨多行时拼成一条（换行不切段）', () => {
-    const out = parseSource('Richard 2026-09-05 19:31:32 \n第一行\n第二行\n张浩 2026-09-05 19:31:34 \n好的\n');
+    const out = parseSource('Alex 2026-09-05 19:31:32 \n第一行\n第二行\n张磊 2026-09-05 19:31:34 \n好的\n');
     expect(out).toHaveLength(2);
     expect(out[0].text).toBe('第一行第二行');
+  });
+
+  it('相对时钟导出（无日期）同样解析出全部发言，`at` 沿用原文时钟', () => {
+    // 真机事故（2026-09-18）：旧正则硬要日期，这类稿子解析出 0 条发言 →
+    // 整条清理管线静默失效（77 分钟的稿子清理版为空）。
+    const text = [
+      '王伟 02:45',
+      '喂海运哥能听到吗？',
+      '刘洋 02:56',
+      '我这边能听到？',
+      '李强 01:00:35',
+      '然后下边就是实现的现状与缺口。',
+    ].join('\n');
+    const out = parseSource(text);
+    expect(out).toHaveLength(3);
+    expect(out.map((u) => u.speaker)).toEqual(['王伟', '刘洋', '李强']);
+    expect(out.map((u) => u.at)).toEqual(['02:45', '02:56', '01:00:35']);
+    expect(out[0].text).toBe('喂海运哥能听到吗？');
+    expect(out[2].text).toBe('然后下边就是实现的现状与缺口。');
+    // id 仍是稳定锚点
+    expect(out.map((u) => u.id)).toEqual(['U0001', 'U0002', 'U0003']);
+  });
+
+  it('相对时钟导出不带日期的转写声明横幅也跳过', () => {
+    const out = parseSource('00:00:00 会议已开启实时转写，机器识别结果仅供参考\n王伟 02:45\n喂海运哥能听到吗？\n');
+    expect(out).toHaveLength(1);
+    expect(out[0].speaker).toBe('王伟');
+    expect(out[0].text).toBe('喂海运哥能听到吗？');
   });
 });
 
@@ -156,7 +184,7 @@ describe('④ 重建契约 buildRewriteRequest / parseRewriteResponse', () => {
       scenario: '教育智能体演示汇报',
       glossary: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }],
     });
-    expect(req.message).toContain('U0001｜Richard｜2026-09-05 19:31:32｜Hello。');
+    expect(req.message).toContain('U0001｜Alex｜2026-09-05 19:31:32｜Hello。');
     expect(req.message).toContain('Cogseed ← coxy / cox');
     expect(req.message).toContain('教育智能体演示汇报');
     expect(req.systemPrompt).toContain('绝对禁止');
@@ -214,7 +242,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   });
 
   it('只是大小写/空格差异的写法不算"新增实体"（NotebookLM vs notebook lm）', () => {
-    const S = [...SRC, { id: 'U0007', speaker: '张浩', at: 't', text: '那个是照 notebook lm 那么做的一个东西。' }];
+    const S = [...SRC, { id: 'U0007', speaker: '张磊', at: 't', text: '那个是照 notebook lm 那么做的一个东西。' }];
     const ok = verifyRewrite(S, [{ srcIds: ['U0007'], text: '那个是照 NotebookLM 那么做的一个东西。' }], { allowedTerms: [] });
     expect(ok.issues.some((i) => i.reason === 'new_entity')).toBe(false);
 
@@ -254,9 +282,9 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     const result = verifyRewrite(
       SRC,
       [
-        { srcIds: ['U0003', 'U0004'], text: 'Richard 指出，个人本体与个人身份是直接连接的，换成保康就全都对不上了。' },
+        { srcIds: ['U0003', 'U0004'], text: 'Alex 指出，个人本体与个人身份是直接连接的，换成王健就全都对不上了。' },
       ],
-      { speakers: ['Richard', '张浩'], allowedTerms: [] },
+      { speakers: ['Alex', '张磊'], allowedTerms: [] },
     );
     expect(result.issues.some((i) => i.reason === 'narration_style')).toBe(true);
     expect(result.stats.narrationCount).toBe(1);
@@ -266,7 +294,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     const result = verifyRewrite(
       SRC,
       [{ srcIds: ['U0003'], text: '长期来说，身份实际上就是你的个人本体。' }],
-      { speakers: ['Richard', '张浩'], allowedTerms: [] },
+      { speakers: ['Alex', '张磊'], allowedTerms: [] },
     );
     expect(result.issues.some((i) => i.reason === 'narration_style')).toBe(false);
   });
@@ -277,8 +305,8 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
       [{ srcIds: ['U0002', 'U0003'], text: '长期来说，身份实际上就是你的个人本体。' }],
       { allowedTerms: [] },
     );
-    // U0002 是张浩、U0003 是 Richard；文本明显是 Richard 说的 → 必须归给 Richard
-    expect(result.paragraphs[0].speaker).toBe('Richard');
+    // U0002 是张磊、U0003 是 Alex；文本明显是 Alex 说的 → 必须归给 Alex
+    expect(result.paragraphs[0].speaker).toBe('Alex');
     expect(result.issues.some((i) => i.reason === 'mixed_speaker')).toBe(false);
   });
 
@@ -304,7 +332,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
 
     // 来源里确实出现了词表形态（coxy）→ 不算过度归一
     const ok = verifyRewrite(
-      [...SRC, { id: 'U0005', speaker: '张浩', at: 't', text: '我的 coxy 是个人大管家。' }],
+      [...SRC, { id: 'U0005', speaker: '张磊', at: 't', text: '我的 coxy 是个人大管家。' }],
       [{ srcIds: ['U0005'], text: '我的 Cogseed 是个人大管家。' }],
       { allowedTerms: ['Cogseed'], canonicalForms: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }] },
     );
@@ -313,7 +341,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   });
 
   it('**引例被抹平被抓住**：说话人在举错写例子，产出改成规范形 → 语义破坏', () => {
-    const S = [...SRC, { id: 'U0009', speaker: 'Richard', at: 't', text: '你看咱们现在转写里面，它一会儿叫什么？coxy 一会儿叫别的。' }];
+    const S = [...SRC, { id: 'U0009', speaker: 'Alex', at: 't', text: '你看咱们现在转写里面，它一会儿叫什么？coxy 一会儿叫别的。' }];
     const bad = verifyRewrite(
       S,
       [{ srcIds: ['U0009'], text: '你看咱们现在的转写，一会儿叫 Cogseed，一会儿叫别的什么。' }],
@@ -331,7 +359,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   });
 
   it('**挂名丢弃被抓住**：id 被引用但该条内容没进产出（不丢信息的空档）', () => {
-    const S = [...SRC, { id: 'U0011', speaker: 'Richard', at: 't', text: '就会有大量这种沉淀的东西需要处理，你稍等一下我看看这个。' }];
+    const S = [...SRC, { id: 'U0011', speaker: 'Alex', at: 't', text: '就会有大量这种沉淀的东西需要处理，你稍等一下我看看这个。' }];
     const bad = verifyRewrite(
       S,
       [{ srcIds: ['U0003', 'U0011'], text: SRC[2].text }],
@@ -344,13 +372,13 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   });
 
   it('挂名丢弃检查**默认关闭**（实测噪声率过高，留着会淹没真信号）', () => {
-    const S = [...SRC, { id: 'U0011', speaker: 'Richard', at: 't', text: '就会有大量这种沉淀的东西需要处理，你稍等一下我看看这个。' }];
+    const S = [...SRC, { id: 'U0011', speaker: 'Alex', at: 't', text: '就会有大量这种沉淀的东西需要处理，你稍等一下我看看这个。' }];
     const off = verifyRewrite(S, [{ srcIds: ['U0003', 'U0011'], text: SRC[2].text }], { allowedTerms: [] });
     expect(off.issues.some((i) => i.reason === 'dropped_utterance')).toBe(false);
   });
 
   it('极短应答被合并/删除属正常，不报挂名丢弃', () => {
-    const S = [...SRC, { id: 'U0012', speaker: '张浩', at: 't', text: '对对。' }];
+    const S = [...SRC, { id: 'U0012', speaker: '张磊', at: 't', text: '对对。' }];
     const ok = verifyRewrite(S, [{ srcIds: ['U0003', 'U0012'], text: SRC[2].text }],
       { allowedTerms: [], checkDroppedUtterances: true });
     expect(ok.issues.some((i) => i.reason === 'dropped_utterance')).toBe(false);
@@ -361,9 +389,9 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
       SRC,
       [
         { srcIds: ['U0001'], text: '会议开始，双方互相问候，确认能听到。' },
-        { srcIds: ['U0002'], text: '张浩询问是否开始投屏。' },
+        { srcIds: ['U0002'], text: '张磊询问是否开始投屏。' },
       ],
-      { speakers: ['Richard', '张浩'], allowedTerms: [] },
+      { speakers: ['Alex', '张磊'], allowedTerms: [] },
     );
     expect(summarized.stats.qualityGate).toBe('summarized');
 
@@ -387,7 +415,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
 
 describe('⑤b 引例段确定性回退（不依赖模型遵守提示词）', () => {
   it('被标记的引例段回退为源发言原文并加可见标注', () => {
-    const S = [...SRC, { id: 'U0009', speaker: 'Richard', at: 't', text: '它一会儿叫什么？coxy 一会儿叫别的。' }];
+    const S = [...SRC, { id: 'U0009', speaker: 'Alex', at: 't', text: '它一会儿叫什么？coxy 一会儿叫别的。' }];
     const v = verifyRewrite(
       S,
       [{ srcIds: ['U0009'], text: '它一会儿叫 Cogseed，一会儿叫别的什么。' }],
@@ -411,8 +439,8 @@ describe('⑤b 引例段确定性回退（不依赖模型遵守提示词）', ()
 describe('⑥ 结构合并与渲染', () => {
   it('同人相邻段落合并为一块，并给出起止时间与合并后的锚点', () => {
     const blocks = mergeBlocks([
-      { srcIds: ['U0003'], text: '甲', similarity: 1, speaker: 'Richard', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:24', suspect: false },
-      { srcIds: ['U0004'], text: '乙', similarity: 1, speaker: 'Richard', from: '2026-09-05 19:35:36', to: '2026-09-05 19:35:36', suspect: false },
+      { srcIds: ['U0003'], text: '甲', similarity: 1, speaker: 'Alex', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:24', suspect: false },
+      { srcIds: ['U0004'], text: '乙', similarity: 1, speaker: 'Alex', from: '2026-09-05 19:35:36', to: '2026-09-05 19:35:36', suspect: false },
     ]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].paragraphs).toEqual(['甲', '乙']);
@@ -429,17 +457,17 @@ describe('⑥ 结构合并与渲染', () => {
 
   it('渲染产物含：说话人｜时间块、逐段锚点、整理说明、附记与未决项', () => {
     const md = renderMarkdown(
-      [{ speaker: 'Richard', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:36', paragraphs: ['身份是个人本体的一部分。'], srcIds: ['U0003', 'U0004'] }],
+      [{ speaker: 'Alex', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:36', paragraphs: ['身份是个人本体的一部分。'], srcIds: ['U0003', 'U0004'] }],
       {
-        title: '测试标题', date: '2026-09-05', speakers: ['Richard'],
+        title: '测试标题', date: '2026-09-05', speakers: ['Alex'],
         glossaryTable: [{ correct: 'Cogseed', forms: 'coxy、cox', basis: '项目文档' }],
-        openItems: ['〔本次额外入册，尚未经人工确认〕静文 → 静雯'],
+        openItems: ['〔本次额外入册，尚未经人工确认〕王晶 → 李静'],
         materials: ['原始转写：x.txt'],
         stats: { '字符保留率': '50%' },
       },
     );
     expect(md).toContain('# 测试标题');
-    expect(md).toContain('**Richard｜19:35:24—19:35:36**');
+    expect(md).toContain('**Alex｜19:35:24—19:35:36**');
     expect(md).toContain('⟦U0003-U0004⟧');
     expect(md).toContain('每个段落都回引了源发言 id');
     expect(md).toContain('| Cogseed | coxy、cox | 项目文档 |');

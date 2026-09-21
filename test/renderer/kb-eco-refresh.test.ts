@@ -39,6 +39,7 @@ describe('KB ecosystem navigation refresh', () => {
         addEventListener: vi.fn(),
         uiIconHtml: vi.fn(() => ''),
         uiIconButton: vi.fn(({ label, icon, attrs }: any) => `<button id="${attrs.id}" aria-label="${label}">${icon}</button>`),
+        uiBadge: vi.fn(({ label, className }: any) => `<span class="ui-badge ${className}">${label}</span>`),
         renderKbWorkbench,
         renderKbDiscover,
       },
@@ -61,6 +62,7 @@ describe('KB ecosystem navigation refresh', () => {
     expect(renderKbWorkbench).toHaveBeenCalledOnce();
     expect(elements['kb-workbench'].hidden).toBe(false);
     expect(context.window.uiIconButton).toHaveBeenCalledWith(expect.objectContaining({ icon: 'panel-list' }));
+    expect(context.window.uiBadge).toHaveBeenCalledWith(expect.objectContaining({ className: 'kb-eco-tab-soon' }));
     expect(source).not.toContain('class="ui-icon-button kb-eco-compact"');
     expect(elements['kb-eco-compact'].setAttribute).toHaveBeenCalledWith('aria-pressed', 'false');
   });

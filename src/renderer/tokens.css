@@ -242,6 +242,29 @@
   --color-ca-red-line: #ecc8c4;
   --color-ca-red-bg: #fdf0ef;
   --color-ca-row-hover: rgba(0, 0, 0, 0.03);
+  /* 认知树图示（HTML 原型 v7 移植）：树干/枝条/张叶/树冠/光斑的层次色 */
+  --color-ca-trunk: #c3a179;
+  --color-ca-trunk-hi: #d9b791;
+  --color-ca-trunk-lo: #8f6745;
+  --color-ca-branch-hi: #c49f78;
+  --color-ca-branch-lo: #a57c57;
+  --color-ca-leaf-hi: #c7e8d2;
+  --color-ca-leaf-lo: #eaf7ef;
+  --color-ca-crown-1: #f2faf4;
+  --color-ca-crown-2: #dcefe3;
+  --color-ca-crown-3: #c8e3d1;
+  --color-ca-orb-1: #7fd3a4;
+  --color-ca-orb-2: #26a366;
+  --color-ca-orb-3: #0f7a47;
+  --color-ca-soil-band: #eceae4;
+  --color-ca-stage-top: #fcfdfc;
+  --color-ca-stage-bottom: #f0efe9;
+  --color-ca-blue: #3b74c4;
+  --color-ca-blue-bg: #eef4fb;
+  --color-ca-switch-track: #dadce0;
+  --color-ca-line-strong: #cfd4d0;
+  --color-white-92: rgba(255, 255, 255, 0.92);
+  --color-white-82: rgba(255, 255, 255, 0.82);
 
   /* Elevation and focus */
   --shadow-sm: 0 1px 2px rgba(20, 40, 30, 0.06);
@@ -249,6 +272,9 @@
   --shadow-card-hover: 0 6px 18px rgba(20, 40, 30, 0.05);
   --shadow-composer: var(--shadow-card);
   --shadow-dialog: 0 24px 60px rgba(20, 40, 30, 0.18);
+  --shadow-ca-card: 0 1px 2px rgba(20, 24, 20, 0.05);
+  --shadow-ca-hover: 0 2px 10px rgba(20, 24, 20, 0.09);
+  --shadow-ca-float: 0 14px 40px rgba(20, 24, 20, 0.18);
   --focus-width: 1px;
   --focus-offset: 2px;
 
