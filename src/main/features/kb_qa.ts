@@ -84,13 +84,15 @@ export interface KbAskEvent {
   notFound?: boolean;
   /** 未找到时若其它个人库目录有对应内容，渲染层展示“前往该库提问”引导。 */
   suggestion?: KbCrossLibSuggestion | null;
+  /** 系统状态行（如“已读取知识库信息”），渲染层以浅灰小字置于回答顶部。 */
+  sysNote?: string | null;
 }
 
 const KB_SYSTEM_PROMPT = `你是知识库问答助手。只依据提供的 ask_materials 证据回答；每条结论都标注引用 \`path#chunk N\`；资料里没有的内容明确归入「资料未说明」，不编造、不联网。
 
 回答结构请遵循：
 1. 开头先用一句话直接给出结论或一句话概括（如问“X 是什么”，第一句就给定义与定位，不要埋在大段中间）。
-2. 再按信息类型分节组织（如「是什么 / 任务要求 / 评分规则 / 复盘要求」）；同类型多条用列表逐条列出，每条一行为宜，避免长句堆砌、整段照抄原文。
+2. 再按信息类型分节组织（如「是什么 / 任务要求 / 评分规则 / 复盘要求」）；同类型多条用列表逐条列出，每条一行为宜，避免长句堆砌、整段照抄原文。需要区分类型时可用 emoji 前缀，如 📋 规则 / 📎 提交证据 / 📝 复盘要求。
 3. 对关键概念与指标做必要的解读：它要求什么、与问题或其它概念的关系，用自己的话简短说明，不只做摘录搬运。
 4. 全文先结论后细节；确实未找到的信息单列「资料未说明：…」如实说明，不脑补未给出的维度或定义。`;
 
@@ -311,17 +313,19 @@ export async function* kbAskStream(
         },
       });
       const docs = Array.isArray(overview.docs) ? overview.docs : [];
-      let text = overview.oneLiner
-        ? `一句话概括：${overview.oneLiner}`
-        : '未能生成一句话总结。';
+      const scope = dirScope ? `「${dirScope}」` : '个人知识库';
+      let text: string;
       if (docs.length) {
-        const scope = dirScope ? `「${dirScope}」` : '个人知识库';
-        text += `\n\n${scope}当前共解析 ${docs.length} 份文档，例如：`;
-        text += `\n${docs.slice(0, 8).map((d, i) => `${i + 1}. ${d.name}${d.text ? `：${d.text}` : ''}`).join('\n')}`;
+        const rows = docs.slice(0, 10).map((d, i) => {
+          const point = d.text && d.text.trim() ? d.text.trim() : '（暂无要点）';
+          return `${i + 1}. **${d.name}** —— ${point}`;
+        }).join('\n');
+        text = `${scope}共收录 ${docs.length} 份已解析文档，以下是核心内容概览：\n\n📚 文档内容\n${rows}\n\n💡 一句话总结\n${overview.oneLiner || '（未能生成总结）'}`;
       } else {
-        text += '\n\n（当前还没有可索引文档，导入资料后可再次总结。）';
+        text = `${scope}当前还没有可索引文档，导入资料后可再次总结。`;
       }
-      yield { type: 'final', text, evidence: [] };
+      // 状态行与正文分离：渲染层以浅灰小字置于回答顶部
+      yield { type: 'final', text, evidence: [], sysNote: '已读取知识库信息' };
       return;
     } catch (err) {
       log.warn('library-overview summary failed; falling back to normal retrieval', {
