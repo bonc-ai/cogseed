@@ -299,4 +299,3 @@ describe('疑似专名探测（保守，宁漏勿噪；仅作模型重点线索�
     expect(text.slice(first.span.start, first.span.end)).toBe('KSTAR');
   });
 });
-

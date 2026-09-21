@@ -1570,16 +1570,18 @@ function _settingsCustomProviderModelBadges(model) {
 
 /** 每模型开关（S2）：关闭前提示已绑定条目；失败回滚开关位置。 */
 function _settingsCustomProviderModelToggle(provider, model) {
-  const label = document.createElement('label');
-  label.className = 'toggle-switch is-compact settings-custom-provider-model-toggle';
-  const input = document.createElement('input');
-  input.type = 'checkbox';
-  input.checked = model.enabled !== false;
   const accessible = t('settings.custom_providers.model_toggle_label', { model: model.id });
-  input.setAttribute('aria-label', accessible);
-  input.title = accessible;
-  input.addEventListener('change', async () => {
-    const next = input.checked;
+  const toggle = _settingsElementFromSharedMarkup(uiSwitch({
+    label: accessible,
+    checked: model.enabled !== false,
+    className: 'settings-custom-provider-model-toggle',
+    attrs: { title: accessible },
+  }));
+  if (!toggle) return document.createElement('span');
+  toggle.addEventListener('click', async () => {
+    const previous = _settingsSwitchIsChecked(toggle);
+    const next = !previous;
+    _settingsSetSwitchChecked(toggle, next);
     if (!next) {
       const bound = (_settingsState.entries || [])
         .filter((entry) => entry.provider === 'cp:' + provider.id && entry.model === model.id);
@@ -1587,19 +1589,19 @@ function _settingsCustomProviderModelToggle(provider, model) {
         const confirmed = typeof uiConfirm === 'function'
           ? await uiConfirm(t('settings.custom_providers.disable_model_confirm', { count: String(bound.length) }))
           : true;
-        if (!confirmed) { input.checked = true; return; }
+        if (!confirmed) { _settingsSetSwitchChecked(toggle, previous); return; }
       }
     }
     const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
-    input.disabled = true;
+    toggle.disabled = true;
     const res = await _settingsCallCustomProvider('customProviders.model.setEnabled', {
       providerId: provider.id,
       modelId: model.id,
       enabled: next,
     });
-    input.disabled = false;
+    toggle.disabled = false;
     if (!res || !res.ok) {
-      input.checked = !next;
+      _settingsSetSwitchChecked(toggle, previous);
       _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.save_failed'));
       return;
     }
@@ -1615,8 +1617,7 @@ function _settingsCustomProviderModelToggle(provider, model) {
       _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
     }
   });
-  label.appendChild(input);
-  return label;
+  return toggle;
 }
 
 /** ⋯ 菜单：低频/危险动作收进溢出菜单，头部只留启用开关。 */
@@ -1746,19 +1747,23 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   // 头部：启用开关 + ⋯ 菜单（低频/危险动作收进菜单，头部只留一个开关）
   const headerActions = body.querySelector('#settings-custom-provider-detail-header-actions');
   if (headerActions) {
-    const toggle = document.createElement('label');
-    toggle.className = 'toggle-switch settings-custom-provider-detail-toggle';
-    const toggleInput = document.createElement('input');
-    toggleInput.type = 'checkbox';
-    toggleInput.checked = enabled;
     const toggleLabel = t('settings.custom_providers.provider_toggle_label', { name: provider.name || provider.id });
-    toggleInput.setAttribute('aria-label', toggleLabel);
-    toggleInput.title = toggleLabel;
-    toggleInput.addEventListener('change', () => {
-      void _settingsSetCustomProviderEnabled(provider, toggleInput.checked);
+    const toggle = _settingsElementFromSharedMarkup(uiSwitch({
+      label: toggleLabel,
+      checked: enabled,
+      className: 'settings-custom-provider-detail-toggle',
+      attrs: { title: toggleLabel },
+    }));
+    toggle?.addEventListener('click', async () => {
+      const previous = _settingsSwitchIsChecked(toggle);
+      const next = !previous;
+      _settingsSetSwitchChecked(toggle, next);
+      toggle.disabled = true;
+      const saved = await _settingsSetCustomProviderEnabled(provider, next);
+      toggle.disabled = false;
+      if (!saved) _settingsSetSwitchChecked(toggle, previous);
     });
-    toggle.appendChild(toggleInput);
-    headerActions.appendChild(toggle);
+    if (toggle) headerActions.appendChild(toggle);
     headerActions.appendChild(_settingsCustomProviderActionButton(
       'more-horizontal',
       t('settings.custom_providers.actions'),
@@ -2153,12 +2158,12 @@ function _settingsRenderModelFormHtml(initial) {
     return `<label class="settings-check-chip${item.locked ? ' is-locked' : ''}">`
       + uiCheckbox({
         id: `settings-model-form-input-${item.value}`,
+        label: item.label,
         name: 'settings-model-form-input',
         value: item.value,
         checked,
         disabled: item.locked,
       })
-      + `<span class="settings-check-chip__box"></span>`
       + `<span class="settings-check-chip__label">${escapeHtml(item.label)}</span>`
       + (item.locked ? `<span class="settings-check-chip__lock">${_settingsIconHtml('lock', 'ui-icon')}</span>` : '')
       + '</label>';
@@ -2172,11 +2177,11 @@ function _settingsRenderModelFormHtml(initial) {
     return `<label class="settings-check-chip">`
       + uiCheckbox({
         id: `settings-model-form-capability-${item.value}`,
+        label: item.label,
         name: 'settings-model-form-capability',
         value: item.value,
         checked,
       })
-      + `<span class="settings-check-chip__box"></span>`
       + `<span class="settings-check-chip__label">${escapeHtml(item.label)}</span>`
       + '</label>';
   }).join('');
@@ -2186,7 +2191,7 @@ function _settingsRenderModelFormHtml(initial) {
       <div class="settings-model-form__smart">
         <span class="settings-model-form__smart-label">${escapeHtml(t('settings.custom_providers.smart_config'))}</span>
         ${_settingsModelFormHint(t('settings.custom_providers.smart_config_hint'))}
-        <label class="toggle-switch">${uiCheckbox({ id: 'settings-model-form-smart', checked: initial.smart })}</label>
+        ${uiSwitch({ id: 'settings-model-form-smart', label: t('settings.custom_providers.smart_config'), checked: initial.smart })}
       </div>` : ''}
       <div class="form-row">
         <label for="settings-custom-provider-model-edit-id">${escapeHtml(t('settings.custom_providers.model_id'))}</label>
@@ -2283,12 +2288,23 @@ function _settingsReadModelForm(body) {
     maxTokens: Number(body.querySelector('#settings-custom-provider-model-edit-output')?.value),
     // smart 开关也入 state：i18n 重渲染整块重建 DOM，开关不在 state 里会被
     // 复位为默认开——用户明确关掉后会再触发被关闭的远端拉取。
-    smart: body.querySelector('#settings-model-form-smart')?.checked !== false,
+    smart: _settingsSwitchIsChecked(body.querySelector('#settings-model-form-smart')),
     inputTypes: checkedValues('settings-model-form-input'),
     capabilities: checkedValues('settings-model-form-capability'),
     reasoningLevels: Array.from(body.querySelectorAll('.settings-level-row__input')).map((el) => el.value),
     reasoningParamsMap: body.querySelector('#settings-custom-provider-model-params')?.value,
   };
+}
+
+function _settingsSwitchIsChecked(element) {
+  return element ? element.getAttribute('aria-checked') === 'true' : true;
+}
+
+function _settingsSetSwitchChecked(element, checked) {
+  if (!element) return;
+  const next = Boolean(checked);
+  element.setAttribute('aria-checked', next ? 'true' : 'false');
+  element.classList.toggle('is-on', next);
 }
 
 /** _settingsReadModelForm 的逆操作：把一份表单状态写回（重）渲染后的表单。
@@ -2314,7 +2330,7 @@ function _settingsApplyModelFormState(body, state) {
   applyChecked('settings-model-form-input', state.inputTypes);
   applyChecked('settings-model-form-capability', state.capabilities);
   const smartToggle = body.querySelector('#settings-model-form-smart');
-  if (smartToggle && typeof state.smart === 'boolean') smartToggle.checked = state.smart;
+  if (smartToggle && typeof state.smart === 'boolean') _settingsSetSwitchChecked(smartToggle, state.smart);
   const levelList = body.querySelector('#settings-model-form-levels');
   if (levelList) {
     levelList.innerHTML = '';
@@ -2414,8 +2430,11 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
     // 「已按…智能填充」只可能出现在手动新增表单里。
     if (initial.smart) {
       const smartToggle = body.querySelector('#settings-model-form-smart');
+      smartToggle?.addEventListener('click', () => {
+        _settingsSetSwitchChecked(smartToggle, !_settingsSwitchIsChecked(smartToggle));
+      });
       body.querySelector('#settings-custom-provider-model-edit-id')?.addEventListener('blur', () => {
-        if (smartToggle?.checked) void _settingsSmartFillModelForm(provider, body);
+        if (_settingsSwitchIsChecked(smartToggle)) void _settingsSmartFillModelForm(provider, body);
       });
     }
   };

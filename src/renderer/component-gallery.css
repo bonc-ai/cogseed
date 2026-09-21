@@ -238,6 +238,7 @@
 .gallery-matrix th { background: var(--surface-subtle); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-size-1); font-weight: var(--font-weight-medium); }
 .gallery-matrix td:first-child { color: var(--text-secondary); font-size: var(--font-size-2); font-weight: var(--font-weight-semibold); }
 .gallery-matrix__control { min-height: 44px; display: flex; align-items: center; }
+.gallery-inline-control { display: inline-flex; align-items: center; gap: var(--space-2); }
 .gallery-empty-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
 .gallery-empty-grid .gallery-specimen__body { min-height: 280px; display: flex; }
 .gallery-empty-grid .ui-empty-state { width: 100%; }
