@@ -43,6 +43,16 @@ require('./proxy-bootstrap.cjs');
 // that are RELATIVE clocks (`02:45`). `get_transcript` returns both the structured paragraphs and
 // a flattened speaker-prefixed `text`.
 //
+// ── TWO INDEPENDENT DATA CHANNELS (verified — this is easy to get wrong) ─────
+//   `record`  — per-sentence transcript. REQUIRES a cloud recording, which the host must start
+//               manually. `record_type` is `云录制` or `文字转写`.
+//   `minutes` — the platform's own meeting summary ("Yuanbao minutes"). Requires NO recording.
+// A real meeting was observed with `records_total_count: 0` (nothing to fetch from `record`) while
+// still exposing three `minutes`. So the two channels do NOT cover the same meetings: a meeting
+// that is invisible to the transcript tools may still be reachable through `get_meeting_minutes`.
+// Neither channel subsumes the other — `minutes` carries no per-sentence text, so word-level
+// correction still needs `record`.
+//
 // ── Time format ──────────────────────────────────────────────────────────────
 // `record list` takes ISO 8601 *with an offset* (`--start 2026-03-12T14:00+08:00`). A bare local
 // time is rejected by the CLI with `--start format error`, which is a confusing dead end for the
@@ -121,6 +131,12 @@ function _resetBinForTest() {
 const EXEC_TIMEOUT_MS = Number(process.env.COGSEED_TMEET_TIMEOUT_MS || 60000);
 /** `record list` caps page size at 30 server-side; keep it honest instead of letting the CLI clamp. */
 const MAX_PAGE_SIZE = 30;
+/** `minutes get` ceilings differ by mode: transient (per-occurrence) allows far more than stable. */
+const MAX_MINUTES_PAGE_TRANSIENT = 300;
+const MAX_MINUTES_PAGE_STABLE = 30;
+const MAX_MINUTES_SEARCH_PAGE = 50;
+/** The minutes search API itself rejects queries longer than this. */
+const MAX_QUERY_CHARS = 50;
 /** Transcript text is the one legitimately large payload here. Keep a single call bounded. */
 const MAX_TRANSCRIPT_CHARS = 200000;
 
@@ -215,6 +231,48 @@ const TOOLS = [
       required: ['meeting_record_id'],
     },
   },
+  {
+    name: 'get_meeting_minutes',
+    description:
+      'Get the platform-generated meeting summary ("Yuanbao minutes") for one meeting. This is the ' +
+      'ONLY channel that works for meetings with no cloud recording — a meeting can have a summary ' +
+      'while its recording list is empty, so prefer this over the transcript tools when a meeting ' +
+      'cannot be found. Provide one of minute_id (a single occurrence), meeting_id (a whole ' +
+      'recurring series, may return several occurrences) or meeting_code. `summary_points` is ' +
+      'Markdown. `todos` is returned by the platform but is frequently EMPTY — do not treat it as a ' +
+      'complete action list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        minute_id: { type: 'string', description: 'One minute occurrence id (from the meeting list or minutes search).' },
+        meeting_id: { type: 'string', description: 'Meeting id (cycle-level) — returns the series\' summaries.' },
+        meeting_code: { type: 'string', description: '9-12 digit meeting code, resolved to a meeting id.' },
+        sub_meeting_id: { type: 'string', description: 'Recurring-meeting instance id; omit for non-recurring meetings.' },
+        short_summary: { type: 'boolean', description: 'Fetch the transient (rolling) summary. Requires minute_id.' },
+        page_size: { type: 'number', description: 'Summaries per page. Max 300 with minute_id, otherwise max 30.' },
+        page_token: { type: 'string', description: 'Pagination token from a previous call.' },
+      },
+    },
+  },
+  {
+    name: 'search_meeting_minutes',
+    description:
+      'Full-text search across meeting summaries, returning matching snippets with context. Use this ' +
+      'to answer "which meeting discussed X" without fetching every summary. The search runs over ' +
+      'summary text, so it finds topics that were summarised rather than every word that was spoken ' +
+      '— use search_transcript for word-level search inside one recording.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search keyword, max 50 characters. Required.' },
+        start: { type: 'string', description: 'Lower time bound, ISO 8601 WITH offset.' },
+        end: { type: 'string', description: 'Upper time bound, ISO 8601 WITH offset.' },
+        page_size: { type: 'number', description: 'Results per page, max 50 (default 20).' },
+        page_token: { type: 'string', description: 'Pagination token from a previous call.' },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 // ── tmeet invocation ──────────────────────────────────────────────────
@@ -284,14 +342,15 @@ function _requireOffsetIso(value, label) {
 
 /**
  * Row-carrier keys, verified against real tmeet v1.0.18 responses:
- *   `tmeet record list`              → data.record_meetings[]
- *   `tmeet record transcript-get`    → data.minutes.paragraphs[]
+ *   `tmeet record list`                  → data.record_meetings[]
+ *   `tmeet record transcript-get`        → data.minutes.paragraphs[]
  *   `tmeet record transcript-paragraphs` → data.pids[]
+ *   `tmeet minutes get` / `minutes search` → data.minutes[]   (an ARRAY here, an OBJECT for transcript-get)
  * `data` is in the list purely as a descent step (it is an object, never returned as rows).
  * The generic tail keeps an older/newer envelope from silently yielding zero rows.
  */
 const _LIST_KEYS = [
-  'record_meetings', 'pids',
+  'record_meetings', 'pids', 'minutes',
   'records', 'record_list', 'recordings',
   'paragraphs', 'items', 'list', 'data',
 ];
@@ -481,6 +540,94 @@ async function callTool(name, args = {}) {
       // No `commit` path is exposed: applying is a write action the user performs themselves.
       note: 'Preview only. Submitting a recording-permission application is a write action and is not available through this connector.',
       preview: payload,
+    };
+  }
+
+  if (name === 'get_meeting_minutes') {
+    const minuteId = args.minute_id ? String(args.minute_id) : '';
+    if (!minuteId && !args.meeting_id && !args.meeting_code) {
+      throw new Error('Provide one of: minute_id, meeting_id, or meeting_code.');
+    }
+    if (args.short_summary && !minuteId) {
+      throw new Error('short_summary requires minute_id (the transient summary is per-occurrence).');
+    }
+    // Page-size ceiling differs by mode: transient (minute_id) allows 300, stable allows 30.
+    const cap = minuteId ? MAX_MINUTES_PAGE_TRANSIENT : MAX_MINUTES_PAGE_STABLE;
+    let pageSize;
+    if (args.page_size !== undefined) {
+      const n = Number(args.page_size);
+      if (!Number.isFinite(n) || n < 1) throw new Error('page_size must be a positive number.');
+      pageSize = Math.min(Math.floor(n), cap);
+    }
+    const payload = await tmeet(
+      'minutes', 'get',
+      ..._opt('--minute-id', minuteId),
+      ..._opt('--meeting-id', args.meeting_id),
+      ..._opt('--meeting-code', args.meeting_code),
+      ..._opt('--sub-meeting-id', args.sub_meeting_id),
+      ...(args.short_summary ? ['--short-summary'] : []),
+      ..._opt('--page-size', pageSize),
+      ..._opt('--page-token', args.page_token),
+    );
+    const d = _data(payload);
+    const rows = _rows(payload);
+    return {
+      subject: _field(d, 'subject'),
+      minuteCount: rows.length,
+      minutes: rows.map((m) => ({
+        minute_id: _field(m, 'minute_id'),
+        created_at: _field(m, 'created_at'),
+        overview: _field(m, 'overview'),
+        // Markdown. Platform-generated: reuse it only where the product has decided to.
+        summary_points: _field(m, 'summary_points'),
+        // Present in the schema but EMPTY for real meetings that plainly had action items —
+        // surface it, and let the caller decide rather than trusting it as a complete list.
+        todos: Array.isArray(m.todos) ? m.todos : [],
+      })),
+      ..._pagination(payload),
+      raw: payload,
+    };
+  }
+
+  if (name === 'search_meeting_minutes') {
+    const query = _requireArg(args, 'query');
+    if (query.length > MAX_QUERY_CHARS) {
+      throw new Error(`query must be at most ${MAX_QUERY_CHARS} characters (got ${query.length}).`);
+    }
+    let pageSize;
+    if (args.page_size !== undefined) {
+      const n = Number(args.page_size);
+      if (!Number.isFinite(n) || n < 1) throw new Error('page_size must be a positive number.');
+      pageSize = Math.min(Math.floor(n), MAX_MINUTES_SEARCH_PAGE);
+    }
+    const payload = await tmeet(
+      'minutes', 'search',
+      '--query', query,
+      ..._opt('--start', args.start && _requireOffsetIso(args.start, 'start')),
+      ..._opt('--end', args.end && _requireOffsetIso(args.end, 'end')),
+      ..._opt('--page-size', pageSize),
+      ..._opt('--page-token', args.page_token),
+    );
+    const d = _data(payload);
+    const rows = _rows(payload);
+    return {
+      query,
+      matchCount: rows.length,
+      total_count: _field(d, 'total_count'),
+      matches: rows.map((m) => ({
+        meeting_id: _field(m, 'meeting_id'),
+        minute_id: _field(m, 'minute_id'),
+        minute_start_time: _field(m, 'minute_start_time'),
+        subject: _field(m, 'subject'),
+        // `q_fields` says which field matched — currently SUMMARY_POINTS.
+        matched_fields: Array.isArray(m.q_fields) ? m.q_fields : [],
+        snippets: (Array.isArray(m.snippets) ? m.snippets : []).map((s) => ({
+          source: _field(s, 'source'),
+          text: _field(s, 'text'),
+        })),
+      })),
+      ..._pagination(payload),
+      raw: payload,
     };
   }
 

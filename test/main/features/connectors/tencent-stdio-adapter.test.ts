@@ -55,10 +55,12 @@ describe('Tencent Meeting stdio CLI adapter', () => {
   it('exposes exactly the 5 read-only tools, without starting the stdio server', () => {
     const adapter = loadAdapter();
     expect(adapter.TOOLS.map((t) => t.name).sort()).toEqual([
+      'get_meeting_minutes',
       'get_transcript',
       'get_transcript_paragraphs',
       'list_recordings',
       'preview_record_permission',
+      'search_meeting_minutes',
       'search_transcript',
     ]);
     expect(typeof adapter.callTool).toBe('function');
@@ -231,6 +233,83 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     const { adapter } = stubTmeet(() => ({ message: '纪要无内容', data: { code: 30002 } }));
     await expect(adapter.callTool('get_transcript', { record_file_id: 'f5' }))
       .rejects.toThrow(/no transcript for record_file_id f5/);
+  });
+
+  it('get_meeting_minutes reaches the channel that works without a cloud recording', async () => {
+    // A real meeting was observed with `records_total_count: 0` while still exposing three
+    // `minutes`, so the summary channel is the only way into those meetings — it must not require
+    // a record id.
+    const { adapter, calls } = stubTmeet(() => ({
+      trace_id: 'x', message: 'success',
+      data: { has_more: false, meeting_id: '', minute_id: 'mid-1', subject: '例会 - P3394 Scrum Team',
+        minutes: [{ created_at: '2026-09-20T17:13:19+08:00', minute_id: 'mid-1',
+          overview: '', summary_points: '小结\n- 确立核心目标', todos: [] }] },
+    }));
+
+    const res = await adapter.callTool('get_meeting_minutes', { minute_id: 'mid-1' });
+
+    expect(calls[0]).toEqual(['minutes', 'get', '--minute-id', 'mid-1']);
+    expect(res.subject).toBe('例会 - P3394 Scrum Team');
+    expect(res.minuteCount).toBe(1);
+    expect(res.minutes[0].summary_points).toContain('确立核心目标');
+    // Platform todos are frequently empty even for meetings that plainly had action items; the
+    // field is surfaced as-is rather than papered over.
+    expect(res.minutes[0].todos).toEqual([]);
+  });
+
+  it('get_meeting_minutes requires a selector and applies the transient/stable page-size ceilings', async () => {
+    const { adapter, calls } = stubTmeet(() => ({ message: 'success', data: { minutes: [] } }));
+
+    await expect(adapter.callTool('get_meeting_minutes', {}))
+      .rejects.toThrow(/Provide one of: minute_id, meeting_id, or meeting_code/);
+    await expect(adapter.callTool('get_meeting_minutes', { meeting_id: '1', short_summary: true }))
+      .rejects.toThrow(/short_summary requires minute_id/);
+
+    // transient (minute_id) allows 300; stable (meeting_id) only 30
+    await adapter.callTool('get_meeting_minutes', { minute_id: 'mid-1', page_size: 500 });
+    expect(calls[0]).toContain('300');
+    await adapter.callTool('get_meeting_minutes', { meeting_id: '42', page_size: 500 });
+    expect(calls[1]).toContain('30');
+    expect(calls[1]).toContain('--meeting-id');
+  });
+
+  it('maps the real captured minutes fixture', async () => {
+    const payload = fixture('tencent-minutes-get.json');
+    const { adapter } = stubTmeet(() => payload);
+    const res = await adapter.callTool('get_meeting_minutes', { minute_id: 'mid-x' });
+    expect(res.minuteCount).toBe(payload.data.minutes.length);
+    expect(res.minutes[0]).toHaveProperty('summary_points');
+    expect(Array.isArray(res.minutes[0].todos)).toBe(true);
+  });
+
+  it('search_meeting_minutes validates the query the way the API does', async () => {
+    const { adapter, calls } = stubTmeet(() => ({
+      message: 'success',
+      data: { has_more: true, total_count: 7, next_page_token: 'tok-9',
+        minutes: [{ meeting_id: '8510129880540746171', minute_id: 'mid-1',
+          minute_start_time: '2026-09-21T11:46:28+08:00', subject: '例会',
+          q_fields: ['SUMMARY_POINTS'],
+          snippets: [{ source: 'SUMMARY_POINTS', text: '…腾讯MCP调研：发现较多问题…' }] }] },
+    }));
+
+    await expect(adapter.callTool('search_meeting_minutes', {})).rejects.toThrow(/query is required/);
+    await expect(adapter.callTool('search_meeting_minutes', { query: 'x'.repeat(51) }))
+      .rejects.toThrow(/at most 50 characters/);
+
+    const res = await adapter.callTool('search_meeting_minutes', { query: '认知资产', page_size: 999 });
+    expect(calls[0]).toEqual(['minutes', 'search', '--query', '认知资产', '--page-size', '50']);
+    expect(res.total_count).toBe(7);
+    expect(res.next_page_token).toBe('tok-9');
+    expect(res.matches[0]).toMatchObject({ matched_fields: ['SUMMARY_POINTS'], minute_id: 'mid-1' });
+    expect(res.matches[0].snippets[0].text).toContain('腾讯MCP调研');
+  });
+
+  it('maps the real captured minutes-search fixture', async () => {
+    const payload = fixture('tencent-minutes-search.json');
+    const { adapter } = stubTmeet(() => payload);
+    const res = await adapter.callTool('search_meeting_minutes', { query: '认知资产' });
+    expect(res.matchCount).toBe(payload.data.minutes.length);
+    expect(res.matches[0].snippets.length).toBeGreaterThan(0);
   });
 
   it('preview_record_permission uses meeting_record_id and states that commit is unavailable', async () => {
