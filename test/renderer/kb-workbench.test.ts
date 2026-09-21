@@ -156,6 +156,13 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       return made.el;
     }),
   };
+  /** 渲染任意 attrs，让桩与真实原语行为一致（data- 与 aria- 属性都会被测试断言到）。 */
+  const renderStubAttrs = (attrs: Record<string, any> | undefined): string =>
+    Object.entries(attrs || {})
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${key}="${value === true ? '' : String(value)}"`)
+      .join('');
+
   const windowMock: any = {
     innerWidth: options.width ?? 1440,
     innerHeight: options.height ?? 900,
@@ -173,6 +180,12 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
+    // 共享原语桩：kb-workbench 现在**不再自带降级模板**（2026-09-21），
+    // 缺原语即抛错；生产里这些由 index.html 加载的 ui-button.js / ui-form.js 提供。
+    uiButton: (o: any) => `<button type="button" class="btn ui-button ui-button--${o.role || 'secondary'} ${o.className || ''}"${o.disabled ? ' disabled' : ''}${renderStubAttrs(o.attrs)}>${o.label}</button>`,
+    uiIconButton: (o: any) => `<button type="button" class="ui-icon-button ${o.className || ''}"${o.disabled ? ' disabled' : ''} aria-label="${o.label}"${renderStubAttrs(o.attrs)}></button>`,
+    uiInput: (o: any) => `<input class="form-input ui-control ui-input ${o.className || ''}" id="${o.id || ''}" type="${o.type || 'text'}" value="${o.value || ''}"${o.disabled ? ' disabled' : ''}${renderStubAttrs(o.attrs)} />`,
+    uiTextarea: (o: any) => `<textarea class="form-input ui-control ui-textarea ${o.className || ''}" id="${o.id || ''}"${o.placeholder ? ` placeholder="${o.placeholder}"` : ''}>${o.value || ''}</textarea>`,
     uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3>${options.hint ? `<p>${String(options.hint)}</p>` : ''}${options.action ? `<button id="${String(options.action.attrs?.id || '')}">${String(options.action.label || '')}</button>` : ''}</section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string) => {
@@ -222,6 +235,10 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     performance,
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (v: unknown) => String(v ?? ''),
+    uiButton: windowMock.uiButton,
+    uiIconButton: windowMock.uiIconButton,
+    uiInput: windowMock.uiInput,
+    uiTextarea: windowMock.uiTextarea,
     uiToast: windowMock.uiToast,
     uiPrompt: windowMock.uiPrompt,
     document: documentMock,
@@ -739,7 +756,8 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
 
-    expect(source).toContain("typeof window.uiIconButton === 'function'");
+    // 2026-09-21：模块不再自带降级模板，改为缺原语即抛错（仍是共享 seam，且不会静默绕过）
+    expect(source).toContain("_requirePrimitive('uiIconButton')");
     expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
     expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.kb-wb\.right-panel-open \.kb-wb-right/);
     expect(css).toContain('width: min(420px, calc(100% - 44px));');
