@@ -791,6 +791,19 @@ export async function finalizeRun(
     } else {
       record.status = 'failed';
     }
+    // 状态推导完成后才落定从未派发的成员：它们仍然是「未完成」，但 run 的
+    // 失败/停止判定沿用既有口径（被点名但没跑到的成员不改变 run 状态）。
+    // 落成 blocked(no_terminal) 是为了进入可重试终态集合——RETRYABLE_TERMINALS
+    // 只含 failed/blocked/stopped/removed，不含 pending，否则会出现
+    // 「汇总说它缺失、重试却不带上它」的自相矛盾。
+    // 已派发但仍 pending 的 actor 不在这里兜底：那说明它在飞或没有终态回调，
+    // 属于要单独排查的状态，不能靠收口悄悄改写。
+    for (const actor of record.actors) {
+      if (actor.terminal === 'pending' && actor.dispatched.length === 0) {
+        actor.terminal = 'blocked';
+        actor.reason = 'no_terminal';
+      }
+    }
     if (!record.summary_publication) {
       record.summary_publication = {
         status: 'pending',

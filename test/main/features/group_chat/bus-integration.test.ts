@@ -9117,7 +9117,10 @@ describe("group_chat bus integration › Task 6 run attribution", () => {
       }),
       expect.objectContaining({
         agent_id: AGENT_ID,
-        terminal: "pending",
+        // 收口后不再残留 pending：从未派发的成员落成 blocked(no_terminal)，
+        // 才会进入「只重试未完成」的覆盖范围（run_store.finalizeRun）。
+        terminal: "blocked",
+        reason: "no_terminal",
         attempts: 0,
         dispatched: [],
       }),
