@@ -36,6 +36,10 @@ import {
 } from './types';
 import { listSkillVersions } from '../skills/version-store';
 import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
+import {
+  hubPinIdentity, isHubManagedContent, resolveHubPinnedTree,
+} from '../marketplace/version-store';
+import { isContentDisabled } from '../marketplace/installed-version';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
 
 const COGSEED_TASK_STATUSES = new Set<string>([
@@ -105,6 +109,26 @@ export interface AdmitPlannedCogSeedTaskInput extends CreateCogSeedTaskInput {
   runtimeWorkerId: string;
 }
 
+/**
+ * 去掉被内容级停用的 Hub 内容（specs/010 FR-042 / FR-043）。
+ *
+ * **停用状态只在这里读一次**——即产生 pin 的这一刻。解析 pin 的路径**永不读它**
+ * （见 `skill-tools.ts` 的来源分派），所以停用**不会中止已经开始的使用**：
+ * 那次使用的 allowlist 与 pin 早已落盘，本函数影响不到它。
+ *
+ * 阻断方式是**不把它放进 allowlist**：运行时对 allowlist 外的 Skill 本就拒绝执行，
+ * 因此无需在执行期再读一次状态，也不会有第二处停用判定。
+ *
+ * ⚠️ **不碰用户自己的启停选择**。恢复（status 不再是 `disabled`）之后，该内容自然
+ * 重新进入 allowlist，用户原有的启停选择保持原样——不是「一律启用」（FR-044）。
+ */
+function withoutDisabledContent(userId: string, skillIds: string[]): string[] {
+  return skillIds.filter((skillId) => {
+    if (!isHubManagedContent(userId, skillId)) return true;
+    return !isContentDisabled(userId, skillId);
+  });
+}
+
 async function resolveSkillVersionPins(
   userId: string,
   allowedSkillIds: string[] | undefined,
@@ -122,8 +146,30 @@ async function resolveSkillVersionPins(
     throw new Error('skill version pin is outside the persisted Skill allowlist');
   }
   const resolved: Array<CogSeedTaskSkillVersionPin | undefined> = await Promise.all(skillIds.map(async (skillId, index): Promise<CogSeedTaskSkillVersionPin | undefined> => {
-    const versions = await listSkillVersions(userId, skillId);
     const requestedPin = requested?.[index];
+
+    // ── 按来源分派（specs/010 FR-029/FR-030）────────────────────────────────
+    // Hub 官方副本的版本来自**不可变版本存储**，不是创作流的版本信封：
+    // `listSkillVersions` 对 Hub 内容恒为空，沿用它会让 `versions[0]` 为 undefined、
+    // 因而**不产生 pin**，PRD §7.8 的不变量对 Hub Skill 就是空的。
+    // 创作流 Skill 不会命中本分支，落到下方原路径，逐字不变。
+    if (isHubManagedContent(userId, skillId)) {
+      if (requestedPin) {
+        // 重建 / 恢复（含 recoverable Task 与 App 重启）：被钉那一版的副本仍在且
+        // 身份摘要一致 → pin 原样保留，不重新解析到新版本。
+        if (resolveHubPinnedTree(userId, skillId, requestedPin.version, requestedPin.manifestHash)) {
+          return requestedPin;
+        }
+        if (preserveRequested) return requestedPin;
+        throw new Error(`skill version pin is stale: ${skillId}`);
+      }
+      const hub = hubPinIdentity(userId, skillId);
+      // 判不出实际版本、或该版本没有副本时**不产生 pin**——宁可没有，
+      // 也不产生一个解析不到内容的 pin。
+      return hub ? { skillId, version: hub.version, manifestHash: hub.manifestHash } : undefined;
+    }
+
+    const versions = await listSkillVersions(userId, skillId);
     const current = requestedPin
       ? versions.find((record) => record.revisionId === requestedPin.revisionId
         || (record.version === requestedPin.version && record.manifestHash === requestedPin.manifestHash))
@@ -854,7 +900,11 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       : await getOrCreateCogSeedSession(userId, input.sessionId);
     const createdAt = nowIso();
     const allowedSkillIds = input.allowedSkillIds !== undefined
-      ? Array.from(new Set(input.allowedSkillIds.map((item) => assertCogSeedAgentId(String(item)))))
+      // 停用的 Hub 内容在此被挡在 allowlist 之外——阻断新的使用，不影响已开始的使用。
+      ? withoutDisabledContent(
+        userId,
+        Array.from(new Set(input.allowedSkillIds.map((item) => assertCogSeedAgentId(String(item))))),
+      )
       : undefined;
     const skillVersionPins = await resolveSkillVersionPins(
       userId,
@@ -944,7 +994,11 @@ export async function admitPlannedCogSeedTask(
     ? assertCogSeedConversationId(String(input.conversationId))
     : undefined;
   const allowedSkillIds = input.allowedSkillIds !== undefined
-    ? Array.from(new Set(input.allowedSkillIds.map((item) => assertCogSeedAgentId(String(item)))))
+    // 同上：admit 是 planned Task 真正开始执行的时刻，也是一次「新的使用」。
+    ? withoutDisabledContent(
+      userId,
+      Array.from(new Set(input.allowedSkillIds.map((item) => assertCogSeedAgentId(String(item))))),
+    )
     : undefined;
   const skillVersionPins = await resolveSkillVersionPins(
     userId,

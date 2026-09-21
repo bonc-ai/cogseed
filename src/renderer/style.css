@@ -19231,6 +19231,13 @@ body:has(#panel-settings.active) .main-top-actions {
   background: rgba(16, 185, 129, 0.04);
   color: #047857;
 }
+/* Update-available chip (specs/010 FR-067) — warning hue, so "there is something newer" reads as
+   a prompt rather than the green "everything is fine" of `.is-status`. Semantic tokens only. */
+.marketplace-card-chip.is-update {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  color: var(--status-warning-text);
+}
 /* Space gate status chip — green ready / red not ready / grey pending review. */
 .agent-card-chip.spaces-gate.is-gate-passed {
   border-color: rgba(16, 185, 129, 0.24);

@@ -1081,33 +1081,23 @@ describe('builtin marketplace seed', () => {
     const installs = await import('../../../src/main/features/marketplace_installs');
     await seed.seedBuiltinMarketplaceForUser('u1');
 
-    postJsonMock.mockImplementation(async (p: string, body: any) => {
-      if (p === '/marketplace/skills/list' && Array.isArray(body?.ids)) {
-        return {
-          list: [{
-            id: 'seo-crawl',
-            name: 'SEO Crawl',
-            version: '2.0.0',
-            published_at: 100,
-            updated_at: 200,
-            create_uid: '0',
-            default_install: true,
-            status: 'approved',
-          }],
-          total: 1,
-        };
-      }
-      if (p === '/marketplace/skills/bundle' && body?.id === 'seo-crawl') {
-        return {
-          bundle_url: 'https://cdn.test/seo-crawl.zip',
-          version: '2.0.0',
-          published_at: 100,
-          updated_at: 200,
-          create_uid: '0',
-          default_install: true,
-          status: 'approved',
-        };
-      }
+    // A-01 目录既服务「按 ids 查」也服务适配层的分页遍历；两者返回同一行。
+    // 原先还有一个 `/marketplace/skills/bundle` 的 JSON 详情分支——A-02 按 F4 收口为
+    // 只回不可变字节后该形态已废止，故删除而不是保留。
+    const catalogRow = {
+      id: 'seo-crawl',
+      content_id: 'seo-crawl',
+      name: 'SEO Crawl',
+      version: '2.0.0',
+      published_at: 100,
+      updated_at: 200,
+      create_uid: '0',
+      default_install: true,
+      status: 'approved',
+      artifact: { sha256: 'a'.repeat(64), size_bytes: 1024, format: 'skill-tree-v1' },
+    };
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === '/marketplace/skills/list') return { list: [catalogRow], total: 1 };
       throw new Error(`unexpected ${p}`);
     });
 
@@ -1126,7 +1116,8 @@ describe('builtin marketplace seed', () => {
         version: '2.0.0',
         published_at: 100,
         updated_at: 200,
-        bundle_url: 'https://cdn.test/seo-crawl.zip',
+        // Hub 内容不再有对象存储地址；身份是 {content_id, version}。
+        bundle_url: '',
       }),
     ]);
     expect((manifest.skills[0] as any).seed_source).toBeUndefined();
