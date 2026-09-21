@@ -5237,11 +5237,14 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
           // 轻工具条：复制回答全文（可读正文，不含行内溯源锚点）
           const tools = document.createElement('div');
           tools.className = 'kb-qa-tools';
-          const copyBtn = document.createElement('button');
-          copyBtn.type = 'button';
-          copyBtn.className = 'kb-qa-tools-btn';
-          copyBtn.textContent = '⧉ 复制';
-          copyBtn.title = '复制回答全文';
+          // 走共享按钮原语，不手搓 <button>：shared-ui-adoption-guard 冻结裸控件债务
+          const copyBtn = _elementFromHtml(_uiButton({
+            label: '⧉ 复制',
+            role: 'ghost',
+            size: 'sm',
+            className: 'kb-qa-tools-btn',
+            attrs: { title: '复制回答全文' },
+          }));
           copyBtn.addEventListener('click', () => _copyText(readableText, '已复制回答全文'));
           tools.appendChild(copyBtn);
           streamBody.appendChild(tools);
