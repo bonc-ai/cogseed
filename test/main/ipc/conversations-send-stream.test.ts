@@ -12,9 +12,14 @@ type StreamCancelFn = (
   event: { sender: { getURL: () => string } },
   requestId: unknown,
 ) => void;
+type InvokeFn = (
+  event: { sender: { getURL: () => string } },
+  req: { channel: string; payload?: unknown },
+) => Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;
 
 let streamStartHandler: StreamStartFn | null = null;
 let streamCancelHandler: StreamCancelFn | null = null;
+let invokeHandler: InvokeFn | null = null;
 
 const groupChatMock = vi.hoisted(() => ({
   subscribers: new Set<(ev: unknown) => void>(),
@@ -25,13 +30,16 @@ const groupChatMock = vi.hoisted(() => ({
   sendStarted: Promise.resolve(),
   sendFinished: Promise.resolve(),
   sendCalls: [] as unknown[],
+  sendResult: { ok: true } as Record<string, unknown>,
   retryCalls: [] as unknown[],
   editCalls: [] as unknown[],
 }));
 
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: vi.fn(),
+    handle: (channel: string, fn: InvokeFn) => {
+      if (channel === 'cogseed.invoke') invokeHandler = fn;
+    },
     on: (channel: string, fn: StreamStartFn | StreamCancelFn) => {
       if (channel === 'cogseed.streamStart') streamStartHandler = fn as StreamStartFn;
       if (channel === 'cogseed.streamCancel') streamCancelHandler = fn as StreamCancelFn;
@@ -52,7 +60,7 @@ vi.mock('../../../src/main/features/group_chat', () => ({
     groupChatMock.resolveSendStarted?.();
     await new Promise<void>((resolve) => { groupChatMock.releaseSend = resolve; });
     groupChatMock.resolveSendFinished?.();
-    return { ok: true };
+    return groupChatMock.sendResult;
   }),
   retryFailedTurn: vi.fn(async (input: unknown) => {
     groupChatMock.retryCalls.push(input);
@@ -82,10 +90,12 @@ beforeEach(async () => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   streamStartHandler = null;
   streamCancelHandler = null;
+  invokeHandler = null;
   groupChatMock.subscribers.clear();
   groupChatMock.quiescent = false;
   groupChatMock.releaseSend = null;
   groupChatMock.sendCalls.length = 0;
+  groupChatMock.sendResult = { ok: true };
   groupChatMock.retryCalls.length = 0;
   groupChatMock.editCalls.length = 0;
   groupChatMock.sendStarted = new Promise<void>((resolve) => { groupChatMock.resolveSendStarted = resolve; });
@@ -113,6 +123,95 @@ async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void>
 }
 
 describe('ipc › conversations.sendStream', () => {
+  it('forwards the server-owned active floor route through invoke and stream IPC', async () => {
+    if (!invokeHandler || !streamStartHandler) throw new Error('ipc handlers not registered');
+    const invokeRun = invokeHandler(
+      { sender: trustedIpcSender() },
+      {
+        channel: 'groupChat.send',
+        payload: {
+          cid: 'c123abc',
+          content: 'continue',
+          recipient_agent_id: 'agent-floor-1',
+          recipient_origin: 'active_floor',
+        },
+      },
+    );
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.sendCalls.at(-1)).toEqual({
+      userId: TEST_UID,
+      cid: 'c123abc',
+      text: 'continue',
+      recipient_agent_id: 'agent-floor-1',
+      recipient_origin: 'active_floor',
+    });
+    groupChatMock.releaseSend?.();
+    await expect(invokeRun).resolves.toMatchObject({ ok: true });
+
+    groupChatMock.sendStarted = new Promise<void>((resolve) => { groupChatMock.resolveSendStarted = resolve; });
+    const streamRun = streamStartHandler(
+      { sender: trustedIpcSender({ isDestroyed: () => false, send: vi.fn() }) },
+      {
+        requestId: 'active-floor-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'continue',
+          recipient_agent_id: 'agent-floor-1',
+          recipient_origin: 'active_floor',
+        },
+      },
+    );
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.sendCalls.at(-1)).toEqual({
+      userId: TEST_UID,
+      cid: 'c123abc',
+      text: 'continue',
+      recipient_agent_id: 'agent-floor-1',
+      recipient_origin: 'active_floor',
+    });
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await streamRun;
+  });
+
+  it('rejects an unknown recipient origin through invoke and stream IPC', async () => {
+    if (!invokeHandler || !streamStartHandler) throw new Error('ipc handlers not registered');
+    const invokeRes = await invokeHandler(
+      { sender: trustedIpcSender() },
+      {
+        channel: 'groupChat.send',
+        payload: {
+          cid: 'c123abc',
+          content: 'continue',
+          recipient_agent_id: 'agent-floor-1',
+          recipient_origin: 'invented',
+        },
+      },
+    );
+    expect(invokeRes).toMatchObject({ ok: false, error: 'invalid recipient route' });
+
+    const sent = vi.fn();
+    await streamStartHandler(
+      { sender: trustedIpcSender({ isDestroyed: () => false, send: sent }) },
+      {
+        requestId: 'unknown-origin-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'continue',
+          recipient_agent_id: 'agent-floor-1',
+          recipient_origin: 'invented',
+        },
+      },
+    );
+    expect(groupChatMock.sendCalls).toEqual([]);
+    expect(sent).toHaveBeenCalledWith(
+      'stream:unknown-origin-request',
+      expect.objectContaining({ type: 'error', text: 'invalid recipient route' }),
+    );
+  });
+
   it('forwards a validated structured Agent selection to the group-chat facade', async () => {
     if (!streamStartHandler) throw new Error('stream handler not registered');
     const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
@@ -142,6 +241,140 @@ describe('ipc › conversations.sendStream', () => {
     groupChatMock.quiescent = true;
     groupChatMock.releaseSend?.();
     await run;
+  });
+
+  it('forwards a validated member / mention selection with per-source configs', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'member-selection-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: '@Codex 看这个',
+          member_agent_ids: ['agent-codex-1', 'agent-task-2', 'agent-codex-1'],
+          mention_agent_ids: ['agent-codex-1'],
+          execution_configs: {
+            internal: { provider: 'deepseek', model: 'deepseek-v4-pro', effort: 'high' },
+            'agent-codex-1': { model: 'gpt-5.6-sol' },
+          },
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.sendCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      text: '@Codex 看这个',
+      // 名单去重后原样下发；形状之外的语义校验由 group-chat facade 负责。
+      member_agent_ids: ['agent-codex-1', 'agent-task-2'],
+      mention_agent_ids: ['agent-codex-1'],
+      execution_configs: {
+        internal: { provider: 'deepseek', model: 'deepseek-v4-pro', effort: 'high' },
+        'agent-codex-1': { model: 'gpt-5.6-sol' },
+      },
+    }]);
+
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+  });
+
+  it('rejects malformed member selections before dispatch', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    for (const payload of [
+      { member_agent_ids: ['../escape'] },
+      { member_agent_ids: ['ok-agent', 42] },
+      { mention_agent_ids: 'agent-codex-1' },
+      { execution_configs: ['internal'] },
+      { member_agent_ids: Array.from({ length: 21 }, (_, i) => `agent-${i}`) },
+    ]) {
+      groupChatMock.sendCalls.length = 0;
+      await streamStartHandler(
+        { sender: trustedIpcSender({ isDestroyed: () => false, send: vi.fn() }) },
+        {
+          requestId: `bad-member-${Math.random().toString(36).slice(2, 8)}`,
+          channel: 'conversations.sendStream',
+          payload: { cid: 'c123abc', content: 'hello', ...payload },
+        },
+      );
+      expect(groupChatMock.sendCalls).toEqual([]);
+    }
+  });
+
+  it('forwards a submit request id and rejects malformed ones (EC-07)', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const run = streamStartHandler(
+      { sender: trustedIpcSender({ isDestroyed: () => false, send: vi.fn() }) },
+      {
+        requestId: 'submit-id-request',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'hello', submit_request_id: 'req_abc12345' },
+      },
+    );
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.sendCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      text: 'hello',
+      submit_request_id: 'req_abc12345',
+    }]);
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+
+    for (const bad of ['has space', 'x'.repeat(65), 'req/../escape', 42]) {
+      groupChatMock.sendCalls.length = 0;
+      await streamStartHandler(
+        { sender: trustedIpcSender({ isDestroyed: () => false, send: vi.fn() }) },
+        {
+          requestId: `bad-submit-${Math.random().toString(36).slice(2, 8)}`,
+          channel: 'conversations.sendStream',
+          payload: { cid: 'c123abc', content: 'hello', submit_request_id: bad },
+        },
+      );
+      expect(groupChatMock.sendCalls).toEqual([]);
+    }
+  });
+
+  it('relays the exact acceptance receipt on both first acceptance and replay', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    groupChatMock.quiescent = true;
+    groupChatMock.sendResult = {
+      ok: true,
+      accepted: true,
+      cid: 'c123abc',
+      submit_request_id: 'req_receipt123',
+    };
+
+    for (const requestId of ['acceptance-first', 'acceptance-replay']) {
+      groupChatMock.sendStarted = new Promise<void>((resolve) => { groupChatMock.resolveSendStarted = resolve; });
+      const sent = vi.fn();
+      const run = streamStartHandler(
+        { sender: trustedIpcSender({ isDestroyed: () => false, send: sent }) },
+        {
+          requestId,
+          channel: 'conversations.sendStream',
+          payload: {
+            cid: 'c123abc',
+            content: 'hello',
+            submit_request_id: 'req_receipt123',
+          },
+        },
+      );
+      await groupChatMock.sendStarted;
+      groupChatMock.releaseSend?.();
+      await run;
+      expect(sent).toHaveBeenCalledWith(`stream:${requestId}`, {
+        type: 'accepted',
+        accepted: true,
+        cid: 'c123abc',
+        submit_request_id: 'req_receipt123',
+      });
+    }
   });
 
   it('rejects malformed structured Agent routes before dispatch', async () => {

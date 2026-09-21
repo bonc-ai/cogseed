@@ -273,7 +273,14 @@ describe('P3394CogseedRuntimeAdapter real backend wiring', () => {
     const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 20 });
     await adapter.openSession({ session_id: 'ses-bridge-1', agent_id: 'cogseed-agent' });
     const { task_id } = await adapter.deliver(envelope() as never);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    // 第一次运行抛错后后端才把任务标成 recoverable；等这个可观察状态，而不是
+    // 猜一个时长——满载时 80ms 不够，resume 会以 p3394_no_recoverable_task 失败。
+    await vi.waitFor(async () => {
+      const snapshot = await adapter.snapshot('ses-bridge-1');
+      const tasks = (snapshot.state as { tasks: Array<{ status: string }> }).tasks;
+      expect(tasks.some((task) => task.status === 'recoverable')).toBe(true);
+    }, { timeout: 10_000 });
 
     // Swap in a completing runtime for the resumed run.
     runtime.run.mockImplementation(async function* () {

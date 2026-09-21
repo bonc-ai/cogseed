@@ -12,6 +12,8 @@ const resolveCogSeedAgentExecutionContext = vi.fn(async () => ({
   interactive: true,
   runtime: { kind: 'in_process' as const },
 }));
+const readGroupChatRun = vi.fn(async () => null as any);
+const recordRunDispatch = vi.fn(async () => null);
 
 vi.mock('../../../../src/main/features/cogseed_backend/runtime-controller', () => ({
   cogseedRuntimeController: { startCogSeedTask, cancelCogSeedTask },
@@ -33,6 +35,10 @@ vi.mock('../../../../src/main/features/group_chat/conv_workspace', () => ({
 vi.mock('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter', () => ({
   resolveCogSeedLocalCliWorkingDir,
 }));
+vi.mock('../../../../src/main/features/group_chat/run_store', () => ({
+  readRun: readGroupChatRun,
+  recordRunDispatch,
+}));
 
 describe('CogSeed P3394 wake dispatcher', () => {
   beforeEach(() => {
@@ -40,6 +46,10 @@ describe('CogSeed P3394 wake dispatcher', () => {
     cancelCogSeedTask.mockClear();
     getConversationWorkspacePath.mockClear();
     resolveCogSeedLocalCliWorkingDir.mockClear();
+    readGroupChatRun.mockReset();
+    readGroupChatRun.mockResolvedValue(null);
+    recordRunDispatch.mockReset();
+    recordRunDispatch.mockResolvedValue(null);
     resolveCogSeedAgentExecutionContext.mockReset();
     resolveCogSeedAgentExecutionContext.mockResolvedValue({
       agentId: 'agent-1',
@@ -141,5 +151,138 @@ describe('CogSeed P3394 wake dispatcher', () => {
       conversationId: 'cid-1',
       agentId: 'external-1',
     });
+  });
+
+  it('checks the durable run stop before a late Wake can start the removed actor', async () => {
+    readGroupChatRun.mockResolvedValueOnce({
+      run_id: 'run-stopped-1',
+      status: 'running',
+      requires_sequential: false,
+      actors: [{ agent_id: 'agent-1', terminal: 'removed', reason: 'member_removed' }],
+    });
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    await expect(cogseedWakeDispatcher.dispatch('user-1', {
+      id: 'wake-late-removed',
+      conversation_id: 'cid-1',
+      execution_domain: 'group_chat',
+      execution_scope_id: 'cid-1',
+      agent_id: 'agent-1',
+      source: 'user_mention',
+      source_actor_id: 'user',
+      objective: 'Must not start after removal',
+      context_scope: ['conversation:cid-1'],
+      behavior_scope: ['user_mention'],
+      dispatch_payload: {
+        text: 'Must not start after removal',
+        run_id: 'run-stopped-1',
+      },
+      status: 'approved',
+      created_at: '2026-09-21T00:00:00.000Z',
+      updated_at: '2026-09-21T00:00:00.000Z',
+    })).rejects.toThrow(/stopped|removed/i);
+
+    expect(startCogSeedTask).not.toHaveBeenCalled();
+    expect(recordRunDispatch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a Wake references a missing or unreadable run', async () => {
+    readGroupChatRun.mockResolvedValueOnce(null);
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    await expect(cogseedWakeDispatcher.dispatch('user-1', {
+      id: 'wake-missing-ledger',
+      conversation_id: 'cid-1',
+      execution_domain: 'group_chat',
+      execution_scope_id: 'cid-1',
+      agent_id: 'agent-1',
+      source: 'user_mention',
+      source_actor_id: 'user',
+      objective: 'Must not start without its run',
+      context_scope: ['conversation:cid-1'],
+      behavior_scope: ['user_mention'],
+      dispatch_payload: { text: 'Must not start without its run', run_id: 'run-missing-1' },
+      status: 'approved',
+      created_at: '2026-09-21T00:00:00.000Z',
+      updated_at: '2026-09-21T00:00:00.000Z',
+    })).rejects.toThrow(/run.*unavailable|ledger/i);
+
+    expect(recordRunDispatch).not.toHaveBeenCalled();
+    expect(startCogSeedTask).not.toHaveBeenCalled();
+  });
+
+  it('persists the Wake dispatch before starting its backend task', async () => {
+    const before = {
+      run_id: 'run-ledger-success',
+      status: 'running',
+      actors: [{ agent_id: 'agent-1', terminal: 'pending', dispatched: [] }],
+    };
+    const after = {
+      ...before,
+      actors: [{
+        agent_id: 'agent-1',
+        terminal: 'pending',
+        dispatched: ['turn-wake-wake-ledger-success'],
+      }],
+    };
+    readGroupChatRun.mockResolvedValueOnce(before);
+    recordRunDispatch.mockResolvedValueOnce(after);
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    await cogseedWakeDispatcher.dispatch('user-1', {
+      id: 'wake-ledger-success',
+      conversation_id: 'cid-1',
+      execution_domain: 'group_chat',
+      execution_scope_id: 'cid-1',
+      agent_id: 'agent-1',
+      source: 'user_mention',
+      source_actor_id: 'user',
+      objective: 'Start only after persistence',
+      context_scope: ['conversation:cid-1'],
+      behavior_scope: ['user_mention'],
+      dispatch_payload: { text: 'Start only after persistence', run_id: 'run-ledger-success' },
+      status: 'approved',
+      created_at: '2026-09-21T00:00:00.000Z',
+      updated_at: '2026-09-21T00:00:00.000Z',
+    });
+
+    expect(recordRunDispatch).toHaveBeenCalledWith(
+      'user-1',
+      'cid-1',
+      'run-ledger-success',
+      'agent-1',
+      'turn-wake-wake-ledger-success',
+    );
+    expect(recordRunDispatch.mock.invocationCallOrder[0])
+      .toBeLessThan(startCogSeedTask.mock.invocationCallOrder[0]);
+  });
+
+  it('does not start a Wake task when durable dispatch persistence fails', async () => {
+    readGroupChatRun.mockResolvedValueOnce({
+      run_id: 'run-ledger-failure',
+      status: 'running',
+      actors: [{ agent_id: 'agent-1', terminal: 'pending', dispatched: [] }],
+    });
+    recordRunDispatch.mockResolvedValueOnce(null);
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    await expect(cogseedWakeDispatcher.dispatch('user-1', {
+      id: 'wake-ledger-failure',
+      conversation_id: 'cid-1',
+      execution_domain: 'group_chat',
+      execution_scope_id: 'cid-1',
+      agent_id: 'agent-1',
+      source: 'user_mention',
+      source_actor_id: 'user',
+      objective: 'Do not start after write failure',
+      context_scope: ['conversation:cid-1'],
+      behavior_scope: ['user_mention'],
+      dispatch_payload: { text: 'Do not start after write failure', run_id: 'run-ledger-failure' },
+      status: 'approved',
+      created_at: '2026-09-21T00:00:00.000Z',
+      updated_at: '2026-09-21T00:00:00.000Z',
+    })).rejects.toThrow(/dispatch.*persist|ledger/i);
+
+    expect(startCogSeedTask).not.toHaveBeenCalled();
   });
 });

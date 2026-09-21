@@ -38,7 +38,9 @@ describe('conversation user-message editing', () => {
     expect(submit).toContain('_removeRenderedHistoryFrom(state.msgDiv);');
     expect(submit).toContain('loadConversationHistory(state.cid, { preserveScroll: true })');
     expect(extractFunction('createChatController')).toContain('!isFailedTurnRetry && !isMessageEdit');
-    expect(source).toContain('if (!statAgentId && !isInternalReplay)');
+    // Task 8 收紧了模型守卫：结构化派发（成员/点名）不再触发自动 CLI 降级，
+    // 因此这里锚定重构后的完整条件，而不是旧的二元判断。
+    expect(source).toContain('if (!statAgentId && !isInternalReplay && !hasStructuredDispatch)');
   });
 
   it('guards Cmd/Ctrl+Enter and IME composition in the inline editor', () => {
