@@ -426,8 +426,7 @@ describe('locale 覆盖', () => {
     'notes_save_failed', 'notes_failed', 'sync_structure_only', 'headings_ask',
     'headings_running', 'headings_title', 'headings_desc', 'headings_adopt',
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short',
-    'headings_none', 'compare', 'compare_running', 'compare_prompt',
-    'compare_result', 'compare_no_rewrite', 'compare_failed', 'panel_hint',
+    'headings_none', 'panel_hint',
     'meta_full', 'save_duplicate_file',
   ];
 
@@ -596,6 +595,13 @@ describe('查看器集成契约', () => {
     expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}?includeReview: state\.scanWithReview === true/);
     // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
     expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
+  });
+
+  it('「检索对比」已删除（按钮、函数、状态与分支一并移除）', () => {
+    expect(panelSrc).not.toContain("data-atc-action': 'compare-search'");
+    expect(panelSrc).not.toContain('runCompareSearch');
+    expect(panelSrc).not.toContain('compareBusy');
+    expect(panelSrc).not.toContain('transcript.query.compare');
   });
 
   it('「预览清理版」已删除；「回滚」并入「对照原文」；弹窗动作必须取 value 而非 id', () => {
