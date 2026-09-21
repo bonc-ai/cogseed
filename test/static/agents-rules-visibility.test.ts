@@ -43,10 +43,29 @@ const INJECTED_FILES = ['AGENTS.md', 'CLAUDE.md'];
  * *mentions* these concepts must not satisfy the check (see the self-check test).
  */
 const REQUIRED_RULE_MARKERS = [
-  'Shared Renderer primitives are',
+  'Shared Renderer APIs are grouped by role',
   'uiModalController(',
+  'Renderer structural component policy uses three explicit states',
   'freezes the legacy raw-control baseline',
   'cogseed-component-change',
+];
+
+const SHARED_UI_SOURCES = [
+  'src/renderer/modules/dialogs.js',
+  'src/renderer/modules/icons.js',
+  'src/renderer/modules/ui-button.js',
+  'src/renderer/modules/ui-card.js',
+  'src/renderer/modules/ui-drawer.js',
+  'src/renderer/modules/ui-empty.js',
+  'src/renderer/modules/ui-form.js',
+  'src/renderer/modules/ui-modal.js',
+  'src/renderer/modules/ui-page-header.js',
+  'src/renderer/modules/ui-segmented-control.js',
+  'src/renderer/modules/ui-sidebar-tools.js',
+  'src/renderer/modules/ui-status.js',
+  'src/renderer/modules/ui-structure.js',
+  'src/renderer/modules/ui-tabs.js',
+  'src/renderer/modules/ui-user-menu.js',
 ];
 
 function readIfExists(relativePath: string): string {
@@ -85,6 +104,20 @@ function withoutCodeSpans(text: string): string {
 /** Paired marker names worth checking, e.g. `<!-- BEGIN: some-block -->` on its own line. */
 function beginMarkerNames(text: string): string[] {
   return [...withoutCodeSpans(text).matchAll(/<!--\s*BEGIN:\s*([A-Za-z0-9_.-]+)/g)].map((m) => m[1]!);
+}
+
+function sharedUiApiNames(): string[] {
+  const names = new Set<string>();
+  for (const relativePath of SHARED_UI_SOURCES) {
+    const source = readIfExists(relativePath);
+    for (const match of source.matchAll(/(?:^|\n)(?:async\s+)?function\s+(ui[A-Z][A-Za-z0-9_]*)\b/g)) {
+      names.add(match[1]!);
+    }
+    for (const match of source.matchAll(/(?:root|global|window)\.(ui[A-Z][A-Za-z0-9_]*)\s*=/g)) {
+      names.add(match[1]!);
+    }
+  }
+  return [...names].sort();
 }
 
 describe('AI 注入文件必须带上共享组件规范', () => {
@@ -141,13 +174,22 @@ describe('AI 注入文件必须带上共享组件规范', () => {
     }
   });
 
+  it('共享 UI API 清单覆盖 Renderer 实际公开的全部 ui* 接口', () => {
+    const missing = sharedUiApiNames().filter((name) => !localAgents.includes(`${name}(`));
+    expect(
+      missing,
+      `AGENTS.md 的共享 UI 清单与 Renderer 导出漂移，缺少：${missing.join('、') || '（无）'}`,
+    ).toEqual([]);
+  });
+
   it('绊线自检：判据本身能识别违规（写坏的判据不能让闸门静默放行）', () => {
     // 规则判据：缺任一标记即为违规
     expect(hasAllRules('Renderer buttons go through uiButton(...)')).toBe(false);
     expect(
       hasAllRules(
-        'Shared Renderer primitives are `uiButton(...)`, `uiIconButton(...)`, … `uiModalController(...)`, '
-          + '`uiPageHeader(...)`; … follow `.agents/skills/cogseed-component-change/SKILL.md`; … '
+        'Shared Renderer APIs are grouped by role: `uiButton(...)`, `uiIconButton(...)`, … `uiModalController(...)`, '
+          + '`uiPageHeader(...)`; Renderer structural component policy uses three explicit states; … '
+          + 'follow `.agents/skills/cogseed-component-change/SKILL.md`; … '
           + '`test/renderer/shared-ui-adoption-guard.test.ts` freezes the legacy raw-control baseline;',
       ),
     ).toBe(true);
