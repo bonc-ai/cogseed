@@ -3890,6 +3890,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // boot wiring + features/marketplace_reconcile.ts::subscribeReconcileStatus.
   'marketplace.reconcileStatus': async () => marketplaceReconcile.getReconcileStatus(),
 
+  // specs/010 FR-034 `[FROZEN]`：「用户打开目录页时」也是一个检查触发时机。
+  // 只转达时机，不带任何参数——频率闸门（6 小时）仍在 `checkServerUpdatesForInstalls` 里，
+  // 本通道不能用来绕过它。不回检查结果：检查不打断用户（T107：只加必需通道）。
+  'marketplace.requestCheck': async () => marketplaceReconcile.requestInstallReconcile('catalog-opened'),
+
   // Persistent listing-grid cache so cold starts don't show a blank panel. Renderer hydrates
   // from this on `openMarketplace` and writes back after every fresh /list response. See
   // `marketplace_cache.ts::{getListingsCache,setListingsCache}`.

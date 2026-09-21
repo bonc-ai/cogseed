@@ -38,6 +38,7 @@ import {
   type SkillInstall,
 } from './marketplace_installs';
 import { postJson } from './marketplace';
+import { getSkillMetadata } from './marketplace/metadata-adapter';
 
 const log = createLogger('builtin-marketplace');
 const BUILTIN_CREATE_UID = '0';
@@ -891,31 +892,24 @@ async function _resolveAgentInstall(uid: string, row: AgentInstall): Promise<Age
 async function _resolveSkillInstall(uid: string, row: SkillInstall): Promise<SkillInstall | null> {
   const catalog = await _findCatalogRow('skills', row.id, '');
   if (!catalog?.id) return null;
-  const detail = await postJson<{
-    bundle_url?: string;
-    version?: string;
-    published_at?: number;
-    updated_at?: number;
-    create_uid?: string;
-    default_install?: boolean;
-    status?: string;
-    state?: string;
-  }>('/marketplace/skills/bundle', { id: catalog.id });
+  // 元信息经适配层。A-02 按 F4 收口后只回不可变字节，不再兼任详情接口。
+  const detail = await getSkillMetadata(catalog.id);
   return {
     id: catalog.id,
-    version: normalizeInstallVersion(detail.version || catalog.version),
-    published_at: typeof detail.published_at === 'number'
+    version: normalizeInstallVersion(detail?.version || catalog.version),
+    published_at: typeof detail?.published_at === 'number'
       ? detail.published_at
       : (typeof catalog.published_at === 'number' ? catalog.published_at : 0),
-    ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : (
+    ...(typeof detail?.updated_at === 'number' ? { updated_at: detail.updated_at } : (
       typeof catalog.updated_at === 'number' ? { updated_at: catalog.updated_at } : {}
     )),
-    bundle_url: detail.bundle_url || '',
+    // Hub 内容没有对象存储地址；字节由对账按 {content_id, version} 取。
+    bundle_url: '',
     installed_at: row.installed_at || Date.now(),
-    create_uid: detail.create_uid || catalog.create_uid || BUILTIN_CREATE_UID,
-    default_install: detail.default_install === true || catalog.default_install === true || catalog.default_install === 1,
-    ...((detail.status || detail.state || catalog.status || catalog.state)
-      ? { status: detail.status || detail.state || catalog.status || catalog.state }
+    create_uid: detail?.create_uid || catalog.create_uid || BUILTIN_CREATE_UID,
+    default_install: detail?.default_install === true || catalog.default_install === true || catalog.default_install === 1,
+    ...((detail?.status || catalog.status || catalog.state)
+      ? { status: detail?.status || catalog.status || catalog.state }
       : {}),
   };
 }
