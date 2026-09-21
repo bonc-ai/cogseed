@@ -155,6 +155,13 @@
     'trash-2': '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"></path>',
     'database': '<ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path>',
     'hard-drive': '<path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M6 12h.01M10 12h.01"></path>',
+    // 文本对齐与格式刷：笔记编辑器的工具条目原先用箭头/方块类字符当图标
+    // （2026-09-21 迁移，规范要求图标一律来自本文件）。
+    'align-left': '<path d="M21 6H3M15 12H3M17 18H3"></path>',
+    'align-center': '<path d="M21 6H3M17 12H7M19 18H5"></path>',
+    'align-right': '<path d="M21 6H3M21 12H9M21 18H7"></path>',
+    'align-justify': '<path d="M21 6H3M21 12H3M21 18H3"></path>',
+    brush: '<path d="M4 20c3 0 4-2 4-4a3 3 0 0 0-3-3c-2.7 0-4 2-3 7 2-1 2-3 2-3z"></path><path d="M9.5 14.5 19 5a2 2 0 0 0-3-3l-9.5 9.5"></path>',
   };
 
   // Multi-color messaging marks bypass the stroke-based ui-icon wrapper. The
