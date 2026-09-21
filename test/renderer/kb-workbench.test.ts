@@ -1118,7 +1118,8 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
   it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
     // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
     // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
-    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    // 层序走 tokens.css 的 --z-*（2026-09-21 迁移：原先写死 z-index: 40）
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: var\(--z-sticky\); \}/);
     expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
     // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
     expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
