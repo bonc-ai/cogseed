@@ -2538,8 +2538,8 @@
       <div class="kb-wb-right-card-title">
         <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
         <span class="kb-wb-card-actions">
-          ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-          ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}        </span>
+          ${_uiButton({ label: _tr('kb.workbench.gen_mindmap', '生成脑图'), role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+          ${_uiButton({ label: _tr('kb.workbench.gen_quiz', '生成测验'), role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}        </span>
       </div>
       <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
       <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>`;
@@ -2646,23 +2646,23 @@
     const mm = summary.mindmap || {};
     const hasMm = !!(mm.root && Array.isArray(mm.kids) && mm.kids.length);
     const ok = summary.source !== 'degraded' || docs.some((d) => d.text);
-    const srcTag = summary.source === 'cached' ? ' <span class="kb-wb-card-src">(缓存)</span>'
-      : summary.source === 'degraded' ? ' <span class="kb-wb-card-src">(降级)</span>' : '';
+    const srcTag = summary.source === 'cached' ? ` <span class="kb-wb-card-src">${_esc(_tr('kb.workbench.analysis_cached', '(缓存)'))}</span>`
+      : summary.source === 'degraded' ? ` <span class="kb-wb-card-src">${_esc(_tr('kb.workbench.analysis_degraded', '(降级)'))}</span>` : '';
 
     // 生成脑图 / 生成测验与解析成败无关：它们只用库内文档（禁用与否由 _bindAnalysisActions 按库是否为空决定）
     const actions = `<span class="kb-wb-card-actions">
-      ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-      ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
-      ${_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}    </span>`;
+      ${_uiButton({ label: _tr('kb.workbench.gen_mindmap', '生成脑图'), role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+      ${_uiButton({ label: _tr('kb.workbench.gen_quiz', '生成测验'), role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}
+      ${_uiButton({ label: _tr('kb.workbench.expand', '展开'), role: 'ghost', size: 'sm', iconEnd: 'chevron-down', className: 'kb-wb-analysis-toggle', attrs: { id: 'kb-wb-analysis-toggle', 'aria-expanded': 'false' } })}    </span>`;
 
     let html = `<div class="kb-wb-right-card-title">
-      <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库${srcTag}<span class="kb-wb-card-src">（${docs.length} 个文档）</span></span>
+      <span><span class="kb-wb-ai-chip"></span>${_esc(_tr('kb.workbench.analysis_title', 'AI 解析本知识库'))}${srcTag}<span class="kb-wb-card-src">${_esc(_tr('kb.workbench.analysis_docs', '（{count} 个文档）', { count: docs.length }))}</span></span>
       ${actions}
     </div>`;
 
     if (ok) {
       if (oneLiner) {
-        html += `<div class="kb-wb-one-liner"><span class="kb-wb-one-liner-tag">${_icon('info')} 一句话总结</span><span class="kb-wb-one-liner-text">${_esc(oneLiner)}</span></div>`;
+        html += `<div class="kb-wb-one-liner"><span class="kb-wb-one-liner-tag">${_icon('info')} ${_esc(_tr('kb.workbench.analysis_one_liner', '一句话总结'))}</span><span class="kb-wb-one-liner-text">${_esc(oneLiner)}</span></div>`;
       }
       html += `<div class="kb-wb-analysis-body" id="kb-wb-analysis-body" hidden>`;
       for (const d of docs) {
@@ -2678,7 +2678,7 @@
     } else {
       const degNote = document.getElementById('kb-qa-degraded-note');
       if (degNote) degNote.hidden = false;
-      html += `<div class="kb-wb-right-placeholder">${_esc(oneLiner || 'AI 解析失败，已降级为文件清单。')}</div>`;
+      html += `<div class="kb-wb-right-placeholder">${_esc(oneLiner || _tr('kb.workbench.analysis_failed', 'AI 解析失败，已降级为文件清单。'))}</div>`;
       if (docs.length) {
         html += `<div class="kb-wb-doc-list">${docs.map((d) =>
           `<div class="kb-wb-doc-row"><span class="kb-wb-doc-name">${_esc(d.name)}</span></div>`).join('')}</div>`;
@@ -2695,7 +2695,7 @@
       const open = body.hidden;
       body.hidden = !open;
       btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      _setUiButtonPresentation(btn, open ? '收起' : '展开', open ? 'chevron-up' : 'chevron-down');
+      _setUiButtonPresentation(btn, open ? _tr('kb.workbench.collapse', '收起') : _tr('kb.workbench.expand', '展开'), open ? 'chevron-up' : 'chevron-down');
     });
     card.querySelectorAll('[data-kb-anchor]').forEach((el) => {
       // 摘要里提到的文件 = "打开这份文件"，不是引用跳转：不带 chunkIdx（没有真实
@@ -3769,12 +3769,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     const s = _state.mmScope;
     if (s && s.scope === 'text') {
-      if (typeof uiToast === 'function') uiToast('这张脑图来自对话回答，无法重新生成', { variant: 'warning' });
+      if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_refresh_no_source', '这张脑图来自对话回答，无法重新生成'), { variant: 'warning' });
       return;
     }
     _mmGenerating = true;
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒，长文档最长约 3 分钟）…</div>';
+    if (wrap) wrap.innerHTML = `<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">${_esc(_tr('kb.workbench.mm_regenerating', '正在重新生成脑图（本地模型推理中，约 30–60 秒，长文档最长约 3 分钟）…'))}</div>`;
     window.cogseed.invoke('kb.mindmap', (s && s.doc)
       ? { doc: s.doc, force: true }
       : {
@@ -3792,7 +3792,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             w.innerHTML = '<div class="kb-mm-fail">主进程未按「本文档」作用域重新生成（返回：' + _esc(res.scope || '未知') + '），已丢弃。请完全退出 CogSeed 后重启再试。'
               + '<div class="kb-mm-refresh-hint" style="font-size:12px;margin-top:8px">原脑图已保留，未受影响</div></div>';
           }
-          if (typeof uiToast === 'function') uiToast('重新生成未按本文档作用域，已保留原脑图', { variant: 'warning' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_refresh_scope_mismatch', '重新生成未按本文档作用域，已保留原脑图'), { variant: 'warning' });
           return;
         }
         if (res.source === 'degraded') {
@@ -3803,7 +3803,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             const retryBtn = wrap.querySelector('.kb-mm-retry-btn');
             if (retryBtn) retryBtn.addEventListener('click', _mmRefreshMindmap);
           }
-          if (typeof uiToast === 'function') uiToast('重新生成未完成，已保留原脑图', { variant: 'warning' });
+          if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_refresh_incomplete', '重新生成未完成，已保留原脑图'), { variant: 'warning' });
           return;
         }
         _state.lastMind = res.root;
@@ -3813,12 +3813,12 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         _state.mmSearchHits = new Set();
         _rerenderMindmaps();
         _mmFitToStage();
-        if (typeof uiToast === 'function') uiToast('脑图已重新生成', { variant: 'success' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_refreshed', '脑图已重新生成'), { variant: 'success' });
       })
       .catch(() => {
         _mmGenerating = false;
         _rerenderMindmaps();
-        if (typeof uiToast === 'function') uiToast('重新生成失败，请稍后重试', { variant: 'warning' });
+        if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.mm_refresh_failed', '重新生成失败，请稍后重试'), { variant: 'warning' });
       });
   }
 
@@ -4231,17 +4231,17 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     if (focusBtn) {
       const on = _state.mmFocus !== null;
       focusBtn.classList.toggle('is-active', on);
-      focusBtn.title = on ? '点击一级分支切换聚焦分支 · 点此取消聚焦' : '聚焦分支：点击一级分支只看该分支';
+      focusBtn.title = on ? _tr('kb.workbench.mm_focus_on_tip', '点击一级分支切换聚焦分支 · 点此取消聚焦') : _tr('kb.workbench.mm_focus_off_tip', '聚焦分支：点击一级分支只看该分支');
       focusBtn.setAttribute('aria-pressed', String(on));
-      _setUiButtonPresentation(focusBtn, on ? '聚焦中' : '聚焦', 'target');
+      _setUiButtonPresentation(focusBtn, on ? _tr('kb.workbench.mm_focused', '聚焦中') : _tr('kb.workbench.mm_focus', '聚焦'), 'target');
     }
     const layoutBtn = document.getElementById('kb-mm-layout-btn');
-    if (layoutBtn) _setUiButtonPresentation(layoutBtn, _state.mmMode === 'org' ? '组织结构' : '思维导图', 'layout-grid');
+    if (layoutBtn) _setUiButtonPresentation(layoutBtn, _state.mmMode === 'org' ? _tr('kb.workbench.mm_org', '组织结构') : _tr('kb.workbench.mm_mind', '思维导图'), 'layout-grid');
     const bgBtn = document.getElementById('kb-mm-bg-btn');
     if (bgBtn) {
-      const names = { dots: '点阵', plain: '纯白', none: '无' };
-      _setUiButtonPresentation(bgBtn, names[_state.mmBg] || '背景', 'palette');
-      bgBtn.title = '背景切换（点阵/纯白/无）';
+      const names = { dots: _tr('kb.workbench.mm_bg_dots', '点阵'), plain: _tr('kb.workbench.mm_bg_plain', '纯白'), none: _tr('kb.workbench.mm_bg_none', '无') };
+      _setUiButtonPresentation(bgBtn, names[_state.mmBg] || _tr('kb.workbench.mm_bg', '背景'), 'palette');
+      bgBtn.title = _tr('kb.workbench.mm_bg_tip', '背景切换（点阵/纯白/无）');
     }
     const outlineBtn = document.getElementById('kb-mm-outline-btn');
     if (outlineBtn) {
@@ -4258,8 +4258,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const hint = document.querySelector('#kb-mm-overlay-stage .kb-mm-overlay-stage-hint');
     if (hint) {
       hint.textContent = _state.mmViewMode === 'outline'
-        ? '点击行可跳转到对应节点 · 折叠的分支不展开'
-        : '滚轮缩放 · 拖拽平移 · 一级分支点击聚焦 · −/+ 折叠 · 双击重命名';
+        ? _tr('kb.workbench.mm_outline_tip', '点击行可跳转到对应节点 · 折叠的分支不展开')
+        : _tr('kb.workbench.mm_canvas_tip', '滚轮缩放 · 拖拽平移 · 一级分支点击聚焦 · −/+ 折叠 · 双击重命名');
     }
   }
 
@@ -5527,8 +5527,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
               <div class="kb-wb-right-card-title">
                 <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
                 <span class="kb-wb-card-actions">
-                  ${_uiButton({ label: '生成脑图', role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
-                  ${_uiButton({ label: '生成测验', role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}                </span>
+                  ${_uiButton({ label: _tr('kb.workbench.gen_mindmap', '生成脑图'), role: 'secondary', size: 'sm', icon: 'brain-circuit', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-mm' } })}
+                  ${_uiButton({ label: _tr('kb.workbench.gen_quiz', '生成测验'), role: 'secondary', size: 'sm', icon: 'file-text', className: 'kb-wb-analysis-action', attrs: { id: 'kb-wb-gen-quiz' } })}                </span>
               </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
               <div class="kb-wb-right-placeholder">${_uiButton({ label: '生成 AI 解析', role: 'primary', size: 'sm', icon: 'sparkles', attrs: { id: 'kb-analyze-btn' } })}</div>
