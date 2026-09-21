@@ -466,6 +466,23 @@ describe('personal_ontology_groups › @verified field value marker', () => {
     const after = groups.listGroupHistory('test-user-groups', gid);
     expect(after.length).toBe(2); // 1 + 恢复时自动留档的被替换版
   });
+
+  it('round-trips snapshot file names back to parseable ISO timestamps', async () => {
+    const groups = await loadModule();
+    const created = await groups.createGroup('test-user-groups', '时间还原组');
+    const gid = created.group!.group_id;
+    await groups.appendFieldValue('test-user-groups', gid, '版本', '第一版内容', '手动');
+    await groups.appendFieldValue('test-user-groups', gid, '版本', '第二版内容', '手动');
+
+    const history = groups.listGroupHistory('test-user-groups', gid);
+    expect(history.length).toBeGreaterThan(0);
+    // 修复前（2026-09-21 审查）：文件名反解把 13/19 位写反，还原出
+    // `T12.34:56:789Z` 这类无效时间，前端 new Date() 得 NaN。
+    for (const entry of history) {
+      expect(Number.isNaN(Date.parse(entry.savedAt))).toBe(false);
+      expect(entry.savedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+  });
 });
 
 describe('projection-knowledge › restricted values stay out of ontology facts', () => {

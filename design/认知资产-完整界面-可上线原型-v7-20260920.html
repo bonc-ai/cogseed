@@ -344,11 +344,11 @@
 <script>
 /* ═══════════════════ 数据（唯一源，四页联动） ═══════════════════ */
 let assets = [
-  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的开发者，大二在读实习生（2026-09 时为大二）。涉及程序配置、数值类问题按内部技术排查口径处理，给出可核实的排查步骤，不按终端用户口径。',scope:'全局',app:'程序配置、数值排查、技术方案讨论',forbid:'对外部客户沟通的场景',vis:'不限制',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,mounted:true,
-   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',scope:'全局',app:'程序配置、数值排查',forbid:'对客户沟通',how:'你手动补了学生身份背景',prev:'你是 CogSeed 的开发者，大二在读实习生…按内部技术排查口径处理。',note:'补充学生身份背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'程序配置、数值排查',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'你是 CogSeed 的开发者，大二在读实习生。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'系统迁移：从旧数据里搬过来',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
+  {id:'a1',cat:'关于我',fam:'开发者身份',title:'你是 CogSeed 的开发者',v:3,vv:['v1','v2','v3'],stmt:'你是 CogSeed 的长期使用者，偏好技术型回答。涉及程序配置、数值类问题时给出可核实的排查步骤，附上判断依据。',scope:'全局',app:'程序配置、数值排查、技术方案讨论',forbid:'对外部客户沟通的场景',vis:'不限制',uses:12,last:'今天',status:'active',mat:'已实证',kstar:true,mounted:true,
+   vers:[{v:3,inuse:true,src:'手动编辑',when:'昨天',scope:'全局',app:'程序配置、数值排查',forbid:'对客户沟通',how:'你手动补充了背景说明',prev:'你是 CogSeed 的长期使用者，偏好技术型回答。',note:'补充背景说明',eff:'有效'},{v:2,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'程序配置、数值排查',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'你是 CogSeed 的长期使用者。',note:'首次确认',eff:'有效'},{v:1,inuse:false,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'系统迁移：从旧数据里搬过来',prev:'（空）',note:'内容未变（系统迁移/搬运）',eff:null,noise:true}],
    proofs:[{k:'usage',when:'今天',where:'对话《时间线记录标注来源》',ver:3,rate:null},{k:'carry',when:'昨天',where:'对话《对话中引用认知资产》',ver:3},{k:'usage',when:'昨天',where:'对话《企业版打包发布》',ver:3,rate:'有用'},{k:'version',when:'昨天',ver:3},{k:'create',when:'上个月',ver:1}]},
-  {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按内部技术排查口径回答，不按终端用户口径；必要时补基础原理但不降技术深度。',scope:'全局',app:'排查类问题',forbid:'—',vis:'不限制',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:1,inuse:true,src:'确认沉淀',when:'昨天',scope:'全局',app:'排查类问题',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'程序配置、数值类问题按内部技术排查口径回答。',note:'首次确认',eff:null}],
+  {id:'a2',cat:'关于我',fam:'开发者身份',title:'技术排查口径',v:1,vv:['v1'],stmt:'程序配置、数值类问题按技术排查口径回答，给出可核实的步骤与依据；必要时补基础原理但不降技术深度。',scope:'全局',app:'排查类问题',forbid:'—',vis:'不限制',uses:7,last:'昨天',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'确认沉淀',when:'昨天',scope:'全局',app:'排查类问题',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'程序配置、数值类问题按技术排查口径回答。',note:'首次确认',eff:null}],
    proofs:[{k:'carry',when:'昨天',where:'对话《本体增强方案讨论》',ver:1},{k:'create',when:'昨天',ver:1}]},
   {id:'a3',cat:'关于我',fam:'回复风格',title:'偏好中文简洁回复',v:2,vv:['v1','v2'],stmt:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',scope:'全局',app:'所有对话',forbid:'—',vis:'不限制',uses:8,last:'3 天前',status:'active',mat:'未验证',kstar:false,
    vers:[{v:2,inuse:true,src:'版本合并',when:'周三',scope:'全局',app:'所有对话',forbid:'—',how:'两条说法接近的资产合并成一个版本组',prev:'偏好中文简洁回复，表格旁附通俗说明，不用比喻。',note:'并入原来两条',eff:'有效'},{v:1,inuse:false,src:'确认沉淀',when:'上周',scope:'全局',app:'所有对话',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'偏好中文简洁回复。',note:'首次确认',eff:null}],
@@ -362,8 +362,8 @@ let assets = [
   {id:'a6',cat:'技能与方法',fam:'',title:'先跑测试再提交',v:1,vv:['v1'],stmt:'改动后先跑相关测试再提交；全量口径 npm run test:js 两遍一致。',scope:'代码任务',app:'改动前验证',forbid:'—',vis:'不限制',uses:5,last:'2 周前',status:'active',mat:'未验证',kstar:false,
    vers:[{v:1,inuse:true,src:'确认沉淀',when:'2 周前',scope:'代码任务',app:'改动前验证',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'改动后先跑测试再提交。',note:'首次确认',eff:null}],
    proofs:[{k:'carry',when:'2 周前',where:'对话《企业版打包发布》',ver:1},{k:'create',when:'2 周前',ver:1}]},
-  {id:'a7',cat:'模板与范例',fam:'',title:'学业方向：计算机科学',v:1,vv:['v1'],stmt:'学业方向：计算机科学，大二在读（来自「学生」模板）。',scope:'全局',app:'—',forbid:'—',vis:'不限制',uses:0,last:'',status:'active',mat:'未验证',kstar:false,
-   vers:[{v:1,inuse:true,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'安装「学生」模板带入',prev:'学业方向：计算机科学，大二在读。',note:'模板安装带入',eff:null}],proofs:[]},
+  {id:'a7',cat:'模板与范例',fam:'',title:'学业方向：计算机科学',v:1,vv:['v1'],stmt:'学业方向：计算机科学（来自「学生」模板）。',scope:'全局',app:'—',forbid:'—',vis:'不限制',uses:0,last:'',status:'active',mat:'未验证',kstar:false,
+   vers:[{v:1,inuse:true,src:'系统迁移',when:'上个月',scope:'全局',app:'—',forbid:'—',how:'安装「学生」模板带入',prev:'学业方向：计算机科学。',note:'模板安装带入',eff:null}],proofs:[]},
   {id:'a8',cat:'技能与方法',fam:'',title:'每周五汇总周报素材',v:1,vv:['v1'],stmt:'每周五下午汇总本周日报素材成一份周报草稿。',scope:'日报任务',app:'周报',forbid:'—',vis:'不限制',uses:1,last:'2 周前',status:'deleted',mat:'未验证',kstar:false,
    vers:[{v:1,inuse:true,src:'确认沉淀',when:'2 周前',scope:'日报任务',app:'周报',forbid:'—',how:'你在「待我处理」确认了这条候选',prev:'每周五汇总周报素材。',note:'首次确认',eff:null}],
    proofs:[{k:'create',when:'2 周前',ver:1}]},
@@ -404,7 +404,7 @@ let srcIssues = [{n:'飞书连接器',k:'连接器',w:'读取失败',act:['retry
 /* 个人本体：分组 → 字段 → 值（与资产是两套数据，各自有各自的动作） */
 let oto = [
   {g:'身份',items:[
-    {id:'o1',f:'身份',t:'CogSeed 的开发者，大二在读实习生',src:'候选'},
+    {id:'o1',f:'身份',t:'CogSeed 的长期使用者',src:'候选'},
     {id:'o2',f:'学业方向',t:'计算机科学',src:'导入'},
   ]},
   {g:'偏好',items:[

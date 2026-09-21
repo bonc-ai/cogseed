@@ -6985,7 +6985,10 @@ async function runActorTurnBody(
         const usedThisTurn = new Set<string>(persistedRecallCitations.map((citation) => String((citation as { asset_id?: string }).asset_id || (citation as { assetId?: string }).assetId || '')));
         const { listInjectionReceipts, recordInjectionReceipt } = await import('../recall/injection-receipt');
         for (const receipt of await listInjectionReceipts(uid, item.turnId)) {
-          if (receipt.status === 'injected' && (receipt.channel === 'agent_read' || receipt.channel === 'dispatched' as never)) {
+          // 派发使用的回执形态是 status='dispatched' + channel='projection'
+          //（channel 枚举里没有 'dispatched'，此前拿它当 channel 比较恒假——
+          // 被 commander 派给 agent 实际用了的 ★ 资产仍被误记「相关而未用」）。
+          if (receipt.status === 'dispatched' || (receipt.status === 'injected' && receipt.channel === 'agent_read')) {
             usedThisTurn.add(String(receipt.assetId));
           }
         }

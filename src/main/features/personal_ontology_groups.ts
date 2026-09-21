@@ -483,7 +483,10 @@ export function listGroupHistory(uid: string, groupId: string): Array<{ id: stri
         const text = fs.readFileSync(path.join(dir, f), 'utf8');
         return {
           id: f.slice(0, -3),
-          savedAt: f.slice(0, -3).replace(/-/g, (m, i) => (i === 4 || i === 7 ? '-' : i >= 13 ? (i === 16 ? ':' : i === 19 ? ':' : '.') : m)),
+          // 文件名把 ISO 的 `[:.]` 全换成 `-`；反解按位置还原：4/7 是日期
+          // 分隔，13/16 是时:分与分:秒的冒号，19 是毫秒点。此前 13↔19 写反，
+          // 还原出 `T12.34:56:789Z` 这类无效时间，前端 new Date() 得 NaN。
+          savedAt: f.slice(0, -3).replace(/-/g, (m, i) => (i === 4 || i === 7 ? '-' : i === 13 || i === 16 ? ':' : i === 19 ? '.' : m)),
           bytes: Buffer.byteLength(text, 'utf8'),
           preview: text.replace(/\s+/g, ' ').slice(0, 80),
         };
