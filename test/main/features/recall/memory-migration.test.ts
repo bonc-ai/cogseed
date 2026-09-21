@@ -79,4 +79,53 @@ describe('migrateLegacyMemoryToAssets', () => {
     expect(again.scannedUser).toBe(0);
     expect(again.migrated).toBe(0);
   });
+
+  // ── 审查修复回归（2026-09-21）：pending 口径 + 清空竞态 ──────────────────
+  it('does not clear the file when entries only reach the candidate pool', async () => {
+    // 修复前：pending-review（embedding 硬阻塞）也计入成功 → 文件被清空，
+    // 画像其实停在「待我处理」候选池里，用户不看候选池就等于丢失。
+    vi.doMock('../../../../src/main/features/recall/candidate-service', () => ({
+      ingestImmediateKnowledge: async () => ({ mode: 'pending-review', candidateId: 'cand-pending' }),
+    }));
+    try {
+      const { userFile, run } = await loaded();
+      fs.mkdirSync(path.dirname(userFile), { recursive: true });
+      fs.writeFileSync(userFile, '停在候选池的一条。', 'utf8');
+      const report = await run('user-mig-pending');
+      expect(report.migrated).toBe(0);
+      expect(report.pendingReview).toBe(1);
+      expect(fs.readFileSync(userFile, 'utf8')).toContain('停在候选池的一条。');
+    } finally {
+      vi.doUnmock('../../../../src/main/features/recall/candidate-service');
+      vi.resetModules();
+    }
+  });
+
+  it('keeps entries written into the file while the migration is running', async () => {
+    const userFile = path.join(tmpDir, 'USER.md');
+    let injected = false;
+    vi.doMock('../../../../src/main/features/recall/candidate-service', () => ({
+      ingestImmediateKnowledge: async () => {
+        if (!injected) {
+          injected = true;
+          // 模拟运行期写手（memory replace / 直投失败回退）在扫描之后、清空
+          // 之前追加了一条新记忆。
+          fs.appendFileSync(userFile, '\n§\n迁移期间新写入的一条。', 'utf8');
+        }
+        return { mode: 'created', assetId: 'asset-race' };
+      },
+    }));
+    try {
+      const { run } = await loaded();
+      fs.mkdirSync(path.dirname(userFile), { recursive: true });
+      fs.writeFileSync(userFile, '扫描时已有的一条。', 'utf8');
+      const report = await run('user-mig-race');
+      expect(report.migrated).toBe(1);
+      // 修复前：清空无守卫，新写入（从未迁移过）的条目被连带抹掉。
+      expect(fs.readFileSync(userFile, 'utf8')).toContain('迁移期间新写入的一条。');
+    } finally {
+      vi.doUnmock('../../../../src/main/features/recall/candidate-service');
+      vi.resetModules();
+    }
+  });
 });
