@@ -7579,6 +7579,7 @@
   "kb.workbench.close_ai_panel": "Close AI analysis and Q&A",
   "kb.eco.hide_labels": "Show icons only",
   "kb.eco.show_labels": "Show icons and labels",
+  "kb.eco.coming_soon": "Coming soon",
   "cognition.kstar_episodes_hint": "After each task finishes, KSTAR reviews it: the task, what happened, why, and the lesson learned. Click to see the full review.",
   "cognition.kstar_episodes_empty": "No tasks reviewed by KSTAR yet",
   "cognition.kstar_episodes_loading": "Loading task reviews…",
@@ -7711,5 +7712,8 @@
   "kb.transcriptCorrect.review_outside": "; {count} of them are spellings outside the glossary — review carefully",
   "kb.transcriptCorrect.row_from_model": "Model suggestion",
   "kb.transcriptCorrect.apply_wrote_glossary": "; {count} model suggestions were added to the glossary (this document only)",
-  "kb.transcriptCorrect.apply_dropped_models": "; {count} model suggestions were dropped because their positions no longer matched"
+  "kb.transcriptCorrect.apply_dropped_models": "; {count} model suggestions were dropped because their positions no longer matched",
+  "kb.qa.copy_answer": "Copy",
+  "kb.qa.copy_answer_title": "Copy full answer",
+  "kb.qa.copy_answer_done": "Full answer copied"
 }

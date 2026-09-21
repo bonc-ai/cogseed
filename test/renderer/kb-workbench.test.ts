@@ -891,6 +891,10 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
+    expect(source).toContain("label: _tr('kb.qa.copy_answer', '复制')");
+    expect(source).toContain("icon: 'copy',\n            className: 'kb-qa-tools-btn'");
+    expect(source).not.toContain("const copyBtn = document.createElement('button')");
+    expect(source).toContain("window.uiIconHtml('check', 'kb-qa-sysnote-icon')");
 
     expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
     expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
