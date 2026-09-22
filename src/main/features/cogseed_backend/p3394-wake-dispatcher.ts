@@ -39,9 +39,17 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
       // chokepoint，并且它自己会补建 actor 行、也会拒绝 stopped/removed。
       // 因此这里只拦「已存在且非 pending 的行」与「run 不是 running」，
       // 否则一次合法批准会永远无法通过。
-      if (run.status !== 'running' || (actor && actor.terminal !== 'pending')) {
-        const reason = actor?.terminal === 'removed' ? 'removed' : 'stopped';
-        throw new Error(`collaboration run ${reason}: ${runIdForLedger}`);
+      // 两种情况分开报：run 自己不是 running，和「这个 actor 已经是终态」
+      // 是完全不同的处置（前者重试，后者只能拒绝/换人）。混成一句 “stopped”
+      // 会把排查带偏——真机上就出现过 run 仍然 running、actor 已 failed 的
+      // 场景被报成 “collaboration run stopped”。
+      if (run.status !== 'running') {
+        throw new Error(`collaboration run ${run.status}: ${runIdForLedger}`);
+      }
+      if (actor && actor.terminal !== 'pending') {
+        throw new Error(
+          `collaboration run actor already terminal (${actor.terminal}): ${runIdForLedger}`,
+        );
       }
       const dispatchTurnId = `turn-wake-${request.id}`;
       const recorded = await recordRunDispatch(
