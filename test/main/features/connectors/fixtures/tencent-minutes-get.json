@@ -3,12 +3,12 @@
   "data": {
     "has_more": false,
     "meeting_id": "",
-    "minute_id": "minute_id_placeholder_0001",
+    "minute_id": "31119673ef16661c7c8128276b0e014a",
     "minutes": [
       {
         "created_at": "2030-09-20T17:13:19+08:00",
-        "minute_id": "minute_id_placeholder_0001",
-        "overview": "",
+        "minute_id": "31119673ef16661c7c8128276b0e014a",
+        "overview": "（示例文本，已脱敏）",
         "summary_points": "（示例文本，已脱敏）",
         "todos": []
       }

@@ -688,8 +688,9 @@ function _transcriptParagraphs(payload) {
       pid: _field(p, 'pid'),
       start_time: _field(p, 'start_time'),
       end_time: _field(p, 'end_time'),
-      // user_id is a STABLE identifier; user_name is only a display name (and is sometimes a room
-      // or shared account, e.g. "示例组织"), so downstream attribution should key on user_id.
+      // user_id is a STABLE identifier; user_name is only a display name, and the platform
+      // sometimes reports a shared or room account as the speaker, so downstream attribution
+      // should key on user_id rather than the name.
       speaker_id: _field(sp, 'user_id'),
       speaker_name: _field(sp, 'user_name'),
       text: _paragraphText(p),
