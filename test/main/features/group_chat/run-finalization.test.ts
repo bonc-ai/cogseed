@@ -878,8 +878,65 @@ describe('group_chat › durable run finalization (FR-018)', () => {
         },
       });
     expect(await store.readRun(UID, cid, emptyRun!.run_id)).toMatchObject({
-      status: 'failed',
+      // 零 actor 的普通消息没有贡献也没有缺失，收口应记 completed；
+      // 记成 failed 会污染 runs/ 台账（修复前就是这样）。
+      status: 'completed',
       summary_publication: { status: 'published' },
     });
+  });
+
+  it('收口时把「已派发但无终态」的成员也落成 blocked(no_terminal)，使其可被重试', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const conversation = await chats.createConversation(UID, { title: 'Run finalization dispatched without terminal' });
+    const cid = conversation.conversation_id;
+    const store = await import('../../../../src/main/features/group_chat/run_store');
+    const run = await store.createRun({
+      uid: UID,
+      cid,
+      submittedText: '先派发再验证',
+      memberAgentIds: ['agent-stuck'],
+      mentionAgentIds: ['agent-stuck'],
+    });
+    // 派发过，但永远没等到终态回调（例如会话级 abort 清空了队列）。
+    await store.recordRunDispatch(UID, cid, run!.run_id, 'agent-stuck', 'turn-stuck');
+
+    const finalized = await store.finalizeRun(UID, cid, run!.run_id);
+    expect(finalized?.actors.find((actor) => actor.agent_id === 'agent-stuck'))
+      .toMatchObject({ terminal: 'blocked', reason: 'no_terminal', attempts: 1 });
+    expect(store.retryableRunActorIds(finalized!)).toContain('agent-stuck');
+  });
+
+  it('已收口的 run 不接受按成员的移除墓碑，也不改写已发布的汇总', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const conversation = await chats.createConversation(UID, { title: 'Scoped stop after finalization' });
+    const cid = conversation.conversation_id;
+    const store = await import('../../../../src/main/features/group_chat/run_store');
+    const run = await store.createRun({
+      uid: UID,
+      cid,
+      submittedText: '完成即收口',
+      memberAgentIds: ['agent-a'],
+      mentionAgentIds: ['agent-a'],
+    });
+    await store.recordRunDispatch(UID, cid, run!.run_id, 'agent-a', 'turn-a');
+    await store.recordRunActorTerminal(UID, cid, run!.run_id, 'agent-a', {
+      terminal: 'done',
+      messages: 1,
+      artifacts: [],
+    });
+    const finalized = await store.finalizeRun(UID, cid, run!.run_id);
+    expect(finalized?.status).toBe('completed');
+
+    // 迟到的按成员移除（渲染层可能持有过期的活跃 run 指针）：不得改写已收口的 run。
+    const after = await store.stopRun(UID, cid, run!.run_id, {
+      agentIds: ['agent-never-in-this-run'],
+      reason: 'member_removed',
+      terminal: 'removed',
+    });
+    expect(after?.actors.map((actor) => actor.agent_id)).toEqual(['agent-a']);
+    expect(after?.status).toBe('completed');
+    expect(after?.summary).toEqual(finalized?.summary);
+    expect(after?.summary_publication?.publication_id)
+      .toBe(finalized?.summary_publication?.publication_id);
   });
 });
