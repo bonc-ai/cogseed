@@ -2145,9 +2145,9 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
 
   it("session-level stop durably stops running runs and rejects their Wake requests", async () => {
     // 真机形状：会话级 Stop（无 run 作用域参数）之前只清内存队列/worker，不写
-    // 台账 → run 永远 running、汇总被「本 run 有待审批 Wake」挡住，而那条 Wake
-    // 又因为 actor 已终态永远批不过（批准直接报错）。这里钉住：Stop 之后 run 必须
-    // 是终态，且该 run 的待审批 Wake 必须被拒。
+    // 台账 → run 永远 running、汇总被「本 run 有待审批 Wake」挡住。这里钉住：
+    // 停止那一刻 actor 还在 pending 时，Stop 之后 run 必须是 stopped，且该 run 的
+    // 待审批 Wake 必须以「用户停止」这个理由被拒（不能被自动判死抢走理由）。
     const cid = newCid();
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const store = await import("../../../../src/main/features/group_chat/run_store");
@@ -2160,12 +2160,6 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
       mentionAgentIds: [AGENT_ID],
     });
     await store.recordRunDispatch(TEST_UID, cid, run!.run_id, AGENT_ID, "turn-session-abort");
-    await store.recordRunActorTerminal(TEST_UID, cid, run!.run_id, AGENT_ID, {
-      terminal: "failed",
-      reason: "runtime_failed",
-      messages: 0,
-      artifacts: [],
-    });
     const evaluated = await wake.evaluateWake(TEST_UID, {
       conversationId: cid,
       agentId: AGENT_ID,
@@ -2187,6 +2181,52 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
     expect(await wake.getWakeRequest(TEST_UID, request.id)).toMatchObject({
       status: "rejected",
       decision_reason: "user_stopped",
+    });
+  });
+
+  it("session-level stop resolves a Wake whose actor already failed instead of leaving it pending", async () => {
+    // 真机复现的另一种形状：actor 已经 failed（终态），Wake 却还是 pending ——
+    // 用户反复点批准都只会得到「actor already terminal」。这种唤醒在停止时必须
+    // 被系统判死（expired + 真实理由），而不是继续挂在待审批里。
+    const cid = newCid();
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const store = await import("../../../../src/main/features/group_chat/run_store");
+    const wake = await import("../../../../src/main/features/p3394/wake-service");
+    const run = await store.createRun({
+      uid: TEST_UID,
+      cid,
+      submittedText: "已失败 actor 的 handoff 不能永久挂起",
+      memberAgentIds: [AGENT_ID],
+      mentionAgentIds: [AGENT_ID],
+    });
+    await store.recordRunDispatch(TEST_UID, cid, run!.run_id, AGENT_ID, "turn-session-abort-2");
+    await store.recordRunActorTerminal(TEST_UID, cid, run!.run_id, AGENT_ID, {
+      terminal: "failed",
+      reason: "runtime_failed",
+      messages: 0,
+      artifacts: [],
+    });
+    const evaluated = await wake.evaluateWake(TEST_UID, {
+      conversationId: cid,
+      agentId: AGENT_ID,
+      source: "hand_off_to",
+      sourceActorId: "commander",
+      objective: "failed actor handoff must be resolved",
+      dispatchPayload: {
+        text: "failed actor handoff must be resolved",
+        run_id: run!.run_id,
+      },
+    });
+    expect(evaluated).toHaveProperty("request");
+    const request = (evaluated as any).request;
+
+    await bus.abort(TEST_UID, cid);
+
+    expect((await store.readRun(TEST_UID, cid, run!.run_id))?.status).toBe("stopped");
+    // 判死发生在显式拒绝之前：actor 早已终态，真实理由是 actor_terminal:failed。
+    expect(await wake.getWakeRequest(TEST_UID, request.id)).toMatchObject({
+      status: "expired",
+      decision_reason: "actor_terminal:failed",
     });
   });
 
