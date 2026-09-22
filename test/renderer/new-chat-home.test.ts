@@ -94,7 +94,10 @@ describe('new chat home surface', () => {
     expect(css).toMatch(/\.new-chat-greeting\s*{[\s\S]*?font-size:\s*34px;[\s\S]*?letter-spacing:\s*-0\.015em;/);
     expect(css).toMatch(/\.new-chat-scenarios\s*{[\s\S]*?flex-wrap:\s*wrap;[\s\S]*?justify-content:\s*space-between;/);
     expect(css).toMatch(/\.new-chat-input-area\s*{[\s\S]*?padding:\s*var\(--space-4\) var\(--space-4\) var\(--space-2\);[\s\S]*?border:\s*1px solid var\(--line-field\);/);
-    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-prefix,[\s\S]*?\.chat-recipient-name,[\s\S]*?\.model-chip-label,[\s\S]*?display:\s*none;/);
+    // 压缩阶梯：≤720px 收起次要 chrome（工作空间/权限文字），成员名与模型名只收紧宽度、不隐藏。
+    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-prefix,[\s\S]*?\.workspace-chip-label\s*\{[\s\S]*?display:\s*none;/);
+    expect(css).not.toMatch(/\.chat-recipient-name[^{}]*\{[^{}]*display:\s*none/);
+    expect(css).not.toMatch(/\.model-chip-label[^{}]*\{[^{}]*display:\s*none/);
     expect(css).toMatch(/\.model-guard-banner\s*{[\s\S]*?height:\s*56px;/);
     expect(css).toMatch(/\.model-guard-dismiss\s*{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
     expect(css).toMatch(/@media \(max-width: 1100px\)\s*{[\s\S]*?\.main-content:has\(#panel-new-chat\.active\):has\(#model-guard-banner\) \.main-top-actions\s*{[\s\S]*?flex-wrap:\s*wrap;/);

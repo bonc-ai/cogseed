@@ -304,6 +304,18 @@
     return agentList();
   }
 
+  /** 被空间作用域排除的内部 Task Agent：仍然出现在列表里并说明原因，
+   *  不允许静默消失（PRD AC-04）。外接 Agent 不在此集合内——它们与主进程
+   *  派发侧同口径恒可用。 */
+  function outOfScopeAgentList() {
+    try {
+      if (typeof window.getComposerOutOfScopeAgents === 'function') {
+        return window.getComposerOutOfScopeAgents() || [];
+      }
+    } catch (_) { /* agents.js 未加载 */ }
+    return [];
+  }
+
   function memberScopeHint() {
     try {
       if (typeof window.getComposerMemberScopeHint === 'function') {
@@ -874,6 +886,45 @@
         checked: checked.has(key),
       });
     }
+
+    // 已选成员但不在候选里（被空间排除 / 已停用 / 已删除）：仍保留一行可取消的
+    // 选中项。否则成员在列表里彻底消失，用户既看不到也无法移除。
+    const listed = new Set(rows.map((row) => String(row.key)));
+    const index = agentIndex();
+    for (const member of members) {
+      const key = memberKeyOf(member);
+      if (member.kind !== 'agent' || !key || listed.has(key)) continue;
+      const agent = index.get(key) || null;
+      rows.push({
+        key,
+        kind: 'agent',
+        group: agent ? (isExternalAgentRecord(agent) ? 'external' : 'task') : 'task',
+        name: String(member.name || (agent && agent.name) || key),
+        description: agent
+          ? describeAgent(agent, isExternalAgentRecord(agent))
+          : tr('composer.members.retained_hint', '已选成员，仍可取消'),
+        checked: true,
+        retained: true,
+      });
+      listed.add(key);
+    }
+
+    // 空间作用域排除的内部 Task Agent：显示原因，而不是静默消失（PRD AC-04）。
+    for (const agent of outOfScopeAgentList()) {
+      if (!agent || !agent.agent_id) continue;
+      const key = String(agent.agent_id);
+      if (listed.has(key)) continue;
+      rows.push({
+        key,
+        kind: 'agent',
+        group: 'task',
+        name: String(agent.name || key),
+        description: tr('composer.members.out_of_scope', '不在当前空间能力范围，可在工作空间配置中添加'),
+        checked: false,
+        unavailable: true,
+      });
+      listed.add(key);
+    }
     return rows;
   }
 
@@ -909,17 +960,30 @@
    *  Enter 走 .active 行的既有键盘路径）。 */
   function createMemberRow(row, mode) {
     const item = document.createElement('div');
-    item.className = `skill-picker-item composer-member-row${row.checked ? ' is-checked' : ''}`;
-    item.dataset.composerMember = row.key;
-    item.dataset.memberKind = row.kind;
-    item.dataset.memberName = row.name;
+    item.className = `skill-picker-item composer-member-row${row.checked ? ' is-checked' : ''}${row.unavailable ? ' is-unavailable' : ''}`;
+    if (row.unavailable) {
+      // 不可选行不进 [data-composer-member]：点击绑定与键盘 roving 都按该属性
+      // 选取，因此这里天然不会被选中，只负责说明原因。
+      item.dataset.composerMemberUnavailable = row.key;
+      item.setAttribute('aria-disabled', 'true');
+      item.title = row.description || '';
+    } else {
+      item.dataset.composerMember = row.key;
+      item.dataset.memberKind = row.kind;
+      item.dataset.memberName = row.name;
+    }
     const rowLabel = mode === 'mentions'
       ? tr('composer.members.mention_aria', '点名 {name}', { name: row.name })
       : tr('composer.members.member_aria', '选择会话成员 {name}', { name: row.name });
 
     const check = document.createElement('span');
     check.className = 'composer-member-check';
-    if (typeof root.uiCheckbox === 'function') {
+    if (row.unavailable) {
+      // 不可选：共享勾选框不出现，改用共享图标说明「被排除」而不是「未勾选」。
+      if (typeof root.uiIconHtml === 'function') {
+        check.innerHTML = root.uiIconHtml('lock', 'composer-member-lock');
+      }
+    } else if (typeof root.uiCheckbox === 'function') {
       check.innerHTML = root.uiCheckbox({
         id: `composer-member-${String(row.key).replace(/[^A-Za-z0-9_-]/g, '-')}`,
         label: rowLabel,
