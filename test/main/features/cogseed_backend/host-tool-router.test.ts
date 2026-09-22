@@ -9,9 +9,16 @@ import {
   respondActionApproval,
 } from '../../../../src/main/features/action_approval';
 
-const { resolveRuntimeCapabilities, runMessagingHostTool } = vi.hoisted(() => ({
+const { resolveRuntimeCapabilities, runMessagingHostTool, shouldAutoApproveRuntimeAction, cogseedControlService } = vi.hoisted(() => ({
   resolveRuntimeCapabilities: vi.fn(),
   runMessagingHostTool: vi.fn(),
+  shouldAutoApproveRuntimeAction: vi.fn(),
+  cogseedControlService: {
+    retryStep: vi.fn(),
+    skipStep: vi.fn(),
+    resume: vi.fn(),
+    workflow: vi.fn(),
+  },
 }));
 
 vi.mock('../../../../src/main/features/cogseed_backend/messaging-capability-policy', () => ({
@@ -20,12 +27,22 @@ vi.mock('../../../../src/main/features/cogseed_backend/messaging-capability-poli
 vi.mock('../../../../src/main/features/cogseed_backend/messaging-host-adapter', () => ({
   runMessagingHostTool,
 }));
+vi.mock('../../../../src/main/features/cogseed_backend/runtime-tool-policy', () => ({
+  shouldAutoApproveRuntimeAction,
+}));
+vi.mock('../../../../src/main/features/cogseed_backend/cogseed-control-service', () => ({
+  cogseedControlService,
+}));
 
 const context: any = { request: { user_id: 'router-user', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', read_only_roots: ['/tmp'], writable_roots: ['/tmp'], working_dir: '/tmp' }, signal: new AbortController().signal };
 
 beforeEach(() => {
   resolveRuntimeCapabilities.mockReset();
   runMessagingHostTool.mockReset();
+  shouldAutoApproveRuntimeAction.mockReset();
+  // Default: the persisted conversation mode requires the human gate.
+  shouldAutoApproveRuntimeAction.mockResolvedValue(false);
+  for (const fn of Object.values(cogseedControlService)) fn.mockReset();
 });
 
 afterEach(() => {
@@ -113,5 +130,57 @@ describe('CogSeed host tool router', () => {
       type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-a3',
       name: 'action_approval_execution', input: { approval_request_id: requestId, phase: 'succeeded' },
     }, context)).resolves.toEqual({ content: JSON.stringify({ ok: true }) });
+  });
+
+  it('auto-approves a sensitive action when the persisted conversation mode allows it', async () => {
+    const pushed: any[] = [];
+    _setActionApprovalBroadcastForTest((_channel, payload) => {
+      pushed.push(payload);
+      return true;
+    });
+    shouldAutoApproveRuntimeAction.mockResolvedValue(true);
+    const router = createCogSeedHostToolRouter({});
+    const approval = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-auto-1',
+      name: 'action_approval_request',
+      input: {
+        actor: 'writer', action: 'bash', target: 'rm -rf build', scope: 'clean the workspace',
+        audit_target: 'Sensitive shell command', audit_scope: 'risk categories: destructive', risk: 'critical',
+        reasons: ['destructive'], fingerprint: 'c'.repeat(64),
+      },
+    }, context);
+
+    expect(approval.isError).toBeFalsy();
+    // No human prompt was broadcast.
+    expect(pushed).toHaveLength(0);
+    expect(shouldAutoApproveRuntimeAction).toHaveBeenCalledWith('router-user', 'req-parent', 'mruntime-parent');
+
+    // The auto grant is still consumable by the execution audit bridge.
+    const requestId = JSON.parse(approval.content).request_id;
+    await expect(router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-auto-2',
+      name: 'action_approval_execution', input: { approval_request_id: requestId, phase: 'started' },
+    }, context)).resolves.toEqual({ content: JSON.stringify({ ok: true }) });
+  });
+
+  it('refuses the workflow tools unless the host derives the workflow capability', async () => {
+    resolveRuntimeCapabilities.mockResolvedValue([]);
+    const router = createCogSeedHostToolRouter({});
+    const denied = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-w1',
+      name: 'cogseed_workflow', input: {},
+    }, context);
+    expect(denied).toMatchObject({ isError: true, content: expect.stringContaining('E_RUNTIME_HOST_TOOL_FORBIDDEN') });
+    expect(cogseedControlService.workflow).not.toHaveBeenCalled();
+
+    resolveRuntimeCapabilities.mockResolvedValue(['cogseed.workflow']);
+    cogseedControlService.workflow.mockResolvedValue({ runId: 'wrun-1', status: 'running' });
+    const allowed = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-w2',
+      name: 'cogseed_workflow', input: {},
+    }, context);
+    expect(allowed.isError).toBeFalsy();
+    expect(allowed.content).toContain('wrun-1');
+    expect(cogseedControlService.workflow).toHaveBeenCalledWith('router-user', 'req-parent');
   });
 });
