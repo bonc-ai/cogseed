@@ -21,7 +21,7 @@
     summary: null,
     summaryCache: {}, // key(库名或 space:xxx) → 已解析的 summary（切回已解析库时立即显示，不重新触发 LLM）
     lastMind: null, // 最近生成的脑图根节点（预览/编辑用）
-    // 当前脑图的**作用域**：{ doc, scope }。刷新(⟳)/保存(💾)必须沿用同一作用域，
+    // 当前脑图的**作用域**：{ doc, scope }。刷新/保存必须沿用同一作用域，
     // 否则"本文档脑图"会被刷新成整库脑图、或按库 key 存进档（真机出过这个问题）。
     mmScope: null,
     mmCollapsed: new Set(), // 已折叠的一级分支节点 idx
@@ -76,88 +76,67 @@
     return !_state.spaceId && !!_currentExternalSource();
   }
 
-  // 统一图标：优先 icons.js 的 uiIconHtml（仓库规范），缺的名走内联 SVG。
+  // 统一图标：一律走 icons.js 的 uiIconHtml（仓库规范：图标只来自 icons.js）。
+  // 2026-09-21 迁移：此前这里还有一套自带的 svg path 表（_SVGS，22 条）与 _svg()，
+  // 属"硬编码 svg 路径"违规；实测那张表只被 3 个名字用到（sparkles/search/chevron-down），
+  // 且这三个名字 icons.js 里都有 → 整表删除，_svg() 改为转发共享注册表。
   function _icon(name, cls) {
     if (typeof window.uiIconHtml === 'function') {
       return window.uiIconHtml(name, cls || 'kb-ico');
     }
-    return `<svg class="${cls || 'kb-ico'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg>`;
+    // 无 icons.js 的环境（部分单测的 window mock）：不再退回手写 svg（规范禁止），
+    // 返回空串由调用方降级，避免"缺图标就自己画一个"的老路。
+    return '';
   }
 
-  const _SVGS = {
-    sort: '<path d="M8 6h13M8 12h9M8 18h5M3 6h.01M3 12h.01M3 18h.01"/>',
-    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
-    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>',
-    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
-    send: '<path d="M3.6 4.4 20.6 12 3.6 19.6l2.4-7.6z"/><path d="M6 12h14.6"/>',
-    plus: '<rect x="4" y="4" width="16" height="16" rx="4.5"/><path d="M12 8v8M8 12h8"/>',
-    trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
-    more: '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>',
-    share: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    chip: '<rect x="5" y="7" width="14" height="10" rx="2.5"/><path d="M9 7V4.5M15 7V4.5M9 19.5V17M15 19.5V17M10.5 12h3"/>',
-    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
-    'chevron-right': '<path d="m9 6 6 6-6 6"/>',
-    'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-    'qrcode': '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM21 14h.01M14 21h.01"/>',
-    'lock': '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
-    'panel-collapse': '<rect x="4" y="5" width="6" height="14" rx="1.5"/><rect x="14" y="5" width="6" height="14" rx="1.5"/>',
-    'popout': '<path d="M15 3h6v6"/><path d="m10 14 11-11"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
-    'history': '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
-    'close': '<path d="M18 6 6 18M6 6l12 12"/>',
-    'paperclip': '<path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/>',
-    'tools': '<path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14.5 12l-2.5-2.5z"/>',
-    'more-h': '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>',
+  // 旧调用名 → 共享注册表名的别名（保持调用点不变）
+  const _ICON_ALIAS = {
+    more: 'more-horizontal',
+    'more-h': 'more-horizontal',
+    share: 'share-2',
+    chip: 'cpu',
+    qrcode: 'qr-code',
+    close: 'x',
+    popout: 'external',
   };
+
   function _svg(name) {
-    return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
+    return _icon(_ICON_ALIAS[name] || name, 'kb-ico-svg');
   }
 
-  function _uiIconButton(options) {
-    if (typeof window.uiIconButton === 'function') return window.uiIconButton(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    const disabled = options.disabled ? ' disabled' : '';
-    const variantClass = options.variant === 'danger' ? ' ui-icon-button--danger' : '';
-    return `<button type="button" class="ui-icon-button${variantClass} ${_esc(options.className || '')}" aria-label="${_esc(options.label)}" title="${_esc(options.title || options.label)}"${disabled}${attrHtml}>${_icon(options.icon, 'ui-icon')}</button>`;
+  /**
+   * 共享按钮的"禁用"是**类**：`.ui-button.is-disabled` / `.ui-icon-button.is-disabled`
+   * 带 `pointer-events: none`。只改 `.disabled` 属性不够 —— 一个"模板里就 disabled"的按钮
+   * （渲染时已带 `is-disabled`）后来被启用时，类还在 ⇒ 按钮**永远点不动**。
+   * 真机事故：问答「发送」按钮输入文字后仍点不动（导入弹窗的「导入」同因）。
+   * 因此凡是要改按钮可用状态，一律走这个函数，属性与类一起改。
+   */
+  function _setDisabled(el, disabled) {
+    if (!el) return;
+    const off = Boolean(disabled);
+    el.disabled = off;
+    el.classList.toggle('is-disabled', off);
   }
 
-  function _uiButton(options) {
-    if (typeof window.uiButton === 'function') return window.uiButton(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    const disabled = options.disabled ? ' disabled' : '';
-    const role = options.role || 'secondary';
-    const size = options.size || 'md';
-    const leadingIcon = options.icon ? _icon(options.icon, 'ui-button__icon') : '';
-    const trailingIcon = options.iconEnd ? _icon(options.iconEnd, 'ui-button__icon') : '';
-    return `<button type="button" class="btn ui-button ui-button--${_esc(role)} ui-button--${_esc(size)} ${_esc(options.className || '')}"${disabled}${attrHtml}>${leadingIcon}<span class="ui-button__label">${_esc(options.label)}</span>${trailingIcon}</button>`;
+  // 共享原语包装：**不再自带降级模板**（2026-09-21）。此前这里把 uiIconButton / uiButton /
+  // uiInput / uiTextarea 的标记各抄了一份作为兜底 —— 等于在页面里维护第二套原语实现：
+  // 既被共享组件闸门计为"裸控件"，也让"缺原语"静默通过。现在缺失即抛错（与 kb-notes 同风格），
+  // 让缺原语的事实当场暴露，而不是各自画一份。
+  function _requirePrimitive(name) {
+    if (typeof window[name] !== 'function') throw new Error(`knowledge base workbench requires ${name}`);
+    return window[name];
   }
 
-  function _uiInput(options) {
-    if (typeof window.uiInput === 'function') return window.uiInput(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    return `<input class="form-input ui-control ui-input ${_esc(options.className || '')}" id="${_esc(options.id)}" type="${_esc(options.type || 'text')}"${options.value == null ? '' : ` value="${_esc(options.value)}"`}${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>`;
-  }
+  function _uiIconButton(options) { return _requirePrimitive('uiIconButton')(options); }
 
-  function _uiTextarea(options) {
-    if (typeof window.uiTextarea === 'function') return window.uiTextarea(options);
-    const attrs = options.attrs || {};
-    const attrHtml = Object.entries(attrs)
-      .filter(([, value]) => value != null && value !== false)
-      .map(([key, value]) => ` ${_esc(key)}="${_esc(value === true ? '' : value)}"`)
-      .join('');
-    return `<textarea class="form-input ui-control ui-textarea ${_esc(options.className || '')}" id="${_esc(options.id)}"${options.placeholder ? ` placeholder="${_esc(options.placeholder)}"` : ''}${attrHtml}>${_esc(options.value || '')}</textarea>`;
-  }
+  function _uiButton(options) { return _requirePrimitive('uiButton')(options); }
+
+  function _uiInput(options) { return _requirePrimitive('uiInput')(options); }
+
+  function _uiTextarea(options) { return _requirePrimitive('uiTextarea')(options); }
+
+  // 复选框：与上面四份同款——**刻意不做降级模板**。降级等于把被禁止的裸 checkbox 标记再抄一份，
+  // 缺原语时直接抛错，让问题暴露而不是静默绕过。
 
   function _uiCheckbox(options) {
     if (typeof window.uiCheckbox !== 'function') throw new Error('knowledge base requires uiCheckbox');
@@ -320,7 +299,7 @@
   function _statusChip(relPath) {
     const st = _state.kbStatus.get(relPath);
     if (!st) return '<span class="kb-file-status is-none">未索引</span>';
-    if (st.status === 'ready') return `<span class="kb-file-status is-ready" title="chunks: ${st.chunks ?? 0}">✓ 已索引</span>`;
+    if (st.status === 'ready') return `<span class="kb-file-status is-ready" title="chunks: ${st.chunks ?? 0}">${_icon('check')} 已索引</span>`;
     if (st.status === 'processing') return '<span class="kb-file-status is-run">索引中…</span>';
     if (st.status === 'pending') return '<span class="kb-file-status is-run">排队中</span>';
     if (st.status === 'failed') return '<span class="kb-file-status is-failed" title="' + _esc(st.error || '') + '">失败</span>';
@@ -719,9 +698,7 @@
     const nameInput = overlay.querySelector('#kb-share-name');
     const okBtn = overlay.querySelector('#kb-share-ok');
     const syncOk = () => {
-      const disabled = !String(nameInput.value || '').trim();
-      okBtn.disabled = disabled;
-      okBtn.classList.toggle('is-disabled', disabled);
+      _setDisabled(okBtn, !String(nameInput.value || '').trim());
     };
     nameInput.addEventListener('input', syncOk);
     nameInput.addEventListener('keydown', (e) => {
@@ -987,7 +964,7 @@
     const countEl = overlay.querySelector('.kb-import-dlg-count');
     const okBtn = overlay.querySelector('.kb-import-dlg-ok');
     if (countEl) countEl.textContent = `已选中 ${_dlgSelected.size} 个文件`;
-    if (okBtn) okBtn.disabled = _dlgSelected.size === 0;
+    if (okBtn) _setDisabled(okBtn, _dlgSelected.size === 0);
   }
 
   function _bindImportDlgEvents(overlay) {
@@ -1113,7 +1090,7 @@
           okBtn.classList.remove('is-loading');
           okBtn.removeAttribute('aria-busy');
           _setUiButtonPresentation(okBtn, '导入', 'upload');
-          okBtn.disabled = _dlgSelected.size === 0;
+          _setDisabled(okBtn, _dlgSelected.size === 0);
         }
       }
     });
@@ -1380,7 +1357,7 @@
     const cur = String(_state.currentLib || '');
     const base = cur ? new RegExp('^' + _escReg(cur) + '(?:/|$)') : null;
     const rel = base ? String(parentPath || '').replace(base, '').replace(/\/+$/, '') : String(parentPath || '');
-    return rel ? `📁 ${rel}` : '库根';
+    return rel ? `${_icon('folder')} ${rel}` : '库根';
   }
 
   function _escReg(s) {
@@ -1469,7 +1446,7 @@
     for (const f of files) {
       const status = f.status || 'pending';
       const chip = status === 'ready'
-        ? `<span class="kb-file-status is-ready" title="chunks: ${f.chunks ?? 0}">✓ 已索引</span>`
+        ? `<span class="kb-file-status is-ready" title="chunks: ${f.chunks ?? 0}">${_icon('check')} 已索引</span>`
         : status === 'processing' ? '<span class="kb-file-status is-run">索引中…</span>'
           : status === 'failed' ? '<span class="kb-file-status is-failed" title="' + _esc(f.error || '') + '">失败</span>'
             : '<span class="kb-file-status is-run">排队中</span>';
@@ -1671,7 +1648,10 @@
     readerBtn.type = 'button';
     readerBtn.id = 'kb-fv-reader';
     readerBtn.title = '切换阅读宽度';
-    const closeBtn = el('button', 'kb-fv-close', '✕');
+    const closeBtn = el('button', 'kb-fv-close');
+    closeBtn.innerHTML = _icon('x', 'kb-fv-close-ico');
+    closeBtn.setAttribute('aria-label', '关闭文件阅读器');
+    closeBtn.title = '关闭文件阅读器';
     closeBtn.type = 'button';
     closeBtn.id = 'kb-fv-close';
     closeBtn.title = '关闭（Esc）';
@@ -2021,21 +2001,99 @@
     try { range.surroundContents(mark); } catch (_) { return null; }
     return mark;
   }
-  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
-  function _fvApproxRawStart(raw, normIdx) {
-    let p = 0;
-    let inWS = false;
-    for (let i = 0; i < raw.length; i++) {
-      const ws = /\s/.test(raw[i]);
-      if (ws) {
-        if (!inWS) { if (p === normIdx) return i; p++; inWS = true; }
-      } else {
-        inWS = false;
-        if (p === normIdx) return i;
-        p++;
+  /**
+   * 把 `[startNode+startOffset, endNode+endOffset)` 包成 `<mark>`，**允许跨节点**。
+   *
+   * 跨行内元素时 `surroundContents` 会因"部分选中非文本节点"直接抛错（一句话被
+   * `<strong>` 切开就是这个情形），所以跨节点走 `extractContents` —— 它会按需
+   * 克隆 `<strong>/<span>` 这类祖先，落点与格式都保留。
+   */
+  function _fvWrapSpan(startNode, startOffset, endNode, endOffset) {
+    if (!startNode || !endNode) return null;
+    if (startOffset < 0 || endOffset < 0) return null;
+    if (startNode === endNode && endOffset <= startOffset) return null;
+    const doc = startNode.ownerDocument;
+    if (!doc || typeof doc.createRange !== 'function') return null;
+    const range = doc.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    const mark = doc.createElement('mark');
+    mark.className = 'kb-fv-mark';
+    try {
+      const contents = range.extractContents();
+      mark.appendChild(contents);
+      range.insertNode(mark);
+    } catch (_) { return null; }
+    return mark;
+  }
+  /**
+   * 连续文本节点的「可见文本 + 每个字符的归属」索引：<strong>/<span> 会把一句话
+   * 切成多个文本节点，只按单节点匹配永远匹配不上整句。归一化口径同 `_fvNormSpace`。
+   */
+  function _fvNodeRun(nodes) {
+    const chars = [];
+    const owners = [];
+    for (const node of nodes) {
+      const raw = String(node.nodeValue || '');
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (/\s/.test(ch)) {
+          if (!chars.length || chars[chars.length - 1] === ' ') continue;
+          chars.push(' ');
+        } else {
+          chars.push(ch);
+        }
+        owners.push({ node, offset: i });
       }
     }
-    return Math.max(0, raw.length - 1);
+    while (chars.length && chars[chars.length - 1] === ' ') {
+      chars.pop();
+      owners.pop();
+    }
+    return { text: chars.join(''), owners };
+  }
+  /** 跨节点精确命中 → 可跨节点的落点；单节点就能命中的由 `_fvWrapRaw` 负责。 */
+  function _fvMatchAcrossNodes(nodes, needle) {
+    if (!needle || nodes.length < 2) return null;
+    const { text, owners } = _fvNodeRun(nodes);
+    const at = text.indexOf(needle);
+    if (at < 0) return null;
+    const first = owners[at];
+    const last = owners[at + needle.length - 1];
+    if (!first || !last || first.node === last.node) return null;
+    return {
+      startNode: first.node,
+      startOffset: first.offset,
+      endNode: last.node,
+      endOffset: last.offset + 1,
+    };
+  }
+  // 归一化区间 → 原始文本区间（空白折叠为单个空格）。与 `_fvNormSpace` 口径一致：
+  // 折叠空白 + 去掉首尾空白，因此下标换算要跳过首尾空白、空白连成一段只算一个位置。
+  // 高亮落点必须用真实区间——早先用 `needleNorm.length * 2 + 8` 估算长度，真机上
+  // 表现为"高亮多涂半句"（摘录末尾之后的正文跟着变色）。
+  function _fvRawSpan(raw, normStart, normEnd) {
+    const text = String(raw == null ? '' : raw);
+    const lead = (text.match(/^\s*/) || [''])[0].length;
+    const trail = (text.match(/\s*$/) || [''])[0].length;
+    const stop = Math.max(lead, text.length - trail);
+    let p = 0;
+    let inWS = false;
+    let start = -1;
+    for (let i = lead; i < stop; i++) {
+      const ws = /\s/.test(text[i]);
+      if (ws && inWS) continue;
+      inWS = ws;
+      if (start < 0 && p === normStart) start = i;
+      if (p === normEnd) return { start, end: i };
+      p++;
+    }
+    return { start, end: stop };
+  }
+  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
+  function _fvApproxRawStart(raw, normIdx) {
+    const span = _fvRawSpan(raw, normIdx, normIdx + 1);
+    return span.start >= 0 ? span.start : Math.max(0, String(raw == null ? '' : raw).length - 1);
   }
   // 去掉行首 md 标记（标题/引用/无序与有序列表编号），便于与渲染后 DOM 比对
   function _fvStripMdMarks(s) {
@@ -2072,32 +2130,53 @@
     push(headSentence);
     const root = container.nodeType === 9 ? container.body : container;
     const nodes = _fvTextNodeList(root);
+    // ① 单节点精确命中：按归一化区间反算原始区间，标记长度 = 真实匹配长度
     for (const needle of needles) {
       const needleNorm = _fvNormSpace(needle);
       for (const node of nodes) {
         const raw = node.nodeValue || '';
         if (!raw.trim()) continue;
-        const rawNorm = _fvNormSpace(raw);
-        const idx = rawNorm.indexOf(needleNorm);
-        let rawStart = -1;
-        if (idx >= 0) {
-          rawStart = _fvApproxRawStart(raw, idx);
-        } else {
-          const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
-          if (!word) continue;
-          const w = raw.indexOf(word);
-          if (w < 0) continue;
-          rawStart = w;
-        }
-        if (rawStart < 0) continue;
-        const mark = _fvWrapRaw(node, rawStart, Math.min(needleNorm.length * 2 + 8, 200));
+        const idx = _fvNormSpace(raw).indexOf(needleNorm);
+        if (idx < 0) continue;
+        const span = _fvRawSpan(raw, idx, idx + needleNorm.length);
+        if (span.start < 0 || span.end <= span.start) continue;
+        const mark = _fvWrapRaw(node, span.start, span.end - span.start);
         if (mark) {
           try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
           return true;
         }
       }
     }
-    // 单节点匹配失败（列表/加粗把一句话拆到多个节点）→ 块级兜底：高亮整段
+    // ② 跨节点精确命中：<strong>/<span> 把一句话切成多个文本节点时
+    for (const needle of needles) {
+      const needleNorm = _fvNormSpace(needle);
+      const span = _fvMatchAcrossNodes(nodes, needleNorm);
+      if (!span) continue;
+      const mark = _fvWrapSpan(span.startNode, span.startOffset, span.endNode, span.endOffset);
+      if (mark) {
+        try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+        return true;
+      }
+    }
+    // ③ 兜底：归一化后仍匹配不上 → 退到首个"实词"，只标这个词（不猜长度）。
+    //    放在精确命中之后，否则另一个节点里的同名词会抢在真正的摘录之前被涂上。
+    for (const needle of needles) {
+      const needleNorm = _fvNormSpace(needle);
+      const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
+      if (!word) continue;
+      for (const node of nodes) {
+        const raw = node.nodeValue || '';
+        if (!raw.trim()) continue;
+        const at = raw.indexOf(word);
+        if (at < 0) continue;
+        const mark = _fvWrapRaw(node, at, word.length);
+        if (mark) {
+          try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+          return true;
+        }
+      }
+    }
+    // 精确与实词都落空 → 块级兜底：高亮整段
     const blocks = root.querySelectorAll ? Array.from(root.querySelectorAll('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,dd,dt,summary')) : [];
     if (blocks.length) {
       const tokens = _fvSignificantTokens(cleaned);
@@ -2732,7 +2811,7 @@
 
     if (ok) {
       if (oneLiner) {
-        html += `<div class="kb-wb-one-liner"><span class="kb-wb-one-liner-tag">💡 一句话总结</span><span class="kb-wb-one-liner-text">${_esc(oneLiner)}</span></div>`;
+        html += `<div class="kb-wb-one-liner"><span class="kb-wb-one-liner-tag">${_icon('info')} 一句话总结</span><span class="kb-wb-one-liner-text">${_esc(oneLiner)}</span></div>`;
       }
       html += `<div class="kb-wb-analysis-body" id="kb-wb-analysis-body" hidden>`;
       for (const d of docs) {
@@ -2828,7 +2907,7 @@
 
   /**
    * 从存档 key 反推作用域（与 _mmSnapshotKey 的构造对称）。
-   * 会话历史/存档恢复出来的脑图必须把作用域一起带回来，否则之后点 ⟳刷新 / 💾保存
+   * 会话历史/存档恢复出来的脑图必须把作用域一起带回来，否则之后点"刷新/保存"
    * 会用到上一次生成留下的作用域，把某一份文档的脑图覆盖成整库脑图（或反之）。
    */
   function _mmScopeFromKey(key) {
@@ -2875,7 +2954,7 @@
     const headLabel = m && m.label ? ' · ' + String(m.label).slice(0, 20) : '';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-mm-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览' + _esc(headLabel) + '</div>'
+    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' 脑图预览' + _esc(headLabel) + '</div>'
       + '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
     ai.appendChild(body);
     if (box) box.appendChild(ai);
@@ -2947,7 +3026,7 @@
     ai.className = 'kb-qa-msg is-ai';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-mm-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览'
+    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('brain-circuit') + ' 脑图预览'
       + (docName ? `<span class="kb-mm-msg-scope">本文档：${_esc(docName)}</span>` : '')
       + '</div>'
       + '<div class="kb-wb-mm-canvas" id="kb-wb-mm-canvas">'
@@ -3117,7 +3196,7 @@
     ai.className = 'kb-qa-msg is-ai';
     const body = document.createElement('div');
     body.className = 'kb-qa-msg-body kb-quiz-msg';
-    body.innerHTML = '<div class="kb-mm-msg-head">📝 测验</div>'
+    body.innerHTML = '<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' 测验</div>'
       + '<div class="kb-quiz-canvas"><div class="kb-mm-loading">正在生成测验题（本地模型推理中，约 30–60 秒）…</div></div>';
     ai.appendChild(body);
     box.appendChild(ai);
@@ -3143,7 +3222,7 @@
         _quizGenerating = false;
         const questions = Array.isArray(res && res.questions) ? res.questions : [];
         if (!res || res.source === 'degraded' || !questions.length) {
-          const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+          const nb = replaceCard('<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' 测验</div>'
             + '<div class="kb-quiz-canvas">' + _quizFailHtml(res && res.reason) + '</div>');
           nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
             nb.parentElement?.remove();
@@ -3170,7 +3249,7 @@
       })
       .catch(() => {
         _quizGenerating = false;
-        const nb = replaceCard('<div class="kb-mm-msg-head">📝 测验</div>'
+        const nb = replaceCard('<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' 测验</div>'
           + '<div class="kb-quiz-canvas"><div class="kb-mm-fail">测验生成失败，请稍后重试</div></div>');
         nb.querySelector('.kb-quiz-retry-btn')?.addEventListener('click', () => {
           nb.parentElement?.remove();
@@ -3210,7 +3289,7 @@
       ...(shorts ? [`${_tr('kb.quiz.card_mix', '单选 {s} · 简答 {q}', { s: singles, q: shorts })}`] : []),
       ...(sources ? [`${_tr('kb.quiz.card_sources', '{n} 个来源', { n: sources })}`] : []),
     ].join(' · ');
-    return '<div class="kb-mm-msg-head">📝 ' + _esc(_tr('kb.quiz.card_title', '测验')) + '</div>'
+    return '<div class="kb-mm-msg-head">' + _icon('document-pencil') + ' ' + _esc(_tr('kb.quiz.card_title', '测验')) + '</div>'
       + '<div class="kb-quiz-canvas">'
       + `<div class="kb-quiz-meta">${_esc(meta)}</div>`
       + `<div class="kb-quiz-launch">${_uiButton({ label: _tr('kb.quiz.start', '开始答题'), role: 'primary', size: 'sm', icon: 'check-circle', className: 'kb-quiz-start-btn', attrs: { id: 'kb-quiz-start' } })}</div>`
@@ -3366,7 +3445,7 @@
         btn.disabled = false;
         if (!res || !res.root) throw new Error('empty mindmap');
         // 「回答 → 脑图」的作用域必须显式归位为 text：否则会沿用上一次的 doc 作用域，
-        // 让之后的 ⟳刷新 / 💾保存 跑到某一份文档上（作用域状态串味）。
+        // 让之后的"刷新/保存"跑到某一份文档上（作用域状态串味）。
         _state.mmScope = { doc: null, scope: 'text' };
         canvas._mmScope = _state.mmScope;
         if (res.source === 'degraded') {
@@ -3403,7 +3482,7 @@
     canvas.addEventListener('click', () => {
       // 历史里可能有多张脑图：优先打开当前画布对应的快照树
       if (canvas._mmRoot) _state.lastMind = canvas._mmRoot;
-      // 作用域跟着画布走：弹窗里的 ⟳刷新 / 💾保存 必须作用在这张图真正的作用域上
+      // 作用域跟着画布走：弹窗里的"刷新/保存"必须作用在这张图真正的作用域上
       if (canvas._mmScope) _state.mmScope = canvas._mmScope;
       _openMindPreview();
     });
@@ -3624,7 +3703,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       el.textContent = '● 未保存';
       el.className = 'kb-mm-save-state is-dirty';
     } else {
-      el.textContent = '✓ 已保存';
+      el.innerHTML = `${_icon('check')} 已保存`;
       el.className = 'kb-mm-save-state is-saved';
     }
   }
@@ -3799,7 +3878,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     return _state.spaceId ? `space:${_state.spaceId}` : `dir:${_state.currentLib || 'global'}`;
   }
 
-  // 💾 保存：把当前脑图存入用户数据目录，下次打开本库可直接读取
+  // 保存：把当前脑图存入用户数据目录，下次打开本库可直接读取
   function _mmSaveMindmap() {
     const root = _state.lastMind;
     if (!root || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
@@ -3882,7 +3961,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       });
   }
 
-  // 📂 存档：列出已保存脑图，点击载入预览
+  // 存档：列出已保存脑图，点击载入预览
   function _mmFillOpenMenu() {
     const menu = document.getElementById('kb-mm-open-menu');
     if (!menu) return;
@@ -4103,8 +4182,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
   function _mmOutlineHtml(root) {
     const lines = _mmOutlineLines(root).map((ln) => {
       const hit = _state.mmSearchHits && _state.mmSearchHits.has(ln.idx) ? ' kb-mm-outline-row--hit' : '';
-      const src = ln.source ? ` <span class="kb-mm-outline-src">📄 ${_esc(ln.source)}</span>` : '';
-      const icon = ln.depth === 0 ? '🧠' : ln.depth === 1 ? '▸' : '·';
+      const src = ln.source ? ` <span class="kb-mm-outline-src">${_icon('file-text')} ${_esc(ln.source)}</span>` : '';
+      const icon = ln.depth === 0 ? _icon('brain-circuit', 'kb-mm-outline-ico') : ln.depth === 1 ? '▸' : '·';
       return `<div class="kb-mm-outline-row${hit}" data-mm-idx="${ln.idx}" style="padding-left:${16 + ln.depth * 22}px">${ln.depth === 0 ? '' : `<span class="kb-mm-outline-dot"></span>`}<span class="kb-mm-outline-label">${icon} ${_esc(ln.label)}</span>${src}</div>`;
     }).join('');
     return `<div class="kb-mm-outline">${lines || '<div class="kb-mm-outline-empty">（空脑图）</div>'}</div>`;
@@ -4135,7 +4214,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const svg = _mmCurrentSvg();
     if (!svg) return '';
     const titleEl = document.getElementById('kb-mm-title-input');
-    const title = titleEl ? titleEl.textContent.replace(/^🧠\s*/, '') : '知识库脑图';
+    const title = titleEl ? titleEl.textContent.replace(/^\s+/, '') : '知识库脑图';
     const clone = svg.cloneNode(true);
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;font-family:-apple-system,"PingFang SC",sans-serif}h1{font-size:15px;padding:14px 18px 6px;color:#14281E;border-bottom:1px solid #E5EDE8}svg{width:100%;height:auto}</style></head><body><h1>${_esc(title)}</h1>${new XMLSerializer().serializeToString(clone)}</body></html>`;
@@ -4683,7 +4762,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       const accent = n.depth === 1
         ? `<rect x="${fc(n.dir > 0 ? x + 2 : x + w - 5)}" y="${fc(y + 8)}" width="3" height="${fc(h - 16)}" rx="1.5" fill="${pal.deep}"/>`
         : '';
-      // 有来源的节点：前缘一个小圆点（原来的 📄 emoji 挤在角上，很花）
+      // 有来源的节点：前缘一个小圆点（原先用 emoji 挤在角上，很花）
       const srcDot = n.source && n.depth >= 2
         ? `<circle cx="${fc(n.dir > 0 ? x + 7 : x + w - 7)}" cy="${fc(n.y)}" r="2.4" fill="${pal.mid}"/>`
         : '';
@@ -5311,7 +5390,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
             card.className = 'kb-qa-suggest';
             const txt = document.createElement('span');
             txt.className = 'kb-qa-suggest-txt';
-            txt.innerHTML = `📁 当前库未找到，可能在「<b>${_esc(sug.dir)}</b>」：<code>${_esc(sug.path)}</code>`;
+            txt.innerHTML = `${_icon('folder')} 当前库未找到，可能在「<b>${_esc(sug.dir)}</b>」：<code>${_esc(sug.path)}</code>`;
             const goBtn = _elementFromHtml(_uiButton({
               label: '前往该库提问',
               role: 'primary',
@@ -5542,7 +5621,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 <div class="kb-wb-sort">
                   ${_uiIconButton({ label: '排序', icon: 'list', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-sort' } })}
                   <div class="kb-wb-sort-menu" id="kb-wb-sort-menu" hidden>
-                    <div class="kb-wb-sort-item is-selected" data-sort="updated">✓ 更新时间</div>
+                    <div class="kb-wb-sort-item is-selected" data-sort="updated">${_icon('check')} 更新时间</div>
                     <div class="kb-wb-sort-item" data-sort="size">大小</div>
                     <div class="kb-wb-sort-item" data-sort="type">类型</div>
                     <div class="kb-wb-sort-item" data-sort="name">名称</div>
@@ -5613,7 +5692,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                 <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
                 <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
               </button>
-              <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
+              ${_uiTextarea({ id: 'kb-qa-input', className: 'kb-qa-input', placeholder: '基于知识库提问', attrs: { rows: 1 } })}
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
                 ${_uiIconButton({ label: '上传附件', icon: 'paperclip', className: 'kb-qa-icon-btn', attrs: { id: 'kb-qa-attach' } })}
                 <div class="kb-qa-attach-tip" id="kb-qa-attach-tip" hidden>
@@ -6385,7 +6464,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const input = document.getElementById('kb-qa-input');
     const send = document.getElementById('kb-qa-send');
     if (!input || !send) return;
-    send.disabled = !input.value.trim();
+    _setDisabled(send, !input.value.trim());
   }
 
   // 问答输入框自动扩容：多行输入随内容增高，避免长文本在单行里向前滚动、
@@ -7780,6 +7859,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     stripMdMarks: _fvStripMdMarks,
     cleanQuote: _fvCleanQuote,
     normSpace: _fvNormSpace,
+    rawSpan: _fvRawSpan,
+    highlightContainer: _fvHighlightContainer,
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
     pdfSrcAt: _fvPdfSrcAt,
