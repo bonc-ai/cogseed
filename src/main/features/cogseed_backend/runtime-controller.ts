@@ -59,6 +59,8 @@ export interface StartCogSeedTaskInput {
   agentId?: string;
   conversationId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
+  /** Optional Group Chat collaboration ledger correlation for wake-gated tasks. */
+  groupChatRunId?: string;
   allowedSkillIds?: string[];
   skillVersionPins?: import('./types').CogSeedTaskSkillVersionPin[];
   localCli?: CogSeedLocalCliConfig;
@@ -321,6 +323,7 @@ async function projectTaskEventBestEffort(
       agentId: task.agentId,
       taskId: task.taskId,
       ...(task.executionId ? { executionId: task.executionId } : {}),
+      ...(task.groupChatRunId ? { groupChatRunId: task.groupChatRunId } : {}),
       sessionId: task.sessionId,
       event,
     });

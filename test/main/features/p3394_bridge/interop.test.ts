@@ -362,7 +362,17 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const first = envelope();
     await channelA.send(first);
     await channelA.send(first);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // The duplicate must be replayed-rejected: wait for the observable (the one
+    // admitted execution reaching its terminal state) instead of a fixed sleep,
+    // which loses the race when the suite is loading the machine.
+    await waitFor(() => {
+      try {
+        return executorB.tasks.require((first as { task_id: string }).task_id).state === 'completed';
+      } catch {
+        return false;
+      }
+    }, 15_000);
 
     expect(runtimeB.run).toHaveBeenCalledTimes(1);
     // Exactly one task was admitted (first submission only).
@@ -432,16 +442,23 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const channelA = new m.socketModule.P3394UnixSocketChannel('node-a', { socketPath: inbound, token: 'tok' });
     await channelA.dial();
     const task = envelope();
+    const taskId = (task as { task_id: string }).task_id;
+    const taskState = () => executorB.tasks.get(taskId)?.state;
     await channelA.send(task);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 取消必须落在「运行中」的任务上：取消帧若早于 runtime 接纳到达，adapter 会因
+    // 找不到 task 映射直接丢弃取消（`p3394_task_not_found`），任务此后永不收敛。
+    // 固定 100ms 在满载并行下会短于接纳耗时（实测：把接纳延后 700ms，取消被丢弃、
+    // 终态停在 working 并超时），所以这里等任务真正进入 working（首个 stream 事件
+    // 已到达，说明 runtime 已接纳并有事件回流）。
+    await waitFor(() => taskState() === 'working');
 
     await channelA.send({
-      spec_version: 'p3394/1.0', message_id: 'ctl-cancel-1', session_id: 'ses-interop-1', task_id: (task as { task_id: string }).task_id,
+      spec_version: 'p3394/1.0', message_id: 'ctl-cancel-1', session_id: 'ses-interop-1', task_id: taskId,
       kind: 'control', performative: 'cancel', sender: { agent_id: 'node-a' }, recipients: [{ agent_id: 'node-b' }],
       payload: { parts: [{ type: 'control', data: { action: 'cancel' } }] }, idempotency_key: 'ctl-cancel-key-1',
     } as never);
-    await waitFor(() => executorB.tasks.require((task as { task_id: string }).task_id).state === 'cancelled');
-    expect(executorB.tasks.require((task as { task_id: string }).task_id).state).toBe('cancelled');
+    await waitFor(() => taskState() === 'cancelled');
+    expect(executorB.tasks.require(taskId).state).toBe('cancelled');
     await channelA.close();
     await channelB.close();
   });

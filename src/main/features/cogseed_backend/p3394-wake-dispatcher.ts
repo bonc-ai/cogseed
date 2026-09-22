@@ -22,6 +22,43 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
   async dispatch(userId, request) {
     const runtime = (await import('./runtime-controller')).cogseedRuntimeController;
 
+    // A Wake decision can arrive long after the original dispatch was staged.
+    // Re-read the durable collaboration ledger before resolving execution
+    // context, prewarming a gateway, or starting any task. Stop/removal must
+    // remain sticky across process restarts; explicit retry is the only path
+    // allowed to put the actor back into pending.
+    const runIdForLedger = request.dispatch_payload.run_id;
+    if (runIdForLedger) {
+      const { readRun, recordRunDispatch } = await import('../group_chat/run_store');
+      const run = await readRun(userId, request.conversation_id, runIdForLedger);
+      if (!run) throw new Error(`collaboration run unavailable: ${runIdForLedger}`);
+      const actor = run?.actors.find((entry) => entry.agent_id === request.agent_id);
+      // 没有 actor 行 ≠ 已停止：Commander 对一个「快照里没有成员/点名」的 run
+      // 发起 dispatch 时（例如用户手打 @名字，那只是正文），这条 Wake 是第一
+      // 次批准，actor 行本来就还不存在。recordRunDispatch 才是耐久准入的
+      // chokepoint，并且它自己会补建 actor 行、也会拒绝 stopped/removed。
+      // 因此这里只拦「已存在且非 pending 的行」与「run 不是 running」，
+      // 否则一次合法批准会永远无法通过。
+      if (run.status !== 'running' || (actor && actor.terminal !== 'pending')) {
+        const reason = actor?.terminal === 'removed' ? 'removed' : 'stopped';
+        throw new Error(`collaboration run ${reason}: ${runIdForLedger}`);
+      }
+      const dispatchTurnId = `turn-wake-${request.id}`;
+      const recorded = await recordRunDispatch(
+        userId,
+        request.conversation_id,
+        runIdForLedger,
+        request.agent_id,
+        dispatchTurnId,
+      );
+      const recordedActor = recorded?.actors.find((entry) => entry.agent_id === request.agent_id);
+      if (recorded?.status !== 'running'
+        || recordedActor?.terminal !== 'pending'
+        || !recordedActor.dispatched.includes(dispatchTurnId)) {
+        throw new Error(`collaboration dispatch persistence failed: ${runIdForLedger}`);
+      }
+    }
+
     // 先建记录再启网关（时序修复）后，外接 agent 的 runtime.kind 是
     // 'p3394-gateway'（cli 字段携带真实 CLI 类型）。它和 'cli' 一样必须落到
     // 本地 CLI 执行（真实 spawn 本机 claude / codebuddy 等），而不是被当成
@@ -83,6 +120,9 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
         agentId: request.agent_id,
         conversationId: request.conversation_id,
         executionKind: localCli ? 'local-cli' : 'cogseed-native',
+        ...(request.dispatch_payload.run_id
+          ? { groupChatRunId: request.dispatch_payload.run_id }
+          : {}),
         ...(localCli ? { localCli } : {}),
         ...(executionContext.skillList !== undefined ? { allowedSkillIds: executionContext.skillList } : {}),
         // Restore ability assets granted before the wake approval (commander
