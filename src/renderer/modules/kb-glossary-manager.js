@@ -1116,6 +1116,16 @@
     dialog.addEventListener('click', onClick);
     dialog.addEventListener('input', onFilterChange);
     dialog.addEventListener('change', onFilterChange);
+
+    // 语言切换：弹层文案全部经 t(...) 取值，重渲染即拿到新语言。弹层挂载后自己持有 DOM，
+    // 视图不会重建它，所以必须自己响应 i18n-change；弹层关闭时解绑，避免监听器随开随积。
+    const onI18nChange = () => { render(); };
+    root.addEventListener('i18n-change', onI18nChange);
+    if (modal && typeof modal.then === 'function') {
+      const unbind = () => root.removeEventListener('i18n-change', onI18nChange);
+      modal.then(unbind, unbind);
+    }
+
     render();
     void reload();
     void loadMetrics().then(() => renderMetrics());
