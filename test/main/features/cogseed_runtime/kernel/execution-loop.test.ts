@@ -114,10 +114,14 @@ describe('CogSeed Runtime native execution loop', () => {
     expect(sessionText).toContain('Answer after tool.');
   });
 
-  it('emits a stable error event when a tool fails', async () => {
+  it('feeds a failed tool result back to the model instead of killing the turn', async () => {
     const model = adapterFromRuns([
       [
         { type: 'tool_call', call: { id: 'call-1', name: 'bad_tool', arguments: {} } },
+        { type: 'done' },
+      ],
+      [
+        { type: 'delta', text: 'Recovered from the tool error.' },
         { type: 'done' },
       ],
     ]);
@@ -129,16 +133,54 @@ describe('CogSeed Runtime native execution loop', () => {
           return { content: '[E_TOOL_FAILED] boom', isError: true };
         },
       },
+      maxToolRounds: 4,
     });
 
     const events = await collect(runner.run(request()));
 
+    // Observability is preserved: the failed tool result is still emitted.
+    expect(events).toContainEqual({
+      type: 'tool_result',
+      requestId: 'req-loop',
+      runtimeSessionId: SESSION,
+      text: '[E_TOOL_FAILED] boom',
+      metadata: { id: 'call-1', name: 'bad_tool', isError: true },
+    });
+    // The error is recoverable input, not a turn-fatal event.
+    expect(events.find((event) => event.type === 'error')).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({ type: 'result', text: 'Recovered from the tool error.' });
+    expect(model.seen[1].message).toContain('[E_TOOL_FAILED] boom');
+  });
+
+  it('still bounds a turn whose every tool round fails', async () => {
+    let round = 0;
+    const model: RuntimeModelAdapter = {
+      async *stream() {
+        round += 1;
+        yield { type: 'tool_call', call: { id: `call-${round}`, name: 'always_fails', arguments: {} } };
+        yield { type: 'done' };
+      },
+    };
+    const runner = createRuntimeSessionRunner({
+      modelAdapter: model,
+      toolRunner: {
+        catalog: [],
+        async run(): Promise<RuntimeToolResult> {
+          return { content: '[E_TOOL_FAILED] boom', isError: true };
+        },
+      },
+      maxToolRounds: 2,
+    });
+
+    const events = await collect(runner.run(request()));
+
+    expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(2);
     expect(events.at(-1)).toEqual({
       type: 'error',
       requestId: 'req-loop',
       runtimeSessionId: SESSION,
-      error: '[E_TOOL_FAILED] boom',
-      metadata: { code: 'runtime_tool_error', tool: 'bad_tool' },
+      error: 'runtime exceeded max tool rounds',
+      metadata: { code: 'max_tool_rounds', maxToolRounds: 2 },
     });
   });
 
