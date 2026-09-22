@@ -30,6 +30,8 @@ interface Harness {
   store: Map<string, string>;
   setCid: (cid: string) => void;
   setAgents: (agents: unknown[]) => void;
+  setCandidates: (agents: unknown[] | null) => void;
+  setOutOfScope: (agents: unknown[]) => void;
   textarea: { value: string; selectionStart: number; selectionEnd: number; setSelectionRange: (a: number, b: number) => void };
   events: any[];
 }
@@ -39,6 +41,8 @@ function createHarness(existingStore?: Map<string, string>): Harness {
   const events: any[] = [];
   let cid = 'conv-1';
   let agents: unknown[] = AGENTS;
+  let candidates: unknown[] | null = null;
+  let outOfScope: unknown[] = [];
   const textarea = {
     value: '',
     selectionStart: 0,
@@ -66,6 +70,8 @@ function createHarness(existingStore?: Map<string, string>): Harness {
     dispatchEvent: (event: any) => { events.push(event); return true; },
     addEventListener: () => {},
     getComposerAgentList: () => agents,
+    getComposerAgentCandidates: () => (candidates || agents),
+    getComposerOutOfScopeAgents: () => outOfScope,
     refreshExecConfigChip: () => {},
     escapeHtml: (value: unknown) => String(value == null ? '' : value),
     t: (key: string, vars?: Record<string, unknown>) => (
@@ -83,6 +89,8 @@ function createHarness(existingStore?: Map<string, string>): Harness {
     textarea,
     setCid: (next: string) => { sandbox.currentCid = next; },
     setAgents: (next: unknown[]) => { agents = next; },
+    setCandidates: (next: unknown[] | null) => { candidates = next; },
+    setOutOfScope: (next: unknown[]) => { outOfScope = next; },
   };
 }
 
@@ -238,6 +246,43 @@ describe('候选列表与原型对齐（勾选态 / 分组顺序）', () => {
       { group: 'task', key: 't2' },
     ]);
     expect(ordered.map((r: any) => r.key)).toEqual(['commander', 'c1', 't1', 't2']);
+  });
+
+  it('被空间排除的内部 Task Agent 显示为不可选行并给原因（PRD AC-04）', () => {
+    h.setOutOfScope([{ agent_id: 'task-x', name: '编写助手', runtime: { kind: 'in-process' } }]);
+    const rows = h.members.memberRows('conversation', 'members');
+    const row = rows.find((r: any) => r.key === 'task-x');
+    expect(row).toBeTruthy();
+    expect(row).toMatchObject({ kind: 'agent', group: 'task', checked: false, unavailable: true });
+    expect(row.name).toBe('编写助手');
+    expect(row.description).toContain('不在当前空间能力范围');
+  });
+
+  it('外接 Agent 存在于 outOfScope 时也不进不可选行（与派发侧豁免同口径）', () => {
+    h.setOutOfScope([{ agent_id: 'cli-codex', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } }]);
+    const rows = h.members.memberRows('conversation', 'members');
+    // 外接 Agent 由 candidateAgentList 正常给出可勾选行，不出现 unavailable 行。
+    const codex = rows.find((r: any) => r.key === 'cli-codex');
+    expect(codex.checked).toBe(false);
+    expect(codex.unavailable).toBeFalsy();
+  });
+
+  it('已选成员不在候选里时仍保留为可取消的勾选行（切换空间不丢选择）', () => {
+    h.setCid('conv-1');
+    h.members.addMember('conversation', { kind: 'agent', id: 'cli-codex', name: 'Codex' });
+    h.members.addMember('conversation', { kind: 'agent', id: 'task-a', name: '集成验证Agent' });
+    // 空间切换后候选只剩外接 Codex（任务型集成验证Agent 被排除）。
+    h.setCandidates([{ agent_id: 'cli-codex', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } }]);
+    h.setOutOfScope([{ agent_id: 'task-a', name: '集成验证Agent', runtime: { kind: 'in-process' } }]);
+    const rows = h.members.memberRows('conversation', 'members');
+    // 已选但不在候选 → retained 可取消行；外接 Codex 仍是正常可勾选行。
+    const codex = rows.find((r: any) => r.key === 'cli-codex');
+    const task = rows.find((r: any) => r.key === 'task-a');
+    expect(codex).toMatchObject({ checked: true });
+    expect(codex.unavailable).toBeFalsy();
+    expect(task).toMatchObject({ checked: true, retained: true });
+    expect(task.unavailable).toBeFalsy();
+    expect(task.description).toBeTruthy();
   });
 });
 
