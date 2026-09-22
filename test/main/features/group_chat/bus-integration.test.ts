@@ -2143,6 +2143,53 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
     });
   });
 
+  it("session-level stop durably stops running runs and rejects their Wake requests", async () => {
+    // 真机形状：会话级 Stop（无 run 作用域参数）之前只清内存队列/worker，不写
+    // 台账 → run 永远 running、汇总被「本 run 有待审批 Wake」挡住，而那条 Wake
+    // 又因为 actor 已终态永远批不过（批准直接报错）。这里钉住：Stop 之后 run 必须
+    // 是终态，且该 run 的待审批 Wake 必须被拒。
+    const cid = newCid();
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const store = await import("../../../../src/main/features/group_chat/run_store");
+    const wake = await import("../../../../src/main/features/p3394/wake-service");
+    const run = await store.createRun({
+      uid: TEST_UID,
+      cid,
+      submittedText: "会话级停止必须落到台账",
+      memberAgentIds: [AGENT_ID],
+      mentionAgentIds: [AGENT_ID],
+    });
+    await store.recordRunDispatch(TEST_UID, cid, run!.run_id, AGENT_ID, "turn-session-abort");
+    await store.recordRunActorTerminal(TEST_UID, cid, run!.run_id, AGENT_ID, {
+      terminal: "failed",
+      reason: "runtime_failed",
+      messages: 0,
+      artifacts: [],
+    });
+    const evaluated = await wake.evaluateWake(TEST_UID, {
+      conversationId: cid,
+      agentId: AGENT_ID,
+      source: "hand_off_to",
+      sourceActorId: "commander",
+      objective: "pending handoff must not outlive a session stop",
+      dispatchPayload: {
+        text: "pending handoff must not outlive a session stop",
+        run_id: run!.run_id,
+      },
+    });
+    expect(evaluated).toHaveProperty("request");
+    const request = (evaluated as any).request;
+    expect(request.dispatch_payload.run_id).toBe(run!.run_id);
+
+    await bus.abort(TEST_UID, cid);
+
+    expect((await store.readRun(TEST_UID, cid, run!.run_id))?.status).toBe("stopped");
+    expect(await wake.getWakeRequest(TEST_UID, request.id)).toMatchObject({
+      status: "rejected",
+      decision_reason: "user_stopped",
+    });
+  });
+
   it("run-scoped stop fails before runtime side effects when its durable ledger is unreadable", async () => {
     const cid = newCid();
     const bus = await import("../../../../src/main/features/group_chat/bus");
