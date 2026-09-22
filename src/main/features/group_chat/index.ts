@@ -17,7 +17,7 @@ import {
   conversationMessageFile,
   conversationMessageReadFile,
 } from '../../util/project-layout';
-import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, genId12, nowIso, safeId, writeJson } from '../../storage';
+import { readJson, readJsonl, rewriteJsonlLine, rewriteJsonlRecords, genId12, nowIso, safeId, writeJson } from '../../storage';
 import { createLogger } from '../../logger';
 import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { t } from '../../i18n';
@@ -32,8 +32,9 @@ import {
 import { isPlaceholderTitle } from './conv_title';
 import {
   abort as busAbort, dropConv as busDropConv, enqueue, subscribe, isQuiescent, runtimeSnapshot,
-  recoverPersistedUserDispatch,
+  classifyRecipientRuntimes, recoverPersistedUserDispatch, reconcileMemberRun,
   type GroupEvent,
+  type AbortRunOptions,
 } from './bus';
 import {
   readActiveCollaborationSnapshot,
@@ -45,6 +46,7 @@ import {
   type ResolveContextConflictSelectionInput,
 } from './collaboration';
 import { buildRetryResumeModelText } from './retry_resume';
+import { detectSequentialIntent, shouldDeferToCommanderForOrder } from './member_scope';
 import type { KstarTaskLifecycleSnapshot } from '../kstar/lifecycle-adapter';
 
 /** Re-export so the IPC layer can poll the bus's true quiescent state on
@@ -469,11 +471,22 @@ export interface SendInput {
   projection_receipt?: { projectionId: string; authorization: string };
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   recipient_agent_id?: string;
-  recipient_origin?: 'user_selection' | 'cli_fallback';
+  recipient_origin?: 'user_selection' | 'cli_fallback' | 'active_floor';
   /** Per-task execution config from the unified execution entry (composer
    *  recipient/model pick). Validated here; empty objects are dropped so
    *  downstream sees a clean undefined. */
   execution_config?: import('./bus').TurnExecutionConfig;
+  /** 提交幂等键（PRD EC-07）：同一次提交意图的重复发送携带同一个 id。
+   *  第一个请求被接受后，重复请求直接返回原消息，不再新建一次运行。 */
+  submit_request_id?: string;
+  /** 多 Agent：会话成员快照（有序）。成员表示本次协作的可选范围，不等于本条都
+   *  启动（FR-017）；缺省/空＝默认由 CogSeed 接收。 */
+  member_agent_ids?: string[];
+  /** 多 Agent：正文 `@` 点名的执行对象。非空时本条只派发给这些成员。 */
+  mention_agent_ids?: string[];
+  /** 多 Agent：按来源的模型配置（'internal' 共享来源，或外接实例 agent_id）。
+   *  多来源时取代单套 execution_config，避免内部连接/模型串到外接实例（FR-007）。 */
+  execution_configs?: Record<string, import('./bus').TurnExecutionConfig>;
   /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随消息贯穿派发；
    * 不传时行为与既往完全一致。 */
   p3394_envelope?: P3394Envelope;
@@ -486,12 +499,22 @@ type ValidatedUserRoute = NonNullable<Parameters<typeof enqueue>[0]['userRoute']
  * all re-read here before a route can bypass Wake Gate. */
 async function _validateUserRoute(
   userId: string,
+  cid: string,
   agentId: unknown,
   origin: unknown,
 ): Promise<ValidatedUserRoute | null> {
   if (agentId === undefined && origin === undefined) return null;
-  if (typeof agentId !== 'string' || !safeId(agentId) || (origin !== 'user_selection' && origin !== 'cli_fallback')) {
+  if (typeof agentId !== 'string' || !safeId(agentId)
+      || (origin !== 'user_selection' && origin !== 'cli_fallback' && origin !== 'active_floor')) {
     throw new Error('invalid recipient route');
+  }
+  if (agentId === COMMANDER_ID) {
+    if (origin !== 'user_selection') throw new Error('invalid recipient route');
+    return { agentId, origin };
+  }
+  if (origin === 'active_floor') {
+    const activeRecipient = (await readState(userId, cid)).active_recipient;
+    if (activeRecipient !== agentId) throw new Error('invalid active floor route');
   }
   const agents = await import('../agents');
   const { isAgentEnabled } = await import('../component_enabled');
@@ -529,14 +552,228 @@ async function _validateUserRoute(
 export function _validatedExecutionConfig(raw: unknown): import('./bus').TurnExecutionConfig | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  const provider = typeof r.provider === 'string' ? r.provider.trim() : '';
-  const model = typeof r.model === 'string' ? r.model.trim() : '';
+  const provider = _safeExecutionString(r.provider);
+  const model = _safeExecutionString(r.model);
+  if (provider === null || model === null) return null;
   const effort = r.effort === 'off' || r.effort === 'low' || r.effort === 'high' ? r.effort : undefined;
   if (!model && !effort) return null;
   return {
     ...(provider && model ? { provider, model } : (model ? { model } : {})),
     ...(effort ? { effort } : {}),
   };
+}
+
+const MAX_EXECUTION_STRING_LENGTH = 256;
+function _safeExecutionString(value: unknown): string | null {
+  if (value === undefined) return '';
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_EXECUTION_STRING_LENGTH || /[\u0000-\u001f\u007f-\u009f]/u.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
+ * 多 Agent 提交的成员 / 点名名单校验（PRD FR-015/FR-016）。
+ *
+ * 与单接收者路由同一条业务边界：渲染层状态只是建议，逐个 id 重新核验
+ * 「已启用 + 可派发」。任一失效即整条拒绝——绝不静默降级成部分成员执行。
+ */
+async function _validateAgentIdList(
+  userId: string,
+  raw: unknown,
+  field: string,
+  opts: { preserveCommander?: boolean } = {},
+): Promise<string[]> {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new Error(`invalid ${field}`);
+  const ids: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string' || !safeId(item)) throw new Error(`invalid ${field}`);
+    // 保留 id（协调者 / 用户）不是成员 agent：跨版本载荷里出现时按「非成员」丢弃，
+    // 而不是让整条提交失败——协调者由 bus 自身承担，不在 member_agent_ids 语义内。
+    if (item === USER_ID || (item === COMMANDER_ID && !opts.preserveCommander)) continue;
+    if (!ids.includes(item)) ids.push(item);
+  }
+  if (ids.length > 20) throw new Error(`${field} too large`);
+  const agents = await import('../agents');
+  const { isAgentEnabled } = await import('../component_enabled');
+  for (const id of ids) {
+    if (RESERVED_IDS.has(id)) continue;
+    if (!isAgentEnabled(userId, id)) throw new Error(`selected Agent is disabled: ${id}`);
+    const agent = await agents.getAgentForChatDispatch(userId, id);
+    if (!agent) throw new Error(`selected Agent is unavailable: ${id}`);
+  }
+  return ids;
+}
+
+/** 按来源的模型配置（多 Agent）：key 为来源 id（'internal' 或外接 agent_id）。 */
+export function _validatedExecutionConfigMap(raw: unknown): Record<string, import('./bus').TurnExecutionConfig> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: Record<string, import('./bus').TurnExecutionConfig> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key !== 'internal' && !safeId(key)) continue;
+    const cfg = _validatedExecutionConfig(value);
+    if (cfg) out[key] = cfg;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export type ExecutionSourceCapability =
+  | {
+      kind: 'internal';
+      models: Array<{ provider: string; model: string; effort: boolean }>;
+    }
+  | {
+      kind: 'external';
+      model: boolean;
+      effort: boolean;
+      effortOff: boolean;
+      /** Empty means the external runtime has a declared model channel but
+       * exposes no enumerable catalog, so a free-form model id is allowed. */
+      models: string[];
+    };
+
+/** Validate the complete renderer map against server-owned source identities
+ * and their execution capabilities. Any invalid entry rejects the submission;
+ * callers must never keep a valid subset of an untrusted map. */
+export function _validateExecutionConfigMapForSources(
+  raw: unknown,
+  capabilities: Record<string, ExecutionSourceCapability>,
+): Record<string, import('./bus').TurnExecutionConfig> | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid execution configs');
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (!entries.length) return null;
+  const out: Record<string, import('./bus').TurnExecutionConfig> = {};
+  for (const [sourceId, value] of entries) {
+    const capability = capabilities[sourceId];
+    if (!capability) throw new Error(`invalid execution config source: ${sourceId}`);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`invalid execution config: ${sourceId}`);
+    }
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== 'provider' && key !== 'model' && key !== 'effort')) {
+      throw new Error(`invalid execution config: ${sourceId}`);
+    }
+    const provider = _safeExecutionString(record.provider);
+    const model = _safeExecutionString(record.model);
+    const effort = record.effort;
+    const normalizedEffort: 'off' | 'low' | 'high' | undefined =
+      effort === 'off' || effort === 'low' || effort === 'high' ? effort : undefined;
+    if (provider === null || model === null) throw new Error(`invalid execution config: ${sourceId}`);
+    if (effort !== undefined && !normalizedEffort) {
+      throw new Error(`unsupported effort: ${sourceId}`);
+    }
+    if (capability.kind === 'internal') {
+      if ((provider || model) && (!provider || !model)) {
+        throw new Error(`unsupported provider/model: ${sourceId}`);
+      }
+      const match = provider && model
+        ? capability.models.find((entry) => entry.provider === provider && entry.model === model)
+        : undefined;
+      if (provider && model && !match) throw new Error(`unsupported provider/model: ${sourceId}`);
+      if (normalizedEffort && !(match ? match.effort : capability.models.some((entry) => entry.effort))) {
+        throw new Error(`unsupported effort: ${sourceId}`);
+      }
+      if (!model && !normalizedEffort) throw new Error(`invalid execution config: ${sourceId}`);
+      out[sourceId] = {
+        ...(provider && model ? { provider, model } : {}),
+        ...(normalizedEffort ? { effort: normalizedEffort } : {}),
+      };
+      continue;
+    }
+    if (provider) throw new Error(`unsupported provider: ${sourceId}`);
+    if (model && (!capability.model
+      || (capability.models.length > 0 && !capability.models.includes(model)))) {
+      throw new Error(`unsupported model: ${sourceId}`);
+    }
+    if (normalizedEffort && (!capability.effort || (normalizedEffort === 'off' && !capability.effortOff))) {
+      throw new Error(`unsupported effort: ${sourceId}`);
+    }
+    if (!model && !normalizedEffort) throw new Error(`invalid execution config: ${sourceId}`);
+    out[sourceId] = { ...(model ? { model } : {}), ...(normalizedEffort ? { effort: normalizedEffort } : {}) };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+async function _executionSourceCapabilities(
+  userId: string,
+  selectedAgentIds: string[],
+): Promise<Record<string, ExecutionSourceCapability>> {
+  const capabilities: Record<string, ExecutionSourceCapability> = {
+    internal: { kind: 'internal', models: [] },
+  };
+  const auth = await import('../auth');
+  const { entries } = await auth.listEntries();
+  const modelLists = new Map<string, Awaited<ReturnType<typeof auth.listModels>>['models']>();
+  for (const entry of entries) {
+    let models = modelLists.get(entry.provider);
+    if (!models) {
+      models = (await auth.listModels(entry.provider)).models;
+      modelLists.set(entry.provider, models);
+    }
+    const meta = models.find((model) => model.id === entry.model);
+    (capabilities.internal as Extract<ExecutionSourceCapability, { kind: 'internal' }>).models.push({
+      provider: entry.provider,
+      model: entry.model,
+      effort: meta?.reasoning === true,
+    });
+  }
+  const agents = await import('../agents');
+  const localModels = await import('../local_agents/models');
+  const gateways = await import('../p3394_bridge/external-gateways');
+  for (const id of selectedAgentIds) {
+    const agent = await agents.getAgentForChatDispatch(userId, id);
+    const runtime = agent?.runtime;
+    if (!runtime || (runtime.kind !== 'cli' && runtime.kind !== 'p3394-gateway')) continue;
+    const fallback = localModels.execControlFor(runtime.cli);
+    const inspected = await gateways.inspectExternalGatewayModels(runtime.cli);
+    const inspectedReady = inspected.status === 'ready';
+    capabilities[id] = {
+      kind: 'external',
+      model: runtime.kind === 'p3394-gateway' && !!runtime.model_args
+        ? true
+        : (inspectedReady ? inspected.modelControllable === true : fallback.model),
+      effort: runtime.kind === 'p3394-gateway' && !!runtime.effort_args
+        ? true
+        : (inspectedReady ? inspected.effortControllable === true : fallback.effort),
+      effortOff: fallback.effortOff,
+      models: inspectedReady
+        ? inspected.models.map((entry) => entry.id)
+        : localModels.listModels(runtime.cli as any).map((entry) => entry.id),
+    };
+  }
+  return capabilities;
+}
+
+/** Convert the legacy single-source composer override into the same durable
+ * per-source shape used by multi-source submissions. A single override is
+ * safe only when all selected executors resolve to one configuration source. */
+export function _normalizeRunSourceConfigs(
+  executionConfig: import('./bus').TurnExecutionConfig | null,
+  executionConfigs: Record<string, import('./bus').TurnExecutionConfig> | null,
+  selectedAgentIds: string[],
+  externalAgentIds: string[],
+): Record<string, import('./bus').TurnExecutionConfig> | null {
+  if (executionConfigs) {
+    return Object.fromEntries(
+      Object.entries(executionConfigs).map(([key, value]) => [key, { ...value }]),
+    );
+  }
+  if (!executionConfig) return null;
+  const external = new Set(externalAgentIds);
+  const sources = new Set(
+    selectedAgentIds.length
+      ? selectedAgentIds.map((id) => external.has(id) ? id : 'internal')
+      : ['internal'],
+  );
+  if (sources.size !== 1) {
+    throw new Error('execution_configs required for multiple sources');
+  }
+  const [source] = sources;
+  return { [source]: { ...executionConfig } };
 }
 
 /** 任务引用（@ 产物）源消息定位：在源会话消息里找持有该文件（附件或 produced）的最新一条。 */
@@ -776,22 +1013,329 @@ async function _resolveMessageReferences(
   return out;
 }
 
+// ─── 提交幂等（PRD EC-07 / 设计 §7） ──────────────────────────────────────
+// 复用失败回合重试的 claim 模式：同一 submit_request_id 只允许一次 enqueue。
+// 响应丢失后渲染层用同一个 id 重发 → 命中 claim 返回原消息，而不是新建运行。
+
+export interface SubmitClaim {
+  version: 1;
+  request_id: string;
+  payload_hash: string;
+  state: 'preparing' | 'message_persisted' | 'accepted';
+  updated_at: string;
+  run_id: string;
+  message_id: string;
+  recipient_ids: string[];
+  dispatch_turn_ids: Record<string, string>;
+}
+
+type SubmitPersistenceHooks = {
+  beforeClaimWrite?: () => void | Promise<void>;
+  beforeRunWrite?: () => void | Promise<void>;
+  afterMessageAppend?: () => void | Promise<void>;
+};
+
+let _submitPersistenceHooksForTest: SubmitPersistenceHooks | null = null;
+
+export function _setSubmitPersistenceHooksForTest(hooks: SubmitPersistenceHooks | null): void {
+  _submitPersistenceHooksForTest = hooks;
+}
+
+function _submitClaimFile(userId: string, cid: string, requestId: string): string {
+  return path.join(conversationLayout(userId, cid).groupDir, 'submit-claims', `${requestId}.json`);
+}
+
+export function _normSubmitClaim(raw: unknown, requestId: string): SubmitClaim | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Partial<SubmitClaim>;
+  if (r.version !== 1 || r.request_id !== requestId) return null;
+  if (r.state !== 'preparing' && r.state !== 'message_persisted' && r.state !== 'accepted') return null;
+  if (typeof r.updated_at !== 'string' || !Number.isFinite(Date.parse(r.updated_at))) return null;
+  if (typeof r.payload_hash !== 'string' || !safeId(r.payload_hash)) return null;
+  if (typeof r.run_id !== 'string' || !safeId(r.run_id)) return null;
+  if (typeof r.message_id !== 'string' || !safeId(r.message_id)) return null;
+  if (!Array.isArray(r.recipient_ids) || r.recipient_ids.some((id) => !safeId(id))) return null;
+  if (!r.dispatch_turn_ids || typeof r.dispatch_turn_ids !== 'object' || Array.isArray(r.dispatch_turn_ids)) return null;
+  const dispatchTurnIds: Record<string, string> = {};
+  for (const [recipientId, turnId] of Object.entries(r.dispatch_turn_ids)) {
+    if (!safeId(recipientId) || typeof turnId !== 'string' || !safeId(turnId)) return null;
+    dispatchTurnIds[recipientId] = turnId;
+  }
+  return {
+    version: 1,
+    request_id: requestId,
+    payload_hash: r.payload_hash,
+    state: r.state,
+    updated_at: r.updated_at,
+    run_id: r.run_id,
+    message_id: r.message_id,
+    recipient_ids: Array.from(new Set(r.recipient_ids)),
+    dispatch_turn_ids: dispatchTurnIds,
+  };
+}
+
+export async function _readSubmitClaim(userId: string, cid: string, requestId: string): Promise<SubmitClaim | null> {
+  try {
+    return _normSubmitClaim(await readJson(_submitClaimFile(userId, cid, requestId)), requestId);
+  } catch {
+    return null;
+  }
+}
+
+export async function _writeSubmitClaim(
+  userId: string,
+  cid: string,
+  requestId: string,
+  claim: SubmitClaim,
+): Promise<void> {
+  const file = _submitClaimFile(userId, cid, requestId);
+  await _submitPersistenceHooksForTest?.beforeClaimWrite?.();
+  await writeJson(file, claim);
+}
+
+export async function _clearSubmitClaim(userId: string, cid: string, requestId: string): Promise<void> {
+  try {
+    await fsp.unlink(_submitClaimFile(userId, cid, requestId));
+  } catch {
+    /* already gone */
+  }
+}
+
+/** 命中已接受的 claim 时取回原消息（回读失败也要返回"已接受"，不能变成第二次运行）。 */
+async function _loadClaimedMessage(userId: string, cid: string, messageId: string): Promise<GroupMessage | undefined> {
+  try {
+    const rows = await readJsonl<GroupMessage>(mainJsonlFile(userId, cid), 10_000);
+    return rows.find((row) => row.id === messageId);
+  } catch {
+    return undefined;
+  }
+}
+
+function _submitConversationLockFile(userId: string, cid: string): string {
+  return path.join(conversationLayout(userId, cid).groupDir, 'submit-claims', '.conversation-submit.lock');
+}
+
+function _stableSubmitId(
+  prefix: 'run_' | 'msg_' | 'turn-submit-',
+  input: Record<string, unknown>,
+): string {
+  const kind = prefix === 'run_'
+    ? 'submit_run'
+    : prefix === 'msg_'
+      ? 'submit_message'
+      : 'submit_turn';
+  return `${prefix}${cogSeedRequestFingerprint(kind, input).slice(0, 24)}`;
+}
+
+async function _readSubmitClaimStrict(
+  userId: string,
+  cid: string,
+  requestId: string,
+): Promise<SubmitClaim | null> {
+  const file = _submitClaimFile(userId, cid, requestId);
+  const raw = await readJson<unknown>(file);
+  const claim = _normSubmitClaim(raw, requestId);
+  if (fs.existsSync(file) && !claim) throw new Error('invalid durable submit claim');
+  return claim;
+}
+
+async function _recoverPersistedSubmit(
+  userId: string,
+  cid: string,
+  claim: SubmitClaim,
+  msg: GroupMessage,
+): Promise<void> {
+  for (const recipientId of msg.to) {
+    if (recipientId === USER_ID) continue;
+    const turnId = claim.dispatch_turn_ids[recipientId];
+    if (!turnId) throw new Error('persisted submit claim is missing a dispatch turn id');
+    await recoverPersistedUserDispatch({
+      uid: userId,
+      cid,
+      messageId: claim.message_id,
+      actionRequestId: claim.request_id,
+      recipientId,
+      turnId,
+    });
+  }
+}
+
+/** 提交被接受时建立协作运行（设计 §4.1）：成员/点名/配置在此冻结。 */
+async function _startRunForSubmit(params: {
+  userId: string;
+  cid: string;
+  text: string;
+  memberIds: string[];
+  mentionIds: string[];
+  externalIds: string[];
+  executionConfigs: Record<string, import('./bus').TurnExecutionConfig> | null;
+  attachments: string[];
+  references: ChatMessageReference[];
+  requiresSequential: boolean;
+  runId?: string;
+}): Promise<string | null> {
+  const { createRun } = await import('./run_store');
+  const { primeScopeAgentNames } = await import('./bus');
+  try {
+    const agents = await import('../agents');
+    const list = await agents.listAgents().catch(() => []);
+    primeScopeAgentNames((list || []).map((a: { agent_id: string; name?: string }) => ({
+      agent_id: a.agent_id,
+      name: a.name,
+    })));
+  } catch {
+    /* 显示名拿不到时范围块回落 id，不影响功能 */
+  }
+  const attachmentDescriptors = (() => {
+    if (!params.attachments.length) return [];
+    try {
+      const all = require('../chat_attachments') as typeof import('../chat_attachments');
+      const byName = new Map(all.listAttachments(params.userId, params.cid).map((item) => [item.name, item]));
+      return params.attachments.map((id) => {
+        const info = byName.get(id);
+        return info ? { id, ...info } : { id, name: id };
+      });
+    } catch {
+      return params.attachments.map((id) => ({ id, name: id }));
+    }
+  })();
+  const record = await createRun({
+    uid: params.userId,
+    cid: params.cid,
+    ...(params.runId ? { runId: params.runId } : {}),
+    submittedText: params.text,
+    memberAgentIds: params.memberIds,
+    mentionAgentIds: params.mentionIds,
+    externalAgentIds: params.externalIds,
+    ...(params.executionConfigs ? { sourceConfigs: params.executionConfigs } : {}),
+    attachmentIds: params.attachments,
+    attachmentDescriptors,
+    references: params.references,
+    requiresSequential: params.requiresSequential,
+  });
+  return record ? record.run_id : null;
+}
+
 export async function send(
   input: SendInput,
-): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
+): Promise<{
+  ok: boolean;
+  accepted?: true;
+  cid?: string;
+  submit_request_id?: string;
+  msg?: GroupMessage;
+  error?: string;
+}> {
   const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card, p3394_envelope } = input;
   if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
   if (!text || !text.trim()) return { ok: false, error: 'empty message' };
+  const submitRequestId = input.submit_request_id || `submit_${genId12()}`;
+  if (!safeId(submitRequestId)) return { ok: false, error: 'invalid submit request id' };
+  const acceptanceReceipt = {
+    accepted: true as const,
+    cid,
+    submit_request_id: submitRequestId,
+  };
+  const payloadHash = cogSeedRequestFingerprint('submit', {
+    cid,
+    text,
+    model_text: model_text || '',
+    attachments: attachments || [],
+    use_selections: use_selections || [],
+    references: references || [],
+    recipient_agent_id: input.recipient_agent_id || '',
+    recipient_origin: input.recipient_origin || '',
+    execution_config: input.execution_config || null,
+    member_agent_ids: input.member_agent_ids || [],
+    mention_agent_ids: input.mention_agent_ids || [],
+    execution_configs: input.execution_configs || null,
+    recall_projection_card: recall_projection_card || null,
+    kstar_review_card: kstar_review_card || null,
+    p3394_envelope: p3394_envelope || null,
+  });
+  const identity = { uid: userId, cid, request_id: submitRequestId };
+  const lockFile = _submitConversationLockFile(userId, cid);
+  try {
+    const accepted = await fileEditLock(lockFile).runExclusive(async () => {
+      const claim = await _readSubmitClaimStrict(userId, cid, submitRequestId);
+      if (!claim) return null;
+      if (claim.payload_hash !== payloadHash) {
+        return { ok: false as const, error: 'submit request ID payload conflict' };
+      }
+      if (claim.state !== 'accepted') return null;
+      const original = await _loadClaimedMessage(userId, cid, claim.message_id);
+      return { ok: true as const, ...(original ? { msg: original } : {}) };
+    });
+    if (accepted) return accepted.ok ? { ...accepted, ...acceptanceReceipt } : accepted;
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
   let userRoute: ValidatedUserRoute | null = null;
   try {
-    userRoute = await _validateUserRoute(userId, input.recipient_agent_id, input.recipient_origin);
+    userRoute = await _validateUserRoute(userId, cid, input.recipient_agent_id, input.recipient_origin);
   } catch (err) {
     return { ok: false, error: (err as Error).message || 'invalid recipient route' };
   }
-  // Per-task execution config (unified execution entry). Validate shape at
-  // the business boundary — the renderer state is advisory, same as the
-  // recipient route above.
-  const executionConfig = _validatedExecutionConfig(input.execution_config);
+  // Execution selection is renderer-advisory until member identity and
+  // server-owned source capabilities have both been classified below.
+  let executionConfig: import('./bus').TurnExecutionConfig | null = null;
+  // 多 Agent：成员 / 点名名单逐个核验；任一失效即整条拒绝，不静默部分执行
+  // （FR-015）。点名是本条的派发对象，不能再叠加结构化单接收者路由。
+  let memberIds: string[] = [];
+  let mentionIds: string[] = [];
+  let implicitActiveRecipient = '';
+  let executionConfigs: Record<string, import('./bus').TurnExecutionConfig> | null = null;
+  let memberExternalIds: string[] = [];
+  try {
+    memberIds = await _validateAgentIdList(userId, input.member_agent_ids, 'member_agent_ids');
+    mentionIds = await _validateAgentIdList(userId, input.mention_agent_ids, 'mention_agent_ids', {
+      preserveCommander: true,
+    });
+    if (mentionIds.length && userRoute) throw new Error('mention route conflicts with recipient route');
+    if (!userRoute && !memberIds.length && !mentionIds.length) {
+      const activeRecipient = (await readState(userId, cid)).active_recipient || '';
+      if (safeId(activeRecipient) && activeRecipient !== USER_ID) {
+        const validated = await _validateAgentIdList(
+          userId,
+          [activeRecipient],
+          'active_recipient',
+          { preserveCommander: true },
+        );
+        implicitActiveRecipient = validated[0] || '';
+      }
+    }
+    // 外接实例名单：派发时用来源判定，避免内部配置串到外接（FR-007）。
+    const selectedAgentIds = Array.from(new Set([
+      ...memberIds,
+      ...mentionIds,
+      ...(userRoute ? [userRoute.agentId] : []),
+      ...(implicitActiveRecipient ? [implicitActiveRecipient] : []),
+    ])).filter((id) => !RESERVED_IDS.has(id));
+    memberExternalIds = (await classifyRecipientRuntimes(userId, selectedAgentIds)).externalIds;
+    if (input.execution_config !== undefined && input.execution_configs !== undefined) {
+      throw new Error('ambiguous execution configs');
+    }
+    let rawSourceConfigs: unknown = input.execution_configs;
+    if (rawSourceConfigs === undefined && input.execution_config !== undefined) {
+      const external = new Set(memberExternalIds);
+      const sources = new Set(
+        selectedAgentIds.length
+          ? selectedAgentIds.map((id) => external.has(id) ? id : 'internal')
+          : ['internal'],
+      );
+      if (sources.size !== 1) throw new Error('execution_configs required for multiple sources');
+      rawSourceConfigs = { [Array.from(sources)[0]]: input.execution_config };
+    }
+    if (rawSourceConfigs !== undefined) {
+      const capabilities = await _executionSourceCapabilities(userId, selectedAgentIds);
+      executionConfigs = _validateExecutionConfigMapForSources(rawSourceConfigs, capabilities);
+    }
+    if (executionConfigs && Object.keys(executionConfigs).length === 1) {
+      executionConfig = Object.values(executionConfigs)[0];
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || 'invalid member selection' };
+  }
   await seedReservedActors(userId, cid);
   // Auto-title: the first real user message in a fresh / unnamed
   // conversation overwrites the placeholder title so the sidebar item
@@ -831,33 +1375,179 @@ export async function send(
   }
   // 空间任务引用合并（标准 composer @ 产物/资产 → task_references）：所有发送路径
   // （conversations.sendStream / groupChat.send IPC）都汇聚到这里，引用才能真正随消息发出。
-  const merged = await _mergeTaskReferences(userId, cid, text, references, model_text);
+  // 顺序意图 + 多点名：交给协调者编排（决策 A）——直接并行派发会让"先…再…"没有任何
+  // 依赖可依，强约束（设计 §4.4）也就无从校验。
+  const requiresSequential = detectSequentialIntent(text);
+  const deferToCommander = shouldDeferToCommanderForOrder({
+    requiresSequential,
+    mentionIds,
+  });
+  let merged: Awaited<ReturnType<typeof _mergeTaskReferences>>;
+  let resolvedReferences: ChatMessageReference[];
   try {
-    const resolvedReferences = await _resolveMessageReferences(userId, merged.refs);
-    const msg = await enqueue({
-      uid: userId, cid,
-      fromActorId: USER_ID,
-      text,
-      ...(merged.modelText && merged.modelText.trim() ? { model_text: merged.modelText } : {}),
-      ...(merged.assetRefs.length ? { space_asset_refs: merged.assetRefs } : {}),
-      ...(attachments && attachments.length ? { attachments: [...attachments] } : {}),
-      ...(use_selections && use_selections.length ? { use_selections } : {}),
-      ...(resolvedReferences.length ? { references: resolvedReferences } : {}),
-      ...(recall_projection_card ? { recall_projection_card } : {}),
-      ...(kstar_review_card ? { kstar_review_card } : {}),
-      ...(userRoute ? { userRoute, forceTo: [userRoute.agentId] } : {}),
-      ...(executionConfig ? { executionConfig } : {}),
-      ...(p3394_envelope ? { p3394_envelope } : {}),
+    merged = await _mergeTaskReferences(userId, cid, text, references, model_text);
+    resolvedReferences = await _resolveMessageReferences(userId, merged.refs);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || 'invalid submission references' };
+  }
+  const deterministicRunId = _stableSubmitId('run_', identity);
+  const deterministicMessageId = _stableSubmitId('msg_', identity);
+  const runMentionIds = Array.from(new Set([
+    ...mentionIds,
+    ...(userRoute && userRoute.agentId !== COMMANDER_ID ? [userRoute.agentId] : []),
+    ...(implicitActiveRecipient && implicitActiveRecipient !== COMMANDER_ID
+      ? [implicitActiveRecipient]
+      : []),
+  ]));
+  const candidateRecipients = Array.from(new Set([
+    COMMANDER_ID,
+    ...memberIds,
+    ...runMentionIds,
+    ...(userRoute ? [userRoute.agentId] : []),
+    ...(implicitActiveRecipient ? [implicitActiveRecipient] : []),
+  ]));
+  const deterministicTurnIds = Object.fromEntries(candidateRecipients.map((recipientId) => [
+    recipientId,
+    _stableSubmitId('turn-submit-', { ...identity, recipient_id: recipientId }),
+  ]));
+  try {
+    const result = await fileEditLock(lockFile).runExclusive(async () => {
+      let claim = await _readSubmitClaimStrict(userId, cid, submitRequestId);
+      if (claim && claim.payload_hash !== payloadHash) {
+        return { ok: false, error: 'submit request ID payload conflict' };
+      }
+      if (!claim) {
+        claim = {
+          version: 1,
+          request_id: submitRequestId,
+          payload_hash: payloadHash,
+          state: 'preparing',
+          updated_at: nowIso(),
+          run_id: deterministicRunId,
+          message_id: deterministicMessageId,
+          recipient_ids: [],
+          dispatch_turn_ids: deterministicTurnIds,
+        };
+        await _writeSubmitClaim(userId, cid, submitRequestId, claim);
+      }
+      if (claim.state === 'accepted') {
+        const original = await _loadClaimedMessage(userId, cid, claim.message_id);
+        return { ok: true, ...(original ? { msg: original } : {}) };
+      }
+
+      const acceptPersisted = async (persisted: GroupMessage) => {
+        claim = {
+          ...claim!,
+          state: 'message_persisted',
+          updated_at: nowIso(),
+          recipient_ids: persisted.to.slice(),
+        };
+        await _writeSubmitClaim(userId, cid, submitRequestId, claim);
+        await _recoverPersistedSubmit(userId, cid, claim, persisted);
+        claim = { ...claim, state: 'accepted', updated_at: nowIso() };
+        await _writeSubmitClaim(userId, cid, submitRequestId, claim);
+        return { ok: true as const, msg: persisted };
+      };
+
+      const alreadyPersisted = await _loadClaimedMessage(userId, cid, claim.message_id);
+      if (alreadyPersisted) return acceptPersisted(alreadyPersisted);
+
+      const { readRun } = await import('./run_store');
+      let run = await readRun(userId, cid, claim.run_id);
+      if (!run) {
+        await _submitPersistenceHooksForTest?.beforeRunWrite?.();
+        const createdRunId = await _startRunForSubmit({
+          userId,
+          cid,
+          text,
+          memberIds,
+          mentionIds: runMentionIds,
+          externalIds: memberExternalIds,
+          executionConfigs,
+          attachments: attachments ? [...attachments] : [],
+          references: resolvedReferences,
+          requiresSequential,
+          runId: claim.run_id,
+        });
+        if (createdRunId !== claim.run_id) throw new Error('collaboration run persistence failed');
+        run = await readRun(userId, cid, claim.run_id);
+        if (!run) throw new Error('collaboration run persistence failed');
+      }
+
+      try {
+        const msg = await enqueue({
+          uid: userId,
+          cid,
+          fromActorId: USER_ID,
+          text,
+          // Current renderer/IPC submissions are identity-structured. Raw
+          // display-name text is presentation only and must never be upgraded
+          // into a recipient by the legacy bus parser.
+          structuredUserSubmission: true,
+          actionRequestId: submitRequestId,
+          messageId: claim.message_id,
+          dispatchTurnIds: claim.dispatch_turn_ids,
+          ...(merged.modelText && merged.modelText.trim() ? { model_text: merged.modelText } : {}),
+          ...(merged.assetRefs.length ? { space_asset_refs: merged.assetRefs } : {}),
+          ...(attachments && attachments.length ? { attachments: [...attachments] } : {}),
+          ...(use_selections && use_selections.length ? { use_selections } : {}),
+          ...(resolvedReferences.length ? { references: resolvedReferences } : {}),
+          ...(recall_projection_card ? { recall_projection_card } : {}),
+          ...(kstar_review_card ? { kstar_review_card } : {}),
+          ...(userRoute ? { userRoute, forceTo: [userRoute.agentId] } : {}),
+          ...(mentionIds.length && !deferToCommander ? { forceTo: mentionIds } : {}),
+          ...(implicitActiveRecipient ? { forceTo: [implicitActiveRecipient] } : {}),
+          ...(deferToCommander ? { forceTo: [COMMANDER_ID] } : {}),
+          runId: claim.run_id,
+          ...(executionConfig ? { executionConfig } : {}),
+          ...(executionConfigs ? { memberConfigs: executionConfigs } : {}),
+          ...(memberExternalIds.length
+            ? { memberConfigScope: { external_ids: memberExternalIds } }
+            : {}),
+          ...((memberIds.length || runMentionIds.length || executionConfigs)
+            ? {
+              member_snapshot: {
+                member_agent_ids: memberIds,
+                ...(runMentionIds.length
+                  ? { mention_agent_ids: runMentionIds, mention_order: runMentionIds }
+                  : {}),
+                ...(memberExternalIds.length ? { external_agent_ids: memberExternalIds } : {}),
+                ...(requiresSequential ? { requires_sequential: true } : {}),
+                ...(executionConfigs ? { execution_configs: executionConfigs } : {}),
+              },
+            }
+            : {}),
+          ...(p3394_envelope ? { p3394_envelope } : {}),
+        });
+        await _submitPersistenceHooksForTest?.afterMessageAppend?.();
+        claim = {
+          ...claim,
+          state: 'message_persisted',
+          updated_at: nowIso(),
+          recipient_ids: msg.to.slice(),
+        };
+        await _writeSubmitClaim(userId, cid, submitRequestId, claim);
+        claim = { ...claim, state: 'accepted', updated_at: nowIso() };
+        await _writeSubmitClaim(userId, cid, submitRequestId, claim);
+        return { ok: true, msg };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'TEST_CRASH_AFTER_MESSAGE_APPEND') {
+          return { ok: false, error: (err as Error).message };
+        }
+        const persisted = await _loadClaimedMessage(userId, cid, claim.message_id);
+        if (persisted) return acceptPersisted(persisted);
+        throw err;
+      }
     });
-    // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
-    // 下一条消息不再自动携带（本消息的引用已在 enqueue 时快照，不受影响）。
-    try {
-      const chats = await import('../chats');
-      await chats.updateConversation(userId, cid, { task_references: [] });
-    } catch (clearErr) {
-      log.warn(`clear task_references failed user=${userId} cid=${cid}: ${(clearErr as Error).message}`);
+    if (result.ok) {
+      try {
+        const chats = await import('../chats');
+        await chats.updateConversation(userId, cid, { task_references: [] });
+      } catch (clearErr) {
+        log.warn(`clear task_references failed user=${userId} cid=${cid}: ${(clearErr as Error).message}`);
+      }
     }
-    return { ok: true, msg };
+    return result.ok ? { ...result, ...acceptanceReceipt } : result;
   } catch (err) {
     log.error(`send failed user=${userId} cid=${cid}: ${(err as Error).message}`);
     return { ok: false, error: (err as Error).message };
@@ -1528,8 +2218,494 @@ export async function retryFailedTurn(
 
 // ── Abort + drop ─────────────────────────────────────────────────────────
 
-export async function abort(userId: string, cid: string): Promise<{ ok: boolean }> {
-  await busAbort(userId, cid);
+interface RunRetryClaim {
+  version: 1;
+  request_id: string;
+  fingerprint: string;
+  run_id: string;
+  requested_agent_ids: string[];
+  agent_ids: string[];
+  status: 'pending' | 'completed';
+  canonical_request_id: string;
+  message_id?: string;
+  updated_at: string;
+}
+
+function normalizeRunRetryClaim(raw: unknown): RunRetryClaim | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const row = raw as Partial<RunRetryClaim>;
+  if (
+    row.version !== 1
+    || !safeId(row.request_id)
+    || typeof row.fingerprint !== 'string'
+    || !row.fingerprint
+    || !safeId(row.run_id)
+    || !Array.isArray(row.requested_agent_ids)
+    || row.requested_agent_ids.some((id) => !safeId(id))
+    || !Array.isArray(row.agent_ids)
+    || row.agent_ids.some((id) => !safeId(id))
+    || (row.status !== 'pending' && row.status !== 'completed')
+    || !safeId(row.canonical_request_id)
+    || (row.message_id !== undefined && !safeId(row.message_id))
+  ) return null;
+  return {
+    version: 1,
+    request_id: row.request_id,
+    fingerprint: row.fingerprint,
+    run_id: row.run_id,
+    requested_agent_ids: Array.from(new Set(row.requested_agent_ids)),
+    agent_ids: Array.from(new Set(row.agent_ids)),
+    status: row.status,
+    canonical_request_id: row.canonical_request_id,
+    ...(row.message_id ? { message_id: row.message_id } : {}),
+    updated_at: typeof row.updated_at === 'string' ? row.updated_at : '',
+  };
+}
+
+interface RunRetryOperation {
+  version: 1;
+  generation: number;
+  operation_id: string;
+  fingerprint: string;
+  run_id: string;
+  requested_agent_ids: string[];
+  retry_agent_ids: string[];
+  recipient_ids: string[];
+  dispatch_turn_ids: Record<string, string>;
+  state: 'preparing' | 'message_persisted' | 'accepted';
+  canonical_request_id: string;
+  request_aliases: string[];
+  message_id: string;
+  updated_at: string;
+}
+
+function normalizeRunRetryOperation(raw: unknown): RunRetryOperation | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const row = raw as Partial<RunRetryOperation>;
+  const idList = (value: unknown): string[] | null => {
+    if (!Array.isArray(value) || value.some((id) => !safeId(id))) return null;
+    const ids = Array.from(new Set(value as string[]));
+    return ids.length === value.length ? ids : null;
+  };
+  const requestedAgentIds = idList(row.requested_agent_ids);
+  const retryAgentIds = idList(row.retry_agent_ids);
+  const recipientIds = idList(row.recipient_ids);
+  const requestAliases = idList(row.request_aliases);
+  if (!requestedAgentIds?.length || !retryAgentIds?.length || !recipientIds?.length || !requestAliases?.length) {
+    return null;
+  }
+  if (!row.dispatch_turn_ids
+    || typeof row.dispatch_turn_ids !== 'object'
+    || Array.isArray(row.dispatch_turn_ids)
+    || Object.entries(row.dispatch_turn_ids).some(([recipientId, turnId]) => (
+      !safeId(recipientId) || !safeId(turnId)
+    ))
+    || recipientIds.some((id) => !row.dispatch_turn_ids?.[id])
+    || Object.keys(row.dispatch_turn_ids).some((id) => !recipientIds.includes(id))) {
+    return null;
+  }
+  if (
+    row.version !== 1
+    || !Number.isSafeInteger(row.generation)
+    || Number(row.generation) < 1
+    || !safeId(row.operation_id)
+    || typeof row.fingerprint !== 'string'
+    || !row.fingerprint
+    || !safeId(row.run_id)
+    || !safeId(row.canonical_request_id)
+    || !safeId(row.message_id)
+    || (row.state !== 'preparing'
+      && row.state !== 'message_persisted'
+      && row.state !== 'accepted')
+  ) return null;
+  return {
+    version: 1,
+    generation: Number(row.generation),
+    operation_id: row.operation_id,
+    fingerprint: row.fingerprint,
+    run_id: row.run_id,
+    requested_agent_ids: requestedAgentIds,
+    retry_agent_ids: retryAgentIds,
+    recipient_ids: recipientIds,
+    dispatch_turn_ids: { ...row.dispatch_turn_ids },
+    state: row.state,
+    canonical_request_id: row.canonical_request_id,
+    request_aliases: requestAliases,
+    message_id: row.message_id,
+    updated_at: typeof row.updated_at === 'string' ? row.updated_at : '',
+  };
+}
+
+function runRetryDispatchTurnId(fingerprint: string, recipientId: string): string {
+  const recipientFingerprint = cogSeedRequestFingerprint('retry', {
+    fingerprint,
+    recipient_id: recipientId,
+  });
+  return `turn-run-retry-${recipientFingerprint.slice(0, 24)}`;
+}
+
+function runRetryOperationId(fingerprint: string, generation: number): string {
+  return `retryop-${fingerprint.slice(0, 24)}-${generation}`;
+}
+
+function runRetryMessageId(fingerprint: string): string {
+  const messageFingerprint = cogSeedRequestFingerprint('retry', {
+    operation_id: fingerprint,
+  });
+  return `msg-run-retry-${messageFingerprint.slice(0, 24)}`;
+}
+
+function runRetryClaimFile(userId: string, cid: string, requestId: string): string {
+  return path.join(
+    conversationLayout(userId, cid).groupDir,
+    'dashboard-retry-claims',
+    `run-${requestId}.json`,
+  );
+}
+
+function runRetryOperationFile(userId: string, cid: string, fingerprint: string): string {
+  return path.join(
+    conversationLayout(userId, cid).groupDir,
+    'dashboard-retry-claims',
+    `run-target-${fingerprint}.json`,
+  );
+}
+
+async function readPersistedRunRetryMessage(
+  userId: string,
+  cid: string,
+  operation: RunRetryOperation,
+): Promise<GroupMessage | undefined> {
+  const rows = await readJsonl<GroupMessage>(mainJsonlFile(userId, cid), 100_000);
+  return rows.find((row) => (
+    row.id === operation.message_id
+    && row.from === USER_ID
+    && row.action_request_id === operation.canonical_request_id
+    && row.run_id === operation.run_id
+  ));
+}
+
+function runRetryAlias(
+  requestId: string,
+  requestedAgentIds: string[],
+  operation: RunRetryOperation,
+  status: RunRetryClaim['status'],
+): RunRetryClaim {
+  return {
+    version: 1,
+    request_id: requestId,
+    fingerprint: operation.fingerprint,
+    run_id: operation.run_id,
+    requested_agent_ids: requestedAgentIds.slice().sort(),
+    agent_ids: operation.retry_agent_ids,
+    status,
+    canonical_request_id: operation.canonical_request_id,
+    ...(status === 'completed' ? { message_id: operation.message_id } : {}),
+    updated_at: nowIso(),
+  };
+}
+
+export async function retryRun(input: {
+  userId: string;
+  cid: string;
+  runId: string;
+  agentIds: string[];
+  requestId: string;
+}): Promise<{ ok: boolean; retry_agent_ids?: string[]; msg?: GroupMessage; error?: string }> {
+  if (!safeId(input.cid) || !safeId(input.runId) || !safeId(input.requestId)) {
+    return { ok: false, error: 'invalid run retry request' };
+  }
+  const requested = Array.from(new Set(input.agentIds.filter((id) => safeId(id))));
+  if (!requested.length || requested.length !== input.agentIds.length) {
+    return { ok: false, error: 'invalid retry actors' };
+  }
+  const requestedPayloadIds = requested.slice().sort();
+  const claimFile = runRetryClaimFile(input.userId, input.cid, input.requestId);
+  const replayClaim = normalizeRunRetryClaim(await readJson<unknown>(claimFile));
+  if (replayClaim) {
+    if (replayClaim.request_id !== input.requestId
+      || replayClaim.run_id !== input.runId
+      || JSON.stringify(replayClaim.requested_agent_ids) !== JSON.stringify(requestedPayloadIds)) {
+      return { ok: false, error: 'retry request ID payload conflict' };
+    }
+    if (replayClaim.status === 'completed') {
+      const rows = await readJsonl<GroupMessage>(mainJsonlFile(input.userId, input.cid), 100_000);
+      const msg = rows.find((row) => (
+        row.id === replayClaim.message_id
+        && row.action_request_id === replayClaim.canonical_request_id
+        && row.run_id === replayClaim.run_id
+      ));
+      if (!msg) return { ok: false, error: 'accepted retry message is missing' };
+      return { ok: true, retry_agent_ids: replayClaim.agent_ids, msg };
+    }
+  }
+  const runStore = await import('./run_store');
+  const initialRun = await runStore.readRun(input.userId, input.cid, input.runId);
+  if (!initialRun || initialRun.cid !== input.cid) return { ok: false, error: 'run not found' };
+  const requestedSet = new Set(requested);
+  const targetActorIds = initialRun.actors
+    .filter((actor) => requestedSet.has(actor.agent_id) && actor.terminal !== 'done')
+    .map((actor) => actor.agent_id)
+    .sort();
+  if (!targetActorIds.length) return { ok: false, error: 'no retryable actors' };
+  const fingerprint = cogSeedRequestFingerprint('retry', {
+    cid: input.cid,
+    run_id: input.runId,
+    agent_ids: targetActorIds,
+  });
+  const operationFile = runRetryOperationFile(input.userId, input.cid, fingerprint);
+  try {
+    return await fileEditLock(claimFile).runExclusive(async () => {
+      const claim = normalizeRunRetryClaim(await readJson<unknown>(claimFile));
+      if (claim && (
+        claim.request_id !== input.requestId
+        || claim.fingerprint !== fingerprint
+        || claim.run_id !== input.runId
+        || JSON.stringify(claim.requested_agent_ids) !== JSON.stringify(requestedPayloadIds)
+      )) {
+        return { ok: false, error: 'retry request ID payload conflict' };
+      }
+      return fileEditLock(operationFile).runExclusive(async () => {
+        const {
+          finalizeRun,
+          prepareRunRetry,
+          readRun,
+          recordRunActorTerminal,
+          retryableRunActorIds,
+        } = runStore;
+        let operation = normalizeRunRetryOperation(await readJson<unknown>(operationFile));
+        let run = await readRun(input.userId, input.cid, input.runId);
+        if (!run || run.cid !== input.cid) return { ok: false, error: 'run not found' };
+
+        const agentsFeat = await import('../agents');
+        let nextGeneration = 1;
+        if (operation) {
+          if (operation.fingerprint !== fingerprint
+            || operation.run_id !== input.runId
+            || JSON.stringify(operation.requested_agent_ids) !== JSON.stringify(targetActorIds)) {
+            return { ok: false, error: 'retry target claim conflict' };
+          }
+          if (operation.state === 'accepted') {
+            const operationStillActive = operation.retry_agent_ids.every((agentId) => {
+              const actor = run!.actors.find((candidate) => candidate.agent_id === agentId);
+              return actor?.terminal === 'pending'
+                && actor.retry_operation_id === operation!.operation_id;
+            });
+            if (!operationStillActive) {
+              nextGeneration = operation.generation + 1;
+              operation = null;
+            }
+          }
+        }
+        if (!operation) {
+          const retryIds = retryableRunActorIds(run, targetActorIds);
+          if (!retryIds.length) return { ok: false, error: 'no retryable actors' };
+          const collaboration = await readCollaborationSnapshot(input.userId, input.cid);
+          const rejectedGateActorIds = new Set(
+            (collaboration?.gates || [])
+              .filter((gate) => gate.review_decision === 'rejected')
+              .map((gate) => collaboration?.steps.find((step) => step.id === gate.step_id))
+              .filter((step) => (
+                step?.group_chat_run_id === input.runId
+                && !!step.actor_id
+                && retryIds.includes(step.actor_id)
+              ))
+              .map((step) => step!.actor_id!),
+          );
+          if (rejectedGateActorIds.size > 0) {
+            for (const agentId of rejectedGateActorIds) {
+              await recordRunActorTerminal(input.userId, input.cid, input.runId, agentId, {
+                terminal: 'blocked',
+                reason: 'approval_rejected',
+                messages: 0,
+                artifacts: [],
+              });
+            }
+            await finalizeRun(input.userId, input.cid, input.runId);
+            return { ok: false, error: 'retry blocked by rejected approval' };
+          }
+          const { listWakeRequests } = await import('../p3394/wake-service');
+          const wakes = await listWakeRequests(input.userId, input.cid);
+          if (wakes.some((request) => (
+            request.dispatch_payload.run_id === input.runId
+            && retryIds.includes(request.agent_id)
+            && request.status === 'rejected'
+          ))) {
+            return { ok: false, error: 'retry blocked by rejected approval' };
+          }
+          const { isAgentEnabled } = await import('../component_enabled');
+          for (const agentId of retryIds) {
+            if (!isAgentEnabled(input.userId, agentId)
+              || !await agentsFeat.getAgentForChatDispatch(input.userId, agentId)) {
+              return { ok: false, error: `retry actor is unavailable: ${agentId}` };
+            }
+          }
+          const recipientIds = run.input_snapshot.requires_sequential && retryIds.length > 1
+            ? [COMMANDER_ID]
+            : retryIds;
+          const operationId = runRetryOperationId(fingerprint, nextGeneration);
+          operation = {
+            version: 1,
+            generation: nextGeneration,
+            operation_id: operationId,
+            fingerprint,
+            run_id: input.runId,
+            requested_agent_ids: targetActorIds,
+            retry_agent_ids: retryIds,
+            recipient_ids: recipientIds,
+            dispatch_turn_ids: Object.fromEntries(recipientIds.map((recipientId) => [
+              recipientId,
+              runRetryDispatchTurnId(operationId, recipientId),
+            ])),
+            state: 'preparing',
+            canonical_request_id: input.requestId,
+            request_aliases: [input.requestId],
+            message_id: runRetryMessageId(operationId),
+            updated_at: nowIso(),
+          };
+          await writeJson(operationFile, operation);
+        } else {
+          if (!operation.request_aliases.includes(input.requestId)) {
+            operation = {
+              ...operation,
+              request_aliases: [...operation.request_aliases, input.requestId],
+              updated_at: nowIso(),
+            };
+            await writeJson(operationFile, operation);
+          }
+        }
+
+        if (!claim) {
+          await writeJson(
+            claimFile,
+            runRetryAlias(input.requestId, requestedPayloadIds, operation, 'pending'),
+          );
+        }
+
+        let persisted = await readPersistedRunRetryMessage(input.userId, input.cid, operation);
+        if (operation.state === 'accepted') {
+          if (!persisted) throw new Error('accepted retry message is missing');
+          await writeJson(
+            claimFile,
+            runRetryAlias(input.requestId, requestedPayloadIds, operation, 'completed'),
+          );
+          return { ok: true, retry_agent_ids: operation.retry_agent_ids, msg: persisted };
+        }
+        if (persisted) {
+          operation = { ...operation, state: 'message_persisted', updated_at: nowIso() };
+          await writeJson(operationFile, operation);
+          for (const recipientId of operation.recipient_ids) {
+            if (recipientId === USER_ID || !persisted.to.includes(recipientId)) continue;
+            await recoverPersistedUserDispatch({
+              uid: input.userId,
+              cid: input.cid,
+              messageId: persisted.id,
+              actionRequestId: operation.canonical_request_id,
+              recipientId,
+              turnId: operation.dispatch_turn_ids[recipientId],
+            });
+          }
+          operation = { ...operation, state: 'accepted', updated_at: nowIso() };
+          await writeJson(operationFile, operation);
+          await writeJson(
+            claimFile,
+            runRetryAlias(input.requestId, requestedPayloadIds, operation, 'completed'),
+          );
+          return { ok: true, retry_agent_ids: operation.retry_agent_ids, msg: persisted };
+        }
+
+        const prepared = await prepareRunRetry(
+          input.userId,
+          input.cid,
+          input.runId,
+          operation.retry_agent_ids,
+          operation.operation_id,
+        );
+        if (!prepared?.retry_agent_ids.length) {
+          run = await readRun(input.userId, input.cid, input.runId);
+          if (!operation.retry_agent_ids.every((agentId) => {
+            const actor = run?.actors.find((candidate) => candidate.agent_id === agentId);
+            return actor?.terminal === 'pending'
+              && actor.retry_operation_id === operation!.operation_id;
+          })) {
+            return { ok: false, error: 'no retryable actors' };
+          }
+        } else {
+          run = prepared.run;
+        }
+        if (!run) return { ok: false, error: 'run not found' };
+        const retryNames = await Promise.all(operation.retry_agent_ids.map(async (agentId) => (
+          (await agentsFeat.getAgentForChatDispatch(input.userId, agentId))?.name || agentId
+        )));
+        const snapshot = run.input_snapshot;
+        const retryModelText = [
+          `<collaboration-run-retry run_id="${input.runId}">`,
+          `Retry only these unfinished agent ids: ${operation.retry_agent_ids.join(', ')}`,
+          'Do not dispatch or repeat work from members that already contributed.',
+          'Original request:',
+          snapshot.submitted_text,
+          '</collaboration-run-retry>',
+        ].join('\n');
+        const msg = await enqueue({
+          uid: input.userId,
+          cid: input.cid,
+          fromActorId: USER_ID,
+          actionRequestId: operation.canonical_request_id,
+          messageId: operation.message_id,
+          dispatchTurnIds: operation.dispatch_turn_ids,
+          text: t('chat.run_retry_message', { names: retryNames.join(', ') }),
+          model_text: retryModelText,
+          forceTo: operation.recipient_ids,
+          runId: input.runId,
+          ...(snapshot.attachment_ids.length
+            ? { attachments: snapshot.attachment_ids.slice() }
+            : {}),
+          ...(snapshot.references.length
+            ? { references: snapshot.references.map((reference) => ({ ...reference })) }
+            : {}),
+          ...(snapshot.source_configs
+            ? {
+                memberConfigs: snapshot.source_configs,
+                memberConfigScope: { external_ids: snapshot.external_agent_ids },
+              }
+            : {}),
+          member_snapshot: {
+            member_agent_ids: snapshot.member_agent_ids,
+            mention_agent_ids: operation.retry_agent_ids,
+            mention_order: snapshot.mention_order.filter((id) => operation.retry_agent_ids.includes(id)),
+            requires_sequential: snapshot.requires_sequential,
+            external_agent_ids: snapshot.external_agent_ids,
+            ...(snapshot.source_configs ? { execution_configs: snapshot.source_configs } : {}),
+          },
+        });
+        if (msg.id !== operation.message_id) throw new Error('retry enqueue returned unexpected message id');
+        operation = { ...operation, state: 'message_persisted', updated_at: nowIso() };
+        await writeJson(operationFile, operation);
+        operation = { ...operation, state: 'accepted', updated_at: nowIso() };
+        await writeJson(operationFile, operation);
+        await writeJson(
+          claimFile,
+          runRetryAlias(input.requestId, requestedPayloadIds, operation, 'completed'),
+        );
+        return { ok: true, retry_agent_ids: operation.retry_agent_ids, msg };
+      });
+    });
+  } catch (err) {
+    log.error('collaboration run retry failed', { error: logErrorRef(err) });
+    return { ok: false, error: (err as Error).message || String(err) };
+  }
+}
+
+export async function reconcileRun(userId: string, cid: string, runId: string): Promise<void> {
+  await reconcileMemberRun(userId, cid, runId);
+}
+
+export async function abort(
+  userId: string,
+  cid: string,
+  options?: AbortRunOptions,
+): Promise<{ ok: boolean }> {
+  await busAbort(userId, cid, options);
   return { ok: true };
 }
 

@@ -8,6 +8,8 @@
 // skill / connector tokens stay in `content`; legacy rows may still carry
 // `use`, which is expanded at dispatch time for compatibility.
 
+const _queueDispatchInFlight = new Map(); // cid -> durable queue item id
+
 function _loadQueueFromStorage(cid) {
   if (!cid) return [];
   try {
@@ -123,6 +125,7 @@ async function _dispatchNextQueued(cid) {
   const q = _getQueue(cid);
   if (!q.length) return;
   if (isConvPending(cid)) return;
+  if (_queueDispatchInFlight.has(cid)) return;
   // Only auto-dispatch for the currently-viewed conversation so the user sees
   // messages go out in order. Queues on other cids stay parked until the user
   // switches back (then on render we'll also kick the next item).
@@ -165,11 +168,14 @@ async function _dispatchNextQueued(cid) {
     ? next.content
     : applyRecipientPrefix(withUse, 'conversation', { recipientSnapshot: next.recipient });
   const extra = next.extra && typeof next.extra === 'object' ? { ...next.extra } : {};
-  // 显式 @提及 本身就是路由目标，不能被入队时快照的结构化路由字段覆盖——
-  // 与即时发送路径的规则一致。否则「切换并继续」重建的 @新目标 在队列重放
-  // 时会被旧接收者（失败的智能体）的 recipient_agent_id 劫持，仍路由回失败的那个。
-  const queueHasLeadingMention = /^@([A-Za-z0-9_一-鿿-]+)\s?/u.test(String(next.content || '').trim());
-  if (!next.direct && !queueHasLeadingMention && typeof _recipientRoutingFields === 'function') {
+  // Only chooser-backed identities can override the enqueue-time recipient.
+  // Visible @ text is presentation and may have been typed or pasted.
+  const hasStructuredRoute = (
+    Array.isArray(extra.mention_agent_ids) && extra.mention_agent_ids.length > 0
+  ) || (
+    Array.isArray(extra.member_agent_ids) && extra.member_agent_ids.length > 0
+  );
+  if (!next.direct && !hasStructuredRoute && typeof _recipientRoutingFields === 'function') {
     Object.assign(extra, _recipientRoutingFields(next.recipient));
   }
   if (!Array.isArray(extra.use_selections) && typeof _normalizeChatUseSelections === 'function') {
@@ -179,7 +185,7 @@ async function _dispatchNextQueued(cid) {
     ]);
     if (selections.length) extra.use_selections = selections;
   }
-  const removeStartedItem = () => {
+  const removeAcceptedItem = () => {
     const liveQueue = _getQueue(cid);
     const idx = liveQueue.findIndex((item) => item && item.id === next.id);
     if (idx < 0) return;
@@ -188,20 +194,31 @@ async function _dispatchNextQueued(cid) {
     _updateConvSidebarBadge(cid);
     if (cid === currentCid) renderMessageQueue(cid);
   };
-  // Fire-and-forget: the send path owns stream failures and final cleanup.
-  // `onStarted` runs synchronously before the request begins, so a second
-  // drain cannot overtake this item; if preflight refuses the send, it stays
-  // at the head of the persisted queue.
-  Promise.resolve(sendInCurrentConversation(
-    content,
-    Object.keys(extra).length ? extra : undefined,
-    {
-      from_queue: true,
-      source_view: 'conversation',
-      agent_id: String(extra.recipient_agent_id || ''),
-      onStarted: removeStartedItem,
-    },
-  )).catch(() => {});
+  const submitRequestId = String(extra.submit_request_id || '');
+  _queueDispatchInFlight.set(cid, next.id);
+  let result = null;
+  try {
+    result = await sendInCurrentConversation(
+      content,
+      Object.keys(extra).length ? extra : undefined,
+      {
+        from_queue: true,
+        source_view: 'conversation',
+        agent_id: String(extra.recipient_agent_id || ''),
+      },
+    );
+  } catch (_) {
+    return;
+  } finally {
+    if (_queueDispatchInFlight.get(cid) === next.id) _queueDispatchInFlight.delete(cid);
+  }
+  if (result?.accepted !== true
+      || String(result.cid || '') !== String(cid)
+      || String(result.submit_request_id || '') !== submitRequestId) return;
+  removeAcceptedItem();
+  // Stream completion attempted to drain while this item was still durable;
+  // continue explicitly after the exact acceptance receipt removes it.
+  void _dispatchNextQueued(cid);
 }
 
 function renderMessageQueue(cid) {

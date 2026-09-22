@@ -21883,6 +21883,38 @@ body:has(#panel-settings.active) .main-top-actions {
 }
 .chat-collaboration-status[data-busy="1"] { opacity: .72; }
 
+.chat-run-summary {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.chat-run-summary-heading,
+.chat-run-summary-group li,
+.chat-run-summary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.chat-run-summary-heading span,
+.chat-run-summary-label,
+.chat-run-summary-group li span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-run-summary-group ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.chat-run-summary-group.is-missing li span:last-child { color: var(--danger); }
+.chat-run-summary-actions { justify-content: flex-end; }
 .model-authorization-list { display: grid; gap: 10px; margin-top: 12px; }
 .model-authorization-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--surface-1, var(--color-surface)); }
 .model-authorization-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
@@ -33224,4 +33256,69 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .chat-recall-projection-card.is-error {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   color: var(--danger);
+}
+
+/* ─── 多 Agent 选择：会话成员 / 正文点名标记 / 按来源模型配置 ───────────────
+   交互基线见 PRD v2.4 与原型 v0.17；配色沿用产品绿（--success），不引入新色值。 */
+
+/* 正文点名标记：产品绿文字，外观与原型 `.cm-mention-text` 一致（不做胶囊底色）。
+   DOM 上是 contenteditable=false 的整体节点，因此整块删除、不拆字、不误删任务文字。 */
+.chat-rich-editor .chat-rich-mention-chip,
+.chat-input-mirror .chat-rich-mention-chip,
+.auto-row-content .chat-rich-mention-chip {
+  display: inline;
+  color: var(--success);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* 底部入口的 `+N` 摘要（一位成员时不渲染）。 */
+.chat-recipient-chip .chat-recipient-more {
+  color: var(--primary-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 候选列表里的可勾选成员行：点选不关闭列表（FR-001 连续多选）。
+   行是普通 div（agents.js 绑定的点击目标，键盘走 .active 行的 Enter 路径），
+   勾选状态由共享 uiCheckbox 承载，所以这里只做行布局与勾选框间距，
+   不再自绘勾选方框（shared-ui-adoption-guard 要求复用共享原语）。 */
+.composer-member-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  margin: 0;
+  text-align: left;
+}
+.composer-member-row .composer-member-check {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  margin-top: 1px;
+}
+.composer-member-row .composer-member-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* 候选列表底部：计数 + 完成。 */
+.composer-members-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 2px 2px;
+  border-top: 1px solid var(--border);
+}
+.composer-members-foot[hidden] { display: none; }
+.composer-members-count {
+  color: var(--muted);
+  font-size: var(--font-size-ui-sm);
 }

@@ -31,6 +31,9 @@ export interface WakeDispatchPayload {
   /** Ability asset ids the commander granted for THIS task. Persisted so a
    *  wake-gated dispatch can restore the grant after user approval. */
   asset_ids?: string[];
+  /** 本条派发所属的协作运行 id。Wake 批准后的派发不经过 group-chat 的 enqueue
+   *  收口，只能靠这里带上 run id，批准后才能把这次派发记进 run 台账（设计 §4.1）。 */
+  run_id?: string;
 }
 
 export type WakeExecutionDomain = 'group_chat' | 'cogseed';

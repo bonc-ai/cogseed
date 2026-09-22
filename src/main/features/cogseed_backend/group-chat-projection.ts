@@ -38,6 +38,8 @@ export interface CogSeedGroupChatProjectionInput {
   taskId: string;
   /** Stable per-attempt id used for idempotent conversation writeback. */
   executionId?: string;
+  /** Collaboration ledger correlation persisted on the owning backend task. */
+  groupChatRunId?: string;
   sessionId: string;
   event: CogSeedProjectionEvent;
 }
@@ -57,6 +59,7 @@ export interface CogSeedGroupChatProjectionDeps {
     conversationId: string;
     agentId: string;
     turnId: string;
+    runId?: string;
     text: string;
     process: ProjectionProcessItem[];
     /** adapter 透传的用量/模型自报（CLI 自报数字字段），随消息落 metrics。 */
@@ -269,6 +272,7 @@ const defaultDeps: CogSeedGroupChatProjectionDeps = {
       cid: input.conversationId,
       agentId: input.agentId,
       turnId: input.turnId,
+      ...(input.runId ? { runId: input.runId } : {}),
       text: handback.text,
       process: input.process,
       ...(input.metrics ? { metrics: input.metrics } : {}),
@@ -345,6 +349,7 @@ export function createCogSeedGroupChatProjection(
                   conversationId: input.conversationId,
                   agentId: input.agentId,
                   turnId: input.executionId || input.taskId,
+                  ...(input.groupChatRunId ? { runId: input.groupChatRunId } : {}),
                   text: terminal?.text || '',
                   process: nextState.process,
                   ...(metricsMeta ? { metrics: metricsMeta } : {}),

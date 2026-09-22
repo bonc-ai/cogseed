@@ -31,7 +31,14 @@ import {
   isFileSystemCaseSensitive,
   isPathAllowed,
 } from "../../util/path-sandbox";
-import { appendJsonlAtomic, genId12, nowIso, readJsonl, safeId } from "../../storage";
+import {
+  appendJsonlAtomic,
+  genId12,
+  nowIso,
+  readJsonl,
+  rewriteJsonlRecords,
+  safeId,
+} from "../../storage";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -73,6 +80,7 @@ import {
   GroupMessage,
   appendVisible,
   appendVisibleStrict,
+  projectMessageForActorSlice,
   readSlice,
   buildReplayPrefix,
   type ChatUseSelection,
@@ -83,10 +91,12 @@ import {
   type RecallMessageCitation,
   type WakeRequestSummary,
 } from "./visibility";
+import type { RunRecord } from "./run_store";
 import {
   applyActiveContextPatches,
   buildSharedContextSummaryFromContext,
   extractContextPatchBlocks,
+  blockingGateForGroupChatRun,
   readActiveCollaborationState,
   readActiveWorkflowRun,
   readCollaborationSnapshot,
@@ -244,7 +254,16 @@ import {
   type SkillAllowlistRef,
 } from "../../model/core-agent/skill-registry";
 import { buildRuntimeDatetimeBlock } from "../../prompts/runtime_context";
-import { evaluateWake, listWakeRequests } from "../p3394/wake-service";
+import {
+  buildMemberScopeBlock, isExternalRecipient, MEMBER_SCOPE_TEMPLATE,
+  sequentialViolationMessage, verifySequentialStepStart,
+} from "./member_scope";
+import {
+  evaluateWake,
+  listWakeRequests,
+  rejectWakeRequest,
+  resetWakeApproval,
+} from "../p3394/wake-service";
 import { allowLegacyGroupChatFormalAgentExecutorForTest, allowLegacyRunWorkerTestRoutes } from "../p3394/execution-boundary";
 import {
   type KStarDecisionRecord,
@@ -305,7 +324,11 @@ export function _setP3394ControllerForTest(
 export interface GroupChatMessageBroadcast {
   uid: string;
   cid: string;
-  msgId: string;
+  /** New message id. Omitted for an in-place revision so renderer reload
+   * cannot be suppressed by its recently-rendered message-id tracker. */
+  msgId?: string;
+  /** Existing deterministic row that was revised or durably repaired. */
+  revisionOf?: string;
   from: string;
   turnEnd: boolean;
 }
@@ -1335,6 +1358,11 @@ interface QueueItem {
    *  triggering user message. Consumed by runActorTurnBody to override the
    *  model / thinking strength for THIS turn only. */
   execConfig?: TurnExecutionConfig;
+  /** 本条回合所属的协作运行 id（设计 §4.1）：终态回复落盘时带上，便于按 run 汇总。 */
+  runId?: string;
+  /** A coordinated nested attempt keeps run accounting pending until the
+   * retry/fallback policy selects the actor's terminal outcome. */
+  deferRunTerminal?: boolean;
 }
 
 type TurnAbortSource =
@@ -1354,6 +1382,8 @@ interface WorkerState {
   abortSource: TurnAbortSource | null;
   /** QueueItem.turnId currently owned by this worker, while `running=true`. */
   currentTurnId: string | null;
+  /** Collaboration run currently owning this worker turn. */
+  currentRunId: string | null;
   /** GroupMessage id that triggered the currently running turn. */
   currentMsgId: string | null;
   /** Monotonic per-conversation order stamped when the worker claims a turn.
@@ -1387,6 +1417,11 @@ interface WorkerState {
 interface CidState {
   uid: string;
   cid: string;
+  /** Compatibility/cache field for the most recently observed collaboration
+   * run. Never use this as workflow-attribution authority. */
+  memberRunId?: string;
+  /** All collaboration runs admitted in this conversation but not yet summarized. */
+  memberRunIds: Set<string>;
   workers: Map<string, WorkerState>;
   listeners: Set<GroupListener>;
   /** Number of `enqueue()` calls currently in their async body. Each
@@ -1414,6 +1449,8 @@ interface CidState {
    *  between the commander's narration and the agent's first token. Anonymous
    *  workers (kind:'worker') are NOT mirrored: their stream is suppressed. */
   nestedTurns: Map<string, ActiveTurn & { order: number }>;
+  /** Abort handles for in-process nested Agent turns, scoped by collaboration run. */
+  nestedWorkers: Map<string, { worker: WorkerState; runId?: string; agentId: string }>;
   /** Formal Agent turns executed by CogSeed Backend. Unlike nested Group Chat
    * dispatches these are authoritative for quiescence because no Group Chat
    * worker remains running while Runtime produces the projected reply. */
@@ -1434,6 +1471,8 @@ interface CidState {
    * terminal listeners may feed OS notifications and must never receive
    * prompts, titles, or model output. */
   taskRun?: TaskRunState;
+  /** Prevent duplicate summary messages when several idle reconciliations race. */
+  finalizingMemberRuns: Set<string>;
 }
 
 interface TaskRunState {
@@ -1607,6 +1646,7 @@ function getOrInitCid(uid: string, cid: string): CidState {
     s = {
       uid,
       cid,
+      memberRunIds: new Set(),
       workers: new Map(),
       listeners: new Set(),
       pendingEnqueues: 0,
@@ -1615,9 +1655,11 @@ function getOrInitCid(uid: string, cid: string): CidState {
       backgroundWrites: new Set(),
       nextTurnOrder: 0,
       nestedTurns: new Map(),
+      nestedWorkers: new Map(),
       backendTurns: new Map(),
       accessAdmission: new CoordinatorAccessAdmission(),
       producedPaths: new Set(),
+      finalizingMemberRuns: new Set(),
     };
     _cids.set(k, s);
   }
@@ -1644,7 +1686,15 @@ export function subscribe(
   listener: GroupListener,
 ): () => void {
   const s = getOrInitCid(uid, cid);
+  const activatesConversation = s.listeners.size === 0;
   s.listeners.add(listener);
+  if (activatesConversation) {
+    trackBackgroundWrite(
+      s,
+      Promise.resolve().then(() => _finalizeMemberRunsIfQuiescent(s)),
+      'conversation activation run reconciliation',
+    );
+  }
   return () => {
     s.listeners.delete(listener);
   };
@@ -1738,6 +1788,244 @@ function _recordTaskRunKstarProvenance(
   if (provenance.executionId && (fillIfAbsent ? run.executionId === undefined : true)) {
     run.executionId = provenance.executionId;
   }
+}
+
+async function rewriteRunSummaryRecord(
+  file: string,
+  replacement: GroupMessage,
+  runId: string,
+): Promise<void> {
+  const rewritten = await rewriteJsonlRecords<GroupMessage>(file, (records) => {
+    let replaced = 0;
+    const next = records.map((record) => {
+      if (record.id !== replacement.id) return record;
+      replaced += 1;
+      if (record.run_summary?.run_id !== runId) {
+        throw new Error(`run summary message id conflict: ${replacement.id}`);
+      }
+      return replacement;
+    });
+    return replaced === 1 ? next : null;
+  });
+  if (rewritten.ok === false) {
+    throw new Error(`run summary rewrite failed: ${rewritten.error}`);
+  }
+}
+
+async function projectRunSummaryMessage(
+  state: CidState,
+  runId: string,
+  messageId: string,
+  runSummary: NonNullable<GroupMessage['run_summary']>,
+): Promise<void> {
+  const layout = conversationLayout(state.uid, state.cid);
+  let projected!: GroupMessage;
+  let created = false;
+  await fileEditLock(layout.messageFile).runExclusive(async () => {
+    const rows = await readJsonl<GroupMessage>(layout.messageFile, 0);
+    const matching = rows.filter((message) => message.id === messageId);
+    if (matching.length > 1) {
+      throw new Error(`duplicate run summary message id: ${messageId}`);
+    }
+    const existing = matching[0];
+    if (existing && existing.run_summary?.run_id !== runId) {
+      throw new Error(`run summary message id conflict: ${messageId}`);
+    }
+    projected = existing
+      ? {
+          ...existing,
+          from: COMMANDER_ID,
+          to: [USER_ID],
+          text: '',
+          run_id: runId,
+          run_summary: runSummary,
+        }
+      : {
+          id: messageId,
+          ts: nowIso(),
+          from: COMMANDER_ID,
+          to: [USER_ID],
+          text: '',
+          run_id: runId,
+          run_summary: runSummary,
+        };
+    if (!existing) {
+      await appendMain(state.uid, state.cid, projected, {
+        senderKind: 'commander',
+        senderId: COMMANDER_ID,
+        agentIds: [],
+      });
+      created = true;
+    } else if (JSON.stringify(existing) !== JSON.stringify(projected)) {
+      await rewriteRunSummaryRecord(layout.messageFile, projected, runId);
+    }
+  });
+
+  await seedReservedActors(state.uid, state.cid, layout.projectId);
+  const members = await readMembers(state.uid, state.cid, layout.projectId);
+  const candidateActorIds = Array.from(new Set([
+    COMMANDER_ID,
+    ...members.actors.map((actor) => actor.id),
+  ]));
+  for (const actorId of candidateActorIds) {
+    if (actorId === USER_ID) continue;
+    const sliceFile = layout.visibilityFile(actorId);
+    await fileEditLock(sliceFile).runExclusive(async () => {
+      const rows = await readJsonl<GroupMessage>(sliceFile, 0);
+      const matching = rows.filter((message) => message.id === messageId);
+      if (matching.length > 1) {
+        throw new Error(`duplicate run summary slice message id: ${messageId}`);
+      }
+      const existing = matching[0];
+      if (existing && existing.run_summary?.run_id !== runId) {
+        throw new Error(`run summary slice message id conflict: ${messageId}`);
+      }
+      if (existing) {
+        if (JSON.stringify(existing) !== JSON.stringify(projected)) {
+          await rewriteRunSummaryRecord(sliceFile, projected, runId);
+        }
+        return;
+      }
+      // The visibility module owns the rule. Passing every current member
+      // keeps this projection aligned if summary visibility expands later.
+      await appendVisibleStrict(
+        state.uid,
+        state.cid,
+        projected,
+        [actorId],
+        layout.projectId,
+      );
+    });
+  }
+
+  if (messageBroadcaster) {
+    try {
+      messageBroadcaster(created
+        ? {
+            uid: state.uid,
+            cid: state.cid,
+            msgId: messageId,
+            from: COMMANDER_ID,
+            turnEnd: false,
+          }
+        : {
+            uid: state.uid,
+            cid: state.cid,
+            revisionOf: messageId,
+            from: COMMANDER_ID,
+            turnEnd: false,
+          });
+    } catch {
+      // Desktop refresh is best-effort after every durable projection has
+      // succeeded; a broken window listener must not strand the outbox.
+    }
+  }
+  if (created) {
+    emit(state, { type: 'message', cid: state.cid, msg: projected });
+  }
+}
+
+async function _finalizeOneMemberRunIfQuiescent(state: CidState, runId: string): Promise<void> {
+  if (!isQuiescent(state.uid, state.cid) || state.finalizingMemberRuns.has(runId)) return;
+  state.finalizingMemberRuns.add(runId);
+  try {
+    const {
+      readRun,
+      recordRunActorTerminal,
+      finalizeRun,
+      publishPendingRunSummary,
+    } = await import('./run_store');
+    let before = await readRun(state.uid, state.cid, runId);
+    if (!before) return;
+    if (before.status === 'running' && !before.summary) {
+      const wakes = await listWakeRequests(state.uid, state.cid).catch(() => []);
+      const runWakes = wakes.filter((request) => request.dispatch_payload.run_id === runId);
+      if (runWakes.some((request) => request.status === 'pending' || request.status === 'approved')) return;
+
+      for (const request of runWakes) {
+        if (request.status !== 'rejected' && request.status !== 'expired') continue;
+        await recordRunActorTerminal(state.uid, state.cid, runId, request.agent_id, {
+          terminal: 'blocked',
+          reason: request.status === 'rejected' ? 'approval_rejected' : 'approval_expired',
+          messages: 0,
+          artifacts: [],
+        });
+      }
+      before = await readRun(state.uid, state.cid, runId);
+      if (!before) return;
+    }
+
+    const final = before.summary_publication
+      ? before
+      : await finalizeRun(state.uid, state.cid, runId);
+    if (!final?.summary || final.status === 'running' || !final.summary_publication) return;
+    if (final.summary_publication.status === 'published') {
+      state.memberRunIds.delete(runId);
+      if (state.memberRunId === runId) state.memberRunId = undefined;
+      return;
+    }
+
+    const publicationId = final.summary_publication.publication_id;
+    const published = await publishPendingRunSummary(
+      state.uid,
+      state.cid,
+      runId,
+      publicationId,
+      async (current) => {
+        if (current.status === 'running') {
+          throw new Error(`run summary publication is not terminal: ${runId}`);
+        }
+        // A default message can create a bookkeeping run without dispatching
+        // any actor. A coordinator run is not empty: terminal accounting adds
+        // commander to actors, so only genuinely empty runs are suppressed.
+        if (current.actors.length === 0) return;
+
+        const publication = current.summary_publication!;
+        const messageId = publication.message_id;
+        const actorTerminal = new Map(
+          current.actors.map((actor) => [actor.agent_id, actor.terminal]),
+        );
+        const runSummary: NonNullable<GroupMessage['run_summary']> = {
+          run_id: current.run_id,
+          status: current.status,
+          contributed: current.summary!.contributed,
+          missing: current.summary!.missing.map((entry) => ({
+            ...entry,
+            ...(actorTerminal.get(entry.agent_id)
+              ? { terminal: actorTerminal.get(entry.agent_id) }
+              : {}),
+          })),
+        };
+        await projectRunSummaryMessage(state, runId, messageId, runSummary);
+      },
+    );
+    if (published?.summary_publication?.status !== 'published') return;
+    state.memberRunIds.delete(runId);
+    if (state.memberRunId === runId) state.memberRunId = undefined;
+  } catch (err) {
+    log.warn(`member run finalization failed cid=${state.cid}: ${(err as Error).message}`);
+  } finally {
+    state.finalizingMemberRuns.delete(runId);
+  }
+}
+
+async function _finalizeMemberRunsIfQuiescent(state: CidState): Promise<void> {
+  const { listRunIds, readRun } = await import('./run_store');
+  const discovered = await listRunIds(state.uid, state.cid);
+  for (const runId of discovered) {
+    if (state.memberRunIds.has(runId)) continue;
+    const run = await readRun(state.uid, state.cid, runId);
+    if (!run) continue;
+    const recoverableTerminalOrphan = run.status === 'running'
+      && run.actors.length > 0
+      && run.actors.every((actor) => actor.terminal !== 'pending');
+    if (run.status === 'running' && !recoverableTerminalOrphan) continue;
+    if (!run.summary || !run.summary_publication || run.summary_publication.status === 'pending') {
+      state.memberRunIds.add(runId);
+    }
+  }
+  const runIds = Array.from(state.memberRunIds);
+  for (const runId of runIds) await _finalizeOneMemberRunIfQuiescent(state, runId);
 }
 
 async function _captureCurrentTaskRunKstarProvenance(state: CidState): Promise<void> {
@@ -1954,6 +2242,15 @@ export function runtimeSnapshot(
   };
 }
 
+/** Re-run the durable collaboration-run settlement after an external gate decision. */
+export async function reconcileMemberRun(uid: string, cid: string, runId: string): Promise<void> {
+  if (!safeId(cid) || !safeId(runId)) throw new Error('invalid collaboration run');
+  const state = getOrInitCid(uid, cid);
+  state.memberRunId = runId;
+  state.memberRunIds.add(runId);
+  await _syncStateStatus(state);
+}
+
 /** Recompute the on-disk `status` field based on actual worker / queue
  *  state. Honors the sticky `aborted` flag — once aborted, ONLY an
  *  explicit USER `enqueue` clears it (so a follow-up worker reply
@@ -1981,6 +2278,7 @@ async function _syncStateStatus(
     });
   }
   if (want === "idle") {
+    await _finalizeMemberRunsIfQuiescent(state);
     const taskStatus = state.taskRun?.status || null;
     _emitTaskRunTerminalIfQuiescent(state, result.state);
   }
@@ -2085,6 +2383,8 @@ export interface ProjectedAgentMessageInput {
   cid: string;
   agentId: string;
   turnId: string;
+  /** 本条回合所属的协作运行（有则落 run_id，便于按 run 汇总）。 */
+  runId?: string;
   text: string;
   process?: GroupMessage['process'];
   /** adapter 透传的回合用量/模型自报（{usage:{...}, model?}，CLI 自报数字
@@ -2102,6 +2402,21 @@ export interface ProjectedUserTaskMessageInput {
   agentId: string;
   requestId: string;
   text: string;
+}
+
+async function recordProjectedMemberRunTerminal(
+  input: ProjectedAgentMessageInput,
+  message: GroupMessage | null,
+): Promise<void> {
+  if (!input.runId) return;
+  const { recordRunActorTerminal } = await import('./run_store');
+  const failed = input.terminalStatus === 'failed' || !!input.failureKind;
+  await recordRunActorTerminal(input.uid, input.cid, input.runId, input.agentId, {
+    terminal: failed ? 'failed' : 'done',
+    ...(failed ? { reason: input.failureCode || 'runtime_failed' } : {}),
+    messages: message ? 1 : 0,
+    artifacts: message?.produced || [],
+  });
 }
 
 /** Persist a Run Center task as the user side of a normal CogSeed
@@ -2194,12 +2509,17 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
   const conversation = await chats.getConversation(input.uid, input.cid);
   if (!conversation) return null;
   const state = getOrInitCid(input.uid, input.cid);
+  if (input.runId) {
+    state.memberRunId = input.runId;
+    state.memberRunIds.add(input.runId);
+  }
   if (!text) {
     // A successful Runtime may legitimately produce no visible text. The
     // terminal projection still owns lifecycle cleanup, but must not create an
     // empty Agent bubble or leave the IPC stream waiting forever.
     state.backendTurns.delete(input.turnId);
     _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+    await recordProjectedMemberRunTerminal(input, null);
     await _syncStateStatus(state);
     return null;
   }
@@ -2232,6 +2552,7 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
     to: [USER_ID],
     text,
     turn_id: input.turnId,
+    ...(input.runId ? { run_id: input.runId } : {}),
     // 终态投影本身就是该回合的结束消息：落库也带 turn_end，让重放路径
     // （history reload / 轮询 reconcile）与实时 emit 语义一致，渲染层据此
     // 消费 actor 占位而不是留下悬空的三点气泡。
@@ -2287,6 +2608,7 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
   }
   state.backendTurns.delete(input.turnId);
   _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+  await recordProjectedMemberRunTerminal(input, msg);
   if (state.taskRun) state.taskRun.lastMessageId = msg.id;
   await _syncStateStatus(state);
   return msg;
@@ -2313,6 +2635,10 @@ export interface EnqueueParams {
   cid: string;
   fromActorId: string;
   text: string;
+  /** Modern user submissions carry recipient identity only in validated
+   * structured fields. When true, prose `@display-name` text stays inert;
+   * direct bus callers without this marker retain historical parsing. */
+  structuredUserSubmission?: boolean;
   /** Host-internal control message (Commander-only, e.g. review request /
    *  continuation judge): must NOT open a new taskRun (fromActorId is USER_ID
    *  for routing but this is not a user action) — otherwise each control
@@ -2324,10 +2650,14 @@ export interface EnqueueParams {
   failure_code?: string;
   /** Durable host action id used to make retry/continuation enqueue idempotent. */
   actionRequestId?: string;
+  /** Host-owned deterministic id for crash-recoverable submissions. */
+  messageId?: string;
   /** Stable QueueItem identity for a host-owned recoverable dispatch. This is
    * internal to the main process and is never persisted on the source user
    * message or exposed through IPC. */
   dispatchTurnId?: string;
+  /** Stable QueueItem identities for a recoverable fan-out message. */
+  dispatchTurnIds?: Record<string, string>;
   model_text?: string;
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
@@ -2376,8 +2706,24 @@ export interface EnqueueParams {
    *  off the persisted message schema and bypasses raw-mention Wake approval. */
   userRoute?: {
     agentId: string;
-    origin: 'user_selection' | 'cli_fallback' | 'failed_turn_retry' | 'message_edit';
+    origin: 'user_selection' | 'cli_fallback' | 'active_floor' | 'failed_turn_retry' | 'message_edit';
   };
+  /** 多 Agent 提交快照（PRD FR-016）：会话成员、本条点名与按来源的模型配置，
+   *  由 group facade 校验后落在用户消息上，供历史回读与运行审计。 */
+  member_snapshot?: GroupMessage['member_snapshot'];
+  /** 本条所属的协作运行 id（设计 §4.1）：由 group facade 在提交被接受时创建，
+   *  随每个收件人的队列项与消息落盘，把多次回合归到一次提交。 */
+  runId?: string;
+  /** Durable host-owned accounting block; rendered as a summary, never model-authored. */
+  run_summary?: GroupMessage['run_summary'];
+  /** 多 Agent 按来源执行配置：key = 'internal'（CogSeed + Task Agent 共享）或
+   *  外接实例 agent_id。派发时按 recipient 的来源取用，替代单一 executionConfig
+   *  广播——否则内部模型会串到外接实例（FR-007/SC-002）。 */
+  memberConfigs?: Record<string, TurnExecutionConfig>;
+  /** 本次派发里哪些 recipient 是「外接实例」。外接只认自己那份配置；名单里没配就
+   *  跟随该 Agent 自身默认——绝不能回落成内部共享配置（否则内部 API 连接会串到
+   *  外接实例）。由 facade 在提交时按 agent runtime 分类后传入。 */
+  memberConfigScope?: { external_ids: string[] };
   /** Per-task execution config from the unified execution entry (renderer
    *  composer). Validated at the IPC boundary; applied on top of agent /
    *  global defaults at turn time. Only rides live queue items — the visible
@@ -2466,10 +2812,189 @@ export interface EnqueueParams {
  *   - If sender was an agent, also marks them as in_flight=false (their
  *     turn just ended) — though that's also done by the worker loop.
  */
+/** 按来源执行配置的内部共享键：CogSeed 与全部 Task Agent 共用一套（FR-007）。
+ *  外接实例用自己的 agent_id 作为键，因此「未被显式列为外接」的收件人一律用
+ *  internal —— 这样 commander、内进程 Agent、以及不在成员名单里的收件人
+ *  都拿到内部共享配置，外接实例拿到各自那份，绝不互相串用。 */
+export const SOURCE_INTERNAL_KEY = 'internal';
+
+/** Classify recipient runtimes from the server-owned Agent specs. Every
+ * non-reserved recipient must resolve; callers must not guess that an
+ * unavailable runtime is internal because that would bypass projection. */
+export async function classifyRecipientRuntimes(
+  uid: string,
+  recipientIds: Iterable<string>,
+): Promise<{ externalIds: string[] }> {
+  const externalIds: string[] = [];
+  for (const recipientId of new Set(recipientIds)) {
+    if (RESERVED_IDS.has(recipientId)) continue;
+    try {
+      const agent = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
+      if (!agent) throw new Error('agent spec unavailable');
+      const kind = agent.runtime?.kind;
+      if (kind === 'cli' || kind === 'p3394-gateway') externalIds.push(recipientId);
+    } catch {
+      throw new Error(`recipient classification unavailable: ${recipientId}`);
+    }
+  }
+  return { externalIds };
+}
+
+/** Privacy classification is monotonic for the life of a run: immutable
+ * snapshot IDs preserve its admitted boundary, while live server-owned
+ * runtime classification can only add newly admitted external recipients. */
+export async function resolveExternalRecipientScope(
+  uid: string,
+  recipientIds: Iterable<string>,
+  frozenExternalIds: Iterable<string> = [],
+): Promise<string[]> {
+  const classified = await classifyRecipientRuntimes(uid, recipientIds);
+  return Array.from(new Set([
+    ...frozenExternalIds,
+    ...classified.externalIds,
+  ]));
+}
+
+/** Fail-closed classification for slice-only actors (sender, persisted
+ *  mentions, recovery-only recipients). Unlike dispatch recipients these
+ *  cannot reject the message, so an actor whose runtime spec cannot be read
+ *  is projected as external instead of failing open — the visibility slice is
+ *  still a privacy boundary even when the actor never runs this turn. */
+export async function resolveSliceOnlyExternalScope(
+  uid: string,
+  actorIds: Iterable<string>,
+  frozenExternalIds: Iterable<string> = [],
+): Promise<string[]> {
+  const externalIds = new Set<string>(frozenExternalIds);
+  for (const actorId of new Set(actorIds)) {
+    if (RESERVED_IDS.has(actorId) || externalIds.has(actorId)) continue;
+    try {
+      const { externalIds: classified } = await classifyRecipientRuntimes(uid, [actorId]);
+      for (const id of classified) externalIds.add(id);
+    } catch {
+      externalIds.add(actorId);
+    }
+  }
+  return Array.from(externalIds);
+}
+
+/** Apply the external-runtime projection at the single recipient boundary. */
+export function projectMessageForRecipientBoundary(
+  recipientId: string,
+  msg: GroupMessage,
+  externalIds: string[],
+  sourceConfigs?: Record<string, TurnExecutionConfig>,
+): GroupMessage {
+  return externalIds.includes(recipientId)
+    ? projectMessageForActorSlice(recipientId, msg, externalIds, sourceConfigs)
+    : msg;
+}
+
+export function resolveSourceExecConfig(
+  recipientId: string,
+  params: EnqueueParams,
+): TurnExecutionConfig | undefined {
+  const map = params.memberConfigs;
+  if (map && typeof map === 'object') {
+    const scope = params.memberConfigScope;
+    if (scope && Array.isArray(scope.external_ids) && scope.external_ids.includes(recipientId)) {
+      // 外接实例：只认自己那份；没配就跟随自身默认（不回落到内部共享）。
+      return map[recipientId];
+    }
+    const exact = map[recipientId];
+    if (exact) return exact;
+    if (map[SOURCE_INTERNAL_KEY]) return map[SOURCE_INTERNAL_KEY];
+  }
+  // 没有按来源配置（单成员 / 旧路径）时沿用既有单套广播语义。
+  return params.executionConfig;
+}
+
+/** Resolve the external-runtime boundary from server-owned scope before a
+ * message reaches either a visibility slice or an actor queue. A nested/tool
+ * enqueue may omit member_snapshot, so an admitted collaboration run and the
+ * agent's persisted runtime classification are authoritative fallbacks. */
+async function _authoritativeExternalScope(
+  uid: string,
+  cid: string,
+  msg: GroupMessage,
+  params: EnqueueParams,
+  actorIds: Iterable<string>,
+): Promise<{
+  externalIds: string[];
+  sourceConfigs?: Record<string, TurnExecutionConfig>;
+}> {
+  let externalIds = new Set<string>();
+  let sourceConfigs = params.memberConfigs;
+  const runId = params.runId || msg.run_id;
+  if (runId) {
+    const { readRun } = await import('./run_store');
+    const run = await readRun(uid, cid, runId);
+    if (!run) throw new Error(`collaboration run ledger unavailable: ${runId}`);
+    externalIds = new Set(run.input_snapshot.external_agent_ids || []);
+    sourceConfigs = run.input_snapshot.source_configs;
+  } else {
+    externalIds = new Set(params.memberConfigScope?.external_ids || []);
+  }
+  externalIds = new Set(await resolveExternalRecipientScope(uid, actorIds, externalIds));
+  return {
+    externalIds: Array.from(externalIds),
+    ...(sourceConfigs ? { sourceConfigs } : {}),
+  };
+}
+
+/** Server-owned external-runtime boundary for one actor turn. Reads the frozen
+ *  run snapshot (authoritative for the life of a run) and falls back to live
+ *  classification of the actor's own runtime, so every dispatch path (direct,
+ *  commander, nested, fallback, retry, recovery) gets the same answer without
+ *  a caller-supplied flag. Fails closed: an unclassifiable actor counts as
+ *  external so host-only prompt augmentation never crosses the boundary. */
+async function _actorTurnIsExternal(
+  uid: string,
+  cid: string,
+  actorId: string,
+  runId?: string,
+): Promise<boolean> {
+  if (RESERVED_IDS.has(actorId)) return false;
+  if (runId) {
+    try {
+      const { readRun } = await import('./run_store');
+      const run = await readRun(uid, cid, runId);
+      if (run?.input_snapshot?.external_agent_ids?.includes(actorId)) return true;
+    } catch (err) {
+      log.warn(
+        `actor turn external classification: run read failed cid=${cid} run=${runId}: ${(err as Error).message}`,
+      );
+    }
+  }
+  try {
+    const { externalIds } = await classifyRecipientRuntimes(uid, [actorId]);
+    return externalIds.includes(actorId);
+  } catch (err) {
+    log.warn(
+      `actor turn external classification unavailable cid=${cid} actor=${actorId}: ${(err as Error).message}`,
+    );
+    return true;
+  }
+}
+
 export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
   const { uid, cid, fromActorId, text } = params;
   if (params.dispatchTurnId && !safeId(params.dispatchTurnId)) {
     throw new Error('invalid dispatch turn id');
+  }
+  if (params.dispatchTurnIds !== undefined) {
+    if (!params.dispatchTurnIds
+      || typeof params.dispatchTurnIds !== 'object'
+      || Array.isArray(params.dispatchTurnIds)
+      || Object.keys(params.dispatchTurnIds).length === 0
+      || Object.entries(params.dispatchTurnIds).some(([recipientId, turnId]) => (
+        !safeId(recipientId) || !safeId(turnId)
+      ))) {
+      throw new Error('invalid dispatch turn ids');
+    }
+  }
+  if (params.dispatchTurnId && params.dispatchTurnIds) {
+    throw new Error('ambiguous dispatch turn ids');
   }
   const state = getOrInitCid(uid, cid);
   if (state.terminating) {
@@ -2587,6 +3112,11 @@ async function _enqueueBody(
     to = [structuredUserRoute.agentId];
   } else if (params.forceTo && params.forceTo.length) {
     to = params.forceTo.slice();
+  } else if (fromKind === 'user' && params.structuredUserSubmission) {
+    // Identity-capable clients must never gain routing authority by typing or
+    // pasting a display name. The explicit current floor remains authoritative
+    // when present; otherwise this is an ordinary Commander message.
+    to = [floorRecipient || COMMANDER_ID];
   } else {
     // Build a global name → id map from the enabled agent registry so the
     // router can resolve `@<human-readable-name>` mentions. Keys are normalized
@@ -2766,6 +3296,9 @@ async function _enqueueBody(
           dispatchPayload: {
             text,
             ...(params.model_text ? { model_text: params.model_text } : {}),
+            // 关闸成员的派发发生在批准之后、且不经 enqueue：把 run id 存进载荷，
+            // 批准后的 backend 派发才能把这次执行记回本次运行。
+            ...(params.runId ? { run_id: params.runId } : {}),
             ...(params.attachments?.length
               ? { attachments: [...params.attachments] }
               : {}),
@@ -2813,6 +3346,11 @@ async function _enqueueBody(
   }
   if (params.dispatchTurnId && to.filter((recipientId) => recipientId !== USER_ID).length !== 1) {
     throw new Error('stable dispatch turn id requires exactly one executable recipient');
+  }
+  if (params.dispatchTurnIds && to.some((recipientId) => (
+    recipientId !== USER_ID && !params.dispatchTurnIds?.[recipientId]
+  ))) {
+    throw new Error('stable dispatch turn ids do not cover every executable recipient');
   }
 
   // Floor update: a user-visible recipient choice is the conversation floor.
@@ -2932,12 +3470,24 @@ async function _enqueueBody(
     rewrittenText = rewrittenText.trim();
   }
 
-  const msgId = genId12();
+  if (params.messageId && !safeId(params.messageId)) {
+    throw new Error('invalid stable message id');
+  }
+  const msgId = params.messageId || genId12();
   const ts = nowIso();
   const mentions = parseMentions(rewrittenText);
   const useSelections = _normalizeUseSelections(params.use_selections);
   const dispatchMembers = await readMembers(uid, cid);
   const recipientEpochs: Record<string, number> = {};
+  // 本次用户提交对应的协作运行：顺序强约束校验据此把步骤对回提交（设计 §4.4）。
+  if (params.runId && fromActorId === USER_ID) {
+    state.memberRunId = params.runId;
+    state.memberRunIds.add(params.runId);
+  }
+  // 协作范围模板只在本次提交带成员快照时读取（无成员＝完全维持现状）。
+  const memberScopeTemplate = params.member_snapshot
+    ? (await import("../../prompts/loader")).prompts.load(MEMBER_SCOPE_TEMPLATE)
+    : "";
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
     const actor = dispatchMembers.actors.find((candidate) => candidate.id === recipientId);
@@ -3031,10 +3581,70 @@ async function _enqueueBody(
       ? { process: params.process }
       : {}),
     ...(params.exec_meta ? { exec_meta: params.exec_meta } : {}),
+    ...(params.member_snapshot ? { member_snapshot: params.member_snapshot } : {}),
+    ...(params.runId ? { run_id: params.runId } : {}),
+    ...(params.run_summary ? { run_summary: params.run_summary } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.turn_end ? { turn_end: true as const } : {}),
   };
+
+  // Resolve every server-owned privacy boundary before the first transcript
+  // write. A missing run ledger or unreadable recipient spec must leave no
+  // unprojected main row that a later recovery could accidentally expose.
+  const sliceMsg: GroupMessage = msg.process
+    ? (() => {
+        const { process: _drop, ...rest } = msg;
+        return rest as GroupMessage;
+      })()
+    : msg;
+  const allActorIds = new Set<string>([
+    fromActorId,
+    ...to,
+    ...members.actors.map((a) => a.id),
+  ]);
+  const visibleRecipientIds = new Set<string>(to);
+  const externalScope = await _authoritativeExternalScope(
+    uid,
+    cid,
+    msg,
+    params,
+    visibleRecipientIds,
+  );
+  const senderIsFormalAgent = members.actors.some((actor) => (
+    actor.id === fromActorId && actor.kind === 'agent'
+  ));
+  // Every actor that can receive a slice or a prompt must be classified, not
+  // just the dispatch recipients in `to`: `msg.mentions` alone admits an actor
+  // to a slice (visibility.isVisibleTo), so a persisted mention of a roster
+  // member that is not a recipient is still a privacy boundary. Dispatch
+  // recipients stay strict (an unreadable spec rejects before persistence),
+  // while this slice-only set is fail-closed because those actors never run
+  // this turn and cannot reject the message.
+  const sliceOnlyActorIds = new Set<string>();
+  if (senderIsFormalAgent) sliceOnlyActorIds.add(fromActorId);
+  const rosterActorIds = new Set(members.actors.map((actor) => actor.id));
+  for (const mentionId of mentions) {
+    if (rosterActorIds.has(mentionId)) sliceOnlyActorIds.add(mentionId);
+  }
+  externalScope.externalIds = await resolveSliceOnlyExternalScope(
+    uid,
+    sliceOnlyActorIds,
+    externalScope.externalIds,
+  );
+  const recipientMessages = new Map<string, GroupMessage>();
+  for (const recipientId of to) {
+    if (!externalScope.externalIds.includes(recipientId)) continue;
+    recipientMessages.set(
+      recipientId,
+      projectMessageForRecipientBoundary(
+        recipientId,
+        sliceMsg,
+        externalScope.externalIds,
+        externalScope.sourceConfigs,
+      ),
+    );
+  }
 
   if (state.taskRun && params.kstarTerminalProvenance) {
     const provenance = params.kstarTerminalProvenance;
@@ -3084,18 +3694,15 @@ async function _enqueueBody(
   // facing main jsonl needs it for history reload. Agent workers replay
   // their slice into the LLM session (`buildReplayPrefix`); leaking the
   // process rail there would inflate prompts with noise the LLM doesn't use.
-  const sliceMsg: GroupMessage = msg.process
-    ? (() => {
-        const { process: _drop, ...rest } = msg;
-        return rest as GroupMessage;
-      })()
-    : msg;
-  const allActorIds = new Set<string>([
-    fromActorId,
-    ...to,
-    ...members.actors.map((a) => a.id),
-  ]);
-  await appendVisible(uid, cid, sliceMsg, Array.from(allActorIds));
+  await appendVisible(
+    uid,
+    cid,
+    sliceMsg,
+    Array.from(allActorIds),
+    undefined,
+    externalScope.externalIds,
+    externalScope.sourceConfigs,
+  );
 
   // Desktop refresh rail: every persisted group-chat message (in-app sends,
   // external-channel inbound like Feishu, agent replies) notifies the
@@ -3207,30 +3814,84 @@ async function _enqueueBody(
       continue;
     }
     const w = ensureRuntime(state);
+    const recipientMsg = recipientMessages.get(recipientId) || msg;
+    const sourceExecConfig = resolveSourceExecConfig(recipientId, {
+      ...params,
+      ...(externalScope.sourceConfigs ? { memberConfigs: externalScope.sourceConfigs } : {}),
+      memberConfigScope: { external_ids: externalScope.externalIds },
+    });
+    const dispatchTurnId = params.dispatchTurnIds?.[recipientId]
+      || params.dispatchTurnId
+      || genId12();
+    // The queue item's explicit run id is the only attribution authority.
+    // Wake-approved and nested dispatch paths must pass it forward themselves;
+    // conversation caches are only discovery aids for finalization.
+    const ledgerRunId = params.runId;
+    if (ledgerRunId) {
+      const { readRun, recordRunDispatch } = await import('./run_store');
+      if (recipientId === COMMANDER_ID) {
+        const ledger = await readRun(uid, cid, ledgerRunId);
+        if (!ledger) throw new Error(`collaboration run unavailable: ${ledgerRunId}`);
+        if (ledger.status !== 'running') {
+          log.info('run-scoped dispatch skipped', {
+            cid: maskId(cid),
+            run_id: maskId(ledgerRunId),
+            actor_id: maskId(recipientId),
+          });
+          continue;
+        }
+      } else {
+        const recorded = await recordRunDispatch(
+          uid,
+          cid,
+          ledgerRunId,
+          recipientId,
+          dispatchTurnId,
+        );
+        if (!recorded) {
+          throw new Error(`collaboration run unavailable: ${ledgerRunId}`);
+        }
+        const recordedActor = recorded.actors.find(
+          (entry) => entry.agent_id === recipientId,
+        );
+        if (recorded.status !== 'running' || recordedActor?.terminal !== 'pending') {
+          log.info('run-scoped dispatch skipped', {
+            cid: maskId(cid),
+            run_id: maskId(ledgerRunId),
+            actor_id: maskId(recipientId),
+          });
+          continue;
+        }
+        if (!recordedActor.dispatched.includes(dispatchTurnId)) {
+          throw new Error(`collaboration dispatch persistence failed: ${ledgerRunId}`);
+        }
+      }
+    }
     w.queue.push({
       actor,
-      turnId: params.dispatchTurnId || genId12(),
+      turnId: dispatchTurnId,
       msgId,
       fromActorId,
       ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
-      llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
-      ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
-        ? { incomingEpoch: msg.p3394.recipient_epochs[recipientId] }
+      llmPayload: composeLlmTurnPayload(uid, fromActorId, recipientMsg, recipientId, memberScopeTemplate),
+      ...(recipientMsg.p3394?.recipient_epochs[recipientId] !== undefined
+        ? { incomingEpoch: recipientMsg.p3394.recipient_epochs[recipientId] }
         : {}),
-      ...(msg.attachments && msg.attachments.length
-        ? { attachments: msg.attachments.slice() }
+      ...(recipientMsg.attachments && recipientMsg.attachments.length
+        ? { attachments: recipientMsg.attachments.slice() }
         : {}),
-      ...(msg.references && msg.references.length
-        ? { references: msg.references.slice() }
+      ...(recipientMsg.references && recipientMsg.references.length
+        ? { references: recipientMsg.references.slice() }
         : {}),
-      ...(msg.use_selections && msg.use_selections.length
-        ? { useSelections: msg.use_selections.slice() }
+      ...(recipientMsg.use_selections && recipientMsg.use_selections.length
+        ? { useSelections: recipientMsg.use_selections.slice() }
         : {}),
       ...(params.committedProjectionId ? { committedProjectionId: params.committedProjectionId } : {}),
       ...(params.forecastId ? { forecastId: params.forecastId } : {}),
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
-      ...(params.executionConfig ? { execConfig: params.executionConfig } : {}),
+      ...(sourceExecConfig ? { execConfig: sourceExecConfig } : {}),
+      ...(ledgerRunId ? { runId: ledgerRunId } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
         : {}),
@@ -3404,8 +4065,8 @@ export async function recoverPersistedUserDispatch(
     if (!msg
       || msg.from !== USER_ID
       || msg.action_request_id !== input.actionRequestId
-      || msg.to.length !== 1
-      || msg.to[0] !== input.recipientId) {
+      || !msg.to.includes(input.recipientId)
+      || input.recipientId === USER_ID) {
       throw new Error('persisted retry message does not match its dispatch claim');
     }
 
@@ -3426,6 +4087,28 @@ export async function recoverPersistedUserDispatch(
     ))) {
       return { msg, disposition: 'already-completed' };
     }
+
+    const ledgerRunId = msg.run_id;
+    let recoveredRun: RunRecord | null = null;
+    if (ledgerRunId) {
+      const { readRun } = await import('./run_store');
+      recoveredRun = await readRun(input.uid, input.cid, ledgerRunId);
+      if (!recoveredRun) throw new Error(`collaboration run unavailable: ${ledgerRunId}`);
+      const actorLedger = input.recipientId === COMMANDER_ID
+        ? undefined
+        : recoveredRun.actors.find((entry) => entry.agent_id === input.recipientId);
+      if (recoveredRun.status !== 'running'
+        || (input.recipientId !== COMMANDER_ID
+          && actorLedger !== undefined
+          && actorLedger.terminal !== 'pending')) {
+        return { msg, disposition: 'already-completed' };
+      }
+      state.memberRunId = ledgerRunId;
+      state.memberRunIds.add(ledgerRunId);
+    }
+
+    let recoveredExternalIds = recoveredRun?.input_snapshot.external_agent_ids || [];
+    const recoveredSourceConfigs = recoveredRun?.input_snapshot.source_configs;
 
     await seedReservedActors(input.uid, input.cid);
     if (!RESERVED_IDS.has(input.recipientId)) {
@@ -3454,11 +4137,58 @@ export async function recoverPersistedUserDispatch(
       input.recipientId,
       ...members.actors.map((member) => member.id),
     ]));
+    // The dispatched recipient is validated above, so strict classification is
+    // guaranteed to resolve for it and stays authoritative. The rest of the
+    // slice audience (persisted mentions, recovery-only and stale roster actors)
+    // never runs this turn, so an unreadable spec must be projected fail-closed
+    // instead of rejecting the whole recovery (`members.json` is append-only,
+    // so one deleted Agent would otherwise block every retry in the roster).
+    const recipientExternalIds = await resolveExternalRecipientScope(
+      input.uid,
+      [input.recipientId],
+      recoveredExternalIds,
+    );
+    recoveredExternalIds = await resolveSliceOnlyExternalScope(
+      input.uid,
+      actorIds,
+      recipientExternalIds,
+    );
+    const recoveredScopeMessage: GroupMessage = recoveredRun
+      ? {
+          ...msg,
+          member_snapshot: {
+            member_agent_ids: recoveredRun.input_snapshot.member_agent_ids,
+            ...(recoveredRun.input_snapshot.mention_agent_ids.length
+              ? {
+                  mention_agent_ids: recoveredRun.input_snapshot.mention_agent_ids,
+                  mention_order: recoveredRun.input_snapshot.mention_order,
+                }
+              : {}),
+            ...(recoveredExternalIds.length ? { external_agent_ids: recoveredExternalIds } : {}),
+            ...(recoveredRun.input_snapshot.requires_sequential ? { requires_sequential: true } : {}),
+            ...(recoveredSourceConfigs ? { execution_configs: recoveredSourceConfigs } : {}),
+          },
+        }
+      : msg;
+    const recoveredRecipientMsg = projectMessageForRecipientBoundary(
+      input.recipientId,
+      sliceMsg,
+      recoveredExternalIds,
+      recoveredSourceConfigs,
+    );
     for (const actorId of actorIds) {
       if (actorId === USER_ID) continue;
       const slice = await readSlice(input.uid, input.cid, actorId, 10_000);
       if (slice.some((row) => row.id === msg.id)) continue;
-      await appendVisibleStrict(input.uid, input.cid, sliceMsg, [actorId]);
+      await appendVisibleStrict(
+        input.uid,
+        input.cid,
+        sliceMsg,
+        [actorId],
+        undefined,
+        recoveredExternalIds,
+        recoveredSourceConfigs,
+      );
     }
 
     if (!state.taskRun) {
@@ -3479,24 +4209,74 @@ export async function recoverPersistedUserDispatch(
         ...kstarProvenance,
       };
     }
+    const sourceExecConfig = resolveSourceExecConfig(input.recipientId, {
+      uid: input.uid,
+      cid: input.cid,
+      fromActorId: USER_ID,
+      text: msg.text,
+      ...(recoveredSourceConfigs
+        ? { memberConfigs: recoveredSourceConfigs }
+        : {}),
+      ...(recoveredExternalIds.length
+        ? { memberConfigScope: { external_ids: recoveredExternalIds } }
+        : {}),
+    });
+    const memberScopeTemplate = recoveredRun
+      ? (await import('../../prompts/loader')).prompts.load(MEMBER_SCOPE_TEMPLATE)
+      : '';
     const runtime = ensureRuntime(state);
     let disposition: PersistedUserDispatchRecoveryDisposition = 'already-active';
     if (runtime.currentTurnId !== input.turnId
       && !runtime.queue.some((item) => item.turnId === input.turnId)) {
+      if (ledgerRunId && input.recipientId !== COMMANDER_ID) {
+        const { recordRunDispatch } = await import('./run_store');
+        const recorded = await recordRunDispatch(
+          input.uid,
+          input.cid,
+          ledgerRunId,
+          input.recipientId,
+          input.turnId,
+        );
+        const recordedActor = recorded?.actors.find((entry) => entry.agent_id === input.recipientId);
+        if (recorded?.status !== 'running'
+          || recordedActor?.terminal !== 'pending'
+          || !recordedActor.dispatched.includes(input.turnId)) {
+          throw new Error(`collaboration dispatch persistence failed: ${ledgerRunId}`);
+        }
+      }
       runtime.queue.push({
         actor,
         turnId: input.turnId,
         msgId: msg.id,
         fromActorId: USER_ID,
         sourceMessageText: msg.text,
-        llmPayload: composeLlmTurnPayload(input.uid, USER_ID, msg),
+        llmPayload: composeLlmTurnPayload(
+          input.uid,
+          USER_ID,
+          projectMessageForRecipientBoundary(
+            input.recipientId,
+            recoveredScopeMessage,
+            recoveredExternalIds,
+            recoveredSourceConfigs,
+          ),
+          input.recipientId,
+          memberScopeTemplate,
+        ),
         ...(msg.p3394?.recipient_epochs[input.recipientId] !== undefined
           ? { incomingEpoch: msg.p3394.recipient_epochs[input.recipientId] }
           : {}),
-        ...(msg.attachments?.length ? { attachments: msg.attachments.slice() } : {}),
-        ...(msg.references?.length ? { references: msg.references.slice() } : {}),
-        ...(msg.use_selections?.length ? { useSelections: msg.use_selections.slice() } : {}),
+        ...(recoveredRecipientMsg.attachments?.length
+          ? { attachments: recoveredRecipientMsg.attachments.slice() }
+          : {}),
+        ...(recoveredRecipientMsg.references?.length
+          ? { references: recoveredRecipientMsg.references.slice() }
+          : {}),
+        ...(recoveredRecipientMsg.use_selections?.length
+          ? { useSelections: recoveredRecipientMsg.use_selections.slice() }
+          : {}),
         ...(input.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
+        ...(sourceExecConfig ? { execConfig: sourceExecConfig } : {}),
+        ...(ledgerRunId ? { runId: ledgerRunId } : {}),
       });
       const wake = runtime.wake;
       runtime.wake = null;
@@ -3628,13 +4408,46 @@ function composeLlmTurnPayload(
   uid: string,
   fromActorId: string,
   msg: GroupMessage,
+  recipientId?: string,
+  memberScopeTemplate?: string,
 ): string {
   // The recipient's LLM sees the inbound message wrapped with sender id +
   // recipient list so it has unambiguous routing context (especially when
   // a stray @ targeted multiple actors).
   const head = `<msg from="${fromActorId}" to="${(msg.to || []).join(",")}">`;
   const tail = "</msg>";
-  return `${head}\n${_referenceContextForModel(uid, msg.references)}${msg.model_text || msg.text}\n${tail}`;
+  const base = `${head}\n${_referenceContextForModel(uid, msg.references)}${msg.model_text || msg.text}\n${tail}`;
+  // 协作范围：易变内容追加在末尾（保持前缀缓存稳定）；外接实例拿到的永远是空串。
+  const scope = recipientId && memberScopeTemplate
+    ? buildMemberScopeBlock({
+      template: memberScopeTemplate,
+      msg,
+      recipientId,
+      isExternal: isExternalRecipient(msg, recipientId),
+      nameOf: (agentId) => _agentDisplayNameForScope(agentId),
+    })
+    : '';
+  return scope ? `${base}\n\n${scope}` : base;
+}
+
+/** 范围块里的显示名：只读缓存，取不到就回落 id（不额外 IO）。 */
+function _agentDisplayNameForScope(agentId: string): string {
+  try {
+    const cached = _scopeAgentNameCache.get(agentId);
+    if (cached) return cached;
+  } catch {
+    /* cache miss is fine */
+  }
+  return agentId;
+}
+
+const _scopeAgentNameCache = new Map<string, string>();
+
+/** 供 facade/agents 刷新范围块显示名（避免在同步组装里做 IO）。 */
+export function primeScopeAgentNames(entries: Array<{ agent_id: string; name?: string }>): void {
+  for (const entry of entries) {
+    if (entry && entry.agent_id && entry.name) _scopeAgentNameCache.set(entry.agent_id, entry.name);
+  }
 }
 
 /** Reverse of `composeLlmTurnPayload`: extract the user-visible text from
@@ -3857,6 +4670,7 @@ function ensureRuntime(state: CidState): WorkerState {
     abortController: null,
     abortSource: null,
     currentTurnId: null,
+    currentRunId: null,
     currentMsgId: null,
     currentTurnOrder: null,
     currentTurnStartedAtMs: null,
@@ -3947,6 +4761,7 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
     // means it spans the WHOLE turn lifecycle.
     w.running = true;
     w.currentTurnId = item.turnId;
+    w.currentRunId = item.runId || null;
     w.currentMsgId = item.msgId;
     w.currentTurnOrder = ++state.nextTurnOrder;
     w.currentTurnStartedAtMs = Date.now();
@@ -3988,8 +4803,22 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
           `turn_silent after worker-turn failure failed cid=${w.cid}: ${(emitErr as Error).message}`,
         );
       }
+      if (item.runId && item.actor.kind === 'agent') {
+        try {
+          const { recordRunActorTerminal } = await import('./run_store');
+          await recordRunActorTerminal(w.uid, w.cid, item.runId, item.actor.id, {
+            terminal: userAborted ? 'stopped' : 'failed',
+            reason: userAborted ? 'user_stopped' : 'runtime_failed',
+            messages: 0,
+            artifacts: [],
+          });
+        } catch (ledgerErr) {
+          log.warn(`run terminal persistence failed cid=${w.cid}: ${(ledgerErr as Error).message}`);
+        }
+      }
     } finally {
       w.currentTurnId = null;
+      w.currentRunId = null;
       w.currentMsgId = null;
       w.currentTurnOrder = null;
       w.currentTurnStartedAtMs = null;
@@ -4028,7 +4857,11 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
  *  and returns the folded LLM payloads in FIFO order. Synchronous: the runner
  *  calls it at a tool-loop boundary between awaits (Node single-thread → no
  *  race with enqueue/the worker loop). Exported for focused unit tests. */
-export function drainSteerInto(w: WorkerState, actor: Actor): string[] {
+export function drainSteerInto(
+  w: WorkerState,
+  actor: Actor,
+  runId?: string,
+): string[] {
   const folded: string[] = [];
   for (let i = 0; i < w.queue.length;) {
     const q = w.queue[i];
@@ -4036,6 +4869,7 @@ export function drainSteerInto(w: WorkerState, actor: Actor): string[] {
       !q.nested &&
       q.fromActorId === USER_ID &&
       q.actor.id === actor.id &&
+      q.runId === runId &&
       !(q.attachments && q.attachments.length)
     ) {
       folded.push(q.llmPayload);
@@ -4075,6 +4909,7 @@ async function runTurn(
   );
 
   const result = await runActorTurn(state, w, item, turnStartedAt);
+  await recordMemberRunTurnResult(state, item, actor, result);
   _recordTaskRunOutcome(
     state,
     result.kind === "completed" ? result.terminalStatus : "failed",
@@ -4106,6 +4941,57 @@ type ActorTurnResult =
       infrastructureFailure?: boolean;
       terminalStatus: TaskTerminalStatus;
     };
+
+async function recordMemberRunTurnResult(
+  state: CidState,
+  item: QueueItem,
+  actor: Actor,
+  result: ActorTurnResult,
+): Promise<void> {
+  if (!item.runId || item.deferRunTerminal || actor.kind !== 'agent') return;
+  const { recordRunActorTerminal } = await import('./run_store');
+  if (result.kind === 'early') {
+    await recordRunActorTerminal(state.uid, state.cid, item.runId, actor.id, {
+      terminal: 'failed',
+      reason: result.failureCode || 'preflight_failed',
+      messages: 0,
+      artifacts: result.produced || [],
+    });
+    return;
+  }
+  const artifacts = Array.from(new Set([
+    ...(result.produced || []),
+    ...((result.persistedMsg?.artifacts || []).map((artifact) => artifact.id)),
+  ]));
+  if (result.terminalStatus === 'completed') {
+    await recordRunActorTerminal(state.uid, state.cid, item.runId, actor.id, {
+      terminal: 'done',
+      messages: result.persistedMsg ? 1 : 0,
+      artifacts,
+    });
+  } else if (result.terminalStatus === 'waiting_input') {
+    await recordRunActorTerminal(state.uid, state.cid, item.runId, actor.id, {
+      terminal: 'blocked',
+      reason: 'waiting_user',
+      messages: result.persistedMsg ? 1 : 0,
+      artifacts,
+    });
+  } else if (result.terminalStatus === 'cancelled') {
+    await recordRunActorTerminal(state.uid, state.cid, item.runId, actor.id, {
+      terminal: 'stopped',
+      reason: 'user_stopped',
+      messages: result.persistedMsg ? 1 : 0,
+      artifacts,
+    });
+  } else {
+    await recordRunActorTerminal(state.uid, state.cid, item.runId, actor.id, {
+      terminal: 'failed',
+      reason: result.persistedMsg?.failure_code || 'runtime_failed',
+      messages: result.persistedMsg ? 1 : 0,
+      artifacts,
+    });
+  }
+}
 
 type CoordinatorTurnContext = {
   processItems: ProcessItem[];
@@ -4462,31 +5348,38 @@ async function runActorTurnBody(
   // happened with the Commander or another Agent before this turn. Carry a
   // bounded digest of that missed context into the new Agent session; the
   // helper advances a per-Agent watermark so the same history is not repeated.
-  // G-26: covers every dispatch source (user direct, commander dispatch,
-  // agent→agent) so an external gateway agent dispatched a task also receives
-  // the digest — previously only direct user messages triggered it.
+  // Covers every in-process dispatch source (user direct, commander dispatch,
+  // agent→agent). External runtimes are excluded below: the digest is host-side
+  // augmentation of the full main transcript and must not cross that boundary.
   if (
     actor.kind === "agent"
     && item.fromActorId !== actor.id
     && !item.internalControl
     && !item.tap
   ) {
-    try {
-      const { buildSwitchedAgentContextDigest } = await import("./context_handoff");
-      switchedContextDigest = await buildSwitchedAgentContextDigest(
-        uid,
-        cid,
-        actor.id,
-        item.msgId,
-        { projectIdHint: turnProjectId },
-      );
-      if (switchedContextDigest) {
-        messageText = `${switchedContextDigest}\n\n${messageText}`;
+    // Host-side prompt augmentation must never cross the external boundary: the
+    // digest is derived from the full main transcript (host-only `model_text`,
+    // other participants and recipients), so skip it for classified external
+    // actors instead of sending a projected-but-still-leaky summary.
+    const digestActorIsExternal = await _actorTurnIsExternal(uid, cid, actor.id, item.runId);
+    if (!digestActorIsExternal) {
+      try {
+        const { buildSwitchedAgentContextDigest } = await import("./context_handoff");
+        switchedContextDigest = await buildSwitchedAgentContextDigest(
+          uid,
+          cid,
+          actor.id,
+          item.msgId,
+          { projectIdHint: turnProjectId },
+        );
+        if (switchedContextDigest) {
+          messageText = `${switchedContextDigest}\n\n${messageText}`;
+        }
+      } catch (err) {
+        log.warn(
+          `switched-context digest failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
+        );
       }
-    } catch (err) {
-      log.warn(
-        `switched-context digest failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-      );
     }
   }
 
@@ -4606,7 +5499,9 @@ async function runActorTurnBody(
         failure_code: "skill_disabled",
         forceTo: [USER_ID],
         turn_end: true,
+        ...(item.runId ? { runId: item.runId } : {}),
         turn_id: item.turnId,
+
       });
       await _syncStateStatus(state);
       log.info(
@@ -4732,6 +5627,7 @@ async function runActorTurnBody(
         item.attachments,
         turnSpaceId ?? turnProjectId,
         item.msgId,
+        item.runId,
         () => commanderResolvedRuntime,
         item.sourceMessageText,
         {
@@ -4790,7 +5686,9 @@ async function runActorTurnBody(
         failure_code: "agent_unavailable",
         forceTo: [USER_ID],
         turn_end: true,
+        ...(item.runId ? { runId: item.runId } : {}),
         turn_id: item.turnId,
+
       });
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
@@ -4818,7 +5716,9 @@ async function runActorTurnBody(
         failure_code: `p3394_${reasonCode}`,
         forceTo: [USER_ID],
         turn_end: true,
+        ...(item.runId ? { runId: item.runId } : {}),
         turn_id: item.turnId,
+
         process: processItems,
       });
       await markInFlight(uid, cid, actor.id, false);
@@ -5275,6 +6175,7 @@ async function runActorTurnBody(
       text,
       forceTo: [USER_ID],
       turn_id: item.turnId,
+
       seg: segIndex,
       ...(segProcessItems.length ? { process: segProcessItems } : {}),
       ...(segProduced.length ? { produced: segProduced } : {}),
@@ -5514,7 +6415,9 @@ async function runActorTurnBody(
             failure_code: "launch_denied",
             forceTo: [USER_ID],
             turn_end: true,
+            ...(item.runId ? { runId: item.runId } : {}),
             turn_id: item.turnId,
+
           });
           await _syncStateStatus(state);
           return { kind: "early" };
@@ -5926,7 +6829,9 @@ async function runActorTurnBody(
         // user sends mid-run into THIS run. Nested sub-runs (dispatched
         // workers) get no steer — the user can't address a worker, and their
         // synthetic queue is empty anyway.
-        ...(item.nested ? {} : { drainSteer: () => drainSteerInto(w, actor) }),
+        ...(item.nested ? {} : {
+          drainSteer: () => drainSteerInto(w, actor, item.runId),
+        }),
         ...(turnToolExtraRoots.length
           ? { extraRoots: turnToolExtraRoots }
           : {}),
@@ -5946,6 +6851,15 @@ async function runActorTurnBody(
         // Skills are NOT project-scoped this round; agent skillList still
         // gates in-process agents' rendered skills and SkillStore.
       })) {
+        // Providers and local bridges are expected to stop after AbortSignal,
+        // but a buffered/late final event can still arrive. Once the host has
+        // stopped this turn, accepting any further stream item would resurrect
+        // removed work as a visible result. End consumption at the shared
+        // choke point so top-level and nested turns have identical semantics.
+        if (w.abortController.signal.aborted) {
+          aborted = true;
+          break;
+        }
         // A model terminal event ends the monitored lease synchronously, before
         // any post-stream persistence or workflow settlement can yield. The
         // outer turn finally repeats stop() as an idempotent cleanup backstop.
@@ -6923,6 +7837,7 @@ async function runActorTurnBody(
       // this flag, mid-turn tool-emitted messages (plan_executor's
       // dispatch) would also wrongly consume the placeholder.
       turn_end: true,
+      ...(item.runId ? { runId: item.runId } : {}),
       turn_id: item.turnId,
       ...(replyMetrics ? { metrics: replyMetrics } : {}),
       ...(item.kstarDecision?.required
@@ -8135,6 +9050,7 @@ async function prepareNestedDispatchForTool(
   objective: string,
   task: string,
   contract: CoordinatorDispatchContract,
+  runId?: string,
   contextDependencies?: string[],
   resumeStepId?: string,
   resumeToken?: string,
@@ -8146,6 +9062,7 @@ async function prepareNestedDispatchForTool(
     actor_kind: actor.kind === "worker" ? "anonymous_worker" : "agent",
     source_tool: source,
     task,
+    ...(runId ? { group_chat_run_id: runId } : {}),
     depends_on: contract.dependsOn,
     required_capabilities: contract.requiredCapabilities,
     access_mode: contract.accessMode,
@@ -8226,7 +9143,16 @@ async function checkPreparedNestedDispatchDependenciesForTool(
 async function startPreparedNestedDispatchForTool(
   state: CidState,
   prepared: PreparedNestedDispatchStep,
+  runId?: string,
 ): Promise<{ content: string } | null> {
+  // 顺序强约束（设计 §4.4）：本条提交要求按点名顺序协作时，启动依赖步骤之前
+  // 校验依赖图；不满足就**不启动**，把原因交回协调者纠正，而不是静默并行执行。
+  const sequentialBlock = await _guardSequentialPlanBeforeStart(
+    state,
+    prepared,
+    runId,
+  );
+  if (sequentialBlock) return sequentialBlock;
   await _beforeNestedDispatchStartForTest?.();
   return dependencyResultFromLockedOperation(prepared, () =>
     startPreparedNestedDispatchStep(
@@ -8235,6 +9161,93 @@ async function startPreparedNestedDispatchForTool(
       prepared.step.id,
     ),
   );
+}
+
+/** 顺序校验闸门：只在「本条提交带顺序意图」时生效，其余路径零影响。 */
+async function _guardSequentialPlanBeforeStart(
+  state: CidState,
+  prepared: PreparedNestedDispatchStep,
+  runId?: string,
+): Promise<{ content: string } | null> {
+  if (!runId) return null;
+  try {
+    const { readRun, updateRun } = await import('./run_store');
+    const run = await readRun(state.uid, state.cid, runId);
+    if (!run || !run.requires_sequential || run.mention_order.length < 2) return null;
+    const scopedSteps = (prepared.run.steps || []).filter(
+      (step) => step.group_chat_run_id === runId,
+    );
+    const scopedStepIds = new Set(scopedSteps.map((step) => step.id));
+    const foreignDependency = (prepared.step.depends_on || []).find(
+      (dependencyId) => !scopedStepIds.has(dependencyId),
+    );
+    const plan = scopedSteps.map((step) => ({
+      step_id: step.id,
+      agent_id: step.actor_id || '',
+      depends_on: step.depends_on || [],
+    }));
+    // 逐步启动校验（2026-09-20 复盘 21:34 误拦后）：只看"这一步该不该放行"，
+    // 不再用完整计划链去卡第一步。
+    const verdict = prepared.step.group_chat_run_id !== runId
+      ? {
+          ok: false as const,
+          reason: 'missing_dependency' as const,
+          detail: `${prepared.step.id} is not bound to ${runId}`,
+        }
+      : foreignDependency
+        ? {
+            ok: false as const,
+            reason: 'missing_dependency' as const,
+            detail: `${prepared.step.id}<-${foreignDependency}（依赖属于其他协作运行）`,
+          }
+        : verifySequentialStepStart({
+            requiresSequential: true,
+            mentionOrder: run.mention_order,
+            steps: plan,
+            stepToStart: {
+              step_id: prepared.step.id,
+              agent_id: prepared.step.actor_id || '',
+              depends_on: prepared.step.depends_on || [],
+            },
+          });
+    if (verdict.ok) return null;
+    // 纠正上限 1 轮：第一次拦下纠正；再次违规把 run 标 blocked，交回用户。
+    const corrections = run.corrections || 0;
+    await updateRun(state.uid, state.cid, runId, (record) => {
+      record.corrections = corrections + 1;
+      if (corrections >= 1) {
+        record.status = 'blocked';
+        record.summary = {
+          contributed: record.summary?.contributed || [],
+          missing: record.actors.map((actor) => ({
+            agent_id: actor.agent_id,
+            reason: 'sequential_not_established',
+          })),
+        };
+      }
+      return record;
+    });
+    const message = corrections >= 1
+      ? `${sequentialViolationMessage(verdict, run.mention_order)}（已纠正过一次，本条按阻塞结束，请调整后重新提交。）`
+      : sequentialViolationMessage(verdict, run.mention_order);
+    log.warn('sequential plan rejected', {
+      cid: maskId(state.cid),
+      run_id: maskId(runId),
+      reason: (verdict as { reason?: string }).reason,
+      corrections: corrections + 1,
+    });
+    return {
+      content: JSON.stringify({
+        ok: false,
+        error_code: 'sequential_not_established',
+        error: message,
+      }),
+    };
+  } catch (err) {
+    // 校验本身失败不能拦住正常派发（审计能力缺失 ≠ 任务失败）。
+    log.warn(`sequential guard failed cid=${maskId(state.cid)}: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 interface PreparedDispatchAccessResult<T> {
@@ -8275,6 +9288,7 @@ async function cancelQueuedPreparedDispatch(
 async function withPreparedNestedDispatchAccess<T>(input: {
   state: CidState;
   prepared: PreparedNestedDispatchStep;
+  runId?: string;
   request: CoordinatorAccessRequest;
   signal?: AbortSignal;
   execute: () => Promise<T>;
@@ -8300,6 +9314,7 @@ async function withPreparedNestedDispatchAccess<T>(input: {
     const blocked = await startPreparedNestedDispatchForTool(
       input.state,
       input.prepared,
+      input.runId,
     );
     if (blocked) return { kind: "blocked", blocked };
     return { kind: "completed", value: await input.execute() };
@@ -8335,6 +9350,7 @@ async function gateNestedAgentWake(
   workflowResumeToken?: string,
   kstarDecision?: KStarDecisionRecord,
   dispatchedAssetIds?: string[],
+  runId?: string,
 ): Promise<WakeRequestSummary | null> {
   if (actor.kind !== "agent" || allowLegacyGroupChatFormalAgentExecutorForTest())
     return null;
@@ -8348,6 +9364,7 @@ async function gateNestedAgentWake(
     dispatchPayload: {
       text: objective,
       ...(dispatchedAssetIds?.length ? { asset_ids: dispatchedAssetIds } : {}),
+      ...(runId ? { run_id: runId } : {}),
     },
     ...(resumeInstruction?.trim()
       ? { resumeInstruction: resumeInstruction.trim() }
@@ -8780,7 +9797,45 @@ async function runNestedDispatch(
   kstarDecision?: KStarDecisionRecord,
   workflowStepId?: string,
   dispatchedAssetIds?: string[],
+  runId?: string,
 ): Promise<NestedDispatchOutcome> {
+  const dispatchTurnId = genId12();
+  if (runId && actor.kind === 'agent') {
+    const { recordRunDispatch } = await import('./run_store');
+    const ledger = await recordRunDispatch(
+      state.uid,
+      state.cid,
+      runId,
+      actor.id,
+      dispatchTurnId,
+    );
+    const actorLedger = ledger?.actors.find((entry) => entry.agent_id === actor.id);
+    if (!ledger
+      || ledger.status !== 'running'
+      || actorLedger?.terminal !== 'pending'
+      || !actorLedger.dispatched.includes(dispatchTurnId)) {
+      const failureCode = !ledger
+        ? 'run_unavailable'
+        : actorLedger?.terminal === 'removed'
+          ? 'member_removed'
+          : 'run_stopped';
+      return completeNestedDispatchOutcome({
+        ok: false,
+        actor,
+        ...(workflowStepId ? { workflowStepId } : {}),
+        text: '',
+        produced: [],
+        failureCode,
+        retryable: false,
+        payload: buildWorkerErrorPayload(actor.name || actor.id, 'This collaboration target was stopped.', {
+          ...(workflowStepId ? { workflowStepId } : {}),
+          aborted: true,
+          failureCode,
+          retryable: false,
+        }),
+      });
+    }
+  }
   // A named agent must be a roster member so its handed-back bubble renders with
   // proper attribution. The old async dispatch path seeded this via enqueue's
   // `to` resolution; the in-process path seeds it here. Anonymous workers
@@ -8843,6 +9898,7 @@ async function runNestedDispatch(
     abortController: ac,
     abortSource: null,
     currentTurnId: null,
+    currentRunId: runId || null,
     currentMsgId: null,
     currentTurnOrder: null,
     currentTurnStartedAtMs: null,
@@ -8871,7 +9927,7 @@ async function runNestedDispatch(
   });
   const item: QueueItem = {
     actor,
-    turnId: genId12(),
+    turnId: dispatchTurnId,
     msgId: genId12(),
     fromActorId: COMMANDER_ID,
     llmPayload: payload,
@@ -8881,6 +9937,8 @@ async function runNestedDispatch(
     ...(workflowStepId ? { workflow_step_id: workflowStepId } : {}),
     ...(attachments && attachments.length ? { attachments } : {}),
     ...(dispatchedAssetIds && dispatchedAssetIds.length ? { dispatchedAssetIds } : {}),
+    ...(runId ? { runId } : {}),
+    ...(runId ? { deferRunTerminal: true } : {}),
   };
   // Bound concurrent nested dispatches: when the commander fans out several
   // run_worker/dispatch_to calls in one turn (G4 runs them concurrently),
@@ -8902,6 +9960,11 @@ async function runNestedDispatch(
   // runActorTurn directly here (bypassing runTurn's markInFlight/emitStateChanged),
   // which is exactly why no start-of-turn state_changed listed this actor before.
   const surfaced = actor.kind === "agent";
+  state.nestedWorkers.set(item.turnId, {
+    worker: w,
+    ...(runId ? { runId } : {}),
+    agentId: actor.id,
+  });
   if (surfaced) {
     state.nestedTurns.set(item.turnId, {
       actor: actor.id,
@@ -8999,6 +10062,8 @@ async function runNestedDispatch(
             actor,
             ...(workflowStepId ? { workflowStepId } : {}),
             source: abortSource,
+            text: r.text,
+            produced: r.produced,
           }),
         );
       }
@@ -9089,6 +10154,7 @@ async function runNestedDispatch(
       payload,
     });
   } finally {
+    state.nestedWorkers.delete(item.turnId);
     if (parentSignal)
       parentSignal.removeEventListener("abort", abortFromParent);
     if (surfaced) {
@@ -9534,6 +10600,70 @@ interface CoordinatedNestedDispatchInput {
   prepared: PreparedNestedDispatchStep;
   requiredCapabilities: string[];
   dispatchedAssetIds?: string[];
+  runId?: string;
+}
+
+interface NestedRunActorAccounting {
+  messages: number;
+  artifacts: Set<string>;
+}
+
+function collectNestedRunActorAccounting(
+  accounting: Map<string, NestedRunActorAccounting>,
+  outcome: NestedDispatchOutcome,
+): void {
+  if (outcome.actor.kind !== "agent") return;
+  const current = accounting.get(outcome.actor.id) || {
+    messages: 0,
+    artifacts: new Set<string>(),
+  };
+  if (outcome.text.trim()) current.messages += 1;
+  for (const artifact of outcome.produced) current.artifacts.add(artifact);
+  accounting.set(outcome.actor.id, current);
+}
+
+async function settleNestedRunActor(
+  state: CidState,
+  runId: string | undefined,
+  outcome: NestedDispatchOutcome,
+  accounting: Map<string, NestedRunActorAccounting>,
+  settledActorIds: Set<string>,
+): Promise<void> {
+  if (!runId || outcome.actor.kind !== "agent") return;
+  if (settledActorIds.has(outcome.actor.id)) return;
+  const produced = accounting.get(outcome.actor.id);
+  let terminal: "done" | "blocked" | "stopped" | "failed";
+  let reason: string | undefined;
+  if ("failureCode" in outcome) {
+    terminal = outcome.abortSource === "group_abort"
+      || outcome.abortSource === "parent_abort"
+      ? "stopped"
+      : "failed";
+    reason = terminal === "stopped" ? "user_stopped" : outcome.failureCode;
+  } else {
+    terminal = outcome.form ? "blocked" : "done";
+    reason = outcome.form ? "waiting_user" : undefined;
+  }
+  const { recordRunActorTerminal } = await import("./run_store");
+  const recorded = await recordRunActorTerminal(
+    state.uid,
+    state.cid,
+    runId,
+    outcome.actor.id,
+    {
+      terminal,
+      ...(reason ? { reason } : {}),
+      messages: produced?.messages || 0,
+      artifacts: [...(produced?.artifacts || [])],
+    },
+  );
+  const actor = recorded?.actors.find(
+    (candidate) => candidate.agent_id === outcome.actor.id,
+  );
+  if (actor?.terminal !== terminal) {
+    throw new Error(`collaboration terminal persistence failed: ${runId}`);
+  }
+  settledActorIds.add(outcome.actor.id);
 }
 
 async function runCoordinatedNestedDispatch(
@@ -9556,6 +10686,9 @@ async function runCoordinatedNestedDispatchAdmitted(
     | null = null;
   const failedActorIds = new Set<string>();
   const produced = new Set<string>();
+  const runActorAccounting = new Map<string, NestedRunActorAccounting>();
+  const accountedRunOutcomes = new WeakSet<object>();
+  const settledRunActorIds = new Set<string>();
   let lastFailure: Extract<NestedDispatchOutcome, { ok: false }> | null = null;
   const lateAbortOutcome = async (
     phase:
@@ -9602,18 +10735,38 @@ async function runCoordinatedNestedDispatchAdmitted(
   const returnAfterInfrastructureFailure = (): NestedDispatchOutcome =>
     lastFailure ||
     nestedDispatchLifecycleFailureOutcome(actor, input.prepared.step.id);
+  const settleTerminalOutcome = async (
+    outcome: NestedDispatchOutcome,
+  ): Promise<NestedDispatchOutcome> => {
+    if (!accountedRunOutcomes.has(outcome)) {
+      collectNestedRunActorAccounting(runActorAccounting, outcome);
+      accountedRunOutcomes.add(outcome);
+    }
+    await settleNestedRunActor(
+      input.state,
+      input.runId,
+      outcome,
+      runActorAccounting,
+      settledRunActorIds,
+    );
+    return outcome;
+  };
 
   for (let loopAttempt = 1; loopAttempt <= 4; loopAttempt += 1) {
     const beforePreparationAbort = await lateAbortOutcome("before_preparation");
-    if (beforePreparationAbort) return beforePreparationAbort;
+    if (beforePreparationAbort) {
+      return settleTerminalOutcome(beforePreparationAbort);
+    }
     if (loopAttempt > 1) {
       try {
         await _nestedDispatchAttemptHooksForTest?.beforeRetry?.();
       } catch {
-        return returnAfterInfrastructureFailure();
+        return settleTerminalOutcome(returnAfterInfrastructureFailure());
       }
       const afterRetryHookAbort = await lateAbortOutcome("after_retry_hook");
-      if (afterRetryHookAbort) return afterRetryHookAbort;
+      if (afterRetryHookAbort) {
+        return settleTerminalOutcome(afterRetryHookAbort);
+      }
       try {
         await prepareWorkflowStepForRetry(
           input.state.uid,
@@ -9625,21 +10778,25 @@ async function runCoordinatedNestedDispatchAdmitted(
           cid: maskId(input.state.cid),
           step_id: maskId(input.prepared.step.id),
         });
-        return returnAfterInfrastructureFailure();
+        return settleTerminalOutcome(returnAfterInfrastructureFailure());
       }
       try {
         await _nestedDispatchAttemptHooksForTest?.afterRetryPreparation?.();
       } catch {
-        return returnAfterInfrastructureFailure();
+        return settleTerminalOutcome(returnAfterInfrastructureFailure());
       }
       const afterPreparationAbort = await lateAbortOutcome(
         "after_retry_preparation",
       );
-      if (afterPreparationAbort) return afterPreparationAbort;
+      if (afterPreparationAbort) {
+        return settleTerminalOutcome(afterPreparationAbort);
+      }
     }
     if (transition) {
       const beforeTransitionAbort = await lateAbortOutcome("before_transition");
-      if (beforeTransitionAbort) return beforeTransitionAbort;
+      if (beforeTransitionAbort) {
+        return settleTerminalOutcome(beforeTransitionAbort);
+      }
       const attempt = loopAttempt;
       const event: ProcessEvent =
         transition.phase === "retry"
@@ -9671,7 +10828,9 @@ async function runCoordinatedNestedDispatchAdmitted(
     }
 
     const beforeAttemptAbort = await lateAbortOutcome("before_attempt");
-    if (beforeAttemptAbort) return beforeAttemptAbort;
+    if (beforeAttemptAbort) {
+      return settleTerminalOutcome(beforeAttemptAbort);
+    }
     const lifecycle = await runNestedDispatchAttemptLifecycle({
       state: input.state,
       actor,
@@ -9688,12 +10847,22 @@ async function runCoordinatedNestedDispatchAdmitted(
           input.kstarDecision,
           input.prepared.step.id,
           input.dispatchedAssetIds,
+          input.runId,
         ),
     });
     const { outcome, finishedStep } = lifecycle;
     for (const file of outcome.produced) produced.add(file);
+    collectNestedRunActorAccounting(runActorAccounting, outcome);
+    accountedRunOutcomes.add(outcome);
 
     if (lifecycle.settlement !== "terminal_confirmed" || outcome.ok === true) {
+      await settleNestedRunActor(
+        input.state,
+        input.runId,
+        outcome,
+        runActorAccounting,
+        settledRunActorIds,
+      );
       return outcome;
     }
 
@@ -9701,10 +10870,28 @@ async function runCoordinatedNestedDispatchAdmitted(
     const cancelled =
       failedOutcome.abortSource === "group_abort" ||
       failedOutcome.abortSource === "parent_abort";
-    if (!finishedStep) return outcome;
+    if (!finishedStep) {
+      await settleNestedRunActor(
+        input.state,
+        input.runId,
+        outcome,
+        runActorAccounting,
+        settledRunActorIds,
+      );
+      return outcome;
+    }
     lastFailure = failedOutcome;
     if (actor.kind === "agent") failedActorIds.add(actor.id);
-    if (cancelled) return outcome;
+    if (cancelled) {
+      await settleNestedRunActor(
+        input.state,
+        input.runId,
+        outcome,
+        runActorAccounting,
+        settledRunActorIds,
+      );
+      return outcome;
+    }
 
     const action = nextRecoveryAction({
       attempts: finishedStep.attempts || [],
@@ -9712,8 +10899,26 @@ async function runCoordinatedNestedDispatchAdmitted(
         ? { abortSource: failedOutcome.abortSource }
         : {}),
     });
-    if (action.kind === "stop") return outcome;
-    if (action.kind === "return_commander" || loopAttempt >= 4) break;
+    if (action.kind === "stop") {
+      await settleNestedRunActor(
+        input.state,
+        input.runId,
+        outcome,
+        runActorAccounting,
+        settledRunActorIds,
+      );
+      return outcome;
+    }
+    if (action.kind === "return_commander" || loopAttempt >= 4) {
+      await settleNestedRunActor(
+        input.state,
+        input.runId,
+        outcome,
+        runActorAccounting,
+        settledRunActorIds,
+      );
+      break;
+    }
 
     if (action.kind === "retry_same") {
       actor = input.initialActor;
@@ -9732,6 +10937,13 @@ async function runCoordinatedNestedDispatchAdmitted(
     }
 
     if (action.kind === "select_fallback") {
+      await settleNestedRunActor(
+        input.state,
+        input.runId,
+        outcome,
+        runActorAccounting,
+        settledRunActorIds,
+      );
       const members = await readMembers(input.state.uid, input.state.cid);
       const agents = await agentsFeat.listAgents().catch(() => []);
       const busyActorIds = new Set(
@@ -9773,6 +10985,13 @@ async function runCoordinatedNestedDispatchAdmitted(
       continue;
     }
 
+    await settleNestedRunActor(
+      input.state,
+      input.runId,
+      outcome,
+      runActorAccounting,
+      settledRunActorIds,
+    );
     actor = {
       kind: "worker",
       id: genId12(),
@@ -10528,12 +11747,14 @@ function buildSkillSearchTool(uid: string): AgentTool {
 async function blockedByCollaborationGateToolResult(
   uid: string,
   cid: string,
+  runId?: string,
 ): Promise<ReturnType<typeof _toolError> | null> {
   try {
     const snapshot = await readCollaborationSnapshot(uid, cid);
     if (!snapshot || snapshot.status !== "blocked" || !snapshot.blocking_gate)
       return null;
-    const gate = snapshot.blocking_gate;
+    const gate = blockingGateForGroupChatRun(snapshot, runId);
+    if (!gate) return null;
     return _toolError(
       `Workflow is blocked by collaboration gate "${gate.name}" (${gate.status}). Do not dispatch more agents until the user reviews the gate. Reason: ${gate.reason || "none"}`,
     );
@@ -10558,6 +11779,7 @@ async function buildCommanderExtraTools(
   currentTurnAttachments?: string[],
   currentProjectId?: string,
   currentSourceMessageId?: string,
+  currentRunId?: string,
   resolvedRuntime: () => ChatResolvedRuntime | null = () => null,
   currentSourceMessageText?: string,
   currentRecallScope: Pick<AssetRuntimeContext, 'projectId' | 'workspaceId' | 'conversationKind' | 'fileKinds'> = {},
@@ -11243,7 +12465,11 @@ async function buildCommanderExtraTools(
           isError: true,
         };
       }
-      const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+      const blocked = await blockedByCollaborationGateToolResult(
+        uid,
+        cid,
+        currentRunId,
+      );
       if (blocked) return blocked;
       // Resolve `to` → actor id via the shared name-map resolver.
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
@@ -11295,6 +12521,7 @@ async function buildCommanderExtraTools(
         _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
         message,
         dispatchContract,
+        currentRunId,
         contextDependencies,
         resumeStepId,
         resumeToken,
@@ -11315,11 +12542,13 @@ async function buildCommanderExtraTools(
         prepared.step.resume_token,
         kstarDecisionRecord(kstar),
         grantedAssets.assetIds,
+        currentRunId,
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
       const dispatchExecution = await withPreparedNestedDispatchAccess({
         state,
         prepared,
+        runId: currentRunId,
         request: dispatchContract.accessRequest,
         signal: ctx?.signal,
         execute: async () => {
@@ -11337,6 +12566,7 @@ async function buildCommanderExtraTools(
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
             dispatchedAssetIds: grantedAssets.assetIds,
+            runId: currentRunId,
           });
         },
       });
@@ -11469,7 +12699,11 @@ async function buildCommanderExtraTools(
       }
       if (!toRaw) return _toolError("`to` is required");
       if (!message) return _toolError("`message` is required");
-      const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+      const blocked = await blockedByCollaborationGateToolResult(
+        uid,
+        cid,
+        currentRunId,
+      );
       if (blocked) return blocked;
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
       if (!resolvedId)
@@ -11511,6 +12745,7 @@ async function buildCommanderExtraTools(
         _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
         message,
         dispatchContract,
+        currentRunId,
         contextDependencies,
         resumeStepId,
         resumeToken,
@@ -11531,11 +12766,13 @@ async function buildCommanderExtraTools(
         prepared.step.resume_token,
         kstarDecisionRecord(kstar),
         grantedAssets.assetIds,
+        currentRunId,
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
       const handoffExecution = await withPreparedNestedDispatchAccess({
         state,
         prepared,
+        runId: currentRunId,
         request: dispatchContract.accessRequest,
         signal: ctx?.signal,
         execute: async () => {
@@ -11552,6 +12789,7 @@ async function buildCommanderExtraTools(
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
             dispatchedAssetIds: grantedAssets.assetIds,
+            runId: currentRunId,
           });
           if (!outcome.ok) return { content: outcome.payload };
 
@@ -11827,7 +13065,11 @@ async function buildCommanderExtraTools(
         return _toolError((error as Error).message);
       }
       if (!task) return _toolError("`task` is required");
-      const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+      const blocked = await blockedByCollaborationGateToolResult(
+        uid,
+        cid,
+        currentRunId,
+      );
       if (blocked) return blocked;
       const contract = dispatchContract;
       const legacy = allowLegacyRunWorkerTestRoutes();
@@ -11859,6 +13101,7 @@ async function buildCommanderExtraTools(
           _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
           task,
           dispatchContract,
+          currentRunId,
           contextDependencies,
           resumeStepId,
           resumeToken,
@@ -11869,6 +13112,7 @@ async function buildCommanderExtraTools(
         const workerExecution = await withPreparedNestedDispatchAccess({
           state,
           prepared,
+          runId: currentRunId,
           request: dispatchContract.accessRequest,
           signal: ctx?.signal,
           execute: () =>
@@ -11888,6 +13132,7 @@ async function buildCommanderExtraTools(
                   kstarDecisionRecord(kstar),
                   prepared.step.id,
                   grantedAssets.assetIds,
+                  currentRunId,
                 ),
             }),
         });
@@ -11941,6 +13186,7 @@ async function buildCommanderExtraTools(
         _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
         task,
         dispatchContract,
+        currentRunId,
         contextDependencies,
         resumeStepId,
         resumeToken,
@@ -11961,11 +13207,13 @@ async function buildCommanderExtraTools(
         prepared.step.resume_token,
         kstarDecisionRecord(kstar),
         grantedAssets.assetIds,
+        currentRunId,
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
       const namedExecution = await withPreparedNestedDispatchAccess({
         state,
         prepared,
+        runId: currentRunId,
         request: dispatchContract.accessRequest,
         signal: ctx?.signal,
         execute: async () => {
@@ -11982,6 +13230,7 @@ async function buildCommanderExtraTools(
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
             dispatchedAssetIds: grantedAssets.assetIds,
+            runId: currentRunId,
           });
         },
       });
@@ -12125,8 +13374,182 @@ async function buildCommanderExtraTools(
 
 // ── Abort ────────────────────────────────────────────────────────────────
 
-export async function abort(uid: string, cid: string): Promise<void> {
+export interface AbortRunOptions {
+  runId: string;
+  agentIds?: string[];
+  reason?: 'member_removed' | 'user_stopped';
+}
+
+async function blockMemberRemovedDependents(
+  uid: string,
+  cid: string,
+  runId: string,
+  removedAgentIds: string[],
+): Promise<void> {
+  if (!removedAgentIds.length) return;
+  const collaboration = await import('./collaboration');
+  const workflow = await collaboration.readActiveWorkflowRun(uid, cid);
+  if (!workflow) return;
+  const scopedSteps = workflow.steps.filter((step) => step.group_chat_run_id === runId);
+  if (!scopedSteps.length) return;
+  const removedAgents = new Set(removedAgentIds);
+  const removedStepIds = new Set(
+    scopedSteps
+      .filter((step) => !!step.actor_id && removedAgents.has(step.actor_id))
+      .map((step) => step.id),
+  );
+  if (!removedStepIds.size) return;
+
+  const blockedStepIds = new Set<string>();
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const step of scopedSteps) {
+      if (removedStepIds.has(step.id) || blockedStepIds.has(step.id)) continue;
+      if (step.status !== 'pending' && step.status !== 'blocked') continue;
+      if (!(step.depends_on || []).some((id) => removedStepIds.has(id) || blockedStepIds.has(id))) continue;
+      blockedStepIds.add(step.id);
+      expanded = true;
+    }
+  }
+
+  const { recordRunActorTerminal } = await import('./run_store');
+  for (const step of scopedSteps) {
+    const directlyRemoved = removedStepIds.has(step.id);
+    const downstreamBlocked = blockedStepIds.has(step.id);
+    if (!directlyRemoved && !downstreamBlocked) continue;
+    if (step.status === 'pending' || step.status === 'blocked') {
+      await collaboration.skipWorkflowStep(uid, cid, workflow.id, step.id, 'member_removed');
+    }
+    if (downstreamBlocked && step.actor_id && safeId(step.actor_id)) {
+      await recordRunActorTerminal(uid, cid, runId, step.actor_id, {
+        terminal: 'blocked',
+        reason: 'member_removed',
+        messages: 0,
+        artifacts: [],
+      });
+    }
+  }
+}
+
+async function rejectRunWakeRequests(
+  uid: string,
+  cid: string,
+  runId: string,
+  targets: ReadonlySet<string>,
+  reason: string,
+): Promise<void> {
+  const wakes = await listWakeRequests(uid, cid);
+  for (const request of wakes) {
+    if (request.dispatch_payload.run_id !== runId) continue;
+    if (targets.size > 0 && !targets.has(request.agent_id)) continue;
+    if (request.status !== 'pending' && request.status !== 'approved') continue;
+    if (request.status === 'approved') {
+      await resetWakeApproval(uid, request.id, reason);
+    }
+    await rejectWakeRequest(uid, request.id, reason);
+  }
+}
+
+export async function abort(uid: string, cid: string, options?: AbortRunOptions): Promise<void> {
   const state = _cids.get(cidKey(uid, cid));
+  if (options) {
+    const runId = options.runId;
+    if (!safeId(runId)) throw new Error('invalid run id');
+    const agentIds = Array.from(new Set((options.agentIds || []).filter((id) => safeId(id))));
+    const targets = new Set(agentIds);
+    const targetsActor = (actorId: string) => targets.size === 0 || targets.has(actorId);
+    const { stopRun } = await import('./run_store');
+    const stopReason = options.reason || (agentIds.length ? 'member_removed' : 'user_stopped');
+    const stopped = await stopRun(uid, cid, runId, {
+      ...(agentIds.length ? { agentIds } : {}),
+      reason: stopReason,
+      terminal: options.reason === 'member_removed' ? 'removed' : 'stopped',
+    });
+    if (!stopped) throw new Error(`collaboration durable stop persistence failed: ${runId}`);
+
+    try {
+      await rejectRunWakeRequests(uid, cid, runId, targets, stopReason);
+    } catch (err) {
+      log.warn('run-scoped Wake rejection failed', { error: logErrorRef(err) });
+    }
+
+    let cleared = 0;
+    let aborted = 0;
+    if (state) {
+      for (const [, worker] of state.workers) {
+        const retained: QueueItem[] = [];
+        for (const item of worker.queue) {
+          if (item.runId === runId && targetsActor(item.actor.id)) {
+            cleared += 1;
+            emit(state, {
+              type: 'turn_silent',
+              cid,
+              actor: item.actor.id,
+              turn_id: item.turnId,
+              source_msg_id: item.msgId,
+            });
+          } else {
+            retained.push(item);
+          }
+        }
+        worker.queue.splice(0, worker.queue.length, ...retained);
+        if (worker.running && worker.currentRunId === runId && targetsActor(worker.actor.id)) {
+          abortWorkerTurn(worker, { kind: 'group_abort' });
+          aborted += 1;
+        }
+      }
+      for (const nested of state.nestedWorkers.values()) {
+        if (nested.runId !== runId || !targetsActor(nested.agentId)) continue;
+        abortWorkerTurn(nested.worker, { kind: 'group_abort' });
+        aborted += 1;
+      }
+    }
+
+    if (options.reason === 'member_removed' && agentIds.length) {
+      try {
+        await blockMemberRemovedDependents(uid, cid, runId, agentIds);
+      } catch (err) {
+        log.warn('member removal dependency settlement failed', { error: logErrorRef(err) });
+      }
+    }
+
+    try {
+      const [{ listCogSeedTasks }, { cogseedRuntimeController }] = await Promise.all([
+        import('../cogseed_backend/task-store'),
+        import('../cogseed_backend/runtime-controller'),
+      ]);
+      const tasks = await listCogSeedTasks(uid);
+      const activeStatuses = new Set(['planned', 'created', 'queued', 'running', 'waiting_user', 'recoverable']);
+      const matches = tasks.filter((task) => (
+        task.conversationId === cid
+        && task.groupChatRunId === runId
+        && activeStatuses.has(task.status)
+        && (!targets.size || (!!task.agentId && targets.has(task.agentId)))
+      ));
+      await Promise.allSettled(matches.map((task) => (
+        cogseedRuntimeController.cancelCogSeedTask(uid, task.taskId)
+      )));
+    } catch (err) {
+      log.warn('run-scoped backend cancellation failed', { error: logErrorRef(err) });
+    }
+
+    const reconcileState = state || getOrInitCid(uid, cid);
+    reconcileState.memberRunId = runId;
+    reconcileState.memberRunIds.add(runId);
+    if (state) await emitStateChanged(state);
+    await _syncStateStatus(reconcileState).catch((err) => {
+        log.warn(`run-scoped syncStateStatus failed cid=${cid}: ${(err as Error).message}`);
+      });
+    log.info('run-scoped abort', {
+      cid: maskId(cid),
+      run_id: maskId(runId),
+      actors: agentIds.length,
+      cleared,
+      aborted,
+    });
+    return;
+  }
   let cleared = 0;
   let aborted = 0;
   let abortedModelSessions = 0;

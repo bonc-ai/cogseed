@@ -41,6 +41,7 @@ function loadComposer() {
     '_chatRichHasAuthoredContent',
     '_chatRichEnsureTrailingBreak',
     '_chatRichHandleEditorInput',
+    '_chatRichSegmentTokens',
     '_chatRichRenderValue',
   ]
     .map(extractFunction)
@@ -93,6 +94,9 @@ function loadComposer() {
     }
     const document = { createElement: (t) => new FakeEl(t), createTextNode: (v) => new FakeText(v) };
     const _findChatUseTokens = () => [];
+    // 多 Agent 点名标记：本文件只验证纯文本/换行的值往返，故不提供成员目录
+    // （扫描结果为空 → 正文里没有点名 chip，等价于加入该能力之前的文本路径）。
+    const window = {};
     const _chatRichCreateUseChip = () => document.createElement('span');
     function makeEditor() { return new FakeEl('div'); }
   `;

@@ -1889,6 +1889,10 @@
   <!-- 纯函数模块：window.conversationMetrics（消息/会话 token 用量格式化）。
        必须在 conversation.js 之前加载（其消费方是 _mountMsgMeta）。 -->
   <script src="./modules/conversation-metrics.js"></script>
+  <!-- 多 Agent 选择：会话成员 / 正文点名标记 / 按来源模型配置。加载在
+       conversation.js 与 agents.js 之前——两者在初始化时直接读 window.composerMembers。 -->
+  <script src="./modules/composer-members.js"></script>
+  <script src="./modules/member-work-state.js"></script>
   <script src="./modules/conversation.js"></script>
   <script src="./modules/kb-glossary-manager.js"></script>
   <script src="./modules/kb-transcript-correct.js"></script>
