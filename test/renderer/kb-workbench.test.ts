@@ -156,6 +156,13 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       return made.el;
     }),
   };
+  /** 渲染任意 attrs，让桩与真实原语行为一致（data- 与 aria- 属性都会被测试断言到）。 */
+  const renderStubAttrs = (attrs: Record<string, any> | undefined): string =>
+    Object.entries(attrs || {})
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${key}="${value === true ? '' : String(value)}"`)
+      .join('');
+
   const windowMock: any = {
     innerWidth: options.width ?? 1440,
     innerHeight: options.height ?? 900,
@@ -173,6 +180,15 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
+    // 共享图标注册表：给出与 icons.js 同形的输出（含 is-<name> 类名），
+    // 让 _icon() 走真实路径而不是空 svg 兜底。
+    uiIconHtml: (name: string, cls?: string) => `<svg class="${cls || 'ui-icon'} is-${name}"></svg>`,
+    // 共享原语桩：kb-workbench 现在**不再自带降级模板**（2026-09-21），
+    // 缺原语即抛错；生产里这些由 index.html 加载的 ui-button.js / ui-form.js 提供。
+    uiButton: (o: any) => `<button type="button" class="btn ui-button ui-button--${o.role || 'secondary'} ${o.className || ''}"${o.disabled ? ' disabled' : ''}${renderStubAttrs(o.attrs)}>${o.label}</button>`,
+    uiIconButton: (o: any) => `<button type="button" class="ui-icon-button ${o.className || ''}"${o.disabled ? ' disabled' : ''} aria-label="${o.label}"${renderStubAttrs(o.attrs)}></button>`,
+    uiInput: (o: any) => `<input class="form-input ui-control ui-input ${o.className || ''}" id="${o.id || ''}" type="${o.type || 'text'}" value="${o.value || ''}"${o.disabled ? ' disabled' : ''}${renderStubAttrs(o.attrs)} />`,
+    uiTextarea: (o: any) => `<textarea class="form-input ui-control ui-textarea ${o.className || ''}" id="${o.id || ''}"${o.placeholder ? ` placeholder="${o.placeholder}"` : ''}>${o.value || ''}</textarea>`,
     uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3>${options.hint ? `<p>${String(options.hint)}</p>` : ''}${options.action ? `<button id="${String(options.action.attrs?.id || '')}">${String(options.action.label || '')}</button>` : ''}</section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string) => {
@@ -222,6 +238,11 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     performance,
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (v: unknown) => String(v ?? ''),
+    uiIconHtml: windowMock.uiIconHtml,
+    uiButton: windowMock.uiButton,
+    uiIconButton: windowMock.uiIconButton,
+    uiInput: windowMock.uiInput,
+    uiTextarea: windowMock.uiTextarea,
     uiToast: windowMock.uiToast,
     uiPrompt: windowMock.uiPrompt,
     document: documentMock,
@@ -334,8 +355,10 @@ describe('KB workbench (S1 skeleton)', () => {
     });
     // 默认选中第一个库（班级建设资料）
     expect(els['kb-wb-lib-name'].textContent).toBe('班级建设资料');
-    // ready → ✓ 已索引；processing → 索引中…
-    expect(els['kb-wb-files'].innerHTML).toContain('✓ 已索引');
+    // ready → [check 图标] 已索引；processing → 索引中…
+    // 图标改由 icons.js 提供（2026-09-21），断言文字 + 共享图标类名，不再断言 emoji
+    expect(els['kb-wb-files'].innerHTML).toContain('已索引');
+    expect(els['kb-wb-files'].innerHTML).toContain('is-check');
     expect(els['kb-wb-files'].innerHTML).toContain('索引中…');
     // 子目录行（可下钻）
     expect(els['kb-wb-files'].innerHTML).toContain('子目录');
@@ -739,7 +762,8 @@ describe('KB workbench (S1 skeleton)', () => {
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
 
-    expect(source).toContain("typeof window.uiIconButton === 'function'");
+    // 2026-09-21：模块不再自带降级模板，改为缺原语即抛错（仍是共享 seam，且不会静默绕过）
+    expect(source).toContain("_requirePrimitive('uiIconButton')");
     expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
     expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.kb-wb\.right-panel-open \.kb-wb-right/);
     expect(css).toContain('width: min(420px, calc(100% - 44px));');
@@ -938,7 +962,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(importDialog).not.toMatch(/[✕←→]/u);
     expect(importBinding).toContain("initialFocus: '#kb-import-dlg-search-input'");
     expect(importBinding).toContain("controller.open(trigger)");
-    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?okBtn\.disabled = _dlgSelected\.size === 0/);
+    // 收尾：先去 loading、再按选择数同步可用状态（必须是属性 + is-disabled 类一起改）
+    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?_setDisabled\(okBtn, _dlgSelected\.size === 0\)/);
     expect(source).toMatch(/getElementById\('kb-qa-history-panel'\) \|\| document\.querySelector\('\.kb-import-dlg-overlay'\)/);
   });
 
@@ -1032,7 +1057,8 @@ describe('KB workbench (S1 skeleton)', () => {
     input.value = '子文件';
     input._listeners.input({ target: input });
     expect(els['kb-wb-files'].innerHTML).toContain('子文件.txt');
-    expect(els['kb-wb-files'].innerHTML).toContain('📁 子目录');
+    expect(els['kb-wb-files'].innerHTML).toContain('子目录');
+    expect(els['kb-wb-files'].innerHTML).toContain('is-folder');
     // 搜索根目录文件：meta 显示「库根」
     input.value = 'a.pdf';
     input._listeners.input({ target: input });
@@ -2160,5 +2186,219 @@ describe('KB 解析卡按钮接线（防"死按钮"）', () => {
       if (typeof btn._listeners.click !== 'function') unwired.push(id);
     }
     expect(unwired).toEqual([]);
+  });
+});
+
+/**
+ * 共享按钮的"禁用"是**类**（`.is-disabled` → `pointer-events:none`），不是属性。
+ *
+ * 真机事故：问答「发送」按钮在模板里就是 `disabled: true`（渲染时已带 `is-disabled`），
+ * 输入文字后代码只把 `.disabled` 置回 false、类还在 ⇒ **按钮永远点不动**（导入弹窗的「导入」同因）。
+ * 这里钉住：这几条启用路径必须走统一 helper（同时改属性与类）。
+ */
+describe('共享按钮禁用状态必须属性 + 类同步', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+
+  it('存在同时改 disabled 与 is-disabled 的统一 helper', () => {
+    expect(src).toMatch(/function _setDisabled\(el, disabled\) \{[\s\S]{0,240}el\.disabled = off;[\s\S]{0,160}classList\.toggle\('is-disabled', off\)/);
+  });
+
+  it('问答发送 / 导入弹窗 / 分享弹窗都不再只改属性', () => {
+    expect(src).toContain('_setDisabled(send, !input.value.trim())');
+    expect(src).toMatch(/_setDisabled\(okBtn, _dlgSelected\.size === 0\)/);
+    expect(src).toMatch(/_setDisabled\(okBtn, !String\(nameInput\.value \|\| ''\)\.trim\(\)\)/);
+    // 反例：下面这两种写法就是当初的 bug
+    expect(src).not.toMatch(/send\.disabled = !input\.value\.trim\(\)/);
+    expect(src).not.toMatch(/okBtn\.disabled = _dlgSelected\.size === 0/);
+  });
+
+  it('模板里创建即 disabled 的三个按钮仍然存在（防误删后本条测试失去意义）', () => {
+    for (const id of ['kb-share-ok', 'kb-import-dlg-ok', 'kb-qa-send']) expect(src).toContain(id);
+    expect((src.match(/disabled: true/g) || []).length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/**
+ * 侧栏「知识库列表」在 uiTree 迁移后曾被压成 16px 宽（库名不可见）——回归防护。
+ *
+ * 根因：共享树的 li 是 `grid-template-columns: 28px minmax(0,1fr)`，页面渲染时把库名
+ * 放进 `.kb-tree-name`（`overflow:hidden`）；子级 `ul[role=group]` 未指定列会被自动放进
+ * **第一列（28px）**，于是整棵子树只有 ~28px、名字宽度归零 —— 真机表现就是"列表空白"。
+ * 这里钉住那三条让它撑开的规则（jsdom 没有布局，只能钉契约；真机已用 CDP 量过宽高）。
+ */
+describe('知识库侧栏树宽度契约（uiTree 迁移回归）', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+
+  it('子级 group 必须横跨两列，行与名字必须可伸缩', () => {
+    expect(css).toMatch(/\.kb-library-tree \[role="treeitem"\] > \[role="group"\] \{ grid-column: 1 \/ -1; width: 100%; \}/);
+    // `.kb-tree-item` 原本就有 width:100%（在 .kb-library-tree 作用域内），这里守它的存在
+    expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \{ width: 100%;/);
+    expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \.kb-tree-name \{ flex: 1 1 auto; min-width: 0; \}/);
+  });
+});
+
+/**
+ * 真机事故（2026-09-21）：点「原文依据」后正文高亮的是**半句多**——摘录 31 字，
+ * 涂了 70 字窗口（被 `needleNorm.length * 2 + 8` 的估算长度放大），摘录末尾之后
+ * 的正文跟着变色，看起来像"引错了位置"。
+ * 排版类（HTML/Office 转出的正文）走的就是这条 `_fvHighlightContainer`，
+ * 所以它和 markdown 那条路径一起锁"涂出来的就是摘录本身"。
+ */
+describe('排版类原文依据高亮的落点口径（真机：高亮多涂半句）', () => {
+  /** 假 iframe 正文：一个文本节点 + 只记区间的 Range，返回被标记的原文片段。 */
+  function frameHost(text: string) {
+    const node: any = { nodeType: 3, nodeValue: text };
+    const marked: string[] = [];
+    let walked = false;
+    node.ownerDocument = {
+      createTreeWalker: () => ({
+        nextNode: () => {
+          if (walked) return null;
+          walked = true;
+          return node;
+        },
+      }),
+      createRange: () => {
+        const range: any = { start: 0, end: 0 };
+        range.setStart = (_n: any, start: number) => { range.start = start; };
+        range.setEnd = (_n: any, end: number) => { range.end = end; };
+        range.surroundContents = () => { marked.push(text.slice(range.start, range.end)); };
+        return range;
+      },
+      createElement: () => ({ className: '', scrollIntoView: () => {} }),
+    };
+    const container: any = {
+      nodeType: 1,
+      ownerDocument: node.ownerDocument,
+      childNodes: [node],
+      querySelectorAll: () => [],
+    };
+    return { container, marked };
+  }
+
+  it('rawSpan 把归一化区间反算成原始区间（与 markdown 路径同一口径）', () => {
+    const { windowMock } = loadScript();
+
+    expect(windowMock.__kbFvUtils.rawSpan('   abc  def   ', 1, 4)).toEqual({ start: 4, end: 8 });
+    expect(windowMock.__kbFvUtils.rawSpan('\n    前导空白后的正文', 0, 2)).toEqual({ start: 5, end: 7 });
+  });
+
+  it('31 字摘录只涂 31 字（旧实现会涂满 70 字窗口）', () => {
+    const { windowMock } = loadScript();
+    const quote = '这段原文依据摘录一共三十一个字，用来验证高亮落点是否准确无误。';
+    const { container, marked } = frameHost(`${quote}后面还有一整句本不该变色。`);
+
+    expect([...quote].length).toBe(31);
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('段落中间的摘录也只涂摘录本身（不清洗前后的正文）', () => {
+    const { windowMock } = loadScript();
+    const quote = '检索改写要先用词表兜住转写错词';
+    const { container, marked } = frameHost(`第三章 方案\n\n前置说明一句话。${quote}，再往下就是别的段落了。`);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('归一化后仍匹配不上时退到首个实词，只涂那个词（不猜长度）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameHost('正文里出现了一处改写计划，其余内容不动。');
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '改写计划（第 2 版）')).toBe(true);
+    expect(marked).toEqual(['改写计划']);
+  });
+});
+
+/**
+ * 行内元素会把一句话切成多个文本节点（Office/HTML 转出的正文里 `<strong>`/`<span>`
+ * 很常见）。这类摘录此前匹配不上整句，掉到"首个实词"兜底 —— 真机看到的就是
+ * "高亮只涂了半句/涂在别的地方"。
+ */
+describe('排版类原文依据高亮：摘录被行内元素切开（跨文本节点）', () => {
+  /** 假 iframe 正文：若干文本节点（可包行内元素）+ 只记区间的 Range。 */
+  function frameTree(parts: Array<{ tag?: string; text: string }>) {
+    const flat: any[] = [];
+    const childNodes: any[] = [];
+    let lastRange: any = null;
+    const ownerDocument: any = {
+      createTreeWalker: () => {
+        let index = 0;
+        return { nextNode: () => (index < flat.length ? flat[index++] : null) };
+      },
+      createRange: () => {
+        const range: any = { startNode: null, startOffset: 0, endNode: null, endOffset: 0 };
+        range.setStart = (node: any, offset: number) => { range.startNode = node; range.startOffset = offset; };
+        range.setEnd = (node: any, offset: number) => { range.endNode = node; range.endOffset = offset; };
+        range.surroundContents = () => {
+          if (range.startNode !== range.endNode) throw new Error('InvalidStateError');
+        };
+        range.extractContents = () => ({ nodeType: 11 });
+        range.insertNode = () => {};
+        lastRange = range;
+        return range;
+      },
+      createElement: () => ({ className: '', appendChild: () => {}, scrollIntoView: () => {} }),
+    };
+    for (const part of parts) {
+      const textNode: any = { nodeType: 3, nodeValue: part.text, ownerDocument };
+      flat.push(textNode);
+      if (!part.tag) {
+        childNodes.push(textNode);
+        continue;
+      }
+      childNodes.push({ nodeType: 1, childNodes: [textNode], querySelectorAll: () => [] });
+    }
+    const container: any = { nodeType: 1, ownerDocument, childNodes, querySelectorAll: () => [] };
+    const marked = () => {
+      if (!lastRange || !lastRange.startNode || !lastRange.endNode) return null;
+      const from = flat.indexOf(lastRange.startNode);
+      const to = flat.indexOf(lastRange.endNode);
+      if (from < 0 || to < 0) return null;
+      let out = '';
+      for (let i = from; i <= to; i++) {
+        const raw = String(flat[i].nodeValue || '');
+        out += raw.slice(i === from ? lastRange.startOffset : 0, i === to ? lastRange.endOffset : raw.length);
+      }
+      return out;
+    };
+    return { container, marked };
+  }
+
+  it('跨 <strong> 的摘录整句都被涂上（不再只涂首个实词）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '前置说明一句话。' },
+      { tag: 'strong', text: '要点' },
+      { text: '：先做词表，再改检索。后面还有很多别的说明文字。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '**要点**：先做词表，再改检索')).toBe(true);
+    expect(marked()).toBe('要点：先做词表，再改检索');
+  });
+
+  it('精确命中优先于实词兜底：前面段落里出现同名词也不许抢落点', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '先做词表这句话在前面另一个段落里出现过。' },
+      { text: '真正的摘录是：' },
+      { tag: 'strong', text: '要点' },
+      { text: '：先做词表，再改检索。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '**要点**：先做词表，再改检索')).toBe(true);
+    expect(marked()).toBe('要点：先做词表，再改检索');
+  });
+
+  it('单节点内的摘录仍然走单节点精确路径', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '前置说明一句话。' },
+      { text: '检索改写要先用词表兜住转写错词。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '检索改写要先用词表兜住转写错词')).toBe(true);
+    expect(marked()).toBe('检索改写要先用词表兜住转写错词');
   });
 });
