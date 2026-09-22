@@ -1791,31 +1791,14 @@ function _syncRecipientFromMembers(target) {
   _renderRecipientChip(tg);
 }
 
-const _activeMemberRunByCid = new Map();
-
 if (typeof window !== 'undefined') {
+  // 会话成员只在**下一次提交**生效：取消/新增成员不改变已提交运行（PRD FR-014
+  // 「提交冻结当次成员与配置，后续修改不改变已提交运行」；验收报告 MA-02）。
+  // 这里只同步底部入口的接收者显示。停止当前工作走显式停止入口（FR-020），
+  // 不再由成员编辑联动触发——否则「编辑下一条消息」会被误当成「停止当前工作」。
   window.addEventListener('composer-members-change', (event) => {
     const detail = event && event.detail ? event.detail : {};
     _syncRecipientFromMembers(detail.target);
-    const removed = Array.isArray(detail.removed_agent_ids)
-      ? detail.removed_agent_ids.filter(Boolean)
-      : [];
-    if (detail.target !== 'conversation' || !removed.length || !currentCid) return;
-    const runId = _activeMemberRunByCid.get(currentCid);
-    if (!runId) return;
-    void window.cogseed.invoke('groupChat.abort', {
-      cid: currentCid,
-      run_id: runId,
-      agent_ids: removed,
-      reason: 'member_removed',
-    }).then((result) => {
-      if (!result || result.ok === false) throw new Error((result && result.error) || 'stop failed');
-      if (typeof uiToast === 'function') uiToast(t('chat.run_member_removed'), { variant: 'success' });
-    }).catch((err) => {
-      if (typeof uiToast === 'function') {
-        uiToast(t('chat.run_member_remove_failed', { reason: (err && err.message) || '' }), { variant: 'error' });
-      }
-    });
   });
 }
 
@@ -9868,13 +9851,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
 
   const role = message.role === 'assistant' ? 'assistant' : 'user';
   const messageCid = opts.cid || currentCid;
-  if (messageCid && role === 'user' && message.run_id) {
-    _activeMemberRunByCid.set(messageCid, message.run_id);
-  } else if (messageCid && role === 'assistant' && message.run_summary && message.run_id) {
-    if (_activeMemberRunByCid.get(messageCid) === message.run_id) {
-      _activeMemberRunByCid.delete(messageCid);
-    }
-  }
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
   if (message?.recall_projection_card?.presentation === 'sidecar') {
@@ -12340,6 +12316,9 @@ function _trackChatSendResult(result, data = {}) {
 
 /** 「新任务」：像市面主流 AI 助手一样，直接进入一个空的会话界面。
  *  后端创建一个 normal 会话，前端立即进入该会话（无需先输入）。 */
+/** 首页提交在途标志：首个 await 之前生效，函数退出（含失败）时释放。 */
+let _newChatSubmitInFlight = false;
+
 async function handleNewChatSubmit() {
   const input = document.getElementById('new-chat-input');
   const raw = (input.value || '').trim();
@@ -12350,6 +12329,32 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
+  // 首页提交保护（FR-016 / SC-004；验收报告 MA-04）：连按 Enter 或双击发送时，
+  // 第二次进入必须在**首个 await 之前**被挡下——模型检查与会话创建都在 await 之后，
+  // 只靠禁用按钮太晚，两次调用会各自创建一个会话、拿到不同 cid，后端幂等无法补救。
+  // 失败在 finally 里恢复：改完草稿可以立即重试。
+  if (_newChatSubmitInFlight) return;
+  _newChatSubmitInFlight = true;
+  try {
+    await _submitNewChatIntent(input, raw, quotes);
+  } catch (err) {
+    // 主体内部的**可预期**失败（模型检查、会话创建、附件）已经 uiAlert 后 return；
+    // 走到这里的是未预期异常。调用点是 fire-and-forget（键盘 Enter / 发送键点击），
+    // 不接住就会变成未处理的 rejection。
+    _convLog.warn('new-chat submit failed unexpectedly', err);
+    try {
+      if (typeof uiAlert === 'function') {
+        await uiAlert(t('chat.create_conv_failed_with_reason', { reason: (err && err.message) || String(err) }));
+      }
+    } catch (_) { /* 提示失败不再改变提交锁语义 */ }
+  } finally {
+    _newChatSubmitInFlight = false;
+  }
+}
+
+/** 首页提交主体（模型检查 → 会话创建 → 首条消息派发）。
+ *  只由 handleNewChatSubmit 在提交保护内调用；锁语义见那里。 */
+async function _submitNewChatIntent(input, raw, quotes) {
   if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', raw))) return;
 
   const references = _referenceSnapshotsForQuotes(quotes);
@@ -12559,6 +12564,7 @@ async function handleNewChatSubmit() {
   const accepted = _settlePendingSubmitDraft(convId, newChatSubmitRequestId, sendResult);
   if (accepted) _clearSubmitIntent(convId, newChatSubmitRequestId);
 }
+
 
 /** 交接意图关键词：命中即视为「继续这项工作/交接」类请求。 */
 const _HANDOFF_INTENT_RE =

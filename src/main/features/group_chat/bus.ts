@@ -9191,18 +9191,17 @@ async function _guardSequentialPlanBeforeStart(
     const verdict = prepared.step.group_chat_run_id !== runId
       ? {
           ok: false as const,
-          reason: 'missing_dependency' as const,
+          reason: 'run_binding' as const,
           detail: `${prepared.step.id} is not bound to ${runId}`,
         }
       : foreignDependency
         ? {
             ok: false as const,
-            reason: 'missing_dependency' as const,
+            reason: 'run_binding' as const,
             detail: `${prepared.step.id}<-${foreignDependency}（依赖属于其他协作运行）`,
           }
         : verifySequentialStepStart({
             requiresSequential: true,
-            mentionOrder: run.mention_order,
             steps: plan,
             stepToStart: {
               step_id: prepared.step.id,
@@ -9228,8 +9227,8 @@ async function _guardSequentialPlanBeforeStart(
       return record;
     });
     const message = corrections >= 1
-      ? `${sequentialViolationMessage(verdict, run.mention_order)}（已纠正过一次，本条按阻塞结束，请调整后重新提交。）`
-      : sequentialViolationMessage(verdict, run.mention_order);
+      ? `${sequentialViolationMessage(verdict)}（已纠正过一次，本条按阻塞结束，请调整后重新提交。）`
+      : sequentialViolationMessage(verdict);
     log.warn('sequential plan rejected', {
       cid: maskId(state.cid),
       run_id: maskId(runId),
