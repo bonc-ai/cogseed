@@ -180,6 +180,10 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
+    // 「去设置管理模型」的官方跳转缝（boot.js 暴露的 setView + settings_tabs 暴露的
+    // activateSettingsTab）：用 spy 断言语义，而不是断言实现细节。
+    setView: vi.fn(),
+    activateSettingsTab: vi.fn(),
     // 共享图标注册表：给出与 icons.js 同形的输出（含 is-<name> 类名），
     // 让 _icon() 走真实路径而不是空 svg 兜底。
     uiIconHtml: (name: string, cls?: string) => `<svg class="${cls || 'ui-icon'} is-${name}"></svg>`,
@@ -388,6 +392,36 @@ describe('KB workbench (S1 skeleton)', () => {
     });
     // 弹层构建：默认行 + 两个已配置模型 + 去设置入口（DOM 追加到 body）
     expect(windowMock.cogseed.invoke).toHaveBeenCalled();
+  });
+
+  // 回归（真机故障）：知识库右区「去设置管理模型」点了没跳到模型配置。
+  // 根因是旧的两段跳转——setView('settings') 不带 settingsTab/settingsAnchor，
+  // 设置特性懒加载完后停在默认的「数据」tab，且没有 models 锚点；同步那次
+  // activateSettingsTab('credentials') 在特性还没进内存时又查不到 .settings-tab。
+  // 现在与 model-chip.js / connections.js 同一条缝（model-chip-cascade-menu.test.ts
+  // 断言的是同一个契约）。
+  it('sends the 「去设置管理模型」entry to Settings → Configuration with the models anchor', async () => {
+    const { windowMock, els, created } = loadScript();
+    windowMock.renderKbWorkbench();
+    els['kb-qa-tools']._listeners.click();
+
+    // 弹层异步构建（auth.listEntries → _buildQaModelPicker），先等 footer 出现。
+    await vi.waitFor(() => {
+      expect(created.some((c: any) => c.el.className === 'kb-qa-model-pop-foot')).toBe(true);
+    });
+    const foot = created.find((c: any) => c.el.className === 'kb-qa-model-pop-foot')!;
+    const manageBtn = foot.el.appendChild.mock.calls[0][0];
+    expect(String(manageBtn.innerHTML)).toContain('kb-qa-model-pop-manage');
+
+    manageBtn._listeners.click();
+
+    // 切视图时带上 configuration tab 与 models 锚点（懒加载路径），
+    // 再切 tab 并滚到模型区（设置特性已在内存时的路径）。
+    expect(windowMock.setView).toHaveBeenCalledWith('settings', undefined, {
+      settingsTab: 'configuration',
+      settingsAnchor: 'models',
+    });
+    expect(windowMock.activateSettingsTab).toHaveBeenCalledWith('configuration', { anchor: 'models' });
   });
 
   it('streams a grounded answer and renders citation chips on final', async () => {

@@ -6431,10 +6431,19 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
         modal.close('select');
       });
     }
+    // 「去设置管理模型」必须落到「设置 → 配置」的模型区（#settings-model-authorizations）。
+    // 设置页是懒加载的：只调 setView('settings') 会停在默认的「数据」tab；只同步调
+    // activateSettingsTab 又会在设置特性还没进内存时查不到 .settings-tab 而静默空转。
+    // 与 model-chip.js / connections.js 同一条缝——setView 带 settingsTab/settingsAnchor
+    // 负责懒加载路径，activateSettingsTab 负责已在内存时的路径，两处都传 models 锚点。
     manageBtn.addEventListener('click', () => {
       modal.close('manage', { restoreFocus: false });
-      if (typeof window.setView === 'function') window.setView('settings');
-      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+      if (typeof window.setView === 'function') {
+        window.setView('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
+      }
+      if (typeof window.activateSettingsTab === 'function') {
+        window.activateSettingsTab('configuration', { anchor: 'models' });
+      }
     });
   }
 
