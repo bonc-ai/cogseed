@@ -264,18 +264,18 @@ async function expireUndispatchableWakeRequests(
   if (!candidates.length) return;
 
   const { readRun } = await import("../group_chat/run_store");
-  const doomed: Array<{ id: string; reason: string }> = [];
+  const doomed: Array<{ id: string; reason: string; cid: string; runId: string }> = [];
   for (const request of candidates) {
     const runId = String(request.dispatch_payload.run_id || "");
     const run = await readRun(userId, request.conversation_id, runId).catch(() => null);
     if (!run) continue;
     if (run.status !== "running") {
-      doomed.push({ id: request.id, reason: `run_terminal:${run.status}` });
+      doomed.push({ id: request.id, reason: `run_terminal:${run.status}`, cid: request.conversation_id, runId });
       continue;
     }
     const actor = run.actors.find((entry) => entry.agent_id === request.agent_id);
     if (actor && actor.terminal !== "pending") {
-      doomed.push({ id: request.id, reason: `actor_terminal:${actor.terminal}` });
+      doomed.push({ id: request.id, reason: `actor_terminal:${actor.terminal}`, cid: request.conversation_id, runId });
     }
   }
   if (!doomed.length) return;
@@ -297,6 +297,25 @@ async function expireUndispatchableWakeRequests(
       }
     }
   });
+
+  // 判死只解决了「唤醒一直挂着」；宿主侧的收口还停在「本 run 有待审批 Wake」的
+  // 旧判断上（收录口门会重新列一次 Wake，那时就能看到 expired）。所以这里主动
+  // 触发一次 run 对账，让 run 走到 blocked/approval_expired 并发布汇总。
+  // 动态 import 断开 bus ↔ wake-service 的静态环（bus 静态依赖本模块）。
+  // 判死只解决了「唤醒一直挂着」；宿主侧的收口还停在「本 run 有待审批 Wake」的
+  // 旧判断上（收录口门会重新列一次 Wake，那时就能看到 expired）。所以这里主动
+  // 触发一次 run 对账，让 run 走到 blocked/approval_expired 并发布汇总。
+  // 动态 import 断开 bus ↔ wake-service 的静态环（bus 静态依赖本模块）。
+  try {
+    const { reconcileRun } = await import("../group_chat/index");
+    for (const { cid, runId } of doomed) {
+      await reconcileRun(userId, cid, runId).catch((err) => {
+        log.warn(`wake expiry run reconcile failed cid=${cid}: ${(err as Error).message}`);
+      });
+    }
+  } catch (err) {
+    log.warn(`wake expiry reconcile unavailable: ${(err as Error).message}`);
+  }
 }
 
 async function reconcileWakeTransitions(
