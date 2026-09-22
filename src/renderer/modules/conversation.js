@@ -532,7 +532,8 @@ function _chatRichTextLength(node) {
 
 /** 正文点名标记 chip：绿色文字（样式与原型 `.cm-mention-text` 一致），
  *  绑定稳定身份（agent_id）；DOM 上是不可编辑整体节点，所以整块删除。
- *  `token` 是它拼回正文的原文（含尾随空格），保证 textarea 值可无损往返。 */
+ *  chip 只承载标记本身；token 的尾随空白由 `_chatRichRenderValue` 作为兄弟文本
+ *  节点补回——见那里的注释（相邻标记之间必须留下可编辑插入点）。 */
 function _chatRichCreateMentionChip(token) {
   const chip = document.createElement('span');
   chip.className = 'chat-rich-mention-chip';
@@ -540,10 +541,11 @@ function _chatRichCreateMentionChip(token) {
   chip.dataset.chatMentionChip = '1';
   chip.dataset.agentId = String(token.id || '');
   chip.dataset.agentName = String(token.name || '');
-  chip.dataset.token = String(token.text || `@${token.name || ''}`);
+  const base = String(token.text || `@${token.name || ''}`).replace(/\s+$/, '');
+  chip.dataset.token = base;
   chip.setAttribute('role', 'img');
-  chip.setAttribute('aria-label', String(token.text || '').trim());
-  chip.textContent = String(token.text || '').trim();
+  chip.setAttribute('aria-label', base);
+  chip.textContent = base;
   return chip;
 }
 
@@ -723,12 +725,38 @@ function _chatRichEnsureTrailingBreak(editor) {
   }
 }
 
+/** 输入后修复合法的点名分隔：标记后面必须紧跟空白（或换行/行尾）。
+ *
+ *  用户把插入点落在分隔空格**之前**再打字时（点两个标记中间很容易发生），文字会
+ *  与标记粘连成 `@Codex中间`——mention 边界随即失效、成员被静默撤销；相邻标记之间
+ *  也会失去可编辑插入点。这里在标记与紧随其后的非空白文本之间补一个空格，使两种
+ *  插入位置都得到可用结果（`@Codex 中间`）。幂等；行尾与换行不需要补。 */
+function _chatRichNormalizeMentionGaps(editor) {
+  if (!editor || !editor.childNodes || !document.createTextNode) return;
+  for (const node of Array.from(editor.childNodes)) {
+    if (node.nodeType !== Node.ELEMENT_NODE || node.dataset?.chatMentionChip !== '1') continue;
+    const next = _chatRichNextSibling(node);
+    if (!next) continue;
+    if (next.nodeType === Node.ELEMENT_NODE && (next.tagName === 'BR' || next.dataset?.chatMentionChip === '1')) {
+      // 相邻标记之间没有分隔空白时补一个：它同时充当可编辑插入点。
+      if (next.dataset?.chatMentionChip === '1') {
+        editor.insertBefore(document.createTextNode(' '), next);
+      }
+      continue;
+    }
+    if (next.nodeType !== Node.TEXT_NODE) continue;
+    if (/^\s/.test(next.nodeValue || '')) continue;
+    editor.insertBefore(document.createTextNode(' '), next);
+  }
+}
+
 /** Reconcile every non-IME native edit before serializing it. The display-only trailing filler can
  * become stale when the user types after a trailing newline or deletes that newline with Backspace;
  * leaving it in the DOM creates a phantom visual line even though serialization correctly drops it. */
 function _chatRichHandleEditorInput(api, inputType = '') {
   if (!api || api.composing) return;
   api.ensureTrailingBreak();
+  _chatRichNormalizeMentionGaps(api.editor);
   api.syncFromEditor(true, { inputType });
 }
 
@@ -739,13 +767,33 @@ function _chatRichRenderValue(editor, value, target = 'conversation') {
   let last = 0;
   tokens.forEach((token) => {
     if (token.start > last) editor.appendChild(document.createTextNode(src.slice(last, token.start)));
-    editor.appendChild(token.kind === 'mention'
-      ? _chatRichCreateMentionChip(token)
-      : _chatRichCreateUseChip(token.selection, token.raw));
+    if (token.kind === 'mention') {
+      editor.appendChild(_chatRichCreateMentionChip(token));
+      // 标记的尾随空白必须留在 chip **外面**：chip 是 contenteditable=false 的
+      // 整体节点，两个标记连续出现时（`@A @B`）若把分隔空格吞进 chip 内部，
+      // 它们之间就没有任何可编辑插入点——用户点不到中间，也就无法在两个智能体
+      // 之间补内容/再点名。分开渲染后视觉上有真实间隙，光标可落在空格文本节点
+      // 里，序列化仍是 chip + 空白 = 原文，无损往返。
+      const trailing = (/(\s+)$/.exec(String(token.text || '')) || ['', ''])[1];
+      if (trailing) editor.appendChild(document.createTextNode(trailing));
+    } else {
+      editor.appendChild(_chatRichCreateUseChip(token.selection, token.raw));
+    }
     last = token.end;
   });
   if (last < src.length) editor.appendChild(document.createTextNode(src.slice(last)));
   _chatRichEnsureTrailingBreak(editor);
+}
+
+/** 下一个兄弟节点。真 DOM 走 nextSibling；隔离 renderer harness 的极简 DOM 没有
+ *  该属性，回退到 parentNode.childNodes 查表，保持同一语义。 */
+function _chatRichNextSibling(node) {
+  if (!node) return null;
+  if (node.nextSibling) return node.nextSibling;
+  const list = node.parentNode && node.parentNode.childNodes;
+  if (!list) return null;
+  const index = Array.prototype.indexOf.call(list, node);
+  return index >= 0 ? (list[index + 1] || null) : null;
 }
 
 function _chatRichMentionSidecarFromDom(editor, target = 'conversation', inputType = '') {
@@ -763,11 +811,19 @@ function _chatRichMentionSidecarFromDom(editor, target = 'conversation', inputTy
     }
     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
     if (node.nodeType === Node.ELEMENT_NODE && node.dataset?.chatMentionChip === '1') {
-      const text = String(node.dataset.token || '');
+      const base = String(node.dataset.token || '');
       const id = String(node.dataset.agentId || '');
       const name = String(node.dataset.agentName || '');
+      // 渲染时标记的尾随空白是 chip 的兄弟文本节点；sidecar 的 text 必须仍然是
+      // 「标记 + 分隔空白」的原文（insertMention 记录的就是这个形状），否则身份
+      // 匹配失败、成员会被误撤销。只吸收紧邻的前导空白，offset 仍按 DOM 顺序推进。
+      const next = _chatRichNextSibling(node);
+      const gap = (next && next.nodeType === Node.TEXT_NODE)
+        ? (/^(\s+)/.exec(next.nodeValue || '') || ['', ''])[1]
+        : '';
+      const text = base + gap;
       out.push({ id, name, start: offset, end: offset + text.length, text });
-      offset += text.length;
+      offset += base.length;
       return;
     }
     if (node.nodeType === Node.ELEMENT_NODE
@@ -1028,8 +1084,10 @@ function _chatRichCreateApi(textarea, editor) {
   editor.addEventListener('compositionend', () => {
     api.composing = false;
     // The committed text is now in the editor DOM; mirror it into the textarea
-    // and recompute height/scroll exactly once.
+    // and recompute height/scroll exactly once. IME 提交也必须走分隔修复：
+    // 中文输入落在标记与空格之间时同样会粘连，而这条路径不经过 input 监听。
     api.ensureTrailingBreak();
+    _chatRichNormalizeMentionGaps(editor);
     api.syncFromEditor(true);
   });
   editor.addEventListener('focus', () => {
@@ -1052,6 +1110,7 @@ function _chatRichCreateApi(textarea, editor) {
     if (!text) return;
     _chatRichInsertText(editor, text);
     api.ensureTrailingBreak();
+    _chatRichNormalizeMentionGaps(editor);
     api.syncFromEditor(true);
   });
   editor.addEventListener('keydown', (e) => {

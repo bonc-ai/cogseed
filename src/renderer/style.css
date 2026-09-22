@@ -11948,13 +11948,23 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   color: var(--color-surface);
 }
 
+/* 底栏压缩阶梯（原型 v0.17 的 .cm-setting / #cm-first 规则）：
+   先收起次要 chrome，再收紧核心文字的宽度上限。
+   成员名与模型名是「谁执行 / 用什么模型」的发送前唯一凭据（PRD AC-01/AC-02），
+   因此它们在所有宽度下都只截断、不 display:none —— 否则底栏退化成纯图标，
+   用户无法确认本次派发对象。 */
 @container composer (max-width: 720px) {
   .workspace-chip-prefix,
-  .workspace-chip-label,
-  .chat-recipient-name,
-  .model-chip-label,
-  .exec-config-effort {
+  .workspace-chip-label {
     display: none;
+  }
+
+  .chat-recipient-chip .chat-recipient-name {
+    max-width: 170px;
+  }
+
+  .model-chip-label {
+    max-width: 170px;
   }
 
   .model-chip-icon {
@@ -11986,6 +11996,21 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   }
 
   .chat-permission-select :is(.ai-select-label, .ai-select-caret) {
+    display: none;
+  }
+}
+
+/* 再窄一档：继续压缩文字宽度，强度徽标先让位；模型名与成员名仍在。 */
+@container composer (max-width: 600px) {
+  .chat-recipient-chip .chat-recipient-name {
+    max-width: 150px;
+  }
+
+  .model-chip-label {
+    max-width: 128px;
+  }
+
+  .exec-config-effort {
     display: none;
   }
 }
@@ -33334,6 +33359,23 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* 被空间作用域排除的内部 Task Agent：仍然可见，但不可勾选。
+   显示原因（行描述）而不是静默消失——静默消失是本次修复的原始缺陷。 */
+.composer-member-row.is-unavailable {
+  cursor: default;
+  opacity: 0.62;
+}
+.composer-member-row.is-unavailable:hover {
+  background: transparent;
+}
+.composer-member-row.is-unavailable .composer-member-check {
+  color: var(--muted);
+}
+.composer-member-row .composer-member-lock {
+  width: 14px;
+  height: 14px;
 }
 
 /* 候选列表底部：计数 + 完成。 */

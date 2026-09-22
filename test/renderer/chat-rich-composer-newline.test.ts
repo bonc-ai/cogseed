@@ -41,6 +41,8 @@ function loadComposer() {
     '_chatRichHasAuthoredContent',
     '_chatRichEnsureTrailingBreak',
     '_chatRichHandleEditorInput',
+    '_chatRichNextSibling',
+    '_chatRichNormalizeMentionGaps',
     '_chatRichSegmentTokens',
     '_chatRichRenderValue',
   ]
