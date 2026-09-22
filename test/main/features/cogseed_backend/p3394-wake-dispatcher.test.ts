@@ -186,6 +186,46 @@ describe('CogSeed P3394 wake dispatcher', () => {
     expect(recordRunDispatch).not.toHaveBeenCalled();
   });
 
+  it('reports an already-terminal actor instead of claiming the run stopped', async () => {
+    // 真机形状：run 仍是 running，但这个 actor 已经 failed（例如它的任务先失败、
+    // 或会话级 Stop 之前 turn 已经收口）。旧文案把这种情况报成
+    // “collaboration run stopped”，把排查方向带偏（run 明明还是 running）。
+    readGroupChatRun.mockResolvedValueOnce({
+      run_id: 'run-actor-terminal-1',
+      status: 'running',
+      actors: [{ agent_id: 'agent-1', terminal: 'failed', reason: 'runtime_failed' }],
+    });
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    let message = '';
+    try {
+      await cogseedWakeDispatcher.dispatch('user-1', {
+        id: 'wake-actor-terminal',
+        conversation_id: 'cid-1',
+        execution_domain: 'group_chat',
+        execution_scope_id: 'cid-1',
+        agent_id: 'agent-1',
+        source: 'hand_off_to',
+        source_actor_id: 'commander',
+        objective: 'Actor is already terminal',
+        context_scope: ['conversation:cid-1'],
+        behavior_scope: ['hand_off_to'],
+        dispatch_payload: { text: 'Actor is already terminal', run_id: 'run-actor-terminal-1' },
+        status: 'approved',
+        created_at: '2026-09-22T10:00:00.000Z',
+        updated_at: '2026-09-22T10:00:00.000Z',
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/actor already terminal/i);
+    expect(message).toContain('failed');
+    expect(message).not.toMatch(/run stopped/i);
+    expect(startCogSeedTask).not.toHaveBeenCalled();
+    expect(recordRunDispatch).not.toHaveBeenCalled();
+  });
+
   it('admits a dispatched actor whose run has no actor row yet', async () => {
     // Real-run shape: the user typed the @names (so the run snapshot has no
     // members/mentions) and the Commander then dispatched to that agent, which
