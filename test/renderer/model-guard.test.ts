@@ -13,6 +13,9 @@ function makeSandbox() {
   let now = 1_000_000;
   const bodyClasses = new Set<string>();
   const calls: string[] = [];
+  // 跳转缝的原始参数（setView / activateSettingsTab 都是多参，「只记第一个参数」
+  // 会看不见 settingsTab / settingsAnchor 有没有传——正是这次真机故障的盲区）。
+  const navCalls: Array<{ fn: string; args: unknown[] }> = [];
   const sandbox: any = {
     console,
     Date: { now: () => now },
@@ -22,7 +25,7 @@ function makeSandbox() {
     escapeHtml: (value: unknown) => String(value ?? ''),
     t: (key: string) => key,
     uiAlert: () => { calls.push('alert'); },
-    setView: (view: string) => { calls.push(`view:${view}`); },
+    setView: (...args: unknown[]) => { calls.push(`view:${args[0]}`); navCalls.push({ fn: 'setView', args }); },
     CustomEvent: function CustomEvent(type: string, init?: unknown) { return { type, ...(init ? { init } : {}) }; },
     document: {
       visibilityState: 'visible',
@@ -57,7 +60,7 @@ function makeSandbox() {
         (listeners[`window:${name}`] ||= []).push(fn);
       },
       dispatchEvent: () => true,
-      activateSettingsTab: (tab: string) => { calls.push(`tab:${tab}`); },
+      activateSettingsTab: (...args: unknown[]) => { calls.push(`tab:${args[0]}`); navCalls.push({ fn: 'activateSettingsTab', args }); },
     },
   };
   sandbox.globalThis = sandbox;
@@ -65,6 +68,7 @@ function makeSandbox() {
     sandbox,
     listeners,
     calls,
+    navCalls,
     bodyClasses,
     setConfigured(value: boolean) { configured = value; },
     setLocalAgentAvailable(value: boolean) { localAgentAvailable = value; },
@@ -118,5 +122,34 @@ describe('model-guard stale state recovery', () => {
     expect(await ctx.sandbox.refreshModelGuard()).toBe(false);
     expect(ctx.sandbox.isModelConfigured()).toBe(false);
     expect(ctx.bodyClasses.has('model-not-configured')).toBe(true);
+  });
+
+  // 回归（与知识库「去设置管理模型」同一类真机故障）：模型守卫的「去配置模型」
+  // 此前也是旧的两段跳转（setView('settings') 不带 tab/锚点 + activateSettingsTab
+  // ('credentials')），设置页懒加载完后停在默认的「数据」tab，落不到模型配置。
+  it('sends the model-config entry to Settings → Configuration with the models anchor', async () => {
+    const ctx = makeSandbox();
+    vm.runInNewContext(source, ctx.sandbox, { filename: 'model-guard.js' });
+    expect(await ctx.sandbox.refreshModelGuard()).toBe(false);
+
+    expect(ctx.sandbox.ensureModelConfigured()).toBe(false);
+
+    expect(ctx.navCalls).toEqual([
+      { fn: 'setView', args: ['settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' }] },
+      { fn: 'activateSettingsTab', args: ['configuration', { anchor: 'models' }] },
+    ]);
+  });
+
+  // 绊线：旧写法（裸 setView('settings') / 'credentials' tab 名）不许再回来——
+  // 两个调用点都必须走 _openModelConfiguration()，否则又会静默停在「数据」tab。
+  // 先剥掉注释再扫：说明这条坑的注释里就写着旧写法（同 AGENTS.md §1.5.1 的教训，
+  // 不剥注释会让"文档里提到过"被判成"代码里还在用"→ 假红）。
+  it('keeps both entry points on the shared model-config navigation seam', () => {
+    const codeOnly = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    expect(codeOnly).not.toMatch(/setView\('settings'\)/);
+    expect(codeOnly).not.toContain("activateSettingsTab('credentials'");
+    expect((codeOnly.match(/_openModelConfiguration\(\)/g) || []).length).toBeGreaterThanOrEqual(3);
   });
 });
