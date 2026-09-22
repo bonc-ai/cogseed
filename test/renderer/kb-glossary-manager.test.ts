@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 const root = path.resolve(__dirname, '../..');
 const readSrc = (rel: string) => fs.readFileSync(path.join(root, 'src', rel), 'utf8');
@@ -273,3 +274,89 @@ describe('交互失效防回归', () => {
     expect(rule![1]).toContain('--primary-soft');
   });
 });
+
+/**
+ * 语言切换响应（i18n-change）。
+ *
+ * 词表弹层挂载后自己持有 DOM，视图不会重建它：不监听 i18n-change 就会一直停在旧语言。
+ * 仓库里没有 jsdom，这里用最小 DOM 假体（元素存在即可、只记录 textContent）真的开一次弹层。
+ */
+function fakeElement(): any {
+  const el: any = {
+    textContent: '', innerHTML: '', outerHTML: '', hidden: false, value: '', checked: false,
+    dataset: {}, style: {}, children: [], isConnected: true,
+    classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => false },
+    addEventListener: () => {}, removeEventListener: () => {},
+    appendChild: (child: any) => child, insertBefore: () => {}, removeChild: () => {},
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+    setAttribute: () => {}, getAttribute: () => null, removeAttribute: () => {},
+    insertAdjacentHTML: () => {}, focus: () => {}, remove: () => {}, replaceWith: () => {},
+  };
+  return el;
+}
+
+function loadGlossaryManagerForI18n() {
+  const source = readSrc('renderer/modules/kb-glossary-manager.js');
+  const nodes = new Map<string, any>();
+  const dialog = fakeElement();
+  dialog.querySelector = (selector: string) => {
+    if (!nodes.has(selector)) nodes.set(selector, fakeElement());
+    return nodes.get(selector);
+  };
+  let settleModal: (v: unknown) => void = () => {};
+  const modal: any = new Promise((resolve) => { settleModal = resolve; });
+  modal.dialog = dialog;
+  modal.overlay = fakeElement();
+  modal.close = () => settleModal({ value: null, reason: 'close' });
+
+  const handlers: Record<string, Array<() => void>> = {};
+  const strings: Record<string, string> = { 'kb.glossary.io': '导入 / 导出' };
+  const windowMock: any = {
+    addEventListener: (name: string, fn: () => void) => { (handlers[name] = handlers[name] || []).push(fn); },
+    removeEventListener: (name: string, fn: () => void) => {
+      handlers[name] = (handlers[name] || []).filter((h) => h !== fn);
+    },
+    t: (key: string) => strings[key] || '',
+    uiModal: () => modal,
+    uiField: () => '<div class="ui-field"></div>',
+    uiButton: () => '<button type="button" class="ui-button">x</button>',
+    cogseed: { invoke: async () => ({ entries: [], meta: {} }) },
+  };
+  const context: any = {
+    console, setTimeout, clearTimeout, document: {
+      createElement: () => fakeElement(), body: fakeElement(),
+      addEventListener: () => {}, removeEventListener: () => {},
+    },
+    window: windowMock,
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: 'kb-glossary-manager.js' });
+  windowMock.KbGlossaryManager.open({});
+  const fire = () => (handlers['i18n-change'] || []).forEach((h) => h());
+  return {
+    nodes, fire, strings, closeModal: () => modal.close(),
+    listenerCount: () => (handlers['i18n-change'] || []).length,
+  };
+}
+
+describe('语言切换（i18n-change）', () => {
+  it('弹层打开后响应 i18n-change 重渲染取新语言；关闭时解绑', async () => {
+    const env = loadGlossaryManagerForI18n();
+    const summary = env.nodes.get('[data-glo-io-summary]');
+    expect(summary.textContent).toBe('导入 / 导出');
+
+    env.strings['kb.glossary.io'] = 'Import / Export';
+    env.fire();
+    expect(summary.textContent).toBe('Import / Export');
+
+    // 关闭必须解绑：否则弹层关掉后监听器还在，每开一次词表就多积一个
+    env.closeModal();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(env.listenerCount()).toBe(0);
+    env.strings['kb.glossary.io'] = '不该出现';
+    env.fire();
+    expect(summary.textContent).toBe('Import / Export');
+  });
+});
+

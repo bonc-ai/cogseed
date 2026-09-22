@@ -228,7 +228,7 @@ ${rows}
           <span class="kb-qz-head-ico">${_iconHtml('check-circle', 'kb-qz-head-icon')}</span>
           <span class="kb-qz-title" id="kb-qz-title-text">${_esc(_tr('kb.quiz.title', '测验'))}</span>
           ${window.uiButton({
-            label: _tr('kb.quiz.view_sources', '查看来源', { count: 0 }),
+            label: _tr('kb.quiz.view_sources', '查看 {count} 个来源', { count: 0 }),
             role: 'ghost',
             size: 'sm',
             className: 'kb-qz-source-chip',
@@ -820,7 +820,9 @@ ${rows}
       btn.setAttribute('aria-label', label);
       const ico = _iconNode(RATE_ICON[kind], 'kb-qz-rate-icon');
       if (ico.childNodes.length) btn.appendChild(ico);
-      else btn.textContent = kind === 'good' ? '👍' : '👎';
+      // 兜底也走共享注册表：RATE_ICON 已指向 thumbs-up/thumbs-down，
+      // 极端情况下取不到才出现空按钮，不再退回 emoji（规范：图标一律来自 icons.js）。
+      else btn.innerHTML = _iconHtml(RATE_ICON[kind], 'kb-qz-rate-icon');
       btn.addEventListener('click', () => _rate(q, kind));
       wrap.appendChild(btn);
     }

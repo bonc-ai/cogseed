@@ -109,6 +109,41 @@ async function pickKbLocation(opts = {}) {
 }
 window.pickKbLocation = pickKbLocation;
 
+/**
+ * 选择器弹层的交互语义交给共享层（M-8）：Escape 关闭、焦点陷阱、关闭后焦点归还。
+ * 此前该弹层**没有任何 Escape 关闭**（只能点按钮/遮罩），焦点也可跑到底层页面。
+ * 类名与 `.open` 显隐语义保持本模块自有 → 无视觉变化。
+ */
+let _kbPickerModalCtrl = null;
+
+function _ensurePickerController(modal) {
+  if (_kbPickerModalCtrl) return _kbPickerModalCtrl;
+  const dialog = modal && modal.querySelector('[role="dialog"]');
+  if (!dialog || typeof window.uiModalController !== 'function') return null;
+  _kbPickerModalCtrl = window.uiModalController({
+    overlay: modal,
+    dialog,
+    initialFocus: '#kb-picker-name',
+    onClose: () => {
+      modal.classList.remove('open');
+      // 用户按 Escape / 点遮罩关闭时，走取消语义；程序化关闭时 resolve 已被取走（见下方顺序）。
+      if (_kbPickerResolve) {
+        const resolve = _kbPickerResolve;
+        _kbPickerResolve = null;
+        resolve(null);
+      }
+    },
+  });
+  return _kbPickerModalCtrl;
+}
+
+function _kbPickerCloseModal() {
+  const modal = document.getElementById('kb-picker-modal');
+  if (!modal) return;
+  if (_kbPickerModalCtrl && _kbPickerModalCtrl.isOpen()) _kbPickerModalCtrl.close('close');
+  else modal.classList.remove('open');
+}
+
 function _kbPickerNormalizeScope(scope) {
   if (scope && scope.type === 'project' && typeof scope.projectId === 'string' && scope.projectId) {
     return { type: 'project', projectId: scope.projectId };
@@ -263,6 +298,7 @@ window.closeKbPicker = closeKbPicker;
 // double-weight so a single budget gives ~50 chars to Chinese filenames and
 // ~100 chars to English filenames.
 const _KB_NAME_MAX_WEIGHT = 100;
+// CJK/谚文/假名的**全角字符区间**：用于名称宽度度量，与语言无关（三种语言都按宽字符算）。
 const _KB_NAME_DOUBLE_WIDTH_RE = /[㐀-鿿가-힯぀-ゟ゠-ヿ]/;
 function _kbNameWeight(s) {
   let w = 0;
