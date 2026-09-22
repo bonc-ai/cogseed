@@ -6,7 +6,8 @@ import { cogseedBrowserAdapter } from './browser-adapter';
 import { createCogSeedCoordinator, type CogSeedCoordinator } from './coordinator';
 import { cogseedControlService } from './cogseed-control-service';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
-import { recordActionApprovalExecution, requestActionApproval } from '../action_approval';
+import { grantAutoActionApproval, recordActionApprovalExecution, requestActionApproval } from '../action_approval';
+import { shouldAutoApproveRuntimeAction } from './runtime-tool-policy';
 
 interface HostAdapter { run(name: any, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult> }
 export interface CogSeedHostToolRouterDeps { office?: HostAdapter; browser?: HostAdapter; coordinator?: CogSeedCoordinator }
@@ -44,7 +45,7 @@ export function createCogSeedHostToolRouter(deps: CogSeedHostToolRouterDeps = {}
       if (call.name === 'action_approval_request') {
         const input = call.input || {};
         const text = (value: unknown) => typeof value === 'string' ? value : '';
-        const result = await requestActionApproval({
+        const approvalInput = {
           userId: request.user_id,
           runtimeSessionId: request.runtime_session_id,
           runtimeRequestId: request.request_id,
@@ -58,7 +59,17 @@ export function createCogSeedHostToolRouter(deps: CogSeedHostToolRouterDeps = {}
           reasons: Array.isArray(input.reasons) ? input.reasons.filter((item): item is string => typeof item === 'string') : [],
           fingerprint: text(input.fingerprint),
           signal: context.signal,
-        });
+        };
+        // 是否自动放行也由主进程从持久化会话重新推导（worker 不得自述）：
+        // full / auto_approve 直接授予，不广播、不弹窗；ask 走既有确认通道。
+        const autoApprove = await shouldAutoApproveRuntimeAction(
+          request.user_id,
+          request.request_id,
+          request.runtime_session_id,
+        );
+        const result = autoApprove
+          ? await grantAutoActionApproval(approvalInput)
+          : await requestActionApproval(approvalInput);
         if ('requestId' in result) return { content: JSON.stringify({ approved: true, request_id: result.requestId }) };
         return { content: JSON.stringify({ approved: false, code: result.code }), isError: true };
       }
@@ -114,6 +125,24 @@ export function createCogSeedHostToolRouter(deps: CogSeedHostToolRouterDeps = {}
         }));
       }
       try {
+        if (call.name === 'cogseed_workflow'
+          || call.name === 'cogseed_retry_step'
+          || call.name === 'cogseed_skip_step'
+          || call.name === 'cogseed_resume_workflow') {
+          // 这四个工具只在真的挂在协作 workflow 上的任务里才有意义；能力同样
+          // 由持久化记录重新推导（worker 自述不算）。
+          const capabilities = await resolveRuntimeCapabilities(
+            request.user_id,
+            request.request_id,
+            request.runtime_session_id,
+          );
+          if (!capabilities.includes('cogseed.workflow')) {
+            return {
+              content: '[E_RUNTIME_HOST_TOOL_FORBIDDEN] workflow tools require a CogSeed collaboration workflow',
+              isError: true,
+            };
+          }
+        }
         if (call.name === 'cogseed_delegate') {
           const task = typeof call.input.task === 'string' ? call.input.task.trim() : '';
           if (!task || task.length > 20_000) return { content: '[E_MATE_COORDINATION_INPUT] task is required and must be at most 20000 characters', isError: true };

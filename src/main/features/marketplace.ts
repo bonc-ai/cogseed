@@ -266,7 +266,7 @@ import { withMarketplaceCacheLock, withMarketplaceInstallLock } from './marketpl
 import { agentPrivateSkillIdsFromBundle } from './marketplace_private_skills';
 import { MarketplaceError } from './marketplace/errors';
 import { readInstalledVersion } from './marketplace/installed-version';
-import { getSkillMetadata, type SkillMetadata } from './marketplace/metadata-adapter';
+import { getSkillMetadata, normalizeCatalogListRow, type CatalogListRow, type SkillMetadata } from './marketplace/metadata-adapter';
 import { decideMarketplaceContentUpdate } from './marketplace-update-policy';
 import { fetchImmutableSource } from './marketplace/source-fetch';
 import { writeVersionCopy } from './marketplace/version-store';
@@ -355,7 +355,9 @@ export interface MarketplaceAgent {
 }
 
 export interface MarketplaceSkill {
+  /** A-01 的 `content_id`，由 `listMarketplaceSkills` 在接口边界映射而来。 */
   id: string;
+  content_id?: string;
   name: string;
   description_zh: string;
   description_en: string;
@@ -368,12 +370,14 @@ export interface MarketplaceSkill {
   default_install?: boolean | number;
   is_open_source?: boolean | number;
   status?: string;
+  state?: string;
   min_app_version?: string;
   minAppVersion?: string;
   min_version?: string;
   minVersion?: string;
   min_pc_version?: string;
   minPcVersion?: string;
+  artifact?: SkillMetadata['artifact'];
 }
 
 export interface AgentDetail {
@@ -442,13 +446,18 @@ export async function listMarketplaceAgents(
 export async function listMarketplaceSkills(
   opts: { category?: string; status?: string; q?: string; page?: number; size?: number } = {},
 ): Promise<{ list: MarketplaceSkill[]; total: number }> {
-  return await postJson('/marketplace/skills/list', {
+  const res = await postJson<{ list?: unknown; total?: number }>('/marketplace/skills/list', {
     category: opts.category || null,
     status: opts.status || null,
     q: opts.q || null,
     page: opts.page || 1,
     size: opts.size || 50,
   });
+  // A-01 下发 `content_id` 与 RFC 3339 时间；在接口边界归一，上层继续按 `id` 与毫秒读取。
+  const list = (Array.isArray(res.list) ? res.list : [])
+    .map(normalizeCatalogListRow)
+    .filter((row): row is CatalogListRow => row !== null) as unknown as MarketplaceSkill[];
+  return { ...res, list, total: typeof res.total === 'number' ? res.total : list.length };
 }
 
 // Open-source projects专区 — a curated, read-only catalog (config-as-code on

@@ -3832,7 +3832,9 @@ async function _refreshGroupMembers(cid) {
       // Sidebar badge stack reads from this same cache as a live overlay
       // on top of the backend snapshot; repaint so a freshly @-mentioned
       // agent shows up in the row before the next loadConversations lands.
-      _refreshSidebarBadgesForCid(cid);
+      // （行内徽标已按设计空化：_updateConvSidebarBadge 现在只刷新全局运行
+      // chip + 当前会话头，这也是本会话应有的重绘入口。）
+      _updateConvSidebarBadge(cid);
       // Chat header's actor stack reads from the same cache. Without this
       // call the header's avatars don't appear on first open (the
       // `onEnterConversationView → _refreshChatHeader` call fires before
@@ -16617,7 +16619,8 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       const conv = conversations.find((x) => x && x.conversation_id === cid);
       if (conv && !conv.commander_in_chat) {
         conv.commander_in_chat = true;
-        _refreshSidebarBadgesForCid(cid);
+        // 同上：侧栏行徽标已空化，统一走 _updateConvSidebarBadge。
+        _updateConvSidebarBadge(cid);
         if (cid === currentCid) {
           try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
         }

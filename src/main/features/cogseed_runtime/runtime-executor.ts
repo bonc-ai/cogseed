@@ -36,9 +36,12 @@ export function runtimeKernelRequestFromProtocol(request: RuntimeRunRequest): Ru
     attachments: request.attachments,
     readOnlyRoots: request.read_only_roots ?? [],
     writableRoots: request.writable_roots ?? [],
-    toolPolicy: allowedSkillIds.length
-      ? { ...COGSEED_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' }
-      : COGSEED_RUNTIME_TOOL_POLICY,
+    // 策略由主进程随请求下发（会话权限模式 + 工作区推导）；缺省仍是 deny-all。
+    // skillRun 维持既有语义：仅当该 Agent 带 skill 白名单时升级。
+    toolPolicy: (() => {
+      const base = request.tool_policy ?? COGSEED_RUNTIME_TOOL_POLICY;
+      return allowedSkillIds.length ? { ...base, skillRun: 'allowlisted_skills' } : base;
+    })(),
     capabilities: request.capabilities ?? [],
     executionKind: 'cogseed-native',
     allowedSkillIds,
