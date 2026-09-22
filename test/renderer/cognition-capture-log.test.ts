@@ -178,7 +178,8 @@ describe('信息架构：3 tab 收敛', () => {
   it('树：经验块移除、土壤落点为待我处理、冠回资产明细', () => {
     expect(viewsSource).not.toContain('go-experiences');
     expect(viewsSource).not.toContain('tree_soil_experience');
-    const html = renderPage('overview', { sources: [], assets: [], proofs: [], candidates: [], captures: [] });
+    // 2026-09-21 五页签迁移:树的导航动作在独立的认知树页,不再挂在 overview。
+    const html = renderPage('tree', { sources: [], assets: [], proofs: [], candidates: [], captures: [] });
     expect(html).toContain('data-act="go-review"');
     expect(html).toContain('data-act="open-ontology"');
     expect(html).toContain('data-act="open-overview"');
@@ -192,12 +193,12 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     captureSettings: { enabled: true, executionPolicy: 'smart', reviewPolicy: 'auto' },
   };
 
-  it('页首只留齿轮入口（共享 uiIconButton），抽屉退役', () => {
+  it('页首只留沉淀设置入口（共享 uiButton + settings 图标），抽屉退役', () => {
     const html = renderPage('organize', baseStore);
-    // 走共享组件体系（2026-09-15 团队规范）：ui-icon-button + icons.js 的
-    // settings 图标，不再有手写 SVG 孤例。
-    expect(html).toContain('ui-icon-button');
+    // 2026-09-21 原型 v7 移植：入口从纯图标（uiIconButton）改回原型的
+    // 「沉淀设置」文字按钮，图标仍走共享 uiButton 的 icon 通道 + icons.js。
     expect(html).toContain('data-act="go-organize-settings"');
+    expect(html).toContain('沉淀设置');
     expect(html).toContain('is-settings');
     expect(html).not.toContain('<svg width="18"');
     expect(html).not.toContain('ca-drawer');
@@ -206,23 +207,23 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     expect(html.indexOf('go-organize-settings')).toBeLessThan(html.indexOf('data-act="capture-filter"'));
   });
 
-  it('共享图标统一：chevron-right 替代 › 字符、circle 替代 ◎（icons.js 真渲染）', () => {
+  it('列表行尾用原型 chevron、空态用共享图标（icons.js 真渲染）', () => {
     const list = renderPage('overview', { assets: [{ id: 'aa-1', title: '上线前确认', type: 'rule', status: 'active' }], sources: [], proofs: [] });
-    expect(list).toContain('is-chevron-right');
+    // 2026-09-21 原型 v7 移植：行尾指示符回到原型的 › 字符（.chev），
+    // 空态仍走共享 uiEmptyState（icons.js 的 circle 图标）。
+    expect(list).toContain('class="chev"');
     const emptyHtml = renderPage('overview', { assets: [], sources: [], proofs: [], candidates: [] });
     expect(emptyHtml).toContain('is-circle');
   });
 
-  it('认知树骨架说明：浅灰一行（先骨架后打磨 + 因现阶段仅内部学员使用故展示，对外版本不出现）', () => {
-    const html = renderPage('overview', { assets: [], sources: [], proofs: [], candidates: [] });
-    expect(html).toContain('ca-tree-wip');
-    expect(html).toContain('开发中的骨架');
-    expect(html).toContain('先搭出可点的骨架');
-    expect(html).toContain('现阶段仅内部学员使用');
-    expect(html).toContain('正式对外版本中不会出现');
-    // cap 修正：候选圆点在树根（不再是与图形脱节的"枝头小点"）。
-    expect(html).toContain('树根上的圆点');
-    expect(html).not.toContain('枝头的小点');
+  it('认知树页保留候选圆点教学位（骨架说明随 v4 树重写退役）', () => {
+    // 2026-09-21 五页签迁移:树拆成独立页;原「开发中的骨架」教学说明随
+    // Phase 4 树 v4 重写移除——正式树形态落地后不再有骨架期披露。
+    const html = renderPage('tree', { assets: [], sources: [], proofs: [], candidates: [] });
+    expect(viewsSource).not.toContain('ca-tree-wip');
+    // 2026-09-21 原型 v7 移植：教学位改成原型的底部图例（枝端光斑/叶片口径）。
+    expect(html).toContain('枝端光斑');
+    expect(html).toContain('待处理（根）');
   });
 
   it('沉淀设置页：夜间自动沉淀条状卡（左说明/中时间/右开关）与迁入的设置卡', () => {
@@ -348,10 +349,10 @@ describe('整理页（任务流 + 策略抽屉）', () => {
     expect(html).toContain('已完成 8');
     // 收拢只铺 5 行，但必须有出口看到剩下 3 行（数字用筛选后行数）。
     expect(html).toContain('查看全部 8 个会话');
-    expect(html.match(/ca-row is-flat/g)?.length).toBe(5);
+    expect(html.match(/class="cap-row"/g)?.length).toBe(5);
     // 展开后 8 行全铺。
     const expanded = renderPage('organize', { ...store, organizeListExpanded: true }, { captureBucket: 'done' });
-    expect(expanded.match(/ca-row is-flat/g)?.length).toBe(8);
+    expect(expanded.match(/class="cap-row"/g)?.length).toBe(8);
     expect(expanded).toContain('收起');
   });
 
@@ -391,7 +392,7 @@ describe('整理页（任务流 + 策略抽屉）', () => {
 
     // 筛选视图：寒暄优先——整理过的寒暄行也从「已完成」移到这里。
     const excluded = renderPage('organize', store, { captureBucket: 'excluded' });
-    expect((excluded.match(/ca-row is-flat/g) || []).length).toBe(3);
+    expect((excluded.match(/class="cap-row"/g) || []).length).toBe(3);
     expect(excluded).toContain('整理过的寒暄');
     expect(excluded).not.toContain('正经工作');
     const doneFiltered = renderPage('organize', store, { captureBucket: 'done' });
@@ -459,18 +460,20 @@ describe('整理页（任务流 + 策略抽屉）', () => {
       sources: [conversationSources[0]],
       candidates: [mk('p1', 'pending_review', false), mk('d1', 'deferred', true)],
     });
-    expect(html).toContain('<b>1</b><span>等待确认');
+    expect(html).toContain('class="v a">1</div><div class="l">等待确认');
     expect(html).toContain('标题-d1');
     expect(html).toContain('已稍后处理');
     expect(html).not.toContain('<b>2</b><span>等待确认');
   });
 
-  it('批量入口写死条数：重试失败（1）与立即整理（1）', () => {
+  it('批量入口只留重试失败;批量「立即整理」不迁移(2026-09-21 原型 v7 定调)', () => {
     const html = renderPage('organize', baseStore);
     expect(html).toContain('重试失败（1）');
-    expect(html).toContain('立即整理（1）');
     expect(html).toContain('data-batch="retry"');
-    expect(html).toContain('data-batch="run_now"');
+    expect(html).not.toContain('data-batch="run_now"');
+    expect(html).not.toContain('立即整理（');
+    // 单条任务行的「立即整理」保留。
+    expect(html).toContain('data-action="run_now"');
   });
 
   it('静默任务也如实显示（无留存内容）', () => {
@@ -585,7 +588,7 @@ describe('整理详情页', () => {
     expect(html).toContain('data-act="open-asset" data-id="aa-1"');
     // 合并：资产区随整合卡渲染，页面卡片数从 4 降为 3（结果/上下文/整合卡），
     // 不再有独立的资产卡。
-    expect((html.match(/class="ca-card[ ">]/g) || []).length).toBe(3);
+    expect((html.match(/class="card[ ">]/g) || []).length).toBe(3);
     // 卡头不再出「查看资产」主按钮（明细已在卡内，与 review_candidates 同规则过滤）。
     expect(html).not.toContain('data-action="view_assets"');
   });
@@ -695,10 +698,10 @@ describe('整理详情页', () => {
     const headSection = html.slice(headAt, html.indexOf('ca-pending-embed'));
     expect(headSection).toContain('模型用量');
     expect(headSection).toContain('data-act="open-conversation"');
-    expect(headSection).toContain('ca-meta-row');
+    expect(headSection).toContain('meta-row');
     expect(headSection).toContain('ca-head-actions');
     // 元信息流式呈现（标签+值同 span），不再用 kv 网格。
-    expect(html).toContain('ca-meta-item');
+    expect(html).toContain('meta-item');
     expect(html).not.toContain('ca-kv');
     // 表单仍在卡头下方。
     expect(html.indexOf('ca-cand-judgment-rcand-2')).toBeGreaterThan(html.indexOf('模型用量'));
@@ -963,6 +966,15 @@ describe('整理详情页', () => {
     expect(rows).toContain('命中既有候选是怎么一个逻辑');
     expect(rows).toContain('data-act="open-kstar-episode" data-id="kse-1"');
     expect(rows).toContain('（未记录目标）');
+    // 收起态不带 open 属性（默认折叠）。
+    expect(rows).not.toContain('class="details ca-kstar-episodes" open');
+    // 点开态保持展开（2026-09-17 方案 A）：路由带 kstarEpisodeId 时 <details>
+    // 渲染 open——否则点行触发整页重画会跳回折叠，要点两次才看得到经过。
+    const opened = renderPage('overview', {
+      assets: [], proofs: [], sources: [],
+      kstarEpisodes: [{ id: 'kse-1', goal: '查认知资产是怎么存的', createdAt: '2026-09-17T10:00:00.000Z' }],
+    }, { kstarEpisodeId: 'kse-1' });
+    expect(opened).toContain('class="details ca-kstar-episodes" open');
     const empty = renderPage('overview', { assets: [], proofs: [], sources: [], kstarEpisodes: [] });
     expect(empty).toContain('还没有被 KSTAR 复盘过的任务');
   });
@@ -983,7 +995,7 @@ describe('整理详情页', () => {
         ],
       },
     }, { assetId: 'aa-mix', assetVersionId: '2' });
-    expect(html).toContain('ca-evgroup');
+    expect(html).toContain('evgroup');
     expect(html).toContain('KSTAR 任务复盘');
     expect(html).toContain('对话与你的表态');
     // bug1：scope=personal 不再裸英文。
@@ -992,6 +1004,34 @@ describe('整理详情页', () => {
     // bug2：review_decision 版本的来源标签是"确认沉淀"，不再裸内部值。
     expect(html).toContain('确认沉淀');
     expect(html).not.toContain('review_decision');
+  });
+
+  it('证据诚实态（2026-09-18）：复盘记录不存在时显示来源不可用，未拉到不误标', () => {
+    const asset = { id: 'aa-kmiss', title: '缺记录的证据', type: 'rule', status: 'active', version: '1', activeVersion: '1', updatedAt: '2026-09-16T00:00:00.000Z' };
+    const versionsWith = (ref) => ({ assetId: 'aa-kmiss', usage: [], versions: [{ assetId: 'aa-kmiss', version: '1', at: '2026-09-16T01:00:00.000Z', snapshot: { title: 'T', statement: 'S', evidenceRefs: [ref] } }] });
+    const kse = (extra = {}) => ({ kind: 'execution', id: 'kse-abc', taxonomyVersion: 1, subtype: 'execution', title: 'KSTAR requirement episode', ...extra });
+    const base = { assets: [asset], proofs: [], sources: [], kstarSummariesSettled: [] };
+    // ① 摘要已拉到 → 正常可点 chip，显示这次任务的目标。
+    const ok = renderPage('overview', { ...base, assetVersions: versionsWith(kse()), kstarSummaries: { 'kse-abc': { id: 'kse-abc', goal: '查认知资产是怎么存的' } } }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(ok).toContain('任务复盘：查认知资产是怎么存的');
+    expect(ok).toContain('data-act="open-kstar-episode" data-id="kse-abc"');
+    expect(ok).not.toContain('来源记录不可用');
+    // ② 已请求过、响应里没有这条 → 诚实显示不可用，且不给可点入口。
+    const gone = renderPage('overview', { ...base, assetVersions: versionsWith(kse()), kstarSummaries: {}, kstarSummariesSettled: ['kse-abc'] }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(gone).toContain('来源记录不可用');
+    expect(gone).not.toContain('data-act="open-kstar-episode"');
+    // ③ 还没请求过（未 settled）→ 维持兜底文案：读不到 ≠ 不存在。
+    const pending = renderPage('overview', { ...base, assetVersions: versionsWith(kse()), kstarSummaries: {} }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(pending).toContain('任务复盘：一次任务');
+    expect(pending).not.toContain('来源记录不可用');
+    // ④ 写入时已标记 degraded（第 3 步入口校验的口径）→ 不等摘要直接不可用。
+    const degraded = renderPage('overview', { ...base, assetVersions: versionsWith(kse({ degraded: true, reason: 'kstar_episode_missing' })), kstarSummaries: {} }, { assetId: 'aa-kmiss', assetVersionId: '1' });
+    expect(degraded).toContain('来源记录不可用');
+    // ⑤ 归边（乙）：degraded 的复盘证据不算 KSTAR 血统，干净的照旧算。
+    const { cogAssets: NS2 } = ensureModule();
+    expect(NS2.isKstarAsset({ evidenceRefs: [kse({ degraded: true })] })).toBe(false);
+    expect(NS2.isKstarAsset({ evidenceRefs: [kse()] })).toBe(true);
+    expect(NS2.isKstarCandidate({ sourceRefs: [{ id: 'kse-abc', degraded: true }] })).toBe(false);
   });
 
   it('候选详情点复盘 chip 就地展开（2026-09-17 修）：不跳页、块出现在证据区下方', () => {
@@ -1295,7 +1335,7 @@ describe('资产详情（使用记录并入）', () => {
     expect(list).toContain('data-action="pause"');
     expect(list).toContain('使用中：这条资产会自动带入你的新任务');
     // 开关说明贴着标题（2026-09-17 红线口径）：说明在标题区副标题位（ca-sub），不沉在正文后。
-    expect(list).toContain('ca-sub">使用中：这条资产会自动带入你的新任务');
+    expect(list).toContain('class="sub">使用中：这条资产会自动带入你的新任务');
     expect(list).not.toContain('data-act="edit-asset"');
     expect(list).not.toContain('data-action="archive"');
     // 头部只留标题+正文+开关：详细信息和证据来源已按版本下沉（2026-09-17
@@ -1443,9 +1483,10 @@ describe('交互反馈与响应式（2026-09-15 全面优化）', () => {
 
   it('同页重画保持滚动位置（轮询不再弹回顶部），切页仍归零', () => {
     // render 里保存并恢复 #ca-scroll 的 scrollTop，且只在路由指纹相同时恢复。
+    // 2026-09-21 持久壳:恢复目标统一走 scrollRoot(main 或重取的 #ca-scroll)。
     expect(viewsSource).toContain('lastRenderKey');
     expect(viewsSource).toContain('restoreScroll');
-    expect(viewsSource).toContain('main.scrollTop = restoreScroll');
+    expect(viewsSource).toContain('scrollRoot.scrollTop = restoreScroll');
   });
 
   it('设置项乐观更新：capture-policy 死委托已删净（2026-09-16 B3），aria-busy 反馈保留', () => {

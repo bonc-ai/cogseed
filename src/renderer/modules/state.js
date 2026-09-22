@@ -6,6 +6,10 @@ let accessPassword = '';
 // current view: 'new-chat' | 'conversation' | 'agents'
 let currentView = 'new-chat';
 let currentCid = null;
+// 最近进入过的会话（2026-09-19 用户主动使用）：切到认知资产等面板时
+// currentCid 会被清空，但「用到当前对话」需要知道用户刚在哪个会话——
+// 独立记录、不清空，null=本会话还没进过任何对话。
+let lastConversationCid = null;
 let conversations = [];
 let _pendingTaskNotificationNavigation = null;
 
@@ -309,10 +313,11 @@ function bindStaticHandlers() {
   // conversation (reloading mid-stream would yank the streaming bubble).
   window.cogseed.onPushEvent('conversations:updated', (payload) => {
     if (!payload || typeof payload !== 'object') return;
-    const { cid, msgId } = payload;
+    const { cid, msgId, revisionOf } = payload;
     if (typeof cid !== 'string' || !cid) return;
+    const isRevision = typeof revisionOf === 'string' && revisionOf.length > 0;
     const tracker = window.__cogseedLiveBusTracker;
-    if (msgId && tracker && typeof tracker.has === 'function' && tracker.has(msgId)) return;
+    if (!isRevision && msgId && tracker && typeof tracker.has === 'function' && tracker.has(msgId)) return;
     // A message landing in a collapsed channel group re-opens that group —
     // external-channel traffic is push-visible by design.
     const conv = (typeof conversations !== 'undefined' && Array.isArray(conversations))
@@ -325,10 +330,12 @@ function bindStaticHandlers() {
       try { _saveSidebarCollapse(); } catch (_) { /* best-effort persistence */ }
     }
     if (cid === (typeof currentCid === 'string' ? currentCid : '')) {
-      const lastStreamAt = (typeof _lastGroupWorkEventAt !== 'undefined' && _lastGroupWorkEventAt && typeof _lastGroupWorkEventAt.get === 'function')
-        ? (_lastGroupWorkEventAt.get(cid) || 0)
-        : 0;
-      if (Date.now() - lastStreamAt < 3000) return;
+      if (!isRevision) {
+        const lastStreamAt = (typeof _lastGroupWorkEventAt !== 'undefined' && _lastGroupWorkEventAt && typeof _lastGroupWorkEventAt.get === 'function')
+          ? (_lastGroupWorkEventAt.get(cid) || 0)
+          : 0;
+        if (Date.now() - lastStreamAt < 3000) return;
+      }
       if (typeof loadConversationHistory === 'function') {
         loadConversationHistory(cid, { preserveScroll: true });
       }

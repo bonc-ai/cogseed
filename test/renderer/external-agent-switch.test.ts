@@ -40,8 +40,32 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
   const sent: Array<{ content: string; extra: Record<string, unknown> | undefined }> = [];
   const chipRenderCalls: string[] = [];
   const recipientSaveCalls: string[] = [];
+  const chatAttachSetCalls: Array<{ cid: string; items: unknown }> = [];
 
   const agents = Array.isArray(opts.agents) ? opts.agents : [];
+  const composerMembers = {
+    getMembers: () => [],
+    mentionTableFrom: (items: Array<Record<string, any>>) => [...items]
+      .filter((a) => a && a.agent_id && a.name)
+      .sort((a, b) => String(b.name).length - String(a.name).length)
+      .map((a) => ({ id: String(a.agent_id), name: String(a.name), aliases: [] })),
+    mentionTokensIn: (text: string, table: Array<Record<string, string>>) => {
+      const out: Array<Record<string, unknown>> = [];
+      const src = String(text || '');
+      for (let i = 0; i < src.length; i += 1) {
+        if (src[i] !== '@') continue;
+        const hit = table.find((entry) => src.slice(i + 1, i + 1 + entry.name.length) === entry.name);
+        if (!hit) continue;
+        const end = i + 1 + hit.name.length;
+        out.push({ id: hit.id, name: hit.name, start: i, end, raw: src.slice(i, end) });
+      }
+      return out;
+    },
+    mentionIdsIn(text: string, table: Array<Record<string, string>>) {
+      return new Set(this.mentionTokensIn(text, table).map((token: any) => token.id));
+    },
+    resetDraftTracking: () => {},
+  };
   const activeRecipient = (): Record<string, any> =>
     recipientByCid[cid] || autoRecipientByCid.get(cid) || { kind: 'commander', id: '', name: '' };
   const sandbox: any = {
@@ -78,10 +102,18 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
     _renderRecipientChip: () => { chipRenderCalls.push('chip'); },
     _saveRecipientMap: () => { recipientSaveCalls.push('save'); },
     _updateChatInputReserve: () => {},
+    ensureModelConfigured: async () => true,
+    _executionConfigForSend: () => null,
     // Submit-flow helpers that live OUTSIDE the extracted slice (mocked to
     // mirror their real routing semantics).
     _activeRecipient: () => activeRecipient(),
     _chatAttachList: () => [],
+    // Draft restoration re-renders attachment chips through _chatAttachSet,
+    // which lives outside the extracted slice. UI side effect only — record it
+    // so the test can assert the restore path ran without touching the DOM.
+    _chatAttachSet: (attachCid: string, items: unknown) => {
+      chatAttachSetCalls.push({ cid: attachCid, items });
+    },
     _chatAttachClear: () => {},
     _clearDraft: () => {},
     getChatUseSelections: () => [],
@@ -113,11 +145,14 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
       querySelector: () => null,
       createElement: () => ({}),
     },
-    window: {},
+    window: {
+      composerMembers,
+      getComposerAgentList: () => agents,
+    },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
   };
   vm.runInNewContext(switchSource, sandbox, { filename: 'slow-switch.js' });
-  return { sandbox, cid, input, sent, chipRenderCalls, recipientSaveCalls };
+  return { sandbox, cid, input, sent, chipRenderCalls, recipientSaveCalls, chatAttachSetCalls };
 }
 
 describe('external-agent switch-and-continue routing', () => {
@@ -212,5 +247,26 @@ describe('external-agent switch-and-continue routing', () => {
       origin: 'user_selection',
     });
     expect(recipientSaveCalls).toHaveLength(0);
+  });
+
+  it('leaves manual @ mentions as visible prose without structured routing payload', async () => {
+    const { sandbox, sent } = buildSwitchSandbox({
+      agents: [
+        { agent_id: 'a-codex', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+        { agent_id: 'a-verify', name: '集成验证Agent', runtime: { kind: 'in-process' } },
+      ],
+      composerText: '先由 @Codex 给出实现方案，再由 @集成验证Agent 按方案做验证，最后汇总。',
+    });
+
+    await sandbox.handleChatSubmit();
+
+    expect(sent).toHaveLength(1);
+    // Task 8：手打/粘贴的 @name 只是正文，不产生任何结构化路由身份
+    // （chooser 侧车才授权点名），正文原样保留给收件人阅读。
+    expect(sent[0].content).toContain('@Codex');
+    expect(sent[0].content).toContain('@集成验证Agent');
+    expect(sent[0].extra?.member_agent_ids).toBeUndefined();
+    expect(sent[0].extra?.mention_agent_ids).toBeUndefined();
+    expect(sent[0].extra?.recipient_agent_id).toBeUndefined();
   });
 });

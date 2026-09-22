@@ -23,9 +23,9 @@ const SAMPLE = [
   'Hello.  ',
   'SpeakerA 2026-09-05 19:31:34 ',
   '能听到吗？ ',
-  '张浩 2026-09-05 19:31:36 ',
+  '张磊 2026-09-05 19:31:36 ',
   '哈喽。 ',
-  '张浩 2026-09-05 19:31:40 ',
+  '张磊 2026-09-05 19:31:40 ',
   '我这边可以。 ',
   'SpeakerA 2026-09-05 19:31:45 ',
   '那我们开始。 ',
@@ -39,18 +39,18 @@ describe('块头解析（格式尽量宽）', () => {
   });
 
   it('名字｜时间 与 名字 时间', () => {
-    expect(parseHeaderLine('张浩｜19:31:54')?.speaker).toBe('张浩');
-    expect(parseHeaderLine('张浩 19:31:54')?.speaker).toBe('张浩');
+    expect(parseHeaderLine('张磊｜19:31:54')?.speaker).toBe('张磊');
+    expect(parseHeaderLine('张磊 19:31:54')?.speaker).toBe('张磊');
   });
 
   it('相对时钟（整点前 mm:ss，无日期）同样算块头', () => {
     // 真机事故：腾讯会议同一份导出整点前只给 mm:ss，只认 hh:mm:ss 会漏掉前 60 分钟
-    expect(parseHeaderLine('牛保康 02:45')).toEqual({
-      speaker: '牛保康', at: '02:45', clock: '02:45',
+    expect(parseHeaderLine('王伟 02:45')).toEqual({
+      speaker: '王伟', at: '02:45', clock: '02:45',
     });
-    expect(parseHeaderLine('刘海运 59:44 ')?.clock).toBe('59:44');
+    expect(parseHeaderLine('李强 59:44 ')?.clock).toBe('59:44');
     // 整点后同一份文件变成 hh:mm:ss，两者必须都认
-    expect(parseHeaderLine('刘海运 01:00:35')?.clock).toBe('01:00:35');
+    expect(parseHeaderLine('李强 01:00:35')?.clock).toBe('01:00:35');
   });
 
   it('正文行不会被误判成块头', () => {
@@ -59,7 +59,7 @@ describe('块头解析（格式尽量宽）', () => {
     expect(parseHeaderLine('')).toBeNull();
     // 只有时间没有名字、或时间不在行尾，都不算
     expect(parseHeaderLine('02:45')).toBeNull();
-    expect(parseHeaderLine('牛保康 02:45 补一句')).toBeNull();
+    expect(parseHeaderLine('王伟 02:45 补一句')).toBeNull();
   });
 });
 
@@ -70,26 +70,26 @@ describe('块切分', () => {
     expect(SAMPLE.slice(blocks[0].headerStart, blocks[0].headerEnd)).toBe('SpeakerA 2026-09-05 19:31:32 ');
     expect(SAMPLE.slice(blocks[0].bodyStart, blocks[0].bodyEnd).trim()).toBe('Hello.');
     expect(blocks[1].speaker).toBe('SpeakerA');
-    expect(blocks[2].speaker).toBe('张浩');
+    expect(blocks[2].speaker).toBe('张磊');
   });
 
   it('整点前 mm:ss + 整点后 hh:mm:ss 混排时，前 60 分钟的发言一个不漏', () => {
     // 真机事故（2026-09-18）：只认 hh:mm:ss 时，首个块头落在 01:00:35，
     // 前面所有发言都不成块，说话人合并/段落拟标题全部只覆盖后半段。
     const mixed = [
-      '牛保康 02:45',
+      '王伟 02:45',
       '喂海运哥能听到吗？',
-      '牛保康 03:10',
+      '王伟 03:10',
       '能看到我这屏幕吗？',
-      '刘海运 59:44',
+      '李强 59:44',
       '总体流程是需要 T 减一的。',
-      '刘海运 01:00:35',
+      '李强 01:00:35',
       '然后下边就是实现的现状与缺口。',
     ].join('\n');
     const blocks = parseTranscriptBlocks(mixed);
     expect(blocks).toHaveLength(4);
     expect(blocks.map((b) => b.clock)).toEqual(['02:45', '03:10', '59:44', '01:00:35']);
-    expect(blocks[0].speaker).toBe('牛保康');
+    expect(blocks[0].speaker).toBe('王伟');
     // 4 个块的正文拼起来 = 原文去掉块头行，逐字不丢（正文区间自带行尾换行）
     const joined = blocks.map((b) => mixed.slice(b.bodyStart, b.bodyEnd)).join('').trim();
     expect(joined).toBe([
@@ -106,14 +106,14 @@ describe('合并编辑集', () => {
     const result = mergeSpeakerEdits(SAMPLE);
     expect(result.blocksBefore).toBe(5);
     expect(result.blocksAfter).toBe(3);
-    expect(result.speakers).toEqual(['SpeakerA', '张浩']);
+    expect(result.speakers).toEqual(['SpeakerA', '张磊']);
     // SpeakerA 段（第 1-2 块）：插 —19:31:34，删第 2 个块头
     expect(result.edits[0]).toMatchObject({
       action: 'replace', correct: '—19:31:34', reason: 'insert_time_range',
     });
     expect(result.edits[1]).toMatchObject({ action: 'delete', reason: 'merge_header' });
     expect(result.edits[1].wrong).toContain('SpeakerA 2026-09-05 19:31:34');
-    // 张浩段同理
+    // 张磊段同理
     expect(result.edits[2]).toMatchObject({ action: 'replace', correct: '—19:31:40' });
     expect(result.edits[3]).toMatchObject({ action: 'delete' });
   });

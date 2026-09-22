@@ -92,6 +92,7 @@ function sameIntent(
     request.conversation_id === input.conversationId &&
     (request.execution_domain || 'group_chat') === (input.executionDomain || 'group_chat') &&
     request.agent_id === input.agentId &&
+    request.dispatch_payload.run_id === input.dispatchPayload.run_id &&
     normalizeIntentText(request.objective) ===
       normalizeIntentText(input.objective) &&
     scopesOverlap(
@@ -133,6 +134,9 @@ function mergePendingIntent(
   ]));
   request.dispatch_payload = {
     ...request.dispatch_payload,
+    ...(input.dispatchPayload.run_id
+      ? { run_id: input.dispatchPayload.run_id }
+      : {}),
     ...(assetIds.length ? { asset_ids: assetIds } : {}),
   };
   if (!request.workflow_step_id && input.workflow_step_id) {
@@ -263,6 +267,8 @@ export async function evaluateWake(
   requireId(userId, "user id");
   requireId(input.conversationId, "conversation id");
   requireId(input.agentId, "agent id");
+  if (input.dispatchPayload.run_id)
+    requireId(input.dispatchPayload.run_id, "wake collaboration run id");
   if (!input.objective.trim()) throw new Error("wake objective is required");
   if (!input.dispatchPayload.text.trim())
     throw new Error("wake dispatch text is required");
@@ -382,6 +388,9 @@ export async function evaluateWake(
           : {}),
         ...(input.dispatchPayload.asset_ids?.length
           ? { asset_ids: [...input.dispatchPayload.asset_ids] }
+          : {}),
+        ...(input.dispatchPayload.run_id
+          ? { run_id: input.dispatchPayload.run_id }
           : {}),
       },
       status: "pending",

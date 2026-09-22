@@ -51,8 +51,9 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
     expect(conversationSource).toContain('chat-kstar-review chat-kstar-result-review');
     expect(conversationSource).toContain('window.mountExpenseSetupCard(bubble');
     expect(conversationSource).toContain('function _mountMarketplaceInstallRequests');
-    // recall_projection 已按产品决策简化为普通文本呈现，不再渲染结果块卡片。
-    expect(conversationSource).toContain('仅以普通文本呈现');
+    // recall 投影呈现契约（2026-09-18 d514c252 起）：仅 model_selected 授权挂
+    // 卡（mountRecallProjectionCard），其余授权维持普通文本、不渲染结果块卡片。
+    expect(conversationSource).toContain('mountRecallProjectionCard');
   });
 
   it('styles the compact result block in the shared stylesheet', () => {

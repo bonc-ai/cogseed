@@ -64,6 +64,9 @@ export async function recoverCogSeedTask(
         agentId: updated.agentId,
         taskId: updated.taskId,
         sessionId: updated.sessionId,
+        // 与终态投影同源：恢复态的投影也要带上 run 归属，否则同一任务在
+        // 「恢复 → 终态」两次投影之间会丢失群聊台账的身份。
+        ...(updated.groupChatRunId ? { groupChatRunId: updated.groupChatRunId } : {}),
         event: {
           eventId: `cogseed-event-recovery-${updated.taskId}`,
           type: 'task.recoverable',

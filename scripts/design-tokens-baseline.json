@@ -14,14 +14,14 @@
     "radius": 4
   },
   "style.css": {
-    "color": 1417,
+    "color": 1393,
     "zIndex": 7,
-    "fontSize": 323,
-    "radius": 254
+    "fontSize": 318,
+    "radius": 251
   },
   "workspace.css": {
-    "color": 317,
+    "color": 307,
     "fontSize": 6,
-    "radius": 39
+    "radius": 38
   }
 }

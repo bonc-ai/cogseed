@@ -248,6 +248,40 @@ describe('CogSeed Runtime controller', () => {
     await expect(deliveries.cogseedResultDeliveryStore.read(USER, task.executionId!)).resolves.toBeNull();
   });
 
+  it('carries the group-chat run id into the retained terminal projection', async () => {
+    // 真机形状：Wake 派发的 CogSeed 任务带着 groupChatRunId 落库，终态却走
+    // retained-result 对账路径投影。这条路径一旦丢掉 run id，群聊台账就收不到
+    // actor 终态，run 永远停在 running（没有汇总，也没有重试入口）。
+    await createConversation('cid-run-binding');
+    const runtime = runtimeFrom([
+      { type: 'result', request_id: 'req-run-binding', runtime_session_id: 'mruntime-run-binding', status: 'completed', text: 'bound answer' },
+    ]);
+    const projectTaskEvent = vi.fn(async () => 'projected');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const controller = trackController(createCogSeedRuntimeController({ runtime, projectTaskEvent } as any));
+
+    const task = await controller.startCogSeedTask(USER, {
+      requestId: 'req-run-binding',
+      task: 'Bind the run id.',
+      conversationId: 'cid-run-binding',
+      agentId: 'agent-run-binding',
+      groupChatRunId: 'run-binding-1',
+    });
+
+    await eventually(async () => {
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({
+        status: 'completed',
+        resultDeliveryState: 'delivered',
+      });
+    });
+    const terminalInputs = projectTaskEvent.mock.calls
+      .map(([input]) => input)
+      .filter((input) => input.event.type === 'task.completed');
+    expect(terminalInputs).toHaveLength(1);
+    expect(terminalInputs[0]).toMatchObject({ groupChatRunId: 'run-binding-1' });
+  });
+
   it('keeps completion authoritative when the same execution later emits failure', async () => {
     await createConversation('cid-completion-before-failure');
     const runtime = runtimeFrom([
@@ -1950,7 +1984,12 @@ describe('CogSeed Runtime controller', () => {
       expect.objectContaining({ payload: { text: 'fresh recovered result' } }),
     ]);
     expect(JSON.stringify(projectTaskEvent.mock.calls)).not.toContain('stale result must be fenced');
-    await expect(deliveries.cogseedResultDeliveryStore.read(USER, task.executionId!)).resolves.toBeNull();
+    // The retained-result record is removed by the reconciliation that follows
+    // the durable delivery; wait for that observable instead of racing it.
+    await eventually(
+      async () => expect(await deliveries.cogseedResultDeliveryStore.read(USER, task.executionId!)).toBeNull(),
+      15_000,
+    );
   });
 
   it('drops a stale progress event when recoverable persists between map precheck and append', async () => {
@@ -2244,12 +2283,13 @@ describe('CogSeed Runtime controller', () => {
     const controller = createCogSeedRuntimeController({ runtime: runtimeFrom([]) });
 
     const cancelling = controller.cancelCogSeedTask(USER, seeded.taskId);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const recovering = controller.recoverOrphanedTasks(USER);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 让取消先真正拿到任务文件锁并完成，再启动恢复：此前用两个固定 20ms 去赌
+    // 调度顺序，满载并发下恢复会抢先（全量套件里 recoveredCount 变成 1）。
+    // 断言不变——恢复不得复活一个已取消的任务。
     releaseTaskFile();
-
     await expect(cancelling).resolves.toMatchObject({ status: 'cancelled' });
+
+    const recovering = controller.recoverOrphanedTasks(USER);
     await expect(recovering).resolves.toMatchObject({ recoveredCount: 0, taskIds: [] });
     await expect(tasks.readCogSeedTask(USER, seeded.taskId)).resolves.toMatchObject({ status: 'cancelled' });
   });

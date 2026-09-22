@@ -1,0 +1,83 @@
+{
+  "message": "success",
+  "data": {
+    "current_page": 1,
+    "current_size": 8,
+    "has_more": false,
+    "next_page_token": "",
+    "record_meetings": [
+      {
+        "host_user_id": "144115389859725620",
+        "media_start_time": "2026-08-18T13:58:36+08:00",
+        "meeting_code": "672866801",
+        "meeting_id": "2192853938120949342",
+        "meeting_record_id": "2089592781946621952",
+        "record_files": [
+          {
+            "record_end_time": "2026-08-18T16:56:41+08:00",
+            "record_file_id": "2089592781946621953",
+            "record_size": 282776770,
+            "record_start_time": "2026-08-18T13:58:36+08:00",
+            "sharing_url": "https://meeting.tencent.com/crm/KzMm41Pr49"
+          }
+        ],
+        "record_type": "云录制",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "subject": "企业 AI 原生落地的逻辑与路线图"
+      },
+      {
+        "host_user_id": "144115217163301631",
+        "media_start_time": "2026-07-31T15:29:20+08:00",
+        "meeting_code": "72337380400",
+        "meeting_id": "8510129880540746171",
+        "meeting_record_id": "2083092637248086016",
+        "record_type": "文字转写",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "sub_meeting_id": "1785463200",
+        "subject": "转写_例会 - P3394 Scrum Team"
+      },
+      {
+        "host_user_id": "16802000000013880114606",
+        "media_start_time": "2026-07-31T15:31:05+08:00",
+        "meeting_code": "999988617",
+        "meeting_id": "8498110019762297795",
+        "meeting_record_id": "2083093077596323840",
+        "record_files": [
+          {
+            "record_end_time": "2026-07-31T15:31:33+08:00",
+            "record_file_id": "2083093077596323841",
+            "record_start_time": "2026-07-31T15:31:05+08:00",
+            "sharing_url": "https://meeting.tencent.com/ctm/Kmbyg3ex92"
+          }
+        ],
+        "record_type": "文字转写",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "subject": "转写_认知资产沉淀"
+      },
+      {
+        "host_user_id": "16802000000013880114606",
+        "media_start_time": "2026-07-31T14:56:44+08:00",
+        "meeting_code": "999988617",
+        "meeting_id": "8498110019762297795",
+        "meeting_record_id": "2083084432036798464",
+        "record_files": [
+          {
+            "record_end_time": "2026-07-31T15:29:16+08:00",
+            "record_file_id": "2083084432036798465",
+            "record_start_time": "2026-07-31T14:56:44+08:00",
+            "sharing_url": "https://meeting.tencent.com/ctm/KwvmGmmqa8"
+          }
+        ],
+        "record_type": "文字转写",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "subject": "转写_认知资产沉淀"
+      }
+    ],
+    "total_count": 8,
+    "total_page": 1
+  }
+}
