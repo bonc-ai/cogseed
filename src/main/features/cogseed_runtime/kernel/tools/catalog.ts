@@ -146,10 +146,19 @@ export const MESSAGING_PROACTIVE_CAPABILITY = 'messaging.proactive';
 /** Capability that unlocks the P3394 agent-interop outbound tool. */
 export const P3394_INTEROP_CAPABILITY = 'p3394.interop';
 
+/** 只有真正挂在一个协作 workflow 上的任务才拿得到：没有 workflow 时
+ *  cogseed_workflow / retry_step / skip_step / resume_workflow 必然报
+ *  “CogSeed workflow not found”，暴露出去只会让模型撞墙（真机复现）。 */
+export const COGSEED_WORKFLOW_CAPABILITY = 'cogseed.workflow';
+
 const CAPABILITY_GATED_TOOLS: ReadonlyMap<RuntimeToolName, string> = new Map([
   ['messaging_list_targets', MESSAGING_PROACTIVE_CAPABILITY],
   ['messaging_send', MESSAGING_PROACTIVE_CAPABILITY],
   ['p3394_send', P3394_INTEROP_CAPABILITY],
+  ['cogseed_workflow', COGSEED_WORKFLOW_CAPABILITY],
+  ['cogseed_retry_step', COGSEED_WORKFLOW_CAPABILITY],
+  ['cogseed_skip_step', COGSEED_WORKFLOW_CAPABILITY],
+  ['cogseed_resume_workflow', COGSEED_WORKFLOW_CAPABILITY],
 ]);
 
 /**
