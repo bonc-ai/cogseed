@@ -12,12 +12,16 @@
  *  - 仅在打包后的 macOS 应用可用（electron autoUpdater 需要签名与安装副本；
  *    开发模式或不支持的平台状态为 disabled，回落到 v1 手动检查/下载流程）；
  *  - 与 v1 提醒通道（updates/latest + dmg）并存：老客户端走提醒，
- *    新版本走自动更新；两条通道由平台同一发布动作驱动。
+ *    新版本走自动更新；两条通道由平台同一发布动作驱动；
+ *  - `downloaded` 只在版本真的更新时才成立（isDownloadedVersionNewer）：feed 的
+ *    204 闸门依赖调用方 UA 里的版本，解析不出来就会把当前版本再发一遍，
+ *    客户端不能照着提示「重启并安装」。
  */
 
 import { app, autoUpdater } from 'electron';
 
 import { createLogger } from '../../logger';
+import { compareVersions } from '../../util/app-version-compat';
 import { requireCogSeedApiBase } from '../api_base';
 
 const log = createLogger('updater-auto');
@@ -26,7 +30,9 @@ export type AutoUpdateStatus =
   | { state: 'disabled'; reason: string }
   | { state: 'idle' }
   | { state: 'checking' }
-  | { state: 'downloading'; percent: number }
+  // percent 只在平台真的上报下载进度时才有值（Windows 的 download-progress）；
+  // macOS 的 Squirrel.Mac 没有该事件，此时 percent 缺省代表「进度未知」。
+  | { state: 'downloading'; percent?: number }
   | { state: 'downloaded'; version: string }
   | { state: 'error'; message: string };
 
@@ -74,6 +80,48 @@ function _feedUrl(): string {
   return `${base}/updates/feed/mac-${process.arch}`;
 }
 
+/** 当前运行版本；pre-ready 或测试替身取不到时返回空串（判据随之失效，不误判）。 */
+function _currentVersion(): string {
+  try {
+    const version = app?.getVersion?.();
+    if (typeof version === 'string' && version.trim()) return version.trim();
+  } catch { /* pre-ready */ }
+  return '';
+}
+
+/**
+ * 从 releaseName 里取出可比较的版本号。
+ *
+ * feed 的 `name` 就是发布版本（hub 侧 `projectMacFeed` 写的是 artifact.latestVersion），
+ * 但这里不假设它一定是干净版本号：取不到 `x.y.z` 形状就返回空串，让调用方退回
+ * 原行为，避免因为一个怪异字符串把正常更新挡掉。
+ */
+function _comparableVersion(value: unknown): string {
+  const text = String(value ?? '').trim();
+  const match = text.match(/^[vV]?(\d+(?:\.\d+){1,3})/);
+  return match ? match[1] : '';
+}
+
+/**
+ * 已下载的更新是否真的比当前版本新。
+ *
+ * 客户端装到最新版后仍然显示「重启并安装」的挡板：feed 只按 CFNetwork UA 里的版本
+ * 做 204 闸门（hub 侧 `projectMacFeed` 解析不出调用方版本时无条件返回 feed），
+ * 所以 Squirrel 完全可能把「已经装着的同一个版本」再下载一遍并回 update-downloaded。
+ * 渲染层没有版本判据，只认 state==='downloaded' 就出按钮，于是最新版客户端上出现
+ * 一个点了也没用的「重启并安装」。v1 手动通道一直有这条判据
+ * （`compareVersions(info.latest_version, current) > 0`），这里补齐自动通道的同一判据。
+ *
+ * 任一版本号取不到时返回 true（保持原行为）：宁可在信息不足时照旧提示，也不因为
+ * 一次解析失败把真实的更新藏起来。
+ */
+export function isDownloadedVersionNewer(downloadedVersion: unknown, currentVersion: unknown): boolean {
+  const staged = _comparableVersion(downloadedVersion);
+  const current = _comparableVersion(currentVersion);
+  if (!staged || !current) return true;
+  return compareVersions(staged, current) > 0;
+}
+
 function _wireEvents(): void {
   autoUpdater.on('checking-for-update', () => {
     log.debug('checking-for-update');
@@ -82,9 +130,11 @@ function _wireEvents(): void {
 
   autoUpdater.on('update-available', () => {
     // macOS（Squirrel.Mac）发现更新后即自动下载；无 download-progress 事件，
-    // 状态直接进入 downloading，直到 update-downloaded。
+    // 状态直接进入 downloading，直到 update-downloaded。故意不带 percent：
+    // 「拿不到进度」不能用 0 冒充——设置页照 0 渲染出的是一条永远不动的
+    // 进度文案，和真实下载进度互相矛盾。
     log.info('update available, downloading');
-    _setStatus({ state: 'downloading', percent: 0 });
+    _setStatus({ state: 'downloading' });
   });
 
   autoUpdater.on('update-not-available', () => {
@@ -94,6 +144,18 @@ function _wireEvents(): void {
 
   autoUpdater.on('update-downloaded', (_event, releaseNotes, releaseName) => {
     const version = String(releaseName || '').trim();
+    // 客户端已经在最新版上时不允许进入 downloaded：feed 的版本闸门依赖调用方
+    // UA，解析不出来就会把同一个版本再发一遍，Squirrel 于是下载并回报
+    // update-downloaded，渲染层据此显示一个点了也没用的「重启并安装」。
+    const current = _currentVersion();
+    if (!isDownloadedVersionNewer(version, current)) {
+      log.warn('downloaded update is not newer than the running version; staying idle', {
+        version,
+        current,
+      });
+      _setStatus({ state: 'idle' });
+      return;
+    }
     log.info('update downloaded', { version });
     _setStatus({ state: 'downloaded', version });
   });
