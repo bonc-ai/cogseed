@@ -284,6 +284,13 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .is-macos .main-top-actions button {
   -webkit-app-region: no-drag;
 }
+/* 更新提醒横幅是右上角浮动提示（top: 12px），整条压在面板拖拽条 / 页面顶部条
+   （都是 -webkit-app-region: drag，顶部 40px 一条带）之上。原生拖拽矩形在 OS
+   层优先命中，z-index 再高也拦不住：不加 no-drag 时横幅里的「查看更新 / 稍后」
+   按上去没有反应（点击被当成拖窗口）。 */
+.is-macos .updater-banner {
+  -webkit-app-region: no-drag;
+}
 /* Panel-scoped top strips sit above page content; raise each page header so
    its tabs and actions keep their own drag/no-drag behavior. */
 .is-macos .connections-tabs,
@@ -27844,6 +27851,22 @@ body.is-terminal-resizing {
   border-radius: 999px;
   transition: width 0.2s ease;
 }
+/* 暂停不是"没有进度"，而是"进度停在这里"：条留着并降饱和，让「继续下载」有
+   一个可读的起点，而不是把已下载的量从页面上抹掉。 */
+.updater-progress-bar.is-paused {
+  background: var(--text-2);
+  opacity: 0.55;
+}
+/* 传输控件（暂停 / 继续下载 / 取消下载）挂载点：自身不是控件，只排布
+   modules/updater.js 注入的共享 uiButton。 */
+.settings-updater-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-updater-actions:empty {
+  display: none;
+}
 
 /* ─── 关于我们（设置 › 关于我们 pane）──────────────────────────────────
    版本信息 + 更新操作从「通用」页移入独立标签页；卡片形态与更新原型对齐。 */
@@ -27892,6 +27915,11 @@ body.is-terminal-resizing {
 }
 .settings-about-rows:empty {
   display: none;
+}
+/* 同上：`.settings-about-rows` 自带 display:grid，会盖过 UA 的 [hidden]，
+   于是"四行都隐藏"时容器仍带着 padding + 上边框留在卡片里（一条空带）。 */
+.settings-about-rows[hidden] {
+  display: none !important;
 }
 
 /* Unified Agent Operations Center. */

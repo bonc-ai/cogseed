@@ -106,8 +106,7 @@
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
-  cursor: pointer;
-  transition:
+  cursor: pointer;transition:
     color var(--duration-control) var(--easing-ui),
     background-color var(--duration-control) var(--easing-ui),
     border-color var(--duration-control) var(--easing-ui),
@@ -117,6 +116,17 @@
   height: var(--control-height-sm);
   padding-inline: var(--space-3);
   font-size: var(--font-size-3);
+}
+/* `hidden` 必须赢。`.btn` / `.ui-button` / `.ui-icon-button` 都在作者样式里声明了
+   display:inline-flex，作者样式优先级高于 UA 的 `[hidden] { display: none }`：于是
+   hidden=true 的按钮照样被画出来、照样能被点到——点下去又因为业务状态判定直接
+   return，用户看到的就是"按钮在、点不动"（2026-09-21 报障）。与 `.settings-row[hidden]`、
+   `.updater-banner[hidden]` 同一条纪律，这里一次性覆盖共享按钮家族（含图标按钮），
+   避免每个页面各打一个补丁。 */
+.btn[hidden],
+.ui-button[hidden],
+.ui-icon-button[hidden] {
+  display: none !important;
 }
 .ui-button--lg { height: var(--control-height-lg); }
 .ui-button--primary {
