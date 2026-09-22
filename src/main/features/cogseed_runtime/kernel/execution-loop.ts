@@ -117,10 +117,12 @@ export async function* runRuntimeExecutionLoop(
       renderedResults.push(renderToolResult(call, result));
       await options.onRecord?.('tool', renderedResults[renderedResults.length - 1]);
       yield { type: 'tool_result', ...eventBase(request), text: result.content, metadata: { id: call.id, name: call.name, isError: !!result.isError } };
-      if (result.isError) {
-        yield { type: 'error', ...eventBase(request), error: result.content, metadata: { code: 'runtime_tool_error', tool: call.name } };
-        return;
-      }
+      // 工具报错是可恢复输入，不是整轮致命错误：错误文本已经随 tool_result 回灌给
+      // 模型（下一轮的 renderedResults），让它自己换工具/改参数/如实说明。此前这里
+      // 直接 yield error 并 return，导致任何一次工具失败都把整轮判死——真机上
+      // cogseed_workflow（无 workflow 时必然报错）、路径写错、策略拒绝都因此变成
+      // 「智能体未能完成本次回复，请重试」，而重试只会再撞同一面墙。
+      // 终止仍由模型自身失败与 maxToolRounds 兜底（见上方与下方分支）。
     }
 
     message = [
