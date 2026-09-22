@@ -370,11 +370,34 @@
     return `<div class="${demoClass}">${conversation ? `<div id="panel-conversation">${area}</div>` : area}</div>`;
   }
 
+  /** 多 Agent 成员列表行的三态（PRD AC-01/AC-04）：勾选态走共享 uiCheckbox，
+   *  「被空间作用域排除」用锁图标 + 说明文字，仍然可见但不可勾选——
+   *  静默消失正是本次修复的缺陷。 */
+  function composerMemberRowsSpecimen() {
+    const row = (id, name, desc, state) => {
+      const unavailable = state === 'unavailable';
+      const control = unavailable
+        ? '<span class="composer-member-check"><span data-ui-icon="lock" data-ui-icon-class="composer-member-lock"></span></span>'
+        : `<span class="composer-member-check">${uiCheckbox({
+          id: `gallery-member-${id}`,
+          label: `选择会话成员 ${name}`,
+          checked: state === 'checked',
+          attrs: { tabindex: '-1' },
+        })}</span>`;
+      const cls = `skill-picker-item composer-member-row${state === 'checked' ? ' is-checked' : ''}${unavailable ? ' is-unavailable' : ''}`;
+      const extra = unavailable ? ` aria-disabled="true" title="${escapeHtml(desc)}"` : '';
+      return `<div class="${cls}"${extra}>${control}<span class="composer-member-body"><span class="skill-picker-item-name">${escapeHtml(name)}</span><span class="skill-picker-item-desc">${escapeHtml(desc)}</span></span></div>`;
+    };
+    return row('cogseed', 'CogSeed', '默认接收者，也可参与协作', 'checked')
+      + row('workbuddy', 'WorkBuddy', '本机 workbuddy 命令行', 'unchecked')
+      + row('task-a', '编写助手', '不在当前空间能力范围，可在工作空间配置中添加', 'unavailable');
+  }
+
   function composerPopoverMatrix() {
     const agent = `<div class="skill-picker composer-popover gallery-composer-popover">
       <div class="skill-picker-tabs"><button type="button" class="skill-picker-tab active">智能体</button><button type="button" class="skill-picker-tab">技能</button></div>
       <div class="skill-picker-header"><input type="text" value="" placeholder="搜索智能体…" /></div>
-      <div class="skill-picker-list"><div class="skill-picker-item active"><div class="skill-picker-item-name">cogseed</div><div class="skill-picker-item-desc">默认接收者，无需 @</div></div><div class="skill-picker-item"><div class="skill-picker-item-name">WorkBuddy</div><div class="skill-picker-item-desc">本地代码研发智能体</div></div></div>
+      <div class="skill-picker-list">${composerMemberRowsSpecimen()}</div>
     </div>`;
     const workspace = `<div class="workspace-menu space-menu composer-popover gallery-composer-popover">
       <input class="workspace-menu-search" type="text" placeholder="搜索工作空间…" />
@@ -390,10 +413,10 @@
     const cases = [
       ['首页 / 900px', '完整标签 · 空正文使用安静发送键', composerDemo()],
       ['已有对话 / 760px', '64–200px 正文 · 有内容时发送键转为品牌主操作', composerDemo({ conversation: true, value: '请核对这份项目材料。' })],
-      ['窄宽 / 480px', '按输入台自身宽度收起标签，不依赖页面宽度', composerDemo({ narrow: true, value: '请按团队整理客户信息。' })],
+      ['窄宽 / 480px', '先收起工作空间文字等次要 chrome，成员名与模型名只截断不隐藏', composerDemo({ narrow: true, value: '请按团队整理客户信息。' })],
     ];
     byId('composer-specimens').innerHTML = cases.map(([label, note, html]) => specimen(label, note, `<div class="gallery-composer-stage">${html}</div>`)).join('')
-      + specimen('弹层 / 统一外壳', '互斥打开 · 同一描边、圆角、层级与阴影', composerPopoverMatrix());
+      + specimen('弹层 / 统一外壳 · 成员三态', '互斥打开 · 同一描边、圆角、层级与阴影 · 勾选/未勾选/被空间排除', composerPopoverMatrix());
   }
 
   function renderFormControls() {
