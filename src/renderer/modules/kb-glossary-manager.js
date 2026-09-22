@@ -416,7 +416,7 @@
         t('kb.glossary.freq', '确认 {count} 次', { count: Number(entry.freq || 0) }),
         t('kb.glossary.owner_scope', '归属：{scope}', { scope: entry.ownerScope || 'personal' }),
         entry.source === 'ontology_seed'
-          ? t('kb.glossary.source_ontology', '来源：记忆分组')
+          ? t('kb.glossary.source_ontology', '来源：本体分组')
           : entry.source === 'import'
             ? t('kb.glossary.source_import', '来源：导入')
             : entry.source === 'meeting_accept'
@@ -478,7 +478,7 @@
             kind: 'quiet',
             title: state.entries.length
               ? t('kb.glossary.no_match', '没有符合条件的词条')
-              : t('kb.glossary.empty', '词表还是空的：在转写纠错面板里新增词条，或从记忆分组同步。'),
+              : t('kb.glossary.empty', '词表还是空的：在转写纠错面板里新增词条，或从本体分组同步。'),
           })
           : '';
         host.innerHTML = empty;

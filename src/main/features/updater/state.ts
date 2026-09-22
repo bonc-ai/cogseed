@@ -10,7 +10,7 @@
 import { userUpdaterStateFile } from '../../paths';
 import { readJsonSync, writeJsonSync } from '../../storage';
 import { createLogger } from '../../logger';
-import type { DownloadedUpdate, UpdateInfo, UpdaterState } from './types';
+import type { DownloadedUpdate, PartialDownload, UpdateInfo, UpdaterState } from './types';
 
 const log = createLogger('updater');
 
@@ -63,6 +63,26 @@ function _sanitizeDownloaded(value: unknown): DownloadedUpdate | undefined {
   };
 }
 
+function _sanitizePartial(value: unknown): PartialDownload | undefined {
+  const obj = _asRecord(value);
+  if (!obj) return undefined;
+  if (typeof obj.version !== 'string' || !obj.version) return undefined;
+  const received = typeof obj.received === 'number' && Number.isFinite(obj.received) ? obj.received : NaN;
+  // A partial record with no bytes on disk is not resumable and must not keep
+  // the pane stuck in a "paused" state that can never continue.
+  if (!(received > 0)) return undefined;
+  const total = typeof obj.total === 'number' && Number.isFinite(obj.total) && obj.total > 0 ? obj.total : 0;
+  const updatedAt = typeof obj.updated_at === 'number' && Number.isFinite(obj.updated_at) ? obj.updated_at : 0;
+  const partial: PartialDownload = {
+    version: obj.version,
+    received,
+    total,
+    updated_at: updatedAt,
+  };
+  if (typeof obj.etag === 'string' && obj.etag.trim()) partial.etag = obj.etag.trim();
+  return partial;
+}
+
 export function readUpdaterState(userId: string): UpdaterState {
   const raw = readJsonSync<unknown>(userUpdaterStateFile(userId));
   const obj = _asRecord(raw);
@@ -89,6 +109,8 @@ export function readUpdaterState(userId: string): UpdaterState {
   }
   const downloaded = _sanitizeDownloaded(obj.downloaded);
   if (downloaded) state.downloaded = downloaded;
+  const partial = _sanitizePartial(obj.partial);
+  if (partial) state.partial = partial;
   return state;
 }
 
