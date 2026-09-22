@@ -72,6 +72,10 @@ export interface CogSeedAgentRuntimeInput {
   working_dir?: string;
   /** Main-process-derived capability grants (Commander-only tools). */
   capabilities?: string[];
+  /** Main-process-derived tool policy for this run (see
+   *  cogseed_backend/runtime-tool-policy.ts). Strictly validated by
+   *  `normalizeRuntimeRunRequest`; absent means the kernel keeps deny-all. */
+  tool_policy?: import('./kernel/types').RuntimeToolPolicy;
 }
 
 export interface RuntimeResultProjector {
