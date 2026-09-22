@@ -988,7 +988,8 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
 
   it('普通 messaging 任务 fire：走主页会话投递、不建 PC 会话、发 delivered 事件', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    // 幂等键日期取本地日期：用本地时间构造，结果不随运行机器的时区变化。
+    vi.setSystemTime(new Date(2026, 4, 22, 9, 0, 0));
     const events: any[] = [];
     const unsubscribe = subscribeFires((ev) => events.push(ev));
     const taskId = 'at_a1b2c3d1';
@@ -997,7 +998,7 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
       title: 'Push to owner',
       content: 'hello from auto task',
       recipient: { kind: 'messaging', instanceId: 'inst_feishu_1', recipient: 'owner' },
-      schedule: { type: 'one_time', at: '2026-05-22T08:59:00.000Z' },
+      schedule: { type: 'one_time', at: new Date(2026, 4, 22, 8, 59, 0).toISOString() },
     });
     expect(created.ok).toBe(true);
 
@@ -1021,7 +1022,8 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
     vi.useFakeTimers();
     // daily 任务无 last_run_at 时 baseline=created_at：创建须在 08:00 边界前
     // （本地时区），触发须在边界后，否则 _crossedTodayBoundary 不判定到期。
-    vi.setSystemTime(new Date('2026-05-21T09:00:00.000Z'));
+    // 用本地时间构造，结果不随运行机器的时区变化。
+    vi.setSystemTime(new Date(2026, 4, 21, 7, 0, 0));
     const events: any[] = [];
     const unsubscribe = subscribeFires((ev) => events.push(ev));
     const taskId = 'at_a1b2c3d2';
@@ -1034,7 +1036,7 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
       schedule: { type: 'daily', hour: 8, minute: 0 },
     });
     expect(created.ok).toBe(true);
-    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    vi.setSystemTime(new Date(2026, 4, 22, 9, 0, 0));
 
     await _onTimerFireForTest(TEST_UID, taskId);
     unsubscribe();

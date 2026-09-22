@@ -113,10 +113,13 @@ describe('forget › parseForgetScope', () => {
 describe('forget › 匹配计算', () => {
   it('matchRegistryEntries 按 provider/type/stableId/since 过滤', async () => {
     const { matchRegistryEntries } = await loadForget();
+    // since 按本地日期起点裁剪；观察时间也按本地时间构造，结果不随运行机器的时区变化。
+    const aug1 = new Date(2026, 7, 1).toISOString();
+    const jul1 = new Date(2026, 6, 1).toISOString();
     const entries = [
-      { resource: { resourceId: buildResourceKey('feishu', 't1', 'calendar', 'cal_a'), observedAt: '2026-08-01T00:00:00Z' } },
-      { resource: { resourceId: buildResourceKey('feishu', 't1', 'calendar', 'cal_b'), observedAt: '2026-07-01T00:00:00Z' } },
-      { resource: { resourceId: buildResourceKey('feishu', 't1', 'document', 'doc_x'), observedAt: '2026-08-01T00:00:00Z' } },
+      { resource: { resourceId: buildResourceKey('feishu', 't1', 'calendar', 'cal_a'), observedAt: aug1 } },
+      { resource: { resourceId: buildResourceKey('feishu', 't1', 'calendar', 'cal_b'), observedAt: jul1 } },
+      { resource: { resourceId: buildResourceKey('feishu', 't1', 'document', 'doc_x'), observedAt: aug1 } },
     ] as never as Array<import('../../../src/main/features/personal_context/registry').RegistryEntry>;
 
     expect(matchRegistryEntries(entries, { all: true })).toHaveLength(3);
