@@ -3688,6 +3688,10 @@ if (typeof window !== 'undefined') {
 // Set on every `_openAgentPicker`; consumed by `_renderAgentPickerList` and
 // the search-input change handler so live filtering stays scoped.
 let _pickerBoundAgentIds = null;
+// 作用域解析世代号：空间作用域是异步解析的，写回前必须确认这次解析仍然属于
+// 当前打开的入口。否则「先开空间会话的选择器、再快速切回首页」会把上一处的
+// 空间过滤残留到首页，表现为首页也搜不到已接入的外接 Agent。
+let _agentPickerScopeSeq = 0;
 let _pickerBoundSkillIds = null; // 情境空间一期：同 scope.resolve 的 skills 作用域
 let _pickerProjectId = '';
 let _pickerScopeSpace = null; // 情境空间一期：当前项目绑定空间摘要
@@ -3889,6 +3893,9 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   // 旧项目作用域已删（不再按 project 过滤）。
   // 主对话：当前会话 → 空间；新聊天：chip 选中的空间（创建后对话归该空间，@ 同步过滤）
   // （同步判定，无空间直接走全局路径，不闪 loading）
+  // 世代号：无空间路径同步自增即可作废在途的空间解析；有空间路径在写回前复查，
+  // 保证模块级作用域变量永远描述「当前这个入口」。
+  const scopeSeq = ++_agentPickerScopeSeq;
   const spaceId = _agentPickerSpaceId(anchorId);
   if (!spaceId) {
     _pickerBoundAgentIds = null;
@@ -3926,8 +3933,10 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   } catch (err) {
     _agentsLog.warn('resolve space scope for picker failed', err);
   } finally {
-    _pickerProjectContextLoading = false;
+    if (scopeSeq === _agentPickerScopeSeq) _pickerProjectContextLoading = false;
   }
+  // 期间用户又开了别的入口（世代号已前进）→ 丢弃这次过期结果。
+  if (scopeSeq !== _agentPickerScopeSeq) return;
   _pickerBoundAgentIds = boundAgentIds;
   _pickerBoundSkillIds = boundSkillIds;
   _pickerScopeSpace = scopeSpace;
@@ -4075,18 +4084,11 @@ function _renderAgentPickerList(filterText) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     return;
   }
-  const executableCliRuntimes = new Set(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
-  let agents = (_agentsCache || []).filter((a) => {
-    if (a.enabled === false || a.interaction_mode === 'management_only') return false;
-    const runtime = a.runtime;
-    return !runtime || runtime.kind === 'in_process' || executableCliRuntimes.has(runtime.cli);
-  });
-  // Project scope: only show agents bound to the active context's project.
+  const executableAgents = _executableAgentCatalog();
+  // 空间作用域：只约束内部 Task Agent；外接 Agent 与派发侧同口径恒可见。
   // Applied AFTER the enabled filter (per CLAUDE.md §6 outer-intersection
-  // rule). `null` = no project scope, full listing.
-  if (_pickerBoundAgentIds) {
-    agents = agents.filter((a) => _pickerBoundAgentIds.has(a.agent_id));
-  }
+  // rule). `null` = no space scope, full listing.
+  const agents = splitComposerAgentCandidates(executableAgents, _pickerBoundAgentIds).candidates;
   const q = (filterText || '').toLowerCase();
   // Search matches across the active locale description; cross-language
   // fallback via pickDesc lets users find a single-locale agent regardless
@@ -5250,6 +5252,46 @@ function bindRecipientAnchor(chipId, inputId) {
   }
 }
 
+/** 当前可派发的 Agent 目录（picker 列表与 composer 候选共用同一口径）：
+ *  禁用的、management_only 的、以及运行时既非进程内也非已知 CLI 的不进候选；
+ *  外接 Agent（cli / p3394-gateway）由运行时可执行性判定（executableCliRuntimes
+ *  覆盖 p3394-gateway 实例的 cli 名），与派发侧豁免口径不冲突。 */
+function _executableAgentCatalog() {
+  const executableCliRuntimes = new Set(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+  return (_agentsCache || []).filter((a) => {
+    if (a.enabled === false || a.interaction_mode === 'management_only') return false;
+    const runtime = a.runtime;
+    return !runtime || runtime.kind === 'in_process' || executableCliRuntimes.has(runtime.cli);
+  });
+}
+
+/** 多 Agent 候选的空间作用域拆分 —— 列表与候选共用的唯一事实来源。
+ *
+ *  内部 Task Agent 受空间派生集约束（空间的「能力配置」语义）；
+ *  **外接 Agent（cli / p3394-gateway）恒放行**，与主进程派发侧同口径：
+ *  features/group_chat/bus.ts 的空间过滤显式豁免外接 Agent（它们有独立凭据、
+ *  由用户显式选择，按空间丢弃只会把消息退回指挥官）。渲染层若继续一刀切过滤，
+ *  就会出现「智能体页面可见、`@` 候选里静默消失」——界面藏了一个运行时愿意
+ *  执行的成员。
+ *
+ *  @param list 只读 Agent 目录（window.getComposerAgentList）
+ *  @param boundAgentIds 空间派生集；null = 无空间作用域（全局可见）
+ *  @returns {{ candidates: any[], outOfScope: any[] }} outOfScope 仍需展示原因，
+ *           不允许静默丢弃。 */
+function splitComposerAgentCandidates(list, boundAgentIds) {
+  const candidates = [];
+  const outOfScope = [];
+  for (const agent of (Array.isArray(list) ? list : [])) {
+    if (!agent || !agent.agent_id) continue;
+    if (!boundAgentIds || _isExternalCliAgent(agent) || boundAgentIds.has(agent.agent_id)) {
+      candidates.push(agent);
+      continue;
+    }
+    outOfScope.push(agent);
+  }
+  return { candidates, outOfScope };
+}
+
 if (typeof window !== 'undefined') {
   window.bindRecipientAnchor = bindRecipientAnchor;
   window.refreshAgentPickerContext = refreshAgentPickerContext;
@@ -5261,12 +5303,17 @@ if (typeof window !== 'undefined') {
   // 点名标记、按来源分组都读它（**不过滤**——否则跨会话恢复的成员会被误判成
   // 内部成员）。候选列表单独走下面的 candidates，与既有 Agents 页签同口径。
   window.getComposerAgentList = () => (Array.isArray(_agentsCache) ? _agentsCache : []);
-  // 候选列表：套用 picker 既有的「项目绑定 Agent」过滤（与 Agents 页签一致）。
-  window.getComposerAgentCandidates = () => {
-    const list = Array.isArray(_agentsCache) ? _agentsCache : [];
-    if (!_pickerBoundAgentIds) return list;
-    return list.filter((a) => a && _pickerBoundAgentIds.has(a.agent_id));
-  };
+  // 候选列表：与 picker 相同的「可派发」口径（enabled/management_only/可执行
+  // 运行时）+ 空间作用域过滤；被排除的内部 Task Agent 单独回报，让列表
+  // 显示原因而不是静默消失（PRD AC-04）。
+  window.getComposerAgentCandidates = () => (
+    splitComposerAgentCandidates(_executableAgentCatalog(), _pickerBoundAgentIds).candidates
+  );
+  window.getComposerOutOfScopeAgents = () => (
+    splitComposerAgentCandidates(_executableAgentCatalog(), _pickerBoundAgentIds).outOfScope
+  );
+  // 纯函数测试缝（唯一的拆分事实来源，picker 列表与 composer 候选共用）。
+  window.splitComposerAgentCandidates = splitComposerAgentCandidates;
   // 项目没有任何绑定 Agent 时，候选列表要给出与 Agents 页签相同的提示。
   window.getComposerMemberScopeHint = () => (
     _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0 ? t('agents.no_project_agents') : ''

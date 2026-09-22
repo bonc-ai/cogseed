@@ -702,7 +702,7 @@
   "chat.quote_from": "引用自 @{name}：",
   "chat.quote_includes_references": "同时包含 {count} 条历史引用",
   "chat.quote_remove_title": "移除引用",
-  "chat.recipient_commander": "cogseed",
+  "chat.recipient_commander": "CogSeed",
   "chat.recipient_space_builder": "空间构建师",
   "chat.recipient_commander_hint": "默认接收者，无需 @",
   "chat.recipient_label": "@",
@@ -8632,5 +8632,7 @@
   "composer.model.managed_by_agent": "由该 Agent 管理",
   "composer.model.cli_models_retry": "重新读取模型清单",
   "composer.model.effort_reset_notice": "新模型不支持「{level}」思考强度，已恢复默认",
-  "composer.members.entry_default_title": "默认由 CogSeed 接收，点击选择成员"
+  "composer.members.entry_default_title": "默认由 CogSeed 接收，点击选择成员",
+  "composer.members.out_of_scope": "不在当前空间能力范围，可在工作空间配置中添加",
+  "composer.members.retained_hint": "已选成员，仍可取消"
 }
