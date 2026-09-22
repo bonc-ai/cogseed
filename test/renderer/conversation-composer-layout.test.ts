@@ -20,6 +20,9 @@ describe('conversation composer layout contract', () => {
     expect(css).toMatch(/\.new-chat-input-area textarea\s*\{[\s\S]*?min-height:\s*80px;/);
     expect(css).toMatch(/\.new-chat-input-area \.chat-rich-editor\s*\{[\s\S]*?min-height:\s*80px;/);
     expect(css).toMatch(/\.new-chat-input-area\s*\{[\s\S]*?container:\s*composer \/ inline-size;/);
-    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-label,[\s\S]*?\.model-chip-label,[\s\S]*?display:\s*none;/);
+    // 压缩阶梯：≤720px 收起次要 chrome（工作空间文字），核心执行信息只收紧宽度。
+    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-prefix,[\s\S]*?\.workspace-chip-label\s*\{[\s\S]*?display:\s*none;/);
+    expect(css).not.toMatch(/\.chat-recipient-name[^{}]*\{[^{}]*display:\s*none/);
+    expect(css).not.toMatch(/\.model-chip-label[^{}]*\{[^{}]*display:\s*none/);
   });
 });
