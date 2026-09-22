@@ -137,6 +137,20 @@
     return _icon(_ICON_ALIAS[name] || name, 'kb-ico-svg');
   }
 
+  /**
+   * 共享按钮的"禁用"是**类**：`.ui-button.is-disabled` / `.ui-icon-button.is-disabled`
+   * 带 `pointer-events: none`。只改 `.disabled` 属性不够 —— 一个"模板里就 disabled"的按钮
+   * （渲染时已带 `is-disabled`）后来被启用时，类还在 ⇒ 按钮**永远点不动**。
+   * 真机事故：问答「发送」按钮输入文字后仍点不动（导入弹窗的「导入」同因）。
+   * 因此凡是要改按钮可用状态，一律走这个函数，属性与类一起改。
+   */
+  function _setDisabled(el, disabled) {
+    if (!el) return;
+    const off = Boolean(disabled);
+    el.disabled = off;
+    el.classList.toggle('is-disabled', off);
+  }
+
   // 共享原语包装：**不再自带降级模板**（2026-09-21）。此前这里把 uiIconButton / uiButton /
   // uiInput / uiTextarea 的标记各抄了一份作为兜底 —— 等于在页面里维护第二套原语实现：
   // 既被共享组件闸门计为"裸控件"，也让"缺原语"静默通过。现在缺失即抛错（与 kb-notes 同风格），
@@ -154,9 +168,8 @@
 
   function _uiTextarea(options) { return _requirePrimitive('uiTextarea')(options); }
 
-  // 复选框一律走共享 uiCheckbox（规范原文：不得手写原生 checkbox 元素）。
-  // 与上面四份同款：不保留本地降级模板——缺原语时直接抛错，问题当场暴露。
-  function _uiCheckbox(options) { return _requirePrimitive('uiCheckbox')(options); }
+  // 复选框：与上面四份同款——**刻意不做降级模板**。降级等于把被禁止的裸 checkbox 标记再抄一份，
+  // 缺原语时直接抛错，让问题暴露而不是静默绕过。
 
   function _uiCheckbox(options) {
     if (typeof window.uiCheckbox !== 'function') throw new Error('knowledge base requires uiCheckbox');
@@ -407,7 +420,7 @@
           .map((lib) => node('lib', lib.name, lib.name, {
             icon: 'folder', selected: lib.name === _state.currentLib && !_state.spaceId,
           })),
-        empty: '暂无知识库，可使用右侧按钮创建',
+        empty: _tr('kb.workbench.tree_empty', '暂无知识库，可使用右侧按钮创建'),
       },
       {
         key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space',
@@ -416,7 +429,9 @@
           .map((space) => node('space', space.space_id, space.name || space.space_id, {
             icon: 'folder', shared: true, selected: space.space_id === _state.spaceId,
           })),
-        empty: _state.treeFilter ? '无匹配知识库' : '暂无共享空间',
+        empty: _state.treeFilter
+          ? _tr('kb.workbench.tree_no_match', '无匹配知识库')
+          : _tr('kb.workbench.tree_no_space', '暂无共享空间'),
       },
       {
         key: 'external', label: externalLabel, plus: false, items: externalItems,
@@ -478,7 +493,7 @@
         label.classList.add('kb-tree-group-label');
         if (meta.group.plus) {
           const add = _elementFromHtml(_uiIconButton({
-            label: meta.group.btnTitle || '创建', icon: 'plus', className: 'kb-tree-plus',
+            label: meta.group.btnTitle || _tr('kb.workbench.tree_create', '创建'), icon: 'plus', className: 'kb-tree-plus',
             attrs: { id: meta.group.btnId },
           }));
           item.appendChild(add);
@@ -718,9 +733,7 @@
     const nameInput = overlay.querySelector('#kb-share-name');
     const okBtn = overlay.querySelector('#kb-share-ok');
     const syncOk = () => {
-      const disabled = !String(nameInput.value || '').trim();
-      okBtn.disabled = disabled;
-      okBtn.classList.toggle('is-disabled', disabled);
+      _setDisabled(okBtn, !String(nameInput.value || '').trim());
     };
     nameInput.addEventListener('input', syncOk);
     nameInput.addEventListener('keydown', (e) => {
@@ -961,7 +974,7 @@
       html += `<div class="kb-import-dlg-row${checked ? ' checked' : ''}" data-import-file="${_esc(rel)}">
         ${_uiCheckbox({
           id: `kb-import-check-${index}`,
-          label: `选择 ${f.name}`,
+          label: _tr('kb.workbench.import_pick_file', '选择 {name}', { name: f.name }),
           className: 'kb-import-dlg-check',
           checked,
           attrs: { 'data-import-check': rel },
@@ -986,7 +999,7 @@
     const countEl = overlay.querySelector('.kb-import-dlg-count');
     const okBtn = overlay.querySelector('.kb-import-dlg-ok');
     if (countEl) countEl.textContent = _tr('kb.workbench.import_selected_count', '已选中 {count} 个文件', { count: _dlgSelected.size });
-    if (okBtn) okBtn.disabled = _dlgSelected.size === 0;
+    if (okBtn) _setDisabled(okBtn, _dlgSelected.size === 0);
   }
 
   function _bindImportDlgEvents(overlay) {
@@ -1112,7 +1125,7 @@
           okBtn.classList.remove('is-loading');
           okBtn.removeAttribute('aria-busy');
           _setUiButtonPresentation(okBtn, _tr('kb.workbench.import_confirm', '导入'), 'upload');
-          okBtn.disabled = _dlgSelected.size === 0;
+          _setDisabled(okBtn, _dlgSelected.size === 0);
         }
       }
     });
@@ -2041,21 +2054,99 @@
     try { range.surroundContents(mark); } catch (_) { return null; }
     return mark;
   }
-  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
-  function _fvApproxRawStart(raw, normIdx) {
-    let p = 0;
-    let inWS = false;
-    for (let i = 0; i < raw.length; i++) {
-      const ws = /\s/.test(raw[i]);
-      if (ws) {
-        if (!inWS) { if (p === normIdx) return i; p++; inWS = true; }
-      } else {
-        inWS = false;
-        if (p === normIdx) return i;
-        p++;
+  /**
+   * 把 `[startNode+startOffset, endNode+endOffset)` 包成 `<mark>`，**允许跨节点**。
+   *
+   * 跨行内元素时 `surroundContents` 会因"部分选中非文本节点"直接抛错（一句话被
+   * `<strong>` 切开就是这个情形），所以跨节点走 `extractContents` —— 它会按需
+   * 克隆 `<strong>/<span>` 这类祖先，落点与格式都保留。
+   */
+  function _fvWrapSpan(startNode, startOffset, endNode, endOffset) {
+    if (!startNode || !endNode) return null;
+    if (startOffset < 0 || endOffset < 0) return null;
+    if (startNode === endNode && endOffset <= startOffset) return null;
+    const doc = startNode.ownerDocument;
+    if (!doc || typeof doc.createRange !== 'function') return null;
+    const range = doc.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    const mark = doc.createElement('mark');
+    mark.className = 'kb-fv-mark';
+    try {
+      const contents = range.extractContents();
+      mark.appendChild(contents);
+      range.insertNode(mark);
+    } catch (_) { return null; }
+    return mark;
+  }
+  /**
+   * 连续文本节点的「可见文本 + 每个字符的归属」索引：<strong>/<span> 会把一句话
+   * 切成多个文本节点，只按单节点匹配永远匹配不上整句。归一化口径同 `_fvNormSpace`。
+   */
+  function _fvNodeRun(nodes) {
+    const chars = [];
+    const owners = [];
+    for (const node of nodes) {
+      const raw = String(node.nodeValue || '');
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (/\s/.test(ch)) {
+          if (!chars.length || chars[chars.length - 1] === ' ') continue;
+          chars.push(' ');
+        } else {
+          chars.push(ch);
+        }
+        owners.push({ node, offset: i });
       }
     }
-    return Math.max(0, raw.length - 1);
+    while (chars.length && chars[chars.length - 1] === ' ') {
+      chars.pop();
+      owners.pop();
+    }
+    return { text: chars.join(''), owners };
+  }
+  /** 跨节点精确命中 → 可跨节点的落点；单节点就能命中的由 `_fvWrapRaw` 负责。 */
+  function _fvMatchAcrossNodes(nodes, needle) {
+    if (!needle || nodes.length < 2) return null;
+    const { text, owners } = _fvNodeRun(nodes);
+    const at = text.indexOf(needle);
+    if (at < 0) return null;
+    const first = owners[at];
+    const last = owners[at + needle.length - 1];
+    if (!first || !last || first.node === last.node) return null;
+    return {
+      startNode: first.node,
+      startOffset: first.offset,
+      endNode: last.node,
+      endOffset: last.offset + 1,
+    };
+  }
+  // 归一化区间 → 原始文本区间（空白折叠为单个空格）。与 `_fvNormSpace` 口径一致：
+  // 折叠空白 + 去掉首尾空白，因此下标换算要跳过首尾空白、空白连成一段只算一个位置。
+  // 高亮落点必须用真实区间——早先用 `needleNorm.length * 2 + 8` 估算长度，真机上
+  // 表现为"高亮多涂半句"（摘录末尾之后的正文跟着变色）。
+  function _fvRawSpan(raw, normStart, normEnd) {
+    const text = String(raw == null ? '' : raw);
+    const lead = (text.match(/^\s*/) || [''])[0].length;
+    const trail = (text.match(/\s*$/) || [''])[0].length;
+    const stop = Math.max(lead, text.length - trail);
+    let p = 0;
+    let inWS = false;
+    let start = -1;
+    for (let i = lead; i < stop; i++) {
+      const ws = /\s/.test(text[i]);
+      if (ws && inWS) continue;
+      inWS = ws;
+      if (start < 0 && p === normStart) start = i;
+      if (p === normEnd) return { start, end: i };
+      p++;
+    }
+    return { start, end: stop };
+  }
+  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
+  function _fvApproxRawStart(raw, normIdx) {
+    const span = _fvRawSpan(raw, normIdx, normIdx + 1);
+    return span.start >= 0 ? span.start : Math.max(0, String(raw == null ? '' : raw).length - 1);
   }
   // 去掉行首 md 标记（标题/引用/无序与有序列表编号），便于与渲染后 DOM 比对
   function _fvStripMdMarks(s) {
@@ -2092,32 +2183,53 @@
     push(headSentence);
     const root = container.nodeType === 9 ? container.body : container;
     const nodes = _fvTextNodeList(root);
+    // ① 单节点精确命中：按归一化区间反算原始区间，标记长度 = 真实匹配长度
     for (const needle of needles) {
       const needleNorm = _fvNormSpace(needle);
       for (const node of nodes) {
         const raw = node.nodeValue || '';
         if (!raw.trim()) continue;
-        const rawNorm = _fvNormSpace(raw);
-        const idx = rawNorm.indexOf(needleNorm);
-        let rawStart = -1;
-        if (idx >= 0) {
-          rawStart = _fvApproxRawStart(raw, idx);
-        } else {
-          const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
-          if (!word) continue;
-          const w = raw.indexOf(word);
-          if (w < 0) continue;
-          rawStart = w;
-        }
-        if (rawStart < 0) continue;
-        const mark = _fvWrapRaw(node, rawStart, Math.min(needleNorm.length * 2 + 8, 200));
+        const idx = _fvNormSpace(raw).indexOf(needleNorm);
+        if (idx < 0) continue;
+        const span = _fvRawSpan(raw, idx, idx + needleNorm.length);
+        if (span.start < 0 || span.end <= span.start) continue;
+        const mark = _fvWrapRaw(node, span.start, span.end - span.start);
         if (mark) {
           try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
           return true;
         }
       }
     }
-    // 单节点匹配失败（列表/加粗把一句话拆到多个节点）→ 块级兜底：高亮整段
+    // ② 跨节点精确命中：<strong>/<span> 把一句话切成多个文本节点时
+    for (const needle of needles) {
+      const needleNorm = _fvNormSpace(needle);
+      const span = _fvMatchAcrossNodes(nodes, needleNorm);
+      if (!span) continue;
+      const mark = _fvWrapSpan(span.startNode, span.startOffset, span.endNode, span.endOffset);
+      if (mark) {
+        try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+        return true;
+      }
+    }
+    // ③ 兜底：归一化后仍匹配不上 → 退到首个"实词"，只标这个词（不猜长度）。
+    //    放在精确命中之后，否则另一个节点里的同名词会抢在真正的摘录之前被涂上。
+    for (const needle of needles) {
+      const needleNorm = _fvNormSpace(needle);
+      const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
+      if (!word) continue;
+      for (const node of nodes) {
+        const raw = node.nodeValue || '';
+        if (!raw.trim()) continue;
+        const at = raw.indexOf(word);
+        if (at < 0) continue;
+        const mark = _fvWrapRaw(node, at, word.length);
+        if (mark) {
+          try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
+          return true;
+        }
+      }
+    }
+    // 精确与实词都落空 → 块级兜底：高亮整段
     const blocks = root.querySelectorAll ? Array.from(root.querySelectorAll('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,dd,dt,summary')) : [];
     if (blocks.length) {
       const tokens = _fvSignificantTokens(cleaned);
@@ -6420,7 +6532,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const input = document.getElementById('kb-qa-input');
     const send = document.getElementById('kb-qa-send');
     if (!input || !send) return;
-    send.disabled = !input.value.trim();
+    _setDisabled(send, !input.value.trim());
   }
 
   // 问答输入框自动扩容：多行输入随内容增高，避免长文本在单行里向前滚动、
@@ -7825,6 +7937,8 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     stripMdMarks: _fvStripMdMarks,
     cleanQuote: _fvCleanQuote,
     normSpace: _fvNormSpace,
+    rawSpan: _fvRawSpan,
+    highlightContainer: _fvHighlightContainer,
     significantTokens: _fvSignificantTokens,
     externalTarget: _fvExternalTarget,
     pdfSrcAt: _fvPdfSrcAt,

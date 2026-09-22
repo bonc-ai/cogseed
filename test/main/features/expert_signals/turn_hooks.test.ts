@@ -21,7 +21,59 @@ import {
 } from '../../../../src/main/features/expert_signals/turn_hooks';
 import { querySignals } from '../../../../src/main/features/expert_signals';
 
-async function wait() { return new Promise((r) => setTimeout(r, 30)); }
+/**
+ * 信号写入是异步 `appendJsonl`：固定 30ms 在满载并发下会读到 0 条
+ *（全量套件里 tool_failure 用例就这样失败过）。改成有界条件等待真实条数。
+ */
+async function waitUntil(
+  probe: () => Promise<Array<{ turn_id?: string }>>,
+  ok: (sigs: Array<{ turn_id?: string }>) => boolean,
+  timeoutMs = 5_000,
+): Promise<Array<{ turn_id?: string }>> {
+  const deadline = Date.now() + timeoutMs;
+  let sigs = await probe();
+  while (!ok(sigs) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+    sigs = await probe();
+  }
+  return sigs;
+}
+
+/**
+ * 负例的非空洞写法：在同一个 cid 上再制造一条「必然产出」的对照信号，
+ * 等它落地后断言只有它一条——否则「读到 0 条」可能只是还没落盘。
+ */
+async function expectOnlyControlToolFailure(cid: string, controlTurnId: string): Promise<void> {
+  onAgentTurnEnd({
+    uid: UID, cid,
+    actorId: 'control_agent',
+    isCommander: false,
+    agentMsg: { id: controlTurnId, text: 'control turn' },
+    errText: 'permanent: control failure',
+  });
+  const sigs = await waitUntil(
+    () => querySignals({ types: ['tool_failure'], cid }),
+    (rows) => rows.length === 1,
+  );
+  expect(sigs).toHaveLength(1);
+  expect(sigs[0].turn_id).toBe(controlTurnId);
+}
+
+async function expectOnlyControlCorrection(cid: string, controlTurnId: string): Promise<void> {
+  onAgentTurnEnd({
+    uid: UID, cid,
+    actorId: 'control_agent',
+    isCommander: false,
+    agentMsg: { id: controlTurnId, text: 'control turn' },
+  });
+  await onUserMessage({ uid: UID, cid, userMsg: { id: `u_${controlTurnId}`, text: '好的，就这样' } });
+  const sigs = await waitUntil(
+    () => querySignals({ types: ['correction', 'accept', 'reject', 'edit'], cid }),
+    (rows) => rows.length === 1,
+  );
+  expect(sigs).toHaveLength(1);
+  expect(sigs[0].turn_id).toBe(controlTurnId);
+}
 
 // Why this file exists: phase-0 commit 76358a8e shipped the chokepoint
 // functions (onAgentTurnEnd / onUserMessage) and the bus.ts wiring, but
@@ -47,10 +99,7 @@ describe('onAgentTurnEnd › set A (live emit + cache)', () => {
       agentMsg: { id: 'm_a1', text: 'Here is the plan.' },
       // No errText → no tool_failure.
     });
-    await wait();
-
-    const errSigs = await querySignals({ types: ['tool_failure'], cid });
-    expect(errSigs.length).toBe(0);
+    await expectOnlyControlToolFailure(cid, 'm_ctrl_tha_a1');
     // Cache write is observable via the next onUserMessage call below.
   });
 
@@ -63,9 +112,10 @@ describe('onAgentTurnEnd › set A (live emit + cache)', () => {
       agentMsg: { id: 'm_a2', text: 'sorry' },
       errText: 'permanent: agent spec missing',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['tool_failure'], cid });
+    const sigs = await waitUntil(
+      () => querySignals({ types: ['tool_failure'], cid }),
+      (rows) => rows.length === 1,
+    );
     expect(sigs.length).toBe(1);
     expect(sigs[0].turn_id).toBe('m_a2');
     expect(sigs[0].metadata!.error_excerpt).toContain('agent spec missing');
@@ -80,9 +130,10 @@ describe('onAgentTurnEnd › set A (live emit + cache)', () => {
       agentMsg: { id: 'm_a3', text: 'done.' },
       errText: 'something broke',
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['tool_failure'], cid });
+    const sigs = await waitUntil(
+      () => querySignals({ types: ['tool_failure'], cid }),
+      (rows) => rows.length === 1,
+    );
     expect(sigs.length).toBe(1);
     expect(sigs[0].aid).toBeNull();
   });
@@ -102,9 +153,10 @@ describe('onUserMessage › set A (text-signal extraction after cache)', () => {
       userMsg: { id: 'u_a1', text: '不对，应该用另一种写法' },
     });
     expect(r.correctionDetected).toBe(true);
-    await wait();
-
-    const sigs = await querySignals({ types: ['correction'], cid });
+    const sigs = await waitUntil(
+      () => querySignals({ types: ['correction'], cid }),
+      (rows) => rows.length >= 1,
+    );
     expect(sigs.length).toBeGreaterThanOrEqual(1);
     expect(sigs[0].turn_id).toBe('m_thu_a1');
     expect(sigs[0].aid).toBe('agent_x');
@@ -122,9 +174,10 @@ describe('onUserMessage › set A (text-signal extraction after cache)', () => {
       uid: UID, cid,
       userMsg: { id: 'u_a2', text: '好的，就这样' },
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['accept'], cid });
+    const sigs = await waitUntil(
+      () => querySignals({ types: ['accept'], cid }),
+      (rows) => rows.length === 1,
+    );
     expect(sigs.length).toBe(1);
     expect(sigs[0].turn_id).toBe('m_thu_a2');
   });
@@ -141,9 +194,10 @@ describe('onUserMessage › set A (text-signal extraction after cache)', () => {
       uid: UID, cid,
       userMsg: { id: 'u_a3', text: '算了，不要这个了' },
     });
-    await wait();
-
-    const sigs = await querySignals({ types: ['reject'], cid });
+    const sigs = await waitUntil(
+      () => querySignals({ types: ['reject'], cid }),
+      (rows) => rows.length === 1,
+    );
     expect(sigs.length).toBe(1);
   });
 });
@@ -156,13 +210,7 @@ describe('onUserMessage / onAgentTurnEnd › set B (must NOT emit)', () => {
       userMsg: { id: 'u_b1', text: '不对' },
     });
     expect(r.correctionDetected).toBe(false);
-    await wait();
-
-    const sigs = await querySignals({
-      types: ['correction', 'accept', 'reject', 'edit'],
-      cid,
-    });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlCorrection(cid, 'm_ctrl_thu_b1');
   });
 
   it('silent agent turn (empty text) → no cache, so next user msg gets no signal', async () => {
@@ -177,13 +225,7 @@ describe('onUserMessage / onAgentTurnEnd › set B (must NOT emit)', () => {
       uid: UID, cid,
       userMsg: { id: 'u_b2', text: '不对' },
     });
-    await wait();
-
-    const sigs = await querySignals({
-      types: ['correction', 'accept', 'reject', 'edit'],
-      cid,
-    });
-    expect(sigs.length).toBe(0);
+    await expectOnlyControlCorrection(cid, 'm_ctrl_thu_b2');
   });
 
   it('neutral user reply → no correction/accept/reject (might still emit edit if it looks like one)', async () => {
@@ -198,12 +240,6 @@ describe('onUserMessage / onAgentTurnEnd › set B (must NOT emit)', () => {
       uid: UID, cid,
       userMsg: { id: 'u_b3', text: '我去问问产品经理' },
     });
-    await wait();
-
-    const tagged = await querySignals({
-      types: ['correction', 'accept', 'reject'],
-      cid,
-    });
-    expect(tagged.length).toBe(0);
+    await expectOnlyControlCorrection(cid, 'm_ctrl_thu_b3');
   });
 });

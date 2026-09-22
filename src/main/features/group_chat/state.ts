@@ -31,6 +31,7 @@ import {
 } from '../../storage';
 import { createLogger } from '../../logger';
 import { logErrorRef, maskId } from '../../util/log-redact';
+import { isCogSeedConversationDeletingOrDeleted } from '../cogseed_backend/conversation-operation-guard';
 
 const log = createLogger('group_chat.state');
 
@@ -446,11 +447,41 @@ async function writeMembers(
   cid: string,
   m: MembersFile,
   projectIdHint?: string | null,
-): Promise<void> {
+): Promise<boolean> {
+  // members.json races conversation deletion exactly like state.json: a roster
+  // growth that lands while an actor unwinds after a stop can arrive after
+  // `chats.deleteConversation` purged the directory, and nobody holds the
+  // promise. Recreating the deleted directory is not acceptable, so skip with
+  // a warn; real persistence failures of a live conversation still throw.
+  // (`_conversationRemoved` / `_logSkippedRemovedWrite` live with the other
+  // removal guards below and are hoisted.)
+  const layout = conversationLayout(uid, cid, projectIdHint);
+  const file = layout.membersFile;
+  if (_conversationRemoved(uid, cid)) {
+    _logSkippedRemovedWrite(uid, cid, 'members', 'members_write_conversation_removed');
+    _membersCache.delete(file);
+    return false;
+  }
   ensureGroupDir(uid, cid, projectIdHint);
-  const file = conversationLayout(uid, cid, projectIdHint).membersFile;
-  await writeJson(file, m);
+  try {
+    await writeJson(file, m);
+  } catch (err) {
+    // Deletion can purge the directory between the mkdir above and the atomic
+    // tmp-file open. The destination is gone, so this is the owner leaving, not
+    // a persistence failure of a live conversation.
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (
+      (code === 'ENOENT' || code === 'ENOTDIR')
+      && !fs.existsSync(layout.groupDir)
+    ) {
+      _logSkippedRemovedWrite(uid, cid, 'members', 'members_write_target_removed', err);
+      _membersCache.delete(file);
+      return false;
+    }
+    throw err;
+  }
   _membersCache.delete(file);
+  return true;
 }
 
 /** 标记「指挥官已发言」。幂等：已标记过只读一次 members.json 就返回。
@@ -467,8 +498,7 @@ export async function markCommanderSpoken(
     const members = await readMembers(uid, cid, projectIdHint);
     if (members.commander_spoken) return false;
     members.commander_spoken = true;
-    await writeMembers(uid, cid, members, projectIdHint);
-    return true;
+    return writeMembers(uid, cid, members, projectIdHint);
   });
 }
 
@@ -493,7 +523,8 @@ export async function addMember(
     if (members.actors.find((a) => a.id === actor.id)) return false;
     const next: Actor = { ...actor, joined_at: nowIso() };
     members.actors.push(next);
-    await writeMembers(uid, cid, members, projectIdHint);
+    const persisted = await writeMembers(uid, cid, members, projectIdHint);
+    if (!persisted) return false;
     log.info('member joined', {
       user_id: maskId(uid),
       cid: maskId(cid),
@@ -578,8 +609,7 @@ export async function renameAgentInMembers(
     if (!actor || actor.name === newName) continue;
     actor.name = newName;
     try {
-      await writeMembers(uid, cid, m);
-      touched += 1;
+      if (await writeMembers(uid, cid, m)) touched += 1;
     } catch {
       log.warn('member rename write failed', {
         user_id: maskId(uid),
@@ -698,9 +728,54 @@ export async function readState(
   return { version: 1, status: 'idle', last_active_at: nowIso(), in_flight: [] };
 }
 
+/** True while conversation deletion is removing this conversation, and for the
+ *  rest of the process lifetime once it removed it. Actor unwinding, the
+ *  stuck-turn watchdog and handoff rollback keep writing state after a stop,
+ *  and nothing holds those promises: writing anyway both resurrects the
+ *  deleted directory and hands the caller a rejection it cannot catch. */
+function _conversationRemoved(uid: string, cid: string): boolean {
+  return isCogSeedConversationDeletingOrDeleted(uid, cid);
+}
+
+function _logSkippedRemovedWrite(
+  uid: string,
+  cid: string,
+  target: 'state' | 'members',
+  failureCode: string,
+  err?: unknown,
+): void {
+  log.warn(`skipped ${target} write for a removed conversation`, {
+    user_id: maskId(uid),
+    cid: maskId(cid),
+    failure_code: failureCode,
+    ...(err ? { error: logErrorRef(err) } : {}),
+  });
+}
+
 async function writeStateRaw(uid: string, cid: string, s: StateFile): Promise<void> {
+  if (_conversationRemoved(uid, cid)) {
+    _logSkippedRemovedWrite(uid, cid, 'state', 'state_write_conversation_removed');
+    return;
+  }
   ensureGroupDir(uid, cid);
-  await writeJson(conversationLayout(uid, cid).stateFile, s);
+  try {
+    await writeJson(conversationLayout(uid, cid).stateFile, s);
+  } catch (err) {
+    // Deletion can purge the directory between the mkdir above and the atomic
+    // tmp-file open. The destination is gone, so this is the owner leaving, not
+    // a persistence failure of a live conversation: skip it (recreating the
+    // directory for a deleted conversation is not acceptable) and warn instead
+    // of rejecting.
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (
+      (code === 'ENOENT' || code === 'ENOTDIR')
+      && !fs.existsSync(conversationLayout(uid, cid).groupDir)
+    ) {
+      _logSkippedRemovedWrite(uid, cid, 'state', 'state_write_target_removed', err);
+      return;
+    }
+    throw err;
+  }
 }
 
 // A compact local journal makes boot crash recovery proportional to the
@@ -793,6 +868,12 @@ export async function untrackRunningConversation(uid: string, cid: string): Prom
 async function _writeStatusTransition(
   uid: string, cid: string, current: GroupStatus, next: GroupStatus, state: StateFile,
 ): Promise<void> {
+  // Checked before the running registry is touched: a deleted conversation
+  // must not be journaled as running for boot recovery.
+  if (_conversationRemoved(uid, cid)) {
+    _logSkippedRemovedWrite(uid, cid, 'state', 'status_transition_conversation_removed');
+    return;
+  }
   // Register before persisting `running`: a crash can leave an extra journal
   // row (self-healing), but must never leave an untracked running state.
   if (current !== 'running' && next === 'running') {

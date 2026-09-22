@@ -39,7 +39,7 @@ export interface RecallCaptureCandidateQualityInput {
   value: string;
   summary: string;
   uncertainty?: string;
-  suggestedType: 'personal' | 'rule' | 'template' | 'skill_method';
+  suggestedType: 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
   suggestedScope: string;
   suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
   risk?: 'low' | 'medium' | 'high';
@@ -83,6 +83,7 @@ export type RecallCaptureAutomaticIneligibilityReason =
  *  属于此类，等 Q1 决策），advisory 不阻断，只如实记录。 */
 export type RecallCandidateClassificationReason =
   | 'personal_is_project_fact'
+  | 'fact_not_stable'
   | 'template_not_reusable_structure'
   | 'skill_not_executable'
   | 'rule_missing_boundary'
@@ -137,6 +138,7 @@ const ONE_OFF_REQUEST_PATTERN = /(?:帮我|请(?:帮我)?|麻烦|能否|可以(?
 // —— 归类校验用的模式 ——
 // 项目/任务事实：PRD 3.4 要求它们留在 Workspace / Project 支撑记录，不进
 // PersonalOntologyAsset。典型："我今天在修 KSTAR"、"这个 Sprint 截止 8/19"。
+const STABLE_FACT_SUBJECT_PATTERN = /(?:团队|项目|环境|工具链|仓库|服务|系统|域名|版本|技术栈|组织|外部系统|依赖|部署|构建|协作入口|\b(?:team|project|environment|toolchain|repository|service|system|domain|version|stack|organization|external system|dependency|deployment|build|collaboration)\b)/i;
 const PROJECT_FACT_PATTERN = /(?:今天|今日|昨天|明天|本周|这周|下周|本月|这次|本次|当前|目前|正在|眼下|这个(?:迭代|冲刺|阶段|版本|项目|需求)|本(?:轮|期|阶段|迭代)|截止|deadline|由\S{1,8}负责|负责人是|会议|日程|排期|\bsprint\b|\bmilestone\b|\btoday\b|\bthis (?:week|month|sprint|iteration|release)\b|\bdue\b|\bhoje\b|\besta semana\b)/i;
 // 长期稳定性标记：有这些才算"关于我"，否则多半是一次性状态。
 const LONG_TERM_PATTERN = /(?:长期|一直|向来|一贯|通常|一般|习惯(?:上|于)?|总是|每次都|我的风格|我倾向|我偏好|长年|多年|常年|いつも|普段|長期|\b(?:long[- ]term|usually|generally|typically|habitually|always|by habit|tend to|my style)\b)/i;
@@ -205,6 +207,7 @@ function durableIntentKindsForUserMessage(message: RecallCaptureScreeningMessage
   if (RULE_PATTERN.test(text) && hasFutureOrReuseIntent) pushUnique(kinds, 'rule');
   if (TEMPLATE_PATTERN.test(text) && hasFutureOrReuseIntent) pushUnique(kinds, 'template');
   if (METHOD_PATTERN.test(text) && hasFutureOrReuseIntent) pushUnique(kinds, 'skill_method');
+  if (STABLE_FACT_SUBJECT_PATTERN.test(text) && (hasFutureOrReuseIntent || LONG_TERM_PATTERN.test(text))) pushUnique(kinds, 'fact');
 
   // A universal or default rule is durable even when it does not say "in the
   // future" literally, for example "所有架构决定必须记录来源".
@@ -436,6 +439,16 @@ export function assessRecallCandidateClassification(
     } else if (!LONG_TERM_PATTERN.test(text) && !STABLE_PREFERENCE_PATTERN.test(text)) {
       // 没写明长期，但也不像项目事实：可能只是措辞省略，交人工判断。
       pushUnique(advisoryReasons, 'personal_not_stable');
+    }
+  }
+
+  if (candidate.suggestedType === 'fact') {
+    // fact 只收稳定的项目/环境/领域/工具链事实。带“今天/本次/当前”等
+    // 时间壳且没有长期标记的叙述是任务状态，不是可复用事实。
+    if (PROJECT_FACT_PATTERN.test(text) && !LONG_TERM_PATTERN.test(text)) {
+      pushUnique(blockingReasons, 'fact_not_stable');
+    } else if (!LONG_TERM_PATTERN.test(text) && !STABLE_FACT_SUBJECT_PATTERN.test(text)) {
+      pushUnique(advisoryReasons, 'fact_not_stable');
     }
   }
 

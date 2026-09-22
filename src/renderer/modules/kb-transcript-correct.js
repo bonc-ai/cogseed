@@ -517,6 +517,10 @@
         }) + '<label class="kb-atc__scope-toggle">' + root.uiCheckbox({
           // 「模型建议并入候选列表」的开关：默认关——它会产生多次模型调用，成本由用户选
           id: 'kb-atc-scan-review-' + panelId,
+          // 可达标签是共享 uiCheckbox 的**硬性要求**（缺了直接抛 TypeError）。
+          // 本面板 render() 是逐步 try/catch，抛错会把这一整段工具栏静默吞掉——
+          // 真机表现就是「同时让模型读一遍」和「词表」一起不见了。
+          label: t('kb.transcriptCorrect.scan_with_review', '同时让模型读一遍'),
           checked: state.scanWithReview,
           disabled: state.busy,
           attrs: { 'data-atc-action': 'toggle-scan-review' },

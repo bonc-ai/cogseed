@@ -13,12 +13,11 @@ import { RECALL_SCHEMA_VERSION, type RecallJsonRecord } from './types';
 
 export const COGNITION_TREE_CONTRACT = 'ability_asset_relations';
 /**
- * v2：树上除正式资产外还长「芽」——尚未晋升、但用户现在就能确认成
- * 正式资产的候选。v1 记录只有 asset 节点，读到时按下面的 `readCognitionTree`
- * 原样重投一次即可，不需要迁移器：树本来就是投影，唯一事实源仍是资产与候选
- * 记录本身，重建不会丢用户数据。
+ * v3：类型集合加入 fact（事实与知识）。树仍是资产/候选投影，不做数据迁移；
+ * v2/v1 记录读取时按需重投。v2 曾在树上长「芽」——尚未晋升、但用户现在
+ * 就能确认成正式资产的候选；v1 记录只有 asset 节点。
  */
-export const COGNITION_TREE_CONTRACT_VERSION = 2;
+export const COGNITION_TREE_CONTRACT_VERSION = 3;
 
 export type CognitionTreeAssetNodeId = `asset:${string}`;
 export type CognitionTreeCandidateNodeId = `candidate:${string}`;
@@ -79,7 +78,7 @@ export interface CognitionTreeRecord extends RecallJsonRecord {
 }
 
 const ASSET_TYPES = new Set<RecallAbilityAssetRecord['type']>([
-  'personal', 'rule', 'template', 'skill_method',
+  'personal', 'rule', 'template', 'skill_method', 'fact',
 ]);
 const ASSET_STATUSES = new Set<RecallAbilityAssetRecord['status']>([
   'active', 'paused', 'archived', 'deleted', 'purged', 'revoked',
@@ -87,8 +86,12 @@ const ASSET_STATUSES = new Set<RecallAbilityAssetRecord['status']>([
 const ASSET_MATURITIES = new Set<RecallAbilityAssetRecord['maturity']>([
   'seed', 'bud', 'transfer_validated', 'effectiveness_validated',
 ]);
+/* 关系种类以 asset-relations.ts 的 AbilityAssetRelationKind 为准：这里漏过
+   same_family（判族引擎写的关系），导致带同族关系的资产让整棵树读取抛
+   「malformed cognition tree asset relation contract」——2026-09-21 真机
+   抓出（面板顶部常驻「部分数据读取失败」）。新增种类时两边一起改。 */
 const RELATION_KINDS = new Set<AbilityAssetRelationKind>([
-  'refines', 'depends_on', 'replaces', 'conflicts_with', 'related_to',
+  'refines', 'depends_on', 'replaces', 'conflicts_with', 'related_to', 'same_family',
 ]);
 const CANDIDATE_DISPLAY_STATES = new Set<RecallCandidateDisplayState>([
   'needs_review', 'weak_evidence', 'deferred', 'confirmed', 'rejected',

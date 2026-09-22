@@ -46,8 +46,23 @@ const legacyRawControlBaseline: Record<string, number> = {
   // uiButton 强制可见文字 label，表达不了纯状态控件——与 run-center 的
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
-  'kb-notes.js': 19,
-  'kb-workbench.js': 4,
+  // kb-notes.js：24 → 21（2026-09-21，新建/保存/更多三个简单按钮已迁到 uiButton/uiIconButton）。
+  // 剩余 19 处裸控件 + 2 处动态控件的分类（见内部《B3 控件迁移分类》）：
+  //   · 编辑器工具栏 data-cmd 按钮（富内容：kb-caret / kb-color-bar 子元素 + 命令委托）
+  //     —— uiButton 只有 label+icon，无法表达该契约，需 owner 裁定豁免或补 seam；
+  //   · 库选择器条目（两段式内容，内容型而非控件）；
+  //   · 两处隐藏 file input（共享层无 file 原语）。
+  'kb-notes.js': 21,
+  'kb-workbench.js': 9,
+  'kb-notes.js': 24,
+  // kb-workbench.js：**实测 5**（2026-09-21，与 develop 的 KB 结构迁移 #346 合并后重算）。
+  // 本批删除了模块自带的 uiIconButton/uiButton/uiInput/uiTextarea 四份"降级模板"——那等于在页面里
+  // 维护第二套原语实现：既被本条闸门计为裸控件、又让"缺原语"静默通过。现在改为缺原语即抛错
+  // （`_requirePrimitive`）。
+  // 剩余 5 处都是真实页面控件，各有归属：分享弹层隐藏 file input、权限触发按钮（M-1）；
+  // 问答引用 chip、模型 chip（M-9）；以及一处问答输入框（B3-b 走 uiTextarea）。
+  // ⚠️ 基线按**合并后实测**填：单独照抄任一支的自测值都会留出空档。
+  'kb-workbench.js': 5,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
@@ -56,7 +71,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   'model-guard.js': 2,
   'onboarding.js': 21,
   'oss.js': 1,
-  'personal-ontology.js': 5,
+  'personal-ontology.js': 5, // 2026-09-20 盒子化：tab/库行/三盒 nav/模板行/库按钮
   'plugins.js': 2,
   'queue-draft.js': 5,
   'recall-projection-card.js': 4,
@@ -154,6 +169,8 @@ const emojiAsIconBaseline: Record<string, number> = {
   'bash_permission.js': 2,
   'chat-artifact.js': 1,
   'conversation.js': 3,
+  // kb-notes.js / kb-quiz.js / kb-workbench.js 的 emoji 已全部迁移到 icons.js（2026-09-21），
+  // 基线随之删除：这三个文件再出现 emoji 就会直接红。
   'model-authorization.js': 2,
   'onboarding.js': 8,
   'settings.js': 1,

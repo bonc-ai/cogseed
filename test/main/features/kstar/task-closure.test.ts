@@ -1110,10 +1110,11 @@ describe('KSTAR direct experience asset line', () => {
     }]);
 
     const updated = await assets.readAbilityAsset('closure-user', original.asset.id);
+    // 2026-09-19 刀二：update 是融合不是覆盖——旧正文保留、新判断融入，v2。
     expect(updated).toMatchObject({
       id: original.asset.id,
       version: '2',
-      statement: 'Update the report verification rule to require an acceptance check.',
+      statement: 'Update the report verification rule to require an acceptance check.Keep report verification consistent across runs.',
     });
     expect(updated.evidenceRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-original' }),

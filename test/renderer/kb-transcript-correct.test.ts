@@ -710,6 +710,136 @@ describe('模型建议并入候选列表', () => {
 });
 
 /**
+ * 真机事故（2026-09-22）：面板**整条工具栏消失**——「同时让模型读一遍」和「词表」
+ * 都不见了，用户以为功能被删了。
+ *
+ * 根因不是没渲染，而是**渲染时抛错被静默吞掉**：
+ *   - `renderHead()` 里 `root.uiCheckbox({ id, checked, disabled, attrs })` **没给可达标签**；
+ *     共享 `uiCheckbox` 缺可达标签时直接抛 `TypeError`（ui-form.js）；
+ *   - 工具栏是**一整条字符串拼接**后再赋给 `innerHTML`，表达式抛错 ⇒ 赋值不执行 ⇒
+ *     拼在它前面的「扫描」、以及后面的「新增词条」「词表」**一起消失**；
+ *   - `render()` 逐步 try/catch（历史事故：某步抛错不该卡死扫描流程），
+ *     于是这条错误只进了 `log.warn`，界面上没有任何痕迹。
+ *
+ * 这条测试用**真原语**（真 uiButton / 真 uiCheckbox）挂面板：只要再有原语的硬性
+ * 要求没给到，拼接即抛错、工具栏恒为空，断言必失败。
+ */
+describe('面板工具栏必须由真原语渲染出来（真机：整条消失）', () => {
+  const fakeElement = (): any => {
+    const el: any = {
+      textContent: '', innerHTML: '', outerHTML: '', hidden: false, value: '', checked: false,
+      dataset: {}, style: {}, children: [], isConnected: true, offsetParent: null,
+      classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => false },
+      addEventListener: () => {}, removeEventListener: () => {},
+      appendChild: (child: any) => child, insertBefore: () => {}, removeChild: () => {},
+      querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+      setAttribute: () => {}, getAttribute: () => null, removeAttribute: () => {},
+      insertAdjacentHTML: () => {}, focus: () => {}, remove: () => {}, replaceWith: () => {},
+    };
+    return el;
+  };
+
+  /** 装载面板源码 + **真实**共享原语，挂一个面板，返回各区域假节点。 */
+  function mountPanelWithRealPrimitives() {
+    const nodes = new Map<string, any>();
+    const container = fakeElement();
+    container.querySelector = (selector: string) => {
+      if (!nodes.has(selector)) nodes.set(selector, fakeElement());
+      return nodes.get(selector);
+    };
+    const context: any = {
+      console, setTimeout, clearTimeout, Map, Set, Array, Object, String, Number, JSON,
+      document: {
+        createElement: () => fakeElement(),
+        body: fakeElement(),
+        addEventListener: () => {}, removeEventListener: () => {},
+      },
+      cogseed: { invoke: async () => ({}) },
+      // 面板挂载时会订阅 i18n-change（#343 引入）——vm 里得给得上这两个口子
+      addEventListener: () => {}, removeEventListener: () => {},
+    };
+    context.window = context;
+    context.globalThis = context;
+    vm.createContext(context);
+    // 真原语：不会替面板兜底（缺 label 就抛），这正是本用例要测的
+    for (const file of ['icons.js', 'ui-button.js', 'ui-form.js']) {
+      vm.runInContext(
+        fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8'),
+        context,
+        { filename: file },
+      );
+    }
+    // i18n 走"缺键回退中文默认文案"的真实分支
+    context.t = () => '';
+    vm.runInContext(panelSrc, context, { filename: 'kb-transcript-correct.js' });
+    const instance = context.KbTranscriptCorrect.mount(container, {
+      text: '甲 2026-09-05 19:31:32\n付平来了。\n乙 2026-09-05 19:31:34\n海云哥你到了吗？',
+      docId: 'doc-1',
+      displayPath: '1/9.15站会.txt',
+    });
+    return { instance, nodes };
+  }
+
+  it('标题栏四个控件都在：扫描 / 同时让模型读一遍 / 新增词条 / 词表', () => {
+    const { instance, nodes } = mountPanelWithRealPrimitives();
+    const head = nodes.get('[data-atc-head-actions]');
+
+    expect(head, '标题栏容器必须存在').toBeTruthy();
+    // 缺了任何一项都说明拼接中途抛错（整条被吞），不是"某个按钮没做"
+    expect(head.innerHTML).toContain('data-atc-action="scan"');
+    expect(head.innerHTML).toContain('data-atc-action="toggle-scan-review"');
+    expect(head.innerHTML).toContain('data-atc-action="toggle-add"');
+    expect(head.innerHTML).toContain('data-atc-action="open-glossary"');
+    instance.destroy();
+  });
+
+  it('「同时让模型读一遍」复选框带可达标签（共享 uiCheckbox 的硬性要求）', () => {
+    const { instance, nodes } = mountPanelWithRealPrimitives();
+    const head = nodes.get('[data-atc-head-actions]');
+
+    // 真 uiCheckbox 只在拿到 label/aria-label 时才会产出 aria-label
+    expect(head.innerHTML).toContain('aria-label="同时让模型读一遍"');
+    expect(head.innerHTML).toContain('type="checkbox"');
+    instance.destroy();
+  });
+
+  it('面板里每个共享原语调用都满足它的硬性要求（抛错会被 render 的 try/catch 吞掉）', () => {
+    const required: Record<string, RegExp[]> = {
+      // 每个条目 = 该原语 throw 的条件必须被满足
+      uiCheckbox: [/id\s*:/, /label\s*:|aria-label|aria-labelledby/],
+      uiSwitch: [/label\s*:|aria-label|aria-labelledby/],
+      uiField: [/id\s*:/, /label\s*:/],
+      uiSelect: [/id\s*:/],
+      uiInput: [/id\s*:/],
+      uiTextarea: [/id\s*:/],
+      uiButton: [/label\s*:/],
+      uiIconButton: [/label\s*:|aria-label/, /icon\s*:/],
+    };
+    const violations: string[] = [];
+    for (const [name, conditions] of Object.entries(required)) {
+      const re = new RegExp(`\\b${name}\\s*\\(\\s*\\{`, 'g');
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(panelSrc))) {
+        // 取出实参对象（按花括号配对，跳过嵌套与注释里的花括号由下面粗滤兜住）
+        let depth = 0;
+        let end = -1;
+        for (let i = match.index + match[0].length - 1; i < panelSrc.length; i++) {
+          if (panelSrc[i] === '{') depth++;
+          else if (panelSrc[i] === '}') { depth--; if (!depth) { end = i; break; } }
+        }
+        const body = panelSrc.slice(match.index, end + 1);
+        const missing = conditions.filter((cond) => !cond.test(body));
+        if (missing.length) {
+          const line = panelSrc.slice(0, match.index).split('\n').length;
+          violations.push(`${name} @ 第 ${line} 行 缺 ${missing.map(String).join(' / ')}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});
+
+/**
  * 语言切换响应（i18n-change）。
  *
  * 面板挂载后自己持有 DOM，视图不会重建它：不监听 i18n-change 就会一直停在旧语言，
