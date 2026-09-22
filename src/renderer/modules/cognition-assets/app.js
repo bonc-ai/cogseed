@@ -102,9 +102,15 @@
           case 'go-review': router.go({ name: 'review' }); break;
           case 'go-organize': router.go({ name: 'organize' }); break;
           case 'go-configure-model': {
-            // configuration_required 的处理出口：模型配置在应用设置页（与
-            // kb-workbench 等模块同一条 setView('settings') 通道）。
-            if (typeof window.setView === 'function') window.setView('settings');
+            // configuration_required 的处理出口：模型配置在应用设置页
+            // 「设置 → 配置」的模型区。与 model-chip.js / kb-workbench.js 同一条缝：
+            // 设置页懒加载，tab 与锚点必须挂在 setView 上，否则落到默认的「数据」tab。
+            if (typeof window.setView === 'function') {
+              window.setView('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
+            }
+            if (typeof window.activateSettingsTab === 'function') {
+              window.activateSettingsTab('configuration', { anchor: 'models' });
+            }
             break;
           }
           case 'toggle-source-issues': {
