@@ -1066,6 +1066,76 @@ describe("group_chat collaboration › nested dispatch recording", () => {
 });
 
 describe("group_chat collaboration › gate control flow", () => {
+  it("scopes a blocking gate to the collaboration run that created its step", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-gate-run-scope`;
+    const created = await c.createWorkflowRun(TEST_UID, cid, {
+      objective: "Keep overlapping run gates isolated",
+      created_by: "commander",
+    });
+    const runBStep = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Keep overlapping run gates isolated",
+      actor_id: "agent-run-b",
+      source_tool: "dispatch_to",
+      task: "Review run B",
+      group_chat_run_id: "run-b",
+    });
+    const legacyStep = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Keep overlapping run gates isolated",
+      actor_id: "agent-legacy",
+      source_tool: "dispatch_to",
+      task: "Review legacy work",
+    });
+    const runAStep = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Keep overlapping run gates isolated",
+      actor_id: "agent-run-a",
+      source_tool: "dispatch_to",
+      task: "Review run A",
+      group_chat_run_id: "run-a",
+    });
+    const runBGate = await c.recordGateResult(
+      TEST_UID,
+      cid,
+      created.run.id,
+      runBStep.step.id,
+      {
+        name: "run_b_review",
+        status: "needs_review",
+        checks: [{ name: "review_required", status: "needs_review" }],
+      },
+    );
+    const legacyGate = await c.recordGateResult(
+      TEST_UID,
+      cid,
+      created.run.id,
+      legacyStep.step.id,
+      {
+        name: "legacy_review",
+        status: "needs_review",
+        checks: [{ name: "review_required", status: "needs_review" }],
+      },
+    );
+    const runAGate = await c.recordGateResult(
+      TEST_UID,
+      cid,
+      created.run.id,
+      runAStep.step.id,
+      {
+        name: "run_a_review",
+        status: "needs_review",
+        checks: [{ name: "review_required", status: "needs_review" }],
+      },
+    );
+    const snapshot = await c.readActiveCollaborationSnapshot(TEST_UID, cid);
+
+    expect(snapshot?.blocking_gate?.id).toBe(runBGate.id);
+    expect(c.blockingGateForGroupChatRun(snapshot, "run-a")?.id).toBe(runAGate.id);
+    expect(c.blockingGateForGroupChatRun(snapshot, "run-b")?.id).toBe(runBGate.id);
+    expect(c.blockingGateForGroupChatRun(snapshot, "run-c")?.id).toBe(legacyGate.id);
+    expect(c.blockingGateForGroupChatRun(snapshot)?.id).toBe(runBGate.id);
+  });
+
   it("blocks new workflow steps when a gate needs review, then resumes after approval", async () => {
     const c =
       await import("../../../../src/main/features/group_chat/collaboration");
@@ -5572,6 +5642,22 @@ describe("group_chat collaboration › dependency and access contracts", () => {
         } as any),
       ).rejects.toThrow("resume workflow step access contract mismatch");
     }
+  });
+
+  it("rejects an unsafe collaboration run binding before persisting a nested step", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-unsafe-group-run-binding`;
+
+    await expect(c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Reject unsafe run binding",
+      actor_id: "agent-unsafe-binding",
+      source_tool: "dispatch_to",
+      task: "Must not be persisted",
+      group_chat_run_id: "../other-run",
+    })).rejects.toThrow("invalid collaboration run id");
+
+    await expect(c.readActiveWorkflowRun(TEST_UID, cid)).resolves.toBeNull();
   });
 
   it("persists plan metadata and preserves it with attempt history across retry", async () => {
