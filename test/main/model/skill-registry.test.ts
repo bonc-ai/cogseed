@@ -55,7 +55,17 @@ beforeEach(async () => {
   users.activateUser(TEST_UID);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // 深扫是后台 fire-and-forget：不排空的话，前一条用例仍在跑的扫描会和下一条
+  // 抢 loader 与缓存 —— CI 上 mtime 那条用例因此 120s 超时（本地同一条只用
+  // 443ms，文件里另一条会触发 9s 级深扫）。drainTrustRefreshForTest 是既有
+  // 测试缝，排空后再清 mock 与临时目录。
+  try {
+    const registry = await loadRegistry();
+    await registry.drainTrustRefreshForTest();
+  } catch {
+    // 用例没加载过 registry（或已被 reset）时没有待排空的扫描。
+  }
   vi.doUnmock('#core-agent');
   vi.doUnmock('../../../src/main/features/skill_reverify');
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
