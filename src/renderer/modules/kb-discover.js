@@ -55,6 +55,9 @@
     return window.uiIconButton(options);
   }
 
+  // 注意：这里的 '研究' / '团队' 是**目录数据里的分类值**（_normalizeCatalogItem 直接取自数据），
+  // 用来挑图标/配色。它们不是界面文案：跟着语言改会让映射查不到、图标全变成默认值。
+  // 分类名本身若要本地化，属于目录数据层的事，不在这里。
   function _catalogIcon(category, origin) {
     if (origin === 'published') return 'users';
     if (category === '研究') return 'globe';
