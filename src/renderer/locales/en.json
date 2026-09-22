@@ -8632,5 +8632,7 @@
   "composer.model.managed_by_agent": "Managed by this agent",
   "composer.model.cli_models_retry": "Reload model list",
   "composer.model.effort_reset_notice": "The new model does not support the \"{level}\" thinking level; reverted to the default",
-  "composer.members.entry_default_title": "CogSeed receives by default — click to choose members"
+  "composer.members.entry_default_title": "CogSeed receives by default — click to choose members",
+  "composer.members.out_of_scope": "Not in this space's scope — add it in the workspace config",
+  "composer.members.retained_hint": "Selected member — still removable"
 }
