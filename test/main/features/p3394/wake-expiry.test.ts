@@ -16,7 +16,7 @@ async function seedRunWithWake(input: {
   runId: string;
   terminal?: 'failed' | 'done' | 'pending';
   stopRun?: boolean;
-}): Promise<{ requestId: string }> {
+}): Promise<{ requestId: string; runId: string }> {
   const runStore = await import('../../../../src/main/features/group_chat/run_store');
   const wake = await import('../../../../src/main/features/p3394/wake-service');
   const run = await runStore.createRun({
@@ -46,19 +46,27 @@ async function seedRunWithWake(input: {
   });
   if (created.approved) throw new Error('unexpected auto-approval');
   expect(created.request.status).toBe('pending');
-  return { requestId: created.request.id };
+  return { requestId: created.request.id, runId: run!.run_id };
 }
 
 it('expires a pending wake whose bound actor already reached a terminal state', async () => {
   const chats = await import('../../../../src/main/features/chats');
+  const runStore = await import('../../../../src/main/features/group_chat/run_store');
   const wake = await import('../../../../src/main/features/p3394/wake-service');
   const cid = (await chats.createConversation(UID, { title: 'wake expiry actor terminal' })).conversation_id;
-  const { requestId } = await seedRunWithWake({ cid, agentId: 'agent-failed', runId: 'run-1', terminal: 'failed' });
+  const { requestId, runId } = await seedRunWithWake({ cid, agentId: 'agent-failed', runId: 'run-1', terminal: 'failed' });
 
   const listed = await wake.listWakeRequests(UID, cid);
   const found = listed.find((request) => request.id === requestId);
   expect(found?.status).toBe('expired');
   expect(found?.decision_reason).toBe('actor_terminal:failed');
+
+  // 判死之后宿主侧必须收口：不能只把 Wake 处理掉、run 还挂在 running。
+  const settled = await runStore.readRun(UID, cid, runId);
+  expect(settled?.status).not.toBe('running');
+  expect(settled?.summary_publication?.status).toBe('published');
+  expect(settled?.actors.find((actor) => actor.agent_id === 'agent-failed'))
+    .toMatchObject({ terminal: 'blocked', reason: 'approval_expired' });
 });
 
 it('expires a pending wake whose bound run is already terminal', async () => {
