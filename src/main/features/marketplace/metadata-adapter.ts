@@ -122,6 +122,47 @@ export function normalizeCatalogEntry(raw: Record<string, unknown>): SkillMetada
   };
 }
 
+/** 目录列表行的归一形状：`marketplace.ts` 的 `MarketplaceSkill` 所需主键、时间与发布物字段。 */
+export type CatalogListRow = Record<string, unknown> & {
+  id: string;
+  content_id: string;
+  published_at: number;
+  updated_at: number;
+  status?: string;
+  min_app_version?: string;
+  artifact?: ArtifactMeta;
+};
+
+/**
+ * 把 A-01 目录列表的一行归一为客户端列表形状（`MarketplaceSkill`）。
+ *
+ * 目录列表（`listMarketplaceSkills`）与按 ID 取元信息共用同一份字段归一
+ * （`normalizeCatalogEntry`），上层不见 `content_id` 与 RFC 3339 字符串（FR-007）：
+ * - `id = content_id`，同时保留 `content_id`；旧形态只带 `id` 的行照常可用；
+ * - `published_at` / `updated_at` 转为 epoch 毫秒；`updated_at` 缺席时回退到 `published_at`；
+ * - `status` 兼容 `state`，`min_app_version` 兼容 `minAppVersion`；
+ * - 下发了 `artifact` 时保留归一后的形状。
+ * 未识别的原始字段原样保留。取不到 ID 的行无法识别、详情、安装，返回 `null` 由调用方丢弃。
+ */
+export function normalizeCatalogListRow(raw: unknown): CatalogListRow | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  const meta = normalizeCatalogEntry(row);
+  if (!meta.content_id) return null;
+  const out: Record<string, unknown> = {
+    ...row,
+    id: meta.content_id,
+    content_id: meta.content_id,
+    published_at: meta.published_at,
+    updated_at: meta.updated_at ?? meta.published_at,
+  };
+  if (meta.status) out.status = meta.status;
+  if (meta.min_app_version) out.min_app_version = meta.min_app_version;
+  if (row.artifact && typeof row.artifact === 'object') out.artifact = meta.artifact;
+  else delete out.artifact;
+  return out as CatalogListRow;
+}
+
 // ── 内部默认数据源：A-01 全量目录 + 本地索引（Q1 = 选项 a） ──────────────
 
 /**

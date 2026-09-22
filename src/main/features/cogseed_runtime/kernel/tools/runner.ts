@@ -1,6 +1,6 @@
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS } from '../../../../util/tool-result-cap';
 import type { RuntimeToolPolicy } from '../types';
-import { TOOL_CATALOG, type RuntimeToolCatalogEntry, type RuntimeToolName, getRuntimeToolCatalog, filterRuntimeToolCatalogByCapabilities } from './catalog';
+import { TOOL_CATALOG, type RuntimeToolCatalogEntry, type RuntimeToolName, getRuntimeToolCatalog, filterRuntimeToolCatalogByCapabilities, filterRuntimeToolCatalogByPolicy } from './catalog';
 import { RUNTIME_FILE_TOOLS, runRuntimeFileTool, type RuntimeToolCallContext, type RuntimeToolResult } from './file-tools';
 import { normalizeRuntimeRoots } from './permissions';
 import { runRuntimeBashTool } from './shell-tools';
@@ -42,7 +42,12 @@ function isRuntimeFileTool(name: string): name is RuntimeToolName {
 }
 
 export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): RuntimeToolRunner {
-  const catalog = filterRuntimeToolCatalogByCapabilities(getRuntimeToolCatalog(), options.capabilities);
+  // 目录 = 全局目录 → capability 门控 → 有效策略过滤。第二道过滤保证模型看不到
+  // 「策略必然拒绝」的工具（bash / write_file / edit_file / run_skill / 读文件）。
+  const catalog = filterRuntimeToolCatalogByPolicy(
+    filterRuntimeToolCatalogByCapabilities(getRuntimeToolCatalog(), options.capabilities),
+    options.toolPolicy,
+  );
   const allowedRoots = normalizeRuntimeRoots(options.allowedRoots);
   const writableRoots = normalizeRuntimeRoots(options.writableRoots ?? []);
   const actionApproval = createRuntimeActionApprovalClient({

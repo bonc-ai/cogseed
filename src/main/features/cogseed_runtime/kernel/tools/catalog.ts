@@ -1,4 +1,5 @@
 import type { RuntimeModelToolDefinition } from '../model-adapter';
+import type { RuntimeToolPolicy } from '../types';
 
 export type RuntimeToolName = 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'cogseed_delegate' | 'cogseed_tasks' | 'cogseed_cancel' | 'cogseed_retry_step' | 'cogseed_skip_step' | 'cogseed_resume_workflow' | 'cogseed_workflow' | 'messaging_list_targets' | 'messaging_send' | 'p3394_send';
 
@@ -145,10 +146,19 @@ export const MESSAGING_PROACTIVE_CAPABILITY = 'messaging.proactive';
 /** Capability that unlocks the P3394 agent-interop outbound tool. */
 export const P3394_INTEROP_CAPABILITY = 'p3394.interop';
 
+/** 只有真正挂在一个协作 workflow 上的任务才拿得到：没有 workflow 时
+ *  cogseed_workflow / retry_step / skip_step / resume_workflow 必然报
+ *  “CogSeed workflow not found”，暴露出去只会让模型撞墙（真机复现）。 */
+export const COGSEED_WORKFLOW_CAPABILITY = 'cogseed.workflow';
+
 const CAPABILITY_GATED_TOOLS: ReadonlyMap<RuntimeToolName, string> = new Map([
   ['messaging_list_targets', MESSAGING_PROACTIVE_CAPABILITY],
   ['messaging_send', MESSAGING_PROACTIVE_CAPABILITY],
   ['p3394_send', P3394_INTEROP_CAPABILITY],
+  ['cogseed_workflow', COGSEED_WORKFLOW_CAPABILITY],
+  ['cogseed_retry_step', COGSEED_WORKFLOW_CAPABILITY],
+  ['cogseed_skip_step', COGSEED_WORKFLOW_CAPABILITY],
+  ['cogseed_resume_workflow', COGSEED_WORKFLOW_CAPABILITY],
 ]);
 
 /**
@@ -165,6 +175,40 @@ export function filterRuntimeToolCatalogByCapabilities(
   return catalog.filter((entry) => {
     const required = CAPABILITY_GATED_TOOLS.get(entry.name);
     return !required || granted.has(required);
+  });
+}
+
+/**
+ * Per-run catalog slice, second half: the目录必须与本次运行的有效策略一致。
+ * 策略为 `none` 的能力，其工具一律不进目录 —— 模型看不到就不会去调用一个必然
+ * 被 `E_RUNTIME_PERMISSION_DENIED` 拒绝的工具。真机复现：进程内 Task Agent 在
+ * 目录里看到 `bash` 就去调用，整轮以 `runtime_tool_error` 收场，UI 只给一句
+ * 「智能体未能完成本次回复，请重试」，而重试只会再次撞同一面墙。
+ *
+ * 注意：这里只收紧可见性，不放宽任何权限——要真正放开某项能力，得先在
+ * Runtime 请求里由主进程推导出对应策略（见 kernel/config.ts 的 policy）。
+ */
+export function filterRuntimeToolCatalogByPolicy(
+  catalog: readonly RuntimeToolCatalogEntry[],
+  policy: RuntimeToolPolicy,
+): readonly RuntimeToolCatalogEntry[] {
+  return catalog.filter((entry) => {
+    switch (entry.name) {
+      case 'bash':
+        return policy.shell !== 'none';
+      case 'write_file':
+      case 'edit_file':
+        return policy.fileWrite !== 'none';
+      case 'run_skill':
+        return policy.skillRun !== 'none';
+      case 'stat_file':
+      case 'read_file':
+      case 'search_files':
+      case 'grep_files':
+        return policy.fileRead !== 'none';
+      default:
+        return true;
+    }
   });
 }
 
