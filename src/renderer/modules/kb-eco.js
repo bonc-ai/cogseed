@@ -4,10 +4,11 @@
 // 工具栏**（图标+文字，可切紧凑「仅图标」，localStorage 记忆），释放横向空间。
 (function () {
   // 知识库/笔记已落地；发现模块当前为「待开发」占位（不展示内置示例市场数据，避免误导）。
+  // label 是中文回退文案，labelKey 才是权威（键在 locales/*.json；缺键时退回 label）。
   const ECO_NAV = [
-    { key: 'kb', icon: 'folder', label: '知识库', status: 'ok' },
-    { key: 'notes', icon: 'file-text', label: '笔记', status: 'ok' },
-    { key: 'discover', icon: 'globe', label: '发现', status: 'soon' },
+    { key: 'kb', icon: 'folder', labelKey: 'kb.eco.nav_kb', label: '知识库', status: 'ok' },
+    { key: 'notes', icon: 'file-text', labelKey: 'kb.eco.nav_notes', label: '笔记', status: 'ok' },
+    { key: 'discover', icon: 'globe', labelKey: 'kb.eco.nav_discover', label: '发现', status: 'soon' },
   ];
   const COMPACT_KEY = 'cogseed.kb.eco.compact';
   let _compact = false;
@@ -24,9 +25,19 @@
     return String(label).split(' · ')[0];
   }
 
-  function _tr(key, fallback) {
+  function _format(text, vars) {
+    return String(text == null ? '' : text).replace(/\{([a-zA-Z0-9_]+)\}/g, (_m, name) => String(vars?.[name] ?? ''));
+  }
+
+  function _tr(key, fallback, vars) {
     const value = typeof window.t === 'function' ? window.t(key) : '';
-    return value && value !== key ? value : fallback;
+    const text = value && value !== key ? value : fallback;
+    return vars ? _format(text, vars) : text;
+  }
+
+  /** 每个导航项的当前语言文案（渲染与重标签共用同一处取值，避免两侧漂移）。 */
+  function _navLabel(item) {
+    return _tr(item.labelKey, item.label);
   }
 
   function _compactButton() {
@@ -42,12 +53,13 @@
   }
 
   function _navBtn(item, active) {
+    const label = _navLabel(item);
     const badge = item.status === 'soon'
       ? window.uiBadge({ label: _tr('kb.eco.coming_soon', '待开发'), className: 'kb-eco-tab-soon' })
       : '';
     return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
-      title="${item.label}" aria-label="${item.label}">
-      <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(item.label)}</span>${badge}</button>`;
+      title="${label}" aria-label="${label}">
+      <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(label)}</span>${badge}</button>`;
   }
 
   function _applyCompact() {
@@ -62,6 +74,28 @@
       btn.setAttribute('aria-pressed', String(_compact));
     }
   }
+
+  /**
+   * 语言切换：**只改文本节点与属性，绝不重建 innerHTML**。
+   * 因为这个外壳里住着 kb-workbench 列表与 kb-notes 编辑器（contenteditable，草稿只在 DOM 里），
+   * 一旦重渲染整个 `.kb-eco`，用户没保存的笔记就没了。
+   */
+  function _relabelEco() {
+    document.querySelectorAll('[data-kb-eco]').forEach((btn) => {
+      const item = ECO_NAV.find((b) => b.key === btn.dataset.kbEco);
+      if (!item) return;
+      const label = _navLabel(item);
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      const text = btn.querySelector('.kb-eco-tab-label');
+      if (text) text.textContent = _mainLabel(label);
+      // 徽标是 uiBadge 渲染的纯文本 span（见 ui-status.js），可直接改文本
+      const badge = btn.querySelector('.kb-eco-tab-soon');
+      if (badge) badge.textContent = _tr('kb.eco.coming_soon', '待开发');
+    });
+    _applyCompact();
+  }
+  window.addEventListener('i18n-change', _relabelEco);
 
   function renderKbEco() {
     const host = document.getElementById('kb-view');
@@ -123,7 +157,7 @@
     }
     const item = ECO_NAV.find((b) => b.key === key);
     if (typeof uiToast === 'function') {
-      uiToast(`「${item ? _mainLabel(item.label) : key}」模块预留`, { variant: 'info' });
+      uiToast(_tr('kb.eco.module_reserved', '「{name}」模块预留', { name: item ? _mainLabel(_navLabel(item)) : key }), { variant: 'info' });
     }
   }
 
