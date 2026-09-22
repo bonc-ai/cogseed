@@ -788,18 +788,25 @@ export async function finalizeRun(
       && record.actors.some((actor) => actor.terminal === 'stopped' || actor.terminal === 'removed')
     ) {
       record.status = 'stopped';
+    } else if (record.actors.length === 0) {
+      // 普通单接收者提交不产生 actor（协调者没被表示为 actor 时）：既没有贡献、
+      // 也没有缺失，不能落到最后的 failed —— 否则每条普通消息都会在 runs/ 里
+      // 留下一条假失败，后续 Run Center / 支持工具会把它当成失败的协作 run。
+      record.status = 'completed';
     } else {
       record.status = 'failed';
     }
-    // 状态推导完成后才落定从未派发的成员：它们仍然是「未完成」，但 run 的
+    // 状态推导完成后才落定 pending actor：它们仍然是「未完成」，但 run 的
     // 失败/停止判定沿用既有口径（被点名但没跑到的成员不改变 run 状态）。
     // 落成 blocked(no_terminal) 是为了进入可重试终态集合——RETRYABLE_TERMINALS
     // 只含 failed/blocked/stopped/removed，不含 pending，否则会出现
     // 「汇总说它缺失、重试却不带上它」的自相矛盾。
-    // 已派发但仍 pending 的 actor 不在这里兜底：那说明它在飞或没有终态回调，
-    // 属于要单独排查的状态，不能靠收口悄悄改写。
+    // 这里包含两种 pending：从未派发的，以及已派发但永远拿不到终态的
+    //（例如会话级 abort 清空了队列）。收口本身是静默门槛——没有 in-flight、
+    // 队列为空、且没有待审批/已批准的 Wake——所以此刻的 pending 一定是被搁置的，
+    // 不是在飞的任务。
     for (const actor of record.actors) {
-      if (actor.terminal === 'pending' && actor.dispatched.length === 0) {
+      if (actor.terminal === 'pending') {
         actor.terminal = 'blocked';
         actor.reason = 'no_terminal';
       }
@@ -877,6 +884,11 @@ export async function stopRun(
     const targets = new Set(scopedIds);
     if (fullRun) record.status = 'stopped';
     else {
+      // 已收口的 run 不接受按成员的移除墓碑：渲染层可能持有一个过期的「本会话
+      // 活跃成员 run」指针，用户取消勾选成员时会发一次按成员的移除。若此时 run
+      // 已经终态，那次调用会把一个从未参与该 run 的 agent 塞成 removed，并删掉
+      // 已发布的权威汇总，最终在无关消息上冒出一条假「有未完成/被移除」卡片。
+      if (record.status !== 'running') return record;
       for (const agentId of scopedIds) {
         if (record.actors.some((actor) => actor.agent_id === agentId)) continue;
         record.actors.push({
