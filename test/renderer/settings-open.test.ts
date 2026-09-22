@@ -43,6 +43,10 @@ class FakeElement {
 
   querySelector() { return null; }
 
+  // boot.js 切视图后会延迟 ~50ms 调 input.focus()；缺少该方法会在用例结束后
+  // 抛出未捕获的异步错误。
+  focus() {}
+
   click() {
     for (const handler of this.listeners.get('click') || []) {
       handler({ currentTarget: this, target: this });
