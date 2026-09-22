@@ -70,6 +70,15 @@ describe('macOS top drag regions', () => {
     expect(css).toMatch(/\.is-macos \.model-guard-banner,[\s\S]*?\.is-macos \.main-top-actions button\s*{[\s\S]*?-webkit-app-region:\s*no-drag;/);
   });
 
+  it('keeps the update reminder banner clickable inside the macOS drag band', () => {
+    // 回归钉子（更新提醒按钮点击无响应）：横幅固定在 top:12px，整条落进顶部
+    // 40px 的原生拖拽带里。拖拽矩形在 OS 层优先命中、连 mousedown 都进不了
+    // 页面，z-index（--z-toast）拦不住——横幅必须显式退出拖拽命中，
+    // 否则页面上只有它在拖窗口，「查看更新 / 稍后」按下去没有任何反应。
+    expect(css).toMatch(/\.is-macos \.updater-banner\s*\{[^}]*-webkit-app-region:\s*no-drag;/);
+    expect(css).toMatch(/\.updater-banner\s*\{[^}]*position:\s*fixed;[^}]*top:\s*12px;/s);
+  });
+
   it('closes and bounds the floating model menu when its viewport or view changes', () => {
     expect(modelChip).toContain('function _clampMenuLeft(preferredLeft, menuWidth)');
     expect(modelChip).toContain("window.addEventListener('resize', onViewportChange)");

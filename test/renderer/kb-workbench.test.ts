@@ -163,10 +163,14 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       .map(([key, value]) => ` ${key}="${value === true ? '' : String(value)}"`)
       .join('');
 
+  // 捕获式 addEventListener：i18n-change 处理器要能被测试真的 dispatch 到
+  const winHandlers: Record<string, Array<(...a: any[]) => void>> = {};
   const windowMock: any = {
     innerWidth: options.width ?? 1440,
     innerHeight: options.height ?? 900,
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((name: string, fn: (...a: any[]) => void) => {
+      (winHandlers[name] = winHandlers[name] || []).push(fn);
+    }),
     matchMedia: vi.fn(() => ({
       matches: Boolean(options.narrow),
       addEventListener: vi.fn(),
@@ -259,7 +263,7 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'kb-workbench.js' });
-  return { context, els, windowMock, created, localStorage: localStorageMock };
+  return { context, els, windowMock, created, localStorage: localStorageMock, winHandlers };
 }
 
 describe('KB workbench (S1 skeleton)', () => {
@@ -600,7 +604,7 @@ describe('KB workbench (S1 skeleton)', () => {
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
-    expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\('测验'\)/);
+    expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\(_tr\('kb\.workbench\.quiz_title', '测验'\)\)/);
     expect(src).toMatch(/const entry = \{ role: 'assistant', kind: 'quiz', \.\.\.payload, ts: Date\.now\(\) \};[\s\S]{0,200}_state\.qaHistory\.push\(entry\)/);
     // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
     expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);
@@ -819,9 +823,9 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _countFiles('),
     );
 
-    expect(fileRows).toContain("_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn'");
+    expect(fileRows).toContain("_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn'");
     expect(fileRows).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn'");
-    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? '折叠' : '展开', icon: open \? 'chevron-down' : 'chevron-right'/);
+    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? _tr\('kb\.workbench\.collapse', '收起'\) : _tr\('kb\.workbench\.expand', '展开'\), icon: open \? 'chevron-down' : 'chevron-right'/);
     expect(fileRows).not.toMatch(/<button\b/);
   });
 
@@ -836,8 +840,9 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(menus).toContain("icon: 'edit-pencil'");
     expect(menus).toContain("icon: 'users'");
     expect(menus).toContain("icon: 'trash-2'");
-    expect(menus).toContain("_uiButton({ label: '置顶', icon: 'pin'");
-    expect(menus).toContain("_uiButton({ label: '编辑标签', icon: 'tag'");
+    // 断言钉在 i18n 键上（文案随语言变，键不变）
+    expect(menus).toContain("_uiButton({ label: _tr('kb.workbench.menu_pin', '置顶'), icon: 'pin'");
+    expect(menus).toContain("_uiButton({ label: _tr('kb.workbench.menu_tag', '编辑标签'), icon: 'tag'");
     expect(menus).toContain("_icon('lock', 'kb-ctx-menu-icon')");
     expect(menus).not.toMatch(/[✏️🗑📂👥📌🏷🔐➡⧉▸✓]/u);
     expect(menus).not.toMatch(/<button\b/);
@@ -878,7 +883,7 @@ describe('KB workbench (S1 skeleton)', () => {
     }
     expect(mindmapMarkup).not.toMatch(/<button\b/);
     expect(mindmapMarkup).not.toMatch(/[🧠👁💾📂📥🖼📐📄📝📋🏢⤢⤡◎☰▦▤＋⋯✕↩⟳]/u);
-    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? '编辑' : '预览'");
+    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? _tr('kb.workbench.mm_edit', '编辑') : _tr('kb.workbench.mm_preview', '预览')");
   });
 
   it('renders analysis disclosure, citations, and retry through shared buttons', () => {
@@ -888,10 +893,10 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _mmSnapshotKey('),
     );
 
-    expect(analysis).toContain("_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down'");
+    expect(analysis).toContain("_uiButton({ label: _tr('kb.workbench.expand', '展开'), role: 'ghost', size: 'sm', iconEnd: 'chevron-down'");
     expect(analysis).toContain("_uiButton({ label: `${d.file}#chunk 1`, role: 'ghost', size: 'sm', className: 'kb-qa-chip'");
-    expect(analysis).toContain("_setUiButtonPresentation(btn, open ? '收起' : '展开', open ? 'chevron-up' : 'chevron-down')");
-    expect(analysis).toContain("_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh'");
+    expect(analysis).toContain("_setUiButtonPresentation(btn, open ? _tr('kb.workbench.collapse', '收起') : _tr('kb.workbench.expand', '展开'), open ? 'chevron-up' : 'chevron-down')");
+    expect(analysis).toContain("_uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh'");
     expect(analysis).not.toMatch(/<button\b/);
     expect(analysis).not.toMatch(/[▾▴↗🔄]/u);
   });
@@ -920,12 +925,12 @@ describe('KB workbench (S1 skeleton)', () => {
     }
     expect((qaMarkup.match(/<button\b/g) || [])).toHaveLength(1);
     expect(qaMarkup).toContain('class="kb-qa-model-chip"');
-    expect(attachments).toContain("_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger'");
-    expect(historyPanel).toContain("_uiButton({ label: '新建对话'");
-    expect(historyPanel).toContain("_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger'");
-    expect(askMarkup).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-qa-more-btn'");
-    expect(askMarkup).toContain("_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost'");
-    expect(askMarkup).toContain("_uiButton({ label: '删除', icon: 'trash-2', role: 'danger'");
+    expect(attachments).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_attach_remove', '移除附件'), icon: 'x', variant: 'danger'");
+    expect(historyPanel).toContain("_uiButton({ label: _tr('kb.workbench.qa_new_session', '新建对话')");
+    expect(historyPanel).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_history_delete', '删除会话'), icon: 'trash-2', variant: 'danger'");
+    expect(askMarkup).toContain("_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-qa-more-btn'");
+    expect(askMarkup).toContain("_uiButton({ label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', role: 'ghost'");
+    expect(askMarkup).toContain("_uiButton({ label: _tr('kb.workbench.menu_delete', '删除'), icon: 'trash-2', role: 'danger'");
     expect(`${attachments}\n${historyPanel}`).not.toMatch(/[✕🗑＋]/u);
     expect(historyPanel).toMatch(/onHistoryKeydown[\s\S]*?event\.key !== 'Escape'/);
     expect(historyPanel).toMatch(/closePanel\(restoreFocus = true\)[\s\S]*?trigger\?\.focus\(\)/);
@@ -943,9 +948,9 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _selectQaModel('),
     );
 
-    expect(answerActions).toContain("_uiButton({\n      label: `资料来源 · ${n}`");
+    expect(answerActions).toContain("_uiButton({\n      label: _tr('kb.workbench.qa_sources', '资料来源 · {count}', { count: n })");
     expect(answerActions).toContain("_uiButton({\n        label: `${r.path}#chunk ${r.chunkIdx}`");
-    expect(answerActions).toContain("_uiIconButton({\n        label: '复制引用路径',\n        icon: 'copy'");
+    expect(answerActions).toContain("_uiIconButton({\n        label: _tr('kb.workbench.qa_copy_ref_path', '复制引用路径'),\n        icon: 'copy'");
     expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
@@ -954,8 +959,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).not.toContain("const copyBtn = document.createElement('button')");
     expect(source).toContain("window.uiIconHtml('check', 'kb-qa-sysnote-icon')");
 
-    expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
-    expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
+    expect(modelPicker).toContain("_uiIconButton({\n      label: _tr('kb.workbench.qa_model_close', '关闭模型选择弹窗'),\n      icon: 'x'");
+    expect(modelPicker).toContain("_uiButton({\n      label: _tr('kb.workbench.qa_model_manage', '去设置管理模型'),\n      role: 'secondary'");
     expect(modelPicker).toContain("_mountKbDialog({");
     expect(modelPicker).toContain("initialFocus: '[aria-pressed=\"true\"]'");
     expect(modelPicker).toContain("fallbackFocus: '#kb-qa-tools'");
@@ -986,11 +991,11 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(importDialog).toContain('class="ui-modal ui-modal--lg kb-import-dlg"');
     expect(importDialog).toContain('class="ui-modal__body kb-import-dlg-content"');
     expect(importDialog).toContain('class="ui-modal__footer kb-import-dlg-foot"');
-    expect(importDialog).toContain("_uiIconButton({ label: '关闭导入弹窗', icon: 'x'");
-    expect(importDialog).toContain("_uiIconButton({ label: '返回', icon: 'chevron-left'");
+    expect(importDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.import_close', '关闭导入弹窗'), icon: 'x'");
+    expect(importDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.import_back', '返回'), icon: 'chevron-left'");
     expect(importDialog).toContain("_uiInput({ id: 'kb-import-dlg-search-input', type: 'search'");
-    expect(importDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
-    expect(importDialog).toContain("_uiButton({ label: '导入', role: 'primary'");
+    expect(importDialog).toContain("_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary'");
+    expect(importDialog).toContain("_uiButton({ label: _tr('kb.workbench.import_confirm', '导入'), role: 'primary'");
     expect(importDialog).not.toMatch(/<button\b/);
     expect(importDialog).not.toMatch(/<input\b/);
     expect(importDialog).not.toMatch(/[✕←→]/u);
@@ -1023,34 +1028,35 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(createDialog).toContain('class="ui-modal__header"');
     expect(createDialog).toContain('class="ui-modal__body kb-share-dlg-body"');
     expect(createDialog).toContain('class="ui-modal__footer kb-share-dlg-actions"');
-    expect(createDialog).toContain("_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x'");
-    expect(createDialog).toContain("_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil'");
+    expect(createDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.create_shared_close', '关闭创建共享知识库弹窗'), icon: 'x'");
+    expect(createDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.cover_upload', '上传或更换知识库封面'), icon: 'edit-pencil'");
     expect(createDialog).toContain("_uiInput({ id: 'kb-share-name', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiSelect({");
     expect(createDialog).toContain("id: 'kb-share-join'");
     expect(createDialog).toContain("window.hydrateUiFormSelects(overlay)");
-    expect(createDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
-    expect(createDialog).toContain("_uiButton({ label: '确定', role: 'primary'");
+    expect(createDialog).toContain("_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary'");
+    expect(createDialog).toContain("_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary'");
     expect(createDialog).not.toMatch(/[✕📁✎▾✓]/u);
     expect(membersDialog).toContain("overlay.className = 'ui-modal-overlay kb-members-overlay'");
     expect(membersDialog).toContain('class="ui-modal ui-modal--sm kb-members-dlg"');
     expect(membersDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-members-title"');
     expect(membersDialog).toContain('class="ui-modal__header"');
     expect(membersDialog).toContain('class="ui-modal__body kb-members-body"');
-    expect(membersDialog).toContain("_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x'");
+    expect(membersDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.members_close', '关闭知识库成员弹窗'), icon: 'x'");
     expect(membersDialog).toContain("_uiInput({ id: 'kb-members-search-input', type: 'search'");
     expect(membersDialog).toContain("_icon('users', 'kb-members-title-icon')");
     expect(membersDialog).not.toMatch(/[✕👥]/u);
-    expect(shareDialogs).toContain("_uiButton({ label: '复制链接', role: 'secondary', icon: 'link'");
-    expect(shareDialogs).toContain("_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code'");
-    expect(shareDialogs).toContain("_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn'");
+    // 断言钉在 i18n 键上（文案随语言变，键不变）
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', icon: 'link'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_gen_code', '生成知识码'), role: 'secondary', icon: 'qr-code'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary', className: 'kb-share-pop-btn'");
     expect((shareDialogs.match(/class="ui-modal__header"/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__body/g) || [])).toHaveLength(7);
     expect((shareDialogs.match(/class="ui-modal__footer/g) || [])).toHaveLength(7);
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.cogseed_config_close', '关闭 CogSeed 共享服务配置弹窗'), icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.feishu_config_close', '关闭飞书分享配置弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input'");
     expect(source).not.toContain("overlay.className = 'kb-share-pop-overlay'");
@@ -1059,15 +1065,15 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(source).toContain("throw new Error('knowledge base requires uiEmptyState')");
     expect(source).not.toContain('class="kb-empty"');
     expect(source).not.toMatch(/kb-(?:qa-model|qa-history|import-dlg|share-manage|share-cogseed-members)-empty/);
-    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无历史对话' })");
-    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: '暂无待审申请' })");
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.qa_history_empty', '暂无历史对话') })");
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.cogseed_members_empty', '暂无待审申请') })");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
-    expect(shareDialogs).toContain("_uiButton({ label: '保存并授权', role: 'primary'");
-    expect(shareDialogs).toContain("_uiButton({ label: '撤销', role: 'danger', size: 'sm'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.qr_close', '关闭知识码弹窗'), icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.cogseed_config_save', '保存并发布'), role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_revoke', '撤销'), role: 'danger', size: 'sm'");
     expect(shareDialogs).toContain("id: 'kb-perm-member'");
     expect(shareDialogs).toContain("id: 'kb-perm-join'");
     expect(shareDialogs).not.toMatch(/<select\b/);
@@ -1191,7 +1197,8 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
     expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
     // 先显示再恢复：overlay 关着时量不到真实尺寸
-    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+    // 先显示再恢复位置；中间可插入 controller.open（共享层接管焦点/Escape）
+    expect(src).toMatch(/overlay\.hidden = false;\n[\s\S]{0,160}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
   });
 });
 
@@ -1453,7 +1460,7 @@ describe('KB mindmap centering', () => {
 
   it('更多菜单提供「窗口居中」，一键把窗口拉回正中', () => {
     const src = source();
-    expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
+    expect(src).toContain("{ k: 'center-window', label: _tr('kb.workbench.mm_center_window', '窗口居中')");
     expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
   });
 });
@@ -2220,6 +2227,124 @@ describe('KB 解析卡按钮接线（防"死按钮"）', () => {
       if (typeof btn._listeners.click !== 'function') unwired.push(id);
     }
     expect(unwired).toEqual([]);
+  });
+});
+
+/**
+ * 外壳语言切换（B6-d 首批：左侧栏 + 内容区工具栏/菜单）。
+ *
+ * `renderKbWorkbench()` 有 `_state.rendered` 守卫 —— 外壳只注入一次；右列里还住着
+ * 问答输入框（用户可能已打了一半问题）。所以语言切换只能**定点重标签**：
+ * 只改文本节点与属性，绝不重建 innerHTML。
+ */
+describe('kb-workbench 外壳语言切换', () => {
+  function hookedText(key: string) {
+    const el: any = { textContent: '旧', dataset: { wbText: key }, setAttribute: () => {}, title: '' };
+    return el;
+  }
+  function hookedTitle(key: string) {
+    return { title: '旧', dataset: { wbTitle: key }, textContent: '', setAttribute: () => {} } as any;
+  }
+  function hookedLabel(key: string) {
+    const span = { textContent: '旧' };
+    return {
+      dataset: { wbLabel: key }, title: '', textContent: '',
+      setAttribute: () => {}, querySelector: (sel: string) => (sel === '.ui-button__label' ? span : null),
+      _span: span,
+    } as any;
+  }
+  function hookedPlaceholder(key: string) {
+    return { placeholder: '旧', dataset: { wbPlaceholder: key }, textContent: '', title: '', setAttribute: () => {} } as any;
+  }
+
+  function mountShell() {
+    const env = loadScript();
+    const texts = [hookedText('kb.workbench.side_title')];
+    const titles = [hookedTitle('kb.workbench.divider_drag')];
+    const labels = [hookedLabel('kb.workbench.more')];
+    const placeholders = [hookedPlaceholder('kb.workbench.search_docs_placeholder')];
+    let html = '';
+    let writes = 0;
+    // 元素是 getElementById 惰性创建的：先取出来再加计数器，避免漏掉首次渲染
+    const host = env.context.document.getElementById('kb-workbench');
+    Object.defineProperty(host, 'innerHTML', {
+      get: () => html,
+      set: (v: string) => { writes += 1; html = v; },
+    });
+    host.querySelectorAll = (sel: string) => {
+      if (sel === '[data-wb-text]') return texts;
+      if (sel === '[data-wb-title]') return titles;
+      if (sel === '[data-wb-label]') return labels;
+      if (sel === '[data-wb-placeholder]') return placeholders;
+      return [];
+    };
+    // 语言字典：先全中文，切换后全英文
+    const dict: Record<string, string> = {
+      'kb.workbench.side_title': '知识库列表',
+      'kb.workbench.divider_drag': '拖动调整宽度',
+      'kb.workbench.more': '更多',
+      'kb.workbench.search_docs_placeholder': '搜索文档…',
+    };
+    env.windowMock.t.mockImplementation((key: string) => dict[key] || key);
+    env.windowMock.renderKbWorkbench();
+    return {
+      env, texts, titles, labels, placeholders, dict, host,
+      writes: () => writes,
+      fire: () => (env.winHandlers['i18n-change'] || []).forEach((fn) => fn()),
+    };
+  }
+
+  it('i18n-change 后侧栏/工具栏文案换语言；且不重建外壳 innerHTML', () => {
+    const env = mountShell();
+    expect(env.texts[0].textContent).toBe('知识库列表');
+    expect(env.labels[0]._span.textContent).toBe('更多');
+    expect(env.placeholders[0].placeholder).toBe('搜索文档…');
+    expect((env.env.winHandlers['i18n-change'] || []).length).toBeGreaterThan(0);
+
+    const writesAfterRender = env.writes();
+    env.dict['kb.workbench.side_title'] = 'Knowledge bases';
+    env.dict['kb.workbench.divider_drag'] = 'Drag to resize';
+    env.dict['kb.workbench.more'] = 'More';
+    env.dict['kb.workbench.search_docs_placeholder'] = 'Search documents…';
+    env.fire();
+
+    expect(env.texts[0].textContent).toBe('Knowledge bases');
+    expect(env.titles[0].title).toBe('Drag to resize');
+    expect(env.labels[0]._span.textContent).toBe('More');
+    expect(env.placeholders[0].placeholder).toBe('Search documents…');
+    // 重建 innerHTML = 问答输入框里打了一半的问题没了
+    expect(env.writes()).toBe(writesAfterRender);
+  });
+
+  it('动态文案不能被静态钩子覆盖；运行时渲染走 _tr（_renderRight 已在 i18n-change 里重跑）', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 库名/标签/描述/头像由 _renderRight 按当前库与语言重写 ⇒ 绝不能挂静态文字钩子
+    for (const key of ['kb.workbench.personal_tag', 'kb.workbench.lib_desc_placeholder', 'kb.workbench.me']) {
+      expect(source).not.toContain(`data-wb-text="${key}"`);
+    }
+    expect(source).toContain("descEl.textContent = desc || _tr('kb.workbench.lib_desc_placeholder'");
+    expect(source).toContain("_tr('kb.workbench.untitled_lib'");
+    // 重标签 + 树 + 右列三件套都在同一个 i18n-change 处理器里
+    const handler = source.slice(source.indexOf("window.addEventListener('i18n-change'"));
+    expect(handler.slice(0, 900)).toContain('_relabelWorkbench()');
+    expect(handler.slice(0, 900)).toContain('_renderRight()');
+    // 文案随状态变的脑图按钮就地重刷（否则静态钩子会把「组织结构」刷回「布局」）
+    expect(handler.slice(0, 900)).toContain('_mmUpdateToolbarState()');
+  });
+
+  it('用到的每个 kb.workbench.* 键在 4 份 locale 里都存在（缺键会静默回退中文）', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const used = [...new Set([...source.matchAll(/_tr\('(kb\.workbench\.[a-z0-9_]+)'/g)].map((m) => m[1]))];
+    expect(used.length).toBeGreaterThan(40);
+    for (const lang of ['zh', 'en', 'ja', 'pt']) {
+      const dict = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${lang}.json`), 'utf8'));
+      const missing = used.filter((k) => !dict[k]);
+      expect(missing, `${lang} 缺 ${missing.length} 个键`).toEqual([]);
+    }
+    // 表里挂的钩子键也必须存在（钩子键写错 = 界面露 key）
+    const hooked = [...new Set([...source.matchAll(/data-wb-(?:text|title|label|placeholder)="([^"]+)"/g)].map((m) => m[1]))];
+    const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf8'));
+    expect(hooked.filter((k) => !zh[k])).toEqual([]);
   });
 });
 

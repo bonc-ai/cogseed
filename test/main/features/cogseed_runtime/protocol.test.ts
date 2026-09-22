@@ -150,6 +150,45 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(bounded.code).toBe('E_RUNTIME_INVALID_REQUEST');
   });
 
+  it('accepts a known tool policy and rejects unknown, partial, or non-object policies', () => {
+    const uid = 'runtime-protocol-user';
+    const root = tmpRoot();
+    const policy = {
+      fileRead: 'explicit_roots',
+      fileWrite: 'explicit_writable_roots',
+      shell: 'allow_with_confirmation',
+      skillRun: 'none',
+      network: 'none',
+      connectors: 'enabled',
+    } as const;
+    const ok = normalizeRuntimeRunRequest(uid, {
+      task: 'Run with a derived policy.',
+      tool_policy: policy,
+    }, { allowedRoots: [root] });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) throw new Error(ok.error);
+    expect(ok.request.tool_policy).toEqual(policy);
+
+    const rejected: unknown[] = [
+      { ...policy, shell: 'sudo' },
+      { ...policy, fileWrite: 'anywhere' },
+      { ...policy, network: 'enabled' },
+      { ...policy, extra: 'nope' },
+      { fileRead: 'explicit_roots' },
+      'full',
+      ['full'],
+    ];
+    for (const toolPolicy of rejected) {
+      const bad = normalizeRuntimeRunRequest(uid, {
+        task: 'Fabricate a policy.',
+        tool_policy: toolPolicy,
+      }, { allowedRoots: [root] });
+      expect(bad.ok).toBe(false);
+      if (bad.ok) throw new Error('expected rejection');
+      expect(bad.code).toBe('E_RUNTIME_INVALID_REQUEST');
+    }
+  });
+
   it('rejects cloud chat and session transcript paths even when the caller passes a broad root', () => {
     const uid = 'runtime-protocol-transcript';
     const chatFile = path.join(paths.userChatsDir(uid), 'gconv-secret.jsonl');
