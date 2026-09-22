@@ -90,6 +90,11 @@ function loadWorkbench({ narrow }: { narrow: boolean }) {
     addEventListener: vi.fn(),
     matchMedia: vi.fn(() => ({ matches: narrow, addEventListener: vi.fn() })),
     t: (key: string) => key,
+    // kb-workbench 自 2026-09-21 起不自带原语降级模板（缺原语即抛错），这里补桩。
+    uiButton: (o: any) => `<button type="button" class="btn ui-button ${o.className || ''}" id="${o.attrs?.id || ''}">${o.label}</button>`,
+    uiIconButton: (o: any) => `<button type="button" class="ui-icon-button ${o.className || ''}" id="${o.attrs?.id || ''}" aria-label="${o.label}"></button>`,
+    uiInput: (o: any) => `<input class="ui-input ${o.className || ''}" id="${o.id || ''}" />`,
+    uiTextarea: (o: any) => `<textarea class="ui-textarea ${o.className || ''}" id="${o.id || ''}"></textarea>`,
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
     cogseed: {
@@ -105,6 +110,10 @@ function loadWorkbench({ narrow }: { narrow: boolean }) {
     performance,
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (v: unknown) => String(v ?? ''),
+    uiButton: windowMock.uiButton,
+    uiIconButton: windowMock.uiIconButton,
+    uiInput: windowMock.uiInput,
+    uiTextarea: windowMock.uiTextarea,
     uiToast: windowMock.uiToast,
     uiPrompt: windowMock.uiPrompt,
     document: documentMock,
