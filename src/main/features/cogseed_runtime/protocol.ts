@@ -10,6 +10,7 @@ import {
 } from '../../paths';
 import { genId12, safeId } from '../../storage';
 import { isPathAllowed } from '../../util/path-sandbox';
+import type { RuntimeToolPolicy } from './kernel/types';
 
 export const COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION = 2;
 
@@ -64,6 +65,11 @@ export interface RuntimeRunRequest {
    *  tool runner filters its catalog by these; the host router re-validates
    *  against the persisted session independently. */
   capabilities?: string[];
+  /** Trusted per-run tool policy, derived by the main process from the persisted
+   *  conversation (permission mode) plus the run's workspace roots. Never
+   *  self-declared by the worker or the model; it decides which kernel tools are
+   *  even advertised and what `bash`/`write_file`/`edit_file` may do. */
+  tool_policy?: RuntimeToolPolicy;
 }
 
 export interface RuntimeCancelRequest {
@@ -85,7 +91,14 @@ export interface RuntimeHelloResponse {
 
 /** Capability grants a Runtime run can carry. Only `messaging.proactive`
  *  exists today; it enables the Commander-only Feishu/Lark send tools. */
-export const RUNTIME_CAPABILITIES = Object.freeze(['messaging.proactive', 'p3394.interop'] as const);
+export const RUNTIME_CAPABILITIES = Object.freeze([
+  'messaging.proactive',
+  'p3394.interop',
+  // 只有真正存在协作 workflow（task.coordinationId → coordination.workflowRunId）
+  // 的任务才拿得到它；否则 cogseed_workflow / retry_step / skip_step /
+  // resume_workflow 这四个宿主工具既不该出现在目录里、也不该能被调用。
+  'cogseed.workflow',
+] as const);
 
 export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number];
 
@@ -303,6 +316,46 @@ function normalizeAttachments(uid: string, value: unknown, allowedRoots: readonl
   return { ok: true, attachments, roots };
 }
 
+const TOOL_POLICY_FIELDS = [
+  'fileRead',
+  'fileWrite',
+  'shell',
+  'skillRun',
+  'network',
+  'connectors',
+] as const;
+
+/** 逐字段白名单校验受信策略：必须是恰好这六个字段、取值只能是已知枚举。
+ *  缺字段、多个字段、非对象、未知枚举一律判非法（宁可拒绝也不静默放宽）。 */
+function normalizeRuntimeToolPolicy(
+  raw: unknown,
+): { ok: true; value?: RuntimeToolPolicy } | { ok: false } {
+  if (raw === undefined) return { ok: true };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false };
+  const record = raw as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== TOOL_POLICY_FIELDS.length) return { ok: false };
+  if (TOOL_POLICY_FIELDS.some((field) => !Object.prototype.hasOwnProperty.call(record, field))) {
+    return { ok: false };
+  }
+  if (keys.some((key) => !(TOOL_POLICY_FIELDS as readonly string[]).includes(key))) {
+    return { ok: false };
+  }
+  const { fileRead, fileWrite, shell, skillRun, network, connectors } = record;
+  if (fileRead !== 'none' && fileRead !== 'explicit_roots') return { ok: false };
+  if (fileWrite !== 'none' && fileWrite !== 'explicit_writable_roots') return { ok: false };
+  if (shell !== 'none' && shell !== 'low_risk_only' && shell !== 'allow_with_confirmation') {
+    return { ok: false };
+  }
+  if (skillRun !== 'none' && skillRun !== 'allowlisted_skills') return { ok: false };
+  if (network !== 'none') return { ok: false };
+  if (connectors !== 'none' && connectors !== 'enabled') return { ok: false };
+  return {
+    ok: true,
+    value: { fileRead, fileWrite, shell, skillRun, network, connectors } as RuntimeToolPolicy,
+  };
+}
+
 export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: RuntimeNormalizeOptions): RuntimeNormalizeResult {
   if (!safeId(uid)) return fail('E_RUNTIME_INVALID_ID', 'invalid user id');
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fail('E_RUNTIME_INVALID_REQUEST', 'runtime request must be an object');
@@ -311,6 +364,8 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   }
   const task = (raw as any).task;
   if (typeof task !== 'string' || !task.trim()) return fail('E_RUNTIME_INVALID_REQUEST', 'runtime task must be a non-empty string');
+  const toolPolicy = normalizeRuntimeToolPolicy((raw as any).tool_policy);
+  if (toolPolicy.ok === false) return fail('E_RUNTIME_INVALID_REQUEST', 'invalid tool_policy');
 
   const request_id = runtimeId('req', opts.requestId || (raw as any).request_id);
   const runtime_session_id = runtimeId('mruntime', opts.runtimeSessionId || (raw as any).runtime_session_id);
@@ -402,6 +457,7 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   }
   if (readOnlyRoots.length) request.read_only_roots = Array.from(new Set(readOnlyRoots));
   if (capabilities?.length) request.capabilities = [...capabilities] as string[];
+  if (toolPolicy.value) request.tool_policy = toolPolicy.value;
   return { ok: true, request };
 }
 

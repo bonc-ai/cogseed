@@ -228,7 +228,7 @@ ${rows}
           <span class="kb-qz-head-ico">${_iconHtml('check-circle', 'kb-qz-head-icon')}</span>
           <span class="kb-qz-title" id="kb-qz-title-text">${_esc(_tr('kb.quiz.title', '测验'))}</span>
           ${window.uiButton({
-            label: _tr('kb.quiz.view_sources', '查看来源', { count: 0 }),
+            label: _tr('kb.quiz.view_sources', '查看 {count} 个来源', { count: 0 }),
             role: 'ghost',
             size: 'sm',
             className: 'kb-qz-source-chip',

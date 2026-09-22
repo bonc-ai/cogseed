@@ -13,6 +13,9 @@ const electronMock = vi.hoisted(() => {
   return {
     app: {
       isPackaged: false,
+      // 真实进程里 app.getVersion() 一定有值；测试替身同样给一个，否则
+      // 「已下载版本是否更新」这条判据在用例里永远走不到。
+      getVersion: vi.fn(() => '0.1.0'),
     },
     autoUpdater: {
       on: vi.fn((event: string, cb: Handler) => { handlers[event] = cb; }),
@@ -43,6 +46,7 @@ async function freshAuto(): Promise<typeof import('../../../../src/main/features
 beforeEach(() => {
   vi.clearAllMocks();
   electronMock.app.isPackaged = false;
+  electronMock.app.getVersion.mockReturnValue('0.1.0');
 });
 
 describe('自动更新模块（Squirrel.Mac）', () => {
@@ -115,6 +119,66 @@ describe('自动更新模块（Squirrel.Mac）', () => {
     electronMock.autoUpdater.emit('checking-for-update');
     electronMock.autoUpdater.emit('update-not-available');
     expect(auto.getAutoUpdateStatus().state).toBe('idle');
+  });
+
+  describe('已是最新版本时不出现「重启并安装」', () => {
+    // 报障（2026-09-20）：客户端已经装到最新版，设置页仍然显示「重启并安装」。
+    // feed 的 204 闸门只看调用方 UA 里的版本，解析不出来就把当前版本再发一遍，
+    // Squirrel 于是下载并回报 update-downloaded——客户端必须自己按版本判据兜住。
+    it.each([
+      ['同版本', '1.2.0', false],
+      ['更低版本', '1.1.0', false],
+      ['带 v 前缀的同版本', 'v1.2.0', false],
+      ['预发布同版本', '1.2.0-beta.1', false],
+      ['更高版本', '1.2.1', true],
+      ['四段版本更高', '1.2.0.1', true],
+      ['取不到版本号（信息不足，保持原行为）', '', true],
+      ['不是版本号形状（信息不足，保持原行为）', 'CogSeed-1.2.0-mac-arm64', true],
+    ])('%s：releaseName=%s → 视为更新=%s', async (_name, releaseName, newer) => {
+      const auto = await freshAuto();
+      expect(auto.isDownloadedVersionNewer(releaseName, '1.2.0')).toBe(newer);
+    });
+
+    it('Squirrel 把当前版本再报一次时停在 idle，不给出安装入口', async () => {
+      electronMock.app.isPackaged = true;
+      electronMock.app.getVersion.mockReturnValue('1.2.0');
+      const auto = await freshAuto();
+      const statuses: Array<{ state: string }> = [];
+      auto.initAutoUpdate((s) => statuses.push(s), packagedMac);
+
+      electronMock.autoUpdater.emit('update-available');
+      electronMock.autoUpdater.emit('update-downloaded', {}, 'notes', '1.2.0');
+
+      expect(auto.getAutoUpdateStatus().state).toBe('idle');
+      expect(statuses.map((s) => s.state)).not.toContain('downloaded');
+      // 渲染层只在 downloaded 时出「重启并安装」，且 install 只认 downloaded：
+      // 状态没到位，按钮点不到、装了也 reinstall 不了。
+      auto.installAutoUpdate();
+      expect(electronMock.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it('Squirrel 把更低版本报成 downloaded 时同样停在 idle', async () => {
+      electronMock.app.isPackaged = true;
+      electronMock.app.getVersion.mockReturnValue('1.2.0');
+      const auto = await freshAuto();
+      auto.initAutoUpdate(undefined, packagedMac);
+
+      electronMock.autoUpdater.emit('update-downloaded', {}, '', '1.1.9');
+      expect(auto.getAutoUpdateStatus()).toEqual({ state: 'idle' });
+    });
+
+    it('更新的版本照旧进入 downloaded 并可安装（回归保护）', async () => {
+      electronMock.app.isPackaged = true;
+      electronMock.app.getVersion.mockReturnValue('1.2.0');
+      const auto = await freshAuto();
+      auto.initAutoUpdate(undefined, packagedMac);
+
+      electronMock.autoUpdater.emit('update-downloaded', {}, '', 'v1.3.0');
+      expect(auto.getAutoUpdateStatus()).toEqual({ state: 'downloaded', version: 'v1.3.0' });
+
+      auto.installAutoUpdate();
+      expect(electronMock.autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
   });
 
   it.each([
