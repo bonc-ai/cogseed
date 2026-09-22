@@ -1,6 +1,6 @@
 // ─── 知识库生态 · 笔记面板（S4）— classic script (window.renderKbNotes) ───
 // 计划书 v1.3 §四.7：笔记列表（新建/删除）+ 富文本编辑器（工具栏/标题层级）
-// + ✨AI帮写（复用 kbqa.askStream，基于当前知识库流式生成草稿插入编辑器）。
+// + AI帮写（复用 kbqa.askStream，基于当前知识库流式生成草稿插入编辑器）。
 // 存储：contexts 下 notes/ 目录（contexts.mkdir/write/read/delete），纯文本 md。
 (function () {
   function _esc(s) {
@@ -22,6 +22,11 @@
   function _uiIconButton(options) {
     if (typeof window.uiIconButton !== 'function') throw new Error('knowledge base notes require uiIconButton');
     return window.uiIconButton(options);
+  }
+
+  function _iconHtml(name) {
+    if (typeof window.uiIconHtml !== 'function') throw new Error('knowledge base notes require uiIconHtml');
+    return window.uiIconHtml(name);
   }
 
   function _uiInput(options) {
@@ -129,7 +134,7 @@
       host.innerHTML = `
         <div class="kb-notes">
           <aside class="kb-notes-list">
-            <div class="kb-notes-list-head"><h2>笔记</h2><button type="button" class="kb-wb-icon-btn" id="kb-notes-new" title="新建笔记">＋</button></div>
+            <div class="kb-notes-list-head"><h2>笔记</h2>${_uiIconButton({ label: '新建笔记', icon: 'plus', className: 'kb-wb-icon-btn', attrs: { id: 'kb-notes-new' } })}</div>
             <div class="kb-notes-filter">
               <span class="kb-notes-filter-tag${_state.filter === 'all' ? ' is-active' : ''}" data-nf="all">全部</span>
               <span class="kb-notes-filter-tag${_state.filter === '30d' ? ' is-active' : ''}" data-nf="30d">过去30天</span>
@@ -151,13 +156,13 @@
                       <div class="kb-table-grid" id="kb-table-grid"></div>
                     </div>
                   </div>
-                  <div class="kb-notes-insert-item" data-insert="link">🔗 链接</div>
-                  <div class="kb-notes-insert-item" data-insert="image">🖼 图片</div>
+                  <div class="kb-notes-insert-item" data-insert="link">${_iconHtml('link')} 链接</div>
+                  <div class="kb-notes-insert-item" data-insert="image">${_iconHtml('image')} 图片</div>
                   <div class="kb-notes-insert-item" data-insert="hr">─ 分割线</div>
-                  <div class="kb-notes-insert-item" data-insert="quote">❝ 引用</div>
+                  <div class="kb-notes-insert-item" data-insert="quote">${_iconHtml('quote')} 引用</div>
                   <div class="kb-notes-insert-sep"></div>
-                  <div class="kb-notes-insert-item" data-insert="audio">🎙 录音纪要</div>
-                  <div class="kb-notes-insert-item" data-insert="attach">📎 附件 <span class="kb-caret">▸</span>
+                  <div class="kb-notes-insert-item" data-insert="audio">${_iconHtml('mic')} 录音纪要</div>
+                  <div class="kb-notes-insert-item" data-insert="attach">${_iconHtml('paperclip')} 附件 <span class="kb-caret">▸</span>
                     <div class="kb-ed-menu kb-notes-insert-sub" data-sub="attach"><div class="kb-notes-insert-item" data-insert="attach-file">上传附件</div></div>
                   </div>
                 </div>
@@ -167,7 +172,7 @@
               <button type="button" class="ed-btn italic" data-cmd="italic" title="斜体">I</button>
               <button type="button" class="ed-btn underline" data-cmd="underline" title="下划线">U</button>
               <button type="button" class="ed-btn strike" data-cmd="strikeThrough" title="删除线">S</button>
-              <button type="button" class="ed-btn" data-cmd="hilite" title="背景颜色" id="kb-notes-hilite-btn">🖍</button>
+              <button type="button" class="ed-btn" data-cmd="hilite" title="背景颜色" id="kb-notes-hilite-btn">${_iconHtml('palette')}</button>
               <div class="kb-ed-dropdown">
                 <button type="button" class="ed-btn" id="kb-notes-color-btn" title="字体颜色">A<span class="kb-color-bar"></span></button>
                 <div class="kb-ed-menu kb-notes-color-menu" id="kb-notes-color-menu" hidden></div>
@@ -188,23 +193,23 @@
               <div class="kb-ed-dropdown">
                 <button type="button" class="ed-btn" id="kb-notes-align-btn" title="对齐">≡ <span class="kb-caret">▾</span></button>
                 <div class="kb-ed-menu kb-notes-align-menu" id="kb-notes-align-menu">
-                  <div class="kb-ed-mi kb-align-item" data-align="justifyLeft">⬅ 左对齐</div>
-                  <div class="kb-ed-mi kb-align-item" data-align="justifyCenter">➡⬅ 居中</div>
-                  <div class="kb-ed-mi kb-align-item" data-align="justifyRight">➡ 右对齐</div>
-                  <div class="kb-ed-mi kb-align-item is-selected" data-align="justifyFull">☰ 两端对齐</div>
+                  <div class="kb-ed-mi kb-align-item" data-align="justifyLeft">${_iconHtml('align-left')} 左对齐</div>
+                  <div class="kb-ed-mi kb-align-item" data-align="justifyCenter">${_iconHtml('align-center')} 居中</div>
+                  <div class="kb-ed-mi kb-align-item" data-align="justifyRight">${_iconHtml('align-right')} 右对齐</div>
+                  <div class="kb-ed-mi kb-align-item is-selected" data-align="justifyFull">${_iconHtml('align-justify')} 两端对齐</div>
                 </div>
               </div>
               <span class="kb-sep"></span>
-              <button type="button" class="ed-btn" data-cmd="insertUnorderedList" title="列表">☰</button>
+              <button type="button" class="ed-btn" data-cmd="insertUnorderedList" title="列表">${_iconHtml('list')}</button>
               <span class="kb-sep"></span>
-              <button type="button" class="ed-btn" id="kb-notes-painter" title="格式刷，双击复用(⌘⇧C)">🖌</button>
+              <button type="button" class="ed-btn" id="kb-notes-painter" title="格式刷，双击复用(⌘⇧C)">${_iconHtml('brush')}</button>
               <button type="button" class="ed-btn" data-cmd="removeFormat" title="清除格式(⌘\)">⌫</button>
               <div class="kb-notes-toolbar-right">
-                <button type="button" class="kb-wb-a-btn" id="kb-notes-to-lib" title="把当前笔记添加到个人或共享知识库">📚 添加到知识库</button>
-                <button type="button" class="kb-wb-a-btn" id="kb-notes-ai" title="基于知识库生成/续写">✨ AI帮写</button>
-                <button type="button" class="kb-wb-a-btn" id="kb-notes-save" title="保存 (Cmd/Ctrl+S)">保存</button>
+                <button type="button" class="kb-wb-a-btn" id="kb-notes-to-lib" title="把当前笔记添加到个人或共享知识库">${_iconHtml('book-open')} 添加到知识库</button>
+                <button type="button" class="kb-wb-a-btn" id="kb-notes-ai" title="基于知识库生成/续写">${_iconHtml('sparkles')} AI帮写</button>
+                ${_uiButton({ label: '保存', className: 'kb-wb-a-btn', attrs: { id: 'kb-notes-save', title: '保存 (Cmd/Ctrl+S)' } })}
                 <div class="kb-ed-dropdown">
-                  <button type="button" class="kb-wb-a-btn" id="kb-notes-more-btn" title="更多">⋯</button>
+                  ${_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-wb-a-btn', attrs: { id: 'kb-notes-more-btn' } })}
                   <div class="kb-ed-menu kb-notes-more-menu" id="kb-notes-more-menu">
                     <div class="kb-ed-mi" data-more="clear">清除格式</div>
                     <div class="kb-ed-mi kb-danger" data-more="del">删除笔记</div>
@@ -584,10 +589,10 @@
         <div class="ui-modal__body kb-lib-picker-body">
           <div class="kb-lib-picker-groups">
             ${personal.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">个人知识库</div>${personal.map((l) =>
-              `<button type="button" class="kb-lib-picker-item" data-kind="lib" data-id="${_esc(l.id)}"><span class="kb-lib-picker-ico">📚</span><span>${_esc(l.name)}</span></button>`
+              `<button type="button" class="kb-lib-picker-item" data-kind="lib" data-id="${_esc(l.id)}"><span class="kb-lib-picker-ico">${_iconHtml('book-open')}</span><span>${_esc(l.name)}</span></button>`
             ).join('')}</div>` : ''}
             ${spaces.length ? `<div class="kb-lib-picker-group"><div class="kb-lib-picker-group-label">待开发</div>${spaces.map((s) =>
-              `<button type="button" class="kb-lib-picker-item" data-kind="space" data-id="${_esc(s.space_id)}"><span class="kb-lib-picker-ico">🌐</span><span>${_esc(s.name || s.space_id)}</span></button>`
+              `<button type="button" class="kb-lib-picker-item" data-kind="space" data-id="${_esc(s.space_id)}"><span class="kb-lib-picker-ico">${_iconHtml('globe')}</span><span>${_esc(s.name || s.space_id)}</span></button>`
             ).join('')}</div>` : ''}
           </div>
         </div>
@@ -770,7 +775,7 @@
     else if (typeof uiToast === 'function') _toast('该插入能力即将上线', 'info');
   }
 
-  // 🔗 插入链接弹窗（对齐 ima：文本 + 链接 双输入）
+  // 插入链接弹窗（对齐 ima：文本 + 链接 双输入）
   let _linkDialogClose = null;
 
   function _openLinkDialog() {
@@ -844,7 +849,7 @@
     if (overlay) overlay.remove();
   }
 
-  // 📎 附件上传：文件 → base64 → contexts.upload 存到 notes/attachments/ → 插入附件引用卡片
+  // 附件上传：文件 → base64 → contexts.upload 存到 notes/attachments/ → 插入附件引用卡片
   async function _uploadAttachment() {
     const input = document.createElement('input');
     input.type = 'file';
@@ -859,7 +864,7 @@
         try {
           const res = await window.cogseed.invoke('contexts.upload', { path: `notes/attachments/${clean}`, data: b64 });
           if (res && res.ok === false) { _toast('上传失败：' + (res.error || 'unknown'), 'error'); return; }
-          _execHtml(`<div class="kb-note-attach" data-attach-path="notes/attachments/${_esc(clean)}"><span class="kb-note-attach-name">📎 ${_esc(f.name)}</span><button type="button" class="kb-note-attach-del" title="移除附件引用">✕</button></div>`);
+          _execHtml(`<div class="kb-note-attach" data-attach-path="notes/attachments/${_esc(clean)}"><span class="kb-note-attach-name">${_iconHtml('paperclip')} ${_esc(f.name)}</span><button type="button" class="kb-note-attach-del" title="移除附件引用">${_iconHtml('x')}</button></div>`);
           _toast('附件已上传', 'success');
         } catch (err) {
           _toast('上传失败：' + ((err && err.message) || String(err)), 'error');
@@ -890,7 +895,7 @@
     });
   }
 
-  // ✨ AI帮写：基于当前知识库（kbqa.askStream）流式生成草稿插入编辑器末尾。
+  // AI 帮写：基于当前知识库（kbqa.askStream）流式生成草稿插入编辑器末尾。
   function _aiWrite() {    const ed = document.getElementById('kb-notes-edit');
     if (!ed) return;
     if (!window.cogseed || typeof window.cogseed.stream !== 'function') {
