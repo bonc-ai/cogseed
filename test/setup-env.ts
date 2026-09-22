@@ -119,20 +119,40 @@ if (process.platform === 'win32') {
   }
 }
 
-// Unconditional. An inherited value is exactly the case that must not win:
-// `index.ts` exports `COGSEED_WORKSPACE_ROOT` into the app's own environment, so
-// every process CogSeed spawns — including a coding agent asked to work on this
-// repo — inherits the live data root. Honouring it here froze `WS_ROOT` to
-// `~/.cogseed/data` and let the suite write signals, uid skeletons, and a
-// rewritten `current_user_id` straight into the user's real profile.
+// Default (and only safe) behaviour: redirect to a throwaway tmp dir. An
+// inherited value is exactly the case that must not win — `index.ts` exports
+// `COGSEED_WORKSPACE_ROOT` into the app's own environment, so every process
+// CogSeed spawns (including a coding agent asked to work on this repo) inherits
+// the live data root. Honouring it froze `WS_ROOT` to `~/.cogseed/data` and let
+// the suite write signals, uid skeletons, and a rewritten `current_user_id`
+// straight into the user's real profile.
+//
+// The single exception is the explicit real-machine scenario opt-in
+// (`COGSEED_SCENARIO=1`, used by `test/main/scenarios/*.scenario.test.ts`).
+// Those runs exist to exercise the live data root, the real agent roster and a
+// real model; redirecting them to a tmp dir made the documented command
+// unrunnable (it always booted an empty user with zero agents). The opt-in must
+// be typed deliberately, and every other run — including the whole `npm test`
+// suite — keeps the unconditional redirect.
+const scenarioOptIn = process.env.COGSEED_SCENARIO === '1';
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vitest-'));
-process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
+if (scenarioOptIn) {
+  const variant = process.env.COGSEED_RUNTIME_VARIANT || 'cogseed';
+  const realRoot = path.join(os.homedir(), '.cogseed', 'runtime-variants', variant, 'data');
+  process.env.COGSEED_WORKSPACE_ROOT = realRoot;
+} else {
+  process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
+}
 
 // `os.homedir()` reads USERPROFILE on Windows and HOME on POSIX. Redirect both
 // before test modules load so global skill/session discovery cannot read from
 // or write fixtures into the developer's real ~/.claude and ~/.codex trees.
 // Tests for real home-resolution precedence explicitly unset or replace these.
-process.env.HOME = tmpRoot;
+// The scenario opt-in keeps the real HOME for the same reason it keeps the real
+// data root: the live CLI agents and model credentials live there.
+if (!scenarioOptIn) {
+  process.env.HOME = tmpRoot;
+}
 process.env.USERPROFILE = tmpRoot;
 
 // Same inheritance, sharper edge: `users.activateUser()` pins

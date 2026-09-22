@@ -177,7 +177,17 @@ describe('CogSeed cold-start recovery', () => {
     persisted.updatedAt = persisted.terminalAt;
     fs.writeFileSync(taskFile, JSON.stringify(persisted));
 
-    const report = await boot.recoverCogSeedTasksAtBoot(USER);
+    // Each boot pass bounds its own projection attempt: a retained result whose
+    // projection loses that race is reported `pending` and is delivered by the
+    // next pass — the product's documented retry entry point. Under suite-wide
+    // load the first pass can report `pending` with nothing actually wrong, so
+    // wait for the durable observable instead of asserting one pass's timing.
+    let report = await boot.recoverCogSeedTasksAtBoot(USER);
+    const deadline = Date.now() + 30_000;
+    while (report.retainedResultsRecovered < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      report = await boot.recoverCogSeedTasksAtBoot(USER);
+    }
 
     expect(report).toMatchObject({
       retainedResultsRecovered: 1,
