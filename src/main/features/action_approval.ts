@@ -246,6 +246,26 @@ export async function respondActionApproval(requestId: string, decision: ActionA
   return { handled: true };
 }
 
+/** 会话权限模式为 full / auto_approve 时由宿主直接放行：不广播、不弹窗（用户
+ *  已经用权限模式表达过「帮我批准」），但同样写入 approved 授予并记 audit，
+ *  因此 action_approval_execution 的执行审计与到期回收都保持不变。 */
+export async function grantAutoActionApproval(input: ActionApprovalInput): Promise<ActionApprovalResult> {
+  if (!validInput(input)) return { approved: false, code: 'E_ACTION_APPROVAL_INVALID' };
+  if (input.signal?.aborted) return { approved: false, code: 'E_ACTION_APPROVAL_CANCELLED' };
+  const requestId = `approval-${crypto.randomBytes(12).toString('hex')}`;
+  const expiresAt = Date.now() + ACTION_APPROVAL_TTL_MS;
+  const timer = setTimeout(() => {
+    const grant = approved.get(requestId);
+    if (!grant) return;
+    approved.delete(requestId);
+    void appendAudit(grant.input, grant.requestId, 'expired', 'approval_not_consumed');
+  }, ACTION_APPROVAL_TTL_MS);
+  timer.unref?.();
+  approved.set(requestId, { input, requestId, expiresAt, timer, started: false });
+  await appendAudit(input, requestId, 'approved');
+  return { approved: true, requestId };
+}
+
 export async function recordActionApprovalExecution(input: {
   userId: string;
   runtimeSessionId: string;
