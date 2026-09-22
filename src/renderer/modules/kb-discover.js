@@ -489,12 +489,12 @@
       label: saved ? _t('kb.discover.saved', '已收藏') : _t('kb.discover.save', '收藏'),
       attrs: { 'data-discover-catalog-save': item.id },
     });
-    return `<article class="kb-discover-catalog-card${isPublic ? ' is-public' : ''} is-${_esc(item.tone || 'mint')}">
+    return window.uiCard({ className: `kb-discover-catalog-card${isPublic ? ' is-public' : ''} is-${_esc(item.tone || 'mint')}`, bodyHtml: `
       <header><span class="kb-discover-catalog-icon">${_icon(item.icon, 'kb-discover-catalog-icon-svg')}</span><span class="kb-discover-catalog-origin">${_esc(_catalogSourceLabel(item.source))}</span></header>
       <h3>${_esc(item.title)}</h3><p>${_esc(item.desc)}</p>${_catalogTags(item.tags)}
       <div class="kb-discover-catalog-facts"><span>${_icon('users', 'kb-discover-catalog-fact-icon')}${_esc(item.author || item.curator)}</span><span>${_icon('file-text', 'kb-discover-catalog-fact-icon')}${_esc(_t('kb.discover.material_count', '{count} 份资料', { count: item.count }))}</span></div>
       <footer><span>${_esc(_t('kb.discover.updated_at', '更新于 {time}', { time: item.update }))}</span><div class="kb-discover-card-controls">${previewButton}${importButton}${saveButton}</div></footer>
-    </article>`;
+    ` });
   }
 
   function _renderFeaturedEcosystem() {
@@ -885,24 +885,24 @@
     const selection = activeQuery ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd } : null;
     const tab = _tabMeta();
     const tabs = [
-      ['featured', 'sparkles', _t('kb.discover.tab_featured', '精选专题')],
-      ['public', 'globe', _t('kb.discover.tab_public', '公共广场')],
-      ['sources', 'folder', _t('kb.discover.tab_external', '外部来源')],
+      ['featured', _t('kb.discover.tab_featured', '精选专题')],
+      ['public', _t('kb.discover.tab_public', '公共广场')],
+      ['sources', _t('kb.discover.tab_external', '外部来源')],
     ];
-    const tabButtons = tabs.map(([key, icon, label]) => _button({
-      label,
-      role: _state.activeTab === key ? 'secondary' : 'ghost',
-      size: 'sm',
-      icon,
-      className: 'kb-discover-tab',
-      attrs: {
-        id: `kb-discover-tab-${key}`,
-        role: 'tab',
-        'aria-selected': _state.activeTab === key ? 'true' : 'false',
-        'aria-controls': 'kb-discover-active-panel',
-        'data-kb-discover-tab': key,
-      },
-    })).join('');
+    const tabButtons = window.uiTabs({
+      ariaLabel: _t('kb.discover.tab_label', '知识库发现分类'),
+      value: _state.activeTab,
+      className: 'kb-discover-tabs',
+      items: tabs.map(([key, label]) => ({
+        value: key,
+        label,
+        className: 'kb-discover-tab',
+        attrs: {
+          id: `kb-discover-tab-${key}`,
+          'aria-controls': 'kb-discover-active-panel',
+        },
+      })),
+    });
     const pageHeader = window.uiPageHeader({
       title: tab.title,
       actions: [{
@@ -929,20 +929,19 @@
         ${pageHeader}
         <section class="kb-discover-pane">
           <p class="kb-discover-page-description">${_esc(tab.subtitle)}</p>
-          <nav class="kb-discover-tabs" role="tablist" aria-label="${_esc(_t('kb.discover.tab_label', '知识库发现分类'))}">${tabButtons}</nav>
+          ${tabButtons}
           ${searchField}
           <div id="kb-discover-active-panel" role="tabpanel" aria-labelledby="kb-discover-tab-${_esc(_state.activeTab)}">${tab.content}</div>
         </section>
       </div>`;
 
-    host.querySelectorAll('[data-kb-discover-tab]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const tabKey = button.dataset.kbDiscoverTab;
-        if (!tabKey || tabKey === _state.activeTab) return;
-        _state.activeTab = tabKey;
-        _state.query = '';
-        _renderAll();
-      });
+    window.hydrateUiTabs(host);
+    host.querySelector('[data-ui-tabs]')?.addEventListener('ui-tabs-change', (event) => {
+      const tabKey = event.detail?.value;
+      if (!tabKey || tabKey === _state.activeTab) return;
+      _state.activeTab = tabKey;
+      _state.query = '';
+      _renderAll();
     });
     host.querySelector('#kb-discover-query')?.addEventListener('input', (event) => {
       _state.query = event.currentTarget.value || '';

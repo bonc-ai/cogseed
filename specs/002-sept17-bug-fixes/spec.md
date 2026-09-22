@@ -5,7 +5,7 @@
 **Status**: Implemented
 **Input**: 用户需求原文：“运用 speckit 去看 9.17Cogseed Bug清单(3)，里面有 4 个 bug，修复一下。”
 
-**Source**: `/Users/blue/Desktop/9.17Cogseed Bug清单(3).docx`
+**Source**: `9.17Cogseed Bug清单(3).docx（本地文档）`
 
 清单条目（原文编号）：
 1. **API 连接异常（红圈卡死）**：连通性测试显示正常，但执行任务时出现红圈、模型不运行；需要重新测验连接后任务才能再次跑通。推测握手测试可通、长时间流式传输中途断流，测试接口与推理请求不是同一条链路。

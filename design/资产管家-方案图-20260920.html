@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>资产管家 · 实现方案 v2（AI 统管资产界面 · 双入口并存）</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#fff; --ink:#0f172a; --ink-2:#334155; --ink-3:#64748b;
+    --line:#e2e8f0; --primary:#4f46e5; --primary-2:#7c3aed; --primary-soft:#eef2ff;
+    --old:#64748b; --old-bg:#f1f5f9; --new:#059669; --new-bg:#ecfdf5;
+    --warn:#b45309; --warn-bg:#fffbeb; --danger:#be123c; --danger-bg:#fff1f2;
+    --chat:#0ea5e9; --chat-bg:#f0f9ff; --patrol:#7c3aed; --patrol-bg:#faf5ff;
+    --radius:16px; --shadow:0 1px 3px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.07);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75;font-size:15px}
+
+  .hero{background:linear-gradient(135deg,#0f172a 0%,#1e1b4b 40%,#4338ca 100%);color:#fff;padding:50px 24px 84px;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;right:-100px;top:-140px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(129,140,248,.4),transparent 70%)}
+  .hero-inner{max-width:1120px;margin:0 auto;position:relative;z-index:1}
+  .hero-tag{display:inline-block;font-size:12.5px;letter-spacing:.14em;padding:5px 14px;border:1px solid rgba(255,255,255,.35);border-radius:999px;margin-bottom:18px;color:#c7d2fe}
+  .hero h1{font-size:32px;font-weight:700;margin-bottom:10px}
+  .hero p.sub{color:#c7d2fe;font-size:15px;max-width:820px}
+  .hero .origin{margin-top:16px;font-size:13px;color:#a5b4fc;background:rgba(255,255,255,.08);border:1px solid rgba(199,210,254,.25);border-radius:12px;padding:10px 16px;display:inline-block}
+
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+  nav.toc{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  nav.toc .wrap{display:flex;gap:6px;overflow-x:auto;padding:10px 24px}
+  nav.toc a{flex:none;font-size:13.5px;color:var(--ink-2);text-decoration:none;padding:6px 14px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  nav.toc a:hover{background:var(--primary-soft);color:var(--primary);border-color:#c7d2fe}
+
+  section{padding:42px 0 6px}
+  .sec-head{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  .sec-num{flex:none;width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:#fff;font-weight:700;font-size:16px;display:flex;align-items:center;justify-content:center}
+  .sec-head h2{font-size:22px;font-weight:700}
+  .sec-desc{color:var(--ink-3);font-size:14px;margin:0 0 20px 46px;max-width:880px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px 28px;margin-bottom:18px}
+  .verdict{background:linear-gradient(135deg,#eef2ff,#faf5ff);border:1px solid #ddd6fe;border-radius:var(--radius);box-shadow:var(--shadow);padding:26px 30px;margin-bottom:18px}
+  .verdict p{font-size:15.5px;color:var(--ink-2)}
+  .verdict b{color:var(--primary)}
+
+  /* 出处表 */
+  table.origin-t{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:14px;background:#fff;border-radius:12px;overflow:hidden}
+  table.origin-t th{background:#f8fafc;text-align:left;font-size:12.5px;color:var(--ink-3);padding:9px 16px;border-bottom:2px solid var(--line)}
+  table.origin-t td{padding:9px 16px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  table.origin-t tr:last-child td{border-bottom:none}
+  table.origin-t td:first-child{width:58%}
+  .src-badge{display:inline-block;font-size:11px;font-weight:800;border-radius:6px;padding:1px 9px;white-space:nowrap}
+  .src-blueprint{background:#fef3c7;color:#92400e}
+  .src-ours{background:#e0e7ff;color:#4338ca}
+
+  /* 双入口图 */
+  .dual{display:grid;grid-template-columns:1fr 64px 1fr;gap:0;align-items:stretch;margin-bottom:0}
+  .entry{border-radius:16px;padding:22px 24px;border:1.5px solid}
+  .entry h4{font-size:17px;display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .entry .who{font-size:12px;font-weight:700;letter-spacing:.05em;border-radius:6px;padding:2px 10px;display:inline-block;margin-bottom:10px}
+  .entry.a{background:var(--chat-bg);border-color:#bae6fd}
+  .entry.a h4{color:#075985} .entry.a .who{background:#e0f2fe;color:#0369a1}
+  .entry.b{background:var(--patrol-bg);border-color:#e9d5ff}
+  .entry.b h4{color:#6b21a8} .entry.b .who{background:#f3e8ff;color:#7e22ce}
+  .entry p{font-size:13.5px;color:var(--ink-2);margin-bottom:8px}
+  .entry ul{list-style:none;margin-top:6px}
+  .entry li{position:relative;padding-left:18px;font-size:13px;color:var(--ink-2);margin-bottom:5px}
+  .entry li::before{content:"";position:absolute;left:2px;top:9px;width:7px;height:7px;border-radius:2px}
+  .entry.a li::before{background:var(--chat)} .entry.b li::before{background:var(--patrol)}
+  .dual-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--ink-3);font-size:12px}
+  .dual-mid .arrow{font-size:22px;color:var(--primary);font-weight:700}
+  .converge{background:linear-gradient(135deg,#312e81,#4338ca);color:#e0e7ff;border-radius:14px;padding:14px 22px;text-align:center;font-size:14px;margin-top:14px}
+  .converge b{color:#fff}
+
+  /* 对话示例 */
+  .chat-demo{background:#0f172a;border-radius:14px;padding:18px 22px;font-size:13.5px;line-height:1.9}
+  .chat-demo .u{color:#7dd3fc}
+  .chat-demo .ai{color:#e2e8f0}
+  .chat-demo .tool{color:#86efac;font-size:12px;font-family:ui-monospace,Menlo,monospace}
+  .chat-demo .note{color:#94a3b8;font-size:12px}
+
+  /* B 入口三步 */
+  .steps3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:6px 0 10px}
+  .s3{background:#fff;border:1px solid #e9d5ff;border-radius:12px;padding:16px 18px}
+  .s3 .n{width:24px;height:24px;border-radius:8px;background:var(--patrol-bg);color:var(--patrol);font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
+  .s3 h5{font-size:14.5px;margin-bottom:4px;color:#6b21a8}
+  .s3 p{font-size:12.8px;color:var(--ink-2)}
+  .keyline{font-size:14px;background:var(--warn-bg);border:1px dashed #fcd34d;border-radius:10px;padding:10px 18px;text-align:center;color:#92400e}
+
+  /* 架构图 */
+  .arch{display:flex;flex-direction:column;margin-bottom:8px}
+  .layer{display:grid;grid-template-columns:56px 1fr;border:1.5px solid var(--line);border-radius:14px;background:#fff;overflow:hidden;margin-bottom:10px}
+  .layer .tag{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#fff;font-weight:700;font-size:15px;padding:14px 6px}
+  .layer .tag small{font-size:10.5px;font-weight:600;opacity:.85;letter-spacing:.05em}
+  .layer .body{padding:15px 22px}
+  .layer .body h4{font-size:15.5px;margin-bottom:4px}
+  .layer .body p{font-size:13.5px;color:var(--ink-2)}
+  .layer .body .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .layer .body .chips span{font-size:12px;background:#f1f5f9;border:1px solid var(--line);border-radius:8px;padding:2px 10px;color:var(--ink-2)}
+  .l5 .tag{background:linear-gradient(135deg,#0ea5e9,#0284c7)}
+  .l4 .tag{background:linear-gradient(135deg,#f59e0b,#d97706)}
+  .l3 .tag{background:linear-gradient(135deg,var(--primary),#6d28d9)}
+  .l2 .tag{background:linear-gradient(135deg,#10b981,#059669)}
+  .l1 .tag{background:linear-gradient(135deg,#334155,#1e293b)}
+  .arch-arrow{text-align:center;color:var(--ink-3);font-size:13px;margin:-6px 0 4px}
+  .arch-note{font-size:13px;color:var(--ink-3);background:#f8fafc;border:1px dashed var(--line);border-radius:10px;padding:10px 16px}
+  .mini-dual{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+  .mini-dual .md{border-radius:10px;padding:10px 14px;font-size:12.8px}
+  .mini-dual .md.a{background:var(--chat-bg);border:1px solid #bae6fd;color:#075985}
+  .mini-dual .md.b{background:var(--patrol-bg);border:1px solid #e9d5ff;color:#6b21a8}
+
+  /* 授权 */
+  .grants{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+  .grant{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;position:relative}
+  .grant .lv{font-size:12px;font-weight:800;letter-spacing:.08em;border-radius:6px;display:inline-block;padding:2px 10px;margin-bottom:8px}
+  .grant.g1 .lv{background:#f1f5f9;color:var(--ink-3)} .grant.g1{border-top:3px solid #94a3b8}
+  .grant.g2 .lv{background:#e0e7ff;color:var(--primary)} .grant.g2{border-top:3px solid var(--primary)}
+  .grant.g3 .lv{background:#d1fae5;color:#065f46} .grant.g3{border-top:3px solid var(--new)}
+  .grant h4{font-size:16px;margin-bottom:6px}
+  .grant p{font-size:13px;color:var(--ink-2);margin-bottom:8px}
+  .grant .human{font-size:12.5px;color:var(--ink-3);border-top:1px dashed var(--line);padding-top:8px}
+
+  table.safe{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.safe th{background:#f8fafc;text-align:left;font-size:12.5px;color:var(--ink-3);padding:10px 14px;border-bottom:2px solid var(--line)}
+  table.safe td{padding:10px 14px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  table.safe td:first-child{font-weight:600;white-space:nowrap;color:var(--danger)}
+  table.safe tr:last-child td{border-bottom:none}
+
+  .ipc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .ipc .row{display:flex;align-items:baseline;gap:10px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 14px;font-size:13px}
+  .ipc code{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--primary);background:var(--primary-soft);border-radius:6px;padding:1px 8px;white-space:nowrap}
+
+  .mock-wrap{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}
+  .mock{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+  .mock .bar{background:linear-gradient(135deg,#312e81,#4338ca);color:#c7d2fe;font-size:12.5px;padding:9px 18px;display:flex;justify-content:space-between}
+  .advice-card{padding:18px 20px;border-bottom:1px solid var(--line)}
+  .advice-card .kind{font-size:11px;font-weight:800;letter-spacing:.06em;color:var(--primary);background:var(--primary-soft);border-radius:6px;padding:2px 9px;display:inline-block;margin-bottom:8px}
+  .advice-card .from{font-size:11px;color:var(--ink-3);margin-left:6px}
+  .advice-card h5{font-size:15px;margin-bottom:6px}
+  .advice-card p{font-size:13px;color:var(--ink-2);margin-bottom:6px}
+  .advice-card .btns{display:flex;gap:8px;margin-top:12px}
+  .btn{font-size:13px;font-weight:600;border-radius:8px;padding:6px 18px;border:none}
+  .btn.yes{background:var(--primary);color:#fff}
+  .btn.no{background:#f1f5f9;color:var(--ink-2);border:1px solid var(--line)}
+  .verify{padding:16px 20px}
+  .verify h5{font-size:14px;margin-bottom:10px;color:#065f46}
+  .v-item{display:flex;align-items:center;gap:10px;font-size:13px;padding:8px 12px;border-radius:10px;margin-bottom:8px}
+  .v-item.ok{background:var(--new-bg);color:#065f46}
+  .v-item.none{background:var(--old-bg);color:var(--ink-2)}
+  .v-item.back{background:var(--danger-bg);color:#9f1239}
+  .v-item .dot{width:9px;height:9px;border-radius:50%;flex:none}
+
+  .phases{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+  .phase{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;border-top:3px solid var(--primary)}
+  .phase .ph{font-size:12px;font-weight:800;color:var(--primary);letter-spacing:.06em;margin-bottom:6px}
+  .phase h4{font-size:15px;margin-bottom:6px}
+  .phase p{font-size:12.5px;color:var(--ink-2);margin-bottom:8px}
+  .phase .acc{font-size:11.5px;color:#065f46;background:var(--new-bg);border-radius:8px;padding:5px 10px;display:block}
+
+  .decisions{border:1px solid #fde68a;border-radius:var(--radius);box-shadow:var(--shadow);padding:22px 28px;background:linear-gradient(135deg,#fffbeb,#fefce8)}
+  .decisions h3{font-size:16.5px;color:#92400e;margin-bottom:12px}
+  .decisions ol{list-style:none;counter-reset:d}
+  .decisions li{counter-increment:d;position:relative;padding-left:34px;margin-bottom:10px;font-size:13.8px;color:#78350f}
+  .decisions li::before{content:counter(d);position:absolute;left:0;top:2px;width:22px;height:22px;border-radius:7px;background:#f59e0b;color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
+
+  /* ===== v3 详细设计新增 ===== */
+  .tools-t{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:4px}
+  .tools-t th{background:#f0f9ff;text-align:left;font-size:12px;color:#075985;padding:8px 12px;border-bottom:2px solid #bae6fd}
+  .tools-t td{padding:8px 12px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  .tools-t td:first-child{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--chat);white-space:nowrap}
+  .tools-t tr:last-child td{border-bottom:none}
+
+  .gates{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+  .gate{display:flex;align-items:flex-start;gap:12px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 14px}
+  .gate .g-n{flex:none;width:24px;height:24px;border-radius:8px;background:var(--danger-bg);color:var(--danger);font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:2px}
+  .gate .g-t{font-size:13px;color:var(--ink-2)}
+  .gate .g-t b{color:var(--ink)}
+
+  .flow{background:#0f172a;border-radius:12px;padding:16px 20px;font-size:12.3px;line-height:1.9;color:#e2e8f0;font-family:ui-monospace,Menlo,monospace;overflow-x:auto;margin:10px 0}
+  .flow .hl{color:#7dd3fc} .flow .ok{color:#86efac} .flow .warn{color:#fcd34d}
+
+  .scen-t{width:100%;border-collapse:collapse;font-size:12.8px}
+  .scen-t th{background:#f8fafc;text-align:left;font-size:11.5px;color:var(--ink-3);padding:7px 12px;border-bottom:2px solid var(--line)}
+  .scen-t td{padding:7px 12px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  .scen-t td:first-child{font-weight:700;color:var(--chat);white-space:nowrap}
+  .scen-t tr:last-child td{border-bottom:none}
+
+  .sm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+  .sm .st{font-size:12.5px;font-weight:700;border-radius:9px;padding:5px 13px;border:1.5px solid}
+  .st.ok{background:var(--new-bg);border-color:#a7f3d0;color:#065f46}
+  .st.pend{background:#fffbeb;border-color:#fcd34d;color:#92400e}
+  .st.bad{background:var(--danger-bg);border-color:#fecdd3;color:#9f1239}
+  .st.mid{background:var(--old-bg);border-color:#cbd5e1;color:var(--ink-2)}
+  .sm .a2{color:var(--ink-3);font-size:14px}
+
+  .pipe7{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+  .pipe7 .p{font-size:12px;background:var(--patrol-bg);border:1px solid #e9d5ff;color:#6b21a8;border-radius:8px;padding:4px 11px;font-weight:600}
+  .pipe7 .ar{color:var(--patrol);font-weight:700}
+
+  .veto{background:#fff;border:1px solid #fecdd3;border-radius:12px;padding:14px 18px;margin-bottom:10px}
+  .veto .x{font-size:11px;font-weight:800;color:#fff;background:var(--danger);border-radius:6px;padding:1px 8px;display:inline-block;margin-bottom:6px}
+  .veto h5{font-size:14px;color:#9f1239;margin-bottom:4px}
+  .veto p{font-size:12.8px;color:var(--ink-2)}
+
+  .stats200{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 14px}
+  .s2{border-radius:12px;padding:12px 22px;text-align:center;border:1.5px solid}
+  .s2 .n{font-size:26px;font-weight:800;line-height:1.2}
+  .s2 .l{font-size:12px}
+  .s2.a{background:var(--new-bg);border-color:#a7f3d0;color:#065f46}
+  .s2.b{background:var(--danger-bg);border-color:#fecdd3;color:#9f1239}
+  .s2.c{background:#fffbeb;border-color:#fcd34d;color:#92400e}
+  .s2.d{background:var(--old-bg);border-color:#cbd5e1;color:var(--ink-2)}
+
+  .refs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .ref{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 16px;font-size:12.8px;color:var(--ink-2)}
+  .ref b{display:block;font-size:13.5px;color:var(--ink);margin-bottom:3px}
+  .ref a{color:var(--primary);text-decoration:none}
+
+  .kv2{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:13px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px}
+  .kv2 .k{color:var(--ink-3);white-space:nowrap;font-weight:600}
+  .kv2 .v{color:var(--ink-2)}
+  .kv2 code{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;background:#f1f5f9;border-radius:5px;padding:0 6px}
+
+
+  footer{margin-top:48px;border-top:1px solid var(--line);padding:26px 24px 40px;text-align:center;font-size:12.5px;color:var(--ink-3)}
+
+  @media (max-width:920px){
+    .dual{grid-template-columns:1fr} .dual-mid{flex-direction:row;padding:8px 0}
+    .steps3,.grants,.ipc,.mock-wrap,.phases,.mini-dual{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-tag">COGSEED · 认知资产迭代分支 · 方案 v3（双入口·详细设计定稿）</div>
+    <h1>资产管家：AI 统管资产界面（双入口并存）</h1>
+    <p class="sub">并入智能体主体——日常对话里直接指挥它调控资产；同时认知资产模块自己定期带运行账本找 AI 判定、产出建议。两条路共享同一套底层与「批准→执行→回滚→回验」闭环。</p>
+    <div class="origin">v1→v2：独立服务 → 并入智能体主体+自动巡检并存（贴蓝图原意）· v3：200 项推演定稿两条路详细设计（工具规格/审批接线/状态机/校验管线/回验规则）</div>
+  </div>
+</div>
+
+<nav class="toc"><div class="wrap">
+  <a href="#origin">出处拆账</a>
+  <a href="#dual">双入口</a>
+  <a href="#detail">两条路·详细设计</a>
+  <a href="#arch">系统架构</a>
+  <a href="#grant">授权与安全</a>
+  <a href="#iface">接口</a>
+  <a href="#advice">建议的产出</a>
+  <a href="#plan">实施分期</a>
+  <a href="#decide">待拍板</a>
+</div></nav>
+
+<div class="wrap">
+
+<section id="origin">
+  <div class="sec-head"><div class="sec-num">1</div><h2>出处拆账：哪些是蓝图的、哪些是我们设计的</h2></div>
+  <p class="sec-desc">如实拆开，不揽功不推责。</p>
+  <div class="verdict">
+    <table class="origin-t">
+      <tr><th>内容</th><th>出处</th></tr>
+      <tr><td>「伴生代理在用户授权下管理个人认知资产」职责定位；R07 授权切片、R15 委派策略</td><td><span class="src-badge src-blueprint">蓝图</span></td></tr>
+      <tr><td>变更集闭环带回滚的思想</td><td><span class="src-badge src-blueprint">蓝图</span></td></tr>
+      <tr><td>五层架构、策略注册表、双入口形态、参数盘点、授权三档、巡检管线、建议 JSON、界面卡片</td><td><span class="src-badge src-ours">本方案设计</span></td></tr>
+      <tr><td>「并入智能体主体」的方向（v2）</td><td><span class="src-badge src-ours">用户拍板</span>——且比 v1 独立服务更贴蓝图字面含义：companion agent 就是常驻对话的那个智能体本体</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="dual">
+  <div class="sec-head"><div class="sec-num">2</div><h2>双入口并存：一个底层，两个入口，一种变更集</h2></div>
+  <p class="sec-desc">不是两套系统——同一个系统的两个门，产出的东西一模一样，记在同一本账上。</p>
+  <div class="card">
+    <div class="dual">
+      <div class="entry a">
+        <span class="who">入口 A · 你发起</span>
+        <h4>💬 对话指挥（并入智能体主体）</h4>
+        <p>主智能体获得一组治理工具（与现有资产工具同一挂法）。你随时开口，它当场查、当场提案、当场解释为什么。</p>
+        <ul>
+          <li>「看看资产库该不该调」→ 它读运行报告，用大白话给你结论</li>
+          <li>你说「行，调吧」→ 变更集生效（你的原话即批准凭据，入台账）</li>
+          <li>不满意随时说「撤了」→ 一键回滚</li>
+        </ul>
+      </div>
+      <div class="dual-mid"><span class="arrow">⇄</span><span>共享底层</span></div>
+      <div class="entry b">
+        <span class="who">入口 B · 模块发起</span>
+        <h4>🔄 自动巡检（认知资产模块自己）</h4>
+        <p>你不开口时，模块定期/出事时自己跑一遍体检——发现的不是「感觉」，是台账里的数字。</p>
+        <ul>
+          <li>触发：每日定时 / 矛盾积压 / 灰区堆积 / 漏用连续命中</li>
+          <li>把账本数字后台问一次 AI（同一个脑子，不开聊天窗）</li>
+          <li>产出建议卡片，<b>等你点采纳才动手</b></li>
+          <li>断网/失败 → 退化为纯数字报告，主流程零影响</li>
+        </ul>
+      </div>
+    </div>
+    <div class="converge">两个入口产出<b>同一种变更集</b>（来源标 via=对话 / via=巡检）· 混排进同一个建议流 · 走同一个回滚闭环 · 巡检时对<b>两路的调整统一回验</b>三态（生效 / 未生效 / 建议回滚）</div>
+  </div>
+
+  <div class="card">
+    <h4 style="font-size:15.5px;margin-bottom:12px">入口 A 长什么样（真机对话示意）</h4>
+    <div class="chat-demo">
+      <div class="u">👤 你：看看我的资产库是不是该调调？</div>
+      <div class="tool">🛠 get_steward_report · list_tunable_policies</div>
+      <div class="ai">🤖 最近 7 天有 9 条内容相似度落在 0.52–0.59，没归成族，它们在目录里总是被一起跳过。建议把分组灵敏度从 0.60 调到 0.55——这 9 条能合成一组，对话时少占 8 行目录。随时可撤销，两周后我会自动检查效果。</div>
+      <div class="u">👤 你：行，调吧。</div>
+      <div class="tool">🛠 propose_policy_change（值被服务端校验钳制，模型说了不算）→ 生效入台账</div>
+      <div class="ai">🤖 已调好。14 天后自动回验，没效果或帮了倒忙我会主动告诉你。</div>
+      <div class="note">—— 批准凭据=你本轮原话（对话 id 可回溯）；红线项（删除/敏感性/作用域）即使你说「调」也被执行层硬拒收</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4 style="font-size:15.5px;margin-bottom:4px;color:#6b21a8">入口 B 到底怎么「主动调控」（白话三步）</h4>
+    <div class="steps3">
+      <div class="s3"><div class="n">1</div><h5>看账本</h5><p>过去 7 天的运行数字：使用次数、取用回执、漏用审计命中、矛盾积压、灰区堆积——全部现成台账，零新增埋点</p></div>
+      <div class="s3"><div class="n">2</div><h5>后台问一次 AI</h5><p>把账本发给 AI（跟对话里那个是同一个模型配置，只是不开聊天窗、后台问一次）拿回一份 JSON 判定</p></div>
+      <div class="s3"><div class="n">3</div><h5>变成待办卡片</h5><p>在管家建议页生成卡片，<b>等你点采纳才动手</b>；你不理它就一直躺着，不催不闹</p></div>
+    </div>
+    <div class="keyline">「自动」的全部含义 = 自动<b>盯着</b>（发现问题和提建议），不是自动<b>改</b>——动手永远要你批准，或你显式开过白名单</div>
+  </div>
+</section>
+
+<section id="detail">
+  <div class="sec-head"><div class="sec-num">3</div><h2>两条路 · 详细设计（200 项推演后定稿）</h2></div>
+  <p class="sec-desc">对两条路做 200 项交叉推演（A 路 70 项 / B 路 80 项 / 共享层 40 项 / 横切 10 项，全矩阵见主方案附录 A），本节展示定稿设计。最大的一个推演结论：入口 A 的批准机制<b>复用仓库现成的 action-approval 审批框架</b>，「对话口头确认」被否决。</p>
+
+  <!-- 3A 入口 A -->
+  <div class="card">
+    <h3 style="font-size:17px;color:#075985;margin-bottom:4px">入口 A · 对话指挥</h3>
+    <p style="font-size:13px;color:var(--ink-3);margin-bottom:14px">5 个工具挂 core-agent（随现有资产工具注册模式），全部本地执行、无网络依赖。</p>
+    <table class="tools-t">
+      <tr><th style="width:190px">工具</th><th>返回（预算）</th><th style="width:38%">服务端行为</th></tr>
+      <tr><td>get_steward_report</td><td>资产统计 / 取用率 / 漏用 Top / 矛盾积压 / 灰区堆积 / 上次调整效果 / 当前授权档 / 待处理建议（&lt;1KB，同轮缓存 60s）</td><td>只读聚合，附启发式提示（如近邻对计数）给模型抓手</td></tr>
+      <tr><td>list_tunable_policies</td><td>策略项：id / 当前值 / 默认值 / 范围 / <b>影响面人话</b> / 档位 / 上次调整（&lt;1.5KB）</td><td>只读，domain 过滤 + 默认 top15</td></tr>
+      <tr><td>propose_policy_change</td><td>{applied, actualValue(可能被钳), changesetId} 或 {applied:false, reason}</td><td><b>五道校验后发起审批卡</b>（见下）</td></tr>
+      <tr><td>list_steward_changesets</td><td>近期变更集 + 回验三态</td><td>支持「上次说的那个」跨轮检索（对话 id+时间）</td></tr>
+      <tr><td>revert_steward_changeset</td><td>回滚结果</td><td>回到代码默认免审批（回基线永远安全）；否则过审批卡</td></tr>
+    </table>
+
+    <h4 style="font-size:14.5px;margin:16px 0 6px;color:#075985">propose 的五道校验（先便宜后贵）</h4>
+    <div class="gates">
+      <div class="gate"><div class="g-n">1</div><div class="g-t"><b>存在性</b>：policyId 必须命中注册表，错误信息附相近 id</div></div>
+      <div class="gate"><div class="g-n">2</div><div class="g-t"><b>红线</b>：autoTunable=never 直接拒（删除/敏感性/作用域类）</div></div>
+      <div class="gate"><div class="g-n">3</div><div class="g-t"><b>授权档</b>：L1 下降级为建议不落变更集；L2/L3 继续</div></div>
+      <div class="gate"><div class="g-n">4</div><div class="g-t"><b>值域钳制</b>：越界值钳到边界，actualValue 如实返回</div></div>
+      <div class="gate"><div class="g-n">5</div><div class="g-t"><b>并发与频率</b>：同 policyId 已有 pending → 拒；冷静期内 → 拒+剩余天数；每轮上限 3 个</div></div>
+    </div>
+
+    <h4 style="font-size:14.5px;margin:16px 0 4px;color:#075985">批准接线：复用 action-approval（kind 扩展 steward_changeset）</h4>
+    <div class="flow">
+<span class="hl">模型调 propose</span> ──► 主进程五道校验 ──► 创建 changeset(pending) + 发起审批请求
+                                  （risk: L3白名单项='high'，其余='critical'；TTL 10 分钟）
+        ──► <span class="hl">对话流渲染审批卡</span>（复用现有审批 UI：from→to diff + 影响面 + rationale + 可撤销说明）
+<span class="ok">用户点「批准」</span> ──► 渲染层只回传 opaque requestId ──► resolve ──► 先快照→写新值→审计(succeeded)
+<span class="warn">拒绝 / 10 分钟无操作</span> ──► changeset → expired / rejected（审计留痕，对话不中断）
+    </div>
+    <div class="veto">
+      <span class="x">否决 · 推演 #25</span>
+      <h5>「对话里说『行』就算批准」被否决</h5>
+      <p>口头确认无法构成凭据——注入攻击可诱导模型相信用户已同意。action-approval 的 UI 点击是主进程持有的硬凭据（渲染层只应答不透明 id），这是仓库已验证的安全结构，零新增风险面。体验上仍是「对话内闭环」：审批卡就渲染在对话流里。</p>
+    </div>
+
+    <h4 style="font-size:14.5px;margin:16px 0 6px;color:#075985">12 个对话场景矩阵</h4>
+    <table class="scen-t">
+      <tr><th style="width:52px">#</th><th style="width:130px">场景</th><th>模型 / 系统行为</th></tr>
+      <tr><td>S1</td><td>「看看该不该调」</td><td>读报告 → 大白话汇报 + 提案（报告自带启发式抓手）</td></tr>
+      <tr><td>S2</td><td>「为什么没归族」</td><td>报告 + 策略关联解释</td></tr>
+      <tr><td>S3</td><td>「调到 0.55」</td><td>propose → 告知已出确认卡</td></tr>
+      <tr><td>S4</td><td>「撤销上次的」</td><td>list → revert（回默认免审批，否则审批卡）</td></tr>
+      <tr><td>S5</td><td>「巡检那个不采纳」</td><td>dismiss 无害可代点（记 via=chat）</td></tr>
+      <tr><td>S6</td><td>「有效果吗」</td><td>报告的回验区三态汇报</td></tr>
+      <tr><td>S7</td><td>「删掉敏感资产」</td><td>拒绝并解释红线；工具层硬拒</td></tr>
+      <tr><td>S8</td><td>「调到 0.2」</td><td>提案被钳到边界，如实报告实际生效值</td></tr>
+      <tr><td>S9</td><td>「以后自动调」</td><td>解释需开 L3，指路设置</td></tr>
+      <tr><td>S10</td><td>模型嘴上说「调好了」</td><td>注册表是唯一真源，不走工具的嘴改自然无效；工具描述强制引导</td></tr>
+      <tr><td>S11</td><td>「先别调了」</td><td>pending 卡 10 分钟自然过期，不残留</td></tr>
+      <tr><td>S12</td><td>注入诱导乱调</td><td>钳制 + 红线 + 审批三道闸；最坏结果 = 用户看到一张可疑卡片，不点即无事</td></tr>
+    </table>
+  </div>
+
+  <!-- 3B 入口 B -->
+  <div class="card">
+    <h3 style="font-size:17px;color:#6b21a8;margin-bottom:4px">入口 B · 自动巡检</h3>
+    <p style="font-size:13px;color:var(--ink-3);margin-bottom:12px">互斥单实例（锁文件带 TTL 防崩溃残留），任何一步失败都退化为纯指标报告——宁缺毋滥。</p>
+
+    <h4 style="font-size:14.5px;margin-bottom:8px;color:#6b21a8">巡检状态机（先回验上次的账，再发现新问题）</h4>
+    <div class="sm">
+      <span class="st mid">idle</span><span class="a2">→</span>
+      <span class="st mid">locked</span><span class="a2">→</span>
+      <span class="st pend">verifying 回验</span><span class="a2">→</span>
+      <span class="st pend">collecting 冻结快照</span><span class="a2">→</span>
+      <span class="st pend">analyzing LLM 判定</span><span class="a2">→</span>
+      <span class="st pend">producing 落库</span><span class="a2">→</span>
+      <span class="st ok">reporting</span><span class="a2">→</span>
+      <span class="st mid">idle</span>
+    </div>
+    <p style="font-size:12.3px;color:var(--ink-3);margin-bottom:14px">任何步骤失败 → degraded_report（纯指标 + 原因标注）→ idle</p>
+
+    <h4 style="font-size:14.5px;margin-bottom:8px;color:#6b21a8">触发器（阈值本身是策略项；每次触发原因入台账）</h4>
+    <div class="kv2" style="margin-bottom:14px">
+      <div class="k">定时</div><div class="v">启动后台任务，距上次 ≥20h（记忆迁移同款模式）</div>
+      <div class="k">事件×4</div><div class="v">矛盾积压 &gt;5 · 灰区堆积 &gt;10 · 漏用连续 3 轮 · 回验冷静期满</div>
+      <div class="k">手动</div><div class="v">「立即巡检」按钮（不防抖但互斥）</div>
+      <div class="k">防抖</div><div class="v">任意两次巡检 ≥6h；运行中新触发直接忽略；静默不弹通知</div>
+    </div>
+
+    <h4 style="font-size:14.5px;margin-bottom:6px;color:#6b21a8">采数与提示词（&lt;6K tokens，温度 0）</h4>
+    <p style="font-size:13px;color:var(--ink-2);margin-bottom:12px">采数=指标+策略快照+回验待办+<b>忽略史</b>（同类建议被忽略 2 次后不再提）；<b>资产全文不进提示词</b>——只给统计数字 + 最多 3 条代表性摘要，全部先过注入扫描。提示词=角色 + 数据（围栏标 DATA）+ 约束（只可引用现存 policyId / 值落声明范围 / 红线清单）+ schema 与 1 个完整示例；每指标附一行人话定义；会话 id 用 <code style="font-family:ui-monospace;font-size:11.5px">steward-</code> 前缀注册 kind（吸取 semantic-review 会话被拒的教训）。LLM 调用复用 buildRunner 临时会话，30s 超时、仅网络失败重试 1 次、token 用量入台账。</p>
+
+    <h4 style="font-size:14.5px;margin-bottom:6px;color:#6b21a8">输出校验管线（七道闸，任一失败=整批丢弃）</h4>
+    <div class="pipe7">
+      <span class="p">剥围栏</span><span class="ar">→</span>
+      <span class="p">JSON 解析</span><span class="ar">→</span>
+      <span class="p">schema 校验</span><span class="ar">→</span>
+      <span class="p">policyId 存在</span><span class="ar">→</span>
+      <span class="p">值域钳制</span><span class="ar">→</span>
+      <span class="p">evidence 必须命中采数集</span><span class="ar">→</span>
+      <span class="p">条数≤5 + 冷静期过滤</span><span class="ar">→</span>
+      <span class="p" style="background:var(--new-bg);border-color:#a7f3d0;color:#065f46">落库</span>
+    </div>
+    <p style="font-size:12.3px;color:var(--ink-3);margin-bottom:12px">第六道闸防「幻觉引用」：AI 编的指标名（采数里没有的）直接导致整批作废。</p>
+
+    <h4 style="font-size:14.5px;margin-bottom:8px;color:#6b21a8">回验器（纯代码，不调 LLM——数字对比不需要智能，零成本零幻觉）</h4>
+    <div class="kv2" style="margin-bottom:12px">
+      <div class="k">时机</div><div class="v">每次巡检开头，扫全部「冷静期满」的已执行变更（覆盖 A/B 两路）</div>
+      <div class="k">生效</div><div class="v">指标相对基线变化 ≥±20% 且方向符合预期（阈值是策略项）</div>
+      <div class="k">未生效</div><div class="v">|Δ|&lt;5%；连续 2 次 → 自动生成回滚建议卡</div>
+      <div class="k">建议回滚</div><div class="v">反向变化 ≥20%，卡片带一键撤销</div>
+      <div class="k">数据不足</div><div class="v">指标停采则不判定（诚实三态之外的第四态）</div>
+    </div>
+
+    <h4 style="font-size:14.5px;margin-bottom:6px;color:#6b21a8">降级矩阵</h4>
+    <p style="font-size:13px;color:var(--ink-2)">断网/无 key/解析失败 → 纯指标报告（标注「本次未产生建议：原因」）· 注册表损坏 → 代码默认+提示 · 台账损坏 → 跳过对应指标 · 磁盘满 → 中止+横幅 · 崩溃 → 锁 TTL 自动释放 · 事件风暴 → 防抖兜底。</p>
+  </div>
+
+  <!-- 3C 共享 -->
+  <div class="card">
+    <h3 style="font-size:17px;color:var(--ink);margin-bottom:10px">共享底层 · 变更集状态机与存储</h3>
+    <div class="sm" style="margin-bottom:12px">
+      <span class="st mid">draft</span><span class="a2">→</span>
+      <span class="st pend">pending（10min）</span><span class="a2">→</span>
+      <span class="st ok">approved</span><span class="a2">→</span>
+      <span class="st ok">executed（先快照后写）</span><span class="a2">→</span>
+      <span class="st pend">verifying（冷静期 14d）</span><span class="a2">→</span>
+      <span class="st ok">effective</span><span class="a2">/</span>
+      <span class="st mid">no_effect</span><span class="a2">/</span>
+      <span class="st bad">revert_suggested</span><span class="a2">→</span>
+      <span class="st mid">reverted</span>
+    </div>
+    <p style="font-size:12.5px;color:var(--ink-3);margin-bottom:12px">pending 亦可 → expired / rejected（归档保留）；requestId 幂等去重；reverted 后再调 = 新变更集（不复活旧记录）；执行器单点迁移，全路径单测覆盖。</p>
+    <div class="kv2" style="margin-bottom:12px">
+      <div class="k">存储布局</div><div class="v"><code>cloud/steward/</code> 下 policies.json（滚动备份×3）· changesets/（每集一文件）· snapshots/（永久）· advices.json · audit.jsonl（10K 行轮转）——全部原子写（tmp+rename）+ lockfile</div>
+      <div class="k">自我保护</div><div class="v">steward 自身策略项（含 L3 白名单本身）autoTunable = never / L2-only——<b>管家不能调自己的缰绳</b>；越权尝试记审计 + 界面提示</div>
+      <div class="k">审计诚实度</div><div class="v">本地文件理论可改——审计定位是「防误不防恶」，不承诺防篡改</div>
+    </div>
+  </div>
+
+  <!-- 200 统计 + 否决 -->
+  <div class="card">
+    <h3 style="font-size:17px;margin-bottom:4px">200 项推演：结论分布与最有信息量的 8 个「否决」</h3>
+    <div class="stats200">
+      <div class="s2 a"><div class="n">180</div><div class="l">✅ 采纳</div></div>
+      <div class="s2 b"><div class="n">8</div><div class="l">❌ 否决</div></div>
+      <div class="s2 c"><div class="n">10</div><div class="l">⏸ 延后</div></div>
+      <div class="s2 d"><div class="n">2</div><div class="l">⊘ 不适用</div></div>
+    </div>
+    <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="veto"><span class="x">#25</span><h5>口头「行」≠批准</h5><p>无凭据、注入可伪造；UI 点击=主进程硬凭据</p></div>
+      <div class="veto"><span class="x">#19</span><h5>不支持批量提案</h5><p>单 policyId/提案——归因清晰，回验才能绑单一指标</p></div>
+      <div class="veto"><span class="x">#28</span><h5>匿名子代理不可审批</h5><p>审批权仅属主会话用户——子代理派生的提案也只算提案</p></div>
+      <div class="veto"><span class="x">#128</span><h5>回验不调 LLM</h5><p>数字对比纯代码算——零成本零幻觉，LLM 只用于「发现」，不用于「对账」</p></div>
+      <div class="veto"><span class="x">#150</span><h5>巡检建议不自动注入对话</h5><p>只在报告工具里按需读——不占上下文预算、不打扰对话</p></div>
+      <div class="veto"><span class="x">#159</span><h5>不存在不可逆操作</h5><p>全部可回滚是设计约束，不是巧合——不可逆的操作一开始就不在可调范围内</p></div>
+      <div class="veto"><span class="x">#177</span><h5>不承诺审计防篡改</h5><p>本地文件可改，诚实标注「防误不防恶」——不给自己做不到的承诺</p></div>
+      <div class="veto"><span class="x">#186</span><h5>界面零暴露参数名</h5><p>全部用「影响面」人话替代——对齐 User Story 铁律：治理概念绝不进用户界面</p></div>
+    </div>
+  </div>
+
+  <!-- 业界参照 -->
+  <div class="card">
+    <h3 style="font-size:17px;margin-bottom:10px">业界参照与仓库先例（每个关键设计都有出处）</h3>
+    <div class="refs">
+      <div class="ref"><b><a href="https://www.reddit.com/r/AI_Agents/comments/1s63az9/i_spent_months_trying_to_make_my_agents" target="_blank">Reddit · 自改进 agent 实践</a></b>B 路三步（采账本→AI 判定→落待办）= 其 capture→analyze→plan 循环的桌面版收敛</div>
+      <div class="ref"><b><a href="https://engineering.salesforce.com/closing-the-loop-how-to-build-self-improving-ai-systems-with-automated-feedback-loops" target="_blank">Salesforce · 自动反馈闭环</a></b>分层评估 + 持续学习的生产级参照；回验三态对齐其「观测-判定-行动」分层</div>
+      <div class="ref"><b><a href="https://www.deeplearning.ai" target="_blank">Letta / MemGPT · 自编辑记忆</a></b>agent 自己管理存储的可行性先例（LLM 当 OS）；本方案是其「参数治理」维度收敛版——管得更少、约束更硬</div>
+      <div class="ref"><b><a href="https://galileo.ai" target="_blank">LLM-as-judge · 结构化输出实践</a></b>judge 响应用固定 JSON schema 防解析失败——与七道闸校验管线同构</div>
+      <div class="ref"><b>仓库先例 · action_approval.ts</b>主进程持有状态 / TTL / 7 事件审计 / 渲染层只应答 opaque id——A 路批准机制整体复用，kind 扩展一项</div>
+      <div class="ref"><b>仓库先例 · semantic-review.ts</b>buildRunner 临时会话 / 封闭输出集 / 永不阻塞 / 降级安全——B 路 LLM 调用照此办理</div>
+    </div>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="sec-head"><div class="sec-num">4</div><h2>系统架构：五层，双入口共享底层</h2></div>
+  <p class="sec-desc">v2 相对 v1 的本质简化：不再需要独立的「管家服务」——入口 A 复用主智能体（加工具即可），只有入口 B 保留一个轻量后台巡检执行器。</p>
+  <div class="card">
+    <div class="arch">
+      <div class="layer l5">
+        <div class="tag">⑤<small>界面</small></div>
+        <div class="body">
+          <h4>「管家」标签页 —— 两路建议汇合的同一个流</h4>
+          <p>卡片混排两来源（「看依据」里标注来自对话还是巡检）+ 巡检报告大数字 + 上次调整效果。治理术语全部内部化。</p>
+        </div>
+      </div>
+      <div class="arch-arrow">▲ 变更集呈现　│　▼ 批准 / 回滚 / 授权设置</div>
+      <div class="layer l4">
+        <div class="tag">④<small>闭环</small></div>
+        <div class="body">
+          <h4>变更集闭环（借鉴蓝图：变更集带回滚）</h4>
+          <p>原子 · schema 校验 · 数值钳制 · dry-run 预演 diff · 批准凭据（对话原话或卡片点击）· 执行前快照 · 一键回滚 · 回验三态。</p>
+        </div>
+      </div>
+      <div class="arch-arrow">▲ 提案（两路同构）</div>
+      <div class="layer l3">
+        <div class="tag">③<small>双入口</small></div>
+        <div class="body">
+          <h4>两个入口，共享下面全部底层</h4>
+          <div class="mini-dual">
+            <div class="md a"><b>A 对话指挥</b>：steward 工具面挂进 core-agent（get_steward_report / list_tunable_policies / propose_policy_change / revert_steward_changeset），与现有资产工具同一注册模式</div>
+            <div class="md b"><b>B 自动巡检</b>：后台巡检执行器（复用 semantic-review 的 buildRunner 一次性判定模式：封闭输出、永不阻塞、失败降级）</div>
+          </div>
+        </div>
+      </div>
+      <div class="arch-arrow">▲ 运行报告　│　▼ getPolicy() 读值</div>
+      <div class="layer l2">
+        <div class="tag">②<small>指标</small></div>
+        <div class="body">
+          <h4>运行报告聚合器 —— 零新增埋点</h4>
+          <p>数据全部来自这几天的现成台账。</p>
+          <div class="chips"><span>usage 计数</span><span>agent_read 回执</span><span>漏用审计</span><span>矛盾台账</span><span>灰区堆积</span><span>聚类统计</span><span>目录预算</span></div>
+        </div>
+      </div>
+      <div class="arch-arrow">▲ 读注册表（读不到=代码默认）</div>
+      <div class="layer l1">
+        <div class="tag">①<small>地基</small></div>
+        <div class="body">
+          <h4>Policy Registry 策略注册表</h4>
+          <p>散装的 20+ 处固定参数/裁决点收口为命名策略项：id · 当前值 · 默认值 · 取值范围 · 影响面 · 来源 · 变更史（含批准凭据）。现有算法「读注册表，读不到回落代码默认」——零风险、一处一提交、逐文件渐进。落盘 cloud/steward/policies.json。</p>
+        </div>
+      </div>
+    </div>
+    <div class="arch-note">为什么 AI 不直接改数据/改代码：不可回滚、失控、与并行开发冲突。唯一安全形态＝算法不变，参数与裁决点变成<b>受控可调项</b>，AI 只能在声明范围内提案。</div>
+  </div>
+</section>
+
+<section id="grant">
+  <div class="sec-head"><div class="sec-num">5</div><h2>授权与安全：档位约束「操作类型」，对两个入口同等生效</h2></div>
+  <p class="sec-desc">授权管的是「什么操作可以被做」，不是「从哪个门做」——对话里和巡检里适用的规则一模一样。</p>
+  <div class="grants">
+    <div class="grant g1"><span class="lv">L1</span><h4>观察</h4><p>只产出建议，<b>不动任何东西</b>。</p><div class="human">人：看或不看 · B 巡检默认在此档</div></div>
+    <div class="grant g2"><span class="lv">L2</span><h4>提案</h4><p>产出变更集等批准。<b>A 路=对话口头确认；B 路=卡片点击</b>。</p><div class="human">人：逐项批准 · 推荐档</div></div>
+    <div class="grant g3"><span class="lv">L3</span><h4>受权执行</h4><p>白名单内直接执行+审计+回滚。白名单初始仅：数值微调（±0.05 内）、族头命名、候选标题。</p><div class="human">人：看审计随时回滚 · 需显式开启</div></div>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="safe">
+      <tr><th style="width:200px">风险</th><th>硬对策（执行层代码拒收，不靠提示词自觉）</th></tr>
+      <tr><td>幻觉/注入产出非法值</td><td>封闭 schema + 数值钳制到声明范围 + 枚举白名单；注入最坏结果=一个「值域内、非红线」的提案，仍需批准</td></tr>
+      <tr><td>越权</td><td>红线清单硬编码在执行层；归因封闭——policyId 必须命中注册表现存 id，AI 不能发明调整点</td></tr>
+      <tr><td>对话路径被注入欺骗</td><td>变更集必带批准凭据（对话 id + 用户原话摘要，或卡片点击），无凭据不执行；L3 白名单外的项在对话确认之外同步出卡片双留痕</td></tr>
+      <tr><td>自激循环</td><td>AI 调的参数影响 AI 看的指标 → 每变更 14 天冷静期不再动同一项；回验对比变更前基线</td></tr>
+      <tr><td>频率失控</td><td>每巡检变更集条数上限 + 每日巡检次数上限（均为策略项）</td></tr>
+      <tr><td>不可逆</td><td>执行前快照，回滚=恢复快照，回滚也记账</td></tr>
+      <tr><td>与并行开发冲突</td><td>第一批只收口 recall 侧参数；ontology 侧（007 三盒开发中）稳定后再纳入</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="iface">
+  <div class="sec-head"><div class="sec-num">6</div><h2>内容管理接口：一套工具面 + 一套 IPC + 裁决钩子</h2></div>
+  <p class="sec-desc">入口 A 用模型工具面（挂 core-agent，蛇形命名随现有资产工具）；界面与手动触发走 IPC；灰区裁决点留可选钩子（钩子失败=今天的原行为）。</p>
+  <div class="card">
+    <h4 style="font-size:15px;margin-bottom:12px">模型工具面（入口 A）</h4>
+    <div class="ipc">
+      <div class="row"><code>get_steward_report</code><span>读运行报告+上次调整效果</span></div>
+      <div class="row"><code>list_tunable_policies</code><span>查可调项（id/值/范围/影响面）</span></div>
+      <div class="row"><code>propose_policy_change</code><span>提变更集（服务端钳制值）</span></div>
+      <div class="row"><code>list_steward_changesets</code><span>查历史调整</span></div>
+      <div class="row"><code>revert_steward_changeset</code><span>回滚某次调整</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <h4 style="font-size:15px;margin-bottom:12px">IPC（界面用，steward.* 命名空间）</h4>
+    <div class="ipc">
+      <div class="row"><code>steward.report.get</code><span>巡检报告+建议列表</span></div>
+      <div class="row"><code>steward.session.run</code><span>手动发起巡检（入口 B）</span></div>
+      <div class="row"><code>steward.advice.list/adopt/dismiss</code><span>建议三件套</span></div>
+      <div class="row"><code>steward.changeset.list/preview/apply/revert</code><span>变更集四件套</span></div>
+      <div class="row"><code>steward.policy.list/history</code><span>策略项与变更史</span></div>
+      <div class="row"><code>steward.grant.get/set</code><span>授权档位</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <h4 style="font-size:15px;margin-bottom:8px">裁决钩子（verdict 点，Phase D 接线，默认关闭）</h4>
+    <p style="font-size:13.5px;color:var(--ink-2)">灰区点调 <code style="font-family:ui-monospace;font-size:12px;background:var(--primary-soft);color:var(--primary);border-radius:6px;padding:1px 8px">judgeVerdict('dedup.grayzone', ctx, {timeoutMs:800, fallback:原逻辑})</code>——同步限时取缓存预判，超时/断网/未开启一律走 fallback=今天的行为；完整判定后台落台账。</p>
+  </div>
+</section>
+
+<section id="advice">
+  <div class="sec-head"><div class="sec-num">7</div><h2>建议的产出：两路同一种格式，界面一张卡</h2></div>
+  <p class="sec-desc">左：建议流实际长相（卡片混排两来源）；右：背后的封闭 JSON 与回验输出。</p>
+  <div class="mock-wrap">
+    <div class="mock">
+      <div class="bar"><span>管家 · 建议</span><span>上次巡检：3 条 · 2 条已生效</span></div>
+      <div class="advice-card">
+        <span class="kind">参数微调 · 可撤销</span><span class="from">来自巡检</span>
+        <h5>有 9 条「答辩偏好」相关的内容没被归到一组</h5>
+        <p>把分组灵敏度稍微调高一点（0.60 → 0.55），对话时少占 8 行目录。预计两周内见效；随时可撤销。</p>
+        <div class="btns"><button class="btn yes">采纳</button><button class="btn no">忽略</button><button class="btn no">看依据</button></div>
+      </div>
+      <div class="advice-card">
+        <span class="kind">命名改写</span><span class="from">来自对话（你上次说「行」之前留下的）</span>
+        <h5>「QmFj…」这一组建议改名叫「代码评审偏好」</h5>
+        <p>现在的组名是自动截断的乱码片段。</p>
+        <div class="btns"><button class="btn yes">采纳</button><button class="btn no">忽略</button></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h4 style="font-size:14.5px;margin-bottom:8px">结构化格式（封闭 schema，节选）</h4>
+        <pre style="font-family:ui-monospace,Menlo,monospace;font-size:11.8px;line-height:1.65;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;overflow-x:auto">{
+  "adviceId": "adv-20260920-001",
+  "via": "chat | patrol",      // 哪个入口
+  "kind": "param_tune",        // 参数/规则/整理/流程
+  "policyId": "family.semantic_threshold",
+  "finding": "9 条资产相似度 0.52–0.59 未归族",
+  "evidence": [
+    { "metric": "family.near_miss_pairs",
+      "window": "7d", "value": 9 } ],
+  "rationale": "语义上同属答辩偏好主题…",
+  "proposal": { "from": 0.60, "to": 0.55 },
+  "confidence": "medium",
+  "risk": { "level": "low" },
+  "reversible": true,
+  "verification": { "gracePeriodDays": 14 }
+}</pre>
+      </div>
+      <div class="mock">
+        <div class="verify">
+          <h5>上次调整效果（回验，两路统一）</h5>
+          <div class="v-item ok"><span class="dot" style="background:#059669"></span>聚类阈值 0.60→0.55（巡检建议）——起作用了，9 条已归族</div>
+          <div class="v-item none"><span class="dot" style="background:#94a3b8"></span>画像新鲜度 72h→48h（对话里调的）——没看到效果</div>
+          <div class="v-item back"><span class="dot" style="background:#e11d48"></span>目录星标 0.40→0.30——好像帮了倒忙，建议撤销〔一键撤销〕</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="plan">
+  <div class="sec-head"><div class="sec-num">8</div><h2>实施分期：先对话入口，后自动巡检</h2></div>
+  <p class="sec-desc">v2 重排：主智能体路径先落地（价值最大、最贴蓝图），自动路径建立在同一底楼上水到渠成。每期独立可验收，拍板后立 specs/008-asset-steward/。</p>
+  <div class="phases">
+    <div class="phase"><div class="ph">A · 地基</div><h4>策略注册表</h4><p>Policy Registry + recall 侧 10 参数收口（一处一提交带回归测试）+ 运行报告聚合器</p><span class="acc">验收：全量绿；行为与收口前一致</span></div>
+    <div class="phase"><div class="ph">B · 对话入口</div><h4>工具面 + 变更集</h4><p>steward 工具挂 core-agent + 变更集落库 + 对话批准凭据</p><span class="acc">验收：真机「看看该不该调→行→生效→台账可查」</span></div>
+    <div class="phase"><div class="ph">C · 闭环</div><h4>回滚 + 建议流</h4><p>dry-run/执行/回滚 + 授权三档 + 界面建议流 + 回验三态</p><span class="acc">验收：采纳→生效→回滚全链两路各验一遍</span></div>
+    <div class="phase"><div class="ph">D · 自动巡检</div><h4>后台执行器</h4><p>事件+定时触发 + 裁决钩子接线 + L3 白名单</p><span class="acc">验收：断网降级纯报告；钩子关闭=与今日一致</span></div>
+  </div>
+</section>
+
+<section id="decide">
+  <div class="sec-head"><div class="sec-num">9</div><h2>待拍板决策点</h2></div>
+  <p class="sec-desc">影响目标与成本的取舍，逐条等用户定。</p>
+  <div class="decisions">
+    <h3>六个决策点</h3>
+    <ol>
+      <li><b>对话批准的边界</b>：方案=对话里明确同意即执行（原话入台账），L3 白名单外同步出卡片双留痕。要更严（对话只提不做、一切执行去卡片点）吗？</li>
+      <li><b>L3 受权执行范围</b>：白名单仅数值微调+两类命名改写。更保守（先不开）还是更大胆（含停用词表）？</li>
+      <li><b>巡检成本</b>：入口 B 每次约一次 LLM 调用。每日定期可接受，还是先只做手动+事件触发？</li>
+      <li><b>入口 B 用哪个模型</b>：A 路天然跟随主模型；B 路可单独指定便宜模型（巡检不需要对话级智力）？</li>
+      <li><b>与 007 的边界</b>：ontology 侧参数等 007 稳定后再纳入——次序认可吗？</li>
+      <li><b>specs 编号</b>：立 specs/008-asset-steward/ 与 007 并行——认可吗？</li>
+    </ol>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  资产管家方案 v2 · 2026-09-20 · 主文档 design/资产管家-AI统管资产界面-方案-20260920.md · 双入口方向由用户拍板 · 依据分支快照 0701d934 实测盘点
+</footer>
+
+</body>
+</html>

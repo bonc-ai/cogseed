@@ -44,6 +44,24 @@ function loadPageAction() {
 }
 
 describe('KB discovery Feishu document action', () => {
+  it('uses shared Tabs for category navigation instead of page-local tab buttons', () => {
+    const source = read('src/renderer/modules/kb-discover.js');
+
+    expect(source).toContain('window.uiTabs({');
+    expect(source).toContain('window.hydrateUiTabs(host)');
+    expect(source).toContain("addEventListener('ui-tabs-change'");
+    expect(source).not.toContain("querySelectorAll('[data-kb-discover-tab]')");
+  });
+
+  it('adopts catalog cards into the shared card shell without moving business actions', () => {
+    const source = read('src/renderer/modules/kb-discover.js');
+
+    expect(source).toContain('return window.uiCard({ className: `kb-discover-catalog-card');
+    expect(source).toContain('data-discover-catalog-preview');
+    expect(source).toContain('data-discover-catalog-import');
+    expect(source).toContain('data-discover-catalog-save');
+  });
+
   it('opens imported source documents directly in the full source viewer', () => {
     const source = read('src/renderer/modules/kb-discover.js');
 

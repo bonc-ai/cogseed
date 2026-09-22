@@ -41,6 +41,7 @@ import {
   removeEntryTransactional,
   listEntries,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
+  type MemoryOpResult,
   type MemoryScope,
 } from '../../features/memory';
 import { listActiveCognitionSourceIds } from '../../features/cognition';
@@ -640,8 +641,44 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       }
       return result;
     };
+    // 即时模式直投（2026-09-19 方案甲·清单 #3）：user/shared 档的写入不再落
+    // 记忆文件，直投第二段入库（查重金字塔＋挂族＋正规回执），产出「模型记
+    // 的·未验证」资产，入库即可用。agent/space 档保持记忆文件路径——它们的
+    // 退役与搬迁在阶段 D 统一处理。改道档位的教学信号桥随之退役（写入本身
+    // 就产候选，不再另发 teaching 信号）。直投失败（注入拒收/内部错误）回退
+    // 记忆文件路径——工具不能因为新通道故障而对模型失声。
+    const ingestImmediate = async (tier: 'user' | 'shared', content: string): Promise<MemoryOpResult> => {
+      try {
+        const { ingestImmediateKnowledge } = await import('../../features/recall/candidate-service');
+        await ingestImmediateKnowledge(uid, {
+          text: content,
+          // 真实会话 id 是 cid（消息所在聊天会话；来源目录按裸 cid 命中）——
+          // 此前误传 runner 内部 sessionId，拼出的合成引用 id 永远查不到，
+          // 候选被误标「来源已删」（2026-09-20 修复）。传法与上方 teaching 线同款。
+          ...(params.cid ? { conversationId: String(params.cid) } : {}),
+          ...(params.cid && params.sourceMessageId ? { messageId: String(params.sourceMessageId) } : {}),
+        });
+        return { ok: true, entries: [], usage: { current: 0, limit: 0 } };
+      } catch (error) {
+        // L3 敏感内容（凭据等）绝不落盘——资产管线的敏感闸拒绝的内容，不能
+        // 经由回退路径用更松的闸（记忆文件只有注入扫描）收下，否则两条写入
+        // 线的处置纪律互相矛盾（capture 线同款口径：丢弃并留痕，见
+        // capture-service 的 per-candidate 处理）。返回失败让模型知道写入被拒。
+        const messageText = error instanceof Error ? error.message : String(error);
+        if (messageText.includes('forbidden to persist')) {
+          log.warn('immediate ingest rejected: sensitive content not persisted', {
+            conversation_id: maskId(params.cid),
+            error: logErrorSummary(error),
+          });
+          return { ok: false, error: messageText, entries: [], usage: { current: 0, limit: 0 } };
+        }
+        return addEntryTransactional(uid, toScope(tier), content);
+      }
+    };
     const memoryHandler: MemoryToolHandler = {
-      add: async (tier, content) => recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
+      add: async (tier, content) => (tier === 'user' || tier === 'shared')
+        ? ingestImmediate(tier, content)
+        : recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
       replace: async (tier, oldText, content) => recordTeaching(tier, content, await replaceEntryTransactional(uid, toScope(tier), oldText, content)),
       remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
     };
@@ -768,12 +805,18 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(params.cid ? { cid: params.cid } : {}),
   }) : [];
 
-  // Recall ability-asset search tool (search_ability_assets). Read-only, no
-  // localExec required. Injected for every main conv + group_chat actor so
-  // the LLM can actively consult the GLOBAL asset pool (product design
+  // Recall ability-asset tools (search_ability_assets: 目录 / 取正文 / 语义检索).
+  // Read-only, no localExec required. Injected for every main conv + group_chat
+  // actor so the LLM can actively consult the GLOBAL asset pool (product design
   // 2026-08-17: 注入只显示本空间资产，全局池的使用交给主动检索).
+  // 2026-09-18：带上回合上下文——模型自己取用的资产要写 agent_read 注入回执
+  // 与使用流水（turnId），并以当前消息文本做适用/禁用场景匹配（taskText）。
   const recallTools = uid && !params.disableTools ? createRecallTools({
     userId: uid,
+    ...(params.turnId ? { turnId: params.turnId } : {}),
+    ...(params.cid ? { cid: params.cid } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+    ...(params.userMessage ? { taskText: params.userMessage } : {}),
   }) : [];
 
   // Personal Ontology read-only tools (personal_ontology_fields). Gives skills
@@ -1082,8 +1125,23 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       });
     }
   }
+  // 背景块内容源（2026-09-19 清单 #7）：画像从资产库渲染（personal 资产按
+  //  使用次数取头部），资产库还没有画像资产时回退记忆文件——存量迁移完成后
+  //  文件为空，这里无感切换。agent/space 档仍在文件（阶段 D 退役）。
+  const formatMemoryBlockWithAssetProfile = async (
+    userId: string, agentId: string, spaceId?: string, projectId?: string, activeIds: ReadonlySet<string> = new Set(),
+  ): Promise<string> => {
+    let assetProfileEntries: string[] = [];
+    try {
+      const { loadAssetProfileEntries } = await import('../../features/recall/profile-block');
+      assetProfileEntries = await loadAssetProfileEntries(userId);
+    } catch {
+      assetProfileEntries = []; // 资产库读取失败回退文件渲染
+    }
+    return formatMemoryForSystemPrompt(userId, agentId, spaceId, projectId, activeIds, assetProfileEntries);
+  };
   const memoryBlock = (uid && memoryAgentScope)
-    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
+    ? await formatMemoryBlockWithAssetProfile(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
     : '';
   if (memoryBlock) parts.push(memoryBlock);
   // 二期「空间 = 角色」：会话挂空间 → 注入该角色模板画像（个人本体角色模板文件，

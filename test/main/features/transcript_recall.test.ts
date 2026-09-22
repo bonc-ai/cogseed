@@ -269,22 +269,22 @@ describe('四条护栏与精确扫描同语义', () => {
 });
 
 describe('中文音近接入口 extraPhonetic（零依赖下的拼音挂点）', () => {
-  const jingwen = entry({ wrong: '静雯', correct: '静雯', kind: 'people' });
+  const jingwen = entry({ wrong: '王婧', correct: '王婧', kind: 'people' });
 
   it('不注入拼音时中文音近召回不到（显式记录的已知缺口）', () => {
-    const r = recallCandidates('静文说了这句话', [jingwen], { domainTerms: ['静雯'] });
+    const r = recallCandidates('王晶说了这句话', [jingwen], { domainTerms: ['王婧'] });
     expect(r.candidates).toHaveLength(0);
   });
 
-  it('注入拼音表后 静文 → 静雯 走 phonetic 通道命中', () => {
-    const r = recallCandidates('静文说了这句话', [jingwen], {
-      domainTerms: ['静雯'],
-      extraPhonetic: { 静: 'jing', 雯: 'wen', 文: 'wen' },
+  it('注入拼音表后 王晶 → 王婧 走 phonetic 通道命中', () => {
+    const r = recallCandidates('王晶说了这句话', [jingwen], {
+      domainTerms: ['王婧'],
+      extraPhonetic: { 王: 'wang', 晶: 'jing', 婧: 'jing' },
     });
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0].channel).toBe('phonetic');
     expect(r.candidates[0].similarity).toBe(1);
-    expect(r.candidates[0].correct).toBe('静雯');
+    expect(r.candidates[0].correct).toBe('王婧');
   });
 });
 

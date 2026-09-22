@@ -1,0 +1,18 @@
+{
+  "message": "success",
+  "data": {
+    "has_more": false,
+    "meeting_id": "",
+    "minute_id": "minute_id_placeholder_0001",
+    "minutes": [
+      {
+        "created_at": "2030-09-20T17:13:19+08:00",
+        "minute_id": "minute_id_placeholder_0001",
+        "overview": "",
+        "summary_points": "（示例文本，已脱敏）",
+        "todos": []
+      }
+    ],
+    "subject": "示例会议 A"
+  }
+}

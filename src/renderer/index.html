@@ -452,6 +452,9 @@
       <!-- Cognitive assets -->
       <section class="panel ui-resource-page" id="panel-recall">
                   <div id="ca-root"></div>
+          <!-- 个人本体 section 的常驻停车场：本体路由激活时被移进 #ca-ontology-mount，
+               离开时归还这里——同一 DOM 节点往返，内部状态不销毁（2026-09-21 五页签迁移）。 -->
+          <div id="ca-ontology-parking" hidden>
           <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
             <!-- 个人本体（#panel-personal-ontology）整体内嵌：保留 id，渲染函数照常工作。 -->
             <section class="panel skills-embedded-panel recall-personal-ontology-frame" id="panel-personal-ontology">
@@ -507,6 +510,7 @@
               </div>
             </section>
             </section>
+          </div>
 </section>
 
 
@@ -1042,9 +1046,9 @@
               <button type="button" class="memory-entry-card" id="memory-entry-card">
                 <span class="memory-entry-icon" data-ui-icon="sparkles"></span>
                 <span class="memory-entry-body">
-                  <span class="memory-entry-title" data-i18n="memory.entry_title">记忆</span>
-                  <!-- desc carries a live count → filled by memory.js (_memRefreshEntryCount); no data-i18n (can't interpolate {n}). -->
-                  <span class="memory-entry-desc" id="memory-entry-desc"></span>
+                  <span class="memory-entry-title" data-i18n="memory.entry_title">认知资产</span>
+                  <!-- 记忆页退役（2026-09-20）：卡片改跳认知资产；desc 改静态引导（实时计数随页面退役移除）。 -->
+                  <span class="memory-entry-desc" data-i18n="memory.entry_desc">个人画像与本体分组的新家</span>
                 </span>
                 <span class="memory-entry-chevron" data-ui-icon="chevron-right"></span>
               </button>
@@ -1430,13 +1434,9 @@
         </div>
       </section>
 
-      <!-- Memory detail page (reached from Settings › 数据 › 记忆).
-           memory.js renders the whole page (breadcrumb + header + sections) and
-           the import/export modals into the body overlay. Personal cross-session
-           memory over features/memory.ts — view / edit / import / export. -->
-      <section class="panel" id="panel-memory">
-        <div class="memory-page" id="memory-page"></div>
-      </section>
+      <!-- Memory page retired (2026-09-20): groups + profile live under the
+           cognition-assets view (personal ontology subpage); export/import
+           remains available there via memory.js (window.MemoryTools). -->
     </main>
   </div>
 
@@ -1863,11 +1863,16 @@
   <script src="./modules/ui-user-menu.js"></script>
   <script src="./modules/ui-sidebar-tools.js"></script>
   <script src="./modules/ui-segmented-control.js"></script>
+  <script src="./modules/ui-tabs.js"></script>
+  <script src="./modules/ui-status.js"></script>
+  <script src="./modules/ui-card.js"></script>
+  <script src="./modules/ui-structure.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>
   <script src="./modules/wake-approvals.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
+  <script src="./modules/ui-drawer.js"></script>
   <script src="./modules/composer-popovers.js"></script>
   <script src="./modules/file-operation-policy.js"></script>
   <script src="./modules/chat-file-viewer.js"></script>
@@ -1889,6 +1894,10 @@
   <!-- 纯函数模块：window.conversationMetrics（消息/会话 token 用量格式化）。
        必须在 conversation.js 之前加载（其消费方是 _mountMsgMeta）。 -->
   <script src="./modules/conversation-metrics.js"></script>
+  <!-- 多 Agent 选择：会话成员 / 正文点名标记 / 按来源模型配置。加载在
+       conversation.js 与 agents.js 之前——两者在初始化时直接读 window.composerMembers。 -->
+  <script src="./modules/composer-members.js"></script>
+  <script src="./modules/member-work-state.js"></script>
   <script src="./modules/conversation.js"></script>
   <script src="./modules/kb-glossary-manager.js"></script>
   <script src="./modules/kb-transcript-correct.js"></script>

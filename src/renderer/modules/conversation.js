@@ -505,6 +505,9 @@ function _chatRichSerializeNode(node, isRoot = true) {
   if (node.nodeType === Node.ELEMENT_NODE) {
     const el = node;
     if (el.dataset?.chatUseChip === '1') return el.dataset.token || '';
+    // 点名标记与技能/连接器 chip 同构：序列化回 `@名字 `，隐藏 textarea 里
+    // 始终是纯文本，主进程的 mention 解析与气泡高亮不需要认识 chip。
+    if (el.dataset?.chatMentionChip === '1') return el.dataset.token || '';
     // A "bogus" <br> is a display-only filler that renders the trailing empty
     // line contenteditable would otherwise collapse; it carries no value, so a
     // render→serialize round-trip must not turn it back into a newline.
@@ -525,6 +528,56 @@ function _chatRichSerializeNode(node, isRoot = true) {
 
 function _chatRichTextLength(node) {
   return _chatRichSerializeNode(node).length;
+}
+
+/** 正文点名标记 chip：绿色文字（样式与原型 `.cm-mention-text` 一致），
+ *  绑定稳定身份（agent_id）；DOM 上是不可编辑整体节点，所以整块删除。
+ *  `token` 是它拼回正文的原文（含尾随空格），保证 textarea 值可无损往返。 */
+function _chatRichCreateMentionChip(token) {
+  const chip = document.createElement('span');
+  chip.className = 'chat-rich-mention-chip';
+  chip.contentEditable = 'false';
+  chip.dataset.chatMentionChip = '1';
+  chip.dataset.agentId = String(token.id || '');
+  chip.dataset.agentName = String(token.name || '');
+  chip.dataset.token = String(token.text || `@${token.name || ''}`);
+  chip.setAttribute('role', 'img');
+  chip.setAttribute('aria-label', String(token.text || '').trim());
+  chip.textContent = String(token.text || '').trim();
+  return chip;
+}
+
+/** 合并技能/连接器 chip 与点名标记两类 token，按位置排序且互不重叠。 */
+function _chatRichSegmentTokens(src, target = 'conversation') {
+  const text = String(src || '');
+  const out = [];
+  const useTokens = (typeof _findChatUseTokens === 'function') ? _findChatUseTokens(text) : [];
+  for (const token of useTokens) {
+    out.push({ kind: 'use', start: token.start, end: token.end, raw: token.raw, selection: token.selection });
+  }
+  const members = (typeof window !== 'undefined') ? window.composerMembers : null;
+  const mentionTokens = (members && typeof members.mentionTokensForTarget === 'function')
+    ? members.mentionTokensForTarget(target, text)
+    : [];
+  for (const token of mentionTokens) {
+    out.push({
+      kind: 'mention',
+      start: token.start,
+      end: token.end,
+      id: token.id,
+      name: token.name,
+      text: text.slice(token.start, token.end),
+    });
+  }
+  out.sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged = [];
+  let cursor = -1;
+  for (const token of out) {
+    if (token.start < cursor) continue;
+    merged.push(token);
+    cursor = token.end;
+  }
+  return merged;
 }
 
 function _chatRichRangeLength(editor, container, offset) {
@@ -561,7 +614,7 @@ function _chatRichFindPosition(root, index) {
     }
     if (node.nodeType === Node.ELEMENT_NODE) {
       const el = node;
-      if (el.dataset?.chatUseChip === '1' || el.tagName === 'BR') {
+      if (el.dataset?.chatUseChip === '1' || el.dataset?.chatMentionChip === '1' || el.tagName === 'BR') {
         const len = _chatRichTextLength(el);
         if (left <= len) return left <= len / 2
           ? { type: 'before', node: el }
@@ -644,7 +697,8 @@ function _chatRichCreateUseChip(selection, rawToken) {
 function _chatRichHasAuthoredContent(node) {
   if (!node) return false;
   if (node.nodeType === Node.TEXT_NODE) return !!(node.nodeValue || '');
-  if (node.nodeType === Node.ELEMENT_NODE && node.dataset?.chatUseChip === '1') return true;
+  if (node.nodeType === Node.ELEMENT_NODE
+    && (node.dataset?.chatUseChip === '1' || node.dataset?.chatMentionChip === '1')) return true;
   return Array.from(node.childNodes || []).some((child) => _chatRichHasAuthoredContent(child));
 }
 
@@ -672,24 +726,79 @@ function _chatRichEnsureTrailingBreak(editor) {
 /** Reconcile every non-IME native edit before serializing it. The display-only trailing filler can
  * become stale when the user types after a trailing newline or deletes that newline with Backspace;
  * leaving it in the DOM creates a phantom visual line even though serialization correctly drops it. */
-function _chatRichHandleEditorInput(api) {
+function _chatRichHandleEditorInput(api, inputType = '') {
   if (!api || api.composing) return;
   api.ensureTrailingBreak();
-  api.syncFromEditor(true);
+  api.syncFromEditor(true, { inputType });
 }
 
-function _chatRichRenderValue(editor, value) {
+function _chatRichRenderValue(editor, value, target = 'conversation') {
   const src = String(value || '');
   editor.textContent = '';
-  const tokens = (typeof _findChatUseTokens === 'function') ? _findChatUseTokens(src) : [];
+  const tokens = _chatRichSegmentTokens(src, target);
   let last = 0;
   tokens.forEach((token) => {
     if (token.start > last) editor.appendChild(document.createTextNode(src.slice(last, token.start)));
-    editor.appendChild(_chatRichCreateUseChip(token.selection, token.raw));
+    editor.appendChild(token.kind === 'mention'
+      ? _chatRichCreateMentionChip(token)
+      : _chatRichCreateUseChip(token.selection, token.raw));
     last = token.end;
   });
   if (last < src.length) editor.appendChild(document.createTextNode(src.slice(last)));
   _chatRichEnsureTrailingBreak(editor);
+}
+
+function _chatRichMentionSidecarFromDom(editor, target = 'conversation', inputType = '') {
+  const out = [];
+  const members = (typeof window !== 'undefined') ? window.composerMembers : null;
+  const active = members && typeof members.mentionSidecarSnapshot === 'function'
+    ? members.mentionSidecarSnapshot(target).map((token) => ({ ...token }))
+    : [];
+  let offset = 0;
+  const visit = (node, isRoot = false) => {
+    if (!node) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      offset += (node.nodeValue || '').length;
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
+    if (node.nodeType === Node.ELEMENT_NODE && node.dataset?.chatMentionChip === '1') {
+      const text = String(node.dataset.token || '');
+      const id = String(node.dataset.agentId || '');
+      const name = String(node.dataset.agentName || '');
+      out.push({ id, name, start: offset, end: offset + text.length, text });
+      offset += text.length;
+      return;
+    }
+    if (node.nodeType === Node.ELEMENT_NODE
+      && (node.dataset?.chatUseChip === '1' || node.tagName === 'BR')) {
+      offset += _chatRichSerializeNode(node, false).length;
+      return;
+    }
+    Array.from(node.childNodes || []).forEach((child) => visit(child, false));
+    if (!isRoot && node.nodeType === Node.ELEMENT_NODE && /^(DIV|P)$/i.test(node.tagName || '')) {
+      offset += 1;
+    }
+  };
+  visit(editor, true);
+  const candidates = out.filter((token) => token.id && token.name && token.text);
+  if (members && typeof members.syncMentionSidecarFromDom === 'function') {
+    return members.syncMentionSidecarFromDom(target, candidates, { inputType });
+  }
+  // Compatibility fallback for isolated renderer harnesses: DOM attributes
+  // remain non-authoritative and may only consume an already-active token.
+  const consumed = new Set();
+  return candidates.filter((candidate) => {
+    const matchIndex = active.findIndex((token, index) => (
+      !consumed.has(index)
+      && token.id === candidate.id
+      && token.name === candidate.name
+      && token.text === candidate.text
+    ));
+    if (matchIndex < 0) return false;
+    consumed.add(matchIndex);
+    return true;
+  });
 }
 
 function _chatRichInputTarget(inputId) {
@@ -800,7 +909,7 @@ function _chatRichCreateApi(textarea, editor) {
         this.lastValue = value;
         const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : value.length;
         const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : start;
-        _chatRichRenderValue(editor, value);
+        _chatRichRenderValue(editor, value, _chatRichInputTarget(textarea.id));
         if (document.activeElement === editor || this.pendingSelection) {
           const sel = this.pendingSelection || { start, end };
           _chatRichSetSelection(editor, sel.start, sel.end);
@@ -812,15 +921,35 @@ function _chatRichCreateApi(textarea, editor) {
       }
       if (shouldAutoGrow) this.autoGrow(_chatRichAutoGrowMax(textarea.id));
     },
-    syncFromEditor(emit) {
+    syncFromEditor(emit, opts = {}) {
       this.syncTextareaSelectionFromEditor();
       const value = _chatRichSerializeNode(editor);
+      const members = window.composerMembers;
+      const target = _chatRichInputTarget(textarea.id);
+      const syncedByMembers = members && typeof members.syncMentionSidecarFromDom === 'function';
+      const mentionSidecar = _chatRichMentionSidecarFromDom(
+        editor,
+        target,
+        opts && typeof opts.inputType === 'string' ? opts.inputType : '',
+      );
+      if (!syncedByMembers && members && typeof members.setMentionSidecar === 'function') {
+        members.setMentionSidecar(
+          target,
+          mentionSidecar,
+        );
+      }
       if (value === this.lastValue && !emit) return;
       this.lastValue = value;
       textarea.value = value;
       this.syncingFromEditor = true;
       if (emit) {
-        try { textarea.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+        try {
+          const inputType = opts && typeof opts.inputType === 'string' ? opts.inputType : '';
+          const event = inputType && typeof InputEvent === 'function'
+            ? new InputEvent('input', { bubbles: true, inputType })
+            : new Event('input', { bubbles: true });
+          textarea.dispatchEvent(event);
+        } catch (_) {}
       }
       this.syncingFromEditor = false;
       this.autoGrow(_chatRichAutoGrowMax(textarea.id));
@@ -890,10 +1019,10 @@ function _chatRichCreateApi(textarea, editor) {
     if (api.syncingFromEditor || api.composing) return;
     api.renderFromTextarea();
   });
-  editor.addEventListener('input', () => {
+  editor.addEventListener('input', (event) => {
     // Native IME keeps mutating the editor while composing; stay out of its way
     // and reconcile once on compositionend.
-    _chatRichHandleEditorInput(api);
+    _chatRichHandleEditorInput(api, event && typeof event.inputType === 'string' ? event.inputType : '');
   });
   editor.addEventListener('compositionstart', () => { api.composing = true; });
   editor.addEventListener('compositionend', () => {
@@ -915,9 +1044,12 @@ function _chatRichCreateApi(textarea, editor) {
       e.preventDefault();
       return;
     }
+    // Never let contenteditable perform its native HTML paste. Foreign DOM
+    // can carry forged mention-chip data attributes. We accept only inert
+    // clipboard plain text; HTML-only/empty payloads insert nothing.
+    e.preventDefault();
     const text = cd?.getData ? cd.getData('text/plain') : '';
     if (!text) return;
-    e.preventDefault();
     _chatRichInsertText(editor, text);
     api.ensureTrailingBreak();
     api.syncFromEditor(true);
@@ -925,12 +1057,18 @@ function _chatRichCreateApi(textarea, editor) {
   editor.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     api.syncTextareaSelectionFromEditor();
-    if ((e.key === 'Backspace' || e.key === 'Delete') && typeof _deleteChatUseTokenAtCaret === 'function') {
+    if (e.key === 'Backspace' || e.key === 'Delete') {
       const direction = e.key === 'Delete' ? 'forward' : 'backward';
-      if (_deleteChatUseTokenAtCaret(textarea, direction)) {
+      if (typeof _deleteChatUseTokenAtCaret === 'function'
+        && _deleteChatUseTokenAtCaret(textarea, direction)) {
         e.preventDefault();
         return;
       }
+      // Mention chips are contenteditable=false atoms. Chromium must own their
+      // Backspace/Delete default action so the node removal enters native undo
+      // history; the following input event archives the active sidecar, and a
+      // later historyUndo can restore that exact authorized atom. The legacy
+      // textarea helper remains available to non-rich/programmatic callers.
     }
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && typeof _moveChatUseTokenCaret === 'function') {
       const direction = e.key === 'ArrowRight' ? 'forward' : 'backward';
@@ -1034,6 +1172,18 @@ function _initMentionMirror(textarea) {
   const chipId = _chatRichRecipientChipId(textarea.id);
   if (chipId && typeof bindRecipientAnchor === 'function') {
     try { bindRecipientAnchor(chipId, textarea.id); } catch (_) {}
+  }
+  // 会话成员与正文标记联动（FR-002）：只有用户真实编辑草稿才可能取消成员；
+  // 发送后的自动清空走 resetDraftTracking，不算手动删除标记。
+  const memberTarget = _chatRichInputTarget(textarea.id);
+  if (memberTarget !== 'auto' && window.composerMembers) {
+    const members = window.composerMembers;
+    members.seedDraftTracking(memberTarget, textarea.value);
+    textarea.addEventListener('input', (event) => {
+      members.syncFromDraft(memberTarget, textarea.value, {
+        inputType: event && typeof event.inputType === 'string' ? event.inputType : '',
+      });
+    });
   }
   // Programmatic value changes (send-clears the input, agent-picker
   // inserts `@<name>`, draft restore on conv switch) don't fire `input`
@@ -1502,6 +1652,64 @@ function _transferNewChatRecipientTo(cid) {
   }
 }
 
+/** `A +2` 摘要里的 `+N`：一位成员时不渲染（FR-003），零位时移除残留。 */
+function _renderRecipientMoreBadge(chipHost, extra) {
+  if (!chipHost) return;
+  const badge = chipHost.querySelector('.chat-recipient-more');
+  if (!extra) {
+    if (badge) badge.remove();
+    return;
+  }
+  const el = badge || document.createElement('span');
+  el.className = 'chat-recipient-more';
+  el.textContent = `+${extra}`;
+  if (!badge) chipHost.appendChild(el);
+}
+
+/** 成员名单变化 → 回写单接收者语义，并重绘入口摘要。
+ *  1 位 agent 成员＝该成员（沿用既有单接收者路由）；2 位以上＝commander 按
+ *  分工编排（FR-017：选择顺序不代表执行顺序，独立工作可并行）。 */
+function _syncRecipientFromMembers(target) {
+  const cm = window.composerMembers;
+  if (!cm || typeof cm.getMembers !== 'function') return;
+  const tg = target === 'new-chat' ? 'new-chat' : 'conversation';
+  const members = cm.getMembers(tg);
+  if (members.length === 1 && members[0].kind === 'agent') {
+    setChatRecipient(tg, { kind: 'agent', id: members[0].id, name: members[0].name });
+  } else {
+    setChatRecipient(tg, { kind: 'commander' });
+  }
+  _renderRecipientChip(tg);
+}
+
+const _activeMemberRunByCid = new Map();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('composer-members-change', (event) => {
+    const detail = event && event.detail ? event.detail : {};
+    _syncRecipientFromMembers(detail.target);
+    const removed = Array.isArray(detail.removed_agent_ids)
+      ? detail.removed_agent_ids.filter(Boolean)
+      : [];
+    if (detail.target !== 'conversation' || !removed.length || !currentCid) return;
+    const runId = _activeMemberRunByCid.get(currentCid);
+    if (!runId) return;
+    void window.cogseed.invoke('groupChat.abort', {
+      cid: currentCid,
+      run_id: runId,
+      agent_ids: removed,
+      reason: 'member_removed',
+    }).then((result) => {
+      if (!result || result.ok === false) throw new Error((result && result.error) || 'stop failed');
+      if (typeof uiToast === 'function') uiToast(t('chat.run_member_removed'), { variant: 'success' });
+    }).catch((err) => {
+      if (typeof uiToast === 'function') {
+        uiToast(t('chat.run_member_remove_failed', { reason: (err && err.message) || '' }), { variant: 'error' });
+      }
+    });
+  });
+}
+
 function _renderRecipientChip(target) {
   const targets = target ? [target] : ['conversation', 'new-chat'];
   for (const tg of targets) {
@@ -1511,6 +1719,29 @@ function _renderRecipientChip(target) {
     // Stale tooltips from a previous model-recipient render must not linger
     // on agent/commander renders — reset first, model branch re-sets it.
     nameEl.closest('.chat-recipient-chip')?.removeAttribute('title');
+    const chipHost = nameEl.closest('.chat-recipient-chip');
+    // 会话成员名单优先：底部入口显示首位成员 + 其余人数（FR-002/FR-008）。
+    // 名单为空时保留原有单接收者渲染（默认由 CogSeed 接收）。
+    const memberList = (window.composerMembers && tg !== 'auto')
+      ? window.composerMembers.getMembers(tg)
+      : [];
+    if (memberList.length) {
+      const summary = window.composerMembers.memberSummary(memberList);
+      nameEl.textContent = summary.name;
+      nameEl.removeAttribute('data-i18n');
+      _renderRecipientMoreBadge(chipHost, summary.extra);
+      if (chipHost) {
+        chipHost.title = t('composer.members.entry_title', {
+          names: memberList.map((m) => m.name).join('、'),
+          n: summary.total,
+        });
+      }
+      continue;
+    }
+    _renderRecipientMoreBadge(chipHost, 0);
+    // 名单为空＝默认由 CogSeed 接收：入口用说明文案交代，而不是在列表里假装勾选
+    // 一个并不存在的成员（原型：aria-label「默认由 CogSeed 接收，点击选择成员。」）。
+    if (chipHost) chipHost.title = t('composer.members.entry_default_title');
     const r = _activeRecipient(tg);
     if (r.kind === 'agent' && r.id) {
       // Resolve name from the live registry first — the `r.name` field is
@@ -1579,6 +1810,11 @@ function onEnterNewChatView() {
     // The landing execution override is as ephemeral as the recipient —
     // a fresh visit starts from defaults (unified execution entry).
     _newChatExecOverride = null;
+    // 新建任务恢复默认：CogSeed 接收 + 既有默认模型配置；旧会话的选择不受
+    // 影响（FR-016 / US3-08）。草稿仍在时保留用户已选成员与配置。
+    if (window.composerMembers && typeof window.composerMembers.resetTarget === 'function') {
+      window.composerMembers.resetTarget('new-chat');
+    }
   }
   _renderRecipientChip('new-chat');
   // Empty-state greeting / clock / ready-count — refresh on each view enter
@@ -2499,6 +2735,8 @@ function onEnterConversationView() {
   // doesn't bleed into this one (and a quote left in this conv reappears
   // when the user navigates back).
   _renderQuotePreview();
+  const pendingDraft = currentCid ? _pendingSubmitDraftByCid.get(String(currentCid)) : null;
+  if (pendingDraft) _restorePendingSubmitDraft(currentCid, pendingDraft.draft);
   _updateChatInputReserve();
 }
 
@@ -3231,9 +3469,9 @@ if (typeof window !== 'undefined') {
   }
 }
 
-// Strip a leading `@<name>` token so the mention regex matches the bus
-// router's charset. Used to detect whether the user already typed an
-// @-prefix that would route somewhere.
+// Legacy text helpers still recognize a leading `@<name>` token for old
+// queued/retry shapes. Current composer submission identity comes only from
+// recipient fields and chooser-created mention sidecars.
 const _LEADING_MENTION_RE = /^@([A-Za-z0-9_一-鿿-]+)\s?/u;
 
 function _normaliseRecipientSnapshot(snapshot) {
@@ -3250,8 +3488,15 @@ function _normaliseRecipientSnapshot(snapshot) {
 
 function _recipientRoutingFields(snapshot) {
   const snap = _normaliseRecipientSnapshot(snapshot);
-  if (!snap || snap.kind !== 'agent' || !snap.id) return {};
-  if (snap.origin !== 'user_selection' && snap.origin !== 'cli_fallback') return {};
+  if (!snap) return {};
+  if (snap.resetFloor) {
+    return {
+      recipient_agent_id: 'commander',
+      recipient_origin: 'user_selection',
+    };
+  }
+  if (snap.kind !== 'agent' || !snap.id) return {};
+  if (snap.origin !== 'user_selection' && snap.origin !== 'cli_fallback' && snap.origin !== 'active_floor') return {};
   return {
     recipient_agent_id: snap.id,
     recipient_origin: snap.origin,
@@ -3291,14 +3536,10 @@ function _applyRecipientPrefixWithSnapshot(raw, snapshot) {
   const text = String(raw || '');
   const snap = _normaliseRecipientSnapshot(snapshot);
   if (!snap) return raw;
-  if (snap.resetFloor) {
-    if (_LEADING_MENTION_RE.exec(text)) return text;
-    const sep = /^>/.test(text) ? '\n' : ' ';
-    return '@commander' + sep + text;
-  }
+  if (snap.resetFloor) return raw;
   // Composer selections are sent as structured routing fields. Keep the
-  // user's visible text untouched; raw, manually typed @mentions still flow
-  // through the legacy mention parser and Wake Gate.
+  // user's visible text untouched; manually typed/pasted display names are
+  // presentation text only on current submissions.
   if (snap.kind === 'agent' && snap.id) return raw;
   return raw;
 }
@@ -3719,6 +3960,48 @@ function _collapseSupersededInterruptionRecords(records) {
   return out.filter(Boolean);
 }
 
+function _projectionReceiptForMessage(message) {
+  return message?.projection_receipt?.projectionId
+    && message?.projection_receipt?.authorization === 'model_selected'
+    ? message.projection_receipt
+    : null;
+}
+
+function _projectionIdsFromCitations(citations) {
+  const ids = [];
+  const seen = new Set();
+  for (const citation of Array.isArray(citations) ? citations : []) {
+    const id = String(citation?.projection_id || citation?.projectionId || '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function _findProjectionSidecar(container, message) {
+  if (!container || typeof container.querySelector !== 'function') return null;
+  for (const projectionId of _projectionIdsFromCitations(message?.recall_citations)) {
+    try {
+      const sidecar = container.querySelector(
+        `.chat-message[data-recall-projection-id="${CSS.escape(projectionId)}"]`,
+      );
+      if (sidecar) return { projectionId, sidecar };
+    } catch (_) {
+      // A malformed persisted id must not break the whole conversation render.
+    }
+  }
+  return null;
+}
+
+function _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard) {
+  return Boolean(
+    message?.recall_projection_card?.projectionId
+      && message.recall_projection_card.authorization === 'model_selected'
+      && !coalescedProjectionCard,
+  );
+}
+
 function _groupMsgToLegacy(gm) {
   if (!gm || typeof gm !== 'object') return gm;
   if (gm.role !== undefined) return gm; // already legacy shape
@@ -3754,6 +4037,7 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
+    ...(gm.projection_receipt ? { projection_receipt: gm.projection_receipt } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
     ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
     ...(gm.welcome_pending === true ? { welcome_pending: true } : {}),
@@ -3762,6 +4046,8 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.metrics ? { metrics: gm.metrics } : {}),
     ...(gm.exec_meta ? { exec_meta: gm.exec_meta } : {}),
+    ...(gm.run_id ? { run_id: gm.run_id } : {}),
+    ...(gm.run_summary ? { run_summary: gm.run_summary } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
     ...(gm.failure_code ? { failure_code: gm.failure_code } : {}),
@@ -4446,6 +4732,76 @@ function _chatAttachSetHost(cid, hostId) {
   if (!cid) return;
   if (hostId) _chatAttachHostOverride.set(cid, hostId);
   else _chatAttachHostOverride.delete(cid);
+}
+
+function _runSummaryReasonLabel(reason) {
+  const raw = String(reason || 'unknown');
+  const code = /^[a-z0-9_-]+$/i.test(raw) ? raw : 'unknown';
+  const key = `chat.run_summary.reason.${code}`;
+  const translated = t(key);
+  return !translated || translated === key
+    ? t('chat.run_summary.reason.unknown')
+    : translated;
+}
+
+function _renderRunSummaryHtml(summary, runId) {
+  if (!summary || typeof summary !== 'object' || !runId) return '';
+  const contributed = Array.isArray(summary.contributed) ? summary.contributed : [];
+  const missing = Array.isArray(summary.missing) ? summary.missing : [];
+  const retryIds = window.memberWorkState
+    ? window.memberWorkState.retryableAgentIds(summary)
+    : [];
+  const memberLabel = (entry) => escapeHtml(_groupActorLabel(String(entry.agent_id || '')) || String(entry.agent_id || ''));
+  const contributedHtml = contributed.length
+    ? `<div class="chat-run-summary-group"><div class="chat-run-summary-label">${escapeHtml(t('chat.run_summary.contributed'))}</div><ul>${contributed.map((entry) => {
+        const outputCount = Math.max(0, Number(entry.messages) || 0) + (Array.isArray(entry.artifacts) ? entry.artifacts.length : 0);
+        return `<li><span>${memberLabel(entry)}</span><span>${escapeHtml(t('chat.run_summary.outputs', { count: outputCount }))}</span></li>`;
+      }).join('')}</ul></div>`
+    : '';
+  const missingHtml = missing.length
+    ? `<div class="chat-run-summary-group is-missing"><div class="chat-run-summary-label">${escapeHtml(t('chat.run_summary.missing'))}</div><ul>${missing.map((entry) => `<li><span>${memberLabel(entry)}</span><span>${escapeHtml(_runSummaryReasonLabel(entry.reason))}</span></li>`).join('')}</ul></div>`
+    : '';
+  const retryHtml = retryIds.length
+    ? uiButton({
+        label: t('chat.run_summary.retry'),
+        role: 'primary',
+        size: 'sm',
+        attrs: { 'data-run-summary-retry': runId },
+      })
+    : '';
+  return `<section class="chat-run-summary" data-run-id="${escapeHtml(runId)}">
+    <div class="chat-run-summary-heading"><strong>${escapeHtml(t('chat.run_summary.title'))}</strong><span>${escapeHtml(t(missing.length ? 'chat.run_summary.incomplete' : 'chat.run_summary.complete'))}</span></div>
+    ${contributedHtml}${missingHtml}
+    ${retryHtml ? `<div class="chat-run-summary-actions">${retryHtml}</div>` : ''}
+  </section>`;
+}
+
+function _hydrateRunSummary(root, cid, runId, summary) {
+  const button = root && root.querySelector
+    ? root.querySelector('[data-run-summary-retry]')
+    : null;
+  if (!button || !cid || !runId || !window.memberWorkState) return;
+  const retryIds = window.memberWorkState.retryableAgentIds(summary);
+  if (!retryIds.length) return;
+  button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const result = await window.cogseed.invoke('groupChat.retryRun', {
+        cid,
+        run_id: runId,
+        agent_ids: retryIds,
+        request_id: _taskTurnRunId(),
+      });
+      if (!result || result.ok === false) throw new Error((result && result.error) || 'retry failed');
+      if (typeof uiToast === 'function') uiToast(t('chat.run_summary.retry_started'), { variant: 'success' });
+    } catch (err) {
+      button.disabled = false;
+      if (typeof uiToast === 'function') {
+        uiToast(t('chat.run_summary.retry_failed', { reason: (err && err.message) || '' }), { variant: 'error' });
+      }
+    }
+  });
 }
 
 async function _chatAttachRefreshFromServer(cid) {
@@ -9400,8 +9756,20 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (emptyEl) emptyEl.remove();
 
   const role = message.role === 'assistant' ? 'assistant' : 'user';
+  const messageCid = opts.cid || currentCid;
+  if (messageCid && role === 'user' && message.run_id) {
+    _activeMemberRunByCid.set(messageCid, message.run_id);
+  } else if (messageCid && role === 'assistant' && message.run_summary && message.run_id) {
+    if (_activeMemberRunByCid.get(messageCid) === message.run_id) {
+      _activeMemberRunByCid.delete(messageCid);
+    }
+  }
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
+  if (message?.recall_projection_card?.presentation === 'sidecar') {
+    msgDiv.hidden = true;
+    msgDiv.classList.add('is-sidecar');
+  }
   // Sender id stamp — used by `_ensureConvCreateAgentInline` to detect
   // whether any agent (≠ user / commander) has spoken in this conversation.
   // Empty when unknown (e.g. stale records lacking _from); the inline button
@@ -9432,9 +9800,35 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       p3394BadgeHtml = `<div class="p3394-node-badge"><span class="p3394-node-badge-icon">🤖</span><span class="p3394-node-badge-name">${escapeHtml(nodeName)}</span><span class="p3394-node-badge-tag">P3394</span></div>`;
     }
   }
-  const contentHtml = isHtmlSnippet
-    ? sanitizeHtml(rawContent)
-    : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
+  // A projection card is a governed sidecar, not assistant prose. The main-process
+  // transport still carries an English fallback string for older clients and
+  // search/history compatibility; rendering both would duplicate the receipt.
+  // A model-selected projection is posted as a durable sidecar so prompt
+  // injection can discover it across turns. Once the final reply arrives, the
+  // visible receipt belongs on that reply—not as a second Cogseed message.
+  const explicitProjectionReceipt = _projectionReceiptForMessage(message);
+  const citationProjectionIds = explicitProjectionReceipt
+    ? []
+    : _projectionIdsFromCitations(message.recall_citations);
+  const coalescedProjectionMatch = role === 'assistant' && !explicitProjectionReceipt
+    ? _findProjectionSidecar(container, message)
+    : null;
+  const coalescedProjectionSidecar = coalescedProjectionMatch?.sidecar || null;
+  const coalescedProjectionCard = coalescedProjectionMatch
+    ? { projectionId: coalescedProjectionMatch.projectionId, authorization: 'model_selected' }
+    : null;
+  const hasProjectionCard = Boolean(
+    explicitProjectionReceipt
+    || (message.recall_projection_card?.projectionId
+        && message.recall_projection_card.authorization === 'model_selected')
+    || coalescedProjectionCard,
+  );
+  const suppressProjectionTransportProse = _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard);
+  const contentHtml = suppressProjectionTransportProse
+    ? ''
+    : isHtmlSnippet
+      ? sanitizeHtml(rawContent)
+      : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
   // 空间构建师的 space-draft 块 → 渲染「创建空间」按钮（用户确认后调 spaces.create）。
   const spaceDraft = (!isHtmlSnippet && role === 'assistant')
     ? _extractSpaceDraft(displayContent)
@@ -9445,6 +9839,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     : (role === 'assistant' && message.welcome_pending === true)
       ? _renderWelcomePendingHtml(message.welcome_resume || '')
       : '';
+  const runSummaryHtml = role === 'assistant' && message.run_summary && message.run_id
+    ? _renderRunSummaryHtml(message.run_summary, message.run_id)
+    : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   // Attachments render on user bubbles AND on P3394 peer bubbles — an
@@ -9489,7 +9886,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
         bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
       })
     : '';
-  const recallCitationsHtml = role === 'assistant'
+  const recallCitationsHtml = role === 'assistant' && !hasProjectionCard
     ? _renderRecallCitationsHtml(message.recall_citations)
     : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
@@ -9545,11 +9942,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${evidenceHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${evidenceHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${runSummaryHtml}${attachmentsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
   if (message._msg_id) msgDiv.dataset.msgId = String(message._msg_id);
+  if (message.recall_projection_card?.projectionId) {
+    msgDiv.dataset.recallProjectionId = String(message.recall_projection_card.projectionId);
+  }
+  if (coalescedProjectionSidecar) {
+    coalescedProjectionSidecar.hidden = true;
+    coalescedProjectionSidecar.classList.add('is-coalesced');
+  }
   if (message._from) msgDiv.dataset.fromActor = String(message._from);
   // Sender label rendered from a stale roster cache: keep the bubble marked
   // so _repaintPendingActorHeaders can upgrade the chip (and avatar) as soon
@@ -9608,6 +10012,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
   if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
   if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, attachmentCid, message._msg_id);
+  if (runSummaryHtml) _hydrateRunSummary(msgDiv, opts.cid || currentCid, message.run_id, message.run_summary);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -9649,7 +10054,26 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
 
   // 预载卡片已按产品决策移除（2026-08-17）：引用资产走自动注入 + LLM 主动
   // 检索工具（search_ability_assets），不再展示可交互的预载确认卡片。
-  // 历史消息里的 recall_projection_card 字段保留在数据中，仅以普通文本呈现。
+  // 2026-09-18 例外：**模型自选**的投影重新挂卡——模型用 attach_assets_to_task
+  // 给这个任务挑了资产，用户必须能看见并一键撤销（onlyModelSelected 让其它授权
+  // 的投影维持"不挂卡"的现状，旧决策不动）。
+  const projectionCardForBubble = _projectionReceiptForMessage(message)
+    || message.recall_projection_card
+    || coalescedProjectionCard;
+  if (role === 'assistant' && projectionCardForBubble?.projectionId
+      && message.recall_projection_card?.presentation !== 'sidecar'
+      && typeof window.mountRecallProjectionCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
+      const host = document.createElement('div');
+      if (message.recall_projection_card) host.dataset.recallProjectionTransport = 'sidecar';
+      bubble.appendChild(host);
+      window.mountRecallProjectionCard(host, projectionCardForBubble, {
+        cid: opts.cid || currentCid,
+        onlyModelSelected: true,
+      });
+    }
+  }
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
   // `<iframe>` over the `chat-app://` protocol, appended after the form so it
@@ -9752,6 +10176,7 @@ function _mountChatInputForm(host, msgDiv, message, opts) {
         return;
       }
       let submissionText = null;
+      let submissionAgentId = '';
       try {
         const res = await apiFetch(`/api/conversations/${cid}/form-submitted`, {
           method: 'POST',
@@ -9764,6 +10189,7 @@ function _mountChatInputForm(host, msgDiv, message, opts) {
           return;
         }
         submissionText = data.submission && data.submission.text;
+        submissionAgentId = String(data.submission && data.submission.agent_id || '').trim();
       } catch (err) {
         _convLog.warn('markFormSubmitted threw', err && err.message ? err.message : err);
         return;
@@ -9775,9 +10201,13 @@ function _mountChatInputForm(host, msgDiv, message, opts) {
       if (values && values.__skipped === true) {
         submissionText = `${t('chat.form.skipped_note')}\n\n${submissionText}`;
       }
-      const extra = (Array.isArray(attachments) && attachments.length)
-        ? { attachments }
-        : undefined;
+      const extra = {
+        ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}),
+        ...(submissionAgentId ? {
+          recipient_agent_id: submissionAgentId,
+          recipient_origin: 'user_selection',
+        } : {}),
+      };
       try { await sendInConversation(cid, submissionText, extra); }
       catch (err) { _convLog.error('form replay send failed', err); }
     },
@@ -11923,17 +12353,19 @@ async function handleNewChatSubmit() {
       } else {
         _convLog.warn('adopt draft attachments failed', data.error);
         await uiAlert(t('chat.attach_adopt_failed', { reason: data.error || t('chat.unknown_error') }));
+        if (newBtn) newBtn.disabled = false;
+        return;
       }
     } catch (err) {
       _convLog.warn('adopt draft attachments threw', err);
       await uiAlert(t('chat.attach_adopt_failed', { reason: err.message || err }));
+      if (newBtn) newBtn.disabled = false;
+      return;
     }
   }
-  // Clear BOTH chip pools so the composer stays empty. If adoption failed,
-  // the draft files did not become message attachments, so discard them from
-  // the synced attachment directory instead of leaving hidden orphans.
-  if (draftNames.length && !attachments.length) await _chatAttachClear(DRAFT_CID, { deleteFiles: true });
-  else _chatAttachClear(DRAFT_CID);
+  // Adoption success is the commit point for the reusable draft attachment
+  // state. Before it, bytes and chips remain owned by the draft for retry.
+  _chatAttachClear(DRAFT_CID);
   _chatAttachClear(convId);
   _clearQuotes(DRAFT_CID);
 
@@ -11953,6 +12385,11 @@ async function handleNewChatSubmit() {
   // Carry the new-chat recipient pick into the new conv's per-cid state so
   // the chip keeps the chosen agent instead of snapping back to commander.
   _transferNewChatRecipientTo(convId);
+  // 多 Agent：落地页选的会话成员与按来源配置跟随这条消息进入新会话
+  // （FR-016：接受后成员与模型保留，用户无需重新选择）。
+  if (window.composerMembers && typeof window.composerMembers.transferTarget === 'function') {
+    window.composerMembers.transferTarget('new-chat', convId);
+  }
   _renderRecipientChip('conversation');
   if (newBtn) newBtn.disabled = false;
   // @ 选的产物/资产引用（new-chat pending）→ 提交进新会话 task_references，
@@ -11964,16 +12401,52 @@ async function handleNewChatSubmit() {
   // execution-config override) follows the message. Recipient + override were
   // already transferred to convId above, so resolve against the new cid.
   const newChatExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
+  // 幂等键同样覆盖落地页首条消息（EC-07）：失败重发复用同一 id。
+  const newChatSubmitRequestId = _submitRequestIdFor(convId, raw);
+  // 首页路径同样携带成员/点名/按来源配置载荷（复盘 2026-09-20：
+  // 之前只有会话路径接了这个，首页手打 @ 的提交把结构化逻辑全绕过了）。
+  const newChatMemberPayload = _composerMemberPayload('conversation', content);
+  const newChatHasMembers = Array.isArray(newChatMemberPayload.member_agent_ids)
+    && newChatMemberPayload.member_agent_ids.length > 0;
+  const newChatHasMentions = Array.isArray(newChatMemberPayload.mention_agent_ids)
+    && newChatMemberPayload.mention_agent_ids.length > 0;
+  const newChatMemberConfigSent = !!(newChatMemberPayload.execution_config
+    || newChatMemberPayload.execution_configs);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
-    ..._recipientRoutingFields(recipientSnapshot),
-    ...(newChatExecConfig ? { execution_config: newChatExecConfig } : {}),
+    // 有成员/点名时不再叠加单接收者路由（避免主进程"mention conflicts with recipient"）。
+    ...((newChatHasMembers || newChatHasMentions) ? {} : _recipientRoutingFields(recipientSnapshot)),
+    ...(!newChatMemberConfigSent && newChatExecConfig ? { execution_config: newChatExecConfig } : {}),
+    ...newChatMemberPayload,
+    submit_request_id: newChatSubmitRequestId,
   };
+  _holdPendingSubmitDraft(convId, newChatSubmitRequestId, {
+    text: raw,
+    mentions: window.composerMembers
+      && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
+      ? window.composerMembers.mentionSidecarSnapshot('conversation')
+      : [],
+    quotes,
+    attachments: draftItems,
+    composer: window.composerMembers
+      && typeof window.composerMembers.draftSelectionSnapshot === 'function'
+      ? window.composerMembers.draftSelectionSnapshot('conversation')
+      : null,
+  }, raw);
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
-  await sendInCurrentConversation(content, Object.keys(extra).length ? extra : undefined);
+  let sendResult = null;
+  try {
+    sendResult = await sendInCurrentConversation(content, Object.keys(extra).length ? extra : undefined);
+  } catch (err) {
+    _settlePendingSubmitDraft(convId, newChatSubmitRequestId, null);
+    _convLog.warn('new chat submit acceptance unknown', err);
+    return;
+  }
+  const accepted = _settlePendingSubmitDraft(convId, newChatSubmitRequestId, sendResult);
+  if (accepted) _clearSubmitIntent(convId, newChatSubmitRequestId);
 }
 
 /** 交接意图关键词：命中即视为「继续这项工作/交接」类请求。 */
@@ -11997,6 +12470,163 @@ async function _tryTemplateHandoffReply(cid, raw) {
     _convLog.warn('template handoff reply failed', { cid, error: err });
     return false;
   }
+}
+
+// ─── 多 Agent 提交载荷（FR-016/017） ──────────────────────────────────────
+// 一次提交记录：正文（含点名标记）、点名身份、会话成员快照、本条分工（点名∩成员）
+// 与按来源的模型配置。成员为空时完全沿用旧单接收者载荷。
+
+// 提交幂等键（EC-07）：一次「提交意图」一个 id；未被接受时保留，重发复用同一个
+// id，让主进程确认原提交而不是新建一次运行。草稿文字变了＝新的意图，换新 id。
+const _submitIntentByCid = new Map();   // cid → { id, text }
+const _pendingSubmitDraftByCid = new Map(); // cid → { id, draft }; kept until explicit acceptance
+const _pendingSubmitDraftById = new Map(); // `${cid}::${id}` → { id, draft }
+
+function _clonePendingSubmitDraft(input) {
+  const value = input && typeof input === 'object' ? input : {};
+  const clone = (item) => {
+    try { return JSON.parse(JSON.stringify(item)); } catch (_) { return item; }
+  };
+  return {
+    text: String(value.text || ''),
+    mentions: clone(Array.isArray(value.mentions) ? value.mentions : []),
+    quotes: clone(Array.isArray(value.quotes) ? value.quotes : []),
+    attachments: clone(Array.isArray(value.attachments) ? value.attachments : []),
+    composer: clone(value.composer && typeof value.composer === 'object' ? value.composer : null),
+  };
+}
+
+function _holdPendingSubmitDraft(cid, id, draft, intentText = draft?.text) {
+  const key = String(cid || '');
+  const idKey = `${key}::${String(id || '')}`;
+  const existing = _pendingSubmitDraftById.get(idKey);
+  if (existing && existing.id === id) return existing.draft;
+  const frozen = _clonePendingSubmitDraft(draft);
+  const pending = { id, text: String(intentText || ''), draft: frozen };
+  _pendingSubmitDraftById.set(idKey, pending);
+  return frozen;
+}
+
+function _isExplicitSubmitAcceptance(result, cid, submitRequestId) {
+  return !!result
+    && result.accepted === true
+    && String(result.cid || '') === String(cid || '')
+    && String(result.submit_request_id || '') === String(submitRequestId || '');
+}
+
+function _restorePendingSubmitDraft(cid, draft) {
+  if (String(currentCid || '') !== String(cid || '')) return;
+  const input = document.getElementById('chat-input');
+  if (input) {
+    input.value = String(draft && draft.text || '');
+    autoGrow(input, 200);
+  }
+  if (window.composerMembers) {
+    if (typeof window.composerMembers.restoreDraftSnapshot === 'function' && draft?.composer) {
+      window.composerMembers.restoreDraftSnapshot('conversation', draft.composer);
+    }
+    if (typeof window.composerMembers.setMentionSidecar === 'function') {
+      window.composerMembers.setMentionSidecar('conversation', draft?.mentions || []);
+    }
+    if (typeof window.composerMembers.seedDraftTracking === 'function') {
+      window.composerMembers.seedDraftTracking('conversation', draft?.text || '');
+    }
+  }
+  const quotes = Array.isArray(draft?.quotes) ? draft.quotes : [];
+  if (quotes.length) _quotesByCid.set(cid, quotes);
+  else _quotesByCid.delete(cid);
+  _renderQuotePreview(cid);
+  _chatAttachSet(cid, Array.isArray(draft?.attachments) ? draft.attachments : []);
+  if (typeof window !== 'undefined' && typeof window.renderChatTaskRefChips === 'function') {
+    window.renderChatTaskRefChips();
+  }
+  try { syncChatRichComposerFromTextarea('chat-input'); } catch (_) {}
+}
+
+function _settlePendingSubmitDraft(cid, id, result) {
+  const key = String(cid || '');
+  const idKey = `${key}::${String(id || '')}`;
+  const pending = _pendingSubmitDraftById.get(idKey);
+  if (!pending || pending.id !== id) return false;
+  if (_isExplicitSubmitAcceptance(result, cid, id)) {
+    _pendingSubmitDraftById.delete(idKey);
+    if (_pendingSubmitDraftByCid.get(key)?.id === id) _pendingSubmitDraftByCid.delete(key);
+    return true;
+  }
+  _pendingSubmitDraftByCid.set(key, pending);
+  _restorePendingSubmitDraft(cid, pending.draft);
+  return false;
+}
+
+function _submitRequestIdFor(cid, text) {
+  const key = String(cid || '');
+  const pending = _pendingSubmitDraftByCid.get(key);
+  if (pending && pending.text === String(text || '')) return pending.id;
+  const current = _submitIntentByCid.get(key);
+  if (current && current.text === String(text || '')) return current.id;
+  return _newSubmitRequestId(cid, text);
+}
+
+function _newSubmitRequestId(cid, text) {
+  const key = String(cid || '');
+  const id = `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  _submitIntentByCid.set(key, { id, text: String(text || '') });
+  return id;
+}
+
+function _clearSubmitIntent(cid, id) {
+  const key = String(cid || '');
+  const current = _submitIntentByCid.get(key);
+  if (current && (!id || current.id === id)) _submitIntentByCid.delete(key);
+}
+
+/** 去掉点名标记后的「任务意图」文本：只剩成员/空白/标点＝没有明确意图（EC-06）。 */
+function _composerIntentText(text, target = 'conversation') {
+  let out = String(text || '');
+  const cm = window.composerMembers;
+  if (cm && typeof cm.mentionTokensForTarget === 'function') {
+    for (const token of cm.mentionTokensForTarget(target, out).slice().reverse()) {
+      out = out.slice(0, token.start) + out.slice(token.end);
+    }
+  }
+  // 只看空白与标点；emoji 等符号（\p{S}）本身可以是有效意图（例如单独的点赞表情）。
+  return out.replace(/[\s\p{P}]/gu, '');
+}
+
+function _composerMentionIdsIn(target, text) {
+  const cm = window.composerMembers;
+  if (!cm) return [];
+  return typeof cm.mentionIdsForTarget === 'function'
+    ? cm.mentionIdsForTarget(target, text)
+    : [];
+}
+
+/** 成员 + 点名 + 按来源配置的载荷片段；没有显式成员时返回 {}。 */
+function _composerMemberPayload(target, text) {
+  const cm = window.composerMembers;
+  if (!cm) return {};
+  const members = cm.getMembers(target);
+  const mentions = _composerMentionIdsIn(target, text || '');
+  // 没有显式成员、正文里也没有点名 → 完全走旧路径，不发成员载荷。
+  if (!members.length && !mentions.length) return {};
+  const out = {};
+  // 手打 @ 也算本条点名：只留痕（审计 / 顺序协作判定），不因此自动增员（FR-004）。
+  if (mentions.length) out.mention_agent_ids = mentions;
+  if (!members.length) return out;
+  // 协调者（CogSeed）不是 agent 成员：把它塞进 member_agent_ids 会让主进程按
+  // agent 校验失败并整条拒绝提交，所以这里只发真正的执行者 id（FR-003）。
+  const agentIds = cm.agentMemberIds ? cm.agentMemberIds(members) : [];
+  if (agentIds.length) out.member_agent_ids = agentIds;
+  const groups = cm.configGroups(target);
+  const configs = cm.sourceConfigSnapshot(target);
+  if (groups.length === 1 && configs && configs[groups[0].id]) {
+    // 单一来源：沿用既有单套 execution_config 语义（内部共享或唯一外接）。
+    out.execution_config = configs[groups[0].id];
+  } else if (groups.length > 1 && configs) {
+    // 多来源：按来源下发，绝不把内部连接/模型串到外接实例（FR-007/SC-002）。
+    out.execution_configs = configs;
+  }
+  return out;
 }
 
 async function handleChatSubmit() {
@@ -12050,6 +12680,13 @@ async function handleChatSubmit() {
     return;
   }
   const attachments = attachList.filter((a) => a.status !== 'error').map((a) => a.name);
+  // EC-06：正文只剩成员标记 / 空白 / 标点时没有明确任务意图，不启动运行；
+  // 附件或引用仍在时沿用既有规则（引用本身就是「看这个」的有效意图）。
+  if (!_composerIntentText(raw) && !attachments.length && !quotes.length) {
+    uiToast(t('composer.members.need_task'), { variant: 'warning' });
+    try { focusChatRichComposer(input); } catch (_) {}
+    return;
+  }
   _convLog.info('chat submit', { cid, length: raw.length, use: useSelections.map((sel) => sel.kind), attachments: attachments.length });
   if (window.Monitor) (() => {})('chat_send', {
     source_view: 'conversation',
@@ -12072,17 +12709,42 @@ async function handleChatSubmit() {
       return;
     }
     const queuedExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
+    // 排队消息同样要冻结本次成员 / 点名 / 按来源配置（FR-016）：排到队列末尾才真正
+    // 发送，若只带 legacy 单套配置，多成员快照就会丢。
+    const queuedMemberPayload = _composerMemberPayload('conversation', requestText);
+    const queuedHasMemberConfig = !!(queuedMemberPayload.execution_config
+      || queuedMemberPayload.execution_configs);
+    const queuedSubmitRequestId = _newSubmitRequestId(cid, requestText);
+    const queuedMentionSnapshot = window.composerMembers
+      && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
+      ? window.composerMembers.mentionSidecarSnapshot('conversation')
+      : [];
+    _holdPendingSubmitDraft(cid, queuedSubmitRequestId, {
+      text: raw,
+      mentions: queuedMentionSnapshot,
+      quotes,
+      attachments: attachList,
+      composer: window.composerMembers
+        && typeof window.composerMembers.draftSelectionSnapshot === 'function'
+        ? window.composerMembers.draftSelectionSnapshot('conversation')
+        : null,
+    }, requestText);
     enqueueMessage(cid, requestText, null, {
       recipient: recipientSnapshot,
       extra: {
         ...(useSelections.length ? { use_selections: useSelections } : {}),
         ...(references.length ? { references } : {}),
-        ...(queuedExecConfig ? { execution_config: queuedExecConfig } : {}),
+        ...(!queuedHasMemberConfig && queuedExecConfig ? { execution_config: queuedExecConfig } : {}),
+        ...queuedMemberPayload,
+        submit_request_id: queuedSubmitRequestId,
       },
     });
     _clearQuotes(cid);
     input.value = '';
     autoGrow(input, 200);
+    if (window.composerMembers && typeof window.composerMembers.resetDraftTracking === 'function') {
+      window.composerMembers.resetDraftTracking('conversation');
+    }
     _clearDraft(cid);
     return;
   }
@@ -12104,28 +12766,60 @@ async function handleChatSubmit() {
   // is aborted, the files remain on disk but the user can re-attach via the
   // "+" button (listAttachments shows what's still there).
   if (attachments.length) _chatAttachClear(cid);
-  // 显式 @提及（如「切换并继续」重建的 @新目标）本身就是路由目标。此时若再
-  // 附带结构化 recipient_agent_id（可能仍指向失败的旧接收者），后端会优先按
-  // 结构化字段路由而覆盖显式提及 → 仍路由回旧智能体。仅当正文没有前导 @提及
-  // 时才附加快照路由字段（普通 chip 选中 / CLI fallback 场景）。
-  const hasExplicitMention = _LEADING_MENTION_RE.test(content);
+  // 多 Agent：成员名单存在时由成员载荷接管配置与路由（单成员等价于原
+  // recipient 语义；多成员交给 commander 按分工编排。点名身份只来自
+  // chooser 边车；手打/粘贴的 @display-name 保留可见文本但不参与路由。
+  const memberPayload = _composerMemberPayload('conversation', content);
+  const hasMembers = Array.isArray(memberPayload.member_agent_ids)
+    && memberPayload.member_agent_ids.length > 0;
+  const hasMentions = Array.isArray(memberPayload.mention_agent_ids)
+    && memberPayload.mention_agent_ids.length > 0;
   // Unified execution entry: per-task model / effort picks (API-connection
   // model recipient or execution-config chip override). Like the structured
   // route above, an explicit @mention overrides the chip target — the task
   // config must not leak onto a differently-routed turn.
-  const executionConfig = hasExplicitMention
+  const executionConfig = (hasMentions || hasMembers)
     ? undefined
     : _executionConfigForSend('conversation', recipientSnapshot);
+  const submitRequestId = _submitRequestIdFor(cid, raw);
+  const mentionSnapshot = window.composerMembers
+    && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
+    ? window.composerMembers.mentionSidecarSnapshot('conversation')
+    : [];
+  _holdPendingSubmitDraft(cid, submitRequestId, {
+    text: raw,
+    mentions: mentionSnapshot,
+    quotes,
+    attachments: attachList,
+    composer: window.composerMembers
+      && typeof window.composerMembers.draftSelectionSnapshot === 'function'
+      ? window.composerMembers.draftSelectionSnapshot('conversation')
+      : null,
+  }, raw);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
-    ...(hasExplicitMention ? {} : _recipientRoutingFields(recipientSnapshot)),
+    ...((hasMentions || hasMembers) ? {} : _recipientRoutingFields(recipientSnapshot)),
     ...(executionConfig ? { execution_config: executionConfig } : {}),
+    ...((hasMembers || hasMentions) ? memberPayload : {}),
+    submit_request_id: submitRequestId,
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
-  await sendInCurrentConversation(content, Object.keys(extra).length ? extra : undefined);
+  // 「发送后自动清空」不是手动删除标记：重置标记基线，会话成员与模型配置保留
+  // （FR-002/FR-016）。
+  if (window.composerMembers) window.composerMembers.resetDraftTracking('conversation');
+  let sendResult = null;
+  try {
+    sendResult = await sendInCurrentConversation(content, Object.keys(extra).length ? extra : undefined);
+  } catch (err) {
+    _settlePendingSubmitDraft(cid, submitRequestId, null);
+    _convLog.warn('chat submit acceptance unknown', err);
+    return;
+  }
+  const accepted = _settlePendingSubmitDraft(cid, submitRequestId, sendResult);
+  if (accepted) _clearSubmitIntent(cid, submitRequestId);
 }
 
 // One transient controller per conversation send. Multi-cid support comes
@@ -13025,10 +13719,8 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
  * 发送前的模型守卫 + 无模型降级：
  * - 有已配置模型 → { ok: true }（正常发送）。
  * - 无模型 → 若当前 recipient 已经是外部智能体（CLI / P3394 外接网关）
- *   则直接放行；若消息文本以 `@<token>` 开头且该 token 命中本机外部
- *   智能体（手动输入 @ 智能体名 的场景），同样放行——外部智能体经本机
- *   CLI 执行，不依赖 CogSeed 模型配置，首次启动不配置模型也能直接调用。
- *   仅当目标确实需要模型（commander 且无 @ 外部智能体）时才走
+ *   或 chooser 边车已绑定点名身份，则放行；手打/粘贴的 `@<display-name>`
+ *   不具有路由权限。仅当目标确实需要模型（commander 且无结构化目标）时才走
  *   _maybeApplyCliFallback 自动切换（返回 fallbackAgentId 供调用方重建
  *   消息前缀，避免旧 @ 前缀与 fallback 目标不一致导致后端解析失败）。
  *   无可用 CLI 才返回 { ok: false }（引导配置）。
@@ -13043,9 +13735,9 @@ async function _ensureModelOrCliFallback(cid, target = 'conversation', rawConten
   // (a stale entry that lost its key falls back to the default group at
   // turn time, surfaced by the resolved-runtime event).
   if (selected && selected.kind === 'model' && selected.provider) return true;
-  // A raw mention is an explicit dispatch request of its own. Let main parse
-  // and Wake-gate it; automatic CLI fallback must not replace its target.
-  if (_LEADING_MENTION_RE.test(String(rawContent || '').trim())) return true;
+  // Only chooser-authorized mention identity bypasses Commander fallback.
+  // Typed/pasted display-name prose has no routing authority.
+  if (_composerMentionIdsIn(target, rawContent).length) return true;
   if (ensureModelConfigured({ silent: true })) return true;
 
   const ok = await _maybeApplyCliFallback(cid);
@@ -13124,12 +13816,15 @@ async function sendInConversation(cid, content, extra, options = {}) {
   // message targets the commander (no explicit agent), route this
   // conversation to the user's signed-in CLI agent so chat still works.
   // Cheap IPC checks; any failure falls through to the normal send path.
-  if (!statAgentId && !isInternalReplay) {
+  const hasStructuredDispatch = !!String(extra?.recipient_agent_id || '').trim()
+    || (Array.isArray(extra?.mention_agent_ids) && extra.mention_agent_ids.length > 0)
+    || (Array.isArray(extra?.member_agent_ids) && extra.member_agent_ids.length > 0);
+  if (!statAgentId && !isInternalReplay && !hasStructuredDispatch) {
     try {
       const recipient = _activeRecipient('conversation');
       const toCommander = !recipient || recipient.kind === 'commander';
       _convLog.info('[cli-fallback] sendInConversation check', { cid, statAgentId, recipientKind: recipient && recipient.kind, toCommander });
-      if (toCommander && !_LEADING_MENTION_RE.test(String(content || '').trim())) {
+      if (toCommander) {
         await _maybeApplyCliFallback(cid);
       }
       // A successful fallback updates the recipient. Mirror the validated
@@ -13151,6 +13846,13 @@ async function sendInConversation(cid, content, extra, options = {}) {
 
   let doneResult = null;
   let taskStarted = false;
+  const submitRequestId = String(extra?.submit_request_id || '');
+  const settleSubmit = (result) => {
+    if (!submitRequestId) return;
+    if (_settlePendingSubmitDraft(cid, submitRequestId, result)) {
+      _clearSubmitIntent(cid, submitRequestId);
+    }
+  };
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
   if (isConvPending(cid)) {
     // Historical retry/replacement operations must never enter the ordinary
@@ -13214,8 +13916,11 @@ async function sendInConversation(cid, content, extra, options = {}) {
       });
     }
     if (!started && _convChatCtrls.get(cid) === ctrl) _convChatCtrls.delete(cid);
-    return { ...terminal, started, aborted, errored, result };
+    const settled = { ...terminal, started, aborted, errored, result };
+    settleSubmit(settled);
+    return settled;
   } catch (err) {
+    settleSubmit(null);
     const durationMs = Math.round(performance.now() - startedAt);
     if (statAgentId) {
       _notifyAgentRunFinished(statAgentId, {
@@ -14371,6 +15076,9 @@ function _streamingUpdateActivityFromEvent(msg, evt) {
   const phase = String(data.phase || data.status || '').toLowerCase();
   if (stream === 'runtime' && phase === 'retrying') {
     const attempt = Math.max(1, Math.round(Number(data.attempt) || 1));
+    if (typeof window.chatStreamSetRuntimeStatus === 'function') {
+      window.chatStreamSetRuntimeStatus(msg?.dataset?.cid, msg, { type: 'retry', attempt });
+    }
     _streamingUpdateActivity(msg, attempt > 1
       ? t('model.retrying_n', { attempt })
       : t('model.retrying'));
@@ -15026,8 +15734,9 @@ function createChatController(config) {
     const hasStructuredAgent = !!String(extraBody?.recipient_agent_id || '').trim();
     const isFailedTurnRetry = !!String(extraBody?.retry_message_id || '').trim();
     const isMessageEdit = !!String(extraBody?.edit_message_id || '').trim();
-    const hasManualRecipientMention = _LEADING_MENTION_RE.test(content);
-    if (!hasStructuredAgent && !hasManualRecipientMention && !isFailedTurnRetry && !isMessageEdit
+    const hasStructuredMention = Array.isArray(extraBody?.mention_agent_ids)
+      && extraBody.mention_agent_ids.length > 0;
+    if (!hasStructuredAgent && !hasStructuredMention && !isFailedTurnRetry && !isMessageEdit
       && !(_cliFallbackApplied === id) && !ensureModelConfigured()) {
       return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
 
@@ -15098,6 +15807,8 @@ function createChatController(config) {
     _updateSendUI();
 
     let terminalResult = { started: true, aborted: false, errored: false };
+    const submitRequestId = String(extraBody?.submit_request_id || '');
+    let acceptedReceipt = null;
     try {
       const res = await apiFetch(config.streamEndpoint(id), {
         method: 'POST',
@@ -15125,6 +15836,17 @@ function createChatController(config) {
           if (!dataLines.length) continue;
           try {
             const ev = JSON.parse(dataLines.join('\n'));
+            if (submitRequestId
+                && ev?.type === 'accepted'
+                && ev.accepted === true
+                && String(ev.cid || '') === String(id)
+                && String(ev.submit_request_id || '') === submitRequestId) {
+              acceptedReceipt = {
+                accepted: true,
+                cid: String(id),
+                submit_request_id: submitRequestId,
+              };
+            }
             // Post-abort events can still arrive while main's for-await drains
             // its buffer — drop them so the bubble stays frozen at the "stopped" state
             // instead of accumulating more deltas / a final reply behind it.
@@ -15187,7 +15909,12 @@ function createChatController(config) {
       if (typeof window.chatStreamFinalize === 'function') {
         try { window.chatStreamFinalize(id); } catch (_) { /* 面板兜底失败不阻塞收尾 */ }
       }
-      terminalResult = { started: true, aborted: !!wasAborted, errored: !!wasErrored };
+      terminalResult = {
+        started: true,
+        aborted: !!wasAborted,
+        errored: !!wasErrored,
+        ...(acceptedReceipt || {}),
+      };
       pending = null;
       _updateSendUI();
       if (features.scrollPin) _setChatScrollOffset(false, historyEl);

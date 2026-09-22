@@ -95,7 +95,7 @@ describe('Recall auto promotion × semantic review gate (N-2)', () => {
 
     expect(result.asset).toBeDefined();
     expect(result.candidate.status).toBe('confirmed');
-    expect(result.asset.lifecycleStatus).toBe('automatically_extracted_unverified');
+    expect(result.asset.lifecycleStatus).toBe('user_confirmed_unverified');
   });
 
   it('promotes normally when semantic review is unavailable (degraded, not blocked)', async () => {

@@ -100,7 +100,7 @@ export interface CognitionReuseReceiptView {
   completedAt?: string;
 }
 
-export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
+export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
 // 与 RecallAbilityAssetRecord 的治理状态保持同步，另加展示层特有的 `candidate`
 // ——候选还没 promote 成资产，在资产侧没有对应状态。
 // PRD 3.6 的成熟度阶梯顶到 effectiveness_validated。曾经多出的 'stable' 档

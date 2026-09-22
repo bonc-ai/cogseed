@@ -18,7 +18,10 @@ export function canonicalCogSeedRequestJson(value: unknown): string {
   return JSON.stringify(canonicalize(value));
 }
 
-export function cogSeedRequestFingerprint(kind: 'create' | 'retry' | 'resume', value: unknown): string {
+export function cogSeedRequestFingerprint(
+  kind: 'create' | 'retry' | 'resume' | 'submit' | 'submit_run' | 'submit_message' | 'submit_turn',
+  value: unknown,
+): string {
   return createHash('sha256')
     .update(canonicalCogSeedRequestJson({ kind, request: value }))
     .digest('hex');

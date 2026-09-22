@@ -132,7 +132,9 @@ export async function reviewCandidateSemantically(
     const build = opts.buildRunnerFn ?? buildRunner;
     const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const { runner } = await build({
-      sessionId: `cognition-review-${tail}`,
+      // 2026-09-19：session id 必须以合法 kind 开头（session-store 白名单）——
+      // 原前缀 cognition-review- 不在名单里，即时直投流量把它暴露出来。
+      sessionId: `memory-extract-recall-cognition-review-${tail}`,
       userId,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
     });
