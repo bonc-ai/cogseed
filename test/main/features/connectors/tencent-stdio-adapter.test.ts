@@ -169,11 +169,11 @@ describe('Tencent Meeting stdio CLI adapter', () => {
           audio_detect: 1, lang: 'zh', keywords: ['全局共享记忆', '沉淀'],
           paragraphs: [
             { pid: '0', start_time: '00:01', end_time: '00:10', lang: 'zh',
-              speaker: { user_id: '000000000000000012', user_name: '赵丽霞', avatar_url: 'https://x' },
+              speaker: { user_id: '1000000000000000001', user_name: '发言人甲', avatar_url: 'https://x' },
               sentences: [{ sid: '0', start_time: '00:01', end_time: '00:10',
-                words: [{ wid: '0', start_time: '00:01', end_time: '00:10', text: '我直接申请了吧，' }] }] },
+                words: [{ wid: '0', start_time: '00:01', end_time: '00:10', text: '（示例发言甲）' }] }] },
             { pid: '1', start_time: '00:12', end_time: '00:36', lang: 'zh',
-              speaker: { user_id: '000000000000000013', user_name: '示例组织' },
+              speaker: { user_id: '1000000000000000002', user_name: '发言人乙' },
               sentences: [
                 { sid: '1', words: [{ wid: '1', text: '第一部分。' }] },
                 { sid: '2', words: [{ wid: '2', text: '第二部分。' }] },
@@ -191,7 +191,7 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     expect(res.paragraphCount).toBe(2);
     // user_id is the stable key; user_name is display-only (sometimes a shared/room account).
     expect(res.paragraphs[0]).toMatchObject({
-      pid: '0', speaker_id: '000000000000000012', speaker_name: '赵丽霞', text: '我直接申请了吧，',
+      pid: '0', speaker_id: '1000000000000000001', speaker_name: '发言人甲', text: '（示例发言甲）',
     });
     // Multiple sentences concatenate into one paragraph.
     expect(res.paragraphs[1].text).toBe('第一部分。第二部分。');
@@ -199,7 +199,7 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     expect(JSON.stringify(res.paragraphs[0])).not.toContain('avatar_url');
     expect(res.keywords).toEqual(['全局共享记忆', '沉淀']);
     expect(res.timestamps_are_relative).toBe(true);
-    expect(res.text.split('\n')[0]).toBe('[00:01] 赵丽霞: 我直接申请了吧，');
+    expect(res.text.split('\n')[0]).toBe('[00:01] 发言人甲: （示例发言甲）');
   });
 
   it('maps a real captured transcript fixture', async () => {
@@ -247,7 +247,7 @@ describe('Tencent Meeting stdio CLI adapter', () => {
       trace_id: 'x', message: 'success',
       data: { has_more: false, meeting_id: '', minute_id: 'mid-1', subject: '示例会议 A',
         minutes: [{ created_at: '2030-09-20T17:13:19+08:00', minute_id: 'mid-1',
-          overview: '', summary_points: '小结\n- （示例文本，已脱敏）', todos: [] }] },
+          overview: '', summary_points: '小结\n- 示例纪要要点', todos: [] }] },
     }));
 
     const res = await adapter.callTool('get_meeting_minutes', { minute_id: 'mid-1' });
@@ -255,7 +255,7 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     expect(calls[0]).toEqual(['minutes', 'get', '--minute-id', 'mid-1']);
     expect(res.subject).toBe('示例会议 A');
     expect(res.minuteCount).toBe(1);
-    expect(res.minutes[0].summary_points).toContain('（示例文本，已脱敏）');
+    expect(res.minutes[0].summary_points).toContain('示例纪要要点');
     // Platform todos are frequently empty even for meetings that plainly had action items; the
     // field is surfaced as-is rather than papered over.
     expect(res.minutes[0].todos).toEqual([]);
@@ -290,28 +290,28 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     const { adapter, calls } = stubTmeet(() => ({
       message: 'success',
       data: { has_more: true, total_count: 7, next_page_token: 'tok-9',
-        minutes: [{ meeting_id: '0000000000000000011', minute_id: 'mid-1',
+        minutes: [{ meeting_id: '1000000000000000003', minute_id: 'mid-1',
           minute_start_time: '2030-09-21T11:46:28+08:00', subject: '例会',
           q_fields: ['SUMMARY_POINTS'],
-          snippets: [{ source: 'SUMMARY_POINTS', text: '（示例文本，已脱敏）' }] }] },
+          snippets: [{ source: 'SUMMARY_POINTS', text: '（示例检索片段，已脱敏）' }] }] },
     }));
 
     await expect(adapter.callTool('search_meeting_minutes', {})).rejects.toThrow(/query is required/);
     await expect(adapter.callTool('search_meeting_minutes', { query: 'x'.repeat(51) }))
       .rejects.toThrow(/at most 50 characters/);
 
-    const res = await adapter.callTool('search_meeting_minutes', { query: '认知资产', page_size: 999 });
-    expect(calls[0]).toEqual(['minutes', 'search', '--query', '认知资产', '--page-size', '50']);
+    const res = await adapter.callTool('search_meeting_minutes', { query: '示例关键词', page_size: 999 });
+    expect(calls[0]).toEqual(['minutes', 'search', '--query', '示例关键词', '--page-size', '50']);
     expect(res.total_count).toBe(7);
     expect(res.next_page_token).toBe('tok-9');
     expect(res.matches[0]).toMatchObject({ matched_fields: ['SUMMARY_POINTS'], minute_id: 'mid-1' });
-    expect(res.matches[0].snippets[0].text).toContain('（示例文本，已脱敏）');
+    expect(res.matches[0].snippets[0].text).toContain('示例检索片段');
   });
 
   it('maps the real captured minutes-search fixture', async () => {
     const payload = fixture('tencent-minutes-search.json');
     const { adapter } = stubTmeet(() => payload);
-    const res = await adapter.callTool('search_meeting_minutes', { query: '认知资产' });
+    const res = await adapter.callTool('search_meeting_minutes', { query: '示例关键词' });
     expect(res.matchCount).toBe(payload.data.minutes.length);
     expect(res.matches[0].snippets.length).toBeGreaterThan(0);
   });
