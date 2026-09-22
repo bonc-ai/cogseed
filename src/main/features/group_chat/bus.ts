@@ -13461,18 +13461,21 @@ export async function abort(uid: string, cid: string, options?: AbortRunOptions)
     const targetsActor = (actorId: string) => targets.size === 0 || targets.has(actorId);
     const { stopRun } = await import('./run_store');
     const stopReason = options.reason || (agentIds.length ? 'member_removed' : 'user_stopped');
+    // 先拒 Wake、再停 run：唤醒对账会把「run 已终态 / actor 已终态」的请求判成
+    // expired（那是系统自动判死的语义），若先停 run 就会盖掉这里更准确的用户决定
+    // 理由（user_stopped / member_removed）。此刻 run 还是 running、actor 还是
+    // pending，所以显式拒绝不会被自动判死抢走。
+    try {
+      await rejectRunWakeRequests(uid, cid, runId, targets, stopReason);
+    } catch (err) {
+      log.warn('run-scoped Wake rejection failed', { error: logErrorRef(err) });
+    }
     const stopped = await stopRun(uid, cid, runId, {
       ...(agentIds.length ? { agentIds } : {}),
       reason: stopReason,
       terminal: options.reason === 'member_removed' ? 'removed' : 'stopped',
     });
     if (!stopped) throw new Error(`collaboration durable stop persistence failed: ${runId}`);
-
-    try {
-      await rejectRunWakeRequests(uid, cid, runId, targets, stopReason);
-    } catch (err) {
-      log.warn('run-scoped Wake rejection failed', { error: logErrorRef(err) });
-    }
 
     let cleared = 0;
     let aborted = 0;
@@ -13590,6 +13593,13 @@ export async function abort(uid: string, cid: string, options?: AbortRunOptions)
     for (const runId of runIds) {
       const record = await readRun(uid, cid, runId);
       if (!record || record.status !== 'running') continue;
+      // 与 run 作用域同一顺序：先拒 Wake（保住 user_stopped 这个用户决定理由），
+      // 再停 run；否则「run 已终态」的自动判死会盖掉它。
+      try {
+        await rejectRunWakeRequests(uid, cid, runId, new Set(), 'user_stopped');
+      } catch (err) {
+        log.warn('session abort Wake rejection failed', { error: logErrorRef(err) });
+      }
       const stopped = await stopRun(uid, cid, runId, {
         reason: 'user_stopped',
         terminal: 'stopped',
@@ -13597,11 +13607,6 @@ export async function abort(uid: string, cid: string, options?: AbortRunOptions)
       if (!stopped) {
         log.warn('session abort durable run stop failed', { run_id: maskId(runId) });
         continue;
-      }
-      try {
-        await rejectRunWakeRequests(uid, cid, runId, new Set(), 'user_stopped');
-      } catch (err) {
-        log.warn('session abort Wake rejection failed', { error: logErrorRef(err) });
       }
     }
   } catch (err) {
