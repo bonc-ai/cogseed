@@ -910,6 +910,32 @@ function _chatRichInsertText(editor, text) {
   next.addRange(range);
 }
 
+/** 编辑器重新聚焦时修复被浏览器丢弃的插入点。
+ *
+ *  多选成员列表的勾选会把焦点交给选择器搜索框（设计上不关闭列表），关闭弹窗后再把
+ *  焦点还给编辑器。这一来一回 Chromium 不一定保留 contenteditable 内的选区：focus
+ *  后 caret 落到开头，随后被 focus 监听同步回 textarea，用户看到光标"跳回最左边"
+ *  ——刚插入的点名标记还在，插入点却没了。
+ *
+ *  `recorded` 由 focus 监听在**浏览器放置默认 caret 之前**记下（textarea 是插入点的
+ *  权威镜像：insertMention、键盘与选区路径都会同步它）。只在「当前插入点无效
+ *  （选区不在编辑器内，或落在 0）」且记录位置不在开头时恢复；用户在编辑器内的真实
+ *  点击由 mousedown 标记排除，不会进入这个分支。 */
+function _chatRichRestoreCaretOnFocus(api, recorded) {
+  const textarea = api && api.input;
+  const editor = api && api.editor;
+  if (!textarea || !editor) return;
+  const start = (recorded && typeof recorded.start === 'number')
+    ? recorded.start
+    : (typeof textarea.selectionStart === 'number' ? textarea.selectionStart : null);
+  if (start === null) return;
+  const end = (recorded && typeof recorded.end === 'number') ? recorded.end : start;
+  if (start === 0 && end === 0) return;
+  const current = _chatRichSelectionIndexes(editor);
+  if (current && (current.start !== 0 || current.end !== 0)) return;
+  _chatRichSetSelection(editor, start, end);
+}
+
 function _chatRichCreateApi(textarea, editor) {
   const nativeSetSelectionRange = typeof textarea.setSelectionRange === 'function'
     ? textarea.setSelectionRange.bind(textarea)
@@ -1092,10 +1118,34 @@ function _chatRichCreateApi(textarea, editor) {
   });
   editor.addEventListener('focus', () => {
     api.renderFromTextarea();
+    // 浏览器在 focus 事件**之后**才放置默认 caret（落在开头）：同步阶段的恢复会被它
+    // 覆盖，若此刻就同步 textarea，还会把"假的开头"写成权威插入点——随后 api.focus()
+    // 读到 0，光标就停在最左边（真机现象：选完 agent 光标跳回开头）。
+    //
+    // 因此分两步：先记下 focus 前的权威插入点，再把校正推迟到浏览器的默认 caret 就位
+    // 之后（宏任务 + 帧各试一次，函数本身幂等：只在当前插入点无效时才恢复），最后才
+    // 回写 textarea。程序化归还焦点（focusChatRichComposer）会在 focus 之后显式设置，
+    // 这里只是兜底。
+    const recorded = {
+      start: typeof textarea.selectionStart === 'number' ? textarea.selectionStart : null,
+      end: typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : null,
+    };
+    const settle = () => {
+      if (document.activeElement !== editor) return;
+      if (!api.pointerSelecting) _chatRichRestoreCaretOnFocus(api, recorded);
+      api.syncTextareaSelectionFromEditor();
+    };
+    setTimeout(settle, 0);
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settle);
+  });
+  // 鼠标点进编辑器时由浏览器按点击位置定位，延后校正必须让位（否则会把用户刚点的
+  // 插入点拉回上一次记录的位置）。
+  editor.addEventListener('mousedown', () => { api.pointerSelecting = true; });
+  editor.addEventListener('keyup', () => api.syncTextareaSelectionFromEditor());
+  editor.addEventListener('mouseup', () => {
+    api.pointerSelecting = false;
     api.syncTextareaSelectionFromEditor();
   });
-  editor.addEventListener('keyup', () => api.syncTextareaSelectionFromEditor());
-  editor.addEventListener('mouseup', () => api.syncTextareaSelectionFromEditor());
   editor.addEventListener('paste', (e) => {
     const cd = e.clipboardData;
     if (cd?.files?.length && _chatRichUploadPasteFiles(textarea.id, cd.files)) {
