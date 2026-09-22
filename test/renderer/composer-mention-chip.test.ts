@@ -53,6 +53,8 @@ function loadEditor(sidecar: any[] = []) {
     '_chatRichSegmentTokens',
     '_chatRichRenderValue',
     '_chatRichMentionSidecarFromDom',
+    '_chatRichNextSibling',
+    '_chatRichNormalizeMentionGaps',
   ].map(extractFunction).join('\n\n');
 
   const bootstrap = `
@@ -60,6 +62,13 @@ function loadEditor(sidecar: any[] = []) {
     class FakeNode {
       constructor(t) { this.nodeType = t; this.childNodes = []; this.parentNode = null; }
       appendChild(c) { c.parentNode = this; this.childNodes.push(c); return c; }
+      insertBefore(c, before) {
+        const at = this.childNodes.indexOf(before);
+        c.parentNode = this;
+        if (at < 0) this.childNodes.push(c);
+        else this.childNodes.splice(at, 0, c);
+        return c;
+      }
       removeChild(c) {
         const i = this.childNodes.indexOf(c);
         if (i >= 0) { this.childNodes.splice(i, 1); c.parentNode = null; }
@@ -138,6 +147,7 @@ function loadEditor(sidecar: any[] = []) {
         return _chatRichMentionSidecarFromDom(e, 'conversation');
       },
       ingest: (n) => _chatRichMentionSidecarFromDom(n, 'conversation'),
+      normalize: (n) => _chatRichNormalizeMentionGaps(n),
     });
   `, {});
 }
@@ -187,8 +197,10 @@ function loadMentionUndoHarness() {
     '_chatRichHasAuthoredContent',
     '_chatRichEnsureTrailingBreak',
     '_chatRichHandleEditorInput',
+    '_chatRichNormalizeMentionGaps',
     '_chatRichRenderValue',
     '_chatRichMentionSidecarFromDom',
+    '_chatRichNextSibling',
     '_chatRichInputTarget',
     '_chatRichAutoGrowMax',
     '_chatRichInsertText',
@@ -587,16 +599,87 @@ describe('正文点名标记（FR-004/FR-005）', () => {
     const c = loadEditor([{ id: 'cli-codex', name: 'Codex', start: 0, end: 7, text: '@Codex ' }]);
     const editor = c.render('@Codex 解释这段代码');
     const chip = chipsOf(editor)[0];
-    // 浏览器的整块删除就是把不可编辑节点整体摘掉（chip 自带尾随空格）。
+    // 浏览器的整块删除就是把不可编辑节点整体摘掉。标记与它的分隔空格是分开渲染的
+    // （否则相邻标记之间没有可编辑插入点），所以删除标记后分隔空格保留——这正是
+    // 用户输入的原文形状，且 undo 恢复 chip 时不会出现双空格。
     chip.parentNode.removeChild(chip);
-    expect(c.serialize(editor)).toBe('解释这段代码');
+    expect(c.serialize(editor)).toBe(' 解释这段代码');
   });
 
   it('chip 的序列化长度与实际字符数一致（光标/选区索引不漂移）', () => {
     const c = loadEditor([{ id: 'cli-codex', name: 'Codex', start: 0, end: 7, text: '@Codex ' }]);
     const editor = c.render('@Codex 看这个');
     const chip = chipsOf(editor)[0];
-    expect(c.textLength(chip)).toBe('@Codex '.length);
+    // chip 只承载标记本身；尾随空白是紧随其后的兄弟文本节点，两者相加才是原文长度。
+    expect(c.textLength(chip)).toBe('@Codex'.length);
+    expect(c.textLength(editor)).toBe('@Codex 看这个'.length);
+  });
+
+  it('相邻点名标记之间保留可编辑空白文本节点（可在两个智能体中间补内容）', () => {
+    const value = '@Codex @集成验证Agent 核对';
+    const c = loadEditor([
+      { id: 'cli-codex', name: 'Codex', start: 0, end: 7, text: '@Codex ' },
+      { id: 'task-a', name: '集成验证Agent', start: 7, end: 18, text: '@集成验证Agent ' },
+    ]);
+    const editor = c.render(value);
+    const nodes = editor.childNodes;
+    // chip 是 contenteditable=false 的整体节点：两个标记连续出现时，若把分隔空格
+    // 吞进 chip 内部，它们之间就没有任何可编辑插入点——用户点不到中间，也无法在
+    // 两个智能体之间补内容。这里钉住「chip + 空白文本节点 + chip」的结构。
+    expect(nodes[0].dataset.chatMentionChip).toBe('1');
+    expect(nodes[1].nodeType).toBe(3);
+    expect(nodes[1].nodeValue).toBe(' ');
+    expect(nodes[2].dataset.chatMentionChip).toBe('1');
+    expect(nodes[3].nodeType).toBe(3);
+    expect(nodes[3].nodeValue).toBe(' ');
+    expect(c.serialize(editor)).toBe(value);
+  });
+
+  it('在两个标记之间插入内容后，序列化把它放在中间且身份不变', () => {
+    const c = loadEditor([
+      { id: 'cli-codex', name: 'Codex', start: 0, end: 7, text: '@Codex ' },
+      { id: 'task-a', name: '集成验证Agent', start: 7, end: 18, text: '@集成验证Agent ' },
+    ]);
+    const editor = c.render('@Codex @集成验证Agent 核对');
+    const gap = editor.childNodes[1];
+    // 模拟浏览器把插入点放进间隙文本节点**开头**后键入 "中间"（用户点两标记中间
+    // 最容易落到的一侧）。不修复合法的分隔就会粘成 `@Codex中间`，点名身份随即失效。
+    gap.nodeValue = '中间 ';
+    c.normalize(editor);
+    expect(c.serialize(editor)).toBe('@Codex 中间 @集成验证Agent 核对');
+    const ingested = c.ingest(editor);
+    expect(ingested.map((token: any) => token.id)).toEqual(['cli-codex', 'task-a']);
+    expect(ingested.map((token: any) => token.text)).toEqual(['@Codex ', '@集成验证Agent ']);
+  });
+
+  it('相邻标记的间隙仍能承载新的结构化点名（中间再 @ 一个）', () => {
+    const c = loadEditor([
+      { id: 'cli-codex', name: 'Codex', start: 0, end: 7, text: '@Codex ' },
+      { id: 'task-a', name: '集成验证Agent', start: 7, end: 18, text: '@集成验证Agent ' },
+    ]);
+    const editor = c.render('@Codex @集成验证Agent 核对');
+    // insertMention 在光标处插入「@名字 + 分隔空格」：插进两个标记之间后字符流保持
+    // 两个原标记身份，新名字作为普通文字等待选择器绑定（与真实插入一致）。
+    editor.childNodes[1].nodeValue = '@WorkBuddy  中间 ';
+    c.normalize(editor);
+    const value = c.serialize(editor);
+    expect(value).toBe('@Codex @WorkBuddy  中间 @集成验证Agent 核对');
+    const ingested = c.ingest(editor);
+    expect(ingested.map((token: any) => token.id)).toEqual(['cli-codex', 'task-a']);
+  });
+
+  it('IME 提交（compositionend）同样修复合法的分隔，中间中文不粘连', () => {
+    const c = loadMentionUndoHarness();
+    const chip = c.firstChip();
+    const siblings = chip.parentNode.childNodes;
+    const gap = siblings[siblings.indexOf(chip) + 1];
+    // 输入法在「标记 + 分隔空格」之间提交中文：composition 期间 input 处理被跳过
+    // （不能打断 IME 缓冲），所以这条路径必须在 compositionend 里补做分隔修复。
+    gap.nodeValue = '中间 ';
+    c.editor.dispatchEvent({ type: 'compositionstart' });
+    c.editor.dispatchEvent({ type: 'compositionend' });
+    expect(c.textarea.value).toBe('@Codex 中间 task');
+    expect(c.members.mentionIdsForTarget('conversation', c.textarea.value)).toEqual(['cli-codex']);
   });
 
   it('粘贴的已注册名字仍是纯文本，不会被重渲染成身份 chip', () => {
@@ -637,7 +720,8 @@ describe('正文点名标记（FR-004/FR-005）', () => {
 
     chip.parentNode.removeChild(chip);
     c.editor.emitInput('deleteContentBackward');
-    expect(c.textarea.value).toBe('task');
+    // 标记与分隔空格分开渲染：删除标记后分隔空格保留（用户原文形状）。
+    expect(c.textarea.value).toBe(' task');
     expect(c.members.mentionIdsForTarget('conversation', c.textarea.value)).toEqual([]);
     expect(c.members.getMembers('conversation')).toEqual([]);
 
@@ -650,13 +734,13 @@ describe('正文点名标记（FR-004/FR-005）', () => {
 
     chip.parentNode.removeChild(chip);
     c.editor.emitInput('historyRedo');
-    expect(c.textarea.value).toBe('task');
+    expect(c.textarea.value).toBe(' task');
     expect(c.members.mentionIdsForTarget('conversation', c.textarea.value)).toEqual([]);
     expect(c.members.getMembers('conversation')).toEqual([]);
 
     c.editor.appendChild(chip);
     c.editor.emitInput('historyUndo');
-    expect(c.textarea.value).toBe('task@Codex ');
+    expect(c.textarea.value).toBe(' task@Codex');
     expect(c.members.mentionIdsForTarget('conversation', c.textarea.value)).toEqual([]);
     expect(c.members.getMembers('conversation')).toEqual([]);
 
@@ -686,7 +770,9 @@ describe('正文点名标记（FR-004/FR-005）', () => {
       removedAsNode: true,
       chipText: '@Codex',
     });
-    expect(c.textarea.value).toBe('task');
+    // 分隔空格保留：标记与空格分开渲染，这是可编辑插入点的代价，也是更贴近
+    // 用户原文的形状（undo 恢复标记后不会出现双空格）。
+    expect(c.textarea.value).toBe(' task');
     expect(c.members.mentionIdsForTarget('conversation', c.textarea.value)).toEqual([]);
     expect(c.members.getMembers('conversation')).toEqual([]);
 
@@ -698,7 +784,7 @@ describe('正文点名标记（FR-004/FR-005）', () => {
 
     c.historyRedo();
     expect(c.firstChip()).toBeUndefined();
-    expect(c.textarea.value).toBe('task');
+    expect(c.textarea.value).toBe(' task');
     expect(c.members.mentionIdsForTarget('conversation', c.textarea.value)).toEqual([]);
     expect(c.members.getMembers('conversation')).toEqual([]);
   });
