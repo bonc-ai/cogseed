@@ -385,26 +385,39 @@
   }
 
   /**
-   * 归一化后的下标 → 原文下标（空白被折叠成一个空格，两边要各自换算）。
-   * 找不到精确位置时给文档尾——只用于"近似窗口"，不追求逐字对齐。
+   * 归一化区间 → 原文区间（`[normStart, normEnd)` → `[start, end)`）。
+   *
+   * 归一化规则必须与 `mdNormSpace` 完全一致：空白折叠成一个空格 + 去掉首尾空白。
+   * 高亮落点必须用这个真实区间 —— 早先用 `needle.length * 2 + 8` 估算长度，
+   * 真机上表现为"高亮多涂半句"（31 字的摘录被涂了 68 字，后面正文跟着变色）。
    */
-  function mdApproxRawStart(raw, normIndex) {
+  function mdRawSpan(raw, normStart, normEnd) {
+    const text = String(raw == null ? '' : raw);
+    const lead = (text.match(/^\s*/) || [''])[0].length;
+    const trail = (text.match(/\s*$/) || [''])[0].length;
+    const stop = Math.max(lead, text.length - trail);
     let position = 0;
     let inWhitespace = false;
-    for (let i = 0; i < raw.length; i++) {
-      if (/\s/.test(raw[i])) {
-        if (!inWhitespace) {
-          if (position === normIndex) return i;
-          position++;
-          inWhitespace = true;
-        }
-      } else {
-        inWhitespace = false;
-        if (position === normIndex) return i;
-        position++;
-      }
+    let start = -1;
+    for (let i = lead; i < stop; i++) {
+      const isWhitespace = /\s/.test(text[i]);
+      if (isWhitespace && inWhitespace) continue; // 空白连成一段只算一个位置
+      inWhitespace = isWhitespace;
+      if (start < 0 && position === normStart) start = i;
+      if (position === normEnd) return { start, end: i };
+      position++;
     }
-    return Math.max(0, raw.length - 1);
+    return { start, end: stop };
+  }
+
+  /**
+   * 归一化后的下标 → 原文下标（空白被折叠成一个空格，两边要各自换算）。
+   * 找不到精确位置时给文档尾——只用于"近似窗口"，不追求逐字对齐。
+   * 内部定位已改用 `mdRawSpan`（一次拿到起点与终点），这里保留单点口径。
+   */
+  function mdApproxRawStart(raw, normIndex) {
+    const span = mdRawSpan(raw, normIndex, normIndex + 1);
+    return span.start >= 0 ? span.start : Math.max(0, String(raw == null ? '' : raw).length - 1);
   }
 
   /** 正文里的可见文本节点（手写递归：不依赖 TreeWalker，测试沙箱也能跑）。 */
@@ -442,6 +455,80 @@
       return null; // 跨节点/非法 Range：不阻断阅读
     }
     return mark;
+  }
+
+  /**
+   * 把 `[startNode+startOffset, endNode+endOffset)` 包成 `<mark>`，**允许跨节点**。
+   *
+   * 跨行内元素时 `surroundContents` 会因"部分选中非文本节点"直接抛错（一句话被
+   * `<strong>` 切开就是这个情形），所以跨节点走 `extractContents` —— 它会按需
+   * 克隆 `<strong>/<em>` 这类祖先，落点与格式都保留。
+   */
+  function mdMarkSpan(startNode, startOffset, endNode, endOffset) {
+    if (typeof document.createRange !== 'function') return null;
+    if (!startNode || !endNode || startOffset < 0 || endOffset < 0) return null;
+    if (startNode === endNode && endOffset <= startOffset) return null;
+    const owner = startNode.ownerDocument || document;
+    const range = owner.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    const mark = document.createElement('mark');
+    try {
+      const contents = range.extractContents();
+      mark.appendChild(contents);
+      range.insertNode(mark);
+    } catch (_) {
+      return null; // 非法 Range：不阻断阅读
+    }
+    return mark;
+  }
+
+  /**
+   * 连续文本节点的「可见文本 + 每个字符的归属」索引：一句话常被行内元素切成多个
+   * 文本节点（`**要点**：先做词表` → `<strong>要点</strong>：先做词表`），只按单节点
+   * 匹配永远匹配不上整句。归一化口径与 `mdNormSpace` 完全一致。
+   */
+  function mdNodeRun(nodes) {
+    const chars = [];
+    const owners = [];
+    for (const node of nodes) {
+      const raw = String(node.nodeValue || '');
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (/\s/.test(ch)) {
+          if (!chars.length || chars[chars.length - 1] === ' ') continue; // 折叠 + 去首部空白
+          chars.push(' ');
+        } else {
+          chars.push(ch);
+        }
+        owners.push({ node, offset: i });
+      }
+    }
+    while (chars.length && chars[chars.length - 1] === ' ') { // 去尾部空白
+      chars.pop();
+      owners.pop();
+    }
+    return { text: chars.join(''), owners };
+  }
+
+  /**
+   * 跨节点精确命中 → 可跨节点的落点。单节点能命中的情况由 `mdMarkRange` 负责，
+   * 这里只处理"确实横跨多个文本节点"的摘录；否则返回 null，交给下一个候选。
+   */
+  function mdMatchAcrossNodes(nodes, needle) {
+    if (!needle || nodes.length < 2) return null;
+    const { text, owners } = mdNodeRun(nodes);
+    const at = text.indexOf(needle);
+    if (at < 0) return null;
+    const first = owners[at];
+    const last = owners[at + needle.length - 1];
+    if (!first || !last || first.node === last.node) return null;
+    return {
+      startNode: first.node,
+      startOffset: first.offset,
+      endNode: last.node,
+      endOffset: last.offset + 1,
+    };
   }
 
   /** 摘录里的显著词（长度 ≥3、去重）：块级兜底按重合词数挑最像的那一块。 */
@@ -504,24 +591,35 @@
     if (cleaned.length > 140) push(cleaned.slice(0, 80));
     push((cleaned.match(/^[^\n。！？!?；;，,]{0,60}/) || [''])[0]);
     const nodes = mdTextNodes(host);
+    // ① 单节点精确命中：按归一化区间反算真实区间，标记长度 = 真实匹配长度
     for (const needle of needles) {
       for (const node of nodes) {
         const raw = String(node.nodeValue || '');
         if (!raw.trim()) continue;
-        let rawStart = -1;
         const index = mdNormSpace(raw).indexOf(needle);
-        if (index >= 0) {
-          rawStart = mdApproxRawStart(raw, index);
-        } else {
-          // 空白/标点归一化后仍匹配不上时，退到首个"实词"命中
-          const word = (needle.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
-          if (!word) continue;
-          const at = raw.indexOf(word);
-          if (at < 0) continue;
-          rawStart = at;
-        }
-        if (rawStart < 0) continue;
-        if (mdMarkRange(node, rawStart, needle.length * 2 + 8)) return true;
+        if (index < 0) continue;
+        const span = mdRawSpan(raw, index, index + needle.length);
+        if (span.start < 0 || span.end <= span.start) continue;
+        if (mdMarkRange(node, span.start, span.end - span.start)) return true;
+      }
+    }
+    // ② 跨节点精确命中：一句话被行内元素切开时（`**要点**：先做词表`）
+    for (const needle of needles) {
+      const span = mdMatchAcrossNodes(nodes, needle);
+      if (!span) continue;
+      if (mdMarkSpan(span.startNode, span.startOffset, span.endNode, span.endOffset)) return true;
+    }
+    // ③ 兜底：归一化后仍匹配不上 → 退到首个"实词"，只标这个词（不猜长度）
+    //    放在精确命中之后，否则前面某个节点里的同名词会抢在真正的摘录之前被涂上。
+    for (const needle of needles) {
+      const word = (needle.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
+      if (!word) continue;
+      for (const node of nodes) {
+        const raw = String(node.nodeValue || '');
+        if (!raw.trim()) continue;
+        const at = raw.indexOf(word);
+        if (at < 0) continue;
+        if (mdMarkRange(node, at, word.length)) return true;
       }
     }
     return mdBlockFallback(host, cleaned);
@@ -532,6 +630,7 @@
   root.__kbMdUtils = {
     isMarkdownPath,
     normSpace: mdNormSpace,
+    rawSpan: mdRawSpan,
     stripMarks: mdStripMarks,
     cleanQuote: mdCleanQuote,
     tokens: mdTokens,
