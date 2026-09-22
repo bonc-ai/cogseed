@@ -20,6 +20,23 @@ let _modelConfigSnapshotSignature = '';
 let _guardRefreshInFlight = null;
 let _lastGuardRefreshAt = 0;
 
+/** 跳「设置 → 配置」的模型区（#settings-model-authorizations）。
+ *
+ *  两个调用点（横幅 CTA / ensureModelConfigured）此前各写一遍旧的两段跳转，
+ *  症状是"点了没跳到模型配置"：设置页是懒加载的，只调 setView('settings')
+ *  会停在默认的「数据」tab；只同步调 activateSettingsTab 又会在设置特性还没
+ *  进内存时查不到 .settings-tab 而静默空转。统一走 model-chip.js /
+ *  connections.js 那条缝：setView 带 settingsTab/settingsAnchor 负责懒加载
+ *  路径，activateSettingsTab 负责已在内存时的路径，两处都传 models 锚点。 */
+function _openModelConfiguration() {
+  if (typeof setView === 'function') {
+    setView('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
+  }
+  if (typeof window !== 'undefined' && typeof window.activateSettingsTab === 'function') {
+    window.activateSettingsTab('configuration', { anchor: 'models' });
+  }
+}
+
 function _ensureGuardBanner() {
   if (_guardBannerEl) return _guardBannerEl;
   const slot = document.querySelector('#model-guard-slot');
@@ -44,10 +61,7 @@ function _ensureGuardBanner() {
     <button type="button" class="btn btn-sm btn-primary model-guard-cta">${escapeHtml(t('model_guard.cta'))}</button>
   `;
   el.querySelector('.model-guard-cta').addEventListener('click', () => {
-    if (typeof setView === 'function') setView('settings');
-    // Drop the user straight on the 配置 (Credentials) tab — that's where
-    // the model-auth UI lives now (Phase 4 4-tab restructure).
-    if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    _openModelConfiguration();
   });
   el.querySelector('.model-guard-dismiss').addEventListener('click', () => {
     _guardDismissed = true;
@@ -203,8 +217,7 @@ function ensureModelConfigured(opts = {}) {
       if (typeof uiAlert === 'function') uiAlert(msg);
       else window.alert(msg);
     } catch (_) { /* swallow — alert is best-effort */ }
-    if (typeof setView === 'function') setView('settings');
-    if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    _openModelConfiguration();
   }
   return false;
 }
