@@ -692,6 +692,32 @@ describe('conversation sidebar task row actions', () => {
 });
 
 describe('conversation background stream buffering', () => {
+  it('marks the commander in chat without throwing from the message handler', () => {
+    // 真机报错：plan recovery event stream failed … _refreshSidebarBadgesForCid is
+    // not defined —— 这个悬空调用抛在 resilience observer 的整段 try 里，会让
+    // 「主 IPC 断流时靠 observer 兜底渲染」整条流直接结束。这里从消息处理入口
+    // 钉住它：commander 说话后必须正常返回，并把 commander_in_chat 标上。
+    const context = loadConversationRenderer();
+    context.currentCid = 'c1';
+    context.conversations = [{ conversation_id: 'c1', commander_in_chat: false }];
+    // 只验证「消息处理路径不再抛 ReferenceError」：把与断言无关的延迟副作用
+    // （置顶 / 防抖刷新 / 列表重绘）隔离掉——它们会在测试结束后才被定时器触发，
+    // 撞上已拆掉的 DOM stub，变成 unhandled error。
+    vm.runInContext(`
+      _bumpConvToTop = function() {};
+      _scheduleConversationInfoFileRefresh = function() {};
+      renderConversationList = function() {};
+    `, context);
+
+    expect(() => context._handleGroupBusEvent('c1', null, {
+      type: 'message',
+      cid: 'c1',
+      msg: { id: 'm1', from: 'commander', text: 'hi' },
+    })).not.toThrow();
+
+    expect(context.conversations[0].commander_in_chat).toBe(true);
+  });
+
   it('does not render background task events into the visible task', () => {
     const context = loadConversationRenderer();
     context.currentCid = 'visible';
