@@ -307,4 +307,25 @@ describe('agent picker space refs (@ 空间化改造)', () => {
     expect(chips.innerHTML).toContain('配色规范');
     expect(chips.innerHTML).toContain('chat-taskref-remove');
   });
+
+  it('splitComposerAgentCandidates：外接 Agent 恒在候选，内部 Agent 按空间拆分', () => {
+    const { context } = loadAgentPicker();
+    const split = vm.runInContext('window.splitComposerAgentCandidates', context);
+    const list = [
+      { agent_id: 'cli-codex', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+      { agent_id: 'gw-1', name: '外接网关', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+      { agent_id: 'task-a', name: '集成验证Agent', runtime: { kind: 'in-process' } },
+      { agent_id: 'task-b', name: 'Foo', runtime: { kind: 'in-process' } },
+    ];
+    const bound = new Set(['cli-codex', 'task-a']);
+    const { candidates, outOfScope } = split(list, bound);
+    expect(candidates.map((a: any) => a.agent_id)).toEqual(['cli-codex', 'gw-1', 'task-a']);
+    expect(outOfScope.map((a: any) => a.agent_id)).toEqual(['task-b']);
+    // 无空间作用域：全部可见，outOfScope 为空。
+    expect(split(list, null).candidates).toHaveLength(4);
+    expect(split(list, null).outOfScope).toHaveLength(0);
+    // 非法输入不抛：null/非数组/缺 id 都被跳过。
+    expect(split(null, bound).candidates).toEqual([]);
+    expect(split([{ name: 'no-id' }], bound).candidates).toEqual([]);
+  });
 });

@@ -16,7 +16,7 @@ describe('composer gallery and real-page integration', () => {
     expect(script).toContain("['已有对话 / 760px'");
     expect(script).toContain("['窄宽 / 480px'");
     expect(script).toContain('chat-permission-select ai-select');
-    expect(script).toContain("specimen('弹层 / 统一外壳'");
+    expect(script).toContain("specimen('弹层 / 统一外壳 · 成员三态'");
     expect(script).toContain('gallery-composer-popover-grid');
     expect(script).toContain('renderComposerSpecimens();');
   });
@@ -32,7 +32,13 @@ describe('composer gallery and real-page integration', () => {
     expect(tokens).toContain('--layout-composer-width-max: 900px;');
     expect(css).toMatch(/\.new-chat-input-area\s*\{[\s\S]*?container:\s*composer \/ inline-size;/);
     expect(css).toMatch(/#panel-conversation \.chat-input-area\s*\{[\s\S]*?width:\s*100%;[\s\S]*?max-width:\s*var\(--layout-thread-width\);/);
-    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-label,[\s\S]*?\.model-chip-label,[\s\S]*?display:\s*none;/);
+    // 压缩阶梯：≤720px 只收起次要 chrome（工作空间文字等），核心执行信息只收紧宽度。
+    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-prefix,[\s\S]*?\.workspace-chip-label\s*\{[\s\S]*?display:\s*none;/);
+    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.chat-recipient-chip \.chat-recipient-name\s*\{[\s\S]*?max-width:\s*170px;/);
+    expect(css).toMatch(/@container composer \(max-width:\s*600px\)\s*\{[\s\S]*?\.chat-recipient-chip \.chat-recipient-name\s*\{[\s\S]*?max-width:\s*150px;[\s\S]*?\.model-chip-label\s*\{[\s\S]*?max-width:\s*128px;/);
+    // 成员名与模型名是「谁执行 / 用什么模型」的唯一发送前凭据，任何宽度都不许隐藏。
+    expect(css).not.toMatch(/\.chat-recipient-name[^{}]*\{[^{}]*display:\s*none/);
+    expect(css).not.toMatch(/\.model-chip-label[^{}]*\{[^{}]*display:\s*none/);
     expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.chat-permission-chip\s*\{[\s\S]*?width:\s*var\(--chat-permission-control-height\);[\s\S]*?\.chat-permission-select :is\(\.ai-select-label, \.ai-select-caret\)\s*\{[\s\S]*?display:\s*none;/);
   });
 
