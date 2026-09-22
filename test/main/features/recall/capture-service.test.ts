@@ -179,6 +179,30 @@ async function captureModule(reviewPolicy: 'auto' | 'manual' = 'manual') {
   return capture;
 }
 
+/** 有界条件等待：固定 sleep 会让用例结果取决于机器负载。 */
+async function waitUntil(probe: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (probe()) return;
+    if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** 终态编排器是「读设置闸门 → 决定是否入队」的异步链。等每个终态事件的闸门判定
+ *  真正 resolve（含判定后的延续），调用方才能断言入队与否——这既覆盖转发路径，
+ *  也覆盖「判定完成但不转发」的负例，不再依赖 20ms 猜测。 */
+async function waitForGate(
+  spy: { mock: { results: Array<{ type: string; value: unknown }> } },
+  expected: number,
+): Promise<void> {
+  await waitUntil(() => spy.mock.results.length >= expected, `${expected} terminal gate reads`);
+  await Promise.all(spy.mock.results.map((result) => (
+    result.type === 'return' ? result.value : undefined
+  )));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe('Recall conversation capture', () => {
   it('does not create or run captures while the conversation source is paused or removed', async () => {
     const capture = await captureModule();
@@ -358,6 +382,8 @@ describe('Recall conversation capture', () => {
 
   it('forwards every terminal outcome to the capture state machine', async () => {
     const capture = await captureModule();
+    const settings = await import('../../../../src/main/features/recall/capture-settings');
+    const gate = vi.spyOn(settings, 'readRecallCaptureSettings');
     let listener: ((event: any) => void) | undefined;
     const queue = vi.fn(async () => undefined);
     const stop = capture.startRecallCaptureOrchestrator({
@@ -365,14 +391,18 @@ describe('Recall conversation capture', () => {
       queue,
     });
 
-    // 2026-09-15 终态口径：仅夜间自动沉淀（enabled+nightly）才转发创建；
-    // smart（任务一结束就整理）保持下线。默认 smart → 不转发。
-    for (const status of ['failed', 'cancelled', 'waiting_input']) listener?.({ ...completedEvent, status });
-    listener?.(completedEvent);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    try {
+      // 2026-09-15 终态口径：仅夜间自动沉淀（enabled+nightly）才转发创建；
+      // smart（任务一结束就整理）保持下线。默认 smart → 不转发。
+      for (const status of ['failed', 'cancelled', 'waiting_input']) listener?.({ ...completedEvent, status });
+      listener?.(completedEvent);
+      await waitForGate(gate, 4);
 
-    expect(queue).not.toHaveBeenCalled();
-    stop();
+      expect(queue).not.toHaveBeenCalled();
+    } finally {
+      gate.mockRestore();
+      stop();
+    }
   });
 
   it('夜间自动沉淀开启后，terminal 事件恢复转发（scheduled 任务到点跑）', async () => {
@@ -387,7 +417,7 @@ describe('Recall conversation capture', () => {
       queue,
     });
     listener?.(completedEvent);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitUntil(() => queue.mock.calls.length > 0, 'nightly terminal capture forwarding');
 
     expect(queue).toHaveBeenCalledWith(completedEvent);
     stop();
@@ -396,6 +426,7 @@ describe('Recall conversation capture', () => {
   it('夜间开关关闭（manual）不转发；功能总开关关闭时同样不转发', async () => {
     const capture = await captureModule();
     const settings = await import('../../../../src/main/features/recall/capture-settings');
+    const gate = vi.spyOn(settings, 'readRecallCaptureSettings');
     let listener: ((event: any) => void) | undefined;
     const queue = vi.fn(async () => undefined);
     const stop = capture.startRecallCaptureOrchestrator({
@@ -403,16 +434,20 @@ describe('Recall conversation capture', () => {
       queue,
     });
 
-    await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'manual' });
-    listener?.(completedEvent);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(queue).not.toHaveBeenCalled();
+    try {
+      await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'manual' });
+      listener?.(completedEvent);
+      await waitForGate(gate, 1);
+      expect(queue).not.toHaveBeenCalled();
 
-    await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'nightly', enabled: false });
-    listener?.(completedEvent);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(queue).not.toHaveBeenCalled();
-    stop();
+      await settings.updateRecallCaptureSettings('capture-user', { executionPolicy: 'nightly', enabled: false });
+      listener?.(completedEvent);
+      await waitForGate(gate, 2);
+      expect(queue).not.toHaveBeenCalled();
+    } finally {
+      gate.mockRestore();
+      stop();
+    }
   });
 
   it('creates one durable quiet-wait task for duplicate terminal delivery', async () => {
@@ -1526,6 +1561,53 @@ describe('Recall conversation capture', () => {
     expect(mocks.autoApplyCandidate).not.toHaveBeenCalled();
     expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
     expect(completed.autoWrite).toBeUndefined();
+  });
+
+  it('drops a credential-shaped candidate instead of failing the whole capture', async () => {
+    // 2026-09-21 真机抓出：候选文本是凭据赋值样式（token: xxx）时，保存侧
+    // L3 敏感闸对它抛 forbidden to persist——此前整次整理被打成 failed
+    // （candidate_save_failed），重试永远撞同一堵墙。正确口径：只丢弃这
+    // 一条候选并留痕，其余候选照常入库（与解析层"单个坏候选不毁整批"
+    // 同一纪律）。
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [
+          {
+            judgment: 'The gateway token: AKIAIOSFODNN7EXAMPLE stays in the vault.',
+            value: 'token: AKIAIOSFODNN7EXAMPLE',
+            summary: 'Gateway credential',
+            suggestedType: 'fact',
+            suggestedScope: 'project',
+            evidence: ['m1'],
+          },
+          {
+            judgment: 'Keep a traceable decision log.',
+            ...reviewableCandidateContract,
+            summary: 'Decision traceability',
+            suggestedType: 'rule',
+            suggestedScope: 'project',
+            evidence: ['m1'],
+          },
+        ],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+    let saveCalls = 0;
+    mocks.saveCandidate.mockImplementation(async (_userId: string, input: { captureKey: string }) => {
+      saveCalls += 1;
+      if (saveCalls === 1) throw new Error('cognition is forbidden to persist: credential_assignment');
+      return { id: `cand-${input.captureKey.slice(-1)}`, status: 'pending_review', ...input };
+    });
+
+    const capture = await captureModule();
+    const queued = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    await capture.runRecallCaptureNow('capture-user', queued.id);
+    const completed = await capture.runRecallCapture('capture-user', queued.id);
+
+    expect(mocks.saveCandidate).toHaveBeenCalledTimes(2);
+    expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-1'] });
+    expect(completed.errorCode ?? '').toBe('');
   });
 
   it('keeps an automatic write failure visible and retryable', async () => {

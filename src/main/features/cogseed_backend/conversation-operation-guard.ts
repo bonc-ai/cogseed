@@ -40,6 +40,20 @@ function assertConversationAvailable(key: string): void {
   }
 }
 
+/** Read-only view of the deletion lease: true while a conversation is being
+ * deleted, and for the rest of the process lifetime once it was tombstoned
+ * here. Late background writers (group-chat state writes unwinding after a
+ * stop) use it to stop writing into a directory deletion just removed instead
+ * of recreating it. A revival through {@link withCogSeedConversationCreation}
+ * clears the marker, so a recreated conversation writes normally again. */
+export function isCogSeedConversationDeletingOrDeleted(
+  userId: string,
+  conversationId: string,
+): boolean {
+  const key = operationKey(userId, conversationId);
+  return deletingConversations.has(key) || deletedConversations.has(key);
+}
+
 async function waitForProjectionEffects(key: string): Promise<void> {
   if ((activeProjectionEffects.get(key) || 0) === 0) return;
   await new Promise<void>((resolve) => {

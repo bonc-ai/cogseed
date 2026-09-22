@@ -68,13 +68,17 @@ export interface AbilityAssetSemantics {
  *  形状与 `readAbilityAssetRelationContract` 一致：返回可直接展开的片段，
  *  这样服务层不必逐字段判断 undefined。 */
 export function readAbilityAssetSemantics(value: Record<string, unknown>): AbilityAssetSemantics {
+  // 边界条件形态统一（2026-09-19 候选归一化）：空数组折叠为缺席——"没声明
+  // 过"和"声明了空"在盘上只允许一种形态，否则同一字段缺席/[]/有值三态并存。
+  const applicableWhen = value.applicableWhen === undefined
+    ? undefined
+    : normalizeAbilityAssetConditions(value.applicableWhen, 'applicableWhen');
+  const forbiddenWhen = value.forbiddenWhen === undefined
+    ? undefined
+    : normalizeAbilityAssetConditions(value.forbiddenWhen, 'forbiddenWhen');
   return {
-    ...(value.applicableWhen === undefined
-      ? {}
-      : { applicableWhen: normalizeAbilityAssetConditions(value.applicableWhen, 'applicableWhen') }),
-    ...(value.forbiddenWhen === undefined
-      ? {}
-      : { forbiddenWhen: normalizeAbilityAssetConditions(value.forbiddenWhen, 'forbiddenWhen') }),
+    ...(applicableWhen?.length ? { applicableWhen } : {}),
+    ...(forbiddenWhen?.length ? { forbiddenWhen } : {}),
     ...(value.sensitivity === undefined
       ? {}
       : { sensitivity: normalizeAbilityAssetSensitivity(value.sensitivity) }),

@@ -137,6 +137,13 @@ function loadViewer(opts: LoadOpts = {}) {
     body: { contains: vi.fn(() => true) },
     createTextNode: vi.fn((t: string) => ({ textContent: t })),
     createElement: vi.fn(() => makeElement()),
+    // 高亮落点会真开 Range：`mdMarkRange` 首先看环境有没有 createRange。
+    // 这里给一个假 Range（只记区间，不建 DOM），断言的是"涂了原文的哪一段"。
+    createRange: vi.fn(() => ({
+      setStart: vi.fn(),
+      setEnd: vi.fn(),
+      surroundContents: vi.fn(),
+    })),
   };
   /** 正文里真的插了几个 `<mark>`（橙色高亮）——"打开整篇不该自带高亮"用它断言。 */
   const markCount = () => (documentMock.createElement as any).mock.calls
@@ -178,23 +185,23 @@ function loadViewer(opts: LoadOpts = {}) {
 const TRANSCRIPT_TEXT = [
   'SpeakerA 2026-09-05 19:31:32',
   'Hello.',
-  '张浩 2026-09-05 19:31:34',
+  '张磊 2026-09-05 19:31:34',
   '哈喽哈喽能听到吗？',
 ].join('\n');
 
 /**
  * 真机事故夹具（2026-09-18）：腾讯会议「相对时钟」导出——整点前只给 `mm:ss`
- * （`牛保康 02:45`），整点后才变成 `刘海运 01:00:35`。块头判定只认 `hh:mm:ss` 时，
+ * （`王伟 02:45`），整点后才变成 `李强 01:00:35`。块头判定只认 `hh:mm:ss` 时，
  * 首个被识别的块头之前的内容从不进 DOM（实测一份 77 分钟的稿子丢了 77%）。
  */
 const RELATIVE_CLOCK_TRANSCRIPT = [
-  '牛保康 02:45',
+  '王伟 02:45',
   '喂海运哥能听到吗？喂我这。',
-  '尹镇宇 02:56',
+  '刘洋 02:56',
   '我这边能听到？',
-  '刘海运 57:59',
+  '李强 57:59',
   '行没问题，后边就是还有两页是啥？',
-  '刘海运 01:00:35',
+  '李强 01:00:35',
   '对，然后下边就是实现的现状与缺口。',
 ].join('\n');
 
@@ -537,7 +544,7 @@ describe('markdown 文档排版化（md 不再直出原文）', () => {
 
 /**
  * 不变量：**块头认不出只该影响排版，绝不能让内容消失**。
- * 真机事故（2026-09-18）：相对时钟转写稿（整点前 `牛保康 02:45`）在查看器里只剩
+ * 真机事故（2026-09-18）：相对时钟转写稿（整点前 `王伟 02:45`）在查看器里只剩
  * 整点之后的内容，用户看到的是"原文被删了"——实际是首个被识别的块头之前的内容
  * 从不进 DOM（一份 77 分钟的稿子丢了 77%）。
  */
@@ -568,9 +575,9 @@ describe('对话块渲染不得丢内容（相对时钟转写稿）', () => {
     const text = [
       '会议已开启实时转写，机器识别结果仅供参考',
       '（这段没人名没时间，属于块外文本）',
-      '牛保康 02:45',
+      '王伟 02:45',
       '喂海运哥能听到吗？',
-      '尹镇宇 02:56',
+      '刘洋 02:56',
       '我这边能听到？',
     ].join('\n');
     const viewer = loadViewer({ text });
@@ -726,5 +733,169 @@ describe('排版后引用定位的清洗口径（纯函数）', () => {
     };
 
     expect(u.highlight(host, '这里有一段摘录')).toBe(false);
+  });
+});
+
+/**
+ * 真机事故（2026-09-21）：点「原文依据」后正文里高亮的是**半句多**——摘录 31 字，
+ * 涂了 68 字，摘录末尾之后的正文跟着变色，用户以为"引的位置不对"。
+ * 根因：标记长度用的是 `needle.length * 2 + 8` 估算值，而不是真实匹配长度。
+ * 这里锁死"涂出来的就是摘录本身"。
+ */
+describe('原文依据高亮的落点口径（真机：高亮多涂半句）', () => {
+  const utils = (viewer: any) => viewer.windowMock.__kbMdUtils;
+
+  /** 用假文本节点跑真高亮分支，返回被 `<mark>` 包住的原文片段（涂错即暴露）。 */
+  function highlightedText(viewer: any, raw: string, quote: string): string | null {
+    let marked: string | null = null;
+    const node: any = {
+      nodeType: 3,
+      nodeValue: raw,
+      ownerDocument: {
+        createRange: () => {
+          const range: any = { start: 0, end: 0 };
+          range.setStart = (_node: any, start: number) => { range.start = start; };
+          range.setEnd = (_node: any, end: number) => { range.end = end; };
+          range.surroundContents = () => { marked = raw.slice(range.start, range.end); };
+          return range;
+        },
+      },
+    };
+    const host: any = { childNodes: [node], querySelectorAll: () => [] };
+
+    utils(viewer).highlight(host, quote);
+    return marked;
+  }
+
+  it('rawSpan 把归一化区间反算成原文区间（首尾空白跳过、空白连成一段只算一个位置）', () => {
+    const u = utils(loadViewer());
+
+    expect(u.rawSpan('   abc  def   ', 1, 4)).toEqual({ start: 4, end: 8 });
+    // 摘录落在段首：下标 0 要落在第一个非空白字符上，不能从行首空白起涂
+    expect(u.rawSpan('\n    前导空白后的正文', 0, 2)).toEqual({ start: 5, end: 7 });
+  });
+
+  it('31 字摘录只涂 31 字，不再向外多涂半句', () => {
+    const viewer = loadViewer();
+    const quote = '这段原文依据摘录一共三十一个字，用来验证高亮落点是否准确无误。';
+    const raw = `${quote}后面还有一整句本不该变色。`;
+
+    expect([...quote].length).toBe(31); // 夹具自检：与真机那 31 字摘录同量级
+    const marked = highlightedText(viewer, raw, quote);
+
+    expect(marked).toBe(quote);
+    expect(marked).not.toContain('后面还有一整句');
+  });
+
+  it('段中摘录（前面有正文）也只涂摘录本身', () => {
+    const viewer = loadViewer();
+    const quote = '检索改写要先用词表兜住转写错词';
+    const raw = `第三章 方案\n\n前置说明一句话。${quote}，再往下就是别的段落了。`;
+
+    expect(highlightedText(viewer, raw, quote)).toBe(quote);
+  });
+
+  it('归一化后才匹配上时（多空白/换行）仍按归一化区间反算真实区间', () => {
+    const viewer = loadViewer();
+    const raw = '开头   中间    结尾';
+    const marked = highlightedText(viewer, raw, '开头 中间    结尾');
+
+    expect(marked).toBe(raw); // 摘录覆盖整段 → 涂的就是整段（含段内空白）
+  });
+
+  it('归一化后仍匹配不上时退到首个实词，只涂那个词（不猜长度）', () => {
+    const viewer = loadViewer();
+    const raw = '正文里出现了一处改写计划，其余内容不动。';
+
+    expect(highlightedText(viewer, raw, '改写计划（第 2 版）')).toBe('改写计划');
+  });
+
+  /**
+   * 行内元素会把一句话切成多个文本节点（`**要点**：先做词表` 渲染成
+   * `<strong>要点</strong>：先做词表`）。这类摘录此前匹配不上整句，掉到"首个实词"
+   * 兜底，真机上看到的就是"只涂了半句"。
+   */
+  describe('摘录被行内元素切开（跨文本节点）', () => {
+    /** 假 DOM：若干文本节点（可选包一层行内元素）+ 只记区间的 Range。 */
+    function buildTree(parts: Array<{ tag?: string; text: string }>) {
+      const flat: any[] = [];
+      const children: any[] = [];
+      let lastRange: any = null;
+      const ownerDocument: any = {
+        createRange: () => {
+          const range: any = { startNode: null, startOffset: 0, endNode: null, endOffset: 0 };
+          range.setStart = (node: any, offset: number) => { range.startNode = node; range.startOffset = offset; };
+          range.setEnd = (node: any, offset: number) => { range.endNode = node; range.endOffset = offset; };
+          // 与真实 DOM 一致：跨节点时 surroundContents 抛错，必须走 extractContents
+          range.surroundContents = () => {
+            if (range.startNode !== range.endNode) throw new Error('InvalidStateError');
+          };
+          range.extractContents = () => ({ nodeType: 11 });
+          range.insertNode = () => {};
+          lastRange = range;
+          return range;
+        },
+      };
+      for (const part of parts) {
+        const textNode: any = { nodeType: 3, nodeValue: part.text, ownerDocument };
+        flat.push(textNode);
+        if (!part.tag) {
+          children.push(textNode);
+          continue;
+        }
+        children.push({ nodeType: 1, childNodes: [textNode], querySelectorAll: () => [] });
+      }
+      const host: any = { nodeType: 1, childNodes: children, querySelectorAll: () => [] };
+      /** 按记录的区间从假树上切出被标记的原文（测试自己算，不复用被测映射）。 */
+      const marked = () => {
+        if (!lastRange || !lastRange.startNode || !lastRange.endNode) return null;
+        const from = flat.indexOf(lastRange.startNode);
+        const to = flat.indexOf(lastRange.endNode);
+        if (from < 0 || to < 0) return null;
+        let out = '';
+        for (let i = from; i <= to; i++) {
+          const raw = String(flat[i].nodeValue || '');
+          out += raw.slice(i === from ? lastRange.startOffset : 0, i === to ? lastRange.endOffset : raw.length);
+        }
+        return out;
+      };
+      return { host, marked };
+    }
+
+    it('跨 <strong> 的摘录整句都被涂上（不再只涂首个实词）', () => {
+      const viewer = loadViewer();
+      const { host, marked } = buildTree([
+        { text: '前置说明一句话。' },
+        { tag: 'strong', text: '要点' },
+        { text: '：先做词表，再改检索。后面还有很多别的说明文字。' },
+      ]);
+
+      expect(utils(viewer).highlight(host, '**要点**：先做词表，再改检索')).toBe(true);
+      expect(marked()).toBe('要点：先做词表，再改检索');
+    });
+
+    it('精确命中优先于实词兜底：前面段落里出现同名词也不许抢落点', () => {
+      const viewer = loadViewer();
+      const { host, marked } = buildTree([
+        { text: '先做词表这句话在前面另一个段落里出现过。' },
+        { text: '真正的摘录是：' },
+        { tag: 'strong', text: '要点' },
+        { text: '：先做词表，再改检索。' },
+      ]);
+
+      expect(utils(viewer).highlight(host, '**要点**：先做词表，再改检索')).toBe(true);
+      expect(marked()).toBe('要点：先做词表，再改检索');
+    });
+
+    it('单节点内的摘录仍然走单节点精确路径（跨节点逻辑不抢单节点结果）', () => {
+      const viewer = loadViewer();
+      const { host, marked } = buildTree([
+        { text: '前置说明一句话。' },
+        { text: '检索改写要先用词表兜住转写错词。' },
+      ]);
+
+      expect(utils(viewer).highlight(host, '检索改写要先用词表兜住转写错词')).toBe(true);
+      expect(marked()).toBe('检索改写要先用词表兜住转写错词');
+    });
   });
 });

@@ -22,6 +22,7 @@ import {
   updateCogSeedTask,
 } from './task-store';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
+import { resolveRuntimeToolPolicyForRun } from './runtime-tool-policy';
 import { buildDispatchedRuntimeAssetContext, buildRuntimeAssetContext } from './runtime-asset-context';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
 import { readCogSeedSession } from './session-store';
@@ -59,6 +60,8 @@ export interface StartCogSeedTaskInput {
   agentId?: string;
   conversationId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
+  /** Optional Group Chat collaboration ledger correlation for wake-gated tasks. */
+  groupChatRunId?: string;
   allowedSkillIds?: string[];
   skillVersionPins?: import('./types').CogSeedTaskSkillVersionPin[];
   localCli?: CogSeedLocalCliConfig;
@@ -136,7 +139,13 @@ export interface CogSeedRuntimeControllerOptions {
   runtimeHealthWatchdog?: false | CogSeedRuntimeControllerWatchdogOptions;
 }
 
-function asRuntimeInput(input: StartCogSeedTaskInput & { runtimeSessionId?: string; capabilities?: string[] }): CogSeedAgentRuntimeInput {
+function asRuntimeInput(
+  input: StartCogSeedTaskInput & {
+    runtimeSessionId?: string;
+    capabilities?: string[];
+    toolPolicy?: import('../cogseed_runtime/kernel/types').RuntimeToolPolicy;
+  },
+): CogSeedAgentRuntimeInput {
   return {
     task: input.task,
     request_id: input.requestId,
@@ -150,6 +159,7 @@ function asRuntimeInput(input: StartCogSeedTaskInput & { runtimeSessionId?: stri
     ...(input.profileId ? { model_profile: input.profileId } : {}),
     ...(input.workingDir ? { working_dir: input.workingDir } : {}),
     ...(input.capabilities?.length ? { capabilities: input.capabilities } : {}),
+    ...(input.toolPolicy ? { tool_policy: input.toolPolicy } : {}),
   };
 }
 
@@ -321,6 +331,7 @@ async function projectTaskEventBestEffort(
       agentId: task.agentId,
       taskId: task.taskId,
       ...(task.executionId ? { executionId: task.executionId } : {}),
+      ...(task.groupChatRunId ? { groupChatRunId: task.groupChatRunId } : {}),
       sessionId: task.sessionId,
       event,
     });
@@ -674,7 +685,20 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
             abilityAssetIds: task.abilityAssetIds,
             localCli: task.localCli!,
           }, { signal: controller.signal })
-        : runtime.run(userId, asRuntimeInput(input), { signal: controller.signal });
+        : runtime.run(
+            userId,
+            asRuntimeInput({
+              ...input,
+              // 工具策略由主进程从持久化会话（权限模式）+ 工作区推导，随请求下发；
+              // worker/模型不得自述。推导不出来时不带字段，kernel 落回 deny-all。
+              toolPolicy: await resolveRuntimeToolPolicyForRun(
+                userId,
+                task.conversationId,
+                input.workingDir ?? task.workingDir,
+              ),
+            }),
+            { signal: controller.signal },
+          );
       for await (const event of stream) {
         current = await mapRuntimeEvent(
           userId,

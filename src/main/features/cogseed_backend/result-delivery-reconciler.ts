@@ -247,6 +247,9 @@ export async function reconcileCogSeedPendingResult(
       taskId: retained.taskId,
       executionId: retained.executionId,
       sessionId: retained.sessionId,
+      // 终态投影必须带回任务自己的 group-chat run 归属：群聊台账的 actor 终态
+      // 就靠这个 id 收口（丢了它 run 会永远停在 running，既没有汇总也没有重试入口）。
+      ...(task.groupChatRunId ? { groupChatRunId: task.groupChatRunId } : {}),
       event: retained.event,
     }, options.projectTaskEvent ?? defaultProjectTaskEvent, options.projectionTimeoutMs ?? 1_000);
     if (!projected) return { status: 'pending', task: awaitingDelivery, reason: 'projection-failed' };

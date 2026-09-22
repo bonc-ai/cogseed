@@ -92,6 +92,7 @@ function sameIntent(
     request.conversation_id === input.conversationId &&
     (request.execution_domain || 'group_chat') === (input.executionDomain || 'group_chat') &&
     request.agent_id === input.agentId &&
+    request.dispatch_payload.run_id === input.dispatchPayload.run_id &&
     normalizeIntentText(request.objective) ===
       normalizeIntentText(input.objective) &&
     scopesOverlap(
@@ -133,6 +134,9 @@ function mergePendingIntent(
   ]));
   request.dispatch_payload = {
     ...request.dispatch_payload,
+    ...(input.dispatchPayload.run_id
+      ? { run_id: input.dispatchPayload.run_id }
+      : {}),
     ...(assetIds.length ? { asset_ids: assetIds } : {}),
   };
   if (!request.workflow_step_id && input.workflow_step_id) {
@@ -240,10 +244,85 @@ async function reconcileWakeRequestWorkflow(
   });
 }
 
+/** 一条唤醒只有在它绑定的 run 仍可派发时才有意义。绑定的 run 已终态、或该 run
+ *  里这个 actor 已经拿到终态时，dispatcher 的预检必然拒绝——这种请求如果一直
+ *  挂在 pending/approved，用户会反复点批准、每次都失败，而且它还挡住宿主侧收口
+ *  （收口门要求本 run 没有 pending/approved 的 Wake）。所以系统自己把它判死：
+ *  置 expired + 撤销 active 审批并写明原因。读不到 run 时不动（交给决策时的
+ *  fail-closed），避免把瞬时读失败当成失效。 */
+async function expireUndispatchableWakeRequests(
+  userId: string,
+  conversationId?: string,
+): Promise<void> {
+  const state = await readWakeState(userId);
+  const candidates = state.requests.filter(
+    (request) =>
+      (!conversationId || request.conversation_id === conversationId) &&
+      (request.status === "pending" || request.status === "approved") &&
+      !!request.dispatch_payload.run_id,
+  );
+  if (!candidates.length) return;
+
+  const { readRun } = await import("../group_chat/run_store");
+  const doomed: Array<{ id: string; reason: string; cid: string; runId: string }> = [];
+  for (const request of candidates) {
+    const runId = String(request.dispatch_payload.run_id || "");
+    const run = await readRun(userId, request.conversation_id, runId).catch(() => null);
+    if (!run) continue;
+    if (run.status !== "running") {
+      doomed.push({ id: request.id, reason: `run_terminal:${run.status}`, cid: request.conversation_id, runId });
+      continue;
+    }
+    const actor = run.actors.find((entry) => entry.agent_id === request.agent_id);
+    if (actor && actor.terminal !== "pending") {
+      doomed.push({ id: request.id, reason: `actor_terminal:${actor.terminal}`, cid: request.conversation_id, runId });
+    }
+  }
+  if (!doomed.length) return;
+
+  await mutateWakeState(userId, (next) => {
+    const now = nowIso();
+    for (const { id, reason } of doomed) {
+      const request = next.requests.find((item) => item.id === id);
+      if (!request || (request.status !== "pending" && request.status !== "approved")) continue;
+      request.status = "expired";
+      request.decision_reason = reason;
+      request.updated_at = now;
+      delete request.workflow_transition;
+      for (const approval of next.approvals.filter(
+        (item) => item.request_id === id && item.status === "active",
+      )) {
+        approval.status = "revoked";
+        approval.updated_at = now;
+      }
+    }
+  });
+
+  // 判死只解决了「唤醒一直挂着」；宿主侧的收口还停在「本 run 有待审批 Wake」的
+  // 旧判断上（收录口门会重新列一次 Wake，那时就能看到 expired）。所以这里主动
+  // 触发一次 run 对账，让 run 走到 blocked/approval_expired 并发布汇总。
+  // 动态 import 断开 bus ↔ wake-service 的静态环（bus 静态依赖本模块）。
+  // 判死只解决了「唤醒一直挂着」；宿主侧的收口还停在「本 run 有待审批 Wake」的
+  // 旧判断上（收录口门会重新列一次 Wake，那时就能看到 expired）。所以这里主动
+  // 触发一次 run 对账，让 run 走到 blocked/approval_expired 并发布汇总。
+  // 动态 import 断开 bus ↔ wake-service 的静态环（bus 静态依赖本模块）。
+  try {
+    const { reconcileRun } = await import("../group_chat/index");
+    for (const { cid, runId } of doomed) {
+      await reconcileRun(userId, cid, runId).catch((err) => {
+        log.warn(`wake expiry run reconcile failed cid=${cid}: ${(err as Error).message}`);
+      });
+    }
+  } catch (err) {
+    log.warn(`wake expiry reconcile unavailable: ${(err as Error).message}`);
+  }
+}
+
 async function reconcileWakeTransitions(
   userId: string,
   conversationId?: string,
 ): Promise<void> {
+  await expireUndispatchableWakeRequests(userId, conversationId);
   const state = await readWakeState(userId);
   const requestIds = state.requests
     .filter(
@@ -263,6 +342,8 @@ export async function evaluateWake(
   requireId(userId, "user id");
   requireId(input.conversationId, "conversation id");
   requireId(input.agentId, "agent id");
+  if (input.dispatchPayload.run_id)
+    requireId(input.dispatchPayload.run_id, "wake collaboration run id");
   if (!input.objective.trim()) throw new Error("wake objective is required");
   if (!input.dispatchPayload.text.trim())
     throw new Error("wake dispatch text is required");
@@ -382,6 +463,9 @@ export async function evaluateWake(
           : {}),
         ...(input.dispatchPayload.asset_ids?.length
           ? { asset_ids: [...input.dispatchPayload.asset_ids] }
+          : {}),
+        ...(input.dispatchPayload.run_id
+          ? { run_id: input.dispatchPayload.run_id }
           : {}),
       },
       status: "pending",

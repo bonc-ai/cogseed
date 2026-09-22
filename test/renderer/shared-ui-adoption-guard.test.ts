@@ -7,9 +7,14 @@ const modulesRoot = path.join(root, 'src/renderer/modules');
 
 const sharedControlFactories = new Set([
   'ui-button.js',
+  'ui-card.js',
+  'ui-drawer.js',
   'ui-user-menu.js',
   'ui-form.js',
   'ui-segmented-control.js',
+  'ui-status.js',
+  'ui-structure.js',
+  'ui-tabs.js',
 ]);
 
 const legacyRawControlBaseline: Record<string, number> = {
@@ -41,8 +46,23 @@ const legacyRawControlBaseline: Record<string, number> = {
   // uiButton 强制可见文字 label，表达不了纯状态控件——与 run-center 的
   // 复合控件豁免同构（2026-09-17 认知资产迭代）。
   'cognition-assets/views.js': 1,
+  // kb-notes.js：24 → 21（2026-09-21，新建/保存/更多三个简单按钮已迁到 uiButton/uiIconButton）。
+  // 剩余 19 处裸控件 + 2 处动态控件的分类（见内部《B3 控件迁移分类》）：
+  //   · 编辑器工具栏 data-cmd 按钮（富内容：kb-caret / kb-color-bar 子元素 + 命令委托）
+  //     —— uiButton 只有 label+icon，无法表达该契约，需 owner 裁定豁免或补 seam；
+  //   · 库选择器条目（两段式内容，内容型而非控件）；
+  //   · 两处隐藏 file input（共享层无 file 原语）。
+  'kb-notes.js': 21,
+  'kb-workbench.js': 9,
   'kb-notes.js': 24,
-  'kb-workbench.js': 13,
+  // kb-workbench.js：**实测 5**（2026-09-21，与 develop 的 KB 结构迁移 #346 合并后重算）。
+  // 本批删除了模块自带的 uiIconButton/uiButton/uiInput/uiTextarea 四份"降级模板"——那等于在页面里
+  // 维护第二套原语实现：既被本条闸门计为裸控件、又让"缺原语"静默通过。现在改为缺原语即抛错
+  // （`_requirePrimitive`）。
+  // 剩余 5 处都是真实页面控件，各有归属：分享弹层隐藏 file input、权限触发按钮（M-1）；
+  // 问答引用 chip、模型 chip（M-9）；以及一处问答输入框（B3-b 走 uiTextarea）。
+  // ⚠️ 基线按**合并后实测**填：单独照抄任一支的自测值都会留出空档。
+  'kb-workbench.js': 5,
   'library-transfer.js': 7,
   'marketplace.js': 7,
   'md-view-edit.js': 5,
@@ -51,7 +71,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   'model-guard.js': 2,
   'onboarding.js': 21,
   'oss.js': 1,
-  'personal-ontology.js': 5,
+  'personal-ontology.js': 5, // 2026-09-20 盒子化：tab/库行/三盒 nav/模板行/库按钮
   'plugins.js': 2,
   'queue-draft.js': 5,
   'recall-projection-card.js': 4,
@@ -92,7 +112,6 @@ const legacyRawCheckboxBaseline: Record<string, number> = {
   'chat-input-form.js': 2,
   'hub-account.js': 1,
   'interactive-cli.js': 1,
-  'kb-workbench.js': 1,
   'messaging-settings.js': 1,
   'onboarding.js': 12,
   'settings.js': 4,
@@ -150,9 +169,8 @@ const emojiAsIconBaseline: Record<string, number> = {
   'bash_permission.js': 2,
   'chat-artifact.js': 1,
   'conversation.js': 3,
-  'kb-notes.js': 21,
-  'kb-quiz.js': 1,
-  'kb-workbench.js': 25,
+  // kb-notes.js / kb-quiz.js / kb-workbench.js 的 emoji 已全部迁移到 icons.js（2026-09-21），
+  // 基线随之删除：这三个文件再出现 emoji 就会直接红。
   'model-authorization.js': 2,
   'onboarding.js': 8,
   'settings.js': 1,
@@ -171,16 +189,18 @@ const inlineSvgBaseline: Record<string, number> = {
   'cognition-assets/views.js': 1,
   'dashboard.js': 2,
   'import-check-modal.js': 1,
-  'kb-workbench.js': 4,
+  // kb-workbench.js：4 → 2（2026-09-21）。删掉的 2 处是页面自带的一套 svg path 表
+  // （`_SVGS`）与 `_icon()` 的空 svg 兜底，属"硬编码 svg 路径"，已改为转发 icons.js。
+  // 剩下 2 处是业务图形：脑图画布 `_mmCurrentSvg()` 与库封面 `kb-wb-cover-svg`——
+  // 政策允许业务画布由页面自有，但闸门只能按 `<svg>` 计数、无法区分图标与画布，
+  // 已在《Renderer structural registry》的 "Known non-icon inline SVG" 一节登记。
+  'kb-workbench.js': 2,
   'marketplace.js': 1,
   'utils.js': 3,
 };
 const iconSourceFiles = new Set(['icons.js']);
 
-const literalZIndexBaseline: Record<string, number> = {
-  'kb-workbench.js': 3,
-  'utils.js': 1,
-};
+const literalZIndexBaseline: Record<string, number> = {};
 /**
  * 各 CSS 文件的字面 z-index 存量（层序应走 tokens.css 的 `--z-*`）。
  * `tokens.css` 豁免：它就是层序的唯一定义处；`vendor/**` 豁免：第三方样式不改。
@@ -188,16 +208,7 @@ const literalZIndexBaseline: Record<string, number> = {
  * `cognition-assets.css`，正好证明"没闸门 = 没人知道有多少"。
  */
 const styleZIndexBaseline: Record<string, number> = {
-  'cognition-assets.css': 1,
-  'component-gallery.css': 1,
-  'kb-quiz.css': 3,
-  'onboarding.css': 4,
-  'recall-local.css': 1,
-  'resource-pages.css': 1,
-  'shell-navigation.css': 2,
-  'style.css': 104,
-  'ui-components.css': 5,
-  'workspace.css': 12,
+  'style.css': 7,
 };
 const styleTokensFile = 'tokens.css';
 const styleVendorPrefix = 'vendor/';
@@ -214,11 +225,13 @@ function inlineSvgCount(source: string): number {
 }
 
 function literalZIndexCount(source: string): number {
-  return (source.match(/z-index/gi) || []).length;
+  return [...source.matchAll(/z-index\s*:\s*([^;}]+)/gi)]
+    .filter((match) => !/var\(\s*--z-/i.test(match[1] || ''))
+    .length;
 }
 
 function styleZIndexDeclarationCount(source: string): number {
-  return (source.match(/z-index\s*:/gi) || []).length;
+  return literalZIndexCount(source);
 }
 
 describe('renderer shared UI adoption guard', () => {
@@ -340,13 +353,19 @@ describe('renderer shared UI adoption guard', () => {
    * 一个写坏的正则会让闸门静默放行一切——那比没有闸门更危险（看着是绿的）。
    */
   it('the counters actually detect violations (a broken regex must not pass silently)', () => {
+    expect(dynamicControlCount("document.createElement('button')")).toBe(1);
+    expect(dynamicControlCount('el("input", "field")')).toBe(1);
+    expect(dynamicControlCount("createElement('div')")).toBe(0);
     expect(emojiLineCount('<span>📁 库根</span>')).toBe(1);
     expect(emojiLineCount('<span>普通文案</span>')).toBe(0);
     expect(emojiLineCount('💡 一句话\n💡 又一句')).toBe(2);
     expect(inlineSvgCount('a<svg viewBox="0 0 1 1"></svg>b')).toBe(1);
     expect(inlineSvgCount('<svgViewer>')).toBe(0); // 不是 svg 标签，别误伤
     expect(literalZIndexCount('.a { z-index: 40; }')).toBe(1);
+    expect(literalZIndexCount('// discusses z-index without declaring one')).toBe(0);
     expect(styleZIndexDeclarationCount('.a { z-index: 40; }')).toBe(1);
+    expect(styleZIndexDeclarationCount('.a { z-index: var(--z-modal); }')).toBe(0);
+    expect(styleZIndexDeclarationCount('.a { z-index: calc(var(--z-modal) + 1); }')).toBe(0);
     expect(styleZIndexDeclarationCount('.a { --x: z-index-ish; }')).toBe(0);
     // 冻结值必须覆盖当前树的实测值，否则下面的"不得增长"就是空话
     for (const [file, count] of Object.entries(emojiAsIconBaseline)) {
@@ -360,6 +379,10 @@ describe('renderer shared UI adoption guard', () => {
     for (const [file, count] of Object.entries(literalZIndexBaseline)) {
       const source = fs.readFileSync(path.join(modulesRoot, file), 'utf8');
       expect(literalZIndexCount(source), `${file} 基线高于实测，说明已被清理：请下调基线`).toBe(count);
+    }
+    for (const [file, count] of Object.entries(styleZIndexBaseline)) {
+      const source = fs.readFileSync(path.join(root, 'src/renderer', file), 'utf8');
+      expect(styleZIndexDeclarationCount(source), `${file} 基线高于实测，说明已被清理：请下调基线`).toBe(count);
     }
   });
 });

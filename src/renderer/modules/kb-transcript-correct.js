@@ -517,6 +517,10 @@
         }) + '<label class="kb-atc__scope-toggle">' + root.uiCheckbox({
           // 「模型建议并入候选列表」的开关：默认关——它会产生多次模型调用，成本由用户选
           id: 'kb-atc-scan-review-' + panelId,
+          // 可达标签是共享 uiCheckbox 的**硬性要求**（缺了直接抛 TypeError）。
+          // 本面板 render() 是逐步 try/catch，抛错会把这一整段工具栏静默吞掉——
+          // 真机表现就是「同时让模型读一遍」和「词表」一起不见了。
+          label: t('kb.transcriptCorrect.scan_with_review', '同时让模型读一遍'),
           checked: state.scanWithReview,
           disabled: state.busy,
           attrs: { 'data-atc-action': 'toggle-scan-review' },
@@ -982,9 +986,12 @@
 
     /**
      * 记忆分组/长期记忆同步块（P1）：概念归组 + 与规范名对齐。
-     * 文案口径：来源按界面用词说（「记忆分组」而不是"本体分组"），并写明
+     * 文案口径：用户实际看到的措辞以 `zh.json` 为准（本批实测是「本体分组」），
+     * 代码回退跟着改成同一措辞 —— 否则缺键时会冒出第二套说法；并写明
      * 长期记忆是散文、只在词表已有该术语时用于对齐——不能让人以为
      * 记忆这半边会源源不断产出建议。
+     * 注意：术语尚未统一——个人本体面板导航仍叫「记忆分组」（`personalOntology.nav_groups`）。
+     * 两处用词不一致是既有状态（非本批引入），等 owner 定一个说法后一起改。
      * 视觉口径：这里全是"建议"，一律弱化色（ghost/次级文字），只有真正被采纳
      * 或需要用户注意的状态才用色调——颜色只表达状态。
      */
@@ -1054,7 +1061,7 @@
           )
           : t(
             'kb.transcriptCorrect.sync_no_source',
-            '没有找到记忆分组或用户级长期记忆（偏好 / 共享）：本次同步没有改动任何词条。',
+            '没有找到本体分组或用户级长期记忆（偏好 / 共享）：本次同步没有改动任何词条。',
           );
         body.appendChild(note);
       }
@@ -2045,11 +2052,18 @@
     }
 
     container.addEventListener('click', onClick);
+
+    // 语言切换：面板文案全部经 t(...) 取值，重渲染即拿到新语言。面板挂载后自己持有 DOM，
+    // 不重建视图，所以必须自己响应 i18n-change——否则切语言后面板停在旧语言，要重开才生效。
+    const onI18nChange = () => { render(); };
+    root.addEventListener('i18n-change', onI18nChange);
+
     render();
 
     return {
       destroy() {
         container.removeEventListener('click', onClick);
+        root.removeEventListener('i18n-change', onI18nChange);
       },
       getState() { return state; },
     };

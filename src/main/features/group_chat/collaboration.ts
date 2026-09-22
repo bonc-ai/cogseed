@@ -343,6 +343,10 @@ function normalizeWorkflowRun(value: unknown): WorkflowRun | null {
         step.original_actor_id,
       );
       const currentActorId = normalizeWorkflowActorId(step.current_actor_id);
+      const groupChatRunId = typeof step.group_chat_run_id === "string"
+        && safeId(step.group_chat_run_id)
+        ? step.group_chat_run_id
+        : undefined;
       const requiredCapabilities = step.required_capabilities;
       const writeScopes = step.write_scopes;
       const attempts = normalizeWorkflowAttempts(step.attempts);
@@ -358,6 +362,9 @@ function normalizeWorkflowRun(value: unknown): WorkflowRun | null {
       if (currentActorId !== undefined)
         normalized.current_actor_id = currentActorId;
       else delete normalized.current_actor_id;
+      if (groupChatRunId !== undefined)
+        normalized.group_chat_run_id = groupChatRunId;
+      else delete normalized.group_chat_run_id;
       if (requiredCapabilities !== undefined)
         normalized.required_capabilities = [...requiredCapabilities];
       else delete normalized.required_capabilities;
@@ -710,11 +717,13 @@ function incompleteWorkflowStepDependencies(
   run: WorkflowRun,
   step: WorkflowStep,
 ): string[] {
+  const groupChatRunId = step.group_chat_run_id;
   const terminal = new Set(
     run.steps
       .filter(
         (candidate) =>
-          candidate.status === "completed" || candidate.status === "skipped",
+          (candidate.status === "completed" || candidate.status === "skipped") &&
+          (!groupChatRunId || candidate.group_chat_run_id === groupChatRunId),
       )
       .map((candidate) => candidate.id),
   );
@@ -3028,6 +3037,7 @@ export interface CollaborationSnapshot {
     Pick<
       WorkflowStep,
       | "id"
+      | "group_chat_run_id"
       | "title"
       | "actor_id"
       | "type"
@@ -3056,6 +3066,34 @@ export interface CollaborationSnapshot {
   blocking_gate?: GateResult;
   recent_events: CollaborationEvent[];
   updated_at: string;
+}
+
+/** Resolve the blocking gate that belongs to one accepted Group Chat run.
+ * Legacy workflow steps without an explicit collaboration-run binding remain
+ * conversation-wide, but a gate attached to another bound run is never an
+ * authority for the current queue item. */
+export function blockingGateForGroupChatRun(
+  snapshot: CollaborationSnapshot | null,
+  groupChatRunId?: string,
+): GateResult | undefined {
+  if (!groupChatRunId) return snapshot?.blocking_gate;
+  const blockingGates = (snapshot?.gates || []).filter(
+    (gate) =>
+      gate.blocks_workflow !== false &&
+      (gate.status === "needs_review" || gate.status === "failed"),
+  );
+  const stepById = new Map(
+    (snapshot?.steps || []).map((step) => [step.id, step]),
+  );
+  const matchingGate = blockingGates.find(
+    (gate) =>
+      stepById.get(gate.step_id)?.group_chat_run_id === groupChatRunId,
+  );
+  if (matchingGate) return matchingGate;
+  return blockingGates.find((gate) => {
+    const step = stepById.get(gate.step_id);
+    return !!step && !step.group_chat_run_id;
+  });
 }
 
 function contextItemPreview(
@@ -3094,6 +3132,7 @@ async function buildCollaborationSnapshotUnlocked(
     phase: run.phase,
     steps: run.steps.map((step) => ({
       id: step.id,
+      group_chat_run_id: step.group_chat_run_id,
       title: step.title,
       actor_id: step.actor_id,
       type: step.type,
@@ -3389,6 +3428,8 @@ export interface PrepareNestedDispatchStepInput {
   write_scopes?: string[];
   resume_step_id?: string;
   resume_token?: string;
+  /** Durable binding to one accepted Group Chat collaboration run. */
+  group_chat_run_id?: string;
 }
 
 export interface PreparedNestedDispatchStep {
@@ -3432,6 +3473,9 @@ async function prepareNestedDispatchStepUnlocked(
     normalizeDispatchIntent(input.objective) || "Multi-agent collaboration";
   const task = normalizeDispatchIntent(input.task);
   if (!task) throw new Error("nested dispatch task is required");
+  if (input.group_chat_run_id !== undefined && !safeId(input.group_chat_run_id)) {
+    throw new Error("invalid collaboration run id");
+  }
   const dependencies = normalizeContextDependencies(input.context_dependencies);
   const workflowDependencies = normalizeWorkflowDependencyInput(input.depends_on);
   const requiredCapabilities = normalizeBoundedStringArray(
@@ -3472,6 +3516,8 @@ async function prepareNestedDispatchStepUnlocked(
       throw new Error("resume workflow step actor mismatch");
     if (step.source_tool !== input.source_tool)
       throw new Error("resume workflow step source tool mismatch");
+    if ((step.group_chat_run_id || undefined) !== (input.group_chat_run_id || undefined))
+      throw new Error("resume workflow step collaboration run mismatch");
     if (normalizeDispatchIntent(step.dispatch_intent) !== task)
       throw new Error("resume workflow step task mismatch");
     if (
@@ -3505,6 +3551,7 @@ async function prepareNestedDispatchStepUnlocked(
     step = {
       id: `wstep-${genId12()}`,
       run_id: run.id,
+      ...(input.group_chat_run_id ? { group_chat_run_id: input.group_chat_run_id } : {}),
       title: `${input.source_tool}: ${input.actor_name || input.actor_id || "worker"}`,
       actor_id: input.actor_id || null,
       ...(input.actor_name ? { actor_name: input.actor_name } : {}),
