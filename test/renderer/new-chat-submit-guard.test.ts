@@ -14,8 +14,9 @@ import vm from 'node:vm';
 const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
 
 function extractFunction(name: string): string {
-  const marker = `async function ${name}`;
-  const start = source.indexOf(marker);
+  const asyncMarker = `async function ${name}`;
+  const syncMarker = `function ${name}`;
+  const start = source.indexOf(asyncMarker) >= 0 ? source.indexOf(asyncMarker) : source.indexOf(syncMarker);
   if (start < 0) throw new Error(`missing ${name}`);
   const braceStart = source.indexOf('{', start);
   let depth = 0;
@@ -52,7 +53,19 @@ function createHarness(): Harness {
     t: (key: string) => key,
     uiAlert: async () => {},
     _getQuotes: () => [],
+    _chatAttachList: () => [],
     unresolvedOssTemplatePlaceholder: () => false,
+    composerMembers: {
+      // 只识别本用例会出现的两个名字（真实实现见 composer-members.js）。
+      mentionTokensForTarget: (_target: string, text: string) => {
+        const out: Array<{ start: number; end: number }> = [];
+        const re = /@(Codex|集成验证Agent)\s?/g;
+        let hit: RegExpExecArray | null;
+        const src = String(text || '');
+        while ((hit = re.exec(src))) out.push({ start: hit.index, end: hit.index + hit[0].length });
+        return out;
+      },
+    },
     _submitNewChatIntent: () => {
       innerCalls += 1;
       if (nextError) {
@@ -67,9 +80,11 @@ function createHarness(): Harness {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   // 模块级在途标志与真实函数一起注入（extractFunction 只抽函数体）。
-  vm.runInContext(`let _newChatSubmitInFlight = false;\n${extractFunction('handleNewChatSubmit')}`, sandbox, {
-    filename: 'conversation-submit-guard.js',
-  });
+  vm.runInContext(
+    `let _newChatSubmitInFlight = false;\n${extractFunction('_hasTaskIntent')}\n${extractFunction('handleNewChatSubmit')}`,
+    sandbox,
+    { filename: 'conversation-submit-guard.js' },
+  );
 
   return {
     submit: () => vm.runInContext('handleNewChatSubmit()', sandbox),
@@ -114,6 +129,26 @@ describe('new-chat submit guard (MA-04)', () => {
     expect(h.innerCalls()).toBe(2);
     h.release();
     await retry;
+  });
+
+  it('仅 @ 成员 / 仅标点 / 空白都不进入提交主体（MA-08）', async () => {
+    const h = createHarness();
+    h.setValue('@Codex @集成验证Agent ');
+    await h.submit();
+    expect(h.innerCalls()).toBe(0);
+    h.setValue('，。！？');
+    await h.submit();
+    expect(h.innerCalls()).toBe(0);
+    h.setValue('   ');
+    await h.submit();
+    expect(h.innerCalls()).toBe(0);
+    // 有任务文字则照常提交。
+    h.setValue('@Codex 帮我核对这份材料');
+    const submit = h.submit();
+    await Promise.resolve();
+    expect(h.innerCalls()).toBe(1);
+    h.release();
+    await submit;
   });
 
   it('空输入不占锁：清空正文后的有效提交仍然生效', async () => {

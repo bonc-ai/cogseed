@@ -153,6 +153,29 @@ app.whenReady().then(async () => {
       const summary = window.composerMembers.memberSummary(window.composerMembers.getMembers('conversation'));
       assert('底栏摘要=首位名称 + 剩余人数', summary && summary.name === 'CogSeed' && summary.total === 3 && summary.extra === 2, summary);
 
+      // ── C. 行点击重建列表后不误判外部点击（MA-07） ─────────────────────
+      // 真实 DOM：行 click 处理器把行从 picker 里摘掉（列表重建的最小复现），
+      // 随后冒泡到 document。旧判定只看 picker.contains(target) → 误判外部点击。
+      const pickerProbe = document.createElement('div');
+      pickerProbe.id = 'agent-picker-probe';
+      const probeRow = document.createElement('div');
+      probeRow.className = 'composer-member-row';
+      pickerProbe.appendChild(probeRow);
+      document.body.appendChild(pickerProbe);
+      let judgedAsOutside = null;
+      let oldRuleVerdict = null;
+      const probeHandler = (event) => {
+        const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+        judgedAsOutside = !(path.includes(pickerProbe) || pickerProbe.contains(event.target));
+        oldRuleVerdict = !pickerProbe.contains(event.target);
+      };
+      document.addEventListener('click', probeHandler);
+      probeRow.addEventListener('click', () => { probeRow.remove(); });
+      probeRow.click();
+      document.removeEventListener('click', probeHandler);
+      assert('重建列表后的行点击不算外部点击（composedPath）', judgedAsOutside === false, { judgedAsOutside, oldRuleVerdict });
+      assert('旧判定确实会误判（对照，证明修复有区分度）', oldRuleVerdict === true, { oldRuleVerdict });
+
       const failed = checks.filter((check) => !check.ok);
       return { passed: checks.length - failed.length, total: checks.length, failed };
     } catch (error) {

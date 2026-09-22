@@ -12316,6 +12316,26 @@ function _trackChatSendResult(result, data = {}) {
 
 /** 「新任务」：像市面主流 AI 助手一样，直接进入一个空的会话界面。
  *  后端创建一个 normal 会话，前端立即进入该会话（无需先输入）。 */
+/** 去掉结构化点名标记与标点后是否还剩任务文字（FR-015 / EC-06；验收报告 MA-08）。
+ *
+ *  仅 @ 成员、仅标点或空白都不构成任务：首页原先只看「正文非空」，于是只 @ 两个
+ *  成员也会创建会话、启动模型，模型只能回一句「你只 @ 了我，但没说要做什么」。
+ *  引用与附件是任务载体，调用方在它们存在时按原有规则放行。 */
+function _hasTaskIntent(text, target) {
+  let body = String(text || '');
+  const cm = (typeof window !== 'undefined') ? window.composerMembers : null;
+  if (cm && typeof cm.mentionTokensForTarget === 'function') {
+    try {
+      const tokens = cm.mentionTokensForTarget(target, body) || [];
+      for (const token of [...tokens].sort((a, b) => b.start - a.start)) {
+        body = body.slice(0, token.start) + body.slice(token.end);
+      }
+    } catch (_) { /* 解析失败按原文判定 */ }
+  }
+  // 空白 / 标点 / 符号（含 emoji）清掉后仍要有内容。
+  return body.replace(/[\s\p{P}\p{S}]+/gu, '').length > 0;
+}
+
 /** 首页提交在途标志：首个 await 之前生效，函数退出（含失败）时释放。 */
 let _newChatSubmitInFlight = false;
 
@@ -12327,6 +12347,14 @@ async function handleNewChatSubmit() {
   if (typeof unresolvedOssTemplatePlaceholder === 'function'
     && unresolvedOssTemplatePlaceholder(input)) {
     await uiAlert(t('oss.task_required'));
+    return;
+  }
+  // 仅 @ 成员 / 仅标点 / 空白不启动（MA-08）：先在输入框旁提示补充任务，不要
+  // 创建会话并调用模型。引用与有效附件按原有规则放行。
+  const intentAttachments = (typeof _chatAttachList === 'function' ? _chatAttachList(DRAFT_CID) : [])
+    .filter((item) => item.status !== 'error');
+  if (!quotes.length && !intentAttachments.length && !_hasTaskIntent(raw, 'new-chat')) {
+    await uiAlert(t('run_center.create_task_required'));
     return;
   }
   // 首页提交保护（FR-016 / SC-004；验收报告 MA-04）：连按 Enter 或双击发送时，
@@ -12754,6 +12782,13 @@ async function handleChatSubmit() {
   // A bare quote with no extra text is a legitimate "look at this" forward;
   // only reject when both the textarea AND the quote are empty.
   if (!raw && !_getQuotes(currentCid).length) return;
+  // 首页与会话用同一条意图检查（MA-08）：仅 @、仅标点或空白不启动模型。
+  const convIntentAttachments = (typeof _chatAttachList === 'function' ? _chatAttachList(currentCid) : [])
+    .filter((item) => item.status !== 'error');
+  if (!_getQuotes(currentCid).length && !convIntentAttachments.length && !_hasTaskIntent(raw, 'conversation')) {
+    await uiAlert(t('run_center.create_task_required'));
+    return;
+  }
   // Template handoff reply: when the user sends a handoff/continue prompt on an
   // imported conversation, answer instantly from real CogSeed data (three-part
   // template) instead of running a slow CLI/LLM turn. Only when this
