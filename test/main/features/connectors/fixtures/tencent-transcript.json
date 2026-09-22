@@ -31,8 +31,8 @@
             }
           ],
           "speaker": {
-            "user_id": "000000000000000012",
-            "user_name": "赵丽霞"
+            "user_id": "162292457878850585",
+            "user_name": "发言人甲"
           },
           "start_time": "00:01"
         },
@@ -69,8 +69,8 @@
             }
           ],
           "speaker": {
-            "user_id": "00000000000000000000001",
-            "user_name": "Example User"
+            "user_id": "75176437556082247920018",
+            "user_name": "发言人乙"
           },
           "start_time": "00:04"
         }
