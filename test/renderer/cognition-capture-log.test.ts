@@ -1550,9 +1550,12 @@ describe('引导层（app.js / core.js）', () => {
     expect(coreSource).toContain('recall.timeline.list');
   });
 
-  it('configure_model 的处理出口是应用设置页；整理进行中轮询限定整理页', () => {
+  it('configure_model 的处理出口是应用设置页的模型区；整理进行中轮询限定整理页', () => {
     expect(appSource).toContain("case 'go-configure-model'");
-    expect(appSource).toContain("setView('settings')");
+    // 设置页懒加载：tab 与锚点必须挂在 setView 上，否则配置页加载完后停在默认的
+    // 「数据」tab（与知识库「去设置管理模型」同一类真机故障）。
+    expect(appSource).toContain("{ settingsTab: 'configuration', settingsAnchor: 'models' }");
+    expect(appSource).toContain("activateSettingsTab('configuration', { anchor: 'models' })");
     expect(appSource).toContain("S.route.name === 'organize'");
     expect(appSource).toContain("capture.bucket === 'active'");
   });
