@@ -107,7 +107,18 @@ vi.mock("../../../../src/main/features/p3394_bridge/p3394-gateway-turn", () => (
       }
       const text = terminal?.output || "gateway turn done";
       const failed = terminal?.status && terminal.status !== "completed" && terminal.status !== "cancelled";
-      return { text: failed ? "" : text, ...(failed ? { error: terminal?.output || "gateway failed" } : {}) };
+      if (failed) {
+        // MA-01：turn 层把网关错误信转成失败时带回 failureKind/failureCode/
+        // infrastructureFailure；注入形状与真实返回值一致，跨层契约才可验证。
+        return {
+          text: "",
+          error: terminal?.output || "gateway failed",
+          ...(terminal?.failureKind ? { failureKind: terminal.failureKind } : {}),
+          ...(terminal?.failureCode ? { failureCode: terminal.failureCode } : {}),
+          ...(terminal?.infrastructureFailure ? { infrastructureFailure: true } : {}),
+        };
+      }
+      return { text };
     }
     const text = input.agent?.agent_id === "gateway-workbuddy"
       ? "WorkBuddy product analysis: map Excel columns, stages, tasks, owners, and dates before creation."
@@ -868,6 +879,63 @@ describe("group_chat visibility › recipient-specific external projection", () 
     expect(call?.prompt).toContain("visible external task");
     expect(call?.prompt).not.toContain("HOST-ONLY-INITIAL-MODEL-TEXT-SENTINEL");
     await waitForQuiescent(TEST_UID, cid);
+  });
+
+  // MA-01 跨层契约（验收报告 P1）：上游 turn 层把网关错误信转成失败后，下游必须
+  // 「失败不计贡献、汇总记 missing、整体不完成」——不能出现 run=completed、
+  // actor done、missing=[] 与界面「全部完成」并存的假成功。
+  it("does not count a gateway runtime error as a contribution in the run ledger", async () => {
+    const cid = newCid();
+    const externalId = "external-gateway-runtime-error";
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const runStore = await import("../../../../src/main/features/group_chat/run_store");
+    await seedAgent({
+      id: externalId,
+      name: "Gateway Error External",
+      runtime: { kind: "p3394-gateway", cli: "codex" },
+    });
+    await addAgentMember(cid, externalId, "Gateway Error External");
+    const run = await runStore.createRun({
+      uid: TEST_UID,
+      cid,
+      submittedText: "let the external agent verify the plan",
+      memberAgentIds: [],
+      mentionAgentIds: [externalId],
+      externalAgentIds: [externalId],
+    });
+    expect(run).not.toBeNull();
+    // turn 层对网关错误信的返回值（形状由 p3394-gateway-turn.test.ts 钉住）。
+    localRunnerScripts.push([{
+      type: "__return__",
+      status: "failed",
+      output: "Unexpected model version: gpt-5 is not available",
+      failureKind: "runtime",
+      failureCode: "p3394_gateway_error",
+      infrastructureFailure: true,
+    }]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "let the external agent verify the plan",
+      forceTo: [externalId],
+      runId: run!.run_id,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    // run 收口可能略晚于静默，轮询到离开 running 为止。
+    let ledger = await runStore.readRun(TEST_UID, cid, run!.run_id);
+    for (let i = 0; i < 60 && ledger && ledger.status === "running"; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      ledger = await runStore.readRun(TEST_UID, cid, run!.run_id);
+    }
+    expect(ledger).not.toBeNull();
+    const actor = ledger!.actors.find((item) => item.agent_id === externalId);
+    expect(actor?.terminal).toBe("failed");
+    expect(ledger!.status).not.toBe("completed");
+    expect(ledger!.summary?.contributed ?? []).toEqual([]);
+    expect((ledger!.summary?.missing ?? []).map((item) => item.agent_id)).toContain(externalId);
   });
 
   it("does not prepend the host switched-context digest to an external runtime prompt", async () => {
