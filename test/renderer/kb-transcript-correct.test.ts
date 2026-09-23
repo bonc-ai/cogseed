@@ -429,6 +429,8 @@ describe('locale 覆盖', () => {
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short',
     'headings_none', 'panel_hint',
     'meta_full', 'save_duplicate_file',
+    'save_local', 'save_local_hint', 'saved_local', 'saved_local_to',
+    'save_local_failed', 'save_local_canceled',
   ];
 
   for (const lang of locales) {
@@ -912,5 +914,179 @@ describe('语言切换（i18n-change）', () => {
     env.strings['kb.transcriptCorrect.title'] = '不该出现';
     env.fire();
     expect(title.textContent).toBe('Transcript correction');
+  });
+});
+
+/**
+ * 「另存到本地文件夹…」（2026-09-23 真机反馈：清理版没落到用户自己的文件夹里）。
+ *
+ * 与「另存到知识库」是两个落点：库内那份喂检索/问答，本机那份给用户自己用。
+ * 这里用真原语 + 假 DOM 挂一次面板，走完整条点击链路（点击分派 → IPC → 状态渲染），
+ * 钉住四件事：按钮存在且带 title 说明落点、payload 只带文件名与库内路径（不是本地路径）、
+ * 取消不算失败、落点如实报回。
+ */
+function loadPanelForLocalExport(invoke: (channel: string, payload: any) => Promise<any>) {
+  const nodes = new Map<string, any>();
+  const container = fakeElement();
+  container.querySelector = (selector: string) => {
+    if (!nodes.has(selector)) nodes.set(selector, fakeElement());
+    return nodes.get(selector);
+  };
+  const listeners: Record<string, (event: any) => void> = {};
+  container.addEventListener = (name: string, fn: (event: any) => void) => { listeners[name] = fn; };
+  const context: any = {
+    console, setTimeout, clearTimeout, Map, Set, Array, Object, String, Number, JSON,
+    document: {
+      createElement: () => fakeElement(),
+      body: fakeElement(),
+      addEventListener: () => {}, removeEventListener: () => {},
+    },
+    cogseed: { invoke },
+    // 面板 mount 时订阅 i18n-change：vm 里得给上这两个口子
+    addEventListener: () => {}, removeEventListener: () => {},
+  };
+  context.window = context;
+  context.globalThis = context;
+  vm.createContext(context);
+  // 真原语：缺 label 就抛，不会替面板兜底
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js']) {
+    vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8'), context, { filename: file });
+  }
+  // 缺键 → 走面板里的中文默认文案（断言就看这套默认文案）
+  context.t = () => '';
+  vm.runInContext(panelSrc, context, { filename: 'kb-transcript-correct.js' });
+  const instance = context.KbTranscriptCorrect.mount(container, {
+    text: '甲 2026-09-05 19:31:32\n付平来了。',
+    docId: '1/9.15站会.txt',
+    displayPath: '1/9.15站会.txt',
+  });
+  const clickAction = (action: string) => {
+    listeners.click?.({
+      target: {
+        closest: (selector: string) => (selector === '[data-atc-action]'
+          ? { getAttribute: (name: string) => (name === 'data-atc-action' ? action : null) }
+          : null),
+      },
+    });
+  };
+  return { instance, nodes, clickAction };
+}
+
+describe('另存到本地文件夹（真机：本地原文件夹里没有清理版）', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('生成清理版后出现「另存到本地文件夹…」按钮，且 title 说明落点与知识库那份不同', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async (channel, payload) => {
+      calls.push({ channel, payload });
+      return {};
+    });
+    // 面板状态由主进程给：直接喂成"已生成清理版 + 有 runId"
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    const actions = nodes.get('[data-atc-actions]');
+    expect(actions.innerHTML).toContain('data-atc-action="save-local"');
+    expect(actions.innerHTML).toContain('另存到本地文件夹…');
+    expect(actions.innerHTML).toContain('原文所在的本地文件夹');
+    expect(actions.innerHTML).toContain('另存到知识库'); // 两个落点并存，不是一个替掉另一个
+    instance.destroy();
+  });
+
+  it('payload 只给文件名 + 库内路径（本地路径在主进程台账里，渲染层不许编）', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const { instance, clickAction } = loadPanelForLocalExport(async (channel, payload) => {
+      calls.push({ channel, payload });
+      return { ok: true, scope: 'origin', path: '/Users/example/会议/9.15站会-清理版.txt' };
+    });
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    expect(calls[0]?.channel).toBe('library.writeTextToLocal');
+    expect(calls[0]?.payload).toEqual({
+      content: '清理后的正文',
+      sourcePath: '1/9.15站会.txt',
+      fileName: '9.15站会-清理版.txt',
+    });
+    // 落点台账：本地那份不在库里，只能靠 deliveries 反查
+    const annotate = calls.find((c) => c.channel === 'transcript.run.annotate');
+    expect(annotate?.payload.kind).toBe('local_copy');
+    expect(annotate?.payload.path).toContain('9.15站会-清理版.txt');
+    instance.destroy();
+  });
+
+  it('落点如实报回（状态行 + 摘要行都给出绝对路径）', async () => {
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async () => ({
+      ok: true, scope: 'origin', path: '/Users/example/会议/9.15站会-清理版.txt',
+    }));
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+    // 摘要行只在 apply 摘要存在时渲染（它本来就在"生成清理版"之后）
+    state.apply = { applied: [{ action: 'replace', count: 3 }], retention: 0.9 };
+
+    clickAction('save-local');
+    await flush();
+
+    expect(nodes.get('[data-atc-summary]').textContent).toContain('/Users/example/会议/9.15站会-清理版.txt');
+    instance.destroy();
+  });
+
+  it('用户关掉系统保存框（canceled）不算失败：不报红、不进交付台账', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async (channel, payload) => {
+      calls.push({ channel, payload });
+      return { ok: false, canceled: true, code: 'E_EXPORT_CANCELED' };
+    });
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    const status = nodes.get('[data-atc-status]');
+    expect(status.textContent).toContain('已取消保存');
+    expect(status.dataset.tone).not.toBe('warning');
+    expect(calls.some((c) => c.channel === 'transcript.run.annotate')).toBe(false);
+    instance.destroy();
+  });
+
+  it('写盘失败按失败提示（不静默、也不谎报成功）', async () => {
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async () => ({
+      ok: false, error: 'EACCES: permission denied', code: 'E_EXPORT_WRITE',
+    }));
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    const status = nodes.get('[data-atc-status]');
+    expect(status.textContent).toContain('保存到本地失败');
+    expect(status.dataset.tone).toBe('warning');
+    instance.destroy();
+  });
+});
+
+describe('本地导出文件名（纯文件名，不带库内目录）', () => {
+  it('只出 basename：本地目录由主进程决定，拼库内相对目录是错的', () => {
+    expect(panel.cleanedFileBaseName('1/9.15站会.txt', '清理版')).toBe('9.15站会-清理版.txt');
+    expect(panel.cleanedFileBaseName('', '清理版')).toBe('transcript-清理版.txt');
+  });
+
+  it('与库内路径命名保持同一套规则（同名前缀只差目录）', () => {
+    const rel = '纪要/纪要/文字转写_x.txt';
+    const suffix = '清理版';
+    expect(panel.cleanedFileName(rel, suffix)).toBe(`纪要/纪要/${panel.cleanedFileBaseName(rel, suffix)}`);
   });
 });

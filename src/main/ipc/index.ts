@@ -100,6 +100,8 @@ import * as marketplaceCache from '../features/marketplace_cache';
 import * as marketplaceReconcile from '../features/marketplace_reconcile';
 import * as cacheClearable from '../features/cache_clearable';
 import * as contexts from '../features/contexts';
+import * as localFileLinks from '../features/local_file_links';
+import * as localTextExport from '../features/local_text_export';
 import * as libraryTransfer from '../features/library_transfer';
 import * as kbVector from '../features/kb_vector';
 import * as kbIndexer from '../features/kb_indexer';
@@ -686,6 +688,51 @@ async function _writeTextToLibrary(payload: any, ctx: IpcContext): Promise<any> 
 
 export const _libraryWriteTextForTest = _writeTextToLibrary;
 export const _libraryImportProducedForTest = _importProducedToLibrary;
+
+/**
+ * 把一段文本导出到**用户本机文件夹**（「另存到本地文件夹…」）。
+ *
+ * 为什么「另存到知识库」不够：库里的文件是从用户磁盘**复制**进来的，产物写回库内目录后，
+ * 用户去自己放原稿的文件夹里翻不到（2026-09-23 真机反馈："在文件夹中显示能看到清理版，
+ * 本地原文件夹却没有"）。两个落点服务两件事：库内那份喂检索/问答，本机那份给用户自己用。
+ *
+ * 两条路径（都看 `features/local_file_links` 里那份机器私有的对应关系台账）：
+ *   - 有线索（导入来源 = 原文所在文件夹 / 用户上次亲手选过的落点）且目录还在 →
+ *     直接写回那个文件夹：用户点这个按钮的意思就是"存回我这儿"，再来一个对话框只是多一次点击；
+ *   - 无线索（新建/同步/剪藏来的文档）或目录已失效（换机器、删掉文件夹）→ 弹系统保存框
+ *     （默认落在下载目录），让用户自己挑位置——总比只回一句"失败"强。
+ *   用户挑完把选择记进台账：同一份文档下次不用再导航一遍。
+ *
+ * 注意与 `_writeTextToLibrary` 的分工：这里的 payload 里带的是**导出用**的字段
+ * （`fileName` 纯文件名 + `sourcePath` 库内相对路径，仅用来反查本机落点），
+ * 没有 `targetPath` 那种"库内目标路径"语义。
+ */
+async function _writeTextToLocal(payload: any, ctx: IpcContext): Promise<any> {
+  const content = typeof payload?.content === 'string' ? payload.content : '';
+  if (!content) return { ok: false, error: 'empty content', code: 'E_EXPORT_EMPTY' };
+  const fileName = localTextExport.sanitizeExportFileName(payload?.fileName || '');
+  const sourceRel = typeof payload?.sourcePath === 'string' ? payload.sourcePath : '';
+  const knownDir = sourceRel ? localFileLinks.localWriteDirForUser(ctx.userId, sourceRel) : null;
+  if (knownDir) {
+    const res = localTextExport.exportTextToDirectory(knownDir, fileName, content);
+    return { ...res, scope: 'known_dir', dir: knownDir };
+  }
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const options = {
+    title: t('dialogs.export_text.title'),
+    defaultPath: path.join(app.getPath('downloads'), fileName),
+    filters: [{ name: t('dialogs.export_text.filter_text'), extensions: ['txt'] }],
+  };
+  const { canceled, filePath } = parent
+    ? await dialog.showSaveDialog(parent, options)
+    : await dialog.showSaveDialog(options);
+  if (canceled || !filePath) return { ok: false, canceled: true, code: 'E_EXPORT_CANCELED' };
+  const res = localTextExport.exportTextToPath(filePath, content);
+  if (res.ok && sourceRel && res.path) localFileLinks.recordUserPickedTargetForUser(ctx.userId, sourceRel, res.path);
+  return { ...res, scope: 'dialog' };
+}
+
+export const _libraryWriteTextToLocalForTest = _writeTextToLocal;
 
 function _recycleDataChangeForPaths(paths: string[]): { domains: string[]; cids: string[]; recycle: true } {
   const domains = new Set<string>();
@@ -4268,6 +4315,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'library.writeText': async (payload, ctx) => {
     return _writeTextToLibrary(payload, ctx);
+  },
+
+  /**
+   * 把一段文本导出到**用户本机文件夹**（「另存到本地文件夹…」）。见 `_writeTextToLocal`。
+   */
+  'library.writeTextToLocal': async (payload, ctx) => {
+    return _writeTextToLocal(payload, ctx);
   },
 
   // KB library summary (知识库模块 S3)：逐文档要点 + 一句话总结 + 脑图骨架。

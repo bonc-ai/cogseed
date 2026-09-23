@@ -70,6 +70,8 @@
   "coordinator.tool_idle": "委任されたツールの進行が停止しました。",
   "dialog.choose_directory": "ディレクトリを選択",
   "dialog.choose_skill_source_directory": "インポートするスキルのソースディレクトリを選択",
+  "dialogs.export_text.title": "ローカルフォルダに保存",
+  "dialogs.export_text.filter_text": "テキストファイル",
   "errors.agent_disabled": "この会話に紐づくエージェントは無効です。再度有効にするか、会話を切り替えてください。",
   "errors.builtin_agent_not_editable": "マーケットプレイスのエージェントはチャットから編集できません",
   "errors.builtin_skill_not_editable": "マーケットプレイスのスキルはチャットから編集できません",

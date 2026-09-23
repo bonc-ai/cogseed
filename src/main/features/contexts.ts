@@ -32,6 +32,7 @@ import { userContextsDir } from '../paths';
 import * as search from './search';
 import * as kbIndexer from './kb_indexer';
 import * as kbVector from './kb_vector';
+import { recordImportLinkForUser } from './local_file_links';
 import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { getActiveUserId } from './users';
@@ -728,6 +729,11 @@ export async function importContextFileFromPath(
         ? checkDuplicateContent(source.sha1, relpath, { allowDuplicate: opts.allowDuplicateContent === true })
         : null;
       if (dup) {
+        // 命中去重也一样是"用户指明了这份库内文件的本机出处"：内容 sha1 相同，就是同一份文件。
+        // 记下这条线索，老库文件才有办法拿到本地落点（否则只能等用户在保存框里手选一次）——
+        // 这也是"重新导入一次原文件"能修好历史数据的依据。
+        const existingPath = String((dup as { existingPath?: string }).existingPath || '');
+        if (existingPath) recordImportLinkForUser(uid, existingPath, source.absPath);
         // 命中也要留痕：此前静默 return，用户反复导入却在日志里看不到任何记录。
         log.info('local library import blocked by duplicate content', {
           user_id: maskId(uid),
@@ -765,6 +771,9 @@ export async function importContextFileFromPath(
       return { ok: true as const, path: relpath, bytes: source.bytes };
     });
     if (!result.ok) return result;
+    // 记下"这份库内文件是从本地哪个文件复制来的"：库内是副本，不留这条线索，
+    // 之后任何"写回原文所在文件夹"的能力都无从下手（见 features/import_origins）。
+    recordImportLinkForUser(uid, result.path, source.absPath);
     log.info('imported local library file', {
       user_id: maskId(uid),
       path: logPathRef(relpath),

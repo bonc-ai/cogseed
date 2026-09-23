@@ -361,7 +361,22 @@
   }
 
   /**
-   * 清理版目标路径：**放在原文同一个目录**，名字尽量短且一眼可认。
+   * 清理版文件名（**不含目录**）：`9.15站会.txt` → `9.15站会-清理版.txt`。
+   * 「另存到本地文件夹…」要的是纯文件名（目标目录由主进程定：原文所在的本地文件夹，
+   * 或者用户在系统保存框里选的位置），所以这里只出 basename，不再拼库内相对目录。
+   */
+  function cleanedFileBaseName(displayPath, suffix, extension) {
+    const raw = String(displayPath || 'transcript');
+    const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
+    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
+    const tail = String(suffix || '').trim() || 'cleaned';
+    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
+    return `${stem}-${tail}.${ext}`;
+  }
+
+  /**
+   * 清理版目标路径（库内）：**放在原文同一个目录**，名字尽量短且一眼可认。
    *   例：`1/9.15站会.txt` → `1/9.15站会-清理版.txt`
    * 同日再次另存由 nextCandidateName 追加 -2/-3（不覆盖上一次产物）。
    * 后缀走 i18n（zh=清理版 / en=cleaned …），因为它是用户直接看到的文件名。
@@ -370,11 +385,7 @@
     const raw = String(displayPath || 'transcript');
     const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
     const dir = cut >= 0 ? raw.slice(0, cut + 1) : '';
-    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
-    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
-    const tail = String(suffix || '').trim() || 'cleaned';
-    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
-    return `${dir}${stem}-${tail}.${ext}`;
+    return `${dir}${cleanedFileBaseName(displayPath, suffix, extension)}`;
   }
 
   /** 同分钟重复另存时给出 -2/-3 候选名，避免覆盖上一次的产物。 */
@@ -427,6 +438,9 @@
       error: '',
       collapsedOther: false,
       savedPath: '',
+      /** 另存到**本地文件夹**的落点（绝对路径，主进程返回）。与 savedPath 是两个落点：
+       *  库内那份喂检索/问答，本机那份给用户自己用（2026-09-23 反馈：本地原文件夹里没有）。 */
+      localSavedPath: '',
       // 本体/记忆接线（P1）：sync = 主进程 SyncResult 原样，呈现交给 syncSummary
       sync: null,
       syncBusy: false,
@@ -890,6 +904,7 @@
         parts.push(t('kb.transcriptCorrect.merged_blocks', '合并为 {count} 块', { count: state.mergedBlocks }));
       }
       if (state.savedPath) parts.push(t('kb.transcriptCorrect.saved_to', '已另存：{path}', { path: state.savedPath }));
+      if (state.localSavedPath) parts.push(t('kb.transcriptCorrect.saved_local_to', '已存本地：{path}', { path: state.localSavedPath }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
     }
@@ -968,6 +983,19 @@
           role: 'secondary',
           size: 'sm',
           attrs: { 'data-atc-action': 'save' },
+        }));
+        buttons.push(button({
+          label: t('kb.transcriptCorrect.save_local', '另存到本地文件夹…'),
+          icon: 'download',
+          role: 'secondary',
+          size: 'sm',
+          disabled: state.busy,
+          // 落点由主进程定（原文所在文件夹 / 系统保存框），把这件事写进 title，
+          // 免得用户以为它和上一颗按钮存的是同一个地方。
+          attrs: {
+            'data-atc-action': 'save-local',
+            title: t('kb.transcriptCorrect.save_local_hint', '存到原文所在的本地文件夹；没有导入来源时用系统保存框自选位置'),
+          },
         }));
         buttons.push(button({
           label: t('kb.transcriptCorrect.notes', '清理附记'),
@@ -1530,6 +1558,58 @@
     }
 
     /**
+     * 另存清理版到**用户本机文件夹**（「另存到本地文件夹…」）。
+     *
+     * 与「另存到知识库」的区别就在落点：库内那份是喂检索/问答的副本，本机这份是用户
+     * 拿去用的文件。真机反馈（2026-09-23）：原文是导进库的副本，产物只写回库内目录，
+     * 用户去自己放原稿的文件夹里翻不到——"在文件夹中显示"能看到，原文件夹里却没有。
+     *
+     * 目标目录由主进程决定（`library.writeTextToLocal`）：有落点线索（导入来源 / 用户上次
+     * 亲手选过）就写回那个文件夹，否则弹系统保存框让用户自己挑；渲染层只负责传文本 + 文件名，
+     * 并如实报回落点。取消（用户关掉保存框）不算失败，按"已取消"收场，不报红。
+     */
+    async function runSaveLocal() {
+      if (state.busy || !state.cleanedText) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('library.writeTextToLocal', {
+          content: state.cleanedText,
+          // 库内相对路径只是**用来反查导入来源**，不是本地路径（本地路径在主进程台账里）。
+          sourcePath: ctx.displayPath || '',
+          fileName: cleanedFileBaseName(ctx.displayPath, t('kb.transcriptCorrect.cleaned_suffix', '清理版')),
+        });
+        if (result?.canceled) {
+          setStatus(t('kb.transcriptCorrect.save_local_canceled', '已取消保存。'), '');
+          return;
+        }
+        if (!result || result.ok === false || !result.path) {
+          throw new Error(String(result?.error || 'local export failed'));
+        }
+        state.localSavedPath = String(result.path);
+        toast(t('kb.transcriptCorrect.saved_local', '已保存到本地：{path}', { path: state.localSavedPath }));
+        // 交付台账同样追加一条（kind=local_copy）：本地那份不在库里，只能靠台账反查。
+        if (state.runId) {
+          try {
+            await root.cogseed.invoke('transcript.run.annotate', {
+              runId: state.runId,
+              kind: 'local_copy',
+              path: state.localSavedPath,
+            });
+          } catch (annotateError) {
+            log?.warn('run annotate (local copy) failed', { error: annotateError?.message || String(annotateError) });
+          }
+        }
+      } catch (error) {
+        log?.warn('cleaned transcript local save failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.save_local_failed', '保存到本地失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /**
      * 清理附记（方案 §五 P1-3）：术语对照表 / 口癖删除 / 未决项 / 上下文材料 /
      * 本次参数，渲染成 Markdown。可以预览，也可以另存到知识库（同目录 .md）。
      */
@@ -2047,6 +2127,7 @@
       else if (kind === 'diff') void openDiffModal();
       else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
+      else if (kind === 'save-local') void runSaveLocal();
       else if (kind === 'add') void runAddEntry();
       else if (kind === 'seed-fillers') void runSeedFillers();
     }
@@ -2099,6 +2180,7 @@
       reviewSummary,
       checkedModelCandidates,
       applySummary,
+      cleanedFileBaseName,
       cleanedFileName,
       nextCandidateName,
       classifySaveResult,
@@ -2120,6 +2202,7 @@
       reviewSummary,
       checkedModelCandidates,
       applySummary,
+      cleanedFileBaseName,
       cleanedFileName,
       nextCandidateName,
       classifySaveResult,
