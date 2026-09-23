@@ -1,7 +1,7 @@
 # CogSeed 发版扫描整改记录（2026-09-23）
 
 对照《CogSeed v1.2.0 全量扫描》待关闭项。本文件记录证据、已落地改动与仍需负责人拍板项。
-**在历史改写完成前，不得宣称「历史树已无个人邮箱 / 已删扫描报告」以外的未核验结论为永久通过；树侧项以本文件矩阵为准。**
+**树侧与历史改写均已在本轮落地**（`git filter-repo` + force-push）。既有 clone 必须重新 clone 或 reset。仍待项见矩阵 #5 / tag。
 
 扫描环境摘要：
 
@@ -30,7 +30,7 @@
 | 4 | 内部会议材料用语 | **本轮已清** | `specs/001-kb-continuity/spec.md` 与 `checklists/requirements.md` 已去掉「内部讨论稿 / 讨论纪要 / 摸底会」等表述，改为「需求调研记录 / 现状盘点评审」等中性产品用语。 |
 | 5 | BONC / `cogseed-open.bonc.com.cn` | **待负责人放行/豁免** | 功能域名出现在 API 基址、onboarding 隐私/条款、更新日志链、测试断言；组织署名在 LICENSE/NOTICE/联系邮箱。**删除域名会破坏发行构建默认 Hub。** 未获删除批准前全部保留。 |
 | 6 | Gitleaks / TruffleHog | **树侧已核** | TruffleHog verified = **0**。Gitleaks 工作树命中均为合成测试/夹具/xterm 误报形状；**不删除安全测试合成密文**。历史树中已删扫描报告命中 → 见「历史改写」节（用户已书面批准 filter-repo + force-push）。 |
-| 7 | 提交作者 PII | **历史改写进行中（已批准）** | 目标：自历史中移除 `fzywind@gmail.com`、`184377817@qq.com` 及其他个人非 noreply 邮箱；作者名映射到 noreply 身份。默认不再保留「仅记录不改写」口径。 |
+| 7 | 提交作者 PII | **历史已改写（已批准）** | 已自全部分支历史移除 `fzywind@gmail.com`、`184377817@qq.com` 及其他个人 `gmail`/`qq` 提交身份，映射到 GitHub noreply。`git log --all --format="%ae %ce"` 个人邮箱 → 0。 |
 | 8 | docs / scripts / 根目录发布清单 | **清单已出 · keep 为主** | 见下文；默认保留产品/测试/打包脚本；偏本地审计脚本可在发行 tarball exclude（待拍板），**不删除有用产品/测试脚本**。 |
 | 9 | 许可证 | **结论已写** | 根包 `UNLICENSED`（与闭源/专有发行策略一致，需产品确认对外叙事）。`jszip` 为 MIT OR GPL-3.0-or-later，`THIRD_PARTY_NOTICES.md` 已声明选用 MIT。 |
 | 10 | README 外链 + 人工复核 | **抽查通过** | `curl -I` 抽查 9 条关键外链（README 中的上游/生态项目与 shields badges 等）均为 HTTP 200。本地 `readme:check` 覆盖仓库内链。 |
@@ -68,11 +68,12 @@
 - Gitleaks 工作树命中落在：`test/**`、`resources/guardrail/skill-sentry/**`、`src/core-agent/test/tools.test.ts`、`src/renderer/vendor/xterm/xterm.js`（合成/误报）。
 - 处置：保留测试；CI 建议 gitleaks ≥ 8.30.1 + 现有 allowlist。
 
-### 历史（用户已批准改写）
+### 历史（用户已批准；已执行）
 
-- 已删文件 `CogSeed-发版扫描报告-牛保康-20260916.md` 曾在历史中引入密钥形状命中。
-- 个人邮箱：`fzywind@gmail.com`、`184377817@qq.com`（及同轮扫到的其他个人非 noreply 邮箱）。
-- 处置：`git filter-repo` 路径删除 + 邮箱映射，随后 `--force-with-lease` 推送改写后的 `develop`（见「历史改写」节）。**所有既有 clone 必须重新 clone 或 reset。**
+- 已删文件 `CogSeed-发版扫描报告-牛保康-20260916.md`：已从**全部分支**历史移除；`git rev-list --objects --all` 无该路径。
+- 个人邮箱：已映射并清除（含 `fzywind@gmail.com`、`184377817@qq.com` 及全库扫到的其他个人 gmail/qq）。
+- `gitleaks detect --log-opts=v1.1.2..HEAD` → **no leaks found**。
+- **所有既有 clone 必须重新 clone 或 hard-reset。**
 
 ---
 
