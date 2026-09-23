@@ -166,6 +166,13 @@
       ".build/build-info.json"
     ],
     "asar": true,
+    "electronFuses": {
+      "runAsNode": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "asarUnpack": [
       "bin/**/*",
       "p3394-gateway/**/*",

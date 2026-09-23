@@ -76,6 +76,8 @@ jobs:
           npx json -I -f package.json -e 'this.build.files.push("!**/archive/**")'
           npx json -I -f package.json -e 'this.build.files.push("!**/*.tar.gz")'
           npx electron-builder --mac --publish never
+      - name: Assert packaged Electron fuse baseline
+        run: node scripts/check-fuses.cjs dist/mac-arm64/CogSeed.app dist/mac/CogSeed.app
       - name: Packaged launch smoke
         run: npm run verify:package:launch
       - uses: actions/upload-artifact@v4
@@ -104,6 +106,8 @@ jobs:
       - run: npm ci
       - run: node scripts/write-build-info.cjs --channel=release
       - run: npm run build:win
+      - name: Assert packaged Electron fuse baseline
+        run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe
       - name: Packaged launch smoke
         run: npm run verify:package:launch
       - name: Packaged STT smoke
