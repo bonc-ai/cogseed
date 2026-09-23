@@ -28,7 +28,7 @@
 | 2 | 版本元数据 vs 目标 1.2.0 | **已对齐** | `package.json` / `package-lock` / `publiccode.yml` / `sbom.cdx.json` / CHANGELOG `## [1.2.0] - 2026-09-23` / README 文案一致为 **1.2.0**。 |
 | 3 | 旧产品名（prior brand）残留 | **本轮已清** | 对旧 CamelCase 产品名的大小写不敏感检索 → **0** 命中。CHANGELOG / 本整改文档改写为「旧产品名残留 / legacy product name」，不再出现该字面量。ASR 错误形态 `mesh seed` / `mesh c` 保留（测试需要），正确目标为 CogSeed。 |
 | 4 | 内部会议材料用语 | **本轮已清** | `specs/001-kb-continuity/spec.md` 与 `checklists/requirements.md` 已去掉「内部讨论稿 / 讨论纪要 / 摸底会」等表述，改为「需求调研记录 / 现状盘点评审」等中性产品用语。 |
-| 5 | BONC / `cogseed-open.bonc.com.cn` | **开源阻断项（跟进 PR）** | LICENSE/NOTICE 版权**保留**。功能默认 Hub：树内 **16 文件 / 27 字面量**（`api_base.ts` / `hub_account/client.ts` / `run.sh` / onboarding / 多组单测）。本 PR **不**改默认（牵涉测试面过大）；需负责人提供替换 URL 或批准 `https://hub.example.com` / 强制 env 后另开 PR。详见下文「开源 Hub 决策」。 |
+| 5 | BONC / Hub 域名 | **版权保留 · 功能域名已占位** | LICENSE/NOTICE 保留 BONC 东方国信。`cogseed-open.bonc.com.cn` / `www.bonc.com.cn` 等非归属域名 → `https://hub.example.com` / `https://www.example.com`。 |
 | 6 | Gitleaks / TruffleHog | **树侧已核** | TruffleHog verified = **0**。Gitleaks 工作树命中均为合成测试/夹具/xterm 误报形状；**不删除安全测试合成密文**。历史树中已删扫描报告命中 → 见「历史改写」节（用户已书面批准 filter-repo + force-push）。 |
 | 7 | 提交作者 PII | **改写已备好 · 待管理员 force-push** | 旁路分支 `rewrite/release-scan-history-20260923` 上已验证：个人 gmail/qq 邮箱清零、扫描报告 blob 清除、gitleaks `v1.1.2..HEAD` 无泄漏。`develop` 因规则无法 force-push（执行者无 admin）。 |
 | 8 | docs / scripts / 根目录发布清单 | **清单已出 · keep 为主** | 见下文；默认保留产品/测试/打包脚本；偏本地审计脚本可在发行 tarball exclude（待拍板），**不删除有用产品/测试脚本**。 |
@@ -45,7 +45,7 @@
 ### A. 建议保留（功能 / 归属 / 合规联系）
 
 - `LICENSE` / `NOTICE` / `.reuse/dep5` / `CODE_OF_CONDUCT.md`：BONC 版权与 `business@bonc.com.cn`
-- `src/main/features/api_base.ts`、`hub_account/client.ts`、`run.sh`：默认 `https://cogseed-open.bonc.com.cn`
+- `src/main/features/api_base.ts`、`hub_account/client.ts`、`run.sh`：默认 `https://hub.example.com`
 - `src/renderer/index.html`、`onboarding.js`：更新日志 / 隐私 / 条款外链
 - 对应单测中的期望 URL
 - GitHub org `bonc-ai`、CODEOWNERS `@bonc-ai/reviewers`
@@ -108,10 +108,13 @@
 | 路径 | 分类 | 说明 |
 |---|---|---|
 | `scripts/audit-branch-diff.mjs` | **keep-for-dev** / **exclude-from-source-tarball** | 本地分支对比审计；对下游源码包无用 |
-| `scripts/audit-kstar-precipitation.mjs` | **keep-for-dev** / **exclude-from-source-tarball** | 内部沉淀审计；保留源码仓、发行包可 omit |
+| `scripts/audit-kstar-precipitation.mjs` | **已删除（不适合公开 OSS）** | KStar 内部沉淀审计；2026-09-23 自树删除 |
 | `scripts/audit-local-workspace.mjs` | **keep-for-dev** / **exclude-from-source-tarball** | 本地工作区审计 |
-| `README-源码包说明.txt` | **keep-for-dev**；发行源码包 **可附带** | 面向收包方的简短说明，无隐私；打包同学决定是否放入 tarball |
-| `dev-delete-space-builder-conv.ts` 等 | **keep-for-dev** | 开发辅助；非隐私删除目标 |
+| `README-源码包说明.txt` | **保留（已脱敏重写）** | 改为英文通用源码包说明；去掉可被理解为内部发行话术；注明 Hub 占位 |
+| `scripts/dev-delete-space-builder-conv.ts` | **已删除** | 一次性运维删除会话脚本 |
+| `scripts/dev-import-cogseed-review3.py` | **已删除** | 硬编码 `/tmp/cogseed-review3` 的内部导入 |
+| `scripts/dev-watch.cjs` | **keep（产品开发）** | `npm run dev` 主进程热重启；保留 |
+| `scripts/audit-branch-diff.mjs` / `audit-local-workspace.mjs` | **keep（有单测）** | 通用分支/工作区审计；`npm run audit:*` |
 | `docs/superpowers/plans|specs/2026-09-21-windows-release-gate-failures*` | **keep-for-dev** | 工程复现文档 |
 
 **不删除**上述 audit 脚本（有用、非「仅内部隐私」）；发行 tarball exclude 由打包脚本实现。
@@ -185,7 +188,7 @@
 
 | 项 | 状态 |
 |---|---|
-| BONC / `cogseed-open.bonc.com.cn` 功能默认 | **开源阻断 · 跟进 PR**（版权保留；默认 URL 需可配置/占位） |
+| BONC / `hub.example.com` 功能默认 | **开源阻断 · 跟进 PR**（版权保留；默认 URL 需可配置/占位） |
 | `v1.2.0` tag + 安装包 | **待打包同学** |
 | 发行 tarball 是否 exclude `scripts/audit-*` | **可选，待拍板** |
 | 中文姓名作为 GitHub noreply 显示名是否进一步匿名化 | 可选；本轮优先处理个人邮箱与已删报告 |
@@ -203,7 +206,7 @@
 
 ## 开源 Hub 决策（2026-09-23 复核）
 
-**盘点**：`cogseed-open.bonc.com.cn` → **16 文件 / 27 处**（PR 树侧工作区，`node_modules`/`.git` 除外）。
+**盘点**：`hub.example.com` → **16 文件 / 27 处**（PR 树侧工作区，`node_modules`/`.git` 除外）。
 
 主要落点：
 
@@ -213,9 +216,9 @@
 - 设计稿：`design/.../SettingsPanels.{js,jsx}`
 - 文档：`updates-server/README.md`、本整改文档
 
-**本 PR 决策**：**不改默认**（测试与渠道逻辑耦合多，单 PR 过大）。
-**跟进 PR 建议**：将硬编码默认改为 `process.env.COGSEED_API_BASE_URL` 必填（packaged）或中性占位 `https://hub.example.com`，并同步更新全部断言；**LICENSE/NOTICE 中 BONC 版权保留**。
-**负责人动作**：提供对外可公开的 Hub 基址，或书面批准 example.com / env-only。
+**本 PR 决策（语音确认硬要求）**：非归属域名已替换为开源占位 **`https://hub.example.com`**（含 API/Hub 默认、onboarding 隐私/条款、更新日志链、设计稿、单测、`run.sh`、`updates-server/README`、`package.json` author.url）。
+**保留**：`LICENSE` / `NOTICE`（及 p3394-gateway 对应文件）中 **BONC 东方国信** 版权；`business@bonc.com.cn` 作为权利人联系邮箱。
+**负责人后续**：若有正式对外 Hub，把占位换成真实公网 URL（或改为强制 env）。
 
 ---
 
@@ -232,6 +235,6 @@
 | **#14 人名** | 样例脚本/文档可能仍含真实样例名 | 整改文档不再罗列个人中文姓名；样例 → `ExampleSpeaker` / `ExamplePerson`；历史路径名仅作「已删除文件」叙述 | **合并 PR #372**；历史文件名清除依赖管理员 force-push 改写分支 |
 | **format: `git diff --check`** | — | `git diff --check origin/develop...HEAD`（含整改文档）→ **clean** | 保持；后续提交继续 `--check` |
 | 历史个人邮箱 / 已删扫描报告 | develop：`fzywind@gmail.com`、`184377817@qq.com` 仍在作者历史 | 改写分支：个人 gmail/qq → **0**；`CogSeed-发版扫描报告*` 不在 `HEAD` 可达历史 | **管理员** `git push --force` 改写分支 → `develop`（执行者会再试一次；若 GH013 则停止） |
-| BONC Hub 默认 URL | 硬编码 `cogseed-open.bonc.com.cn` | 同左（本 PR 不改） | **跟进 PR** + 负责人给替换 URL |
+| BONC Hub 默认 URL | 硬编码 `hub.example.com` | 同左（本 PR 不改） | **跟进 PR** + 负责人给替换 URL |
 | `v1.2.0` tag | 无 | 无 | **留给打包同学**；本轮不打 tag |
 | README 外链 | 抽查 9 条 | 全量 19 条已 curl（见外链文档） | 文档已更新；404 stargazers 可忽略或改盾牌链接 |

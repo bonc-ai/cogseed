@@ -33,7 +33,7 @@ export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
 // 验收用 packaged-dev 包固定指向本机 Hub 测试服务；正式 release
 // 仍使用线上 HTTPS 地址，避免测试配置泄漏到发布通道。
 export const PACKAGED_DEV_HUB_API_BASE = 'http://127.0.0.1:4180';
-export const RELEASE_HUB_API_BASE = 'https://cogseed-open.bonc.com.cn';
+export const RELEASE_HUB_API_BASE = 'https://hub.example.com';
 
 /**
  * 按环境变量与构建通道解析 Hub 服务地址。

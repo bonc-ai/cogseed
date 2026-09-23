@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://github.com/bonc-ai/cogseed/releases"><img src="https://img.shields.io/badge/Release-v1.2.0-blue" alt="Release v1.2.0"></a>
   <a href="https://github.com/bonc-ai/cogseed/releases"><img src="https://img.shields.io/github/downloads/bonc-ai/cogseed/total?label=Downloads" alt="Downloads"></a>
-  <a href="https://github.com/bonc-ai/cogseed/stargazers"><img src="https://img.shields.io/github/stars/bonc-ai/cogseed?style=flat" alt="GitHub Stars"></a>
+  <a href="https://github.com/bonc-ai/cogseed"><img src="https://img.shields.io/github/stars/bonc-ai/cogseed?style=flat" alt="GitHub Stars"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/bonc-ai/cogseed" alt="License"></a>
   <img src="https://img.shields.io/badge/macOS-12%2B-black?logo=apple" alt="macOS">
   <img src="https://img.shields.io/badge/Windows-x64-0078D4?logo=windows" alt="Windows">
