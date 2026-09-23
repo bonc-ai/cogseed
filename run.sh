@@ -98,12 +98,15 @@ if [ "$(uname -s)" = "Darwin" ]; then
   APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR" "--cogseed-runtime-variant=$VARIANT")
+    # `open -n` 启动的 App 不继承当前 shell 的环境变量，需要的变量必须在这里逐个转发；
+    # 漏转发的 base URL 会静默回落到默认值（市场接口回落到 localhost:3000）。
     OPEN_ENV_ARGS=()
     if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
       OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
     fi
-    if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
-      OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
+    # 市场 / 更新等业务接口的 base（api_base.ts）。
+    if [ -n "${COGSEED_API_BASE_URL:-}" ]; then
+      OPEN_ENV_ARGS+=(--env "COGSEED_API_BASE_URL=$COGSEED_API_BASE_URL")
     fi
     # Hub 账号发布 Gate 显式开关（gate.ts 的 env override）。
     # 发布 Gate 已默认打开；如需强制关闭可设 COGSEED_HUB_ENABLED=false。

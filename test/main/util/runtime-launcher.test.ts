@@ -129,6 +129,18 @@ describe('source runtime launchers', () => {
     expect(main).toContain('env: relaunchEnv');
   });
 
+  it('forwards both API base overrides through `open --env` exactly once each', () => {
+    // macOS launches the bundle via `open -n`, which does not inherit the shell
+    // environment: any base URL not forwarded here silently falls back to its default
+    // (the marketplace one to localhost:3000).
+    const shell = read('run.sh');
+    const forwarded = [...shell.matchAll(/OPEN_ENV_ARGS\+=\(--env "([A-Z_]+)=/g)].map((m) => m[1]);
+
+    expect(forwarded).toContain('COGSEED_API_BASE_URL');
+    expect(forwarded).toContain('COGSEED_HUB_API_BASE');
+    expect(new Set(forwarded).size).toBe(forwarded.length);
+  });
+
   it('keeps protocol ownership in the prepared cogseed bundle, not launcher code', () => {
     const sources = `${read('run.sh')}\n${read('run.cmd')}`;
     expect(sources).not.toContain('prepare-source-protocol.cjs');
