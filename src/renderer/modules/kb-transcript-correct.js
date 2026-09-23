@@ -135,12 +135,17 @@
   /**
    * 取出**被勾选**的模型建议，转成主进程 `apply` 需要的形状（纯函数）。
    * 只取勾选的：没勾的一条都不该进正文，也不该被记进词表。
+   *
+   * `entryRef` 必须一起带上：面板 acceptedIds 里放的就是**扫描期**这个 ref，
+   * 主进程若按数组下标重编 `model_<i>`，只勾第 2 条时两边编号就错位——候选没被应用、
+   * 也就不会被记进词表，而且一声不响（真机：模型建议"接受了却进不了词汇表"）。
    */
   function checkedModelCandidates(rows, acceptedIds) {
     const accepted = acceptedIds instanceof Set ? acceptedIds : new Set(acceptedIds || []);
     return (rows || [])
       .filter((row) => row.fromModel === true && accepted.has(row.entryRef))
       .map((row) => ({
+        entryRef: String(row.entryRef || ''),
         start: Number(row.spans?.[0]?.start ?? 0),
         wrong: String(row.wrong || ''),
         correct: String(row.correct || ''),

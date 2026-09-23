@@ -681,7 +681,7 @@ describe('模型建议并入候选列表', () => {
       { entryRef: 'model_1', wrong: 'coxyx', correct: 'Cogseed', fromModel: true, spans: [{ start: 20, end: 25 }] },
     ];
     expect(panel.checkedModelCandidates(rows, ['model_1'])).toEqual([
-      { start: 20, wrong: 'coxyx', correct: 'Cogseed', confidence: 1, reason: '' },
+      { entryRef: 'model_1', start: 20, wrong: 'coxyx', correct: 'Cogseed', confidence: 1, reason: '' },
     ]);
     expect(panel.checkedModelCandidates(rows, [])).toEqual([]);
     // 词表命中的行不算"模型建议"，不会被重复提交
@@ -1143,8 +1143,12 @@ describe('词表操作与模型建议：动作分流（每行都有接受/忽略
     expect(source).toMatch(/if \(!isGlossaryRow\(targetRow\)\) \{[\s\S]{0,400}targetRow\.correct = correct/);
     expect(source).toContain("t('kb.transcriptCorrect.rename_model_done'");
     // 改后的写法要真的进 apply（模型候选的 correct 取自本行）
-    const checked = panel.checkedModelCandidates([{ entryRef: 'model_0', fromModel: true, wrong: 'coxy', correct: 'CogSeed 平台', spans: [{ start: 3, end: 7 }] }], ['model_0']);
-    expect(checked[0]).toMatchObject({ wrong: 'coxy', correct: 'CogSeed 平台', start: 3 });
+    const checked = panel.checkedModelCandidates(
+      [{ entryRef: 'model_7', fromModel: true, wrong: 'coxy', correct: 'CogSeed 平台', spans: [{ start: 3, end: 7 }] }],
+      ['model_7'],
+    );
+    // ref 必须原样带上：acceptedIds 用的就是扫描期这个值，主进程按数组下标重编会错位
+    expect(checked[0]).toMatchObject({ entryRef: 'model_7', wrong: 'coxy', correct: 'CogSeed 平台', start: 3 });
   });
 
   it('三个词表写操作都必须校验主进程回执，不能凭"没抛错"就报成功', () => {
