@@ -39,7 +39,7 @@ const CHUNK_MAX_UTTERANCES = 26;
  * 「未决项」里如实声明它们尚未经人工确认——不藏在代码里。
  */
 const EXTRA_ENTRIES: Array<{ wrong: string; correct: string; kind: string; note: string }> = [
-  { wrong: '静文', correct: '静雯', kind: 'people', note: 'metrics 实测 26 处；人工清理版也做了此归一' },
+  { wrong: '示例人', correct: 'ExamplePerson', kind: 'people', note: 'metrics 样例；人工清理版也做了此归一（人名已脱敏）' },
   { wrong: 'mesh seed', correct: 'CogSeed', kind: 'product', note: '未召回 3 处' },
   { wrong: 'mesh c', correct: 'CogSeed', kind: 'product', note: '未召回 1 处' },
   { wrong: '多维表', correct: '多维表格', kind: 'term', note: '未召回 2 处' },
