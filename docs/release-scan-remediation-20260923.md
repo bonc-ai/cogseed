@@ -70,7 +70,7 @@
 
 ### 历史（用户已批准；旁路分支已执行；develop 待管理员）
 
-- 旁路：`rewrite/release-scan-history-from-develop-202609231930`（及镜像内 67 分支改写结果）。
+- 旁路：`rewrite/release-scan-history-from-develop-202609231930`（基于当前 `origin/develop` 单分支 filter-repo；**不含** cicd/tags 改写）。
 - 已删文件路径 `CogSeed-发版扫描报告-牛保康-20260916.md`：在旁路历史上已清除。
 - 个人邮箱：旁路历史上已映射清零。
 - `gitleaks detect --log-opts=v1.1.2..HEAD`（旁路）→ **no leaks found**。
