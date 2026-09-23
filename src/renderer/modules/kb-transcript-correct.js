@@ -89,6 +89,23 @@
   }
 
   /**
+   * 这一行背后**是否有真的词表条目**。
+   *
+   * 候选有两个来源（见主进程 scan）：词表命中（`entryRef: g_*`）与**模型读正文的建议**
+   * （`entryRef: model_<i>`、`fromModel: true`）。后者**不在词表里**——它只有在用户
+   * 「勾选 + 生成清理版」时才被记进词表（`source: meeting_accept`）。
+   *
+   * 为什么必须区分：忽略（降权）/ 加白 / 改写法都是**词表操作**，对 `model_*` 这种
+   * 合成 id 主进程找不到条目、返回 0/null。面板此前不看回执，照样弹"已改为：X""已忽略"，
+   * 用户看到的就是"改写法点了没用"（2026-09-23 反馈）。所以这些动作**只给词表行**，
+   * 同时所有词表写操作的返回值都要校验（双保险：万一以后又多了别的合成 id 来源）。
+   */
+  function isGlossaryRow(row) {
+    if (!row || row.fromModel === true) return false;
+    return String(row.entryRef || '').startsWith('g_');
+  }
+
+  /**
    * 分组：高危优先展示，其余归入可折叠组（视觉噪声主要来自低风险条目），
    * 被忽略过的词条另外折叠到最后——这就是方案里的"忽略（降权）"，
    * 不是删除：用户仍能展开看到并恢复。
@@ -606,7 +623,7 @@
       // 高危行用纯文字按钮（hover 才出底色），把横向空间让给内容。
       const acceptRole = isAccepted ? 'primary' : (row.riskLevel === 'high' ? 'ghost' : 'secondary');
       const isIgnoredRow = Number(row.ignoredCount || 0) > 0;
-      actions.innerHTML = [
+      const parts = [
         button({
           label: isAccepted
             ? t('kb.transcriptCorrect.accepted', '已接受')
@@ -617,7 +634,10 @@
           disabled: state.busy,
           attrs: { 'data-atc-accept': row.entryRef },
         }),
-        button({
+      ];
+      if (isGlossaryRow(row)) {
+        // 「忽略（降权）」与「更多（加白 / 改写法）」都是**词表操作**：只给真的在词表里的行。
+        parts.push(button({
           label: isIgnoredRow
             ? t('kb.transcriptCorrect.restore', '恢复')
             : t('kb.transcriptCorrect.ignore', '忽略'),
@@ -626,19 +646,20 @@
           className: 'kb-atc__btn',
           disabled: state.busy,
           attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': isIgnoredRow ? '1' : '0' },
-        }),
-        button({
+        }));
+        parts.push(button({
           label: t('kb.transcriptCorrect.more', '更多'),
           icon: state.rowMenu === row.entryRef ? 'chevron-down' : 'chevron-right',
           role: 'ghost',
           size: 'sm',
           className: 'kb-atc__btn',
           attrs: { 'data-atc-rowmenu': row.entryRef },
-        }),
-      ].join('');
+        }));
+      }
+      actions.innerHTML = parts.join('');
 
       el.append(main, count, actions);
-      if (state.rowMenu === row.entryRef) {
+      if (isGlossaryRow(row) && state.rowMenu === row.entryRef) {
         el.appendChild(rowMenuElement(row, isIgnoredRow));
       }
       return el;
@@ -1882,7 +1903,13 @@
       if (state.busy) return;
       const row = state.rows.find((item) => item.entryRef === entryRef);
       try {
-        await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        const result = await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        // 主进程只对"词表里真的存在的条目"计数：`updated: 0` 说明这条不在词表里，
+        // 不能报"已忽略"（否则本地翻个组、磁盘上什么都没有，重扫又回来）。
+        if (!Number(result?.updated)) {
+          setStatus(t('kb.transcriptCorrect.ignore_skipped', '这条不在词表里，无法忽略（模型建议直接取消勾选即可）。'), 'warning');
+          return;
+        }
         if (row) row.ignoredCount = restore ? 0 : Number(row.ignoredCount || 0) + 1;
         if (restore) {
           state.accepted.add(entryRef);
@@ -1912,7 +1939,12 @@
       state.busy = true;
       render();
       try {
-        await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        const result = await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        // 同「忽略」：`updated: 0` = 词表里没有这条，别报"已加白"再让重扫把它打回原形。
+        if (!Number(result?.updated)) {
+          setStatus(t('kb.transcriptCorrect.add_allow_skipped', '这条不在词表里，无法加白（模型建议要先写进词表）。'), 'warning');
+          return;
+        }
         state.allowOpen = '';
         setStatus(t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
           term,
@@ -1955,7 +1987,14 @@
       state.busy = true;
       render();
       try {
-        await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        const result = await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        // 主进程找不到条目时返回 `entry: null`——**这不是成功**。此前不看回执就报
+        // "已改为：X"，用户对着没变的词表反复点（真机：更多 → 改写法"点了没用"）。
+        if (!result?.entry) {
+          state.renameOpen = '';
+          setStatus(t('kb.transcriptCorrect.rename_skipped', '这条不在词表里，改写法没有生效（模型建议要先勾选并生成清理版才会写进词表）。'), 'warning');
+          return;
+        }
         state.renameOpen = '';
         setStatus(t('kb.transcriptCorrect.rename_done', '已改为：{correct}', { correct }), '');
         await runScan();
@@ -2175,6 +2214,7 @@
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
+      isGlossaryRow,
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
@@ -2197,6 +2237,7 @@
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
+      isGlossaryRow,
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,

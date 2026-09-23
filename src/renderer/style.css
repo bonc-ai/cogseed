@@ -32516,6 +32516,11 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 /* 条目：无卡片外框，只有底部分隔线；hover 出浅底以便定位。 */
 .kb-atc__row {
   display: flex;
+  /* 必须允许换行：行内「更多」菜单与展开的表单都是 `flex: 1 0 100%` 的子项，
+     它们是按"换到下一行占满整行"设计的。不换行时它们会和原文/按钮挤在同一行，
+     把 `.kb-atc__row-main`（min-width: 0）压成 0 宽——真机现象就是点开「更多」后
+     整行文字被挤成竖条、按钮错位，连「改写法」表单都点不准（2026-09-23 反馈）。 */
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2) var(--space-2) 0;
@@ -32926,18 +32931,31 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-atc__row-menu {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1);
   flex: 1 0 100%;
   margin-top: var(--space-1);
   padding-top: var(--space-1);
   border-top: 1px solid var(--line-default);
 }
+/* 展开的表单：输入框吃满剩余宽度，确定/取消保持按钮自身宽度。
+   曾经是 `flex-direction: column`，子项被拉伸到整行宽（748px 的"确定"按钮）——
+   配合上面的不换行行布局，就是用户看到的"大面积错位"。 */
 .kb-atc__row-form {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
   gap: var(--space-1);
   flex: 1 0 100%;
   padding-top: var(--space-1);
+}
+.kb-atc__row-form .ui-field {
+  min-width: 0;
+}
+/* 表单里附加的上下文提示/已加白清单不是"第三列"，它们各占一整行。 */
+.kb-atc__row-form > .kb-atc__sync-note,
+.kb-atc__row-form > .kb-atc__allow-list {
+  grid-column: 1 / -1;
 }
 .kb-atc__allow-list {
   display: flex;

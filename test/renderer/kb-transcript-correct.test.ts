@@ -51,6 +51,7 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   checkedModelCandidates: (rows: unknown[], accepted: Iterable<string>) => Array<{ start: number; wrong: string; correct: string }>;
   normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
+  isGlossaryRow: (row: unknown) => boolean;
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
   classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; existingPath?: string; message?: string };
@@ -431,6 +432,7 @@ describe('locale 覆盖', () => {
     'meta_full', 'save_duplicate_file',
     'save_local', 'save_local_hint', 'saved_local', 'saved_local_to',
     'save_local_failed', 'save_local_canceled',
+    'rename_skipped', 'ignore_skipped', 'add_allow_skipped',
   ];
 
   for (const lang of locales) {
@@ -1088,5 +1090,67 @@ describe('本地导出文件名（纯文件名，不带库内目录）', () => {
     const rel = '纪要/纪要/文字转写_x.txt';
     const suffix = '清理版';
     expect(panel.cleanedFileName(rel, suffix)).toBe(`纪要/纪要/${panel.cleanedFileBaseName(rel, suffix)}`);
+  });
+});
+
+/**
+ * 「更多 → 改写法」点了没反应，且展开后大面积错位（2026-09-23 真机反馈）。
+ *
+ * 两个根因，各自钉一条：
+ *   1. 候选里混着**不在词表**的行（`model_<i>` 模型建议），而忽略/加白/改写法都是词表操作，
+ *      主进程对合成 id 返回 0/null；面板此前不看回执，照样弹"已改为：X" —— 看起来能用，
+ *      实际什么都没发生。现在：这些动作只给词表行 + 所有回执都校验。
+ *   2. 行是 `display:flex`（不换行），而「更多」菜单与展开的表单都声明 `flex: 1 0 100%`，
+ *      于是它们挤在同一行、把原文区压成 0 宽 —— 这就是"大面积错位"。
+ */
+describe('词表操作只给词表行（模型建议不能改写法）', () => {
+  it('识别词表行：g_* 是词表命中；model_* / fromModel 是模型建议，不是词表行', () => {
+    expect(panel.isGlossaryRow({ entryRef: 'g_8056893a079bdf09' })).toBe(true);
+    expect(panel.isGlossaryRow({ entryRef: 'model_0', fromModel: true })).toBe(false);
+    // 万一以后又冒出别的合成 id 来源（历史 merge_* 就是这类），也不当词表行
+    expect(panel.isGlossaryRow({ entryRef: 'merge_3' })).toBe(false);
+    expect(panel.isGlossaryRow(null)).toBe(false);
+  });
+
+  it('行内动作按行类型分流：模型建议行不给「忽略」与「更多」', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    // 只保留接受按钮，其余两个词表操作都要挂在 isGlossaryRow 上
+    expect(source).toMatch(/if \(isGlossaryRow\(row\)\) \{[\s\S]{0,900}data-atc-ignore/);
+    expect(source).toMatch(/if \(isGlossaryRow\(row\)\) \{[\s\S]{0,1200}data-atc-rowmenu/);
+    expect(source).toMatch(/if \(isGlossaryRow\(row\) && state\.rowMenu === row\.entryRef\)/);
+  });
+
+  it('三个词表写操作都必须校验主进程回执，不能凭"没抛错"就报成功', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    expect(source).toMatch(/applyAlignment'[\s\S]{0,400}if \(!result\?\.entry\)/);
+    expect(source).toMatch(/setIgnored'[\s\S]{0,400}if \(!Number\(result\?\.updated\)\)/);
+    expect(source).toMatch(/addAllow'[\s\S]{0,400}if \(!Number\(result\?\.updated\)\)/);
+    // 未生效时给出的文案必须说清"为什么"，而不是笼统的"失败"
+    expect(source).toContain("t('kb.transcriptCorrect.rename_skipped'");
+    expect(source).toContain("t('kb.transcriptCorrect.ignore_skipped'");
+    expect(source).toContain("t('kb.transcriptCorrect.add_allow_skipped'");
+  });
+});
+
+describe('展开「更多」不再错位（行必须允许换行 + 表单按钮保持自身宽度）', () => {
+  const css = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
+
+  it('行容器允许换行（菜单/表单按 flex: 1 0 100% 换到整行）', () => {
+    const rowRule = css.match(/\.kb-atc__row \{[^}]*\}/)?.[0] || '';
+    expect(rowRule).toContain('flex-wrap: wrap');
+    // 菜单与表单声明了 100% 基准宽度：不换行时它们会把同行内容压成 0 宽
+    expect(css).toMatch(/\.kb-atc__row-menu \{[^}]*flex: 1 0 100%/);
+    expect(css).toMatch(/\.kb-atc__row-form \{[^}]*flex: 1 0 100%/);
+  });
+
+  it('展开的表单是三列网格：输入框伸缩、确定/取消保持按钮宽度（曾经被拉成整行宽）', () => {
+    const formRule = css.match(/\.kb-atc__row-form \{[^}]*\}/)?.[0] || '';
+    expect(formRule).toContain('display: grid');
+    expect(formRule).toContain('grid-template-columns: minmax(0, 1fr) auto auto');
+    expect(formRule).not.toContain('flex-direction: column');
+  });
+
+  it('表单里的上下文提示/已加白清单各占整行，不挤进第三列', () => {
+    expect(css).toMatch(/\.kb-atc__row-form > \.kb-atc__sync-note,[\s\S]{0,120}grid-column: 1 \/ -1;/);
   });
 });
