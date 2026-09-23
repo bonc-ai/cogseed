@@ -27,6 +27,23 @@
 #   which is exactly the scenario CONTRIBUTING.md → "Merge requirements" item 4
 #   exists to prevent.
 #   Root cause + prevention: mergers must enable "Keep my email addresses private".
+#
+# TEMPORARY EXCEPTION (recorded 2026-09-23) — fzywind@gmail.com, **author emails only**:
+#   Source: the squash-merge commit `a0cb7c5f` ("feat(community): add contribution
+#   entry points (#369)"), authored by an account that has not enabled
+#   "Keep my email addresses private". That commit's own Signed-off-by and
+#   Co-authored-by trailers already use the noreply form — only the author header
+#   carries the personal address. It is already public on `develop` and cannot be
+#   amended without rewriting `develop`, which the `develop-approval-gate` ruleset
+#   forbids (the ruleset has no bypass actors).
+#   Scope: author check only — identical to the entry above.
+#
+#   ⚠️ DELETE THIS ENTRY once the cicd branch contains `a0cb7c5f`, i.e. immediately
+#   after the next develop → cicd promotion merges. From that point the commit is an
+#   ancestor of both check ranges (`base..head` on PRs and `origin/cicd..HEAD` in
+#   ci.yml), so leaving the entry in place would keep allowlisting this account for
+#   no reason.
+#   Root cause + prevention: contributors must enable "Keep my email addresses private".
 
 name: email-gate
 
@@ -49,10 +66,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Author allowlist: GitHub noreply + team address + the single
-          # historical web-merge exception documented in the file header.
+          # Author allowlist: GitHub noreply + team address + the two historical
+          # author-header exceptions documented in the file header.
           bad=$(git log --format='%h|%an|%ae' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
-            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|184377817@qq\.com)$' \
+            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|184377817@qq\.com|fzywind@gmail\.com)$' \
             || true)
           if [ -n "$bad" ]; then
             echo "::error::PR contains commits with non-noreply author emails:"
