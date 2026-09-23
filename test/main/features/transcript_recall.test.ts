@@ -64,11 +64,11 @@ const cogseedLong = entry({ wrong: 'cogseed', correct: 'Cogseed', riskLevel: 'hi
 const kstar = entry({ wrong: 'K star', correct: 'KSTAR', kind: 'term' });
 const k4 = entry({ wrong: 'K4', correct: 'KSTAR', kind: 'term' });
 const raymond = entry({ wrong: '雷蒙德', correct: 'Raymond', kind: 'people' });
-const mesh = entry({ wrong: 'mesh seed', correct: 'MeshSeed' });
+const mesh = entry({ wrong: 'mesh seed', correct: 'CogSeed' });
 const SEED = [cogseed, cogseedLong, kstar, k4, raymond, mesh];
 
-/** 与 09-14 手工清理版附记一致的域概念（本次会议确实在讲这些）。 */
-const DOMAIN = ['Cogseed', 'KSTAR', 'Raymond', 'MeshSeed'];
+/** 与手工清理版附记一致的代表性域概念。 */
+const DOMAIN = ['Cogseed', 'KSTAR', 'Raymond'];
 
 describe('归一化与音形骨架', () => {
   it('normalizeKey 抹掉分隔符与大小写：K-STAR / K star / kstar 视为同一键', () => {
@@ -196,8 +196,8 @@ describe('结构性安全性质', () => {
   });
 
   it('riskLevel 非 low 时不给 suggest', () => {
-    const g = entry({ wrong: 'MeshSeed', correct: 'MeshSeed', riskLevel: 'high' });
-    const r = recallCandidates('写成了 meshseed', [g], { domainTerms: ['MeshSeed'] });
+    const g = entry({ wrong: 'cog seed', correct: 'CogSeed', riskLevel: 'high' });
+    const r = recallCandidates('写成了 cogseed', [g], { domainTerms: ['CogSeed'] });
     const hit = r.candidates[0];
     expect(hit).toBeDefined();
     expect(hit.disposition).toBe('review');
@@ -227,15 +227,15 @@ describe('四条护栏与精确扫描同语义', () => {
   });
 
   it('语境加白优先于黑名单：整条静默', () => {
-    const g = entry({ wrong: 'mesh seed', correct: 'MeshSeed', contextAllow: ['种子'] });
-    const r = recallCandidates('这是种子 mesh seed', [g], { domainTerms: ['MeshSeed'] });
+    const g = entry({ wrong: 'mesh seed', correct: 'CogSeed', contextAllow: ['种子'] });
+    const r = recallCandidates('这是种子 mesh seed', [g], { domainTerms: ['CogSeed'] });
     expect(r.candidates).toHaveLength(0);
     expect(r.stats.denied.context_allowed).toBeGreaterThan(0);
   });
 
   it('语境黑名单命中即拒', () => {
-    const g = entry({ wrong: 'mesh seed', correct: 'MeshSeed', contextDeny: ['植物'] });
-    const r = recallCandidates('植物 mesh seed', [g], { domainTerms: ['MeshSeed'] });
+    const g = entry({ wrong: 'mesh seed', correct: 'CogSeed', contextDeny: ['植物'] });
+    const r = recallCandidates('植物 mesh seed', [g], { domainTerms: ['CogSeed'] });
     expect(r.candidates).toHaveLength(0);
     expect(r.stats.denied.context_denied).toBeGreaterThan(0);
   });
