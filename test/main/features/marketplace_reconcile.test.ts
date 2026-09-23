@@ -14,10 +14,46 @@ const electronMock = vi.hoisted(() => ({ appVersion: '1.5.1' }));
 const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
 }));
+const fetchImmutableSourceMock = vi.hoisted(() => vi.fn());
+
+/** 合成一条 A-01 目录行（含 artifact 身份）。 */
+function catalogRow(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    content_id: id,
+    version: '1.0.0',
+    published_at: 100,
+    updated_at: 110,
+    create_uid: '0',
+    status: 'approved',
+    name: id,
+    artifact: { sha256: 'a'.repeat(64), size_bytes: 1024, format: 'skill-tree-v1' },
+    ...over,
+  };
+}
+
+/** 在唯一取字节接缝上供给已校验字节。 */
+function serveImmutableBytes(bytes: Buffer, before?: () => void): void {
+  fetchImmutableSourceMock.mockImplementation(async (req: any) => {
+    before?.();
+    req.assertContinue?.();
+    fs.writeFileSync(req.destPath, bytes);
+    return { path: req.destPath, sha256: 'a'.repeat(64), sizeBytes: bytes.length };
+  });
+}
 
 vi.mock('../../../src/main/features/marketplace', () => ({
   postJson: postJsonMock,
   extractBundleSafely: extractBundleSafelyMock,
+  // 临时区 / trash 的命名是纯字符串函数，用真实实现——mock 掉会让原子提升与
+  // 崩溃恢复的命名契约在本用例里失真。
+  quarantineStagingName: (hex: string) => `.staging-${hex}`,
+  quarantineTrashName: (contentId: string, hex: string) => `.trash-${contentId}-${hex}`,
+}));
+// 取字节已收敛为 `source-fetch.ts` 这一个入口（FR-008），测试在该接缝上注入。
+// 原先这些用例靠 manifest 里的 `bundle_url` 指向本地 HTTP server —— 那套语义已废止，
+// 且 `COGSEED_API_BASE_URL` 只接受 HTTPS，本地 server 本就指不过去。
+vi.mock('../../../src/main/features/marketplace/source-fetch', () => ({
+  fetchImmutableSource: fetchImmutableSourceMock,
 }));
 vi.mock('../../../src/main/logger', () => ({
   createLogger: () => loggerMocks,
@@ -621,12 +657,12 @@ describe('marketplace reconcile', () => {
     skillZip.addFile('SKILL.md', Buffer.from('---\nname: cancelled-skill\n---\n'));
     const body = skillZip.toBuffer();
     let shouldContinue = true;
-    const base = await listen((_req, res) => {
-      res.setHeader('Content-Type', 'application/zip');
-      res.write(body.subarray(0, Math.max(1, Math.floor(body.length / 2))));
-      shouldContinue = false;
-      setTimeout(() => res.end(body.subarray(Math.max(1, Math.floor(body.length / 2)))), 10);
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === '/marketplace/skills/list') return { list: [catalogRow('cancelled-skill')], total: 1 };
+      throw new Error(`unexpected path ${p}`);
     });
+    // 取字节途中准入被撤销：`assertContinue` 抛出，本次拉取中止。
+    serveImmutableBytes(body, () => { shouldContinue = false; });
     writeManifest({
       version: 1,
       agents: [],
@@ -634,7 +670,7 @@ describe('marketplace reconcile', () => {
         id: 'cancelled-skill',
         version: '1.0.0',
         published_at: 100,
-        bundle_url: `${base}/skill.zip`,
+        bundle_url: '',
         installed_at: 200,
       }],
     });
@@ -660,27 +696,14 @@ describe('marketplace reconcile', () => {
         }));
         return;
       }
-      if (req.url === '/dep-skill.zip') {
-        res.setHeader('Content-Type', 'application/zip');
-        res.end(depZip.toBuffer());
-        return;
-      }
       res.statusCode = 404;
       res.end('not found');
     });
-    postJsonMock.mockImplementation(async (p: string, body: any) => {
-      if (p === '/marketplace/skills/bundle' && body?.id === 'dep-skill') {
-        return {
-          bundle_url: `${base}/dep-skill.zip`,
-          version: '1.0.0',
-          published_at: 100,
-          updated_at: 110,
-          create_uid: '0',
-          status: 'approved',
-        };
-      }
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === '/marketplace/skills/list') return { list: [catalogRow('dep-skill')], total: 1 };
       throw new Error(`unexpected path ${p}`);
     });
+    serveImmutableBytes(depZip.toBuffer());
     writeManifest({
       version: 1,
       agents: [{
@@ -700,13 +723,19 @@ describe('marketplace reconcile', () => {
 
     expect(result.pulled_agents).toBe(1);
     const manifest = await installs.readInstalls('u1');
+    // Hub 内容不再有对象存储地址：清单行的 bundle_url 恒为空，身份是 {content_id, version}。
     expect(manifest.skills).toEqual([
       expect.objectContaining({
         id: 'dep-skill',
-        bundle_url: `${base}/dep-skill.zip`,
+        bundle_url: '',
+        version: '1.0.0',
         status: 'approved',
       }),
     ]);
+    // 字节确实是按 {content_id, version} 从唯一取字节入口取的。
+    expect(fetchImmutableSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ contentId: 'dep-skill', version: '1.0.0' }),
+    );
     expect(fs.existsSync(path.join(tmpDir, 'u1', 'local', 'marketplace', 'skills', 'dep-skill', 'SKILL.md'))).toBe(true);
     const agentJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'u1', 'local', 'marketplace', 'agents', 'agent-updated', 'agent.json'), 'utf8'));
     expect(agentJson.skill_list).toEqual(['dep-skill']);
@@ -742,15 +771,12 @@ describe('marketplace reconcile security gate (W3)', () => {
 
   async function runPull(skillId: string, files: Record<string, string>) {
     const zip = pullZip(files);
-    const base = await listen((req, res) => {
-      if (req.url === `/${skillId}.zip`) {
-        res.setHeader('Content-Type', 'application/zip');
-        res.end(zip.toBuffer());
-        return;
-      }
-      res.statusCode = 404;
-      res.end('not found');
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === '/marketplace/skills/list') return { list: [catalogRow(skillId)], total: 1 };
+      // 其余目录调用返回稳定空结果，而不是抛错——本用例只关心拉取与安全门。
+      return { list: [], total: 0 };
     });
+    serveImmutableBytes(zip.toBuffer());
     const manifestDir = path.join(tmpDir, 'u1', 'cloud', 'marketplace');
     fs.mkdirSync(manifestDir, { recursive: true });
     fs.writeFileSync(path.join(manifestDir, 'installs.json'), JSON.stringify({
@@ -760,7 +786,7 @@ describe('marketplace reconcile security gate (W3)', () => {
         version: '1.0.0',
         published_at: 100,
         updated_at: 100,
-        bundle_url: `${base}/${skillId}.zip`,
+        bundle_url: '',
         installed_at: 200,
       }],
       agents: [],

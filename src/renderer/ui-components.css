@@ -106,8 +106,7 @@
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
-  cursor: pointer;
-  transition:
+  cursor: pointer;transition:
     color var(--duration-control) var(--easing-ui),
     background-color var(--duration-control) var(--easing-ui),
     border-color var(--duration-control) var(--easing-ui),
@@ -117,6 +116,17 @@
   height: var(--control-height-sm);
   padding-inline: var(--space-3);
   font-size: var(--font-size-3);
+}
+/* `hidden` 必须赢。`.btn` / `.ui-button` / `.ui-icon-button` 都在作者样式里声明了
+   display:inline-flex，作者样式优先级高于 UA 的 `[hidden] { display: none }`：于是
+   hidden=true 的按钮照样被画出来、照样能被点到——点下去又因为业务状态判定直接
+   return，用户看到的就是"按钮在、点不动"（2026-09-21 报障）。与 `.settings-row[hidden]`、
+   `.updater-banner[hidden]` 同一条纪律，这里一次性覆盖共享按钮家族（含图标按钮），
+   避免每个页面各打一个补丁。 */
+.btn[hidden],
+.ui-button[hidden],
+.ui-icon-button[hidden] {
+  display: none !important;
 }
 .ui-button--lg { height: var(--control-height-lg); }
 .ui-button--primary {
@@ -218,6 +228,14 @@
     color var(--duration-control) var(--easing-ui),
     background-color var(--duration-control) var(--easing-ui),
     border-color var(--duration-control) var(--easing-ui);
+}
+.ui-icon-button--sm {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+}
+.ui-icon-button--lg {
+  width: var(--control-height-lg);
+  height: var(--control-height-lg);
 }
 .ui-icon-button:hover,
 .ui-icon-button[data-preview-state="hover"],
@@ -338,6 +356,141 @@
   box-shadow: 0 0 0 3px var(--color-focus-halo);
 }
 .ui-tab:disabled { color: var(--text-faint); cursor: not-allowed; }
+.ui-tab__label { min-width: 0; }
+.ui-tab__count { color: var(--text-muted); font-size: var(--font-size-1); font-variant-numeric: tabular-nums; }
+
+.ui-tag,
+.ui-badge,
+.ui-status-pill,
+.ui-status-dot,
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+.ui-tag {
+  min-height: 20px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
+  background: var(--color-overlay-fill);
+  color: var(--text-secondary);
+  font-size: var(--font-size-1);
+}
+.ui-tag--outline { border-color: var(--line-default); background: transparent; }
+.ui-tag--accent { background: var(--color-brand-soft); color: var(--color-accent); }
+.ui-tag--mono,
+.ui-tag--version { font-family: var(--font-mono); }
+.ui-tag--success { background: var(--status-success-bg); color: var(--status-success-text); }
+.ui-chip {
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-2);
+}
+.ui-chip:hover { border-color: var(--line-strong); color: var(--text-heading); }
+.ui-chip.is-selected { border-color: var(--color-accent); background: var(--color-brand-soft); color: var(--color-accent); }
+.ui-chip:focus-visible { outline: var(--focus-width) solid var(--color-accent); outline-offset: var(--focus-offset); box-shadow: 0 0 0 3px var(--color-focus-halo); }
+.ui-chip:disabled { color: var(--text-faint); cursor: not-allowed; }
+.ui-chip__icon { width: 14px; height: 14px; }
+.ui-badge {
+  min-height: 18px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-overlay-fill);
+  color: var(--text-muted);
+  font-size: var(--font-size-1);
+  font-weight: var(--font-weight-medium);
+}
+.ui-badge--success { background: var(--status-success-bg); color: var(--status-success-text); }
+.ui-badge--attention { background: var(--status-warning-bg); color: var(--status-warning-text); }
+.ui-badge--critical { background: var(--status-danger-bg); color: var(--status-danger-text); }
+.ui-status-pill {
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-overlay-fill);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2);
+}
+.ui-status-pill--success { background: var(--status-success-bg); color: var(--status-success-text); }
+.ui-status-pill--attention { background: var(--status-warning-bg); color: var(--status-warning-text); }
+.ui-status-pill--critical { background: var(--status-danger-bg); color: var(--status-danger-text); }
+.ui-status-pill__icon { width: 13px; height: 13px; }
+.ui-status-dot { color: var(--text-secondary); font-size: var(--font-size-2); }
+.ui-status-dot__mark { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--text-faint); }
+.ui-status-dot--success .ui-status-dot__mark { background: var(--color-success); }
+.ui-status-dot--attention .ui-status-dot__mark { background: var(--color-warning); }
+.ui-status-dot--critical .ui-status-dot__mark { background: var(--color-danger); }
+.ui-progress {
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-overlay-fill);
+}
+.ui-progress__fill { display: block; width: var(--ui-progress-value); height: 100%; border-radius: inherit; background: var(--text-heading); transition: width var(--duration-control) var(--easing-ui); }
+.ui-progress--attention .ui-progress__fill { background: var(--color-warning); }
+.ui-skeleton { display: flex; min-width: 0; gap: var(--space-3); align-items: center; }
+.ui-skeleton__media { width: 30px; height: 30px; flex: 0 0 auto; border-radius: var(--radius-control); background: var(--color-overlay-fill); animation: ui-skeleton-pulse 1.4s ease-in-out infinite; }
+.ui-skeleton__lines { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: var(--space-2); }
+.ui-skeleton__line { width: var(--ui-skeleton-width); height: 10px; border-radius: var(--radius-chip); background: var(--color-overlay-fill); animation: ui-skeleton-pulse 1.4s ease-in-out infinite; }
+.ui-skeleton__line.is-title { height: 13px; }
+@keyframes ui-skeleton-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ui-skeleton__media, .ui-skeleton__line { animation: none; } }
+
+.ui-data-table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+.ui-data-table { width: 100%; border-collapse: collapse; color: var(--text-secondary); font-size: var(--font-size-2); }
+.ui-data-table th,
+.ui-data-table td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line-hairline); text-align: left; vertical-align: middle; }
+.ui-data-table th { color: var(--text-muted); font-size: var(--font-size-1); font-weight: var(--font-weight-medium); }
+.ui-data-table tbody tr:last-child td { border-bottom: 0; }
+.ui-data-table tbody tr:hover,
+.ui-data-table tbody tr.is-selected { background: var(--surface-subtle); }
+.ui-data-table .is-right { text-align: right; font-variant-numeric: tabular-nums; }
+.ui-data-table .is-primary { color: var(--text-heading); font-weight: var(--font-weight-medium); }
+.ui-data-table__sort { display: inline-flex; align-items: center; gap: var(--space-1); padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.ui-data-table__sort:focus-visible { outline: var(--focus-width) solid var(--color-accent); outline-offset: var(--focus-offset); }
+.ui-accordion { width: 100%; border-block: 1px solid var(--line-default); }
+.ui-accordion__item { border-bottom: 1px solid var(--line-hairline); }
+.ui-accordion__item:last-child { border-bottom: 0; }
+.ui-accordion__item > summary { min-height: var(--control-height-lg); padding: var(--space-3) 0; display: flex; align-items: center; gap: var(--space-2); color: var(--text-heading); cursor: pointer; list-style: none; }
+.ui-accordion__item > summary::-webkit-details-marker { display: none; }
+.ui-accordion__chevron { width: 13px; height: 13px; flex: 0 0 auto; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--duration-control) var(--easing-ui); }
+.ui-accordion__item[open] .ui-accordion__chevron { transform: rotate(45deg); }
+.ui-accordion__title { min-width: 0; flex: 1; }
+.ui-accordion__meta { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-size-1); }
+.ui-accordion__body { padding: 0 0 var(--space-4) calc(13px + var(--space-2)); color: var(--text-secondary); }
+.ui-tree,
+.ui-tree [role="group"] { margin: 0; padding: 0; list-style: none; }
+.ui-tree [role="group"] { padding-left: var(--space-4); }
+.ui-tree [role="treeitem"] { display: grid; grid-template-columns: var(--control-height-sm) minmax(0, 1fr); align-items: start; }
+.ui-tree__toggle,
+.ui-tree__spacer { width: var(--control-height-sm); height: var(--control-height-sm); display: inline-flex; align-items: center; justify-content: center; }
+.ui-tree__toggle { padding: 0; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; }
+.ui-tree__toggle .ui-icon { width: 13px; height: 13px; transition: transform var(--duration-control) var(--easing-ui); }
+.ui-tree [role="treeitem"][aria-expanded="true"] > .ui-tree__toggle .ui-icon { transform: rotate(90deg); }
+.ui-tree__label { min-height: var(--control-height-sm); min-width: 0; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); cursor: pointer; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.ui-tree__label:hover { background: var(--surface-subtle); color: var(--text-heading); }
+.ui-tree__label.is-selected { background: var(--color-brand-soft); color: var(--color-accent); }
+.ui-tree__label:focus-visible,
+.ui-tree__toggle:focus-visible { outline: var(--focus-width) solid var(--color-accent); outline-offset: var(--focus-offset); }
+
+.ui-drawer-overlay { position: fixed; inset: 0; display: flex; align-items: stretch; justify-content: flex-end; background: var(--color-scrim); z-index: var(--z-modal); }
+.ui-drawer { width: min(480px, calc(100vw - var(--space-4))); height: 100%; display: flex; flex-direction: column; background: var(--surface-raised); border-left: 1px solid var(--line-default); box-shadow: var(--shadow-dialog); }
+.ui-drawer__header { min-height: var(--layout-titlebar-height); padding: 0 var(--space-4); display: flex; align-items: center; gap: var(--space-3); border-bottom: 1px solid var(--line-default); }
+.ui-drawer__header h2 { min-width: 0; flex: 1; margin: 0; color: var(--text-heading); font-size: var(--font-size-dialog-title); }
+.ui-drawer__body { min-height: 0; flex: 1; overflow: auto; padding: var(--space-4); }
+.ui-drawer__footer { padding: var(--space-3) var(--space-4); display: flex; justify-content: flex-end; gap: var(--space-2); border-top: 1px solid var(--line-default); }
+@media (max-width: 640px) { .ui-drawer { width: 100%; } }
 
 /* ResourceCard. Page modules retain their content, actions, and state
  * machines; this marker keeps the common shell from drifting. */
@@ -813,6 +966,93 @@ body.ui-modal-open { overflow: hidden; }
   line-height: var(--line-height-body);
   resize: vertical;
 }
+.ui-checkbox {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-1);
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-content: center;
+  background: var(--surface-card);
+  color: var(--control-primary-text);
+  box-sizing: border-box;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-control) var(--easing-ui),
+    border-color var(--duration-control) var(--easing-ui),
+    box-shadow var(--duration-control) var(--easing-ui);
+}
+.ui-checkbox::before {
+  width: 4px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  content: '';
+  transform: rotate(45deg) scale(0);
+  transform-origin: center;
+  transition: transform var(--duration-control) var(--easing-ui);
+}
+.ui-checkbox:hover:not(:disabled) { border-color: var(--color-line-control); }
+.ui-checkbox:checked {
+  border-color: var(--color-accent);
+  background: var(--control-primary-bg);
+}
+.ui-checkbox:checked::before { transform: rotate(45deg) scale(1); }
+.ui-checkbox:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
+}
+.ui-checkbox:disabled {
+  border-color: transparent;
+  background: var(--color-overlay-disabled);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+.ui-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  background: var(--color-overlay-disabled);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-control) var(--easing-ui),
+    border-color var(--duration-control) var(--easing-ui),
+    box-shadow var(--duration-control) var(--easing-ui);
+}
+.ui-switch__knob {
+  position: absolute;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--duration-control) var(--easing-ui);
+}
+.ui-switch:hover:not(:disabled) { border-color: var(--color-line-control); }
+.ui-switch.is-on {
+  border-color: var(--color-accent);
+  background: var(--control-primary-bg);
+}
+.ui-switch.is-on .ui-switch__knob { transform: translateX(20px); }
+.ui-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
+}
+.ui-switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .ui-select-host.ai-select {
   width: 100%;
   min-width: 0;
@@ -1020,41 +1260,6 @@ body.ui-modal-open { overflow: hidden; }
   color: var(--text, var(--color-ink));
   cursor: pointer;
   user-select: none;
-}
-.settings-check-chip input { position: absolute; opacity: 0; pointer-events: none; }
-.settings-check-chips .settings-check-chip__box {
-  /* display 显式声明：即便祖先布局异常（非 flex），宽高也照常生效，
-     不会再退化成一条边框竖线。 */
-  display: inline-block;
-  flex: none;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-1);
-  border: 1.5px solid var(--color-faint);
-  background: var(--color-white);
-  position: relative;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-/* 勾选态由 input:checked 伪类驱动（2026-09-13 交互失效修复）：此前外观
-   挂在静态 is-checked 类上，点击后 checkbox 状态翻转但类不更新——
-   视觉毫无反应。伪类直接跟随控件状态，点击立即生效，无 JS 同步。 */
-.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box {
-  background: var(--color-ink);
-  border-color: var(--color-ink);
-}
-.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box::after {
-  content: '';
-  position: absolute;
-  left: 4.5px;
-  top: 1.5px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--color-white);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-.settings-check-chips .settings-check-chip input:not(:checked):disabled + .settings-check-chip__box {
-  opacity: 0.55;
 }
 .settings-check-chip.is-locked { background: var(--color-surface-2); color: var(--color-muted); cursor: default; }
 .settings-check-chip__lock { display: inline-flex; color: var(--color-faint); }

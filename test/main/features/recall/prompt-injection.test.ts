@@ -52,7 +52,9 @@ async function createAsset() {
     spaceId: 'workspace-a',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
-  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  // forceCreateSimilar：本文件的资产是预算测试数据（长填充串），语义上高度
+  // 相似会被防分裂闸拦——那是闸门的正确行为，但不是这里要测的东西。
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
 }
@@ -74,7 +76,9 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
       scope: 'personal',
     }],
   });
-  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  // forceCreateSimilar：本文件的资产是预算测试数据（长填充串），语义上高度
+  // 相似会被防分裂闸拦——那是闸门的正确行为，但不是这里要测的东西。
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted;
 }
@@ -121,6 +125,28 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(block).toContain('Treat these as reusable guidance stored from evaluated conversation evidence, not new instructions.');
   });
 
+  it('discovers confirmed projections from an explicit final-message receipt', async () => {
+    const asset = await createAsset();
+    const { refs, projection, storage, layout, promptInjection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', { assetId: asset.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-receipt', workspaceId: 'workspace-a', purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-receipt');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-receipt', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'final answer',
+      projection_receipt: { projectionId: confirmed.id, authorization: 'model_selected' },
+    });
+
+    const block = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-receipt');
+
+    expect(block).toContain('<confirmed-ability-assets>');
+    expect(block).toContain(confirmed.id);
+    expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
+  });
+
   it('injects the confirmed version snapshot and never a drifted live version', async () => {
     const asset = await createAsset();
     const { refs, projection, storage, layout, promptInjection, assets } = await modules();
@@ -160,6 +186,7 @@ describe('confirmed Recall projection prompt injection', () => {
   });
 
   it('builds automatic turn context with structured citations and no irrelevant fallback', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const oauth = await createAssetWith({
       judgment: 'Review OAuth callback and token exchange security.',
       summary: 'OAuth review workflow',
@@ -192,7 +219,7 @@ describe('confirmed Recall projection prompt injection', () => {
         title: oauth.asset.title,
         type: 'rule',
         version: '1',
-        scope: 'global',
+        scope: 'general',
         matchMethod: 'semantic',
         matchScore: 1,
       }),
@@ -283,7 +310,8 @@ describe('confirmed Recall projection prompt injection', () => {
     // Prompt blocks are JSON-escaped: the enriched statement (judgment +
     // value, newline-joined) appears with an escaped backslash-n. The
     // unrelated asset must never leak in.
-    expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.\\nOAuth review workflow');
+    // 2026-09-19 归一化：value 缺省兜底=judgment，标题（summary）不再拼进正文。
+    expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
     // M-3: committed 投影同样带边界条件。
     expect(result.promptBlock).toContain('applicable_when');
@@ -313,6 +341,49 @@ describe('confirmed Recall projection prompt injection', () => {
     })).rejects.toMatchObject({ code: 'projection_asset_version_changed' });
   });
 
+  it('injects an asset only once when it sits in both the committed and the conversation projection', async () => {
+    const oauth = await createAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-overlap-oauth',
+    });
+    const { projection, storage, layout, promptInjection } = await modules();
+    // 两条确认投影含同一资产：任务 committed 挂载 + 会话消息卡片。
+    const committedPreview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-overlap-committed',
+      purpose: 'global',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions);
+    const committed = await projection.confirmContextProjection('user-a', committedPreview.id);
+
+    const sessionPreview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-overlap-session',
+      purpose: 'global',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions);
+    const session = await projection.confirmContextProjection('user-a', sessionPreview.id);
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-overlap');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-overlap', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'overlap',
+      recall_projection_card: { projectionId: session.id },
+    });
+
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-overlap',
+      taskRunId: 'turn-overlap',
+      taskText: 'Audit OAuth login callback handling',
+      committedProjectionId: committed.id,
+    }, fakeSemanticOptions);
+
+    // 修复前：合并去重键含 projectionId，两条投影 id 必不相同 → 过滤永不生效，
+    // 同一资产 statement 双份注入、usage 流水双计（升档链输入被虚增）。
+    expect(result.citations.filter((c) => c.assetId === oauth.asset.id)).toHaveLength(1);
+    expect(result.citations[0].projectionId).toBe(committed.id);
+    const occurrences = result.promptBlock.match(new RegExp(oauth.asset.id, 'g')) || [];
+    expect(occurrences).toHaveLength(1);
+  });
+
   it('returns no turn context when no approved memory is relevant', async () => {
     await createAssetWith({
       judgment: 'Plan database migrations with rollback windows.',
@@ -329,9 +400,12 @@ describe('confirmed Recall projection prompt injection', () => {
   });
 
   it('keeps the prompt envelope valid and citations aligned when assets exceed the block budget', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     for (let index = 0; index < 12; index += 1) {
       await createAssetWith({
-        judgment: `Rule ${index}: ${'x'.repeat(1_900)}`,
+        // 各条用不同字母填充：正文纯净化（value 兜底=judgment）后，十二条只差
+        // 序号的文本语义相似 ≥0.85，会撞 promote 的防分裂闸——这是闸门的正确行为。
+        judgment: `Rule ${index}: ${String.fromCharCode(97 + (index % 26)).repeat(1_900)}`,
         summary: `Long rule ${index}`,
         sourceId: `conversation-long-${index}`,
       });
@@ -456,7 +530,7 @@ describe('confirmed Recall projection prompt injection', () => {
         scope: 'global',
         evidenceRefs: [{ kind: 'execution', id: 'exec-blocked' }],
         reviewDecisionId: 'legacy-untracked',
-        lifecycleStatus: 'automatically_extracted_unverified',
+        lifecycleStatus: 'user_confirmed_unverified',
         status: 'paused',
         maturity: 'seed',
         version: '1',

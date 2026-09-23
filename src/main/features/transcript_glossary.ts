@@ -18,6 +18,12 @@
  *
  * 本模块只做"词表数据 + 归一化 + 风险分级 + 迁移"，不含扫描/替换
  * （见 transcript_auto_correct.ts）与产物/回滚（见 transcript_correction_runs.ts）。
+ *
+ * ── 关于"模型候选"（2026-09-20 起）────────────────────────────────────
+ * 候选区（`candidates` 数组 / `adoptCandidate` 等）已**整体移除**：模型候选改为直接
+ * 并入扫描候选列表，人勾选即确认；确认应用时经 `rememberConfirmedPairs` 以
+ * `source: 'meeting_accept'` 记入词表（作用域收窄到当前文档）。
+ * 于是词表里只剩一种东西：**人确认过的** `wrong → correct`。
  */
 
 import * as fs from 'node:fs';
@@ -39,7 +45,6 @@ export type EntryStatus = 'active' | 'paused';
 export type OwnerScope = 'personal' | 'team' | 'org';
 export type EntrySource = 'manual' | 'meeting_accept' | 'ontology_seed' | 'import';
 export type CreatedBy = 'manual' | 'harvest' | 'import';
-
 export interface GlossaryScope {
   /** 允许生效的文档 id（空数组 = 不按文档限制）。 */
   docIds: string[];
@@ -95,7 +100,7 @@ export interface GlossaryEntry {
 }
 
 export interface GlossaryFile {
-  version: 2;
+  version: 4;
   uid: string;
   entries: GlossaryEntry[];
   meta: {
@@ -105,6 +110,7 @@ export interface GlossaryFile {
     queryRewrite?: boolean;
   };
 }
+
 
 export interface UpsertEntryInput {
   wrong?: unknown;
@@ -117,6 +123,12 @@ export interface UpsertEntryInput {
   contextDeny?: unknown;
   contextAllow?: unknown;
   scope?: unknown;
+  /**
+   * 创建上下文：未显式给 `scope` 时用它决定默认作用域（本文档 / 本场景）。
+   * 不给就会被兜底成全局规则——那正是作用域机制要防的事故，所以调用方应当传。
+   */
+  docId?: unknown;
+  scenarioTags?: unknown;
   source?: unknown;
   ownerScope?: unknown;
   ontologyRef?: unknown;
@@ -131,7 +143,7 @@ export interface UpsertResult {
   skippedReason?: 'pure_digit_variant';
 }
 
-const GLOSSARY_VERSION = 2 as const;
+const GLOSSARY_VERSION = 4 as const;
 const MAX_ENTRIES = 2000;
 const MAX_WRONG_LEN = 80;
 const MAX_CORRECT_LEN = 200;
@@ -332,7 +344,7 @@ export function loadGlossary(userId: string): GlossaryFile {
   }
   if (record.version === 1 || typeof record.version !== 'number') {
     const migrated = migrateGlossaryV1ToV2(raw as { entries?: unknown; meta?: unknown }, userId);
-    log.info('glossary migrated to v2', { entries: migrated.entries.length });
+    log.info('glossary migrated from v1 to current', { version: migrated.version, entries: migrated.entries.length });
     saveGlossary(userId, migrated);
     return migrated;
   }
@@ -457,6 +469,64 @@ export function listEntries(
 
 export function findEntry(userId: string, id: string): GlossaryEntry | null {
   return loadGlossary(userId).entries.find((e) => e.id === id) ?? null;
+}
+
+/**
+ * 把**已确认应用**的 `wrong → correct` 对记进词表（source: meeting_accept）。
+ *
+ * 为什么放在这里：'meeting_accept' 这个 source 一直是"词表里预留、但全仓库没人发过"
+ * 的值（见 upsertEntry 里那段注释——它曾经因此让每个新词条都变成全局规则）。
+ * 现在由"扫描里勾选并应用了模型候选"来发它：人点了勾、正文里真的换了，才算确认。
+ *
+ * 作用域刻意收窄到**当前文档**（传 `docId` ⇒ upsertEntry 走"仅本文档"分支）：
+ * 一次会议里确认的写法不等于全局规则，这正是那份事故注释要防的事。
+ */
+export function rememberConfirmedPairs(
+  userId: string,
+  pairs: Array<{ wrong: string; correct: string }>,
+  context: { docId?: string } = {},
+): { created: number; updated: number; skipped: number } {
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  const docId = typeof context.docId === 'string' ? context.docId.trim() : '';
+  // 作用域必须**显式给**。`upsertEntry` 里 `source === 'meeting_accept'` 只会把
+  // `global` 置为 false，却不动 `docIds`/`scenarioTags`——那样得到的条目
+  // `scopeAllows` 恒为 false，等于一条**永不命中的死规则**（这也正是
+  // 'meeting_accept' 这个 source 一直没有任何调用方的真正原因）。
+  if (!docId) {
+    // 没有文档作用域时宁可如实跳过，也不要写死条目。
+    return { created: 0, updated: 0, skipped: (pairs || []).length };
+  }
+  const scope = { docIds: [docId], scenarioTags: [] as string[], global: false };
+  const seen = new Set<string>();
+  for (const pair of pairs || []) {
+    const wrong = String(pair?.wrong ?? '').trim();
+    const correct = String(pair?.correct ?? '').trim();
+    if (!wrong || !correct) {
+      skipped += 1;
+      continue;
+    }
+    const key = `${foldText(wrong).trim()}|${foldText(correct).trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const result = upsertEntry(userId, {
+        wrong,
+        correct,
+        source: 'meeting_accept',
+        scope,
+      });
+      if (!result.entry) skipped += 1;
+      else if (result.created) created += 1;
+      else updated += 1;
+    } catch (error) {
+      // 单条不合法（超长/空）不该让整次应用失败：如实计入 skipped。
+      log.warn('remember confirmed pair failed', { error: (error as Error).message });
+      skipped += 1;
+    }
+  }
+  return { created, updated, skipped };
 }
 
 /** 作用域选择（面板「接受」动作的范围，方案 §七）。 */
@@ -680,9 +750,34 @@ export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResu
 
   const source = normalizeSource(input.source);
   const scope = normalizeScope(input.scope);
-  // 会议中"顺手确认"的词条默认只在本次文档/场景生效；显式 hand-add 的才算全局。
   if (!input.scope) {
-    scope.global = source !== 'meeting_accept';
+    if (existingIndex >= 0) {
+      // 更新已有词条时保持其原有作用域：一次编辑不该把它悄悄放宽成全局。
+      Object.assign(scope, file.entries[existingIndex].scope);
+    } else {
+      // 未显式给作用域时的兜底：有文档 → 仅本文档；有场景标签 → 仅本场景；
+      // 两者都没有才退到全局。
+      //
+      // 此前这里判断 `source !== 'meeting_accept'`，但全仓库没有任何调用方发送过该
+      // source（面板发 'manual'、本体桥接发 'ontology_seed'）⇒ 判断恒真 ⇒ 每个新词条
+      // 都成了全局规则，等于把 transcript_auto_correct 记录的事故重新引入
+      // （一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）。
+      const contextDocId = typeof input.docId === 'string' && input.docId.trim() ? input.docId.trim() : '';
+      const contextTags = Array.isArray(input.scenarioTags)
+        ? input.scenarioTags.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 50)
+        : [];
+      if (contextDocId) {
+        scope.docIds = [contextDocId];
+        scope.scenarioTags = [];
+        scope.global = false;
+      } else if (contextTags.length) {
+        scope.docIds = [];
+        scope.scenarioTags = contextTags;
+        scope.global = false;
+      } else {
+        scope.global = true;
+      }
+    }
   }
 
   const entry: GlossaryEntry = {
@@ -776,6 +871,13 @@ export function recordReplacement(
 
 // ── 导入 / 导出 ─────────────────────────────────────────────────────────
 
+/**
+ * 导出包格式版本：与词表**文件**版本（`GLOSSARY_VERSION`）是两件事——
+ * 导出包只带词条、不带候选区，不跟着文件版本走。此前两者共用一个常量，
+ * 文件版本一升就把导出包的契约类型也跟着改，属于误耦合，这里显式拆开。
+ */
+const GLOSSARY_PACK_VERSION = 2 as const;
+
 /** 导出：人名类默认不导出（披露红线），可用 includePeople 显式放开。 */
 export function exportGlossary(
   userId: string,
@@ -789,7 +891,7 @@ export function exportGlossary(
       riskLevel: e.riskLevel, boundary: e.boundary, contextDeny: e.contextDeny, contextAllow: e.contextAllow,
       scope: e.scope, ownerScope: e.ownerScope, source: e.source,
     }));
-  return { version: GLOSSARY_VERSION, exportedAt: Date.now(), entries };
+  return { version: GLOSSARY_PACK_VERSION, exportedAt: Date.now(), entries };
 }
 
 export function importGlossary(

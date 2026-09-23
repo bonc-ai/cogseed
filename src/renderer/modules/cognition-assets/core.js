@@ -46,6 +46,109 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;'));
   NS.esc = esc;
 
+  /* ── 显示截断（对齐后端 catalogTruncate）：截断、去尾标点、省略号 ── */
+  function truncateText(value, limit) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= limit) return text;
+    return text.slice(0, limit).replace(/[，、；：,;:\-—\s]+$/, '') + '…';
+  }
+  NS.truncateText = truncateText;
+
+  /* ── 语义融合（移植自 statement-fusion.ts）：句级三档融入 ──
+   * 重述（重叠≥0.50 且新句更长/近全等）→ 保留更长；
+   * 改写（重叠≥0.45）→ 新替旧；
+   * 增量 → 追加到尾部。截断 4000 字。 */
+  const FUSION_STATEMENT_LIMIT = 4000;
+  const RESTATED_OVERLAP = 0.50;
+  const RESTATED_LENGTH_RATIO = 1.8;
+  const RESTATED_NEAR_TOTAL = 0.75;
+  const REWRITE_OVERLAP = 0.45;
+
+  function fusionBigrams(text) {
+    const normalized = String(text || '').replace(/\s+/g, '');
+    const grams = new Set();
+    for (let i = 0; i + 1 < normalized.length; i += 1) grams.add(normalized.slice(i, i + 2));
+    return grams;
+  }
+  function fusionOverlapCoefficient(left, right) {
+    const a = fusionBigrams(left), b = fusionBigrams(right);
+    if (!a.size || !b.size) return 0;
+    let shared = 0;
+    a.forEach(function (g) { if (b.has(g)) shared += 1; });
+    return shared / Math.min(a.size, b.size);
+  }
+  function fusionSplitSentences(text) {
+    return String(text || '').replace(/([。！？!?；;\n])/g, '$1\u0001').split('\u0001').map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  function fuseStatements(oldStatement, incoming) {
+    const oldSentences = fusionSplitSentences(oldStatement);
+    const newSentences = fusionSplitSentences(incoming);
+    if (!oldSentences.length) {
+      const statement = String(incoming || '').trim().slice(0, FUSION_STATEMENT_LIMIT);
+      return { statement: statement, added: statement ? [statement] : [], replaced: [], keptCount: 0, truncated: (incoming || '').trim().length > FUSION_STATEMENT_LIMIT };
+    }
+    if (!newSentences.length) return { statement: oldStatement, added: [], replaced: [], keptCount: oldSentences.length, truncated: false };
+    const working = oldSentences.slice();
+    for (const sentence of newSentences) {
+      let bestIndex = -1, bestOverlap = 0;
+      for (let i = 0; i < working.length; i += 1) {
+        const overlap = fusionOverlapCoefficient(sentence, working[i]);
+        if (overlap > bestOverlap) { bestOverlap = overlap; bestIndex = i; }
+      }
+      if (bestIndex === -1) { working.push(sentence); continue; }
+      const lengthRatio = sentence.length / working[bestIndex].length;
+      if ((bestOverlap >= RESTATED_OVERLAP && lengthRatio >= RESTATED_LENGTH_RATIO) || bestOverlap >= RESTATED_NEAR_TOTAL) {
+        if (sentence.length > working[bestIndex].length) working[bestIndex] = sentence;
+      } else if (bestOverlap >= REWRITE_OVERLAP) {
+        working[bestIndex] = sentence;
+      } else {
+        working.push(sentence);
+      }
+    }
+    const joined = working.join('');
+    return { statement: joined.slice(0, FUSION_STATEMENT_LIMIT), replaced: [], keptCount: working.length, truncated: joined.length > FUSION_STATEMENT_LIMIT };
+  }
+  NS.fuseStatements = fuseStatements;
+  NS.resolveMergeChainTarget = resolveMergeChainTarget;
+  NS.isAutoCaptureEligible = isAutoCaptureEligible;
+  NS.dedupRefs = dedupRefs;
+
+  /* ── 归并链跟随（对齐后端 promote 实时语义查重）：目标 archived 时 ──
+   * 落到 mergedIntoAssetId 指向的最终存活目标，防止链式归并死循环。 */
+  function resolveMergeChainTarget(asset, allAssets) {
+    let cur = asset;
+    const seen = new Set([String(cur.id)]);
+    while (cur.mergedIntoAssetId) {
+      const next = (allAssets || []).find(function (a) { return String(a.id) === String(cur.mergedIntoAssetId); });
+      if (!next || seen.has(String(next.id))) break;
+      seen.add(String(next.id));
+      cur = next;
+    }
+    return cur;
+  }
+
+  /* ── 自动采纳门禁（对齐 isAutoCaptureEligible）：只有 pending_review ──
+   * 且非高风险的候选可自动写入；其余转待确认由用户手动处理。 */
+  function isAutoCaptureEligible(candidate) {
+    const caps = candidate.capabilities || {};
+    return String(candidate.status || '') === 'pending_review'
+      && String(candidate.risk || 'low') !== 'high'
+      && (caps.canConfirm !== false);
+  }
+
+  /* ── 证据引用去重（对齐 normalizeCognitionSourceRefs seen-set）── */
+  function dedupRefs(refs) {
+    const seen = new Set();
+    const out = [];
+    for (const ref of refs || []) {
+      const key = String(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(ref);
+    }
+    return out;
+  }
+
   const toArr = (value, keys) => {
     if (Array.isArray(value)) return value;
     for (const key of keys || []) {
@@ -117,10 +220,22 @@
     candidates: [],
     captures: [],
     captureCounts: {},
-    /** 后端分桶计数；缺字段（旧主进程）时为 null，视图走前端兜底现算——
-     *  绝不能用全 0 对象冒充，否则版本错配时计数显示成 0 而不是兜底值。 */
-    captureBuckets: null,
     captureSettings: null,
+    /** 资产详情按需拉的版本链（版本组 2026-09-16）：{assetId, versions}。 */
+    assetVersions: null,
+    /** KSTAR 溯源（2026-09-17）：{[episodeId]: {goal,status,at}} 摘要缓存；
+     *  kstarEpisode 为点开中的单条详情 {episodeId, episode, review}。 */
+    kstarSummaries: null,
+    /** 已请求过且拿到响应的 kse id（2026-09-18）：区分「还没拉到」与「确实
+     *  没有」——前者维持兜底文案，后者如实显示「来源记录不可用」；顺带
+     *  止住缺失 id 永远进不了缓存、每次 notify 重发同一次 IPC 的循环。 */
+    kstarSummariesSettled: [],
+    kstarEpisode: null,
+    /** 正被"模型自选"挂着的资产 id（2026-09-18）：面板目录视图据此标"模型挂着"，
+     *  用户不必翻会话才知道模型给哪个任务挂了东西。 */
+    modelSelectedAssetIds: [],
+    /** KSTAR 任务复盘列表（kstar-episodes tab）：kstar.episodes.list 的记录。 */
+    kstarEpisodes: null,
     sources: [],
     tree: null,
     proofs: [],
@@ -130,8 +245,10 @@
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' },
+    route: { name: 'tree', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '', ontologyBox: '' },
     backStack: [],
+    /** 上一帧的路由名：渲染层据此判断「离开 ontology 页」需要先归还本体 section。 */
+    prevRouteName: 'tree',
   };
   NS.store = store;
 
@@ -139,7 +256,10 @@
   NS.stats = function stats() {
     const s = store;
     const confirmed = s.assets.filter((a) => String(a.status || 'active') !== 'archived').length;
-    const pending = s.candidates.filter((c) => (c.capabilities && c.capabilities.countsAsPending) || false).length;
+    // 待确认口径（2026-09-16 B1 统一）：需要判断且未被"稍后处理"静音——
+    // 与 views.candidateAwaiting 同一份口径（countsAsPending && !isSnoozed），
+    // deferred 不再占「待确认」名额（三套口径 7/5/0 分叉的修复）。
+    const pending = s.candidates.filter((c) => (c.capabilities && c.capabilities.countsAsPending) && !(c.capabilities && c.capabilities.isSnoozed)).length;
     const validated = s.assets.filter((a) => a.maturity === 'effectiveness_validated').length;
     const transferOk = s.assets.filter((a) => a.maturity === 'transfer_validated' || a.maturity === 'effectiveness_validated').length;
     const sourceIssues = s.sources
@@ -147,8 +267,11 @@
       // 用户主动暂停的来源（reason=source_paused）不算"需要处理"——用户
       // 自己停的，再提示他去处理自相矛盾；连接器断开等真故障的 paused
       // 仍计入（2026-09-14 修：实机出现 [paused] source_paused 假警报）。
-      .filter((item) => item.status === 'failed'
-        || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused')).length;
+      // 执行失败轮次同样不算（2026-09-16）：与 views.sourceItemNeedsAttention
+      // 同口径，agent 执行失败不是用户可修复的来源故障。
+      .filter((item) => String(item.kind || '') !== 'execution_evaluation'
+        && (item.status === 'failed'
+          || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused'))).length;
     const failedTasks = Number(s.captureCounts && s.captureCounts.failed || 0);
     const coveredAssets = new Set(s.proofs.map((p) => String((p.refs || {}).assetId || '')).filter(Boolean)).size;
     const attention = s.assets.filter((a) => String(a.status || 'active') === 'paused' || String(a.status || '') === 'archived').length;
@@ -171,18 +294,14 @@
         // 记录）。后端保证静默记录零候选读取，这里多拉的记录不产生模型开销。
         api.soft('recall.captures.list', { limit: 40, scope: 'all' }, {}),
         api.soft('recall.captures.settings.get', {}, {}),
-        api.soft('recall.sources.list', {}, {}),
+        // limit:100=IPC 上限（审计 C1 修复，2026-09-16）：此前不传 limit 走
+        // 后端默认 25，会话超 25 个后整理页静默丢行。满 100 时视图侧另有提示。
+        api.soft('recall.sources.list', { limit: 100 }, {}),
       ]);
       store.assets = toArr(assets, ['assets', 'items']);
       store.candidates = toArr(candidates, ['candidates', 'items']);
       store.captures = toArr(captures, ['items', 'captures', 'tasks']);
       store.captureCounts = (captures && captures.counts) || {};
-      // 后端 buckets 缺席（旧主进程/旧网关）时保持 null，交给视图现算：
-      // 曾因 `|| {全0}` 把「缺字段」当「全为 0」，计数显示错误。
-      const remoteBuckets = captures && captures.buckets;
-      store.captureBuckets = remoteBuckets && Number.isFinite(Number(remoteBuckets.attention))
-        ? remoteBuckets
-        : null;
       store.captureSettings = (settings && settings.settings) || settings || null;
       store.sources = toArr(sources, ['groups', 'sources']);
       // 证明链服务资产详情内的使用记录区与成熟度展示，失败不阻塞主快照。
@@ -237,18 +356,154 @@
     NS.notify();
   };
 
+  /** 资产详情按需拉版本链（版本组 2026-09-16）。按资产缓存；失败降级为
+   *  空列表（版本链区静默不渲染）。 */
+  NS.loadAssetVersions = async function loadAssetVersions(assetId) {
+    const id = String(assetId || '');
+    if (!id || (store.assetVersions && store.assetVersions.assetId === id)) return;
+    store.assetVersions = { assetId: id, loading: true };
+    NS.notify();
+    let versions = [];
+    let usage = [];
+    try {
+      const result = await api.call('recall.assets.versions.list', { assetId: id });
+      versions = (result && result.versions) || [];
+      usage = (result && result.usage) || [];
+    } catch (error) {
+      versions = [];
+      usage = [];
+    }
+    if (!store.assetVersions || store.assetVersions.assetId !== id) return;
+    store.assetVersions = { assetId: id, versions, usage };
+    NS.notify();
+  };
+
+  /** 批量补 kse 摘要（2026-09-18 抽共用入口）：结果并入缓存；本次请求里
+   *  响应没有的 id 记进 settled——没有就是没有，chip 据此如实显示「来源
+   *  记录不可用」；失败不记（读不到 ≠ 不存在，保持兜底文案）。 */
+  async function fetchKstarEpisodeSummaries(rawIds) {
+    const wanted = [...new Set((rawIds || []).map(String).filter((id) => id.startsWith('kse-')))];
+    if (!wanted.length) return;
+    const have = store.kstarSummaries || {};
+    const settled = store.kstarSummariesSettled || [];
+    const missing = wanted.filter((id) => !have[id] && !settled.includes(id));
+    if (!missing.length) return;
+    try {
+      const result = await api.call('recall.kstar.episodes.summaries', { ids: missing });
+      const summaries = (result && result.summaries) || [];
+      store.kstarSummaries = {
+        ...(store.kstarSummaries || {}),
+        ...Object.fromEntries(summaries.map((s) => [String(s.id), s])),
+      };
+      const returned = new Set(summaries.map((s) => String(s.id)));
+      store.kstarSummariesSettled = [...new Set([...(store.kstarSummariesSettled || []), ...missing.filter((id) => !returned.has(id))])];
+      NS.notify();
+    } catch (error) {
+      // 摘要缺席只影响 chip 文案，不阻断详情；失败不记 settled。
+    }
+  }
+
+  /** KSTAR 溯源（2026-09-17）：资产详情证据含 kse 引用时批量拉任务目标
+   *  摘要（chip 显示用）；失败静默（chip 退回占位标题）。
+   *  2026-09-18 修：此前只取资产级 evidenceRefs，版本块渲染读的却是
+   *  snapshot.evidenceRefs——历史版本的 kse id 从没拉过摘要，永远命中不了
+   *  缓存。现在把已加载版本的快照证据一并纳入（版本异步到达后，onChange
+   *  会再触发一次，新 id 自然补拉）。 */
+  NS.loadKstarEpisodeSummaries = async function loadKstarEpisodeSummaries(assetId) {
+    const id = String(assetId || '');
+    const asset = store.assets.find((a) => String(a.id) === id);
+    if (!asset) return;
+    const refs = [...(asset.evidenceRefs || [])];
+    if (store.assetVersions && String(store.assetVersions.assetId || '') === id) {
+      for (const version of store.assetVersions.versions || []) {
+        refs.push(...((version.snapshot && version.snapshot.evidenceRefs) || []));
+      }
+    }
+    await fetchKstarEpisodeSummaries(refs.map((ref) => String(ref.id || '')));
+  };
+
+  /** 模型自选挂载的资产（2026-09-18）：confirmed 的 model_selected 投影里
+   *  出现的资产 id 集合；失败静默（标记缺席不影响目录）。 */
+  NS.loadModelSelectedAssets = async function loadModelSelectedAssets() {
+    try {
+      const result = await api.call('recall.projections.list', { status: 'confirmed', limit: 100 });
+      const projections = (result && result.projections) || [];
+      const ids = [];
+      for (const projection of projections) {
+        if (String(projection.authorization || '') !== 'model_selected') continue;
+        for (const assetId of projection.assetIds || []) ids.push(String(assetId));
+      }
+      const next = [...new Set(ids)];
+      // 防重入（2026-09-18 P0 修复）：onChange 每次 notify 都会调本函数——若
+      // 无条件再 notify 就成了"加载→重画→再加载"死循环，整页被拖死。集合没变
+      // 就直接返回（对照 loadKstarEpisodes 的守卫）。
+      const prev = Array.isArray(store.modelSelectedAssetIds) ? store.modelSelectedAssetIds : [];
+      const changed = prev.length !== next.length || next.some((id) => !prev.includes(id));
+      if (!changed) return;
+      store.modelSelectedAssetIds = next;
+      NS.notify();
+    } catch (error) {
+      // 标记拿不到不影响目录本身。
+    }
+  };
+
+  /** 按 kse id 批量补复盘摘要（候选详情页用：候选不是资产，走不了
+   *  loadKstarEpisodeSummaries 的按资产入口——候选的 kse 引用来自
+   *  sourceRefs/evidenceRefs）。 */
+  NS.loadKstarEpisodeSummariesByIds = async function loadKstarEpisodeSummariesByIds(ids) {
+    await fetchKstarEpisodeSummaries(ids);
+  };
+
+  /** 点开单条任务复盘详情（就地展开块）。 */
+  NS.loadKstarEpisode = async function loadKstarEpisode(episodeId) {
+    const id = String(episodeId || '');
+    if (!id) return;
+    store.kstarEpisode = { episodeId: id };
+    NS.notify();
+    let data = null;
+    try {
+      data = await api.call('recall.kstar.episode.read', { episodeId: id });
+    } catch (error) {
+      data = null;
+    }
+    if (!store.kstarEpisode || String(store.kstarEpisode.episodeId) !== id) return;
+    store.kstarEpisode = { episodeId: id, episode: data && data.episode, review: data && data.review };
+    NS.notify();
+  };
+
+  /** KSTAR 任务复盘列表（kstar-episodes tab）：一次性拉最近复盘过的任务。 */
+  NS.loadKstarEpisodes = async function loadKstarEpisodes(force) {
+    if (!force && Array.isArray(store.kstarEpisodes)) return;
+    const prev = store.kstarEpisodes;
+    store.kstarEpisodes = [];
+    try {
+      const result = await api.soft('kstar.episodes.list', { limit: 50 }, { episodes: [] });
+      const episodes = (result && (result.episodes || result.items)) || [];
+      store.kstarEpisodes = [...episodes].sort((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')));
+    } catch (error) {
+      // 列表缺席只影响 tab 内容，恢复上一份避免整页空白。
+      store.kstarEpisodes = prev || [];
+    }
+    NS.notify();
+  };
+
   /* ────────────────────────── 路由 ────────────────────────── */
 
-  /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab——我的认知 / 待我处理 /
-   * 整理。「我的认知」固定首位（子安拍板）。tab 只留标题（描述小字已删）。
-   * 使用记录并入资产详情、经验（KSTAR）与来源健康常态页砍除（来源改为
-   * 异常驱动，只在待我处理出现）。 */
+  /* 2026-09-15 全模块重构：按最小闭环收敛为三个 tab;使用记录并入资产详情、
+   * 经验(KSTAR)与来源健康常态页砍除(来源改为异常驱动,只在待我处理出现)。 */
+  /* 2026-09-21 HTML 原型 v7 迁移：三页签扩成五页签——认知树 / 个人本体 /
+   * 我的认知 / 待我处理 / 整理。默认落地认知树(原型的信息架构：树是第一眼)。
+   * 「我的认知」不再承载树图主界面,树拆成独立全屏页(Phase 3)。 */
   const TABS = [
+    { id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树' },
+    { id: 'ontology', titleKey: 'cognition.tab_ontology', title: '个人本体' },
     { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
     { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
     { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
   ];
   NS.TABS = TABS;
+  // 归边判定 NS.isKstarAsset / NS.isKstarCandidate 由 views.js 定义
+  //（2026-09-17 B 档两线分开；渲染层唯一消费方，跟着渲染代码走）。
 
   const router = {
     go(next, options) {
@@ -256,13 +511,14 @@
       const current = store.route;
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
       // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '' }, next);
+      const merged = Object.assign({ name: 'tree', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '', ontologyBox: '' }, next);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
+      // 滚动不在这里清零（2026-09-17 修）：views.render 的 restoreScroll 按
+      // routeKey 判定——页面级路由变了回顶，就地展开（使用记录/版本详情/
+      // KSTAR 复盘）保持原位。此前无条件清零会把展开后的视口打回页面顶部。
       NS.notify();
-      const main = document.getElementById('ca-scroll');
-      if (main) main.scrollTop = 0;
     },
     back() {
       const prev = store.backStack.pop();
@@ -299,6 +555,8 @@
       '内容被认知安全闸门拦下，不能沉淀为资产。'],
     recall_candidate_unknown_source: ['cognition.candidate_error_unknown_source',
       '有一条证据引用在来源列表里找不到，不能保存。证据只能从真实来源中选取。'],
+    recall_candidate_similar_asset: ['cognition.candidate_error_similar_asset',
+      '检测到与现有资产高度相似——确认是新条目，还是同一条的修订（改为更新）。'],
     recall_capture_not_review_ready: ['cognition.candidate_error_capture_not_review_ready',
       '它所属的沉淀任务还没到可复核状态，稍后再确认。'],
     recall_capture_writing: ['cognition.candidate_error_capture_writing',
@@ -319,6 +577,12 @@
       '这段判断是在评价这条候选本身，不是可复用的内容。'],
     type_conflicts_with_existing: ['cognition.candidate_block_type_conflicts_with_existing',
       '同一句话已经以另一种类型存在，分类不可信；先裁定它到底属于哪一类。'],
+  };
+
+  /** 单条晋升阻断原因 → 用户文案（候选确认卡内联说明用）。 */
+  NS.promotionBlockText = function promotionBlockText(reason) {
+    const entry = RECALL_PROMOTION_BLOCK_TEXTS[reason];
+    return entry ? T(entry[0], entry[1]) : '';
   };
 
   /** 把 IPC 失败体（{code, error, promotionReasons}）翻成给用户看的话。 */
@@ -366,6 +630,9 @@
     resume: 'recall.candidates.resume',
   };
 
+  // originKindOf 已随出身收敛退役（2026-09-20）：「模型记的=已确定」，
+  // 出身三值不再是显示或行为维度；出身章与转正动作一并移除。
+
   const actions = {
     /** 采纳：可选携带编辑后的字段（adjust=true 时从表单读取）。 */
     async adoptCandidate(candidateId, formValues) {
@@ -395,7 +662,63 @@
         await alertUser(T('cognition.candidate_scope_required', '先填写作用范围：没有范围的资产不会被带入任何任务。'));
         return;
       }
-      const result = await api.call('recall.candidates.promote', { candidateId, ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}) });
+      // 版本组防分裂（2026-09-16）：create 候选与现有资产语义高度相似时后端
+      // 拦下并返回专用错误码——问用户"仍存新条目"还是回来改为更新。
+      const promote = (force) => api.call('recall.candidates.promote', { candidateId, forceCreateSimilar: force, ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}) });
+      let result;
+      try {
+        result = await promote(false);
+      } catch (error) {
+        if (error && error.code === 'recall_candidate_similar_asset') {
+          const info = String(error.message || '').replace(/^similar asset [^ ]+ /, '').replace(/ \(score [\d.]+\)$/, '');
+          // 相似确认改双选（2026-09-17 报告建议 F）：此前用「确认=新条目 /
+          // 取消=改为更新」——取消不等于取消，用户凭"别乱存"的本能点取消
+          // 会被推进一个没预期的流程。uiChoice 三义各归其位：存为新条目 /
+          // 更新到该条 / 先不动（真取消）。
+          let choice = null;
+          if (typeof window.uiChoice === 'function') {
+            choice = await window.uiChoice({
+              title: T('cognition.candidate_similar_choice_title', '检测到与现有资产高度相似'),
+              message: T('cognition.candidate_similar_choice_message', '这条候选与「{info}」高度相似。要怎么处理？', { info }),
+              choices: [
+                { id: 'create', label: T('cognition.candidate_similar_choice_create', '存为新条目') },
+                { id: 'update', label: T('cognition.candidate_similar_choice_update', '更新到该条资产'), style: '' },
+              ],
+              cancelLabel: T('cognition.candidate_similar_choice_cancel', '先不动'),
+            });
+          } else {
+            choice = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。确认 = 保存为新条目；取消 = 改为对它的更新。', { info })) ? 'create' : 'update';
+          }
+          if (choice === 'create') {
+            result = await promote(true);
+          } else if (choice === 'update') {
+            const match = String(error.message || '').match(/^similar asset ([A-Za-z0-9-]+)/);
+            const targetAssetId = match ? match[1] : '';
+            if (targetAssetId) {
+              await api.call('recall.candidates.update', {
+                candidateId,
+                judgment: candidate.judgment,
+                value: candidate.value || '',
+                summary: candidate.summary || '',
+                suggestedType: candidate.suggestedType,
+                suggestedScope: candidate.suggestedScope || 'general',
+                suggestedAction: 'update',
+                targetAssetId,
+                risk: candidate.risk || 'low',
+                sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
+                evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
+              });
+              toast(T('cognition.candidate_switched_to_update', '已改为更新——请对照差异后确认'));
+              await NS.reload();
+            }
+            return;
+          } else {
+            return; // 先不动：真正的取消，什么都不发生。
+          }
+        } else {
+          throw error;
+        }
+      }
       // 晋升可能改变个人画像投影：异步刷新本体，失败只提醒不阻断（资产已落库）。
       void (async () => {
         if (typeof window.refreshPersonalOntology !== 'function') return;
@@ -407,6 +730,8 @@
       })();
       if (result && result.assetId) {
         toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
+        // 检修剪：update 候选确认会 bump 目标资产版本——曾缓存的版本链失效。
+        if (candidate && candidate.targetAssetId) store.assetVersions = null;
         router.go({ name: 'overview', assetId: result.assetId });
       } else {
         toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
@@ -418,7 +743,18 @@
       const channel = CANDIDATE_CHANNELS[action];
       if (!channel) return;
       await api.call(channel, { candidateId });
-      toast({ reject: T('cognition.candidate_rejected', '已拒绝'), defer: T('cognition.candidate_deferred', '已稍后处理'), ignore: T('cognition.candidate_ignored', '已忽略') }[action] || T('common.done', '已完成'));
+      if (action === 'defer') {
+        // 「稍后处理」的提示与导航随语境分流（2026-09-16 子安口径）：
+        // 整理页=内容被送进待我处理，提示去向；待我处理页内=人已在此，
+        // "已进入待处理"没有信息量，处理完这条直接回列表即反馈。
+        if (String(store.route && store.route.name || '') === 'review') {
+          router.go({ name: 'review' });
+        } else {
+          toast(T('cognition.candidate_deferred', '已进入待处理'));
+        }
+      } else {
+        toast({ reject: T('cognition.candidate_rejected', '已拒绝'), ignore: T('cognition.candidate_ignored', '已忽略') }[action] || T('common.done', '已完成'));
+      }
       await NS.reload();
     },
     async rateProof(proofId, feedback, extra) {
@@ -444,8 +780,180 @@
         if (!ok) return;
       }
       await api.call(channel, { assetId });
-      toast(T('cognition.asset_action_done', '已完成'));
+      // 删除给时间感（报告建议 G）：保留期常量 30 天在后端标注 TODO(产品确
+      // 认)，文案先按现值显示，定稿后同步。
+      toast(action === 'delete'
+        ? T('cognition.asset_delete_done_retention', '已删除，30 天内可在「已删除」中恢复')
+        : T('cognition.asset_action_done', '已完成'));
       if (action === 'delete' || action === 'purge') router.go({ name: 'overview' });
+      await NS.reload();
+    },
+    /** 选用历史版本为在用版（版本组 2026-09-16）：切指针不产生新版本号。 */
+    async selectAssetVersion(assetId, version) {
+      await api.call('recall.assets.versions.select', { assetId, version });
+      toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
+      store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 真删单个版本（2026-09-17）：物理移除该版本记录；引用它的已确认注入
+     *  在服务端冻结内容副本后继续可用。危险操作，双按钮确认。 */
+    async deleteAssetVersion(assetId, version) {
+      const ok = await confirmUser(T('cognition.asset_version_delete_confirm',
+        '永久删除 v{n}，不可恢复。引用过它的已确认注入会继续使用保留的内容副本。确认删除？', { n: String(version) }), true);
+      if (!ok) return;
+      await api.call('recall.assets.versions.delete', { assetId, version });
+      toast(T('cognition.asset_version_deleted', '已删除 v{n}', { n: String(version) }));
+      if (String(store.route.assetVersionId || '') === String(version)) {
+        router.go({ name: 'overview', assetId: String(store.route.assetId || ''), assetVersionId: '' }, { replace: true });
+      }
+      store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 基于某一版修改（2026-09-17 子安口径：编辑入口只在版本行）：历史版
+     *  先设为在用（select 通道，切指针不产新版本），再进入编辑——"切回+
+     *  编辑"合一步，每个版本都能成为编辑起点。 */
+    async editFromVersion(assetId, version) {
+      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      if (!asset) return;
+      if (String(asset.activeVersion || asset.version) !== String(version)) {
+        await api.call('recall.assets.versions.select', { assetId, version });
+        toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
+        store.assetVersions = null;
+        await NS.reload();
+      }
+      router.go({ name: 'overview', assetId, assetVersionId: '', assetVersionDiff: '', assetEdit: '1' }, { replace: true });
+    },
+    /** 族改名（2026-09-22 快赢）：组头内联输入 → recall.families.rename
+     *  批量写族内全部成员的 familyName；空名=恢复默认短名。 */
+    async renameFamily(anchorAssetId) {
+      const input = document.querySelector(`[data-family-name]`);
+      const name = input ? String(input.value || '').trim() : '';
+      await api.call('recall.families.rename', { anchorAssetId, name });
+      toast(name ? T('cognition.family_renamed', '已命名为「{name}」', { name }) : T('cognition.family_name_cleared', '已恢复默认名'));
+      router.go({ name: 'overview', familyRename: '' }, { replace: true });
+      await NS.reload();
+    },
+    async enterFamilyRename(anchorAssetId) {
+      router.go({ name: 'overview', familyRename: anchorAssetId }, { replace: true });
+    },
+    async exitFamilyRename() {
+      router.go({ name: 'overview', familyRename: '' }, { replace: true });
+    },
+    /** 用户主动使用（2026-09-19）：把这条资产钉到最近会话——confirmed 投影
+     *  + 投影卡，下一轮起注入命中，卡上可撤销。lastConversationCid 由
+     *  state.js 记录（切面板不清空）；还没进过任何对话时给出口径提示。 */
+    async attachAssetToConversation(assetId) {
+      const cid = (typeof lastConversationCid !== 'undefined' && lastConversationCid) ? String(lastConversationCid) : '';
+      if (!cid) {
+        toast(T('cognition.asset_use_in_chat_no_chat', '还没有可用的对话——先在任意会话里说一句话，再回来钉它。'));
+        return;
+      }
+      const result = await api.call('recall.projections.attachToConversation', { assetId, conversationId: cid });
+      if (result && result.ok) {
+        toast(T('cognition.asset_use_in_chat_done', '已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。'));
+      }
+    },
+    // confirmAssetOrigin（转正）已随出身收敛退役（2026-09-20）：模型记的=已
+    // 确定，出身升格动作失去意义；views 侧按钮已删。
+    /** 手动编辑资产（2026-09-17 报告建议 A）：改动自己写的话不该以"系统先
+     *  产候选"为前提。与现值逐字段比对，无实际修改不提交——后端没有内容
+     *  等价检查，相同内容也会 bump 出空版本。 */
+    async editAsset(assetId) {
+      const card = document.querySelector('.ca-asset-edit');
+      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      if (!card || !asset) return;
+      const raw = (name) => { const el = card.querySelector(`[data-f="${name}"]`); return el ? String(el.value || '').trim() : ''; };
+      const splitList = (text) => (text ? String(text).split(/[、;；,，\n]/).map((s) => s.trim()).filter(Boolean) : []);
+      const payload = {
+        title: raw('title'),
+        statement: raw('statement'),
+        applicableWhen: splitList(raw('applicable')),
+        forbiddenWhen: splitList(raw('forbidden')),
+      };
+      // 谁能看见（2026-09-19 刀一·面板暴露）：scopePolicy 白名单的 Agent/空间
+      // 维度在此编辑；与现值不同才随保存提交（不产空版本），空输入＝清除限制。
+      const policy = asset.scopePolicy || {};
+      const visibleAgents = splitList(raw('visible-agents'));
+      const visibleSpaces = splitList(raw('visible-spaces'));
+      const visibilityChanged = JSON.stringify(visibleAgents) !== JSON.stringify(policy.agentIds || [])
+        || JSON.stringify(visibleSpaces) !== JSON.stringify(policy.workspaceIds || []);
+      if (visibilityChanged) {
+        payload.scopePolicy = {
+          ...(visibleAgents.length ? { agentIds: visibleAgents } : {}),
+          ...(visibleSpaces.length ? { workspaceIds: visibleSpaces } : {}),
+        };
+      }
+      const unchanged = payload.title === String(asset.title || '')
+        && payload.statement === String(asset.statement || '')
+        && JSON.stringify(payload.applicableWhen) === JSON.stringify((asset.applicableWhen || []))
+        && JSON.stringify(payload.forbiddenWhen) === JSON.stringify((asset.forbiddenWhen || []))
+        && !visibilityChanged;
+      const exitEdit = () => router.go({ name: 'overview', assetId, assetEdit: '' }, { replace: true });
+      if (unchanged) {
+        toast(T('cognition.asset_edit_unchanged', '内容没有变化，未保存'));
+        exitEdit();
+        return;
+      }
+      const result = await api.call('recall.assets.update', { assetId, ...payload, reason: 'user manual edit' });
+      const version = String((result && result.asset && result.asset.version) || '');
+      toast(T('cognition.asset_edit_saved', '已保存为新版本 v{n}', { n: version }));
+      store.assetVersions = null;
+      exitEdit();
+      await NS.reload();
+    },
+    /** 推荐卡「知道了」（2026-09-21 Phase 5 闭环）：确认已了解系统建议
+     *  （暂停/返工），后端清除 recommendedAction 并写 recommendation_cleared
+     *  审计。推荐是告知不是强制——确认只清卡，不改变资产状态。 */
+    async acknowledgeAssetRecommendation(assetId) {
+      const result = await api.call('recall.assets.update', {
+        assetId,
+        acknowledgeRecommendation: true,
+        reason: 'user acknowledged recommendation',
+      });
+      if (!result || !result.ok) return;
+      toast(T('cognition.asset_recommend_cleared', '已确认，推荐卡已清除'));
+      store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 两版合并为新版（2026-09-17 报告建议 H）：把所选版正文接在在用版正文
+     *  之后存为新版本（只合并正文，标题/范围取在用版）；合并后可用「编辑」
+     *  整理措辞。合成结果与在用版相同则不提交（后端无内容等价检查）。 */
+    async mergeAssetVersion(assetId, version) {
+      const state = store.assetVersions;
+      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      if (!state || state.assetId !== String(assetId) || !asset) return;
+      const pick = (v) => (state.versions || []).find((x) => String(x.version) === String(v));
+      const activeV = pick(asset.activeVersion || asset.version);
+      const targetV = pick(version);
+      if (!activeV || !targetV) return;
+      const activeText = String((activeV.snapshot && activeV.snapshot.statement) || '').trim();
+      const targetText = String((targetV.snapshot && targetV.snapshot.statement) || '').trim();
+      if (!targetText || targetText === activeText) {
+        toast(T('cognition.asset_version_merge_same', '所选版正文与在用版一致，无需合并'));
+        return;
+      }
+      const ok = await confirmUser(T('cognition.asset_version_merge_confirm',
+        '将把 v{n} 的正文接在在用版正文之后，保存为新版本；保存后可用「编辑」整理措辞。确认合并？', { n: String(version) }), true);
+      if (!ok) return;
+      const merged = `${activeText}\n\n${targetText}`;
+      const result = await api.call('recall.assets.update', {
+        assetId, statement: merged, reason: `merge versions v${String(asset.activeVersion || asset.version)}+v${String(version)}`,
+      });
+      toast(T('cognition.asset_edit_saved', '已保存为新版本 v{n}', { n: String((result && result.asset && result.asset.version) || '') }));
+      store.assetVersions = null;
+      await NS.reload();
+    },
+    /** 同义资产归并（2026-09-16 存量治理）：本条并入目标条目（版本链续接、
+     *  本条归档）。破坏性低但影响面大（两条合一），双重确认。 */
+    async mergeAssets(sourceAssetId, targetAssetId) {
+      const target = (store.assets || []).find((a) => String(a.id) === String(targetAssetId));
+      const ok = await confirmUser(T('cognition.asset_merge_confirm', '将把本条的全部历史版本并入「{title}」，本条归档不再单独显示。确认合并？', { title: (target && target.title) || targetAssetId }), true);
+      if (!ok) return;
+      await api.call('recall.assets.merge', { sourceAssetId, targetAssetId });
+      toast(T('cognition.asset_merge_done', '已合并为同一版本组'));
+      // 检修剪：target 的版本链缓存必须失效（曾在本次会话打开过它的详情）。
+      store.assetVersions = null;
+      router.go({ name: 'overview', assetId: targetAssetId });
       await NS.reload();
     },
     async sourceAction(kind, sourceId, action) {
@@ -482,12 +990,13 @@
       toast(T('common.done', '已完成'));
       await NS.reload();
     },
-    /** 批量控制：ids 由调用方收敛到「当前已加载且该动作可执行」的行（每条
-     *  立即整理都是一次模型额度消耗），确认弹窗在 app.js 写死条数。 */
+    /** 批量控制：ids 由调用方收敛到「当前已加载且该动作可执行」的行。只做
+     *  批量重试（2026-09-21 原型 v7 定调）：批量「立即整理」入口不迁移——
+     *  每次立即整理都是一次模型额度消耗，用户旅程只需逐条处理；后端
+     *  batchRunNow 能力保留但前端不再触达。 */
     async captureBatch(action, ids) {
-      const channel = action === 'retry' ? 'recall.captures.batchRetry' : 'recall.captures.batchRunNow';
-      if (!channel || !ids.length) return;
-      const result = await api.call(channel, { captureIds: ids });
+      if (action !== 'retry' || !ids.length) return;
+      const result = await api.call('recall.captures.batchRetry', { captureIds: ids });
       const outcome = (result && result.result) || { succeeded: [], failed: [] };
       if (outcome.failed && outcome.failed.length) {
         toast(T('cognition.capture_batch_partial', '已处理 {ok} 条，{fail} 条没有成功（多为状态已变化）', { ok: String(outcome.succeeded.length), fail: String(outcome.failed.length) }), 'warning');
@@ -562,21 +1071,35 @@
     back.addEventListener('click', () => { NS.closePersonalOntology(); });
   }
 
-  NS.openPersonalOntology = async function openPersonalOntology() {
-    showRecallPanel();
+  /* ───────────── 个人本体独立页(2026-09-21 五页签迁移) ───────────── */
+  /* 本体不再是"隐藏 ca-root + 整屏替换"的独立形态,而是五页签里的一个路由:
+   * 渲染层在 ca-scroll 里放 #ca-ontology-mount,再由这里把 index.html 的
+   * #skills-cognition-personal-ontology section 从 parking 容器移进 mount,
+   * 调 renderPersonalOntology()。离开路由时先归还 parking 再擦除内容区——
+   * section 始终是同一个 DOM 节点,本体内部状态(_pocSelected 等)不销毁。 */
+
+  NS.unmountPersonalOntology = function unmountPersonalOntology() {
     const section = document.getElementById('skills-cognition-personal-ontology');
     if (!section) return;
-    // 深链可能早于 recall 特性组加载完成：渲染函数不在时按需补载再画。
+    const parking = document.getElementById('ca-ontology-parking');
+    if (parking && section.parentElement !== parking) parking.appendChild(section);
+    section.hidden = true;
+    section.classList.remove('is-standalone');
+  };
+
+  NS.mountPersonalOntology = async function mountPersonalOntology() {
+    showRecallPanel();
+    const section = document.getElementById('skills-cognition-personal-ontology');
+    const mount = document.getElementById('ca-ontology-mount');
+    if (!section || !mount) return;
+    // 深链可能早于特性组加载完成:渲染函数不在时按需补载再画。
     if (typeof window.renderPersonalOntology !== 'function') {
       const load = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
       if (typeof load === 'function') {
         try { await load('personal-ontology'); } catch (_) { /* 渲染函数缺席时下面跳过 */ }
       }
     }
-    // 独立界面（2026-09-14）：本体工作台独占内容区——收起新 UI 主体
-    // （认知树/资产列表），不再以"树下方半页卡片"的形式共存。
-    const appRoot = document.getElementById('ca-root');
-    if (appRoot) appRoot.hidden = true;
+    if (mount.parentElement && section.parentElement !== mount) mount.appendChild(section);
     section.hidden = false;
     section.classList.add('is-standalone');
     wireOntologyBackButton(section);
@@ -585,15 +1108,11 @@
     }
   };
 
+  NS.openPersonalOntology = function openPersonalOntology() {
+    NS.router.go({ name: 'ontology' });
+  };
+
   NS.closePersonalOntology = function closePersonalOntology() {
-    const section = document.getElementById('skills-cognition-personal-ontology');
-    if (section) {
-      section.hidden = true;
-      section.classList.remove('is-standalone');
-    }
-    const appRoot = document.getElementById('ca-root');
-    if (appRoot) appRoot.hidden = false;
-    const main = document.getElementById('ca-scroll');
-    if (main) main.scrollTop = 0;
+    NS.router.go({ name: 'tree' });
   };
 })();

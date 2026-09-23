@@ -357,7 +357,31 @@ function _execEffortLabel(effort) {
 }
 
 function _modelChipRenderAll() {
+  _modelChipRenderChipsOnly();
+  _refreshOpenMemberMenu();
+}
+
+function _modelChipRenderChipsOnly() {
   document.querySelectorAll('.model-chip[data-model-target]').forEach((chip) => _modelChipRenderChip(chip));
+}
+
+/** 成员/来源变化时让已展开的多来源菜单与真实状态保持一致：来源消失（取消成员）
+ *  关闭其第二层、只剩一套时恢复直达、来源行摘要跟着更新（FR-014）。菜单处于旧
+ *  单接收者视图时不介入——那条路径由它自己的事件驱动。 */
+function _refreshOpenMemberMenu() {
+  const menu = document.getElementById('model-chip-menu');
+  if (!menu) return;
+  if (String(menu.dataset.view || '').indexOf('member') !== 0) return;
+  const target = menu.dataset.modelTarget || '';
+  const anchor = document.querySelector(`.model-chip[data-model-target="${target}"]`);
+  const groups = anchor ? _memberSourceGroups(target) : null;
+  if (!anchor || !groups || !groups.length) {
+    _closeMenuWithFlyouts();
+    return;
+  }
+  _closeFlyouts();
+  _renderExecConfigMenu(menu, anchor);
+  _positionModelMenu(menu, anchor);
 }
 
 /** 切到外接智能体时后台拉一次模型扫描（有缓存直接命中）——chip 的
@@ -381,21 +405,53 @@ async function _scanCliCurrentForChips() {
 
 function _modelChipRenderChip(chip) {
   const target = _chipTargetForElement(chip);
+  const groups = _memberSourceGroups(target);
   const cfg = _effectiveExecConfig(target);
   const hasRecipient = (typeof getChatRecipient === 'function')
     && getChatRecipient(target).kind !== 'commander';
-  if (!cfg.model && !hasRecipient && !_modelChipEntries.length) { chip.hidden = true; return; }
+  // 有会话成员时入口始终可见：外接实例的模型配置即使在没有 API 模型时也要能调。
+  if (!(groups && groups.length) && !cfg.model && !hasRecipient && !_modelChipEntries.length) {
+    chip.hidden = true;
+    return;
+  }
   chip.hidden = false;
 
   const labelEl = chip.querySelector('.model-chip-label');
   const effortEl = chip.querySelector('.exec-config-effort');
   const cliMode = cfg.mode === 'cli';
 
+  // 多 Agent：入口按会话成员的配置套数变化（FR-008）。单套显示具体模型并直达
+  // 其选项；多套显示「模型配置」并先列来源，强度徽标只在单套显示。
+  if (groups && groups.length) {
+    const multi = groups.length > 1;
+    const only = groups[0];
+    if (labelEl) {
+      labelEl.textContent = multi ? t('composer.model.title') : _memberSourceModelLabel(target, only);
+    }
+    if (effortEl) {
+      const effort = multi ? '' : ((_memberSourceConfig(target, only.id) || {}).effort || '');
+      effortEl.hidden = multi;
+      effortEl.textContent = multi ? '' : _execEffortLabel(effort || 'auto');
+      effortEl.classList.remove('is-cli');
+      effortEl.classList.toggle('is-override', !multi && !!effort);
+    }
+    const overridden = groups.some((group) => {
+      const conf = _memberSourceConfig(target, group.id);
+      return !!(conf && (conf.model || conf.effort));
+    });
+    chip.classList.toggle('is-override', overridden);
+    chip.title = multi
+      ? t('composer.model.multi_title')
+      : t('exec_config.title');
+    return;
+  }
+
   if (labelEl) {
     labelEl.textContent = cfg.modelLabel
       || (cliMode ? t('exec_config.cli_default_model') : t('exec_config.no_model'));
   }
   if (effortEl) {
+    effortEl.hidden = false;
     if (cliMode) {
       // claude：选了档位就显示档位（本次任务徽标态）；否则显示 CLI 徽标。
       if (cfg.effort) {
@@ -424,6 +480,371 @@ function _modelChipRenderChip(chip) {
 }
 
 // ─── Menu ─────────────────────────────────────────────────────────────────
+
+// ── 多 Agent：按来源的模型配置（PRD FR-007～014） ─────────────────────────
+// 套数只随会话成员变化：CogSeed 与全部 Task Agent 共用一套 API 配置，每个外接
+// Agent 实例各自一套。单套 → 入口直达模型 + 竖排思考强度；多套 → 入口显示
+// 「模型配置」，第一层列来源，悬浮/点击/键盘展开第二层。
+
+function _memberSourceGroups(target) {
+  const cm = (typeof window !== 'undefined') ? window.composerMembers : null;
+  if (!cm || typeof cm.getMembers !== 'function' || typeof cm.configGroups !== 'function') return null;
+  if (!cm.getMembers(target).length) return null;
+  return cm.configGroups(target);
+}
+
+function _memberSourceConfig(target, sourceId) {
+  const cm = window.composerMembers;
+  if (!cm || typeof cm.getSourceConfig !== 'function') return null;
+  return cm.getSourceConfig(target, sourceId) || {};
+}
+
+function _memberSourceWrite(target, sourceId, patch) {
+  const cm = window.composerMembers;
+  if (!cm || typeof cm.setSourceConfig !== 'function') return;
+  cm.setSourceConfig(target, sourceId, patch);
+  // 只重画入口：菜单/第二层的层内状态由调用方维护（选完模型要回第一层，
+  // 点强度要保持当前层），整菜单重画会把用户正在看的层拆掉。
+  _modelChipRenderChipsOnly();
+}
+
+function _memberAgentRecord(agentId) {
+  const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
+  return list.find((a) => a && a.agent_id === agentId) || null;
+}
+
+/** 来源当前生效的模型标签：显式配置 > 外接跟随其自身 > 内部默认条目。 */
+function _memberSourceModelLabel(target, group) {
+  const conf = _memberSourceConfig(target, group.id);
+  if (conf.model) return conf.modelLabel || conf.model;
+  if (group.external) {
+    const agent = _memberAgentRecord(group.id);
+    const cli = (agent && agent.runtime && agent.runtime.cli) || '';
+    const ctl = window.cliExecControl;
+    const scan = ctl ? ctl.cachedCliModels(cli) : null;
+    if (scan && scan.current) return scan.current;
+    const eff = ctl ? ctl.effectiveModelLabel(cli, scan) : null;
+    if (eff && eff.label) return eff.label;
+    return t('exec_config.cli_default_model');
+  }
+  const entry = _modelChipEntries[0];
+  return (entry && (entry.modelName || entry.model)) || t('exec_config.no_model');
+}
+
+function _memberSourceEffortLabel(target, group) {
+  return _execEffortLabel(_memberSourceConfig(target, group.id).effort || 'auto');
+}
+
+/** 第二层：某来源的模型清单 + 竖排思考强度（悬浮切换来源时整层重画）。 */
+function _openMemberSourceFlyout(target, group, rowEl, pin) {
+  if (pin) { _cancelFlyoutTimers(); _flyoutPinned = true; }
+  const flyout = _ensureFlyout('models');
+  _closeFlyout('levels');
+  _flyoutProviderKey = `member:${group.id}`;
+  flyout.innerHTML = '';
+  // 第二层保留来源名称标题（FR-009）。
+  _flyoutHeader(flyout, group.name, _memberSourceModelLabel(target, group));
+  _renderMemberSourceBody(flyout, target, group, { flyout: true });
+  _positionFlyout(flyout, rowEl);
+}
+
+function _renderMemberConfigMenu(menu, anchor, target, groups) {
+  const multi = groups.length > 1;
+  menu.dataset.view = multi ? 'member-sources' : 'member-source-single';
+  if (multi) {
+    const header = document.createElement('div');
+    header.className = 'model-chip-menu-header';
+    header.textContent = t('composer.model.title');
+    header.title = t('composer.model.multi_title');
+    menu.appendChild(header);
+  } else {
+    // 单套：直达该来源的选项，不显示来源标题（FR-011）。
+    _renderMemberSourceBody(menu, target, groups[0], {});
+    return;
+  }
+  groups.forEach((group) => {
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item model-chip-menu-item--provider';
+    item.tabIndex = 0;
+    item.dataset.configSource = group.id;
+    item.setAttribute('aria-expanded', 'false');
+    // FR-011：来源行不显示 `>`／`›` 箭头（原型同样没有），靠悬浮/点击展开。
+    item.innerHTML = '<span class="model-chip-menu-main">'
+      + `<span class="model-chip-menu-name">${escapeHtml(group.name)}</span></span>`
+      + `<span class="model-chip-menu-sub">${escapeHtml(`${_memberSourceModelLabel(target, group)} · ${_memberSourceEffortLabel(target, group)}`)}</span>`;
+
+    const open = (pin) => _openMemberSourceFlyout(target, group, item, pin);
+    item.addEventListener('mouseenter', () => _scheduleFlyoutOpen(() => open(false), _MEMBER_FLYOUT_DELAY));
+    item.addEventListener('mouseleave', _scheduleFlyoutClose);
+    item.addEventListener('focus', () => open(true));
+    item.addEventListener('click', (e) => { e.stopPropagation(); open(true); });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        open(true);
+      }
+    });
+    item.addEventListener('blur', () => {
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (active && (_inFlyout(active) || menu.contains(active))) return;
+        _closeFlyouts();
+      }, 0);
+    });
+    menu.appendChild(item);
+  });
+}
+
+/** 来源内容的宿主：标题/头部留在层里，重画只换宿主内容。
+ *  （不这么做，任何一次重画都会往同一层里再叠一份 —— 重复堆叠的根因。） */
+function _memberSourceBodyHost(container) {
+  for (const child of Array.from(container.children || [])) {
+    if (child.classList && child.classList.contains('model-chip-menu-body')) return child;
+  }
+  const host = document.createElement('div');
+  host.className = 'model-chip-menu-body';
+  container.appendChild(host);
+  return host;
+}
+
+/** 一个来源的模型行 + 竖排思考强度；「跟随默认」行清空该来源的显式配置。 */
+function _renderMemberSourceBody(container, target, group, opts) {
+  const host = _memberSourceBodyHost(container);
+  host.replaceChildren();
+  const conf = _memberSourceConfig(target, group.id);
+  const finish = () => {
+    if (opts.flyout) {
+      // 多套：选完模型回到来源层并更新摘要（FR-010）。
+      _closeFlyouts();
+      const menu = document.getElementById('model-chip-menu');
+      const anchor = menu
+        ? document.querySelector(`.model-chip[data-model-target="${menu.dataset.modelTarget || ''}"]`)
+        : null;
+      if (menu && anchor) {
+        _renderExecConfigMenu(menu, anchor);
+        _positionModelMenu(menu, anchor);
+      }
+      return;
+    }
+    _closeModelMenu();
+  };
+  const pickModel = (patch) => {
+    // 换模型后原强度不受支持 → 恢复该来源的默认强度并提示（FR-013）。
+    const next = { ...(patch || {}) };
+    const supported = (next.provider && next.model)
+      ? _modelReasoningCapability(next.provider, next.model)
+      : null;
+    const currentEffort = conf.effort;
+    if (supported === false && (currentEffort === 'low' || currentEffort === 'high')) {
+      next.effort = '';
+      if (typeof uiToast === 'function') {
+        uiToast(t('composer.model.effort_reset_notice', { level: t(`model_effort.${currentEffort}`) }), {
+          variant: 'warning',
+        });
+      }
+    }
+    _memberSourceWrite(target, group.id, next);
+    finish();
+  };
+  const row = (label, sub, active, onPick) => {
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item' + (active ? ' is-default' : '');
+    item.tabIndex = 0;
+    item.setAttribute('aria-pressed', active ? 'true' : 'false');
+    item.innerHTML = '<span class="model-chip-menu-main">'
+      + `<span class="model-chip-menu-name">${escapeHtml(label)}</span>`
+      + (active ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '')
+      + '</span>'
+      + (sub ? `<span class="model-chip-menu-sub">${escapeHtml(sub)}</span>` : '');
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onPick();
+    });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(); }
+    });
+    host.appendChild(item);
+    return item;
+  };
+
+  row(t('composer.model.follow_default'), '', !conf.model && !conf.effort, () => pickModel(null));
+
+  if (group.external) {
+    const agent = _memberAgentRecord(group.id);
+    const cli = (agent && agent.runtime && agent.runtime.cli) || '';
+    const ctl = window.cliExecControl;
+    const scan = ctl ? ctl.cachedCliModels(cli) : null;
+    // 只看扫描结果会让"读不到清单"变成"完全不可配置"：合并静态目录与手输记忆后，
+    // 即使扫描失败也仍有可选模型（与既有 CLI 模型菜单同一份清单）。
+    const models = (ctl && typeof ctl.mergedCliModels === 'function')
+      ? ctl.mergedCliModels(cli, scan)
+      : ((scan && Array.isArray(scan.models)) ? scan.models : []);
+    const modelSupported = ctl ? ctl.modelControllableFor(cli) : false;
+    const rerender = () => _renderMemberSourceBody(container, target, group, opts);
+    if (modelSupported && typeof _renderCliModelList === 'function') {
+      // 与既有 CLI 模型菜单同一份清单与同一套入口（搜索 / 手输模型 / 当前标记）：
+      // 只按来源把"写回"换成该来源自己的配置。清单读取失败时它自己带重试与说明，
+      // 不再出现"读不到就等于没法配"的死局面。
+      void _renderCliModelList(
+        host,
+        container,
+        {
+          mode: 'cli',
+          agent: agent || undefined,
+          cliType: cli,
+          providerLabel: cli,
+          model: conf.model || '',
+          modelLabel: conf.modelLabel || '',
+          modelSupported: true,
+        },
+        target,
+        cli,
+        {
+          // 宿主在层内，不需要（也不能）按 fixed 菜单重新定位。
+          skipPositioning: true,
+          onRescan: rerender,
+          applyPick: (modelId, isCustom) => {
+            const patch = modelId
+              ? { model: String(modelId), modelLabel: String(modelId) }
+              : null;
+            // 手输模型要记住，下次直接可选（与既有菜单一致）。
+            if (modelId && isCustom && ctl && typeof ctl.rememberCustomModel === 'function') {
+              try { ctl.rememberCustomModel(cli, String(modelId)); } catch { /* best-effort */ }
+            }
+            _memberSourceWrite(target, group.id, patch);
+            finish();
+          },
+        },
+      );
+      return;
+    }
+    if (!modelSupported) {
+      // 该来源没有模型下发通道：不放假开关，明示「由该 Agent 管理」（FR-013）。
+      const note = document.createElement('div');
+      note.className = 'model-chip-menu-note';
+      note.textContent = t('composer.model.managed_by_agent');
+      host.appendChild(note);
+    } else {
+      models.forEach((model) => {
+        const id = String((model && typeof model === 'object') ? (model.id || model.label || '') : model || '');
+        if (!id) return;
+        const label = String((model && (model.label || model.id)) || id);
+        const sub = id === (scan && scan.current)
+          ? t('composer.model.cli_current')
+          : String((model && model.description) || '');
+        row(label, sub, conf.model === id, () => pickModel({ model: id, modelLabel: label }));
+      });
+      if (!models.length) {
+        const loading = ctl && ctl.scanInFlight(cli);
+        const note = document.createElement('div');
+        note.className = 'model-chip-menu-note';
+        note.textContent = loading
+          ? t('exec_config.cli_models_loading')
+          : t('composer.model.cli_models_unavailable');
+        host.appendChild(note);
+        // 读取失败可重试（FR-013）：重新扫描该 CLI 的模型清单后原位重画。
+        if (!loading && ctl && typeof ctl.loadCliModels === 'function') {
+          row(t('composer.model.cli_models_retry'), '', false, () => {
+            void ctl.loadCliModels(group.id, cli, { refresh: true }).then(() => {
+              if (host.isConnected) rerender();
+            }).catch(() => {});
+          });
+        }
+      }
+    }
+    _renderMemberEffortRows(host, target, group, conf, {
+      supported: modelSupported && (ctl ? ctl.effortControllableFor(cli) : false),
+      rerender,
+    });
+    return;
+  }
+
+  // 内部共享来源：先画当前生效条目，provider 目录异步到达后原位重画。
+  const seen = new Set();
+  const entries = [];
+  if (conf.provider && conf.model) entries.push({ provider: conf.provider, model: conf.model, modelName: conf.modelLabel });
+  _modelChipEntries.forEach((entry) => {
+    if (!entry || !entry.provider) return;
+    const key = `${entry.provider}/${entry.model || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(entry);
+  });
+  let pending = false;
+  entries.forEach((entry) => {
+    const provider = String(entry.provider || '');
+    const cached = _modelListByProvider.get(provider);
+    const models = (Array.isArray(cached) && cached.length)
+      ? cached.map((m) => ((m && typeof m === 'object')
+        ? { id: String(m.id || m.name || ''), name: String(m.name || m.id || '') }
+        : { id: String(m), name: String(m) }))
+      : [{ id: String(entry.model || ''), name: String(entry.modelName || entry.model || '') }];
+    models.filter((m) => m.id).forEach((model) => {
+      row(
+        model.name || model.id,
+        entry.providerLabel || provider,
+        conf.provider === provider && conf.model === model.id,
+        () => pickModel({ provider, model: model.id, modelLabel: model.name || model.id }),
+      );
+    });
+    if (!Array.isArray(cached)) {
+      pending = true;
+      void _loadProviderModels(provider).then((list) => {
+        if (!host.isConnected || !Array.isArray(list) || !list.length) return;
+        _renderMemberSourceBody(container, target, group, opts);
+      });
+    }
+  });
+  if (pending) {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('model_chip.loading_models');
+    host.appendChild(note);
+  }
+  _renderMemberEffortRows(host, target, group, conf, {
+    supported: (conf.provider && conf.model)
+      ? _modelReasoningCapability(conf.provider, conf.model)
+      : true,
+    rerender: () => _renderMemberSourceBody(container, target, group, opts),
+  });
+}
+
+/** 竖排思考强度：每项一行，点选保持当前层打开（FR-010）。 */
+function _renderMemberEffortRows(container, target, group, conf, opts) {
+  const section = document.createElement('div');
+  section.className = 'model-chip-menu-section';
+  section.textContent = t('model_effort.menu_title');
+  container.appendChild(section);
+  _EFFORT_OPTIONS.forEach((level) => {
+    const unavailable = (level === 'low' || level === 'high') && opts.supported === false;
+    const active = (conf.effort || 'auto') === level;
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item'
+      + (active ? ' is-default' : '')
+      + (unavailable ? ' is-disabled' : '');
+    item.tabIndex = unavailable ? -1 : 0;
+    item.setAttribute('aria-pressed', active ? 'true' : 'false');
+    item.dataset.memberEffort = level;
+    item.innerHTML = '<span class="model-chip-menu-main">'
+      + `<span class="model-chip-menu-name">${escapeHtml(t('model_effort.' + level))}</span></span>`
+      + (active ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '');
+    if (unavailable) {
+      item.title = t('model_effort.unsupported_title');
+      container.appendChild(item);
+      return;
+    }
+    const apply = () => {
+      _memberSourceWrite(target, group.id, { effort: level === 'auto' ? '' : level });
+      // 强度点选保持当前层打开并显示选中态（FR-010）。
+      if (typeof opts.rerender === 'function') opts.rerender();
+    };
+    item.addEventListener('click', (e) => { e.stopPropagation(); apply(); });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); apply(); }
+    });
+    container.appendChild(item);
+  });
+}
 
 function _clampMenuLeft(preferredLeft, menuWidth) {
   const edge = 8;
@@ -533,6 +954,7 @@ function _toggleExecConfigMenu(anchor) {
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
   menu.className = 'model-chip-menu model-chip-menu--exec composer-popover';
+  menu.dataset.modelTarget = _chipTargetForElement(anchor);
   anchor.classList.add('model-chip--open');
   _renderExecConfigMenu(menu, anchor);
   _positionModelMenu(menu, anchor);
@@ -551,6 +973,14 @@ function _renderExecConfigMenu(menu, anchor) {
   const target = _chipTargetForElement(anchor);
   const cfg = _effectiveExecConfig(target);
   menu.innerHTML = '';
+
+  // 多 Agent：有显式会话成员时按来源分层；无成员时沿用原单接收者菜单，
+  // 既有交互不受影响。
+  const memberGroups = _memberSourceGroups(target);
+  if (memberGroups && memberGroups.length) {
+    _renderMemberConfigMenu(menu, anchor, target, memberGroups);
+    return;
+  }
 
   // Compact single-line header: title carries the scope note (task-only)
   // so no subheader row is needed.
@@ -787,6 +1217,9 @@ function _renderProviderRows(menu, anchor, target, cfg) {
 
 const _FLYOUT_OPEN_DELAY = 90;
 const _FLYOUT_CLOSE_DELAY = 220;
+// 多 Agent 按来源分层：离开「入口 + 两层弹层」整体区域约 140ms 后收起（FR-012），
+// 跨层间隙重入即取消。既有 provider 级联沿用上面的原时长，互不影响。
+const _MEMBER_FLYOUT_DELAY = 140;
 let _flyoutOpenTimer = null;
 let _flyoutCloseTimer = null;
 let _flyoutPinned = false;
@@ -798,22 +1231,26 @@ function _cancelFlyoutTimers() {
   if (_flyoutCloseTimer) { clearTimeout(_flyoutCloseTimer); _flyoutCloseTimer = null; }
 }
 
-function _scheduleFlyoutOpen(open) {
+function _scheduleFlyoutOpen(open, delay) {
   _cancelFlyoutTimers();
   _flyoutPinned = false;
   _flyoutOpenTimer = setTimeout(() => {
     _flyoutOpenTimer = null;
     open();
-  }, _FLYOUT_OPEN_DELAY);
+  }, Number.isFinite(delay) ? delay : _FLYOUT_OPEN_DELAY);
 }
 
-function _scheduleFlyoutClose() {
+function _scheduleFlyoutClose(delay) {
   if (_flyoutPinned) return;
   _cancelFlyoutTimers();
+  // 多来源层已展开时按 FR-012 的 140ms 收起（含移出到菜单外的情况）。
+  const wait = Number.isFinite(delay)
+    ? delay
+    : (_flyoutProviderKey.indexOf('member:') === 0 ? _MEMBER_FLYOUT_DELAY : _FLYOUT_CLOSE_DELAY);
   _flyoutCloseTimer = setTimeout(() => {
     _flyoutCloseTimer = null;
     _closeFlyouts();
-  }, _FLYOUT_CLOSE_DELAY);
+  }, wait);
 }
 
 function _closeFlyout(kind) {
@@ -1064,7 +1501,7 @@ function _applyModelPick(target, cfg, provider, model, modelLabel, providerLabel
  *  扫描 ∪ 静态目录 ∪ 手输记忆；选择写任务级 model 覆盖（bare id），再点
  *  当前行取消覆盖。底部输入框接受任意模型 id（claude 接受别名与完整 id，
  *  "or a full model ID"），记入 localStorage 供下次直接选。 */
-async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
+async function _renderCliModelList(menu, anchor, cfg, target, cliType, hooks = {}) {
   const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
   if (!ctl) return;
   const agentId = (cfg.agent && cfg.agent.agent_id) || '';
@@ -1073,7 +1510,7 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   loading.className = 'model-chip-menu-loading';
   loading.textContent = t('exec_config.cli_models_scanning');
   menu.appendChild(loading);
-  _positionModelMenu(menu, anchor);
+  if (!hooks.skipPositioning) _positionModelMenu(menu, anchor);
 
   const scan = await ctl.loadCliModels(agentId, cliType);
   // 菜单可能在扫描期间被关闭（或重开为别的菜单）。
@@ -1111,6 +1548,12 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   }
 
   const applyPick = (modelId, isCustom) => {
+    // 多 Agent 按来源配置：写回该来源自己的配置，而不是任务级单人覆盖
+    // （否则成员之间会互相串用同一个模型）。
+    if (typeof hooks.applyPick === 'function') {
+      hooks.applyPick(modelId, isCustom);
+      return;
+    }
     try {
       if (typeof setExecOverride !== 'function') return;
       const ov = getExecOverride(target) || {};
@@ -1224,12 +1667,15 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   rescan.addEventListener('click', (e) => {
     e.stopPropagation();
     void ctl.loadCliModels(agentId, cliType, { refresh: true }).then(() => {
+      // 换来源（成员模式）时由钩子决定怎么重画——这里直接重画整菜单会把
+      // 来源内容宿主当成菜单锚点，画错层。
+      if (typeof hooks.onRescan === 'function') { hooks.onRescan(); return; }
       _renderExecConfigMenu(menu, anchor);
-      _positionModelMenu(menu, anchor);
+      if (!hooks.skipPositioning) _positionModelMenu(menu, anchor);
     });
   });
   menu.appendChild(rescan);
-  _positionModelMenu(menu, anchor);
+  if (!hooks.skipPositioning) _positionModelMenu(menu, anchor);
 }
 
 /** CLI 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed

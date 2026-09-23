@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+// 渲染层统一 Markdown 管线（index.html 在 kb-workbench 之前加载 utils.js）。
+// 这里注入真函数而不是替身，保证 chip/标题断言跑在真管线上。
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { renderMarkdown: realRenderMarkdown } = require('../../src/renderer/modules/utils.js') as {
+  renderMarkdown: (md: string) => string;
+};
 import * as vm from 'node:vm';
 
 function fakeClassList() {
@@ -122,11 +128,8 @@ const MINDMAP_ROOT = {
   ],
 };
 
-function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string>; mindmapRoot?: unknown } = {}) {
-  const source = fs.readFileSync(
-    path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-    'utf8',
-  ).replace(/\r\n/g, '\n');
+function loadScript(options: { narrow?: boolean; width?: number; height?: number; storage?: Record<string, string>; mindmapRoot?: unknown; extraGlobals?: Record<string, unknown> } = {}) {
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
   const els: Record<string, any> = {};
   const created: any[] = [];
   // localStorage：窗口尺寸/位置记忆的真实读写路径（此前 VM 里没有 localStorage，
@@ -153,10 +156,21 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       return made.el;
     }),
   };
+  /** 渲染任意 attrs，让桩与真实原语行为一致（data- 与 aria- 属性都会被测试断言到）。 */
+  const renderStubAttrs = (attrs: Record<string, any> | undefined): string =>
+    Object.entries(attrs || {})
+      .filter(([, value]) => value != null && value !== false)
+      .map(([key, value]) => ` ${key}="${value === true ? '' : String(value)}"`)
+      .join('');
+
+  // 捕获式 addEventListener：i18n-change 处理器要能被测试真的 dispatch 到
+  const winHandlers: Record<string, Array<(...a: any[]) => void>> = {};
   const windowMock: any = {
     innerWidth: options.width ?? 1440,
     innerHeight: options.height ?? 900,
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((name: string, fn: (...a: any[]) => void) => {
+      (winHandlers[name] = winHandlers[name] || []).push(fn);
+    }),
     matchMedia: vi.fn(() => ({
       matches: Boolean(options.narrow),
       addEventListener: vi.fn(),
@@ -166,10 +180,24 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
       'kb.workbench.external_source': '外部来源',
       'kb.workbench.group_external': '外部来源',
       'kb.workbench.group_personal': '个人知识库',
-      'kb.workbench.group_shared': '共享知识库',
+      'kb.workbench.group_shared': '待开发',
     } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
+    // 「去设置管理模型」的官方跳转缝（boot.js 暴露的 setView + settings_tabs 暴露的
+    // activateSettingsTab）：用 spy 断言语义，而不是断言实现细节。
+    setView: vi.fn(),
+    activateSettingsTab: vi.fn(),
+    // 共享图标注册表：给出与 icons.js 同形的输出（含 is-<name> 类名），
+    // 让 _icon() 走真实路径而不是空 svg 兜底。
+    uiIconHtml: (name: string, cls?: string) => `<svg class="${cls || 'ui-icon'} is-${name}"></svg>`,
+    // 共享原语桩：kb-workbench 现在**不再自带降级模板**（2026-09-21），
+    // 缺原语即抛错；生产里这些由 index.html 加载的 ui-button.js / ui-form.js 提供。
+    uiButton: (o: any) => `<button type="button" class="btn ui-button ui-button--${o.role || 'secondary'} ${o.className || ''}"${o.disabled ? ' disabled' : ''}${renderStubAttrs(o.attrs)}>${o.label}</button>`,
+    uiIconButton: (o: any) => `<button type="button" class="ui-icon-button ${o.className || ''}"${o.disabled ? ' disabled' : ''} aria-label="${o.label}"${renderStubAttrs(o.attrs)}></button>`,
+    uiInput: (o: any) => `<input class="form-input ui-control ui-input ${o.className || ''}" id="${o.id || ''}" type="${o.type || 'text'}" value="${o.value || ''}"${o.disabled ? ' disabled' : ''}${renderStubAttrs(o.attrs)} />`,
+    uiTextarea: (o: any) => `<textarea class="form-input ui-control ui-textarea ${o.className || ''}" id="${o.id || ''}"${o.placeholder ? ` placeholder="${o.placeholder}"` : ''}>${o.value || ''}</textarea>`,
+    uiEmptyState: (options: any) => `<section class="ui-empty-state ui-empty-state--${String(options.kind || 'quiet')}"><h3>${String(options.title || '')}</h3>${options.hint ? `<p>${String(options.hint)}</p>` : ''}${options.action ? `<button id="${String(options.action.attrs?.id || '')}">${String(options.action.label || '')}</button>` : ''}</section>`,
     cogseed: {
       invoke: vi.fn(async (ch: string) => {
         if (ch === 'contexts.tree') return { tree: TREE };
@@ -218,26 +246,65 @@ function loadScript(options: { narrow?: boolean; width?: number; height?: number
     performance,
     createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
     escapeHtml: (v: unknown) => String(v ?? ''),
+    uiIconHtml: windowMock.uiIconHtml,
+    uiButton: windowMock.uiButton,
+    uiIconButton: windowMock.uiIconButton,
+    uiInput: windowMock.uiInput,
+    uiTextarea: windowMock.uiTextarea,
     uiToast: windowMock.uiToast,
     uiPrompt: windowMock.uiPrompt,
     document: documentMock,
     window: windowMock,
     localStorage: localStorageMock,
+    // 渲染层统一 Markdown 管线（index.html 在 kb-workbench 之前加载 utils.js）。
+    // extraGlobals 允许用例把它改成 undefined，以覆盖纯文本兜底路径。
+    renderMarkdownFull: realRenderMarkdown,
+    ...(options.extraGlobals || {}),
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'kb-workbench.js' });
-  return { context, els, windowMock, created, localStorage: localStorageMock };
+  return { context, els, windowMock, created, localStorage: localStorageMock, winHandlers };
 }
 
 describe('KB workbench (S1 skeleton)', () => {
   it('opens file rows in the real source viewer instead of the S2 placeholder toast', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+
+    expect(source).toMatch(/function _openFile[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
+    expect(source).not.toContain('原文查看器：S2 上线（anchor-resolver 已就绪）');
+  });
+
+  /**
+   * 真机反馈：「很多文件打开都有返回引用，并且前几行都有橙色高亮」——
+   * 文件列表/摘要/来源跳转这些**打开整篇**的入口塞了占位 chunk 号，主进程把它
+   * 当引用片段定位后，正文前几行被高亮、按钮变成"返回引用位置"。
+   * 契约：只有真引用（搜索命中/问答引用给的 chunkIdx 或 quote）才带定位信息。
+   *
+   * ⚠️ 这组断言曾被人从工作区覆盖掉一次（并行会话写了旧副本），于是占位值复活、
+   * 症状复发——它守的正是"别再退化"，删掉等于把 bug 放回来。
+   */
+  it('打开整篇的入口不带 chunkIdx（不冒充引用跳转）', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
       'utf8',
     ).replace(/\r\n/g, '\n');
+    const block = (name: string) => source.match(new RegExp(`function ${name}\\([^)]*\\)[\\s\\S]*?\\n  \\}`))?.[0] || '';
+    // 注释里会解释历史包袱（提到 chunkIdx），断言只看代码本身
+    const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
-    expect(source).toMatch(/function _openFile[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
-    expect(source).not.toContain('原文查看器：S2 上线（anchor-resolver 已就绪）');
+    // 文件列表点击、脑图/测验的来源跳转：整篇打开
+    expect(block('_openFile')).toContain("view: 'document'");
+    expect(code(block('_openFile'))).not.toContain('chunkIdx');
+    expect(code(block('_mmOpenSource'))).not.toContain('chunkIdx');
+
+    // 摘要卡片里的文件锚点：摘要只给了文件名，给不出片段
+    const summaryAnchorLine = source.split('\n').find((line) => line.includes('el.dataset.kbAnchor')) || '';
+    expect(summaryAnchorLine).toContain('_openAnchor');
+    expect(summaryAnchorLine).not.toContain('chunkIdx');
+
+    // 真引用那一路必须仍然带过去定位（条件式，不是缺省 0）
+    expect(source).toContain('...(typeof anchor.chunkIdx === \'number\' ? { chunkIdx: anchor.chunkIdx } : {})');
+    expect(source).toContain('...(typeof ref.chunkIdx === \'number\' ? { chunkIdx: ref.chunkIdx } : {})');
   });
 
   it('reconnects the KB event stream after a previous page stream has ended', async () => {
@@ -259,7 +326,9 @@ describe('KB workbench (S1 skeleton)', () => {
     });
     expect(els['kb-wb-tree'].innerHTML).toContain('挑战资料');
     expect(els['kb-wb-tree'].innerHTML).toContain('个人知识库');
-    expect(els['kb-wb-tree'].innerHTML).toContain('共享知识库');
+    // 共享知识库已暂停：库树里的这个**分组标签**统一标"待开发"（9.17 会议 P1）
+    expect(els['kb-wb-tree'].innerHTML).toMatch(/kb-tree-group-name">待开发</);
+    // 注：分组右侧的「+ 创建共享知识库」按钮本轮不动（它是动作入口，不在本次两条 P1 范围内）
     expect(els['kb-wb-tree'].innerHTML).toContain('外部来源');
     expect(els['kb-wb-tree'].innerHTML).toContain('飞书 Wiki');
     expect(els['kb-wb-tree'].innerHTML).not.toContain('data-kb-lib="external"');
@@ -280,7 +349,8 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-lib-name'].textContent).toBe('飞书 Wiki');
     expect(els['kb-wb-lib-tag'].textContent).toBe('外部来源');
     expect(els['kb-wb-owner-name'].textContent).toBe('飞书 Wiki');
-    expect(els['kb-wb-share'].style.display).toBe('none');
+    // 外部来源只读：分享/双人整块（按钮 + chip）一并收掉
+    expect(els['kb-wb-share-wrap'].style.display).toBe('none');
     expect(els['kb-wb-more-btn'].style.display).toBe('none');
     expect(els['kb-wb-import'].style.display).toBe('none');
   });
@@ -293,8 +363,10 @@ describe('KB workbench (S1 skeleton)', () => {
     });
     // 默认选中第一个库（班级建设资料）
     expect(els['kb-wb-lib-name'].textContent).toBe('班级建设资料');
-    // ready → ✓ 已索引；processing → 索引中…
-    expect(els['kb-wb-files'].innerHTML).toContain('✓ 已索引');
+    // ready → [check 图标] 已索引；processing → 索引中…
+    // 图标改由 icons.js 提供（2026-09-21），断言文字 + 共享图标类名，不再断言 emoji
+    expect(els['kb-wb-files'].innerHTML).toContain('已索引');
+    expect(els['kb-wb-files'].innerHTML).toContain('is-check');
     expect(els['kb-wb-files'].innerHTML).toContain('索引中…');
     // 子目录行（可下钻）
     expect(els['kb-wb-files'].innerHTML).toContain('子目录');
@@ -326,6 +398,36 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(windowMock.cogseed.invoke).toHaveBeenCalled();
   });
 
+  // 回归（真机故障）：知识库右区「去设置管理模型」点了没跳到模型配置。
+  // 根因是旧的两段跳转——setView('settings') 不带 settingsTab/settingsAnchor，
+  // 设置特性懒加载完后停在默认的「数据」tab，且没有 models 锚点；同步那次
+  // activateSettingsTab('credentials') 在特性还没进内存时又查不到 .settings-tab。
+  // 现在与 model-chip.js / connections.js 同一条缝（model-chip-cascade-menu.test.ts
+  // 断言的是同一个契约）。
+  it('sends the 「去设置管理模型」entry to Settings → Configuration with the models anchor', async () => {
+    const { windowMock, els, created } = loadScript();
+    windowMock.renderKbWorkbench();
+    els['kb-qa-tools']._listeners.click();
+
+    // 弹层异步构建（auth.listEntries → _buildQaModelPicker），先等 footer 出现。
+    await vi.waitFor(() => {
+      expect(created.some((c: any) => c.el.className === 'kb-qa-model-pop-foot')).toBe(true);
+    });
+    const foot = created.find((c: any) => c.el.className === 'kb-qa-model-pop-foot')!;
+    const manageBtn = foot.el.appendChild.mock.calls[0][0];
+    expect(String(manageBtn.innerHTML)).toContain('kb-qa-model-pop-manage');
+
+    manageBtn._listeners.click();
+
+    // 切视图时带上 configuration tab 与 models 锚点（懒加载路径），
+    // 再切 tab 并滚到模型区（设置特性已在内存时的路径）。
+    expect(windowMock.setView).toHaveBeenCalledWith('settings', undefined, {
+      settingsTab: 'configuration',
+      settingsAnchor: 'models',
+    });
+    expect(windowMock.activateSettingsTab).toHaveBeenCalledWith('configuration', { anchor: 'models' });
+  });
+
   it('streams a grounded answer and renders citation chips on final', async () => {
     const { windowMock, els, created } = loadScript();
     windowMock.renderKbWorkbench();
@@ -355,6 +457,36 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(streamBody.appendChild).toHaveBeenCalled();
     // typing 态已移除
     expect(ai.el.classList.contains('is-typing')).toBe(false);
+  });
+
+  it('auto-grows the Q&A input up to the cap and resets after send', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+
+    const input = els['kb-qa-input'];
+    // 初始单行高度
+    expect(input.style.height).toBe('26px');
+    expect(input.style.overflowY).toBe('hidden');
+
+    // 多行内容 → 高度跟随内容增长，不出现滚动条
+    input.scrollHeight = 60;
+    input._listeners.input();
+    expect(input.style.height).toBe('60px');
+    expect(input.style.overflowY).toBe('hidden');
+
+    // 超过上限 → 封顶并启用纵向滚动
+    input.scrollHeight = 400;
+    input._listeners.input();
+    expect(input.style.height).toBe('120px');
+    expect(input.style.overflowY).toBe('auto');
+
+    // 发送后清空并复位到单行高度
+    input.value = 'alpha protocol?';
+    input.scrollHeight = 26;
+    els['kb-qa-send']._listeners.click();
+    expect(input.value).toBe('');
+    expect(input.style.height).toBe('26px');
+    expect(input.style.overflowY).toBe('hidden');
   });
 
   it('renders the S3 analysis card (docs + one-liner + mindmap action)', async () => {
@@ -407,33 +539,83 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).not.toContain('请先生成 AI 解析');
   });
 
-  it('生成测验有真实实现：调 kb.quiz 并渲染可作答的卡片', () => {
+  it('生成测验有真实实现：调 kb.quiz、渲染缩略卡并打开答题面板', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
-    // 这个入口此前只有调用点、没有实现（点击 ReferenceError）
+    // 这个入口此前只有调用点、没有实现（点击直接 ReferenceError）
     expect(src).not.toMatch(/_renderQuiz\b/);
     expect(src).toContain('function _genQuiz()');
     expect(src).toContain("invoke('kb.quiz'");
-    expect(src).toContain('function _renderQuizCard');
-    // 题目文本一律走 textContent（模型输出不拼 innerHTML）
-    expect(src).toMatch(/function _renderQuizCard[\s\S]{0,900}textContent = String\(q\.question/);
-    // 会话恢复：quiz 消息按存下来的题目重建
+    // 答题/结果工作面移到 window.KbQuizPanel（逐题作答、提示、结果页、再测/新测），
+    // 会话流里只留一张缩略卡（入口 + 事实），生成完直接进入答题
+    expect(src).toContain('function _quizLauncherHtml(payload)');
+    expect(src).toMatch(/function _bindQuizLauncher[\s\S]{0,400}_openQuizPanel/);
+    expect(src).toMatch(/function _openQuizPanel[\s\S]{0,400}panel\.open\(/);
+    expect(src).toMatch(/_bindQuizLauncher\(nb, entry\);[\s\S]{0,200}_openQuizPanel\(entry\)/);
+    // 会话恢复：quiz 消息按存下来的题目重建缩略卡
     expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,200}_appendQuizMessage/);
-    expect(src).toMatch(/kind: 'quiz', questions/);
+    expect(src).toMatch(/kind: 'quiz', \.\.\.payload/);
+  });
+
+  it('测验「原文依据」带片段打开：文本类高亮该段、排版类翻页并传 hl.quote', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 宿主接住面板给的 (path, { quote })，并走锚点通道（而不是"只打开整篇"的 _openFile）
+    expect(src).toMatch(/onOpenSource: \(path, anchor\) => \{[\s\S]{0,200}_openQuizSource\(String\(path\), anchor\)/);
+    const helper = src.match(/function _openQuizSource\(rawSource, anchor\) \{[\s\S]*?\n  \}/)![0];
+    expect(helper).toMatch(/_openFileViewerForAnchor\(\{/);
+    expect(helper).toMatch(/quote,/);
+    // 没有片段 / 锚点通道没打开 → 退回整篇，不能因为定位失败反而打不开文件
+    expect(helper).toMatch(/if \(!quote\) return _openFile\(relPath\);/);
+    expect(helper).toMatch(/ok \? 'anchor' : _openFile\(relPath\)/);
+    // 排版类（md/Office）把片段传给富查看器的高亮分支；PDF 只有页码
+    expect(src).toMatch(/if \(typeof anchor\.quote === 'string' && anchor\.quote\.trim\(\)\) hl\.quote = anchor\.quote\.trim\(\);/);
+    expect(src).toMatch(/hl\.page = loc\.page/);
+  });
+
+  it('来源名 → 库内真实路径：裸文件名也能定位（否则查看器只会说"不能读取原文"）', () => {
+    const { windowMock } = loadScript();
+    const resolve = windowMock.__kbQuizSourceTest.resolvePath;
+    const lib = ['9.16产物/AAR复盘.md', 'CICD/发版规范.md', 'notes/reader.md'];
+    // 真机事故：模型给的是裸文件名，主进程 path.join(库根, 它) 后 stat → ENOENT → "暂时无法读取该文件的原文"
+    expect(resolve('AAR复盘.md', lib)).toBe('9.16产物/AAR复盘.md');
+    expect(resolve('发版规范.md', lib)).toBe('CICD/发版规范.md');
+    // 已经是完整相对路径时原样命中
+    expect(resolve('CICD/发版规范.md', lib)).toBe('CICD/发版规范.md');
+    // 忽略大小写；后缀必须真匹配（不能用 includes 把 a.md 配到 x-a.md 之类）
+    expect(resolve('READER.MD', lib)).toBe('notes/reader.md');
+    expect(resolve('report.md', lib)).toBe('');
+    // 空输入/空候选不炸
+    expect(resolve('', lib)).toBe('');
+    expect(resolve('AAR复盘.md', [])).toBe('');
+  });
+
+  it('测验「原文依据」打开链路：先解析路径，再带 quote 走锚点通道', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const fn = src.match(/function _openQuizSource\(rawSource, anchor\) \{[\s\S]*?\n  \}/)![0];
+    expect(fn).toMatch(/const matched = _pickKbSourcePath\(rawSource, candidates\);/);
+    // 有候选但都不匹配 → 不开一个只会显示"不能读取原文"的查看器；候选为空则尽力打开
+    expect(fn).toMatch(/if \(!matched && candidates\.length\) \{[\s\S]{0,200}uiToast\(/);
+    expect(fn).toMatch(/const relPath = matched \|\| String\(rawSource \|\| ''\);/);
+    expect(fn).toMatch(/path: relPath,/);
+    expect(fn).toMatch(/_openFileViewerForAnchor\(\{/);
+    // 脑图溯源复用同一套解析（避免两份规则各自漂移）
+    expect(src).toMatch(/function _mmOpenSource\(source, idx\)[\s\S]{0,300}const hit = _resolveKbSourcePath\(name\);/);
   });
 
   it('测验进会话历史：写入 + 持久化 + 载入不被丢', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     // ① 生成后 push 进 qaHistory 并立刻保存会话（此前只 push → 切库/重开就没了）
-    expect(src).toMatch(/kind: 'quiz', questions[\s\S]{0,200}_qaSaveCurrentSession\('测验'\)/);
-    expect(src).toMatch(/_state\.qaHistory\.push\(\{ role: 'assistant', kind: 'quiz'/);
+    expect(src).toMatch(/kind: 'quiz', \.\.\.payload[\s\S]{0,300}_qaSaveCurrentSession\(_tr\('kb\.workbench\.quiz_title', '测验'\)\)/);
+    expect(src).toMatch(/const entry = \{ role: 'assistant', kind: 'quiz', \.\.\.payload, ts: Date\.now\(\) \};[\s\S]{0,200}_state\.qaHistory\.push\(entry\)/);
     // ② 载入会话时保留 quiz 消息与题目（此前非脑图消息一律被重建成 {role,content}）
     expect(src).toMatch(/m\.kind === 'quiz'[\s\S]{0,300}questions/);
     expect(src).toMatch(/Array\.isArray\(m\.questions\) \? m\.questions\.slice\(0, 20\)/);
+    // 来源与指纹一并存下来：面板的"查看 N 个来源"与「生成后续测验」的缓存键都靠它
+    expect(src).toMatch(/function _appendQuizMessage[\s\S]{0,400}m\.sources/);
     // ③ 产物消息没有 content，不进模型多轮上下文
     expect(src).toMatch(/filter\(\(m\) => m\.kind !== 'mindmap' && m\.kind !== 'quiz'\)/);
   });
 
-  it('参考答案/解析分块显示，多要点自动列点', () => {
+  it('参考答案/解析分块显示，多要点自动列点（纯函数仍由 __kbFvUtils 暴露给测验面板）', () => {
     const { windowMock } = loadScript();
     const clauses = windowMock.__kbFvUtils.quizAnswerClauses;
     // 真机反馈里的原句：一个分号隔开的两个要点 → 拆成两条，而不是糊成一整段
@@ -448,10 +630,16 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(clauses('')).toEqual([]);
     // 渲染层：答案与解析各占一块（标签 + 文本/列表），不再用 ' · ' 拼句子
     const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
-    expect(src).toContain('function _quizAnswerBlock');
-    expect(src).toContain("_quizAnswerBlock('参考答案'");
-    expect(src).toContain("_quizAnswerBlock('解析'");
-    expect(src).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
+    // 纯函数留在 kb-workbench（__kbFvUtils 导出给面板复用），答案块渲染已在测验面板里
+    expect(src).toContain('quizAnswerClauses: _quizAnswerClauses');
+    expect(src).not.toContain('function _quizAnswerBlock');
+    const panel = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-quiz.js'), 'utf8').replace(/\r\n/g, '\n');
+    expect(panel).toContain("_answerBlock(_tr('kb.quiz.reference'");
+    expect(panel).toContain("_answerBlock(_tr('kb.quiz.explain'");
+    expect(panel).toContain("_answerBlock(_tr('kb.quiz.correct_answer'");
+    expect(panel).toMatch(/function _clauses\(text\)[\s\S]{0,300}quizAnswerClauses/);
+    // 仍然不用 ' · ' 把答案与解析拼成一句话
+    expect(panel).not.toMatch(/q\.explain \? ' · ' \+ q\.explain/);
   });
 
   it('共享库的分享显示为待开发（不再弹出"像能用"的分享弹窗）', () => {
@@ -475,6 +663,64 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(src).toContain("invoke('kb.mindmap'");
   });
 
+  it('文档级脑图：文件菜单给入口，且 doc 作用域下沉到 kb.mindmap', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    // 两个入口：个人库文件行右键/… + 共享库文件菜单
+    const entries = src.match(/生成脑图（本文档）/g) || [];
+    expect(entries.length).toBeGreaterThanOrEqual(2);
+    expect(src).toContain('function _kbMindmapForDoc');
+    expect(src).toMatch(/if \(act === 'mind'\) _kbMindmapForDoc\(path\)/);
+    // 有 doc 时不再传 dir：作用域必须下沉到单文档，否则根主题还是"这个库是什么"。
+    // spaceId 仍要带上——共享库的文件得去共享库索引里找。
+    expect(src).toContain('? { doc, spaceId: _state.spaceId || null }');
+    expect(src).not.toMatch(/invoke\('kb\.mindmap', doc[\s\S]{0,200}?\? \{ doc \}/);
+    // 快照 key 以主进程回执的真实作用域为准，避免"请求本文档、实际整库"的错误脑图也顶着 doc: 存档
+    expect(src).toMatch(/function _mmSnapshotKey\(doc, scope\)/);
+    expect(src).toMatch(/const base = \(doc && \(!scope \|\| scope === 'doc'\)\)/);
+    // 降级提示按作用域区分（文档级别说成"当前知识库没有文档"）
+    expect(src).toMatch(/function _mmDegradedHtml\(reason, doc\)/);
+  });
+
+  it('作用域回执校验：主进程没按「本文档」生成时必须丢弃结果并提示重启', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    // 请求了 doc 就必须拿到 scope==='doc'；否则不渲染、不存档
+    expect(src).toMatch(/const scopeMismatch = Boolean\(doc\) && res\.scope !== 'doc';/);
+    expect(src).toMatch(/if \(doc && !_mmSameDoc\(res\.files, doc\)\)/);
+    // 顺序契约：**降级提示必须排在"文件是否同一份"校验之前**。
+    // not-found 的降级响应 files 是空的，若先判 files 就会把"这份文档没索引到"
+    // 误报成"作用域不匹配，请重启"（2026-09-16 真机就此误报，用户以为功能坏了）。
+    const guardIdx = src.indexOf("const scopeMismatch = Boolean(doc)");
+    const degradedIdx = src.indexOf("if (res.source === 'degraded')", guardIdx);
+    const filesIdx = src.indexOf('if (doc && !_mmSameDoc(res.files, doc))', guardIdx);
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(degradedIdx).toBeGreaterThan(guardIdx);
+    expect(filesIdx).toBeGreaterThan(degradedIdx);
+    const anchor = src.indexOf('主进程没有按「本文档」作用域生成');
+    expect(anchor).toBeGreaterThan(-1);
+    expect(src).toContain('完全退出 CogSeed 后重新启动');
+    // 该分支必须 return，不能继续走渲染/写历史
+    expect(src.slice(anchor, anchor + 900)).toMatch(/return;/);
+    // 刷新(⟳)与保存(💾)沿用同一作用域，不能把本文档脑图换成整库脑图/存到库档位
+    expect(src).toMatch(/function _mmRefreshMindmap\(\)[\s\S]{0,1200}\(s && s\.doc\)/);
+    expect(src).toMatch(/function _mmCurrentKey\(\)[\s\S]{0,400}scope === 'doc'\) return `doc:\$\{s\.doc\}`/);
+    expect(src).toContain('mmScope: null');
+  });
+
+  it('脑图作用域全程不串味：生成/回答/历史恢复三条路径都带上作用域', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    // 存档 key ←→ 作用域 双向可逆
+    expect(src).toMatch(/function _mmScopeFromKey\(key\)/);
+    expect(src).toMatch(/if \(k\.startsWith\('doc:'\)\) return \{ doc: k\.slice\(4\)\.split\('#'\)\[0\], scope: 'doc' \}/);
+    // 三条渲染路径都把作用域挂到画布上
+    expect(src).toMatch(/canvas\._mmScope = _state\.mmScope/); // 文件/整库生成 + 回答生成
+    expect(src).toMatch(/canvas\._mmScope = _mmScopeFromKey\(m\.key\)/); // 会话历史里的脑图消息
+    expect(src).toMatch(/canvas\._mmScope = _mmScopeFromKey\(key\)/); // 答案内的脑图快照
+    // 打开弹窗前同步到全局：⟳/💾 作用在这张图真正的作用域上
+    expect(src).toMatch(/if \(canvas\._mmScope\) _state\.mmScope = canvas\._mmScope;/);
+    // 「回答 → 脑图」必须显式归位 text，否则会沿用上一次的 doc 作用域
+    expect(src).toMatch(/_state\.mmScope = \{ doc: null, scope: 'text' \};/);
+  });
+
   it('renders shared knowledge bases (space library) in the tree', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
@@ -482,8 +728,26 @@ describe('KB workbench (S1 skeleton)', () => {
       expect(els['kb-wb-tree'].innerHTML).toContain('团队空间');
     });
     expect(els['kb-wb-tree'].innerHTML).toContain('data-kb-space="sp1"');
-    expect(els['kb-wb-tree'].innerHTML).toContain('共享');
+    expect(els['kb-wb-tree'].innerHTML).toContain('待开发');
     expect(els['kb-wb-tree'].innerHTML).not.toContain('空间库 · S4 上线');
+  });
+
+  it('个人知识库下不出现"分享/双人"入口，共享知识库下保留（9.17 会议 P1）', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    // 默认选中的是个人库 → 分享/双人整块收起（个人库单用户，挂着只会误导）
+    await vi.waitFor(() => {
+      expect(els['kb-wb-lib-tag'].textContent).toBe('个人知识库');
+    });
+    expect(els['kb-wb-share-wrap'].style.display).toBe('none');
+
+    // 切到共享知识库（空间）：入口回来，且库头标签统一标"待开发"
+    const [spaceRow] = els['kb-wb-tree'].querySelectorAll('[data-kb-space]');
+    spaceRow._listeners.click();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-lib-tag'].textContent).toBe('待开发');
+    });
+    expect(els['kb-wb-share-wrap'].style.display).toBe('');
   });
 
   it('collapses the side panel and reveals the floating expand handle (round trip)', async () => {
@@ -533,26 +797,18 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('uses the shared icon-button seam for the responsive AI panel controls', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const css = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/style.css'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
 
-    expect(source).toContain("typeof window.uiIconButton === 'function'");
+    // 2026-09-21：模块不再自带降级模板，改为缺原语即抛错（仍是共享 seam，且不会静默绕过）
+    expect(source).toContain("_requirePrimitive('uiIconButton')");
     expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
     expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.kb-wb\.right-panel-open \.kb-wb-right/);
     expect(css).toContain('width: min(420px, calc(100% - 44px));');
   });
 
   it('routes every import-menu glyph through the shared icon registry', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
 
     for (const icon of ['file', 'folder', 'book-open', 'link', 'file-text', 'document-pencil', 'upload', 'mic']) {
       expect(source).toContain(`_icon('${icon}', 'kb-wb-import-icon')`);
@@ -561,26 +817,20 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders knowledge-base file row actions through shared icon buttons', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const fileRows = source.slice(
       source.indexOf('function _renderNodeRows('),
       source.indexOf('function _countFiles('),
     );
 
-    expect(fileRows).toContain("_uiIconButton({ label: '生成思维导图（S3）', icon: 'sparkles', className: 'kb-mini-btn'");
+    expect(fileRows).toContain("_uiIconButton({ label: _tr('kb.workbench.file_gen_mindmap', '生成思维导图（S3）'), icon: 'sparkles', className: 'kb-mini-btn'");
     expect(fileRows).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-mini-btn'");
-    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? '折叠' : '展开', icon: open \? 'chevron-down' : 'chevron-right'/);
+    expect(fileRows).toMatch(/_uiIconButton\(\{ label: open \? _tr\('kb\.workbench\.collapse', '收起'\) : _tr\('kb\.workbench\.expand', '展开'\), icon: open \? 'chevron-down' : 'chevron-right'/);
     expect(fileRows).not.toMatch(/<button\b/);
   });
 
   it('renders knowledge-base context menu actions through shared buttons and icons', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const menus = source.slice(
       source.indexOf('function _kbMenuShow('),
       source.indexOf('async function _kbRenameSpaceFile('),
@@ -590,32 +840,24 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(menus).toContain("icon: 'edit-pencil'");
     expect(menus).toContain("icon: 'users'");
     expect(menus).toContain("icon: 'trash-2'");
-    expect(menus).toContain("_uiButton({ label: '置顶', icon: 'pin'");
-    expect(menus).toContain("_uiButton({ label: '编辑标签', icon: 'tag'");
+    // 断言钉在 i18n 键上（文案随语言变，键不变）
+    expect(menus).toContain("_uiButton({ label: _tr('kb.workbench.menu_pin', '置顶'), icon: 'pin'");
+    expect(menus).toContain("_uiButton({ label: _tr('kb.workbench.menu_tag', '编辑标签'), icon: 'tag'");
     expect(menus).toContain("_icon('lock', 'kb-ctx-menu-icon')");
     expect(menus).not.toMatch(/[✏️🗑📂👥📌🏷🔐➡⧉▸✓]/u);
     expect(menus).not.toMatch(/<button\b/);
   });
 
   it('keeps the note submenu open when hover is followed by click', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
 
     expect(source).toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = false;/);
     expect(source).not.toMatch(/noteToggle\.addEventListener\('click',[\s\S]*?importNoteSub\.hidden = !importNoteSub\.hidden;/);
   });
 
   it('opens the note submenu toward the available left side', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const css = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/style.css'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
 
     expect(source).toContain("_icon('chevron-left', 'kb-import-caret-icon')");
     const submenuRule = css.match(/\.kb-wb-import-sub\s*\{([^}]*)\}/)?.[1] || '';
@@ -624,10 +866,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders mindmap window actions through shared buttons and registered icons', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const mindmapMarkup = source.slice(
       source.indexOf('<div class="kb-mm-overlay"'),
       source.indexOf('// 右列强制 flex column'),
@@ -644,32 +883,26 @@ describe('KB workbench (S1 skeleton)', () => {
     }
     expect(mindmapMarkup).not.toMatch(/<button\b/);
     expect(mindmapMarkup).not.toMatch(/[🧠👁💾📂📥🖼📐📄📝📋🏢⤢⤡◎☰▦▤＋⋯✕↩⟳]/u);
-    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? '编辑' : '预览'");
+    expect(source).toContain("_setUiButtonPresentation(btn, _mmPreviewMode ? _tr('kb.workbench.mm_edit', '编辑') : _tr('kb.workbench.mm_preview', '预览')");
   });
 
   it('renders analysis disclosure, citations, and retry through shared buttons', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const analysis = source.slice(
       source.indexOf('function _renderAnalysis('),
       source.indexOf('function _mmSnapshotKey('),
     );
 
-    expect(analysis).toContain("_uiButton({ label: '展开', role: 'ghost', size: 'sm', iconEnd: 'chevron-down'");
+    expect(analysis).toContain("_uiButton({ label: _tr('kb.workbench.expand', '展开'), role: 'ghost', size: 'sm', iconEnd: 'chevron-down'");
     expect(analysis).toContain("_uiButton({ label: `${d.file}#chunk 1`, role: 'ghost', size: 'sm', className: 'kb-qa-chip'");
-    expect(analysis).toContain("_setUiButtonPresentation(btn, open ? '收起' : '展开', open ? 'chevron-up' : 'chevron-down')");
-    expect(analysis).toContain("_uiButton({ label: '重新生成', role: 'secondary', size: 'sm', icon: 'refresh'");
+    expect(analysis).toContain("_setUiButtonPresentation(btn, open ? _tr('kb.workbench.collapse', '收起') : _tr('kb.workbench.expand', '展开'), open ? 'chevron-up' : 'chevron-down')");
+    expect(analysis).toContain("_uiButton({ label: _tr('kb.workbench.regenerate', '重新生成'), role: 'secondary', size: 'sm', icon: 'refresh'");
     expect(analysis).not.toMatch(/<button\b/);
     expect(analysis).not.toMatch(/[▾▴↗🔄]/u);
   });
 
   it('renders QA actions and removable items through shared buttons', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const qaMarkup = source.slice(
       source.indexOf('<div class="kb-qa-session">'),
       source.indexOf('<div class="kb-mm-overlay"'),
@@ -692,12 +925,12 @@ describe('KB workbench (S1 skeleton)', () => {
     }
     expect((qaMarkup.match(/<button\b/g) || [])).toHaveLength(1);
     expect(qaMarkup).toContain('class="kb-qa-model-chip"');
-    expect(attachments).toContain("_uiIconButton({ label: '移除附件', icon: 'x', variant: 'danger'");
-    expect(historyPanel).toContain("_uiButton({ label: '新建对话'");
-    expect(historyPanel).toContain("_uiIconButton({ label: '删除会话', icon: 'trash-2', variant: 'danger'");
-    expect(askMarkup).toContain("_uiIconButton({ label: '更多', icon: 'more-horizontal', className: 'kb-qa-more-btn'");
-    expect(askMarkup).toContain("_uiButton({ label: '重命名', icon: 'edit-pencil', role: 'ghost'");
-    expect(askMarkup).toContain("_uiButton({ label: '删除', icon: 'trash-2', role: 'danger'");
+    expect(attachments).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_attach_remove', '移除附件'), icon: 'x', variant: 'danger'");
+    expect(historyPanel).toContain("_uiButton({ label: _tr('kb.workbench.qa_new_session', '新建对话')");
+    expect(historyPanel).toContain("_uiIconButton({ label: _tr('kb.workbench.qa_history_delete', '删除会话'), icon: 'trash-2', variant: 'danger'");
+    expect(askMarkup).toContain("_uiIconButton({ label: _tr('kb.workbench.more', '更多'), icon: 'more-horizontal', className: 'kb-qa-more-btn'");
+    expect(askMarkup).toContain("_uiButton({ label: _tr('kb.workbench.menu_rename', '重命名'), icon: 'edit-pencil', role: 'ghost'");
+    expect(askMarkup).toContain("_uiButton({ label: _tr('kb.workbench.menu_delete', '删除'), icon: 'trash-2', role: 'danger'");
     expect(`${attachments}\n${historyPanel}`).not.toMatch(/[✕🗑＋]/u);
     expect(historyPanel).toMatch(/onHistoryKeydown[\s\S]*?event\.key !== 'Escape'/);
     expect(historyPanel).toMatch(/closePanel\(restoreFocus = true\)[\s\S]*?trigger\?\.focus\(\)/);
@@ -705,10 +938,7 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('renders QA sources, answer actions, and model dialog through shared UI seams', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const answerActions = source.slice(
       source.indexOf('function _qaRefsElement('),
       source.indexOf('function _decorateAnswerHtml('),
@@ -718,15 +948,19 @@ describe('KB workbench (S1 skeleton)', () => {
       source.indexOf('function _selectQaModel('),
     );
 
-    expect(answerActions).toContain("_uiButton({\n      label: `资料来源 · ${n}`");
+    expect(answerActions).toContain("_uiButton({\n      label: _tr('kb.workbench.qa_sources', '资料来源 · {count}', { count: n })");
     expect(answerActions).toContain("_uiButton({\n        label: `${r.path}#chunk ${r.chunkIdx}`");
-    expect(answerActions).toContain("_uiIconButton({\n        label: '复制引用路径',\n        icon: 'copy'");
+    expect(answerActions).toContain("_uiIconButton({\n        label: _tr('kb.workbench.qa_copy_ref_path', '复制引用路径'),\n        icon: 'copy'");
     expect(answerActions).toContain("icon: 'brain-circuit',\n      className: 'kb-qa-mm-btn'");
     expect(answerActions).not.toMatch(/document\.createElement\('button'\)/);
     expect(answerActions).not.toMatch(/[🧠⧉▴▾]/u);
+    expect(source).toContain("label: _tr('kb.qa.copy_answer', '复制')");
+    expect(source).toContain("icon: 'copy',\n            className: 'kb-qa-tools-btn'");
+    expect(source).not.toContain("const copyBtn = document.createElement('button')");
+    expect(source).toContain("window.uiIconHtml('check', 'kb-qa-sysnote-icon')");
 
-    expect(modelPicker).toContain("_uiIconButton({\n      label: '关闭模型选择弹窗',\n      icon: 'x'");
-    expect(modelPicker).toContain("_uiButton({\n      label: '去设置管理模型',\n      role: 'secondary'");
+    expect(modelPicker).toContain("_uiIconButton({\n      label: _tr('kb.workbench.qa_model_close', '关闭模型选择弹窗'),\n      icon: 'x'");
+    expect(modelPicker).toContain("_uiButton({\n      label: _tr('kb.workbench.qa_model_manage', '去设置管理模型'),\n      role: 'secondary'");
     expect(modelPicker).toContain("_mountKbDialog({");
     expect(modelPicker).toContain("initialFocus: '[aria-pressed=\"true\"]'");
     expect(modelPicker).toContain("fallbackFocus: '#kb-qa-tools'");
@@ -736,19 +970,13 @@ describe('KB workbench (S1 skeleton)', () => {
   });
 
   it('keeps the QA history panel above the responsive AI drawer', () => {
-    const css = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/style.css'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8').replace(/\r\n/g, '\n');
     const historyRule = css.match(/\.kb-qa-history-panel\s*\{([^}]*)\}/)?.[1] || '';
     expect(historyRule).toContain('z-index: var(--z-modal-popover);');
   });
 
   it('renders the library import dialog with shared controls and recoverable loading state', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const importDialog = source.slice(
       source.indexOf('async function _importSpaceFromLib()'),
       source.indexOf('async function _kbNewFolder()'),
@@ -759,24 +987,27 @@ describe('KB workbench (S1 skeleton)', () => {
     );
 
     expect(importDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-import-dlg-title"');
-    expect(importDialog).toContain("_uiIconButton({ label: '关闭导入弹窗', icon: 'x'");
-    expect(importDialog).toContain("_uiIconButton({ label: '返回', icon: 'chevron-left'");
+    expect(importDialog).toContain("overlay.className = 'ui-modal-overlay kb-import-dlg-overlay'");
+    expect(importDialog).toContain('class="ui-modal ui-modal--lg kb-import-dlg"');
+    expect(importDialog).toContain('class="ui-modal__body kb-import-dlg-content"');
+    expect(importDialog).toContain('class="ui-modal__footer kb-import-dlg-foot"');
+    expect(importDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.import_close', '关闭导入弹窗'), icon: 'x'");
+    expect(importDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.import_back', '返回'), icon: 'chevron-left'");
     expect(importDialog).toContain("_uiInput({ id: 'kb-import-dlg-search-input', type: 'search'");
-    expect(importDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
-    expect(importDialog).toContain("_uiButton({ label: '导入', role: 'primary'");
+    expect(importDialog).toContain("_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary'");
+    expect(importDialog).toContain("_uiButton({ label: _tr('kb.workbench.import_confirm', '导入'), role: 'primary'");
     expect(importDialog).not.toMatch(/<button\b/);
     expect(importDialog).not.toMatch(/<input\b/);
     expect(importDialog).not.toMatch(/[✕←→]/u);
-    expect(importBinding).toMatch(/onImportDialogKeydown[\s\S]*?event\.key !== 'Escape'/);
-    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?okBtn\.disabled = _dlgSelected\.size === 0/);
+    expect(importBinding).toContain("initialFocus: '#kb-import-dlg-search-input'");
+    expect(importBinding).toContain("controller.open(trigger)");
+    // 收尾：先去 loading、再按选择数同步可用状态（必须是属性 + is-disabled 类一起改）
+    expect(importBinding).toMatch(/finally \{[\s\S]*?classList\.remove\('is-loading'\)[\s\S]*?_setDisabled\(okBtn, _dlgSelected\.size === 0\)/);
     expect(source).toMatch(/getElementById\('kb-qa-history-panel'\) \|\| document\.querySelector\('\.kb-import-dlg-overlay'\)/);
   });
 
   it('adopts shared controls and modal behavior for knowledge-base sharing dialogs', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
     const createDialog = source.slice(
       source.indexOf('function _createSharedSpace()'),
       source.indexOf('async function _kbShareSubmit()'),
@@ -791,34 +1022,61 @@ describe('KB workbench (S1 skeleton)', () => {
     );
 
     expect(source).toMatch(/function _mountKbDialog[\s\S]*?uiModalController\(\{ overlay, dialog, initialFocus, fallbackFocus/);
+    expect(createDialog).toContain("overlay.className = 'ui-modal-overlay kb-share-dlg-overlay'");
+    expect(createDialog).toContain('class="ui-modal kb-share-dlg"');
     expect(createDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-share-dlg-title"');
-    expect(createDialog).toContain("_uiIconButton({ label: '关闭创建共享知识库弹窗', icon: 'x'");
-    expect(createDialog).toContain("_uiIconButton({ label: '上传或更换知识库封面', icon: 'edit-pencil'");
+    expect(createDialog).toContain('class="ui-modal__header"');
+    expect(createDialog).toContain('class="ui-modal__body kb-share-dlg-body"');
+    expect(createDialog).toContain('class="ui-modal__footer kb-share-dlg-actions"');
+    expect(createDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.create_shared_close', '关闭创建共享知识库弹窗'), icon: 'x'");
+    expect(createDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.cover_upload', '上传或更换知识库封面'), icon: 'edit-pencil'");
     expect(createDialog).toContain("_uiInput({ id: 'kb-share-name', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-desc', className: 'kb-share-input'");
     expect(createDialog).toContain("_uiTextarea({ id: 'kb-share-questions', className: 'kb-share-input'");
-    expect(createDialog).toContain("_uiButton({ label: '取消', role: 'secondary'");
-    expect(createDialog).toContain("_uiButton({ label: '确定', role: 'primary'");
+    expect(createDialog).toContain("_uiSelect({");
+    expect(createDialog).toContain("id: 'kb-share-join'");
+    expect(createDialog).toContain("window.hydrateUiFormSelects(overlay)");
+    expect(createDialog).toContain("_uiButton({ label: _tr('kb.workbench.cancel', '取消'), role: 'secondary'");
+    expect(createDialog).toContain("_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary'");
     expect(createDialog).not.toMatch(/[✕📁✎▾✓]/u);
+    expect(membersDialog).toContain("overlay.className = 'ui-modal-overlay kb-members-overlay'");
+    expect(membersDialog).toContain('class="ui-modal ui-modal--sm kb-members-dlg"');
     expect(membersDialog).toContain('role="dialog" aria-modal="true" aria-labelledby="kb-members-title"');
-    expect(membersDialog).toContain("_uiIconButton({ label: '关闭知识库成员弹窗', icon: 'x'");
+    expect(membersDialog).toContain('class="ui-modal__header"');
+    expect(membersDialog).toContain('class="ui-modal__body kb-members-body"');
+    expect(membersDialog).toContain("_uiIconButton({ label: _tr('kb.workbench.members_close', '关闭知识库成员弹窗'), icon: 'x'");
     expect(membersDialog).toContain("_uiInput({ id: 'kb-members-search-input', type: 'search'");
     expect(membersDialog).toContain("_icon('users', 'kb-members-title-icon')");
     expect(membersDialog).not.toMatch(/[✕👥]/u);
-    expect(shareDialogs).toContain("_uiButton({ label: '复制链接', role: 'secondary', icon: 'link'");
-    expect(shareDialogs).toContain("_uiButton({ label: '生成知识码', role: 'secondary', icon: 'qr-code'");
-    expect(shareDialogs).toContain("_uiButton({ label: '确定', role: 'primary', className: 'kb-share-pop-btn'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭 CogSeed 共享服务配置弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭飞书分享配置弹窗', icon: 'x'");
+    // 断言钉在 i18n 键上（文案随语言变，键不变）
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_copy_link', '复制链接'), role: 'secondary', icon: 'link'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_gen_code', '生成知识码'), role: 'secondary', icon: 'qr-code'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.confirm', '确定'), role: 'primary', className: 'kb-share-pop-btn'");
+    expect((shareDialogs.match(/class="ui-modal__header"/g) || [])).toHaveLength(7);
+    expect((shareDialogs.match(/class="ui-modal__body/g) || [])).toHaveLength(7);
+    expect((shareDialogs.match(/class="ui-modal__footer/g) || [])).toHaveLength(7);
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.cogseed_config_close', '关闭 CogSeed 共享服务配置弹窗'), icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.feishu_config_close', '关闭飞书分享配置弹窗'), icon: 'x'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-baseurl', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-cogseed-apikey', type: 'password', className: 'kb-share-config-input'");
+    expect(source).not.toContain("overlay.className = 'kb-share-pop-overlay'");
+    expect((source.match(/overlay\.className = 'ui-modal-overlay kb-share-pop-overlay'/g) || [])).toHaveLength(8);
+    expect((source.match(/class="ui-modal ui-modal--sm kb-share-pop/g) || [])).toHaveLength(8);
+    expect(source).toContain("throw new Error('knowledge base requires uiEmptyState')");
+    expect(source).not.toContain('class="kb-empty"');
+    expect(source).not.toMatch(/kb-(?:qa-model|qa-history|import-dlg|share-manage|share-cogseed-members)-empty/);
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.qa_history_empty', '暂无历史对话') })");
+    expect(source).toContain("_uiEmptyState({ kind: 'quiet', title: _tr('kb.workbench.cogseed_members_empty', '暂无待审申请') })");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-appid', className: 'kb-share-config-input'");
     expect(shareDialogs).toContain("_uiInput({ id: 'kb-share-config-secret', type: 'password', className: 'kb-share-config-input'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭知识码弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiIconButton({ label: '关闭分享管理弹窗', icon: 'x'");
-    expect(shareDialogs).toContain("_uiButton({ label: '保存并发布', role: 'primary'");
-    expect(shareDialogs).toContain("_uiButton({ label: '保存并授权', role: 'primary'");
-    expect(shareDialogs).toContain("_uiButton({ label: '撤销', role: 'danger', size: 'sm'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.qr_close', '关闭知识码弹窗'), icon: 'x'");
+    expect(shareDialogs).toContain("_uiIconButton({ label: _tr('kb.workbench.share_manage_close', '关闭分享管理弹窗'), icon: 'x'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.cogseed_config_save', '保存并发布'), role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.feishu_config_save_authorize', '保存并授权'), role: 'primary'");
+    expect(shareDialogs).toContain("_uiButton({ label: _tr('kb.workbench.share_revoke', '撤销'), role: 'danger', size: 'sm'");
+    expect(shareDialogs).toContain("id: 'kb-perm-member'");
+    expect(shareDialogs).toContain("id: 'kb-perm-join'");
+    expect(shareDialogs).not.toMatch(/<select\b/);
     expect(shareDialogs).toMatch(/_kbShareDlgClose\(\{ restoreFocus: false \}\)[\s\S]*?_kbPermDialogOpen\(\)/);
     expect(shareDialogs).toMatch(/_kbShareDlgController\.close\('close', options\)/);
     expect(shareDialogs).not.toMatch(/[✕›]/u);
@@ -839,7 +1097,8 @@ describe('KB workbench (S1 skeleton)', () => {
     input.value = '子文件';
     input._listeners.input({ target: input });
     expect(els['kb-wb-files'].innerHTML).toContain('子文件.txt');
-    expect(els['kb-wb-files'].innerHTML).toContain('📁 子目录');
+    expect(els['kb-wb-files'].innerHTML).toContain('子目录');
+    expect(els['kb-wb-files'].innerHTML).toContain('is-folder');
     // 搜索根目录文件：meta 显示「库根」
     input.value = 'a.pdf';
     input._listeners.input({ target: input });
@@ -919,13 +1178,13 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     // 缩放到 200% 后拖下手柄，指针常落在遮罩上；松手那次 click 的 target 就成了遮罩
     expect(src).toMatch(/pressedOnOverlay/);
     expect(src).toMatch(/mousedown'[\s\S]{0,120}pressedOnOverlay = e\.target === overlay/);
-    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) overlay\.hidden = true/);
+    expect(src).toMatch(/if \(e\.target === overlay && pressedOnOverlay\) \{[\s\S]{0,180}_fileViewerController\.close\('backdrop'\)/);
   });
 
   it('拖拽期间盖事件罩 —— 否则指针划到内嵌 iframe 上就丢 mousemove', () => {
     // 真机实测：PDF 插件是独立进程，指针越到它上面后主窗口收不到 mousemove，
     // 结果是"往右下拉能变大、往左上拉没反应"（只能变大不能缩小/移动）
-    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: 40; \}/);
+    expect(src).toMatch(/\.kb-fv-drag-shield \{ position: absolute; inset: 0; z-index: var\(--z-modal-popover\); \}/);
     expect(src).toMatch(/function _fvBeginDragShield[\s\S]{0,300}kb-fv-drag-shield/);
     // 调整大小与拖动标题栏两条拖拽都要挂罩子，并在 mouseup 收掉
     expect(src.match(/_fvBeginDragShield\(fvOverlay\)/g)?.length).toBe(2);
@@ -938,7 +1197,8 @@ describe('查看器窗口：缩放与调整大小（真机反馈回归）', () =
     expect(fn![0]).not.toMatch(/dialog\.offsetWidth/);
     expect(fn![0]).toMatch(/Math\.min\(x, vw - w\)/);
     // 先显示再恢复：overlay 关着时量不到真实尺寸
-    expect(src).toMatch(/overlay\.hidden = false;\n {4}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
+    // 先显示再恢复位置；中间可插入 controller.open（共享层接管焦点/Escape）
+    expect(src).toMatch(/overlay\.hidden = false;\n[\s\S]{0,160}if \(dialog\) _fvApplyWindowRect\(dialog\);/);
   });
 });
 
@@ -1025,10 +1285,7 @@ describe('KB mindmap centering', () => {
   const CENTERED = { x: 158, y: 90, w: 1123, h: 720 };
 
   function source(): string {
-    return fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    return fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
   }
 
   // 预置窗口几何 + 生成脑图按钮的绑定，返回可断言的 harness
@@ -1191,10 +1448,7 @@ describe('KB mindmap centering', () => {
   });
 
   it('主进程独立窗口按鼠标所在显示器的工作区居中（不是系统默认角落）', () => {
-    const mainSrc = fs.readFileSync(
-      path.join(__dirname, '../../src/main/ipc/index.ts'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+    const mainSrc = fs.readFileSync(path.join(__dirname, '../../src/main/ipc/index.ts'), 'utf8').replace(/\r\n/g, '\n');
     const start = mainSrc.indexOf("'kb.mindmap.popout'");
     expect(start).toBeGreaterThan(-1);
     const block = mainSrc.slice(start, start + 1400);
@@ -1206,7 +1460,7 @@ describe('KB mindmap centering', () => {
 
   it('更多菜单提供「窗口居中」，一键把窗口拉回正中', () => {
     const src = source();
-    expect(src).toContain("{ k: 'center-window', label: '窗口居中'");
+    expect(src).toContain("{ k: 'center-window', label: _tr('kb.workbench.mm_center_window', '窗口居中')");
     expect(src).toMatch(/function _mmCenterWindow\(\) \{\n\s*_mmSetWindowOffset\(0, 0\);/);
   });
 });
@@ -1232,6 +1486,10 @@ describe('KB mindmap layout & typography', () => {
   }
 
   // 走真实路径渲染一份脑图 SVG（生成 → 缩略卡 innerHTML）
+  //
+  // 注意：界面首屏现在是**骨架态**（默认只展开到一级分支，渐进展开），
+  // 而下面这些断言考的是"整图排版"（折行/列宽/层距）。整图语义 = 导出与独立窗口
+  // 的全展开渲染，所以这里先真跑生成路径（保证链路有效），再用全展开基准取值。
   async function renderSvg(root: unknown = VIS_ROOT) {
     const h = loadScript({ width: 1440, height: 900, mindmapRoot: root });
     // 先预置按钮与卡片（绑定发生在 render 时），再渲染一次
@@ -1245,8 +1503,7 @@ describe('KB mindmap layout & typography', () => {
     await vi.waitFor(() => {
       expect(h.created.some((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))).toBe(true);
     });
-    const canvas = h.created.find((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))!.child;
-    return String(canvas.innerHTML);
+    return String(h.windowMock.__kbMindmapTest.svgExpanded(root));
   }
 
   type NodeBox = { idx: number; depth: number; dir: number; x: number; y: number; w: number; h: number; lines: string[] };
@@ -1358,5 +1615,949 @@ describe('KB mindmap layout & typography', () => {
     expect(src).toContain('function _mmCharW(ch, size) {');
     expect(src).toMatch(/if \(wide\) return size;/);
     expect(src).toMatch(/if \(\/\[A-Z0-9\]\/\.test\(ch\)\) return size \* 0\.64;/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 库列表不落后于磁盘（真机反馈 2026-09-16）
+//
+// 现场：在「转写纠错」里把清理版另存到知识库 → 磁盘/向量库/检索索引都有这份
+// `…-清理版.txt`，但个人知识库列表里找不到，用户以为"另存没生效"。
+// 原因：文件列表渲染的是**进入视图时拍的 `contexts.tree` 快照**，kb.events 只
+// 报"某个路径的索引进度"，此前只更新「已索引」徽标、从不重拉树。
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TREE_WITH_CLEANED = TREE.map((node) => (node.name !== '班级建设资料' ? node : {
+  ...node,
+  children: [
+    ...(node.children || []),
+    { name: '站会-清理版.txt', path: '班级建设资料/站会-清理版.txt', type: 'file', bytes: 9, mtime: 2 },
+  ],
+}));
+
+describe('库列表不落后于磁盘（另存到知识库后找不到文件）', () => {
+  /**
+   * 装一份"库真的变了"的现场：第二次拉 contexts.tree 时多出一个刚另存的文件，
+   * 并把 kb.events 的回调握在手里，好手动推一个索引事件进去。
+   */
+  function loadWithLiveKbStream() {
+    const harness = loadScript();
+    const { windowMock } = harness;
+    const baseInvoke = windowMock.cogseed.invoke;
+    let treeServed = 0;
+    windowMock.cogseed.invoke = vi.fn(async (channel: string) => {
+      if (channel === 'contexts.tree') {
+        treeServed += 1;
+        return { tree: treeServed > 1 ? TREE_WITH_CLEANED : TREE };
+      }
+      return baseInvoke(channel);
+    });
+    let kbEvent: ((ev: unknown) => void) | null = null;
+    windowMock.cogseed.stream = vi.fn((_channel: string, _payload: unknown, cb: (ev: unknown) => void) => {
+      kbEvent = cb;
+      return { promise: new Promise(() => { /* 长连接：测试期间不结束 */ }) };
+    });
+    return {
+      ...harness,
+      pushKbEvent: (ev: unknown) => { kbEvent?.(ev); },
+      treeCalls: () => treeServed,
+    };
+  }
+
+  it('索引事件带来快照里没有的新文件时重拉库树，文件随即出现在列表里', async () => {
+    const h = loadWithLiveKbStream();
+    h.windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(h.els['kb-wb-files'].innerHTML).toContain('a.pdf'));
+    expect(h.els['kb-wb-files'].innerHTML).not.toContain('站会-清理版.txt');
+    expect(h.treeCalls()).toBe(1);
+
+    // main 写盘后会推一条该路径的索引事件（另存/导入/AI 落库都是这条路）
+    h.pushKbEvent({ event: { relPath: '班级建设资料/站会-清理版.txt', status: 'ready', chunks: 3, kind: 'text' } });
+
+    await vi.waitFor(
+      () => expect(h.els['kb-wb-files'].innerHTML).toContain('站会-清理版.txt'),
+      { timeout: 3000 },
+    );
+    expect(h.treeCalls()).toBe(2);
+  });
+
+  it('已知路径的索引进度只更新徽标，不重拉库树（不做无谓的整树刷新）', async () => {
+    const h = loadWithLiveKbStream();
+    h.windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(h.els['kb-wb-files'].innerHTML).toContain('a.pdf'));
+
+    h.pushKbEvent({ event: { relPath: '班级建设资料/a.pdf', status: 'ready', chunks: 2, kind: 'pdf' } });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(h.treeCalls()).toBe(1);
+  });
+
+  it('文件在别处被删掉（快照里还在）时也重拉库树，让幽灵行消失', async () => {
+    const h = loadWithLiveKbStream();
+    h.windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(h.els['kb-wb-files'].innerHTML).toContain('a.pdf'));
+
+    h.pushKbEvent({ event: { relPath: '班级建设资料/a.pdf', status: 'deleted' } });
+
+    await vi.waitFor(() => expect(h.treeCalls()).toBe(2), { timeout: 3000 });
+  });
+});
+
+// ── 脑图渐进展开 + 画布自适应（像 NotebookLM：先给骨架，点一层开一层）──
+describe('KB mindmap progressive disclosure', () => {
+  // 规模刻意接近真实脑图（一支 5 个叶子 + 一支两层），否则 SVG 的
+  // svgW≥360 / svgH≥280 下限会把两态尺寸都抬平，"自适应"就测不出来了。
+  const DEEP_ROOT = {
+    label: 'ECS 早会',
+    children: [
+      {
+        label: '产品与租户管理',
+        children: [
+          { label: '租户管理需求调整', children: [] },
+          { label: '宁夏项目配合', children: [] },
+          { label: '官网 Roadmap 对齐', children: [] },
+          { label: '白皮书框架评审', children: [] },
+          { label: '演示环境配置', children: [] },
+        ],
+      },
+      {
+        label: '会议行动项',
+        children: [
+          { label: '产品线跟进', children: [{ label: '租户隔离口径', children: [] }, { label: '配额与计费', children: [] }] },
+        ],
+      },
+    ],
+  };
+  // pre-order 索引：0=root 1=产品与租户管理 2-6=它的 5 个叶子 7=会议行动项 8=产品线跟进 9/10=三级叶子
+
+  // 生成是异步的：必须等它落地再断言折叠态，否则拿到的是"还没跑"的全展开图。
+  async function hooks() {
+    const h = loadScript({ width: 1440, height: 900, mindmapRoot: DEEP_ROOT });
+    const btn = fakeEl('kb-wb-gen-mm');
+    h.els['kb-wb-gen-mm'] = btn;
+    const card = fakeEl('kb-wb-analysis-card');
+    card.querySelector = vi.fn((sel: string) => (sel === '#kb-wb-gen-mm' ? btn : null));
+    h.els['kb-wb-analysis-card'] = card;
+    h.windowMock.renderKbWorkbench();
+    btn._listeners.click();
+    await vi.waitFor(() => {
+      expect(h.created.some((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))).toBe(true);
+    });
+    return { h, M: h.windowMock.__kbMindmapTest as any };
+  }
+
+  function depths(svg: string): number[] {
+    return [...svg.matchAll(/data-depth="(\d+)"/g)].map((m) => Number(m[1]));
+  }
+  /** 可见节点真实包围盒（不比 viewBox：那里有 360/280 下限，小图会被抬平）。 */
+  function contentBox(svg: string) {
+    const boxes = [...svg.matchAll(/data-depth="(\d+)"[^>]*>\s*<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)"/g)]
+      .map((m) => ({ d: Number(m[1]), x: Number(m[2]), y: Number(m[3]), w: Number(m[4]), h: Number(m[5]) }));
+    const minX = Math.min(...boxes.map((b) => b.x));
+    const maxX = Math.max(...boxes.map((b) => b.x + b.w));
+    const minY = Math.min(...boxes.map((b) => b.y));
+    const maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    return { n: boxes.length, w: maxX - minX, h: maxY - minY, maxDepth: Math.max(...boxes.map((b) => b.d)) };
+  }
+
+  it('首屏是骨架：真跑生成路径后只到一级分支（不是全展开）', async () => {
+    const { h } = await hooks();
+    const canvas = h.created.find((c) => String(c.child && c.child.innerHTML).includes('kb-mm-svg'))!.child;
+    const d = depths(String(canvas.innerHTML));
+    expect(d.length).toBeGreaterThan(0);
+    expect(Math.max(...d)).toBe(1); // 只有 root + 一级分支
+  });
+
+  it('默认折叠集 = 全部非叶子节点（根除外），所以每层都能"点一层开一层"', async () => {
+    const { M } = await hooks();
+    const def = [...M.defaultCollapsed(DEEP_ROOT)].sort((a: number, b: number) => a - b);
+    expect(def).toEqual([1, 7, 8]);
+    expect(def).not.toContain(0); // 根永不折叠（否则首屏只剩一个孤点）
+    expect(def).not.toContain(2); // 叶子不参与折叠
+  });
+
+  it('展开一层只多出一层：点开一级分支 → 出现二级，且二级仍带 +N 徽章', async () => {
+    const { M } = await hooks();
+    expect(Math.max(...depths(M.svg(DEEP_ROOT)))).toBe(1);
+
+    M.toggleFold(1);
+    const svg1 = M.svg(DEEP_ROOT);
+    expect(Math.max(...depths(svg1))).toBe(2);
+    expect(svg1).toContain('租户管理需求调整');
+    expect(svg1).toContain('data-folded="1"'); // 另一支仍是折叠节点
+    expect(svg1).toMatch(/>\+\d+</); // +N 徽章：告诉用户"这里还有一层"
+    expect(svg1).not.toContain('租户隔离口径'); // 三级没出来：不是整支炸开
+  });
+
+  it('逐层打开：一级 → 二级 → 三级', async () => {
+    const { M } = await hooks();
+    M.toggleFold(7);
+    expect(Math.max(...depths(M.svg(DEEP_ROOT)))).toBe(2);
+    expect(M.svg(DEEP_ROOT)).not.toContain('租户隔离口径');
+    M.toggleFold(8);
+    expect(Math.max(...depths(M.svg(DEEP_ROOT)))).toBe(3);
+    expect(M.svg(DEEP_ROOT)).toContain('租户隔离口径');
+  });
+
+  it('再点一次收回去（折叠任意层级都隐藏整棵子树）', async () => {
+    const { M } = await hooks();
+    M.toggleFold(7);
+    M.toggleFold(8);
+    expect(Math.max(...depths(M.svg(DEEP_ROOT)))).toBe(3);
+    M.toggleFold(8);
+    expect(Math.max(...depths(M.svg(DEEP_ROOT)))).toBe(2);
+    expect(M.svg(DEEP_ROOT)).not.toContain('租户隔离口径');
+    M.toggleFold(7);
+    expect(Math.max(...depths(M.svg(DEEP_ROOT)))).toBe(1);
+    expect(M.svg(DEEP_ROOT)).not.toContain('产品线跟进');
+  });
+
+  it('画布随结构自适应：展开后可见节点与包围盒都变大，收起后回到原尺寸', async () => {
+    const { M } = await hooks();
+    const folded = contentBox(M.svg(DEEP_ROOT));
+    expect(folded.maxDepth).toBe(1);
+
+    M.toggleFold(1);
+    const expanded = contentBox(M.svg(DEEP_ROOT));
+    expect(expanded.n).toBeGreaterThan(folded.n); // 节点变多
+    expect(expanded.h).toBeGreaterThan(folded.h); // 纵向跟着长
+    expect(expanded.w).toBeGreaterThan(folded.w); // 横向多了二级列
+
+    M.toggleFold(1);
+    expect(contentBox(M.svg(DEEP_ROOT))).toEqual(folded); // 收起即收回
+  });
+
+  it('定位类操作会先展开路径（否则默认骨架态下"搜到了却看不到"）', async () => {
+    const { M } = await hooks();
+    expect(M.svg(DEEP_ROOT)).not.toContain('租户隔离口径'); // 三级，默认被两层折叠藏住
+    expect(M.expandPathTo(9)).toBe(true);
+    const svg = M.svg(DEEP_ROOT);
+    expect(svg).toContain('租户隔离口径');
+    expect(svg).toContain('会议行动项'); // 祖先链都展开了
+    expect(svg).toContain('产品线跟进');
+  });
+
+  it('「收拢」幂等（默认就是收拢态，再按一次应维持，而不是反向全部展开）', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).not.toContain('if (_state.mmCollapsed.size >= idxs.length) _state.mmCollapsed.clear();');
+    expect(src).toMatch(/function _mmCollapseAll\(\)[\s\S]{0,700}_mmResetFoldToDefault\(root\)/);
+  });
+
+  it('结构变化后都重新适应画布（展开/收拢/折叠三处都要 fit）', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const body = (name: string) => {
+      const i = src.indexOf(`function ${name}(`);
+      return src.slice(i, i + 900);
+    };
+    expect(body('_mmToggleFold')).toContain('_mmFitToStage()');
+    expect(body('_mmExpandAll')).toContain('_mmFitToStage()');
+    expect(body('_mmCollapseAll')).toContain('_mmFitToStage()');
+  });
+
+  it('折叠态点节点主体 = 展开（不是聚焦/跳原文），且截断后续监听', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    const i = src.indexOf('function _bindPreviewNodes');
+    const block = src.slice(i, i + 1200);
+    expect(block).toContain("closest('.kb-mm-fold-badge')");
+    expect(block).toContain('_state.mmCollapsed.has(idx)');
+    expect(block).toContain('e.stopImmediatePropagation()');
+    expect(block).toContain('_mmToggleFold(idx)');
+  });
+
+  it('回执文件判定：恰好一份 + NFC/NFD 等价（不因 Unicode 形式差异误弃合法结果）', async () => {
+    const { M } = await hooks();
+    expect(M.sameDoc(['文字转写/a.txt'], '文字转写/a.txt')).toBe(true);
+    // 带重音的拉丁字符（如 Café）在 NFC/NFD 下字节不同，但指向同一个文件
+    const nfc = '会议纪要-Café.pdf'.normalize('NFC');
+    const nfd = '会议纪要-Café.pdf'.normalize('NFD');
+    expect(nfc).not.toBe(nfd); // 前提：两种形式确实是不同字节
+    expect(M.sameDoc([nfd], nfc)).toBe(true);
+    expect(M.sameDoc([nfc], nfd)).toBe(true);
+    // 数量不对 → 一律不认（这条才是"别把整库图冒充本文档图"的真正防线）
+    expect(M.sameDoc([nfc, nfc], nfc)).toBe(false);
+    expect(M.sameDoc([], nfc)).toBe(false);
+    expect(M.sameDoc(null, nfc)).toBe(false);
+    // 不同文件 → 不认
+    expect(M.sameDoc(['文字转写/b.txt'], '文字转写/a.txt')).toBe(false);
+  });
+
+  it('大纲视图沿用折叠态（任意层级折叠都不展开），提示文案同步', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain('if ((n.children || []).length && _state.mmCollapsed.has(cur)) return;');
+    expect(src).toContain('折叠的分支不展开');
+  });
+});
+
+// ── A02 回归：回答正文的引用渲染与标题 ────────────────────────────────────
+//
+// 线上缺陷（2026-09 验收）：① 正文多处出现 `[来源：1]()` 残片、标题原样显示 `#`；
+// ② 正文紧贴引用路径时，旧正则把前置正文一并删除（静默丢内容）。
+// 根因是旧迷你渲染器只支持加粗/行内代码/列表，且用惰性扩张字符类剥裸锚点。
+//
+// 修复后的契约（2026-09 验收修订）：**正文里的引用要看得见、点得开** ——
+// 证据里命中过的锚点还原成行内可点 chip；命中不了的（模型自创）直接删除，
+// 不给点开是"找不到"的死 chip。底部「资料来源」折叠区同时保留。
+describe('kb answer body rendering (引用 chip / 标题)', () => {
+  const EVIDENCE = [
+    { path: 'official/product-discovery/interview-synthesis.md', chunkIdx: 1 },
+    { path: 'external/feishu-wiki/SM 的交接.md', chunkIdx: 4 },
+    { path: '班级建设资料/a.pdf', chunkIdx: 1 },
+  ];
+  const PATH = EVIDENCE[0].path;
+
+  function answerUtils(extraGlobals?: Record<string, unknown>) {
+    const { windowMock } = loadScript({ extraGlobals });
+    return windowMock.__kbAnswerUtils as {
+      chipifyCitationAnchors: (t: string, e: unknown[]) => { text: string; chips: string[] };
+      citationVariants: (e: unknown[]) => Array<[string, unknown]>;
+      citeChipHtml: (ref: unknown, label?: string) => string;
+      decorateAnswerHtml: (t: string, e?: unknown[]) => string;
+    };
+  }
+
+  /**
+   * 去掉 chip 与标签后的可见"正文"文本。
+   * chip 的标签就是文件名（无标签形态会回落到文件名），所以判断残片时必须
+   * 先把 chip 摘掉——否则会把合规的 chip 误判成"路径残片"。
+   */
+  function visibleText(html: string) {
+    return String(html)
+      .replace(/<button[^>]*data-kb-cite="1"[\s\S]*?<\/button>/g, '')
+      .replace(/<[^>]*>/g, '');
+  }
+
+  /** 残片断言：正文里不应残留空壳、锚点或裸路径。 */
+  function expectNoCitationResidue(html: string) {
+    for (const bad of [']()', '()', '（）', '【', '】', '⟦', '⟧']) {
+      expect(html).not.toContain(bad);
+    }
+    const text = visibleText(html);
+    for (const bad of ['#chunk', 'interview-synthesis', '的交接', '班级建设资料/a.pdf']) {
+      expect(text).not.toContain(bad);
+    }
+  }
+
+  /** 从渲染结果里取出 chip 的 data-* 描述。 */
+  function chipsIn(html: string) {
+    return Array.from(String(html).matchAll(/<button[^>]*data-kb-cite="1"[^>]*>/g)).map((m) => {
+      const tag = m[0];
+      const attr = (name: string) => (new RegExp(`${name}="([^"]*)"`).exec(tag) || [])[1];
+      return {
+        path: attr('data-cite-path'),
+        chunk: attr('data-cite-chunk'),
+        scope: attr('data-cite-scope'),
+        source: attr('data-cite-source'),
+        label: (/<button[^>]*>([^<]*)<\/button>/.exec(String(html).slice(m.index)) || [])[1],
+        tag,
+      };
+    });
+  }
+
+  it('renders a markdown-link citation as a clickable chip (regression: `[来源：1]()`)', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`- 访谈记录 [来源：1](${PATH}#chunk 1)`, EVIDENCE);
+    const chips = chipsIn(html);
+    expect(chips).toHaveLength(1);
+    // 解析到的是证据里的真实文档（全路径），chunk 保持 1
+    expect(chips[0]).toMatchObject({ path: PATH, chunk: '1', scope: 'global', source: 'library' });
+    // 标签沿用模型写的「来源：1」
+    expect(chips[0].label).toContain('来源：1');
+    expect(html).toContain('访谈记录');
+    expectNoCitationResidue(html);
+  });
+
+  it('renders 【来源：N】（…） and 来源：N（…） forms as chips', () => {
+    const u = answerUtils();
+    for (const answer of [
+      `- 访谈记录【来源：1】（${PATH}#chunk 1）`,
+      `- 访谈记录 来源：1（${PATH}#chunk 1）`,
+    ]) {
+      const html = u.decorateAnswerHtml(answer, EVIDENCE);
+      expect(chipsIn(html)).toHaveLength(1);
+      expect(html).toContain('访谈记录');
+      expectNoCitationResidue(html);
+    }
+  });
+
+  it('keeps the prose that directly abuts the anchor (regression: 正文被静默删除)', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`以下是访谈记录${PATH}#chunk 1`, EVIDENCE);
+    expect(visibleText(html)).toContain('以下是访谈记录');
+    expect(chipsIn(html)).toHaveLength(1);
+  });
+
+  it('resolves anchors on paths containing spaces or CJK to the full evidence path', () => {
+    const u = answerUtils();
+    const spacey = 'external/feishu-wiki/SM 的交接.md';
+    // 裸锚点（含空格+中文路径）
+    const a = chipsIn(u.decorateAnswerHtml(`见 ${spacey}#chunk 4`, EVIDENCE));
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ path: spacey, chunk: '4' });
+    // markdown 链接形态
+    const b = chipsIn(u.decorateAnswerHtml(`见 [来源：4](${spacey}#chunk 4)`, EVIDENCE));
+    expect(b).toHaveLength(1);
+    expect(b[0]).toMatchObject({ path: spacey, chunk: '4' });
+    // 中文路径夹在正文中：正文不能被吞
+    const html = u.decorateAnswerHtml('依据 班级建设资料/a.pdf#chunk 1 的结论', EVIDENCE);
+    expect(visibleText(html)).toContain('依据');
+    expect(visibleText(html)).toContain('的结论');
+    expect(chipsIn(html)).toHaveLength(1);
+  });
+
+  it('renders the prompt-mandated backtick anchor form as a chip', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`- 访谈记录 \`${PATH}#chunk 1\``, EVIDENCE);
+    const chips = chipsIn(html);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].path).toBe(PATH);
+    // 无标签形态 → 回落到文件名
+    expect(chips[0].label).toContain('interview-synthesis.md');
+    expectNoCitationResidue(html);
+  });
+
+  it('drops anchors that are absent from the evidence (no dead chip)', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml('见 mystery/unknown.md#chunk 9 的说明', EVIDENCE);
+    expect(chipsIn(html)).toHaveLength(0);
+    expect(visibleText(html)).toContain('见');
+    expect(visibleText(html)).toContain('的说明');
+    expect(visibleText(html)).not.toContain('mystery');
+  });
+
+  it('does not create chips while streaming (no evidence yet), then resolves at final', () => {
+    const u = answerUtils();
+    const answer = `- 访谈记录 [来源：1](${PATH}#chunk 1)`;
+    // 流式阶段没有 evidence：不出 chip，也不留残片
+    const streamed = u.chipifyCitationAnchors(answer, []);
+    expect(streamed.chips).toHaveLength(0);
+    expectNoCitationResidue(streamed.text);
+    // final 带上 evidence：出 chip
+    expect(chipsIn(u.decorateAnswerHtml(answer, EVIDENCE))).toHaveLength(1);
+  });
+
+  it('does not damage ordinary prose or legitimate links', () => {
+    const u = answerUtils();
+    const prose = '本库共有 来源：3 个文档，全部已解析';
+    expect(visibleText(u.decorateAnswerHtml(prose, EVIDENCE))).toBe(prose);
+    const html = u.decorateAnswerHtml('- 参考 [文档](https://ex.com) 说明', EVIDENCE);
+    expect(html).toContain('href="https://ex.com"'); // 非引用链接仍是真链接
+    expect(chipsIn(html)).toHaveLength(0);
+  });
+
+  it('renders markdown headings instead of showing literal `#`', () => {
+    const u = answerUtils();
+    const html = u.decorateAnswerHtml(`### 一、先整理的信息\n\n- 访谈记录\n\n## 二、聚类原则`, EVIDENCE);
+    expect(html).toContain('<h3>一、先整理的信息</h3>');
+    expect(html).toContain('<h2>二、聚类原则</h2>');
+    expect(html).not.toContain('###');
+  });
+
+  it('renders a full realistic answer: chips + headings, no fragments, no lost prose', () => {
+    const u = answerUtils();
+    const answer = [
+      '访谈结束后建议先整理访谈记录与用户画像。',
+      '',
+      '### 一、先整理的信息',
+      `- 访谈记录与录音转写：见 [来源：1](${PATH}#chunk 1)`,
+      '- 用户画像与角色标签：见 external/feishu-wiki/SM 的交接.md#chunk 4',
+      '',
+      '### 二、聚类原则',
+      `- 按主题相似度聚类 见 ${PATH}#chunk 1`,
+    ].join('\n');
+    const html = u.decorateAnswerHtml(answer, EVIDENCE);
+    const text = visibleText(html);
+    expect(text).toContain('访谈结束后建议先整理访谈记录与用户画像。');
+    expect(text).toContain('访谈记录与录音转写：见');
+    expect(text).toContain('用户画像与角色标签：见');
+    expect(text).toContain('按主题相似度聚类');
+    expect(html).toContain('<h3>');
+    expect(chipsIn(html)).toHaveLength(3);
+    expectNoCitationResidue(html);
+  });
+
+  it('escapes model text inside the chip (chips bypass the sanitizer on purpose)', () => {
+    const u = answerUtils();
+    // chip 在 renderMarkdownFull/sanitizeHtml 之后注入，所以标签必须自己转义
+    const html = u.decorateAnswerHtml(`- 见 [<img src=x onerror=alert(1)>](${PATH}#chunk 1)`, EVIDENCE);
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('escapes text when the markdown pipeline is unavailable (fallback path)', () => {
+    const u = answerUtils({ renderMarkdownFull: undefined });
+    const html = u.decorateAnswerHtml('<img src=x onerror=alert(1)>\n### 标题', EVIDENCE);
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain('<img');
+  });
+
+  it('renders the chip in the streaming final (端到端，无残片)', async () => {
+    const { windowMock, els, created } = loadScript();
+    windowMock.renderKbWorkbench();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-files'].innerHTML).toContain('a.pdf');
+    });
+    els['kb-qa-input'].value = '聚类原则是什么？';
+    els['kb-qa-send']._listeners.click();
+    const kbCall = windowMock.cogseed.stream.mock.calls.find((c: any[]) => c[0] === 'kbqa.askStream');
+    const cb = kbCall[2];
+    const answer = `- 访谈记录 [来源：1](${PATH}#chunk 1)`;
+    // 先发一个 delta 以捕获 AI 气泡（final 会额外创建引用区元素，created 尾部会变）
+    cb({ type: 'delta', text: '- 访谈' });
+    const streamBody = created[created.length - 1].el.querySelector('.kb-qa-stream');
+    cb({ type: 'final', text: answer, evidence: [{ source: 'library', scope: 'global', path: PATH, chunkIdx: 1 }] });
+    expect(streamBody.innerHTML).toContain('访谈记录');
+    expect(chipsIn(streamBody.innerHTML)).toHaveLength(1);
+    expectNoCitationResidue(streamBody.innerHTML);
+  });
+
+  it('clicking an inline citation chip opens the source viewer (事件委托)', async () => {
+    const { windowMock, els } = loadScript();
+    const opened: any[] = [];
+    windowMock.__openAnchorViewer = vi.fn(async (anchor: any) => { opened.push(anchor); });
+    windowMock.renderKbWorkbench();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-files'].innerHTML).toContain('a.pdf');
+    });
+    const box = els['kb-qa-messages'];
+    expect(typeof box._listeners.click).toBe('function');
+
+    // 模拟点中一个 chip：事件目标提供 closest()，命中 [data-kb-cite]
+    const chip = {
+      dataset: {
+        citePath: PATH,
+        citeChunk: '1',
+        citeScope: 'global',
+        citeSource: 'library',
+      },
+    };
+    box._listeners.click({
+      target: { closest: (sel: string) => (sel === '[data-kb-cite]' ? chip : null) },
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+    await vi.waitFor(() => { expect(opened.length).toBe(1); });
+    expect(opened[0]).toMatchObject({ path: PATH, chunkIdx: 1, view: 'document' });
+  });
+
+});
+
+// ── A01 根因防回归：解析卡上的按钮必须真的能点 ──────────────────────────────
+//
+// A01 的根因不是"功能没做"，而是"按钮接到了不存在的函数"：`📝 生成测验` 的
+// 监听器调用 `_renderQuiz`（全仓无定义），点击抛 ReferenceError，被全局 error
+// 捕获（logger.js 只写日志不提示用户）静默吞掉 → 用户看到的是"点了没反应"。
+//
+// 原有的 `innerHTML).toContain('生成测验')` 断言只看文案、不看接线，所以坏在
+// 线上很久没人发现。这里改成**逐个真点**：任何按钮接线到未定义标识符、或拿着
+// 监听器却什么都没挂，都在这里当场变红。
+//
+// 注：默认测试桩的 `querySelector` 恒返回 null（监听器压根挂不上），所以本用例
+// 自己装一个按 id 取元素的 querySelector，模拟真实 DOM。
+describe('KB 解析卡按钮接线（防"死按钮"）', () => {
+  /** 渲染解析卡，并把卡片 querySelector 换成能按 id 返回可点元素的版本。 */
+  async function mountAnalysisCard() {
+    const { context, windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    let analyzeBtn: any;
+    await vi.waitFor(() => {
+      analyzeBtn = els['kb-analyze-btn'];
+      expect(analyzeBtn).toBeTruthy();
+    });
+    // 卡片元素要显式取一次才会被桩创建（document.getElementById 会记忆实例），
+    // 且必须早于点击——_renderAnalysis 是"先写 innerHTML 再按 id 查按钮"。
+    const card = context.document.getElementById('kb-wb-analysis-card');
+    expect(card).toBeTruthy();
+    const cache = new Map<string, any>();
+    card.querySelector = (sel: string) => {
+      const m = /^#(.+)$/.exec(String(sel));
+      if (!m) return null;
+      if (!cache.has(m[1])) {
+        const el = fakeEl(m[1]);
+        // 按卡片当前 HTML 判定 disabled（_renderAnalysis 先写 innerHTML 再查询）
+        el.disabled = new RegExp(`id="${m[1]}"[^>]*\\sdisabled`).test(String(card.innerHTML));
+        cache.set(m[1], el);
+      }
+      return cache.get(m[1]);
+    };
+    analyzeBtn._listeners.click();
+    await vi.waitFor(() => {
+      expect(card.innerHTML).toContain('A 要点');
+    });
+    return { card, windowMock };
+  }
+
+  it('clicking every wired control in the analysis card throws nothing', async () => {
+    const { card } = await mountAnalysisCard();
+    const failures: string[] = [];
+    const clickOnce = (label: string, el: any) => {
+      const handler = el && el._listeners ? el._listeners.click : null;
+      if (typeof handler !== 'function') {
+        failures.push(`${label}: 没有注册 click 监听器`);
+        return;
+      }
+      try {
+        handler();
+      } catch (err) {
+        failures.push(`${label}: ${(err as Error).name}: ${(err as Error).message}`);
+      }
+    };
+
+    const ids = Array.from(String(card.innerHTML).matchAll(/<button[^>]*\sid="([^"]+)"/g)).map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0); // 解析卡上应当有可点控件
+    for (const id of ids) {
+      const btn = card.querySelector(`#${id}`);
+      if (!btn || btn.disabled) continue;
+      clickOnce(id, btn);
+    }
+    // 文档引用锚点 chip 同样逐个点（走 _openAnchor → 原文查看器）
+    for (const chip of card.querySelectorAll('[data-kb-anchor]')) {
+      clickOnce(`chip:${chip.dataset.kbAnchor}`, chip);
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it('every enabled button in the analysis card has a click handler', async () => {
+    const { card } = await mountAnalysisCard();
+    const unwired: string[] = [];
+    const ids = Array.from(String(card.innerHTML).matchAll(/<button[^>]*\sid="([^"]+)"/g)).map((m) => m[1]);
+    for (const id of ids) {
+      const btn = card.querySelector(`#${id}`);
+      if (!btn || btn.disabled) continue;
+      if (typeof btn._listeners.click !== 'function') unwired.push(id);
+    }
+    expect(unwired).toEqual([]);
+  });
+});
+
+/**
+ * 外壳语言切换（B6-d 首批：左侧栏 + 内容区工具栏/菜单）。
+ *
+ * `renderKbWorkbench()` 有 `_state.rendered` 守卫 —— 外壳只注入一次；右列里还住着
+ * 问答输入框（用户可能已打了一半问题）。所以语言切换只能**定点重标签**：
+ * 只改文本节点与属性，绝不重建 innerHTML。
+ */
+describe('kb-workbench 外壳语言切换', () => {
+  function hookedText(key: string) {
+    const el: any = { textContent: '旧', dataset: { wbText: key }, setAttribute: () => {}, title: '' };
+    return el;
+  }
+  function hookedTitle(key: string) {
+    return { title: '旧', dataset: { wbTitle: key }, textContent: '', setAttribute: () => {} } as any;
+  }
+  function hookedLabel(key: string) {
+    const span = { textContent: '旧' };
+    return {
+      dataset: { wbLabel: key }, title: '', textContent: '',
+      setAttribute: () => {}, querySelector: (sel: string) => (sel === '.ui-button__label' ? span : null),
+      _span: span,
+    } as any;
+  }
+  function hookedPlaceholder(key: string) {
+    return { placeholder: '旧', dataset: { wbPlaceholder: key }, textContent: '', title: '', setAttribute: () => {} } as any;
+  }
+
+  function mountShell() {
+    const env = loadScript();
+    const texts = [hookedText('kb.workbench.side_title')];
+    const titles = [hookedTitle('kb.workbench.divider_drag')];
+    const labels = [hookedLabel('kb.workbench.more')];
+    const placeholders = [hookedPlaceholder('kb.workbench.search_docs_placeholder')];
+    let html = '';
+    let writes = 0;
+    // 元素是 getElementById 惰性创建的：先取出来再加计数器，避免漏掉首次渲染
+    const host = env.context.document.getElementById('kb-workbench');
+    Object.defineProperty(host, 'innerHTML', {
+      get: () => html,
+      set: (v: string) => { writes += 1; html = v; },
+    });
+    host.querySelectorAll = (sel: string) => {
+      if (sel === '[data-wb-text]') return texts;
+      if (sel === '[data-wb-title]') return titles;
+      if (sel === '[data-wb-label]') return labels;
+      if (sel === '[data-wb-placeholder]') return placeholders;
+      return [];
+    };
+    // 语言字典：先全中文，切换后全英文
+    const dict: Record<string, string> = {
+      'kb.workbench.side_title': '知识库列表',
+      'kb.workbench.divider_drag': '拖动调整宽度',
+      'kb.workbench.more': '更多',
+      'kb.workbench.search_docs_placeholder': '搜索文档…',
+    };
+    env.windowMock.t.mockImplementation((key: string) => dict[key] || key);
+    env.windowMock.renderKbWorkbench();
+    return {
+      env, texts, titles, labels, placeholders, dict, host,
+      writes: () => writes,
+      fire: () => (env.winHandlers['i18n-change'] || []).forEach((fn) => fn()),
+    };
+  }
+
+  it('i18n-change 后侧栏/工具栏文案换语言；且不重建外壳 innerHTML', () => {
+    const env = mountShell();
+    expect(env.texts[0].textContent).toBe('知识库列表');
+    expect(env.labels[0]._span.textContent).toBe('更多');
+    expect(env.placeholders[0].placeholder).toBe('搜索文档…');
+    expect((env.env.winHandlers['i18n-change'] || []).length).toBeGreaterThan(0);
+
+    const writesAfterRender = env.writes();
+    env.dict['kb.workbench.side_title'] = 'Knowledge bases';
+    env.dict['kb.workbench.divider_drag'] = 'Drag to resize';
+    env.dict['kb.workbench.more'] = 'More';
+    env.dict['kb.workbench.search_docs_placeholder'] = 'Search documents…';
+    env.fire();
+
+    expect(env.texts[0].textContent).toBe('Knowledge bases');
+    expect(env.titles[0].title).toBe('Drag to resize');
+    expect(env.labels[0]._span.textContent).toBe('More');
+    expect(env.placeholders[0].placeholder).toBe('Search documents…');
+    // 重建 innerHTML = 问答输入框里打了一半的问题没了
+    expect(env.writes()).toBe(writesAfterRender);
+  });
+
+  it('动态文案不能被静态钩子覆盖；运行时渲染走 _tr（_renderRight 已在 i18n-change 里重跑）', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    // 库名/标签/描述/头像由 _renderRight 按当前库与语言重写 ⇒ 绝不能挂静态文字钩子
+    for (const key of ['kb.workbench.personal_tag', 'kb.workbench.lib_desc_placeholder', 'kb.workbench.me']) {
+      expect(source).not.toContain(`data-wb-text="${key}"`);
+    }
+    expect(source).toContain("descEl.textContent = desc || _tr('kb.workbench.lib_desc_placeholder'");
+    expect(source).toContain("_tr('kb.workbench.untitled_lib'");
+    // 重标签 + 树 + 右列三件套都在同一个 i18n-change 处理器里
+    const handler = source.slice(source.indexOf("window.addEventListener('i18n-change'"));
+    expect(handler.slice(0, 900)).toContain('_relabelWorkbench()');
+    expect(handler.slice(0, 900)).toContain('_renderRight()');
+    // 文案随状态变的脑图按钮就地重刷（否则静态钩子会把「组织结构」刷回「布局」）
+    expect(handler.slice(0, 900)).toContain('_mmUpdateToolbarState()');
+  });
+
+  it('用到的每个 kb.workbench.* 键在 4 份 locale 里都存在（缺键会静默回退中文）', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+    const used = [...new Set([...source.matchAll(/_tr\('(kb\.workbench\.[a-z0-9_]+)'/g)].map((m) => m[1]))];
+    expect(used.length).toBeGreaterThan(40);
+    for (const lang of ['zh', 'en', 'ja', 'pt']) {
+      const dict = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${lang}.json`), 'utf8'));
+      const missing = used.filter((k) => !dict[k]);
+      expect(missing, `${lang} 缺 ${missing.length} 个键`).toEqual([]);
+    }
+    // 表里挂的钩子键也必须存在（钩子键写错 = 界面露 key）
+    const hooked = [...new Set([...source.matchAll(/data-wb-(?:text|title|label|placeholder)="([^"]+)"/g)].map((m) => m[1]))];
+    const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf8'));
+    expect(hooked.filter((k) => !zh[k])).toEqual([]);
+  });
+});
+
+/**
+ * 共享按钮的"禁用"是**类**（`.is-disabled` → `pointer-events:none`），不是属性。
+ *
+ * 真机事故：问答「发送」按钮在模板里就是 `disabled: true`（渲染时已带 `is-disabled`），
+ * 输入文字后代码只把 `.disabled` 置回 false、类还在 ⇒ **按钮永远点不动**（导入弹窗的「导入」同因）。
+ * 这里钉住：这几条启用路径必须走统一 helper（同时改属性与类）。
+ */
+describe('共享按钮禁用状态必须属性 + 类同步', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'), 'utf8');
+
+  it('存在同时改 disabled 与 is-disabled 的统一 helper', () => {
+    expect(src).toMatch(/function _setDisabled\(el, disabled\) \{[\s\S]{0,240}el\.disabled = off;[\s\S]{0,160}classList\.toggle\('is-disabled', off\)/);
+  });
+
+  it('问答发送 / 导入弹窗 / 分享弹窗都不再只改属性', () => {
+    expect(src).toContain('_setDisabled(send, !input.value.trim())');
+    expect(src).toMatch(/_setDisabled\(okBtn, _dlgSelected\.size === 0\)/);
+    expect(src).toMatch(/_setDisabled\(okBtn, !String\(nameInput\.value \|\| ''\)\.trim\(\)\)/);
+    // 反例：下面这两种写法就是当初的 bug
+    expect(src).not.toMatch(/send\.disabled = !input\.value\.trim\(\)/);
+    expect(src).not.toMatch(/okBtn\.disabled = _dlgSelected\.size === 0/);
+  });
+
+  it('模板里创建即 disabled 的三个按钮仍然存在（防误删后本条测试失去意义）', () => {
+    for (const id of ['kb-share-ok', 'kb-import-dlg-ok', 'kb-qa-send']) expect(src).toContain(id);
+    expect((src.match(/disabled: true/g) || []).length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/**
+ * 侧栏「知识库列表」在 uiTree 迁移后曾被压成 16px 宽（库名不可见）——回归防护。
+ *
+ * 根因：共享树的 li 是 `grid-template-columns: 28px minmax(0,1fr)`，页面渲染时把库名
+ * 放进 `.kb-tree-name`（`overflow:hidden`）；子级 `ul[role=group]` 未指定列会被自动放进
+ * **第一列（28px）**，于是整棵子树只有 ~28px、名字宽度归零 —— 真机表现就是"列表空白"。
+ * 这里钉住那三条让它撑开的规则（jsdom 没有布局，只能钉契约；真机已用 CDP 量过宽高）。
+ */
+describe('知识库侧栏树宽度契约（uiTree 迁移回归）', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+
+  it('子级 group 必须横跨两列，行与名字必须可伸缩', () => {
+    expect(css).toMatch(/\.kb-library-tree \[role="treeitem"\] > \[role="group"\] \{ grid-column: 1 \/ -1; width: 100%; \}/);
+    // `.kb-tree-item` 原本就有 width:100%（在 .kb-library-tree 作用域内），这里守它的存在
+    expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \{ width: 100%;/);
+    expect(css).toMatch(/\.kb-library-tree \.kb-tree-item \.kb-tree-name \{ flex: 1 1 auto; min-width: 0; \}/);
+  });
+});
+
+/**
+ * 真机事故（2026-09-21）：点「原文依据」后正文高亮的是**半句多**——摘录 31 字，
+ * 涂了 70 字窗口（被 `needleNorm.length * 2 + 8` 的估算长度放大），摘录末尾之后
+ * 的正文跟着变色，看起来像"引错了位置"。
+ * 排版类（HTML/Office 转出的正文）走的就是这条 `_fvHighlightContainer`，
+ * 所以它和 markdown 那条路径一起锁"涂出来的就是摘录本身"。
+ */
+describe('排版类原文依据高亮的落点口径（真机：高亮多涂半句）', () => {
+  /** 假 iframe 正文：一个文本节点 + 只记区间的 Range，返回被标记的原文片段。 */
+  function frameHost(text: string) {
+    const node: any = { nodeType: 3, nodeValue: text };
+    const marked: string[] = [];
+    let walked = false;
+    node.ownerDocument = {
+      createTreeWalker: () => ({
+        nextNode: () => {
+          if (walked) return null;
+          walked = true;
+          return node;
+        },
+      }),
+      createRange: () => {
+        const range: any = { start: 0, end: 0 };
+        range.setStart = (_n: any, start: number) => { range.start = start; };
+        range.setEnd = (_n: any, end: number) => { range.end = end; };
+        range.surroundContents = () => { marked.push(text.slice(range.start, range.end)); };
+        return range;
+      },
+      createElement: () => ({ className: '', scrollIntoView: () => {} }),
+    };
+    const container: any = {
+      nodeType: 1,
+      ownerDocument: node.ownerDocument,
+      childNodes: [node],
+      querySelectorAll: () => [],
+    };
+    return { container, marked };
+  }
+
+  it('rawSpan 把归一化区间反算成原始区间（与 markdown 路径同一口径）', () => {
+    const { windowMock } = loadScript();
+
+    expect(windowMock.__kbFvUtils.rawSpan('   abc  def   ', 1, 4)).toEqual({ start: 4, end: 8 });
+    expect(windowMock.__kbFvUtils.rawSpan('\n    前导空白后的正文', 0, 2)).toEqual({ start: 5, end: 7 });
+  });
+
+  it('31 字摘录只涂 31 字（旧实现会涂满 70 字窗口）', () => {
+    const { windowMock } = loadScript();
+    const quote = '这段原文依据摘录一共三十一个字，用来验证高亮落点是否准确无误。';
+    const { container, marked } = frameHost(`${quote}后面还有一整句本不该变色。`);
+
+    expect([...quote].length).toBe(31);
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('段落中间的摘录也只涂摘录本身（不清洗前后的正文）', () => {
+    const { windowMock } = loadScript();
+    const quote = '检索改写要先用词表兜住转写错词';
+    const { container, marked } = frameHost(`第三章 方案\n\n前置说明一句话。${quote}，再往下就是别的段落了。`);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, quote)).toBe(true);
+    expect(marked).toEqual([quote]);
+  });
+
+  it('归一化后仍匹配不上时退到首个实词，只涂那个词（不猜长度）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameHost('正文里出现了一处改写计划，其余内容不动。');
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '改写计划（第 2 版）')).toBe(true);
+    expect(marked).toEqual(['改写计划']);
+  });
+});
+
+/**
+ * 行内元素会把一句话切成多个文本节点（Office/HTML 转出的正文里 `<strong>`/`<span>`
+ * 很常见）。这类摘录此前匹配不上整句，掉到"首个实词"兜底 —— 真机看到的就是
+ * "高亮只涂了半句/涂在别的地方"。
+ */
+describe('排版类原文依据高亮：摘录被行内元素切开（跨文本节点）', () => {
+  /** 假 iframe 正文：若干文本节点（可包行内元素）+ 只记区间的 Range。 */
+  function frameTree(parts: Array<{ tag?: string; text: string }>) {
+    const flat: any[] = [];
+    const childNodes: any[] = [];
+    let lastRange: any = null;
+    const ownerDocument: any = {
+      createTreeWalker: () => {
+        let index = 0;
+        return { nextNode: () => (index < flat.length ? flat[index++] : null) };
+      },
+      createRange: () => {
+        const range: any = { startNode: null, startOffset: 0, endNode: null, endOffset: 0 };
+        range.setStart = (node: any, offset: number) => { range.startNode = node; range.startOffset = offset; };
+        range.setEnd = (node: any, offset: number) => { range.endNode = node; range.endOffset = offset; };
+        range.surroundContents = () => {
+          if (range.startNode !== range.endNode) throw new Error('InvalidStateError');
+        };
+        range.extractContents = () => ({ nodeType: 11 });
+        range.insertNode = () => {};
+        lastRange = range;
+        return range;
+      },
+      createElement: () => ({ className: '', appendChild: () => {}, scrollIntoView: () => {} }),
+    };
+    for (const part of parts) {
+      const textNode: any = { nodeType: 3, nodeValue: part.text, ownerDocument };
+      flat.push(textNode);
+      if (!part.tag) {
+        childNodes.push(textNode);
+        continue;
+      }
+      childNodes.push({ nodeType: 1, childNodes: [textNode], querySelectorAll: () => [] });
+    }
+    const container: any = { nodeType: 1, ownerDocument, childNodes, querySelectorAll: () => [] };
+    const marked = () => {
+      if (!lastRange || !lastRange.startNode || !lastRange.endNode) return null;
+      const from = flat.indexOf(lastRange.startNode);
+      const to = flat.indexOf(lastRange.endNode);
+      if (from < 0 || to < 0) return null;
+      let out = '';
+      for (let i = from; i <= to; i++) {
+        const raw = String(flat[i].nodeValue || '');
+        out += raw.slice(i === from ? lastRange.startOffset : 0, i === to ? lastRange.endOffset : raw.length);
+      }
+      return out;
+    };
+    return { container, marked };
+  }
+
+  it('跨 <strong> 的摘录整句都被涂上（不再只涂首个实词）', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '前置说明一句话。' },
+      { tag: 'strong', text: '要点' },
+      { text: '：先做词表，再改检索。后面还有很多别的说明文字。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '**要点**：先做词表，再改检索')).toBe(true);
+    expect(marked()).toBe('要点：先做词表，再改检索');
+  });
+
+  it('精确命中优先于实词兜底：前面段落里出现同名词也不许抢落点', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '先做词表这句话在前面另一个段落里出现过。' },
+      { text: '真正的摘录是：' },
+      { tag: 'strong', text: '要点' },
+      { text: '：先做词表，再改检索。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '**要点**：先做词表，再改检索')).toBe(true);
+    expect(marked()).toBe('要点：先做词表，再改检索');
+  });
+
+  it('单节点内的摘录仍然走单节点精确路径', () => {
+    const { windowMock } = loadScript();
+    const { container, marked } = frameTree([
+      { text: '前置说明一句话。' },
+      { text: '检索改写要先用词表兜住转写错词。' },
+    ]);
+
+    expect(windowMock.__kbFvUtils.highlightContainer(container, '检索改写要先用词表兜住转写错词')).toBe(true);
+    expect(marked()).toBe('检索改写要先用词表兜住转写错词');
   });
 });

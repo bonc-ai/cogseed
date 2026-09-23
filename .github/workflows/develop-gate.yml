@@ -4,14 +4,20 @@ name: Develop Gate
 #
 # 为什么需要它：ci.yml 只在 cicd 上触发，develop 侧没有任何检查会拦住问题。
 # 1.1.2 发版时爆出来的 231 个测试失败，是在 develop 上躺了两周没人发现的。
-# 详见《CogSeed 发版流程规范 v1.9》第四节第 0 项。
+# 详见《CogSeed 发版流程规范 v2.0》第四节第 ⓪ 项。
 #
-# 【灰度说明 · 重要】
-# 本版所有 job 都是 continue-on-error: true —— 只出结论、不阻塞合并。
-# 跑一周看红的分布：
-#   · 红的都是历史遗留 -> 修完把 continue-on-error 删掉，转成阻塞
-#   · 有大量新提交引入的红 -> 说明拦得对，直接删掉转阻塞
-# 转阻塞 = 删掉下面每处 `continue-on-error: true` 这一行，别的都不用动。
+# 【阻塞状态 · 2026-09-18 起】
+# 灰度期（2026-09-16 上线）结束，三个 job 的 continue-on-error 已全部删除：
+#   · static-gates / affected-tests —— 同时设为 develop 的 required status checks；
+#   · windows-tests —— 结论真实呈现（红就是红），但不作为 required check，
+#     以免 Windows 托管 runner 的偶发抖动卡住整条线。
+# 转阻塞依据：灰度期内 windows shard 3 的唯一红单是既有的平台相关断言
+# （test/scripts/verify-packaged-launch.test.ts，已由 PR #297 修复），
+# 其余 shard 与两个 macos job 都没有新提交引入的红。
+#
+# 【本文件的一条纪律（规范红线 17）】
+# 门禁宁可多跑一次，也不能制造假红或假绿——一个会说谎的门禁会让人对红单脱敏。
+# 删掉 continue-on-error 之后，"红"必须是真实失败，"绿"必须真的跑过。
 #
 # 【为什么用 macos-latest 而不是 ubuntu】
 # 测试跑在 Electron 的 Node 运行时里（scripts/run-tests.mjs 里
@@ -35,8 +41,6 @@ permissions:
 
 jobs:
   static-gates:
-    # 灰度期：只报告不拦截。转阻塞时删掉这一行。
-    continue-on-error: true
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -60,10 +64,17 @@ jobs:
         run: npm run builtin:manifest:check
       - name: README link gate
         run: npm run readme:check
+      - name: Community Skill candidate gate
+        run: npm run community:skills:check
+      - name: Community Skill gate self-test
+        run: node scripts/run-tests.mjs run test/scripts/check-community-skills.test.ts --maxWorkers=1
+      # 2026-09-20 新增：硬跳过（it/test/describe.skip）必须逐条登记在
+      # test/skip-allowlist.json，未登记的一律判失败。放在 L1 是为了在**源头**
+      # 挡住"用 skip 静音"——nightly 里的同名步骤（同一份脚本）作为 L2 兜底。
+      - name: Skip 残留检查（硬跳过必须登记）
+        run: node scripts/check-skipped-tests.mjs --strict
 
   affected-tests:
-    # 灰度期：只报告不拦截。转阻塞时删掉这一行。
-    continue-on-error: true
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
@@ -105,8 +116,6 @@ jobs:
           echo "::warning::漏网是预期内的 —— develop-nightly.yml 会在每天夜里跑全量兜底。"
 
   windows-tests:
-    # Gray rollout: report the full Windows failure inventory without blocking merges.
-    continue-on-error: true
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:

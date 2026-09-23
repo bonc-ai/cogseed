@@ -98,7 +98,7 @@ describe('committed projection knowledge', () => {
     fs.writeFileSync(profileFile, `${bounded}\n§\n${hardCut}`, 'utf8');
 
     const { loadOntologyAssets } = await import('../../../../src/main/features/recall/projection-knowledge');
-    const assets = loadOntologyAssets('user-a');
+    const assets = await loadOntologyAssets('user-a');
 
     expect(assets).toHaveLength(2);
     const [boundedAsset, hardCutAsset] = assets;

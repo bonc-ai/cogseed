@@ -40,7 +40,16 @@ export interface AnchorTarget {
   scope: 'global' | 'space' | 'conversation';
   /** Library-relative path or attachment filename. */
   path: string;
-  chunkIdx: number;
+  /**
+   * 向量库 chunk 序号（调用方的 0-based；kb_chunks 行内 chunk_idx 自 1 起）。
+   *
+   * **省略 = 这次不是引用跳转，而是"打开整篇"**（知识库文件列表、发现页、
+   * 摘要/脑图的来源跳转都属此类）：不做 chunk 定位、不返回 charStart/charEnd，
+   * 正文照常返回——前端因此不会凭空高亮正文前几行，也不会多出"返回引用位置"
+   * 按钮（真机反馈：文件列表点开也带高亮，就是因为调用方塞了个占位 chunkIdx）。
+   * 一旦这里给了数字，语义就是"定位到这个 chunk"。
+   */
+  chunkIdx?: number;
   /** Optional expected snippet from the evidence (preferred for locating). */
   quote?: string;
   /** Required for attachments. */
@@ -165,14 +174,19 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
   } else if (scope === 'space') {
     if (!target.spaceId) return { resolved: false, reason: 'bad_input' };
     absPath = path.join(spaceContextsDir(userId, target.spaceId), displayPath);
-    const chunks = spaceLibrary.readFileChunks(userId, target.spaceId, displayPath);
-    const meta = chunks.find((c) => c.chunk_idx === target.chunkIdx);
+    // 没给 chunkIdx = 打开整篇，不查 chunk（不然 chunk 0 会被当成"引用片段"高亮）
+    const meta = target.chunkIdx == null
+      ? undefined
+      : spaceLibrary.readFileChunks(userId, target.spaceId, displayPath)
+        .find((c) => c.chunk_idx === target.chunkIdx);
     chunkText = meta?.content?.trim() ?? null;
     chunkTitle = meta?.title ?? null;
   } else {
     absPath = path.join(userContextsDir(userId), displayPath);
-    const chunks = kb.readFileChunks(userId, displayPath);
-    const meta = chunks.find((c) => c.chunk_idx === target.chunkIdx);
+    const meta = target.chunkIdx == null
+      ? undefined
+      : kb.readFileChunks(userId, displayPath)
+        .find((c) => c.chunk_idx === target.chunkIdx);
     chunkText = meta?.content?.trim() ?? null;
     chunkTitle = meta?.title ?? null;
   }

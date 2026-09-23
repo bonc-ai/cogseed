@@ -12,6 +12,7 @@
  * reinstall (or the next boot retries automatically).
  */
 
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
@@ -37,7 +38,15 @@ import {
   type AgentInstall, type SkillInstall,
 } from './marketplace_installs';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
-import { extractBundleSafely, postJson } from './marketplace';
+import {
+  extractBundleSafely, postJson, quarantineStagingName, quarantineTrashName,
+} from './marketplace';
+import { decideCurrentSwitch } from './marketplace/current-switch-policy';
+import { readInstalledVersion } from './marketplace/installed-version';
+import { MarketplaceError } from './marketplace/errors';
+import { getSkillMetadata } from './marketplace/metadata-adapter';
+import { fetchImmutableSource } from './marketplace/source-fetch';
+import { writeVersionCopy } from './marketplace/version-store';
 import { validateSkillDir } from '../quality';
 import { persistReport as persistQualityReport } from '../quality/report';
 import {
@@ -173,6 +182,37 @@ function _setStatus(next: ReconcileStatus): void {
   for (const fn of _listeners) {
     try { fn(_status); } catch { /* listener errors must not break reconcile */ }
   }
+}
+
+/**
+ * 「用户打开目录页时触发一次检查」的接缝（specs/010 FR-034 `[FROZEN]`，PRD doc-v0.5 §7.3）。
+ *
+ * 检查的编排住在 `index.ts`（去重、默认撒种、失败重试节奏都在那儿），而 IPC 层够不到它——
+ * 于是由 `index.ts` 在启动时把它注册进来，IPC 只负责转达一次「用户打开了目录页」。
+ * 形态与本规格其它可替换接缝（`setConsentReader` / `setUsageEventSender`）一致。
+ *
+ * ⚠️ **不改变检查节奏**：真正的频率闸门是 `checkServerUpdatesForInstalls` 的 `minIntervalMs`
+ * （6 小时），打开目录页只是**提供一次触发时机**，不是绕过节奏的后门。
+ */
+export type InstallReconcileRunner = (reason: string) => Promise<void>;
+
+let _installReconcileRunner: InstallReconcileRunner | null = null;
+
+export function setInstallReconcileRunner(runner: InstallReconcileRunner | null): void {
+  _installReconcileRunner = runner;
+}
+
+/**
+ * 请求一次检查。**不 await 检查本身**——FR-034 要求检查不打断用户，渲染层拿到的是
+ * 「已受理 / 未受理」，不是检查结果。未注册运行器时如实返回 `accepted: false`。
+ */
+export function requestInstallReconcile(reason: string): { accepted: boolean } {
+  const runner = _installReconcileRunner;
+  if (!runner) return { accepted: false };
+  void runner(reason).catch((err) => {
+    log.warn('requested install reconcile failed', { reason, error: (err as Error).message });
+  });
+  return { accepted: true };
 }
 
 export function setDefaultInstallSeedStatus(active: boolean): void {
@@ -481,7 +521,7 @@ export async function reconcileInstalls(
     (r) => _isInstallRowAppCompatible(r, 'agent') && !!r.agent_json_url && _agentNeedsPull(uid, r),
   );
   const skillsNeedingPull = manifest.skills.filter(
-    (r) => _isInstallRowAppCompatible(r, 'skill') && !!r.bundle_url && _skillNeedsPull(uid, r),
+    (r) => _isInstallRowAppCompatible(r, 'skill') && _skillRowHasServerSource(r) && _skillNeedsPull(uid, r),
   );
   const agentPullIds = new Set(agentsNeedingPull.map((r) => r.id));
   const skillPullIds = new Set(skillsNeedingPull.map((r) => r.id));
@@ -693,8 +733,9 @@ async function _reconcileLocalOnlyInstalls(
         version: meta.version,
         published_at: meta.published_at,
         ...(typeof meta.updated_at === 'number' ? { updated_at: meta.updated_at } : {}),
-        bundle_url: meta.bundle_url!,
-        installed_at: meta.installed_at!,
+        // Hub 内容没有对象存储地址；历史行若带着它就沿用，否则留空。
+        bundle_url: typeof meta.bundle_url === 'string' ? meta.bundle_url : '',
+        installed_at: meta.installed_at,
         create_uid: meta.create_uid || '',
         ...(typeof meta.default_install === 'boolean' ? { default_install: meta.default_install } : {}),
         ...(meta.status ? { status: meta.status } : {}),
@@ -807,6 +848,18 @@ function _agentPrivateSkillsExist(uid: string, id: string): boolean {
   } catch { return false; }
 }
 
+/**
+ * 这一行是否有服务端来源可拉。
+ *
+ * ⚠️ 原判据是 `!!row.bundle_url`。Hub 内容按 F4 收口后不再有对象存储地址，沿用旧判据会让
+ * **任何 Hub Skill 永远不被拉取**（实测：清单行 `bundle_url` 为空即被这条过滤掉）。
+ * 新判据：**不是随包内置种子**即可按 `{content_id, version}` 从 Hub 源站取字节；
+ * 历史行即便仍带 `bundle_url` 也同样成立。
+ */
+function _skillRowHasServerSource(row: SkillInstall): boolean {
+  return row.seed_source !== 'builtin' && row.seed_source !== 'resource';
+}
+
 function _skillNeedsPull(uid: string, row: SkillInstall): boolean {
   if (!_skillContentExists(uid, row.id)) return true;
   const dir = userMarketplaceSkillDir(uid, row.id);
@@ -894,21 +947,13 @@ async function _ensureAgentSkillDependencies(
     if (row && _marketplaceStatus(row) && _marketplaceStatus(row) !== 'approved') {
       throw new Error(`dependency skill ${skillId} is not approved (${_marketplaceStatus(row)})`);
     }
-    if (!row || !row.bundle_url) {
-      const meta = await postJson<{
-        bundle_url: string;
-        version: string;
-        published_at: number;
-        updated_at?: number;
-        create_uid?: string;
-        default_install?: boolean;
-        status?: string;
-        state?: string;
-        min_app_version?: string;
-        minAppVersion?: string;
-      }>('/marketplace/skills/bundle', { id: skillId });
-      _assertApprovedDependencySkill(skillId, meta);
-      const minAppVersion = _normalizeMinAppVersion(meta);
+    if (!row) {
+      // 条件原为「缺 row 或缺 bundle_url」。Hub 内容不再有 bundle_url，缺它不再是补装信号；
+      // 唯一的信号是清单里没有这一行。元信息经适配层取，不再拿取字节接口当详情接口。
+      const meta = await getSkillMetadata(skillId);
+      if (!meta) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
+      _assertApprovedDependencySkill(skillId, { status: meta.status });
+      const minAppVersion = meta.min_app_version;
       if (!_isAppCompatible(minAppVersion)) {
         throw new Error(`dependency skill ${skillId} requires CogSeed >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
       }
@@ -917,17 +962,17 @@ async function _ensureAgentSkillDependencies(
         version: meta.version || '1.0.0',
         published_at: meta.published_at || 0,
         ...(typeof meta.updated_at === 'number' ? { updated_at: meta.updated_at } : {}),
-        bundle_url: meta.bundle_url || '',
+        // Hub 内容没有对象存储地址；字节由 `_pullSkill` 按 {content_id, version} 取。
+        bundle_url: '',
         installed_at: Date.now(),
-        create_uid: meta.create_uid || '',
-        ...(typeof meta.default_install === 'boolean' ? { default_install: meta.default_install } : {}),
-        ...((meta.status || meta.state) ? { status: meta.status || meta.state } : {}),
+        create_uid: meta.create_uid,
+        default_install: meta.default_install,
+        ...(meta.status ? { status: meta.status } : {}),
         ...(minAppVersion ? { min_app_version: minAppVersion } : {}),
       };
       await addSkillInstall(uid, row);
       manifestSkills.set(skillId, row);
     }
-    if (!row.bundle_url) throw new Error(`dependency skill ${skillId} missing bundle_url`);
     await _pullSkill(uid, row, opts);
     try { clearSkillListCache(); } catch { /* list cache may not be loaded yet */ }
     try { invalidateCoreAgentSkills(); } catch { /* runner may not be loaded yet */ }
@@ -997,7 +1042,11 @@ interface InstallMeta {
   updated_at?: number;
   agent_json_url?: string;
   agent_skills_bundle_url?: string;
+  /** @deprecated Hub 内容恒为空串；版本身份见 `artifact_sha256`。 */
   bundle_url?: string;
+  /** 发布物字节摘要（`artifact.sha256`）。与 `content_sha`（SKILL.md 单文件摘要）不同。 */
+  artifact_sha256?: string;
+  artifact_size_bytes?: number;
   installed_at?: number;
   create_uid?: string;
   default_install?: boolean;
@@ -1040,9 +1089,17 @@ function _canRestoreAgentInstall(meta: InstallMeta | null): meta is InstallMeta 
     && typeof meta.installed_at === 'number' && meta.installed_at > 0;
 }
 
-function _canRestoreSkillInstall(meta: InstallMeta | null): meta is InstallMeta & { bundle_url: string; installed_at: number } {
+/**
+ * 本机有内容、清单里却没有这一行时，能否据本机标记把清单行补回来。
+ *
+ * ⚠️ 原判据要求 `bundle_url` 非空。Hub 内容按 F4 收口后该字段恒为空，沿用旧判据会让
+ * **本地有内容但清单行缺失的 Hub Skill 再也无法恢复**（表现为界面显示未安装，而内容仍在盘上）。
+ * 重建清单行需要的其实是 `version` + `installed_at`；下载地址早已不是必需——
+ * 拉取按 `{content_id, version}` 进行。
+ */
+function _canRestoreSkillInstall(meta: InstallMeta | null): meta is InstallMeta & { installed_at: number } {
   return !!meta
-    && typeof meta.bundle_url === 'string' && meta.bundle_url.length > 0
+    && typeof meta.version === 'string' && meta.version.length > 0
     && typeof meta.installed_at === 'number' && meta.installed_at > 0;
 }
 
@@ -1304,65 +1361,131 @@ async function _pullSkill(uid: string, row: SkillInstall, opts: MarketplaceRecon
 }
 
 async function _pullSkillLocked(uid: string, row: SkillInstall, opts: MarketplaceReconcileOptions = {}): Promise<void> {
-  let current = row;
   _assertContinue(opts);
-  let downloaded = await downloadMarketplaceBundle(`marketplace:pull-skill:${row.id}`, current.bundle_url, {
-    assertContinue: () => _assertContinue(opts),
-  });
-  let res = downloaded.response;
-  if (!res.ok && res.status === 404) {
-    _assertContinue(opts);
-    const fresh = await postJson<{
-      bundle_url: string;
-      version: string;
-      published_at: number;
-      updated_at?: number;
-      create_uid: string;
-      default_install?: boolean;
-      status?: string;
-      state?: string;
-      min_app_version?: string;
-      minAppVersion?: string;
-    }>('/marketplace/skills/bundle', { id: row.id });
-    const minAppVersion = _normalizeMinAppVersion(fresh);
-    current = {
-      ...row,
-      version: fresh.version,
-      published_at: fresh.published_at,
-      ...(typeof fresh.updated_at === 'number' ? { updated_at: fresh.updated_at } : {}),
-      bundle_url: fresh.bundle_url,
-      create_uid: fresh.create_uid || row.create_uid,
-      ...(typeof fresh.default_install === 'boolean' ? { default_install: fresh.default_install } : {}),
-      ...((fresh.status || fresh.state) ? { status: fresh.status || fresh.state } : {}),
-      min_app_version: minAppVersion || '',
-    };
-    _assertContinue(opts);
-    await addSkillInstall(uid, current);
-    downloaded = await downloadMarketplaceBundle(`marketplace:pull-skill:${row.id}:fresh`, current.bundle_url, {
+  // 元信息经适配层。原先「先用 bundle_url 下载、404 再刷新地址重下」那一套**整体消失**：
+  // 它存在的唯一理由是对象存储地址会过期，而字节现在按 {content_id, version} 从 Hub 源站取，
+  // 没有会过期的地址可刷新。
+  const meta = await getSkillMetadata(row.id);
+  if (!meta) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${row.id}`);
+  const minAppVersion = meta.min_app_version;
+  const current: SkillInstall = {
+    ...row,
+    version: meta.version,
+    published_at: meta.published_at,
+    ...(typeof meta.updated_at === 'number' ? { updated_at: meta.updated_at } : {}),
+    bundle_url: '',
+    create_uid: meta.create_uid || row.create_uid,
+    default_install: meta.default_install,
+    ...(meta.status ? { status: meta.status } : {}),
+    min_app_version: minAppVersion || '',
+  };
+  _assertContinue(opts);
+  await addSkillInstall(uid, current);
+
+  const stagingRoot = userMarketplaceSkillsDir(uid);
+  await fsp.mkdir(stagingRoot, { recursive: true });
+  const staging = path.join(stagingRoot, `.staging-pull-${row.id}-${Date.now()}.zip`);
+  let zip: ReturnType<typeof parseMarketplaceBundle>;
+  try {
+    await fetchImmutableSource({
+      contentId: row.id,
+      version: meta.version,
+      artifact: meta.artifact,
+      destPath: staging,
       assertContinue: () => _assertContinue(opts),
     });
-    res = downloaded.response;
+    _assertContinue(opts);
+    zip = parseMarketplaceBundle(await fsp.readFile(staging));
+  } finally {
+    await fsp.rm(staging, { force: true }).catch(() => { /* staging is best-effort cleanup */ });
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  if (!downloaded.buffer) throw new Error('skill bundle response body missing');
-  _assertContinue(opts);
-  const zip = parseMarketplaceBundle(downloaded.buffer);
-  const minAppVersion = _normalizeMinAppVersion(current);
   if (!_isAppCompatible(minAppVersion)) {
     throw new Error(`skill ${row.id} requires CogSeed >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
   }
 
-  const dir = userMarketplaceSkillDir(uid, row.id);
-  _assertContinue(opts);
-  await fsp.rm(dir, { recursive: true, force: true });
-  _assertContinue(opts);
-  await fsp.mkdir(dir, { recursive: true });
+  // ── 单调更新（T057 / FR-035）：目录版本**高于本机实际版本**时才替换 ────────────
+  // 本机版本取自 `installed-version.ts` 这一单一判定入口（FR-019/FR-020），
+  // **不是**安装清单的目标版本——后者在更新失败时会领先于内容。
+  const localFact = readInstalledVersion(uid, row.id);
+  if (localFact.version) {
+    const updateDecision = decideMarketplaceContentUpdate(
+      {
+        version: localFact.version,
+        published_at: localFact.publishedAt ?? 0,
+        ...(typeof localFact.updatedAt === 'number' ? { updated_at: localFact.updatedAt } : {}),
+      },
+      {
+        version: meta.version,
+        published_at: meta.published_at,
+        ...(typeof meta.updated_at === 'number' ? { updated_at: meta.updated_at } : {}),
+      },
+      'hub',
+    );
+    if (updateDecision.action === 'preserve_content') {
+      log.info('skill content preserved by the monotonic update rule', {
+        skillId: row.id, local: localFact.version, server: meta.version, reason: updateDecision.reason,
+      });
+      return;
+    }
+  }
 
+  // ── 替换走与安装同一套临时区 + 原子落盘（T057 / FR-035 / FR-038）────────────
+  // 原先这里是 `rm -rf dir` → `mkdir` → `extract`：崩在解包中途，旧版直接没了，
+  // 而且**半写的树对 loader 可见**。PRD §7.5 要求「更新写入中断或崩溃，重启后仍是旧版可用」，
+  // 因此内容先落到点前缀临时区，全部就位后再一次性原子提升。
+  const dir = userMarketplaceSkillDir(uid, row.id);
+  const skillsRoot = userMarketplaceSkillsDir(uid);
+  await fsp.mkdir(skillsRoot, { recursive: true });
+  const stagingDir = path.join(skillsRoot, quarantineStagingName(randomBytes(6).toString('hex')));
   _assertContinue(opts);
-  extractBundleSafely(zip, dir);
-  // Sanity: SKILL.md must end up in place (zip empty / corrupt would silently skip everything).
+  await fsp.mkdir(stagingDir, { recursive: true });
+
+  try {
+    _assertContinue(opts);
+    extractBundleSafely(zip, stagingDir);
+    // Sanity: SKILL.md must end up in place (zip empty / corrupt would silently skip everything).
+    if (!fs.existsSync(path.join(stagingDir, 'SKILL.md'))) throw new Error('bundle missing SKILL.md');
+    _assertContinue(opts);
+
+    // 版本副本从**临时区**写：下载与校验可以先做完，与 current 是否推进无关（§7.5）。
+    if (meta.artifact.sha256) {
+      try {
+        await writeVersionCopy(uid, {
+          contentId: row.id,
+          version: current.version,
+          sha256: meta.artifact.sha256,
+          sizeBytes: meta.artifact.size_bytes,
+        }, stagingDir);
+      } catch (err) {
+        log.warn('immutable version copy not written; the pull itself is unaffected', {
+          skillId: row.id, version: current.version, error: (err as Error).message,
+        });
+      }
+    }
+
+    // ── M1 的唯一决策点，恰一次（T054 / FR-037）──────────────────────────
+    // 在版本副本写入完成之后、推进 current install 之前。本文件**不认识**它的取值。
+    _assertContinue(opts);
+    const decision = await decideCurrentSwitch(uid, row.id);
+    if (!decision.advance) {
+      log.info('skill update staged but current install not advanced', {
+        skillId: row.id, version: current.version, reason: decision.reason,
+      });
+      return;
+    }
+
+    // 原子提升：旧版先挪进带 content_id 的 trash，再把临时区换进正式位置。
+    // 两次 rename 之间崩溃时，启动期清理会从 trash 把旧版恢复回来（发现 15）。
+    const trash = path.join(skillsRoot, quarantineTrashName(row.id, randomBytes(6).toString('hex')));
+    if (fs.existsSync(dir)) await fsp.rename(dir, trash);
+    await fsp.rename(stagingDir, dir);
+    await fsp.rm(trash, { recursive: true, force: true });
+  } finally {
+    // 未提升的临时区一律清掉：未通过提升的内容不得留存。
+    await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+  }
+
   const skillMdFile = path.join(dir, 'SKILL.md');
-  if (!fs.existsSync(skillMdFile)) throw new Error('bundle missing SKILL.md');
   _assertContinue(opts);
   // W3 install gate for the reconcile path. UX-first, by product decision:
   // a refusal NEVER deletes the pulled content — the user installed this skill
@@ -1375,7 +1498,11 @@ async function _pullSkillLocked(uid: string, row: SkillInstall, opts: Marketplac
   await _writeInstallMeta(dir, {
     version: current.version, published_at: current.published_at,
     ...(typeof current.updated_at === 'number' ? { updated_at: current.updated_at } : {}),
-    bundle_url: current.bundle_url,
+    // Hub 内容恒为空串；版本身份与完整性见 artifact_*。
+    bundle_url: '',
+    ...(meta.artifact.sha256 ? { artifact_sha256: meta.artifact.sha256 } : {}),
+    ...(typeof meta.artifact.size_bytes === 'number'
+      ? { artifact_size_bytes: meta.artifact.size_bytes } : {}),
     installed_at: current.installed_at,
     create_uid: current.create_uid || '',
     ...(typeof current.default_install === 'boolean' ? { default_install: current.default_install } : {}),
@@ -1390,6 +1517,7 @@ async function _pullSkillLocked(uid: string, row: SkillInstall, opts: Marketplac
       return hash ? { content_tree_hash: hash } : {};
     })()),
   });
+
 }
 
 async function _fetchAgentPrivateSkillsBundle(

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
 import { createLogger } from '../../logger';
-import { listAbilityAssets, readAbilityAsset } from './asset-service';
+import { listAbilityAssets, readAbilityAsset, type AbilityAssetVersionRecord } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
 import { isAssetScopeAllowed, scopeIncludes } from './scope-policy';
@@ -43,7 +43,11 @@ const RUNTIME_OMISSION_REASON: Partial<Record<AssetRuntimeBlockReason, OmittedAs
 const log = createLogger('recall.context-projection');
 let lastProjectionCreatedAtMs = 0;
 
-export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required';
+/** 授权来源（2026-09-18 增 model_selected）：模型自己把资产挂到本任务——
+ *  与宿主自动投影（not_required）、工作区策略（workspace_policy）、用户确认
+ *  （user_confirmed）并列，区别在于"谁做的决定"，界面据此标"模型自选"并
+ *  允许一键撤销。 */
+export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required' | 'model_selected';
 export type ContextProjectionStatus = 'preview' | 'confirmed' | 'deferred' | 'rejected' | 'expired' | 'revoked';
 
 export type ProjectionKnowledgeErrorCode =
@@ -91,6 +95,13 @@ export interface RecallAssetMatch {
   matchMethod: RecallAssetMatchMethod;
 }
 
+export interface ModelSelectionEvent {
+  taskRunId: string;
+  assetIds: string[];
+  addedAssetIds: string[];
+  addedAt: string;
+}
+
 export interface ContextProjectionRecord extends RecallJsonRecord {
   taskRunId: string;
   conversationId?: string;
@@ -99,7 +110,15 @@ export interface ContextProjectionRecord extends RecallJsonRecord {
   authorization: ProjectionAuthorization;
   assetIds: string[];
   assetVersions?: Record<string, string>;
+  /** 版本真删前冻结进投影的内容副本（2026-09-17）：已确认注入引用的版本被
+   *  物理删除时，把该版本快照抄进这里；之后注入优先按副本供给，效果与
+   *  删除前一致。仅为删除时的兜底缓存，不是投影本体的必填结构。 */
+  assetVersionSnapshots?: Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }>;
   assetMatches?: RecallAssetMatch[];
+  /** Cumulative assets added because the model explicitly named them. */
+  modelSelectedAssetIds?: string[];
+  /** Per tool-call ledger for model-selected additions. */
+  modelSelectionEvents?: ModelSelectionEvent[];
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
   expiresAt?: string;
@@ -123,6 +142,13 @@ export interface ProjectionInput {
   taskText?: string;
   authorization?: ProjectionAuthorization;
   expiresAt?: string;
+  /** 来源会话 id（2026-09-18）：模型自选投影按会话去重（同一会话只维护一条），
+   *  使用记录/时间线也靠它把事件关联回会话名。 */
+  conversationId?: string;
+  /** 显式资产（2026-09-19 用户主动使用）：用户点「用到当前对话」钉住的资产
+   *  ——绕过语义选择（用户已经挑好了），但仍过状态硬门（必须 active）并
+   *  钉住当前在用版。与 taskText 语义选互斥，显式优先。 */
+  explicitAssetIds?: string[];
   /** Auto-confirm on creation (workspace_policy line): the projection is
    *  written as confirmed immediately, skipping the user confirmation card. */
   confirm?: boolean;
@@ -243,6 +269,24 @@ function validateAssetVersions(value: unknown): Record<string, string> | undefin
   return out;
 }
 
+/** 快照缓存是删除时的兜底字段：形状不对就整字段剥离（回退版本流读取），
+ *  不让它有权力把整条投影判成畸形。 */
+function validateAssetVersionSnapshots(
+  value: unknown,
+): Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, { version: string; snapshot: AbilityAssetVersionRecord['snapshot'] }> = {};
+  for (const [assetId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!safeId(assetId) || !entry || typeof entry !== 'object' || Array.isArray(entry)) return undefined;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.version !== 'string' || !record.version.trim()
+      || !record.snapshot || typeof record.snapshot !== 'object' || Array.isArray(record.snapshot)) return undefined;
+    out[assetId] = { version: record.version, snapshot: record.snapshot as AbilityAssetVersionRecord['snapshot'] };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function validateProjectionStatus(value: unknown): ContextProjectionStatus {
   if (value === 'preview' || value === 'confirmed' || value === 'deferred' || value === 'rejected' || value === 'expired' || value === 'revoked') {
     return value;
@@ -354,22 +398,26 @@ function scopeAppliesToPurpose(scope: string, purpose: string): boolean {
   return scopeIncludes(scope, purpose);
 }
 
-async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose'>): Promise<boolean> {
+async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose' | 'authorization'>): Promise<boolean> {
   if (asset.status !== 'active') throw new Error('context projection asset is not active');
   if (!isAssetScopeAllowed(asset.scopePolicy, {
     purpose: projection.purpose,
     workspaceId: projection.workspaceId,
   })) return false;
+  // scope 词匹配（scope 词要出现在 purpose 文本里）是给宿主自动挑选兜底的启发式；
+  // 模型自选线不再重复这一道（2026-09-18）：模型在目录里看过这条资产声明的范围、
+  // 自己判断过适用性，且挂载时已过运行时准入门（含 scopePolicy）。其余检查一律保留。
+  const requireScopeWordMatch = projection.authorization !== 'model_selected';
   // 资产池全局共享：空间投影可引用整个池子（含其它空间资产与全局资产）。
   // workspace-ref 是可选收紧控制（显式停用 / scope 词），不是前置。
   if (projection.workspaceId) {
     const refs = await listWorkspaceAssetReferences(userId);
     const ref = refs.find((item) => item.assetId === asset.id && item.workspaceId === projection.workspaceId);
     if (ref && !ref.enabled) return false;
-    if (ref && !scopeAppliesToPurpose(ref.scope, projection.purpose)) return false;
+    if (ref && requireScopeWordMatch && !scopeAppliesToPurpose(ref.scope, projection.purpose)) return false;
     return true;
   }
-  return scopeAppliesToPurpose(asset.scope, projection.purpose);
+  return requireScopeWordMatch ? scopeAppliesToPurpose(asset.scope, projection.purpose) : true;
 }
 
 async function readEligibleProjectionAsset(userId: string, assetId: string, projection: ContextProjectionRecord): Promise<RecallAbilityAssetRecord> {
@@ -392,12 +440,49 @@ function sourceRefsForAssets(assets: RecallAbilityAssetRecord[]): CognitionSourc
   return sourceRefs;
 }
 
+function validateModelSelectedAssetIds(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('malformed model-selected assets');
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const id = String(item || '');
+    if (!id || seen.has(id)) throw new Error('malformed model-selected assets');
+    seen.add(id); out.push(id);
+  }
+  return out;
+}
+
+function validateModelSelectionEvents(value: unknown): ModelSelectionEvent[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('malformed model selection events');
+  return value.map((event) => {
+    if (!event || typeof event !== 'object') throw new Error('malformed model selection event');
+    const row = event as Record<string, unknown>;
+    const taskRunId = String(row.taskRunId || '');
+    const addedAt = String(row.addedAt || '');
+    if (!taskRunId || !addedAt) throw new Error('malformed model selection event');
+    return {
+      taskRunId,
+      assetIds: validateModelSelectedAssetIds(row.assetIds) || [],
+      addedAssetIds: validateModelSelectedAssetIds(row.addedAssetIds) || [],
+      addedAt,
+    };
+  });
+}
+
 function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   if (!Array.isArray(value.assetIds) || !Array.isArray(value.sourceRefs) || !Array.isArray(value.omittedRefs) || typeof value.taskRunId !== 'string' || typeof value.purpose !== 'string' || typeof value.authorization !== 'string' || typeof value.createdAt !== 'string') throw new Error('malformed context projection');
   if (value.selectionDegraded !== undefined && typeof value.selectionDegraded !== 'boolean') throw new Error('malformed context projection');
   const assetMatches = validateAssetMatches(value.assetMatches);
   const assetVersions = validateAssetVersions(value.assetVersions);
-  return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}) } as ContextProjectionRecord;
+  const assetVersionSnapshots = validateAssetVersionSnapshots(value.assetVersionSnapshots);
+  const modelSelectedAssetIds = validateModelSelectedAssetIds(value.modelSelectedAssetIds);
+  const modelSelectionEvents = validateModelSelectionEvents(value.modelSelectionEvents);
+  return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}), ...(assetVersionSnapshots ? { assetVersionSnapshots } : {}),
+    ...(modelSelectedAssetIds ? { modelSelectedAssetIds } : {}),
+    ...(modelSelectionEvents ? { modelSelectionEvents } : {}),
+  } as ContextProjectionRecord;
 }
 
 /** Default semantic HARD FLOOR (dual-signal selection): scores below this
@@ -573,20 +658,45 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   };
 }
 
+/** 显式资产视图（2026-09-19 用户主动使用）：绕过语义选择，逐条校验存在且
+ *  active、钉住当前在用版——用户指定即是意图，语义门不该再筛一遍。 */
+async function buildExplicitAssetView(userId: string, assetIds: string[]) {
+  const ids = [...new Set(assetIds)].slice(0, 12);
+  if (!ids.length) throw new Error('explicit projection requires at least one asset');
+  const { readAbilityAsset } = await import('./asset-service');
+  const assets = [];
+  for (const id of ids) {
+    const asset = await readAbilityAsset(userId, id);
+    if (asset.status !== 'active') throw new Error(`explicit projection asset is not active: ${id}`);
+    assets.push(asset);
+  }
+  return {
+    assetIds: assets.map((asset) => asset.id),
+    assetVersions: Object.fromEntries(assets.map((asset) => [asset.id, String(asset.activeVersion || asset.version || '1')])),
+    sourceRefs: assets.flatMap((asset) => (asset.evidenceRefs || []).slice(0, 3).map((ref) => ({ kind: ref.kind, id: ref.id }))),
+    omittedRefs: [] as OmittedAssetRef[],
+    assetMatches: assets.map((asset) => ({ assetId: asset.id, matchScore: 1, matchMethod: 'manual' as const })),
+    degraded: false,
+  };
+}
+
 export async function previewContextProjection(userId: string, input: ProjectionInput, options: ProjectionSemanticOptions = {}): Promise<ContextProjectionRecord> {
   const taskRunId = normalizeTerm(input.taskRunId, 'task run id', 160);
   const purpose = normalizeTerm(input.purpose, 'purpose', 120);
   const workspaceId = input.workspaceId === undefined ? undefined : normalizeTerm(input.workspaceId, 'workspace id', 160);
   const taskText = normalizeOptionalTerm(input.taskText, 'task text');
+  const conversationId = input.conversationId === undefined ? undefined : normalizeTerm(input.conversationId, 'conversation id', 160);
   const authorization: ProjectionAuthorization = input.authorization || 'user_confirmed';
-  if (authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') throw new Error('invalid projection authorization');
+  if (authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required' && authorization !== 'model_selected') throw new Error('invalid projection authorization');
   if (input.expiresAt !== undefined && Number.isNaN(Date.parse(input.expiresAt))) throw new Error('invalid projection expiry');
-  const view = await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
+  const view = input.explicitAssetIds?.length
+    ? await buildExplicitAssetView(userId, input.explicitAssetIds)
+    : await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
   const now = projectionNowIso();
   const confirmedAt = input.confirm ? now : undefined;
   const record: ContextProjectionRecord = {
     schemaVersion: 2, ownerId: userId, id: `proj-${genId12()}`,
-    taskRunId, ...(workspaceId ? { workspaceId } : {}), purpose, authorization,
+    taskRunId, ...(workspaceId ? { workspaceId } : {}), ...(conversationId ? { conversationId } : {}), purpose, authorization,
     assetIds: view.assetIds, ...(view.assetVersions ? { assetVersions: view.assetVersions } : {}), ...(view.assetMatches ? { assetMatches: view.assetMatches } : {}), sourceRefs: view.sourceRefs, omittedRefs: view.omittedRefs,
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
     ...(view.degraded ? { selectionDegraded: true } : {}),
@@ -677,7 +787,16 @@ export async function createAutomaticContextProjection(
   }
   if (!eligibleAssets.length) return undefined;
 
-  const selection = await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId);
+  // 基线开关（2026-09-22 起默认反转）：正文自动注入默认**关闭**——查重与
+  // 知识发现由常驻目录＋模型自取承担（A/B 对照实验：注入抑制自取 5↔10 次、
+  // 命中增益仅 5/12↔3/12，砍注入的决策依据）。COGSEED_RECALL_BASELINE_TOP=N>0
+  // 显式恢复旧的"自动挑 N 条塞正文"行为（回滚通道与实验复跑都保留）。
+  const baselineTopEnv = process.env.COGSEED_RECALL_BASELINE_TOP;
+  const baselineTop = baselineTopEnv === undefined || baselineTopEnv.trim() === '' ? Number.NaN : Number(baselineTopEnv);
+  const baselineEnabled = Number.isFinite(baselineTop) && baselineTop > 0;
+  const selection = baselineEnabled
+    ? await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId)
+    : { assets: [] as RecallAbilityAssetRecord[], degraded: false };
   const selectedAssets = selection.assets;
   if (!selectedAssets.length) return undefined;
 
@@ -767,6 +886,33 @@ export function validateCommittedProjectionAssetVersions(
  *  且无任何回退——旧实现的安全论证引用的是非 committed 路径的宽容跳过，
  *  论证对象错了（2026-09-14 修复）。只动版本号快照，注入内容仍按投影
  *  确认时冻结的语句；返回刷新的投影条数。 */
+/** 全量列举 confirmed 投影（不过 listContextProjections——它 clamp 条数，
+ *  存量超过时最老的投影漏掉。版本删除冻结副本（asset-service）等"必须
+ *  一个不漏"的消费方用这个；条数敏感的常规列表仍走 listContextProjections）。 */
+export async function listAllConfirmedProjections(userId: string): Promise<ContextProjectionRecord[]> {
+  let names: string[];
+  try {
+    names = await fs.readdir(projectionsDirectory(userId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const records = await Promise.all(names
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => readRecallJsonRecord(userId, 'projections', name.slice(0, -5))));
+  const confirmed: ContextProjectionRecord[] = [];
+  for (const raw of records) {
+    if (!raw) continue;
+    try {
+      const projection = asProjection(raw);
+      if (isCommittedProjection(projection)) confirmed.push(projection);
+    } catch {
+      continue;
+    }
+  }
+  return confirmed;
+}
+
 export async function refreshCommittedProjectionAssetVersion(
   userId: string,
   assetId: string,
@@ -841,7 +987,9 @@ export async function reviseContextProjection(
   userId: string,
   projectionId: string,
   input: ProjectionRevisionInput,
+  options: { allowedStatuses?: ContextProjectionStatus[]; modelSelection?: { taskRunId: string } } = {},
 ): Promise<ContextProjectionRecord> {
+  const allowedStatuses = options.allowedStatuses || ['preview'];
   const addAssetIds = normalizeProjectionAssetIds(input.addAssetIds, 'addAssetIds');
   const removeAssetIds = normalizeProjectionAssetIds(input.removeAssetIds, 'removeAssetIds');
   const removeSet = new Set(removeAssetIds);
@@ -852,7 +1000,7 @@ export async function reviseContextProjection(
   const updated = await updateRecallJsonRecord(userId, 'projections', projectionId, async (raw) => {
     if (!raw) throw new Error('context projection not found');
     const current = asProjection(raw);
-    if (current.status !== 'preview') throw new Error('context projection cannot be revised');
+    if (!allowedStatuses.includes(current.status)) throw new Error('context projection cannot be revised');
     if (current.expiresAt && Date.parse(current.expiresAt) <= Date.now()) throw new Error('context projection is expired');
 
     const addedAssets = new Map<string, RecallAbilityAssetRecord>();
@@ -887,10 +1035,28 @@ export async function reviseContextProjection(
       else if (addAssetIds.includes(assetId)) assetMatches.push({ assetId, matchScore: 1, matchMethod: 'manual' });
     }
 
+    const priorModelIds = current.modelSelectedAssetIds || [];
+    const newlyAddedModelIds = options.modelSelection
+      ? addAssetIds.filter((assetId) => !current.assetIds.includes(assetId))
+      : [];
+    const nextModelIds = [...new Set([...priorModelIds, ...newlyAddedModelIds])]
+      .filter((assetId) => finalAssetIdSet.has(assetId));
+    const modelSelectionEvents = [
+      ...(current.modelSelectionEvents || []),
+      ...(options.modelSelection ? [{
+        taskRunId: options.modelSelection.taskRunId,
+        assetIds: addAssetIds,
+        addedAssetIds: newlyAddedModelIds,
+        addedAt: new Date().toISOString(),
+      }] : []),
+    ];
+
     return {
       ...current,
       ...(input.purpose ? { purpose: normalizeTerm(input.purpose, 'purpose', 120) } : {}),
       ...(input.decisionNote ? { decisionNote: normalizeTerm(input.decisionNote, 'decision note', 1000) } : {}),
+      ...(nextModelIds.length ? { modelSelectedAssetIds: nextModelIds } : { modelSelectedAssetIds: undefined }),
+      ...(modelSelectionEvents.length ? { modelSelectionEvents } : { modelSelectionEvents: undefined }),
       assetIds: nextAssetIds,
       assetVersions: Object.fromEntries(finalAssets.map((asset) => [asset.id, asset.version])),
       ...(assetMatches.length ? { assetMatches } : { assetMatches: undefined }),
@@ -992,6 +1158,50 @@ export async function confirmContextProjection(userId: string, projectionId: str
   const projection = asProjection(updated);
   if (projection.status === 'expired') throw new Error('context projection is expired');
   return projection;
+}
+
+/** 模型自选投影的追加（2026-09-18）：同一条投影在任务内可反复追加资产
+ *  （"基线 + 模型追加"里的追加）。只对 authorization='model_selected' 开放，
+ *  且允许在 confirmed 态追加——这是模型自选线独有的编辑面，用户确认的投影
+ *  仍只能在 preview 态改。 */
+export async function appendAssetsToModelSelectedProjection(
+  userId: string,
+  projectionId: string,
+  assetIds: string[],
+  options: { taskRunId?: string } = {},
+): Promise<ContextProjectionRecord> {
+  const projection = await readContextProjection(userId, projectionId);
+  if (projection.authorization !== 'model_selected') {
+    throw new Error('context projection is not model-selected');
+  }
+  const taskRunId = String(options.taskRunId || projection.taskRunId || '');
+  if (!taskRunId) throw new Error('model selection task run is required');
+  return reviseContextProjection(userId, projectionId, { addAssetIds: assetIds }, {
+    allowedStatuses: ['preview', 'confirmed'],
+    modelSelection: { taskRunId },
+  });
+}
+
+/** 撤销一条投影（2026-09-18，模型自选线）：把 confirmed 置为 revoked——
+ *  注入查找只认 confirmed，所以撤销后本会话后续回合不再带入这批资产；
+ *  已发生的注入/使用记录保留（历史不可改写）。只允许撤销"模型自选"的投影：
+ *  用户自己确认过的投影走既有的人工流程（避免一键撤销掉用户明确的决定）。 */
+export async function revokeModelSelectedProjection(
+  userId: string,
+  projectionId: string,
+): Promise<ContextProjectionRecord> {
+  if (!safeId(userId) || !safeId(projectionId)) throw new Error('invalid projection revoke input');
+  const updated = await updateRecallJsonRecord(userId, 'projections', projectionId, (raw) => {
+    if (!raw) throw new Error('context projection not found');
+    const current = asProjection(raw);
+    if (current.authorization !== 'model_selected') {
+      throw new Error('context projection is not model-selected');
+    }
+    if (current.status === 'revoked') return current;
+    if (current.status !== 'confirmed') throw new Error('context projection is not revocable');
+    return { ...current, status: 'revoked' as const, decidedAt: new Date().toISOString() };
+  });
+  return asProjection(updated);
 }
 
 export async function confirmAndApproveWake(

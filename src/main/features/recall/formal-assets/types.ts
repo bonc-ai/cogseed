@@ -67,7 +67,8 @@ export type FormalAssetPayload =
   | { kind: 'personal' }
   | { kind: 'rule' }
   | { kind: 'template' }
-  | { kind: 'skill_method'; generatedSkillId?: string };
+  | { kind: 'skill_method'; generatedSkillId?: string }
+  | { kind: 'fact' };
 
 export interface FormalAbilityAsset extends FormalAssetEnvelope {
   payload: FormalAssetPayload;
@@ -83,11 +84,11 @@ export interface ListFormalAssetsFilter {
   spaceId?: string;
 }
 
-/** 四类之外的一切都不是正式资产（PRD 3.3）。这个集合是 canonical 边界的
+/** 约定类型之外的一切都不是正式资产（PRD 3.3）。这个集合是 canonical 边界的
  *  唯一判据——Personal Ontology 分组、Memory、Evidence、Receipt、
  *  RelationshipAssertion、Workspace state、原始文件都进不来。 */
 export const FORMAL_ASSET_TYPES: ReadonlySet<FormalAssetType> = new Set<FormalAssetType>([
-  'personal', 'rule', 'template', 'skill_method',
+  'personal', 'rule', 'template', 'skill_method', 'fact',
 ]);
 
 export function isFormalAssetType(value: unknown): value is FormalAssetType {

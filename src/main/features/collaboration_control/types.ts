@@ -109,6 +109,8 @@ export interface WorkflowAttempt {
 export interface WorkflowStep {
   id: string;
   run_id: string;
+  /** Owning user-submission collaboration run, when this step came from Group Chat. */
+  group_chat_run_id?: string;
   title: string;
   actor_id: string | null;
   type: WorkflowStepType;
@@ -275,4 +277,3 @@ export interface CollaborationEvent {
   payload?: Record<string, unknown>;
   created_at: string;
 }
-

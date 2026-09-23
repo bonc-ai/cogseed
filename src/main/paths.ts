@@ -146,9 +146,15 @@ export const cogseedAgentSkillLifecycleDir = (uid: string) => path.join(cogseedA
 export const userTranscriptGlossaryDir  = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'transcript');
 export const userTranscriptGlossaryFile = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'transcript-glossary.json');
 export const userTranscriptRunsDir      = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'runs');
+/** 转写文档的场景标签（「仅本场景」作用域的依据）：与词表同域、同属私人资产。 */
+export const userTranscriptDocTagsFile  = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'transcript-doc-tags.json');
 /** 本地埋点（方案 §8.2「可选埋点，本地」）：一行一个事件，只追加、不上报。 */
 export const userTranscriptMetricsFile  = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'metrics.jsonl');
 export const userTranscriptRunDir       = (uid: string, runId: string) => path.join(userTranscriptRunsDir(uid), runId);
+
+// ── 知识库测验（测验面板的本地反馈台账）────────────────────────────────────
+/** 「优质内容 / 劣质内容」评分：一行一个事件，只追加、不联网、不上报。 */
+export const userKbQuizFeedbackFile     = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'kb', 'quiz-feedback.jsonl');
 
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
@@ -741,6 +747,32 @@ export const userMarketplaceAgentSkillsDir = (uid: string, id: string) =>
   path.join(userMarketplaceAgentDir(uid, id), 'skills');
 export const userMarketplaceSkillDir   = (uid: string, id: string) =>
   path.join(userMarketplaceSkillsDir(uid), id);
+
+// ── Hub immutable version copies (`<uid>/local/marketplace/versions/`) ──
+// **A second tree, deliberately separate from `skills/` above.** `skills/<content_id>/` is the
+// one version the user currently sees; `versions/<content_id>/<version>/` holds copies that a
+// still-running Task has pinned. Keeping them apart is what lets a pinned run keep reading the
+// version it started on while the current install moves ahead (specs/010, route C).
+// Unrelated to the authoring-flow version envelope under `cloud/skills/versions/`.
+export const userMarketplaceVersionsDir = (uid: string) =>
+  path.join(userMarketplaceDir(uid), 'versions');
+export const userMarketplaceContentVersionsDir = (uid: string, contentId: string) =>
+  path.join(userMarketplaceVersionsDir(uid), contentId);
+export const userMarketplaceVersionDir = (uid: string, contentId: string, version: string) =>
+  path.join(userMarketplaceContentVersionsDir(uid, contentId), version);
+export const userMarketplaceVersionTreeDir = (uid: string, contentId: string, version: string) =>
+  path.join(userMarketplaceVersionDir(uid, contentId, version), 'tree');
+export const userMarketplaceVersionMetaFile = (uid: string, contentId: string, version: string) =>
+  path.join(userMarketplaceVersionDir(uid, contentId, version), 'meta.json');
+
+// ── Fork-to-custom intent journal (specs/010 FR-055) ──────────────────────
+// Written BEFORE the official copy is uninstalled and cleared only once the custom copy exists.
+// It records **intent only** — never content — so the frozen order (uninstall, then copy) is
+// untouched while a crash in the gap between them stays recoverable: boot recovery finds the
+// journal, sees the version copy is still there, and finishes the fork instead of leaving the
+// user with neither copy. Dot-prefixed so it can never be mistaken for a content dir.
+export const userMarketplaceForkIntentFile = (uid: string, contentId: string) =>
+  path.join(userMarketplaceDir(uid), `.fork-intent-${contentId}.json`);
 
 // ── Marketplace install manifest (cloud-synced) ────────────────────────
 // `<uid>/cloud/marketplace/installs.json` — the only marketplace state that crosses devices.

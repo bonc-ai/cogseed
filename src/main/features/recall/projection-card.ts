@@ -47,6 +47,9 @@ export interface RecallProjectionCard {
   authorization: ContextProjectionRecord['authorization'];
   summary: ProjectionCardSummary;
   assetSummaries: ProjectionCardAssetSummary[];
+  modelSelectedAssetIds?: string[];
+  modelSelectedCount?: number;
+  totalAssetCount: number;
   projectionPreview: ProjectionCardPreview;
   includedAssetIds: string[];
   omittedAssetRefs: OmittedAssetRef[];
@@ -135,6 +138,13 @@ export async function buildProjectionCard(userId: string, projectionId: string):
     authorization: projection.authorization,
     summary: summarize(projection),
     assetSummaries,
+    ...(Array.isArray(projection.modelSelectedAssetIds)
+      ? {
+          modelSelectedAssetIds: [...projection.modelSelectedAssetIds],
+          modelSelectedCount: projection.modelSelectedAssetIds.length,
+        }
+      : {}),
+    totalAssetCount: projection.assetIds.length,
     projectionPreview: {
       sourceRefs: projection.sourceRefs,
       omittedAssetRefs: projection.omittedRefs,

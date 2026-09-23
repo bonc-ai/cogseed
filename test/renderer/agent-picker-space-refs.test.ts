@@ -307,4 +307,57 @@ describe('agent picker space refs (@ 空间化改造)', () => {
     expect(chips.innerHTML).toContain('配色规范');
     expect(chips.innerHTML).toContain('chat-taskref-remove');
   });
+
+  it('splitComposerAgentCandidates：外接 Agent 恒在候选，内部 Agent 按空间拆分', () => {
+    const { context } = loadAgentPicker();
+    const split = vm.runInContext('window.splitComposerAgentCandidates', context);
+    const list = [
+      { agent_id: 'cli-codex', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+      { agent_id: 'gw-1', name: '外接网关', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+      { agent_id: 'task-a', name: '集成验证Agent', runtime: { kind: 'in-process' } },
+      { agent_id: 'task-b', name: 'Foo', runtime: { kind: 'in-process' } },
+    ];
+    const bound = new Set(['cli-codex', 'task-a']);
+    const { candidates, outOfScope } = split(list, bound);
+    expect(candidates.map((a: any) => a.agent_id)).toEqual(['cli-codex', 'gw-1', 'task-a']);
+    expect(outOfScope.map((a: any) => a.agent_id)).toEqual(['task-b']);
+    // 无空间作用域：全部可见，outOfScope 为空。
+    expect(split(list, null).candidates).toHaveLength(4);
+    expect(split(list, null).outOfScope).toHaveLength(0);
+    // 非法输入不抛：null/非数组/缺 id 都被跳过。
+    expect(split(null, bound).candidates).toEqual([]);
+    expect(split([{ name: 'no-id' }], bound).candidates).toEqual([]);
+  });
+
+  it('切换空间后丢弃过期的作用域解析结果（AC-04：不保留上一个空间状态）', async () => {
+    const loaded = loadAgentPicker();
+    const { context, el } = loaded;
+    const picker = el('agent-picker');
+    picker.dataset.anchorId = 'chat-recipient-chip';
+    picker.style.display = 'flex';
+
+    const pending: Array<(value: unknown) => void> = [];
+    context.window.cogseed.invoke = (channel: string, payload: any) => {
+      if (channel !== 'spaces.scope.resolve') return Promise.resolve({});
+      // spc-a 的解析挂起（模拟慢请求），spc-b 立即返回。
+      if (payload.spaceId === 'spc-a') return new Promise((resolve) => pending.push(resolve));
+      return Promise.resolve({ scope: { agents: ['task-b'], skills: [] } });
+    };
+
+    setCurrentConv(loaded, { conversation_id: 'c1', space_id: 'spc-a' });
+    const refresh = context.refreshAgentPickerContext || context.window.refreshAgentPickerContext;
+    const inflight = refresh('chat-recipient-chip');
+    await Promise.resolve();
+
+    // 用户切到另一个空间：新一代解析先写回。
+    setCurrentConv(loaded, { conversation_id: 'c1', space_id: 'spc-b' });
+    await refresh('chat-recipient-chip');
+    expect(vm.runInContext('_pickerBoundAgentIds ? Array.from(_pickerBoundAgentIds) : null', context)).toEqual(['task-b']);
+
+    // 过期的那次解析此刻才返回，绝不能覆盖当前空间的作用域。
+    pending.forEach((resolve) => resolve({ scope: { agents: ['task-a'], skills: [] } }));
+    await inflight;
+    expect(vm.runInContext('_pickerBoundAgentIds ? Array.from(_pickerBoundAgentIds) : null', context)).toEqual(['task-b']);
+    expect(vm.runInContext('_pickerProjectContextLoading', context)).toBe(false);
+  });
 });

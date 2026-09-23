@@ -18,9 +18,9 @@ describe('CogSeed API base', () => {
   it('defaults to the production origin for packaged builds', () => {
     expect(resolveCogSeedApiBase(undefined, 'release')).toBe(RELEASE_API_BASE);
     expect(resolveCogSeedApiBase(undefined, 'packaged-dev')).toBe(PACKAGED_DEV_API_BASE);
-    expect(RELEASE_API_BASE).toBe('https://cogseed-open.bonc.com.cn');
+    expect(RELEASE_API_BASE).toBe('https://hub.example.com');
     expect(requireCogSeedApiBase({ COGSEED_BUILD_CHANNEL: 'release' } as NodeJS.ProcessEnv))
-      .toBe('https://cogseed-open.bonc.com.cn');
+      .toBe('https://hub.example.com');
   });
 
   it('defaults to the local backend for dev/unknown channels', () => {

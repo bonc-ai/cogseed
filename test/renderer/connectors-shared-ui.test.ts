@@ -45,4 +45,14 @@ describe('connectors shared UI adoption', () => {
     expect(source).toContain("empty.querySelector('[data-connectors-clear-search]')");
     expect(source).toContain("_connectorsSearchQuery = '';");
   });
+
+  it('uses the shared modal shell for the custom connector form', () => {
+    const source = read('src/renderer/modules/connectors.js');
+
+    expect(source).toContain("overlay.className = 'ui-modal-overlay'");
+    expect(source).toContain('class="ui-modal connector-custom-dialog"');
+    expect(source).toContain('class="ui-modal__header"');
+    expect(source).toContain('class="ui-modal__body"');
+    expect(source).not.toContain("overlay.className = 'modal-overlay ui-dialog-overlay'");
+  });
 });

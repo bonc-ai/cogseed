@@ -43,7 +43,7 @@ async function seedAsset(
     suggestedScope: 'review',
     sourceRefs: [sourceRef],
   });
-  const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user' });
+  const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user', forceCreateSimilar: true });
   return { candidate, asset };
 }
 
@@ -77,7 +77,7 @@ describe('cognition tree asset relation contract', () => {
 
     expect(graph).toMatchObject({
       contract: 'ability_asset_relations',
-      contractVersion: 2,
+      contractVersion: 3,
       ownerId: 'u',
       id: 'graph',
     });
@@ -178,7 +178,7 @@ describe('cognition tree asset relation contract', () => {
       ownerId: 'u-malformed',
       id: 'graph',
       contract: 'ability_asset_relations',
-      contractVersion: 2,
+      contractVersion: 3,
       nodes: [],
       edges: [{
         from: 'asset:missing-source',
@@ -238,7 +238,7 @@ describe('cognition tree candidate buds', () => {
 
     const graph = await tree.rebuildCognitionTree('u-bud');
 
-    expect(graph.contractVersion).toBe(2);
+    expect(graph.contractVersion).toBe(3);
     const buds = graph.nodes.filter((node) => node.type === 'candidate');
     expect(buds.map((node) => node.id).sort()).toEqual([
       `candidate:${rule.id}`, `candidate:${personal.id}`,
@@ -317,7 +317,7 @@ describe('cognition tree candidate buds', () => {
     const before = await tree.rebuildCognitionTree('u-promote');
     expect(before.nodes.map((node) => node.id)).toEqual([`candidate:${candidate.id}`]);
 
-    const { asset } = await candidates.promoteRecallCandidate('u-promote', candidate.id, { actor: 'user' });
+    const { asset } = await candidates.promoteRecallCandidate('u-promote', candidate.id, { actor: 'user', forceCreateSimilar: true });
     const after = await tree.rebuildCognitionTree('u-promote');
 
     expect(after.nodes.map((node) => node.id)).toEqual([`asset:${asset.id}`]);
@@ -339,7 +339,7 @@ describe('cognition tree candidate buds', () => {
       suggestedType: 'rule',
       sourceRefs: [{ kind: 'conversation', id: 'conv-drift' }],
     });
-    const { asset } = await candidates.promoteRecallCandidate('u-drift', candidate.id, { actor: 'user' });
+    const { asset } = await candidates.promoteRecallCandidate('u-drift', candidate.id, { actor: 'user', forceCreateSimilar: true });
     // 人为把候选状态改回可晋升，模拟"某条晋升路径忘了落状态"。
     const stored = await store.readRecallJsonRecord('u-drift', 'candidates', candidate.id);
     await store.writeRecallJsonRecord('u-drift', 'candidates', candidate.id, {
@@ -352,7 +352,7 @@ describe('cognition tree candidate buds', () => {
   });
 
   /** 旧用户的 v1 树记录不能读坏，也不能因为契约升级丢掉已有资产。 */
-  it('rebuilds a persisted v1 asset-only tree into v2 without losing the existing assets', async () => {
+  it('rebuilds a persisted v1 asset-only tree into the current contract without losing the existing assets', async () => {
     const { tree, store } = await modules();
     const existing = await seedAsset(
       'u-v1',
@@ -385,20 +385,20 @@ describe('cognition tree candidate buds', () => {
 
     const graph = await tree.readCognitionTree('u-v1');
 
-    expect(graph?.contractVersion).toBe(2);
+    expect(graph?.contractVersion).toBe(3);
     expect(graph?.nodes.map((node) => node.id).sort()).toEqual([
       `asset:${existing.asset.id}`, `candidate:${pending.id}`,
     ].sort());
   });
 
-  it('rejects a v2 record carrying an unknown node type', async () => {
+  it('rejects a v3 record carrying an unknown node type', async () => {
     const { tree, store } = await modules();
     await store.writeRecallJsonRecord('u-badnode', 'tree', 'graph', {
       schemaVersion: 2,
       ownerId: 'u-badnode',
       id: 'graph',
       contract: 'ability_asset_relations',
-      contractVersion: 2,
+      contractVersion: 3,
       nodes: [{ id: 'usage:u-1', type: 'usage', label: 'used once' }],
       edges: [],
       updatedAt: new Date().toISOString(),

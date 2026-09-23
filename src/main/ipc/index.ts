@@ -23,6 +23,7 @@ import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
 import * as kbQuiz from '../features/kb_quiz';
+import * as kbQuizFeedback from '../features/kb_quiz_feedback';
 import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
@@ -67,7 +68,7 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
-import { listKstarEpisodes } from '../features/kstar/episode-store';
+import { listKstarEpisodes, readKstarEpisode } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
 import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
@@ -83,6 +84,7 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
+import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -183,7 +185,12 @@ import {
   parseStreamEnvelope,
   parseStreamRequestId,
 } from './security';
-import { officeEmptyBodyHtml, officeFragmentHasText } from '../util/office-preview';
+import {
+  officeEmptyBodyHtml,
+  officeFragmentHasText,
+  officePreviewKindForExt,
+  wrapOfficePreviewHtml,
+} from '../util/office-preview';
 
 const log = createLogger('ipc');
 
@@ -452,16 +459,6 @@ function _projectFileScopeForUser(userId: string, projectId: string | undefined)
   return path.resolve(projectFilesDir(userId, projectId));
 }
 
-function _escapePreviewHtml(s: string): string {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-type OfficePreviewKind = 'word' | 'spreadsheet' | 'presentation';
-
 /**
  * 知识库文件 → 磁盘绝对路径，供 `kb.openFile`（预览）与 `kb.openExternal`
  * （用系统默认应用打开）共用。
@@ -489,13 +486,6 @@ async function resolveKbFileAbsPath(
   return { abs: contexts.resolveContextFileAbsPath(relPath), spaceRoot: null };
 }
 
-function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
-  if (ext === '.docx' || ext === '.docm') return 'word';
-  if (ext === '.xlsx' || ext === '.xlsm') return 'spreadsheet';
-  if (ext === '.pptx' || ext === '.pptm') return 'presentation';
-  return null;
-}
-
 // 卡片视图会为可视卡片批量请求 Office 预览：按 path+size+mtime 做进程内
 // LRU 缓存（上限 24 条），同一文件重复预览/卡片来回滚动不重复解析。
 const _officePreviewCache = new Map<string, { at: number; html: string; kind: string }>();
@@ -517,194 +507,6 @@ function _officePreviewCachePut(key: string, html: string, kind: string): void {
     if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
   }
   if (oldestKey) _officePreviewCache.delete(oldestKey);
-}
-
-function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string, opts?: { compact?: boolean }): string {
-  const safeTitle = _escapePreviewHtml(title || 'Office preview');
-  // 卡片缩略模式：整页紧贴顶部、小字号、去留白——小卡里「全而不大」。
-  const compactCss = opts?.compact ? `
-  <style>
-    body { background: #fff; font-size: 11px; }
-    .office-preview { padding: 0; min-height: 0; }
-    .office-word { max-width: none; min-height: 0; margin: 0; padding: 12px 14px; border: 0; box-shadow: none; }
-    .office-word h1 { margin: 0 0 8px; font-size: 16px; }
-    .office-word h2 { margin: 12px 0 6px; font-size: 13px; }
-    .office-word h3 { margin: 10px 0 5px; font-size: 12px; }
-    .office-word p, .office-word li { margin: 0 0 6px; font-size: 11px; line-height: 1.5; }
-    .office-word ul, .office-word ol { margin: 0 0 8px 18px; }
-    .office-word table, .office-table-wrap table { margin: 8px 0; font-size: 10px; }
-    .office-word th, .office-word td, .office-table-wrap th, .office-table-wrap td { padding: 3px 5px; }
-    .office-spreadsheet { padding: 6px; }
-    .office-sheet { margin: 0 0 10px; padding: 8px; }
-    .office-sheet h2 { margin: 0 0 8px; font-size: 12px; }
-    .office-table-wrap { max-height: none; }
-    .office-table-wrap td { min-width: 60px; }
-    .office-presentation { padding: 6px; gap: 8px; }
-    .office-slide { width: 100%; padding: 12px 14px; border-radius: 4px; }
-    .office-slide-body p { margin: 0 0 6px; font-size: 12px; }
-    .office-slide-body p:first-child { font-size: 14px; }
-  </style>` : '';
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${safeTitle}</title>
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: #eef2f7;
-      color: #0f172a;
-      font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    .office-preview {
-      width: 100%;
-      min-height: 100vh;
-      margin: 0 auto;
-      padding: 24px;
-    }
-    .office-word {
-      max-width: 820px;
-      background: #fff;
-      min-height: calc(100vh - 48px);
-      margin: 20px auto 32px;
-      padding: 56px 64px;
-      border: 1px solid #e5e7eb;
-      box-shadow: 0 1px 8px rgba(15, 23, 42, 0.06);
-    }
-    .office-spreadsheet {
-      max-width: none;
-      padding: 18px;
-    }
-    .office-word h1, .office-word h2, .office-word h3 {
-      line-height: 1.3;
-      color: #111827;
-    }
-    .office-word h1 {
-      margin: 0 0 22px;
-      font-size: 28px;
-      font-weight: 700;
-    }
-    .office-word h2 {
-      margin: 26px 0 12px;
-      font-size: 21px;
-      font-weight: 650;
-    }
-    .office-word h3 {
-      margin: 22px 0 10px;
-      font-size: 17px;
-      font-weight: 650;
-    }
-    .office-word p,
-    .office-word li {
-      margin: 0 0 13px;
-      font-size: 15px;
-      line-height: 1.72;
-      color: #111827;
-    }
-    .office-word ul,
-    .office-word ol {
-      margin: 0 0 16px 24px;
-      padding: 0;
-    }
-    .office-word table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 16px 0;
-    }
-    .office-word th, .office-word td,
-    .office-table-wrap th, .office-table-wrap td {
-      border: 1px solid #cbd5e1;
-      padding: 7px 9px;
-      vertical-align: top;
-    }
-    .office-sheet {
-      margin: 0 0 22px;
-      padding: 18px;
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
-    }
-    .office-sheet h2 {
-      margin: 0 0 12px;
-      font-size: 15px;
-    }
-    .office-table-wrap {
-      overflow: auto;
-      max-height: 70vh;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-    }
-    .office-table-wrap table {
-      border-collapse: collapse;
-      min-width: 100%;
-      background: #fff;
-      font-size: 13px;
-    }
-    .office-table-wrap td {
-      min-width: 96px;
-      white-space: pre-wrap;
-    }
-    .office-empty-cell, .office-muted { color: #64748b; }
-    .office-presentation {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 24px;
-      padding: 24px;
-    }
-    .office-slide {
-      width: min(1120px, calc(100vw - 64px));
-      aspect-ratio: 16 / 9;
-      margin: 0 auto;
-      padding: clamp(32px, 5vw, 64px);
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
-      display: flex;
-      align-items: center;
-    }
-    .office-slide-body p {
-      margin: 0 0 18px;
-      font-size: clamp(18px, 2vw, 30px);
-      line-height: 1.35;
-    }
-    .office-slide-body p:first-child {
-      font-size: clamp(26px, 3vw, 44px);
-      font-weight: 600;
-      line-height: 1.2;
-    }
-    @media (max-width: 720px) {
-      .office-preview { padding: 12px; }
-      .office-word {
-        margin: 0 auto;
-        min-height: calc(100vh - 24px);
-        padding: 32px 24px;
-      }
-      .office-word h1 { font-size: 24px; }
-      .office-word p,
-      .office-word li { font-size: 14px; }
-      .office-presentation { padding: 12px; gap: 14px; }
-      .office-slide {
-        width: calc(100vw - 24px);
-        padding: 24px;
-      }
-      .office-slide-body p { font-size: 16px; }
-      .office-slide-body p:first-child { font-size: 22px; }
-    }
-  </style>
-  ${compactCss}
-</head>
-<body>
-  <main class="office-preview office-${kind}">
-    ${body}
-  </main>
-</body>
-</html>`;
 }
 
 /** Build the allowed-roots list for the file-class IPC sandbox: workspace ∪
@@ -1017,6 +819,10 @@ function batchRecallCaptures(
     throw new Error('invalid recall capture ids');
   }
   return run(ctx.userId, captureIds);
+}
+
+function _isRecipientOrigin(value: unknown): value is 'user_selection' | 'cli_fallback' | 'active_floor' {
+  return value === 'user_selection' || value === 'cli_fallback' || value === 'active_floor';
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
@@ -2163,7 +1969,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const refs = Array.isArray(references) ? references : [];
     if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
       && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
-        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+        || !_isRecipientOrigin(recipient_origin))) {
       throw new Error('invalid recipient route');
     }
     return groupChat.send({
@@ -2381,11 +2187,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!request || request.conversation_id !== cid) throw new Error('wake request not found');
     const kstarProjectionError = await ensureKstarWakeProjectionConfirmed(ctx.userId, cid, requestId, decision, request);
     if (kstarProjectionError) return kstarProjectionError;
-    return p3394.decideWakeRequest(ctx.userId, {
+    const result = await p3394.decideWakeRequest(ctx.userId, {
       requestId,
       decision,
       ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}),
     });
+    if (decision === 'reject' && request.dispatch_payload.run_id) {
+      await groupChat.reconcileRun(ctx.userId, cid, request.dispatch_payload.run_id);
+    }
+    return result;
   },
 
   'p3394.listProtocolEvents': async ({ cid }, ctx) => {
@@ -2604,6 +2414,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 存量记忆迁移手动口（2026-09-19 清单 #6）：dryRun=盘点；否则立即迁移
+  //（备份→入库→按文件清空）。启动任务之外的可控触发（验收/补跑）。
+  // 族改名（2026-09-22 快赢·族可命名）：锚资产起按 same_family 连通分量批量写。
+  'recall.families.rename': async ({ anchorAssetId, name } = {}, ctx) => {
+    if (typeof anchorAssetId !== 'string' || !anchorAssetId.trim()) throw new Error('invalid family anchor asset id');
+    const { renameAssetFamily } = await import('../features/recall/family');
+    const updated = await renameAssetFamily(ctx.userId, anchorAssetId.trim(), String(name ?? ''));
+    return { ok: true, updated };
+  },
+  'recall.memory.migrate': async ({ dryRun } = {}, ctx) => {
+    const { migrateLegacyMemoryToAssets } = await import('../features/recall/memory-migration');
+    return migrateLegacyMemoryToAssets(ctx.userId, { dryRun: dryRun === true });
+  },
   'recall.captures.settings.get': async (_input, ctx) => {
     const [settings, model] = await Promise.all([
       recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
@@ -2635,28 +2458,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.readRecallCandidate(ctx.userId, candidateId)) };
   },
 
-  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, spaceId, applicableWhen, forbiddenWhen } = {}, ctx) => {
+  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, targetVersionUsed, spaceId, applicableWhen, forbiddenWhen } = {}, ctx) => {
     if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
     if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
-    if (value !== undefined && (typeof value !== 'string' || value.length > 1_000)) throw new Error('invalid recall candidate value');
+    if (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) throw new Error('invalid recall candidate value');
     if (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) throw new Error('invalid recall candidate uncertainty');
-    if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') throw new Error('invalid recall candidate type');
+    if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') throw new Error('invalid recall candidate type');
     if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
     if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
     if (spaceId !== undefined && !safeId(spaceId)) throw new Error('invalid space id');
     if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
     if (suggestedAction !== undefined && !['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject'].includes(suggestedAction)) throw new Error('invalid recall candidate action');
+    if (targetVersionUsed !== undefined && (typeof targetVersionUsed !== 'string' || !/^[0-9]{1,9}$/.test(targetVersionUsed))) throw new Error('invalid recall candidate target version');
     if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) throw new Error('invalid recall candidate risk');
     if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) throw new Error('invalid recall candidate expiry');
     if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid recall candidate task run id');
     if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
     if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall candidate applicable range');
     if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall candidate forbidden range');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(spaceId ? { spaceId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(targetVersionUsed !== undefined ? { targetVersionUsed } : {}), ...(spaceId ? { spaceId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
   },
 
   'recall.candidates.update': async ({ candidateId, judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, applicableWhen, forbiddenWhen } = {}, ctx) => {
-    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (value !== undefined && (typeof value !== 'string' || value.length > 1_000)) || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
+    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
     if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
     if (suggestedAction !== undefined && !['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject'].includes(suggestedAction)) throw new Error('invalid recall candidate action');
     if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) throw new Error('invalid recall candidate risk');
@@ -2702,9 +2526,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.batchPromoteRecallCandidates(ctx.userId, candidateIds)) };
   },
 
-  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
+  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget, forceCreateSimilar } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    if (forceCreateSimilar !== undefined && typeof forceCreateSimilar !== 'boolean') throw new Error('invalid force-create flag');
     // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
     // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
     // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
@@ -2719,6 +2544,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
+      ...(forceCreateSimilar === true ? { forceCreateSimilar: true } : {}),
       ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
@@ -2754,7 +2580,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (statement !== undefined && (typeof statement !== 'string' || statement.length > 4_000)) throw new Error('invalid recall asset statement');
     if (scope !== undefined && (typeof scope !== 'string' || scope.length > 500)) throw new Error('invalid recall asset scope');
     if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall asset scope policy');
-    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method'].includes(type)) throw new Error('invalid recall asset type');
+    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method', 'fact'].includes(type)) throw new Error('invalid recall asset type');
     if (evidenceRefs !== undefined && !Array.isArray(evidenceRefs)) throw new Error('invalid recall asset evidence');
     if (ontologyRefs !== undefined && !Array.isArray(ontologyRefs)) throw new Error('invalid recall asset ontology refs');
     if (relations !== undefined && !Array.isArray(relations)) throw new Error('invalid recall asset relations');
@@ -2777,6 +2603,81 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.assets.purge': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset purge'); return { ok: true, asset: await recallAssets.purgeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user purge' }) }; },
   'recall.assets.restore': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset restore'); return { ok: true, asset: await recallAssets.restoreAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user restore' }) }; },
   'recall.assets.rollback': async ({ assetId, version, note } = {}, ctx) => { if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset rollback'); return { ok: true, asset: await recallAssets.rollbackAbilityAsset(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user rollback to v${version}` }) }; },
+
+  // 版本组（2026-09-16）：versions.list 供资产详情版本链；versions.select 切
+  // 「在用」指针（内容同步、不 bump——与 rollback 的生成新版语义互补）。
+  'recall.assets.versions.list': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, ...(await recallAssets.listAbilityAssetVersionsWithUsage(ctx.userId, assetId)) };
+  },
+  'recall.assets.versions.select': async ({ assetId, version, note } = {}, ctx) => {
+    if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version selection');
+    return { ok: true, asset: await recallAssets.selectAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user selected v${version}` }) };
+  },
+  // 版本真删（2026-09-17）：物理移除该版本记录；删除前把快照冻结进引用它的
+  // 已确认投影（注入按副本继续）。在用版本不可删。
+  'recall.assets.versions.delete': async ({ assetId, version, note } = {}, ctx) => {
+    if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version deletion');
+    await recallAssets.deleteAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user deleted v${version}` });
+    return { ok: true };
+  },
+
+  // 存量治理（2026-09-16）：同义资产归并为一个版本组（source 版本链并入
+  // target，source 归档并记录去向）。
+  'recall.assets.merge': async ({ sourceAssetId, targetAssetId, note } = {}, ctx) => {
+    if (!safeId(sourceAssetId) || !safeId(targetAssetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset merge');
+    return { ok: true, asset: await recallAssets.mergeAbilityAssets(ctx.userId, sourceAssetId, targetAssetId, { actor: 'user', reason: note ?? 'user merge' }) };
+  },
+
+  // 资产侧 KSTAR 溯源（2026-09-17）：证据区 kse 引用的批量摘要与单条复盘
+  // 详情——此前 KSTAR 血统只在候选卡可见，确认后沉回数据层。
+  'recall.kstar.episodes.summaries': async ({ ids } = {}, ctx) => {
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some((id) => typeof id !== 'string' || !safeId(id))) throw new Error('invalid kstar episode ids');
+    const wanted = new Set(ids.map((id) => String(id)));
+    const episodes = (await listKstarEpisodes(ctx.userId)).filter((episode) => wanted.has(String(episode.id)));
+    return {
+      ok: true,
+      summaries: episodes.map((episode) => ({
+        id: episode.id,
+        goal: String(episode.t?.userGoal || '').slice(0, 120),
+        status: String(episode.r?.status || ''),
+        at: String(episode.createdAt || ''),
+      })),
+    };
+  },
+  'recall.kstar.episode.read': async ({ episodeId } = {}, ctx) => {
+    if (typeof episodeId !== 'string' || !safeId(episodeId)) throw new Error('invalid kstar episode id');
+    const episode = await readKstarEpisode(ctx.userId, episodeId);
+    if (!episode) throw new Error('kstar episode not found');
+    let review: { expectedResult?: string; actualResult?: string; outcome?: string; attribution?: string; confidence?: number } | null = null;
+    try {
+      const record = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
+      if (record) {
+        review = {
+          ...(record.lesson !== undefined && String(record.lesson || '').trim() ? { lesson: String(record.lesson).slice(0, 600) } : {}),
+          ...(record.expectedResult !== undefined ? { expectedResult: String(record.expectedResult).slice(0, 400) } : {}),
+          ...(record.actualResult !== undefined ? { actualResult: String(record.actualResult).slice(0, 400) } : {}),
+          ...(record.outcome !== undefined ? { outcome: String(record.outcome) } : {}),
+          ...(record.attribution !== undefined ? { attribution: String(record.attribution) } : {}),
+          ...(record.confidence !== undefined ? { confidence: Number(record.confidence) } : {}),
+        };
+      }
+    } catch {
+      // 复盘记录缺席只少一截展示，不阻断 episode 详情。
+    }
+    return {
+      ok: true,
+      episode: {
+        id: episode.id,
+        goal: String(episode.t?.userGoal || '').slice(0, 400),
+        status: String(episode.r?.status || ''),
+        finalText: String(episode.r?.finalText || '').slice(0, 600),
+        sessionId: String(episode.sessionId || ''),
+        at: String(episode.createdAt || ''),
+      },
+      review,
+    };
+  },
 
   'recall.skills.prepare': async ({ assetId } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
@@ -2829,6 +2730,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.projections.confirm': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection confirm'); return { ok: true, ...(await kstarProjectionDecision.confirmProjectionAndResumeCommander(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.retryForecast': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection retry'); return { ok: true, ...(await kstarProjectionDecision.retryProjectionInCommander(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
+  'recall.projections.revoke': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.revokeModelSelectedProjection(ctx.userId, projectionId) }; },
   'recall.projections.availableAssets': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, assets: await recallProjection.listAvailableProjectionAssets(ctx.userId, projectionId) }; },
   'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },
   'recall.projections.defer': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.deferContextProjection(ctx.userId, projectionId, note) }; },
@@ -2912,10 +2814,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
-  'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
-  'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
-  'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })), }; },
-  'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
+  'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } } : {}) })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })), }; },
+  'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })) }; },
+  // 用户主动使用（2026-09-19）：把用户钉住的资产以 confirmed 投影挂到指定会话
+  //  并发投影卡——下一轮起注入命中，卡上可撤销。显式资产模式（绕语义门、
+  //  过状态硬门），authorization=user_confirmed（IPC 白名单内）。
+  'recall.projections.attachToConversation': async ({ assetId, conversationId } = {}, ctx) => {
+    if (!safeId(assetId) || !safeId(conversationId)) throw new Error('invalid recall projection attach');
+    const projection = await recallProjection.previewContextProjection(ctx.userId, {
+      taskRunId: `user-attach-${assetId}-${conversationId}`.slice(0, 160),
+      purpose: 'user_pinned',
+      authorization: 'user_confirmed',
+      conversationId,
+      confirm: true,
+      explicitAssetIds: [assetId],
+    });
+    return {
+      ok: true,
+      projection: { id: projection.id, assetIds: projection.assetIds, status: projection.status },
+      ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid: conversationId, projectionId: projection.id }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid: conversationId, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })),
+    };
+  },
   'recall.projections.read': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.readContextProjection(ctx.userId, projectionId) }; },
 
   'recall.proofs.transfer.prepare': async ({ projectionId, executionId, expectedResultSnapshot } = {}, ctx) => { if (!safeId(projectionId) || !safeId(executionId) || typeof expectedResultSnapshot !== 'string' || expectedResultSnapshot.length > 4_000) throw new Error('invalid transfer proof'); return { ok: true, proof: await recallProofs.prepareTransferProof(ctx.userId, { projectionId, executionId, expectedResultSnapshot }) }; },
@@ -3143,9 +3064,40 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }) };
   },
 
-  'groupChat.abort': async ({ cid }, ctx) => {
+  'groupChat.abort': async ({ cid, run_id, agent_ids, reason }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
-    return groupChat.abort(ctx.userId, cid);
+    if (run_id === undefined) return groupChat.abort(ctx.userId, cid);
+    if (!safeId(run_id)) throw new Error('invalid run id');
+    const ids = Array.isArray(agent_ids) ? agent_ids : [];
+    if (ids.some((id: unknown) => typeof id !== 'string' || !safeId(id))) {
+      throw new Error('invalid run abort actors');
+    }
+    if (reason !== undefined && reason !== 'member_removed' && reason !== 'user_stopped') {
+      throw new Error('invalid run abort reason');
+    }
+    return groupChat.abort(ctx.userId, cid, {
+      runId: run_id,
+      ...(ids.length ? { agentIds: ids } : {}),
+      ...(reason ? { reason } : {}),
+    });
+  },
+
+  'groupChat.retryRun': async ({ cid, run_id, agent_ids, request_id }, ctx) => {
+    if (!safeId(cid) || !safeId(run_id) || !safeId(request_id)) {
+      throw new Error('invalid run retry request');
+    }
+    if (!Array.isArray(agent_ids)
+      || !agent_ids.length
+      || agent_ids.some((id: unknown) => typeof id !== 'string' || !safeId(id))) {
+      throw new Error('invalid run retry actors');
+    }
+    return groupChat.retryRun({
+      userId: ctx.userId,
+      cid,
+      runId: run_id,
+      agentIds: agent_ids,
+      requestId: request_id,
+    });
   },
 
   'groupChat.deleteMessages': async ({ cid, message_ids }, ctx) => {
@@ -3621,6 +3573,35 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.profile.syncRecall': async (_payload, ctx) => {
     return { ok: true, ...(await recallProfileSync.schedulePersonalProfileSync(ctx.userId)) };
   },
+  // 冲突台账（2026-09-20 本体界面）：读取自带自愈——值已被用户删除的
+  // 冲突行顺手清除，返回的每一条都仍然成立。
+  'personalOntology.conflicts.list': async ({ groupId } = {}, ctx) => {
+    const { listConflicts } = await import('../features/recall/ontology-conflicts');
+    const conflicts = await listConflicts(ctx.userId, typeof groupId === 'string' && groupId ? groupId : undefined);
+    return { ok: true, conflicts };
+  },
+  // ── 本体候选池（2026-09-20 首次暴露）：此前只有写入方（转写桥/onboarding/
+  // 资产回流），读取与确认零暴露零 UI——回流闭环的确认端在这里补齐。 ──
+  'personalOntology.candidates.list': async (_payload, ctx) => {
+    const data = await personalOntologyCandidates.listCandidates(ctx.userId);
+    return { ok: true, candidates: data.candidate_updates || [] };
+  },
+  'personalOntology.candidates.confirm': async ({ candidateId, dest } = {}, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.confirmCandidate(
+      ctx.userId,
+      candidateId,
+      dest && typeof dest === 'object' ? dest : {},
+    );
+  },
+  'personalOntology.candidates.reject': async ({ candidateId, reason } = {}, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.rejectCandidate(
+      ctx.userId,
+      candidateId,
+      typeof reason === 'string' ? reason : undefined,
+    );
+  },
   'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
     if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
     return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, restoreData === true);
@@ -3651,8 +3632,45 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.groups.fields.setValue': async ({ groupId, fieldName, value, oldValue }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
-    if (typeof value !== 'string') throw new Error('missing value');
+    if (typeof value !== 'string') throw new Error('invalid value');
     return personalOntologyTemplateFiles.setFieldValueToRef(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
+  },
+  // 断言核实档（2026-09-20；spec 007 升两档）：标记/取消一条值的核实状态。
+  // verified: false 取消 / true 有来源支持 / 'independent' 独立核实过。
+  'personalOntology.groups.fields.verify': async ({ groupId, fieldName, value, verified }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    const level: boolean | 'independent' = verified === 'independent' ? 'independent' : verified === true;
+    return personalOntologyGroups.setFieldValueVerified(
+      ctx.userId, groupId, fieldName, value, level,
+    );
+  },
+  // 规则分类循环（spec 007 T301）：无 → operation → preference → constraint → 无。
+  'personalOntology.groups.fields.cycleRuleKind': async ({ groupId, fieldName, value }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    return personalOntologyGroups.cycleFieldValueRuleKind(ctx.userId, groupId, fieldName, value);
+  },
+  // 组变更历史（spec 007 T304）：快照列表与恢复。
+  'personalOntology.groups.history.list': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return { ok: true, history: personalOntologyGroups.listGroupHistory(ctx.userId, groupId) };
+  },
+  'personalOntology.groups.history.restore': async ({ groupId, snapshotId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!snapshotId || typeof snapshotId !== 'string') throw new Error('missing snapshotId');
+    return personalOntologyGroups.restoreGroupSnapshot(ctx.userId, groupId, snapshotId);
+  },
+  // 敏感性（spec 007 T302）：restricted 不进任务自动注入与世界模型。
+  'personalOntology.groups.fields.sensitivity': async ({ groupId, fieldName, value, restricted }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('invalid value');
+    return personalOntologyGroups.setFieldValueSensitivity(
+      ctx.userId, groupId, fieldName, value, restricted === true,
+    );
   },
   'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
@@ -4011,6 +4029,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // boot wiring + features/marketplace_reconcile.ts::subscribeReconcileStatus.
   'marketplace.reconcileStatus': async () => marketplaceReconcile.getReconcileStatus(),
 
+  // specs/010 FR-034 `[FROZEN]`：「用户打开目录页时」也是一个检查触发时机。
+  // 只转达时机，不带任何参数——频率闸门（6 小时）仍在 `checkServerUpdatesForInstalls` 里，
+  // 本通道不能用来绕过它。不回检查结果：检查不打断用户（T107：只加必需通道）。
+  'marketplace.requestCheck': async () => marketplaceReconcile.requestInstallReconcile('catalog-opened'),
+
   // Persistent listing-grid cache so cold starts don't show a blank panel. Renderer hydrates
   // from this on `openMarketplace` and writes back after every fresh /list response. See
   // `marketplace_cache.ts::{getListingsCache,setListingsCache}`.
@@ -4115,6 +4138,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     const buf = typeof data === 'string' ? Buffer.from(data, 'base64') : Buffer.from(data || []);
     return contexts.uploadContextFile(target, buf);
+  },
+
+  // 「文件已存在」弹窗上的「仍要导入一份」：凭被去重拦下时发的 token，把那份本地
+  // 文件再复制成本库里的一个新名字（显式覆盖，见 contexts.importContextFileAsDuplicate）。
+  'contexts.importDuplicateAnyway': async ({ token } = {}) => {
+    return contexts.importContextFileAsDuplicate(String(token || ''));
   },
 
   // KB 问答附件选择：返回本地文件路径元数据（挂载卡片 + askStream 读内容）。
@@ -4270,11 +4299,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
-  // 支持 text 参数：基于对话回答文本生成；缺省基于知识库文档要点。
-  'kb.mindmap': async ({ dir, spaceId, force, text }, ctx) => {
+  // 三个作用域，优先级 text > doc > dir/space：
+  //   text —— 基于对话回答文本生成；
+  //   doc  —— 文档级脑图（根主题 = 这一份文档，一级分支 = 它的章节）；
+  //   缺省 —— 基于整个知识库（目录 / 空间）的 ready 文档要点。
+  'kb.mindmap': async ({ dir, spaceId, doc, force, text }, ctx) => {
     const res = await kbMindmap.kbMindmap(ctx.userId, {
       dir: typeof dir === 'string' && dir ? dir : null,
       spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      doc: typeof doc === 'string' && doc ? doc : null,
       force: force === true,
       text: typeof text === 'string' && text ? text : null,
     }, {
@@ -4322,6 +4355,104 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       },
     });
     return res;
+  },
+
+  // 测验「提示」两级：
+  //   level 1（默认）—— 文档内线索，不给答案（单题小请求，30s 预算）；
+  //   level 2        —— **材料片段**：直接从来源文档要点里挑与题干最相关的一段，
+  //                     不打模型，因此离线/未配模型也能给，且是逐字原文。
+  'kb.quiz.hint': async ({ question, answer, options, type, source, dir, spaceId, fingerprint, qid, level }, ctx) => {
+    if (Number(level) === 2) {
+      const snip = kbQuiz.kbQuizSnippet(ctx.userId, {
+        question: typeof question === 'string' ? question : '',
+        // 答案一起给：它是"材料里哪一段是依据"的最强信号（渲染层从题目带过来）
+        answer: typeof answer === 'string' && answer ? answer : null,
+        source: typeof source === 'string' && source ? source : null,
+        dir: typeof dir === 'string' && dir ? dir : null,
+        spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      });
+      return { level: 2, snippet: snip.snippet, line: snip.line, covered: snip.ok, source: 'material', reason: snip.ok ? undefined : 'empty' };
+    }
+    const res = await kbQuiz.kbQuizHint(ctx.userId, {
+      question: typeof question === 'string' ? question : '',
+      options: Array.isArray(options) ? options.map((o: unknown) => String(o ?? '')) : [],
+      type: typeof type === 'string' ? type : '',
+      source: typeof source === 'string' && source ? source : null,
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      fingerprint: typeof fingerprint === 'string' ? fingerprint : '',
+      qid: Number.isFinite(Number(qid)) ? Number(qid) : 0,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 单发无状态：不写/不复用持久会话（与 kb.summary/kb.mindmap/kb.quiz 同款）
+          ephemeralSession: true,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // 测验导出 PDF（线下打印/发团队）：与脑图导出同一条 printToPDF 链路，只是 A4 版式。
+  // 测验「导出 Markdown」：与导出 PDF 同一条通道——主进程弹保存对话框再写文件，
+  // 渲染层据回执提示成功/失败/取消（不再用渲染层 Blob 下载：那条路失败是静默的）。
+  'kb.quiz.exportMarkdown': async ({ text, title }) => {
+    const source = typeof text === 'string' ? text : '';
+    if (!source) return { ok: false };
+    try {
+      const base = String(title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出测验 Markdown',
+        defaultPath: `${base}-${Date.now()}.md`,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, source, 'utf-8');
+      return { ok: true, filePath };
+    } catch (err) {
+      log.warn('kb quiz export markdown failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false };
+    }
+  },
+
+  'kb.quiz.exportPdf': async ({ html, title }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const base = String(title || 'quiz').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'quiz';
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出测验 PDF',
+        defaultPath: `${base}-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      log.warn('kb quiz export pdf failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false };
+    }
+  },
+
+  // 测验评分反馈（「优质内容 / 劣质内容」）：只写本机 JSONL 台账，不上报、不联网。
+  'kb.quiz.feedback': async ({ fingerprint, qid, verdict, type, source, correct }, ctx) => {
+    const res = kbQuizFeedback.appendQuizFeedback(ctx.userId, {
+      fingerprint, qid, verdict, type, source, correct,
+    });
+    return { ok: res.ok };
   },
 
   // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。
@@ -4579,7 +4710,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
         return { ok: true, kind, name, path: display, content: text, ...spaceField };
       }
-      const officeKind = _officePreviewKindForExt(ext);
+      const officeKind = officePreviewKindForExt(ext);
       if (officeKind) {
         // docx / xlsx / pptx → 排版化 HTML 预览（与 produced.officePreviewHtml 同链）
         const st = fs.statSync(abs);
@@ -4605,7 +4736,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           // docx 的"壳文件"等）。这时给一句能照做的说明，而不是空白页——文案
           // 与其它 Office 预览出口（资料面板 / 聊天文件）共用同一份。
           const bodyHtml = officeFragmentHasText(fragment) ? fragment : officeEmptyBodyHtml(officeKind, buf);
-          const html = _wrapOfficePreviewHtml(officeKind, name, bodyHtml);
+          const html = wrapOfficePreviewHtml(officeKind, name, bodyHtml);
           _officePreviewCachePut(cacheKey, html, officeKind);
           return { ok: true, kind: 'office', officeKind, name, path: display, html, ...spaceField };
         } catch (err) {
@@ -5903,7 +6034,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
       throw new Error('path is outside the user workspace');
     }
-    const kind = _officePreviewKindForExt(path.extname(norm).toLowerCase());
+    const kind = officePreviewKindForExt(path.extname(norm).toLowerCase());
     if (!kind) return { ok: false, error: 'unsupported' };
     let st: fs.Stats;
     try { st = fs.statSync(norm); }
@@ -5931,7 +6062,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const { pptxBufferToHtml } = await import('../util/extract-office');
         fragment = pptxBufferToHtml(buf);
       }
-      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
+      const html = wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
       _officePreviewCachePut(cacheKey, html, kind);
       return { ok: true, html, kind, size: st.size };
     } catch (err) {
@@ -6075,6 +6206,18 @@ setInteractionBroadcast((uid, event) => {
   if (push) push(event);
 });
 
+/** 多 Agent 名单的形状检查：`undefined` → 缺省；非法项 → null（调用方拒绝整条）。 */
+function _safeAgentIdList(raw: unknown): string[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > 20) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string' || !safeId(item)) return null;
+    if (!out.includes(item)) out.push(item);
+  }
+  return out;
+}
+
 const streamHandlers: Record<string, StreamHandler> = {
   'stt.results': async function* ({ sessionId }, ctx, signal) {
     if (typeof sessionId !== 'string' || !safeId(sessionId)) {
@@ -6207,7 +6350,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, member_agent_ids, mention_agent_ids, execution_configs, submit_request_id, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -6222,7 +6365,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     const refs = Array.isArray(references) ? references : [];
     if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
       && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
-        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+        || !_isRecipientOrigin(recipient_origin))) {
       yield { type: 'error', text: 'invalid recipient route' };
       return;
     }
@@ -6238,6 +6381,27 @@ const streamHandlers: Record<string, StreamHandler> = {
         yield { type: 'error', text: 'invalid execution config' };
         return;
       }
+    }
+    // 多 Agent（PRD FR-016）：只有形状在这里检查；「已启用 + 可派发」的逐个核验
+    // 在 group-chat facade 内完成（任一失效即整条拒绝，不静默降级）。
+    const memberIds = _safeAgentIdList(member_agent_ids);
+    const mentionIds = _safeAgentIdList(mention_agent_ids);
+    if ((member_agent_ids !== undefined && memberIds === null)
+      || (mention_agent_ids !== undefined && mentionIds === null)) {
+      yield { type: 'error', text: 'invalid member selection' };
+      return;
+    }
+    if (execution_configs !== undefined
+      && (!execution_configs || typeof execution_configs !== 'object' || Array.isArray(execution_configs))) {
+      yield { type: 'error', text: 'invalid execution configs' };
+      return;
+    }
+    // 提交幂等键（EC-07）：只做形状检查，语义在 group-chat facade。
+    if (submit_request_id !== undefined
+      && (typeof submit_request_id !== 'string' || !safeId(submit_request_id)
+        || submit_request_id.length > 64)) {
+      yield { type: 'error', text: 'invalid submit request id' };
+      return;
     }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
@@ -6283,6 +6447,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     let processCount = 0;
     let firstProcessLogged = false;
     let sendDone = false;
+    let acceptanceRelayed = false;
     let sendRes: Awaited<ReturnType<typeof groupChat.send>>
       | Awaited<ReturnType<typeof groupChat.retryFailedTurn>>
       | null = null;
@@ -6318,6 +6483,10 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(refs.length ? { references: refs } : {}),
                 ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
                 ...(execution_config ? { execution_config } : {}),
+                ...(memberIds && memberIds.length ? { member_agent_ids: memberIds } : {}),
+                ...(mentionIds && mentionIds.length ? { mention_agent_ids: mentionIds } : {}),
+                ...(execution_configs ? { execution_configs } : {}),
+                ...(submit_request_id ? { submit_request_id } : {}),
               });
       } catch (err) {
         sendErr = err;
@@ -6356,6 +6525,24 @@ const streamHandlers: Record<string, StreamHandler> = {
           if (!sendRes?.ok) {
             yield { type: 'error', text: sendRes?.error || 'send failed' };
             return;
+          }
+          const receipt = sendRes as {
+            accepted?: unknown;
+            cid?: unknown;
+            submit_request_id?: unknown;
+          };
+          if (!acceptanceRelayed
+            && receipt.accepted === true
+            && receipt.cid === cid
+            && typeof receipt.submit_request_id === 'string'
+            && receipt.submit_request_id === submit_request_id) {
+            acceptanceRelayed = true;
+            yield {
+              type: 'accepted',
+              accepted: true,
+              cid,
+              submit_request_id: receipt.submit_request_id,
+            };
           }
           if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
         }

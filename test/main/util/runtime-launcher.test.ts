@@ -12,6 +12,7 @@ describe('source runtime launchers', () => {
     const windows = read('run.cmd');
     const bootstrap = read('bootstrap.cjs');
     const restart = read('scripts/restart-cogseed.sh');
+    const runtimePids = read('scripts/lib/runtime-pids.sh');
     const packageMeta = JSON.parse(read('package.json')) as { cogseedSourceRuntimeVariant?: string };
 
     expect(shell).toContain('VARIANT="cogseed"');
@@ -29,10 +30,14 @@ describe('source runtime launchers', () => {
     expect(restart).toContain('DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"');
     expect(restart).toContain('ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"');
     expect(restart).toContain('worktree_pids()');
-    expect(restart).toContain('*"$APP_DIR/node_modules/.bin/electron ."');
-    expect(restart).toContain('*"$APP_DIR/node_modules/.bin/electron . --cogseed-runtime-variant=${VARIANT}"*');
-    expect(restart).toContain('|"$ELECTRON_APP"|"$ELECTRON_APP ."|');
-    expect(restart).toContain('"$ELECTRON_APP $APP_DIR --cogseed-runtime-variant=${VARIANT}"*');
+    // 进程匹配集中在共享库（本 worktree 前缀锚定，嵌套 worktree 不计入）。
+    expect(restart).toContain('source "$APP_DIR/scripts/lib/runtime-pids.sh"');
+    expect(restart).toContain('ps_snapshot | worktree_runtime_pids "$APP_DIR" "$VARIANT"');
+    expect(restart).toContain('ps_snapshot | other_worktree_runtime_pids "$APP_DIR" "$VARIANT"');
+    expect(runtimePids).toContain('_RUNTIME_EXE_SUFFIX');
+    expect(runtimePids).toContain('$app_dir/node_modules/.bin/electron .');
+    expect(runtimePids).toContain('"$own_exe"|"$own_exe "*)');
+    expect(runtimePids).toContain('$app_dir/p3394-gateway/gateway.cjs');
     expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
     expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
     expect(bootstrap).toContain('sourceVariant: packageMeta.cogseedSourceRuntimeVariant');

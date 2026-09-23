@@ -55,7 +55,17 @@ beforeEach(async () => {
   users.activateUser(TEST_UID);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // 深扫是后台 fire-and-forget：不排空的话，前一条用例仍在跑的扫描会和下一条
+  // 抢 loader 与缓存 —— CI 上 mtime 那条用例因此 120s 超时（本地同一条只用
+  // 443ms，文件里另一条会触发 9s 级深扫）。drainTrustRefreshForTest 是既有
+  // 测试缝，排空后再清 mock 与临时目录。
+  try {
+    const registry = await loadRegistry();
+    await registry.drainTrustRefreshForTest();
+  } catch {
+    // 用例没加载过 registry（或已被 reset）时没有待排空的扫描。
+  }
   vi.doUnmock('#core-agent');
   vi.doUnmock('../../../src/main/features/skill_reverify');
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
@@ -626,6 +636,8 @@ describe('skill-registry › trust withholding', () => {
     writeSkill(builtinDir(), 'fresh', 'fresh', 'F');
     let resolveDeep: (v: { loadable: string[]; withheld: string[] }) => void = () => {};
     const gate = new Promise<{ loadable: string[]; withheld: string[] }>((res) => { resolveDeep = res; });
+    let deepPassSettled = false;
+    void gate.then(() => { deepPassSettled = true; });
     const partitionSkillsByTrustDeep = vi.fn(() => gate);
     vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
       ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
@@ -633,12 +645,13 @@ describe('skill-registry › trust withholding', () => {
     }));
 
     const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
-    const text = await Promise.race([
-      getSystemPromptBlock(),
-      new Promise<string>((_, reject) => setTimeout(
-        () => reject(new Error('prompt path blocked on the deep scan')), 300,
-      )),
-    ]);
+    // Non-blocking is an ordering property, not a latency budget: the deep pass
+    // is still pending when the listing returns. A wall-clock race (formerly
+    // 300ms) turns correct-but-slow suite runs into false regressions; if the
+    // prompt path ever awaits the deep scan this await never returns and the
+    // test fails instead of passing on a lucky clock.
+    const text = await getSystemPromptBlock();
+    expect(deepPassSettled).toBe(false);
     expect(text).toContain('fresh');
 
     // The deep pass was scheduled, not awaited — settle it and drain.

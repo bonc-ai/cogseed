@@ -14,13 +14,15 @@ export type RecallAssetTimelineKind =
   | 'asset_purged'
   | 'asset_restored'
   | 'asset_rolled_back'
+  | 'asset_version_selected'
   | 'asset_maturity_downgraded'
   | 'asset_version'
   | 'projection_confirmed'
+  | 'projection_revoked'
   | 'usage_recorded'
   | 'transfer_prepared'
   | 'transfer_completed'
-  | 'effectiveness_recorded';
+  | 'effectiveness_recorded' | 'catalog_hint_unused';
 
 export interface RecallAssetTimelineItem {
   id: string;
@@ -55,6 +57,7 @@ export interface RecallAssetTimelineItem {
 
 function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
   switch (kind) {
+    case 'catalog_hint_unused': return 'Marked relevant but not used';
     case 'asset_created': return 'Asset created';
     case 'asset_updated': return 'Asset updated';
     case 'asset_paused': return 'Asset paused';
@@ -65,9 +68,11 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_purged': return 'Asset purged';
     case 'asset_restored': return 'Asset restored';
     case 'asset_rolled_back': return 'Asset rolled back';
+    case 'asset_version_selected': return 'Asset version selected';
     case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
+    case 'projection_revoked': return 'Attachment revoked';
     case 'usage_recorded': return 'Usage recorded';
     case 'transfer_prepared': return 'Transfer prepared';
     case 'transfer_completed': return extra ? `Transfer ${extra}` : 'Transfer completed';
@@ -93,6 +98,7 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
     case 'purged': return 'asset_purged';
     case 'restored': return 'asset_restored';
     case 'rolled_back': return 'asset_rolled_back';
+    case 'version_selected': return 'asset_version_selected';
     case 'maturity_downgraded': return 'asset_maturity_downgraded';
     case 'pause_recommended':
     case 'rework_recommended':
@@ -101,6 +107,8 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
     case 'cross_scope_withdrawn':
     case 'maturity_advanced':
     case 'maturity_corrected':
+    case 'merged_from':
+    case 'merged_into':
       return 'asset_updated';
     default: return undefined;
   }
@@ -108,6 +116,23 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
 
 function pushSorted(items: RecallAssetTimelineItem[], item: RecallAssetTimelineItem): void {
   items.push(item);
+}
+
+/** M10（2026-09-16）：投影 → 最新已完成迁移证明 的索引。一次性构建供全部
+ *  usage 行查询（检修修：此前每条 usage 全量扫 proofs 目录，I/O 随
+ *  usage×资产数放大）。 */
+function buildTransferProofIndex(proofs: TransferProofRecord[]): Map<string, string> {
+  const index = new Map<string, { id: string; completedAt: string }>();
+  for (const proof of proofs) {
+    if (!proof.projectionId || !proof.completedAt) continue;
+    const prev = index.get(proof.projectionId);
+    if (!prev || String(proof.completedAt) > prev.completedAt) {
+      index.set(proof.projectionId, { id: proof.id, completedAt: String(proof.completedAt) });
+    }
+  }
+  const ids = new Map<string, string>();
+  for (const [projectionId, { id }] of index) ids.set(projectionId, id);
+  return ids;
 }
 
 export async function listAbilityAssetTimeline(userId: string, assetId: string): Promise<RecallAssetTimelineItem[]> {
@@ -159,7 +184,30 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   }
 
   for (const projection of await listContextProjections(userId)) {
-    if (projection.status !== 'confirmed' || !projection.assetIds.includes(asset.id)) continue;
+    // 撤销的模型自选投影同样入时间线（2026-09-18）：用户撤销后原本"这件事消失
+    // 得无影无踪"，只剩注入回执——现在给一条"已撤销"事件，撤销动作可追溯。
+    const isRevokedAttachment = projection.status === 'revoked' && projection.authorization === 'model_selected';
+    if (projection.status !== 'confirmed' && !isRevokedAttachment) continue;
+    if (!projection.assetIds.includes(asset.id)) continue;
+    if (isRevokedAttachment) {
+      const revokedAt = String(projection.decidedAt || projection.createdAt || '');
+      const revokedConversationId = projection.conversationId
+        || episodeConversationByRun.get(String(projection.taskRunId || ''));
+      pushSorted(items, {
+        id: `${projection.id}-revoked`,
+        kind: 'projection_revoked',
+        occurredAt: revokedAt,
+        title: itemTitle('projection_revoked'),
+        summary: projection.purpose,
+        refs: {
+          assetId: asset.id,
+          projectionId: projection.id,
+          taskRunId: projection.taskRunId,
+          ...(revokedConversationId ? { conversationId: revokedConversationId } : {}),
+        },
+      });
+      continue;
+    }
     const occurredAt = projection.confirmedAt || projection.decidedAt || projection.createdAt;
     const projectionConversationId = projection.conversationId
       || episodeConversationByRun.get(String(projection.taskRunId || ''));
@@ -176,6 +224,30 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         ...(projectionConversationId ? { conversationId: projectionConversationId } : {}),
       },
     });
+  }
+
+  // 漏取审计行（2026-09-19）：catalog_hint 回执（目录标★相关但该回合未被
+  // 使用）→「相关而未被用」时间线行。只列该资产的，读回执流全量后过滤。
+  try {
+    const { listInjectionReceipts } = await import('./injection-receipt');
+    for (const receipt of await listInjectionReceipts(userId)) {
+      if (receipt.channel !== 'catalog_hint' || receipt.status !== 'omitted') continue;
+      if (String(receipt.assetId) !== asset.id) continue;
+      pushSorted(items, {
+        id: `catalog-hint-${receipt.id}`,
+        kind: 'catalog_hint_unused',
+        occurredAt: receipt.createdAt,
+        title: itemTitle('catalog_hint_unused'),
+        summary: '目录标注了「本轮相关」，但这一轮没有被注入或取用',
+        refs: {
+          assetId: asset.id,
+          taskRunId: receipt.taskRunId,
+          ...(receipt.messageId ? { messageId: receipt.messageId } : {}),
+        },
+      });
+    }
+  } catch {
+    // 回执流读不到就少几行审计，不影响其余时间线。
   }
 
   // usage → 来源会话：usage 只带 projectionId，会话 id 在投影记录上——
@@ -195,11 +267,18 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       return undefined;
     }
   };
+  // 检修剪（2026-09-16）：proofs 只读一次，建投影索引供全部 usage 行查询
+  // （下方 transfer 段复用同一份，避免重复全量扫描）。
+  const transferProofs = await listTransferProofs(userId);
+  const transferProofByProjection = buildTransferProofIndex(transferProofs);
   for (const usage of await listRecallUsage(userId, assetId)) {
     // 会话 id：新投影的 conversationId 优先；旧数据用 episode 的
     // taskRunId→sessionId 回溯——用户要求老记录也能看出"在哪个对话里被用"。
     const usageConversationId = (await conversationOfProjection(usage.projectionId))
       || episodeConversationByRun.get(String(usage.taskRunId || ''));
+    // M10（2026-09-16 审计收口）：带上该投影已完成的迁移证明 id——评价控件
+    // 的渲染条件依赖它，此前恒缺导致"效果评价 UI 不可达"。
+    const usageProofId = usage.projectionId ? transferProofByProjection.get(usage.projectionId) : undefined;
     pushSorted(items, {
       id: usage.id,
       kind: 'usage_recorded',
@@ -213,6 +292,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         version: usage.assetVersion,
         projectionId: usage.projectionId,
         taskRunId: usage.taskRunId,
+        ...(usageProofId ? { transferProofId: usageProofId } : {}),
         ...(usageConversationId ? { conversationId: usageConversationId } : {}),
         // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
         // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
@@ -223,10 +303,16 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     });
   }
 
-  const transferProofs = await listTransferProofs(userId);
   const relevantTransfers = transferProofs.filter((proof: TransferProofRecord) => proof.assetVersions.some((entry) => entry.assetId === asset.id));
   for (const proof of relevantTransfers) {
-    const projection = await readContextProjection(userId, proof.projectionId);
+    // 兜底（2026-09-18 P0）：证明指向的投影记录可能已不存在（数据手术/清理遗留）。
+    // 一条坏记录不该把整个时间线拖垮——降级为不带投影上下文的事件，而不是抛错。
+    let projection: Awaited<ReturnType<typeof readContextProjection>> | undefined;
+    try {
+      projection = await readContextProjection(userId, proof.projectionId);
+    } catch {
+      projection = undefined;
+    }
     pushSorted(items, {
       id: `${proof.id}-prepared`,
       kind: 'transfer_prepared',
@@ -236,7 +322,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       refs: {
         assetId: asset.id,
         projectionId: proof.projectionId,
-        taskRunId: projection.taskRunId,
+        ...(projection?.taskRunId ? { taskRunId: projection.taskRunId } : {}),
         transferProofId: proof.id,
       },
     });

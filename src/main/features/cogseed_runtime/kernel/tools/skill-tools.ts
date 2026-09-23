@@ -12,6 +12,8 @@ import { isSkillTrustedForLoadDeep } from '../../../skill_reverify';
 import { normalizeRuntimePath } from './permissions';
 import { captureSkillTree } from '../../../skills/snapshot-service';
 import { verifySkillRuntimeSnapshot } from '../../../skills/runtime-snapshot-service';
+import { isHubManagedContent, resolveHubPinnedTree } from '../../../marketplace/version-store';
+import { recordHubContentUsage } from '../../../marketplace/usage-event';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 import { runWithRuntimeActionApproval } from './action-approval';
 
@@ -91,7 +93,33 @@ export async function runRuntimeSkillTool(
     const pin = ctx.skillVersionPins?.find((item) => item.skillId === skillId);
     let pinnedSkillDir: string | undefined;
     if (pin) {
-      if (pin.revisionId) {
+      // ── 按来源分派（specs/010 FR-031/FR-032）────────────────────────────
+      // Hub 官方副本解析**不可变版本副本**；创作流 Skill 不命中本分支，
+      // 落到下方原路径（`verifySkillRuntimeSnapshot` / 清单哈希兜底），逐字不变。
+      //
+      // ⚠️ 本分支**不读停用状态、不联网、不看 current install**：停用、更新、
+      // Hub 不可达都不得改变一次已开始的使用所读的版本（FR-042、`C7`、`C8`）。
+      if (isHubManagedContent(ctx.userId, skillId)) {
+        pinnedSkillDir = resolveHubPinnedTree(
+          ctx.userId, skillId, pin.version, pin.manifestHash,
+        ) ?? undefined;
+        if (!pinnedSkillDir) {
+          // 副本缺失或身份摘要不符：**报错，绝不回退到 current install**——
+          // 那会让一次使用中途读到另一版本内容（PRD §7.8）。
+          // 这是一次**真实使用尝试**的失败结果，故采集（不满足条件时内部自行跳过）。
+          recordHubContentUsage({
+            userId: ctx.userId,
+            contentId: skillId,
+            pinnedVersion: pin.version,
+            result: 'failure',
+            reason: 'content_unavailable',
+          });
+          return formatError(
+            'E_RUNTIME_SKILL_VERSION_UNAVAILABLE',
+            `frozen skill "${skillId}" version ${pin.version} is unavailable`,
+          );
+        }
+      } else if (pin.revisionId) {
         pinnedSkillDir = await verifySkillRuntimeSnapshot(
           ctx.userId,
           skillId,
@@ -161,6 +189,19 @@ export async function runRuntimeSkillTool(
         '--',
         ...args,
       ], cwd, env, undefined);
+      // ── `hub_content_used` 的采集边界（specs/010 FR-061～FR-066）──────────
+      // 这里是**真实使用尝试**真正产生结果的地方：脚本已经跑过了。
+      // **不是** UI 点击、不是查看详情、不是安装动作——那些都不产生事件。
+      // `version` 取本次使用 pin 固定的版本；无 pin 时采集侧自行跳过。
+      // 采集不抛错、不影响本次使用的返回值。
+      const usageResult = !result.timedOut && result.code === 0 ? 'success' : 'failure';
+      recordHubContentUsage({
+        userId: ctx.userId,
+        contentId: skillId,
+        pinnedVersion: pin?.version ?? '',
+        result: usageResult,
+        ...(usageResult === 'failure' ? { reason: 'internal_error' as const } : {}),
+      });
       if (result.timedOut) return formatError('E_RUNTIME_TIMEOUT', 'runtime run_skill timed out');
       if (result.code !== 0) {
         const output = result.stderr || result.stdout || `run-skill exited with code ${result.code}`;

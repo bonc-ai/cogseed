@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
-import { officeBufferToPreviewHtml, officeEmptyBodyHtml, officeFragmentHasText } from '../../../src/main/util/office-preview';
+import { officeBufferToPreviewHtml, officeEmptyBodyHtml, officeFragmentHasText, wrapOfficePreviewHtml } from '../../../src/main/util/office-preview';
 import { makeMinimalDocx } from '../../fixtures/make-minimal-docx';
 import { makeMinimalPptx, makeMinimalXlsx } from '../../fixtures/make-minimal-office';
 
@@ -39,6 +41,47 @@ describe('office-preview', () => {
     expect(preview.kind).toBe('presentation');
     expect(preview.html).toContain('class="office-slide office-slide-blank"');
     expect(preview.html).not.toContain('(no previewable content)');
+  });
+});
+
+describe('office 预览排版护栏（真机反馈：docx 内图片溢出正文栏）', () => {
+  it('正文图片/视频/矢量图受正文栏约束，不再按固有像素溢出', () => {
+    const html = wrapOfficePreviewHtml('word', 't', '<p>x</p><img src="data:image/jpeg;base64,AA">');
+    // mammoth 内联的 base64 图不带宽高属性：必须由外壳 CSS 兜住（1080px 图塞进 692px 正文栏 → 曾溢出）
+    expect(html).toMatch(/\.office-word img,[\s\S]{0,80}\.office-word video \{[\s\S]{0,120}max-width: 100%;/);
+    expect(html).toContain('height: auto;');
+  });
+
+  it('长串与宽表格同样有换行/限宽护栏', () => {
+    const html = wrapOfficePreviewHtml('word', 't', '<p>https://example.com/very/long</p>');
+    expect(html).toMatch(/\.office-word a \{[\s\S]{0,120}overflow-wrap: anywhere;/);
+    expect(html).toMatch(/\.office-word table \{[\s\S]{0,160}max-width: 100%;/);
+  });
+});
+
+describe('office 预览外壳唯一来源（防"改了一份、走的是另一份"）', () => {
+  // 背景（2026-09-18 真机）：09-16 的图片溢出修复只改了本模块的 CSS，而知识库
+  // 整页查看器（kb.openFile）当时用的是 ipc 里另一份私有副本 → 用户反馈"依旧溢出"。
+  const ipcSource = fs.readFileSync(path.join(process.cwd(), 'src/main/ipc/index.ts'), 'utf8');
+
+  it('ipc 不再自带 office 预览外壳/CSS 副本，改从本模块引入', () => {
+    expect(ipcSource).not.toContain('function _wrapOfficePreviewHtml');
+    expect(ipcSource).not.toContain('function _officePreviewKindForExt');
+    expect(ipcSource).not.toMatch(/\.office-word \{[\s\S]{0,120}max-width: 820px/);
+    expect(ipcSource).toMatch(/import \{[\s\S]{0,200}wrapOfficePreviewHtml,[\s\S]{0,80}\} from '\.\.\/util\/office-preview';/);
+  });
+
+  it('知识库整页查看器走同一份外壳（图片因此受约束）', () => {
+    const start = ipcSource.indexOf("'kb.openFile'");
+    expect(start).toBeGreaterThan(0);
+    const kbBlock = ipcSource.slice(start, ipcSource.indexOf("'kb.openExternal'", start));
+    expect(kbBlock).toContain('wrapOfficePreviewHtml(');
+  });
+
+  it('卡片紧凑模式只调字号留白，图片护栏仍在', () => {
+    const html = wrapOfficePreviewHtml('word', 't', '<img src="data:image/jpeg;base64,AA">', { compact: true });
+    expect(html).toMatch(/\.office-word img,[\s\S]{0,80}\.office-word video \{[\s\S]{0,120}max-width: 100%;/);
+    expect(html).toContain('.office-word { max-width: none; min-height: 0; margin: 0;');
   });
 });
 

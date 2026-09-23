@@ -1,207 +1,348 @@
 <p align="center">
-  <img src="./assets/cogseed-icon.png" width="160" alt="CogSeed product icon">
+  <img src="./assets/cogseed-icon.png" width="150" alt="CogSeed">
 </p>
 
 <h1 align="center">CogSeed</h1>
 
-<p align="center">A local-first desktop workspace for coordinating AI agents and turning task experience into reusable personal capability assets.</p>
-
 <p align="center">
-  <a href="./README.md">English</a> | <a href="./README.zh-CN.md">简体中文</a>
+  <strong>AI that understands you better with every task</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/license/bonc-ai/cogseed" alt="License">
-  <img src="https://img.shields.io/github/actions/workflow/status/bonc-ai/cogseed/ci.yml" alt="CI">
-  <img src="https://img.shields.io/github/v/release/bonc-ai/cogseed" alt="Release">
-  <img src="https://img.shields.io/github/downloads/bonc-ai/cogseed/total" alt="Downloads">
-  <img src="https://img.shields.io/badge/platform-macOS%2012%2B-0071BC" alt="Platform">
+  <a href="./README.md">English</a> ·
+  <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
-  <img src="./assets/cogseed-homepage-hero-agent-continuity.png" width="1000" alt="CogSeed desktop workspace">
+  <a href="https://github.com/bonc-ai/cogseed/releases"><img src="https://img.shields.io/badge/Release-v1.2.0-blue" alt="Release v1.2.0"></a>
+  <a href="https://github.com/bonc-ai/cogseed/releases"><img src="https://img.shields.io/github/downloads/bonc-ai/cogseed/total?label=Downloads" alt="Downloads"></a>
+  <a href="https://github.com/bonc-ai/cogseed"><img src="https://img.shields.io/github/stars/bonc-ai/cogseed?style=flat" alt="GitHub Stars"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/bonc-ai/cogseed" alt="License"></a>
+  <img src="https://img.shields.io/badge/macOS-12%2B-black?logo=apple" alt="macOS">
+  <img src="https://img.shields.io/badge/Windows-x64-0078D4?logo=windows" alt="Windows">
 </p>
 
-## Overview
+**CogSeed is your personal companion agent.**
+It turns preferences, project constraints, and effective approaches validated through your work into **cognitive assets** that you confirm, trace, and revoke—and reuse when relevant in your next task.
 
-CogSeed brings tasks, workspaces, AI teams, skills, connectors, personal knowledge, and reusable cognitive assets into one Electron desktop application. It is designed for work that needs more than a single chat turn: planning, delegation, tool use, local project access, continuity across sessions, reviewable evidence, and long-term reuse.
+When you switch from Codex to Claude Code or another supported agent, CogSeed can carry task progress and applicable cognitive assets forward so you can continue the work.
 
-A Commander maintains the shared plan and delegates work through structured dispatch. Built-in agents and supported local CLI agents operate through controlled execution paths, while each worker receives only the context needed for its role. Results can remain as conversation output, become workspace files or artifacts, or enter the Cognition and Recall workflow as user-reviewed capability assets.
+<p align="center">
+  <a href="https://github.com/bonc-ai/cogseed/releases"><strong>⬇️ Download CogSeed</strong></a>
+  ·
+  <a href="#-quick-start"><strong>Quick start</strong></a>
+  ·
+  <a href="#-build-on-cogseed"><strong>Build extensions</strong></a>
+  ·
+  <a href="#-faq"><strong>FAQ</strong></a>
+</p>
 
-CogSeed is local-first. The renderer cannot access Node.js directly, local tools run behind explicit gateways, and user-scoped data is separated into sync-eligible private state and machine-local state.
+<p align="center">
+  <img src="./assets/cogseed-asset-reuse.gif" width="800" alt="Cognitive asset reuse: confirmed experience is reused when relevant in a later task">
+</p>
 
-## Highlights
+Cognitive asset reuse in action: see how confirmed experience is brought into a later related task and used.
 
-| Capability | What it enables |
+---
+
+## Confirm once, start the next task with less repetition
+
+You should not have to explain how to write code for this project, which rules must be respected, or how you prefer to collaborate every time you work with an agent.
+
+After a task finishes or a past session is imported, CogSeed extracts preferences, constraints, and effective approaches worth keeping and presents them as candidate experience for your review. Once you confirm them, they become cognitive assets for reuse in later related tasks.
+
+**CogSeed does not silently turn conversations into long-term memory.** Candidates need your confirmation. Each asset retains its source, version, and scope, and you can edit, pause, or revoke it at any time.
+
+```text
+Complete a task
+  → Generate candidate experience: preferences, constraints, effective approaches
+  → Confirm, revise, or reject it
+  → Create cognitive assets with sources and scope
+  → Reuse them when relevant in the next task or with another supported agent
+  → Review results, edit, pause, or revoke at any time
+```
+
+---
+
+## What you gain
+
+| Outcome | What it means |
 |---|---|
-| Structured multi-agent coordination | Plan, delegate, observe, retry, skip, and stop work through one group-chat execution path. |
-| Local CLI agent integration | Use Claude Code, Codex, OpenClaw, OpenCode, Hermes, or WorkBuddy from the same workspace. |
-| Continuity across tasks | Import supported sessions and continue work with workspace context, progress, constraints, and execution evidence. |
-| Governed cognitive assets | Review candidate experience, promote confirmed assets, version them, and track reuse and effectiveness evidence. |
-| Connected tools and knowledge | Give supported agents controlled access to skills, MCP connectors, messaging touchpoints, and indexed Library content. |
-| Local-first security boundaries | Keep credentials, indexes, caches, tool results, and local installations behind explicit storage and execution boundaries. |
+| **Less repetition about you and your projects** | Confirmed preferences, rules, and constraints appear in relevant tasks with their sources |
+| **Continue working when you switch agents** | Carry task goals, progress, workspace, and available assets between supported agents |
+| **Keep control of your experience** | Review candidates before confirmation; inspect sources, edit, pause, or revoke each asset |
 
-## Core Workflows
+<p align="center">
+  <img src="./assets/cogseed-asset-detail.png" width="800" alt="Cognitive asset details: source, versions, usage records, and controls to pause, archive, or revoke use">
+</p>
 
-### Tasks and Spaces
+Open an asset's details to review its source, versions, and usage records, and manage its scope and usage status.
 
-- Start a focused task or organize related work inside a Space.
-- Select agents, skills, connectors, and Library files from the task composer with `@`.
-- Associate conversations with a workspace directory without encoding project identity into file paths or session IDs.
-- Review plans, member status, process events, produced files, artifacts, and conversation history in one place.
+<p align="center">
+  <img src="./assets/cogseed-session-continuity.png" width="800" alt="After importing a past session, review the continuation snapshot and proposed plan, then select Continue with this">
+</p>
 
-### Commander and AI Team
+---
 
-- The Commander translates the user goal into a shared plan.
-- Structured `dispatch_to` actions assign work to specific members.
-- `plan_set` owns plan state, including retries, skips, and reconciliation.
-- Every worker reads its visibility slice instead of the full conversation record.
-- Group abort is the single stop path for all active actors.
+## 🚀 Quick start
 
-### Continue Existing Work
+Already have a local agent? Check that it is installed, logged in, and has available quota.
 
-- Import supported histories from local coding-agent environments.
-- Carry forward the working directory, current progress, known constraints, and available evidence.
-- Keep imported source sessions separate from CogSeed conversation and execution state.
-- Resume through normal task dispatch rather than bypassing the collaboration pipeline.
+No local agent? Configure and test a model in **Models & Quota** first.
 
-### Skills, Connections, and Library
+For model selection and key requirements when extracting candidate experience, see [Built-in capabilities and keys](#built-in-capabilities-and-keys).
 
-- Install or create agents and skills, then control which skills an agent may use.
-- Connect supported external services through OAuth or MCP transports.
-- Expose connector actions through list-and-call meta-tools instead of injecting every remote action into the model context.
-- Store user-managed source material in the Library while keeping derived indexes and vector data machine-local.
+<p align="center">
+  <img src="./assets/cogseed-demo.gif" width="800" alt="CogSeed walkthrough">
+</p>
 
-### Cognition and Recall
+### Already using Claude Code, Codex, or another agent?
 
-- Capture candidate experience from sessions, review signals, and teaching interactions.
-- Require user confirmation before a candidate becomes a formal capability asset.
-- Preserve stable IDs, versions, scope policy, provenance, and audit history.
-- Record transfer and effectiveness evidence when an asset is reused in later work.
+Prerequisites: install and log in to your agent on this machine (see [Support and data boundaries](#-support-and-data-boundaries)), and have a past session you can continue.
 
-### Automation, Touchpoints, and Artifacts
+1. Download and launch CogSeed from the [Releases page](https://github.com/bonc-ai/cogseed/releases), then follow the guide to detect local agents.
+2. Under "Where should we continue?", select a recommended recent task, or choose another session to find the one you want to continue. You authorize access before CogSeed reads its content.
+3. Review the task goal, progress, and workspace information to be imported. CogSeed reads the original agent's session without writing back to it.
+4. Click "Continue with this" to have the agent pick up from the existing progress. You can add new requirements in the conversation.
+5. When the task finishes, give your assessment in the "Task result check" card. If candidates are generated, open **Cognition Assets → To Review**, check their content, sources, and scope, then confirm what to keep.
+6. Create a new related task in the same project or applicable scope. Open **Carried context** in the task information to inspect the included context and its sources. Then open the asset's details under **Cognition Assets**, check whether **Usage** links to this task, and compare the output against the constraint.
 
-- Run saved automation tasks through the same guarded execution surface.
-- Connect supported messaging touchpoints, including Feishu and WeChat integrations where configured.
-- Produce chat artifacts inside conversation-scoped storage and display them through the validated artifact resolver.
-- Save reusable apps separately; editing a saved app creates a forked conversation rather than mutating it in place.
+Assess reuse using both the target task's carried context and its actual output. Creation and version-change records only show that an asset was saved or modified.
 
+### No past tasks yet?
 
+Configure a model key, then create a task for the Commander and built-in Task Agent to execute. Try this example across two tasks:
 
-## Quick Install
+1. **First task:** provide this week's progress and say, "Prepare a project weekly report. For this project, always organize weekly reports under Accomplishments, Risks, and Next steps." After the task, review and confirm the corresponding candidate in **To Review**, if one is generated. Check that its scope covers the project or report tasks.
+2. **Second task:** create a new task in the same project, provide fresh progress, and ask only, "Prepare this week's report," without repeating the formatting preference. Follow step 6 to inspect the carried context, then check whether the output uses the structure above.
 
-### Requirements
+If no candidate appears, first check that the model or agent used for extraction is available. If the second task does not include the asset, check that it is confirmed, enabled, and matches the task's scope.
 
-- Git
-- Node.js and npm available in the development shell
-- Network access during first setup for npm packages and pinned runtime resources
-- macOS or Windows for the primary desktop targets
+---
 
-Clone the repository and install its dependencies:
+## 📋 Support and data boundaries
 
-```bash
-git clone https://github.com/bonc-ai/cogseed.git
-cd cogseed
-npm install
-```
+### Local agents
 
-The repository pins `npm@11.11.0`. Installation prepares Electron native dependencies and the embedding model. Development startup also verifies or downloads the platform runtime and OfficeCLI resources required by enabled features.
+| Agent | CogSeed version | Import past sessions | Continue execution |
+|---|---|---|---|
+| Claude Code | v1.2.0 | ✅ | ✅ |
+| Codex | v1.2.0 | ✅ | ✅ |
+| OpenCode | v1.2.0 | ✅ | ✅ |
+| WorkBuddy | v1.2.0 | ✅ | ✅ |
 
-## Quick Start
+Install and log in to local agents on your machine. Compatibility depends on the combination of CogSeed and CLI versions. When reporting import or execution issues, include both versions and your operating system.
 
-Start CogSeed on macOS or a Linux development environment:
+More agent adapters are being added. Suggest an agent you would like to connect in [Issues](https://github.com/bonc-ai/cogseed/issues).
 
-```bash
-./run.sh
-```
+### Built-in capabilities and keys
 
-On Windows:
-
-```bat
-./run.cmd
-```
-
-The source launcher verifies dependencies, prepares the `cogseed` runtime variant, and starts Electron with an isolated data root and application identity.
-
-### First-Run Setup
-
-1. Open **Connections → Models & Quota**.
-2. Add an API key, configure a supported OAuth authorization, or import a compatible authorization from CC Switch.
-3. Test the connection and select one or more returned models.
-4. Create a task and type `@` to select agents, skills, connectors, or Library files.
-5. Choose a workspace when the task needs controlled access to local project files.
-
-## Local Agent Support
-
-The corresponding CLI must be installed or configured on the machine before CogSeed can use it.
-
-| CLI | Primary role | CogSeed integration |
+| Capability | Model key requirement | Where data goes |
 |---|---|---|
-| Claude Code | End-to-end coding tasks | Managed process, workspace context, session resume, event mapping, and supported bridge injection |
-| Codex | Coding, patches, debugging, and refactoring | Managed process, app-server support, workspace evidence, and supported bridge injection |
-| OpenClaw | General orchestration and lightweight automation | Managed process with backend-specific progress and idle handling |
-| OpenCode | Coding with selectable providers, including local models | Managed process, terminal activity, and supported session import |
-| Hermes | Multi-step tasks and tool-driven workflows | Managed process, session-scoped resume, and supported bridge injection |
-| WorkBuddy | End-to-end coding through CodeBuddy CLI | Managed process, workspace context, session resume, and file-change evidence |
+| Continue a local agent's task | No extra key; uses the agent's existing login | The corresponding agent and its model service |
+| Built-in model execution for the Commander and Task Agent | Configure an available model in **Models & Quota**; your own API access requires a key (BYOK) | The configured model provider |
+| Import past sessions and extract candidate experience after tasks | Uses the configured model; without one, it can use an available local CLI agent with no extra key. Valid login and available quota are still required | The configured model provider, or the local agent performing extraction and its model service |
+| Other model entry points, such as generating a cognitive draft from a message | Configure an available model as required by the entry point | The model service actually called |
+| MCP connectors and external services | Depends on the service | The third-party service you connect |
 
-Local CLI execution is centralized in `src/main/features/local_agents/runner.ts`. The runner manages backend selection, working directory, environment overlays, cancellation, event mapping, idle detection, and result evidence.
+### Data and credentials
 
-## Architecture and Data
+- **Local storage.** This repository's open-source build can be used without logging in and does not integrate multi-device data synchronization. Tasks, attachments, and cognitive assets are stored on your machine.
+- **Accounts and synchronization.** Hub login authorizes the account and binds the device, exchanging necessary account, installation, and device information with the account service. Login alone does not mean content synchronization is enabled. Builds that support hosted synchronization also depend on service configuration and account entitlements.
+- **Sync-eligible data.** The [Development Guide](./docs/DEVELOPMENT.md#data-and-security) describes the sync-eligible domain, including conversations, attachments, artifacts, projects, memory, cognitive assets, and user configuration. Local caches, indexes, and device state remain machine-private. Eligibility does not mean the current build synchronizes the data, or that all code files in your workspace are automatically uploaded.
+- **Models and external services.** Task execution and candidate extraction may send necessary conversation content, file excerpts, and asset context to the agent, model API, or connector service actually used. Disabling CogSeed synchronization does not make these calls offline.
+- **Credential protection.** Model credentials are accessed through local credential storage and used to authenticate model requests. Local CLIs use their own login credentials. Hosted connector OAuth starts on the server; grants, tokens, and transport information received by the client are stored in encrypted fields.
 
-CogSeed is a single-process Electron application with explicit boundaries between the desktop backend and the interface:
+### Platforms
 
-- `src/main/` contains the TypeScript backend, business workflows, storage, model adapters, and controlled tool execution.
-- `src/renderer/` contains the vanilla HTML, CSS, and JavaScript interface. It has no direct Node.js access.
-- `src/main/preload.js` exposes the allow-listed `window.cogseed` bridge. Renderer-to-main communication goes through the canonical IPC invoke and stream paths.
-- Local CLI agents run through the managed P3394 gateway channel (spawned child processes with watchdog self-healing and heartbeat registration); MCP stdio connectors and isolated runtime workers use their own dedicated process gateways. The Agents Overview dashboard unifies builtin agents, local gateways, remote P3394 nodes, and messaging channel instances in one place.
-
-User-scoped state is separated under the application data container. Sync-eligible private data lives under `data/<uid>/cloud/`, while indexes, caches, credentials, local installations, and other machine-specific state live under `data/<uid>/local/`. Development launchers use an isolated `.cogseed` data root so source builds do not share state with packaged applications.
-
-The `cogseed://` protocol handles validated application deep links. Conversation artifacts and saved apps use separate resolvers and sandboxed display paths; artifact content cannot access `window.cogseed`. Attachments are stored without eager preprocessing. Images, audio, documents, and ordinary video attachments can be displayed in the conversation, while video attachments remain display-only and are not supplied as model input.
-
-## Development
-
-| Command | Purpose |
+| Platform | Supported systems |
 |---|---|
-| `npm run typecheck` | Run the TypeScript compiler without emitting build output |
-| `npm run lint` | Run static checks for source, tests, and scripts |
-| `npm test` | Run the complete JavaScript and resource test suite |
-| `npm run readme:check` | Verify local links and bundled assets referenced by both READMEs |
-| `npm run builtin:manifest:check` | Verify that bundled marketplace resources match the generated manifest |
-| `./run.sh` | Prepare dependencies and start the development application |
+| macOS 12+ | Apple Silicon and Intel |
+| Windows | x64 |
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for contribution workflow and [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) for runtime, packaging, and platform-specific details.
+### Capabilities and requirements
 
-## Cognition and Recall
+This guide applies to **v1.2.0**. Installers and release history are available on the [Releases page](https://github.com/bonc-ai/cogseed/releases).
 
-Cognition turns reviewed work experience into reusable capability assets instead of silently treating every conversation as permanent memory. Candidate experience can come from session capture, review signals, and explicit teaching. Promotion requires user confirmation and records provenance, version, scope, and audit history.
-
-Recall retrieves approved assets for later tasks and records reuse evidence without merging unrelated user, conversation, or project scopes. Source files that are eligible for synchronization stay in the private cloud domain; derived indexes and vector data remain machine-local.
-
-## Upstream Attribution
-
-CogSeed is a secondary development of [Orkas](https://github.com/Orkas-AI/Orkas), extending its local-first multi-agent collaboration and tooling. The desktop `core-agent` component originates from [OpenClaw](https://github.com/openclaw/openclaw). CogSeed also incorporates planning and runtime adaptation patterns informed by [Hermes-Agent](https://github.com/NousResearch/hermes-agent).
-
-Upstream copyright and license information is recorded in [`NOTICE`](./NOTICE). Third-party component notices are recorded in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
-
-## Documentation
-
-| Topic | Link |
+| Capability | Requirements and scope |
 |---|---|
-| Engineering boundaries and repository rules | [AGENTS.md](./AGENTS.md) |
-| Contributing guide | [CONTRIBUTING.md](./CONTRIBUTING.md) |
-| Security policy and vulnerability reporting | [SECURITY.md](./SECURITY.md) |
-| Source package contents and startup commands | [Source package notes](./README-源码包说明.txt) |
-| P3394 bridge gateway *(advanced: cross-machine agent collaboration)* | [Gateway README](./p3394-gateway/README.md) |
+| Capture and reuse cognitive assets | Extraction requires an available model or agent; confirmed assets are reused according to task needs, scope, and enabled status |
+| Import and continue local agent sessions | Requires an installed and authenticated supported CLI; import reads the original session and continuation runs in CogSeed |
+| Commander multi-agent collaboration | Configure the relevant model or execution agent; work is assigned according to task needs |
+| Skills / MCP connectors / knowledge base | Install Skills, configure and authorize connector services, and import knowledge files |
+| P3394 Gateway interoperability | Configure both endpoints, network access, and authentication; see the Gateway documentation for connection methods and implementation scope |
 
-## Standards
+---
 
-CogSeed implements the **IEEE P3394** standard for agent interoperability. Protocol
-fields prefixed with `p3394` (for example `p3394-gateway`, `p3394_bridge`, and the
-`P3394_*` environment variables) refer to that standard. CogSeed is a separate
-open-source product; the IEEE P3394 standard remains the property of its
-respective standards body.
+## 🧠 How CogSeed works
 
-## License
+### Cognitive assets
 
-CogSeed is available under the [MIT License](./LICENSE).
+Cognitive assets are experiences extracted from your work and confirmed by you. They include:
+
+- **Personal ontology:** your preferences, working style, rules, and constraints
+- **Skills:** reusable, installable methods and workflows
+
+Sources explain where experience came from, scope determines which tasks can retrieve it, and versions preserve its changes. Confirming an asset does not mean it is included in every task.
+
+### KSTAR: from a task to an asset
+
+KSTAR is CogSeed's learning loop for recording "expected outcome → actual execution → result feedback → captured experience":
+
+```text
+Before the task: record the expected outcome
+      │
+      ▼
+After the task: compare actual and expected outcomes
+      │        (Choose met / partially met / not met, or add a correction)
+      ▼
+Candidate experience: preferences, constraints, effective approaches
+      │
+      ▼  After your confirmation
+Formal cognitive assets
+      │
+      ▼
+Later tasks: Recall retrieves relevant assets for supported agents;
+             usage records, outputs, and feedback help assess their value
+```
+
+### Task continuity: switch agents and keep working
+
+CogSeed saves task goals, workspace, completed progress, known constraints, and execution evidence. It also supports importing past sessions from supported agents:
+
+```text
+Today       Codex finishes code analysis
+              ↓
+Tomorrow    Claude Code takes over implementation
+              ↓
+Later       Other supported agents continue testing and wrap-up
+```
+
+When continuing a task, CogSeed includes confirmed cognitive assets according to task needs and scope, reducing the work of explaining project rules again to a new agent.
+
+### Multi-agent collaboration when tasks need it
+
+For complex tasks, the Commander coordinates the smallest necessary set of agents:
+
+```text
+Your goal
+   │
+   ▼
+Commander ── Plans, delegates, and tracks status
+   │
+   ├──► Codex                   Code analysis / changes
+   ├──► Claude Code             Architecture analysis / implementation
+   └──► Other supported agents  Research / verification / tool calls
+                │
+                ▼
+           Combined results
+```
+
+Each agent receives only the context it needs. In one interface, you can see the plan, each member's status, execution progress, file changes, and final deliverables instead of juggling separate opaque terminals.
+
+### Skills, MCP, and connectors: extend capabilities
+
+Install Skills for agents, connect MCP connectors and external services, and add knowledge files. Installing a Skill or connecting MCP does not require changing CogSeed's source code; you can do it in the app.
+
+---
+
+## 🛠 Build on CogSeed
+
+CogSeed is an extensible Agent Workspace. Choose an entry point based on what you want to do:
+
+| Direction | What you can do | Where to start | Maturity |
+|---|---|---|---|
+| **Skill** | Submit a reusable Skill candidate | [Community Skill pilot](./community/skills/README.md): directory template, evaluation cases, and submission process | Community pilot; repository merge, app import, and distribution are separate stages |
+| **Agent Adapter** | Connect a new local agent | Existing implementations in `src/main/features/local_agents/backends/` | Source extension |
+| **MCP / connector** | Connect an external service | Configure it in the app; source extensions start in `src/main/features/connectors/` | In-app integration / source extension |
+| **Product contribution** | Fix features or improve the experience | [`good first issue`](https://github.com/bonc-ai/cogseed/labels/good%20first%20issue) · [`help wanted`](https://github.com/bonc-ai/cogseed/labels/help%20wanted) · [`documentation`](https://github.com/bonc-ai/cogseed/labels/documentation) | Actively maintained |
+
+Skill and MCP extensions do not require forking the main repository. Fork it for source changes, adapter implementations, or customized internal builds.
+
+### Run from source
+
+These commands run the source code for the v1.2.0 release.
+
+```bash
+git clone --branch v1.2.0 https://github.com/bonc-ai/cogseed.git
+cd cogseed
+npm ci
+./run.sh        # macOS / Linux
+```
+
+On Windows, use `run.cmd`. See the [Development Guide](./docs/DEVELOPMENT.md) for requirements (Node.js 24.x and npm 11.11.0), development commands, and packaging instructions, and [AGENTS.md](./AGENTS.md) for engineering boundaries.
+
+Developer contract: the renderer reaches main only through the allow-listed
+`window.cogseed` bridge, development launchers keep source-build state under an
+isolated `.cogseed` root, and validated application deep links use the
+`cogseed://` protocol. Run `npm test` before submitting a source change; the
+[Development Guide](./docs/DEVELOPMENT.md) documents the full boundaries and
+verification commands.
+
+### Contributing
+
+To contribute, follow the [Contribution Guide](./CONTRIBUTING.md) and create a development branch from the latest `develop`.
+
+Submit pull requests to `develop` and sign off your commits under the DCO. See the [Contribution Guide](./CONTRIBUTING.md) for the workflow, Git identity requirements, and review rules. If the Chinese and English contribution guides differ, the English version takes precedence.
+
+---
+
+## ❓ FAQ
+
+**Will my code be uploaded to CogSeed?**
+This repository's open-source build does not integrate multi-device content synchronization. Task execution and experience extraction may still send necessary context to the agent, model, or connector service used. Builds that support hosted synchronization also depend on service configuration and account entitlements. See [Data and credentials](#data-and-credentials).
+
+**Could cognitive assets retain incorrect experience?**
+Candidates are not promoted automatically. You confirm each one, and can inspect its sources, edit it, pause it, or revoke it.
+
+**Do I need my own API key?**
+Not always. Local agents use their CLI login. Session import and candidate extraction after tasks can also use an available local CLI when no model is configured. For built-in model execution or other entry points requiring a model, configure an available model first. If you use your own API access, enter and test its key in **Models & Quota**. See [Built-in capabilities and keys](#built-in-capabilities-and-keys).
+
+**Can I use CogSeed without Claude Code or Codex installed?**
+Yes. CogSeed includes a built-in Task Agent. Configure a model key to use multi-agent collaboration without those CLIs.
+
+**How is this different from using Claude Code or Codex directly?**
+CogSeed is a personal companion agent that works with you over time. It turns preferences, constraints, and methods you confirm into cognitive assets, reuses them when relevant in later tasks, and coordinates supported agents such as Claude Code and Codex to carry out the work.
+
+**Does it support Skills, MCP, and connectors?**
+Yes. Install Skills for agents, connect MCP connectors and external services, and add knowledge files.
+
+---
+
+## 💬 Community and security
+
+- Report bugs in [Issues](https://github.com/bonc-ai/cogseed/issues).
+- Share product ideas and experiences in [Discussions](https://github.com/bonc-ai/cogseed/discussions).
+- Do not open public Issues for security problems. Report them privately through GitHub Private Vulnerability Reporting; see [SECURITY.md](./SECURITY.md).
+
+CogSeed provides a P3394 Gateway for agent interoperability. See [p3394-gateway/README.md](./p3394-gateway/README.md) for implementation scope, connection methods, and review guidance.
+
+---
+
+## 🙏 Acknowledgments
+
+CogSeed is based on [Orkas](https://github.com/Orkas-AI/Orkas). The desktop `core-agent` component originates from [OpenClaw](https://github.com/openclaw/openclaw), and the planning and runtime adapter patterns draw on [Hermes-Agent](https://github.com/NousResearch/hermes-agent).
+
+For upstream copyright and third-party license information, see [NOTICE](./NOTICE) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
+---
+
+## 📄 License
+
+CogSeed is open source under the [MIT License](./LICENSE).
+
+---
+
+<p align="center">
+  <strong>If you want to keep control of your experience and put it to work in your next task, give CogSeed a ⭐ Star.</strong>
+</p>
+
+<p align="center">
+  ⭐ <a href="https://github.com/bonc-ai/cogseed">Star</a>
+  ·
+  🍴 <a href="https://github.com/bonc-ai/cogseed/fork">Fork</a>
+  ·
+  🐛 <a href="https://github.com/bonc-ai/cogseed/issues">Issues</a>
+  ·
+  💬 <a href="https://github.com/bonc-ai/cogseed/discussions">Discussions</a>
+</p>

@@ -25,7 +25,7 @@ import {
 } from '../group_chat/bus';
 import { readMembers } from '../group_chat/state';
 import type { GroupMessage } from '../group_chat/visibility';
-import { readAbilityAsset } from './asset-service';
+import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import {
   isAutoCaptureEligible,
   autoApplyRecallCandidate,
@@ -151,6 +151,9 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   resumeStatus?: 'waiting_quiet' | 'waiting_completion' | 'waiting_manual' | 'scheduled' | 'queued';
   attempt: number;
   candidateIds: string[];
+  /** 终态时点固化的复核计数快照（2026-09-16 A2）：workflowStatus 判定以它
+   *  为准，杜绝 defer 冷却过期等读取时点漂移把已完成任务翻成失败。 */
+  reviewSnapshot?: RecallCaptureReviewSummary;
   writingCandidateId?: string;
   /** Persisted intent to write qualifying candidates without a later approval click. */
   autoWrite?: boolean;
@@ -652,7 +655,7 @@ function optionalText(value: unknown, max: number): string | undefined {
 }
 
 function parseCandidateType(value: unknown): AbilityAssetType {
-  if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method') return value;
+  if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method' || value === 'fact') return value;
   throw new CaptureFailure('invalid_model_output', 'invalid suggestedType');
 }
 
@@ -821,12 +824,19 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method|fact","suggestedScope":"general|report|code|review|product","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates.',
     // scope 枚举约束（A 轨道）：自由文本 scope（"用户全局画像"）在自动投影
     // 里永远匹配不上任务词，用户确认的资产会全部失配。general=跨对话/跨
     // 空间的用户级事实；其余四个是任务类型词。空间限定交给 workspace-ref。
     'suggestedScope must be one of the five controlled terms: "general" (applies across all conversations and spaces — identity, durable preferences), or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes like "用户全局画像" — use "general" instead.',
+    // summary 是候选在界面上的名字（2026-09-16）：渲染层以它为卡片标题，模型
+    // 必须给出"像名字"的短语——完整句子或 judgment 前缀会让列表不可读。
+    'summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation (e.g. "回复保持简洁", "接口变更须同步文档"). Never write a full sentence, a question, or a prefix copied from judgment.',
+    // 版本组（2026-09-16）：update 候选必须基于现有资产的在用版融合生成——
+    // 输入里的 existingAssets 列表带当前内容；无融合的重写会让新版丢失
+    // 旧版仍然有效的信息。
+    'When the conversation corrects or refines an existing asset (see "existingAssets" in the input), emit that candidate with suggestedAction "update" and targetAssetId set to that asset id, and write judgment as a MERGED REVISION of the asset current statement plus the new information — keep still-valid content from the current version, do not rewrite from scratch. If your revision would drop key content of the current version, emit it as a separate "create" candidate instead.',
     // 空返回也要说明白为什么。没有这句，实机上「这次没抽出来」在系统里没有
     // 任何解释，用户无法判断是抽对了还是抽漏了。
     'When nothing is durable enough, return {"candidates":[],"reason":"one short sentence, in the language of the conversation, saying what was missing"}.',
@@ -834,6 +844,7 @@ function extractionSystemPrompt(): string {
     // 词自行猜测，项目事实会被写成 personal、原文件会被写成 template。
     'suggestedType must answer one of four questions, and each has contents that are explicitly excluded:',
     '- personal: "What is durably true about this user?" Identity, role, long-term preference, stable relationship, long-term environment, boundary. EXCLUDED: current task progress, the current sprint or milestone, a meeting or schedule, a temporary contact relationship, any project fact. Those stay with the project, not with the person.',
+    '- fact: "Is this a durable fact about a project or environment?" A stable repository, tool, organisation, workflow, or long-lived environment statement that future tasks can rely on. EXCLUDED: transient task state, current progress, a one-off failure, schedules, and facts likely to change soon.',
     '- rule: "Under what condition should which judgment or behaviour hold?" A complete rule has a condition, a principle, and a boundary. EXCLUDED: a bare preference with no condition ("likes concise"), and one-off instructions for this task only.',
     'For a rule candidate you MUST also return applicableWhen and forbiddenWhen: short concrete phrases for when it applies and where it must not be used. A rule without both cannot become a formal asset. Do not invent a boundary the messages do not support — drop the candidate instead.',
     '- template: "Is there a structure that can be applied again next time?" Document skeletons, checklists, section structures, reusable fragments, output schemas. EXCLUDED: the source file itself. A PRD.docx stays a source file; only the reusable structure extracted from it can be a template.',
@@ -841,7 +852,7 @@ function extractionSystemPrompt(): string {
     'When the content does not satisfy the type it would need, drop it rather than forcing it into the closest type.',
     'judgment must BE the reusable content itself, never a verdict about the candidate. "Useful and reusable" or "valuable, shows what the user expects" are judgements about your own extraction, not knowledge — drop those instead of emitting them.',
     'Never emit the same judgment under two different suggestedType values. Pick the one type it actually satisfies, or drop it.',
-    'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
+    'Only extract reusable preferences, constraints, decisions, templates, methods, or durable facts supported by the supplied messages.',
     'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
     'Every candidate must cite at least one user message. Short acknowledgements, greetings, status checks, and failed work are not candidates.',
     'Write candidate text in the same language as the conversation.',
@@ -849,13 +860,39 @@ function extractionSystemPrompt(): string {
   ].join('\n');
 }
 
+/** 版本组（2026-09-16）：提炼时附用户现有资产清单（在用版内容），供模型
+ *  识别 update 场景并基于现有版融合生成，而非无上下文重写。上限护栏：
+ *  只带 active 的最近 20 条，防 prompt 膨胀。 */
+async function existingAssetsForExtraction(userId: string) {
+  try {
+    const assets = await listAbilityAssets(userId);
+    return assets
+      .filter((asset) => asset.status === 'active')
+      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+      .slice(0, 20)
+      .map((asset: RecallAbilityAssetRecord) => ({
+        id: asset.id,
+        title: asset.title,
+        statement: asset.statement,
+        type: asset.type,
+        scope: asset.scope,
+        version: String(asset.activeVersion || asset.version || '1'),
+      }));
+  } catch {
+    // 资产清单读取失败不阻断整理：模型照常提炼，只是没有 update 上下文。
+    return [];
+  }
+}
+
 function extractionInput(
   conversationTitle: string,
   messages: CapturePromptMessage[],
   recallView: RecallViewRecord,
+  existingAssets: Array<{ id: string; title: string; statement: string; type: string; scope: string; version: string }> = [],
 ): string {
   return JSON.stringify({
     conversation: { title: conversationTitle },
+    ...(existingAssets.length ? { existingAssets } : {}),
     recallView: {
       id: recallView.id,
       purpose: recallView.purpose,
@@ -897,14 +934,16 @@ async function extractCaptureViaCli(
   const available = entries.filter((e) => e && e.available);
   if (!available.length) return null;
   const chosen = available.find((e) => e.type === 'claude') ?? available[0];
-  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView);
+  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView, await existingAssetsForExtraction(userId));
   const prompt =
     `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
     `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
-    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
+    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method|fact","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
     `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
     `suggestedScope must be one of the five controlled terms: "general" (across all conversations and spaces — identity, durable preferences) or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes.\n` +
-    `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
+    `summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation. Never a full sentence or a prefix copied from judgment.\n` +
+    `When the conversation corrects an existing asset (see "existingAssets" in the input), emit it with suggestedAction "update", targetAssetId set, and judgment as a merged revision of that asset's current statement plus the new information.\n` +
+    `Only extract reusable preferences, constraints, decisions, templates, methods, or durable facts supported by the supplied messages.\n` +
     `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
     `Write candidate text in the same language as the conversation.\n\n` +
     `## Conversation JSON\n${input}`;
@@ -1197,20 +1236,36 @@ async function summarizeRecallCaptures(
   return Promise.all(captures.map(async (capture) => {
     const candidateIds = [...new Set(capture.candidateIds)];
     const candidates = await Promise.all(candidateIds.map(readCandidate));
-    const reviewSummary: RecallCaptureReviewSummary = {
-      total: 0,
-      pending: 0,
-      deferred: 0,
-      promoted: 0,
-      rejected: 0,
-      missing: 0,
-    };
+    // 终态固化的快照优先（2026-09-16 A2）：只保护 completed 终态——防 defer
+    // 冷却过期等读取时点漂移把已完成的任务翻成失败。review_ready 保持现算：
+    // 它是活的等待区，用户确认/拒绝后照常翻「已完成」（既有行为），不锁死。
+    // 快照存在时仍现算 confirmed 回执——那是详情页的展示数据。
+    const snapshotted = capture.status === 'completed' ? capture.reviewSnapshot : undefined;
+    const reviewSummary: RecallCaptureReviewSummary = snapshotted
+      ? { ...snapshotted }
+      : { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 };
     const linkedAssetIds = new Set<string>();
     const confirmedAssetReceipts: RecallCaptureConfirmedAssetReceipt[] = [];
+    const collectConfirmedReceipt = async (candidate: RecallCandidateRecord) => {
+      if (!candidate.promotedAssetId || !candidate.reviewDecisionId) return;
+      const [asset, receipt] = await Promise.all([
+        readAsset(candidate.promotedAssetId),
+        readReceipt(candidate.id, candidate.reviewDecisionId),
+      ]);
+      const displayReceipt = asset && receipt
+        ? confirmedAssetReceipt(candidate, asset, receipt)
+        : undefined;
+      if (displayReceipt) {
+        linkedAssetIds.add(displayReceipt.assetId);
+        confirmedAssetReceipts.push(displayReceipt);
+      }
+    };
     for (const candidate of candidates) {
       if (!candidate) {
-        reviewSummary.total += 1;
-        reviewSummary.missing += 1;
+        if (!snapshotted) {
+          reviewSummary.total += 1;
+          reviewSummary.missing += 1;
+        }
         continue;
       }
       // 复核摘要按 capability 计数，不按 raw status 列举：实机上多数候选是
@@ -1220,6 +1275,10 @@ async function summarizeRecallCaptures(
       // 稍后处理是用户自己按下的静音，这份摘要里继续保持安静（既有行为）。
       if (capability.isSnoozed) continue;
       if (!capability.countsAsPending && !capability.isTerminal) continue;
+      if (snapshotted) {
+        if (candidate.status === 'confirmed') await collectConfirmedReceipt(candidate);
+        continue;
+      }
       reviewSummary.total += 1;
       if (capability.countsAsPending) reviewSummary.pending += 1;
       else if (candidate.status === 'confirmed') {
@@ -2024,7 +2083,7 @@ export async function runRecallCapture(
       if (signal?.aborted) modelController.abort();
       try {
         result = await runner.run({
-          message: extractionInput(conversation.title, promptMessages, recallView),
+          message: extractionInput(conversation.title, promptMessages, recallView, await existingAssetsForExtraction(userId)),
           signal: modelController.signal,
           thinkingLevel: 'off',
           cacheRetention: 'none',
@@ -2168,7 +2227,28 @@ export async function runRecallCapture(
           if (quality.automaticEligible) automaticallyEligibleCandidateIds.add(storedCandidate.id);
           else automaticallyEligibleCandidateIds.delete(storedCandidate.id);
         }
-      } catch {
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        // L3 敏感内容（凭据等）绝不落盘——闸门在 saveRecallCandidate 内部。
+        // 这里只丢弃**这一条**候选并留痕，其余候选照常保存：此前直接把整次
+        // 整理打成失败，重试又撞同一堵墙，会话永远整理不了（2026-09-21
+        // 真机抓出：candidate_save_failed 背后是 credential_assignment）。
+        if (messageText.includes('forbidden to persist')) {
+          log.warn('recall capture candidate dropped (sensitive)', {
+            capture_id: capture.id,
+            candidate_index: index,
+            error: messageText,
+          });
+          continue;
+        }
+        // 其他保存错误必须落日志：真实错误此前被整体吞掉，真机上只留下
+        // candidate_save_failed 一个码，定位全靠猜。
+        log.warn('recall capture candidate save threw', {
+          capture_id: capture.id,
+          candidate_index: index,
+          suggested_type: candidate.suggestedType,
+          error: messageText,
+        });
         throw new CaptureFailure('candidate_save_failed', 'candidate could not be saved');
       }
     }
@@ -2228,6 +2308,25 @@ export async function runRecallCapture(
     const hasReviewableCandidates = candidates.some((candidate) => (
       isAutoCaptureEligible(resolvedCandidates.get(candidate.id) || candidate)
     ));
+    // 终态固化复核快照（2026-09-16 A2）：只在 completed 落点固化（自动写
+    // 完成线）——防 defer 冷却过期等读取时点漂移把已完成任务翻成失败。
+    // review_ready 是活的等待区（用户处理后照常翻「已完成」），不固化。
+    // 口径与读取侧共用 summarizeRecallCaptures；读取异常时放弃固化，绝不
+    // 让它把一次成功的整理拖成 failed。
+    const finishingAsCompleted = automaticWrite && !hasReviewableCandidates;
+    let reviewSnapshot: RecallCaptureReviewSummary | undefined;
+    if (finishingAsCompleted && candidateIds.length) {
+      try {
+        const [workflow] = await summarizeRecallCaptures(userId, [
+          { ...capture, candidateIds } as RecallCaptureRecord,
+        ]);
+        if (workflow && workflow.reviewSummary.total) reviewSnapshot = workflow.reviewSummary;
+      } catch {
+        // 快照是防漂移的加固，不是整理的必要产物——读取侧异常时放弃固化，
+        // 保持既有读取时现算口径，绝不让它把一次成功的整理拖成 failed。
+        reviewSnapshot = undefined;
+      }
+    }
     capture = await updateCapture(userId, id, (current) => (automaticWrite
       ? current.status !== 'writing'
       : current.status !== 'extracting')
@@ -2235,6 +2334,7 @@ export async function runRecallCapture(
       : {
           ...current,
           status: hasReviewableCandidates ? 'review_ready' : automaticWrite ? 'completed' : 'no_candidate',
+          ...(reviewSnapshot ? { reviewSnapshot } : {}),
           visibility: current.executionPolicy === 'manual' || hasQualifiedCandidates || automaticWrite ? 'visible' : 'internal',
           screeningStatus: hasQualifiedCandidates ? 'qualified' : 'filtered',
           // 三分而不是二分：模型判空 / 模型给了但全被丢弃 / 给了且接住但下游筛掉。
@@ -2875,13 +2975,14 @@ export function startHistoricalRecallCapture(
 export async function promoteRecallCaptureCandidate(
   userId: string,
   candidateId: string,
-  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget } = {},
+  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget; forceCreateSimilar?: boolean } = {},
 ): Promise<RecallCaptureCandidatePromotion> {
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+  const similarRetry = options.forceCreateSimilar === true ? { forceCreateSimilar: true } : {};
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
     // 用户确认提升 → actor 必须为 user（promoteRecallCandidate 强制校验；此前漏传导致 IPC 提升一直失败）
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;
   }
@@ -2903,7 +3004,7 @@ export async function promoteRecallCaptureCandidate(
   });
 
   try {
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     await updateCapture(userId, capture.id, (current) => (
       current.status === 'writing' && current.writingCandidateId === candidateId

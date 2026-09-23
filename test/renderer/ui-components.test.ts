@@ -7,13 +7,22 @@ const root = path.join(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 function loadFactories() {
-  const context: any = { window: {}, document: undefined };
+  const labels: Record<string, string> = {
+    'common.required': '必填',
+    'common.optional': '选填',
+  };
+  const context: any = { window: { t: (key: string) => labels[key] || key }, document: undefined };
   vm.createContext(context);
   for (const file of [
     'src/renderer/modules/icons.js',
     'src/renderer/modules/ui-button.js',
+    'src/renderer/modules/ui-card.js',
+    'src/renderer/modules/ui-drawer.js',
     'src/renderer/modules/ui-sidebar-tools.js',
     'src/renderer/modules/ui-segmented-control.js',
+    'src/renderer/modules/ui-tabs.js',
+    'src/renderer/modules/ui-status.js',
+    'src/renderer/modules/ui-structure.js',
     'src/renderer/modules/ui-form.js',
     'src/renderer/modules/ui-empty.js',
     'src/renderer/modules/ui-page-header.js',
@@ -55,6 +64,7 @@ describe('first-version renderer components', () => {
 
     expect(() => uiIconButton({ icon: 'x' })).toThrow(/accessible label/);
     expect(uiIconButton({ icon: 'x', label: '关闭弹窗' })).toContain('aria-label="关闭弹窗"');
+    expect(uiIconButton({ icon: 'x', label: '关闭弹窗', size: 'sm' })).toContain('ui-icon-button--sm');
   });
 
   it('keeps shell search before collapse and exposes one recovery entry', () => {
@@ -105,6 +115,72 @@ describe('first-version renderer components', () => {
     expect(html).toContain('role="tab" aria-selected="false" tabindex="-1"');
     expect(html).toContain('role="tab" aria-selected="true" tabindex="0" data-view="plugins"');
     expect(html).not.toContain('aria-pressed=');
+  });
+
+  it('renders Tabs with one active entry, counts, disabled states and escaped copy', () => {
+    const { uiTabs, hydrateUiTabs } = loadFactories();
+    const html = uiTabs({
+      ariaLabel: '知识库视图',
+      value: 'sources',
+      items: [
+        { value: 'featured', label: '<精选>', count: 4 },
+        { value: 'sources', label: '外部来源' },
+        { value: 'public', label: '公共广场', disabled: true },
+      ],
+    });
+
+    expect(html).toContain('class="ui-tabs" role="tablist" aria-label="知识库视图"');
+    expect(html).toContain('&lt;精选&gt;');
+    expect(html).toContain('class="ui-tab__count">4</span>');
+    expect(html).toContain('data-ui-tab="sources"');
+    expect(html).toContain('aria-selected="true" tabindex="0"');
+    expect(html).toContain('data-ui-tab="public" disabled');
+    expect(typeof hydrateUiTabs).toBe('function');
+    expect(() => uiTabs({ items: ['A'] })).toThrow(/accessible label/);
+  });
+
+  it('separates metadata, interactive chips, status and loading semantics', () => {
+    const { uiTag, uiChip, uiBadge, uiStatusPill, uiStatusDot, uiProgressBar, uiSkeleton } = loadFactories();
+
+    expect(uiTag({ label: '<版本>', variant: 'version' })).toContain('&lt;版本&gt;');
+    expect(uiChip({ label: '已引用', selected: true })).toContain('aria-pressed="true"');
+    expect(uiBadge({ label: 12, tone: 'attention' })).toContain('ui-badge--attention');
+    expect(uiStatusPill({ label: '完成', tone: 'success', check: true })).toContain('ui-status-pill--success');
+    expect(uiStatusDot({ label: '失败', tone: 'critical' })).toContain('role="status"');
+    expect(uiProgressBar({ ariaLabel: '导入进度', value: 120, max: 100 })).toContain('aria-valuenow="100"');
+    expect(uiSkeleton({ ariaLabel: '正在加载', lines: [40, 95], withMedia: true })).toContain('ui-skeleton--media');
+    expect(() => uiProgressBar({ value: 50 })).toThrow(/accessible label/);
+  });
+
+  it('renders shared card shells, standard resource cards and responsive grids', () => {
+    const { uiCard, uiResourceCard, uiResourceGrid } = loadFactories();
+
+    expect(uiCard({ className: 'business-card', bodyHtml: '<strong>内容</strong>' })).toContain('ui-resource-card business-card');
+    expect(uiResourceCard({ title: '<空间>', description: '说明', icon: 'folder', status: '刚刚更新', action: { label: '打开' } }))
+      .toContain('&lt;空间&gt;');
+    expect(uiResourceCard({ title: '行卡片', layout: 'row' })).toContain('ui-resource-card--row');
+    expect(uiResourceGrid({ className: 'business-grid', bodyHtml: '<article></article>' })).toContain('ui-resource-grid business-grid');
+    expect(() => uiResourceCard({ description: '缺标题' })).toThrow(/requires a title/);
+  });
+
+  it('renders native tables, disclosure sections and semantic trees', () => {
+    const { uiDataTable, uiAccordion, uiTree, hydrateUiTrees } = loadFactories();
+    const table = uiDataTable({
+      label: '资料状态',
+      columns: [{ key: 'name', label: '名称', primary: true }, { key: 'count', label: '数量', align: 'right', sortable: true }],
+      rows: [{ name: '需求', count: '12' }],
+      sortKey: 'count',
+      sortDir: -1,
+    });
+    expect(table).toContain('<table class="ui-data-table" aria-label="资料状态">');
+    expect(table).toContain('aria-sort="descending"');
+    expect(table).toContain('data-ui-table-sort="count"');
+    expect(uiDataTable({ label: '转义', columns: [{ key: 'name', label: '名称' }], rows: [{ name: '<script>' }] })).toContain('&lt;script&gt;');
+    expect(uiAccordion({ items: [{ title: '来源', meta: '3 项', bodyHtml: '<p>内容</p>' }] })).toContain('<details class="ui-accordion__item" open>');
+    const tree = uiTree({ ariaLabel: '资料树', items: [{ id: 'root', label: '根目录', expanded: true, children: [{ id: 'child', label: '文档', selected: true }] }] });
+    expect(tree).toContain('role="tree" aria-label="资料树"');
+    expect(tree).toContain('role="treeitem" aria-level="2" aria-selected="true"');
+    expect(typeof hydrateUiTrees).toBe('function');
   });
 
   it('enforces the three EmptyState contracts and one-action boundary', () => {
@@ -175,27 +251,30 @@ describe('first-version renderer components', () => {
 
     const checkbox = uiCheckbox({
       id: 'capability-search',
+      label: '启用联网搜索',
       name: 'capability',
       value: '<search>',
       checked: true,
       disabled: true,
     });
-    expect(checkbox).toContain('class="ui-control ui-checkbox"');
+    expect(checkbox).toContain('class="ui-checkbox"');
     expect(checkbox).toContain('id="capability-search" type="checkbox"');
+    expect(checkbox).toContain('aria-label="启用联网搜索"');
     expect(checkbox).toContain('name="capability" value="&lt;search&gt;"');
     expect(checkbox).toContain(' checked disabled');
 
     const switchControl = uiSwitch({
       label: '夜间自动沉淀',
       checked: true,
-      className: 'ca-switch',
-      attrs: { 'data-act': 'nightly-toggle' },
+      attrs: { id: 'nightly-toggle', 'data-act': 'nightly-toggle' },
     });
-    expect(switchControl).toContain('class="ui-switch ca-switch is-on"');
+    expect(switchControl).toContain('class="ui-switch is-on"');
     expect(switchControl).toContain('role="switch" aria-checked="true"');
     expect(switchControl).toContain('aria-label="夜间自动沉淀"');
     expect(switchControl).toContain('data-act="nightly-toggle"');
+    expect(switchControl).toContain('id="nightly-toggle"');
     expect(switchControl).toContain('class="ui-switch__knob"');
+    expect(() => uiCheckbox({ id: 'missing-label' })).toThrow(/accessible label/);
 
     const textarea = uiField({ id: 'task-content', label: '任务内容', control: { kind: 'textarea' } });
     expect(textarea).toContain('ui-textarea');
@@ -227,6 +306,7 @@ describe('first-version renderer components', () => {
       ariaLabel: '报告日期范围',
       startLabel: '开始日期',
       endLabel: '结束日期',
+      separator: '至',
       start: '2026-09-01',
       end: '2026-09-14',
       invalidEnd: true,
@@ -237,6 +317,32 @@ describe('first-version renderer components', () => {
     expect(range).toContain('id="report-range-end"');
     expect(range).toContain('aria-label="报告日期范围"');
     expect(range).toContain('aria-invalid="true"');
+    expect(() => uiDateRangePicker({ id: 'missing-copy' })).toThrow(/localized labels/);
+
+    const checkboxField = uiField({
+      id: 'notify',
+      label: '发送通知',
+      control: { kind: 'checkbox', checked: true },
+    });
+    expect(checkboxField).toContain('type="checkbox"');
+    expect(checkboxField).toContain('aria-label="发送通知"');
+
+    const switchField = uiField({
+      id: 'auto-sync',
+      label: '自动同步',
+      control: { kind: 'switch', checked: true },
+    });
+    expect(switchField).toContain('id="auto-sync"');
+    expect(switchField).toContain('aria-labelledby="auto-sync-label"');
+
+    const rangeField = uiField({
+      id: 'active-range',
+      label: '有效日期',
+      required: true,
+      control: { kind: 'date-range', startLabel: '开始日期', endLabel: '结束日期', separator: '至' },
+    });
+    expect(rangeField).toContain('aria-labelledby="active-range-label"');
+    expect(rangeField.match(/ required/g)).toHaveLength(2);
   });
 
   it('lets a field drop the per-field requirement marker without losing required semantics', () => {
@@ -306,7 +412,8 @@ describe('component gallery integration contract', () => {
   const rendererCss = read('src/renderer/style.css');
   const workspaceCss = read('src/renderer/workspace.css');
   const recallCss = read('src/renderer/recall-local.css');
-  const modal = read('src/renderer/modules/ui-modal.js');
+const modal = read('src/renderer/modules/ui-modal.js');
+  const drawer = read('src/renderer/modules/ui-drawer.js');
   const tokens = read('src/renderer/tokens.css');
 
   it('loads tokens before legacy styles and shared component CSS after them', () => {
@@ -320,9 +427,14 @@ describe('component gallery integration contract', () => {
       './ui-components.css',
       './shell-navigation.css',
       './modules/ui-button.js',
+      './modules/ui-card.js',
+      './modules/ui-drawer.js',
       './modules/ui-user-menu.js',
       './modules/ui-sidebar-tools.js',
       './modules/ui-segmented-control.js',
+      './modules/ui-tabs.js',
+      './modules/ui-status.js',
+      './modules/ui-structure.js',
       './modules/ui-form.js',
       './modules/ui-empty.js',
       './modules/ui-page-header.js',
@@ -446,7 +558,16 @@ describe('component gallery integration contract', () => {
     expect(modal).toContain("document.body.style.overflow = 'hidden'");
     expect(modal).toContain('previousFocus.focus()');
     expect(modal).toContain('closeTopPopover()');
+    expect(modal).toContain("typeof value.onRequestClose === 'function'");
     expect(modal).toContain("icon: 'x'");
     expect(modal).not.toContain("icon: 'close'");
+  });
+
+  it('builds Drawer on the shared modal and icon-button runtimes', () => {
+    expect(drawer).toContain('root.uiModalController({');
+    expect(drawer).toContain("throw new TypeError('uiDrawer requires uiIconButton')");
+    expect(drawer).toContain("icon: 'x'");
+    expect(drawer).toContain("controller.close('backdrop')");
+    expect(drawer).not.toContain('>×</button>');
   });
 });

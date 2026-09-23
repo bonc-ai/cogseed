@@ -59,6 +59,11 @@ function validateEpisode(userId: string, episodeId: string, value: unknown): Kst
     !Array.isArray(record.k.memoryRefs) ||
     !Array.isArray(record.k.contextRefs) ||
     !Array.isArray(record.k.abilityAssetRefs) ||
+    // 版本组契约（2026-09-16）：可选的资产版本映射，值为非空字符串。
+    (record.k.abilityAssetVersions !== undefined
+      && (typeof record.k.abilityAssetVersions !== 'object'
+        || Array.isArray(record.k.abilityAssetVersions)
+        || Object.entries(record.k.abilityAssetVersions).some(([key, value]) => !safeId(key) || typeof value !== 'string' || !value))) ||
     !Array.isArray(record.t.constraints) ||
     !Array.isArray(record.a.toolCalls) ||
     !Array.isArray(record.a.agentActions) ||
