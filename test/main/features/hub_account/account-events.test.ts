@@ -70,7 +70,7 @@ describe('hub account deep-link 登录结果广播', () => {
   beforeEach(() => {
     mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-account-events-'));
     vi.clearAllMocks();
-    fakeClient.login.mockResolvedValue({ authorize_url: 'https://cogseed-open.bonc.com.cn/login', state: 'state_abc' });
+    fakeClient.login.mockResolvedValue({ authorize_url: 'https://hub.example.com/login', state: 'state_abc' });
     fakeClient.callback.mockResolvedValue({
       is_new_account: false,
       account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },

@@ -1,30 +1,36 @@
-CogSeed 源码包
-=================
+CogSeed source package
+======================
 
-项目名称: CogSeed
-仓库地址: https://github.com/bonc-ai/cogseed.git
+Project: CogSeed
+Repository: https://github.com/bonc-ai/cogseed.git
 
-内容
-----
-- 完整源码: src/ (Electron 主进程、renderer、Core Agent)
-- 资源: resources/ (平台 Agent/Skill、品牌资源、运行时清单)
-- 测试: test/
-- 文档: AGENTS.md、README.md
-
-可重建或按平台准备的本地内容
-----------------------------
-- node_modules/ (npm install)
-- resources/runtime/ (npm run runtime:ensure / 开发依赖准备)
-- resources/embedding-model/ (postinstall 自动准备)
-- resources/officecli/ 等平台资源
-
-启动方式
+Contents
 --------
+- Source: src/ (Electron main, renderer, Core Agent)
+- Resources: resources/ (agents/skills, branding, runtime manifests)
+- Tests: test/
+- Docs: AGENTS.md, README.md, README.zh-CN.md
+
+Local / rebuildable (not required in a minimal source tree)
+----------------------------------------------------------
+- node_modules/ (npm install)
+- resources/runtime/ (npm run runtime:ensure)
+- resources/embedding-model/ (prepared by postinstall)
+- platform-specific resources under resources/
+
+Quick start
+-----------
 npm install
-./run.sh      # macOS / Linux shell
+./run.sh      # macOS / Linux
 ./run.cmd     # Windows
 
-验证方式
---------
+Verify
+------
 npm run typecheck
 npm test
+
+Notes
+-----
+Packaged release Hub / API defaults use the open-source placeholder
+https://hub.example.com. Override with COGSEED_API_BASE_URL /
+COGSEED_HUB_API_BASE for your deployment.

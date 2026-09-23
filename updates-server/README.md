@@ -4,8 +4,8 @@ Standalone, zero-dependency release catalog API for the in-app update reminder
 feature. Serves the contract documented in `docs/design/updates-api.md`; the
 client implementation lives in `src/main/features/updater/`.
 
-Production deployment target: `https://cogseed-open.bonc.com.cn/updates/latest` — packaged
-client builds default their API base to `https://cogseed-open.bonc.com.cn` (env
+Production deployment target: `https://hub.example.com/updates/latest` — packaged
+client builds default their API base to `https://hub.example.com` (env
 `COGSEED_API_BASE_URL` still overrides for staging/local runs).
 
 ## Quick start
