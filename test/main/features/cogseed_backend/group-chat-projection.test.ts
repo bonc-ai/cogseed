@@ -109,6 +109,69 @@ describe('CogSeed Group Chat projection bridge', () => {
     await bus.dropConv(base.userId, cid);
   });
 
+  it('carries groupChatRunId through terminal projection and settles the durable run summary', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const store = await import('../../../../src/main/features/group_chat/run_store');
+    const { cogseedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    const userId = 'projection-run-ledger-user';
+    const agentId = 'agent-projection-run-ledger';
+    const conversation = await chats.createConversation(userId, { title: 'Projected run ledger' });
+    const cid = conversation.conversation_id;
+    const run = await store.createRun({
+      uid: userId,
+      cid,
+      submittedText: '让 backend Agent 完成任务',
+      memberAgentIds: [agentId],
+      mentionAgentIds: [agentId],
+    });
+    const base = {
+      userId,
+      conversationId: cid,
+      agentId,
+      taskId: 'cogseed-task-projection-run-ledger',
+      sessionId: 'cogseed-session-projection-run-ledger',
+      groupChatRunId: run!.run_id,
+    };
+
+    await cogseedGroupChatProjection.project({
+      ...base,
+      event: { eventId: 'projection-run-ledger-start', type: 'task.started', payload: {} },
+    });
+    await cogseedGroupChatProjection.project({
+      ...base,
+      event: {
+        eventId: 'projection-run-ledger-complete',
+        type: 'task.completed',
+        payload: { text: 'backend contribution' },
+      },
+    });
+
+    const settled = await store.readRun(userId, cid, run!.run_id);
+    expect(settled).toMatchObject({
+      status: 'completed',
+      actors: [{
+        agent_id: agentId,
+        terminal: 'done',
+        produced: { messages: 1, artifacts: [] },
+      }],
+      summary: {
+        contributed: [{ agent_id: agentId, messages: 1, artifacts: [] }],
+        missing: [],
+      },
+    });
+    const messages = await groupChat.readMessages(userId, cid);
+    expect(messages.filter((message) => message.run_id === run!.run_id)).toEqual([
+      expect.objectContaining({ from: agentId, text: 'backend contribution' }),
+      expect.objectContaining({
+        from: 'commander',
+        run_summary: expect.objectContaining({ run_id: run!.run_id, status: 'completed' }),
+      }),
+    ]);
+    await bus.dropConv(userId, cid);
+  });
+
   it('lets deletion finish while a detached projection waits, then rejects every late side effect', async () => {
     const userId = 'projection-delete-race-user';
     const taskId = 'cogseed-task-projection-delete-race';

@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -14,11 +14,13 @@
     "start": "electron .",
     "prestart:electron": "node scripts/ensure-dev-dependencies.cjs",
     "start:electron": "electron .",
+    "dev": "node scripts/dev-watch.cjs",
     "stop": "pkill -9 -f \"$PWD/node_modules/electron/dist\" || true",
     "smoke": "tsx src/main/smoke.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "readme:check": "node scripts/check-readme-links.mjs",
+    "community:skills:check": "node scripts/check-community-skills.mjs",
     "tokens:check": "node scripts/check-design-tokens.mjs",
     "tokens:update": "node scripts/check-design-tokens.mjs --update",
     "test": "npm run test:js && npm run test:resources",
@@ -134,6 +136,7 @@
       "!bin/packaged-entrypoint-gate.cjs",
       "!bin/packaged-resource-gate.cjs",
       "!bin/runtime-gate.cjs",
+      "!bin/tencent-meeting-mcp-server.cjs",
       "src/main/**/*.{cjs,js,ts,mjs,md,json}",
       "src/main/native/build/*.node",
       "src/renderer/**/*",
@@ -343,6 +346,6 @@
   "author": {
     "name": "BONC 东方国信",
     "email": "business@bonc.com.cn",
-    "url": "https://www.bonc.com.cn"
+    "url": "https://www.example.com"
   }
 }

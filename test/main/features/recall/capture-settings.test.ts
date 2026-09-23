@@ -26,10 +26,13 @@ afterEach(() => {
 });
 
 describe('Recall capture settings', () => {
-  it('defaults to smart capture with a ten-minute quiet period and persists a validated nightly policy', async () => {
+  it('defaults to manual capture with a ten-minute quiet period and persists a validated nightly policy', async () => {
+    // 2026-09-16 B3：默认值 smart→manual。smart 自动创建早已下线（见
+    // capture-service terminalCaptureEnabledFor），默认值留在半死档会让
+    // "smart+auto"存量组合的手动整理意外自动采纳——默认档与实际行为对齐。
     await expect(readRecallCaptureSettings('capture-user')).resolves.toMatchObject({
       enabled: true,
-      executionPolicy: 'smart',
+      executionPolicy: 'manual',
       reviewPolicy: 'auto',
       quietMinutes: 10,
       nightlyStart: '02:00',
@@ -73,6 +76,8 @@ describe('Recall capture settings', () => {
   });
 
   it('migrates legacy immediate settings to smart capture without rewriting the source record', async () => {
+    // 2026-09-16 B3 收窄：存量 smart/immediate 不做归一（waiting_quiet 路径
+    // 仍是活代码），仅默认值改为 manual。
     const store = await import('../../../../src/main/features/recall/store');
     await store.updateRecallJsonRecord('capture-user', 'capture-settings', 'settings', () => ({
       schemaVersion: 1,

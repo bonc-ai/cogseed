@@ -491,6 +491,8 @@
   let _artifactSort = 'newest';    // 排序：'newest' | 'oldest' | 'name'
   let _artifactView = 'list';      // 视图：'list' 列表（默认） | 'grid' 卡片
   let _artDrawerId = null;         // 打开的预览抽屉产物 key（path）
+  let _artDrawerController = null; // 共享 Drawer 控制器（焦点、ESC、遮罩、滚动锁）
+  let _artDrawerTrigger = null;    // 关闭后恢复焦点的触发元素
   let _artMenuId = null;           // 展开「更多」菜单的产物 key
   let _artMenuEl = null;           // 展开中的菜单元素（键盘导航用）
   // ── 虚拟滚动（列表视图，飞书/Notion 同款窗口化渲染）────────────────────
@@ -1771,8 +1773,8 @@
       : `${escapeHtml(_t('ws.art_from_task', '来自「{title}」', { title: a.sourceTitle || _t('ws.art_source_deleted', '原任务已删除') }))} · ${escapeHtml(a.agents)} · ${escapeHtml(a.timeLabel)}`;
     const brokenHint = a.broken ? `<p class="ws-art-drawer-broken">${escapeHtml(_t('ws.art_broken_meta', '文件已移动或失效'))}</p>` : '';
     return `
-    <div class="ws-art-drawer-backdrop open" data-ws="art-drawer-close" role="dialog" aria-modal="true" aria-labelledby="ws-art-drawer-name">
-      <aside class="ws-art-drawer" data-ws="noop">
+    <div class="ws-art-drawer-backdrop open">
+      <aside class="ws-art-drawer" data-ws="noop" role="dialog" aria-modal="true" aria-labelledby="ws-art-drawer-name">
         <div class="ws-art-drawer-head">
           <div class="ws-art-file-icon ext-${escapeHtml(a.ext.replace(/^\./, '').toLowerCase())}">${escapeHtml(_artifactExtBadge(a.ext))}</div>
           <div class="ws-art-drawer-title">
@@ -1961,19 +1963,60 @@
     if (_artPreviewBlobUrl) { try { URL.revokeObjectURL(_artPreviewBlobUrl); } catch (_) { /* ignore */ } _artPreviewBlobUrl = ''; }
   }
 
+  function _artifactEntry(id) {
+    if (!id) return null;
+    try {
+      const escaped = CSS.escape(id);
+      return document.querySelector(`[data-ws="art-open"][data-id="${escaped}"]`)
+        || document.querySelector(`[data-ws="art-row-open"][data-id="${escaped}"]`);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _mountArtifactDrawer(trigger) {
+    if (!_artDrawerId || typeof window.uiDrawerController !== 'function') return;
+    const overlay = document.querySelector('.ws-art-drawer-backdrop');
+    const drawer = overlay && overlay.querySelector('.ws-art-drawer');
+    if (!overlay || !drawer) return;
+    _artDrawerController = window.uiDrawerController({
+      overlay,
+      drawer,
+      initialFocus: '.ws-art-drawer-close',
+      fallbackFocus: () => _artifactEntry(_artDrawerId),
+      onClose(reason) {
+        const closedArtifactId = _artDrawerId;
+        _artDrawerController = null;
+        if (reason === 'rerender') return;
+        _artDrawerId = null;
+        _artDrawerTrigger = null;
+        _revokeArtPreviewBlob();
+        _reRender();
+        const returnTarget = _artifactEntry(closedArtifactId);
+        if (returnTarget && typeof returnTarget.focus === 'function') returnTarget.focus();
+      },
+    });
+    _artDrawerController.open(trigger || _artDrawerTrigger);
+    _artDrawerTrigger = null;
+  }
+
   function _openArtifactDrawer(id) {
     const a = _artifactById(id);
     if (!a) return;
+    _artDrawerTrigger = document.activeElement;
     _artDrawerId = id;
     _artMenuId = null;
     _reRender(); // _reRender 检测到抽屉开启会自动装载预览内容
-    const closeBtn = document.querySelector('.ws-art-drawer-close');
-    if (closeBtn) closeBtn.focus();
   }
 
   function _closeArtifactDrawer() {
     if (!_artDrawerId) return;
+    if (_artDrawerController) {
+      _artDrawerController.close('business-action');
+      return;
+    }
     _artDrawerId = null;
+    _artDrawerTrigger = null;
     _revokeArtPreviewBlob();
     _reRender();
   }
@@ -2185,7 +2228,12 @@
 
   function _renderAssetsPane() {
     if (!_assets.length) {
-      return `<div class="ws-empty">${_t('ws.assets_empty', '该空间暂无沉淀资产。空间内任务产出的认知确认后会沉淀到这里。')}</div>`;
+      return window.uiEmptyState({
+        kind: 'explained',
+        title: _t('ws.assets_empty_title', '暂无沉淀资产'),
+        hint: _t('ws.assets_empty', '该空间暂无沉淀资产。空间内任务产出的认知确认后会沉淀到这里。'),
+        icon: 'archive',
+      });
     }
     const items = _assets.filter((a) => _assetFilter === 'all' || a.typeId === _assetFilter);
     return `
@@ -2304,13 +2352,13 @@
     };
     // 基础 Agent 已选即 _createBaseAgents（cli type 列表），由 _baseAgentToolRow 直接渲染工具卡
     return `
-    <div class="ws-scrim" data-ws="close-create">
-      <section class="ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-dialog-head">
+    <div class="ui-modal-overlay ws-scrim" data-ws="close-create">
+      <section class="ui-modal ui-modal--lg ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-dialog-head">
           <div><h2>${_t('ws.new_space', '新建空间')}</h2>${tpl ? `<span>${escapeHtml(_t('ws.template_suffix', '{name}模板', { name: tpl.name }))}</span>` : ''}</div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-create' } })}
         </header>
-        <div class="ws-dialog-body">
+        <div class="ui-modal__body ws-dialog-body">
           ${!_configurationReady() ? _catalogStatus('configuration') : `
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
@@ -2357,7 +2405,7 @@
           </div>
           `}
         </div>
-        <footer class="ws-dialog-foot">
+        <footer class="ui-modal__footer ws-dialog-foot">
           <small>${_t('ws.create_footer', '创建后将自动进入空间的第一个新任务。')}</small>
           <div>
             ${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-create' } })}
@@ -2374,13 +2422,13 @@
     const list = _baseAgentCatalog || [];
     const picks = _createBaseAgents || [];
     return `
-    <div class="ws-scrim ws-ability-scrim" data-ws="close-create-agent">
-      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-ability-head">
+    <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-create-agent">
+      <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-ability-head">
           <div><h2>${_t('ws.pick_base_agent', '选择基础 Agent')}</h2><p>${_t('ws.pick_base_agent_hint', '可多选：所有被选中的 Agent 都会承接空间内任务。')}</p></div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-create-agent' } })}
         </header>
-        <div class="ws-ability-main ws-ability-main-solo">
+        <div class="ui-modal__body ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
             <div class="ws-option-grid">
               ${list.length ? list.map((o) => {
@@ -2390,11 +2438,11 @@
                   <span class="ws-check">${selected ? '✓' : ''}</span>
                   <div><strong>${escapeHtml(o.name || o.id)}</strong><p>${_t('ws.current_agent_hint', '承接空间内任务')}</p></div>
                 </button>`;
-              }).join('') : `<div class="ws-empty">${_t('ws.no_local_agent', '未检测到本机 Agent')}</div>`}
+              }).join('') : window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_local_agent', '未检测到本机 Agent') })}
             </div>
           </div>
         </div>
-        <footer class="ws-ability-foot">
+        <footer class="ui-modal__footer ws-ability-foot">
           <div>${picks.length ? `<span class="ws-config-hint">${_t('ws.selected_agents', '已选 {count} 个', { count: picks.length })}</span>` : ''}</div>
           <div>${picks.length ? window.uiButton({ label: _t('ws.clear', '清除'), attrs: { 'data-ws': 'clear-create-agent' } }) : ''}${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-create-agent' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-create-agent' } })}</div>
         </footer>
@@ -2418,13 +2466,13 @@
     // （固定开启不可移除，data-bundled 拦截点击）；role 原样取 picks。
     const picked = kind === 'role' ? (_abilityPicks.role || []) : _abilityPicksWithBundle(kind);
     return `
-    <div class="ws-scrim ws-ability-scrim" data-ws="close-ability">
-      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-ability-head">
+    <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-ability">
+      <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-ability-head">
           <div><h2>${_t('ws.choose_ability', '选择空间能力')}</h2><p>${_t('ws.choose_ability_hint', '角色决定工作视角，Task Agent 与 Skill 提供专项执行能力。')}</p></div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-ability' } })}
         </header>
-        <div class="ws-ability-main">
+        <div class="ui-modal__body ws-ability-main">
           <nav>
             ${Object.keys(kindLabels).map((k) => `<button class="${_abilityKind === k ? 'active' : ''}" data-ws="ability-tab" data-kind="${k}">${kindLabels[k]}<span>${_abilityCatalog(k).length}</span></button>`).join('')}
           </nav>
@@ -2445,7 +2493,7 @@
             </div>`}
           </div>
         </div>
-        <footer class="ws-ability-foot">
+        <footer class="ui-modal__footer ws-ability-foot">
           <div></div>
           <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-ability' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-ability' } })}</div>
         </footer>
@@ -2461,7 +2509,9 @@
     const byId = new Map(list.map((o) => [o.id, o]));
     const pickedItems = picked.map((id) => byId.get(id)).filter(Boolean);
     const availItems = list.filter((o) => !pickedSet.has(o.id));
-    if (!pickedItems.length && !availItems.length) return `<div class="ws-empty">${_t('ws.no_role_templates', '暂无可用模板')}</div>`;
+    if (!pickedItems.length && !availItems.length) {
+      return window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_role_templates', '暂无可用模板') });
+    }
     const card = (o, idx) => {
       const isPicked = idx >= 0;
       const isPrimary = isPicked && idx === 0;
@@ -2493,13 +2543,13 @@
     const picked = _editAbilityPicks || [];
     const kindLabel = kind === 'task' ? 'Task Agent' : 'Skill';
     return `
-    <div class="ws-scrim ws-ability-scrim" data-ws="close-edit-ability">
-      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-ability-head">
+    <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-edit-ability">
+      <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-ability-head">
           <div><h2>${_t('ws.adjust_ability', '调整空间能力')}</h2><p>${_t('ws.adjust_ability_hint', '{kind}：模板内置项固定开启，额外勾选的内容会写入空间扩充配置。', { kind: kindLabel })}</p></div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-edit-ability' } })}
         </header>
-        <div class="ws-ability-main ws-ability-main-solo">
+        <div class="ui-modal__body ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
             <div class="ws-option-grid">
               ${list.map((o) => {
@@ -2514,7 +2564,7 @@
             </div>
           </div>
         </div>
-        <footer class="ws-ability-foot">
+        <footer class="ui-modal__footer ws-ability-foot">
           <div></div>
           <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-edit-ability' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-edit-ability' } })}</div>
         </footer>
@@ -2528,13 +2578,13 @@
     const current = (sp && sp.main_skill_ref) ? sp.main_skill_ref.asset_id : '';
     const list = (_skillCatalog || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'));
     return `
-    <div class="ws-scrim ws-ability-scrim" data-ws="close-main-skill">
-      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-ability-head">
+    <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-main-skill">
+      <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-ability-head">
           <div><h2>${_t('ws.pick_main_skill', '选择主 Skill')}</h2><p>${_t('ws.pick_main_skill_hint', '主 Skill 作为空间的核心能力入口（可选）。')}</p></div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-main-skill' } })}
         </header>
-        <div class="ws-ability-main ws-ability-main-solo">
+        <div class="ui-modal__body ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
             <div class="ws-option-grid">
               ${list.map((o) => {
@@ -2548,7 +2598,7 @@
             </div>
           </div>
         </div>
-        <footer class="ws-ability-foot">
+        <footer class="ui-modal__footer ws-ability-foot">
           <div></div>
           <div>${current ? window.uiButton({ label: _t('ws.clear', '清除'), attrs: { 'data-ws': 'clear-main-skill' } }) : ''}${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-main-skill' } })}</div>
         </footer>
@@ -2561,13 +2611,13 @@
     const list = _baseAgentCatalog || [];
     const picks = _baseAgentEditPicks || [];
     return `
-    <div class="ws-scrim ws-ability-scrim" data-ws="close-base-agent">
-      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-ability-head">
+    <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-base-agent">
+      <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-ability-head">
           <div><h2>${_t('ws.pick_base_agent', '选择当前对话 Agent')}</h2><p>${_t('ws.pick_base_agent_hint', '可多选：所有被选中的 Agent 都会承接空间内任务。')}</p></div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-base-agent' } })}
         </header>
-        <div class="ws-ability-main ws-ability-main-solo">
+        <div class="ui-modal__body ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
             <div class="ws-option-grid">
               ${list.length ? list.map((o) => {
@@ -2577,11 +2627,11 @@
                   <span class="ws-check">${selected ? '✓' : ''}</span>
                   <div><strong>${escapeHtml(o.name || o.id)}</strong><p>${_t('ws.current_agent_hint', '承接空间内任务')}</p></div>
                 </button>`;
-              }).join('') : `<div class="ws-empty">${_t('ws.no_local_agent', '未检测到本机 Agent')}</div>`}
+              }).join('') : window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_local_agent', '未检测到本机 Agent') })}
             </div>
           </div>
         </div>
-        <footer class="ws-ability-foot">
+        <footer class="ui-modal__footer ws-ability-foot">
           <div>${picks.length ? `<span class="ws-config-hint">${_t('ws.selected_agents', '已选 {count} 个', { count: picks.length })}</span>` : ''}</div>
           <div>${picks.length ? window.uiButton({ label: _t('ws.clear', '清除'), attrs: { 'data-ws': 'clear-base-agent' } }) : ''}${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-base-agent' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-base-agent' } })}</div>
         </footer>
@@ -2595,13 +2645,13 @@
     const current = sp ? (sp.primary_template_id || sp.template_id || '') : '';
     const list = _templates || [];
     return `
-    <div class="ws-scrim ws-ability-scrim" data-ws="close-role">
-      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
-        <header class="ws-ability-head">
+    <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-role">
+      <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ui-modal__header ws-ability-head">
           <div><h2>${_t('ws.pick_role', '选择角色')}</h2><p>${_t('ws.pick_role_hint', '角色决定空间的工作视角与默认能力，模板预置的指令与能力会随角色变化。')}</p></div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-role' } })}
         </header>
-        <div class="ws-ability-main ws-ability-main-solo">
+        <div class="ui-modal__body ws-ability-main ws-ability-main-solo">
           <div class="ws-ability-pane">
             <div class="ws-option-grid">
               ${list.length ? list.map((o) => {
@@ -2611,11 +2661,11 @@
                   <span class="ws-check">${selected ? '✓' : ''}</span>
                   <div><strong>${escapeHtml(o.name || o.templateId)}</strong>${o.description ? `<p>${escapeHtml(o.description)}</p>` : ''}</div>
                 </button>`;
-              }).join('') : `<div class="ws-empty">${_t('ws.no_role_templates', '暂无可用模板')}</div>`}
+              }).join('') : window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_role_templates', '暂无可用模板') })}
             </div>
           </div>
         </div>
-        <footer class="ws-ability-foot">
+        <footer class="ui-modal__footer ws-ability-foot">
           <div></div>
           <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-role' } })}</div>
         </footer>
@@ -3348,6 +3398,7 @@
     if (_renderedHtml === html) return;
     // 卡片预览的 blob URL 随旧 DOM 一并作废（每次重建前吊销，防内存堆积）
     _revokeArtCardBlobs();
+    if (_artDrawerController) _artDrawerController.close('rerender', { restoreFocus: false });
     root.innerHTML = html;
     _renderedHtml = html;
     _bind(root);
@@ -3370,6 +3421,7 @@
     }
     // 抽屉开着时，任何重建都会清空预览容器 → 容器为空则重新装载预览内容
     if (_artDrawerId && _view === 'space' && _spaceTab === 'artifacts') {
+      _mountArtifactDrawer(_artDrawerTrigger);
       const a = _artifactById(_artDrawerId);
       if (a) {
         const body = document.getElementById('ws-art-preview-body');

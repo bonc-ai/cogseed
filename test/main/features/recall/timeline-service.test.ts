@@ -102,6 +102,10 @@ describe('Recall asset proof timeline', () => {
     expect(usageRow).toBeDefined();
     expect(usageRow!.refs).not.toHaveProperty('usageReceiptId');
     expect(usageRow!.refs).toHaveProperty('usage_id');
+    // M10（2026-09-16 审计收口）：usage 行带 transferProofId——评价控件的
+    // 渲染条件依赖它；此前恒缺导致"效果评价 UI 不可达"、maturity 停在
+    // transfer_validated（效果层无人到达）。
+    expect(usageRow!.refs).toMatchObject({ transferProofId: prepared.id });
     expect(items.map((item) => item.occurredAt)).toEqual([...items.map((item) => item.occurredAt)].sort().reverse());
   });
 

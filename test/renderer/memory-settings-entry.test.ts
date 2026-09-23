@@ -41,7 +41,12 @@ describe('settings memory entry', () => {
     expect(rendererCss).toMatch(/\.memory-col\s*{[^}]*width:\s*var\(--layout-thread-width\);[^}]*padding:\s*var\(--space-5\) var\(--space-6\) var\(--space-page\);/s);
     expect(rendererCss).toMatch(/\.memory-entry\s*{[^}]*border-radius:\s*var\(--radius-card\);[^}]*box-shadow:\s*var\(--shadow-card\);/s);
     expect(rendererCss).toMatch(/\.memory-entry-textarea\s*{[^}]*border:\s*1px solid var\(--line-field\);[^}]*border-radius:\s*var\(--radius-field\);/s);
-    expect(rendererCss).toMatch(/\.memory-modal\s*{[^}]*border-radius:\s*var\(--radius-dialog\);[^}]*box-shadow:\s*var\(--shadow-dialog\);/s);
+    expect(source).toContain("host.className = 'ui-modal-overlay memory-modal-overlay'");
+    expect(source).toContain('class="ui-modal memory-modal"');
+    expect(source).toContain('class="ui-modal__header memory-modal-head"');
+    expect(source).toContain('class="ui-modal__body memory-modal-body');
+    expect(source).toContain('class="ui-modal__footer memory-modal-foot"');
+    expect(rendererCss).not.toMatch(/\.memory-modal\s*\{[^}]*(?:background|border-radius|box-shadow):/s);
   });
 
   it('routes ordinary memory controls through shared renderer primitives', () => {
@@ -54,8 +59,6 @@ describe('settings memory entry', () => {
 
   it('binds immediately when the lazy feature loads after DOMContentLoaded', async () => {
     const card = clickable();
-    const dataTab = clickable();
-    const desc = { textContent: '' };
     const setView = vi.fn();
     const invoke = vi.fn(async () => ({
       ok: true,
@@ -67,17 +70,16 @@ describe('settings memory entry', () => {
         readyState: 'complete',
         getElementById(id: string) {
           if (id === 'memory-entry-card') return card;
-          if (id === 'memory-entry-desc') return desc;
           return null;
         },
-        querySelector(selector: string) {
-          return selector === '[data-settings-tab="data"]' ? dataTab : null;
+        querySelector() {
+          return null;
         },
         addEventListener() {},
       },
       window: { cogseed: { invoke }, addEventListener() {} },
       setView,
-      t: (key: string, vars?: { n?: number }) => key === 'memory.entry_desc' ? `count:${vars?.n || 0}` : key,
+      t: (key: string, vars?: { n?: number }) => key,
       setTimeout,
       clearTimeout,
     });
@@ -85,11 +87,14 @@ describe('settings memory entry', () => {
     loadMemoryModule(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // 记忆页退役（2026-09-20）：设置卡改跳认知资产；计数填充随页面退役移除。
     card.click();
-    expect(setView).toHaveBeenCalledWith('memory');
-    expect(desc.textContent).toBe('count:5');
+    expect(setView).toHaveBeenCalledWith('recall');
     expect(card.dataset.bound).toBe('1');
-    expect(dataTab.dataset.memoryBound).toBe('1');
+    // 导出/导入工具经 window.MemoryTools 暴露（个人本体页复用）。
+    expect((context as any).window.MemoryTools).toBeTruthy();
+    expect(typeof (context as any).window.MemoryTools.openExport).toBe('function');
+    expect(typeof (context as any).window.MemoryTools.openImport).toBe('function');
   });
 });
 

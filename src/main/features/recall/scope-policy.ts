@@ -26,6 +26,31 @@ const GLOBAL_SCOPE_HINTS = [
   '任何任务', 'global', 'general', 'personal', 'user',
 ];
 
+/** 资产**写入点**的 scope 归一（2026-09-19 刀一）：三档——
+ *  ① 词表值/中文全局提示 → 软归一为词表值；
+ *  ② 合法自定义词条（≤20 字、无句读分隔、非"…时"句式）→ 原样保留——
+ *     scope 不是封闭五值枚举，自定义词条（'architecture-review' 等）是
+ *     体系内合法形态；
+ *  ③ 适用场景描述句（"新增、审核、晋升认知资产条目时"这类、含顿号/句读/
+ *     超长/以"时"结尾）→ 兜底 'general'——它们是 applicableWhen 的内容
+ *     走错了门，不进 scope。
+ *  只在 create/update 的输入口调用；读取口（asAsset）不动——存量自由文本
+ *  由既有 migrateLegacyFreeTextScopes 轨道处理，读时强归一会破坏词条语义。 */
+export function resolveScopeForAsset(raw: string): string {
+  const normalized = normalizeAssetScopeValue(raw);
+  if (normalized) return normalized;
+  const text = String(raw || '').trim();
+  if (!text) return 'general';
+  // 组合词条（'review,project'）是合法形态：按分隔符拆段，每段都是合法
+  // 词条（≤20 字、非"…时"句式、无句号）才整串保留；任一段不合格（如
+  // "新增、审核、晋升认知资产条目时"的末段是适用条件句）兜底 general。
+  const segments = text.split(/[、,，;；]/).map((segment) => segment.trim()).filter(Boolean);
+  if (segments.length === 0) return 'general';
+  const allTerms = segments.every((segment) =>
+    segment.length <= 20 && !segment.endsWith('时') && !/[。！？]/.test(segment));
+  return allTerms ? text : 'general';
+}
+
 /** 自由文本 scope → 词表值（软归一）。
  *  返回 null = 无法安全归一，调用方保留原值。幂等：词表值原样返回。 */
 export function normalizeAssetScopeValue(raw: string): RecallScopeTerm | null {

@@ -131,13 +131,20 @@ describe('recall candidate pool renders from capability, not raw status', () => 
   it('never renders decision actions for terminal candidates', () => {
     // 已处理（confirmed/rejected/ignored）只出现在处理记录折叠区，无决策按钮。
     expect(viewsSource).toContain("['confirmed', 'rejected', 'ignored']");
-    expect(viewsSource).toContain('ca-processed-fold');
+    expect(viewsSource).toContain('fold-processed');
   });
 
   it('treats a candidate without capabilities as read-only instead of guessing', () => {
-    // 编辑/晋升入口都以 capabilities 为前置条件，缺能力不渲染。
-    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canEdit');
-    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canPromote');
+    // 编辑/晋升/决策入口都以 capabilities 为前置条件，**缺失即只读**。
+    // 2026-09-20：同一函数里原来的三种读法（`capabilities && …` / 真值 / `!== false`）
+    // 统一成一组 canX 常量——`!== false` 那种写法在 capabilities 缺失时会渲染出
+    // 「稍后处理 / 拒绝」，正是它要防的死按钮。真实渲染结果（含"缺失"这一分支）
+    // 由 recall-asset-rating-gate.test.ts 用真实现驱动断言。
+    expect(viewsSource).toContain('const caps = candidate.capabilities || {}');
+    expect(viewsSource).toContain('const canEdit = !!caps.canEdit');
+    expect(viewsSource).toContain('const canPromote = !!caps.canPromote');
+    expect(viewsSource).toContain('const canDefer = !!caps.canDefer');
+    expect(viewsSource).toContain('const canReject = !!caps.canReject');
   });
 });
 
@@ -182,7 +189,7 @@ describe('recall candidate detail renders from capability', () => {
   });
 
   it('keeps an expired candidate read-only', () => {
-    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canEdit');
+    expect(viewsSource).toContain('const canEdit = !!caps.canEdit');
   });
 
   it('blocks confirmation while evidence is insufficient and says why', () => {
@@ -191,11 +198,11 @@ describe('recall candidate detail renders from capability', () => {
   });
 
   it('keeps the save-only entry away from read-only candidates', () => {
-    expect(viewsSource).toContain('candidate.capabilities && candidate.capabilities.canPromote');
+    expect(viewsSource).toContain('const canPromote = !!caps.canPromote');
   });
 
   it('says why a failed candidate failed instead of showing a dead button', () => {
-    expect(viewsSource).toContain('ca-warn');
+    expect(viewsSource).toContain('class="warn"');
     expect(viewsSource).toContain('cognition.candidate_evidence_all_unavailable');
   });
 });
@@ -213,8 +220,10 @@ describe('confirmed candidate exits into the formal asset version chain', () => 
 
 describe('governance page carries the asset revision entry', () => {
   it('shows the edit entry for an asset whose content can still change', () => {
-    // 资产详情内按状态给治理动作（pause/resume/archive/restore）。
-    expect(viewsSource).toContain("data: { action: 'pause' }");
+    // 2026-09-17 重构：暂停/恢复合并为标题旁总开关（data-action 动态二值），
+    // 恢复入口保留在 deleted 态；编辑入口=版本行的「基于此版修改」。
+    expect(viewsSource).toContain('const switchEl = window.uiSwitch({');
+    expect(viewsSource).toContain("'data-action': statusOn ? 'pause' : 'resume'");
     expect(viewsSource).toContain("data: { action: 'restore' }");
   });
 
@@ -228,8 +237,10 @@ describe('governance page carries the asset revision entry', () => {
   });
 
   it('offers no content editing for a revoked asset', () => {
-    expect(viewsSource).toContain('revoked');
-    expect(viewsSource).not.toContain("'data-f': 'statement'");
+    // 2026-09-17：编辑表单回到界面（就地编辑，用户口径），但编辑态门口
+    // 限定 active/paused——revoked/archived 等终态只读（断言改判门口条件，
+    // 源码级"无表单字样"已随功能恢复失效）。
+    expect(viewsSource).toContain("['active', 'paused'].includes(String(asset.status || 'active'))");
   });
 });
 

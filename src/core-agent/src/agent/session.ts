@@ -580,14 +580,18 @@ export class Session {
     isError?: boolean,
   ): void {
     this.addMessage("user", [{ type: "tool_result", toolUseId, content: result, isError }]);
-    if (images && images.length) {
-      const imageBlocks: ImageContent[] = images.map((img) => ({
-        type: "image",
-        data: img.data,
-        mediaType: img.mediaType as ImageContent["mediaType"],
-      }));
-      this.addMessage("user", imageBlocks);
-    }
+    this.addToolImages(images);
+  }
+
+  /** Append images produced by tools without inserting another tool result. */
+  addToolImages(images?: ToolResultImage[]): void {
+    if (!images?.length) return;
+    const imageBlocks: ImageContent[] = images.map((img) => ({
+      type: "image",
+      data: img.data,
+      mediaType: img.mediaType as ImageContent["mediaType"],
+    }));
+    this.addMessage("user", imageBlocks);
   }
 
   /** Get all messages in the session. */

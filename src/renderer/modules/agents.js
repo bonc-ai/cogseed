@@ -3688,6 +3688,10 @@ if (typeof window !== 'undefined') {
 // Set on every `_openAgentPicker`; consumed by `_renderAgentPickerList` and
 // the search-input change handler so live filtering stays scoped.
 let _pickerBoundAgentIds = null;
+// 作用域解析世代号：空间作用域是异步解析的，写回前必须确认这次解析仍然属于
+// 当前打开的入口。否则「先开空间会话的选择器、再快速切回首页」会把上一处的
+// 空间过滤残留到首页，表现为首页也搜不到已接入的外接 Agent。
+let _agentPickerScopeSeq = 0;
 let _pickerBoundSkillIds = null; // 情境空间一期：同 scope.resolve 的 skills 作用域
 let _pickerProjectId = '';
 let _pickerScopeSpace = null; // 情境空间一期：当前项目绑定空间摘要
@@ -3889,6 +3893,9 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   // 旧项目作用域已删（不再按 project 过滤）。
   // 主对话：当前会话 → 空间；新聊天：chip 选中的空间（创建后对话归该空间，@ 同步过滤）
   // （同步判定，无空间直接走全局路径，不闪 loading）
+  // 世代号：无空间路径同步自增即可作废在途的空间解析；有空间路径在写回前复查，
+  // 保证模块级作用域变量永远描述「当前这个入口」。
+  const scopeSeq = ++_agentPickerScopeSeq;
   const spaceId = _agentPickerSpaceId(anchorId);
   if (!spaceId) {
     _pickerBoundAgentIds = null;
@@ -3926,8 +3933,10 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   } catch (err) {
     _agentsLog.warn('resolve space scope for picker failed', err);
   } finally {
-    _pickerProjectContextLoading = false;
+    if (scopeSeq === _agentPickerScopeSeq) _pickerProjectContextLoading = false;
   }
+  // 期间用户又开了别的入口（世代号已前进）→ 丢弃这次过期结果。
+  if (scopeSeq !== _agentPickerScopeSeq) return;
   _pickerBoundAgentIds = boundAgentIds;
   _pickerBoundSkillIds = boundSkillIds;
   _pickerScopeSpace = scopeSpace;
@@ -3955,11 +3964,14 @@ async function refreshAgentPickerContext(anchorId) {
   _renderAgentPickerList(search ? search.value : '');
 }
 
-async function _openAgentPicker(anchorBtn) {
+async function _openAgentPicker(anchorBtn, opts = {}) {
   const picker = document.getElementById('agent-picker');
   if (!anchorBtn || !picker) return;
   if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('agent');
   picker.dataset.anchorId = anchorBtn.id;
+  // 多 Agent 选择：`members` = 底部入口管理会话成员；`mentions` = 正文 `@`
+  // 点名。两种模式下 Agents 页签渲染成可勾选名单（PRD FR-001）。
+  picker.dataset.composerMode = opts.mode === 'members' || opts.mode === 'mentions' ? opts.mode : '';
   const openSeq = ++_agentPickerOpenSeq;
   _agentPickerLoadedTabs = new Set();
   // 产物/资产目录按 picker 会话重置（防上次会话残留旧空间行可点）
@@ -3996,7 +4008,24 @@ async function _openAgentPicker(anchorBtn) {
 function _closeAgentPicker({ returnFocus = false } = {}) {
   const picker = document.getElementById('agent-picker');
   const anchorId = picker?.dataset.anchorId || '';
-  if (picker) picker.style.display = 'none';
+  const composerMode = picker?.dataset.composerMode || '';
+  if (picker) {
+    picker.style.display = 'none';
+    picker.dataset.composerMode = '';
+    const foot = picker.querySelector('.composer-members-foot');
+    if (foot) foot.hidden = true;
+  }
+  // 多选模式关闭后焦点回到输入框：用户刚选完成员，下一步就是写任务。
+  if (composerMode && window.composerMembers) {
+    const target = _targetFromPickerAnchor(anchorId);
+    const inputId = window.composerMembers.inputIdOf(target);
+    const input = document.getElementById(inputId);
+    if (input && typeof focusChatRichComposer === 'function') {
+      try { if (focusChatRichComposer(input)) return; } catch (_) {}
+    }
+    if (input) { try { input.focus(); } catch (_) {} }
+    return;
+  }
   if (returnFocus && anchorId) document.getElementById(anchorId)?.focus();
   // NOTE: callers that close-without-selection (Esc / click-outside) must
   // also clear `_atKeyMark` — otherwise the next picker open would consume
@@ -4020,6 +4049,19 @@ function _renderAgentPickerList(filterText) {
     _agentPickerTab = 'agents';
   }
   _updateAgentPickerChrome();
+  // 多 Agent 选择模式：Agents 页签改为可勾选名单（会话成员 / 本条点名）。
+  const composerMode = picker?.dataset.composerMode || '';
+  if (composerMode && _agentPickerTab === 'agents' && window.composerMembers) {
+    const target = _targetFromPickerAnchor(anchorId);
+    listEl.replaceChildren(window.composerMembers.buildPickerList(target, composerMode, filterText));
+    _bindComposerMemberRows(listEl, target, composerMode);
+    window.composerMembers.updatePickerChrome(picker, target, composerMode);
+    return;
+  }
+  if (picker) {
+    const foot = picker.querySelector('.composer-members-foot');
+    if (foot) foot.hidden = true;
+  }
   if (_agentPickerTab === 'skills') {
     if (typeof loadSkills !== 'function') {
       listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
@@ -4042,18 +4084,11 @@ function _renderAgentPickerList(filterText) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     return;
   }
-  const executableCliRuntimes = new Set(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
-  let agents = (_agentsCache || []).filter((a) => {
-    if (a.enabled === false || a.interaction_mode === 'management_only') return false;
-    const runtime = a.runtime;
-    return !runtime || runtime.kind === 'in_process' || executableCliRuntimes.has(runtime.cli);
-  });
-  // Project scope: only show agents bound to the active context's project.
+  const executableAgents = _executableAgentCatalog();
+  // 空间作用域：只约束内部 Task Agent；外接 Agent 与派发侧同口径恒可见。
   // Applied AFTER the enabled filter (per CLAUDE.md §6 outer-intersection
-  // rule). `null` = no project scope, full listing.
-  if (_pickerBoundAgentIds) {
-    agents = agents.filter((a) => _pickerBoundAgentIds.has(a.agent_id));
-  }
+  // rule). `null` = no space scope, full listing.
+  const agents = splitComposerAgentCandidates(executableAgents, _pickerBoundAgentIds).candidates;
   const q = (filterText || '').toLowerCase();
   // Search matches across the active locale description; cross-language
   // fallback via pickDesc lets users find a single-locale agent regardless
@@ -4491,6 +4526,40 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
   _bindAgentPickerListItems(listEl, anchorId);
 }
 
+/** 多选模式：勾选会话成员 / 插入本条点名标记。点选不关闭列表（FR-001 连续多选）。 */
+function _bindComposerMemberRows(listEl, target, mode) {
+  const members = window.composerMembers;
+  if (!members) return;
+  for (const el of listEl.querySelectorAll('[data-composer-member]')) {
+    el.addEventListener('click', () => {
+      const key = el.dataset.composerMember || '';
+      const kind = el.dataset.memberKind || 'agent';
+      const name = el.dataset.memberName || key;
+      const member = kind === 'commander' ? members.commanderMember() : { kind: 'agent', id: key, name };
+      const picker = document.getElementById('agent-picker');
+      if (mode === 'mentions') {
+        // 本条点名：先确保是本条有效对象（点名已有成员；选新成员时加入会话）。
+        if (!members.isMember(target, key)) members.addMember(target, member);
+        const pendingAt = (_atKeyMark && _atKeyMark.inputId === members.inputIdOf(target))
+          ? _atKeyMark.posAfter - 1
+          : null;
+        members.insertMention(target, member, { pendingAt });
+        _atKeyMark = null;
+      } else if (members.isMember(target, key)) {
+        members.removeMember(target, key);
+        members.removeMentions(target, key);
+      } else {
+        members.addMember(target, member);
+        members.insertMention(target, member);
+      }
+      const search = document.getElementById('agent-picker-search');
+      _renderAgentPickerList(search ? search.value : '');
+      if (mode === 'members') search?.focus();
+    });
+  }
+  _setAgentPickerActive(0);
+}
+
 function _bindAgentPickerListItems(listEl, anchorId) {
   for (const el of listEl.querySelectorAll('[data-id]')) {
     el.addEventListener('click', async () => {
@@ -4515,10 +4584,15 @@ function _bindAgentPickerListItems(listEl, anchorId) {
 
 // ── Agent picker keyboard navigation ─────────────────────────────────────
 
+// 可选行选择器：既有 tab 行是 [data-id]，多 Agent 成员行是 [data-composer-member]。
+// active 变体单独写死——用字符串拼接会拼出非法的双点选择器（querySelector 抛错）。
+const _PICKER_ROW_SELECTOR = '.skill-picker-item[data-id], .composer-member-row[data-composer-member]';
+const _PICKER_ROW_ACTIVE_SELECTOR = '.skill-picker-item.active[data-id], .composer-member-row.active[data-composer-member]';
+
 function _setAgentPickerActive(idx) {
   const listEl = document.getElementById('agent-picker-list');
   if (!listEl) return;
-  const items = listEl.querySelectorAll('.skill-picker-item[data-id]');
+  const items = listEl.querySelectorAll(_PICKER_ROW_SELECTOR);
   if (!items.length) return;
   const clamped = Math.max(0, Math.min(items.length - 1, idx));
   items.forEach((el, i) => el.classList.toggle('active', i === clamped));
@@ -4528,7 +4602,7 @@ function _setAgentPickerActive(idx) {
 function _moveAgentPickerActive(delta) {
   const listEl = document.getElementById('agent-picker-list');
   if (!listEl) return;
-  const items = listEl.querySelectorAll('.skill-picker-item[data-id]');
+  const items = listEl.querySelectorAll(_PICKER_ROW_SELECTOR);
   if (!items.length) return;
   let cur = -1;
   items.forEach((el, i) => { if (el.classList.contains('active')) cur = i; });
@@ -5127,9 +5201,19 @@ function _atKeyOpener(chipId) {
         inputId: ta.id || '',
         posAfter: typeof ta.selectionStart === 'number' ? ta.selectionStart : 0,
       };
-      _openAgentPicker(btn);
+      // 正文 `@`：本条点名模式（勾选即插入点名标记，不再改写接收者）。
+      const composerMode = _composerMemberModeForChip(chipId);
+      if (composerMode) _openAgentPicker(btn, { mode: 'mentions' });
+      else _openAgentPicker(btn);
     }, 0);
   };
+}
+
+/** auto 弹窗的接收者入口保持旧的单选语义（它有自己的接收者状态与回调）；
+ *  两个主 composer（会话 / 新建任务）才走多 Agent 模式。 */
+function _composerMemberModeForChip(chipId) {
+  if (chipId === 'auto-recipient-chip') return false;
+  return typeof window.composerMembers === 'object' && window.composerMembers !== null;
 }
 
 // Wire (chip → click opens picker) + (textarea → `@` opens picker,
@@ -5148,7 +5232,8 @@ function bindRecipientAnchor(chipId, inputId) {
       if (picker && picker.style.display !== 'none' && picker.dataset.anchorId === chipId) {
         _closeAgentPicker();
       } else {
-        _openAgentPicker(btn);
+        // 底部 Agent 入口管理「会话成员」（多选）。
+        _openAgentPicker(btn, _composerMemberModeForChip(chipId) ? { mode: 'members' } : {});
       }
     });
   }
@@ -5167,6 +5252,46 @@ function bindRecipientAnchor(chipId, inputId) {
   }
 }
 
+/** 当前可派发的 Agent 目录（picker 列表与 composer 候选共用同一口径）：
+ *  禁用的、management_only 的、以及运行时既非进程内也非已知 CLI 的不进候选；
+ *  外接 Agent（cli / p3394-gateway）由运行时可执行性判定（executableCliRuntimes
+ *  覆盖 p3394-gateway 实例的 cli 名），与派发侧豁免口径不冲突。 */
+function _executableAgentCatalog() {
+  const executableCliRuntimes = new Set(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+  return (_agentsCache || []).filter((a) => {
+    if (a.enabled === false || a.interaction_mode === 'management_only') return false;
+    const runtime = a.runtime;
+    return !runtime || runtime.kind === 'in_process' || executableCliRuntimes.has(runtime.cli);
+  });
+}
+
+/** 多 Agent 候选的空间作用域拆分 —— 列表与候选共用的唯一事实来源。
+ *
+ *  内部 Task Agent 受空间派生集约束（空间的「能力配置」语义）；
+ *  **外接 Agent（cli / p3394-gateway）恒放行**，与主进程派发侧同口径：
+ *  features/group_chat/bus.ts 的空间过滤显式豁免外接 Agent（它们有独立凭据、
+ *  由用户显式选择，按空间丢弃只会把消息退回指挥官）。渲染层若继续一刀切过滤，
+ *  就会出现「智能体页面可见、`@` 候选里静默消失」——界面藏了一个运行时愿意
+ *  执行的成员。
+ *
+ *  @param list 只读 Agent 目录（window.getComposerAgentList）
+ *  @param boundAgentIds 空间派生集；null = 无空间作用域（全局可见）
+ *  @returns {{ candidates: any[], outOfScope: any[] }} outOfScope 仍需展示原因，
+ *           不允许静默丢弃。 */
+function splitComposerAgentCandidates(list, boundAgentIds) {
+  const candidates = [];
+  const outOfScope = [];
+  for (const agent of (Array.isArray(list) ? list : [])) {
+    if (!agent || !agent.agent_id) continue;
+    if (!boundAgentIds || _isExternalCliAgent(agent) || boundAgentIds.has(agent.agent_id)) {
+      candidates.push(agent);
+      continue;
+    }
+    outOfScope.push(agent);
+  }
+  return { candidates, outOfScope };
+}
+
 if (typeof window !== 'undefined') {
   window.bindRecipientAnchor = bindRecipientAnchor;
   window.refreshAgentPickerContext = refreshAgentPickerContext;
@@ -5174,6 +5299,25 @@ if (typeof window !== 'undefined') {
   window.commitNewChatTaskRefs = commitNewChatTaskRefs;
   window.clearChatTaskRefChips = clearChatTaskRefChips;
   window.updateAgentPickerPlaceholders = updateAgentPickerPlaceholders;
+  // 多 Agent 选择（composer-members.js）需要的只读 Agent 目录：身份解析、
+  // 点名标记、按来源分组都读它（**不过滤**——否则跨会话恢复的成员会被误判成
+  // 内部成员）。候选列表单独走下面的 candidates，与既有 Agents 页签同口径。
+  window.getComposerAgentList = () => (Array.isArray(_agentsCache) ? _agentsCache : []);
+  // 候选列表：与 picker 相同的「可派发」口径（enabled/management_only/可执行
+  // 运行时）+ 空间作用域过滤；被排除的内部 Task Agent 单独回报，让列表
+  // 显示原因而不是静默消失（PRD AC-04）。
+  window.getComposerAgentCandidates = () => (
+    splitComposerAgentCandidates(_executableAgentCatalog(), _pickerBoundAgentIds).candidates
+  );
+  window.getComposerOutOfScopeAgents = () => (
+    splitComposerAgentCandidates(_executableAgentCatalog(), _pickerBoundAgentIds).outOfScope
+  );
+  // 纯函数测试缝（唯一的拆分事实来源，picker 列表与 composer 候选共用）。
+  window.splitComposerAgentCandidates = splitComposerAgentCandidates;
+  // 项目没有任何绑定 Agent 时，候选列表要给出与 Agents 页签相同的提示。
+  window.getComposerMemberScopeHint = () => (
+    _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0 ? t('agents.no_project_agents') : ''
+  );
 }
 
 function bindAgentPickers() {
@@ -5211,11 +5355,21 @@ function bindAgentPickers() {
     if (e.key === 'ArrowUp')   { _moveAgentPickerActive(-1); e.preventDefault(); return; }
     if (e.key === 'Enter') {
       const listEl = document.getElementById('agent-picker-list');
-      const active = listEl?.querySelector('.skill-picker-item.active[data-id]')
-        || listEl?.querySelector('.skill-picker-item[data-id]');
+      const active = listEl?.querySelector(_PICKER_ROW_ACTIVE_SELECTOR)
+        || listEl?.querySelector(_PICKER_ROW_SELECTOR);
       if (active) { active.click(); e.preventDefault(); }
     }
   });
+  // 多选模式的底部「完成」：收起列表并把焦点还给输入框（PRD FR-006）。
+  const pickerEl = document.getElementById('agent-picker');
+  if (pickerEl && pickerEl.dataset.membersFootBound !== '1') {
+    pickerEl.dataset.membersFootBound = '1';
+    pickerEl.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-composer-members-done]')) return;
+      e.stopPropagation();
+      _closeAgentPicker({ returnFocus: true });
+    });
+  }
   for (const { chip, input } of _RECIPIENT_ANCHOR_PAIRS) {
     bindRecipientAnchor(chip, input);
   }

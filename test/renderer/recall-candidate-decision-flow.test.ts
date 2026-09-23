@@ -219,8 +219,13 @@ describe('候选决定的收尾', () => {
   });
 
   it('在待我处理列表上做决定时不劫持页面', () => {
+    // 2026-09-16 子安口径例外：defer（稍后处理）在待我处理页内=处理完回
+    // 列表即反馈（router.go 复位列表）——守卫细化到"reject/ignore/adopt 不
+    // 劫持"，defer 的复位分支不受限。
     expect(decide).toContain('await NS.reload()');
-    expect(decide).not.toContain('router.');
+    const deferAt = decide.indexOf("if (action === 'defer')");
+    const beforeDefer = deferAt > 0 ? decide.slice(0, deferAt) : decide;
+    expect(beforeDefer).not.toContain('router.');
   });
 
   it('失败时弹中文、就地重画，并且不报成功', () => {

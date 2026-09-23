@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import YAML from 'yaml';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..');
-const releaseVersion = '1.1.2';
-const releaseDate = '2026-09-16';
+const releaseVersion = '1.2.0';
+const releaseDate = '2026-09-23';
 
 function readJson(relativePath: string): any {
   return JSON.parse(readFileSync(resolve(repoRoot, relativePath), 'utf8'));
@@ -27,7 +27,7 @@ function collectCogSeedVersions(value: unknown, versions = new Set<string>()): S
 }
 
 describe('release version consistency', () => {
-  it('keeps package, publiccode, SBOM, and changelog on 1.1.2', () => {
+  it('keeps package, publiccode, SBOM, and changelog on 1.2.0', () => {
     const packageJson = readJson('package.json');
     const packageLock = readJson('package-lock.json');
     const sbom = readJson('sbom.cdx.json');

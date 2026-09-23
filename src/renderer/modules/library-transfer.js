@@ -28,6 +28,16 @@
     return root && typeof root.uiIconHtml === 'function' ? root.uiIconHtml(name, cls) : '';
   }
 
+  function _button(options) {
+    if (!root || typeof root.uiButton !== 'function') throw new Error('library transfer requires uiButton');
+    return root.uiButton(options);
+  }
+
+  function _iconButton(options) {
+    if (!root || typeof root.uiIconButton !== 'function') throw new Error('library transfer requires uiIconButton');
+    return root.uiIconButton(options);
+  }
+
   function _errorKey(code) {
     return {
       target_exists: 'contexts.transfer.error_target_exists',
@@ -69,19 +79,17 @@
     const initialLibrary = _libraryValue(source);
     const overlay = document.createElement('div');
     overlay.id = 'library-transfer-overlay';
-    overlay.className = 'modal-overlay library-transfer-overlay';
+    overlay.className = 'ui-modal-overlay library-transfer-overlay';
     overlay.innerHTML = `
-      <div class="modal modal-standard library-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="library-transfer-title">
-        <div class="modal-header library-transfer-header">
-          <div>
-            <div class="modal-title library-transfer-title" id="library-transfer-title">${escapeHtml(t('contexts.transfer.title'))}</div>
+      <section class="ui-modal ui-modal--lg library-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="library-transfer-title">
+        <header class="ui-modal__header library-transfer-header">
+          <div class="ui-modal__heading">
+            <h2 class="ui-modal__title library-transfer-title" id="library-transfer-title">${escapeHtml(t('contexts.transfer.title'))}</h2>
             <div class="library-transfer-summary">${escapeHtml(t('contexts.transfer.selected_count', { count: paths.length }))}</div>
           </div>
-          <button type="button" class="modal-close-btn project-library-modal-close" data-transfer-close title="${escapeHtml(t('common.close'))}" aria-label="${escapeHtml(t('common.close'))}">
-            ${_icon('x', 'modal-close-icon')}
-          </button>
-        </div>
-        <div class="modal-body library-transfer-body">
+          ${_iconButton({ label: t('common.close'), icon: 'x', attrs: { 'data-transfer-close': '' } })}
+        </header>
+        <div class="ui-modal__body library-transfer-body">
           <div class="library-transfer-label" id="library-transfer-mode-label" data-transfer-label="action">${escapeHtml(t('contexts.transfer.action'))}</div>
           <div class="library-transfer-mode" role="radiogroup" aria-labelledby="library-transfer-mode-label">
             <label class="library-transfer-mode-option">
@@ -99,11 +107,11 @@
           <div class="library-transfer-folders" data-transfer-folders></div>
           <div class="library-transfer-error" data-transfer-error hidden></div>
         </div>
-        <div class="modal-actions library-transfer-footer">
-          <button type="button" class="btn" data-transfer-cancel>${escapeHtml(t('common.cancel'))}</button>
-          <button type="button" class="btn btn-primary" data-transfer-confirm>${escapeHtml(t('contexts.transfer.move'))}</button>
-        </div>
-      </div>
+        <footer class="ui-modal__footer library-transfer-footer">
+          ${_button({ label: t('common.cancel'), role: 'secondary', attrs: { 'data-transfer-cancel': '' } })}
+          ${_button({ label: t('contexts.transfer.move'), role: 'primary', attrs: { 'data-transfer-confirm': '' } })}
+        </footer>
+      </section>
     `;
     document.body.appendChild(overlay);
     const dialog = overlay.querySelector('[role="dialog"]');
@@ -118,6 +126,10 @@
     const folderEl = overlay.querySelector('[data-transfer-folders]');
     const errorEl = overlay.querySelector('[data-transfer-error]');
     const confirmBtn = overlay.querySelector('[data-transfer-confirm]');
+    const setButtonLabel = (button, text) => {
+      const label = button && button.querySelector('.ui-button__label');
+      if (label) label.textContent = text;
+    };
 
     // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
     const cleanup = () => {
@@ -198,8 +210,8 @@
       overlay.querySelector('[data-transfer-label="folder"]').textContent = t('contexts.transfer.destination_folder');
       overlay.querySelector('[data-transfer-mode-label="move"]').textContent = t('contexts.transfer.move');
       overlay.querySelector('[data-transfer-mode-label="copy"]').textContent = t('contexts.transfer.copy');
-      overlay.querySelector('[data-transfer-cancel]').textContent = t('common.cancel');
-      confirmBtn.textContent = t(mode === 'copy' ? 'contexts.transfer.copy' : 'contexts.transfer.move');
+      setButtonLabel(overlay.querySelector('[data-transfer-cancel]'), t('common.cancel'));
+      setButtonLabel(confirmBtn, t(mode === 'copy' ? 'contexts.transfer.copy' : 'contexts.transfer.move'));
       const closeBtn = overlay.querySelector('[data-transfer-close]');
       closeBtn.title = t('common.close');
       closeBtn.setAttribute('aria-label', t('common.close'));
@@ -213,7 +225,7 @@
       input.addEventListener('change', () => {
         if (!input.checked) return;
         mode = input.dataset.transferMode === 'copy' ? 'copy' : 'move';
-        confirmBtn.textContent = t(mode === 'copy' ? 'contexts.transfer.copy' : 'contexts.transfer.move');
+        setButtonLabel(confirmBtn, t(mode === 'copy' ? 'contexts.transfer.copy' : 'contexts.transfer.move'));
         showError('');
       });
     });

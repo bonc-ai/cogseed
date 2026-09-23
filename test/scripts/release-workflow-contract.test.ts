@@ -78,6 +78,11 @@ describe('release workflow contract', () => {
     expect(macos).toContain('npm run package:dev:mac && npm run verify:package:dev:mac');
   });
 
+  it('requires a real packaged macOS launch before the cicd gate is green', () => {
+    const macos = commands(load('ci.yml').jobs.verify);
+    expect(macos).toContain('npm run package:dev:mac && npm run verify:package:dev:mac');
+  });
+
   it('pins the Windows P3394 lane to the platform-native regression suites', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
     expect(pkg.scripts['test:p3394:windows']).toBe('node scripts/run-p3394-windows-tests.mjs');

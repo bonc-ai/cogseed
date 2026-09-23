@@ -254,7 +254,8 @@ describe('Chinese and English locale catalogs', () => {
       'cognition.title': 'Cognition Assets',
       'connections.tab.sources': 'Library',
       'agent_picker.ref_artifact': 'Artifact',
-      // 2026-09-15 重构后候选回执视图删除；术语检查改用现存 key。
+      // 2026-09-15 重构后候选回执视图删除；术语检查改用现存 key
+      //（candidate_receipt_title 已随 #266 三 tab 收敛移除，2026-09-17 同步删）。
       'cognition.tab_overview': 'Cognition',
     };
 
@@ -348,8 +349,9 @@ describe('dynamic language refresh', () => {
     expect(workspaceSource).not.toContain("_t('ws.space_mark', '空')");
     expect(stateSource).toContain("t('common.unknown_error')");
     // 认知域空态文案的取词点随 skills.js 瘦身迁至 cognition-assets（T()，
-    // 2026-09-14），断言同步迁移。
-    expect(cognitionAssetsSource).toContain("T('cognition.asset_no_proofs', '还没用过')");
+    // 2026-09-14）。asset_no_proofs 的调用点随"用过几次"行删除（2026-09-17
+    // 详细信息按版本下沉），改断言仍在用的空态 key。
+    expect(cognitionAssetsSource).toContain("T('cognition.asset_scope_unset', '还没设置')");
   });
 
   it('repaints Continue Work without repeating source/session reads or import work', () => {

@@ -127,15 +127,18 @@ export function learningSignal(review: KstarReviewRecord): KstarCandidateProposa
 export function assetMutationFor(
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
-): Pick<KstarCandidateProposal, 'suggestedAction' | 'targetAssetId'> {
+): Pick<KstarCandidateProposal, 'suggestedAction' | 'targetAssetId' | 'targetVersionUsed'> {
   const targetAssetIds = [...new Set((episode.k.abilityAssetRefs || []).filter((id) => safeId(id)))];
   if (targetAssetIds.length !== 1) return {};
+  const targetAssetId = targetAssetIds[0];
+  // 版本组契约（2026-09-16）：带上任务实际使用的版本，供确认时与当前在用版核对。
+  const targetVersionUsed = episode.k.abilityAssetVersions?.[targetAssetId];
   const categories = new Set((review.attributionDetails || []).map((detail) => detail.category));
   if (categories.has('asset_outdated') || categories.has('asset_conflict')) {
-    return { suggestedAction: 'update', targetAssetId: targetAssetIds[0] };
+    return { suggestedAction: 'update', targetAssetId, ...(targetVersionUsed ? { targetVersionUsed } : {}) };
   }
   if (categories.has('asset_not_applicable')) {
-    return { suggestedAction: 'limit_scope', targetAssetId: targetAssetIds[0] };
+    return { suggestedAction: 'limit_scope', targetAssetId, ...(targetVersionUsed ? { targetVersionUsed } : {}) };
   }
   return {};
 }

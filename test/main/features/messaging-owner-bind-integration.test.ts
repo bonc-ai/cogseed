@@ -226,11 +226,14 @@ describe('wechat_personal end-to-end', () => {
     expect(adapter.platform).toBe('wechat_personal');
   });
 
-  // Skipped per P7 release-test-waiver (2026-08-20): known failing case carried
-  // over from previous baselines; remediation scheduled for a future cycle.
-  it.skip('carries the inbound contextTokenRef into the ledger entry and the send context', async () => {
+  // 2026-09-20：恢复启用。原注释引用了一份**并不存在**的 "P7 release-test-waiver"。
+  // 恢复后该用例本身可以通过（309ms），但它此前用 `vi.doMock` 安装自己的
+  // group_chat / bus 替身，而 finally 里的 `vi.doUnmock` 会把**文件级静态 mock 的
+  // 注册一并摘掉**——紧随其后的两条端到端用例于是动态 import 到真实模块，共享 spy
+  // 再也不被调用（表现为 groupSend 0 次调用 + 10s 超时）。现改为与同文件兄弟用例
+  // 完全一致的写法：只用文件级静态 spy，不再触碰 mock 注册表。
+  it('carries the inbound contextTokenRef into the ledger entry and the send context', async () => {
     let busListener: ((event: unknown) => void) | undefined;
-    const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
     const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
     const adapter: import('../../../src/main/features/messaging/types').MessagingAdapter = {
       platform: 'wechat_personal',
@@ -250,22 +253,25 @@ describe('wechat_personal end-to-end', () => {
       },
       sendMessage,
     };
-    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
-      busListener = listener;
-      return () => { busListener = undefined; };
-    });
     adapterMocks.createAdapter = () => adapter;
-    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
-    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
-    // The suite also imports messaging from tests that use the real Group
-    // Chat module. Reset after registering these mocks so this integration
-    // case cannot reuse that earlier module graph under parallel execution.
     vi.resetModules();
 
     try {
       const registry = await import('../../../src/main/features/messaging/registry');
       const manager = await import('../../../src/main/features/messaging/manager');
       const ledger = await import('../../../src/main/features/messaging/ledger');
+      // Fresh module graph: aim the static group-chat spies at this test's
+      // fakes before any inbound dispatch can run（与下方兄弟用例同款写法）。
+      const groupSend = groupChatMocks.send;
+      const subscribe = busMocks.subscribe;
+      if (!groupSend || !subscribe) throw new Error('static group-chat mocks not installed');
+      groupSend.mockClear();
+      subscribe.mockClear();
+      groupSend.mockImplementation(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
+      subscribe.mockImplementation((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+        busListener = listener;
+        return () => { busListener = undefined; };
+      });
       const created = await registry.createWechatInstance('uid-1', {
         displayName: '我的微信',
         ilinkBotToken: 't'.repeat(64),
@@ -333,8 +339,6 @@ describe('wechat_personal end-to-end', () => {
       await manager.stopForUser('uid-1');
     } finally {
       adapterMocks.createAdapter = undefined;
-      vi.doUnmock('../../../src/main/features/group_chat');
-      vi.doUnmock('../../../src/main/features/group_chat/bus');
       vi.resetModules();
     }
   });
@@ -427,10 +431,13 @@ describe('wechat_personal end-to-end', () => {
       await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1), { timeout: 10000 });
       // 回复必须绑定批次中最后一条消息的 tokenRef，而不是第一条
       expect(sendMessage.mock.calls[0][3]).toMatchObject({ contextTokenRef: 'ref-new' });
-      expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
-        status: 'sent',
-        contextTokenRef: 'ref-new',
-      });
+      // 记账在发送返回后才落 `sent`：等这个可观察状态，不要抢在它之前断言。
+      await vi.waitFor(async () => {
+        expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+          status: 'sent',
+          contextTokenRef: 'ref-new',
+        });
+      }, { timeout: 10000 });
 
       await manager.stopForUser('uid-1');
     } finally {

@@ -327,4 +327,30 @@ describe('CogSeed Runtime tool runtime MVP', () => {
     expect(read.persistedOutput?.path.startsWith(paths.cogseedRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
     expect(fs.existsSync(read.persistedOutput!.path)).toBe(true);
   });
+
+  it('hides tools the effective policy will refuse, and shows them once granted', () => {
+    const root = makeRoot();
+
+    // 默认策略（COGSEED_RUNTIME_TOOL_POLICY）：shell/fileWrite/skillRun 全为 none。
+    // 这些工具如果留在目录里，模型就会去调用一个必然被 E_RUNTIME_PERMISSION_DENIED
+    // 拒绝的工具，整轮以 runtime_tool_error 收场（真机复现过 bash 与 search_files）。
+    const denied = runner(root).catalog.map((entry) => entry.name);
+    expect(denied).not.toContain('bash');
+    expect(denied).not.toContain('write_file');
+    expect(denied).not.toContain('edit_file');
+    expect(denied).not.toContain('run_skill');
+    // 只读工具仍然可见（fileRead 默认为 explicit_roots）。
+    expect(denied).toContain('read_file');
+    expect(denied).toContain('search_files');
+
+    // 对照：策略真正放开时，对应工具必须回到目录里（这里只验证目录组装，
+    // 不改变任何权限语义——放开仍由主进程推导的策略决定）。
+    const granted = runner(root, undefined, {
+      ...DEFAULT_RUNTIME_TOOL_POLICY,
+      fileWrite: 'explicit_writable_roots',
+      shell: 'low_risk_only',
+      skillRun: 'allowlisted_skills',
+    }).catalog.map((entry) => entry.name);
+    expect(granted).toEqual(expect.arrayContaining(['bash', 'write_file', 'edit_file', 'run_skill']));
+  });
 });

@@ -20,6 +20,7 @@ import {
 
 type ConversationMessage = {
   recall_projection_card?: Pick<RecallProjectionCard, 'projectionId'>;
+  projection_receipt?: Pick<RecallProjectionCard, 'projectionId'>;
 };
 
 const log = createLogger('recall.prompt-injection');
@@ -43,7 +44,7 @@ const PROFILE_MEMORY_PREFIX_LINES = [
 export interface RecallPromptCitation {
   assetId: string;
   title: string;
-  type: 'personal' | 'rule' | 'template' | 'skill_method';
+  type: 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
   version: string;
   scope: string;
   projectionId: string;
@@ -169,6 +170,7 @@ async function buildPromptContextForProjections(
   userId: string,
   projections: ProjectionForPrompt[],
   runtimeContext: AssetRuntimeContext = {},
+  excludeAssetIds: ReadonlySet<string> = new Set(),
 ): Promise<RecallTurnPromptContext> {
   const records: Array<Record<string, unknown>> = [];
   const citations: RecallPromptCitation[] = [];
@@ -178,7 +180,7 @@ async function buildPromptContextForProjections(
     if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) continue;
     const matches = new Map((projection.assetMatches || []).map((match) => [match.assetId, match]));
     for (const assetId of projection.assetIds) {
-      if (seenAssets.has(assetId) || records.length >= MAX_ASSETS) continue;
+      if (seenAssets.has(assetId) || excludeAssetIds.has(assetId) || records.length >= MAX_ASSETS) continue;
       try {
         const confirmedVersion = projection.assetVersions?.[assetId];
         const liveAsset = await readAbilityAsset(userId, assetId);
@@ -188,9 +190,26 @@ async function buildPromptContextForProjections(
           // snapshot; never inject a drifted live version under a confirmed
           // Projection. When the snapshot record is missing we fall back to
           // the live asset ONLY if it still sits on the confirmed version.
-          snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
-          if (!snapshot) {
-            if (liveAsset.version !== confirmedVersion) continue;
+          // 版本真删兜底（2026-09-17）：删除前系统把该版本快照冻结进了
+          // projection.assetVersionSnapshots——版本记录已物理删除时按副本
+          // 继续供给，注入效果与删除前一致。
+          const cached = projection.assetVersionSnapshots?.[assetId];
+          if (cached && cached.version === confirmedVersion) {
+            snapshot = cached.snapshot;
+          } else {
+            snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
+            if (!snapshot) {
+              if (liveAsset.version !== confirmedVersion) {
+                // 可恢复降级必须可见（AGENTS.md）：冻结副本缺失且线上版本
+                // 已变，这条已确认资产本次只能缺席——静默吞掉实机无法诊断。
+                log.warn('confirmed projection asset version snapshot missing', {
+                  projectionId: projection.id,
+                  assetId,
+                  confirmedVersion,
+                });
+                continue;
+              }
+            }
           }
         }
         // Frozen snapshots preserve the content the user confirmed. Governance
@@ -352,7 +371,8 @@ export async function projectionIdsForConversation(userId: string, cid: string):
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const message of messages.reverse()) {
-    const projectionId = message?.recall_projection_card?.projectionId;
+    const projectionId = message?.projection_receipt?.projectionId
+      || message?.recall_projection_card?.projectionId;
     if (typeof projectionId !== 'string' || !projectionId || seen.has(projectionId)) continue;
     seen.add(projectionId);
     ids.push(projectionId);
@@ -459,9 +479,9 @@ export async function buildRecallTurnPromptContext(
   input: RecallTurnPromptInput,
   options: ProjectionSemanticOptions = {},
 ): Promise<RecallTurnPromptContext> {
-  if (input.committedProjectionId) {
-    return buildPromptContextForCommittedProjection(userId, input);
-  }
+  // 会话里确认过的投影（用户确认的 + 模型自选的）**始终**参与装配：committed
+  // 投影是宿主给的基线，不是替代品（2026-09-18 修：此前有 committed 就整条跳过
+  // 会话投影——模型自己挂上的资产在 KStar 任务里永远带不上，真机实测抓出）。
   const projections: ProjectionForPrompt[] = [];
   let manualProjectionIds: string[] = [];
   try {
@@ -478,6 +498,22 @@ export async function buildRecallTurnPromptContext(
     } catch (error) {
       log.warn('read manual projection for Recall turn failed', { projectionId, error: (error as Error).message });
     }
+  }
+  if (input.committedProjectionId) {
+    const committed = await buildPromptContextForCommittedProjection(userId, input);
+    if (!projections.length) return committed;
+    // 同一资产已在 committed 块注入的不重复注入。去重按 assetId（此前键含
+    // projectionId，committed 投影与会话投影 id 必不相同，过滤从未生效——同一
+    // 资产 statement 双份注入、usage 流水双计）。排除下沉到装配层执行：
+    // promptBlock 与 citations 同源去重，不会出现 citations 减了、正文还是
+    // 两份的劈叉。committed 是宿主基线，重叠时以 committed 冻结内容为准。
+    const committedAssets = new Set(committed.citations.map((item) => item.assetId));
+    const local = await buildPromptContextForProjections(userId, projections, input, committedAssets);
+    return {
+      ...committed,
+      promptBlock: [committed.promptBlock, local.promptBlock].filter(Boolean).join('\n\n'),
+      citations: [...committed.citations, ...local.citations],
+    };
   }
 
   try {

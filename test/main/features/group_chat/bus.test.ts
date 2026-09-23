@@ -992,7 +992,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(digestOnly).not.toContain('现在开始实现需求A');
   });
 
-  it('attaches the digest and routing envelope to a commander-dispatched external gateway turn (G-26)', async () => {
+  it('keeps the routing envelope but withholds the host digest from a commander-dispatched external gateway turn', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
     const cid = 'cid-gw-dispatch-digest';
@@ -1030,8 +1030,10 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     await waitForQuiescent(TEST_UID, cid);
 
     // Phase 3: commander dispatches a task to the external agent. G-26: this
-    // turn must now carry the missed-context digest AND keep the routing
-    // envelope (previously dispatches carried neither digest nor sender).
+    // turn must keep the routing envelope (previously dispatches carried no
+    // sender). The missed-context digest is host-side augmentation of the full
+    // main transcript, so it must NOT cross the external boundary — the private
+    // user↔commander background above stays host-only (round-3 privacy review).
     // T1: quotes on the message ride along as structured references.
     await bus.enqueue({
       uid: TEST_UID, cid, fromActorId: 'commander',
@@ -1042,17 +1044,15 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const call = gatewayTurnMock.calls[gatewayTurnMock.calls.length - 1];
     expect(call).toBeTruthy();
-    expect(String(call.prompt)).toContain('<group-context-summary>');
-    expect(String(call.prompt)).toContain('先和指挥官讨论网关上下文注入的背景细节');
+    expect(String(call.prompt)).not.toContain('<group-context-summary>');
+    expect(String(call.prompt)).not.toContain('先和指挥官讨论网关上下文注入的背景细节');
     expect(String(call.prompt)).toContain('<msg from="commander"');
-    // T1 引用信封化：消息引用透传到网关 turn（落信封 metadata 槽位）。
-    expect(Array.isArray(call.references)).toBe(true);
-    expect(call.references).toHaveLength(1);
-    expect(call.references[0]).toMatchObject({ source_cid: TEST_CID, source_msg_id: 'm-ref-1' });
-    // The digest is context, not instructions: the current task text lives
-    // outside the summary block.
-    const digestPart = String(call.prompt).split('</group-context-summary>')[0] ?? '';
-    expect(digestPart).not.toContain('执行网关上下文注入的验证任务');
+    expect(String(call.prompt)).toContain('执行网关上下文注入的验证任务');
+    // T1 引用信封化仅对内部收件人生效：references 携带被引用消息的正文与
+    // 发言者，属于跨成员上下文，外部网关边界必须剥离（Task 8 外部投影白名单）。
+    // 内部透传由 "persists structured references and injects them as inert model
+    // context" 覆盖，外部剥离由 bus-integration 的多条恢复/初始用例覆盖。
+    expect(call.references).toBeUndefined();
   });
 
   it('feeds the missed-conversation digest to the floor agent after a /agent-style switch (no re-@)', async () => {

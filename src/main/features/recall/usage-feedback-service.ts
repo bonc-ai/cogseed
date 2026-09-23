@@ -26,7 +26,7 @@ function isCitation(value: unknown): value is RecallMessageCitation {
     && typeof citation.title === 'string'
     && citation.title.trim().length > 0
     && citation.title.length <= 160
-    && (citation.type === 'personal' || citation.type === 'rule' || citation.type === 'template' || citation.type === 'skill_method')
+    && (citation.type === 'personal' || citation.type === 'rule' || citation.type === 'template' || citation.type === 'skill_method' || citation.type === 'fact')
     && typeof citation.version === 'string'
     && citation.version.trim().length > 0
     && citation.version.length <= 40

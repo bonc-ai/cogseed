@@ -345,12 +345,50 @@ function writeStrictEntries(filePath: string, entries: MemoryEntry[], charLimit:
     : { ok: false, error: result.error || 'memory_write_failed' };
 }
 
+/** 角色模板记忆的独立活存储（2026-09-22 清单 #5·模板搬迁）：
+ *  cloud/memory/role-templates/<templateId>.md ——模板借住 USER/MEMORY.md 的
+ *  时代结束：条目写模板自己的文件，记忆文件退役时模板数据无牵连。 */
+export function roleTemplateMemoryFile(userId: string, templateId: string): string {
+  return path.join(path.dirname(userMemoryFile(userId)), 'role-templates', `${templateId}.md`);
+}
+
+function addRoleTemplateMemoryToOwnFile(
+  userId: string,
+  templateId: string,
+  content: string,
+): MemoryOpResult {
+  const trimmed = content.trim();
+  if (!trimmed) return buildResult(userId, 'memory', false, 'empty content');
+  const invalid = validateMemoryText(trimmed);
+  if (invalid) return buildResult(userId, 'memory', false, invalid);
+  const threat = scanForInjection(trimmed);
+  if (threat) {
+    log.warn('blocked memory write', { threat, content_chars: trimmed.length });
+    return buildResult(userId, 'memory', false, `blocked: suspicious content (${threat})`);
+  }
+  const filePath = roleTemplateMemoryFile(userId, templateId);
+  // 独立文件：单模板条目集合，预算沿用共享档（卸载即整文件归档删除）。
+  const result = ensureRoleTemplateMemoryRecord(filePath, templateId, trimmed, MEMORY_CHAR_LIMIT);
+  if (!result.ok) return buildResult(userId, 'memory', false, result.error || 'memory_write_failed');
+  notifyMemoryDirty('memory');
+  return buildResult(userId, 'memory', true, undefined, { nearLimit: result.nearLimit });
+}
+
 /**
- * 角色模板来源的全局记忆写入：候选确认选角色时，USER.md/MEMORY.md 条目附带
- * `{ kind: 'role_template', sourceId: <template_id> }` 来源标记（注释头，正文零污染）。
- * 便于卸载模板时按标签删除/备份/恢复该角色的全局记忆数据。
+ * 角色模板来源的全局记忆写入（2026-09-22 起写模板独立文件，不再进
+ * USER.md/MEMORY.md——正文零污染且与记忆退役解耦）。
  */
 export function addRoleTemplateMemoryEntry(
+  userId: string,
+  _target: MemoryScope,
+  templateId: string,
+  content: string,
+): MemoryOpResult {
+  return addRoleTemplateMemoryToOwnFile(userId, templateId, content);
+}
+
+/** 兼容旧签名保留的实现（存量 live 条目迁移期使用）。 */
+function addRoleTemplateMemoryToLegacyFile(
   userId: string,
   target: MemoryScope,
   templateId: string,
@@ -375,7 +413,12 @@ export function addRoleTemplateMemoryEntry(
 
 /** 该角色模板来源的全局记忆条目数（跨 USER.md + MEMORY.md）。 */
 export function countRoleTemplateMemoryEntries(userId: string, templateId: string): number {
-  return listRoleTemplateMemoryTexts(fileForTarget(userId, 'user'), templateId).length
+  // 2026-09-22 搬迁：独立文件为主，旧 live 记忆兼容计入（迁移期双源）。
+  const own = fs.existsSync(roleTemplateMemoryFile(userId, templateId))
+    ? listRoleTemplateMemoryTexts(roleTemplateMemoryFile(userId, templateId), templateId).length
+    : 0;
+  return own
+    + listRoleTemplateMemoryTexts(fileForTarget(userId, 'user'), templateId).length
     + listRoleTemplateMemoryTexts(fileForTarget(userId, 'memory'), templateId).length;
 }
 
@@ -387,9 +430,23 @@ export function collectRoleTemplateMemoryEntries(
   userId: string,
   templateId: string,
 ): { user: string[]; memory: string[] } {
+  // 2026-09-22 搬迁后条目在模板独立文件；旧 live 记忆里可能还有存量，
+  // 两处都收（去重），卸载归档不丢数据。
+  const own = fs.existsSync(roleTemplateMemoryFile(userId, templateId))
+    ? listRoleTemplateMemoryTexts(roleTemplateMemoryFile(userId, templateId), templateId)
+    : [];
+  const legacyUser = listRoleTemplateMemoryTexts(fileForTarget(userId, 'user'), templateId);
+  const legacyMemory = listRoleTemplateMemoryTexts(fileForTarget(userId, 'memory'), templateId);
+  const seen = new Set<string>();
+  const dedupe = (texts: string[]) => texts.filter((text) => {
+    if (seen.has(text)) return false;
+    seen.add(text);
+    return true;
+  });
   return {
-    user: listRoleTemplateMemoryTexts(fileForTarget(userId, 'user'), templateId),
-    memory: listRoleTemplateMemoryTexts(fileForTarget(userId, 'memory'), templateId),
+    user: dedupe(legacyUser),
+    // 独立文件的条目优先计入（搬迁后的主来源）。
+    memory: dedupe([...own, ...legacyMemory]),
   };
 }
 
@@ -403,6 +460,11 @@ export function removeRoleTemplateMemoryFromLive(
 ): { userOk: boolean; memoryOk: boolean } {
   let userOk = true;
   let memoryOk = true;
+  // 模板独立文件整体删除（2026-09-22 搬迁）；旧 live 记忆的残留按来源删。
+  try {
+    const ownFile = roleTemplateMemoryFile(userId, templateId);
+    if (fs.existsSync(ownFile)) fs.rmSync(ownFile, { force: true });
+  } catch { /* 独立文件删除失败不阻塞归档语义 */ }
   const userRes = removeRoleTemplateMemoryEntries(fileForTarget(userId, 'user'), templateId, USER_CHAR_LIMIT);
   if (!userRes.ok) userOk = false;
   else notifyMemoryDirty('user');
@@ -973,9 +1035,18 @@ export function formatForSystemPrompt(
   spaceId?: string,
   legacyProjectId?: string,
   activeCognitionSourceIds: ReadonlySet<string> = new Set(),
+  /** 资产库画像源（2026-09-19 清单 #7）：非空时 user/shared 两节改由资产库
+   *  渲染（画像=personal 资产）；空数组=资产库还没有画像资产，回退文件。
+   *  存量迁移完成后文件为空，这里自然切换，无需一次性硬切。 */
+  assetProfileEntries: string[] = [],
 ): string {
-  const userEntries = loadEntries(userProfileFile(userId));     // cross-agent profile
-  const sharedEntries = loadMemoryRecords(userMemoryFile(userId))
+  const profileFromAssets = assetProfileEntries.length > 0;
+  const userEntries = profileFromAssets
+    ? assetProfileEntries.map((text) => ({ text }))
+    : loadEntries(userProfileFile(userId));     // cross-agent profile
+  const sharedEntries = profileFromAssets
+    ? [] // 画像已由资产库渲染；共享档文件留待迁移清空（阶段 D 退役）。
+    : loadMemoryRecords(userMemoryFile(userId))
     .filter((record) => record.independent || record.sources.length === 0
       || record.sources.some((source) => activeCognitionSourceIds.has(source.sourceId))
       // role_template 来源 = 角色画像（长期事实），常驻可见；cognition asset 才受 active 门控
@@ -991,7 +1062,40 @@ export function formatForSystemPrompt(
     }
   }
   const agentEntries = agentId ? loadAgentEntries(userId, agentId) : []; // this agent only
-  if (userEntries.length === 0 && sharedEntries.length === 0 && spaceEntries.length === 0 && agentEntries.length === 0) return '';
+  // 角色模板画像：独立文件（2026-09-22 搬迁后的主落点）+ 存量 live 记忆里
+  // 带 role_template 来源的条目。双源是必须的：老用户原地升级时装着的模板
+  // 画像还在 USER/MEMORY.md，而 profileFromAssets 模式下这两份文件不再被
+  // 读取——不收 live 条目，装着的模板画像会静默消失。文本去重、独立文件
+  // 优先（与卸载归档 collectRoleTemplateMemoryEntries 同口径）。
+  let roleTemplateEntries: MemoryEntry[] = [];
+  const seenRoleTemplateText = new Set<string>();
+  try {
+    const templateDir = path.join(path.dirname(userMemoryFile(userId)), 'role-templates');
+    if (fs.existsSync(templateDir)) {
+      roleTemplateEntries = fs.readdirSync(templateDir)
+        .filter((name) => name.endsWith('.md'))
+        .flatMap((name) => loadEntries(path.join(templateDir, name)))
+        .filter((entry) => {
+          if (seenRoleTemplateText.has(entry.text)) return false;
+          seenRoleTemplateText.add(entry.text);
+          return true;
+        });
+    }
+  } catch { /* 模板画像读不到不阻塞背景块 */ }
+  try {
+    const legacyRoleTemplate = [
+      ...loadMemoryRecords(userProfileFile(userId)),
+      ...loadMemoryRecords(userMemoryFile(userId)),
+    ]
+      .filter((record) => record.sources.some((source) => source.kind === 'role_template'))
+      .map(({ text }) => ({ text }));
+    for (const entry of legacyRoleTemplate) {
+      if (seenRoleTemplateText.has(entry.text)) continue;
+      seenRoleTemplateText.add(entry.text);
+      roleTemplateEntries.push(entry);
+    }
+  } catch { /* live 文件读不到不阻塞背景块 */ }
+  if (userEntries.length === 0 && sharedEntries.length === 0 && spaceEntries.length === 0 && agentEntries.length === 0 && roleTemplateEntries.length === 0) return '';
 
   // Preamble: keep the non-space wording byte-identical to the legacy shape
   // (cache prefix + regression stability); mention the space store only when
@@ -1022,6 +1126,10 @@ export function formatForSystemPrompt(
   if (agentEntries.length > 0) {
     parts.push('### Your own notes (this agent only)');
     parts.push(agentEntries.map(e => e.text).join(ENTRY_SEPARATOR));
+  }
+  if (roleTemplateEntries.length > 0) {
+    parts.push('### Role profiles (installed templates)');
+    parts.push(roleTemplateEntries.map(e => e.text).join(ENTRY_SEPARATOR));
   }
   return parts.join('\n\n');
 }

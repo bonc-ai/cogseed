@@ -10,7 +10,6 @@
  *   transcript.correct.scan        —— 只读扫描，产出候选 + 拒绝原因
  *   transcript.correct.apply       —— 按确认结果替换，落 run 快照，原文不可变
  *   transcript.run.list / get / report / notes / revert
- *   transcript.issues.list / resolve
  *
  * 本体接线（P1，2026-09-15）：
  *   transcript.glossary.syncOntology —— 归组 + 挂 ontologyRef + 出建议（+可选反哺候选）
@@ -31,6 +30,7 @@ import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
 import * as transcriptMetrics from '../features/transcript_metrics';
+import * as transcriptDocTags from '../features/transcript_doc_tags';
 import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
@@ -70,90 +70,6 @@ function riskLevels(value: unknown): Array<'low' | 'medium' | 'high'> | undefine
   const list = stringList(value, 3);
   if (!list) return undefined;
   return list.filter((v): v is 'low' | 'medium' | 'high' => v === 'low' || v === 'medium' || v === 'high');
-}
-
-function issueInputs(value: unknown): Array<{
-  span: { start: number; end: number };
-  text: string;
-  reason: transcriptRuns.IssueReason;
-  suggestion?: string;
-}> {
-  if (!Array.isArray(value)) return [];
-  const allowed: transcriptRuns.IssueReason[] = ['unknown_entity', 'ambiguous_name', 'mixed_speech', 'asr_unrecoverable'];
-  return value.slice(0, 200).map((raw) => {
-    const item = raw as Partial<{ span: { start: number; end: number }; text: string; reason: string; suggestion: string }>;
-    const start = typeof item?.span?.start === 'number' ? Math.max(0, Math.floor(item.span.start)) : 0;
-    const end = typeof item?.span?.end === 'number' ? Math.max(start, Math.floor(item.span.end)) : start;
-    const reason = allowed.includes(item?.reason as transcriptRuns.IssueReason)
-      ? (item!.reason as transcriptRuns.IssueReason)
-      : 'unknown_entity';
-    return {
-      span: { start, end },
-      text: typeof item?.text === 'string' ? item.text.slice(0, 500) : '',
-      reason,
-      ...(typeof item?.suggestion === 'string' ? { suggestion: item.suggestion.slice(0, 300) } : {}),
-    };
-  });
-}
-
-/**
- * 把"待核"标记真正写进清理版，并返回插入后的 span。
- * 输入 span 必须是**清理版**坐标（调用方先用 mapOffset 从原文坐标换算过来）；
- * 映射不到的（落在被删除区域且无对应位置）直接丢弃，不假装标上了。
- */
-function withIssueMarkers(
-  applied: transcriptAutoCorrect.ApplyResult,
-  issues: Array<{
-    span: { start: number; end: number };
-    text: string;
-    reason: transcriptRuns.IssueReason;
-    suggestion?: string;
-  }>,
-): {
-  result: transcriptAutoCorrect.ApplyResult;
-  issues: Array<{
-    span: { start: number; end: number };
-    text: string;
-    reason: transcriptRuns.IssueReason;
-    suggestion?: string;
-  }>;
-} {
-  if (issues.length === 0) return { result: applied, issues: [] };
-  const resolved = issues
-    .map((issue) => {
-      const at = transcriptAutoCorrect.mapOffset(applied.offsetMap, issue.span.start);
-      if (at === null) return null;
-      const start = Math.max(0, Math.min(at, applied.text.length));
-      const end = Math.max(start, Math.min(
-        transcriptAutoCorrect.mapOffset(applied.offsetMap, issue.span.end) ?? start + 1,
-        applied.text.length,
-      ));
-      return { ...issue, span: { start, end } };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-  if (resolved.length === 0) return { result: applied, issues: [] };
-
-  const marked = transcriptAutoCorrect.insertIssueMarkers(applied.text, resolved.map((i) => i.span));
-  // byStart 以**输入**插入点为键，同一位置多条待核共用同一个标记 span
-  const withSpans = resolved
-    .map((issue) => {
-      const span = marked.byStart.get(issue.span.start);
-      return span ? { ...issue, span } : null;
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-  const charsOut = marked.text.length;
-  const charsIn = applied.charsIn;
-  const retention = charsIn > 0 ? charsOut / charsIn : 1;
-  return {
-    result: {
-      ...applied,
-      text: marked.text,
-      charsOut,
-      retention,
-      overRewriteSuspected: retention < transcriptAutoCorrect.OVER_REWRITE_THRESHOLD,
-    },
-    issues: withSpans,
-  };
 }
 
 export const invokeHandlers = {
@@ -335,6 +251,10 @@ export const invokeHandlers = {
     ownerNote: transcriptGlossary.setOwnerNote(ctx.userId, typeof payload?.note === 'string' ? payload.note : ''),
   }),
 
+  // 候选区（待核）的 IPC（candidates / adoptCandidate / discardCandidate / clearCandidates）
+  // 已随「模型建议并入扫描」整体移除：模型候选现在是扫描结果里的一行，勾选即确认。
+  // 见 src/main/features/transcript_glossary.ts 顶部说明与 dev/cx677-candidate-gate 的设计。
+
   'transcript.glossary.upsert': async (payload: Payload, ctx: IpcContext) => {
     const result = transcriptGlossary.upsertEntry(ctx.userId, payload ?? {});
     return result;
@@ -404,6 +324,29 @@ export const invokeHandlers = {
     });
   },
 
+  /**
+   * 转写文档的「场景标签」读 / 写 / 建议 —— 「仅本场景」这条作用域的前置数据。
+   *
+   * 为什么放在这里：`transcript.correct.scan` / `.apply` / `transcript.glossary.setScope`
+   * 都收 `scenarioTags`，但此前渲染层没有任何来源可传（面板 ctx 里恒为空），于是
+   * 「仅本场景」永远置灰、带场景标签的词条也永远命中不了。这三条把"文档 → 标签"
+   * 补上：面板读它、写它，扫描/接受时带上它。
+   */
+  'transcript.docTags.get': async (payload: Payload, ctx: IpcContext) => {
+    const docId = optionalId(payload?.docId, 'docId');
+    if (!docId) return { ok: false, error: 'missing docId', tags: [] as string[] };
+    return { ok: true, docId, tags: transcriptDocTags.readTagsForDoc(ctx.userId, docId) };
+  },
+  'transcript.docTags.set': async (payload: Payload, ctx: IpcContext) => {
+    const docId = optionalId(payload?.docId, 'docId');
+    if (!docId) return { ok: false, error: 'missing docId' };
+    return transcriptDocTags.setTagsForDoc(ctx.userId, docId, payload?.tags);
+  },
+  'transcript.docTags.suggest': async (_payload: Payload, ctx: IpcContext) => ({
+    ok: true,
+    tags: await transcriptDocTags.suggestScenarioTags(ctx.userId),
+  }),
+
   /** 忽略（可逆、降权）与恢复：只留痕，不删词条、不动台账。 */
   'transcript.glossary.setIgnored': async (payload: Payload, ctx: IpcContext) => ({
     updated: transcriptGlossary.setIgnored(
@@ -440,31 +383,81 @@ export const invokeHandlers = {
   }),
 
   // ── 扫描与替换 ────────────────────────────────────────────────────────
+  /**
+   * 扫描 = **一个候选清单**：词表命中（含作用域/护栏/口癖）+ 可选的模型复核。
+   *
+   * `includeReview: true` 时再让模型读一遍正文，把它的建议转成同构候选
+   * （`entryRef: model_<i>`、`fromModel: true`、`riskLevel: 'medium'`）**追加在
+   * 同一个列表后面**——不另开一套 UI，也没有第二条"待核"状态线。
+   *
+   * 风险等级给 `medium` 的用意：面板只预勾 `low`，所以模型建议**永远不会被预勾**，
+   * 必须逐条人工确认；同时它又不算"未处理的高危候选"，不会把产物误标成 draft。
+   */
   'transcript.correct.scan': async (payload: Payload, ctx: IpcContext) => {
     const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
+    const docId = optionalId(payload?.docId, 'docId');
+    const scenarioTags = stringList(payload?.scenarioTags, 20);
     const entries = transcriptGlossary.listEntries(ctx.userId, { status: 'active' });
     const scan = transcriptAutoCorrect.scanText(text, entries, {
-      ...(optionalId(payload?.docId, 'docId') ? { docId: optionalId(payload?.docId, 'docId')! } : {}),
-      ...(stringList(payload?.scenarioTags, 20) ? { scenarioTags: stringList(payload?.scenarioTags, 20)! } : {}),
+      ...(docId ? { docId } : {}),
+      ...(scenarioTags ? { scenarioTags } : {}),
       includeDelete: payload?.includeDelete === true,
     });
-    return scan;
-  },
+    if (payload?.includeReview !== true) return { ...scan, review: null };
 
-  /**
-   * 疑似专名探测（只读）：找出"词表与记忆分组里都没有"的混合大小写/全大写拉丁串。
-   * 保守设计（宁漏勿噪）：不产出任何替换，只给"标待核"当输入。
-   */
-  'transcript.correct.suspects': async (payload: Payload, ctx: IpcContext) => {
-    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
+    // 优先参考名单 = 词表正确写法 + 记忆分组字段值（不含投影里的结构标签）
     const known = new Set<string>();
-    for (const entry of transcriptGlossary.listEntries(ctx.userId, { status: 'active' })) {
+    for (const entry of entries) {
       known.add(entry.wrong);
       known.add(entry.correct);
     }
-    for (const name of transcriptOntology.collectCanonicalNames(ctx.userId)) known.add(name.name);
-    const limit = typeof payload?.limit === 'number' ? Math.max(1, Math.min(500, Math.floor(payload.limit))) : 200;
-    return { suspects: transcriptAutoCorrect.detectSuspectEntities(text, known, limit) };
+    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
+    for (const name of canonical) known.add(name.name);
+    const allowed = [
+      ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
+      ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
+    ].filter((value) => !!value && value.length <= 60);
+    // 词形可疑的位置只作为"重点线索"提示模型，不决定要不要问
+    const hints = transcriptAutoCorrect
+      .detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_HINTS)
+      .map((suspect) => ({ text: suspect.text, start: suspect.span.start }));
+    const review = await transcriptLlm.generateReviewCandidates(ctx.userId, text, {
+      knownTargets: allowed,
+      hints,
+      sessionKey: docId,
+    });
+    const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = review.candidates.map((candidate, index) => ({
+      entryRef: `model_${index}`,
+      wrong: candidate.wrong,
+      correct: candidate.correct,
+      action: 'replace' as const,
+      confidence: candidate.confidence,
+      riskLevel: 'medium' as const,
+      context: candidate.reason,
+      span: { start: candidate.start, end: candidate.start + candidate.wrong.length },
+      ignoredCount: 0,
+      contextAllow: [],
+      fromModel: true,
+    }));
+    return {
+      ...scan,
+      candidates: [...scan.candidates, ...modelCandidates],
+      stats: {
+        ...scan.stats,
+        candidates: scan.candidates.length + modelCandidates.length,
+      },
+      review: {
+        modelCandidates: modelCandidates.length,
+        chunksScanned: review.chunksScanned,
+        chunksTotal: review.chunksTotal,
+        truncated: review.truncated,
+        failedChunks: review.failedChunks,
+        outsideAllowlist: review.outsideAllowlist,
+        rejected: review.rejected.length,
+        skipped: review.skipped ?? '',
+        knownCount: allowed.length,
+      },
+    };
   },
 
   /**
@@ -476,43 +469,6 @@ export const invokeHandlers = {
     return transcriptHeadings.suggestHeadings(ctx.userId, text, {
       sessionKey: optionalId(payload?.docId, 'docId'),
     });
-  },
-
-  /**
-   * 受约束 LLM 候选（方案 §五 P2-1）：只问"疑似专名"，只认白名单目标，
-   * 低置信只进待确认。**不自动替换**——替换照旧走 apply 的护栏与风险分级。
-   */
-  'transcript.correct.llmCandidates': async (payload: Payload, ctx: IpcContext) => {
-    const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
-    const entries = transcriptGlossary.listEntries(ctx.userId, { status: 'active' });
-    const known = new Set<string>();
-    for (const entry of entries) {
-      known.add(entry.wrong);
-      known.add(entry.correct);
-    }
-    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
-    for (const name of canonical) known.add(name.name);
-    const suspects = transcriptAutoCorrect.detectSuspectEntities(text, known, transcriptLlm.LLM_CANDIDATE_MAX_SUSPECTS);
-    // 白名单 = 词表正确写法 + 记忆分组字段值（**不含**投影里的结构标签）
-    const allowed = [
-      ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
-      ...canonical.filter((n) => n.source === 'ontology' && n.seedKind !== 'field' && n.seedKind !== 'group').map((n) => n.name),
-    ].filter((value) => !!value && value.length <= 60);
-    const result = await transcriptLlm.generateCandidates(
-      ctx.userId,
-      suspects.map((suspect) => ({
-        text: suspect.text,
-        context: text.slice(Math.max(0, suspect.span.start - 30), Math.min(text.length, suspect.span.end + 30)).replace(/\n/g, ' '),
-        start: suspect.span.start,
-      })),
-      allowed,
-      { sessionKey: optionalId(payload?.docId, 'docId') },
-    );
-    return {
-      ...result,
-      suspects: suspects.map((suspect) => ({ text: suspect.text, span: suspect.span })),
-      allowedCount: allowed.length,
-    };
   },
 
   /**
@@ -590,18 +546,56 @@ export const invokeHandlers = {
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-    const allCandidates = [...scan.candidates, ...mergeCandidates, ...headingCandidates];
+    // 模型建议（方案 §五 P2-1，与扫描合并后）：按 headings 同款"合成 ref"接入，
+    // 复用同一条替换/偏移/回滚管道，不另起第二套改写逻辑。
+    //
+    // 两条硬要求：
+    //   1. **span 必须与正文逐字对上**（折叠后比较，容忍大小写/全角）。扫描到 apply
+    //      之间可能重扫或换稿，旧坐标会错位——对不上就丢弃，绝不按脏坐标改正文。
+    //   2. **必须显式勾选才应用**：模型候选不进 `syntheticRefs` 那套"给了就一定应用"，
+    //      只能从 acceptedIds 里来；没传 acceptedIds 时一条都不应用（否则
+    //      applyCorrections 的"缺省=全部非 high"会让模型建议被静默全量应用）。
+    const modelInputs = Array.isArray(payload?.models) ? payload.models.slice(0, 200) : [];
+    const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = modelInputs
+      .map((raw, index): transcriptAutoCorrect.CorrectionCandidate | null => {
+        const item = raw as Partial<{ start: unknown; wrong: unknown; correct: unknown; confidence: unknown; reason: unknown }>;
+        const start = typeof item?.start === 'number' && Number.isFinite(item.start)
+          ? Math.max(0, Math.min(Math.floor(item.start), text.length))
+          : -1;
+        const wrong = typeof item?.wrong === 'string' ? item.wrong.trim() : '';
+        const correct = typeof item?.correct === 'string' ? item.correct.trim() : '';
+        if (start < 0 || !wrong || !correct) return null;
+        const end = start + wrong.length;
+        if (end > text.length) return null;
+        if (transcriptGlossary.foldText(text.slice(start, end)) !== transcriptGlossary.foldText(wrong)) return null;
+        const confidenceRaw = Number(item?.confidence);
+        return {
+          entryRef: `model_${index}`,
+          wrong,
+          correct,
+          action: 'replace' as const,
+          confidence: Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0,
+          // medium：不预勾（面板只预勾 low），但也不计进"未处理高危"。
+          riskLevel: 'medium' as const,
+          context: typeof item?.reason === 'string' ? item.reason.slice(0, 200) : '',
+          span: { start, end },
+          ignoredCount: 0,
+          contextAllow: [] as string[],
+        };
+      })
+      .filter((item): item is transcriptAutoCorrect.CorrectionCandidate => item !== null);
+    const droppedModels = modelInputs.length - modelCandidates.length;
+
+    const allCandidates = [...scan.candidates, ...mergeCandidates, ...headingCandidates, ...modelCandidates];
     const syntheticRefs = [...mergeCandidates, ...headingCandidates].map((c) => c.entryRef);
     const acceptedAll = syntheticRefs.length
       ? [...(acceptedIds ?? []), ...syntheticRefs]
-      : acceptedIds;
+      : (acceptedIds ?? (modelCandidates.length ? [] : undefined));
     const applied0 = transcriptAutoCorrect.applyCorrections(text, allCandidates, {
       ...(acceptedAll ? { acceptedIds: acceptedAll } : {}),
       ...(riskLevels(payload?.acceptRiskLevels) ? { acceptRiskLevels: riskLevels(payload?.acceptRiskLevels)! } : {}),
     });
-    // 未决项（方案 §4.3/§8.1-7）：用户标的 span 在**原文**坐标系，先按偏移映射
-    // 落到清理版，再插「【转写存疑】」。有未决项时 createRun 会把产物标 draft。
-    const { result, issues } = withIssueMarkers(applied0, issueInputs(payload?.issues));
+    const result = applied0;
     const params = {
       glossaryVersion: 2,
       ...(optionalText(payload?.fillerRulePack, 'fillerRulePack', 40)
@@ -612,7 +606,6 @@ export const invokeHandlers = {
     const run = transcriptRuns.createRun(ctx.userId, {
       docId,
       sourceText: text,
-      ...(issues.length ? { issues } : {}),
       ...(optionalText(payload?.sourcePath, 'sourcePath', 500)
         ? { sourcePath: optionalText(payload?.sourcePath, 'sourcePath', 500)! }
         : {}),
@@ -626,7 +619,15 @@ export const invokeHandlers = {
       result.applied.map((a) => a.entryRef),
       { docId, runId: run.runId },
     );
-    return { run, result, denied: scan.denied };
+    // 「勾选并应用 = 确认」：把**真的被应用**的模型建议记进词表（source: meeting_accept，
+    // 作用域收窄到本文档）。只认 result.applied——勾了但被护栏挡掉的不算确认。
+    // 词表命中的候选（g_*）本来就在表里，这里的 ref 只筛 model_*。
+    const appliedModelRefs = new Set(result.applied.map((a) => a.entryRef));
+    const confirmedPairs = modelCandidates
+      .filter((candidate) => appliedModelRefs.has(candidate.entryRef))
+      .map((candidate) => ({ wrong: candidate.wrong, correct: candidate.correct }));
+    const glossaryWrites = transcriptGlossary.rememberConfirmedPairs(ctx.userId, confirmedPairs, { docId });
+    return { run, result, denied: scan.denied, glossaryWrites, droppedModels };
   },
 
   // ── 产物 ──────────────────────────────────────────────────────────────
@@ -695,20 +696,4 @@ export const invokeHandlers = {
   'transcript.run.revert': async (payload: Payload, ctx: IpcContext) =>
     transcriptRuns.revertRun(ctx.userId, requireText(payload?.runId, 'runId', 128)),
 
-  // ── 未决项（待核）────────────────────────────────────────────────────
-  'transcript.issues.list': async (payload: Payload, ctx: IpcContext) => ({
-    issues: transcriptRuns.listIssues(ctx.userId, {
-      ...(optionalId(payload?.runId, 'runId') ? { runId: optionalId(payload?.runId, 'runId')! } : {}),
-      ...(payload?.status === 'open' || payload?.status === 'resolved' ? { status: payload.status } : {}),
-    }),
-  }),
-
-  'transcript.issues.resolve': async (payload: Payload, ctx: IpcContext) => ({
-    issue: transcriptRuns.resolveIssue(
-      ctx.userId,
-      requireText(payload?.runId, 'runId', 128),
-      requireText(payload?.issueId, 'issueId', 128),
-      typeof payload?.resolution === 'string' ? payload.resolution : '',
-    ),
-  }),
 };

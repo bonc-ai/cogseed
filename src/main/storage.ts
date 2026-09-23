@@ -358,6 +358,66 @@ export async function rewriteJsonlRecords<T extends object>(
   });
 }
 
+/** Result of an atomic JSONL record removal (physical compaction): how many
+ *  records were kept and removed. Failures (unreadable stream, malformed
+ *  lines) throw instead of returning an error branch. */
+export interface RemoveJsonlRecordsResult {
+  kept: number;
+  removed: number;
+}
+
+/**
+ * Atomically remove records from a JSONL stream under the same file lock as
+ * appendJsonlAtomic. Unlike rewriteJsonlRecords this is allowed to shrink the
+ * stream: it is the physical-deletion primitive (e.g. removing an ability
+ * asset version for real), so line-based locators are NOT preserved. Kept
+ * records are re-serialized in order; removing everything deletes the file.
+ */
+export async function removeJsonlRecords<T extends object>(
+  filePath: string,
+  keep: (record: T) => boolean,
+): Promise<RemoveJsonlRecordsResult> {
+  const lock = _getLineLock(filePath);
+  return lock.runExclusive<RemoveJsonlRecordsResult>(async () => {
+    let text: string;
+    try { text = await fsp.readFile(filePath, 'utf8'); }
+    catch (err) { throw new Error(`read failed: ${(err as Error).message}`); }
+
+    const lines = text.split('\n');
+    const hasTrailing = lines.length > 0 && lines[lines.length - 1] === '';
+    const body = hasTrailing ? lines.slice(0, -1) : lines;
+    const kept: T[] = [];
+    for (let index = 0; index < body.length; index += 1) {
+      if (!body[index].trim()) throw new Error(`line ${index} is empty`);
+      let record: T;
+      try { record = JSON.parse(body[index]) as T; }
+      catch (err) { throw new Error(`line ${index} not JSON: ${(err as Error).message}`); }
+      if (keep(record)) kept.push(record);
+    }
+    const removed = body.length - kept.length;
+    if (kept.length === 0) {
+      try {
+        await fsp.rm(filePath);
+      } catch (error) {
+        if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+      }
+      _lineCounts.set(filePath, 0);
+      return { kept: 0, removed };
+    }
+    const out = kept.map((record) => JSON.stringify(record)).join('\n') + '\n';
+    const tmp = atomicTmpPath(filePath);
+    await fsp.writeFile(tmp, out, 'utf8');
+    try {
+      await renameWithRetry(tmp, filePath);
+    } catch (err) {
+      await fsp.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+    _lineCounts.set(filePath, kept.length);
+    return { kept: kept.length, removed };
+  });
+}
+
 const JSONL_TAIL_CHUNK_BYTES = 64 * 1024;
 
 function _parseJsonlRecord<T>(line: string): T | undefined {

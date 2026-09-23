@@ -138,6 +138,72 @@ describe('conversation create-agent inline gate', () => {
   });
 });
 
+describe('new-chat attachment adoption', () => {
+  it('keeps the complete draft and stops before send when attachment adoption fails', async () => {
+    const context = loadConversationRenderer();
+    context.performance = performance;
+    const input = { value: 'draft with attachment' };
+    const sendButton = { disabled: false };
+    const draftItems = [{ name: 'evidence.pdf', status: 'ready' }];
+    const views: any[] = [];
+    const sends: any[] = [];
+    const alerts: any[] = [];
+    context.t = (key: string, params: any = {}) => `${key}:${params.reason || ''}`;
+    context.document.getElementById = (id: string) => {
+      if (id === 'new-chat-input') return input;
+      if (id === 'new-chat-send-btn') return sendButton;
+      if (id === 'chat-input') return { value: 'existing conversation draft' };
+      return null;
+    };
+    context._ensureModelOrCliFallback = async () => true;
+    context.transformWithChatUse = (value: string) => value;
+    context._autoTitle = (value: string) => value;
+    context.autoGrow = () => {};
+    context.__draftItems = draftItems;
+    vm.runInContext('_chatAttachSet(DRAFT_CID, __draftItems)', context);
+    expect(context._chatAttachList('main_chat')).toEqual(draftItems);
+    context.renderConversationList = () => {};
+    context.uiAlert = async (message: any) => { alerts.push(message); };
+    context.setView = (...args: any[]) => { views.push(args); };
+    context._transferNewChatRecipientTo = () => {};
+    context._renderRecipientChip = () => {};
+    context._executionConfigForSend = () => null;
+    context._composerMemberPayload = () => ({});
+    context.sendInCurrentConversation = async (...args: any[]) => {
+      sends.push(args);
+      return { accepted: false };
+    };
+    const requests: string[] = [];
+    context.apiFetch = async (url: string) => {
+      requests.push(url);
+      if (requests.length === 1) {
+        return {
+          json: async () => ({
+            ok: true,
+            conversation: {
+              conversation_id: 'created-cid',
+              title: 'New task',
+              created_at: '2026-09-21T00:00:00.000Z',
+              updated_at: '2026-09-21T00:00:00.000Z',
+            },
+          }),
+        };
+      }
+      return { json: async () => ({ ok: false, error: 'disk unavailable' }) };
+    };
+
+    await context.handleNewChatSubmit();
+
+    expect(alerts).toContain('chat.attach_adopt_failed:disk unavailable');
+    expect(requests).toContain('/api/conversations/attachments/adopt');
+    expect(input.value).toBe('draft with attachment');
+    expect(context._chatAttachList('main_chat')).toEqual(draftItems);
+    expect(views).toEqual([]);
+    expect(sends).toEqual([]);
+    expect(sendButton.disabled).toBe(false);
+  });
+});
+
 describe('conversation history initial window', () => {
   it('uses ten-message cursor pages for initial and older history requests', () => {
     const context = loadConversationRenderer();
@@ -626,6 +692,32 @@ describe('conversation sidebar task row actions', () => {
 });
 
 describe('conversation background stream buffering', () => {
+  it('marks the commander in chat without throwing from the message handler', () => {
+    // 真机报错：plan recovery event stream failed … _refreshSidebarBadgesForCid is
+    // not defined —— 这个悬空调用抛在 resilience observer 的整段 try 里，会让
+    // 「主 IPC 断流时靠 observer 兜底渲染」整条流直接结束。这里从消息处理入口
+    // 钉住它：commander 说话后必须正常返回，并把 commander_in_chat 标上。
+    const context = loadConversationRenderer();
+    context.currentCid = 'c1';
+    context.conversations = [{ conversation_id: 'c1', commander_in_chat: false }];
+    // 只验证「消息处理路径不再抛 ReferenceError」：把与断言无关的延迟副作用
+    // （置顶 / 防抖刷新 / 列表重绘）隔离掉——它们会在测试结束后才被定时器触发，
+    // 撞上已拆掉的 DOM stub，变成 unhandled error。
+    vm.runInContext(`
+      _bumpConvToTop = function() {};
+      _scheduleConversationInfoFileRefresh = function() {};
+      renderConversationList = function() {};
+    `, context);
+
+    expect(() => context._handleGroupBusEvent('c1', null, {
+      type: 'message',
+      cid: 'c1',
+      msg: { id: 'm1', from: 'commander', text: 'hi' },
+    })).not.toThrow();
+
+    expect(context.conversations[0].commander_in_chat).toBe(true);
+  });
+
   it('does not render background task events into the visible task', () => {
     const context = loadConversationRenderer();
     context.currentCid = 'visible';
@@ -1547,7 +1639,11 @@ describe('conversation auto recipient', () => {
     expect(context.__snap).toMatchObject({ kind: 'commander', resetFloor: true });
     expect(context.__stillPending).toBe(false);
     expect(context.applyRecipientPrefix('回来', 'conversation', { recipientSnapshot: context.__snap }))
-      .toBe('@commander 回来');
+      .toBe('回来');
+    expect(context._recipientRoutingFields(context.__snap)).toEqual({
+      recipient_agent_id: 'commander',
+      recipient_origin: 'user_selection',
+    });
   });
 
   it('drains queued messages with the enqueue-time recipient snapshot', () => {
@@ -1582,7 +1678,46 @@ describe('conversation auto recipient', () => {
     }]);
   });
 
-  it('keeps a queued message until its controller reports that sending started', async () => {
+  it('routes queued messages only from structured identities, never visible @ text', async () => {
+    const context = loadConversationRenderer();
+    context.messageQueues = new Map();
+    context._QUEUE_KEY = (cid: string) => `queue_${cid}`;
+    context._DRAFT_KEY = (cid: string) => `draft_${cid}`;
+    context._agentsCache = [{ agent_id: 'a1', name: 'FamilyTutor' }];
+    const queueSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/queue-draft.js'), 'utf8');
+    vm.runInContext(queueSource, context);
+    vm.runInContext(`
+      currentCid = "c1";
+      __sent = [];
+      sendInCurrentConversation = async (content, extra) => {
+        __sent.push({ content, extra });
+        return { accepted: false };
+      };
+      setChatRecipient("conversation", { kind: "agent", id: "a1", name: "FamilyTutor" });
+      enqueueMessage("c1", "@PastedName visible text", null, {
+        recipient: _takeRecipientSnapshotForSend("conversation"),
+      });
+      __first = _dispatchNextQueued("c1");
+    `, context);
+    await context.__first;
+    expect(context.__sent[0].extra).toMatchObject({
+      recipient_agent_id: 'a1',
+      recipient_origin: 'user_selection',
+    });
+
+    vm.runInContext(`
+      messageQueues.set("c1", []);
+      enqueueMessage("c1", "please ask @FamilyTutor mid text", null, {
+        recipient: _takeRecipientSnapshotForSend("conversation"),
+        extra: { mention_agent_ids: ["a1"] },
+      });
+      __second = _dispatchNextQueued("c1");
+    `, context);
+    await context.__second;
+    expect(context.__sent[1].extra).toEqual({ mention_agent_ids: ['a1'] });
+  });
+
+  it('keeps a queued message when optimistic start is followed by server failure', async () => {
     const context = loadConversationRenderer();
     context.messageQueues = new Map();
     context._QUEUE_KEY = (cid: string) => `queue_${cid}`;
@@ -1591,23 +1726,74 @@ describe('conversation auto recipient', () => {
     vm.runInContext(queueSource, context);
     vm.runInContext(`
       currentCid = "c1";
-      enqueueMessage("c1", "稍后执行", null);
-      sendInCurrentConversation = async () => ({ started: false, reason: "model_not_configured" });
-      _dispatchNextQueued("c1");
+      enqueueMessage("c1", "稍后执行", null, { extra: { submit_request_id: "req-queue-1" } });
+      sendInCurrentConversation = async (_content, _extra, options) => {
+        if (typeof options.onStarted === "function") options.onStarted();
+        return {
+          accepted: false,
+          cid: "c1",
+          submit_request_id: "req-queue-1",
+          started: true,
+          errored: true,
+          result: "failure",
+        };
+      };
+      __dispatch = _dispatchNextQueued("c1");
     `, context);
-    await Promise.resolve();
+    await context.__dispatch;
 
+    expect(context.messageQueues.get('c1')).toHaveLength(1);
+  });
+
+  it('removes a queued message only for an exact server acceptance receipt', async () => {
+    const context = loadConversationRenderer();
+    context.messageQueues = new Map();
+    context._QUEUE_KEY = (cid: string) => `queue_${cid}`;
+    context._DRAFT_KEY = (cid: string) => `draft_${cid}`;
+    const queueSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/queue-draft.js'), 'utf8');
+    vm.runInContext(queueSource, context);
+    vm.runInContext(`
+      currentCid = "c1";
+      enqueueMessage("c1", "稍后执行", null, { extra: { submit_request_id: "req-queue-1" } });
+      sendInCurrentConversation = async () => ({
+        accepted: true,
+        cid: "other-cid",
+        submit_request_id: "req-queue-1",
+        started: true,
+        errored: false,
+        result: "success",
+      });
+      __dispatch = _dispatchNextQueued("c1");
+    `, context);
+    await context.__dispatch;
     expect(context.messageQueues.get('c1')).toHaveLength(1);
 
     vm.runInContext(`
-      sendInCurrentConversation = async (_content, _extra, options) => {
-        options.onStarted();
-        return { started: true, aborted: false, errored: false };
-      };
-      _dispatchNextQueued("c1");
+      sendInCurrentConversation = async () => ({
+        accepted: true,
+        cid: "c1",
+        submit_request_id: "wrong-request",
+        started: true,
+        errored: false,
+        result: "success",
+      });
+      __dispatch = _dispatchNextQueued("c1");
     `, context);
-    await Promise.resolve();
+    await context.__dispatch;
+    expect(context.messageQueues.get('c1')).toHaveLength(1);
 
+    vm.runInContext(`
+      sendInCurrentConversation = async () => ({
+        accepted: true,
+        cid: "c1",
+        submit_request_id: "req-queue-1",
+        started: true,
+        errored: false,
+        result: "success",
+      });
+      __dispatch = _dispatchNextQueued("c1");
+    `, context);
+    await context.__dispatch;
     expect(context.messageQueues.get('c1')).toHaveLength(0);
   });
 });
@@ -1699,6 +1885,60 @@ describe('conversation controller settlement', () => {
     expect(errors).toBe(0);
     expect(result).toMatchObject({ started: true, aborted: true, errored: false });
     expect(doneResult).toMatchObject({ started: true, aborted: true, errored: false });
+  });
+
+  it.each([
+    ['matching receipt', { type: 'accepted', accepted: true, cid: 'c1', submit_request_id: 'req-1' }, true],
+    ['different conversation', { type: 'accepted', accepted: true, cid: 'c2', submit_request_id: 'req-1' }, false],
+    ['different submit request', { type: 'accepted', accepted: true, cid: 'c1', submit_request_id: 'req-2' }, false],
+    ['ordinary persisted user-message event', {
+      type: 'event',
+      event: {
+        stream: 'group',
+        data: {
+          type: 'message',
+          cid: 'c1',
+          msg: { from: 'user', action_request_id: 'req-1' },
+        },
+      },
+    }, false],
+  ])('derives acceptance only from a %s', async (_label, event, accepted) => {
+    const context = loadConversationRenderer();
+    context.TextDecoder = TextDecoder;
+    context.AbortController = AbortController;
+    context.performance = performance;
+    context.ensureModelConfigured = () => true;
+    context.nowIsoLocal = () => '2026-07-17T00:00:00';
+    context._createStreamingAssistantMessage = () => ({ dataset: {} });
+    context._handleStreamEvent = () => {};
+    context._makeStreamPaintYield = () => () => null;
+    const encoded = new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+    let readCount = 0;
+    context.apiFetch = async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => (readCount++ === 0
+            ? { done: false, value: encoded }
+            : { done: true, value: undefined }),
+        }),
+      },
+    });
+    const controller = context.createChatController({
+      historyEl: { dataset: {} },
+      getCurrentId: () => 'c1',
+      streamEndpoint: () => '/stream',
+      features: { bindInput: false, scrollPin: false },
+      hooks: { appendHistoryMessage: () => ({ dataset: {} }) },
+    });
+
+    const result = await controller.send('hello', { submit_request_id: 'req-1' });
+
+    if (accepted) {
+      expect(result).toMatchObject({ accepted: true, cid: 'c1', submit_request_id: 'req-1' });
+    } else {
+      expect(result.accepted).not.toBe(true);
+    }
   });
 
   it('renders a server abort as stopped instead of a model error', () => {

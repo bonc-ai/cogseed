@@ -49,7 +49,7 @@ export COGSEED_RUNTIME_VARIANT="cogseed"
 # Hub 联调默认值：默认连接 Hub 账号服务。需要连本地服务时，
 # 显式导出同名变量即可覆盖：
 #   COGSEED_HUB_API_BASE=http://localhost:3000 ./run.sh
-export COGSEED_HUB_API_BASE="${COGSEED_HUB_API_BASE:-https://cogseed-open.bonc.com.cn}"
+export COGSEED_HUB_API_BASE="${COGSEED_HUB_API_BASE:-https://hub.example.com}"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[CogSeed] $APP_DIR/package.json not found; check the project directory layout." >&2

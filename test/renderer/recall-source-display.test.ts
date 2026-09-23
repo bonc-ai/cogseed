@@ -56,7 +56,9 @@ describe('source refs never fall back to a raw locator', () => {
       [{ kind: 'conversation', items: [{ id: 'conv-processing', title: '', status: 'processing' }] }],
     );
 
-    expect(visibleText(html)).toContain('来源对话已删除');
+    // 2026-09-17 修：processing 态如实显示"整理中"（旧文案"来源对话已删除"
+    // 对处理中的来源是误导）；不裸 id 的底线不变。
+    expect(visibleText(html)).toContain('来源整理中');
     expect(visibleText(html)).not.toContain('conv-processing');
   });
 
@@ -102,12 +104,13 @@ describe('processed history shows semantic candidate records', () => {
           status: 'confirmed',
           capabilities: CAPS('confirmed'),
           judgment: '架构决策要留可追溯记录',
+          summary: '架构决策要留可追溯记录',
           updatedAt: '2026-09-15T10:00:00.000Z',
         })],
       },
     );
 
-    expect(html).toContain('ca-processed-fold');
+    expect(html).toContain('fold-processed');
     expect(visibleText(html)).toContain('架构决策要留可追溯记录');
     expect(visibleText(html)).not.toContain('cand-processed');
   });
@@ -115,7 +118,7 @@ describe('processed history shows semantic candidate records', () => {
   it('does not fabricate a processed record for a candidate absent from the snapshot', () => {
     const html = renderCognition({ name: 'review' }, { candidates: [] });
 
-    expect(html).not.toContain('ca-processed-fold');
+    expect(html).not.toContain('fold-processed');
     expect(visibleText(html)).toContain('当前没有等待确认的候选');
   });
 });

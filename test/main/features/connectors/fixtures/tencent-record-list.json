@@ -1,0 +1,83 @@
+{
+  "message": "success",
+  "data": {
+    "current_page": 1,
+    "current_size": 8,
+    "has_more": false,
+    "next_page_token": "",
+    "record_meetings": [
+      {
+        "host_user_id": "975678484047419205",
+        "media_start_time": "2030-08-18T13:58:36+08:00",
+        "meeting_code": "527938942",
+        "meeting_id": "2112997805528651745",
+        "meeting_record_id": "2691846996827212013",
+        "record_files": [
+          {
+            "record_end_time": "2030-08-18T16:56:41+08:00",
+            "record_file_id": "2203206945136628906",
+            "record_size": 282776770,
+            "record_start_time": "2030-08-18T13:58:36+08:00",
+            "sharing_url": "https://meeting.tencent.com/redacted"
+          }
+        ],
+        "record_type": "云录制",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "subject": "示例会议 B"
+      },
+      {
+        "host_user_id": "162292457878850585",
+        "media_start_time": "2030-07-31T15:29:20+08:00",
+        "meeting_code": "231278416",
+        "meeting_id": "7057197626500425787",
+        "meeting_record_id": "6610068072990581101",
+        "record_type": "文字转写",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "sub_meeting_id": "2665624731",
+        "subject": "示例会议 C"
+      },
+      {
+        "host_user_id": "75176437556082247920018",
+        "media_start_time": "2030-07-31T15:31:05+08:00",
+        "meeting_code": "959967225",
+        "meeting_id": "9897657577349432740",
+        "meeting_record_id": "1243689267106340022",
+        "record_files": [
+          {
+            "record_end_time": "2030-07-31T15:31:33+08:00",
+            "record_file_id": "6517814956488692567",
+            "record_start_time": "2030-07-31T15:31:05+08:00",
+            "sharing_url": "https://meeting.tencent.com/redacted"
+          }
+        ],
+        "record_type": "文字转写",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "subject": "示例会议 D"
+      },
+      {
+        "host_user_id": "75176437556082247920018",
+        "media_start_time": "2030-07-31T14:56:44+08:00",
+        "meeting_code": "959967225",
+        "meeting_id": "9897657577349432740",
+        "meeting_record_id": "0900000040282320795",
+        "record_files": [
+          {
+            "record_end_time": "2030-07-31T15:29:16+08:00",
+            "record_file_id": "0360531605626264932",
+            "record_start_time": "2030-07-31T14:56:44+08:00",
+            "sharing_url": "https://meeting.tencent.com/redacted"
+          }
+        ],
+        "record_type": "文字转写",
+        "state": "转码完成，可根据录制文件权限进行下一步",
+        "state_int": 3,
+        "subject": "示例会议 D"
+      }
+    ],
+    "total_count": 8,
+    "total_page": 1
+  }
+}
