@@ -63,3 +63,20 @@ Keep private handoffs, implementation plans, scan output, and local runtime
 data outside public source distributions. Official repository URLs, service
 domains, security contacts, and third-party copyright notices are public
 project metadata and must retain their functional and attribution roles.
+
+## Synthetic private addresses
+
+Release scanners sometimes flag RFC1918 and link-local addresses in tests as
+"internal network leakage." In this repository those addresses are **assertion
+inputs and negative fixtures**, not reachable production endpoints:
+
+| Address / class | Where | Purpose |
+|---|---|---|
+| `10.0.0.1` | `test/renderer/marketplace-card-states.test.ts` | Error string must **not** surface in UI HTML |
+| `169.254.169.254` | `test/main/quality/ssrf-egress.test.ts` and skill SSRF guards | Named so the guard can **reject** cloud-metadata access |
+| Other synthetic tokens | `test/**`, skill-sentry fixtures | Credential detection / redaction unit tests |
+
+Do not delete these fixtures to silence scanners. Reviewed Gitleaks exceptions
+live in `.gitleaks.toml` (exact path + exact synthetic value). Run scanners on
+a clean tree before `npm install` when possible; exclude `node_modules` for
+TruffleHog verified scans.
