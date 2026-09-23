@@ -1,7 +1,7 @@
 # CogSeed 发版扫描整改记录（2026-09-23）
 
 对照《CogSeed v1.2.0 全量扫描》待关闭项。本文件记录证据、已落地改动与仍需负责人拍板项。
-**树侧已落地**；**历史改写已在本地/旁路分支完成并推送到 `rewrite/release-scan-history-20260923`**，但 `develop` 的 force-push 被仓库规则拒绝（GH013：Cannot force-push / PR-only），**待管理员 force-push**。仍待项见矩阵 #5 / tag / 管理员放行。
+**树侧已落地**；**历史改写已在本地/旁路分支完成并推送到 `rewrite/release-scan-history-from-develop-202609231930`**，但 `develop` 的 force-push 被仓库规则拒绝（GH013：Cannot force-push / PR-only），**待管理员 force-push**。仍待项见矩阵 #5 / tag / 管理员放行。
 
 扫描环境摘要：
 
@@ -30,7 +30,7 @@
 | 4 | 内部会议材料用语 | **本轮已清** | `specs/001-kb-continuity/spec.md` 与 `checklists/requirements.md` 已去掉「内部讨论稿 / 讨论纪要 / 摸底会」等表述，改为「需求调研记录 / 现状盘点评审」等中性产品用语。 |
 | 5 | BONC / Hub 域名 | **版权保留 · 功能域名已占位** | LICENSE/NOTICE 保留 BONC 东方国信。`cogseed-open.bonc.com.cn` / `www.bonc.com.cn` 等非归属域名 → `https://hub.example.com` / `https://www.example.com`。 |
 | 6 | Gitleaks / TruffleHog | **树侧已核** | TruffleHog verified = **0**。Gitleaks 工作树命中均为合成测试/夹具/xterm 误报形状；**不删除安全测试合成密文**。历史树中已删扫描报告命中 → 见「历史改写」节（用户已书面批准 filter-repo + force-push）。 |
-| 7 | 提交作者 PII | **改写已备好 · 待管理员 force-push** | 旁路分支 `rewrite/release-scan-history-20260923` 上已验证：个人 gmail/qq 邮箱清零、扫描报告 blob 清除、gitleaks `v1.1.2..HEAD` 无泄漏。`develop` 因规则无法 force-push（执行者无 admin）。 |
+| 7 | 提交作者 PII | **改写已备好 · 待管理员 force-push** | 旁路分支 `rewrite/release-scan-history-from-develop-202609231930` 上已验证：个人 gmail/qq 邮箱清零、扫描报告 blob 清除、gitleaks `v1.1.2..HEAD` 无泄漏。`develop` 因规则无法 force-push（执行者无 admin）。 |
 | 8 | docs / scripts / 根目录发布清单 | **清单已出 · keep 为主** | 见下文；默认保留产品/测试/打包脚本；偏本地审计脚本可在发行 tarball exclude（待拍板），**不删除有用产品/测试脚本**。 |
 | 9 | 许可证 | **结论已写** | 根包 `UNLICENSED`（与闭源/专有发行策略一致，需产品确认对外叙事）。`jszip` 为 MIT OR GPL-3.0-or-later，`THIRD_PARTY_NOTICES.md` 已声明选用 MIT。 |
 | 10 | README 外链 + 人工复核 | **抽查通过** | `curl -I` 抽查 9 条关键外链（README 中的上游/生态项目与 shields badges 等）均为 HTTP 200。本地 `readme:check` 覆盖仓库内链。 |
@@ -70,7 +70,7 @@
 
 ### 历史（用户已批准；旁路分支已执行；develop 待管理员）
 
-- 旁路：`rewrite/release-scan-history-20260923`（及镜像内 67 分支改写结果）。
+- 旁路：`rewrite/release-scan-history-from-develop-202609231930`（及镜像内 67 分支改写结果）。
 - 已删文件路径 `CogSeed-发版扫描报告-牛保康-20260916.md`：在旁路历史上已清除。
 - 个人邮箱：旁路历史上已映射清零。
 - `gitleaks detect --log-opts=v1.1.2..HEAD`（旁路）→ **no leaks found**。
@@ -174,6 +174,13 @@
 
 ## 历史改写与 force-push（用户已批准）
 
+
+### ⚠ 过期改写分支（禁止使用）
+
+- **禁止**复用或强推 `rewrite/release-scan-history-20260923`（2026-09-23 14:18 左右）：它早于 `7cbea805`（Hub 占位 + 内部脚本删除），若强推到 `develop` 会**回滚** `hub.example.com` 占位并**恢复**已删内部脚本。
+- **唯一可用旁路**：`rewrite/release-scan-history-from-develop-202609231930`（基于当时 `origin/develop` 含 `7cbea805` 之后的 tip 改写）。
+- `cicd` 与签名 tag `v1.2.0` **不在**本旁路范围内，须技术负责人单独处理。
+
 执行工具：`git-filter-repo`（路径删除 + 邮箱/作者映射）。
 
 改写后核验目标：
@@ -224,7 +231,7 @@
 
 ## 用户旧清单映射（发版扫描 checklist）
 
-对照用户再次粘贴的旧清单编号；**develop 现状** = `origin/develop`；**PR372/改写分支现状** = 本树侧分支 `chore/release-scan-residual-scrub-20260923-tree`（及旁路 `rewrite/release-scan-history-20260923` 历史项）。
+对照用户再次粘贴的旧清单编号；**develop 现状** = `origin/develop`；**PR372/改写分支现状** = 本树侧分支 `chore/release-scan-residual-scrub-20260923-tree`（及旁路 `rewrite/release-scan-history-from-develop-202609231930` 历史项）。
 
 | 清单项 | develop 现状 | PR372 / 改写分支现状 | 要上线的动作 |
 |---|---|---|---|
