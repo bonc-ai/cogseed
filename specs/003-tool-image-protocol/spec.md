@@ -6,7 +6,7 @@
 
 **Status**: Complete
 
-**Input**: MeshSeed task COGSEED-341 and `BUGFIX_TOOL_IMAGE_PROTOCOL.md`
+**Input**: CogSeed task COGSEED-341 and `BUGFIX_TOOL_IMAGE_PROTOCOL.md`
 
 ## User Scenarios & Testing
 

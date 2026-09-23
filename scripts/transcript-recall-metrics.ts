@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     'Personal Ontology': { canonical: 'Personal Ontology', variants: ['personal ontology', 'personaltology', 'personality', 'personalontology'] },
     OpenClaw: { canonical: 'OpenClaw', variants: ['open cloud', '开放云'] },
     'Claude Code': { canonical: 'Claude Code', variants: ['cloud code', '云代码'] },
-    MeshSeed: { canonical: 'MeshSeed', variants: ['mesh seed', 'mesh c'] },
+    CogSeed: { canonical: 'CogSeed', variants: ['mesh seed', 'mesh c'] },
     README: { canonical: 'README', variants: ['redmi'] },
     Moodle: { canonical: 'Moodle', variants: ['model'] },
     Context: { canonical: 'Context', variants: ['contact'] },
