@@ -295,9 +295,9 @@ function _csObShellHtml() {
                   <input type="checkbox" id="first-consent" />
                   <span data-i18n="onboarding.legal_consent_prefix">我已阅读并同意</span>
                 </label>
-                <button type="button" class="first-run-legal-link" data-open-external-url="https://cogseed-open.bonc.com.cn/#view=privacy" data-i18n="onboarding.legal_privacy">隐私政策</button>
+                <button type="button" class="first-run-legal-link" data-open-external-url="https://hub.example.com/#view=privacy" data-i18n="onboarding.legal_privacy">隐私政策</button>
                 <span class="first-run-consent-and" data-i18n="onboarding.legal_consent_and">和</span>
-                <button type="button" class="first-run-legal-link" data-open-external-url="https://cogseed-open.bonc.com.cn/#view=terms" data-i18n="onboarding.legal_terms">用户协议</button>
+                <button type="button" class="first-run-legal-link" data-open-external-url="https://hub.example.com/#view=terms" data-i18n="onboarding.legal_terms">用户协议</button>
               </div>
               ${_csButton({ label: _csT('onboarding.start.begin', '开始一次真实工作'), i18nKey: 'onboarding.start.begin', role: 'primary', size: 'lg', icon: 'sparkles', disabled: true, className: 'first-run-primary', attrs: { id: 'first-begin', 'data-csnext': '1' } })}
               <div class="first-run-scan" id="first-run-scan">
