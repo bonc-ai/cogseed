@@ -1,7 +1,9 @@
 # @cogseed/p3394-gateway
 
-给对端 Agent 装的 **P3394 实现包**。装上即内建 P3394，与 CogSeed 直接互通 ——
-中间没有转接层，包本身就是 P3394 在对端的那一半（收消息 → 交给本机 Agent 模型 → 回消息）。
+给对端 Agent 安装的 **P3394 Gateway**，用于与 CogSeed 互通：接收消息，
+交给本机 Agent 执行，再返回结果。接入时需配置端点、网络和鉴权，并选择适合该 Agent 的运行模式。
+
+本文描述本包的实现与接入范围；协议 profile 和运行模式见下文，不据此声明对 IEEE P3394 的完整符合性。
 
 ## 先审查，再接入
 
@@ -199,7 +201,7 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 
 本包是 CogSeed（桌面伴侣 Agent）的一部分，随 @cogseed/p3394-gateway 以 [MIT](./LICENSE) 许可证发布（CogSeed + BONC 东方国信）。上游来源与第三方依赖声明见同目录 NOTICE。本包无第三方运行时依赖（仅用 Node.js 内置模块）。
 
-本包实现的 "P3394" 指 IEEE P3394 智能体互操作标准，该标准仍归其标准组织所有。更多三方上游信息见项目根目录 NOTICE 与 THIRD_PARTY_NOTICES.md。
+本包中的 "P3394" 名称用于标识面向 IEEE P3394 的 Agent 互通实现，不代表标准认证。更多三方上游信息见项目根目录 NOTICE 与 THIRD_PARTY_NOTICES.md。
 
 ## 安全
 
