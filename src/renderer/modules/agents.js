@@ -5167,6 +5167,10 @@ function _recipientTextareaFromEventTarget(target) {
   return target;
 }
 
+/** 纯 textarea 兜底路径的标记删除（无富编辑器时使用）。
+ *  富编辑器**不得**走这里：contenteditable 里的标记是不可编辑原子节点，Chromium
+ *  的原生删除会把它整块移除并进入 undo 栈，而这里会 preventDefault + 直接改写
+ *  value，撤销栈就断了（验收报告 MA-06）。 */
 function _onMentionBackspace(e) {
   if (e.key !== 'Backspace') return;
   if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -5247,7 +5251,16 @@ function bindRecipientAnchor(chipId, inputId) {
   bindInput(ta);
   if (typeof getChatRichComposerEditor === 'function') {
     try {
-      bindInput(getChatRichComposerEditor(inputId));
+      const rich = getChatRichComposerEditor(inputId);
+      if (rich && rich.dataset.atBound !== '1') {
+        rich.dataset.atBound = '1';
+        // 富编辑器只绑 `@` 打开器：标记是不可编辑的原子节点，删除交给 Chromium
+        // 原生处理才会进入原生 undo 栈（conversation.js 的 editor keydown 明确
+        // 不拦截 Backspace/Delete）。旧的 textarea 版 Backspace 处理会
+        // preventDefault 并直接改写 value，绕过 undo 栈——真机现象：从成员列表
+        // 选 Codex 后按 Backspace 删掉标记，Cmd+Z 无法恢复（验收报告 MA-06）。
+        rich.addEventListener('keydown', _atKeyOpener(chipId));
+      }
     } catch (_) {}
   }
 }
@@ -5379,7 +5392,12 @@ function bindAgentPickers() {
     picker.dataset.outsideBound = '1';
     document.addEventListener('click', (e) => {
       if (!picker || picker.style.display === 'none') return;
-      if (picker.contains(e.target)) return;
+      // 勾选成员后候选列表会被重建，事件目标随之脱离 DOM —— 此时
+      // `picker.contains(e.target)` 为 false，「选中一项」会被误判成外部点击而关闭
+      // 弹窗（验收报告 MA-07：选 CogSeed 后列表立即关闭，连续多选做不下去）。
+      // composedPath() 在派发时捕获路径，节点被移除也不受影响。
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+      if (path.includes(picker) || picker.contains(e.target)) return;
       const anchorId = picker.dataset.anchorId;
       const anchorEl = anchorId ? document.getElementById(anchorId) : null;
       if (anchorEl && anchorEl.contains(e.target)) return;
