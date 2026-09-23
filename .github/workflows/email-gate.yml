@@ -1,55 +1,93 @@
-# Email hygiene gate — blocks PRs whose commits carry personal email addresses.
+# Email hygiene gate — keeps personal email addresses out of the public commit record.
 #
-# Personal emails (gmail / qq / 163 / corporate-personal / *.local) must never
-# enter public commit history. Every commit in a PR must use a noreply address:
+# Personal emails (gmail / qq / 163 / corporate-personal / *.local) must never enter
+# public commit history. Every commit must use a noreply address:
 #   {GitHubUserID}+{username}@users.noreply.github.com
-# or a sanctioned team address (see the allowlist below).
+# or a sanctioned team address (see the allowlist files below).
 #
-# This gate is fast (<5s): it inspects commit author emails **and** any email
-# appearing in the commit message / Co-authored-by trailers, no build.
-# It runs on every PR targeting develop (and is also wired into cicd's verify).
+# Two triggers, because the two ways an address enters history are different shapes:
 #
-# RETIRED EXCEPTIONS (2026-09-23) — both historical author-header entries are gone:
-#   `2f5a490e` ("Merge pull request #288", recorded 2026-09-20) and `a0cb7c5f`
-#   ("feat(community): add contribution entry points (#369)", recorded 2026-09-23)
-#   carried personal addresses in their **author header only** — the account's
-#   public profile email, which a PR author can neither control nor amend.
+#   1. `pull_request` — a contributor pushes a commit with a bad author/committer header,
+#      or an address in the message / Co-authored-by trailer. Checked over `base..head`,
+#      which is exactly the set of commits the PR adds. Fast (<5s), no build. The job name
+#      stays `check-commit-emails` because it is a required check on develop.
 #
-#   The v1.2.0 promotion merged both commits into `cicd`, so they are now
-#   ancestors of both check ranges (`base..head` on PRs and `origin/cicd..HEAD`
-#   in ci.yml) and need no allowlist entry. Keeping them would have permanently
-#   allowlisted those accounts' webpage merges — exactly the scenario
-#   CONTRIBUTING.md → "Merge requirements" item 4 exists to prevent.
+#   2. `push` to develop / cicd — the hole that (1) structurally cannot see. GitHub creates
+#      the merge / squash commit AT MERGE TIME, after the PR check already ran, and its
+#      author header is taken from the account that clicked merge. That is how `2f5a490e`
+#      ("Merge pull request #288") and `a0cb7c5f` ("… (#369)") carried personal addresses
+#      into develop in Sep 2026 while both PRs passed a green gate. Each one was found by
+#      hand days later, and the second only surfaced again when the next release promotion
+#      tripped over it; the workaround was to allowlist two real mailboxes, which is
+#      exactly the wrong direction (see `.github/email-allowlist.txt`). A push run scans
+#      the commits that were just pushed, which *includes* the freshly generated merge /
+#      squash commit, so the leak is reported within seconds instead.
 #
-#   Root cause + prevention for both: mergers and contributors must enable
-#   "Keep my email addresses private".
+# Range handling on push: if `before` is unusable (new branch) or is not an ancestor of
+# `after` (a force-push rewrote it), the whole reachable history of `after` is scanned.
+# That is deliberate — after a history rewrite, "nothing left behind" must be provable.
+#
+# Both jobs check three columns: author (`%ae`), committer (`%ce`) and the message /
+# trailer text. The committer column matters because GitHub is the committer of every
+# commit it creates (its own automation identity, named in COMMITTER_POLICY — verified
+# against every web-generated commit on develop), so an account-email leak in the committer
+# header would otherwise be invisible. That identity is allowlisted for the committer column
+# only, never for authors.
+#
+# The allowlists are NOT inline here. `scripts/email-allowlist.mjs` owns the sanctioned
+# forms; `.github/email-allowlist.txt` owns time-boxed exceptions and is validated for
+# format, expiry and personal-mailbox quarantine on every run. Both files are asserted
+# present below, so deleting either one fails the gate instead of silently weakening it.
+#
+# Root cause + prevention for every address this gate has ever flagged: contributors and
+# mergers must enable Settings → Emails → "Keep my email addresses private". The repo
+# cannot enforce an account setting, which is why the merge-time and message scans exist.
 
 name: email-gate
 
 on:
   pull_request:
+  push:
+    branches:
+      - develop
+      - cicd
 
 permissions:
   contents: read
 
 jobs:
   check-commit-emails:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check author emails
+      - name: Assert allowlist sources are present
+        run: |
+          set -euo pipefail
+          # The allowlist lives in these two files. Deleting one must break the gate
+          # loudly rather than leave it matching too much.
+          for f in scripts/email-allowlist.mjs .github/email-allowlist.txt; do
+            if [ ! -f "$f" ]; then
+              echo "::error::email-gate allowlist source is missing: $f"
+              echo "Restore it, or change the gate on purpose in a reviewed commit."
+              exit 1
+            fi
+          done
+      - name: Validate allowlist ledger
+        run: node scripts/email-allowlist.mjs --check
+      - name: Check author and committer emails
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Author allowlist: GitHub noreply + team address. The two historical
-          # author-header exceptions were retired once cicd absorbed their commits
-          # (see the file header).
+          AUTHOR_RE=$(node scripts/email-allowlist.mjs --emit-author)
+          COMMITTER_RE=$(node scripts/email-allowlist.mjs --emit-committer)
+
           bad=$(git log --format='%h|%an|%ae' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
-            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn)$' \
+            | grep -vE "\|(${AUTHOR_RE})$" \
             || true)
           if [ -n "$bad" ]; then
             echo "::error::PR contains commits with non-noreply author emails:"
@@ -60,28 +98,139 @@ jobs:
             echo "  then amend/rebase the offending commits."
             exit 1
           fi
-          echo "✅ All commit author emails are noreply."
+
+          bad=$(git log --format='%h|%cn|%ce' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
+            | grep -vE "\|(${COMMITTER_RE})$" \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::PR contains commits with non-noreply committer emails:"
+            echo "$bad"
+            echo ""
+            echo "A committer header is written by whoever last rewrote the commit — a rebase"
+            echo "or an 'Update branch' click can set it, so check the local git identity too."
+            exit 1
+          fi
+
+          echo "✅ All commit author and committer emails are noreply."
       - name: Check co-author and message emails
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Co-authored-by trailers and free-text bodies are part of the public
-          # commit record too (see #184: a personal QQ address slipped in via a
-          # Co-authored-by line while every author email was noreply).
-          # Allowlist = noreply github addresses, the team address, and GitHub's
-          # own automation address.
+          # Co-authored-by trailers and free-text bodies are part of the public commit
+          # record too (see #184: a personal QQ address slipped in via a Co-authored-by
+          # line while every author email was noreply).
+          AUTHOR_RE=$(node scripts/email-allowlist.mjs --emit-author)
+
           bad=$(git log --format='%h|%B' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
             | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
-            | grep -viE '^([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|support@github\.com)$' \
+            | grep -viE "^(${AUTHOR_RE})$" \
             | sort -u || true)
           if [ -n "$bad" ]; then
             echo "::error::Commit messages / Co-authored-by contain non-allowlisted emails:"
             echo "$bad"
             echo ""
-            echo "Allowed: {GitHubUserID}+{username}@users.noreply.github.com, business@bonc.com.cn, support@github.com"
             echo "Personal addresses (*.local / qq / 163 / gmail) must not appear anywhere in a commit."
             exit 1
           fi
           echo "✅ Commit messages and Co-authored-by trailers are clean."
+
+  check-pushed-emails:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assert allowlist sources are present
+        run: |
+          set -euo pipefail
+          for f in scripts/email-allowlist.mjs .github/email-allowlist.txt; do
+            if [ ! -f "$f" ]; then
+              echo "::error::email-gate allowlist source is missing: $f"
+              echo "Restore it, or change the gate on purpose in a reviewed commit."
+              exit 1
+            fi
+          done
+      - name: Validate allowlist ledger
+        run: node scripts/email-allowlist.mjs --check
+      - name: Resolve the pushed range
+        id: range
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          ZERO='0000000000000000000000000000000000000000'
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ] \
+             && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null \
+             && git merge-base --is-ancestor "$BEFORE" "$AFTER" 2>/dev/null; then
+            echo "range=${BEFORE}..${AFTER}" >> "$GITHUB_OUTPUT"
+            echo "Checking the pushed commits: ${BEFORE}..${AFTER}"
+          else
+            echo "range=${AFTER}" >> "$GITHUB_OUTPUT"
+            echo "::notice::'before' is unusable (new branch, or a force-push rewrote it) — scanning the whole reachable history of ${AFTER} instead."
+          fi
+      - name: Check author and committer emails
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          set -euo pipefail
+          # Fail closed: if the range cannot be resolved, the step must go red instead of
+          # producing an empty (and therefore "clean") result.
+          count=$(git rev-list --count "$RANGE")
+          echo "Commits in range: ${count}"
+          if [ "$count" -eq 0 ]; then
+            echo "::warning::No commits resolved in range '${RANGE}' — nothing was checked."
+          fi
+
+          AUTHOR_RE=$(node scripts/email-allowlist.mjs --emit-author)
+          COMMITTER_RE=$(node scripts/email-allowlist.mjs --emit-committer)
+
+          bad=$(git log --format='%h|%an|%ae' "$RANGE" \
+            | grep -vE "\|(${AUTHOR_RE})$" \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Pushed commits carry non-noreply author emails:"
+            echo "$bad"
+            echo ""
+            echo "A merge or squash commit created by GitHub takes its author email from the"
+            echo "account that clicked merge, so the PR-time check could not see it. That account"
+            echo "must enable 'Keep my email addresses private', and the address has to be removed"
+            echo "from history with filter-repo — it is already public by the time this runs."
+            exit 1
+          fi
+
+          bad=$(git log --format='%h|%cn|%ce' "$RANGE" \
+            | grep -vE "\|(${COMMITTER_RE})$" \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Pushed commits carry non-noreply committer emails:"
+            echo "$bad"
+            exit 1
+          fi
+
+          echo "✅ Pushed commit author and committer emails are noreply (${count} commit(s) checked)."
+      - name: Check co-author and message emails
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          set -euo pipefail
+          count=$(git rev-list --count "$RANGE")
+          AUTHOR_RE=$(node scripts/email-allowlist.mjs --emit-author)
+
+          bad=$(git log --format='%h|%B' "$RANGE" \
+            | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+            | grep -viE "^(${AUTHOR_RE})$" \
+            | sort -u || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commit messages / Co-authored-by in the pushed range contain non-allowlisted emails:"
+            echo "$bad"
+            echo ""
+            echo "Trailers are text, so this also fires for addresses copied in from elsewhere: a"
+            echo "release-notes body that reprints an old Co-authored-by line republishes that"
+            echo "address. Use the noreply form."
+            exit 1
+          fi
+          echo "✅ Pushed commit messages and Co-authored-by trailers are clean (${count} commit(s) checked)."

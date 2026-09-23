@@ -1,0 +1,41 @@
+# Email-hygiene exception ledger — read by scripts/email-allowlist.mjs.
+#
+# SCOPE: time-boxed exceptions only.
+#
+#   The sanctioned identity forms are NOT listed here. They live in
+#   scripts/email-allowlist.mjs as AUTHOR_POLICY / COMMITTER_POLICY, so that
+#   widening the policy means changing code a reviewer reads, not appending a
+#   line to a data file.
+#
+# RECORD FORMAT (tab-separated, one record per line; blank lines and '#' comments ignored):
+#
+#   <kind>\t<ERE pattern>\t<expires:YYYY-MM-DD>\t<approver>\t<reason>
+#
+#   kind      author | committer | both — which column the exception applies to
+#   pattern   POSIX ERE, joined with '|' and fed to `grep -E`
+#   expires   ISO date; the record MUST be deleted on or before that day
+#   approver  GitHub login that approved the exception
+#   reason    why, and what removes the need for it
+#
+# RULES ENFORCED BY `node scripts/email-allowlist.mjs --check`
+# (run by .github/workflows/email-gate.yml on every PR and push, and by
+# test/scripts/email-allowlist.test.ts):
+#
+#   1. A real personal mailbox is NEVER allowed here. gmail / qq / 163 / 126 /
+#      outlook / hotmail / icloud / yahoo / *.local and any other personal
+#      address is rejected outright, expiry or not. Exceptions exist for
+#      noreply-FORM variants only (an account whose address is still the id-less
+#      `users.noreply.github.com` form, for example) —
+#      and even then the fix is to correct the address, not to keep the entry.
+#
+#      Why this rule exists: in Sep 2026 two real mailboxes were allowlisted as
+#      "temporary" entries in the workflow file itself (PR #373 and its
+#      predecessor). Neither was a noreply form, neither had an expiry, and both
+#      sat in the public repository until #376 retired them. That is how a
+#      one-off merge accident became a permanent hole, so the addresses are
+#      deliberately NOT written down here.
+#
+#   2. Every record needs an expiry date and a named approver. An expired record
+#      fails the gate: the expected end state of an exception is deletion.
+#
+# ACTIVE EXCEPTIONS: none (as of 2026-09-23).
