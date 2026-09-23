@@ -36,6 +36,7 @@ jobs:
       - run: node scripts/run-tests.mjs run --maxWorkers=2
       - run: npm run test:resources
       - run: npm run readme:check
+      - run: npm run community:skills:check
       - run: npm run tokens:check
       - run: npm run builtin:manifest:check
       - name: Packaged macOS launch smoke
