@@ -496,6 +496,19 @@
       setStatus(message, variant === 'warning' ? 'warning' : '');
     }
 
+    /**
+     * 写操作之后重扫：**必须先解除 busy**。
+     *
+     * `runScan()` 第一行是 `if (state.busy) return`（防止并发扫描），而加白/装规则包这类
+     * 写操作都在 `state.busy = true` 区间里干活——直接 `await runScan()` 会被守卫拦掉，
+     * 表现为"提示说成功、列表却没变"（真机：装了口癖包看不见、加白后行还在）。
+     * 这里显式先解除再扫；`finally` 里照旧再置一次 false（幂等）。
+     */
+    async function rescanAfterMutation() {
+      state.busy = false;
+      await runScan();
+    }
+
     function setStatus(message, tone) {
       const host = q('[data-atc-status]');
       if (!host) return;
@@ -760,6 +773,11 @@
                 id: 'atc-rename-' + row.entryRef,
                 label: t('kb.transcriptCorrect.rename_correct', '改写法'),
                 control: { kind: 'input', placeholder: row.correct, value: row.correct },
+                // 删除型条目（口癖规则）本来就是"见到就删"，correct 是空的：这里要讲清
+                // "填上写法"意味着行为从删除变成替换，否则用户以为填了没用（真机反馈）。
+                ...(row.action === 'delete'
+                  ? { hint: t('kb.transcriptCorrect.rename_delete_hint', '这是删除型规则；填上写法后，它变成"替换为这个词"。') }
+                  : {}),
               }),
               button({
                 label: t('kb.transcriptCorrect.confirm', '确定'),
@@ -1884,11 +1902,13 @@
       render();
       try {
         const result = await root.cogseed.invoke('transcript.glossary.seedFillers', {});
-        setStatus(t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
+        const seeded = t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
           created: Number(result?.created || 0),
           updated: Number(result?.updated || 0),
-        }), '');
-        await runScan();
+        });
+        setStatus(seeded, '');
+        toast(seeded);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('seed fillers failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.seed_fillers_failed', '装入口癖规则包失败，请稍后重试。'), 'warning');
@@ -1946,11 +1966,14 @@
           return;
         }
         state.allowOpen = '';
-        setStatus(t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
+        const done = t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
           term,
           wrong: state.rows.find((r) => r.entryRef === entryRef)?.wrong || '',
-        }), '');
-        await runScan();
+        });
+        setStatus(done, '');
+        // 紧接着的重扫会把状态行刷成"扫描完成…"，成功提示再用 toast 留一份（否则像没生效）
+        toast(done);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('add allow failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.add_allow_failed', '加白失败，请稍后重试。'), 'warning');
@@ -1965,8 +1988,10 @@
       if (state.busy) return;
       try {
         await root.cogseed.invoke('transcript.glossary.removeAllow', { ids: [entryRef], term });
-        setStatus(t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term }), '');
-        await runScan();
+        const removed = t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term });
+        setStatus(removed, '');
+        toast(removed);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('remove allow failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.remove_allow_failed', '移除失败，请稍后重试。'), 'warning');
@@ -1996,8 +2021,18 @@
           return;
         }
         state.renameOpen = '';
+        // 就地更新这一行，**不整表重扫**：重扫会丢掉已勾选集合与刚生成的清理版
+        // （`runScan` 第一行就是 `if (state.busy) return`，此前带着 busy 调它等于没扫，
+        //  真机上就表现为"填了新写法、点了确定，列表还是旧的"）。
+        // 替换目标变了、错形没变 → span 仍然有效，只需要把显示数据对上。
+        const entry = result.entry;
+        const row = state.rows.find((item) => item.entryRef === entryRef);
+        if (row) {
+          row.correct = String(entry.correct || '');
+          if (entry.action === 'replace' || entry.action === 'delete') row.action = entry.action;
+          if (entry.riskLevel) row.riskLevel = entry.riskLevel;
+        }
         setStatus(t('kb.transcriptCorrect.rename_done', '已改为：{correct}', { correct }), '');
-        await runScan();
       } catch (error) {
         log?.warn('rename failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.rename_failed', '改写失败，请稍后重试。'), 'warning');
@@ -2037,10 +2072,12 @@
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
           return;
         }
-        setStatus(t('kb.transcriptCorrect.added', '已加入词表：{wrong} → {correct}', { wrong, correct }), '');
+        const added = t('kb.transcriptCorrect.added', '已加入词表：{wrong} → {correct}', { wrong, correct });
+        setStatus(added, '');
+        toast(added);
         if (wrongInput) wrongInput.value = '';
         if (correctInput) correctInput.value = '';
-        await runScan();
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('glossary upsert failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.add_failed', '加入词表失败，请稍后重试。'), 'warning');

@@ -4621,6 +4621,7 @@
   "kb.transcriptCorrect.add_allow_done": "Permitido: {wrong} não é mais substituído quando \"{term}\" aparece.",
   "kb.transcriptCorrect.add_allow_failed": "Não foi possível adicionar à lista. Tente novamente mais tarde.",
   "kb.transcriptCorrect.rename_correct": "Editar grafia",
+  "kb.transcriptCorrect.rename_delete_hint": "Esta é uma regra apenas de exclusão; ao informar uma grafia ela passa a \"substituir por esta palavra\".",
   "kb.transcriptCorrect.rename_done": "Alterado para: {correct}",
   "kb.transcriptCorrect.rename_failed": "Não foi possível alterar a grafia. Tente novamente mais tarde.",
   "kb.transcriptCorrect.rename_skipped": "Esta linha não está no glossário, então a reescrita não foi aplicada (sugestões do modelo só entram no glossário após aceitar e gerar a versão limpa).",

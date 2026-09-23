@@ -6998,6 +6998,7 @@
   "kb.transcriptCorrect.add_allow_done": "Allow-listed: {wrong} is no longer replaced when \"{term}\" appears.",
   "kb.transcriptCorrect.add_allow_failed": "Could not allow-list. Please try again later.",
   "kb.transcriptCorrect.rename_correct": "Edit spelling",
+  "kb.transcriptCorrect.rename_delete_hint": "This is a delete-only rule; after you enter a wording it becomes \"replace with this word\".",
   "kb.transcriptCorrect.rename_done": "Changed to: {correct}",
   "kb.transcriptCorrect.rename_failed": "Could not change the spelling. Please try again later.",
   "kb.transcriptCorrect.rename_skipped": "This row is not in the glossary, so the rewrite did not apply (model suggestions enter the glossary only after you accept and generate a cleaned copy).",

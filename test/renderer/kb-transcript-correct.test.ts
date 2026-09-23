@@ -432,7 +432,7 @@ describe('locale 覆盖', () => {
     'meta_full', 'save_duplicate_file',
     'save_local', 'save_local_hint', 'saved_local', 'saved_local_to',
     'save_local_failed', 'save_local_canceled',
-    'rename_skipped', 'ignore_skipped', 'add_allow_skipped',
+    'rename_skipped', 'ignore_skipped', 'add_allow_skipped', 'rename_delete_hint',
   ];
 
   for (const lang of locales) {
@@ -1152,5 +1152,37 @@ describe('展开「更多」不再错位（行必须允许换行 + 表单按钮�
 
   it('表单里的上下文提示/已加白清单各占整行，不挤进第三列', () => {
     expect(css).toMatch(/\.kb-atc__row-form > \.kb-atc__sync-note,[\s\S]{0,120}grid-column: 1 \/ -1;/);
+  });
+});
+
+/**
+ * "填了写法、点了确定，列表还是旧的"（2026-09-23 真机追问）。
+ *
+ * 两个成因都必须留痕：
+ *   1. `runScan()` 第一行 `if (state.busy) return`，而写操作都在 busy 区间里干活——
+ *      带着 busy 调它等于没扫；重扫路径统一改走 `rescanAfterMutation()`（先解除再扫）。
+ *   2. 改写法成功后**不整表重扫**（那会丢掉已勾选集合与刚生成的清理版），
+ *      而是就地更新该行的写法/动作/风险——所以必须能找到这段就地更新。
+ */
+describe('改写法后列表必须跟着变', () => {
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('写操作后的重扫统一走 rescanAfterMutation（先解除 busy 再扫）', () => {
+    expect(source).toMatch(/async function rescanAfterMutation\(\) \{\s*state\.busy = false;\s*await runScan\(\);/);
+    // 这四条路径都不许再直接 await runScan()（会被 busy 守卫拦掉）
+    const bareCalls = source.match(/await runScan\(\);/g) || [];
+    expect(bareCalls.length).toBe(1); // 只剩 rescanAfterMutation 内部那一处
+  });
+
+  it('改写法成功后就地更新该行，而不是悄悄丢掉用户的勾选与清理版', () => {
+    expect(source).toMatch(/const entry = result\.entry;[\s\S]{0,400}state\.rows\.find\(\(item\) => item\.entryRef === entryRef\)/);
+    expect(source).toMatch(/row\.correct = String\(entry\.correct \|\| ''\)/);
+    expect(source).toMatch(/row\.action = entry\.action/);
+  });
+
+  it('删除型条目给出提示：填了写法就变成"替换为这个词"', () => {
+    expect(source).toMatch(/row\.action === 'delete'[\s\S]{0,300}rename_delete_hint/);
+    const zh = JSON.parse(readSrc('renderer/locales/zh.json'));
+    expect(zh['kb.transcriptCorrect.rename_delete_hint']).toContain('替换');
   });
 });

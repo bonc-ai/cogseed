@@ -6998,6 +6998,7 @@
   "kb.transcriptCorrect.add_allow_done": "已加白：出现「{term}」时不再替换 {wrong}。",
   "kb.transcriptCorrect.add_allow_failed": "加白失败，请稍后重试。",
   "kb.transcriptCorrect.rename_correct": "改写法",
+  "kb.transcriptCorrect.rename_delete_hint": "这是删除型规则；填上写法后，它变成\"替换为这个词\"。",
   "kb.transcriptCorrect.rename_done": "已改为：{correct}",
   "kb.transcriptCorrect.rename_failed": "改写失败，请稍后重试。",
   "kb.transcriptCorrect.rename_skipped": "这条不在词表里，改写法没有生效（模型建议要先勾选并生成清理版才会写进词表）。",
