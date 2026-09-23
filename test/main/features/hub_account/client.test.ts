@@ -21,7 +21,7 @@ describe('hub account client', () => {
   }
 
   it('login builds the provider query and returns authorize_url + state', async () => {
-    mockFetchOnce(200, { ok: true, data: { authorize_url: 'https://cogseed-open.bonc.com.cn/login', state: 's1' } });
+    mockFetchOnce(200, { ok: true, data: { authorize_url: 'https://hub.example.com/login', state: 's1' } });
     const client = createHubClient(BASE);
     const res = await client.login('web', 'cogseed://account/callback');
     expect(res.state).toBe('s1');
