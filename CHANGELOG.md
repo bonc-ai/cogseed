@@ -11,7 +11,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **发版扫描隐私清理** — 清除 MeshSeed 品牌残留与内部汇报/台账材料；规格文档中的
+- **发版扫描隐私清理** — 清除旧产品名残留与内部汇报/台账材料；规格文档中的
   内部证据标题与示例人名脱敏；补充 RFC1918/合成地址扫描豁免说明与整改矩阵
   （见 `docs/release-scan-remediation-20260923.md`）。正式安装包与 `v1.2.0` tag
   仍由发布流水线在门禁绿后创建。

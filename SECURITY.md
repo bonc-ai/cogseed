@@ -68,11 +68,16 @@ project metadata and must retain their functional and attribution roles.
 
 Release scanners sometimes flag RFC1918 and link-local addresses in tests as
 "internal network leakage." In this repository those addresses are **assertion
-inputs and negative fixtures**, not reachable production endpoints:
+inputs and negative fixtures**, not reachable production endpoints. A 2026-09-23
+tree scan of tracked non-`node_modules` sources found these RFC1918 literals
+(plus link-local / metadata examples used by the same SSRF suites):
 
 | Address / class | Where | Purpose |
 |---|---|---|
-| `10.0.0.1` | `test/renderer/marketplace-card-states.test.ts` | Error string must **not** surface in UI HTML |
+| `10.0.0.1` | `test/renderer/marketplace-card-states.test.ts`; seo-crawl SSRF tests (`resources/builtin/.../seo-crawl/test/test_crawl.py`) | UI must **not** echo private IP from error strings; SSRF guard must **reject** 10/8 (incl. decimal/`6to4` encodings) |
+| `10.0.0.5` | seo-crawl + skill-sentry URL-safety fixtures | Synthetic private peer in resolve/allowlist negative cases |
+| `192.168.1.1` | seo-crawl + skill-sentry fixtures; `.agents/skills/archify/test/brand-marks.test.mjs` (IPv4-mapped form) | Classic RFC1918 fixture for block/reject paths |
+| `172.16.0.1` | seo-crawl `test_crawl.py` | 172.16/12 class representative in private-IP reject loops |
 | `169.254.169.254` | `test/main/quality/ssrf-egress.test.ts` and skill SSRF guards | Named so the guard can **reject** cloud-metadata access |
 | Other synthetic tokens | `test/**`, skill-sentry fixtures | Credential detection / redaction unit tests |
 
