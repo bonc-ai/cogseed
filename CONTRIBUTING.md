@@ -1,8 +1,10 @@
 # Contributing to CogSeed
 
-Thanks for your interest in contributing to CogSeed! This project is developed in
-the open, and contributions — bug reports, fixes, documentation, and features —
-are welcome.
+English · [简体中文](./CONTRIBUTING.zh-CN.md)
+
+Thanks for your interest in contributing to CogSeed! This project is developed
+in the open, and contributions — bug reports, fixes, documentation, features,
+tests, and examples — are welcome.
 
 ## Code of Conduct
 
@@ -11,92 +13,194 @@ participating, you are expected to uphold this code.
 
 ## Getting Started
 
-1. Fork the repository and clone your fork.
-2. Install dependencies: `npm install`
-3. Run the type checker: `npm run typecheck`
-4. Run the linter: `npm run lint`
-5. Run the test suite: `npm test`
+To try a release from source, follow the [README](./README.md#run-from-source). The steps below are for contributing changes from the latest `develop`.
+
+CogSeed's primary development platforms are macOS and Windows. Before you
+start, install Git, Node.js 24.x, and npm 11.11.0. See the
+[Development Guide](./docs/DEVELOPMENT.md#development-setup) for platform and
+setup details.
+
+1. Fork the repository, then clone your fork and add the upstream repository:
+
+   ```bash
+   git clone https://github.com/<your-github-username>/cogseed.git
+   cd cogseed
+   git remote add upstream https://github.com/bonc-ai/cogseed.git
+   git fetch upstream
+   ```
+
+2. Configure a repository-local Git identity. Copy your exact noreply address
+   from **GitHub → Settings → Emails**; CogSeed's public-history gate requires
+   the `{user-id}+{username}@users.noreply.github.com` form:
+
+   ```bash
+   git config user.name "Your Name"
+   git config user.email "<github-user-id>+<username>@users.noreply.github.com"
+   ```
+
+3. Create a short-lived branch from the latest `develop`:
+
+   ```bash
+   git switch -c dev/<your-github-username> upstream/develop
+   ```
+
+4. Install the locked dependencies. `npm ci` also prepares native modules and
+   downloads required development assets, so the first install needs network
+   access and can take several minutes:
+
+   ```bash
+   npm ci
+   npm run test:resources:setup
+   ```
+
+5. Verify the clean baseline before making changes:
+
+   ```bash
+   npm run typecheck
+   npm run lint
+   npm test
+   npm run readme:check
+   ```
 
 ## Development Commands
 
 | Command | Purpose |
 |---|---|
+| `./run.sh` | Launch the source app on macOS or Linux |
+| `run.cmd` | Launch the source app on Windows |
 | `npm run typecheck` | TypeScript type checking (`tsc --noEmit`) |
 | `npm run lint` | Static checks for source, test, and script files |
-| `npm test` | Full test suite (JS + resources) |
-| `npm run readme:check` | Verify local links and bundled assets referenced by both READMEs |
-| `npm test -- <file>` | Run a specific test file |
-| `npm run start` | Launch the desktop app locally |
-| `npm run builtin:manifest` | Regenerate the builtin resources manifest |
+| `npm test` | Full JavaScript and resource test suites |
+| `npm run test:js -- <file>` | Run one JavaScript/TypeScript test file |
+| `npm run test:resources` | Run the Python resource tests |
+| `npm run readme:check` | Verify local links and bundled README assets |
+| `npm run builtin:manifest` | Regenerate the built-in resources manifest |
 | `npm run builtin:manifest:check` | Verify the manifest is up to date |
+
+Do not invoke Vitest directly. The repository test runner manages Electron's
+native-module ABI before and after the JavaScript suite.
 
 ## Making Changes
 
 - Keep changes focused; prefer small, reviewable pull requests.
-- Follow the repository layout and engineering boundaries described in
+- Follow the repository layout and engineering boundaries in
   [AGENTS.md](./AGENTS.md).
-- Add or update tests for the code you change.
-- Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run readme:check` before opening a pull request.
-- If you change builtin resources, regenerate the manifest
-  (`npm run builtin:manifest`) and include the updated file.
+- Add or update tests for behavior you change, including failure and recovery
+  paths where relevant.
+- Run `npm run typecheck`, `npm run lint`, `npm test`, and
+  `npm run readme:check` before opening a pull request.
+- If you change built-in resources, run `npm run builtin:manifest` and include
+  the updated manifest.
+- Never commit credentials, private logs, local runtime data, or customer
+  material. Report suspected vulnerabilities privately as described in
+  [SECURITY.md](./SECURITY.md).
+
+### Community Skill pilot
+
+Developers may claim a starter community Skill Issue or independently design a
+declarative candidate from
+[`community/skills/_template/`](./community/skills/_template/). Independent
+proposals need no prior approval and do not require an Issue, but their pull
+request must fully describe the user problem, boundaries, evaluation cases,
+and sources. The first pilot does not accept scripts, executables, binaries,
+network access, external-system writes, or new dependencies. See the
+[Community Skill guide](./community/skills/README.md) for the package shape,
+verification command, review boundary, and candidate states.
+
+A merge into `community/skills/` means repository-reviewed candidate source
+only. It does not mean import verification, Hub publication, release bundling,
+or production approval.
 
 ## Developer Certificate of Origin (DCO)
 
-This project uses the **Developer Certificate of Origin** for contributions.
-Every commit must include a `Signed-off-by` trailer, which certifies that you
-have the right to submit the contribution under the project's license:
+Every commit must include a `Signed-off-by` trailer certifying that you have
+the right to submit the contribution under the project's license. The trailer
+must use the same GitHub noreply address as the commit author:
 
 ```text
-Signed-off-by: Your Name <your@email.com>
+Signed-off-by: Your Name <12345678+username@users.noreply.github.com>
 ```
 
-Add it with `git commit -s`. By signing off you agree to the terms of the
-[Developer Certificate of Origin](https://developercertificate.org/).
+Create signed-off commits with:
+
+```bash
+git commit -s
+```
+
+To add the trailer to your latest local commit, use:
+
+```bash
+git commit --amend --no-edit --signoff
+```
+
+By signing off, you agree to the terms of the
+[Developer Certificate of Origin](https://developercertificate.org/). Do not
+place other email addresses in commit messages or trailers; the email-hygiene
+gate scans the complete public commit record.
 
 ## Reporting Issues
 
 - Search existing issues before filing a new one.
-- Include the CogSeed version, your platform, and steps to reproduce.
-- For security vulnerabilities, **do not open a public issue** — see
+- Include the CogSeed version, platform, expected behavior, actual behavior,
+  and reproducible steps.
+- Remove credentials and private data from screenshots and logs.
+- For security vulnerabilities, **do not open a public issue** — follow
   [SECURITY.md](./SECURITY.md).
 
 ## Pull Requests
 
-- Reference the issue your PR addresses, if any.
-- Describe what the change does and why.
-- Ensure required checks pass (email-hygiene gate on `develop`; full CI on `cicd`).
-- A maintainer will review; be patient and responsive to feedback.
+- Open external contributions against `develop`, not `main` or `cicd`.
+- Reference the issue your pull request addresses, if any.
+- Describe what changed, why it is needed, and how you verified it.
+- Keep generated output and unrelated formatting changes out of the diff.
+- Be responsive to review feedback and keep the branch current with
+  `upstream/develop`.
+
+For a first-time contributor, GitHub may show the workflow as waiting for
+maintainer approval. This is expected for pull requests from forks and does not
+mean the checks failed.
+
+Pull requests to `develop` must pass:
+
+- `check-commit-emails` — protects the public history from personal addresses;
+- `static-gates` — typecheck, lint, design tokens, built-in manifest, README
+  links, and skipped-test policy;
+- `affected-tests` — module-graph-aware tests selected from the pull request
+  diff.
+
+Windows test shards also run and must be investigated when red, although they
+are not currently required status checks. A full suite runs again after changes
+land on `develop`; promotion to `cicd` runs the complete macOS, Windows, and
+compliance release gates.
 
 ## Branching and Merge Rules
 
-We use a **three-line branch model**:
+CogSeed uses three long-lived branches:
 
-- `main` — public release branch. Always releasable and **protected** — no direct pushes, all changes go through pull requests.
-- `develop` — the main development branch. All feature work merges here via pull requests; **a reviewer approval is required**. The email-hygiene gate (`check-commit-emails`) runs on every PR. The **full CI suite (`verify` on macOS + `verify-windows` on Windows) does not run on `develop`** — it runs on `cicd` (see below).
-- `cicd` — release packaging branch and the **release gate**. Promotion from `develop` into `cicd` runs the full pipeline (macOS `verify`; Windows `verify-windows` — native suite plus the full JS suite split into four shards — and `compliance`); merging into it requires a review. Releases come from the tag-triggered `release.yml`, which only accepts a tag pointing at a `cicd` commit whose **push** run of `CI` and `compliance` is green.
-- Short-lived personal branches: `dev/<your-github-username>` (e.g. `dev/alice`) for day-to-day work; open a pull request against `develop` when ready.
-- `release/vX.Y` branches are cut from `main` at release time for patch-only fixes; they are protected by the same review rules.
+- `main` — protected public release branch; always intended to be releasable.
+- `develop` — protected integration branch and the target for feature and
+  external-contributor pull requests.
+- `cicd` — protected release gate; promotion from `develop` runs the full
+  verification and compliance pipeline before a release tag is accepted.
 
-**For external contributors**: open your pull request against `develop`, not `main`.
+Short-lived contributor branches use `dev/<your-github-username>` by default.
+Release maintainers may create `release/vX.Y` branches for patch-only work.
 
-### Merge requirements (branch protection)
-
-1. At least **1 approving review** from a designated reviewer (see CODEOWNERS / `@bonc-ai/reviewers`).
-2. Required checks pass: on `develop` that is the email-hygiene gate (`check-commit-emails`); on `cicd` it is the full `verify` + `verify-windows` + `compliance` pipeline.
-3. You cannot approve or merge your own pull request.
-4. **Before you click merge, enable "Keep my email addresses private"** (GitHub → Settings → Emails). ⚠️ A merge commit created by the web UI takes its **author email from the account that clicks merge** — not from the PR author. If that setting is off, a personal address is written into public history, and nobody can amend or rebase it away; it then blocks the `develop → cicd` sync and the release gate. This already happened once (merge commit `2f5a490e` / PR #288 blocked PR #312 and had to be recorded as a **temporary** allowlist exception in `.github/workflows/email-gate.yml` — temporary because that entry must be deleted once `cicd` contains the commit, otherwise it would keep allowing that account's webpage merges forever). Enabling the setting takes 10 seconds and prevents the whole class of problem.
+Merging requires at least one approving CODEOWNER review and all required
+status checks. Pull request authors cannot approve their own changes; only a
+maintainer with write access can merge after the requirements are satisfied.
+Maintainers who merge through GitHub must enable **Keep my email addresses
+private** so the generated merge commit also uses a noreply address.
 
 ### Commit messages
 
 Use [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 <type>(<scope>): <subject>
 ```
 
-Example: `fix(messaging): route wechat group messages correctly`.
-
-**Never write an email address into a commit message or trailer** — including one you are quoting from a CI log or discussing in the change itself. The email-hygiene gate scans the message body of every commit and only permits GitHub noreply addresses, `business@bonc.com.cn` and `support@github.com`; a quoted address fails the gate even when the author check passes. Describe the address instead of reproducing it.
+Example: `fix(messaging): handle disconnected group delivery`.
 
 ## License
 
