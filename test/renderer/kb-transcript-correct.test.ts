@@ -433,6 +433,7 @@ describe('locale 覆盖', () => {
     'save_local', 'save_local_hint', 'saved_local', 'saved_local_to',
     'save_local_failed', 'save_local_canceled',
     'rename_skipped', 'ignore_skipped', 'add_allow_skipped', 'rename_delete_hint',
+    'ignore_model_done', 'restore_model_done', 'rename_model_done', 'rename_model_hint',
   ];
 
   for (const lang of locales) {
@@ -1103,7 +1104,7 @@ describe('本地导出文件名（纯文件名，不带库内目录）', () => {
  *   2. 行是 `display:flex`（不换行），而「更多」菜单与展开的表单都声明 `flex: 1 0 100%`，
  *      于是它们挤在同一行、把原文区压成 0 宽 —— 这就是"大面积错位"。
  */
-describe('词表操作只给词表行（模型建议不能改写法）', () => {
+describe('词表操作与模型建议：动作分流（每行都有接受/忽略/更多，落点按行类型不同）', () => {
   it('识别词表行：g_* 是词表命中；model_* / fromModel 是模型建议，不是词表行', () => {
     expect(panel.isGlossaryRow({ entryRef: 'g_8056893a079bdf09' })).toBe(true);
     expect(panel.isGlossaryRow({ entryRef: 'model_0', fromModel: true })).toBe(false);
@@ -1112,12 +1113,38 @@ describe('词表操作只给词表行（模型建议不能改写法）', () => {
     expect(panel.isGlossaryRow(null)).toBe(false);
   });
 
-  it('行内动作按行类型分流：模型建议行不给「忽略」与「更多」', () => {
+  it('行内三颗按钮所有行都给（模型建议不能只剩"接受"）', () => {
     const source = readSrc('renderer/modules/kb-transcript-correct.js');
-    // 只保留接受按钮，其余两个词表操作都要挂在 isGlossaryRow 上
-    expect(source).toMatch(/if \(isGlossaryRow\(row\)\) \{[\s\S]{0,900}data-atc-ignore/);
-    expect(source).toMatch(/if \(isGlossaryRow\(row\)\) \{[\s\S]{0,1200}data-atc-rowmenu/);
-    expect(source).toMatch(/if \(isGlossaryRow\(row\) && state\.rowMenu === row\.entryRef\)/);
+    const actions = source.slice(source.indexOf('const actions = document.createElement'), source.indexOf('el.append(main, count, actions)'));
+    expect(actions).toContain("'data-atc-accept'");
+    expect(actions).toContain("'data-atc-ignore'");
+    expect(actions).toContain("'data-atc-rowmenu'");
+    expect(actions).not.toContain('isGlossaryRow'); // 不再按行类型砍按钮
+  });
+
+  it('「更多」里只有「加白」是词表专属（白名单要挂在词表条目上）；改写法两种行都给', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    const menu = source.slice(source.indexOf('function rowMenuElement'), source.indexOf('if (state.allowOpen === row.entryRef)'));
+    expect(menu).toMatch(/if \(isGlossaryRow\(row\)\) \{[\s\S]{0,400}data-atc-allow-open/);
+    expect(menu).toContain("'data-atc-rename-open'");
+  });
+
+  it('模型建议的「忽略」不写词表、只作用于本次扫描（并说清会重新给出）', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    expect(source).toMatch(/async function runIgnore[\s\S]{0,500}if \(!isGlossaryRow\(row\)\) \{/);
+    // 模型分支必须在调 setIgnored **之前**返回（合成 id 调它只会拿到 updated: 0）
+    expect(source).toMatch(/if \(!isGlossaryRow\(row\)\) \{[\s\S]{0,600}return;\s*\}\s*const result = await root\.cogseed\.invoke\('transcript\.glossary\.setIgnored'/);
+    expect(source).toContain("t('kb.transcriptCorrect.ignore_model_done'");
+    expect(source).toContain("t('kb.transcriptCorrect.restore_model_done'");
+  });
+
+  it('模型建议的「改写法」就地改本行、不报"已写入词表"', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    expect(source).toMatch(/if \(!isGlossaryRow\(targetRow\)\) \{[\s\S]{0,400}targetRow\.correct = correct/);
+    expect(source).toContain("t('kb.transcriptCorrect.rename_model_done'");
+    // 改后的写法要真的进 apply（模型候选的 correct 取自本行）
+    const checked = panel.checkedModelCandidates([{ entryRef: 'model_0', fromModel: true, wrong: 'coxy', correct: 'CogSeed 平台', spans: [{ start: 3, end: 7 }] }], ['model_0']);
+    expect(checked[0]).toMatchObject({ wrong: 'coxy', correct: 'CogSeed 平台', start: 3 });
   });
 
   it('三个词表写操作都必须校验主进程回执，不能凭"没抛错"就报成功', () => {

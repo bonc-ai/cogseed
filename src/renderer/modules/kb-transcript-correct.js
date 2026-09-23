@@ -636,7 +636,10 @@
       // 高危行用纯文字按钮（hover 才出底色），把横向空间让给内容。
       const acceptRole = isAccepted ? 'primary' : (row.riskLevel === 'high' ? 'ghost' : 'secondary');
       const isIgnoredRow = Number(row.ignoredCount || 0) > 0;
-      const parts = [
+      // 三颗按钮**所有行都有**：忽略在模型建议行上是"本次不采纳（可恢复）"，
+      // 在词表行上是词表降权——两者都是"这条先放一边"，只是落点不同（见 runIgnore）。
+      // 「更多」在模型建议行上只给"改写法"（加白要挂在词表条目上，见 rowMenuElement）。
+      actions.innerHTML = [
         button({
           label: isAccepted
             ? t('kb.transcriptCorrect.accepted', '已接受')
@@ -647,10 +650,7 @@
           disabled: state.busy,
           attrs: { 'data-atc-accept': row.entryRef },
         }),
-      ];
-      if (isGlossaryRow(row)) {
-        // 「忽略（降权）」与「更多（加白 / 改写法）」都是**词表操作**：只给真的在词表里的行。
-        parts.push(button({
+        button({
           label: isIgnoredRow
             ? t('kb.transcriptCorrect.restore', '恢复')
             : t('kb.transcriptCorrect.ignore', '忽略'),
@@ -659,48 +659,65 @@
           className: 'kb-atc__btn',
           disabled: state.busy,
           attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': isIgnoredRow ? '1' : '0' },
-        }));
-        parts.push(button({
+        }),
+        button({
           label: t('kb.transcriptCorrect.more', '更多'),
           icon: state.rowMenu === row.entryRef ? 'chevron-down' : 'chevron-right',
           role: 'ghost',
           size: 'sm',
           className: 'kb-atc__btn',
           attrs: { 'data-atc-rowmenu': row.entryRef },
-        }));
-      }
-      actions.innerHTML = parts.join('');
+        }),
+      ].join('');
 
       el.append(main, count, actions);
-      if (isGlossaryRow(row) && state.rowMenu === row.entryRef) {
+      if (state.rowMenu === row.entryRef) {
         el.appendChild(rowMenuElement(row, isIgnoredRow));
       }
       return el;
     }
 
-    /** 行内次级动作：加白 / 改写法 / 恢复（默认收起，避免每行堆 5 个按钮）。 */
+    /**
+     * 行内次级动作（默认收起，避免每行堆 5 个按钮）。
+     *
+     * 菜单内容按行类型分流：
+     *   - 「加白」**只给词表行**：白名单是挂在词表条目上的字段（`contextAllow`），
+     *     模型建议还没有条目可挂——先「接受 + 生成清理版」把它记进词表，下次扫描它就成了
+     *     词表行，那时再加白。给个点了必然失败（`updated: 0`）的按钮才是坑。
+     *   - 「改写法」两种行都给：词表行走主进程改条目；模型建议行改的是"这条建议要替换成
+     *     什么"，本地生效、勾选并生成清理版时按改后的写法替换（那也是它进词表的时刻）。
+     *   - 「重新审视」= 恢复：词表行走词表降权还原，模型建议行走"本次不采纳"的还原。
+     */
     function rowMenuElement(row, isIgnoredRow) {
       const wrap = document.createElement('div');
       wrap.className = 'kb-atc__row-menu';
-      wrap.innerHTML = button({
-        label: t('kb.transcriptCorrect.add_allow', '加白'),
-        role: 'ghost',
-        size: 'sm',
-        className: 'kb-atc__btn',
-        attrs: { 'data-atc-allow-open': row.entryRef },
-      }) + button({
+      const parts = [];
+      if (isGlossaryRow(row)) {
+        parts.push(button({
+          label: t('kb.transcriptCorrect.add_allow', '加白'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-allow-open': row.entryRef },
+        }));
+      }
+      parts.push(button({
         label: t('kb.transcriptCorrect.rename_correct', '改写法'),
         role: 'ghost',
         size: 'sm',
         className: 'kb-atc__btn',
         attrs: { 'data-atc-rename-open': row.entryRef },
-      }) + (isIgnoredRow ? button({
-        label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
-        role: 'ghost',
-        size: 'sm',
-        className: 'kb-atc__btn',
-        attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
-      }) : '');
+      }));
+      if (isIgnoredRow) {
+        parts.push(button({
+          label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
+        }));
+      }
+      wrap.innerHTML = parts.join('');
 
       if (state.allowOpen === row.entryRef) {
         const form = document.createElement('div');
@@ -773,11 +790,14 @@
                 id: 'atc-rename-' + row.entryRef,
                 label: t('kb.transcriptCorrect.rename_correct', '改写法'),
                 control: { kind: 'input', placeholder: row.correct, value: row.correct },
-                // 删除型条目（口癖规则）本来就是"见到就删"，correct 是空的：这里要讲清
-                // "填上写法"意味着行为从删除变成替换，否则用户以为填了没用（真机反馈）。
-                ...(row.action === 'delete'
-                  ? { hint: t('kb.transcriptCorrect.rename_delete_hint', '这是删除型规则；填上写法后，它变成"替换为这个词"。') }
-                  : {}),
+                // 两种行要讲清"改完什么时候生效"，否则用户以为点了没用（真机反馈）：
+                //   - 模型建议：改的是建议本身，勾选 + 生成清理版时才落地（并进词表）；
+                //   - 删除型条目：填上写法后行为从"删除"变成"替换为这个词"。
+                ...(row.fromModel === true
+                  ? { hint: t('kb.transcriptCorrect.rename_model_hint', '这是模型建议：改的是"要替换成什么"，勾选并生成清理版时生效（那时才会写进词表）。') }
+                  : (row.action === 'delete'
+                    ? { hint: t('kb.transcriptCorrect.rename_delete_hint', '这是删除型规则；填上写法后，它变成"替换为这个词"。') }
+                    : {})),
               }),
               button({
                 label: t('kb.transcriptCorrect.confirm', '确定'),
@@ -1918,11 +1938,26 @@
       }
     }
 
-    /** 忽略 / 恢复（持久化，可逆）：不是删词条，只是降权。 */
+    /**
+     * 忽略 / 恢复（可逆）。两种行两种落点：
+     *   - 词表行：主进程 `setIgnored` 给条目降权（持久化，重扫仍在"已忽略"组）；
+     *   - 模型建议行：它**不在词表里**，没有条目可降权 → 本次扫描内不采纳
+     *     （降权到"已忽略"组、可恢复），并如实说明"不写词表、下次扫描会重新给出"。
+     *     绝不能对合成 id 调 `setIgnored`：主进程返回 `updated: 0`，此前面板照样弹"已忽略"。
+     */
     async function runIgnore(entryRef, restore) {
       if (state.busy) return;
       const row = state.rows.find((item) => item.entryRef === entryRef);
       try {
+        if (!isGlossaryRow(row)) {
+          if (row) row.ignoredCount = restore ? 0 : 1;
+          if (restore) state.accepted.add(entryRef);
+          else state.accepted.delete(entryRef);
+          setStatus(restore
+            ? t('kb.transcriptCorrect.restore_model_done', '已恢复这条建议：{wrong}', { wrong: row?.wrong || '' })
+            : t('kb.transcriptCorrect.ignore_model_done', '已忽略这条建议（只作用于本次扫描，不写词表；重新扫描会再次给出）。', { wrong: row?.wrong || '' }), '');
+          return;
+        }
         const result = await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
         // 主进程只对"词表里真的存在的条目"计数：`updated: 0` 说明这条不在词表里，
         // 不能报"已忽略"（否则本地翻个组、磁盘上什么都没有，重扫又回来）。
@@ -2000,13 +2035,28 @@
       }
     }
 
-    /** 改写法（方案 §七「改别名」的词表侧）：只改 correct，不伪造一次确认。 */
+    /**
+     * 改写法：改"这个词要替换成什么"。两种行两种落点：
+     *   - 词表行：主进程 `applyAlignment` 改条目（`entry: null` = 没改成功，必须如实报）；
+     *   - 模型建议行：它不在词表里，改的是**这条建议的目标写法**——就地改本行，
+     *     勾选并生成清理版时按改后的写法替换（`checkedModelCandidates` 读的就是 row.correct），
+     *     那一刻主进程才会把这条确认过的写法记进词表。所以本地改就够了，不必写盘，
+     *     也不该报"已写入词表"。
+     */
     async function runRename(entryRef) {
       if (state.busy) return;
       const input = container.querySelector('#atc-rename-' + entryRef);
       const correct = String(input?.value || '').trim();
       if (!correct) {
         setStatus(t('kb.transcriptCorrect.rename_need_value', '请填写新的写法。'), 'warning');
+        return;
+      }
+      const targetRow = state.rows.find((item) => item.entryRef === entryRef);
+      if (!isGlossaryRow(targetRow)) {
+        if (targetRow) targetRow.correct = correct;
+        state.renameOpen = '';
+        setStatus(t('kb.transcriptCorrect.rename_model_done', '已改为：{correct}（勾选并生成清理版时按这个写法替换）。', { correct }), '');
+        render();
         return;
       }
       state.busy = true;
