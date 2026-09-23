@@ -5,7 +5,7 @@
  *   1. explicit `COGSEED_API_BASE_URL` env override (must be a clean HTTPS
  *      origin/path; used for local integration and deployment overrides),
  *   2. build-channel default: release and packaged-dev builds default to the
- *      production origin `https://cogseed-open.bonc.com.cn` (env keeps working
+ *      production origin `https://hub.example.com` (env keeps working
  *      for deployment overrides), dev/unknown default to the local backend
  *      `http://localhost:3000`.
  *
@@ -20,8 +20,8 @@ import { resolveBuildIdentity } from '../util/build-identity';
 /** Local backend for dev runs (`npm start` / run.sh sets channel=dev). */
 export const DEFAULT_API_BASE = 'http://localhost:3000';
 /** Packaged builds (release + packaged-dev) point at the production origin. */
-export const PACKAGED_DEV_API_BASE = 'https://cogseed-open.bonc.com.cn';
-export const RELEASE_API_BASE = 'https://cogseed-open.bonc.com.cn';
+export const PACKAGED_DEV_API_BASE = 'https://hub.example.com';
+export const RELEASE_API_BASE = 'https://hub.example.com';
 
 function _validate(raw: string): string {
   let url: URL;

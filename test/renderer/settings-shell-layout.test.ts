@@ -56,7 +56,7 @@ describe('standalone settings shell and sidebar UserMenu', () => {
     const entry = html.match(/<a\b[^>]*data-i18n="settings\.updates\.view_intro"[^>]*>[^<]*<\/a>/i)?.[0] || '';
 
     expect(entry).not.toBe('');
-    expect(entry).toContain('href="https://cogseed-open.bonc.com.cn/changelog/"');
+    expect(entry).toContain('href="https://hub.example.com/changelog/"');
     expect(entry).toContain('target="_blank"');
     expect(entry).toContain('rel="noopener noreferrer"');
     expect(entry).not.toContain('#view=changelog');
