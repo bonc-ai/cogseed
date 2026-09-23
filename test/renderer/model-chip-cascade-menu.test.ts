@@ -89,6 +89,15 @@ class FakeElement {
     if (this.id) this.registry.delete(this.id);
   }
 
+  /** 成员来源层重画时会清空宿主：`host.replaceChildren()`（MA-05 用例用到）。 */
+  replaceChildren(...nodes: FakeElement[]) {
+    for (const child of this.children.splice(0, this.children.length)) {
+      child.parentElement = null;
+      if (child.id) this.registry.delete(child.id);
+    }
+    for (const node of nodes) this.appendChild(node);
+  }
+
   get isConnected() {
     let node: FakeElement | null = this;
     while (node) { if (node.tagName === 'BODY') return true; node = node.parentElement; }
@@ -482,5 +491,56 @@ describe('exec-config chip — provider → model → thinking-strength cascade'
     await models.dispatch('mouseenter');
     await afterClose();
     expect(h.registry.get('model-chip-flyout-levels')).toBeTruthy();
+  });
+});
+
+// MA-05（验收报告 P2）：外接来源支持模型下发时，菜单里同样要有竖排思考强度。
+//
+// 真机现象：选 CogSeed、Codex、WorkBuddy 后打开模型配置再进入 Codex，可见模型
+// 列表 / 手输模型 / 重新扫描，但**没有**竖排思考强度——`_renderMemberSourceBody`
+// 在「支持模型控制 + 走标准 CLI 模型列表」的分支里提前 return，绕过了尾部的
+// `_renderMemberEffortRows`（内部来源与无模型通道来源都还有强度行）。
+describe('member source menu effort rows (MA-05)', () => {
+  it('renders thinking-strength rows for an external CLI source with model control', async () => {
+    const h = buildHarness();
+    h.windowObj.cliExecControl = {
+      cachedCliModels: () => ({ models: [{ id: 'gpt-6-astra', name: 'gpt-6-astra' }] }),
+      mergedCliModels: (_cli: string, scan: any) => (scan && scan.models) || [],
+      modelControllableFor: () => true,
+      effortControllableFor: () => true,
+      loadCliModels: async () => ({ models: [{ id: 'gpt-6-astra', name: 'gpt-6-astra' }] }),
+      scanInFlight: () => false,
+      execControlFor: () => ({ effortOff: true }),
+    };
+    h.context._agentsCache = [
+      { agent_id: 'agent-codex', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+    ];
+
+    // 来源配置读写来自 composer-members（真实页面里由该模块持有）。
+    h.windowObj.composerMembers = {
+      getSourceConfig: () => ({}),
+      setSourceConfig: () => {},
+      isMember: () => true,
+    };
+    h.context._memberSourceWrite = () => {};
+
+    const container = h.context.document.createElement('div');
+    h.context.document.body.appendChild(container);
+    vm.runInContext(
+      '_renderMemberSourceBody(__container, "conversation", { id: "agent-codex", external: true }, {})',
+      Object.assign(h.context, { __container: container }),
+    );
+    // _renderCliModelList 先画 loading 再 await 模型清单；等它填充完成。
+    await sleep(50);
+
+    const effortRows: FakeElement[] = [];
+    const walk = (el: FakeElement) => {
+      for (const child of el.children) {
+        if (child.dataset.memberEffort) effortRows.push(child);
+        walk(child);
+      }
+    };
+    walk(container);
+    expect(effortRows.map((row) => row.dataset.memberEffort)).toEqual(['auto', 'off', 'low', 'high']);
   });
 });
