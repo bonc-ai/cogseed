@@ -21,8 +21,8 @@
 
 | # | 扫描项 | 状态 | 说明 |
 |---|---|---|---|
-| 1 | 可核验的 v1.2.0 基线 / tag | **阻塞 · 待拍板** | 最新 release 为 v1.1.2；不存在 `v1.2.0` tag。禁止伪造 tag。 |
-| 2 | 版本元数据 vs 目标 1.2.0 | **阻塞 · 待拍板** | `package.json` / `publiccode.yml` 仍为 **1.0.2**；README badge/文案写 **v1.2.0**；CHANGELOG 顶部为 `[Unreleased]`，最近版本节为 `1.0.2`。 |
+| 1 | 可核验的 v1.2.0 基线 / tag | **元数据已齐 · tag 留给打包** | 源码版本字段已对齐 1.2.0；GitHub 上仍无 `v1.2.0` tag（按要求不在本轮创建）。最新正式 release 仍为 v1.1.2，直至打包同学打 tag。 |
+| 2 | 版本元数据 vs 目标 1.2.0 | **本 PR 已对齐** | `package.json` / `package-lock` / `publiccode.yml` / `sbom.cdx.json` / CHANGELOG `## [1.2.0] - 2026-09-23` / README 文案一致为 **1.2.0**；`release-version-consistency` 测试已同步。 |
 | 3 | MeshSeed 残留 | **本分支已清** | `git grep -i MeshSeed` → 0。ASR 错误形态 `mesh seed` / `mesh c` 保留，正确目标为 CogSeed。 |
 | 4 | 内部材料 | **大部分已清** | 已删内部汇报/台账 HTML。仍保留工程用 `docs/superpowers/plans|specs/*windows-release-gate-failures*`（失败复现设计，非隐私汇报）。 |
 | 5 | BONC / `cogseed-open.bonc.com.cn` | **清单已出 · 待审批** | 约 113 处命中；功能域名出现在 API 基址、onboarding 隐私/条款、更新日志链、测试断言。组织署名出现在 LICENSE/NOTICE/联系邮箱。**删除域名会破坏发行构建默认 Hub。** |
@@ -142,7 +142,7 @@
 
 | 项 | 本轮动作 |
 |---|---|
-| #1 / #2 版本基线 | **交给打包同学**：对齐 `package.json` / `publiccode.yml` / CHANGELOG / README 后，再从 `cicd` 顶端打 tag（见 `docs/CI_RELEASE_STANDARD.md`）。本 PR **不 bump、不 tag**。 |
+| #1 / #2 版本基线 | **源码已 bump 到 1.2.0**；**不打 tag、不建安装包**。打包同学：合入 → 晋升 `cicd` → 门禁绿 → 打 `v1.2.0` tag（见 `docs/CI_RELEASE_STANDARD.md`）。 |
 | #3–#4、#6、#8–#11 | 本 PR 已落地或已有证据（见上文矩阵）。 |
 | #5 BONC / 域名 | 默认 **全部保留**（功能 Hub、法律联系、归属）；未收到删除批准。 |
 | #7 提交 PII | 默认 **不改写历史**；仅记录。 |
@@ -159,4 +159,17 @@
 | `npm run audit:identity` | 通过（无遗留产品标识） |
 
 未执行：`build:mac` / `build:win` / `package:dev:mac` / tag（按负责人要求留给打包同学）。
+
+### 版本对齐后复查（2026-09-23）
+
+| 命令 | 结果 |
+|---|---|
+| `npm run sbom:generate` + `sbom:check` | 通过（659 components） |
+| `npm run reuse:check` | 通过 |
+| `npm run builtin:manifest:check` | 通过 |
+| `vitest run test/scripts/release-version-consistency.test.ts` | 通过 |
+| `npm run typecheck` | 通过 |
+| `npm run readme:check` / `audit:identity` | 通过 |
+
+仍未执行（留给打包同学）：`build:mac` / `build:win` / `package:dev:mac` / 创建 `v1.2.0` Git tag / GitHub Release。
 
