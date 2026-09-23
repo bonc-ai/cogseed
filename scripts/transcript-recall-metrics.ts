@@ -122,8 +122,8 @@ async function main(): Promise<void> {
     Context: { canonical: 'Context', variants: ['contact'] },
     鉴权: { canonical: '鉴权', variants: ['健全'] },
     多维表格: { canonical: '多维表格', variants: ['多 vbl', '多维表'] },
-    Richard: { canonical: 'Richard', variants: ['瑞昌', '理查德', '非常老师', '这常老师', '日超', '胡老师', '瑞嘉'] },
-    静雯: { canonical: '静雯', variants: ['静文'] },
+    ExampleSpeaker: { canonical: 'ExampleSpeaker', variants: ['示例讲者', '样例讲师', '示例老师甲', '示例老师乙', '样例甲', '样例乙', '示例嘉'] },
+    ExamplePerson: { canonical: 'ExamplePerson', variants: ['示例人'] },
   };
 
   /**
