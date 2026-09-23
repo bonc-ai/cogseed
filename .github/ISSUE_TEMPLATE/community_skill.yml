@@ -1,0 +1,68 @@
+name: Community Skill candidate
+description: Optionally propose a declarative Skill or claim a starter task
+title: "[Community Skill] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opening an Issue is optional: developers may also submit an independent Skill directly by pull request. The first pilot accepts declarative, text-only Skills. Do not submit scripts, network access, external writes, binaries, or new dependencies.
+  - type: dropdown
+    id: contribution_path
+    attributes:
+      label: Contribution path
+      options:
+        - I am proposing my own Skill idea
+        - I want to claim a starter Skill task
+    validations:
+      required: true
+  - type: input
+    id: user_problem
+    attributes:
+      label: User problem
+      description: What real user request should this Skill help with?
+      placeholder: A student provides a draft and a grading rubric and wants a gap review.
+    validations:
+      required: true
+  - type: textarea
+    id: input_output
+    attributes:
+      label: Input and expected output
+      description: Describe the user-provided input and a concrete, reviewable result.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Non-goals and refusal boundary
+      description: When must the Skill not run, or stop and ask for missing information?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance examples
+      description: Provide at least one positive and one negative example.
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Material source
+      options:
+        - Entirely original work
+        - Includes third-party material with source and license
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Pilot scope confirmation
+      options:
+        - label: This proposal needs no scripts, executables, binaries, network access, external writes, or new dependencies.
+          required: true
+        - label: I will not include private, customer, course-restricted, or confidential material.
+          required: true
+        - label: I understand that merge does not imply Hub publication or release bundling.
+          required: true
