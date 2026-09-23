@@ -130,5 +130,33 @@
 2. MeshSeed → CogSeed 品牌清理  
 3. specs 内部证据标题/人名脱敏  
 4. EOF 多余空行（本提交）  
-5. 本整改记录 + SECURITY.md RFC1918 豁免说明  
+5. 本整改记录 + SECURITY.md RFC1918 豁免说明
+
+---
+
+## 2026-09-23 追加：打包职责划分
+
+负责人确认：**本轮不打安装包、不打 `v1.2.0` tag**；正式打包由后续同学在门禁绿后执行。
+
+因此对本文件矩阵的执行口径调整为：
+
+| 项 | 本轮动作 |
+|---|---|
+| #1 / #2 版本基线 | **交给打包同学**：对齐 `package.json` / `publiccode.yml` / CHANGELOG / README 后，再从 `cicd` 顶端打 tag（见 `docs/CI_RELEASE_STANDARD.md`）。本 PR **不 bump、不 tag**。 |
+| #3–#4、#6、#8–#11 | 本 PR 已落地或已有证据（见上文矩阵）。 |
+| #5 BONC / 域名 | 默认 **全部保留**（功能 Hub、法律联系、归属）；未收到删除批准。 |
+| #7 提交 PII | 默认 **不改写历史**；仅记录。 |
+
+打包同学建议顺序：合入本 PR → 按需要晋升 `cicd` → 对齐 1.2.0 元数据 → `release.yml` / 平台硬门禁绿 → 打 tag。
+
+### 本轮已跑的打包前检查（Linux 开发机，非安装包）
+
+| 命令 | 结果 |
+|---|---|
+| `npm run readme:check` | 通过（本地 24；外链跳过） |
+| `npm run typecheck` | 通过 |
+| `npm run lint` | 通过 |
+| `npm run audit:identity` | 通过（无遗留产品标识） |
+
+未执行：`build:mac` / `build:win` / `package:dev:mac` / tag（按负责人要求留给打包同学）。
 
