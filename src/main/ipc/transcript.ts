@@ -31,6 +31,7 @@ import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
 import * as transcriptMetrics from '../features/transcript_metrics';
 import * as transcriptDocTags from '../features/transcript_doc_tags';
+import * as transcriptFuzzy from '../features/transcript_recall_bridge';
 import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
@@ -403,7 +404,38 @@ export const invokeHandlers = {
       ...(scenarioTags ? { scenarioTags } : {}),
       includeDelete: payload?.includeDelete === true,
     });
-    if (payload?.includeReview !== true) return { ...scan, review: null };
+    /**
+     * 多路召回接线（2026-09-22）：`transcript_recall` 此前只被离线脚本用，面板路径
+     * 只有"字面命中 + 模型"，词表里没写过的错形召回率恒为 0。这里把音近/编辑距离/
+     * 弱通道接进同一份候选列表：
+     *   - `normalized` 通道整体丢弃（与精确命中重复，见 transcript_recall_bridge 头注释）；
+     *   - 模糊候选一律 `riskLevel:'medium'` + `fromFuzzy`，**永不预勾**（实测误召回依据
+     *     写在 bridge 注释里），自动应用仍只走精确命中那条路；
+     *   - 与精确命中 span 重叠的模糊候选丢弃（`scanText` 有自己的重叠消解与截断，
+     *     召回层看不到它砍掉了哪些）。
+     * 护栏（边界/语境/保护区/作用域）不在这里重写：召回层与扫描层共用同一套实现，
+     * 所以 `docId`/`scenarioTags` 传下去就是同一套判定。
+     */
+    const fuzzy = transcriptFuzzy.buildFuzzyCandidates(text, entries, {
+      ...(docId ? { docId } : {}),
+      ...(scenarioTags ? { scenarioTags } : {}),
+      // 口癖词条是 `action:'delete'`，召回层本就不处理它们；这里只需跳过精确命中已占的 span。
+      existingSpans: scan.candidates
+        .filter((candidate) => candidate.action !== 'delete')
+        .map((candidate) => candidate.span),
+    });
+    const withRecall = {
+      ...scan,
+      candidates: [...scan.candidates, ...fuzzy.candidates],
+      stats: {
+        ...scan.stats,
+        candidates: scan.candidates.length + fuzzy.candidates.length,
+      },
+      // 场景标签回显：面板要能告诉用户"这次扫描带了哪些场景"
+      // （否则带标签的词条命中/不命中都无从解释）。
+      scenarioTags: scenarioTags ?? [],
+    };
+    if (payload?.includeReview !== true) return { ...withRecall, recall: fuzzy.stats, review: null };
 
     // 优先参考名单 = 词表正确写法 + 记忆分组字段值（不含投影里的结构标签）
     const known = new Set<string>();
@@ -440,12 +472,13 @@ export const invokeHandlers = {
       fromModel: true,
     }));
     return {
-      ...scan,
-      candidates: [...scan.candidates, ...modelCandidates],
+      ...withRecall,
+      candidates: [...withRecall.candidates, ...modelCandidates],
       stats: {
-        ...scan.stats,
-        candidates: scan.candidates.length + modelCandidates.length,
+        ...withRecall.stats,
+        candidates: withRecall.candidates.length + modelCandidates.length,
       },
+      recall: fuzzy.stats,
       review: {
         modelCandidates: modelCandidates.length,
         chunksScanned: review.chunksScanned,
@@ -616,7 +649,9 @@ export const invokeHandlers = {
     });
     transcriptGlossary.recordReplacement(
       ctx.userId,
-      result.applied.map((a) => a.entryRef),
+      // 合成 ref（`quoted_<entryId>`）要先剥回词条 id，否则台账 `find(e => e.id === id)`
+      // 找不到条目、静默跳过——表现为"引例那条明明改了，freq 却不涨"。
+      result.applied.map((a) => transcriptAutoCorrect.glossaryEntryIdOf(a.entryRef)),
       { docId, runId: run.runId },
     );
     // 「勾选并应用 = 确认」：把**真的被应用**的模型建议记进词表（source: meeting_accept，
