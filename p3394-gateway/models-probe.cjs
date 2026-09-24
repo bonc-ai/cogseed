@@ -467,6 +467,110 @@ function probeCodexConfigModel(fsLike, env = process.env) {
   } catch { return null; }
 }
 
+/** codex 常驻 app-server 的配置代次（真机修复总结 E-03）：app-server 只在
+ *  进程启动时读一次 CODEX_HOME 的配置——用户改完模型/登录态后旧进程仍按旧
+ *  配置执行，真机上必须手工 kill 掉 pid 才生效。这里给网关一个可比较的代次
+ *  戳（config.toml + auth.json 的 mtimeMs 最大值），与 spawn 时记录的值比较
+ *  即可判定「配置变了，该换进程」。读不到 → 0（永不触发重启）。 */
+function codexConfigStamp(fsLike, env = process.env) {
+  try {
+    const fsMod = fsLike || require('node:fs');
+    const osMod = require('node:os');
+    const pathMod = require('node:path');
+    const home = (env && env.CODEX_HOME) || pathMod.join(osMod.homedir(), '.codex');
+    let stamp = 0;
+    for (const name of ['config.toml', 'auth.json']) {
+      try {
+        const stat = fsMod.statSync(pathMod.join(home, name));
+        const mtime = stat && typeof stat.mtimeMs === 'number' ? stat.mtimeMs : 0;
+        if (mtime > stamp) stamp = mtime;
+      } catch { /* 文件缺失按不存在处理 */ }
+    }
+    return stamp;
+  } catch { return 0; }
+}
+
+/** 是否需要为配置变更重启常驻 app-server：代次未变、任一侧读不到代次、或有
+ *  在途轮次 → false。在途轮次先用旧配置跑完（不打断用户正在等的回答），
+ *  下一轮再换进程。 */
+function shouldRestartForConfig(previousStamp, currentStamp, activeTurns) {
+  if (!previousStamp || !currentStamp) return false;
+  if (currentStamp === previousStamp) return false;
+  return !(Number(activeTurns) > 0);
+}
+
+/** codex 模型名合法性（真机修复总结 E-01）：config.toml 的 `model` 写错一处
+ *  （gpt-6-sol vs 有效的 gpt-5.6-sol）会被 app-server 直接拒绝，用户只看到一段
+ *  原始 JSON-RPC 文本，无从知道有效名。用枚举到的清单判定：命中（忽略大小写，
+ *  避免把 CLI 自己能规范化的写法判死）或清单不可用 → null（放行给 CLI）；否则
+ *  返回带可用模型的错误信息。
+ *
+ *  只判 codex/OpenAI 命名族（gpt-* / codex* / chatgpt* / o<数字>*）：自定义
+ *  provider 的模型名（deepseek-*、kimi-* 等）不在 codex 自家清单里也无从判定，
+ *  一律放行——误杀合法模型比漏判更糟。options.familyOnly === false 可关掉该闸。 */
+function codexModelProblem(requested, modelIds, options) {
+  const want = typeof requested === 'string' ? requested.trim() : '';
+  if (!want) return null;
+  if (!Array.isArray(modelIds) || modelIds.length === 0) return null;
+  const ids = modelIds.map((id) => String(id == null ? '' : id).trim()).filter(Boolean);
+  if (ids.length === 0) return null;
+  const wanted = want.toLowerCase();
+  if (ids.some((id) => id.toLowerCase() === wanted)) return null;
+  const familyOnly = !(options && options.familyOnly === false);
+  if (familyOnly && !/^(gpt|codex|chatgpt|o[0-9])/i.test(want)) return null;
+  return {
+    code: 'p3394_codex_model_unsupported',
+    model: want,
+    available: ids.slice(0, 12),
+    message: 'p3394_codex_model_unsupported: ' + want + ' (available: ' + ids.slice(0, 12).join(', ') + ')',
+  };
+}
+
+/** codex 模型层「不受支持」报文的识别（真机 E-01 原文：The 'gpt-6-sol' model
+ *  is not supported when using Codex with a ChatGPT account.）。只在报文确实
+ *  指向模型时才做诊断——取消/超时/网络抖动不能被误诊成模型问题。 */
+function isCodexModelRejection(raw) {
+  const message = String(raw == null ? '' : raw).toLowerCase();
+  if (!message) return false;
+  const aboutModel = message.includes('model') || message.includes('模型');
+  if (!aboutModel) return false;
+  return message.includes('not supported') || message.includes('unsupported')
+    || message.includes('unknown model') || message.includes('no such model')
+    || message.includes('invalid model') || message.includes('does not exist')
+    || message.includes('不支持') || message.includes('不受支持')
+    || message.includes('无效') || message.includes('不存在');
+}
+
+/** codex 可用模型清单（权威来源之一，真机报告 E-01 指定）：CODEX_HOME 的
+ *  models_cache.json 的 models[].slug。它是 codex 自己维护的缓存（带 TTL
+ *  续期），字段会漂移（报告 R-05：missing field 'supports_parallel_tool_calls'
+ *  只是警告）——逐个字段容错，缺字段的行跳过而不是整份放弃。
+ *  返回 { ids, visible }：ids 全部可用名（含隐藏项 gpt-reserve 等，能选不算错），
+ *  visible 为可推荐项（hidden === true 的不推荐）。文件缺失 → 空清单（不判定）。 */
+function probeCodexModelsCache(fsLike, env = process.env) {
+  try {
+    const fsMod = fsLike || require('node:fs');
+    const osMod = require('node:os');
+    const pathMod = require('node:path');
+    const home = (env && env.CODEX_HOME) || pathMod.join(osMod.homedir(), '.codex');
+    const data = JSON.parse(fsMod.readFileSync(pathMod.join(home, 'models_cache.json'), 'utf8'));
+    const rows = Array.isArray(data) ? data : (data && Array.isArray(data.models) ? data.models : []);
+    const ids = [];
+    const visible = [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const slug = typeof row.slug === 'string' && row.slug.trim()
+        ? row.slug.trim()
+        : (typeof row.id === 'string' && row.id.trim() ? row.id.trim() : '');
+      if (!slug) continue;
+      if (!ids.includes(slug)) ids.push(slug);
+      if (row.hidden === true) continue;
+      if (!visible.includes(slug)) visible.push(slug);
+    }
+    return { ids, visible };
+  } catch { return { ids: [], visible: [] }; }
+}
+
 // ── 声明式配置枚举（hermes / openclaw）──────────────────────────────────
 // 这两家 CLI 的「已配置模型」躺在各自磁盘配置里（无通用枚举子命令）：
 //   hermes   ~/.hermes/config.yaml（model.default/provider）
@@ -687,6 +791,11 @@ module.exports = {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  codexConfigStamp,
+  shouldRestartForConfig,
+  codexModelProblem,
+  isCodexModelRejection,
+  probeCodexModelsCache,
   probeConfigModels,
   CONFIG_MODEL_PARSERS,
   INSPECT_SUBCOMMANDS,

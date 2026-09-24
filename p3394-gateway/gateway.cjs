@@ -999,6 +999,11 @@ const {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  codexConfigStamp,
+  shouldRestartForConfig,
+  codexModelProblem,
+  isCodexModelRejection,
+  probeCodexModelsCache,
   probeConfigModels,
   effortArgsFor,
   effortLevelFor,
@@ -1344,6 +1349,12 @@ class CodexAppServerRuntime {
     this.threads = new Map();
     this.activeTurns = new Map(); // task_id（无则 message_id）→ { threadId }
     this.seq = 0;
+    // E-03：spawn 时的配置代次（config.toml/auth.json mtime）——下一轮发现
+    // 变化就换新 app-server，免去真机上的手工 kill。
+    this.configStamp = 0;
+    // E-01：本代 app-server 枚举到的模型清单（null = 未探测；[] = 探测失败
+    // 也缓存，避免每轮重付枚举超时）。
+    this.modelIds = null;
   }
   _send(message) {
     if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
@@ -1416,12 +1427,79 @@ class CodexAppServerRuntime {
     entry.onProgress(text);
   }
   async start() {
-    if (this.child) return;
+    if (this.child) {
+      // E-03：常驻 app-server 只在启动时读 CODEX_HOME 配置，用户改完模型/供应商
+      // 后旧进程仍按旧配置跑（真机上表现为"改了配置不生效，必须手工 kill pid"）。
+      // 下一轮开始前比较配置代次，变了就换新进程——thread 绑定随进程失效，按
+      // cli-session.json 走 thread/resume 恢复原会话（G-27 持久化通道）。
+      if (shouldRestartForConfig(this.configStamp, codexConfigStamp(), this.activeTurns.size)) {
+        await this._restartForConfigChange();
+      } else {
+        return;
+      }
+    }
     // 并发去重：预热（server.listen 回调）与首轮 deliver 可能同时触发
     // start()，没有这层会让同一个 gateway 双 spawn 两个 app-server。
     if (this.startPromise) return this.startPromise;
     this.startPromise = this._doStart().finally(() => { this.startPromise = null; });
     return this.startPromise;
+  }
+  /** 配置变更后的换进程：只在无在途轮次时调用（见 shouldRestartForConfig）。
+   *  终止旧进程、清空线程绑定与模型清单缓存，让 _doStart 起一个新的。 */
+  async _restartForConfigChange() {
+    const stale = this.child;
+    console.log('[p3394-gateway] codex config changed → restarting app-server'
+      + (stale && stale.pid ? ' (old pid ' + stale.pid + ')' : ''));
+    if (stale) await killProcessTree(stale, 'SIGTERM');
+    if (this.child === stale) this.child = null;
+    this.buf = '';
+    // 新进程不认识旧 thread：清内存绑定，下一轮按盘上 cli-session.json 走
+    // thread/resume（被拒再退回 thread/start），会话连续性不受影响。
+    this.threads.clear();
+    this.modelIds = null;
+    this.pending.clear();
+  }
+  /** 本代 app-server 的模型清单（E-01 诊断用，按代缓存）：枚举失败缓存空数组，
+   *  调用方据此"无法判定 → 放行给 CLI"，不反复付枚举超时。 */
+  async _knownModelIds() {
+    if (this.modelIds) return this.modelIds;
+    let ids = [];
+    try {
+      const inspected = await this.inspectModels();
+      if (inspected && inspected.status === 'ready' && Array.isArray(inspected.models)) {
+        ids = inspected.models.map((item) => String((item && item.id) || '').trim()).filter(Boolean);
+      }
+    } catch { ids = []; }
+    this.modelIds = ids;
+    return ids;
+  }
+  /** 本机权威模型清单（同步、零网络）：CODEX_HOME/models_cache.json 的
+   *  models[].slug（真机报告 E-01 指定的权威来源）∪ 已缓存的 app-server
+   *  枚举结果。清单为空 = 无从判定，调用方放行给 CLI。 */
+  _localModelIds() {
+    const cached = probeCodexModelsCache();
+    const ids = Array.isArray(cached && cached.ids) ? cached.ids.slice() : [];
+    for (const id of this.modelIds || []) if (!ids.includes(id)) ids.push(id);
+    return ids;
+  }
+  /** thread/start 被拒 / 轮次失败时的可执行诊断（E-01）：请求模型（或
+   *  config.toml 默认模型）不在清单里 → 换成带可用模型的错误；判定不了就保留
+   *  原始错误。options.assumeModelFault：thread/start 这种参数级失败可直接按
+   *  模型诊断；轮次失败必须先匹配"模型不受支持"报文，避免把取消/超时误诊。 */
+  async _modelDiagnosedError(error, requestedModel, options) {
+    const raw = error && error.message ? error.message : String(error);
+    const assume = !!(options && options.assumeModelFault);
+    if (!assume && !isCodexModelRejection(raw)) return error instanceof Error ? error : new Error(raw);
+    try {
+      const suspect = (requestedModel && requestedModel.trim()) || probeCodexConfigModel() || '';
+      const problem = codexModelProblem(suspect, this._localModelIds())
+        || codexModelProblem(suspect, await this._knownModelIds());
+      if (problem) {
+        const origin = (requestedModel && requestedModel.trim()) ? '' : ' [from CODEX_HOME config.toml]';
+        return new Error(problem.message + origin + ' | ' + raw);
+      }
+    } catch { /* 诊断失败不掩盖原始错误 */ }
+    return error instanceof Error ? error : new Error(raw);
   }
   async _doStart() {
     if (this.child) return;
@@ -1429,18 +1507,30 @@ class CodexAppServerRuntime {
     // 会让 gateway 进程直接崩（uncaught 'error'），而且 initialize 会挂到
     // TIMEOUT_MS 才失败。这里快速失败并清空状态，deliver 侧拿到明确错误。
     let spawnError = null;
-    this.child = spawnCli(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.child.on('error', (error) => {
+    const child = spawnCli(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = child;
+    // 换进程（E-03）时旧 child 的 close 事件可能晚于新 child 赋值：只在仍是
+    // 当前 child 时才清空状态，否则会把新进程的引用抹掉（后续 _send 静默丢弃）。
+    child.on('error', (error) => {
       spawnError = error;
-      this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
-      this.child = null;
+      if (this.child === child) {
+        this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
+        this.child = null;
+      }
     });
-    this.child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk) => {
       this.buf += chunk.toString(); const lines = this.buf.split('\n'); this.buf = lines.pop();
       for (const line of lines) if (line.trim()) this._onLine(line.trim());
     });
-    this.child.stderr.on('data', (chunk) => { if (String(chunk).includes('ERROR')) console.error('[p3394-gateway] codex app-server: ' + String(chunk).trim().slice(-500)); });
-    this.child.on('close', () => { this._failPending(new Error('p3394_codex_app_server_exited')); this.child = null; });
+    child.stderr.on('data', (chunk) => { if (String(chunk).includes('ERROR')) console.error('[p3394-gateway] codex app-server: ' + String(chunk).trim().slice(-500)); });
+    child.on('close', () => {
+      if (this.child !== child) return;
+      this._failPending(new Error('p3394_codex_app_server_exited'));
+      this.child = null;
+    });
+    // 记下这一代进程读到的配置版本，供 start() 判定是否需要换进程（E-03）。
+    this.configStamp = codexConfigStamp();
+    this.modelIds = null;
     await this._request('initialize', { clientInfo: { name: 'p3394-gateway', version: '1.0' }, capabilities: { experimentalApi: true } });
     if (spawnError) throw spawnError;
     this._send({ jsonrpc: '2.0', method: 'initialized', params: {} });
@@ -1494,6 +1584,9 @@ class CodexAppServerRuntime {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cwd = (opts && opts.cwd) || null;
+    const prefs = (opts && opts.execPrefs) || {};
+    // 本轮实际模型：单轮下发优先，否则 codex 自己 config.toml 的默认值。
+    const requestedModel = (prefs.model && String(prefs.model).trim()) || '';
     await this.start();
     let threadId = this.threads.get(sessionId);
     if (!threadId) {
@@ -1523,7 +1616,15 @@ class CodexAppServerRuntime {
       // config 是 app-server 的 per-thread 覆盖——若当前版本不认该字段导致
       // thread/start 被拒，去掉 config 重试一次（强度静默降级、模型保留，
       // 不让整轮失败）。
-      const prefs = (opts && opts.execPrefs) || {};
+      // E-01 快检：模型名先对**本机权威清单**（models_cache.json，纯文件读）核
+      // 一次；命中不了再问 app-server 的枚举清单（慢，只在判负时付）。两处都
+      // 没有才拒绝——真机上错名要等模型层 114 秒才回一段原始报文，这里毫秒级
+      // 给出可用模型。清单为空 = 无从判定 → 放行给 CLI。
+      const effectiveModel = requestedModel || probeCodexConfigModel() || '';
+      const localProblem = codexModelProblem(effectiveModel, this._localModelIds());
+      if (localProblem && codexModelProblem(effectiveModel, await this._knownModelIds())) {
+        throw new Error(localProblem.message + (requestedModel ? '' : ' [from CODEX_HOME config.toml]'));
+      }
       const startParams = {
         cwd,
         approvalPolicy: 'never',
@@ -1541,10 +1642,16 @@ class CodexAppServerRuntime {
           ? { ...startParams, config: { model_reasoning_effort: effortLevel } }
           : startParams);
       } catch (configError) {
-        if (!effortLevel) throw configError;
+        if (!effortLevel) throw await this._modelDiagnosedError(configError, requestedModel, { assumeModelFault: true });
         console.warn('[p3394-gateway] codex thread/start rejected effort config; retrying without it: '
           + (configError && configError.message ? configError.message : String(configError)));
-        result = await this._request('thread/start', startParams);
+        try {
+          result = await this._request('thread/start', startParams);
+        } catch (retryError) {
+          // 去掉强度后的重试仍失败：多半不是强度问题而是模型名（E-01）——
+          // 换成带可用模型的错误，别把原始 JSON-RPC 文本丢给用户。
+          throw await this._modelDiagnosedError(retryError, requestedModel, { assumeModelFault: true });
+        }
       }
       threadId = result && result.thread && result.thread.id;
       if (!threadId) throw new Error('p3394_codex_thread_start_failed');
@@ -1579,7 +1686,12 @@ class CodexAppServerRuntime {
         entry.reject(error);
       }
     }
-    return promise;
+    // E-01：模型层在**轮次内**才拒（真机原文 114 秒后到，事件是 model.delta /
+    // turn failed）——这里对失败做一次诊断包装：确实是"模型不受支持"就换成带
+    // 可用模型的错误；取消/超时/网络抖动的报文不匹配，原样保留不误诊。
+    return promise.catch(async (error) => {
+      throw await this._modelDiagnosedError(error, requestedModel);
+    });
   }
   /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的
    *  app-server 进程——进程保持可复用，只中断目标线程的在途 turn。 */

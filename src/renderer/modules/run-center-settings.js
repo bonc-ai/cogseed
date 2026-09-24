@@ -413,6 +413,25 @@
     }
   }
 
+  /** 网关启停失败的**可执行**原因（真机修复总结 F-02b）：主进程回的是稳定
+   *  错误码（p3394_cli_not_found / _registration_timeout / _bridge_unavailable
+   *  / _gateway_script_missing），此前一律显示「切换失败」——用户看不出是
+   *  CLI 没装、桥没起还是内置脚本缺失。未知码保留通用文案并附码，便于排查。 */
+  function gatewayErrorText(error) {
+    const raw = String(error || '').trim();
+    const code = raw.split(':')[0].trim();
+    const known = {
+      p3394_cli_not_found: 'run_center.agent_gateway_error_cli_not_found',
+      p3394_gateway_registration_timeout: 'run_center.agent_gateway_error_registration_timeout',
+      p3394_bridge_unavailable: 'run_center.agent_gateway_error_bridge_unavailable',
+      p3394_gateway_script_missing: 'run_center.agent_gateway_error_script_missing',
+    };
+    const key = known[code];
+    if (key) return text(key, 'Could not turn the external channel on or off.');
+    const generic = text('run_center.agent_gateway_failed', 'Could not change this gateway.');
+    return /^p3394_[a-z0-9_]+$/.test(code) ? `${generic} (${code})` : generic;
+  }
+
   async function toggleGateway(cli, action) {
     const safeCli = String(cli || '').trim().toLocaleLowerCase();
     if (!/^[a-z0-9_-]+$/.test(safeCli) || state.gatewayBusy[safeCli]) return;
@@ -432,7 +451,7 @@
       if (state.active) {
         state.gatewayErrors = {
           ...state.gatewayErrors,
-          [safeCli]: text('run_center.agent_gateway_failed', 'Could not change this gateway.'),
+          [safeCli]: gatewayErrorText(error?.message || String(error)),
         };
         log.warn('gateway action failed', { cli: safeCli, action, error: error?.message || String(error) });
       }

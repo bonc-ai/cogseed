@@ -16,6 +16,11 @@ import {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  codexConfigStamp,
+  shouldRestartForConfig,
+  codexModelProblem,
+  isCodexModelRejection,
+  probeCodexModelsCache,
   probeConfigModels,
   createClaudeStreamEventClassifier,
   effortArgsFor,
@@ -795,6 +800,195 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     const unknown = probeConfigModels({ configModels: 'nope', env: {}, readFileSync: () => '' }) as { status: string; reason: string };
     expect(unknown.status).toBe('unavailable');
     expect(unknown.reason).toBe('no_config_probe');
+  });
+});
+
+describe('gateway codexConfigStamp — CODEX_HOME 配置代次（真机修复 E-03）', () => {
+  const statOf = (map: Record<string, number>) => ({
+    statSync: (p: string) => {
+      if (!(p in map)) throw new Error('ENOENT: ' + p);
+      return { mtimeMs: map[p] };
+    },
+  });
+
+  it('takes the newest mtime across config.toml and auth.json', () => {
+    const fsLike = statOf({
+      '/codes/config.toml': 1_000,
+      '/codes/auth.json': 2_500,
+    });
+    expect(codexConfigStamp(fsLike, { CODEX_HOME: '/codes' })).toBe(2_500);
+  });
+
+  it('ignores missing files instead of failing the turn path', () => {
+    const fsLike = statOf({ '/codes/config.toml': 1_000 });
+    expect(codexConfigStamp(fsLike, { CODEX_HOME: '/codes' })).toBe(1_000);
+    expect(codexConfigStamp(statOf({}), { CODEX_HOME: '/codes' })).toBe(0);
+    const throwing = { statSync: () => { throw new Error('EACCES'); } };
+    expect(codexConfigStamp(throwing, { CODEX_HOME: '/codes' })).toBe(0);
+  });
+
+  it('resolves CODEX_HOME like probeCodexConfigModel does', () => {
+    const seen: string[] = [];
+    const fsLike = { statSync: (p: string) => { seen.push(p); return { mtimeMs: 7 }; } };
+    codexConfigStamp(fsLike, { CODEX_HOME: '/custom-home' });
+    expect(seen.every((p) => p.startsWith('/custom-home'))).toBe(true);
+  });
+});
+
+describe('gateway shouldRestartForConfig — 配置变更换进程判定（真机修复 E-03）', () => {
+  it('restarts only on a real stamp change with no in-flight turn', () => {
+    expect(shouldRestartForConfig(100, 200, 0)).toBe(true);
+    expect(shouldRestartForConfig(100, 100, 0)).toBe(false);
+  });
+
+  it('lets an in-flight turn finish on the old config first', () => {
+    // 用户在等回答：这一轮沿用旧配置跑完，下一轮（activeTurns=0）再换进程。
+    expect(shouldRestartForConfig(100, 200, 1)).toBe(false);
+  });
+
+  it('degrades honestly when either side has no stamp', () => {
+    expect(shouldRestartForConfig(0, 200, 0)).toBe(false);
+    expect(shouldRestartForConfig(100, 0, 0)).toBe(false);
+    expect(shouldRestartForConfig(undefined, 200, 0)).toBe(false);
+  });
+});
+
+describe('gateway codexModelProblem — 模型名合法性（真机修复 E-01）', () => {
+  const IDS = ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5-codex'];
+
+  it('accepts a listed model, ignoring case', () => {
+    expect(codexModelProblem('gpt-5.6-sol', IDS)).toBeNull();
+    expect(codexModelProblem('  gpt-5.6-sol  ', IDS)).toBeNull();
+    expect(codexModelProblem('GPT-5.6-SOL', IDS)).toBeNull();
+  });
+
+  it('names the available models when the name is not in the list (the gpt-6-sol typo)', () => {
+    const problem = codexModelProblem('gpt-6-sol', IDS) as { code: string; model: string; available: string[]; message: string };
+    expect(problem.code).toBe('p3394_codex_model_unsupported');
+    expect(problem.model).toBe('gpt-6-sol');
+    expect(problem.available).toEqual(IDS);
+    // 用户要能照着这条消息改对，而不是收到一段原始 JSON-RPC 文本。
+    expect(problem.message).toContain('gpt-6-sol');
+    expect(problem.message).toContain('gpt-5.6-sol');
+  });
+
+  it('never judges without a usable list (degrades to the CLI verdict)', () => {
+    expect(codexModelProblem('gpt-6-sol', [])).toBeNull();
+    expect(codexModelProblem('gpt-6-sol', null)).toBeNull();
+    expect(codexModelProblem('gpt-6-sol', ['', '  '])).toBeNull();
+    expect(codexModelProblem('', IDS)).toBeNull();
+    expect(codexModelProblem(null, IDS)).toBeNull();
+  });
+
+  it('caps the disclosed list so a huge catalogue stays readable', () => {
+    const many = Array.from({ length: 40 }, (_, i) => 'model-' + i);
+    const problem = codexModelProblem('gpt-nope', many) as { available: string[] };
+    expect(problem.available).toHaveLength(12);
+  });
+
+  it('never blocks a custom-provider model name (only codex-family names are judged)', () => {
+    // 自定义 provider（deepseek-* / kimi-* …）的模型名不在 codex 自家清单里，
+    // 无从判定——误杀合法模型比漏判更糟，一律放行。
+    expect(codexModelProblem('deepseek-v4-pro', IDS)).toBeNull();
+    expect(codexModelProblem('kimi-k3', IDS)).toBeNull();
+    expect(codexModelProblem('MiniMax-M2.7', IDS)).toBeNull();
+    // 显式关掉命名族闸时仍可判定（供调用方按需强校验）。
+    expect(codexModelProblem('deepseek-v4-pro', IDS, { familyOnly: false })).not.toBeNull();
+  });
+});
+
+describe('gateway isCodexModelRejection — 只认模型层报文（真机 E-01 原文）', () => {
+  it('recognizes the real ChatGPT-account rejection', () => {
+    expect(isCodexModelRejection("The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account.")).toBe(true);
+    expect(isCodexModelRejection('unknown model: gpt-6-astra')).toBe(true);
+    expect(isCodexModelRejection('模型不受支持')).toBe(true);
+  });
+
+  it('does not misdiagnose cancellation, timeout or transport failures', () => {
+    expect(isCodexModelRejection('p3394_codex_turn_cancelled')).toBe(false);
+    expect(isCodexModelRejection('p3394_codex_turn_timeout')).toBe(false);
+    expect(isCodexModelRejection('Reconnecting... 5/5 websocket failed')).toBe(false);
+    expect(isCodexModelRejection('p3394_codex_app_server_exited')).toBe(false);
+    expect(isCodexModelRejection('')).toBe(false);
+    expect(isCodexModelRejection(undefined)).toBe(false);
+  });
+});
+
+describe('gateway probeCodexModelsCache — 本机权威模型清单（真机 E-01）', () => {
+  const readOf = (payload: unknown) => ({ readFileSync: () => JSON.stringify(payload) });
+
+  it('collects models[].slug and keeps hidden ones selectable but unadvertised', () => {
+    const result = probeCodexModelsCache(readOf({ models: [
+      { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol' },
+      { slug: 'gpt-5.6-terra' },
+      { slug: 'gpt-5.6-luna' },
+      { slug: 'gpt-5.5' },
+      { slug: 'gpt-reserve', hidden: true },
+      { slug: 'codex-auto-review', hidden: true },
+    ] }), { CODEX_HOME: '/codes' }) as { ids: string[]; visible: string[] };
+    expect(result.ids).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-reserve', 'codex-auto-review']);
+    expect(result.visible).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']);
+  });
+
+  it('tolerates schema drift instead of dropping the whole list (report R-05)', () => {
+    // codex 日志有 missing field 'supports_parallel_tool_calls' 之类的漂移警告：
+    // 缺字段的行跳过，其余照收；id 兜底 slug。
+    const result = probeCodexModelsCache(readOf({ models: [
+      { slug: 'gpt-5.6-sol' },
+      { id: 'gpt-5.5' },
+      null,
+      { slug: '' },
+      { slug: 'gpt-5.6-luna' },
+    ] }), {}) as { ids: string[] };
+    expect(result.ids).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.6-luna']);
+  });
+
+  it('returns an empty list when the cache is missing or unreadable (no judgement)', () => {
+    const missing = { readFileSync: () => { throw new Error('ENOENT'); } };
+    expect(probeCodexModelsCache(missing, { CODEX_HOME: '/codes' })).toEqual({ ids: [], visible: [] });
+    expect(probeCodexModelsCache({ readFileSync: () => 'not json' }, {})).toEqual({ ids: [], visible: [] });
+    expect(probeCodexModelsCache(readOf({ models: [] }), {})).toEqual({ ids: [], visible: [] });
+  });
+});
+
+describe('gateway codex app-server wiring — E-01 / E-03 接线', () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+
+  it('re-reads the config stamp before reusing the resident app-server', () => {
+    expect(source).toMatch(/if \(shouldRestartForConfig\(this\.configStamp, codexConfigStamp\(\), this\.activeTurns\.size\)\) \{\s*await this\._restartForConfigChange\(\);/);
+    expect(source).toMatch(/async _restartForConfigChange\(\) \{[\s\S]*?await killProcessTree\(stale, 'SIGTERM'\)/);
+    // 新进程不认旧 thread + 新清单：清绑定走 cli-session.json 的 thread/resume。
+    expect(source).toMatch(/this\.threads\.clear\(\);\s*this\.modelIds = null;/);
+  });
+
+  it('records the stamp of the generation it spawned', () => {
+    expect(source).toMatch(/this\.configStamp = codexConfigStamp\(\);/);
+  });
+
+  it('scopes child close/error handling to the current child (restart race)', () => {
+    // 换进程时旧 child 的 close 晚于新 child 赋值——不加这层守卫会把新进程引用抹掉。
+    expect(source).toMatch(/child\.on\('close', \(\) => \{\s*if \(this\.child !== child\) return;/);
+    expect(source).toMatch(/child\.on\('error', \(error\) => \{\s*spawnError = error;\s*if \(this\.child === child\) \{/);
+  });
+
+  it('fails fast on an unknown model name before spending a turn', () => {
+    // 本机清单（文件读）先判；判负才付 app-server 枚举的代价；两处都没有才拒绝。
+    expect(source).toMatch(/const localProblem = codexModelProblem\(effectiveModel, this\._localModelIds\(\)\);\s*if \(localProblem && codexModelProblem\(effectiveModel, await this\._knownModelIds\(\)\)\) \{/);
+    expect(source).toMatch(/_localModelIds\(\) \{[\s\S]*?probeCodexModelsCache\(\)/);
+    expect(source).toMatch(/const requestedModel = \(prefs\.model && String\(prefs\.model\)\.trim\(\)\) \|\| ''/);
+  });
+
+  it('diagnoses a rejected thread/start as an actionable model error on both paths', () => {
+    expect(source).toMatch(/if \(!effortLevel\) throw await this\._modelDiagnosedError\(configError, requestedModel, \{ assumeModelFault: true \}\)/);
+    expect(source).toMatch(/throw await this\._modelDiagnosedError\(retryError, requestedModel, \{ assumeModelFault: true \}\)/);
+  });
+
+  it('diagnoses the in-turn model rejection (the path the real E-01 came back on)', () => {
+    // 真机 E-01 是 model.delta / turn failed（114 秒后），不是 thread/start——
+    // 轮次失败同样要包装，且必须先匹配"模型不受支持"报文。
+    expect(source).toMatch(/return promise\.catch\(async \(error\) => \{\s*throw await this\._modelDiagnosedError\(error, requestedModel\);/);
+    expect(source).toMatch(/if \(!assume && !isCodexModelRejection\(raw\)\) return error instanceof Error \? error : new Error\(raw\)/);
+    expect(source).toMatch(/const suspect = \(requestedModel && requestedModel\.trim\(\)\) \|\| probeCodexConfigModel\(\) \|\| ''/);
   });
 });
 

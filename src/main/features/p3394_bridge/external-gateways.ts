@@ -331,6 +331,32 @@ async function doStartExternalGateway(input: {
   const existing = listExternalGateways().find((g) => g.cli === cli && g.running);
   if (existing) return { ok: true, value: existing };
 
+  // 内置网关脚本缺失是安装缺陷，先于 CLI 探测报出：此时换任何 CLI 都起不来，
+  // 报 `p3394_gateway_script_missing` 比误报 CLI 未安装更准确（既有契约，见
+  // external-gateways.test.ts）。
+  const scriptPath = gatewayScriptPath();
+  if (!fs.existsSync(scriptPath)) return { ok: false, error: 'p3394_gateway_script_missing' };
+
+  // Resolve the CLI to an absolute path **before** spawning. A managed gateway is
+  // long-lived and answers turns over the bridge, so a gateway started with an
+  // unresolvable command still registers successfully and only fails later, per
+  // turn, as an opaque `spawn <cmd> ENOENT` (acceptance report E-02). The preset
+  // id is not the command name in general: `workbuddy` ships its `codebuddy` CLI
+  // inside the desktop app (see local_agents/registry BIN_NAMES), so the previous
+  // `|| mapping.id` fallback could never resolve under a GUI launch — and the
+  // renderer start entry points (onboarding, run-center, agent wizard without a
+  // discovered path) pass no binPath. Discovery also covers PATH, so a
+  // user-installed wrapper keeps resolving. Not found → explicit failure; never
+  // bare-spawn.
+  let cliPath = String(input.binPath || '').trim();
+  if (!cliPath) {
+    try {
+      const detected = await detectOne(cli as never);
+      if (detected && detected.path) cliPath = detected.path;
+    } catch { /* discovery failure → reported as not found below */ }
+  }
+  if (!cliPath) return { ok: false, error: 'p3394_cli_not_found: ' + cli };
+
   // 自定义参数模板声明（agent 记录的 runtime.model_args / effort_args）——
   // 「任意外接智能体接入即可控」的声明通道：spawn 时注入网关 env（覆盖
   // 进程级同名值）。动态 import 避免 agents ↔ bridge 循环依赖；读取失败
@@ -352,8 +378,6 @@ async function doStartExternalGateway(input: {
     } catch { return {}; }
   })();
 
-  const scriptPath = gatewayScriptPath();
-  if (!fs.existsSync(scriptPath)) return { ok: false, error: 'p3394_gateway_script_missing' };
   let port: number;
   try { port = await freePort(); } catch (error) {
     return { ok: false, error: 'p3394_port_alloc_failed: ' + (error instanceof Error ? error.message : String(error)) };
@@ -392,7 +416,7 @@ async function doStartExternalGateway(input: {
     P3394_AGENT_ID: mapping.id,
     P3394_AGENT_ALIAS: alias,
     // 检测到的 CLI 绝对路径优先于 PATH（GUI 启动的 app 看不到 shell PATH）。
-    P3394_AGENT_CLI: String(input.binPath || '').trim() || mapping.id,
+    P3394_AGENT_CLI: cliPath,
     P3394_HEARTBEAT_MS: '30000',
     // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
     // sscli 主导（G-35）：任意 CLI（含未知名自接）默认经 shim 走 sscli。
@@ -446,7 +470,7 @@ async function doStartExternalGateway(input: {
       cli,
       agent_id: mapping.id,
       alias,
-      bin: String(input.binPath || '').trim() || mapping.id,
+      bin: cliPath,
       port,
       pid: child.pid ?? 0,
       started_at: new Date().toISOString(),
@@ -455,7 +479,8 @@ async function doStartExternalGateway(input: {
     state.gateways.push(record);
     writeStateFile(state);
     log.info('P3394 external gateway started', { cli, agent_id: mapping.id, port, pid: child.pid });
-    watchGateway(cli, child, { binPath: input.binPath, alias, bridgeInfo: input.bridgeInfo });
+    // Auto-restart must inherit the resolved absolute path, not re-derive it.
+    watchGateway(cli, child, { binPath: cliPath, alias, bridgeInfo: input.bridgeInfo });
     return { ok: true, value: { ...record, running: true } };
   } catch (error) {
     if (child && child.exitCode === null) await killProcessTree(child, 'SIGTERM');
