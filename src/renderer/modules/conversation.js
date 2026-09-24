@@ -1791,31 +1791,14 @@ function _syncRecipientFromMembers(target) {
   _renderRecipientChip(tg);
 }
 
-const _activeMemberRunByCid = new Map();
-
 if (typeof window !== 'undefined') {
+  // 会话成员只在**下一次提交**生效：取消/新增成员不改变已提交运行（PRD FR-014
+  // 「提交冻结当次成员与配置，后续修改不改变已提交运行」；验收报告 MA-02）。
+  // 这里只同步底部入口的接收者显示。停止当前工作走显式停止入口（FR-020），
+  // 不再由成员编辑联动触发——否则「编辑下一条消息」会被误当成「停止当前工作」。
   window.addEventListener('composer-members-change', (event) => {
     const detail = event && event.detail ? event.detail : {};
     _syncRecipientFromMembers(detail.target);
-    const removed = Array.isArray(detail.removed_agent_ids)
-      ? detail.removed_agent_ids.filter(Boolean)
-      : [];
-    if (detail.target !== 'conversation' || !removed.length || !currentCid) return;
-    const runId = _activeMemberRunByCid.get(currentCid);
-    if (!runId) return;
-    void window.cogseed.invoke('groupChat.abort', {
-      cid: currentCid,
-      run_id: runId,
-      agent_ids: removed,
-      reason: 'member_removed',
-    }).then((result) => {
-      if (!result || result.ok === false) throw new Error((result && result.error) || 'stop failed');
-      if (typeof uiToast === 'function') uiToast(t('chat.run_member_removed'), { variant: 'success' });
-    }).catch((err) => {
-      if (typeof uiToast === 'function') {
-        uiToast(t('chat.run_member_remove_failed', { reason: (err && err.message) || '' }), { variant: 'error' });
-      }
-    });
   });
 }
 
@@ -9868,13 +9851,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
 
   const role = message.role === 'assistant' ? 'assistant' : 'user';
   const messageCid = opts.cid || currentCid;
-  if (messageCid && role === 'user' && message.run_id) {
-    _activeMemberRunByCid.set(messageCid, message.run_id);
-  } else if (messageCid && role === 'assistant' && message.run_summary && message.run_id) {
-    if (_activeMemberRunByCid.get(messageCid) === message.run_id) {
-      _activeMemberRunByCid.delete(messageCid);
-    }
-  }
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
   if (message?.recall_projection_card?.presentation === 'sidecar') {
@@ -12340,6 +12316,29 @@ function _trackChatSendResult(result, data = {}) {
 
 /** 「新任务」：像市面主流 AI 助手一样，直接进入一个空的会话界面。
  *  后端创建一个 normal 会话，前端立即进入该会话（无需先输入）。 */
+/** 去掉结构化点名标记与标点后是否还剩任务文字（FR-015 / EC-06；验收报告 MA-08）。
+ *
+ *  仅 @ 成员、仅标点或空白都不构成任务：首页原先只看「正文非空」，于是只 @ 两个
+ *  成员也会创建会话、启动模型，模型只能回一句「你只 @ 了我，但没说要做什么」。
+ *  引用与附件是任务载体，调用方在它们存在时按原有规则放行。 */
+function _hasTaskIntent(text, target) {
+  let body = String(text || '');
+  const cm = (typeof window !== 'undefined') ? window.composerMembers : null;
+  if (cm && typeof cm.mentionTokensForTarget === 'function') {
+    try {
+      const tokens = cm.mentionTokensForTarget(target, body) || [];
+      for (const token of [...tokens].sort((a, b) => b.start - a.start)) {
+        body = body.slice(0, token.start) + body.slice(token.end);
+      }
+    } catch (_) { /* 解析失败按原文判定 */ }
+  }
+  // 空白 / 标点 / 符号（含 emoji）清掉后仍要有内容。
+  return body.replace(/[\s\p{P}\p{S}]+/gu, '').length > 0;
+}
+
+/** 首页提交在途标志：首个 await 之前生效，函数退出（含失败）时释放。 */
+let _newChatSubmitInFlight = false;
+
 async function handleNewChatSubmit() {
   const input = document.getElementById('new-chat-input');
   const raw = (input.value || '').trim();
@@ -12350,6 +12349,40 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
+  // 仅 @ 成员 / 仅标点 / 空白不启动（MA-08）：先在输入框旁提示补充任务，不要
+  // 创建会话并调用模型。引用与有效附件按原有规则放行。
+  const intentAttachments = (typeof _chatAttachList === 'function' ? _chatAttachList(DRAFT_CID) : [])
+    .filter((item) => item.status !== 'error');
+  if (!quotes.length && !intentAttachments.length && !_hasTaskIntent(raw, 'new-chat')) {
+    await uiAlert(t('run_center.create_task_required'));
+    return;
+  }
+  // 首页提交保护（FR-016 / SC-004；验收报告 MA-04）：连按 Enter 或双击发送时，
+  // 第二次进入必须在**首个 await 之前**被挡下——模型检查与会话创建都在 await 之后，
+  // 只靠禁用按钮太晚，两次调用会各自创建一个会话、拿到不同 cid，后端幂等无法补救。
+  // 失败在 finally 里恢复：改完草稿可以立即重试。
+  if (_newChatSubmitInFlight) return;
+  _newChatSubmitInFlight = true;
+  try {
+    await _submitNewChatIntent(input, raw, quotes);
+  } catch (err) {
+    // 主体内部的**可预期**失败（模型检查、会话创建、附件）已经 uiAlert 后 return；
+    // 走到这里的是未预期异常。调用点是 fire-and-forget（键盘 Enter / 发送键点击），
+    // 不接住就会变成未处理的 rejection。
+    _convLog.warn('new-chat submit failed unexpectedly', err);
+    try {
+      if (typeof uiAlert === 'function') {
+        await uiAlert(t('chat.create_conv_failed_with_reason', { reason: (err && err.message) || String(err) }));
+      }
+    } catch (_) { /* 提示失败不再改变提交锁语义 */ }
+  } finally {
+    _newChatSubmitInFlight = false;
+  }
+}
+
+/** 首页提交主体（模型检查 → 会话创建 → 首条消息派发）。
+ *  只由 handleNewChatSubmit 在提交保护内调用；锁语义见那里。 */
+async function _submitNewChatIntent(input, raw, quotes) {
   if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', raw))) return;
 
   const references = _referenceSnapshotsForQuotes(quotes);
@@ -12560,6 +12593,7 @@ async function handleNewChatSubmit() {
   if (accepted) _clearSubmitIntent(convId, newChatSubmitRequestId);
 }
 
+
 /** 交接意图关键词：命中即视为「继续这项工作/交接」类请求。 */
 const _HANDOFF_INTENT_RE =
   /继续这项工作|现在做到哪里|做到哪里了|交接|继续工作|接着做|下一步准备怎么做|哪些约束不能丢|进度.*继续|继续.*进度|工作交接|汇报进度/;
@@ -12748,6 +12782,13 @@ async function handleChatSubmit() {
   // A bare quote with no extra text is a legitimate "look at this" forward;
   // only reject when both the textarea AND the quote are empty.
   if (!raw && !_getQuotes(currentCid).length) return;
+  // 首页与会话用同一条意图检查（MA-08）：仅 @、仅标点或空白不启动模型。
+  const convIntentAttachments = (typeof _chatAttachList === 'function' ? _chatAttachList(currentCid) : [])
+    .filter((item) => item.status !== 'error');
+  if (!_getQuotes(currentCid).length && !convIntentAttachments.length && !_hasTaskIntent(raw, 'conversation')) {
+    await uiAlert(t('run_center.create_task_required'));
+    return;
+  }
   // Template handoff reply: when the user sends a handoff/continue prompt on an
   // imported conversation, answer instantly from real CogSeed data (three-part
   // template) instead of running a slow CLI/LLM turn. Only when this

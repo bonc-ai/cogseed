@@ -8525,8 +8525,6 @@
   "chat.run_summary.retry": "重试未完成成员",
   "chat.run_summary.retry_started": "已开始重试未完成成员",
   "chat.run_summary.retry_failed": "重试失败：{reason}",
-  "chat.run_member_removed": "已停止并移除该成员的当前工作",
-  "chat.run_member_remove_failed": "停止当前成员失败：{reason}",
   "chat.run_summary.reason.runtime_failed": "执行失败",
   "chat.run_summary.reason.no_contribution": "未产生可交付结果",
   "chat.run_summary.reason.no_terminal": "未返回终态",

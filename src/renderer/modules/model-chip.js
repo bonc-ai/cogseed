@@ -714,6 +714,12 @@ function _renderMemberSourceBody(container, target, group, opts) {
             _memberSourceWrite(target, group.id, patch);
             finish();
           },
+          // 外接来源支持模型下发时同样要有竖排思考强度（FR-010/FR-013）：
+          // 之前在模型清单之后直接 return，菜单底部没有强度入口（MA-05）。
+          afterRender: () => _renderMemberEffortRows(host, target, group, conf, {
+            supported: ctl ? ctl.effortControllableFor(cli) : false,
+            rerender,
+          }),
         },
       );
       return;
@@ -1675,6 +1681,10 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType, hooks = {
     });
   });
   menu.appendChild(rescan);
+  // 渲染完成钩子：调用方在这里追加「来源自己的」尾部区块（成员模式的外接来源
+  // 思考强度行）。不放在调用处直接 append，是因为本函数先画 loading 再 await
+  // 模型清单——提前 append 会把强度行排到清单前面（验收报告 MA-05）。
+  if (typeof hooks.afterRender === 'function') hooks.afterRender();
   if (!hooks.skipPositioning) _positionModelMenu(menu, anchor);
 }
 
