@@ -228,11 +228,20 @@ async function main() {
   const concLong = { message_id: 'mc1', session_id: 's-conc-long', task_id: 'tc1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-3000 conc-along' }] }, idempotency_key: 'idemc1' };
   const concQuick = { message_id: 'mc2', session_id: 's-conc-quick', task_id: 'tc2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'conc-quick' }] }, idempotency_key: 'idemc2' };
   await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: concLong }, GATEWAY_TOKEN);
+  const concStartedAt = Date.now();
   await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: concQuick }, GATEWAY_TOKEN);
-  await sleep(700);
-  const quickRepliedEarly = received.some((e) => e.session_id === 's-conc-quick' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: conc-quick'));
+  // 轮询等待快消息回发，而不是固定睡一个窗口：这里每条消息都要 spawn 一个独立
+  // CLI 进程，Windows 托管 runner 的进程启动开销可能远超原先写死的 700ms，固定
+  // 窗口会把“机器慢”误判成“被串行队列阻塞”（2026-09-23 CI #318 即由此偶发红单，
+  // 而失败日志里两条回复的顺序完全正确）。
+  // 上限 2000ms 仍明显小于长任务的 SLEEP-3000，所以“快消息抢在长任务之前回”这个
+  // 语义没有被放宽：真被排队阻塞时，快消息最早也要等长任务跑完才可能到达。
+  const concQuickReplied = (e) => e.session_id === 's-conc-quick' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: conc-quick');
+  for (let i = 0; i < 40 && !received.some(concQuickReplied); i += 1) await sleep(50);
+  const quickRepliedEarly = received.some(concQuickReplied);
   const longStillRunning = !received.some((e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:'));
-  check('oneshot 并发：长任务未结束时快速消息已回（不排队）', quickRepliedEarly && longStillRunning);
+  // 把两个子条件与实测耗时写进断言文案：下次失败可以直接区分“慢”与“被排队”。
+  check(`oneshot 并发：长任务未结束时快速消息已回（不排队；快回复=${quickRepliedEarly} 长任务仍在跑=${longStillRunning} 耗时=${Date.now() - concStartedAt}ms）`, quickRepliedEarly && longStillRunning);
   await sleep(3000);
   check('长任务随后正常回发', received.some((e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:') && (e.payload.parts[0].text || '').includes('SLEEP-3000')));
 
