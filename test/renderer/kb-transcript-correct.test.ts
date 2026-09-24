@@ -51,6 +51,7 @@ const panel = require('../../src/renderer/modules/kb-transcript-correct.js') as 
   checkedModelCandidates: (rows: unknown[], accepted: Iterable<string>) => Array<{ start: number; wrong: string; correct: string }>;
   normalizeScenarioTags: (input: unknown) => string[];
   applySummary: (r: unknown) => { replaced: number; deleted: number; pendingTotal: number; overRewrite: boolean; status: string };
+  isGlossaryRow: (row: unknown) => boolean;
   cleanedFileName: (p: string, suffix?: string) => string;
   nextCandidateName: (p: string, attempt: number) => string;
   classifySaveResult: (r: unknown) => { kind: string; path?: string; existingDir?: string; existingPath?: string; message?: string };
@@ -429,6 +430,10 @@ describe('locale 覆盖', () => {
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short',
     'headings_none', 'panel_hint',
     'meta_full', 'save_duplicate_file',
+    'save_local', 'save_local_hint', 'saved_local', 'saved_local_to',
+    'save_local_failed', 'save_local_canceled',
+    'rename_skipped', 'ignore_skipped', 'add_allow_skipped', 'rename_delete_hint',
+    'ignore_model_done', 'restore_model_done', 'rename_model_done', 'rename_model_hint',
   ];
 
   for (const lang of locales) {
@@ -676,7 +681,7 @@ describe('模型建议并入候选列表', () => {
       { entryRef: 'model_1', wrong: 'coxyx', correct: 'Cogseed', fromModel: true, spans: [{ start: 20, end: 25 }] },
     ];
     expect(panel.checkedModelCandidates(rows, ['model_1'])).toEqual([
-      { start: 20, wrong: 'coxyx', correct: 'Cogseed', confidence: 1, reason: '' },
+      { entryRef: 'model_1', start: 20, wrong: 'coxyx', correct: 'Cogseed', confidence: 1, reason: '' },
     ]);
     expect(panel.checkedModelCandidates(rows, [])).toEqual([]);
     // 词表命中的行不算"模型建议"，不会被重复提交
@@ -912,5 +917,303 @@ describe('语言切换（i18n-change）', () => {
     env.strings['kb.transcriptCorrect.title'] = '不该出现';
     env.fire();
     expect(title.textContent).toBe('Transcript correction');
+  });
+});
+
+/**
+ * 「另存到本地文件夹…」（2026-09-23 真机反馈：清理版没落到用户自己的文件夹里）。
+ *
+ * 与「另存到知识库」是两个落点：库内那份喂检索/问答，本机那份给用户自己用。
+ * 这里用真原语 + 假 DOM 挂一次面板，走完整条点击链路（点击分派 → IPC → 状态渲染），
+ * 钉住四件事：按钮存在且带 title 说明落点、payload 只带文件名与库内路径（不是本地路径）、
+ * 取消不算失败、落点如实报回。
+ */
+function loadPanelForLocalExport(invoke: (channel: string, payload: any) => Promise<any>) {
+  const nodes = new Map<string, any>();
+  const container = fakeElement();
+  container.querySelector = (selector: string) => {
+    if (!nodes.has(selector)) nodes.set(selector, fakeElement());
+    return nodes.get(selector);
+  };
+  const listeners: Record<string, (event: any) => void> = {};
+  container.addEventListener = (name: string, fn: (event: any) => void) => { listeners[name] = fn; };
+  const context: any = {
+    console, setTimeout, clearTimeout, Map, Set, Array, Object, String, Number, JSON,
+    document: {
+      createElement: () => fakeElement(),
+      body: fakeElement(),
+      addEventListener: () => {}, removeEventListener: () => {},
+    },
+    cogseed: { invoke },
+    // 面板 mount 时订阅 i18n-change：vm 里得给上这两个口子
+    addEventListener: () => {}, removeEventListener: () => {},
+  };
+  context.window = context;
+  context.globalThis = context;
+  vm.createContext(context);
+  // 真原语：缺 label 就抛，不会替面板兜底
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js']) {
+    vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8'), context, { filename: file });
+  }
+  // 缺键 → 走面板里的中文默认文案（断言就看这套默认文案）
+  context.t = () => '';
+  vm.runInContext(panelSrc, context, { filename: 'kb-transcript-correct.js' });
+  const instance = context.KbTranscriptCorrect.mount(container, {
+    text: '甲 2026-09-05 19:31:32\n付平来了。',
+    docId: '1/9.15站会.txt',
+    displayPath: '1/9.15站会.txt',
+  });
+  const clickAction = (action: string) => {
+    listeners.click?.({
+      target: {
+        closest: (selector: string) => (selector === '[data-atc-action]'
+          ? { getAttribute: (name: string) => (name === 'data-atc-action' ? action : null) }
+          : null),
+      },
+    });
+  };
+  return { instance, nodes, clickAction };
+}
+
+describe('另存到本地文件夹（真机：本地原文件夹里没有清理版）', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('生成清理版后出现「另存到本地文件夹…」按钮，且 title 说明落点与知识库那份不同', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async (channel, payload) => {
+      calls.push({ channel, payload });
+      return {};
+    });
+    // 面板状态由主进程给：直接喂成"已生成清理版 + 有 runId"
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    const actions = nodes.get('[data-atc-actions]');
+    expect(actions.innerHTML).toContain('data-atc-action="save-local"');
+    expect(actions.innerHTML).toContain('另存到本地文件夹…');
+    expect(actions.innerHTML).toContain('原文所在的本地文件夹');
+    expect(actions.innerHTML).toContain('另存到知识库'); // 两个落点并存，不是一个替掉另一个
+    instance.destroy();
+  });
+
+  it('payload 只给文件名 + 库内路径（本地路径在主进程台账里，渲染层不许编）', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const { instance, clickAction } = loadPanelForLocalExport(async (channel, payload) => {
+      calls.push({ channel, payload });
+      return { ok: true, scope: 'origin', path: '/Users/example/会议/9.15站会-清理版.txt' };
+    });
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    expect(calls[0]?.channel).toBe('library.writeTextToLocal');
+    expect(calls[0]?.payload).toEqual({
+      content: '清理后的正文',
+      sourcePath: '1/9.15站会.txt',
+      fileName: '9.15站会-清理版.txt',
+    });
+    // 落点台账：本地那份不在库里，只能靠 deliveries 反查
+    const annotate = calls.find((c) => c.channel === 'transcript.run.annotate');
+    expect(annotate?.payload.kind).toBe('local_copy');
+    expect(annotate?.payload.path).toContain('9.15站会-清理版.txt');
+    instance.destroy();
+  });
+
+  it('落点如实报回（状态行 + 摘要行都给出绝对路径）', async () => {
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async () => ({
+      ok: true, scope: 'origin', path: '/Users/example/会议/9.15站会-清理版.txt',
+    }));
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+    // 摘要行只在 apply 摘要存在时渲染（它本来就在"生成清理版"之后）
+    state.apply = { applied: [{ action: 'replace', count: 3 }], retention: 0.9 };
+
+    clickAction('save-local');
+    await flush();
+
+    expect(nodes.get('[data-atc-summary]').textContent).toContain('/Users/example/会议/9.15站会-清理版.txt');
+    instance.destroy();
+  });
+
+  it('用户关掉系统保存框（canceled）不算失败：不报红、不进交付台账', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async (channel, payload) => {
+      calls.push({ channel, payload });
+      return { ok: false, canceled: true, code: 'E_EXPORT_CANCELED' };
+    });
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    const status = nodes.get('[data-atc-status]');
+    expect(status.textContent).toContain('已取消保存');
+    expect(status.dataset.tone).not.toBe('warning');
+    expect(calls.some((c) => c.channel === 'transcript.run.annotate')).toBe(false);
+    instance.destroy();
+  });
+
+  it('写盘失败按失败提示（不静默、也不谎报成功）', async () => {
+    const { instance, nodes, clickAction } = loadPanelForLocalExport(async () => ({
+      ok: false, error: 'EACCES: permission denied', code: 'E_EXPORT_WRITE',
+    }));
+    const state = instance.getState();
+    state.cleanedText = '清理后的正文';
+    state.runId = 'run_1';
+
+    clickAction('save-local');
+    await flush();
+
+    const status = nodes.get('[data-atc-status]');
+    expect(status.textContent).toContain('保存到本地失败');
+    expect(status.dataset.tone).toBe('warning');
+    instance.destroy();
+  });
+});
+
+describe('本地导出文件名（纯文件名，不带库内目录）', () => {
+  it('只出 basename：本地目录由主进程决定，拼库内相对目录是错的', () => {
+    expect(panel.cleanedFileBaseName('1/9.15站会.txt', '清理版')).toBe('9.15站会-清理版.txt');
+    expect(panel.cleanedFileBaseName('', '清理版')).toBe('transcript-清理版.txt');
+  });
+
+  it('与库内路径命名保持同一套规则（同名前缀只差目录）', () => {
+    const rel = '纪要/纪要/文字转写_x.txt';
+    const suffix = '清理版';
+    expect(panel.cleanedFileName(rel, suffix)).toBe(`纪要/纪要/${panel.cleanedFileBaseName(rel, suffix)}`);
+  });
+});
+
+/**
+ * 「更多 → 改写法」点了没反应，且展开后大面积错位（2026-09-23 真机反馈）。
+ *
+ * 两个根因，各自钉一条：
+ *   1. 候选里混着**不在词表**的行（`model_<i>` 模型建议），而忽略/加白/改写法都是词表操作，
+ *      主进程对合成 id 返回 0/null；面板此前不看回执，照样弹"已改为：X" —— 看起来能用，
+ *      实际什么都没发生。现在：这些动作只给词表行 + 所有回执都校验。
+ *   2. 行是 `display:flex`（不换行），而「更多」菜单与展开的表单都声明 `flex: 1 0 100%`，
+ *      于是它们挤在同一行、把原文区压成 0 宽 —— 这就是"大面积错位"。
+ */
+describe('词表操作与模型建议：动作分流（每行都有接受/忽略/更多，落点按行类型不同）', () => {
+  it('识别词表行：g_* 是词表命中；model_* / fromModel 是模型建议，不是词表行', () => {
+    expect(panel.isGlossaryRow({ entryRef: 'g_8056893a079bdf09' })).toBe(true);
+    expect(panel.isGlossaryRow({ entryRef: 'model_0', fromModel: true })).toBe(false);
+    // 万一以后又冒出别的合成 id 来源（历史 merge_* 就是这类），也不当词表行
+    expect(panel.isGlossaryRow({ entryRef: 'merge_3' })).toBe(false);
+    expect(panel.isGlossaryRow(null)).toBe(false);
+  });
+
+  it('行内三颗按钮所有行都给（模型建议不能只剩"接受"）', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    const actions = source.slice(source.indexOf('const actions = document.createElement'), source.indexOf('el.append(main, count, actions)'));
+    expect(actions).toContain("'data-atc-accept'");
+    expect(actions).toContain("'data-atc-ignore'");
+    expect(actions).toContain("'data-atc-rowmenu'");
+    expect(actions).not.toContain('isGlossaryRow'); // 不再按行类型砍按钮
+  });
+
+  it('「更多」里只有「加白」是词表专属（白名单要挂在词表条目上）；改写法两种行都给', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    const menu = source.slice(source.indexOf('function rowMenuElement'), source.indexOf('if (state.allowOpen === row.entryRef)'));
+    expect(menu).toMatch(/if \(isGlossaryRow\(row\)\) \{[\s\S]{0,400}data-atc-allow-open/);
+    expect(menu).toContain("'data-atc-rename-open'");
+  });
+
+  it('模型建议的「忽略」不写词表、只作用于本次扫描（并说清会重新给出）', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    expect(source).toMatch(/async function runIgnore[\s\S]{0,500}if \(!isGlossaryRow\(row\)\) \{/);
+    // 模型分支必须在调 setIgnored **之前**返回（合成 id 调它只会拿到 updated: 0）
+    expect(source).toMatch(/if \(!isGlossaryRow\(row\)\) \{[\s\S]{0,600}return;\s*\}\s*const result = await root\.cogseed\.invoke\('transcript\.glossary\.setIgnored'/);
+    expect(source).toContain("t('kb.transcriptCorrect.ignore_model_done'");
+    expect(source).toContain("t('kb.transcriptCorrect.restore_model_done'");
+  });
+
+  it('模型建议的「改写法」就地改本行、不报"已写入词表"', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    expect(source).toMatch(/if \(!isGlossaryRow\(targetRow\)\) \{[\s\S]{0,400}targetRow\.correct = correct/);
+    expect(source).toContain("t('kb.transcriptCorrect.rename_model_done'");
+    // 改后的写法要真的进 apply（模型候选的 correct 取自本行）
+    const checked = panel.checkedModelCandidates(
+      [{ entryRef: 'model_7', fromModel: true, wrong: 'coxy', correct: 'CogSeed 平台', spans: [{ start: 3, end: 7 }] }],
+      ['model_7'],
+    );
+    // ref 必须原样带上：acceptedIds 用的就是扫描期这个值，主进程按数组下标重编会错位
+    expect(checked[0]).toMatchObject({ entryRef: 'model_7', wrong: 'coxy', correct: 'CogSeed 平台', start: 3 });
+  });
+
+  it('三个词表写操作都必须校验主进程回执，不能凭"没抛错"就报成功', () => {
+    const source = readSrc('renderer/modules/kb-transcript-correct.js');
+    expect(source).toMatch(/applyAlignment'[\s\S]{0,400}if \(!result\?\.entry\)/);
+    expect(source).toMatch(/setIgnored'[\s\S]{0,400}if \(!Number\(result\?\.updated\)\)/);
+    expect(source).toMatch(/addAllow'[\s\S]{0,400}if \(!Number\(result\?\.updated\)\)/);
+    // 未生效时给出的文案必须说清"为什么"，而不是笼统的"失败"
+    expect(source).toContain("t('kb.transcriptCorrect.rename_skipped'");
+    expect(source).toContain("t('kb.transcriptCorrect.ignore_skipped'");
+    expect(source).toContain("t('kb.transcriptCorrect.add_allow_skipped'");
+  });
+});
+
+describe('展开「更多」不再错位（行必须允许换行 + 表单按钮保持自身宽度）', () => {
+  const css = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
+
+  it('行容器允许换行（菜单/表单按 flex: 1 0 100% 换到整行）', () => {
+    const rowRule = css.match(/\.kb-atc__row \{[^}]*\}/)?.[0] || '';
+    expect(rowRule).toContain('flex-wrap: wrap');
+    // 菜单与表单声明了 100% 基准宽度：不换行时它们会把同行内容压成 0 宽
+    expect(css).toMatch(/\.kb-atc__row-menu \{[^}]*flex: 1 0 100%/);
+    expect(css).toMatch(/\.kb-atc__row-form \{[^}]*flex: 1 0 100%/);
+  });
+
+  it('展开的表单是三列网格：输入框伸缩、确定/取消保持按钮宽度（曾经被拉成整行宽）', () => {
+    const formRule = css.match(/\.kb-atc__row-form \{[^}]*\}/)?.[0] || '';
+    expect(formRule).toContain('display: grid');
+    expect(formRule).toContain('grid-template-columns: minmax(0, 1fr) auto auto');
+    expect(formRule).not.toContain('flex-direction: column');
+  });
+
+  it('表单里的上下文提示/已加白清单各占整行，不挤进第三列', () => {
+    expect(css).toMatch(/\.kb-atc__row-form > \.kb-atc__sync-note,[\s\S]{0,120}grid-column: 1 \/ -1;/);
+  });
+});
+
+/**
+ * "填了写法、点了确定，列表还是旧的"（2026-09-23 真机追问）。
+ *
+ * 两个成因都必须留痕：
+ *   1. `runScan()` 第一行 `if (state.busy) return`，而写操作都在 busy 区间里干活——
+ *      带着 busy 调它等于没扫；重扫路径统一改走 `rescanAfterMutation()`（先解除再扫）。
+ *   2. 改写法成功后**不整表重扫**（那会丢掉已勾选集合与刚生成的清理版），
+ *      而是就地更新该行的写法/动作/风险——所以必须能找到这段就地更新。
+ */
+describe('改写法后列表必须跟着变', () => {
+  const source = readSrc('renderer/modules/kb-transcript-correct.js');
+
+  it('写操作后的重扫统一走 rescanAfterMutation（先解除 busy 再扫）', () => {
+    expect(source).toMatch(/async function rescanAfterMutation\(\) \{\s*state\.busy = false;\s*await runScan\(\);/);
+    // 这四条路径都不许再直接 await runScan()（会被 busy 守卫拦掉）
+    const bareCalls = source.match(/await runScan\(\);/g) || [];
+    expect(bareCalls.length).toBe(1); // 只剩 rescanAfterMutation 内部那一处
+  });
+
+  it('改写法成功后就地更新该行，而不是悄悄丢掉用户的勾选与清理版', () => {
+    expect(source).toMatch(/const entry = result\.entry;[\s\S]{0,400}state\.rows\.find\(\(item\) => item\.entryRef === entryRef\)/);
+    expect(source).toMatch(/row\.correct = String\(entry\.correct \|\| ''\)/);
+    expect(source).toMatch(/row\.action = entry\.action/);
+  });
+
+  it('删除型条目给出提示：填了写法就变成"替换为这个词"', () => {
+    expect(source).toMatch(/row\.action === 'delete'[\s\S]{0,300}rename_delete_hint/);
+    const zh = JSON.parse(readSrc('renderer/locales/zh.json'));
+    expect(zh['kb.transcriptCorrect.rename_delete_hint']).toContain('替换');
   });
 });

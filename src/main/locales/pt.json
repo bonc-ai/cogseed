@@ -70,6 +70,8 @@
   "coordinator.tool_idle": "A ferramenta delegada parou de apresentar progresso.",
   "dialog.choose_directory": "Escolha um diretório",
   "dialog.choose_skill_source_directory": "Escolha o diretório de origem da habilidade para importar",
+  "dialogs.export_text.title": "Salvar em pasta local",
+  "dialogs.export_text.filter_text": "Arquivo de texto",
   "errors.agent_disabled": "O agente vinculado a esta conversa está desativado. Reative-o ou troque de conversa.",
   "errors.builtin_agent_not_editable": "Os agentes do Marketplace não podem ser editados pelo chat",
   "errors.builtin_skill_not_editable": "As habilidades do Marketplace não podem ser editadas pelo chat",

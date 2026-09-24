@@ -60,6 +60,21 @@ function optionalId(value: unknown, field: string): string | undefined {
   return optionalText(value, field, 128);
 }
 
+/**
+ * 模型候选的 ref：优先用渲染层带回的扫描期 ref（`model_<n>`），拿不到/形状不对才按数组下标兜底。
+ *
+ * 为什么必须认它：`acceptedIds` 由面板按扫描期的 ref 传上来，若主进程按 payload 下标重编
+ * `model_<i>`，只勾了第 2 条时就会"勾的是 model_1、建的是 model_0"，勾选的建议既没进正文、
+ * 也没被记进词表，且不报错（真机："模型建议接受了进不了词汇表"）。
+ *
+ * 为什么限制形状：这个 ref 会进 `recordReplacement` 的 `replacedIn` 台账，
+ * 不能允许渲染层用一个像词表条目 id（`g_*`）的值来冒充，所以只认 `model_<数字>`。
+ */
+function modelEntryRefFor(value: unknown, index: number): string {
+  if (typeof value === 'string' && /^model_\d{1,4}$/.test(value)) return value;
+  return `model_${index}`;
+}
+
 function stringList(value: unknown, max = 200): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) throw new Error('invalid transcript list');
@@ -558,7 +573,7 @@ export const invokeHandlers = {
     const modelInputs = Array.isArray(payload?.models) ? payload.models.slice(0, 200) : [];
     const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = modelInputs
       .map((raw, index): transcriptAutoCorrect.CorrectionCandidate | null => {
-        const item = raw as Partial<{ start: unknown; wrong: unknown; correct: unknown; confidence: unknown; reason: unknown }>;
+        const item = raw as Partial<{ entryRef: unknown; start: unknown; wrong: unknown; correct: unknown; confidence: unknown; reason: unknown }>;
         const start = typeof item?.start === 'number' && Number.isFinite(item.start)
           ? Math.max(0, Math.min(Math.floor(item.start), text.length))
           : -1;
@@ -570,7 +585,11 @@ export const invokeHandlers = {
         if (transcriptGlossary.foldText(text.slice(start, end)) !== transcriptGlossary.foldText(wrong)) return null;
         const confidenceRaw = Number(item?.confidence);
         return {
-          entryRef: `model_${index}`,
+          // ref 用渲染层带回来的**扫描期** ref（acceptedIds 里放的就是它）。
+          // 早先按数组下标重编 `model_<i>`，而 payload 只含被勾选的条目 → 只勾第 2 条时
+          // `model_1` 与 `model_0` 对不上：勾了的建议既没进正文、也没进词表，还不报错
+          // （真机："模型建议接受了进不了词汇表"）。
+          entryRef: modelEntryRefFor(item?.entryRef, index),
           wrong,
           correct,
           action: 'replace' as const,

@@ -84,7 +84,11 @@ export interface SearchCompare {
 }
 
 export interface RunDelivery {
-  kind: 'cleaned_copy';
+  /**
+   * `cleaned_copy` = 另存进知识库的清理版；
+   * `local_copy`   = 另存到用户本机文件夹的清理版（两者可能出现，也可能只有一份）。
+   */
+  kind: 'cleaned_copy' | 'local_copy';
   path: string;
   at: number;
 }
@@ -231,9 +235,11 @@ export function revertRun(userId: string, runId: string): { run: CorrectionRun; 
 }
 
 /**
- * 追加一条交付记录（只追加）。用于把"另存到知识库"的产物路径与 run 绑定，
+ * 追加一条交付记录（只追加）。用于把"另存到知识库 / 另存到本地文件夹"的产物路径与 run 绑定，
  * 否则清理版文件名换成人类可读的时间戳后，就无法从文件名反查是哪次清理产出的。
  * 无论 run 处于 draft/applied/reverted，交付事实都要留下。
+ *
+ * kind 只认白名单两种：未知值一律记 `cleaned_copy`（历史调用方不传 kind，行为不变）。
  */
 export function annotateRun(
   userId: string,
@@ -245,7 +251,7 @@ export function annotateRun(
   // 注意：局部名不要用 path —— 会遮蔽 node:path 模块（tsc 会直接报错）。
   const deliveryPath = typeof delivery?.path === 'string' ? delivery.path.trim() : '';
   if (!deliveryPath) throw new Error('transcript runs: delivery path is required');
-  const kind: RunDelivery['kind'] = 'cleaned_copy';
+  const kind: RunDelivery['kind'] = delivery?.kind === 'local_copy' ? 'local_copy' : 'cleaned_copy';
   const record: RunDelivery = { kind, path: deliveryPath.slice(0, 500), at: Date.now() };
   const next: CorrectionRun = {
     ...run,

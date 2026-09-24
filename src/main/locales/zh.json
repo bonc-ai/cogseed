@@ -70,6 +70,8 @@
   "coordinator.tool_idle": "委派工具长时间没有进展。",
   "dialog.choose_directory": "选择目录",
   "dialog.choose_skill_source_directory": "选择要导入的技能源目录",
+  "dialogs.export_text.title": "保存到本地文件夹",
+  "dialogs.export_text.filter_text": "文本文件",
   "errors.agent_disabled": "本对话绑定的智能体已被禁用，请重新启用或换一个对话",
   "errors.builtin_agent_not_editable": "平台智能体不可通过对话编辑",
   "errors.builtin_skill_not_editable": "平台技能不可通过对话编辑",

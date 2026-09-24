@@ -700,7 +700,7 @@ export function retargetEntry(userId: string, id: string, correctInput: unknown)
   if (!target) return null;
   const correct = bounded(correctInput, 'correct', MAX_CORRECT_LEN);
   if (!correct) throw new Error('transcript glossary: correct is required');
-  if (correct === target.correct) return target;
+  if (correct === target.correct && target.action !== 'delete') return target;
 
   const file = loadGlossary(userId);
   const entry = file.entries.find((e) => e.id === target.id);
@@ -709,6 +709,15 @@ export function retargetEntry(userId: string, id: string, correctInput: unknown)
     .filter((e) => e.id !== entry.id && e.status === 'active' && foldText(e.wrong).trim() === foldText(entry.wrong).trim())
     .map((e) => e.correct);
   entry.correct = correct;
+  /**
+   * 删除型条目（口癖规则：`action: 'delete'`，correct 恒为空）被填上写法时，**必须同时把
+   * action 翻成 replace**：否则扫描/替换只看 action，`correct` 存了也永远不用——真机上就是
+   * "填了新写法、点了确定、列表里还是（删除）"，看着像没生效（2026-09-23 反馈）。
+   * 语义变化因此是明确的：这条从"见到就删"变成"见到就替换成这个词"。
+   * `kind` 保持不变（`product`/`term`/`filler` 只影响词表分组与查询改写范围，
+   * 一旦用户给了写法，扫描侧就不再走 filler 规则分支——见 transcript_auto_correct 的分支条件）。
+   */
+  if (entry.action === 'delete') entry.action = 'replace';
   entry.riskLevel = deriveRiskLevel(
     { wrong: entry.wrong, correct, action: entry.action, partial: false },
     { otherCorrects: others },

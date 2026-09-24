@@ -70,6 +70,8 @@
   "coordinator.tool_idle": "The delegated tool stopped making progress.",
   "dialog.choose_directory": "Choose a directory",
   "dialog.choose_skill_source_directory": "Choose the skill source directory to import",
+  "dialogs.export_text.title": "Save to local folder",
+  "dialogs.export_text.filter_text": "Text file",
   "errors.agent_disabled": "The agent bound to this conversation is disabled — re-enable it or switch conversation.",
   "errors.builtin_agent_not_editable": "Marketplace agents cannot be edited through chat",
   "errors.builtin_skill_not_editable": "Marketplace skills cannot be edited through chat",

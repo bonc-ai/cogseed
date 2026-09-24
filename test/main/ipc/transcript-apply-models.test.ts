@@ -72,6 +72,35 @@ describe('model_* 候选接入 apply', () => {
     expect(entries[0].scope.docIds).toEqual(['doc_1']);
   });
 
+  it('只勾第 2 条时也真的应用并记进词表（ref 要按扫描期编号走，不能按数组下标重编）', async () => {
+    // 真机事故：面板把扫描期的 model_1 放进 acceptedIds，主进程按 payload 下标重编成 model_0
+    // → 勾了的建议既没进正文、也没进词表，且不报错（"模型建议接受了进不了词汇表"）。
+    const second = { ...MODEL, entryRef: 'model_1', start: TEXT.indexOf('排期'), wrong: '排期', correct: '计划' };
+    const result = await apply({
+      models: [{ ...MODEL, entryRef: 'model_0' }, second],
+      acceptedIds: ['model_1'],
+    });
+    expect(result.result.text).toBe('这个方案要付平老师确认一下计划。');
+    expect(result.result.applied.map((a: any) => a.entryRef)).toEqual(['model_1']);
+    expect(result.glossaryWrites).toMatchObject({ created: 1, skipped: 0 });
+
+    const glossary = await import('../../../src/main/features/transcript_glossary');
+    const entries = glossary.listEntries(TEST_UID, { status: 'active' });
+    expect(entries.map((e) => [e.wrong, e.correct])).toEqual([['排期', '计划']]);
+  });
+
+  it('伪造的 ref（长得像词表条目 id）被忽略：只认 model_<数字>，不许冒充 g_*', async () => {
+    const result = await apply({
+      models: [{ ...MODEL, entryRef: 'g_deadbeef' }],
+      acceptedIds: ['g_deadbeef', 'model_0'],
+    });
+    // 伪造 ref 被换成 model_0（数组下标兜底），因此它进不了词条台账的 replacedIn
+    expect(result.result.applied.map((a: any) => a.entryRef)).toEqual(['model_0']);
+    const glossary = await import('../../../src/main/features/transcript_glossary');
+    expect(glossary.findEntry(TEST_UID, 'g_deadbeef')).toBeNull();
+    expect(glossary.listEntries(TEST_UID, { status: 'active' })).toHaveLength(1);
+  });
+
   it('**没勾选**就一个字都不改，也不写词表', async () => {
     const result = await apply({ models: [MODEL], acceptedIds: [] });
     expect(result.result.text).toBe(TEXT);
