@@ -85,17 +85,21 @@ export function buildMemberScopeBlock(input: MemberScopeInput): string {
     ? `- Required executors: ${mentions.map((id) => label(input.nameOf, id)).join('、')}`
     : '- Required executors: none named — continue from the task context and the current division of work.');
   if (snapshot.requires_sequential) {
-    lines.push(`- Sequential requirement: the task states an order. Declare dependent steps in this order: ${
-      (snapshot.mention_order && snapshot.mention_order.length ? snapshot.mention_order : mentions)
-        .map((id) => label(input.nameOf, id)).join(' → ')}. Parallel dispatch violates the requirement.`);
+    // 顺序只能来自任务描述本身：选择/点名排列不代表执行顺序（PRD FR-017，
+    // 验收报告 MA-03）。这里只说明「本条有先后要求」，方向由协调者按任务文本
+    // 与分工建立依赖——给出由点名顺序推导的箭头会把错误顺序强加给协调者。
+    lines.push('- Sequential requirement: the task description states an order or dependencies. '
+      + 'Declare each step\'s dependencies from the task text itself; the selection or mention order is NOT an execution order. '
+      + 'Dispatch in parallel only for genuinely independent work.');
   }
   const block = template.split(MEMBER_SCOPE_PLACEHOLDER).join(lines.join('\n'));
   return block.trim();
 }
 
-// ─── 顺序强约束校验（设计 §4.4） ────────────────────────────────────────────
-// 纯函数：给定依赖图与点名顺序，判断"必须先方案、后验证"这类要求是否被满足。
-// 主机侧在校验不过时不启动后续步骤，并把原因交回协调者（纠正上限 1 轮）。
+// ─── 顺序约束校验（PRD FR-017 / 验收报告 MA-03） ───────────────────────────
+// 校验只针对**与顺序来源无关**的一致性：本条点名的执行者都必须有计划步骤
+// （不静默忽略本条点名），且依赖图无环。谁先谁后由任务分工决定；主机侧不再比较
+// 点名/选择排列——PRD FR-017 明确「选择顺序不代表执行顺序」。
 
 export interface SequentialPlanStep {
   step_id: string;
@@ -105,83 +109,94 @@ export interface SequentialPlanStep {
 
 export type SequentialVerdict =
   | { ok: true }
-  | { ok: false; reason: 'missing_member' | 'missing_dependency' | 'wrong_order' | 'cycle'; detail: string };
+  | { ok: false; reason: 'missing_member' | 'cycle'; detail: string };
 
-export function verifySequentialPlan(input: {
-  requiresSequential: boolean;
-  mentionOrder: string[];
-  steps: SequentialPlanStep[];
-}): SequentialVerdict {
-  const order = (input.mentionOrder || []).filter((id) => !!id);
-  if (!input.requiresSequential || order.length < 2) return { ok: true };
-  const steps = Array.isArray(input.steps) ? input.steps : [];
+/** 依赖图无环检测（有环时报出环上的 step）。 */
+function detectDependencyCycle(steps: SequentialPlanStep[]): SequentialVerdict {
   const byStep = new Map(steps.map((step) => [step.step_id, step]));
-  const stepOfAgent = new Map<string, SequentialPlanStep>();
-  for (const step of steps) {
-    if (!step.agent_id) continue;
-    if (!stepOfAgent.has(step.agent_id)) stepOfAgent.set(step.agent_id, step);
-  }
-  for (const agentId of order) {
-    if (!stepOfAgent.has(agentId)) {
-      return { ok: false, reason: 'missing_member', detail: agentId };
-    }
-  }
-  /** 该步骤是否（直接或间接）依赖某个 agent 的步骤。 */
-  const dependsOnAgent = (step: SequentialPlanStep, agentId: string, seen = new Set<string>()): boolean => {
-    for (const depId of step.depends_on || []) {
-      if (seen.has(depId)) continue;
-      seen.add(depId);
-      const dep = byStep.get(depId);
-      if (!dep) continue;
-      if (dep.agent_id === agentId) return true;
-      if (dependsOnAgent(dep, agentId, seen)) return true;
-    }
-    return false;
-  };
-  // 顺序被调换（前一步依赖了后一步）比"缺依赖"更具体，先判它，给出准确原因。
-  for (let i = 1; i < order.length; i += 1) {
-    const earlier = stepOfAgent.get(order[i - 1])!;
-    if (dependsOnAgent(earlier, order[i])) {
-      return { ok: false, reason: 'wrong_order', detail: `${order[i - 1]}<-${order[i]}` };
-    }
-  }
-  for (let i = 1; i < order.length; i += 1) {
-    const step = stepOfAgent.get(order[i])!;
-    if (!dependsOnAgent(step, order[i - 1])) {
-      return { ok: false, reason: 'missing_dependency', detail: `${order[i]}<-${order[i - 1]}` };
-    }
-  }
-  // 环检测：依赖图必须无环。
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const hasCycle = (step: SequentialPlanStep): boolean => {
-    if (visited.has(step.step_id)) return false;
-    if (visiting.has(step.step_id)) return true;
+  const visit = (step: SequentialPlanStep): SequentialPlanStep | null => {
+    if (visited.has(step.step_id)) return null;
+    if (visiting.has(step.step_id)) return step;
     visiting.add(step.step_id);
     for (const depId of step.depends_on || []) {
       const dep = byStep.get(depId);
-      if (dep && hasCycle(dep)) return true;
+      if (dep) {
+        const hit = visit(dep);
+        if (hit) return hit;
+      }
     }
     visiting.delete(step.step_id);
     visited.add(step.step_id);
-    return false;
+    return null;
   };
   for (const step of steps) {
-    if (hasCycle(step)) return { ok: false, reason: 'cycle', detail: step.step_id };
+    const cycle = visit(step);
+    if (cycle) return { ok: false, reason: 'cycle', detail: cycle.step_id };
   }
   return { ok: true };
 }
 
+/** 计划级校验：被点名的执行者都要有步骤，且依赖图无环。
+ *  `requiredAgentIds` 是集合语义（本条点名对象），不是顺序。 */
+export function verifySequentialPlan(input: {
+  requiresSequential: boolean;
+  requiredAgentIds: string[];
+  steps: SequentialPlanStep[];
+}): SequentialVerdict {
+  if (!input.requiresSequential) return { ok: true };
+  const required = (input.requiredAgentIds || []).filter((id) => !!id);
+  const steps = Array.isArray(input.steps) ? input.steps : [];
+  const dispatched = new Set(steps.map((step) => step.agent_id).filter((id) => !!id));
+  for (const agentId of required) {
+    if (!dispatched.has(agentId)) return { ok: false, reason: 'missing_member', detail: agentId };
+  }
+  return detectDependencyCycle(steps);
+}
+
+export type StepStartVerdict =
+  | { ok: true }
+  | { ok: false; reason: 'cycle' | 'run_binding'; detail: string };
+
+/** 步骤启动校验：只判「这一步的依赖闭包是否绕回自身」——与谁先谁后无关的真实
+ *  一致性错误。点名位次不再参与判定：任务要求的先后可能与选择顺序相反
+ *  （验收报告 MA-03 的隔离复现即为该场景）。 */
+export function verifySequentialStepStart(input: {
+  requiresSequential: boolean;
+  steps: SequentialPlanStep[];
+  stepToStart: SequentialPlanStep;
+}): StepStartVerdict {
+  if (!input.requiresSequential) return { ok: true };
+  const step = input.stepToStart;
+  if (!step || !step.step_id) return { ok: true };
+  const steps = Array.isArray(input.steps) ? input.steps : [];
+  const byStep = new Map(steps.map((item) => [item.step_id, item]));
+  const seen = new Set<string>([step.step_id]);
+  const walk = (node: SequentialPlanStep): boolean => {
+    for (const depId of node.depends_on || []) {
+      if (depId === step.step_id) return true;
+      if (seen.has(depId)) continue;
+      seen.add(depId);
+      const dep = byStep.get(depId);
+      if (dep && walk(dep)) return true;
+    }
+    return false;
+  };
+  if (walk(step)) return { ok: false, reason: 'cycle', detail: step.step_id };
+  return { ok: true };
+}
+
 /** 校验失败时交回协调者的纠正说明（不静默降级为并行）。 */
-export function sequentialViolationMessage(verdict: SequentialVerdict, mentionOrder: string[]): string {
+export function sequentialViolationMessage(verdict: SequentialVerdict | StepStartVerdict): string {
   if (verdict.ok) return '';
   const { reason, detail } = verdict as { reason: string; detail: string };
-  const order = (mentionOrder || []).join(' → ');
-  const why = reason === 'missing_member' ? `${detail} 没有被派发`
-    : reason === 'missing_dependency' ? `${detail} 之间缺少依赖`
-      : reason === 'wrong_order' ? `${detail} 的依赖方向与点名顺序相反`
-        : `依赖图存在环（${detail}）`;
-  return `本条要求按顺序协作（${order}），但当前派发不满足：${why}。请为被点名成员建立依赖步骤后重试；不要并行派发。`;
+  const why = reason === 'missing_member'
+    ? `被点名的 ${detail} 没有被派发`
+    : reason === 'run_binding'
+      ? `${detail} 不属于本次协作运行`
+      : `依赖图存在环（${detail}）`;
+  return `本条要求按任务分工协作，但当前派发不满足：${why}。请按任务描述为被点名成员建立依赖步骤后重试。`;
 }
 
 /**
@@ -196,63 +211,4 @@ export function shouldDeferToCommanderForOrder(input: {
   mentionIds: string[];
 }): boolean {
   return input.requiresSequential === true && (input.mentionIds || []).length >= 2;
-}
-
-/**
- * 步骤启动时的顺序校验（修订版，2026-09-20 复盘 21:34 误拦后）。
- *
- * 之前在"步骤启动"处拿完整计划链校验，导致 commander 派发第一位成员时
- * 因"后序成员还没计划"被误拦（missing_member）。正确语义只看**这一步**：
- *   - 非顺序运行 / 点名少于 2 / 该步骤的成员不在顺序里 → 放行；
- *   - 是顺序名单里的**首位成员** → 放行（它没有前置）；
- *   - 其它位次成员：前一位成员的步骤必须已经存在，且本步骤（直接或间接）
- *     依赖它；否则拦下并给原因。
- */
-export type StepStartVerdict =
-  | { ok: true }
-  | { ok: false; reason: 'missing_dependency' | 'wrong_order'; detail: string };
-
-export function verifySequentialStepStart(input: {
-  requiresSequential: boolean;
-  mentionOrder: string[];
-  steps: SequentialPlanStep[];
-  stepToStart: SequentialPlanStep;
-}): StepStartVerdict {
-  const order = (input.mentionOrder || []).filter((id) => !!id);
-  const step = input.stepToStart;
-  if (!input.requiresSequential || order.length < 2 || !step) return { ok: true };
-  const idx = order.indexOf(step.agent_id);
-  if (idx < 0) return { ok: true };   // 不在顺序名单里：放行
-
-  const steps = input.steps || [];
-  const byStep = new Map(steps.map((s) => [s.step_id, s]));
-  const dependsOn = (node: SequentialPlanStep, agentId: string, seen = new Set<string>()): boolean => {
-    for (const depId of node.depends_on || []) {
-      if (seen.has(depId)) continue;
-      seen.add(depId);
-      const dep = byStep.get(depId);
-      if (!dep) continue;
-      if (dep.agent_id === agentId) return true;
-      if (dependsOn(dep, agentId, seen)) return true;
-    }
-    return false;
-  };
-
-  // 打乱检查：无论位次，依赖了"更靠后且步骤已存在"的成员 = 链反了。
-  for (let i = idx + 1; i < order.length; i += 1) {
-    if (dependsOn(step, order[i]) && steps.some((s) => s.agent_id === order[i])) {
-      return { ok: false, reason: 'wrong_order', detail: `${step.agent_id} 依赖了更靠后的 ${order[i]}（且其步骤已存在）` };
-    }
-  }
-  if (idx === 0) return { ok: true };  // 首位成员：无前置要求
-
-  const priorAgent = order[idx - 1];
-  const priorStep = steps.find((s) => s.agent_id === priorAgent);
-  if (!priorStep) {
-    return { ok: false, reason: 'missing_dependency', detail: `${step.agent_id}<-${priorAgent}（前序尚未派发）` };
-  }
-  if (!dependsOn(step, priorAgent)) {
-    return { ok: false, reason: 'missing_dependency', detail: `${step.agent_id}<-${priorAgent}（缺少依赖）` };
-  }
-  return { ok: true };
 }

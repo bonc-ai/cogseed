@@ -17,6 +17,26 @@ import { createLogger } from '../../logger';
 
 const log = createLogger('p3394-bridge:gateway-turn');
 
+/**
+ * 网关错误信前缀。托管网关在 CLI/运行时异常时用
+ * `postReply(envelope, '[p3394_gateway_error] ' + message)` 回一条**普通回复**
+ * （见 p3394-gateway/gateway.cjs；那里的注释写明「让 CogSeed 快速失败、不空等」）。
+ * 宿主侧不识别它，就会把执行失败当成一次成功回合：actor 记 done、
+ * produced.messages=1 → 汇总计入贡献、missing 为空、整体「全部完成」。
+ */
+const GATEWAY_ERROR_PREFIX = '[p3394_gateway_error]';
+
+/** 从网关回信里取出错误详情；不是错误信时返回空串。
+ *
+ *  只有**以标记开头**（允许前导空白）的回信才算错误信——网关是唯一生产者，
+ *  它总是把标记放在最前面。正文里引用/讨论这个标记（例如 agent 讲解这条协议）
+ *  不改判失败，避免把正常回复误判成执行错误。 */
+function gatewayErrorDetail(text: string): string {
+  const raw = String(text || '').trimStart();
+  if (!raw.startsWith(GATEWAY_ERROR_PREFIX)) return '';
+  return raw.slice(GATEWAY_ERROR_PREFIX.length).trim() || 'p3394_gateway_error';
+}
+
 export interface P3394GatewayTurnResult {
   text: string;
   error?: string;
@@ -265,6 +285,22 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       if (recoveryError) return recoveryError;
       envelope = buildEnvelope(); // 网关重启后重发：换新信封，避免旧幂等键
       result = await send();
+    }
+    // 网关错误信不是成果：先转失败，再谈 delta/final 与用量。
+    const gatewayError = gatewayErrorDetail(result.text);
+    if (gatewayError) {
+      log.warn('P3394 gateway reported a runtime error in its reply', {
+        cli: input.cli,
+        nodeId,
+        error: gatewayError,
+      });
+      return {
+        text: '',
+        error: gatewayError,
+        failureKind: 'runtime',
+        failureCode: 'p3394_gateway_error',
+        infrastructureFailure: true,
+      };
     }
     // Legacy/oneshot gateways have no stream frames; preserve their original
     // one-shot rendering. A streaming gateway already emitted every chunk,

@@ -673,13 +673,26 @@ export async function respawnManagedGateways(
   // 已有 per-cli in-flight 去重（S-04），同 cli 不会双 spawn。
   await Promise.all(state.gateways.map(async (record) => {
     if (!record.cli) return;
-    // `bin` holds the absolute CLI path when discovery found one; fall back
-    // to the bare preset name (the gateway resolves it against PATH).
-    const binPath = record.bin && record.bin !== record.cli ? record.bin : undefined;
+    // `bin` holds the absolute CLI path when discovery found one. 旧记录可能只存了
+    // 裸标识（bin === cli，例如 workbuddy）：GUI 启动的 app 看不到 shell PATH，而
+    // WorkBuddy 的 CLI 是应用内置的 codebuddy —— 直接裸 spawn 只会得到
+    // `spawn workbuddy ENOENT`（验收报告 MA-09）。恢复时重新发现绝对路径；
+    // 发现不到就明确失败，不回退裸命令、也不静默降级。
+    let binPath = record.bin && record.bin !== record.cli ? record.bin : undefined;
+    if (!binPath) {
+      try {
+        const detected = await detectOne(record.cli as never);
+        if (detected && detected.path) binPath = detected.path;
+      } catch { /* 发现失败 → 按「未检测到 CLI」明确失败 */ }
+      if (!binPath) {
+        out.failed.push({ cli: record.cli, error: 'p3394_cli_not_found' });
+        return;
+      }
+    }
     const started = await startExternalGateway({
       cli: record.cli,
       alias: record.alias,
-      ...(binPath ? { binPath } : {}),
+      binPath,
       // Test seam: defaults to the live bridge.
       ...(opts.bridgeInfo !== undefined ? { bridgeInfo: opts.bridgeInfo } : {}),
     });
