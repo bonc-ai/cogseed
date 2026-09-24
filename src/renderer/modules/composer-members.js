@@ -1076,6 +1076,9 @@
   function updatePickerChrome(picker, target, mode) {
     const foot = ensurePickerChrome(picker);
     if (!foot) return;
+    // 关闭弹窗时 footer 被隐藏（收起「完成」）；重开成员列表必须恢复可见性，
+    // 否则完成入口再也回不来（验收报告 MA-07）。
+    foot.hidden = false;
     const count = foot.querySelector('.composer-members-count');
     if (count) {
       count.textContent = mode === 'mentions'
