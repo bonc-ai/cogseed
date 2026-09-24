@@ -89,6 +89,23 @@
   }
 
   /**
+   * 这一行背后**是否有真的词表条目**。
+   *
+   * 候选有两个来源（见主进程 scan）：词表命中（`entryRef: g_*`）与**模型读正文的建议**
+   * （`entryRef: model_<i>`、`fromModel: true`）。后者**不在词表里**——它只有在用户
+   * 「勾选 + 生成清理版」时才被记进词表（`source: meeting_accept`）。
+   *
+   * 为什么必须区分：忽略（降权）/ 加白 / 改写法都是**词表操作**，对 `model_*` 这种
+   * 合成 id 主进程找不到条目、返回 0/null。面板此前不看回执，照样弹"已改为：X""已忽略"，
+   * 用户看到的就是"改写法点了没用"（2026-09-23 反馈）。所以这些动作**只给词表行**，
+   * 同时所有词表写操作的返回值都要校验（双保险：万一以后又多了别的合成 id 来源）。
+   */
+  function isGlossaryRow(row) {
+    if (!row || row.fromModel === true) return false;
+    return String(row.entryRef || '').startsWith('g_');
+  }
+
+  /**
    * 分组：高危优先展示，其余归入可折叠组（视觉噪声主要来自低风险条目），
    * 被忽略过的词条另外折叠到最后——这就是方案里的"忽略（降权）"，
    * 不是删除：用户仍能展开看到并恢复。
@@ -118,12 +135,17 @@
   /**
    * 取出**被勾选**的模型建议，转成主进程 `apply` 需要的形状（纯函数）。
    * 只取勾选的：没勾的一条都不该进正文，也不该被记进词表。
+   *
+   * `entryRef` 必须一起带上：面板 acceptedIds 里放的就是**扫描期**这个 ref，
+   * 主进程若按数组下标重编 `model_<i>`，只勾第 2 条时两边编号就错位——候选没被应用、
+   * 也就不会被记进词表，而且一声不响（真机：模型建议"接受了却进不了词汇表"）。
    */
   function checkedModelCandidates(rows, acceptedIds) {
     const accepted = acceptedIds instanceof Set ? acceptedIds : new Set(acceptedIds || []);
     return (rows || [])
       .filter((row) => row.fromModel === true && accepted.has(row.entryRef))
       .map((row) => ({
+        entryRef: String(row.entryRef || ''),
         start: Number(row.spans?.[0]?.start ?? 0),
         wrong: String(row.wrong || ''),
         correct: String(row.correct || ''),
@@ -361,7 +383,22 @@
   }
 
   /**
-   * 清理版目标路径：**放在原文同一个目录**，名字尽量短且一眼可认。
+   * 清理版文件名（**不含目录**）：`9.15站会.txt` → `9.15站会-清理版.txt`。
+   * 「另存到本地文件夹…」要的是纯文件名（目标目录由主进程定：原文所在的本地文件夹，
+   * 或者用户在系统保存框里选的位置），所以这里只出 basename，不再拼库内相对目录。
+   */
+  function cleanedFileBaseName(displayPath, suffix, extension) {
+    const raw = String(displayPath || 'transcript');
+    const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
+    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
+    const tail = String(suffix || '').trim() || 'cleaned';
+    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
+    return `${stem}-${tail}.${ext}`;
+  }
+
+  /**
+   * 清理版目标路径（库内）：**放在原文同一个目录**，名字尽量短且一眼可认。
    *   例：`1/9.15站会.txt` → `1/9.15站会-清理版.txt`
    * 同日再次另存由 nextCandidateName 追加 -2/-3（不覆盖上一次产物）。
    * 后缀走 i18n（zh=清理版 / en=cleaned …），因为它是用户直接看到的文件名。
@@ -370,11 +407,7 @@
     const raw = String(displayPath || 'transcript');
     const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
     const dir = cut >= 0 ? raw.slice(0, cut + 1) : '';
-    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
-    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
-    const tail = String(suffix || '').trim() || 'cleaned';
-    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
-    return `${dir}${stem}-${tail}.${ext}`;
+    return `${dir}${cleanedFileBaseName(displayPath, suffix, extension)}`;
   }
 
   /** 同分钟重复另存时给出 -2/-3 候选名，避免覆盖上一次的产物。 */
@@ -427,6 +460,9 @@
       error: '',
       collapsedOther: false,
       savedPath: '',
+      /** 另存到**本地文件夹**的落点（绝对路径，主进程返回）。与 savedPath 是两个落点：
+       *  库内那份喂检索/问答，本机那份给用户自己用（2026-09-23 反馈：本地原文件夹里没有）。 */
+      localSavedPath: '',
       // 本体/记忆接线（P1）：sync = 主进程 SyncResult 原样，呈现交给 syncSummary
       sync: null,
       syncBusy: false,
@@ -463,6 +499,19 @@
         try { root.uiToast(message, { variant: variant || 'success' }); return; } catch (_) { /* 忽略 */ }
       }
       setStatus(message, variant === 'warning' ? 'warning' : '');
+    }
+
+    /**
+     * 写操作之后重扫：**必须先解除 busy**。
+     *
+     * `runScan()` 第一行是 `if (state.busy) return`（防止并发扫描），而加白/装规则包这类
+     * 写操作都在 `state.busy = true` 区间里干活——直接 `await runScan()` 会被守卫拦掉，
+     * 表现为"提示说成功、列表却没变"（真机：装了口癖包看不见、加白后行还在）。
+     * 这里显式先解除再扫；`finally` 里照旧再置一次 false（幂等）。
+     */
+    async function rescanAfterMutation() {
+      state.busy = false;
+      await runScan();
     }
 
     function setStatus(message, tone) {
@@ -592,6 +641,9 @@
       // 高危行用纯文字按钮（hover 才出底色），把横向空间让给内容。
       const acceptRole = isAccepted ? 'primary' : (row.riskLevel === 'high' ? 'ghost' : 'secondary');
       const isIgnoredRow = Number(row.ignoredCount || 0) > 0;
+      // 三颗按钮**所有行都有**：忽略在模型建议行上是"本次不采纳（可恢复）"，
+      // 在词表行上是词表降权——两者都是"这条先放一边"，只是落点不同（见 runIgnore）。
+      // 「更多」在模型建议行上只给"改写法"（加白要挂在词表条目上，见 rowMenuElement）。
       actions.innerHTML = [
         button({
           label: isAccepted
@@ -630,29 +682,47 @@
       return el;
     }
 
-    /** 行内次级动作：加白 / 改写法 / 恢复（默认收起，避免每行堆 5 个按钮）。 */
+    /**
+     * 行内次级动作（默认收起，避免每行堆 5 个按钮）。
+     *
+     * 菜单内容按行类型分流：
+     *   - 「加白」**只给词表行**：白名单是挂在词表条目上的字段（`contextAllow`），
+     *     模型建议还没有条目可挂——先「接受 + 生成清理版」把它记进词表，下次扫描它就成了
+     *     词表行，那时再加白。给个点了必然失败（`updated: 0`）的按钮才是坑。
+     *   - 「改写法」两种行都给：词表行走主进程改条目；模型建议行改的是"这条建议要替换成
+     *     什么"，本地生效、勾选并生成清理版时按改后的写法替换（那也是它进词表的时刻）。
+     *   - 「重新审视」= 恢复：词表行走词表降权还原，模型建议行走"本次不采纳"的还原。
+     */
     function rowMenuElement(row, isIgnoredRow) {
       const wrap = document.createElement('div');
       wrap.className = 'kb-atc__row-menu';
-      wrap.innerHTML = button({
-        label: t('kb.transcriptCorrect.add_allow', '加白'),
-        role: 'ghost',
-        size: 'sm',
-        className: 'kb-atc__btn',
-        attrs: { 'data-atc-allow-open': row.entryRef },
-      }) + button({
+      const parts = [];
+      if (isGlossaryRow(row)) {
+        parts.push(button({
+          label: t('kb.transcriptCorrect.add_allow', '加白'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-allow-open': row.entryRef },
+        }));
+      }
+      parts.push(button({
         label: t('kb.transcriptCorrect.rename_correct', '改写法'),
         role: 'ghost',
         size: 'sm',
         className: 'kb-atc__btn',
         attrs: { 'data-atc-rename-open': row.entryRef },
-      }) + (isIgnoredRow ? button({
-        label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
-        role: 'ghost',
-        size: 'sm',
-        className: 'kb-atc__btn',
-        attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
-      }) : '');
+      }));
+      if (isIgnoredRow) {
+        parts.push(button({
+          label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
+        }));
+      }
+      wrap.innerHTML = parts.join('');
 
       if (state.allowOpen === row.entryRef) {
         const form = document.createElement('div');
@@ -725,6 +795,14 @@
                 id: 'atc-rename-' + row.entryRef,
                 label: t('kb.transcriptCorrect.rename_correct', '改写法'),
                 control: { kind: 'input', placeholder: row.correct, value: row.correct },
+                // 两种行要讲清"改完什么时候生效"，否则用户以为点了没用（真机反馈）：
+                //   - 模型建议：改的是建议本身，勾选 + 生成清理版时才落地（并进词表）；
+                //   - 删除型条目：填上写法后行为从"删除"变成"替换为这个词"。
+                ...(row.fromModel === true
+                  ? { hint: t('kb.transcriptCorrect.rename_model_hint', '这是模型建议：改的是"要替换成什么"，勾选并生成清理版时生效（那时才会写进词表）。') }
+                  : (row.action === 'delete'
+                    ? { hint: t('kb.transcriptCorrect.rename_delete_hint', '这是删除型规则；填上写法后，它变成"替换为这个词"。') }
+                    : {})),
               }),
               button({
                 label: t('kb.transcriptCorrect.confirm', '确定'),
@@ -890,6 +968,7 @@
         parts.push(t('kb.transcriptCorrect.merged_blocks', '合并为 {count} 块', { count: state.mergedBlocks }));
       }
       if (state.savedPath) parts.push(t('kb.transcriptCorrect.saved_to', '已另存：{path}', { path: state.savedPath }));
+      if (state.localSavedPath) parts.push(t('kb.transcriptCorrect.saved_local_to', '已存本地：{path}', { path: state.localSavedPath }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
     }
@@ -968,6 +1047,19 @@
           role: 'secondary',
           size: 'sm',
           attrs: { 'data-atc-action': 'save' },
+        }));
+        buttons.push(button({
+          label: t('kb.transcriptCorrect.save_local', '另存到本地文件夹…'),
+          icon: 'download',
+          role: 'secondary',
+          size: 'sm',
+          disabled: state.busy,
+          // 落点由主进程定（原文所在文件夹 / 系统保存框），把这件事写进 title，
+          // 免得用户以为它和上一颗按钮存的是同一个地方。
+          attrs: {
+            'data-atc-action': 'save-local',
+            title: t('kb.transcriptCorrect.save_local_hint', '存到原文所在的本地文件夹；没有导入来源时用系统保存框自选位置'),
+          },
         }));
         buttons.push(button({
           label: t('kb.transcriptCorrect.notes', '清理附记'),
@@ -1530,6 +1622,58 @@
     }
 
     /**
+     * 另存清理版到**用户本机文件夹**（「另存到本地文件夹…」）。
+     *
+     * 与「另存到知识库」的区别就在落点：库内那份是喂检索/问答的副本，本机这份是用户
+     * 拿去用的文件。真机反馈（2026-09-23）：原文是导进库的副本，产物只写回库内目录，
+     * 用户去自己放原稿的文件夹里翻不到——"在文件夹中显示"能看到，原文件夹里却没有。
+     *
+     * 目标目录由主进程决定（`library.writeTextToLocal`）：有落点线索（导入来源 / 用户上次
+     * 亲手选过）就写回那个文件夹，否则弹系统保存框让用户自己挑；渲染层只负责传文本 + 文件名，
+     * 并如实报回落点。取消（用户关掉保存框）不算失败，按"已取消"收场，不报红。
+     */
+    async function runSaveLocal() {
+      if (state.busy || !state.cleanedText) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('library.writeTextToLocal', {
+          content: state.cleanedText,
+          // 库内相对路径只是**用来反查导入来源**，不是本地路径（本地路径在主进程台账里）。
+          sourcePath: ctx.displayPath || '',
+          fileName: cleanedFileBaseName(ctx.displayPath, t('kb.transcriptCorrect.cleaned_suffix', '清理版')),
+        });
+        if (result?.canceled) {
+          setStatus(t('kb.transcriptCorrect.save_local_canceled', '已取消保存。'), '');
+          return;
+        }
+        if (!result || result.ok === false || !result.path) {
+          throw new Error(String(result?.error || 'local export failed'));
+        }
+        state.localSavedPath = String(result.path);
+        toast(t('kb.transcriptCorrect.saved_local', '已保存到本地：{path}', { path: state.localSavedPath }));
+        // 交付台账同样追加一条（kind=local_copy）：本地那份不在库里，只能靠台账反查。
+        if (state.runId) {
+          try {
+            await root.cogseed.invoke('transcript.run.annotate', {
+              runId: state.runId,
+              kind: 'local_copy',
+              path: state.localSavedPath,
+            });
+          } catch (annotateError) {
+            log?.warn('run annotate (local copy) failed', { error: annotateError?.message || String(annotateError) });
+          }
+        }
+      } catch (error) {
+        log?.warn('cleaned transcript local save failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.save_local_failed', '保存到本地失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /**
      * 清理附记（方案 §五 P1-3）：术语对照表 / 口癖删除 / 未决项 / 上下文材料 /
      * 本次参数，渲染成 Markdown。可以预览，也可以另存到知识库（同目录 .md）。
      */
@@ -1783,11 +1927,13 @@
       render();
       try {
         const result = await root.cogseed.invoke('transcript.glossary.seedFillers', {});
-        setStatus(t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
+        const seeded = t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
           created: Number(result?.created || 0),
           updated: Number(result?.updated || 0),
-        }), '');
-        await runScan();
+        });
+        setStatus(seeded, '');
+        toast(seeded);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('seed fillers failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.seed_fillers_failed', '装入口癖规则包失败，请稍后重试。'), 'warning');
@@ -1797,12 +1943,33 @@
       }
     }
 
-    /** 忽略 / 恢复（持久化，可逆）：不是删词条，只是降权。 */
+    /**
+     * 忽略 / 恢复（可逆）。两种行两种落点：
+     *   - 词表行：主进程 `setIgnored` 给条目降权（持久化，重扫仍在"已忽略"组）；
+     *   - 模型建议行：它**不在词表里**，没有条目可降权 → 本次扫描内不采纳
+     *     （降权到"已忽略"组、可恢复），并如实说明"不写词表、下次扫描会重新给出"。
+     *     绝不能对合成 id 调 `setIgnored`：主进程返回 `updated: 0`，此前面板照样弹"已忽略"。
+     */
     async function runIgnore(entryRef, restore) {
       if (state.busy) return;
       const row = state.rows.find((item) => item.entryRef === entryRef);
       try {
-        await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        if (!isGlossaryRow(row)) {
+          if (row) row.ignoredCount = restore ? 0 : 1;
+          if (restore) state.accepted.add(entryRef);
+          else state.accepted.delete(entryRef);
+          setStatus(restore
+            ? t('kb.transcriptCorrect.restore_model_done', '已恢复这条建议：{wrong}', { wrong: row?.wrong || '' })
+            : t('kb.transcriptCorrect.ignore_model_done', '已忽略这条建议（只作用于本次扫描，不写词表；重新扫描会再次给出）。', { wrong: row?.wrong || '' }), '');
+          return;
+        }
+        const result = await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        // 主进程只对"词表里真的存在的条目"计数：`updated: 0` 说明这条不在词表里，
+        // 不能报"已忽略"（否则本地翻个组、磁盘上什么都没有，重扫又回来）。
+        if (!Number(result?.updated)) {
+          setStatus(t('kb.transcriptCorrect.ignore_skipped', '这条不在词表里，无法忽略（模型建议直接取消勾选即可）。'), 'warning');
+          return;
+        }
         if (row) row.ignoredCount = restore ? 0 : Number(row.ignoredCount || 0) + 1;
         if (restore) {
           state.accepted.add(entryRef);
@@ -1832,13 +1999,21 @@
       state.busy = true;
       render();
       try {
-        await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        const result = await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        // 同「忽略」：`updated: 0` = 词表里没有这条，别报"已加白"再让重扫把它打回原形。
+        if (!Number(result?.updated)) {
+          setStatus(t('kb.transcriptCorrect.add_allow_skipped', '这条不在词表里，无法加白（模型建议要先写进词表）。'), 'warning');
+          return;
+        }
         state.allowOpen = '';
-        setStatus(t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
+        const done = t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
           term,
           wrong: state.rows.find((r) => r.entryRef === entryRef)?.wrong || '',
-        }), '');
-        await runScan();
+        });
+        setStatus(done, '');
+        // 紧接着的重扫会把状态行刷成"扫描完成…"，成功提示再用 toast 留一份（否则像没生效）
+        toast(done);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('add allow failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.add_allow_failed', '加白失败，请稍后重试。'), 'warning');
@@ -1853,8 +2028,10 @@
       if (state.busy) return;
       try {
         await root.cogseed.invoke('transcript.glossary.removeAllow', { ids: [entryRef], term });
-        setStatus(t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term }), '');
-        await runScan();
+        const removed = t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term });
+        setStatus(removed, '');
+        toast(removed);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('remove allow failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.remove_allow_failed', '移除失败，请稍后重试。'), 'warning');
@@ -1863,7 +2040,14 @@
       }
     }
 
-    /** 改写法（方案 §七「改别名」的词表侧）：只改 correct，不伪造一次确认。 */
+    /**
+     * 改写法：改"这个词要替换成什么"。两种行两种落点：
+     *   - 词表行：主进程 `applyAlignment` 改条目（`entry: null` = 没改成功，必须如实报）；
+     *   - 模型建议行：它不在词表里，改的是**这条建议的目标写法**——就地改本行，
+     *     勾选并生成清理版时按改后的写法替换（`checkedModelCandidates` 读的就是 row.correct），
+     *     那一刻主进程才会把这条确认过的写法记进词表。所以本地改就够了，不必写盘，
+     *     也不该报"已写入词表"。
+     */
     async function runRename(entryRef) {
       if (state.busy) return;
       const input = container.querySelector('#atc-rename-' + entryRef);
@@ -1872,13 +2056,38 @@
         setStatus(t('kb.transcriptCorrect.rename_need_value', '请填写新的写法。'), 'warning');
         return;
       }
+      const targetRow = state.rows.find((item) => item.entryRef === entryRef);
+      if (!isGlossaryRow(targetRow)) {
+        if (targetRow) targetRow.correct = correct;
+        state.renameOpen = '';
+        setStatus(t('kb.transcriptCorrect.rename_model_done', '已改为：{correct}（勾选并生成清理版时按这个写法替换）。', { correct }), '');
+        render();
+        return;
+      }
       state.busy = true;
       render();
       try {
-        await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        const result = await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        // 主进程找不到条目时返回 `entry: null`——**这不是成功**。此前不看回执就报
+        // "已改为：X"，用户对着没变的词表反复点（真机：更多 → 改写法"点了没用"）。
+        if (!result?.entry) {
+          state.renameOpen = '';
+          setStatus(t('kb.transcriptCorrect.rename_skipped', '这条不在词表里，改写法没有生效（模型建议要先勾选并生成清理版才会写进词表）。'), 'warning');
+          return;
+        }
         state.renameOpen = '';
+        // 就地更新这一行，**不整表重扫**：重扫会丢掉已勾选集合与刚生成的清理版
+        // （`runScan` 第一行就是 `if (state.busy) return`，此前带着 busy 调它等于没扫，
+        //  真机上就表现为"填了新写法、点了确定，列表还是旧的"）。
+        // 替换目标变了、错形没变 → span 仍然有效，只需要把显示数据对上。
+        const entry = result.entry;
+        const row = state.rows.find((item) => item.entryRef === entryRef);
+        if (row) {
+          row.correct = String(entry.correct || '');
+          if (entry.action === 'replace' || entry.action === 'delete') row.action = entry.action;
+          if (entry.riskLevel) row.riskLevel = entry.riskLevel;
+        }
         setStatus(t('kb.transcriptCorrect.rename_done', '已改为：{correct}', { correct }), '');
-        await runScan();
       } catch (error) {
         log?.warn('rename failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.rename_failed', '改写失败，请稍后重试。'), 'warning');
@@ -1918,10 +2127,12 @@
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
           return;
         }
-        setStatus(t('kb.transcriptCorrect.added', '已加入词表：{wrong} → {correct}', { wrong, correct }), '');
+        const added = t('kb.transcriptCorrect.added', '已加入词表：{wrong} → {correct}', { wrong, correct });
+        setStatus(added, '');
+        toast(added);
         if (wrongInput) wrongInput.value = '';
         if (correctInput) correctInput.value = '';
-        await runScan();
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('glossary upsert failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.add_failed', '加入词表失败，请稍后重试。'), 'warning');
@@ -2047,6 +2258,7 @@
       else if (kind === 'diff') void openDiffModal();
       else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
+      else if (kind === 'save-local') void runSaveLocal();
       else if (kind === 'add') void runAddEntry();
       else if (kind === 'seed-fillers') void runSeedFillers();
     }
@@ -2094,11 +2306,13 @@
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
+      isGlossaryRow,
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
       checkedModelCandidates,
       applySummary,
+      cleanedFileBaseName,
       cleanedFileName,
       nextCandidateName,
       classifySaveResult,
@@ -2115,11 +2329,13 @@
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
+      isGlossaryRow,
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
       checkedModelCandidates,
       applySummary,
+      cleanedFileBaseName,
       cleanedFileName,
       nextCandidateName,
       classifySaveResult,
