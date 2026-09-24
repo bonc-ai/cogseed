@@ -716,6 +716,27 @@
     return inline;
   }
 
+  /**
+   * 该文档已标注的场景标签。
+   *
+   * 为什么面板要读它：主进程 `scopeAllows` 判定"带场景作用域的词条能不能生效"时
+   * **只看 docId 与 scenarioTags**。此前渲染层从不传标签，于是带标签的词条恒被判
+   * `out_of_scope`——标签链路两头都是断的（写入端没有界面，读取端不传参）。
+   * 这里接上读取端；标签的**增删**仍走知识库自身的文档标注能力，本面板只读。
+   *
+   * 读不到不算错误：没有标签就等于"不按场景限制"，与升级前行为一致。
+   */
+  async function resolveCorrectionScenarioTags(docId) {
+    if (!docId) return [];
+    try {
+      const res = await root.cogseed.invoke('transcript.docTags.get', { docId });
+      return Array.isArray(res?.tags) ? res.tags.map(String).filter(Boolean) : [];
+    } catch (error) {
+      log?.warn('correction scenario tags read failed', { error: error?.message || String(error) });
+      return [];
+    }
+  }
+
   async function toggleCorrection() {
     if (correctionOpen) {
       destroyCorrection();
@@ -735,11 +756,15 @@
     }
     if (!modalIsOpen()) return;
     setStatus('', '');
+    const correctionDocId = String(activeAnchor?.path || activeResult?.displayPath || 'transcript');
+    const scenarioTags = await resolveCorrectionScenarioTags(correctionDocId);
+    if (!modalIsOpen()) return;
     try {
       activeCorrection = root.KbTranscriptCorrect.mount(panel, {
         text,
-        docId: String(activeAnchor?.path || activeResult?.displayPath || 'transcript'),
+        docId: correctionDocId,
         displayPath: String(activeResult?.displayPath || activeAnchor?.path || ''),
+        scenarioTags,
       });
       correctionOpen = true;
       element('.anchored-source-viewer')?.classList.add('is-correct-open');

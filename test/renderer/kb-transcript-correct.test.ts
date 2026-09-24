@@ -429,6 +429,11 @@ describe('locale 覆盖', () => {
     'headings_adopted', 'headings_count', 'headings_no_model', 'headings_too_short',
     'headings_none', 'panel_hint',
     'meta_full', 'save_duplicate_file',
+    // 2026-09-22 新增：多路召回来源 / 引例语境 / 场景标签
+    'row_from_fuzzy', 'row_from_fuzzy_hint', 'row_quoted_example', 'row_quoted_hint',
+    'channel_phonetic', 'channel_edit', 'channel_weak', 'channel_normalized',
+    'recall_found', 'recall_none', 'recall_overlap', 'recall_truncated', 'recall_unknown_channel',
+    'scene_tags', 'scene_tags_hint',
   ];
 
   for (const lang of locales) {
@@ -579,23 +584,36 @@ describe('查看器集成契约', () => {
     expect(viewer).toContain('destroyCorrection()');
   });
 
-  it('场景标签已整体删除（控件、归一函数、docTags 接线一并移除）', () => {
+  it('场景设置界面仍然不许回来（控件 / 归一函数 / 写入通道都不在面板里）', () => {
     expect(panelSrc).not.toContain('scenarioControlHtml');
     expect(panelSrc).not.toContain('normalizeScenarioTags');
-    expect(panelSrc).not.toContain('state.scenarioTags');
-    expect(panelSrc).not.toContain("invoke('transcript.docTags.get'");
     expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
     expect(panelSrc).not.toContain("invoke('transcript.docTags.suggest'");
-    // 建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId
+  });
+
+  /**
+   * 场景标签的**只读接线**（2026-09-22 收窄）。
+   *
+   * 原来这条守卫把"标签整体删除"冻成了四项 not.toContain，其中包括 `state.scenarioTags`
+   * 与 `docTags.get`。但主进程 `scopeAllows` 判定"带场景作用域的词条能不能生效"只看
+   * docId 与 scenarioTags——读这一端被禁掉，带标签的词条就**永远**判 out_of_scope
+   * （标签链路两头都断）。本轮只接**读**（用于 scan/apply 传参与界面上屏），
+   * **不恢复任何写入口**：控件、归一函数、`docTags.set/suggest` 仍由上面那条守卫钉死。
+   * 恢复"仅本场景"设置界面属于会议场景故事的范围，不在本轮。
+   */
+  it('场景标签只读接线：读取并传参，但不提供编辑入口', () => {
+    expect(panelSrc).toContain('state.scenarioTags');
+    expect(panelSrc).toContain("invoke('transcript.correct.scan'");
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,900}?scenarioTags: state\.scenarioTags/);
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.apply'[\s\S]{0,900}?scenarioTags: state\.scenarioTags/);
+    // 写入口仍然不许出现（与上一条守卫互为约束）
+    expect(panelSrc).not.toContain("invoke('transcript.docTags.set'");
+  });
+
+  it('建词条仍带创建上下文（护栏留在 upsertEntry）：手动入表这个调用点必须带 docId', () => {
     const upserts = [...panelSrc.matchAll(/transcript\.glossary\.upsert', \{\n([\s\S]{0,400}?)\n\s*\}\)/g)].map((m) => m[1]);
     expect(upserts).toHaveLength(1);
     for (const payload of upserts) expect(payload).toContain('docId: ctx.docId');
-    // 模型候选这条路已改走「并入扫描」：面板不再单独标待核（没有 flagCandidates 通道），
-    // 而是把 includeReview 交给 scan，模型建议并进同一个候选列表，仍带 docId 收窄作用域。
-    expect(panelSrc).not.toContain("invoke('transcript.correct.flagCandidates'");
-    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}?includeReview: state\.scanWithReview === true/);
-    // destroy() 必须仍然注销点击监听（场景输入监听一并删除后不要漏掉它）
-    expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 
   it('「检索对比」已删除（按钮、函数、状态与分支一并移除）', () => {
@@ -912,5 +930,111 @@ describe('语言切换（i18n-change）', () => {
     env.strings['kb.transcriptCorrect.title'] = '不该出现';
     env.fire();
     expect(title.textContent).toBe('Transcript correction');
+  });
+});
+
+/**
+ * 多路召回 / 引例语境 / 场景标签（2026-09-22）
+ *
+ * 这三件事都是"面板必须把依据讲清楚、且不得默认改动原文"的契约，所以做成源码级 + 纯函数级
+ * 双重钉子：
+ *   1. 纯函数：引例与模糊候选**绝不预勾**；`recallSummary` 把通道条数讲出来；
+ *   2. 源码契约：行上有来源徽标；扫描/应用都带 `scenarioTags`；查看器读文档场景标签；
+ *   3. panelHtml 里不再有历史残留的多余 `</details>`。
+ */
+describe('多路召回与引例语境（面板契约）', () => {
+  const bridge = panel as unknown as Record<string, (...args: unknown[]) => unknown>;
+
+  it('引例与模糊候选绝不预勾（默认勾选只认低风险词表命中）', () => {
+    const rows = [
+      { entryRef: 'g_a', riskLevel: 'low', ignoredCount: 0 },
+      { entryRef: 'g_quoted', riskLevel: 'low', ignoredCount: 0, quotedExample: true },
+      { entryRef: 'fuzzy_g_a_phonetic', riskLevel: 'medium', ignoredCount: 0, fromFuzzy: true },
+      { entryRef: 'model_0', riskLevel: 'medium', ignoredCount: 0, fromModel: true },
+      { entryRef: 'g_b', riskLevel: 'low', ignoredCount: 2 },
+    ];
+    const accepted = bridge.defaultAcceptedIds(rows) as string[];
+    expect(accepted).toEqual(['g_a']);
+  });
+
+  it('被勾选的模糊候选会随 apply 请求一起送出（否则勾了也不生效）', () => {
+    const rows = [
+      { entryRef: 'fuzzy_g_a_phonetic', fromFuzzy: true, wrong: 'cox', correct: 'Cogseed', spans: [{ start: 4, end: 7 }], context: '近似' },
+      { entryRef: 'fuzzy_g_a_edit', fromFuzzy: true, wrong: 'coxx', correct: 'Cogseed', spans: [{ start: 9, end: 13 }], context: '' },
+      { entryRef: 'g_a', wrong: 'coxy', correct: 'Cogseed', spans: [{ start: 0, end: 4 }] },
+    ];
+    const sent = bridge.checkedModelCandidates(rows, new Set(['fuzzy_g_a_edit', 'g_a'])) as Array<{ start: number; wrong: string }>;
+    expect(sent).toHaveLength(1);
+    expect(sent[0].wrong).toBe('coxx');
+  });
+
+  it('recallSummary 把各通道条数与去重数讲出来（"提升"要可见）', () => {
+    const text = String(bridge.recallSummary({
+      recalled: 5,
+      produced: 3,
+      skippedNormalized: 1,
+      skippedOverlap: 1,
+      truncated: true,
+      byChannel: { phonetic: 2, edit: 1 },
+      residualCount: 0,
+    }));
+    expect(text).toContain('3');
+    expect(text).toContain('音近 2');
+    expect(text).toContain('编辑距离 1');
+    // 截断必须可见（否则用户以为"就这么多"）
+    expect(text).toMatch(/上限/);
+    // 没有模糊候选时也要有明确说法，而不是空字符串
+    expect(String(bridge.recallSummary({ produced: 0, byChannel: {} }))).toMatch(/没有/);
+    expect(bridge.recallSummary(null)).toBe('');
+  });
+});
+
+describe('场景信息进链路（源码契约）', () => {
+  it('面板把 scenarioTags 传给 scan 与 apply（否则带场景作用域的词条恒 out_of_scope）', () => {
+    const scanCall = panelSrc.slice(panelSrc.indexOf("invoke('transcript.correct.scan'"));
+    expect(scanCall.slice(0, 900)).toContain('scenarioTags: state.scenarioTags');
+    const applyCall = panelSrc.slice(panelSrc.indexOf("invoke('transcript.correct.apply'"));
+    expect(applyCall.slice(0, 900)).toContain('scenarioTags: state.scenarioTags');
+  });
+
+  it('面板显示本次生效的场景标签（只读，走共享 uiTag）', () => {
+    expect(panelSrc).toContain('data-atc-tags');
+    expect(panelSrc).toContain('root.uiTag(');
+    expect(panelSrc).toContain('scene_tags_hint');
+  });
+
+  it('查看器在挂载纠错面板前读该文档的场景标签', () => {
+    // 单独读一次源码：`viewer` 是上面 describe 里的局部常量，这里不共享作用域
+    const viewerSrc = readSrc('renderer/modules/anchored-source-view.js');
+    expect(viewerSrc).toContain("invoke('transcript.docTags.get'");
+    expect(viewerSrc).toContain('scenarioTags,');
+    expect(viewerSrc).toContain('resolveCorrectionScenarioTags');
+  });
+
+  it('panelHtml 里 <details> 开闭配对（历史残留的多余闭合已修掉）', () => {
+    // 只看 panelHtml 那一段：模块里其它弹窗也有 details，全局计数会误判
+    const from = panelSrc.indexOf('function panelHtml()');
+    const to = panelSrc.indexOf('function createPanel(');
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    // 先剥掉整行注释：说明性注释里写一句示例标签（如本仓库其它文档那样）
+    // 会被当成真标记，造成"修好了反而红"的假警报——同一条教训见
+    // agents-rules-visibility 那条绊线测试的说明。
+    const html = panelSrc.slice(from, to)
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+    const open = (html.match(/<details/g) || []).length;
+    const close = (html.match(/<\/details>/g) || []).length;
+    expect(open).toBeGreaterThan(0);
+    expect(close).toBe(open);
+  });
+});
+
+describe('模型候选与监听契约（原本挂在场景标签那条守卫里，收窄后单独保留）', () => {
+  it('模型候选并入扫描（不再有独立待核通道），destroy 仍注销点击监听', () => {
+    expect(panelSrc).not.toContain("invoke('transcript.correct.flagCandidates'");
+    expect(panelSrc).toMatch(/invoke\('transcript\.correct\.scan'[\s\S]{0,400}?includeReview: state\.scanWithReview === true/);
+    expect(panelSrc).toMatch(/destroy\(\) \{\n\s+container\.removeEventListener\('click', onClick\);/);
   });
 });

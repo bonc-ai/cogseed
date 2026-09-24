@@ -4433,8 +4433,12 @@
   "cognition.inbox_processed_badge": "Decision log",
   "cognition.inbox_processed_hint": "Newest first; only settled decisions are shown",
   "agents": {},
-  "agent_modal": {"ext_cli_missing_label":"Agents not found on this machine"},
-  "agent": {"cli_missing_workbuddy":"codebuddy CLI not found. It ships inside WorkBuddy.app or under ~/.local/bin — no PATH registration needed; please confirm WorkBuddy is installed with its CLI component enabled."},
+  "agent_modal": {
+    "ext_cli_missing_label": "Agents not found on this machine"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "codebuddy CLI not found. It ships inside WorkBuddy.app or under ~/.local/bin — no PATH registration needed; please confirm WorkBuddy is installed with its CLI component enabled."
+  },
   "cognition.source_unavailable_label": "Source record unavailable",
   "cognition.source_deleted": "Source conversation deleted",
   "cognition.candidate_untitled": "Untitled candidate",
@@ -6850,7 +6854,6 @@
   "kb.workbench.more": "More",
   "kb.workbench.refresh": "Refresh",
   "kb.workbench.rename": "Rename",
-  "kb.workbench.delete_to_trash": "Move to trash",
   "kb.workbench.content": "Items",
   "kb.workbench.search_docs_placeholder": "Search documents…",
   "kb.workbench.sort": "Sort",
@@ -8634,5 +8637,20 @@
   "composer.model.effort_reset_notice": "The new model does not support the \"{level}\" thinking level; reverted to the default",
   "composer.members.entry_default_title": "CogSeed receives by default — click to choose members",
   "composer.members.out_of_scope": "Not in this space's scope — add it in the workspace config",
-  "composer.members.retained_hint": "Selected member — still removable"
+  "composer.members.retained_hint": "Selected member — still removable",
+  "kb.transcriptCorrect.row_from_fuzzy": "Near match",
+  "kb.transcriptCorrect.row_from_fuzzy_hint": "Approximate match ({channel}, similarity {score}). This wrong form is not in the glossary; it was inferred from a close surface form. Never pre-checked — review each one.",
+  "kb.transcriptCorrect.row_quoted_example": "Quoted form",
+  "kb.transcriptCorrect.row_quoted_hint": "“{marker}” appears nearby, so this passage discusses spelling itself — the form may be a quoted example. Not pre-checked; check it only if it really should change.",
+  "kb.transcriptCorrect.channel_phonetic": "phonetic",
+  "kb.transcriptCorrect.channel_edit": "edit distance",
+  "kb.transcriptCorrect.channel_weak": "weak",
+  "kb.transcriptCorrect.channel_normalized": "exact",
+  "kb.transcriptCorrect.recall_found": "; multi-channel recall added {count} ({channels})",
+  "kb.transcriptCorrect.recall_none": "; multi-channel recall found no additional near matches",
+  "kb.transcriptCorrect.recall_overlap": "; {count} duplicates of exact glossary hits were merged",
+  "kb.transcriptCorrect.recall_truncated": "; near-match candidates hit the cap, there may be more",
+  "kb.transcriptCorrect.recall_unknown_channel": "approximate",
+  "kb.transcriptCorrect.scene_tags": "Scene",
+  "kb.transcriptCorrect.scene_tags_hint": "Scene-scoped glossary entries only apply in these scenes; this scan used them for scope."
 }

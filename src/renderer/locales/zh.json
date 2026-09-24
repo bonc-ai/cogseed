@@ -4433,8 +4433,12 @@
   "cognition.inbox_processed_badge": "处理记录",
   "cognition.inbox_processed_hint": "按处理时间倒序，只显示已处理的决定",
   "agents": {},
-  "agent_modal": {"ext_cli_missing_label":"本机未找到的智能体"},
-  "agent": {"cli_missing_workbuddy":"未找到 codebuddy CLI。它通常随 WorkBuddy.app 内置或位于 ~/.local/bin（无需手动注册 PATH）；请确认已安装 WorkBuddy 并启用其 CLI 组件。"},
+  "agent_modal": {
+    "ext_cli_missing_label": "本机未找到的智能体"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "未找到 codebuddy CLI。它通常随 WorkBuddy.app 内置或位于 ~/.local/bin（无需手动注册 PATH）；请确认已安装 WorkBuddy 并启用其 CLI 组件。"
+  },
   "cognition.source_unavailable_label": "来源记录不可用",
   "cognition.source_deleted": "来源对话已删除",
   "cognition.candidate_untitled": "未命名候选",
@@ -6850,7 +6854,6 @@
   "kb.workbench.more": "更多",
   "kb.workbench.refresh": "刷新",
   "kb.workbench.rename": "重命名",
-  "kb.workbench.delete_to_trash": "删除到回收站",
   "kb.workbench.content": "内容",
   "kb.workbench.search_docs_placeholder": "搜索文档…",
   "kb.workbench.sort": "排序",
@@ -8634,5 +8637,20 @@
   "composer.model.effort_reset_notice": "新模型不支持「{level}」思考强度，已恢复默认",
   "composer.members.entry_default_title": "默认由 CogSeed 接收，点击选择成员",
   "composer.members.out_of_scope": "不在当前空间能力范围，可在工作空间配置中添加",
-  "composer.members.retained_hint": "已选成员，仍可取消"
+  "composer.members.retained_hint": "已选成员，仍可取消",
+  "kb.transcriptCorrect.row_from_fuzzy": "音近命中",
+  "kb.transcriptCorrect.row_from_fuzzy_hint": "近似命中（{channel}，相似度 {score}）：词表里没写过这个错形，是形态接近推出来的。默认不勾选，请逐条核对。",
+  "kb.transcriptCorrect.row_quoted_example": "引例",
+  "kb.transcriptCorrect.row_quoted_hint": "附近出现「{marker}」，说明这段在讨论写法本身，这一处可能是被举例的错形。默认不勾选；确认要改再勾。",
+  "kb.transcriptCorrect.channel_phonetic": "音近",
+  "kb.transcriptCorrect.channel_edit": "编辑距离",
+  "kb.transcriptCorrect.channel_weak": "弱匹配",
+  "kb.transcriptCorrect.channel_normalized": "精确",
+  "kb.transcriptCorrect.recall_found": "；多路召回补出 {count} 条（{channels}）",
+  "kb.transcriptCorrect.recall_none": "；多路召回没有补出新的近似命中",
+  "kb.transcriptCorrect.recall_overlap": "；{count} 条与词表精确命中重复，已合并",
+  "kb.transcriptCorrect.recall_truncated": "；近似候选已达上限，可能还有更多",
+  "kb.transcriptCorrect.recall_unknown_channel": "近似",
+  "kb.transcriptCorrect.scene_tags": "场景",
+  "kb.transcriptCorrect.scene_tags_hint": "带场景作用域的词条只在这些场景里生效；本次扫描用它判定范围。"
 }

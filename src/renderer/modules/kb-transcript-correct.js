@@ -61,6 +61,14 @@
         context: String(candidate.context || ''),
         // 来源：模型读正文给的建议（不是词表命中）。面板据此标来源、且永不预勾。
         fromModel: candidate.fromModel === true,
+        // 来源：多路召回（音近/编辑距离/弱通道）。同样永不预勾——它的 confidence < 1，
+        // 实测会把 cookie/id 这类普通词召回成产品名，自动替换就是静默事故。
+        fromFuzzy: candidate.fromFuzzy === true,
+        fuzzy: candidate.fuzzy && typeof candidate.fuzzy === 'object' ? candidate.fuzzy : null,
+        // 引例语境：这一处落在"讲拼写/识别/纠错本身"的句子里，很可能是被举例的错形。
+        // 降级处理——可见但**不预勾**（丢弃会让"引例段里真写错了"变成看不见的漏报）。
+        quotedExample: candidate.quotedExample === true,
+        quotedBy: String(candidate.quotedBy || ''),
         count: 0,
         spans: [],
       };
@@ -112,17 +120,24 @@
       // 模型建议**永不预勾**：它的风险等级虽然给的是 medium，但不能只靠这点兜底——
       // 一旦以后有人调整分级，模型判断就会被一键写进正文。
       .filter((row) => row.fromModel !== true)
+      // 模糊召回同理绝不预勾：confidence < 1，且实测有误召回（cookie→产品名）。
+      .filter((row) => row.fromFuzzy !== true)
+      // 引例语境绝不预勾：这段在讲拼写/识别本身，那处很可能是被举例的错形——
+      // 预勾就等于默认改写原文（真实事故：8 段引例被抹平）。仍可显式勾选。
+      .filter((row) => row.quotedExample !== true)
       .map((row) => row.entryRef);
   }
 
   /**
-   * 取出**被勾选**的模型建议，转成主进程 `apply` 需要的形状（纯函数）。
-   * 只取勾选的：没勾的一条都不该进正文，也不该被记进词表。
+   * 取出**被勾选**的、apply 时要随请求带过去的候选（纯函数）。
+   *
+   * 覆盖两类：模型建议（`model_*`）与模糊召回（`fuzzy_*`）。它们在主进程里都不是
+   * 词表条目，apply 必须按 span 逐字复核（主进程会做），所以只传勾选的。
    */
   function checkedModelCandidates(rows, acceptedIds) {
     const accepted = acceptedIds instanceof Set ? acceptedIds : new Set(acceptedIds || []);
     return (rows || [])
-      .filter((row) => row.fromModel === true && accepted.has(row.entryRef))
+      .filter((row) => (row.fromModel === true || row.fromFuzzy === true) && accepted.has(row.entryRef))
       .map((row) => ({
         start: Number(row.spans?.[0]?.start ?? 0),
         wrong: String(row.wrong || ''),
@@ -131,6 +146,47 @@
         reason: String(row.context || ''),
       }))
       .filter((item) => item.wrong && item.correct);
+  }
+
+  /**
+   * 多路召回结果的展示摘要（纯函数）：「音近 / 编辑距离 / 弱匹配各出了多少条、
+   * 有多少条与精确命中重复被去掉」。
+   *
+   * 为什么必须显示：接线前这一层**根本没跑**（只被离线脚本用），所以"召回率提升"
+   * 是本次改造的核心验收点之一。用户要能自己看见"这几条是从哪条通道来的"，
+   * 而不是只看到候选变多了。
+   */
+  function recallSummary(recall) {
+    if (!recall) return '';
+    const parts = [];
+    const byChannel = recall.byChannel && typeof recall.byChannel === 'object' ? recall.byChannel : {};
+    const produced = Number(recall.produced || 0);
+    const label = (channel, key, fallback) => {
+      const n = Number(byChannel[channel] || 0);
+      return n > 0 ? t(key, fallback, { count: n }) : '';
+    };
+    const chunks = [
+      label('phonetic', 'kb.transcriptCorrect.recall_phonetic', '音近 {count}'),
+      label('edit', 'kb.transcriptCorrect.recall_edit', '编辑距离 {count}'),
+      label('weak', 'kb.transcriptCorrect.recall_weak', '弱匹配 {count}'),
+    ].filter(Boolean);
+    if (produced > 0) {
+      parts.push(t('kb.transcriptCorrect.recall_found', '；多路召回补出 {count} 条（{channels}）', {
+        count: produced,
+        channels: chunks.join('、') || t('kb.transcriptCorrect.recall_unknown_channel', '近似'),
+      }));
+    } else {
+      parts.push(t('kb.transcriptCorrect.recall_none', '；多路召回没有补出新的近似命中'));
+    }
+    if (Number(recall.skippedOverlap || 0) > 0) {
+      parts.push(t('kb.transcriptCorrect.recall_overlap', '；{count} 条与词表精确命中重复，已合并', {
+        count: Number(recall.skippedOverlap || 0),
+      }));
+    }
+    if (recall.truncated === true) {
+      parts.push(t('kb.transcriptCorrect.recall_truncated', '；近似候选已达上限，可能还有更多'));
+    }
+    return parts.join('');
   }
 
   /**
@@ -391,6 +447,9 @@
       '    <div class="kb-atc__head-main">',
       '      <div class="kb-atc__title" data-atc-title></div>',
       '      <div class="kb-atc__meta" data-atc-meta title=""></div>',
+      // 场景标签行：带场景作用域的词条只有在标签命中时才生效（主进程 scopeAllows），
+      // 所以"这次用了哪些场景"必须可见——否则用户看到"某条词条没命中"无从解释。
+      '      <div class="kb-atc__tags" data-atc-tags hidden></div>',
       '      <div class="kb-atc__hint" data-atc-hint></div>',
       '    </div>',
       '    <div class="kb-atc__head-actions" data-atc-head-actions></div>',
@@ -400,7 +459,8 @@
       '  <div class="kb-atc__body" data-atc-body></div>',
       '  <div class="kb-atc__scope" data-atc-scope></div>',
       '  <div class="kb-atc__actions" data-atc-actions></div>',
-      '  </details>',
+      // 这里原本有一个多余的 `</details>`（没有对应开标签）：属于历史残留，
+      // 顺手修掉——本次要改 panelHtml，不该把坏标记带着走。
       '  <details class="kb-atc__sync" data-atc-sync>',
       '    <summary data-atc-sync-summary></summary>',
       '    <div class="kb-atc__sync-body" data-atc-sync-body></div>',
@@ -444,6 +504,13 @@
       scanWithReview: false,
       // 最近一次 AI 复核的元信息（段数/失败数/建议数），仅用于说明"读到哪了"
       review: null,
+      // 最近一次多路召回的元信息（各通道条数/去重数），用于说明"近似命中是从哪来的"
+      recall: null,
+      // 本文档的场景标签（来自 transcript.docTags.get；scan/apply 都要带上，
+      // 否则带场景作用域的词条恒 out_of_scope）
+      scenarioTags: Array.isArray(ctx?.scenarioTags) ? ctx.scenarioTags.map(String).filter(Boolean) : [],
+      // 主进程回显的"这次扫描实际用的标签"
+      scannedTags: [],
       rowMenu: '',
       allowOpen: '',
       allowDraft: '',
@@ -478,6 +545,34 @@
       return root.uiButton(options);
     }
 
+    /**
+     * 场景标签行：显示"这次纠错带了哪些场景"。
+     *
+     * 只读展示，不提供编辑入口——本轮范围是"把场景信息接进链路"，
+     * 标注的增删仍走知识库自身的文档标注能力（`transcript.docTags.set`），
+     * 恢复"仅本场景"设置界面属于会议场景故事的范围。
+     */
+    function renderTags() {
+      const host = q('[data-atc-tags]');
+      if (!host) return;
+      const tags = state.scannedTags.length ? state.scannedTags : state.scenarioTags;
+      if (!tags.length) {
+        host.hidden = true;
+        host.textContent = '';
+        return;
+      }
+      host.textContent = '';
+      host.appendChild(document.createTextNode(t('kb.transcriptCorrect.scene_tags', '场景')));
+      for (const tag of tags) {
+        host.insertAdjacentHTML('beforeend', root.uiTag({ label: String(tag) }));
+      }
+      host.title = t(
+        'kb.transcriptCorrect.scene_tags_hint',
+        '带场景作用域的词条只在这些场景里生效；本次扫描用它判定范围。',
+      );
+      host.hidden = false;
+    }
+
     function renderHead() {
       const title = q('[data-atc-title]');
       const meta = q('[data-atc-meta]');
@@ -504,6 +599,7 @@
           '只替换你词表里确认过的词；原文不会被改动，生成的清理版是另一份文件。',
         );
       }
+      renderTags();
       if (actions) {
         // 次级操作贴着标题行右侧，避免单独占一行（视觉反馈：纵向留白更省）。
         actions.innerHTML = button({
@@ -579,6 +675,36 @@
         src.className = 'kb-atc__badge kb-atc__badge--model';
         src.textContent = t('kb.transcriptCorrect.row_from_model', '模型建议');
         if (row.context) src.title = String(row.context);
+        main.appendChild(src);
+      }
+
+      if (row.fromFuzzy) {
+        // 多路召回命中：与「模型建议」同样是"依据弱、不预勾"，但来源不同，
+        // 必须分开标——否则用户无法判断"这条是词表规则还是近似猜测"。
+        const src = document.createElement('span');
+        src.className = 'kb-atc__badge kb-atc__badge--fuzzy';
+        const channel = String(row.fuzzy?.channel || '');
+        const similarity = Number(row.fuzzy?.similarity || 0);
+        src.textContent = t('kb.transcriptCorrect.row_from_fuzzy', '音近命中');
+        src.title = t(
+          'kb.transcriptCorrect.row_from_fuzzy_hint',
+          '近似命中（{channel}，相似度 {score}）：词表里没写过这个错形，是形态接近推出来的。默认不勾选，请逐条核对。',
+          { channel: t('kb.transcriptCorrect.channel_' + channel, channel || '近似'), score: similarity.toFixed(2) },
+        );
+        main.appendChild(src);
+      }
+
+      if (row.quotedExample) {
+        // 引例语境：这段在讲拼写/识别/纠错本身，那一处很可能是**被举例的错形**。
+        // 仍然可见可勾（用户可能确实要改），但默认不勾——真实事故里 8 段引例被整段抹平。
+        const src = document.createElement('span');
+        src.className = 'kb-atc__badge kb-atc__badge--quoted';
+        src.textContent = t('kb.transcriptCorrect.row_quoted_example', '引例');
+        src.title = t(
+          'kb.transcriptCorrect.row_quoted_hint',
+          '附近出现「{marker}」，说明这段在讨论写法本身，这一处可能是被举例的错形。默认不勾选；确认要改再勾。',
+          { marker: String(row.quotedBy || '') },
+        );
         main.appendChild(src);
       }
 
@@ -1265,8 +1391,11 @@
           includeDelete: true,
           // 「同时让模型读一遍」：模型建议会**并进同一个候选列表**（不是另开一套面板）
           includeReview: state.scanWithReview === true,
-          // 「仅本场景」的场景标签能力已随主线 #307 的界面收敛整体删除：
-          // 渲染层不再产生标签，故这里也不再向 scan 传标签字段。
+          // 场景标签：这是**唯一**决定"带场景作用域的词条能不能命中"的入参
+          // （主进程 scopeAllows 只看 docId / scenarioTags）。此前渲染层不传，
+          // 于是带标签的词条恒被判 out_of_scope、永远不命中——标签链路两头都是断的。
+          // 标签来自文档已保存的标注（transcript.docTags.get），本次不新增设置界面。
+          ...(state.scenarioTags.length ? { scenarioTags: state.scenarioTags } : {}),
         });
         state.rows = groupCandidates(result?.candidates);
         state.denied = Array.isArray(result?.denied) ? result.denied : [];
@@ -1282,9 +1411,12 @@
         const stats = summarizeRows(state.rows, state.accepted);
         state.truncated = Boolean(result?.stats?.truncated);
         state.review = result?.review ?? null;
-        const reviewNote = reviewSummary(state.review);
+        state.recall = result?.recall ?? null;
+        // 主进程回显的场景标签优先（它才是这次扫描真正用的那一份）
+        if (Array.isArray(result?.scenarioTags)) state.scannedTags = result.scenarioTags.map(String);
+        const reviewNote = reviewSummary(state.review) + recallSummary(state.recall);
         setStatus(stats.total === 0
-          ? reviewNote
+          ? (reviewNote || t('kb.transcriptCorrect.no_hits', '没有发现可替换的命中'))
           : (state.truncated
             ? t('kb.transcriptCorrect.scan_truncated', '扫描完成：{total} 条候选（已达上限，可能还有更多；建议先暂停部分词条）{review}', { total: stats.total, review: reviewNote })
             : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选{review}', { total: stats.total, review: reviewNote })), '');
@@ -1315,7 +1447,11 @@
           // 附记要能说清"这份清理版是从哪份转写来的"
           ...(ctx.displayPath ? { sourcePath: ctx.displayPath } : {}),
           acceptedIds: [...state.accepted],
-          // 模型建议是**本轮的临时候选**（没有词表条目），apply 时得跟着请求走；
+          // 场景标签必须与 scan 时一致：apply 会**重扫一遍**（不信任前端传来的坐标），
+          // 两次扫描的作用域判定不一致的话，会出现"扫出来能改、应用时被判 out_of_scope"
+          // 的静默不一致。
+          ...(state.scenarioTags.length ? { scenarioTags: state.scenarioTags } : {}),
+          // 模型建议 / 近似命中都是**本轮的临时候选**（没有词表条目），apply 时得跟着请求走；
           // 只传被勾选的那些——主进程还会按 span 逐字校验。
           ...(checkedModelCandidates(state.rows, state.accepted).length
             ? { models: checkedModelCandidates(state.rows, state.accepted) }
@@ -2097,6 +2233,7 @@
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
+      recallSummary,
       checkedModelCandidates,
       applySummary,
       cleanedFileName,
@@ -2118,6 +2255,7 @@
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
+      recallSummary,
       checkedModelCandidates,
       applySummary,
       cleanedFileName,
