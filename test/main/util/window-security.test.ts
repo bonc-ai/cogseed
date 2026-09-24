@@ -235,6 +235,12 @@ describe('window security baseline', () => {
       securityOrigin: 'file://',
       mediaType: 'audio',
     })).toBe(true);
+    expect(checkHandler(mainWebContents, 'media', 'file:///', {
+      isMainFrame: true,
+      requestingUrl: rendererUrl,
+      securityOrigin: 'file:///',
+      mediaType: 'audio',
+    })).toBe(true);
     expect(checkHandler(mainWebContents, 'clipboard-read', 'file://', {
       isMainFrame: true,
       requestingUrl: rendererUrl,
@@ -253,6 +259,15 @@ describe('window security baseline', () => {
     });
     expect(mediaCallback).toHaveBeenCalledExactlyOnceWith(true);
 
+    const canonicalMediaCallback = vi.fn();
+    requestHandler(mainWebContents, 'media', canonicalMediaCallback, {
+      isMainFrame: true,
+      requestingUrl: rendererUrl,
+      securityOrigin: 'file:///',
+      mediaTypes: ['audio'],
+    });
+    expect(canonicalMediaCallback).toHaveBeenCalledExactlyOnceWith(true);
+
     for (const permission of ['clipboard-read', 'clipboard-sanitized-write']) {
       const callback = vi.fn();
       requestHandler(mainWebContents, permission, callback, {
@@ -261,7 +276,7 @@ describe('window security baseline', () => {
       });
       expect(callback, permission).toHaveBeenCalledExactlyOnceWith(true);
     }
-    expect(observation).toEqual({ checkCount: 3, requestCount: 3 });
+    expect(observation).toEqual({ checkCount: 4, requestCount: 4 });
   });
 
   it('denies permission checks from inexact origins, URLs, frames, and web contents', () => {
@@ -278,7 +293,6 @@ describe('window security baseline', () => {
 
     for (const [webContents, permission, requestingOrigin, details] of [
       [mainWebContents, 'media', 'file://', { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'video' }],
-      [mainWebContents, 'media', 'file:///', { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'audio' }],
       [mainWebContents, 'media', null, { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'audio' }],
       [mainWebContents, 'media', 'https://evil.test', { isMainFrame: true, requestingUrl: 'https://evil.test/', mediaType: 'audio' }],
       [mainWebContents, 'media', 'chat-app://cid', { isMainFrame: true, requestingUrl: 'chat-app://cid/a/index.html', mediaType: 'audio' }],
@@ -307,7 +321,6 @@ describe('window security baseline', () => {
       [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: ['audio', 'video'] }],
       [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: [] }],
       [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, mediaTypes: ['audio'] }],
-      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file:///', mediaTypes: ['audio'] }],
       [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: null, mediaTypes: ['audio'] }],
       [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'https://evil.test', mediaTypes: ['audio'] }],
       [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'chat-app://cid', mediaTypes: ['audio'] }],
