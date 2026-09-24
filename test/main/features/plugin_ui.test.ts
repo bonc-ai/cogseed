@@ -218,11 +218,11 @@ describe('plugin_ui › runtime config store', () => {
     vi.stubGlobal('fetch', fetchMock);
     try {
       const res = await savePluginRuntimeConfig(TEST_UID, 'withui', {
-        server_url: 'https://cogseed-open.bonc.com.cn/edu',
+        server_url: 'https://hub.example.com/edu',
         api_key: 'k-edu',
       });
       expect(res.ok).toBe(true);
-      expect(urls[0]).toBe('https://cogseed-open.bonc.com.cn/edu/api/agent/whoami');
+      expect(urls[0]).toBe('https://hub.example.com/edu/api/agent/whoami');
     } finally {
       vi.unstubAllGlobals();
     }
