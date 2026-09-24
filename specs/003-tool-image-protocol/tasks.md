@@ -2,7 +2,7 @@
 
 ## Phase 1: Reproduction and Contract
 
-- [X] T001 Read MeshSeed attachment and inspect session, runner, and provider conversion paths
+- [X] T001 Read CogSeed attachment and inspect session, runner, and provider conversion paths
 - [X] T002 Add failing mixed image/text tool ordering tests in `src/core-agent/test/parallel-tools.test.ts`
 
 ## Phase 2: Implementation

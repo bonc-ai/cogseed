@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "1.0.2",
+  "version": "1.2.0",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "readme:check": "node scripts/check-readme-links.mjs",
+    "community:skills:check": "node scripts/check-community-skills.mjs",
     "tokens:check": "node scripts/check-design-tokens.mjs",
     "tokens:update": "node scripts/check-design-tokens.mjs --update",
     "test": "npm run test:js && npm run test:resources",
@@ -338,6 +339,6 @@
   "author": {
     "name": "BONC 东方国信",
     "email": "business@bonc.com.cn",
-    "url": "https://www.bonc.com.cn"
+    "url": "https://www.example.com"
   }
 }

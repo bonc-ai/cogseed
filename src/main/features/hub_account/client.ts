@@ -2,10 +2,17 @@
  * Minimal HTTP client for the CogSeed Hub account service.
  *
  * The Hub service is a separate backend (own domain / base URL), not the
- * marketplace API base. Development defaults to `http://localhost:3000`
- * (the Hub service dev server); production URL comes from the
- * `COGSEED_HUB_API_BASE` env override until the platform owner assigns a
- * public domain (then it can also be moved to remote config).
+ * marketplace API base. Base resolution precedence:
+ *   1. `COGSEED_HUB_API_BASE` env override (local integration),
+ *   2. the origin baked into the package at build time (`hubApiBase` in
+ *      `.build/build-info.json`, written by `scripts/write-build-info.cjs`),
+ *   3. channel default — `http://localhost:3000` for dev, the on-box test
+ *      service for packaged-dev, and the open-source placeholder for release.
+ *
+ * Step 2 is why a packaged release can reach the Hub at all: a double-clicked
+ * `.app` inherits no environment, and the source tree deliberately carries no
+ * real origin (open-source publication removed non-owned domains — see the #5
+ * blocker in `docs/release-scan-remediation-20260923.md`).
  *
  * Every endpoint returns the Hub envelope `{ ok: true, data }`; failures
  * throw `HubApiError` carrying the service error code (e.g.
@@ -13,6 +20,7 @@
  */
 import { createLogger } from '../../logger';
 import { resolveBuildIdentity } from '../../util/build-identity';
+import { normalizeHttpsOrigin } from '../../util/https-origin';
 import type {
   HubAccountMe,
   HubBindResult,
@@ -33,27 +41,32 @@ export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
 // 验收用 packaged-dev 包固定指向本机 Hub 测试服务；正式 release
 // 仍使用线上 HTTPS 地址，避免测试配置泄漏到发布通道。
 export const PACKAGED_DEV_HUB_API_BASE = 'http://127.0.0.1:4180';
-export const RELEASE_HUB_API_BASE = 'https://cogseed-open.bonc.com.cn';
+export const RELEASE_HUB_API_BASE = 'https://hub.example.com';
 
 /**
- * 按环境变量与构建通道解析 Hub 服务地址。
- * 优先级：COGSEED_HUB_API_BASE > COGSEED_HUB_API_BASE > 通道默认值。
+ * 按环境变量、构建期注入值与构建通道解析 Hub 服务地址。
+ * 优先级：`COGSEED_HUB_API_BASE` > 构建期注入值（release）> 通道默认值。
  * 纯函数，便于测试。
  */
-export function resolveHubApiBase(envOverride: string | undefined, channel: string): string {
+export function resolveHubApiBase(
+  envOverride: string | undefined,
+  channel: string,
+  packagedBase = '',
+): string {
   const env = envOverride?.trim();
   if (env) return env;
-  if (channel === 'release') return RELEASE_HUB_API_BASE;
+  if (channel === 'release') return normalizeHttpsOrigin(packagedBase) || RELEASE_HUB_API_BASE;
   if (channel === 'packaged-dev') return PACKAGED_DEV_HUB_API_BASE;
   return DEFAULT_HUB_API_BASE; // dev / unknown：本地联调默认 localhost
 }
 
-/** Resolve the Hub service base URL. `COGSEED_HUB_API_BASE` is preferred for
- * 联调，`COGSEED_HUB_API_BASE` is kept as the legacy override. */
+/** Resolve the Hub service base URL. `COGSEED_HUB_API_BASE` is the documented
+ *  local-integration override; packaged builds use the origin baked into
+ *  `.build/build-info.json` at package time. */
 export function hubApiBase(): string {
-  const env = process.env.COGSEED_HUB_API_BASE || process.env.COGSEED_HUB_API_BASE;
-  const { channel } = resolveBuildIdentity();
-  return resolveHubApiBase(env, channel);
+  const env = process.env.COGSEED_HUB_API_BASE;
+  const { channel, hubApiBase: packagedBase } = resolveBuildIdentity();
+  return resolveHubApiBase(env, channel, packagedBase);
 }
 
 export class HubApiError extends Error {

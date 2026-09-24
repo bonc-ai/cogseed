@@ -1,7 +1,11 @@
 # CogSeed Development Guide
 
-> **受众**：开发者 / 贡献者。用户入门请看 [README](../README.md)。
-> **本文档**：CogSeed 的架构、开发、测试与维护细节。
+English · [简体中文](./DEVELOPMENT.zh-CN.md)
+
+> **Audience**: Developers and contributors. For user onboarding, see the
+> [README](../README.md).
+> **Scope**: Architecture, development, testing, and maintenance details for
+> CogSeed.
 
 ## Table of Contents
 
@@ -12,7 +16,9 @@
 - [Data and Security](#data-and-security)
 - [Runtime and Dependencies](#runtime-and-dependencies)
 - [Repository Layout](#repository-layout)
+- [Development Setup](#development-setup)
 - [Development](#development)
+- [Packaging](#packaging)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -110,7 +116,11 @@ Assets can be paused, resumed, revised, or rolled back through the established C
     └── workspace selection and other machine-private state
 ```
 
-The `cloud` and `local` names describe synchronization eligibility, not public visibility. Cloud state remains user-private and is synchronized only when the configured hosted account and entitlement support it. Model credentials remain behind the local secret-storage facade.
+The `cloud` and `local` names describe synchronization eligibility, not public visibility or proof of an upload. This repository's open-source build does not integrate multi-device content synchronization. Sync-eligible state, including conversations, attachments, cognitive assets, and user configuration, stays on the machine in this build; caches, indexes, and device state belong to the machine-private domain.
+
+Hub login authorizes the account and binds the device, exchanging necessary account, installation, and device information with the account service. Login alone does not enable content synchronization. Builds that integrate hosted synchronization also depend on service configuration and account entitlements.
+
+Model and connector calls are separate from synchronization: task execution and candidate extraction may send necessary context to the service actually used. Model credentials are accessed through local credential storage and used for authentication; local CLIs manage their own login credentials. Hosted connector OAuth starts on the server, and the grants, tokens, and transport information received by the client are encrypted before storage.
 
 ### Security Controls
 
@@ -129,7 +139,7 @@ The `cloud` and `local` names describe synchronization eligibility, not public v
 
 | Component | Repository baseline | Purpose |
 |---|---|---|
-| Electron | `^41.7.1` | Desktop shell and main/renderer process boundary |
+| Electron | `^41.10.6` | Desktop shell and main/renderer process boundary |
 | TypeScript | `^6.0.3` | Main-process, feature, model, and test code |
 | Node.js runtime bundle | `24.17.0` | Node-based skills and packaged command execution |
 | Python runtime bundle | `3.12.13` | Python skills, package tooling, and resource tests |
@@ -157,16 +167,88 @@ Pinned runtime downloads are described and checksummed in `resources/runtime/man
 | `test/` | Main-process, renderer, resource, native, and cross-layer tests |
 | `scripts/` | Dependency preparation, diagnostics, packaging, audits, and verification tools |
 
+## Development Setup
+
+### Prerequisites
+
+CogSeed's primary development platforms are macOS and Windows. Use the native
+launcher for the host platform; WSL delegates to the Windows launcher so IME
+and desktop integration run in the Windows environment.
+
+Install these host tools before setting up the repository:
+
+- Git;
+- Node.js 24.x, matching the version used by CI;
+- npm 11.11.0, matching the `packageManager` field in `package.json`;
+- on macOS, Xcode Command Line Tools for native-module recovery or rebuilds;
+- on Windows, current PowerShell and the Visual C++ build tools when a native
+  dependency cannot use a prebuilt binary.
+
+The Node.js, Python, and uv versions listed under
+[Runtime and Dependencies](#runtime-and-dependencies) are application runtime
+assets. They do not replace the host Node.js installation used by normal npm
+development commands.
+
+### Install
+
+To try a release from source, use the version-specific commands in the [README](../README.md#run-from-source). For contribution development, clone your fork and create a branch from the latest `upstream/develop` as described in [CONTRIBUTING.md](../CONTRIBUTING.md), then run:
+
+```bash
+npm ci
+npm run test:resources:setup
+```
+
+Use `npm ci` for a reproducible install from `package-lock.json`. The
+`postinstall` step rebuilds native Electron modules and downloads the embedding
+and speech assets required by development and tests, so the first installation
+needs network access and can take several minutes. Do not commit downloaded or
+generated runtime output.
+
+### Run from source
+
+On macOS or Linux:
+
+```bash
+./run.sh
+```
+
+On Windows:
+
+```bat
+run.cmd
+```
+
+The launchers prepare dependencies, keep development data isolated to this
+worktree, and start Electron with the CogSeed development identity. API keys
+and provider credentials are optional until you exercise a feature that needs
+them; configure secrets in the application, never in repository files.
+
+Before changing code, confirm that the baseline is healthy:
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run readme:check
+```
+
 ## Development
 
 ### Common Commands
 
 | Command | Purpose |
 |---|---|
+| `./run.sh` | Launch the source application on macOS or Linux |
+| `run.cmd` | Launch the source application on Windows |
 | `npm run typecheck` | Run TypeScript checking without emitting files |
+| `npm run lint` | Run static checks for source, tests, and scripts |
 | `npm test` | Run JavaScript and resource test suites with native ABI management |
+| `npm run test:js -- <file>` | Run one JavaScript/TypeScript test file through the repository runner |
+| `npm run test:resources` | Run the Python resource tests |
 | `npm run test:coverage` | Run the JavaScript suite with coverage |
 | `npm run test:platform-native` | Run platform-native verification |
+| `npm run readme:check` | Validate local README links and bundled assets |
+| `npm run tokens:check` | Verify Renderer design-token invariants |
 | `npm run runtime:ensure` | Verify or prepare the pinned runtime bundle |
 | `npm run builtin:manifest:check` | Verify the built-in marketplace manifest |
 | `npm run audit:workspace` | Audit the local workspace layout and invariants |
@@ -175,7 +257,26 @@ Pinned runtime downloads are described and checksummed in `resources/runtime/man
 | `npm run rebuild:pty:electron` | Repair the Electron node-pty native ABI |
 | `scripts/restart-cogseed.sh` | Restart only this worktree's CogSeed runtime |
 
-Use `npm test` rather than invoking Vitest directly. The repository test runner manages Electron and Node native SQLite ABI switching and recovery.
+Use `npm test` rather than invoking Vitest directly. The repository test runner
+manages Electron and Node native SQLite ABI switching and recovery. Use
+`npm run test:js -- test/path/file.test.ts` for a focused JavaScript or
+TypeScript test; `npm test -- <file>` does not target the composed JavaScript
+and resource suites reliably.
+
+### Pull Request Verification
+
+Pull requests targeting `develop` run three required checks:
+
+- `check-commit-emails` validates the complete commit record;
+- `static-gates` runs typecheck, lint, design-token, built-in manifest, README,
+  and skipped-test checks;
+- `affected-tests` selects relevant tests through the module dependency graph.
+
+Windows test shards also run on the pull request. They currently report real
+failures without acting as required status checks, so investigate and explain
+any red shard before merge. After a change lands on `develop`, the nightly
+workflow runs the full suite for that exact branch tip. Promotion to `cicd`
+runs the complete release verification and compliance gates.
 
 ### Development Rules
 
@@ -186,6 +287,37 @@ Use `npm test` rather than invoking Vitest directly. The repository test runner 
 - Register boot-time asynchronous work through `util/boot_init.ts`.
 - Add new Core Agent tools to the central catalog and runner wiring.
 - Run `npm run typecheck` after merges that touch renderer-to-main IPC contracts.
+
+## Packaging
+
+Packaging is platform-specific. A locally built artifact is development or
+test evidence; it is not an official release unless the signed release
+workflow has completed.
+
+### macOS development application
+
+Create an unsigned, directly runnable development app and verify its packaged
+runtime:
+
+```bash
+npm run package:dev:mac
+npm run verify:package:dev:mac
+```
+
+The app is written below `dist-dev/`. For real-environment verification after
+code changes, restart only this worktree with:
+
+```bash
+scripts/restart-cogseed.sh
+```
+
+### Release-oriented builds
+
+The repository exposes `npm run build:mac` and `npm run build:win` for
+platform build diagnostics. Official release artifacts are produced through
+the protected `cicd` and tag-triggered GitHub workflows, which enforce the
+required verification, signing, compliance, and release gates. Do not present
+a local build as signed, notarized, accepted, or released.
 
 ## Troubleshooting
 

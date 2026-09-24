@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "id": "replace-with-positive-case-id",
+      "kind": "positive",
+      "input": "请填写应该触发 Skill 的真实用户请求",
+      "expected": "请填写可判定的预期行为"
+    },
+    {
+      "id": "replace-with-negative-case-id",
+      "kind": "negative",
+      "input": "请填写不应该触发或必须拒绝的真实用户请求",
+      "expected": "请填写预期的拒绝、转交或澄清行为"
+    }
+  ]
+}
