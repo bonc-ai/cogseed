@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "1.0.2",
+  "version": "1.2.0",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -339,6 +339,6 @@
   "author": {
     "name": "BONC 东方国信",
     "email": "business@bonc.com.cn",
-    "url": "https://www.bonc.com.cn"
+    "url": "https://www.example.com"
   }
 }

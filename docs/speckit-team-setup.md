@@ -80,14 +80,14 @@ specify workflow run ai-product-lifecycle \
 后续使用 `specify workflow resume <run-id>`。Gate 决定不替代工具权限和发布授权。
 首要不确定性由 route 后的 review-route Gate 选择，并非 workflow 的输入参数。
 
-## MeshSeed 协作
+## 任务系统协作
 
-需要任务联动时，每人单独准备 OpenCLI、`meshseed-tasks` Skill 及已登录的 Chrome。
-执行该 Skill 的适配器检查，确认 `in_sync` 后再读取任务正文及全部评论。
+需要与外部任务系统联动时，每人单独准备对应 CLI/Skill 及已登录的工作浏览器。
+执行任务适配器检查，确认同步状态正常后再读取任务正文及全部评论。
 任务编号必须写入规格；空描述、未知验收边界不能补写为事实。
-业务验证遵循本仓库命令，不照搬 Hub 的 pnpm/数据库命令。
-提交与回写结果按当前任务授权和 MeshSeed Skill 的预览、执行、回读规则进行。
-本次接入不包含全局 MeshSeed 工具、登录信息或远程写入。
+业务验证遵循本仓库命令，不照搬外部 Hub 的包管理或数据库命令。
+提交与回写结果按当前任务授权及所用 Skill 的预览、执行、回读规则进行。
+本次接入不包含全局外部任务工具、登录信息或远程写入凭证。
 
 ## 维护与共享
 

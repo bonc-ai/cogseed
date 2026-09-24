@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-23
+
+### Changed
+
+- **发版扫描隐私清理** — 清除旧产品名残留与内部汇报/台账材料；规格文档中的
+  内部证据标题与示例人名脱敏；补充 RFC1918/合成地址扫描豁免说明与整改矩阵
+  （见 `docs/release-scan-remediation-20260923.md`）。正式安装包与 `v1.2.0` tag
+  仍由发布流水线在门禁绿后创建。
+
 ### Fixed
 
 - **知识库问答回答正文的引用：从"删掉"改为"可点 chip"** — 正文里被模型标注的
@@ -34,6 +43,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - **「📝 生成测验」入口** — 该入口接线到不存在的 `_renderQuiz`，点击抛
   `ReferenceError` 且无任何 UI 反馈；本期不交付测验，故收敛 AI 解析卡上的
   该入口。恢复需先补主进程 `kb.quiz` 与渲染层实现。
+
 ## [1.0.2] - 2026-09-10
 ### Security
 

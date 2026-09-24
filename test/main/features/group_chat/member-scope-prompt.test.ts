@@ -94,17 +94,6 @@ describe('member scope › 谁能看到范围', () => {
     })).toBe('');
   });
 
-  it('顺序意图写进范围块，方向沿用点名顺序', () => {
-    const block = buildMemberScopeBlock({
-      template: TEMPLATE,
-      msg: msg({ ...snapshot, requires_sequential: true, mention_order: ['agent-task-2', 'agent-codex-1'] }),
-      recipientId: 'commander',
-      isExternal: false,
-      nameOf: names,
-    });
-    expect(block).toContain('Sequential requirement');
-    expect(block).toContain('集成验证Agent → Codex');
-  });
 
   it('无点名时明确告知「没有点名对象」（而不是留空让人猜）', () => {
     const block = buildMemberScopeBlock({
@@ -160,67 +149,84 @@ describe('member scope › prompt 源文件约定', () => {
   });
 });
 
-describe('member scope › 顺序强约束校验（设计 §4.4）', () => {
+describe('member scope › 顺序约束只来自任务分工（PRD FR-017；验收报告 MA-03）', () => {
   const steps = (list: Array<[string, string, string[]]>) => list.map(([step_id, agent_id, depends_on]) => ({
     step_id, agent_id, depends_on,
   }));
 
-  it('未命中顺序意图 / 单成员时不校验（保持并行现状）', () => {
-    expect(verifySequentialPlan({ requiresSequential: false, mentionOrder: ['a', 'b'], steps: [] }).ok).toBe(true);
-    expect(verifySequentialPlan({
-      requiresSequential: true, mentionOrder: ['a'], steps: steps([['s1', 'a', []]]),
+  it('未命中顺序意图时不校验（保持并行现状）', () => {
+    expect(verifySequentialPlan({ requiresSequential: false, requiredAgentIds: ['a', 'b'], steps: [] }).ok).toBe(true);
+  });
+
+  it('点名排列与任务要求的先后相反时，任务要求的首位不被拦截（MA-03 隔离复现）', () => {
+    // 真机/隔离复现：依次选 A、B，正文为「先让 B 生成方案，再让 A 验证」。
+    // 旧实现按点名顺序强制 A→B，回 missing_dependency: b<-a；顺序只能来自任务分工。
+    expect(verifySequentialStepStart({
+      requiresSequential: true,
+      steps: [],
+      stepToStart: { step_id: 's-b', agent_id: 'b', depends_on: [] },
+    }).ok).toBe(true);
+    // 反过来 A 依赖 B 也自洽。
+    expect(verifySequentialStepStart({
+      requiresSequential: true,
+      steps: steps([['s-b', 'b', []]]),
+      stepToStart: { step_id: 's-a', agent_id: 'a', depends_on: ['s-b'] },
     }).ok).toBe(true);
   });
 
-  it('依赖方向与点名顺序一致＝通过（含链式多步）', () => {
-    const verdict = verifySequentialPlan({
+  it('并行派发不再被拦（顺序不由选择/点名排列推导）', () => {
+    expect(verifySequentialPlan({
       requiresSequential: true,
-      mentionOrder: ['a', 'b', 'c'],
-      steps: steps([['s1', 'a', []], ['s2', 'b', ['s1']], ['s3', 'c', ['s2']]]),
-    });
-    expect(verdict.ok).toBe(true);
-  });
-
-  it('并行派发（缺依赖）被拦，并说明是谁缺依赖', () => {
-    const verdict = verifySequentialPlan({
-      requiresSequential: true,
-      mentionOrder: ['a', 'b'],
+      requiredAgentIds: ['a', 'b'],
       steps: steps([['s1', 'a', []], ['s2', 'b', []]]),
-    });
-    expect(verdict).toMatchObject({ ok: false, reason: 'missing_dependency', detail: 'b<-a' });
-    expect(sequentialViolationMessage(verdict, ['a', 'b'])).toContain('不要并行派发');
+    }).ok).toBe(true);
+    expect(verifySequentialStepStart({
+      requiresSequential: true,
+      steps: steps([['s1', 'a', []]]),
+      stepToStart: { step_id: 's2', agent_id: 'b', depends_on: [] },
+    }).ok).toBe(true);
   });
 
-  it('被点名成员没被派发＝missing_member', () => {
+  it('被点名成员没有被派发＝missing_member（不静默忽略本条点名）', () => {
     const verdict = verifySequentialPlan({
       requiresSequential: true,
-      mentionOrder: ['a', 'b'],
+      requiredAgentIds: ['a', 'b'],
       steps: steps([['s1', 'a', []]]),
     });
     expect(verdict).toMatchObject({ ok: false, reason: 'missing_member', detail: 'b' });
+    expect(sequentialViolationMessage(verdict)).toContain('b');
   });
 
-  it('依赖方向反了＝wrong_order（后一步被前一步依赖）', () => {
-    const verdict = verifySequentialPlan({
+  it('依赖成环被拦（与谁先谁后无关的一致性错误）', () => {
+    expect(verifySequentialPlan({
       requiresSequential: true,
-      mentionOrder: ['a', 'b'],
-      steps: steps([['s1', 'a', ['s2']], ['s2', 'b', []]]),
-    });
-    expect(verdict).toMatchObject({ ok: false, reason: 'wrong_order' });
-  });
-
-  it('依赖成环被拦', () => {
-    const verdict = verifySequentialPlan({
-      requiresSequential: true,
-      mentionOrder: ['a', 'b'],
+      requiredAgentIds: ['a', 'b'],
       steps: steps([['s1', 'a', ['s2']], ['s2', 'b', ['s1']]]),
-    });
-    expect(verdict.ok).toBe(false);
-    expect(['cycle', 'wrong_order']).toContain((verdict as { reason: string }).reason);
+    })).toMatchObject({ ok: false, reason: 'cycle' });
+    expect(verifySequentialStepStart({
+      requiresSequential: true,
+      steps: steps([['s1', 'a', ['s2']], ['s2', 'b', ['s1']]]),
+      stepToStart: { step_id: 's1', agent_id: 'a', depends_on: ['s2'] },
+    })).toMatchObject({ ok: false, reason: 'cycle' });
   });
 
   it('通过时不产出纠正文案', () => {
-    expect(sequentialViolationMessage({ ok: true }, ['a', 'b'])).toBe('');
+    expect(sequentialViolationMessage({ ok: true })).toBe('');
+  });
+});
+
+describe('member scope › 范围块给依赖指引（不把选择顺序当执行顺序）', () => {
+  it('顺序意图下要求按任务描述声明依赖，且不出现由点名顺序推导的箭头', () => {
+    const block = buildMemberScopeBlock({
+      template: TEMPLATE,
+      msg: msg({ ...snapshot, requires_sequential: true, mention_order: ['agent-task-2', 'agent-codex-1'] }),
+      recipientId: 'commander',
+      isExternal: false,
+      nameOf: names,
+    });
+    expect(block).toContain('Sequential requirement');
+    expect(block).not.toContain('集成验证Agent → Codex');
+    expect(block).toContain('task description');
   });
 });
 
@@ -237,61 +243,25 @@ describe('member scope › 顺序协作转交协调者（决策 A）', () => {
   });
 });
 
-describe('member scope › 逐步启动校验（复盘 21:34 误拦后）', () => {
+describe('member scope › 步骤启动边界（与顺序来源无关）', () => {
   const steps = (list: Array<[string, string, string[]]>) => list.map(([step_id, agent_id, depends_on]) => ({
     step_id, agent_id, depends_on,
   }));
-  const start = (o: { order: string[]; steps: ReturnType<typeof steps>; step: [string, string, string[]]; seq?: boolean }) =>
+  const start = (o: { steps: ReturnType<typeof steps>; step: [string, string, string[]]; seq?: boolean }) =>
     verifySequentialStepStart({
       requiresSequential: o.seq ?? true,
-      mentionOrder: o.order,
       steps: o.steps,
       stepToStart: steps([o.step])[0],
     });
 
-  it('首位成员放行（哪怕后序成员还没计划）——修 21:34 误拦', () => {
-    expect(start({ order: ['a', 'b'], steps: steps([['s1', 'a', []]]), step: ['s1', 'a', []] }).ok).toBe(true);
-    expect(start({ order: ['a', 'b'], steps: [], step: ['s1', 'b', []] }).ok).toBe(false); // 第二位在前序没派发时仍要拦
+  it('非顺序运行 / 无依赖步骤：一律放行（不论点名位次）', () => {
+    expect(start({ seq: false, steps: [], step: ['s1', 'b', []] }).ok).toBe(true);
+    expect(start({ steps: [], step: ['s1', 'b', []] }).ok).toBe(true);
+    expect(start({ steps: steps([['s0', 'a', []]]), step: ['s1', 'b', []] }).ok).toBe(true);
   });
 
-  it('非首位成员：前序步骤存在且被依赖 → 放行', () => {
-    expect(start({
-      order: ['a', 'b'],
-      steps: steps([['s1', 'a', []], ['s2', 'b', ['s1']]]),
-      step: ['s2', 'b', ['s1']],
-    }).ok).toBe(true);
-    // 间接依赖也算
-    expect(start({
-      order: ['a', 'b', 'c'],
-      steps: steps([['s1', 'a', []], ['s2', 'b', ['s1']], ['s3', 'c', ['s2']]]),
-      step: ['s3', 'c', ['s2']],
-    }).ok).toBe(true);
-  });
-
-  it('缺前序 / 缺依赖 → 拦下并说明', () => {
-    const v1 = start({ order: ['a', 'b'], steps: steps([['s1', 'a', []]]), step: ['s2', 'b', []] });
-    expect(v1).toMatchObject({ ok: false, reason: 'missing_dependency' });
-    const v2 = start({ order: ['a', 'b'], steps: steps([['s1', 'a', []], ['s2', 'b', []]]), step: ['s2', 'b', []] });
-    expect(v2).toMatchObject({ ok: false, reason: 'missing_dependency' });
-  });
-
-  it('依赖了更靠后的成员且其步骤已存在（顺序打乱）→ wrong_order', () => {
-    const v = start({
-      order: ['a', 'b'],
-      steps: steps([['s1', 'a', ['s2']], ['s2', 'b', []]]),
-      step: ['s1', 'a', ['s2']],
-    });
-    expect(v).toMatchObject({ ok: false, reason: 'wrong_order' });
-  });
-
-  it('依赖了更靠后的成员但其步骤尚不存在（只是还没开始）→ 不判打乱', () => {
-    // 前序在启动时带有对后序的依赖声明，但后序步骤对象还没建——不拦。
-    expect(start({ order: ['b', 'a'], steps: steps([['sX', 'b', ['sY']]]), step: ['sX', 'b', ['sY']] }).ok).toBe(true);
-  });
-
-  it('非顺序运行 / 单点名 / 名单外成员 → 一律放行', () => {
-    expect(start({ seq: false, order: ['a', 'b'], steps: [], step: ['s1', 'b', []] }).ok).toBe(true);
-    expect(start({ order: ['a'], steps: [], step: ['s1', 'b', []] }).ok).toBe(true);
-    expect(start({ order: ['a', 'b'], steps: [], step: ['s1', 'x', []] }).ok).toBe(true); // 未点名成员
+  it('依赖尚未建立的步骤不判环（前序还没开始是正常状态）', () => {
+    expect(start({ steps: [], step: ['s2', 'b', ['s1']] }).ok).toBe(true);
+    expect(start({ steps: steps([['s1', 'a', []]]), step: ['s2', 'b', ['s1']] }).ok).toBe(true);
   });
 });

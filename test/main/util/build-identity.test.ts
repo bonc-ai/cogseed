@@ -22,7 +22,13 @@ describe('build identity', () => {
       packagedInfoPath: '/pack/build-info.json',
       readFile: () => JSON.stringify({ channel: 'release', commit: 'ignored' }),
     });
-    expect(identity).toEqual({ channel: 'dev', commit: 'abcdef123456', dirty: true, builtAt: '2026-07-30T10:00:00.000Z' });
+    expect(identity).toEqual({
+      channel: 'dev',
+      commit: 'abcdef123456',
+      dirty: true,
+      builtAt: '2026-07-30T10:00:00.000Z',
+      hubApiBase: '',
+    });
     expect(formatBuildIdentityLabel('2026.7.21', identity)).toBe('v2026.7.21 · dev · abcdef1-dirty');
   });
 
@@ -38,11 +44,38 @@ describe('build identity', () => {
 
   it('degrades malformed or missing metadata to unknown without throwing', () => {
     expect(resolveBuildIdentity({ env: {}, packagedInfoPath: '/bad', readFile: () => '{bad' })).toEqual({
-      channel: 'unknown', commit: '', dirty: null, builtAt: '',
+      channel: 'unknown', commit: '', dirty: null, builtAt: '', hubApiBase: '',
     });
     expect(resolveBuildIdentity({ env: {}, packagedInfoPath: '/missing', readFile: () => { throw new Error('missing'); } })).toEqual({
-      channel: 'unknown', commit: '', dirty: null, builtAt: '',
+      channel: 'unknown', commit: '', dirty: null, builtAt: '', hubApiBase: '',
     });
+  });
+
+  it('reads the build-time injected service origin from packaged build-info', () => {
+    // 源码树只带开源占位符；真实地址由打包环节写进 build-info.json，
+    // 这是打包产物拿到服务地址的唯一通道（双击启动的 .app 不继承环境变量）。
+    const identity = resolveBuildIdentity({
+      env: {},
+      packagedInfoPath: '/pack/build-info.json',
+      readFile: () => JSON.stringify({
+        channel: 'release',
+        commit: '242541ba27f0',
+        builtAt: '2026-07-30T11:00:00.000Z',
+        hubApiBase: 'https://hub.example.test',
+      }),
+    });
+    expect(identity.hubApiBase).toBe('https://hub.example.test');
+  });
+
+  it('reports an empty injected origin when the build carried none', () => {
+    // 源码运行（run.sh 导出了 COGSEED_BUILD_*）时不存在注入值，
+    // 调用方应回落到各自的通道默认值。
+    const identity = resolveBuildIdentity({
+      env: { COGSEED_BUILD_CHANNEL: 'dev' },
+      packagedInfoPath: '/pack/build-info.json',
+      readFile: () => JSON.stringify({ channel: 'release', hubApiBase: 'https://hub.example.test' }),
+    });
+    expect(identity.hubApiBase).toBe('');
   });
 
   it('falls back to the packaged package.json cogseedBuildChannel when build-info is absent (self-built bundles)', () => {

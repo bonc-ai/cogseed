@@ -293,4 +293,43 @@ describe('P3394 gateway turn runner', () => {
     const [, , , noRefs] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { references?: unknown[] }];
     expect(noRefs?.references).toBeUndefined();
   });
+
+  // MA-01（验收报告 P1）：网关把 CLI/运行时异常包装成**普通回信**
+  // `[p3394_gateway_error] <detail>`（p3394-gateway/gateway.cjs 的 postReply）。
+  // 不识别它就会走成功路径 → actor done、produced.messages=1 → 汇总计入贡献、
+  // missing 为空、整体「全部完成」。真机复现：Codex 模型版本不兼容报错，同屏却
+  // 显示 Codex「已完成」「1 项产出」「全部完成」。
+  it('maps a gateway error reply to an explicit failure instead of a successful turn', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    hub.sendAndWait.mockResolvedValue({ text: '[p3394_gateway_error] Unexpected model version: gpt-5 is not available' });
+
+    const processes: Array<{ type: string; text: string }> = [];
+    const result = await runP3394GatewayTurn({ ...baseInput, onProcess: (event) => { processes.push(event as never); } });
+
+    expect(result.text).toBe('');
+    expect(result.error).toContain('Unexpected model version');
+    expect(result.failureCode).toBe('p3394_gateway_error');
+    expect(result.failureKind).toBe('runtime');
+    expect(result.infrastructureFailure).toBe(true);
+    // 错误信不是成果：不得作为 delta/final 正文落地。
+    expect(processes.filter((e) => e.type === 'delta' || e.type === 'final')).toHaveLength(0);
+  });
+
+  it('detects the gateway error reply when the gateway prefixes it with whitespace', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    hub.sendAndWait.mockResolvedValue({ text: '\n  [p3394_gateway_error] spawn workbuddy ENOENT workbuddy' });
+    const result = await runP3394GatewayTurn({ ...baseInput });
+    expect(result.failureCode).toBe('p3394_gateway_error');
+    expect(result.error).toContain('ENOENT');
+    expect(result.text).toBe('');
+  });
+
+  it('does not treat a reply that merely mentions the marker as a failure', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // look-alike：agent 在正文里讨论这条协议（标记不在开头）→ 仍是正常回复。
+    hub.sendAndWait.mockResolvedValue({ text: '网关失败时会回一条 [p3394_gateway_error] 前缀的错误信，我已按这个约定处理。' });
+    const result = await runP3394GatewayTurn({ ...baseInput });
+    expect(result.error).toBeUndefined();
+    expect(result.text).toContain('[p3394_gateway_error]');
+  });
 });

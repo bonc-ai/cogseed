@@ -8539,8 +8539,6 @@
   "chat.run_summary.retry": "Retry unfinished members",
   "chat.run_summary.retry_started": "Retrying unfinished members",
   "chat.run_summary.retry_failed": "Retry failed: {reason}",
-  "chat.run_member_removed": "Stopped and removed this member's current work",
-  "chat.run_member_remove_failed": "Could not stop this member: {reason}",
   "chat.run_summary.reason.runtime_failed": "Execution failed",
   "chat.run_summary.reason.no_contribution": "No deliverable was produced",
   "chat.run_summary.reason.no_terminal": "No terminal result",
