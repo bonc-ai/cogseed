@@ -28,6 +28,14 @@
  */
 
 import { editDistance } from './transcript_recall';
+/**
+ * "引例语境"标记已抽到 `transcript_quote_context`（**单一事实源**）：
+ *   同一条规则要同时作用于**语句重建层**（本文件，文档级：来源在举例、产出里原始错形
+ *   全丢 → `quoted_form_flattened`）与**扫描通道**（`transcript_auto_correct`，命中窗口级：
+ *   引例不预勾）。两处各写一份必然漂移（一个认定引例、另一个照改），故共用一份列表。
+ *   事故依据（2026-09-16 复核）见该模块头注释——"引例保留、实际指称纠正"。
+ */
+import { hasQuoteMarker } from './transcript_quote_context';
 
 /** 保留率下限：低于此值判"过度改写"（对齐 `OVER_REWRITE_THRESHOLD`）。 */
 export const REWRITE_MIN_RETENTION = 0.35;
@@ -46,17 +54,6 @@ export const REWRITE_MAX_PARAGRAPH_CHARS = 1200;
  * 当时靠 `low_similarity` + `new_entity` 间接抓到；这里补一条**直接的**判定，
  * 让这种失败模式有自己的名字（诊断比"相似度低"可行动得多）。
  */
-/**
- * "引例语境"标记：出现这些词说明发言人在**讲拼写/识别/纠错这件事本身**，
- * 那么其中的错写形态是**例子**，必须原样保留。
- * 依据（2026-09-16 复核）：实测 8 段被抹平，其中"一会儿叫 coxy，一会儿叫别的"
- * 被改成"一会儿叫 Cogseed"、"词汇表应该有 coxy"被改成"应该有 Cogseed"，语义完全破坏。
- * 人工清理版对此有明确规则："引例保留、实际指称纠正"。
- */
-const QUOTE_MARKERS = [
-  '会变成', '识别成', '识别错', '识别不准', '错误形式', '错形', '拼写', '写成',
-  '一会儿叫', '这个词', '词汇表', '纠错', '纠正', '转录里', '转写里', '搞错', '叫错',
-];
 const NARRATION_VERBS = [
   '说', '询问', '问', '答', '回答', '确认', '指出', '认为', '提到', '提出', '表示',
   '建议', '要求', '同意', '补充', '强调', '回应', '解释', '承认',
@@ -493,7 +490,7 @@ export function verifyRewrite(
 
     // ⑩ 引例被抹平检测：来源在举例说明错形，产出却把它改成了规范形
     if (options.canonicalForms?.length) {
-      const sourceIsQuoting = QUOTE_MARKERS.some((m) => sourceText.includes(m))
+      const sourceIsQuoting = hasQuoteMarker(sourceText)
         && (options.canonicalForms ?? []).some((g) =>
           (g.forms ?? []).some((f) => f && f.length > 2 && sourceText.toLowerCase().includes(f.toLowerCase())));
       if (sourceIsQuoting) {

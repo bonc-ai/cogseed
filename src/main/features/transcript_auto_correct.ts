@@ -40,6 +40,7 @@ import {
   fillerRuleFor,
   type FillerRule,
 } from './transcript_filler_rules';
+import { findQuoteContext } from './transcript_quote_context';
 
 /** 清理版字符保留率低于此值即判"疑似过度改写"（方案 v0.2 §8.2）。 */
 export const OVER_REWRITE_THRESHOLD = 0.55;
@@ -56,6 +57,24 @@ export type DeniedReason =
   | 'protected_region';
 
 export interface Span { start: number; end: number }
+
+/**
+ * 引例候选的 `entryRef` 前缀。
+ *
+ * 为什么给它一个**独立的 ref**（而不是让 `quotedExample` 与普通命中共用 `entry.id`）：
+ * 面板的接受粒度是"一行一 ref"，而一条词条可能同时出现在两种语境里——
+ *   「coxy 那边下周上线」（真实指称，该改） + 「词汇表应该有 coxy」（引例，不该改）。
+ * 二者共用 ref 时，用户勾了那一行，`acceptedIds` 会把**两种 span 一起**应用，
+ * 引例照样被改掉——防误改就白做了。独立 ref 同时让界面把它显示成单独一组
+ * （"引例 · N 处"），用户能明确地说"这一组不改"。
+ */
+export const QUOTED_ENTRY_PREFIX = 'quoted_';
+
+/** 从 `entryRef` 取回词表条目 id（引例前缀会被剥掉）。 */
+export function glossaryEntryIdOf(entryRef: string): string {
+  const ref = String(entryRef ?? '');
+  return ref.startsWith(QUOTED_ENTRY_PREFIX) ? ref.slice(QUOTED_ENTRY_PREFIX.length) : ref;
+}
 
 export interface ScanTarget {
   docId?: string;
@@ -95,6 +114,34 @@ export interface CorrectionCandidate {
    * 确认应用时按 `meeting_accept` 记进词表（见 ipc/transcript.ts 的 apply）。
    */
   fromModel?: boolean;
+  /**
+   * 来自**多路召回**（`transcript_recall` 的音近/编辑距离/弱通道）的建议，
+   * `entryRef` 形如 `fuzzy_<entryId>_<channel>`。
+   *
+   * 与词表精确命中（`g_*`）的区别：精确命中是"这个词条写过的错形"
+   * （`confidence` 恒为 1），模糊召回是"形态接近、语义待判"（`confidence` < 1）。
+   * 因此面板**永不预勾**它——依据注释里那条实测：模糊通道会把 `cookie`(0.80)、
+   * `id`(0.67) 这类普通英文词召回成产品名，"一旦自动替换就是静默事故"。
+   */
+  fromFuzzy?: boolean;
+  /** 模糊召回的诊断信息（面板据此显示"音近命中 0.86"这类依据）。 */
+  fuzzy?: {
+    channel: 'normalized' | 'phonetic' | 'edit' | 'weak';
+    similarity: number;
+    disposition: 'suggest' | 'review';
+  };
+  /**
+   * **引例语境**命中：这一处出现在"讲拼写/识别/纠错这件事本身"的句子里
+   * （见 `transcript_quote_context`），所以它很可能是**被举例的错形**，
+   * 不是该被纠正的错字。
+   *
+   * 处理方式是**降级而非丢弃**：候选仍然可见（用户可能确实要改），但**不预勾**，
+   * 且 `applyCorrections` 的"缺省按风险等级全应用"那条路会跳过它——要应用必须显式
+   * 勾选。丢弃会让"引例段里真的写错了"变成静默漏报，而漏报用户看不见。
+   */
+  quotedExample?: boolean;
+  /** 命中的引例标记词（面板 tooltip 用它解释"为什么没预勾"）。 */
+  quotedBy?: string;
 }
 
 export interface DeniedMatch {
@@ -200,6 +247,8 @@ export function isProtected(ranges: Span[], span: Span): boolean {
 interface RawMatch {
   entry: GlossaryEntry;
   span: Span;
+  /** 该命中落在引例语境里（命中的标记词）。 */
+  quotedBy?: string;
 }
 
 export function scanText(text: string, entries: GlossaryEntry[], options: ScanOptions = {}): ScanResult {
@@ -280,7 +329,12 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
           continue;
         }
       }
-      raw.push({ entry, span });
+      // 引例语境（P0 防误改）：命中落在"讲拼写/识别/纠错"的句子里 → 这一处可能是
+      // **被举例的错形**，不该当错字改。注意是**降级不是否决**：仍然产出候选（留 `deny`
+      // 会让人看不到它，而"引例段里真的写错了"就变成静默漏报），只是标 `quotedExample`
+      // 让面板不预勾、让 apply 的"缺省全应用"跳过它。
+      const quotedBy = findQuoteContext(foldedText, span);
+      raw.push(quotedBy ? { entry, span, quotedBy } : { entry, span });
     }
   }
 
@@ -310,7 +364,7 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
   // 原上限会把排在后面的口癖整类截掉（表现为"啊/呃/嗯 只清掉一半"）。
   const limit = options.maxCandidates ?? 2000;
   const candidates: CorrectionCandidate[] = accepted.slice(0, limit).map((m) => ({
-    entryRef: m.entry.id,
+    entryRef: m.quotedBy ? `${QUOTED_ENTRY_PREFIX}${m.entry.id}` : m.entry.id,
     wrong: m.entry.wrong,
     correct: m.entry.correct,
     action: m.entry.action,
@@ -320,6 +374,7 @@ export function scanText(text: string, entries: GlossaryEntry[], options: ScanOp
     span: m.span,
     ignoredCount: m.entry.ignoredCount ?? 0,
     contextAllow: m.entry.contextAllow ?? [],
+    ...(m.quotedBy ? { quotedExample: true, quotedBy: m.quotedBy } : {}),
   }));
 
   return {
@@ -386,7 +441,15 @@ export function applyCorrections(
   const acceptedIds = options.acceptedIds;
   const levels = options.acceptRiskLevels ?? ['low', 'medium'];
   const chosen = candidates
-    .filter((c) => (acceptedIds ? acceptedIds.includes(c.entryRef) : levels.includes(c.riskLevel)))
+    .filter((c) => {
+      if (acceptedIds) return acceptedIds.includes(c.entryRef);
+      // 「缺省按风险等级全应用」这条路**跳过引例候选**：引例里那处很可能是被举例的错形，
+      // 默认应用就等于误改原文。要改它必须由调用方显式列进 `acceptedIds`（面板勾选）。
+      // 同理跳过模糊召回候选（`fromFuzzy`）：它们的 confidence < 1，实测会把普通英文词
+      // 召回成产品名，绝不能进"缺省应用"这条路。
+      if (c.quotedExample === true || c.fromFuzzy === true) return false;
+      return levels.includes(c.riskLevel);
+    })
     .sort((a, b) => a.span.start - b.span.start);
 
   const edits: AcceptedEdit[] = chosen.map((c) => ({

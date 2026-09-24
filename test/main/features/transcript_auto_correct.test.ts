@@ -15,6 +15,7 @@ import {
   applyCorrections,
   computeProtectedRanges,
   detectSuspectEntities,
+  glossaryEntryIdOf,
   mapOffset,
   scanText,
   verifyEditsRebuild,
@@ -297,5 +298,74 @@ describe('疑似专名探测（保守，宁漏勿噪；仅作模型重点线索�
     const text = '前 KSTAR 后';
     const [first] = detectSuspectEntities(text, []);
     expect(text.slice(first.span.start, first.span.end)).toBe('KSTAR');
+  });
+});
+
+/**
+ * 引例语境闸（2026-09-22，P0 防误改）
+ *
+ * 真实事故（写在 transcript_rewrite 的注释里）：人工清理版把
+ *   「一会儿叫 coxy，一会儿叫别的」改成「一会儿叫 Cogseed」、
+ *   「词汇表应该有 coxy」改成「应该有 Cogseed」，**实测 8 段被抹平、语义完全破坏**。
+ * 那套判定此前只在语句重建层的校验器里，扫描通道没有——这里把它钉在扫描与替换两侧：
+ *   1. 引例里的命中**仍然产出**候选（不能变成看不见的漏报），但带 `quotedExample`；
+ *   2. 引例候选的 `entryRef` 带 `quoted_` 前缀 → 与真实指称**分成两行**，
+ *      勾"真实指称"那一行不会顺带把引例一起改掉（这是防误改能不能真正生效的关键）；
+ *   3. `applyCorrections` 的"缺省按风险等级全应用"这条路跳过引例候选。
+ */
+describe('引例语境闸（防误改）', () => {
+  it('引例里的命中带 quotedExample 与独立 ref，普通命中不受影响', () => {
+    const text = '一会儿叫 coxy，一会儿叫别的。下周 coxy 那边上线。';
+    const res = scanText(text, [coxy]);
+    expect(res.candidates).toHaveLength(2);
+    const [quoted, normal] = res.candidates;
+    expect(quoted.quotedExample).toBe(true);
+    expect(quoted.quotedBy).toBe('一会儿叫');
+    expect(quoted.entryRef).toBe('quoted_g_coxy');
+    expect(normal.quotedExample).toBeUndefined();
+    expect(normal.entryRef).toBe('g_coxy');
+    // 两处 span 指向原文真实位置（引例那处在 pre，真实指称在后）
+    expect(text.slice(quoted.span.start, quoted.span.end)).toBe('coxy');
+    expect(text.slice(normal.span.start, normal.span.end)).toBe('coxy');
+    expect(quoted.span.start).toBeLessThan(normal.span.start);
+  });
+
+  it('引例词条仍然在候选里（丢弃 = 看不见的漏报）', () => {
+    const res = scanText('词汇表应该有 coxy', [coxy]);
+    expect(res.candidates).toHaveLength(1);
+    expect(res.denied.filter((d) => d.reason === 'context_denied' || d.reason === 'out_of_scope')).toEqual([]);
+  });
+
+  it('没有引例标记时不加标记（避免把整段候选都降级）', () => {
+    const res = scanText('下周由 coxy 那边负责上线', [coxy]);
+    expect(res.candidates[0].quotedExample).toBeUndefined();
+    expect(res.candidates[0].entryRef).toBe('g_coxy');
+  });
+
+  it('缺省按风险等级应用时跳过引例候选', () => {
+    const text = '一会儿叫 coxy，一会儿叫别的。下周 coxy 那边上线。';
+    const res = scanText(text, [coxy]);
+    const applied = applyCorrections(text, res.candidates, {});
+    expect(applied.text).toBe('一会儿叫 coxy，一会儿叫别的。下周 Cogseed 那边上线。');
+    expect(applied.applied.map((a) => a.entryRef)).toEqual(['g_coxy']);
+  });
+
+  it('显式勾选引例那一行才改它；只勾普通行不动引例', () => {
+    const text = '一会儿叫 coxy，一会儿叫别的。下周 coxy 那边上线。';
+    const res = scanText(text, [coxy]);
+    const quotedRef = res.candidates.find((c) => c.quotedExample)!.entryRef;
+    const normalRef = res.candidates.find((c) => !c.quotedExample)!.entryRef;
+
+    const onlyQuoted = applyCorrections(text, res.candidates, { acceptedIds: [quotedRef] });
+    expect(onlyQuoted.text).toBe('一会儿叫 Cogseed，一会儿叫别的。下周 coxy 那边上线。');
+
+    const onlyNormal = applyCorrections(text, res.candidates, { acceptedIds: [normalRef] });
+    expect(onlyNormal.text).toBe('一会儿叫 coxy，一会儿叫别的。下周 Cogseed 那边上线。');
+  });
+
+  it('合成 ref 能取回词表条目 id（台账不能因为前缀而漏记 freq）', () => {
+    expect(glossaryEntryIdOf('quoted_g_coxy')).toBe('g_coxy');
+    expect(glossaryEntryIdOf('g_coxy')).toBe('g_coxy');
+    expect(glossaryEntryIdOf('')).toBe('');
   });
 });
