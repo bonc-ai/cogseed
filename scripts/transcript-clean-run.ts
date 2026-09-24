@@ -39,9 +39,9 @@ const CHUNK_MAX_UTTERANCES = 26;
  * 「未决项」里如实声明它们尚未经人工确认——不藏在代码里。
  */
 const EXTRA_ENTRIES: Array<{ wrong: string; correct: string; kind: string; note: string }> = [
-  { wrong: '静文', correct: '静雯', kind: 'people', note: 'metrics 实测 26 处；人工清理版也做了此归一' },
-  { wrong: 'mesh seed', correct: 'MeshSeed', kind: 'product', note: '未召回 3 处' },
-  { wrong: 'mesh c', correct: 'MeshSeed', kind: 'product', note: '未召回 1 处' },
+  { wrong: '示例人', correct: 'ExamplePerson', kind: 'people', note: 'metrics 样例；人工清理版也做了此归一（人名已脱敏）' },
+  { wrong: 'mesh seed', correct: 'CogSeed', kind: 'product', note: '未召回 3 处' },
+  { wrong: 'mesh c', correct: 'CogSeed', kind: 'product', note: '未召回 1 处' },
   { wrong: '多维表', correct: '多维表格', kind: 'term', note: '未召回 2 处' },
   { wrong: '联盟德', correct: 'Raymond', kind: 'product', note: '未召回 1 处（中文音近，本层无拼音表）' },
   // ⚠️ 刻意**不**入册 `k42` / `k32`（2026-09-16 两次判断后的结论）：
@@ -428,7 +428,7 @@ async function compare(args: string[]): Promise<void> {
    * 两个必须做对的口径（否则会得出相反的结论）：
    *  ① 附记里的「术语对照表」本来就该列出原始错形（`coxy`、`K star`…），
    *     把它算进来会误判成"没清理干净"；
-   *  ② 必须用**词边界**计数：`海运` 是 `刘海运` 的子串、`多维表` 是 `多维表格` 的子串，
+   *  ② 必须用**词边界**计数：`海运` 是 `示例人名甲` 的子串、`多维表` 是 `多维表格` 的子串，
    *     朴素子串计数会把正确写法误报成残留（实测因此踩过两次）。
    */
   const bodyOf = (t: string) => t.split('## 整理附记')[0];

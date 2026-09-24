@@ -8,6 +8,17 @@ export interface BuildIdentity {
   commit: string;
   dirty: boolean | null;
   builtAt: string;
+  /**
+   * Service origin baked into the package at build time
+   * (`scripts/write-build-info.cjs` / `COGSEED_HUB_API_BASE`).
+   *
+   * Empty when the build carried none, in which case callers fall back to
+   * their channel default. The source tree intentionally ships a placeholder
+   * origin, so this field is the only channel through which a packaged app can
+   * learn a real service address — `run.sh` env exports never reach a
+   * double-clicked `.app`.
+   */
+  hubApiBase: string;
 }
 
 function channelOf(value: unknown): BuildChannel {
@@ -33,6 +44,9 @@ export function resolveBuildIdentity(options: {
       commit: text(env.COGSEED_BUILD_COMMIT),
       dirty: dirtyOf(env.COGSEED_BUILD_DIRTY),
       builtAt: text(env.COGSEED_BUILD_TIME),
+      // Source-mode runs resolve service bases from env/channel defaults;
+      // an injected base only ever exists in a packaged build-info.json.
+      hubApiBase: '',
     };
   }
   const readBuildInfo = (filePath: string): BuildIdentity | null => {
@@ -44,6 +58,7 @@ export function resolveBuildIdentity(options: {
         commit: text(parsed?.commit),
         dirty: dirtyOf(parsed?.dirty),
         builtAt: text(parsed?.builtAt),
+        hubApiBase: text(parsed?.hubApiBase),
       };
     } catch { return null; /* missing/malformed build metadata */ }
   };
@@ -71,12 +86,12 @@ export function resolveBuildIdentity(options: {
         const pkg = JSON.parse(pkgRaw) as { cogseedBuildChannel?: unknown };
         const fallbackChannel = channelOf(pkg?.cogseedBuildChannel);
         if (fallbackChannel !== 'unknown') {
-          return { channel: fallbackChannel, commit: '', dirty: null, builtAt: '' };
+          return { channel: fallbackChannel, commit: '', dirty: null, builtAt: '', hubApiBase: '' };
         }
       } catch { /* not found / malformed → unknown below */ }
     }
   } catch { /* not running under electron / app api missing */ }
-  return { channel: 'unknown', commit: '', dirty: null, builtAt: '' };
+  return { channel: 'unknown', commit: '', dirty: null, builtAt: '', hubApiBase: '' };
 }
 
 export function shortBuildCommit(commit: string): string { return text(commit).slice(0, 7); }
