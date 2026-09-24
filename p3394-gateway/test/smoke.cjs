@@ -242,8 +242,13 @@ async function main() {
   const longStillRunning = !received.some((e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:'));
   // 把两个子条件与实测耗时写进断言文案：下次失败可以直接区分“慢”与“被排队”。
   check(`oneshot 并发：长任务未结束时快速消息已回（不排队；快回复=${quickRepliedEarly} 长任务仍在跑=${longStillRunning} 耗时=${Date.now() - concStartedAt}ms）`, quickRepliedEarly && longStillRunning);
-  await sleep(3000);
-  check('长任务随后正常回发', received.some((e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:') && (e.payload.parts[0].text || '').includes('SLEEP-3000')));
+  // 长任务随后回发：同样轮询等待，而不是固定睡 3000ms。上面的轮询一旦早于原先
+  // 写死的 700ms 就退出（CI 实测 55ms），固定 3000ms 会让长任务拿到的总等待
+  // 比改动前少几百毫秒——2026-09-24 CI 上这条随即变成新的偶发红单。
+  // 上限 7000ms 只抬高超时上限；正常路径一到就返回，不拖慢绿灯。
+  const concLongReplied = (e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:') && (e.payload.parts[0].text || '').includes('SLEEP-3000');
+  for (let i = 0; i < 140 && !received.some(concLongReplied); i += 1) await sleep(50);
+  check('长任务随后正常回发', received.some(concLongReplied));
 
   // oneshot 增量输出：CLI 运行中逐段输出的可见内容实时以 stream delta 帧回发，
   // 不必等工具+回复全部跑完。用分段输出的假 CLI：任务 ~620ms 才结束，但
