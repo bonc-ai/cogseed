@@ -159,4 +159,51 @@ describe('Google connector remote switches', () => {
     expect(restoreComposioConnectionsFromServer).not.toHaveBeenCalled();
     expect(refreshStaleToolCaches).not.toHaveBeenCalled();
   });
+
+  it('never exposes auth-session tools to the model, even when the adapter caches them', async () => {
+    const restoreComposioConnectionsFromServer = vi.fn(async () => 0);
+    const refreshStaleToolCaches = vi.fn(async () => 0);
+    // The adapter advertises all ten tools and `tools_cache` is faithful to that. Three of them
+    // drive `tmeet auth login` for the connector page; handing them to the model would let it open
+    // a browser and start an authorization flow nobody asked for.
+    const withAuthTools = {
+      ...connectedInstance('tencent-meeting'),
+      tools_cache: [
+        { name: 'list_recordings', description: '', input_schema: {} },
+        { name: 'get_transcript', description: '', input_schema: {} },
+        { name: 'start_login', description: '', input_schema: {} },
+        { name: 'check_login', description: '', input_schema: {} },
+        { name: 'stop_login', description: '', input_schema: {} },
+      ],
+    };
+    vi.doMock('../../../../src/main/features/connectors/manager', () => ({
+      restoreComposioConnectionsFromServer,
+      refreshStaleToolCaches,
+      listInstances: vi.fn(() => [withAuthTools, connectedInstance('github')]),
+    }));
+    vi.doMock('../../../../src/main/features/component_enabled', () => ({
+      isConnectorEnabled: vi.fn(() => true),
+    }));
+    vi.doMock('../../../../src/main/features/agents', () => ({
+      getAgentForChatDispatch: vi.fn(),
+    }));
+
+    // The availability gate probes the real filesystem/PATH; pin it so the instance stays visible
+    // regardless of whether the runner has the CLI installed.
+    const availability = await import('../../../../src/main/features/connectors/availability');
+    availability._setLocalCliProbeForTest(() => true);
+    try {
+      const toolsAdapter = await import('../../../../src/main/features/connectors/tools-adapter');
+      const visible = await toolsAdapter.resolveVisibleConnectors(TEST_UID, undefined);
+      const tencent = visible.find((item) => item.instance.id === 'tencent-meeting');
+
+      expect(tencent).toBeTruthy();
+      expect(tencent!.tools.map((t) => t.name).sort()).toEqual(['get_transcript', 'list_recordings']);
+      // The cache itself keeps them: the connector page and `local-cli-auth.ts` call them by name
+      // over their own connection, so removing them from the cache would break authorization.
+      expect(withAuthTools.tools_cache.map((t) => t.name)).toContain('start_login');
+    } finally {
+      availability._setLocalCliProbeForTest(null);
+    }
+  });
 });

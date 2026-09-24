@@ -7,18 +7,49 @@ const root = path.join(__dirname, '../../../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 describe('public connector boundary', () => {
-  it('keeps every catalog connector on a public OAuth mode without credit metering', () => {
-    expect(CONNECTOR_CATALOG).toHaveLength(21);
+  // "Public" means: any user can authorize it themselves, with no company-held secret and no
+  // paid metering. Two shapes satisfy that, and this test pins both:
+  //
+  //   - `server_bridge` / `mcp_dcr` — publicly reachable OAuth authorization.
+  //   - `local_cli` — the provider publishes no authorization server, and its supported
+  //     programmatic surface is an openly licensed CLI the user installs themselves. The
+  //     credential lives in the user's own OS keychain (the `bin/` adapter child owns it) and
+  //     never transits CogSeed, so nothing about it depends on a CogSeed-held secret.
+  //
+  // What this test must keep preventing: an entry that only works because CogSeed holds a
+  // private client secret, or that meters usage. Adding a mode is a deliberate widening — it is
+  // not a licence to add non-public connectors under the new label.
+  const PUBLIC_AUTH_MODES = ['server_bridge', 'mcp_dcr', 'local_cli'];
+
+  it('keeps every catalog connector on a public authorization mode without credit metering', () => {
+    expect(CONNECTOR_CATALOG).toHaveLength(22);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'mcp_dcr')).toHaveLength(11);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'server_bridge')).toHaveLength(10);
+    expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'local_cli')).toHaveLength(1);
     for (const entry of CONNECTOR_CATALOG) {
-      expect(['server_bridge', 'mcp_dcr']).toContain(entry.auth_mode);
+      expect(PUBLIC_AUTH_MODES).toContain(entry.auth_mode);
       expect(entry.icon_svg).toMatch(/^<svg\b/);
       if (entry.auth_mode === 'mcp_dcr') {
         expect(entry.transport_template?.kind).toBe('streamable-http');
         expect(entry.transport_template && 'url' in entry.transport_template
           ? entry.transport_template.url
           : '').toMatch(/^https:\/\//);
+      }
+      if (entry.auth_mode === 'local_cli') {
+        // `local_cli` must be credential-owning, not credential-forwarding: a stdio template that
+        // carries no `oauth_env_key` and no `env_synthesizer` is what makes `applyTemplate` accept
+        // a null grant. A `local_cli` entry that names either key would demand a token that no
+        // flow can produce, so the requirement is asserted here rather than left implicit.
+        expect(entry.transport_template?.kind).toBe('stdio');
+        const tpl = entry.transport_template as { oauth_env_key?: string; env_synthesizer?: string } | null;
+        expect(tpl?.oauth_env_key).toBeUndefined();
+        expect(tpl?.env_synthesizer).toBeUndefined();
+        // No pre-registered app, no scopes to require, and no OAuth provider id.
+        expect(entry.oauth).toBeUndefined();
+        expect(entry.required_oauth_scopes).toBeUndefined();
+        // And it must point at a bundled adapter we ship, not an arbitrary command.
+        const args = (entry.transport_template as { args?: string[] } | null)?.args || [];
+        expect(args.join(' ')).toMatch(/\$\{COGSEED_PC_DIR\}\/bin\/[A-Za-z0-9._-]+\.cjs/);
       }
       for (const forbiddenKey of [
         `usage_${'metering'}`,

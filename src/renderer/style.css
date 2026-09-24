@@ -20386,6 +20386,214 @@ body:has(#panel-settings.active) .main-top-actions {
 .connector-tool-name { font-family: ui-monospace, monospace; font-size: 12px; }
 .connector-tool-desc { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 
+/* ─── Connector detail view (registry CONN-PV-001) ───
+   Page-local structural composition for one business surface: the Tencent Meeting
+   connector detail. Proposed in docs/renderer-structural-registry.md; it must not grow
+   into a second visual variant of the card grid. Tokens only — no literal color,
+   font-size, radius or z-index. Layout only: the shared shells (ui-resource-card,
+   ui-button, ui-status-pill) keep their own visual identity, exactly as
+   `.connector-card` does today. */
+.connectors-detail-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) 0;
+}
+.connectors-detail-info-btn { flex: 0 0 auto; }
+.connectors-detail-column {
+  width: 100%;
+  max-width: var(--layout-resource-detail-width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.connectors-detail-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.connectors-detail-identity-icon {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+}
+.connectors-detail-identity-icon svg { width: 100%; height: 100%; display: block; }
+.connectors-detail-identity-icon.is-fallback {
+  color: var(--color-surface);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-bold);
+}
+.connectors-detail-identity-heading { min-width: 0; }
+.connectors-detail-identity-name {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+.connectors-detail-identity-subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+/* Three-step progress indicator. Native <ol> semantics + aria-current; the connector
+   line between steps is decorative and carries no information of its own. */
+.connectors-detail-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.connectors-detail-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: var(--line-height-row);
+}
+.connectors-detail-step + .connectors-detail-step::before {
+  content: '';
+  flex: 0 0 auto;
+  width: var(--space-5);
+  height: 1px;
+  background: var(--line-hairline);
+}
+.connectors-detail-step-mark { display: inline-flex; align-items: center; }
+.connectors-detail-step.is-done { color: var(--color-success); }
+.connectors-detail-step.is-current { color: var(--text); font-weight: var(--font-weight-medium); }
+.connectors-detail-step-dot {
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+}
+
+/* Both panels adopt the shared `ui-resource-card` shell. They only relax its 400px card-grid
+   width cap for this page's layout — the same page-scoped width override the card grid already
+   does with `.connectors-grid > .connector-card`. The shell's border, radius, background and
+   shadow are deliberately left alone. The direct-child selector is required: `ui-components.css`
+   loads after `style.css`, so a single-class rule would lose to `.ui-resource-card`. */
+.connectors-detail-column > .connectors-detail-panel {
+  width: 100%;
+  max-width: 100%;
+  padding: var(--space-5);
+  box-sizing: border-box;
+}
+.connectors-detail-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+}
+/* Icon sizing goes through the documented `uiIconHtml(name, className)` seam: the page sizes its
+   own class rather than overriding the shared `.ui-icon` from page CSS. Colour is inherited from
+   the host (`--color-success` on `.is-ok` / `.is-done`) via the icon's `currentColor` stroke. */
+.connectors-detail-hero-icon { display: inline-flex; color: var(--text-secondary); }
+.connectors-detail-hero-icon.is-ok { color: var(--color-success); }
+.connectors-detail-hero-icon .connectors-detail-hero-glyph { width: 40px; height: 40px; }
+.connectors-detail-step-mark .connectors-detail-step-glyph { width: 14px; height: 14px; }
+.connectors-detail-hero-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+.connectors-detail-hero-desc {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.connectors-detail-hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.connectors-detail-hero-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-meta);
+}
+
+.connectors-detail-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.connectors-detail-panel-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-medium);
+}
+.connectors-detail-panel-scope {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.connectors-detail-panel-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.connectors-detail-soon-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-meta);
+}
+
+.connectors-detail-auth-url {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  text-align: left;
+}
+.connectors-detail-auth-url-label {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-meta);
+}
+.connectors-detail-auth-url-value {
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
+  color: var(--text);
+  word-break: break-all;
+  user-select: all;
+}
+
 /* Connect / configure modal (minimal scoped styles for the connectors flow; if the project
    later introduces a shared .modal-overlay / .modal-card system, these can be retired). */
 #connectors-connect-modal.modal-overlay {

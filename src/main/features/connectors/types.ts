@@ -169,8 +169,10 @@ export type TransportTemplate =
       oauth_header_key?: string;
     };
 
-// ── OAuth ───────────────────────────────────────────────────────────────
-// Two auth_modes for catalog entries:
+// ── Auth ────────────────────────────────────────────────────────────────
+// Three auth_modes for catalog entries. The first two are credential-forwarding: CogSeed obtains
+// a grant and hands the token to the spawned MCP server. The third is credential-owning: the
+// child resolves its own account and CogSeed never sees, stores, or forwards a token.
 //
 //  - 'server_bridge'  — CogSeed company pre-registered an OAuth App at the provider. Server holds
 //    client_id/secret, runs the full OAuth handshake server-side, returns a token via deep-link.
@@ -184,6 +186,30 @@ export type TransportTemplate =
 //    as an HTTPS callback intermediate (Server stashes code+state in a 5-min KV, deep-links
 //    PC). The DCR client and rotating refresh grant remain encrypted on this device; Server is
 //    never a credential store for this mode. Used for Notion, Atlassian, Cloudflare suite, … .
+//
+//  - 'local_cli'      — The provider publishes no OAuth authorization server at all; its
+//    supported programmatic surface is a locally installed CLI that owns its own login (device
+//    flow, OS keychain). CogSeed ships a stdio adapter under `bin/` that wraps that CLI, and the
+//    adapter child runs the login and holds the session — so this mode needs **no** `oauth`
+//    config, **no** `required_oauth_scopes`, and no grant. `transport_template` must therefore be
+//    a stdio template that names neither `oauth_env_key` nor `env_synthesizer` (see
+//    `apply-template.ts`, which only asserts a token for the forwarding shapes).
+//
+//    Why this stays inside the public-connector boundary (see
+//    `test/main/features/connectors/open-source-boundary.test.ts`): the CLI is a publicly
+//    obtainable, openly licensed package that any user can install themselves. No company-held
+//    secret, no pre-registration, and no credit metering is involved — the credential lives in
+//    the user's own OS keychain and never transits CogSeed. What changes is only *how* the user
+//    authorizes, not *who can*.
+//
+//    Two consequences reviewers must keep in mind:
+//      1. The CLI session is per-machine, not per-instance — `_resolveTransport(uid, inst)` is
+//         keyed by instance, but every profile on the machine shares one CLI login. Disconnect
+//         therefore means "log the CLI out" and affects all profiles, which is why the
+//         disconnect path for this mode must confirm with the user first.
+//      2. Availability is machine-dependent: the card must render as unavailable (not
+//         "connectable, then fails") when the CLI is missing — hence
+//         `unavailable_reason: 'cli_not_installed'`.
 
 export interface OAuthConfig {
   /** Server-bridge only: matches the Server's `biz/connectors/oauth/<provider>.py` module name
@@ -239,7 +265,7 @@ export type CatalogCategory =
   | 'search'
   | 'data';
 
-export type AuthMode = 'server_bridge' | 'mcp_dcr';
+export type AuthMode = 'server_bridge' | 'mcp_dcr' | 'local_cli';
 
 export interface CatalogEntry {
   /** Stable id; doubles as the installed instance id (one install per catalog entry in Phase 0).
@@ -257,9 +283,11 @@ export interface CatalogEntry {
   category: CatalogCategory;
   description_zh: string;
   description_en: string;
-  /** Which OAuth pathway this provider needs — see the `// ── OAuth ──` section above. */
+  /** Which authorization pathway this provider needs — see the `// ── Auth ──` section above. */
   auth_mode: AuthMode;
-  /** Required when `auth_mode === 'server_bridge'`; absent for `'mcp_dcr'` (no pre-registration). */
+  /** Required when `auth_mode === 'server_bridge'`; absent for `'mcp_dcr'` (no pre-registration)
+   *  and for `'local_cli'` (the adapter child owns the credential, so there is nothing to
+   *  pre-register and no grant to obtain). */
   oauth?: OAuthConfig;
   /** OAuth scopes that must be present in the provider's returned grant for the connector to
    *  function. Google lets users uncheck individual requested permissions on the consent screen;
@@ -271,10 +299,13 @@ export interface CatalogEntry {
    *  Renderer surfaces a disabled "敬请期待" state. */
   transport_template: TransportTemplate | null;
   /** Set when `transport_template` is null to explain why; renderer surfaces in the badge. */
-  unavailable_reason?: 'oauth_pending';
+  unavailable_reason?: 'oauth_pending' | 'cli_not_installed';
   /** Remote-config gate. `visible_disabled` keeps the card visible but blocks OAuth/tool use. */
   availability?: 'visible_disabled';
-  disabled_reason?: 'unsupported';
+  /** Why a `visible_disabled` card is disabled. `unsupported` = remote config said so;
+   *  `cli_missing` = this machine does not have the `local_cli` connector's CLI installed, which
+   *  the user can fix themselves, so the card must say so instead of the generic message. */
+  disabled_reason?: 'unsupported' | 'cli_missing';
   /** When set, this catalog entry is a **UI-only bundle**: one OAuth flow provisions N member
    *  ConnectorInstances (one per listed catalog id). The bundle entry itself does NOT produce a
    *  ConnectorInstance and has `transport_template: null` — the model sees the members as

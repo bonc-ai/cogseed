@@ -66,6 +66,51 @@ the branch is submitted; code-owner review may supersede any boundary without de
 | `KB-PV-003` | File-reader internal interaction | Approved Provisional | Zoom, pagination, resize/drag behavior, document rendering and block marking remain page-owned after the outer modal migrates. | Modal lifecycle, actions, icons, status and layer tokens. | `@bonc-ai/reviewers`, 2026-09-21 | Another page needs the same stable reader interaction contract or a shared drag/resize seam is approved. |
 | `KB-PV-004` | Media-manager internal views | Approved Provisional | Thumbnail grid, multi-select and batch-operation composition remain page-owned after the outer overlay migrates. | Modal/drawer lifecycle, actions, selection controls, progress and status. | `@bonc-ai/reviewers`, 2026-09-21 | A second page needs the same stable media-management contract. |
 
+## Proposed compositions
+
+Records in this section are awaiting a code-owner decision and cannot be used as an approved
+exception. Their implementation ships under the proposal, and the boundary stays exactly as
+written here until `@bonc-ai/reviewers` promotes, narrows or rejects it.
+
+### `CONN-PV-001` — Connector detail view (Tencent Meeting)
+
+- **ID**: `CONN-PV-001`
+- **Scope**: `connectors.js` — the connector detail view and its grid ⇄ detail transition
+  (`#connectors-detail-view` / `#connectors-detail-body`, page-local classes `connectors-detail-*`),
+  reachable from the `腾讯会议` card in the 连接 › MCP与工具 tab (`#connections-pane-mcp`). Covers
+  the connector identity header, the three-step progress indicator (`接入前` / `发起连接` /
+  `连接成功`), the main status card with its `创建会议自动化` action, and the `连接状态` panel.
+- **Status**: `Proposed`
+- **Allowed boundary** (the boundary this proposal asks to keep page-local; nothing here is
+  approved yet): one detail view keyed by connector id, entered only from that connector's own card
+  action (`data-act="open-detail"`), and only for connectors with a row in
+  `_CONNECTOR_DETAIL_PROFILES` — today the Tencent Meeting connector alone. It must not become a
+  second visual variant of the card grid, must not add a whole-card click target (the module header
+  records why), and must not be generalised to other connectors without a new review. Both panels
+  reuse the shared `ui-resource-card` shell and add page-owned padding/width only; the shared
+  shell's border, radius, background and shadow are not overridden.
+- **Required shared seams**: `uiButton(...)` and `uiIconButton(...)` for every control (the
+  `connectors.js` raw-control baseline is unchanged), `uiCard(...)` for both panels,
+  `uiStatusPill(...)` for the `已连接` tag, `uiIconHtml('check-circle' | 'info' | 'plug')` for
+  icons, `uiAlert(...)` for the `(i)` disclosure instead of a page-local overlay, the shared
+  Escape/focus-return pattern (document-level keydown with an IME guard plus focus return to the
+  originating card action), native `<ol>`/`<li>` with `aria-current="step"` and a visually hidden
+  state word for the indicator, and design tokens only — no literal colour, font-size, radius or
+  `z-index`.
+- **Rationale**: No shared seam describes this shape. The step indicator is business-specific —
+  its steps 2 and 3 are derived from the live `connected` state rather than a new persisted field,
+  and the first step is unconditionally complete — and the whole view exists because for this
+  connector the connection is only half the job (connect, then create a meeting-digest automation
+  task). Extracting a `uiSteps(...)` primitive from a single call site would freeze a contract that
+  no second page has validated. Colours, spacing and typography come from tokens and the shared
+  primitives, so the duplicate-implementation risk the policy targets does not apply.
+- **Decision owner**: `TBD` (`@bonc-ai/reviewers` owns the decision; no approval has been given)
+- **Decision date**: `TBD`
+- **Review trigger**: A second page or a second connector needs the same detail composition or the
+  same stable step-indicator contract (then propose `uiSteps(...)` / a connector-detail seam), or
+  `@bonc-ai/reviewers` decides the shared layer should own it now.
+- **Related PR/issue**: `TBD` (branch `dev/cx677-tencent-meeting-page`)
+
 ## Explicit business-owned decisions
 
 | ID | Scope | Status | Decision | Review trigger |

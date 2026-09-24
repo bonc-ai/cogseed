@@ -1096,4 +1096,59 @@ describe('features/connectors/manager authorization recovery', () => {
     );
   });
 
+  it('installs a local_cli connector without obtaining, storing, or refreshing any grant', async () => {
+    // The availability gate probes the real filesystem/PATH, so pin it: on a runner without the
+    // CLI installed the connect path would be refused before it ever reaches the transport.
+    const availability = await import('../../../../src/main/features/connectors/availability');
+    availability._setLocalCliProbeForTest(() => true);
+    try {
+      const startOAuth = vi.fn();
+      const startMcpDcrOAuth = vi.fn();
+      mocks.oauth.startOAuth = startOAuth;
+      mocks.dcr.startMcpDcrOAuth = startMcpDcrOAuth;
+
+      // The connect path authorizes the CLI first over an ephemeral connection, then provisions.
+      // Report an already-authorized session so the attempt does not sit in the 5-minute poll loop.
+      const toolCalls: string[] = [];
+      mocks.mcp.callTool = vi.fn(async (name: string) => {
+        toolCalls.push(name);
+        if (name === 'check_login') return { logged_in: true, user_name: 'tester' };
+        return {};
+      });
+
+      const registry = await import('../../../../src/main/features/connectors/registry');
+      const manager = await import('../../../../src/main/features/connectors/manager');
+
+      const inst = await manager.connectViaOAuth(TEST_UID, 'tencent-meeting');
+
+      // Neither OAuth flow is entered: this mode has no authorization server to talk to.
+      expect(startOAuth).not.toHaveBeenCalled();
+      expect(startMcpDcrOAuth).not.toHaveBeenCalled();
+      // Authorization is a pre-flight check, never a login, when the CLI is already signed in.
+      expect(toolCalls).toContain('check_login');
+      expect(toolCalls).not.toContain('start_login');
+      // No grant row at all — which is what keeps the refresh cycle from ever picking it up.
+      expect(inst).not.toHaveProperty('oauth_grant');
+      expect(registry.load(TEST_UID).connections['tencent-meeting']).not.toHaveProperty('oauth_grant');
+      // The transport is our bundled adapter, spawned as Node.
+      expect(inst.transport.kind).toBe('stdio');
+      expect((inst.transport as { args: string[] }).args[0]).toMatch(/tencent-meeting-mcp-server\.cjs$/);
+      // And it went through the normal connect path rather than a bespoke one.
+      expect(mocks.mcp.connect).toHaveBeenCalled();
+    } finally {
+      availability._setLocalCliProbeForTest(null);
+    }
+  });
+
+  it('refuses to install a local_cli connector when the CLI is not on this machine', async () => {
+    const availability = await import('../../../../src/main/features/connectors/availability');
+    availability._setLocalCliProbeForTest(() => false);
+    try {
+      const manager = await import('../../../../src/main/features/connectors/manager');
+      await expect(manager.connectViaOAuth(TEST_UID, 'tencent-meeting')).rejects.toThrow(/connector_unsupported/);
+    } finally {
+      availability._setLocalCliProbeForTest(null);
+    }
+  });
+
 });
