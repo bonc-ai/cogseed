@@ -46,10 +46,11 @@ unset ELECTRON_RUN_AS_NODE
 
 export COGSEED_RUNTIME_VARIANT="cogseed"
 
-# Hub 联调默认值：默认连接 Hub 账号服务。需要连本地服务时，
-# 显式导出同名变量即可覆盖：
-#   COGSEED_HUB_API_BASE=http://localhost:3000 ./run.sh
-export COGSEED_HUB_API_BASE="${COGSEED_HUB_API_BASE:-https://hub.example.com}"
+# Hub 服务地址：源码运行默认走代码内的 dev 默认值（本地 Hub 服务
+# http://localhost:3000）。需要连共享 Hub 时显式导出：
+#   COGSEED_HUB_API_BASE=https://<hub-host> ./run.sh
+# 这里刻意不再提供默认值——源码树不携带非归属域名，而硬编码一个开源占位符
+# 只会让源码运行也连不上服务。打包产物走 build-info.json 里的注入值。
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[CogSeed] $APP_DIR/package.json not found; check the project directory layout." >&2
@@ -102,8 +103,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
       OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
     fi
-    if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
-      OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
+    if [ -n "${COGSEED_API_BASE_URL:-}" ]; then
+      OPEN_ENV_ARGS+=(--env "COGSEED_API_BASE_URL=$COGSEED_API_BASE_URL")
     fi
     # Hub 账号发布 Gate 显式开关（gate.ts 的 env override）。
     # 发布 Gate 已默认打开；如需强制关闭可设 COGSEED_HUB_ENABLED=false。

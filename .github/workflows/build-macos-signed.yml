@@ -34,6 +34,8 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm certificate.p12
       - run: node scripts/write-build-info.cjs --channel=release
+        env:
+          COGSEED_HUB_API_BASE: ${{ vars.COGSEED_HUB_API_BASE_URL }}
       - name: Build and sign
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: true

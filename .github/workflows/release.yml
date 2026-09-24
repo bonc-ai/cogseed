@@ -63,7 +63,14 @@ jobs:
           security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm certificate.p12
+      # Bakes the service origin into .build/build-info.json. Without it the
+      # packaged app falls back to the open-source placeholder origin and
+      # account / marketplace / update endpoints are unreachable. The script
+      # exits non-zero when a release build carries no origin, so a missing
+      # variable blocks the release instead of shipping a dead installer.
       - run: node scripts/write-build-info.cjs --channel=release
+        env:
+          COGSEED_HUB_API_BASE: ${{ vars.COGSEED_HUB_API_BASE_URL }}
       - name: Build, sign, and notarize
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: true
@@ -105,6 +112,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/write-build-info.cjs --channel=release
+        env:
+          COGSEED_HUB_API_BASE: ${{ vars.COGSEED_HUB_API_BASE_URL }}
       - run: npm run build:win
       - name: Assert packaged Electron fuse baseline
         run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe

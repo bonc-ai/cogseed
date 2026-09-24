@@ -9,41 +9,20 @@
 # appearing in the commit message / Co-authored-by trailers, no build.
 # It runs on every PR targeting develop (and is also wired into cicd's verify).
 #
-# TEMPORARY EXCEPTION (recorded 2026-09-20) — 184377817@qq.com, **author emails only**:
-#   Source: the GitHub web-UI merge commit `2f5a490e` ("Merge pull request #288"),
-#   whose author email is taken from the account that clicked merge. A PR author
-#   can neither control nor amend that address, and it is already part of the
-#   public history (rewriting develop is not an option). It is the only
-#   non-allowlisted author email across all **merged** history (develop / main /
-#   cicd); unmerged side branches and some tags still carry personal addresses,
-#   but those never enter this gate's range.
-#   Scope: applies to the author check only. The message / Co-authored-by scan
-#   below still covers **every** commit, merges included.
+# RETIRED EXCEPTIONS (2026-09-23) — both historical author-header entries are gone:
+#   `2f5a490e` ("Merge pull request #288", recorded 2026-09-20) and `a0cb7c5f`
+#   ("feat(community): add contribution entry points (#369)", recorded 2026-09-23)
+#   carried personal addresses in their **author header only** — the account's
+#   public profile email, which a PR author can neither control nor amend.
 #
-#   ⚠️ DELETE THIS ENTRY once the cicd branch contains `2f5a490e`. From that point
-#   the commit is an ancestor of both check ranges (`base..head` on PRs and
-#   `origin/cicd..HEAD` in ci.yml), so the address is no longer needed here — and
-#   leaving it in place would permanently allowlist this account's webpage merges,
-#   which is exactly the scenario CONTRIBUTING.md → "Merge requirements" item 4
-#   exists to prevent.
-#   Root cause + prevention: mergers must enable "Keep my email addresses private".
+#   The v1.2.0 promotion merged both commits into `cicd`, so they are now
+#   ancestors of both check ranges (`base..head` on PRs and `origin/cicd..HEAD`
+#   in ci.yml) and need no allowlist entry. Keeping them would have permanently
+#   allowlisted those accounts' webpage merges — exactly the scenario
+#   CONTRIBUTING.md → "Merge requirements" item 4 exists to prevent.
 #
-# TEMPORARY EXCEPTION (recorded 2026-09-23) — fzywind@gmail.com, **author emails only**:
-#   Source: the squash-merge commit `a0cb7c5f` ("feat(community): add contribution
-#   entry points (#369)"), authored by an account that has not enabled
-#   "Keep my email addresses private". That commit's own Signed-off-by and
-#   Co-authored-by trailers already use the noreply form — only the author header
-#   carries the personal address. It is already public on `develop` and cannot be
-#   amended without rewriting `develop`, which the `develop-approval-gate` ruleset
-#   forbids (the ruleset has no bypass actors).
-#   Scope: author check only — identical to the entry above.
-#
-#   ⚠️ DELETE THIS ENTRY once the cicd branch contains `a0cb7c5f`, i.e. immediately
-#   after the next develop → cicd promotion merges. From that point the commit is an
-#   ancestor of both check ranges (`base..head` on PRs and `origin/cicd..HEAD` in
-#   ci.yml), so leaving the entry in place would keep allowlisting this account for
-#   no reason.
-#   Root cause + prevention: contributors must enable "Keep my email addresses private".
+#   Root cause + prevention for both: mergers and contributors must enable
+#   "Keep my email addresses private".
 
 name: email-gate
 
@@ -66,10 +45,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Author allowlist: GitHub noreply + team address + the two historical
-          # author-header exceptions documented in the file header.
+          # Author allowlist: GitHub noreply + team address. The two historical
+          # author-header exceptions were retired once cicd absorbed their commits
+          # (see the file header).
           bad=$(git log --format='%h|%an|%ae' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
-            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn|184377817@qq\.com|fzywind@gmail\.com)$' \
+            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn)$' \
             || true)
           if [ -n "$bad" ]; then
             echo "::error::PR contains commits with non-noreply author emails:"
