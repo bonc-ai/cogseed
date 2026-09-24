@@ -26,7 +26,7 @@ describe('Windows packaged STT smoke', () => {
   it('runs blocking packaged launch and fake-microphone verifiers before uploading the Windows artifact', () => {
     const scriptPath = path.resolve('scripts/verify-packaged-stt-win.cjs');
     const workflow = parse(fs.readFileSync(path.resolve('.github/workflows/ci.yml'), 'utf8'), { version: '1.2' });
-    const steps = workflow.jobs['verify-windows'].steps as Array<{ run?: string; continueOnError?: boolean }>;
+    const steps = workflow.jobs['build-windows'].steps as Array<{ run?: string; continueOnError?: boolean }>;
     const buildIndex = steps.findIndex((step) => step.run === 'npm run build:win');
     const launchIndex = steps.findIndex((step) => step.run === 'npm run verify:package:launch');
     const smokeIndex = steps.findIndex((step) => step.run === 'npm run verify:package:stt:win');

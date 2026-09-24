@@ -44,6 +44,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   `ReferenceError` 且无任何 UI 反馈；本期不交付测验，故收敛 AI 解析卡上的
   该入口。恢复需先补主进程 `kb.quiz` 与渲染层实现。
 
+## [1.1.2] - 2026-09-16
+
+### Security
+
+- 打包构建启用 Electron fuses 隐私基线：禁用 `NODE_OPTIONS` / `--inspect` 注入路径，启用 `app.asar` 启动完整性校验与 `OnlyLoadAppFromAsar`。
+- 新增 `scripts/check-fuses.cjs`，并在 CI 打包 job 中强制断言产物 fuse 状态，防止基线回退。
+
 ## [1.0.2] - 2026-09-10
 ### Security
 

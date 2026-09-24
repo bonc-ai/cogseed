@@ -97,13 +97,15 @@ export function _setInteractiveCliBroadcastForTest(fn: ((channel: string, payloa
   _broadcastOverride = fn;
 }
 
-export function _resetInteractiveCliSessionsForTest(): void {
+export async function _resetInteractiveCliSessionsForTest(): Promise<void> {
+  const completions: Array<Promise<void>> = [];
   for (const s of _sessions.values()) {
-    try { killProcessTree(s.child, 'SIGKILL'); } catch { /* best effort */ }
+    try { completions.push(killProcessTree(s.child, 'SIGKILL')); } catch { /* best effort */ }
     clearTimers(s);
   }
   _sessions.clear();
   _broadcastOverride = null;
+  await Promise.allSettled(completions);
 }
 
 function nowIso(): string {
