@@ -1,22 +1,22 @@
 # CogSeed 发版扫描整改记录（2026-09-23）
 
 对照《CogSeed v1.2.0 全量扫描》待关闭项。本文件记录证据、已落地改动与仍需负责人拍板项。
-**树侧已落地**；**历史改写已在本地/旁路分支完成并推送到 `rewrite/release-scan-history-20260923`**，但 `develop` 的 force-push 被仓库规则拒绝（GH013：Cannot force-push / PR-only），**待管理员 force-push**。仍待项见矩阵 #5 / tag / 管理员放行。
+**树侧已落地并合入 `develop`（含 PR #370/#372）**；远端签名 tag **`v1.2.0`** 已存在。**历史改写**仍在旁路分支 `rewrite/release-scan-history-20260923`：canonical `develop`/tag 历史尚未替换（GH013，需管理员 force-push）。功能 Hub 占位为 `hub.example.com`，待负责人换成真实公网 URL。
 
 扫描环境摘要：
 
 | 工具 | 版本 / 命令 | 结果摘要 |
 |---|---|---|
 | Gitleaks | 8.24.3 · `gitleaks dir . --config .gitleaks.toml --redact` | 工作树合成测试/夹具类命中（见 #6）；历史命中见历史改写节 |
-| TruffleHog | 3.88.29 · `filesystem . --only-verified --no-update`（排除 `node_modules`） | **已验证命中 0**（2026-09-23 residual scrub 复跑） |
+| TruffleHog | 3.88.29 · `filesystem . --only-verified --no-update`（排除 `node_modules`） | **已验证命中 0**（2026-09-23 18:52 再跑，verified_secrets=0） |
 | license-checker | 对 `npm ci --ignore-scripts` 后依赖树 | 见 #9 |
 | README 链接 | `npm run readme:check` + 人工 `curl -I` 抽查 | 本地链接脚本通过；外链抽查 9/9 HTTP 200（见 #10） |
-| Release / tag | `gh release list` + matching-refs | 最新正式版 **v1.1.2**；**无 v1.2.0 tag**（留给打包同学） |
+| Release / tag | `gh release list` + matching-refs | 远端签名 tag **`v1.2.0`** 已存在（2026-09-23 复查确认）；正式发布以 tag 为准 |
 
 相关分支 / PR：
 
 - 首轮隐私清理：`chore/release-scan-privacy-cleanup` · https://github.com/bonc-ai/cogseed/pull/370（已合入 `develop` @ `091a7db`）
-- 本轮残留清理：`chore/release-scan-residual-scrub-20260923`（树侧）+ 历史改写 force-push（见下文）
+- 残留清理：https://github.com/bonc-ai/cogseed/pull/372（已合入）；历史改写旁路 `rewrite/release-scan-history-20260923`（待管理员）
 
 ---
 
@@ -24,13 +24,13 @@
 
 | # | 扫描项 | 状态 | 说明 |
 |---|---|---|---|
-| 1 | 可核验的 v1.2.0 基线 / tag | **元数据已齐 · tag 留给打包** | 源码版本字段已对齐 1.2.0；GitHub 上仍无 `v1.2.0` tag（按要求不在本轮创建）。最新正式 release 仍为 v1.1.2，直至打包同学打 tag。 |
+| 1 | 可核验的 v1.2.0 基线 / tag | **已齐** | 源码版本字段与远端签名 tag **`v1.2.0`** 一致。 |
 | 2 | 版本元数据 vs 目标 1.2.0 | **已对齐** | `package.json` / `package-lock` / `publiccode.yml` / `sbom.cdx.json` / CHANGELOG `## [1.2.0] - 2026-09-23` / README 文案一致为 **1.2.0**。 |
 | 3 | 旧产品名（prior brand）残留 | **本轮已清** | 对旧 CamelCase 产品名的大小写不敏感检索 → **0** 命中。CHANGELOG / 本整改文档改写为「旧产品名残留 / legacy product name」，不再出现该字面量。ASR 错误形态 `mesh seed` / `mesh c` 保留（测试需要），正确目标为 CogSeed。 |
 | 4 | 内部会议材料用语 | **本轮已清** | `specs/001-kb-continuity/spec.md` 与 `checklists/requirements.md` 已去掉「内部讨论稿 / 讨论纪要 / 摸底会」等表述，改为「需求调研记录 / 现状盘点评审」等中性产品用语。 |
 | 5 | BONC / Hub 域名 | **版权保留 · 功能域名已占位** | LICENSE/NOTICE 保留 BONC 东方国信。`cogseed-open.bonc.com.cn` / `www.bonc.com.cn` 等非归属域名 → `https://hub.example.com` / `https://www.example.com`。 |
 | 6 | Gitleaks / TruffleHog | **树侧已核** | TruffleHog verified = **0**。Gitleaks 工作树命中均为合成测试/夹具/xterm 误报形状；**不删除安全测试合成密文**。历史树中已删扫描报告命中 → 见「历史改写」节（用户已书面批准 filter-repo + force-push）。 |
-| 7 | 提交作者 PII | **改写已备好 · 待管理员 force-push** | 旁路分支 `rewrite/release-scan-history-20260923` 上已验证：个人 gmail/qq 邮箱清零、扫描报告 blob 清除、gitleaks `v1.1.2..HEAD` 无泄漏。`develop` 因规则无法 force-push（执行者无 admin）。 |
+| 7 | 提交作者 PII | **改写已备好 · 须 ruleset 临时放行 + 新改写分支（勿用旧 rewrite）** | 旁路分支 `rewrite/release-scan-history-20260923` 上已验证：个人 gmail/qq 邮箱清零、扫描报告 blob 清除、gitleaks `v1.1.2..HEAD` 无泄漏。`develop` 因规则无法 force-push（执行者无 admin）。 |
 | 8 | docs / scripts / 根目录发布清单 | **清单已出 · keep 为主** | 见下文；默认保留产品/测试/打包脚本；偏本地审计脚本可在发行 tarball exclude（待拍板），**不删除有用产品/测试脚本**。 |
 | 9 | 许可证 | **结论已写** | 根包 `UNLICENSED`（与闭源/专有发行策略一致，需产品确认对外叙事）。`jszip` 为 MIT OR GPL-3.0-or-later，`THIRD_PARTY_NOTICES.md` 已声明选用 MIT。 |
 | 10 | README 外链 + 人工复核 | **抽查通过** | `curl -I` 抽查 9 条关键外链（README 中的上游/生态项目与 shields badges 等）均为 HTTP 200。本地 `readme:check` 覆盖仓库内链。 |
@@ -71,7 +71,7 @@
 ### 历史（用户已批准；旁路分支已执行；develop 待管理员）
 
 - 旁路：`rewrite/release-scan-history-20260923`（及镜像内 67 分支改写结果）。
-- 已删文件路径 `CogSeed-发版扫描报告-牛保康-20260916.md`：在旁路历史上已清除。
+- 已删文件路径 `CogSeed-发版扫描报告-<redacted>-20260916.md`：在旁路历史上已清除。
 - 个人邮箱：旁路历史上已映射清零。
 - `gitleaks detect --log-opts=v1.1.2..HEAD`（旁路）→ **no leaks found**。
 - **管理员操作**：对 `develop`（及需同步的分支/tag）执行 force-push；之后所有 clone 必须重 clone/reset。
@@ -87,7 +87,7 @@
 | `184377817@qq.com`（作者名「海韵」等） | → `Usernames686@users.noreply.github.com` / `Usernames686` |
 | 其他个人 `gmail.com` / `qq.com` 提交身份 | → 对应已有 GitHub noreply，或 `Usernames686@users.noreply.github.com` |
 | `business@bonc.com.cn` / `*@users.noreply.github.com` | **保留** |
-| 路径 `CogSeed-发版扫描报告-牛保康-20260916.md` | 自**全部历史**删除 |
+| 路径 `CogSeed-发版扫描报告-<redacted>-20260916.md` | 自**全部历史**删除 |
 | `JP Richardson`（SBOM） | **豁免保留**（上游包 author） |
 
 **未再使用「仅记录、不改写」默认**——本轮已获用户明确批准。
@@ -122,7 +122,7 @@
 **已删除（隐私）**
 
 - `design/` 下内部汇报 / 台账 HTML（PR #370）
-- 历史中的 `CogSeed-发版扫描报告-牛保康-20260916.md`（本轮 filter-repo）
+- 历史中的 `CogSeed-发版扫描报告-<redacted>-20260916.md`（本轮 filter-repo）
 
 ---
 
@@ -228,13 +228,55 @@
 
 | 清单项 | develop 现状 | PR372 / 改写分支现状 | 要上线的动作 |
 |---|---|---|---|
-| **#2 MeshSeed** | `git grep -i MeshSeed` → **3**（CHANGELOG + 本整改文档旧表述） | 树侧大小写不敏感检索 → **0** | **合并 PR #372** |
-| **#9 内部讨论稿/讨论纪要/摸底会** | `specs/001-kb-continuity/spec.md` 仍含上述字面量 | `specs/` / `.specify/` → **0**；仅整改文档作为「已清除」叙述出现 | **合并 PR #372** |
-| **#10 SECURITY 合成 RFC1918** | 可能未列全四类地址 | `SECURITY.md` 已列 `10.0.0.1` / `10.0.0.5` / `192.168.1.1` / `172.16.0.1`（+ `169.254.169.254`） | **合并 PR #372** |
+| **#2 旧产品名字面量** | tag/`develop` 树：对旧 CamelCase 品牌的大小写不敏感检索 → **0**（本文件亦不保留该字面量） | 同左 | **已闭环** |
+| **#9 内部讨论稿/讨论纪要/摸底会** | `specs/001-kb-continuity/spec.md` 仍含上述字面量 | `specs/` / `.specify/` → **0**；仅整改文档作为「已清除」叙述出现 | **已合入 develop** |
+| **#10 SECURITY 合成 RFC1918** | 可能未列全四类地址 | `SECURITY.md` 已列 `10.0.0.1` / `10.0.0.5` / `192.168.1.1` / `172.16.0.1`（+ `169.254.169.254`） | **已合入 develop** |
 | **#12 TruffleHog** | 以上次记录为准 | 复跑 `filesystem . --only-verified` → **verified_secrets=0**（trufflehog 3.88.29） | 记录已写入；合并后即可 |
-| **#14 人名** | 样例脚本/文档可能仍含真实样例名 | 整改文档不再罗列个人中文姓名；样例 → `ExampleSpeaker` / `ExamplePerson`；历史路径名仅作「已删除文件」叙述 | **合并 PR #372**；历史文件名清除依赖管理员 force-push 改写分支 |
+| **#14 人名** | 样例脚本/文档可能仍含真实样例名 | 整改文档不再罗列个人中文姓名；样例 → `ExampleSpeaker` / `ExamplePerson`；历史路径名仅作「已删除文件」叙述 | **已合入**；历史路径清除仍依赖管理员 force-push |
 | **format: `git diff --check`** | — | `git diff --check origin/develop...HEAD`（含整改文档）→ **clean** | 保持；后续提交继续 `--check` |
 | 历史个人邮箱 / 已删扫描报告 | develop：`fzywind@gmail.com`、`184377817@qq.com` 仍在作者历史 | 改写分支：个人 gmail/qq → **0**；`CogSeed-发版扫描报告*` 不在 `HEAD` 可达历史 | **管理员** `git push --force` 改写分支 → `develop`（执行者会再试一次；若 GH013 则停止） |
-| BONC Hub 默认 URL | 硬编码 `hub.example.com` | 同左（本 PR 不改） | **跟进 PR** + 负责人给替换 URL |
-| `v1.2.0` tag | 无 | 无 | **留给打包同学**；本轮不打 tag |
+| BONC Hub 默认 URL | 占位 `hub.example.com` | 同左 | **负责人提供真实公网 URL** 或强制 env |
+| `v1.2.0` tag | **远端已有签名 tag** | 同左 | **已闭环**（Release 页面如需再核） |
 | README 外链 | 抽查 9 条 | 全量 19 条已 curl（见外链文档） | 文档已更新；404 stargazers 可忽略或改盾牌链接 |
+
+
+---
+
+## 第二次复查收口（2026-09-23 18:52）
+
+对照《发版清理复查 Checklist（第二次）》在 tag `v1.2.0` 口径下的未闭环项：
+
+| 项 | 处置 |
+|---|---|
+| 旧产品名字面量须全库 0 | 本文件已去掉该字面量（含旧扫描对照表）；`git grep -i` → **0** |
+| 整改记录过期状态 | 已更新：PR #372 已合入；远端 **`v1.2.0`** 签名 tag 已存在 |
+| 已删扫描报告路径中的人名 | 文档叙述改为 `<redacted>`，不再保留原文件名中的人名 |
+| TruffleHog | 本机 `trufflehog` 3.88.29 再跑 `filesystem . --only-verified` → **verified_secrets=0** |
+| 历史 Gitleaks / 个人邮箱作者 | **仍未闭环**：旁路 `rewrite/release-scan-history-20260923` 已清零，canonical 历史须 ruleset 临时放行 + 新改写分支（勿用旧 rewrite） |
+| SBOM `JP Richardson` | **豁免保留**（上游 npm author 元数据） |
+| Hub 占位 `hub.example.com` | **待负责人**换成真实公网 URL 或强制环境变量 |
+
+---
+
+## 安全定性：历史 gitleaks `aws-access-token`（commit `67959c4`）
+
+**结论：合成样本，不是真实凭据。无需吊销/轮换。**
+
+| 字段 | 值 |
+|---|---|
+| Commit | `67959c4893039606d65ee4704cbc1558b4c51952` |
+| 文件 | 已删发版扫描报告（历史路径含人名，文档侧已 `<redacted>`） |
+| Rule | `aws-access-token` |
+| Secret | `AKIAABCDEFGHIJKLMNOP` |
+| Entropy | 3.88 |
+
+依据：该串为顺序字母占位，不符合真实 AKIA 密钥分布；报告正文 `#11 gitleaks` 已自述为「样例…脱敏类合成测试夹具」「全部为合成测试凭据」。历史改写可排在此结论之后，**不以吊销为前置**。
+
+## 历史改写执行口径（纠正）
+
+1. **禁止**复用/强推过期旁路 `rewrite/release-scan-history-20260923`（09-23 14:18）：它早于 `7cbea805`（Hub 占位与内部脚本删除），强推会回滚企业 Hub 域名清理并恢复已删脚本。
+2. 若仍要清个人邮箱与已删报告 blob：必须基于**当时最新** `origin/develop` HEAD 重新 `git filter-repo`，产出**新**旁路分支后再谈 ruleset 临时放行。
+3. `develop-approval-gate` 的 `bypass_actors` 为 null：**无人可直推/强推**（含管理员）。落地路径只能是负责人临时改 ruleset → 强推新分支 → 恢复规则；不是「等管理员绕过」。
+4. 只改 `develop` 不解「已发布面」：`v1.2.0` 在 `cicd`（`b0b88fbe`）上。是否同步 `cicd`/移动 tag，须与技术负责人按「未确认前不 force push、不删分支」口径共同决定；整改记录不得再写「待管理员直接 force-push develop」而未提 tag/`cicd`。
+5. 公开可见的 `rewrite/*` 旁路**不是**私密通道。
+
