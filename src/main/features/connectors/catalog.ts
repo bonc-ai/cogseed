@@ -1,7 +1,7 @@
 /**
  * Built-in catalog of connector entries.
  *
- * Every entry uses OAuth 2.0 by default — Server-bridge flow with an `cogseed://` deep-link
+ * Most entries use OAuth 2.0 — Server-bridge flow with an `cogseed://` deep-link
  * callback (see `oauth.ts` header). The catalog declares the provider id + default scopes;
  * the actual `client_id` / `client_secret` live on the CogSeed Server and never touch the PC
  * binary.
@@ -11,6 +11,11 @@
  * + every reconnect, the manager injects the *current* access_token into that env var before
  * spawning. Refresh is lazy — checked at boot / `connectors.refresh` / when the model's tool
  * call surfaces a 401.
+ *
+ * Entries whose provider publishes no OAuth authorization server use `auth_mode: 'local_cli'`
+ * instead: no grant is obtained, and a bundled `bin/` adapter wraps a locally installed CLI that
+ * owns its own login. Such entries name no `oauth_env_key` and forward nothing. See the Auth
+ * section in `types.ts`.
  */
 import { GOOGLE_ENTRIES } from './catalog-google';
 import type { CatalogEntry } from './types';
@@ -235,6 +240,37 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
       args: ['${COGSEED_PC_DIR}/bin/bing-webmaster-mcp-server.cjs'],
       oauth_env_key: 'BING_ACCESS_TOKEN',
       proxy_target_url: 'https://www.bing.com/webmaster/api.svc/json',
+    },
+  },
+  {
+    id: 'tencent-meeting',
+    display_name: '腾讯会议',
+    // Self-drawn neutral mark (screen + play), not the Tencent Meeting trademark: the catalog
+    // requires a real `icon_svg` on every shipped entry, and shipping a third-party brand asset
+    // would need a licence review we have not done. Kept geometric so it still reads at 40×40.
+    icon_svg: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="2.6" y="4.6" width="18.8" height="12.8" rx="2.6" fill="#006EFF"/><path fill="#fff" d="M9.8 8.35a.5.5 0 0 1 .76-.43l4.3 2.5a.5.5 0 0 1 0 .86l-4.3 2.5a.5.5 0 0 1-.76-.43z"/><path d="M8.4 20.4h7.2" fill="none" stroke="#006EFF" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    category: 'communication',
+    description_zh: '连接账号，读取有权访问的会议转写。',
+    description_en: 'Connect an account to read meeting transcripts you have access to.',
+    // Third auth mode — see the `// ── Auth ──` section in `types.ts`. Tencent Meeting publishes
+    // no OAuth authorization server (no OAuth 2.0, no DCR, no enterprise AppID) and no hosted MCP
+    // endpoint we can authorize against, so neither `server_bridge` nor `mcp_dcr` applies. The
+    // provider's supported programmatic surface is the locally installed `tmeet` CLI, which runs
+    // its own device-flow login and keeps the session in the OS keychain. Our stdio adapter wraps
+    // it, so CogSeed never sees, stores, or forwards the credential.
+    auth_mode: 'local_cli',
+    // Deliberately absent: `oauth`, `required_oauth_scopes`, and — unlike every other stdio entry
+    // — `oauth_env_key` / `env_synthesizer`. There is no token to forward; the child resolves its
+    // own account. `proxy_target_url` is absent too, because the child shells out to `tmeet`
+    // rather than issuing its own fetches.
+    //
+    // Machine-dependent availability is handled by `availability.ts`, which reports
+    // `visible_disabled` + `disabled_reason: 'cli_missing'` when `tmeet` is not installed, so the
+    // card never offers a connect action that can only fail.
+    transport_template: {
+      kind: 'stdio',
+      command: '${COGSEED_NODE}',
+      args: ['${COGSEED_PC_DIR}/bin/tencent-meeting-mcp-server.cjs'],
     },
   },
 ];

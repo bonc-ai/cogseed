@@ -748,6 +748,14 @@
                       <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
                     </div>
                   </div>
+                  <!-- 连接器详情视图：与网格互斥，由 connectors.js 填入。
+                       两个 host 只承载骨架——所有控件都由共享原语渲染，故 index.html
+                       的裸控件预算不变。结构登记见 docs/renderer-structural-registry.md
+                       的 CONN-PV-001。 -->
+                  <div class="connectors-detail-view" id="connectors-detail-view" style="display:none">
+                    <div class="connectors-detail-topbar" id="connectors-detail-topbar"></div>
+                    <div class="connectors-detail-body" id="connectors-detail-body"></div>
+                  </div>
                 </div>
                 <div class="connections-tools-view" data-connections-tools-view="plugins" hidden>
                   <div class="plugins-root" id="plugins-root"></div>

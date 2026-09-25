@@ -59,6 +59,7 @@ require('./proxy-bootstrap.cjs');
 // model, so `_requireOffsetIso` fails fast with a message that says what to add.
 
 const { execFile } = require('node:child_process');
+const { resolveCliLaunch } = require('./cli-launch.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -104,24 +105,56 @@ function _candidates() {
   return out.filter(Boolean);
 }
 
-/** First candidate that is either an absolute executable or a bare name we let PATH resolve. */
+/** Prefer an absolute candidate that is actually executable; fall back to a bare name for PATH to
+ *  resolve. Pure, so the ordering is testable without depending on what this machine has
+ *  installed.
+ *
+ *  Absolute probing has to come FIRST, and bare names must not short-circuit it. A packaged app
+ *  launched from Finder inherits the minimal GUI PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), so the
+ *  location that works in a terminal is missing there — that is the whole reason the absolute
+ *  candidate list exists. Testing a bare name first would always win and silently reduce this to
+ *  "trust PATH", which is the bug the candidate list was written to avoid. */
+function _pickBin(candidates, isExecutable) {
+  for (const c of candidates) {
+    // Bare names are PATH-resolved; they are the fallback below, not a probe here.
+    if (!c.includes('/') && !c.includes('\\')) continue;
+    if (isExecutable(c)) return c;
+  }
+  return candidates.find((c) => !c.includes('/') && !c.includes('\\')) || 'tmeet';
+}
+
 function tmeetBin() {
   // An explicit override is used verbatim — never silently swapped for another binary, so an
   // ENOENT names the path the user actually configured.
   if (process.env.COGSEED_TMEET_BIN) return process.env.COGSEED_TMEET_BIN;
   const cached = _RESOLVED.get('bin');
   if (cached) return cached;
-  let chosen = 'tmeet';
-  for (const c of _candidates()) {
-    if (!c.includes('/') && !c.includes('\\')) { chosen = c; break; }
+  const chosen = _pickBin(_candidates(), (c) => {
     try {
       fs.accessSync(c, fs.constants.X_OK);
-      chosen = c;
-      break;
-    } catch { /* keep probing */ }
-  }
+      return true;
+    } catch {
+      return false;
+    }
+  });
   _RESOLVED.set('bin', chosen);
   return chosen;
+}
+
+/** Resolve one `tmeet` invocation into something the OS can actually execute.
+ *
+ *  On Windows an npm-global install is a `tmeet.cmd` shim and CreateProcess cannot execute a
+ *  `.cmd`/`.bat` directly, so a bare `execFile(bin, …)` fails with ENOENT no matter how correct
+ *  the path is. `cli-launch.cjs` prefers resolving the shim to the Node script it wraps (no shell,
+ *  so model-supplied arguments such as a meeting id or a search term can never become shell
+ *  syntax) and only falls back to `ComSpec` with escaped arguments. Off Windows this is the
+ *  identity. */
+function _launchFor(bin, args) {
+  const launch = resolveCliLaunch(bin, args);
+  const options = {};
+  if (launch.envPatch) options.env = { ...process.env, ...launch.envPatch };
+  if (launch.windowsVerbatimArguments) options.windowsVerbatimArguments = true;
+  return { command: launch.command, args: launch.args, options };
 }
 
 function _resetBinForTest() {
@@ -273,6 +306,39 @@ const TOOLS = [
       required: ['query'],
     },
   },
+  // ── Authorization helpers ─────────────────────────────────────────────
+  // These three are NOT read-only meeting tools and must never be handed to the model: they
+  // open a browser-based login, poll the session, and cancel a pending attempt. They exist so the
+  // connector page can drive `tmeet auth login` through this adapter — the sanctioned place where
+  // the CLI may be spawned — instead of adding a third CLI-spawn site to the main process.
+  //
+  // They deliberately stop short of anything that would make the adapter a credential store:
+  // `check_login` reports validity and the display name only, never a token value, and there is no
+  // logout tool — disconnecting a connector must not silently sign the user out of a CLI that
+  // every profile on the machine shares.
+  {
+    name: 'start_login',
+    description:
+      'Begin a Tencent Meeting CLI login and return the authorization URL for the host to open. ' +
+      'The URL is also shown to the user, so a browser that fails to open is recoverable. ' +
+      'Supersedes any previous pending attempt. Call check_login afterwards to poll.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'check_login',
+    description:
+      'Report whether the Tencent Meeting CLI currently holds a valid session. Returns ' +
+      'logged_in, the display name, and token validity windows — never token values. When a login ' +
+      'started by start_login has completed, this stops the pending attempt.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'stop_login',
+    description:
+      'Abandon a login started by start_login. Safe to call when none is pending. Does not sign ' +
+      'the user out of an already-established session.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 // ── tmeet invocation ──────────────────────────────────────────────────
@@ -289,7 +355,8 @@ function _execTmeet(args) {
     // argv array, never a shell string: no quoting/injection surface, and the CLI's own argument
     // parsing stays the single source of truth.
     const bin = tmeetBin();
-    execFile(bin, [...args, '--format', 'json'], { timeout: EXEC_TIMEOUT_MS }, (err, stdout, stderr) => {
+    const launch = _launchFor(bin, [...args, '--format', 'json']);
+    execFile(launch.command, launch.args, { timeout: EXEC_TIMEOUT_MS, ...launch.options }, (err, stdout, stderr) => {
       if (err) {
         // `tmeet` reports "Not logged in. Please use 'tmeet auth login'." on stdout for some
         // commands and on stderr for others; surface whichever exists plus the exit code.
@@ -321,6 +388,196 @@ async function tmeet(...args) {
 function _opt(flag, value) {
   return value === undefined || value === null || value === '' ? [] : [flag, String(value)];
 }
+
+// ── Authorization (auth subcommands) ──────────────────────────────────
+//
+// `tmeet auth` ignores `--format json` and prints human-readable text ("Logged in", "OpenId: …"),
+// so these commands cannot go through `_execTmeet`, which JSON-parses stdout. `_execTmeetText` is
+// the text-mode sibling: same argv-not-shell-string contract, no JSON parsing.
+
+/** Injectable so tests never spawn a real CLI. */
+let _execTextImpl = _execTmeetText;
+
+function _setTextExecForTest(fn) {
+  _execTextImpl = fn || _execTmeetText;
+}
+
+const AUTH_STATUS_TIMEOUT_MS = Number(process.env.COGSEED_TMEET_AUTH_TIMEOUT_MS || 30000);
+
+function _execTmeetText(args) {
+  return new Promise((resolve, reject) => {
+    const bin = tmeetBin();
+    const launch = _launchFor(bin, args);
+    execFile(launch.command, launch.args, { timeout: AUTH_STATUS_TIMEOUT_MS, ...launch.options }, (err, stdout, stderr) => {
+      if (err) {
+        const detail = String(stderr || '').trim() || String(stdout || '').trim() || err.message;
+        let hint = '';
+        if (err.code === 'ENOENT') {
+          hint = ` (the Tencent Meeting CLI was not found at "${bin}". Install it with ` +
+            '`npm install -g @tencentcloud/tmeet`, or point COGSEED_TMEET_BIN at the binary.)';
+        }
+        reject(new Error(`tmeet ${args.join(' ')} failed: ${detail.slice(0, 400)}${hint}`));
+        return;
+      }
+      resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+    });
+  });
+}
+
+async function tmeetText(...args) {
+  return _execTextImpl(args.filter((a) => a !== undefined && a !== null && a !== ''));
+}
+
+/** Parse `tmeet auth status` output. Shape (verified against tmeet 1.0.18):
+ *    Logged in
+ *      OpenId:  cli_…
+ *      UserName:  Example User
+ *      AccessToken:  valid (expires at 2026-09-23 00:23:31, remaining 5h 59m)
+ *      RefreshToken: valid (expires at 2026-10-22 18:23:31, remaining 29d 23h 59m)
+ *  A signed-out CLI prints a "Not logged in"-style line instead, so absence of `Logged in` is the
+ *  sign-out signal rather than a parse failure — a parse that threw here would make "not logged in"
+ *  indistinguishable from a real CLI error for the caller. */
+function _parseAuthStatus(text) {
+  const raw = String(text || '');
+  const loggedIn = /^\s*Logged\s+in\s*$/im.test(raw) && !/not\s+logged\s+in/i.test(raw);
+  const field = (label) => {
+    const m = raw.match(new RegExp(`^\\s*${label}:\\s*(.*)$`, 'im'));
+    return m ? m[1].trim() : '';
+  };
+  const validity = (label) => {
+    const value = field(label);
+    if (!value) return { present: false, valid: false, expires_at: '', remaining: '' };
+    const expires = value.match(/expires at ([^,)]+)/i);
+    const remaining = value.match(/remaining ([^,)]+)/i);
+    return {
+      present: true,
+      valid: /valid/i.test(value) && !/invalid|expired/i.test(value),
+      expires_at: expires ? expires[1].trim() : '',
+      remaining: remaining ? remaining[1].trim() : '',
+    };
+  };
+  return {
+    logged_in: loggedIn,
+    user_name: loggedIn ? field('UserName') : '',
+    access_token: validity('AccessToken'),
+    refresh_token: validity('RefreshToken'),
+    // `OpenId` is deliberately NOT returned: it is an account identifier the connector page never
+    // displays, so handing it to main would be exposure without a consumer. Everything returned
+    // here is validity metadata plus a display name.
+  };
+}
+
+/** Pending `tmeet auth login` child, if any. Held at module scope because the login outlives the
+ *  single tool call that starts it: the CLI waits for the user to finish in the browser, so its
+ *  completion is only observable through a later `check_login` poll. */
+let _pendingLogin = null;
+
+/** Spawn injection for tests. */
+let _spawnImpl = null;
+
+function _setSpawnForTest(fn) {
+  _spawnImpl = fn || null;
+}
+
+const LOGIN_URL_TIMEOUT_MS = Number(process.env.COGSEED_TMEET_LOGIN_URL_TIMEOUT_MS || 20000);
+const AUTH_URL_RE = /https?:\/\/[^\s"'<>]+/;
+
+/** Kill the pending login child, if any. `SIGTERM` then a short `SIGKILL` fallback, because the
+ *  CLI may be blocked in a poll and ignore the first signal. Returns whether something was pending. */
+function _stopPendingLogin() {
+  const pending = _pendingLogin;
+  if (!pending) return false;
+  _pendingLogin = null;
+  try {
+    pending.child.kill('SIGTERM');
+    const killer = setTimeout(() => {
+      try { pending.child.kill('SIGKILL'); } catch { /* already gone */ }
+    }, 2000);
+    if (typeof killer.unref === 'function') killer.unref();
+  } catch { /* already gone */ }
+  return true;
+}
+
+/** Start a login and resolve with the authorization URL once it appears on stdout. Rejects when the
+ *  CLI exits early or never prints a URL, so the caller gets a concrete error instead of an
+ *  indefinitely pending state. */
+async function startLogin() {
+  _stopPendingLogin();
+  const bin = tmeetBin();
+  // argv array, never a shell string, and `--no-browser` so this adapter controls what happens
+  // next: the host decides whether to open the URL, and a browser that refuses to open still
+  // leaves the user a copyable link.
+  const launch = _launchFor(bin, ['auth', 'login', '--no-browser']);
+  const child = (_spawnImpl || require('node:child_process').spawn)(
+    launch.command,
+    launch.args,
+    { stdio: ['ignore', 'pipe', 'pipe'], ...launch.options },
+  );
+  const entry = { child, bin, started_at: Date.now() };
+  _pendingLogin = entry;
+
+  const url = await new Promise((resolve, reject) => {
+    let buffered = '';
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const timer = setTimeout(() => {
+      finish(reject, new Error(
+        `tmeet auth login did not print an authorization URL within ${Math.round(LOGIN_URL_TIMEOUT_MS / 1000)}s`,
+      ));
+    }, LOGIN_URL_TIMEOUT_MS);
+
+    const scan = (chunk) => {
+      buffered += String(chunk);
+      const found = buffered.match(AUTH_URL_RE);
+      if (found) finish(resolve, found[0].replace(/[.,;)]+$/, ''));
+    };
+    child.stdout.on('data', scan);
+    child.stderr.on('data', scan);
+    child.on('error', (err) => finish(reject, err));
+    child.on('exit', (code) => {
+      // Exit before a URL appeared: the CLI failed fast, already had a session, or finished without
+      // needing a browser. Report the buffered output rather than swallowing it, because that output
+      // is the only diagnosis available.
+      const found = buffered.match(AUTH_URL_RE);
+      if (found) return finish(resolve, found[0].replace(/[.,;)]+$/, ''));
+      // Observed for real (tmeet 1.0.18): when a valid session already exists, `auth login` exits
+      // non-zero printing "Error: user has been login, please use 'tmeet cmd [flags] to use'" on
+      // stderr. Callers are expected to `check_login` before `start_login`, so reaching this means
+      // either a race or a caller bug — say so instead of passing CLI jargon through.
+      const alreadySignedIn = /has been login|already logged in|user config is empty/i.test(buffered);
+      const hint = alreadySignedIn
+        ? ' (the CLI already holds a session — call check_login first instead of starting a login)'
+        : '';
+      finish(reject, new Error(
+        `tmeet auth login exited (code ${code}) without printing an authorization URL: ` +
+        `${buffered.trim().slice(0, 300) || '(no output)'}${hint}`,
+      ));
+    });
+  });
+
+  entry.authorization_url = url;
+  return url;
+}
+
+async function checkLogin() {
+  const { stdout } = await tmeetText('auth', 'status');
+  const status = _parseAuthStatus(stdout);
+  // A completed login means the pending `tmeet auth login` has done its job; stop it so the user
+  // is not left with a stray process.
+  if (status.logged_in) _stopPendingLogin();
+  return status;
+}
+
+/** Never let a login child outlive the adapter — an orphaned `tmeet auth login` could re-open a
+ *  browser after the connector page is gone. */
+process.on('exit', () => { _stopPendingLogin(); });
+process.on('SIGTERM', () => { _stopPendingLogin(); process.exit(0); });
+process.on('SIGINT', () => { _stopPendingLogin(); process.exit(0); });
 
 // ── Time handling ─────────────────────────────────────────────────────
 
@@ -438,6 +695,20 @@ function _normalizeRecord(row) {
 // ── Tool dispatch ─────────────────────────────────────────────────────
 
 async function callTool(name, args = {}) {
+  if (name === 'start_login') {
+    const authorization_url = await startLogin();
+    return {
+      authorization_url,
+      started_at: Date.now(),
+      note: 'The host is expected to open this URL. Poll check_login until logged_in is true.',
+    };
+  }
+  if (name === 'check_login') {
+    return await checkLogin();
+  }
+  if (name === 'stop_login') {
+    return { cancelled: _stopPendingLogin() };
+  }
   if (name === 'list_recordings') {
     const hasRange = args.start || args.end;
     if (hasRange && !(args.start && args.end)) {
@@ -732,7 +1003,21 @@ async function main() {
   await server.connect(transport);
 }
 
-module.exports = { TOOLS, callTool, tmeetBin, _setExecForTest, _resetBinForTest };
+module.exports = {
+  TOOLS,
+  callTool,
+  tmeetBin,
+  _setExecForTest,
+  _resetBinForTest,
+  // Pure candidate ordering — asserted directly so the "absolute before PATH" contract cannot
+  // regress on a machine that happens to have the CLI only on PATH.
+  _pickBin,
+  // Authorization seams — tests must never spawn a real CLI or a real login process.
+  _setTextExecForTest,
+  _setSpawnForTest,
+  _parseAuthStatus,
+  _stopPendingLogin,
+};
 
 if (require.main === module) {
   main().catch((err) => {

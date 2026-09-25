@@ -16,12 +16,23 @@ function fixture(name: string): any {
   return JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', name), 'utf8'));
 }
 
+type AuthSession = {
+  logged_in: boolean;
+  user_name: string;
+  access_token: { present: boolean; valid: boolean; expires_at: string; remaining: string };
+  refresh_token: { present: boolean; valid: boolean; expires_at: string; remaining: string };
+};
+
 type Adapter = {
   TOOLS: Array<{ name: string; description: string; inputSchema: { required?: string[] } }>;
   callTool: (name: string, args?: Record<string, unknown>) => Promise<any>;
   tmeetBin: () => string;
   _setExecForTest: (fn: ((args: string[]) => Promise<unknown>) | null) => void;
   _resetBinForTest: () => void;
+  _setTextExecForTest: (fn: ((args: string[]) => Promise<unknown>) | null) => void;
+  _setSpawnForTest: (fn: ((bin: string, args: string[], opts: unknown) => unknown) | null) => void;
+  _parseAuthStatus: (text: string) => AuthSession;
+  _stopPendingLogin: () => boolean;
 };
 
 function loadAdapter(): Adapter {
@@ -56,9 +67,10 @@ afterEach(() => {
 });
 
 describe('Tencent Meeting stdio CLI adapter', () => {
-  it('exposes exactly the 5 read-only tools, without starting the stdio server', () => {
+  it('exposes the read-only meeting tools plus the three auth-session tools, without starting the stdio server', () => {
     const adapter = loadAdapter();
     expect(adapter.TOOLS.map((t) => t.name).sort()).toEqual([
+      'check_login',
       'get_meeting_minutes',
       'get_transcript',
       'get_transcript_paragraphs',
@@ -66,8 +78,26 @@ describe('Tencent Meeting stdio CLI adapter', () => {
       'preview_record_permission',
       'search_meeting_minutes',
       'search_transcript',
+      'start_login',
+      'stop_login',
     ]);
     expect(typeof adapter.callTool).toBe('function');
+  });
+
+  it('separates the auth-session tools from the meeting tools and ships no logout', () => {
+    const adapter = loadAdapter();
+    const names = adapter.TOOLS.map((t) => t.name);
+    // These three drive `tmeet auth login` so the connector page can authorize without adding a
+    // third CLI-spawn site to main. They are not meeting-data tools and the model must never be
+    // handed them, so the description of each has to say what it is for.
+    for (const name of ['start_login', 'check_login', 'stop_login']) {
+      expect(names).toContain(name);
+    }
+    expect(adapter.TOOLS.find((t) => t.name === 'start_login')!.description).toMatch(/authorization URL/i);
+    expect(adapter.TOOLS.find((t) => t.name === 'check_login')!.description).toMatch(/never token values/i);
+    // Deliberately absent: signing out is a machine-wide side effect (the CLI session is shared by
+    // every profile on this device), so disconnecting a connector must never trigger it.
+    expect(names.filter((n) => /logout|sign_out|signout/i.test(n))).toEqual([]);
   });
 
   it('exposes NO write tool — no create/update/cancel/commit path can reach the CLI', () => {
@@ -75,6 +105,9 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     // COGSEED-314.4 is 只读接入适配. Tencent's docs require a self-built agent to implement write
     // confirmation itself; shipping no write tool satisfies that by construction, and keeps the
     // (agent, connector)-scoped bridge always-allow grant from silently covering a mutation.
+    // The auth-session tools are the one non-read-only surface; they were named to stay clear of
+    // this guard on purpose (`stop_login`, not `cancel_login`) so the guard keeps meaning
+    // "no meeting mutation is reachable" rather than being widened for them.
     const WRITE_VERBS = /create|update|cancel|commit|delete|remove|replace|add|invite|control/i;
     for (const t of adapter.TOOLS) {
       expect(t.name).not.toMatch(WRITE_VERBS);
@@ -373,5 +406,202 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     adapter._setExecForTest(null); // restore the real execFile so ENOENT actually happens
     await expect(adapter.callTool('list_recordings', { meeting_id: '1' }))
       .rejects.toThrow(/npm install -g @tencentcloud\/tmeet/);
+  });
+});
+
+// ── Authorization session ──────────────────────────────────────────────
+//
+// `tmeet auth` ignores `--format json` and prints text, so `_parseAuthStatus` is the load-bearing
+// piece: it must distinguish "signed out" from "CLI broken", and must never leak a token value.
+// Real output (tmeet 1.0.18) is quoted verbatim in the fixtures below.
+
+const LOGGED_IN_TEXT = [
+  'Logged in',
+  '  OpenId:  cli_0123456789abcdef0123456789abcdef',
+  '  UserName:  Example User',
+  '  AccessToken:  valid (expires at 2026-09-23 00:23:31, remaining 5h 59m)',
+  '  RefreshToken: valid (expires at 2026-10-22 18:23:31, remaining 29d 23h 59m)',
+  '',
+].join('\n');
+
+const EXPIRED_TEXT = [
+  'Logged in',
+  '  OpenId:  cli_0123456789abcdef0123456789abcdef',
+  '  UserName:  Example User',
+  '  AccessToken:  invalid (expired at 2026-09-22 00:23:31)',
+  '  RefreshToken: valid (expires at 2026-10-22 18:23:31, remaining 29d 23h 59m)',
+  '',
+].join('\n');
+
+const LOGGED_OUT_TEXT = "Not logged in. Please use 'tmeet auth login' to log in.\n";
+
+/** A fake `spawn` whose child lets the test drive stdout and exit timing. */
+function fakeChild() {
+  const listeners: Record<string, Array<(arg: unknown) => void>> = { data: [], error: [], exit: [] };
+  const child = {
+    killed: false,
+    kill(signal: string) { this.killed = true; this.signals.push(signal); return true; },
+    signals: [] as string[],
+    stdout: { on: (ev: string, fn: (arg: unknown) => void) => { listeners[ev]?.push(fn); } },
+    stderr: { on: (ev: string, fn: (arg: unknown) => void) => { listeners[ev]?.push(fn); } },
+    on(ev: string, fn: (arg: unknown) => void) { listeners[ev]?.push(fn); },
+    emit(ev: string, arg: unknown) { for (const fn of listeners[ev] || []) fn(arg); },
+  };
+  return child;
+}
+
+describe('Tencent Meeting adapter authorization session', () => {
+  it('parses a signed-in status without exposing any token value', () => {
+    const adapter = loadAdapter();
+    const status = adapter._parseAuthStatus(LOGGED_IN_TEXT);
+    expect(status).toMatchObject({ logged_in: true, user_name: 'Example User' });
+    expect(status.access_token).toMatchObject({ present: true, valid: true, remaining: '5h 59m' });
+    expect(status.refresh_token).toMatchObject({ present: true, valid: true, remaining: '29d 23h 59m' });
+    // The returned shape IS the privacy boundary: this object crosses into main, so every field is
+    // either a boolean, a display name, or a human-readable validity window. A field that could
+    // carry a credential must not exist — and neither must the account's OpenId, which nothing
+    // downstream displays.
+    expect(Object.keys(status).sort()).toEqual([
+      'access_token', 'logged_in', 'refresh_token', 'user_name',
+    ]);
+    for (const key of ['access_token', 'refresh_token'] as const) {
+      expect(Object.keys(status[key]).sort()).toEqual(['expires_at', 'present', 'remaining', 'valid']);
+    }
+  });
+
+  it('parses an expired access token as invalid but keeps the session signed in', () => {
+    const adapter = loadAdapter();
+    const status = adapter._parseAuthStatus(EXPIRED_TEXT);
+    expect(status.logged_in).toBe(true);
+    expect(status.access_token.valid).toBe(false);
+    expect(status.refresh_token.valid).toBe(true);
+  });
+
+  it('treats a signed-out status as logged_in:false rather than an error', () => {
+    const adapter = loadAdapter();
+    const status = adapter._parseAuthStatus(LOGGED_OUT_TEXT);
+    expect(status.logged_in).toBe(false);
+    expect(status.user_name).toBe('');
+    expect(status.access_token).toMatchObject({ present: false, valid: false });
+  });
+
+  it('start_login returns the authorization URL printed by --no-browser', async () => {
+    const adapter = loadAdapter();
+    const child = fakeChild();
+    const spawned: Array<{ bin: string; args: string[] }> = [];
+    adapter._setSpawnForTest((bin, args) => { spawned.push({ bin, args }); return child; });
+
+    const pending = adapter.callTool('start_login');
+    child.emit('data', 'Please open the following URL to authorize:\n');
+    child.emit('data', 'https://meeting.tencent.com/ai-skill/authorize?code=abc123\n');
+    const result = await pending;
+
+    expect(result.authorization_url).toBe('https://meeting.tencent.com/ai-skill/authorize?code=abc123');
+    // `--no-browser` is what makes the URL observable; without it the CLI opens the browser itself
+    // and the host has nothing to fall back to when that fails.
+    //
+    // Assert the arguments the adapter asks the CLI to run, not the launch wrapper that carries
+    // them. The wrapper is platform-specific: on Windows a `tmeet.cmd` shim has to travel through
+    // ComSpec, so `args` is one escaped payload rather than the raw argv. Matching the raw argv
+    // here would pass on macOS and fail on Windows for a reason unrelated to what is being tested.
+    const invoked = spawned[0].args.join(' ');
+    for (const part of ['auth', 'login', '--no-browser']) {
+      expect(invoked).toContain(part);
+    }
+  });
+
+  it('start_login strips trailing punctuation from a URL inside prose', async () => {
+    const adapter = loadAdapter();
+    const child = fakeChild();
+    adapter._setSpawnForTest(() => child);
+    const pending = adapter.callTool('start_login');
+    child.emit('data', 'Open https://meeting.tencent.com/ai-skill/authorize?code=abc123)\n');
+    const result = await pending;
+    expect(result.authorization_url).toBe('https://meeting.tencent.com/ai-skill/authorize?code=abc123');
+  });
+
+  it('start_login rejects with the CLI output when the process exits without a URL', async () => {
+    const adapter = loadAdapter();
+    const child = fakeChild();
+    adapter._setSpawnForTest(() => child);
+    const pending = adapter.callTool('start_login');
+    child.emit('exit', 3);
+    await expect(pending).rejects.toThrow(/exited \(code 3\) without printing an authorization URL/);
+  });
+
+  it('explains the already-signed-in rejection instead of passing CLI jargon through', async () => {
+    const adapter = loadAdapter();
+    const child = fakeChild();
+    adapter._setSpawnForTest(() => child);
+    const pending = adapter.callTool('start_login');
+    // Observed for real on tmeet 1.0.18: with a valid session, `auth login --no-browser` exits
+    // non-zero with this exact stderr line and prints no URL. Callers check_login first, so hitting
+    // it means a race or a caller bug — the message has to say which.
+    child.emit('data', "Error: user has been login, please use 'tmeet cmd [flags]' to use\n");
+    child.emit('exit', 1);
+    await expect(pending).rejects.toThrow(/call check_login first instead of starting a login/);
+  });
+
+  it('start_login supersedes a previous pending attempt instead of leaking a second process', async () => {
+    const adapter = loadAdapter();
+    const first = fakeChild();
+    const second = fakeChild();
+    const children = [first, second];
+    adapter._setSpawnForTest(() => children.shift()!);
+
+    const firstPending = adapter.callTool('start_login');
+    first.emit('data', 'https://meeting.tencent.com/ai-skill/authorize?code=first\n');
+    await firstPending;
+
+    const secondPending = adapter.callTool('start_login');
+    second.emit('data', 'https://meeting.tencent.com/ai-skill/authorize?code=second\n');
+    await secondPending;
+
+    expect(first.killed).toBe(true);
+    expect(second.killed).toBe(false);
+  });
+
+  it('check_login reports the session and stops the pending login once it succeeds', async () => {
+    const adapter = loadAdapter();
+    const child = fakeChild();
+    adapter._setSpawnForTest(() => child);
+    // Start a login first — `check_login` only has something to stop if one is pending.
+    const pending = adapter.callTool('start_login');
+    child.emit('data', 'https://meeting.tencent.com/ai-skill/authorize?code=abc123\n');
+    await pending;
+
+    adapter._setTextExecForTest(async (args: string[]) => {
+      expect(args).toEqual(['auth', 'status']);
+      return { stdout: LOGGED_IN_TEXT, stderr: '' };
+    });
+    const status = await adapter.callTool('check_login');
+
+    expect(status.logged_in).toBe(true);
+    expect(status.user_name).toBe('Example User');
+    // A completed login must not leave `tmeet auth login` running.
+    expect(child.killed).toBe(true);
+  });
+
+  it('check_login leaves a still-pending login alone while the user has not finished', async () => {
+    const adapter = loadAdapter();
+    const child = fakeChild();
+    adapter._setSpawnForTest(() => child);
+    const pending = adapter.callTool('start_login');
+    child.emit('data', 'https://meeting.tencent.com/ai-skill/authorize?code=abc123\n');
+    await pending;
+
+    adapter._setTextExecForTest(async () => ({ stdout: LOGGED_OUT_TEXT, stderr: '' }));
+    const status = await adapter.callTool('check_login');
+
+    expect(status.logged_in).toBe(false);
+    // The login process must survive the poll: it is waiting for the user in the browser.
+    expect(child.killed).toBe(false);
+    expect(adapter._stopPendingLogin()).toBe(true);
+  });
+
+  it('stop_login is a safe no-op when nothing is pending', async () => {
+    const adapter = loadAdapter();
+    adapter._stopPendingLogin();
+    await expect(adapter.callTool('stop_login')).resolves.toEqual({ cancelled: false });
   });
 });

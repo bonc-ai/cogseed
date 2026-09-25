@@ -19,6 +19,7 @@ const CONNECTOR_CATALOG_ENTRYPOINTS = Object.freeze([
   'gsearch-console-mcp-server.cjs',
   'gsheets-mcp-server.cjs',
   'gtasks-mcp-server.cjs',
+  'tencent-meeting-mcp-server.cjs',
 ]);
 
 const CONNECTOR_CATALOG_SOURCE_FILES = Object.freeze([
@@ -58,6 +59,9 @@ const PACKAGED_BIN_ENTRYPOINTS = Object.freeze([
 // bootstrap so their fetch can follow the route selected by Electron main.
 const PACKAGED_BIN_HELPERS = Object.freeze([
   'proxy-bootstrap.cjs',
+  // Windows-aware CLI launch resolution, required by the Tencent Meeting adapter. It ships beside
+  // the entrypoint because the adapter `require`s it at runtime, but it is not a spawn surface.
+  'cli-launch.cjs',
 ]);
 
 // Shipped in source but deliberately NOT packaged: nothing in the app can reach these yet, so
@@ -65,12 +69,9 @@ const PACKAGED_BIN_HELPERS = Object.freeze([
 // exists to prevent. A file belongs here only while it has no consumer; promote it into
 // CONNECTOR_CATALOG_ENTRYPOINTS (or INTERNAL_ENTRYPOINT_CONSUMERS) in the same change that wires
 // it up.
-const DORMANT_BIN_FILES = Object.freeze([
-  // Tencent Meeting read-only adapter: implemented and verified against a live account, but not yet
-  // registered in the connector catalog — that needs a third auth_mode. Promote out of DORMANT in
-  // the same change that adds the catalog entry.
-  'tencent-meeting-mcp-server.cjs',
-]);
+// Currently empty — the Tencent Meeting adapter was the only occupant and is now a live
+// CONNECTOR_CATALOG_ENTRYPOINT; the list stays as the documented parking spot for the next one.
+const DORMANT_BIN_FILES = Object.freeze([]);
 
 const BUILD_ONLY_BIN_FILES = Object.freeze([
   'builtin-resource-gate.cjs',
