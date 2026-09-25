@@ -428,12 +428,13 @@ async function tmeetText(...args) {
   return _execTextImpl(args.filter((a) => a !== undefined && a !== null && a !== ''));
 }
 
-/** Parse `tmeet auth status` output. Shape (verified against tmeet 1.0.18):
+/** Parse `tmeet auth status` output. Shape verified against tmeet 1.0.18; the values below
+ *  are synthetic illustrations rather than a captured account:
  *    Logged in
  *      OpenId:  cli_…
  *      UserName:  Example User
- *      AccessToken:  valid (expires at 2026-09-23 00:23:31, remaining 5h 59m)
- *      RefreshToken: valid (expires at 2026-10-22 18:23:31, remaining 29d 23h 59m)
+ *      AccessToken:  valid (expires at 2030-01-01 00:00:00, remaining 1h 0m)
+ *      RefreshToken: valid (expires at 2030-02-01 00:00:00, remaining 30d 0h 0m)
  *  A signed-out CLI prints a "Not logged in"-style line instead, so absence of `Logged in` is the
  *  sign-out signal rather than a parse failure — a parse that threw here would make "not logged in"
  *  indistinguishable from a real CLI error for the caller. */
