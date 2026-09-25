@@ -413,14 +413,14 @@ describe('Tencent Meeting stdio CLI adapter', () => {
 //
 // `tmeet auth` ignores `--format json` and prints text, so `_parseAuthStatus` is the load-bearing
 // piece: it must distinguish "signed out" from "CLI broken", and must never leak a token value.
-// Real output (tmeet 1.0.18) is quoted verbatim in the fixtures below.
+// The fixtures below reproduce that shape with synthetic values: no real account name or OpenId.
 
 const LOGGED_IN_TEXT = [
   'Logged in',
   '  OpenId:  cli_0123456789abcdef0123456789abcdef',
   '  UserName:  Example User',
-  '  AccessToken:  valid (expires at 2026-09-23 00:23:31, remaining 5h 59m)',
-  '  RefreshToken: valid (expires at 2026-10-22 18:23:31, remaining 29d 23h 59m)',
+  '  AccessToken:  valid (expires at 2030-01-01 00:00:00, remaining 1h 0m)',
+  '  RefreshToken: valid (expires at 2030-02-01 00:00:00, remaining 30d 0h 0m)',
   '',
 ].join('\n');
 
@@ -428,8 +428,8 @@ const EXPIRED_TEXT = [
   'Logged in',
   '  OpenId:  cli_0123456789abcdef0123456789abcdef',
   '  UserName:  Example User',
-  '  AccessToken:  invalid (expired at 2026-09-22 00:23:31)',
-  '  RefreshToken: valid (expires at 2026-10-22 18:23:31, remaining 29d 23h 59m)',
+  '  AccessToken:  invalid (expired at 2029-12-31 00:00:00)',
+  '  RefreshToken: valid (expires at 2030-02-01 00:00:00, remaining 30d 0h 0m)',
   '',
 ].join('\n');
 
@@ -455,8 +455,8 @@ describe('Tencent Meeting adapter authorization session', () => {
     const adapter = loadAdapter();
     const status = adapter._parseAuthStatus(LOGGED_IN_TEXT);
     expect(status).toMatchObject({ logged_in: true, user_name: 'Example User' });
-    expect(status.access_token).toMatchObject({ present: true, valid: true, remaining: '5h 59m' });
-    expect(status.refresh_token).toMatchObject({ present: true, valid: true, remaining: '29d 23h 59m' });
+    expect(status.access_token).toMatchObject({ present: true, valid: true, remaining: '1h 0m' });
+    expect(status.refresh_token).toMatchObject({ present: true, valid: true, remaining: '30d 0h 0m' });
     // The returned shape IS the privacy boundary: this object crosses into main, so every field is
     // either a boolean, a display name, or a human-readable validity window. A field that could
     // carry a credential must not exist — and neither must the account's OpenId, which nothing
@@ -483,6 +483,19 @@ describe('Tencent Meeting adapter authorization session', () => {
     expect(status.logged_in).toBe(false);
     expect(status.user_name).toBe('');
     expect(status.access_token).toMatchObject({ present: false, valid: false });
+  });
+
+  it('keeps the auth-status fixtures synthetic, so no captured account value lands here', () => {
+    // These fixtures are transcribed from `tmeet auth status`, which prints the signed-in account's
+    // display name and OpenId. They once carried a real pair in this public repository, and the
+    // published-repo audit could not tell them from ordinary text — it matches on key-shaped
+    // secrets, not on a display name or a `cli_…` account id. So the guard has to live here: the
+    // parser reads whatever the CLI prints, but the fixtures must never be a capture of a real
+    // account again.
+    for (const [name, text] of [['LOGGED_IN_TEXT', LOGGED_IN_TEXT], ['EXPIRED_TEXT', EXPIRED_TEXT]] as const) {
+      expect(text.match(/OpenId:\s*(\S+)/)?.[1], name).toBe('cli_0123456789abcdef0123456789abcdef');
+      expect(text.match(/UserName:\s*(.+)/)?.[1]?.trim(), name).toBe('Example User');
+    }
   });
 
   it('start_login returns the authorization URL printed by --no-browser', async () => {
