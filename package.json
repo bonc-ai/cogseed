@@ -91,7 +91,7 @@
     "better-sqlite3": "^12.10.0",
     "electron-log": "^5.4.4",
     "esbuild": "~0.28.2",
-    "fastembed": "^2.1.0",
+    "fastembed": "^3.0.0",
     "get-tsconfig": "^4.7.5",
     "jimp": "^1.6.1",
     "mammoth": "^1.12.1",
