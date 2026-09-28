@@ -53,6 +53,27 @@ function encodeMeta(value) {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
 }
 
+/**
+ * Take ownership of an upstream fetch body before dropping the Response object
+ * that produced it.
+ *
+ * undici cancels a fetch Response's body when the Response object is garbage
+ * collected while its stream is neither locked nor disturbed (its fetch
+ * implementation registers the stream in a FinalizationRegistry). Re-wrapping
+ * `response.body` in a new Response keeps only the stream, so any GC between
+ * the bridge call and the caller reading the body cancels a response that is
+ * still in flight. The child sees
+ * `TypeError: Body is unusable: Body has already been read`.
+ *
+ * Piping through a TransformStream locks the upstream stream immediately, so
+ * that finalizer can never cancel it, and hands the caller a stream this module
+ * owns. Streaming, backpressure and cancellation propagate unchanged.
+ */
+function takeOwnershipOfBody(body) {
+  if (!body) return null;
+  return body.pipeThrough(new TransformStream());
+}
+
 function decodeMeta(value) {
   if (!value) throw new Error('system fetch bridge returned no metadata');
   return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
@@ -90,7 +111,7 @@ function createBridgeFetch(nativeFetch, bridgeUrl, bridgeToken) {
       throw new Error(`system fetch bridge failed: ${detail}`);
     }
     const responseMeta = decodeMeta(response.headers.get('x-cogseed-fetch-meta'));
-    return new Response(response.body, {
+    return new Response(takeOwnershipOfBody(response.body), {
       status: responseMeta.status,
       statusText: responseMeta.statusText,
       headers: responseMeta.headers,

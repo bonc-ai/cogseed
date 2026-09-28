@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **走系统代理的子进程不再偶发丢失响应体** — 本地子进程（连接器 / 本地 Agent）
+  经回环桥接取回响应后，父进程侧此前只保留了 `Response.body` 流，而 undici 会在
+  `Response` 对象被回收时取消尚未读取的流，于是偶发
+  `TypeError: Body is unusable: Body has already been read`（在 CI 满载分片里表现为
+  随机红单）。桥接现在在返回前接管上游流，响应体生命周期不再取决于 GC 时机。
+
 ## [1.2.0] - 2026-09-23
 
 ### Changed

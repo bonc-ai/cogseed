@@ -211,6 +211,43 @@ describe('util/proxy-dispatcher child fetch bridge', () => {
     }
   });
 
+  it('keeps a proxied body readable when the native response is released', async () => {
+    // Regression guard for the CI flake "Body is unusable: Body has already
+    // been read" (audit item C12). undici cancels a fetch Response's body once
+    // the Response object is garbage collected while its stream is neither
+    // locked nor disturbed (its fetch implementation registers the stream in a
+    // FinalizationRegistry), so a bridge that only re-wraps `response.body`
+    // loses an unread body to GC timing. The bridge must therefore own the
+    // upstream stream before returning; this asserts that contract without
+    // depending on when a collection actually happens.
+    const system = vi.fn(async () => new Response('bridged-body')) as unknown as typeof fetch;
+    const bridge = await startChildFetchBridge(system);
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createBridgeFetch } = require('../../../bin/proxy-bootstrap.cjs') as {
+      createBridgeFetch: (native: typeof fetch, url: string, token: string) => typeof fetch;
+    };
+    let native: Response | undefined;
+    const nativeFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      native = await hostFetch(input, init);
+      return native;
+    }) as unknown as typeof fetch;
+    const childFetch = createBridgeFetch(nativeFetch, bridge.url, bridge.token);
+
+    try {
+      const bridged = await childFetch('https://direct.example/path');
+      const upstream = native?.body;
+      expect(upstream).toBeDefined();
+      // The bridge must own the upstream stream before it returns. undici's
+      // response finalizer only cancels a stream that is neither locked nor
+      // disturbed, so an owned stream cannot be cancelled out from under a
+      // child that has not read the body yet.
+      expect(upstream?.locked).toBe(true);
+      await expect(bridged.text()).resolves.toBe('bridged-body');
+    } finally {
+      await bridge.close();
+    }
+  });
+
   it('cancels the Electron response stream when the child stops reading', async () => {
     let upstreamCancelled = false;
     const system = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
