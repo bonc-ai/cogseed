@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-QUALIFY-001",
+    "EVAL-QUALIFY-002",
+    "EVAL-QUALIFY-003",
+    "EVAL-QUALIFY-004",
+    "EVAL-QUALIFY-005",
+    "EVAL-QUALIFY-006",
+    "EVAL-QUALIFY-007",
+    "EVAL-QUALIFY-008",
+    "EVAL-QUALIFY-009",
+    "EVAL-QUALIFY-010"
+  ],
+  "id": "EVAL-SET-QUALIFY-001",
+  "negative_refs": [
+    "EVAL-QUALIFY-007",
+    "EVAL-QUALIFY-008",
+    "EVAL-QUALIFY-009",
+    "EVAL-QUALIFY-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

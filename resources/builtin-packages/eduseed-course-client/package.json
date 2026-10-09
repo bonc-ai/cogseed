@@ -1,0 +1,6 @@
+{
+  "name": "eduseed-course-client",
+  "version": "0.5.3",
+  "private": true,
+  "description": "EduSeed 课程客户端（CogSeed Course Plugin）——课程无关薄客户端；课程内容与业务数据在 EduSeed 平台。首门试点课安装包名：aix-course-elite20"
+}

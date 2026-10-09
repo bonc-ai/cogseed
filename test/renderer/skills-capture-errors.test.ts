@@ -1,0 +1,101 @@
+import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as vm from 'node:vm';
+
+// 手动沉淀错误文案 2026-09-14 随认知资产前端重建迁至 cognition-assets/
+// core.js 的 NS.captureErrorText（自 skills-bindings.js 的
+// _recallCaptureErrorMessage 迁入）；来源原因文案在 vocabulary.js 的
+// SOURCE_REASON 映射。读取源同步迁移。
+const core = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'),
+  'utf8',
+);
+
+function extractFunction(name: string, source = core): string {
+  const start = source.indexOf(`function ${name}`);
+  if (start < 0) throw new Error(`missing function: ${name}`);
+  const bodyStart = source.indexOf('{', start);
+  let depth = 0;
+  let quote = '';
+  for (let i = bodyStart; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote) {
+      if (char === '\\') i += 1;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    else if (char === '}' && --depth === 0) return source.slice(start, i + 1);
+  }
+  throw new Error(`unterminated function: ${name}`);
+}
+
+function loadMessageFormatter() {
+  const sandbox: any = {
+    window: {
+      t(key: string, fallback: string) {
+        const table: Record<string, string> = {
+          'cognition.capture_error_no_completed_exchange': '当前会话还没有完成一轮问答，暂时无法沉淀。',
+          'cognition.capture_error_waiting_response': '当前会话仍在等待回复，完成后才能沉淀。',
+          'cognition.capture_error_disabled': '沉淀功能已关闭，请先在沉淀设置中开启。',
+          'cognition.capture_error_conversation_not_found': '找不到这个会话，暂时无法沉淀。',
+          'cognition.capture_error_unknown': '沉淀任务发生未知错误',
+        };
+        return table[key] || fallback;
+      },
+    },
+  };
+  vm.runInNewContext(
+    `function T(key, fallback) { return window.t(key, fallback); }\n${extractFunction('captureErrorText')}\nthis.format = captureErrorText;`,
+    sandbox,
+  );
+  return sandbox.format as (error: unknown) => string;
+}
+
+describe('Recall capture error feedback', () => {
+  it('localizes known manual-capture errors before showing the alert dialog', () => {
+    const format = loadMessageFormatter();
+    expect(format(new Error('conversation has no completed exchange'))).toBe('当前会话还没有完成一轮问答，暂时无法沉淀。');
+    expect(format(new Error('conversation is still waiting for a response'))).toBe('当前会话仍在等待回复，完成后才能沉淀。');
+    expect(format(new Error('recall capture is disabled'))).toBe('沉淀功能已关闭，请先在沉淀设置中开启。');
+    expect(format(new Error('conversation not found'))).toBe('找不到这个会话，暂时无法沉淀。');
+  });
+
+  it('keeps unexpected backend details available to the user', () => {
+    const format = loadMessageFormatter();
+    expect(format(new Error('provider timed out'))).toBe('provider timed out');
+    expect(format(null)).toBe('沉淀任务发生未知错误');
+  });
+
+  it('explains paused and removed source failures instead of showing an unknown error', () => {
+    // 来源原因文案随重构迁至 vocabulary.js 的 SOURCE_REASON 映射。
+    const vocab = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/cognition-assets/vocabulary.js'),
+      'utf8',
+    );
+    expect(vocab).toContain("source_paused: ['cognition.source_reason_source_paused'");
+    expect(vocab).toContain("source_removed: ['cognition.source_reason_source_removed'");
+  });
+
+  it('ships the feedback strings for every supported locale', () => {
+    for (const locale of ['zh', 'en', 'ja', 'pt']) {
+      const table = JSON.parse(fs.readFileSync(
+        path.join(__dirname, `../../src/renderer/locales/${locale}.json`),
+        'utf8',
+      ));
+      for (const key of [
+        'cognition.capture_error_no_completed_exchange',
+        'cognition.capture_error_waiting_response',
+        'cognition.capture_error_disabled',
+        'cognition.capture_error_conversation_not_found',
+        'cognition.source_reason_source_paused',
+        'cognition.source_reason_source_removed',
+      ]) expect(table[key]).toBeTruthy();
+    }
+  });
+});

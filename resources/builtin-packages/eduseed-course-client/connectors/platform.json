@@ -1,0 +1,17 @@
+{
+  "display_name": "EduSeed 平台 (Plugin)",
+  "kind": "http-agent-api",
+  "endpoint_env": "EDUSEED_SERVER_URL",
+  "endpoint_default": "",
+  "auth": {
+    "header": "x-api-key",
+    "api_key_ref": "env:EDUSEED_API_KEY",
+    "identity_header": "x-agent-id",
+    "identity": "student-companion-<student_id>"
+  },
+  "channels": {
+    "sync": "/api/eduseed",
+    "async": "/api/p3394"
+  },
+  "_note": "插件运行时（skills/*/scripts/runtime.js）读取本文件 + course/class-profile.yaml；CogSeed 中无需再配置 MCP 自定义连接器。"
+}

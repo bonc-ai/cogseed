@@ -1,0 +1,86 @@
+# capabilities.yaml — 机器可读的能力边界声明
+#
+# 把散落在 3 份设计文档里的"局限声明"统一成一份结构化、可被程序读取
+# 的清单。上层系统（Agent Factory / Skill Factory）可以据此判断
+# 是否需要叠加其他检测手段，而不是只能读报告里的自然语言文案。
+
+schema_version: "1.1.0"
+engine_version: "2.1.0"
+
+capabilities:
+  text_static_analysis:
+    implemented: true
+    method: "逐行正则匹配 + 语言分派 + 上下文降权"
+    coverage: "密钥泄漏、危险命令、动态执行、SQL注入、持久化、提示注入载荷、网络外联、可疑地址"
+    known_limitations:
+      - "正则/关键词检测存在误报与漏报"
+      - "无法理解代码语义，只能匹配字面模式（如变量拼接后的字符串无法检出）"
+      - "混淆/编码后的代码（如多层 base64、动态拼接的函数名）检出率低"
+
+  context_awareness:
+    implemented: true
+    since: "2.1.0"
+    method: "按扩展名做规则语言分派；按路径/注释/围栏块判定上下文并降级 severity"
+    contexts: [source, doc, prose, comment, test, vendor]
+    coverage: "消除「防御代码被判成攻击代码」「JS re.exec() 被判 Python 动态执行」「测试断言输入被判攻击载荷」三类系统性误报"
+    guarantees:
+      - "降权只降级，绝不删除 finding；original_severity / context / demoted 三字段完整保留审计轨迹"
+      - "hard_block 一票否决项不受降权影响"
+      - "未降权 critical 单条即触发 DO_NOT_INSTALL"
+    known_limitations:
+      - "上下文判定是静态启发式（路径命名 + 轻量注释解析），非语义分析"
+      - "攻击者可把恶意代码放入 test/ 或 vendor/ 以压低严重级；实测仍报 CAUTION 不能逃脱裁决，但用于强制拦截时应同时消费 original_severity"
+      - "块注释解析不处理字符串内嵌引号等边缘情况；不确定时保持原级别（偏向避免漏报）"
+
+  secret_detection:
+    implemented: true
+    method: "内置正则 + 可选 gitleaks 增强"
+    degraded_without: ["gitleaks"]
+    known_limitations:
+      - "未安装 gitleaks 时仅依赖内置正则规则库，规则覆盖面小于 gitleaks 官方规则集"
+
+  dependency_vulnerability_scan:
+    implemented: true
+    method: "可选 osv-scanner 增强"
+    degraded_without: ["osv-scanner"]
+    known_limitations:
+      - "未安装 osv-scanner 时完全跳过 CVE 扫描，报告中 vulnerability_findings 恒为空"
+
+  binary_static_analysis:
+    implemented: true
+    method: "strings 抽取 + 正则指标匹配"
+    coverage: "ELF/PE/Mach-O/WASM/JAR 等格式识别，硬编码地址/危险命令/持久化路径/反调试指标"
+    known_limitations:
+      - "仅静态字符串级启发式，不解析二进制指令、不做符号执行"
+      - "无法确认二进制真实运行时行为（写了什么文件、连了什么地址、发了什么数据）"
+
+  binary_dynamic_analysis:
+    implemented: false
+    reason: "需接入动态沙箱（strace + 网络流量镜像），当前未实现"
+    tracked_as: "需单独立项"
+
+  runtime_behavior_analysis:
+    implemented: false
+    reason: "扫描器仅做静态分析，不执行被扫描的 Skill 代码"
+    tracked_as: "架构决策：扫描过程本身不执行代码以规避风险，但因此无法观察真实运行时行为"
+
+  malware_signature_matching:
+    implemented: false
+    reason: "未接入 YARA 等恶意代码特征库"
+    tracked_as: "需单独立项（见 08_review_docs 评审文档中的待决策事项）"
+
+  false_positive_rate_baseline:
+    implemented: partial
+    since: "2.1.0"
+    method: "对 43 个真实官方 Skill 全量扫描，统计误判 CAUTION / DO_NOT_INSTALL 数"
+    result: "误报 0（2.1.0 校准前为 1 例误 DO_NOT_INSTALL + 31 例误 CAUTION）"
+    known_limitations:
+      - "单一语料，以 Markdown/Python/TypeScript 为主，不含 Go/Rust/Java"
+      - "语料内无真实恶意样本；真阳性率仅由合成样本与 8 个对抗用例覆盖"
+      - "尚未在大规模真实恶意 Skill 语料上标定漏报率"
+    tracked_as: "扩充多语言语料 + 真实恶意样本集，需单独立项"
+
+notes: |
+  本文件是 capabilities 的唯一权威声明源。engine/scanner_core/report.py
+  的 `limitations` 字段应与本文件保持一致；新增/移除能力时需同步更新
+  两处。

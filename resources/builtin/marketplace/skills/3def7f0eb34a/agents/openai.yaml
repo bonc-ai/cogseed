@@ -1,0 +1,29 @@
+{
+  "interface": {
+    "display_name": "每周学习复盘",
+    "short_description": "用完成证据、掌握变化和误区日志调整下周负荷与复习间隔。",
+    "default_prompt": "Use $weekly-review and follow its evidence, approval, and output contract."
+  },
+  "policy": {
+    "allow_implicit_invocation": true
+  },
+  "runtime": {
+    "executor": "codex_skill_interpreter",
+    "binding_status": "target_state_not_run",
+    "skill_entrypoint": "../SKILL.md",
+    "schema_ref": "../schemas.json",
+    "permissions": {
+      "direct_resource_access": false,
+      "external_actions": "deny_without_explicit_approval",
+      "formal_asset_write": false,
+      "candidate_write_only": true
+    },
+    "governance": {
+      "level": "L5",
+      "risk_route": "Full",
+      "promotion_ceiling": "staged",
+      "production_release_allowed": false,
+      "independent_review": "pending"
+    }
+  }
+}

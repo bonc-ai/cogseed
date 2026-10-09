@@ -1,0 +1,4 @@
+import { describe, expect, it } from 'vitest';
+import { P3394InProcessChannel } from '../../../../src/main/features/p3394';
+const envelope = { spec_version:'p3394/1.0', message_id:'msg-1', session_id:'s', kind:'message', performative:'inform', sender:{agent_id:'a'}, recipients:[{agent_id:'b'}], payload:{parts:[{type:'text',text:'hi'}]}, idempotency_key:'i' } as any;
+describe('P3394 in-process channel',()=>{it('delivers, unsubscribes, and closes',async()=>{const c=new P3394InProcessChannel(); const got:string[]=[]; const unsub=c.subscribe(e=>got.push(e.message_id)); expect(await c.send(envelope)).toMatchObject({accepted:true,message_id:'msg-1'}); unsub(); await c.send({...envelope,message_id:'msg-2'}); expect(got).toEqual(['msg-1']); await c.close(); await expect(c.send(envelope)).rejects.toThrow(/closed/);});});

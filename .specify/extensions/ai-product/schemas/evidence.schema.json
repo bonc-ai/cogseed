@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-product/evidence.schema.json",
+  "title": "AI Product Evidence Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "id", "title", "source_type", "claim_type", "source_ref", "supports", "does_not_prove", "verification"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "kind": {"const": "evidence"},
+    "id": {"type": "string", "pattern": "^EV-[A-Z0-9-]+$"},
+    "title": {"type": "string", "minLength": 1},
+    "source_type": {"enum": ["real", "desensitized", "synthetic", "stub"]},
+    "claim_type": {"enum": ["fact", "user_quote", "self_report", "stakeholder_view", "hypothesis", "proposal"]},
+    "source_ref": {"type": "string", "minLength": 1},
+    "observed_at": {"type": ["string", "null"], "format": "date-time"},
+    "supports": {"type": "array", "items": {"type": "string"}},
+    "does_not_prove": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "verification": {"enum": ["Submitted", "Verified", "Accepted"]},
+    "reviewer": {"type": ["string", "null"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verification": {"const": "Accepted"}}},
+      "then": {"required": ["reviewer"], "properties": {"reviewer": {"type": "string", "minLength": 1}}}
+    }
+  ]
+}

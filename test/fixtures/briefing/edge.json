@@ -1,0 +1,74 @@
+{
+  "description": "边界/脏数据：allDay 与无效时间事件被忽略、过去与窗口外截止被过滤、短间隙不推空闲时段建议、无日期日程事实被静默跳过",
+  "now": "2026-08-10T08:00:00",
+  "facts": [
+    {
+      "id": "fact_deadline_past",
+      "kind": "deadline",
+      "summary": "已过期的作业",
+      "date": "2026-08-05"
+    },
+    {
+      "id": "fact_deadline_far",
+      "kind": "deadline",
+      "summary": "窗口外的期末论文",
+      "date": "2026-08-20"
+    },
+    {
+      "id": "fact_deadline_edge",
+      "kind": "deadline",
+      "summary": "窗口边界的周报",
+      "date": "2026-08-17"
+    },
+    {
+      "id": "fact_course_dateless",
+      "kind": "appointment",
+      "summary": "没有日期的课程",
+      "date": ""
+    },
+    {
+      "id": "fact_deadline_bad_date",
+      "kind": "deadline",
+      "summary": "日期格式非法的截止",
+      "date": "not-a-date"
+    }
+  ],
+  "events": [
+    {
+      "id": "ev_all_day",
+      "title": "全天占用事件（应被忽略）",
+      "startAt": "2026-08-10T00:00:00",
+      "allDay": true
+    },
+    {
+      "id": "ev_invalid",
+      "title": "无效时间事件（应被忽略）",
+      "startAt": "garbage"
+    },
+    {
+      "id": "ev_1",
+      "title": "早会",
+      "startAt": "2026-08-10T08:30:00"
+    },
+    {
+      "id": "ev_2",
+      "title": "半小时后的小会",
+      "startAt": "2026-08-10T09:00:00"
+    }
+  ],
+  "expected": {
+    "degraded": false,
+    "missingData": [],
+    "sectionKeys": ["today_schedule", "upcoming_deadlines"],
+    "contains": ["早会", "窗口边界的周报"],
+    "notContains": [
+      "全天占用事件",
+      "无效时间事件",
+      "已过期的作业",
+      "窗口外的期末论文",
+      "没有日期的课程",
+      "日期格式非法的截止",
+      "有空档"
+    ]
+  }
+}

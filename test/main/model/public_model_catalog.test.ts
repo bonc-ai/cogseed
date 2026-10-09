@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest';
+import { PUBLIC_PROVIDER_MODELS, publicContextWindowFor, publicModelAbilitiesFor } from '../../../src/main/model/public_model_catalog';
+
+describe('public model catalog', () => {
+  it('contains only public providers with unique model ids', () => {
+    expect(Object.keys(PUBLIC_PROVIDER_MODELS).sort()).toEqual([
+      'anthropic',
+      'deepseek',
+      'doubao',
+      'google',
+      'kimi-coding',
+      'minimax-cn',
+      'minimax-portal',
+      'minimax-portal-cn',
+      'moonshot',
+      'openai',
+      'openai-codex',
+      'openrouter',
+      'zai',
+    ]);
+    for (const models of Object.values(PUBLIC_PROVIDER_MODELS)) {
+      const ids = models.map((model) => model.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(ids.every(Boolean)).toBe(true);
+    }
+  });
+
+  it('keeps OpenAI and OpenAI Codex on the same GPT-5.6 generation', () => {
+    const expected = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'];
+    expect(PUBLIC_PROVIDER_MODELS.openai?.map((model) => model.id)).toEqual(expected);
+    expect(PUBLIC_PROVIDER_MODELS['openai-codex']?.map((model) => model.id)).toEqual(expected);
+  });
+
+  it('declares compatibility metadata for models newer than older runtimes', () => {
+    for (const provider of ['openai', 'openai-codex'] as const) {
+      for (const model of PUBLIC_PROVIDER_MODELS[provider]?.slice(0, 3) || []) {
+        expect(model.template).toBe('gpt-5.5');
+        expect(model.contextWindow).toBeGreaterThan(0);
+        expect(model.maxTokens).toBe(128000);
+      }
+    }
+    expect(PUBLIC_PROVIDER_MODELS['kimi-coding']?.[0]).toMatchObject({
+      id: 'k3',
+      template: 'kimi-for-coding',
+      contextWindow: 1048576,
+      maxTokens: 131072,
+    });
+  });
+});
+
+describe('publicContextWindowFor', () => {
+  it('resolves exact ids across namespaces', () => {
+    expect(publicContextWindowFor('kimi-k3')).toBe(1_048_576);
+    expect(publicContextWindowFor('gpt-5.6-sol')).toBe(372_000);
+  });
+
+  it('resolves aggregator-prefixed ids to their home-namespace entry', () => {
+    // deepseek/deepseek-v4-flash-vision-exp is stored only as
+    // deepseek-v4-flash-vision-exp in the deepseek namespace — the window
+    // belongs to the model, not the reseller (2026-08-27: suban confirmed 1M;
+    // 2026-09-13: decimal 1000000 caliber).
+    expect(publicContextWindowFor('deepseek/deepseek-v4-flash-vision-exp')).toBe(1000000);
+  });
+
+  it('returns undefined instead of guessing for unknown or windowless ids', () => {
+    expect(publicContextWindowFor('doubao-seed-2-0-pro-260215')).toBeUndefined(); // catalog has the id but no window
+    expect(publicContextWindowFor('no-such-model')).toBeUndefined();
+    expect(publicContextWindowFor('vendor/')).toBeUndefined();
+    expect(publicContextWindowFor('')).toBeUndefined();
+  });
+
+  it('resolves the deepseek V4/V4.1 family to the confirmed 1M window', () => {
+    // 2026-09-11 口径更新（产品负责人确认）：V4 文本系列与此前已确认 1M 的
+    // v4-flash-vision-exp 共用 1M 窗口，v4.1 为同族迭代。原先本文件把
+    // deepseek-v4-pro 当"有 id 无窗口"的样本，该角色改由豆包条目承担。
+    // 2026-09-13 起窗口/输出统一十进制口径（1M=1000000、384K=384000）。
+    expect(publicContextWindowFor('deepseek-v4-pro')).toBe(1000000);
+    expect(publicContextWindowFor('deepseek-v4.1-flash')).toBe(1000000);
+    // 用户实际配置的 id 形态（自定义供应商带 vendor 前缀）解析到同一窗口。
+    expect(publicContextWindowFor('deepseek/deepseek-v4.1-flash')).toBe(1000000);
+  });
+
+  it('registers the 384K output ceiling for the deepseek V4/V4.1 family (2026-09-13)', () => {
+    // 产品负责人口径（十进制）：V4/V4.1 最大输出 384K，与 1M 窗口配套。此前
+    // 目录只登记窗口不登记输出，模型输出被兜到保守默认 8192（编辑页偏低）。
+    expect(publicModelAbilitiesFor('deepseek-v4.1-flash').maxTokens).toBe(384000);
+    expect(publicModelAbilitiesFor('deepseek/deepseek-v4.1-flash').maxTokens).toBe(384000);
+    expect(publicModelAbilitiesFor('deepseek-v4-flash').maxTokens).toBe(384000);
+    expect(publicModelAbilitiesFor('deepseek-v4-flash-vision-exp').maxTokens).toBe(384000);
+    // 输出上限必须 ≤ 窗口（校验前的静态护栏）。
+    const abilities = publicModelAbilitiesFor('deepseek-v4.1-flash');
+    expect(abilities.maxTokens!).toBeLessThanOrEqual(abilities.contextWindow!);
+  });
+});

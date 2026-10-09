@@ -1,0 +1,29 @@
+{
+ "interface": {
+  "display_name": "品牌研究 Brand Research",
+  "short_description": "从公开来源研究公司/产品/品牌，产出带来源的 Brand DNA：定位、受众、竞品、语气、定价、社交证明与内容缺口。",
+  "default_prompt": "Use $brand-research and follow its evidence, approval, and output contract."
+ },
+ "policy": {
+  "allow_implicit_invocation": true
+ },
+ "runtime": {
+  "executor": "codex_skill_interpreter",
+  "binding_status": "target_state_not_run",
+  "skill_entrypoint": "../SKILL.md",
+  "schema_ref": "../schemas.json",
+  "permissions": {
+   "direct_resource_access": false,
+   "external_actions": "deny_without_explicit_approval",
+   "formal_asset_write": false,
+   "candidate_write_only": true
+  },
+  "governance": {
+   "level": "L5",
+   "risk_route": "Full",
+   "promotion_ceiling": "staged",
+   "production_release_allowed": false,
+   "independent_review": "pending"
+  }
+ }
+}

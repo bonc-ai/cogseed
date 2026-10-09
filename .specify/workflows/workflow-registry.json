@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "workflows": {
+    "speckit": {
+      "name": "Full SDD Cycle",
+      "version": "1.0.1",
+      "description": "Runs specify → plan → tasks → implement with review gates",
+      "source": "bundled",
+      "installed_at": "2026-09-17T08:37:33.396654+00:00",
+      "updated_at": "2026-09-17T08:37:33.396659+00:00"
+    },
+    "ai-product-lifecycle": {
+      "name": "AI Product Lifecycle with Native Spec Kit",
+      "version": "0.2.1",
+      "description": "Routes AI product uncertainty, pauses at human gates, then invokes the native Spec Kit specification and implementation chain.",
+      "source": ".specify/workflows/ai-product-lifecycle",
+      "installed_at": "2026-09-17T08:37:45.100024+00:00",
+      "updated_at": "2026-09-17T08:37:45.100161+00:00"
+    }
+  }
+}

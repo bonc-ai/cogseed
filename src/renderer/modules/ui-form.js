@@ -1,0 +1,325 @@
+// Shared form primitives for classic renderer scripts. The factories own
+// field semantics and composition; existing business workflows keep their
+// data, validation, and submission behavior.
+(function initUiForm(root) {
+  'use strict';
+
+  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number', 'date', 'time']);
+
+  function escapeText(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function translatedLabel(key, fallback) {
+    const translated = typeof root.t === 'function' ? root.t(key) : '';
+    return translated && translated !== key ? translated : fallback;
+  }
+
+  function renderAttrs(attrs) {
+    const safe = [];
+    for (const [key, rawValue] of Object.entries(attrs || {})) {
+      if (!/^(id|name|title|autocomplete|inputmode|min|max|minlength|maxlength|rows|spellcheck|step|aria-[a-z-]+|data-[a-z0-9-]+)$/.test(key)) continue;
+      if (rawValue == null || rawValue === false) continue;
+      safe.push(`${key}="${escapeText(rawValue === true ? '' : rawValue)}"`);
+    }
+    return safe.length ? ` ${safe.join(' ')}` : '';
+  }
+
+  function controlStateAttrs(value) {
+    return [
+      value.disabled ? ' disabled' : '',
+      value.readOnly ? ' readonly' : '',
+      value.required ? ' required' : '',
+      value.invalid ? ' aria-invalid="true"' : '',
+      value.describedBy ? ` aria-describedby="${escapeText(value.describedBy)}"` : '',
+      value.previewState ? ` data-preview-state="${escapeText(value.previewState)}"` : '',
+    ].join('');
+  }
+
+  function uiInput(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiInput requires an id');
+    const type = INPUT_TYPES.has(value.type) ? value.type : 'text';
+    const classes = ['form-input', 'ui-control', 'ui-input', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="${type}"${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)} />`;
+  }
+
+  function uiCheckbox(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiCheckbox requires an id');
+    const attrs = { ...(value.attrs || {}) };
+    const label = String(value.label || '').trim();
+    if (label && !attrs['aria-label'] && !attrs['aria-labelledby']) attrs['aria-label'] = label;
+    if (!attrs['aria-label'] && !attrs['aria-labelledby']) {
+      throw new TypeError('uiCheckbox requires an accessible label');
+    }
+    const classes = ['ui-checkbox', value.className || ''].filter(Boolean).join(' ');
+    return `<input class="${escapeText(classes)}" id="${escapeText(id)}" type="checkbox"${value.name ? ` name="${escapeText(value.name)}"` : ''}${value.value == null ? '' : ` value="${escapeText(value.value)}"`}${value.checked ? ' checked' : ''}${controlStateAttrs(value)}${renderAttrs(attrs)} />`;
+  }
+
+  function switchStateAttrs(value) {
+    return [
+      value.disabled ? ' disabled' : '',
+      value.invalid ? ' aria-invalid="true"' : '',
+      value.describedBy ? ` aria-describedby="${escapeText(value.describedBy)}"` : '',
+      value.previewState ? ` data-preview-state="${escapeText(value.previewState)}"` : '',
+    ].join('');
+  }
+
+  function uiSwitch(options) {
+    const value = options || {};
+    const label = String(value.label || '').trim();
+    if (!label) throw new TypeError('uiSwitch requires an accessible label');
+    const checked = Boolean(value.checked);
+    const classes = ['ui-switch', value.className || '', checked ? 'is-on' : ''].filter(Boolean).join(' ');
+    const attrs = { ...(value.attrs || {}) };
+    if (value.id && !attrs.id) attrs.id = value.id;
+    if (!attrs['aria-label'] && !attrs['aria-labelledby']) attrs['aria-label'] = label;
+    return `<button type="button" class="${escapeText(classes)}" role="switch" aria-checked="${checked ? 'true' : 'false'}"${switchStateAttrs(value)}${renderAttrs(attrs)}><span class="ui-switch__knob" aria-hidden="true"></span></button>`;
+  }
+
+  function uiTextarea(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiTextarea requires an id');
+    const classes = ['form-input', 'ui-control', 'ui-textarea', value.className || ''].filter(Boolean).join(' ');
+    return `<textarea class="${escapeText(classes)}" id="${escapeText(id)}"${value.placeholder ? ` placeholder="${escapeText(value.placeholder)}"` : ''}${controlStateAttrs(value)}${renderAttrs(value.attrs)}>${escapeText(value.value)}</textarea>`;
+  }
+
+  function uiSelect(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiSelect requires an id');
+    const config = {
+      value: String(value.value == null ? '' : value.value),
+      placeholder: value.placeholder == null ? null : String(value.placeholder),
+      options: (Array.isArray(value.options) ? value.options : []).map((option) => ({
+        value: String(option.value == null ? '' : option.value),
+        label: String(option.label == null ? '' : option.label),
+        ...(option.hint ? { hint: String(option.hint) } : {}),
+        ...(option.iconName ? { iconName: String(option.iconName) } : {}),
+      })),
+      labelId: value.labelId || '',
+      ariaLabel: value.ariaLabel || '',
+      describedBy: value.describedBy || '',
+      disabled: Boolean(value.disabled),
+      invalid: Boolean(value.invalid),
+      required: Boolean(value.required),
+      searchable: Boolean(value.searchable),
+      searchPlaceholder: value.searchPlaceholder == null ? null : String(value.searchPlaceholder),
+      loading: Boolean(value.loading),
+      total: value.total != null && Number.isFinite(Number(value.total)) ? Number(value.total) : null,
+      initialQuery: value.initialQuery == null ? '' : String(value.initialQuery),
+      previewState: value.previewState || '',
+    };
+    const classes = [
+      'ui-select-host',
+      config.disabled ? 'is-disabled' : '',
+      config.invalid ? 'is-error' : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="${classes}" id="${escapeText(id)}" data-ui-select data-ui-select-config="${escapeText(JSON.stringify(config))}"></div>`;
+  }
+
+  function hydrateUiFormSelects(container, callbacks) {
+    if (typeof document === 'undefined') throw new Error('hydrateUiFormSelects requires a browser document');
+    if (typeof root._aiSelectMount !== 'function') throw new Error('hydrateUiFormSelects requires the existing AiSelect runtime');
+    const scope = container || document;
+    const hosts = [
+      ...(scope.matches && scope.matches('[data-ui-select]') ? [scope] : []),
+      ...Array.from(scope.querySelectorAll('[data-ui-select]')),
+    ];
+    return hosts.map((host) => {
+      if (host.dataset.uiSelectHydrated === 'true') return host._uiSelectApi;
+      let config;
+      try {
+        config = JSON.parse(host.dataset.uiSelectConfig || '{}');
+      } catch (_) {
+        throw new TypeError(`Invalid uiSelect config for ${host.id || 'unknown host'}`);
+      }
+      const onChange = callbacks && typeof callbacks[host.id] === 'function'
+        ? callbacks[host.id]
+        : () => {};
+      const api = root._aiSelectMount(host, {
+        options: config.options || [],
+        value: config.value || '',
+        ...(config.placeholder == null ? {} : { placeholder: config.placeholder }),
+        ...(config.searchPlaceholder == null ? {} : { searchPlaceholder: config.searchPlaceholder }),
+        searchable: Boolean(config.searchable),
+        loading: Boolean(config.loading),
+        total: config.total,
+        initialQuery: config.initialQuery || '',
+        onChange,
+      });
+      const trigger = api.el.querySelector('.ai-select-trigger');
+      const valueLabel = api.el.querySelector('.ai-select-label');
+      if (valueLabel && host.id) valueLabel.id = `${host.id}-selected-value`;
+      const labelledBy = [config.labelId, valueLabel && valueLabel.id].filter(Boolean).join(' ');
+      if (labelledBy) trigger.setAttribute('aria-labelledby', labelledBy);
+      if (config.ariaLabel) trigger.setAttribute('aria-label', config.ariaLabel);
+      if (config.describedBy) trigger.setAttribute('aria-describedby', config.describedBy);
+      if (config.required) trigger.setAttribute('aria-required', 'true');
+      if (config.invalid) trigger.setAttribute('aria-invalid', 'true');
+      if (config.previewState) trigger.dataset.previewState = config.previewState;
+      if (config.disabled) {
+        trigger.disabled = true;
+        api.el.classList.add('is-disabled');
+      }
+      host.dataset.uiSelectHydrated = 'true';
+      host._uiSelectApi = api;
+      return api;
+    });
+  }
+
+  function uiDateRangePicker(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiDateRangePicker requires an id');
+    const startLabel = String(value.startLabel || '').trim();
+    const endLabel = String(value.endLabel || '').trim();
+    const ariaLabel = String(value.ariaLabel || '').trim();
+    const labelledBy = String(value.labelledBy || '').trim();
+    const separator = String(value.separator || '').trim();
+    if (!startLabel || !endLabel || (!ariaLabel && !labelledBy) || !separator) {
+      throw new TypeError('uiDateRangePicker requires localized labels and separator');
+    }
+    const startId = `${id}-start`;
+    const endId = `${id}-end`;
+    const classes = ['date-range-picker', value.className || ''].filter(Boolean).join(' ');
+    const start = uiInput({
+      id: startId,
+      type: 'date',
+      className: 'ui-date-control',
+      value: value.start || '',
+      disabled: value.disabled,
+      required: value.required,
+      invalid: value.invalidStart,
+      describedBy: value.describedBy,
+      previewState: value.startPreviewState,
+      attrs: { 'aria-label': startLabel },
+    });
+    const end = uiInput({
+      id: endId,
+      type: 'date',
+      className: 'ui-date-control',
+      value: value.end || '',
+      disabled: value.disabled,
+      required: value.required,
+      invalid: value.invalidEnd,
+      describedBy: value.describedBy,
+      previewState: value.endPreviewState,
+      attrs: { 'aria-label': endLabel },
+    });
+    const groupLabel = labelledBy
+      ? ` aria-labelledby="${escapeText(labelledBy)}"`
+      : ` aria-label="${escapeText(ariaLabel)}"`;
+    const groupState = [
+      value.describedBy ? ` aria-describedby="${escapeText(value.describedBy)}"` : '',
+      value.invalid || value.invalidStart || value.invalidEnd ? ' aria-invalid="true"' : '',
+    ].join('');
+    return `<div class="${escapeText(classes)}" id="${escapeText(id)}" role="group"${groupLabel}${groupState}>${start}<span class="date-range-picker__separator" aria-hidden="true">${escapeText(separator)}</span>${end}</div>`;
+  }
+
+  function renderControl(options) {
+    if (options.kind === 'textarea') return uiTextarea(options);
+    if (options.kind === 'select') return uiSelect(options);
+    if (options.kind === 'checkbox') return uiCheckbox({ ...options, label: options.accessibleLabel || options.label });
+    if (options.kind === 'switch') {
+      return uiSwitch({
+        ...options,
+        label: options.accessibleLabel || options.label,
+        attrs: { ...(options.attrs || {}), id: options.id, 'aria-labelledby': options.labelId },
+      });
+    }
+    if (options.kind === 'date-range') {
+      return uiDateRangePicker({
+        ...options,
+        labelledBy: options.labelId,
+      });
+    }
+    return uiInput(options);
+  }
+
+  function uiField(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    const label = String(value.label || '').trim();
+    if (!id || !label) throw new TypeError('uiField requires an id and label');
+    const hintId = value.hint ? `${id}-hint` : '';
+    const errorId = value.error ? `${id}-error` : '';
+    const describedBy = [hintId, errorId].filter(Boolean).join(' ');
+    const kind = value.control && value.control.kind;
+    const usesLabelId = kind === 'select' || kind === 'switch' || kind === 'date-range';
+    const labelId = usesLabelId ? `${id}-label` : '';
+    const control = renderControl({
+      ...(value.control || {}),
+      id,
+      label,
+      required: Boolean(value.required),
+      invalid: Boolean(value.error),
+      describedBy,
+      labelId,
+    });
+    // 需求标记（必填/选填）默认渲染，showRequirement: false 时整块不渲染——
+    // 用于"整张卡片每个字段都必填"这类逐条标注纯属噪音的场景（2026-09-14 自定义
+    // 供应商详情卡：名称 / Base URL / API 格式 / API Key 都是必填）。required
+    // 仍照常落到控件上（required 属性 + aria-required），只是不再逐条写文案。
+    const requirement = value.showRequirement === false
+      ? ''
+      : value.required
+        ? `<span class="ui-field__requirement">${escapeText(value.requiredLabel || translatedLabel('common.required', 'Required'))}</span>`
+        : `<span class="ui-field__requirement">${escapeText(value.optionalLabel || translatedLabel('common.optional', 'Optional'))}</span>`;
+    const hint = value.hint
+      ? `<p class="ui-field__hint" id="${escapeText(hintId)}">${escapeText(value.hint)}</p>`
+      : '';
+    const error = value.error
+      ? `<p class="ui-field__error" id="${escapeText(errorId)}">${escapeText(value.error)}</p>`
+      : '';
+    return [
+      `<div class="ui-field${value.error ? ' is-error' : ''}">`,
+      '<div class="ui-field__label-row">',
+      usesLabelId
+        ? `<span class="ui-field__label" id="${escapeText(labelId)}">${escapeText(label)}</span>`
+        : `<label for="${escapeText(id)}">${escapeText(label)}</label>`,
+      requirement,
+      '</div>',
+      control,
+      hint,
+      error,
+      '</div>',
+    ].join('');
+  }
+
+  function uiForm(options) {
+    const value = options || {};
+    const twoColumns = value.columns === 2;
+    const fields = (Array.isArray(value.fields) ? value.fields : []).map((field) => {
+      const item = typeof field === 'string' ? { html: field } : field;
+      return `<div class="ui-form__item${item.wide ? ' ui-form__item--wide' : ''}">${item.html || ''}</div>`;
+    }).join('');
+    const actions = (Array.isArray(value.actions) ? value.actions.slice(0, 2) : [])
+      .map((action) => root.uiButton(action))
+      .join('');
+    return `<form class="ui-form${twoColumns ? ' ui-form--two-column' : ''}"${value.ariaLabel ? ` aria-label="${escapeText(value.ariaLabel)}"` : ''}>${fields}${actions ? `<div class="ui-form__actions">${actions}</div>` : ''}</form>`;
+  }
+
+  root.uiInput = uiInput;
+  root.uiCheckbox = uiCheckbox;
+  root.uiSwitch = uiSwitch;
+  root.uiTextarea = uiTextarea;
+  root.uiSelect = uiSelect;
+  root.hydrateUiFormSelects = hydrateUiFormSelects;
+  root.uiDateRangePicker = uiDateRangePicker;
+  root.uiField = uiField;
+  root.uiForm = uiForm;
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { uiInput, uiCheckbox, uiSwitch, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
+  }
+})(typeof window !== 'undefined' ? window : globalThis);

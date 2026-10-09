@@ -1,0 +1,131 @@
+# ============================================================
+# 个人本体候选构建器 — 技能规范（Skill Spec）
+# 版本: v1.0.0
+# 描述: ProductionProcessSkill 元数据、成熟度、输入输出契约
+# 适用: 平台侧技能管理/对齐；Electron 运行时行为以 SKILL.md 为准
+# ============================================================
+
+skill_spec:
+  name: personal-ontology-candidate-builder
+  version: "1.0.0"
+  level: L3
+  owner: CogSeed Team
+  status: packaged
+  language: zh-CN
+  skill_category: ProductionProcessSkill
+  session_role: sub_skill
+  owns_session: false
+  form: interpreted
+  production_process_skill: true
+
+  # ── 本体链接（导师要求"要有链接的"） ──
+  ontology_mapping:
+    mapping_ref: references/ontology-mapping.md
+    tbox_ref: ontology/personal_ontology/scene_tbox.yaml
+    rbox_ref: ontology/personal_ontology/scene_rbox.yaml
+    abox_ref: ontology/personal_ontology/scene_abox.yaml
+    package_ref: ontology/personal_ontology/scene_package.yaml
+
+  scope: >-
+    从对话历史、记忆片段、笔记或手工"记住这个"交代中提炼个人本体候选
+    （偏好/实例/属性/关系/规则），强制本地存储，必须用户确认后才写入长期记忆。
+
+  task_family:
+    - personal-ontology-candidate-builder
+    - memory-to-candidate-extraction
+
+  capability_maturity:
+    scale:
+      - declared_target_state
+      - packaged
+      - engine_bound
+      - evidence_validated
+    current:
+      instruction_package: packaged
+      runtime_binding: declared_target_state
+    invariant: "declared_target_state != engine_bound"
+
+  # ── 输出优先设计（Output Schema-first） ──
+  output_schema_first:
+    business_goal: >-
+      帮用户把个人记忆整理成结构化候选，等用户确认后沉淀为长期记忆，
+      不污染项目事实、不进入团队共享、不泄露敏感信息。
+    chain: "Business Goal -> Desired Decision -> Output Schema -> Input Schema -> TBox/RBox/ABox -> sub_skill -> candidate output"
+    desired_decision: >-
+      判断每条记忆是否可成为个人本体候选、属于五类中的哪一类、
+      建议哪个去向（user/shared/分组字段区/分组流水区）。
+    output_schema:
+      - candidate_updates[]     # 写 candidates.md（人读 markdown）
+      - blocked_items[]         # 写 blocked_items.md
+      - fde_confirmation_required: true  # 用户确认制
+    acceptance_criteria:
+      - "每条候选带 source_memory_refs（来源引用）"
+      - "每条候选保持 state=candidate 直到用户确认"
+      - "未脱敏或未知敏感内容进 blocked_items"
+      - "候选强制 local_only，不进入团队/组织共享存储"
+    feedback_mount_points:
+      - candidate_kind_misclassification
+      - insufficient_source_support
+      - masking_failure
+      - over_generalized_rule
+
+  # ── 情景卡（SituationCard） ──
+  situation_card:
+    situation_id: personal-memory-to-ontology-candidate
+    actor: 用户（内置角色模板 + 普通用户）
+    business_situation: >-
+      用户希望把对话和记忆中的个人经验变成结构化个人本体候选，
+      确认后写入长期记忆（USER.md/MEMORY.md 或记忆分组）。
+    core_process: >-
+      记忆输入 -> 参考本体 TBox/RBox/ABox -> 候选提炼 -> 边界校验 ->
+      candidates.md 落盘 -> 用户确认 -> 写入记忆/分组
+    input_schema:
+      - 对话历史/记忆片段/笔记/remember this 交代
+    output_schema:
+      - candidate_updates
+      - blocked_items
+    decision_points:
+      - "内容是否可成为个人候选？"
+      - "属于五类中的哪一类（偏好/实例/属性/关系/规则）？"
+      - "是否含未脱敏敏感信息？"
+      - "建议去向：user / shared / 分组字段区 / 分组流水区？"
+      - "能否对号入座到已安装角色模板字段？"
+    handoff_targets:
+      - candidates.md（待确认候选池）
+      - blocked_items.md（阻断清单）
+
+  # ── 上下文组装 ──
+  context_assembly:
+    runtime_variables:
+      - owner_id
+      - memory_scope
+      - source_refs
+      - masking_status
+      - installed_template_fields
+    runtime_conditions:
+      - confirmation_mode=user_required
+      - sync_policy=local_only
+
+  # ── 治理边界（Governance） ──
+  governance_boundaries:
+    data_boundary: local_only
+    risk_route: Core
+    promotion_state: candidate
+    non_claims:
+      - "个人本地候选不是正式本体"
+      - "不进入团队/组织共享存储"
+      - "不做企业级组织/业务路由"
+      - "用户确认前不自动生效"
+
+  # ── 进化（Evolution） ──
+  evolution:
+    record_delta_a: true
+    record_delta_r: true
+    update_targets:
+      - memory
+      - skill
+      - evaluation
+    evolution_campaign:
+      min_trusted_kstar_episodes: 3
+      checkpoint_policy: best_not_last
+      auto_adopt: false

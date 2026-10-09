@@ -1,0 +1,65 @@
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { describe, expect, it } from 'vitest';
+
+const require = createRequire(import.meta.url);
+const {
+  createDevBuilderConfig,
+  expectedDevAppPath,
+  resolveLocalElectronDist,
+} = require('../../scripts/package-dev-mac.cjs');
+
+describe('isolated mac development packaging', () => {
+  it('derives a packaged-dev builder config without mutating production config', () => {
+    const base = {
+      appId: 'com.cogseed.desktop',
+      productName: 'CogSeed',
+      protocols: [{ schemes: ['cogseed'] }],
+      directories: { output: 'dist' },
+      files: ['bootstrap.cjs'],
+      extraMetadata: { retained: true },
+      mac: { category: 'public.app-category.productivity', target: ['dmg'] },
+    };
+    const snapshot = structuredClone(base);
+    const config = createDevBuilderConfig(base, { channel: 'packaged-dev' }, { electronDist: '/cache/electron.zip', arch: 'x64' });
+
+    expect(base).toEqual(snapshot);
+    expect(config).toMatchObject({
+      appId: 'com.cogseed.desktop.dev',
+      productName: 'CogSeed Dev',
+      electronDist: '/cache/electron.zip',
+      directories: { output: 'dist-dev' },
+      extraMetadata: { retained: true, cogseedBuildChannel: 'packaged-dev' },
+      mac: {
+        category: 'public.app-category.productivity',
+        forceCodeSigning: false,
+        identity: null,
+        target: [{ target: 'dir', arch: ['x64'] }],
+      },
+    });
+    expect(config.protocols).toBeUndefined();
+    expect(config.files).toEqual(expect.arrayContaining(['bootstrap.cjs', '.build/build-info.json']));
+  });
+
+  it('computes the isolated app bundle path', () => {
+    expect(expectedDevAppPath('/repo', 'arm64')).toBe(path.join('/repo', 'dist-dev', 'mac-arm64', 'CogSeed Dev.app'));
+    expect(expectedDevAppPath('/repo', 'x64')).toBe(path.join('/repo', 'dist-dev', 'mac', 'CogSeed Dev.app'));
+  });
+
+  it('uses a cached Electron zip and rejects a renamed source bundle', () => {
+    const expectedZip = path.posix.join('/cache', 'hash', 'electron-v41.7.1-darwin-arm64.zip');
+    expect(resolveLocalElectronDist({
+      electronVersion: '41.7.1', arch: 'arm64',
+      cacheRoot: '/cache',
+      exists: (candidate: string) => candidate === '/cache' || candidate === expectedZip,
+      listDirs: () => ['hash'],
+    })).toBe(expectedZip);
+    expect(resolveLocalElectronDist({ electronVersion: '41.7.1', cacheRoot: '/cache', exists: () => false, listDirs: () => [] })).toBe('');
+    const x64Zip = path.posix.join('/cache', 'hash', 'electron-v41.7.1-darwin-x64.zip');
+    expect(resolveLocalElectronDist({
+      electronVersion: '41.7.1', arch: 'x64', cacheRoot: '/cache',
+      exists: (candidate: string) => candidate === '/cache' || candidate === x64Zip,
+      listDirs: () => ['hash'],
+    })).toBe(x64Zip);
+  });
+});

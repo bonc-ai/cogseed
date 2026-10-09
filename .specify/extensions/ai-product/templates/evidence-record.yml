@@ -1,0 +1,13 @@
+schema_version: "1.0"
+kind: evidence
+id: EV-REPLACE-ME
+title: "状态待确认"
+source_type: desensitized
+claim_type: hypothesis
+source_ref: "状态待确认"
+observed_at: null
+supports: []
+does_not_prove:
+  - "未证明真实用户验收、生产结果或业务价值"
+verification: Submitted
+reviewer: null

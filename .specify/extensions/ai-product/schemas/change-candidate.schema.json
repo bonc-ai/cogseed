@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-product/change-candidate.schema.json",
+  "title": "AI Product Change Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "id", "trigger", "proposed_change", "affected_artifacts", "evidence_refs", "risk", "status"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "kind": {"const": "change-candidate"},
+    "id": {"type": "string", "pattern": "^CC-[A-Z0-9-]+$"},
+    "trigger": {"type": "string", "minLength": 1},
+    "proposed_change": {"type": "string", "minLength": 1},
+    "affected_artifacts": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^EV-"}},
+    "risk": {"enum": ["low", "medium", "high"]},
+    "status": {"enum": ["proposed", "under_review", "accepted", "rejected"]},
+    "owner_decision_ref": {"type": ["string", "null"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["accepted", "rejected"]}}},
+      "then": {"required": ["owner_decision_ref"], "properties": {"owner_decision_ref": {"type": "string", "minLength": 1}}}
+    }
+  ]
+}

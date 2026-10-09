@@ -1,0 +1,192 @@
+name: Develop Nightly
+
+# L2 每日全量 —— 兜住 L1 的漏网，翻出"攒着没人发现"的红单。
+#
+# 【为什么不用 schedule 触发 —— 重要】
+#   GitHub 的 schedule 事件**只在仓库默认分支上运行**。
+#   本仓库默认分支是 main，而 main 是"发版镜像"（只从 cicd 同步过来、零夹带），
+#   把 develop 的工具放到 main 上会破坏这个约定。
+#   所以这里改用 push 触发 + 覆盖门控：
+#     - push 事件读的是**被 push 分支上的 workflow 文件**，develop 上可以生效；
+#     - 门控步骤检查"**当前 head SHA 是否已被一次完成的全量覆盖**"，覆盖过才跳过。
+#   净效果 = 每个 develop 尖端都被一次全量覆盖；连续 push 由 concurrency 收敛到最后一次。
+#
+# 【门控口径为什么从"今天是否跑过"改成"当前 head SHA 是否被覆盖"】
+#   旧口径（2026-09-16 上线当天暴露的缺陷 2，规范 ⓪2 记为"假绿"）：
+#   门控判的是"今天是否已经跑过全量"，而当天早先那次（缺陷 1 的失败运行）已被算作
+#   "跑过" → 之后 push 进来的代码**一次都没被验证**，但打开 Actions 看到的是一个
+#   success 的、什么都没跑的 job —— 这正是整件事要治的"看起来正常"。
+#   新口径下"跳过"只有一个含义：**这个 commit 已经被一次完成的全量覆盖过**，
+#   因此绿色不再可能掩盖"未验证的代码"。
+#
+# 【门控为什么是 fail-open —— 2026-09-16 教训，必读】
+#   第一版把门控写成了"失败就报错"，结果门控步骤自己抛错、后续 14 个步骤
+#   全部 skipped，整次运行被标记为 failure —— 但实际上一行测试都没跑。
+#   这是最坏的结果：**看起来像"develop 有红单"，其实是假警报**。
+#   现已改为 fail-open：任何异常（取不到数据、解析失败、网络问题）一律
+#   当作"该跑"，让全量正常执行。宁可多跑一次，不制造假红。
+#
+# 【为什么必须有这一层】
+#   L1（develop-gate.yml）只跑「受影响的测试」，靠模块图传播筛选，必然有漏网。
+#   1.1.2 实证：macOS 全量套件约 7.2 分钟，整个 job 约 9 分钟。
+#   而且 develop 上确实存在 L1 抓不到的红单 —— PR #277 报告
+#   context-projection-confirm-wake.test.ts 2 个用例、PR #279 报告
+#   conv-workspace-space.test.ts 2 个用例，在干净 develop 上都失败，
+#   因为这些文件本身没被改过、是被测源码变了（语义冲突）。
+#
+# 【红了怎么办】
+#   本层不阻塞任何合并。但红了必须当天修，否则又变成 1.1.2 那种"攒着没人管"。
+#   建议：SM 每天早会固定过一眼本 workflow 的结果。
+
+on:
+  push:
+    branches:
+      - develop
+  # 保留手动触发：想立刻验证时不必等下一次 push。手动触发不做门控。
+  workflow_dispatch:
+
+# 连续 push 时取消上一次未跑完的，让最终 tip 一定被覆盖，而不是排队跑一串旧 tip。
+concurrency:
+  group: develop-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read        # 门控要读本 workflow 的历史运行记录
+
+jobs:
+  full-suite:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: 覆盖门控（fail-open：出任何问题都照常跑）
+        id: gate
+        # 双保险：即使脚本本身抛错，也不会顶掉后面的全量
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 注意：这里不用 set -e —— 门控绝不应该是"能失败"的东西
+          SHOULD_RUN=true
+          SKIP_REASON=""
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "手动触发，不做门控"
+          else
+            echo "查询本 commit（${GITHUB_SHA}）是否已被一次完成的全量覆盖"
+
+            # 按 head_sha 查询而不是按日期：口径 = "这个 commit 跑过没有"
+            RESP=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/develop-nightly.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=1" \
+              2>&1) || true
+            echo "---- API 原始返回 ----"
+            echo "$RESP" | head -c 1500
+            echo ""
+            echo "----------------------"
+
+            COUNT=$(echo "$RESP" | jq -r '.total_count // empty' 2>/dev/null) || true
+
+            case "$COUNT" in
+              ''|*[!0-9]*)
+                echo "::warning::拿不到覆盖情况（返回：[${COUNT}]），按应当执行处理，本次正常跑全量"
+                SHOULD_RUN=true
+                ;;
+              0)
+                echo "本 commit 还没有完成过的全量，正常执行"
+                SHOULD_RUN=true
+                ;;
+              *)
+                echo "本 commit 已被 $COUNT 次完成的全量覆盖，本次跳过"
+                SHOULD_RUN=false
+                SKIP_REASON="该 commit ${GITHUB_SHA} 已有 $COUNT 次完成的全量运行"
+                ;;
+            esac
+          fi
+
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+
+          # 让"跳过"在 run summary 里自解释：跳过 = 这个 commit 已被覆盖，
+          # 不是"今天跑过了所以不跑"——后者正是规范 ⓪2 记录的假绿。
+          {
+            echo "### Develop Nightly 覆盖门控"
+            echo ""
+            if [ "$SHOULD_RUN" = "false" ]; then
+              echo "- 结论：**跳过**（${SKIP_REASON}）"
+              echo "- 含义：本 commit 已被一次完成的全量覆盖，本次绿色不掩盖任何未验证的代码。"
+            else
+              echo "- 结论：**执行全量**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.should_run != 'false'
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.should_run != 'false'
+        with:
+          node-version: 24
+          cache: npm
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm ci
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run test:resources:setup
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run typecheck
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run lint
+
+      # 与 ci.yml 的 verify 保持一致：限 2 个 worker。
+      # macos-latest 是 3 vCPU，默认 4 worker 会过度抢占，导致负载型时序用例
+      # （CLI 版本探测、boot 恢复投影等）偶发超时红单。
+      - name: Full JS suite
+        if: steps.gate.outputs.should_run != 'false'
+        run: node scripts/run-tests.mjs run --maxWorkers=2
+
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run test:resources
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run readme:check
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run tokens:check
+      - if: steps.gate.outputs.should_run != 'false'
+        run: npm run builtin:manifest:check
+
+      # 2026-09-20 改版：原来这条只数文件数、只 ::warning、末尾恒 exit 0，且只认
+      # `.skip(`——"用 skip 静音"因此没有任何一道会自动变红的关卡（审计 ⑧6 / C9）。
+      # 现在口径：
+      #   · 硬跳过（it/test/describe.skip）必须逐条登记在 test/skip-allowlist.json，
+      #     白名单之外出现一处就判失败 —— nightly 变红，当天必须处理；
+      #   · skipIf / 条件跳过只统计并打印（平台条件跳过是正当用法，但要"看得见"）；
+      #   · 白名单里的过期条目会被提示，提醒顺手清理。
+      # 本步骤**不使用** continue-on-error：它就是那个"该红就红"的关卡。
+      - name: Skip 残留检查（防 it.skip 静音，可失败）
+        if: steps.gate.outputs.should_run != 'false'
+        run: node scripts/check-skipped-tests.mjs --strict
+
+      - name: 测试用例数快照（覆盖度趋势）
+        if: always() && steps.gate.outputs.should_run != 'false'
+        run: |
+          echo "=== 关键文件的用例数（用于对比覆盖度是否又掉了）==="
+          for f in \
+            test/renderer/recall-cognition-flow.test.ts \
+            test/renderer/cognition-chain-view.test.ts \
+            test/renderer/skills-cognition-layout.test.ts \
+            test/renderer/skills-frontmatter.test.ts \
+            test/renderer/recall-source-display.test.ts \
+            test/renderer/recall-candidate-capability-ui.test.ts \
+            test/renderer/recall-candidate-decision-flow.test.ts \
+            test/renderer/ui-components.test.ts \
+            test/renderer/shared-ui-adoption-guard.test.ts ; do
+            if git cat-file -e "HEAD:$f" 2>/dev/null; then
+              printf '%-58s %s\n' "$f" "$(git show HEAD:$f | grep -cE '\b(it|test)\s*\(' || true)"
+            fi
+          done
+          echo ""
+          echo "对照基线（1.1.2 修复前 f79719c7）："
+          echo "  recall-cognition-flow 115 / cognition-chain-view 21 / skills-cognition-layout 27"
+          echo "  skills-frontmatter 17 / recall-source-display 8 / recall-candidate-capability-ui 23"
+          echo "  recall-candidate-decision-flow 11 / shared-ui-adoption-guard 1"
+          exit 0

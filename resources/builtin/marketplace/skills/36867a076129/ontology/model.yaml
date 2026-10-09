@@ -1,0 +1,18 @@
+{
+  "entities": [
+    "Specification",
+    "Task",
+    "Implementation",
+    "EvaluationRun",
+    "RollbackPlan"
+  ],
+  "gate": "Release Readiness Gate",
+  "relations": [
+    "implements",
+    "verified_by",
+    "traces_to",
+    "restored_by"
+  ],
+  "schema_version": "1.0",
+  "stage": "Build & Evaluate"
+}

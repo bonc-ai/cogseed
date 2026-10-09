@@ -1,0 +1,31 @@
+{
+  "case_ids": [
+    "EVAL-DERISK-001",
+    "EVAL-DERISK-002",
+    "EVAL-DERISK-003",
+    "EVAL-DERISK-004",
+    "EVAL-DERISK-005",
+    "EVAL-DERISK-006",
+    "EVAL-DERISK-007",
+    "EVAL-DERISK-008",
+    "EVAL-DERISK-009",
+    "EVAL-DERISK-010"
+  ],
+  "count": 10,
+  "coverage": [
+    "anti_trigger",
+    "boundary",
+    "failure",
+    "prohibited_behavior",
+    "trigger"
+  ],
+  "id": "EVAL-MANIFEST-DERISK-001",
+  "negative_count": 4,
+  "negative_ids": [
+    "EVAL-DERISK-007",
+    "EVAL-DERISK-008",
+    "EVAL-DERISK-009",
+    "EVAL-DERISK-010"
+  ],
+  "schema_version": "1.0"
+}

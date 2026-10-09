@@ -1,0 +1,286 @@
+/**
+ * Anchor resolver (知识库问答 ② P1) — chunk-level citation → char-level position.
+ *
+ * Given a citation anchor (`source`/`scope`/`path`/`chunkIdx`, optional
+ * `quote`) this resolves the anchor to a concrete character range in the
+ * source document's extracted text, so the UI can jump to and highlight the
+ * exact spot:
+ *
+ *   1. read the chunk text from the vector store (kb / space library);
+ *   2. load the source file's extracted text via the file-indexer cache
+ *      (plain text read directly; rich docs only when cached — never
+ *      trigger an expensive extraction from here);
+ *   3. locate the chunk (or its quote) in the text: exact substring first,
+ *      whitespace-normalized search, then first-token fallback;
+ *   4. map charStart → page via the PDF page map when available.
+ *
+ * Failures are structured, not thrown: `resolved: false` with a reason
+ * (`no_cache` / `not_found` / `out_of_scope` / `no_text`) so the caller can
+ * degrade to the chunk-level anchor instead of silently failing.
+ *
+ * Read-only; reuses existing utilities (kb / space library / file_indexer /
+ * attachment resolver) — no new parsers, no writes.
+ */
+
+import * as path from 'node:path';
+import { createLogger } from '../../logger';
+import * as kb from '../../features/kb_vector';
+import * as spaceLibrary from '../../features/project_library_indexer';
+import * as chatAttachments from '../../features/chat_attachments';
+import * as fileIndexer from '../../features/file_indexer';
+import { userContextsDir, spaceContextsDir } from '../../paths';
+import { isPathAllowed } from '../../util/path-sandbox';
+import { maskId } from '../../util/log-redact';
+
+const log = createLogger('anchor-resolver');
+
+export interface AnchorTarget {
+  userId: string;
+  source: 'library' | 'attachment';
+  scope: 'global' | 'space' | 'conversation';
+  /** Library-relative path or attachment filename. */
+  path: string;
+  /**
+   * 向量库 chunk 序号（调用方的 0-based；kb_chunks 行内 chunk_idx 自 1 起）。
+   *
+   * **省略 = 这次不是引用跳转，而是"打开整篇"**（知识库文件列表、发现页、
+   * 摘要/脑图的来源跳转都属此类）：不做 chunk 定位、不返回 charStart/charEnd，
+   * 正文照常返回——前端因此不会凭空高亮正文前几行，也不会多出"返回引用位置"
+   * 按钮（真机反馈：文件列表点开也带高亮，就是因为调用方塞了个占位 chunkIdx）。
+   * 一旦这里给了数字，语义就是"定位到这个 chunk"。
+   */
+  chunkIdx?: number;
+  /** Optional expected snippet from the evidence (preferred for locating). */
+  quote?: string;
+  /** Required for attachments. */
+  cid?: string;
+  spaceId?: string;
+  /** Compact citation location or a bounded document-reader payload. */
+  view?: 'anchor' | 'document';
+}
+
+export type AnchorFailure = 'no_cache' | 'not_found' | 'out_of_scope' | 'no_text' | 'bad_input';
+
+export interface AnchorLocation {
+  resolved: boolean;
+  reason?: AnchorFailure;
+  /** Absolute path of the source file (for the viewer). */
+  absPath?: string;
+  /** Display path (library relPath / attachment filename / space relPath). */
+  displayPath?: string;
+  charStart?: number;
+  charEnd?: number;
+  page?: number;
+  totalChars?: number;
+  /** Absolute character offset represented by text[0]. */
+  textStart?: number;
+  /** Located context or a bounded document-reader payload. */
+  text?: string;
+  truncated?: boolean;
+}
+
+const ANCHOR_CONTEXT_BEFORE = 240;
+const ANCHOR_CONTEXT_AFTER = 760;
+const DOCUMENT_VIEW_MAX_CHARS = 500_000;
+
+/** Collapse all whitespace runs to single spaces (for fuzzy locating). */
+function normalize(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function firstSignificantToken(s: string): string {
+  const m = s.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u);
+  return m ? m[0] : '';
+}
+
+/**
+ * Locate `needle` inside `text`. Exact substring first; then
+ * whitespace-normalized; then first-significant-token fallback. Returns
+ * charStart/charEnd (approximate for the fuzzy paths).
+ */
+function locateInText(text: string, needle: string): { start: number; end: number } | null {
+  if (!needle) return null;
+  let idx = text.indexOf(needle);
+  if (idx >= 0) return { start: idx, end: idx + needle.length };
+
+  const needleNorm = normalize(needle);
+  const textNorm = normalize(text);
+  idx = textNorm.indexOf(needleNorm);
+  if (idx >= 0) {
+    // Map normalized index back to raw by locating the first token at/after idx.
+    const head = needleNorm.slice(0, Math.min(60, needleNorm.length));
+    const firstWord = firstSignificantToken(head);
+    const rawIdx = firstWord ? text.indexOf(firstWord) : text.indexOf(needle[0]);
+    if (rawIdx >= 0) {
+      const end = Math.min(text.length, rawIdx + Math.max(needle.length, firstWord.length));
+      return { start: rawIdx, end };
+    }
+  }
+
+  const firstWord = firstSignificantToken(needle);
+  if (firstWord) {
+    const rawIdx = text.indexOf(firstWord);
+    if (rawIdx >= 0) {
+      return { start: rawIdx, end: Math.min(text.length, rawIdx + Math.max(needle.length, firstWord.length)) };
+    }
+  }
+  return null;
+}
+
+/**
+ * Derive the PDF page from the `--- page N ---` delimiters the materialiser
+ * writes into text.md (see file_indexer). Scans markers up to charStart.
+ */
+function pageForText(text: string, charStart: number): number | undefined {
+  const re = /---\s*page\s*(\d+)\s*---/g;
+  let m: RegExpExecArray | null;
+  let page: number | undefined;
+  while ((m = re.exec(text)) && m.index <= charStart) {
+    page = Number(m[1]);
+  }
+  return page;
+}
+
+/** PDF chunk title（形如 p.7 / p.7-8 / Page 3）→ 起始页码。索引时已记录，最可靠。 */
+function pdfPageFromChunkTitle(title: string | null | undefined): number | undefined {
+  if (!title) return undefined;
+  const m = String(title).match(/(?:^|\D)(\d{1,4})(?:\D|$)/);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Resolve a citation anchor to a character range in the source document.
+ * Returns `resolved: false` (with a reason) instead of throwing when the
+ * source is out of scope, not cached, or the chunk cannot be located.
+ */
+export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocation> {
+  const { userId, source, scope } = target;
+  const displayPath = target.path;
+  const view = target.view === 'document' ? 'document' : 'anchor';
+
+  // ── Resolve abs path + read the chunk text ─────────────────────────────
+  let absPath: string;
+  let chunkText: string | null = null;
+  // pdf chunk title（形如 p.7 / p.7-8）：chunk 级页码的最可靠来源
+  let chunkTitle: string | null = null;
+
+  if (source === 'attachment') {
+    if (!target.cid) return { resolved: false, reason: 'bad_input' };
+    const resolved = chatAttachments.resolveAttachmentAbsPath(userId, target.cid, displayPath);
+    if (!resolved.ok) return { resolved: false, reason: 'not_found' };
+    absPath = resolved.absPath;
+    // Attachments are not in the vector store; locate by quote only.
+    chunkText = target.quote?.trim() || null;
+  } else if (scope === 'space') {
+    if (!target.spaceId) return { resolved: false, reason: 'bad_input' };
+    absPath = path.join(spaceContextsDir(userId, target.spaceId), displayPath);
+    // 没给 chunkIdx = 打开整篇，不查 chunk（不然 chunk 0 会被当成"引用片段"高亮）
+    const meta = target.chunkIdx == null
+      ? undefined
+      : spaceLibrary.readFileChunks(userId, target.spaceId, displayPath)
+        .find((c) => c.chunk_idx === target.chunkIdx);
+    chunkText = meta?.content?.trim() ?? null;
+    chunkTitle = meta?.title ?? null;
+  } else {
+    absPath = path.join(userContextsDir(userId), displayPath);
+    const meta = target.chunkIdx == null
+      ? undefined
+      : kb.readFileChunks(userId, displayPath)
+        .find((c) => c.chunk_idx === target.chunkIdx);
+    chunkText = meta?.content?.trim() ?? null;
+    chunkTitle = meta?.title ?? null;
+  }
+
+  // ── Scope check: source must be inside its allowed root ────────────────
+  let allowedRoot: string;
+  if (source === 'attachment') {
+    allowedRoot = chatAttachments.attachmentDirForCid(userId, target.cid!);
+  } else if (scope === 'space') {
+    allowedRoot = spaceContextsDir(userId, target.spaceId!);
+  } else {
+    allowedRoot = userContextsDir(userId);
+  }
+  if (!isPathAllowed(absPath, [allowedRoot])) {
+    return { resolved: false, reason: 'out_of_scope' };
+  }
+
+  // ── Load extracted text (cache-only for rich docs) ─────────────────────
+  // readRange: plain text reads the file directly; rich docs require an
+  // existing file-indexer cache (NeedStatError → no_cache) and carry the
+  // PDF page map.
+  let text: string | null = null;
+  try {
+    const read = await fileIndexer.readRange(userId, absPath, {});
+    text = read.content;
+  } catch (err) {
+    const name = (err as Error).name || '';
+    if (name.includes('NeedStat') && source === 'library') {
+      // KB 向量索引与 file-indexer 缓存并不同步：富文档（pdf/docx/html 等）若
+      // 只经 kb 索引、从未走文件索引器，此处会 no_cache。此时用向量库按 chunk
+      // 顺序拼接整篇文本做降级定位——文本即 kb 索引时的提取结果，足以定位被
+      // 引用的段落；拼接为空（该文件确实无索引文本）才保持 no_cache。
+      const rows = scope === 'space'
+        ? spaceLibrary.readFileChunks(userId, target.spaceId!, displayPath)
+        : kb.readFileChunks(userId, displayPath);
+      const joined = (rows || []).map((c) => c.content || '').join('\n').trim();
+      if (!joined) return { resolved: false, reason: 'no_cache', absPath, displayPath };
+      text = joined;
+    } else if (name.includes('NeedStat')) {
+      return { resolved: false, reason: 'no_cache', absPath, displayPath };
+    } else {
+      log.warn('anchor_resolver: extract failed', {
+        user_id: maskId(userId),
+        abs_path: displayPath,
+        error: (err as Error).message,
+      });
+      return { resolved: false, reason: 'no_text', absPath, displayPath };
+    }
+  }
+  if (!text) return { resolved: false, reason: 'no_text', absPath, displayPath };
+
+  const needle = target.quote?.trim() || chunkText;
+  const located = needle ? locateInText(text, needle) : null;
+
+  if (view === 'document') {
+    const totalChars = text.length;
+    const textStart = totalChars <= DOCUMENT_VIEW_MAX_CHARS
+      ? 0
+      : located
+        ? Math.max(0, Math.min(located.start - ANCHOR_CONTEXT_BEFORE, totalChars - DOCUMENT_VIEW_MAX_CHARS))
+        : 0;
+    const textEnd = Math.min(totalChars, textStart + DOCUMENT_VIEW_MAX_CHARS);
+    const page = located ? pageForText(text, located.start) : undefined;
+    return {
+      resolved: true,
+      absPath,
+      displayPath,
+      ...(located ? { charStart: located.start, charEnd: located.end, page } : {}),
+      totalChars,
+      textStart,
+      text: text.slice(textStart, textEnd),
+      truncated: textStart > 0 || textEnd < totalChars,
+    };
+  }
+
+  if (!needle || !located) {
+    return { resolved: false, reason: 'not_found', absPath, displayPath, totalChars: text.length };
+  }
+
+  // 页优先取 file-indexer 文本里的 `--- page N ---`；拿不到再用向量库 pdf chunk
+  // title（p.N / p.N-M）兜底——不依赖 file-indexer 缓存是否已生成。
+  const isPdf = /\.pdf$/i.test(displayPath);
+  const textStart = Math.max(0, located.start - ANCHOR_CONTEXT_BEFORE);
+  const textEnd = Math.min(text.length, located.end + ANCHOR_CONTEXT_AFTER);
+  const page = pageForText(text, located.start) ?? (isPdf ? pdfPageFromChunkTitle(chunkTitle) : undefined);
+  return {
+    resolved: true,
+    absPath,
+    displayPath,
+    charStart: located.start,
+    charEnd: located.end,
+    page,
+    totalChars: text.length,
+    textStart,
+    text: text.slice(textStart, textEnd),
+  };
+}

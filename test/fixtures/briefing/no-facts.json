@@ -1,0 +1,21 @@
+{
+  "description": "无本体事实：仅有日历事件 → 降级，缺失 facts，有今日安排但无截止/建议/要点",
+  "now": "2026-08-10T08:00:00",
+  "facts": [],
+  "events": [
+    {
+      "id": "ev_1",
+      "title": "小组讨论",
+      "startAt": "2026-08-10T15:00:00",
+      "endAt": "2026-08-10T16:00:00",
+      "location": "B204"
+    }
+  ],
+  "expected": {
+    "degraded": true,
+    "missingData": ["facts"],
+    "sectionKeys": ["today_schedule", "generic"],
+    "contains": ["小组讨论", "暂无已确认的本体事实", "B204"],
+    "notContains": ["近期截止", "有空档", "其他要点"]
+  }
+}

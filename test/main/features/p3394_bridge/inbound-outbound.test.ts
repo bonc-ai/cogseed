@@ -1,0 +1,6 @@
+import { describe, expect, it } from 'vitest';
+import type { Agent } from '../../../../src/main/features/agents';
+import { buildP3394BridgeManifest, P3394BridgeKernel, P3394InboundServer, P3394InProcessChannel, P3394OutboundClient } from '../../../../src/main/features/p3394';
+function manifest(id:string){const r=buildP3394BridgeManifest({agent_id:id,name:id,description_zh:'',description_en:'',workflow:'',category:'general'} as Agent); if(!r.ok) throw new Error(r.error.message); return r.manifest;}
+const envelope = { spec_version:'p3394/1.0', message_id:'msg-1', session_id:'s', kind:'task', performative:'request', sender:{agent_id:'a'}, recipients:[{agent_id:'b'}], payload:{parts:[{type:'text',text:'hi'}]}, idempotency_key:'i' } as any;
+describe('P3394 inbound outbound APIs',()=>{it('receives through bridge and sends through channel',async()=>{const bridge=new P3394BridgeKernel(); bridge.registry.register({identity:{agent_id:'a',display_name:'A'},manifest:manifest('a')}); bridge.registry.register({identity:{agent_id:'b',display_name:'B'},manifest:manifest('b')}); expect(new P3394InboundServer(bridge).receive(envelope)).toMatchObject({ok:true}); const channel=new P3394InProcessChannel(); const client=new P3394OutboundClient(channel); expect(await client.send(envelope)).toMatchObject({accepted:true});});});

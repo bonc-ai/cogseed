@@ -1,0 +1,88 @@
+.DS_Store
+/data
+/node_modules
+/resources/embedding-model
+/resources/officecli
+/resources/sherpa-onnx
+/.npm-cache
+/resources/runtime/.python-*
+/resources/runtime/.uv-*
+/resources/runtime/.node-*
+/resources/runtime/node
+/resources/runtime/python
+/resources/runtime/uv
+/resources/runtime/vc
+/src/main/native/build/
+/userWorkSpace
+/venv
+
+# Local multi-agent shared-file collaboration POC state
+task.md
+plan.md
+.collab-poc/
+
+# Local document/render outputs and workflow state
+/.docx_render_*/
+/.pdf_render_*/
+/.superpowers/
+/.codex-workflow/
+/.zcode/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+
+# Unrelated project snapshots and inspection material (never commit)
+/.inspect-jiaoyu/
+/builds/
+
+# engine build artifacts
+packages/*/node_modules
+packages/*/dist
+
+# electron-builder output and runtime render outputs
+/dist
+/output
+
+# stray sidecar edits
+package.json.new
+
+# local build identity and development package output
+/.build
+/build-info.json
+/dist-dev
+build-info.json
+
+# Per-machine tool permissions. Plans under .claude/plans/ are shared
+# deliberately; this file is local state and would churn per developer.
+/.claude/settings.local.json
+
+# Declares the intentional absence of the bundled deep scanner. Since the
+# engine itself is not distributed in this repository, the marker is tracked
+# so a fresh clone reports `scanner_absent` instead of `unknown`.
+# Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
+/.hermes/
+
+# WorkBuddy workspace memory (本地记忆/工作日志，不入库)
+/.workbuddy/
+
+# Private handoffs and implementation notes are kept outside the public tree.
+/PROJECT_HANDOFF.md
+/docs/plans/
+/docs/changes/
+/docs/design/
+/docs/superpowers/
+/design-qa/
+
+# updates-server installer artifacts (large binaries; published via
+# updates-server/publish.cjs which copies them here)
+/updates-server/downloads/
+
+# Internal dev skills must not be tracked in the public repo.
+# Keep a local copy outside the checkout (e.g. ~/Desktop/cogseed-open-source-audit).
+.agents/skills/cogseed-open-source-audit/
+.tmp-override-src-*/
+.tmp-skill-import-*/
+.tmp-skill-runner-*/
+
+# Local Python environment for Spec Kit template composition.
+/.venv-speckit/

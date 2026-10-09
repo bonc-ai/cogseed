@@ -1,0 +1,25 @@
+{
+  "message": "success",
+  "data": {
+    "has_more": true,
+    "minutes": [
+      {
+        "meeting_id": "7057197626500425787",
+        "minute_id": "6c13999208c6b9452132bbd7d895faf5",
+        "minute_start_time": "2030-09-21T11:46:28+08:00",
+        "q_fields": [
+          "SUMMARY_POINTS"
+        ],
+        "snippets": [
+          {
+            "source": "SUMMARY_POINTS",
+            "text": "（示例文本，已脱敏）"
+          }
+        ],
+        "subject": "示例会议 A"
+      }
+    ],
+    "next_page_token": "tm_ptk_v1_AcJE2SaEXtr7Ub--TAZF0Lxzc6d1r88q2ergVSCueVEhyewhbTFeirLhbqP1w3H3I8vLajkWfac7ilzBQo14EoxW8KYVm73_X55Wxd14mwVjYn69Z34dWCG0tXZ7TDJMUpABkbVYkiQG1kqH_6aEW4Mptq0diYCwkyFGh7vRWxdOdkrUdysTdw",
+    "total_count": 73
+  }
+}

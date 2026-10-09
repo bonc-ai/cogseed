@@ -1,0 +1,37 @@
+schema_version: "1.0"
+
+preset:
+  id: ai-product-method
+  name: "AI Product Method Addenda"
+  version: "0.2.1"
+  description: "Append evidence, authority, discovery and learning constraints to native Spec Kit templates without replacing core content."
+  author: "AI Product Method Working Group"
+  license: "LicenseRef-Internal-Trial"
+
+requires:
+  speckit_version: ">=1.0.1,<2.0.0"
+
+provides:
+  templates:
+    - type: template
+      name: constitution-template
+      file: templates/constitution-addendum.md
+      description: "AI product evidence and authority principles"
+      strategy: append
+    - type: template
+      name: spec-template
+      file: templates/spec-addendum.md
+      description: "AI suitability, evidence and human decision requirements"
+      strategy: append
+    - type: template
+      name: plan-template
+      file: templates/plan-addendum.md
+      description: "Uncertainty, eval and rollback design fields"
+      strategy: append
+    - type: template
+      name: tasks-template
+      file: templates/tasks-addendum.md
+      description: "Evidence, protection-surface and gate tasks"
+      strategy: append
+
+tags: [ai-product, governance, evidence, human-in-the-loop]

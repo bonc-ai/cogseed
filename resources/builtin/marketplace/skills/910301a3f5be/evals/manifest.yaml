@@ -1,0 +1,31 @@
+{
+  "case_ids": [
+    "EVAL-QUALIFY-001",
+    "EVAL-QUALIFY-002",
+    "EVAL-QUALIFY-003",
+    "EVAL-QUALIFY-004",
+    "EVAL-QUALIFY-005",
+    "EVAL-QUALIFY-006",
+    "EVAL-QUALIFY-007",
+    "EVAL-QUALIFY-008",
+    "EVAL-QUALIFY-009",
+    "EVAL-QUALIFY-010"
+  ],
+  "count": 10,
+  "coverage": [
+    "anti_trigger",
+    "boundary",
+    "failure",
+    "prohibited_behavior",
+    "trigger"
+  ],
+  "id": "EVAL-MANIFEST-QUALIFY-001",
+  "negative_count": 4,
+  "negative_ids": [
+    "EVAL-QUALIFY-007",
+    "EVAL-QUALIFY-008",
+    "EVAL-QUALIFY-009",
+    "EVAL-QUALIFY-010"
+  ],
+  "schema_version": "1.0"
+}

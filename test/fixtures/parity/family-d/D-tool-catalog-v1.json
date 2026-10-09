@@ -1,0 +1,66 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only D-tool-catalog-v1",
+  "inputs": {
+    "requested": [
+      "read_file",
+      "office_render",
+      "browser_snapshot",
+      "cogseed_delegate",
+      "not-a-tool"
+    ]
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "recognized": [
+      "read_file",
+      "office_render",
+      "browser_snapshot",
+      "cogseed_delegate"
+    ],
+    "rejected": [
+      "not-a-tool"
+    ],
+    "toolNames": [
+      "stat_file",
+      "read_file",
+      "search_files",
+      "grep_files",
+      "write_file",
+      "edit_file",
+      "bash",
+      "run_skill",
+      "list_connector_tools",
+      "call_connector_tool",
+      "search_mate_kb",
+      "read_mate_kb",
+      "office_read",
+      "office_create",
+      "office_edit",
+      "office_render",
+      "browser_open",
+      "browser_snapshot",
+      "browser_click",
+      "browser_type",
+      "browser_screenshot",
+      "cogseed_delegate",
+      "cogseed_tasks",
+      "cogseed_cancel",
+      "cogseed_retry_step",
+      "cogseed_skip_step",
+      "cogseed_resume_workflow",
+      "cogseed_workflow",
+      "messaging_list_targets",
+      "messaging_send",
+      "p3394_send"
+    ]
+  },
+  "notes": [
+    "The runtime catalog is the single tool exposure source."
+  ]
+}

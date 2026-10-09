@@ -1,0 +1,124 @@
+{
+  "categories": [
+    {
+      "code": "anim",
+      "name_zh": "动画 / 视频",
+      "name_en": "Animation / Video",
+      "name_ja": "アニメ / 動画",
+      "sort_order": 10
+    },
+    {
+      "code": "browser",
+      "name_zh": "浏览器",
+      "name_en": "Browser",
+      "name_ja": "ブラウザ",
+      "sort_order": 30
+    },
+    {
+      "code": "office",
+      "name_zh": "办公",
+      "name_en": "Office",
+      "name_ja": "オフィス",
+      "sort_order": 60
+    },
+    {
+      "code": "slides",
+      "name_zh": "演示 / PPT",
+      "name_en": "Slides / PPT",
+      "name_ja": "スライド / PPT",
+      "sort_order": 70
+    }
+  ],
+  "projects": [
+    {
+      "id": "hyperframes",
+      "name": "HyperFrames",
+      "repo": "heygen-com/hyperframes",
+      "category": "anim",
+      "driver": "cli",
+      "glyph": "◓",
+      "color": "#8b5cf6",
+      "by": "HyperFrames",
+      "home": true,
+      "description_zh": "生成开场动画和短视频, 装好后 CogSeed 会自动调用。",
+      "description_en": "Generate intro animations and short videos; CogSeed uses it automatically once installed.",
+      "task_zh": "帮我做一段产品开场动画",
+      "task_en": "Make a product intro animation for me"
+    },
+    {
+      "id": "browser-use",
+      "name": "Browser-Use",
+      "repo": "browser-use/browser-use",
+      "category": "browser",
+      "driver": "mcp",
+      "glyph": "◍",
+      "color": "#10b981",
+      "by": "Browser-Use",
+      "home": false,
+      "description_zh": "让 AI 直接帮你操作浏览器、点击和填写网页。",
+      "description_en": "Let AI operate the browser for you - click and fill in pages.",
+      "task_zh": "让 AI 帮我操作浏览器",
+      "task_en": "Let AI operate the browser for me"
+    },
+    {
+      "id": "ppt-master",
+      "name": "PPT-Master",
+      "repo": "hugohe3/ppt-master",
+      "category": "slides",
+      "driver": "install",
+      "glyph": "▥",
+      "color": "#f97316",
+      "by": "PPT-Master",
+      "home": true,
+      "description_zh": "用一段大纲或要点自动生成可编辑的 PPT 演示文稿。",
+      "description_en": "Generate an editable slide deck from an outline or a few bullet points.",
+      "task_zh": "把要点做成一份 PPT",
+      "task_en": "Turn my outline into a slide deck"
+    },
+    {
+      "id": "OfficeCLI",
+      "name": "OfficeCLI",
+      "repo": "iOfficeAI/OfficeCLI",
+      "category": "office",
+      "driver": "cli",
+      "glyph": "▤",
+      "color": "#2563eb",
+      "by": "OfficeCLI",
+      "home": true,
+      "description_zh": "让 AI 读写、生成和预览 Word、Excel、PowerPoint 文件, 无需本机安装 Office。",
+      "description_en": "Create, read, edit, and preview Word, Excel, and PowerPoint files without a local Office installation.",
+      "task_zh": "帮我生成或修改一份 Office 文档",
+      "task_en": "Create or edit an Office document"
+    },
+    {
+      "id": "Lark-CLI",
+      "name": "Lark-CLI",
+      "repo": "larksuite/cli",
+      "category": "office",
+      "driver": "cli",
+      "glyph": "◒",
+      "color": "#00b96b",
+      "by": "LarkSuite",
+      "home": true,
+      "description_zh": "飞书官方 CLI 与 Agent Skills，接入文档、表格、多维表格、消息、日历、任务和会议纪要。",
+      "description_en": "Official Lark/Feishu CLI and Agent Skills for Docs, Sheets, Base, messages, calendar, tasks, and meeting notes.",
+      "task_zh": "接入飞书并帮我处理文档、表格或日程",
+      "task_en": "Connect Lark/Feishu and help me work with docs, sheets, or calendar events"
+    },
+    {
+      "id": "crawl4ai",
+      "name": "Crawl4AI",
+      "repo": "unclecode/crawl4ai",
+      "category": "browser",
+      "driver": "cli",
+      "glyph": "◑",
+      "color": "#14b8a6",
+      "by": "Crawl4AI",
+      "home": true,
+      "description_zh": "抓取网页正文并整理成干净的文档或结构化数据, 装好后 CogSeed 会自动调用。",
+      "description_en": "Extract a web page's main content into a clean document or structured data; CogSeed uses it automatically once installed.",
+      "task_zh": "抓取这个网页的内容整理成文档",
+      "task_en": "Pull this web page into a clean document"
+    }
+  ]
+}

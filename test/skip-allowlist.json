@@ -1,0 +1,12 @@
+{
+  "$comment": "硬跳过（it.skip / test.skip / describe.skip）的显式登记表。scripts/check-skipped-tests.mjs --strict 会对白名单之外的任何硬跳过判失败（nightly 会因此变红）。新增条目必须在 PR 描述里写明理由与恢复条件；恢复后用例应删掉条目。",
+  "allowed": [
+    {
+      "file": "test/main/features/group_chat/bus-integration.test.ts",
+      "title": "CLI process-info accepts only a positive integer number as the in-memory PID",
+      "reason": "第二期通道收口（2026-08-24）：直连 cli 通道不再是默认执行路径，本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下会话连续性由 P3394 session 承担，网关侧的 PID 数据源与探活语义尚未补齐（见 docs/design 设计文档第 5 节）。2026-09-20 复核：恢复后会红，其余 3 条同类跳过恢复后均直接通过。",
+      "since": "2026-08-24",
+      "restore_when": "网关侧 PID 数据源与探活语义补齐后"
+    }
+  ]
+}

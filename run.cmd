@@ -1,0 +1,77 @@
+@echo off
+REM CogSeed source launcher with isolated runtime variants.
+setlocal EnableExtensions EnableDelayedExpansion
+set "APP_DIR=%~dp0"
+if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
+set "VARIANT=cogseed"
+
+:parse_args
+if "%~1"=="" goto args_done
+set "ARG=%~1"
+if "!ARG!"=="--help" goto usage_ok
+if "!ARG!"=="-h" goto usage_ok
+echo [CogSeed] Unknown argument: !ARG! 1>&2
+goto usage_error
+
+:args_done
+if defined COGSEED_RUNTIME_VARIANT if not "%COGSEED_RUNTIME_VARIANT%"=="cogseed" (
+  echo [CogSeed] This worktree is locked to the cogseed runtime; COGSEED_RUNTIME_VARIANT=%COGSEED_RUNTIME_VARIANT% is not allowed. 1>&2
+  exit /b 2
+)
+if defined COGSEED_WORKSPACE_ROOT (
+  echo [CogSeed] This worktree manages its own cogseed data root; inherited COGSEED_WORKSPACE_ROOT is not allowed. 1>&2
+  exit /b 2
+)
+set "COGSEED_RUNTIME_VARIANT=cogseed"
+
+if not exist "%APP_DIR%\package.json" (
+  echo [CogSeed] %APP_DIR%\package.json not found; check the project directory layout. 1>&2
+  exit /b 1
+)
+
+echo [CogSeed] Starting source runtime: !VARIANT!
+
+set "COGSEED_BUILD_CHANNEL=dev"
+for /f "delims=" %%G in ('git -C "%APP_DIR%" rev-parse HEAD 2^>nul') do set "COGSEED_BUILD_COMMIT=%%G"
+set "COGSEED_BUILD_DIRTY=0"
+for /f "delims=" %%G in ('git -C "%APP_DIR%" status --porcelain 2^>nul') do set "COGSEED_BUILD_DIRTY=1"
+for /f "delims=" %%G in ('powershell -NoLogo -NoProfile -Command "[DateTime]::UtcNow.ToString('o')"') do set "COGSEED_BUILD_TIME=%%G"
+echo [CogSeed] Build identity: !COGSEED_BUILD_CHANNEL! !COGSEED_BUILD_COMMIT! dirty=!COGSEED_BUILD_DIRTY!
+
+node --version >nul 2>nul
+if errorlevel 1 (
+  echo [CogSeed] Node.js is unavailable; preparing the pinned bundled runtime...
+  powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%\scripts\bootstrap-node.ps1"
+  if errorlevel 1 exit /b 1
+  set "RUNTIME_KEY=win32-x64"
+  if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "RUNTIME_KEY=win32-arm64"
+  if /I "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "RUNTIME_KEY=win32-arm64"
+  set "PATH=%APP_DIR%\resources\runtime\node\!RUNTIME_KEY!;%PATH%"
+)
+node --version >nul 2>nul
+if errorlevel 1 (
+  echo [CogSeed] Node.js is still unavailable after bootstrap. 1>&2
+  exit /b 1
+)
+
+call node "%APP_DIR%\scripts\ensure-deps.cjs"
+if errorlevel 1 exit /b 1
+call node "%APP_DIR%\scripts\ensure-dev-dependencies.cjs"
+if errorlevel 1 exit /b 1
+call node "%APP_DIR%\scripts\prepare-source-runtime.cjs" --variant=!VARIANT!
+if errorlevel 1 exit /b 1
+
+pushd "%APP_DIR%"
+call npm run start:electron -- --cogseed-runtime-variant=!VARIANT!
+set "RC=%ERRORLEVEL%"
+popd
+exit /b %RC%
+
+:usage_error
+echo Usage: run.cmd 1>&2
+exit /b 2
+
+:usage_ok
+echo Usage: run.cmd
+echo This worktree is locked to the cogseed runtime identity.
+exit /b 0

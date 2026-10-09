@@ -1,0 +1,214 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import type { MessagingAdapter } from '../../../src/main/features/messaging/types';
+import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
+
+let tmpDir = '';
+let previousRoot: string | undefined;
+
+function connectedAdapter(): MessagingAdapter {
+  return {
+    platform: 'feishu_lark',
+    async start(signal, callbacks) {
+      await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    },
+    async stop() {},
+    async checkHealth() {
+      return { kind: 'connected', checkedAt: new Date().toISOString() };
+    },
+    sendMessage: vi.fn(async () => ({ deliveryId: 'om_9' })),
+  };
+}
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-owner-bind-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  vi.resetModules();
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  try {
+    const manager = await import('../../../src/main/features/messaging/manager');
+    await manager.stopForUser('user-1');
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    const bus = await import('../../../src/main/features/group_chat/bus');
+    const userBindings = await bindings.listBindings('user-1');
+    await Promise.all(userBindings.map((binding) => bus.abort('user-1', binding.cid)));
+    await drainMainRuntimeForTest('user-1');
+  } catch { /* cleanup assertions below still report real filesystem leaks */ }
+  vi.unstubAllGlobals();
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function seededFeishu(uid: string, allowUserIds: string[] = []) {
+  // Only the binding-window deadline needs a controllable clock. Keep timers
+  // real so burst flushing and Windows filesystem retry sleeps can settle.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const adapter = connectedAdapter();
+  vi.doMock('../../../src/main/features/messaging/adapters', () => ({ createAdapter: vi.fn(() => adapter) }));
+  const groupSend = vi.fn(async () => ({ ok: true }));
+  vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+  vi.doMock('../../../src/main/features/group_chat/bus', () => ({
+    subscribe: vi.fn(() => () => undefined),
+    abort: vi.fn(async () => undefined),
+  }));
+  const registry = await import('../../../src/main/features/messaging/registry');
+  const manager = await import('../../../src/main/features/messaging/manager');
+  const created = await registry.createInstance(uid, {
+    platform: 'feishu_lark',
+    displayName: 'Bind bot',
+    policy: { allowUserIds, allowGroupIds: [] },
+    secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+  });
+  await manager.setEnabled(uid, created.id, true);
+  await vi.waitFor(async () => {
+    const instances = await manager.listInstances(uid);
+    expect(instances[0]?.status.kind).toBe('connected');
+  });
+  return { manager, registry, instanceId: created.id, groupSend };
+}
+
+function envelope(instanceId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    platform: 'feishu_lark' as const,
+    instanceId,
+    externalMessageId: 'om-in-1',
+    externalChatId: 'oc_dm_1',
+    externalUserId: 'ou_sender_1',
+    externalUserName: 'Sender One',
+    text: '你好，绑定我',
+    isGroup: false,
+    mentionPresent: false,
+    receivedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+async function drain(groupSend: ReturnType<typeof vi.fn>) {
+  await vi.waitFor(() => expect(groupSend).toHaveBeenCalled(), { timeout: 5_000 });
+}
+
+describe('messaging owner auto-bind from direct message', () => {
+  it('binds the first direct-message sender as owner inside the binding window', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
+    manager.openOwnerBindingWindow(uid, instanceId);
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
+    await drain(groupSend);
+    await inbound;
+
+    const instance = await registry.getInstance(uid, instanceId);
+    expect(instance).toMatchObject({
+      ownerExternalUserId: 'ou_sender_1',
+      ownerExternalUserName: 'Sender One',
+      ownerIdentitySource: 'auto',
+    });
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+
+  it('auto-opens the binding window when the bot is enabled', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
+    // seededFeishu enabled the instance, which opens the window by itself —
+    // no manual openOwnerBindingWindow call is needed.
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
+    await drain(groupSend);
+    await inbound;
+
+    expect(await registry.getInstance(uid, instanceId)).toMatchObject({
+      ownerExternalUserId: 'ou_sender_1',
+      ownerIdentitySource: 'auto',
+    });
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+
+  it('ignores group messages inside the window', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId } = await seededFeishu(uid, ['ou_sender_1']);
+    manager.openOwnerBindingWindow(uid, instanceId);
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId, { isGroup: true, externalChatId: 'oc_group_1' }));
+    await inbound;
+
+    expect(await registry.getInstance(uid, instanceId)).not.toHaveProperty('ownerExternalUserId');
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+
+  it('does not bind after the window expires', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
+    manager.openOwnerBindingWindow(uid, instanceId);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1000);
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
+    await drain(groupSend);
+    await inbound;
+
+    expect(await registry.getInstance(uid, instanceId)).not.toHaveProperty('ownerExternalUserId');
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+
+  it('does not overwrite an existing owner', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
+    await registry.updateInstance(uid, instanceId, {
+      ownerExternalUserId: 'ou_existing',
+      ownerExternalUserName: 'Existing',
+      ownerIdentitySource: 'manual',
+    });
+    manager.openOwnerBindingWindow(uid, instanceId);
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
+    await drain(groupSend);
+    await inbound;
+
+    expect(await registry.getInstance(uid, instanceId)).toMatchObject({ ownerExternalUserId: 'ou_existing' });
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+
+  it('closes the window after a successful bind', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
+    manager.openOwnerBindingWindow(uid, instanceId);
+    const firstInbound = manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-1' }));
+    await drain(groupSend);
+    await firstInbound;
+    // Second message from a different sender must not rebind; the allowlist
+    // only admits the original sender, so no dispatch is expected here.
+    const secondInbound = manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-2', externalUserId: 'ou_other' }));
+    await secondInbound;
+
+    expect(await registry.getInstance(uid, instanceId)).toMatchObject({ ownerExternalUserId: 'ou_sender_1' });
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+
+  it('reports live binding-window status and clears it on expiry', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId } = await seededFeishu(uid, ['ou_sender_1']);
+    // seededFeishu enabled the instance, which opens the window automatically.
+    const live = manager.getOwnerBindingStatus(uid, instanceId);
+    expect(live).toMatchObject({ binding: true });
+    expect(live?.remainingMs).toBeGreaterThan(0);
+    expect(live?.remainingMs).toBeLessThanOrEqual(5 * 60 * 1000);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1000);
+    expect(manager.getOwnerBindingStatus(uid, instanceId)).toBeNull();
+    vi.useRealTimers();
+    await manager.stopForUser(uid);
+  });
+});

@@ -1,0 +1,60 @@
+# 电商系统 E-R 图模板
+# 适用于电商、订单、商品相关系统
+
+id: "ecommerce"
+name: "电商系统 E-R 图"
+description: "适用于电商系统，包含用户、商品、订单等核心实体，默认输出 Graphviz DOT"
+
+# 模板变量定义
+variables:
+  - name: "user_entity"
+    description: "用户实体名称"
+    default: "用户"
+  - name: "product_entity"
+    description: "商品实体名称"
+    default: "商品"
+  - name: "order_entity"
+    description: "订单实体名称"
+    default: "订单"
+  - name: "additional_entities"
+    description: "额外实体列表"
+    type: "list"
+    default: []
+
+# Graphviz DOT 代码模板
+# ER 图默认从 background.md 提取表和字段生成 DOT，模板仅用于事实不足时的示例补全。
+dot_template: |
+  digraph {{chart_id}} {
+      graph [rankdir=LR, bgcolor=white, nodesep=0.5, ranksep=0.8];
+      node [fontname="Microsoft YaHei", shape=box, style=rounded];
+      edge [fontname="Microsoft YaHei", color="#555555"];
+
+      {{user_entity}} [shape=box, style="rounded,filled", fillcolor="#F8FBFF"];
+      {{product_entity}} [shape=box, style="rounded,filled", fillcolor="#F8FBFF"];
+      {{order_entity}} [shape=box, style="rounded,filled", fillcolor="#F8FBFF"];
+      ORDER_ITEM [shape=box, style="rounded,filled", fillcolor="#F8FBFF"];
+
+      {{user_entity}} -> {{order_entity}};
+      {{order_entity}} -> ORDER_ITEM;
+      ORDER_ITEM -> {{product_entity}};
+  }
+
+# 关键词匹配规则
+keywords:
+  - "电商"
+  - "订单"
+  - "商品"
+  - "购物"
+  - "交易"
+  - "E-R"
+  - "实体关系"
+
+# 实体提取规则
+entity_extraction:
+  # 从描述中识别实体
+  patterns:
+    - "用户|会员|客户"
+    - "商品|产品|物品"
+    - "订单|交易|购买"
+    - "评论|评价"
+    - "分类|类别"

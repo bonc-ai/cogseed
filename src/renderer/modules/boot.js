@@ -1,0 +1,712 @@
+// ─── Boot ─────────────────────────────────────────────────────────────────
+const _bootLog = createLogger('boot');
+async function initAuth() {
+  bootApp().catch((err) => {
+    console.error('[BOOT FATAL] bootApp failed:', err);
+    _bootLog.error('bootApp failed', { error: (err && err.message) || String(err), stack: err && err.stack });
+  });
+}
+
+// ─── Boot performance guardrails ────────────────────────────────────────────
+//
+// `bootApp` is the critical path from window open → "user sees last
+// conversation". Three structural rules + a runtime check keep it honest:
+//
+//   R1. THREE STAGES ONLY. Do not add a fourth serial `await` between
+//       `initI18n` and `_restoreLastView`. Any new boot-time work MUST
+//       land in Stage A (independent prep), Stage B (chat first-paint
+//       prereqs), or the deferred Stage C tail (non-critical warmup).
+//   R2. STAGE A / STAGE B ITEMS MUST BE FIRE-AND-RETURN. No new module
+//       inside the Promise.all may emit a fire-and-forget `await` inside
+//       another `await` of the same Promise.all — that defeats parallelism.
+//   R3. NON-CRITICAL WORK GOES IN STAGE C. If a task does not contribute
+//       to the user seeing the last conversation (subscriptions, tab-only
+//       data, banners, warmup caches), defer it.
+//
+// `_bootStage` wraps each stage with a timer; a stage exceeding
+// `_BOOT_STAGE_WARN_MS` or a total boot exceeding `_BOOT_TOTAL_WARN_MS`
+// emits `log.warn` with the breakdown. That single warn line is the
+// regression alarm — any future commit that re-introduces a serial await
+// will show up in the next boot's log.
+const _BOOT_STAGE_WARN_MS = 1500;
+const _BOOT_TOTAL_WARN_MS = 3000;
+const _SIDEBAR_NAV_BOOT_WARM_MS = 3500;
+let _sidebarNavWarmUntil = 0;
+const _sidebarNavTimers = new Map();
+const _sidebarNavTokens = new Map();
+
+// One coarse timestamp per second is enough for background admission. No
+// event details leave the renderer; main only learns that interaction happened.
+let _lastBootActivityReportAt = 0;
+function _reportBootUserActivity() {
+  const now = Date.now();
+  if (now - _lastBootActivityReportAt < 1000) return;
+  _lastBootActivityReportAt = now;
+  try { window.cogseed?.reportUserActivity?.(); } catch (_) {}
+}
+for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+  window.addEventListener(eventName, _reportBootUserActivity, { capture: true, passive: true });
+}
+
+function _deferSidebarNavWork(key, fn, delayMs = 0) {
+  const token = (_sidebarNavTokens.get(key) || 0) + 1;
+  _sidebarNavTokens.set(key, token);
+  const prev = _sidebarNavTimers.get(key);
+  if (prev) clearTimeout(prev);
+
+  const arm = () => {
+    if (_sidebarNavTokens.get(key) !== token) return;
+    const timer = setTimeout(() => {
+      if (_sidebarNavTokens.get(key) !== token) return;
+      _sidebarNavTimers.delete(key);
+      _sidebarNavTokens.delete(key);
+      try {
+        fn();
+      } catch (err) {
+        _bootLog.warn('sidebar nav work failed', {
+          key,
+          error: (err && err.message) || String(err),
+        });
+      }
+    }, Math.max(0, delayMs || 0));
+    _sidebarNavTimers.set(key, timer);
+  };
+
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(arm);
+  else arm();
+}
+
+async function _bootStage(name, fn) {
+  const t0 = performance.now();
+  try {
+    return await fn();
+  } finally {
+    const ms = Math.round(performance.now() - t0);
+    if (ms > _BOOT_STAGE_WARN_MS) {
+      _bootLog.warn(`boot stage slow: ${name} ${ms}ms (threshold ${_BOOT_STAGE_WARN_MS}ms)`);
+    } else {
+      _bootLog.info(`boot stage: ${name} ${ms}ms`);
+    }
+  }
+}
+
+async function bootApp() {
+  _bootLog.info('app boot');
+  const _bootT0 = performance.now();
+  _sidebarNavWarmUntil = Math.max(_sidebarNavWarmUntil, _bootT0 + _SIDEBAR_NAV_BOOT_WARM_MS);
+  _migrateLegacyLocalStorageKeys();
+  // i18n must be ready before any other UI module renders labels.
+  await _bootStage('initI18n', initI18n);
+
+  // First-run walkthrough FIRST: check the machine-local onboarding marker
+  // right after i18n, BEFORE Stage A/B. The walkthrough is a full-screen
+  // overlay — the user should land on it immediately, never on a half-loaded
+  // main UI that swaps to the walkthrough seconds later. Fire-and-forget so
+  // it never blocks first paint; the script itself is lazy-loaded only when
+  // the marker says this device hasn't completed it. The post-restore call
+  // below stays as a safety net (loader + maybeStart are both idempotent).
+  _maybeStartOnboardingFeature();
+
+  // ── Stage A (parallel, no inter-dependencies) ──────────────────────
+  // All four are independent IPC calls. Three downstream constraints,
+  // all honored by staging:
+  //   - `_stampSettingsVersion` stamps body.is-dev BEFORE Stage B's
+  //     `loadAgents` / later `loadSkills` read `false`.
+  //   - `initAvatarCatalog` must finish BEFORE `loadAgents` so cards
+  //     render with their icon SVGs instead of a fallback frame.
+  //   - `initUser` → `initUserWorkspace` stays sequential (workspace
+  //     paths key off the activated uid).
+  // `refreshModelGuard` is the no-model banner — non-critical, deferred
+  // to Stage C with the other warmup-only work.
+  await _bootStage('stageA', () => Promise.all([
+    _stampSettingsVersion(),
+    (async () => { await initUser(); await initUserWorkspace(); if (typeof initModelChip === 'function') initModelChip(); })(),
+    initAvatarCatalog(),
+  ]));
+
+  // ── Stage B (parallel, depends on Stage A) ─────────────────────────
+  // Both feed the first chat view: the sidebar list (loadConversations)
+  // and a lightweight @-mention / actor-label cache. The full Agent specs
+  // (workflows, profiles, memory and skill references) load only on the
+  // Agents tab.
+  await _bootStage('stageB', () => Promise.all([
+    loadConversations({ startup: true }),
+    loadAgents(false, { summary: true }),
+  ]));
+
+  // User now sees the last conversation. _ensureCommanderAvatarLoaded is
+  // fire-and-forget but kicked off NOW (not in Stage C) so the first
+  // chat render finds the commander avatar warm; one cheap IPC, worth
+  // it to avoid a default-avatar flash on the first frame.
+  _restoreLastView();
+  // Warm code and data only. Hidden DOM must not compete with an explicit
+  // workspace destination or reset the space selected while data is loading.
+  {
+    const _warmWorkspaceFeature = () => {
+      const loader = typeof loadRendererFeature === 'function'
+        ? loadRendererFeature
+        : window.loadRendererFeature;
+      if (typeof loader !== 'function') return;
+      Promise.resolve(loader('workspace'))
+        .then(() => {
+          if (typeof window.warmWorkspace === 'function') return window.warmWorkspace();
+        })
+        .catch((err) => {
+          _bootLog.warn('workspace warmup load failed', { error: (err && err.message) || String(err) });
+        });
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(_warmWorkspaceFeature, { timeout: 4000 });
+    } else {
+      setTimeout(_warmWorkspaceFeature, 500);
+    }
+  }
+  // First-run walkthrough safety net: fire-and-forget so it never blocks
+  // first paint. Same lazy path as the early call — the marker gates both,
+  // and the loader/maybeStart are idempotent so the second call is a no-op
+  // when the early one already started the walkthrough.
+  _maybeStartOnboardingFeature();
+
+  // Interactive tour is started by onboarding.js after completion
+  // (removed duplicate auto-start to avoid "tour already running" conflict)
+  if (typeof _consumePendingTaskNotificationConversation === 'function') {
+    _consumePendingTaskNotificationConversation();
+  }
+  if (typeof _ensureCommanderAvatarLoaded === 'function') _ensureCommanderAvatarLoaded();
+  // Inline `delete_file` confirm-card subscription is attached here (NOT in
+  // Stage C) so a tool call fired within the first 2.5 s of boot still has
+  // a receiver. The listener is cheap (one IPC subscribe); deferring it
+  // would risk the main-side `delete_file` tool sitting on a 5-minute
+  // timeout because no renderer was listening yet.
+  if (typeof startDeleteFileConfirmSubscription === 'function') {
+    startDeleteFileConfirmSubscription();
+  }
+
+  const _bootTotalMs = Math.round(performance.now() - _bootT0);
+  if (_bootTotalMs > _BOOT_TOTAL_WARN_MS) {
+    _bootLog.warn(`boot total slow: ${_bootTotalMs}ms (threshold ${_BOOT_TOTAL_WARN_MS}ms) — likely a new serial await landed in bootApp; see boot stage timings above`);
+  } else {
+    _bootLog.info(`boot total: ${_bootTotalMs}ms`);
+  }
+  _sidebarNavWarmUntil = Math.max(_sidebarNavWarmUntil, performance.now() + _SIDEBAR_NAV_BOOT_WARM_MS);
+
+  // ── Stage C (deferred ~2.5 s, no impact on first paint) ────────────
+  // These do not block first-frame interactivity:
+  //   - refreshModelGuard: no-model banner can appear a tick later.
+  //   - subscriptions: passive event sinks, not on the critical path.
+  // Skill data deliberately does NOT prefetch here. The Skills tab already
+  // loads it on entry; pulling the full catalog at +2.5 s competes with the
+  // user's first interactions on low-end devices for no chat-path benefit.
+  setTimeout(() => {
+    try { refreshModelGuard(); } catch (_) { /* non-fatal */ }
+    if (typeof startAutoEventsSubscription === 'function') {
+      startAutoEventsSubscription();
+    }
+  }, 2500);
+}
+
+// Stamps body.is-dev so renderer modules can branch on dev mode synchronously
+// via `document.body.classList.contains('is-dev')`. Used by skills / agents
+// grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
+// item on custom cards.
+//
+// 顺带做 dev 半更新检测：main 侧 `src/main/**/*.ts` 是进程启动时由 tsx 加载的
+// （无编译步骤），而本渲染层的 .js 每次刷新窗口都会重读磁盘。若磁盘上的 main
+// 源码比主进程启动还新，就会出现"界面是新代码、主进程是旧代码"——新参数会被
+// 旧主进程静默忽略（真机事故：kb.mindmap 的 doc 参数被忽略 → 整库脑图冒充
+// "本文档脑图"）。这里显式提示 + 一键重启，把静默故障变成可见问题。
+async function _stampSettingsVersion() {
+  if (!window.cogseed || typeof window.cogseed.env !== 'function') return;
+  try {
+    const env = await window.cogseed.env();
+    if (env && env.isDev) document.body.classList.add('is-dev');
+    if (env && env.mainSourceStale) _showStaleMainBanner(env);
+  } catch (_) { /* ignore — non-critical */ }
+}
+
+// Dev-only 提示条：复用 model-guard 的横幅样式与插槽（同一位置、同一视觉语言，
+// 不新增样式与 i18n key）。文案是开发态信息，按本仓库既有 dev 文案惯例用中文。
+function _showStaleMainBanner(env) {
+  try {
+    if (sessionStorage.getItem('stale-main-banner-dismissed') === '1') return;
+    if (document.getElementById('stale-main-banner')) return;
+    const slot = document.querySelector('#model-guard-slot');
+    if (!slot) return;
+    const changedAt = env.mainSourceChangedAt ? String(env.mainSourceChangedAt).slice(11, 19) : '?';
+    const el = document.createElement('div');
+    el.className = 'model-guard-banner';
+    el.id = 'stale-main-banner';
+    el.dataset.staleSince = changedAt;
+    // 控件走共享原语（护栏禁止裸控件）；本处晚于 ui-button.js 加载，原语必已就绪
+    el.innerHTML = `
+      ${window.uiIconButton({ label: '本次运行内忽略', icon: 'x', className: 'model-guard-dismiss', attrs: { title: '本次运行内忽略' } })}
+      <span class="model-guard-icon" aria-hidden="true"></span>
+      <span class="model-guard-copy">
+        <strong class="model-guard-title">主进程代码已过期（改动未生效）</strong>
+        <span class="model-guard-text">磁盘上的 src/main 代码在 ${escapeHtml(changedAt)} 有更新，比当前进程启动更晚。此时界面已是新代码、主进程还是旧代码：新功能的参数会被静默忽略（例如"生成脑图（本文档）"可能退回整库）。点右侧重启即可生效。</span>
+      </span>
+      ${window.uiButton({ label: '立即重启', role: 'primary', size: 'sm', className: 'model-guard-cta' })}
+    `;
+    const ctaButton = el.querySelector('.model-guard-cta');
+    if (ctaButton) ctaButton.addEventListener('click', () => {
+      // 走应用自己的 dev 重启通道（shell 出 run.sh/run.cmd，带上依赖自愈），
+      // 而不是本模块直接杀进程。
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        window.cogseed.invoke('cogseed.relaunch').catch(() => { /* 失败则用户手动重启 */ });
+      }
+    });
+    const dismissButton = el.querySelector('.model-guard-dismiss');
+    if (dismissButton) dismissButton.addEventListener('click', () => {
+      try { sessionStorage.setItem('stale-main-banner-dismissed', '1'); } catch (_) { /* ignore */ }
+      el.remove();
+    });
+    slot.appendChild(el);
+  } catch (_) { /* 提示条失败绝不能影响启动 */ }
+}
+
+// One-shot rename of legacy brand-prefixed localStorage keys
+// (`cogseed_*` / `cogseed.*`). Rationale lives in
+// plans/decouple-session-id-from-brand.md: avoid breaking another wave
+// of user view state / drafts the next time the brand is renamed. After
+// stamping, subsequent boots are no-ops. Placed at the very start of
+// boot so no other module reads a stale key first.
+function _migrateLegacyLocalStorageKeys() {
+  try {
+    if (localStorage.getItem('_ls_brand_migration_v1')) return;
+    const fixedMap = {
+      'cogseed_last_view':           'last_view',
+      'cogseed_search_history':      'search_history',
+      'cogseed.chat.recipientByCid': 'chat.recipientByCid',
+      'cogseed.kb-picker.last-dir':  'kb-picker.last-dir',
+    };
+    for (const [oldK, newK] of Object.entries(fixedMap)) {
+      const v = localStorage.getItem(oldK);
+      if (v != null && localStorage.getItem(newK) == null) {
+        localStorage.setItem(newK, v);
+      }
+      localStorage.removeItem(oldK);
+    }
+    const toRename = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('cogseed_queue_') || k.startsWith('cogseed_draft_'))) {
+        toRename.push(k);
+      }
+    }
+    for (const k of toRename) {
+      const newK = k.replace(/^cogseed_/, '');
+      const v = localStorage.getItem(k);
+      if (v != null && localStorage.getItem(newK) == null) {
+        localStorage.setItem(newK, v);
+      }
+      localStorage.removeItem(k);
+    }
+    localStorage.setItem('_ls_brand_migration_v1', '1');
+  } catch (_) {
+    /* localStorage unavailable / quota — skip; no-op next boot */
+  }
+}
+
+// Persist the current view across reloads (localStorage keyed by user).
+const _LAST_VIEW_KEY = 'last_view';
+
+function _saveLastView(view, cid) {
+  try {
+    localStorage.setItem(_LAST_VIEW_KEY, JSON.stringify({ view, cid: cid || null }));
+  } catch (_) {}
+}
+
+// ── 首启引导（onboarding）按需加载 ─────────────────────────────────────────
+// onboarding.js(168K)+css(33K) 只在设备未完成引导时才需要：先查机器本地
+// 标记（prefs IPC，无需脚本本体），未完成才经 lazy-features 注入并启动；
+// 已完成的老设备首屏少解析约 200K。幂等：loader 与 maybeStart 各自去重。
+function _maybeStartOnboardingFeature() {
+  Promise.resolve()
+    .then(() => window.cogseed.invoke('prefs.getOnboarding'))
+    .then((res) => {
+      if (res && res.completed === true) return; // 已完成：不加载不启动
+      const loader = typeof loadRendererFeature === 'function'
+        ? loadRendererFeature
+        : window.loadRendererFeature;
+      if (typeof loader !== 'function') return;
+      return Promise.resolve(loader('onboarding'))
+        .then(() => {
+          if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+            return window.csOnboarding.maybeStart();
+          }
+        });
+    })
+    .catch((err) => {
+      _bootLog.warn('onboarding lazy load failed', { error: (err && err.message) || String(err) });
+    });
+}
+
+function _loadViewFeature(feature, view, run) {
+  const loader = typeof loadRendererFeature === 'function'
+    ? loadRendererFeature
+    : window.loadRendererFeature;
+  if (typeof loader !== 'function') {
+    run();
+    return;
+  }
+  _clearLazyFeatureError(view);
+  Promise.resolve(loader(feature))
+    .then(() => {
+      _clearLazyFeatureError(view);
+      if (currentView === view) run();
+    })
+    .catch((err) => {
+      _bootLog.warn('lazy renderer feature load failed', {
+        feature,
+        error: (err && err.message) || String(err),
+      });
+      _showLazyFeatureError(feature, view, err, run);
+    });
+}
+
+function _lazyFeaturePanel(view) {
+  const panelId = view === 'skills' ? 'panel-connections'
+    : view === 'recall' ? 'panel-recall'
+    : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+    : view === 'kb' ? 'panel-kb'
+    : view === 'contexts' ? 'panel-contexts'
+    : view === 'settings' ? 'panel-settings'
+    : view === 'auto' ? 'panel-auto'
+    : view === 'run-center' ? 'panel-run-center'
+    : view === 'marketplace' ? 'panel-marketplace'
+    : view === 'devtools' ? 'panel-devtools'
+    : null;
+  return panelId ? document.getElementById(panelId) : null;
+}
+
+function _clearLazyFeatureError(view) {
+  _lazyFeaturePanel(view)?.querySelector(':scope > .lazy-feature-error')?.remove();
+}
+
+function _showLazyFeatureError(feature, view, err, run) {
+  const panel = _lazyFeaturePanel(view);
+  if (!panel) return;
+  _clearLazyFeatureError(view);
+  const banner = document.createElement('div');
+  banner.className = 'lazy-feature-error';
+  banner.dataset.feature = feature;
+  const reason = (err && err.message) || String(err || '');
+  banner.dataset.errorReason = reason;
+  banner.innerHTML = `<span data-lazy-feature-error-message>${escapeHtml(t('chat.load_failed', { msg: reason }))}</span>
+    <button type="button" class="btn btn-sm">${escapeHtml(t('chat.retry_btn'))}</button>`;
+  banner.querySelector('button')?.addEventListener('click', () => {
+    _clearLazyFeatureError(view);
+    if (currentView === view) _loadViewFeature(feature, view, run);
+  });
+  panel.prepend(banner);
+}
+
+window.addEventListener('i18n-change', () => {
+  document.querySelectorAll('.lazy-feature-error').forEach((banner) => {
+    const message = banner.querySelector('[data-lazy-feature-error-message]');
+    const retry = banner.querySelector('button');
+    if (message) message.textContent = t('chat.load_failed', { msg: banner.dataset.errorReason || '' });
+    if (retry) retry.textContent = t('chat.retry_btn');
+  });
+});
+
+function _restoreLastView() {
+  // Restart policy: only `conversation` view is remembered across launches.
+  // Every other tab (agents / skills / contexts / connectors / apps / settings
+  // / project detail / marketplace / devtools) intentionally falls back to
+  // the commander (new-chat) — the user always lands on a known starting
+  // point and doesn't accidentally resume a settings / inventory tab they
+  // wandered into before quitting.
+  let saved = null;
+  try {
+    const raw = localStorage.getItem(_LAST_VIEW_KEY);
+    if (raw) saved = JSON.parse(raw);
+  } catch (_) {}
+
+  const view = saved?.view;
+  const cid = saved?.cid;
+
+  if (view === 'conversation' && cid && conversations.some(c => c.conversation_id === cid)) {
+    setView('conversation', cid);
+    return;
+  }
+  setView('new-chat');
+}
+
+async function initUser() {
+  try {
+    const res = await apiFetch('/api/user/init');
+    const data = await res.json();
+    if (data.ok && data.user_id) {
+      currentUserId = data.user_id;
+      _bootLog.info('user init', { user_id: currentUserId });
+      // Bind the telemetry identity as soon as we have a user_id;
+      // Monitor handles dedupe + queueing internally, so no need to
+      // check whether umami has finished initializing.
+          }
+  } catch (e) {
+    _bootLog.error('init user failed', { error: (e && e.message) || String(e) });
+      }
+}
+
+// ─── View routing ───
+
+function setView(view, cid, opts = {}) {
+  if (view === 'settings' && currentView !== 'settings') {
+    window.__settingsReturnTarget = {
+      view: currentView || 'new-chat',
+      cid: currentView === 'conversation' ? currentCid : null,
+    };
+  }
+  if (view === 'spaces') view = 'workspace';
+  if (typeof window.closeRunCenterGlobal === 'function') window.closeRunCenterGlobal();
+  if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
+  const openPersonalOntology = view === 'personal-ontology';
+  const openLegacyAgentDashboard = view === 'dashboard';
+  const openLegacyAgentConnections = view === 'agents';
+  // Keep deep links and persisted callers using the pre-unification routes
+  // inside Run Center. The Run Center controller owns the secondary mode/tab
+  // mapping, while boot only needs to select the shared panel.
+  const legacyRunCenterView = ['overview', 'board', 'runs', 'tasks', 'sessions', 'history', 'execution', 'collaboration'].includes(view)
+    ? view : null;
+  // Keep `agents` out of the direct-route list because that route opens the
+  // global Connections/Agents surface outside Run Center.
+  const requestedRunCenterView = openLegacyAgentDashboard ? 'agents' : opts.runCenterView;
+  const runCenterInitialView = legacyRunCenterView || requestedRunCenterView;
+  if (openPersonalOntology) view = 'recall';
+  if (openLegacyAgentDashboard) view = 'run-center';
+  if (legacyRunCenterView) view = 'run-center';
+  if (openLegacyAgentConnections) view = 'connections';
+  if (view === 'evolution') view = 'skills';
+  if (view !== 'run-center' && typeof window.stopRunCenterWatch === 'function') {
+    window.stopRunCenterWatch();
+  }
+  if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
+    _bootLog.info('view change', { view, cid: cid || undefined });
+  }
+  currentView = view;
+  if (view !== 'agents' && typeof closeExpenseWorkbench === 'function') {
+    closeExpenseWorkbench();
+  }
+  // 切离会话 / 新建会话面板时停止正在进行的语音输入，避免麦克风在别的模块继续收音。
+  if (view !== 'conversation' && view !== 'new-chat' && typeof window.__stopSttInputRecording === 'function') {
+    window.__stopSttInputRecording();
+  }
+  _saveLastView(view, cid);
+  window.__runCenterReturnContext = view === 'conversation' && opts.runCenterReturn
+    ? opts.runCenterReturn : null;
+  const runCenterReturnButton = document.getElementById('run-center-return-btn');
+  if (runCenterReturnButton) runCenterReturnButton.hidden = !window.__runCenterReturnContext;
+  // Prepare synchronously before exposing the retained panel: otherwise its
+  // previous space paints for a frame before the deferred loader runs.
+  if (view === 'workspace') {
+    if (typeof window.prepareWorkspaceView === 'function') window.prepareWorkspaceView();
+  } else {
+    // A breadcrumb may have queued a destination before workspace.js loaded.
+    // Leaving cancels that intent even when its lifecycle hook is not ready.
+    window.__cogseedPendingOpenSpace = null;
+    if (typeof window.leaveWorkspace === 'function') window.leaveWorkspace();
+  }
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const panelId = view === 'new-chat' ? 'panel-new-chat'
+                : view === 'auto' ? 'panel-auto'
+                : view === 'run-center' ? 'panel-run-center'
+                : view === 'agents' || view === 'contexts' ? 'panel-connections'
+                : view === 'skills' ? 'panel-connections'
+                : view === 'recall' ? 'panel-recall'
+                : view === 'connections' || view === 'connectors' ? 'panel-connections'
+                : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+                : view === 'kb' ? 'panel-kb'
+                : view === 'settings' ? 'panel-settings'
+                : view === 'devtools' ? 'panel-devtools'
+                : view === 'marketplace' ? 'panel-marketplace'
+                : 'panel-conversation';
+  document.getElementById(panelId).classList.add('active');
+
+  document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
+  document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
+  document.getElementById('kb-btn')?.classList.toggle('active', view === 'kb');
+  document.getElementById('run-center-btn')?.classList.toggle('active', view === 'run-center');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
+  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
+  document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
+  // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
+  if (typeof window.setChipSettingsActive === 'function') {
+    window.setChipSettingsActive(view === 'settings');
+  }
+  document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
+  document.querySelectorAll('.conv-item').forEach(it => {
+    it.classList.toggle('active', view === 'conversation' && it.dataset.cid === cid);
+  });
+
+  // Memory page retired (2026-09-20): its entry card now routes to the
+  // cognition-assets view; memory.js stays loaded as the export/import tool
+  // (window.MemoryTools), reused from the personal-ontology subpage.
+  if (view === 'run-center') {
+    _loadViewFeature('run-center', 'run-center', () => {
+      if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView, opts.runCenterOptions || {});
+    });
+  }
+  if (view === 'conversation' && cid) {
+    currentCid = cid;
+    lastConversationCid = cid;
+    if (typeof onEnterConversationView === 'function') onEnterConversationView();
+    if (opts.openRunContext && window.ConversationInfo?.openAndSetTab) {
+      window.ConversationInfo.openAndSetTab(opts.openRunContext);
+    }
+    // If this conversation has an in-flight stream and its bubble is still
+    // attached to #chat-history (sidebar tab toggle didn't wipe it), skip
+    // the reload — wiping would orphan the bubble while the active stream
+    // closure keeps writing into the detached node, leaving the "thinking…" indicator stuck.
+    const pendingState = pendingConvs.get(cid);
+    const streamBubbleAlive = !!pendingState?.loadingEl?.isConnected;
+
+    if (opts.skipLoad) {
+      // Fresh conversation — caller will drive appends. Clear any stale content.
+      const container = document.getElementById('chat-history');
+      container.innerHTML = '';
+      if (typeof _replayBufferedGroupEvents === 'function') _replayBufferedGroupEvents(cid);
+    } else if (!streamBubbleAlive) {
+      loadConversationHistory(cid, opts.historyTarget ? { searchTarget: opts.historyTarget } : undefined);
+    } else if (opts.historyTarget && typeof _revealConversationHistorySearchTarget === 'function') {
+      _revealConversationHistorySearchTarget(cid, opts.historyTarget);
+    }
+    // If this conversation is still pending a response, re-attach loading indicator
+    if (isConvPending(cid) && !opts.skipLoad && !streamBubbleAlive) {
+      const state = pendingConvs.get(cid);
+      // Will be (re)appended after history loads — handled in loadConversationHistory
+      if (state) state.needsIndicator = true;
+    }
+    // Restore input draft + queue panel for this conversation
+    if (!opts.skipLoad) _restoreDraft(cid);
+    renderMessageQueue(cid);
+    // Attachment chips: bind the "+" button once, redraw chip area for the
+    // current cid, and resync with the server in case the previous visit
+    // left files on disk without their dataUrl.
+    if (typeof _initChatAttachInput === 'function') _initChatAttachInput();
+    if (typeof _chatAttachRenderChips === 'function') _chatAttachRenderChips();
+    if (!opts.skipLoad && typeof _chatAttachRefreshFromServer === 'function') {
+      _chatAttachRefreshFromServer(cid);
+    }
+    // If we returned to a conversation with queued items and nothing is
+    // streaming, kick off the next one automatically.
+    if (!isConvPending(cid) && (messageQueues.get(cid) || []).length) {
+      // Fire-and-forget: _dispatchNextQueued is async (ontology_group token
+      // expansion needs an IPC round-trip); this call site never awaited it.
+      Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
+    }
+    _updateConvSendUI(cid);
+    setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
+  } else if (view === 'new-chat') {
+    // Leaving conversation view: hide any queue panel remnants.
+    renderMessageQueue(null);
+    currentCid = null;
+    // Reset the new-chat ephemeral recipient back to commander every time
+    // the landing page is entered — the user explicitly asked for a clean
+    // slate here, so prior in-session picks don't leak forward.
+    if (typeof onEnterNewChatView === 'function') onEnterNewChatView();
+    // Draft attachment chips (commander tab's local `main_chat/` pool): re-paint
+    // from the in-memory Map immediately, and re-sync with disk in case a prior
+    // session left files on disk without a dataUrl.
+    if (typeof _chatAttachRenderChips === 'function') _chatAttachRenderChips(DRAFT_CID);
+    if (typeof _chatAttachRefreshFromServer === 'function') _chatAttachRefreshFromServer(DRAFT_CID);
+    if (typeof _renderQuotePreview === 'function') _renderQuotePreview(DRAFT_CID);
+    setTimeout(() => document.getElementById('new-chat-input')?.focus(), 50);
+  } else if (view === 'skills') {
+    currentCid = null;
+    _deferSidebarNavWork('skills-tab-refresh', () => {
+      _loadViewFeature('skills', 'skills', () => {
+        // 技能库已移到连接页「技能」tab（技能市场/外部库属于可用资源，不是
+        // 个人认知资产）。深链先切过去，再渲染技能网格。
+        if (typeof activateConnectionsTab === 'function') activateConnectionsTab('skills');
+        if (typeof _skillsCache !== 'undefined' && _skillsCache) renderSkillsList(_skillsCache);
+        const forceRefresh = !!(typeof _skillsCache !== 'undefined' && _skillsCache);
+        Promise.resolve(loadSkills(forceRefresh))
+          .then(() => {
+            if (currentView === 'skills' && typeof refreshSelectedSkillDetail === 'function') {
+              return refreshSelectedSkillDetail();
+            }
+            return null;
+          })
+          .catch((e) => _bootLog.warn('skills refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+      });
+    });
+  } else if (view === 'recall') {
+    currentCid = null;
+    _deferSidebarNavWork('recall-tab-refresh', () => {
+      _loadViewFeature('recall', 'recall', () => {
+        // 认知资产面板由 cognition-assets/app.js 自举（面板激活即拉数据）；
+        // 深链 setView('personal-ontology') 在 setView 顶部被归一化为 recall，
+        // 本体工作台内嵌在面板下方，由 cognition-assets 模块接管展开。
+        if (openPersonalOntology && window.CogAssets && typeof window.CogAssets.openPersonalOntology === 'function') {
+          void window.CogAssets.openPersonalOntology();
+        }
+      });
+    });
+  } else if (view === 'connections' || view === 'connectors') {
+    currentCid = null;
+    _deferSidebarNavWork('connections-tab-load', () => {
+      // The connections panel is eager-bundled with connectors.js; just make
+      // sure tab chrome + entry cards are initialized, then open the MCP pane
+      // when arriving via the legacy 'connectors' view.
+      if (currentView !== 'connections' && currentView !== 'connectors') return;
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (openLegacyAgentConnections && typeof activateConnectionsTab === 'function') {
+        activateConnectionsTab('agents');
+      } else if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
+        activateConnectionsTab('mcp');
+      }
+    });
+  } else if (view === 'contexts') {
+    currentCid = null;
+    _deferSidebarNavWork('contexts-tab-load', () => {
+      // 资料库已内嵌进「连接」：深链先切到数据源 tab。
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (typeof activateConnectionsTab === 'function') activateConnectionsTab('sources');
+      _loadViewFeature('contexts', 'contexts', () => {
+        if (typeof loadContexts === 'function') loadContexts();
+      });
+    });
+  } else if (view === 'auto') {
+    currentCid = null;
+    // Force-refresh on every tab visit: a scheduled fire or remote sync pull
+    // may have updated the list while the user was elsewhere.
+    _deferSidebarNavWork('auto-tab-load', () => {
+      _loadViewFeature('auto', 'auto', () => {
+        if (typeof loadAutoList === 'function') loadAutoList(true);
+      });
+    });
+  } else if (view === 'spaces' || view === 'workspace') {
+    currentCid = null;
+    _deferSidebarNavWork('workspace-tab-load', () => {
+      _loadViewFeature('workspace', 'workspace', () => {
+        if (typeof renderWorkspace === 'function') renderWorkspace();
+      });
+    });
+  } else if (view === 'kb') {
+    currentCid = null;
+    _deferSidebarNavWork('kb-tab-load', () => {
+      _loadViewFeature('kb', 'kb', () => {
+        if (typeof renderKbEco === 'function') renderKbEco();
+        if (typeof renderKbWorkbench === 'function') renderKbWorkbench();
+      });
+    });
+  } else if (view === 'settings') {
+    currentCid = null;
+    _deferSidebarNavWork('settings-tab-load', () => {
+      _loadViewFeature('settings', 'settings', () => {
+        if (typeof loadSettings === 'function') {
+          Promise.resolve(loadSettings({ tab: opts.settingsTab, anchor: opts.settingsAnchor }))
+            .catch((e) => _bootLog.warn('settings page load failed', { error: (e && e.message) || String(e) }));
+        }
+      });
+    });
+  } else {
+    currentCid = null;
+  }
+}
+
+// Expose setView to window for interactive tour
+window.setView = setView;

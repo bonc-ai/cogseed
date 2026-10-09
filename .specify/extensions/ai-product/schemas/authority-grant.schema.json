@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-product/authority-grant.schema.json",
+  "title": "AI Authority Grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "id", "level", "allowed_actions", "prohibited_actions", "data_boundary", "confirmation_points", "audit_requirements", "a4_enabled"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "kind": {"const": "authority-grant"},
+    "id": {"type": "string", "pattern": "^AUTH-[A-Z0-9-]+$"},
+    "level": {"enum": ["A0", "A1", "A2", "A3", "A4"]},
+    "allowed_actions": {"type": "array", "items": {"type": "string"}},
+    "prohibited_actions": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "data_boundary": {"type": "array", "items": {"type": "string"}},
+    "confirmation_points": {"type": "array", "items": {"type": "string"}},
+    "rollback_plan": {"type": ["string", "null"]},
+    "audit_requirements": {"type": "array", "items": {"type": "string"}},
+    "owner": {"type": ["string", "null"]},
+    "approved_at": {"type": ["string", "null"], "format": "date-time"},
+    "a4_enabled": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"level": {"enum": ["A3", "A4"]}}},
+      "then": {
+        "required": ["owner", "approved_at", "rollback_plan"],
+        "properties": {
+          "owner": {"type": "string", "minLength": 1},
+          "approved_at": {"type": "string", "minLength": 1},
+          "rollback_plan": {"type": "string", "minLength": 1},
+          "confirmation_points": {"minItems": 1},
+          "audit_requirements": {"minItems": 1}
+        }
+      }
+    }
+  ]
+}

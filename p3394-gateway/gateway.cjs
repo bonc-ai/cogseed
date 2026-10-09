@@ -1,0 +1,3428 @@
+#!/usr/bin/env node
+/**
+ * p3394-gateway — 给对端 Agent 装的 P3394 实现包。
+ *
+ * 装上即内建 P3394：收 envelope → 交给本机 Agent 的模型/CLI → 回 envelope。
+ * CogSeed 内建 P3394，对端装上本包后两边直接互通，中间没有任何转接层。
+ *
+ * 两种运行模式（P3394_AGENT_MODE）：
+ *   oneshot（默认）  每消息 spawn 一次 CLI；网关侧维护会话 transcript + 会话
+ *                    工作区（in/out），跨轮保留上下文 —— 适合 hermes/claude/
+ *                    codex 等 oneshot CLI。oneshot 同样增量回发：CLI 运行过程
+ *                    中印到 stdout/stderr 的可见输出会实时以 stream delta 帧
+ *                    发回 CogSeed（气泡随之增长），不必等工具+回复全部跑完。
+ *                    openclaw 预设整体排除（无中间分片，其最终 JSON 回复信封
+ *                    写在 stderr 末尾），保持一次性回发。
+ *                    `P3394_DISABLE_ONESHOT_STREAM=1` 可整体关闭。
+ *   sscli            常驻单个 CLI 进程，按 p3394-sscli/1.0 JSONL 协议交换
+ *                    hello/open_session/deliver/事件/cancel/heartbeat —— 适合
+ *                    支持结构化会话协议的 Agent Runtime（指南 §9.2）。
+ *
+ * 会话连续性（两种模式通用）：
+ *   - 同一 session_id 的多轮消息共享一个会话目录（transcript + 工作区）；
+ *   - 入站 resource/artifact part（data URI + sha256 digest）落盘到会话
+ *     workspace/in/，并把路径告诉 Agent；
+ *   - Agent 运行期间写入 workspace/out/ 的文件随回复作为 resource part
+ *     回传（digest 校验）——Artifact 端到端传递。
+ *
+ * 安装/获取（对端机器上；本地优先，有就直接用、不要从 NPM 拉）：
+ *   1) 已全局安装过（POSIX: command -v p3394-gateway；Windows: where
+ *      p3394-gateway）有输出 → 直接用 p3394-gateway；
+ *   2) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
+ *      开发仓库 <仓库根>/p3394-gateway/gateway.cjs；
+ *      macOS 已安装应用
+ *      /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs；
+ *      Windows <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs；
+ *      找到后 node <该路径> 启动即等同于装了包；
+ *   3) 以上都没有才：npm install -g @cogseed/p3394-gateway（发布中，失败回退 2）。
+ * 启动（默认适配 Hermes）：
+ *   COGSEED_ENDPOINT=http://127.0.0.1:8444 COGSEED_TOKEN=<token> p3394-gateway
+ *
+ * 配置（环境变量）：
+ *   P3394_GATEWAY_PORT        监听端口（默认 9000）
+ *   P3394_GATEWAY_TOKEN       本端入站鉴权（默认空 = 不鉴权，仅回环）
+ *   P3394_GATEWAY_HOME        会话/工作区根目录（默认 ~/.p3394-gateway）
+ *   COGSEED_ENDPOINT          回复发回的 CogSeed 端点（默认 http://127.0.0.1:8444）
+ *   COGSEED_TOKEN             回发 CogSeed 的 Bearer 令牌
+ *   P3394_ADVERTISE_ENDPOINT  向 CogSeed 自报的本端地址（默认 http://127.0.0.1:<port>）
+ *   P3394_AGENT               智能体名：内置预设（hermes/claude/codex/opencode/
+ *                              gemini/aider/openclaw/workbuddy）或任意名字
+ *                              （未知名默认：身份=名字、CLI=同名命令、
+ *                              参数={message}，复杂参数用 P3394_AGENT_CLI_ARGS）
+ *   P3394_AGENT_ID            本节点的 agent_id（默认随预设）
+ *   P3394_AGENT_ALIAS         本节点自报的显示名（默认空 = 用 agent_id）
+ *   P3394_AGENT_MODE          oneshot（默认）| sscli
+ *   P3394_AGENT_CLI           自定义 CLI（覆盖预设）
+ *   P3394_AGENT_CLI_ARGS      CLI 参数模板，{message} 为消息占位（oneshot；覆盖预设）
+ *   P3394_AGENT_TIMEOUT_MS    Agent 单次回答上限（默认 10 分钟）
+ *   P3394_DISABLE_ONESHOT_STREAM  1 关闭 oneshot 模式增量输出回发（默认开启）
+ */
+
+'use strict';
+
+const http = require('http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+// ── 命令行参数（G-35 统一包快速接入）：环境变量之外的便捷入口——
+//   node gateway.cjs --agent <名> [--exec <命令>] [--args '<参数模板>']
+//                   [--port <端口>] [--home <目录>] [--native]
+//   参数优先于环境变量；--native 即 P3394_SSCLI_NATIVE=1（CLI 原生讲
+//   p3394-sscli 协议时直连，不经垫片）。这让"任意智能体装包即用"成为
+//   一条命令的事，不再要求手配 env。
+function _parseArgv() {
+  const out = {};
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--agent') out.agent = argv[i + 1];
+    else if (a === '--exec') out.exec = argv[i + 1];
+    else if (a === '--args') out.args = argv[i + 1];
+    else if (a === '--port') out.port = argv[i + 1];
+    else if (a === '--home') out.home = argv[i + 1];
+    else if (a === '--native') out.native = '1';
+    else if (a === '--help' || a === '-h') {
+      console.log([
+        'p3394-gateway — 任意智能体的 P3394 接入包（装包即成一个 P3394 节点）',
+        '',
+        '用法：node gateway.cjs --agent <智能体名> [选项]',
+        '  --agent <名>    智能体身份名（内置预设名用其模板；任意名=同名命令）',
+        '  --exec <命令>   实际执行的命令（默认：预设命令或与 --agent 同名）',
+        '  --args <模板>   参数模板，{message} 为消息占位（默认预设模板或 {message}）',
+        '  --port <端口>   本端监听端口（默认 9000；也可 P3394_GATEWAY_PORT）',
+        '  --home <目录>   会话/工作区根（默认 ~/.p3394-gateway）',
+        '  --native        该智能体原生讲 p3394-sscli/1.0 协议，直连不经垫片',
+        '',
+        '运行模式：默认经 sscli-shim 通用垫片走 p3394-sscli/1.0（任意一次性',
+        '命令行智能体零改造接入）；原生协议智能体加 --native。',
+        '完整变量说明见 README.md「配置（环境变量）」。',
+      ].join('\n'));
+      process.exit(0);
+    }
+  }
+  return out;
+}
+const _ARGV = _parseArgv();
+if (_ARGV.agent) {
+  process.env.P3394_AGENT = _ARGV.agent;
+  // 快速接入路径（--agent）默认走 sscli（经通用垫片，任意智能体零改造
+  // 即协议化）——这是"统一包"的承诺；显式 P3394_AGENT_MODE 优先。
+  // 纯 env 启动维持 oneshot 默认（存量兼容）。
+  if (!process.env.P3394_AGENT_MODE) process.env.P3394_AGENT_MODE = 'sscli';
+}
+if (_ARGV.exec) process.env.P3394_AGENT_CLI = _ARGV.exec;
+if (_ARGV.args) process.env.P3394_AGENT_CLI_ARGS = _ARGV.args;
+if (_ARGV.port) process.env.P3394_GATEWAY_PORT = _ARGV.port;
+if (_ARGV.home) process.env.P3394_GATEWAY_HOME = _ARGV.home;
+if (_ARGV.native) process.env.P3394_SSCLI_NATIVE = _ARGV.native;
+
+const PORT = Number(process.env.P3394_GATEWAY_PORT || 9000);
+// 跨机器：可绑定局域网地址（默认回环，安全优先）。
+const GATEWAY_HOST = (process.env.P3394_GATEWAY_HOST || '127.0.0.1').trim();
+const AUTH_TOKEN = (process.env.P3394_GATEWAY_TOKEN || '').trim();
+const COGSEED_ENDPOINT = (process.env.COGSEED_ENDPOINT || 'http://127.0.0.1:8444').replace(/\/$/, '');
+const COGSEED_TOKEN = (process.env.COGSEED_TOKEN || '').trim();
+const GATEWAY_HOME = (process.env.P3394_GATEWAY_HOME || path.join(os.homedir(), '.p3394-gateway')).trim();
+const isLoopbackHost = GATEWAY_HOST === '127.0.0.1' || GATEWAY_HOST === 'localhost' || GATEWAY_HOST === '::1';
+const ADVERTISE_ENDPOINT = (process.env.P3394_ADVERTISE_ENDPOINT || 'http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT).replace(/\/$/, '');
+// 心跳：定期向 CogSeed 报告在线（默认 60s；0 关闭）。
+const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
+// V-04 反向入口：P3394_SEND_TASK 非空时，启动后向 CogSeed 发起一次任务，
+// 等待自动回发结果、打印后退出（Hermes → CogSeed → Hermes 闭环）。
+const SEND_TASK = (process.env.P3394_SEND_TASK || '').trim();
+const SEND_TASK_TIMEOUT_MS = Number(process.env.P3394_SEND_TASK_TIMEOUT_MS || 30 * 1000);
+// Peer call 本地路由：等待 CogSeed 转发 + 目标回复回发的总时限（默认 3 分钟）。
+const PEER_CALL_TIMEOUT_MS = Number(process.env.P3394_PEER_CALL_TIMEOUT_MS || 3 * 60 * 1000);
+// H-04：运行中 CLI 的 peer 转调提示（P3394 外接智能体互调）。**绝不把
+// AUTH_TOKEN 拼进 prompt**——token 会进 Agent 模型上下文 / transcript /
+// 进程命令行。回环模式 /p3394/call 免鉴权（本机父子进程），非回环绑定
+// 已由下方启动门强制要求 token。
+const PEER_CALL_HINT = COGSEED_ENDPOINT
+  ? '\n\n[P3394 协作工具] 你可以调用本机 P3394 桥转调其他已接入智能体（如另一个代码智能体）帮你分担子任务。用法：curl -s -X POST http://127.0.0.1:' + PORT + '/p3394/call -H "Content-Type: application/json" -d \'{"peer":"<节点id>","message":"<子任务描述>"}\'，响应里的 reply 字段即对方回复。若网关配置了鉴权令牌请向使用者索取并在 Authorization 头附带；回环模式下可省略。仅在确有需要时使用，并保持回复简洁。'
+  : '';
+// 入站信封/调用请求体上限（M-01）：JSON 缓冲上限，超限 413。
+const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
+// 流式帧回发通道的有界性（回发侧，与入站 413 对称）：
+//   STREAM_POST_TIMEOUT_MS    单帧 POST 请求超时——对端不响应（半开/事件循环
+//                             卡死）时不能把终态回复一起拖死（handleEnvelope
+//                             会 await stream.finish()）。
+//   STREAM_FINISH_DEADLINE_MS finish() 对整条 delta 链的整体截止——delta 是
+//                             best-effort，异常慢时让位给终态回发。
+//   STREAM_TOTAL_CAP_CHARS    整条消息累计可回发的增量字符上限——失控的常驻
+//                             sscli/codex 刷屏时截断帧流（oneshot 侧另有
+//                             STREAM_CAP_CHARS 双保险）。
+const STREAM_POST_TIMEOUT_MS = Number(process.env.P3394_STREAM_POST_TIMEOUT_MS || 15 * 1000);
+const STREAM_FINISH_DEADLINE_MS = Number(process.env.P3394_STREAM_FINISH_DEADLINE_MS || 30 * 1000);
+const STREAM_TOTAL_CAP_CHARS = 512 * 1024;
+// 其余出站 HTTP（终态回发 / peer-call 转发 / 注册 / 心跳 / 反向任务）的统一
+// 请求超时：对端不响应时 socket 必须被销毁（触发 error → 现有重试/告警路径），
+// 不能无限挂起泄漏连接。
+const OUTBOUND_HTTP_TIMEOUT_MS = 15 * 1000;
+// H-03 fail-closed：绑定非回环接口时必须在启动前配置入站鉴权令牌，
+// 否则任意内网主机都能无密码调用本网关（命令/数据面全暴露）。
+if (!isLoopbackHost && !AUTH_TOKEN) {
+  console.error('[p3394-gateway] 绑定到非回环地址（GATEWAY_HOST=' + GATEWAY_HOST + '）必须配置 P3394_GATEWAY_TOKEN —— 拒绝以无鉴权方式暴露内部接口。');
+  process.exit(2);
+}
+
+/**
+ * SSRF 收口（H-01）：入站信封的 reply_endpoint 是对端可控的，直接用于
+ * 回发/对象拉取会诱导本网关向任意地址 POST 结果或 GET 对象（数据外泄）。
+ * 只信任：回环地址，或用户显式配置的受信端点（COGSEED_ENDPOINT）。
+ * 其它声明一律拒绝并回退到配置端点。
+ */
+function isLoopbackUrl(urlString) {
+  let parsed = null;
+  try { parsed = new URL(urlString); } catch { return false; }
+  let host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  // 规范化 IPv4-mapped / IPv6 组合回环。注意 Node 的 URL 对 IPv4-mapped
+  // 可能编码成 ::ffff:7f00:1（十六进制）而非 ::ffff:127.0.0.1（点分）。
+  if (host.startsWith('::ffff:')) {
+    const ip4 = host.slice('::ffff:'.length);
+    const dot = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip4);
+    if (dot && dot.slice(1).every((s) => Number(s) >= 0 && Number(s) <= 255)) return Number(dot[1]) === 127;
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip4);
+    if (hex) return (parseInt(hex[1], 16) >> 8) === 127;
+    return false;
+  }
+  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  if (host === 'localhost') return true;
+  const ipv4Segs = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4Segs && ipv4Segs.slice(1).every((s) => Number(s) >= 0 && Number(s) <= 255)) {
+    return Number(ipv4Segs[1]) === 127; // 127.0.0.0/8 loopback
+  }
+  return false;
+}
+function trustedReplyEndpoint(declared) {
+  const d = (declared && typeof declared === 'string' && declared.trim()) || '';
+  if (!d) return COGSEED_ENDPOINT;
+  if (isLoopbackUrl(d) || d === COGSEED_ENDPOINT) return d;
+  console.warn('[p3394-gateway] 拒绝非回环/非受信 reply_endpoint: ' + d);
+  return COGSEED_ENDPOINT;
+}
+/** H-01 配套：reply_endpoint 与 reply_token 是**一对**对端声明的回发凭据。
+ * 端点声明不可信被回退到配置端点时，声明的 token 必须一并丢弃（改用
+ * COGSEED_TOKEN）——否则会把对端提供的 token 打到受信端点上：受信端点按
+ * 配置 token 鉴权时全部 401 拒绝，合法回复被无声丢弃。端点受信（回环/等于
+ * 配置端点）时 token 才跟随声明（零配置回发场景）。 */
+function trustedReplyTarget(declaredEndpoint, declaredToken) {
+  const d = (declaredEndpoint && typeof declaredEndpoint === 'string' && declaredEndpoint.trim()) || '';
+  const endpoint = trustedReplyEndpoint(d) || COGSEED_ENDPOINT;
+  const declaredTrusted = Boolean(d) && (isLoopbackUrl(d) || d === COGSEED_ENDPOINT);
+  return {
+    endpoint,
+    token: declaredTrusted ? (typeof declaredToken === 'string' ? declaredToken : COGSEED_TOKEN) : COGSEED_TOKEN,
+  };
+}
+// V-04 断线重试：发送失败（连接拒绝/非 2xx）按退避重试，默认 2 次额外尝试。
+const SEND_TASK_RETRIES = Math.max(1, Number(process.env.P3394_SEND_TASK_RETRIES || 2));
+const replyWaiters = new Map(); // message_id → 处理回信的函数
+
+// 预设：市面上常见智能体的 CLI 模板（oneshot 非交互模式，stdout 输出最终回复）。
+// 预设只是便捷模板，不是接入白名单——任何 P3394_AGENT 名字都可启动，
+// 未知名默认：身份=名字、CLI=同名命令、参数={message}（见下方解析逻辑）。
+// modelArgs：模型参数模板（'{model}' 占位，注入任务级模型选择；无声明=该
+//   CLI 无已知模型参数通道）。自定义智能体用 P3394_AGENT_MODEL_ARGS 声明
+//   同样的模板即可获得模型控制。
+// inspect：模型枚举通道声明（args+parser；无声明=unavailable 回落静态/手输）。
+const PRESETS = {
+  hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes',
+              // -m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
+              // 配置（configModels 声明式枚举，见 models-probe.cjs）。
+              // --reasoning 单次覆盖（none|minimal|low|medium|high|xhigh|
+              // max|ultra）——off 映射 none（CLI 无 "off" 词）。
+              modelArgs: '-m {model}', configModels: 'hermes',
+              effortArgs: '--reasoning {effort}', effortLevels: { off: 'none' } },
+  // claude 声明 stream-json 输出（sscli 主导下的流式包装器）：-p 配合
+  // --verbose --output-format stream-json --include-partial-messages 才真正
+  // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
+  // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
+  // G-27 resume 登记：--resume 让降级模式（每轮 spawn）也带会话号续聊，
+  // G-27 resume 登记：opencode run 的输出含 sessionID，--session 续聊；
+  claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
+              modelArgs: '--model {model}', inspect: { args: ['-p', '/model', '--output-format', 'json'], parser: 'claude-model-list' },
+              // 强度专有通道：reasoningEffort → MAX_THINKING_TOKENS env（无
+              // --effort 类参数）——effortChannel 声明让 /models 的
+              // effort_controllable 如实披露（模板通道之外的第二类通道）。
+              effortChannel: 'max-thinking-tokens',
+              resumeArgs: '--resume {cli_session_id}', sessionIdPattern: '"session_id"\\s*:\\s*"([^"]+)"' },
+  codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex',
+              // 模型经 app-server thread/start 的 model 参数下发（专有通道）。
+              modelControllable: true,
+              // 清单：常驻通道探 app-server 枚举 RPC，失败回落 config.toml
+              // profiles（configModels 声明，2026-09-09 全量补全）。
+              configModels: 'codex',
+              // 强度专有通道：low/high → thread/start 的
+              // model_reasoning_effort config（失败降级重试）。
+              effortChannel: 'model-reasoning-effort' },
+  opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode',
+              modelArgs: '--model {model}', inspect: { args: ['models'], parser: 'lines' },
+              // --variant 即推理强度（run --help 实测："model variant
+              // (provider-specific reasoning effort, e.g., high, max, minimal)"）。
+              // 无真"关"档（minimal 是最低不是关闭）→ off 映射 minimal，
+              // 能力表 effortOff=false（UI 置灰 off，防语义欺骗）。
+              effortArgs: '--variant {effort}', effortLevels: { off: 'minimal' },
+              resumeArgs: '--session {cli_session_id}', sessionIdPattern: '"sessionID"\\s*:\\s*"([^"]+)"' },
+  gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini',
+              // 模型清单读 ~/.gemini/settings.json（当前）+ 官方常规系
+              //（configModels 声明式枚举，2026-09-09 全量补全）。
+              modelArgs: '-m {model}', configModels: 'gemini' },
+  aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider',
+              // 模型清单读 ~/.aider.model.settings.yml 条目 + conf 的当前
+              //（configModels 声明式枚举，2026-09-09 全量补全）。
+              modelArgs: '--model {model}', configModels: 'aider' },
+  openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw',
+              // --model 单次覆盖（agent --help 实测）；模型绑定在配置的
+              // agents/models 段——configModels 声明式枚举读取。
+              // --thinking off|minimal|low|medium|high——off/low/high 与
+              // CogSeed 档位同名，零映射声明。
+              modelArgs: '--model {model}', configModels: 'openclaw',
+              effortArgs: '--thinking {effort}',
+              resumeArgs: '--session-id {cli_session_id}', sessionGenerate: true },
+  workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy',
+              modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' },
+              // 当前模型经 stream-json init 帧（codebuddy 兼容 claude 双工流式，
+              // 实测 init.model="auto"）——清单与当前值双通道。
+              initProbeArgs: ['-p'],
+              // --effort 单次覆盖（--help 实测：minimal, low, medium, high,
+              // xhigh, max）。无真"关"档 → off 映射 minimal，effortOff=false。
+              effortArgs: '--effort {effort}', effortLevels: { off: 'minimal' } },
+};
+const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
+// 预设只是便捷模板，不是白名单：P3394 面向任意智能体/任意程序，任何名字
+// 都可接入。未知名字的默认语义：身份 = 该名字；CLI = 同名命令；
+// 参数 = 把消息作为唯一参数（复杂参数用 P3394_AGENT_CLI_ARGS 自定义）。
+const preset = PRESETS[PRESET_NAME] || null;
+const AGENT_ID = (process.env.P3394_AGENT_ID || (preset ? preset.id : PRESET_NAME)).trim();
+const AGENT_ALIAS = (process.env.P3394_AGENT_ALIAS || '').trim();
+const AGENT_MODE = (process.env.P3394_AGENT_MODE || 'oneshot').trim().toLowerCase();
+if (AGENT_MODE !== 'oneshot' && AGENT_MODE !== 'sscli') {
+  console.error('[p3394-gateway] 未知 P3394_AGENT_MODE=' + AGENT_MODE + '（oneshot | sscli）');
+  process.exit(2);
+}
+const CLI = (process.env.P3394_AGENT_CLI || (preset ? preset.cli : PRESET_NAME)).trim();
+const CLI_ARGS = (process.env.P3394_AGENT_CLI_ARGS || (preset ? preset.args : '{message}')).trim();
+
+// Windows 拉起规则：
+//   - 裸命令名（如 npm 全局的 `codex`）必须按 PATH + PATHEXT 查找，优先
+//     `.cmd/.bat`（npm 的 Windows shim），否则 CreateProcess 会报 ENOENT；
+//   - `.cmd/.bat` 必须经 cmd.exe /c 执行，参数要内嵌进同一命令行，避免
+//     npm shim 二次解析 `%*` 时丢掉调用方追加的参数；
+//   - 无扩展名 node-shebang 脚本（如 WorkBuddy 内置 `codebuddy`）改经本进程
+//     Node 运行时执行（网关自身以 ELECTRON_RUN_AS_NODE=1 启动时子进程继承）；
+//   - 原生 exe/com 原样直启。
+const WINDOWS_CMD_SCRIPT_RE = /\.(?:cmd|bat)$/i;
+const WINDOWS_NATIVE_EXT_RE = /\.(?:exe|com)$/i;
+const CMD_META_RE = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdCommand(value) {
+  return String(value).replace(CMD_META_RE, '^$1');
+}
+
+function escapeCmdArgument(value, doubleEscapeMetaChars) {
+  // cmd.exe treats CR/LF as command separators even inside the quoted
+  // command passed to /c. Keep every prompt segment in the same inert argv
+  // value instead of dropping or executing text after the first line.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
+  escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
+  escaped = '"' + escaped + '"';
+  escaped = escaped.replace(CMD_META_RE, '^$1');
+  if (doubleEscapeMetaChars) escaped = escaped.replace(CMD_META_RE, '^$1');
+  return escaped;
+}
+
+function windowsSystem32Tool(name) {
+  const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  return path.win32.join(root, 'System32', name);
+}
+
+/** 终止 CLI 及其全部后代；Windows 的 child.kill() 只会杀直接子进程。 */
+function killProcessTree(child, signal = 'SIGTERM') {
+  const pid = child && child.pid;
+  return new Promise((resolve) => {
+    let settled = false;
+    let signalDone = process.platform !== 'win32' || !pid;
+    let targetDone = !pid || child.exitCode != null || child.signalCode != null;
+    let killer = null;
+    let hardKillTimer = null;
+    let terminationDeadlineTimer = null;
+    let pidPoll = null;
+    const onTargetClose = () => { targetDone = true; maybeFinish(); };
+    const cleanup = () => {
+      if (killer) {
+        killer.off('error', onKillerError);
+        killer.off('exit', onKillerExit);
+        killer.off('close', onKillerClose);
+      }
+      if (child && typeof child.off === 'function') child.off('close', onTargetClose);
+      if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (terminationDeadlineTimer) clearTimeout(terminationDeadlineTimer);
+      if (pidPoll) clearInterval(pidPoll);
+      hardKillTimer = null;
+      terminationDeadlineTimer = null;
+      pidPoll = null;
+    };
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
+    };
+    const maybeFinish = () => {
+      if (!signalDone || !targetDone) return;
+      finish({ status: 'terminated' });
+    };
+    const directKill = (nextSignal) => { try { child.kill(nextSignal); } catch { /* already gone */ } };
+    const armTerminationDeadline = () => {
+      if (settled || targetDone || terminationDeadlineTimer) return;
+      terminationDeadlineTimer = setTimeout(() => {
+        terminationDeadlineTimer = null;
+        if (settled) return;
+        for (const stream of [child && child.stdin, child && child.stdout, child && child.stderr]) {
+          try { stream?.destroy(); } catch { /* best effort */ }
+        }
+        try { child?.unref?.(); } catch { /* best effort */ }
+        finish({ status: 'termination-unverified' });
+      }, 3000);
+      terminationDeadlineTimer.unref?.();
+    };
+    let usedFallback = false;
+    const fallbackOnce = () => {
+      if (usedFallback) return;
+      usedFallback = true;
+      directKill(signal);
+    };
+    const onKillerError = () => { fallbackOnce(); signalDone = true; maybeFinish(); };
+    const onKillerExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+    const onKillerClose = (code, closeSignal) => {
+      if (code !== 0 || closeSignal) fallbackOnce();
+      signalDone = true;
+      maybeFinish();
+    };
+    if (!targetDone && typeof child.once === 'function') {
+      child.once('close', onTargetClose);
+    } else if (!targetDone && pid) {
+      const checkPid = () => {
+        try { process.kill(pid, 0); } catch (error) {
+          if (!error || error.code !== 'ESRCH') return;
+          targetDone = true;
+          maybeFinish();
+        }
+      };
+      pidPoll = setInterval(checkPid, 25);
+      pidPoll.unref?.();
+      checkPid();
+    }
+    if (!targetDone && signal !== 'SIGKILL') {
+      hardKillTimer = setTimeout(() => {
+        hardKillTimer = null;
+        if (targetDone) return;
+        armTerminationDeadline();
+        if (pid && process.platform !== 'win32') {
+          try { process.kill(-pid, 'SIGKILL'); } catch { directKill('SIGKILL'); }
+        } else {
+          directKill('SIGKILL');
+        }
+      }, 3000);
+      hardKillTimer.unref?.();
+    } else if (!targetDone) {
+      armTerminationDeadline();
+    }
+    if (pid && process.platform === 'win32') {
+      try {
+        killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        killer.once('error', onKillerError);
+        killer.once('exit', onKillerExit);
+        killer.once('close', onKillerClose);
+        killer.unref?.();
+      } catch {
+        fallbackOnce();
+        signalDone = true;
+        maybeFinish();
+      }
+      return;
+    }
+    if (pid && process.platform !== 'win32') {
+      try { process.kill(-pid, signal); } catch { fallbackOnce(); }
+    } else {
+      fallbackOnce();
+    }
+    maybeFinish();
+  });
+}
+
+/** PATH + PATHEXT 查找；绝对路径也尝试同名 Windows shim。 */
+function windowsLookPath(cli) {
+  if (!cli) return null;
+  if (path.isAbsolute(cli) || cli.includes('\\') || cli.includes('/')) {
+    const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+    const candidates = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+    for (const candidate of candidates) {
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+    return null;
+  }
+  const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+  const pathValue = process.env.PATH || process.env.Path || '';
+  const dirs = pathValue.split(';').map((s) => s.trim()).filter(Boolean);
+  const names = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+  }
+  return null;
+}
+
+function buildWindowsCmdInvocation(cli, args) {
+  const normalized = path.win32.normalize(cli);
+  const doubleEscape = /(?:node_modules[\\/]\.bin|AppData[\\/]Roaming[\\/]npm)[\\/][^\\/]+\.cmd$/i
+    .test(normalized);
+  const shellCommand = [
+    escapeCmdCommand(normalized),
+    ...args.map((arg) => escapeCmdArgument(arg, doubleEscape)),
+  ].join(' ');
+  return {
+    command: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', '"' + shellCommand + '"'],
+  };
+}
+
+function expandWindowsShimPath(value, shimDir) {
+  const expanded = value.replace(/%~?dp0%?/ig, shimDir + '\\');
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(cli, args) {
+  let source;
+  try { source = fs.readFileSync(cli, 'utf8'); } catch { return null; }
+  const shimDir = path.win32.dirname(cli);
+  const tokens = Array.from(source.matchAll(/"([^"\r\n]+)"/g), (match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    try {
+      if (target && fs.statSync(target).isFile()) {
+        return { command: process.execPath, args: [target, ...args], envPatch: { ELECTRON_RUN_AS_NODE: '1' } };
+      }
+    } catch { /* not a standard Node shim */ }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    try { if (target && fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+  }
+  return null;
+}
+
+function isNodeShebangScript(cli) {
+  try {
+    const fd = fs.openSync(cli, 'r');
+    try {
+      const buf = Buffer.alloc(256);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, n));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** Windows 感知的 CLI spawn：解析 shim 并选择正确的执行方式。 */
+function spawnCli(cli, args, optsArg) {
+  const opts = optsArg || {};
+  // killProcessTree signals -pid on POSIX, which only targets the CLI tree
+  // when the spawned CLI is the leader of its own process group.
+  if (process.platform !== 'win32') return spawn(cli, args, { ...opts, detached: true });
+  const resolved = windowsLookPath(cli) || cli;
+  if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const directShim = resolveWindowsCommandShim(resolved, args);
+    if (directShim) {
+      return spawn(directShim.command, directShim.args, {
+        ...opts,
+        env: { ...(opts.env || process.env), ...(directShim.envPatch || {}) },
+      });
+    }
+    const inv = buildWindowsCmdInvocation(resolved, args);
+    return spawn(inv.command, inv.args, Object.assign({}, opts, { windowsVerbatimArguments: true }));
+  }
+  if (!WINDOWS_NATIVE_EXT_RE.test(resolved) && isNodeShebangScript(resolved)) {
+    return spawn(process.execPath, [resolved, ...args], opts);
+  }
+  return spawn(resolved, args, opts);
+}
+
+const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 10 * 60 * 1000);
+const NODE_KIND = (process.env.P3394_NODE_KIND || 'agent').trim();
+if (!['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'].includes(NODE_KIND)) {
+  console.error('[p3394-gateway] P3394_NODE_KIND must be agent|sub_agent|task_agent|capability|model_runtime');
+  process.exit(2);
+}
+const PROFILES = (process.env.P3394_PROFILES || 'p3394-session/1.0,p3394-artifact/1.0').split(',').map((s) => s.trim()).filter(Boolean);
+
+// oneshot 模式的增量输出：CLI 运行过程中印出的可见输出实时回发为 stream delta
+// 帧（CogSeed 气泡随之增长），不必等工具+回复全部跑完。openclaw 特殊处理：
+// 它不以增量方式在 stdout 输出（stdout 为空），正文只能等其末尾的 JSON 回复
+// 信封一次性落地；但其 stderr 里的 [skills]/[tools] 过程日志（工具调用等）
+// 逐行实时回发为 stream progress 帧，让 CogSeed 的 process rail 能看到协作
+// 过程，而不是 17 秒一片空白。最终 JSON 信封本身不转发（它是回复正文来源，
+// 灌进气泡会污染正文）。其余预设转发 stdout+stderr 为 delta。
+// P3394_DISABLE_ONESHOT_STREAM=1 整体关闭。
+const ONESHOT_STREAM = String(process.env.P3394_DISABLE_ONESHOT_STREAM || '').trim() !== '1';
+const ONESHOT_STREAM_CHILD = ONESHOT_STREAM && PRESET_NAME !== 'openclaw';
+const MANIFEST_STREAMING = AGENT_MODE === 'sscli' || PRESET_NAME === 'codex' || ONESHOT_STREAM_CHILD || PRESET_NAME === 'openclaw';
+
+const MANIFEST = {
+  spec_version: 'p3394/1.0',
+  identity: { agent_id: AGENT_ID, display_name: AGENT_ALIAS || AGENT_ID },
+  runtime: { kind: 'in_process' },
+  // G-18：manifest 自报网关进程 pid（探活数据源；正整数，读取侧同校验）。
+  pid: process.pid,
+  capability_profile: {
+    agent_id: AGENT_ID,
+    runtime_kind: 'cogseed-native',
+    capabilities: ['handle_message', 'artifact.transfer'],
+    supported_performatives: ['request', 'response', 'inform', 'cancel'],
+    supports_streaming: MANIFEST_STREAMING,
+    supports_artifacts: true,
+  },
+  conformance: {
+    level: 'level-2-session-aware',
+    registry: true,
+    agent_home: true,
+    runtime_adapter: true,
+    capabilities: {
+      sessions: true,
+      artifacts: true,
+      streaming: MANIFEST_STREAMING,
+      cancellation: true,
+      restart_recovery: true,
+      multi_party_sessions: true,
+      delegation: false,
+      checkpoints: false,
+      resource_policy: false,
+    },
+  },
+};
+
+// ── 幂等（LRU） ──
+const IDEM_MAX = 256;
+const processed = new Map();
+function remember(key, value) {
+  if (processed.has(key)) processed.delete(key);
+  processed.set(key, value);
+  if (processed.size > IDEM_MAX) {
+    const oldest = processed.keys().next().value;
+    processed.delete(oldest);
+  }
+}
+const MAX_REPLY_BYTES = 100 * 1024;
+const MAX_MESSAGE_LEN = 20000;
+const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
+const MAX_ARTIFACT_FILES = 3;
+const MAX_DECODE_BYTES = 4 * 1024 * 1024;
+const TRANSCRIPT_TURNS = 8;
+const TRANSCRIPT_BYTES = 16 * 1024;
+
+function json(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function sha256(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function mimeFor(name) {
+  const ext = path.extname(String(name || '')).toLowerCase();
+  const map = {
+    '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json',
+    '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+    '.csv': 'text/csv', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.html': 'text/html', '.py': 'text/x-python', '.js': 'text/javascript',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+// ── 会话目录 / transcript / 工作区 ──
+function sessionDir(sessionId) {
+  const safe = String(sessionId || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120) || 'unknown';
+  return path.join(GATEWAY_HOME, 'sessions', safe);
+}
+function workspaceDirs(sessionId) {
+  const dir = sessionDir(sessionId);
+  const inDir = path.join(dir, 'workspace', 'in');
+  const outDir = path.join(dir, 'workspace', 'out');
+  fs.mkdirSync(inDir, { recursive: true });
+  fs.mkdirSync(outDir, { recursive: true });
+  return { dir, inDir, outDir };
+}
+
+function pathWithinRoot(target, root) {
+  const normalize = (value) => {
+    const normalized = path.normalize(path.resolve(value));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const normalizedTarget = normalize(target);
+  const normalizedRoot = normalize(root);
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(normalizedRoot + path.sep);
+}
+
+function configuredWorkingDirRoots() {
+  return String(process.env.P3394_GATEWAY_ALLOWED_ROOTS || '')
+    .split(path.delimiter)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => {
+      const resolved = path.resolve(value);
+      try { return fs.realpathSync(resolved); } catch { return resolved; }
+    });
+}
+
+/** Resolve the requested CLI cwd without changing the gateway-owned session
+ * workspace used for attachments, transcripts, and returned artifacts. */
+function resolveEnvelopeWorkingDir(envelope, fallback) {
+  const ext = envelope && envelope.extensions;
+  const raw = ext && ext.working_dir;
+  if (raw === undefined) return fallback;
+  const claimedToken = ext && typeof ext.reply_token === 'string' ? ext.reply_token : '';
+  const trustedToken = COGSEED_TOKEN && claimedToken
+    && Buffer.byteLength(COGSEED_TOKEN) === Buffer.byteLength(claimedToken)
+    && crypto.timingSafeEqual(Buffer.from(COGSEED_TOKEN), Buffer.from(claimedToken));
+  if (!trustedToken) throw new Error('working_dir_requires_trusted_sender');
+  if (typeof raw !== 'string' || !raw.trim()) throw new Error('invalid_working_dir');
+  if (!path.isAbsolute(raw.trim())) throw new Error('working_dir_must_be_absolute');
+  const requested = path.resolve(raw.trim());
+  if (requested === path.parse(requested).root) throw new Error('working_dir_root_forbidden');
+  const roots = configuredWorkingDirRoots();
+  if (roots.length && !roots.some((root) => pathWithinRoot(requested, root))) {
+    throw new Error('working_dir_outside_allowed_roots');
+  }
+  // Reject an existing symlink/junction before mkdirSync can follow it. For a
+  // new path, validate its nearest existing ancestor so creation cannot cross
+  // an allowed-root boundary through a symlinked parent.
+  try {
+    const existingReal = fs.realpathSync(requested);
+    if (roots.length && !roots.some((root) => pathWithinRoot(existingReal, root))) {
+      throw new Error('working_dir_outside_allowed_roots');
+    }
+  } catch (error) {
+    if (error && error.message === 'working_dir_outside_allowed_roots') throw error;
+    let ancestor = requested;
+    while (!fs.existsSync(ancestor)) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+    let ancestorReal = ancestor;
+    try { ancestorReal = fs.realpathSync(ancestor); } catch { /* checked below */ }
+    if (roots.length && !roots.some((root) => pathWithinRoot(ancestorReal, root))) {
+      throw new Error('working_dir_outside_allowed_roots');
+    }
+  }
+  fs.mkdirSync(requested, { recursive: true });
+  if (!fs.statSync(requested).isDirectory()) throw new Error('working_dir_not_directory');
+  let realRequested;
+  try { realRequested = fs.realpathSync(requested); } catch { realRequested = requested; }
+  if (roots.length && !roots.some((root) => pathWithinRoot(realRequested, root))) {
+    throw new Error('working_dir_outside_allowed_roots');
+  }
+  return realRequested;
+}
+function transcriptFile(sessionId) { return path.join(sessionDir(sessionId), 'transcript.jsonl'); }
+
+function readTranscriptTail(sessionId) {
+  const file = transcriptFile(sessionId);
+  if (!fs.existsSync(file)) return '';
+  const lines = fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.trim());
+  const picked = [];
+  let bytes = 0;
+  for (let i = lines.length - 1; i >= 0 && picked.length < TRANSCRIPT_TURNS; i -= 1) {
+    if (bytes + lines[i].length > TRANSCRIPT_BYTES) break;
+    picked.unshift(lines[i]);
+    bytes += lines[i].length;
+  }
+  return picked.join('\n');
+}
+function appendTranscript(sessionId, role, text) {
+  const line = JSON.stringify({ at: new Date().toISOString(), role, text: String(text).slice(0, MAX_MESSAGE_LEN) });
+  const file = transcriptFile(sessionId);
+  fs.appendFileSync(file, line + '\n');
+  // 只追加永不截断会让长会话的 transcript.jsonl 无限增长。超过上限后
+  // 重写为仅保留最近 N 轮的头（读取侧本来就是按轮/字节截尾，重写无损）。
+  try {
+    if (fs.statSync(file).size > TRANSCRIPT_BYTES * 64) {
+      const kept = readTranscriptTail(sessionId);
+      fs.writeFileSync(file, (kept ? kept + '\n' : '') + line + '\n');
+    }
+  } catch { /* best effort */ }
+}
+
+// ── G-27 CLI 原生会话恢复（resume）──
+// 有原生会话恢复能力的 CLI（--resume / --session 类参数）按会话目录存一份
+// CLI 自己的会话号：首轮调用后从输出提取（sessionIdPattern）或由网关生成
+// （sessionGenerate，CLI 接受任意 id 新建），下轮 spawn 追加恢复参数，CLI
+// 自己恢复完整上下文。resume 生效时不回放 [会话历史]（避免双份上下文）；
+// transcript 回放退为未登记 CLI 的兜底与 resume 被拒后的重试路径。
+// 语义对齐 CogSeed 直连路径的 cli-sessions（存 CLI 名防换绑失效、被拒清
+// 绑定重跑一次），G-19 删直连后此机制独立存活。
+function cliSessionFile(sessionId) {
+  return path.join(sessionDir(sessionId), 'cli-session.json');
+}
+function readCliSession(sessionId) {
+  try {
+    const data = JSON.parse(fs.readFileSync(cliSessionFile(sessionId), 'utf8'));
+    if (!data || typeof data.sessionId !== 'string' || !data.sessionId) return null;
+    // CLI 名不一致（同会话目录换了 CLI）视为失效，按全新会话处理。
+    if (data.cli !== AGENT_ID) return null;
+    return data;
+  } catch { return null; }
+}
+function writeCliSession(sessionId, cliSessionIdValue) {
+  if (!cliSessionIdValue) return;
+  try {
+    fs.mkdirSync(sessionDir(sessionId), { recursive: true });
+    fs.writeFileSync(cliSessionFile(sessionId), JSON.stringify({
+      cli: AGENT_ID, sessionId: cliSessionIdValue, updatedAt: new Date().toISOString(),
+    }));
+  } catch (err) {
+    console.error('[p3394-gateway] cli-session write failed:', err && err.message);
+  }
+}
+function clearCliSession(sessionId) {
+  try { fs.unlinkSync(cliSessionFile(sessionId)); } catch { /* absent ok */ }
+}
+// 从 CLI 输出提取会话号：登记了 sessionIdPattern 的预设按正则取第一捕获组。
+function extractCliSessionId(output) {
+  if (!preset || typeof preset.sessionIdPattern !== 'string' || !output) return null;
+  try {
+    const m = new RegExp(preset.sessionIdPattern).exec(String(output));
+    if (m && m[1]) return m[1].trim();
+  } catch { /* bad pattern — ignore */ }
+  return null;
+}
+// 会话被拒的 stderr/错误特征（模式列表沿用 CogSeed 直连路径成熟经验，
+// 含 claude 专属的 "No conversation found with session ID"）。
+const RESUME_REJECTED_PATTERNS = [
+  /session\s+(?:not\s+found|expired|invalid|does\s+not\s+exist)/i,
+  /unknown\s+(?:session|conversation|thread)/i,
+  /cannot\s+resume/i,
+  /failed\s+to\s+resume/i,
+  /No\s+conversation\s+found\s+with\s+session\s+ID/i,
+];
+function resumeRejectedByText(...texts) {
+  return texts.some((t) => typeof t === 'string' && t
+    && RESUME_REJECTED_PATTERNS.some((re) => re.test(t)));
+}
+// 本预设是否具备 resume 能力（登记了 resumeArgs 或自生成会话号）。
+function resumeCapable() {
+  return !!(preset && (typeof preset.resumeArgs === 'string' || preset.sessionGenerate === true));
+}
+// 取当前会话号：有绑定用绑定；无绑定且是 sessionGenerate 形态则生成新
+// UUID 并立即落盘（openclaw 直连语义：同会话号跨轮稳定，CLI 接受任意 id）。
+function currentOrGeneratedCliSessionId(sessionId) {
+  const existing = readCliSession(sessionId);
+  if (existing) return existing.sessionId;
+  if (preset && preset.sessionGenerate === true) {
+    const id = 'p3394-' + crypto.randomUUID();
+    writeCliSession(sessionId, id);
+    return id;
+  }
+  return null;
+}
+// 生成 resume 追加参数；{cli_session_id} 占位符在调用时替换。
+function buildResumeArgs(cliSessionIdValue) {
+  if (!preset || typeof preset.resumeArgs !== 'string' || !cliSessionIdValue) return [];
+  return preset.resumeArgs.split(' ').filter(Boolean)
+    .map((part) => part.replace('{cli_session_id}', cliSessionIdValue));
+}
+
+// ── p3394-object 拉取（入站，§12 resource endpoint） ──
+// 信封里的 resource part 若是 p3394-object URI（内容寻址引用），从发送方
+// 的资源端点拉取原始字节并验证 digest。失败不阻塞消息处理。
+function fetchObjectPart(digestRef, endpoint, token) {
+  const digest = String(digestRef).toLowerCase().replace(/^sha256:/, '').replace(/^p3394-object:sha256:/, '');
+  if (!/^[a-f0-9]{64}$/.test(digest)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(endpoint.replace(/\/$/, '') + '/p3394/objects/' + digest); } catch { resolve(null); return; }
+    const headers = {};
+    if (token) headers.Authorization = 'Bearer ' + token;
+    const req = http.request({ hostname: url.hostname, port: url.port ? Number(url.port) : 80, path: url.pathname, method: 'GET', headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => { resolve(res.statusCode === 200 ? Buffer.concat(chunks) : null); });
+    });
+    req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => { req.destroy(); resolve(null); });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
+async function fetchObjectParts(envelope, inDir) {
+  const files = [];
+  const parts = (envelope && envelope.payload && envelope.payload.parts) || [];
+  const ext = (envelope && envelope.extensions) || {};
+  // H-01：对象拉取端点同样走受信端点解析（回环/COGSEED_ENDPOINT），
+  // 防止诱导本网关向任意内部/外部地址 GET。token 与端点成对回退（声明
+  // 端点不可信时声明的 token 一并丢弃，改用配置 token）。
+  const { endpoint, token } = trustedReplyTarget(ext.reply_endpoint, ext.reply_token);
+  if (!endpoint) return files;
+  let index = 0;
+  for (const part of parts) {
+    if (part.type !== 'resource' && part.type !== 'artifact') continue;
+    if (typeof part.uri !== 'string' || !part.uri.startsWith('p3394-object:')) continue;
+    const digestRef = part.digest || part.uri;
+    const content = await fetchObjectPart(digestRef, endpoint, token);
+    if (!content || !content.length || content.length > MAX_DECODE_BYTES) {
+      console.error('[p3394-gateway] object fetch failed: ' + (part.name || digestRef));
+      continue;
+    }
+    const expected = String(digestRef).toLowerCase().replace(/^sha256:/, '').replace(/^p3394-object:sha256:/, '');
+    if (/^[a-f0-9]{64}$/.test(expected) && sha256(content) !== expected) {
+      console.error('[p3394-gateway] object digest mismatch, dropped');
+      continue;
+    }
+    const declared = typeof part.name === 'string' && part.name.trim() ? part.name.trim() : '';
+    const safe = (declared || 'p3394-artifact-' + (index + 1)).replace(/[\\/]+/g, '_').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120) || 'p3394-artifact-' + (index + 1);
+    const abs = path.join(inDir, safe);
+    fs.writeFileSync(abs, content);
+    files.push({ name: safe, path: abs, bytes: content.length });
+    index += 1;
+  }
+  return files;
+}
+
+// ── Artifact 解码（入站）／收集（出站） ──
+function decodeResourceParts(envelope, inDir) {
+  const files = [];
+  const parts = (envelope && envelope.payload && envelope.payload.parts) || [];
+  let index = 0;
+  for (const part of parts) {
+    if (part.type !== 'resource' && part.type !== 'artifact') continue;
+    if (typeof part.uri !== 'string' || !part.uri.startsWith('data:')) continue;
+    const comma = part.uri.indexOf(',');
+    if (comma < 0) continue;
+    const meta = part.uri.slice(5, comma);
+    const isB64 = /;base64$/i.test(meta);
+    const payload = part.uri.slice(comma + 1);
+    const content = isB64 ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload), 'utf8');
+    if (!content.length || content.length > MAX_DECODE_BYTES) continue;
+    if (part.digest) {
+      const expected = String(part.digest).toLowerCase().replace(/^sha256:/, '');
+      if (sha256(content) !== expected) {
+        console.error('[p3394-gateway] artifact digest mismatch, dropped');
+        continue;
+      }
+    }
+    const declared = typeof part.name === 'string' && part.name.trim() ? part.name.trim() : '';
+    const safe = (declared || 'p3394-artifact-' + (index + 1)).replace(/[\\/]+/g, '_').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120) || 'p3394-artifact-' + (index + 1);
+    const abs = path.join(inDir, safe);
+    fs.writeFileSync(abs, content);
+    files.push({ name: safe, path: abs, bytes: content.length });
+    index += 1;
+  }
+  return files;
+}
+
+function collectOutParts(outDir, sinceMs) {
+  const parts = [];
+  let entries = [];
+  try { entries = fs.readdirSync(outDir); } catch { return parts; }
+  const files = entries
+    .map((name) => path.join(outDir, name))
+    .filter((abs) => { try { const st = fs.statSync(abs); return st.isFile() && st.mtimeMs >= sinceMs; } catch { return false; } })
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  for (const abs of files.slice(0, MAX_ARTIFACT_FILES)) {
+    try {
+      const st = fs.statSync(abs);
+      if (st.size === 0 || st.size > MAX_ARTIFACT_BYTES) continue;
+      const content = fs.readFileSync(abs);
+      const media = mimeFor(abs);
+      parts.push({
+        type: 'resource',
+        uri: 'data:' + media + ';base64,' + content.toString('base64'),
+        media_type: media,
+        name: path.basename(abs),
+        digest: sha256(content),
+      });
+    } catch { /* skip */ }
+  }
+  return parts;
+}
+
+function envelopeText(envelope) {
+  const parts = (envelope && envelope.payload && envelope.payload.parts) || [];
+  return parts.map((part) => (typeof part.text === 'string' ? part.text : '')).filter(Boolean).join('\n').trim();
+}
+
+/** 把 CLI 运行中的原始字节转成可安全进气泡的可见文本：剥 ANSI 转义序列（颜色/
+ *  光标/清屏/OSC 超链），去掉 NUL 等裸控制字符（保留 \n \t \r），并吞掉
+ *  `\r` 前的前一屏进度串（\r 回写作覆盖型进度时只留下一段）。 */
+function sanitizeStreamText(raw) {
+  let s = String(raw || '');
+  // ANSI CSI：ESC [ 参数? 中间字节 最终字节
+  s = s.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+  // ANSI OSC（ESC ] ... BEL / ESC \）：超链接/标题
+  s = s.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '');
+  // 其余裸控制字符（保留常见空白 \t \n \r）
+  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  // 覆盖型进度（foo\rbar）→ 保留最后一段，避免气泡里堆满中间进度
+  s = s.replace(/[^\r\n]*\r(?!\n)/g, '');
+  return s;
+}
+
+// ── oneshot 模式：每消息 spawn CLI（可取消） ──
+
+// ── 外接智能体执行控制：模型发现 + 单轮偏好 + 用量提取 ──────────────────
+// 实现抽在同目录 models-probe.cjs（纯函数 + 依赖注入，可直接单测；本文件
+// 顶层即起 HTTP 服务无法被 require）。/p3394/models 端点按 runtime 枚举
+// CLI 真实可用的模型：claude 用 /model 本地命令（零模型调用）、codex 探测
+// app-server 枚举方法、opencode 跑自家 models 子命令；其余 runtime 明确
+// unavailable，宿主回落静态目录+手输（能力协商降级，不硬失败）。
+const {
+  executionPrefsFor,
+  extractClaudeResultUsage,
+  normalizeClaudeInit,
+  createClaudeStreamEventClassifier,
+  claudeModelsCache,
+  probeClaudeModels: probeClaudeModelsImpl,
+  probeInspectCommand,
+  probeStreamJsonInitModel,
+  probeCodexConfigModel,
+  probeConfigModels,
+  effortArgsFor,
+  effortLevelFor,
+  modelArgsFor,
+  modelControllableFor,
+  splitModelArgs,
+} = require('./models-probe.cjs');
+
+// 薄包装：把网关进程级常量（CLI 命令、spawn）注入探测实现。
+function probeClaudeModels() {
+  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawnCli, killTreeFn: killProcessTree });
+}
+// 通用枚举探测：按预设表的 inspect 声明（args+parser）spawn 解析。
+function probePresetInspect() {
+  if (!preset || !preset.inspect) return null;
+  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawnCli, killTreeFn: killProcessTree });
+}
+
+/** 预设级模型发现（oneshot 与 sscli 通道共用，Hermes 模型枚举修复
+ *  2026-09-09）：网关与 CLI 同机，探测与消息通道无关——预设表声明了
+ *  枚举通道（inspect）就走通用探测；声明了 initProbeArgs（claude 兼容
+ *  CLI）再并行抓 init 帧的当前模型；claude 落 oneshot 时保留专用探测，
+ *  其列表探测拿不到清单（自定义模型网关只披露 current）时回落读
+ *  ~/.claude/settings.json 槽位变量取完整清单；声明 configModels
+ *  （hermes/openclaw/gemini/aider/codex）读 CLI 自身配置文件枚举；其余
+ *  明确 unavailable，宿主回落静态目录+手输。 */
+async function inspectPresetModels(fallbackReason) {
+  if (PRESET_NAME === 'claude') {
+    const probed = await probeClaudeModels();
+    if (probed.status === 'ready' && Array.isArray(probed.models) && probed.models.length) {
+      return probed;
+    }
+    // claude 自定义模型网关（DeepSeek 等的 anthropic 兼容端点）下列表
+    // 探测/init 帧只披露 current 一个——回落读 ~/.claude/settings.json
+    // env 段的槽位变量取完整清单（2026-09-09 实机：/model 五条目只扫
+    // 出默认一条）。专用探测的 current（CLI 运行态事实）优先于配置。
+    const viaCfg = probeConfigModels({ configModels: 'claude', env: process.env, readFileSync: fs.readFileSync });
+    if (viaCfg.status === 'ready') {
+      return { ...viaCfg, ...(probed.current ? { current: probed.current } : {}) };
+    }
+    return probed;
+  }
+  const viaPreset = probePresetInspect();
+  const viaConfig = (preset && preset.configModels)
+    ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
+    : null;
+  const viaInit = (preset && preset.initProbeArgs)
+    ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawnCli, killTreeFn: killProcessTree })
+    : null;
+  const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
+  if (listResult && listResult.status === 'ready') {
+    return {
+      ...listResult,
+      ...(initResult && initResult.current ? { current: initResult.current } : {}),
+    };
+  }
+  // 清单没拿到但 init 帧披露了清单（未来 claude 版本恢复 models 数组）。
+  if (initResult && initResult.models && initResult.models.length) {
+    return { status: 'ready', models: initResult.models, ...(initResult.current ? { current: initResult.current } : {}) };
+  }
+  if (initResult && initResult.current) {
+    // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
+    return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
+  }
+  // 配置声明式枚举（hermes/openclaw/gemini/aider/codex）：子命令探测缺失/
+  // 失败时接管——读 CLI 自身配置的模型绑定，永远比"无枚举命令"多一步。
+  if (viaConfig && viaConfig.status === 'ready') return viaConfig;
+  if (listResult) return listResult;
+  return { status: 'unavailable', reason: fallbackReason || 'preset_no_inspect' };
+}
+// 本网关的模型参数模板（env 覆盖 > 预设声明；null=无通道，信封 model 被忽略）。
+function modelArgTemplate() {
+  return modelArgsFor(preset, process.env);
+}
+function modelControllable() {
+  return modelControllableFor(preset, process.env);
+}
+
+const activeTasks = new Map(); // task_id → child
+const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
+function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraArgs) {
+  return new Promise((resolve, reject) => {
+    const args = splitArgs(CLI_ARGS).map((part) => part.replace('{message}', message));
+    // CogSeed 扩展（通用）：单轮模型选择按「模型参数模板」注入（预设声明
+    // 或 P3394_AGENT_MODEL_ARGS 自定义声明；模板形如 '--model {model}'）。
+    // 单轮强度同理走「强度参数模板」（effortArgs + 档位映射，hermes
+    // --reasoning / openclaw --thinking）。无模板的 CLI 忽略（跟随自身
+    // 默认）；claude 强度仍走 MAX_THINKING_TOKENS。
+    const prefs = execPrefs || {};
+    const template = modelArgTemplate();
+    if (prefs.model && template) args.push(...splitModelArgs(template, prefs.model));
+    const effortTemplate = effortArgsFor(preset, process.env);
+    const effortLevel = prefs.reasoningEffort ? effortLevelFor(preset, prefs.reasoningEffort) : null;
+    if (effortLevel && effortTemplate) args.push(...splitModelArgs(effortTemplate, effortLevel));
+    // G-27: extraArgs 追加在模板参数之后（resume 类参数），与 {message}
+    // 模板互不干扰。
+    if (Array.isArray(extraArgs)) args.push(...extraArgs);
+    const claudeEnv = (PRESET_NAME === 'claude' && prefs.maxThinkingTokens)
+      ? { MAX_THINKING_TOKENS: prefs.maxThinkingTokens }
+      : null;
+    const child = spawnCli(CLI, args, { cwd: cwd || undefined, env: claudeEnv ? Object.assign({}, process.env, claudeEnv) : undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (taskId) activeTasks.set(taskId, child);
+    let out = '';
+    let errOut = '';
+    let timingOut = false;
+    let streamedChars = 0;
+    // 增量回发上限：防止 CLI 疯狂刷屏把每条 chunk 都堆进增量帧（合并器本身
+    // ~80ms/512 字符限速，这里再加一个总量保护；收取 out 不受影响）。
+    const STREAM_CAP_CHARS = 256 * 1024;
+    const forwardStream = (chunkStr) => {
+      if (!onStream) return;
+      if (streamedChars >= STREAM_CAP_CHARS) return;
+      const visible = sanitizeStreamText(chunkStr);
+      if (!visible) return;
+      streamedChars += visible.length;
+      onStream(visible);
+    };
+    // openclaw --json：正文一次性出（末尾 JSON 信封），过程日志在 stderr。
+    // 把非 JSON 信封的 stderr 行逐行回发为 progress（process rail 可见工具
+    // 调用），进入 pretty-printed JSON 回复信封块（trim 后以 `{` 开头）后
+    // 停止转发，直到 `}` 结尾的行把信封收尾——JSON 是回复正文来源，不能灌进
+    // 气泡。行可能跨 chunk，用残行缓冲拼接。
+    let ocPendingLine = '';
+    let ocJsonDepth = 0;
+    const forwardOpenclawProgress = (line) => {
+      const trimmed = String(line || '').trim();
+      if (!trimmed) return;
+      if (ocJsonDepth > 0) {
+        if (/}\s*$/.test(trimmed)) ocJsonDepth = 0;
+        return;
+      }
+      if (trimmed.startsWith('{')) { ocJsonDepth = 1; return; }
+      if (!onProgress) return;
+      if (streamedChars >= STREAM_CAP_CHARS) return;
+      const visible = sanitizeStreamText(line);
+      if (!visible) return;
+      streamedChars += visible.length;
+      onProgress(visible);
+    };
+    const timer = setTimeout(() => {
+      timingOut = true;
+      void killProcessTree(child, 'SIGTERM').then(() => {
+        if (taskId && activeTasks.get(taskId) === child) activeTasks.delete(taskId);
+        reject(new Error('p3394_agent_timeout'));
+      });
+    }, TIMEOUT_MS);
+    child.stdout.on('data', (chunk) => { if (out.length < MAX_REPLY_BYTES * 4) out += chunk; if (ONESHOT_STREAM_CHILD) forwardStream(chunk.toString('utf8')); });
+    child.stderr.on('data', (chunk) => {
+      if (errOut.length < 8 * 1024) errOut += chunk;
+      if (PRESET_NAME === 'openclaw') {
+        ocPendingLine += chunk.toString('utf8');
+        const lines = ocPendingLine.split(/\r?\n/);
+        ocPendingLine = lines.pop() || '';
+        for (const line of lines) forwardOpenclawProgress(line);
+      } else if (ONESHOT_STREAM_CHILD) {
+        forwardStream(chunk.toString('utf8'));
+      }
+    });
+    child.on('error', (error) => { if (timingOut) return; clearTimeout(timer); if (taskId) activeTasks.delete(taskId); reject(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (timingOut) return;
+      if (taskId) activeTasks.delete(taskId);
+      if (code === 0) resolve(extractReplyText(out, PRESET_NAME));
+      else reject(new Error('agent exited ' + code + (errOut ? ': ' + sanitizeStreamText(errOut.slice(-300)) : '')));
+    });
+  });
+}
+
+/** openclaw --json 模式的输出是 JSON 信封；提取其中的可见回复文本。
+ *  优先 finalAssistantVisibleText（冒烟实测字段），再退 JSON 字段或原样。 */
+function extractReplyText(out, preset) {
+  const text = String(out || '').trim();
+  if (!text || preset !== 'openclaw') return text;
+  const visible = /"finalAssistantVisibleText"\s*:\s*"([^"]*)"/.exec(text);
+  if (visible && visible[1]) return visible[1].replace(/\\n/g, '\n');
+  try {
+    const parsed = JSON.parse(text);
+    const pick = [
+      parsed.finalAssistantVisibleText,
+      parsed.text,
+      parsed.result && parsed.result.text,
+      Array.isArray(parsed.payloads) && parsed.payloads[0] && parsed.payloads[0].text,
+    ].find((v) => typeof v === 'string' && v.trim());
+    if (pick) return pick.trim();
+  } catch { /* not a single JSON object — return raw */ }
+  return text;
+}
+
+async function cancelTask(taskId) {
+  const child = activeTasks.get(taskId);
+  if (!child) return false;
+  const termination = await killProcessTree(child, 'SIGTERM');
+  if (activeTasks.get(taskId) === child) activeTasks.delete(taskId);
+  if (termination.status === 'termination-unverified') {
+    console.warn('[p3394-gateway] oneshot cancellation termination unverified for task ' + taskId);
+    return false;
+  }
+  return true;
+}
+
+// ── oneshot 后端（万能兜底）：任何 CLI，只要 `{message}` 参数模板就能跑 ──
+// 会话连续性由网关侧 transcript 承担（跨轮回放 + 落盘），无需 agent 握手。
+// 在与 sscli 统一的后端接口下，这是"无协议 agent"的默认落点。
+const oneshotRuntime = {
+  name: 'oneshot',
+  async openSession() { /* transcript / cli-session 负责连续性，无需握手 */ },
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    // 注册可取消键用 task_id（cancel 控制帧按 task_id 匹配）；无 task_id 时
+    // 回退到 message_id，保证单消息用例仍可取消。
+    const cancelKey = (opts && opts.taskId) || messageId;
+
+    // G-27 降级链：有 resume 能力且有会话号 → 带 resume 参数、只发本轮新
+    // 内容（CLI 自己恢复完整上下文，不回放 [会话历史]，避免双份）；被拒
+    // （会话号过期/不存在等）→ 清绑定，落回 transcript 回放重试一次。
+    if (resumeCapable()) {
+      const cliSessionId = currentOrGeneratedCliSessionId(sessionId);
+      if (cliSessionId) {
+        try {
+          const rawReply = await runAgent(
+            text + note + hint, cancelKey, opts && opts.cwd, onDelta, onProgress,
+            opts && opts.execPrefs, buildResumeArgs(cliSessionId),
+          );
+          const reply = clipReply(rawReply);
+          const nextId = extractCliSessionId(rawReply);
+          if (nextId && nextId !== cliSessionId) writeCliSession(sessionId, nextId);
+          appendTranscript(sessionId, 'in', text);
+          appendTranscript(sessionId, 'out', reply);
+          return reply;
+        } catch (err) {
+          if (!resumeRejectedByText(err && err.message)) throw err;
+          console.warn('[p3394-gateway] cli resume rejected, retrying with transcript replay:', err && err.message);
+          clearCliSession(sessionId);
+          // fall through — 带 [会话历史] 回放重跑一次（同消息）。
+        }
+      }
+    }
+
+    // 兜底路径（首轮 / 未登记 resume / 被拒重试）：回放 transcript + 当前
+    // 消息；登记了 sessionIdPattern 的 CLI 顺手提取会话号写回（下轮生效）。
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress, opts && opts.execPrefs);
+    const reply = clipReply(rawReply);
+    const nextId = extractCliSessionId(rawReply);
+    if (nextId) writeCliSession(sessionId, nextId);
+    appendTranscript(sessionId, 'in', text);
+    appendTranscript(sessionId, 'out', reply);
+    return reply;
+  },
+  async cancel(taskId) { return cancelTask(taskId); },
+  /** 模型发现：与 sscli 通道共用 inspectPresetModels（Hermes 模型枚举
+   *  修复 2026-09-09：探测与消息通道无关，见该函数头注释）。 */
+  async inspectModels() {
+    return inspectPresetModels('oneshot_no_inspect');
+  },
+  async close() {
+    await Promise.all(Array.from(activeTasks.values(), (child) => killProcessTree(child, 'SIGTERM')));
+    activeTasks.clear();
+  },
+};
+function clipReply(rawReply) {
+  return rawReply.length > MAX_REPLY_BYTES
+    ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]'
+    : rawReply;
+}
+
+
+/** 引号感知的 argv 切分（sscli 模式的 CLI 参数可能含带空格的路径）。 */
+function splitArgs(str) {
+  const out = [];
+  let current = '';
+  let quote = null;
+  let tokenStarted = false;
+  const input = String(str || '');
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (quote === '"') {
+      if (ch === '"') { quote = null; tokenStarted = true; continue; }
+      // Inside double quotes, only quote/backslash escapes are special. This
+      // preserves ordinary Windows paths such as C:\\Program Files\\agent.
+      if (ch === '\\' && (input[i + 1] === '"' || input[i + 1] === '\\')) {
+        current += input[++i];
+      } else {
+        current += ch;
+      }
+      tokenStarted = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") { quote = null; tokenStarted = true; continue; }
+      current += ch;
+      tokenStarted = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; tokenStarted = true; continue; }
+    if (/\s/.test(ch)) {
+      if (tokenStarted) { out.push(current); current = ''; tokenStarted = false; }
+      continue;
+    }
+    // Backslash is literal in Windows paths unless it is clearly escaping a
+    // quote, a backslash, or whitespace in a shell-style argument.
+    if (ch === '\\' && /["'\\\s]/.test(input[i + 1] || '')) {
+      current += input[++i];
+    } else {
+      current += ch;
+    }
+    tokenStarted = true;
+  }
+  if (tokenStarted) out.push(current);
+  return out;
+}
+
+/** sscli 模式的 CLI 参数：整串是真实存在的脚本路径时按单参数处理（路径可含空格），
+ *  否则按引号感知切分。 */
+function sscliArgs() {
+  const raw = String(CLI_ARGS || '').trim();
+  if (!raw) return [];
+  if (fs.existsSync(raw)) return [raw];
+  return splitArgs(raw);
+}
+
+// ── sscli 模式：常驻 CLI，p3394-sscli/1.0 JSONL ──
+/** Codex Desktop app-server adapter. The ChatGPT app ships this runtime and
+ * uses the same CODEX_HOME as the visible Desktop conversations. */
+const CODEX_APP_SERVER =
+  // Detected CLI path wins: CogSeed may find the Windows-app hash install or
+  // an explicit COGSEED_CODEX_PATH even when `codex` is not on PATH/PATHEXT.
+  process.env.P3394_AGENT_CLI ||
+  process.env.P3394_CODEX_APP_SERVER ||
+  (process.platform === 'win32'
+    // Windows has no Codex Desktop bundle; fall back to the PATH-resolvable
+    // `codex` (npm global shim, resolved by PATHEXT at spawn time).
+    ? 'codex'
+    : '/Applications/ChatGPT.app/Contents/Resources/codex');
+class CodexAppServerRuntime {
+  constructor() {
+    this.child = null;
+    this.buf = '';
+    this.pending = new Map();
+    this.threads = new Map();
+    this.activeTurns = new Map(); // task_id（无则 message_id）→ { threadId }
+    this.seq = 0;
+  }
+  _send(message) {
+    if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
+  }
+  _request(method, params, timeoutMs = TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      const id = ++this.seq;
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('p3394_codex_app_server_timeout')); }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this._send({ jsonrpc: '2.0', id, method, params });
+    });
+  }
+  _onLine(line) {
+    let msg; try { msg = JSON.parse(line); } catch { return; }
+    if (msg.id !== undefined && this.pending.has(msg.id)) {
+      const entry = this.pending.get(msg.id); this.pending.delete(msg.id); clearTimeout(entry.timer);
+      if (msg.error) entry.reject(new Error(msg.error.message || 'p3394_codex_app_server_error'));
+      else entry.resolve(msg.result);
+      return;
+    }
+    if (msg.method === 'turn/completed' && msg.params) {
+      const key = 'turn:' + msg.params.threadId; const entry = this.pending.get(key);
+      if (entry) {
+        this.pending.delete(key);
+        clearTimeout(entry.timer);
+        const turn = msg.params.turn || {};
+        if (turn.status === 'failed' || turn.status === 'interrupted') {
+          entry.reject(new Error((turn.error && turn.error.message) || ('p3394_codex_turn_' + turn.status)));
+        } else {
+          const itemReply = Array.isArray(turn.items)
+            ? turn.items.filter((item) => item && item.type === 'agentMessage' && typeof item.text === 'string').map((item) => item.text).join('')
+            : '';
+          entry.resolve(entry.deltas.join('') || itemReply);
+        }
+      }
+      return;
+    }
+    const entry = msg.params && msg.params.threadId ? this._touchTurn(msg.params.threadId) : null;
+    if (msg.method === 'item/agentMessage/delta' && msg.params) {
+      if (entry) {
+        const delta = msg.params.delta || '';
+        entry.deltas.push(delta);
+        entry.onDelta?.(delta);
+      }
+    }
+    if (entry && (msg.method === 'item/started' || msg.method === 'item/completed')) {
+      const itemType = msg.params.item && msg.params.item.type ? String(msg.params.item.type) : 'work';
+      this._emitProgress(entry, '[Codex] ' + itemType + (msg.method === 'item/started' ? ' started' : ' completed'));
+    } else if (entry && (msg.method === 'item/commandExecution/outputDelta' || msg.method === 'item/mcpToolCall/progress')) {
+      this._emitProgress(entry, '[Codex] working');
+    }
+  }
+  _touchTurn(threadId) {
+    const key = 'turn:' + threadId;
+    const entry = this.pending.get(key);
+    if (!entry) return null;
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
+      if (this.pending.get(key) !== entry) return;
+      this.pending.delete(key);
+      this.activeTurns.delete(entry.cancelKey);
+      entry.reject(new Error('p3394_codex_turn_timeout'));
+    }, TIMEOUT_MS);
+    return entry;
+  }
+  _emitProgress(entry, text) {
+    const now = Date.now();
+    if (!entry.onProgress || (entry.lastProgressAt && now - entry.lastProgressAt < 15 * 1000)) return;
+    entry.lastProgressAt = now;
+    entry.onProgress(text);
+  }
+  async start() {
+    if (this.child) return;
+    // 并发去重：预热（server.listen 回调）与首轮 deliver 可能同时触发
+    // start()，没有这层会让同一个 gateway 双 spawn 两个 app-server。
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this._doStart().finally(() => { this.startPromise = null; });
+    return this.startPromise;
+  }
+  async _doStart() {
+    if (this.child) return;
+    // spawn 失败（app-server 二进制缺失等）必须处理 'error' 事件：不监听
+    // 会让 gateway 进程直接崩（uncaught 'error'），而且 initialize 会挂到
+    // TIMEOUT_MS 才失败。这里快速失败并清空状态，deliver 侧拿到明确错误。
+    let spawnError = null;
+    this.child = spawnCli(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child.on('error', (error) => {
+      spawnError = error;
+      this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
+      this.child = null;
+    });
+    this.child.stdout.on('data', (chunk) => {
+      this.buf += chunk.toString(); const lines = this.buf.split('\n'); this.buf = lines.pop();
+      for (const line of lines) if (line.trim()) this._onLine(line.trim());
+    });
+    this.child.stderr.on('data', (chunk) => { if (String(chunk).includes('ERROR')) console.error('[p3394-gateway] codex app-server: ' + String(chunk).trim().slice(-500)); });
+    this.child.on('close', () => { this._failPending(new Error('p3394_codex_app_server_exited')); this.child = null; });
+    await this._request('initialize', { clientInfo: { name: 'p3394-gateway', version: '1.0' }, capabilities: { experimentalApi: true } });
+    if (spawnError) throw spawnError;
+    this._send({ jsonrpc: '2.0', method: 'initialized', params: {} });
+  }
+  /** 模型发现：探测 app-server 的枚举 RPC（协议演进中，方法名不保证稳定，
+   *  候选依次试、短超时、解析容错）。全部失败 → unavailable，宿主回落静态
+   *  目录（能力协商降级，不硬失败）。 */
+  async inspectModels() {
+    // codex 当前默认模型：本机 CODEX_HOME 的 config.toml `model = "..."` 行
+    // （网关与 codex 同机，配置文件即事实源）。无论 RPC 枚举成败都带上。
+    const configModel = probeCodexConfigModel();
+    try { await this.start(); } catch (error) {
+      return { status: 'unavailable', reason: 'app_server_start_failed', ...(configModel ? { current: configModel } : {}), error: error && error.message ? error.message : String(error) };
+    }
+    const candidates = ['model/providers', 'models/list'];
+    for (const method of candidates) {
+      let result;
+      try {
+        result = await this._request(method, {}, 8_000);
+      } catch { continue; } // 未知方法/超时 → 试下一个
+      const models = [];
+      const seen = new Set();
+      const visit = (node, depth) => {
+        if (!node || depth > 4 || models.length > 200) return;
+        if (Array.isArray(node)) { for (const item of node) visit(item, depth + 1); return; }
+        if (typeof node !== 'object') return;
+        // 带 models 数组的节点是 provider（其自身 id 不是模型名）——只下钻。
+        if (Array.isArray(node.models)) { visit(node.models, depth + 1); return; }
+        const id = typeof node.id === 'string' && node.id.trim()
+          ? node.id.trim()
+          : (typeof node.model === 'string' && node.model.trim() ? node.model.trim() : '');
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          models.push({ id, label: (typeof node.displayName === 'string' && node.displayName.trim()) || (typeof node.name === 'string' && node.name.trim()) || id });
+        }
+        for (const value of Object.values(node)) visit(value, depth + 1);
+      };
+      visit(result, 0);
+      if (models.length) return { status: 'ready', models, ...(configModel ? { current: configModel } : {}) };
+    }
+    return { status: 'unavailable', reason: 'no_model_rpc', ...(configModel ? { current: configModel } : {}) };
+  }
+  _failPending(error) {
+    for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
+    this.pending.clear();
+    this.activeTurns.clear();
+  }
+  get name() { return 'codex'; }
+  async openSession() { /* codex 的 thread 在 deliver 里惰性创建 */ }
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    const cwd = (opts && opts.cwd) || null;
+    await this.start();
+    let threadId = this.threads.get(sessionId);
+    if (!threadId) {
+      // G-27 持久化补齐（2026-09-11）：thread 映射此前只在内存——网关重启后
+      // 同一 P3394 会话静默 thread/start 换新原生会话，用户侧表现为"切走再
+      // 切回，智能体新建会话并重发内容"（实测同会话双 rollout）。对齐 sscli
+      // 路径的 cli-session.json：重启后先读盘 thread/resume 恢复原 thread；
+      // resume 被拒（rollout 已删/被孤儿 app-server 占用 writer）才清绑定按
+      // 全新会话处理，下一轮写回新 id。
+      const persisted = readCliSession(sessionId);
+      if (persisted && persisted.sessionId) {
+        try {
+          await this._request('thread/resume', { threadId: persisted.sessionId });
+          threadId = persisted.sessionId;
+          this.threads.set(sessionId, threadId);
+        } catch (resumeError) {
+          console.warn('[p3394-gateway] codex thread/resume rejected, starting fresh: '
+            + (resumeError && resumeError.message ? resumeError.message : String(resumeError)));
+          clearCliSession(sessionId);
+        }
+      }
+    }
+    if (!threadId) {
+      // CogSeed 扩展（统一执行入口）：单轮模型 → thread/start 的 model 参数
+      // （与 CogSeed 直连 backend 同一传法）；单轮强度 → config 的
+      // model_reasoning_effort（CogSeed 统一档位 low/high 与 codex 值集 1:1）。
+      // config 是 app-server 的 per-thread 覆盖——若当前版本不认该字段导致
+      // thread/start 被拒，去掉 config 重试一次（强度静默降级、模型保留，
+      // 不让整轮失败）。
+      const prefs = (opts && opts.execPrefs) || {};
+      const startParams = {
+        cwd,
+        approvalPolicy: 'never',
+        sandbox: 'workspace-write',
+        ephemeral: false,
+        model: prefs.model || null,
+        modelProvider: null,
+      };
+      const effortLevel = (prefs.reasoningEffort === 'low' || prefs.reasoningEffort === 'high')
+        ? prefs.reasoningEffort
+        : null;
+      let result;
+      try {
+        result = await this._request('thread/start', effortLevel
+          ? { ...startParams, config: { model_reasoning_effort: effortLevel } }
+          : startParams);
+      } catch (configError) {
+        if (!effortLevel) throw configError;
+        console.warn('[p3394-gateway] codex thread/start rejected effort config; retrying without it: '
+          + (configError && configError.message ? configError.message : String(configError)));
+        result = await this._request('thread/start', startParams);
+      }
+      threadId = result && result.thread && result.thread.id;
+      if (!threadId) throw new Error('p3394_codex_thread_start_failed');
+      this.threads.set(sessionId, threadId);
+      writeCliSession(sessionId, threadId);
+    }
+    // 可取消键与其余 runtime 一致：task_id 优先（cancel 控制帧按 task_id
+    // 匹配），无 task_id 回退 message_id。
+    const cancelKey = (opts && opts.taskId) || messageId;
+    const promise = new Promise((resolve, reject) => {
+      // 包装 resolve/reject 以便 turn 结束时同步摘除 activeTurns 登记。
+      this.pending.set('turn:' + threadId, {
+        resolve: (value) => { this.activeTurns.delete(cancelKey); resolve(value); },
+        reject: (error) => { this.activeTurns.delete(cancelKey); reject(error); },
+        timer: null,
+        deltas: [],
+        onDelta,
+        onProgress,
+        cancelKey,
+        lastProgressAt: 0,
+      });
+      this._touchTurn(threadId);
+    });
+    this.activeTurns.set(cancelKey, { threadId });
+    try {
+      await this._request('turn/start', { threadId, input: [{ type: 'text', text: text + note + hint, text_elements: [] }] });
+    } catch (error) {
+      const entry = this.pending.get('turn:' + threadId);
+      if (entry) {
+        this.pending.delete('turn:' + threadId);
+        clearTimeout(entry.timer);
+        entry.reject(error);
+      }
+    }
+    return promise;
+  }
+  /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的
+   *  app-server 进程——进程保持可复用，只中断目标线程的在途 turn。 */
+  async cancel(taskId) {
+    const entry = this.activeTurns.get(taskId);
+    if (!entry) return false;
+    this.activeTurns.delete(taskId);
+    // 先摘掉本端 pending 的 turn 等待：随后的 turn/completed 无 entry 会被
+    // 忽略，避免中断后 partial deltas 被当作正常回复回发。
+    const pendingEntry = this.pending.get('turn:' + entry.threadId);
+    if (pendingEntry) {
+      clearTimeout(pendingEntry.timer);
+      this.pending.delete('turn:' + entry.threadId);
+      pendingEntry.reject(new Error('p3394_codex_turn_cancelled'));
+    }
+    try {
+      this._send({ jsonrpc: '2.0', method: 'turn/interrupt', params: { threadId: entry.threadId } });
+    } catch { /* best effort */ }
+    return true;
+  }
+  async close() {
+    const child = this.child;
+    if (child) await killProcessTree(child, 'SIGTERM');
+    this.activeTurns.clear();
+    if (this.child === child) this.child = null;
+  }
+}
+const codexAppServerRuntime = new CodexAppServerRuntime();
+
+const SSCLI_PROTOCOL = 'p3394-sscli/1.0';
+const SSCLI_HEARTBEAT_MS = 30 * 1000;
+const SSCLI_HANDSHAKE_MS = 15 * 1000;
+
+class SscliRuntime {
+  constructor() {
+    this.child = null;
+    this.pending = new Map(); // request_id → {resolve, reject, deltas, timer}
+    this.sessions = new Set();
+    this.reqSeq = 0;
+    this.lineBuf = '';
+    this.heartbeatTimer = null;
+    this.closing = false;
+  }
+  get name() { return 'sscli'; }
+  _nextReq() { this.reqSeq += 1; return 'req-' + this.reqSeq; }
+  _send(op) { if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(op) + '\n'); }
+  _request(op, timeoutMs, onDelta, onProgress) {
+    return new Promise((resolve, reject) => {
+      const requestId = op.request_id || this._nextReq();
+      op.request_id = requestId;
+      const entry = {
+        resolve, reject,
+        // cancel 精确命中用：task_id 为网关外部取消键（handleCancel 按
+        // task_id 匹配），requestId 为本 runtime 内部应答关联键。
+        requestId,
+        taskId: (op.task_id !== undefined && op.task_id !== null) ? String(op.task_id) : null,
+        deltas: [],
+        onDelta,
+        onProgress,
+        terminating: false,
+        timer: setTimeout(() => {
+          if (entry.terminating) return;
+          entry.terminating = true;
+          void (async () => {
+            const child = this.child;
+            let acknowledged = false;
+            if (op.op === 'deliver' && entry.taskId && child) {
+              try {
+                const ack = await this._request({ op: 'cancel', task_id: entry.taskId }, SSCLI_HANDSHAKE_MS);
+                acknowledged = ack.killed !== false;
+              } catch { /* fall back to terminating the shim runtime */ }
+            }
+            if (!acknowledged && child) await killProcessTree(child, 'SIGTERM');
+            if (this.pending.get(requestId) === entry) this.pending.delete(requestId);
+            reject(new Error('p3394_sscli_timeout'));
+          })();
+        }, timeoutMs),
+      };
+      this.pending.set(requestId, entry);
+      this._send(op);
+    });
+  }
+  _parseLine(line) {
+    let parsed;
+    try { parsed = JSON.parse(line); } catch { return; }
+    if (parsed.event && parsed.request_id) {
+      const entry = this.pending.get(parsed.request_id);
+      if (!entry) return;
+      if (entry.terminating) return;
+      if (parsed.event === 'delta' && typeof parsed.text === 'string') {
+        entry.deltas.push(parsed.text);
+        entry.onDelta?.(parsed.text);
+      } else if (parsed.event === 'progress' && typeof parsed.text === 'string') {
+        // 工具过程/冷启动提示（shim stderr 识别、native CLI 自报）→ process rail。
+        entry.onProgress?.(parsed.text);
+      }
+      if (parsed.event === 'completed') {
+        this.pending.delete(parsed.request_id);
+        clearTimeout(entry.timer);
+        // completed 带 text（shim 已提取的终态全文，含信封型 CLI 的
+        // extractReplyText）优先；无 text（native CLI 等）退 delta 拼接。
+        const finalText = typeof parsed.text === 'string' && parsed.text.trim()
+          ? parsed.text
+          : entry.deltas.join('');
+        entry.resolve(finalText);
+      } else if (parsed.event === 'failed') {
+        this.pending.delete(parsed.request_id);
+        clearTimeout(entry.timer);
+        entry.reject(new Error(parsed.error || 'p3394_sscli_failed'));
+      }
+      return;
+    }
+    if (parsed.ok !== undefined && parsed.request_id) {
+      const entry = this.pending.get(parsed.request_id);
+      if (!entry) return;
+      this.pending.delete(parsed.request_id);
+      clearTimeout(entry.timer);
+      if (parsed.ok === true) entry.resolve(parsed);
+      else entry.reject(new Error(parsed.error || 'p3394_sscli_rejected'));
+    }
+  }
+  _failAll(error) {
+    for (const [requestId, entry] of this.pending) {
+      if (entry.terminating) continue;
+      clearTimeout(entry.timer);
+      this.pending.delete(requestId);
+      entry.reject(error);
+    }
+  }
+  async start() {
+    if (this.child) return;
+    // sscli 主导落地（过渡桥）：CLI 原生讲 p3394-sscli 协议时直连
+    // （P3394_SSCLI_NATIVE=1，测试用 fake-sscli-agent / 将来原生支持的
+    // CLI）；否则经 sscli-shim 通用垫片包装——shim 对本 runtime 讲协议、
+    // 内部每轮 spawn 真实 CLI（resume/transcript 语义与 oneshot 一致）。
+    // 标准推广、CLI 原生化后撤垫片即可，上层零改动。
+    if (String(process.env.P3394_SSCLI_NATIVE || '').trim() === '1') {
+      this.child = spawnCli(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    } else {
+      const resumeCfg = preset ? {
+        ...(typeof preset.resumeArgs === 'string' ? { resumeArgs: preset.resumeArgs } : {}),
+        ...(typeof preset.sessionIdPattern === 'string' ? { sessionIdPattern: preset.sessionIdPattern } : {}),
+        ...(preset.sessionGenerate === true ? { sessionGenerate: true } : {}),
+      } : {};
+      this.child = spawn(process.execPath, [
+        path.join(__dirname, 'sscli-shim.cjs'),
+        '--exec', CLI,
+        '--args', CLI_ARGS,
+        '--home', GATEWAY_HOME,
+        '--preset', PRESET_NAME,
+        ...(Object.keys(resumeCfg).length
+          ? ['--resume-config', Buffer.from(JSON.stringify(resumeCfg), 'utf8').toString('base64')]
+          : []),
+      ], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, P3394_AGENT_TIMEOUT_MS: String(TIMEOUT_MS) } });
+    }
+    this.lineBuf = '';
+    let errLog = '';
+    this.child.stdout.on('data', (chunk) => {
+      this.lineBuf += chunk;
+      const lines = this.lineBuf.split('\n');
+      this.lineBuf = lines.pop();
+      for (const line of lines) { if (line.trim()) this._parseLine(line.trim()); }
+    });
+    this.child.stderr.on('data', (chunk) => { if (errLog.length < 8 * 1024) errLog += chunk; });
+    this.child.on('error', (error) => { this._failAll(error); this.child = null; });
+    this.child.on('close', () => {
+      this._failAll(new Error('p3394_sscli_exited' + (errLog ? ': ' + errLog.slice(-200) : '')));
+      this.child = null;
+      this.sessions.clear();
+      if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+    });
+    await this._request({ op: 'hello', protocol: SSCLI_PROTOCOL }, SSCLI_HANDSHAKE_MS);
+    this.heartbeatTimer = setInterval(() => {
+      if (this.pending.size === 0 && this.child && this.child.stdin.writable) {
+        this._send({ op: 'heartbeat', protocol: SSCLI_PROTOCOL });
+      }
+    }, SSCLI_HEARTBEAT_MS);
+    this.heartbeatTimer.unref();
+    console.log('[p3394-gateway] sscli runtime connected');
+  }
+  async openSession(sessionId, goal, workspace) {
+    await this.start();
+    if (this.sessions.has(sessionId)) return;
+    await this._request({
+      op: 'open_session',
+      session_id: sessionId,
+      goal: goal || 'p3394-collaboration',
+      workspace,
+    }, SSCLI_HANDSHAKE_MS);
+    this.sessions.add(sessionId);
+  }
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    await this.start();
+    return this._request({
+      op: 'deliver',
+      session_id: sessionId,
+      // PR209 评审 M6 复核返工：deliver 帧透传外部 task_id——shim 据此把
+      // 取消键对齐到 cancel 帧的 task_id（此前帧里只有内部 req-N，cancel
+      // 比对永不命中=假取消）。task_id 语义与 oneshot/stream-json 的
+      // 可取消键一致（见 handleDeliver 调用点注释）。
+      task_id: (opts && opts.taskId) || undefined,
+      message: { message_id: messageId, payload: { parts: [{ type: 'text', text: text + note + hint }] } },
+    }, TIMEOUT_MS, onDelta, onProgress);
+  }
+  async cancel(taskId) {
+    if (!this.child || !taskId) return false;
+    // 只对在途任务发 cancel 并如实上报命中：目标不在 pending（已完结或
+    // 从未运行）时返回 false，避免 handleCancel 误记 killed 后吞掉真实
+    // 错误回执（首版「只要有子进程就 return true」掩盖过假取消）。
+    let hit = false;
+    for (const [, entry] of this.pending) {
+      if (entry.taskId === String(taskId) || entry.requestId === String(taskId)) { hit = true; break; }
+    }
+    if (!hit) return false;
+    const ack = await this._request({ op: 'cancel', task_id: taskId }, SSCLI_HANDSHAKE_MS);
+    if (ack.termination_status === 'termination-unverified') {
+      console.warn('[p3394-gateway] sscli cancellation termination unverified for task ' + taskId);
+    }
+    return ack.killed !== false;
+  }
+  /** 模型发现（Hermes 模型枚举修复 2026-09-09）：不再因「协议无枚举 op」
+   *  直接 unavailable——网关与 CLI 同机，预设级探测（子命令/init 帧/
+   *  配置文件声明式枚举，hermes 走 ~/.hermes 配置）与消息通道无关，
+   *  sscli 通道与 oneshot 共用 inspectPresetModels。shim 的 p3394-sscli
+   *  协议侧无需新 op；探测失败的兜底语义不变（unavailable，宿主回落
+   *  静态目录+手输）。 */
+  async inspectModels() {
+    return inspectPresetModels('sscli_no_inspect');
+  }
+  async close() {
+    this.closing = true;
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+    const child = this.child;
+    if (child) await killProcessTree(child, 'SIGTERM');
+    if (this.child === child) this.child = null;
+  }
+}
+
+const sscliRuntime = new SscliRuntime();
+
+// ── Stream-json 后端（sscli 主导下的"流式包装器"）─────────────────────
+// 对支持 `--output-format stream-json` 的 CLI（claude -p 等），把 JSONL
+// 事件流实时转成与 sscli 相同的 delta 帧喂给网关统一入口：不协商协议，
+// 有 content_block_delta 就逐 token 增量，最终以 assistant 完整帧/累积文本
+// 收尾。与原生 sscli 常驻进程共用完全相同的下游（createStreamEmitter →
+// postStreamEvent）与超时/取消语义。这是让"sscli 主导"落到真实智能体上
+// 的通用适配器；新增带 stream-json 的 CLI 只需在 PRESETS 里声明。
+const STREAM_JSON_TIMEOUT_MS = Number(process.env.P3394_STREAM_JSON_TIMEOUT_MS || TIMEOUT_MS);
+
+class StreamJsonRuntime {
+  constructor() { this.active = new Map(); } // task_id → child（无 task_id 回退 message_id）
+  get name() { return 'stream-json'; }
+  async openSession() { /* 每次 deliver 独立 spawn 该回调 CLI，无需握手 */ }
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    // 结构化过程帧分类器（工具调用/思考起止）——每轮一个实例（块索引状态
+    // 随进程生命周期，天然 per-turn）。
+    const classifyStreamEvent = createClaudeStreamEventClassifier();
+    const emitStructured = (event) => {
+      if (onProgress && event) {
+        const name = (event.data && event.data.name) || '';
+        const phase = (event.data && event.data.phase) || '';
+        const fallback = event.stream === 'tool'
+          ? (phase === 'end' ? `工具 ${name} 执行完成` : `运行了工具 ${name}`)
+          : (phase === 'end' ? '思考完成' : '思考中');
+        onProgress(fallback, event);
+      }
+    };
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
+    const cancelKey = (opts && opts.taskId) || messageId;
+
+    // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS env（claude）；单轮
+    // 模型 → 通用「模型参数模板」注入（每轮独立 spawn，天然 per-turn）；
+    // 强度参数模板通道（hermes/openclaw）与模型同构注入。
+    const execPrefs = (opts && opts.execPrefs) || null;
+    const thinkingEnv = (PRESET_NAME === 'claude' && execPrefs && execPrefs.maxThinkingTokens)
+      ? { MAX_THINKING_TOKENS: execPrefs.maxThinkingTokens }
+      : null;
+    const template = modelArgTemplate();
+    const modelArgv = (execPrefs && execPrefs.model && template) ? splitModelArgs(template, execPrefs.model) : [];
+    const effortTemplate = effortArgsFor(preset, process.env);
+    const effortLevel = (execPrefs && execPrefs.reasoningEffort) ? effortLevelFor(preset, execPrefs.reasoningEffort) : null;
+    const effortArgv = (effortLevel && effortTemplate) ? splitModelArgs(effortTemplate, effortLevel) : [];
+
+    // 单次 spawn 尝试：prompt 全文替换 {message}，模型/强度参数与 extraArgs
+    // （G-27 resume 参数）依次追加在模板参数之后。返回累积的助手输出文本；
+    // transcript 落盘统一由调用侧编排（resume 快路径/兜底各一次），此处不写。
+    const runOnce = (prompt, extraArgs) => {
+      const args = [...splitArgs(CLI_ARGS).map((part) => (part === '{message}' ? prompt : part)),
+        ...((preset && preset.streamJsonArgs) ? splitArgs(preset.streamJsonArgs) : []),
+        ...modelArgv, ...effortArgv,
+        ...(Array.isArray(extraArgs) ? extraArgs : [])];
+      return new Promise((resolve, reject) => {
+        const child = spawnCli(CLI, args, { cwd: (opts && opts.cwd) || undefined, env: thinkingEnv ? Object.assign({}, process.env, thinkingEnv) : undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+        this.active.set(cancelKey, child);
+        let lineBuf = '';
+        let accumulated = '';
+        let finished = false;
+        let timingOut = false;
+        let stderrLog = '';
+        const finish = (error) => {
+          if (finished) return;
+          finished = true;
+          if (this.active.get(cancelKey) === child) this.active.delete(cancelKey);
+          if (error) reject(error); else resolve(accumulated.trim());
+        };
+        const timer = setTimeout(() => {
+          timingOut = true;
+          void killProcessTree(child, 'SIGTERM').then(() => finish(new Error('p3394_stream_json_timeout')));
+        }, STREAM_JSON_TIMEOUT_MS);
+        child.stdout.on('data', (chunk) => {
+          lineBuf += chunk.toString('utf8');
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const structured = classifyStreamEvent(line);
+          if (structured) emitStructured(structured);
+          const result = this._parseLine(line, onDelta, (t) => { accumulated += t; }, () => accumulated);
+          if (result === 'done') {
+            clearTimeout(timer);
+            finish();
+            return;
+          }
+        }
+      });
+      child.stderr.on('data', (chunk) => {
+        if (stderrLog.length < 8 * 1024) stderrLog += chunk;
+        const visible = sanitizeStreamText(chunk.toString('utf8'));
+        if (visible) onDelta && onDelta(visible); // 进度/stderr 也实时可见
+      });
+      child.on('error', (error) => { if (timingOut) return; clearTimeout(timer); finish(error); });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (timingOut) return;
+        if (!finished) {
+          if (code !== 0) finish(new Error('agent exited ' + code + (stderrLog ? ': ' + sanitizeStreamText(stderrLog.slice(-300)) : '')));
+          else finish(); // 进程正常退出，无显式终帧 → 以累积文本收尾
+        }
+      });
+      });
+    };
+
+    // G-27 降级链（与 oneshot 同构）：有 resume 能力且有会话号 → 只发本轮
+    // 新内容 + --resume（CLI 自己恢复上下文，不回放 [会话历史]）；被拒 →
+    // 清绑定，带回放重试一次。stream-json 每轮 spawn 的失忆问题由此根治。
+    if (resumeCapable()) {
+      const cliSessionId = currentOrGeneratedCliSessionId(sessionId);
+      if (cliSessionId) {
+        try {
+          const out = await runOnce(text + note + hint, buildResumeArgs(cliSessionId));
+          const nextId = extractCliSessionId(out);
+          if (nextId && nextId !== cliSessionId) writeCliSession(sessionId, nextId);
+          appendTranscript(sessionId, 'in', text);
+          appendTranscript(sessionId, 'out', out);
+          return out;
+        } catch (err) {
+          if (!resumeRejectedByText(err && err.message)) throw err;
+          console.warn('[p3394-gateway] cli resume rejected (stream-json), retrying with transcript replay:', err && err.message);
+          clearCliSession(sessionId);
+          // fall through — 带 [会话历史] 回放重跑一次（同消息）。
+        }
+      }
+    }
+
+    // 兜底路径：回放会话历史，保证跨轮上下文（-p 每次调用是独立的，
+    // 不带 [会话历史] 会让 claude 每轮失忆）。
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    const out = await runOnce(prompt, []);
+    const nextId = extractCliSessionId(out);
+    if (nextId) writeCliSession(sessionId, nextId);
+    // 落盘 transcript（与 oneshot 同构），供跨轮回放。
+    appendTranscript(sessionId, 'in', text);
+    appendTranscript(sessionId, 'out', out);
+    return out;
+  }
+  /** 解析一行 stream-json 事件：text_delta → 逐 token 增量；assistant 完整帧
+   *  作为终态（仅在无 delta 累积时以其全文本收尾，避免与已累积的 delta 重复）。
+   *  返回 'delta' | 'done' | null。init 帧顺带缓存模型清单（inspect 数据源）。 */
+  _parseLine(line, onDelta, append, getAccumulated) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return null; }
+    if (ev && ev.type === 'system' && ev.subtype === 'init') {
+      const normalized = normalizeClaudeInit(ev);
+      if (normalized) claudeModelsCache.set(normalized);
+      return null;
+    }
+    if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
+      && ev.event.delta && typeof ev.event.delta.text === 'string') {
+      const t = ev.event.delta.text;
+      if (t) { append(t); onDelta && onDelta(t); }
+      return 'delta';
+    }
+    if (ev && ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+      const full = ev.message.content
+        .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+        .map((c) => c.text)
+        .join('');
+      if (full && !(getAccumulated && getAccumulated())) append(full);
+      return 'done'; // 终态帧（claude stream-json：assistant 后仅余 result）
+    }
+    return null;
+  }
+  /** 模型发现：缓存优先（每轮 spawn 的 init 帧都会刷新），冷启动最小探测。 */
+  async inspectModels() {
+    const cached = claudeModelsCache.get();
+    if (cached && cached.models.length) {
+      return { status: 'ready', models: cached.models, current: cached.current };
+    }
+    return probeClaudeModels();
+  }
+  async cancel(taskId) {
+    const child = this.active.get(taskId);
+    if (!child) return false;
+    const termination = await killProcessTree(child, 'SIGTERM');
+    if (this.active.get(taskId) === child) this.active.delete(taskId);
+    if (termination.status === 'termination-unverified') {
+      console.warn('[p3394-gateway] stream-json cancellation termination unverified for task ' + taskId);
+      return false;
+    }
+    return true;
+  }
+  async close() {
+    await Promise.all(Array.from(this.active.values(), (child) => killProcessTree(child, 'SIGTERM')));
+    this.active.clear();
+  }
+}
+const streamJsonRuntime = new StreamJsonRuntime();
+
+// ── claude stream-json 常驻模式 ─────────────────────────────────────
+// claude 支持 `--input-format stream-json` 双工流式：一个常驻进程经 stdin
+// 收 user 消息、stdout 推 stream-json 事件，进程内自动延续同一 session 的
+// 上下文。相比每轮 spawn（实测 TTFB 8-12s，CLI 启动占大头），常驻化把
+// 启动成本摊到整个会话生命周期，热态每轮只剩 LLM 首 token。
+// 每个 P3394 session 一个 claude 进程（进程级隔离，避免多会话上下文
+// 串扰——resume 切换实测不可靠），空闲回收；gateway 重启后该 session 的
+// 首轮用 transcript 重建上下文（与每轮 spawn 语义一致，不丢历史）。
+// COGSEED_P3394_CLAUDE_PERSISTENT=0 可整体回退到每轮 spawn。
+const CLAUDE_PERSISTENT_ENABLED = String(process.env.COGSEED_P3394_CLAUDE_PERSISTENT ?? '1').trim() !== '0';
+const CLAUDE_IDLE_RECLAIM_MS = Number(process.env.P3394_CLAUDE_IDLE_RECLAIM_MS || 10 * 60 * 1000);
+
+class ClaudePersistentRuntime {
+  constructor() {
+    this.sessions = new Map(); // p3394 sessionId → { child, buf, turn, idleTimer }
+    this.turnKeys = new Map(); // cancelKey(task_id) → sessionId
+  }
+  get name() { return 'claude-persistent'; }
+  async openSession() { /* 常驻进程在 deliver 时惰性 spawn */ }
+
+  _args(model) {
+    // CLI_ARGS（'-p {message}'）去掉 {message} 占位，追加双工流式参数。
+    // streamJsonArgs 已含 --output-format stream-json（claude preset），
+    // 缺失时才补，避免重复参数。model 是进程级参数：任务级模型选择随
+    // spawn 固化（变更走 deliver 的 drop/respawn）。
+    const base = splitArgs(CLI_ARGS).filter((part) => part !== '{message}');
+    const extra = (preset && preset.streamJsonArgs) ? splitArgs(preset.streamJsonArgs) : [];
+    const hasOutputFormat = extra.some((part) => part === '--output-format');
+    return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra, ...(model ? ['--model', model] : [])];
+  }
+
+  _spawn(sessionId, cwd, maxThinkingTokens, model) {
+    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, closing: null, maxThinkingTokens: maxThinkingTokens || null, model: model || null };
+    // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env；
+    // --model 是进程级参数——两者的变更由 deliver 的 drop/respawn 对齐）。
+    const childEnv = maxThinkingTokens ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: maxThinkingTokens }) : undefined;
+    const child = spawnCli(CLI, this._args(model), { cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    entry.child = child;
+    let stderrLog = '';
+    child.stderr.on('data', (chunk) => {
+      // 常驻进程的 stderr 是 claude 的 ERROR/MCP 日志，转发进气泡会污染正文
+      // （工具调用的过程可见性由 stdout 的 stream_event 事件承担），只收集。
+      if (stderrLog.length < 8 * 1024) stderrLog += chunk;
+    });
+    child.stdout.on('data', (chunk) => {
+      entry.buf += chunk.toString('utf8');
+      const lines = entry.buf.split('\n');
+      entry.buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        this._onLine(entry, line);
+      }
+    });
+    child.on('error', (error) => {
+      const turn = entry.turn;
+      entry.turn = null;
+      if (turn) { clearTimeout(turn.timer); turn.reject(new Error('p3394_claude_spawn_failed: ' + error.message)); }
+    });
+    child.on('close', (code) => {
+      const turn = entry.turn;
+      entry.turn = null;
+      if (turn) {
+        clearTimeout(turn.timer);
+        turn.reject(new Error('agent exited ' + code + (stderrLog ? ': ' + sanitizeStreamText(stderrLog.slice(-300)) : '')));
+      }
+      this._dropSession(sessionId, entry);
+    });
+    this.sessions.set(sessionId, entry);
+    return entry;
+  }
+
+  /** 解析一行 stream-json 事件。常驻模式与每轮 spawn 的差异：assistant
+   *  完整帧不代表轮结束（工具调用后会有多段），以 result 事件收尾。 */
+  _onLine(entry, line) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    // init 帧（type:system/subtype:init）在 spawn 后、首轮消息前到达——此刻
+    // entry.turn 必为空，必须先于下面的在途守卫接住：models 清单与当前默认
+    // 模型都来自这里（/p3394/models 的最新鲜数据源）。
+    if (ev && ev.type === 'system' && ev.subtype === 'init') {
+      const normalized = normalizeClaudeInit(ev);
+      if (normalized) claudeModelsCache.set(normalized);
+      return;
+    }
+    if (!entry.turn) return; // 无在途轮次的事件（如并发残留）一律忽略
+    const turn = entry.turn;
+    // 工具过程帧：总量封顶（失控的多工具循环不爆 process rail）。
+    const note = (t) => {
+      turn.progressCount = (turn.progressCount || 0) + 1;
+      if (turn.progressCount > 100) return;
+      turn.onProgress && turn.onProgress(t);
+    };
+    // 结构化事件优先投影（chat_events 消费）；过程帧走 note() 老通道。
+    const structured = turn.classifyStreamEvent ? turn.classifyStreamEvent(ev) : null;
+    if (structured) turn.emitStructured(structured);
+    if (ev && ev.type === 'stream_event' && ev.event) {
+      const se = ev.event;
+      // 工具调用可见性：content_block_start 报工具名；参数经 input_json_delta
+      // 流式拼接，content_block_stop 时解析出最有信息量的字段（file_path/
+      // command 等）作摘要——过程栏能看到"在跑什么"而不只是"在调工具"。
+      if (se.type === 'content_block_start' && se.content_block && se.content_block.type === 'tool_use'
+        && typeof se.content_block.name === 'string') {
+        turn.toolJson = { name: se.content_block.name, buf: '' };
+        note('🔧 ' + se.content_block.name + '…');
+        return;
+      }
+      if (se.type === 'content_block_delta' && se.delta && se.delta.type === 'input_json_delta'
+        && typeof se.delta.partial_json === 'string' && turn.toolJson) {
+        turn.toolJson.buf += se.delta.partial_json;
+        return;
+      }
+      if (se.type === 'content_block_stop' && turn.toolJson) {
+        const tj = turn.toolJson;
+        turn.toolJson = null;
+        let brief = '';
+        try {
+          const input = JSON.parse(tj.buf || '{}');
+          const v = input.file_path || input.command || input.pattern || input.path
+            || input.url || input.query || input.keyword || input.description;
+          if (v) brief = ' ' + String(v).slice(0, 120);
+        } catch { /* 参数流不完整时只报工具名 */ }
+        note(brief ? '└ ' + tj.name + ' ' + brief : '└ ' + tj.name);
+        return;
+      }
+      if (se.type === 'content_block_delta'
+        && se.delta && typeof se.delta.text === 'string') {
+        const t = se.delta.text;
+        if (t) {
+          turn.accumulated += t;
+          turn.onDelta && turn.onDelta(t);
+        }
+        return;
+      }
+      return;
+    }
+    if (ev && ev.type === 'user' && ev.message && Array.isArray(ev.message.content)) {
+      // 此模式的 user 帧只承载 tool_result（工具执行结果回给模型）：
+      // 一帧 = 上一组工具调用完成，轻提示收尾。
+      if (ev.message.content.some((c) => c && c.type === 'tool_result')) {
+        note('✅ 工具执行完成');
+      }
+      return;
+    }
+    if (ev && ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+      // 完整 assistant 帧：仅在无 delta 累积时作为终态文本回退（claude 短答
+      // 可能只有这一帧没有 content_block_delta）。
+      const full = ev.message.content
+        .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+        .map((c) => c.text)
+        .join('');
+      if (full) turn.lastAssistantText = full;
+      return;
+    }
+    if (ev && ev.type === 'result') {
+      clearTimeout(turn.timer);
+      entry.turn = null;
+      this._armIdleReclaim(entry.sessionId, entry);
+      if (ev.is_error) turn.reject(new Error(ev.error || 'p3394_claude_turn_failed'));
+      else turn.resolve({ text: (turn.accumulated || turn.lastAssistantText || '').trim(), usage: extractClaudeResultUsage(ev) });
+    }
+  }
+
+  _armIdleReclaim(sessionId, entry) {
+    if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+    entry.idleTimer = setTimeout(() => {
+      entry.idleTimer = null;
+      // 空闲回收：无在途轮次且超时 → 关进程释放内存（下次 deliver 重建）。
+      if (!entry.turn) {
+        void this._terminateSession(sessionId, entry);
+      }
+    }, CLAUDE_IDLE_RECLAIM_MS);
+    entry.idleTimer.unref();
+  }
+
+  async _terminateSession(sessionId, entry) {
+    if (!entry.closing) {
+      entry.closing = killProcessTree(entry.child, 'SIGTERM').then((termination) => {
+        this._dropSession(sessionId, entry);
+        return termination;
+      });
+    }
+    return entry.closing;
+  }
+
+  _dropSession(sessionId, expectedEntry) {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    // A replaced process can emit `close` after its successor was installed.
+    // Never let that stale callback delete the live successor session.
+    if (expectedEntry && entry !== expectedEntry) return;
+    this.sessions.delete(sessionId);
+    if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+    for (const [key, sid] of this.turnKeys) {
+      if (sid === sessionId) this.turnKeys.delete(key);
+    }
+  }
+
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    const cancelKey = (opts && opts.taskId) || messageId;
+    const cwd = (opts && opts.cwd) || process.cwd();
+    // 结构化过程帧分类器（与 StreamJsonRuntime 同构，状态随常驻进程的当轮）。
+    const classifyStreamEvent = createClaudeStreamEventClassifier();
+    const emitStructured = (event) => {
+      if (onProgress && event) {
+        const name = (event.data && event.data.name) || '';
+        const phase = (event.data && event.data.phase) || '';
+        const fallback = event.stream === 'tool'
+          ? (phase === 'end' ? `工具 ${name} 执行完成` : `运行了工具 ${name}`)
+          : (phase === 'end' ? '思考完成' : '思考中');
+        onProgress(fallback, event);
+      }
+    };
+    // 本轮的推理强度预算/模型：与常驻进程已固化值不同时必须重启进程（env 与
+    // --model 都是 spawn 时定死的，进程活着改不了）；重启后首轮由 transcript
+    // 恢复上下文。在途轮次不可杀——旧配置跑完当轮，下一轮 deliver 再对齐。
+    const wantThinking = (opts && opts.execPrefs) ? opts.execPrefs.maxThinkingTokens : null;
+    const wantModel = (opts && opts.execPrefs) ? opts.execPrefs.model : null;
+    let entry = this.sessions.get(sessionId);
+    if (entry && entry.closing) {
+      await entry.closing;
+      entry = this.sessions.get(sessionId);
+    }
+    if (entry && (entry.maxThinkingTokens !== (wantThinking || null) || entry.model !== (wantModel || null)) && !entry.turn) {
+      await this._terminateSession(sessionId, entry);
+      entry = null;
+    }
+    const fresh = !entry || entry.child.exitCode !== null || !entry.child.stdin.writable;
+    if (fresh) {
+      // 新进程（首次/上次进程已退出/被取消）：首轮回放 transcript，保证
+      // 跨 gateway 重启与进程重建后的上下文不丢（常驻进程内后续轮自动延续）。
+      entry = this._spawn(sessionId, cwd, wantThinking, wantModel);
+    } else if (entry.cwd !== cwd) {
+      throw new Error('p3394_session_cwd_conflict');
+    }
+    if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (fresh && transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    this.turnKeys.set(cancelKey, sessionId);
+    return new Promise((resolve, reject) => {
+      entry.turn = {
+        resolve: (value) => { this.turnKeys.delete(cancelKey); resolve(value); },
+        reject: (error) => { this.turnKeys.delete(cancelKey); reject(error); },
+        timer: setTimeout(() => {
+          // 超时：挂死的轮次不能占着常驻进程，立即丢弃该会话并杀掉进程重建
+          // （上下文由 transcript 恢复）。不依赖 close 事件：否则窗口期内
+          // 下一次 deliver 可能复用濒死的进程写 stdin。
+          const turn = entry.turn;
+          entry.turn = null;
+          this.turnKeys.delete(cancelKey);
+          void this._terminateSession(sessionId, entry).then(() => {
+            reject(new Error('p3394_claude_timeout'));
+          });
+        }, STREAM_JSON_TIMEOUT_MS),
+        accumulated: '',
+        lastAssistantText: '',
+        onDelta,
+        onProgress,
+        classifyStreamEvent,
+        emitStructured,
+        toolJson: null, // 当前 tool_use 块的参数累积（input_json_delta 流式拼接）
+      };
+      try {
+        entry.child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }) + '\n');
+      } catch (error) {
+        clearTimeout(entry.turn.timer);
+        entry.turn = null;
+        this.turnKeys.delete(cancelKey);
+        reject(new Error('p3394_claude_write_failed: ' + (error && error.message ? error.message : String(error))));
+      }
+    });
+  }
+  async cancel(taskId) {
+    const sessionId = this.turnKeys.get(taskId);
+    if (!sessionId) return false;
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return false;
+    this.turnKeys.delete(taskId);
+    // 必须 reject 挂起的 turn：否则 handleEnvelope 的 deliver promise 永不
+    // settle，gateway 的串行队列（enqueue）会被这个挂起任务永久卡死，后续
+    // 所有消息都不再执行。错误回信由 handleCancel 的 cancelledTasks 抑制。
+    const turn = entry.turn;
+    if (turn) {
+      clearTimeout(entry.turn.timer);
+      entry.turn = null;
+    }
+    // 取消 = 终止该 session 的常驻进程：claude stream-json 无 interrupt
+    // 输入，kill 最可靠；下一轮 deliver 重新 spawn（首轮带 transcript）。
+    const termination = await this._terminateSession(sessionId, entry);
+    if (turn) turn.reject(new Error('p3394_claude_cancelled'));
+    if (termination.status === 'termination-unverified') {
+      console.warn('[p3394-gateway] claude cancellation termination unverified for task ' + taskId);
+      return false;
+    }
+    return true;
+  }
+  /** 模型发现：常驻会话的 init 帧缓存优先（正在运行的进程自己披露的最新
+   *  清单），冷启动回落最小探测（起进程只等 init、零模型调用）。 */
+  async inspectModels() {
+    const cached = claudeModelsCache.get();
+    if (cached && cached.models.length) {
+      return { status: 'ready', models: cached.models, current: cached.current };
+    }
+    return probeClaudeModels();
+  }
+  async close() {
+    const entries = Array.from(this.sessions.values());
+    for (const entry of entries) {
+      if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+      if (entry.turn) clearTimeout(entry.turn.timer);
+    }
+    await Promise.all(entries.map((entry) => killProcessTree(entry.child, 'SIGTERM')));
+    this.sessions.clear();
+    this.turnKeys.clear();
+  }
+}
+// ── opencode 常驻（server 模式）────────────────────────────────────────────
+// 实测对比（2026-08-25，同任务同模型）：每轮 spawn `opencode run` ≈66s，
+// 常驻 server 同步 HTTP ≈15s——差值即 CLI 冷启动（配置/插件/客户端重建），
+// 续轮还吃到会话 prompt cache。API（v1.18 实测）：
+//   POST /session → {id}；POST /session/:id/message（挂起至整轮完成）
+//   → {info, parts:[step-start|reasoning|text|tool|step-finish]}
+//   GET /event（SSE）→ message.part.delta{field:'text',delta} /
+//   message.part.updated{part:{type:'tool',tool,state:{status,input}}}
+// server 按工作目录复用（同项目多会话共享），会话连续性由 opencode 服务端
+// 自管。reasoning 与正文的 delta 都是 field:'text'，按 partID→type 映射
+// 区分，思考流不混进气泡。COGSEED_P3394_OPENCODE_PERSISTENT=0 回退 sscli。
+const OPENCODE_PERSISTENT_ENABLED = String(process.env.COGSEED_P3394_OPENCODE_PERSISTENT ?? '1').trim() !== '0';
+// 无人值守放行：opencode server 的 bash/edit 默认 permission.asked 等人工
+// 批准，headless 无人应答会永久挂起。垫片/oneshot 模式下同一 CLI 本就是
+// 全权限直跑，常驻模式收紧反而倒退——经 OPENCODE_CONFIG_CONTENT 注入
+// allow 规则（不落盘、不污染用户项目/全局配置）。置 0 恢复 opencode
+// 自身权限策略（需人工在 web UI 批准）。
+const OPENCODE_AUTO_APPROVE = String(process.env.COGSEED_P3394_OPENCODE_AUTO_APPROVE ?? '1').trim() !== '0';
+class OpencodeRuntime {
+  constructor() {
+    this.servers = new Map(); // cwd → {child, base, port, ready}
+    this.sessions = new Map(); // p3394 session_id → {cwd, ocSessionId}
+    this.turns = new Map(); // opencode sessionID → {onDelta, onProgress, partTypes, timer, progressCount}
+    this.closing = false;
+  }
+  get name() { return 'opencode-persistent'; }
+  async _serverFor(cwd) {
+    const key = cwd || process.cwd();
+    const hit = this.servers.get(key);
+    if (hit) return hit.ready;
+    const entry = { key, child: null, base: '', port: 0, ready: null };
+    this.servers.set(key, entry);
+    entry.ready = (async () => {
+      const serveEnv = { ...process.env };
+      if (OPENCODE_AUTO_APPROVE && !serveEnv.OPENCODE_CONFIG_CONTENT) {
+        serveEnv.OPENCODE_CONFIG_CONTENT = '{"permission":{"bash":"allow","edit":"allow","webfetch":"allow","websearch":"allow"}}';
+      }
+      const child = spawnCli(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
+      entry.child = child;
+      let errLog = '';
+      child.stderr.on('data', (c) => { if (errLog.length < 8 * 1024) errLog += c; });
+      const port = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('p3394_opencode_serve_timeout' + (errLog ? ': ' + errLog.slice(-200) : ''))), 30_000);
+        timer.unref();
+        child.on('error', (error) => { clearTimeout(timer); reject(new Error('p3394_opencode_spawn_failed: ' + error.message)); });
+        let buf = '';
+        child.stdout.on('data', (c) => {
+          buf += c;
+          const m = buf.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
+          if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+        });
+      });
+      child.on('close', () => { if (this.servers.get(key) === entry) this.servers.delete(key); });
+      entry.port = port;
+      entry.base = 'http://127.0.0.1:' + port;
+      this._subscribeEvents(entry);
+      return entry;
+    })();
+    // serve 启动失败要摘掉占位，否则该 cwd 永久卡死在 rejected promise。
+    entry.ready.catch(() => { if (this.servers.get(key) === entry) this.servers.delete(key); });
+    return entry.ready;
+  }
+  _subscribeEvents(entry) {
+    const connect = () => {
+      if (this.closing || this.servers.get(entry.key) !== entry || !entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null) return;
+      const req = http.get(entry.base + '/event', (res) => {
+        let buf = '';
+        res.on('data', (c) => {
+          buf += c;
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line.startsWith('data:')) continue;
+            try { this._onEvent(JSON.parse(line.slice(5).trim())); } catch { /* 非 JSON 行忽略 */ }
+          }
+        });
+        // SSE 断线重连：在途轮的终态由同步 HTTP 兜底，事件流只影响实时性。
+        res.on('end', () => { setTimeout(connect, 2000).unref(); });
+      });
+      req.on('error', () => { setTimeout(connect, 2000).unref(); });
+    };
+    connect();
+  }
+  _onEvent(ev) {
+    const p = ev && ev.properties;
+    if (!p || typeof p.sessionID !== 'string') return;
+    const turn = this.turns.get(p.sessionID);
+    if (!turn) return;
+    if (ev.type === 'message.part.updated' && p.part && typeof p.part.id === 'string') {
+      const part = p.part;
+      turn.partTypes.set(part.id, part.type);
+      if (part.type === 'text' && typeof part.text === 'string') {
+        turn.lastText = part.text; // 无 delta 流时的终态文本兜底
+      } else if (part.type === 'tool' && part.state) {
+        const note = (t) => {
+          turn.progressCount = (turn.progressCount || 0) + 1;
+          if (turn.progressCount > 100 || !turn.onProgress) return;
+          turn.onProgress(t);
+        };
+        const st = part.state.status;
+        if (st === 'running') {
+          const input = part.state.input || {};
+          const brief = input.command || input.filePath || input.pattern || input.path || input.url;
+          note(brief ? '🔧 ' + part.tool + ' ' + String(brief).slice(0, 120) : '🔧 ' + part.tool + '…');
+        } else if (st === 'completed') {
+          note('✅ ' + part.tool + ' 完成');
+        }
+      }
+      return;
+    }
+    if (ev.type === 'message.part.delta' && p.field === 'text' && typeof p.delta === 'string' && p.delta) {
+      // reasoning part 的增量也是 field:'text'：按 partID 查映射，只透传正文。
+      if (turn.partTypes.get(p.partID) === 'text') turn.onDelta && turn.onDelta(p.delta);
+    }
+  }
+  async openSession(sessionId, goal, workspace) {
+    const cwd = workspace || process.cwd();
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      if (existing.cwd !== cwd) throw new Error('p3394_session_cwd_conflict');
+      return;
+    }
+    const server = await this._serverFor(cwd);
+    const created = await this._postJson(server.base, '/session', {});
+    if (!created || typeof created.id !== 'string') throw new Error('p3394_opencode_session_failed');
+    this.sessions.set(sessionId, { cwd, ocSessionId: created.id });
+  }
+  _postJson(base, pathName, body) {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const req = http.request(base + pathName, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({ raw: buf }); }
+        });
+      });
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+  }
+  _getJson(base, pathName) {
+    return new Promise((resolve, reject) => {
+      const req = http.get(base + pathName, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({ raw: buf }); }
+        });
+      });
+      req.on('error', reject);
+    });
+  }
+  _abortSession(server, sessionId) {
+    return new Promise((resolve, reject) => {
+      const req = http.request(server.base + '/session/' + encodeURIComponent(sessionId) + '/abort', { method: 'POST' }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          clearTimeout(timer);
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) { reject(new Error('p3394_opencode_abort_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          resolve();
+        });
+      });
+      const timer = setTimeout(() => req.destroy(new Error('p3394_opencode_abort_timeout')), OUTBOUND_HTTP_TIMEOUT_MS);
+      timer.unref();
+      req.on('error', (error) => { clearTimeout(timer); reject(error); });
+      req.end();
+    });
+  }
+  _destroyTurnRequest(turn) {
+    if (!turn.req || turn.req.destroyed) return Promise.resolve();
+    return new Promise((resolve) => {
+      turn.req.once('close', resolve);
+      try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { resolve(); }
+    });
+  }
+  async _restartServer(server) {
+    const termination = server.child ? await killProcessTree(server.child, 'SIGTERM') : { status: 'terminated' };
+    if (this.servers.get(server.key) === server) this.servers.delete(server.key);
+    if (termination.status === 'termination-unverified') return false;
+    if (!this.closing) await this._serverFor(server.key);
+    return true;
+  }
+  /** 模型发现（2026-09-09 全量补全）：常驻 serve 的 GET /api/model 是权威
+   *  事实源（进程已在跑、零 spawn、天然含自定义 provider——实机实测
+   *  {location, data:[{id, providerID, name}]}）。清单 id 拼 providerID/id
+   *  （与 --model 传参同口径，子命令输出同格式）；端点不披露 current，
+   *  留空（UI 选中态由宿主处理）。无活跃 server 时按默认 cwd 起一个
+   *  （首查需等 serve 冷启动，之后复用）；端点失败回落 models 子命令
+   *  探测。此前本 runtime 无 inspectModels，端点一律 runtime_no_inspect
+   *  → 界面扫描不到模型。 */
+  async inspectModels() {
+    try {
+      let entry = null;
+      for (const [, hitEntry] of this.servers) { entry = hitEntry; break; }
+      if (!entry) entry = await this._serverFor(process.cwd());
+      else await entry.ready;
+      const body = await this._getJson(entry.base, '/api/model');
+      const rawModels = body && Array.isArray(body.data)
+        ? body.data
+        : (body && Array.isArray(body.models) ? body.models : null);
+      const models = [];
+      const seen = new Set();
+      if (rawModels) {
+        for (const m of rawModels) {
+          if (!m || typeof m !== 'object') continue;
+          const bareId = String(m.id || m.modelID || '').trim();
+          if (!bareId) continue;
+          const provider = String(m.providerID || '').trim();
+          const id = provider ? `${provider}/${bareId}` : bareId;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          models.push({ id, label: String(m.name || m.displayName || id).trim() || id });
+        }
+      }
+      if (models.length) return { status: 'ready', models };
+    } catch (error) {
+      console.log('[p3394-gateway] opencode /api/model inspect failed: ' + (error && error.message ? error.message : String(error)));
+    }
+    return inspectPresetModels('opencode_no_inspect');
+  }
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error('p3394_opencode_no_session');
+    const server = await this._serverFor(entry.cwd);
+    // PR209 评审 M6：turn 记 taskId 并保留在途 http 句柄——cancel(taskId)
+    // 据此中断在途请求（此前恒 return false，用户看到「已取消 + 后又来一
+    // 条回复」）。同会话并发 turn 会覆盖 turns 表（既有单轮语义），覆盖后
+    // 老 turn 失去 cancel 句柄属已知限制。
+    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '', taskId: (opts && opts.taskId) || null, req: null, server, ocSessionId: entry.ocSessionId, cancelled: false };
+    this.turns.set(entry.ocSessionId, turn);
+    try {
+      const msg = await new Promise((resolve, reject) => {
+        const data = JSON.stringify({ parts: [{ type: 'text', text: text + note + hint }] });
+        const req = http.request(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+          let buf = '';
+          res.on('data', (c) => { buf += c; });
+          res.on('end', () => {
+            if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+            try { resolve(JSON.parse(buf)); } catch { resolve({ parts: [] }); }
+          });
+        });
+        req.on('error', reject);
+        turn.req = req;
+        turn.timer = setTimeout(() => { req.destroy(); reject(new Error('p3394_opencode_timeout')); }, STREAM_JSON_TIMEOUT_MS);
+        turn.timer.unref();
+        req.write(data);
+        req.end();
+      });
+      if (turn.cancelled) throw new Error('p3394_opencode_cancelled');
+      const out = (msg.parts || []).filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('');
+      return (out.trim() || (turn.lastText || '').trim());
+    } finally {
+      if (turn.timer) clearTimeout(turn.timer);
+      // 宽限删除：SSE 帧与同步 HTTP 终态分属两个连接、无到达顺序保证——
+      // 终态先到时立刻删 turn 会把紧随其后的过程/增量帧全部丢弃（终态文本
+      // 以 HTTP parts 为准，晚帧只影响实时流完整性）。短窗口后删；若同
+      // 会话下一轮已覆盖 turn 则不动（比对实例）。
+      setTimeout(() => { if (this.turns.get(entry.ocSessionId) === turn) this.turns.delete(entry.ocSessionId); }, 250).unref();
+    }
+  }
+  async cancel(taskId) {
+    // OpenCode 的 /message 连接断开不代表服务端 turn 已停止。必须先等待
+    // 权威 /abort 端点确认；旧版本/异常 server 无法确认时，回收并重启整个
+    // 托管 server，确保任务不再运行后才能让 handleCancel 发回执。
+    if (!taskId) return false;
+    const matches = [];
+    for (const [, turn] of this.turns) {
+      if (turn.taskId === String(taskId) && turn.req && !turn.req.destroyed) {
+        turn.cancelled = true;
+        matches.push(turn);
+      }
+    }
+    if (!matches.length) return false;
+    let verified = true;
+    for (const turn of matches) {
+      try {
+        await this._abortSession(turn.server, turn.ocSessionId);
+      } catch (error) {
+        console.warn('[p3394-gateway] opencode abort unavailable; restarting managed server: ' + (error && error.message ? error.message : String(error)));
+        try {
+          if (!await this._restartServer(turn.server)) {
+            verified = false;
+            console.warn('[p3394-gateway] opencode cancellation termination unverified for task ' + taskId);
+          }
+        } catch (restartError) {
+          verified = false;
+          console.warn('[p3394-gateway] opencode server restart failed after abort fallback: ' + (restartError && restartError.message ? restartError.message : String(restartError)));
+        }
+      }
+      await this._destroyTurnRequest(turn);
+    }
+    return verified;
+  }
+  async close() {
+    this.closing = true;
+    await Promise.all(Array.from(this.servers.values(), (entry) => (
+      entry.child ? killProcessTree(entry.child, 'SIGTERM') : Promise.resolve()
+    )));
+    this.servers.clear();
+    this.sessions.clear();
+  }
+}
+const claudePersistentRuntime = new ClaudePersistentRuntime();
+const opencodeRuntime = new OpencodeRuntime();
+
+/** 运行时后端选择 —— sscli 主导：显式声明 sscli 的 agent 优先走
+ *  p3394-sscli/1.0 常驻协议（原生 delta 流式）；声明了 stream-json 输出且
+ *  未原生讲协议的 CLI（如 claude -p）走流式包装器（同一 sscli 语义）；
+ *  codex 走其专有 app-server JSON-RPC；其余任何 CLI 落到 oneshot 万能兜底
+ *  （{message} 模板 + 网关 transcript 连续性）。统一 deliver 接口让新增后端
+ *  只是在这里多注册一个分支。 */
+function runtimeFor() {
+  if (AGENT_MODE === 'sscli') {
+    if (preset && preset.streamJson) {
+      // claude 常驻双工流式（默认开；COGSEED_P3394_CLAUDE_PERSISTENT=0
+      // 回退到每轮 spawn 的 stream-json 包装器）。
+      if (PRESET_NAME === 'claude' && CLAUDE_PERSISTENT_ENABLED) return claudePersistentRuntime;
+      return streamJsonRuntime;
+    }
+    // opencode 常驻 server（默认开；COGSEED_P3394_OPENCODE_PERSISTENT=0
+    // 回退到 sscli 垫片每轮 spawn——冷启动差值见 OpencodeRuntime 头注）。
+    if (PRESET_NAME === 'opencode' && OPENCODE_PERSISTENT_ENABLED) return opencodeRuntime;
+    return sscliRuntime;
+  }
+  if (PRESET_NAME === 'codex') return codexAppServerRuntime;
+  return oneshotRuntime;
+}
+
+// ── 回复回发（可携带 resource parts） ──
+function postReply(envelope, replyText, resourceParts, turnUsage) {
+  const ext = (envelope && envelope.extensions) || {};
+  // H-01：回发端点只信任回环/受信配置（COGSEED_ENDPOINT），防止诱导本网关
+  // 把任务结果 POST 到任意第三方地址（数据外泄）。token 与端点成对回退。
+  const { endpoint: replyEndpoint, token: replyToken } = trustedReplyTarget(ext.reply_endpoint, ext.reply_token);
+  const parts = [{ type: 'text', text: replyText }];
+  for (const part of (resourceParts || [])) parts.push(part);
+  const body = JSON.stringify({
+    envelope: {
+      spec_version: 'p3394/1.0',
+      message_id: 'msg-reply-' + Date.now().toString(36),
+      session_id: envelope.session_id,
+      task_id: envelope.task_id,
+      kind: 'message',
+      performative: 'inform',
+      role: 'responder',
+      sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+      recipients: [{ agent_id: (envelope.sender && envelope.sender.agent_id) || 'cogseed' }],
+      reply_to: envelope.message_id,
+      // CogSeed 私有扩展：本轮 CLI 自报用量（数字字段，非文本非凭据），宿主
+      // 折进消息 metrics。旧宿主不认识 metadata 字段——安全忽略。
+      payload: {
+        parts,
+        ...(turnUsage ? { metadata: { usage: turnUsage } } : {}),
+      },
+      idempotency_key: 'idem-reply-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+    },
+  });
+  const url = new URL(replyEndpoint.replace(/\/$/, '') + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (replyToken) headers.Authorization = 'Bearer ' + replyToken;
+  let attempt = 0;
+  const deliver = () => {
+    attempt += 1;
+    const req = http.request(url, { method: 'POST', headers }, (res) => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        console.log('[p3394-gateway] reply delivered ' + res.statusCode);
+      } else {
+        console.error('[p3394-gateway] reply rejected ' + res.statusCode);
+      }
+    });
+    // 请求必须有界：对端不响应时销毁 socket（触发 error → 重试/告警），
+    // 否则挂起的连接既不重试也不释放。
+    req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => req.destroy());
+    req.on('error', (error) => {
+      if (attempt < 2) { console.error('[p3394-gateway] reply failed, retrying: ' + error.message); setTimeout(deliver, 1500); }
+      else console.error('[p3394-gateway] reply failed: ' + error.message);
+    });
+    req.end(body);
+  };
+  deliver();
+}
+
+/** Sends a best-effort incremental reply. Stream frames are deliberately
+ * separate event envelopes so the terminal reply remains the only frame that
+ * resolves the outbound request. */
+function postStreamEvent(envelope, text, sequence, kind, structuredEvent) {
+  const ext = (envelope && envelope.extensions) || {};
+  // H-01：流式帧回发与终态回发（postReply）同规则——只信任回环/受信配置
+  // （COGSEED_ENDPOINT）。对端可控的 reply_endpoint 若不校验，攻击者发一条
+  // 入站信封即可让本网关把运行中的增量输出（现代 CLI 流式输出即回复全文，
+  // 可能含敏感内容）POST 到任意第三方地址 —— SSRF + 数据外泄。token 与端点
+  // 成对回退：声明端点不可信时一并丢弃声明的 token。
+  const { endpoint: replyEndpoint, token: replyToken } = trustedReplyTarget(ext.reply_endpoint, ext.reply_token);
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const body = JSON.stringify({
+    envelope: {
+      spec_version: 'p3394/1.0',
+      message_id: 'msg-stream-' + nonce,
+      session_id: envelope.session_id,
+      task_id: envelope.task_id,
+      kind: 'event',
+      performative: 'inform',
+      role: 'responder',
+      sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+      recipients: [{ agent_id: (envelope.sender && envelope.sender.agent_id) || 'cogseed' }],
+      reply_to: envelope.message_id,
+      payload: {
+        parts: [{ type: 'text', text }],
+        metadata: {
+          stream_event: kind || 'delta',
+          stream_seq: sequence,
+          stream_source_message_id: envelope.message_id,
+          // 结构化过程事件（stream:'tool' / item reasoning…）——宿主过程栏
+          // 按 event 词表渲染（参数/时长/i18n），text 仅作旧宿主的降级行。
+          ...(structuredEvent ? { stream_data: structuredEvent } : {}),
+        },
+      },
+      idempotency_key: 'idem-stream-' + nonce,
+    },
+  });
+  const url = new URL(replyEndpoint.replace(/\/$/, '') + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (replyToken) headers.Authorization = 'Bearer ' + replyToken;
+  return new Promise((resolve) => {
+    const req = http.request(url, { method: 'POST', headers }, (res) => {
+      res.resume();
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          console.error('[p3394-gateway] stream event rejected ' + res.statusCode);
+        }
+        resolve();
+      });
+    });
+    // 回发通道必须有界：对端不响应（连接建立后挂起）时不能无限等待——
+    // handleEnvelope 会 await stream.finish()，帧卡死会连带阻塞终态回发。
+    req.setTimeout(STREAM_POST_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve();
+    });
+    req.on('error', (error) => {
+      console.error('[p3394-gateway] stream event failed: ' + error.message);
+      resolve();
+    });
+    req.end(body);
+  });
+}
+
+/** Coalesces token deltas to avoid one HTTP request per token while keeping
+ * the visible response live (roughly 12 updates/second at most). */
+function createStreamEmitter(envelope) {
+  let buffer = '';
+  let progressBuffer = '';
+  let sequence = 0;
+  let timer = null;
+  let progressTimer = null;
+  let streamedChars = 0;
+  let chain = Promise.resolve();
+  const flush = (kind) => {
+    const text = kind === 'progress' ? progressBuffer : buffer;
+    if (!text) return;
+    if (kind === 'progress') progressBuffer = '';
+    else buffer = '';
+    sequence += 1;
+    chain = chain.then(() => postStreamEvent(envelope, text, sequence, kind));
+  };
+  const armFlush = (kind) => {
+    const isProgress = kind === 'progress';
+    const length = isProgress ? progressBuffer.length : buffer.length;
+    if (length >= 512) {
+      if (isProgress) { if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; } }
+      else { if (timer) { clearTimeout(timer); timer = null; } }
+      flush(kind);
+    } else if (isProgress ? !progressTimer : !timer) {
+      const t = setTimeout(() => { if (isProgress) progressTimer = null; else timer = null; flush(kind); }, 80);
+      t.unref();
+      if (isProgress) progressTimer = t;
+      else timer = t;
+    }
+  };
+  return {
+    push(text) {
+      if (typeof text !== 'string' || !text) return;
+      // 总量上限：失控/异常的常驻 CLI（sscli/codex）无限刷 delta 时截断帧流，
+      // 而不是无限向回发端点 POST（oneshot 侧 runAgent 另有 256KB 双保险）。
+      if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
+      streamedChars += text.length;
+      buffer += text;
+      armFlush('delta');
+    },
+    // openclaw 过程日志（[skills]/[tools] 等）→ progress 帧，process rail 展示。
+    pushProgress(text) {
+      if (typeof text !== 'string' || !text) return;
+      if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
+      streamedChars += text.length;
+      progressBuffer += (progressBuffer && !/\n$/.test(progressBuffer) ? '\n' : '') + text;
+      armFlush('progress');
+    },
+    // 结构化过程事件（工具调用/思考起止）：低频，立即独立成帧（不经文本
+    // 合并器），text 只作旧宿主的降级行。事件与文本帧共用 sequence 序列，
+    // chain 串行保证有序。
+    pushEvent(event, fallbackText) {
+      if (!event || typeof event !== 'object') return;
+      if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
+      sequence += 1;
+      const seq = sequence;
+      chain = chain.then(() => postStreamEvent(envelope, fallbackText || '.', seq, 'progress', event));
+    },
+    async finish() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; }
+      flush('delta');
+      flush('progress');
+      // 整体截止：delta 通道是 best-effort，异常慢（对端不响应）时必须在
+      // 有限时间内让位给终态回发，不能无限拖住 handleEnvelope。
+      await Promise.race([
+        chain,
+        new Promise((resolve) => { const deadline = setTimeout(resolve, STREAM_FINISH_DEADLINE_MS); deadline.unref(); }),
+      ]);
+    },
+  };
+}
+
+// 串行队列：同一时刻只处理一条消息，避免并发锁/限流问题。只在共享单个
+// 子进程的模式下真正必要（sscli 常驻 JSONL 子进程 / codex app-server）——
+// 同一进程的并发 deliver 会互相踩协议状态。oneshot 模式每条消息都会 spawn
+// 一个独立的 CLI 子进程，没有共享运行时，因此走并发路径：这样同一智能体的
+// 上一条长任务还在跑时，新的一条快速消息也能立即启动，不用干等旧任务。
+const RUNS_OWN_CLI_PROCESS = AGENT_MODE !== 'sscli' && PRESET_NAME !== 'codex';
+let queue = Promise.resolve();
+function enqueue(task) {
+  const run = queue.then(task, task);
+  queue = run.catch(() => {});
+  return run;
+}
+
+/** 取消控制帧（guide §9.2）：绕过串行队列，立即终止运行中的任务。
+ *  统一分发给全部运行时：oneshot 子进程（activeTasks）/ stream-json 子进程
+ *  （StreamJsonRuntime.active）/ codex app-server 在途 turn / sscli 常驻进程
+ *  （JSONL cancel）。各端都以 task_id 为 cancel 键注册运行中的任务（无
+ *  task_id 时回退 message_id），未持有该 task 的端直接返回 false。任一 runtime
+ *  命中即记入 cancelledTasks——被 kill 的子进程/turn 之后的非零退出/拒绝会在
+ *  handleEnvelope 里被抑制，不再补发错误回信（否则用户会同时看到取消回执与
+ *  一条 [p3394_gateway_error] 或半截回复）。 */
+async function handleCancel(envelope) {
+  const taskId = envelope.task_id;
+  if (!taskId) {
+    postReply(envelope, '[已取消]');
+    return;
+  }
+  // PR209 评审 M6：原代码在 || 链外对 sscliRuntime 又 cancel 一次（双发），
+  // 且 shim 侧 cancel 不看 task_id 会误杀排队中另一任务的执行进程。
+  // 修复：单次按序 cancel（短路即停，首个命中的 runtime 负责）。
+  cancelledTasks.add(taskId);
+  let killed = false;
+  const cancellers = [
+    (id) => cancelTask(id),
+    (id) => streamJsonRuntime.cancel(id),
+    (id) => codexAppServerRuntime.cancel(id),
+    (id) => claudePersistentRuntime.cancel(id),
+    (id) => opencodeRuntime.cancel(id),
+    (id) => sscliRuntime.cancel(id),
+  ];
+  for (const cancel of cancellers) {
+    if (await cancel(taskId)) { killed = true; break; }
+  }
+  if (!killed) cancelledTasks.delete(taskId);
+  console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));
+  postReply(envelope, '[已取消]');
+}
+
+async function handleEnvelope(envelope) {
+  const idem = envelope.idempotency_key;
+  if (idem && processed.has(idem)) {
+    console.log('[p3394-gateway] duplicate skipped ' + idem);
+    postReply(envelope, processed.get(idem));
+    return;
+  }
+  const text = envelopeText(envelope).slice(0, MAX_MESSAGE_LEN);
+  if (!text) {
+    postReply(envelope, '（空消息）');
+    return;
+  }
+  console.log('[p3394-gateway] received from ' + (envelope.sender && envelope.sender.agent_id) + ': ' + text.slice(0, 120));
+  const sessionId = String(envelope.session_id || '');
+  // 会话工作区 mkdir + 入站附件落盘必须被保护：任一失败都不能把信封静默
+  // 丢弃——对端会一直干等回复直到超时（表现为"无回复/超慢"）。失败要回
+  // 显式 `[p3394_gateway_error]` 错误信，让 CogSeed 快速失败、不空等。
+  let inDir = '';
+  let outDir = '';
+  let dir = '';
+  let inFiles = [];
+  let runtimeDir = '';
+  try {
+    const dirs = workspaceDirs(sessionId);
+    inDir = dirs.inDir;
+    outDir = dirs.outDir;
+    dir = dirs.dir;
+    runtimeDir = resolveEnvelopeWorkingDir(envelope, dir);
+    inFiles = decodeResourceParts(envelope, inDir);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    console.error('[p3394-gateway] session setup failed: ' + message);
+    postReply(envelope, '[p3394_gateway_error] ' + sanitizeStreamText(message));
+    return;
+  }
+  const runStartedAt = Date.now();
+  try {
+    const fetched = await fetchObjectParts(envelope, inDir);
+    for (const file of fetched) inFiles.push(file);
+  } catch (error) {
+    console.error('[p3394-gateway] object parts failed: ' + (error && error.message ? error.message : String(error)));
+  }
+  let artifactNote = '';
+  if (inFiles.length) {
+    artifactNote = '\n\n[附件已保存到会话工作区，路径如下]\n' + inFiles.map((file) => '- ' + file.path).join('\n');
+  }
+
+  try {
+    const stream = createStreamEmitter(envelope);
+    // 统一入口：按 runtimeFor() 选中后端（sscli 主导 / codex 专有 / oneshot
+    // 兜底），会话连续性由各后端自管（oneshot 走网关 transcript，sscli/codex
+    // 常驻进程内建历史）。
+    const runtime = runtimeFor();
+    const goal = envelope.payload && envelope.payload.metadata && typeof envelope.payload.metadata.goal === 'string'
+      ? envelope.payload.metadata.goal
+      : '';
+    await runtime.openSession(sessionId, goal, runtimeDir);
+    // PEER_CALL_HINT 每会话只注一次（首轮）：hint 信息（端口/用法）会话内
+    // 恒定，resume 的 CLI 自会记住，重复注入浪费上下文还会被 CLI 当正文
+    // 回应（交互设计 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
+    // 目录 marker 防重（网关重启不重注；transcript 回放路径 hint 已在历史
+    // 里）；marker 在 deliver 成功后才写——首轮失败下轮补注，不丢入口。
+    let peerHintThisTurn = '';
+    let hintMark = '';
+    if (PEER_CALL_HINT && dir) {
+      hintMark = path.join(dir, 'peer-hint.sent');
+      if (!fs.existsSync(hintMark)) peerHintThisTurn = PEER_CALL_HINT;
+    }
+    // taskId 随 opts 传给运行时：oneshot / stream-json 子进程按 task_id 注册
+    // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
+    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）；peer-call
+    // hint 每会话只注一次（peerHintThisTurn 由 marker 防重，首轮失败下轮补注）。
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    if (peerHintThisTurn && hintMark) {
+      try { fs.writeFileSync(hintMark, String(Date.now())); } catch { /* best effort：下轮重注无害 */ }
+    }
+    await stream.finish();
+    // deliver 契约：string（无用量）或 { text, usage? }（带本轮 CLI 自报
+    // 用量——claude persistent 的 result 帧；其余 runtime 一期不带）。
+    const replyBody = typeof rawReply === 'string' ? rawReply : String((rawReply && rawReply.text) || '');
+    const turnUsage = (rawReply && typeof rawReply === 'object' && rawReply.usage && typeof rawReply.usage === 'object')
+      ? rawReply.usage
+      : undefined;
+    const reply = replyBody.length > MAX_REPLY_BYTES ? replyBody.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : replyBody;
+    // Agent 运行期间写入 workspace/out/ 的文件 → 随回复回传（Artifact 端到端）
+    const outParts = collectOutParts(outDir, runStartedAt);
+    if (outParts.length) console.log('[p3394-gateway] attaching ' + outParts.length + ' artifact(s) to reply');
+    if (idem) remember(idem, reply);
+    console.log('[p3394-gateway] agent replied ' + reply.slice(0, 120));
+    postReply(envelope, reply, outParts, turnUsage);
+  } catch (error) {
+    // 已被 cancel 控制帧终止的任务：取消回执已发，不再补发错误回信。
+    if (envelope.task_id && cancelledTasks.has(envelope.task_id)) {
+      cancelledTasks.delete(envelope.task_id);
+      return;
+    }
+    postReply(envelope, '[p3394_gateway_error] ' + sanitizeStreamText(error && error.message ? error.message : String(error)));
+  }
+}
+
+const server = http.createServer((req, res) => {
+  if (req.url && req.url.startsWith('/p3394/manifest')) {
+    json(res, 200, { ok: true, manifest: MANIFEST });
+    return;
+  }
+  if (req.url && req.url.startsWith('/p3394/health')) {
+    json(res, 200, { ok: true, agent_id: AGENT_ID });
+    return;
+  }
+  // 模型发现（CodexHost 式"问 CLI 本身"）：按当前 runtime 枚举 CLI 真实可用
+  // 的模型。同步请求-响应（探测可能起子进程，上限 ~25s，宿主侧 fetch 需带
+  // 足够超时）。鉴权与 /p3394/envelope 同规则（回环 + 可选 Bearer）。
+  if (req.url && req.url.startsWith('/p3394/models') && req.method === 'GET') {
+    if (AUTH_TOKEN) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer ' + AUTH_TOKEN) {
+        json(res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+    void (async () => {
+      try {
+        const runtime = runtimeFor();
+        const inspected = runtime.inspectModels
+          ? await runtime.inspectModels()
+          : { status: 'unavailable', reason: 'runtime_no_inspect' };
+        json(res, 200, {
+          ok: true,
+          runtime: runtime.name,
+          cli: CLI,
+          // 能力协商（CodexHost 式）：模型可控 = 有参数模板或专有通道；强度
+          // 可控 = 有 effortArgs 模板（预设声明或 P3394_AGENT_EFFORT_ARGS）或
+          // effortChannel 专有通道（claude 的 MAX_THINKING_TOKENS、codex 的
+          // model_reasoning_effort——它们不走参数模板）。宿主据此决定 UI
+          // 控件显隐——不再依赖任何硬编码白名单。
+          model_controllable: modelControllable(),
+          effort_controllable: !!effortArgsFor(PRESETS[PRESET_NAME] || {}, process.env)
+            || !!(PRESETS[PRESET_NAME] && PRESETS[PRESET_NAME].effortChannel),
+          inspected_at: new Date().toISOString(),
+          ...(inspected || {}),
+        });
+      } catch (error) {
+        json(res, 200, {
+          ok: true,
+          status: 'unavailable',
+          reason: 'inspect_failed',
+          error: error && error.message ? error.message : String(error),
+        });
+      }
+    })();
+    return;
+  }
+  // Peer call 本地路由：运行中的 CLI 智能体（oneshot 子进程 / sscli 常驻）
+  // 通过本端点转调另一个 P3394 节点。本网关只与 CogSeed 桥通信：信封带
+  // extensions.forward_to，由桥解析目标并转发（peer-forward），回复经本端
+  // reply_endpoint 回发、由 replyWaiters 匹配后作为本端点响应返回。
+  // 鉴权：仅回环可访问 + 需 Bearer AUTH_TOKEN（与本端入站信封一致）。
+  if (req.url && req.url.startsWith('/p3394/call') && req.method === 'POST') {
+    if (AUTH_TOKEN) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer ' + AUTH_TOKEN) {
+        json(res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+    let body = '';
+    let bodyTooLarge = false;
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body) > MAX_REQUEST_BODY_BYTES && !bodyTooLarge) {
+        bodyTooLarge = true;
+        json(res, 413, { ok: false, error: 'payload_too_large' });
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (bodyTooLarge) return;
+      let parsed = null;
+      try { parsed = JSON.parse(body); } catch { /* fallthrough */ }
+      const peer = parsed && typeof parsed.peer === 'string' ? parsed.peer.trim() : '';
+      const message = parsed && typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      if (!peer || !message) {
+        json(res, 422, { ok: false, error: 'peer_and_message_required' });
+        return;
+      }
+      // 本地预校验（与桥 peer-forward 的拒绝规则一致，避免无效目标
+      // 空等 3 分钟超时）：桥自身节点 id 不可作为转发目标；也不可转发
+      // 给自己。桥对这些情况的响应是 200-ack + 异步失败（不回传错误），
+      // 所以必须在本地拦截。
+      if (peer === 'cogseed' || peer === 'cogseed' || peer === 'cogseed') {
+        json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: p3394_forward_invalid_target (bridge self node)' });
+        return;
+      }
+      if (peer === AGENT_ID) {
+        json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: p3394_forward_invalid_target (cannot forward to self)' });
+        return;
+      }
+      const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      const env = {
+        spec_version: 'p3394/1.0',
+        message_id: 'msg-fwd-' + nonce,
+        session_id: 'ses-fwd-' + nonce,
+        task_id: 'tsk-fwd-' + nonce,
+        kind: 'task',
+        performative: 'request',
+        role: 'requester',
+        sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+        recipients: [{ agent_id: peer }],
+        payload: { parts: [{ type: 'text', text: message.slice(0, MAX_MESSAGE_LEN) }], metadata: { goal: 'peer call to ' + peer } },
+        extensions: { forward_to: peer, reply_endpoint: ADVERTISE_ENDPOINT, reply_token: AUTH_TOKEN },
+        idempotency_key: 'idem-fwd-' + nonce,
+      };
+      const timer = setTimeout(() => {
+        if (replyWaiters.has(env.message_id)) {
+          replyWaiters.delete(env.message_id);
+          json(res, 504, { ok: false, error: 'p3394_call_timeout' });
+        }
+      }, PEER_CALL_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+      replyWaiters.set(env.message_id, (reply) => {
+        clearTimeout(timer);
+        // 桥转发失败时回传的错误信封（app-wiring.ts 方案 2）：识别前缀并
+        // 映射为 502，而不是当作成功回复返回。
+        const replyText = envelopeText(reply);
+        if (replyText.startsWith('[p3394_forward_error]')) {
+          json(res, 502, { ok: false, peer, error: replyText.replace('[p3394_forward_error] ', '') });
+          return;
+        }
+        json(res, 200, { ok: true, peer, reply: replyText });
+      });
+      const url = new URL(COGSEED_ENDPOINT + '/p3394/envelope');
+      const headers = { 'Content-Type': 'application/json' };
+      if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+      const fwdReq = http.request(url, { method: 'POST', headers }, (r) => {
+        // 读取桥的响应体：非 2xx（如 p3394_forward_invalid_target 422）必须
+        // 立即失败返回，否则 replyWaiters 会空等 PEER_CALL_TIMEOUT_MS 超时。
+        let resBody = '';
+        r.on('data', (chunk) => { resBody += chunk; });
+        r.on('end', () => {
+          if (r.statusCode && r.statusCode >= 200 && r.statusCode < 300) return; // 转发已受理，等待对端回信
+          clearTimeout(timer);
+          if (replyWaiters.has(env.message_id)) {
+            replyWaiters.delete(env.message_id);
+            let reason = 'HTTP ' + r.statusCode;
+            try { const parsed = JSON.parse(resBody); if (parsed && typeof parsed.error === 'string') reason = parsed.error; } catch { /* fallthrough */ }
+            json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: ' + reason });
+          }
+        });
+      });
+      fwdReq.on('error', (error) => {
+        clearTimeout(timer);
+        if (replyWaiters.has(env.message_id)) {
+          replyWaiters.delete(env.message_id);
+          json(res, 502, { ok: false, error: 'p3394_call_send_failed: ' + (error && error.message ? error.message : String(error)) });
+        }
+      });
+      // 转发请求必须有界：桥不响应时销毁 socket（触发 error → 502），
+      // 否则挂起的转发连接延迟到 PEER_CALL_TIMEOUT_MS 才由 waiter 兜底。
+      fwdReq.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => fwdReq.destroy());
+      fwdReq.end(JSON.stringify({ envelope: env }));
+    });
+    return;
+  }
+  if (req.url && req.url.startsWith('/p3394/envelope') && req.method === 'POST') {
+    if (AUTH_TOKEN) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer ' + AUTH_TOKEN) {
+        json(res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+    let body = '';
+    let bodyTooLarge = false;
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body) > MAX_REQUEST_BODY_BYTES && !bodyTooLarge) {
+        bodyTooLarge = true;
+        json(res, 413, { ok: false, error: 'payload_too_large' });
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (bodyTooLarge) return;
+      let envelope = null;
+      try {
+        const parsed = JSON.parse(body);
+        envelope = (parsed && parsed.envelope) || null;
+      } catch {
+        /* fallthrough */
+      }
+      if (!envelope || !envelope.message_id || !envelope.session_id || !envelope.idempotency_key) {
+        json(res, 422, { ok: false, error: 'invalid_envelope' });
+        return;
+      }
+      json(res, 200, { ok: true, message_id: envelope.message_id });
+      // V-04 反向闭环：本端发起的任务回信（reply_to 命中 waiter）直接交给
+      // 等待方，不进入 CLI 执行路径。
+      if (envelope.reply_to && replyWaiters.has(envelope.reply_to)) {
+        const waiter = replyWaiters.get(envelope.reply_to);
+        replyWaiters.delete(envelope.reply_to);
+        waiter(envelope);
+        return;
+      }
+      // cancel 控制帧必须绕过串行队列立即处理，否则会被正在运行的长任务阻塞。
+      if (envelope.kind === 'control' && envelope.performative === 'cancel') {
+        void handleCancel(envelope).catch((error) => {
+          console.error('[p3394-gateway] cancel failed: ' + (error && error.message ? error.message : String(error)));
+        });
+        return;
+      }
+      // oneshot 模式并发执行（每条消息独立 CLI 进程，不排队）；sscli/codex
+      // 共享单子进程，仍走串行队列。
+      if (RUNS_OWN_CLI_PROCESS) {
+        void handleEnvelope(envelope).catch((error) => {
+          console.error('[p3394-gateway] envelope failed: ' + (error && error.message ? error.message : String(error)));
+        });
+      } else {
+        void enqueue(() => handleEnvelope(envelope));
+      }
+    });
+    return;
+  }
+  json(res, 404, { ok: false, error: 'not_found' });
+});
+
+let shuttingDown = false;
+async function shutdownGateway(reason) {
+  if (shuttingDown) {
+    process.exit(1);
+    return;
+  }
+  shuttingDown = true;
+  console.log('[p3394-gateway] shutting down (' + reason + ')');
+  // Deadline 必须覆盖 runtime.close() 本身；如果某个 close 永不 settle，不能
+  // 等到它之后才设 failsafe。第二个 shutdown 请求走上面的立即退出分支。
+  const deadline = setTimeout(() => process.exit(1), 3000);
+  deadline.unref();
+  // 统一关闭各运行时：回杀运行中的 oneshot CLI 子进程（否则退场后它们继续
+  // 跑成孤儿）、sscli 常驻子进程、codex app-server。
+  try {
+    await Promise.allSettled([
+      sscliRuntime.close(),
+      codexAppServerRuntime.close(),
+      streamJsonRuntime.close(),
+      claudePersistentRuntime.close(),
+      opencodeRuntime.close(),
+      oneshotRuntime.close(),
+    ]);
+  } finally {
+    server.close(() => {
+      clearTimeout(deadline);
+      process.exit(0);
+    });
+  }
+}
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => { void shutdownGateway(signal); });
+}
+// Windows does not deliver child.kill('SIGTERM') to Node handlers. A parent
+// with an IPC channel can request the same graceful shutdown path explicitly.
+process.on('message', (message) => {
+  if (message && message.type === 'p3394-shutdown') void shutdownGateway('IPC');
+});
+
+server.listen(PORT, GATEWAY_HOST, () => {
+  console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);
+  console.log('[p3394-gateway] runtime: ' + runtimeFor().name);
+  console.log('[p3394-gateway] replies to ' + COGSEED_ENDPOINT + ' · preset: ' + PRESET_NAME + (PRESET_NAME === 'codex' ? ' · runtime: Codex Desktop app-server (' + CODEX_APP_SERVER + ')' : ' · CLI: ' + CLI + ' ' + CLI_ARGS));
+  // codex 预热：gateway 一启动就把 app-server 拉起来（冷启动实测 ~8s，
+  // 首轮对话才 spawn 会让用户干等）。fire-and-forget，失败静默——首次
+  // deliver 会再走 start() 兜底。
+  if (PRESET_NAME === 'codex') {
+    codexAppServerRuntime.start().catch((error) => {
+      console.error('[p3394-gateway] codex app-server warmup failed: ' + (error && error.message ? error.message : String(error)));
+    });
+  }
+  registerWithCogseed();
+  if (SEND_TASK) sendTaskOneShot(SEND_TASK);
+  if (HEARTBEAT_MS > 0) {
+    const timer = setInterval(sendHeartbeat, HEARTBEAT_MS);
+    timer.unref();
+  }
+});
+
+/**
+ * V-04 反向闭环：本网关（对端 Agent）主动向 CogSeed 发起一次任务，
+ * 信封携带本端 reply_endpoint/reply_token；CogSeed 执行完自动回发结果，
+ * 网关命中 waiter 后打印回复并退出。
+ *
+ * 断线恢复：发送失败（CogSeed 未起/连接拒绝/非 2xx）按退避重试
+ * （P3394_SEND_TASK_RETRIES 次，间隔 1.2s * attempt）；总等待受
+ * SEND_TASK_TIMEOUT_MS 封顶，超时以非零码退出。
+ */
+function sendTaskOneShot(text, attempt = 1) {
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const task = {
+    spec_version: 'p3394/1.0',
+    message_id: 'msg-task-' + nonce,
+    session_id: 'ses-task-' + nonce,
+    task_id: 'tsk-' + nonce,
+    kind: 'task',
+    performative: 'request',
+    sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: { parts: [{ type: 'text', text: text.slice(0, MAX_MESSAGE_LEN) }], metadata: { goal: text.slice(0, 200) } },
+    extensions: { reply_endpoint: ADVERTISE_ENDPOINT, reply_token: AUTH_TOKEN },
+    idempotency_key: 'idem-task-' + nonce,
+  };
+  replyWaiters.set(task.message_id, (reply) => {
+    const replyText = envelopeText(reply);
+    console.log('[p3394-gateway] task reply from ' + (reply.sender && reply.sender.agent_id) + ': ' + replyText.slice(0, 120));
+    process.stdout.write(replyText + '\n');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('[p3394-gateway] send-task timeout waiting for reply');
+    process.exit(1);
+  }, SEND_TASK_TIMEOUT_MS);
+  const url = new URL(COGSEED_ENDPOINT + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+  const body = JSON.stringify({ envelope: task });
+  const retry = (why) => {
+    if (attempt < SEND_TASK_RETRIES) {
+      console.error('[p3394-gateway] send-task ' + why + ', retrying (' + attempt + '/' + SEND_TASK_RETRIES + ')');
+      setTimeout(() => sendTaskOneShot(text, attempt + 1), 1200 * attempt);
+      return true;
+    }
+    console.error('[p3394-gateway] send-task ' + why + ' after ' + attempt + ' attempt(s)');
+    process.exit(1);
+    return false;
+  };
+  const req = http.request(url, { method: 'POST', headers }, (res) => {
+    res.resume();
+    if (!(res.statusCode >= 200 && res.statusCode < 300)) {
+      retry('rejected ' + res.statusCode);
+    }
+  });
+  req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => req.destroy());
+  req.on('error', (error) => {
+    retry('failed: ' + error.message);
+  });
+  req.end(body);
+}
+
+/** 心跳：轻量 control 信封（inform），刷新 CogSeed 注册表里的 last_seen。 */
+function sendHeartbeat() {
+  if (!COGSEED_ENDPOINT) return;
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const beat = {
+    spec_version: 'p3394/1.0',
+    message_id: 'msg-heartbeat-' + nonce,
+    session_id: 'ses-heartbeat-' + nonce,
+    kind: 'control',
+    performative: 'inform',
+    sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: { parts: [{ type: 'text', text: '' }], metadata: { heartbeat: true } },
+    extensions: {
+      endpoints: [ADVERTISE_ENDPOINT],
+      capabilities: MANIFEST.capability_profile.capabilities,
+      locality: 'same_host',
+      node_kind: NODE_KIND,
+      supported_profiles: PROFILES,
+    },
+    idempotency_key: 'idem-heartbeat-' + nonce,
+  };
+  const url = new URL(COGSEED_ENDPOINT.replace(/\/$/, '') + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+  const req = http.request(url, { method: 'POST', headers }, (res) => { res.resume(); });
+  req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => req.destroy());
+  req.on('error', () => { /* CogSeed 离线：下一拍重试即可 */ });
+  req.end(JSON.stringify({ envelope: beat }));
+}
+
+/** 启动即注册：向 CogSeed 发一个 hello 信封，自报 agent_id / 显示名 / 本端
+ *  地址 / 能力 —— CogSeed 收到后自动把本节点注册进 P3394 注册表（含 endpoint
+ *  与 capabilities），之后即可被 CogSeed 主动调用（p3394_send）。幂等：重复
+ *  启动只重发一次 hello。 */
+function registerWithCogseed() {
+  if (!COGSEED_ENDPOINT) return;
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const hello = {
+    spec_version: 'p3394/1.0',
+    message_id: 'msg-hello-' + nonce,
+    session_id: 'ses-hello-' + nonce,
+    kind: 'control',
+    performative: 'request',
+    sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: { parts: [{ type: 'text', text: '' }], metadata: { registration: true } },
+    extensions: {
+      endpoints: [ADVERTISE_ENDPOINT],
+      capabilities: MANIFEST.capability_profile.capabilities,
+      locality: 'same_host',
+      node_kind: NODE_KIND,
+      supported_profiles: PROFILES,
+      // G-18：自报网关进程 pid——CogSeed 侧内存协调器的探活数据源
+      //（正整数才被采纳，与 bus 边界同一校验）。
+      pid: process.pid,
+    },
+    idempotency_key: 'idem-hello-' + nonce,
+  };
+  const url = new URL(COGSEED_ENDPOINT.replace(/\/$/, '') + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+  const req = http.request(url, { method: 'POST', headers }, (res) => {
+    const ok = res.statusCode >= 200 && res.statusCode < 300;
+    console.log('[p3394-gateway] registered with CogSeed: ' + res.statusCode + (ok ? ' (ok)' : ''));
+    res.resume();
+  });
+  req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => req.destroy());
+  req.on('error', (error) => {
+    console.log('[p3394-gateway] registration hello failed (CogSeed offline?): ' + error.message);
+  });
+  req.end(JSON.stringify({ envelope: hello }));
+}

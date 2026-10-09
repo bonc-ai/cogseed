@@ -1,0 +1,19 @@
+schema_version: "1.0"
+kind: gate-decision
+id: GATE-REPLACE-ME
+gate_type: discovery
+status: proposed
+owner: null
+reviewer: null
+decided_at: null
+reason: null
+evidence_refs: []
+claims_allowed:
+  - "可提交人工评审"
+claims_prohibited:
+  - approved
+  - staged
+  - published
+  - production_ready
+  - accepted
+  - business_value

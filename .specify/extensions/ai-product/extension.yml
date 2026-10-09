@@ -1,0 +1,87 @@
+schema_version: "1.0"
+
+extension:
+  id: ai-product
+  name: "AI Product Governance"
+  version: "0.2.1"
+  description: "Route AI product work by uncertainty, preserve evidence and human authority, and hand validated conclusions to native Spec Kit."
+  category: process
+  effect: read-write
+  author: "AI Product Method Working Group"
+  license: "LicenseRef-Internal-Trial"
+
+requires:
+  speckit_version: ">=1.0.1,<2.0.0"
+  commands:
+    - speckit.specify
+    - speckit.plan
+    - speckit.tasks
+    - speckit.analyze
+    - speckit.implement
+
+provides:
+  commands:
+    - name: speckit.ai-product.route
+      file: commands/speckit.ai-product.route.md
+      description: "Select one primary uncertainty, stage, next action and human gate"
+    - name: speckit.ai-product.frame
+      file: commands/speckit.ai-product.frame.md
+      description: "Frame user, workflow, problem, outcome and non-goals"
+    - name: speckit.ai-product.discover
+      file: commands/speckit.ai-product.discover.md
+      description: "Build evidence-bound user journey and hypotheses"
+    - name: speckit.ai-product.qualify
+      file: commands/speckit.ai-product.qualify.md
+      description: "Decide AI fit, data boundary and A0-A4 authority"
+    - name: speckit.ai-product.define
+      file: commands/speckit.ai-product.define.md
+      description: "Define objects, states, acceptance and native Spec Kit handoff"
+    - name: speckit.ai-product.derisk
+      file: commands/speckit.ai-product.derisk.md
+      description: "Choose the lowest-cost validation for the primary uncertainty"
+    - name: speckit.ai-product.build-evaluate
+      file: commands/speckit.ai-product.build-evaluate.md
+      description: "Build from frozen native specs and evaluate protection surfaces"
+    - name: speckit.ai-product.launch-learn
+      file: commands/speckit.ai-product.launch-learn.md
+      description: "Observe authorized real outcomes and create governed change candidates"
+    - name: speckit.ai-product.evidence
+      file: commands/speckit.ai-product.evidence.md
+      description: "Create or review an evidence record"
+    - name: speckit.ai-product.gate
+      file: commands/speckit.ai-product.gate.md
+      description: "Prepare a human gate decision record without inferring approval"
+  templates:
+    - name: ai-product-evidence
+      file: templates/evidence-record.yml
+      description: "Evidence record template"
+    - name: ai-product-gate
+      file: templates/gate-decision.yml
+      description: "Human gate decision template"
+    - name: ai-product-authority
+      file: templates/authority-grant.yml
+      description: "A0-A4 authority template"
+    - name: ai-product-handoff
+      file: templates/spec-handoff.yml
+      description: "Discovery-to-native-Spec-Kit handoff template"
+    - name: ai-product-change-candidate
+      file: templates/change-candidate.yml
+      description: "Governed method change candidate template"
+  scripts:
+    - name: ai-product-validate-records
+      file: scripts/validate_records.py
+      description: "Fail-closed local validator for governance records"
+      runtimes: [python]
+  config:
+    - name: ai-product-config.yml
+      template: ai-product-config.template.yml
+      description: "Project-local authority, evidence and claim defaults"
+      required: false
+
+tags: [ai-product, discovery, governance, evaluation, human-in-the-loop]
+
+defaults:
+  status: candidate
+  default_authority: A1
+  maximum_without_independent_approval: A2
+  a4_enabled: false

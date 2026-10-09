@@ -1,0 +1,45 @@
+# exit-code-registry.yaml — Skill Sentry CLI 统一退出码语义表
+#
+# 单一语义源：所有 CLI（report.py 的 main()、未来的 orchestrator/guard 脚本）
+# 都必须从这里查语义，不得各自发明退出码；退出码语义遵循
+# CogSeed 技能治理体系的设计。
+
+schema_version: "1.0.0"
+engine_version: "2.0.0"
+
+codes:
+  - code: 0
+    name: SUCCESS
+    meaning: "扫描完成，部署建议为 ALLOW（未达到 --fail-on 阈值）"
+
+  - code: 1
+    name: FAIL_ON_THRESHOLD
+    meaning: "部署建议达到或超过 --fail-on 指定的阈值，CI/发布流程应据此拦截"
+
+  - code: 2
+    name: ARTIFACT_ERROR
+    meaning: "输入的 artifact 路径不存在，或无法定位/解压"
+
+  - code: 10
+    name: SUCCESS_WITH_CAUTION
+    meaning: "部署建议为 CAUTION，但未达到 --fail-on 阈值（预留：当前实现走 0/1 分支，未来可细分）"
+
+  - code: 20
+    name: RULESET_LOAD_ERROR
+    meaning: "指定的规则包版本不存在或解析失败，已降级为 builtin 规则（预留：当前仅记录在 rules_source 字段，未来可选择性地以此码退出）"
+
+  - code: 40
+    name: EXECUTION_ERROR
+    meaning: "引擎内部异常（未捕获的 Python 异常），非预期错误"
+
+deployment_recommendation_order:
+  ALLOW: 0
+  CAUTION: 1
+  DO_NOT_INSTALL: 2
+
+notes: |
+  当前 CLI (report.py main()) 只实现了 0/1/2 三种退出码的判定逻辑
+  （--fail-on 阈值比较 + artifact 错误）。10/20/40 为预留位，供后续
+  CLI 增强（如规则包校验失败单独区分、内部异常单独区分）时启用，
+  避免未来扩展时退出码语义冲突。这一预留模式为阶段二预留位设计
+  （35-39），语义在仓库根目录的全局退出码注册表中统一维护。

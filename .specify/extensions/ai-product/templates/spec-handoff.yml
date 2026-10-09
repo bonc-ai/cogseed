@@ -1,0 +1,24 @@
+schema_version: "1.0"
+kind: spec-handoff
+id: HANDOFF-REPLACE-ME
+product_version: "状态待确认"
+frozen_problem: "状态待确认"
+user_goal: "状态待确认"
+primary_journey: "状态待确认"
+object_refs:
+  - "状态待确认"
+state_refs:
+  - success
+  - failure
+  - refusal
+  - empty
+authority_ref: AUTH-REPLACE-ME
+evidence_refs:
+  - EV-REPLACE-ME
+discovery_gate_ref: GATE-REPLACE-ME
+discovery_gate_status: proposed
+open_assumptions: []
+blocking_gaps:
+  - "Discovery Gate 尚未批准"
+ready_for_speckit: false
+next_command: speckit.specify

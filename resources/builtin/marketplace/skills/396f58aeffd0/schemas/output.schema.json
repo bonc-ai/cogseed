@@ -1,0 +1,75 @@
+{
+  "$id": "urn:ai-product-suite:derisk-ai-product:output:0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "approval_gate": {
+      "const": "Discovery Gate"
+    },
+    "approval_required": {
+      "type": "boolean"
+    },
+    "artifact_refs": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "claims_allowed": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "claims_prohibited": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "evidence_refs": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "next_action": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "stage": {
+      "const": "De-risk"
+    },
+    "status": {
+      "enum": [
+        "candidate",
+        "needs_clarification",
+        "blocked",
+        "returned"
+      ]
+    },
+    "summary": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "stage",
+    "artifact_refs",
+    "evidence_refs",
+    "next_action",
+    "approval_required",
+    "approval_gate",
+    "claims_allowed",
+    "claims_prohibited"
+  ],
+  "title": "De-risk｜最低成本不确定性验证 output",
+  "type": "object"
+}

@@ -1,0 +1,264 @@
+import { nowIso } from '../../storage';
+import { createLogger } from '../../logger';
+import { normalizeCognitionSourceRefs } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
+import {
+  listKstarJsonRecords,
+  readKstarEpisode,
+  readKstarJsonRecord,
+  replaceKstarJsonRecord,
+  writeKstarJsonRecord,
+} from './episode-store';
+import { normalizeKstarAttributionDetails } from './secondary-attribution';
+import type {
+  KstarAttribution,
+  KstarEpisodeRecord,
+  KstarOutcome,
+  KstarReviewRecord,
+} from './types';
+
+const log = createLogger('kstar.review');
+
+export interface SaveKstarReviewInput {
+  expectedResult?: string;
+  actualResult?: string;
+  deltaR: number | 'unknown';
+  deltaA: number | 'unknown';
+  outcome: KstarOutcome;
+  attribution: KstarAttribution;
+  reason: string;
+  confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
+  reviewState?: KstarReviewRecord['reviewState'];
+  inferenceMethod?: KstarReviewRecord['inferenceMethod'];
+  needsConfirmation?: boolean;
+  evidenceLayer?: KstarReviewRecord['evidenceLayer'];
+  reviewStatus?: KstarReviewRecord['reviewStatus'];
+  confirmedAt?: string;
+  /** Model-reasoned reusable lesson; persisted and used as the precipitation
+   *  judgment instead of a fixed template sentence. */
+  lesson?: string;
+  attributionDetails?: unknown;
+  evidenceRefs: unknown[];
+}
+
+function optionalReviewText(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`invalid ${field}`);
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  if (text.length > 4_000) throw new Error(`${field} is too long`);
+  return text;
+}
+
+function boundedReason(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('missing kstar review reason');
+  const reason = value.replace(/\s+/g, ' ').trim();
+  if (!reason) throw new Error('missing kstar review reason');
+  if (reason.length > 2_000) throw new Error('kstar review reason is too long');
+  return reason;
+}
+
+function reviewNumber(value: number | 'unknown', field: string): number | 'unknown' {
+  if (value === 'unknown') return value;
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`invalid ${field}`);
+  return value;
+}
+
+function validateConfidence(value: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error('invalid kstar review confidence');
+  }
+  return value;
+}
+
+export function createInitialKstarReview(episode: KstarEpisodeRecord): KstarReviewRecord {
+  const reason = episode.r.status === 'completed'
+    ? 'No explicit expectation or verification evidence was recorded.'
+    : `Task ended with status ${episode.r.status}; an expected-result comparison was not recorded.`;
+  const now = episode.updatedAt || nowIso();
+  return {
+    schemaVersion: 1,
+    ownerId: episode.ownerId,
+    id: `ksr-${episode.id}`,
+    episodeId: episode.id,
+    deltaR: 'unknown',
+    deltaA: 'unknown',
+    outcome: 'unclear',
+    attribution: 'unclear',
+    reason,
+    confidence: 0,
+    evidenceRefs: episode.evidenceRefs,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export async function saveKstarReviewRecord(
+  userId: string,
+  record: KstarReviewRecord,
+  episodeEvidenceRefs?: unknown[],
+): Promise<KstarReviewRecord> {
+  const boundEvidenceRefs = record.attributionDetails === undefined
+    ? undefined
+    : episodeEvidenceRefs || (await readKstarEpisode(userId, record.episodeId))?.evidenceRefs;
+  if (record.attributionDetails !== undefined && !boundEvidenceRefs) {
+    throw new Error('kstar episode not found for attribution evidence');
+  }
+  validateStoredReview(userId, record.episodeId, record, boundEvidenceRefs);
+  return replaceKstarJsonRecord(userId, 'reviews', record);
+}
+
+export async function saveKstarReview(
+  userId: string,
+  episode: KstarEpisodeRecord,
+  input: SaveKstarReviewInput,
+): Promise<KstarReviewRecord> {
+  if (episode.ownerId !== userId) throw new Error('kstar episode owner mismatch');
+  const now = nowIso();
+  const record: KstarReviewRecord = {
+    schemaVersion: 1,
+    ownerId: userId,
+    id: `ksr-${episode.id}`,
+    episodeId: episode.id,
+    ...(optionalReviewText(input.expectedResult, 'expected result') ? { expectedResult: optionalReviewText(input.expectedResult, 'expected result') } : {}),
+    ...(optionalReviewText(input.actualResult, 'actual result') ? { actualResult: optionalReviewText(input.actualResult, 'actual result') } : {}),
+    deltaR: reviewNumber(input.deltaR, 'deltaR'),
+    deltaA: reviewNumber(input.deltaA, 'deltaA'),
+    outcome: input.outcome,
+    attribution: input.attribution,
+    reason: boundedReason(input.reason),
+    confidence: validateConfidence(input.confidence),
+    ...(input.actionDelta ? { actionDelta: input.actionDelta } : {}),
+    ...(input.resultDelta ? { resultDelta: input.resultDelta } : {}),
+    ...(input.reviewState ? { reviewState: input.reviewState } : {}),
+    ...(input.inferenceMethod ? { inferenceMethod: input.inferenceMethod } : {}),
+    ...(input.needsConfirmation !== undefined ? { needsConfirmation: input.needsConfirmation } : {}),
+    evidenceLayer: input.evidenceLayer || (input.inferenceMethod === 'user' ? 'experience' : 'inference'),
+    reviewStatus: input.reviewStatus || (input.reviewState === 'confirmed' ? 'confirmed' : input.reviewState === 'unknown' ? 'skipped' : 'pending'),
+    ...(input.confirmedAt ? { confirmedAt: input.confirmedAt } : {}),
+    ...(input.lesson?.trim() ? { lesson: boundedReason(input.lesson) } : {}),
+    evidenceRefs: normalizeCognitionSourceRefs(input.evidenceRefs),
+    ...(input.attributionDetails !== undefined
+      ? { attributionDetails: normalizeKstarAttributionDetails(input.attributionDetails, episode.evidenceRefs) }
+      : {}),
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (!record.evidenceRefs.length) throw new Error('kstar review evidence is required');
+  return saveKstarReviewRecord(userId, record, episode.evidenceRefs);
+}
+
+function validateStoredReview(
+  userId: string,
+  episodeId: string,
+  raw: Record<string, unknown>,
+  episodeEvidenceRefs?: unknown[],
+): KstarReviewRecord {
+  if (
+    raw.ownerId !== userId || raw.id !== `ksr-${episodeId}` || raw.episodeId !== episodeId ||
+    (raw.expectedResult !== undefined && typeof raw.expectedResult !== 'string') ||
+    (raw.actualResult !== undefined && typeof raw.actualResult !== 'string') ||
+    (raw.deltaR !== 'unknown' && (typeof raw.deltaR !== 'number' || !Number.isFinite(raw.deltaR))) ||
+    (raw.deltaA !== 'unknown' && (typeof raw.deltaA !== 'number' || !Number.isFinite(raw.deltaA))) ||
+    !['better_than_expected', 'met_expected', 'worse_than_expected', 'unclear'].includes(String(raw.outcome)) ||
+    !['knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear'].includes(String(raw.attribution)) ||
+    typeof raw.reason !== 'string' || typeof raw.confidence !== 'number' ||
+    (raw.actionDelta !== undefined && (typeof raw.actionDelta !== 'object' || raw.actionDelta === null || Array.isArray(raw.actionDelta))) ||
+    (raw.resultDelta !== undefined && (typeof raw.resultDelta !== 'object' || raw.resultDelta === null || Array.isArray(raw.resultDelta))) ||
+    (raw.reviewState !== undefined && !['inferred', 'needs_confirmation', 'confirmed', 'unknown'].includes(String(raw.reviewState))) ||
+    (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'commander', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
+    (raw.needsConfirmation !== undefined && typeof raw.needsConfirmation !== 'boolean') ||
+    (raw.evidenceLayer !== undefined && !['fact', 'inference', 'experience'].includes(String(raw.evidenceLayer))) ||
+    (raw.reviewStatus !== undefined && !['pending', 'confirmed', 'rejected', 'skipped'].includes(String(raw.reviewStatus))) ||
+    (raw.confirmedAt !== undefined && typeof raw.confirmedAt !== 'string') ||
+    (raw.lesson !== undefined && typeof raw.lesson !== 'string') ||
+    !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 ||
+    !Array.isArray(raw.evidenceRefs) || typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
+  ) throw new Error('malformed kstar review');
+  const attributionDetails = raw.attributionDetails === undefined
+    ? undefined
+    : normalizeKstarAttributionDetails(raw.attributionDetails, episodeEvidenceRefs || raw.evidenceRefs);
+  return {
+    ...raw,
+    ...(attributionDetails !== undefined ? { attributionDetails } : {}),
+  } as KstarReviewRecord;
+}
+
+export async function readKstarReview(userId: string, episodeId: string): Promise<KstarReviewRecord | null> {
+  const raw = await readKstarJsonRecord(userId, 'reviews', `ksr-${episodeId}`);
+  if (!raw) return null;
+  const episodeEvidenceRefs = raw.attributionDetails === undefined
+    ? undefined
+    : (await readKstarEpisode(userId, episodeId))?.evidenceRefs;
+  if (raw.attributionDetails !== undefined && !episodeEvidenceRefs) {
+    throw new Error('kstar episode not found for attribution evidence');
+  }
+  return validateStoredReview(userId, episodeId, raw, episodeEvidenceRefs);
+}
+
+export interface KstarExperienceSummary {
+  id: string;
+  episodeId: string;
+  /** 提炼出的经验正文（review.lesson）。 */
+  lesson: string;
+  confidence: number;
+  outcome: KstarOutcome;
+  reviewState: 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
+  /** 来源任务的目标（episode.t.userGoal）。 */
+  goal: string;
+  taskStatus: string;
+  createdAt: string;
+  /** 是否已通过 extraction-run 沉淀成候选。 */
+  precipitated: boolean;
+  candidateCount: number;
+}
+
+/** 列出"提炼出的经验"（lesson 非空的 review），并 join 来源任务与沉淀状态。
+ *  注意：只有真正带 lesson 的记录才会出现在这里——episode 任务流水不在本列表
+ *  语义内（另有 kstar.episodes.list）。
+ *  已知行为（暂不修改）：用户手动确认 review 会重建记录且不带 lesson，
+ *  经验列表可能随确认而减少，属现有语义。 */
+export async function listKstarExperiences(
+  userId: string,
+  limit?: number,
+): Promise<{ total: number; experiences: KstarExperienceSummary[] }> {
+  const records = await listKstarJsonRecords(userId, 'reviews');
+  const lessons: Array<{ review: KstarReviewRecord; lesson: string }> = [];
+  for (const raw of records) {
+    const episodeId = String(raw.episodeId || '');
+    if (!episodeId) continue;
+    try {
+      const review = validateStoredReview(userId, episodeId, raw);
+      const lesson = String(review.lesson || '').trim();
+      if (lesson) lessons.push({ review, lesson });
+    } catch (error) {
+      log.warn('skipping degraded kstar review', { episodeId, error: (error as Error).message });
+    }
+  }
+  lessons.sort((a, b) => String(b.review.createdAt).localeCompare(String(a.review.createdAt)));
+  const capped = Number.isFinite(limit) && Number(limit) > 0 ? Math.min(Number(limit), 200) : 100;
+  const experiences: KstarExperienceSummary[] = [];
+  for (const { review, lesson } of lessons.slice(0, capped)) {
+    const episode = await readKstarEpisode(userId, review.episodeId).catch(() => null);
+    const run = await readKstarJsonRecord(userId, 'extraction-runs', `ksx-${review.episodeId}`).catch(() => null);
+    const candidateIds = run && Array.isArray(run.candidateIds)
+      ? run.candidateIds.filter((value): value is string => typeof value === 'string')
+      : [];
+    experiences.push({
+      id: review.id,
+      episodeId: review.episodeId,
+      lesson: lesson.slice(0, 500),
+      confidence: review.confidence,
+      outcome: review.outcome,
+      reviewState: review.reviewState || 'unknown',
+      goal: String((episode && episode.t && episode.t.userGoal) || '').slice(0, 200),
+      taskStatus: String((episode && episode.r && episode.r.status) || 'unknown'),
+      createdAt: String(review.createdAt),
+      precipitated: candidateIds.length > 0,
+      candidateCount: candidateIds.length,
+    });
+  }
+  return { total: lessons.length, experiences };
+}

@@ -1,0 +1,24 @@
+[project]
+name = "skill-sentry"
+version = "2.1.0"
+description = "Skill 安全静态扫描 + 信任网关引擎——AI Skill 安装/加载前的强制安全入口"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "CogSeed" }]
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+skill-sentry = "engine.scanner_core.report:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["engine*"]

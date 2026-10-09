@@ -1,0 +1,37 @@
+# CogSeed open-source compliance gates (P7).
+#
+# Validates license hygiene and supply-chain metadata before release:
+#   - reuse:check           REUSE spec coverage (.reuse/dep5 + LICENSES/)
+#   - builtin:manifest:check  builtin resource inventory consistency
+#   - sbom:check            CycloneDX SBOM freshness (needs network)
+#
+# The full compliance gate runs on promotion PRs into cicd and again on the
+# resulting cicd push. Release verification accepts only the push run for the
+# exact tagged cicd tip.
+
+name: compliance
+
+on:
+  pull_request:
+    branches:
+      - cicd
+  push:
+    branches:
+      - cicd
+
+permissions:
+  contents: read
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run reuse:check
+      - run: npm run builtin:manifest:check
+      - run: npm run sbom:check

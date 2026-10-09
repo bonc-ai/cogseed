@@ -1,0 +1,12 @@
+schema_version: "1.0"
+kind: change-candidate
+id: CC-REPLACE-ME
+trigger: "状态待确认"
+proposed_change: "状态待确认"
+affected_artifacts:
+  - "状态待确认"
+evidence_refs:
+  - EV-REPLACE-ME
+risk: medium
+status: proposed
+owner_decision_ref: null

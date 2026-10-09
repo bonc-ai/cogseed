@@ -1,0 +1,1571 @@
+import { Mutex } from 'async-mutex';
+
+import { createLogger } from '../../logger';
+import { logErrorSummary } from '../../util/log-redact';
+import { t } from '../../i18n';
+import { createBurstMerger, FEISHU_BURST_DEFAULTS, type BurstBatch, type BurstMerger } from './burst-merge';
+import { isCardAdapter } from './stream-card';
+import { safeId } from '../../storage';
+import * as groupChat from '../group_chat';
+import * as spaces from '../spaces';
+import * as wakeController from '../p3394/wake-controller';
+import * as wakeService from '../p3394/wake-service';
+import * as ontologyCandidates from '../personal_ontology_candidates';
+import * as touchpointLedger from '../touchpoints/ledger';
+import * as touchpointActions from '../touchpoints/actions';
+import { buildResolvedTouchpointCard, TOUCHPOINT_CARD_INPUT_ID } from '../touchpoints/feishu/card';
+import type { TouchpointActionKind } from '../touchpoints/types';
+import * as registry from './registry';
+import * as bindings from './bindings';
+import * as ledger from './ledger';
+import { evaluateInboundPolicy, stripBotMention } from './policy';
+import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
+import { channelPeerAlias, ensureChannelPeer } from '../p3394_bridge/channel-peer-map';
+import { P3394_ENVELOPE_VERSION, type P3394Envelope } from '../p3394_bridge/envelope';
+import { matchInboundCommand, dispatchInboundCommand } from './commands';
+// 副作用导入：确保 /agent 等接续命令的 handler 在 boot deferred 阶段注册
+// （安装幂等，与 personal-context 的注册互不干扰）。
+import './continuity_commands';
+import { isValidFeishuOpenId } from './types';
+import { createAdapter } from './adapters';
+import { normalizeInboundImageKeys } from './ledger';
+import { RuntimeInstance } from './runtime';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { importAttachmentFromPath, imageExtForBytes } from '../chat_attachments';
+import type {
+  AdapterCallbacks,
+  CardActionEnvelope,
+  DeliveryLedgerEntry,
+  InboundEnvelope,
+  JsonCompatibleValue,
+  MessagingAdapter,
+  MessagingInboundResult,
+  MessagingInstance,
+  MessagingInstanceClient,
+  MessagingInstanceInternal,
+  MessagingInstanceStatus,
+  MessagingPlatform,
+  MessagingPlatformCatalogEntry,
+  WorkspaceScope,
+} from './types';
+
+const log = createLogger('messaging:manager');
+
+/** How long a freshly configured Feishu bot accepts the first direct message
+ * as its owner (no manual open id needed). The window is short so a bot that
+ * is not configured by its owner cannot be claimed by a random first sender. */
+export const OWNER_BINDING_WINDOW_MS = 5 * 60 * 1000;
+
+/** uid\u0000instanceId → window deadline for owner auto-binding. */
+const ownerBindingWindows = new Map<string, number>();
+
+function ownerBindingKey(uid: string, instanceId: string): string {
+  return `${uid}\u0000${instanceId}`;
+}
+
+/** Open (or refresh) the owner auto-binding window for a Feishu bot that has
+ * credentials but no configured owner. Called after credentials are written
+ * or the instance is enabled; the renderer shows the "send a message to bind"
+ * hint at the same time. */
+export function openOwnerBindingWindow(uid: string, instanceId: string): void {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  ownerBindingWindows.set(ownerBindingKey(uid, instanceId), Date.now() + OWNER_BINDING_WINDOW_MS);
+}
+
+/** Live binding-window status for the settings UI. Returns null when no
+ * window is open (or it expired). */
+export function getOwnerBindingStatus(
+  uid: string,
+  instanceId: string,
+): { binding: true; expiresAt: string; remainingMs: number } | null {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const deadline = ownerBindingWindows.get(ownerBindingKey(uid, instanceId));
+  if (deadline === undefined) return null;
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    ownerBindingWindows.delete(ownerBindingKey(uid, instanceId));
+    return null;
+  }
+  return { binding: true, expiresAt: new Date(deadline).toISOString(), remainingMs };
+}
+
+/** Bind the sender of the first direct message as the instance owner while
+ * the binding window is open. Runs before inbound policy so a freshly
+ * configured bot (whose allowlist is still empty) can still be claimed.
+ * Returns true when an owner was written. */
+async function tryAutoBindOwner(
+  uid: string,
+  envelope: InboundEnvelope,
+  instanceId: string,
+  platform: MessagingPlatform,
+): Promise<boolean> {
+  if (platform !== 'feishu_lark' || envelope.isGroup) return false;
+  const key = ownerBindingKey(uid, instanceId);
+  const deadline = ownerBindingWindows.get(key);
+  if (deadline === undefined) return false;
+  if (deadline <= Date.now()) {
+    ownerBindingWindows.delete(key);
+    return false;
+  }
+  const current = await registry.getInstance(uid, instanceId);
+  if (!current || current.ownerExternalUserId) return false;
+  const openId = envelope.externalUserId?.trim() || '';
+  if (!openId || !isValidFeishuOpenId(openId)) return false;
+  await registry.updateInstance(uid, instanceId, {
+    ownerExternalUserId: openId,
+    ...(envelope.externalUserName?.trim() ? { ownerExternalUserName: envelope.externalUserName.trim().slice(0, 120) } : {}),
+    ownerIdentitySource: 'auto',
+  });
+  ownerBindingWindows.delete(key);
+  log.info('messaging owner auto-bound from direct message', { instanceId, source: 'auto' });
+  return true;
+}
+
+/** True when the inbound text is a session-reset slash command. */
+function isNewSessionCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '/new' || trimmed.startsWith('/new ')
+    || trimmed === '/reset' || trimmed.startsWith('/reset ');
+}
+
+const runtimes = new Map<string, Map<string, RuntimeInstance>>();
+const liveStatuses = new Map<string, Map<string, MessagingInstanceStatus>>();
+const lifecycleLocks = new Map<string, Mutex>();
+
+export const PLATFORM_CATALOG: readonly MessagingPlatformCatalogEntry[] = [
+  {
+    platform: 'telegram',
+    displayName: 'Telegram',
+    description: 'Telegram Bot API，支持双向对话和长轮询。',
+    available: true,
+    twoWay: true,
+  },
+  {
+    platform: 'feishu_lark',
+    displayName: '飞书 / Lark',
+    description: '飞书开放平台事件订阅，支持双向对话。',
+    available: true,
+    twoWay: true,
+  },
+  {
+    platform: 'wechat_personal',
+    displayName: '个人微信',
+    description: '微信官方 iLink 通道，扫码绑定后长轮询双向对话。',
+    available: true,
+    twoWay: true,
+  },
+  {
+    platform: 'wecom',
+    displayName: '企业微信',
+    description: '企业微信智能机器人官方扫码创建，使用 WebSocket 长连接双向对话。',
+    available: true,
+    twoWay: true,
+  },
+];
+
+function assertUserId(uid: string): void {
+  if (!safeId(uid)) throw new Error('invalid user id');
+}
+
+function assertInstanceId(instanceId: string): void {
+  if (!registry.isValidInstanceId(instanceId)) throw new Error('invalid messaging instance id');
+}
+
+function runtimeMap(uid: string): Map<string, RuntimeInstance> {
+  let map = runtimes.get(uid);
+  if (!map) {
+    map = new Map();
+    runtimes.set(uid, map);
+  }
+  return map;
+}
+
+function lifecycleLock(uid: string, instanceId: string): Mutex {
+  const key = `${uid}:${instanceId}`;
+  let lock = lifecycleLocks.get(key);
+  if (!lock) {
+    lock = new Mutex();
+    lifecycleLocks.set(key, lock);
+  }
+  return lock;
+}
+
+async function withLifecycle<T>(uid: string, instanceId: string, operation: () => Promise<T>): Promise<T> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  return lifecycleLock(uid, instanceId).runExclusive(operation);
+}
+
+function cloneStatus(status: MessagingInstanceStatus): MessagingInstanceStatus {
+  return {
+    kind: status.kind,
+    checkedAt: status.checkedAt,
+    ...(status.message ? { message: status.message } : {}),
+    ...(status.connectedAt ? { connectedAt: status.connectedAt } : {}),
+  };
+}
+
+function setLiveStatus(uid: string, instanceId: string, status: MessagingInstanceStatus): void {
+  let statuses = liveStatuses.get(uid);
+  if (!statuses) {
+    statuses = new Map();
+    liveStatuses.set(uid, statuses);
+  }
+  statuses.set(instanceId, cloneStatus(status));
+}
+
+function clearLiveStatus(uid: string, instanceId: string): void {
+  const statuses = liveStatuses.get(uid);
+  if (!statuses) return;
+  statuses.delete(instanceId);
+  if (!statuses.size) liveStatuses.delete(uid);
+}
+
+function isCurrentRuntime(uid: string, runtime: RuntimeInstance): boolean {
+  return runtime.active && runtimes.get(uid)?.get(runtime.instanceId) === runtime;
+}
+
+function withLiveStatus(uid: string, instance: MessagingInstanceClient): MessagingInstanceClient {
+  const runtime = runtimes.get(uid)?.get(instance.id);
+  const live = runtime && runtime.active ? liveStatuses.get(uid)?.get(instance.id) : undefined;
+  return {
+    ...instance,
+    status: live ? cloneStatus(live) : cloneStatus(instance.status),
+  };
+}
+
+function queueRuntimeStatus(uid: string, runtime: RuntimeInstance, nextStatus: MessagingInstanceStatus): void {
+  if (!isCurrentRuntime(uid, runtime)) return;
+  const snapshot = cloneStatus(nextStatus);
+  const previous = liveStatuses.get(uid)?.get(runtime.instanceId);
+  setLiveStatus(uid, runtime.instanceId, snapshot);
+  // 状态 kind 变化才推送渲染层：心跳重复 connected 不刷屏，避免高频重渲染。
+  if (!previous || previous.kind !== snapshot.kind) {
+    broadcastMessagingStatus(runtime.instanceId, snapshot);
+  }
+  runtime.statusWrite = runtime.statusWrite
+    .then(async () => {
+      if (!isCurrentRuntime(uid, runtime)) return;
+      await registry.updateStatus(uid, runtime.instanceId, snapshot);
+    })
+    .catch((error) => {
+      log.warn('messaging status persistence failed', {
+        instanceId: runtime.instanceId,
+        error: (error as Error).message,
+      });
+    });
+}
+
+/** 实例状态变化广播给渲染层（kind 变化时）。channel 在 preload 的
+ * `messaging:` 推送前缀白名单内。推送是尽力而为，失败不影响状态机。 */
+let broadcastOverride: ((channel: string, payload: unknown) => void) | null = null;
+
+function broadcastMessagingStatus(instanceId: string, status: MessagingInstanceStatus): void {
+  if (broadcastOverride) {
+    broadcastOverride('messaging:instance-status', { instanceId, status: cloneStatus(status) });
+    return;
+  }
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (typeof ipc.broadcastToRenderer !== 'function') return;
+    ipc.broadcastToRenderer('messaging:instance-status', { instanceId, status: cloneStatus(status) });
+  } catch {
+    /* push is best-effort */
+  }
+}
+
+/**
+ * Proactive (Commander-initiated) send to a fixed recipient — currently the
+ * configured Feishu/Lark owner open id or the WeChat owner user id. Uses the
+ * same ledger, idempotency key,
+ * retry, and recovery machinery as ordinary replies, keyed on a caller-owned
+ * stable source key so one tool call never sends twice. Waits for the
+ * terminal outcome (`sent` / `failed` / `cancelled`) instead of returning on
+ * the first `retry_pending`; an aborted signal cancels the delivery so no
+ * retry timer or restart recovery can fire it later.
+ */
+export async function sendProactive(
+  uid: string,
+  input: {
+    instanceId: string;
+    recipientId: string;
+    text: string;
+    card?: Record<string, JsonCompatibleValue>;
+    sourceKey: string;
+    signal?: AbortSignal | null;
+  },
+): Promise<{ entry: DeliveryLedgerEntry }> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(input.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) {
+    throw new Error('messaging instance is not running');
+  }
+  const text = typeof input.text === 'string' ? input.text.trim().slice(0, 12_000) : '';
+  if (!text) throw new Error('proactive message text required');
+  const sourceKey = typeof input.sourceKey === 'string' && input.sourceKey.trim()
+    ? input.sourceKey.trim().slice(0, 160)
+    : '';
+  if (!sourceKey) throw new Error('proactive source key required');
+  const recipientId = typeof input.recipientId === 'string' ? input.recipientId.trim() : '';
+  if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
+  const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  const begun = await ledger.beginDelivery(uid, {
+    key,
+    instanceId: input.instanceId,
+    recipientId,
+    recipientIdType: 'open_id',
+    sourceMessageId: sourceKey,
+    textHash: ledger.textHash(text),
+    text,
+    ...(input.card ? { card: input.card } : {}),
+    idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
+  });
+  if (!begun.duplicate) {
+    if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+      await ledger.finishDelivery(uid, key, {
+        status: 'cancelled',
+        error: 'delivery cancelled because messaging instance stopped',
+      });
+    } else {
+      await runtime.attemptDelivery(key, begun.entry);
+    }
+  }
+  try {
+    const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'cancelled') {
+      throw new Error('proactive delivery cancelled');
+    }
+    return { entry: terminal };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      // Stop the retry timer / restart recovery from ever firing this send.
+      await ledger.cancelDelivery(uid, key, 'proactive send aborted').catch(() => undefined);
+      throw Object.assign(new Error('proactive send aborted'), { name: 'AbortError' });
+    }
+    throw error;
+  }
+}
+
+/** Proactive file send to the owner: uploads and sends a local file through
+ * the same idempotent delivery ledger as `sendProactive`. The text fallback
+ * for recovery is a `[file] name` marker, so an adapter without `sendFile`
+ * still delivers something instead of wedging. */
+export async function sendProactiveFile(
+  uid: string,
+  input: {
+    instanceId: string;
+    recipientId: string;
+    filePath: string;
+    fileName: string;
+    sourceKey: string;
+    signal?: AbortSignal | null;
+  },
+): Promise<{ entry: DeliveryLedgerEntry }> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(input.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) {
+    throw new Error('messaging instance is not running');
+  }
+  const filePath = typeof input.filePath === 'string' && input.filePath.trim() ? input.filePath.trim() : '';
+  if (!filePath || filePath.length > 1024) throw new Error('proactive file path required');
+  const fileName = typeof input.fileName === 'string' && input.fileName.trim()
+    ? input.fileName.trim().slice(0, 240)
+    : filePath.split('/').pop() || 'file';
+  const sourceKey = typeof input.sourceKey === 'string' && input.sourceKey.trim()
+    ? input.sourceKey.trim().slice(0, 160)
+    : '';
+  if (!sourceKey) throw new Error('proactive source key required');
+  const recipientId = typeof input.recipientId === 'string' ? input.recipientId.trim() : '';
+  if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
+  const text = `[文件] ${fileName}`;
+  const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  const begun = await ledger.beginDelivery(uid, {
+    key,
+    instanceId: input.instanceId,
+    recipientId,
+    recipientIdType: 'open_id',
+    sourceMessageId: sourceKey,
+    textHash: ledger.textHash(text),
+    text,
+    file: { path: filePath, name: fileName },
+    idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
+  });
+  if (!begun.duplicate) {
+    if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+      await ledger.finishDelivery(uid, key, {
+        status: 'cancelled',
+        error: 'delivery cancelled because messaging instance stopped',
+      });
+    } else {
+      await runtime.attemptDelivery(key, begun.entry);
+    }
+  }
+  try {
+    const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'cancelled') {
+      throw new Error('proactive file delivery cancelled');
+    }
+    return { entry: terminal };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      await ledger.cancelDelivery(uid, key, 'proactive file send aborted').catch(() => undefined);
+      throw Object.assign(new Error('proactive file send aborted'), { name: 'AbortError' });
+    }
+    throw error;
+  }
+}
+
+const CHAT_LOCKS_MAX = 1000;
+const chatLocks = new Map<string, Mutex>();
+
+/** Per-user burst mergers; synthetic envelopes bypass them entirely. */
+const burstMergers = new Map<string, BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }>>();
+
+function chatLockKey(uid: string, instanceId: string, externalChatId: string): string {
+  return `${uid}:${instanceId}:${externalChatId}`;
+}
+
+function getChatLock(uid: string, instanceId: string, externalChatId: string): Mutex {
+  const key = chatLockKey(uid, instanceId, externalChatId);
+  const existing = chatLocks.get(key);
+  if (existing) {
+    // LRU touch: re-insert so the most recently used lock sits last.
+    chatLocks.delete(key);
+    chatLocks.set(key, existing);
+    return existing;
+  }
+  if (chatLocks.size >= CHAT_LOCKS_MAX) {
+    let evicted = false;
+    for (const [candidateKey, candidate] of chatLocks) {
+      if (!candidate.isLocked()) {
+        chatLocks.delete(candidateKey);
+        evicted = true;
+        break;
+      }
+    }
+    if (!evicted) {
+      // Every lock is held; drop the oldest regardless (Hermes behaves the
+      // same way — the caller for that chat simply gets a fresh lock).
+      const oldestKey = chatLocks.keys().next().value;
+      if (oldestKey !== undefined) chatLocks.delete(oldestKey);
+    }
+  }
+  const lock = new Mutex();
+  chatLocks.set(key, lock);
+  return lock;
+}
+
+async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  const loaded = await registry.getInstanceWithSecret(uid, envelope.instanceId);
+  if (!loaded || loaded.instance.platform !== envelope.platform) {
+    return { accepted: false, duplicate: false, reason: 'instance_not_found' };
+  }
+  const instance = loaded.instance;
+  if (!instance.enabled) return { accepted: false, duplicate: false, reason: 'instance_disabled' };
+  const key = ledger.inboundKey(instance.id, envelope.externalMessageId);
+  // Idempotency reservation happens outside the per-chat lock: the ledger is
+  // itself atomic, so a concurrent duplicate of an in-flight message is
+  // rejected immediately instead of queueing behind the lock.
+  const reservation = await ledger.reserveInbound(uid, key, envelope.receivedAt);
+  if (reservation.duplicate) return { accepted: false, duplicate: true, cid: reservation.entry.cid };
+  // PR209 评审 M4（复核返工）：锁外只下载字节到 tmp（网络 IO 不占
+  // per-chat 锁）；导入推迟到锁内过了策略/解绑检查、拿到轮换后最新
+  // binding 之后——被拒消息的图片不再落盘、/new 并发下附件不再跨会话
+  // 错位（见 downloadInboundImagesToTmp 头注释）。
+  let stagedImages: InboundImageStaged[] = [];
+  if (envelope.imageKeys?.length && instance.platform === 'feishu_lark') {
+    stagedImages = await downloadInboundImagesToTmp(uid, instance, envelope, normalizeInboundImageKeys(envelope.imageKeys));
+  }
+  try {
+    const lock = getChatLock(uid, instance.id, envelope.externalChatId);
+    return await lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key, stagedImages));
+  } finally {
+    // 拒绝/异常路径（导入未发生）也要清 tmp——导入段自身逐文件清理，
+    // 这里兜底未触达的残留。
+    for (const { tmpPath } of stagedImages) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    }
+  }
+}
+
+function mergerFor(uid: string): BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }> {
+  let merger = burstMergers.get(uid);
+  if (!merger) {
+    merger = createBurstMerger(FEISHU_BURST_DEFAULTS, (batch) => {
+      void flushBurstBatch(uid, batch);
+    });
+    burstMergers.set(uid, merger);
+  }
+  return merger;
+}
+
+/** Flush one merged batch: mark the trailing message ids as seen so a lone
+ * redelivery is rejected as a duplicate, then dispatch as a single envelope
+ * carrying the first message id. Every enqueued promise settles: the first
+ * caller resolves with the merged dispatch result, trailing callers resolve
+ * as merged duplicates (or all fail when the dispatch errors). */
+async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }>): Promise<void> {
+  const first = batch.payloads[0].envelope;
+  const firstResolve = batch.payloads[0].resolve;
+  // Keys this batch marked as consumed. 'duplicate' is a terminal mark; if
+  // the merged dispatch fails, these must be released to 'failed' (which
+  // reserveInbound treats as recoverable) so a platform redelivery can
+  // re-consume them — otherwise those messages are silently dropped even
+  // though they were only swallowed into the failed batch.
+  const markedDuplicateKeys: string[] = [];
+  try {
+    for (const id of batch.ids.slice(1)) {
+      const key = ledger.inboundKey(first.instanceId, id);
+      try {
+        const reservation = await ledger.reserveInbound(uid, key, first.receivedAt);
+        if (!reservation.duplicate) {
+          await ledger.completeInbound(uid, key, { status: 'duplicate' });
+          markedDuplicateKeys.push(key);
+        }
+      } catch {
+        // Trailing ids are best-effort dedup markers; a bad id must not fail the batch.
+      }
+    }
+    // 合并批次携带最后一条有效消息的 tokenRef：getupdates 多消息批次里
+    // 靠前的 context_token 可能已陈旧（spec §3.1），回复必须绑定该轮
+    // 最新的一条，而不是第一条。
+    let lastTokenRef: string | undefined;
+    for (const item of batch.payloads) {
+      if (item.envelope.contextTokenRef) lastTokenRef = item.envelope.contextTokenRef;
+    }
+    // G-17：聚合批次内全部图片引用（去重保序、上限 9）——合并后的文本只剩
+    // 占位符时，图片本身不能跟着批次的文本折叠一起丢掉。
+    const batchImageKeys = normalizeInboundImageKeys(
+      batch.payloads.flatMap((item) => item.envelope.imageKeys || []),
+    );
+    const envelope: InboundEnvelope = {
+      ...first,
+      externalMessageId: batch.ids[0],
+      text: batch.text,
+      ...(lastTokenRef !== undefined ? { contextTokenRef: lastTokenRef } : {}),
+      ...(batchImageKeys ? { imageKeys: batchImageKeys } : {}),
+    };
+    const result = await handleInbound(uid, envelope);
+    firstResolve(result);
+    for (const item of batch.payloads.slice(1)) {
+      item.resolve({ accepted: false, duplicate: true, reason: 'merged' });
+    }
+  } catch (error) {
+    log.warn('messaging burst merge dispatch failed', {
+      instanceId: first.instanceId,
+      error: logErrorSummary(error),
+    });
+    // Release the trailing ids this batch marked: a redelivery of those ids
+    // must be re-consumable instead of rejected forever as duplicates. Only
+    // release keys that still carry this batch's 'duplicate' mark — a
+    // concurrent later batch may already have re-consumed and re-marked the
+    // same id, and releasing that would allow a third dispatch.
+    for (const key of markedDuplicateKeys) {
+      try {
+        const current = await ledger.readInbound(uid, key);
+        if (current?.status !== 'duplicate') continue;
+        await ledger.completeInbound(uid, key, { status: 'failed', reason: 'burst_merge_failed' });
+      } catch {
+        // Best effort; a stale duplicate mark only blocks one redelivery.
+      }
+    }
+    for (const item of batch.payloads) {
+      item.resolve({ accepted: false, duplicate: false, reason: 'burst_merge_failed' });
+    }
+  }
+}
+
+/** Inbound entry for adapters: synthetic feedback envelopes dispatch
+ * immediately; regular text goes through the burst merger so split platform
+ * messages consume a single agent turn. */
+export async function enqueueInbound(uid: string, envelope: InboundEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  if (!envelope || typeof envelope !== 'object') throw new Error('invalid inbound envelope');
+  if (!envelope.instanceId || !envelope.externalMessageId || !envelope.externalChatId || !envelope.externalUserId || !envelope.text) {
+    throw new Error('inbound envelope missing required fields');
+  }
+  if (envelope.synthetic) return handleInbound(uid, envelope);
+  return new Promise<MessagingInboundResult>((resolve) => {
+    const merger = mergerFor(uid);
+    merger.push(`${envelope.instanceId}\u0000${envelope.externalChatId}`, {
+      id: envelope.externalMessageId,
+      text: envelope.text,
+      payload: { envelope, resolve },
+    });
+  });
+}
+
+/** G-17 入站图片投影：构造随派发消息携带的最小 P3394 信封。它是渠道
+ *  事件的投影元数据（不进协议边界、不做完整信封校验），字段形态对齐
+ *  P3394Envelope：文本 part 保路由，image part 用引用式 uri。 */
+function buildInboundImageEnvelope(input: {
+  key: string;
+  cid: string;
+  platform: MessagingPlatform;
+  instanceId: string;
+  externalMessageId: string;
+  senderAlias: string;
+  text: string;
+  imageKeys: string[];
+}): P3394Envelope {
+  return {
+    spec_version: P3394_ENVELOPE_VERSION,
+    message_id: `inbound:${input.key}`,
+    session_id: input.cid,
+    kind: 'message',
+    performative: 'inform',
+    sender: { agent_id: input.senderAlias, channel_instance_id: input.instanceId },
+    recipients: [{ agent_id: 'commander' }],
+    payload: {
+      parts: [
+        { type: 'text', text: input.text },
+        ...input.imageKeys.map((imageKey) => ({
+          type: 'image' as const,
+          uri: `feishu-image:${imageKey}`,
+          name: imageKey,
+        })),
+      ],
+      metadata: {
+        platform: input.platform,
+        instance_id: input.instanceId,
+        external_message_id: input.externalMessageId,
+      },
+    },
+    idempotency_key: `inbound:${input.key}`,
+  };
+}
+
+/** G-17 字节链（锁外执行，PR209 评审 M4）：飞书入站图片下载字节并导入
+ *  会话附件目录，让派发轮次走与桌面端发图相同的多模态视觉链。
+ *  此前在 per-chat 互斥锁内 await——慢下载串行阻塞同会话后续所有入站
+ *  与重投。现移到 reserve 之后、锁之前完成（网络 IO 不占锁）；导入按
+ *  内容哈希幂等。下载/导入失败仅 warn 不阻塞（占位文本仍保证路由）。 */
+// G-17 字节链：飞书入站图片下载字节并导入会话附件目录，让派发轮次
+// 走与桌面端发图相同的多模态视觉链（attachments 引用名）。下载/导入
+// 失败仅 warn 不阻塞——占位文本仍保证路由（与投影链同纪律）。
+//
+// PR209 M4 复核返工：拆成两段——锁外只做「下载字节到 tmp」（网络 IO
+// 不占 per-chat 锁），锁内过了策略/解绑检查、且拿到轮换后最新 binding
+// 之后再导入。修复两个竞态：①被拒消息（allowlist 拒绝/空文本/已解绑/
+// slash 命令）的图片不再落盘到绑定会话的附件目录（磁盘副作用）；②锁外
+// 下载期间 /new 轮换 cid 时，附件不再跨会话错位——导入与 cid 解析同在
+// 锁内，顺序有保证。
+function imageTmpPath(instanceId: string, externalMessageId: string, name: string): string {
+  return path.join(os.tmpdir(), `${instanceId}-${externalMessageId}-${name}.inbound`);
+}
+
+/** 已下载待导入的入站图片：tmp 物理路径 + 干净的附件显示名。 */
+interface InboundImageStaged {
+  tmpPath: string;
+  name: string;
+}
+
+async function downloadInboundImagesToTmp(
+  uid: string,
+  instance: MessagingInstance,
+  envelope: InboundEnvelope,
+  imageKeys: string[],
+): Promise<InboundImageStaged[]> {
+  const staged: InboundImageStaged[] = [];
+  const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
+  if (typeof adapter?.downloadMessageImage !== 'function') return staged;
+  for (const imageKey of imageKeys) {
+    try {
+      const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
+      const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
+      staged.push({ tmpPath: imageTmpPath(envelope.instanceId, envelope.externalMessageId, name), name });
+      fs.writeFileSync(staged[staged.length - 1].tmpPath, bytes);
+    } catch (err) {
+      // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
+      // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
+      // 权限/参数问题。
+      const message = err instanceof Error ? err.message : String(err);
+      const codeMatch = message.match(/code=([^ ]+)/);
+      const msgMatch = message.match(/msg=(.*)$/);
+      log.warn('messaging inbound image download failed', {
+        instanceId: envelope.instanceId,
+        imageKey,
+        errorName: err instanceof Error ? err.name : 'Error',
+        feishuCode: codeMatch ? codeMatch[1] : undefined,
+        feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
+        errorDetail: message.slice(0, 240),
+      });
+    }
+  }
+  return staged;
+}
+
+/** 锁内导入已下载的 tmp 图片到指定会话（本地 IO，快），逐文件清理 tmp。
+ *  导入失败仅 warn 跳过——与下载段同纪律。 */
+async function importInboundImagesFromTmp(uid: string, cid: string, staged: InboundImageStaged[]): Promise<string[]> {
+  const attachmentNames: string[] = [];
+  for (const { tmpPath, name } of staged) {
+    try {
+      const imported = await importAttachmentFromPath(uid, cid, tmpPath, name);
+      if (imported.ok) attachmentNames.push(imported.info.name);
+      else log.warn('messaging inbound image import failed', { cid, file: path.basename(tmpPath), error: (imported as { error: string }).error });
+    } catch (err) {
+      log.warn('messaging inbound image import failed', { cid, file: path.basename(tmpPath), error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    }
+  }
+  return attachmentNames;
+}
+
+async function handleInboundLocked(
+  uid: string,
+  envelope: InboundEnvelope,
+  instance: MessagingInstance,
+  key: string,
+  stagedImages: InboundImageStaged[],
+): Promise<MessagingInboundResult> {
+  log.info('messaging inbound envelope received', {
+    instanceId: envelope.instanceId,
+    platform: envelope.platform,
+    externalMessageId: envelope.externalMessageId,
+    isGroup: envelope.isGroup,
+    textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
+    mentionPresent: envelope.mentionPresent,
+    imageCount: envelope.imageKeys?.length ?? 0,
+  });
+  // Q3 open_id→Peer 映射：飞书入站即记录（幂等；无变化时零写盘）。
+  // 纯元数据采集——失败仅 warn，绝不阻塞派发主链路。
+  if (envelope.platform === 'feishu_lark' && envelope.externalUserId) {
+    try {
+      ensureChannelPeer(uid, envelope.platform, envelope.instanceId, envelope.externalUserId, envelope.externalUserName);
+    } catch (error) {
+      log.warn('messaging channel peer map update failed', {
+        instanceId: envelope.instanceId,
+        error: logErrorSummary(error),
+      });
+    }
+  }
+  // G-17：规整入站图片引用（去空/去重/上限 9），台账完成记录与派发信封共用。
+  const imageKeys = normalizeInboundImageKeys(envelope.imageKeys);
+  const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
+    ledger.completeInbound(uid, key, imageKeys ? { ...patch, imageKeys } : patch);
+  // A freshly configured bot can claim its owner from the first direct message
+  // (before policy — the default allowlist still denies everyone).
+  await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
+  const decision = evaluateInboundPolicy(instance, envelope);
+  if (!decision.allowed) {
+    await completeLedger({ status: 'rejected', reason: decision.reason || 'policy_rejected' });
+    return { accepted: false, duplicate: false, reason: decision.reason };
+  }
+  const text = stripBotMention(envelope.text).slice(0, 12_000);
+  if (!text) {
+    await completeLedger({ status: 'rejected', reason: 'empty_message' });
+    return { accepted: false, duplicate: false, reason: 'empty_message' };
+  }
+  // Session-reset slashes rotate the bound conversation to a fresh cid and
+  // confirm with a system message instead of consuming a Meta Agent turn
+  // (mirrors Hermes' `/new` session reset).
+  if (isNewSessionCommand(text)) {
+    try {
+      // 先取旧任务 cid（forceNew 会轮换），配对的其他渠道要跟着搬家。
+      const previous = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+      const oldCid = previous.cid;
+      const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope, { forceNew: true });
+      const runtime = runtimes.get(uid)?.get(instance.id);
+      // 跨渠道接续（G2）：/new 不许重新制造信息孤岛——与旧任务配对的渠道
+      // 一并指向新任务并重挂监听，各自收到一条跟随通知。
+      if (binding.cid !== oldCid) {
+        const peers = await bindings.listBindingsForTask(uid, oldCid);
+        for (const peer of peers) {
+          if (peer.key === binding.key) continue;
+          const moved = await bindings.pointBindingToTask(uid, peer.key, binding.cid);
+          if (!moved) continue;
+          const peerRuntime = runtimes.get(uid)?.get(peer.instanceId);
+          if (peerRuntime) {
+            peerRuntime.bindingContexts.set(peer.key, moved);
+            await peerRuntime.attachBindingListener(moved);
+            void peerRuntime
+              .deliverSystemNotice(moved, t('messaging.continuity.pair_task_rotated'))
+              .catch((error) => {
+                log.warn('messaging pair-rotation notice failed', {
+                  instanceId: peer.instanceId,
+                  key: peer.key,
+                  error: (error as Error).message,
+                });
+              });
+          }
+          log.info('continuity peer followed task rotation', {
+            uid,
+            instanceId: peer.instanceId,
+            fromCid: oldCid,
+            toCid: binding.cid,
+          });
+        }
+      }
+      if (runtime) {
+        runtime.detachBindingListener(binding.key);
+        runtime.bindingContexts.set(binding.key, binding);
+        await runtime.attachBindingListener(binding);
+        await runtime.deliverConfirmationMessage(binding, envelope);
+      } else {
+        log.warn('messaging new-session: runtime not present, confirmation skipped', {
+          instanceId: instance.id,
+        });
+      }
+      await completeLedger({ status: 'accepted', cid: binding.cid });
+      return { accepted: true, duplicate: false, cid: binding.cid };
+    } catch (error) {
+      const message = (error as Error).message || 'messaging new-session dispatch failed';
+      await completeLedger({ status: 'failed', reason: message });
+      throw new Error(`messaging new-session dispatch failed: ${message}`);
+    }
+  }
+  // 渠道任务接续（G0）撤权：已解绑的渠道会话只放行 /new（上面的分支已
+  // 处理并 return），其余消息——含一切 slash 命令——一律明确拒绝并引导，
+  // 绝不静默吞掉，也绝不无提示地重建绑定。
+  // （读 binding 与拒绝之间的窗口与本 handler 的处理锁并不同锁，理论上
+  // 存在瞬态 TOCTOU；但 /unbind 与 /new 都经 bindings 文件锁串行落盘，
+  // 最坏结果是并发消息读到旧状态、晚一轮才被拒——单条消息的可接受
+  // 延迟，不构成越权。）
+  const currentBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  if (currentBinding.unboundedAt) {
+    await completeLedger({ status: 'rejected', reason: 'binding_unbound' });
+    const runtime = runtimes.get(uid)?.get(instance.id);
+    if (runtime) {
+      await runtime.deliverText(currentBinding, envelope, t('messaging.continuity.unbound_reply'));
+    }
+    return { accepted: false, duplicate: false, reason: 'binding_unbound' };
+  }
+  // Personal-context slash commands（/权限 /遗忘）：consumed by registered
+  // handlers; the reply goes through the same ledger-backed delivery as the
+  // session-reset confirmation and never consumes an agent turn.
+  const inboundCommand = matchInboundCommand(text);
+  if (inboundCommand) {
+    const outcome = await dispatchInboundCommand({ uid, instance, envelope, command: inboundCommand });
+    if (outcome.consumed) {
+      const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+      const runtime = runtimes.get(uid)?.get(instance.id);
+      if (runtime) {
+        // 与下方常规入站路径同款刷新：命令可能改变绑定状态（G2 /mute
+        // /pair 落盘 mutedAt / 新 cid），出站快照必须跟上，否则静音拦不住、
+        // 监听重挂不触发。
+        runtime.bindingContexts.set(binding.key, binding);
+        await runtime.attachBindingListener(binding);
+      }
+      if (outcome.replyText && runtime) {
+        await runtime.deliverText(binding, envelope, outcome.replyText);
+      } else if (outcome.replyText) {
+        log.warn('messaging command reply skipped: runtime not present', {
+          instanceId: instance.id,
+          command: inboundCommand.name,
+        });
+      }
+      await completeLedger({ status: 'accepted', cid: binding.cid });
+      return { accepted: true, duplicate: false, cid: binding.cid };
+    }
+  }
+  try {
+    const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+    const runtime = runtimes.get(uid)?.get(instance.id);
+    log.info('messaging inbound accepted, dispatching to group chat', {
+      instanceId: instance.id,
+      key,
+      cid: binding.cid,
+      runtimePresent: !!runtime,
+      bindingKey: binding.key,
+    });
+    if (runtime) {
+      // Refresh the live binding (replyToMessageId etc.) so outbound replies
+      // reference the message they actually answer.
+      runtime.bindingContexts.set(binding.key, binding);
+      await runtime.attachBindingListener(binding);
+    }
+    // G-17：图片入站投影为最小 P3394 信封（派发元数据，字段形态对齐
+    // P3394Envelope 但不强求通过 validateP3394Envelope 完整校验——它不进
+    // 协议边界，只随消息贯穿派发链）：parts[0] 文本占位保证路由不退化，
+    // 其后每个 image_key 一个引用式格子 {type:'image', uri:'feishu-image:
+    // <key>'}（不内联字节，下载/物化由消费方决定）。message_id 带台账
+    // key 可互查；sender 用 Q3 渠道 peer 别名（同一 open_id 恒定）。
+    const p3394Envelope = imageKeys
+      ? buildInboundImageEnvelope({
+        key,
+        cid: binding.cid,
+        platform: envelope.platform,
+        instanceId: envelope.instanceId,
+        externalMessageId: envelope.externalMessageId,
+        senderAlias: channelPeerAlias(envelope.platform, envelope.externalUserId),
+        text,
+        imageKeys,
+      })
+      : undefined;
+    // G-17 附件导入（PR209 M4 复核返工）：锁内、策略/解绑检查之后、且
+    // binding.cid 为轮换后最新值——导入目标会话与派发会话恒一致。
+    const attachmentNames = await importInboundImagesFromTmp(uid, binding.cid, stagedImages);
+    const result = await groupChat.send({
+      userId: uid,
+      cid: binding.cid,
+      text,
+      ...(attachmentNames.length ? { attachments: attachmentNames } : {}),
+      ...(p3394Envelope ? { p3394_envelope: p3394Envelope } : {}),
+    });
+    if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
+    // Capture the inbound's context token reference keyed by the user message
+    // this turn starts from, so the completing turn's reply resolves its own
+    // ref even when a later inbound arrives while the turn is still in flight.
+    if (runtime && result.msg?.id && envelope.contextTokenRef) {
+      runtime.turnSourceRefs.set(result.msg.id, envelope.contextTokenRef);
+    }
+    await completeLedger({ status: 'accepted', cid: binding.cid });
+    return { accepted: true, duplicate: false, cid: binding.cid };
+  } catch (error) {
+    const message = (error as Error).message || 'messaging inbound dispatch failed';
+    await completeLedger({ status: 'failed', reason: message });
+    throw new Error(`messaging inbound dispatch failed: ${message}`);
+  }
+}
+
+/** Buttons on interactive cards are explicit operator actions: the clicker
+ * must be an allowed user (no group-mention requirement), and the payload
+ * decides the handler. Today the only wired action is wake approvals. */
+async function handleCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  if (!action || typeof action !== 'object' || !action.instanceId || !action.externalUserId || !action.action) {
+    return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+  }
+  const loaded = await registry.getInstanceWithSecret(uid, action.instanceId);
+  if (!loaded || loaded.instance.platform !== action.platform) {
+    return { accepted: false, duplicate: false, reason: 'instance_not_found' };
+  }
+  const instance = loaded.instance;
+  if (!instance.enabled) return { accepted: false, duplicate: false, reason: 'instance_disabled' };
+  if (!instance.policy.allowUserIds.includes(action.externalUserId)) {
+    return { accepted: false, duplicate: false, reason: 'user_not_allowed' };
+  }
+  // 触达点意图卡片（touchpoint 特性产出）：按钮 value 携带签名回执信封，
+  // 确认/拒绝等动作直接消费进触达点 ledger。
+  if (action.action === 'touchpoint') {
+    return handleTouchpointCardAction(uid, action);
+  }
+  // 候选确认卡片（personal_context 管线产出）：按钮 value 携带 candidate_id，
+  // 确认/拒绝直接落 personal_ontology 候选池，无 wake_id。
+  if (action.action === 'candidate_approve' || action.action === 'candidate_reject') {
+    const candidateId = typeof action.payload.candidate_id === 'string' ? action.payload.candidate_id.trim() : '';
+    if (!candidateId) return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+    if (action.action === 'candidate_approve') {
+      const result = await ontologyCandidates.confirmCandidate(uid, candidateId);
+      if (!result.ok) return { accepted: false, duplicate: false, reason: 'candidate_confirm_failed' };
+    } else {
+      await ontologyCandidates.rejectCandidate(uid, candidateId);
+    }
+    void finalizeCandidateCard(uid, action);
+    return { accepted: true, duplicate: false };
+  }
+
+  const wakeId = typeof action.payload.wake_id === 'string' && action.payload.wake_id.trim()
+    ? action.payload.wake_id.trim()
+    : '';
+  if (!wakeId) return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+  if (action.action === 'approve' || action.action === 'approve_once'
+    || action.action === 'approve_session' || action.action === 'approve_always') {
+    const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'approve' });
+    if (decision.ok === false) {
+      const reasonText = String(decision.error || '');
+      // Idempotent re-click: the wake already advanced past approval (it was
+      // approved earlier and may already be executing). Settle the card so
+      // the operator sees feedback instead of a silent no-op button.
+      if (/cannot be approved from (approved|executed|executing)/.test(reasonText)) {
+        void finalizeApprovalCard(uid, action);
+        return { accepted: true, duplicate: false };
+      }
+      void finalizeFailedCard(uid, action, reasonText || 'wake_approval_failed');
+      return { accepted: false, duplicate: false, reason: reasonText || 'wake_approval_failed' };
+    }
+    void finalizeApprovalCard(uid, action);
+    return { accepted: true, duplicate: false };
+  }
+  if (action.action === 'deny') {
+    const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'reject' });
+    if (decision.ok === false) {
+      const reasonText = String(decision.error || '');
+      // Denying an already-approved/executed wake is a legitimate miss (the
+      // operator was too late) — still surface why instead of silence.
+      void finalizeFailedCard(uid, action, reasonText || 'wake_rejection_failed');
+      return { accepted: false, duplicate: false, reason: reasonText || 'wake_rejection_failed' };
+    }
+    void finalizeApprovalCard(uid, action);
+    return { accepted: true, duplicate: false };
+  }
+  return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+}
+
+/** Buttons on touchpoint intent cards carry a signed receipt envelope in
+ * their value; clicking one consumes the action in the touchpoint ledger and
+ * swaps the card for its terminal state. Duplicate clicks are idempotent —
+ * the ledger returns the stored record and the card is not re-finalized. */
+async function handleTouchpointCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  const payloadText = (field: string): string => {
+    const entry = action.payload[field];
+    return typeof entry === 'string' && entry.trim() ? entry.trim() : '';
+  };
+  const intentId = payloadText('intent_id');
+  const actionId = payloadText('action_id');
+  const envelopeUserId = payloadText('user_id');
+  const kind = payloadText('kind');
+  const occurredAt = payloadText('occurred_at');
+  const signature = payloadText('signature');
+  // Free-text content from the card input field; trimmed, capped, and
+  // validated by the touchpoint receipt contract.
+  const content = payloadText(TOUCHPOINT_CARD_INPUT_ID);
+  if (!intentId || !actionId || !envelopeUserId || !kind || !occurredAt || !signature) {
+    return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+  }
+  try {
+    const outcome = await touchpointLedger.consumeTouchpointAction(uid, {
+      actionId,
+      intentId,
+      userId: envelopeUserId,
+      action: kind,
+      occurredAt,
+      signature,
+      ...(content ? { content } : {}),
+    });
+    if (!outcome.duplicate) {
+      void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind, content);
+      // Business effects (reschedule, update, …) run fire-and-forget; a
+      // failing handler never changes the accepted receipt outcome.
+      void touchpointActions.notifyTouchpointActionHandlers(uid, outcome.action).catch(() => undefined);
+    }
+    return { accepted: true, duplicate: outcome.duplicate };
+  } catch (error) {
+    log.warn('touchpoint card action rejected', {
+      instanceId: action.instanceId,
+      intentId,
+      action: kind,
+      error: logErrorSummary(error),
+    });
+    return { accepted: false, duplicate: false, reason: 'touchpoint_action_rejected' };
+  }
+}
+
+/** Replaces a resolved touchpoint card with its terminal state so the same
+ * buttons cannot be clicked twice (mirrors the wake approval finalize).
+ * Submitted content is echoed back on the resolved card. */
+async function finalizeTouchpointCard(uid: string, action: CardActionEnvelope, kind: TouchpointActionKind, content?: string): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedTouchpointCard(kind, content));
+  } catch (error) {
+    log.warn('touchpoint card finalize failed', {
+      instanceId: action.instanceId,
+      externalMessageId: action.externalMessageId,
+      error: logErrorSummary(error),
+    });
+  }
+}
+
+/** Localized terminal label for an approval choice. Keys mirror the card
+ * button action values so unknown choices fall back to the raw key. */
+function approvalChoiceLabel(choice: string): string {
+  return t(`messaging.approval.${choice}`);
+}
+
+/** Replaces a resolved approval card with a terminal state so the same
+ * buttons cannot be clicked twice (mirrors Hermes' resolved card). */
+function buildResolvedApprovalCard(choice: string, userName = ''): Record<string, JsonCompatibleValue> {
+  const denied = choice === 'deny';
+  const label = approvalChoiceLabel(choice);
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { content: `${denied ? '❌' : '✅'} ${label}`, tag: 'plain_text' },
+      template: denied ? 'red' : 'green',
+    },
+    elements: [
+      { tag: 'markdown', content: `${denied ? '❌' : '✅'} **${label}**${userName ? ` — ${userName}` : ''}` },
+    ],
+  };
+}
+
+async function finalizeApprovalCard(uid: string, action: CardActionEnvelope): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedApprovalCard(action.action));
+  } catch (error) {
+    log.warn('messaging approval card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** Terminal card for a wake button click that could not take effect (e.g.
+ *  re-clicking approve after the wake already executed). Without this the
+ *  click is a silent no-op from the operator's point of view. */
+async function finalizeFailedCard(uid: string, action: CardActionEnvelope, reason: string): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { content: t('messaging.wake_card.noop_title'), tag: 'plain_text' },
+        template: 'grey',
+      },
+      elements: [
+        { tag: 'markdown', content: `**${t('messaging.wake_card.noop_detail')}**\n\n\`${reason.slice(0, 300)}\`` },
+      ],
+    });
+  } catch (error) {
+    log.warn('messaging failed card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** Terminal card for a resolved personal-ontology candidate, so the same
+ * buttons cannot be clicked twice (mirrors approval card finalize). */
+function buildResolvedCandidateCard(approved: boolean): Record<string, JsonCompatibleValue> {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: {
+        content: approved ? t('messaging.candidate_card.confirmed') : t('messaging.candidate_card.rejected'),
+        tag: 'plain_text',
+      },
+      template: approved ? 'green' : 'red',
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: approved ? t('messaging.candidate_card.confirmed_detail') : t('messaging.candidate_card.rejected_detail'),
+      },
+    ],
+  };
+}
+
+async function finalizeCandidateCard(uid: string, action: CardActionEnvelope): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedCandidateCard(action.action === 'candidate_approve'));
+  } catch (error) {
+    log.warn('messaging candidate card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+async function startRuntime(uid: string, instanceId: string): Promise<void> {
+  const map = runtimeMap(uid);
+  if (map.has(instanceId)) return;
+  const loaded = await registry.getInstanceWithSecret(uid, instanceId);
+  if (!loaded || !loaded.instance.enabled) {
+    clearLiveStatus(uid, instanceId);
+    return;
+  }
+  // An enabled bot without an owner re-opens its binding window on startup,
+  // so a legacy configuration can claim its owner by sending the first
+  // direct message without touching the settings UI.
+  if (loaded.instance.platform === 'feishu_lark' && !(loaded.instance as MessagingInstanceInternal).ownerExternalUserId) {
+    openOwnerBindingWindow(uid, instanceId);
+  }
+  let adapter: MessagingAdapter;
+  try {
+    adapter = createAdapter(loaded.instance, loaded.secret, uid);
+  } catch (error) {
+    const message = (error as Error).message || 'messaging adapter initialization failed';
+    await registry.updateStatus(uid, instanceId, { kind: 'error', message, checkedAt: new Date().toISOString() });
+    throw new Error(`messaging adapter initialization failed: ${message}`);
+  }
+
+  let runtime: RuntimeInstance;
+  runtime = new RuntimeInstance({
+    uid,
+    instanceId,
+    instance: loaded.instance,
+    adapter,
+    isCurrent: () => runtimes.get(uid)?.get(instanceId) === runtime,
+  });
+  const callbacks: AdapterCallbacks = {
+    onInbound: async (envelope) => {
+      if (!isCurrentRuntime(uid, runtime)) return { accepted: false, duplicate: false, reason: 'instance_not_found' };
+      return enqueueInbound(uid, envelope);
+    },
+    resolveDelivery: async (deliveryId) => ledger.getDeliveryByExternalId(uid, instanceId, deliveryId),
+    onStatus: async (nextStatus) => {
+      log.info('messaging adapter status change', { instanceId, kind: nextStatus.kind, message: nextStatus.message || '' });
+      queueRuntimeStatus(uid, runtime, nextStatus);
+    },
+    onCardAction: async (action) => handleCardAction(uid, action),
+  };
+
+  map.set(instanceId, runtime);
+  queueRuntimeStatus(uid, runtime, { kind: 'connecting', checkedAt: new Date().toISOString() });
+  runtime.started = Promise.resolve()
+    .then(() => adapter.start(runtime.controller.signal, callbacks))
+    .catch(async (error) => {
+      if (!isCurrentRuntime(uid, runtime)) return;
+      const message = (error as Error).message || 'messaging adapter stopped unexpectedly';
+      queueRuntimeStatus(uid, runtime, { kind: 'error', message, checkedAt: new Date().toISOString() });
+      await runtime.statusWrite;
+      log.warn('messaging runtime stopped unexpectedly', { instanceId, error: message });
+    })
+    .finally(async () => {
+      log.info('messaging runtime lifecycle ended', { instanceId, wasCurrent: runtimes.get(uid)?.get(instanceId) === runtime });
+      await runtime.statusWrite;
+      if (runtimes.get(uid)?.get(instanceId) === runtime) {
+        runtimes.get(uid)?.delete(instanceId);
+        if (!runtimes.get(uid)?.size) runtimes.delete(uid);
+        clearLiveStatus(uid, instanceId);
+      }
+    });
+
+  try {
+    const existingBindings = await bindings.listBindings(uid);
+    for (const binding of existingBindings) {
+      if (binding.instanceId === instanceId) await runtime.attachBindingListener(binding);
+    }
+    // Resume deliveries that were interrupted by a previous process restart.
+    await runtime.recoverDeliveries();
+  } catch (error) {
+    log.warn('messaging binding listener restore failed', {
+      instanceId,
+      error: (error as Error).message,
+    });
+  }
+  // 第三期「渠道即节点」：实例运行即注册为 P3394 节点（幂等，桥未启动时静默跳过）
+  const bridgeRegister = registerChannelBridgeNode(loaded.instance);
+  if (!bridgeRegister.ok && bridgeRegister.error !== 'p3394_bridge_unavailable') {
+    log.warn('messaging channel-bridge node registration failed', {
+      instanceId,
+      error: bridgeRegister.error,
+    });
+  }
+}
+
+async function stopRuntime(uid: string, instanceId: string): Promise<void> {
+  const map = runtimes.get(uid);
+  const runtime = map?.get(instanceId);
+  if (!runtime) {
+    clearLiveStatus(uid, instanceId);
+    return;
+  }
+  runtime.active = false;
+  map?.delete(instanceId);
+  if (!map?.size) runtimes.delete(uid);
+  unregisterChannelBridgeNode(instanceId);
+  runtime.disposeTimers();
+
+  let stopFailure: Error | null = null;
+  try {
+    runtime.controller.abort();
+    await runtime.adapter.stop();
+  } catch (error) {
+    stopFailure = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    for (const unsubscribe of runtime.listeners.values()) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        log.warn('messaging binding listener cleanup failed', {
+          instanceId,
+          error: (error as Error).message,
+        });
+      }
+    }
+    runtime.listeners.clear();
+    try {
+      await runtime.waitForOutboundDeliveries();
+      await runtime.started;
+      await runtime.statusWrite;
+    } finally {
+      clearLiveStatus(uid, instanceId);
+    }
+  }
+  if (stopFailure) throw new Error(`messaging adapter stop failed: ${stopFailure.message}`);
+}
+
+async function startInstance(uid: string, instanceId: string): Promise<void> {
+  await withLifecycle(uid, instanceId, () => startRuntime(uid, instanceId));
+}
+
+export async function stopInstance(uid: string, instanceId: string): Promise<void> {
+  await withLifecycle(uid, instanceId, () => stopRuntime(uid, instanceId));
+}
+
+function sameWorkspace(left: WorkspaceScope, right: WorkspaceScope): boolean {
+  return left.type === right.type && left.spaceId === right.spaceId;
+}
+
+async function assertWorkspaceAvailable(uid: string, workspace: WorkspaceScope | undefined): Promise<void> {
+  if (!workspace || workspace.type === 'default') return;
+  if (!workspace.spaceId || !safeId(workspace.spaceId) || !await spaces.spaceExists(uid, workspace.spaceId)) {
+    throw new Error('messaging workspace space not found');
+  }
+}
+
+async function existingClient(uid: string, instanceId: string): Promise<MessagingInstanceClient> {
+  const instance = (await registry.listInstances(uid)).find((item) => item.id === instanceId);
+  if (!instance) throw new Error('messaging instance not found');
+  return withLiveStatus(uid, instance);
+}
+
+export async function createInstance(uid: string, input: registry.CreateMessagingInstanceInput): Promise<MessagingInstanceClient> {
+  assertUserId(uid);
+  await assertWorkspaceAvailable(uid, input.workspace);
+  return registry.createInstance(uid, input);
+}
+
+export async function startForUser(uid: string): Promise<void> {
+  assertUserId(uid);
+  const instances = await registry.listInstances(uid);
+  await Promise.all(instances.filter((instance) => instance.enabled).map((instance) => startInstance(uid, instance.id).catch((error) => {
+    log.warn('messaging instance start failed', { instanceId: instance.id, error: (error as Error).message });
+  })));
+}
+
+export async function stopForUser(uid: string): Promise<void> {
+  assertUserId(uid);
+  const instanceIds = Array.from(runtimes.get(uid)?.keys() || []);
+  await Promise.all(instanceIds.map((instanceId) => stopInstance(uid, instanceId)));
+  runtimes.delete(uid);
+  liveStatuses.delete(uid);
+}
+
+export async function restartInstance(uid: string, instanceId: string): Promise<void> {
+  await withLifecycle(uid, instanceId, async () => {
+    const instance = await registry.getInstance(uid, instanceId);
+    if (!instance) throw new Error('messaging instance not found');
+    if (!(await registry.getInstanceWithSecret(uid, instanceId))) {
+      throw new Error('messaging credentials required before restarting');
+    }
+    await stopRuntime(uid, instanceId);
+    await startRuntime(uid, instanceId);
+  });
+}
+
+export async function updateInstance(
+  uid: string,
+  instanceId: string,
+  input: registry.UpdateMessagingInstanceInput,
+): Promise<MessagingInstanceClient> {
+  return withLifecycle(uid, instanceId, async () => {
+    const current = await registry.getInstance(uid, instanceId);
+    if (!current) throw new Error('messaging instance not found');
+    await assertWorkspaceAvailable(uid, input.workspace);
+    const nextEnabled = typeof input.enabled === 'boolean' ? input.enabled : current.enabled;
+    const existingCredentials = await registry.getInstanceWithSecret(uid, instanceId);
+    const willHaveCredentials = !input.clearSecret && (input.secret !== undefined || !!existingCredentials);
+    if (nextEnabled && !willHaveCredentials) {
+      throw new Error('messaging credentials required before enabling');
+    }
+    const workspaceChanged = !!input.workspace && !sameWorkspace(current.workspace, input.workspace);
+    if (workspaceChanged) await bindings.removeBindingsForInstance(uid, instanceId);
+
+    const updated = await registry.updateInstance(uid, instanceId, input);
+    // A Feishu bot that just got credentials or was just enabled, without an
+    // owner yet, opens the auto-binding window: the first direct message
+    // claims the sender as the owner (renderer shows the hint).
+    if (updated.platform === 'feishu_lark' && !updated.ownerConfigured
+      && (input.secret !== undefined || (typeof input.enabled === 'boolean' && input.enabled))) {
+      openOwnerBindingWindow(uid, instanceId);
+    }
+    if (!nextEnabled) {
+      if (current.enabled) {
+        await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance disabled');
+        try {
+          await stopRuntime(uid, instanceId);
+        } finally {
+          await registry.updateStatus(uid, instanceId, { kind: 'disabled', checkedAt: new Date().toISOString() });
+        }
+        return { ...updated, status: { kind: 'disabled', checkedAt: new Date().toISOString() } };
+      }
+      return withLiveStatus(uid, updated);
+    }
+    if (current.enabled) await stopRuntime(uid, instanceId);
+    await startRuntime(uid, instanceId);
+    return existingClient(uid, instanceId);
+  });
+}
+
+export async function setEnabled(uid: string, instanceId: string, enabled: boolean): Promise<MessagingInstanceClient> {
+  if (typeof enabled !== 'boolean') throw new Error('invalid enabled value');
+  return updateInstance(uid, instanceId, { enabled });
+}
+
+export async function unbindInstance(uid: string, instanceId: string): Promise<MessagingInstanceClient> {
+  return withLifecycle(uid, instanceId, async () => {
+    const current = await registry.getInstance(uid, instanceId);
+    if (!current) throw new Error('messaging instance not found');
+    await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance unbound');
+    const client = await registry.updateInstance(uid, instanceId, { enabled: false, clearSecret: true });
+    try {
+      await stopRuntime(uid, instanceId);
+    } finally {
+      await registry.updateStatus(uid, instanceId, {
+        kind: 'disconnected',
+        checkedAt: new Date().toISOString(),
+        message: 'credentials removed',
+      });
+    }
+    return {
+      ...client,
+      status: { kind: 'disconnected', checkedAt: new Date().toISOString(), message: 'credentials removed' },
+    };
+  });
+}
+
+export async function deleteInstance(uid: string, instanceId: string): Promise<boolean> {
+  return withLifecycle(uid, instanceId, async () => {
+    const current = await registry.getInstance(uid, instanceId);
+    if (current?.enabled) await registry.updateInstance(uid, instanceId, { enabled: false });
+    await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance deleted');
+    try {
+      await stopRuntime(uid, instanceId);
+    } catch (error) {
+      log.warn('messaging instance stopped with cleanup error during deletion', {
+        instanceId,
+        error: (error as Error).message,
+      });
+    }
+
+    const results = await Promise.allSettled([
+      bindings.removeBindingsForInstance(uid, instanceId),
+      ledger.removeEntriesForInstance(uid, instanceId),
+      registry.deleteInstance(uid, instanceId),
+    ]);
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason));
+    if (failures.length) throw new Error(`messaging instance cleanup incomplete: ${failures.join('; ')}`);
+    clearLiveStatus(uid, instanceId);
+    return true;
+  });
+}
+
+export async function listInstances(uid: string): Promise<MessagingInstanceClient[]> {
+  assertUserId(uid);
+  const instances = await registry.listInstances(uid);
+  return instances.map((instance) => withLiveStatus(uid, instance));
+}
+
+/** Live connection status for one instance, or null when no runtime is
+ * registered. Disk state is deliberately degraded (`registry.normalizeStatus`
+ * never persists `connected`), so proactive senders must check the live
+ * status here instead of the persisted one — reading the file shows a
+ * connected instance as disconnected. */
+export async function getLiveInstanceStatus(
+  uid: string,
+  instanceId: string,
+): Promise<MessagingInstanceStatus | null> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  const live = runtime && runtime.active ? liveStatuses.get(uid)?.get(instanceId) : undefined;
+  return live ? cloneStatus(live) : null;
+}
+
+export async function health(uid: string, instanceId: string): Promise<MessagingInstanceStatus> {
+  return withLifecycle(uid, instanceId, async () => {
+    const loaded = await registry.getInstanceWithSecret(uid, instanceId);
+    if (!loaded) throw new Error('messaging credentials required before checking connection');
+    const runtime = runtimes.get(uid)?.get(instanceId);
+    const result = runtime && isCurrentRuntime(uid, runtime)
+      ? await runtime.adapter.checkHealth()
+      : await createAdapter(loaded.instance, loaded.secret, uid).checkHealth();
+    if (runtime && isCurrentRuntime(uid, runtime)) {
+      queueRuntimeStatus(uid, runtime, result);
+      await runtime.statusWrite;
+    } else {
+      await registry.updateStatus(uid, instanceId, result);
+    }
+    return cloneStatus(result);
+  });
+}
+
+export async function ingestInbound(uid: string, envelope: InboundEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  if (!envelope || typeof envelope !== 'object') throw new Error('invalid inbound envelope');
+  if (!envelope.instanceId || !envelope.externalMessageId || !envelope.externalChatId || !envelope.externalUserId || !envelope.text) {
+    throw new Error('inbound envelope missing required fields');
+  }
+  return handleInbound(uid, envelope);
+}
+
+export async function ingestCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  return handleCardAction(uid, action);
+}
+
+/** Send an interactive approval card through a running instance. The wake
+ * bridge (or any future caller) uses this to surface approvals on Feishu. */
+export async function sendApprovalCard(
+  uid: string,
+  instanceId: string,
+  chatId: string,
+  approval: {
+    wakeId: string;
+    title: string;
+    description: string;
+    allowSession?: boolean;
+    allowPermanent?: boolean;
+    replyToMessageId?: string;
+  },
+): Promise<{ deliveryId?: string }> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) throw new Error('messaging instance is not running');
+  if (!isCardAdapter(runtime.adapter) || !runtime.adapter.sendApprovalCard) {
+    throw new Error('approval cards are not supported by this instance');
+  }
+  return runtime.adapter.sendApprovalCard(chatId, approval, runtime.controller.signal);
+}
+
+/**
+ * 通用交互卡片投递（候选确认等 personal_context 场景）。
+ * 只接受结构化 card 对象 + chatId；调用方均为主进程内部模块，
+ * 卡片内容由构造方（features/personal_context）负责，不接收用户直通内容。
+ */
+export async function sendInteractiveCard(
+  uid: string,
+  instanceId: string,
+  chatId: string,
+  card: Record<string, JsonCompatibleValue>,
+): Promise<{ deliveryId?: string }> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  if (typeof chatId !== 'string' || !chatId.trim() || chatId.length > 512) throw new Error('invalid chat id');
+  if (!card || typeof card !== 'object' || Array.isArray(card)) throw new Error('invalid card payload');
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) throw new Error('messaging instance is not running');
+  if (!isCardAdapter(runtime.adapter) || !runtime.adapter.sendCard) {
+    throw new Error('interactive cards are not supported by this instance');
+  }
+  return runtime.adapter.sendCard(chatId, card, runtime.controller.signal);
+}
+
+export const _managerTestHooks = {
+  runtimeMap,
+  handleInbound,
+  handleCardAction,
+  buildResolvedApprovalCard,
+  stopInstance,
+  liveStatuses,
+  enqueueInbound,
+  setBroadcastOverride: (fn: ((channel: string, payload: unknown) => void) | null): void => {
+    broadcastOverride = fn;
+  },
+};

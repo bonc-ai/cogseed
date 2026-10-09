@@ -1,0 +1,970 @@
+/**
+ * Per-instance messaging runtime: owns the adapter connection lifecycle
+ * state, the bound-conversation bus listeners, the outbound delivery ledger
+ * path (idempotent send + retry + restart recovery), and the Feishu
+ * streaming-card state machine. The manager orchestrates runtimes (start/stop,
+ * status broadcast, inbound policy) and keeps the global registries; this
+ * class holds everything that is scoped to one running instance.
+ */
+
+import { createLogger } from '../../logger';
+import { t } from '../../i18n';
+import { subscribe, type GroupEvent } from '../group_chat/bus';
+import type { GroupMessage, WakeRequestSummary } from '../group_chat/visibility';
+import { COMMANDER_ID, USER_ID } from '../group_chat/state';
+import { listAgents } from '../agents';
+import * as ledger from './ledger';
+import type {
+  DeliveryLedgerEntry,
+  InboundEnvelope,
+  MessagingAdapter,
+  MessagingBinding,
+  MessagingInstance,
+} from './types';
+import { MAX_TOOL_LINES, toolLinesFromProcessEvent } from './tool-chrome';
+import {
+  CARD_FLUSH_DELAY_MS,
+  CARD_MAX_TEXT_LENGTH,
+  isCardAdapter,
+  cardStateKey,
+  cardEventTurnId,
+  buildStreamCard,
+} from './stream-card';
+
+const log = createLogger('messaging:runtime');
+
+export const OUTBOUND_MAX_ATTEMPTS = 3;
+export const OUTBOUND_RETRY_DELAYS_MS = [1_000, 5_000] as const;
+const MAX_RETRY_TIMER_DELAY_MS = 2_147_000_000;
+
+// ── Actor badge (F1 结果来源标注) ─────────────────────────────────────────
+
+/** agent id → display name cache, per uid, short TTL. Channel replies need
+ *  the executing agent's name on every turn end; reading the agent registry
+ *  each time is a small JSON read, so a 60s cache keeps it cheap while still
+ *  picking up renames reasonably fast. */
+const ACTOR_NAME_TTL_MS = 60_000;
+const actorNameCache = new Map<string, { stamp: number; names: Map<string, string> }>();
+
+async function loadActorNames(uid: string): Promise<Map<string, string>> {
+  const cached = actorNameCache.get(uid);
+  if (cached && Date.now() - cached.stamp < ACTOR_NAME_TTL_MS) return cached.names;
+  const names = new Map<string, string>();
+  try {
+    for (const agent of await listAgents()) {
+      if (agent?.agent_id && typeof agent.name === 'string' && agent.name) {
+        names.set(agent.agent_id, agent.name);
+      }
+    }
+  } catch (error) {
+    log.warn('messaging actor name lookup failed', { uid, error: (error as Error).message });
+  }
+  actorNameCache.set(uid, { stamp: Date.now(), names });
+  return names;
+}
+
+/** Resolve a human-facing badge label for the actor that produced a reply:
+ *  the executing agent's display name, or the localized commander title.
+ *  Returns null when no badge applies (user's own messages, unknown ids) —
+ *  callers skip the prefix rather than leaking a raw actor id. */
+export async function resolveActorLabel(uid: string, actorId: string | undefined): Promise<string | null> {
+  if (!actorId || actorId === USER_ID) return null;
+  if (actorId === COMMANDER_ID) return t('messaging.continuity.badge_commander');
+  const names = await loadActorNames(uid);
+  return names.get(actorId) || null;
+}
+
+/** Prefix a reply with its executor badge. Pure function (exported for tests). */
+export function withActorBadge(text: string, label: string | null): string {
+  if (!label) return text;
+  return `【${label}】 ${text}`;
+}
+
+/** F4 失败回执的错误摘要清洗（纯函数，导出供测试）：剥掉本地绝对路径
+ *  只留文件名——错误串常含 /Users/<name>/… 前缀，渠道回执不该外泄。
+ *  PR209 评审 M1：此前排除式正则遇含空格路径段失效（实测
+ *  "/Users/alice smith/…/main.ts" → "alice smithmain.ts" 用户名前缀外
+ *  泄；"C:\Users\bob smith\…" 原样不剥）。改为 token 状态机：
+ *  1) 按空白切 token，含 / 或 \ 的 token 只留 basename；
+ *  2) 跨空格路径延续拼合——前一 token 已是路径（含分隔符）且本 token
+ *     以词开头但含分隔符（"smith/Desktop/…"）= 含空格目录名的续段，
+ *     无缝并入前一 token（吞掉中间空白），再统一剥 basename。
+ *  对任意用户名（空格/中文/点）稳定；多路径同串各自独立剥离。
+ *  M1 复核收窄（引号段 + 家目录一级占位）：状态机对「路径以含空格段
+ *  结尾」仍有盲区（basename 本身=用户名，剥了也泄）。两规则堵高频形态：
+ *  a) 引号包裹的含分隔符串整段处理——basename 含空白 → 输出 [路径]；
+ *  b) 家目录一级（/Users/x、/home/x、C:\Users\x，恰一段）的紧邻无
+ *     分隔符 token 视为含空格用户名续段并入，整段同样占位（家目录
+ *     basename 即用户名，是泄漏风险最高的形态；代价是误吞该位置一个
+ *     普通词——信息损失，不泄漏）。 */
+const HOME_ONE_LEVEL_RE = /^(?:\/Users|\/home|[A-Za-z]:\/Users)\/[^/]+$/;
+
+function isHomeOneLevel(token: string): boolean {
+  return HOME_ONE_LEVEL_RE.test(token.replace(/\\/g, '/'));
+}
+
+/** 家目录一级尾段是否为纯可打印 ASCII：ASCII 用户名（alice）可能带空格
+ *  续段（"alice smith"），需并入一次；非 ASCII 用户名（测试用户甲）不含
+ *  空格、本身即完整段——直接占位，不吞其后的普通词。 */
+function homeDirTailIsAscii(token: string): boolean {
+  const tail = token.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  return /^[\x20-\x7E]+$/.test(tail);
+}
+
+export function sanitizeFailureText(error: string): string {
+  // 规则 a：引号段整段处理（配对的单/双引号；inner 含分隔符才算路径）。
+  const unquoted = String(error || '').replace(/(['"])([^'"\n]*)\1/g, (quoted, _q, inner) => {
+    if (!/[/\\]/.test(inner)) return quoted as string;
+    const base = String(inner).split(/[/\\]/).filter(Boolean).pop() || '';
+    return /\s/.test(base) ? '[路径]' : (base as string);
+  });
+  const parts = unquoted.split(/(\s+)/);
+  const out: string[] = [];
+  // 规则 b 的并入只做一次（按 out 下标记）：并入产物本身仍匹配家目录
+  // 一级形态，不设限会把后续普通词全部连拼进来。
+  const homeMergedAt = new Set<number>();
+  const lastNonSpaceIdx = (): number => {
+    for (let j = out.length - 1; j >= 0; j -= 1) {
+      if (out[j] !== '' && !/^\s+$/.test(out[j])) return j;
+    }
+    return -1;
+  };
+  for (const t of parts) {
+    if (t === '' || /^\s+$/.test(t)) { out.push(t); continue; }
+    if (!/[/\\]/.test(t)) {
+      // 规则 b：家目录一级的紧邻词 = 含空格用户名续段（如
+      // "open /Users/alice smith failed" 的 "smith"），并入后整段占位。
+      // 仅限 ASCII 尾段（非 ASCII 用户名无空格，不吞其后的词）。
+      const pi0 = lastNonSpaceIdx();
+      if (pi0 >= 0 && !homeMergedAt.has(pi0) && isHomeOneLevel(out[pi0]) && homeDirTailIsAscii(out[pi0])) {
+        out.length = pi0 + 1;
+        out[pi0] = `${out[pi0]} ${t}`;
+        homeMergedAt.add(pi0);
+        continue;
+      }
+      out.push(t); continue;
+    }
+    const startsWithSep = /^[/\\]/.test(t);
+    const pi = lastNonSpaceIdx();
+    if (pi >= 0) {
+      const prev = out[pi];
+      if (/[/\\]/.test(prev) && !startsWithSep) {
+        out.length = pi + 1;
+        out[pi] = prev + t;
+        continue;
+      }
+    }
+    out.push(t);
+  }
+  return out.map((t) => {
+    if (!/[/\\]/.test(t)) return t;
+    if (isHomeOneLevel(t)) return '[路径]';
+    return t.split(/[/\\]/).filter(Boolean).pop() || '';
+  }).join('');
+}
+
+interface CardStreamState {
+  messageId?: string;
+  accumulated: string;
+  timer: ReturnType<typeof setTimeout> | null;
+  /** A flush is in flight. Prevents the debounce from scheduling a second
+   * concurrent flush while the first is awaiting the network — two parallel
+   * flushes both see an empty `messageId` and each create their own card. */
+  flushing: boolean;
+}
+
+interface OutboundMessage {
+  /** Stable per-message id used as the delivery idempotency key. All inbound
+   * platforms normalize their native ids (Feishu `om_*`, iLink numeric ids)
+   * to strings before this point, so the id is always present. */
+  id: string;
+  from?: string;
+  text?: string;
+  dispatch?: boolean;
+}
+
+export interface RuntimeOptions {
+  uid: string;
+  instanceId: string;
+  instance: MessagingInstance;
+  adapter: MessagingAdapter;
+  /** Live check that this runtime is still the registered one for its
+   * (uid, instanceId) pair. Injected by the manager so this class never
+   * imports the manager (no circular dependency). */
+  isCurrent: () => boolean;
+}
+
+export class RuntimeInstance {
+  readonly uid: string;
+  readonly instanceId: string;
+  instance: MessagingInstance;
+  readonly adapter: MessagingAdapter;
+  readonly controller = new AbortController();
+  started: Promise<void> = Promise.resolve();
+  readonly listeners = new Map<string, () => void>();
+  /** 跨渠道接续（G2-1）：每个已挂监听实际订阅的 cid。attachBindingListener
+   *  依此识别"绑定被配对指向了另一任务"（同 key、cid 变了）并自动重挂——
+   *  否则入站路径的幂等检查会让旧任务的订阅一直占着 key。 */
+  private readonly listenerCids = new Map<string, string>();
+  readonly outboundDeliveries = new Set<Promise<void>>();
+  active = true;
+  statusWrite: Promise<void> = Promise.resolve();
+  readonly bindingContexts = new Map<string, MessagingBinding>();
+  retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Streaming-card state keyed by `binding.key + turn_id`. */
+  readonly cardStates = new Map<string, CardStreamState>();
+  /** Rendered tool-call chrome lines keyed by turn_id, for both card and
+   * plain-text reply paths. */
+  readonly toolLinesByTurn = new Map<string, string[]>();
+  /** Wechat-personal only: `contextTokenRef` captured per inbound at
+   * processing time, keyed by the group-chat user message id the inbound
+   * produced. The turn-end handler consumes the entry for the completing
+   * turn (via the event's `source_msg_id`) so an interleaved later inbound
+   * can never supply the token for an earlier turn's reply. */
+  readonly turnSourceRefs = new Map<string, string>();
+  private readonly isCurrent: () => boolean;
+
+  constructor(options: RuntimeOptions) {
+    this.uid = options.uid;
+    this.instanceId = options.instanceId;
+    this.instance = options.instance;
+    this.adapter = options.adapter;
+    this.isCurrent = options.isCurrent;
+  }
+
+  // ── Tool chrome ──────────────────────────────────────────────────────────
+
+  /** Accumulate rendered tool lines for a turn (bounded to MAX_TOOL_LINES). */
+  recordToolLines(event: Extract<GroupEvent, { type: 'process' }>): void {
+    const lines = toolLinesFromProcessEvent(event);
+    if (!lines.length) return;
+    const turnId = cardEventTurnId(event);
+    if (!turnId) return;
+    let perTurn = this.toolLinesByTurn.get(turnId);
+    if (!perTurn) {
+      perTurn = [];
+      this.toolLinesByTurn.set(turnId, perTurn);
+    }
+    for (const line of lines) {
+      if (perTurn.length >= MAX_TOOL_LINES) perTurn.shift();
+      perTurn.push(line);
+    }
+  }
+
+  /** Tool lines of a turn, bounded to the card display cap. */
+  toolLinesForTurn(turnId: string): string[] {
+    const lines = this.toolLinesByTurn.get(turnId);
+    if (!lines || !lines.length) return [];
+    return lines.length > MAX_TOOL_LINES ? lines.slice(-MAX_TOOL_LINES) : lines;
+  }
+
+  /** Drop per-turn tool lines once the turn is finished. */
+  clearToolLinesForTurn(turnId: string): void {
+    this.toolLinesByTurn.delete(turnId);
+  }
+
+  // ── Context token references ─────────────────────────────────────────────
+
+  /** Resolve the context token reference for one completing turn. The per-turn
+   * capture (keyed by the user message id that triggered the turn) is
+   * authoritative and is consumed on use; the binding's latest-inbound ref is
+   * only a fallback for turns the manager cannot trace to an inbound (e.g.
+   * nested agent turns carry their own synthetic source ids) and can never
+   * override the per-turn capture. */
+  resolveTurnContextTokenRef(
+    turnSourceMsgId: string | undefined,
+    binding: MessagingBinding,
+  ): string | undefined {
+    if (turnSourceMsgId) {
+      const perTurn = this.turnSourceRefs.get(turnSourceMsgId);
+      this.turnSourceRefs.delete(turnSourceMsgId);
+      if (perTurn) return perTurn;
+    }
+    return binding.contextTokenRef;
+  }
+
+  // ── Outbound delivery ────────────────────────────────────────────────────
+
+  /** One ledger-backed send attempt. Success finishes the delivery; failure
+   * schedules a bounded retry, or a terminal `failed` when attempts are
+   * exhausted. A stopped runtime cancels the delivery instead of retrying. */
+  async attemptDelivery(key: string, entry: DeliveryLedgerEntry): Promise<void> {
+    if (!this.isCurrent()) return;
+    try {
+      // Interactive-card sends (touchpoint intents) replay through sendCard;
+      // file sends go through sendFile when the adapter supports it;
+      // everything else stays on the plain-text path. Non-card/file adapters
+      // fall back to text so an entry can never wedge a delivery.
+      const receipt = entry.card && isCardAdapter(this.adapter)
+        ? await this.adapter.sendCard(
+          entry.recipientId,
+          entry.card,
+          this.controller.signal,
+          deliveryContext(entry),
+        )
+        : entry.file && typeof this.adapter.sendFile === 'function'
+          ? await this.adapter.sendFile(
+            entry.recipientId,
+            entry.file.path,
+            entry.file.name,
+            this.controller.signal,
+            deliveryContext(entry),
+          )
+          : await this.adapter.sendMessage(
+            entry.recipientId,
+            entry.text || '',
+            this.controller.signal,
+            deliveryContext(entry),
+          );
+      await ledger.finishDelivery(this.uid, key, {
+        status: 'sent',
+        ...(receipt.deliveryId ? { externalDeliveryId: receipt.deliveryId } : {}),
+      });
+    } catch (error) {
+      if (!this.isCurrent() || this.controller.signal.aborted) {
+        await ledger.finishDelivery(this.uid, key, {
+          status: 'cancelled',
+          error: 'delivery cancelled because messaging instance stopped',
+        });
+        return;
+      }
+      const messageText = (error as Error).message || 'delivery failed';
+      await this.scheduleRetry(key, messageText);
+    }
+  }
+
+  private async scheduleRetry(key: string, messageText: string): Promise<void> {
+    const entry = await ledger.getDelivery(this.uid, key);
+    if (!entry) return;
+    if (entry.attempts >= OUTBOUND_MAX_ATTEMPTS) {
+      await ledger.finishDelivery(this.uid, key, { status: 'failed', error: messageText });
+      log.warn('messaging delivery failed after retries', {
+        instanceId: this.instanceId,
+        key,
+        attempts: entry.attempts,
+        error: messageText,
+      });
+      return;
+    }
+    const delayMs = OUTBOUND_RETRY_DELAYS_MS[Math.min(entry.attempts - 1, OUTBOUND_RETRY_DELAYS_MS.length - 1)];
+    const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+    await ledger.finishDelivery(this.uid, key, { status: 'retry_pending', error: messageText, nextAttemptAt });
+    await this.scheduleRetryTimer();
+  }
+
+  private async retryDelayMs(): Promise<number | null> {
+    const nextAt = await ledger.nextRecoverableDeliveryAt(this.uid, this.instanceId);
+    if (nextAt === null) return null;
+    return Math.max(0, Math.min(nextAt - Date.now(), MAX_RETRY_TIMER_DELAY_MS));
+  }
+
+  private async scheduleRetryTimer(): Promise<void> {
+    if (this.retryTimer !== null) return;
+    const delay = await this.retryDelayMs();
+    if (delay === null) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.recoverDeliveries();
+    }, delay);
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  /** Resume deliveries that were interrupted by a previous process restart. */
+  async recoverDeliveries(): Promise<void> {
+    if (!this.isCurrent()) return;
+    const due = await ledger.listRecoverableDeliveries(this.uid, this.instanceId);
+    for (const entry of due) {
+      if (!this.isCurrent()) return;
+      const begun = await ledger.beginDelivery(this.uid, beginDeliveryEntry(this.instanceId, entry, { id: entry.sourceMessageId, text: entry.text || '' }, entry.text || '', entry.idempotencyKey, entry.contextTokenRef));
+      if (begun.duplicate) continue;
+      await this.attemptDelivery(entry.key, begun.entry);
+    }
+    await this.scheduleRetryTimer();
+  }
+
+  /** Deliver one agent reply through the ledger path. Dispatch/user messages
+   * are not replies and are skipped. */
+  private async deliverGroupMessage(
+    binding: MessagingBinding,
+    message: OutboundMessage,
+    turnSourceMsgId?: string,
+  ): Promise<void> {
+    if (!this.isCurrent()) return;
+    const sourceMessageId = typeof message.id === 'string' && message.id ? message.id : '';
+    const text = typeof message.text === 'string' ? message.text.trim().slice(0, 12_000) : '';
+    if (!sourceMessageId || !text || message.dispatch || message.from === 'user') return;
+    const key = ledger.deliveryKey(this.instanceId, sourceMessageId);
+    const begun = await ledger.beginDelivery(
+      this.uid,
+      beginDeliveryEntry(this.instanceId, binding, message, text, undefined, this.resolveTurnContextTokenRef(turnSourceMsgId, binding)),
+    );
+    if (begun.duplicate) return;
+    if (!this.isCurrent() || this.controller.signal.aborted) {
+      await ledger.finishDelivery(this.uid, key, {
+        status: 'cancelled',
+        error: 'delivery cancelled because messaging instance stopped',
+      });
+      return;
+    }
+    await this.attemptDelivery(key, begun.entry);
+  }
+
+  private trackOutboundDelivery(
+    binding: MessagingBinding,
+    message: OutboundMessage,
+    turnSourceMsgId?: string,
+  ): void {
+    // G2-2 静音：本渠道只进不出——台账型出站（回合正文/失败回执）整体抑制。
+    if (binding.mutedAt) {
+      log.info('messaging outbound suppressed (binding muted)', {
+        instanceId: this.instanceId,
+        key: binding.key,
+        messageId: message.id,
+      });
+      return;
+    }
+    const delivery = this.deliverGroupMessage(binding, message, turnSourceMsgId);
+    this.outboundDeliveries.add(delivery);
+    void delivery.then(
+      () => {
+        this.outboundDeliveries.delete(delivery);
+      },
+      (error) => {
+        this.outboundDeliveries.delete(delivery);
+        log.warn('messaging delivery callback failed', {
+          instanceId: this.instanceId,
+          error: (error as Error).message,
+        });
+      },
+    );
+  }
+
+  async waitForOutboundDeliveries(): Promise<void> {
+    // Listeners are removed before this wait starts, but loop defensively in
+    // case a callback that was already queued registers its delivery first.
+    while (this.outboundDeliveries.size) {
+      await Promise.allSettled(Array.from(this.outboundDeliveries));
+    }
+  }
+
+  /** Send the session-reset confirmation through the same ledger-backed path
+   * as ordinary replies, keyed on the inbound command message. */
+  async deliverConfirmationMessage(binding: MessagingBinding, envelope: InboundEnvelope): Promise<void> {
+    // Mirrors Hermes' `gateway.reset.header_default` banner.
+    await this.deliverText(binding, envelope, t('messaging.new_session_confirmation'));
+  }
+
+  /** Ledger-backed text reply to an inbound message (slash-command replies,
+   *  banners, system notices). Idempotent on the inbound message id: a
+   *  redelivery of the same inbound message never sends twice. */
+  async deliverText(binding: MessagingBinding, envelope: InboundEnvelope, text: string): Promise<void> {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    if (!trimmed) return;
+    // G2-2 静音说明：本方法承载的是"用户刚敲的命令的即时回声"（命令回执、
+    // 撤权引导），不拦——否则静音渠道里 /status 无响应、/unmute 的解除
+    // 确认也被吞，用户无法自救。静音只抑制任务产出（trackOutboundDelivery
+    // 与流式卡片）。
+    const key = ledger.deliveryKey(this.instanceId, envelope.externalMessageId);
+    const begun = await ledger.beginDelivery(
+      this.uid,
+      beginDeliveryEntry(this.instanceId, binding, { id: envelope.externalMessageId, text: trimmed }, trimmed, undefined, envelope.contextTokenRef),
+    );
+    if (begun.duplicate) return;
+    await this.attemptDelivery(key, begun.entry);
+  }
+
+  // ── Binding bus listener ─────────────────────────────────────────────────
+
+  /** Subscribe to the bound conversation's group-chat bus events and route
+   *  them into the reply/card machinery. One listener per binding key;
+   *  re-attaching after the binding was pointed at a different task (G2-1
+   *  /pair) swaps the subscription to the new cid automatically. */
+  async attachBindingListener(binding: MessagingBinding): Promise<void> {
+    if (!this.isCurrent()) return;
+    if (this.listeners.has(binding.key)) {
+      // True idempotency requires the SAME cid; a changed cid means the
+      // binding joined another task — tear the old subscription down first.
+      if (this.listenerCids.get(binding.key) === binding.cid) return;
+      this.detachBindingListener(binding.key);
+    }
+    const streamingEnabled = this.instance.responseMode === 'streaming_card' && isCardAdapter(this.adapter);
+    log.info('messaging binding listener attached', { instanceId: this.instanceId, key: binding.key, cid: binding.cid, streamingEnabled });
+    const unsubscribe = subscribe(this.uid, binding.cid, (event: GroupEvent) => {
+      if (!this.isCurrent()) {
+        log.info('messaging bus event dropped: runtime no longer current', {
+          instanceId: this.instanceId,
+          key: binding.key,
+          eventType: event.type,
+        });
+        return;
+      }
+      // The listener closure holds the binding snapshot from attach time; the
+      // live binding (fresh replyToMessageId etc.) lives in bindingContexts and
+      // is refreshed on every inbound message. Always send against the latest
+      // so replies reference the message they actually answer.
+      const currentBinding = this.bindingContexts.get(binding.key) || binding;
+      // PR209 评审 M13：/unbind 后抑制任务产出的出站投递。此前只拦入站
+      // （manager 侧拒绝），长回合的正文/流式卡片仍会投递到已解绑渠道
+      // 直到 /new 换绑。命令即时回声（deliverText 直发路径，不走本
+      // listener）不受影响——/unbind 的确认本身要送达。醒审批卡属
+      // 交互请求，解绑渠道不应再收：一并抑制。
+      if (currentBinding.unboundedAt) {
+        log.info('messaging bus event dropped: binding unbound', {
+          instanceId: this.instanceId,
+          key: currentBinding.key,
+          eventType: event.type,
+        });
+        return;
+      }
+      if (event.type === 'wake_request') {
+        // A pending agent wake inside this bound conversation surfaces as an
+        // interactive approval card in the same Feishu chat.
+        if (event.request.status === 'pending') {
+          void this.sendWakeApprovalCard(currentBinding, event.request).catch((error) => {
+            log.warn('messaging wake approval card send failed', {
+              instanceId: this.instanceId,
+              error: (error as Error).message,
+            });
+          });
+        }
+        return;
+      }
+      if (event.type === 'process') {
+        // Tool chrome is collected for every response mode; the card path
+        // renders it live while the plain-text path merges it at turn end.
+        this.recordToolLines(event);
+        if (streamingEnabled) this.handleCardProcessEvent(currentBinding, event);
+        return;
+      }
+      if (event.type === 'turn_silent') {
+        // A silent turn produced no reply: release its captured context token
+        // reference so it can never leak into a later delivery.
+        if (event.source_msg_id) this.turnSourceRefs.delete(event.source_msg_id);
+        if (streamingEnabled) this.handleCardTurnSilent(currentBinding, event);
+        // 渠道任务接续（G0）：意外失败（event.error 非空）给用户一条明确的
+        // 失败回执，而不是渠道侧一片沉默。正常 silent / 用户取消不带 error。
+        if (event.error) {
+          void this.handleTurnFailure(currentBinding, event).catch((error) => {
+            log.warn('messaging turn-failure notice delivery failed', {
+              instanceId: this.instanceId,
+              key: currentBinding.key,
+              error: (error as Error).message,
+            });
+          });
+        }
+        return;
+      }
+      if (!isMessageEvent(event) || event.turn_end !== true) return;
+      log.info('messaging bus turn-end message event', {
+        instanceId: this.instanceId,
+        key: binding.key,
+        msgId: event.msg?.id,
+        textLen: typeof event.msg?.text === 'string' ? event.msg.text.length : 0,
+      });
+      void this.handleTurnEndMessage(currentBinding, event).catch((error) => {
+        log.warn('messaging turn-end delivery failed', {
+          instanceId: this.instanceId,
+          error: (error as Error).message,
+        });
+      });
+    });
+    this.listeners.set(binding.key, unsubscribe);
+    this.listenerCids.set(binding.key, binding.cid);
+  }
+
+  /** 退订并移除一个绑定的总线监听（attach 重挂与外部清理共用）。 */
+  detachBindingListener(key: string): void {
+    const unsubscribe = this.listeners.get(key);
+    if (unsubscribe) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        log.warn('messaging bus listener unsubscribe failed', {
+          instanceId: this.instanceId,
+          key,
+          error: (error as Error).message,
+        });
+      }
+    }
+    this.listeners.delete(key);
+    this.listenerCids.delete(key);
+  }
+
+  /** 跨渠道接续（G2-1）：向绑定渠道投递一条系统通知（非命令回声、非
+   *  任务回复——用于"任务已被另一渠道翻新，本渠道已跟随"这类跨渠道
+   *  联动提示）。合成唯一 externalMessageId 保证台账幂等。 */
+  async deliverSystemNotice(binding: MessagingBinding, text: string): Promise<void> {
+    const envelope: InboundEnvelope = {
+      platform: this.instance.platform as InboundEnvelope['platform'],
+      instanceId: this.instanceId,
+      externalMessageId: `sys-${binding.key}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      externalChatId: binding.externalChatId,
+      externalUserId: binding.externalUserId,
+      text: '',
+      isGroup: binding.conversationScope === 'group_sender',
+      mentionPresent: false,
+      receivedAt: new Date().toISOString(),
+    };
+    await this.deliverText(binding, envelope, text);
+  }
+
+  // ── Approval cards ───────────────────────────────────────────────────────
+
+  /** Bridge a pending wake request into an interactive approval card on the
+   * bound Feishu chat. Buttons route back through ingestCardAction → the wake
+   * gate; the card is finalized by handleCardAction after the decision. */
+  private async sendWakeApprovalCard(
+    binding: MessagingBinding,
+    request: WakeRequestSummary,
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!isCardAdapter(adapter) || !adapter.sendApprovalCard) return;
+    const agentLabel = request.agent_name || request.agent_id;
+    await adapter.sendApprovalCard(binding.externalChatId, {
+      wakeId: request.id,
+      title: t('messaging.approval.title_needed', { agent: agentLabel }),
+      description: request.objective.slice(0, 1500),
+      allowSession: true,
+      allowPermanent: false,
+    }, this.controller.signal);
+  }
+
+  // ── Streaming cards ──────────────────────────────────────────────────────
+
+  private clearCardTimer(state: CardStreamState): void {
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+  }
+
+  private async flushCardUpdate(
+    binding: MessagingBinding,
+    key: string,
+    state: CardStreamState,
+  ): Promise<void> {
+    if (state.flushing) return;
+    // PR209 评审 M13（复核补齐）：debounce 定时器与尾随 flush 不经过 bus
+    // listener 头部的 unboundedAt 检查（闭包捕获的是 attach/分发时的旧
+    // 快照）——流式中途 /unbind 后仍可能再推一帧。这里用 bindingContexts
+    // 的 live 版本复查（manager 在 unbind 后刷新该表），解绑即停推并清
+    // 掉该 turn 的卡片状态。
+    const liveBinding = this.bindingContexts.get(binding.key) || binding;
+    if (liveBinding.unboundedAt) {
+      this.clearCardTimer(state);
+      this.cardStates.delete(key);
+      log.info('messaging streaming card dropped: binding unbound', {
+        instanceId: this.instanceId,
+        key: liveBinding.key,
+      });
+      return;
+    }
+    const turnId = key.split('\u0000')[1] || '';
+    const flushedToolCount = this.toolLinesForTurn(turnId).length;
+    if (!this.isCurrent() || (!state.accumulated && flushedToolCount === 0)) return;
+    state.flushing = true;
+    const flushedLen = state.accumulated.length;
+    try {
+      const adapter = this.adapter;
+      if (!isCardAdapter(adapter)) return;
+      const toolLines = this.toolLinesForTurn(turnId);
+      const card = buildStreamCard(this.instance.displayName, toolLines, state.accumulated);
+      if (state.messageId) {
+        await adapter.updateCard(state.messageId, card, this.controller.signal);
+      } else {
+        const receipt = await adapter.sendCard(liveBinding.externalChatId, card, this.controller.signal, deliveryContext(liveBinding));
+        state.messageId = receipt.deliveryId;
+        log.info('messaging streaming card created', {
+          instanceId: this.instanceId,
+          turnId: key.split('\u0000')[1] || '',
+          deliveryId: receipt.deliveryId || '',
+          textLen: state.accumulated.length,
+        });
+      }
+    } catch (error) {
+      if (!this.isCurrent() || this.controller.signal.aborted) return;
+      log.warn('messaging streaming card delivery failed', {
+        instanceId: this.instanceId,
+        hadMessageId: !!state.messageId,
+        error: (error as Error).message,
+      });
+      this.clearCardTimer(state);
+      this.cardStates.delete(key);
+    } finally {
+      state.flushing = false;
+      // Deltas or tool lines that arrived while this flush was awaiting the
+      // network were only accumulated (the debounce saw `flushing` and skipped
+      // scheduling). Trail one more flush so the latest content still reaches
+      // the card.
+      if (this.isCurrent()
+        && (state.accumulated.length > flushedLen || this.toolLinesForTurn(turnId).length > flushedToolCount)) {
+        this.scheduleCardFlush(binding, key, state);
+      }
+    }
+  }
+
+  private scheduleCardFlush(binding: MessagingBinding, key: string, state: CardStreamState): void {
+    if (state.timer !== null || state.flushing) return;
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      void this.flushCardUpdate(binding, key, state);
+    }, CARD_FLUSH_DELAY_MS);
+  }
+
+  private handleCardProcessEvent(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'process' }>,
+  ): void {
+    // G2-2 静音：流式卡片同样属于出站，静音渠道不创建/更新卡片。
+    if (binding.mutedAt) return;
+    const data = event.data && typeof event.data === 'object' ? event.data : {};
+    const isDelta = data.type === 'delta' && typeof data.text === 'string';
+    if (!isDelta && !toolLinesFromProcessEvent(event).length) return;
+    const turnId = cardEventTurnId(event);
+    if (!turnId) return;
+    const key = cardStateKey(binding.key, turnId);
+    let state = this.cardStates.get(key);
+    if (!state) {
+      state = { accumulated: '', timer: null, flushing: false };
+      this.cardStates.set(key, state);
+      log.info('messaging streaming card state created', {
+        instanceId: this.instanceId,
+        turnId,
+        cardStates: this.cardStates.size,
+        keys: [...this.cardStates.keys()].map((k) => k.split('\u0000')[1] || ''),
+      });
+    }
+    if (isDelta) {
+      state.accumulated = (state.accumulated + data.text).slice(0, CARD_MAX_TEXT_LENGTH);
+    }
+    this.scheduleCardFlush(binding, key, state);
+  }
+
+  private async finalizeCardForTurnEnd(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'message' }>,
+    actorLabel?: string | null,
+  ): Promise<boolean> {
+    const turnId = cardEventTurnId(event);
+    if (!turnId) return false;
+    const key = cardStateKey(binding.key, turnId);
+    const state = this.cardStates.get(key);
+    log.info('messaging streaming card finalize', {
+      instanceId: this.instanceId,
+      key,
+      turnId,
+      statePresent: !!state,
+      cardStates: this.cardStates.size,
+    });
+    if (!state) return false;
+    this.clearCardTimer(state);
+    const message = messageFromEvent(event);
+    const finalText = typeof message.text === 'string' && message.text.trim()
+      ? message.text.trim().slice(0, CARD_MAX_TEXT_LENGTH)
+      : state.accumulated;
+    if (!state.messageId) {
+      // The card was never created: its first flush was still pending when the
+      // turn ended (the 400ms debounce or an in-flight sendCard won the race
+      // against turn-end). Drop the draft and fall through to the plain-text
+      // path so the final answer is still delivered instead of being lost.
+      this.cardStates.delete(key);
+      this.clearToolLinesForTurn(turnId);
+      return false;
+    }
+    log.info('messaging streaming card finalize text', {
+      instanceId: this.instanceId,
+      messageId: state.messageId || '',
+      finalTextLen: finalText.length,
+      accumulatedLen: state.accumulated.length,
+    });
+    if (state.messageId && finalText) {
+      const adapter = this.adapter;
+      if (isCardAdapter(adapter)) {
+        try {
+          // F1: the finalized card title carries the executor badge so the
+          // streamed answer is attributed at a glance.
+          const cardTitle = actorLabel
+            ? `${this.instance.displayName} · ${actorLabel}`
+            : this.instance.displayName;
+          await adapter.updateCard(
+            state.messageId,
+            buildStreamCard(cardTitle, this.toolLinesForTurn(turnId), withActorBadge(finalText, actorLabel ?? null)),
+            this.controller.signal,
+          );
+          log.info('messaging streaming card finalized ok', {
+            instanceId: this.instanceId,
+            messageId: state.messageId,
+          });
+        } catch (error) {
+          if (!this.isCurrent() || this.controller.signal.aborted) {
+            this.cardStates.delete(key);
+            return true;
+          }
+          log.warn('messaging streaming card finalize failed', {
+            instanceId: this.instanceId,
+            error: (error as Error).message,
+          });
+          this.cardStates.delete(key);
+          // Fall through to the plain-text delivery path so the answer still arrives.
+          return false;
+        }
+      }
+    }
+    this.cardStates.delete(key);
+    this.clearToolLinesForTurn(turnId);
+    return true;
+  }
+
+  private handleCardTurnSilent(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'turn_silent' }>,
+  ): void {
+    // G2-2 静音：静音渠道不收尾卡片（没有开过的卡片不需要收）。
+    if (binding.mutedAt) return;
+    const turnId = cardEventTurnId(event);
+    if (!turnId) return;
+    const key = cardStateKey(binding.key, turnId);
+    const state = this.cardStates.get(key);
+    if (!state) return;
+    this.clearCardTimer(state);
+    // An already-sent card keeps its accumulated content; a silent turn only
+    // stops further updates. Unsent drafts are dropped without creating a card.
+    this.cardStates.delete(key);
+    this.clearToolLinesForTurn(turnId);
+  }
+
+  /** F4 失败回执：把意外失败的回合以带执行者标注的文本回执投回渠道。
+   *  幂等键用 `turn-fail-<turn_id|source_msg_id>`（走出站投递台账，
+   *  平台重发同一事件不会重复打扰用户）。 */
+  private async handleTurnFailure(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'turn_silent' }>,
+  ): Promise<void> {
+    if (!this.isCurrent() || !event.error) return;
+    const failKey = event.turn_id || event.source_msg_id;
+    if (!failKey) return;
+    const label = await resolveActorLabel(this.uid, event.actor);
+    const text = t('messaging.continuity.turn_failed', {
+      agent: label || t('messaging.continuity.badge_agent'),
+      error: sanitizeFailureText(event.error),
+    });
+    this.trackOutboundDelivery(
+      binding,
+      { id: `turn-fail-${failKey}`, from: event.actor, text },
+      event.source_msg_id,
+    );
+  }
+
+  private async handleTurnEndMessage(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'message' }>,
+  ): Promise<void> {
+    if (!this.isCurrent()) return;
+    const turnId = cardEventTurnId(event);
+    const message = messageFromEvent(event);
+    // F1: badge every channel reply with the executor so the user can tell
+    // which agent (or the commander) produced a result.
+    const actorLabel = await resolveActorLabel(this.uid, message.from);
+    log.info('messaging turn-end handling', {
+      instanceId: this.instanceId,
+      key: binding.key,
+      responseMode: this.instance.responseMode,
+      cardAdapter: isCardAdapter(this.adapter),
+      turnId,
+      cardStateCount: this.cardStates.size,
+    });
+    if (this.instance.responseMode === 'streaming_card' && isCardAdapter(this.adapter)) {
+      if (await this.finalizeCardForTurnEnd(binding, event, actorLabel)) return;
+      log.info('messaging turn-end card finalize skipped, falling back to text delivery', {
+        instanceId: this.instanceId,
+        key: binding.key,
+        turnId,
+      });
+    }
+    // Plain-text path: merge the turn's tool chrome into the reply so the tool
+    // trail stays visible without emitting a second message (mirrors Hermes'
+    // progress bubbles, folded into the final post).
+    const toolLines = turnId ? this.toolLinesForTurn(turnId) : [];
+    if (typeof message.text === 'string' && message.text.trim()) {
+      message.text = withActorBadge(message.text, actorLabel);
+    }
+    if (toolLines.length && typeof message.text === 'string') {
+      message.text = `${toolLines.map((line) => `\`${line}\``).join('\n')}\n\n---\n\n${message.text}`;
+    }
+    this.trackOutboundDelivery(binding, message, event.source_msg_id);
+    if (turnId) this.clearToolLinesForTurn(turnId);
+  }
+
+  // ── Shutdown ─────────────────────────────────────────────────────────────
+
+  /** Stop retry/card timers and drop per-turn state so a stopped runtime can
+   * never fire stale deliveries or card updates. */
+  disposeTimers(): void {
+    this.clearRetryTimer();
+    for (const state of this.cardStates.values()) this.clearCardTimer(state);
+    this.cardStates.clear();
+    this.toolLinesByTurn.clear();
+    this.turnSourceRefs.clear();
+  }
+}
+
+function isMessageEvent(event: GroupEvent): event is Extract<GroupEvent, { type: 'message' }> {
+  return event.type === 'message';
+}
+
+function messageFromEvent(event: Extract<GroupEvent, { type: 'message' }>): OutboundMessage {
+  const message: GroupMessage = event.msg;
+  return {
+    id: message.id,
+    from: message.from,
+    text: message.text,
+    ...(message.dispatch ? { dispatch: true } : {}),
+  };
+}
+
+function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string; recipientIdType?: 'chat_id' | 'open_id'; contextTokenRef?: string }) {
+  return {
+    ...(entry.replyToMessageId ? { replyToMessageId: entry.replyToMessageId } : {}),
+    ...(entry.threadId ? { threadId: entry.threadId } : {}),
+    ...(entry.replyInThread ? { replyInThread: true } : {}),
+    ...(entry.idempotencyKey ? { idempotencyKey: entry.idempotencyKey } : {}),
+    ...(entry.recipientIdType ? { recipientIdType: entry.recipientIdType } : {}),
+    ...(entry.contextTokenRef ? { contextTokenRef: entry.contextTokenRef } : {}),
+  };
+}
+
+function beginDeliveryEntry(
+  instanceId: string,
+  binding: { externalChatId?: string; recipientId?: string; recipientIdType?: 'chat_id' | 'open_id'; replyToMessageId?: string; threadId?: string; replyInThread?: boolean },
+  message: OutboundMessage,
+  text: string,
+  idempotencyKey?: string,
+  contextTokenRef?: string,
+) {
+  // Defense in depth: every current call site (bus reply, confirmation, ledger
+  // recovery) guarantees a non-empty id upstream; a missing one would silently
+  // stringify into an "undefined" idempotency key and corrupt dedupe.
+  if (!message.id) throw new Error('delivery requires a message id');
+  const key = ledger.deliveryKey(instanceId, message.id);
+  return {
+    key,
+    instanceId,
+    recipientId: binding.recipientId || binding.externalChatId || '',
+    recipientIdType: binding.recipientIdType === 'open_id' ? 'open_id' as const : 'chat_id' as const,
+    ...(binding.externalChatId ? { externalChatId: binding.externalChatId } : {}),
+    sourceMessageId: message.id as string,
+    textHash: ledger.textHash(text),
+    text,
+    ...(binding.replyToMessageId ? { replyToMessageId: binding.replyToMessageId } : {}),
+    ...(binding.threadId ? { threadId: binding.threadId } : {}),
+    ...(binding.replyInThread ? { replyInThread: true } : {}),
+    ...(contextTokenRef ? { contextTokenRef } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  };
+}

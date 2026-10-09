@@ -1,0 +1,87 @@
+# Security Policy
+
+## Supported Versions
+
+| Version | Supported |
+|---|---|
+| latest release | ✅ |
+
+Security fixes are applied to the latest stable release. Older versions are
+supported on a best-effort basis.
+
+## Reporting a Vulnerability
+
+**Please do not open a public issue for security vulnerabilities.**
+
+Report vulnerabilities privately through one of the following channels:
+
+1. **Preferred: GitHub private vulnerability reporting** — use the
+   **Security → Report a vulnerability** button on the repository page
+   (https://github.com/bonc-ai/cogseed/security).
+2. **Alternative: email** — **business@bonc.com.cn**
+
+Please include:
+
+- The affected version and platform.
+- A description of the vulnerability.
+- Steps to reproduce, or a proof of concept.
+- Impact assessment, if known.
+
+## Response Timeline
+
+- **Acknowledgment**: within 3 business days of receiving a report.
+- **Initial assessment**: within 7 business days.
+- **Fix / mitigation**: as soon as a fix is available, coordinated with the
+  reporter before public disclosure.
+
+We will credit reporters (unless anonymity is requested) once a fix is
+released.
+
+## Scope
+
+This policy covers the CogSeed desktop application and its official
+repositories on GitHub. Third-party dependencies are handled through their
+respective projects' disclosure processes; please also notify us so we can
+track upstream advisories.
+
+## Source Scanning
+
+Scan a clean source snapshot (before installing dependencies) with Gitleaks
+8.30.1 or later:
+
+```sh
+gitleaks dir . --config .gitleaks.toml --redact
+```
+
+The configuration retains the default detection rules. Reviewed exceptions
+require the matching rule, exact file path, and exact synthetic test value;
+one exception covers an export expression in the unmodified xterm library.
+Other values in those same files remain subject to detection. Credential
+detection and redaction tests intentionally retain realistic token shapes.
+
+Keep private handoffs, implementation plans, scan output, and local runtime
+data outside public source distributions. Official repository URLs, service
+domains, security contacts, and third-party copyright notices are public
+project metadata and must retain their functional and attribution roles.
+
+## Synthetic private addresses
+
+Release scanners sometimes flag RFC1918 and link-local addresses in tests as
+"internal network leakage." In this repository those addresses are **assertion
+inputs and negative fixtures**, not reachable production endpoints. A 2026-09-23
+tree scan of tracked non-`node_modules` sources found these RFC1918 literals
+(plus link-local / metadata examples used by the same SSRF suites):
+
+| Address / class | Where | Purpose |
+|---|---|---|
+| `10.0.0.1` | `test/renderer/marketplace-card-states.test.ts`; seo-crawl SSRF tests (`resources/builtin/.../seo-crawl/test/test_crawl.py`) | UI must **not** echo private IP from error strings; SSRF guard must **reject** 10/8 (incl. decimal/`6to4` encodings) |
+| `10.0.0.5` | seo-crawl + skill-sentry URL-safety fixtures | Synthetic private peer in resolve/allowlist negative cases |
+| `192.168.1.1` | seo-crawl + skill-sentry fixtures; `.agents/skills/archify/test/brand-marks.test.mjs` (IPv4-mapped form) | Classic RFC1918 fixture for block/reject paths |
+| `172.16.0.1` | seo-crawl `test_crawl.py` | 172.16/12 class representative in private-IP reject loops |
+| `169.254.169.254` | `test/main/quality/ssrf-egress.test.ts` and skill SSRF guards | Named so the guard can **reject** cloud-metadata access |
+| Other synthetic tokens | `test/**`, skill-sentry fixtures | Credential detection / redaction unit tests |
+
+Do not delete these fixtures to silence scanners. Reviewed Gitleaks exceptions
+live in `.gitleaks.toml` (exact path + exact synthetic value). Run scanners on
+a clean tree before `npm install` when possible; exclude `node_modules` for
+TruffleHog verified scans.

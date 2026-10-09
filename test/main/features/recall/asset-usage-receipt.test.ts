@@ -1,0 +1,199 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+let root: string;
+let previousRoot: string | undefined;
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-asset-usage-receipt-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
+});
+
+afterEach(() => {
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe('asset usage receipts', () => {
+  it('persists a normalized evidence-bound applied receipt idempotently', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const injection = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-a',
+    });
+    const input = {
+      taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+      injectionReceiptId: injection.id,
+      status: 'applied' as const,
+      evidenceKind: 'tool_call' as const,
+      evidenceRefs: [
+        { kind: 'execution_evaluation' as const, id: 'kse-run-a', excerpt: 'prompt and tool argument values must not persist' },
+        { kind: 'execution_evaluation' as const, id: 'kse-run-a' },
+      ],
+      boundary: 'real' as const,
+    };
+
+    const [first, second, third] = await Promise.all([
+      usage.recordAssetUsageReceipt('user-a', input),
+      usage.recordAssetUsageReceipt('user-a', input),
+      usage.recordAssetUsageReceipt('user-a', input),
+    ]);
+
+    expect(first).toMatchObject({
+      id: expect.stringMatching(/^aur-[a-f0-9]{24}$/),
+      status: 'applied',
+      evidenceKind: 'tool_call',
+      evidenceRefs: [{
+        kind: 'execution_evaluation', id: 'kse-run-a', taxonomyVersion: 2, subtype: 'execution',
+      }],
+    });
+    expect(first.evidenceRefs[0]).not.toHaveProperty('excerpt');
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+    await expect(usage.listAssetUsageReceipts('user-a', 'run-a')).resolves.toEqual([first]);
+
+    const jsonl = path.join(root, 'user-a', 'cloud', 'recall', 'jsonl', 'asset-usage-receipts', 'events.jsonl');
+    expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('negative feedback overrides an earlier applied receipt; reads return the latest per id (2026-09-14)', async () => {
+    // KSTAR 收账先写 applied，用户随后点踩写 contradicted——此前被同键幂等
+    // 去重静默吞掉（「点踩进治理」失效）；现在 contradicted 可覆盖，读取侧
+    // 同 id 取末条，消费方不双计。
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const injection = await injections.recordInjectionReceipt('user-b', {
+      taskRunId: 'run-b', projectionId: 'proj-b', assetId: 'asset-b', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-b',
+    });
+    const base = {
+      taskRunId: 'run-b', projectionId: 'proj-b', assetId: 'asset-b', assetVersion: '1',
+      injectionReceiptId: injection.id,
+      evidenceKind: 'agent_action' as const,
+      evidenceRefs: [{ kind: 'conversation' as const, id: 'conv-b', title: 'user negative feedback' }],
+      boundary: 'real' as const,
+    };
+    const applied = await usage.recordAssetUsageReceipt('user-b', { ...base, status: 'applied' });
+    expect(applied.status).toBe('applied');
+
+    const contradicted = await usage.recordAssetUsageReceipt('user-b', { ...base, status: 'contradicted' });
+    expect(contradicted.status).toBe('contradicted');
+
+    const listed = await usage.listAssetUsageReceipts('user-b', 'run-b');
+    expect(listed).toHaveLength(1);
+    expect(listed[0].status).toBe('contradicted');
+
+    // 幂等方向不变：已是 contradicted 再写 contradicted 仍返回同状态、list 仍一条。
+    const again = await usage.recordAssetUsageReceipt('user-b', { ...base, status: 'contradicted' });
+    expect(again.status).toBe('contradicted');
+    expect(await usage.listAssetUsageReceipts('user-b', 'run-b')).toHaveLength(1);
+  });
+
+  it.each([
+    ['task run', { taskRunId: 'run-other' }],
+    ['projection', { projectionId: 'proj-other' }],
+    ['asset', { assetId: 'asset-other' }],
+    ['asset version', { assetVersion: '2' }],
+  ])('rejects an injection receipt with a mismatched %s', async (_label, override) => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const injection = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-a',
+    });
+
+    await expect(usage.recordAssetUsageReceipt('user-a', {
+      taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+      injectionReceiptId: injection.id,
+      status: 'usage_unknown', evidenceKind: 'none', evidenceRefs: [], boundary: 'real',
+      ...override,
+    })).rejects.toThrow('injection receipt does not match asset usage');
+  });
+
+  it('rejects missing, failed, or unsafe injection references', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const failed = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+      boundary: 'real', status: 'failed', messageId: 'message-a',
+    });
+    const base = {
+      taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+      status: 'usage_unknown' as const, evidenceKind: 'none' as const, evidenceRefs: [], boundary: 'real' as const,
+    };
+
+    await expect(usage.recordAssetUsageReceipt('user-a', {
+      ...base, injectionReceiptId: 'inj-missing',
+    })).rejects.toThrow('injection receipt not found');
+    await expect(usage.recordAssetUsageReceipt('user-a', {
+      ...base, injectionReceiptId: failed.id,
+    })).rejects.toThrow('injection receipt did not inject asset');
+    await expect(usage.recordAssetUsageReceipt('user-a', {
+      ...base, taskRunId: '../unsafe', injectionReceiptId: failed.id,
+    })).rejects.toThrow('invalid asset usage receipt reference');
+  });
+
+  it.each(['applied', 'considered_not_applicable', 'contradicted'] as const)(
+    'requires nonempty evidence for %s',
+    async (status) => {
+      const injections = await import('../../../../src/main/features/recall/injection-receipt');
+      const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+      const injection = await injections.recordInjectionReceipt('user-a', {
+        taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+        boundary: 'real', status: 'injected', messageId: 'message-a',
+      });
+
+      await expect(usage.recordAssetUsageReceipt('user-a', {
+        taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+        injectionReceiptId: injection.id, status, evidenceKind: 'none', evidenceRefs: [], boundary: 'real',
+      })).rejects.toThrow('asset usage evidence is required');
+    },
+  );
+
+  it('allows usage_unknown and available_no_opportunity without evidence', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    for (const [suffix, status] of [['unknown', 'usage_unknown'], ['unavailable', 'available_no_opportunity']] as const) {
+      const injection = await injections.recordInjectionReceipt('user-a', {
+        taskRunId: `run-${suffix}`, projectionId: `proj-${suffix}`, assetId: `asset-${suffix}`, assetVersion: '1',
+        boundary: 'real', status: 'injected', messageId: `message-${suffix}`,
+      });
+      await expect(usage.recordAssetUsageReceipt('user-a', {
+        taskRunId: `run-${suffix}`, projectionId: `proj-${suffix}`, assetId: `asset-${suffix}`, assetVersion: '1',
+        injectionReceiptId: injection.id, status, evidenceKind: 'none', boundary: 'real',
+      })).resolves.toMatchObject({ status, evidenceRefs: [] });
+    }
+  });
+
+  it('persists profile-memory channel injection receipts and rejects unknown channels', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    // 画像通道收据：无 projectionId（背景记忆不携带投影授权），channel 区分。
+    const receipt = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-profile', assetId: 'onto-abc123def456abc123def456', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-profile',
+      channel: 'profile_memory',
+    });
+    expect(receipt).toMatchObject({ channel: 'profile_memory', status: 'injected' });
+    expect(receipt.projectionId).toBeUndefined();
+    const listed = await injections.listInjectionReceipts('user-a', 'turn-profile');
+    expect(listed).toEqual([expect.objectContaining({ channel: 'profile_memory' })]);
+    // 幂等：同键重落返回同一张收据（channel 不参与去重键）。
+    const again = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-profile', assetId: 'onto-abc123def456abc123def456', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-profile',
+      channel: 'profile_memory',
+    });
+    expect(again.id).toBe(receipt.id);
+    // 非法通道值在写入侧即拒绝。
+    await expect(injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-profile', assetId: 'onto-abc123def456abc123def456', assetVersion: '1',
+      boundary: 'real', status: 'injected',
+      channel: 'side_channel' as 'profile_memory',
+    })).rejects.toThrow('invalid injection receipt reference');
+  });
+});
