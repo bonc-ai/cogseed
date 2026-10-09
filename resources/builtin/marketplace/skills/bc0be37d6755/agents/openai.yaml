@@ -1,0 +1,25 @@
+interface:
+  display_name: "功能优先级决策"
+  short_description: "选择框架并基于证据、影响、投入和风险输出可解释优先级"
+  default_prompt: "使用 $feature-prioritization：基于目标、证据、影响、投入和风险进行功能优先级决策。"
+
+# SKILL-GATE:BEGIN
+policy:
+  allow_implicit_invocation: true
+runtime:
+  executor: "codex_skill_interpreter"
+  binding_status: "target_state_not_run"
+  skill_entrypoint: "../SKILL.md"
+  schema_ref: "../schemas.json"
+  permissions:
+    direct_resource_access: false
+    external_actions: "deny_without_explicit_approval"
+    formal_asset_write: false
+    candidate_write_only: true
+  governance:
+    level: "L5"
+    risk_route: "Full"
+    promotion_ceiling: "staged"
+    production_release_allowed: false
+    independent_review: "pending"
+# SKILL-GATE:END

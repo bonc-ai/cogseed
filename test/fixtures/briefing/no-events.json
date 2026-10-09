@@ -1,0 +1,26 @@
+{
+  "description": "无日历事件：仅有本体事实（今日日程+截止）→ 降级，缺失 events，无今日安排/空闲时段建议",
+  "now": "2026-08-10T08:00:00",
+  "facts": [
+    {
+      "id": "fact_course_english",
+      "kind": "appointment",
+      "summary": "英语口语",
+      "date": "2026-08-10T13:00:00"
+    },
+    {
+      "id": "fact_deadline_lab",
+      "kind": "deadline",
+      "summary": "实验报告",
+      "date": "2026-08-14"
+    }
+  ],
+  "events": [],
+  "expected": {
+    "degraded": true,
+    "missingData": ["events"],
+    "sectionKeys": ["today_schedule", "upcoming_deadlines", "generic"],
+    "contains": ["英语口语", "实验报告", "今日无日历事件"],
+    "notContains": ["有空档", "空闲时段建议"]
+  }
+}

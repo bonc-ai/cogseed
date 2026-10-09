@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-ORCH-001",
+    "EVAL-ORCH-002",
+    "EVAL-ORCH-003",
+    "EVAL-ORCH-004",
+    "EVAL-ORCH-005",
+    "EVAL-ORCH-006",
+    "EVAL-ORCH-007",
+    "EVAL-ORCH-008",
+    "EVAL-ORCH-009",
+    "EVAL-ORCH-010"
+  ],
+  "id": "EVAL-SET-ORCH-001",
+  "negative_refs": [
+    "EVAL-ORCH-007",
+    "EVAL-ORCH-008",
+    "EVAL-ORCH-009",
+    "EVAL-ORCH-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

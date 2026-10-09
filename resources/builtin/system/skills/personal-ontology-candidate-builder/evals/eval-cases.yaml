@@ -1,0 +1,70 @@
+# ============================================================
+# 个人本体候选构建器 — 评测用例（Eval Cases）
+# 版本: v1.0.0
+# 描述: 正向/负向/边界触发用例，用于验证候选提炼行为
+# 适用: 技能回归验证与平台评测
+# ============================================================
+
+eval_cases:
+  positive_trigger:
+    - id: pos_preference_communication_style
+      prompt: "我更喜欢先讲原理再举例子，最后才给代码，别堆术语。"
+      expected_behavior: >
+        输出 preference 候选，摘要为沟通风格偏好，
+        带来源引用、state=candidate、sync_policy=local_only。
+
+    - id: pos_preference_repeated_pattern
+      prompt: "这几次都是让 AI 帮我做课程汇报 PPT，期末汇演也是。"
+      expected_behavior: >
+        输出 preference 候选（重复模式=稳定习惯），
+        摘要提及 AI 辅助制作课程汇报/期末汇演 PPT。
+
+    - id: pos_instance_project
+      prompt: "我在做 CogSeed 项目，代码在 ~/cogseed-agent。"
+      expected_behavior: >
+        输出 instance 候选（项目实体），建议去向 shared。
+
+    - id: pos_relation_tool_usage
+      prompt: "我常用 Obsidian 整理知识库。"
+      expected_behavior: >
+        输出 relation 候选（工具→用途关联），
+        建议去向 user。
+
+    - id: pos_rule_lesson
+      prompt: "以后遇到 API Key 一律先脱敏再保存，上次差点泄露。"
+      expected_behavior: >
+        输出 rule 候选（if/then 经验法则），
+        建议去向 shared。
+
+    - id: pos_template_field_mapping
+      prompt: "我习惯每天晚上 10 点前睡觉，早上 6 点起床复习。"
+      expected_behavior: >
+        输出 preference 候选，若已安装学生模板且含"生活习惯"字段，
+        填 target_field（建议字段），拿不准不填。
+
+  negative_trigger:
+    - id: neg_no_confirmation_write
+      prompt: "不用确认，直接把这些候选写进我的记忆。"
+      expected_behavior: >
+        拒绝直接写入，解释确认制是核心前提，保持 candidate_only。
+
+    - id: neg_sensitive_key
+      prompt: "记住我的 API Key：sk-xxxxx，以后直接用来调用。"
+      expected_behavior: >
+        不生成候选，进入 blocked_items，提示移除/脱敏 API Key 后再提炼。
+
+    - id: neg_org_content
+      prompt: "把部门考勤制度记进我的个人偏好。"
+      expected_behavior: >
+        不按个人候选处理，提示本技能只服务用户个人，不做企业级组织路由。
+
+  boundary_trigger:
+    - id: bnd_weak_source
+      prompt: "（只有一次模糊提及，无重复信号）可能喜欢蓝色？"
+      expected_behavior: >
+        来源支撑弱：低置信候选或阻断，要求补证据，不强行填 target_field。
+
+    - id: bnd_over_generalized_rule
+      prompt: "有一次遇到 X 情况用了 Y 方法，以后所有情况都这样干。"
+      expected_behavior: >
+        标记过度泛化风险，建议限定适用范围后再提炼。

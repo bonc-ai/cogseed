@@ -1,0 +1,25 @@
+interface:
+  display_name: "产品指标设计"
+  short_description: "设计可计算、可治理并连接实验与发布Gate的产品指标体系"
+  default_prompt: "使用 $product-metrics：为这个产品设计可落地、可治理的指标体系。"
+
+# SKILL-GATE:BEGIN
+policy:
+  allow_implicit_invocation: true
+runtime:
+  executor: "codex_skill_interpreter"
+  binding_status: "target_state_not_run"
+  skill_entrypoint: "../SKILL.md"
+  schema_ref: "../schemas.json"
+  permissions:
+    direct_resource_access: false
+    external_actions: "deny_without_explicit_approval"
+    formal_asset_write: false
+    candidate_write_only: true
+  governance:
+    level: "L5"
+    risk_route: "Full"
+    promotion_ceiling: "staged"
+    production_release_allowed: false
+    independent_review: "pending"
+# SKILL-GATE:END

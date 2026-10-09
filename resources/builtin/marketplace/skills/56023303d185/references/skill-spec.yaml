@@ -1,0 +1,175 @@
+{
+  "artifact_manifest": [
+    "SKILL.md",
+    "agents/openai.yaml",
+    "evals/evals.json",
+    "evals/forecast_model.md",
+    "evals/outcome_evaluation.md",
+    "evals/replay_dataset.md",
+    "evals/regression_tests.md",
+    "references/skill-spec.yaml",
+    "references/input-contract.md",
+    "references/output-contract.md",
+    "references/validation-contract.md",
+    "references/ontology-mapping.md",
+    "references/kstar-evolution.md",
+    "references/governance-boundaries.md",
+    "references/eval-cases.yaml",
+    "references/failure-modes.md",
+    "manifest.yaml",
+    "schemas/input.schema.json",
+    "schemas/output.schema.json",
+    "evals/manifest.yaml"
+  ],
+  "business_context": {
+    "abox_examples": [
+      {
+        "id": "SYNTHETIC-ORCH-001",
+        "source_type": "synthetic"
+      }
+    ],
+    "rbox_relations": [
+      "routes_to",
+      "blocked_by",
+      "governed_by",
+      "supported_by"
+    ],
+    "tbox_classes": [
+      "ProductVersion",
+      "Stage",
+      "Uncertainty",
+      "Gate",
+      "ChangeCandidate"
+    ]
+  },
+  "contracts": {
+    "input": "schemas/input.schema.json",
+    "output": "schemas/output.schema.json"
+  },
+  "evaluation_contract": {
+    "coverage_categories": 5,
+    "minimum": 10,
+    "negative_minimum": 4,
+    "suite_e2e_required_on_material_change": true
+  },
+  "failure_attribution": [
+    "product",
+    "model",
+    "prompt",
+    "data",
+    "tool",
+    "permission",
+    "workflow",
+    "schema",
+    "governance",
+    "evidence"
+  ],
+  "generated_by": "FACTORY-CANDIDATE-001",
+  "governance": {
+    "automation_ceiling": "staged_eligible",
+    "owner_gates": [
+      "next_required_human_gate",
+      "staged decision",
+      "production release"
+    ],
+    "production_release_allowed": false
+  },
+  "id": "SKILL-ORCHESTRATE-AI-PRODUCT-001",
+  "kstar_hook": {
+    "bounded_patch": true,
+    "change_candidate_required": true,
+    "delta_r_is_not_release": true
+  },
+  "meta_profile": {
+    "is_skill_of_skill": true,
+    "mutation_surface_policy": {
+      "mutable_surface": [
+        "configuration keys",
+        "threshold weights",
+        "policy switches"
+      ],
+      "protected_surface": [
+        "formal rules",
+        "HITL",
+        "audit"
+      ]
+    },
+    "operates_on": [
+      "Skill",
+      "OntologySlice",
+      "EvalCase",
+      "Workflow",
+      "Policy",
+      "MetaSkill"
+    ],
+    "production_release_allowed": false,
+    "promotion_ceiling": "staged",
+    "recursive_guard": {
+      "max_self_patch_depth": 1,
+      "max_self_patch_ops": 1,
+      "rejected_self_patch_buffered": true,
+      "self_patch_must_pass_gates": [
+        "Validation",
+        "Governance",
+        "Canary"
+      ]
+    },
+    "required_directories": [
+      "ontology/",
+      "scripts/",
+      "config/"
+    ],
+    "skill_class": "meta_skill"
+  },
+  "name": "orchestrate-ai-product",
+  "skill_category": "ProductionProcessSkill",
+  "schema_version": "1.0",
+  "skill_class": "meta_skill",
+  "status": "candidate",
+  "suite_role": "meta_router",
+  "tool_bindings": [
+    {
+      "fallback": "blocked",
+      "permission": "read-and-bounded-draft",
+      "scope": "approved-project-root",
+      "tool": "local-filesystem"
+    },
+    {
+      "fallback": "blocked",
+      "permission": "execute-read-only-checks",
+      "scope": "current-package",
+      "tool": "local-validator"
+    }
+  ],
+  "trigger": {
+    "ambiguity_behavior": "route",
+    "required_context": [
+      "product_version_id",
+      "approved source refs",
+      "entry_mode",
+      "observed_state",
+      "evidence_refs"
+    ],
+    "stage_compatibility": [
+      "Orchestrate"
+    ],
+    "when_not_to_use": [
+      "代替 owner 批准 Gate、staged 或发布",
+      "绕过阶段直接构建或上线",
+      "把未知证据、日期或业务结果补写为事实"
+    ],
+    "when_to_use": [
+      "启动一个 0→1 AI 产品",
+      "处理已冻结产品的实质迭代",
+      "诊断线上问题并选择正确阶段",
+      "判断下一道必须由人作出的 Gate"
+    ]
+  },
+  "validation_contract": {
+    "gate": "next_required_human_gate",
+    "protected_failures": 0,
+    "ref": "references/validation-contract.md"
+  },
+  "version": "0.1.0",
+  "workflow_ref": "SKILL.md#executable-workflow"
+}

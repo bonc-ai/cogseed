@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "author": "cx677",
+  "note": "Honest stub at creation time; boundary cases listed in references/validation-contract.md and eval-cases.yaml. Machine-readable eval set to be filled as the feature lands.",
+  "cases": []
+}

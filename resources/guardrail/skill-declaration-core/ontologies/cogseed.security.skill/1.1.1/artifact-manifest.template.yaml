@@ -1,0 +1,29 @@
+# 制品主清单模板（根目录 artifact.yaml）
+# api_version 与 kind 现行为 cogseed.security/v1、SkillArtifact
+# manifest.yaml 只能由 artifact.yaml 单向生成，不允许反向回写
+
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: REQUIRED_INPUT
+  name: REQUIRED_INPUT
+  version: REQUIRED_INPUT
+  description: REQUIRED_INPUT
+  owner: REQUIRED_INPUT
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: REQUIRED_INPUT
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: development
+    rollback_ref: null

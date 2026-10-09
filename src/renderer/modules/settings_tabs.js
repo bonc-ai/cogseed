@@ -1,0 +1,79 @@
+// Settings tab switching.
+//
+// PC's Settings tab binding lives in sync_settings.js, which is stripped from
+// the open-source build. Keep this tiny standalone module so the remaining local Settings
+// panes still bind after sync.
+
+// 一级页面 header：统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）。
+// 设置页是 tab 容器，页级没有单一主操作（操作落在各 tab 内），故只渲染语义 h1
+// 标题，不设操作（PH-05：无操作页面保持同一标题骨架）。
+function _renderSettingsPageHeader() {
+  if (typeof document.getElementById !== 'function') return;
+  const root = document.getElementById('settings-page-header');
+  if (!root || typeof uiPageHeader !== 'function') return;
+  root.innerHTML = uiPageHeader({ title: typeof t === 'function' ? t('settings.title') : '设置' });
+}
+
+function _normalizeSettingsTab(name) {
+  return name === 'credentials' ? 'configuration' : name;
+}
+
+function activateSettingsTab(name, options = {}) {
+  const tabs = Array.from(document.querySelectorAll('.settings-tab'));
+  if (!tabs.length) return;
+
+  const requested = _normalizeSettingsTab(name);
+  // If the requested tab was removed by open-source stripping, fall back to the
+  // first surviving tab so no pane stays hidden.
+  const existing = tabs.find((btn) => btn.dataset.settingsTab === requested);
+  const target = existing ? requested : tabs[0].dataset.settingsTab;
+  const panes = document.querySelectorAll('.settings-tab-pane');
+
+  tabs.forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.settingsTab === target);
+  });
+  panes.forEach((pane) => {
+    pane.hidden = pane.dataset.settingsPane !== target;
+  });
+
+  const anchor = typeof options === 'string' ? options : options?.anchor;
+  if (target === 'configuration') {
+    window.__settingsConfigurationAnchor = anchor || window.__settingsConfigurationAnchor || '';
+    window.CogSeedRunCenterSettings?.activate?.(window.__settingsConfigurationAnchor);
+  } else {
+    window.CogSeedRunCenterSettings?.deactivate?.();
+  }
+  return target;
+}
+
+function initSettingsTabs() {
+  const tabs = Array.from(document.querySelectorAll('.settings-tab'));
+  if (!tabs.length) return;
+
+  if (!window.__settingsTabsBound) {
+    window.__settingsTabsBound = true;
+    const backButton = typeof document.getElementById === 'function'
+      ? document.getElementById('settings-back-btn')
+      : null;
+    backButton?.addEventListener('click', () => {
+      const target = window.__settingsReturnTarget || { view: 'new-chat', cid: null };
+      if (typeof setView === 'function') setView(target.view || 'new-chat', target.cid || undefined);
+    });
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('i18n-change', _renderSettingsPageHeader);
+    }
+  }
+  tabs.forEach((btn) => {
+    btn.addEventListener('click', () => activateSettingsTab(btn.dataset.settingsTab));
+  });
+
+  const defaultTab = tabs.some((tab) => tab.dataset.settingsTab === 'data')
+    ? 'data'
+    : tabs[0]?.dataset.settingsTab;
+  _renderSettingsPageHeader();
+  activateSettingsTab(defaultTab);
+}
+
+window.initSettingsTabs = initSettingsTabs;
+window.activateSettingsTab = activateSettingsTab;
+window.normalizeSettingsTab = _normalizeSettingsTab;

@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-LEARN-001",
+    "EVAL-LEARN-002",
+    "EVAL-LEARN-003",
+    "EVAL-LEARN-004",
+    "EVAL-LEARN-005",
+    "EVAL-LEARN-006",
+    "EVAL-LEARN-007",
+    "EVAL-LEARN-008",
+    "EVAL-LEARN-009",
+    "EVAL-LEARN-010"
+  ],
+  "id": "EVAL-SET-LEARN-001",
+  "negative_refs": [
+    "EVAL-LEARN-007",
+    "EVAL-LEARN-008",
+    "EVAL-LEARN-009",
+    "EVAL-LEARN-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

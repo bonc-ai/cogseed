@@ -1,0 +1,31 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only F-compat-projection-v1",
+  "inputs": {
+    "actor_ids": [
+      "commander",
+      "agent-a"
+    ],
+    "cid": "c-compat"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "canonical_fields": [
+      "kind",
+      "cid",
+      "actor_id"
+    ],
+    "legacy": {
+      "gconv": "gconv-c-compat",
+      "gmember": "gmember-c-compat-agent-a"
+    }
+  },
+  "notes": [
+    "Legacy session id fields remain stable while canonical actor fields are additive."
+  ]
+}

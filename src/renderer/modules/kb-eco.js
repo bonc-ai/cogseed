@@ -1,0 +1,129 @@
+// ─── 知识库生态外壳（顶部横向工具栏 + 子视图容器）— classic script ───
+// 计划书 v1.3 §四.1：总入口 = 侧边栏「自动化」后「知识库」按钮 → 进入知识库生态。
+// v2（按产品评审建议）：移除 52px 图标竖栏 → 6 个入口迁移为**第二栏顶部的横向
+// 工具栏**（图标+文字，可切紧凑「仅图标」，localStorage 记忆），释放横向空间。
+(function () {
+  // 知识库/笔记已落地；发现模块当前为「待开发」占位（不展示内置示例市场数据，避免误导）。
+  const ECO_NAV = [
+    { key: 'kb', icon: 'folder', label: '知识库', status: 'ok' },
+    { key: 'notes', icon: 'file-text', label: '笔记', status: 'ok' },
+    { key: 'discover', icon: 'globe', label: '发现', status: 'soon' },
+  ];
+  const COMPACT_KEY = 'cogseed.kb.eco.compact';
+  let _compact = false;
+  try { _compact = localStorage.getItem(COMPACT_KEY) === '1'; } catch (_) { /* ignore */ }
+
+  function _kbIcon(name) {
+    if (typeof window.uiIconHtml === 'function') {
+      return window.uiIconHtml(name, 'kb-eco-icon');
+    }
+    return '<span class="kb-eco-icon">◈</span>';
+  }
+
+  function _mainLabel(label) {
+    return String(label).split(' · ')[0];
+  }
+
+  function _tr(key, fallback) {
+    const value = typeof window.t === 'function' ? window.t(key) : '';
+    return value && value !== key ? value : fallback;
+  }
+
+  function _compactButton() {
+    const label = _compact
+      ? _tr('kb.eco.show_labels', '显示图标和文字')
+      : _tr('kb.eco.hide_labels', '仅显示图标');
+    return window.uiIconButton({
+      label,
+      icon: 'panel-list',
+      className: 'kb-eco-compact',
+      attrs: { id: 'kb-eco-compact', 'aria-pressed': String(_compact) },
+    });
+  }
+
+  function _navBtn(item, active) {
+    const badge = item.status === 'soon' ? '<span class="kb-eco-tab-soon">待开发</span>' : '';
+    return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
+      title="${item.label}" aria-label="${item.label}">
+      <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(item.label)}</span>${badge}</button>`;
+  }
+
+  function _applyCompact() {
+    document.querySelectorAll('.kb-eco').forEach((el) => el.classList.toggle('kb-eco--compact', _compact));
+    const btn = document.getElementById('kb-eco-compact');
+    if (btn) {
+      const label = _compact
+        ? _tr('kb.eco.show_labels', '显示图标和文字')
+        : _tr('kb.eco.hide_labels', '仅显示图标');
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('aria-pressed', String(_compact));
+    }
+  }
+
+  function renderKbEco() {
+    const host = document.getElementById('kb-view');
+    if (!host || host.querySelector('.kb-eco')) return;
+    const nav = ECO_NAV.map((b, i) => _navBtn(b, i === 0)).join('');
+    host.innerHTML = `<div class="kb-eco">
+      <div class="kb-eco-topnav">
+        <div class="kb-eco-tabs">${nav}</div>
+        ${_compactButton()}
+      </div>
+      <div class="kb-eco-body">
+        <div class="kb-workbench" id="kb-workbench"></div>
+        <div class="kb-eco-pane" id="kb-notes" hidden></div>
+        <div class="kb-eco-pane" id="kb-discover" hidden></div>
+      </div>
+    </div>`;
+    host.querySelectorAll('[data-kb-eco]').forEach((btn) => {
+      btn.addEventListener('click', () => _activateEco(btn.dataset.kbEco));
+    });
+    document.getElementById('kb-eco-compact')?.addEventListener('click', () => {
+      _compact = !_compact;
+      try { localStorage.setItem(COMPACT_KEY, _compact ? '1' : '0'); } catch (_) { /* ignore */ }
+      _applyCompact();
+    });
+    _applyCompact();
+  }
+
+  function _activateEco(key) {
+    document.querySelectorAll('[data-kb-eco]').forEach((b) => {
+      b.classList.toggle('active', b.dataset.kbEco === key);
+    });
+    const wb = document.getElementById('kb-workbench');
+    const notes = document.getElementById('kb-notes');
+    const disc = document.getElementById('kb-discover');
+    if (key === 'kb') {
+      if (wb) wb.hidden = false;
+      if (notes) notes.hidden = true;
+      if (disc) disc.hidden = true;
+      if (typeof renderKbWorkbench === 'function') renderKbWorkbench();
+      return;
+    }
+    if (key === 'notes') {
+      if (wb) wb.hidden = true;
+      if (disc) disc.hidden = true;
+      if (notes) {
+        notes.hidden = false;
+        if (typeof renderKbNotes === 'function') renderKbNotes();
+      }
+      return;
+    }
+    if (key === 'discover') {
+      if (wb) wb.hidden = true;
+      if (notes) notes.hidden = true;
+      if (disc) {
+        disc.hidden = false;
+        if (typeof renderKbDiscover === 'function') renderKbDiscover();
+      }
+      return;
+    }
+    const item = ECO_NAV.find((b) => b.key === key);
+    if (typeof uiToast === 'function') {
+      uiToast(`「${item ? _mainLabel(item.label) : key}」模块预留`, { variant: 'info' });
+    }
+  }
+
+  window.renderKbEco = renderKbEco;
+})();

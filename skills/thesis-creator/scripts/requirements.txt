@@ -1,0 +1,16 @@
+# Thesis Creator Python dependencies
+
+# Core dependencies (~50 MB)
+jieba>=0.42.1
+synonyms>=3.18.0
+rich>=13.0.0
+click>=8.1.0
+requests>=2.28.0
+python-docx>=0.8.11
+
+# Optional dependencies for full AIGC detection (~2.5 GB)
+# transformers>=4.30.0
+# torch>=2.0.0
+
+# Optional external tool:
+# Install pandoc separately if needed.

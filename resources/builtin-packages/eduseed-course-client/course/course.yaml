@@ -1,0 +1,17 @@
+# course.yaml —— 课程档案模板（课程无关客户端；权威内容在 EduSeed 平台）
+# 规则：
+# 1. 课程身份以平台为准：管理端「课程管理」登记课程（course_id + GitHub 内容仓库 + 版本 tag）；
+# 2. 客户端 course_id 由插件面板配置或 EDUSEED_COURSE_ID 注入，本文件为占位模板；
+# 3. 学习路径 / 挑战定义 / 评分标准等课程内容一律在服务端
+#    （飞书挑战任务表为运行时权威 + 平台 content/frozen 为版本化内容库），不进插件；
+# 4. 换课 = 平台登记新课程 + 换 course_id；换班 = 复制 class-profile.yaml 改表映射。
+
+course: "<REPLACE: course_id，默认由插件面板 / EDUSEED_COURSE_ID 注入>"
+version: 0.1.0
+title: "<REPLACE: 课程名称（以平台 Courses 表为准）>"
+
+roles:
+  student:
+    skills: [eduseed-student-submit, eduseed-student-aar, eduseed-student-review]
+  teacher:
+    skills: [eduseed-teacher-publish]

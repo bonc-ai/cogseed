@@ -1,0 +1,20 @@
+schema_version: "1.0"
+agent: "codex"
+skill_id: "SKILL-DERISK-AI-PRODUCT-001"
+stage: "De-risk"
+execution_mode: "local-candidate-only"
+allowed_actions:
+  - "read_approved_project_facts"
+  - "draft_local_stage_artifacts"
+  - "run_local_validation"
+  - "request_human_gate"
+prohibited_actions:
+  - "invent_evidence_or_dates"
+  - "owner_approval"
+  - "global_install"
+  - "publish"
+  - "production_write"
+human_confirmation:
+  - "Discovery Gate"
+  - "before_any_A4_action"
+fallback: "return_blocked_with_missing_capability"

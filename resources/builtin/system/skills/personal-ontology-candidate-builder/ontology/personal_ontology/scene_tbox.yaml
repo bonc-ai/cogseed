@@ -1,0 +1,441 @@
+---
+# ============================================================
+# 个人本体候选构建本体 — TBox（概念层）
+# 版本: v1.0.0
+# 描述: 定义个人本体候选提炼领域的核心概念、类和属性
+# 适用: CogSeed 个人记忆沉淀、候选提炼与确认路由
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_tbox/1.0
+serialization_policy: utf-8
+
+ontology:
+  id: personal_ontology
+  iri: cogseed.io/ontologies/personal_ontology
+  version: "1.0.0"
+  title: 个人本体候选构建
+  description: 面向大众用户的个人本体候选提炼概念模型，包含候选类型、角色模板、来源追溯、去向路由等核心概念
+  namespaces:
+    base: cogseed.io/ontologies/personal_ontology#
+    rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+    rdfs: http://www.w3.org/2000/01/rdf-schema#
+    owl: http://www.w3.org/2002/07/owl#
+    xsd: http://www.w3.org/2001/XMLSchema#
+    sh: http://www.w3.org/ns/shacl#
+    dcterms: http://purl.org/dc/terms/
+  imports: []
+  annotations:
+    creator: CogSeed Team
+    created: 2026-08-05
+    lifecycle_status: staged
+
+cognitive_governance:
+  purpose:
+    - 为个人记忆提炼 Agent 提供候选分类与边界依据
+    - 为 Meta-Skill Engine 提供个人本体候选的语义匹配支撑
+    - 为角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）的字段对号入座提供概念基础
+  scope:
+    included:
+      - 对话历史/记忆片段/笔记中可长期记住的个人内容
+      - 五类候选：偏好、实例、属性、关系、规则
+      - 个人角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）的字段建议
+      - 候选去向路由（全局记忆 user/shared、分组字段区、分组流水区）
+      - 来源追溯（候选/手动/导入/智能）与敏感信息拦截
+    excluded:
+      - 企业级组织本体（部门/岗位/职责/权限）
+      - 业务本体（客户/订单/合同/流程/指标）
+      - 团队共享资产与跨客户学习
+      - 不定义 SQL、物理表、物理字段或 Join 条件
+  quality_dimensions:
+    - 候选类型判定准确性
+    - 来源追溯完整性
+    - 敏感信息拦截召回率
+    - 跨格式兼容性（candidates.md 人读格式与结构化解析）
+
+# ============================================================
+# 核心类（Classes）
+# ============================================================
+
+classes:
+  - id: PersonalMemoryEpisode
+    label: 个人记忆片段
+    description: 待提炼的原始输入，来自对话历史、记忆片段、笔记或手工"记住这个"交代
+    alternative_labels: [记忆片段, 对话记录, 笔记]
+    class_kind: domain_entity
+    grain: 片段级
+    identifier_properties: [memoryId]
+
+  - id: PersonalOntologyCandidate
+    label: 个人本体候选
+    description: 从记忆片段提炼出的结构化候选，等待用户确认后才成为正式记忆
+    alternative_labels: [候选, 待确认候选]
+    class_kind: domain_entity
+    grain: 条目级
+    identifier_properties: [candidateId]
+
+  - id: CandidateKind
+    label: 候选类型
+    description: 候选的五种类型分类
+    alternative_labels: [类型]
+    class_kind: vocabulary
+    grain: 枚举级
+
+  - id: Preference
+    label: 偏好
+    description: 喜欢/不喜欢、习惯用什么方式做事、沟通风格、工具偏好、生活习惯
+    alternative_labels: [喜欢, 习惯, 偏好]
+    class_kind: candidate_type
+    grain: 条目级
+    parent: CandidateKind
+
+  - id: Instance
+    label: 实例
+    description: 值得记住的人、项目、工具、地点等实体
+    alternative_labels: [实体]
+    class_kind: candidate_type
+    grain: 条目级
+    parent: CandidateKind
+
+  - id: Property
+    label: 属性
+    description: 某个实体的具体特征或设置
+    alternative_labels: [特征, 设置]
+    class_kind: candidate_type
+    grain: 条目级
+    parent: CandidateKind
+
+  - id: Relation
+    label: 关系
+    description: 实体之间的关联，比如"你常用某个工具做某件事"
+    alternative_labels: [关联]
+    class_kind: candidate_type
+    grain: 条目级
+    parent: CandidateKind
+
+  - id: Rule
+    label: 规则
+    description: 用户摸索出来的经验法则，通常是 if/then 结构
+    alternative_labels: [经验法则, 踩坑教训]
+    class_kind: candidate_type
+    grain: 条目级
+    parent: CandidateKind
+
+  - id: RoleTemplate
+    label: 角色模板
+    description: 预置的个人角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师），模板 = 字段挖空清单，不预设用户事实
+    alternative_labels: [模板]
+    class_kind: domain_entity
+    grain: 模板级
+    identifier_properties: [templateId, version]
+
+  - id: StudentTemplate
+    label: 学生模板
+    description: 面向学生群体的角色模板，含课程、学习、项目等预置字段
+    alternative_labels: [学生]
+    class_kind: template_type
+    grain: 模板级
+    parent: RoleTemplate
+
+  - id: ScholarTemplate
+    label: 学者模板
+    description: 面向学者/研究者的角色模板
+    alternative_labels: [学者]
+    class_kind: template_type
+    grain: 模板级
+    parent: RoleTemplate
+
+  - id: FdeTemplate
+    label: FDE 模板
+    description: 面向一线交付工程师的角色模板
+    alternative_labels: [FDE]
+    class_kind: template_type
+    grain: 模板级
+    parent: RoleTemplate
+
+  - id: SourceKind
+    label: 来源类型
+    description: 候选来源的四值标注：候选/手动/导入/智能
+    alternative_labels: [来源]
+    class_kind: vocabulary
+    grain: 枚举级
+
+  - id: MemoryTarget
+    label: 记忆去向
+    description: 候选确认后的去向：全局记忆（user/shared）或记忆分组
+    alternative_labels: [去向]
+    class_kind: vocabulary
+    grain: 枚举级
+
+  - id: OntologyGroup
+    label: 记忆分组
+    description: 个人本体分组（markdown 双区：字段区 + 流水区），或角色模板文件的分节
+    alternative_labels: [分组, 记忆分组]
+    class_kind: domain_entity
+    grain: 分组级
+    identifier_properties: [groupId, title]
+
+  - id: GroupField
+    label: 分组字段
+    description: 分组字段区中的字段（坑），候选确认时可对号入座填入
+    alternative_labels: [字段, 坑]
+    class_kind: domain_entity
+    grain: 字段级
+    identifier_properties: [fieldName]
+
+  - id: MaskingStatus
+    label: 脱敏状态
+    description: 敏感信息脱敏状态（已脱敏/合成/无敏感/未脱敏/未知）
+    alternative_labels: [脱敏]
+    class_kind: vocabulary
+    grain: 枚举级
+
+# ============================================================
+# 对象属性（Object Properties）
+# ============================================================
+
+object_properties:
+  - id: derivedFrom
+    label: 提炼自
+    domain: PersonalOntologyCandidate
+    range: PersonalMemoryEpisode
+    inverse_of: yieldsCandidates
+    annotations:
+      relationshipCardinality: "1..*"
+      reasoningConstraint: "每条候选必须能回溯到来源记忆片段"
+
+  - id: confirmedBy
+    label: 由用户确认
+    domain: PersonalOntologyCandidate
+    range: RoleTemplate
+    annotations:
+      relationshipCardinality: "0..1"
+      reasoningConstraint: "未经用户确认的候选不进入正式记忆"
+
+  - id: belongsToTemplate
+    label: 归属模板
+    domain: OntologyGroup
+    range: RoleTemplate
+    annotations:
+      relationshipCardinality: "0..1"
+      reasoningConstraint: "模板预置组归属对应角色模板"
+
+  - id: routesToTarget
+    label: 路由去向
+    domain: PersonalOntologyCandidate
+    range: MemoryTarget
+    annotations:
+      relationshipCardinality: "0..*"
+      reasoningConstraint: "确认时可路由到全局记忆或分组字段区/流水区"
+
+  - id: hasField
+    label: 含字段
+    domain: OntologyGroup
+    range: GroupField
+    annotations:
+      relationshipCardinality: "0..*"
+      reasoningConstraint: "分组字段区包含零到多个字段坑"
+
+# ============================================================
+# 数据属性（Datatype Properties）
+# ============================================================
+
+datatype_properties:
+  - id: candidateId
+    label: 候选 ID
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: identifier
+      dataGrain: 条目级
+      supportedQueryOperations: [equals]
+
+  - id: kind
+    label: 类型
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 条目级
+      valueSemantics: preference | instance | property | relation | rule
+      supportedQueryOperations: [equals]
+
+  - id: confidence
+    label: 置信度
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: status
+      dataGrain: 条目级
+      valueSemantics: low | medium | high — 只表示证据强度，不表示自动生效
+      supportedQueryOperations: [equals]
+
+  - id: summary
+    label: 摘要
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: descriptive
+      dataGrain: 条目级
+      valueSemantics: 一句人话摘要，直接展示在审阅卡片上
+      supportedQueryOperations: [contains]
+
+  - id: memory_scope
+    label: 记忆去向
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 条目级
+      valueSemantics: user → USER.md | shared → MEMORY.md
+      supportedQueryOperations: [equals]
+
+  - id: memory_text
+    label: 记忆文本
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: descriptive
+      dataGrain: 条目级
+      valueSemantics: 确认后写入 USER.md/MEMORY.md 的精炼文本
+      supportedQueryOperations: [contains]
+
+  - id: registry_like_path
+    label: 路径
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 条目级
+      valueSemantics: 定位建议，如 Personal/Preferences/CommunicationStyle
+      supportedQueryOperations: [contains]
+
+  - id: diff_summary
+    label: 差异
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: descriptive
+      dataGrain: 条目级
+      valueSemantics: 相对已有记忆的更新差异摘要
+      supportedQueryOperations: [contains]
+
+  - id: target_field
+    label: 建议字段
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 条目级
+      valueSemantics: 角色模板字段名（如 沟通风格/工具偏好）；拿不准不填
+      supportedQueryOperations: [equals]
+
+  - id: source_memory_refs
+    label: 来源引用
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: descriptive
+      dataGrain: 条目级
+      valueSemantics: 逗号分隔的来源引用（会话 id/轮次 id），供回溯
+      supportedQueryOperations: [contains]
+
+  - id: source_kind
+    label: 来源标注
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: provenance
+      dataGrain: 条目级
+      valueSemantics: 候选 | 手动 | 导入 | 智能
+      supportedQueryOperations: [equals]
+
+  - id: masking_status
+    label: 脱敏状态
+    domain: PersonalOntologyCandidate
+    range: string
+    annotations:
+      semanticRole: status
+      dataGrain: 条目级
+      valueSemantics: masked | synthetic | no_sensitive_data | unmasked | unknown
+      supportedQueryOperations: [equals]
+
+# ============================================================
+# 受控词表（Controlled Vocabularies）
+# ============================================================
+
+controlled_vocabularies:
+  - id: CandidateKindVocabulary
+    label: 候选类型词表
+    description: 五类候选分类
+    terms:
+      - preference
+      - instance
+      - property
+      - relation
+      - rule
+
+  - id: SourceKindVocabulary
+    label: 来源类型词表
+    description: 候选来源四值
+    terms:
+      - 候选
+      - 手动
+      - 导入
+      - 智能
+
+  - id: MemoryTargetVocabulary
+    label: 去向词表
+    description: 候选确认后的去向
+    terms:
+      - user
+      - shared
+      - 分组字段区
+      - 分组流水区
+
+  - id: MaskingStatusVocabulary
+    label: 脱敏状态词表
+    description: 敏感信息脱敏状态
+    terms:
+      - masked
+      - synthetic
+      - no_sensitive_data
+      - unmasked
+      - unknown
+
+  - id: RoleTemplateVocabulary
+    label: 角色模板词表
+    description: 内置个人角色模板
+    terms:
+      - student
+      - scholar
+      - fde
+
+# ============================================================
+# 公理（Axioms）
+# ============================================================
+
+axioms:
+  disjoint_classes:
+    - [Preference, Instance, Property, Relation, Rule]
+    - [StudentTemplate, ScholarTemplate, FdeTemplate]
+  class_restrictions:
+    - class: PersonalOntologyCandidate
+      restriction: derivedFrom min 1 PersonalMemoryEpisode
+    - class: PersonalOntologyCandidate
+      restriction: confirmedBy max 1 RoleTemplate
+
+# ============================================================
+# 验证（Validation）
+# ============================================================
+
+validation:
+  enabled: true
+  shacl_shapes: []
+
+mapping_hints:
+  target: candidates_md
+  description: 映射到本地 candidates.md 待确认候选池
+
+physical_mapping_placeholder:
+  enabled: false

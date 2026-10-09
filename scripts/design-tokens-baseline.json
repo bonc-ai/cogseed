@@ -1,0 +1,27 @@
+{
+  "onboarding.css": {
+    "color": 82,
+    "fontSize": 24,
+    "radius": 11
+  },
+  "plugins.css": {
+    "color": 17,
+    "fontSize": 4
+  },
+  "recall-local.css": {
+    "color": 462,
+    "fontSize": 13,
+    "radius": 4
+  },
+  "style.css": {
+    "color": 1417,
+    "zIndex": 7,
+    "fontSize": 323,
+    "radius": 254
+  },
+  "workspace.css": {
+    "color": 317,
+    "fontSize": 6,
+    "radius": 39
+  }
+}

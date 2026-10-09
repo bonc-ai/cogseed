@@ -1,0 +1,8 @@
+interface:
+  display_name: "个人本体候选构建器"
+  short_description: "从对话与记忆中提炼个人本体候选（偏好/实例/属性/关系/规则），强制本地存储，用户确认后才写入长期记忆。"
+  default_prompt: >-
+    Use personal-ontology-candidate-builder to inspect conversation history and memory material,
+    reference the personal ontology (ontology/personal_ontology/ scene YAML),
+    produce candidates.md / blocked_items.md entries with source trace and masking checks,
+    and enforce local_only plus user confirmation before any durable memory write.

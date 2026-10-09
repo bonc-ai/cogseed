@@ -1,0 +1,18 @@
+{
+  "display_name": "Feishu Class Bitable",
+  "kind": "feishu-bitable",
+  "profile_ref": "../course/class-profile.yaml",
+  "scope": ["bitable:app"],
+  "tables": {
+    "students": "学生表",
+    "challenges": "挑战任务表",
+    "submissions": "提交记录表",
+    "evaluations": "评价记录表",
+    "portfolio": "作品集表",
+    "audit": "AuditLogs",
+    "inbox": "InboxQueue",
+    "teachers": "Teachers",
+    "admins": "Admins"
+  },
+  "_note": "飞书是可插拔组件：插件运行时只读写平台 API，平台内部经此映射访问飞书；换班只改 class-profile.yaml，不动本文件。"
+}

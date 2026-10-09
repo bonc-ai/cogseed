@@ -1,0 +1,170 @@
+# Gitleaks >= 8.25: retain all default rules. Each reviewed exception matches
+# a specific rule, one exact file path, AND one exact synthetic value.
+# Never exempt an entire test/vendor directory or a whole commit.
+title = "CogSeed reviewed synthetic fixtures"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)src/core\-agent/test/tools\.test\.ts$''']
+regexes = [
+  '''^\Qpropagated-abc123\E$''',
+]
+
+[[allowlists]]
+description = "Unmodified xterm export expression, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)src/renderer/vendor/xterm/xterm\.js$''']
+regexes = [
+  '''^\Qt.TwoKeyMap=void\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/p3394_bridge/executor\-leak\.test\.ts$''']
+regexes = [
+  '''^\QabcDEF1234567890\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/p3394_bridge/http\-leak\-boundary\.test\.ts$''']
+regexes = [
+  '''^\Qsk-abcdef0123456789\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["jwt"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/p3394_bridge/redaction\.test\.ts$''']
+regexes = [
+  '''^\QeyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/p3394_bridge/remote\-nodes\.test\.ts$''']
+regexes = [
+  '''^\Qtok-abcdef1234\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["stripe-access-token", "generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/recall/asset\-semantics\.test\.ts$''']
+regexes = [
+  '''^\Qsk_live_9f8e7d6c5b4a3210\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/recall/asset\-service\.test\.ts$''']
+regexes = [
+  '''^\Qsk-123456789012345678901234\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/recall/candidate\-service\.test\.ts$''']
+regexes = [
+  '''^\Qsk-123456789012345678901234\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["gitlab-pat"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/features/recall/candidate\-service\.test\.ts$''']
+regexes = [
+  '''^\Qglpat-0123456789abcdefTEST\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/model/local\-tools\.test\.ts$''']
+regexes = [
+  '''^\QSECRET-sentinel-7f3\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["gitlab-pat"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/quality/context\-and\-secrets\.test\.ts$''']
+regexes = [
+  '''^\Qglpat-abcdefghij0123456789\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["gitlab-pat"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/util/cognition\-sensitivity\.test\.ts$''']
+regexes = [
+  '''^\Qglpat-abcdefghij1234567890\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["private-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/util/cognition\-sensitivity\.test\.ts$''']
+regexes = [
+  '''^\Q-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n', 'private_key_block'],
+    ['OpenSSH 私钥', '备份里有 -----BEGIN OPENSSH PRIVATE KEY-----\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["stripe-access-token", "generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/main/util/cognition\-sensitivity\.test\.ts$''']
+regexes = [
+  '''^\Qsk_live_9f8e7d6c5b4a3210\E$''',
+]
+
+[[allowlists]]
+description = "Synthetic test data for credential detection, redaction, or sandbox isolation"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)test/scripts/diagnose\-local\-agents\.test\.ts$''']
+regexes = [
+  '''^\Qsk-1234567890\E$''',
+  '''^\Qsk-1234567890abcdef\E$''',
+  '''^\Qtok-1234567890\E$''',
+]

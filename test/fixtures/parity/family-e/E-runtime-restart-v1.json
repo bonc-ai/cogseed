@@ -1,0 +1,47 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only E-runtime-restart-v1",
+  "inputs": {
+    "completed_before_restart": true,
+    "run_id": "run-recovery-1",
+    "uid": "u-parity-capture"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "duplicate_request_claim": [
+      {
+        "claimed": true
+      },
+      {
+        "claimed": false,
+        "existingRunId": "run-recovery-2",
+        "status": "running"
+      }
+    ],
+    "events": [
+      {
+        "request_id": "req-recovery-1",
+        "runtime_session_id": "mruntime-recovery-1",
+        "status": "completed",
+        "text": "done",
+        "type": "event"
+      }
+    ],
+    "runMeta": {
+      "created_at": "__TIMESTAMP__",
+      "request_id": "req-recovery-1",
+      "run_id": "run-recovery-1",
+      "runtime_session_id": "mruntime-recovery-1",
+      "status": "completed",
+      "updated_at": "__TIMESTAMP__"
+    }
+  },
+  "notes": [
+    "Persisted completed state is read back and the request ledger rejects a second claim for the same request id."
+  ]
+}

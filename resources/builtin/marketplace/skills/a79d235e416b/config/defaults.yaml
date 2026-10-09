@@ -1,0 +1,9 @@
+{
+  "automation_ceiling": "staged_eligible",
+  "default_authority": "A2",
+  "exit_gate": "Evidence Gate",
+  "production_release_allowed": false,
+  "schema_version": "1.0",
+  "stage": "Discover",
+  "unknown_failure": "pending"
+}

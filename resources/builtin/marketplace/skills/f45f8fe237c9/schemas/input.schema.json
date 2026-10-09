@@ -1,0 +1,67 @@
+{
+  "$id": "urn:ai-product-suite:frame-ai-product:input:0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "owner_context": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_scope": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "owner_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_id",
+        "authorization_scope"
+      ],
+      "type": "object"
+    },
+    "product_version_id": {
+      "pattern": "^PV-[0-9]{3,}$",
+      "type": "string"
+    },
+    "stage_input": {
+      "additionalProperties": false,
+      "properties": {
+        "business_context": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "idea": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "target_user": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "idea",
+        "target_user",
+        "business_context"
+      ],
+      "type": "object"
+    },
+    "task_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "product_version_id",
+    "owner_context",
+    "stage_input"
+  ],
+  "title": "Frame｜产品机会框定 input",
+  "type": "object"
+}

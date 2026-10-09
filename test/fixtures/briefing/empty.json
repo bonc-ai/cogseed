@@ -1,0 +1,13 @@
+{
+  "description": "数据全缺：无本体事实且无日历事件 → 通用简报（不含任何资源数据），仍可推送不阻塞",
+  "now": "2026-08-10T08:00:00",
+  "facts": [],
+  "events": [],
+  "expected": {
+    "degraded": true,
+    "missingData": ["facts", "events"],
+    "sectionKeys": ["generic"],
+    "contains": ["今天还没有已接入的课程、会议或截止日期安排"],
+    "notContains": ["今日安排", "近期截止", "空闲时段建议"]
+  }
+}

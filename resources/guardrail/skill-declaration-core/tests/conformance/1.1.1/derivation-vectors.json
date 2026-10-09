@@ -1,0 +1,29 @@
+[
+  {
+    "id": "derive-local-public-dev",
+    "environment": "development",
+    "actions": [],
+    "data": { "input_classification": ["PUBLIC"], "pii_allowed": false, "secrets_allowed": false, "external_transmission": false },
+    "maximum_impact": "无持久影响，仅静态文本格式化",
+    "declared_risk": "L0",
+    "expect_calculated_max": "L1"
+  },
+  {
+    "id": "derive-prod-write-floor",
+    "environment": "production",
+    "actions": [{ "id": "a1", "effect": "WRITE", "permission_id": "p1", "recoverable": true }],
+    "data": { "input_classification": ["INTERNAL"], "pii_allowed": false, "secrets_allowed": false, "external_transmission": false },
+    "maximum_impact": "生产业务受影响但可恢复",
+    "declared_risk": "L3",
+    "expect_calculated_min": "L3"
+  },
+  {
+    "id": "derive-irreversible-delete-block",
+    "environment": "development",
+    "actions": [{ "id": "del1", "effect": "DELETE", "recoverable": false, "permission_id": "pdel" }],
+    "data": { "input_classification": ["INTERNAL"], "pii_allowed": false, "secrets_allowed": false, "external_transmission": false },
+    "maximum_impact": "不可逆删除",
+    "declared_risk": "L5",
+    "expect_block_rule": "SEC-ACTION-IRREVERSIBLE-001"
+  }
+]

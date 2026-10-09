@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skill-sentry.local/schemas/report-schema.json",
+  "title": "Skill Sentry Report",
+  "description": "Skill Sentry 扫描报告契约（3.3 要求的 9 个核心字段 + 支撑信息）。scan() 的返回值必须符合此 schema。",
+  "type": "object",
+  "required": [
+    "scanner",
+    "scanner_version",
+    "security_score",
+    "risk_classification",
+    "attack_surface",
+    "permission_summary",
+    "data_access_summary",
+    "dangerous_action_list",
+    "vulnerability_findings",
+    "required_mitigations",
+    "deployment_recommendation"
+  ],
+  "properties": {
+    "scanner": { "type": "string", "const": "skill-sentry" },
+    "scanner_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "ruleset_version": { "type": "string" },
+    "skill": { "type": "string" },
+    "skill_path": { "type": "string" },
+    "security_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "risk_classification": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    },
+    "attack_surface": {
+      "type": "object",
+      "required": ["network_egress_points", "dynamic_execution_points", "persistence_points", "binary_files", "has_binaries"],
+      "properties": {
+        "network_egress_points": { "type": "array" },
+        "dynamic_execution_points": { "type": "array" },
+        "persistence_points": { "type": "array" },
+        "binary_files": { "type": "integer", "minimum": 0 },
+        "has_binaries": { "type": "boolean" }
+      }
+    },
+    "permission_summary": {
+      "type": "object",
+      "required": ["declares_permissions", "has_hitl", "has_side_effects"],
+      "properties": {
+        "declares_permissions": { "type": "boolean" },
+        "has_hitl": { "type": "boolean" },
+        "has_side_effects": { "type": "boolean" },
+        "note": { "type": "string" }
+      }
+    },
+    "data_access_summary": {
+      "type": "object",
+      "required": ["network_used", "egress_findings", "has_audit"],
+      "properties": {
+        "network_used": { "type": "boolean" },
+        "egress_findings": { "type": "integer", "minimum": 0 },
+        "has_audit": { "type": "boolean" },
+        "binary_network_indicators": { "type": "array" }
+      }
+    },
+    "dangerous_action_list": { "type": "array" },
+    "vulnerability_findings": { "type": "array" },
+    "required_mitigations": { "type": "array" },
+    "deployment_recommendation": {
+      "type": "string",
+      "enum": ["ALLOW", "CAUTION", "DO_NOT_INSTALL"]
+    },
+    "sr_items": { "type": "array" },
+    "findings": {
+      "type": "array",
+      "description": "全部发现项。severity 为生效严重级（可能已被上下文降权）；original_severity 为规则声明的原始级别；context 记录降权依据。降权不删除 finding，审计时应同时看这三个字段。",
+      "items": {
+        "type": "object",
+        "required": [
+          "sr", "rule_id", "severity", "category", "file", "line",
+          "description", "remediation", "hard_block", "source",
+          "context", "original_severity", "demoted"
+        ],
+        "properties": {
+          "sr": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "original_severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "context": {
+            "type": "string",
+            "enum": ["source", "test", "vendor", "doc", "prose", "comment"]
+          },
+          "demoted": { "type": "boolean" },
+          "category": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "description": { "type": "string" },
+          "remediation": { "type": "string" },
+          "hard_block": { "type": "boolean" },
+          "source": { "type": "string" }
+        }
+      }
+    },
+    "hard_blocked": { "type": "boolean" },
+    "binary_scan": { "type": "object" },
+    "tool_status": { "type": "object" },
+    "rules_source": { "type": ["string", "null"] },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "status": { "type": "string" }
+  }
+}

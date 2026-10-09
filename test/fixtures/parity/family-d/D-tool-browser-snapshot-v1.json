@@ -1,0 +1,42 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only D-tool-browser-snapshot-v1",
+  "inputs": {
+    "commands": [
+      "npm install playwright",
+      "https://example.test",
+      "cf-ray waf challenge"
+    ]
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "browser": [
+      {
+        "automation": true,
+        "command": "npm install playwright",
+        "explicit": true,
+        "waf": false
+      },
+      {
+        "automation": false,
+        "command": "https://example.test",
+        "explicit": false,
+        "waf": false
+      },
+      {
+        "automation": false,
+        "command": "cf-ray waf challenge",
+        "explicit": false,
+        "waf": false
+      }
+    ]
+  },
+  "notes": [
+    "Browser guard classification is deterministic and does not access private storage."
+  ]
+}

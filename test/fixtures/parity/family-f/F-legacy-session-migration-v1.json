@@ -1,0 +1,29 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only F-legacy-session-migration-v1",
+  "inputs": {
+    "legacy_filename": "legacy-user-gconv-c1.jsonl",
+    "legacy_session_id": "legacy-user-gconv-c1"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "files": [
+      "legacy-user-gconv-c1.jsonl"
+    ],
+    "stats": {
+      "alreadyMigrated": 0,
+      "conflicts": 0,
+      "fieldsRewritten": 0,
+      "renamed": 0,
+      "scanned": 0
+    }
+  },
+  "notes": [
+    "Migration is invoked through the existing public migration function and records conversion counts."
+  ]
+}
