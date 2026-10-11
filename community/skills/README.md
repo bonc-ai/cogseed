@@ -57,7 +57,9 @@ The status chain is deliberately separate:
 
 1. **Pull request opened** — proposed contribution.
 2. **Accepted community candidate** — reviewed and imported into private development;
-   the public PR is closed with an import record and the source appears in a later release snapshot.
+   the public PR stays open until source release gates, required CI and maintainer
+   approval pass; it then merges preserving the original author commits before
+   the next public snapshot.
 3. **Import verified** — separately tested in a clean CogSeed environment.
 4. **Hub published** — separately approved and distributed through CogSeed Hub.
 5. **Bundled** — separately approved for inclusion in an application release.
