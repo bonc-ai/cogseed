@@ -5,14 +5,17 @@
  * **这一版到底改了什么。** 没有这个答案，"回滚到此版本"就是一次盲赌。
  *
  * 数据是现成的：`AbilityAssetVersionRecord.snapshot` 每一版都存了完整内容
- * （title / statement / scope / applicableWhen / forbiddenWhen / sensitivity /
+ * （title / statement / scope / applicableWhen / forbiddenWhen /
  * evidenceRefs …），所以这里不需要新增任何持久化，只做纯比对。
+ *
+ * 标签（tags）是元数据，**不进版本 diff**：标签改动不 bump 内容版本
+ * （specs/012 data-model §3，对齐 familyName 先例），版本链只记内容；
+ * 快照本身也不含 tags（见 asset-service 的 snapshot()）。
  *
  * 比对的粒度按「用户要为什么事负责」来分，不是按字段数量：
  *   - 作用边界变了，意味着这条资产从今往后会进入/退出一批任务；
- *   - 敏感级升了，意味着它能去的地方变了；
  *   - 正文变了，意味着它主张的内容变了。
- * 这三类必须能各自被识别出来，因为待办里对应三种不同的决定。
+ * 这两类必须能各自被识别出来，因为待办里对应两种不同的决定。
  */
 
 import type { AbilityAssetVersionRecord } from '../asset-service';
@@ -27,10 +30,6 @@ export type AssetChangeKind =
   | 'title'
   /** 作用域变了。 */
   | 'scope'
-  /** 敏感级变了。升档单独用 sensitivity_escalated 表示。 */
-  | 'sensitivity'
-  /** 敏感级**升高**：能去的地方变多了，属于扩权。 */
-  | 'sensitivity_escalated'
   /** 证据集合变了。 */
   | 'evidence'
   /** 成熟度变了。 */
@@ -60,15 +59,10 @@ export interface AssetVersionDiff {
 
 type Snapshot = AbilityAssetVersionRecord['snapshot'];
 
-/** 敏感级从低到高。缺失不参与比较——未分级不是一个档位。 */
-const SENSITIVITY_RANK: Record<string, number> = { L0: 0, L1: 1, L2: 2, L3: 3 };
-
 /** 影响面从大到小：先说"它会不会进入别的任务"，再说"它说了什么"。 */
 const CHANGE_ORDER: AssetChangeKind[] = [
-  'sensitivity_escalated',
   'boundary',
   'scope',
-  'sensitivity',
   'statement',
   'evidence',
   'maturity',
@@ -121,21 +115,6 @@ export function diffAssetSnapshots(previous: Snapshot | undefined, next: Snapsho
   push(changes, 'evidence', 'evidenceRefs', evidenceOf(previous.evidenceRefs), evidenceOf(next.evidenceRefs));
   push(changes, 'maturity', 'maturity', textOf(previous.maturity), textOf(next.maturity));
   push(changes, 'status', 'status', textOf(previous.status), textOf(next.status));
-
-  // 敏感级：只有确实升高才叫扩权。降级和"从未分级变成已分级"都不是。
-  const before = textOf(previous.sensitivity);
-  const after = textOf(next.sensitivity);
-  if (before !== after) {
-    const beforeRank = SENSITIVITY_RANK[before];
-    const afterRank = SENSITIVITY_RANK[after];
-    const escalated = beforeRank !== undefined && afterRank !== undefined && afterRank > beforeRank;
-    changes.push({
-      kind: escalated ? 'sensitivity_escalated' : 'sensitivity',
-      field: 'sensitivity',
-      before,
-      after,
-    });
-  }
 
   return changes;
 }

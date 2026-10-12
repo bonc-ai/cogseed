@@ -31,13 +31,26 @@ function sliceBlock(source: string, start: number): string {
   const bodyStart = source.indexOf('{', start);
   let depth = 0;
   let quote = '';
+  let lineComment = false;
+  let blockComment = false;
   for (let i = bodyStart; i < source.length; i += 1) {
     const char = source[i];
+    const next = source[i + 1];
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') { blockComment = false; i += 1; }
+      continue;
+    }
     if (quote) {
       if (char === '\\') i += 1;
       else if (char === quote) quote = '';
       continue;
     }
+    if (char === '/' && next === '/') { lineComment = true; i += 1; continue; }
+    if (char === '/' && next === '*') { blockComment = true; i += 1; continue; }
     if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
     if (char === '{') depth += 1;
     else if (char === '}' && --depth === 0) return source.slice(start, i + 1);
@@ -210,7 +223,7 @@ describe('候选决定的收尾', () => {
   const decide = fnBlock('async decideCandidate');
 
   it('确认并限域成功后离开候选详情页，回到对应落点', () => {
-    expect(adopt).toContain("router.go({ name: 'overview', assetId: result.assetId })");
+    expect(adopt).toContain("router.go({ name: 'overview', assetId: promotedAssetId })");
     expect(adopt).toContain("router.go({ name: 'review' })");
     expect(adopt).toContain("toast(T('cognition.candidate_promoted'");
     // 成功路径只有 toast 分支；scope 拦截的 alertUser 在 promote 之前 return。
@@ -254,8 +267,12 @@ describe('候选决定的收尾', () => {
   });
 
   it('塞进自由文本也不会新增证据——那个输入口已经没有了', () => {
-    // 证据区只读：无自由文本证据输入（views.js 无 textarea 证据控件）。
-    const views = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/views.js'), 'utf-8');
+    // 证据区只读：无自由文本证据输入（视图层无 textarea 证据控件）。
+    // 2026-09-29 views.js 机械拆分：evidenceRefs 渲染随候选族迁入 review-candidate.js /
+    // review-views.js，按加载顺序合并三源扫描（断言语义不变）。
+    const views = ['views.js', 'review-candidate.js', 'review-views.js']
+      .map((file) => fs.readFileSync(path.join(root, `src/renderer/modules/cognition-assets/${file}`), 'utf-8'))
+      .join('\n');
     expect(views).not.toContain('data-recall-edit-evidence');
     expect(views).toContain('evidenceRefs');
   });

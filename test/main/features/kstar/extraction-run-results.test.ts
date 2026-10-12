@@ -28,10 +28,14 @@ describe('KSTAR extraction run results', () => {
     await store.replaceKstarRequirement('user-a', requirement);
     const result = await (await import('../../../../src/main/features/kstar/task-level-precipitation')).precipitateRequirementLevel('user-a', requirement);
     const run = await episodes.readKstarJsonRecord('user-a', 'extraction-runs', `ksx-${episode.id}`);
-    expect(result.candidateIds.length).toBeGreaterThan(0);
+    // specs/016 T014：create 线改道写经验（candidateIds/createdAssetIds 为空），
+    // 经验产出驻留 run 记录的 experienceIds。
+    expect(result.experienceIds.length).toBeGreaterThan(0);
+    expect(result.candidateIds).toEqual([]);
     expect(run).toMatchObject({
-      candidateIds: result.candidateIds,
-      createdAssetIds: result.createdAssetIds,
+      experienceIds: result.experienceIds,
+      candidateIds: [],
+      createdAssetIds: [],
       status: 'degraded',
       error: 'Forecast provenance is unavailable; candidate evidence is incomplete.',
     });

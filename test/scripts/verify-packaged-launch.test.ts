@@ -10,6 +10,7 @@ const verifier = require('../../scripts/verify-packaged-launch.cjs') as {
   verifySmokeMarker: (marker: unknown) => string[];
   waitForMarker: (markerPath: string, child: EventEmitter & { exitCode: number | null }, timeoutMs?: number) => Promise<unknown>;
   terminateChild: (child: EventEmitter & { exitCode: number | null; signalCode: string | null; kill: ReturnType<typeof vi.fn> }, graceMs?: number) => Promise<void>;
+  cleanupTemporaryRoot: (tempRoot: string) => boolean;
 };
 
 describe('packaged launch smoke', () => {
@@ -63,5 +64,13 @@ describe('packaged launch smoke', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('removes a disposable profile after the packaged smoke', () => {
+    const tempRoot = path.join(process.cwd(), '.tmp-packaged-launch-test');
+    const fs = require('node:fs') as typeof import('node:fs');
+    fs.mkdirSync(tempRoot, { recursive: true });
+    expect(verifier.cleanupTemporaryRoot(tempRoot)).toBe(true);
+    expect(fs.existsSync(tempRoot)).toBe(false);
   });
 });

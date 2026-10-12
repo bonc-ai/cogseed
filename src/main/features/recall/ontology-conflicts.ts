@@ -29,6 +29,7 @@ import * as path from 'node:path';
 import { createLogger } from '../../logger';
 import { userOntologyGroupsDir } from '../../paths';
 import { safeId, nowIso, genId12, writeTextAtomicSync } from '../../storage';
+import { notifyCognitionWrite } from './store-events';
 // groups 不反向依赖本模块（写值挂点用动态 import），这里静态单向依赖安全。
 import {
   collectTemplateFileFields,
@@ -113,6 +114,7 @@ function readConflicts(uid: string): OntologyConflictRecord[] {
 
 function writeConflicts(uid: string, records: OntologyConflictRecord[]): void {
   writeTextAtomicSync(conflictsMdPath(uid), serializeConflictsMd(records));
+  notifyCognitionWrite(uid, 'ontology-conflicts', 'update');
 }
 
 function dedupeKey(r: { group_id: string; field: string; value_a: string; value_b: string }): string {
@@ -193,12 +195,17 @@ export async function checkNewValueAgainst(
   groupId: string,
   fieldName: string,
   newValue: string,
-  existingValues: string[],
+  existingValues: Array<string | { value: string; restricted?: boolean }>,
   opts: ConflictCheckOptions = {},
 ): Promise<void> {
   try {
     if (!safeId(userId) || !safeId(groupId)) return;
-    const others = (existingValues || []).filter((v) => v && v !== newValue);
+    // B5①（specs/014 T017）：受限值不送检——对含受限值的值对整对跳过，
+    // 既不进 LLM 也不进台账（受限 = 不自动注入 LLM 的既有口径，写后检测
+    // 不能成为旁路）。形态兼容旧的纯字符串数组。
+    const asEntry = (v: string | { value: string; restricted?: boolean }) =>
+      typeof v === 'string' ? { value: v, restricted: false } : { value: String(v && v.value), restricted: v && v.restricted === true };
+    const others = (existingValues || []).map(asEntry).filter((v) => v.value && v.value !== newValue && !v.restricted);
     if (!others.length) return;
 
     const { embedForDedup, cosineScore } = await import('./similarity');
@@ -209,7 +216,8 @@ export async function checkNewValueAgainst(
     }
     const judge = opts.judgeFn ?? llmJudgeMutuallyExclusive;
     const timeoutMs = opts.judgeTimeoutMs ?? CONFLICT_JUDGE_TIMEOUT_MS;
-    for (const existing of others.slice(0, MAX_PAIRS_PER_CHECK)) {
+    for (const entry of others.slice(0, MAX_PAIRS_PER_CHECK)) {
+      const existing = entry.value;
       const existingVec = await embedForDedup(userId, existing);
       if (!existingVec) continue;
       if (cosineScore(newVec, existingVec) < CONFLICT_SEMANTIC_THRESHOLD) continue;
@@ -300,4 +308,120 @@ export async function listConflicts(
     }
     return live;
   });
+}
+
+/* ═══════════ 确认动作的写入前冲突门（specs/014 US-902 / T011/T012）═══════════
+ * 与既有「写后检测」（checkNewValueAgainst → LLM judge → 台账）互补：
+ * 这里是**写入时刻的只读预检**——本地 embedding 判「可能矛盾」（阈值沿用
+ * CONFLICT_SEMANTIC_THRESHOLD），不发 LLM、不写盘、不触发自愈。 */
+
+export interface PrecheckConflict {
+  field: string;
+  existingValue: string;
+}
+
+export interface PrecheckResult {
+  blocked: boolean;
+  conflicts: PrecheckConflict[];
+  /** embedding 不可用时的降级标记（放行但不静默——调用方记日志）。 */
+  degraded: boolean;
+}
+
+/**
+ * T011：只读读出「两条值仍在」的矛盾对（与 listConflicts 的过滤口径一致，
+ * 但**不写回**——读取方（世界模型装配 / 注入提示）不该顺手改台账）。
+ * 每端带受限标记（受限端的正文不进模型侧标记与提示，只置位）。
+ */
+export interface LiveConflictPair {
+  groupId: string;
+  field: string;
+  valueA: string;
+  valueB: string;
+  aRestricted: boolean;
+  bRestricted: boolean;
+}
+
+export async function readLiveConflicts(userId: string): Promise<LiveConflictPair[]> {
+  const all = readConflicts(userId);
+  if (!all.length) return [];
+  const live: LiveConflictPair[] = [];
+  for (const record of all) {
+    let values: Array<{ value: string; restricted: boolean }> = [];
+    try {
+      const content = await readGroupContent(userId, record.group_id);
+      if (content.content) {
+        if (isTemplateFileText(content.content)) {
+          for (const f of collectTemplateFileFields(content.content)) {
+            if (f.name === record.field) {
+              values.push(...f.values.map((fv) => ({ value: fv.value, restricted: fv.sensitivity === 'restricted' })));
+            }
+          }
+        } else {
+          values = (parseGroupContent(content.content).fields[record.field] || [])
+            .map((fv) => ({ value: fv.value, restricted: fv.sensitivity === 'restricted' }));
+        }
+      }
+    } catch {
+      values = [];
+    }
+    const a = values.find((entry) => entry.value === record.value_a);
+    const b = values.find((entry) => entry.value === record.value_b);
+    if (a && b) {
+      live.push({
+        groupId: record.group_id,
+        field: record.field,
+        valueA: record.value_a,
+        valueB: record.value_b,
+        aRestricted: a.restricted,
+        bRestricted: b.restricted,
+      });
+    }
+  }
+  return live;
+}
+
+/**
+ * T012：写入时刻预检——读盘取该字段全部值（**受限值不进送检**），候选文本与
+ * 每条做本地 embedding 余弦；≥ CONFLICT_SEMANTIC_THRESHOLD 即「可能矛盾」。
+ * 完全相等 → 跳过（既有去重路径不发门）；上限 MAX_PAIRS_PER_CHECK；
+ * embedding 不可用 → 放行但 degraded:true（调用方记日志，不静默）。
+ */
+export async function precheckFieldValueConflict(
+  userId: string,
+  ref: string,
+  fieldName: string,
+  candidateText: string,
+): Promise<PrecheckResult> {
+  const text = String(candidateText || '').trim();
+  if (!text) return { blocked: false, conflicts: [], degraded: false };
+  // 写入时刻读盘：以**此刻**的值为准（值在两次调用之间被改 → 重检结果不同）。
+  const { listFieldsByRef } = await import('../personal_ontology_template_files');
+  let values: Array<{ value: string; restricted: boolean }> = [];
+  try {
+    const fields = await listFieldsByRef(userId, ref);
+    const field = (fields.fields || []).find((f) => f.name === fieldName);
+    values = ((field && field.values) || []).map((fv) => ({
+      value: String(fv.value || ''),
+      restricted: fv.sensitivity === 'restricted',
+    }));
+  } catch {
+    return { blocked: false, conflicts: [], degraded: false };
+  }
+  const others = values.filter((entry) => entry.value && entry.value !== text && !entry.restricted);
+  if (!others.length) return { blocked: false, conflicts: [], degraded: false };
+
+  const { embedForDedup, cosineScore } = await import('./similarity');
+  const candidateVec = await embedForDedup(userId, text);
+  if (!candidateVec) {
+    return { blocked: false, conflicts: [], degraded: true };
+  }
+  const conflicts: PrecheckConflict[] = [];
+  for (const existing of others.slice(0, MAX_PAIRS_PER_CHECK)) {
+    const existingVec = await embedForDedup(userId, existing.value);
+    if (!existingVec) continue;
+    if (cosineScore(candidateVec, existingVec) >= CONFLICT_SEMANTIC_THRESHOLD) {
+      conflicts.push({ field: fieldName, existingValue: existing.value });
+    }
+  }
+  return { blocked: conflicts.length > 0, conflicts, degraded: false };
 }

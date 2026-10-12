@@ -20,6 +20,7 @@ import { createLogger } from '../../logger';
 import { appendJsonlAtomic, readJsonl, nowIso } from '../../storage';
 import { cogseedAgentReviewDecisionsDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
+import { notifyCognitionWrite } from '../recall/store-events';
 
 const log = createLogger('review-decision');
 
@@ -133,6 +134,7 @@ export async function writeReviewDecision(
     timestamp: nowIso(),
   };
   await appendJsonlAtomic<ReviewDecision>(reviewDecisionLogPath(uid, input.targetRef), record);
+  notifyCognitionWrite(uid, 'candidates', 'append', decisionId);
   log.info(`review decision actor=${input.actor || 'user'} user=${maskId(uid)} target=${maskId(input.targetRef)} type=${input.decisionType}`);
   return record;
 }
@@ -163,6 +165,7 @@ export async function recordReviewDecisionOutcome(
     timestamp: nowIso(),
   };
   await appendJsonlAtomic<ReviewDecision>(reviewDecisionLogPath(uid, targetRef), updated);
+  notifyCognitionWrite(uid, 'candidates', 'append', decisionId);
   return updated;
 }
 

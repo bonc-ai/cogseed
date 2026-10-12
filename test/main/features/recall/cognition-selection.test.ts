@@ -131,31 +131,6 @@ describe('作用域白名单的三态在选择层生效', () => {
   });
 });
 
-describe('敏感级：缺失不等于 L0', () => {
-  it('目的地声明上限后，没分过级的资产不放行', async () => {
-    const { classifyInheritedAsset } = await mod();
-    const a = asset({ id: 'aa-unclass' });
-    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery', maxSensitivity: 'L1' }))
-      .toEqual(['sensitivity_unclassified']);
-  });
-
-  it('超过上限拦下，不超过放行', async () => {
-    const { classifyInheritedAsset } = await mod();
-    const high = asset({ id: 'aa-l2', sensitivity: 'L2' });
-    const low = asset({ id: 'aa-l0', sensitivity: 'L0' });
-    expect(classifyInheritedAsset(await refFor(high), high, { scope: 'delivery', maxSensitivity: 'L1' }))
-      .toEqual(['sensitivity_above_destination']);
-    expect(classifyInheritedAsset(await refFor(low), low, { scope: 'delivery', maxSensitivity: 'L1' }))
-      .toEqual([]);
-  });
-
-  it('目的地没声明上限时不拿敏感级说事', async () => {
-    const { classifyInheritedAsset } = await mod();
-    const a = asset({ id: 'aa-l2b', sensitivity: 'L2' });
-    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery' })).toEqual([]);
-  });
-});
-
 describe('规范 10.2 矩阵在这里被真正消费', () => {
   it('seed 档默认不带入', async () => {
     const { classifyInheritedAsset } = await mod();
@@ -324,7 +299,7 @@ describe('跨作用域授权的落盘与撤回', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const c = await candidates.saveRecallCandidate(UID, {
-      judgment: '一条会被授权跨域的判断。', suggestedType: 'rule', suggestedScope: 'delivery',
+      judgment: '一条会被授权跨域的判断。', summary: '跨域授权样本', suggestedType: 'rule', suggestedScope: 'delivery',
       sourceRefs: [{ kind: 'execution', id: 'exec-cross' }],
     });
     const { asset: created } = await candidates.promoteRecallCandidate(UID, c.id, { actor: 'user' });
@@ -346,7 +321,7 @@ describe('跨作用域授权的落盘与撤回', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const c = await candidates.saveRecallCandidate(UID, {
-      judgment: '会被彻底清除的判断。', suggestedType: 'rule', suggestedScope: 'delivery',
+      judgment: '会被彻底清除的判断。', summary: '清除授权样本', suggestedType: 'rule', suggestedScope: 'delivery',
       sourceRefs: [{ kind: 'execution', id: 'exec-purge-cross' }],
     });
     const { asset: created } = await candidates.promoteRecallCandidate(UID, c.id, { actor: 'user' });

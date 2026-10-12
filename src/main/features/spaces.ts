@@ -1182,6 +1182,7 @@ export async function resolveSpaceScope(
 export async function formatRoleProfileForSystemPrompt(
   uid: string,
   spaceId: string | null | undefined,
+  readContext: import('./recall/prompt-injection').RecallAgentReadContext = {},
 ): Promise<string> {
   if (!spaceId) return '';
   const space = await _readSpace(uid, spaceId).catch(() => null);
@@ -1192,5 +1193,5 @@ export async function formatRoleProfileForSystemPrompt(
     if (sid && sid !== primary) templateIds.push(sid);
   }
   const { getRoleProfileForRuntime } = await import('./personal_ontology_contract');
-  return getRoleProfileForRuntime(uid, templateIds);
+  return getRoleProfileForRuntime(uid, templateIds, readContext);
 }

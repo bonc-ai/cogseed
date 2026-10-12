@@ -252,7 +252,7 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
 
   // ③ Route cognitions to Recall (the asset side of the extraction).
   // Dynamic import to avoid a cycle (asset-router imports this module).
-  let cognitions = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  let cognitions = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
   try {
     const { routeCognitions } = await import('./asset-router');
     cognitions = await routeCognitions(
@@ -295,6 +295,6 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
     },
   });
 
-  log.info(`background extraction done cid=${cid} cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}/${cognitions.skill_method}`);
+  log.info(`background extraction done cid=${cid} cog=${cognitions.personal}/${cognitions.fact}/${cognitions.rule}/${cognitions.template}/${cognitions.skill_method}`);
   emit({ type: 'extraction_done', cid, welcome, cognitions });
 }

@@ -209,6 +209,9 @@ export interface KstarExtractionRunRecord extends KstarJsonRecord {
   status: 'created' | 'partial' | 'degraded' | 'failed';
   /** Result ids are populated when the requirement-level extraction pass runs. */
   createdAssetIds?: string[];
+  /** 经验条目产出（specs/016 T014，加法式可选）：create 型提案分流写入
+   *  `experiences` 集合的 id。旧记录没有该字段，读取零影响。 */
+  experienceIds?: string[];
   mergedIntoIds?: string[];
   updateCandidateIds?: string[];
   failureIds?: string[];

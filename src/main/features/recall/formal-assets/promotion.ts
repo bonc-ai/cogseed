@@ -35,6 +35,9 @@ export interface PromotionCandidateInput {
   suggestedAction?: RecallCandidateAction;
   applicableWhen?: readonly string[];
   forbiddenWhen?: readonly string[];
+  /** 主题标签（specs/012 US-201）：候选确认时可顺手打标（createdFrom='candidate'）。
+   *  纯透传元数据——不参与分类判断（分类是 assetType 的事），落库走标签规范化唯一处。 */
+  tags?: readonly string[];
   /** 系统里已存在的同文本条目的类型（不含本条自己）。同一句话被分成两类，
    *  说明至少一边分错了——谁都不晋升，留给人判断。 */
   conflictingTypes?: readonly string[];

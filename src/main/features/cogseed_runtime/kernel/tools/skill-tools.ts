@@ -13,6 +13,7 @@ import { normalizeRuntimePath } from './permissions';
 import { captureSkillTree } from '../../../skills/snapshot-service';
 import { verifySkillRuntimeSnapshot } from '../../../skills/runtime-snapshot-service';
 import { isHubManagedContent, resolveHubPinnedTree } from '../../../marketplace/version-store';
+import { isContentDisabled } from '../../../marketplace/installed-version';
 import { recordHubContentUsage } from '../../../marketplace/usage-event';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 import { runWithRuntimeActionApproval } from './action-approval';
@@ -91,6 +92,9 @@ export async function runRuntimeSkillTool(
       return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime skill is outside the persisted Agent allowlist');
     }
     const pin = ctx.skillVersionPins?.find((item) => item.skillId === skillId);
+    if (!pin && isContentDisabled(ctx.userId, skillId)) {
+      return formatError('E_RUNTIME_SKILL_DISABLED', `Hub skill "${skillId}" is disabled for new use`);
+    }
     let pinnedSkillDir: string | undefined;
     if (pin) {
       // ── 按来源分派（specs/010 FR-031/FR-032）────────────────────────────
@@ -182,6 +186,10 @@ export async function runRuntimeSkillTool(
     };
     const runSkillPath = path.join(ctx.pcDir, 'bin', 'run-skill.cjs');
     const execute = async (): Promise<RuntimeToolResult> => {
+      // Approval may take time; an unpinned invocation is still a new use at spawn.
+      if (!pin && isContentDisabled(ctx.userId, skillId)) {
+        return formatError('E_RUNTIME_SKILL_DISABLED', `Hub skill "${skillId}" is disabled for new use`);
+      }
       const result = await runProcess([
         runSkillPath,
         skillId,

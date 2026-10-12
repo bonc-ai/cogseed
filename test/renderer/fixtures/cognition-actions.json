@@ -1,78 +1,974 @@
 {
   "comment": "认知资产迁移动作契约。转录自 design/认知资产-原型按钮IPC施工矩阵-20260921.md(92 行)。module=cognition-assets 的 entry 用 data-act 名断言 app.js handler;module=personal-ontology 的 entry 用 IPC 通道名断言 personal-ontology.js 调用点。write=写操作;pending=必须进 app.js WRITE_ACTIONS(pending 态);phase=迁移阶段。",
   "actions": [
-    { "act": "tab", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 3 },
-    { "act": "go-back", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 3 },
-    { "act": "refresh", "module": "cognition-assets", "ipc": null, "write": true, "pending": true, "phase": 3 },
-    { "act": "filter-cat", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 4 },
-    { "act": "asset-view", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "go-review", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 4 },
-    { "act": "go-organize", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 3 },
-    { "act": "go-organize-settings", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "go-configure-model", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "toggle-source-issues", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "toggle-asset-more", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "toggle-organize-list", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "toggle-asset-versions-noise", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "open-asset", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "open-overview", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 4 },
-    { "act": "open-ontology", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 4 },
-    { "act": "open-candidate", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 6 },
-    { "act": "open-capture-detail", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "open-conversation", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "open-kstar-episode", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "open-asset-version", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "diff-asset-version", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "capture-filter", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "organize-conv", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 7 },
-    { "act": "cand-type", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 6 },
-    { "act": "edit-asset", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "asset-edit-cancel", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "family-rename", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "family-rename-cancel", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 5 },
-    { "act": "asset-recommend-ack", "module": "cognition-assets", "ipc": "recall.assets.update", "write": true, "pending": true, "phase": 5 },
-    { "act": "cand-adopt-with-form", "module": "cognition-assets", "ipc": "recall.candidates.promote", "write": true, "pending": true, "phase": 6 },
-    { "act": "cand-decide", "module": "cognition-assets", "ipc": "recall.candidates", "write": true, "pending": true, "phase": 6 },
-    { "act": "asset-action", "module": "cognition-assets", "ipc": "recall.assets", "write": true, "pending": true, "phase": 5 },
-    { "act": "asset-edit-save", "module": "cognition-assets", "ipc": "recall.assets.update", "write": true, "pending": true, "phase": 5 },
-    { "act": "asset-use-in-chat", "module": "cognition-assets", "ipc": "recall.projections.attachToConversation", "write": true, "pending": false, "phase": 9 },
-    { "act": "select-asset-version", "module": "cognition-assets", "ipc": "recall.assets.versions.select", "write": true, "pending": true, "phase": 5 },
-    { "act": "delete-asset-version", "module": "cognition-assets", "ipc": "recall.assets.versions.delete", "write": true, "pending": true, "phase": 5 },
-    { "act": "edit-from-version", "module": "cognition-assets", "ipc": "recall.assets.update", "write": true, "pending": true, "phase": 5 },
-    { "act": "merge-asset-version", "module": "cognition-assets", "ipc": "recall.assets.update", "write": true, "pending": true, "phase": 5 },
-    { "act": "merge-asset", "module": "cognition-assets", "ipc": "recall.assets.merge", "write": true, "pending": true, "phase": 5 },
-    { "act": "family-rename-save", "module": "cognition-assets", "ipc": "recall.families.rename", "write": true, "pending": true, "phase": 5 },
-    { "act": "source-action", "module": "cognition-assets", "ipc": "recall.sources", "write": true, "pending": true, "phase": 7 },
-    { "act": "capture-action", "module": "cognition-assets", "ipc": "recall.captures", "write": true, "pending": true, "phase": 7 },
-    { "act": "capture-batch", "module": "cognition-assets", "ipc": "recall.captures.batchRetry", "write": true, "pending": true, "phase": 7 },
-    { "act": "capture-toggle", "module": "cognition-assets", "ipc": "recall.captures.settings.update", "write": true, "pending": true, "phase": 7 },
-    { "act": "capture-review-toggle", "module": "cognition-assets", "ipc": "recall.captures.settings.update", "write": true, "pending": true, "phase": 7 },
-    { "act": "nightly-toggle", "module": "cognition-assets", "ipc": "recall.captures.settings.update", "write": true, "pending": false, "phase": 7 },
-    { "act": "nightly-time", "module": "cognition-assets", "ipc": "recall.captures.settings.update", "write": true, "pending": false, "phase": 7 },
-    { "act": "proof-rate", "module": "cognition-assets", "ipc": "recall.proofs.effectiveness.feedback", "write": true, "pending": true, "phase": 9 },
-    { "act": "proof-toggle", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 9 },
-    { "act": "personalOntology.groups.fields.verify", "module": "personal-ontology", "ipc": "personalOntology.groups.fields.verify", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.fields.cycleRuleKind", "module": "personal-ontology", "ipc": "personalOntology.groups.fields.cycleRuleKind", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.fields.sensitivity", "module": "personal-ontology", "ipc": "personalOntology.groups.fields.sensitivity", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.fields.removeValue", "module": "personal-ontology", "ipc": "personalOntology.groups.fields.removeValue", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.fields.append", "module": "personal-ontology", "ipc": "personalOntology.groups.fields.append", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.fields.setValue", "module": "personal-ontology", "ipc": "personalOntology.groups.fields.setValue", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.entries.promote", "module": "personal-ontology", "ipc": "personalOntology.groups.entries.promote", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.entries.remove", "module": "personal-ontology", "ipc": "personalOntology.groups.entries.remove", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.create", "module": "personal-ontology", "ipc": "personalOntology.groups.create", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.rename", "module": "personal-ontology", "ipc": "personalOntology.groups.rename", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.delete", "module": "personal-ontology", "ipc": "personalOntology.groups.delete", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.history.list", "module": "personal-ontology", "ipc": "personalOntology.groups.history.list", "write": false, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.history.restore", "module": "personal-ontology", "ipc": "personalOntology.groups.history.restore", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.write", "module": "personal-ontology", "ipc": "personalOntology.groups.write", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.groups.read", "module": "personal-ontology", "ipc": "personalOntology.groups.read", "write": false, "pending": false, "phase": 8 },
-    { "act": "personalOntology.templates.list", "module": "personal-ontology", "ipc": "personalOntology.templates.list", "write": false, "pending": false, "phase": 8 },
-    { "act": "personalOntology.templates.install", "module": "personal-ontology", "ipc": "personalOntology.templates.install", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.templates.uninstall", "module": "personal-ontology", "ipc": "personalOntology.templates.uninstall", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.candidates.confirm", "module": "personal-ontology", "ipc": "personalOntology.candidates.confirm", "write": true, "pending": false, "phase": 8 },
-    { "act": "personalOntology.candidates.reject", "module": "personal-ontology", "ipc": "personalOntology.candidates.reject", "write": true, "pending": false, "phase": 8 }
+    {
+      "act": "tab",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 3
+    },
+    {
+      "act": "go-back",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 3
+    },
+    {
+      "act": "refresh",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": true,
+      "pending": true,
+      "phase": 3
+    },
+    {
+      "act": "filter-cat",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 4
+    },
+    {
+      "act": "asset-view",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "go-review",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 4
+    },
+    {
+      "act": "go-organize",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 3
+    },
+    {
+      "act": "go-organize-settings",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "go-configure-model",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "toggle-source-issues",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "toggle-asset-more",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "toggle-organize-list",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "toggle-asset-versions-noise",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "open-asset",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "open-overview",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 4
+    },
+    {
+      "act": "open-ontology",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 4
+    },
+    {
+      "act": "open-candidate",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 6
+    },
+    {
+      "act": "cand-create",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "cand-create-cancel",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "cand-create-save",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.save",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "open-capture-detail",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "open-conversation",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "open-kstar-episode",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "open-asset-version",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "diff-asset-version",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "capture-filter",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "organize-conv",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "cand-type",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 6
+    },
+    {
+      "act": "edit-asset",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "asset-edit-cancel",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 5
+    },
+    {
+      "act": "asset-recommend-ack",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.update",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "cand-adopt-with-form",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.promote",
+      "write": true,
+      "pending": true,
+      "phase": 6
+    },
+    {
+      "act": "cand-decide",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates",
+      "write": true,
+      "pending": true,
+      "phase": 6
+    },
+    {
+      "act": "asset-action",
+      "module": "cognition-assets",
+      "ipc": "recall.assets",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "asset-edit-save",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.update",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "asset-use-in-chat",
+      "module": "cognition-assets",
+      "ipc": "recall.projections.attachToConversation",
+      "write": true,
+      "pending": false,
+      "phase": 9
+    },
+    {
+      "act": "select-asset-version",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.versions.select",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "run-cleanup",
+      "module": "cognition-assets",
+      "ipc": "recall.cleanup.run",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "open-cleanup",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "open-cleanup-report",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "rollback-cleanup-item",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.rollback",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "cleanup-uncertain-dismiss",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "cleanup-uncertain-defer",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "inspection-toggle",
+      "module": "cognition-assets",
+      "ipc": "recall.inspection.settings.set",
+      "write": true,
+      "pending": true,
+      "phase": 8
+    },
+    {
+      "act": "run-inspection",
+      "module": "cognition-assets",
+      "ipc": "recall.inspection.run",
+      "write": true,
+      "pending": true,
+      "phase": 8
+    },
+    {
+      "act": "purge-deleted-asset",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.deleted.purgeNow",
+      "write": true,
+      "pending": true,
+      "phase": 9
+    },
+    {
+      "act": "inbox-resolve",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 9
+    },
+    {
+      "act": "go-inbox-asset",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 9
+    },
+    {
+      "act": "delete-asset-version",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.versions.delete",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "edit-from-version",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.update",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "merge-asset-version",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.update",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "merge-asset",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.merge",
+      "write": true,
+      "pending": true,
+      "phase": 5
+    },
+    {
+      "act": "source-action",
+      "module": "cognition-assets",
+      "ipc": "recall.sources",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "capture-action",
+      "module": "cognition-assets",
+      "ipc": "recall.captures",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "capture-batch",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.batchRetry",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "capture-review-toggle",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.settings.update",
+      "write": true,
+      "pending": true,
+      "phase": 7
+    },
+    {
+      "act": "nightly-toggle",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.settings.update",
+      "write": true,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "nightly-time",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.settings.update",
+      "write": true,
+      "pending": false,
+      "phase": 7
+    },
+    {
+      "act": "proof-rate",
+      "module": "cognition-assets",
+      "ipc": "recall.proofs.effectiveness.feedback",
+      "write": true,
+      "pending": true,
+      "phase": 9
+    },
+    {
+      "act": "proof-toggle",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 9
+    },
+    {
+      "act": "open-experience",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 10
+    },
+    {
+      "act": "experience-status-toggle",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.setStatus",
+      "write": true,
+      "pending": true,
+      "phase": 10
+    },
+    {
+      "act": "experience-set-type",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.setType",
+      "write": true,
+      "pending": true,
+      "phase": 10
+    },
+    {
+      "act": "experience-merge",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.merge",
+      "write": true,
+      "pending": true,
+      "phase": 10
+    },
+    {
+      "act": "experience-archive",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.archive",
+      "write": true,
+      "pending": true,
+      "phase": 10
+    },
+    {
+      "act": "experience-migration-preview",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.migration.preview",
+      "write": false,
+      "pending": false,
+      "phase": 10
+    },
+    {
+      "act": "experience-migration-run",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.migration.run",
+      "write": true,
+      "pending": true,
+      "phase": 10
+    },
+    {
+      "act": "experience-migration-status",
+      "module": "cognition-assets",
+      "ipc": "recall.experiences.migration.status",
+      "write": false,
+      "pending": false,
+      "phase": 10
+    },
+    {
+      "act": "filter-tag",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "filter-tag-mode",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "filter-untagged",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-more",
+      "module": "cognition-assets",
+      "ipc": "recall.tags.list",
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-manage",
+      "module": "cognition-assets",
+      "ipc": "recall.tags.list",
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-overlay-close",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-select-mode",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-select-toggle",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-select-all",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-select-clear",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-batch-op",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-batch-dismiss",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-rename",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-rename-cancel",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-merge",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-merge-target",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-merge-cancel",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-suggestion-merge",
+      "module": "cognition-assets",
+      "ipc": "recall.tags.suggestions",
+      "write": false,
+      "pending": false,
+      "phase": 11
+    },
+    {
+      "act": "tag-add",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.tags.set",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "tag-remove",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.tags.set",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "tag-batch-run",
+      "module": "cognition-assets",
+      "ipc": "recall.assets.tags.batch",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "tag-rename-save",
+      "module": "cognition-assets",
+      "ipc": "recall.tags.rename",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "tag-merge-confirm",
+      "module": "cognition-assets",
+      "ipc": "recall.tags.merge",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "tag-delete",
+      "module": "cognition-assets",
+      "ipc": "recall.tags.delete",
+      "write": true,
+      "pending": true,
+      "phase": 11
+    },
+    {
+      "act": "inbox-boundary-save",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 12
+    },
+    {
+      "act": "inbox-conflict-claim",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 12
+    },
+    {
+      "act": "inbox-inspection-keep",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 12
+    },
+    {
+      "act": "inbox-inspection-merge",
+      "module": "cognition-assets",
+      "ipc": "cognition.inbox.resolve",
+      "write": true,
+      "pending": true,
+      "phase": 12
+    },
+    {
+      "act": "legacy-memory-refresh",
+      "module": "cognition-assets",
+      "ipc": "recall.memory.migrate",
+      "write": false,
+      "pending": false,
+      "phase": 13
+    },
+    {
+      "act": "legacy-memory-toggle",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false,
+      "phase": 13
+    },
+    {
+      "act": "legacy-memory-run",
+      "module": "cognition-assets",
+      "ipc": "recall.memory.migrate",
+      "write": true,
+      "pending": true,
+      "phase": 13
+    },
+    {
+      "act": "legacy-scoped-memory-run",
+      "module": "cognition-assets",
+      "ipc": "recall.scopedMemoryMigration.run",
+      "write": true,
+      "pending": true,
+      "phase": 13
+    },
+    {
+      "act": "po.values.update",
+      "module": "personal-ontology",
+      "ipc": "po.values.update",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.values.update",
+      "module": "personal-ontology",
+      "ipc": "po.values.update",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.values.update",
+      "module": "personal-ontology",
+      "ipc": "po.values.update",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.values.delete",
+      "module": "personal-ontology",
+      "ipc": "po.values.delete",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.values.add",
+      "module": "personal-ontology",
+      "ipc": "po.values.add",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.values.update",
+      "module": "personal-ontology",
+      "ipc": "po.values.update",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.entries.promote",
+      "module": "personal-ontology",
+      "ipc": "po.entries.promote",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.entries.delete",
+      "module": "personal-ontology",
+      "ipc": "po.entries.delete",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.groups.create",
+      "module": "personal-ontology",
+      "ipc": "po.groups.create",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.groups.rename",
+      "module": "personal-ontology",
+      "ipc": "po.groups.rename",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.groups.delete",
+      "module": "personal-ontology",
+      "ipc": "po.groups.delete",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.history.list",
+      "module": "personal-ontology",
+      "ipc": "po.history.list",
+      "write": false,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.history.restore",
+      "module": "personal-ontology",
+      "ipc": "po.history.restore",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "personalOntology.groups.write",
+      "module": "personal-ontology",
+      "ipc": "personalOntology.groups.write",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "personalOntology.groups.read",
+      "module": "personal-ontology",
+      "ipc": "personalOntology.groups.read",
+      "write": false,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "personalOntology.templates.list",
+      "module": "personal-ontology",
+      "ipc": "personalOntology.templates.list",
+      "write": false,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "personalOntology.templates.install",
+      "module": "personal-ontology",
+      "ipc": "personalOntology.templates.install",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "personalOntology.templates.uninstall",
+      "module": "personal-ontology",
+      "ipc": "personalOntology.templates.uninstall",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.candidates.confirm",
+      "module": "personal-ontology",
+      "ipc": "po.candidates.confirm",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {
+      "act": "po.candidates.reject",
+      "module": "personal-ontology",
+      "ipc": "po.candidates.reject",
+      "write": true,
+      "pending": false,
+      "phase": 8
+    },
+    {"act": "toggle-task-failed", "module": "cognition-assets", "ipc": null, "write": false, "pending": false, "phase": 13},
+    {"act": "retry-candidates", "module": "cognition-assets", "ipc": "recall.candidates.list", "write": true, "pending": true, "phase": 13},
+    {"act": "run-maintenance", "module": "cognition-assets", "ipc": "recall.maintenance.run", "write": true, "pending": true, "phase": 13}
   ],
   "forbidden": [
-    { "act": "batchRunNow", "reason": "批量立即整理入口确认不迁移;后端能力保留,前端不暴露(施工矩阵 L48)" }
+    {
+      "act": "batchRunNow",
+      "reason": "批量立即整理入口确认不迁移;后端能力保留,前端不暴露(施工矩阵 L48)"
+    }
   ]
 }

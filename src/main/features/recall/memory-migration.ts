@@ -1,22 +1,18 @@
 /**
- * memory-migration.ts — 存量记忆迁移（2026-09-19 合并实施·清单 #6）。
+ * Migrate legacy USER.md / MEMORY.md entries into cognition assets.
  *
- * 产品形态：升级后一次性把 USER.md / MEMORY.md 的既有条目过第二段入库
- * （直投管线复用：注入扫描、查重金字塔、挂族、候选留痕），全部迁移完成后
- * 两个文件清空退役（阶段 D 的记忆退役前提）。
- *
- * 安全性：
- *  - 迁移前把两个文件原样备份到 cloud/memory-backup-<timestamp>/；
- *  - dryRun 只读不写（盘点模式）；
- *  - 单条失败不中断整批（计入 failed，条目保留在文件里等下次重跑）；
- *  - 迁移幂等：清空后重跑扫到 0 条，零副作用。
+ * The source remains authoritative until its exact scanned bytes have been
+ * backed up. Only entries that reach the asset store are removed; failed and
+ * review-pending entries remain, and role-template records stay in place.
  */
 
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createLogger } from '../../logger';
 import { userMemoryFile, userProfileFile } from '../../paths';
-import { loadMemoryRecords } from '../memory-records';
+import { writeTextAtomicSync } from '../../storage';
+import { parseMemoryRecordsContent, serializeMemoryRecords, type MemoryRecord } from '../memory-records';
 
 const log = createLogger('recall.memory-migration');
 
@@ -25,121 +21,335 @@ export interface MemoryMigrationReport {
   scannedShared: number;
   migrated: number;
   skippedNoText: number;
-  /** 入库只到候选池（embedding 硬阻塞 / 查重命中等确认融合）的条数——
-   *  这些条目保留在源文件里，没进资产库就不算迁移完成。 */
+  /** Entries held in the candidate/review flow remain in the legacy source. */
   pendingReview: number;
   failed: number;
   backupDir?: string;
+  backupFailed: boolean;
+  corruptFiles: number;
+  readFailedFiles: number;
+  sourceChangedFiles: number;
+  cleanupFailedFiles: number;
+  /** Selected source/hash rows that were no longer present in the reviewed snapshot. */
+  staleSelections: number;
   dryRun: boolean;
 }
 
-function backupFile(sourceFile: string, backupDir: string): boolean {
+export type LegacyMemoryScope = 'user' | 'shared';
+
+export interface LegacyMemoryMigrationSelection {
+  scope: LegacyMemoryScope;
+  contentHash: string;
+}
+
+export interface LegacyMemoryMigrationPreview {
+  fingerprints: Record<LegacyMemoryScope, string>;
+  sources: Record<LegacyMemoryScope, {
+    status: 'ready' | 'empty' | 'blocked' | 'unavailable';
+    eligibleEntries: number;
+    eligibleRecords: number;
+    retainedTemplateRecords: number;
+    retainedAssetRecords: number;
+    retainedNonIndependentRecords: number;
+  }>;
+  items: Array<LegacyMemoryMigrationSelection & { text: string; occurrences: number }>;
+}
+
+interface PendingSource {
+  file: string;
+  scope: LegacyMemoryScope;
+  rawSnapshot: Buffer;
+  records: MemoryRecord[];
+  migratableRecords: MemoryRecord[];
+}
+
+const CONTENT_HASH = /^[a-f0-9]{64}$/;
+
+function contentHash(value: string | Buffer): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function sourceFiles(userId: string, files?: { user?: string; shared?: string }) {
+  return [
+    { scope: 'user' as const, file: files?.user || userProfileFile(userId) },
+    { scope: 'shared' as const, file: files?.shared || userMemoryFile(userId) },
+  ];
+}
+
+function readSourceSnapshot(file: string): { raw: Buffer; unavailable: boolean } {
   try {
-    if (!fs.existsSync(sourceFile)) return false;
-    fs.mkdirSync(backupDir, { recursive: true });
-    fs.copyFileSync(sourceFile, path.join(backupDir, path.basename(sourceFile)));
-    return true;
+    return { raw: fs.readFileSync(file), unavailable: false };
   } catch (error) {
-    log.warn('memory migration backup failed', { sourceFile, error: (error as Error).message });
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { raw: Buffer.alloc(0), unavailable: false };
+    return { raw: Buffer.alloc(0), unavailable: true };
+  }
+}
+
+/** Read-only inventory used by the explicit migration review UI. No backup,
+ * candidate, asset, or source-file mutation happens here. Repeated identical
+ * notes in one file are grouped because selecting a content hash moves every
+ * matching occurrence together. */
+export function previewLegacyMemoryMigration(
+  userId: string,
+  opts: { files?: { user?: string; shared?: string } } = {},
+): LegacyMemoryMigrationPreview {
+  const fingerprints: Record<LegacyMemoryScope, string> = { user: '', shared: '' };
+  const sources: LegacyMemoryMigrationPreview['sources'] = {
+    user: { status: 'empty', eligibleEntries: 0, eligibleRecords: 0, retainedTemplateRecords: 0, retainedAssetRecords: 0, retainedNonIndependentRecords: 0 },
+    shared: { status: 'empty', eligibleEntries: 0, eligibleRecords: 0, retainedTemplateRecords: 0, retainedAssetRecords: 0, retainedNonIndependentRecords: 0 },
+  };
+  const grouped = new Map<string, LegacyMemoryMigrationPreview['items'][number]>();
+
+  for (const target of sourceFiles(userId, opts.files)) {
+    const { raw, unavailable } = readSourceSnapshot(target.file);
+    fingerprints[target.scope] = contentHash(raw);
+    if (unavailable) {
+      sources[target.scope] = { ...sources[target.scope], status: 'unavailable' };
+      continue;
+    }
+
+    const parsed = parseMemoryRecordsContent(raw.toString('utf8'));
+    if (parsed.corruptMetadata || parsed.degradedMetadata) {
+      // The visible notes may still be readable, but unclear ownership means
+      // this file cannot be safely migrated as a whole.
+      sources[target.scope] = { ...sources[target.scope], status: 'blocked' };
+      continue;
+    }
+
+    const sourceSummary = sources[target.scope];
+    for (const record of parsed.records) {
+      if (!String(record.text || '').trim()) continue;
+      if (record.sources.some((source) => source.kind === 'role_template')) {
+        sourceSummary.retainedTemplateRecords += 1;
+        continue;
+      }
+      if (record.sources.some((source) => source.kind === 'cognition_asset')) {
+        sourceSummary.retainedAssetRecords += 1;
+        continue;
+      }
+      if (!record.independent) {
+        // A projection with no surviving owner marker is not a user-authored
+        // memory. Leave it in place until its provenance can be reconciled.
+        sourceSummary.retainedNonIndependentRecords += 1;
+        continue;
+      }
+      const hash = record.contentSha256 || contentHash(record.text.trim());
+      const key = `${target.scope}:${hash}`;
+      const prior = grouped.get(key);
+      if (prior) prior.occurrences += 1;
+      else grouped.set(key, { scope: target.scope, contentHash: hash, text: record.text.trim(), occurrences: 1 });
+      sourceSummary.eligibleRecords += 1;
+    }
+    sourceSummary.eligibleEntries = [...grouped.values()]
+      .filter((item) => item.scope === target.scope).length;
+    sourceSummary.status = sourceSummary.eligibleRecords > 0 ? 'ready' : 'empty';
+  }
+
+  return { fingerprints, sources, items: [...grouped.values()] };
+}
+
+function backupFile(source: PendingSource, backupDir: string): boolean {
+  try {
+    fs.mkdirSync(backupDir, { recursive: true });
+    const backupPath = path.join(backupDir, path.basename(source.file));
+    // Persist the exact scanned bytes, not a later copy of a source that may
+    // have changed while this migration was preparing its backup.
+    writeTextAtomicSync(backupPath, source.rawSnapshot);
+    return fs.readFileSync(backupPath).equals(source.rawSnapshot);
+  } catch (error) {
+    log.warn('memory migration backup failed', { sourceFile: source.file, error: (error as Error).message });
     return false;
   }
 }
 
-/** 迁移入口：读取两个记忆文件的条目 → 逐条直投入库 → 全部成功后清空文件。
- *  dryRun=true 只盘点（返回会迁多少条），不备份不写入。 */
+function sourceMatchesSnapshot(file: string, snapshot: Buffer): boolean {
+  try {
+    return fs.readFileSync(file).equals(snapshot);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Migrate entries from USER.md / MEMORY.md. dryRun inventories only and never
+ * creates a backup or writes to the source files.
+ */
 export async function migrateLegacyMemoryToAssets(
   userId: string,
-  opts: { dryRun?: boolean; files?: { user?: string; shared?: string } } = {},
+  opts: {
+    selectedEntries: LegacyMemoryMigrationSelection[];
+    expectedFingerprints: Partial<Record<LegacyMemoryScope, string>>;
+    files?: { user?: string; shared?: string };
+  },
 ): Promise<MemoryMigrationReport> {
-  const dryRun = opts.dryRun === true;
-  const report: MemoryMigrationReport = {
-    scannedUser: 0, scannedShared: 0, migrated: 0, skippedNoText: 0, pendingReview: 0, failed: 0, dryRun,
-  };
-  // files 注入口：生产走 paths 默认；测试/迁移工具可显式指定（绕开 paths 的
-  // 工作区根固化，也让"迁移哪个文件"可组合）。
-  const files: Array<{ file: () => string; key: 'scannedUser' | 'scannedShared' }> = [
-    { file: () => opts.files?.user || userProfileFile(userId), key: 'scannedUser' },
-    { file: () => opts.files?.shared || userMemoryFile(userId), key: 'scannedShared' },
-  ];
-
-  const pending: Array<{ file: string; key: 'scannedUser' | 'scannedShared'; texts: string[] }> = [];
-  for (const target of files) {
-    const file = target.file();
-    let texts: string[] = [];
-    let blank = 0;
-    try {
-      // loadMemoryRecords 返回数组（不是 {records} 包装）。role_template 来源
-      // 条目不迁：它们的家在模板独立文件/渲染层双源（迁移会把模板画像混进
-      // personal 资产、清空文件后卸载也找不到条目可删——原地升级用户装着的
-      // 模板会静默失效）。
-      const rawTexts = loadMemoryRecords(file)
-        .filter((record) => !record.sources.some((source) => source.kind === 'role_template'))
-        .map((record) => String(record.text || '').trim());
-      texts = rawTexts.filter(Boolean);
-      blank = rawTexts.length - texts.length;
-    } catch (error) {
-      log.warn('memory migration read failed', { file, error: (error as Error).message });
-    }
-    report[target.key] = texts.length;
-    report.skippedNoText += blank;
-    if (texts.length) pending.push({ file, key: target.key, texts });
+  if (!Array.isArray(opts.selectedEntries) || opts.selectedEntries.length === 0 || opts.selectedEntries.length > 500) {
+    throw new Error('explicit migration selection is required');
   }
+  const selections = new Map<string, LegacyMemoryMigrationSelection>();
+  for (const selection of opts.selectedEntries) {
+    if (!selection || (selection.scope !== 'user' && selection.scope !== 'shared') || !CONTENT_HASH.test(selection.contentHash)) {
+      throw new Error('invalid migration selection');
+    }
+    selections.set(`${selection.scope}:${selection.contentHash}`, selection);
+  }
+  for (const selection of selections.values()) {
+    const fingerprint = opts.expectedFingerprints?.[selection.scope];
+    if (typeof fingerprint !== 'string' || !CONTENT_HASH.test(fingerprint)) {
+      throw new Error('reviewed source fingerprint is required');
+    }
+  }
+  const report: MemoryMigrationReport = {
+    scannedUser: 0,
+    scannedShared: 0,
+    migrated: 0,
+    skippedNoText: 0,
+    pendingReview: 0,
+    failed: 0,
+    backupFailed: false,
+    corruptFiles: 0,
+    readFailedFiles: 0,
+    sourceChangedFiles: 0,
+    cleanupFailedFiles: 0,
+    staleSelections: 0,
+    dryRun: false,
+  };
+
+  const files = sourceFiles(userId, opts.files);
+  const selectedMatches = new Set<string>();
+
+  const pending: PendingSource[] = [];
+  for (const target of files) {
+    const selectedHashes = new Set([...selections.values()]
+      .filter((selection) => selection.scope === target.scope)
+      .map((selection) => selection.contentHash));
+    if (!selectedHashes.size) continue;
+    const { raw: rawSnapshot, unavailable } = readSourceSnapshot(target.file);
+    if (unavailable) {
+      report.readFailedFiles += 1;
+      log.warn('memory migration read failed', { file: target.file });
+      continue;
+    }
+    if (contentHash(rawSnapshot) !== opts.expectedFingerprints[target.scope]) {
+      report.sourceChangedFiles += 1;
+      log.info('memory migration deferred because source differs from the reviewed snapshot', { file: target.file });
+      continue;
+    }
+
+    const parsed = parseMemoryRecordsContent(rawSnapshot.toString('utf8'));
+    if (parsed.corruptMetadata || parsed.degradedMetadata) {
+      report.corruptFiles += 1;
+      log.warn('memory migration skipped file with unreliable metadata', { file: target.file });
+      continue;
+    }
+    const eligibleRecords = parsed.records.filter(
+      (record) => record.independent && record.sources.length === 0,
+    );
+    const candidateTexts = eligibleRecords.map((record) => String(record.text || '').trim());
+    const texts = candidateTexts.filter(Boolean);
+    report[target.scope === 'user' ? 'scannedUser' : 'scannedShared'] = texts.length;
+    report.skippedNoText += candidateTexts.length - texts.length;
+
+    const migratableRecords = eligibleRecords.filter((record) => {
+      const text = String(record.text || '').trim();
+      if (!text) return false;
+      const hash = record.contentSha256 || contentHash(text);
+      const key = `${target.scope}:${hash}`;
+      if (!selectedHashes.has(hash)) return false;
+      selectedMatches.add(key);
+      return true;
+    });
+    if (migratableRecords.length) {
+      pending.push({
+        file: target.file,
+        scope: target.scope,
+        rawSnapshot,
+        records: parsed.records,
+        migratableRecords,
+      });
+    }
+  }
+  report.staleSelections = [...selections.keys()].filter((key) => !selectedMatches.has(key)).length;
   if (!pending.length) return report;
-  if (dryRun) return report;
 
-  // 迁移前备份（两个文件都备，哪怕其中一个为空——空文件也证明当时状态）。
-  const backupDir = path.join(path.dirname(userMemoryFile(userId)), `memory-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-  for (const target of pending) backupFile(target.file, backupDir);
-  report.backupDir = backupDir;
+  let backupDir: string;
+  try {
+    const backupParent = path.dirname(userMemoryFile(userId));
+    fs.mkdirSync(backupParent, { recursive: true });
+    backupDir = fs.mkdtempSync(
+      path.join(backupParent, `memory-backup-${new Date().toISOString().replace(/[:.]/g, '-')}-`),
+    );
+    report.backupDir = backupDir;
+  } catch (error) {
+    report.backupFailed = true;
+    report.failed += pending.reduce((total, source) => total + source.migratableRecords.length, 0);
+    log.error('memory migration could not create a backup directory', { error: (error as Error).message });
+    return report;
+  }
+  for (const source of pending) {
+    if (!backupFile(source, backupDir)) report.backupFailed = true;
+  }
+  if (report.backupFailed) {
+    // A partially created backup directory is harmless; no ingestion or source
+    // mutation starts unless every source snapshot is safely recoverable.
+    report.failed += pending.reduce((total, source) => total + source.migratableRecords.length, 0);
+    log.error('memory migration stopped because a source backup could not be verified', {
+      backupDir,
+      files: pending.length,
+    });
+    return report;
+  }
 
-  const { ingestImmediateKnowledge } = await import('./candidate-service');
-  for (const target of pending) {
-    let targetSucceeded = 0;
-    for (const text of target.texts) {
+  const { ingestLegacyMemoryKnowledge } = await import('./candidate-service');
+  for (const source of pending) {
+    if (!sourceMatchesSnapshot(source.file, source.rawSnapshot)) {
+      report.sourceChangedFiles += 1;
+      report.failed += source.migratableRecords.length;
+      log.info('memory migration deferred because source changed after backup', { file: source.file });
+      continue;
+    }
+
+    const succeededRecords = new Set<MemoryRecord>();
+    for (const record of source.migratableRecords) {
+      const text = String(record.text || '').trim();
       try {
-        const result = await ingestImmediateKnowledge(userId, { text });
+        const result = await ingestLegacyMemoryKnowledge(userId, {
+          text,
+          scope: source.scope,
+          contentHash: record.contentSha256 || contentHash(text),
+        });
         if (result.mode === 'created' || result.mode === 'merged') {
-          targetSucceeded += 1;
+          succeededRecords.add(record);
           report.migrated += 1;
         } else {
-          // pending-review（embedding 硬阻塞）/ fused-update-pending（查重
-          // 命中、等确认后融合）：内容只到候选池、没进资产库——不计入可清空
-          // 口径。此前一律计成功，USER.md 被清空而画像其实停在「待我处理」
-          // 里，用户不看候选池就等于丢失。条目保留在文件里：候选池按
-          // captureKey 幂等，embedding 恢复或用户确认融合后重跑即收口。
+          // Candidate-only results are not complete: the original remains until
+          // the user or a later retry resolves the review flow.
           report.pendingReview += 1;
         }
       } catch (error) {
-        // 单条失败（注入扫描拒收等）不中断整批；条目保留在文件里。
         report.failed += 1;
         log.warn('memory migration entry failed', { error: (error as Error).message, head: text.slice(0, 40) });
       }
     }
-    // 本文件全部条目真正入库才清空；清空前重读比对——扫描到清空之间运行
-    // 期写手（memory replace/remove、直投失败回退）可能写入新条目，清空不
-    // 能把它们连带抹掉（那些条目从未迁移过）。
-    if (targetSucceeded === target.texts.length && sourceUnchangedSinceScan(target.file, target.texts)) {
-      try { fs.writeFileSync(target.file, '', 'utf8'); } catch (error) {
-        log.warn('memory migration clear failed', { file: target.file, error: (error as Error).message });
+
+    // Retire only migrated records. Keep template-owned records, and require an
+    // exact byte match so concurrent writes are never swept away with the scan.
+    if (succeededRecords.size > 0) {
+      if (!sourceMatchesSnapshot(source.file, source.rawSnapshot)) {
+        report.sourceChangedFiles += 1;
+        log.info('memory migration cleanup deferred because source changed during migration', { file: source.file });
+        continue;
       }
-    } else if (targetSucceeded === target.texts.length) {
-      log.info('memory migration clear deferred: file changed during migration (new entries kept for next run)', {
-        file: target.file,
-      });
+      try {
+        const retainedRecords = source.records.filter((record) => {
+          const isRoleTemplateRecord = record.sources.some((sourceRef) => sourceRef.kind === 'role_template');
+          return isRoleTemplateRecord || !succeededRecords.has(record);
+        });
+        writeTextAtomicSync(source.file, serializeMemoryRecords(retainedRecords));
+      } catch (error) {
+        report.cleanupFailedFiles += 1;
+        log.warn('memory migration cleanup failed', { file: source.file, error: (error as Error).message });
+      }
     }
   }
   return report;
-}
-
-/** 清空前守卫：重读源文件，条目集合与扫描时一致才允许清空（防把迁移期间
- *  新写入的条目一并抹掉）。读失败按「已变化」处理——宁可不清空多跑一轮。 */
-function sourceUnchangedSinceScan(file: string, texts: string[]): boolean {
-  try {
-    const current = loadMemoryRecords(file)
-      .map((record) => String(record.text || '').trim())
-      .filter(Boolean);
-    return current.length === texts.length && current.every((text, i) => text === texts[i]);
-  } catch {
-    return false;
-  }
 }

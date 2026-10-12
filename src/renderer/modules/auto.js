@@ -775,6 +775,9 @@ const _AUTO_TEMPLATES = [
   { id: 'tech_news',     icon: 'globe',          schedule: { type: 'daily',   hour: 8,  minute: 30 } },
   { id: 'daily_wrapup',  icon: 'clipboard-list', schedule: { type: 'daily',   hour: 18, minute: 0  } },
   { id: 'meeting_prep',  icon: 'presentation',   schedule: { type: 'daily',   hour: 8,  minute: 45 } },
+  // Post-meeting counterpart to `meeting_prep`: it reads the transcripts a connected meeting
+  // connector can access, so it runs after the workday rather than before it.
+  { id: 'meeting_digest', icon: 'clipboard-list', schedule: { type: 'daily',   hour: 19, minute: 0  } },
   { id: 'weekly_report', icon: 'file-text',      schedule: { type: 'weekly',  weekday: 5, hour: 17, minute: 30 } },
   { id: 'project_health',icon: 'zap',            schedule: { type: 'daily',   hour: 10, minute: 0  } },
   { id: 'monthly_admin', icon: 'star',           schedule: { type: 'monthly', day: 25, hour: 10, minute: 0  } },
@@ -2236,6 +2239,10 @@ if (typeof window !== 'undefined') {
   window.loadAutoList = loadAutoList;
   window.loadProjectAutoList = loadProjectAutoList;
   window.openAutoTaskDialog = openAutoTaskDialog;
+  // Exposed so another page can land the user on a pre-filled starter template without
+  // duplicating the template list or the form pre-fill. The connectors detail view's
+  // 「创建会议自动化」 uses it; `_autoApplyTemplate` opens the dialog itself.
+  window.applyAutoTemplate = _autoApplyTemplate;
   window.refreshAutoProjectOptions = _autoRefreshProjectOptions;
   window._autoUploadFilesFromComposer = _autoUploadFiles;
   window._autoAttachLibraryFile = _autoAttachLibraryFile;

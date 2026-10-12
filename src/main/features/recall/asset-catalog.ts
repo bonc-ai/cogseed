@@ -4,11 +4,13 @@ import { listRecallUsage } from './usage-service';
 /**
  * 资产目录的**紧凑文本 + 使用统计**（2026-09-18 抽出共用）。
  *
- * 两个消费方共用同一份格式，避免"模型看到的目录"与"工具返回的目录"长得不一样：
+ * 两个消费方共用同一份行格式，避免"模型看到的目录"与"工具返回的目录"长得不一样：
  *   - `search_ability_assets` 目录模式（工具内返回）；
  *   - 回合提示词里的常驻目录（小库直接进上下文，省掉一次工具往返）。
  *
- * 预算（有测试钉着）：每条 ≤ 110 字符；标题 14、一句话 22、适用 12、页眉页脚 ≤ 250。
+ * 预算（有测试钉着，口径＝标题行＋meta 行**两行合计、平均** ≤ 110 字符）：
+ * 标题不截断（2026-09-28 标题一等化后标题本身合法、≤16 字，闸门在 asset-service
+ * 收口处保证，目录行不再需要兜底截断）、一句话 22、适用 12、页眉页脚 ≤ 250。
  */
 
 export interface AssetUsageStat {
@@ -71,7 +73,9 @@ export function formatCatalogEntry(
   ].join('·');
   const applies = (asset.applicableWhen || [])[0];
   const oneLine = catalogOneLine(asset.statement);
-  const head = `${index}. ${relevant ? '★' : ''}[asset:${asset.id}] ${catalogTruncate(String(asset.title || '(无标题)'), 14)}`;
+  // 标题不截断（2026-09-28 标题一等化 3.4）：标题经 3.2 收口闸门保证合法
+  // （中文 ≤16 字），目录行原样给出；只有缺标题的记录才落「(无标题)」兜底。
+  const head = `${index}. ${relevant ? '★' : ''}[asset:${asset.id}] ${String(asset.title || '(无标题)')}`;
   return [
     oneLine ? `${head} — ${oneLine}` : head,
     ` ${meta}${applies ? `｜适用:${catalogTruncate(String(applies), 12)}` : ''}`,
@@ -89,8 +93,7 @@ export function formatCatalogEntries(
   return assets.map((asset, index) => formatCatalogEntry(asset, stats.get(asset.id), startIndex + index, relevantIds?.has(asset.id) === true));
 }
 
-/** 每条的取用次数与最近时间（一次流水扫描）。消费方各自缓存（提示词侧 60 秒
- *  TTL），避免每回合重复扫流水。 */
+/** 旧的带入流水统计保留供资产履历使用；目录展示改为实际采用次数。 */
 export async function loadAssetUsageStats(userId: string): Promise<Map<string, AssetUsageStat>> {
   const stats = new Map<string, AssetUsageStat>();
   for (const row of await listRecallUsage(userId)) {
@@ -121,4 +124,77 @@ export async function loadAssetUsageStatsCached(userId: string, turnId?: string)
   const stats = await loadAssetUsageStats(userId);
   if (key) usageCache = { key, stats };
   return stats;
+}
+
+/** 实际采用与明确纠错：只读派生，不落盘。
+ * `applied && boundary='real'` 是采用唯一口径；`contradicted && real`
+ * 单独记录质量纠错。展示、搜索命中、带入与「本轮没用」都不计作负反馈。
+ *
+ *  采用判定**只经 `listAppliedUsageReceipts`**（唯一处，反漂移 II3）：它要求
+ *  非空 taskRunIds，所以先全量读一遍回执**收钥匙**（只收集 taskRunId 与时间戳，
+ *  不做任何状态判定），再把全量钥匙传给它 = 继承判定本身、不过滤任务。
+ *  同 id 多条回执（负反馈覆盖 append 的产物）由读取侧取末条，天然不双计。 */
+export interface AssetAdoptionStat {
+  appliedCount: number;
+  /** 最近一条 applied 回执的时间（排序近度微调用；拿不到就缺省）。 */
+  lastAppliedAt?: string;
+  contradictedCount?: number;
+  lastContradictedAt?: string;
+}
+
+export async function loadAssetAdoptionStats(userId: string): Promise<Map<string, AssetAdoptionStat>> {
+  const stats = new Map<string, AssetAdoptionStat>();
+  const { listAssetUsageReceipts, listAppliedUsageReceipts } = await import('./asset-usage-receipt');
+  const receipts = await listAssetUsageReceipts(userId);
+  const taskRunIds = [...new Set(receipts.map((row) => String(row.taskRunId || '')).filter(Boolean))];
+  if (!taskRunIds.length) return stats;
+  const applied = await listAppliedUsageReceipts(userId, { taskRunIds });
+  const createdAtById = new Map(receipts.map((row) => [row.id, String(row.createdAt || '')]));
+  for (const receipt of applied) {
+    const id = String(receipt.assetId || '');
+    if (!id) continue;
+    const current = stats.get(id) || { appliedCount: 0 };
+    current.appliedCount += 1;
+    const at = createdAtById.get(receipt.id) || '';
+    if (at && (!current.lastAppliedAt || at > current.lastAppliedAt)) current.lastAppliedAt = at;
+    stats.set(id, current);
+  }
+  for (const receipt of receipts) {
+    if (receipt.status !== 'contradicted' || receipt.boundary !== 'real') continue;
+    const current = stats.get(receipt.assetId) || { appliedCount: 0 };
+    current.contradictedCount = (current.contradictedCount || 0) + 1;
+    if (!current.lastContradictedAt || receipt.createdAt > current.lastContradictedAt) {
+      current.lastContradictedAt = receipt.createdAt;
+    }
+    stats.set(receipt.assetId, current);
+  }
+  return stats;
+}
+
+/** 采用统计的按回合缓存（与上面的使用统计缓存同一口径/同一形状）：同一回合内
+ *  重复调用复用同一份快照，新回合重算；没有回合上下文时直读，不缓存。 */
+let adoptionCache: { key: string; stats: Map<string, AssetAdoptionStat> } | null = null;
+
+export function resetAssetAdoptionStatsCacheForTest(): void {
+  adoptionCache = null;
+}
+
+export async function loadAssetAdoptionStatsCached(userId: string, turnId?: string): Promise<Map<string, AssetAdoptionStat>> {
+  const key = turnId ? `${userId}:${turnId}` : '';
+  if (key && adoptionCache && adoptionCache.key === key) return adoptionCache.stats;
+  const stats = await loadAssetAdoptionStats(userId);
+  if (key) adoptionCache = { key, stats };
+  return stats;
+}
+
+/** 兼容旧调用方的相关度入口；实际召回由 catalog-relevance 唯一实现。
+ * embedding 不可用时仍有词面与专名通道。 */
+export async function catalogRelevanceScores(
+  userId: string,
+  taskText: string,
+  assets: Array<{ id: string; statement: string; title: string; type?: RecallAbilityAssetRecord['type']; applicableWhen?: string[]; forbiddenWhen?: string[] }>,
+): Promise<Map<string, number>> {
+  const { catalogMatches } = await import('./catalog-relevance');
+  const matches = await catalogMatches(userId, taskText, assets);
+  return new Map([...matches].map(([id, match]) => [id, match.score]));
 }

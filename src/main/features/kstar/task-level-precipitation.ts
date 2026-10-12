@@ -2,9 +2,15 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { lessonLanguageMismatches } from '../../util/language';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
-import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
+import {
+  kstarPrecipitationAdmission,
+  precipitateDirectExperienceFromSource,
+  recordKstarNoUpdateOutcome,
+  recordKstarSubmitFailedOutcome,
+} from './direct-experience-assets';
 import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
 import { assetMutationFor, clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
+import type { KstarAdmissionContext } from './improvement-admission';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
@@ -79,6 +85,9 @@ export interface RequirementLevelPrecipitationResult {
   proposals: KstarCandidateProposal[];
   createdAssetIds: string[];
   candidateIds: string[];
+  /** 经验条目（specs/016 T014）：聚合线 create 型提案分流写入 experiences
+   *  集合的产出（mutating 线仍走 candidateIds，两数组互斥按动作分流）。 */
+  experienceIds: string[];
   mergedIntoIds: string[];
   updateCandidateIds: string[];
   failureIds: string[];
@@ -103,8 +112,13 @@ async function updateExtractionRuns(
       schemaVersion: 1 as const, ownerId: userId, id, episodeId: episode.id,
       reviewId: review?.id || `ksr-${episode.id}`, candidateIds: result.candidateIds,
       createdAssetIds: result.createdAssetIds, mergedIntoIds: result.mergedIntoIds,
+      // 经验产出也驻留 run 记录（specs/016 T014：旧记录无此字段不受影响，
+      // 新记录带上后「这次沉淀产出了哪些经验」可从 run 直接追溯）。
+      experienceIds: result.experienceIds,
       updateCandidateIds: result.updateCandidateIds, failureIds: result.failureIds,
-      status: result.failureIds.length && !result.candidateIds.length
+      // 「有产出」= 候选或经验任一存在（分流后 create 线只产经验）：全部
+      // 失败且零产出才 failed，部分成功的部分失败不冒充整体失败。
+      status: result.failureIds.length && !result.candidateIds.length && !result.experienceIds.length
         ? 'failed' as const
         : provenanceDegraded
           ? 'degraded' as const
@@ -246,10 +260,33 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
 }
 
 /**
+ * 需求级分析的**锚 episode**：驱动聚合信号（`clearsPrecipitationGate` 通过、置信度
+ * 最高）的那条复盘所属 episode，退化时取第一条——与 `aggregateRequirementProposals`
+ * 的 `primaryEpisode` 同一规则。结论 id（`kio-<episodeId>`）、回指复盘与采用证据
+ * 的范围都由它定。
+ */
+function anchorEpisodeFor(
+  episodes: KstarEpisodeRecord[],
+  reviews: KstarReviewRecord[],
+): KstarEpisodeRecord | undefined {
+  const strongest = [...reviews]
+    .filter((review) => clearsPrecipitationGate(review))
+    .sort((a, b) => b.confidence - a.confidence)[0];
+  return episodes.find((episode) => episode.id === strongest?.episodeId) || episodes[0];
+}
+
+/**
  * Precipitate requirement-level ability assets: aggregated proposals go
  * DIRECTLY into ability assets. The KStar line skips the cognitive-
  * precipitation candidate line (no pending_review) — self-evolution
  * precipitates straight to the asset store.
+ *
+ * 采用门（specs/015 T010）：本函数是该需求全部提案的**唯一提交出口**——
+ * 提交前按该需求相关 run id 取「实际采用」证据，经 `admitKstarProposals`
+ * 放行的提案才可能落候选；被拦提案不落候选，拦下的原因与结论（
+ * `insufficient_evidence` / `analysis_failed`）由准入门自己落档。
+ * 闸门不达阈（无提案）时如实回一条 `no_update`；提交失败写 `submit_failed`+
+ * 归因——三类互不冒充，`no_update` 永远不由失败退化而来。
  */
 export async function precipitateRequirementLevel(
   userId: string,
@@ -304,8 +341,31 @@ export async function precipitateRequirementLevel(
   // is global and does not carry a trustworthy user owner. KSTAR precipitation
   // must remain scoped to this user's own episode and Recall stores.
   const allProposals = [...proposals, ...personalProposals];
+
+  // 锚 episode + 准入上下文（T010）：采用证据按该需求相关 run id 取（episode
+  // 自身 run + 逐回合归属 run），结论 id 与回指复盘都由锚 episode 定。
+  const anchorEpisode = anchorEpisodeFor(episodes, reviews);
+  if (!anchorEpisode) {
+    // 没有可用 episode（记录缺失/被清）：既无可回指的复盘与任务，也没有
+    // 采用证据的查询范围，准入与结论都无从谈起——保持既有空返回（best-effort，
+    // 不抛错、不为不存在的 episode 造结论）。聚合线本就无提案，personal 线
+    // 的提案 sourceRefs 也为空（写入侧跳过）。
+    const empty: RequirementLevelPrecipitationResult = { proposals: [], createdAssetIds: [], candidateIds: [], experienceIds: [], mergedIntoIds: [], updateCandidateIds: [], failureIds: [] };
+    await updateExtractionRuns(userId, requirement, episodes, empty);
+    return empty;
+  }
+  const admission: KstarAdmissionContext = await kstarPrecipitationAdmission(userId, {
+    source: 'requirement_level',
+    episodes,
+    episodeId: anchorEpisode.id,
+    requirementId: requirement.id,
+  });
   if (allProposals.length === 0) {
-    const empty: RequirementLevelPrecipitationResult = { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [], failureIds: [] };
+    // 沉淀闸门不达阈（ΔR/ΔA 与置信度判定后没有任何提案）→ 如实回一条
+    // `no_update`（T012）；这里**不是**失败路径，失败各有 analysis_failed /
+    // submit_failed，不许退化成"无需更新"。
+    await recordKstarNoUpdateOutcome(userId, admission);
+    const empty: RequirementLevelPrecipitationResult = { proposals: [], createdAssetIds: [], candidateIds: [], experienceIds: [], mergedIntoIds: [], updateCandidateIds: [], failureIds: [] };
     await updateExtractionRuns(userId, requirement, episodes, empty);
     return empty;
   }
@@ -314,18 +374,28 @@ export async function precipitateRequirementLevel(
 
   let createdAssetIds: string[] = [];
   let candidateIds: string[] = [];
+  let experienceIds: string[] = [];
   let mergedIntoIds: string[] = [];
   let updateCandidateIds: string[] = [];
   let failureIds: string[] = [];
   try {
+    // 唯一提交出口：准入在 `precipitateDirectExperienceFromSource` 里、
+    // `saveRecallCandidate` 之前执行（放行的提案才落候选）；create 型提案
+    // 在同一出口内分流写经验（specs/016 T014——聚合线与直通线共用同一
+    // 分流规则，不各写一套）。
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
       conversationId: requirement.conversationId,
       requirementId: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
-    }, allProposals);
+    }, allProposals, admission, {
+      // 经验条目 source 的任务口径：聚合层的任务目标 + 锚 episode 终态。
+      taskGoal: requirement.goalText || requirement.title,
+      taskStatus: anchorEpisode.r.status,
+    });
     createdAssetIds = direct.createdAssetIds;
     candidateIds = direct.candidateIds;
+    experienceIds = direct.experienceIds;
     mergedIntoIds = direct.mergedIntoIds;
     updateCandidateIds = direct.updateCandidateIds;
     failureIds = direct.failureIds;
@@ -336,8 +406,11 @@ export async function precipitateRequirementLevel(
       requirementId: requirement.id,
       error: (error as Error).message,
     });
+    // 需求级提交整体失败（写入前置环节抛出）→ 如实写 `submit_failed` + 归因
+    // （T013）；best-effort 语义不变：收口照旧继续。
+    await recordKstarSubmitFailedOutcome(userId, admission, { error });
   }
-  const result = { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds, failureIds };
+  const result = { proposals: allProposals, createdAssetIds, candidateIds, experienceIds, mergedIntoIds, updateCandidateIds, failureIds };
   await updateExtractionRuns(userId, requirement, episodes, result);
   return result;
 }

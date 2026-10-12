@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -36,6 +36,7 @@ function writeSession(
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   while (tmpDirs.length) fs.rmSync(tmpDirs.pop()!, { recursive: true, force: true });
 });
 
@@ -45,8 +46,11 @@ describe('claude desktop session roots', () => {
     expect(mac).toContain('/Users/x/Library/Application Support/Claude');
     expect(mac.some((r) => r.endsWith('Claude-3p'))).toBe(true);
 
+    vi.stubEnv('XDG_CONFIG_HOME', undefined);
     const linux = claudeDesktopRoots('/home/x', 'linux');
     expect(linux).toContain('/home/x/.config/Claude');
+    vi.stubEnv('XDG_CONFIG_HOME', '/custom-config');
+    expect(claudeDesktopRoots('/home/x', 'linux')).toContain('/custom-config/Claude');
 
     const prevAppData = process.env.APPDATA;
     process.env.APPDATA = 'C:\\Users\\x\\AppData\\Roaming';

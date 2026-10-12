@@ -39,9 +39,37 @@ export type AssetRuntimeBlockReason =
   | 'forbidden_context'
   | 'not_applicable_context'
   | 'target_agent_not_allowed'
-  | 'sensitivity_above_destination'
-  | 'sensitivity_unclassified'
   | 'source_unavailable';
+
+/** 稳定规则标识（2026-09-25 验收修复 US-604 AC1 / SC-004）：把资产状态与运行时
+ *  阻断原因收敛成一个不随界面语言变的标识，界面据此说清"到底哪条规则拦的"。
+ *  顺序即优先级：状态最具体，作用域最笼统。**只给标识——不给原因码原文、不含正文。**
+ *  挂载时（explicit attach）与每轮注入（prompt injection）共用同一份映射，两处
+ *  说法才不会打架。 */
+export type AssetRuntimeBlockRule =
+  | 'paused' | 'archived' | 'revoked' | 'deleted' | 'purged' | 'inactive'
+  | 'missing' | 'source_unavailable' | 'agent' | 'scope'
+  | 'maturity'
+  | 'forbidden_context' | 'not_applicable_context'
+  | 'version_changed' | 'versions_missing' | 'unknown';
+
+export function assetRuntimeBlockRule(
+  assetStatus: string,
+  reasons: readonly AssetRuntimeBlockReason[],
+): AssetRuntimeBlockRule {
+  if (reasons.includes('status_not_active')) {
+    return ['paused', 'archived', 'revoked', 'deleted', 'purged'].includes(assetStatus)
+      ? assetStatus as AssetRuntimeBlockRule
+      : 'inactive';
+  }
+  if (reasons.includes('source_unavailable')) return 'source_unavailable';
+  if (reasons.includes('target_agent_not_allowed')) return 'agent';
+  if (reasons.includes('maturity_below_default_use')) return 'maturity';
+  if (reasons.includes('forbidden_context')) return 'forbidden_context';
+  if (reasons.includes('not_applicable_context')) return 'not_applicable_context';
+  if (reasons.includes('scope_mismatch')) return 'scope';
+  return 'unknown';
+}
 
 export interface AssetRuntimeCandidate extends AssetPolicyInput {
   scope: string;
@@ -49,15 +77,11 @@ export interface AssetRuntimeCandidate extends AssetPolicyInput {
   applicableWhen?: readonly string[];
   forbiddenWhen?: readonly string[];
   targetAgents?: readonly string[];
-  sensitivity?: string;
 }
 
 export interface AssetRuntimeContext extends AssetScopeContext {
   /** 目的地作用域。undefined = 不限定，视为同作用域。 */
   scope?: string;
-  /** 目的地能接受的最高敏感级。声明了就必须比对。 */
-  maxSensitivity?: string;
-  sensitivityRank?: Readonly<Record<string, number>>;
   /** 来源是否仍然可读。false = 授权已撤回或来源失效。 */
   sourceAvailable?: boolean;
   /** 当前任务的自由文本，用于比对 applicable/forbidden 条件。 */
@@ -118,18 +142,9 @@ export function evaluateAssetRuntimeEligibility(
     reasons.push('target_agent_not_allowed');
   }
 
-  // 敏感级。缺失不等于 L0：目的地声明了上限就必须先分级。
-  if (context.maxSensitivity !== undefined) {
-    const rank = context.sensitivityRank;
-    if (asset.sensitivity === undefined) reasons.push('sensitivity_unclassified');
-    else if (rank && (rank[asset.sensitivity] ?? 0) > (rank[context.maxSensitivity] ?? 0)) {
-      reasons.push('sensitivity_above_destination');
-    }
-  }
-
   // 静默默认注入以「适合度」为准，不以成熟度为硬门槛：
-  // - 适合度 = status / scope / forbidden / applicable / target_agent /
-  //   sensitivity（上方已全部检查）+ 调用方的语义匹配分（投影双信号门槛）。
+  // - 适合度 = status / scope / forbidden / applicable / target_agent
+  //   （上方已全部检查）+ 调用方的语义匹配分（投影双信号门槛）。
   // - 成熟度（置信度）不再是注入与否的依据——未验证资产（seed）的诚实性
   //   由注入标注承担（prompt 块里带 lifecycle 提示，模型知道这是系统自评、
   //   参考不盲从），而不是把资产完全排除（旧逻辑下 seed 永远无法被使用、

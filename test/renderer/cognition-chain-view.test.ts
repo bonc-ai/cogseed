@@ -22,13 +22,26 @@ function sliceBlock(source: string, start: number): string {
   const bodyStart = source.indexOf('{', start);
   let depth = 0;
   let quote = '';
+  let lineComment = false;
+  let blockComment = false;
   for (let i = bodyStart; i < source.length; i += 1) {
     const char = source[i];
+    const next = source[i + 1];
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') { blockComment = false; i += 1; }
+      continue;
+    }
     if (quote) {
       if (char === '\\') i += 1;
       else if (char === quote) quote = '';
       continue;
     }
+    if (char === '/' && next === '/') { lineComment = true; i += 1; continue; }
+    if (char === '/' && next === '*') { blockComment = true; i += 1; continue; }
     if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
     if (char === '{') depth += 1;
     else if (char === '}' && --depth === 0) return source.slice(start, i + 1);
@@ -160,7 +173,11 @@ describe('证明评价文案', () => {
 // 本批随修复恢复守卫——lookup 与各内联字典未命中一律走「其他/未知」兜底文案。
 
 describe('未知枚举不落到机器码', () => {
-  const views = readSrc('modules/cognition-assets/views.js');
+  // 2026-09-29 views.js 机械拆分：候选状态字典随候选族迁入 review-candidate.js /
+  // review-views.js，按加载顺序合并三源扫描（断言语义不变）。
+  const views = ['views.js', 'review-candidate.js', 'review-views.js']
+    .map((file) => readSrc(`modules/cognition-assets/${file}`))
+    .join('\n');
 
   it('资产状态 chip 对字典没有的状态给兜底文案，不把原始 status 当文案', () => {
     const start = views.indexOf('const assetStatusChip');

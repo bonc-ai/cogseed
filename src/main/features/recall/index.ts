@@ -54,7 +54,7 @@ export type { RecallUsageRecord, RecordRecallUsageInput } from './usage-service'
 export { COGNITION_TREE_CONTRACT, COGNITION_TREE_CONTRACT_VERSION, readCognitionTree, rebuildCognitionTree } from './tree-service';
 export type { CognitionTreeAssetNode, CognitionTreeAssetNodeId, CognitionTreeCandidateNode, CognitionTreeCandidateNodeId, CognitionTreeEdge, CognitionTreeNode, CognitionTreeNodeId, CognitionTreeRecord } from './tree-service';
 
-export { listAbilityAssetTimeline, listRecallTimeline } from './timeline-service';
+export { listAbilityAssetTimeline, listRecallTimeline, REAL_USAGE_KINDS } from './timeline-service';
 export type { RecallAssetTimelineItem, RecallAssetTimelineKind } from './timeline-service';
 export { buildProjectionCard } from './projection-card';
 export type { RecallProjectionCard, ProjectionCardAction, ProjectionCardAssetSummary, ProjectionCardPreview, ProjectionCardSummary } from './projection-card';

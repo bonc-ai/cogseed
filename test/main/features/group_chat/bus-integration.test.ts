@@ -233,8 +233,8 @@ vi.mock("../../../../src/main/model/client", () => ({
         _recordedSteers.push(opts.drainSteer?.() || []);
         continue;
       }
-      if (ev?.type === "__emit_teaching_receipt__") {
-        await opts.onTeachingReceipt?.(ev.receipt);
+      if (ev?.type === "__emit_cognition_save_receipt__") {
+        await opts.onCognitionSaveReceipt?.(ev.receipt);
         continue;
       }
       if (ev?.type === "__capture_tool_definitions__") {
@@ -1681,20 +1681,22 @@ describe("group_chat bus integration › structured user recipient", () => {
 });
 
 describe("group_chat bus integration › teaching receipts", () => {
-  it("persists a deduplicated teaching receipt on the visible commander reply", async () => {
+  it("persists a deduplicated taught receipt on the visible commander reply (并入保存回执链)", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
+    // 教学回执并入保存回执（2026-09-28 四病整改 7.0 修7 / F39）：runner 不再有
+    // onTeachingReceipt，教学信号以 candidate+taught-pending-review 走同一条
+    // 保存回执收集口径（渲染层不再有独立教学卡）。
     const receipt = {
-      id: "teach-a",
+      target: "candidate",
+      id: "cand-a",
       summary: "以后所有结论都附来源。",
-      scope: "project",
-      status: "active",
-      candidateIds: ["cand-a"],
+      outcome: "taught-pending-review",
     };
     _setScript(state.buildGconvSessionId(cid), [
-      { type: "__emit_teaching_receipt__", receipt },
-      { type: "__emit_teaching_receipt__", receipt },
+      { type: "__emit_cognition_save_receipt__", receipt },
+      { type: "__emit_cognition_save_receipt__", receipt },
       { type: "final", text: "已经记住。" },
     ]);
 
@@ -1708,23 +1710,86 @@ describe("group_chat bus integration › teaching receipts", () => {
 
     const messages = await readConversationMessages(cid);
     const reply = messages.find((message) =>
-      message.from === "commander" && Array.isArray(message.teaching_receipts));
+      message.from === "commander" && Array.isArray(message.cognition_save_receipts));
     expect(_recordedCalls.find((call) => call.sid === state.buildGconvSessionId(cid))?.sourceMessageText)
       .toBe("请记住：以后所有结论都附来源。");
     expect(reply).toMatchObject({
       text: "已经记住。",
-      teaching_receipts: [{
-        id: "teach-a",
+      cognition_save_receipts: [{
+        target: "candidate",
+        id: "cand-a",
         summary: "以后所有结论都附来源。",
-        scope: "project",
-        status: "active",
-        candidate_ids: ["cand-a"],
+        outcome: "taught-pending-review",
       }],
+    });
+  });
+
+  it("persists deduplicated host-owned cognition save receipts on the assistant message", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const activeAsset = {
+      target: "asset",
+      id: "asset-save-a",
+      summary: "以后所有结论都附来源。",
+      outcome: "created",
+    };
+    const pendingCandidate = {
+      target: "candidate",
+      id: "cand-save-a",
+      summary: "The user prefers concise answers and one example.",
+      outcome: "pending-review",
+    };
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__emit_cognition_save_receipt__", receipt: activeAsset },
+      { type: "__emit_cognition_save_receipt__", receipt: pendingCandidate },
+      { type: "__emit_cognition_save_receipt__", receipt: pendingCandidate },
+      { type: "final", text: "已保存，请查看回执。" },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "请记住：以后所有结论都附来源。",
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const messages = await readConversationMessages(cid);
+    const reply = messages.find((message) =>
+      message.from === "commander" && Array.isArray(message.cognition_save_receipts));
+    expect(reply).toMatchObject({
+      text: "已保存，请查看回执。",
+      cognition_save_receipts: [activeAsset, pendingCandidate],
     });
   });
 });
 
 describe("group_chat bus integration › disabled skills", () => {
+  it("blocks a structured Hub-disabled selection before commander execution", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const paths = await import("../../../../src/main/paths");
+    const storage = await import("../../../../src/main/storage");
+    const enabled = await import("../../../../src/main/features/component_enabled");
+    const skillDir = paths.userMarketplaceSkillDir(TEST_UID, "hub-disabled");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), '---\nname: hub-disabled\ndescription_en: test\n---\n# test');
+    fs.writeFileSync(path.join(skillDir, "_install.json"), JSON.stringify({ version: "1.0.0", status: "disabled" }));
+    enabled.setSkillEnabled(TEST_UID, "hub-disabled", true);
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "WRONG: disabled skill ran" }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "开始", use_selections: [{ kind: "skill", id: "hub-disabled" }] });
+    await waitForQuiescent(TEST_UID, cid);
+    const messages = await storage.readJsonl<any>(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`));
+    expect(messages.some((message: any) => String(message.text || "").includes("WRONG"))).toBe(false);
+    const failure = messages.find((message: any) => message.from === "commander" && message.failure_kind);
+    expect(failure).toMatchObject({ failure_kind: "dependency", failure_code: "skill_disabled" });
+    expect(failure.text).toMatch(/Hub/);
+    expect(failure.text).not.toMatch(/重新启用|re-enable/);
+    expect(enabled.readDisabledSets(TEST_UID).skills.has("hub-disabled")).toBe(false);
+  });
+
   it("does not let commander substitute another skill when user explicitly requests a disabled one", async () => {
     const cid = newCid();
     const state =
@@ -2987,9 +3052,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
     // This assertion covers both sides of the boundary: the Commander must
     // receive host-owned Recall context, while the delegated Agent receives
-    // only the explicit dispatch grant. Enable the host routing path so the
-    // test creates the confirmed projection that supplies that context.
-    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+    // only the explicit dispatch grant. Pin the projection explicitly so this
+    // dispatch-boundary test does not depend on semantic-ranking heuristics.
 
     const candidate = await candidates.saveRecallCandidate(TEST_UID, {
       judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
@@ -3003,6 +3067,15 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // "资产只经 Commander 分发、不由宿主注入 Agent"的契约，不是成熟度闸门，
     // 所以先把资产抬到够格的档位。
     await (await import("../../../../src/main/features/recall/asset-service")).setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+    const projection = await projections.previewContextProjection(TEST_UID, {
+      taskRunId: "task-dispatch-boundary",
+      purpose: "review",
+      authorization: "user_confirmed",
+      explicitAssetIds: [asset.id],
+      confirm: true,
+    });
+    expect(projection.assetIds).toContain(asset.id);
 
     const AGENT_REPLY = "AGENT-OK-58d2";
     _setScript(state.buildGconvSessionId(cid), [
@@ -3017,7 +3090,13 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     _setScript(agentSid, [{ type: "final", text: AGENT_REPLY }]);
 
     bus.subscribe(TEST_UID, cid, () => {});
-    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "run the audit",
+      committedProjectionId: projection.id,
+    });
     await waitForQuiescent(TEST_UID, cid);
 
     // The agent's system prompt received the Commander-granted asset block...
@@ -6763,10 +6842,11 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
     const preview = await projections.previewContextProjection(TEST_UID, {
       taskRunId: "task-receipt",
       purpose: "review",
-      taskText: "Audit OAuth login",
-      authorization: "workspace_policy",
+      authorization: "user_confirmed",
+      explicitAssetIds: [asset.id],
       confirm: true,
     });
+    expect(preview.assetIds).toContain(asset.id);
     const messageFile = layout.conversationMessageFile(TEST_UID, cid);
     fs.mkdirSync(path.dirname(messageFile), { recursive: true });
     await storage.appendJsonlAtomic(messageFile, {
@@ -11595,4 +11675,72 @@ describe("group_chat bus integration › model-selected asset attachment (2026-0
     await expect(projection.revokeModelSelectedProjection(TEST_UID, userOwned.id))
       .rejects.toThrow("not model-selected");
   }, 20_000);
+});
+
+describe("group_chat bus integration › experience catalog hint (specs/016 T025)", () => {
+  it("并列注入资产与经验两段目录，且互不污染：资产块零经验条目、经验块零资产条目、正文不硬注入", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    // 一条在用资产（资产目录可见）+ 一条同类型经验（"报告"命中消息文本的任务类型）。
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Report asset: lead with the conclusion, then evidence.",
+      summary: "report-first rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-exp-catalog" }],
+    });
+    await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" });
+    const experienceService = await import("../../../../src/main/features/recall/experience-service");
+    const now = new Date().toISOString();
+    await experienceService.createExperience(TEST_UID, {
+      id: "exp-bus-catalog1",
+      source: {
+        episodeId: "kse-exp-bus-catalog1",
+        taskGoal: "写竞品调研报告",
+        taskType: "report",
+        taskStatus: "confirmed",
+      },
+      experienceType: "lesson",
+      title: "报告先给结论再给依据",
+      body: "报告类经验正文：经验正文只应经 read_task_experience 自取，不得硬注入提示词。",
+      scope: "report",
+      verification: { state: "confirmed", outcome: "better_than_expected", deltaR: 0.3, confidence: 0.8 },
+      evidenceRefs: [{ kind: "conversation", id: "conv-exp-bus-1" }],
+      learningProvenance: {
+        projectionId: "prj-exp-bus-1",
+        episodeId: "kse-exp-bus-catalog1",
+        ruleRefs: [],
+        attribution: "execution_gap",
+      },
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "done" }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "写一份竞品调研报告" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const commanderCall = [..._recordedCalls].reverse().find((c) => c.sid === state.buildGconvSessionId(cid));
+    expect(commanderCall).toBeTruthy();
+    const prompt = String(commanderCall!.systemPrompt || "");
+    // 两段目录都在、并列追加（资产块在前，经验块在后）。
+    const assetIdx = prompt.indexOf("Asset catalog");
+    const expIdx = prompt.indexOf("Experience catalog");
+    expect(assetIdx).toBeGreaterThan(-1);
+    expect(expIdx).toBeGreaterThan(assetIdx);
+    // 互不污染：资产块里零经验条目、经验块里零资产条目（各自只含自家引用前缀）。
+    const assetBlock = prompt.slice(assetIdx, expIdx);
+    const expBlock = prompt.slice(expIdx);
+    expect(assetBlock).not.toContain("[exp:");
+    expect(expBlock).not.toContain("[asset:");
+    // 模型能看见经验清单（单行条目），但正文仍需自取（拍板 C-7）。
+    expect(expBlock).toContain("[exp:exp-bus-catalog1]");
+    expect(expBlock).toContain("read_task_experience");
+    expect(prompt).not.toContain("报告类经验正文：经验正文只应经");
+    // 资产那条仍在资产块里（资产目录不受经验接入影响）。
+    expect(assetBlock).toContain("[asset:");
+  }, BUS_TEST_TIMEOUT_MS);
 });

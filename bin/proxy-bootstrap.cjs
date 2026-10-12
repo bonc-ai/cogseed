@@ -90,7 +90,12 @@ function createBridgeFetch(nativeFetch, bridgeUrl, bridgeToken) {
       throw new Error(`system fetch bridge failed: ${detail}`);
     }
     const responseMeta = decodeMeta(response.headers.get('x-cogseed-fetch-meta'));
-    return new Response(response.body, {
+    // Transfer stream ownership before the original fetch Response becomes
+    // unreachable. Undici's finalizer cancels an unlocked, unread body even
+    // when another Response references it. Piping preserves backpressure and
+    // propagates consumer cancellation without buffering the whole response.
+    const body = response.body?.pipeThrough(new TransformStream()) ?? null;
+    return new Response(body, {
       status: responseMeta.status,
       statusText: responseMeta.statusText,
       headers: responseMeta.headers,

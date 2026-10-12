@@ -36,7 +36,7 @@ vi.mock('../../../src/main/logger', () => ({
 let probe: (channel: string) => Promise<{ ok: boolean; error?: string }>;
 
 beforeEach(async () => {
-  process.env.COGSEED_WORKSPACE_ROOT = os.tmpdir();
+  // Keep the isolated workspace assigned by test/setup-env.ts.
   invokeHandler = null;
   registered.clear();
   vi.resetModules();

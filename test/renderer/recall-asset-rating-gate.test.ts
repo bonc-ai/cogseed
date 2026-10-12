@@ -24,7 +24,9 @@ const zh: Record<string, string> = JSON.parse(
 );
 
 function installSharedUi(context: vm.Context) {
-  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-segmented-control.js']) {
+  // ui-status.js（uiTag 等）与 ui-segmented-control.js 同为 index.html 静态共享层——
+  // 夹具必须与真机同构（specs/010 T026 起详情页有档位章，缺它整页渲染抛错）。
+  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-status.js', 'ui-segmented-control.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8'), context, { filename: file });
   }
 }
@@ -49,7 +51,7 @@ function loadAssetsRenderer() {
   context.globalThis = context;
   vm.createContext(context);
   installSharedUi(context);
-  for (const file of ['vocabulary.js', 'core.js', 'views.js']) {
+  for (const file of ['vocabulary.js', 'core.js', 'views.js', 'review-candidate.js', 'review-views.js']) {
     vm.runInContext(
       fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets', file), 'utf8'),
       context,
@@ -79,6 +81,9 @@ function renderAssets(route: Record<string, unknown>, patch: (store: any) => voi
   context.document.getElementById = (id: string) => (id === 'ca-root' ? host : null);
   NS.store.assets = [ASSET];
   NS.store.proofs = [];
+  // 白名单与真实载荷同默认（2026-09-25 US-602）：没有它使用记录区会被 fail-closed
+  // 过滤空，评价入口自然测不到。
+  NS.store.realUsageKinds = ['usage_recorded', 'projection_confirmed'];
   NS.store.candidates = [];
   NS.store.loaded = true;
   NS.store.loading = false;
@@ -220,7 +225,11 @@ describe('认知资产 · 候选行的就地处理', () => {
       });
       expect([...html.matchAll(/<button[^>]*data-action="(defer|reject)"[^>]*>/g)].length).toBe(0);
       expect(html).not.toContain(zh['cognition.candidate_defer_action']);
-      expect(html).not.toContain(zh['cognition.candidate_save_and_use']);
+      // 2026-09-29 A6 词根统一后「保存」成为公共词根（新建主按钮「保存」/
+      // 更新「保存更新」、说明文案也含「保存」），子串断言不再能表达"没有
+      // 决策入口"——改按确认按钮的 act 通道断言（卡片与详情同走
+      // cand-adopt-with-form）。
+      expect(html).not.toContain('data-act="cand-adopt-with-form"');
     }
   });
 });

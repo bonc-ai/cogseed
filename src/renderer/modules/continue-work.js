@@ -881,7 +881,7 @@ async function _cwRunImport() {
         }
         _cw.imported.push(item);
         if (item.source === 'claude' && res.cognitions) {
-          _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0) + (res.cognitions.skill_method || 0);
+          _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.fact || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0) + (res.cognitions.skill_method || 0);
         }
         // B+ 快速导入：会话已立即落盘，提炼在后台进行——行直接标记
         // 「已准备 · 提炼中」，不阻塞后续导入与完成面板。

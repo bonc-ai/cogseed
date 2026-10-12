@@ -3586,11 +3586,11 @@ async function useAgent(agentId, managementOpenGesture) {
 
 async function useSkill(skillId, skillName) {
   if (typeof _skillsCache !== 'undefined'
-      && _skillsCache?.some((s) => s.id === skillId && s.enabled === false)) return;
+      && _skillsCache?.some((s) => s.id === skillId && (s.enabled === false || (s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
   // Open-tier skills (external packages / global folders) live in their own
   // cache; a disabled one must not run from its card's play button either.
   if (typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache)
-      && _openSkillsCache.some((s) => s.id === skillId && s.enabled === false)) return;
+      && _openSkillsCache.some((s) => s.id === skillId && (s.enabled === false || (s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
   // Skill "use" flow: navigate to the new-chat page with the skill
   // pre-selected and wait for user input.
   _agentsLog.info('use skill', { skill_id: skillId, skill_name: skillName || skillId });
@@ -3721,10 +3721,17 @@ let _pickerArtifactRenderSeq = 0;
 let _pickerAssetRows = null;           // 全局沉淀资产（recall.assets.list）
 let _pickerAssetLoading = null;
 let _pickerAssetRenderSeq = 0;
+// 任务 tab（specs/016 T027 / US-802 AC2）：@ 历史任务带入其经验集。数据源是
+// recall.experiences.sourceTasks（episode 维度，只列有经验的任务），选中即
+// attachToTask（主进程过准入 + 冻结快照），不走 taskRefs.add——经验集必须
+// 在主进程过准入，渲染层直塞引用会绕过闸门。
+let _pickerTaskRows = null;            // 有经验的历史任务（recall.experiences.sourceTasks）
+let _pickerTaskLoading = null;
+let _pickerTaskRenderSeq = 0;
 // 任务引用 chips（composer 引用条）：conversation = 已持久化 task_references；
 // new-chat = 待提交 pending（会话创建后写入 task_references）
 let _pendingNewChatRefs = [];          // TaskReference[]
-const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'artifacts', 'assets'];
+const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'artifacts', 'assets', 'tasks'];
 const _AGENT_PICKER_TABS = new Set(_AGENT_PICKER_TAB_ORDER);
 
 function _normalizeAgentPickerTab(tab) {
@@ -3753,26 +3760,40 @@ function _agentPickerSpaceId(anchorId) {
 }
 
 function _agentPickerVisibleTabs(anchorId) {
-  // 空间会话（聊天绑空间 / new-chat 选中空间）→ 智能体/技能/产物/资产；
-  // 无空间（主对话默认工作区 / Auto）→ 仅智能体/技能。
-  // 连接器/资料库/本体 tab 已删（两处都不再出现）。
+  // 空间会话（聊天绑空间 / new-chat 选中空间）→ 智能体/技能/产物/资产/任务；
+  // 普通会话与新建普通任务（无空间）→ 智能体/技能/资产/任务。
+  // 连接器/资料库/本体 tab 已删（各处都不再出现）。
+  //
+  // 资产页签对普通会话开放（2026-09-25 验收修复 US-601）：普通任务是最高频
+  // 入口，此前只有空间会话能 @ 资产，等于绝大多数对话里引用能力缺席。
+  // 「产物」仍限空间会话（产物归属空间，普通会话没有可列的空间产物）。
+  // 「任务」与资产同口径（specs/016 T027）：经验集来自全局经验目录，与空间
+  // 无关——普通任务恰恰是「把上一个任务的经验带进下一个任务」的主场。
+  //
+  // 自动任务弹窗是例外，恒为智能体/技能：它没有资产引用的落地通道
+  // （_commitTaskRef 只处理 conversation / new-chat，auto 直接返回 False），
+  // 放开页签只会造出"选了没反应"的静默失败。自动任务引用资产属后续独立范围。
+  if (anchorId === 'auto-recipient-chip') return ['agents', 'skills'];
   const spaceId = _agentPickerSpaceId(anchorId);
-  return spaceId ? _AGENT_PICKER_TAB_ORDER : ['agents', 'skills'];
+  return spaceId ? _AGENT_PICKER_TAB_ORDER : ['agents', 'skills', 'assets', 'tasks'];
 }
 
 function _agentPickerSearchPlaceholder() {
   if (_agentPickerTab === 'skills') return t('agent_picker.search_skills_placeholder');
   if (_agentPickerTab === 'artifacts') return t('agent_picker.search_artifacts_placeholder');
   if (_agentPickerTab === 'assets') return t('agent_picker.search_assets_placeholder');
+  if (_agentPickerTab === 'tasks') return t('agent_picker.search_tasks_placeholder');
   return t('agent_picker.search_placeholder');
 }
 
-/** composer 占位符随会话空间状态更新：空间会话提示「产物/资产」可选，非空间只说智能体/技能。
- *  同时同步富文本编辑器（contenteditable 镜像 data-placeholder，见 _initMentionMirror）与
- *  attribute（i18n 重应用/镜像 sync 读的是 getAttribute）。 */
+/** composer 占位符随会话空间状态更新：空间会话提示「产物/资产」可选，普通会话
+ *  提示「资产」可选（2026-09-25 US-601：资产页签已对普通会话开放，占位符不说
+ *  就等于功能不可发现）。同时同步富文本编辑器（contenteditable 镜像
+ *  data-placeholder，见 _initMentionMirror）与 attribute（i18n 重应用/镜像 sync
+ *  读的是 getAttribute）。 */
 function updateAgentPickerPlaceholders() {
   const spacePh = t('agent_picker.input_placeholder_space', '输入 @ 选择智能体、技能、产物、资产');
-  const plainPh = t('chat.input_placeholder', '输入 @ 选择智能体、技能');
+  const plainPh = t('chat.input_placeholder', '输入 @ 选择智能体、技能、资产');
   const apply = (input, ph) => {
     if (!input) return;
     input.placeholder = ph;
@@ -3821,10 +3842,11 @@ function _setAgentPickerTab(tab, opts = {}) {
 
 function _ensureAgentPickerTabData(tab, openSeq) {
   const normalized = _normalizeAgentPickerTab(tab);
-  // artifacts/assets own their own lazy-load + cache inside their render
-  // functions (_renderArtifactsPickerList / _renderAssetsPickerList) — same
-  // pattern as the removed library/ontology tabs, skip generic bookkeeping.
-  if (normalized === 'artifacts' || normalized === 'assets' || _agentPickerLoadedTabs.has(normalized)) {
+  // artifacts/assets/tasks own their own lazy-load + cache inside their render
+  // functions (_renderArtifactsPickerList / _renderAssetsPickerList /
+  // _renderTasksPickerList) — same pattern as the removed library/ontology
+  // tabs, skip generic bookkeeping.
+  if (normalized === 'artifacts' || normalized === 'assets' || normalized === 'tasks' || _agentPickerLoadedTabs.has(normalized)) {
     return Promise.resolve();
   }
   const existing = _agentPickerTabLoads.get(normalized);
@@ -3914,6 +3936,8 @@ async function _refreshAgentPickerProjectContext(anchorId) {
     _pickerArtifactLoading = null;
     _pickerAssetRows = null;
     _pickerAssetLoading = null;
+    _pickerTaskRows = null;
+    _pickerTaskLoading = null;
     return;
   }
   // 有空间 → 异步解析作用域（loading 壳防旧列表可点）
@@ -3947,11 +3971,13 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   _pickerOntologyEntries = null;
   _pickerOntologyLoading = null;
   _pickerOntologyRenderSeq += 1;
-  _pickerArtifactRows = null;
-  _pickerArtifactTitles = new Map();
-  _pickerArtifactLoading = null;
-  _pickerAssetRows = null;
-  _pickerAssetLoading = null;
+    _pickerArtifactRows = null;
+    _pickerArtifactTitles = new Map();
+    _pickerArtifactLoading = null;
+    _pickerAssetRows = null;
+    _pickerAssetLoading = null;
+    _pickerTaskRows = null;
+    _pickerTaskLoading = null;
 }
 
 async function refreshAgentPickerContext(anchorId) {
@@ -3974,12 +4000,14 @@ async function _openAgentPicker(anchorBtn, opts = {}) {
   picker.dataset.composerMode = opts.mode === 'members' || opts.mode === 'mentions' ? opts.mode : '';
   const openSeq = ++_agentPickerOpenSeq;
   _agentPickerLoadedTabs = new Set();
-  // 产物/资产目录按 picker 会话重置（防上次会话残留旧空间行可点）
+  // 产物/资产/任务目录按 picker 会话重置（防上次会话残留旧空间行可点）
   _pickerArtifactRows = null;
   _pickerArtifactTitles = new Map();
   _pickerArtifactLoading = null;
   _pickerAssetRows = null;
   _pickerAssetLoading = null;
+  _pickerTaskRows = null;
+  _pickerTaskLoading = null;
   // Reset project scope synchronously before painting. For project-bound
   // composers this flips the list to a loading shell immediately, so stale
   // unrestricted rows from the previous picker session are never clickable
@@ -4076,6 +4104,10 @@ function _renderAgentPickerList(filterText) {
   }
   if (_agentPickerTab === 'assets') {
     _renderAssetsPickerList(listEl, filterText, anchorId);
+    return;
+  }
+  if (_agentPickerTab === 'tasks') {
+    _renderTasksPickerList(listEl, filterText, anchorId);
     return;
   }
   // Disabled agents are filtered out — picker is a "what can I dispatch right
@@ -4619,6 +4651,8 @@ function _targetFromPickerAnchor(anchorId) {
 // ── 产物 / 资产 tab（空间会话 @ 引用：复用任务引用 task_references）─────────────
 
 function _sameTaskRefKey(r) {
+  // 经验集引用的去重键按 episode（同一来源任务只挂一份，重挂走主进程整体替换）。
+  if (r && r.kind === 'experience_set') return `experience_set:${r.episode_id || ''}`;
   return r && r.kind === 'asset'
     ? `asset:${r.asset_id || ''}`
     : `artifact:${r.source_cid || ''}:${r.file_name || ''}`;
@@ -4638,13 +4672,27 @@ async function _loadArtifactPickerRows(spaceId) {
 }
 
 async function _loadAssetPickerRows(spaceId) {
-  // @ 资产 = 本空间沉淀资产（recall.assets.listForSpace，与空间资产 tab 同源；
-  // 不再用全局 recall.assets.list——用户明确要求空间资产）。
-  if (!spaceId) return [];
+  // 空间会话走空间口；普通会话/新建普通任务走全局口（2026-09-25 US-601：
+  // 空间隔离已废止，资产对普通会话开放）。
+  // **不按 active 过滤**：暂停/撤回的资产照样列出来并标状态，选中时才拦并说明
+  // 规则——藏起来的话用户只看到"找不到"，AC4 要求的「阻止并显示明确原因」在
+  // @ 入口就永远不可达。归档/已删/已清除除外：它们根本无法被引用，列出来只是噪声。
+  const notReferenceable = ['archived', 'deleted', 'purged'];
   try {
-    const res = await window.cogseed.invoke('recall.assets.listForSpace', { spaceId });
+    const res = spaceId
+      ? await window.cogseed.invoke('recall.assets.listForSpace', { spaceId })
+      : await window.cogseed.invoke('recall.assets.list', {});
     return Array.isArray(res && res.assets)
-      ? res.assets.map((a) => ({ asset_id: a.id, title: a.title, asset_type: a.type }))
+      ? res.assets
+        .filter((a) => !notReferenceable.includes(String((a && a.status) || 'active')))
+        .map((a) => ({
+          asset_id: a.id,
+          title: a.title,
+          asset_type: a.type,
+          status: String(a.status || 'active'),
+          // 选中时显示"名称 · vN"用（AC2）；真正冻结的版本以挂载响应为准。
+          version: String(a.activeVersion || a.version || ''),
+        }))
       : [];
   } catch (err) {
     _agentsLog.warn('asset picker load failed', err);
@@ -4710,19 +4758,38 @@ function _renderArtifactsPickerList(listEl, filterText, anchorId) {
   _bindAgentPickerListItems(listEl, anchorId);
 }
 
+/** 拦截原因文案住在 cognition-assets/core.js（懒加载特性组 recall）。与 skills
+ *  tab 同一套做法：用到之前先把特性组拉起来，否则资产被拦时只能说"不可引用"，
+ *  说不出是哪条规则（US-604 AC1）。拉不起来也不阻塞列表——兜底文案仍在。 */
+async function _ensureAssetBlockReasonText() {
+  if (window.CogAssets && typeof window.CogAssets.blockReasonText === 'function') return;
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader !== 'function') return;
+  try {
+    await loader('recall');
+  } catch (err) {
+    _agentsLog.warn('recall feature load failed', err);
+  }
+}
+
+/** 资产状态标记：走共享 uiTag（AGENTS.md：非交互元数据用 uiTag，不落裸控件）；
+ *  共享件缺席时退回同形态 span——两条路径都不引入裸控件。 */
+function _pickerAssetStatusTag(label, status) {
+  const className = `skill-picker-asset-status is-${status}`;
+  if (typeof window.uiTag === 'function') return ` · ${window.uiTag({ label, className })}`;
+  return ` · <span class="ui-tag ${escapeHtml(className)}">${escapeHtml(label)}</span>`;
+}
+
 function _renderAssetsPickerList(listEl, filterText, anchorId) {
   const q = (filterText || '').toLowerCase();
   const renderSeq = ++_pickerAssetRenderSeq;
   const spaceId = _agentPickerSpaceId(anchorId);
-  if (!spaceId) {
-    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agent_picker.assets_empty'))}</div>`;
-    return;
-  }
   if (!_pickerAssetRows) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     const openSeq = _agentPickerOpenSeq;
     if (!_pickerAssetLoading) {
-      _pickerAssetLoading = _loadAssetPickerRows(spaceId)
+      _pickerAssetLoading = _ensureAssetBlockReasonText()
+        .then(() => _loadAssetPickerRows(spaceId))
         .then((rows) => {
           // 会话守卫：picker 已关闭/重开则丢弃过期结果
           if (openSeq !== _agentPickerOpenSeq) return;
@@ -4751,15 +4818,108 @@ function _renderAssetsPickerList(listEl, filterText, anchorId) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(q ? t('agent_picker.assets_no_match') : t('agent_picker.assets_empty'))}</div>`;
     return;
   }
-  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(t('agent_picker.assets_group'))}</div>` +
+  // 组名区分空间/全局：普通会话列的是全部认知资产，不是"空间资产"。
+  const groupLabel = spaceId ? t('agent_picker.assets_group') : t('agent_picker.assets_group_all');
+  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(groupLabel)}</div>` +
     filtered.map((a) => {
       const typeLabel = a.asset_type ? ` · ${escapeHtml(a.asset_type)}` : '';
+      const status = String(a.status || 'active');
+      const statusLabel = status === 'paused'
+        ? t('agent_picker.asset_status_paused')
+        : (status === 'revoked' ? t('agent_picker.asset_status_revoked') : '');
+      // 标题缺失时给泛称，不拿内部 id 当名字上屏。
+      const title = String(a.title || '').trim() || t('agent_picker.asset_unnamed');
       return `
       <div class="skill-picker-item" data-kind="asset"
-           data-id="${escapeHtml(a.asset_id)}" data-name="${escapeHtml(a.title || a.asset_id)}"
-           data-asset-id="${escapeHtml(a.asset_id)}" data-asset-type="${escapeHtml(a.asset_type || '')}">
-        <div class="skill-picker-item-name">${escapeHtml(a.title || a.asset_id)}</div>
-        <div class="skill-picker-item-desc">${escapeHtml(t('agent_picker.asset_type'))}${typeLabel}</div>
+           data-id="${escapeHtml(a.asset_id)}" data-name="${escapeHtml(title)}"
+           data-asset-id="${escapeHtml(a.asset_id)}" data-asset-type="${escapeHtml(a.asset_type || '')}"
+           data-asset-status="${escapeHtml(status)}" data-asset-version="${escapeHtml(a.version || '')}">
+        <div class="skill-picker-item-name">${escapeHtml(title)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(t('agent_picker.asset_type'))}${typeLabel}${statusLabel ? _pickerAssetStatusTag(statusLabel, status) : ''}</div>
+      </div>`;
+    }).join('');
+  _bindAgentPickerListItems(listEl, anchorId);
+}
+
+// ── 任务 tab（specs/016 T027 / US-802 AC2：@ 历史任务带入其经验集）───────────
+
+/** 数据源：有经验的来源任务（episode 维度）。全暂停的任务照样列出——藏起来
+ *  等于「被拦原因不可见」，选中时才在主进程过准入并说明规则（与资产页签同
+ *  一 UX 哲学）。 */
+async function _loadTaskPickerRows() {
+  try {
+    const res = await window.cogseed.invoke('recall.experiences.sourceTasks', { limit: 100 });
+    return Array.isArray(res && res.tasks) ? res.tasks : [];
+  } catch (err) {
+    _agentsLog.warn('task picker load failed', err);
+    return [];
+  }
+}
+
+/** 任务行副文案：类型（可读四语）+ 经验条数。类型标签住在认知资产模块
+ *  （experience.taskTypeLabel），先拉起特性组（被拦回报也要用它翻规则名）。 */
+function _taskPickerRowDesc(task) {
+  const ns = window.CogAssets;
+  const typeLabel = (ns && ns.experience && typeof ns.experience.taskTypeLabel === 'function')
+    ? `${ns.experience.taskTypeLabel(task.taskType)} · `
+    : '';
+  const count = Number(task.experienceCount || 0);
+  const active = Number(task.activeCount || 0);
+  const countLabel = active >= count
+    ? t('agent_picker.task_experience_count', { count })
+    : t('agent_picker.task_experience_count_active', { count, active });
+  return `${typeLabel}${escapeHtml(countLabel)}`;
+}
+
+function _renderTasksPickerList(listEl, filterText, anchorId) {
+  const q = (filterText || '').toLowerCase();
+  const renderSeq = ++_pickerTaskRenderSeq;
+  if (!_pickerTaskRows) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+    const openSeq = _agentPickerOpenSeq;
+    if (!_pickerTaskLoading) {
+      _pickerTaskLoading = _ensureAssetBlockReasonText()
+        .then(() => _loadTaskPickerRows())
+        .then((rows) => {
+          // 会话守卫：picker 已关闭/重开则丢弃过期结果
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerTaskRows = rows || [];
+          _pickerTaskLoading = null;
+        })
+        .catch(() => {
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerTaskRows = [];
+          _pickerTaskLoading = null;
+        });
+    }
+    _pickerTaskLoading.then(() => {
+      if (openSeq !== _agentPickerOpenSeq) return;
+      if (renderSeq !== _pickerTaskRenderSeq) return;
+      const picker = document.getElementById('agent-picker');
+      if (!picker || picker.style.display === 'none' || _agentPickerTab !== 'tasks') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderTasksPickerList(listEl, search ? search.value : filterText, anchorId);
+    });
+    return;
+  }
+  const rows = _pickerTaskRows || [];
+  const filtered = q
+    ? rows.filter((task) => _matchPickerItem(q, task.goal || '', task.episodeId || '', task.taskType || ''))
+    : rows;
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t(q ? 'agent_picker.tasks_no_match' : 'agent_picker.tasks_empty'))}</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(t('agent_picker.tasks_group'))}</div>` +
+    filtered.map((task) => {
+      // 标题缺失给泛称，不拿 episodeId 当名字上屏（内部 id 不进主文案）。
+      const goal = String(task.goal || '').trim() || t('agent_picker.task_unnamed');
+      return `
+      <div class="skill-picker-item" data-kind="task"
+           data-id="${escapeHtml(task.episodeId)}" data-name="${escapeHtml(goal)}"
+           data-episode-id="${escapeHtml(task.episodeId)}">
+        <div class="skill-picker-item-name">${escapeHtml(goal)}</div>
+        <div class="skill-picker-item-desc">${_taskPickerRowDesc(task)}</div>
       </div>`;
     }).join('');
   _bindAgentPickerListItems(listEl, anchorId);
@@ -4771,10 +4931,22 @@ function _renderTaskRefChips(el, refs, cid) {
   if (!el) return;
   if (!refs || !refs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = '';
-  el.innerHTML = refs.map((r, i) => `
-    <span class="chat-taskref-chip ${r.kind === 'asset' ? 'is-asset' : 'is-artifact'}">
-      <em>${r.kind === 'asset' ? escapeHtml(t('agent_picker.ref_asset')) : escapeHtml(t('agent_picker.ref_artifact'))}</em>
-      <span title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
+  el.innerHTML = refs.map((r, i) => {
+    const isAsset = r.kind === 'asset';
+    // 经验集引用（specs/016 T027）：与产物/资产同一 chip 结构，前缀标「任务」，
+    // 撤销走既有 taskRefs.remove（experience_set 无投影通道，index 即位置）。
+    const isTask = r.kind === 'experience_set';
+    const version = String(r.version || '');
+    // 名称缺失给泛称，不拿 asset_id/episode_id 当名字上屏（内部 id 不进主文案）。
+    const name = String(r.name || '').trim() || t('agent_picker.ref_asset_unnamed');
+    const projectionId = String(r.projection_id || '');
+    const kindLabel = isAsset
+      ? escapeHtml(t('agent_picker.ref_asset'))
+      : (isTask ? escapeHtml(t('agent_picker.ref_task')) : escapeHtml(t('agent_picker.ref_artifact')));
+    return `
+    <span class="chat-taskref-chip ${isAsset ? 'is-asset' : (isTask ? 'is-task' : 'is-artifact')}">
+      <em>${kindLabel}</em>
+      <span title="${escapeHtml(name)}">${escapeHtml(name)}${isAsset && version ? ` · v${escapeHtml(version)}` : ''}</span>
       ${typeof uiIconButton === 'function' ? uiIconButton({
         label: t('agent_picker.ref_remove'),
         icon: 'x',
@@ -4784,17 +4956,25 @@ function _renderTaskRefChips(el, refs, cid) {
           'data-cid': cid || '',
           'data-index': i,
           'data-kind': r.kind || '',
+          // 资产挂载走投影通道：移除 = 撤销挂载（需要 projectionId，不是 index）。
+          ...(projectionId ? { 'data-projection-id': projectionId } : {}),
           'data-key': _sameTaskRefKey(r),
         },
       }) : ''}
-    </span>`).join('');
+    </span>`;
+  }).join('');
   el.querySelectorAll('.chat-taskref-remove').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const c = btn.dataset.cid;
       const idx = Number(btn.dataset.index);
+      const projectionId = String(btn.dataset.projectionId || '');
       try {
-        if (c) {
+        if (projectionId) {
+          // 资产挂载是"持续生效"的（每轮注入都会重判），不是一次性消息引用：
+          // 移除即撤销，下一轮起不再带入，历史与使用记录保留（US-601 AC3）。
+          await window.cogseed.invoke('recall.projections.revokePinned', { projectionId });
+        } else if (c) {
           await window.cogseed.invoke('conversations.taskRefs.remove', { cid: c, index: idx });
         } else {
           _pendingNewChatRefs = (_pendingNewChatRefs || []).filter((_, i) => i !== idx);
@@ -4807,7 +4987,9 @@ function _renderTaskRefChips(el, refs, cid) {
   });
 }
 
-/** 渲染两个 composer 的引用条：conversation = 当前会话 task_references；new-chat = pending。 */
+/** 渲染两个 composer 的引用条：conversation = 已挂载资产（投影）+ task_references
+ *  产物；new-chat = pending。资产挂载不在 task_references 里（它走投影通道），
+ *  两类必须一起显示，否则用户挂上去的东西在 composer 里看不见。 */
 function renderChatTaskRefChips() {
   const cid = (typeof currentCid === 'string') ? currentCid : '';
   const convEl = document.getElementById('chat-taskrefs');
@@ -4816,9 +4998,19 @@ function renderChatTaskRefChips() {
     else {
       (async () => {
         try {
-          const res = await window.cogseed.invoke('conversations.taskRefs.list', { cid });
+          const [res, pinned] = await Promise.all([
+            window.cogseed.invoke('conversations.taskRefs.list', { cid }),
+            window.cogseed.invoke('recall.projections.pinnedAssets', { cid }).catch(() => null),
+          ]);
           const refs = Array.isArray(res && res.references) ? res.references : [];
-          _renderTaskRefChips(convEl, refs, cid);
+          const assets = (Array.isArray(pinned && pinned.items) ? pinned.items : []).map((item) => ({
+            kind: 'asset',
+            name: String(item.title || ''),
+            asset_id: String(item.assetId || ''),
+            version: String(item.version || ''),
+            projection_id: String(item.projectionId || ''),
+          }));
+          _renderTaskRefChips(convEl, [...assets, ...refs], cid);
         } catch (_) { convEl.style.display = 'none'; }
       })();
     }
@@ -4835,19 +5027,48 @@ function clearChatTaskRefChips() {
   if (ncEl) { ncEl.style.display = 'none'; ncEl.innerHTML = ''; }
 }
 
-/** new-chat 提交：把 @ 选的 pending 引用写入新建会话的 task_references（发送前调用）。 */
+/** new-chat 提交：把 @ 选的 pending 引用落地到新建会话（发送前调用）。
+ *  产物 → task_references（发送时后端并入 AI 可读）；资产 → 投影挂载
+ *  （attach 需要 cid，所以必须等会话建好；版本在此刻冻结）。 */
 async function commitNewChatTaskRefs(convId) {
   const refs = _pendingNewChatRefs || [];
+  // 先清缓冲再逐条落地：任何一条失败都不留半冻结状态（Edge Case：引用在
+  // 发送前被暂停/撤权 → 如实说明，chip 不残留）。
   _pendingNewChatRefs = [];
   renderChatTaskRefChips();
   if (!convId || !refs.length) return;
   for (const r of refs.slice(0, 20)) {
+    if (r.kind === 'asset') {
+      const res = await window.cogseed.invoke('recall.projections.attachToConversation', {
+        assetId: String(r.asset_id || ''),
+        conversationId: convId,
+      }).catch((err) => {
+        _agentsLog.warn('asset attach for new chat failed', err);
+        return null;
+      });
+      if (!res || res.ok === false) await _reportAssetRefBlocked(res || {}, r.name);
+      continue;
+    }
+    if (r.kind === 'experience_set') {
+      // 经验集同样等会话建好再挂（attach 需要 cid）；主进程过准入 + 冻结快照，
+      // 失败/被拦逐条说明，chip 不残留（specs/016 T027）。
+      const res = await window.cogseed.invoke('recall.experiences.attachToTask', {
+        conversationId: convId,
+        episodeId: String(r.episode_id || ''),
+      }).catch((err) => {
+        _agentsLog.warn('experience set attach for new chat failed', err);
+        return null;
+      });
+      if (!res || res.ok === false) await _reportExperienceAttachBlocked(res || {}, r.name);
+      continue;
+    }
     try {
       await window.cogseed.invoke('conversations.taskRefs.add', { cid: convId, reference: r });
     } catch (err) {
       _agentsLog.warn('taskRefs.add for new chat failed', err);
     }
   }
+  renderChatTaskRefChips();
 }
 
 async function _commitTaskRef(reference, anchorId) {
@@ -4904,6 +5125,86 @@ async function _triggerArtifactRef(itemName, dataset, anchorId) {
   }
 }
 
+/** 引用被拦/失败的统一出口（US-601 AC4 / US-604 AC1：阻止必须可见并说明是
+ *  哪条规则，不静默）。优先用认知资产模块的码表（blockRule → 四语规则名，
+ *  只给标题与规则，不上屏主进程英文原文、不露内部 id、不含正文）；模块还没
+ *  加载时退回一句通用说明——宁可笼统，也不把 `not eligible: aa-xxx` 甩给用户。 */
+async function _reportAssetRefBlocked(result, title) {
+  const detail = {
+    code: String((result && result.code) || ''),
+    blockRule: String((result && result.blockRule) || ''),
+  };
+  const ns = window.CogAssets;
+  if (ns && typeof ns.reportBlocked === 'function') {
+    await ns.reportBlocked(detail, title);
+    return;
+  }
+  if (typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_blocked'), { variant: 'warning', timeoutMs: 6000 });
+  }
+}
+
+/** 已有会话：@ 选中即挂载（confirmed 投影 + 冻结在用版 + 回执卡 + 可撤销）。
+ *  不走 task_references——那条通道无版本、无权限校验、无回执、无撤销，且会与
+ *  投影注入在同一次模型调用里把同一资产塞两遍。 */
+async function _attachAssetRef(reference) {
+  const cid = (typeof currentCid === 'string') ? currentCid : '';
+  const assetId = String(reference.asset_id || '');
+  if (!cid || !assetId) return false;
+  // 接收者已知就把 agentId 一起送进准入判定：目标 Agent 白名单当场生效，
+  //  不必等到发送那一轮才被静默丢掉（US-604 AC2）。
+  const recipient = typeof getChatRecipient === 'function' ? getChatRecipient() : null;
+  const agentId = recipient && recipient.kind === 'agent' ? String(recipient.id || '') : '';
+  let res = null;
+  try {
+    res = await window.cogseed.invoke('recall.projections.attachToConversation', {
+      assetId,
+      conversationId: cid,
+      ...(agentId ? { agentId } : {}),
+    });
+  } catch (err) {
+    _agentsLog.warn('asset attach failed', err);
+    await _reportAssetRefBlocked({}, reference.name);
+    return false;
+  }
+  if (!res || res.ok === false) {
+    await _reportAssetRefBlocked(res || {}, reference.name);
+    return false;
+  }
+  const frozen = (res.projection && res.projection.assetVersions) || {};
+  const version = String(frozen[assetId] || reference.version || '');
+  renderChatTaskRefChips();
+  if (typeof uiToast === 'function') {
+    // 注意 t 的签名是 (key, vars)：内联中文只作缺键兜底时的第二参（会被当 vars
+    // 忽略），要带占位符必须走 vars 对象。
+    uiToast(version
+      ? t('agent_picker.ref_attached_version', { title: reference.name, version })
+      : t('agent_picker.ref_attached', { title: reference.name }),
+    { variant: 'success', timeoutMs: 1500 });
+  }
+  return true;
+}
+
+/** 新建任务：还没有 cid，挂载进 pending 缓冲，会话建好后由
+ *  commitNewChatTaskRefs 统一落地。 */
+function _queuePendingAssetRef(reference) {
+  const pending = _pendingNewChatRefs || [];
+  const dup = pending.some((r) => _sameTaskRefKey(r) === _sameTaskRefKey(reference));
+  if (!dup) {
+    if (pending.length >= 20) {
+      if (typeof uiToast === 'function') uiToast(t('agent_picker.ref_too_many'), { variant: 'warning' });
+      return false;
+    }
+    pending.push(reference);
+    _pendingNewChatRefs = pending;
+  }
+  renderChatTaskRefChips();
+  if (!dup && typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_added'), { variant: 'success', timeoutMs: 1500 });
+  }
+  return true;
+}
+
 async function _triggerAssetRef(itemName, dataset, anchorId) {
   const target = _targetFromPickerAnchor(anchorId);
   const name = dataset.name || itemName || '';
@@ -4914,13 +5215,116 @@ async function _triggerAssetRef(itemName, dataset, anchorId) {
     name,
     ...(dataset.assetId ? { asset_id: dataset.assetId } : {}),
     ...(dataset.assetType ? { asset_type: dataset.assetType } : {}),
+    ...(dataset.assetVersion ? { version: String(dataset.assetVersion) } : {}),
+    ...(dataset.assetStatus ? { status: String(dataset.assetStatus) } : {}),
   };
-  const ok = await _commitTaskRef(reference, anchorId);
+  const ok = target === 'new-chat'
+    ? _queuePendingAssetRef(reference)
+    : await _attachAssetRef(reference);
   const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
   _focusInput(document.getElementById(inputId));
-  if (ok && typeof uiToast === 'function') {
-    uiToast(t('agent_picker.ref_added', '已添加引用'), { variant: 'success', timeoutMs: 1500 });
+  return ok;
+}
+
+/** 经验集被拦/失败的统一出口（specs/016 US-802 AC2 / FR-005）：规则名文案与
+ *  资产共用同一码表（消费准入本来就是同一个闸门），只给标题与规则、不上屏
+ *  主进程 message 原文、不露内部 id、不含正文。 */
+async function _reportExperienceAttachBlocked(result, title) {
+  const detail = {
+    code: String((result && result.code) || ''),
+    blockRule: String((result && (result.rule ?? result.blockRule)) || ''),
+  };
+  const ns = window.CogAssets;
+  if (ns && typeof ns.reportBlocked === 'function') {
+    await ns.reportBlocked(detail, title);
+    return;
   }
+  if (typeof uiToast === 'function') {
+    uiToast(t('agent_picker.task_attach_blocked'), { variant: 'warning', timeoutMs: 6000 });
+  }
+}
+
+/** 已有会话：@ 任务选中即挂载（主进程跑准入 + 冻结快照 + 写 task_references）。
+ *  接收方已知就把 agentId 一起送进准入（目标 Agent 白名单当场生效，同资产挂载）。 */
+async function _attachTaskRef(reference) {
+  const cid = (typeof currentCid === 'string') ? currentCid : '';
+  const episodeId = String(reference.episode_id || '');
+  if (!cid || !episodeId) return false;
+  const recipient = typeof getChatRecipient === 'function' ? getChatRecipient() : null;
+  const agentId = recipient && recipient.kind === 'agent' ? String(recipient.id || '') : '';
+  let res = null;
+  try {
+    res = await window.cogseed.invoke('recall.experiences.attachToTask', {
+      conversationId: cid,
+      episodeId,
+      ...(agentId ? { agentId } : {}),
+    });
+  } catch (err) {
+    _agentsLog.warn('experience set attach failed', err);
+    await _reportExperienceAttachBlocked(null, reference.name);
+    return false;
+  }
+  if (!res || res.ok === false) {
+    // 全被拦：主进程回稳定码 + 逐条规则名，这里逐条说明（不静默）。
+    for (const item of (res && res.blocked) || []) {
+      await _reportExperienceAttachBlocked({ code: item.code, rule: item.rule }, item.title);
+    }
+    if (!res || !Array.isArray(res.blocked) || !res.blocked.length) {
+      await _reportExperienceAttachBlocked(res || {}, reference.name);
+    }
+    return false;
+  }
+  const attached = (res && res.attached) || {};
+  const count = Array.isArray(attached.experienceIds) ? attached.experienceIds.length : 0;
+  renderChatTaskRefChips();
+  if (typeof uiToast === 'function') {
+    uiToast(t('agent_picker.task_attached', { title: reference.name, count }), { variant: 'success', timeoutMs: 1500 });
+  }
+  // 部分被拦：通过者已带入，被拦的逐条说明（标题 + 规则名）。
+  for (const item of (attached.blocked) || []) {
+    await _reportExperienceAttachBlocked({ code: item.code, rule: item.rule }, item.title);
+  }
+  return true;
+}
+
+/** 新建任务：还没有 cid，先进 pending 缓冲（会话建好后由 commitNewChatTaskRefs
+ *  统一走 attachToTask 落地）。 */
+function _queuePendingTaskRef(reference) {
+  const pending = _pendingNewChatRefs || [];
+  const dup = pending.some((r) => _sameTaskRefKey(r) === _sameTaskRefKey(reference));
+  if (!dup) {
+    if (pending.length >= 20) {
+      if (typeof uiToast === 'function') uiToast(t('agent_picker.ref_too_many'), { variant: 'warning' });
+      return false;
+    }
+    pending.push(reference);
+    _pendingNewChatRefs = pending;
+  }
+  renderChatTaskRefChips();
+  if (!dup && typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_added'), { variant: 'success', timeoutMs: 1500 });
+  }
+  return true;
+}
+
+async function _triggerTaskRef(itemName, dataset, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  const episodeId = String(dataset.episodeId || dataset.id || '');
+  const name = String(dataset.name || itemName || '').trim() || episodeId;
+  if (!episodeId) return;
+  _consumeAtKeyChar();
+  _agentsTrackClick(target === 'auto' ? 'auto_task_select' : 'chat_task_select', { target, name });
+  const reference = {
+    kind: 'experience_set',
+    name,
+    episode_id: episodeId,
+  };
+  const ok = target === 'new-chat'
+    ? _queuePendingTaskRef(reference)
+    : await _attachTaskRef(reference);
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  _focusInput(document.getElementById(inputId));
+  return ok;
 }
 
 async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
@@ -4962,6 +5366,10 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
   }
   if (kind === 'asset') {
     await _triggerAssetRef(itemName, dataset || {}, anchorId);
+    return;
+  }
+  if (kind === 'task') {
+    await _triggerTaskRef(itemName, dataset || {}, anchorId);
     return;
   }
   await _triggerAgent(itemId, itemName, anchorId);
@@ -5333,9 +5741,34 @@ if (typeof window !== 'undefined') {
   );
 }
 
+/** 任务页签按钮注入（specs/016 T027）：克隆资产页签按钮，形态/样式与其余页签
+ *  完全一致；不在 index.html 加静态控件（index 裸控件基线只许降不许升）。
+ *  data-i18n 保留——语言切换时全局 applyDomI18n 会照常刷新文本。
+ *  防御式：最小测试沙箱可能没有 document.querySelector / t（bindAgentPickers
+ *  会被整体提取进沙箱执行，体内引用必须自带防御），缺件时静默跳过。 */
+function _ensureAgentPickerTasksTab() {
+  if (typeof document.querySelector !== 'function') return;
+  if (document.querySelector('[data-agent-picker-tab="tasks"]')) return;
+  const assetTabBtn = document.querySelector('[data-agent-picker-tab="assets"]');
+  if (!assetTabBtn || typeof assetTabBtn.cloneNode !== 'function') return;
+  const taskTabBtn = assetTabBtn.cloneNode(true);
+  taskTabBtn.dataset.agentPickerTab = 'tasks';
+  taskTabBtn.dataset.bound = '';
+  taskTabBtn.classList.remove('active');
+  taskTabBtn.setAttribute('aria-selected', 'false');
+  taskTabBtn.setAttribute('data-i18n', 'agent_picker.tab_tasks');
+  taskTabBtn.textContent = typeof t === 'function' ? t('agent_picker.tab_tasks', '任务') : '任务';
+  // 克隆会带上 display:none（资产页签的隐藏态）——可见性统一交给
+  // _updateAgentPickerChrome 按入口计算。
+  taskTabBtn.removeAttribute('style');
+  if (typeof assetTabBtn.after === 'function') assetTabBtn.after(taskTabBtn);
+}
+
 function bindAgentPickers() {
   // Re-bindable helper: wire the recipient chips on both chat panels +
   // under anchorIds. Guarded with dataset.bound so a second call is a no-op.
+  // （体内调用自带防御：沙箱提取执行时 _ensureAgentPickerTasksTab 可能不在场。）
+  if (typeof _ensureAgentPickerTasksTab === 'function') _ensureAgentPickerTasksTab();
   document.querySelectorAll('[data-agent-picker-tab]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';

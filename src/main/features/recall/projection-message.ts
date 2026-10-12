@@ -91,6 +91,7 @@ export async function previewAndPostProjectionCard(
 ): Promise<PostProjectionCardMessageResult & { projection: Awaited<ReturnType<typeof previewContextProjection>> }> {
   const projection = await previewContextProjection(userId, {
     taskRunId: input.taskRunId,
+    conversationId: input.cid,
     ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     purpose: input.purpose,
     ...(input.taskText ? { taskText: input.taskText } : {}),
@@ -118,6 +119,7 @@ export async function previewAndPostProjectionCardForNextTask(
   const taskRunId = `rt-${genId12()}`;
   const projection = await previewContextProjection(userId, {
     taskRunId,
+    conversationId: input.cid,
     ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     purpose: input.purpose || 'conversation_task',
     ...(input.taskText ? { taskText: input.taskText } : {}),

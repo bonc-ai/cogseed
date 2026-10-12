@@ -12,14 +12,12 @@
  *
  * 所以这里把判断收在一处，且复用同一批 gate 函数，不另立标准。
  *
- * 打扰分级按产品口径：普通候选低打扰进列表；冲突、扩权、敏感信息、Skill
- * 建议才需要主动确认。分级只影响呈现，不影响是否入列。
+ * 打扰分级按产品口径：普通候选低打扰进列表；冲突、作用范围变更、来源失效、
+ * Skill 建议才需要主动确认。分级只影响呈现，不影响是否入列。
  */
 
 import { tryGetRecallCandidateCapabilities } from '../candidate-capabilities';
-import { allowsSilentDefaultInjection } from './policy';
 import { validatePromotionByAssetType } from './promotion';
-import { evaluateAssetRuntimeEligibility } from './runtime';
 import type { FormalAbilityAsset, FormalAssetType } from './types';
 import type { AssetVersionDiff } from './version-diff';
 
@@ -32,8 +30,6 @@ export type CognitionInboxKind =
   | 'rule_scope_changed'
   /** 系统线改了模板正文。 */
   | 'template_updated'
-  /** 敏感级被升高：能去的地方变多了，属于扩权。 */
-  | 'sensitivity_escalated'
   /** 规则没有作用边界：无边界的规则不该被默认带入任何任务。 */
   | 'rule_boundary_missing'
   /** 同一条判断被归到了两个不同的资产类型，必须由用户裁定。 */
@@ -49,16 +45,53 @@ export type CognitionInboxKind =
   | 'candidate_ineligible'
   /** 来源失效，已经影响到具体的既有资产。 */
   | 'source_unavailable'
-  /** 没有分过敏感级。缺失不等于 L0，所以这是待办而不是默认放行。 */
-  | 'sensitivity_unclassified'
-  /** 普通待确认候选。 */
-  | 'candidate_pending_review';
+  // 2026-09-29 第 2 批·一物一链：`candidate_pending_review` 停产——同一 pending
+  // 候选此前既出候选卡（promote 完整三选一）又出治理行（accept 直调 promote
+  // 不带选项，撞闸门直接报错），两套按钮两条链（B1/B2）。治理清单不再镜像
+  // 候选池；待确认候选唯一确认入口=候选卡/详情。
+  /**
+   * AI 自主提出的实质变化（specs/008 US-406）：待处理或用户选了「稍后处理」。
+   * 与候选分开：候选是"还没成为资产的东西"，这条是"资产已经在、改动等拍板"。
+   */
+  | 'asset_change_pending'
+  /**
+   * 大扫除里拿不准的项（specs/008 US-403）：疑似重复但正文不同之类。
+   * 当初就是因为"要判断含义"才没动手，所以这里只等用户给个处置意见。
+   */
+  | 'cleanup_uncertain'
+  /**
+   * 后台巡检的发现（specs/008 US-405）：重复 / 过时 / 冲突。
+   * **只是建议**——巡检不改任何资产，用户自己去处理或标"不管它"。
+   * 呈现分组待 specs/010 落地，这里只带发现类别。
+   */
+  | 'inspection_finding';
 
 /**
  * `confirm` = 需要用户明确点头才继续；`low_disturbance` = 列出来即可，
  * 不弹窗、不打断。
  */
 export type CognitionInboxUrgency = 'confirm' | 'low_disturbance';
+
+/**
+ * 这条待办**能做什么**（不是"该怎么显示"）。
+ *
+ * 由读模型给出而不是让渲染层各判一次：处置的分发在
+ * `cognition/inbox-adapter.ts::resolveCognitionInboxItem`，两处各写一份
+ * "哪些动作可用"就是下一个分叉源——渲染层只负责把动作渲染成按钮。
+ * 空数组 = 没有一键动作（资产类待办要用户去资产详情里改）。
+ *
+ * specs/010 新增的动作：`claim`（候选分类冲突选边保留本边）、`set_boundary`
+ * （规则就地补边界条件）、`keep` / `merge`（巡检冲突/重复的选边归档与合并）。
+ */
+export type CognitionInboxAction =
+  | 'accept'
+  | 'reject'
+  | 'defer'
+  | 'ignore'
+  | 'claim'
+  | 'set_boundary'
+  | 'keep'
+  | 'merge';
 
 export interface CognitionInboxItem {
   /** 稳定 id：同一件事重复计算要得到同一个 id，否则前端列表会闪。 */
@@ -71,6 +104,17 @@ export interface CognitionInboxItem {
   candidateId?: string;
   /** 补充说明，已是用户能读懂的话，渲染层不再翻译。 */
   detail?: string;
+  /** 可用动作；缺省/空数组 = 没有一键动作，只给"去资产详情"的落点。 */
+  actions?: readonly CognitionInboxAction[];
+  /**
+   * 本条待办涉及的**全部**资产 id（specs/010 T006）。巡检的冲突/重复发现
+   * 涉及一对资产——只带 `assetIds[0]` 会让"合并/选边"拿不到另一方。
+   */
+  assetIds?: readonly string[];
+  /** 巡检发现的类别（仅 `inspection_finding` 带；分组映射的唯一输入）。 */
+  findingCategory?: 'duplicate' | 'outdated' | 'conflict';
+  /** 缺边界规则**当前**的条件（仅 `rule_boundary_missing` 带，供就地表单预填）。 */
+  boundary?: { applicableWhen: readonly string[]; forbiddenWhen: readonly string[] };
 }
 
 /**
@@ -116,37 +160,80 @@ export interface CognitionInboxInput {
   skillUpgradeCurrentAssetIds?: ReadonlySet<string>;
   /** 用户已明确拒绝当前资产版本的升级，不应重复打扰。 */
   skillUpgradeRejectedAssetIds?: ReadonlySet<string>;
+  /** AI 提议的实质变化里还没拍板的那些（pending / deferred）。 */
+  pendingAssetChanges?: ReadonlyArray<{ proposalId: string; assetId: string; title?: string; reason?: string }>;
+  /** 大扫除里还没处置的拿不准项。 */
+  pendingCleanupItems?: ReadonlyArray<{ reportId: string; assetId: string; title?: string; question: string }>;
+  /** 后台巡检的发现（最新一轮、未被"不管它"的）。 */
+  pendingInspectionFindings?: ReadonlyArray<{
+    key: string;
+    category: string;
+    assetIds: readonly string[];
+    title?: string;
+    detail?: string;
+    deferred?: boolean;
+  }>;
 }
+
+/**
+ * 每类待办可用的动作（**唯一处**）。与 `inbox-adapter` 的分发分支一一对应：
+ *   - 候选类走既有 4 个处置函数（confirm/reject/defer/ignore）；
+ *   - 审批提议走三态（确认更新 / 稍后处理 / 拒绝）；
+ *   - 大扫除拿不准项与巡检发现只有"要不要继续提醒"（不管它 / 回头再看）；
+ *   - 巡检的冲突/重复发现另有选边与合并（specs/010 US-302，见 `itemActions`）；
+ *   - 缺边界可就地补条件（US-304）——资产编辑动作拥有待办内的一键入口。
+ */
+const INBOX_ACTIONS: Record<CognitionInboxKind, readonly CognitionInboxAction[]> = {
+  skill_creation_suggested: [],
+  skill_upgrade_suggested: [],
+  rule_scope_changed: [],
+  template_updated: [],
+  rule_boundary_missing: ['set_boundary'],
+  classification_conflict: ['claim', 'reject', 'defer'],
+  evidence_insufficient: ['reject', 'defer'],
+  candidate_ineligible: ['reject', 'defer'],
+  source_unavailable: [],
+  asset_change_pending: ['accept', 'defer', 'reject'],
+  cleanup_uncertain: ['reject', 'defer'],
+  inspection_finding: ['reject', 'defer'],
+};
+
+/**
+ * 巡检发现的"过时"没有合并/选边语义（两条不是同一件事，只是旧了），维持
+ * 只读建议；冲突与重复才有「保留这一条，归档另一条 / 合并到这一条」。
+ * 动作判定仍收口在本文件——渲染层不自行判断。
+ */
+const INSPECTION_PAIR_ACTIONS: readonly CognitionInboxAction[] = ['keep', 'merge', 'reject', 'defer'];
 
 const URGENCY: Record<CognitionInboxKind, CognitionInboxUrgency> = {
   skill_creation_suggested: 'confirm',
   skill_upgrade_suggested: 'confirm',
   rule_scope_changed: 'confirm',
   template_updated: 'low_disturbance',
-  sensitivity_escalated: 'confirm',
   rule_boundary_missing: 'low_disturbance',
   classification_conflict: 'confirm',
   evidence_insufficient: 'low_disturbance',
   // 列出来就够，不打断：用户可以改到合格，也可以直接否掉，都不紧急。
   candidate_ineligible: 'low_disturbance',
   source_unavailable: 'confirm',
-  sensitivity_unclassified: 'confirm',
-  candidate_pending_review: 'low_disturbance',
+  asset_change_pending: 'confirm',
+  cleanup_uncertain: 'low_disturbance',
+  inspection_finding: 'low_disturbance',
 };
 
 /** 排序权重：先要人点头的，再低打扰的；同级按 kind 稳定排序。 */
 const KIND_ORDER: CognitionInboxKind[] = [
-  'sensitivity_escalated',
   'classification_conflict',
   'rule_scope_changed',
-  'sensitivity_unclassified',
   'source_unavailable',
   'skill_upgrade_suggested',
   'skill_creation_suggested',
   'rule_boundary_missing',
   'template_updated',
   'evidence_insufficient',
-  'candidate_pending_review',
+  'asset_change_pending',
+  'cleanup_uncertain',
+  'inspection_finding',
 ];
 
 /** 与 candidate-service 的同名比较保持一致：只做空白归一，不做语义归一。 */
@@ -160,7 +247,7 @@ function item(
   title: string,
   extra: Omit<CognitionInboxItem, 'id' | 'kind' | 'urgency' | 'title'> = {},
 ): CognitionInboxItem {
-  return { id, kind, urgency: URGENCY[kind], title, ...extra };
+  return { id, kind, urgency: URGENCY[kind], title, actions: INBOX_ACTIONS[kind], ...extra };
 }
 
 /**
@@ -195,14 +282,6 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
     const systemChanged = diff !== undefined && diff.actor !== 'user';
 
     if (diff && systemChanged) {
-      if (diff.kinds.includes('sensitivity_escalated')) {
-        const escalation = diff.changes.find((change) => change.kind === 'sensitivity_escalated');
-        items.push(item('sensitivity_escalated', `sensitivity-up:${asset.assetId}`, asset.title, {
-          assetType: asset.assetType,
-          assetId: asset.assetId,
-          ...(escalation ? { detail: `${escalation.before} → ${escalation.after}` } : {}),
-        }));
-      }
       if (asset.assetType === 'rule'
         && (diff.kinds.includes('boundary') || diff.kinds.includes('scope'))) {
         const boundary = diff.changes.find((change) => change.kind === 'boundary' || change.kind === 'scope');
@@ -251,31 +330,12 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
         items.push(item('rule_boundary_missing', `rule-boundary:${asset.assetId}`, asset.title, {
           assetType: asset.assetType,
           assetId: asset.assetId,
-        }));
-      }
-    }
-
-    // 敏感级：**只对真的会被静默默认注入的资产报**。
-    //
-    // 未分级确实不等于 L0，但如果对每一条资产都报一次，待办会被几十条永远
-    // 处理不完的"未分级"塞满，真正的冲突和扩权就被埋掉了——那比不报更糟。
-    // 会自己走出去的只有 transfer_validated 及以上那一档（PRD 3.6 默认使用
-    // 契约），所以这里先用 policy 判一次能不能静默注入，能才继续问 runtime
-    // gate 要原因。判断标准与真正注入时同源。
-    // sameScope=true：问的是「在它自己的作用域里会不会自动带出去」，
-    // 而不是某一次具体注入。
-    if (allowsSilentDefaultInjection(asset, true)) {
-      const eligibility = evaluateAssetRuntimeEligibility({
-        status: asset.status,
-        maturity: asset.maturity,
-        lifecycleStatus: asset.lifecycleStatus,
-        scope: asset.scope,
-        ...(asset.sensitivity !== undefined ? { sensitivity: asset.sensitivity } : {}),
-      }, { maxSensitivity: 'L0' });
-      if (eligibility.reasons.includes('sensitivity_unclassified')) {
-        items.push(item('sensitivity_unclassified', `sensitivity:${asset.assetId}`, asset.title, {
-          assetType: asset.assetType,
-          assetId: asset.assetId,
+          // 当前条件随行（specs/010 T006）：用户点开就地表单时要看到现状，
+          // 而不是一张空表单——空表单会让人以为条件从来没填过。
+          boundary: {
+            applicableWhen: asset.applicableWhen || [],
+            forbiddenWhen: asset.forbiddenWhen || [],
+          },
         }));
       }
     }
@@ -334,9 +394,9 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
       }));
       continue;
     }
-    items.push(item('candidate_pending_review', `candidate:${candidate.id}`, candidate.judgment || candidate.id, {
-      candidateId: candidate.id,
-    }));
+    // 2026-09-29 第 2 批：普通待确认候选不再进治理清单（candidate_pending_review
+    // 停产，B2）——它的唯一确认入口是候选卡/详情（完整三选一），这里再给
+    // 一套 accept 直调就是第二条确认链。
   }
 
   // 补证据不是"决定"，所以它不能跟决定类共用 `pending` 这层过滤。
@@ -357,6 +417,121 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
     }));
   }
 
+  // AI 提议的实质变化：还没拍板的都进清单（"稍后处理"不丢，就靠这条）。
+  // 与候选不同，它不依赖任何能力判据——提议已经是既成事实，只等用户点一下。
+  for (const change of input.pendingAssetChanges || []) {
+    items.push(item('asset_change_pending', `proposal:${change.proposalId}`, change.title || change.assetId, {
+      assetId: change.assetId,
+      ...(change.reason ? { detail: change.reason } : {}),
+    }));
+  }
+
+  // 大扫除拿不准项：低打扰列出（列出来就够，不打断），等用户给个处置意见。
+  for (const pending of input.pendingCleanupItems || []) {
+    items.push(item('cleanup_uncertain', `cleanup:${pending.reportId}:${pending.assetId}`, pending.title || pending.assetId, {
+      assetId: pending.assetId,
+      detail: pending.question,
+    }));
+  }
+
+  // 后台巡检的发现：低打扰列出（列出来就够，不打断）。**只是建议**，
+  // 处置动作是"要不要继续提醒"，不是"这条资产怎么办"——冲突/重复除外
+  // （specs/010 US-302：那一类的处置恰恰是"这两条资产怎么办"）。
+  for (const finding of input.pendingInspectionFindings || []) {
+    const category = finding.category === 'duplicate' || finding.category === 'outdated' || finding.category === 'conflict'
+      ? finding.category
+      : undefined;
+    const pair = category === 'conflict' || category === 'duplicate';
+    const entry = item('inspection_finding', `inspection:${finding.key}`, finding.title || finding.assetIds.join(' / '), {
+      ...(finding.assetIds[0] ? { assetId: finding.assetIds[0] } : {}),
+      // 整对带上（T006）：合并与选边都需要"另一方"，只带 [0] 会把 id 丢掉。
+      ...(finding.assetIds.length ? { assetIds: finding.assetIds } : {}),
+      ...(category ? { findingCategory: category } : {}),
+      ...(finding.detail ? { detail: finding.detail } : {}),
+    });
+    if (pair) entry.actions = INSPECTION_PAIR_ACTIONS;
+    items.push(entry);
+  }
+
   return items.sort((left, right) => KIND_ORDER.indexOf(left.kind) - KIND_ORDER.indexOf(right.kind)
     || left.id.localeCompare(right.id));
+}
+
+/* ══════════════════════════ 治理分组（specs/010 US-301 / US-305） ══════════════════════════
+ * 分组是**纯函数视图**：不落盘、不改 `buildCognitionInbox` 的输出语义，
+ * 只把已排好序的扁平清单多对一地归到三个治理分区里。判定收口在这里——
+ * 渲染层只遍历，不在页面里再写一份 kind→类别映射（反漂移守卫钉着）。 */
+
+/** 治理分区：冲突 / 缺边界 / 其他（收纳位，不是新类别）。 */
+export type CognitionInboxGovernanceCategory =
+  | 'conflict'
+  | 'boundary'
+  | 'other';
+
+export interface CognitionInboxGroup {
+  category: CognitionInboxGovernanceCategory;
+  /** 分区标题的 i18n 键（渲染层内联取词）。 */
+  titleKey: string;
+  /** 组内条目（已按入参顺序）。 */
+  items: CognitionInboxItem[];
+  /** 组内条目数。 */
+  count: number;
+  /** 组内涉及的资产/对象总数（巡检成对发现按对内资产数计）。 */
+  total: number;
+}
+
+/** 分区顺序恒定：冲突置顶（SC-001 的机械判据），其余按治理优先级。 */
+const GROUP_ORDER: readonly CognitionInboxGovernanceCategory[] = [
+  'conflict', 'boundary', 'other',
+];
+
+const GROUP_TITLE_KEYS: Record<CognitionInboxGovernanceCategory, string> = {
+  conflict: 'cognition.inbox_group_conflict',
+  boundary: 'cognition.inbox_group_boundary',
+  other: 'cognition.inbox_group_other',
+};
+
+/**
+ * kind → 治理分区（唯一映射处）。
+ * 巡检发现按 `findingCategory` 细分：conflict/duplicate 归「冲突」（它们的
+ * 处置就是选边/合并）；outdated 归「其他」（没有合并语义，只是旧了）。
+ */
+function governanceCategory(entry: CognitionInboxItem): CognitionInboxGovernanceCategory {
+  if (entry.kind === 'classification_conflict') return 'conflict';
+  if (entry.kind === 'inspection_finding'
+    && (entry.findingCategory === 'conflict' || entry.findingCategory === 'duplicate')) return 'conflict';
+  if (entry.kind === 'rule_boundary_missing') return 'boundary';
+  return 'other';
+}
+
+/**
+ * 纯函数：把扁平待办清单归成治理分区（specs/010 T004/T005）。
+ *
+ * - 组序恒为 conflict → boundary → other，空组不出；
+ * - `groups.flatMap(g => g.items)` 与入参集合相等。
+ */
+export function groupCognitionInbox(items: readonly CognitionInboxItem[]): CognitionInboxGroup[] {
+  const buckets = new Map<CognitionInboxGovernanceCategory, CognitionInboxItem[]>(
+    GROUP_ORDER.map((category) => [category, []]),
+  );
+  for (const entry of items) {
+    buckets.get(governanceCategory(entry))!.push(entry);
+  }
+
+  return GROUP_ORDER
+    .map((category) => {
+      const groupItems = buckets.get(category)!;
+      const total = groupItems.reduce(
+        (sum, entry) => sum + (entry.assetIds && entry.assetIds.length > 1 ? entry.assetIds.length : 1),
+        0,
+      );
+      return {
+        category,
+        titleKey: GROUP_TITLE_KEYS[category],
+        items: groupItems,
+        count: groupItems.length,
+        total,
+      };
+    })
+    .filter((group) => group.items.length > 0);
 }

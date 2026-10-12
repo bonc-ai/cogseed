@@ -103,6 +103,7 @@ async function loadSettings(options = {}) {
     _settingsSafeCall('settings tts refresh', _settingsRefreshTtsProfiles),
     _settingsSafeCall('settings task notifications refresh', _settingsRefreshTaskNotifications),
     _settingsSafeCall('settings metacognition refresh', _settingsRefreshMetacognition),
+    _settingsSafeCall('settings close-to-tray refresh', _settingsRefreshCloseToTray),
     _settingsSafeCall('settings data root refresh', _settingsRefreshDataRoot),
     _settingsSafeCall('settings commander backend refresh', _settingsRefreshCommanderBackend),
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
@@ -126,6 +127,7 @@ async function loadSettings(options = {}) {
   await _settingsSafeCall('settings tts render', _settingsRenderTtsEntries);
   await _settingsSafeCall('settings task notifications render', _settingsRenderTaskNotifications);
   await _settingsSafeCall('settings metacognition render', _settingsRenderMetacognition);
+  await _settingsSafeCall('settings close-to-tray render', _settingsRenderCloseToTray);
   await _settingsSafeCall('settings data root render', _settingsRenderDataRoot);
   await _settingsSafeCall('settings commander backend render', _settingsRenderCommanderBackend);
   await _settingsSafeCall('settings auth profiles recovery render', _settingsRenderAuthProfilesRecovery);
@@ -374,6 +376,64 @@ function _settingsRenderMetacognition() {
   }
 }
 
+// ── Close to tray (background run) ──
+// Stored at preferences.json::close_to_tray_enabled (per-uid, same file as
+// metacognition_enabled). Main owns the behaviour; this is only the switch.
+
+async function _settingsRefreshCloseToTray() {
+  try {
+    const res = await window.cogseed.invoke('prefs.getCloseToTray');
+    // 读失败时按"开启"显示，与主进程的默认值一致（v !== false）。
+    _settingsState.closeToTray = (res && res.ok) ? res.enabled !== false : true;
+  } catch (_) {
+    _settingsState.closeToTray = true;
+  }
+}
+
+function _settingsRenderCloseToTray() {
+  const host = document.getElementById('settings-close-to-tray-toggle');
+  if (!host) return;
+  let toggle = document.getElementById('settings-close-to-tray-switch');
+  if (!toggle) {
+    const created = _settingsElementFromSharedMarkup(uiSwitch({
+      id: 'settings-close-to-tray-switch',
+      label: t('settings.close_to_tray.toggle'),
+      checked: _settingsState.closeToTray !== false,
+    }));
+    // 生成失败就不渲染：宁可不显示，也不退回裸 checkbox。
+    if (!created) return;
+    host.appendChild(created);
+    toggle = created;
+    toggle.addEventListener('click', async () => {
+      const previous = _settingsSwitchIsChecked(toggle);
+      const next = !previous;
+      _settingsSetSwitchChecked(toggle, next);
+      // 写入在途时禁用：否则第二次点击会把第一次的乐观值当成 previous，
+      // 两次写入都失败后开关停在存储值的反面，用户以为偏好已经关掉。
+      toggle.disabled = true;
+      try {
+        const res = await window.cogseed.invoke('prefs.setCloseToTray', { enabled: next });
+        if (res && res.ok) {
+          _settingsState.closeToTray = res.enabled !== false;
+        } else {
+          // 路由把 handler 抛错包成 { ok: false }（不 reject），两条失败路径都要回滚。
+          _settingsSetSwitchChecked(toggle, previous);
+          _settingsLog.warn('setCloseToTray rejected', res);
+        }
+      } catch (err) {
+        _settingsSetSwitchChecked(toggle, previous);
+        _settingsLog.warn('setCloseToTray failed', err);
+      } finally {
+        toggle.disabled = false;
+      }
+    });
+  }
+  _settingsSetSwitchChecked(toggle, _settingsState.closeToTray !== false);
+  // 可见文案由旁边的 data-i18n span 承担，但开关自身的无障碍名由 t() 派生，
+  // 不随 applyDomI18n 更新——每次渲染都重写，语言切换才不会留下旧语言。
+  toggle.setAttribute('aria-label', t('settings.close_to_tray.toggle'));
+}
+
 // ── Data root row ──
 // Read-only display of the unified data root path; click to open it in
 // the OS file manager via the `app.openDataRoot` IPC.
@@ -555,6 +615,7 @@ window.addEventListener('i18n-change', () => {
   _settingsRenderSearchSection();
   _settingsRenderImageSection();
   _settingsRenderMetacognition();
+  _settingsRenderCloseToTray();
   _settingsRenderCommanderBackend();
   _settingsRenderCustomProviders();
   _settingsRenderCcswitchStatus();

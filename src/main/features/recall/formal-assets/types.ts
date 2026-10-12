@@ -52,6 +52,9 @@ export interface FormalAssetEnvelope {
   applicableWhen?: string[];
   /** 禁止范围。缺失 = 没记录过。 */
   forbiddenWhen?: string[];
+  /** 主题标签（specs/012 US-201）：标签名数组，指向标签库条目的 name。
+   *  缺失 与 [] 都表示「未分类」；元数据，不 bump 内容版本、不进版本 diff。 */
+  tags?: string[];
   /** 敏感级别与外发限制。缺失 = 没分过级，不等于 L0。 */
   sensitivity?: RecallAbilityAssetRecord['sensitivity'];
   /** 形成候选时的来源空间，仅用于追溯，不改变 Owner（PRD 3.4）。 */

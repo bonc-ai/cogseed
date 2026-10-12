@@ -117,7 +117,7 @@ describe('Recall projection chat card', () => {
   });
 
   it('renders deferred and rejected decisions without confirm actions', async () => {
-    const included = await createAsset({ judgment: 'Use source evidence in reviews.', summary: 'Use source evidence', sourceId: 'exec-a' });
+    const included = await createAsset({ judgment: 'Use source evidence in reviews.', summary: 'Evidence use in reviews', sourceId: 'exec-a' });
     const { refs, projection, cards } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: included.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review' });

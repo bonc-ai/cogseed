@@ -74,10 +74,14 @@ describe('renderer lazy feature loader', () => {
 
     const skills = loadFeatureLoader();
     await skills.context.loadRendererFeature('skills');
-    expect(skills.appended.map((script) => script.src)).toEqual([
+    // Style entries are `<link>` elements, so they carry `href` instead of `src`.
+    expect(skills.appended.map((script) => script.src ?? script.href)).toEqual([
       './modules/recall-information-architecture.js',
       './modules/import-check-modal.js',
       './modules/skills.js',
+      './hub-contributions.css',
+      './modules/hub-contributions-model.js',
+      './modules/hub-contributions.js',
       './modules/skills-bindings.js',
     ]);
   });

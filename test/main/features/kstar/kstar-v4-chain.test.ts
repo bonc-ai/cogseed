@@ -161,7 +161,7 @@ async function seedRequirementWithLesson(cid: string, goal: string, lesson: stri
 }
 
 describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)', () => {
-  it('1. precipitates a lesson into the unified candidate pool then promotes it to an asset', async () => {
+  it('1. precipitates a lesson into an experience entry (specs/016 分流：不进候选池不产资产)', async () => {
     const cid = newCid();
     const requirementId = await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数并按板块组织');
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
@@ -170,23 +170,26 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
 
     const result = await precipitation.precipitateRequirementLevel('user-a', requirement!);
 
-    // Lesson entered the unified pool (kstar- captureKey) and promoted.
-    expect(result.candidateIds.length).toBeGreaterThan(0);
-    expect(result.createdAssetIds).toHaveLength(1);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const asset = await assets.readAbilityAsset('user-a', result.createdAssetIds[0]);
-    expect(asset.statement).toContain('N 字资料');
-    // Honest lifecycle from the system-actor promote (P0-2)，并且要能认出这是
-    // KStar 自进化线：它和会话自动抽取都没有用户确认，但证据来源不同
-    // （冻结预期 vs 实际结果的复盘，而不是模型从对话里猜）。两者共用一个
-    // lifecycleStatus 会让认知树分不出可信度。
-    expect(asset.lifecycleStatus).toBe('user_confirmed_unverified');
+    // specs/016 T013/T014（FR-001）：lesson 型 create 提案改道写经验条目——
+    // 不落统一候选池（kstar- captureKey 零出现）、不自动晋升资产。
+    expect(result.experienceIds).toHaveLength(1);
+    expect(result.candidateIds).toEqual([]);
+    expect(result.createdAssetIds).toEqual([]);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const stored = await experiences.listExperiences('user-a');
+    const exp = stored.find((e) => e.id === result.experienceIds[0]);
+    expect(exp).toBeDefined();
+    expect(exp!.body).toContain('N 字资料');
+    expect(exp!.experienceType).toBe('lesson');
+    expect(exp!.status).toBe('active');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const all = await candidates.listRecallCandidates('user-a');
-    expect(all.some((c) => c.status === 'confirmed' && String(c.captureKey).startsWith('kstar-'))).toBe(true);
+    expect(all.some((c) => String(c.captureKey).startsWith('kstar-'))).toBe(false);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    expect(await assets.listAbilityAssets('user-a')).toHaveLength(0);
   });
 
-  it('2. semantic dedup: same rule, different wording → merges into one asset', async () => {
+  it('2. 分流后 create 线零资产；不同任务的相近表述各自成条、同任务重沉淀经验不重复', async () => {
     const similarity = await import('../../../../src/main/features/recall/similarity');
     // Both lessons "say the same thing" → identical embedding → cosine 1.0.
     const vector = Array.from({ length: 8 }, (_, i) => (i === 0 ? 1 : 0));
@@ -205,13 +208,20 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     const r2 = await store.readKstarRequirement('user-a', req2);
     const result2 = await precipitation.precipitateRequirementLevel('user-a', r2!);
 
-    // Second precipitation found the semantic duplicate: no NEW asset.
+    // specs/016 D2：create 线不再走自动晋升的语义查重（那是资产通道的
+    // 机制）——「不重复」的保证改为经验 id 幂等。资产面对 create 线零产出。
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const all = await assets.listAbilityAssets('user-a');
-    expect(all).toHaveLength(1);
-    // And the second candidate was merged (mergedIntoAssetId) not promoted.
+    expect(all).toHaveLength(0);
     expect(result2.createdAssetIds).toHaveLength(0);
-    expect(result2.mergedIntoIds.length).toBeGreaterThan(0);
+    expect(result2.mergedIntoIds).toEqual([]);
+    // 不同任务（不同 episode）的相近表述各自成条（各自溯源，data-model 关系）。
+    expect(result2.experienceIds).toHaveLength(1);
+    // 同一任务重复沉淀：经验不重复（id 稳定派生，createExperience 幂等）。
+    const again = await precipitation.precipitateRequirementLevel('user-a', r2!);
+    expect(again.experienceIds).toEqual(result2.experienceIds);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    expect((await experiences.listExperiences('user-a')).filter((e) => e.id === result2.experienceIds[0])).toHaveLength(1);
   });
 
   it('3. quiet-window auto-close: schedule → pendingAutoCloseAt → expiry runs finish', async () => {

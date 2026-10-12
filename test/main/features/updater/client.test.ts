@@ -19,7 +19,30 @@ const electronMock = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({ app: electronMock.app }));
 
+/**
+ * The installer is the OS boundary: `installDownloaded` spawns a detached helper
+ * and quits the app. Tests drive the hand-off outcome from here so no case ever
+ * spawns or quits anything.
+ */
+const installerMock = vi.hoisted(() => ({
+  installDownloadedUpdate: vi.fn(),
+  defaultWindowsInstallRuntime: {
+    platform: 'win32' as NodeJS.Platform,
+    execPath: '/fake/electron',
+    pid: 4242,
+    spawnDetached: vi.fn(),
+    quit: vi.fn(),
+  },
+}));
+
+vi.mock('../../../../src/main/features/updater/installer', () => ({
+  installDownloadedUpdate: installerMock.installDownloadedUpdate,
+  defaultWindowsInstallRuntime: installerMock.defaultWindowsInstallRuntime,
+  openDownloadedUpdate: vi.fn(),
+}));
+
 import * as updater from '../../../../src/main/features/updater/client';
+import { evaluateBootGuard } from '../../../../src/main/features/updater/boot_guard';
 import { REMIND_THROTTLE_MS, readUpdaterState, writeUpdaterState } from '../../../../src/main/features/updater/state';
 import { userUpdaterDownloadsDir, userUpdaterStateFile } from '../../../../src/main/paths';
 
@@ -82,6 +105,9 @@ describe('checkForUpdates', () => {
     vi.unstubAllGlobals();
     delete process.env.COGSEED_API_BASE_URL;
     updater.cancelActiveDownloadForTest?.();
+    // This is the only describe that flips isPackaged; restore it so the
+    // packaged state cannot leak into the download describes below.
+    electronMock.app.isPackaged = false;
   });
 
   it('reports a newer server version and surfaces the first reminder', async () => {
@@ -117,20 +143,31 @@ describe('checkForUpdates', () => {
     expect(headers['CogSeed-Arch']).toBe(process.arch);
   });
 
-  it('skips packaged Windows latest checks instead of surfacing updates/latest 400', async () => {
+  it('checks updates/latest on packaged Windows and surfaces the win32 release', async () => {
     electronMock.app.isPackaged = true;
-    const fetchMock = stubFetch(async () => new Response('bad platform', { status: 400 }));
+    // 这一条要证的是"打包 Windows 能拿到并留下更新信息"，所以制品地址也得是
+    // Windows 包：fixture 默认是 mac 的 .dmg，名字里的 win32 就落不到实处。
+    const winInfo = infoFixture({ url: 'https://dl.example.com/CogSeed-0.0.6-win-x64.exe' });
+    const fetchMock = stubFetch(async () => latestResponse(winInfo));
 
     const result = await withPlatform('win32', () => updater.checkForUpdates(UID, { manual: true, now: 1_000 }));
 
-    expect(result).toMatchObject({
-      checked: true,
-      has_update: false,
-      reminded: false,
-      current_version: '0.0.5',
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(readUpdaterState(UID).latest_info).toBeUndefined();
+    expect(result).toMatchObject({ checked: true, has_update: true, current_version: '0.0.5' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = (fetchMock.mock.calls[0][1].headers || {}) as Record<string, string>;
+    expect(headers['CogSeed-Platform']).toBe('win32');
+    expect(readUpdaterState(UID).latest_info?.latest_version).toBe(winInfo.latest_version);
+    expect(readUpdaterState(UID).latest_info?.url).toBe(winInfo.url);
+  });
+
+  it('checks updates/latest on a packaged non-darwin platform the old guard swallowed', async () => {
+    electronMock.app.isPackaged = true;
+    const fetchMock = stubFetch(async () => latestResponse(infoFixture()));
+
+    const result = await withPlatform('linux', () => updater.checkForUpdates(UID, { manual: true, now: 1_000 }));
+
+    expect(result.checked).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('throttles automatic reminders to once per day, same version', async () => {
@@ -638,5 +675,309 @@ describe('stale update records', () => {
         version: '0.0.6', path: '/tmp/x.dmg', size: 1, sha256: DMG_SHA, downloaded_at: 1,
       },
     }, current)).toBe(true);
+  });
+});
+
+// Windows 安装交接：只有「已下载且校验过」的安装包才能交给分离 helper；失败必须留下
+// 记录（否则跨会话的重试上限永远从 0 开始），并且同一次运行里绝不能同时起两个 helper。
+describe('installDownloaded', () => {
+  function downloadedFixture() {
+    const dir = userUpdaterDownloadsDir(UID);
+    fs.mkdirSync(dir, { recursive: true });
+    const installerPath = path.join(dir, 'CogSeed-0.0.6-win-x64.exe');
+    fs.writeFileSync(installerPath, DMG_BODY);
+    return {
+      version: '0.0.6',
+      path: installerPath,
+      size: DMG_BODY.length,
+      sha256: DMG_SHA,
+      downloaded_at: Date.now(),
+    };
+  }
+
+  beforeEach(() => {
+    void resetState();
+    installerMock.installDownloadedUpdate.mockReset();
+    updater.resetInstallInFlightForTest();
+    electronMock.app.getVersion.mockReturnValue('0.0.5');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    updater.resetInstallInFlightForTest();
+  });
+
+  // darwin on purpose: on win32 (the dev host) the platform gate passes, so this
+  // case would hold for BOTH orderings. A non-Windows platform pins the contract
+  // that "is anything downloaded?" is judged before the platform gate.
+  it('refuses to install when nothing verifiable is downloaded, before the platform gate', async () => {
+    const result = await withPlatform('darwin', () => updater.installDownloaded(UID));
+    expect(result).toMatchObject({ started: false });
+    expect(result.error).toMatch(/no verified download/i);
+  });
+
+  it('hands the verified installer to the helper and reports started', async () => {
+    const downloaded = downloadedFixture();
+    writeUpdaterState(UID, { version: 1, downloaded });
+    installerMock.installDownloadedUpdate.mockResolvedValue(undefined);
+
+    const result = await withPlatform('win32', () => updater.installDownloaded(UID));
+
+    expect(result).toEqual({ started: true });
+    expect(installerMock.installDownloadedUpdate).toHaveBeenCalledWith({
+      installerPath: downloaded.path,
+      sha256: DMG_SHA,
+      runtime: installerMock.defaultWindowsInstallRuntime,
+    });
+    const state = readUpdaterState(UID);
+    expect(state.install?.version).toBe('0.0.6');
+    expect(state.install?.from_version).toBe('0.0.5');
+    expect(state.install?.attempts).toBe(1);
+    // 成功即退出：守卫保持置位，本进程不许再起第二个 helper。
+    const second = await withPlatform('win32', () => updater.installDownloaded(UID));
+    expect(second).toEqual({ started: false, error: 'install already in progress' });
+    expect(installerMock.installDownloadedUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('bases the written install record on a state re-read after the dynamic import', async () => {
+    const downloaded = downloadedFixture();
+    writeUpdaterState(UID, { version: 1, downloaded, last_check_at: 111 });
+    installerMock.installDownloadedUpdate.mockResolvedValue(undefined);
+
+    await withPlatform('win32', async () => {
+      const pending = updater.installDownloaded(UID);
+      // Concurrent writer inside the dynamic-import window: a completing download
+      // or a stale-state reconcile. The snapshot taken before `await import` must
+      // not be written back over it, and `attempts` must come from this record.
+      const fresh = readUpdaterState(UID);
+      writeUpdaterState(UID, {
+        ...fresh,
+        last_check_at: 222,
+        known_latest: '0.0.6',
+        install: {
+          version: '0.0.6',
+          from_version: '0.0.5',
+          installer_path: downloaded.path,
+          sha256: DMG_SHA,
+          requested_at: 333,
+          attempts: 2,
+        },
+      });
+
+      await expect(pending).resolves.toEqual({ started: true });
+    });
+
+    const state = readUpdaterState(UID);
+    // Fields written by the concurrent writer survive: the record is built from
+    // the fresh read, not from the pre-import snapshot.
+    expect(state.last_check_at).toBe(222);
+    expect(state.known_latest).toBe('0.0.6');
+    // attempts = fresh (2) + this hand-off, not snapshot (0) + 1.
+    expect(state.install?.attempts).toBe(3);
+    expect(state.install?.installer_path).toBe(downloaded.path);
+  });
+
+  it('refuses a second click while the first hand-off is still in flight', async () => {
+    writeUpdaterState(UID, { version: 1, downloaded: downloadedFixture() });
+    let reject!: (err: Error) => void;
+    installerMock.installDownloadedUpdate.mockImplementation(() => new Promise<void>((_resolve, rej) => {
+      reject = rej;
+    }));
+
+    await withPlatform('win32', async () => {
+      const first = updater.installDownloaded(UID);
+      await vi.waitFor(() => expect(installerMock.installDownloadedUpdate).toHaveBeenCalledTimes(1));
+      const second = await updater.installDownloaded(UID);
+      expect(second).toEqual({ started: false, error: 'install already in progress' });
+
+      reject(new Error('helper spawn failed'));
+      const firstResult = await first;
+      expect(firstResult).toEqual({ started: false, error: 'helper spawn failed' });
+    });
+    expect(installerMock.installDownloadedUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the install record with the incremented attempt when the hand-off fails', async () => {
+    const downloaded = downloadedFixture();
+    writeUpdaterState(UID, { version: 1, downloaded });
+    installerMock.installDownloadedUpdate.mockRejectedValue(
+      new Error('installDownloadedUpdate: helper not found: C:\\app\\bin\\apply-update.cjs'),
+    );
+
+    const result = await withPlatform('win32', () => updater.installDownloaded(UID));
+
+    expect(result.started).toBe(false);
+    expect(result.error).toContain('helper not found');
+    // 失败不回滚：记录是跨会话重试上限和 boot guard 的唯一证据。
+    const state = readUpdaterState(UID);
+    expect(state.install?.attempts).toBe(1);
+    expect(state.install?.installer_path).toBe(downloaded.path);
+    expect(state.install?.sha256).toBe(DMG_SHA);
+
+    // 失败清掉了 in-flight 守卫，用户可以在本次运行里重试，attempts 继续累加。
+    const retry = await withPlatform('win32', () => updater.installDownloaded(UID));
+    expect(retry.started).toBe(false);
+    expect(readUpdaterState(UID).install?.attempts).toBe(2);
+  });
+
+  it('clears the record once the attempts cap is reached, before any spawn', async () => {
+    writeUpdaterState(UID, {
+      version: 1,
+      downloaded: downloadedFixture(),
+      install: {
+        version: '0.0.6',
+        from_version: '0.0.5',
+        installer_path: '/old/installer.exe',
+        sha256: DMG_SHA,
+        requested_at: 1,
+        attempts: 3,
+      },
+    });
+
+    const result = await withPlatform('win32', () => updater.installDownloaded(UID));
+
+    expect(result).toEqual({ started: false, error: 'install attempts exhausted' });
+    expect(installerMock.installDownloadedUpdate).not.toHaveBeenCalled();
+    expect(readUpdaterState(UID).install).toBeUndefined();
+  });
+
+  it('reports unsupported platform instead of the installer raw throw elsewhere', async () => {
+    writeUpdaterState(UID, { version: 1, downloaded: downloadedFixture() });
+
+    const result = await withPlatform('darwin', () => updater.installDownloaded(UID));
+
+    expect(result).toEqual({ started: false, error: 'unsupported platform' });
+    expect(installerMock.installDownloadedUpdate).not.toHaveBeenCalled();
+    expect(readUpdaterState(UID).install).toBeUndefined();
+  });
+
+  // A dedicated uid: the verdict map is process-global, and an unstable verdict
+  // must not leak into the other install cases.
+  const UNSTABLE_UID = 'updater-client-unstable-verdict';
+
+  it('refuses to install when the boot guard has judged this upgrade unstable', async () => {
+    fs.rmSync(userUpdaterStateFile(UNSTABLE_UID), { force: true });
+    writeUpdaterState(UNSTABLE_UID, {
+      version: 1,
+      downloaded: { ...downloadedFixture(), path: 'C:\\tmp\\CogSeed.exe' },
+      pending_boot: { from_version: '0.0.5', to_version: '0.0.6', attempts: 1, first_seen_at: 1 },
+    });
+    // Two consecutive starts on a never-cleared marker → the guard says unstable.
+    const verdict = evaluateBootGuard(UNSTABLE_UID, { currentVersion: '0.0.6', now: 2_000 });
+    expect(verdict.unstable).toBe(true);
+    const before = readUpdaterState(UNSTABLE_UID);
+
+    const result = await withPlatform('win32', () => updater.installDownloaded(UNSTABLE_UID));
+
+    expect(result.started).toBe(false);
+    expect(result.error).toContain('unstable');
+    // The invariant is enforced in main, not only by the renderer hiding a button:
+    // nothing was written and no helper was ever spawned.
+    expect(installerMock.installDownloadedUpdate).not.toHaveBeenCalled();
+    expect(readUpdaterState(UNSTABLE_UID)).toEqual(before);
+    fs.rmSync(userUpdaterStateFile(UNSTABLE_UID), { force: true });
+  });
+
+  it('releases the in-flight guard when quit never happens, so a stranded session can retry', async () => {
+    vi.useFakeTimers();
+    try {
+      writeUpdaterState(UID, { version: 1, downloaded: downloadedFixture() });
+      installerMock.installDownloadedUpdate.mockResolvedValue(undefined);
+
+      const first = await withPlatform('win32', () => updater.installDownloaded(UID));
+      expect(first).toEqual({ started: true });
+      // The normal path keeps the guard set: the helper took over and the app quits.
+      expect(await withPlatform('win32', () => updater.installDownloaded(UID)))
+        .toEqual({ started: false, error: 'install already in progress' });
+
+      // `app.quit()` did not actually quit. Past the helper's 60 s parent wait the
+      // guard must release itself, or this session could never retry.
+      vi.advanceTimersByTime(90_000);
+
+      const retry = await withPlatform('win32', () => updater.installDownloaded(UID));
+      expect(retry).toEqual({ started: true });
+      expect(installerMock.installDownloadedUpdate).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// `updates.getState` is the renderer-visible shape of the persisted record: the
+// install bookkeeping the pane needs, never the absolute installer path and the
+// digest. The persisted record itself keeps them for the helper hand-off and the
+// boot guard.
+describe('updates.getState install projection', () => {
+  function seedInstallState() {
+    const dir = userUpdaterDownloadsDir(UID);
+    fs.mkdirSync(dir, { recursive: true });
+    const installerPath = path.join(dir, 'CogSeed-0.0.6-win-x64.exe');
+    fs.writeFileSync(installerPath, DMG_BODY);
+    writeUpdaterState(UID, {
+      version: 1,
+      known_latest: '0.0.6',
+      last_check_at: 111,
+      downloaded: {
+        version: '0.0.6',
+        path: installerPath,
+        size: DMG_BODY.length,
+        sha256: DMG_SHA,
+        downloaded_at: 222,
+      },
+      install: {
+        version: '0.0.6',
+        from_version: '0.0.5',
+        installer_path: installerPath,
+        sha256: DMG_SHA,
+        requested_at: 333,
+        attempts: 2,
+      },
+    });
+    return installerPath;
+  }
+
+  beforeEach(() => {
+    void resetState();
+    electronMock.app.getVersion.mockReturnValue('0.0.5');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    void updater.cancelActiveDownloadForTest();
+  });
+
+  it('projects the install record instead of exposing the installer path', async () => {
+    const installerPath = seedInstallState();
+    const { invokeHandlers } = await import('../../../../src/main/ipc/updates');
+
+    const payload = await invokeHandlers['updates.getState']({}, { userId: UID }) as {
+      state: Record<string, any>;
+    };
+
+    expect(payload.state.install).toEqual({ version: '0.0.6', attempts: 2 });
+    expect(payload.state.install).not.toHaveProperty('installer_path');
+    expect(payload.state.install).not.toHaveProperty('sha256');
+    expect(payload.state.install).not.toHaveProperty('requested_at');
+    expect(payload.state.install).not.toHaveProperty('from_version');
+    // Projection is an IPC-boundary concern only: the persisted record still
+    // carries what the hand-off and the boot guard read.
+    expect(readUpdaterState(UID).install?.installer_path).toBe(installerPath);
+    // Every other field keeps its shape — except `downloaded`, which is projected
+    // to the one field the renderer reads: `updates.open` resolves the absolute
+    // path in main, so the renderer never needs it.
+    expect(payload.state.downloaded).toEqual({ version: '0.0.6' });
+    expect(payload.state.known_latest).toBe('0.0.6');
+    expect(payload.state.last_check_at).toBe(111);
+  });
+
+  it('reports no install record when nothing is pending', async () => {
+    writeUpdaterState(UID, { version: 1, known_latest: '0.0.6' });
+    const { invokeHandlers } = await import('../../../../src/main/ipc/updates');
+
+    const payload = await invokeHandlers['updates.getState']({}, { userId: UID }) as {
+      state: Record<string, any>;
+    };
+
+    expect(payload.state.install).toBeUndefined();
   });
 });

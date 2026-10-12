@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import {
   _resetProxyRoutingForTests,
   activeProxy,
@@ -177,6 +179,41 @@ describe('util/proxy-dispatcher child routes', () => {
 });
 
 describe('util/proxy-dispatcher child fetch bridge', () => {
+  it('keeps an unread bridged response usable across garbage collection', () => {
+    const script = `
+      const assert = require('node:assert/strict');
+      const { createServer } = require('node:http');
+      const { setTimeout: delay } = require('node:timers/promises');
+      const { createBridgeFetch } = require(${JSON.stringify(path.resolve('bin/proxy-bootstrap.cjs'))});
+      const server = createServer((req, res) => {
+        req.resume();
+        res.writeHead(200, { 'x-cogseed-fetch-meta': Buffer.from(JSON.stringify({
+          status: 201, statusText: 'Created', headers: [['x-upstream', 'electron']],
+        })).toString('base64url') });
+        res.end('delayed consumer');
+      });
+      (async () => {
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+          const bridgeFetch = createBridgeFetch(fetch, 'http://127.0.0.1:' + server.address().port, 'fixture');
+          const response = await bridgeFetch('https://example.test/stream');
+          // The consumer is allowed to retain only the returned Response.
+          for (let i = 0; i < 20; i++) { global.gc(); await delay(10); }
+          assert.equal(response.status, 201);
+          assert.equal(response.headers.get('x-upstream'), 'electron');
+          assert.equal(await response.text(), 'delayed consumer');
+        } finally {
+          server.closeAllConnections();
+          await new Promise(resolve => server.close(resolve));
+        }
+      })().catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+    const result = spawnSync(process.env.COGSEED_TEST_NODE || process.execPath, ['--expose-gc', '-e', script], {
+      encoding: 'utf8', timeout: 15_000,
+    });
+    expect(result.status, result.stderr || result.error?.message).toBe(0);
+  });
+
   it('streams each actual URL through the supplied Electron fetch implementation', async () => {
     const system = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const body = init?.body ? await new Response(init.body).text() : '';

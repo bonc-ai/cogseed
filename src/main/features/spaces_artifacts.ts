@@ -20,6 +20,7 @@ import * as path from 'node:path';
 
 import { chatArtifactCidDir, chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir, spaceChatIndexFile, spaceContentDir } from '../paths';
 import { conversationMessageReadFile } from '../util/project-layout';
+import { directoryEntryStamp as _entryStamp } from '../util/directory-stamp';
 import { safeId } from '../storage';
 import { ALLOWED_EXTENSIONS } from './chat_attachments';
 import { getMessages, listSpaceConversations, listSpaceConversationsLight } from './chats';
@@ -143,8 +144,8 @@ export interface SpaceArtifactEntry {
 // 打开/切换空间详情时渲染端会反复请求 artifacts.list，而聚合是一次全量
 // 磁盘扫描（每个会话读消息 produced[] + 递归遍历工作区目录）。缓存策略：
 //   - 「变更才扫」：每次调用先算一个廉价指纹（空间会话索引 + 每个会话的
-//     附件/产物目录 + 消息文件 + imports 目录的 mtime:size），指纹与上次
-//     扫描时一致 → 直接返回缓存，无论隔了多久；
+//     附件/产物及 imports 的浅层目录项 + 消息文件元数据），指纹与上次
+//     扫描时一致且未超过兜底窗口 → 直接返回缓存；
 //   - 兜底重扫：指纹一致但缓存超过 ARTIFACT_STAMP_BACKSTOP_MS 仍重扫一次，
 //     覆盖指纹感知不到的变更（如外部手动往工作区深层目录放文件），保证
 //     最坏情况下陈旧不超过该窗口；
@@ -170,15 +171,6 @@ export function invalidateSpaceArtifacts(spaceId: string): void {
   }
 }
 
-async function _entryStamp(dir: string): Promise<string> {
-  try {
-    const st = await fsp.stat(dir);
-    return `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return 'missing';
-  }
-}
-
 async function _fileStamp(file: string): Promise<string> {
   try {
     const st = await fsp.stat(file);
@@ -189,8 +181,8 @@ async function _fileStamp(file: string): Promise<string> {
 }
 
 /** 空间产物的廉价变更指纹：覆盖会话成员变化（空间会话索引）、附件/网页
- *  产物增删（各自目录 mtime）、消息 produced[] 登记（消息文件 mtime）、
- *  imports 增删（imports 根目录 mtime）。指纹一致即认为产物集合未变。 */
+ *  产物增删（各自浅层目录项）、消息 produced[] 登记（消息文件 mtime）、
+ *  imports 增删（imports 浅层目录项）。指纹一致即认为产物集合未变。 */
 async function _spaceArtifactsStamp(uid: string, spaceId: string): Promise<string> {
   const parts: string[] = [];
   parts.push(`chatidx:${await _fileStamp(spaceChatIndexFile(uid, spaceId))}`);

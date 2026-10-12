@@ -67,6 +67,7 @@ function _skillUiEmptyState(options) {
 function _skillCardChipsHtml(s) {
   const lang = getLang();
   const parts = [];
+  if (_isHubSkillDisabled(s)) parts.push(uiStatusPill({ label: t('marketplace.state_disabled'), tone: 'attention' }));
   // 技能卡片不再展示版本号（产品口径：技能库技能下方只留分类/安全状态 chip）。
   const catLabel = _resolveCategoryLabel(s && s.category, lang);
   if (catLabel) parts.push(`<span class="skill-card-chip">${escapeHtml(catLabel)}</span>`);
@@ -79,6 +80,10 @@ function _skillCardChipsHtml(s) {
     );
   }
   return parts.join('');
+}
+
+function _isHubSkillDisabled(s) {
+  return _isSkillPlatformSource(s?.source) && HubContentStatus.isHubContentDisabled(s);
 }
 
 /** True when the main process reported this skill as held back by the
@@ -665,19 +670,31 @@ function renderSkillsGrid(skills) {
     const enabled = s.enabled !== false;
     const cardChips = _skillCardChipsHtml(s);
     const withheld = _isSkillWithheld(s);
-    const usable = enabled && !withheld;
-    const thisUseTitle = withheld ? t('skills.security_withheld_hint') : useTitle;
+    const hubDisabled = _isHubSkillDisabled(s);
+    const usable = enabled && !withheld && !hubDisabled;
+    const thisUseTitle = hubDisabled ? t('marketplace.disabled_hint') : withheld ? t('skills.security_withheld_hint') : useTitle;
     const useBtn = _skillUiButton({
-      label: t('skills.use'),
+      label: hubDisabled ? t('marketplace.state_disabled') : t('skills.use'),
       role: 'primary',
       size: 'sm',
       className: 'skill-card-use',
       disabled: !usable,
       attrs: { 'data-skill-use': true, title: thisUseTitle, 'aria-label': thisUseTitle },
     });
+    const canContribute = !s.ownerAgent && s.category !== 'external'
+      && _skillSource(s?.source) === 'custom' && /^[A-Za-z0-9_-]+$/.test(String(s.id || ''));
+    const iconDataUrl = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(String(s.icon_data_url || ''))
+      ? s.icon_data_url : '';
+    const contributeBtn = canContribute
+      ? _skillUiButton({
+        label: t('skills.contribute'), role: 'secondary', size: 'sm', className: 'skill-card-contribute',
+        attrs: { 'data-skill-contribute': true, title: t('skills.contribute_hint'), 'aria-label': t('skills.contribute_hint') },
+      })
+      : '';
     return `
-      <div class="skill-card ui-resource-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
+      <div class="skill-card ui-resource-card${enabled && !hubDisabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
         <div class="skill-card-header">
+          <span class="skill-card-avatar" aria-hidden="true">${escapeHtml(Array.from(String(s.name || s.id || '?').trim())[0] || '?')}${iconDataUrl ? `<img class="skill-card-avatar-image" src="${escapeHtml(iconDataUrl)}" alt="">` : ''}</span>
           <span class="skill-card-name">${escapeHtml(s.name)}</span>
           ${_skillSecurityBadgeHtml(s)}
           ${moreBtn}
@@ -685,6 +702,7 @@ function renderSkillsGrid(skills) {
         <div class="${descClass}">${escapeHtml(descText)}</div>
         <div class="skill-card-actions">
           ${cardChips}
+          ${contributeBtn}
           ${useBtn}
         </div>
       </div>
@@ -744,6 +762,9 @@ function renderSkillsGrid(skills) {
   _wireOpenSkillCards(gridEl);
   _wireSkillsSecurityRecheck(gridEl);
   _wireSkillSecurityPanels(gridEl);
+  gridEl.querySelectorAll('.skill-card-avatar-image').forEach((img) => {
+    img.addEventListener('error', () => img.remove());
+  });
 
   // Wire card / ▶ / ⋯ click handlers. (Enable/disable lives in the ⋯ menu now.)
   // Scope to editable-tier cards (`data-id`): open-tier cards (`data-open-id`,
@@ -755,6 +776,12 @@ function renderSkillsGrid(skills) {
     const id = card.dataset.id;
     const source = card.dataset.source;
     card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-skill-contribute]')) {
+        e.stopPropagation();
+        const skill = _skillsCache?.find(s => s.id === id && s.source === source);
+        if (typeof window.startSkillContribution === 'function') window.startSkillContribution(id, skill?.name || id);
+        return;
+      }
       if (e.target.closest('[data-skill-use]')) {
         e.stopPropagation();
         if (!card.classList.contains('is-disabled') && !card.classList.contains('is-withheld')) {
@@ -1455,6 +1482,9 @@ function _showSkillsGridView() {
     if (chatCol) chatCol.style.display = 'none';
     _updateEditButtonLabel();
   }
+  // Contribution pages are same-level views of the grid; leaving them via the
+  // grid also ends any contribution session they still hold.
+  if (typeof window.hideContributionViews === 'function') window.hideContributionViews();
   if (grid) grid.style.display = 'flex';
   if (detail) detail.style.display = 'none';
   // Collapse source tree so next detail open starts clean.
@@ -1473,6 +1503,7 @@ async function _showSkillsDetailView(source, id, opts = {}) {
   source = _skillSource(source);
   const grid = document.getElementById('skills-grid-view');
   const detail = document.getElementById('skills-detail-view');
+  if (typeof window.hideContributionViews === 'function') window.hideContributionViews();
   if (grid) grid.style.display = 'none';
   if (detail) detail.style.display = 'flex';
   await loadSkills(true);
@@ -1877,7 +1908,7 @@ async function selectSkillFile(source, id, filepath, nodeEl) {
     source,
     version: skill?.version || '',
     category: skill?.category || '',
-  });
+  }) + (_isHubSkillDisabled(skill) ? uiStatusPill({ label: t('marketplace.state_disabled'), tone: 'attention', attrs: { title: t('marketplace.disabled_hint') } }) : '');
   _renderSkillDetailCategory(skill, source);
 
   // Doc sections (description / external dependencies / dependent
@@ -1903,8 +1934,12 @@ async function selectSkillFile(source, id, filepath, nodeEl) {
     const delBtn = document.getElementById('skill-delete-btn');
     if (useBtn) {
       useBtn.style.display = editingThis ? 'none' : '';
-      useBtn.disabled = skill?.enabled === false;
-      useBtn.setAttribute('aria-disabled', skill?.enabled === false ? 'true' : 'false');
+      useBtn.disabled = skill?.enabled === false || _isHubSkillDisabled(skill) || _isSkillWithheld(skill);
+      useBtn.setAttribute('aria-disabled', String(useBtn.disabled));
+      useBtn.classList.toggle('is-disabled', useBtn.disabled);
+      useBtn.textContent = _isHubSkillDisabled(skill) ? t('marketplace.state_disabled') : t('skills.use');
+      useBtn.title = _isHubSkillDisabled(skill) ? t('marketplace.disabled_hint') : t('skills.use_tooltip');
+      useBtn.setAttribute('aria-label', useBtn.title);
     }
     if (editBtn) editBtn.style.display = canEditThisSkill ? '' : 'none';
     if (enableBtn) enableBtn.style.display = editingThis ? 'none' : '';
@@ -3577,3 +3612,10 @@ function _renderSkillEnabledButton(skill) {
     finally { btn.disabled = false; }
   });
 }
+
+// Read-only bridge for the Hub contribution page composition. It exposes only
+// the minimum identity needed to choose a local custom Skill for a new version.
+window.getCustomContributionSkills = () => (_skillsCache || [])
+  .filter((skill) => !skill.ownerAgent && skill.category !== 'external'
+    && _skillSource(skill?.source) === 'custom' && /^[A-Za-z0-9_-]+$/.test(String(skill.id || '')))
+  .map((skill) => ({ id: skill.id, name: skill.name || skill.id }));

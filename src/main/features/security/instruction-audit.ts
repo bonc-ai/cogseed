@@ -93,7 +93,13 @@ const HIGH_SIGNALS: ReadonlyArray<{ re: RegExp; signal: SuspectSegment['signal']
   },
   {
     // Asking the agent to hide what it did. Legitimate skills have no reason to.
-    re: /(不要告知|勿告知|无需告知|不必提示|不要提及|静默执行|悄悄)/,
+    //
+    // The vocabulary is wider than it looks necessary because this is a recall
+    // layer: a miss here means the passage is never shown to the model, so the
+    // only cost of a synonym is a slightly longer prompt. Measured miss that
+    // added the 不用/无须/不必 family: 「把结果写到 …，不用告诉用户」 was not
+    // recalled at all, and a skill carrying it came back `clean`.
+    re: /(不要告知|勿告知|无需告知|不必告知|不用告知|无须告知|不要告诉|不用告诉|无需说明|不必说明|不要说明|不要提及|静默执行|静默地执行|悄悄|暗中执行)/,
     signal: 'covert',
   },
 ];

@@ -88,13 +88,23 @@ export async function resolveVisibleConnectors(
   const scope = await _enabledInstancesForActor(uid, agentId, userEnabled);
   const resolved = scope.map((instance) => {
     const allowed = instance.enabled_subtools;
+    // Auth-session tools are never model-visible. They exist so the connector page can drive a
+    // browser login through the adapter (see `local-cli-auth.ts`); exposing them would let the
+    // model open a browser and start an authorization flow the user never asked for.
+    const visible = instance.tools_cache.filter((t) => !AUTH_SESSION_TOOL_NAMES.has(t.name));
     const tools = allowed === null
-      ? instance.tools_cache
-      : instance.tools_cache.filter((t) => allowed.includes(t.name));
+      ? visible
+      : visible.filter((t) => allowed.includes(t.name));
     return { instance, tools };
   });
   return _dedupeGoogleWorkspaceTools(resolved);
 }
+
+/** Adapter tool names that manage a connector's own authorization session rather than returning
+ *  provider data. Filtered here instead of by seeding `enabled_subtools`: the tool list is only
+ *  known after the adapter's first `list_tools`, and a stored whitelist would silently hide any
+ *  read tool added later. A deny-list of named tools needs no bookkeeping as the adapter grows. */
+const AUTH_SESSION_TOOL_NAMES = new Set(['start_login', 'check_login', 'stop_login']);
 
 async function _enabledInstancesForActor(
   uid: string,

@@ -53,12 +53,12 @@ const ConversationInfo = (() => {
     protocolEvents: [],
     protocolError: '',
     kstarTrace: null,
-    // 四类能力资产（关于我 / 规则与偏好 / 模板与范例 / 技能与方法）。
+    // 本会话关联的认知资产（五种资产类型均计入）。
     assets: [],
     // 本会话相关的认知候选（recall.candidates.list 按 sourceRefs 过滤）：
-    // 待确认的显示「确认入库/忽略」，已确认的归入「已沉淀资产」。
+    // 待确认项跳转到完整确认页；已确认项归入「已保存资产」。
     candidates: [],
-    // 导入会话的后台提炼状态（sessionImport.extractionStatus）：四类资产段的
+    // 导入会话的后台提炼状态（sessionImport.extractionStatus）：认知资产段的
     // 「正在提炼」提示与完成后自动刷新共用。
     extraction: null,
   };
@@ -282,6 +282,23 @@ const ConversationInfo = (() => {
     }
   }
 
+  /** 认知两通道的读取包一层「失败可辨」：_invokeOrDefault 把异常吞成
+   *  {ok:false}，下游无法区分「读不到」与「读到了但没有」——认知资产段
+   *  曾因此在读取失败时谎报「还没有沉淀认知」（迭代轮 5：读不到 ≠ 没有）。
+   *  无 IPC 环境沿用既有降级语义（当空、不算失败）。 */
+  async function _invokeCognition(channel, payload) {
+    const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+      ? window.cogseed.invoke.bind(window.cogseed)
+      : null;
+    if (!invoke) return { data: null, failed: false };
+    try {
+      const result = await invoke(channel, payload);
+      return { data: result || null, failed: false };
+    } catch (_) {
+      return { data: null, failed: true };
+    }
+  }
+
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
     const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData, assetsData, extractionData, candidatesData, kstarTraceData] = await Promise.all([
@@ -307,23 +324,26 @@ const ConversationInfo = (() => {
           ? data.executions.filter((item) => item && item.conversationId === cid)
           : []
       )).catch(() => []),
-      // 四类能力资产（cognition.assets.list）：跨会话的个人能力资产，右侧「四类资产」段展示。
-      _invokeOrDefault('cognition.assets.list', { limit: 500 }, { ok: false }).then((data) => (
-        data && data.ok && Array.isArray(data.assets) ? data.assets : []
-      )).catch(() => []),
-      // 导入会话的后台提炼状态：pending 时四类资产段显示「正在提炼」，
+      // 能力资产（cognition.assets.list）：跨会话的个人能力资产，右侧「认知资产」段展示。
+      // 读取失败可辨（迭代轮 5）：失败置 cognitionFailed，段内如实说「读不到」。
+      _invokeCognition('cognition.assets.list', { limit: 500 }).then((outcome) => ({
+        list: outcome.data && outcome.data.ok && Array.isArray(outcome.data.assets) ? outcome.data.assets : [],
+        failed: outcome.failed,
+      })),
+      // 导入会话的后台提炼状态：pending 时认知资产段显示「正在提炼」，
       // 完成后（sessionImport.events → extraction_done）由 conversation.js 触发刷新。
       _invokeOrDefault('sessionImport.extractionStatus', { cid }, { ok: false }).then((data) => (
         data && data.ok && data.status ? data.status : null
       )).catch(() => null),
       // 本会话相关的认知候选：候选带 sourceRefs（kind:'conversation', id:cid），
-      // 导入提取与沉淀活动产出的候选都指向它们来源的会话。
-      _invokeOrDefault('recall.candidates.list', {}, { ok: false }).then((data) => (
-        data && data.ok && Array.isArray(data.candidates)
-          ? data.candidates.filter((c) => c && Array.isArray(c.sourceRefs)
+      // 导入提取与沉淀活动产出的候选都指向它们来源的会话。读取失败可辨（迭代轮 5）。
+      _invokeCognition('recall.candidates.list', {}).then((outcome) => ({
+        list: outcome.data && outcome.data.ok && Array.isArray(outcome.data.candidates)
+          ? outcome.data.candidates.filter((c) => c && Array.isArray(c.sourceRefs)
               && c.sourceRefs.some((ref) => ref && ref.kind === 'conversation' && ref.id === cid))
-          : []
-      )).catch(() => []),
+          : [],
+        failed: outcome.failed,
+      })),
       _invokeOrDefault('kstar.trace.read', { conversationId: cid }, { ok: false }).then((data) => (
         data && data.ok && data.trace && Array.isArray(data.trace.nodes) ? data.trace : null
       )).catch(() => null),
@@ -346,9 +366,10 @@ const ConversationInfo = (() => {
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
       executions: Array.isArray(executionsData) ? executionsData : [],
-      assets: Array.isArray(assetsData) ? assetsData : [],
+      assets: assetsData && Array.isArray(assetsData.list) ? assetsData.list : [],
       extraction: extractionData || null,
-      candidates: Array.isArray(candidatesData) ? candidatesData : [],
+      candidates: candidatesData && Array.isArray(candidatesData.list) ? candidatesData.list : [],
+      cognitionFailed: !!(assetsData && assetsData.failed) || !!(candidatesData && candidatesData.failed),
       kstarTrace: kstarTraceData || null,
     };
   }
@@ -1240,13 +1261,13 @@ const ConversationInfo = (() => {
   function _renderKstarTrace() {
     const trace = _snapshot.kstarTrace;
     const nodes = trace && Array.isArray(trace.nodes) ? trace.nodes : [];
-    const title = _label('conversation_info.kstar_trace.title', 'KSTAR 执行轨迹');
+    const title = _label('conversation_info.kstar_trace.title', '任务复盘轨迹');
     const subtitle = _label('conversation_info.kstar_trace.subtitle', '按阶段查看任务是否真实落盘、执行和沉淀');
     if (!trace) {
-      return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div></div><div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.kstar_trace.unavailable', '当前会话暂无 KSTAR 轨迹。'))}</div></section>`;
+      return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div></div><div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.kstar_trace.unavailable', '当前会话暂无任务复盘轨迹。'))}</div></section>`;
     }
     if (!nodes.length) {
-      return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div></div><div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.kstar_trace.empty', 'KSTAR 尚未产生可展示的阶段记录。'))}</div></section>`;
+      return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div></div><div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.kstar_trace.empty', '任务复盘还没有可展示的记录。'))}</div></section>`;
     }
     const rows = nodes.slice(-100).map((entry) => {
       const stage = String(entry && entry.stage || 'unknown');
@@ -1442,7 +1463,7 @@ const ConversationInfo = (() => {
     if (contextIds.length) contextRows.push([_label('conversation_info.carried.context_id', 'Context ID'), contextIds.join(' · ')]);
     const contextHtml = contextRows.length
       ? `<dl class="conversation-info-carried-rows">${contextRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
-      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.context_empty', '本会话暂无 Context 投影记录；接续不会凭空生成正式资产。'))}</div>`;
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.context_empty', '本会话暂无 Context 带入记录；接续不会凭空生成正式资产。'))}</div>`;
 
     // 来源与边界：会话来源 + 最近一次执行的执行方 / 边界 / 真实权限模式。
     const latestRun = sorted[0] || null;
@@ -1456,7 +1477,7 @@ const ConversationInfo = (() => {
     const boundaryHtml = `<dl class="conversation-info-carried-rows">${boundaryRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
     const permissionNote = latestRun && latestRun.permissionMode
       ? _label('conversation_info.carried.permission_note', '本会话最近一次执行的权限模式：{mode}', { mode: _carriedPermissionLabel(latestRun.permissionMode) })
-      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
+      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、放宽范围或正式资产变更会单独确认。');
 
     return `<div class="conversation-info-carried">
       ${resumeHtml}
@@ -1606,10 +1627,10 @@ const ConversationInfo = (() => {
     }
     var permissionDetailHtml = permissionRows.length
       ? '<dl class="conversation-info-carried-rows">' + permissionRows.map(function (r) { return '<div><dt>' + escapeHtml(r[0]) + '</dt><dd>' + escapeHtml(r[1]) + '</dd></div>'; }).join('') + '</dl>'
-      : '<div class="conversation-info-empty is-small">' + escapeHtml(_label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。')) + '</div>';
+      : '<div class="conversation-info-empty is-small">' + escapeHtml(_label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、放宽范围或正式资产变更会单独确认。')) + '</div>';
     var permissionNote = latestRun && latestRun.permissionMode
       ? _label('conversation_info.carried.permission_note', '本会话最近一次执行的权限模式：{mode}', { mode: _carriedPermissionLabel(latestRun.permissionMode) })
-      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
+      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、放宽范围或正式资产变更会单独确认。');
 
     // --- 段 3 运行与协作：运行证明 + 协作参与者 ---
     var proofSummary = _label('conversation_info.run_context.protocol_count', '{count} 个协议事件', { count: protocolEvents.length });
@@ -1618,13 +1639,13 @@ const ConversationInfo = (() => {
       ? _label('conversation_info.run_context.collab_active', '有协作进行中')
       : _label('conversation_info.run_context.collab_empty', '暂无协作');
 
-    // --- 四类资产 tab：本会话的认知沉淀（提取中 / 待确认候选 / 已沉淀资产） ---
+    // --- 认知资产 tab：本会话的认知沉淀（提取中 / 待确认候选 / 已保存资产） ---
     // 注意：这里不展示全库资产计数——那是认知资产页「总览」的事。放在会话
     // 运行上下文里，用户只会被误导成"这个会话有这些资产"（实测确认过）。
     var assetsData = Array.isArray(_snapshot.assets) ? _snapshot.assets : [];
     var extraction = _snapshot.extraction || null;
     var extracting = !!(extraction && extraction.status === 'pending');
-    var sessionCognitionHtml = _renderSessionCognitionHtml(_cid, _snapshot.candidates, assetsData, extracting);
+    var sessionCognitionHtml = _renderSessionCognitionHtml(_cid, _snapshot.candidates, assetsData, extracting, _snapshot.cognitionFailed === true);
 
     var runTab = _activeRunContextTab || 'runs';
     var tabBtn = function (key, label) {
@@ -1639,7 +1660,7 @@ const ConversationInfo = (() => {
         tabBtn('runs', _label('conversation_info.run_context.section_runs', '本次运行')) +
         tabBtn('source', _label('conversation_info.run_context.section_source', '来源与产物')) +
         tabBtn('proof', _label('conversation_info.run_context.section_proof', '运行与协作')) +
-        tabBtn('assets', _label('conversation_info.run_context.section_assets', '四类资产')) +
+        tabBtn('assets', _label('conversation_info.run_context.section_assets', '认知资产')) +
       '</div>' +
       paneOpen('runs') +
         resumeHtml +
@@ -1671,15 +1692,15 @@ const ConversationInfo = (() => {
     '</div>';
   }
 
-  // ── 四类资产 tab · 本会话认知沉淀 ─────────────────────────────────────
-  // 回答用户「这个会话沉淀了什么认知」：提取中提示 → 待确认候选（确认入库 /
-  // 忽略）→ 已沉淀资产。候选来自 recall 候选池（导入提取与沉淀活动共用），
-  // 确认动作走与认知沉淀页相同的 promote 底层。
+  // ── 认知资产 tab · 本会话认知沉淀 ─────────────────────────────────────
+  // 回答用户「这个会话沉淀了什么认知」：提取中提示 → 待确认候选 → 已保存资产。
+  // 候选来自 recall 候选池（导入提取与沉淀活动共用），确认从完整详情页完成。
   var _COG_TYPE_LABELS = {
     personal: ['cognition.asset_category_personal', '关于我'],
     rule: ['cognition.asset_category_rule', '规则与偏好'],
     template: ['cognition.asset_category_template', '模板与范例'],
     skill_method: ['cognition.asset_category_skill_method', '技能与方法'],
+    fact: ['cognition.asset_category_fact', '事实与知识'],
   };
 
   function _cogTypeLabel(type) {
@@ -1709,42 +1730,45 @@ const ConversationInfo = (() => {
       if (bounds.length) body += '<div class="run-context-cog-bounds">' + bounds.join('') + '</div>';
     }
     var actions = '<div class="run-context-cog-actions">' +
-      _button({ label: _label('conversation_info.run_context.assets_confirm', '确认入库'), role: 'primary', size: 'sm', attrs: { 'data-candidate-promote': c.id } }) +
-      _button({ label: _label('conversation_info.run_context.assets_ignore', '忽略'), size: 'sm', attrs: { 'data-candidate-ignore': c.id } }) +
+      _button({ label: _label('conversation_info.run_context.assets_review', '查看、确认或修改'), role: 'primary', size: 'sm', attrs: { 'data-candidate-review': c.id } }) +
     '</div>';
     return head + body + actions + '</div>';
   }
 
-  /** 已沉淀条目：confirmed 候选（有对应资产时显示资产标题）。 */
+  /** 已保存条目：confirmed 候选（有对应资产时显示资产标题）。 */
   function _settledCandidateHtml(c, assetsById) {
     var asset = c.promotedAssetId && assetsById[c.promotedAssetId];
     var title = asset ? (asset.title || asset.summary || c.judgment) : c.judgment;
     return '<div class="run-context-cog-settled" data-candidate-id="' + escapeHtml(c.id) + '">' +
       '<span class="run-context-cog-type is-' + escapeHtml(c.suggestedType) + '">' + escapeHtml(_cogTypeLabel(c.suggestedType)) + '</span>' +
       '<span class="run-context-cog-judgment">' + escapeHtml(title) + '</span>' +
-      '<span class="run-context-cog-settled-badge">' + escapeHtml(_label('conversation_info.run_context.assets_settled', '已沉淀')) + '</span>' +
+      '<span class="run-context-cog-settled-badge">' + escapeHtml(_label('conversation_info.run_context.assets_settled', '已保存')) + '</span>' +
     '</div>';
   }
 
-  /** 已沉淀条目：正式资产（relationRefs 指向本会话且未被候选区覆盖）。 */
+  /** 已保存条目：正式资产（relationRefs 指向本会话且未被候选区覆盖）。 */
   function _settledAssetHtml(a) {
     return '<div class="run-context-cog-settled" data-asset-id="' + escapeHtml(a.id) + '">' +
       '<span class="run-context-cog-type is-' + escapeHtml(a.category || a.type) + '">' + escapeHtml(_cogTypeLabel(a.category || a.type)) + '</span>' +
       '<span class="run-context-cog-judgment">' + escapeHtml(a.title || a.summary || '') + '</span>' +
-      '<span class="run-context-cog-settled-badge">' + escapeHtml(_label('conversation_info.run_context.assets_settled', '已沉淀')) + '</span>' +
+      '<span class="run-context-cog-settled-badge">' + escapeHtml(_label('conversation_info.run_context.assets_settled', '已保存')) + '</span>' +
     '</div>';
   }
 
-  /** 四类资产 tab · 本会话认知沉淀区（提取中 / 待确认 / 已沉淀 / 空态）。 */
-  function _renderSessionCognitionHtml(cid, candidates, assets, extracting) {
+  /** 本会话认知计数（specs/019 会话侧衔接）：头部衔接行与「认知资产」tab 共用
+   *  同一份口径，同屏数字永不打架——pending = pending_review + deferred（与
+   *  「待我处理」页签角标的已知差异：deferred 计入，写进 spec）；settled =
+   *  confirmed 候选 + relationRefs 指向本会话且未被候选区覆盖的正式资产。 */
+  function _sessionCognitionCounts(cid, candidates, assets) {
     var pending = [];
     var confirmed = [];
     (Array.isArray(candidates) ? candidates : []).forEach(function (c) {
+      if (!c || !Array.isArray(c.sourceRefs)) return;
+      var mine = c.sourceRefs.some(function (r) { return r && r.kind === 'conversation' && r.id === cid; });
+      if (!mine) return;
       if (c.status === 'pending_review' || c.status === 'deferred') pending.push(c);
       else if (c.status === 'confirmed') confirmed.push(c);
     });
-    var assetsById = {};
-    (Array.isArray(assets) ? assets : []).forEach(function (a) { if (a && a.id) assetsById[a.id] = a; });
     var confirmedById = {};
     confirmed.forEach(function (c) { confirmedById[c.id] = true; });
     // 本会话正式资产：relationRefs（字段是 type，不是 kind）指向本会话；
@@ -1756,11 +1780,22 @@ const ConversationInfo = (() => {
       var linkedCandidate = a.candidateRefs && a.candidateRefs[0];
       return !(linkedCandidate && confirmedById[linkedCandidate]);
     });
+    return { pending: pending, confirmed: confirmed, extraAssets: extraAssets };
+  }
 
-    // 四格计数框（本会话视角）：关于我 / 规则与偏好 / 模板与范例 / 技能与方法。
-    // 始终显示——没确认或没沉淀出东西就是 0，确认入库后对应分类 +1，用户能
+  /** 认知资产 tab · 本会话认知沉淀区（提取中 / 待确认 / 已保存 / 空态）。 */
+  function _renderSessionCognitionHtml(cid, candidates, assets, extracting, failed) {
+    var counts = _sessionCognitionCounts(cid, candidates, assets);
+    var pending = counts.pending;
+    var confirmed = counts.confirmed;
+    var extraAssets = counts.extraAssets;
+    var assetsById = {};
+    (Array.isArray(assets) ? assets : []).forEach(function (a) { if (a && a.id) assetsById[a.id] = a; });
+
+    // 按资产五种类型显示本会话数量，包含事实与知识。
+    // 始终显示——没确认或没保存出内容就是 0，确认保存后对应分类 +1，用户能
     // 直观看到数字变化。不做全库计数，那是认知资产页「总览」的事。
-    var settledByType = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+    var settledByType = { personal: 0, rule: 0, template: 0, skill_method: 0, fact: 0 };
     confirmed.forEach(function (c) {
       if (settledByType[c.suggestedType] != null) settledByType[c.suggestedType] += 1;
     });
@@ -1768,7 +1803,7 @@ const ConversationInfo = (() => {
       var t = a.category || a.type;
       if (settledByType[t] != null) settledByType[t] += 1;
     });
-    var assetCells = ['personal', 'rule', 'template', 'skill_method'].map(function (t) {
+    var assetCells = ['personal', 'rule', 'template', 'skill_method', 'fact'].map(function (t) {
       return '<div class="run-context-asset"><span>' + escapeHtml(_cogTypeLabel(t)) + '</span><strong>' + escapeHtml(String(settledByType[t])) + '</strong></div>';
     }).join('');
     var assetStrip = '<div class="run-context-assets">' + assetCells + '</div>';
@@ -1779,21 +1814,112 @@ const ConversationInfo = (() => {
         escapeHtml(_label('conversation_info.run_context.assets_extracting', '正在后台提炼认知资产，完成后自动更新。')) + '</span></div>';
     }
     if (pending.length) {
-      html += '<div class="run-context-cog-section-title">' + escapeHtml(_label('conversation_info.run_context.assets_candidates_title', '待确认候选')) +
+      html += '<div class="run-context-cog-section-title">' + escapeHtml(_label('conversation_info.run_context.assets_candidates_title', '本会话待确认（含稍后处理）')) +
         ' <em>' + escapeHtml(String(pending.length)) + '</em></div>';
       html += pending.map(_candidateCardHtml).join('');
     }
     if (confirmed.length || extraAssets.length) {
-      html += '<div class="run-context-cog-section-title">' + escapeHtml(_label('conversation_info.run_context.assets_settled_title', '已沉淀资产')) + '</div>';
+      html += '<div class="run-context-cog-section-title">' + escapeHtml(_label('conversation_info.run_context.assets_settled_title', '已保存资产')) + '</div>';
       html += confirmed.map(function (c) { return _settledCandidateHtml(c, assetsById); }).join('');
       html += extraAssets.map(_settledAssetHtml).join('');
     }
     // 空态只在「没有在提取且确实没有内容」时显示——提取中由转圈提示代替。
+    // 读取失败是第三态：如实说「读不到」，不谎报「还没有」（迭代轮 5）。
     if (!extracting && !pending.length && !confirmed.length && !extraAssets.length) {
-      html += '<div class="conversation-info-empty is-small">' +
-        escapeHtml(_label('conversation_info.run_context.assets_empty', '这个会话还没有沉淀认知。导入的会话会在后台自动提炼，提炼出的候选确认后沉淀为正式资产。')) + '</div>';
+      var emptyCopy = failed
+        ? _label('conversation_info.run_context.assets_read_failed', '认知数据暂时读不到，稍后再试。')
+        : _label('conversation_info.run_context.assets_empty', '这个会话还没有保存认知信息。导入的会话会在后台整理，整理出的建议会等你确认后保存。');
+      html += '<div class="conversation-info-empty is-small">' + escapeHtml(emptyCopy) + '</div>';
     }
     return html;
+  }
+
+  /** 会话头部认知衔接行（specs/019）：显示本会话已保存与待处理计数，并进入本会话认知详情。
+   *  三条硬口径：①未确认候选不得说成「已保存」（分段措辞）；②N=M=0（含未加载/
+   *  加载失败）整行不出现；③「去看」→ openAndSetTab('assets')（本会话视角的
+   *  认知资产 tab，既有面，无死链）。 */
+  /** 衔接行的后台数据（specs/019）：只拉候选与资产两条既有只读通道，按本会话
+   *  过滤后预填进 _snapshot（抽屉打开时的全量 refresh 会覆盖，不会陈旧外泄）。
+   *  失败静默——衔接行保持隐藏，不给会话头部报错。 */
+  let _cognitionStripSeq = 0;
+  async function _loadCognitionStripData(cid) {
+    const seq = ++_cognitionStripSeq;
+    try {
+      const [candidatesResult, assetsResult] = await Promise.all([
+        _invokeOrDefault('recall.candidates.list', {}, { ok: false }),
+        _invokeOrDefault('cognition.assets.list', { limit: 500 }, { ok: false }),
+      ]);
+      if (seq !== _cognitionStripSeq || cid !== _cid) return;
+      const candidates = candidatesResult && candidatesResult.ok && Array.isArray(candidatesResult.candidates)
+        ? candidatesResult.candidates.filter((c) => c && Array.isArray(c.sourceRefs)
+            && c.sourceRefs.some((ref) => ref && ref.kind === 'conversation' && ref.id === cid))
+        : [];
+      const assets = assetsResult && assetsResult.ok && Array.isArray(assetsResult.assets) ? assetsResult.assets : [];
+      _snapshot = { ..._snapshot, candidates, assets };
+      _renderCognitionStrip();
+    } catch (_) {
+      /* 静默：行不出现 */
+    }
+  }
+
+  /** 关闭偏好（方案 A，2026-09-29）：按会话记在本机 localStorage——纯前端视图
+   *  偏好，不进后端（同 anchored-source-view 分栏宽度的先例）；换会话互不影响。 */
+  function _cognitionStripDismissKey(cid) {
+    return 'cogseed.cognition-strip.dismissed.' + String(cid || '');
+  }
+  function _cognitionStripDismissed(cid) {
+    try {
+      const store = typeof localStorage !== 'undefined' ? localStorage : window.localStorage;
+      return store?.getItem?.(_cognitionStripDismissKey(cid)) === '1';
+    } catch (_) { return false; }
+  }
+
+  function _renderCognitionStrip() {
+    const el = document.getElementById('chat-cognition-strip');
+    if (!el) return;
+    const cid = _cid;
+    if (!cid) { el.hidden = true; el.innerHTML = ''; return; }
+    // 用户点过叉（方案 A）：本会话不再显示——即便之后又有沉淀/待处理也保持
+    // 隐藏；全局聚合入口仍在「待我处理」页。
+    if (_cognitionStripDismissed(cid)) { el.hidden = true; el.innerHTML = ''; return; }
+    // 可见性只取决于衔接行自己的数据（两条通道是否给出计数）——不与抽屉的
+    // loading/error 态连坐：抽屉其它源（历史/文件）失败不该把这行藏掉
+    //（真机抓出：伪会话历史 404 → error → 行被误藏）。数据未到＝键缺失＝隐藏。
+    const counts = _sessionCognitionCounts(cid, _snapshot.candidates, _snapshot.assets);
+    const settled = counts.confirmed.length + counts.extraAssets.length;
+    const pending = counts.pending.length;
+    if (!settled && !pending) { el.hidden = true; el.innerHTML = ''; return; }
+    const settledPart = settled
+      ? _label('conversation_info.cognition_strip_settled', '已沉淀 {n} 条认知', { n: String(settled) })
+      : '';
+    const pendingPart = pending
+      ? _label('conversation_info.cognition_strip_pending', '待处理 {n} 条', { n: String(pending) })
+      : '';
+    const summary = [settledPart, pendingPart].filter(Boolean).join(' · ');
+    const dismissLabel = _label('conversation_info.cognition_strip_dismiss', '不再显示本会话的认知提示');
+    const dismissButton = _iconButton({
+      label: dismissLabel,
+      icon: 'x',
+      size: 'sm',
+      className: 'chat-cognition-strip-dismiss',
+      attrs: { 'data-cognition-strip-dismiss': '1' },
+    });
+    const gotoButton = _button({
+      label: _label('conversation_info.cognition_strip_goto', '去处理'),
+      role: 'ghost',
+      size: 'sm',
+      className: 'chat-cognition-strip-goto',
+      attrs: { 'data-cognition-strip-goto': '1' },
+    });
+    el.innerHTML =
+      '<div class="chat-cognition-strip-inner" role="status">' +
+        '<span data-ui-icon="git-branch" data-ui-icon-class="ui-icon chat-cognition-strip-icon"></span>' +
+        '<span class="chat-cognition-strip-label">' + escapeHtml(summary) + '</span>' +
+        gotoButton +
+        dismissButton +
+      '</div>';
+    el.hidden = false;
+    if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(el);
   }
 
   function _renderBody() {
@@ -1803,16 +1929,19 @@ const ConversationInfo = (() => {
     if (!_cid) {
       body.innerHTML = `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.no_conversation', 'Open a conversation to see details'))}</div>`;
       _refreshTabCounts();
+      _renderCognitionStrip();
       return;
     }
     if (_loading) {
       body.innerHTML = `<div class="conversation-info-empty">${escapeHtml(_label('common.loading', 'Loading…'))}</div>`;
       _refreshTabCounts();
+      _renderCognitionStrip();
       return;
     }
     if (_error) {
       body.innerHTML = `<div class="conversation-info-empty is-error">${escapeHtml(_label('conversation_info.load_failed', 'Could not load conversation info', { reason: _error }))}</div>`;
       _refreshTabCounts();
+      _renderCognitionStrip();
       return;
     }
     body.innerHTML = _renderRunContext();
@@ -1820,6 +1949,7 @@ const ConversationInfo = (() => {
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
       window.hydrateUiIcons(body);
     }
+    _renderCognitionStrip();
   }
 
   function _syncChrome() {
@@ -1994,6 +2124,11 @@ const ConversationInfo = (() => {
     _attachmentSeq++;
     _syncChrome();
     _renderBody();
+    // 019 会话侧衔接：抽屉未打开时 refresh() 以 _open 为闸不拉数据，但头部
+    // 衔接行不依赖抽屉开合——bind 即后台拉「按会话的认知计数」（仅两条既有
+    // 只读通道），到货后只更新衔接行，不渲染抽屉体（抽屉打开时本就有全量
+    // refresh 兜底，预填数据会被覆盖，不会陈旧外泄）。
+    if (_cid) void _loadCognitionStripData(_cid);
     if (_open && _cid) refresh(_cid);
   }
 
@@ -2315,6 +2450,46 @@ const ConversationInfo = (() => {
       close.dataset.bound = '1';
       close.addEventListener('click', () => _setOpen(false));
     }
+    // 会话头部认知衔接行（specs/019）：「去待我处理」→ 认知面板「待我处理」页
+    // （审计 R4 拍板项 #6，2026-09-28：衔接行是本会话 N/M 计数行、无具体资产
+    // id，跳资产详情不可执行；本会话的候选在「待我处理」排队确认）。认知面板
+    // 入口不可用时回退旧落点（抽屉「认知资产」tab），加载器可用时先补载再跳。
+    const cogStrip = document.getElementById('chat-cognition-strip');
+    if (cogStrip && cogStrip.dataset.bound !== '1') {
+      cogStrip.dataset.bound = '1';
+      cogStrip.addEventListener('click', (ev) => {
+        // 点叉关闭（方案 A）：本会话不再显示；偏好记本机 localStorage（跨重启），
+        // 写失败不影响本次隐藏。
+        if (ev.target.closest('[data-cognition-strip-dismiss]')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try {
+            const store = typeof localStorage !== 'undefined' ? localStorage : window.localStorage;
+            store?.setItem?.(_cognitionStripDismissKey(_cid), '1');
+          } catch (_) { /* 存偏好失败不影响本次隐藏 */ }
+          cogStrip.hidden = true;
+          cogStrip.innerHTML = '';
+          return;
+        }
+        if (!ev.target.closest('[data-cognition-strip-goto]')) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const openReview = () => {
+          if (typeof window.openCognitionReview === 'function' && window.openCognitionReview()) return;
+          openAndSetTab('assets');
+        };
+        if (typeof window.openCognitionReview === 'function') {
+          openReview();
+          return;
+        }
+        const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+        if (typeof loader === 'function') {
+          loader('recall').then(openReview).catch(() => { openAndSetTab('assets'); });
+        } else {
+          openAndSetTab('assets');
+        }
+      });
+    }
     if (body && body.dataset.bound !== '1') {
       body.dataset.bound = '1';
       body.addEventListener('click', (ev) => {
@@ -2379,66 +2554,52 @@ const ConversationInfo = (() => {
           _renderBody();
           return;
         }
-        // 四类资产 tab · 候选操作：确认入库（promote，与认知沉淀页同一底层）。
-        const candidatePromote = ev.target.closest('[data-candidate-promote]');
-        if (candidatePromote) {
+        // 抽屉只提供到完整候选详情的入口，不绕过主确认页的作用范围、相似资产
+        // 和版本冲突护栏。用户仍可从详情确认、修改或拒绝。
+        const candidateReview = ev.target.closest('[data-candidate-review]');
+        if (candidateReview) {
           ev.preventDefault();
           ev.stopPropagation();
-          const candidateId = candidatePromote.dataset.candidatePromote || '';
+          const candidateId = candidateReview.dataset.candidateReview || '';
           if (!candidateId) return;
-          const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
-            ? window.cogseed.invoke.bind(window.cogseed)
-            : null;
-          if (!invoke) return;
-          candidatePromote.disabled = true;
-          invoke('recall.candidates.promote', { candidateId, riskAcknowledged: true })
-            .then((res) => {
-              if (res && res.ok) {
-                if (typeof uiToast === 'function') {
-                  uiToast(_label('conversation_info.run_context.assets_confirmed_toast', '已确认入库，可在四类资产中查看'), { variant: 'success', timeoutMs: 4000 });
-                }
-                void refresh(_cid);
-              } else {
-                candidatePromote.disabled = false;
-                if (typeof uiToast === 'function') {
-                  uiToast(_label('conversation_info.run_context.assets_confirm_failed', '确认失败，请重试'), { variant: 'warning', timeoutMs: 5000 });
-                }
-              }
-            })
-            .catch(() => {
-              candidatePromote.disabled = false;
+          candidateReview.disabled = true;
+          const openCandidate = () => {
+            if (typeof window.openCognitionCandidateById !== 'function'
+                || !window.openCognitionCandidateById(candidateId)) {
+              throw new Error('cognition candidate opener unavailable');
+            }
+            _setOpen(false);
+          };
+          if (typeof window.openCognitionCandidateById === 'function') {
+            try {
+              openCandidate();
+            } catch (_) {
+              candidateReview.disabled = false;
               if (typeof uiToast === 'function') {
-                uiToast(_label('conversation_info.run_context.assets_confirm_failed', '确认失败，请重试'), { variant: 'warning', timeoutMs: 5000 });
+                uiToast(_label('conversation_info.run_context.assets_review_failed', '无法打开认知资产详情，请重试'), { variant: 'warning', timeoutMs: 5000 });
+              }
+            }
+            return;
+          }
+          const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+          if (typeof loader === 'function') {
+            loader('recall').then(openCandidate).catch(() => {
+              candidateReview.disabled = false;
+              if (typeof uiToast === 'function') {
+                uiToast(_label('conversation_info.run_context.assets_review_failed', '无法打开认知资产详情，请重试'), { variant: 'warning', timeoutMs: 5000 });
               }
             });
+          } else {
+            candidateReview.disabled = false;
+            if (typeof uiToast === 'function') {
+              uiToast(_label('conversation_info.run_context.assets_review_failed', '无法打开认知资产详情，请重试'), { variant: 'warning', timeoutMs: 5000 });
+            }
+          }
           return;
         }
-        // 四类资产 tab · 候选操作：忽略。
-        const candidateIgnore = ev.target.closest('[data-candidate-ignore]');
-        if (candidateIgnore) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const candidateId = candidateIgnore.dataset.candidateIgnore || '';
-          if (!candidateId) return;
-          const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
-            ? window.cogseed.invoke.bind(window.cogseed)
-            : null;
-          if (!invoke) return;
-          candidateIgnore.disabled = true;
-          invoke('recall.candidates.ignore', { candidateId })
-            .then((res) => {
-              if (res && res.ok) {
-                if (typeof uiToast === 'function') {
-                  uiToast(_label('conversation_info.run_context.assets_ignored_toast', '已忽略该候选'), { variant: 'info', timeoutMs: 4000 });
-                }
-                void refresh(_cid);
-              } else {
-                candidateIgnore.disabled = false;
-              }
-            })
-            .catch(() => { candidateIgnore.disabled = false; });
-          return;
-        }
+        // 「忽略」按钮已删（审计 R1④ 残余，拍板项 #4，2026-09-28）：就地忽略
+        // 只有 toast、与「待我处理」页完全重叠且更弱——想忽略走「查看、确认
+        // 或修改」进完整候选详情处置（ignore 动作在候选详情侧仍可用）。
         // 9.1 右侧「本次携带」：点击「查看回执」→ 读取该执行的
         // ContextReuseReceipt（IPC 已存在）并展开明细。
         const receiptToggle = ev.target.closest('[data-receipt-execution-id]');
@@ -2602,6 +2763,7 @@ const ConversationInfo = (() => {
     _resumeEvidenceCid = cid || _cid || '';
     _snapshot = { ..._snapshot, resumeEvidence: data || null };
     _open = true;
+    _activeRunContextTab = 'runs'; // 依据渲染在 runs pane：停在其它 tab 时打开会看不到（2026-09-28 修）
     _resetLoading(); // 依据已就绪，先渲染，避免旧 loading 状态遮挡
     _syncChrome();
     _renderBody();

@@ -86,6 +86,7 @@ import { chatAttachmentDirForConversation } from '../../util/project-layout';
 import * as chatArtifacts from '../../features/chat_artifacts';
 import { warmConversationSpace } from '../../features/chat_attachments';
 import { finalizeProducedArtifact, producedDocumentFooterText } from '../../features/produced_output_hooks';
+import { disabledHubSkillIds } from '../../features/marketplace/installed-version';
 import { readDisabledSets } from '../../features/component_enabled';
 import {
   cancelConfirmation as cancelDeleteConfirmation,
@@ -1980,24 +1981,22 @@ function guardDisabledSkillBash(opts: LocalToolsOpts, command: string): string |
   const uid = opts.userId;
   if (!uid || !command) return null;
 
-  const disabled = readDisabledSets(uid).skills;
+  const hubDisabled = disabledHubSkillIds(uid);
+  const disabled = new Set([...readDisabledSets(uid).skills, ...hubDisabled]);
   if (!disabled.size) return null;
+  const disabledError = (skillId: string) => hubDisabled.has(skillId)
+    ? errText('E_SKILL_HUB_DISABLED', `skill "${skillId}" is disabled by Hub; new use is blocked until Hub restores it.`)
+    : errText('E_SKILL_DISABLED', `skill "${skillId}" is disabled for this user; re-enable it before running its workflow.`);
 
   for (const ref of extractRunSkillRefs(command)) {
     if (disabled.has(ref)) {
-      return errText(
-        'E_SKILL_DISABLED',
-        `skill "${ref}" is disabled for this user; re-enable it before running its workflow.`,
-      );
+      return disabledError(ref);
     }
   }
 
   for (const skillId of disabled) {
     if (commandMentionsSkillRoot(command, uid, skillId)) {
-      return errText(
-        'E_SKILL_DISABLED',
-        `skill "${skillId}" is disabled for this user; re-enable it before running its workflow.`,
-      );
+      return disabledError(skillId);
     }
   }
 

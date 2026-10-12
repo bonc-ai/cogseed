@@ -33,7 +33,7 @@ function factCandidate() {
   return {
     judgment: '团队长期使用自托管 Git 服务，MR 是主要协作入口。',
     value: '后续讨论代码协作、MR 流程和仓库归属时直接沿用这个环境事实。',
-    summary: '团队使用自托管 Git 服务',
+    summary: '自托管 Git 协作惯例',
     suggestedType: 'fact' as const,
     suggestedScope: 'code',
     suggestedAction: 'create' as const,
@@ -105,8 +105,10 @@ describe('fact ability asset type', () => {
 
   it('extraction prompts define fact as a durable factual category', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/main/features/recall/capture-service.ts'), 'utf8');
-    expect(source).toContain('- fact: "Is this a durable fact about a project or environment?"');
-    expect(source).toContain('templates, methods, or durable facts');
+    const contract = fs.readFileSync(path.join(process.cwd(), 'src/main/prompts/recall_candidate_contract.md'), 'utf8');
+    expect(source).toContain("prompts.load('recall_candidate_contract')");
+    expect(contract).toContain('`fact`: durable fact about a project, tool, organisation, workflow, or long-lived environment');
+    expect(contract).toContain('Exclude transient task state');
   });
 
   it('keeps the four existing asset types valid', async () => {

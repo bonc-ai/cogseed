@@ -178,6 +178,21 @@ export function sensitivePathReasons(absPath: string, access: 'read' | 'write' =
   return [];
 }
 
+/**
+ * 只查**写入敏感**清单（`authorized_keys`、`/etc/cron*`、LaunchAgents、`System32/config`…），
+ * 不含读侧的家目录/凭据目录。
+ *
+ * 为什么单独开一个出口：读侧清单里有 `^~/(Desktop|Documents|Downloads)`——那是为了拦住
+ * "模型去翻用户桌面"，而**用户主动导出产物到自己桌面**是完全正常的动作。转写清理版
+ * 的「另存到本地文件夹…」用的就是这条（见 `features/local_text_export.ts`），
+ * 若复用 `sensitivePathReasons(path, 'write')`，最常见的落点反而会被误拦。
+ */
+export function sensitiveWritePathReasons(absPath: string): LocalAccessRiskCategory[] {
+  const policy = getLocalAccessSensitivePolicy();
+  if (!policy.enabled_categories.includes('sensitive_path')) return [];
+  return patternsMatch(policy.sensitive_write_path_patterns, pathHaystack(absPath)) ? ['sensitive_path'] : [];
+}
+
 export function classifyConfiguredBashCommand(
   command: string,
   baseReasons: readonly LocalAccessRiskCategory[] = [],

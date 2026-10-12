@@ -13,6 +13,67 @@
 (function () {
   'use strict';
 
+  // ── pure install decisions (guarded CommonJS bridge for tests) ─────────
+  // 这三个判定不碰 DOM、不读 i18n，所以可以在 Node 里直接 require；真机渲染路径
+  // 复用同一份实现，而不是另写一套只给测试看的影子逻辑。
+
+  /**
+   * Windows「重启并安装」入口的判定：只有主进程确认「已有校验通过、且不是当前
+   * 正在运行的版本」的安装包时才给入口。macOS 走 `updates.open` 打开 dmg，没有
+   * 静默安装通道。
+   */
+  function installActionFor(input) {
+    const isWindows = input.platform === 'win32';
+    const hasNewer = !!input.downloadedVersion && input.downloadedVersion !== input.currentVersion;
+    const visible = isWindows && input.state === 'downloaded' && hasNewer;
+    return { visible, label: 'updates.action.restart_install', enabled: visible };
+  }
+
+  /**
+   * 渲染层的平台串（navigator.platform / userAgentData.platform）归一成
+   * `installActionFor` 认的取值。preload 不暴露 platform（见 src/main/preload.js），
+   * 与 chat 的麦克风权限文案同源：只能在渲染层读 navigator 再归一。
+   */
+  function installPlatformFor(nav) {
+    const source = nav || {};
+    const raw = String(
+      (source.userAgentData && source.userAgentData.platform) || source.platform || source.userAgent || '',
+    ).toLowerCase();
+    // navigator.platform 在 Chromium 上是 'Win32' / 'MacIntel' / 'Linux x86_64'，
+    // userAgentData.platform 是 'Windows' / 'macOS' / 'Linux'；只有 UA 串可读时
+    // （老内核）再退到包含判断。
+    if (raw.startsWith('win') || raw.includes('windows')) return 'win32';
+    if (raw.startsWith('mac') || raw.includes('macintosh') || raw.includes('mac os')) return 'darwin';
+    if (raw.startsWith('linux') || raw.includes('linux')) return 'linux';
+    return '';
+  }
+
+  /**
+   * 引导自检（Task 5）判定的界面落点。`boot_guard` 为 null/缺失表示主进程尚未
+   * 判定这个 uid —— 那是「未知」，不是「健康」：不得据此显示任何提示。
+   *   · unstable      → 收起静默安装入口 + 阻断提示：上次升级没能稳定启动；
+   *   · installMissed → 只作说明，入口保留：保留中的安装记录可能只是交接还在
+   *                     飞行中（旧进程被提前重开），用户仍可以重试。
+   */
+  function bootGuardNoticeFor(bootGuard, install) {
+    if (bootGuard && bootGuard.unstable === true) {
+      return { key: 'updates.boot_guard.unstable', vars: {}, blocking: true, hidesInstallAction: true };
+    }
+    if (bootGuard && bootGuard.installMissed === true) {
+      const version = install && install.version ? String(install.version) : '';
+      return version
+        ? { key: 'updates.boot_guard.install_missed', vars: { version }, blocking: false, hidesInstallAction: false }
+        : { key: 'updates.boot_guard.install_missed_unknown', vars: {}, blocking: false, hidesInstallAction: false };
+    }
+    return { key: '', vars: {}, blocking: false, hidesInstallAction: false };
+  }
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { installActionFor, installPlatformFor, bootGuardNoticeFor };
+  }
+  // Node（测试）里没有 window：导出到桥之后立刻退场，不碰 createLogger / document。
+  if (typeof window === 'undefined') return;
+
   const _updLog = createLogger('updater');
 
   /** 主进程说"没有传输在跑"时的落点；本地任何猜测都必须能回到它。 */
@@ -36,6 +97,15 @@
     statusKind: '',      // '' | 'error'
     bannerInfo: null,    // info shown in the global banner (dismissed → null)
     autoStatus: null,    // AutoUpdateStatus pushed from main (updates:auto)
+    // 引导自检判定（Task 5）。null = 主进程还没判定这个 uid，是「未知」而不是
+    // 「健康」：不能据此显示提示，也不能据此收掉安装入口。
+    bootGuard: null,
+    // 保留中的安装记录（主进程投影为 { version, attempts }）：没有它时安装未生效
+    // 的说明只能不带版本号。
+    install: null,
+    // 静默安装的本地瞬时状态：'' | 'installing'。成功路径上主进程几乎立刻退出，
+    // 等不到后续状态推送，所以「正在重启并安装」必须由渲染层自己保持。
+    installPhase: '',
   };
 
   // ── helpers ────────────────────────────────────────────────────────────
@@ -186,6 +256,28 @@
     label.textContent = t(key);
   }
 
+  /**
+   * 「重启并安装」入口的构建输入。`_renderInstall` 画按钮、`_renderActions` 收起旧的
+   * 手动入口，两处必须同源：任何一处单独判定，都会出现「静默入口没画出来、手动入口
+   * 也被收走」的死角。
+   */
+  function _installActionState() {
+    const installing = _state.installPhase === 'installing';
+    const notice = installing
+      ? { key: 'updates.install.in_progress', vars: {}, blocking: false, hidesInstallAction: false }
+      : bootGuardNoticeFor(_state.bootGuard, _state.install);
+    const action = installActionFor({
+      platform: installPlatformFor(typeof navigator !== 'undefined' ? navigator : null),
+      // 只有主进程算出的 install_ready 才算「校验通过的安装包已就绪」。
+      state: _state.installReady ? 'downloaded' : '',
+      downloadedVersion: _state.downloadedVersion,
+      currentVersion: _state.currentVersion,
+    });
+    const visible = action.visible && action.enabled && !notice.hidesInstallAction
+      && !installing && !_autoAuthoritative() && typeof uiButton === 'function';
+    return { installing, notice, action, visible };
+  }
+
   function _renderActions() {
     const row = _id('updater-actions-row');
     if (!row) return;
@@ -201,7 +293,10 @@
     const transferOwns = _transferOwnsControls();
     row.hidden = transferOwns || !(actionable || _state.installReady);
     _setVisible('updater-download-btn', actionable && !_state.installReady && !transferOwns);
-    _setVisible('updater-open-btn', _state.installReady);
+    // Windows 上「重启并安装」已经是最好的入口，同一个包再挂一个「打开安装包」
+    // 只会让用户分不清按哪个；macOS 没有静默通道，那个入口必须保留。
+    // 静默入口被引导自检收起时（unstable），手动入口重新出现，用户仍有出路。
+    _setVisible('updater-open-btn', _state.installReady && !_installActionState().visible);
     _setVisible('updater-skip-btn', actionable && !_state.installReady && !transferOwns);
     _syncDownloadLabel();
   }
@@ -311,9 +406,66 @@
     }
   }
 
+  /**
+   * 「重启并安装」（Windows 静默安装）入口 + 引导自检提示。
+   *
+   * 按钮与进度条由共享 `uiButton()` / `uiProgressBar()` 生成后注入空容器，不在本
+   * 文件里拼控件标签：本模块的裸控件冻结基线是 0（见
+   * test/renderer/shared-ui-adoption-guard.test.ts）。
+   *
+   * 安装中不画百分比：detached helper 的接管过程没有可测量的进度，编一个数值只会
+   * 得到一条不动的假进度（与自动更新行同一条纪律）。下载既然已经校验完成，进度条
+   * 就停在完成态，重启由文案说明。
+   */
+  function _renderInstall() {
+    const slot = _id('updater-install-slot');
+    const { installing, notice, action, visible } = _installActionState();
+    _renderNotice(notice);
+    if (!slot) return;
+    let html = '';
+    if (installing && typeof uiProgressBar === 'function') {
+      html = uiProgressBar({
+        ariaLabel: t('updates.install.in_progress'),
+        value: 100,
+        max: 100,
+      });
+    } else if (visible) {
+      html = uiButton({
+        label: t(action.label),
+        role: 'primary',
+        size: 'sm',
+        attrs: { id: 'updater-install-btn' },
+      });
+    }
+    // 与传输控件同样的规矩：只在真的重建了节点时绑定，否则一次点击会触发多层。
+    if (html === slot.innerHTML) return;
+    slot.innerHTML = html;
+    _bindClick('updater-install-btn', () => { void _installNow(); });
+  }
+
+  /**
+   * 引导自检 / 安装状态的说明行。阻断性提示（上次升级不稳定）沿用状态行的错误样式
+   * ——那是本页既有的样式契约，不新增页面级结构。
+   */
+  function _renderNotice(notice) {
+    const row = _id('updater-notice-row');
+    const text = _id('updater-notice-text');
+    if (!row || !text) return;
+    if (!notice || !notice.key) {
+      row.hidden = true;
+      text.textContent = '';
+      return;
+    }
+    row.hidden = false;
+    text.textContent = t(notice.key, notice.vars || {});
+    text.className = 'settings-updater-status'
+      + (notice.blocking ? ' settings-updater-status-error' : '');
+  }
+
   function _renderAll() {
     _renderStatus();
     _renderActions();
+    _renderInstall();
     _renderProgress();
     _renderTransferActions();
     _renderAuto();
@@ -329,7 +481,13 @@
       ? document.querySelector('.settings-about-rows')
       : null;
     if (!rows) return;
-    const ids = ['updater-status-row', 'updater-actions-row', 'updater-auto-row', 'updater-progress-row'];
+    const ids = [
+      'updater-status-row',
+      'updater-actions-row',
+      'updater-auto-row',
+      'updater-progress-row',
+      'updater-notice-row',
+    ];
     const anyVisible = ids.some((id) => {
       const el = _id(id);
       return !!el && !el.hidden;
@@ -350,6 +508,10 @@
     // 老版本主进程不带 download 字段时退回"没有传输在进行"这个安全落点，
     // 而不是让上一个乐观状态继续挂在页面上。
     _state.download = res.download && res.download.phase ? res.download : _idleDownload();
+    // 引导自检判定（Task 5 的安全网）与保留中的安装记录。判定为 null 就是「未知」，
+    // 原样保留 null，绝不折算成「健康」。
+    _state.bootGuard = res.boot_guard || null;
+    _state.install = (res.state && res.state.install) || null;
     const versionLabel = _id('updater-current-version');
     if (versionLabel) {
       versionLabel.textContent = t('settings.updates.current_version', {
@@ -513,6 +675,39 @@
     await _resyncDownload();
   }
 
+  /**
+   * Windows「重启并安装」：把校验通过的安装包交给 detached helper，主进程随后
+   * 立刻退出。
+   *
+   * 成功路径上不可能等到后续状态推送，所以先落一个乐观的「正在重启并安装」；
+   * 只有真的失败（started !== true）才回退、弹错误并把入口放回去。
+   */
+  async function _installNow() {
+    if (_state.installPhase === 'installing') return;
+    _state.installPhase = 'installing';
+    _renderAll();
+    let res = null;
+    try {
+      res = await window.cogseed.invoke('updates.install', {});
+    } catch (err) {
+      res = { started: false, error: err && err.message };
+    }
+    // started === true：应用即将退出，保持安装中状态，不做任何后续猜测。
+    if (res && res.started === true) return;
+    _state.installPhase = '';
+    _renderAll();
+    // 主进程的失败原话原样带出（只做已知错误码的本地化映射），外面再套一层本地化
+    // 的「安装失败」句式：文案归属与 settings.updates.error 一致。
+    const raw = res && res.error ? String(res.error) : '';
+    const message = t('updates.install.failed', { message: raw ? _friendlyError(raw) : '' });
+    if (typeof uiAlert === 'function') {
+      void uiAlert(message);
+    } else {
+      // 共享弹窗缺失时的降级：至少把失败写在状态行上，而不是静默回到原状。
+      _setStatus('settings.updates.error', { message }, 'error');
+    }
+  }
+
   async function _openInstaller() {
     try {
       const res = await window.cogseed.invoke('updates.open', {});
@@ -550,6 +745,24 @@
     // is in fact correct, so it gets its own actionable wording.
     if (message.includes('insecure_url')) return t('settings.updates.errors.insecure_url');
     if (message.includes('bad_url')) return t('settings.updates.errors.bad_url');
+    // Windows 静默安装（Task 7）的稳定错误串来自主进程
+    // src/main/features/updater/client.ts 与 installer.ts。渲染层只认这几个固定
+    // 串；带安装器原话的失败（installer checksum mismatch / spawn failed: …）没有
+    // 稳定错误码，原样透出，由外层的「安装失败：{message}」句式收口。
+    // `unsupported platform` 同时出现在 client.ts 的返回值与 installer.ts 抛出的
+    // `installDownloadedUpdate: unsupported platform`，所以用包含匹配而不是全等。
+    if (message.includes('no verified download to install')) {
+      return t('settings.updates.errors.install_no_download');
+    }
+    if (message.includes('install attempts exhausted')) {
+      return t('settings.updates.errors.install_attempts_exhausted');
+    }
+    if (message.includes('unsupported platform')) {
+      return t('settings.updates.errors.install_unsupported_platform');
+    }
+    if (message.includes('install already in progress')) {
+      return t('settings.updates.errors.install_in_progress');
+    }
     return message;
   }
 

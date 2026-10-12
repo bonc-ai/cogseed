@@ -1,0 +1,1 @@
+{"code":42203,"msg":"package rejected","request_id":"req_fixture","error":{"code":"PACKAGE_REJECTED","message":"Package validation failed","retryable":false,"details":{"rule_id":"PACKAGE_STRUCTURE"}}}

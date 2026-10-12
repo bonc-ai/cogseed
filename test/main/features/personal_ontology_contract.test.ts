@@ -118,6 +118,52 @@ describe('PO contract › B Runtime 角色画像', () => {
     expect(block).not.toContain('[智能]');
   });
 
+  it('asset-backed template values resolve live text through task-time eligibility', async () => {
+    const contract = await loadContract();
+    const templates = await loadTemplates();
+    await templates.installTemplateFile(UID, 'student');
+    const target = (await contract.listRoleTemplateFieldTargets(UID))
+      .find((entry) => entry.label.endsWith('· 教育阶段'))!;
+    const assetId = 'aa-profile-source';
+    await contract.appendRoleTemplateFieldValue(UID, target.fieldRef, '旧版本措辞', '智能', undefined, assetId);
+
+    const assetService = await import('../../../src/main/features/recall/asset-service');
+    const promptInjection = await import('../../../src/main/features/recall/prompt-injection');
+    const asset = {
+      id: assetId,
+      type: 'personal',
+      status: 'active',
+      statement: '当前正式资产正文',
+    } as any;
+    const listSpy = vi.spyOn(assetService, 'listAbilityAssets').mockResolvedValue([asset]);
+    const eligibilitySpy = vi.spyOn(promptInjection, 'filterRecallAssetsForAgentRead')
+      .mockImplementation(async (_uid, assets, context) => (
+        context.projectId === 'project-allowed' ? [...assets] : []
+      ));
+
+    try {
+      const allowed = await contract.getRoleProfileForRuntime(UID, ['student'], {
+        projectId: 'project-allowed',
+        workspaceId: 'space-a',
+      });
+      expect(allowed).toContain('当前正式资产正文');
+      expect(allowed).not.toContain('旧版本措辞');
+
+      const denied = await contract.getRoleProfileForRuntime(UID, ['student'], {
+        projectId: 'project-other',
+        workspaceId: 'space-a',
+      });
+      expect(denied).toBe('');
+      expect(eligibilitySpy).toHaveBeenCalledWith(UID, [asset], {
+        projectId: 'project-other',
+        workspaceId: 'space-a',
+      });
+    } finally {
+      listSpy.mockRestore();
+      eligibilitySpy.mockRestore();
+    }
+  });
+
   it('未安装 / 全空坑 / 空入参 / 非法 uid → 空串（静默降级，不注入空画像）', async () => {
     const contract = await loadContract();
     const tmpl = await loadTemplates();

@@ -61,6 +61,22 @@ export interface ChatAttachmentMetadata {
   attachmentTypes: string[];
 }
 
+/** Host-owned result of a cross-session cognition save. Persisted with the
+ * assistant message so the user sees the real status even if model narration
+ * omits or misstates it.
+ *
+ * 2026-09-28 四病整改（设计 7.0 修7 / 深探 F39）：教学回执并入保存回执——
+ * 旧记忆条目 replace 第三层（旧链）产出的教学信号没有 asset/candidate 快照，
+ * 但 teaching-service 落信号时必建候选（signal.candidateIds[0]），所以以
+ * `target: 'candidate'` + `outcome: 'taught-pending-review'` 装进同一回执链，
+ * 渲染层不再有独立教学卡。 */
+export interface CognitionSaveReceipt {
+  target: 'asset' | 'candidate';
+  id: string;
+  summary: string;
+  outcome: 'created' | 'already-confirmed' | 'pending-review' | 'merged' | 'fused-update-pending' | 'taught-pending-review';
+}
+
 export interface ChatResolvedRuntime {
   providerId: string;
   modelId: string;
@@ -203,13 +219,10 @@ export interface ChatOptions {
   /** Exact visible user-authored text for provenance-bound teaching intent.
    * This excludes model-only reference, attachment, and replay envelopes. */
   sourceMessageText?: string;
-  onTeachingReceipt?: (receipt: {
-    id: string;
-    summary: string;
-    scope: 'personal' | 'project' | 'agent';
-    status: 'active' | 'revoked';
-    candidateIds: string[];
-  }) => void | Promise<void>;
+  /** Host-owned cognition save receipt sink. Teaching receipts merged into
+   * this chain on 2026-09-28 (四病整改 7.0 修7): the runner emits
+   * candidate+taught-pending-review here instead of a separate callback. */
+  onCognitionSaveReceipt?: (receipt: CognitionSaveReceipt) => void | Promise<void>;
   /** Host observation of the actual runtime candidate and final tool catalog. */
   onResolvedRuntime?: (runtime: ChatResolvedRuntime) => void;
   /** Project id of the conversation, when it belongs to one. Threaded

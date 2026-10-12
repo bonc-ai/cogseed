@@ -7,7 +7,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const conversationSource = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
 const styleSource = fs.readFileSync(path.join(ROOT, 'src/renderer/style.css'), 'utf8');
 
-function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unknown>) {
+function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unknown>, windowExtras: Record<string, unknown> = {}) {
   const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/recall-projection-card.js'), 'utf8');
   const host: any = {
     className: '',
@@ -27,6 +27,7 @@ function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unkn
         const extra = Object.entries(attrs || {}).map(([key, value]) => ` ${key}="${String(value)}"`).join('');
         return `<button type="button" class="btn ui-button"${extra}><span class="ui-button__label">${String(label)}</span></button>`;
       },
+      ...windowExtras,
     },
     document: {},
     escapeHtml: (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
@@ -63,6 +64,8 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Old asset');
+    // 未确认的投影草稿里只编辑本轮内容，不提供通往正式资产管理页的动作。
+    expect(host.innerHTML).not.toContain('data-asset-citation');
     expect(host.innerHTML).toContain('Remove asset');
     expect(host.innerHTML).toContain('Preloaded assets');
     expect(host.innerHTML).toContain('Add asset');
@@ -317,7 +320,8 @@ describe('projection card surfaces a drifted confirmed version', () => {
     });
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
-    expect(host.innerHTML).toContain('Model-selected projection · 1 cognition assets');
+    // 合并卡（拍板项 #8）：头部是投影状态摘要（带入 N 条），徽标区分谁做的决定。
+    expect(host.innerHTML).toContain('带入 1 条');
     expect(host.innerHTML).toContain('Model-picked');
     expect(host.innerHTML).toContain('Revoke');
     // confirmed 态不发确认按钮（它已经生效了，只给撤销）。
@@ -359,11 +363,12 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
 
-    expect(host.innerHTML).toContain('Model attached 1 cognition assets · 2 in projection');
-    expect(host.innerHTML).toContain('Model-selected assets');
-    expect(host.innerHTML).toContain('Semantic baseline assets');
+    // 合并卡：模型新挂数量并进头部摘要（带入总数 · 其中模型挑 N 条），资产行
+    // 平铺一张列表（不再分「模型自选/语义基线」两个明细小节）。
+    expect(host.innerHTML).toContain('带入 2 条 · 其中模型挑 1 条');
     expect(host.innerHTML).toContain('Model rule');
     expect(host.innerHTML).toContain('Semantic base');
+    expect(host.innerHTML.match(/data-recall-projection-asset=/g)).toHaveLength(2);
   });
 
   it('旧模型自选投影没有点名历史时显示中性总数，不编造模型新挂数量', async () => {
@@ -389,8 +394,9 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
 
-    expect(host.innerHTML).toContain('Model-selected projection · 2 cognition assets');
-    expect(host.innerHTML).not.toContain('Model-selected assets');
+    // 没有点名历史时不编造模型新挂数量（摘要只报带入总数）。
+    expect(host.innerHTML).toContain('带入 2 条');
+    expect(host.innerHTML).not.toContain('其中模型挑');
     expect(host.innerHTML).toContain('Old A');
   });
 
@@ -424,15 +430,17 @@ describe('projection card surfaces a drifted confirmed version', () => {
     host.closest = vi.fn(() => ({ querySelector: (selector: string) => selector === '.markdown-body' ? prose : null }));
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
 
+    // 合并卡（拍板项 #8）：列表平铺全部带入行（旧「明细渐进展开」折叠随两卡
+    // 合并退役——设计 7.4 列表＝每条资产一行），撤销留在尾部操作行。
     expect(prose.hidden).toBe(false);
-    expect(host.className).toContain('is-model-selected');
-    expect(host.innerHTML).toContain('Model-selected projection · 8 cognition assets');
-    expect(host.innerHTML).toContain('View details');
+    expect(host.className).toContain('chat-recall-citations');
+    expect(host.innerHTML).toContain('本次使用的记忆');
+    expect(host.innerHTML).toContain('带入 8 条');
     expect(host.innerHTML).toContain('Revoke');
-    expect(host.innerHTML).toContain('<details class="chat-recall-projection-details"');
-    expect(host.innerHTML).not.toContain('<details class="chat-recall-projection-details" open');
+    expect(host.innerHTML).not.toContain('<details class="chat-recall-projection-details"');
     expect(host.innerHTML.match(/data-recall-projection-asset=/g)).toHaveLength(8);
-    expect(host.innerHTML.indexOf('data-recall-projection-revoke')).toBeLessThan(host.innerHTML.indexOf('<details'));
+    // 反馈行与投影操作同在尾部（一条「带入 → 使用 → 反馈」线）。
+    expect(host.innerHTML).toContain('data-recall-feedback');
   });
 
   it('旧传输 sidecar 才隐藏 fallback 正文；最终回复挂卡不隐藏正文', async () => {
@@ -480,10 +488,12 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
 
-    expect(host.className).toContain('is-model-selected');
+    // 撤销后：状态与说明如实呈现（已发出那轮收不回来），不再给撤销按钮；
+    // 资产行保留（可审计明细）。
+    expect(host.className).toContain('is-projection-revoked');
     expect(host.innerHTML).toContain('Revoked: later turns no longer carry these assets.');
-    expect(host.innerHTML).toContain('<details class="chat-recall-projection-details"');
     expect(host.innerHTML).not.toContain('data-recall-projection-revoke');
+    expect(host.innerHTML).toContain('data-recall-projection-asset=');
   });
 
   it('projection sidecar 消息隐藏传输 fallback 文本，不让治理回执伪装成模型正文', () => {
@@ -499,9 +509,14 @@ describe('projection card surfaces a drifted confirmed version', () => {
   });
 
   it('投影卡片有顶层样式，而不只有结果块内的嵌套重置', () => {
-    expect(styleSource).toMatch(/^\.chat-recall-projection-card \{$/m);
-    expect(styleSource).toMatch(/^\.chat-recall-projection-details \{$/m);
-    expect(styleSource).toMatch(/^\.chat-recall-projection-head \{$/m);
+    // 6dff92a5 起家族壳/头部收口为分组选择器（`.chat-recall-projection-card,
+    // .chat-recall-citations {`），顶层规则有两种形态：「S,」（分组）或
+    // 「S {」（独立）——与 recall-receipt-family.test.ts 的 cssBlock 同语义。
+    // 嵌套重置（.chat-result-block-body …）与修饰规则（S.is-error）不在行首
+    // 以裸类名出现，仍不匹配，判别力不变。
+    expect(styleSource).toMatch(/^\.chat-recall-projection-card(,| \{)/m);
+    expect(styleSource).toMatch(/^\.chat-recall-projection-details(,| \{)/m);
+    expect(styleSource).toMatch(/^\.chat-recall-projection-head(,| \{)/m);
     expect(fs.readFileSync(path.join(ROOT, 'src/renderer/modules/recall-projection-card.js'), 'utf8')).toContain("recall.projection.status.revoked");
   });
 
@@ -535,5 +550,81 @@ describe('projection card surfaces a drifted confirmed version', () => {
     expect(context.uiAlert).toHaveBeenCalled();
     expect(String(context.uiAlert.mock.calls[0][0])).toContain('revoke failed');
     expect(host.innerHTML).toContain('Revoke');
+  });
+});
+
+describe('「本次使用的记忆」卡折叠热区与默认收起（2026-09-29 二轮）', () => {
+  const confirmedModelCard = {
+    kind: 'recall_projection_card',
+    projectionId: 'proj-fold',
+    status: 'confirmed',
+    authorization: 'model_selected',
+    purpose: 'model_selected',
+    totalAssetCount: 1,
+    assetSummaries: [{ assetId: 'asset-fold', title: '折叠测试资产', type: 'rule', status: 'active', scope: 'review', version: '1' }],
+  };
+
+  function loadWithIcons(invoke: (channel: string, payload?: unknown) => Promise<unknown>) {
+    return loadModule(invoke, {
+      uiIconHtml: (name: string, className: string) => `<svg class="${className} is-${name}" aria-hidden="true"></svg>`,
+    });
+  }
+
+  it('默认收起：头部即热区（role=button + aria-expanded=false），计数内联标题右侧，提示句在尾行撤销左侧；箭头只是指示图标', async () => {
+    const loaded = loadWithIcons(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: confirmedModelCard };
+      return { ok: true };
+    });
+    await loaded.context.window.mountRecallProjectionCard(loaded.host, { projectionId: 'proj-fold' }, { cid: 'c1', onlyModelSelected: true });
+    expect(loaded.host.className).toContain('is-collapsed');
+    expect(loaded.host.innerHTML).toContain('role="button" tabindex="0" aria-expanded="false"');
+    // 计数上移：标题右侧内联（不再是标题下的块级 small）。
+    expect(loaded.host.innerHTML).toContain('chat-recall-citations-count');
+    expect(loaded.host.innerHTML).toContain('带入 1 条');
+    expect(loaded.host.innerHTML).not.toContain('data-recall-projection-summary');
+    // 提示句挪到尾行、撤销左侧。
+    expect(loaded.host.innerHTML).toContain('chat-recall-citations-note');
+    expect(loaded.host.innerHTML.indexOf('chat-recall-citations-note'))
+      .toBeLessThan(loaded.host.innerHTML.indexOf('data-recall-projection-revoke'));
+    expect(loaded.host.innerHTML).not.toContain('data-recall-projection-note');
+    // 箭头是指示图标不是按钮。
+    expect(loaded.host.innerHTML).toContain('chat-recall-toggle');
+    expect(loaded.host.innerHTML).not.toContain('data-recall-toggle');
+
+    // 图标原语缺席：箭头整颗降级，卡照常（默认收起态不变）。
+    const plain = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: confirmedModelCard };
+      return { ok: true };
+    });
+    await plain.context.window.mountRecallProjectionCard(plain.host, { projectionId: 'proj-fold' }, { cid: 'c1', onlyModelSelected: true });
+    expect(plain.host.innerHTML).not.toContain('chat-recall-toggle');
+    expect(plain.host.innerHTML).toContain('本次使用的记忆');
+    expect(plain.host.innerHTML).toContain('data-recall-projection-revoke');
+  });
+
+  it('翻转：默认收起→首次点击=展开；整卡重画（撤销成功刷新）后状态保持', async () => {
+    const loaded = loadWithIcons(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: confirmedModelCard };
+      return { ok: true };
+    });
+    await loaded.context.window.mountRecallProjectionCard(loaded.host, { projectionId: 'proj-fold' }, { cid: 'c1', onlyModelSelected: true });
+    expect(loaded.host.dataset.recallCollapsed).toBeUndefined();
+
+    // 首次翻转 = 展开（默认收起）。
+    expect(loaded.context.window.recallCardToggleCollapsed(loaded.host)).toBe(false);
+    expect(loaded.host.className).not.toContain('is-collapsed');
+    expect(loaded.host.dataset.recallCollapsed).toBe('0');
+
+    // 撤销成功走 refresh 整卡重画：展开态从 dataset 回读，不弹回收起。
+    await loaded.host.handler({ target: { closest: (selector: string) => (String(selector).includes('revoke') ? { disabled: false } : null) } });
+    expect(loaded.host.className).not.toContain('is-collapsed');
+    expect(loaded.host.innerHTML).toContain('aria-expanded="true"');
+
+    expect(loaded.context.window.recallCardToggleCollapsed(loaded.host)).toBe(true);
+    expect(loaded.host.className).toContain('is-collapsed');
+    expect(loaded.host.dataset.recallCollapsed).toBe('1');
+    // 返回值 = 翻转后的折叠态（vm 宿主 querySelector 是空桩，aria 属性的
+    // 即时同步只在真实 DOM 生效；重画路径的 aria 已在上面断过）。
+    expect(loaded.context.window.recallCardToggleCollapsed(loaded.host)).toBe(false);
   });
 });

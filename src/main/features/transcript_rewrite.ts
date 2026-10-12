@@ -53,7 +53,9 @@ export const REWRITE_MAX_PARAGRAPH_CHARS = 1200;
  * 被改成"一会儿叫 Cogseed"、"词汇表应该有 coxy"被改成"应该有 Cogseed"，语义完全破坏。
  * 人工清理版对此有明确规则："引例保留、实际指称纠正"。
  */
-const QUOTE_MARKERS = [
+// 【specs/013 T005】引例判据的**唯一**定义处，导出供扫描链（transcript_auto_correct）
+// 共享——只加 export，词表内容与改写链逻辑零改动；任何通道不得复制第二份词表。
+export const QUOTE_MARKERS = [
   '会变成', '识别成', '识别错', '识别不准', '错误形式', '错形', '拼写', '写成',
   '一会儿叫', '这个词', '词汇表', '纠错', '纠正', '转录里', '转写里', '搞错', '叫错',
 ];

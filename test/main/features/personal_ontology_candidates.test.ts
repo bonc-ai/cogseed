@@ -935,6 +935,8 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
     const cs = await import('../../../../src/main/features/recall/candidate-service');
     const saved = await cs.saveRecallCandidate(UID, {
       judgment: statement,
+      // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+      summary: '画像种子样本',
       suggestedType: 'personal',
       suggestedScope: 'general',
       sourceRefs: [{ kind: 'memory', id: 'dual-rail-seed' }],
@@ -949,7 +951,7 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
       candidate_id: 'cand-dual-1',
       kind: 'preference',
       memory_scope: 'user',
-      summary: '偏好中文简洁',
+      summary: '中文简洁偏好',
       memory_text: '偏好中文简洁。',
     });
     const res = await poc.confirmCandidate(UID, 'cand-dual-1');
@@ -974,7 +976,7 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
       candidate_id: 'cand-dual-2',
       kind: 'rule',
       memory_scope: 'shared',
-      summary: '评审规则',
+      summary: '产品模型先行',
       memory_text: '评审必须先讲产品模型。',
     });
     const res = await poc.confirmCandidate(UID, 'cand-dual-2');
@@ -991,7 +993,7 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
       candidate_id: 'cand-dual-3',
       kind: 'preference',
       memory_scope: 'user',
-      summary: '重复偏好',
+      summary: '语义重复偏好',
       memory_text: '偏好中文简洁。',
     });
     const res = await poc.confirmCandidate(UID, 'cand-dual-3');
@@ -1026,5 +1028,151 @@ describe('personal_ontology_candidates › confirmCandidate asset track (dual-ra
     const text = fs.readFileSync(groupFile, 'utf8');
     const now = new Date().toISOString().slice(0, 7);
     expect(text).toContain(`- 目前在校就读。 [候选] @asof:${now}`);
+  });
+});
+
+/* ═══════════ 写入前冲突门（specs/014 US-902 / T015）═══════════
+ * embedding 受控替身：默认**不可用**（走降级放行 + 日志，既有用例不受门影响）；
+ * 冲突用例显式开启。「北京/上海」在谈同一件事（高相似），「旅行」无关。 */
+const GATE_VECTORS: Record<string, [number, number]> = {
+  常住北京: [1, 0],
+  常住上海: [0.99, 0.02],
+  每年旅行一次: [0, 1],
+};
+let gateEmbeddingAvailable = false;
+vi.mock('../../../src/main/features/recall/similarity', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../../src/main/features/recall/similarity')>();
+  return {
+    ...original,
+    embedForDedup: async (_uid: string, text: string): Promise<number[] | null> => {
+      if (!gateEmbeddingAvailable) return null;
+      return GATE_VECTORS[text] ?? null;
+    },
+  };
+});
+
+describe('候选确认的写入前冲突门（specs/014 T015）', () => {
+  it('① 冲突候选 → 零写入 + 候选仍在池 + 回执含冲突集', async () => {
+    gateEmbeddingAvailable = true;
+    try {
+      const m = await import('../../../src/main/features/personal_ontology_candidates');
+      const groups = await import('../../../src/main/features/personal_ontology_groups');
+      const created = await groups.createGroup(UID, '冲突门组');
+      const gid = created.group!.group_id;
+      await groups.appendFieldValue(UID, gid, '居住地', '常住北京', '手动');
+      const cand = (await m.addCandidate(UID, { memory_text: '常住上海', memory_scope: 'user' })).candidate;
+
+      const result = await m.confirmCandidate(UID, cand.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid], targetField: '居住地',
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe('conflict_detected');
+      expect(result.conflicts).toEqual([{ groupId: gid, field: '居住地', existingValue: '常住北京' }]);
+      // 零写入 + 候选仍在池里。
+      const fields = await groups.listGroupFields(UID, gid);
+      expect(fields.fields?.[0].values).toHaveLength(1);
+      const pool = (await m.listCandidates(UID)).candidate_updates;
+      expect(pool.some((c: { candidate_id: string }) => c.candidate_id === cand.candidate_id)).toBe(true);
+    } finally {
+      gateEmbeddingAvailable = false;
+    }
+  });
+
+  it('② acknowledgeConflict → 写入成功（自动 @asof 既有行为不变）', async () => {
+    gateEmbeddingAvailable = true;
+    try {
+      const m = await import('../../../src/main/features/personal_ontology_candidates');
+      const groups = await import('../../../src/main/features/personal_ontology_groups');
+      const created = await groups.createGroup(UID, '冲突门组二');
+      const gid = created.group!.group_id;
+      await groups.appendFieldValue(UID, gid, '居住地', '常住北京', '手动');
+      const cand = (await m.addCandidate(UID, { memory_text: '常住上海', memory_scope: 'user' })).candidate;
+
+      const result = await m.confirmCandidate(UID, cand.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid], targetField: '居住地',
+      }, { acknowledgeConflict: true });
+      expect(result.ok).toBe(true);
+      const fields = await groups.listGroupFields(UID, gid);
+      const values = fields.fields?.[0].values || [];
+      expect(values.some((fv: { value: string; asOf?: string }) => fv.value === '常住上海' && fv.asOf)).toBe(true);
+    } finally {
+      gateEmbeddingAvailable = false;
+    }
+  });
+
+  it('③ 值在两次调用之间被改 → 重检后不再拦（写入时刻读盘为准）', async () => {
+    gateEmbeddingAvailable = true;
+    try {
+      const m = await import('../../../src/main/features/personal_ontology_candidates');
+      const groups = await import('../../../src/main/features/personal_ontology_groups');
+      const created = await groups.createGroup(UID, '冲突门组三');
+      const gid = created.group!.group_id;
+      await groups.appendFieldValue(UID, gid, '居住地', '常住北京', '手动');
+      const cand = (await m.addCandidate(UID, { memory_text: '常住上海', memory_scope: 'user' })).candidate;
+      // 第一次被拦。
+      const blocked = await m.confirmCandidate(UID, cand.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid], targetField: '居住地',
+      });
+      expect(blocked.error).toBe('conflict_detected');
+      // 对端值被改成无关内容 → 重检不再拦。
+      await groups.setFieldValue(UID, gid, '居住地', '常住北京', '每年旅行一次');
+      const result = await m.confirmCandidate(UID, cand.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid], targetField: '居住地',
+      });
+      expect(result.ok).toBe(true);
+    } finally {
+      gateEmbeddingAvailable = false;
+    }
+  });
+
+  it('④ 无字段（流水区）与全局记忆路径不拦；⑤ 与现有值完全相等 → 不拦（既有去重）', async () => {
+    gateEmbeddingAvailable = true;
+    try {
+      const m = await import('../../../src/main/features/personal_ontology_candidates');
+      const groups = await import('../../../src/main/features/personal_ontology_groups');
+      const created = await groups.createGroup(UID, '冲突门组四');
+      const gid = created.group!.group_id;
+      await groups.appendFieldValue(UID, gid, '居住地', '常住北京', '手动');
+
+      // 流水区（无 targetField）：不拦。
+      const flow = (await m.addCandidate(UID, { memory_text: '常住上海', memory_scope: 'user' })).candidate;
+      const flowResult = await m.confirmCandidate(UID, flow.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid],
+      });
+      expect(flowResult.ok).toBe(true);
+      expect(flowResult.error).not.toBe('conflict_detected');
+
+      // 完全相等（同文本同源）：既有去重，门不发。
+      const dup = (await m.addCandidate(UID, { memory_text: '常住北京', memory_scope: 'user' })).candidate;
+      const dupResult = await m.confirmCandidate(UID, dup.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid], targetField: '居住地',
+      });
+      expect(dupResult.ok).toBe(true);
+      expect(dupResult.error).not.toBe('conflict_detected');
+    } finally {
+      gateEmbeddingAvailable = false;
+    }
+  });
+
+  it('受限值不进送检（embedding 拿不到它的向量 → 门对它沉默）', async () => {
+    gateEmbeddingAvailable = true;
+    try {
+      const m = await import('../../../src/main/features/personal_ontology_candidates');
+      const groups = await import('../../../src/main/features/personal_ontology_groups');
+      const created = await groups.createGroup(UID, '冲突门组五');
+      const gid = created.group!.group_id;
+      await groups.appendFieldValue(UID, gid, '居住地', '常住北京', '手动');
+      await groups.setFieldValueSensitivity(UID, gid, '居住地', '常住北京', 'restricted');
+
+      const cand = (await m.addCandidate(UID, { memory_text: '常住上海', memory_scope: 'user' })).candidate;
+      const result = await m.confirmCandidate(UID, cand.candidate_id, {
+        toGlobalMemory: false, toGroupIds: [gid], targetField: '居住地',
+      });
+      // 受限对端被预检排除 → 不拦（写后检测与界面标红仍兜底）。
+      expect(result.error).not.toBe('conflict_detected');
+      expect(result.ok).toBe(true);
+    } finally {
+      gateEmbeddingAvailable = false;
+    }
   });
 });

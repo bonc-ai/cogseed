@@ -100,7 +100,7 @@ function normalizeToken(value: unknown, field: string): string {
  *  那是个权限洞：过滤方拿到同一个值，放行会外发本该拦死的资产，拦死会让
  *  所有没设限的资产一起失效——两边都错，且看不出是哪边错。
  *
- *  资产已经有 sensitivity / scope / applicableWhen / forbiddenWhen 几道边界，
+ *  资产已经有 scope / applicableWhen / forbiddenWhen 几道边界，
  *  这一道塌了，整个权限模型就漏了。
  *
  *  也刻意**不**禁止空数组：`status` 的 paused/revoked 已经在表达「停用」，

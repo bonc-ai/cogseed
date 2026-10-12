@@ -99,4 +99,19 @@ describe('认知域词条覆盖', () => {
       .map((locale) => `${locale}:${key}`));
     expect(mismatches).toEqual([]);
   });
+
+  it('维护卡提示引用的节名必须逐字命中本语「是否自动保存」标题', () => {
+    // maint_hint_short 指引用户看同一张维护卡里 maint_review_title 渲染出的
+    // 那一节。词条改写时容易脱离 UI 现实，引用一个不存在的节名——代码兜底
+    // 里看不出来（T() 词条命中优先于兜底），四语用户看到的都是词条。机械
+    // 门禁：四语 hint 都必须逐字包含本语 title 的实际值。
+    const stale = LOCALES
+      .filter((locale) => {
+        const hint = tables[locale]['cognition.maint_hint_short'];
+        const title = tables[locale]['cognition.maint_review_title'];
+        return typeof hint !== 'string' || typeof title !== 'string' || !hint.includes(title);
+      })
+      .map((locale) => `${locale}: maint_hint_short 引用的节名与 maint_review_title 不一致`);
+    expect(stale).toEqual([]);
+  });
 });

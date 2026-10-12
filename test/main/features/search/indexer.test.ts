@@ -229,6 +229,45 @@ describe('search/indexer › reconcileChatsIndex', () => {
 });
 
 describe('search/indexer › indexChatMessage (hot path)', () => {
+  it('preserves an appended message when an older cold read finishes last', async () => {
+    const ix = await loadIndexer();
+    const paths = await import('../../../../src/main/paths');
+    const storage = await import('../../../../src/main/features/search/storage');
+    const idxPath = paths.userChatsIndexPath(TEST_UID);
+    await storage.saveIndex(idxPath, storage.emptyIndex('chat'));
+    let releaseRead!: () => void;
+    let readStarted!: () => void;
+    const released = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const started = new Promise<void>((resolve) => { readStarted = resolve; });
+    const readFile = fs.promises.readFile.bind(fs.promises);
+    const delayedRead = vi.spyOn(fs.promises, 'readFile').mockImplementationOnce((async (...args: Parameters<typeof readFile>) => {
+      const bytes = await readFile(...args);
+      readStarted();
+      await released;
+      return bytes;
+    }) as typeof fs.promises.readFile);
+    const coldRead = ix.getEntry(idxPath, 'chat');
+    try {
+      await started;
+      await ix.getEntry(idxPath, 'chat');
+      ix.indexChatMessage(TEST_UID, 'c1', 0, { from: 'user', ts: 't', text: 'fresh group message' });
+      await waitForSearchDoc(ix, 'chat:c1:0', 'fresh');
+      releaseRead();
+      await coldRead;
+      const entry = await ix.getEntry(idxPath, 'chat');
+      expect(entry.idx.docs['chat:c1:0']).toMatchObject({ role: 'user', time: 't' });
+      expect(entry.idx.postings['fresh']).toEqual([['chat:c1:0', 1]]);
+      await ix.flushAll();
+      const persisted = await storage.loadIndex(idxPath, 'chat');
+      expect(persisted.docs['chat:c1:0']).toMatchObject({ role: 'user', time: 't' });
+    } finally {
+      releaseRead();
+      await coldRead;
+      delayedRead.mockRestore();
+      await ix.flushAll();
+    }
+  });
+
   it('adds a doc for the appended message without re-reading the jsonl', async () => {
     writeChat('u1', 'c1', [{ role: 'user', content: 'existing', time: 't1' }]);
     const ix = await loadIndexer();

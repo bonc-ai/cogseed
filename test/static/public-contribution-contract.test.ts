@@ -35,7 +35,7 @@ describe('Public contribution contract', () => {
     }
   });
 
-  it('keeps both contribution guides on public main with an import-based review process', () => {
+  it('keeps both contribution guides on public main with an import-first process preserving public author history', () => {
     for (const name of ['CONTRIBUTING.md', 'CONTRIBUTING.zh-CN.md']) {
       const text = read(name);
       expect(text).toContain('upstream/main');
@@ -43,8 +43,11 @@ describe('Public contribution contract', () => {
       expect(text).toContain('Signed-off-by');
       expect(text).toContain('npm test');
     }
-    expect(read('CONTRIBUTING.md')).toContain('closed with an imported status');
-    expect(read('CONTRIBUTING.zh-CN.md')).toContain('以“已导入”说明关闭');
+    expect(read('CONTRIBUTING.md')).toContain('retaining the\noriginal contributor commits');
+    expect(read('CONTRIBUTING.zh-CN.md')).toContain('保留贡献者的原始提交');
+    for (const name of publicDocs) {
+      expect(read(name)).not.toMatch(/closed with (?:an import|the import)|以[“"]?已?导入(?:记录|结果)?[”"]?(?:说明)?关闭/);
+    }
     expect(read('community/skills/README.md')).toContain('against public `main`');
     expect(read('community/skills/README.zh-CN.md')).toContain('向公仓 `main`');
   });

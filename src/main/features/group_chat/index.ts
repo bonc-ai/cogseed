@@ -470,6 +470,7 @@ export interface SendInput {
   /** Explicit projection receipt ownership on the final user-visible turn message. */
   projection_receipt?: { projectionId: string; authorization: string };
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
+  asset_change_approval_card?: { kind: 'asset_change_approval'; proposalId: string; assetId: string; assetTitle: string; baselineVersion: string; diff: { before: string; after: string; fields: string[] }; reason: string; actions: Array<'confirm' | 'defer' | 'reject'> };
   recipient_agent_id?: string;
   recipient_origin?: 'user_selection' | 'cli_fallback' | 'active_floor';
   /** Per-task execution config from the unified execution entry (composer

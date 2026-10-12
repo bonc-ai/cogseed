@@ -47,6 +47,25 @@
     return `<div class="${escapeText(classes)}"${renderAttrs(value.attrs)}><table class="ui-data-table" aria-label="${escapeText(label)}"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
   }
 
+  // 与 ui-status.js 同一套取值：用错不会抛错，只会静默降级成中性色。
+  const ACCORDION_TONES = new Set(['success', 'attention', 'critical', 'neutral', 'idle']);
+
+  /**
+   * Independent disclosure sections.
+   *
+   * Per item:
+   *   title       visible label (escaped)
+   *   bodyHtml    caller-owned HTML for the expanded body
+   *   meta        plain-text right-hand slot (escaped) — short dim values
+   *   statusHtml  caller-escaped HTML for the right-hand slot, takes precedence over
+   *               `meta`. Needed when a row's status is a control rather than text
+   *               (uiStatusPill / uiTag). Caller owns escaping, same contract as
+   *               `bodyHtml`.
+   *   icon        icon name from icons.js, rendered before the title
+   *   tone        success | attention | critical | neutral | idle → data-tone on the
+   *               item, so a row needing action is distinguishable from a healthy one
+   *   open        force this item open (also settable via top-level `defaultOpen`)
+   */
   function uiAccordion(options) {
     const value = options || {};
     const items = Array.isArray(value.items) ? value.items : [];
@@ -55,8 +74,15 @@
     const rows = items.map((item, index) => {
       const title = String(item && item.title || '').trim();
       if (!title) throw new TypeError('uiAccordion items require titles');
-      const meta = item.meta ? `<span class="ui-accordion__meta">${escapeText(item.meta)}</span>` : '';
-      return `<details class="ui-accordion__item"${open.has(index) ? ' open' : ''}><summary><span class="ui-accordion__chevron" aria-hidden="true"></span><span class="ui-accordion__title">${escapeText(title)}</span>${meta}</summary><div class="ui-accordion__body">${String(item.bodyHtml || '')}</div></details>`;
+      const tone = ACCORDION_TONES.has(item.tone) ? item.tone : '';
+      const icon = item.icon && typeof root.uiIconHtml === 'function'
+        ? `<span class="ui-accordion__icon" aria-hidden="true">${root.uiIconHtml(String(item.icon), '')}</span>`
+        : '';
+      const status = item.statusHtml
+        ? `<span class="ui-accordion__status">${String(item.statusHtml)}</span>`
+        : (item.meta ? `<span class="ui-accordion__meta">${escapeText(item.meta)}</span>` : '');
+      const isOpen = item.open === true || open.has(index);
+      return `<details class="ui-accordion__item"${tone ? ` data-tone="${tone}"` : ''}${isOpen ? ' open' : ''}><summary><span class="ui-accordion__chevron" aria-hidden="true"></span>${icon}<span class="ui-accordion__title">${escapeText(title)}</span>${status}</summary><div class="ui-accordion__body">${String(item.bodyHtml || '')}</div></details>`;
     }).join('');
     const classes = ['ui-accordion', value.className || ''].filter(Boolean).join(' ');
     return `<div class="${escapeText(classes)}"${renderAttrs(value.attrs)}>${rows}</div>`;

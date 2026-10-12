@@ -1,0 +1,129 @@
+{
+  "schema_version": "2.0.0",
+  "ruleset_version": "v1.1.0",
+  "scanner_version": "2.2.0",
+  "description": "锁定已知输入的打分/分级/部署建议，防止未来重构悄悄改变行为（回归契约）。",
+  "notes": [
+    "2.1.0 引入上下文降权层（engine/scanner_core/context.py）：测试目录 / vendor 压缩产物 / 注释与 docstring / 文档散文里的命中会降级并标注 context，finding 仍保留在报告中。",
+    "2.2.0 引入按类别封顶 + 指数衰减 + 置信度加权的打分模型（scoring.py），以及 6 个新检测模块。分数因此与 2.1.0 不可直接比较——这是一次有意的模型变更，不是回归。",
+    "sample-defensive-skill 是降权层的核心回归样本：全部内容为 SSRF 防御代码及其测试，期望 ALLOW。若未来改动使其回到 CAUTION/DO_NOT_INSTALL，说明降权层失效（防御代码又被判成攻击代码）。",
+    "sample-prose-only-skill 是 2.2.0 新增的第二个核心回归样本：整份文档是「不要做这些」的安全守则。它必须保持 ALLOW——实测这一条曾经被违反（agent-creator / skill-creator 两个官方技能因散文里的禁止性表述被判 blocked）。",
+    "sample-risky-skill 的期望值保持不变，用于确认降权层与新规则没有放宽真实恶意样本的检测。",
+    "v2-samples/* 覆盖 2.2.0 新增的检测能力：不可见字符走私、解码后执行、代理运行时篡改、供应链安装钩子。它们都期望 DO_NOT_INSTALL。",
+    "2.2.0 的反规避层（engine/scanner_core/derived_views.py）会对每个文件再跑一遍归一化视图（去不可见字符 + NFKC 折叠 + 同形字折回）与迭代解码视图（base64/hex，最多 3 层）。sample-obfuscated-skill 的期望值因此从 25 降到 8：载荷里的 `curl | sh` 原先完全不可见，现在解码后被检出。",
+    "覆盖类发现（scan_coverage_incomplete / scan_rules_failed_to_compile / scan_external_tools_missing）固定为 info 级，不参与打分：它们是关于「这次检查」的陈述，不是关于「这个技能」的陈述。用 low 的初版会让没装 gitleaks 的机器上每个技能的上限都变成 95 分，「100 分 = 没发现问题」当场失效。",
+    "sample-evasion-skill 是反规避层的核心回归样本：文件里**没有**任何明文的危险串——一处用零宽字符切断了 `eval`，另一处把 `curl | sh` 放在 base64 里。两者都只在派生视图（normalized / b64_1）里命中。若未来改动让它回到 ALLOW，说明反规避层失效，扫描器重新变成「只看得见老实写法的载荷」。"
+  ],
+  "vectors": [
+    {
+      "name": "safe-skill-baseline",
+      "fixture": "tests/fixtures/legacy-samples/sample-safe-skill",
+      "expect": {
+        "security_score": 100,
+        "risk_classification": "LOW",
+        "deployment_recommendation": "ALLOW",
+        "hard_blocked": false
+      }
+    },
+    {
+      "name": "risky-skill-baseline",
+      "fixture": "tests/fixtures/legacy-samples/sample-risky-skill",
+      "expect": {
+        "security_score": 0,
+        "risk_classification": "CRITICAL",
+        "deployment_recommendation": "DO_NOT_INSTALL",
+        "hard_blocked": true
+      }
+    },
+    {
+      "name": "defensive-skill-not-false-blocked",
+      "fixture": "tests/fixtures/context-samples/sample-defensive-skill",
+      "expect": {
+        "security_score": 78,
+        "risk_classification": "LOW",
+        "deployment_recommendation": "ALLOW",
+        "hard_blocked": false
+      }
+    },
+    {
+      "name": "prose-only-safety-rules-not-punished",
+      "fixture": "tests/fixtures/v2-samples/sample-prose-only-skill",
+      "expect": {
+        "security_score": 78,
+        "risk_classification": "LOW",
+        "deployment_recommendation": "ALLOW",
+        "hard_blocked": false,
+        "max_severity": "low"
+      }
+    },
+    {
+      "name": "hidden-content-unicode-smuggling",
+      "fixture": "tests/fixtures/v2-samples/sample-hidden-content-skill",
+      "expect": {
+        "security_score": 25,
+        "risk_classification": "CRITICAL",
+        "deployment_recommendation": "DO_NOT_INSTALL",
+        "hard_blocked": false,
+        "must_include_rules": [
+          "unicode_tag_smuggling"
+        ]
+      }
+    },
+    {
+      "name": "obfuscation-decode-then-execute",
+      "fixture": "tests/fixtures/v2-samples/sample-obfuscated-skill",
+      "expect": {
+        "security_score": 8,
+        "risk_classification": "CRITICAL",
+        "deployment_recommendation": "DO_NOT_INSTALL",
+        "hard_blocked": false,
+        "must_include_rules": [
+          "decode_then_execute",
+          "curl_pipe_shell"
+        ]
+      }
+    },
+    {
+      "name": "agentic-runtime-tampering",
+      "fixture": "tests/fixtures/v2-samples/sample-agentic-skill",
+      "expect": {
+        "security_score": 12,
+        "risk_classification": "CRITICAL",
+        "deployment_recommendation": "DO_NOT_INSTALL",
+        "hard_blocked": false,
+        "must_include_rules": [
+          "agent_config_write",
+          "dangerous_agent_flag"
+        ]
+      }
+    },
+    {
+      "name": "supply-chain-install-hook",
+      "fixture": "tests/fixtures/v2-samples/sample-supply-chain-skill",
+      "expect": {
+        "security_score": 19,
+        "risk_classification": "CRITICAL",
+        "deployment_recommendation": "DO_NOT_INSTALL",
+        "hard_blocked": false,
+        "must_include_rules": [
+          "install_hook",
+          "typosquat_suspected"
+        ]
+      }
+    },
+    {
+      "name": "evasion-zero-width-and-encoded-payload",
+      "fixture": "tests/fixtures/v2-samples/sample-evasion-skill",
+      "expect": {
+        "security_score": 5,
+        "risk_classification": "CRITICAL",
+        "deployment_recommendation": "DO_NOT_INSTALL",
+        "hard_blocked": false,
+        "must_include_rules": [
+          "python_eval_exec",
+          "curl_pipe_shell"
+        ]
+      }
+    }
+  ]
+}

@@ -127,7 +127,7 @@ describe('Recall personal profile projection', () => {
 
     const fields = await templates.listFieldsByRef(UID, templates.buildContentRef(row.group_id, '学习背景'));
     const education = fields.fields?.find((field) => field.name === '教育阶段');
-    expect(education?.values).toEqual([{ value: assets[0].statement, source: '智能' }]);
+    expect(education?.values).toEqual([{ value: assets[0].statement, source: '智能', recallAssetId: assets[0].id }]);
     const file = templates.readTemplateFileText(UID, 'student');
     expect(file).not.toContain(assets[1].statement);
     expect(file).not.toContain(assets[2].statement);
@@ -333,8 +333,67 @@ describe('Recall personal profile projection', () => {
     expect(routeAsset).not.toHaveBeenCalled();
     const fields = await templates.listFieldsByRef(UID, templates.buildContentRef(row.group_id, '学习背景'));
     expect(fields.fields?.find((field) => field.name === '专业与学习方向')?.values).toEqual([
-      { value: personal.statement, source: '智能' },
+      { value: personal.statement, source: '智能', recallAssetId: personal.id },
     ]);
+  });
+
+  it('keeps asset-owned role-template values read-only through edit, value-delete, and field-delete APIs', async () => {
+    const { templates, row } = await installStudentTemplate();
+    const ref = templates.buildContentRef(row.group_id, '学习背景');
+    const personal = asset('aa-personal-protected-projection', 'personal', '我是一名程序员，有十年经验。');
+
+    expect((await templates.appendExistingTemplateFieldValueToRef(
+      UID, ref, '专业与学习方向', personal.statement, '智能', undefined, personal.id,
+    )).ok).toBe(true);
+
+    expect(await templates.setFieldValueToRef(
+      UID, ref, '专业与学习方向', personal.statement, '不应覆盖资产来源',
+    )).toEqual({ ok: false, error: 'asset_projection_read_only' });
+    expect(await templates.removeFieldValueToRef(
+      UID, ref, '专业与学习方向', personal.statement,
+    )).toEqual({ ok: false, error: 'asset_projection_read_only' });
+    expect(await templates.removeFieldToRef(
+      UID, ref, '专业与学习方向',
+    )).toEqual({ ok: false, error: 'asset_projection_read_only' });
+
+    const fields = await templates.listFieldsByRef(UID, ref);
+    expect(fields.fields?.find((field) => field.name === '专业与学习方向')?.values).toEqual([
+      { value: personal.statement, source: '智能', recallAssetId: personal.id },
+    ]);
+  });
+
+  it('protects asset projections in raw template saves while allowing manual template edits', async () => {
+    const { templates, row } = await installStudentTemplate();
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const ref = templates.buildContentRef(row.group_id, '学习背景');
+    const personal = asset('aa-personal-raw-projection', 'personal', '我是一名程序员，有十年经验。');
+    await templates.appendExistingTemplateFieldValueToRef(
+      UID, ref, '专业与学习方向', personal.statement, '智能', undefined, personal.id,
+    );
+    await templates.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+
+    const before = templates.readTemplateFileText(UID, 'student');
+    const projectionLine = `- ${personal.statement} [智能] @asset:${personal.id}`;
+    const tampered = before.replace(`${projectionLine}\n`, '');
+    expect(tampered).not.toBe(before);
+    expect(await groups.writeGroupContent(UID, row.group_id, tampered)).toEqual({
+      ok: false, error: 'asset_projection_read_only',
+    });
+    expect(await groups.writeGroupContent(
+      UID, row.group_id, before.replace('# 学生（模板）', '# 另一个模板（模板）'),
+    )).toEqual({ ok: false, error: 'template_metadata_read_only' });
+    expect(templates.readTemplateFileText(UID, 'student')).toBe(before);
+
+    const manualEdit = before.replace('- 本科 [手动]', '- 硕士 [手动]');
+    expect(manualEdit).not.toBe(before);
+    expect((await groups.writeGroupContent(UID, row.group_id, manualEdit)).ok).toBe(true);
+    expect(templates.readTemplateFileText(UID, 'student')).toContain(projectionLine);
+    expect((await templates.listFieldsByRef(UID, ref)).fields?.find((field) => field.name === '教育阶段')?.values)
+      .toEqual([{ value: '硕士', source: '手动' }]);
+
+    expect(await templates.appendFieldValueToRef(
+      UID, row.group_id, '专业与学习方向', '不应写入', '手动',
+    )).toEqual({ ok: false, error: 'template_section_required' });
   });
 
   it('rejects an explicit target that is not a valid PO field ref', async () => {
@@ -390,7 +449,7 @@ describe('Recall personal profile projection', () => {
     const fields = await templates.listFieldsByRef(UID, ref);
     expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
       { value: '本科', source: '手动' },
-      { value: '硕士', source: '智能' },
+      { value: '硕士', source: '智能', recallAssetId: personal.id },
     ]);
   });
 
@@ -475,7 +534,7 @@ describe('Recall personal profile projection', () => {
     expect(templates.readTemplateFileText(UID, 'student')).not.toContain(personal.statement);
   });
 
-  it('does not append a second profile value when an applied asset changes version or statement', async () => {
+  it('updates the tagged projection in place when the canonical asset text changes', async () => {
     const { templates, row } = await installStudentTemplate();
     const sync = await loadSync();
     const initial = asset('aa-personal-versioned', 'personal', '本科阶段。');
@@ -507,16 +566,41 @@ describe('Recall personal profile projection', () => {
     });
 
     expect(first).toMatchObject({ written: 1, failed: [] });
-    expect(second).toMatchObject({ eligible: 1, written: 0, skipped: 1, failed: [] });
+    expect(second).toMatchObject({ eligible: 1, written: 1, skipped: 0, failed: [] });
     expect(routeAsset).toHaveBeenCalledTimes(1);
     const fields = await templates.listFieldsByRef(
       UID,
       templates.buildContentRef(row.group_id, '学习背景'),
     );
     expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
-      { value: initial.statement, source: '智能' },
+      { value: changed.statement, source: '智能', recallAssetId: initial.id },
     ]);
-    expect(templates.readTemplateFileText(UID, 'student')).not.toContain(changed.statement);
+    expect(templates.readTemplateFileText(UID, 'student')).toContain(changed.statement);
+    expect(templates.readTemplateFileText(UID, 'student')).not.toContain(initial.statement);
+  });
+
+  it('removes only values owned by a paused asset and keeps independent ontology values', async () => {
+    const { templates, row } = await installStudentTemplate();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    const sync = await loadSync();
+    const fieldRef = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '教育阶段'))!;
+    const fieldFileRef = templates.buildContentRef(row.group_id, '学习背景');
+    await templates.appendFieldValueToRef(UID, fieldFileRef, '教育阶段', '本科', '手动');
+    const assetRow = asset('aa-personal-paused-projection', 'personal', '暂停后应撤走这条资产投影。');
+
+    const projected = await sync.syncPersonalProfileFromRecallAssets(
+      UID,
+      { listAssets: async () => [assetRow], routeAsset: async () => ({ action: 'flow' }) },
+      { assetId: assetRow.id, target: { fieldRef } },
+    );
+    expect(projected).toMatchObject({ written: 1, failed: [] });
+
+    const retired = await sync.removePersonalProfileProjectionForAsset(UID, assetRow.id);
+    expect(retired).toMatchObject({ ok: true, removed: 1 });
+    const fields = await templates.listFieldsByRef(UID, fieldFileRef);
+    expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
+      { value: '本科', source: '手动' },
+    ]);
   });
 
   it('caches a stable no-match decision for the same asset and template catalog', async () => {
@@ -581,7 +665,7 @@ describe('Recall personal profile projection', () => {
       templates.buildContentRef(row.group_id, '学习背景'),
     );
     expect(fields.fields?.find((field) => field.name === '专业与学习方向')?.values).toEqual([
-      { value: personal.statement, source: '智能' },
+      { value: personal.statement, source: '智能', recallAssetId: personal.id },
     ]);
   });
 
@@ -627,7 +711,7 @@ describe('Recall personal profile projection', () => {
       templates.buildContentRef(row.group_id, '学习背景'),
     );
     expect(fields.fields?.find((field) => field.name === '专业与学习方向')?.values).toEqual([
-      { value: healthy.statement, source: '智能' },
+      { value: healthy.statement, source: '智能', recallAssetId: healthy.id },
     ]);
   });
 });
@@ -641,6 +725,7 @@ describe('personal profile projection is driven from the main process', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '我偏好先看结论，再看实现细节。',
+      summary: '先看结论的偏好',
       value: '后续回答应优先给出明确结论。',
       suggestedType: 'personal',
       suggestedScope: 'personal',
@@ -671,6 +756,7 @@ describe('personal profile projection is driven from the main process', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '我长期偏好先给整体结构，再补细节。',
+      summary: '结构优先的偏好',
       value: '后续任务可以直接按结构优先的方式组织输出。',
       suggestedType: 'personal',
       suggestedScope: 'personal',
@@ -700,6 +786,7 @@ describe('personal profile projection is driven from the main process', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '正式评审必须先讲产品模型，再谈实现细节。',
+      summary: '评审次序纪律',
       value: '避免评审跑偏到实现细节上。',
       suggestedType: 'rule',
       suggestedScope: 'review',
@@ -732,6 +819,7 @@ describe('personal profile projection is driven from the main process', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '我长期从事程序开发。',
+      summary: '程序开发背景',
       value: '后续可按技术工作者的背景理解我的需求。',
       suggestedType: 'personal',
       suggestedScope: 'personal',

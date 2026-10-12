@@ -113,7 +113,7 @@ describe('session_import › transcript-normalize', () => {
 });
 
 describe('session_import › extractor', () => {
-  it('parses strict JSON from a single pass (four-type candidates with full fields)', async () => {
+  it('parses strict JSON from a single pass with full candidate fields', async () => {
     __nextChat = () => ({
       ok: true,
       text: JSON.stringify({
@@ -223,7 +223,7 @@ describe('session_import › extractor', () => {
 });
 
 describe('session_import › asset-router (cognitions → Recall candidate pool)', () => {
-  it('routes four-type candidates with the full field set to matching suggestedType', async () => {
+  it('routes five-type candidates with the full field set to matching suggestedType', async () => {
     const { routeCognitions } = await import('../../../src/main/features/session_import/asset-router');
     const recall = await import('../../../src/main/features/recall/candidate-service');
 
@@ -231,6 +231,7 @@ describe('session_import › asset-router (cognitions → Recall candidate pool)
     const cid = 'imp-claude-abc123';
     const counts = await routeCognitions(TEST_UID, 'claude', 'sess-1', cid, [
       { text: '偏好 TypeScript', suggestedType: 'personal' },
+      { text: '项目发布日固定在周四', suggestedType: 'fact' },
       {
         text: '提交前必须过 lint',
         note: '用户强调过两次',
@@ -243,11 +244,12 @@ describe('session_import › asset-router (cognitions → Recall candidate pool)
       { text: 'PR 描述用三段式', suggestedType: 'template' },
       { text: '支付回调用重试队列', suggestedType: 'skill_method' },
     ]);
-    expect(counts).toEqual({ personal: 1, rule: 1, template: 1, skill_method: 1 });
+    expect(counts).toEqual({ personal: 1, fact: 1, rule: 1, template: 1, skill_method: 1 });
 
     const candidates = await recall.listRecallCandidates(TEST_UID);
     const byType = (t: string) => candidates.filter((c: any) => c.suggestedType === t);
     expect(byType('personal')[0].judgment).toBe('偏好 TypeScript');
+    expect(byType('fact')[0].judgment).toBe('项目发布日固定在周四');
     expect(byType('rule')[0].judgment).toBe('提交前必须过 lint');
     expect(byType('rule')[0].summary).toBe('用户强调过两次');
     expect(byType('rule')[0].value).toBe('减少 CI 失败返工');
@@ -406,7 +408,7 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
     const res = await importClaudeSession({ userId: TEST_UID, filePath });
     expect(res.ok).toBe(true);
     expect(res.extractionPending).toBe(true);
-    expect(res.cognitions).toEqual({ personal: 0, rule: 0, template: 0, skill_method: 0 });
+    expect(res.cognitions).toEqual({ personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 });
 
     // Conversation exists immediately, seeded with the placeholder banner.
     const msgs = await chats.getMessages(TEST_UID, res.conversationId!);

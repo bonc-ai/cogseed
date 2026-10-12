@@ -137,7 +137,11 @@ export async function recordTeachingSignalAfterMemoryWrite(
   const memoryRef = input.memoryRef || teachingMemoryRef(scope, memoryContent);
   requireSafeId(memoryRef, 'memory ref');
   const id = teachingSignalId({ conversationId, messageId, memoryContent, intent });
-  const summary = memoryContent.length <= 240 ? memoryContent : `${memoryContent.slice(0, 239)}…`;
+  // 标题与会话整理线统一（2026-09-29 子安拍板「两条线统一」）：短标题用
+  // makeDisplayTitle（正文首句、≤60 字，与当场记/旧记忆迁移线同款），不再
+  // 拿正文前 239 字截断当标题——那会让待我处理里的教学候选顶着半行正文。
+  const { makeDisplayTitle } = await import('./statement-fusion');
+  const summary = makeDisplayTitle(memoryContent) || `${memoryContent.slice(0, 239)}…`;
 
   const candidate = await saveRecallCandidate(userId, {
     judgment: memoryContent,

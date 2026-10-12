@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 
-const [workspaceRoot, userId, executionId, childId, readyFile, startFile, resultFile, releaseFile] = process.argv.slice(2);
+const [workspaceRoot, userId, executionId, childId, readyFile, startFile, resultFile, releaseFile, delayMs] = process.argv.slice(2);
 process.env.COGSEED_WORKSPACE_ROOT = workspaceRoot;
 
 async function exists(file: string): Promise<boolean> {
@@ -14,6 +14,7 @@ async function waitFor(file: string): Promise<void> {
 async function main(): Promise<void> {
   await fs.appendFile(readyFile, `${childId}\n`, 'utf8');
   await waitFor(startFile);
+  await new Promise((resolve) => setTimeout(resolve, Number(delayMs ?? 0)));
   const { acquireCogSeedResultDeliveryLease } = await import(
     '../../../../../src/main/features/cogseed_backend/result-delivery-lease'
   );

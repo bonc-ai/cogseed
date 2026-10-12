@@ -81,12 +81,13 @@ describe('分类不合格的候选不得作为普通可确认待办', () => {
       .toContain('personal_is_project_fact');
   });
 
-  it('合格候选仍然正常进入 candidate_pending_review', () => {
+  it('合格候选不再进治理清单（candidate_pending_review 停产，2026-09-29 一物一链）', () => {
+    // 唯一确认入口=候选卡/详情的完整三选一；治理清单只收系统自查类。
     const items = buildCognitionInbox({
       assets: [], candidates: [inboxCandidate('c-good', DURABLE_PREFERENCE)],
       unavailableSourceIds: new Set(), latestDiffs: new Map(),
     } as never);
-    expect(items.map((entry) => entry.kind)).toEqual(['candidate_pending_review']);
+    expect(items).toEqual([]);
   });
 
   it('内容字段缺失时不收紧——只带状态与证据的旧调用方仍然可操作', () => {

@@ -39,6 +39,7 @@ import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
 import {
   hubPinIdentity, isHubManagedContent, resolveHubPinnedTree,
 } from '../marketplace/version-store';
+import { readDisabledSets } from '../component_enabled';
 import { isContentDisabled } from '../marketplace/installed-version';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
 
@@ -123,7 +124,9 @@ export interface AdmitPlannedCogSeedTaskInput extends CreateCogSeedTaskInput {
  * 重新进入 allowlist，用户原有的启停选择保持原样——不是「一律启用」（FR-044）。
  */
 function withoutDisabledContent(userId: string, skillIds: string[]): string[] {
+  const userDisabled = readDisabledSets(userId).skills;
   return skillIds.filter((skillId) => {
+    if (userDisabled.has(skillId)) return false;
     if (!isHubManagedContent(userId, skillId)) return true;
     return !isContentDisabled(userId, skillId);
   });

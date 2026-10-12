@@ -250,19 +250,18 @@ describe('add-field migration › 崩溃自愈（文件已 v2、台账仍 v1）'
     const migrated = t.readTemplateFileText(UID, 'probe');
 
     // 模拟「文件已写、台账未更新」就崩溃：把台账版本掰回 v1
-    const groups = t.readGroups(UID);
-    const row = groups.find((g) => g.template_id === 'probe')!;
-    row.template_version = '1.0.0';
-    const { writeGroups } = await import('../../../src/main/features/personal_ontology_groups');
-    writeGroups(UID, groups);
+    // v2：版本列在模板组上，用显式测试缝掰回 v1
+    expect((await t.setTemplateInstalledVersionForTest(UID, 'probe', '1.0.0')).ok).toBe(true);
     expect(await ledgerVersion()).toBe('1.0.0');
 
+    // v2：结构已在目标版、仅版本列被外部掰回 → 只抬版本列，内容零改动、
+    // 不留备份（v1 的「只修台账」等价语义）
     const res = await applyRoleTemplateMigration(UID, 'probe');
-    expect(res).toMatchObject({ ok: true, outcome: 'ledger_repaired', toVersion: '2.0.0' });
+    expect(res).toMatchObject({ ok: true, outcome: 'ledger_repaired', toVersion: '2.0.0', addedFields: 0, addedSections: 0 });
     expect(await ledgerVersion()).toBe('2.0.0');
-    // 文件一个字节都没被重写
+    // 内容一个字节都没被重写
     expect(t.readTemplateFileText(UID, 'probe')).toBe(migrated);
-    // 也没有为此再产生一份备份
+    // 没有为此再产生一份备份（首次真迁移的那份仍在）
     expect(t.listMigrationBackupDirs(UID).length).toBe(1);
   });
 
@@ -276,7 +275,8 @@ describe('add-field migration › 崩溃自愈（文件已 v2、台账仍 v1）'
 
     const { applyRoleTemplateMigration } = await loadMig();
     const res = await applyRoleTemplateMigration(UID, 'probe');
-    expect(res).toMatchObject({ ok: true, outcome: 'migrated', addedFields: 0, addedSections: 0 });
+    // 结构与值零变化，只前进版本号 → 只抬版本列
+    expect(res).toMatchObject({ ok: true, outcome: 'ledger_repaired', toVersion: '1.1.0', addedFields: 0, addedSections: 0 });
 
     const after = t.readTemplateFileText(UID, 'probe');
     expect(fileVersion(after)).toBe('1.1.0');
@@ -328,19 +328,16 @@ describe('add-field migration › 崩溃窗口 W1（备份已写、文件未写�
 });
 
 describe('add-field migration › 台账自愈是幂等的', () => {
-  it('reconcileInstalledRoleTemplates 修完台账后再跑一次是 noop', async () => {
+  it('reconcileInstalledRoleTemplates 修完版本列后再跑一次是 noop', async () => {
     const t = await loadFiles();
     expect((await t.installTemplateFile(UID, 'probe')).ok).toBe(true);
 
-    // 只把台账版本掰歪（文件仍是真实的 1.0.0）
-    const groups = t.readGroups(UID);
-    groups.find((g) => g.template_id === 'probe')!.template_version = '0.9.0';
-    const { writeGroups } = await import('../../../src/main/features/personal_ontology_groups');
-    writeGroups(UID, groups);
+    // 只把版本列掰歪（结构仍是真实的 1.0.0）
+    expect((await t.setTemplateInstalledVersionForTest(UID, 'probe', '0.9.0')).ok).toBe(true);
 
     const { reconcileInstalledRoleTemplates } = await loadMig();
     const first = await reconcileInstalledRoleTemplates(UID);
-    expect(first[0]).toMatchObject({ ok: true, outcome: 'ledger_repaired', toVersion: '1.0.0' });
+    expect(first[0]).toMatchObject({ ok: true, outcome: 'ledger_repaired', toVersion: '1.0.0', addedFields: 0 });
     expect(await ledgerVersion()).toBe('1.0.0');
 
     const second = await reconcileInstalledRoleTemplates(UID);

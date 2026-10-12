@@ -27,10 +27,12 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
     expect(conversationSource).toContain('window.mountMessageArtifacts(bubble, message.artifacts');
   });
 
-  it('wraps source references and teaching receipts in an evidence result block', () => {
+  it('wraps source references and save receipts (含并入的教学回执) in an evidence result block', () => {
     expect(conversationSource).toContain("t('chat.result_block.evidence')");
     expect(conversationSource).toContain('_compactResultBlockHtml');
-    expect(conversationSource).toContain('evidenceRefCount + evidenceReceiptCount');
+    // 证据块数量 = 引用数 + 保存回执数（2026-09-28 四病整改 7.0 修7 起教学
+    // 回执并入保存回执，不再单列计数）。
+    expect(conversationSource).toContain('count: evidenceRefCount + (Array.isArray(message.cognition_save_receipts) ? message.cognition_save_receipts.length : 0)');
     // 证据块默认展开（open: true），证据不能被折叠藏起来。
     expect(conversationSource).toContain('icon: \'link\',');
     const bubbleLine = conversationSource.split('\n').find((l) => l.includes('chat-bubble">') && l.includes('${evidenceHtml}'));

@@ -2,6 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
+
+// Ontology writes enqueue real indexing work. These deterministic contract
+// tests do not exercise the external embedding model, but still drain the
+// real queue and close its database before removing the workspace.
+vi.mock('../../../../src/main/features/kb_embed', () => ({
+  embedTexts: async (texts: string[]) => texts.map(() => Array(512).fill(0.1)),
+  closeEmbedder: vi.fn(),
+}));
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
@@ -13,10 +22,14 @@ beforeEach(() => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
 });
 
-afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    await drainMainRuntimeForTest('user-a');
+  } finally {
+    if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('deterministic RecallTaskContract', () => {

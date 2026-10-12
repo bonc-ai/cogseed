@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { createLogger } from '../../logger';
+import { prompts } from '../../prompts/loader';
 import { buildRunner } from '../../model/core-agent/runner';
 import { safeId } from '../../storage';
 import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../util/boot_init';
@@ -294,6 +295,11 @@ export interface RecallCaptureCandidatePromotion {
   decision: ReviewDecision;
   receipt: RecallAssetHandoffReceipt;
   profileProjection?: PersonalProfileSyncResult;
+  /** specs/015 US-702 原样透传的版本重检口径（本层不判定版本）：
+   *  `versionCheckSkipped`（复盘候选缺 targetVersionUsed，没能核对改进对象）
+   *  与显式重锚成功后的 `rebasedFrom`（原锚）。 */
+  versionCheckSkipped?: true;
+  rebasedFrom?: string;
 }
 
 export type RecallCaptureQueryStatus = RecallCaptureStatus | RecallCaptureDisplayStatus | 'completed';
@@ -824,40 +830,15 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method|fact","suggestedScope":"general|report|code|review|product","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
-    'Return at most 3 candidates.',
-    // scope 枚举约束（A 轨道）：自由文本 scope（"用户全局画像"）在自动投影
-    // 里永远匹配不上任务词，用户确认的资产会全部失配。general=跨对话/跨
-    // 空间的用户级事实；其余四个是任务类型词。空间限定交给 workspace-ref。
-    'suggestedScope must be one of the five controlled terms: "general" (applies across all conversations and spaces — identity, durable preferences), or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes like "用户全局画像" — use "general" instead.',
-    // summary 是候选在界面上的名字（2026-09-16）：渲染层以它为卡片标题，模型
-    // 必须给出"像名字"的短语——完整句子或 judgment 前缀会让列表不可读。
-    'summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation (e.g. "回复保持简洁", "接口变更须同步文档"). Never write a full sentence, a question, or a prefix copied from judgment.',
+    'Return at most 3 candidates under the top-level candidates array. When no durable candidate is supported, return an empty array and a short reason.',
+    'Every candidate must cite at least one user message label from the supplied run. Greetings, status checks, and failed one-off work are not candidates.',
     // 版本组（2026-09-16）：update 候选必须基于现有资产的在用版融合生成——
     // 输入里的 existingAssets 列表带当前内容；无融合的重写会让新版丢失
     // 旧版仍然有效的信息。
     'When the conversation corrects or refines an existing asset (see "existingAssets" in the input), emit that candidate with suggestedAction "update" and targetAssetId set to that asset id, and write judgment as a MERGED REVISION of the asset current statement plus the new information — keep still-valid content from the current version, do not rewrite from scratch. If your revision would drop key content of the current version, emit it as a separate "create" candidate instead.',
-    // 空返回也要说明白为什么。没有这句，实机上「这次没抽出来」在系统里没有
-    // 任何解释，用户无法判断是抽对了还是抽漏了。
-    'When nothing is durable enough, return {"candidates":[],"reason":"one short sentence, in the language of the conversation, saying what was missing"}.',
-    // 四类定义与硬边界（PRD 3.1/3.2/3.3）。缺了这段，模型只能靠四个英文枚举
-    // 词自行猜测，项目事实会被写成 personal、原文件会被写成 template。
-    'suggestedType must answer one of four questions, and each has contents that are explicitly excluded:',
-    '- personal: "What is durably true about this user?" Identity, role, long-term preference, stable relationship, long-term environment, boundary. EXCLUDED: current task progress, the current sprint or milestone, a meeting or schedule, a temporary contact relationship, any project fact. Those stay with the project, not with the person.',
-    '- fact: "Is this a durable fact about a project or environment?" A stable repository, tool, organisation, workflow, or long-lived environment statement that future tasks can rely on. EXCLUDED: transient task state, current progress, a one-off failure, schedules, and facts likely to change soon.',
-    '- rule: "Under what condition should which judgment or behaviour hold?" A complete rule has a condition, a principle, and a boundary. EXCLUDED: a bare preference with no condition ("likes concise"), and one-off instructions for this task only.',
-    'For a rule candidate you MUST also return applicableWhen and forbiddenWhen: short concrete phrases for when it applies and where it must not be used. A rule without both cannot become a formal asset. Do not invent a boundary the messages do not support — drop the candidate instead.',
-    '- template: "Is there a structure that can be applied again next time?" Document skeletons, checklists, section structures, reusable fragments, output schemas. EXCLUDED: the source file itself. A PRD.docx stays a source file; only the reusable structure extracted from it can be a template.',
-    '- skill_method: "Is there an executable, checkable method here?" It must be able to state a trigger, inputs, an ordered action plan, outputs, and how the result is validated. EXCLUDED: capability claims such as "I am good at writing PRDs", and single one-step actions.',
-    'When the content does not satisfy the type it would need, drop it rather than forcing it into the closest type.',
-    'judgment must BE the reusable content itself, never a verdict about the candidate. "Useful and reusable" or "valuable, shows what the user expects" are judgements about your own extraction, not knowledge — drop those instead of emitting them.',
-    'Never emit the same judgment under two different suggestedType values. Pick the one type it actually satisfies, or drop it.',
-    'Only extract reusable preferences, constraints, decisions, templates, methods, or durable facts supported by the supplied messages.',
-    'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
-    'Every candidate must cite at least one user message. Short acknowledgements, greetings, status checks, and failed work are not candidates.',
-    'Write candidate text in the same language as the conversation.',
-    'Do not invent facts. Every candidate must cite at least one supplied message label.',
-  ].join('\n');
+    'Only extract reusable knowledge supported by the supplied messages. Never invent facts or duplicate one judgment under multiple types.',
+    prompts.load('recall_candidate_contract'),
+  ].join('\n\n');
 }
 
 /** 版本组（2026-09-16）：提炼时附用户现有资产清单（在用版内容），供模型
@@ -935,18 +916,7 @@ async function extractCaptureViaCli(
   if (!available.length) return null;
   const chosen = available.find((e) => e.type === 'claude') ?? available[0];
   const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView, await existingAssetsForExtraction(userId));
-  const prompt =
-    `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
-    `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
-    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method|fact","suggestedScope":"general|report|code|review|product","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
-    `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
-    `suggestedScope must be one of the five controlled terms: "general" (across all conversations and spaces — identity, durable preferences) or a task-type term "report" / "code" / "review" / "product". Never emit free-text scopes.\n` +
-    `summary is the display name of the candidate: a noun-phrase title of at most 16 characters, in the language of the conversation. Never a full sentence or a prefix copied from judgment.\n` +
-    `When the conversation corrects an existing asset (see "existingAssets" in the input), emit it with suggestedAction "update", targetAssetId set, and judgment as a merged revision of that asset's current statement plus the new information.\n` +
-    `Only extract reusable preferences, constraints, decisions, templates, methods, or durable facts supported by the supplied messages.\n` +
-    `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
-    `Write candidate text in the same language as the conversation.\n\n` +
-    `## Conversation JSON\n${input}`;
+  const prompt = `${extractionSystemPrompt()}\n\nAnalyze the bounded conversation JSON below.\n\n## Conversation JSON\n${input}`;
 
   const controller = new AbortController();
   const relayAbort = (): void => controller.abort();
@@ -2139,7 +2109,7 @@ export async function runRecallCapture(
     for (const [index, candidate] of parsed.entries()) {
       const evidenceMessages = candidate.evidence.map((label) => byLabel.get(label)!);
       const quality = assessRecallCaptureCandidateQuality(candidate, evidenceMessages);
-      // 归类校验：提示词只能"要求"模型按四类定义分类，兜底靠这里。命中 PRD
+      // 归类校验：提示词要求模型按五类定义分类，运行时仍需兜底校验。命中 PRD
       // 明确排除的内容（项目事实当 personal、原文件当 template、能力自述当
       // skill_method）时降级为弱观察，不进 pending_review。
       const classification = assessRecallCandidateClassification(candidate);
@@ -2975,14 +2945,18 @@ export function startHistoricalRecallCapture(
 export async function promoteRecallCaptureCandidate(
   userId: string,
   candidateId: string,
-  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget; forceCreateSimilar?: boolean } = {},
+  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget; forceCreateSimilar?: boolean; confirmBaselineVersion?: string } = {},
 ): Promise<RecallCaptureCandidatePromotion> {
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
   const similarRetry = options.forceCreateSimilar === true ? { forceCreateSimilar: true } : {};
+  // 版本冲突后的显式重锚（specs/015 US-702，`contracts/ipc.md` §二）：本层只是
+  // 把调用方声明的基线转发下去，不做任何版本判定——判定在
+  // `updateAbilityAsset` 的锁内（唯一一处）。
+  const rebase = options.confirmBaselineVersion ? { confirmBaselineVersion: options.confirmBaselineVersion } : {};
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
     // 用户确认提升 → actor 必须为 user（promoteRecallCandidate 强制校验；此前漏传导致 IPC 提升一直失败）
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...rebase, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;
   }
@@ -3004,7 +2978,7 @@ export async function promoteRecallCaptureCandidate(
   });
 
   try {
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...similarRetry, ...rebase, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     await updateCapture(userId, capture.id, (current) => (
       current.status === 'writing' && current.writingCandidateId === candidateId

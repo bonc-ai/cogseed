@@ -199,6 +199,6 @@ export function esticogseedTokens(text: string): number {
  *  feeding to the summariser. Turns are separated by blank lines. */
 export function renderTranscript(turns: TranscriptTurn[]): string {
   return turns
-    .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${t.text}`)
+    .map((t, index) => `[m${index + 1}] ${t.role === 'user' ? 'User' : 'Assistant'}: ${t.text}`)
     .join('\n\n');
 }

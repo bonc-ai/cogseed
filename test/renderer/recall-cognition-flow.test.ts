@@ -19,7 +19,11 @@ const CAPS = (status: string, risk?: 'low' | 'medium' | 'high') =>
 
 const root = path.join(__dirname, '../..');
 const core = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/core.js'), 'utf-8');
-const views = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/views.js'), 'utf-8');
+// 2026-09-29 views.js 机械拆分：候选族/待我处理函数迁入 review-candidate.js 与
+// review-views.js，按加载顺序合并三源扫描（断言语义不变）。
+const views = ['views.js', 'review-candidate.js', 'review-views.js']
+  .map((file) => fs.readFileSync(path.join(root, `src/renderer/modules/cognition-assets/${file}`), 'utf-8'))
+  .join('\n');
 const app = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/app.js'), 'utf-8');
 const vocab = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/vocabulary.js'), 'utf-8');
 
@@ -28,13 +32,26 @@ function sliceBlock(source: string, start: number): string {
   const bodyStart = source.indexOf('{', start);
   let depth = 0;
   let quote = '';
+  let lineComment = false;
+  let blockComment = false;
   for (let i = bodyStart; i < source.length; i += 1) {
     const char = source[i];
+    const next = source[i + 1];
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') { blockComment = false; i += 1; }
+      continue;
+    }
     if (quote) {
       if (char === '\\') i += 1;
       else if (char === quote) quote = '';
       continue;
     }
+    if (char === '/' && next === '/') { lineComment = true; i += 1; continue; }
+    if (char === '/' && next === '*') { blockComment = true; i += 1; continue; }
     if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
     if (char === '{') depth += 1;
     else if (char === '}' && --depth === 0) return source.slice(start, i + 1);
@@ -51,28 +68,47 @@ function fnBlock(marker: string): string {
 
 describe('cognition-assets snapshot and routing', () => {
   it('loads the five snapshot channels in parallel with soft fallbacks', () => {
-    // 五个读口并行拉取，全部走 api.soft 容错——单个失败不拖垮整页。
+    // 五个读口并行拉取——四个走 api.soft 容错；候选清单例外（2026-09-29 A5）：
+    // 读失败进显式错误态（api.call+catch 置 store.candidatesError），不再把
+    // 「没读到」软降级成空数组伪装成「没有要你决定的」。
     for (const channel of [
-      'recall.assets.list', 'recall.candidates.list', 'recall.captures.list',
+      'recall.assets.list', 'recall.captures.list',
       'recall.captures.settings.get', 'recall.sources.list',
     ]) expect(core).toContain(`api.soft('${channel}'`);
+    expect(core).toContain("api.call('recall.candidates.list'");
+    expect(core).toContain('store.candidatesError');
     expect(core).toContain('Promise.all([');
     expect(core).toContain('async soft(channel, payload, fallback)');
     expect(core).toContain('return fallback;');
   });
 
   it('routes the five views through one router', () => {
-    // 2026-09-21 五页签迁移:认知树/个人本体是独立路由,默认落地认知树。
+    // specs/018 后端驱动重构:五页签=待我处理/我的认知/个人本体/系统活动/设置,
+    // 默认落地待我处理;认知树是 overview 的视图投影(assetView='tree')。
+    // 旧路由名(tree/organize/organize-settings/experiences)在 router.go 归一。
     expect(core).toContain("route: { name: 'tree'");
     expect(core).toContain("router.go({ name: 'review' })");
     expect(core).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree'");
-    expect(core).toContain("{ id: 'ontology', titleKey: 'cognition.tab_ontology'");
-    expect(core).toContain("{ id: 'organize', titleKey: 'cognition.tab_organize'");
-    // organize / tree 路由由 views.js 的 tab 分派驱动（route.name === 'organize'）。
-    expect(views).toContain("route.name === 'organize'");
+    expect(core).toContain("{ id: 'review', titleKey: 'cognition.tab_review'");
+    expect(core).toContain("{ id: 'activity', titleKey: 'cognition.tab_activity'");
+    expect(core).toContain("{ id: 'settings', titleKey: 'cognition.tab_settings'");
+    // 旧名归一在入栈前完成(store 里恒为新名,onChange 钩子不做双名判断)。
+    expect(core).toContain("legacyName === 'organize'");
+    // activity / 树由 views.js 的分派驱动。
+    expect(views).toContain("route.name === 'activity'");
     expect(views).toContain("route.name === 'tree'");
     expect(core).toContain('store.backStack.push');
     expect(core).toContain('back()');
+  });
+
+  it('returns to the previous page via the back stack, and page-level jumps push it', () => {
+    // 2026-09-29 返回跳错根因守护：go-back 优先弹 backStack（router.back()），
+    // 且进入整理报告页必须入栈——此前 open-cleanup-report 带 replace:true，
+    // 来源页（系统活动）没进栈，「← 返回」弹到更早逛过的历史页（如待我处理）。
+    // 就地状态翻转（编辑态/弹层开合）才允许 replace，页面切换不允许。
+    expect(app).toContain('router.back()');
+    expect(app).toContain("case 'open-cleanup': router.go({ name: 'cleanup', cleanupReportId: '' });");
+    expect(app).toContain("case 'open-cleanup-report': router.go({ name: 'cleanup', cleanupReportId: String(el.dataset.report || '') });");
   });
 
   it('lands on the cognition tree without auto-redirecting when the inbox is empty', () => {
@@ -94,7 +130,7 @@ describe('candidate decisions', () => {
     expect(adopt).toContain("'recall.candidates.update'");
     expect(adopt).toContain("'recall.candidates.promote'");
     expect(adopt).toContain("alertUser(T('cognition.candidate_scope_required'");
-    expect(adopt).toContain("router.go({ name: 'overview', assetId: result.assetId })");
+    expect(adopt).toContain("router.go({ name: 'overview', assetId: promotedAssetId })");
     expect(adopt).toContain('await NS.reload()');
   });
 
@@ -253,12 +289,15 @@ describe('asset governance actions', () => {
   it('confirms destructive asset actions before sending', () => {
     expect(core).toContain("T('cognition.asset_delete_confirm'");
     expect(core).toContain("T('cognition.asset_purge_confirm'");
-    expect(core).toContain("T('cognition.asset_revoke_confirm'");
     expect(core).toContain('confirmUser(dangerCopy[action], true)');
+    // 「撤回使用」已随界面按钮删除（审计 R3，2026-09-28）：revoke 通道映射
+    // 与确认文案一并删；audit_revoked 标签与 revoked 过滤逻辑保留（历史展示）。
+    expect(core).not.toContain("'recall.assets.revoke'");
+    expect(core).not.toContain("T('cognition.asset_revoke_confirm'");
   });
 });
 
-describe('app boot and polling', () => {
+describe('app boot and change notifications', () => {
   it('mounts into panel-recall > ca-root and renders on change', () => {
     expect(app).toContain("getElementById('ca-root')");
     // 2026-09-21 Phase 10:订阅体是带焦点保持的渲染包装(内部调 NS.render()),
@@ -268,8 +307,10 @@ describe('app boot and polling', () => {
     expect(app).toContain('NS.reload()');
   });
 
-  it('keeps the 4s capture poll bounded to the live page', () => {
-    expect(app).toContain('scheduleCapturePoll');
+  it('subscribes to changes and flushes deferred refreshes when the page becomes visible', () => {
+    expect(app).toContain('NS.setupChangeRail(panelVisible)');
+    expect(app).toContain('NS.flushPendingRefresh()');
     expect(app).toContain('panelVisible()');
+    expect(app).not.toContain('scheduleCapturePoll(');
   });
 });

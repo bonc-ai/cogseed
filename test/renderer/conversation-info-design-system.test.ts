@@ -11,7 +11,7 @@ describe('conversation info design-system integration', () => {
     expect(source).toContain("role: 'danger', size: 'sm', className: 'conversation-info-cogseed-action is-danger'");
     expect(source).toContain("className: 'conversation-info-file-menu-btn'");
     expect(source).toContain("className: 'conversation-info-agent-activity-refresh'");
-    expect(source).toContain("role: 'primary', size: 'sm', attrs: { 'data-candidate-promote': c.id }");
+    expect(source).toContain("role: 'primary', size: 'sm', attrs: { 'data-candidate-review': c.id }");
   });
 
   it('keeps only attachment, filter, disclosure, and tab composites native', () => {

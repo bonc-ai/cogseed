@@ -7,6 +7,14 @@
  *
  * Validation lives here because catalog entries don't know whether a token is still valid;
  * throw on missing pieces, the caller surfaces the error.
+ *
+ * Token ownership varies by template. A template that names `oauth_env_key` / `env_synthesizer`
+ * (stdio) or carries a Bearer header (streamable-http) is credential-forwarding: CogSeed holds
+ * the grant and hands the token to the child, so a missing token is a real error. A stdio
+ * template that names neither (see `auth_mode: 'local_cli'`) is credential-owning: the child
+ * resolves its own account (e.g. reading an OS keychain via its own CLI) and CogSeed must not
+ * require, hold, or forward any token. `grant` is therefore nullable, and the token assertion
+ * below fires only for the credential-forwarding shapes.
  */
 import { app } from 'electron';
 
@@ -65,24 +73,26 @@ const _SYNTHESIZERS: Record<string, EnvSynth> = {
   },
 };
 
-export function applyTemplate(entry: CatalogEntry, grant: OAuthGrant): Transport {
+export function applyTemplate(entry: CatalogEntry, grant: OAuthGrant | null): Transport {
   if (!entry.transport_template) {
     throw new Error('connector not installable (no transport_template)');
   }
   const tpl = entry.transport_template;
-  const token = grant.access_token;
-  if (!token) throw new Error('OAuth grant has no access_token');
+  const token = grant?.access_token || '';
   if (tpl.kind === 'stdio') {
     let env: Record<string, string> = {};
     if (tpl.env_synthesizer) {
+      if (!token) throw new Error('OAuth grant has no access_token');
       const synth = _SYNTHESIZERS[tpl.env_synthesizer];
       if (!synth) throw new Error(`unknown env_synthesizer: ${tpl.env_synthesizer}`);
       env = { ...synth(token) };
     } else if (tpl.oauth_env_key) {
+      if (!token) throw new Error('OAuth grant has no access_token');
       env[tpl.oauth_env_key] = token;
-    } else {
-      throw new Error('OAuth stdio template needs either oauth_env_key or env_synthesizer');
     }
+    // No `else` throw: a stdio template that names neither forwarding key is credential-owning,
+    // not misconfigured. The child resolves its own account, so there is nothing to synthesize.
+
     // Electron-as-Node injection: templates pointing at our own bundled adapter scripts (e.g.
     // `${COGSEED_NODE}` + `${COGSEED_PC_DIR}/bin/gmail-mcp-server.cjs`) need `ELECTRON_RUN_AS_NODE=1`
     // in the child env so Electron boots as plain Node. Same pattern as `client.ts::
@@ -102,6 +112,7 @@ export function applyTemplate(entry: CatalogEntry, grant: OAuthGrant): Transport
     };
   }
   // streamable-http
+  if (!token) throw new Error('OAuth grant has no access_token');
   const headers: Record<string, string> = {};
   const headerName = tpl.oauth_header_key || 'Authorization';
   // Always send `Bearer` per RFC 6750 — `grant.token_type` is descriptive metadata from the

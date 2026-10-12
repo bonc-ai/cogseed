@@ -50,7 +50,7 @@ async function confirmedProjection(taskRunId: string) {
   const { candidates, refs, projection } = await modules();
   const candidate = await candidates.saveRecallCandidate('user-a', {
     judgment: 'Use confirmed evidence in task reviews.',
-    summary: 'Use confirmed evidence',
+    summary: 'Confirmed evidence habit',
     suggestedType: 'rule',
     ...RULE_BOUNDARY,
     suggestedScope: 'review',
@@ -210,7 +210,7 @@ describe('Recall terminal transfer proof handler', () => {
     // 另一条真实资产：本次运行真的注入了它，但它不在提交投影的冻结清单里。
     const other = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Live-loaded asset outside the committed projection.',
-      summary: 'Live-loaded asset',
+      summary: 'Asset loaded live',
       suggestedType: 'rule',
       suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: 'exec-run-receipt-first' }],
@@ -259,7 +259,7 @@ describe('Recall terminal transfer proof handler', () => {
     const { candidates } = await modules();
     const other = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Second asset injected in a later turn of the same run.',
-      summary: 'Second asset',
+      summary: 'Asset injected later',
       suggestedType: 'rule',
       suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: 'exec-run-union-receipts' }],

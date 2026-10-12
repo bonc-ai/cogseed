@@ -7,6 +7,252 @@
       "reason": "第二期通道收口（2026-08-24）：直连 cli 通道不再是默认执行路径，本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下会话连续性由 P3394 session 承担，网关侧的 PID 数据源与探活语义尚未补齐（见 docs/design 设计文档第 5 节）。2026-09-20 复核：恢复后会红，其余 3 条同类跳过恢复后均直接通过。",
       "since": "2026-08-24",
       "restore_when": "网关侧 PID 数据源与探活语义补齐后"
+    },
+    {
+      "file": "test/质检/probe-r1-candidate-concurrency.test.ts",
+      "title": "并发确认两条候选：池中复活一条（已写记忆的候选回到待确认）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-candidate-concurrency.test.ts",
+      "title": "并发确认 + 驳回：驳回可被并发确认的回写复活（用户以为已丢弃又出现）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-edit-injection-bypass.test.ts",
+      "title": "发现主体：updateAbilityAsset 编辑写入同一段文本零拦截、落盘成功（待议 P-r1-5，拍板前 skip）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住待议项现状实证，待产品拍板修复后反转/启用；待议编号见用例名。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-edit-injection-bypass.test.ts",
+      "title": "画像链渲染：statement 原文裸拼进 system prompt（无 escape/无结构包裹）（待议 P-r1-5，拍板前 skip）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住待议项现状实证，待产品拍板修复后反转/启用；待议编号见用例名。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-inject-version-mismatch.test.ts",
+      "title": "派发注入块标 head version 配 activeVersion 内容；目录行标 activeVersion——同一资产两个版本号",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-badjson-overwrite.test.ts",
+      "title": "磁盘 JSON 损坏后，下一次成功写入把旧文档静默替换（无坏档备份）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-path-traversal.test.ts",
+      "title": "组 id 含 ../ 时，渲染副本与写前快照都写出各自沙箱与 WS_ROOT 之外",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-restricted-kb-index.test.ts",
+      "title": "restricted 值原文写入 md 副本，且 search/kb 索引钩子被调用",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-writecontent-projection-bypass.test.ts",
+      "title": "writeGroupContent 能伪造 @asset: 投影值（正常 add 通道造不出来）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-writecontent-projection-bypass.test.ts",
+      "title": "writeGroupContent 能篡改投影值文本（assetId 保留）与删除投影值",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-writecontent-projection-bypass.test.ts",
+      "title": "restoreGroupSnapshot 能把投影值回滚成旧文本（旧投影复活，无守卫）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-po-writecontent-projection-bypass.test.ts",
+      "title": "附带观察：writeGroupContent 的值 id 保全逻辑是死代码（每次覆写 id 全换）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-purge-audit-residue.test.ts",
+      "title": "delete→purge 后审计行 before 摘要仍含正文前 60 字（对照组：主记录 statement 已清空）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-purge-tombstone-residue.test.ts",
+      "title": "purge 后 causalRule/tags/scope/learningProvenance 原样留在墓碑上（对照组：title/statement/familyName 已清）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r1-rename-family-revoked.test.ts",
+      "title": "revoked 成员被连带改 familyName + 刷新 updatedAt（对照组：deleted 成员被跳过）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-candidate-lostwrite.test.ts",
+      "title": "确认的 await 窗口内 addCandidate 写入的新候选被旧快照回写吞掉（静默丢失）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-po-firstpersist-nontransactional.test.ts",
+      "title": "firstPersist 时 writeJson 失败：台账已删，活组全体降格为回收站条目",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-po-migration-ghost-ids.test.ts",
+      "title": "两次只读 load 生成两套值 id；UI 持第一次 id 编辑必 not found；po-history 冻结的又是另一套",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-po-renderer-refresh-race.test.ts",
+      "title": "并发两次 refresh：慢的旧 po.snapshot 后到，覆盖新快照（stale overwrite）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-po-renderer-refresh-race.test.ts",
+      "title": "编辑器打开后一次后台刷新（change rail 语义）销毁编辑器并按服务端内容重开——未保存输入无 state 承载",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-purge-version-stream-revival.test.ts",
+      "title": "真并发：主记录 bump 落盘后 purge 插队，迟到的 appendVersion 复活版本流",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r2-review-decision-collision.test.ts",
+      "title": "targetRef 折叠同名 → B 的决定改写 A 的抑制状态",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-po-import-reserved-title.test.ts",
+      "title": "唯一组叫「字段区」时，导出再导入整组消失；跟在别组后则被前组吞并",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-po-unbounded-store.test.ts",
+      "title": "600 条 2000 字符值全部写入成功，文档超 cognition 字节上限口径仍照写",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-renderer-states.test.ts",
+      "title": "po.snapshot IPC reject：与错误对象路径殊途同归——真实错误丢失、TypeError 上屏",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-renderer-states.test.ts",
+      "title": "po.snapshot 返回错误对象：loadError 被下游 TypeError 替换上屏（错误态契约错位）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-renderer-states.test.ts",
+      "title": "locale 缺键兜底：t 返回 key 时 _t 回落硬编码中文 fallback（en 界面冒中文机制）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-trash-projection-revival.test.ts",
+      "title": "组删除→资产级联清（trash 不扫）→组恢复→投影值复活且只读锁死",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r3-trash-projection-revival.test.ts",
+      "title": "对照组：普通组活组的投影值同样不被级联清（P-r1-14 范围的运行时实证）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r5-merge-zombie-target.test.ts",
+      "title": "已归并源可再当 target：形成 m3→m1→m2 僵尸链，m2 永远收不到 m3 的内容（待议 P-r1-3，拍板前 skip）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住待议项现状实证，待产品拍板修复后反转/启用；待议编号见用例名。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r5-purge-earlyreturn-guard-bypass.test.ts",
+      "title": "带已应用 reviewDecisionId 的 purge：guard 被跳过、状态未变但版本流被清空",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-r5-purge-nonretryable-cascade.test.ts",
+      "title": "级联 IO 失败：墓碑已落盘、重试被 assertNotPurged 拒绝、版本流正文永久残留（待议 P-r1-1，拍板前 skip）",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住待议项现状实证，待产品拍板修复后反转/启用；待议编号见用例名。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/probe-sm1-purge-retry-blocked.test.ts",
+      "title": "墓碑已落、级联残留未清时：重试 purge 被 assertNotPurged 挡住，投影冻结副本无通道可清",
+      "reason": "认知资产质检循环（2026-09-30）红队探针：钉住未拍板缺陷的现状实证，拍板修复后反转启用。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-asset-lifecycle.test.ts",
+      "title": "deletedAt 在未来（时钟拨快 10 天）：保留期判定恒真——restore 成功",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-asset-lifecycle.test.ts",
+      "title": "archived 非终态：内容仍可改（与 deleted 口径刻意区分）——行为记录",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-po-boundary.test.ts",
+      "title": "asOf 未来年月 2099-12 被接受（1899-12 被拒）——时间锚无上界校验",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-po-boundary.test.ts",
+      "title": "控制字符/零宽字符原样写入单一事实源 JSON 与渲染副本（sanitize 只压换行制表）",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-po-boundary.test.ts",
+      "title": "删除幂等口径不一致：值/字段删不存在 id 静默 ok，流水删除报 entry not found",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-po-boundary.test.ts",
+      "title": "流水升格绕过同文本去重门：同字段同文本可产生两条值（poAddValue 会拒）",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r1-po-boundary.test.ts",
+      "title": "导入同一份导出两次：第二次零写入但 applied 计数照样虚高",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
+    },
+    {
+      "file": "test/质检/regression-r2-po-meta-sanitize.test.ts",
+      "title": "存量脏数据（末尾孤立代理）load 自愈；中间孤立代理不在自愈范围（修复注释口径）",
+      "reason": "行为记录型用例（现状锁定）：断言当前实际行为而非期望态，产品拍板后改为期望态断言。",
+      "since": "2026-09-30"
     }
   ]
 }

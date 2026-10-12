@@ -101,8 +101,13 @@ async function _getEntry(idxPath: string, kind: IndexKind): Promise<CacheEntry> 
   let entry = _cache.get(idxPath);
   if (!entry) {
     const idx = await loadIndex(idxPath, kind);
-    entry = { idx: idx as RuntimeIndex, dirty: false, kind };
-    _cache.set(idxPath, entry);
+    // Query reads do not hold the writer mutex. A concurrent load may have
+    // populated and mutated the cache while this disk read was pending.
+    entry = _cache.get(idxPath);
+    if (!entry) {
+      entry = { idx: idx as RuntimeIndex, dirty: false, kind };
+      _cache.set(idxPath, entry);
+    }
   }
   return entry;
 }

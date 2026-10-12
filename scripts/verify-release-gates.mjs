@@ -3,29 +3,14 @@ import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const WORKFLOW_JOBS = Object.freeze({
-  'ci.yml': Object.freeze({
-    required: Object.freeze(['verify', 'verify-windows']),
-    // The Windows lane fans out into four serial shards, one native/browser
-    // lane, and a parallel build lane; `verify-windows` is the aggregate that
-    // fails closed if any of them fails. Allow exactly this job graph and
-    // nothing else.
-    allowed: Object.freeze([
-      'verify',
-      'verify-windows',
-      'verify-windows-shard-1',
-      'verify-windows-shard-2',
-      'verify-windows-shard-3',
-      'verify-windows-shard-4',
-      'verify-windows-native',
-      'build-windows',
-    ]),
-  }),
-  'compliance.yml': Object.freeze({
-    required: Object.freeze(['compliance']),
-    allowed: Object.freeze(['compliance']),
-  }),
-});
+// Keep this exact graph aligned with public-ci.yml. A skipped lane, stale SHA,
+// PR-only result or successful older attempt never authorizes a release.
+export const PUBLIC_CI_JOBS = Object.freeze([
+  'compliance', 'verify-macos', 'verify-windows-package',
+  ...['linux-tests', 'macos-tests', 'windows-tests'].flatMap((job) =>
+    [1, 2, 3, 4].map((shard) => `${job} (${shard})`)),
+]);
+const WORKFLOW_JOBS = Object.freeze({ 'public-ci.yml': PUBLIC_CI_JOBS });
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const MAX_PAGES = 100;
 
@@ -139,8 +124,10 @@ function latestRun(runs, workflowName, peeledSha) {
     .map((run) => validateRun(run, workflowName))
     .filter((run) => (
       String(run.head_sha).toLowerCase() === peeledSha
-      && run.head_branch === 'cicd'
+      && run.head_branch === 'main'
       && run.event === 'push'
+      && (run.path === `.github/workflows/${workflowName}`
+        || run.path === `.github/workflows/${workflowName}@refs/heads/main`)
     ));
   if (exactRuns.length === 0) throw new Error(`No exact ${workflowName} push run for SHA ${peeledSha}`);
   return exactRuns.sort((left, right) => (
@@ -156,7 +143,7 @@ function verifyRunSuccess(run, workflowName) {
   }
 }
 
-function verifyJobs(jobs, requiredNames, allowedNames, workflowName, attempt) {
+function verifyJobs(jobs, requiredNames, workflowName, attempt) {
   const counts = new Map();
   for (const job of jobs) {
     const row = objectFrom(job, `${workflowName} job`);
@@ -170,11 +157,9 @@ function verifyJobs(jobs, requiredNames, allowedNames, workflowName, attempt) {
   for (const name of requiredNames) {
     const count = counts.get(name) ?? 0;
     if (count === 0) throw new Error(`Missing required ${workflowName} job: ${name}`);
+    if (count > 1) throw new Error(`Duplicate required ${workflowName} job: ${name}`);
   }
-  for (const [name, count] of counts) {
-    if (count > 1) throw new Error(`Duplicate ${workflowName} job: ${name}`);
-  }
-  const extras = [...counts.keys()].filter((name) => !allowedNames.includes(name));
+  const extras = [...counts.keys()].filter((name) => !requiredNames.includes(name));
   if (extras.length > 0) throw new Error(`Unexpected ${workflowName} jobs: ${extras.join(', ')}`);
   for (const job of jobs) {
     if (job.status !== 'completed' || job.conclusion !== 'success') {
@@ -189,29 +174,29 @@ export async function verifyReleaseGates({ env = process.env, fetchImpl = global
   const githubRef = requiredEnv(env, 'GITHUB_REF');
   const eventSha = assertSha(requiredEnv(env, 'GITHUB_SHA'), 'GITHUB_SHA');
   const token = requiredEnv(env, 'GITHUB_TOKEN');
-  if (!/^[^/]+\/[^/]+$/.test(repository)) throw new Error('GITHUB_REPOSITORY must be owner/repo');
+  if (repository !== 'bonc-ai/cogseed') throw new Error('Releases require the public repository bonc-ai/cogseed');
   if (!githubRef.startsWith('refs/tags/v')) throw new Error('GITHUB_REF must identify a v* release tag');
   const tagName = githubRef.slice('refs/tags/'.length);
   const api = createApiClient({ apiUrl, repository, token, fetchImpl });
   const peeledSha = await peelTag(api, tagName);
   if (peeledSha !== eventSha) throw new Error(`GITHUB_SHA must exactly match the peeled tag commit (${eventSha} != ${peeledSha})`);
-  const cicdRef = objectFrom((await api.get('/git/ref/heads/cicd')).object, 'cicd ref');
-  const cicdSha = assertSha(cicdRef.sha, 'origin/cicd tip');
-  if (peeledSha !== cicdSha) {
-    throw new Error(`Release tag commit must exactly match origin/cicd tip (${peeledSha} != ${cicdSha})`);
+  const mainRef = objectFrom((await api.get('/git/ref/heads/main')).object, 'main ref');
+  const mainSha = assertSha(mainRef.sha, 'origin/main tip');
+  if (peeledSha !== mainSha) {
+    throw new Error(`Release tag commit must exactly match origin/main tip (${peeledSha} != ${mainSha})`);
   }
 
   const workflows = {};
-  for (const [workflowName, jobSpec] of Object.entries(WORKFLOW_JOBS)) {
+  for (const [workflowName, requiredJobs] of Object.entries(WORKFLOW_JOBS)) {
     const runs = await api.getAll(`/actions/workflows/${workflowName}/runs`, 'workflow_runs', {
-      branch: 'cicd',
+      branch: 'main',
       event: 'push',
       head_sha: peeledSha,
     });
     const run = latestRun(runs, workflowName, peeledSha);
     verifyRunSuccess(run, workflowName);
     const jobs = await api.getAll(`/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
-    verifyJobs(jobs, jobSpec.required, jobSpec.allowed, workflowName, run.run_attempt);
+    verifyJobs(jobs, requiredJobs, workflowName, run.run_attempt);
     workflows[workflowName] = { runId: run.id, attempt: run.run_attempt };
   }
   return { peeledSha, workflows };
@@ -224,7 +209,7 @@ export async function verifyPublishTarget({ env = process.env, fetchImpl = globa
   const eventSha = assertSha(requiredEnv(env, 'GITHUB_SHA'), 'GITHUB_SHA');
   const expectedSha = assertSha(requiredEnv(env, 'EXPECTED_SHA'), 'EXPECTED_SHA');
   const token = requiredEnv(env, 'GITHUB_TOKEN');
-  if (!/^[^/]+\/[^/]+$/.test(repository)) throw new Error('GITHUB_REPOSITORY must be owner/repo');
+  if (repository !== 'bonc-ai/cogseed') throw new Error('Releases require the public repository bonc-ai/cogseed');
   if (!githubRef.startsWith('refs/tags/v')) throw new Error('GITHUB_REF must identify a v* release tag');
   const tagName = githubRef.slice('refs/tags/'.length);
   const api = createApiClient({ apiUrl, repository, token, fetchImpl });

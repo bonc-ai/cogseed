@@ -29,7 +29,7 @@ describe('recall projection chat messages', () => {
 
     const result = await messages.previewAndPostProjectionCard('user-a', { cid: 'cid-a', taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', taskText: 'OAuth review task' }, projectionPortMock);
 
-    expect(projectionMock.previewContextProjection).toHaveBeenCalledWith('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', taskText: 'OAuth review task' });
+    expect(projectionMock.previewContextProjection).toHaveBeenCalledWith('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', conversationId: 'cid-a', purpose: 'review', taskText: 'OAuth review task' });
     expect(cardMock.buildProjectionCard).toHaveBeenCalledWith('user-a', 'proj-preview');
     expect(enqueueMock).toHaveBeenCalledWith(expect.objectContaining({ cid: 'cid-a', card: expect.objectContaining({ projectionId: 'proj-preview' }) }));
     expect(result).toMatchObject({ ok: true, projection: { id: 'proj-preview' }, card: { projectionId: 'proj-preview' }, msg: { id: 'msg-a' } });

@@ -9,7 +9,11 @@ import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../au
 import * as skills from '../skills';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import type { RecallAbilityAssetRecord } from './candidate-service';
-import { createAutomaticContextProjection } from './context-projection';
+import { createAutomaticContextProjection, readContextProjection } from './context-projection';
+import {
+  filterRecallAssetsForAgentRead,
+  filterRecallAssetsForCommittedProjection,
+} from './prompt-injection';
 import { createSkillBinding, readSkillBinding, recordSkillBindingDecision } from './skill-binding-service';
 import { listSkillVersions } from '../skills/version-store';
 import { captureSkillTree, snapshotSkillFiles } from '../skills/snapshot-service';
@@ -697,6 +701,15 @@ function recallContextSnapshot(context: RecallSkillGenerationContext): RecallSki
   };
 }
 
+function recallSkillGenerationTaskText(asset: RecallAbilityAssetRecord): string {
+  return [
+    'Generate a reusable Skill from this approved Recall method.',
+    asset.title,
+    asset.statement,
+    `Scope: ${asset.scope}`,
+  ].join('\n');
+}
+
 async function buildSkillRecallContext(
   userId: string,
   primaryAsset: RecallAbilityAssetRecord,
@@ -706,12 +719,7 @@ async function buildSkillRecallContext(
     .update(`${primaryAsset.id}\n${activeAssets.map((asset) => `${asset.id}:${asset.version}`).sort().join('\n')}`)
     .digest('hex')
     .slice(0, 24);
-  const taskText = [
-    'Generate a reusable Skill from this approved Recall method.',
-    primaryAsset.title,
-    primaryAsset.statement,
-    `Scope: ${primaryAsset.scope}`,
-  ].join('\n');
+  const taskText = recallSkillGenerationTaskText(primaryAsset);
   let projection: Awaited<ReturnType<typeof createAutomaticContextProjection>>;
   try {
     projection = await createAutomaticContextProjection(userId, {
@@ -728,14 +736,34 @@ async function buildSkillRecallContext(
   const byId = new Map(activeAssets.map((asset) => [asset.id, asset]));
   byId.set(primaryAsset.id, primaryAsset);
   const orderedIds = [primaryAsset.id, ...(projection?.assetIds || [])];
-  const assets: RecallAbilityAssetRecord[] = [];
+  const selectedAssets: RecallAbilityAssetRecord[] = [];
   const seen = new Set<string>();
   for (const assetId of orderedIds) {
     const asset = byId.get(assetId);
-    if (!asset || seen.has(asset.id) || assets.length >= 6) continue;
+    if (!asset || seen.has(asset.id) || selectedAssets.length >= 6) continue;
     seen.add(asset.id);
-    assets.push(asset);
+    selectedAssets.push(asset);
   }
+  const projectionReadContext = {
+    purpose: taskText,
+    ...(projection?.workspaceId ? { workspaceId: projection.workspaceId } : {}),
+    taskText,
+  };
+  const readablePrimary = await filterRecallAssetsForCommittedProjection(
+    userId,
+    selectedAssets.filter((asset) => asset.id === primaryAsset.id),
+    projectionReadContext,
+  );
+  if (!readablePrimary.length) throw new Error('Recall skill source is not available under its current use policy');
+  const relatedAssets = await filterRecallAssetsForAgentRead(
+    userId,
+    selectedAssets.filter((asset) => asset.id !== primaryAsset.id),
+    projectionReadContext,
+  );
+  const readableById = new Map([...readablePrimary, ...relatedAssets].map((asset) => [asset.id, asset]));
+  const assets = selectedAssets
+    .map((asset) => readableById.get(asset.id))
+    .filter((asset): asset is RecallAbilityAssetRecord => Boolean(asset));
   const sourceRefs = recallContextSourceRefs(assets);
   if (!sourceRefs.length) throw new Error('Recall skill generation requires traceable source evidence');
   return {
@@ -760,6 +788,35 @@ async function validateSkillRecallContext(
         ? 'Recall skill asset changed; generate the skill draft again'
         : 'Recall context changed; generate the skill draft again');
     }
+  }
+  const primaryAsset = assets.find((asset) => asset.id === context.primaryAssetId);
+  if (!primaryAsset) throw new Error('Recall skill asset changed; generate the skill draft again');
+  const taskText = recallSkillGenerationTaskText(primaryAsset);
+  let projection: Awaited<ReturnType<typeof readContextProjection>> | null = null;
+  if (context.projectionId) {
+    try {
+      projection = await readContextProjection(userId, context.projectionId);
+    } catch {
+      throw new Error('Recall context changed; generate the skill draft again');
+    }
+  }
+  const runtimeContext = {
+    purpose: taskText,
+    ...(projection?.workspaceId ? { workspaceId: projection.workspaceId } : {}),
+    taskText,
+  };
+  const readablePrimary = await filterRecallAssetsForCommittedProjection(
+    userId,
+    [primaryAsset],
+    runtimeContext,
+  );
+  const readableRelated = await filterRecallAssetsForAgentRead(
+    userId,
+    assets.filter((asset) => asset.id !== primaryAsset.id),
+    runtimeContext,
+  );
+  if (!readablePrimary.length || readableRelated.length !== assets.length - 1) {
+    throw new Error('Recall context changed; generate the skill draft again');
   }
   const sourceRefs = recallContextSourceRefs(assets);
   const fingerprint = recallContextFingerprint(context.primaryAssetId, assets, sourceRefs);

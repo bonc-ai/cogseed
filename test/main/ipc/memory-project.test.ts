@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { readCognitionStore, seedConfirmedCognition } from '../../helpers/cognition-store-fixture';
 
 vi.mock('../../../src/main/model/client', () => ({
   async *streamChatWithModel() {
@@ -95,46 +96,37 @@ describe('ipc/memory space scope', () => {
 });
 
 describe('ipc/memory cognition binding', () => {
-  const evidence = {
-    kind: 'manual' as const,
-    summary: '用户确认这条认知来自可核验证据。',
-    sourceLabel: '人工证据',
-  };
 
   it('替换已确认的共享记忆后，在 IPC 返回前完成认知失效', async () => {
-    const cognition = await import('../../../src/main/features/cognition');
-    const candidate = await cognition.createCognitionAssetWithEvidence(UID, {
+    await seedConfirmedCognition(tmpDir, UID, {
+      id: 'cog_replace_binding',
       title: '替换联动',
       summary: '被替换的已确认记忆。',
-      evidence,
     });
-    await cognition.confirmCognitionAsset(UID, candidate.id);
-
-    expect(await call('memory.replace', {
+    const replaceResult = await call('memory.replace', {
       target: 'shared',
-      oldText: candidate.summary,
+      oldText: '被替换的已确认记忆。',
       content: '用户独立保存的新记忆。',
-    })).toMatchObject({ ok: true, entries: ['用户独立保存的新记忆。'] });
+    });
+    expect(replaceResult).toMatchObject({ ok: true, entries: ['用户独立保存的新记忆。'] });
 
-    const invalidated = await cognition.getCognitionAsset(UID, candidate.id);
-    expect(invalidated.reviewState).toBe('invalidated');
-    expect(invalidated.invalidation?.reason).toBe('replaced');
+    const invalidated = (await readCognitionStore(tmpDir, UID)).find((item) => item.id === 'cog_replace_binding');
+    expect(invalidated?.reviewState).toBe('invalidated');
+    expect(invalidated?.invalidation?.reason).toBe('replaced');
   });
 
   it('删除已确认的共享记忆后，在 IPC 返回前完成认知失效', async () => {
-    const cognition = await import('../../../src/main/features/cognition');
-    const candidate = await cognition.createCognitionAssetWithEvidence(UID, {
+    await seedConfirmedCognition(tmpDir, UID, {
+      id: 'cog_remove_binding',
       title: '删除联动',
       summary: '被删除的已确认记忆。',
-      evidence,
     });
-    await cognition.confirmCognitionAsset(UID, candidate.id);
 
-    expect(await call('memory.remove', { target: 'shared', oldText: candidate.summary }))
+    expect(await call('memory.remove', { target: 'shared', oldText: '被删除的已确认记忆。' }))
       .toMatchObject({ ok: true, entries: [] });
 
-    const invalidated = await cognition.getCognitionAsset(UID, candidate.id);
-    expect(invalidated.reviewState).toBe('invalidated');
-    expect(invalidated.invalidation?.reason).toBe('removed');
+    const invalidated = (await readCognitionStore(tmpDir, UID)).find((item) => item.id === 'cog_remove_binding');
+    expect(invalidated?.reviewState).toBe('invalidated');
+    expect(invalidated?.invalidation?.reason).toBe('removed');
   });
 });

@@ -290,8 +290,8 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       sessionSummary: '',
     });
 
-    // 第二部分：工作空间可用能力（关于我 1项 · 我的能力 1项）.
-    expect(out.text).toContain('工作空间可用能力：关于我 1项 · 我的能力 1项');
+    // 第二部分：工作空间可用能力（个人信息 1项 · 我的能力 1项）.
+    expect(out.text).toContain('工作空间可用能力：个人信息 1项 · 我的能力 1项');
     expect(out.text).toContain('只对目标任务生效');
     // 「查看依据」按钮由前端 welcome-carry 条渲染（依赖 carry 元数据）。
     expect(out.text).not.toContain('**查看依据**');

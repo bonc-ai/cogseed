@@ -137,6 +137,7 @@ export interface GroupMessage {
   recall_citations?: RecallMessageCitation[];
   /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
+  asset_change_approval_card?: { kind: 'asset_change_approval'; proposalId: string; assetId: string; assetTitle: string; baselineVersion: string; diff: { before: string; after: string; fields: string[] }; reason: string; actions: Array<'confirm' | 'defer' | 'reject'> };
   /** Plain `@token` list (raw text mentions). */
   mentions?: string[];
   /** 多 Agent 提交快照（PRD FR-016）：当次提交的会话成员、本条点名对象与按来源的
@@ -294,6 +295,17 @@ export interface GroupMessage {
     scope: 'personal' | 'project' | 'agent';
     status: 'active' | 'revoked';
     candidate_ids: string[];
+  }>;
+  /** Durable host-owned outcome of a cross-session cognition save.
+   * 2026-09-28 四病整改 7.0 修7：教学回执并入——taught-pending-review 是用户
+   * 教学（旧记忆 replace 第三层）产生的候选回执，与 model/client.ts 的
+   * CognitionSaveReceipt 同步扩枚举。上面的 teaching_receipts 字段仅作历史
+   * 数据容忍保留（新消息不再写入，渲染层也不再消费）。 */
+  cognition_save_receipts?: Array<{
+    target: 'asset' | 'candidate';
+    id: string;
+    summary: string;
+    outcome: 'created' | 'already-confirmed' | 'pending-review' | 'merged' | 'fused-update-pending' | 'taught-pending-review';
   }>;
   /** Commander-requested marketplace installs. The model can search the
    * official marketplace and request a user decision, but the install only

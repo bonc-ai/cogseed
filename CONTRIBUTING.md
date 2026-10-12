@@ -172,13 +172,26 @@ a check has run or passed. Report any platform you have not verified.
 The public `main` branch receives approved source snapshots at release time.
 External pull requests are reviewed against that branch, then accepted patches
 are imported into the private development repository. Maintainers preserve the
-public PR reference, author attribution and DCO sign-offs. The public PR is
-closed with an imported status rather than merged into public `main`.
+public PR reference, original commit authors and DCO sign-offs. Import alone
+keeps the public PR open; it is not a completed merge or a release.
 
-Acceptance into development does not mean a release is available. The change
-appears in a later public snapshot only after that version passes its release
-gates. Maintainers link the public release when available. Internal review
-records and private commit history are not copied into the public repository.
+After the corresponding source candidate passes its release gates, maintainers
+merge the reviewed public PR into `main` with a merge commit, retaining the
+original contributor commits. Required CI and CODEOWNERS approval still apply;
+do not squash or rebase away those commits. The next snapshot starts from that
+updated public `main`, and synchronization refuses to proceed while a registered
+contribution is missing from its history. Use a GitHub-linked noreply author
+email so GitHub can associate those commits with your account.
+
+Only reviewed public history based on the current clean public baseline may be
+merged. Contributions based on older history need a clean migration retaining
+authorship; never reconnect pre-baseline or private history. For content already
+published in a snapshot, a reviewed history repair must preserve the complete
+current file tree and pass the same CI and approval gates.
+
+Acceptance and a source merge do not mean a release is available. Maintainers
+link the public release when available. Internal review records and private
+commit history are not copied into the public repository.
 
 Create contributor branches from `upstream/main` and follow the public PR's
 review feedback. Do not merge private branches or push release snapshots into

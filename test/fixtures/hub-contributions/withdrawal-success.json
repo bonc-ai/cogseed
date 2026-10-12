@@ -1,0 +1,15 @@
+{
+  "code": 0,
+  "msg": "",
+  "request_id": "req_04",
+  "withdrawal_request": {
+    "request_id": "wr_01J8Z",
+    "content_id": "8a4f01c29d7e",
+    "status": "PENDING",
+    "reason": "Third-party authorization changed.",
+    "rejected_reason": null,
+    "requested_at": "2026-09-20T09:00:00Z",
+    "updated_at": "2026-09-20T09:00:00Z"
+  },
+  "notice": "A withdrawal request takes effect only after governance review."
+}

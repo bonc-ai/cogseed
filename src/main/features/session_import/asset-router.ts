@@ -10,8 +10,8 @@
  *        → route extracted cognitions into Recall's candidate pool (stage 4).
  *
  *   2. `routeCognitions` — the stage-4 mapping itself. The extracted
- *      candidates carry a `suggestedType` in the four AbilityAssetType values
- *      (personal | rule | template | skill_method) — the SAME extraction rule
+ *      candidates carry a `suggestedType` in the five AbilityAssetType values
+ *      (personal | fact | rule | template | skill_method) — the SAME extraction rule
  *      the recall capture pipeline ("沉淀活动 → 从历史会话沉淀") uses — plus
  *      the full candidate fields (value / risk / suggestedAction /
  *      applicableWhen / forbiddenWhen). Each becomes a *pending* candidate the
@@ -52,6 +52,7 @@ type EmittedType = EmittedCognitionType;
 
 export interface RoutedCognitionCounts {
   personal: number;
+  fact: number;
   rule: number;
   template: number;
   skill_method: number;
@@ -365,7 +366,7 @@ export async function routeCognitions(
   conversationId: string,
   candidates: CognitionCandidate[],
 ): Promise<RoutedCognitionCounts> {
-  const counts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  const counts: RoutedCognitionCounts = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
   await Promise.all(candidates.map(async (candidate) => {
     const written = await routeCandidate(userId, candidate, conversationId, source, sourceId);
     if (written > 0) counts[candidate.suggestedType] += 1;
@@ -402,7 +403,7 @@ async function commitPreparedSession(
   prepared: PreparedSession,
   titleHint?: string,
 ): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
   const { source, transcript, extraction, truncated } = prepared;
 
   const materialize = await materializeSession({
@@ -429,7 +430,7 @@ async function commitPreparedSession(
   log.info(
     `imported ${source} session=${transcript.sourceId} cid=${materialize.conversationId} ` +
     `degraded=${!!extraction.degraded} ` +
-    `cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}/${cognitions.skill_method}`,
+    `cog=${cognitions.personal}/${cognitions.fact}/${cognitions.rule}/${cognitions.template}/${cognitions.skill_method}`,
   );
 
   return {
@@ -445,7 +446,7 @@ async function commitPreparedSession(
 }
 
 export async function importClaudeSession(input: ImportClaudeSessionInput): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
 
   // B+ fast import: a settled prefetch (extraction already in hand) commits
   // directly; otherwise the conversation materializes immediately and the
@@ -495,7 +496,7 @@ export interface ImportWorkbuddySessionInput {
  * WorkBuddy session become real, owned cognitive assets in CogSeed.
  */
 export async function importWorkbuddySession(input: ImportWorkbuddySessionInput): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
 
   // B+ fast import (same split as importClaudeSession).
   const ready = await getPreparedIfReady('workbuddy', input.userId, input.filePath);
@@ -544,7 +545,7 @@ export interface ImportClaudeDesktopSessionInput {
 export async function importClaudeDesktopSession(
   input: ImportClaudeDesktopSessionInput,
 ): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
 
   const scan = await listClaudeDesktopSessions();
   if (!scan.ok) {

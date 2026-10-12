@@ -160,6 +160,7 @@ function loadCategoryRenderers() {
   for (const file of [
     'icons.js',
     'ui-button.js',
+    'ui-status.js',
     'ui-form.js',
     'ui-empty.js',
     'ui-segmented-control.js',
@@ -167,6 +168,8 @@ function loadCategoryRenderers() {
     const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8');
     vm.runInContext(code, context, { filename: file });
   }
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/shared/hub-content-status.js'), 'utf8'), context);
+  context.uiStatusPill = context.window.uiStatusPill;
   for (const file of ['agents.js', 'skills.js']) {
     const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8');
     vm.runInContext(code, context, { filename: file });
@@ -636,10 +639,11 @@ describe('agent and skill category tabs', () => {
       setChatSkill = (target, id, name) => { pickedSkillCalls.push([target, id, name]); };
     `, context);
 
-    // Commander: no space selected → only agents/skills tabs (connectors /
-    // library / ontology removed); global open-tier skill selectable.
+    // Commander: no space selected → agents/skills/assets/tasks tabs (connectors /
+    // library / ontology removed; artifacts stay space-only — US-601 AC1;
+    // tasks = 经验集带入页签，specs/016 T027).
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills']);
+      .toEqual(['agents', 'skills', 'assets', 'tasks']);
     await context._triggerPickerItem('skill', 'global-helper', 'Global Helper', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'global-helper', 'Global Helper']]);
 
@@ -648,22 +652,22 @@ describe('agent and skill category tabs', () => {
     context.pickedSkillCalls = [];
     context.getChatRecipient = () => ({ kind: 'agent', id: 'agent-1', name: 'Agent One' });
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills']);
+      .toEqual(['agents', 'skills', 'assets', 'tasks']);
     await context._triggerPickerItem('skill', 'trusted', 'Trusted Skill', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'trusted', 'Trusted Skill']]);
   });
 
-  it('shows artifacts/assets tabs for a space-scoped picker anchor', () => {
+  it('shows artifacts/assets/tasks tabs for a space-scoped picker anchor', () => {
     const { context } = loadCategoryRenderers();
-    // new-chat chip 选中空间 → 空间会话 tab 集合（智能体/技能/产物/资产）
+    // new-chat chip 选中空间 → 空间会话 tab 集合（智能体/技能/产物/资产/任务）
     context.window.getNewChatSpaceId = () => 'spc-test-1';
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'artifacts', 'assets']);
-    // 无空间 → 仅智能体/技能
+      .toEqual(['agents', 'skills', 'artifacts', 'assets', 'tasks']);
+    // 普通新建任务（无空间）→ 智能体/技能/资产/任务（US-601 AC1；产物仍限空间会话）
     context.window.getNewChatSpaceId = () => '';
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills']);
-    // Auto 恒为智能体/技能
+      .toEqual(['agents', 'skills', 'assets', 'tasks']);
+    // Auto 恒为智能体/技能（自动任务无资产/经验集引用落地通道，2026-09-25 Owner 拍板不放开）
     expect(vm.runInContext('_agentPickerVisibleTabs("auto-recipient-chip")', context))
       .toEqual(['agents', 'skills']);
   });
@@ -932,6 +936,35 @@ describe('skills grid › security badge and summary', () => {
     const html = el('skills-grid').innerHTML;
     expect(html).not.toContain('skills-security-summary');
     expect(html).not.toContain('重新检查');
+  });
+
+  it('offers contribution only for an owned local Skill and keeps a readable avatar', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'my-skill', name: '测试 Skill', source: 'custom', category: 'general', enabled: true },
+      { id: 'codex:imagegen', name: 'External Skill', source: 'custom', category: 'external', enabled: true },
+      { id: 'agent-owned', name: 'Private Skill', source: 'custom', category: 'general', ownerAgent: 'agent-1', enabled: true },
+    ]);
+    const html = el('skills-grid').innerHTML;
+    const ownCard = html.match(/<div class="skill-card[^]*?data-id="my-skill"[^]*?<\/div>\s*<\/div>/)?.[0] || '';
+    expect(ownCard).toContain('data-skill-contribute');
+    expect(ownCard).toContain('skill-card-avatar');
+    expect(ownCard).toContain('测</span>');
+    expect(html.match(/data-skill-contribute/g)).toHaveLength(1);
+  });
+
+  it('shows a local Skill icon while retaining the name initial if it fails to load', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'icon-skill', name: '图标 Skill', source: 'custom', category: 'general', enabled: true,
+        icon_data_url: 'data:image/png;base64,iVBORw0KGgo=' },
+      { id: 'bad-icon', name: '回退 Skill', source: 'custom', category: 'general', enabled: true,
+        icon_data_url: 'javascript:alert(1)' },
+    ]);
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('class="skill-card-avatar-image" src="data:image/png;base64,iVBORw0KGgo="');
+    expect(html).toContain('回</span>');
+    expect(html).not.toContain('javascript:alert(1)');
   });
 
   // The deep scanner reports a score and how the scan was produced. Both belong

@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { userMemoryFile, userProfileFile, agentMemoryFile, userAgentMemoryFile, projectMemoryFile, spaceMemoryFile } from '../paths';
 import { writeTextAtomicSync } from '../storage';
 import { createLogger } from '../logger';
+import { notifyCognitionWrite } from './recall/store-events';
 import {
   assertCognitionMemoryTransaction,
   withCognitionMemoryTransaction,
@@ -89,6 +90,10 @@ export interface MemoryOpResult {
   error?: string;
   entries: string[];
   usage: { current: number; limit: number; entries_current?: number; entries_limit?: number };
+  /** Set when entries come from the read-only legacy Project fallback. */
+  legacySource?: 'project';
+  /** Number of trailing entries in a combined list that came from a legacy file. */
+  legacyEntryCount?: number;
   /** Set on a successful strict-mode (user/shared) write once usage crosses
    *  80% of the char budget — advisory only, does not block. */
   nearLimit?: boolean;
@@ -274,6 +279,20 @@ function notifyMemoryDirty(target: MemoryScope): void {
     const sync = null as { markDirty?: (domain: string, relPath: string) => void };
     sync?.markDirty?.('memory', syncRelForTarget(target));
   } catch { /* features/sync stripped */ }
+}
+
+/** saveEntries 的认知广播包装：长期记忆（USER.md / MEMORY.md / agent / space 档）
+ *  落盘后发 cognition:changed，渲染层据此刷新迁移预览与依赖记忆的视图。
+ *  saveEntries 本身保持无 uid 的纯函数签名（外部迁移代码直接复用它）。 */
+function saveEntriesNotify(
+  userId: string,
+  filePath: string,
+  entries: MemoryEntry[],
+  charLimit: number,
+  entryLimit?: number,
+): void {
+  saveEntries(filePath, entries, charLimit, entryLimit);
+  notifyCognitionWrite(userId, 'longterm-memory', 'update');
 }
 
 function notifyLegacyAgentMemoryDirty(agentId: string): void {
@@ -540,7 +559,7 @@ function migrateLegacyAgentMemoryOnce(userId: string, agentId: string): void {
         ...legacyEntries,
         ...loadEntries(canonicalPath),
       ]);
-      saveEntries(canonicalPath, merged, AGENT_CHAR_LIMIT, AGENT_ENTRY_LIMIT);
+      saveEntriesNotify(userId, canonicalPath, merged, AGENT_CHAR_LIMIT, AGENT_ENTRY_LIMIT);
       writeTextAtomicSync(legacyPath, '');
       notifyMemoryDirty({ agent: agentId });
       notifyLegacyAgentMemoryDirty(agentId);
@@ -620,7 +639,7 @@ export function addEntry(userId: string, target: MemoryScope, content: string): 
   // agent/project 层级保持 legacy saveEntries（有 entry 数量上限）
   const entries = loadEntries(filePath);
   entries.push({ text: trimmed });
-  saveEntries(filePath, entries, limit, entryLimitForTarget(target));
+  saveEntriesNotify(userId, filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);
 }
@@ -696,7 +715,7 @@ export function replaceEntry(userId: string, target: MemoryScope, oldText: strin
 
   entries[idx] = { text: trimmed };
 
-  saveEntries(filePath, entries, limit, entryLimitForTarget(target));
+  saveEntriesNotify(userId, filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);
 }
@@ -721,7 +740,7 @@ export function replaceAgentEntry(userId: string, agentId: string, oldText: stri
   const canonicalIdx = canonicalEntries.findIndex(e => e.text.includes(oldText));
   if (canonicalIdx !== -1) {
     canonicalEntries[canonicalIdx] = { text: trimmed };
-    saveEntries(canonicalPath, canonicalEntries, AGENT_CHAR_LIMIT, AGENT_ENTRY_LIMIT);
+    saveEntriesNotify(userId, canonicalPath, canonicalEntries, AGENT_CHAR_LIMIT, AGENT_ENTRY_LIMIT);
     notifyMemoryDirty({ agent: agentId });
     changed = true;
   }
@@ -776,7 +795,7 @@ export function removeEntry(userId: string, target: MemoryScope, oldText: string
     return buildResult(userId, target, true);
   }
 
-  saveEntries(filePath, entries, limit, entryLimitForTarget(target));
+  saveEntriesNotify(userId, filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);
 }
@@ -789,7 +808,7 @@ export function removeAgentEntry(userId: string, agentId: string, oldText: strin
   const canonicalIdx = canonicalEntries.findIndex(e => e.text.includes(oldText));
   if (canonicalIdx !== -1) {
     canonicalEntries.splice(canonicalIdx, 1);
-    saveEntries(canonicalPath, canonicalEntries, AGENT_CHAR_LIMIT, AGENT_ENTRY_LIMIT);
+    saveEntriesNotify(userId, canonicalPath, canonicalEntries, AGENT_CHAR_LIMIT, AGENT_ENTRY_LIMIT);
     notifyMemoryDirty({ agent: agentId });
     changed = true;
   }
@@ -799,6 +818,57 @@ export function removeAgentEntry(userId: string, agentId: string, oldText: strin
 
 export function listEntries(userId: string, target: MemoryScope): MemoryOpResult {
   return buildResult(userId, target, true);
+}
+
+/** Return the same effective Space note list that the runner injects. Old
+ * Project files are visible only while the canonical Space file is absent. */
+export function listSpaceEntriesWithProjectFallback(
+  userId: string,
+  spaceId: string,
+  legacyProjectId?: string,
+): MemoryOpResult {
+  const currentFile = spaceMemoryFile(userId, spaceId);
+  const useProjectFallback = !fs.existsSync(currentFile) && !!legacyProjectId;
+  const filePath = useProjectFallback && legacyProjectId
+    ? projectMemoryFile(userId, legacyProjectId)
+    : currentFile;
+  const entries = loadEntries(filePath).map((entry) => entry.text);
+  const text = entries.join(ENTRY_SEPARATOR);
+  return {
+    ok: true,
+    entries,
+    usage: {
+      current: text.length,
+      limit: SPACE_CHAR_LIMIT,
+      entries_current: entries.length,
+      entries_limit: SPACE_ENTRY_LIMIT,
+    },
+    ...(useProjectFallback ? { legacySource: 'project' as const, legacyEntryCount: entries.length } : {}),
+  };
+}
+
+/** Copy old Project bytes to the canonical Space path before a user-requested
+ * correction or removal. The original remains intact as the recovery source;
+ * once copied, even an empty Space file remains authoritative. */
+export function backfillProjectMemoryToSpaceForWrite(
+  userId: string,
+  spaceId: string,
+  legacyProjectId?: string,
+): void {
+  if (!legacyProjectId) return;
+  const currentFile = spaceMemoryFile(userId, spaceId);
+  if (fs.existsSync(currentFile)) return;
+  const legacyFile = projectMemoryFile(userId, legacyProjectId);
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(legacyFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  fs.mkdirSync(path.dirname(currentFile), { recursive: true });
+  writeTextAtomicSync(currentFile, bytes);
+  notifyMemoryDirty({ space: spaceId });
 }
 
 /** Low-level synchronous helper for tests and callers already inside a
@@ -1016,6 +1086,40 @@ export function parseImportText(text: string): ParsedImportEntry[] {
 
 // ── System prompt block (read side) ──────────────────────────────────────
 
+/** Keep independent migration-era notes available while treating linked
+ * cognition mirrors as controlled by their owning asset. When the asset
+ * profile is authoritative (or its read failed), only independent records
+ * from USER/MEMORY remain eligible; linked mirrors are rendered from the
+ * asset source after its status and scope checks. */
+function loadPromptMemoryEntries(
+  filePath: string,
+  activeCognitionSourceIds: ReadonlySet<string>,
+  suppressLinkedMirrors: boolean,
+): MemoryEntry[] {
+  let loaded: ReturnType<typeof loadMemoryRecordsWithStatus>;
+  try {
+    loaded = loadMemoryRecordsWithStatus(filePath);
+  } catch (error) {
+    log.warn('memory file could not be read for prompt', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+  const degradedRecordIds = new Set(loaded.degradedRecordIds || []);
+  return loaded.records
+    .filter((record) => {
+      // A damaged metadata header may have hidden a source link. Do not let
+      // that ambiguous mirror bypass pause/scope checks when the asset store
+      // is authoritative or unavailable.
+      if (suppressLinkedMirrors && degradedRecordIds.has(record.recordId)) return false;
+      if (record.independent || record.sources.length === 0) return true;
+      if (suppressLinkedMirrors) return false;
+      return record.sources.some((source) =>
+        source.kind === 'cognition_asset' && activeCognitionSourceIds.has(source.sourceId));
+    })
+    .map(({ text }) => ({ text }));
+}
+
 /**
  * Render the user's existing memory as a system-prompt block so the model has
  * it as background context every turn. READ side only — it does NOT teach the
@@ -1035,29 +1139,37 @@ export function formatForSystemPrompt(
   spaceId?: string,
   legacyProjectId?: string,
   activeCognitionSourceIds: ReadonlySet<string> = new Set(),
-  /** 资产库画像源（2026-09-19 清单 #7）：非空时 user/shared 两节改由资产库
-   *  渲染（画像=personal 资产）；空数组=资产库还没有画像资产，回退文件。
-   *  存量迁移完成后文件为空，这里自然切换，无需一次性硬切。 */
+  /** 资产库画像源（2026-09-19 清单 #7）：资产条目渲染画像；USER/MEMORY 文件里
+   *  尚未迁移的独立条目继续保留，关联镜像由资产状态和范围门控。 */
   assetProfileEntries: string[] = [],
+  /** 资产库有 personal 记录或读取状态不明时禁止关联镜像回退，避免旧副本
+   *  绕过准入；仍保留来源独立的迁移期 USER.md / MEMORY.md 条目。 */
+  assetProfileSourceBlocksFallback = false,
 ): string {
-  const profileFromAssets = assetProfileEntries.length > 0;
-  const userEntries = profileFromAssets
-    ? assetProfileEntries.map((text) => ({ text }))
-    : loadEntries(userProfileFile(userId));     // cross-agent profile
-  const sharedEntries = profileFromAssets
-    ? [] // 画像已由资产库渲染；共享档文件留待迁移清空（阶段 D 退役）。
-    : loadMemoryRecords(userMemoryFile(userId))
-    .filter((record) => record.independent || record.sources.length === 0
-      || record.sources.some((source) => activeCognitionSourceIds.has(source.sourceId))
-      // role_template 来源 = 角色画像（长期事实），常驻可见；cognition asset 才受 active 门控
-      || record.sources.some((source) => source.kind === 'role_template'))
-    .map(({ text }) => ({ text }));                              // cross-space, cross-agent facts
+  const profileFromAssets = assetProfileSourceBlocksFallback || assetProfileEntries.length > 0;
+  const legacyUserEntries = loadPromptMemoryEntries(
+    userProfileFile(userId), activeCognitionSourceIds, profileFromAssets,
+  );
+  const userEntryTexts = new Set(assetProfileEntries);
+  const userEntries = [
+    ...assetProfileEntries.map((text) => ({ text })),
+    ...legacyUserEntries.filter(({ text }) => !userEntryTexts.has(text)),
+  ];
+  // Mixed migration is intentional: independent legacy notes stay available
+  // until each item is migrated, while source-linked mirrors are only read
+  // from their authoritative, status- and scope-checked asset.
+  const sharedEntries = loadPromptMemoryEntries(
+    userMemoryFile(userId), activeCognitionSourceIds, profileFromAssets,
+  );
   // 空间级记忆：新落点 `spaces/<sid>/MEMORY.md`；旧项目文件（`projects/<pid>/MEMORY.md`）
-  // 仅作读侧兼容回退（T4.5 空间化，项目壳废弃但旧数据仍可能只有项目文件）。
+  // 仅在新落点不存在时作读侧兼容回退（T4.5 空间化，项目壳废弃但旧数据仍可能只有项目文件）。
+  // 空文件表示用户已清空当前 Space 记忆，必须阻止旧 Project 内容复活；旧文件仍保留在原处。
   let spaceEntries: MemoryEntry[] = [];
   if (spaceId) {
-    spaceEntries = loadEntries(spaceMemoryFile(userId, spaceId));
-    if (spaceEntries.length === 0 && legacyProjectId) {
+    const currentSpaceMemoryFile = spaceMemoryFile(userId, spaceId);
+    const hasCurrentSpaceMemoryFile = fs.existsSync(currentSpaceMemoryFile);
+    spaceEntries = loadEntries(currentSpaceMemoryFile);
+    if (!hasCurrentSpaceMemoryFile && legacyProjectId) {
       spaceEntries = loadEntries(projectMemoryFile(userId, legacyProjectId));
     }
   }

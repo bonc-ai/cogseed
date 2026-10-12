@@ -188,7 +188,7 @@ export interface Conversation {
 
 /** 空间任务引用项（持久化在会话记录上，任务级作用域）。 */
 export interface TaskReference {
-  kind: 'artifact' | 'asset';
+  kind: 'artifact' | 'asset' | 'experience_set';
   /** 展示名（产物 = 文件名；资产 = 标题）。 */
   name: string;
   /** 产物：源会话 + 附件名（走现成跨任务引用链路，LLM 可读文件内容）。 */
@@ -201,6 +201,14 @@ export interface TaskReference {
   asset_id?: string;
   asset_type?: string;
   summary?: string;
+  /** 经验集（specs/016 §6）：@ 历史任务带入的经验快照。只经主进程
+   *  attachToTask 过准入写入（taskRefs.add 白名单刻意不含该 kind，
+   *  渲染层不能绕闸直塞）；读路径透传字段但正文快照按单条上限截断。 */
+  episode_id?: string;
+  requirement_id?: string;
+  experienceIds?: string[];
+  snapshots?: Record<string, { version?: string; title?: string; body?: string; experienceType?: string; taskType?: string }>;
+  addedAt?: string;
 }
 
 /** Persisted record on `<cid>.jsonl`. Aliased for legacy callers; the new
@@ -324,7 +332,9 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (raw.needs_welcome === true) out.needs_welcome = true;
   if (Array.isArray(raw.task_references)) {
     const refs = raw.task_references
-      .filter((r: any) => r && typeof r === 'object' && (r.kind === 'artifact' || r.kind === 'asset') && typeof r.name === 'string' && r.name)
+      // experience_set 与既有两 kind 同列透传（specs/016 §6）：写入口唯一
+      // （attachToTask 已过准入并截断），这里只防形状异常与条数上限。
+      .filter((r: any) => r && typeof r === 'object' && (r.kind === 'artifact' || r.kind === 'asset' || r.kind === 'experience_set') && typeof r.name === 'string' && r.name)
       .map((r: any) => ({
         kind: r.kind,
         name: String(r.name).slice(0, 200),
@@ -336,6 +346,21 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
         ...(typeof r.asset_id === 'string' && r.asset_id ? { asset_id: r.asset_id } : {}),
         ...(typeof r.asset_type === 'string' && r.asset_type ? { asset_type: r.asset_type.slice(0, 60) } : {}),
         ...(typeof r.summary === 'string' && r.summary ? { summary: r.summary.slice(0, 400) } : {}),
+        ...(r.kind === 'experience_set' ? {
+          ...(typeof r.episode_id === 'string' && r.episode_id ? { episode_id: r.episode_id } : {}),
+          ...(typeof r.requirement_id === 'string' && r.requirement_id ? { requirement_id: r.requirement_id } : {}),
+          ...(Array.isArray(r.experienceIds) ? { experienceIds: r.experienceIds.map((id: any) => String(id)).slice(0, 20) } : {}),
+          ...(r.snapshots && typeof r.snapshots === 'object' ? {
+            snapshots: Object.fromEntries(Object.entries(r.snapshots).slice(0, 20).map(([id, snap]: [string, any]) => [id, {
+              ...(typeof snap?.version === 'string' ? { version: snap.version } : {}),
+              ...(typeof snap?.title === 'string' ? { title: snap.title.slice(0, 200) } : {}),
+              ...(typeof snap?.body === 'string' ? { body: snap.body.slice(0, 2000) } : {}),
+              ...(typeof snap?.experienceType === 'string' ? { experienceType: snap.experienceType } : {}),
+              ...(typeof snap?.taskType === 'string' ? { taskType: snap.taskType } : {}),
+            }])),
+          } : {}),
+          ...(typeof r.addedAt === 'string' && r.addedAt ? { addedAt: r.addedAt } : {}),
+        } : {}),
       }))
       .slice(0, 20);
     if (refs.length) out.task_references = refs;
@@ -2021,6 +2046,53 @@ export async function getConversation(
     () => _readTargetRawConversation(userId, cid, projectIdHint),
   );
   return target.find((c) => c.conversation_id === cid) || null;
+}
+
+/** 批量会话标题上限：来源解析按批取名，超出直接拒绝（不做隐式截断——
+ *  截断会让"查不到"与"没问"混为一谈，界面就会误报「来源记录不可用」）。 */
+const CONVERSATION_TITLE_BATCH_LIMIT = 50;
+
+/** 批量取会话标题（2026-09-25 验收修复 US-603）：证据来源要把 cid 翻成用户
+ *  看得懂的标题，且五处展示必须同名，因此需要一个按 id 批量取名的窄口——
+ *  `conversations.list` 是分页 + 频道标注重口，不适合逐条解析。
+ *  只返回 `{cid,title}`：不带消息正文、不带附件、不带项目/成员信息。
+ *  查无的 cid **不出现在结果里**（调用方据此判来源失效）；查到但标题为空的
+ *  仍返回空串（会话存在，只是还没起名——由界面给泛称，不谎称失效）。 */
+export async function listConversationTitles(
+  userId: string,
+  cids: readonly string[],
+): Promise<Array<{ cid: string; title: string }>> {
+  if (!Array.isArray(cids)) throw new Error('invalid conversation title batch');
+  const wanted: string[] = [];
+  const seen = new Set<string>();
+  for (const cid of cids) {
+    if (typeof cid !== 'string' || !safeId(cid)) throw new Error('invalid conversation title batch');
+    if (seen.has(cid)) continue;
+    seen.add(cid);
+    wanted.push(cid);
+  }
+  if (wanted.length > CONVERSATION_TITLE_BATCH_LIMIT) throw new Error('invalid conversation title batch');
+  if (!wanted.length) return [];
+
+  const titles = new Map<string, string>();
+  // 侧栏刚加载过时整份列表已在内存缓存里，一次命中即可；只为漏网的 cid 逐条读。
+  const cached = _conversationListCache.get(userId);
+  const missing: string[] = [];
+  if (cached && cached.expiresAt > Date.now()) {
+    const byId = new Map(cached.items.map((c) => [c.conversation_id, c]));
+    for (const cid of wanted) {
+      const found = byId.get(cid);
+      if (found) titles.set(cid, String(found.title || ''));
+      else missing.push(cid);
+    }
+  } else {
+    missing.push(...wanted);
+  }
+  for (const cid of missing) {
+    const conversation = await getConversation(userId, cid);
+    if (conversation) titles.set(cid, String(conversation.title || ''));
+  }
+  return wanted.filter((cid) => titles.has(cid)).map((cid) => ({ cid, title: titles.get(cid) as string }));
 }
 
 export type CogSeedConversationDeliveryBinding =
