@@ -41,7 +41,7 @@
 | R-UNCERTAINTY | 声称与公认值或其他参照一致的 Conclusion 必须带不确定度或误差范围 | 违反时记 `insufficient` 且该结论不得判为 supported |
 | R-N-DECLARED | 以多次测量为基础的 Conclusion 必须声明样本量或重复次数 | 违反时记 `insufficient` |
 | R-SAFETY-HANDOFF | 涉及安全、风险或伦理的判断一律不产生 Conclusion，只产生 HumanReviewItem | 违反即触犯边界红线 |
-| R-NO-INVENTION | 输出中任何数值必须能回查到用户的输入材料 | 回查失败即删除该条判断 |
+| R-NO-INVENTION | 输出中任何数值必须能回查到用户的输入材料 | 回查失败即删除该条判断；唯一例外是带 `对账推算` 标记、仅由输入数值组成的对照算式，且不得据此给出更正值 |
 
 ## 3. ABox：本次实例的落点
 
@@ -54,11 +54,12 @@
 | DataSource | 时间间隔读数表（ds_type = raw_record，10 个值，均值 450.89 ms）；落距 h = 1.000 m（raw_record）；计时器分辨力 0.1 ms（raw_record） |
 | Analysis | 由均值算 t = 0.45089 s；由 g = 2h/t^2 得 g = 9.837 m/s^2；A 类与 B 类不确定度合成 |
 | Conclusion | c1 实验值 g = 9.837 m/s^2；c2 与公认值 9.79 m/s^2 的相对偏差约 0.48%，一致性结论 |
-| Defect | 该案例无 P0 或 P1 缺陷 |
+| Defect | 该案例报出 4 条 `contradiction`（P0：U 与合成相对标准不确定度不相容、两节不确定度口径冲突、B 类分量取值与其算式不符、偏差大于自报区间半宽）与 2 条 `insufficient`（1 条 P1 缺合成分量表、1 条 P2 释放对准），`Conclusion.c1` 的 `可支撑性` 为 `weakly_supported`、`c2` 为 `unsupported` |
 
 对照案例（缺原始数据）的实际实例：`DataSource` 仅存在 `ds_type = none`（用户未提供），因此
-R-CONC-DATA 无法满足，`Conclusion.evidence_strength` 一律为 `missing`，`可支撑性` 一律为
-`unsupported`，并按 R-SAFETY-HANDOFF 之外的全部规则产出 Defect 与 HumanReviewItem（要求补充原始记录）。
+R-CONC-DATA 无法满足，`Conclusion.evidence_strength` 一律为 `missing`；此时停止的是**判断动作**
+（不核对数值、不评价充分性、不裁决结论），而每条依赖数据的 `Conclusion` 仍按 R-CONC-DATA 登记为
+`可支撑性 = unsupported` 并注明"因数据缺失，已停止核对"，另产出 HumanReviewItem（要求补充原始记录）。
 
 ## 4. source_refs
 

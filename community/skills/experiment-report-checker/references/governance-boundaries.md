@@ -19,7 +19,7 @@
 | 禁止项 | 说明 |
 |---|---|
 | 格式化、修改或补全实验数据 | 包括重算、插值、平滑、单位换算后替换原值 |
-| 把未交付或未提供的结果写成事实 | 输出中任何数值都必须能回查用户材料 |
+| 把未交付或未提供的结果写成事实 | 输出中任何数值都必须能回查用户材料；唯一例外是带 `对账推算` 标记、仅由输入数值组成的对照算式（见 `references/output-contract.md` §3） |
 | 替代实验室安全解读或专业风险判断 | 涉及安全、伦理、合规一律转人工 |
 | 判断"是否有害""是否违法""是否违反校规" | 属专业人员职责，不在本 Skill 能力面内 |
 | 联网检索、对照外部数据库、引用看不到的材料 | 无网络访问 |
@@ -34,7 +34,9 @@
 - `promotion_ceiling: staged` —— 本 Skill 最高只能停留在社区候选状态。可以经评审被接受、可以导入私有
   仓库试用；不得表述为已发布、已随包发布或已获生产批准。
 - `production_release_allowed: false` —— 生产发布硬锁，永不为真。
-- 两条声明同时出现在 `SKILL.md` 正文与 `references/skill-spec.yaml` 中。
+- 两条声明都不在 `SKILL.md` 的 frontmatter 里（社区格式只允许 `name` 与 `description`）：
+  `production_release_allowed: false` 裸写在 `SKILL.md` 正文末行，`promotion_ceiling: staged` 写在
+  `references/skill-spec.yaml`。
 
 ## 4. 状态链（五级严格分离）
 
