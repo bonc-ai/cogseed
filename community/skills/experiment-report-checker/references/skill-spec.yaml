@@ -1,0 +1,43 @@
+# experiment-report-checker 能力规格
+#
+# 本文件声明身份、等级与路由，属于预防性声明：社区校验器不检查本文件内容，
+# 但 CogSeed 注册表闸门会读取 promotion_ceiling 与 production_release_allowed 两条封顶。
+# 两条封顶为硬上限，任何情况下不得抬高。
+
+skill_spec:
+  skill_id: experiment-report-checker
+  skill_class: execution
+  is_skill_of_skill: false
+  level: L2
+  risk_route: Lite
+  promotion_ceiling: staged
+  production_release_allowed: false
+  session_role: sub_skill
+  owns_session: false
+  form: interpreted
+
+level_rationale: >
+  本 Skill 为个人使用的只读检查工具：不写文件、不联网、不执行脚本、不产生新数据，
+  也不做任何不可逆动作。按风险等级定义属于个人低风险范围，取 L2。若上游要求元技能或
+  共享决策类一律取 L5，应当上调至 L5；本文件取 L2 的前提是仅个人本地使用，未共享、
+  未接入私有数据、未触发外部动作。
+
+boundary_declaration:
+  reads_user_material_only: true
+  writes_files: false
+  network_access: false
+  executes_scripts: false
+  produces_new_numeric_values: false
+  performs_safety_or_risk_judgement: false
+  replaces_human_review: false
+
+staged_meaning: >
+  promotion_ceiling 为 staged 表示本 Skill 最高只能停留在社区候选状态：可以经评审接受、
+  可以导入私有仓库试用，但不代表已发布、已随包发布或已获生产批准。任何关于"已发布"
+  或"生产可用"的表述都超出本规格。
+
+open_gaps_expected_on_import: >
+  社区候选包格式不允许 _meta.json 与 schemas.json 两个文件，因此导入 CogSeed 时以下三项
+  质量提示必然出现且为预期：skill_meta_category_missing 或 skill_meta_category_invalid、
+  shape_runtime_contracts_missing、shape_runtime_guard_violation。三者均为 MEDIUM 级，
+  不阻断写入。导入私有仓库时按 references/governance-boundaries.md 的补件说明另行补齐。

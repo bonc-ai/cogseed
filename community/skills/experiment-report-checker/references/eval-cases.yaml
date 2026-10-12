@@ -1,0 +1,121 @@
+# 评测用例（eval cases）
+#
+# 与 evals/evals.json 的用例一一对应（7 条：4 positive / 3 negative）：此处给出输入要点与可判定的期望行为，
+# evals.json 保存机器可读的登记项。任一用例的期望行为都必须不依赖主观评价即可判定通过与否。
+
+skill_id: experiment-report-checker
+
+cases:
+  - id: pos-complete-free-fall
+    kind: positive
+    input_summary: >
+      要求五项（原理与公式、仪器与条件、步骤与重复次数、原始数据表、数据处理与不确定度并与公认值比较）；
+      原始数据为 10 次自由落体计时读数（451.2, 450.8, 451.5, 451.0, 452.1, 450.6, 450.3, 450.5, 449.9,
+      451.0 ms，均值 450.89 ms、样本标准差 0.6262 ms）与落距 1.000 m；草稿六节齐备，给出
+      g = 9.837 m/s^2、U = 0.010 m/s^2（k = 2），同节又写"合成相对标准不确定度约 0.10%"、结论段写
+      "相对扩展不确定度 0.2%（k = 2）"，并称偏差在不确定度范围内、与 9.79 m/s^2 一致。
+    expected_behaviour:
+      - 输出七节完整，无小节缺失
+      - B 节五条要求均为 matched，且每条有非空证据
+      - D 节报出至少两条 contradiction：不确定度写法自相矛盾（0.10% 与 k=2 对应 U=0.020，而稿中写 0.010；由 0.010 反推合成相对标准不确定度约 0.05%）与结论方向被写反（自报偏差约 0.48% 大于自报的相对扩展不确定度 0.2%）
+      - C 节 g 值那条证据强度为 provided、可支撑性为 supported；"与公认值一致"那条可支撑性必须为 unsupported
+      - D 节另记一条 insufficient：未给出不确定度合成分量表
+      - 输出中每个数值均可回查输入材料
+    must_not:
+      - 不得重算 g 或改写不确定度
+      - 不得替用户选定两处不确定度写法中的哪一处正确
+      - 不得替用户补写实验步骤
+
+  - id: neg-missing-raw-data
+    kind: negative
+    input_summary: >
+      给出实验要求与报告草稿；草稿写明 g = 9.83 m/s^2 并称与公认值一致；未提供任何原始数据或数据摘要。
+    expected_behaviour:
+      - A 节把 data 标为未提供
+      - C 节该结论证据强度为 missing，可支撑性为 unsupported
+      - D 节记 missing 缺口；E 节给 P0 建议为补充原始数据或降级表述
+      - F 节列出需补齐的材料
+      - 明确声明已停止证据链与数值一致性判断
+    must_not:
+      - 不得自行给出 g 的数值或任何新数值
+      - 不得假定原始数据存在
+      - 不得把草稿的 g = 9.83 当作已核实事实
+
+  - id: neg-missing-requirements
+    kind: negative
+    input_summary: 提供原始数据与报告草稿，未提供任何实验要求或评分点。
+    expected_behaviour:
+      - A 节把 requirements 标为未提供
+      - B 节保留标题并写明因材料缺失未执行
+      - 仍执行结构检查与内部一致性检查
+      - F 节要求用户补充要求原文
+    must_not:
+      - 不得按通用实验惯例自行编造要求清单
+      - 不得用外部课程标准的评分点代替
+
+  - id: pos-contradiction-direction-and-number
+    kind: positive
+    input_summary: >
+      要求、数据、草稿齐备；数据为挂 50 g / 100 g / 150 g 砝码三次，周期依次 1.238 s、1.240 s、1.244 s
+      （随砝码质量递增）；草稿在同一段正文写"周期随砝码质量增加而逐渐减小"，并在同段既写平均周期
+      1.2407 s 又写 1.214 s。
+    expected_behaviour:
+      - D 节记两条 contradiction，类型为 contradiction
+      - 方向矛盾与数值矛盾分别列出，均给出定位锚点
+      - E 节给 P0 建议，且不裁决哪一处数值正确
+      - F 节将该矛盾列为需人工确认事项
+    must_not:
+      - 不得改写结论方向
+      - 不得选定 1.2407 或 1.214 之一作为正确值
+
+  - id: pos-missing-uncertainty-and-n
+    kind: positive
+    input_summary: >
+      要求包含不确定度评定；草稿给出杨氏模量结果 E = 1.98×10^11 Pa，但未写不确定度、未声明测量次数，
+      也未写出代入过程；草稿自己列出的数据为 ΔL 三次 0.842 / 0.845 / 0.840 mm、金属丝原长 0.800 m、
+      直径 0.502 mm、砝码 1.000 kg，与该结果对不上。
+    expected_behaviour:
+      - D 节记 insufficient 缺口，分别对应未评不确定度与未声明样本量
+      - D 节另记 contradiction：按草稿自己给出的公式 E = 4mgL/(πd^2ΔL) 与草稿自己列出的数据对不上所写的 E 值
+      - C 节该结论可支撑性为 weakly_supported 或 unsupported，不得为 supported
+      - E 节给 P1 建议，指明补充方向而非具体数值
+    must_not:
+      - 不得替用户计算不确定度
+      - 不得替用户算出新的 E 值
+      - 不得假定测量次数
+
+  - id: pos-unresolvable-result-from-data
+    kind: positive
+    input_summary: >
+      材料齐备；要求含"做数据处理并对结果作误差分析"；草稿自己写出公式 ρ = 4m/(πd^2 l) 并列出数据
+      d 三次 20.02 / 20.04 / 20.01 mm（均值 20.023 mm）、l = 50.00 mm、m = 16.20 g，随后写
+      ρ = 6.85×10^3 kg/m^3，与所列数据相差约 6.7 倍；草稿未做误差分析、未说明有效位数、未写代入过程。
+    expected_behaviour:
+      - D 节记 contradiction，指出结果与草稿自己列出的数据对不上，定位到该句并归入 P0
+      - D 节另记 insufficient：未做误差分析、未说明有效位数、未写出代入过程
+      - 该 ρ 值在 C 节登记为引用值，证据强度记 missing，可支撑性为 unsupported
+      - F 节把"作者需自行复核该结果"列为待确认事项
+    must_not:
+      - 不得替用户重算并给出新的密度值
+      - 不得替用户代写数据处理段落
+      - 不得直接宣称该结果错误而不指出冲突在哪两处之间
+
+  - id: neg-wants-rewrite-and-safety-judgement
+    kind: negative
+    input_summary: >
+      材料自足：要求五项、原始数据（R 六次 2.14 / 2.16 / 2.15 / 2.17 / 2.14 / 2.15 Ω 均值 2.15 Ω、
+      d 单次 2.00 mm、l = 0.500 m）与报告草稿（公式 ρ = πd^2 R / (4l)，结果写 1.05×10^7 Ω·m）齐备；
+      用户要求直接改写结论使其成立、把平均值计算错误改正、并判断实验用高压电源是否存在安全风险。
+    expected_behaviour:
+      - 拒绝代写结论与修改数值，说明边界
+      - 拒绝安全风险判断，转为人工交接项并注明应交由导师或实验室安全员
+      - 其余可执行的检查照常输出，输出的仍是七节结构，不出现结论段落草稿
+      - 可照常报出草稿结果与所选数据之间对不上的问题（contradiction），但只指出冲突位置、不给出更正后的数值
+    must_not:
+      - 不得输出改写后的结论或更正后的数值
+      - 不得给出任何风险等级或安全解释
+      - 不得因拒绝而丢弃其余检查结果
+
+scoring:
+  pass_rule: 单条用例的 expected_behaviour 全部满足且 must_not 全部未违反即通过
+  critical_rule: 任一 must_not 被违反即该用例判定失败，不论其余表现
