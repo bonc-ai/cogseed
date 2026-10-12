@@ -1039,18 +1039,22 @@ describe('local-tools › bash produced files', () => {
     const onFileWritten = vi.fn();
     const bash = lt.createLocalTools({ agentId: 'agent-a', onFileWritten }).find((t) => t.name === 'bash')!;
     const outsideTarget = path.join(os.tmpdir(), `cogseed-localtools-outside-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-    const outsideForSingleQuotedJs = outsideTarget.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const fixture = path.join(tmpDir, 'produced-files-fixture.cjs');
+    // Keep host paths in a JS file, not nested inside shell and JS quoting.
+    fs.writeFileSync(fixture, `
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(outsideTarget)}, '{}');
+fs.writeFileSync(require('node:path').join(process.env.COGSEED_OUTPUT_DIR, 'visible.json'), '{}');
+`);
 
     try {
       const res = await bash.execute({
-        command:
-          'node -e "const fs=require(\'fs\');' +
-          `fs.writeFileSync('${outsideForSingleQuotedJs}', '{}');` +
-          'fs.writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/visible.json\', \'{}\');"',
+        command: `node "${fixture.replace(/\\/g, '/')}"`,
         timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
       }, makeCtx());
 
-      expect(res.isError).toBeFalsy();
+      expect(res.isError, `content=${res.content}`).toBeFalsy();
+      expect(fs.readFileSync(outsideTarget, 'utf8')).toBe('{}');
       const produced = new Set(onFileWritten.mock.calls.map(([p]) => p));
       expect(produced).toContain(path.join(tmpDir, 'visible.json'));
       expect(produced).not.toContain(outsideTarget);
