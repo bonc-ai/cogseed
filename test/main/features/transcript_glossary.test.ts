@@ -100,6 +100,30 @@ describe('写法对齐（本体规范名覆盖词表写法）', () => {
     expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
   });
 
+  it('删除型口癖条目填上写法 → action 翻成 replace（否则 correct 存了也永远不用）', () => {
+    const filler = upsertEntry(uid, { wrong: '嗯嗯', correct: '', action: 'delete', kind: 'filler' }).entry!;
+    expect(filler.action).toBe('delete');
+
+    const after = retargetEntry(uid, filler.id, '嗯')!;
+    expect(after.action).toBe('replace');
+    expect(after.correct).toBe('嗯');
+    // 错形与台账不动（同"写法修正"口径）
+    expect(after.wrong).toBe(filler.wrong);
+    expect(after.freq).toBe(filler.freq);
+    // 行为随之改变：扫描里它不再是删除，而是替换
+    const scan = scanText('嗯嗯 这个方案', [after], { docId: 'd1', includeDelete: true });
+    const hit = scan.candidates.find((c) => c.entryRef === after.id);
+    expect(hit?.action).toBe('replace');
+    expect(hit?.correct).toBe('嗯');
+  });
+
+  it('替换型条目重复填同一个写法时保持 no-op（不动 action、不报错）', () => {
+    const entry = upsertEntry(uid, { wrong: 'kstar', correct: 'K star', kind: 'term' }).entry!;
+    const same = retargetEntry(uid, entry.id, 'K star')!;
+    expect(same.action).toBe('replace');
+    expect(same.updatedAt).toBe(entry.updatedAt);
+  });
+
   it('同一个错形出现两种写法时 → 改完自动升为 high（同错不同正的风险）', () => {
     const a = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' }).entry!;
     // 折叠后不同才算"另一种写法"（`CogSeed` 与 `Cogseed` 折叠等价 → 是同一条）

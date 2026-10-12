@@ -175,6 +175,134 @@ export type ScanOutcome = 'pass' | 'restricted' | 'blocked' | 'unknown' | 'scann
  */
 export type ScannerAvailability = 'present' | 'absent_by_build' | 'broken';
 
+/**
+ * One sanitized finding, as the engine produced it.
+ *
+ * The engine's `make_finding` never puts the matched text in the dict — the
+ * snippet is used only to derive `fingerprint` and then dropped — so there is
+ * nothing here to redact. The gate re-applies a field whitelist
+ * (`scan_gate.py::_FINDING_FIELDS`) as a second line of defence, because a
+ * future engine field going straight to the renderer is exactly how a leaked
+ * credential ends up in the UI.
+ */
+export interface SecurityFinding {
+  ruleId: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  originalSeverity: string;
+  demoted: boolean;
+  confidence: 'high' | 'medium' | 'low';
+  category: string;
+  file: string;
+  line: number | null;
+  description: string;
+  remediation: string;
+  hardBlock: boolean;
+  context: string;
+  cwe: string[];
+  owaspLlm: string[];
+  owaspAgentic: string[];
+  /** OWASP Agentic Skills Top 10 (AST01–AST10). */
+  owaspAst: string[];
+  references: string[];
+  /** Cross-line-shift stable problem identity, used by baselines and SARIF. */
+  fingerprint: string;
+  suppressed: boolean;
+  suppressedReason?: string;
+  /**
+   * True when a baseline entry exists but the severity forbids suppressing it.
+   *
+   * Surfaced rather than silently ignored: a user who wrote an acceptance and
+   * sees the finding still active must be told why, or they will conclude the
+   * feature is broken and stop using it — which is worse than not offering it.
+   */
+  suppressionRefused?: boolean;
+  /** Anti-evasion view this came from (`normalized`, `b64_1`, …). */
+  derived?: string;
+  /** True when the hit sits inside a documented example/negative-example block. */
+  example?: boolean;
+}
+
+/** Per-category score contribution, so a score can be explained. */
+export interface ScoreBreakdownCategory {
+  category: string;
+  count: number;
+  raw: number;
+  cap: number;
+  penalty: number;
+  /** True when the category hit its ceiling: more hits cannot lower the score. */
+  capped: boolean;
+}
+
+export interface ScoreBreakdown {
+  score: number;
+  rawPenalty: number;
+  penalty: number;
+  scale: number;
+  byCategory: ScoreBreakdownCategory[];
+  /** `hard_block` / `confirmed_critical` when a red line overrode the curve. */
+  floors: string[];
+}
+
+/** What this scan actually covered — the answer to "why is it 100?". */
+/** How deeply this verdict was established. */
+export type ScanTier = 'sandboxed' | 'static';
+
+export interface ScanCoverage {
+  filesScanned: number;
+  filesSeen: number;
+  bytesScanned: number;
+  ruleCount: number;
+  ruleGroups: string[];
+  hardBlockRules: number;
+  contexts: Record<string, number>;
+  externalTools: Record<string, string>;
+  rulesSource: string;
+  rulesetResolved: boolean;
+  rulesetVersion: string;
+  /** Rules whose regex failed to compile. A non-empty list means silent gaps. */
+  invalidRules: Array<{ id: string; where: string; error: string }>;
+  /**
+   * Derived (anti-evasion) views that were scanned, by view name.
+   *
+   * A non-empty map means the file was re-scanned after normalisation
+   * (invisible characters stripped, NFKC/homoglyph folded) or after decoding
+   * an embedded base64/hex blob. Findings from those passes carry `derived`.
+   */
+  derivedViews?: Record<string, number>;
+  derivedFindings?: number;
+  /** `sandboxed` or `static` — see ScanTier. */
+  scanTier?: ScanTier;
+}
+
+export interface FrameworkEntry {
+  id: string;
+  title: string;
+  count: number;
+  rules: string[];
+}
+
+export interface FrameworkSummary {
+  owaspLlm: FrameworkEntry[];
+  owaspAgentic: FrameworkEntry[];
+  owaspAst: FrameworkEntry[];
+}
+
+export interface StructuralSummary {
+  fileCount?: number;
+  totalBytes?: number;
+  executableCount?: number;
+  archiveCount?: number;
+  symlinkCount?: number;
+  topExtensions?: Array<{ ext: string; count: number }>;
+}
+
+export interface BaselineSummary {
+  acceptedTotal?: number;
+  acceptedActive?: number;
+  acceptedExpired?: number;
+  suppressedFindings?: number;
+}
+
 export interface SentryScanResult {
   outcome: ScanOutcome;
   /** 0-100 heuristic score. Absent when the scan did not complete. */
@@ -194,6 +322,15 @@ export interface SentryScanResult {
   scanMode: string;
   /** True when a hard-block red line fired (e.g. sustained data exfiltration). */
   hardBlocked: boolean;
+  /**
+   * True when an un-demoted, high-confidence `critical` finding exists.
+   *
+   * Distinct from `hardBlocked`: a hard block is a named red line, this is a
+   * rule that fired at critical severity in real source. Both refuse an
+   * install, and the UI words them differently — "we found a known-malicious
+   * pattern" reads very differently from "this skill reads your SSH keys".
+   */
+  confirmedCritical?: boolean;
   /**
    * Attack-surface counts only — never file contents or matched strings. Spec
    * §5.2 requires that a high-risk message explain the risk "without exposing
@@ -265,6 +402,33 @@ export interface SentryScanResult {
    * matched line — which may be the credential itself.
    */
   blockingRules?: string[];
+  /**
+   * Sanitized findings, most severe first. Absent on a verdict that did not
+   * complete, and absent when the caller did not ask for detail.
+   *
+   * Optional rather than defaulted to `[]` for the same reason `attackSurface`
+   * is: an empty array reads as "scanned, nothing found", and a verdict that
+   * never ran must not be representable as a clean result.
+   */
+  findings?: SecurityFinding[];
+  /** Effective-severity counts, including suppressed findings. */
+  severityCounts?: Record<string, number>;
+  /** Category-level score contributions. */
+  scoreBreakdown?: ScoreBreakdown;
+  /** What this scan covered. */
+  coverage?: ScanCoverage;
+  frameworkSummary?: FrameworkSummary;
+  structuralSummary?: StructuralSummary;
+  dependencyManifests?: Record<string, unknown>;
+  baseline?: BaselineSummary;
+  /** `sandboxed` or `static`. A static pass is not the same claim as a sandboxed one. */
+  scanTier?: ScanTier;
+  /** Engine self-declared limitations, shown alongside the verdict. */
+  limitations?: string[];
+  /** ISO-8601 scan time reported by the engine. */
+  scannedAt?: string;
+  /** Report schema version, so a consumer can detect a shape change. */
+  schemaVersion?: string;
 }
 
 /**
@@ -504,12 +668,58 @@ function resolvePythonCandidates(): string[] {
   return _pythonCandidates;
 }
 
-function readVersion(file: string): string {
+/**
+ * Read a version file from an engine root.
+ *
+ * Takes the root as a parameter because a scan can run against an externally
+ * installed engine (`COGSEED_SENTRY_SKILL_DIR`, or a separately installed
+ * scanner skill). Reading the version from the *bundled* path in that case
+ * reports the version of an engine that did not run — measured: the external
+ * engine scenario came back with an empty ruleset version, because the bundled
+ * tree in that test had none.
+ */
+function readVersion(file: string, root: string = enginePath()): string {
   try {
-    return fs.readFileSync(path.join(enginePath(), file), 'utf8').trim();
+    return fs.readFileSync(path.join(root, file), 'utf8').trim();
   } catch {
     return '';
   }
+}
+
+/**
+ * The ruleset the engine loads by default.
+ *
+ * Read from `engine/rulesets/CURRENT` rather than hardcoded. Before this, the
+ * version literal `v1.0.0` appeared in three places (here, guardrail-status and
+ * the ruleset directory name) and none of them was checked against the others —
+ * so shipping a new ruleset left the UI reporting the old one, which is worse
+ * than reporting nothing: a stale version string is a false statement about
+ * what ran.
+ *
+ * Falls back to the lexicographically greatest `v*` directory, then to empty.
+ */
+export function resolveRulesetVersion(root: string = enginePath()): string {
+  // Paths here are relative to the skill directory (`<guardrail>/skill-sentry`),
+  // so the rulesets live under `engine/rulesets` — the same base `readVersion`
+  // uses for `engine/VERSION`. Getting this wrong does not throw; it silently
+  // yields '' and the UI then reports no ruleset version at all.
+  const declared = readVersion(path.join('engine', 'rulesets', 'CURRENT'), root);
+  if (declared) return declared;
+  try {
+    const dirs = fs.readdirSync(path.join(root, 'engine', 'rulesets'), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && /^v\d+(\.\d+)*$/.test(e.name))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+    return dirs[dirs.length - 1] || '';
+  } catch {
+    return '';
+  }
+}
+
+/** Version file inside the active ruleset, e.g. `rulesets/v1.1.0/VERSION`. */
+function rulesetVersionFile(root: string = enginePath()): string {
+  const version = resolveRulesetVersion(root);
+  return version ? path.join('engine', 'rulesets', version, 'VERSION') : '';
 }
 
 class ScannerProcessExitError extends Error {
@@ -562,11 +772,27 @@ export function isRetryableScannerProcessExit(
  * scanner, scanner absent) and an audit added to one of them would silently not
  * apply to the other two.
  */
+export interface ScanOptions {
+  /**
+   * Ask the engine for the per-finding list, score breakdown and coverage.
+   *
+   * Off by default. The install path only needs the verdict, and the detail
+   * payload is two orders of magnitude larger than it (measured: 1.2 KB vs
+   * 180 KB on a marketplace skill with 60 findings). Paying that on every
+   * install — and holding it in memory inside a decision that has a 60s
+   * timeout — buys nothing.
+   */
+  detail?: boolean;
+}
+
 export async function scanSkillDir(
   skillDir: string,
   source: SkillSource = 'thirdparty',
+  options: ScanOptions = {},
 ): Promise<SentryScanResult> {
-  return _withInstructionRisk(await _scanSkillCode(skillDir, source), skillDir);
+  return _withInstructionRisk(
+    await _scanSkillCode(skillDir, source, options.detail === true), skillDir,
+  );
 }
 
 /**
@@ -624,6 +850,7 @@ async function _withInstructionRisk(
 async function _scanSkillCode(
   skillDir: string,
   source: SkillSource = 'thirdparty',
+  detail = false,
 ): Promise<SentryScanResult> {
   const root = enginePath();
   if (!fs.existsSync(skillDir)) return unknown('artifact_missing');
@@ -645,7 +872,7 @@ async function _scanSkillCode(
     const external = resolveExternalScanner(gateScript());
     if (external) {
       return withRedLines(
-        await runGate(external.gateScript, external.engineRoot, skillDir, source, redLines),
+        await runGate(external.gateScript, external.engineRoot, skillDir, source, redLines, detail),
       );
     }
 
@@ -664,7 +891,7 @@ async function _scanSkillCode(
     );
   }
 
-  return withRedLines(await runGate(gateScript(), root, skillDir, source, redLines));
+  return withRedLines(await runGate(gateScript(), root, skillDir, source, redLines, detail));
 }
 
 /**
@@ -687,13 +914,15 @@ async function runGate(
   skillDir: string,
   source: SkillSource,
   redLines: string[],
+  detail = false,
 ): Promise<SentryScanResult> {
   const thru = <T extends SentryScanResult>(r: T): T => r;
   const pythons = resolvePythonCandidates();
   let raw: string;
   try {
     const runOnce = (python: string) => new Promise<string>((resolve, reject) => {
-      const child = spawn(python, [gate, engineRoot, skillDir], {
+      const child = spawn(python, detail ? [gate, engineRoot, skillDir, '--detail']
+        : [gate, engineRoot, skillDir], {
         cwd: engineRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
         // PYTHONIOENCODING guards against a non-UTF8 default on Windows
@@ -825,6 +1054,7 @@ async function runGate(
     isolated: parsed.isolated === true,
     scanMode,
     hardBlocked: parsed.hard_blocked === true,
+    confirmedCritical: parsed.confirmed_critical === true,
     attackSurface: {
       egressPoints: Number(surface.egress_points || 0),
       dynamicExecPoints: Number(surface.dynamic_exec_points || 0),
@@ -838,12 +1068,171 @@ async function runGate(
       : [],
     vulnerabilityCount: Number(parsed.vulnerability_count || 0),
     ...(blockingHits.length ? { blockingRules: blockingHits } : {}),
-    scannerVersion: readVersion(path.join('engine', 'VERSION')),
-    rulesetVersion: readVersion(path.join('engine', 'rulesets', 'v1.0.0', 'VERSION'))
-      || 'v1.0.0',
+    // Read from the engine root that actually ran — see readVersion().
+    scannerVersion: readVersion(path.join('engine', 'VERSION'), engineRoot),
+    rulesetVersion: (rulesetVersionFile(engineRoot)
+      ? readVersion(rulesetVersionFile(engineRoot), engineRoot) : '')
+      || resolveRulesetVersion(engineRoot),
     ...(parsed.warning ? { warning: String(parsed.warning) } : {}),
     ...(redLines.length ? { localRedLines: redLines } : {}),
     ...(rulesSource ? { rulesSource } : {}),
     ...(rulesDegraded ? { rulesDegraded: true } : {}),
+    ...(detail ? parseDetail(parsed) : {}),
   };
+}
+
+/**
+ * Map the gate's `--detail` payload onto our camelCase shape.
+ *
+ * Kept as one function (rather than inlined into the object above) because the
+ * mapping is pure and the failure mode is quiet: a field renamed on one side
+ * only shows up as an empty panel, not as an error. Every field is optional in
+ * the output, so a payload missing one degrades the panel instead of breaking
+ * the scan.
+ */
+function parseDetail(parsed: Record<string, unknown>): Partial<SentryScanResult> {
+  const out: Partial<SentryScanResult> = {};
+
+  if (Array.isArray(parsed.findings)) {
+    out.findings = (parsed.findings as Array<Record<string, unknown>>).map((f) => ({
+      ruleId: String(f.rule_id || ''),
+      severity: (String(f.severity || 'info') as SecurityFinding['severity']),
+      originalSeverity: String(f.original_severity || ''),
+      demoted: f.demoted === true,
+      confidence: (String(f.confidence || 'medium') as SecurityFinding['confidence']),
+      category: String(f.category || ''),
+      file: String(f.file || ''),
+      line: typeof f.line === 'number' ? f.line : null,
+      description: String(f.description || ''),
+      remediation: String(f.remediation || ''),
+      hardBlock: f.hard_block === true,
+      context: String(f.context || ''),
+      cwe: asStringArray(f.cwe),
+      owaspLlm: asStringArray(f.owasp_llm),
+      owaspAgentic: asStringArray(f.owasp_agentic),
+      owaspAst: asStringArray(f.owasp_ast),
+      references: asStringArray(f.references),
+      fingerprint: String(f.fingerprint || ''),
+      suppressed: f.suppressed === true,
+      ...(f.suppressed_reason ? { suppressedReason: String(f.suppressed_reason) } : {}),
+      ...(f.suppression_refused ? { suppressionRefused: true } : {}),
+      ...(f.derived ? { derived: String(f.derived) } : {}),
+      ...(f.example ? { example: true } : {}),
+    })).filter((f) => f.ruleId);
+  }
+
+  if (parsed.severity_counts && typeof parsed.severity_counts === 'object') {
+    out.severityCounts = parsed.severity_counts as Record<string, number>;
+  }
+
+  const breakdown = parsed.score_breakdown as Record<string, unknown> | undefined;
+  if (breakdown && typeof breakdown === 'object') {
+    out.scoreBreakdown = {
+      score: Number(breakdown.score || 0),
+      rawPenalty: Number(breakdown.raw_penalty || 0),
+      penalty: Number(breakdown.penalty || 0),
+      scale: Number(breakdown.scale || 0),
+      byCategory: Array.isArray(breakdown.by_category)
+        ? (breakdown.by_category as Array<Record<string, unknown>>).map((c) => ({
+          category: String(c.category || ''),
+          count: Number(c.count || 0),
+          raw: Number(c.raw || 0),
+          cap: Number(c.cap || 0),
+          penalty: Number(c.penalty || 0),
+          capped: c.capped === true,
+        }))
+        : [],
+      floors: asStringArray(breakdown.floors),
+    };
+  }
+
+  const coverage = parsed.coverage as Record<string, unknown> | undefined;
+  if (coverage && typeof coverage === 'object') {
+    out.coverage = {
+      filesScanned: Number(coverage.files_scanned || 0),
+      filesSeen: Number(coverage.files_seen || 0),
+      bytesScanned: Number(coverage.bytes_scanned || 0),
+      ruleCount: Number(coverage.rule_count || 0),
+      ruleGroups: asStringArray(coverage.rule_groups),
+      hardBlockRules: Number(coverage.hard_block_rules || 0),
+      contexts: (coverage.contexts || {}) as Record<string, number>,
+      externalTools: (coverage.external_tools || {}) as Record<string, string>,
+      rulesSource: String(coverage.rules_source || ''),
+      rulesetResolved: coverage.ruleset_resolved !== false,
+      rulesetVersion: String(coverage.ruleset_version || ''),
+      invalidRules: Array.isArray(coverage.invalid_rules)
+        ? (coverage.invalid_rules as Array<Record<string, unknown>>).map((r) => ({
+          id: String(r.id || ''),
+          where: String(r.where || ''),
+          error: String(r.error || ''),
+        }))
+        : [],
+      derivedViews: (coverage.derived_views || {}) as Record<string, number>,
+      derivedFindings: Number(coverage.derived_findings || 0),
+      scanTier: coverage.scan_tier === 'sandboxed' ? 'sandboxed' : 'static',
+    };
+  }
+
+  const framework = parsed.framework_summary as Record<string, unknown> | undefined;
+  if (framework && typeof framework === 'object') {
+    out.frameworkSummary = {
+      owaspLlm: parseFrameworkEntries(framework.owasp_llm),
+      owaspAgentic: parseFrameworkEntries(framework.owasp_agentic),
+      owaspAst: parseFrameworkEntries(framework.owasp_ast),
+    };
+  }
+
+  const structural = parsed.structural_summary as Record<string, unknown> | undefined;
+  if (structural && typeof structural === 'object' && Object.keys(structural).length) {
+    out.structuralSummary = {
+      fileCount: Number(structural.file_count || 0),
+      totalBytes: Number(structural.total_bytes || 0),
+      executableCount: Number(structural.executable_count || 0),
+      archiveCount: Number(structural.archive_count || 0),
+      symlinkCount: Number(structural.symlink_count || 0),
+      topExtensions: Array.isArray(structural.top_extensions)
+        ? (structural.top_extensions as Array<Record<string, unknown>>)
+          .map((e) => ({ ext: String(e.ext || ''), count: Number(e.count || 0) }))
+        : [],
+    };
+  }
+
+  if (parsed.dependency_manifests && typeof parsed.dependency_manifests === 'object'
+    && Object.keys(parsed.dependency_manifests as object).length) {
+    out.dependencyManifests = parsed.dependency_manifests as Record<string, unknown>;
+  }
+
+  const baseline = parsed.baseline as Record<string, unknown> | undefined;
+  if (baseline && typeof baseline === 'object' && Object.keys(baseline).length) {
+    out.baseline = {
+      acceptedTotal: Number(baseline.accepted_total || 0),
+      acceptedActive: Number(baseline.accepted_active || 0),
+      acceptedExpired: Number(baseline.accepted_expired || 0),
+      suppressedFindings: Number(baseline.suppressed_findings || 0),
+    };
+  }
+
+  if (parsed.scan_tier === 'sandboxed' || parsed.scan_tier === 'static') {
+    out.scanTier = parsed.scan_tier;
+  }
+  if (Array.isArray(parsed.limitations)) out.limitations = asStringArray(parsed.limitations);
+  if (parsed.scanned_at) out.scannedAt = String(parsed.scanned_at);
+  if (parsed.schema_version) out.schemaVersion = String(parsed.schema_version);
+  return out;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((v) => String(v)).filter(Boolean) : [];
+}
+
+function parseFrameworkEntries(value: unknown): FrameworkEntry[] {
+  if (!Array.isArray(value)) return [];
+  return (value as Array<Record<string, unknown>>)
+    .map((row) => ({
+      id: String(row.id || ''),
+      title: String(row.title || ''),
+      count: Number(row.count || 0),
+      rules: asStringArray(row.rules),
+    }))
+    .filter((row) => row.id);
 }

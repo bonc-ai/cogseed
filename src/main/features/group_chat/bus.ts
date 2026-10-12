@@ -21,7 +21,7 @@
  */
 
 import type { AgentTool, HistoryResource } from "#core-agent";
-import type { ChatResolvedRuntime } from "../../model/client";
+import type { ChatResolvedRuntime, CognitionSaveReceipt } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
@@ -227,6 +227,7 @@ import {
   type CoordinatorAccessRequest,
 } from "./coordinator_admission";
 import { buildRetryResumeModelText } from "./retry_resume";
+import * as HubContentStatus from '../../../shared/hub-content-status';
 import { isAgentEnabled, readDisabledSets } from "../component_enabled";
 import { finalizeProducedFile } from "../produced_output_hooks";
 import { selectVisibleProducedFiles } from "../produced_files";
@@ -633,8 +634,10 @@ async function _runtimeSkillListForAgent(
 async function _findDisabledSkillUseRequest(
   uid: string,
   text: string,
-): Promise<{ id: string; name: string } | null> {
-  if (!_hasSkillUseIntent(text)) return null;
+  selections?: readonly ChatUseSelection[],
+): Promise<{ id: string; name: string; hubDisabled: boolean } | null> {
+  const selected = new Set(_selectedSkillRefs(selections));
+  if (!_hasSkillUseIntent(text) && !selected.size) return null;
   let skills: skillsFeat.SkillListing[];
   try {
     skills = await skillsFeat.listSkills();
@@ -646,12 +649,14 @@ async function _findDisabledSkillUseRequest(
   }
   const haystack = _normaliseSkillMentionText(text);
   for (const skill of skills) {
-    if (skill.enabled !== false) continue;
+    const hubDisabled = skill.source === 'marketplace' && HubContentStatus.isHubContentDisabled(skill);
+    if (skill.enabled !== false && !hubDisabled) continue;
+    if (selected.has(skill.id)) return { id: skill.id, name: skill.name, hubDisabled };
     const needles = [skill.id, skill.name]
       .map((s) => _normaliseSkillMentionText(s))
       .filter((s, idx, arr) => s.length >= 2 && arr.indexOf(s) === idx);
     if (needles.some((needle) => haystack.includes(needle))) {
-      return { id: skill.id, name: skill.name || skill.id };
+      return { id: skill.id, name: skill.name || skill.id, hubDisabled };
     }
   }
   return null;
@@ -2679,6 +2684,7 @@ export interface EnqueueParams {
   projection_receipt?: { projectionId: string; authorization: string };
   recall_citations?: RecallMessageCitation[];
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
+  asset_change_approval_card?: { kind: 'asset_change_approval'; proposalId: string; assetId: string; assetTitle: string; baselineVersion: string; diff: { before: string; after: string; fields: string[] }; reason: string; actions: Array<'confirm' | 'defer' | 'reject'> };
   produced?: string[];
   form?: ChatFormPayload;
   created_agents?: Array<{
@@ -2695,7 +2701,7 @@ export interface EnqueueParams {
    * `agent_id` is the producing actor — the renderer routes a user→artifact
    * interaction result back to it. */
   artifacts?: Array<{ id: string; title: string; agent_id: string }>;
-  teaching_receipts?: GroupMessage["teaching_receipts"];
+  cognition_save_receipts?: GroupMessage["cognition_save_receipts"];
   marketplace_requests?: MarketplaceInstallRequest[];
   plan_announcement?: boolean;
   /** Override resolved recipients (commander emitting plan announcement
@@ -3552,6 +3558,7 @@ async function _enqueueBody(
       ? { recall_citations: params.recall_citations }
       : {}),
     ...(params.kstar_review_card ? { kstar_review_card: params.kstar_review_card } : {}),
+    ...(params.asset_change_approval_card ? { asset_change_approval_card: params.asset_change_approval_card } : {}),
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
       : {}),
@@ -3565,8 +3572,8 @@ async function _enqueueBody(
     ...(params.artifacts && params.artifacts.length
       ? { artifacts: params.artifacts }
       : {}),
-    ...(params.teaching_receipts && params.teaching_receipts.length
-      ? { teaching_receipts: params.teaching_receipts }
+    ...(params.cognition_save_receipts && params.cognition_save_receipts.length
+      ? { cognition_save_receipts: params.cognition_save_receipts }
       : {}),
     ...(params.marketplace_requests && params.marketplace_requests.length
       ? { marketplace_requests: params.marketplace_requests }
@@ -5482,9 +5489,10 @@ async function runActorTurnBody(
     const disabledSkill = await _findDisabledSkillUseRequest(
       uid,
       item.llmPayload,
+      item.useSelections,
     );
     if (disabledSkill) {
-      const reply = `<span style="color:var(--danger)">${escapeHtmlForBubble(t("component.skill_disabled_request", { name: disabledSkill.name || disabledSkill.id }))}</span>`;
+      const reply = `<span style="color:var(--danger)">${escapeHtmlForBubble(t(disabledSkill.hubDisabled ? "component.skill_hub_disabled_request" : "component.skill_disabled_request", { name: disabledSkill.name || disabledSkill.id }))}</span>`;
       log.info(
         `blocked disabled skill request cid=${cid} skill=${disabledSkill.id}`,
       );
@@ -5765,6 +5773,10 @@ async function runActorTurnBody(
   // InjectionReceipt（channel='profile_memory'）——「这轮带了哪些背景记忆」
   // 从此可查（此前画像注入零收据，审计黑洞）。
   let recallProfileMemory: Array<{ id: string; source: string; version: string }> = [];
+  // 呈现面合一（2026-09-30）：授权块/画像块的裸渲染（无旧长导语）——目录
+  // 建成后与目录文本合成单一 <asset-context> 块一次追加（见目录段之后）。
+  let recallAuthorizedBlock = '';
+  let recallProfileBlock = '';
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
@@ -5815,9 +5827,12 @@ async function runActorTurnBody(
           ...(item.forecastId ? { forecastId: item.forecastId } : {}),
         });
         if (recallContext.promptBlock) {
-          systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
+          // 呈现面合一（2026-09-30）：不再在此处 append——授权块/画像块攒到
+          // 目录建成后合成单一 <asset-context> 一次追加（见下方目录段之后）。
           recallCitations = recallContext.citations;
           recallProfileMemory = recallContext.profileMemoryEntries ?? [];
+          recallAuthorizedBlock = recallContext.authorizedAssetsBlock ?? '';
+          recallProfileBlock = recallContext.profileAssetsBlock ?? '';
         }
         // PRD 3.6 Transfer Verified 闭环：投影资产真实注入时在同一处落
         // ContextReuseReceipt（key=turn-<turnId>），并登记到本次运行的
@@ -5861,15 +5876,89 @@ async function runActorTurnBody(
       // 资产目录可发现性提示（2026-09-18）：注入解决"这一轮相关"，但模型不会
       // 主动想到"还有别的资产"（真机样本 0/3 会去查目录）。一行提示 + TTL 缓存，
       // 只讲"目录存在且便宜"，挑哪几条仍归模型。
+      let catalogText = '';
       try {
         const { assetCatalogForPromptWithRelevance } = await import('../recall/asset-catalog-hint');
         // 目录带当轮相关度（★标记+排序，2026-09-22 砍注入后的算法落点）：
         // 复用上面 recallContext 同源的当轮任务文本。
-        const catalog = await assetCatalogForPromptWithRelevance(uid, cid, Date.now(), String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000));
-        if (catalog.text) systemPrompt = `${systemPrompt}\n\n${catalog.text}`;
+        // 场景因子（specs/012 T017）：会话的项目/空间归属（回合顶部解析、会话级
+        // 冻结）传进目录排序——命中 spaceId===turnSpaceId 或
+        // scopePolicy.{projectIds,workspaceIds} 的资产给正分；两者都缺省时该因子
+        // 整体缺席（≠0 分），排序行为接近现状。
+        // 修3（2026-09-30）：注入块已带入的资产（committed/模型自选/画像镜像）
+        // 在目录行尾标注 [attached]——目录保持可用全集语义但不再对已注入内容
+        // 装作未知，模型不必重复翻找已到手的东西。
+        const attachedAssetIds = new Set<string>([
+          ...recallCitations.map((citation) => citation.assetId),
+          ...recallProfileMemory.map((entry) => entry.id),
+        ]);
+        const catalog = await assetCatalogForPromptWithRelevance(uid, cid, Date.now(), String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000), {
+          ...(turnProjectId ? { turnProjectId } : {}),
+          ...(turnSpaceId ? { turnSpaceId } : {}),
+        }, actor.id, item.turnId, attachedAssetIds);
+        catalogText = catalog.text;
+        if (catalogText) {
+          const { recordCatalogObservations } = await import('../recall/catalog-observation');
+          await recordCatalogObservations(uid, { turnId: item.turnId, cid, stage: 'prompt_included', assets: catalog.shown });
+        }
         catalogRelevantIds = catalog.relevantIds;
       } catch {
         // 目录块拿不到不影响回合。
+      }
+
+      // 呈现面合一（2026-09-30）：授权资产/画像/目录合成单一 <asset-context>
+      // 块一次追加——选择分层与通道记账原样不动；目录建失败时授权/画像子区
+      // 照常合成。经验目录块按 specs/016 保持并列，不并入本块。
+      try {
+        const { composeAssetContextBlock } = await import('../recall/prompt-injection');
+        const assetContext = composeAssetContextBlock({
+          ...(recallAuthorizedBlock ? { authorized: recallAuthorizedBlock } : {}),
+          ...(recallProfileBlock ? { profile: recallProfileBlock } : {}),
+          ...(catalogText ? { catalog: catalogText } : {}),
+        });
+        if (assetContext) systemPrompt = `${systemPrompt}\n\n${assetContext}`;
+      } catch (error) {
+        // 合成失败时回退旧形态直接拼接，注入不丢。
+        log.warn(`asset context compose failed cid=${cid}: ${(error as Error).message}`);
+        if (recallAuthorizedBlock || recallProfileBlock) {
+          systemPrompt = `${systemPrompt}\n\n${[recallAuthorizedBlock, recallProfileBlock].filter(Boolean).join('\n\n')}`;
+        }
+        if (catalogText) systemPrompt = `${systemPrompt}\n\n${catalogText}`;
+      }
+
+      // 任务经验目录（specs/016 T025 / US-802）：与上面的资产目录**并列**追加、
+      // 不合并成一段——两套集合与过滤口径互不污染（合并正是"经验稀释资产"的
+      // 老毛病，spec 背景点名要修的）。清单只给单行条目，正文模型用
+      // read_task_experience 自取（拍板 C-7：能看见、不硬注入）；拿不到同样
+      // 不影响回合。
+      try {
+        const { experienceCatalogForPrompt } = await import('../recall/experience-catalog-hint');
+        // 挂载集（@ 带入的经验集引用）作为第 5 参传入：清单据此对「已挂载但
+        // 本轮被拦」的经验各写一条 omitted 回执（E10 的数据源），不传则该路
+        // 径静默缺失——读取失败不阻塞回合，与清单本身同一条降级线。
+        let experienceMounted: { taskRunId?: string; experienceIds: string[] } | undefined;
+        try {
+          const { listExperienceSetReferences } = await import('../recall/experience-reference');
+          const refs = await listExperienceSetReferences(uid, cid);
+          const mountedIds = [...new Set(refs.flatMap((ref) => ref.experienceIds ?? []))];
+          if (mountedIds.length) experienceMounted = { experienceIds: mountedIds };
+        } catch {
+          // 挂载集读不到只影响 omitted 回执，不影响清单。
+        }
+        const experienceCatalog = await experienceCatalogForPrompt(
+          uid,
+          cid,
+          Date.now(),
+          String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          experienceMounted,
+          {
+            agentId: actor.id,
+            ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          },
+        );
+        if (experienceCatalog) systemPrompt = `${systemPrompt}\n\n${experienceCatalog}`;
+      } catch {
+        // 经验清单拿不到不影响回合。
       }
 
       // Layer 1 routing uplift: deterministic task-intent detection adds an
@@ -6076,7 +6165,10 @@ async function runActorTurnBody(
   // one as a sandboxed `<iframe>` (`chat-app://`); `agent_id` = this actor,
   // the routing target for a user→artifact interaction result.
   const turnArtifacts: Array<{ id: string; title: string }> = [];
-  const turnTeachingReceipts: NonNullable<GroupMessage["teaching_receipts"]> = [];
+  // Teaching receipts were merged into cognition save receipts (2026-09-28
+  // 四病整改 7.0 修7): the runner emits candidate+taught-pending-review through
+  // onCognitionSaveReceipt, so this turn keeps no separate teaching collector.
+  const turnCognitionSaveReceipts: NonNullable<GroupMessage["cognition_save_receipts"]> = [];
   const onArtifactCreated = (a: { id: string; title: string }) => {
     turnArtifacts.push(a);
     emit(state, {
@@ -6747,15 +6839,13 @@ async function runActorTurnBody(
         sourceMessageId: item.msgId,
         sourceMessageFromUser: item.fromActorId === USER_ID,
         ...(item.sourceMessageText ? { sourceMessageText: item.sourceMessageText } : {}),
-        onTeachingReceipt: (receipt) => {
-          if (turnTeachingReceipts.some((item) => item.id === receipt.id)) return;
-          turnTeachingReceipts.push({
-            id: receipt.id,
-            summary: receipt.summary,
-            scope: receipt.scope,
-            status: receipt.status,
-            candidate_ids: receipt.candidateIds,
-          });
+        onCognitionSaveReceipt: (receipt: CognitionSaveReceipt) => {
+          const existingIndex = turnCognitionSaveReceipts.findIndex((item) => item.target === receipt.target && item.id === receipt.id && item.outcome === receipt.outcome);
+          if (existingIndex >= 0) {
+            turnCognitionSaveReceipts[existingIndex] = { ...receipt };
+            return;
+          }
+          turnCognitionSaveReceipts.push({ ...receipt });
         },
         // Every in-process turn reports its resolved runtime (actual
         // provider/model after override / fallback). Commander keeps its
@@ -7609,7 +7699,7 @@ async function runActorTurnBody(
   if (turnArtifacts.length > 0 && outcome.kind === "silent") {
     outcome = { kind: "persist", text: "" };
   }
-  if (turnTeachingReceipts.length > 0 && outcome.kind === "silent") {
+  if (turnCognitionSaveReceipts.length > 0 && outcome.kind === "silent") {
     outcome = { kind: "persist", text: "" };
   }
 
@@ -7627,7 +7717,7 @@ async function runActorTurnBody(
       (outcome.createdAgents && outcome.createdAgents.length) ||
       (outcome.createdSkills && outcome.createdSkills.length) ||
       turnArtifacts.length ||
-      turnTeachingReceipts.length ||
+      turnCognitionSaveReceipts.length ||
       turnMarketplaceRequests.length
     );
     outcome =
@@ -7812,8 +7902,8 @@ async function runActorTurnBody(
             })),
           }
         : {}),
-      ...(turnTeachingReceipts.length
-        ? { teaching_receipts: turnTeachingReceipts }
+      ...(turnCognitionSaveReceipts.length
+        ? { cognition_save_receipts: turnCognitionSaveReceipts }
         : {}),
       ...(turnMarketplaceRequests.length
         ? { marketplace_requests: turnMarketplaceRequests }
@@ -7866,31 +7956,40 @@ async function runActorTurnBody(
         log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
       }
       const { recordInjectionReceipt } = await import('../recall/injection-receipt');
-      await Promise.allSettled(persistedRecallCitations.map((citation) => recordInjectionReceipt(uid, {
-        assetId: citation.asset_id,
-        assetVersion: citation.version,
-        taskRunId: item.turnId,
-        projectionId: citation.projection_id,
-        messageId: persistedMsg.id,
-        boundary: 'real',
-        status: 'injected',
-        channel: 'projection',
-      })));
+      // 「为什么排前」拆解随回执留痕（specs/012 T019）：拆解只出自当轮目录
+      // 构建的那一次 rankAssets（asset-catalog-hint 按 userId+cid 记住的
+      // ranked 视图，见上方 catalog 调用同键）——这里查表透传，不在写侧
+      // 重算（排序唯一处）。资产不在当轮 ranked 视图里时不带 ranking，
+      // 读取侧（recall.catalog.ranking）按 explainable:false 如实说
+      // 「没有记录」，不编造。
+      const { lastCatalogRankedForTurn } = await import('../recall/asset-catalog-hint');
+      const { explainRanking } = await import('../recall/asset-ranking');
+      const rankedThisTurn = lastCatalogRankedForTurn(uid, cid, item.turnId);
+      await Promise.allSettled(persistedRecallCitations.map((citation) => {
+        const rankedRow = rankedThisTurn.get(String(citation.asset_id || ''));
+        return recordInjectionReceipt(uid, {
+          assetId: citation.asset_id,
+          assetVersion: citation.version,
+          taskRunId: item.turnId,
+          projectionId: citation.projection_id,
+          messageId: persistedMsg.id,
+          boundary: 'real',
+          status: 'injected',
+          channel: 'projection',
+          ...(rankedRow ? { ranking: explainRanking(rankedRow) } : {}),
+        });
+      }));
     }
-    // 画像通道收据（2026-09-13）：只落 InjectionReceipt（channel 区分），
-    // 不写 usage-records——usage 流水按「资产被使用」记账，画像不是资产，
-    // 混入会让资产使用统计失真。审计「这轮带了什么」以收据流为准。
+    // 画像通道落账（2026-09-13 通道显式化 / 2026-09-30 修2）：回执逐条留
+    // 痕；正式资产镜像（非 onto-*）同口径计入 usage——「画像不是资产」的
+    // 旧口径只适用于已废弃的文件回退形态，统一入口见
+    // injection-receipt.ts::recordProfileMemoryInjection。
     if (recallProfileMemory.length) {
-      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
-      await Promise.allSettled(recallProfileMemory.map((entry) => recordInjectionReceipt(uid, {
-        assetId: entry.id,
-        assetVersion: entry.version,
+      const { recordProfileMemoryInjection } = await import('../recall/injection-receipt');
+      await recordProfileMemoryInjection(uid, recallProfileMemory, {
         taskRunId: item.turnId,
         messageId: persistedMsg.id,
-        boundary: 'real',
-        status: 'injected',
-        channel: 'profile_memory',
-      })));
+      });
     }
     // 漏取审计（2026-09-19）：目录标了★（提示模型"这些相关"）但本回合既没
     // 注入也没被模型取用/派发的资产——每条记一条 omitted/catalog_hint 回执，
@@ -12131,10 +12230,12 @@ async function buildCommanderExtraTools(
         if (existing) {
           projection = await appendAssetsToModelSelectedProjection(uid, existing.id, granted, { taskRunId: turnId });
         } else {
+          const { fileKinds: scopeFileKinds, ...scopeWithoutFileKinds } = currentRecallScope;
           const base = await previewContextProjection(uid, {
             taskRunId: turnId,
             conversationId: cid,
-            ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
+            ...scopeWithoutFileKinds,
+            ...(scopeFileKinds !== undefined ? { fileKinds: [...scopeFileKinds] } : {}),
             purpose: "model_selected",
             ...(reason ? { taskText: reason } : {}),
             authorization: "model_selected",

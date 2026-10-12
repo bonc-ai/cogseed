@@ -28,6 +28,8 @@ import * as path from 'node:path';
 
 import { userLocalRoot } from '../paths';
 import { safeId, writeTextAtomicSync, nowIso, readJsonSync } from '../storage';
+import { skillIdToFileStem, fileStemToSkillId } from './skill_id';
+import { securityNotableOf } from './skill_verdict';
 import { createLogger } from '../logger';
 import { VALIDATOR_VERSION } from '../quality';
 import { marketplaceContentTreeHash } from '../util/marketplace-tree-hash';
@@ -220,6 +222,10 @@ export type StaleReason =
   | 'validator_upgraded'
   | 'ruleset_changed'
   | 'payload_unreadable'
+  // The deep scanner's ruleset is a *different* identity from the declaration
+  // profile above, and a receipt records it as `rulesetVersion`. Kept separate so
+  // an audit can tell which of the two moved.
+  | 'scanner_ruleset_changed'
   // The security scanner is verified by pinned tree hash rather than by content
   // scanning (see features/scanner_trust). These record which of those checks
   // applied, so a scanner admitted without a pin is distinguishable in an audit
@@ -245,18 +251,41 @@ export function currentRuleProfile(): string {
   return `builtin@${VALIDATOR_VERSION}`;
 }
 
+/**
+ * Ruleset version of the deep scanner, or `''` when it cannot be read.
+ *
+ * Loaded lazily: `isReceiptStale` is synchronous and sits on the load path for
+ * every skill, while `security/sentry-adapter` pulls in the model client and the
+ * prompt loader. `skill_reverify` avoids the same import at module scope for the
+ * same reason (`_isScannerAbsentByBuild`). A failure here yields `''`, which
+ * callers must read as "unknown" and skip — never as "changed".
+ */
+function currentScannerRulesetVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const adapter = require('./security/sentry-adapter') as { resolveRulesetVersion?: () => string };
+    return adapter.resolveRulesetVersion?.() || '';
+  } catch {
+    return '';
+  }
+}
+
 function _receiptsDir(uid: string): string {
   return path.join(userLocalRoot(uid), 'skill_trust');
 }
 
 function _receiptFile(uid: string, skillId: string, agentId?: string): string {
-  if (!safeId(skillId)) throw new Error('invalid skill id');
+  // `safeId` rejects `:`, so an external id (`claude:name`) is encoded to a
+  // filesystem-safe stem. `.` cannot occur in an internal id, so the mapping is
+  // injective and cannot collide with a hex or name receipt.
+  const stem = skillIdToFileStem(skillId);
+  if (!stem) throw new Error('invalid skill id');
   // Agent-private skills share a skillId namespace with standalone installs
   // (`userMarketplaceAgentSkillsDir`), so their receipts are namespaced by
   // agent: `${agentId}__${skillId}.json`. Without the prefix a private skill
   // that shadows a standalone id would verify the WRONG bytes — the exact
   // trap documented in skill-registry's private branch.
-  const name = agentId ? `${agentId}__${skillId}.json` : `${skillId}.json`;
+  const name = agentId ? `${agentId}__${stem}.json` : `${stem}.json`;
   return path.join(_receiptsDir(uid), name);
 }
 
@@ -467,7 +496,7 @@ function _readUserOverride(raw: unknown): { userOverride?: SecurityReceipt['user
 }
 
 export function readReceipt(uid: string, skillId: string, agentId?: string): SecurityReceipt | null {
-  if (!safeId(uid) || !safeId(skillId)) return null;
+  if (!safeId(uid) || !skillIdToFileStem(skillId)) return null;
   if (agentId !== undefined && !safeId(agentId)) return null;
   const raw = readJsonSync<Partial<SecurityReceipt>>(_receiptFile(uid, skillId, agentId));
   if (!raw || typeof raw !== 'object') return null;
@@ -683,6 +712,21 @@ export function isReceiptStale(uid: string, skillId: string, skillDir: string, a
   if (receipt.ruleProfile !== currentRuleProfile()) {
     return { stale: true, reason: 'ruleset_changed' };
   }
+  // The deep scanner's ruleset, which the check above does NOT cover: it compares
+  // the declaration profile. Without this, a ruleset upgrade leaves every receipt
+  // looking fresh, so 重新检查 silently returns the old verdict without rescanning —
+  // measured: receipts written under ruleset v1.0.0 kept short-circuiting after the
+  // engine moved to v1.1.0, which also made the panel's "re-checking recalculates
+  // them" note untrue.
+  //
+  // Skipped when either side is unknown: a build without the deep scanner writes no
+  // `rulesetVersion`, and treating "absent" as stale would rescan the whole library
+  // on every call without ever converging (the failure `_isScannerAbsentByBuild`
+  // exists to prevent).
+  const scannerRuleset = currentScannerRulesetVersion();
+  if (scannerRuleset && receipt.rulesetVersion && receipt.rulesetVersion !== scannerRuleset) {
+    return { stale: true, reason: 'scanner_ruleset_changed' };
+  }
   return { stale: false, reason: null };
 }
 
@@ -709,8 +753,39 @@ export function listReceipts(uid: string): SecurityReceipt[] {
     // trust list — they describe agent-bundled skills and would read as
     // unrelated skill ids here.
     if (name.includes('__')) continue;
-    const receipt = readReceipt(uid, name.slice(0, -'.json'.length));
+    // Decode the stem back to a skill id: an external receipt is stored as
+    // `claude.foo.json` but must surface as `claude:foo`.
+    const stem = fileStemToSkillId(name.slice(0, -'.json'.length));
+    if (!stem) continue;
+    const receipt = readReceipt(uid, stem);
     if (receipt) out.push(receipt);
   }
   return out.sort((a, b) => b.scannedAt.localeCompare(a.scannedAt));
+}
+
+/**
+ * Receipts for a surface that presents the verdict to a user.
+ *
+ * `securityNotable` is computed here rather than in the renderer so that the two
+ * surfaces reading these receipts — the skills list and the 安全与信任 page —
+ * cannot reach different conclusions from the same file again. Both used to count
+ * every `decision: 'risk'`; on a real profile that was 59 of 60 skills, every one
+ * of them driven by declaration hygiene, which is how a security page ends up
+ * telling the user their whole library needs attention.
+ */
+export interface ReceiptForDisplay extends SecurityReceipt {
+  /**
+   * True when the verdict is worth showing as a **security** risk.
+   *
+   * A consumer that receives no flag must keep showing the raw verdict: hiding a
+   * security finding is worse than showing a bookkeeping one.
+   */
+  securityNotable: boolean;
+}
+
+export function listReceiptsForDisplay(uid: string): ReceiptForDisplay[] {
+  return listReceipts(uid).map((receipt) => ({
+    ...receipt,
+    securityNotable: securityNotableOf(receipt),
+  }));
 }

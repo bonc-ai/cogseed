@@ -6,6 +6,7 @@ import { scanForInjection } from '../memory';
 import * as chats from '../chats';
 import { chatWithModel } from '../../model/client';
 import type { MessageRecord } from '../chats';
+import type { CognitionSourceInput } from '../recall/source-service';
 
 const log = createLogger('cognition.capture-draft');
 
@@ -19,21 +20,22 @@ export const COGNITION_CAPTURE_MAX_REASON_CHARS = 400;
 const MAX_USER_ID_LENGTH = 160;
 const MAX_CONVERSATION_TITLE_LENGTH = 160;
 const MAX_MESSAGE_ID_LENGTH = 160;
-const MAX_TITLE_LENGTH = 120;
+const MAX_TITLE_LENGTH = 60;
 const MAX_SUMMARY_LENGTH = 2_000;
 const MIN_COPY_COMPARISON_CHARS = 24;
+const CANDIDATE_SCOPES = ['general', 'report', 'code', 'review', 'product'] as const;
+const CANDIDATE_RISKS = ['low', 'medium', 'high'] as const;
 
 export interface CognitionCaptureRequest {
   conversationId: string;
   messageId: string;
 }
 
-/** 四类正式资产类型。与 `AbilityAssetType` 同一套词汇——气泡沉淀产出的是
- *  recall 候选，必须和其它五个候选生产者走同一套分类，不另立一套。 */
-export type CognitionCaptureAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
+/** 与所有 Recall 候选生产者共用的五类资产类型。 */
+export type CognitionCaptureAssetType = 'personal' | 'fact' | 'rule' | 'template' | 'skill_method';
 
 const COGNITION_CAPTURE_ASSET_TYPES: readonly CognitionCaptureAssetType[] = [
-  'personal', 'rule', 'template', 'skill_method',
+  'personal', 'fact', 'rule', 'template', 'skill_method',
 ];
 
 export function isCognitionCaptureAssetType(value: unknown): value is CognitionCaptureAssetType {
@@ -42,11 +44,20 @@ export function isCognitionCaptureAssetType(value: unknown): value is CognitionC
 }
 
 export interface CognitionCaptureDraft {
-  title: string;
+  /** Canonical Recall candidate fields. `summary` is the display title. */
   summary: string;
-  evidenceSummary: string;
-  /** 模型给出的四类预判。给不出合法值时缺省，由用户在面板上选。 */
-  suggestedType?: CognitionCaptureAssetType;
+  judgment: string;
+  value: string;
+  suggestedType: CognitionCaptureAssetType;
+  suggestedScope: typeof CANDIDATE_SCOPES[number];
+  applicableWhen: string[];
+  forbiddenWhen: string[];
+  suggestedAction: 'create';
+  risk: typeof CANDIDATE_RISKS[number];
+  uncertainty?: string;
+  sourceRefs: CognitionSourceInput[];
+  evidenceRefs: CognitionSourceInput[];
+  /** Display-only source title; references themselves are host-generated. */
   sourceLabel: string;
   conversationId: string;
   messageId: string;
@@ -149,14 +160,12 @@ function comparisonTokens(value: string): Set<string> {
 
 function isCopiedOnly(candidate: CognitionCaptureDraft, sourceText: string): boolean {
   const source = normalizeText(sourceText);
-  const summary = normalizeText(candidate.summary);
-  const evidence = normalizeText(candidate.evidenceSummary);
-  if (!source || !summary || !evidence) return false;
-  if (summary === source || evidence === source) return true;
-  if (summary.length >= MIN_COPY_COMPARISON_CHARS && source.includes(summary)
-      && evidence.length >= MIN_COPY_COMPARISON_CHARS && source.includes(evidence)) return true;
+  const judgment = normalizeText(candidate.judgment);
+  if (!source || !judgment) return false;
+  if (judgment === source) return true;
+  if (judgment.length >= MIN_COPY_COMPARISON_CHARS && source.includes(judgment)) return true;
   const sourceTokens = comparisonTokens(sourceText);
-  const candidateTokens = comparisonTokens(`${candidate.summary} ${candidate.evidenceSummary}`);
+  const candidateTokens = comparisonTokens(candidate.judgment);
   if (candidateTokens.size < 8 || sourceTokens.size < candidateTokens.size) return false;
   let overlap = 0;
   for (const token of candidateTokens) if (sourceTokens.has(token)) overlap += 1;
@@ -178,12 +187,6 @@ function assertSafeGeneratedText(value: string, field: string, maxLength: number
   return text;
 }
 
-function exactKeys(value: JsonObject, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const sortedExpected = expected.slice().sort();
-  return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index]);
-}
-
 function parseModelOutput(raw: unknown, context: SourceContext): CognitionCaptureDraftResult {
   if (typeof raw !== 'string') {
     throw new CognitionCaptureError('invalid_model_output', 'generated cognition draft is not text');
@@ -197,36 +200,92 @@ function parseModelOutput(raw: unknown, context: SourceContext): CognitionCaptur
   } catch (error) {
     throw new CognitionCaptureError('invalid_model_output', 'generated cognition draft is not valid JSON', { cause: error });
   }
-  if (!isJsonObject(parsed) || typeof parsed.status !== 'string') {
+  if (!isJsonObject(parsed) || !Array.isArray(parsed.candidates)
+      || Object.keys(parsed).some((key) => key !== 'candidates' && key !== 'reason')) {
     throw new CognitionCaptureError('invalid_model_output', 'generated cognition draft has an invalid shape');
   }
-  if (parsed.status === 'not_reusable') {
-    if (!exactKeys(parsed, ['status', 'reason']) || typeof parsed.reason !== 'string') {
-      throw new CognitionCaptureError('invalid_model_output', 'generated no-candidate response has an invalid shape');
+  if (parsed.reason !== undefined && typeof parsed.reason !== 'string') {
+    throw new CognitionCaptureError('invalid_model_output', 'generated extraction reason has an invalid shape');
+  }
+  if (parsed.candidates.length === 0) {
+    if (typeof parsed.reason !== 'string' || !parsed.reason.trim()) {
+      throw new CognitionCaptureError('invalid_model_output', 'generated no-candidate response is missing its reason');
     }
     return {
       status: 'not_reusable',
       reason: assertSafeGeneratedText(parsed.reason, 'reason', COGNITION_CAPTURE_MAX_REASON_CHARS),
     };
   }
-  // `suggested_type` 是**可选**键：模型漏了它不该让整条草稿作废——面板上的
-  // 分类选择器是必填的，缺省时用户自己选，链路照样走得通。多余的其它键仍然拒收。
-  const readyKeys: readonly string[] = ['status', 'title', 'summary', 'evidence_summary'];
-  const shapeOk = exactKeys(parsed, readyKeys)
-    || exactKeys(parsed, [...readyKeys, 'suggested_type']);
-  if (parsed.status !== 'ready' || !shapeOk
-      || typeof parsed.title !== 'string' || typeof parsed.summary !== 'string'
-      || typeof parsed.evidence_summary !== 'string') {
+  if (parsed.reason !== undefined || parsed.candidates.length !== 1
+      || !isJsonObject(parsed.candidates[0])) {
     throw new CognitionCaptureError('invalid_model_output', 'generated cognition draft has an invalid shape');
   }
-  // 四类分类走和主抽取管线同一套词汇（AbilityAssetType）。模型给不出合法值时
-  // **不猜**——退回 skill_method 只会把分类错误藏进资产库，而面板上的分类选择器
-  // 是必填的，用户会看到并可以改。这里只负责"预填一个可信的默认"。
+  const candidate = parsed.candidates[0];
+  const requiredKeys = [
+    'judgment', 'value', 'summary', 'suggestedType', 'suggestedScope',
+    'applicableWhen', 'forbiddenWhen', 'suggestedAction', 'risk', 'evidence',
+  ];
+  const allowedKeys = [...requiredKeys, 'targetAssetId', 'uncertainty'];
+  if (Object.keys(candidate).some((key) => !allowedKeys.includes(key))
+      || requiredKeys.some((key) => !Object.prototype.hasOwnProperty.call(candidate, key))) {
+    throw new CognitionCaptureError('invalid_model_output', 'generated cognition candidate has an invalid shape');
+  }
+  if (typeof candidate.summary !== 'string' || typeof candidate.judgment !== 'string'
+      || typeof candidate.value !== 'string' || typeof candidate.suggestedType !== 'string'
+      || typeof candidate.suggestedScope !== 'string' || candidate.suggestedAction !== 'create'
+      || typeof candidate.risk !== 'string' || !Array.isArray(candidate.evidence)) {
+    throw new CognitionCaptureError('invalid_model_output', 'generated cognition candidate has an invalid shape');
+  }
+  if (candidate.targetAssetId !== undefined && candidate.targetAssetId !== '') {
+    throw new CognitionCaptureError('invalid_model_output', 'new manual cognition candidate cannot target an existing asset');
+  }
+  if (candidate.uncertainty !== undefined && typeof candidate.uncertainty !== 'string') {
+    throw new CognitionCaptureError('invalid_model_output', 'generated cognition uncertainty is not text');
+  }
+  if (!isCognitionCaptureAssetType(candidate.suggestedType)
+      || !(CANDIDATE_SCOPES as readonly string[]).includes(candidate.suggestedScope)
+      || !(CANDIDATE_RISKS as readonly string[]).includes(candidate.risk)) {
+    throw new CognitionCaptureError('invalid_model_output', 'generated cognition candidate has an invalid type, scope, or risk');
+  }
+  const applicableWhen = parseStringArray(candidate.applicableWhen, 'applicableWhen');
+  const forbiddenWhen = parseStringArray(candidate.forbiddenWhen, 'forbiddenWhen');
+  if (candidate.suggestedType === 'rule' && (!applicableWhen.length || !forbiddenWhen.length)) {
+    throw new CognitionCaptureError('invalid_model_output', 'rule candidate is missing its applicability boundary');
+  }
+  const labels = context.messages.map((_message, index) => `m${index + 1}`);
+  const evidenceLabels = [...new Set(candidate.evidence.map((label) => {
+    if (typeof label !== 'string' || !labels.includes(label)) {
+      throw new CognitionCaptureError('invalid_model_output', 'generated cognition candidate cites an unknown evidence label');
+    }
+    return label;
+  }))];
+  if (!evidenceLabels.length) {
+    throw new CognitionCaptureError('invalid_model_output', 'generated cognition candidate has no evidence');
+  }
+  const evidenceMessages = evidenceLabels.map((label) => context.messages[labels.indexOf(label)]);
+  const sessionRef: CognitionSourceInput = {
+    kind: 'conversation', subtype: 'session', scope: 'conversation',
+    id: context.conversationId, title: context.conversationTitle,
+  };
+  const messageRefs: CognitionSourceInput[] = evidenceMessages.map((message) => ({
+    kind: 'conversation', subtype: 'message', scope: 'conversation',
+    id: message.id, title: context.conversationTitle,
+  }));
   const draft: CognitionCaptureDraft = {
-    title: assertSafeGeneratedText(parsed.title, 'title', MAX_TITLE_LENGTH),
-    summary: assertSafeGeneratedText(parsed.summary, 'summary', MAX_SUMMARY_LENGTH),
-    evidenceSummary: assertSafeGeneratedText(parsed.evidence_summary, 'evidence summary', MAX_SUMMARY_LENGTH),
-    ...(isCognitionCaptureAssetType(parsed.suggested_type) ? { suggestedType: parsed.suggested_type } : {}),
+    summary: assertSafeGeneratedText(candidate.summary, 'title', MAX_TITLE_LENGTH),
+    judgment: assertSafeGeneratedText(candidate.judgment, 'judgment', MAX_SUMMARY_LENGTH),
+    value: assertSafeGeneratedText(candidate.value, 'future value', MAX_SUMMARY_LENGTH),
+    suggestedType: candidate.suggestedType,
+    suggestedScope: candidate.suggestedScope as CognitionCaptureDraft['suggestedScope'],
+    applicableWhen,
+    forbiddenWhen,
+    suggestedAction: 'create',
+    risk: candidate.risk as CognitionCaptureDraft['risk'],
+    ...(typeof candidate.uncertainty === 'string' && candidate.uncertainty.trim()
+      ? { uncertainty: assertSafeGeneratedText(candidate.uncertainty, 'uncertainty', 1_000) }
+      : {}),
+    sourceRefs: [sessionRef, ...messageRefs],
+    evidenceRefs: [sessionRef, ...messageRefs],
     sourceLabel: context.conversationTitle,
     conversationId: context.conversationId,
     messageId: context.messageId,
@@ -234,6 +293,19 @@ function parseModelOutput(raw: unknown, context: SourceContext): CognitionCaptur
   const anchor = context.messages.find((message) => message.anchor);
   if (!anchor || !isCopiedOnly(draft, anchor.text)) return { status: 'ready', draft, context: context.stats };
   throw new CognitionCaptureError('copied_model_output', 'generated cognition draft only repeats the selected reply');
+}
+
+function parseStringArray(value: JsonValue, field: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new CognitionCaptureError('invalid_model_output', `generated cognition ${field} is not an array`);
+  }
+  const items = value.map((item) => {
+    if (typeof item !== 'string') {
+      throw new CognitionCaptureError('invalid_model_output', `generated cognition ${field} has a non-text item`);
+    }
+    return assertSafeGeneratedText(item, field, 300);
+  });
+  return [...new Set(items)].slice(0, 10);
 }
 
 function sourceMessageFromRecord(record: MessageRecord, anchorId: string): SourceMessage | null {
@@ -365,9 +437,16 @@ function buildPrompt(context: SourceContext): string {
   const source = JSON.stringify({
     conversation: { id: context.conversationId, title: context.conversationTitle },
     anchor_message_id: context.messageId,
-    messages: context.messages,
+    messages: context.messages.map((message, index) => ({
+      label: `m${index + 1}`,
+      id: message.id,
+      role: message.role,
+      timestamp: message.timestamp,
+      anchor: message.anchor,
+      text: message.text,
+    })),
   });
-  return `${prompts.load('cognition_capture')}\n${source}`;
+  return `${prompts.load('cognition_capture')}\n\n${prompts.load('recall_candidate_contract')}\n\n${source}`;
 }
 
 export async function generateCognitionDraft(

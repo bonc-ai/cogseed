@@ -29,7 +29,7 @@ afterEach(() => {
 
 async function reviewableCandidate(candidates: typeof import('../../../../src/main/features/recall/candidate-service')) {
   return candidates.saveRecallCandidate(UID, {
-    judgment: '正式评审必须先讲产品模型，再谈实现细节。',
+    judgment: '正式评审必须先讲产品模型，再谈实现细节。', summary: '评审次序纪律',
     value: '避免评审跑偏到实现细节上。',
     suggestedType: 'rule',
     applicableWhen: ['正式评审与架构决策时'],
@@ -69,7 +69,7 @@ describe('semantic dedup degradation', () => {
     users.activateUser(UID);
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     await candidates.saveRecallCandidate(UID, {
-      judgment: '架构评审应先说明产品模型，再进入代码细节。',
+      judgment: '架构评审应先说明产品模型，再进入代码细节。', summary: '产品模型先行',
       value: '避免架构评审过早陷入实现讨论。',
       suggestedType: 'rule',
       applicableWhen: ['正式评审与架构决策时'],

@@ -65,21 +65,11 @@ async function backflowIds(): Promise<string[]> {
 }
 
 describe('ontology-backflow › whitelist and pool shape', () => {
-  it('offers personal assets as preference/user with low confidence', async () => {
+  it('does not duplicate canonical personal assets into a second ontology candidate', async () => {
     const backflow = await loadBackflow();
     const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset());
-    expect(outcome).toEqual({ offered: true, candidateId: 'asset-backflow-aa-backflow-1' });
-
-    const poc = await loadPoc();
-    const pool = await poc.listCandidates(UID);
-    const entry = pool.candidate_updates.find((c) => c.candidate_id === 'asset-backflow-aa-backflow-1');
-    expect(entry).toMatchObject({
-      kind: 'preference',
-      memory_scope: 'user',
-      confidence: 'low',
-      write_actor: 'llm',
-      memory_text: '偏好中文简洁回复。',
-    });
+    expect(outcome).toEqual({ offered: false, reason: 'personal_asset_already_canonical' });
+    expect(await backflowIds()).toEqual([]);
   });
 
   it('maps rule → rule/shared and template → instance/user', async () => {
@@ -104,7 +94,7 @@ describe('ontology-backflow › whitelist and pool shape', () => {
 
   it('skips empty statements', async () => {
     const backflow = await loadBackflow();
-    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ statement: '   ' }));
+    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule', statement: '   ' }));
     expect(outcome).toEqual({ offered: false, reason: 'empty_statement' });
   });
 });
@@ -112,8 +102,8 @@ describe('ontology-backflow › whitelist and pool shape', () => {
 describe('ontology-backflow › idempotency and flood guard', () => {
   it('re-offering the same asset overwrites instead of piling up', async () => {
     const backflow = await loadBackflow();
-    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ statement: '第一版内容。' }));
-    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ statement: '第二版内容，覆盖第一版。' }));
+    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule', statement: '第一版内容。' }));
+    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule', statement: '第二版内容，覆盖第一版。' }));
 
     const ids = await backflowIds();
     expect(ids).toEqual(['asset-backflow-aa-backflow-1']);
@@ -134,7 +124,7 @@ describe('ontology-backflow › idempotency and flood guard', () => {
       });
     }
     const backflow = await loadBackflow();
-    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset());
+    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule' }));
     expect(outcome).toEqual({ offered: false, reason: 'pool_full' });
     // 原池 20 条原样保留，没有第 21 条
     expect((await backflowIds()).length).toBe(20);
@@ -142,10 +132,10 @@ describe('ontology-backflow › idempotency and flood guard', () => {
 });
 
 describe('ontology-backflow › wired into asset creation', () => {
-  it('promoting a personal asset offers it to the pool end to end', async () => {
+  it('promoting a personal asset does not create a second ontology candidate', async () => {
     const cs = await import('../../../../src/main/features/recall/candidate-service');
     const saved = await cs.saveRecallCandidate(UID, {
-      judgment: '偏好用中文写周报。',
+      judgment: '偏好用中文写周报。', summary: '中文周报偏好',
       suggestedType: 'personal',
       suggestedScope: 'general',
       sourceRefs: [{ kind: 'memory', id: 'backflow-e2e' }],
@@ -154,13 +144,13 @@ describe('ontology-backflow › wired into asset creation', () => {
     expect(asset?.type).toBe('personal');
 
     const ids = await backflowIds();
-    expect(ids).toEqual([`asset-backflow-${asset!.id}`]);
+    expect(ids).toEqual([]);
   });
 
   it('skill_method promotion does not touch the pool', async () => {
     const cs = await import('../../../../src/main/features/recall/candidate-service');
     const saved = await cs.saveRecallCandidate(UID, {
-      judgment: '先跑测试再提交的做法。',
+      judgment: '先跑测试再提交的做法。', summary: '测试先行做法',
       suggestedType: 'skill_method',
       suggestedScope: 'general',
       sourceRefs: [{ kind: 'memory', id: 'backflow-skill' }],

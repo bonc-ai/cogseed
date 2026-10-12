@@ -22,6 +22,7 @@ import { applyTemplate } from './apply-template';
 import { assertConnectorRuntimeEnabled, isConnectorRuntimeEnabled } from './availability';
 import { startOAuth, refreshIfStale, startGoogleSheetsPicker } from './oauth';
 import { startMcpDcrOAuth, refreshDcrIfStale } from './oauth-dcr';
+import { ensureLocalCliAuthorized } from './local-cli-auth';
 import { createLogger } from '../../logger';
 import { logErrorSummary } from '../../util/log-redact';
 import { broadcastOAuthConnectOutcome } from './oauth-events';
@@ -221,7 +222,12 @@ function _isRecoverableTransportUnresolved(inst: ConnectorInstance): boolean {
   if (inst.status?.kind !== 'error' || !/transport unresolved/i.test(inst.status.message)) return false;
   if (inst.origin === 'custom') return false;
   const entry = findCatalogEntry(inst.id);
-  return !!entry?.transport_template && !!inst.oauth_grant && _hasEstablishedConnectorState(inst);
+  if (!entry?.transport_template) return false;
+  // `local_cli` materializes its transport from the template alone, so a missing grant can never
+  // be the cause here and re-authorization is never the fix — but retrying the spawn still is.
+  // Keying this on `oauth_grant` would wrongly freeze such an instance as a permanent error.
+  if (entry.auth_mode === 'local_cli') return _hasEstablishedConnectorState(inst);
+  return !!inst.oauth_grant && _hasEstablishedConnectorState(inst);
 }
 
 function _lastVerifiedAt(inst: ConnectorInstance): number | undefined {
@@ -523,6 +529,15 @@ async function _resolveTransport(uid: string, inst: ConnectorInstance): Promise<
   if (!entry) {
     log.warn('catalog entry missing for instance', { id: inst.id });
     return null;
+  }
+  // `local_cli` entries are credential-owning, not credential-forwarding: the adapter child runs
+  // its own login and holds the session, so there is no grant to refresh and none to forward.
+  // Materialize straight from the catalog template and return a null grant — same shape as the
+  // custom branch above, except the transport comes from the template rather than the instance.
+  // This branch must stay ahead of the `oauth_grant` check below: a `local_cli` instance never
+  // has that row, and treating its absence as "broken instance" would silently drop the card.
+  if (entry.auth_mode === 'local_cli') {
+    return { transport: applyTemplate(entry, null), grant: null };
   }
   if (!inst.oauth_grant) {
     log.warn('instance has no oauth_grant', { id: inst.id });
@@ -835,14 +850,34 @@ export function getInstance(uid: string, id: string): ConnectorInstance | null {
   return inst;
 }
 
-/** Drive the full OAuth flow for a catalog entry and bring the resulting MCP connection up.
- *  This is the **only** public install path — there is no free-form / API-key entry point.
- *  Dispatches to server-bridge or DCR depending on `entry.auth_mode`. */
+/** Bring a catalog connector up and install it for this user.
+ *  This is the **only** public install path — there is no free-form / API-key entry point, and
+ *  no catalog entry is reachable except through here.
+ *  Dispatches on `entry.auth_mode`: `server_bridge` and `mcp_dcr` obtain a grant through the
+ *  corresponding OAuth flow; `local_cli` skips that entirely because its `bin/` adapter owns the
+ *  credential (see the `// ── Auth ──` section in `types.ts`). */
 export async function connectViaOAuth(uid: string, catalogId: string): Promise<ConnectorInstance> {
   if (!uid) throw new Error('uid required');
   const entry = findCatalogEntry(catalogId);
   if (!entry) throw new Error('unknown catalog id');
   assertConnectorRuntimeEnabled(catalogId);
+
+  // `local_cli`: no grant is created, requested, stored or refreshed. Returning here keeps the
+  // grant/dcrClient declarations below honestly non-nullable, so the OAuth paths cannot
+  // accidentally observe a grant-less instance.
+  if (entry.auth_mode === 'local_cli') {
+    if (!entry.transport_template) {
+      throw new Error(`'${catalogId}' is not installable yet (${entry.unavailable_reason || 'unavailable'})`);
+    }
+    // Authorize the CLI first: the adapter spawns fine either way, but every read tool would fail
+    // with "not logged in", which would surface to the user as a broken connector rather than as a
+    // missing authorization step. This awaits the user finishing in the browser (or cancelling, or
+    // the 5-minute deadline), so callers must already treat a connect as long-running — which
+    // `beginOAuthConnect` does for every mode.
+    await ensureLocalCliAuthorized(entry);
+    log.info('connectViaOAuth: local_cli authorized; spawning MCP adapter', { catalog_id: catalogId });
+    return _provisionMemberInstance(uid, entry, null, undefined);
+  }
 
   log.info('connectViaOAuth: starting OAuth', { catalog_id: catalogId, auth_mode: entry.auth_mode });
   let grant: OAuthGrant;
@@ -970,7 +1005,7 @@ export function beginOAuthConnect(uid: string, catalogId: string): OAuthConnectS
 async function _provisionMemberInstance(
   uid: string,
   entry: CatalogEntry,
-  grant: OAuthGrant,
+  grant: OAuthGrant | null,
   dcrClient: ConnectorInstance['dcr_client'],
 ): Promise<ConnectorInstance> {
   const transport = applyTemplate(entry, grant);
@@ -990,7 +1025,9 @@ async function _provisionMemberInstance(
     tools_cache: [],
     tools_cached_at: 0,
     status: { kind: 'connecting' },
-    oauth_grant: grant,
+    // Omitted entirely for grant-less installs (`local_cli`), matching the custom-instance shape:
+    // no `oauth_grant` row means the refresh cycle can never pick this instance up.
+    ...(grant ? { oauth_grant: grant } : {}),
     ...(dcrClient ? { dcr_client: dcrClient } : {}),
     created_at: _nowIso(),
     updated_at: _nowIso(),
@@ -1000,11 +1037,16 @@ async function _provisionMemberInstance(
   // _tokPrefix fingerprint — `bad_refresh_token` mid-day means the on-disk RT no longer matches
   // what the provider has on record; correlating fingerprints pinpoints whether the write here
   // didn't land or got overwritten by another path).
+  //
+  // Grant-less installs (`local_cli`) go through this same provisioning path with `grant === null`,
+  // so the fingerprint must be conditional: there is no exchange to correlate, and dereferencing
+  // the grant unconditionally made every local_cli install crash after the transport was built.
   log.info('provision: fresh grant from exchange', {
     id: entry.id,
-    rt_prefix: _tokPrefix(grant.refresh_token),
-    at_prefix: _tokPrefix(grant.access_token),
-    expires_at_ms: grant.expires_at,
+    auth_mode: entry.auth_mode,
+    rt_prefix: grant ? _tokPrefix(grant.refresh_token) : null,
+    at_prefix: grant ? _tokPrefix(grant.access_token) : null,
+    expires_at_ms: grant ? grant.expires_at : null,
     has_dcr_client: !!dcrClient,
   });
   await registry.upsert(uid, draft);

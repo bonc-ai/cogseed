@@ -257,3 +257,32 @@ describe('features/config › getLanguage', () => {
     expect(process.env.COGSEED_ACCEPT_LANGUAGE).toMatch(/^ja-JP/);
   });
 });
+
+describe('features/config › close to tray preference', () => {
+  it('defaults to enabled when the key was never written', async () => {
+    const { appConfig } = await load();
+    expect(appConfig.getCloseToTrayEnabled()).toBe(true);
+  });
+
+  it('persists an explicit false and reads it back', async () => {
+    const { appConfig } = await load();
+    expect(appConfig.setCloseToTrayEnabled(false)).toBe(false);
+    expect(appConfig.getCloseToTrayEnabled()).toBe(false);
+  });
+
+  it('coerces truthy input and survives a reload', async () => {
+    const first = await load();
+    expect(first.appConfig.setCloseToTrayEnabled(1 as unknown as boolean)).toBe(true);
+    // Raw read straight off disk: `undefined` here would mean the write never
+    // landed, which the default-ON `getCloseToTrayEnabled()` would mask.
+    expect(first.appConfig.readPreferences().close_to_tray_enabled).toBe(true);
+    vi.resetModules();
+    // resetModules() also drops the in-memory `users` singleton, so the active
+    // uid has to be re-activated before the fresh module can resolve its file.
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(TEST_UID);
+    const second = await load();
+    expect(second.appConfig.readPreferences().close_to_tray_enabled).toBe(true);
+    expect(second.appConfig.getCloseToTrayEnabled()).toBe(true);
+  });
+});

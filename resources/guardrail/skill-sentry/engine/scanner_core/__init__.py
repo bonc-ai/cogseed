@@ -9,7 +9,7 @@ scanner_core — Skill Sentry 检测引擎
 __getattr__ 懒加载，保持 `from engine.scanner_core import scan` 可用。
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 _LAZY = {"scan", "scan_one_skill", "SCANNER_VERSION"}
 

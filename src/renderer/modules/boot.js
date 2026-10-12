@@ -250,9 +250,10 @@ function _showStaleMainBanner(env) {
     const ctaButton = el.querySelector('.model-guard-cta');
     if (ctaButton) ctaButton.addEventListener('click', () => {
       // 走应用自己的 dev 重启通道（shell 出 run.sh/run.cmd，带上依赖自愈），
-      // 而不是本模块直接杀进程。
-      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
-        window.cogseed.invoke('cogseed.relaunch').catch(() => { /* 失败则用户手动重启 */ });
+      // 而不是本模块直接杀进程。该通道由 preload 直通暴露，不经通用
+      // invoke 分发（那里只有 {ok:false} 的静默失败）。
+      if (window.cogseed && typeof window.cogseed.relaunch === 'function') {
+        window.cogseed.relaunch().catch(() => { /* 失败则用户手动重启 */ });
       }
     });
     const dismissButton = el.querySelector('.model-guard-dismiss');

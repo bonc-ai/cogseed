@@ -40,6 +40,8 @@ import {
   replaceEntryTransactional,
   removeEntryTransactional,
   listEntries,
+  listSpaceEntriesWithProjectFallback,
+  backfillProjectMemoryToSpaceForWrite,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
   type MemoryOpResult,
   type MemoryScope,
@@ -60,6 +62,8 @@ import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createRecallTools } from './recall-tools';
+import { createAssetStewardTools } from './asset-steward-tools';
+import { createExperienceTools } from './experience-tools';
 import { createPersonalOntologyTools } from './personal-ontology-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
@@ -108,6 +112,7 @@ import { createLogger } from '../../logger';
 import { logErrorSummary, maskId } from '../../util/log-redact';
 import type { MemoryToolHandler } from '../../../core-agent/src/tools/memory-tool';
 import type { MetacognitionToolHandler } from '../../../core-agent/src/tools/metacognition-tool';
+import type { CognitionSaveReceipt } from '../client';
 import {
   recordTeachingSignalAfterMemoryWrite,
   teachingMemoryRef,
@@ -214,13 +219,7 @@ export interface BuildRunnerParams {
   userMessage?: string;
   sourceMessageId?: string;
   sourceMessageFromUser?: boolean;
-  onTeachingReceipt?: (receipt: {
-    id: string;
-    summary: string;
-    scope: UserTeachingScope;
-    status: 'active' | 'revoked';
-    candidateIds: string[];
-  }) => void | Promise<void>;
+  onCognitionSaveReceipt?: (receipt: CognitionSaveReceipt) => void | Promise<void>;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Resolved once at
@@ -412,6 +411,30 @@ function splitCommanderOrchestrationBlock(prompt: string): { stable: string; orc
 /** Exported for unit tests — see runner.test.ts. */
 export const _splitCommanderOrchestrationBlock = splitCommanderOrchestrationBlock;
 
+/**
+ * 只读会话（`toolAccess: 'read-only'`）的**闭合**工具允许集。
+ *
+ * 语义是「**无副作用 actor 的最小工具集**」，不是「所有读操作」：
+ *   - 这里每一个工具都只读本机文件/网络/库，不写用户数据；
+ *   - **资产工具一律不在其中（读与写都不进）**——资产库是用户私有全量数据，
+ *     开给从属 actor 属权限扩张；而且资产读取本身就会写注入回执与使用流水
+ *     （见 recall-tools 的 agent_read 留痕），根本不是无副作用的。
+ *     从属 actor 需要资产时走「任务装配时注入允许切片」，不开全库工具。
+ *
+ * 导出是为了让不变量可被测试钉住（`asset-steward-tools.test.ts`），不是给
+ * 调用方拼装——要加工具请改这里并同步那条测试的判据。
+ */
+export const READ_ONLY_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
+  'read_file', 'stat_file', 'search_files', 'grep_files', 'list_files',
+  'web_search', 'web_fetch', 'kb_list', 'kb_search', 'kb_read',
+  'tool_result_search', 'tool_result_read_chunk',
+]);
+
+/** 只读会话下保留的 core-agent 内建工具（同样是闭合集）。 */
+export const READ_ONLY_BUILTIN_ALLOWLIST: ReadonlySet<string> = new Set([
+  'read_file', 'list_files', 'web_fetch', 'web_search',
+]);
+
 export async function buildRunner(params: BuildRunnerParams): Promise<{
   runner: AgentRunnerInstance;
   resolvedSystemPrompt: string;
@@ -594,10 +617,21 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     const scopeId = memoryAgentScope; // narrowed to string
     const spaceScopeId = params.spaceId || '';
     const legacyProjectScopeId = params.projectId || '';
+    const memoryAssetContext = {
+      ...(agentId ? { agentId } : {}),
+      ...(legacyProjectScopeId ? { projectId: legacyProjectScopeId } : {}),
+      ...(spaceScopeId ? { workspaceId: spaceScopeId } : {}),
+      ...(params.userMessage ? { taskText: params.userMessage } : {}),
+    };
     const toScope = (tier: 'agent' | 'space' | 'shared' | 'user'): MemoryScope =>
       tier === 'agent' ? { agent: scopeId }
       : tier === 'space' ? { space: spaceScopeId }
       : tier === 'shared' ? 'memory' : 'user';
+    const assetTarget = (tier: 'agent' | 'space' | 'shared' | 'user') => tier === 'agent'
+      ? { kind: 'agent' as const, id: scopeId }
+      : tier === 'space'
+        ? { kind: 'space' as const, id: spaceScopeId }
+        : { kind: 'global' as const };
     const teachingScope = (tier: 'agent' | 'space' | 'shared' | 'user'): UserTeachingScope => (
       tier === 'agent' ? 'agent' : tier === 'space' ? 'project' : 'personal'
     );
@@ -624,14 +658,17 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
           memoryScope: scope,
           memoryRef: teachingMemoryRef(scope, content),
         });
-        if (signal) {
-          await params.onTeachingReceipt?.({
-            id: signal.id,
+        // 教学回执并入保存回执链（2026-09-28 四病整改 7.0 修7 / F39）：教学
+        // 信号落库时必建候选，回执以 candidate+taught-pending-review 走同一条
+        // onCognitionSaveReceipt 收集口径，渲染层不再有独立教学卡。
+        if (signal && signal.candidateIds.length > 0) {
+          const receipt: CognitionSaveReceipt = {
+            target: 'candidate',
+            id: signal.candidateIds[0],
             summary: signal.summary,
-            scope: signal.scope,
-            status: signal.status,
-            candidateIds: signal.candidateIds,
-          });
+            outcome: 'taught-pending-review',
+          };
+          await params.onCognitionSaveReceipt?.(receipt);
         }
       } catch (error) {
         log.warn('teaching signal persistence failed after memory write', {
@@ -641,29 +678,80 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       }
       return result;
     };
-    // 即时模式直投（2026-09-19 方案甲·清单 #3）：user/shared 档的写入不再落
-    // 记忆文件，直投第二段入库（查重金字塔＋挂族＋正规回执），产出「模型记
-    // 的·未验证」资产，入库即可用。agent/space 档保持记忆文件路径——它们的
-    // 退役与搬迁在阶段 D 统一处理。改道档位的教学信号桥随之退役（写入本身
-    // 就产候选，不再另发 teaching 信号）。直投失败（注入拒收/内部错误）回退
-    // 记忆文件路径——工具不能因为新通道故障而对模型失声。
-    const ingestImmediate = async (tier: 'user' | 'shared', content: string): Promise<MemoryOpResult> => {
+    // All four memory tiers now use the same user-authorized asset/candidate
+    // path. Agent and Space targets carry hard scope-policy allowlists so the
+    // saved item cannot widen beyond the legacy store it replaces.
+    const ingestImmediate = async (tier: 'agent' | 'space' | 'shared' | 'user', content: string): Promise<MemoryOpResult> => {
       try {
+        const { classifyMemorySaveIntent } = await import('../../features/recall/memory-save-intent');
+        const saveIntent = classifyMemorySaveIntent(
+          params.userMessage,
+          content,
+          params.sourceMessageFromUser === true,
+        );
+        if (saveIntent === 'none') {
+          return {
+            ok: false,
+            error: 'A current user save request or confirmation is required before saving cross-session memory. Nothing was persisted.',
+            entries: [],
+            usage: { current: 0, limit: 0 },
+          };
+        }
         const { ingestImmediateKnowledge } = await import('../../features/recall/candidate-service');
-        await ingestImmediateKnowledge(uid, {
+        const scopePolicy = tier === 'agent'
+          ? { agentIds: [scopeId] }
+          : tier === 'space'
+            ? { workspaceIds: [spaceScopeId] }
+            : undefined;
+        const saved = await ingestImmediateKnowledge(uid, {
           text: content,
+          requireUserReview: saveIntent !== 'direct',
           // 真实会话 id 是 cid（消息所在聊天会话；来源目录按裸 cid 命中）——
           // 此前误传 runner 内部 sessionId，拼出的合成引用 id 永远查不到，
           // 候选被误标「来源已删」（2026-09-20 修复）。传法与上方 teaching 线同款。
           ...(params.cid ? { conversationId: String(params.cid) } : {}),
           ...(params.cid && params.sourceMessageId ? { messageId: String(params.sourceMessageId) } : {}),
+          ...(tier === 'space' && spaceScopeId ? { spaceId: spaceScopeId } : {}),
+          ...(scopePolicy ? { scopePolicy } : {}),
         });
-        return { ok: true, entries: [], usage: { current: 0, limit: 0 } };
+        let receipt: CognitionSaveReceipt;
+        if (saved.mode === 'created') {
+          receipt = saved.assetId
+            ? { target: 'asset', id: saved.assetId, summary: content, outcome: 'created' }
+            : { target: 'candidate', id: saved.candidateId, summary: content, outcome: 'pending-review' };
+        } else if (saved.mode === 'already-confirmed') {
+          receipt = saved.assetId
+            ? { target: 'asset', id: saved.assetId, summary: content, outcome: 'already-confirmed' }
+            : { target: 'candidate', id: saved.candidateId, summary: content, outcome: 'already-confirmed' };
+        } else {
+          receipt = { target: 'candidate', id: saved.candidateId, summary: content, outcome: saved.mode };
+        }
+        try {
+          await params.onCognitionSaveReceipt?.(receipt);
+        } catch (receiptError) {
+          log.warn('cognition save receipt callback failed after persistence', {
+            conversation_id: maskId(params.cid),
+            error: logErrorSummary(receiptError),
+          });
+        }
+        const exactWording = JSON.stringify(content);
+        const resultMessage = saved.mode === 'already-confirmed'
+          ? 'This exact memory already has a confirmed cognition record [candidate:' + saved.candidateId + ']'
+            + (saved.assetId ? ' and asset [asset:' + saved.assetId + ']' : '')
+            + '. No new review was created, and the existing asset lifecycle state was preserved. Source evidence may have been added. The asset may be active, paused, or otherwise unavailable; ask the user to open it in My Cognition to inspect its current state.'
+          : saved.mode === 'created'
+          ? `Saved as active cognition asset [asset:${saved.assetId}]. Exact wording: ${exactWording}. It remains subject to scope and runtime rules; the user can edit, pause, or archive it in My Cognition. Include the exact [asset:${saved.assetId}] marker in your user-facing reply so the user can open it.`
+          : saved.mode === 'fused-update-pending'
+            ? `Proposed update [candidate:${saved.candidateId}] is awaiting review. Exact proposed wording: ${exactWording}. The existing cognition asset has not changed; the user can review or edit it in To Review. Include the exact [candidate:${saved.candidateId}] marker in your user-facing reply so the user can open this proposal.`
+            : saved.mode === 'merged'
+              ? `This memory matched an existing suggestion [candidate:${saved.candidateId}]. Its evidence was merged, but no active asset was changed. Exact wording received: ${exactWording}. The user can review it in To Review. Include the exact [candidate:${saved.candidateId}] marker in your user-facing reply so the user can open it.`
+              : `Suggestion [candidate:${saved.candidateId}] is awaiting review and is not active memory yet. Exact proposed wording: ${exactWording}. The user can review or edit it in To Review. Include the exact [candidate:${saved.candidateId}] marker in your user-facing reply so the user can open it.`;
+        return { ok: true, entries: [resultMessage], usage: { current: 0, limit: 0 } };
       } catch (error) {
         // L3 敏感内容（凭据等）绝不落盘——资产管线的敏感闸拒绝的内容，不能
-        // 经由回退路径用更松的闸（记忆文件只有注入扫描）收下，否则两条写入
-        // 线的处置纪律互相矛盾（capture 线同款口径：丢弃并留痕，见
-        // capture-service 的 per-candidate 处理）。返回失败让模型知道写入被拒。
+        // 经由回退路径用更松的闸（旧记忆文件只有注入扫描）收下，否则两条写入
+        // 线的处置纪律互相矛盾。正式资产写入失败也不再偷偷降级写进旧记忆文件：
+        // 新内容只能进入认知资产/候选流程，避免形成用户看不到的第二份数据。
         const messageText = error instanceof Error ? error.message : String(error);
         if (messageText.includes('forbidden to persist')) {
           log.warn('immediate ingest rejected: sensitive content not persisted', {
@@ -672,15 +760,71 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
           });
           return { ok: false, error: messageText, entries: [], usage: { current: 0, limit: 0 } };
         }
-        return addEntryTransactional(uid, toScope(tier), content);
+        log.warn('immediate cognition save failed; legacy memory fallback skipped', {
+          conversation_id: maskId(params.cid),
+          error: logErrorSummary(error),
+        });
+        return {
+          ok: false,
+          error: 'The cognition save did not complete. A draft may still be waiting in To Review; check there before retrying.',
+          entries: [],
+          usage: { current: 0, limit: 0 },
+        };
       }
     };
     const memoryHandler: MemoryToolHandler = {
-      add: async (tier, content) => (tier === 'user' || tier === 'shared')
-        ? ingestImmediate(tier, content)
-        : recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
-      replace: async (tier, oldText, content) => recordTeaching(tier, content, await replaceEntryTransactional(uid, toScope(tier), oldText, content)),
-      remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
+      add: async (tier, content) => ingestImmediate(tier, content),
+      replace: async (tier, oldText, content) => {
+        const { classifyMemoryReplaceIntent } = await import('../../features/recall/memory-save-intent');
+        if (classifyMemoryReplaceIntent(params.userMessage, content, params.sourceMessageFromUser === true) !== 'direct') {
+          return {
+            ok: false,
+            error: 'A current user edit request with exact replacement wording is required. Nothing was changed.',
+            entries: [],
+            usage: { current: 0, limit: 0 },
+          };
+        }
+        const { replaceCrossSessionMemoryAsset } = await import('../../features/recall/cross-session-memory-assets');
+        const assetEdit = await replaceCrossSessionMemoryAsset(uid, oldText, content, memoryAssetContext, assetTarget(tier));
+        if (assetEdit.handled) return assetEdit.result;
+        if (tier === 'space') {
+          backfillProjectMemoryToSpaceForWrite(uid, spaceScopeId, legacyProjectScopeId);
+        }
+        return recordTeaching(tier, content, await replaceEntryTransactional(uid, toScope(tier), oldText, content));
+      },
+      remove: async (tier, oldText) => {
+        const { classifyMemoryRemoveIntent } = await import('../../features/recall/memory-save-intent');
+        if (classifyMemoryRemoveIntent(params.userMessage, params.sourceMessageFromUser === true) !== 'direct') {
+          return {
+            ok: false,
+            error: 'A current user request to forget or remove this memory is required. Nothing was changed.',
+            entries: [],
+            usage: { current: 0, limit: 0 },
+          };
+        }
+        const { removeCrossSessionMemoryAsset } = await import('../../features/recall/cross-session-memory-assets');
+        const assetRemoval = await removeCrossSessionMemoryAsset(uid, oldText, memoryAssetContext, assetTarget(tier));
+        if (assetRemoval.handled) return assetRemoval.result;
+        if (tier === 'space') {
+          backfillProjectMemoryToSpaceForWrite(uid, spaceScopeId, legacyProjectScopeId);
+        }
+        return removeEntryTransactional(uid, toScope(tier), oldText);
+      },
+      list: async (tier) => {
+        const legacy = tier === 'space'
+          ? listSpaceEntriesWithProjectFallback(uid, spaceScopeId, legacyProjectScopeId)
+          : listEntries(uid, toScope(tier));
+        const { listCrossSessionMemoryAssets } = await import('../../features/recall/cross-session-memory-assets');
+        const assets = await listCrossSessionMemoryAssets(uid, memoryAssetContext, assetTarget(tier));
+        return {
+          ...assets,
+          ok: assets.ok && legacy.ok,
+          ...(assets.ok && legacy.ok ? {} : { error: assets.error || legacy.error || 'The memory inventory is incomplete.' }),
+          ...(legacy.legacySource ? { legacySource: legacy.legacySource } : {}),
+          legacyEntryCount: legacy.entries.length,
+          entries: [...assets.entries, ...legacy.entries],
+        };
+      },
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
     // Space memory: commander read+write, sub-agents read-only (list only).
@@ -813,15 +957,46 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // 与使用流水（turnId），并以当前消息文本做适用/禁用场景匹配（taskText）。
   const recallTools = uid && !params.disableTools ? createRecallTools({
     userId: uid,
+    ...(agentId ? { agentId } : {}),
+    ...(params.turnId ? { turnId: params.turnId } : {}),
+    ...(params.cid ? { cid: params.cid } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+    ...(params.projectId ? { projectId: params.projectId } : {}),
+    ...(params.userMessage ? { taskText: params.userMessage } : {}),
+  }) : [];
+
+  // 资产管家工具（specs/008 US-401/402）：全量浏览、读全文、按用户指令改动。
+  // 与 search_ability_assets 分开：那是任务执行期的取用（写 agent_read 回执与
+  // 使用流水），这是管理视角（看全貌、改内容），读也不该记成"任务用了它"。
+  // 同样注入给主会话与 group_chat 各 actor，且**不进只读白名单**（见下）。
+  const assetStewardTools = uid && !params.disableTools ? createAssetStewardTools({
+    userId: uid,
+    ...(agentId ? { agentId } : {}),
+    ...(params.projectId ? { projectId: params.projectId } : {}),
+    ...(params.turnId ? { turnId: params.turnId } : {}),
+    ...(params.cid ? { cid: params.cid } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+    ...(params.userMessage ? { taskText: params.userMessage } : {}),
+    sourceMessageFromUser: params.sourceMessageFromUser === true,
+  }) : [];
+
+  // 任务经验目录工具（specs/016 T024 / US-802）：list_task_experiences +
+  // read_task_experience，2 读 0 写、无 localExec。与上面两族（资产取用/资产
+  // 管家）分属两套集合（exp- vs aa-，完全隔离），但注入条件同源：主会话与
+  // group_chat 各 actor 都拿到，读正文写 agent_read 回执与使用流水（turnId）、
+  // 以当前消息做准入匹配（taskText）。同样**不进只读白名单**（见上）。
+  const experienceTools = uid && !params.disableTools ? createExperienceTools({
+    userId: uid,
+    ...(agentId ? { agentId } : {}),
     ...(params.turnId ? { turnId: params.turnId } : {}),
     ...(params.cid ? { cid: params.cid } : {}),
     ...(params.spaceId ? { spaceId: params.spaceId } : {}),
     ...(params.userMessage ? { taskText: params.userMessage } : {}),
   }) : [];
 
-  // Personal Ontology read-only tools (personal_ontology_fields). Gives skills
-  // the installed role-template field list through the PO contract instead of
-  // shelling out to read groups.md / <template_id>.md by hand.
+  // Personal Ontology read-only tools (personal_ontology_fields / list_ontology_graph).
+  // Skills can inspect the saved graph and template fields through feature contracts
+  // instead of shelling out to read groups.md, graph JSON, or template files.
   const personalOntologyTools = uid && !params.disableTools ? createPersonalOntologyTools({
     userId: uid,
   }) : [];
@@ -971,6 +1146,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...fileTools,
     ...kbTools,
     ...recallTools,
+    ...assetStewardTools,
+    ...experienceTools,
     ...personalOntologyTools,
     ...chatHistoryTools,
     ...messagingTools,
@@ -995,20 +1172,12 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ? []
     : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
   if (!params.disableTools && params.toolAccess === 'read-only') {
-    const readOnlyAllowlist = new Set([
-      'read_file', 'stat_file', 'search_files', 'grep_files', 'list_files',
-      'web_search', 'web_fetch', 'kb_list', 'kb_search', 'kb_read',
-      'tool_result_search', 'tool_result_read_chunk',
-    ]);
-    visibleTools = visibleTools.filter((tool) => readOnlyAllowlist.has(tool.name));
+    visibleTools = visibleTools.filter((tool) => READ_ONLY_TOOL_ALLOWLIST.has(tool.name));
   }
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
   let builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
   if (!params.disableTools && params.toolAccess === 'read-only') {
-    const readOnlyBuiltinAllowlist = new Set([
-      'read_file', 'list_files', 'web_fetch', 'web_search',
-    ]);
-    builtinTools = builtinTools.filter((t) => readOnlyBuiltinAllowlist.has(t.name));
+    builtinTools = builtinTools.filter((t) => READ_ONLY_BUILTIN_ALLOWLIST.has(t.name));
   }
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
@@ -1126,19 +1295,33 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     }
   }
   // 背景块内容源（2026-09-19 清单 #7）：画像从资产库渲染（personal 资产按
-  //  使用次数取头部），资产库还没有画像资产时回退记忆文件——存量迁移完成后
-  //  文件为空，这里无感切换。agent/space 档仍在文件（阶段 D 退役）。
+  //  使用次数取头部）；记忆文件中尚未迁移的独立条目仍保留，关联镜像服从资产
+  //  状态和范围门控。agent/space 档仍在文件（阶段 D 退役）。
   const formatMemoryBlockWithAssetProfile = async (
     userId: string, agentId: string, spaceId?: string, projectId?: string, activeIds: ReadonlySet<string> = new Set(),
   ): Promise<string> => {
     let assetProfileEntries: string[] = [];
+    let assetProfileSourceBlocksFallback = false;
     try {
-      const { loadAssetProfileEntries } = await import('../../features/recall/profile-block');
-      assetProfileEntries = await loadAssetProfileEntries(userId);
+      const { loadAssetProfileEntriesWithAvailability } = await import('../../features/recall/profile-block');
+      const profile = await loadAssetProfileEntriesWithAvailability(userId, {
+        readContext: {
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(spaceId ? { workspaceId: spaceId } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(params.userMessage ? { taskText: params.userMessage } : {}),
+        },
+      });
+      assetProfileEntries = profile.entries;
+      assetProfileSourceBlocksFallback = profile.hasPersonalAssets;
     } catch {
-      assetProfileEntries = []; // 资产库读取失败回退文件渲染
+      assetProfileEntries = [];
+      // 资产库状态不明时不能回退到可能含有正式资产旧副本的记忆文件。
+      assetProfileSourceBlocksFallback = true;
     }
-    return formatMemoryForSystemPrompt(userId, agentId, spaceId, projectId, activeIds, assetProfileEntries);
+    return formatMemoryForSystemPrompt(
+      userId, agentId, spaceId, projectId, activeIds, assetProfileEntries, assetProfileSourceBlocksFallback,
+    );
   };
   const memoryBlock = (uid && memoryAgentScope)
     ? await formatMemoryBlockWithAssetProfile(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
@@ -1147,7 +1330,12 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // 二期「空间 = 角色」：会话挂空间 → 注入该角色模板画像（个人本体角色模板文件，
   // 与 memoryBlock 同层级的读侧背景上下文；异步读文件，失败静默降级为空串）。
   const roleProfileBlock = (uid && memoryAgentScope && params.spaceId)
-    ? await formatRoleProfileForSystemPrompt(uid, params.spaceId)
+    ? await formatRoleProfileForSystemPrompt(uid, params.spaceId, {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.projectId ? { projectId: params.projectId } : {}),
+      workspaceId: params.spaceId,
+      ...(params.userMessage ? { taskText: params.userMessage } : {}),
+    })
     : '';
   if (roleProfileBlock) parts.push(roleProfileBlock);
   const resolvedSystemPrompt = parts.join('\n\n');

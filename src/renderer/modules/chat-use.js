@@ -568,11 +568,13 @@ function _replaceChatUseTokens(content, mapper) {
   if (!tokens.length) return text;
   let out = '';
   let last = 0;
-  tokens.forEach((token) => {
+  // for…of（不是 forEach）：本体分组的矛盾提示要按组读一次 IPC——
+  // 回调里 await 不了（specs/014 T020 改造时抓出）。
+  for (const token of tokens) {
     out += text.slice(last, token.start);
     out += mapper(token.selection, token);
     last = token.end;
-  });
+  }
   out += text.slice(last);
   return out;
 }
@@ -606,6 +608,24 @@ async function _fetchOntologyGroupContent(groupId) {
  *      一致，不是拼在整段消息前后）
  * 非 ontology_group 的 token（skill/connector）走原来的同步逻辑，行为不变。
  */
+/** 矛盾提示行构造（specs/014 T020/T021，纯函数测试缝）：字段级去重、≤3 行；
+ *  回执不 ok / conflicts 非数组 / 空 → 空串（无冲突时注入正文逐字不变，I-9）。 */
+function buildConflictNotices(response, translate) {
+  const conflicts = response && response.ok && Array.isArray(response.conflicts) ? response.conflicts : [];
+  if (!conflicts.length) return '';
+  const seenFields = new Set();
+  const lines = [];
+  for (const conflict of conflicts) {
+    const field = String((conflict && conflict.field) || '');
+    if (!field || seenFields.has(field)) continue;
+    seenFields.add(field);
+    if (lines.length >= 3) break;
+    lines.push(translate('personalOntology.use_conflict_notice', { field }));
+  }
+  return lines.length ? `\n${lines.join('\n')}` : '';
+}
+if (typeof window !== 'undefined') window.__buildChatUseConflictNotices = buildConflictNotices;
+
 async function transformChatUseTokensAsync(content) {
   const text = String(content || '');
   const tokens = _findChatUseTokens(text);
@@ -623,20 +643,32 @@ async function transformChatUseTokensAsync(content) {
 
   let out = '';
   let last = 0;
-  tokens.forEach((token) => {
+  // for…of（不是 forEach）：本体分组的矛盾提示要按组读一次 IPC——
+  // 回调里 await 不了（specs/014 T020 改造时抓出）。
+  for (const token of tokens) {
     out += text.slice(last, token.start);
     const sel = _normalizeChatUseSelection(token.selection);
     if (sel && sel.kind === 'ontology_group') {
       const groupContent = contentById.get(sel.id) || '';
       const title = sel.name || sel.id;
+      // 矛盾提示行（specs/014 US-903 / T020）：该组存在仍成立的字段矛盾时，
+      // 在注入正文**之前**追加 ≤3 行字段级去重的提醒。读失败静默跳过（提示是
+      // 增量，不是注入的依赖项）。构造逻辑抽成纯函数（测试缝，T021）。
+      let conflictNotices = '';
+      if (groupContent) {
+        try {
+          const res = await window.cogseed.invoke('personalOntology.conflicts.list', { groupId: sel.id });
+          conflictNotices = buildConflictNotices(res, t);
+        } catch { /* 提示行读失败静默跳过——正文注入不受影响 */ }
+      }
       out += groupContent
-        ? t('personalOntology.use_prefix', { title, content: groupContent })
+        ? t('personalOntology.use_prefix', { title, content: groupContent + conflictNotices })
         : title; // empty/unreadable group — fall back to just the name, no empty template.
     } else {
       out += _chatUseInlineText(token.selection);
     }
     last = token.end;
-  });
+  }
   out += text.slice(last);
   return out;
 }

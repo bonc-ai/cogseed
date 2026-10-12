@@ -18,7 +18,7 @@
   --color-ink-body: #243D30;
   --color-ink-2: #3E5A4C;
   --color-ink-3: #4C685A;
-  --color-muted: #5E7467;
+  --color-muted: #5C7064; /* WCAG：浅底(#edf3ef)上需 ≥4.5，#5E7467 为 4.48，最小加深一档（白底 4.93→5.31） */
   --color-faint: #9CAEA2;
   --color-line-subtle: rgba(20, 40, 30, 0.06);
   --color-line-hairline: rgba(20, 40, 30, 0.07);
@@ -238,7 +238,7 @@
   --color-ca-soil-line: #ddd0ba;
   --color-ca-soil-hover: #e4d8c2;
   --color-ca-soil-ink: #6f5a3a;
-  --color-ca-red: #cf4a42;
+  --color-ca-red: #ce4840; /* WCAG：白字需 ≥4.5，#cf4a42 为 4.46，最小加深一档 */
   --color-ca-red-line: #ecc8c4;
   --color-ca-red-bg: #fdf0ef;
   --color-ca-row-hover: rgba(0, 0, 0, 0.03);
@@ -373,3 +373,14 @@
   --control-stop: var(--color-control-stop);
   --control-stop-hover: var(--color-control-stop-hover);
 }
+
+/* 认知资产面板（cognition-assets）专属色——2026-09-30 从 css 字面量收编：
+   值为收编前的实际渲染值（原 var() 兜底/字面量原样搬运，视觉零变化），
+   tokens:check 门禁归零。 */
+  --cognition-ink-soft: #6b7263;
+  --cognition-ink-faint: #8a9080;
+  --cognition-line: #d8dcd3;
+  --cognition-line-soft: #e3e6de;
+  --cognition-tint: #eceee7;
+  --status-attention: #c58a23;
+  --color-shadow-lift: rgba(0, 0, 0, 0.12);

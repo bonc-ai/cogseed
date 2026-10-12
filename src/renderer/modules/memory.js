@@ -20,10 +20,10 @@ let _memData = {};
 //   { target /* scope-key */, mode:'edit'|'add', oldText? } — null when closed.
 let _memEditor = null;
 
-// ── "记忆分组" (personal-ontology groups) section state ──────────────────
+// ── "本体分组" (personal-ontology groups) section state ──────────────────
 // Embedded in this same page per the requirements doc's default choice
 // (§3.6): a dedicated management surface, not shoved into the user/shared
-// scope list above. 这个面板只管**普通**记忆分组：角色模板分组由个人本体面板
+// scope list above. 这个面板只管**普通**本体分组：角色模板分组由个人本体面板
 // 负责（见 _memRenderGroupsSection 的 template_id 过滤），这里不解析模板文件
 // 格式、不做字段/流水编辑。
 let _memGroups = [];
@@ -232,7 +232,7 @@ function _memRenderEditor(target, text) {
   `;
 }
 
-// ── "记忆分组" section ────────────────────────────────────────────────────
+// ── "本体分组" section ────────────────────────────────────────────────────
 // Scope: create / rename / delete a group + edit its content as one whole-file
 // textarea (§3.6 in the requirements doc — no per-entry management here, and
 // no "used by these past conversations" tracking, per the doc's explicit

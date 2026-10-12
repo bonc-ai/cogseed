@@ -7,10 +7,8 @@ import { nowIso, safeId, writeJson } from '../../storage';
 import { logErrorSummary, maskId } from '../../util/log-redact';
 import {
   detachCognitionMemoryEntryLocked,
-  ensureCognitionMemoryEntryLocked,
   findCognitionMemoryEntryLocked,
   memoryContentHash,
-  scanForInjection,
 } from '../memory';
 import { CorruptMemoryMetadataError } from '../memory-records';
 import {
@@ -73,15 +71,6 @@ export interface CognitionReuseInput {
 export interface CognitionReuseEvent extends CognitionReuseInput {
   id: string;
   createdAt: string;
-}
-
-export interface CognitionCreateInput {
-  title: string;
-  summary: string;
-}
-
-export interface CognitionCaptureInput extends CognitionCreateInput {
-  evidence: CognitionEvidenceInput;
 }
 
 export interface CognitionMemoryBinding {
@@ -732,44 +721,6 @@ function newId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
-function normalizedText(value: string, field: string, maxLength: number): string {
-  if (typeof value !== 'string') throw new Error(`invalid cognition ${field}`);
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > maxLength) throw new Error(`invalid cognition ${field}`);
-  return trimmed;
-}
-
-function validatedOptionalId(value: string | undefined, field: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (!safeId(value) || value.length > MAX_ID_LENGTH) throw new Error(`invalid cognition ${field}`);
-  return value;
-}
-
-function validateEvidenceInput(input: CognitionEvidenceInput): CognitionEvidenceInput {
-  if (!input || (input.kind !== 'conversation' && input.kind !== 'project'
-      && input.kind !== 'execution' && input.kind !== 'manual')) throw new Error('invalid cognition evidence kind');
-  const conversationId = validatedOptionalId(input.conversationId, 'evidence conversationId');
-  const projectId = validatedOptionalId(input.projectId, 'evidence projectId');
-  return {
-    kind: input.kind,
-    summary: normalizedText(input.summary, 'evidence summary', MAX_SUMMARY_LENGTH),
-    sourceLabel: normalizedText(input.sourceLabel, 'evidence sourceLabel', MAX_SOURCE_LABEL_LENGTH),
-    ...(conversationId ? { conversationId } : {}),
-    ...(projectId ? { projectId } : {}),
-  };
-}
-
-function validateReuseInput(input: CognitionReuseInput): CognitionReuseInput {
-  if (!input || typeof input !== 'object') throw new Error('invalid cognition reuse input');
-  const conversationId = validatedOptionalId(input.conversationId, 'reuse conversationId');
-  const projectId = validatedOptionalId(input.projectId, 'reuse projectId');
-  return {
-    sourceLabel: normalizedText(input.sourceLabel, 'reuse sourceLabel', MAX_SOURCE_LABEL_LENGTH),
-    ...(conversationId ? { conversationId } : {}),
-    ...(projectId ? { projectId } : {}),
-  };
-}
-
 export function deriveCognitionStage(
   reviewState: CognitionReviewState,
   evidenceCount: number,
@@ -914,72 +865,6 @@ async function reconciledStore(
   return store;
 }
 
-async function mutateAsset(
-  userId: string,
-  assetId: string,
-  mutation: (asset: CognitionAsset) => void,
-): Promise<CognitionAsset> {
-  assertUserId(userId);
-  if (!safeId(assetId) || assetId.length > MAX_ID_LENGTH) throw new Error('invalid cognition asset id');
-  return withCognitionMemoryTransaction(userId, async (transaction) => {
-    const store = await reconciledStore(userId, transaction);
-    const asset = store.assets.find((item) => item.id === assetId);
-    if (!asset) throw new Error('cognition asset not found');
-    mutation(asset);
-    refreshStage(asset);
-    const result = structuredClone(asset);
-    await writeStore(userId, store);
-    return result;
-  });
-}
-
-function newAsset(title: string, summary: string, evidence: CognitionEvidence[]): CognitionAsset {
-  const timestamp = nowIso();
-  const asset: CognitionAsset = {
-    id: newId('cog'), title, summary,
-    stage: evidence.length ? 'sprout' : 'seed', reviewState: 'pending', evidence, reuseEvents: [],
-    transitions: [], createdAt: timestamp, updatedAt: timestamp,
-  };
-  appendTransition(asset, 'created', {}, timestamp);
-  for (const item of evidence) appendTransition(asset, 'evidence_added', { evidenceId: item.id }, item.createdAt);
-  return asset;
-}
-
-export async function createCognitionAsset(userId: string, input: CognitionCreateInput): Promise<CognitionAsset> {
-  assertUserId(userId);
-  if (!input || typeof input !== 'object') throw new Error('invalid cognition create input');
-  const title = normalizedText(input.title, 'title', MAX_TITLE_LENGTH);
-  const summary = normalizedText(input.summary, 'summary', MAX_SUMMARY_LENGTH);
-  return withCognitionMemoryTransaction(userId, async (transaction) => {
-    const store = await reconciledStore(userId, transaction);
-    if (store.assets.length >= MAX_ASSETS) throw new Error(`cognition asset count exceeds ${MAX_ASSETS}`);
-    const asset = newAsset(title, summary, []);
-    store.assets.push(asset);
-    await writeStore(userId, store);
-    return structuredClone(asset);
-  });
-}
-
-export async function createCognitionAssetWithEvidence(
-  userId: string,
-  input: CognitionCaptureInput,
-): Promise<CognitionAsset> {
-  assertUserId(userId);
-  if (!input || typeof input !== 'object') throw new Error('invalid cognition capture input');
-  const title = normalizedText(input.title, 'title', MAX_TITLE_LENGTH);
-  const summary = normalizedText(input.summary, 'summary', MAX_SUMMARY_LENGTH);
-  const evidenceInput = validateEvidenceInput(input.evidence);
-  return withCognitionMemoryTransaction(userId, async (transaction) => {
-    const store = await reconciledStore(userId, transaction);
-    if (store.assets.length >= MAX_ASSETS) throw new Error(`cognition asset count exceeds ${MAX_ASSETS}`);
-    const createdAt = nowIso();
-    const asset = newAsset(title, summary, [{ id: newId('evidence'), ...evidenceInput, createdAt }]);
-    store.assets.push(asset);
-    await writeStore(userId, store);
-    return structuredClone(asset);
-  });
-}
-
 function sortedAssets(store: CognitionStore): CognitionAsset[] {
   return store.assets.slice().sort((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
@@ -1027,136 +912,6 @@ export async function listCognitionAssetPage(
   });
 }
 
-export async function getCognitionAsset(userId: string, assetId: string): Promise<CognitionAsset> {
-  assertUserId(userId);
-  if (!safeId(assetId) || assetId.length > MAX_ID_LENGTH) throw new Error('invalid cognition asset id');
-  return withCognitionMemoryTransaction(userId, async (transaction) => {
-    const store = await reconciledStore(userId, transaction);
-    const asset = store.assets.find((item) => item.id === assetId);
-    if (!asset) throw new Error('cognition asset not found');
-    return structuredClone(asset);
-  });
-}
-
-export async function addCognitionEvidence(
-  userId: string,
-  assetId: string,
-  input: CognitionEvidenceInput,
-): Promise<CognitionAsset> {
-  const evidence = validateEvidenceInput(input);
-  return mutateAsset(userId, assetId, (asset) => {
-    if (asset.evidence.length >= MAX_EVIDENCE_PER_ASSET) {
-      throw new Error(`cognition evidence count exceeds ${MAX_EVIDENCE_PER_ASSET}`);
-    }
-    const item = { id: newId('evidence'), ...evidence, createdAt: nowIso() };
-    asset.evidence.push(item);
-    appendTransition(asset, 'evidence_added', { evidenceId: item.id }, item.createdAt);
-  });
-}
-
-export async function confirmCognitionAsset(userId: string, assetId: string): Promise<CognitionAsset> {
-  assertUserId(userId);
-  if (!safeId(assetId) || assetId.length > MAX_ID_LENGTH) throw new Error('invalid cognition asset id');
-  return withCognitionMemoryTransaction(userId, async (transaction) => {
-    const store = await reconciledStore(userId, transaction);
-    const asset = store.assets.find((item) => item.id === assetId);
-    if (!asset) throw new Error('cognition asset not found');
-    if (!asset.evidence.length) throw new Error('cognition asset needs evidence before confirmation');
-    if (asset.reviewState === 'confirmed' && !reconcileAsset(userId, asset, transaction)) return structuredClone(asset);
-
-    const wasPreviouslyConfirmed = Boolean(asset.confirmedAt);
-    const threat = scanForInjection(asset.summary);
-    if (threat) throw new Error(`cognition confirmation blocked: suspicious content (${threat})`);
-    const hash = memoryContentHash(asset.summary);
-    const existingTransition = asset.memoryTransition;
-    if (existingTransition?.kind === 'activate' && existingTransition.contentSha256 !== hash) {
-      throw new Error('cognition activation content changed during retry');
-    }
-    assertTransitionCapacity(asset, existingTransition?.kind === 'activate' ? 1 : 2);
-    if (!existingTransition || existingTransition.kind !== 'activate') {
-      const requestedAt = nowIso();
-      if (asset.reviewState === 'deferred') asset.reviewState = 'pending';
-      asset.memoryTransition = { kind: 'activate', sourceId: asset.id, contentSha256: hash, requestedAt };
-      asset.confirmationRequestedAt = requestedAt;
-      appendTransition(asset, 'confirmation_requested', {}, requestedAt);
-      refreshStage(asset);
-      await writeStore(userId, store);
-    }
-
-    let memoryResult;
-    try {
-      memoryResult = ensureCognitionMemoryEntryLocked(userId, asset.id, asset.summary, transaction);
-    } catch (error) {
-      throw new Error('cognition memory write failed', { cause: error });
-    }
-    if (!memoryResult.ok || !memoryResult.record) {
-      throw new Error(`cognition memory write failed: ${memoryResult.error || 'unknown error'}`);
-    }
-
-    const confirmedAt = asset.memoryTransition.requestedAt;
-    asset.reviewState = 'confirmed';
-    asset.confirmedAt = asset.confirmedAt || confirmedAt;
-    asset.memoryBinding = {
-      sourceId: asset.id,
-      recordId: memoryResult.record.recordId,
-      contentSha256: hash,
-      activatedAt: confirmedAt,
-    };
-    delete asset.memoryTransition;
-    delete asset.confirmationRequestedAt;
-    delete asset.invalidation;
-    appendTransition(asset, wasPreviouslyConfirmed ? 'reconfirmed' : 'confirmed', {}, confirmedAt);
-    refreshStage(asset);
-    const result = structuredClone(asset);
-    await writeStore(userId, store);
-    return result;
-  });
-}
-
-export async function deferCognitionAsset(userId: string, assetId: string): Promise<CognitionAsset> {
-  assertUserId(userId);
-  if (!safeId(assetId) || assetId.length > MAX_ID_LENGTH) throw new Error('invalid cognition asset id');
-  return withCognitionMemoryTransaction(userId, async (transaction) => {
-    const store = await readStore(userId);
-    const asset = store.assets.find((item) => item.id === assetId);
-    if (!asset) throw new Error('cognition asset not found');
-    if (asset.reviewState === 'confirmed') throw new Error('confirmed cognition asset cannot be deferred');
-
-    if (!asset.memoryTransition || asset.memoryTransition.kind !== 'deactivate') {
-      const requestedAt = nowIso();
-      if (asset.reviewState === 'deferred' && !asset.memoryTransition) return structuredClone(asset);
-      assertTransitionCapacity(asset, 2);
-      if (asset.reviewState !== 'invalidated') asset.reviewState = 'pending';
-      asset.memoryTransition = {
-        kind: 'deactivate',
-        sourceId: asset.id,
-        contentSha256: memoryContentHash(asset.summary),
-        requestedAt,
-      };
-      asset.confirmationRequestedAt = requestedAt;
-      appendTransition(asset, 'defer_requested', {}, requestedAt);
-      // A deactivate transition is a valid in-flight form of an invalidated
-      // asset; the invalidation is cleared only after the detach is durable.
-      refreshStage(asset);
-      await writeStore(userId, store);
-    } else {
-      assertTransitionCapacity(asset, 1);
-    }
-    const detached = detachCognitionMemoryEntryLocked(userId, asset.id, transaction);
-    if (!detached.ok) throw new Error(`cognition memory detach failed: ${detached.error || 'unknown error'}`);
-    asset.reviewState = 'deferred';
-    delete asset.memoryBinding;
-    delete asset.memoryTransition;
-    delete asset.confirmationRequestedAt;
-    delete asset.invalidation;
-    appendTransition(asset, 'deferred');
-    refreshStage(asset);
-    const result = structuredClone(asset);
-    await writeStore(userId, store);
-    return result;
-  });
-}
-
 export async function invalidateCognitionMemorySources(
   userId: string,
   sourceIds: string[],
@@ -1193,28 +948,6 @@ export async function invalidateCognitionMemorySourcesLocked(
   // sources it just detached, then reconcile every unrelated active asset.
   changed = reconcileStore(userId, store, transaction) || changed;
   if (changed) await writeStore(userId, store);
-}
-
-export async function recordCognitionReuse(
-  userId: string,
-  assetId: string,
-  input: CognitionReuseInput,
-): Promise<CognitionAsset> {
-  const reuse = validateReuseInput(input);
-  return mutateAsset(userId, assetId, (asset) => {
-    if (asset.reviewState !== 'confirmed') throw new Error('only actively confirmed cognition assets can be reused');
-    if (asset.reuseEvents.length >= MAX_REUSE_EVENTS_PER_ASSET) {
-      throw new Error(`cognition reuse count exceeds ${MAX_REUSE_EVENTS_PER_ASSET}`);
-    }
-    const event = { id: newId('reuse'), ...reuse, createdAt: nowIso() };
-    asset.reuseEvents.push(event);
-    appendTransition(asset, 'reused', { reuseEventId: event.id }, event.createdAt);
-  });
-}
-
-export async function listCognitionStoreAssets(userId: string): Promise<CognitionAsset[]> {
-  return withCognitionMemoryTransaction(userId, async (transaction) =>
-    sortedAssets(await reconciledStore(userId, transaction)).map((asset) => structuredClone(asset)));
 }
 
 // ── develop 侧能力（candidates/receipts/dashboard/skill-summary 等）─────────

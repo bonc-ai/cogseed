@@ -1,55 +1,159 @@
 # capabilities.yaml — 机器可读的能力边界声明
 #
-# 把散落在 3 份设计文档里的"局限声明"统一成一份结构化、可被程序读取
+# 把散落在多份设计文档里的"局限声明"统一成一份结构化、可被程序读取
 # 的清单。上层系统（Agent Factory / Skill Factory）可以据此判断
 # 是否需要叠加其他检测手段，而不是只能读报告里的自然语言文案。
+#
+# 2.2.0 起每条能力增加 `report_fields`：声明「这条能力的结果出现在报告的
+# 哪些字段里」。此前能力清单只说自己做了什么，下游无法据此判断「该读报告
+# 的哪里」。一个声明了 implemented: true 但结果无处可读的能力，对集成方
+# 等于不存在。
 
-schema_version: "1.1.0"
-engine_version: "2.1.0"
+schema_version: "2.0.0"
+engine_version: "2.2.0"
 
 capabilities:
   text_static_analysis:
     implemented: true
-    method: "逐行正则匹配 + 语言分派 + 上下文降权"
-    coverage: "密钥泄漏、危险命令、动态执行、SQL注入、持久化、提示注入载荷、网络外联、可疑地址"
+    method: "逐行正则匹配 + 语言分派 + 上下文降权（7 级）"
+    coverage: "12 类规则组：危险命令、动态执行、SQL 注入、持久化、提示注入载荷、网络外联、可疑地址、反向 shell、凭据读取、监控行为、挖矿、不可信输入执行"
+    rule_count_at_1_1_0: 176
+    report_fields: ["findings", "severity_counts", "coverage.rule_count"]
     known_limitations:
       - "正则/关键词检测存在误报与漏报"
       - "无法理解代码语义，只能匹配字面模式（如变量拼接后的字符串无法检出）"
-      - "混淆/编码后的代码（如多层 base64、动态拼接的函数名）检出率低"
+      - "混淆/编码后的代码（如多层 base64、动态拼接的函数名）交由 obfuscation 模块的启发式处理，不是语义分析"
 
   context_awareness:
     implemented: true
     since: "2.1.0"
-    method: "按扩展名做规则语言分派；按路径/注释/围栏块判定上下文并降级 severity"
+    method: "按扩展名做规则语言分派；按路径/注释/围栏块/断言语料判定上下文并降级 severity"
     contexts: [source, doc, prose, comment, test, vendor]
-    coverage: "消除「防御代码被判成攻击代码」「JS re.exec() 被判 Python 动态执行」「测试断言输入被判攻击载荷」三类系统性误报"
+    coverage: "消除「防御代码被判成攻击代码」「JS re.exec() 被判 Python 动态执行」「测试断言输入被判攻击载荷」「安全守则散文被判成实际行为」四类系统性误报"
     guarantees:
       - "降权只降级，绝不删除 finding；original_severity / context / demoted 三字段完整保留审计轨迹"
       - "hard_block 一票否决项不受降权影响"
-      - "未降权 critical 单条即触发 DO_NOT_INSTALL"
+      - "未降权且高置信的 critical 单条即触发 DO_NOT_INSTALL"
+    report_fields: ["findings[].context", "findings[].demoted", "findings[].original_severity"]
     known_limitations:
       - "上下文判定是静态启发式（路径命名 + 轻量注释解析），非语义分析"
-      - "攻击者可把恶意代码放入 test/ 或 vendor/ 以压低严重级；实测仍报 CAUTION 不能逃脱裁决，但用于强制拦截时应同时消费 original_severity"
+      - "攻击者可把恶意代码放入 test/ 或 vendor/ 以压低严重级；强制拦截场景应同时消费 original_severity"
       - "块注释解析不处理字符串内嵌引号等边缘情况；不确定时保持原级别（偏向避免漏报）"
+
+  negative_example_recognition:
+    implemented: true
+    since: "2.2.0"
+    method: "识别文档中标注为示例/反例的区块（negative_examples / anti_patterns / do_not_use_when / negative_fewshot 等键与标题），区块内命中降为 info"
+    coverage: "消除「把安全用例写进文档反而被扣分」这一类误报——实测 5 个官方 Skill 的 negative_examples 清单因此曾被判 CAUTION"
+    guarantees:
+      - "只降级、不删除：finding 带 example: true 保留在报告中"
+      - "hard_block 一票否决项不适用本机制"
+    report_fields: ["findings[].example", "findings[].severity"]
+    known_limitations:
+      - "依赖标记词汇表（中英文各约 20 个），自定义命名的示例区块无法识别"
+      - "回看窗口 25 行；跨越更长距离的标记不会被关联"
+
+  instruction_analysis:
+    implemented: true
+    since: "2.2.0"
+    method: "针对代理运行时的确定性规则：结构层（宿主配置路径 / 危险命令行开关 / MCP 键）+ 祈使层（隐瞒、越权、绕过、索取凭据、结果外送）+ 组合层（弱信号配对）+ 否定守卫（前置与内部）"
+    coverage: "补足纯代码规则的结构性盲区：一个不需要代码就能生效的越权指令"
+    guarantees:
+      - "指令类规则在散文里不降权（散文就是它的载荷通道）；在 test/vendor 语料里降为 low"
+      - "否定守卫区分「要求跳过确认」与「禁止跳过确认」——两者在中文里同形"
+    report_fields: ["findings[].category"]
+    known_limitations:
+      - "语义判断仍然有限：改写句式（同义词替换、分步拆分、换语言）可以绕过祈使层"
+      - "否定守卫是 18 字符窗口的启发式；长距离的否定与动词不会被关联"
+      - "本层不做模型判断；需要语义裁决时由上层 instruction-audit 层用模型补充"
+
+  hidden_content_detection:
+    implemented: true
+    since: "2.2.0"
+    method: "码点级扫描：Unicode 标签块（U+E0000–E007F）、零宽字符、双向控制符、变体选择符成串、ANSI 转义、HTML 注释内指令、隐藏样式、Markdown 链接外带、同形字混排"
+    coverage: "对人不显示、对模型可见的载荷——传统 SAST 不处理的类别"
+    guarantees:
+      - "不可见字符类载荷不做上下文降权：藏进哪一层目录都不改变它不可见这一事实"
+      - "阈值卡在正常用法之上（单个 BOM、emoji 后的单个变体选择符、普通 HTML 注释均不命中）"
+    report_fields: ["findings[].category == \"hidden_content\""]
+    known_limitations:
+      - "不处理图像/PDF 内的隐写，也不做字体级同形字全表比对"
+      - "同形字检测只覆盖最常见的西里尔/希腊字母（约 20 个码点）"
+
+  obfuscation_detection:
+    implemented: true
+    since: "2.2.0"
+    method: "解码动作 × 执行动作共现（行内与相邻行）+ 长编码串香农熵 + 转义串/逐字符构造 + shell 管道解码执行"
+    coverage: "base64/hex 载荷、atob/b64decode+exec、String.fromCharCode、chr() 链、JSFuck 风格、远端拉取后执行"
+    guarantees:
+      - "info 级信号不参与打分；解码+执行共现是 critical"
+      - "sha256/sha384/sha512 长度的十六进制串被显式放行（摘要不是载荷）"
+    report_fields: ["findings[].category == \"obfuscation\""]
+    known_limitations:
+      - "多层编码（base64 套 hex 套 rot13）只检出第一层"
+      - "自定义解码器（作者自己实现的解码函数）无法识别"
+      - "熵阈值 3.6 是启发式，压缩后的合法资源可能命中低置信度告警"
+
+  supply_chain_analysis:
+    implemented: true
+    since: "2.2.0"
+    method: "安装钩子（package.json scripts）、依赖源覆盖（--index-url/--extra-index-url/registry）、运行时未固定版本安装、拼写伪装（流行包词表 + 编辑距离）、CI pwn request 与未固定 action"
+    coverage: "依赖清单与运行时安装的包名会作为事实写入报告，供人复核"
+    report_fields: ["findings[].category", "dependency_manifests"]
+    known_limitations:
+      - "拼写伪装词表约 40 个流行包，离线维护；不在词表内的伪造名无法识别"
+      - "不做 CVE 匹配（需 osv-scanner），不做包内容级比对"
+      - "安装命令行解析是 token 级的；跨行拼接的命令无法还原"
+
+  structural_analysis:
+    implemented: true
+    since: "2.2.0"
+    method: "文件级结构检查：可执行载荷扩展名、嵌套压缩包、符号链接逃逸、内嵌 .git 目录、可执行位、超大文件"
+    coverage: "报告同时给出文件构成统计（文件数、总字节、可执行数、归档数、符号链接数、类型分布）"
+    guarantees:
+      - "结构事实不做上下文降权；符号链接按 realpath 判定是否逃出 Skill 目录"
+      - ".git 目录整体报一次，不下钻其内部对象"
+    report_fields: ["findings[].category == \"structural\"", "structural_summary"]
+    known_limitations:
+      - "不解析二进制指令、不做符号执行"
+      - "归档只报存在，不解包递归扫描"
 
   secret_detection:
     implemented: true
-    method: "内置正则 + 可选 gitleaks 增强"
-    degraded_without: ["gitleaks"]
+    method: "内置 70 条具名正则 + 通用高熵检测（凭据味变量名 × 香农熵 ≥ 3.5 × 长度 ≥ 16）+ 可选 gitleaks 增强"
+    enhanced_by: ["gitleaks"]
+    status_note: |
+      未安装 gitleaks **不计为能力降级**。内置规则集本身就是这条能力的交付物，
+      gitleaks 只扩大覆盖面，不决定能力是否成立；它的可用性仍然单独出现在
+      coverage.external_tools.gitleaks，信息没有隐藏。
+      上层若把「缺少增强」读成「能力降级」，页面会开屏显示降级横幅——用户看到的
+      是「我这装坏了」，而真相是「有个可选的更强配置没用上」。
+    report_fields: ["findings[].category in (secret, secret_file)", "coverage.external_tools.gitleaks"]
     known_limitations:
-      - "未安装 gitleaks 时仅依赖内置正则规则库，规则覆盖面小于 gitleaks 官方规则集"
+      - "具名规则只覆盖它认识的服务；名字不认识的凭据由通用高熵检测兜底"
+      - "通用高熵检测固定 low 置信度、几乎不参与扣分，且刻意做窄：摘要（sha1/md5/sha256/384/512 十六进制）、模板引用（${VAR} / process.env.X）、占位符、单一字符类串一律放行——误报代价高于漏报"
+      - "取名刻意不像凭据的变量（如 `k = \"…\"`）不会被通用检测命中"
 
   dependency_vulnerability_scan:
-    implemented: true
-    method: "可选 osv-scanner 增强"
-    degraded_without: ["osv-scanner"]
+    implemented: false
+    requires_tool: ["osv-scanner"]
+    method: "仅由 osv-scanner 提供；本引擎不携带漏洞数据库"
+    status_note: |
+      原声明写作 `implemented: true / method: 可选 osv-scanner 增强`，但本能力没有
+      任何原生交付：未安装时 vulnerability_findings 恒为空。声明为 implemented 会
+      让上层把它当成「降级」（我们有，只是弱一点），而真相是「整个能力未启用」。
+      上层状态取值为 `needs_tool`：装工具即可解锁，与「能力降级」分开表述。
+      注意依赖**清单与固定性**问题已由 supply_chain_analysis 原生覆盖，不在这里重复。
+    report_fields: ["vulnerability_findings", "coverage.external_tools.osv_scanner"]
     known_limitations:
       - "未安装 osv-scanner 时完全跳过 CVE 扫描，报告中 vulnerability_findings 恒为空"
+      - "离线环境即便装了 osv-scanner，CVE 数据的新鲜度也取决于其本地库的更新"
 
   binary_static_analysis:
     implemented: true
     method: "strings 抽取 + 正则指标匹配"
     coverage: "ELF/PE/Mach-O/WASM/JAR 等格式识别，硬编码地址/危险命令/持久化路径/反调试指标"
+    report_fields: ["findings[].category == \"binary_indicator\"", "binary_scan"]
     known_limitations:
       - "仅静态字符串级启发式，不解析二进制指令、不做符号执行"
       - "无法确认二进制真实运行时行为（写了什么文件、连了什么地址、发了什么数据）"
@@ -65,22 +169,121 @@ capabilities:
     tracked_as: "架构决策：扫描过程本身不执行代码以规避风险，但因此无法观察真实运行时行为"
 
   malware_signature_matching:
-    implemented: false
-    reason: "未接入 YARA 等恶意代码特征库"
-    tracked_as: "需单独立项（见 08_review_docs 评审文档中的待决策事项）"
+    implemented: partial
+    since: "2.2.0"
+    method: "内置指标表（挖矿池/矿工程序名、反向 shell 形态、键盘记录 API、内存注入 API）"
+    report_fields: ["findings[].category in (crypto_miner, reverse_shell, surveillance)"]
+    known_limitations:
+      - "未接入 YARA 规则引擎与第三方恶意代码特征库；指标表是人工维护的小集合"
+      - "不做家族归因，不给恶意软件命名"
+
+  anti_evasion_rescan:
+    implemented: true
+    since: "2.2.0"
+    method: "归一化视图（去不可见字符 + NFKC 折叠 + 同形字折回拉丁）与迭代解码视图（base64/hex，最多 3 层）各跑一遍同一套规则"
+    coverage: "零宽字符切断的关键字、全角/同形字伪装、base64/hex 编码后隐藏的载荷、嵌套编码"
+    guarantees:
+      - "派生视图的命中降一档置信度并带 derived 字段，原文与变换后的命中在报告里可区分"
+      - "解码视图不给行号（解码结果的第 N 行在原文里没有对应位置），只保留 original_line"
+      - "可读性门槛：解码结果必须 ≥85% 可打印才作为视图，内嵌图片/字体不会刷屏"
+      - "解码视图里的 critical 命中仍可按类别拒装——否则这个功能只是把问题从「看不见」变成「看见了但不管」"
+    report_fields: ["findings[].derived", "coverage.derived_views", "coverage.derived_findings"]
+    known_limitations:
+      - "仅 base64 与 hex 两种编码；自定义编码器与加密载荷无法识别"
+      - "多层编码上限 3 层；更深的嵌套会被漏掉"
+      - "归一化会改写字符，其命中因此更容易是变换本身的产物（置信度已降档）"
+
+  coverage_disclosure:
+    implemented: true
+    since: "2.2.0"
+    method: "扫描覆盖缺口（跳过文件 / 规则编译失败 / 外部工具缺失）作为 info 级发现项写入 findings"
+    rationale: "部分扫描得到的干净结果不是「这个包是干净的」的证据；覆盖信息此前只在统计字段里，而用户读的是发现项列表"
+    guarantees:
+      - "固定 info 级，不参与打分：这是关于「这次检查」的陈述，不是关于「这个技能」的陈述"
+      - "同时出现在 coverage 字段（机器可读）与 findings（人可读）"
+    report_fields: ["findings[].category == \"scan_coverage\"", "coverage"]
+
+  scan_tier:
+    implemented: true
+    since: "2.2.0"
+    method: "报告顶层与 coverage 都给出 scan_tier：`sandboxed` | `static`"
+    rationale: "一次静态通过和一次沙箱通过不是同一个安全声明，UI 与导出都必须能把两者分开"
+    report_fields: ["scan_tier", "coverage.scan_tier"]
+
+  scoring_explainability:
+    implemented: true
+    since: "2.2.0"
+    method: "按类别封顶 + 指数衰减 + severity×confidence 加权；输出逐类别扣分拆解与触发的分数下限"
+    guarantees:
+      - "分数恒在 [0,100]；无 finding 恒为 100"
+      - "info 级发现不参与打分"
+      - "hard_block 恒为 0 分；未经降权且高置信的 critical 恒不高于 25 分"
+    report_fields: ["security_score", "score_breakdown", "severity_counts"]
+    known_limitations:
+      - "权重与上限是人工标定值，不是统计拟合结果；不同语料上的表现可能不同"
+
+  framework_mapping:
+    implemented: true
+    since: "2.2.0"
+    method: "类别 → CWE / OWASP LLM Top 10 (2025) / OWASP Agentic Top 10 (2026) 的集中映射表"
+    guarantees:
+      - "未登记类别不猜编号（返回空列表），避免把过度代理显示成提示注入而误导修复方向"
+      - "框架条目只统计生效 severity ≥ low 的 finding；info 级线索不计入"
+    report_fields: ["findings[].cwe", "findings[].owasp_llm", "findings[].owasp_agentic", "framework_summary"]
+    known_limitations:
+      - "框架编号是风险分类提示，不是合规认证结论"
+      - "一个 finding 可映射到多个编号；报告不给出唯一「最主要」的分类"
+
+  sarif_export:
+    implemented: true
+    since: "2.2.0"
+    method: "SARIF 2.1.0 输出（--format sarif），含规则元数据、CWE/OWASP 标签、稳定指纹"
+    guarantees:
+      - "artifactLocation 使用 Skill 内相对路径，绝不输出绝对路径"
+      - "partialFingerprints 使用跨行号稳定的指纹，使告警可跨提交追踪"
+    known_limitations:
+      - "不产出 SARIF 的 codeFlows / graph（本引擎没有数据流图）"
+      - "GitHub code scanning 的 required 字段（如 automationDetails）未填充"
+
+  risk_acceptance:
+    implemented: true
+    since: "2.2.0"
+    method: "Skill 根目录的 .skill-sentry-baseline.json；按 finding 指纹抑制，必须写明理由与到期日"
+    guarantees:
+      - "抑制只影响打分与裁决，绝不删除 finding（报告中带 suppressed 与理由）"
+      - "缺少到期日的条目视为过期——「永久接受」是例外腐化的唯一路径"
+      - "被抑制的命中不再触发类别级拒装，也不会让 SR 项失败"
+    report_fields: ["findings[].suppressed", "baseline"]
+    known_limitations:
+      - "指纹基于规则 + 文件 + 归一化命中片段；同一行内容改变后抑制失效（这是刻意的）"
 
   false_positive_rate_baseline:
     implemented: partial
     since: "2.1.0"
-    method: "对 43 个真实官方 Skill 全量扫描，统计误判 CAUTION / DO_NOT_INSTALL 数"
-    result: "误报 0（2.1.0 校准前为 1 例误 DO_NOT_INSTALL + 31 例误 CAUTION）"
+    method: "对 66 个内置 Skill（system + marketplace）全量扫描，统计误判 CAUTION / DO_NOT_INSTALL 数"
+    result: "误报 0（2.2.0 校准前为 2 例误 DO_NOT_INSTALL；2.1.0 校准前为 1 例误 DO_NOT_INSTALL + 31 例误 CAUTION）"
     known_limitations:
-      - "单一语料，以 Markdown/Python/TypeScript 为主，不含 Go/Rust/Java"
-      - "语料内无真实恶意样本；真阳性率仅由合成样本与 8 个对抗用例覆盖"
+      - "语料仍是自有内容，以 Markdown/Python/TypeScript 为主，不含 Go/Rust/Java"
+      - "语料内无真实恶意样本；真阳性率仅由合成样本与 21 个对抗用例覆盖（tests/unit/test_detectors.py）"
       - "尚未在大规模真实恶意 Skill 语料上标定漏报率"
     tracked_as: "扩充多语言语料 + 真实恶意样本集，需单独立项"
 
 notes: |
+  上层状态取值（与 src/main/features/security/guardrail-status.ts 保持一致）：
+    implemented  引擎原生具备
+    partial      有原生检测，但覆盖是已知子集
+    needs_tool   整个能力未启用，需安装外部工具才能解锁（可行动，不是故障）
+    degraded     引擎在跑，但覆盖面小于完整配置
+    absent       本构建不含扫描器
+  `needs_tool` 与 `degraded` 必须分开：前者是「装个工具」，后者是「防护变差」。
+  合并两者的直接后果是页面开屏写「3 项降级」，其中两项其实只是可选增强未装配。
+
   本文件是 capabilities 的唯一权威声明源。engine/scanner_core/report.py
   的 `limitations` 字段应与本文件保持一致；新增/移除能力时需同步更新
   两处。
+
+  2.2.0 的实测数据（用于校准结论，不是宣传口径）：
+  · 内置语料 66 个 Skill：误报 0（2.1.0 为 2 例误拒装，且恰好是自家的两个创作技能）
+  · 对抗用例 21 组（tests/unit/test_detectors.py）：正例全部命中，反例全部干净
+  · 规则条数：181（v1.0.0 为 58）
+  · 反规避样本 sample-evasion-skill：文件内无任何明文危险串，全部经派生视图检出

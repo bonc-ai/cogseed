@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+import { parse } from 'yaml';
 
 const require = createRequire(import.meta.url);
 const packageJson = require('../../package.json') as { scripts?: Record<string, string> };
@@ -22,10 +23,22 @@ const verifier = require('../../scripts/verify-packaged-stt-win.cjs') as {
 };
 
 describe('Windows packaged STT smoke', () => {
-  it('exposes the packaged STT verifier through the package command', () => {
+  it('runs blocking packaged launch and fake-microphone verifiers before uploading the Windows artifact', () => {
     const scriptPath = path.resolve('scripts/verify-packaged-stt-win.cjs');
+    const workflow = parse(fs.readFileSync(path.resolve('.github/workflows/public-release.yml'), 'utf8'), { version: '1.2' });
+    const steps = workflow.jobs['build-windows'].steps as Array<{ run?: string; continueOnError?: boolean; uses?: string }>;
+    const buildIndex = steps.findIndex((step) => step.run === 'npm run build:win');
+    const launchIndex = steps.findIndex((step) => step.run === 'npm run verify:package:launch');
+    const smokeIndex = steps.findIndex((step) => step.run === 'npm run verify:package:stt:win');
+    const uploadIndex = steps.findIndex((step) => step.uses === 'actions/upload-artifact@v4');
+
     expect(fs.existsSync(scriptPath)).toBe(true);
     expect(packageJson.scripts?.['verify:package:stt:win']).toBe('node scripts/verify-packaged-stt-win.cjs');
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(launchIndex).toBeGreaterThan(buildIndex);
+    expect(smokeIndex).toBeGreaterThan(launchIndex);
+    expect(uploadIndex).toBeGreaterThan(smokeIndex);
+    expect(steps[smokeIndex].continueOnError).toBeUndefined();
   });
 
   it('pins the licensed Mandarin speech fixture used by Chromium fake capture', () => {
@@ -189,9 +202,9 @@ describe('Windows packaged STT smoke', () => {
     }
   });
 
-  it('awaits child termination before removing the isolated Windows profile with retries', () => {
+  it('awaits child termination before best-effort removal of the isolated Windows profile', () => {
     const source = fs.readFileSync(path.resolve('scripts/verify-packaged-stt-win.cjs'), 'utf8');
 
-    expect(source).toMatch(/finally\s*{\s*await terminateChild\(child\);\s*fs\.rmSync\(tempRoot,\s*{\s*recursive:\s*true,\s*force:\s*true,\s*maxRetries:\s*5,\s*retryDelay:\s*200\s*}\);\s*}/);
+    expect(source).toMatch(/finally\s*{\s*await terminateChild\(child\);\s*cleanupTemporaryRoot\(tempRoot\);\s*}/);
   });
 });

@@ -1,0 +1,11 @@
+{
+  "code": 1,
+  "msg": "",
+  "request_id": "req_error",
+  "error": {
+    "code": "VERSION_NOT_HIGHER",
+    "message": "The version must be higher than the current published version.",
+    "retryable": false,
+    "details": { "highest_published_version": "1.0.0" }
+  }
+}

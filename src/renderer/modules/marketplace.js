@@ -877,6 +877,10 @@ function _mpBindPanel(panel) {
   }
   panel.querySelector('[data-mp-search-btn]')?.addEventListener('click', _mpRunSearch);
   panel.querySelector('[data-mp-search-clear]')?.addEventListener('click', _mpClearSearch);
+  const installButton = panel.querySelector('[data-mp-detail-install]');
+  if (installButton) installButton.outerHTML = uiButton({
+    label: t('marketplace.install'), role: 'primary', size: 'sm', attrs: { 'data-mp-detail-install': true },
+  });
   panel.querySelector('[data-mp-detail-install]')?.addEventListener('click', _mpInstallFromDetail);
   // Dev-only delete button click handler is bound by marketplace_dev.js (file absent in
   // the open-source build). HTML element ships in index.html with display:none — dev module flips it
@@ -1594,36 +1598,33 @@ function _mpCardHtml(item, lang) {
   const installing = _mpState.installing.has(`${kind}:${item.id}`);
   const desc = pickDesc(item, lang) || '';
   const catLabel = _mpCategoryLabel(item.category, lang);
-  const statusLabel = '';
+  const hubDisabled = kind === 'skill' && HubContentStatus.isHubContentDisabled(item);
+  const statusLabel = hubDisabled ? t('marketplace.state_disabled') : '';
   const versionLabel = t('marketplace.version').replace('{version}', String(item.version || ''));
   // specs/010 FR-067：目录页卡片状态「有更新」——本机**实际版本**（`skills.list` 的 version，
   // 经主进程 `installed-version.ts` 单一入口判定）低于目录版本时出现。呈现由客户端自定，
   // 这里是一枚 chip；按钮文案仍是既有的「更新」。只挂 Skill tab（FR-070：Agents tab 不动）。
-  const updateChip = kind === 'skill' && status.updateAvailable
+  const updateChip = kind === 'skill' && !hubDisabled && status.updateAvailable
     ? `<span class="marketplace-card-chip is-update" data-mp-state="update-available">${escapeHtml(t('marketplace.state_update_available'))}</span>`
     : '';
   const avatar = kind === 'agent'
     ? renderAvatarHtml(item.icon, item.color, { size: 32, seed: item.id, extraClass: 'marketplace-card-avatar' })
     : '';
   const appCompatible = status.installed || status.updateAvailable || _mpItemAppCompatible(item);
-  let btnClass = 'btn btn-sm btn-primary';
   let btnLabel = t('marketplace.install');
   let btnAttrs = `data-mp-install="${escapeHtml(kind)}" data-mp-id="${escapeHtml(item.id)}"`;
-  let btnSpinner = '';
-  if (installing) {
-    btnClass = 'btn btn-sm is-disabled';
+  if (hubDisabled) {
+    btnLabel = t('marketplace.state_disabled');
+    btnAttrs = 'disabled';
+  } else if (installing) {
     btnLabel = status.updateAvailable ? t('marketplace.updating') : t('marketplace.installing');
     btnAttrs = 'disabled';
-    btnSpinner = '<span class="marketplace-btn-spinner"></span>';
   } else if (!appCompatible) {
-    btnClass = 'btn btn-sm is-disabled';
     btnLabel = t('marketplace.requires_app').replace('{version}', _mpMinAppVersion(item));
     btnAttrs = 'disabled title="' + escapeHtml(btnLabel) + '"';
   } else if (status.updateAvailable) {
-    btnClass = 'btn btn-sm btn-primary';
     btnLabel = t('marketplace.update');
   } else if (status.installed) {
-    btnClass = 'btn btn-sm is-disabled';
     btnLabel = t('marketplace.installed');
     btnAttrs = 'disabled';
   }
@@ -1639,10 +1640,10 @@ function _mpCardHtml(item, lang) {
           ${item.version && kind !== 'skill' ? `<span class="marketplace-card-chip is-version">${escapeHtml(versionLabel)}</span>` : ''}
           ${catLabel ? `<span class="marketplace-card-chip">${escapeHtml(catLabel)}</span>` : ''}
           ${updateChip}
-          ${statusLabel ? `<span class="marketplace-card-chip is-status">${escapeHtml(statusLabel)}</span>` : ''}
+          ${statusLabel ? uiStatusPill({ label: statusLabel, tone: 'attention', attrs: { 'data-mp-state': 'disabled' } }) : ''}
         </div>
         <div class="marketplace-card-actions">
-          <button type="button" class="${btnClass}" ${btnAttrs}>${btnSpinner}${escapeHtml(btnLabel)}</button>
+          ${uiButton({ label: btnLabel, role: 'primary', size: 'sm', disabled: btnAttrs === 'disabled' || btnAttrs.startsWith('disabled '), attrs: { 'data-mp-install': kind, 'data-mp-id': item.id }, loading: installing && !hubDisabled })}
         </div>
       </div>
     </div>
@@ -1721,6 +1722,7 @@ async function _mpOpenDetail(kind, item, opts = {}) {
           min_app_version: _mpMinAppVersion(item),
         });
         if (!detail || detail.ok === false) throw _mpErrorFromResponse(detail, 'detail failed');
+        _mpState.detailItem = { ...item, ...detail };
         const files = await window.cogseed.invoke('marketplace.cacheSkillFiles', { id: item.id });
         _mpState.detailSkillFiles = (files && files.list) || [];
         const selected = _mpState.detailSkillFiles.find((f) => f.path === _mpState.detailSkillSelected)
@@ -1753,7 +1755,8 @@ function _mpRenderDetail() {
   const lang = getLang();
   const desc = pickDesc(item, lang) || '';
   const catLabel = _mpCategoryLabel(item.category, lang);
-  const statusLabel = '';
+  const hubDisabled = kind === 'skill' && HubContentStatus.isHubContentDisabled(item);
+  const statusLabel = hubDisabled ? t('marketplace.state_disabled') : '';
   const versionLabel = t('marketplace.version').replace('{version}', String(item.version || ''));
   const status = _mpInstallStatus(kind, item);
   const installing = _mpState.installing.has(`${kind}:${item.id}`);
@@ -1783,7 +1786,7 @@ function _mpRenderDetail() {
     kind === 'skill' ? `<span class="marketplace-card-chip" data-mp-detail-published>${escapeHtml(_mpPublishedAtLabel(item))}</span>` : '',
     kind === 'skill' ? `<span class="marketplace-card-chip" data-mp-detail-min-app>${escapeHtml(_mpMinAppLabel(item))}</span>` : '',
     catLabel ? `<span class="marketplace-card-chip">${escapeHtml(catLabel)}</span>` : '',
-    statusLabel ? `<span class="marketplace-card-chip is-status">${escapeHtml(statusLabel)}</span>` : '',
+    statusLabel ? uiStatusPill({ label: statusLabel, tone: 'attention', attrs: { 'data-mp-state': 'disabled' } }) : '',
   ].filter(Boolean).join(' ');
   // (description used to render in a top-of-body `.marketplace-detail-desc` strip; now it's
   // the first section inside body — see `_mpAgentDetailHtml` / `_mpSkillDetailHtml`)
@@ -1803,16 +1806,21 @@ function _mpRenderDetail() {
     installBtn.innerHTML = `${spinnerHtml}${escapeHtml(label)}`;
     installBtn.classList.add('is-disabled'); installBtn.disabled = true;
     installBtn.dataset.action = '';
-  } else if (status.updateAvailable) {
+  } else if (hubDisabled && !status.installed) {
+    installBtn.textContent = t('marketplace.state_disabled');
+    installBtn.classList.add('is-disabled');
+    installBtn.disabled = true;
+    installBtn.dataset.action = '';
+  } else if (!hubDisabled && status.updateAvailable) {
     installBtn.textContent = t('marketplace.update');
-    installBtn.classList.remove('is-disabled', 'btn-danger');
-    installBtn.classList.add('btn-primary');
+    installBtn.classList.remove('is-disabled', 'btn-danger', 'ui-button--danger');
+    installBtn.classList.add('btn-primary', 'ui-button--primary');
     installBtn.disabled = false;
     installBtn.dataset.action = 'install';
   } else if (status.installed) {
     installBtn.textContent = t('marketplace.uninstall');
-    installBtn.classList.remove('is-disabled', 'btn-primary');
-    installBtn.classList.add('btn-danger');
+    installBtn.classList.remove('is-disabled', 'btn-primary', 'ui-button--primary');
+    installBtn.classList.add('btn-danger', 'ui-button--danger');
     installBtn.disabled = false;
     installBtn.dataset.action = 'uninstall';
   } else if (!_mpItemAppCompatible(item)) {
@@ -1825,8 +1833,8 @@ function _mpRenderDetail() {
     installBtn.dataset.action = '';
   } else {
     installBtn.textContent = t('marketplace.install');
-    installBtn.classList.remove('is-disabled', 'btn-danger');
-    installBtn.classList.add('btn-primary');
+    installBtn.classList.remove('is-disabled', 'btn-danger', 'ui-button--danger');
+    installBtn.classList.add('btn-primary', 'ui-button--primary');
     installBtn.disabled = false;
     installBtn.dataset.action = 'install';
   }
@@ -1855,7 +1863,7 @@ function _mpRenderDetail() {
   if (kind === 'agent') {
     body.innerHTML = _mpAgentDetailHtml(_mpState.detailAgentJson);
   } else {
-    body.innerHTML = _mpSkillDetailHtml();
+    body.innerHTML = (hubDisabled ? `<p>${escapeHtml(t('marketplace.disabled_hint'))}</p>` : '') + _mpSkillDetailHtml();
     // File-tree node click → fetch + re-render selected file
     body.querySelectorAll('[data-mp-skill-file]').forEach((el) => {
       el.addEventListener('click', async () => {
@@ -2112,7 +2120,9 @@ function _mpInstallFailedName(kind, item, err) {
 function _mpInstallFailedText(kind, item, err) {
   const failedKind = err?.marketplaceKind || kind;
   const failedName = _mpInstallFailedName(kind, item, err);
-  const reason = (err && err.marketplaceAppUpdateRequired)
+  const reason = err?.marketplaceReason === 'content_disabled'
+    ? t('marketplace.disabled_hint')
+    : (err && err.marketplaceAppUpdateRequired)
     ? t('marketplace.app_update_required')
         .replace('{minimum}', String(err.marketplaceMinAppVersion || _mpMinAppVersion(item) || ''))
         .replace('{current}', String(err.marketplaceCurrentAppVersion || ''))
@@ -2165,6 +2175,10 @@ function _mpTrackInstallFailure(kind, item, err, surface = 'marketplace') {
 async function _mpInstall(kind, id, itemOverride = null) {
   const item = itemOverride || (kind === 'agent' ? _mpState.agents : _mpState.skills).find((x) => x.id === id);
   if (!item) return;
+  if (kind === 'skill' && HubContentStatus.isHubContentDisabled(item)) {
+    uiAlert(t('marketplace.disabled_hint'));
+    return;
+  }
   const key = `${kind}:${id}`;
   if (_mpState.installing.has(key)) return;
   _mpState.installing.add(key);

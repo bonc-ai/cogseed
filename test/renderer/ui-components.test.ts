@@ -156,11 +156,34 @@ describe('first-version renderer components', () => {
     const { uiCard, uiResourceCard, uiResourceGrid } = loadFactories();
 
     expect(uiCard({ className: 'business-card', bodyHtml: '<strong>内容</strong>' })).toContain('ui-resource-card business-card');
-    expect(uiResourceCard({ title: '<空间>', description: '说明', icon: 'folder', status: '刚刚更新', action: { label: '打开' } }))
-      .toContain('&lt;空间&gt;');
-    expect(uiResourceCard({ title: '行卡片', layout: 'row' })).toContain('ui-resource-card--row');
+    const singleAction = uiResourceCard({ title: '<空间>', description: '说明', icon: 'folder', status: '刚刚更新', action: { label: '打开' } });
+    expect(singleAction).toContain('&lt;空间&gt;');
+    expect(singleAction).toContain('ui-resource-card--standard');
+    expect(singleAction).toContain('ui-resource-card__actions');
+    expect(singleAction).toContain('ui-resource-card__footer');
+
+    const multiAction = uiResourceCard({
+      title: '社区贡献',
+      status: { label: '待审核', tone: 'attention' },
+      actions: [
+        { label: '提交新版本' },
+        { label: '撤回投稿', role: 'danger' },
+        { label: '撤回申请历史' },
+      ],
+    });
+    expect(multiAction).toContain('ui-status-pill--attention');
+    expect(multiAction.match(/class="btn ui-button/g)).toHaveLength(3);
+    expect(multiAction).toContain('ui-button--danger');
+
+    const withoutFooter = uiResourceCard({ title: '行卡片', layout: 'row' });
+    expect(withoutFooter).toContain('ui-resource-card--row');
+    expect(withoutFooter).not.toContain('ui-resource-card__footer');
     expect(uiResourceGrid({ className: 'business-grid', bodyHtml: '<article></article>' })).toContain('ui-resource-grid business-grid');
     expect(() => uiResourceCard({ description: '缺标题' })).toThrow(/requires a title/);
+    expect(() => uiResourceCard({ title: '冲突操作', action: { label: '打开' }, actions: [{ label: '查看' }] }))
+      .toThrow(/either action or actions/);
+    expect(uiResourceCard({ title: '操作换行', actions: [{ label: '一' }, { label: '二' }, { label: '三' }, { label: '四' }] })
+      .match(/class="btn ui-button/g)).toHaveLength(4);
   });
 
   it('renders native tables, disclosure sections and semantic trees', () => {
@@ -181,6 +204,43 @@ describe('first-version renderer components', () => {
     expect(tree).toContain('role="tree" aria-label="资料树"');
     expect(tree).toContain('role="treeitem" aria-level="2" aria-selected="true"');
     expect(typeof hydrateUiTrees).toBe('function');
+  });
+
+  it('lets an accordion row carry a tone, an icon and a control status', () => {
+    const { uiAccordion } = loadFactories();
+    // 页面用「若干行，点开才展开」的形态时，需要区分健康行与告警行，并把状态放成
+    // 控件（uiStatusPill / uiTag）而不是纯文本。缺这三样，页面就只能自己实现一套
+    // disclosure，等于在一个已经有共享缝的地方留下第二套行实现。
+    const rows = uiAccordion({
+      defaultOpen: [],
+      items: [
+        {
+          title: '技能检查', icon: 'shield-check', tone: 'critical', open: true,
+          statusHtml: '<span class="ui-status-pill">需要处理</span>',
+          bodyHtml: '<p>1 个被拦截。</p>',
+        },
+        { title: '组合风险', icon: 'git-branch', statusHtml: '<span>尚未分析</span>', bodyHtml: '<p>—</p>' },
+        { title: '来源', meta: '规则包 v1.1.0', bodyHtml: '<p>已校验。</p>' },
+      ],
+    });
+    // tone 落在 item 上（CSS 只染图标，标题保持中性）
+    expect(rows).toContain('data-tone="critical"');
+    // 逐项 open 生效；defaultOpen 为空时其余项不展开
+    expect(rows).toContain('<details class="ui-accordion__item" data-tone="critical" open>');
+    expect(rows.match(/<details/g)).toHaveLength(3);
+    expect(rows.match(/ open>/g)).toHaveLength(1);
+    // icon 走 icons.js（内联 svg），不是硬编码路径
+    expect(rows).toContain('ui-accordion__icon');
+    expect(rows).toContain('<svg');
+    // statusHtml 优先于 meta，且原样透传（调用方负责转义，与 bodyHtml 同契约）
+    expect(rows).toContain('ui-accordion__status');
+    expect(rows).toContain('ui-status-pill');
+    // 未给 statusHtml 的项回落到 meta 槽
+    expect(rows).toContain('ui-accordion__meta');
+    // 白名单外的 tone 不得写进 DOM（用错值只应静默降级，不能变成任意属性）
+    expect(uiAccordion({ items: [{ title: 'x', tone: 'elaborate', bodyHtml: '' }] })).not.toContain('data-tone');
+    // meta 仍然转义；statusHtml 与 bodyHtml 同为调用方负责
+    expect(uiAccordion({ items: [{ title: 'x', meta: '<img>', bodyHtml: '' }] })).toContain('&lt;img&gt;');
   });
 
   it('enforces the three EmptyState contracts and one-action boundary', () => {

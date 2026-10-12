@@ -57,6 +57,8 @@ export function toFormalAsset(record: RecallAbilityAssetRecord): FormalAbilityAs
     scope: record.scope,
     ...(record.applicableWhen ? { applicableWhen: record.applicableWhen } : {}),
     ...(record.forbiddenWhen ? { forbiddenWhen: record.forbiddenWhen } : {}),
+    // 标签缺省（含 []）时省字段，不伪造空数组——「未分类」的盘上形态就是键缺席。
+    ...(record.tags?.length ? { tags: record.tags } : {}),
     ...(record.sensitivity ? { sensitivity: record.sensitivity } : {}),
     ...(record.spaceId ? { sourceWorkspaceRef: record.spaceId } : {}),
     evidenceRefs: record.evidenceRefs,

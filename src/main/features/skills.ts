@@ -49,7 +49,8 @@ import {
 } from '../storage';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { readDisabledSets, setSkillEnabled } from './component_enabled';
-import { partitionSkillsByTrustDeep, topViolationOf, isConventionRule } from './skill_reverify';
+import { partitionSkillsByTrustDeep, topViolationOf } from './skill_reverify';
+import { securityNotableOf } from './skill_verdict';
 import { listReceipts, skillPayloadHash, writeInstallReceipt, type SecurityReceipt } from './skill_trust';
 import { scanVerdictBlocksInstall } from './security/sentry-adapter';
 import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
@@ -67,7 +68,7 @@ import {
   normalizeMarketplaceCategoryCode,
 } from './marketplace_biz';
 import { normalizeInstallVersion } from './marketplace_installs';
-import { installedVersionOf } from './marketplace/installed-version';
+import { readContentStatus, installedVersionOf } from './marketplace/installed-version';
 import { NAME_DISPLAY_MAX_UNITS, nameDisplayWidth } from '../util/name-limit';
 import { captureSkillTree, normalizeSkillSnapshotPath } from './skills/snapshot-service';
 import { createProcessCollector } from './chat_events/process-persist';
@@ -92,7 +93,10 @@ function _isGeneratedSkillSidecarName(name: string): boolean {
   return false;
 }
 // Starts with a letter, then letters/digits/_/-. Spaces are not allowed.
-const SKILL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+import {
+  SKILL_NAME_RE, SKILL_EXTERNAL_ID_RE, EXTERNAL_SKILL_ROOTS,
+  isValidSkillId, isExternalSkillId, isScannableSkillId,
+} from './skill_id';
 const CATEGORY_LINE_RE = /(^|\n)category\s*:\s*(.*?)(?=\n|$)/;
 // Block syntax: `<<<skill-file path=<rel> ... >>>`. Cross-skill writes (the
 // old `skill=<id>` attribute) are no longer supported — every skill is
@@ -119,6 +123,8 @@ type SkillSourceInput = SkillSource | 'builtin';
 export interface SkillListing {
   id: string;
   name: string;
+  /** Bounded local icon bytes for the card. A missing or invalid icon uses the renderer text fallback. */
+  icon_data_url?: string;
   source: SkillSource;
   description_zh: string;
   description_en: string;
@@ -516,6 +522,25 @@ function skillMetaFile(dir: string): string {
   return path.join(dir, '_meta.json');
 }
 
+function localSkillIconDataUrl(dir: string): string | undefined {
+  for (const [filename, mime] of [
+    ['icon.png', 'image/png'], ['icon.webp', 'image/webp'],
+    ['icon.jpg', 'image/jpeg'], ['icon.jpeg', 'image/jpeg'],
+  ]) {
+    try {
+      const file = path.join(dir, filename);
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.size < 12 || stat.size > 128 * 1024) continue;
+      const bytes = fs.readFileSync(file);
+      const valid = mime === 'image/png' ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+        : mime === 'image/webp' ? bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+          : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+      if (valid) return `data:${mime};base64,${bytes.toString('base64')}`;
+    } catch { /* missing or unreadable icon uses the text fallback */ }
+  }
+  return undefined;
+}
+
 function hasSkillMd(dir: string): boolean {
   try { return fs.statSync(skillMdFile(dir)).isFile(); }
   catch { return false; }
@@ -638,7 +663,7 @@ function removeSkillSidecarDescriptionsSync(dir: string): void {
 }
 
 // Module-level cache for `listSkills`.
-const SKILL_CATALOG_CACHE_VERSION = 2;
+const SKILL_CATALOG_CACHE_VERSION = 3;
 const SKILL_PERSISTED_TRUST_MS = 2_000;
 
 interface SkillListCache {
@@ -779,6 +804,12 @@ function _skillDirStamp(): string {
         let childMtime = 0;
         try { childMtime = fs.statSync(childDir).mtimeMs; } catch { /* ignore */ }
         stamp += `${child}:${childMtime}:${hasSkillMd(childDir) ? 1 : 0};`;
+        for (const icon of ['icon.png', 'icon.webp', 'icon.jpg', 'icon.jpeg']) {
+          try {
+            const iconStat = fs.lstatSync(path.join(childDir, icon));
+            stamp += `${icon}:${iconStat.mtimeMs}:${iconStat.size};`;
+          } catch { /* no icon */ }
+        }
       }
     }
     catch { stamp += `${d}:0;`; }
@@ -888,8 +919,10 @@ async function _allSkillListingsCached(): Promise<SkillListing[]> {
             log.warn(`marketplace skill install metadata unreadable id=${name}: ${(err as Error).message}`);
           }
         }
+        const iconDataUrl = localSkillIconDataUrl(skillDir);
         out.push({
           id: name, name: displayName, source: normalizeSkillSource(source), ...descPair,
+          ...(iconDataUrl ? { icon_data_url: iconDataUrl } : {}),
           category, enabled: true, version,
           ...(typeof status === 'string' ? { status } : {}),
           ...(typeof marketplacePublishedAt === 'number' ? { marketplace_published_at: marketplacePublishedAt } : {}),
@@ -916,7 +949,11 @@ async function _allSkillListingsCached(): Promise<SkillListing[]> {
  *  without having to bump dir mtime. */
 function _overlaySkillEnabled(list: SkillListing[]): SkillListing[] {
   const { skills: disabledSkillIds } = readDisabledSets(getActiveUserId());
-  return list.map((s) => ({ ...s, enabled: !disabledSkillIds.has(s.id) }));
+  const uid = getActiveUserId();
+  return list.map((s) => ({
+    ...s, enabled: !disabledSkillIds.has(s.id),
+    ...(s.source === 'marketplace' && !s.ownerAgent ? { status: readContentStatus(uid, s.id).raw } : {}),
+  }));
 }
 
 /**
@@ -1015,24 +1052,13 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
     }
     // `decision: 'risk'` means "the scan recorded at least one violation of any
     // level" — including LOW/MEDIUM metadata nits like a missing `_meta.json`
-    // category, which nearly every builtin skill currently trips. Surfacing that
-    // verbatim would label the whole library "has findings" and train users to
-    // ignore the badge, so `risk` is shown only when the top finding was MEDIUM
-    // or above. The receipt keeps the raw decision; this is presentation, and it
-    // must not cry wolf.
+    // category. The receipt keeps the raw decision; showing it verbatim is
+    // presentation, and it must not cry wolf.
     //
-    // A receipt written before `topLevel` existed has no level, and is treated as
-    // not notable rather than assumed severe — the next rescan fills it in.
-    //
-    // Convention rules are excluded by rule id, not by level — see
-    // `isConventionRule`. They are an authoring contract that fires at MEDIUM on
-    // most of the library, and letting them drive the badge would mark clean
-    // skills as "has findings", the exact failure the paragraph above exists to
-    // prevent. Belt and braces with `_decisionOf`: this also covers receipts
-    // written before that fix, which recorded `risk` for convention-only reports.
-    const notable = !isConventionRule(receipt.topRule || '')
-      && (receipt.topLevel === 'EXTREME' || receipt.topLevel === 'MEDIUM');
-    const status = receipt.decision === 'risk' && notable ? 'risk' as const : 'verified' as const;
+    // That judgement lives in one place (`securityNotableOf`): the 安全与信任 page
+    // reads the same receipts and used to draw the opposite conclusion from them,
+    // because it counted every `risk` as a security risk.
+    const status = securityNotableOf(receipt) ? 'risk' as const : 'verified' as const;
     return { ...s, security: { status, ...common } };
   });
 }
@@ -1062,10 +1088,7 @@ function _externalSkillStamp(): string {
 
 async function _scanExternalSkills(): Promise<SkillListing[]> {
   const external: SkillListing[] = [];
-  const roots = [
-    { root: path.join(os.homedir(), '.claude', 'skills'), prefix: 'claude', label: 'Claude' },
-    { root: path.join(os.homedir(), '.codex', 'skills', '.system'), prefix: 'codex', label: 'Codex' },
-  ];
+  const roots = EXTERNAL_SKILL_ROOTS;
   for (const { root, prefix, label } of roots) {
     let entries: import('node:fs').Dirent[];
     try { entries = await fsp.readdir(root, { withFileTypes: true }); }
@@ -1222,17 +1245,10 @@ export function validateSkillName(name: string): string {
   return '';
 }
 
-// Skill-id shape check used by IPC handlers. Accepts EITHER a user-typed skill name
-// (SKILL_NAME_RE — letter-led, no spaces) for custom skills, OR a 12-hex
-// server-assigned id for marketplace-installed skills (which can begin with a digit).
-// Without the hex branch, dev uploading a platform-installed skill whose id starts with a
-// digit (e.g. `9720e1e263fd` Word/DOCX) bounced as "invalid skill id" — root cause of the
-// "skill upload error" event seen in main log.
-const SKILL_HEX_ID_RE = /^[a-f0-9]{12}$/;
-export function isValidSkillId(id: unknown): boolean {
-  if (typeof id !== 'string' || !id) return false;
-  return SKILL_HEX_ID_RE.test(id) || SKILL_NAME_RE.test(id);
-}
+// Id-shape rules live in ./skill_id (leaf module) so this file and skill_trust.ts
+// share one contract without an import cycle. Re-exported here because
+// security-report.ts reaches them through `require('../skills')`.
+export { isValidSkillId, isExternalSkillId, isScannableSkillId, SKILL_EXTERNAL_ID_RE };
 
 function customSkillDir(skillId: string): string {
   return path.join(CUSTOM_SKILLS_DIR(), skillId);

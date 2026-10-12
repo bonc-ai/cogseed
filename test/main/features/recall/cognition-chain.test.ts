@@ -15,6 +15,8 @@ async function seedAsset(statement: string, tag: string) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const candidate = await candidates.saveRecallCandidate(UID, {
     judgment: statement,
+    // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+    summary: `履历样本${tag}`,
     suggestedType: 'rule',
     ...RULE_BOUNDARY,
     suggestedScope: 'delivery',

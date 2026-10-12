@@ -209,6 +209,26 @@ async function buildBashTool() {
 }
 
 describe('local-tools › bash › disabled skills', () => {
+  it('blocks Hub-disabled skills through both shell entry points without changing the user preference', async () => {
+    await grant();
+    const paths = await import('../../../../src/main/paths');
+    const enabled = await import('../../../../src/main/features/component_enabled');
+    const { createLocalTools } = await import('../../../../src/main/model/core-agent/local-tools');
+    const skillDir = paths.userMarketplaceSkillDir(UID, 'hub-disabled');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, '_install.json'), JSON.stringify({ version: '1.0.0', status: 'disabled' }));
+    enabled.setSkillEnabled(UID, 'hub-disabled', true);
+    const tools = createLocalTools({ userId: UID });
+    for (const name of ['bash', 'interactive_cli_start']) {
+      const tool = tools.find((item) => item.name === name)!;
+      const result = await run(tool, { command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" hub-disabled go' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('E_SKILL_HUB_DISABLED');
+      expect(result.content).not.toContain('re-enable');
+    }
+    expect(enabled.readDisabledSets(UID).skills.has('hub-disabled')).toBe(false);
+  });
+
   it('rejects run-skill.cjs for a disabled skill id', async () => {
     await grant();
     const enabled = await import('../../../../src/main/features/component_enabled');

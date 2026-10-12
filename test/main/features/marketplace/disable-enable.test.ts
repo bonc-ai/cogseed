@@ -115,10 +115,10 @@ describe('内容级停用 / 恢复（PRD US5 客户端半，C8）', () => {
       expect(store2.split('withoutDisabledContent(').length - 1).toBe(3); // 1 定义 + 2 调用
     });
 
-    it('阻断靠 allowlist，不在执行期再读一次状态——避免第二处停用判定', () => {
+    it('执行入口仅对未固定版本的新调用检查停用，保留已有任务', () => {
       const resolver = readSrc('main/features/cogseed_runtime/kernel/tools/skill-tools.ts');
-      expect(resolver).not.toContain('isContentDisabled');
-      expect(resolver).not.toContain('readContentStatus');
+      expect(resolver).toContain('!pin && isContentDisabled(ctx.userId, skillId)');
+      expect(resolver).toContain('E_RUNTIME_SKILL_DISABLED');
     });
   });
 

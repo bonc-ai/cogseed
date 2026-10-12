@@ -25,6 +25,7 @@ const EMBEDDING_MODEL_CONTRACT = Object.freeze({
   kind: 'embedding-model',
   id: 'fast-bge-small-zh-v1.5',
   source: 'https://storage.googleapis.com/qdrant-fastembed/fast-bge-small-zh-v1.5.tar.gz',
+  fileSource: 'https://huggingface.co/Qdrant/bge-small-zh-v1.5/resolve/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59',
   archive: Object.freeze({
     bytes: 54_584_282,
     sha256: 'bf023219b6029148fddf764d248808816c0ca1f107f058231bb1ae0fa526f83f',

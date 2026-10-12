@@ -1,0 +1,28 @@
+{
+  "code": 0,
+  "msg": "",
+  "request_id": "req_03",
+  "generated_at": "2026-09-20T09:00:00Z",
+  "total": 1,
+  "items": [
+    {
+      "entry_id": "8a4f01c29d7e",
+      "content_id": "8a4f01c29d7e",
+      "name": "Meeting Notes",
+      "content_status": "published",
+      "current_published_version": "1.0.0",
+      "latest_submission": {
+        "submission_id": "sub_01J8Z3K4M5N6P7Q8R9S0T1U2V3",
+        "kind": "new_version",
+        "version": "1.1.0",
+        "status": "PENDING_REVIEW",
+        "returned_reason": null,
+        "declarations_origin": { "type": "original", "note": null, "forked_from": null },
+        "submitted_at": "2026-09-20T08:00:10Z",
+        "updated_at": "2026-09-20T08:00:10Z"
+      },
+      "withdrawal_request": null,
+      "updated_at": "2026-09-20T08:00:10Z"
+    }
+  ]
+}

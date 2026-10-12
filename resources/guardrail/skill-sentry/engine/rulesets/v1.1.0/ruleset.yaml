@@ -1,0 +1,29 @@
+# ruleset.yaml — 规则包索引（v1.1.0）
+#
+# 声明该版本规则包包含哪些文件及其职责，供 rule_loader.py 追溯
+# rules_source，也供人工审查规则演进历史。
+
+version: "1.1.0"
+status: current
+released: "2026-03-06"
+
+files:
+  text-rules.yaml:
+    purpose: "12 类规则组：危险命令 / 动态执行 / SQL注入 / 持久化 / 提示注入 /
+              网络外联 / 可疑地址 / 反向shell / 凭据读取 / 监控行为 / 挖矿 /
+              不可信输入执行"
+  secret-patterns.yaml:
+    purpose: "密钥/凭据检测正则模式（含数据库连接串与云厂商密钥）+ 误报标记词表"
+
+compatible_engine_versions: ">=2.2.0"
+
+changelog:
+  - version: "1.1.0"
+    date: "2026-03-06"
+    change: >
+      新增 5 个规则组，原有 7 组各补充规则；每条规则新增 confidence 字段；
+      forbidden_files 从 12 项扩展到 22 项；新增 covert_credential_harvest
+      一票否决项；修正 openai_api_key 旧格式导致的真实密钥漏报。
+  - version: "1.0.0"
+    date: "2026-07-27"
+    change: "从 cogseed-security-scan 02_rules 迁移，规则内容未变更，仅补充版本化索引"

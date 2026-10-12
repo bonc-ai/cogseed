@@ -25,7 +25,6 @@ import type { AgentGlossaryEntry } from '../agent_inheritance';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
-  type AbilityAssetSensitivity,
   type AbilityAssetUsePolicy,
 } from './asset-semantics';
 import { resolveAssetUsePolicy } from './formal-assets/policy';
@@ -40,8 +39,6 @@ export type WithheldReason =
   | 'scope_role_not_allowed'
   | 'scope_project_not_allowed'
   | 'scope_workspace_not_allowed'
-  | 'sensitivity_above_destination'
-  | 'sensitivity_unclassified'
   // —— 状态类 ——
   | 'asset_paused'
   | 'asset_archived'
@@ -68,8 +65,6 @@ const WITHHELD_REASON_TIER: Record<WithheldReason, number> = {
   scope_role_not_allowed: 1,
   scope_project_not_allowed: 1,
   scope_workspace_not_allowed: 1,
-  sensitivity_above_destination: 1,
-  sensitivity_unclassified: 1,
   // 2 状态：资产当下不可用
   asset_revoked: 2,
   asset_purged: 2,
@@ -89,8 +84,6 @@ const WITHHELD_REASON_ORDER: WithheldReason[] = [
   'scope_role_not_allowed',
   'scope_project_not_allowed',
   'scope_workspace_not_allowed',
-  'sensitivity_above_destination',
-  'sensitivity_unclassified',
   'asset_revoked',
   'asset_purged',
   'asset_deleted',
@@ -120,8 +113,6 @@ export interface CognitionSelectionContext {
   roleId?: string;
   projectId?: string;
   workspaceId?: string;
-  /** 目的地允许的最高敏感级。缺省 = 不额外设限。 */
-  maxSensitivity?: AbilityAssetSensitivity;
 }
 
 /** 一条被选中的认知。content 是只读快照，不是资产本体。 */
@@ -139,7 +130,6 @@ export interface SelectedCognition {
   /** 原样携带，交给模型自限并展示给用户。**本模块不判定它们。** */
   applicableWhen?: string[];
   forbiddenWhen?: string[];
-  sensitivity?: AbilityAssetSensitivity;
   /** 规范 10.2 算出来的默认使用档，渲染侧据此决定是直接带入还是需要确认。
    *  已确认跨作用域的资产在这里已经从 confirm 抬到 prompt。 */
   usePolicy: Exclude<AbilityAssetUsePolicy, 'never'>;
@@ -172,8 +162,6 @@ export interface CognitionSelectionResult {
    */
   glossary: AgentGlossaryEntry[];
 }
-
-const SENSITIVITY_RANK: Record<AbilityAssetSensitivity, number> = { L0: 0, L1: 1, L2: 2 };
 
 const STATUS_REASON: Record<Exclude<RecallAbilityAssetRecord['status'], 'active'>, WithheldReason> = {
   paused: 'asset_paused',
@@ -218,7 +206,7 @@ export function classifyInheritedAsset(
   const reasons: WithheldReason[] = [];
 
   // 权限/安全。scopePolicy 是能力包继承独有的合同检查，留在这里；
-  // 敏感级、状态、成熟度三项走统一 runtime 闸门，不再本地重写一遍规则。
+  // 状态、成熟度两项走统一 runtime 闸门，不再本地重写一遍规则。
   reasons.push(...scopePolicyReasons(asset.scopePolicy, context));
 
   const sameScope = context.scope === undefined || context.scope === asset.scope;
@@ -227,18 +215,12 @@ export function classifyInheritedAsset(
     maturity: asset.maturity,
     scope: asset.scope,
     ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
-    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
   }, {
     ...(context.scope !== undefined ? { scope: context.scope } : {}),
-    ...(context.maxSensitivity !== undefined
-      ? { maxSensitivity: context.maxSensitivity, sensitivityRank: SENSITIVITY_RANK }
-      : {}),
   });
   for (const reason of runtime.reasons) {
     if (reason === 'status_not_active') reasons.push(STATUS_REASON[asset.status]);
     else if (reason === 'maturity_below_default_use') reasons.push('use_policy_never');
-    else if (reason === 'sensitivity_unclassified') reasons.push('sensitivity_unclassified');
-    else if (reason === 'sensitivity_above_destination') reasons.push('sensitivity_above_destination');
   }
 
   // 内容完整性：出生时冻结的是哪一版、哪一份内容，现在还对不对得上。
@@ -273,7 +255,6 @@ function toSelected(
     },
     ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
     ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
-    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     usePolicy,
     sameScope,
   };

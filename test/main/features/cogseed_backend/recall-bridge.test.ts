@@ -67,7 +67,7 @@ describe('CogSeed Recall execution bridge', () => {
     const proofs = await import('../../../../src/main/features/recall/proof-service');
 
     const candidate = await candidates.saveRecallCandidate(USER, {
-      judgment: 'Bring confirmed Mate task evidence into Recall.',
+      judgment: 'Bring confirmed Mate task evidence into Recall.', summary: 'Mate evidence bridging',
       suggestedType: 'rule',
       suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: 'exec-a' }],

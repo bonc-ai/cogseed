@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual };
+});
 
 vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -21,6 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -148,6 +155,12 @@ describe('spaces › 产物缓存「变更才扫」', () => {
     const attDir = path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id);
     fs.mkdirSync(attDir, { recursive: true });
     fs.writeFileSync(path.join(attDir, 'a.pdf'), 'x');
+
+    // Windows can retain identical directory metadata across adjacent writes.
+    const frozenStat = fs.statSync(attDir);
+    const stat = fsp.stat.bind(fsp);
+    vi.spyOn(fsp, 'stat').mockImplementation(((...args: Parameters<typeof stat>) =>
+      String(args[0]) === attDir ? Promise.resolve(frozenStat) : stat(...args)) as typeof fsp.stat);
 
     const mod = await import('../../../src/main/features/spaces_artifacts');
     const first = await mod.listSpaceArtifacts(UID, sid);

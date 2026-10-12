@@ -7,9 +7,8 @@
  *   2. the origin baked into the package at build time (`hubApiBase` in
  *      `.build/build-info.json`, written by `scripts/write-build-info.cjs` from
  *      the release pipeline's repository variable),
- *   3. build-channel default: release/packaged-dev fall back to the open-source
- *      placeholder `https://hub.example.com`, dev/unknown default to the local
- *      backend `http://localhost:3000`.
+ *   3. build-channel default: release falls back to the open-source placeholder,
+ *      packaged-dev uses the local Hub, and dev/unknown use `http://localhost:3000`.
  *
  * Step 2 is what makes a packaged build usable. Packaged apps do not run
  * `run.sh`, so they inherit no environment: before it existed, release builds
@@ -26,11 +25,10 @@ import { normalizeHttpsOrigin } from '../util/https-origin';
 /** Local backend for dev runs (`npm start` / run.sh sets channel=dev). */
 export const DEFAULT_API_BASE = 'http://localhost:3000';
 /**
- * Open-source placeholder. A real deployment bakes its own origin into the
- * package (step 2 above); these constants are only the last-resort default so
- * the source tree stays free of non-owned domains.
+ * Packaged-dev uses the local Hub. Release builds bake their deployment origin;
+ * the release constant is only a last-resort open-source placeholder.
  */
-export const PACKAGED_DEV_API_BASE = 'https://hub.example.com';
+export const PACKAGED_DEV_API_BASE = 'http://127.0.0.1:3101';
 export const RELEASE_API_BASE = 'https://hub.example.com';
 
 function _validate(raw: string): string {

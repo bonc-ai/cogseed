@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 
 import { appendJsonlAtomic, removeJsonlRecords, safeId, writeJson } from '../../storage';
 import { fileEditLock } from '../../util/locks';
+import { notifyCognitionWrite } from './store-events';
 import {
   recallJsonRecordPath,
   recallJsonlPath,
@@ -108,12 +109,14 @@ export async function writeRecallJsonRecord(
   record: RecallJsonRecord,
 ): Promise<RecallJsonRecord> {
   const recordPath = recallJsonRecordPath(userId, collection, recordId);
-  return fileEditLock(recordPath).runExclusive(async () => {
+  const validated = await fileEditLock(recordPath).runExclusive(async () => {
     await readExistingRecallRecord(userId, recordPath, recordId);
-    const validated = validateRecallRecord(userId, recordId, record);
-    await writeJson(recordPath, validated);
-    return validated;
+    const result = validateRecallRecord(userId, recordId, record);
+    await writeJson(recordPath, result);
+    return result;
   });
+  notifyCognitionWrite(userId, collection, 'write', recordId);
+  return validated;
 }
 
 export async function updateRecallJsonRecord(
@@ -123,13 +126,15 @@ export async function updateRecallJsonRecord(
   updater: RecallJsonRecordUpdater,
 ): Promise<RecallJsonRecord> {
   const recordPath = recallJsonRecordPath(userId, collection, recordId);
-  return fileEditLock(recordPath).runExclusive(async () => {
+  const validated = await fileEditLock(recordPath).runExclusive(async () => {
     const current = await readExistingRecallRecord(userId, recordPath, recordId);
     const next = await updater(current);
-    const validated = validateRecallRecord(userId, recordId, next);
-    await writeJson(recordPath, validated);
-    return validated;
+    const result = validateRecallRecord(userId, recordId, next);
+    await writeJson(recordPath, result);
+    return result;
   });
+  notifyCognitionWrite(userId, collection, 'update', recordId);
+  return validated;
 }
 
 export async function appendRecallJsonlRecord(
@@ -142,6 +147,7 @@ export async function appendRecallJsonlRecord(
   const recordId = typeof record?.id === 'string' ? record.id : '';
   const validated = validateRecallRecord(userId, recordId, record);
   await appendJsonlAtomic(streamPath, validated);
+  notifyCognitionWrite(userId, collection, 'append', recordId || undefined);
   return validated;
 }
 
@@ -165,22 +171,39 @@ export async function removeRecallJsonlStream(
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
     throw error;
   }
+  notifyCognitionWrite(userId, collection, 'remove');
 }
 
 /**
  * 从 JSONL 流中物理移除记录（真删，2026-09-17 版本删除）。与 append 共享
  * 同一把行锁，整文件临时写+原子改名回写；全部记录被移除时直接删掉流文件。
  * 与 removeRecallJsonlStream 的分工：那是删整条流（彻底清除资产），这是按
- * 记录粒度删（删除单个版本），除此之外没有别的调用理由。
+ * 记录粒度删（删除单个版本、清理链按 assetId 摘除引用）。
+ *
+ * 流不存在视为已达成目标（与 removeRecallJsonlStream 同口径）：清理链要可
+ * 重入——一条从未产生过使用记录的新资产被彻底清除时，"这里本来就没有东西"
+ * 不该让整次清除失败。返回保留/移除条数供调用方观测。
  */
 export async function removeRecallJsonlRecords(
   userId: string,
   collection: string,
   stream: string,
   keep: (record: RecallJsonRecord) => boolean,
-): Promise<void> {
+): Promise<{ kept: number; removed: number }> {
   const streamPath = recallJsonlPath(userId, collection, stream);
-  await removeJsonlRecords(streamPath, keep);
+  if (!(await fileExists(streamPath))) return { kept: 0, removed: 0 };
+  const result = await removeJsonlRecords(streamPath, keep);
+  if (result.removed > 0) notifyCognitionWrite(userId, collection, 'remove');
+  return result;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function listRecallJsonlRecords(

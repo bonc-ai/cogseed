@@ -249,7 +249,7 @@ describe('Recall context projection status and confirmation boundaries', () => {
       dispatchPayload: { text: 'Version change review' },
     });
     const recallAssets = await import('../../../../src/main/features/recall/asset-service');
-    await recallAssets.updateAbilityAsset('user-a', asset, { title: 'Keep decision logs and revisions.', reason: 'Refine the title.', actor: 'user' });
+    await recallAssets.updateAbilityAsset('user-a', asset, { title: 'Decision logs with revisions', reason: 'Refine the title.', actor: 'user' });
 
     await expect(projection.confirmAndApproveWake('user-a', {
       cid: 'cid-a',

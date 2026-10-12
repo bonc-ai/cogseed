@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { verifyPublishTarget, verifyReleaseGates } from '../../scripts/verify-release-gates.mjs';
+import { PUBLIC_CI_JOBS, verifyPublishTarget, verifyReleaseGates } from '../../scripts/verify-release-gates.mjs';
 
 const SHA = 'a'.repeat(40);
 const OLD_SHA = 'b'.repeat(40);
+const successfulJobs = (attempt = 1) => PUBLIC_CI_JOBS.map((name: string) => ({
+  name, status: 'completed', conclusion: 'success', run_attempt: attempt,
+}));
 
 type JsonResponse = { status?: number; body?: unknown; jsonError?: Error };
 
@@ -19,9 +22,8 @@ function response({ status = 200, body, jsonError }: JsonResponse) {
 
 function run({
   tagObject = { type: 'commit', sha: SHA },
-  cicdSha = SHA,
+  mainSha = SHA,
   ciRuns,
-  complianceRuns,
   jobs = {},
   overrides = {},
   githubSha = SHA,
@@ -29,11 +31,11 @@ function run({
   releaseResponse = { status: 404, body: { message: 'Not Found' } },
   requestedUrls = [],
   operation = 'gate',
+  repository = 'bonc-ai/cogseed',
 }: {
   tagObject?: { type: string; sha: string };
-  cicdSha?: string;
+  mainSha?: string;
   ciRuns?: unknown[];
-  complianceRuns?: unknown[];
   jobs?: Record<string, unknown[]>;
   overrides?: Record<string, JsonResponse>;
   githubSha?: string;
@@ -41,30 +43,25 @@ function run({
   releaseResponse?: JsonResponse;
   requestedUrls?: string[];
   operation?: 'gate' | 'publish';
+  repository?: string;
 } = {}) {
   const successfulRun = (id: number, workflow: string) => ({
     id,
     run_number: id,
     run_attempt: 1,
     head_sha: SHA,
-    head_branch: 'cicd',
+    head_branch: 'main',
     event: 'push',
     status: 'completed',
     conclusion: 'success',
-    path: `.github/workflows/${workflow}@refs/heads/cicd`,
+    // The API can include an explicit ref suffix.
+    path: `.github/workflows/${workflow}@refs/heads/main`,
   });
   const runsByWorkflow: Record<string, unknown[]> = {
-    'ci.yml': ciRuns ?? [successfulRun(20, 'ci.yml')],
-    'compliance.yml': complianceRuns ?? [successfulRun(21, 'compliance.yml')],
+    'public-ci.yml': ciRuns ?? [successfulRun(20, 'public-ci.yml')],
   };
   const jobsByRun: Record<string, unknown[]> = {
-    '20/attempts/1': [
-      { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 1 },
-    ],
-    '21/attempts/1': [
-      { name: 'compliance', status: 'completed', conclusion: 'success', run_attempt: 1 },
-    ],
+    '20/attempts/1': successfulJobs(),
     ...jobs,
   };
 
@@ -80,11 +77,11 @@ function run({
     if (url.pathname.includes('/git/tags/')) {
       return response({ body: { object: { type: 'commit', sha: SHA } } });
     }
-    if (url.pathname.endsWith('/git/ref/heads/cicd')) {
-      return response({ body: { object: { type: 'commit', sha: cicdSha } } });
+    if (url.pathname.endsWith('/git/ref/heads/main')) {
+      return response({ body: { object: { type: 'commit', sha: mainSha } } });
     }
     if (url.pathname.endsWith('/releases/tags/v0.10.0')) return response(releaseResponse);
-    const workflowMatch = url.pathname.match(/\/actions\/workflows\/(ci\.yml|compliance\.yml)\/runs$/);
+    const workflowMatch = url.pathname.match(/\/actions\/workflows\/(public-ci\.yml|compliance\.yml)\/runs$/);
     if (workflowMatch) {
       const rows = runsByWorkflow[workflowMatch[1]];
       return response({ body: { total_count: rows.length, workflow_runs: rows } });
@@ -99,7 +96,7 @@ function run({
 
   const env = {
     GITHUB_API_URL: 'https://api.github.test',
-    GITHUB_REPOSITORY: 'bonc-ai/cogseed',
+    GITHUB_REPOSITORY: repository,
     GITHUB_REF: 'refs/tags/v0.10.0',
     GITHUB_SHA: githubSha,
     GITHUB_TOKEN: 'test-token',
@@ -112,22 +109,26 @@ function run({
 }
 
 describe('release gate verification', () => {
-  it('accepts an exact cicd tip with the current successful push attempts', async () => {
+  it('rejects release execution in the private repository', async () => {
+    for (const operation of ['gate', 'publish'] as const) {
+      await expect(run({ operation, repository: 'bonc-ai/cogseed-internal' })).rejects.toThrow(/public repository/i);
+    }
+  });
+  it('accepts an exact main tip with the current successful push attempts', async () => {
     await expect(run()).resolves.toMatchObject({
       peeledSha: SHA,
       workflows: {
-        'ci.yml': { runId: 20, attempt: 1 },
-        'compliance.yml': { runId: 21, attempt: 1 },
+        'public-ci.yml': { runId: 20, attempt: 1 },
       },
     });
   });
 
-  it('peels an annotated tag before comparing it to the cicd tip', async () => {
+  it('peels an annotated tag before comparing it to the main tip', async () => {
     await expect(run({ tagObject: { type: 'tag', sha: 'c'.repeat(40) } })).resolves.toMatchObject({ peeledSha: SHA });
   });
 
   it('rejects an ancestor or otherwise non-tip tag SHA', async () => {
-    await expect(run({ cicdSha: OLD_SHA })).rejects.toThrow(/exactly match.*cicd/i);
+    await expect(run({ mainSha: OLD_SHA })).rejects.toThrow(/exactly match.*main/i);
   });
 
   it('requires the pushed tag event SHA to exactly match the peeled commit', async () => {
@@ -147,12 +148,13 @@ describe('release gate verification', () => {
       run_number: 20,
       run_attempt: 1,
       head_sha: SHA,
-      head_branch: 'cicd',
+      head_branch: 'main',
+    path: '.github/workflows/public-ci.yml',
       event,
       status: 'completed',
       conclusion,
     };
-    await expect(run({ ciRuns: [row] })).rejects.toThrow(/ci\.yml/i);
+    await expect(run({ ciRuns: [row] })).rejects.toThrow(/public-ci\.yml/i);
   });
 
   it('uses the latest run even when the API returns runs out of order', async () => {
@@ -161,13 +163,14 @@ describe('release gate verification', () => {
       run_number: id,
       run_attempt: 1,
       head_sha: SHA,
-      head_branch: 'cicd',
+      head_branch: 'main',
+    path: '.github/workflows/public-ci.yml',
       event: 'push',
       status: 'completed',
       conclusion,
     });
-    await expect(run({ ciRuns: [row(30, 'failure'), row(20, 'success')] })).rejects.toThrow(/latest.*ci\.yml/i);
-    await expect(run({ ciRuns: [row(20, 'success'), row(30, 'failure')] })).rejects.toThrow(/latest.*ci\.yml/i);
+    await expect(run({ ciRuns: [row(30, 'failure'), row(20, 'success')] })).rejects.toThrow(/latest.*public-ci\.yml/i);
+    await expect(run({ ciRuns: [row(20, 'success'), row(30, 'failure')] })).rejects.toThrow(/latest.*public-ci\.yml/i);
   });
 
   it('uses jobs from the selected latest run attempt', async () => {
@@ -177,7 +180,8 @@ describe('release gate verification', () => {
       run_number: 20,
       run_attempt: 2,
       head_sha: SHA,
-      head_branch: 'cicd',
+      head_branch: 'main',
+    path: '.github/workflows/public-ci.yml',
       event: 'push',
       status: 'completed',
       conclusion: 'success',
@@ -186,68 +190,43 @@ describe('release gate verification', () => {
       ciRuns: [rerun],
       jobs: {
         '20/attempts/1': [],
-        '20/attempts/2': [
-          { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 2 },
-          { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 2 },
-        ],
+        '20/attempts/2': successfulJobs(2),
       },
       requestedUrls,
-    })).resolves.toMatchObject({ workflows: { 'ci.yml': { runId: 20, attempt: 2 } } });
+    })).resolves.toMatchObject({ workflows: { 'public-ci.yml': { runId: 20, attempt: 2 } } });
     expect(requestedUrls.some((url) => url.includes('/actions/runs/20/attempts/2/jobs'))).toBe(true);
     expect(requestedUrls.some((url) => url.includes('/actions/runs/20/attempts/1/jobs'))).toBe(false);
   });
 
-  it('selects exact-SHA runs while ignoring historical runs from other cicd tips', async () => {
+  it('selects exact-SHA runs while ignoring historical runs from other main tips', async () => {
     const exact = {
       id: 20,
       run_number: 20,
       run_attempt: 1,
       head_sha: SHA,
-      head_branch: 'cicd',
+      head_branch: 'main',
+    path: '.github/workflows/public-ci.yml',
       event: 'push',
       status: 'completed',
       conclusion: 'success',
     };
     const historical = { ...exact, id: 19, run_number: 19, head_sha: OLD_SHA };
     await expect(run({ ciRuns: [historical, exact] })).resolves.toMatchObject({ peeledSha: SHA });
-    await expect(run({ ciRuns: [historical] })).rejects.toThrow(/exact.*ci\.yml.*SHA/i);
+    await expect(run({ ciRuns: [historical] })).rejects.toThrow(/exact.*public-ci\.yml.*SHA/i);
   });
 
-  it('rejects missing and duplicate required jobs', async () => {
-    await expect(run({ jobs: { '20/attempts/1': [{ name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 1 }] } }))
-      .rejects.toThrow(/verify-windows/i);
-    await expect(run({ jobs: { '21/attempts/1': [
-      { name: 'compliance', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      { name: 'compliance', status: 'completed', conclusion: 'success', run_attempt: 1 },
-    ] } })).rejects.toThrow(/duplicate.*compliance/i);
-  });
-
-  it('accepts the sharded Windows job graph and rejects unknown extra jobs', async () => {
-    const shardedCiJobs = [
-      { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      { name: 'verify-windows-native', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      { name: 'build-windows', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      ...[1, 2, 3, 4].map((shard) => ({
-        name: `verify-windows-shard-${shard}`,
-        status: 'completed',
-        conclusion: 'success',
-        run_attempt: 1,
-      })),
-    ];
-    await expect(run({ jobs: { '20/attempts/1': shardedCiJobs } })).resolves.toMatchObject({ peeledSha: SHA });
-    await expect(run({
-      jobs: {
-        '20/attempts/1': [
-          ...shardedCiJobs,
-          { name: 'verify-windows-extra', status: 'completed', conclusion: 'success', run_attempt: 1 },
-        ],
-      },
-    })).rejects.toThrow(/Unexpected ci\.yml jobs: verify-windows-extra/i);
+  it('rejects missing, unexpected and duplicate required jobs', async () => {
+    await expect(run({ jobs: { '20/attempts/1': successfulJobs().slice(1) } }))
+      .rejects.toThrow(/missing.*compliance/i);
+    await expect(run({ jobs: { '20/attempts/1': [...successfulJobs(),
+      { name: 'legacy', status: 'completed', conclusion: 'success', run_attempt: 1 },
+    ] } })).rejects.toThrow(/unexpected.*legacy/i);
+    await expect(run({ jobs: { '20/attempts/1': [...successfulJobs(), successfulJobs()[0]] } }))
+      .rejects.toThrow(/duplicate.*compliance/i);
   });
 
   it('rejects missing or non-positive run_attempt values', async () => {
-    await expect(run({ jobs: { '21/attempts/1': [
+    await expect(run({ jobs: { '20/attempts/1': [
       { name: 'compliance', status: 'completed', conclusion: 'success' },
     ] } })).rejects.toThrow(/run_attempt.*positive integer/i);
 
@@ -256,7 +235,8 @@ describe('release gate verification', () => {
       run_number: 20,
       run_attempt: 0,
       head_sha: SHA,
-      head_branch: 'cicd',
+      head_branch: 'main',
+    path: '.github/workflows/public-ci.yml',
       event: 'push',
       status: 'completed',
       conclusion: 'success',
@@ -266,7 +246,6 @@ describe('release gate verification', () => {
       jobs: {
         '20/attempts/0': [
           { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 0 },
-          { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 0 },
         ],
       },
     })).rejects.toThrow(/run attempt.*positive integer/i);
@@ -274,9 +253,9 @@ describe('release gate verification', () => {
 
   it('rejects failed, skipped, and cancelled jobs', async () => {
     for (const conclusion of ['failure', 'skipped', 'cancelled']) {
-      await expect(run({ jobs: { '21/attempts/1': [
-        { name: 'compliance', status: 'completed', conclusion, run_attempt: 1 },
-      ] } })).rejects.toThrow(/compliance/i);
+      await expect(run({ jobs: { '20/attempts/1': successfulJobs().map((job) =>
+        job.name === 'windows-tests (4)' ? { ...job, conclusion } : job) } }))
+        .rejects.toThrow(/windows-tests/i);
     }
   });
 
@@ -286,7 +265,7 @@ describe('release gate verification', () => {
       .rejects.toThrow(/503/);
     await expect(run({ overrides: { '/repos/bonc-ai/cogseed/git/ref/tags/v0.10.0': { jsonError: new Error('bad json') } } }))
       .rejects.toThrow(/JSON/i);
-    const firstPage = '/repos/bonc-ai/cogseed/actions/workflows/ci.yml/runs?branch=cicd&event=push&head_sha=' + SHA + '&per_page=100&page=1';
+    const firstPage = '/repos/bonc-ai/cogseed/actions/workflows/public-ci.yml/runs?branch=main&event=push&head_sha=' + SHA + '&per_page=100&page=1';
     await expect(run({ overrides: { [firstPage]: { body: { total_count: 101, workflow_runs: [] } } } }))
       .rejects.toThrow(/pagination/i);
   });

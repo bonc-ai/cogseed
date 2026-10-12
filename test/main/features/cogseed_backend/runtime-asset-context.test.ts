@@ -72,7 +72,7 @@ describe('Mate runtime asset context assembly (Decision 2 = connect)', () => {
   it('never leaks another user assets (user isolation)', async () => {
     await seedConfirmedProjection(
       'user-a', 'cid-a',
-      'Private rule of user-a only.', 'Private summary of user-a',
+      'Private rule of user-a only.', 'Rule private to user-a',
     );
     const { buildRuntimeAssetContext } = await import('../../../../src/main/features/cogseed_backend/runtime-asset-context');
     const items = await buildRuntimeAssetContext('user-b', 'cid-a');

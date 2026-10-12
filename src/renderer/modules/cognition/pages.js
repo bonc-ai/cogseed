@@ -40,6 +40,11 @@
     return root.uiTextarea(options);
   }
 
+  function select(options) {
+    if (typeof root.uiSelect !== 'function') throw new Error('cognition pages require uiSelect');
+    return root.uiSelect(options);
+  }
+
   function emptyState(options) {
     if (typeof root.uiEmptyState !== 'function') throw new Error('cognition pages require uiEmptyState');
     return root.uiEmptyState(options);
@@ -274,13 +279,17 @@
     const error = String(options?.error || '').trim();
     const title = String(options?.title || '').trim();
     const summary = String(options?.summary || '').trim();
-    const evidence = String(options?.evidence || '').trim();
+    const value = String(options?.value || '').trim();
     const sourceLabel = String(options?.sourceLabel || '').trim();
+    const suggestedScope = String(options?.suggestedScope || '').trim();
+    const applicableWhen = Array.isArray(options?.applicableWhen) ? options.applicableWhen : [];
+    const forbiddenWhen = Array.isArray(options?.forbiddenWhen) ? options.forbiddenWhen : [];
+    const risk = String(options?.risk || 'low');
+    const uncertainty = String(options?.uncertainty || '').trim();
     const conversationId = String(options?.conversationId || '').trim();
     const messageId = String(options?.messageId || '').trim();
-    // 四类分类是候选的最低必填项（saveRecallCandidate 会 requireAssetType）。
-    // 模型预判只作默认值；给不出合法值时留空，强制用户自己选——不替他猜。
-    const assetTypes = ['personal', 'rule', 'template', 'skill_method'];
+    // 使用与 Recall 候选一致的五类分类，模型预填仍可由用户修正。
+    const assetTypes = ['personal', 'fact', 'rule', 'template', 'skill_method'];
     const suggestedType = assetTypes.indexOf(String(options?.suggestedType || '')) >= 0
       ? String(options.suggestedType)
       : '';
@@ -303,17 +312,30 @@
       + '</header>'
       + '<div class="ui-modal__body cognition-capture-body">'
       + status
-      + '<label>' + escapeHtml(text('cognition.capture.name', '认知名称')) + input({ id: 'cognition-capture-title', value: title, disabled, required: true, attrs: { maxlength: 120, 'data-cognition-capture-title': 'true' } }) + '</label>'
-      + '<label>' + escapeHtml(text('cognition.capture.summary', '可复用的工作方式')) + textarea({ id: 'cognition-capture-summary', value: summary, disabled, required: true, attrs: { maxlength: 2000, 'data-cognition-capture-summary': 'true' } }) + '</label>'
-      + '<label>' + escapeHtml(text('cognition.capture.evidence', '本次证据')) + textarea({ id: 'cognition-capture-evidence', value: evidence, disabled, required: true, attrs: { maxlength: 2000, 'data-cognition-capture-evidence': 'true' } }) + '</label>'
-      + '<label>' + escapeHtml(text('cognition.capture.source', '来源')) + input({ id: 'cognition-capture-source', value: sourceLabel, disabled, required: true, attrs: { maxlength: 160, 'data-cognition-capture-source': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.capture.name', '认知名称')) + input({ id: 'cognition-capture-title', value: title, disabled, required: true, attrs: { maxlength: 60, 'data-cognition-capture-title': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.capture.summary', '可复用内容')) + textarea({ id: 'cognition-capture-summary', value: summary, disabled, required: true, attrs: { maxlength: 2000, 'data-cognition-capture-summary': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.chain_value_label', '带来的价值')) + textarea({ id: 'cognition-capture-value', value, disabled, required: true, attrs: { maxlength: 2000, 'data-cognition-capture-value': 'true' } }) + '</label>'
+      + `<div class="field"><span id="cognition-capture-scope-label">${escapeHtml(text('cognition.candidate_scope_domain', '适用任务范围'))}</span>${select({
+        id: 'cognition-capture-scope', labelId: 'cognition-capture-scope-label', value: suggestedScope, placeholder: text('cognition.capture.scope_placeholder', '请选择任务范围…'), required: true,
+        options: ['general', 'report', 'code', 'review', 'product'].map((scope) => ({
+          value: scope,
+          label: text(`cognition.capture.scope_${scope}`, {
+            general: '跨任务通用', report: '报告', code: '编程', review: '审查与评审', product: '产品工作',
+          }[scope]),
+        })),
+      })}</div>`
+      + '<label>' + escapeHtml(text('cognition.asset_version_applicable', '适用场景')) + textarea({ id: 'cognition-capture-applicable', value: (applicableWhen || []).join('\n'), disabled, attrs: { maxlength: 1000, 'data-cognition-capture-applicable': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.asset_version_forbidden', '禁用场景')) + textarea({ id: 'cognition-capture-forbidden', value: (forbiddenWhen || []).join('\n'), disabled, attrs: { maxlength: 1000, 'data-cognition-capture-forbidden': 'true' } }) + '</label>'
+      + '<label>' + escapeHtml(text('cognition.chain_uncertainty_label', '仍不确定的地方')) + textarea({ id: 'cognition-capture-uncertainty', value: uncertainty, disabled, attrs: { maxlength: 1000, 'data-cognition-capture-uncertainty': 'true' } }) + '</label>'
+      + `<div class="field"><span>${escapeHtml(text('cognition.capture.risk', '风险等级'))}</span><p class="note">${escapeHtml(text(`cognition.capture.risk_${risk || 'low'}`, { low: '低', medium: '中', high: '高' }[risk || 'low']))}</p></div>`
+      + '<label>' + escapeHtml(text('cognition.capture.source', '证据来源')) + input({ id: 'cognition-capture-source', value: sourceLabel, disabled: true, attrs: { maxlength: 160, 'data-cognition-capture-source': 'true' } }) + '</label>'
       + '<label>' + escapeHtml(text('cognition.capture.type', '归入哪一类'))
       + `<select class="ui-control" data-cognition-capture-type required${disabled ? ' disabled' : ''}>`
       + `<option value=""${suggestedType ? '' : ' selected'}>`
       + escapeHtml(text('cognition.capture.type_placeholder', '请选择…')) + '</option>'
       + assetTypes.map((value) => `<option value="${value}"${suggestedType === value ? ' selected' : ''}>`
         + escapeHtml(text(`cognition.asset_category_${value}`, {
-          personal: '关于我', rule: '规则与偏好', template: '模板与范例', skill_method: '技能与方法',
+          personal: '关于我', fact: '项目与环境事实', rule: '规则与偏好', template: '模板与范例', skill_method: '技能与方法',
         }[value])) + '</option>').join('')
       + '</select></label>'
       + '<input type="hidden" data-cognition-capture-conversation value="' + escapeHtml(conversationId) + '" />'

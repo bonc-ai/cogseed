@@ -210,7 +210,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .is-macos .chat-header-actions,
 .is-macos .chat-header-title-input,
 .is-macos .chat-header-meta,
-.is-macos .chat-header-breadcrumb {
+.is-macos .chat-header-breadcrumb,
+/* 认知衔接行（2026-09-30 二迁）：搬进标题栏后必须显式豁免拖拽，否则真实
+   鼠标点击被窗口拖拽吞掉（程序化 click 走不到这层命中，真机上才暴露）。 */
+.is-macos .chat-cognition-strip {
   -webkit-app-region: no-drag;
 }
 /* 各视图顶部条（标题栏语义，与 .chat-header 同模式）：空白处拖窗口、
@@ -4077,6 +4080,30 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   min-height: 22px;
 }
 
+.skill-card-avatar {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  color: var(--primary-text);
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.skill-card-avatar-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .skill-card-name {
   flex: 1;
   min-width: 0;
@@ -5395,6 +5422,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 /* ── Conversation header — Surface C top (PC/docs/design/PATTERNS.md). ── */
 .chat-header {
+  position: relative;
   flex: 0 0 auto;
   min-height: var(--layout-titlebar-height);
   display: flex;
@@ -5978,7 +6006,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   border-top-color: var(--primary);
   animation: spin 0.8s linear infinite;
 }
-/* 四类资产 tab · 本会话认知沉淀：待确认候选与已沉淀资产 */
+/* 认知资产 tab · 本会话内容：待确认建议与已保存资产 */
 .run-context-cog-section-title {
   display: flex;
   align-items: baseline;
@@ -5996,7 +6024,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   font-weight: 600;
   color: var(--primary);
 }
-/* 四格计数框（本会话已沉淀资产数，未沉淀显示 0） */
+/* 本会话按资产类型计数（未保存显示 0） */
 .run-context-assets {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -6999,7 +7027,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   gap: 8px;
   font-size: 11px;
   line-height: 1.55;
-  color: var(--text-muted);
+  /* WCAG：--text-muted 于浅底 4.48 < 4.5，升一档次级文本 */
+  color: var(--text-secondary);
   background: var(--surface-2, #f7f8fa);
   border-radius: 8px;
   padding: 8px 10px;
@@ -20386,6 +20415,214 @@ body:has(#panel-settings.active) .main-top-actions {
 .connector-tool-name { font-family: ui-monospace, monospace; font-size: 12px; }
 .connector-tool-desc { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 
+/* ─── Connector detail view (registry CONN-PV-001) ───
+   Page-local structural composition for one business surface: the Tencent Meeting
+   connector detail. Proposed in docs/renderer-structural-registry.md; it must not grow
+   into a second visual variant of the card grid. Tokens only — no literal color,
+   font-size, radius or z-index. Layout only: the shared shells (ui-resource-card,
+   ui-button, ui-status-pill) keep their own visual identity, exactly as
+   `.connector-card` does today. */
+.connectors-detail-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) 0;
+}
+.connectors-detail-info-btn { flex: 0 0 auto; }
+.connectors-detail-column {
+  width: 100%;
+  max-width: var(--layout-resource-detail-width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.connectors-detail-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.connectors-detail-identity-icon {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+}
+.connectors-detail-identity-icon svg { width: 100%; height: 100%; display: block; }
+.connectors-detail-identity-icon.is-fallback {
+  color: var(--color-surface);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-bold);
+}
+.connectors-detail-identity-heading { min-width: 0; }
+.connectors-detail-identity-name {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+.connectors-detail-identity-subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+/* Three-step progress indicator. Native <ol> semantics + aria-current; the connector
+   line between steps is decorative and carries no information of its own. */
+.connectors-detail-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.connectors-detail-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: var(--line-height-row);
+}
+.connectors-detail-step + .connectors-detail-step::before {
+  content: '';
+  flex: 0 0 auto;
+  width: var(--space-5);
+  height: 1px;
+  background: var(--line-hairline);
+}
+.connectors-detail-step-mark { display: inline-flex; align-items: center; }
+.connectors-detail-step.is-done { color: var(--color-success); }
+.connectors-detail-step.is-current { color: var(--text); font-weight: var(--font-weight-medium); }
+.connectors-detail-step-dot {
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+}
+
+/* Both panels adopt the shared `ui-resource-card` shell. They only relax its 400px card-grid
+   width cap for this page's layout — the same page-scoped width override the card grid already
+   does with `.connectors-grid > .connector-card`. The shell's border, radius, background and
+   shadow are deliberately left alone. The direct-child selector is required: `ui-components.css`
+   loads after `style.css`, so a single-class rule would lose to `.ui-resource-card`. */
+.connectors-detail-column > .connectors-detail-panel {
+  width: 100%;
+  max-width: 100%;
+  padding: var(--space-5);
+  box-sizing: border-box;
+}
+.connectors-detail-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+}
+/* Icon sizing goes through the documented `uiIconHtml(name, className)` seam: the page sizes its
+   own class rather than overriding the shared `.ui-icon` from page CSS. Colour is inherited from
+   the host (`--color-success` on `.is-ok` / `.is-done`) via the icon's `currentColor` stroke. */
+.connectors-detail-hero-icon { display: inline-flex; color: var(--text-secondary); }
+.connectors-detail-hero-icon.is-ok { color: var(--color-success); }
+.connectors-detail-hero-icon .connectors-detail-hero-glyph { width: 40px; height: 40px; }
+.connectors-detail-step-mark .connectors-detail-step-glyph { width: 14px; height: 14px; }
+.connectors-detail-hero-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+.connectors-detail-hero-desc {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.connectors-detail-hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.connectors-detail-hero-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-meta);
+}
+
+.connectors-detail-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.connectors-detail-panel-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-medium);
+}
+.connectors-detail-panel-scope {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.connectors-detail-panel-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.connectors-detail-soon-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-meta);
+}
+
+.connectors-detail-auth-url {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  text-align: left;
+}
+.connectors-detail-auth-url-label {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-meta);
+}
+.connectors-detail-auth-url-value {
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
+  color: var(--text);
+  word-break: break-all;
+  user-select: all;
+}
+
 /* Connect / configure modal (minimal scoped styles for the connectors flow; if the project
    later introduces a shared .modal-overlay / .modal-card system, these can be retired). */
 #connectors-connect-modal.modal-overlay {
@@ -21839,7 +22076,7 @@ body:has(#panel-settings.active) .main-top-actions {
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--success) 6%, var(--panel));
+  background: color-mix(in srgb, var(--success) 6%, var(--surface));
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -21851,13 +22088,91 @@ body:has(#panel-settings.active) .main-top-actions {
 .chat-kstar-experience { padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
 .chat-kstar-review[data-busy="1"] { opacity: .72; }
 
+/* 资产审批卡片（specs/008 US-406）：与复盘卡同一套排版语言。层次是
+   「标题 + 状态 → 目标资产 → 一行摘要 → 依据 → 逐字段内容 → 三选一」；
+   长正文一律折叠，资产正文动辄上千字，整段铺在对话里没法看。 */
+.chat-asset-approval {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 4%, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-asset-approval.is-confirmed {
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
+  background: color-mix(in srgb, var(--success) 5%, var(--surface));
+}
+.chat-asset-approval.is-rejected,
+.chat-asset-approval.is-deferred { border-color: var(--border); background: var(--surface); }
+.chat-asset-approval-head { display: flex; align-items: center; gap: 8px; }
+.chat-asset-approval-title { font-weight: 650; }
+.chat-asset-approval-head .ui-tag { flex: 0 0 auto; }
+.chat-asset-approval-asset { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.chat-asset-approval-asset-label,
+.chat-asset-approval-diff-label,
+.chat-asset-approval-reason-label { color: var(--muted); flex: 0 0 auto; }
+.chat-asset-approval-asset-name { color: var(--text); font-weight: 600; }
+.chat-asset-approval-baseline { color: var(--muted); font-variant-numeric: tabular-nums; }
+.chat-asset-approval-diff,
+.chat-asset-approval-reason {
+  font-size: 12px;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.chat-asset-approval-reason { -webkit-line-clamp: 5; }
+.chat-asset-approval-hint,
+.chat-asset-approval-note,
+.chat-asset-approval-read-failed { font-size: 12px; color: var(--muted); }
+.chat-asset-approval-read-failed { color: color-mix(in srgb, var(--danger) 72%, var(--text)); }
+.chat-asset-approval-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+}
+.chat-asset-approval-row { display: flex; flex-direction: column; gap: 6px; }
+.chat-asset-approval-row + .chat-asset-approval-row {
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.chat-asset-approval-row-head { display: flex; align-items: center; gap: 6px; }
+.chat-asset-approval-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.chat-asset-approval-edit-tag { flex: 0 0 auto; }
+.chat-asset-approval-prev { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.chat-asset-approval-prev-label { flex: 0 0 auto; }
+.chat-asset-approval-prev-text,
+.chat-asset-approval-value { white-space: pre-wrap; }
+.chat-asset-approval-value { font-size: 13px; }
+.chat-asset-approval-prev-text.is-clamped,
+.chat-asset-approval-value.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.chat-asset-approval-toggle { display: flex; }
+.chat-asset-approval-toggle-btn { height: auto; padding: 0; font-size: 12px; }
+.chat-asset-approval-input { width: 100%; font-size: 13px; line-height: 1.55; resize: vertical; }
+.chat-asset-approval-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chat-asset-approval-state { font-size: 12px; color: var(--muted); }
+.chat-asset-approval[data-busy="1"] { opacity: .72; }
+
 
 .chat-collaboration-status {
   margin: 10px 12px 12px;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
   border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -23205,37 +23520,18 @@ body:has(#panel-settings.active) .main-top-actions {
   .ew-service-callout .btn { width: 100%; }
 }
 
-/* Recall 引用反馈（「提供给本次回答的记忆」+ 有帮助/需改进）——合并时被远端
-   style.css 覆盖丢失，已恢复。 */
-.chat-recall-citations {
-  margin: 10px 0 8px;
-  padding: 10px 12px;
-  border: 1px solid rgba(14, 159, 110, 0.22);
-  border-radius: 8px;
-  background: rgba(14, 159, 110, 0.04);
-}
-.chat-recall-citations-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-.chat-recall-citations-head > span:first-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #0b7a4f;
-  font-size: 12px;
-  font-weight: 600;
-}
-.chat-recall-citations-head .ui-icon { width: 15px; height: 15px; }
-.chat-recall-feedback-status {
-  color: var(--text-secondary, #6b7280);
-  font-size: 11px;
-}
+/* Recall 引用反馈（「提供给本次回答的记忆」+ 有帮助/需改进）。
+   它与「你引用了 N 条认知资产」回执卡（.chat-recall-projection-card）同属
+   "本轮带入了什么" 这一个家族。2026-09-28 收口：两卡壳与头部是同一份分组
+   规则，唯一壳源在下方「Recall projection receipt」段——本段只准写记忆卡
+   独有的内容行（引用行、反馈行），不得再出现第二份壳/头部规则。
+   2026-09-25 收口：这里原先自带一套硬编码品牌绿（4 处 rgba(14,159,110,·) +
+   2 处 #0b7a4f）和 99px 药丸按钮样式，与回执卡并排时被认成两种卡片样式；
+   硬编码值已全部收进 token，药丸变体删除（共享按钮已覆盖 hover/disabled/focus）。 */
 .chat-recall-citation-list {
   display: grid;
+  /* 显式可收缩轨道：隐式 auto 轨在超长 nowrap 标题下会按 min-content 撑穿卡片。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 .chat-recall-citation {
@@ -23243,51 +23539,117 @@ body:has(#panel-settings.active) .main-top-actions {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-2);
   line-height: 1.45;
 }
-.chat-recall-citation strong {
+.chat-recall-citation-open.ui-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--primary);
+  font-size: inherit;
+  font-weight: var(--font-weight-semibold);
+  text-align: left;
+  /* 溢出修复（2026-09-30）：shared .btn 家族把按钮定成 center 对齐，超宽标题
+     居中向两侧逃逸（截图病：文字跑出卡片左缘）——改左对齐。 */
+  justify-content: flex-start;
+}
+.chat-recall-citation-open.ui-button:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.chat-recall-citation-open .ui-button__label {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 溢出修复（2026-09-30）：legacy .btn 家族给 label 钉了 flex-shrink:0，
+     超长标题永不收缩、直接撑穿卡片——这里显式放开收缩。 */
+  flex: 0 1 auto;
 }
 .chat-recall-citation span {
   flex: none;
-  color: var(--text-secondary, #6b7280);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+}
+/* 合并卡（拍板项 #8，2026-09-28）新增内容行：省略行灰显、带入行的版本钉住
+   说明整行换行（沿用引用行样式，不另起壳）。 */
+.chat-recall-citation.is-omitted {
+  color: var(--muted);
+}
+.chat-recall-citation .chat-recall-projection-stale {
+  flex: 1 0 100%;
+  color: var(--muted);
+  font-size: var(--font-size-1);
 }
 .chat-recall-feedback-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(14, 159, 110, 0.15);
-}
-.chat-recall-feedback-btn {
-  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border: 1px solid rgba(14, 159, 110, 0.3);
-  border-radius: 99px;
-  color: #0b7a4f;
-  background: var(--color-surface);
-  font-size: 11px;
-  cursor: pointer;
+  gap: 4px;
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
 }
-.chat-recall-feedback-btn .ui-icon { width: 13px; height: 13px; }
-.chat-recall-feedback-btn:hover { background: rgba(14, 159, 110, 0.08); }
-.chat-recall-feedback-btn:disabled { opacity: 0.55; cursor: default; }
+/* 尾行视觉收紧（2026-09-29 三轮）：分隔留白与按钮各缩一档——页内 scoped 覆盖，
+   不动共享 sm 档（同 .chat-taskref-remove.ui-icon-button 的页内尺寸先例）。 */
+.chat-recall-feedback-actions .ui-button {
+  height: 24px;
+  padding-inline: var(--space-2);
+  font-size: var(--font-size-2);
+}
+.chat-recall-feedback-actions .ui-button .ui-button__icon,
+.chat-recall-feedback-actions .ui-button .ui-icon {
+  width: 12px;
+  height: 12px;
+}
+/* 尾行（2026-09-29 二轮）：状态说明句挪到撤销左侧、独占中段；反馈钮居左。 */
+.chat-recall-citations-note {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+}
 .chat-recall-citations.is-feedback-sent .chat-recall-feedback-btn { opacity: 0.55; pointer-events: none; }
 
-.chat-teaching-receipts {
+/* 折叠（2026-09-29 二轮）：头部即点击热区（cursor/悬停反馈在这层），箭头只是
+   指示图标（aria-hidden）；点击收起/展开引用明细（列表＋省略块），尾部反馈、
+   提示句与撤销保持可见。状态记在宿主 dataset，整卡重画不丢；展开时箭头朝上
+   （点它收起），收起时朝下。计数上移内联在标题右侧。 */
+.chat-recall-citations-head { cursor: pointer; user-select: none; }
+.chat-recall-citations .chat-recall-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-top: 1px;
+  color: var(--muted);
+}
+.chat-recall-citations-head:hover .chat-recall-toggle { color: var(--primary); }
+.chat-recall-citations .chat-recall-toggle .ui-icon { transform: rotate(180deg); }
+.chat-recall-citations-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
+  font-weight: var(--font-weight-regular);
+}
+.chat-recall-citations.is-collapsed .chat-recall-citation-list,
+.chat-recall-citations.is-collapsed .chat-recall-projection-omitted {
+  display: none;
+}
+.chat-recall-citations.is-collapsed .chat-recall-toggle .ui-icon { transform: none; }
+
+/* 教学卡样式已删（2026-09-28 四病整改 7.0 修7）：教学回执并入保存回执卡
+   （.chat-cognition-save-receipts），独立教学卡不再渲染。 */
+.chat-cognition-save-receipts {
   display: grid;
   gap: 8px;
   margin-top: 10px;
 }
 
-.chat-teaching-receipt {
+.chat-cognition-save-receipt {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -23298,24 +23660,20 @@ body:has(#panel-settings.active) .main-top-actions {
   background: var(--surface-secondary, rgba(127, 127, 127, 0.08));
 }
 
-.chat-teaching-receipt > div {
+.chat-cognition-save-receipt > div {
   min-width: 0;
   display: grid;
   gap: 3px;
 }
 
-.chat-teaching-receipt strong,
-.chat-teaching-receipt span {
+.chat-cognition-save-receipt strong,
+.chat-cognition-save-receipt span {
   overflow-wrap: anywhere;
 }
 
-.chat-teaching-receipt span {
+.chat-cognition-save-receipt span {
   color: var(--text-secondary, #6b7280);
   font-size: 12px;
-}
-
-.chat-teaching-receipt.is-revoked {
-  opacity: 0.68;
 }
 
 /* ── merged from dev/zhangh: personal ontology + memory group styles ── */
@@ -23703,26 +24061,6 @@ body:has(#panel-settings.active) .main-top-actions {
   color: var(--personal-onto-fg);
 }
 
-.personal-onto-back-btn {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--personal-onto-muted);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.personal-onto-back-btn:hover {
-  color: var(--personal-onto-fg);
-  background: rgba(14, 159, 110, 0.08);
-}
-
 .personal-onto-nav {
 
   flex: 1;
@@ -23795,6 +24133,29 @@ body:has(#panel-settings.active) .main-top-actions {
   text-overflow: ellipsis;
   white-space: nowrap;
 
+}
+
+/* US-103 三盒导航副标题：文字位竖排（名称 + 副标题各单行省略）。T 盒模板行
+   复用 .personal-onto-nav-row-text（单行），故竖排用 is-stacked 修饰类限定。 */
+.personal-onto-nav-row-text.is-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  white-space: normal;
+}
+
+.personal-onto-nav-row-name,
+.personal-onto-nav-row-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personal-onto-nav-row-sub {
+  font-size: 11px;
+  /* WCAG：--personal-onto-muted 于白底 3.97 < 4.5，改走全局次级文本 token */
+  color: var(--color-ca-ink-2);
 }
 
 .personal-onto-nav-row.is-file {
@@ -24582,13 +24943,9 @@ body:has(#panel-settings.active) .main-top-actions {
 .personal-onto-value-line.is-expanded { background: var(--surface-2); }
 .personal-onto-value-line.is-conflicted { border-left: 3px solid var(--danger); }
 .personal-onto-value-src { font-size: 12px; flex-shrink: 0; }
-.personal-onto-status-dot {
-  width: 8px; height: 8px; border-radius: 999px;
-  align-self: center; flex-shrink: 0;
-}
-.personal-onto-status-dot.is-red { background: var(--danger); }
-.personal-onto-status-dot.is-amber { background: var(--color-warning); }
-.personal-onto-status-dot.is-green { background: var(--success); }
+/* T041 状态点已收敛到共享 uiStatusDot：这里只保留值行（baseline 行）内的
+   垂直居中与防压缩适配，色点样式由 ui-components.css 的 .ui-status-dot* 提供。 */
+.personal-onto-value-line .ui-status-dot { align-self: center; flex-shrink: 0; }
 .personal-onto-value-detail {
   padding: 8px 10px 10px 14px;
   border-left: 2px solid var(--border);
@@ -27392,125 +27749,343 @@ body.is-terminal-resizing {
   animation: autoTimeAdjustResultFadeIn 0.3s ease-out;
 }
 
-/* ── 安全与信任设置页（v2）────────────────────────────────────────────── */
-#settings-security-body { max-width: 880px; }
-.sec-loading { padding: 28px 0; color: var(--text-3); font-size: 13px; }
-.sec-empty { padding: 18px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
+/* ── 安全与信任设置页（v3）────────────────────────────────────────────
+   命名：sec-* 为页面私有结构（见 docs/renderer-structural-registry.md
+   `SEC-PV-001`）。控件本身一律走共享 seam（uiButton/uiStatusPill/uiTag/
+   uiBadge/uiSegmentedControl/uiProgressBar/uiSkeleton/uiEmptyState/uiDrawer），
+   这里只放业务内容的排版与状态色。全部颜色走 token，不写字面 z-index。 */
+#settings-security-body { max-width: 940px; }
+.sec-visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.sec-loading { display: grid; gap: var(--space-4); }
+.sec-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
-/* Hero */
+/* ── Hero ───────────────────────────────────────────────────────────── */
 .sec-hero {
-  display: flex; gap: 16px; align-items: flex-start;
-  background: var(--panel, var(--color-surface)); border: 1px solid var(--border);
-  border-radius: 14px; padding: 18px 20px; margin-bottom: 16px;
+  display: flex; gap: var(--space-5); align-items: flex-start; flex-wrap: wrap;
+  background: var(--surface-card); border: 1px solid var(--line-default);
+  border-radius: var(--radius-window); padding: var(--space-5); margin-bottom: var(--space-4);
 }
-.sec-hero-icon {
-  width: 40px; height: 40px; border-radius: 50%; flex: none;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--success-soft); border: 1px solid transparent;
+.sec-hero[data-kind="warn"] { border-color: var(--state-caution-line); }
+.sec-hero[data-kind="bad"] { border-color: var(--danger); }
+.sec-hero-main { flex: 1 1 320px; min-width: 0; }
+.sec-hero-title {
+  font-size: var(--font-size-title); font-weight: 650; margin: 0;
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
 }
-.sec-hero-icon.warn { background: var(--color-warning-soft); }
-.sec-hero-icon.bad { background: var(--danger-soft, #fee2e2); }
-.sec-hero-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--success); }
-.sec-hero-icon.warn .sec-hero-dot { background: var(--color-warning); }
-.sec-hero-icon.bad .sec-hero-dot { background: var(--danger); }
-.sec-hero-main { flex: 1; min-width: 0; }
-.sec-hero-title { font-size: 15.5px; font-weight: 650; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.sec-hero-desc { font-size: 12.5px; color: var(--text-2); margin-top: 4px; }
-.sec-hero-meta { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--text-3); }
-.sec-hero-meta b { color: var(--text-2); font-weight: 600; }
+.sec-hero-desc { font-size: var(--font-size-caption); color: var(--text-secondary); margin: var(--space-1) 0 0; }
+.sec-hero-meta { display: flex; gap: var(--space-4); flex-wrap: wrap; margin-top: var(--space-3); }
+.sec-meta-item { display: flex; flex-direction: column; gap: 2px; font-size: var(--font-size-2); }
+.sec-meta-label { color: var(--text-muted); }
+.sec-meta-item b { color: var(--text-body); font-weight: 600; font-variant-numeric: tabular-nums; }
+.sec-hero-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: flex-start; }
 
-/* 状态胶囊/标签 */
-.sec-tag, .sec-pill {
-  font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+/* 评分环 */
+/* 环与说明用一列 flex，而不是把说明绝对定位到环下面：绝对定位在环尺寸
+   变化时（sm/lg）会压到环上——实测截图里「库内最低分」正好叠在圆环下缘。 */
+.sec-ring { position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--space-2); flex: none; }
+.sec-ring > svg { position: relative; }
+.sec-ring svg { display: block; }
+.sec-ring-track { stroke: var(--line-subtle); }
+.sec-ring-value { stroke: var(--primary); transition: stroke-dashoffset var(--duration-panel) var(--easing-ui); }
+.sec-ring--ok .sec-ring-value { stroke: var(--success); }
+.sec-ring--warn .sec-ring-value,
+.sec-ring--mid .sec-ring-value { stroke: var(--color-warning); }
+.sec-ring--bad .sec-ring-value { stroke: var(--danger); }
+.sec-ring--unknown .sec-ring-value { stroke: transparent; }
+.sec-ring-number {
+  position: absolute; top: 0; left: 0; right: 0; height: 92px;
+  display: grid; place-items: center;
+  font-size: var(--font-size-6); font-weight: 650; color: var(--text-heading);
+  font-variant-numeric: tabular-nums;
 }
-.sec-tag.ok, .sec-pill.ok { background: var(--success-soft); color: var(--success); }
-.sec-tag.warn, .sec-pill.warn { background: var(--color-warning-soft); color: #b45309; }
-.sec-tag.bad, .sec-pill.bad { background: var(--danger-soft, #fee2e2); color: var(--danger); }
-.sec-pill.muted { background: #f1f5f3; color: var(--text-3); }
+.sec-ring--sm .sec-ring-number { font-size: var(--font-size-5); height: 64px; }
+.sec-ring-caption { font-size: var(--font-size-1); color: var(--text-muted); white-space: nowrap; }
 
-/* 组件卡片 */
-.sec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
-@media (max-width: 760px) { .sec-grid { grid-template-columns: 1fr; } }
-.sec-card {
-  background: var(--panel, var(--color-surface)); border: 1px solid var(--border);
-  border-radius: 14px; padding: 14px 15px 12px;
+/* ── 异常提示 ───────────────────────────────────────────────────────── */
+.sec-issues { display: grid; gap: var(--space-2); margin-bottom: var(--space-4); }
+.sec-issue {
+  display: flex; gap: var(--space-2); align-items: flex-start;
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-card);
+  background: var(--status-warning-bg); color: var(--status-warning-text);
+  font-size: var(--font-size-caption); border: 1px solid var(--state-caution-line);
 }
-.sec-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.sec-card-name { font-size: 13.5px; font-weight: 600; flex: 1; }
-.sec-card-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 4px 0; color: var(--text-2); }
-.sec-card-row span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
-.sec-card-note { font-size: 11.5px; color: var(--text-3); margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-strong); }
+.sec-issue-icon { flex: none; display: inline-flex; margin-top: 1px; }
+/* 提示条分两档：attention = 防护变差（琥珀）；info = 装个工具就能解锁（中性）。
+   两者都写成琥珀时，「需要安装 osv-scanner」读起来和「扫描器被篡改」一样严重。 */
+.sec-issue[data-tone="info"] {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border-color: var(--line-subtle);
+}
 
-/* 记录表 */
-.sec-section-head { display: flex; justify-content: space-between; align-items: flex-end; margin: 20px 0 10px; flex-wrap: wrap; gap: 6px; }
-.sec-section-title { font-size: 14.5px; font-weight: 650; }
-.sec-section-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
-.sec-table-wrap { background: var(--panel, var(--color-surface)); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
-.sec-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* ── 区块 ───────────────────────────────────────────────────────────── */
+/* 防护项：hero 以下只有这一组行。区块头退化成一个小组标签——
+   信息架构靠「行」而不是「区块」，所以不再需要 section 头。 */
+.sec-section { margin-bottom: var(--space-5); }
+.sec-section-label {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-2); font-weight: 500; color: var(--text-faint);
+}
+.sec-aside-label { font-size: var(--font-size-2); color: var(--text-muted); }
+
+/* 行体：与共享 .ui-accordion__body 的左缩进对齐，内容再收一点边距 */
+.sec-rowbody { display: block; padding-top: var(--space-1); }
+.sec-row-note { margin: 0; font-size: var(--font-size-2); color: var(--text-muted); }
+.sec-row-note b { color: var(--text-secondary); font-weight: 500; }
+.sec-rowfoot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3);
+}
+
+/* 能力覆盖 */
+.sec-rulebar { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+/* 名称一行、状态一行。
+   单行「名称 … 状态」在窄列里会把中文名称逐字换行，状态文字也被挤成
+   一列单字——实测截图里「依赖漏洞扫描」竖排了四行，状态与名称互相重叠。
+   两行布局对任何名称长度都稳定，也不需要 nowrap 与省略号。 */
+.sec-caps {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); gap: var(--space-3);
+  background: var(--surface-card); border: 1px solid var(--line-default);
+  border-radius: var(--radius-card); padding: var(--space-4);
+}
+.sec-cap { display: grid; grid-template-columns: auto 1fr; gap: 2px var(--space-2); font-size: var(--font-size-caption); min-width: 0; }
+.sec-cap > :first-child { grid-row: span 2; align-self: start; margin-top: 3px; }
+.sec-cap-name { color: var(--text-body); min-width: 0; }
+.sec-cap-state { color: var(--text-muted); font-size: var(--font-size-1); min-width: 0; }
+.sec-cap[data-status="absent"] .sec-cap-name { color: var(--text-muted); }
+.sec-cap[data-status="degraded"] .sec-cap-state { color: var(--status-warning-text); }
+.sec-cap[data-status="partial"] .sec-cap-state { color: var(--status-warning-text); }
+
+/* 统计磁贴 */
+/* 库级概览：数字是信息（一行文字），筛选是控件（共享分段控件）。
+   两者合成一排按钮的版本会让页面自己写 button，绕开共享无障碍契约。 */
+/* 行内筛选：数字的唯一载体是分段控件本身；同一句话另有一份视觉隐藏副本供
+   屏幕阅读器一次读完（原先是可见的一行，等于把同一组数字渲染两遍）。 */
+.sec-stats { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
+
+/* ── 记录表 ─────────────────────────────────────────────────────────── */
+.sec-table-wrap {
+  background: var(--surface-card); border: 1px solid var(--line-default);
+  border-radius: var(--radius-window); overflow: hidden;
+}
+.sec-table { width: 100%; border-collapse: collapse; font-size: var(--font-size-3); }
 .sec-table th {
-  text-align: left; font-weight: 500; color: var(--text-3); font-size: 12px;
-  padding: 10px 15px; border-bottom: 1px solid var(--border); background: #f7faf8;
+  text-align: left; font-weight: 500; color: var(--text-muted);
+  font-size: var(--font-size-2); padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line-default); background: var(--surface-subtle);
+  /* 中文表头「检查时间」「提示数」在窄列里会逐字换行，两行表头比省下的
+     那点宽度难读得多。 */
+  white-space: nowrap;
 }
-.sec-table td { padding: 10px 15px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.sec-table td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line-subtle); vertical-align: middle; }
 .sec-table tbody tr:last-child td { border-bottom: none; }
-.sec-id { display: flex; align-items: center; gap: 9px; }
+.sec-table tbody tr:hover { background: var(--surface-subtle); }
+.sec-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.sec-id { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .sec-dot {
-  width: 26px; height: 26px; border-radius: 8px; background: var(--primary-soft);
-  color: var(--primary-text); font-size: 12px; font-weight: 600;
-  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 26px; height: 26px; border-radius: var(--radius-2); background: var(--primary-soft);
+  color: var(--primary-text); font-size: var(--font-size-2); font-weight: 600;
+  display: grid; place-items: center; flex: none;
 }
+.sec-id-body { min-width: 0; }
 .sec-id-name { font-weight: 550; }
-.sec-id-sub { font-size: 11.5px; color: var(--text-3); }
-.sec-score { display: flex; align-items: center; gap: 8px; }
-.sec-score-bar { width: 60px; height: 5px; border-radius: 999px; background: #edf2ef; overflow: hidden; }
-.sec-score-bar i { display: block; height: 100%; border-radius: 999px; background: var(--primary); }
-.sec-score-bar i.mid { background: var(--color-warning); }
-.sec-score-bar i.low { background: var(--danger); }
-.sec-score-num { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
-.sec-time { color: var(--text-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.sec-id-sub { font-size: var(--font-size-1); color: var(--text-muted); }
+.sec-score { display: flex; align-items: center; gap: var(--space-2); }
+.sec-score-bar { width: 60px; height: 5px; border-radius: var(--radius-pill); background: var(--line-subtle); overflow: hidden; }
+/* 与评分环共用同一套分档（data-band 由 scoreBand() 产出），
+   两处各自写阈值会让同一个分数在环和条上显示成不同颜色。 */
+.sec-score-bar i { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--success); }
+.sec-score-bar i[data-band="warn"],
+.sec-score-bar i[data-band="mid"] { background: var(--color-warning); }
+.sec-score-bar i[data-band="bad"] { background: var(--danger); }
+.sec-score-num { color: var(--text-secondary); font-size: var(--font-size-2); font-variant-numeric: tabular-nums; }
+.sec-row-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
 .sec-table-foot {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 11px 15px; border-top: 1px solid var(--border); background: var(--color-surface-4);
+  display: flex; justify-content: space-between; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line-default);
+  background: var(--color-surface-4); flex-wrap: wrap;
 }
-.sec-hint { font-size: 12px; color: var(--text-3); }
+.sec-hint { font-size: var(--font-size-2); color: var(--text-muted); }
 
-/* 操作 + 选择器 + 保护说明 */
-.sec-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-.sec-btn-primary { background: var(--primary); border-color: var(--primary); color: var(--color-surface); }
-.sec-btn-primary:hover { background: var(--color-brand-hover); }
-.sec-link {
-  background: none; border: none; cursor: pointer; font-family: inherit;
-  font-size: 12.5px; color: var(--primary-text); padding: 4px 2px;
+/* ── 技能选择器 ─────────────────────────────────────────────────────── */
+/* 技能选择器：内容渲染在共享 uiDrawer 里（右侧抽屉），不再是页面流里的卡片。
+   抽屉 full-height，所以搜索框固定在顶部、列表自己滚——列表高度取视口减去
+   抽屉头与内边距，使 body 本身不产生第二条滚动条。 */
+.sec-picker-input { width: 100%; margin-bottom: var(--space-2); }
+.sec-picker-list {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
 }
-.sec-link:hover { text-decoration: underline; }
-.sec-link:disabled { color: var(--text-3); cursor: default; text-decoration: none; }
-.sec-picker {
-  display: none; margin-top: 12px; background: var(--panel, var(--color-surface));
-  border: 1px solid var(--border); border-radius: 14px; padding: 12px;
-}
-.sec-picker.open { display: block; }
-.sec-picker-input {
-  width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit;
-  border: 1px solid var(--border-strong); border-radius: 9px; margin-bottom: 10px;
-  color: var(--text); background: var(--color-surface-4); outline: none;
-}
-.sec-picker-input:focus { border-color: var(--primary); }
-.sec-picker-list { max-height: 240px; overflow-y: auto; }
 .sec-picker-item {
-  display: flex; align-items: center; gap: 12px; padding: 8px 6px;
-  border-bottom: 1px solid var(--border); font-size: 13px;
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) 0; border-bottom: 1px solid var(--line-hairline);
+  font-size: var(--font-size-3);
 }
 .sec-picker-item:last-child { border-bottom: none; }
-.sec-picker-name { font-weight: 550; min-width: 150px; }
-.sec-picker-sub { flex: 1; color: var(--text-3); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sec-protect {
-  margin-top: 20px; padding: 13px 16px; border-radius: 12px;
-  background: #f7faf8; border: 1px solid var(--border);
-  font-size: 12.5px; color: var(--text-2); display: flex; gap: 10px; align-items: flex-start;
+/* 两行式：抽屉只有 480px，ID 与名称单行并排放不下，名称会被省略号吃掉。 */
+.sec-picker-text { flex: 1 1 auto; min-width: 0; display: block; }
+.sec-picker-name {
+  display: block; font-weight: 550;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sec-lock {
-  width: 8px; height: 8px; border-radius: 2px; background: var(--text-3);
-  margin-top: 5px; flex: none; opacity: .6;
+.sec-picker-sub {
+  display: block; color: var(--text-muted); font-size: var(--font-size-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sec-picker-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: var(--space-1); }
+
+/* ── 保护说明 ───────────────────────────────────────────────────────── */
+.sec-protect {
+  display: flex; gap: var(--space-2); align-items: flex-start;
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-card);
+  background: var(--surface-subtle); border: 1px solid var(--line-subtle);
+  font-size: var(--font-size-caption); color: var(--text-secondary);
+}
+.sec-protect-icon { flex: none; display: inline-flex; color: var(--text-muted); margin-top: 1px; }
+
+/* ── 组合风险（path-level） ─────────────────────────────────────────── */
+.sec-composition-meta { font-size: var(--font-size-2); color: var(--text-muted); margin-bottom: var(--space-2); }
+.sec-paths { list-style: none; margin: 0 0 var(--space-2); padding: 0; display: grid; gap: var(--space-3); }
+.sec-path {
+  border: 1px solid var(--line-default); border-left-width: 3px;
+  border-radius: var(--radius-card); padding: var(--space-3) var(--space-4);
+  background: var(--surface-card);
+}
+.sec-path[data-severity="high"] { border-left-color: var(--danger); }
+.sec-path[data-severity="medium"] { border-left-color: var(--color-warning); }
+.sec-path-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.sec-path-name { font-weight: 600; font-size: var(--font-size-caption); }
+.sec-path-desc { font-size: var(--font-size-2); color: var(--text-body); margin: var(--space-2) 0; }
+/* 只在数据异常（能力归属不到任何参与者）时才渲染的兜底行。 */
+.sec-path-skills { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
+/* 组合路径图：节点是技能，边是能力交接。
+   几何量全部来自布局而非数据，所以不需要 SVG 例外（评分环的弧长来自分数，才需要）；
+   手算坐标还会在 4 种语言下因文案长度而错位。 */
+.sec-graph {
+  display: flex; align-items: stretch; gap: var(--space-2);
+  /* 不折行：折行之后横箭头就不再成立，方向会被读错。窄到放不下时横向滚动
+     （最小宽度 ≈ 2×148 + 箭头 + 两道间距 ≈ 340px）。 */
+  flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px;
+}
+.sec-graph-node {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1);
+  /* 封顶宽度：不封顶时两个节点会被拉满整行（实测各约 440px），一行三个短标签
+     的节点看起来像一个空表格，而不是图。 */
+  flex: 1 1 148px; max-width: 340px; min-width: 148px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-default); border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+}
+/* 「涉及 N 条路径」是节点上的元信息，不是这个技能的能力；用组合风险行自己的
+   图标把它和上面的能力标签区分开，否则两枚灰底小标签看起来是同一类东西。 */
+.sec-graph-shared { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-muted); }
+.sec-graph-shared-icon { width: 13px; height: 13px; }
+/* 技能 id 是外部数据，可能是 `claude:pdf-tools` 这类长串。共享按钮默认
+   nowrap + 定高，长 id 会顶破节点边框，所以在这个容器内允许它折行。 */
+.sec-graph-node .ui-button {
+  max-width: 100%; height: auto; min-height: var(--control-height);
+  justify-content: flex-start; white-space: normal; text-align: left;
+}
+.sec-graph-node .ui-button__label { overflow-wrap: anywhere; }
+.sec-graph-edge { display: flex; align-items: center; flex: none; color: var(--text-muted); }
+.sec-graph-arrow { width: 18px; height: 18px; }
+
+/* ── 详情抽屉 ───────────────────────────────────────────────────────── */
+/* 抽屉可用宽度只有约 430px：环与元数据并排时元数据被压成一列，
+   头部因此高得离谱。改成可换行，并在窄容器里让元数据保持两列。 */
+.sec-drawer-hero { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; margin-bottom: var(--space-4); }
+.sec-drawer-hero-main { min-width: 220px; flex: 1 1 220px; }
+.sec-drawer-verdict { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-2); }
+.sec-drawer-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: var(--space-2); margin: 0; }
+.sec-drawer-meta dt { font-size: var(--font-size-1); color: var(--text-muted); }
+.sec-drawer-meta dd { margin: 0; font-size: var(--font-size-caption); color: var(--text-body); font-variant-numeric: tabular-nums; }
+.sec-drawer-section { margin-top: var(--space-5); }
+.sec-drawer-title { font-size: var(--font-size-3); font-weight: 650; margin: 0 0 var(--space-1); }
+.sec-drawer-sub { font-size: var(--font-size-2); color: var(--text-muted); margin: 0 0 var(--space-3); }
+.sec-drawer-note {
+  font-size: var(--font-size-2); color: var(--status-warning-text);
+  background: var(--status-warning-bg); border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-3); margin: var(--space-2) 0 0;
+}
+.sec-drawer-alert {
+  font-size: var(--font-size-2); color: var(--danger); background: var(--status-danger-bg, var(--color-danger-soft));
+  border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3);
+}
+.sec-drawer-notices {
+  list-style: none; margin: 0 0 var(--space-3); padding: 0;
+  display: grid; gap: var(--space-1); font-size: var(--font-size-2); color: var(--status-warning-text);
+}
+.sec-drawer-loading { display: grid; gap: var(--space-3); }
+.sec-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); font-size: var(--font-size-2); color: var(--text-muted); }
+.sec-stages .is-active { color: var(--text-body); font-weight: 550; }
+
+.sec-sevbar { margin-bottom: var(--space-3); }
+.sec-findings { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.sec-finding {
+  border: 1px solid var(--line-default); border-left-width: 3px; border-radius: var(--radius-card);
+  padding: var(--space-3) var(--space-4); background: var(--surface-card);
+}
+.sec-finding[data-severity="critical"] { border-left-color: var(--danger); }
+.sec-finding[data-severity="high"] { border-left-color: var(--danger); }
+.sec-finding[data-severity="medium"] { border-left-color: var(--color-warning); }
+.sec-finding[data-severity="low"] { border-left-color: var(--line-strong); }
+.sec-finding[data-severity="info"] { border-left-color: var(--line-subtle); }
+.sec-finding[data-suppressed="1"] { opacity: .72; }
+.sec-finding-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.sec-finding-rule { font-weight: 600; font-size: var(--font-size-caption); }
+.sec-finding-loc {
+  font-size: var(--font-size-2); color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.sec-finding-desc { font-size: var(--font-size-caption); margin: var(--space-2) 0 0; color: var(--text-body); }
+.sec-finding-tags { display: flex; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-2); }
+.sec-finding-meta { display: flex; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-2) 0 0; }
+.sec-finding-meta div { display: flex; gap: var(--space-1); align-items: baseline; }
+.sec-finding-meta dt { font-size: var(--font-size-1); color: var(--text-muted); }
+.sec-finding-meta dd { margin: 0; font-size: var(--font-size-2); color: var(--text-secondary); }
+.sec-finding-fix {
+  display: flex; gap: var(--space-2); margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-control);
+  background: var(--surface-subtle); font-size: var(--font-size-2); color: var(--text-body);
+}
+.sec-finding-fix-label { color: var(--text-muted); flex: none; }
+.sec-finding-refs { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-2); font-size: var(--font-size-1); }
+.sec-finding-refs a { color: var(--primary-text); }
+.sec-finding-actions { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
+.sec-finding-accepted { font-size: var(--font-size-1); color: var(--text-muted); }
+
+.sec-breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.sec-breakdown li { display: grid; grid-template-columns: minmax(90px, 1fr) 2fr auto auto; gap: var(--space-2); align-items: center; font-size: var(--font-size-2); }
+.sec-breakdown-name { color: var(--text-body); }
+.sec-breakdown-bar { height: 5px; border-radius: var(--radius-pill); background: var(--line-subtle); overflow: hidden; }
+.sec-breakdown-bar i { display: block; height: 100%; background: var(--color-warning); border-radius: var(--radius-pill); }
+.sec-breakdown-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.sec-breakdown-count { color: var(--text-muted); white-space: nowrap; }
+
+.sec-framework-group { margin-bottom: var(--space-2); }
+.sec-framework-label { font-size: var(--font-size-2); color: var(--text-muted); margin-bottom: var(--space-1); }
+.sec-framework-tags, .sec-tags { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.sec-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: 0; }
+.sec-kv dt { font-size: var(--font-size-1); color: var(--text-muted); }
+.sec-kv dd { margin: 0; font-size: var(--font-size-caption); color: var(--text-body); font-variant-numeric: tabular-nums; }
+.sec-limitations { margin: 0; padding-left: var(--space-4); font-size: var(--font-size-2); color: var(--text-muted); display: grid; gap: 2px; }
+.sec-export-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+/* 窄屏：抽屉里的两列网格压缩成一列，避免 1fr 列被挤成不可读宽度。 */
+@media (max-width: 720px) {
+  .sec-hero { gap: var(--space-3); }
+  .sec-breakdown li { grid-template-columns: 1fr auto; }
+  .sec-breakdown-bar { display: none; }
+  .sec-caps { grid-template-columns: 1fr; }
+  .sec-table th:nth-child(4), .sec-table td:nth-child(4) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sec-ring-value { transition: none; }
+  .sec-stat { transition: none; }
 }
 
 /* ── 导入检查结果弹窗（W5，文件夹/URL 统一）────────────────────────── */
@@ -32516,6 +33091,11 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 /* 条目：无卡片外框，只有底部分隔线；hover 出浅底以便定位。 */
 .kb-atc__row {
   display: flex;
+  /* 必须允许换行：行内「更多」菜单与展开的表单都是 `flex: 1 0 100%` 的子项，
+     它们是按"换到下一行占满整行"设计的。不换行时它们会和原文/按钮挤在同一行，
+     把 `.kb-atc__row-main`（min-width: 0）压成 0 宽——真机现象就是点开「更多」后
+     整行文字被挤成竖条、按钮错位，连「改写法」表单都点不准（2026-09-23 反馈）。 */
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2) var(--space-2) 0;
@@ -32926,18 +33506,31 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-atc__row-menu {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1);
   flex: 1 0 100%;
   margin-top: var(--space-1);
   padding-top: var(--space-1);
   border-top: 1px solid var(--line-default);
 }
+/* 展开的表单：输入框吃满剩余宽度，确定/取消保持按钮自身宽度。
+   曾经是 `flex-direction: column`，子项被拉伸到整行宽（748px 的"确定"按钮）——
+   配合上面的不换行行布局，就是用户看到的"大面积错位"。 */
 .kb-atc__row-form {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
   gap: var(--space-1);
   flex: 1 0 100%;
   padding-top: var(--space-1);
+}
+.kb-atc__row-form .ui-field {
+  min-width: 0;
+}
+/* 表单里附加的上下文提示/已加白清单不是"第三列"，它们各占一整行。 */
+.kb-atc__row-form > .kb-atc__sync-note,
+.kb-atc__row-form > .kb-atc__allow-list {
+  grid-column: 1 / -1;
 }
 .kb-atc__allow-list {
   display: flex;
@@ -33174,8 +33767,12 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 
 /* ── Recall projection receipt ───────────────────────────────────────────
    Model-selected assets are governance events, not assistant prose. Keep the
-   receipt compact in the chat timeline and disclose details progressively. */
-.chat-recall-projection-card {
+   receipt compact in the chat timeline and disclose details progressively.
+   引用卡片家族唯一壳源（2026-09-28）：回执卡与记忆卡（.chat-recall-citations，
+   见上方 Recall 引用反馈段）的壳与头部共用这组分组选择器——单一事实源，
+   两卡各自段落只写内容行；两卡要差异只能差在内容，不能差在壳。 */
+.chat-recall-projection-card,
+.chat-recall-citations {
   margin: 6px 0;
   padding: 9px 11px;
   border: 1px solid var(--border);
@@ -33192,37 +33789,54 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .chat-message.is-coalesced {
   display: none !important;
 }
-.chat-recall-projection-card.is-model-selected {
-  max-width: 620px;
-}
-.chat-recall-projection-head {
+.chat-recall-projection-head,
+.chat-recall-citations-head {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  margin-bottom: 8px;
 }
-.chat-recall-projection-title {
+/* 头部图标：两卡同一条头部语言（图标 + 标题 + 右侧状态）。图标只从 icons.js
+   出（uiIconHtml），原语缺席时 JS 侧渲染空串。 */
+.chat-recall-projection-icon,
+.chat-recall-citations-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--primary);
+}
+.chat-recall-projection-icon .ui-icon,
+.chat-recall-citations-icon .ui-icon { width: 14px; height: 14px; }
+.chat-recall-projection-title,
+.chat-recall-citations-title {
   flex: 1 1 auto;
   min-width: 0;
 }
-.chat-recall-projection-title strong {
+.chat-recall-projection-title strong,
+.chat-recall-citations-title strong {
   display: block;
   color: var(--text);
   font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   line-height: 1.35;
 }
-.chat-recall-projection-title small {
+.chat-recall-projection-title small,
+.chat-recall-citations-title small {
   display: block;
   margin-top: 2px;
   color: var(--muted);
   font-size: var(--font-size-1);
 }
-.chat-recall-projection-badge,
-.chat-recall-projection-status {
+.chat-recall-projection-status,
+.chat-recall-feedback-status {
   flex: 0 0 auto;
   margin-top: 1px;
+  color: var(--muted);
+  font-size: var(--font-size-1);
 }
 .chat-recall-projection-badge {
+  flex: 0 0 auto;
+  margin-top: 1px;
   padding: 2px 6px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--primary) 10%, transparent);
@@ -33230,15 +33844,10 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-size: var(--font-size-1);
   font-weight: var(--font-weight-semibold);
 }
-.chat-recall-projection-status {
-  color: var(--muted);
-  font-size: var(--font-size-1);
-}
 .chat-recall-projection-summary-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
-  margin-top: 6px;
 }
 .chat-recall-projection-details {
   margin-top: 7px;
@@ -33289,6 +33898,27 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   color: var(--text);
   font-size: var(--font-size-2);
   font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.chat-recall-projection-open-asset.ui-button {
+  display: flex;
+  justify-content: flex-start;
+  max-width: 100%;
+  min-height: 0;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--primary);
+  font-size: var(--font-size-2);
+  font-weight: var(--font-weight-semibold);
+  text-align: left;
+}
+.chat-recall-projection-open-asset.ui-button:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.chat-recall-projection-open-asset .ui-button__label {
+  text-align: left;
   overflow-wrap: anywhere;
 }
 .chat-recall-projection-asset small,
@@ -33391,4 +34021,64 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .composer-members-count {
   color: var(--muted);
   font-size: var(--font-size-ui-sm);
+}
+
+
+/* ── 019 会话侧衔接：认知衔接行 ── 方案 A 二迁（2026-09-30）：从会话头部独立
+   槽移入标题栏，绝对定位居中（与标题/右侧按钮并列，不挤占消息流）；去卡片壳，
+   muted meta 行；「去处理」为链接字；叉 = 本会话关闭（偏好存本机 localStorage，
+   跨重启）。label 超宽省略，不撑爆标题栏。 */
+.chat-cognition-strip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: min(46%, 480px);
+  padding: 0;
+}
+.chat-cognition-strip[hidden] {
+  display: none;
+}
+.chat-cognition-strip-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--font-size-1);
+  color: var(--muted);
+}
+.chat-cognition-strip-icon {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+}
+.chat-cognition-strip-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-cognition-strip-goto.ui-button {
+  flex: 0 0 auto;
+  height: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: var(--font-size-1);
+  cursor: pointer;
+}
+.chat-cognition-strip-goto.ui-button:hover {
+  background: transparent;
+  color: var(--primary);
+  text-decoration: underline;
+}
+.chat-cognition-strip .chat-cognition-strip-dismiss {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
 }

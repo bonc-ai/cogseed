@@ -51,6 +51,7 @@ import {
   userSystemSkillsDir,
   globalSkillRoots,
 } from '../../paths';
+import { isContentDisabled } from '../../features/marketplace/installed-version';
 import { enabledPackageSkillRoots, packageSkillRoots, readPackagesRegistry } from '../../features/packages';
 import { companionSkillsRootIfPopulated, companionPackageForDir } from '../../features/package_skills';
 import { getActiveUserId } from '../../features/users';
@@ -984,8 +985,8 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
   const discoveredSpecs = loader.list();
   let specs: typeof discoveredSpecs;
   const disabled = opts.disabledIds ? new Set(opts.disabledIds) : null;
-  const filterDisabled = (list: typeof discoveredSpecs) =>
-    disabled && disabled.size ? list.filter((s) => !disabled.has(s.id)) : list;
+  const filterDisabled = (list: typeof discoveredSpecs) => list.filter((s) =>
+    !disabled?.has(s.id) && !isContentDisabled(getActiveUserId(), s.id));
   // Resolve roots once per call — `getActiveUserId` may have rotated since
   // `getLoader` (cached) was first instantiated; users.ts switches uid via
   // `activateUser` which calls `invalidateSkills` to drop the loader cache,

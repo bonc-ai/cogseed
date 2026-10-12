@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  QUOTE_MARKERS,
   REWRITE_MIN_RETENTION,
   REWRITE_MAX_RETENTION,
   buildRewriteRequest,
@@ -473,5 +474,17 @@ describe('⑥ 结构合并与渲染', () => {
     expect(md).toContain('| Cogseed | coxy、cox | 项目文档 |');
     expect(md).toContain('未决项');
     expect(md).toContain('本次运行统计');
+  });
+});
+
+// ── 引例判据的唯一来源（specs/013 T005：只加 export，词表零改动）─────────────
+describe('⑦ QUOTE_MARKERS 导出共享（引例判据唯一处定义）', () => {
+  it('词表内容逐字不变：17 个 marker，含 2026-09-16 事故原词「一会儿叫」', () => {
+    expect(QUOTE_MARKERS).toHaveLength(17);
+    expect(QUOTE_MARKERS).toContain('一会儿叫');
+    expect(QUOTE_MARKERS).toContain('拼写');
+    expect(QUOTE_MARKERS).toContain('词汇表');
+    // 事故判据的三个"识别"系 marker 都在（扫描链共享的就是这一份，不复制第二份）
+    expect(QUOTE_MARKERS.filter((m) => m.startsWith('识别'))).toEqual(['识别成', '识别错', '识别不准']);
   });
 });

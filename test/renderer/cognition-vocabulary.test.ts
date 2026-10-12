@@ -181,8 +181,7 @@ describe('未知枚举不裸出机器码（未命中走兜底文案）', () => {
   /** views.js 内联字典的兜底 key。 */
   const VIEWS_FALLBACK_KEYS = [
     'cognition.asset_status_unknown',
-    'cognition.asset_origin_status_other',
-    'cognition.candidate_status_other',
+      'cognition.candidate_status_other',
     'cognition.proof_event_other',
     'cognition.capture_detail_actor_unknown',
   ];

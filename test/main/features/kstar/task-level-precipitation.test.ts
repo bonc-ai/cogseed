@@ -168,9 +168,10 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0].sourceRefs.some((ref) => ref.kind === 'authorized_external_system')).toBe(false);
     expect(JSON.stringify(result.proposals)).not.toContain('用户 A 的私有工作流');
-    expect(result.createdAssetIds).toHaveLength(1);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    expect((await assets.listAbilityAssets('user-b5')).some((asset) => asset.id === result.createdAssetIds[0])).toBe(true);
+    // specs/016 T014：B 本地沉淀改道写经验条目（原「资产」断言 → 经验断言）。
+    expect(result.experienceIds).toHaveLength(1);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    expect((await experiences.listExperiences('user-b5')).some((exp) => exp.id === result.experienceIds[0])).toBe(true);
   });
 
   it('aggregates two episodes into one skill_method asset carrying both episodes evidence', async () => {
@@ -198,25 +199,24 @@ describe('KStar task-level precipitation (B5)', () => {
     // Strongest review drives the signal (confidence 0.9 > 0.6).
     expect(result.proposals[0].learningSignal?.confidence).toBe(0.9);
 
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const abilityAssets = await assets.listAbilityAssets('user-b5');
-    const created = abilityAssets.filter((asset) => asset.id === result.createdAssetIds[0]);
+    // specs/016 T013/T014（FR-001）：聚合线 create 提案改道写经验条目
+    // （skill_method 分支 → workflow 类型），不再进候选池/资产库——经验没有
+    // 「候选→晋升」的通道，也没有成熟度/lifecycleStatus 这些资产口径（D12）。
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const stored = await experiences.listExperiences('user-b5');
+    const created = stored.filter((exp) => exp.id === result.experienceIds[0]);
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({
-      type: 'skill_method',
+      experienceType: 'workflow',
       status: 'active',
-      maturity: 'seed',
-      // Honest confirmation semantics: promoted by the system actor via the
-      // unified candidate pool — never claims user confirmation (P0-2).
-      // 需求级沉淀走的是 KStar 自进化线，来源标签必须是 system_precipitated_*，
-      // 不能和会话自动抽取线混成同一个值。
-      lifecycleStatus: 'user_confirmed_unverified',
+      scope: 'report',
     });
-    // Unified pool: the promoted candidate exists (confirmed) behind the asset.
+    // 隔离双向钉住：候选池与资产库对 create 线零产出。
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const saved = await candidates.listRecallCandidates('user-b5');
-    expect(saved.some((c) => c.status === 'confirmed')).toBe(true);
-    expect(result.candidateIds).toHaveLength(1);
+    expect(await candidates.listRecallCandidates('user-b5')).toHaveLength(0);
+    expect(result.candidateIds).toEqual([]);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    expect(await assets.listAbilityAssets('user-b5')).toHaveLength(0);
   });
 
   it('carries persisted Projection, Forecast, Episode, Review and delta provenance into candidates', async () => {
@@ -292,7 +292,7 @@ describe('KStar task-level precipitation (B5)', () => {
     });
   });
 
-  it('is idempotent: re-running precipitation does not duplicate assets', async () => {
+  it('is idempotent: re-running precipitation does not duplicate experiences', async () => {
     const epA = episode('kse-b5-ida', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
     await seedEpisode(epA);
     await seedReview(epA, learningReview);
@@ -302,10 +302,12 @@ describe('KStar task-level precipitation (B5)', () => {
     const first = await precipitation.precipitateRequirementLevel('user-b5', requirement);
     const second = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
-    expect(second.createdAssetIds).toEqual(first.createdAssetIds);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const abilityAssets = await assets.listAbilityAssets('user-b5');
-    expect(abilityAssets.filter((asset) => asset.id === first.createdAssetIds[0])).toHaveLength(1);
+    // specs/016 T014：create 线的去重语义改为「经验不重复」——经验 id 由
+    // source+原序稳定派生，createExperience 同 id 返回既有记录。
+    expect(second.experienceIds).toEqual(first.experienceIds);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const stored = await experiences.listExperiences('user-b5');
+    expect(stored.filter((exp) => exp.id === first.experienceIds[0])).toHaveLength(1);
   });
 
   it('emits nothing when no review clears the evidence gate', async () => {
@@ -318,7 +320,7 @@ describe('KStar task-level precipitation (B5)', () => {
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
     expect(result.proposals).toHaveLength(0);
-    expect(result.createdAssetIds).toHaveLength(0);
+    expect(result.experienceIds).toHaveLength(0);
     const assets = await import('../../../../src/main/features/recall/asset-service');
     expect(await assets.listAbilityAssets('user-b5')).toHaveLength(0);
   });
@@ -384,7 +386,7 @@ describe('KStar task-level precipitation (B5)', () => {
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
     expect(result.proposals).toHaveLength(0);
-    expect(result.createdAssetIds).toHaveLength(0);
+    expect(result.experienceIds).toHaveLength(0);
   });
 
   it('precipitates when the ΔR signal clears the noise gate (|ΔR| >= 0.15)', async () => {
@@ -406,7 +408,7 @@ describe('KStar task-level precipitation (B5)', () => {
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
     expect(result.proposals).toHaveLength(1);
-    expect(result.createdAssetIds).toHaveLength(1);
+    expect(result.experienceIds).toHaveLength(1);
   });
 
   it('precipitates a process-experience lesson even when the task met expectations (met_expected + lesson)', async () => {
@@ -430,7 +432,7 @@ describe('KStar task-level precipitation (B5)', () => {
 
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0].judgment).toContain('type assertions');
-    expect(result.createdAssetIds).toHaveLength(1);
+    expect(result.experienceIds).toHaveLength(1);
   });
 
   it('does not precipitate a routine met_expected without a lesson (process-experience noise gate)', async () => {
@@ -453,7 +455,7 @@ describe('KStar task-level precipitation (B5)', () => {
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
     expect(result.proposals).toHaveLength(0);
-    expect(result.createdAssetIds).toHaveLength(0);
+    expect(result.experienceIds).toHaveLength(0);
   });
 
   it('does not aggregate an excluded-only secondary attribution into a reusable asset', async () => {
@@ -490,7 +492,7 @@ describe('KStar task-level precipitation (B5)', () => {
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
     await expect(precipitation.precipitateRequirementLevel('user-b5', requirement)).resolves.toMatchObject({
       proposals: [],
-      createdAssetIds: [],
+      experienceIds: [],
     });
   });
 });

@@ -87,6 +87,39 @@ describe('committed projection knowledge', () => {
       .rejects.toMatchObject({ code: 'projection_not_committed' });
   });
 
+  it('正式个人资产的画像镜像携带真实治理字段，不再伪造 onto-/bud/v1', async () => {
+    const assetService = await import('../../../../src/main/features/recall/asset-service');
+    const now = new Date().toISOString();
+    const created = await assetService.createAbilityAsset('user-a', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'aa-personal-mirror',
+      candidateId: 'cand-personal-mirror', sourceCandidateIds: ['cand-personal-mirror'],
+      reviewDecisionId: 'rd_personal_mirror',
+      type: 'personal', title: '沟通语言', statement: '与该用户对话一律使用中文。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-personal-mirror' }],
+      scope: 'general', status: 'active', lifecycleStatus: 'user_confirmed_unverified',
+      maturity: 'bud', version: '1',
+      createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: 'mirror fidelity test' });
+    // 初始 maturity 被 createAbilityAsset 强制为 bud；抬到 transfer_validated
+    // 走 production 合法入口，制造「库内真实成熟度 ≠ 镜像伪造值」的场景。
+    await assetService.setAbilityAssetMaturity('user-a', created.id, 'transfer_validated');
+
+    const { loadOntologyAssets } = await import('../../../../src/main/features/recall/projection-knowledge');
+    const entries = await loadOntologyAssets('user-a');
+
+    // 镜像必须如实：治理字段取源资产真值。伪造（onto-<sha>/v1/bud）会让注入
+    // 块显示与真实记录矛盾的成熟度——自检曾据此误判「画像通道绕过闸门」。
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: created.id,
+      version: created.version,
+      maturity: 'transfer_validated',
+      title: created.title,
+      scope: created.scope,
+    });
+    expect(entries[0]!.id).not.toMatch(/^onto-/);
+  });
+
   it('cuts ontology titles at sentence boundaries instead of mid-word (T1.4)', async () => {
     const paths = await import('../../../../src/main/paths');
     const profileFile = paths.userProfileFile('user-a');

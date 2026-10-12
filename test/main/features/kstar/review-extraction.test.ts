@@ -3,6 +3,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// 标题闸门（设计 3.2）后晋升链对不合规 summary 走 LLM 起标题；本文件的候选
+// 由 KStar 抽取/即时直投内生生成（summary＝模板拼接或正文首句），单测无模型，
+// mock 出确定性合规标题（与 asset-title-suggestion.test.ts 同一边界口径）。
+vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({
+  suggestAbilityAssetTitle: async () => ({ title: '模型重起的样本标题' }),
+}));
+
+
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 

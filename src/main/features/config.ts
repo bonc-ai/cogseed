@@ -68,6 +68,11 @@ export interface UserPreferences {
    * `COGSEED_METACOGNITION='0'` remains a higher-priority kill switch.
    * Reads go through `features/metacognition.isFeatureEnabled`. */
   metacognition_enabled?: boolean;
+  /** Close-to-tray (keep running in the background) toggle. undefined / any
+   * non-false value → treated as enabled, matching `metacognition_enabled`;
+   * only an explicit false closes the window for real. Stored per-uid in the
+   * same preferences file as every other settings toggle. */
+  close_to_tray_enabled?: boolean;
   /** Thinking strength for chat model calls: 'auto' (model default),
    *  'off' | 'low' | 'high' forwarded to the runner's thinkingLevel. */
   thinking_level?: 'auto' | 'off' | 'low' | 'high';
@@ -299,6 +304,20 @@ export function getMetacognitionEnabled(): boolean {
 
 export function setMetacognitionEnabled(enabled: boolean): boolean {
   writePreferences({ metacognition_enabled: !!enabled });
+  return !!enabled;
+}
+
+// ── Close-to-tray (background run) ───────────────────────────────────────
+// Defaults to ON: never-written = undefined → treated as true. Reads and
+// writes go through the per-uid preferences file, same as metacognition.
+
+export function getCloseToTrayEnabled(): boolean {
+  const v = readPreferences().close_to_tray_enabled;
+  return v !== false;
+}
+
+export function setCloseToTrayEnabled(enabled: boolean): boolean {
+  writePreferences({ close_to_tray_enabled: !!enabled });
   return !!enabled;
 }
 

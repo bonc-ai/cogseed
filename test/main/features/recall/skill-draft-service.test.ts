@@ -59,6 +59,18 @@ vi.mock('../../../../src/main/features/recall/context-projection', () => ({
     omittedRefs: [],
     status: 'confirmed',
   }) : undefined),
+  readContextProjection: vi.fn(async (_userId: string, projectionId: string) => {
+    if (projectionId !== 'proj-auto-skill-context' || !modelMocks.projectionAssetIds.length) {
+      throw new Error('test projection is unavailable');
+    }
+    return {
+      id: projectionId,
+      assetIds: [...modelMocks.projectionAssetIds],
+      sourceRefs: [],
+      omittedRefs: [],
+      status: 'confirmed',
+    };
+  }),
 }));
 vi.mock('../../../../src/main/features/p3394', () => ({
   listExperienceCandidates: vi.fn(async () => []),

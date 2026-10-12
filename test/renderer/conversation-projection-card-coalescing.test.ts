@@ -95,7 +95,7 @@ describe('model-selected projection sidecar coalescing', () => {
     expect(source).toContain("message?.projection_receipt?.authorization === 'model_selected'");
     expect(source).toContain("message?.recall_projection_card?.presentation === 'sidecar'");
     expect(source).toContain('msgDiv.hidden = true;');
-    expect(source).toContain("if (message.recall_projection_card) host.dataset.recallProjectionTransport = 'sidecar';");
+    expect(source).toContain("if (message.recall_projection_card) cardHost.dataset.recallProjectionTransport = 'sidecar';");
     expect(source).toContain('const projectionCardForBubble = _projectionReceiptForMessage(message)');
   });
 
@@ -109,16 +109,19 @@ describe('model-selected projection sidecar coalescing', () => {
     expect(_projectionReceiptForMessage({})).toBeNull();
   });
 
-  it('renders one card on the final reply, replaces the citation footer, and hides the standalone reply', () => {
+  it('renders one card on the final reply, merges projection into the memory card, and hides the standalone reply', () => {
     expect(source).toContain('const coalescedProjectionMatch = role === \'assistant\'');
     expect(source).toContain('const coalescedProjectionSidecar = coalescedProjectionMatch?.sidecar || null');
     expect(source).toContain('_findProjectionSidecar(container, message)');
     expect(source).toContain("projectionId: coalescedProjectionMatch.projectionId");
     expect(source).toContain('const projectionCardForBubble = _projectionReceiptForMessage(message)');
-    expect(source).toContain("const recallCitationsHtml = role === 'assistant' && !hasProjectionCard");
+    // 两卡互斥抑制已删（拍板项 #8）：投影在场不再抑制引用行——投影数据并入
+    // 同一张「本次使用的记忆」卡。
+    expect(source).toContain("const recallCitationsHtml = role === 'assistant'");
+    expect(source).not.toContain('!hasProjectionCard');
     expect(source).toContain('const contentHtml = suppressProjectionTransportProse');
     expect(source).toContain('coalescedProjectionSidecar.hidden = true;');
-    expect(source).toContain('window.mountRecallProjectionCard(host, projectionCardForBubble, {');
+    expect(source).toContain('window.mountRecallProjectionCard(cardHost, projectionCardForBubble, {');
     expect(source).toContain('if (message.recall_projection_card?.projectionId) {');
     expect(source).toContain('msgDiv.dataset.recallProjectionId');
   });

@@ -27,6 +27,7 @@
 
 import { createLogger } from '../logger';
 import { safeId } from '../storage';
+import type { RecallAgentReadContext } from './recall/prompt-injection';
 import {
   getRoleTemplate,
   listRoleTemplates,
@@ -41,6 +42,7 @@ import {
   readContentById,
   readTemplateFileText,
   appendExistingTemplateFieldValueToRef,
+  removeTemplateFieldValuesForRecallAsset,
   readGroups,
 } from './personal_ontology_template_files';
 import { listGroups } from './personal_ontology_groups';
@@ -63,7 +65,7 @@ const log = createLogger('personal-ontology-contract');
  *  都不会以此开头，所以前缀足以把 contract ref 与历史 id 区分开。 */
 const REF_PREFIX = 'po1';
 
-/** 普通记忆分组（非模板）。分组没有模板那样的稳定业务 id，只能用 group_id。 */
+/** 普通本体分组（非模板）。分组没有模板那样的稳定业务 id，只能用 group_id。 */
 interface PlainGroupRef {
   k: 'g';
   /** 台账 group_id。 */
@@ -339,9 +341,28 @@ export function getRoleScenario(scenarioId: string): RoleScenarioSummary | undef
 export async function getRoleProfileForRuntime(
   uid: string,
   templateIds: ReadonlyArray<string>,
+  readContext: RecallAgentReadContext = {},
 ): Promise<string> {
   try {
     if (!safeId(uid) || !templateIds?.length) return '';
+    // Field values copied from a formal asset are references, not a second source
+    // of truth. Resolve them from the live asset and apply the same runtime gate
+    // as other task-time reads; stale, paused, restricted, or out-of-scope copies
+    // must not leak through the role-template prompt path.
+    let projectedAssets = new Map<string, string>();
+    try {
+      const [{ listAbilityAssets }, { filterRecallAssetsForAgentRead }] = await Promise.all([
+        import('./recall/asset-service'),
+        import('./recall/prompt-injection'),
+      ]);
+      const assets = (await listAbilityAssets(uid)).filter((asset) => asset.type === 'personal');
+      const eligible = await filterRecallAssetsForAgentRead(uid, assets, readContext);
+      projectedAssets = new Map(eligible.map((asset) => [asset.id, String(asset.statement || '').trim()]));
+    } catch (error) {
+      log.warn('asset-backed role profile values unavailable; excluding projections', {
+        error: (error as Error).message,
+      });
+    }
     const seen = new Set<string>();
     const allLines: string[] = [];
     for (const tid of templateIds) {
@@ -355,8 +376,13 @@ export async function getRoleProfileForRuntime(
       for (const sec of content.sections) {
         for (const [fieldName, values] of Object.entries(sec.fields)) {
           if (!values.length) continue; // 空坑不注入
-          // 只取值本身：来源标记与 @proj 标记是 PO 内部账务，不进上下文
-          lines.push(`- ${sec.title} · ${fieldName}: ${values.map((v) => v.value).join('、')}`);
+          // 只取值本身：来源和关联标记是 PO 内部账务，不进上下文。
+          const visibleValues = values.flatMap((value) => {
+            if (!value.recallAssetId) return [value.value];
+            const current = projectedAssets.get(value.recallAssetId);
+            return current ? [current] : [];
+          });
+          if (visibleValues.length) lines.push(`- ${sec.title} · ${fieldName}: ${visibleValues.join('、')}`);
         }
       }
       if (lines.length) allLines.push(`### 角色「${tplName}」`, ...lines);
@@ -387,7 +413,7 @@ export interface OntologyEntryRef {
 }
 
 /**
- * 可 @ 引用的本体条目：普通记忆分组（平铺）+ 已安装模板的每个分节
+ * 可 @ 引用的本体条目：普通本体分组（平铺）+ 已安装模板的每个分节
  * （带 parentId/parentLabel 供渲染层折叠与搜索）。
  * 顺序：普通分组在前（台账顺序），模板分节在后（模板目录顺序 × 文件分节顺序）。
  */
@@ -708,6 +734,7 @@ export async function appendRoleTemplateFieldValue(
   value: string,
   source: string,
   project?: string,
+  recallAssetId?: string,
 ): Promise<AppendFieldValueResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const decoded = decodeOntologyRef(fieldRef);
@@ -732,10 +759,19 @@ export async function appendRoleTemplateFieldValue(
     value,
     source,
     project,
+    recallAssetId,
   );
   return res.ok
     ? { ok: true, templateId: decoded.t, section: slot.section, fieldName: slot.fieldName }
     : { ok: false, error: res.error };
+}
+
+/** Remove all values owned by one formal asset from installed role templates. */
+export async function removeRoleTemplateValuesForRecallAsset(
+  uid: string,
+  recallAssetId: string,
+): Promise<{ ok: boolean; removed: number; error?: string }> {
+  return removeTemplateFieldValuesForRecallAsset(uid, recallAssetId);
 }
 
 // ── T-box 白名单（原 candidates.ts::tboxFields / profile-sync::tboxCatalog）──

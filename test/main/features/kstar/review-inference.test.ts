@@ -5,7 +5,7 @@ vi.mock('../../../../src/main/features/recall/asset-service', () => ({
   readAbilityAsset: vi.fn(async (userId: string, assetId: string) => ({
     id: assetId, title: 'Decision log rule', type: 'rule', status: 'active',
     statement: 'Keep every architecture decision in the shared decision log.',
-    scope: 'general', version: '2', activeVersion: '1',
+    scope: 'general', maturity: 'transfer_validated', evidenceRefs: [], version: '2', activeVersion: '1',
     createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
   })),
 }));

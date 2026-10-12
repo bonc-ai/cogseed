@@ -19,6 +19,10 @@ import { createCrossSessionMemoryTool } from '../../../../src/core-agent/src/too
 import { createMetacognitionTool } from '../../../../src/core-agent/src/tools/metacognition-tool';
 import { createLocalTools, createFileTools } from '../../../../src/main/model/core-agent/local-tools';
 import { createKbTools } from '../../../../src/main/model/core-agent/kb-tools';
+import { createRecallTools } from '../../../../src/main/model/core-agent/recall-tools';
+import { createAssetStewardTools } from '../../../../src/main/model/core-agent/asset-steward-tools';
+import { createPersonalOntologyTools } from '../../../../src/main/model/core-agent/personal-ontology-tools';
+import { createExperienceTools } from '../../../../src/main/model/core-agent/experience-tools';
 import { createChatHistoryTools } from '../../../../src/main/model/core-agent/chat-history-tools';
 import { createMessagingTools } from '../../../../src/main/model/core-agent/messaging-tools';
 import { createImageGenTool } from '../../../../src/main/model/core-agent/image-gen-tool';
@@ -105,6 +109,14 @@ function enumerateAllInjectedTools(): AgentTool[] {
   }));
   tools.push(...createFileTools({ userId: 'testuid', cid: 'testcid' }));
   tools.push(...createKbTools({ userId: 'testuid' }));
+  // recall 组的三个工厂都要枚举到，否则这一组工具整体漏在反漂移之外
+  // （2026-09-25 补：此前 createRecallTools / createAssetStewardTools /
+  //  createPersonalOntologyTools 都没被调用，catalog 少一行也不会变红）。
+  tools.push(...createRecallTools({ userId: 'testuid' }));
+  tools.push(...createAssetStewardTools({ userId: 'testuid' }));
+  tools.push(...createPersonalOntologyTools({ userId: 'testuid' }));
+  // 经验目录工厂（specs/016 T024）：同样必须枚举，漏了它 catalog 少两行也不会红。
+  tools.push(...createExperienceTools({ userId: 'testuid' }));
   tools.push(...createChatHistoryTools({ userId: 'testuid' }));
   tools.push(...createMessagingTools({ userId: 'testuid', cid: 'testcid' }));
   tools.push(createImageGenTool({ userId: 'testuid', cid: 'testcid' }));
@@ -192,6 +204,14 @@ function toolByName(name: string): AgentTool {
 describe('tool-catalog', () => {
   it('TOOL_CATALOG covers every tool name injected by runner (anti-drift)', () => {
     const injected = enumerateAllInjectedToolNames();
+    // 枚举本身也要覆盖到 recall 组：工厂没被调用时这一组会整体隐身，
+    // 反漂移就成了一句空话（2026-09-25 补的洞）。
+    for (const name of [
+      'search_ability_assets', 'personal_ontology_fields',
+      'list_ability_assets', 'read_ability_asset',
+    ]) {
+      expect(injected.has(name), `enumerateAllInjectedTools 漏了 ${name}`).toBe(true);
+    }
     const catalog = new Set(TOOL_CATALOG.map((e) => e.name));
     const missing = [...injected].filter((n) => !catalog.has(n));
     expect(missing, `Injected tools missing from TOOL_CATALOG: ${missing.join(', ')}`).toEqual([]);
@@ -200,6 +220,26 @@ describe('tool-catalog', () => {
   it('TOOL_CATALOG has no duplicate names', () => {
     const names = TOOL_CATALOG.map((e) => e.name);
     expect(names.length).toBe(new Set(names).size);
+  });
+
+  it('declares the ability-asset steward surface in the recall group with no extra gate', () => {
+    // 资产管家的 6 个写工具 + 3 个读工具（specs/008 US-401/402；第 3 个读工具是
+    // 待审批提议清单，2026-09-25 因"模型拿不到待审批的内容"补的）。这些工具读写的
+    // 是 <uid> 数据域里的资产记录，不碰 shell / 文件系统，所以**不该**挂
+    // localExec；也不按 agent 限定——主会话与 group_chat 各 actor 共用同一面。
+    // 少了 / 多了一层权限门，会直接改变"模型能不能动手"的产品口径。
+    const stewardTools = [
+      'list_ability_assets', 'read_ability_asset', 'list_asset_change_proposals',
+      'edit_ability_asset', 'merge_ability_assets', 'archive_ability_asset',
+      'delete_ability_asset', 'restore_ability_asset', 'rollback_ability_asset',
+    ];
+    for (const name of stewardTools) {
+      const entry = TOOL_CATALOG.find((e) => e.name === name);
+      expect(entry, `missing catalog row: ${name}`).toBeTruthy();
+      expect(entry!.group, name).toBe('recall');
+      expect(entry!.permission, `${name} must not require localExec`).toBeUndefined();
+      expect(entry!.ownerAgent, `${name} must not be owner-scoped`).toBeUndefined();
+    }
   });
 
   it('provider tool definitions preserve descriptions without a hard length cap', () => {
@@ -257,6 +297,9 @@ describe('tool-catalog', () => {
       create_pptx: ['slides', 'shapes', 'images', 'path'],
       cross_session_memory: ['remember', 'agent', 'shared', 'user', 'routing', 'language', 'proper nouns', 'add', 'replace', 'remove', 'list'],
       metacognition: ['competence', 'strategies', 'content limits', 'rejected', 'condense', 'read', 'write'],
+      list_ability_assets: ['全量', 'offset', '总数', '已删除'],
+      read_ability_asset: ['chunk', '2000', '不可用'],
+      list_asset_change_proposals: ['待审批', '处置权在用户', 'state'],
     };
 
     const missing: string[] = [];

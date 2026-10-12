@@ -190,7 +190,21 @@
       { title: '需求证据整理', description: '把多来源反馈整理成可追溯的问题主题与证据账本。', icon: 'database', status: '已启用', action: '使用技能' },
       { title: 'GitHub', description: '查找和管理代码仓库、Issue、PR、文件与代码。', icon: 'globe', status: '未连接', action: '连接账户' },
       { title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', layout: 'row' },
-    ].map((item) => uiResourceCard({ ...item, action: { label: item.action } })).join('');
+      {
+        title: '社区贡献',
+        description: '展示审核状态，并在共享底部操作区承载同一对象的多个操作。',
+        icon: 'upload',
+        status: { label: '待审核', tone: 'attention' },
+        actions: [
+          { label: '提交新版本' },
+          { label: '撤回投稿', role: 'danger' },
+          { label: '撤回申请历史' },
+        ],
+      },
+    ].map((item) => uiResourceCard({
+      ...item,
+      ...(item.action ? { action: { label: item.action } } : {}),
+    })).join('');
     hydrateUiIcons(byId('resource-card-specimens'));
   }
 
@@ -224,6 +238,32 @@
         { title: '同步记录', meta: '12:40', bodyHtml: '<p>最近一次同步成功。</p>' },
       ],
     });
+    // 行式状态：icon + tone 染图标 + statusHtml 放控件。
+    // 用于「若干行，点开才展开」的页面：健康行不给徽章，只有需要注意的行带 uiStatusPill。
+    const accordionRows = uiAccordion({
+      defaultOpen: [],
+      items: [
+        {
+          title: '技能检查', icon: 'shield-check', tone: 'critical', open: true,
+          statusHtml: uiStatusPill({ label: '需要处理', tone: 'critical' }),
+          bodyHtml: '<p>5 个已检查 · 1 个被拦截。</p>',
+        },
+        {
+          title: '检测能力', icon: 'search', tone: 'attention',
+          statusHtml: uiStatusPill({ label: '需要留意', tone: 'attention' }),
+          bodyHtml: '<p>13 可用 · 3 项降级。</p>',
+        },
+        {
+          title: '组合风险', icon: 'git-branch',
+          statusHtml: '<span>尚未分析</span>',
+          bodyHtml: '<p>分析会为每个技能派生能力清单，再找能走通的有害路径。</p>',
+        },
+        {
+          title: '来源与完整性', icon: 'lock', meta: '规则包 v1.1.0',
+          bodyHtml: '<p>扫描器完整性与发布哈希一致。</p>',
+        },
+      ],
+    });
     const tree = uiTree({
       ariaLabel: '知识库目录',
       items: [
@@ -234,6 +274,7 @@
     byId('structured-data-specimens').innerHTML = [
       specimen('DataTable', '原生表格 · 可排序表头 · 数值右对齐', table),
       specimen('Accordion', '独立展开 · 左侧恒定箭头 · 右侧元数据', accordion),
+      specimen('Accordion · 行式状态', 'icon + tone 染图标 · statusHtml 放胶囊 · meta 与 statusHtml 二选一', accordionRows),
       specimen('Tree', '方向键导航 · 展开/收起 · 单一 Tab 入口', tree),
     ].join('');
     hydrateUiIcons(byId('structured-data-specimens'));

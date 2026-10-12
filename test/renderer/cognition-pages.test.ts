@@ -26,7 +26,7 @@ const pages = require('../../src/renderer/modules/cognition/pages.js') as {
     state?: 'loading' | 'ready' | 'error';
     title: string;
     summary: string;
-    evidence?: string;
+    value?: string;
     sourceLabel: string;
     suggestedType?: string;
     conversationId: string;
@@ -56,27 +56,28 @@ const asset = {
 describe('cognition pages', () => {
   it('shows generation progress before exposing editable model output', () => {
     const loading = pages.renderCognitionCapture({
-      state: 'loading', title: '', summary: '', evidence: '', sourceLabel: '', conversationId: 'conv_1',
+      state: 'loading', title: '', summary: '', value: '', sourceLabel: '', conversationId: 'conv_1',
     });
     expect(loading).toContain('data-cognition-capture-status');
     expect(loading).toContain('正在从会话中提炼可复用认知');
     expect(loading).not.toContain('data-cognition-capture-submit');
 
     const ready = pages.renderCognitionCapture({
-      state: 'ready', title: '模型生成名称', summary: '模型生成方法', evidence: '模型生成证据',
+      state: 'ready', title: '模型生成名称', summary: '模型生成方法', value: '模型生成价值',
       sourceLabel: '当前会话', conversationId: 'conv_1',
     });
     expect(ready).toContain('模型生成名称');
     expect(ready).toContain('模型生成方法');
-    expect(ready).toContain('模型生成证据');
+    expect(ready).toContain('模型生成价值');
+    expect(ready).toContain('当前会话');
     expect(ready).toContain('data-cognition-capture-submit');
   });
 
-  it('四类分类是必填项，模型预判只作默认值', () => {
+  it('五类分类是必填项，模型预判只作默认值', () => {
     // 气泡沉淀产出的是 recall 候选，saveRecallCandidate 会 requireAssetType，
     // 所以分类必须在面板上收齐——不能靠后端兜底猜一个。
     const withGuess = pages.renderCognitionCapture({
-      state: 'ready', title: 't', summary: 's', evidence: 'e',
+      state: 'ready', title: 't', summary: 's', value: 'v',
       sourceLabel: '当前会话', suggestedType: 'rule',
       conversationId: 'conv_1', messageId: 'msg_1',
     });
@@ -85,9 +86,9 @@ describe('cognition pages', () => {
     // 锚点消息 id 必须带进表单：evidenceRefs 要靠它，而不是靠用户手填的来源文本。
     expect(withGuess).toContain('data-cognition-capture-message value="msg_1"');
 
-    // 模型给不出合法四类时留空占位，强制用户自己选,不替他猜一个默认分类。
+    // 模型给不出合法五类时留空占位，强制用户自己选，不替他猜一个默认分类。
     const noGuess = pages.renderCognitionCapture({
-      state: 'ready', title: 't', summary: 's', evidence: 'e',
+      state: 'ready', title: 't', summary: 's', value: 'v',
       sourceLabel: '当前会话', suggestedType: 'not_a_type',
       conversationId: 'conv_1', messageId: 'msg_1',
     });
@@ -194,17 +195,18 @@ describe('cognition pages', () => {
     expect(html).toContain('第 2 / 3 页');
   });
 
-  it('从对话沉淀的候选保留可编辑摘要、证据和来源', () => {
+  it('从对话沉淀的候选保留可编辑正文、价值和来源', () => {
     const html = pages.renderCognitionCapture({
       title: '先确认边界再执行',
       summary: '先确认边界，再安排执行顺序。',
-      evidence: '本次对话先确认了验收标准。',
+      value: '后续任务可沿用这套执行顺序。',
       sourceLabel: '任务：方案设计',
       conversationId: 'c_capture',
     });
     expect(html).toContain('data-cognition-capture-form');
     expect(html).toContain('任务：方案设计');
-    expect(html).toContain('本次对话先确认了验收标准。');
+    expect(html).toContain('先确认边界，再安排执行顺序。');
+    expect(html).toContain('后续任务可沿用这套执行顺序。');
     expect(html).toContain('c_capture');
   });
 
@@ -272,29 +274,35 @@ describe('cognition-assets 五页签结构(迁移终态)', () => {
     return tabs;
   }
 
-  it('TABS 是五页签且顺序固定:认知树 / 个人本体 / 我的认知 / 待我处理 / 整理', () => {
+  it('TABS 是六页签且顺序固定:认知树 / 我的认知 / 个人本体 / 待我处理 / 系统活动 / 设置', () => {
+    // specs/018 + 2026-09-26 子安真机否决树降级:认知树恢复顶级页签与默认
+    // 落地;经验仍是「我的认知」分类档;整理页与整理设置保留为独立入口。
+    // 2026-09-27 子安定序:「我的认知」提到「个人本体(关于我)」之前。
     const tabs = parseTabs(core2);
-    expect(tabs.map((t) => t.id)).toEqual(['tree', 'ontology', 'overview', 'review', 'organize']);
+    expect(tabs.map((t) => t.id)).toEqual(['tree', 'overview', 'ontology', 'review', 'activity', 'settings']);
     expect(tabs.map((t) => t.titleKey)).toEqual([
-      'cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview',
-      'cognition.tab_review', 'cognition.tab_organize',
+      'cognition.tab_tree', 'cognition.tab_overview', 'cognition.tab_ontology',
+      'cognition.tab_review', 'cognition.tab_activity', 'cognition.tab_settings',
     ]);
   });
 
   it('默认路由是认知树,深链归一化键保留', () => {
+    // 2026-09-26 子安真机否决:默认落地恢复认知树(全景第一眼)。
     expect(core2).toContain("route: { name: 'tree'");
     expect(core2).toContain("Object.assign({ name: 'tree'");
     // 深链兼容:既有详情路由键一个都不能少(资产/候选/整理/版本/KSTAR)。
     for (const key of ['assetId', 'candidateId', 'captureId', 'assetVersionId', 'kstarEpisodeId', 'assetEdit']) {
       expect(core2).toContain(`${key}: ''`);
     }
+    // 旧路由名在 router.go 入栈前归一(organize/organize-settings/experiences)。
+    expect(core2).toContain("legacyName === 'organize-settings'");
   });
 
-  it('认知树与我的认知拆分为独立页面,overview 不再承载树图主界面', () => {
+  it('认知树是独立页面,overview 列表不内嵌树图', () => {
     expect(views2).toContain('function viewTree(');
     expect(views2).toContain("route.name === 'tree'");
     expect(views2).toContain('function viewOntology(');
-    // viewOverview 函数体内不再调用 treeBlocks——树整卡搬去了独立页。
+    // viewOverview 函数体内不调用 treeBlocks——树整卡是独立页。
     const start = views2.indexOf('function viewOverview');
     const end = views2.indexOf('\n  function ', start + 10);
     const overviewBlock = views2.slice(start, end);
@@ -313,7 +321,7 @@ describe('cognition-assets 五页签结构(迁移终态)', () => {
   it('五页签标题四语齐全', () => {
     for (const locale of ['zh', 'en', 'ja', 'pt'] as const) {
       const table = JSON.parse(readFileSync(resolve(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf8'));
-      for (const key of ['cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview', 'cognition.tab_review', 'cognition.tab_organize']) {
+      for (const key of ['cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview', 'cognition.tab_review', 'cognition.tab_activity', 'cognition.tab_settings']) {
         expect(table[key], `${locale}:${key}`).toBeTruthy();
       }
     }

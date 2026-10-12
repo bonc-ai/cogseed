@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -25,7 +25,7 @@
     "tokens:update": "node scripts/check-design-tokens.mjs --update",
     "test": "npm run test:js && npm run test:resources",
     "test:js": "node scripts/run-tests.mjs run",
-    "test:resources": "node scripts/run-python-tests.mjs resources/builtin resources/test -q",
+    "test:resources": "node scripts/run-python-tests.mjs resources/builtin resources/test resources/guardrail/skill-sentry/tests resources/guardrail/skill-sentry/runtime_trust -q",
     "test:coverage": "node scripts/run-tests.mjs run --coverage",
     "test:watch": "node scripts/run-tests.mjs",
     "test:local-agents:live": "tsx scripts/test-local-agents-live.ts",
@@ -64,7 +64,8 @@
     "prebuild:win": "node scripts/ensure-sherpa-windows-runtime.cjs && node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
     "build:win": "electron-builder --win --x64 --publish never",
     "verify:package:launch": "node scripts/verify-packaged-launch.cjs",
-    "verify:package:stt:win": "node scripts/verify-packaged-stt-win.cjs"
+    "verify:package:stt:win": "node scripts/verify-packaged-stt-win.cjs",
+    "verify:package:build-info": "node scripts/verify-packaged-build-info.cjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -136,10 +137,10 @@
       "!bin/packaged-entrypoint-gate.cjs",
       "!bin/packaged-resource-gate.cjs",
       "!bin/runtime-gate.cjs",
-      "!bin/tencent-meeting-mcp-server.cjs",
       "src/main/**/*.{cjs,js,ts,mjs,md,json}",
       "src/main/native/build/*.node",
       "src/renderer/**/*",
+      "src/shared/**/*.js",
       "src/resources/brand.json",
       "src/resources/identity.json",
       "src/resources/icons/**/*",
@@ -175,6 +176,7 @@
     },
     "asarUnpack": [
       "bin/**/*",
+      "src/shared/**/*.js",
       "p3394-gateway/**/*",
       "src/main/native/build/*.node",
       "node_modules/tsx/**/*",

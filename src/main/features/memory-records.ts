@@ -42,6 +42,14 @@ export interface MemoryRecordMutation {
 export interface MemoryRecordLoadResult {
   records: MemoryRecord[];
   corruptMetadata: boolean;
+  /** Records remain readable as legacy text when a valid header's body hash
+   * no longer matches, but migrations must retain that source because its
+   * source ownership can no longer be trusted. */
+  degradedMetadata?: boolean;
+  /** Record ids whose valid source metadata was discarded because the body no
+   * longer matched its stored hash. Prompt projection can fail closed for
+   * these ambiguous mirrors without hiding unrelated independent records. */
+  degradedRecordIds?: string[];
 }
 
 export class CorruptMemoryMetadataError extends Error {
@@ -115,7 +123,12 @@ function legacyRecord(text: string): MemoryRecord {
   };
 }
 
-function parseSegment(segment: string): { record: MemoryRecord | null; corruptMetadata: boolean } {
+function parseSegment(segment: string): {
+  record: MemoryRecord | null;
+  corruptMetadata: boolean;
+  degradedMetadata?: boolean;
+  degradedRecordId?: string;
+} {
   const trimmed = segment.trim();
   if (!trimmed) return { record: null, corruptMetadata: false };
   const newline = trimmed.indexOf('\n');
@@ -146,12 +159,34 @@ function parseSegment(segment: string): { record: MemoryRecord | null; corruptMe
     // 而不是隔离。否则下一次普通写入会静默覆盖删除用户数据（数据丢失）。
     // 代价：该条目的 sources/independent 元数据丢失（按普通记忆展示），数据本身保留。
     if (body) {
-      return { record: legacyRecord(body), corruptMetadata: false };
+      const record = legacyRecord(body);
+      return {
+        record,
+        corruptMetadata: false,
+        degradedMetadata: true,
+        degradedRecordId: record.recordId,
+      };
     }
     // 正文完全为空（机器头 + 空行）→ 无内容可保留，视为损坏
     return { record: null, corruptMetadata: true };
   }
   return { record: { ...header, text: body }, corruptMetadata: false };
+}
+
+export function parseMemoryRecordsContent(raw: string): MemoryRecordLoadResult {
+  if (!raw.trim()) return { records: [], corruptMetadata: false };
+  const parsed = raw.split(/\n?§\n?/).map(parseSegment);
+  const degradedMetadata = parsed.some(({ degradedMetadata: degraded }) => degraded === true);
+  return {
+    records: parsed.map(({ record }) => record).filter((record): record is MemoryRecord => !!record),
+    corruptMetadata: parsed.some(({ corruptMetadata }) => corruptMetadata),
+    ...(degradedMetadata ? { degradedMetadata: true } : {}),
+    ...(degradedMetadata ? {
+      degradedRecordIds: parsed
+        .map(({ degradedRecordId }) => degradedRecordId)
+        .filter((recordId): recordId is string => !!recordId),
+    } : {}),
+  };
 }
 
 export function loadMemoryRecordsWithStatus(filePath: string): MemoryRecordLoadResult {
@@ -164,12 +199,7 @@ export function loadMemoryRecordsWithStatus(filePath: string): MemoryRecordLoadR
     }
     throw new Error(`failed to read memory records: ${filePath}`, { cause: error });
   }
-  if (!raw.trim()) return { records: [], corruptMetadata: false };
-  const parsed = raw.split(/\n?§\n?/).map(parseSegment);
-  return {
-    records: parsed.map(({ record }) => record).filter((record): record is MemoryRecord => !!record),
-    corruptMetadata: parsed.some(({ corruptMetadata }) => corruptMetadata),
-  };
+  return parseMemoryRecordsContent(raw);
 }
 
 export function loadMemoryRecords(filePath: string): MemoryRecord[] {

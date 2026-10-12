@@ -1,6 +1,6 @@
 [project]
 name = "skill-sentry"
-version = "2.1.0"
+version = "2.2.0"
 description = "Skill 安全静态扫描 + 信任网关引擎——AI Skill 安装/加载前的强制安全入口"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,3 +22,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["engine*"]
+
+[tool.pytest.ini_options]
+# fixtures/ 下是**被扫描的样本**，其中的 test_*.py 是扫描对象而不是测试：
+# 它们 import 的是样本内部的相对路径（`from scripts.url_safety import ...`），
+# 从别的 cwd 收集会直接报 ModuleNotFoundError 并中断整套测试。
+norecursedirs = ["tests/fixtures", "vendor", "sandbox", "docs", ".venv"]
+addopts = "-q"

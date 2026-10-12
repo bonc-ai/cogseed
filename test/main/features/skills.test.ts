@@ -785,6 +785,22 @@ describe('skills › listSkills', () => {
     });
   });
 
+  it('exposes only bounded, valid local icon bytes and leaves broken icons to text fallback', async () => {
+    writeCustomSkill('valid-icon');
+    writeCustomSkill('bad-icon');
+    writeCustomSkill('linked-icon');
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', 'base64');
+    fs.writeFileSync(path.join(customSkillsDir(), 'valid-icon', 'icon.png'), png);
+    fs.writeFileSync(path.join(customSkillsDir(), 'bad-icon', 'icon.png'), '<script>alert(1)</script>');
+    fs.symlinkSync(path.join(customSkillsDir(), 'valid-icon', 'icon.png'), path.join(customSkillsDir(), 'linked-icon', 'icon.png'));
+    const s = await loadSkills();
+    const list = await s.listSkills();
+    expect(list.find((item) => item.id === 'valid-icon')?.icon_data_url)
+      .toBe(`data:image/png;base64,${png.toString('base64')}`);
+    expect(list.find((item) => item.id === 'bad-icon')?.icon_data_url).toBeUndefined();
+    expect(list.find((item) => item.id === 'linked-icon')?.icon_data_url).toBeUndefined();
+  });
+
   it('keeps disabled state when the list is served from cache', async () => {
     writeCustomSkill('alpha', 'name: "Alpha"\ndescription: "The first"');
     const s = await loadSkills();

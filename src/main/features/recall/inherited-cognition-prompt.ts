@@ -59,7 +59,6 @@ function recordFor(item: SelectedCognition): Record<string, unknown> {
     // 条件原样带上，由模型自己判断这次适不适用——系统不替它判定。
     ...(conditions(item.applicableWhen, 500) ? { applicable_when: conditions(item.applicableWhen, 500) } : {}),
     ...(conditions(item.forbiddenWhen, 500) ? { forbidden_when: conditions(item.forbiddenWhen, 500) } : {}),
-    ...(item.sensitivity ? { sensitivity: item.sensitivity } : {}),
   };
 }
 

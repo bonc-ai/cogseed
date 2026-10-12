@@ -119,7 +119,8 @@ describe('processed history shows semantic candidate records', () => {
     const html = renderCognition({ name: 'review' }, { candidates: [] });
 
     expect(html).not.toContain('fold-processed');
-    expect(visibleText(html)).toContain('当前没有等待确认的候选');
+    // specs/018 v2：全清时给结论式空态（原「当前没有等待确认的候选」空壳退役）。
+    expect(visibleText(html)).toContain('没有需要你确认的事项');
   });
 });
 

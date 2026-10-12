@@ -257,3 +257,20 @@ describe('run-skill.cjs', () => {
     expect(out.argv).toBe('arg1');
   });
 });
+
+
+describe('Hub governance at the final script entry', () => {
+  it.each(['hub-disabled-id', 'governed-display-name'])('rejects a disabled current install via id or name (%s), then runs after recovery', (ref) => {
+    writeMarketplaceSkill('hub-disabled-id', 'governed-display-name', 'ok');
+    const dir = path.join(tmpDir, 'u1/local/marketplace/skills/hub-disabled-id');
+    fs.writeFileSync(path.join(dir, '_install.json'), JSON.stringify({ version: '1.0.0', status: 'disabled', disabled: true }));
+    const denied = runSkill(ref, 'ok', [], { COGSEED_UID: 'u1' });
+    expect(denied.status).toBe(77);
+    expect(denied.stderr).toContain('E_SKILL_HUB_DISABLED');
+    expect(fs.existsSync(path.join(dir, 'scripts/ok.js'))).toBe(true);
+    fs.writeFileSync(path.join(dir, '_install.json'), JSON.stringify({ version: '1.0.0', status: 'approved', disabled: false }));
+    const recovered = runSkill(ref, 'ok', [], { COGSEED_UID: 'u1' });
+    expect(recovered.status).toBe(0);
+    expect(JSON.parse(recovered.stdout).ok).toBe(true);
+  });
+});

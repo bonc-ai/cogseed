@@ -75,6 +75,31 @@ export interface UpdaterState {
   downloaded?: DownloadedUpdate;
   /** Resumable partial download, if the last attempt paused or was interrupted. */
   partial?: PartialDownload;
+  /** Install approved by the user, awaiting app exit + helper hand-off. */
+  install?: PendingInstall;
+  /** Set by a post-upgrade boot; cleared once the app reaches a healthy window. */
+  pending_boot?: PendingBoot;
+}
+
+/** An install the user has approved; the app exits and the helper applies it. */
+export interface PendingInstall {
+  version: string;
+  /** The version the app was running when the user approved this install. */
+  from_version: string;
+  installer_path: string;
+  /** sha256 re-verified right before handing the file to the OS installer. */
+  sha256: string;
+  requested_at: number;
+  /** How many times we tried to hand this installer off. */
+  attempts: number;
+}
+
+/** Boot self-check written by the new build's first launch after an upgrade. */
+export interface PendingBoot {
+  from_version: string;
+  to_version: string;
+  attempts: number;
+  first_seen_at: number;
 }
 
 /** Byte-level progress of a running download. */

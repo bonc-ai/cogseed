@@ -118,16 +118,14 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     // 单边界：只带 applicableWhen，不带 forbiddenWhen
     expect(result.proposals[0].applicableWhen).toBeTruthy();
     expect((result.proposals[0] as { forbiddenWhen?: string[] }).forbiddenWhen).toBeUndefined();
-    // 系统线晋升不被 rule_boundary_required 阻断
-    expect(result.createdAssetIds).toHaveLength(1);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const asset = await assets.readAbilityAsset(UID, result.createdAssetIds[0]);
-    expect(asset.type).toBe('rule');
-    expect(asset.maturity).toBe('seed');
-    expect(asset.lifecycleStatus).toBe('user_confirmed_unverified');
-    expect(asset.statement).toContain('写城市资料时应先收集数据再成文');
-    // statement 纯净：value=judgment 时不再拼接标题残片
-    expect(asset.statement).not.toContain('可复用经验：');
+    // 系统线沉淀不被 rule_boundary_required 阻断（specs/016 分流后落经验条目）
+    expect(result.createdAssetIds).toEqual([]);
+    expect(result.experienceIds).toHaveLength(1);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const exp = await experiences.readExperience(UID, result.experienceIds![0]);
+    expect(exp.experienceType).toBe('lesson');
+    expect(exp.status).toBe('active');
+    expect(exp.body).toContain('写城市资料时应先收集数据再成文');
   });
 
   it('B. drain 收口：drainKstarTaskState 不产候选，requirement 级为唯一沉淀路径（A1）', async () => {
@@ -170,15 +168,17 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     // 2. requirement 级路径正常产出（唯一沉淀路径）
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
     const result = await precipitation.precipitateRequirementLevel(UID, requirement);
-    expect(result.createdAssetIds).toHaveLength(1);
+    expect(result.experienceIds).toHaveLength(1);
 
-    // 3. 无双写：候选池里恰好一条 confirmed（无 drain 线带来的重复候选）
+    // 3. 无双写：requirement 级恰好产一条经验（drain 线不带来重复沉淀），
+    //    且分流后候选池零记录（specs/016：create 线与候选池完全隔离）。
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const pool = await candidates.listRecallCandidates(UID);
-    const related = pool.filter((c) => String(c.judgment).includes('城市资料交付应注明实际字数'));
-    expect(related).toHaveLength(1);
-    expect(related[0].status).toBe('confirmed');
-    expect(related[0].promotedAssetId).toBe(result.createdAssetIds[0]);
+    expect(pool.filter((c) => String(c.judgment).includes('城市资料交付应注明实际字数'))).toHaveLength(0);
+    const experiencesB = await import('../../../../src/main/features/recall/experience-service');
+    const relatedExp = (await experiencesB.listExperiences(UID))
+      .filter((exp) => exp.body.includes('城市资料交付应注明实际字数'));
+    expect(relatedExp).toHaveLength(1);
   });
 
   it('C. 迁移证明回执并集覆盖：多回合分散注入仍升档（B4）', async () => {
@@ -187,7 +187,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     const c1 = await candidates.saveRecallCandidate(UID, {
       judgment: '资产一：跨回合注入的第一条经验。',
       value: '资产一：跨回合注入的第一条经验。',
-      summary: '资产一',
+      summary: '跨回合经验一',
       suggestedType: 'rule',
       suggestedScope: 'general',
       suggestedAction: 'create',
@@ -199,7 +199,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     const c2 = await candidates.saveRecallCandidate(UID, {
       judgment: '资产二：另一个回合注入的第二条经验。',
       value: '资产二：另一个回合注入的第二条经验。',
-      summary: '资产二',
+      summary: '跨回合经验二',
       suggestedType: 'rule',
       suggestedScope: 'general',
       suggestedAction: 'create',
@@ -314,7 +314,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     const c1 = await candidates.saveRecallCandidate(UID, {
       judgment: '通用经验：写资料类任务应先收集数据再成文。',
       value: '通用经验：写资料类任务应先收集数据再成文。',
-      summary: '通用经验',
+      summary: '资料先行经验',
       suggestedType: 'rule',
       suggestedScope: 'general',
       suggestedAction: 'create',

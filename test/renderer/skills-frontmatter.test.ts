@@ -70,6 +70,7 @@ function loadSkillRendererHelpers() {
   for (const file of [
     'icons.js',
     'ui-button.js',
+    'ui-status.js',
     'ui-form.js',
     'ui-empty.js',
     'ui-segmented-control.js',
@@ -77,6 +78,9 @@ function loadSkillRendererHelpers() {
     const code = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'modules', file), 'utf8');
     vm.runInContext(code, context, { filename: file });
   }
+  vm.runInContext(fs.readFileSync(path.join(process.cwd(), 'src/shared/hub-content-status.js'), 'utf8'), context);
+  context.uiStatusPill = context.window.uiStatusPill;
+  vm.runInContext(fs.readFileSync(path.join(process.cwd(), 'src/renderer/modules/agents.js'), 'utf8'), context, { filename: 'agents.js' });
   const code = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'modules', 'skills.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'skills.js' });
   return context;
@@ -279,13 +283,18 @@ describe('skills renderer frontmatter parsing', () => {
     ]);
   });
 
-  it('renders pending Recall candidates with the simplified review actions', () => {
+  it('renders pending Recall candidates with a primary confirm on the card (specs/018 T011)', () => {
     const candidate = cognitionCandidate();
     const list = renderCognition({ name: 'review' }, { candidates: [candidate] });
     expect(visibleText(list)).toContain('Keep every approval tied to source evidence.');
     expect(list).toContain('data-act="open-candidate" data-id="cand-review"');
-    expect(list).not.toContain('data-act="cand-adopt-with-form"');
-    expect(list).not.toContain('data-act="cand-decide"');
+    // specs/018 T011：卡片主按钮 = 推荐动作（确认），沿既有 cand-adopt-with-form
+    // 通道（卡片不在 .ca-candidate-detail 内 → 按未携带编辑确认）；
+    // 2026-09-29 子安标注整改：动作全部平铺右侧同一行，不再有「其他处理」折叠。
+    expect(list).toContain('data-act="cand-adopt-with-form"');
+    expect(list).toContain('data-act="cand-decide"');
+    expect(list).not.toContain('其他处理');
+    expect(list).toContain('ca-card-actions-flat');
 
     const detail = renderCognition(
       { name: 'review', candidateId: 'cand-review' },
@@ -343,10 +352,10 @@ describe('skills renderer frontmatter parsing', () => {
     );
 
     expect(visibleText(html)).toContain('Scoped review rule');
-    // 2026-09-17 下沉改：「用过几次」随详细信息归版本展开块；顶部使用
-    // 汇总在使用记录区（被实际使用/被带入任务）。
-    expect(visibleText(html)).toContain('被实际使用 1 次');
-    expect(visibleText(html)).toContain('被带入任务 1 次');
+    // 2026-09-17 下沉改：「用过几次」随详细信息归版本展开块；顶部汇总在使用记录区。
+    // 2026-09-28 词表统一：计量统一为「被任务用过 N 次」（四语词条已同步）。
+    expect(visibleText(html)).toContain('被任务用过 1 次');
+    expect(visibleText(html)).not.toContain('被实际使用');
     expect(html).toContain('data-act="proof-toggle" data-id="proof-1"');
   });
 
@@ -371,22 +380,23 @@ describe('skills renderer frontmatter parsing', () => {
     expect(html).not.toContain('cognition-asset-card');
   });
 
-  it('renders Recall candidates as entry cards without inline actions', () => {
+  it('renders Recall candidates as entry cards with exactly one primary action each (specs/018 T011)', () => {
     const html = renderCognition(
       { name: 'review' },
       { candidates: [cognitionCandidate(), cognitionCandidate({ id: 'cand-second', judgment: 'Second candidate' })] },
     );
 
     expect(html.match(/class="cand"/g)).toHaveLength(2);
-    expect(html.match(/data-act="open-candidate"/g)).toHaveLength(2);
-    expect(html).not.toContain('data-act="cand-adopt-with-form"');
-    expect(html).not.toContain('data-act="cand-decide"');
+    // 每卡恰好一个主按钮（确认），打开详情入口在标题行与动作行平铺区里
+    //（2026-09-29 起「其他处理」折叠已撤）。
+    expect(html.match(/data-act="cand-adopt-with-form"/g)).toHaveLength(2);
+    expect(html.match(/data-act="open-candidate"/g).length).toBeGreaterThanOrEqual(2);
   });
 
   it('renders ability assets with PRD categories and without marketplace skill promotion', () => {
     const html = renderCognition({ name: 'overview' }, { assets: [] });
 
-    for (const category of ['关于我', '规则与偏好', '模板与范例', '技能与方法']) {
+    for (const category of ['个人信息', '规则与偏好', '模板与范例', '技能与方法']) {
       expect(visibleText(html)).toContain(category);
     }
     expect(html).not.toContain('marketplace');
@@ -441,10 +451,49 @@ describe('skills renderer frontmatter parsing', () => {
       },
     );
 
-    expect(visibleText(html)).toContain('kse-episode-1');
-    expect(visibleText(html)).toContain('conversation-1');
+    // 2026-09-25 US-603 放行修改：来源不裸 id——解析不出名字时按类型给泛称
+    // （kse 复盘）或「来源记录不可用」（查无的会话），内部 id 一律不上屏。
+    // 原意图不变：结构化 evidenceRefs 要被归一化（不出 [object Object]），
+    // 且只有更长的审计历史才标「仅显示最近 N 条」。
+    expect(visibleText(html)).not.toContain('kse-episode-1');
+    expect(visibleText(html)).not.toContain('conversation-1');
+    expect(visibleText(html)).toContain('任务复盘：一次任务');
+    expect(visibleText(html)).toContain('来源记录不可用');
     expect(visibleText(html)).not.toContain('[object Object]');
     expect(visibleText(html)).not.toContain('仅显示最近 12 条');
+  });
+
+  it('shows the ledger four (actor / time / before-after / reason) and the one-step rollback entry', () => {
+    const html = renderCognition(
+      { name: 'overview', assetId: 'asset-rule' },
+      {
+        assets: [cognitionAsset({
+          audit: [
+            {
+              action: 'updated',
+              at: '2026-09-25T01:00:00.000Z',
+              actor: 'ai',
+              reason: '用户要求把这条改清楚点',
+              before: 'statement=20 字；version=2',
+              after: 'statement=31 字；version=3',
+              rollbackAnchor: '2',
+            },
+            { action: 'danger_snapshot', at: '2026-09-25T00:50:00.000Z', actor: 'ai', note: '批量删除前的执行前快照' },
+          ],
+        })],
+      },
+    );
+    const text = visibleText(html);
+    // 谁改的 / 何时 / 前后值 / 依据 —— 四项都要看得见（只给一句"更新内容"等于没账）。
+    expect(text).toContain('AI');
+    expect(text).toContain('用户要求把这条改清楚点');
+    expect(text).toContain('statement=20 字；version=2');
+    expect(text).toContain('statement=31 字；version=3');
+    // 危险操作的安全网记录也在履历里（危险操作前留档）。
+    expect(text).toContain('危险操作前留档');
+    // 台账行内一步回滚按钮已删（审计 R2，2026-09-28）：rollbackAnchor 数据
+    // 仍在（服务端字段），不再渲染按钮；回滚走版本区「切回此版」。
+    expect(html).not.toContain('data-act="rollback-asset"');
   });
 
   it('filters the integrated asset list by the selected tree category', () => {
@@ -482,10 +531,44 @@ describe('skills renderer frontmatter parsing', () => {
     expect(archived).toContain('已归并');
     expect(archived).not.toContain('data-action="archive"');
 
-    for (const html of [active, paused, archived]) {
+    // 2026-09-29 详情重构适配：删除入口只对可切换状态（active/paused）渲染；
+    // archived 是只读归并终态（09-17 口径），仅保留「彻底清除」。
+    for (const html of [active, paused]) {
       expect(html).toContain('data-action="delete"');
-      expect(html).toContain('data-action="revoke"');
+      // 「撤回使用」已随界面按钮删除（审计 R3，2026-09-28：0 使用＋终态危险）；
+      // audit_revoked 台账标签与 status==='revoked' 过滤逻辑保留（历史展示）。
+      expect(html).not.toContain('data-action="revoke"');
       expect(html).toContain('data-action="purge"');
     }
+    expect(archived).not.toContain('data-action="delete"');
+    expect(archived).toContain('data-action="purge"');
+  });
+});
+
+
+describe('installed Hub Skill governance in the production Skills grid', () => {
+  it.each([true, false])('disables new use while preserving the user choice and restores it (enabled=%s)', (enabled) => {
+    const ctx = loadSkillRendererHelpers();
+    const grid = { innerHTML: '', classList: { add() {}, remove() {} }, querySelectorAll: () => [], querySelector: () => null };
+    ctx.document = { getElementById: (id: string) => id === 'skills-grid' ? grid : null };
+    ctx.getLang = () => 'zh';
+    ctx.pickDesc = (s: any) => s.description_zh || '';
+    const originalT = ctx.t;
+    ctx.t = (key: string) => ({ 'marketplace.state_disabled': '已停用', 'skills.use': '使用此技能' } as any)[key] || originalT(key);
+    const skill = { id: 'governed-skill', name: 'Governed', source: 'marketplace', enabled, status: 'disabled', category: 'general' };
+    ctx.renderSkillsGrid([skill]);
+    expect(grid.innerHTML).toContain('已停用');
+    expect(grid.innerHTML).toMatch(/<button[^>]*disabled[^>]*data-skill-use/);
+    expect(skill.enabled).toBe(enabled);
+    ctx.renderSkillsGrid([{ ...skill, status: 'approved' }]);
+    expect(grid.innerHTML).not.toContain('已停用');
+    expect(/<button[^>]*disabled[^>]*data-skill-use/.test(grid.innerHTML)).toBe(!enabled);
+    expect(grid.innerHTML).toContain('使用此技能');
+  });
+
+  it('does not apply Hub governance to a custom skill with its own lifecycle status', () => {
+    const ctx = loadSkillRendererHelpers();
+    expect(ctx._isHubSkillDisabled({ source: 'custom', status: 'disabled' })).toBe(false);
+    expect(ctx._isHubSkillDisabled({ source: 'marketplace', status: ' DISABLED ' })).toBe(true);
   });
 });

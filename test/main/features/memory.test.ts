@@ -432,6 +432,7 @@ describe('memory › formatForSystemPrompt', () => {
     expect(block).toContain('模板画像：讲白话');
     expect(block).toContain('Role profiles (installed templates)');
   });
+
 });
 
 // ── Security: injection scanning ────────────────────────────────

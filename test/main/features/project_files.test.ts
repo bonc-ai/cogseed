@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual };
+});
 
 import { makeMinimalPptx, makeMinimalXlsx } from '../../fixtures/make-minimal-office';
 
@@ -29,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -126,10 +133,16 @@ describe('project_files › async project tree', () => {
 
   it('reuses a warm tree, sees root-level external writes via stamp, invalidates after a supported write', async () => {
     const projectFiles = await import('../../../src/main/features/project_files');
-    await projectFiles.uploadSpaceFile('u1', 'p1', 'first.md', Buffer.from('first'));
+    const uploaded = await projectFiles.uploadSpaceFile('u1', 'p1', 'first.md', Buffer.from('first'));
+    const root = path.dirname((uploaded as any).info.path);
+    // Reproduce a filesystem whose directory metadata does not change between writes.
+    const frozenStat = fs.statSync(root);
+    const stat = fsp.stat.bind(fsp);
+    vi.spyOn(fsp, 'stat').mockImplementation(((...args: Parameters<typeof stat>) =>
+      String(args[0]) === root ? Promise.resolve(frozenStat) : stat(...args)) as typeof fsp.stat);
     await projectFiles.listSpaceFileTree('u1', 'p1');
 
-    const root = path.dirname((await projectFiles.listSpaceFileTree('u1', 'p1'))[0].path);
+    await projectFiles.listSpaceFileTree('u1', 'p1');
     // 根目录外部写入 → 根指纹变化 → 下一次列表立即可见（「变更才扫」）
     fs.writeFileSync(path.join(root, 'out-of-band.md'), 'external');
     const warm = await projectFiles.listSpaceFileTree('u1', 'p1');

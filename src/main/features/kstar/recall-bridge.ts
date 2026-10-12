@@ -1,5 +1,6 @@
 import { safeId } from '../../storage';
 import {
+  alignUpdateCandidateType,
   saveRecallCandidate,
   type RecallCandidateRecord,
 } from '../recall/candidate-service';
@@ -17,6 +18,14 @@ export async function saveKstarCandidateProposals(
   const candidates: RecallCandidateRecord[] = [];
   for (const proposal of proposals.slice(0, 3)) {
     const action = recallFieldsForKstarProposal(proposal);
+    // 更新型提案的类型取自目标资产。与 direct-experience-assets 直通路径同一
+    // 口径，而且两条路径的候选指纹必须一致（见下面 value = judgment 的说明），
+    // 所以对齐必须两边都做，不能只改一条。
+    const suggestedType = await alignUpdateCandidateType(userId, {
+      suggestedType: proposal.suggestedType,
+      suggestedAction: action.suggestedAction,
+      ...(action.targetAssetId ? { targetAssetId: action.targetAssetId } : {}),
+    });
     candidates.push(await saveRecallCandidate(userId, {
       judgment: proposal.judgment,
       // value = judgment：saveRecallCandidate 的 reviewReady 要求 value 非空
@@ -31,7 +40,7 @@ export async function saveKstarCandidateProposals(
 
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
-      suggestedType: proposal.suggestedType,
+      suggestedType,
       suggestedScope: proposal.suggestedScope,
       sourceRefs: proposal.sourceRefs,
       ...(proposal.applicableWhen ? { applicableWhen: proposal.applicableWhen } : {}),

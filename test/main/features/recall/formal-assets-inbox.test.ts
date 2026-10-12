@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCognitionInbox, type CognitionInboxInput } from '../../../../src/main/features/recall/formal-assets/inbox';
+import { buildCognitionInbox, groupCognitionInbox, type CognitionInboxInput } from '../../../../src/main/features/recall/formal-assets/inbox';
 import type { AssetVersionDiff } from '../../../../src/main/features/recall/formal-assets/version-diff';
 import type { FormalAbilityAsset } from '../../../../src/main/features/recall/formal-assets/types';
 
@@ -77,28 +77,6 @@ describe('cognition inbox read model', () => {
   });
 
   /**
-   * 未分级不等于 L0。资产没分过敏感级时必须进待办，而不是被当成最低级默认放行。
-   */
-  it('treats an unclassified sensitivity as a decision, not as L0', () => {
-    const willTravel = asset({ assetId: 'A-sens', maturity: 'transfer_validated' });
-    expect(buildCognitionInbox(input({ assets: [willTravel] })).map((entry) => entry.kind))
-      .toContain('sensitivity_unclassified');
-    expect(buildCognitionInbox(input({ assets: [{ ...willTravel, sensitivity: 'L0' }] }))
-      .map((entry) => entry.kind)).not.toContain('sensitivity_unclassified');
-  });
-
-  /**
-   * 未分级确实不等于 L0，但对每一条资产都报一次会把待办塞满几十条永远处理
-   * 不完的条目，真正的冲突和扩权反而被埋掉。只有会被静默默认注入的那一档
-   * （transfer_validated 及以上）才值得占一个确认位。
-   */
-  it('does not nag about sensitivity for assets that never travel on their own', () => {
-    const staysPut = asset({ assetId: 'A-bud', maturity: 'bud' });
-    expect(buildCognitionInbox(input({ assets: [staysPut] })).map((entry) => entry.kind))
-      .not.toContain('sensitivity_unclassified');
-  });
-
-  /**
    * 全局"有 N 个来源需要处理"说不清后果。只有真的挂在某条资产的证据上时才报，
    * 并且要说清是哪条资产、断了哪个来源。
    */
@@ -150,11 +128,12 @@ describe('cognition inbox read model', () => {
       ],
     }));
     expect(items.find((entry) => entry.candidateId === 'c-bare')?.kind).toBe('evidence_insufficient');
-    expect(items.find((entry) => entry.candidateId === 'c-ok')?.kind).toBe('candidate_pending_review');
+    // 2026-09-29 第 2 批·一物一链：普通待确认候选不再进治理清单——它的唯一
+    // 确认入口是候选卡/详情（promote 完整三选一），治理行 accept 直调是
+    // 第二条不带冲突选项的确认链（B1/B2）。
+    expect(items.find((entry) => entry.candidateId === 'c-ok')).toBeUndefined();
     // 补证据同样是低打扰：列出来就够，不打断。
     expect(items.find((entry) => entry.candidateId === 'c-bare')?.urgency).toBe('low_disturbance');
-    // 普通候选是低打扰的，不该和冲突、扩权抢同一个确认位。
-    expect(items.find((entry) => entry.candidateId === 'c-ok')?.urgency).toBe('low_disturbance');
   });
 
   it('keeps an evidence-less candidate visible even though it is not a decision', () => {
@@ -179,9 +158,14 @@ describe('cognition inbox read model', () => {
 
   /** id 必须稳定：同一件事重复计算得到同一个 id，否则前端列表会闪。 */
   it('produces stable ids and a decision-first ordering', () => {
+    // 2026-09-29 第 2 批：普通待确认候选（原 low_disturbance 来源）停产，
+    // 换 evidence_insufficient 候选占低打扰位，保持双档排序覆盖。
     const shape = input({
       assets: [asset({ assetId: 'A-skill', assetType: 'skill_method', payload: { kind: 'skill_method' } })],
-      candidates: [{ id: 'c-ok', status: 'pending_review', judgment: '有证据', suggestedType: 'rule', evidenceRefs: [{}] }],
+      candidates: [
+        { id: 'c-ok', status: 'pending_review', judgment: '有证据', suggestedType: 'rule', evidenceRefs: [{}] },
+        { id: 'c-bare', status: 'weak_observation', judgment: '没有证据', suggestedType: 'rule', sourceRefs: [], evidenceRefs: [] },
+      ],
     });
     const first = buildCognitionInbox(shape);
     const second = buildCognitionInbox(shape);
@@ -213,24 +197,6 @@ describe('cognition inbox read model', () => {
       assets: [target], latestDiffs: new Map([['A-rule', { ...changed, actor: 'user' as const }]]),
     }));
     expect(byUser.map((entry) => entry.kind)).not.toContain('rule_scope_changed');
-  });
-
-  it('flags a sensitivity escalation but not an ordinary sensitivity edit', () => {
-    const target = asset({ assetId: 'A-sens', sensitivity: 'L2' });
-    const escalated = buildCognitionInbox(input({
-      assets: [target],
-      latestDiffs: new Map([['A-sens', diff({
-        assetId: 'A-sens', kinds: ['sensitivity_escalated'],
-        changes: [{ kind: 'sensitivity_escalated', field: 'sensitivity', before: 'L0', after: 'L2' }],
-      })]]),
-    }));
-    expect(escalated.find((entry) => entry.kind === 'sensitivity_escalated')?.detail).toBe('L0 → L2');
-
-    const plain = buildCognitionInbox(input({
-      assets: [target],
-      latestDiffs: new Map([['A-sens', diff({ assetId: 'A-sens', kinds: ['sensitivity'] })]]),
-    }));
-    expect(plain.map((entry) => entry.kind)).not.toContain('sensitivity_escalated');
   });
 
   /**
@@ -291,8 +257,98 @@ describe('cognition inbox read model', () => {
   /** 没有版本历史时，变更类待办整体不产出——不能把"读不到"当成"没变过"。 */
   it('produces no change items when no version history is available', () => {
     const items = buildCognitionInbox(input({ assets: [asset({ assetId: 'A-rule' })] }));
-    for (const kind of ['rule_scope_changed', 'template_updated', 'skill_upgrade_suggested', 'sensitivity_escalated']) {
+    for (const kind of ['rule_scope_changed', 'template_updated', 'skill_upgrade_suggested']) {
       expect(items.map((entry) => entry.kind)).not.toContain(kind);
     }
+  });
+});
+
+/* ═════════════ 治理分组与载荷透传（specs/010 T004/T005/T006） ═════════════ */
+
+/** 合成一条最小待办条目（分组是纯函数，不依赖 build 的事实来源）。 */
+function inboxItem(overrides: Partial<import('../../../../src/main/features/recall/formal-assets/inbox').CognitionInboxItem> = {}) {
+  return {
+    id: 'syn:1', kind: 'candidate_ineligible' as const, urgency: 'low_disturbance' as const,
+    title: '合成条目',
+    ...overrides,
+  };
+}
+
+describe('cognition inbox governance grouping (specs/010)', () => {
+  /** 12 种 kind 各一条（candidate_pending_review 已停产，2026-09-29 第 2 批），
+   * 外加按 findingCategory 细分的巡检三类。 */
+  const ALL_KINDS = [
+    'skill_creation_suggested', 'skill_upgrade_suggested', 'rule_scope_changed', 'template_updated',
+    'rule_boundary_missing', 'classification_conflict', 'evidence_insufficient',
+    'candidate_ineligible', 'source_unavailable',
+    'asset_change_pending', 'cleanup_uncertain', 'inspection_finding',
+  ] as const;
+
+  function kitchenSink() {
+    const items = ALL_KINDS.map((kind, index) => inboxItem({ id: `syn-${kind}`, kind }));
+    // 巡检三类细分：conflict / duplicate / outdated 各一条（id 不与上面那条撞）。
+    items.push(
+      inboxItem({ id: 'syn-insp-conflict', kind: 'inspection_finding', findingCategory: 'conflict', assetIds: ['A-1', 'A-2'], assetId: 'A-1' }),
+      inboxItem({ id: 'syn-insp-duplicate', kind: 'inspection_finding', findingCategory: 'duplicate', assetIds: ['A-1', 'A-3'], assetId: 'A-1' }),
+      inboxItem({ id: 'syn-insp-outdated', kind: 'inspection_finding', findingCategory: 'outdated', assetIds: ['A-4'], assetId: 'A-4' }),
+    );
+    return items;
+  }
+
+  it('assigns all 12 kinds to a governance group — nothing dropped, nothing invented', () => {
+    const items = kitchenSink();
+    const groups = groupCognitionInbox(items);
+    // 全部条目（12 kind + 巡检细分 3）都有归属（无漏项）：逐条都能在某组里找到自己。
+    const flatIds = new Set(groups.flatMap((group) => group.items.map((entry) => entry.id)));
+    for (const entry of items) expect(flatIds.has(entry.id)).toBe(true);
+    expect(groups.flatMap((group) => group.items).length).toBe(items.length);
+    // 组数 = 出现过的分区数，无空组。
+    expect(groups.map((group) => group.items.length > 0)).not.toContain(false);
+  });
+
+  it('keeps conflict on top in the fixed order and splits inspection findings by category', () => {
+    const groups = groupCognitionInbox(kitchenSink());
+    expect(groups.map((group) => group.category))
+      .toEqual(['conflict', 'boundary', 'other']);
+    expect(groups[0].category).toBe('conflict');
+    // 冲突组 = 分类冲突 + 巡检 conflict/duplicate；outdated 不进。
+    const conflictIds = groups[0].items.map((entry) => entry.id);
+    expect(conflictIds).toContain('syn-classification_conflict');
+    expect(conflictIds).toContain('syn-insp-conflict');
+    expect(conflictIds).toContain('syn-insp-duplicate');
+    expect(conflictIds).not.toContain('syn-insp-outdated');
+    expect(groups[2].items.map((entry) => entry.id)).toContain('syn-insp-outdated');
+    // 一条巡检 pair 涉及两个资产 → 组 total 按对象数计。
+    const pairTotal = groups[0].items
+      .filter((entry) => entry.id === 'syn-insp-conflict')[0];
+    expect(pairTotal.assetIds).toEqual(['A-1', 'A-2']);
+  });
+
+  it('carries the payload fields through the real build: pair assetIds, findingCategory, boundary prefill', () => {
+    const items = buildCognitionInbox(input({
+      assets: [
+        asset({ assetId: 'A-rule-nb', applicableWhen: [], forbiddenWhen: [] }),
+      ],
+      pendingInspectionFindings: [
+        { key: 'f-conflict', category: 'conflict', assetIds: ['A-2', 'A-rule-nb'] },
+        { key: 'f-out', category: 'outdated', assetIds: ['A-2'] },
+      ],
+    }));
+    const finding = items.find((entry) => entry.kind === 'inspection_finding' && entry.findingCategory === 'conflict');
+    expect(finding?.assetIds).toEqual(['A-2', 'A-rule-nb']);
+    expect(finding?.actions).toEqual(['keep', 'merge', 'reject', 'defer']);
+    const outdated = items.find((entry) => entry.kind === 'inspection_finding' && entry.findingCategory === 'outdated');
+    expect(outdated?.actions).toEqual(['reject', 'defer']);
+    const boundary = items.find((entry) => entry.kind === 'rule_boundary_missing');
+    expect(boundary?.boundary).toEqual({ applicableWhen: [], forbiddenWhen: [] });
+    expect(boundary?.actions).toEqual(['set_boundary']);
+  });
+
+  it('emits no empty groups and never mutates the input list', () => {
+    expect(groupCognitionInbox([])).toEqual([]);
+    const items = kitchenSink();
+    const before = JSON.stringify(items);
+    groupCognitionInbox(items);
+    expect(JSON.stringify(items)).toBe(before);
   });
 });

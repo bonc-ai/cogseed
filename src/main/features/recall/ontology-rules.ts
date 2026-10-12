@@ -73,7 +73,7 @@ function ruleId(groupId: string, field: string, subject: string, object: string)
 /** Load the ontology R-Box: relation-field values across all groups. */
 export async function loadOntologyRules(
   userId: string,
-  context: { workspaceId?: string } = {},
+  context: { projectId?: string; workspaceId?: string } = {},
 ): Promise<OntologyRulesResult> {
   if (!safeId(userId)) return { rules: [] };
   const groups = readGroups(userId).slice(0, MAX_GROUPS);
@@ -88,7 +88,12 @@ export async function loadOntologyRules(
     if (!fields.ok || !fields.fields) continue;
     for (const field of fields.fields) {
       for (const value of field.values) {
-        if (value.project && value.project !== context.workspaceId) continue;
+        // Restricted ontology values are excluded from every automatic task
+        // surface, including R-Box rules sent to forecast/simulation.
+        if (value.sensitivity === 'restricted') continue;
+        // @proj values are bound to app projects, not spaces/workspaces. If the
+        // current project is unknown, omit project-bound values (fail closed).
+        if (value.project && value.project !== context.projectId) continue;
         const parsed = parseRelationValue(value.value);
         if (!parsed) continue;
         rules.push({

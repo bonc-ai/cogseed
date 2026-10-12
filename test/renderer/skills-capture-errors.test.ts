@@ -42,7 +42,7 @@ function loadMessageFormatter() {
         const table: Record<string, string> = {
           'cognition.capture_error_no_completed_exchange': '当前会话还没有完成一轮问答，暂时无法沉淀。',
           'cognition.capture_error_waiting_response': '当前会话仍在等待回复，完成后才能沉淀。',
-          'cognition.capture_error_disabled': '沉淀功能已关闭，请先在沉淀设置中开启。',
+          'cognition.capture_error_disabled': '会话整理暂不可用，请检查整理设置。',
           'cognition.capture_error_conversation_not_found': '找不到这个会话，暂时无法沉淀。',
           'cognition.capture_error_unknown': '沉淀任务发生未知错误',
         };
@@ -62,7 +62,7 @@ describe('Recall capture error feedback', () => {
     const format = loadMessageFormatter();
     expect(format(new Error('conversation has no completed exchange'))).toBe('当前会话还没有完成一轮问答，暂时无法沉淀。');
     expect(format(new Error('conversation is still waiting for a response'))).toBe('当前会话仍在等待回复，完成后才能沉淀。');
-    expect(format(new Error('recall capture is disabled'))).toBe('沉淀功能已关闭，请先在沉淀设置中开启。');
+    expect(format(new Error('recall capture is disabled'))).toBe('会话整理暂不可用，请检查整理设置。');
     expect(format(new Error('conversation not found'))).toBe('找不到这个会话，暂时无法沉淀。');
   });
 

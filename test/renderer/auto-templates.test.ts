@@ -45,17 +45,29 @@ function loadLocale(name: string): Record<string, string> {
 describe('auto starter templates', () => {
   const templates = auto._AUTO_TEMPLATES;
 
-  it('exposes the six starter templates plus a blank entry', () => {
+  it('exposes the seven starter templates plus a blank entry', () => {
     const ids = templates.map((t) => t.id);
     expect(ids).toEqual([
       'tech_news',
       'daily_wrapup',
       'meeting_prep',
+      'meeting_digest',
       'weekly_report',
       'project_health',
       'monthly_admin',
       'blank',
     ]);
+  });
+
+  it('keeps the post-meeting digest distinct from the pre-meeting prep template', () => {
+    // `meeting_digest` is the counterpart the connector detail view's CTA pre-fills. It must
+    // stay a separate, post-meeting entry: `meeting_prep` runs before the meetings.
+    const digest = templates.find((t) => t.id === 'meeting_digest')!;
+    const prep = templates.find((t) => t.id === 'meeting_prep')!;
+    expect(digest).toBeTruthy();
+    expect(digest.schedule).toMatchObject({ type: 'daily', hour: 19, minute: 0 });
+    expect((digest.schedule as { hour: number }).hour)
+      .toBeGreaterThan((prep.schedule as { hour: number }).hour);
   });
 
   it('gives every non-blank template a schedule main accepts', () => {
@@ -70,7 +82,7 @@ describe('auto starter templates', () => {
 
   it('maps the workday-style cadences down to daily (method A fallback)', () => {
     // Under method A there is no "weekdays" schedule; these fire every day.
-    const daily = ['tech_news', 'daily_wrapup', 'meeting_prep', 'project_health'];
+    const daily = ['tech_news', 'daily_wrapup', 'meeting_prep', 'meeting_digest', 'project_health'];
     for (const id of daily) {
       const tpl = templates.find((t) => t.id === id)!;
       expect(tpl.schedule?.type, id).toBe('daily');

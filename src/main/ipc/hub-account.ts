@@ -54,6 +54,13 @@ export const invokeHandlers = {
     // 不设 release gate：退出登录 = 清理本地会话，是用户的正当权利。
     // gate 关闭时若拦截 logout，已登录用户会被困住（无法退出、也无法再登录）。
     // 服务端通知仍是尽力而为（auth-flow.logout 网络失败也照常清本地）。
+    try {
+      const { endAllSessions } = await import('../features/contribution/session');
+      await endAllSessions(ctx.userId);
+    } catch {
+      // Logout remains authoritative; orphaned contribution staging is removed
+      // before the next contribution starts.
+    }
     await hubAccount.logout(ctx.userId);
     // 状态已落盘；广播让所有 renderer 表面（左下角账号区 / 设置-账号页）
     // 立即刷新，避免两处显示不一致。

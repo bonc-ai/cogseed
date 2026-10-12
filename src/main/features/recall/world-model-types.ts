@@ -57,6 +57,11 @@ export interface WorldModelOntologyFact {
    *  when the value carries no time marker). Blueprint R26 temporal integrity:
    *  the as-of date is when the VALUE was correct, never the read date. */
   asOf?: string;
+  /** 矛盾标记（specs/014 US-903 / D8）：该字段存在两条语义矛盾的值。
+   *  `conflictedWith` 只装**非受限**对端（≤2 条、每条截 MAX_ONTOLOGY_FACT_VALUE）；
+   *  对端受限时只置 `disputed` 不带文本（受限正文不进模型侧标记，B5/A9）。 */
+  disputed?: true;
+  conflictedWith?: string[];
   /** User verification level (2026-09-20 assertion-verification; spec 007 two
    *  tiers): true = source-supported (bare `@verified`), 'independent' =
    *  independently verified (`@verified:independent`). Manual-only: the

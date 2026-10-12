@@ -20,13 +20,17 @@ upstream and gets re-synced; our policy layer has to survive that.
 
 Usage::
 
-    python3 scan_gate.py <engine-dir> <target-dir>
+    python3 scan_gate.py <engine-dir> <target-dir> [--detail]
 
 Writes one JSON object to stdout and always exits 0 — the caller decides what to
 do with ``outcome``. A crash here must not be indistinguishable from a clean
 scan, so failures are reported as ``outcome: "unknown"`` (see ``_fail``) rather
 than as an absent verdict or a non-zero exit the caller might treat as "no
 findings".
+
+``--detail`` adds the per-finding list and the coverage/score breakdown. The
+adapter needs those to render a security panel; the package CLI does not, and
+paying for the extra JSON on every install is pointless.
 """
 
 from __future__ import annotations
@@ -60,6 +64,39 @@ BLOCKING_CATEGORIES = frozenset({
     "cognitive_asset_exfil",
 })
 
+# Contexts in which a rule hit may NOT block an install on category alone.
+#
+# ``prose`` is documentation narrative — a sentence in SKILL.md that *mentions*
+# ``~/.ssh`` or ``curl | sh``. It is not executable and cannot be copied into a
+# shell. The engine already caps prose at ``low`` (context.py::_SEVERITY_CAP);
+# this set is the gate honouring that decision instead of reading through it.
+#
+# Measured, not assumed: before this exclusion, `agent-creator` and
+# `skill-creator` — our own two shipped authoring skills — were both BLOCKED.
+# Both carry a "Validator-aligned safety gates" section that *prohibits* the very
+# patterns being matched ("do not use `curl | sh`", "do not read `~/.ssh`").
+# The gate read ``original_severity: critical`` off those prohibitions and
+# refused to install our own product content.
+#
+# Deliberately NOT included: ``doc`` (a fenced code block in a README is content
+# users copy and run — the sample that reached the skill library in testing was
+# exactly that), ``test``/``vendor`` (a payload in tests/ is the evasion this
+# read-through exists to catch), and ``comment``.
+NON_BLOCKING_CONTEXTS = frozenset({"prose"})
+
+# Confidence levels that may block on category alone.
+#
+# Matches ``scoring.is_confirmed_critical``: only a *high*-confidence critical
+# refuses an install. The rule library carries patterns that are structurally
+# unambiguous but semantically fuzzy (three-segment tokens, ``key`` + 14 chars),
+# and letting a medium-confidence heuristic refuse an install trains users to
+# look for a bypass.
+BLOCKING_CONFIDENCE = frozenset({"high"})
+
+#: 派生视图里「确实解码成功」的那些。归一化视图**不在**其中：归一化会
+#: 改写字符，它的命中更容易是变换本身的产物，因此仍要求 high 置信度。
+DECODED_VIEWS = frozenset({"b64_1", "b64_2", "b64_3", "hex_1", "hex_2", "hex_3"})
+
 
 def _fail(reason: str) -> dict[str, Any]:
     """Infrastructure failure — never a threat claim, never a pass.
@@ -75,6 +112,7 @@ def _fail(reason: str) -> dict[str, Any]:
         "risk_classification": "",
         "score": None,
         "hard_blocked": False,
+        "confirmed_critical": False,
         "blocking_rules": [],
         "rules_source": "",
         "isolated": False,
@@ -91,18 +129,50 @@ def _fail(reason: str) -> dict[str, Any]:
         "required_mitigations": [],
         "vulnerability_count": 0,
         "skill_count": None,
+        "findings": [],
+        "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
+        "framework_summary": {"owasp_llm": [], "owasp_agentic": []},
+        "score_breakdown": None,
+        "coverage": None,
     }
+
+
+def _blocks_install(finding: dict[str, Any]) -> bool:
+    """单条 finding 是否足以按类别拒装。"""
+    if finding.get("category") not in BLOCKING_CATEGORIES:
+        return False
+    level = str(finding.get("original_severity") or finding.get("severity") or "").lower()
+    if level != "critical":
+        return False
+    if str(finding.get("context") or "") in NON_BLOCKING_CONTEXTS:
+        return False
+    confidence = str(finding.get("confidence") or "high").lower()
+    if confidence in BLOCKING_CONFIDENCE:
+        return True
+    # 解码视图的例外。
+    #
+    # 这条规则补的是本功能存在的理由：把载荷 base64 编码后藏进文件，
+    # 是「把危险内容从安装期可见的视图里移走」。如果解码后的命中因为
+    # 「派生视图降置信度」而无法拦截，那么这个功能就只是把问题
+    # 从「看不见」变成「看见了但不管」。
+    #
+    # 仍然很窄：只认解码成功的视图 + critical + 封锁类别三者同时成立，
+    # 归一化视图不适用。
+    return str(finding.get("derived") or "") in DECODED_VIEWS
 
 
 def _blocking_rules(reports: list[dict[str, Any]]) -> list[str]:
     """Rule ids that must block, read through the engine's context demotion.
 
-    Reads ``original_severity``, not ``severity``. Doc and prose contexts demote
+    Reads ``original_severity``, not ``severity``. Doc and test contexts demote
     (prose is capped at ``low``) so that a SKILL.md *warning* about ``curl | sh``
     is not scored as doing it — right for reporting, wrong for a gate. A fenced
     code block in a README is content users copy and run, and the sample that
     reached the skill library in testing was exactly that: a ``critical``
-    ``credential_path_read`` recorded as ``high`` after doc demotion.
+    ``credential_path_read`` recorded as high after doc demotion.
+
+    What changed in 2.2.0: the read-through now stops at ``prose``. See
+    ``NON_BLOCKING_CONTEXTS`` for the measurement that forced it.
 
     Only rule ids are returned. Never the matched line, file, or line number —
     the matched text can be the leaked credential itself.
@@ -112,10 +182,12 @@ def _blocking_rules(reports: list[dict[str, Any]]) -> list[str]:
         for finding in report.get("findings") or []:
             if not isinstance(finding, dict):
                 continue
-            if finding.get("category") not in BLOCKING_CATEGORIES:
+            if finding.get("suppressed"):
+                # A risk the user explicitly accepted must not keep blocking the
+                # install it was accepted for. Suppression that only moves the
+                # score and not the verdict is a suppression that does nothing.
                 continue
-            level = str(finding.get("original_severity") or finding.get("severity") or "").lower()
-            if level != "critical":
+            if not _blocks_install(finding):
                 continue
             rule = str(finding.get("rule_id") or finding.get("category") or "").strip()
             if rule and rule not in hits:
@@ -123,7 +195,58 @@ def _blocking_rules(reports: list[dict[str, Any]]) -> list[str]:
     return hits
 
 
-def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
+def _detail_payload(full: dict[str, Any], reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-finding list plus the facts a security panel needs.
+
+    Findings are passed through **as the engine produced them** — the engine's
+    ``make_finding`` never puts the matched text in the dict (``snippet`` is used
+    only to derive ``fingerprint`` and then dropped), so there is nothing here to
+    redact. ``_strip_internal`` below is a belt-and-braces check for that
+    invariant rather than a filter that could silently drop a field.
+    """
+    merged: list[dict[str, Any]] = []
+    for report in reports:
+        merged.extend(report.get("findings") or [])
+
+    coverage = full.get("coverage") or (reports[0].get("coverage") if reports else None)
+    severity_counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for f in merged:
+        level = str(f.get("severity") or "info")
+        if level in severity_counts:
+            severity_counts[level] += 1
+
+    return {
+        "findings": [_strip_internal(f) for f in merged],
+        "severity_counts": severity_counts,
+        "framework_summary": full.get("framework_summary") or {},
+        "score_breakdown": full.get("score_breakdown"),
+        "coverage": coverage,
+        "structural_summary": full.get("structural_summary") or {},
+        "dependency_manifests": full.get("dependency_manifests") or {},
+        "baseline": full.get("baseline") or {},
+        "scan_tier": full.get("scan_tier") or ("sandboxed" if isolated else "static"),
+        "limitations": full.get("limitations") or [],
+        "scanned_at": full.get("scanned_at") or "",
+        "schema_version": full.get("schema_version") or "",
+    }
+
+
+#: 只允许出现在报告里的 finding 字段。白名单而非黑名单：新增一个内部字段
+#: （例如匹配原文）时，黑名单会漏掉它并把它发给渲染进程，白名单不会。
+_FINDING_FIELDS = (
+    "sr", "rule_id", "severity", "original_severity", "demoted", "confidence",
+    "category", "file", "line", "description", "remediation", "hard_block",
+    "source", "context", "cwe", "owasp_llm", "owasp_agentic", "owasp_ast", "references",
+    "fingerprint", "suppressed", "suppressed_reason", "suppressed_until",
+    "suppression_refused", "derived", "derived_note", "example",
+)
+
+
+def _strip_internal(finding: dict[str, Any]) -> dict[str, Any]:
+    return {k: finding[k] for k in _FINDING_FIELDS if k in finding}
+
+
+def evaluate(engine_dir: str, target: str, detail: bool = False) -> dict[str, Any]:
     """Scan ``target`` and reduce the report to a single install decision."""
     if engine_dir not in sys.path:
         sys.path.insert(0, engine_dir)
@@ -149,6 +272,7 @@ def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
         full.get("aggregate_recommendation") or full.get("deployment_recommendation") or ""
     ).upper()
     hard_blocked = any(bool(r.get("hard_blocked")) for r in reports) or bool(full.get("hard_blocked"))
+    confirmed_critical = any(bool(r.get("confirmed_critical")) for r in reports)
     blocking = _blocking_rules(reports)
 
     # A weakened ruleset must not be reported as equivalent to the real one; the
@@ -224,7 +348,7 @@ def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
             seen_mitigations.add(mid)
             mitigations.append({"id": mid, "name": str(m.get("name") or "")})
 
-    return {
+    result = {
         "outcome": outcome,
         "reason": "",
         "recommendation": recommendation,
@@ -232,6 +356,7 @@ def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
         # Worst score across skills: a batch is only as safe as its weakest member.
         "score": min(scores) if scores else full.get("security_score"),
         "hard_blocked": hard_blocked,
+        "confirmed_critical": confirmed_critical,
         "blocking_rules": blocking,
         "rules_source": rules_source,
         "isolated": isolated,
@@ -246,6 +371,9 @@ def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
         "vulnerability_count": vulnerabilities,
         "skill_count": full.get("skill_count"),
     }
+    if detail:
+        result.update(_detail_payload(full, reports))
+    return result
 
 
 def _apply_memory_guard() -> None:
@@ -270,13 +398,24 @@ def _apply_memory_guard() -> None:
         return
 
 
+def _parse_args(argv: list[str]) -> tuple[str, str, bool]:
+    """``<engine-dir> <target-dir> [--detail]``，位置参数可交换顺序无关。"""
+    detail = "--detail" in argv
+    positional = [a for a in argv if not a.startswith("--")]
+    if len(positional) < 2:
+        raise ValueError("usage: scan_gate.py <engine-dir> <target-dir> [--detail]")
+    return positional[0], positional[1], detail
+
+
 def main() -> int:
     _apply_memory_guard()
-    if len(sys.argv) < 3:
-        sys.stdout.write(json.dumps(_fail("usage: scan_gate.py <engine-dir> <target-dir>")))
+    try:
+        engine_dir, target, detail = _parse_args(sys.argv[1:])
+    except ValueError as exc:
+        sys.stdout.write(json.dumps(_fail(str(exc))))
         return 0
     try:
-        result = evaluate(sys.argv[1], sys.argv[2])
+        result = evaluate(engine_dir, target, detail)
     except Exception as exc:  # noqa: BLE001 - last-resort guard, still fail-closed
         result = _fail(f"unexpected: {type(exc).__name__}: {exc}")
     sys.stdout.write(json.dumps(result, ensure_ascii=False))

@@ -83,25 +83,15 @@ async function makeSpaceWithProfile() {
     instructions: '这是空间默认目标：帮助学生真正理解知识。',
   });
   if (!created.ok) throw new Error('create space failed');
-  const tmplFile = path.join(
-    tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', 'student.md');
-  fs.mkdirSync(path.dirname(tmplFile), { recursive: true });
-  fs.writeFileSync(tmplFile, [
-    '# 学生（模板）',
-    '> 模板: student@0.2.0-review.1',
-    '',
-    '## 学习背景',
-    '### 教育阶段',
-    '- 硕士',
-    '### 专业与学习方向',
-    '### 流水',
-    '',
-    '## 学期与课程',
-    '### 课程清单',
-    '- 机器学习',
-    '### 流水',
-    '',
-  ].join('\n'), 'utf8');
+  // v2：种子走真实安装 + 字段写入（JSON 是唯一事实源，直写渲染副本无效）
+  const templates = await import('../../../src/main/features/personal_ontology_template_files');
+  const installed = await templates.installTemplateFile(UID, 'student');
+  if (!installed.ok && !installed.already_installed) throw new Error(`install student failed: ${installed.error}`);
+  const row = templates.readGroups(UID).find((g) => g.template_id === 'student')!;
+  await templates.appendFieldValueToRef(
+    UID, templates.buildContentRef(row.group_id, '学习背景'), '教育阶段', '硕士', '手动');
+  await templates.appendFieldValueToRef(
+    UID, templates.buildContentRef(row.group_id, '学期与课程'), '课程清单', '机器学习', '手动');
   return { spaces, sid: created.space.space_id };
 }
 

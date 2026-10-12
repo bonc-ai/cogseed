@@ -297,6 +297,29 @@ describe('contexts › content-level dedup', () => {
     fs.rmSync(sourceAbs, { force: true });
   });
 
+  it('被去重拦下的导入也记下本机出处：老库文件靠"重新导入一次原文件"就能拿到本地落点', async () => {
+    const crypto = await import('node:crypto');
+    const kb = await import('../../../src/main/features/kb_vector');
+    const buf = Buffer.from('%PDF-1.4\n%%EOF\n');
+    const sha1 = crypto.createHash('sha1').update(buf).digest('hex');
+    await kb.upsertFile(TEST_UID, {
+      relPath: 'work/b.pdf', kind: 'pdf', bytes: buf.length, mtime: 1, sha1,
+      chunks: [{ title: 't', content: 'c', embedding: new Array(512).fill(0) }],
+    });
+    const sourceDir = path.join(tmpDir, '用户的文件夹');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const sourceAbs = path.join(sourceDir, 'b.pdf');
+    fs.writeFileSync(sourceAbs, buf);
+
+    const c = await loadContexts();
+    const blocked = await c.importContextFileFromPath('work/b.pdf', sourceAbs);
+    expect(blocked.ok).toBe(false);
+
+    // 内容 sha1 相同 = 同一份文件：用户已明确指认了这份库内文件在本机的位置
+    const links = await import('../../../src/main/features/local_file_links');
+    expect(links.localWriteDirForUser(TEST_UID, 'work/b.pdf')).toBe(sourceDir);
+  });
+
   it('覆盖导入 token 只能用一个：重复使用直接失败', async () => {
     const c = await loadContexts();
     const res = await c.importContextFileAsDuplicate('not-a-real-token');

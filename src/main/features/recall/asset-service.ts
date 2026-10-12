@@ -11,18 +11,29 @@ import {
 import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord, RecallAbilityAssetLifecycleStatus } from './candidate-service';
+import { ensureAbilityTags, normalizeAbilityTagList } from './ability-tag-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
 import { readAbilityAssetSemantics } from './asset-semantics';
 import { normalizeAbilityAssetScopePolicy, resolveScopeForAsset, normalizeAssetScopeValue, isRecallScopeTerm, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { normalizeCausalRule } from './world-model-types';
 import { resolveExecutionEvidenceRefs } from './evidence-resolution';
+import { assertCompliantAbilityAssetTitle, recallTitleIssue } from './title-policy';
 import { createLogger } from '../../logger';
 
 const log = createLogger('recall.assets');
 
-export type AbilityAssetActor = 'user' | 'system';
+/** `'ai'` = 模型经资产管家工具发起的写操作（specs/008 US-402）。
+ *  与 `'system'` 分开：system 是自动线（抽取/沉淀/迁移），它带自动评审交接；
+ *  ai 是用户在场的一次对话指令或 AI 自主提议，二者在台账上要能分辨。 */
+export type AbilityAssetActor = 'user' | 'system' | 'ai';
 export type AbilityAssetRecommendedAction = 'pause' | 'rework';
+
+/** 失败归因分类（specs/008 plan · AI Product Addendum）。
+ *  只写在失败/被拦截的台账记录上；成功的记录不带这个字段。 */
+export type AbilityAssetFailureCategory =
+  | 'product' | 'model' | 'prompt' | 'data' | 'tool'
+  | 'permission' | 'workflow' | 'schema' | 'governance' | 'evidence' | 'unknown';
 
 export interface AbilityAssetVersionRecord extends RecallJsonRecord {
   assetId: string;
@@ -50,10 +61,35 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
     | 'maturity_advanced'
     // 修正归档错误，**不是**靠证据挣来的升档。审计里要分得开，否则日后
     // 回看会以为这条资产做过 transfer proof。
-    | 'maturity_corrected';
+    | 'maturity_corrected'
+    // 资产管家安全网（specs/008 US-404）：
+    //   - danger_snapshot：危险操作**执行前**留的快照锚点（内容在版本流里，
+    //     这里记"当时在用哪一版"，回滚就滚到它）；
+    //   - danger_confirmed / danger_denied：单次确认的结果（含超时/取消=deny）；
+    //   - attempt_blocked：被门禁拦下的写尝试——**失败也要留痕**，否则"零静默
+    //     放行"只在成功路径上成立，拦下的那些事无从审计。
+    | 'danger_snapshot' | 'danger_confirmed' | 'danger_denied' | 'attempt_blocked'
+    // 审批提议（specs/008 US-406）：AI 提出、用户三态处置、以及用户编辑卡片内容。
+    // 提议本身不改资产，但它必须与"谁在什么时候做了什么决定"绑在同一条履历上。
+    | 'approval_proposed' | 'approval_confirmed' | 'approval_rejected' | 'approval_deferred' | 'approval_edited';
   at: string;
   actor?: AbilityAssetActor;
   note?: string;
+  /** 变更前后的**摘要**（不是全文）。由 `summarizeAuditChange` 产出：正文类字段
+   *  只留字数（specs/008 FR-012）。逐字对比看
+   *  版本流快照，台账不承担第二份正文副本的职责。 */
+  before?: string;
+  after?: string;
+  /** 本次写操作的依据（specs/008 FR-004 的「依据」项）。与 `note` 同源：
+   *  `note` 是既有消费方（渲染层生命周期记录 / timeline summary）在读的字段，
+   *  保留不动；`reason` 是台账四项里可单独查询的那一项。 */
+  reason?: string;
+  /** 失败/被拦截的归因。成功的记录不带——「被拦截不得计为成功」靠这个字段
+   *  与 `ok:false` 回执共同表达（specs/008 T032）。 */
+  failureCategory?: AbilityAssetFailureCategory;
+  /** 这一步之前的在用版本（回滚锚点）。渲染层「回滚到改动前」直接拿它调
+   *  rollback，不必从 `before` 摘要里反解。 */
+  rollbackAnchor?: string;
 }
 
 export interface UpdateAbilityAssetInput {
@@ -62,6 +98,9 @@ export interface UpdateAbilityAssetInput {
   title?: string;
   statement?: string;
   scope?: string;
+  /** `undefined` keeps the current policy; an empty object explicitly clears
+   *  every policy dimension. Empty arrays inside a non-empty policy remain
+   *  explicit deny-all decisions for that dimension. */
   scopePolicy?: RecallAbilityAssetScopePolicy;
   type?: RecallAbilityAssetRecord['type'];
   evidenceRefs?: RecallAbilityAssetRecord['evidenceRefs'];
@@ -70,9 +109,18 @@ export interface UpdateAbilityAssetInput {
   derivedFrom?: RecallAbilityAssetRecord['derivedFrom'];
   applicableWhen?: RecallAbilityAssetRecord['applicableWhen'];
   forbiddenWhen?: RecallAbilityAssetRecord['forbiddenWhen'];
-  sensitivity?: RecallAbilityAssetRecord['sensitivity'];
+  /** 主题标签（specs/012 T004）：整组替换语义。规范化/去重/≤12 条由
+   *  ability-tag-service 的规范化唯一处收口，超限**抛错不截断**；缺失的库条目
+   *  自动补建。元数据：**不 bump 内容版本**（对齐 family.ts:232 的 familyName
+   *  直写先例）。**缺失 = 不改标签**（省略≠清空；清空请显式传 `[]`）。 */
+  tags?: string[];
   reason: string;
   actor: AbilityAssetActor;
+  /** 乐观并发：调用方读到的版本号。给了就要求与当前版本一致，不一致直接拒绝
+   *  （**不静默覆盖**）。比对放在 `updateRecallJsonRecord` 的锁内做——放到调用方
+   *  先读后写就会留下 TOCTOU 窗口，"比对通过"与"真的没被改过"变成两件事。
+   *  资产管家工具在"用户可能正在手动编辑同一条"的场景下必须传它。 */
+  expectedVersion?: string;
   acknowledgeRecommendation?: boolean;
   reviewDecisionId?: string;
   sourceCandidateId?: string;
@@ -83,6 +131,8 @@ export interface UpdateAbilityAssetInput {
 export interface AbilityAssetUserActionInput {
   actor: AbilityAssetActor;
   reason: string;
+  /** Optional optimistic concurrency guard for status changes. */
+  expectedVersion?: string;
   reviewDecisionId?: string;
   sourceCandidateId?: string;
 }
@@ -111,11 +161,11 @@ const ABILITY_ASSET_MATURITIES = new Set<RecallAbilityAssetRecord['maturity']>([
 /**
  * 删除保留期长度（天）。
  *
- * 规范 22.1 只写了「进入保留期」「保留期内可恢复」，没有给出具体天数，所以这里
- * 是占位值，等产品确认后只改这一个常量。记录里存的是 `deletedAt` 这个事实而不是
- * 算好的到期时间，因此改动此常量不需要迁移任何已有数据。
- *
- * TODO(产品确认): 保留期天数，以及到期后是自动 purge 还是仅停止恢复入口。
+ * 口径（2026-09-24 定稿，不再是占位值）：删除后 30 天内可恢复；保留期内可在
+ * 「已删除」列表对单条「立即彻底删除」；**到期系统自动彻底删除**（内容与记录
+ * 一并清除、不可恢复）。到期清理见 `asset-retention-service.ts`。
+ * 记录里存的是 `deletedAt` 这个事实而不是算好的到期时间，所以改动此常量不需要
+ * 迁移任何已有数据。
  */
 export const ABILITY_ASSET_DELETION_RETENTION_DAYS = 30;
 
@@ -140,6 +190,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     typeof value.candidateId !== 'string' || typeof value.title !== 'string' ||
     typeof value.statement !== 'string' || !Array.isArray(value.evidenceRefs) ||
     typeof value.scope !== 'string' || typeof value.version !== 'string' ||
+    typeof value.updatedAt !== 'string' ||
     !ABILITY_ASSET_STATUSES.has(value.status as RecallAbilityAssetRecord['status']) ||
     (value.maturity !== undefined
       && !ABILITY_ASSET_MATURITIES.has(value.maturity as RecallAbilityAssetRecord['maturity']))
@@ -153,7 +204,11 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     return { ...value, evidenceRefs: [] } as unknown as RecallAbilityAssetRecord;
   }
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
-  if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
+  // 手动新建资产（「记一条」晋升）没有对话证据，空证据合法——与 purged 的
+  // 空证据同款豁免口径，靠落盘的 origin='manual' 识别（2026-09-28 拍板项）。
+  if (!evidenceRefs.length && (value as { origin?: unknown }).origin !== 'manual') {
+    throw new Error('malformed recall ability asset evidence');
+  }
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(value, value.id);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
@@ -226,8 +281,9 @@ function bounded(value: unknown, field: string, max: number): string {
 function requireAssetAction(input: unknown): AbilityAssetUserActionInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('ability asset action requires an actor');
   const record = input as Record<string, unknown>;
-  if (record.actor !== 'user' && record.actor !== 'system') {
-    throw new Error('ability asset action requires a user actor or system actor');
+  if (record.actor !== 'user' && record.actor !== 'system' && record.actor !== 'ai') {
+    // 措辞里的 "user actor" 是既有契约（调用方与测试按它匹配），改动需同步。
+    throw new Error('ability asset action requires a user actor, system actor or ai actor');
   }
   return { actor: record.actor, reason: bounded(record.reason, 'reason', 1_000) };
 }
@@ -253,7 +309,6 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),
     ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
     ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
-    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     ...(asset.sourceSessionIds?.length ? { sourceSessionIds: asset.sourceSessionIds } : {}),
     status: asset.status,
     maturity: asset.maturity,
@@ -294,8 +349,125 @@ async function appendVersion(userId: string, asset: RecallAbilityAssetRecord, me
   } satisfies AbilityAssetVersionRecord);
 }
 
-async function appendAudit(userId: string, assetId: string, action: AbilityAssetAuditRecord['action'], metadata: { note?: string; actor?: AbilityAssetActor } = {}): Promise<void> {
+/** 台账摘要的隐私边界（specs/008 FR-012 + data-model「before/after 只存摘要」）。
+ *
+ *  正文类字段**只留字数**：台账是给用户逐条读的账，不是第二份正文副本。
+ *  要逐字对比，版本流里有完整快照（版本对比视图读的就是它）。
+ */
+const AUDIT_BODY_FIELDS: ReadonlySet<string> = new Set(['statement', 'applicableWhen', 'forbiddenWhen']);
+const AUDIT_SUMMARY_MAX_CHARS = 240;
+const AUDIT_BODY_PREFIX_CHARS = 60;
+const AUDIT_VALUE_MAX_CHARS = 80;
+
+/** 参与台账前后值比对的字段：只取用户/模型能改的那几维，治理派生量
+ *  （validationCount、recommendedAction 等）由各自的 audit action 表达。 */
+const AUDIT_DIFF_FIELDS = [
+  'title', 'statement', 'type', 'scope', 'status', 'maturity', 'version',
+  'applicableWhen', 'forbiddenWhen', 'evidenceRefs', 'deletedAt',
+] as const;
+
+function clipAuditText(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/** 单个字段值 → 台账摘要文本。 */
+export function summarizeAuditValue(field: string, value: unknown): string {
+  if (value === undefined || value === null || value === '') return '—';
+  if (AUDIT_BODY_FIELDS.has(field)) {
+    const text = Array.isArray(value) ? value.map((entry) => String(entry)).join('；') : String(value);
+    const size = Array.isArray(value) ? `${value.length} 条` : `${text.length} 字`;
+    const flat = text.replace(/\s+/g, ' ').trim();
+    const prefix = flat.slice(0, AUDIT_BODY_PREFIX_CHARS);
+    // 短正文整段就是"前缀"——这时不给前缀等于台账什么都没说（用户看不出改了
+    // 什么），而它本来也没超出前缀预算，没有多泄露任何东西。
+    return prefix.length < flat.length ? `${size}·「${prefix}…」` : `${size}·「${prefix}」`;
+  }
+  if (Array.isArray(value)) return `${value.length} 项`;
+  return clipAuditText(String(value), AUDIT_VALUE_MAX_CHARS);
+}
+
+export interface AuditFieldChange {
+  field: string;
+  before: unknown;
+  after: unknown;
+}
+
+/** 变更集 → 台账的 `before`/`after` 两个摘要串。空变更集返回 undefined，
+ *  调用方据此不写这两个字段（无变化的记录不该带空摘要）。 */
+export function summarizeAuditChange(
+  changes: readonly AuditFieldChange[],
+): { before: string; after: string } | undefined {
+  if (!changes.length) return undefined;
+  const render = (pick: (change: AuditFieldChange) => unknown): string => {
+    const joined = changes
+      .map((change) => `${change.field}=${summarizeAuditValue(change.field, pick(change))}`)
+      .join('；');
+    return joined.length > AUDIT_SUMMARY_MAX_CHARS
+      ? `${joined.slice(0, AUDIT_SUMMARY_MAX_CHARS)}…`
+      : joined;
+  };
+  return { before: render((change) => change.before), after: render((change) => change.after) };
+}
+
+/** 比对两条资产记录，取出真正变了的那几维（供写路径生成台账前后值）。 */
+export function diffAbilityAssetsForAudit(
+  before: Partial<RecallAbilityAssetRecord>,
+  after: Partial<RecallAbilityAssetRecord>,
+): AuditFieldChange[] {
+  const changes: AuditFieldChange[] = [];
+  for (const field of AUDIT_DIFF_FIELDS) {
+    const left = before[field];
+    const right = after[field];
+    if (JSON.stringify(left ?? null) === JSON.stringify(right ?? null)) continue;
+    changes.push({ field, before: left, after: right });
+  }
+  return changes;
+}
+
+/**
+ * 写路径的失败归因（specs/008 T032 · plan 的 AI Product Addendum 分类表）。
+ *
+ * 只影响"回执与台账怎么写归因"，**不改判定**：所有失败一律不得计为成功。
+ * 认的是各写函数抛出的稳定英文消息（它们是不变量的一部分，不是展示文案），
+ * 认不出的落 `unknown`——宁可归因不准，也不要假装知道原因。
+ */
+export function classifyAbilityAssetWriteFailure(error: unknown): AbilityAssetFailureCategory {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('version conflict')) return 'workflow';
+  if (message.includes('forbidden to persist')) return 'permission';
+  if (
+    message.includes('cannot be changed')
+    || message.includes('has been purged')
+    || message.includes('not restorable')
+    || message.includes('retention window')
+    || message.includes('review handoff')
+  ) return 'governance';
+  if (message.includes('not found')) return 'data';
+  if (message.includes('evidence is required')) return 'evidence';
+  if (message.includes('identity is immutable') || message.includes('invalid ') || message.includes('malformed ')) return 'schema';
+  return 'unknown';
+}
+
+export interface AbilityAssetAuditMetadata {
+  note?: string;
+  reason?: string;
+  actor?: AbilityAssetActor;
+  before?: string;
+  after?: string;
+  failureCategory?: AbilityAssetFailureCategory;
+  /** 这一步改动**之前**在用哪一版：回滚锚点。写路径自己填，渲染层的
+   *  「回滚到改动前」直接拿它调 rollback——从 `before` 摘要里反解版本号是
+   *  解析展示文本，迟早随文案改动而错。 */
+  rollbackAnchor?: string;
+}
+
+async function appendAudit(userId: string, assetId: string, action: AbilityAssetAuditRecord['action'], metadata: AbilityAssetAuditMetadata = {}): Promise<void> {
   const at = new Date().toISOString();
+  const reason = metadata.reason === undefined ? undefined : clipAuditText(metadata.reason, 1_000);
+  // note 是既有消费方（渲染层生命周期记录 / timeline summary）在读的字段：
+  // 没有单独给 note 时按 reason 落，保证「依据」在旧界面上照样看得见。
+  const note = metadata.note === undefined ? reason : clipAuditText(metadata.note, 1_000);
   await appendRecallJsonlRecord(userId, 'ability-asset-audit', assetId, {
     schemaVersion: 1,
     ownerId: userId,
@@ -304,8 +476,71 @@ async function appendAudit(userId: string, assetId: string, action: AbilityAsset
     action,
     at,
     ...(metadata.actor ? { actor: metadata.actor } : {}),
-    ...(metadata.note ? { note: metadata.note } : {}),
+    ...(note ? { note } : {}),
+    ...(reason ? { reason } : {}),
+    ...(metadata.before ? { before: metadata.before } : {}),
+    ...(metadata.after ? { after: metadata.after } : {}),
+    ...(metadata.failureCategory ? { failureCategory: metadata.failureCategory } : {}),
+    ...(metadata.rollbackAnchor ? { rollbackAnchor: metadata.rollbackAnchor } : {}),
   } satisfies AbilityAssetAuditRecord);
+}
+
+/** 台账写入的公开口（specs/008 US-404）。
+ *
+ *  写路径自己记账的那几条（updated/deleted/…）不走这里；这个口给**工具层**用：
+ *  危险操作的执行前快照与确认结果、以及被门禁拦下的写尝试——它们不产生版本
+ *  变更，但必须留痕，否则"危险操作 100% 有执行前快照""零静默放行"两条承诺
+ *  在失败路径上无从取证。
+ *
+ *  **不校验业务状态**（记录的是"发生过什么"，不是"资产现在是什么"）：调用方
+ *  自己保证语义，就像 appendAudit 的既有调用点一样。 */
+export async function recordAbilityAssetAudit(
+  userId: string,
+  assetId: string,
+  action: AbilityAssetAuditRecord['action'],
+  metadata: AbilityAssetAuditMetadata = {},
+): Promise<void> {
+  if (!safeId(assetId)) throw new Error('invalid ability asset id');
+  await appendAudit(userId, assetId, action, metadata);
+}
+
+/**
+ * 回滚/选用旧版时必须**显式清掉**的可选内容字段。
+ *
+ * `...content` 展开只能带上快照里**存在**的键：快照里缺席的可选字段会静默保留
+ * 当前值——"改回去"于是只改了一半（回滚到没有 scopePolicy / 条件 / 定级的那一版，
+ * 这些字段会原样留下）。这与 `updateAbilityAsset` 的条件清空是同一族缺陷，
+ * 那处已修，这里（rollback 与 select 两条兄弟路径）一并清。
+ *
+ * 治理状态与成熟度**不在其列**：按设计不随内容回滚（暂停过的不该因回滚变回在用）。
+ */
+const VERSION_REVERT_CLEARABLE_FIELDS = [
+  'scopePolicy', 'applicableWhen', 'forbiddenWhen',
+  'ontologyRefs', 'relations', 'derivedFrom', 'learningSignal',
+  'learningProvenance', 'sourceSessionIds',
+] as const;
+
+/** 把旧版快照里缺席的可选内容字段从目标记录上摘掉（见上）。 */
+function clearFieldsAbsentFromSnapshot(
+  target: Record<string, unknown>,
+  snapshot: Record<string, unknown>,
+): void {
+  for (const field of VERSION_REVERT_CLEARABLE_FIELDS) {
+    if (!(field in snapshot)) delete target[field];
+  }
+}
+
+/** 当前在用版（回滚锚点取它）：select 切过旧版时 activeVersion 才是内容来源。 */
+function activeVersionOf(asset: RecallAbilityAssetRecord): string {
+  return String(asset.activeVersion || asset.version || '1');
+}
+
+/** 对外暴露同一个规则：工具层与渲染层都要回答"这条现在的在用版是几"，
+ *  各自写一遍迟早会分叉（select 之后 activeVersion 才是内容来源）。 */
+export function abilityAssetActiveVersion(
+  asset: Pick<RecallAbilityAssetRecord, 'activeVersion' | 'version'>,
+): string {
+  return activeVersionOf(asset as RecallAbilityAssetRecord);
 }
 
 export async function initializeAbilityAsset(userId: string, asset: RecallAbilityAssetRecord, metadata: { reason?: string; actor?: AbilityAssetActor } = {}): Promise<void> {
@@ -324,6 +559,11 @@ export async function createAbilityAsset(
   if (metadata.actor !== 'user' && metadata.actor !== 'system') throw new Error('invalid ability asset creation actor');
   // 刀一（2026-09-19）：scope 写入点归一——词条放行、场景描述句兜底 general。
   if (input.scope !== undefined) input = { ...input, scope: resolveScopeForAsset(input.scope) };
+  // 标题一等化闸门（设计 3.2 / 深探 F4）：create 收口补与 update 对称的 bounded
+  // 归一（空白折叠、trim、≤120），随后过 3.1 判定。闸门放在收口处，任何调用方
+  // （晋升、跨会话记忆、AI 管家、审批卡确认、未来新增）都无法绕过。
+  input = { ...input, title: bounded(input.title, 'title', 120) };
+  assertCompliantAbilityAssetTitle(input.title, input.statement);
   bounded(metadata.reason, 'reason', 1_000);
   assertNotForbiddenToPersist([
     input.title,
@@ -405,6 +645,39 @@ export async function readAbilityAsset(userId: string, assetId: string): Promise
   return asAsset(raw);
 }
 
+/** Keep the optional role-template view aligned with the canonical asset. The
+ * prompt reader also rechecks live eligibility, so a transient cleanup failure
+ * cannot make a paused or restricted asset visible to a task. */
+async function reconcilePersonalProfileProjection(
+  userId: string,
+  asset: RecallAbilityAssetRecord,
+): Promise<void> {
+  try {
+    const profileSync = await import('./personal-profile-sync');
+    const canProject = asset.type === 'personal'
+      && asset.status === 'active'
+      && !(asset.ontologyRefs?.length);
+    if (canProject) {
+      await profileSync.schedulePersonalProfileSync(userId, { assetId: asset.id });
+      return;
+    }
+    const result = await profileSync.removePersonalProfileProjectionForAsset(userId, asset.id);
+    if (!result.ok) {
+      log.warn('personal profile projection cleanup needs review', {
+        userId,
+        assetId: asset.id,
+        error: result.error,
+      });
+    }
+  } catch (error) {
+    log.warn('personal profile projection reconciliation failed', {
+      userId,
+      assetId: asset.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function listAbilityAssets(userId: string): Promise<RecallAbilityAssetRecord[]> {
   let names: string[];
   try { names = await fs.readdir(assetsDirectory(userId)); }
@@ -412,8 +685,38 @@ export async function listAbilityAssets(userId: string): Promise<RecallAbilityAs
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
-  const records = await Promise.all(names.filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5))).map((name) => readRecallJsonRecord(userId, 'ability-assets', name.slice(0, -5))));
-  return records.filter((record): record is RecallJsonRecord => Boolean(record)).map(asAsset).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const ids = names
+    .filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
+    .map((name) => name.slice(0, -5));
+  // 逐条降级，而不是让一条坏资产把全部资产列表读失败（照抄同目录
+  // listRecallCandidates / listExperiences 的既有口径）：记录形状的不变量
+  // 分布在两层——store 的 validateRecallRecord 和这里的 asAsset——任一层
+  // 一抛，主列表/空间 tab/收件箱聚合/巡检/启动迁移全挂，好资产也列不出。
+  //
+  // 只降级**记录形状**的错。真正的 IO 故障（EACCES / EISDIR……）带 errno code，
+  // 照旧上抛：那种情况下静默少几条，等于把磁盘问题伪装成「资产变少了」。
+  const reads = await Promise.all(ids.map(async (id) => {
+    try {
+      return { id, record: await readRecallJsonRecord(userId, 'ability-assets', id) };
+    } catch (error) {
+      if (typeof (error as NodeJS.ErrnoException).code === 'string') throw error;
+      return { id, error: error as Error };
+    }
+  }));
+  const assets: RecallAbilityAssetRecord[] = [];
+  for (const read of reads) {
+    if (read.error) {
+      log.warn('skipped an unreadable recall ability asset', { assetId: read.id, error: read.error.message });
+      continue;
+    }
+    if (!read.record) continue;
+    try {
+      assets.push(asAsset(read.record));
+    } catch (error) {
+      log.warn('skipped a malformed recall ability asset', { assetId: read.id, error: (error as Error).message });
+    }
+  }
+  return assets.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 /** 某空间沉淀的资产（按 spaceId 过滤；资产随 recall 全局存储，不随空间删）。
@@ -425,11 +728,36 @@ export async function listAbilityAssetsForSpace(userId: string, spaceId: string)
   return all.filter((asset) => asset.spaceId === spaceId && asset.status !== 'revoked');
 }
 
+/** tags-only 更新判定（specs/012 T004）：除 tags/reason/actor/expectedVersion 外
+ *  没有别的字段 = 纯标签元数据更新，走不 bump 版本的路径；任何内容字段在场
+ *  都走既有内容路径（版本照常 bump，标签随同写入但不进版本快照）。 */
+const TAGS_ONLY_METADATA_KEYS = new Set(['tags', 'reason', 'actor', 'expectedVersion']);
+
+function isTagsOnlyUpdate(input: UpdateAbilityAssetInput): boolean {
+  return Object.keys(input).every((key) => TAGS_ONLY_METADATA_KEYS.has(key));
+}
+
+function sameTagList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+/** 台账里的标签变更注记：只存标签名（元数据，非正文），形如「标签：a、b → c」。 */
+function formatTagNames(names: readonly string[]): string {
+  return names.length ? names.join('、') : '（无）';
+}
+
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
   // 刀一（2026-09-19）：scope 写入点归一——词条放行、场景描述句兜底 general。
   if (input.scope !== undefined) input = { ...input, scope: resolveScopeForAsset(input.scope) };
   const action = requireAssetAction(input);
+  // 标签规范化唯一处在 ability-tag-service（specs/012 反漂移 II4），这里不另写。
+  // 缺失的库条目**先补建**再写资产（createdFrom 按调用来源：模型打标 = ai），
+  // 保证"资产引用的每个名字都有 active 条目"不被写路径自己打破。
+  const tagsInput = input.tags === undefined ? undefined : normalizeAbilityTagList(input.tags);
+  if (tagsInput !== undefined) {
+    await ensureAbilityTags(userId, tagsInput, action.actor === 'ai' ? 'ai' : 'user');
+  }
   const evidenceRefs = input.evidenceRefs === undefined
     ? undefined
     : await resolveExecutionEvidenceRefs(userId, normalizeCognitionSourceRefs(input.evidenceRefs));
@@ -454,9 +782,13 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     // 不过闸就等于给凭证留了一条只换字段名的旁路。
     ...(semantics.applicableWhen || []),
     ...(semantics.forbiddenWhen || []),
+    // 标签同上：会进筛选提示的自由文本（specs/012）。
+    ...(tagsInput || []),
   ]);
   let clearedRecommendation = false;
   let changed = false;
+  let tagsChanged = false;
+  let beforeAsset: RecallAbilityAssetRecord | undefined;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
@@ -464,14 +796,39 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     // 仍可被 update 改内容并 bump 版本——与 select/rollback/merge 同口径。
     assertMutableAbilityAsset(current);
     if (reviewDecisionId && current.appliedReviewDecisionIds?.includes(reviewDecisionId)) return current;
+    if (input.expectedVersion !== undefined && current.version !== input.expectedVersion) {
+      throw new Error(
+        `ability asset version conflict: expected v${input.expectedVersion}, current v${current.version}`,
+      );
+    }
+    // 标签元数据路径（specs/012 T004）：tags-only 更新**不 bump 内容版本**——
+    // 标签是元数据不是内容（对齐 family.ts:232 的 familyName 直写先例）；
+    // 版本快照不含 tags（见 snapshot()），version-diff 因此永远不出现标签项。
+    // 规范化后无变化 = 不写不记账（幂等：同名打标不产生第二条台账）。
+    // 清空的盘上形态是键缺席（与 applicableWhen 的显式清空同款），缺失与 []
+    // 都表示「未分类」。
+    if (isTagsOnlyUpdate(input)) {
+      if (tagsInput === undefined || sameTagList(current.tags || [], tagsInput)) return current;
+      changed = false;
+      tagsChanged = true;
+      beforeAsset = current;
+      const tagOnly: RecallAbilityAssetRecord = {
+        ...current,
+        ...(tagsInput.length ? { tags: tagsInput } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+      if (!tagsInput.length) delete tagOnly.tags;
+      return tagOnly;
+    }
     changed = true;
+    beforeAsset = current;
     clearedRecommendation = Boolean(current.recommendedAction && input.acknowledgeRecommendation);
     const next: RecallAbilityAssetRecord = {
       ...current,
       ...(input.title !== undefined ? { title: bounded(input.title, 'title', 120) } : {}),
       ...(input.statement !== undefined ? { statement: bounded(input.statement, 'statement', 4_000) } : {}),
       ...(input.scope !== undefined ? { scope: bounded(input.scope, 'scope', 500) } : {}),
-      ...(scopePolicy !== undefined ? { scopePolicy } : {}),
+      ...(input.scopePolicy !== undefined && scopePolicy ? { scopePolicy } : {}),
       ...(input.type !== undefined ? { type: input.type } : {}),
       ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
       ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
@@ -484,8 +841,17 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
         sourceCandidateIds: [...new Set([...(current.sourceCandidateIds || [current.candidateId]), sourceCandidateId!])],
         reviewDecisionId,
       } : {}),
+      // 标签随内容路径整组替换（快照不含 tags：元数据不进版本链）。
+      ...(tagsInput?.length ? { tags: tagsInput } : {}),
       updatedAt: new Date().toISOString(),
     };
+    // An explicitly supplied empty policy means “remove all restrictions”.
+    // `normalizeAbilityAssetScopePolicy({})` returns undefined to represent an
+    // absent policy in stored records, so use the input-presence check to tell
+    // that deliberate clear apart from an omitted update field.
+    if (input.scopePolicy !== undefined && !scopePolicy) delete next.scopePolicy;
+    if (tagsInput !== undefined && !tagsInput.length) delete next.tags;
+    if (tagsInput !== undefined && !sameTagList(current.tags || [], tagsInput)) tagsChanged = true;
     if (clearedRecommendation) {
       delete next.recommendedAction;
       delete next.recommendationReason;
@@ -496,13 +862,56 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     // 没折出值的维度 = 显式清空（盘上形态：键缺席），把现值从记录上拿掉。
     if (input.applicableWhen !== undefined && !semantics.applicableWhen) delete next.applicableWhen;
     if (input.forbiddenWhen !== undefined && !semantics.forbiddenWhen) delete next.forbiddenWhen;
+    // 标题一等化闸门（设计 3.2 / 深探 F1）：title 在场即过 3.1 判定，比对用的
+    // 正文是写入后的最终值（本次未改正文 = 在用正文）。闸门拦的是**写入**：
+    // 存量遗留的不合规标题只要本次不写 title 就不受影响，不会被这里卡死。
+    if (input.title !== undefined) assertCompliantAbilityAssetTitle(next.title, next.statement);
     return next;
   });
   const asset = asAsset(updated);
-  if (changed) {
-    await appendVersion(userId, asset, { reason: action.reason, actor: action.actor });
-    await appendAudit(userId, asset.id, 'updated', { note: action.reason, actor: action.actor });
-    if (clearedRecommendation) await appendAudit(userId, asset.id, 'recommendation_cleared', { note: action.reason, actor: action.actor });
+  if (changed || tagsChanged) {
+    // 标签是元数据：tags-only 改动不进版本流（不 appendVersion）、不 bump
+    // version/activeVersion，只进台账；内容路径照旧进版本流。
+    if (changed) {
+      await appendVersion(userId, asset, { reason: action.reason, actor: action.actor });
+    }
+    const summary = summarizeAuditChange(
+      diffAbilityAssetsForAudit(beforeAsset ?? asset, asset),
+    );
+    // 台账 reason 必含「标签：旧 → 新」（specs/012 data-model §3 台账纪律）——
+    // 只存标签名（元数据，非正文）。
+    const tagNote = tagsChanged && beforeAsset
+      ? `标签：${formatTagNames(beforeAsset.tags || [])} → ${formatTagNames(asset.tags || [])}`
+      : undefined;
+    await appendAudit(userId, asset.id, 'updated', {
+      reason: tagNote ? `${action.reason}｜${tagNote}` : action.reason,
+      actor: action.actor,
+      ...(summary ? { before: summary.before, after: summary.after } : {}),
+      ...(beforeAsset ? { rollbackAnchor: activeVersionOf(beforeAsset) } : {}),
+    });
+    if (changed && clearedRecommendation) await appendAudit(userId, asset.id, 'recommendation_cleared', { note: action.reason, actor: action.actor });
+  }
+  if (changed) await reconcilePersonalProfileProjection(userId, asset);
+  if (changed && beforeAsset && asset.title !== beforeAsset.title) {
+    // 标题一等化硬前提（设计 3.3 / 深探 F6）：改 title 走内容路径必然 bump
+    // version，而 committed 投影读取强校验「冻结版本 == 资产当前版本」，不匹配
+    // 即整组拒绝注入且无回退。一切改标题写入必须伴随投影版本刷新——与 scope
+    // 迁移（2026-09-14）同口径，动态 import 避开 asset-service ↔
+    // context-projection 静态循环依赖。资产写已落盘：刷新失败只记 error 不回滚
+    // （回滚救不回已 bump 的版本号），留给下次写入或迁移修复。
+    try {
+      const { refreshCommittedProjectionAssetVersion } = await import('./context-projection');
+      const refreshed = await refreshCommittedProjectionAssetVersion(userId, asset.id, String(asset.version));
+      if (refreshed > 0) {
+        log.info(`title change refreshed committed projections assetId=${asset.id} count=${refreshed}`);
+      }
+    } catch (error) {
+      log.error('committed projection refresh failed after title change', {
+        userId,
+        assetId: asset.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   return asset;
 }
@@ -519,30 +928,37 @@ export async function mergeAbilityAssetEvidence(
 ): Promise<RecallAbilityAssetRecord> {
   const current = await readAbilityAsset(userId, assetId);
   if (!current) throw new Error('recall ability asset not found');
-  assertNotPurged(current);
-  if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+  // 2026-09-28 红队补齐：与 updateAbilityAsset 同口径（assertMutable 挡
+  // purged/revoked/deleted）。此前只挡 purged/revoked——已删除资产仍会被
+  // 语义去重融合路径 bump 版本、追加快照，违反「保留期内不可变」。
+  assertMutableAbilityAsset(current);
   // 只解析这批**新**证据（2026-09-18 乙档）：库里既有的引用原样放行——
   // 旧记录指向已被清理的复盘是既成事实，不该由一次融合触发版本重写；
   // 它们的诚实态由渲染层的"请求过但没有"兜底。
   const incoming = (await resolveExecutionEvidenceRefs(userId, normalizeCognitionSourceRefs(newRefs))) || [];
-  const merged = mergeRefsDedup(current.evidenceRefs || [], incoming);
   const sourceSessionIds = [...new Set([
     ...(current.sourceSessionIds || []),
     ...(metadata.sourceSessionIds || []).filter((id) => safeId(id)),
   ])].slice(0, 50);
-  const changed = merged.length !== (current.evidenceRefs || []).length
-    || merged.some((ref, i) => JSON.stringify(ref) !== JSON.stringify((current.evidenceRefs || [])[i]))
-    || sourceSessionIds.length !== (current.sourceSessionIds || []).length;
-  if (!changed) return current;
   const updated = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const cur = asAsset(raw);
-    assertNotPurged(cur);
-    if (cur.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    assertMutableAbilityAsset(cur);
+    // 融合在锁内基于最新 cur 重算（2026-09-28）：锁外预计算的 merged 会把
+    // 并发 updateAbilityAsset 刚写入的引用集整体覆写（丢更新窗口）。
+    const merged = mergeRefsDedup(cur.evidenceRefs || [], incoming);
+    const mergedSessions = [...new Set([
+      ...(cur.sourceSessionIds || []),
+      ...(metadata.sourceSessionIds || []).filter((id) => safeId(id)),
+    ])].slice(0, 50);
+    const changed = merged.length !== (cur.evidenceRefs || []).length
+      || merged.some((ref, i) => JSON.stringify(ref) !== JSON.stringify((cur.evidenceRefs || [])[i]))
+      || mergedSessions.length !== (cur.sourceSessionIds || []).length;
+    if (!changed) return cur;
     return {
       ...cur,
       evidenceRefs: merged,
-      ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
+      ...(mergedSessions.length ? { sourceSessionIds: mergedSessions } : {}),
       version: nextVersion(cur.version),
       activeVersion: nextVersion(cur.version),
       updatedAt: new Date().toISOString(),
@@ -607,21 +1023,38 @@ async function setStatus(
   if ((reviewDecisionId === undefined) !== (sourceCandidateId === undefined)) throw new Error('incomplete ability asset review handoff');
   if (reviewDecisionId !== undefined && !/^rd_[A-Za-z0-9_-]{8,64}$/.test(reviewDecisionId)) throw new Error('invalid ability asset review decision');
   if (sourceCandidateId !== undefined && !safeId(sourceCandidateId)) throw new Error('invalid ability asset source candidate');
-  if (action.actor === 'system' && reviewDecisionId === undefined) {
+  // 评审交接要求只覆盖内容/治理变更。保留期到期清理是**策略触发**，没有可指的
+  // 评审决定——凭空造一个 rd_ 只会污染 appliedReviewDecisionIds，让日后回看以为
+  // 这条经过了一次人工评审。终态清除因此豁免（specs/008 T005 到期自动彻底删除）。
+  if (action.actor === 'system' && status !== 'purged' && reviewDecisionId === undefined) {
     throw new Error('system asset action requires an automatic review handoff');
   }
   let clearedRecommendation = false;
   let changed = false;
+  let beforeAsset: RecallAbilityAssetRecord | undefined;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
     assertNotPurged(current);
+    if (input.expectedVersion !== undefined && current.version !== input.expectedVersion) {
+      throw new Error(
+        `ability asset version conflict: expected v${input.expectedVersion}, current v${current.version}`,
+      );
+    }
     if (current.status === 'revoked' && status !== 'revoked' && status !== 'purged') {
       throw new Error('revoked ability asset cannot be changed');
+    }
+    // deleted 与 revoked 同为终态守卫口径（2026-09-28 红队补齐）：保留期内的
+    // 删除只许重复 delete（幂等）、到期/手动 purge，或经 restore（auditAction
+    // 'restored'，自带保留期 guard）回 active。此前 pause/resume/archive/revoke
+    // 四条 setStatus 路径不挡 deleted——resume 可让已删除资产绕过保留期复活。
+    if (current.status === 'deleted' && status !== 'deleted' && status !== 'purged' && auditAction !== 'restored') {
+      throw new Error('deleted ability asset cannot be changed');
     }
     if (reviewDecisionId && current.appliedReviewDecisionIds?.includes(reviewDecisionId)) return current;
     guard?.(current);
     changed = current.status !== status || Boolean(reviewDecisionId);
+    beforeAsset = current;
     clearedRecommendation = Boolean(current.recommendedAction && status !== 'active');
     const next: RecallAbilityAssetRecord = {
       ...current,
@@ -643,8 +1076,19 @@ async function setStatus(
   });
   const asset = asAsset(updated);
   if (changed) {
-    await appendAudit(userId, asset.id, auditAction, { note: action.reason, actor: action.actor });
+    const summary = summarizeAuditChange(
+      diffAbilityAssetsForAudit(beforeAsset ?? asset, asset),
+    );
+    await appendAudit(userId, asset.id, auditAction, {
+      reason: action.reason,
+      actor: action.actor,
+      ...(summary ? { before: summary.before, after: summary.after } : {}),
+      // 状态改动**不**留回滚锚点：它不 bump 版本，"回滚到改动前那一版"等于回滚到
+      // 当前版（服务层会正当拒绝）。状态的回退走 restore，不是内容回滚——把锚点
+      // 写上去只会让界面给出一个点了必然报错的按钮。
+    });
     if (clearedRecommendation) await appendAudit(userId, asset.id, 'recommendation_cleared', { note: action.reason, actor: action.actor });
+    await reconcilePersonalProfileProjection(userId, asset);
   }
   return asset;
 }
@@ -703,7 +1147,10 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
     [/^Verified multi-tool workflow$/, () => '已验证的工作流程'],
   ];
   for (const asset of await listAbilityAssets(userId)) {
-    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    // deleted 一并跳过（2026-09-28 红队补齐）：迁移是维护性内容改写，保留期内
+    // 的删除同样不可变——此前只跳过 revoked/purged，deleted 资产会被改标题并
+    // bump 版本，与 assertMutableAbilityAsset 的口径冲突。
+    if (asset.status !== 'active' && asset.status !== 'paused' && asset.status !== 'archived') continue;
     const scope = String(asset.scope || '');
     let nextTitle: string | undefined;
     for (const [pattern, build] of titleRules) {
@@ -721,6 +1168,10 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
       await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
         if (!raw) throw new Error('recall ability asset not found');
         const current = asAsset(raw);
+        // 锁内终态复核（r2 补齐）：外层快照过滤只对快照时刻有效，遍历期间
+        // 资产可能已被删除/撤回——闭包抛错发生在 writeJson 之前，整个
+        // runExclusive reject 不落盘，外层 catch 记 warn 跳过该资产继续。
+        assertMutableAbilityAsset(current);
         if (nextTitle) current.title = nextTitle;
         if (nextStatement) current.statement = nextStatement;
         current.version = nextVersion(current.version);
@@ -764,7 +1215,8 @@ export async function migrateLegacyFreeTextScopes(userId: string): Promise<numbe
   const { normalizeAssetScopeValue, isRecallScopeTerm } = await import('./scope-policy');
   let migrated = 0;
   for (const asset of await listAbilityAssets(userId)) {
-    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    // 同上：迁移不触碰终态/保留期资产（2026-09-28 红队补齐，与标题迁移同口径）。
+    if (asset.status !== 'active' && asset.status !== 'paused' && asset.status !== 'archived') continue;
     const scope = String(asset.scope || '');
     if (isRecallScopeTerm(scope)) continue;
     const normalized = normalizeAssetScopeValue(scope);
@@ -773,6 +1225,8 @@ export async function migrateLegacyFreeTextScopes(userId: string): Promise<numbe
       await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
         if (!raw) throw new Error('recall ability asset not found');
         const current = asAsset(raw);
+        // 同上（r2 补齐）：锁内终态复核，墓碑/撤回资产不进改写。
+        assertMutableAbilityAsset(current);
         current.scope = normalized;
         current.version = nextVersion(current.version);
         current.updatedAt = new Date().toISOString();
@@ -816,8 +1270,9 @@ export async function setAbilityAssetCrossScopeConfirmation(
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
-    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    // 2026-09-28 红队补齐：跨范围授权是对内容的授权，deleted 资产上预埋授权
+    // 会让恢复后的资产带着一条用户没有重新确认过的许可。
+    assertMutableAbilityAsset(current);
     if (Boolean(current.crossScopeConfirmedAt) === confirmed) return current;
     changed = true;
     const next: RecallAbilityAssetRecord = {
@@ -847,8 +1302,8 @@ export async function recommendAbilityAssetAction(userId: string, assetId: strin
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
-    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    // 2026-09-28 红队补齐：推荐卡只对可变更资产有意义（与内容写路径同口径）。
+    assertMutableAbilityAsset(current);
     if (current.recommendedAction === input.action && current.recommendationReason === reason) return current;
     appended = true;
     return { ...current, recommendedAction: input.action, recommendationReason: reason, recommendationAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -887,7 +1342,12 @@ export function deleteAbilityAsset(userId: string, assetId: string, input: Abili
  *
  * 版本快照一并清空——它们同样含正文，留着就不算「删除内容和版本」。
  */
-export async function purgeAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+export async function purgeAbilityAsset(
+  userId: string,
+  assetId: string,
+  input: AbilityAssetUserActionInput,
+  options: { requireDeleted?: boolean } = {},
+): Promise<RecallAbilityAssetRecord> {
   const asset = await setStatus(userId, assetId, 'purged', input, () => ({
     title: '',
     statement: '',
@@ -897,11 +1357,9 @@ export async function purgeAbilityAsset(userId: string, assetId: string, input: 
     ontologyRefs: undefined,
     relations: undefined,
     derivedFrom: undefined,
-    // 适用/禁用条件是用户手写的自然语言，与正文同属可识别内容；
-    // sensitivity 是对已清除内容的定级，留着也只会指向一条空记录。
+    // 适用/禁用条件是用户手写的自然语言，与正文同属可识别内容。
     applicableWhen: undefined,
     forbiddenWhen: undefined,
-    sensitivity: undefined,
     // 跨域授权是对一条已经不存在的内容的授权，留着没有意义，也不该让墓碑
     // 继续携带一个「可以跨作用域使用」的许可。
     crossScopeConfirmedAt: undefined,
@@ -910,11 +1368,63 @@ export async function purgeAbilityAsset(userId: string, assetId: string, input: 
     recommendationReason: undefined,
     recommendationAt: undefined,
     sourceSessionIds: undefined,
-  } as Partial<RecallAbilityAssetRecord>));
+    // 族名是用户手写的分类名（元数据），与正文同属可识别内容：墓碑留着它
+    // 等于把用户取的名字留在一条"已彻底清除"的记录上。
+    familyName: undefined,
+    // 成熟度是对已清除内容的效果声明（2026-09-28 补）：与 sensitivity 同理，
+    // 墓碑不该继续声称「这条已验证」。
+    maturity: undefined,
+  } as Partial<RecallAbilityAssetRecord>),
+  // 到期清扫传 requireDeleted（2026-09-28 补）：锁内复核仍是 deleted 才清——
+  // 清扫列表是锁外读的快照，窗口期内被用户恢复的资产不许被照单清除。
+  options.requireDeleted
+    ? (current: RecallAbilityAssetRecord) => {
+      if (current.status !== 'deleted') throw new Error('retention purge requires a deleted asset');
+    }
+    : undefined);
   // 版本快照同样含正文，留着就不算「删除内容和版本」。审计流保留：它只有
   // 动作名和时间戳，属于规范允许保留的不可识别最小项。
   await removeRecallJsonlStream(userId, 'ability-asset-versions', assetId);
+  await cascadePurgeAssetReferences(userId, assetId);
   return asset;
+}
+
+/**
+ * 彻底清除的级联段（specs/008 T005）。
+ *
+ * 正文副本散落在哪几处，就要清到哪几处——只清主记录和版本流不够：
+ *   - `usage-records` / `asset-usage-receipts` / `injection-receipts` 的 events
+ *     流里带着 assetId 与版本，是"这条资产被用过"的可识别痕迹；
+ *   - 投影里的 `assetVersionSnapshots` 是「版本真删」时冻结的**内容副本**
+ *     （见 deleteAbilityAssetVersion），正文就在里面；
+ *   - 本体回流候选池的 `asset-backflow-<assetId>` 候选（见 ontology-backflow）
+ *     的 memory_text 就是 statement 全文——候选确认不查来源资产存活性，
+ *     留着它等于留了一条「确认即复活」的通道。
+ * 留下任何一处，「内容与记录一并清除、搜索不可见、不可恢复」都不成立。
+ *
+ * 幂等：流不存在或没有匹配行都不报错、不写新账——反复清除不会留下重复痕迹。
+ */
+async function cascadePurgeAssetReferences(userId: string, assetId: string): Promise<void> {
+  const dropAsset = (record: RecallJsonRecord) => String(record.assetId || '') !== assetId;
+  await removeRecallJsonlRecords(userId, 'usage-records', 'events', dropAsset);
+  await removeRecallJsonlRecords(userId, 'asset-usage-receipts', 'events', dropAsset);
+  await removeRecallJsonlRecords(userId, 'injection-receipts', 'events', dropAsset);
+  // 动态 import：asset-service ↔ context-projection 静态互引会成环。
+  const { clearAssetFromAllProjections } = await import('./context-projection');
+  const cleared = await clearAssetFromAllProjections(userId, assetId);
+  if (cleared > 0) {
+    log.info(`purge cascade cleared frozen asset copies from projections assetId=${assetId} projections=${cleared}`);
+  }
+  // 动态 import 同上先例：候选池模块（personal_ontology_candidates /
+  // ontology-backflow）静态互引同样会牵出成环依赖。rejectCandidate 按
+  // candidate_id 精确移除这一条回流候选、不动池内其他候选；候选不存在时
+  // 仅告警并返回 {ok:false}，不抛错不写新账——与上面各步同口径满足幂等。
+  const { rejectCandidate } = await import('../personal_ontology_candidates');
+  const { backflowCandidateIdFor } = await import('./ontology-backflow');
+  const rejected = await rejectCandidate(userId, backflowCandidateIdFor(assetId), 'asset purged');
+  if (rejected.ok) {
+    log.info(`purge cascade rejected ontology backflow candidate assetId=${assetId}`);
+  }
 }
 
 /**
@@ -954,31 +1464,54 @@ export async function rollbackAbilityAsset(
   const versions = await listAbilityAssetVersions(userId, assetId);
   const target = versions.find((record) => record.version === toVersion);
   if (!target) throw new Error('recall ability asset version not found');
+  let beforeAsset: RecallAbilityAssetRecord | undefined;
+  // 标题闸门（设计 3.2 拍板项 #2 / 深探 F14）：历史快照冻结着大量不合规 title
+  // （版本流只追加、物理不动），回滚不能成为「把烂标题带回在用版」的通道。
+  // 目标快照标题不合规时保留在用标题，其余字段照常回滚；在锁内置位供台账注记。
+  let titleRetained = false;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
     assertMutableAbilityAsset(current);
     if (current.version === toVersion) throw new Error('ability asset is already at that version');
+    beforeAsset = current;
     // scope 单独摘出且不倒退（2026-09-17 对齐 select 的守卫）：旧快照可能带
     // 词表化前的自由文本 scope，原样写回会再触发 legacy 迁移垫空版本。
-    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, scope: rbScope, ...content } = target.snapshot;
+    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, scope: rbScope, title: rbTitle, ...content } = target.snapshot;
     const scope = isRecallScopeTerm(String(rbScope || ''))
       ? String(rbScope)
       : (normalizeAssetScopeValue(String(rbScope || '')) || current.scope);
-    return {
+    // 判定用正文 = 目标快照自己的正文（回滚后的最终正文）；标题合规才随快照
+    // 回滚，不合规则留在用标题（...current 先铺，content 已不含 title）。
+    titleRetained = recallTitleIssue(String(rbTitle ?? ''), String(target.snapshot.statement ?? '')) !== undefined;
+    const reverted: Record<string, unknown> = {
       ...current,
       // 只回滚内容，不回滚治理状态与成熟度：暂停过的资产不该因为回滚就自己
       // 变回 active，验证过的成熟度也不该被一次内容回滚抹掉。
       ...content,
+      ...(titleRetained ? {} : { title: String(rbTitle ?? '') }),
       scope,
       version: nextVersion(current.version),
       activeVersion: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
     };
+    clearFieldsAbsentFromSnapshot(reverted, target.snapshot as unknown as Record<string, unknown>);
+    return reverted as RecallAbilityAssetRecord;
   });
   const asset = asAsset(updated);
   await appendVersion(userId, asset, { reason: action.reason, actor: action.actor });
-  await appendAudit(userId, asset.id, 'rolled_back', { note: action.reason, actor: action.actor });
+  // 回滚本身记账（FR-005）：前后值 + 依据齐全，回滚到哪一版写在 note/reason 里。
+  const rollbackSummary = summarizeAuditChange(
+    diffAbilityAssetsForAudit(beforeAsset ?? asset, asset),
+  );
+  await appendAudit(userId, asset.id, 'rolled_back', {
+    reason: action.reason,
+    actor: action.actor,
+    ...(titleRetained ? { note: `${action.reason}｜目标版本标题不合规，保留在用标题（设计 3.2 拍板项 #2）` } : {}),
+    ...(rollbackSummary ? { before: rollbackSummary.before, after: rollbackSummary.after } : {}),
+    ...(beforeAsset ? { rollbackAnchor: activeVersionOf(beforeAsset) } : {}),
+  });
+  await reconcilePersonalProfileProjection(userId, asset);
   return asset;
 }
 
@@ -1002,6 +1535,9 @@ export async function selectAbilityAssetVersion(
   const versions = await listAbilityAssetVersions(userId, assetId);
   const target = versions.find((record) => record.version === toVersion);
   if (!target) throw new Error('recall ability asset version not found');
+  // 标题闸门（设计 3.2 拍板项 #2 / 深探 F14，与 rollback 同口径）：选用标题
+  // 不合规的旧快照时保留在用标题，其余内容照常切换。
+  let titleRetained = false;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
@@ -1012,20 +1548,29 @@ export async function selectAbilityAssetVersion(
     // 自由文本 scope——原样写回会让 legacy scope 迁移在下次启动时再 bump
     // 一个内容不变的新版本（实机 aa-34b688 连产 v4/v5）。选用旧版只回内容，
     // scope 保持词表值。
-    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, scope: snapshotScope, ...content } = target.snapshot;
+    const { status: _snapshotStatus, maturity: _snapshotMaturity, version: _snapshotVersion, scope: snapshotScope, title: selectedTitle, ...content } = target.snapshot;
     const scope = isRecallScopeTerm(String(snapshotScope || ''))
       ? String(snapshotScope)
       : (normalizeAssetScopeValue(String(snapshotScope || '')) || current.scope);
-    return {
+    // 判定用正文 = 所选快照自己的正文（切换后的最终正文）。
+    titleRetained = recallTitleIssue(String(selectedTitle ?? ''), String(target.snapshot.statement ?? '')) !== undefined;
+    const selected: Record<string, unknown> = {
       ...current,
       ...content,
+      ...(titleRetained ? {} : { title: String(selectedTitle ?? '') }),
       scope,
       activeVersion: toVersion,
       updatedAt: new Date().toISOString(),
     };
+    clearFieldsAbsentFromSnapshot(selected, target.snapshot as unknown as Record<string, unknown>);
+    return selected as RecallAbilityAssetRecord;
   });
   const asset = asAsset(updated);
-  await appendAudit(userId, asset.id, 'version_selected', { note: `${action.reason || 'select'} (v${toVersion})`, actor: action.actor });
+  await appendAudit(userId, asset.id, 'version_selected', {
+    note: `${action.reason || 'select'} (v${toVersion})${titleRetained ? '｜目标版本标题不合规，保留在用标题（设计 3.2 拍板项 #2）' : ''}`,
+    actor: action.actor,
+  });
+  await reconcilePersonalProfileProjection(userId, asset);
   return asset;
 }
 
@@ -1155,10 +1700,14 @@ export async function mergeAbilityAssets(
   // await）后可能已不是最新，且挂族是直写不 bump 版本——版本快照里的
   // relations 恒滞后于 live 记录，按快照搬会把自动挂上的族关系丢掉。
   const sourceLive = await readAbilityAsset(userId, sourceAssetId);
+  let beforeTarget: RecallAbilityAssetRecord | undefined;
   const merged = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', targetAssetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
+    // 锁内复核三终态（与 rollback/select/update 同款）：版本搬运多次 await，
+    // 锁外预检后窗口期内被 delete/revoke 的 target 不许再被铺内容或 bump 版本。
+    assertMutableAbilityAsset(current);
+    beforeTarget = current;
     // 关系/溯源并入不挑 source 新旧：source 随即归档，不搬就净丢失（族成员
     // 凭空少）。过滤自指（same_family 互指时 source 带着指向 target 的关系，
     // 直接搬会撞 normalize 的自指闸），指向彼此的 same_family 随归并失效一并
@@ -1191,13 +1740,18 @@ export async function mergeAbilityAssets(
     }
     // scope 单独摘出且不倒退（与 rollback/select 同款守卫）：旧快照可能带
     // 词表化前的自由文本 scope，原样铺上会再触发 legacy 迁移垫空版本。
-    const { status: _s, maturity: _m, version: _v, relations: _r, derivedFrom: _d, scope: snapshotScope, ...content } = sourceActiveSnapshot;
+    // 标题闸门（设计 3.2 / 深探 F15）：source 在用标题不合规时不铺到 target
+    // （保留 target 在用标题），其余内容照常并入——归并不走 updateAbilityAsset
+    // 收口，这里就是它的判定点。
+    const { status: _s, maturity: _m, version: _v, relations: _r, derivedFrom: _d, scope: snapshotScope, title: snapshotTitle, ...content } = sourceActiveSnapshot;
     const mergedScope = isRecallScopeTerm(String(snapshotScope || ''))
       ? String(snapshotScope)
       : (normalizeAssetScopeValue(String(snapshotScope || '')) || current.scope);
+    const sourceTitleCompliant = recallTitleIssue(String(snapshotTitle ?? ''), String(sourceActiveSnapshot.statement ?? '')) === undefined;
     return {
       ...current,
       ...content,
+      ...(sourceTitleCompliant ? { title: String(snapshotTitle ?? '') } : {}),
       scope: mergedScope,
       relations: mergedRelations,
       ...(mergedDerivedFrom.length ? { derivedFrom: mergedDerivedFrom } : {}),
@@ -1208,15 +1762,38 @@ export async function mergeAbilityAssets(
     };
   }));
   // source 归档 + 去向 + 双向审计。
+  let beforeSource: RecallAbilityAssetRecord | undefined;
+  let afterSource: RecallAbilityAssetRecord | undefined;
   await updateRecallJsonRecord(userId, 'ability-assets', sourceAssetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    assertNotPurged(current);
+    // 同上：锁内复核三终态——窗口期内被 delete/revoke 的 source 强改 archived
+    // 是非法跃迁（deletedAt 脏残留），archived 又是 restore 的合法源会绕过保留期。
+    assertMutableAbilityAsset(current);
     if (current.mergedIntoAssetId) throw new Error('ability asset has already been merged');
-    return { ...current, status: 'archived' as const, mergedIntoAssetId: targetAssetId, updatedAt: new Date().toISOString() };
+    beforeSource = current;
+    afterSource = { ...current, status: 'archived' as const, mergedIntoAssetId: targetAssetId, updatedAt: new Date().toISOString() };
+    return afterSource;
   });
-  await appendAudit(userId, targetAssetId, 'merged_from', { note: `${action.reason || 'merge'} (from ${sourceAssetId})`, actor: action.actor });
-  await appendAudit(userId, sourceAssetId, 'merged_into', { note: `${action.reason || 'merge'} (into ${targetAssetId})`, actor: action.actor });
+  // 归并也要台账四项（FR-004）：target 记它自己的版本/关系变化，source 记归档与去向。
+  const targetSummary = summarizeAuditChange(
+    diffAbilityAssetsForAudit(beforeTarget ?? merged, merged),
+  );
+  const sourceSummary = summarizeAuditChange(
+    diffAbilityAssetsForAudit(beforeSource ?? source, afterSource ?? source),
+  );
+  await appendAudit(userId, targetAssetId, 'merged_from', {
+    reason: `${action.reason || 'merge'} (from ${sourceAssetId})`,
+    actor: action.actor,
+    ...(targetSummary ? { before: targetSummary.before, after: targetSummary.after } : {}),
+    ...(beforeTarget ? { rollbackAnchor: activeVersionOf(beforeTarget) } : {}),
+  });
+  await appendAudit(userId, sourceAssetId, 'merged_into', {
+    reason: `${action.reason || 'merge'} (into ${targetAssetId})`,
+    actor: action.actor,
+    ...(sourceSummary ? { before: sourceSummary.before, after: sourceSummary.after } : {}),
+    ...(beforeSource ? { rollbackAnchor: activeVersionOf(beforeSource) } : {}),
+  });
   return merged;
 }
 
@@ -1230,7 +1807,11 @@ export async function listAbilityAssetVersions(userId: string, assetId: string):
 export async function listAbilityAssetVersionsWithUsage(
   userId: string,
   assetId: string,
-): Promise<{ versions: AbilityAssetVersionRecord[]; usage: Array<{ version: string; applied: number; contradicted: number; total: number }> }> {
+): Promise<{
+  versions: AbilityAssetVersionRecord[];
+  usage: Array<{ version: string; applied: number; contradicted: number; total: number }>;
+  frozen: Array<{ version: string; count: number }>;
+}> {
   const versions = await listAbilityAssetVersions(userId, assetId);
   const { listAssetUsageReceipts } = await import('./asset-usage-receipt');
   const counts = new Map<string, { applied: number; contradicted: number; total: number }>();
@@ -1248,7 +1829,27 @@ export async function listAbilityAssetVersionsWithUsage(
   } catch {
     // 回执读取失败只丢效果列，不阻断版本链。
   }
-  return { versions, usage: [...counts.entries()].map(([version, c]) => ({ version, ...c })) };
+  // 冻结引用按版本计数（specs/008 US-402 AC6 / T023「被引用过的历史版本」）：
+  // 权威判据是已确认投影的 assetVersions 映射——与 deleteAbilityAssetVersion 的
+  // 冻结段同一判据。**不能拿 KSTAR 采用回执（上面的 usage）顶替**：那记录的是
+  // "这一版被判为实际采用/被否定"，与"这一版被某个任务引用过"是两件事，回执为空
+  // 时提示永不出现（2026-09-25 合并态走查抓出：v1 被 8 条投影冻结，界面无标记）。
+  const frozenCounts = new Map<string, number>();
+  try {
+    const { listAllConfirmedProjections } = await import('./context-projection');
+    for (const projection of await listAllConfirmedProjections(userId)) {
+      const version = String(projection.assetVersions?.[assetId] || '');
+      if (!version) continue;
+      frozenCounts.set(version, (frozenCounts.get(version) || 0) + 1);
+    }
+  } catch {
+    // 投影读取失败只丢「已有更新的版本」标记，不阻断版本链。
+  }
+  return {
+    versions,
+    usage: [...counts.entries()].map(([version, c]) => ({ version, ...c })),
+    frozen: [...frozenCounts.entries()].map(([version, count]) => ({ version, count })),
+  };
 }
 
 /** Read the immutable content snapshot of a specific asset version, or null
@@ -1271,6 +1872,50 @@ export async function listAbilityAssetAudit(userId: string, assetId: string): Pr
   return (await listRecallJsonlRecords(userId, 'ability-asset-audit', assetId, 0)) as AbilityAssetAuditRecord[];
 }
 
+/** 「已删除」列表的一行。
+ *
+ *  保留期剩余天数是用户"什么时候会真的没了"的唯一答案，所以**现算**而不存字段：
+ *  存下来的倒计时会在磁盘上冻结，用户看到的永远是删除那天算出的数字。
+ *  `retentionUnknown` 单列一态：deletedAt 缺失/损坏时既不能恢复、也不会自动到期，
+ *  把这种情况混进"已过期"或"还能恢复"都是在替用户编一个不存在的事实。 */
+export interface DeletedAbilityAssetView {
+  id: string;
+  title: string;
+  type: RecallAbilityAssetRecord['type'];
+  scope: string;
+  deletedAt?: string;
+  restorable: boolean;
+  /** 保留期剩余天数（向上取整）；时间戳不可用时为 null。 */
+  retentionDaysLeft: number | null;
+  retentionUnknown: boolean;
+  /** 「立即彻底删除」可用否。列表里恒为 true（列表本身就只收 deleted）。 */
+  purgeable: boolean;
+}
+
+export function describeDeletedAbilityAsset(
+  asset: Pick<RecallAbilityAssetRecord, 'id' | 'title' | 'type' | 'scope' | 'status' | 'deletedAt'>,
+  now: Date = new Date(),
+): DeletedAbilityAssetView {
+  const parsed = typeof asset.deletedAt === 'string' ? Date.parse(asset.deletedAt) : Number.NaN;
+  const retentionUnknown = Number.isNaN(parsed);
+  const expiresAt = retentionUnknown
+    ? null
+    : parsed + ABILITY_ASSET_DELETION_RETENTION_DAYS * 86_400_000;
+  return {
+    id: asset.id,
+    title: asset.title,
+    type: asset.type,
+    scope: asset.scope,
+    ...(asset.deletedAt ? { deletedAt: asset.deletedAt } : {}),
+    restorable: asset.status === 'deleted' && isWithinDeletionRetention(asset, now),
+    retentionDaysLeft: expiresAt === null
+      ? null
+      : Math.max(0, Math.ceil((expiresAt - now.getTime()) / 86_400_000)),
+    retentionUnknown,
+    purgeable: asset.status === 'deleted',
+  };
+}
+
 export async function setAbilityAssetMaturity(userId: string, assetId: string, maturity: RecallAbilityAssetRecord['maturity']): Promise<RecallAbilityAssetRecord> {
   if (!ABILITY_ASSET_MATURITIES.has(maturity)) {
     throw new Error('invalid ability asset maturity');
@@ -1285,6 +1930,9 @@ export async function setAbilityAssetMaturity(userId: string, assetId: string, m
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
+    // 2026-09-28 红队补齐：终态/保留期资产不再推进成熟度（回执驱动的调用在
+    // 资产被删后仍可能到达）。
+    assertMutableAbilityAsset(current);
     if (rank[maturity] < rank[current.maturity]) {
       throw new Error('ability asset maturity cannot move backwards');
     }
@@ -1316,7 +1964,7 @@ export async function recordAbilityAssetValidation(
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    if (current.status === 'purged' || current.status === 'deleted') return current;
+    if (current.status === 'purged' || current.status === 'deleted' || current.status === 'revoked') return current;
     const appliedValidationIds = current.appliedValidationIds || [];
     if (validationId && appliedValidationIds.includes(validationId)) return current;
     const validationCount = (current.validationCount || 0) + (outcome === 'success' ? 1 : 0);
@@ -1380,10 +2028,11 @@ export async function pauseAbilityAssetForRevokedEvidence(
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
+    // 2026-09-28 红队收紧：只暂停 active 资产。此前跳过清单漏了 deleted 与
+    // archived——删除保留期内的资产被证据撤销级联改道成 paused 后，「已删除」
+    // 列表与保留期清扫都看不到它，随后 resume 一路绿灯复活且不可追踪。
     if (
-      current.status === 'purged'
-      || current.status === 'revoked'
-      || current.status === 'paused'
+      current.status !== 'active'
       || !current.evidenceRefs.some((ref) => ref.kind === source.kind && ref.id === source.id)
     ) return current;
     paused = true;
@@ -1409,8 +2058,11 @@ export async function downgradeAbilityAssetMaturityForRevokedEvidence(
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
+    // 2026-09-28 红队补齐：终态/保留期资产不降成熟度（与内容写路径同口径）。
     if (
       current.status === 'purged'
+      || current.status === 'revoked'
+      || current.status === 'deleted'
       || current.maturity === 'seed'
       || current.maturity === 'bud'
       || !current.evidenceRefs.some((ref) => ref.kind === source.kind && ref.id === source.id)

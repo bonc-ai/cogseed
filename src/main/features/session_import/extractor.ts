@@ -9,8 +9,8 @@
  *                         user can continue without carrying the raw history
  *                         (avoids blowing the context window).
  *   - `candidates[]`    — reusable cognition candidates. Each carries a
- *                         `suggestedType` in the four AbilityAssetType values
- *                         ('personal' | 'rule' | 'template' | 'skill_method')
+ *                         `suggestedType` in the five AbilityAssetType values
+ *                         ('personal' | 'fact' | 'rule' | 'template' | 'skill_method')
  *                         plus the full candidate fields (value / risk /
  *                         suggestedAction / applicableWhen / forbiddenWhen),
  *                         using the SAME extraction rule as the recall capture
@@ -46,8 +46,8 @@ import { EXTRACT_SYSTEM_PROMPT } from '../../prompts/session-extract';
 
 const log = createLogger('session-import:extractor');
 
-/** The four AbilityAssetType values emitted by this extractor. */
-export type EmittedCognitionType = 'personal' | 'rule' | 'template' | 'skill_method';
+/** The five AbilityAssetType values emitted by this extractor. */
+export type EmittedCognitionType = 'personal' | 'fact' | 'rule' | 'template' | 'skill_method';
 
 /** How long a single CLI extraction pass may run before aborting. Local CLIs
  *  are slower than a raw model call (process spawn + model latency). */
@@ -164,8 +164,8 @@ export interface CognitionCandidate {
   suggestedAction?: string;
   /** low | medium | high. */
   risk?: string;
-  /** Short excerpt from the transcript supporting the judgment. */
-  evidence?: string;
+  /** Message labels from the rendered transcript supporting the judgment. */
+  evidence?: string[];
   uncertainty?: string;
 }
 
@@ -227,10 +227,12 @@ function extractJsonObject(raw: string): unknown | null {
   }
 }
 
-/** Normalize a suggestedType string to one of the four emitted types. */
-function normalizeType(value: unknown): EmittedCognitionType {
+/** Normalize a suggestedType string to one of the five emitted types. */
+function normalizeType(value: unknown): EmittedCognitionType | undefined {
   const t = String(value ?? '').trim().toLowerCase();
-  return t === 'rule' || t === 'template' || t === 'skill_method' ? t : 'personal';
+  return t === 'personal' || t === 'fact' || t === 'rule' || t === 'template' || t === 'skill_method'
+    ? t
+    : undefined;
 }
 
 /** Parse a string array field defensively: drop blanks, cap length. */
@@ -263,9 +265,11 @@ function toCandidates(value: unknown): CognitionCandidate[] {
       const o = entry as Record<string, unknown>;
       const text = String(o.judgment ?? o.text ?? '').trim();
       if (!text) continue;
+      const suggestedType = normalizeType(o.suggestedType);
+      if (!suggestedType) continue;
       const candidate: CognitionCandidate = {
         text,
-        suggestedType: normalizeType(o.suggestedType),
+        suggestedType,
       };
       const note = optString(o, 'note') ?? optString(o, 'summary');
       if (note) candidate.note = note;
@@ -277,7 +281,7 @@ function toCandidates(value: unknown): CognitionCandidate[] {
       if (action) candidate.suggestedAction = action;
       const risk = optString(o, 'risk');
       if (risk) candidate.risk = risk;
-      const evidence = optString(o, 'evidence');
+      const evidence = toStringArray(o.evidence) || (optString(o, 'evidence') ? [optString(o, 'evidence')!] : undefined);
       if (evidence) candidate.evidence = evidence;
       const uncertainty = optString(o, 'uncertainty');
       if (uncertainty) candidate.uncertainty = uncertainty;
@@ -307,7 +311,7 @@ function toLegacyCandidates(value: unknown, type: EmittedCognitionType): Cogniti
       const candidate: CognitionCandidate = { text, suggestedType: type };
       const note = optString(o, 'note') ?? optString(o, 'summary');
       if (note) candidate.note = note;
-      const evidence = optString(o, 'evidence');
+      const evidence = toStringArray(o.evidence) || (optString(o, 'evidence') ? [optString(o, 'evidence')!] : undefined);
       if (evidence) candidate.evidence = evidence;
       items.push(candidate);
     }

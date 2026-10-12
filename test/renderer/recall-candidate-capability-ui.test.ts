@@ -110,7 +110,11 @@ function renderPool(pool: unknown[]) {
 //    删除——批量入库改由详情页逐条决定 + 高风险独立确认。以下断言更新为
 //    真实实现源码的契约检查，覆盖同一组用户语义。
 
-const viewsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf-8');
+// 2026-09-29 views.js 机械拆分：候选族函数迁入 review-candidate.js / review-views.js，
+// 契约断言按加载顺序合并三源扫描（断言语义不变）。
+const viewsSource = ['views.js', 'review-candidate.js', 'review-views.js']
+  .map((file) => fs.readFileSync(path.join(__dirname, `../../src/renderer/modules/cognition-assets/${file}`), 'utf-8'))
+  .join('\n');
 const coreSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf-8');
 
 describe('recall candidate pool renders from capability, not raw status', () => {
@@ -209,12 +213,13 @@ describe('recall candidate detail renders from capability', () => {
 
 describe('confirmed candidate exits into the formal asset version chain', () => {
   it('sends a confirmed candidate to its asset instead of reopening the candidate', () => {
-    expect(coreSource).toContain("router.go({ name: 'overview', assetId: result.assetId })");
+    expect(coreSource).toContain("router.go({ name: 'overview', assetId: promotedAssetId })");
   });
 
   it('offers no asset entry when the candidate never produced one', () => {
-    expect(coreSource).toContain('result.assetId');
-    expect(coreSource).toContain("router.go({ name: 'overview', assetId: result.assetId })");
+    expect(coreSource).toContain('(result && result.asset && result.asset.id) || (result && result.assetId)');
+    expect(coreSource).toContain("router.go({ name: 'overview', assetId: promotedAssetId })");
+    expect(coreSource).toContain("router.go({ name: 'review' })");
   });
 });
 

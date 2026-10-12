@@ -1,0 +1,173 @@
+name: Public CI
+
+# Only reviewed exported snapshots run here. No signing secrets or private checkout.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compliance:
+    if: github.repository == 'bonc-ai/cogseed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run reuse:check
+      - run: npm run sbom:check
+      - run: npm run tokens:check
+      - run: npm run builtin:manifest:check
+      - run: npm run readme:check
+      - run: npm run community:skills:check
+      - run: node scripts/check-skipped-tests.mjs --strict
+      # Exercise the same artifact service used by Release before signing.
+      # Only this tiny public file is stored, and only for one day.
+      - name: Record public artifact checksum
+        run: sha256sum package.json > "$RUNNER_TEMP/public-artifact.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-storage-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: public-storage-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/public-storage-probe
+      - name: Verify public artifact roundtrip
+        run: (cd "$RUNNER_TEMP/public-storage-probe" && sha256sum --check "$RUNNER_TEMP/public-artifact.sha256")
+
+  linux-tests:
+    if: github.repository == 'bonc-ai/cogseed'
+    name: linux-tests (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      - name: Configure Chromium sandbox for Linux fixtures
+        run: |
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      - run: xvfb-run --auto-servernum npm run test:js -- --maxWorkers=1 --shard=${{ matrix.shard }}/4
+      - if: matrix.shard == 1
+        run: npm run test:resources
+
+  macos-tests:
+    if: github.repository == 'bonc-ai/cogseed'
+    name: macos-tests (${{ matrix.shard }})
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:resources:setup
+      - run: npm run test:js -- --maxWorkers=1 --shard=${{ matrix.shard }}/4
+      - if: matrix.shard == 1
+        run: npm run test:resources
+
+  windows-tests:
+    if: github.repository == 'bonc-ai/cogseed'
+    name: windows-tests (${{ matrix.shard }})
+    runs-on: windows-2022
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --foreground-scripts
+        timeout-minutes: 10
+      - run: npm run test:resources:setup
+      - run: npm run test:js -- --maxWorkers=1 --shard=${{ matrix.shard }}/4
+      - if: matrix.shard == 1
+        run: npm run test:resources
+      - if: matrix.shard == 1
+        run: npm run test:platform-native
+      - if: matrix.shard == 1
+        run: npm run test:p3394:windows
+      - if: matrix.shard == 1
+        run: node p3394-gateway/test/smoke.cjs
+
+  verify-macos:
+    if: github.repository == 'bonc-ai/cogseed'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run package:dev:mac && npm run verify:package:dev:mac
+
+  verify-windows-package:
+    if: github.repository == 'bonc-ai/cogseed'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --foreground-scripts
+        timeout-minutes: 10
+      - run: node scripts/write-build-info.cjs --channel=ci
+      - run: npm run build:win
+      - run: npm run verify:package:build-info -- --channel=ci
+      - name: Packaged launch smoke
+        run: npm run verify:package:launch
+      - name: Packaged STT smoke
+        run: npm run verify:package:stt:win
+      - run: node scripts/check-fuses.cjs dist/win-unpacked/CogSeed.exe

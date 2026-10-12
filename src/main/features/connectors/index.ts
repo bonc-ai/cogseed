@@ -19,6 +19,8 @@ export { isValidInstanceId } from './registry';
 export { CONNECTOR_CATALOG, findCatalogEntry } from './catalog';
 export { handleCallbackUrl, cancelInFlightOAuth, startGoogleSheetsPicker } from './oauth';
 export { handleDcrCallbackUrl } from './oauth-dcr';
+export { cancelLocalCliAuth, ensureLocalCliAuthorized } from './local-cli-auth';
+export type { LocalCliAuthStatus } from './local-cli-auth';
 export type {
   Transport,
   StdioTransport,

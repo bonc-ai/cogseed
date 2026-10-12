@@ -265,8 +265,10 @@ import {
 import { withMarketplaceCacheLock, withMarketplaceInstallLock } from './marketplace_locks';
 import { agentPrivateSkillIdsFromBundle } from './marketplace_private_skills';
 import { MarketplaceError } from './marketplace/errors';
-import { readInstalledVersion } from './marketplace/installed-version';
-import { getSkillMetadata, normalizeCatalogListRow, type CatalogListRow, type SkillMetadata } from './marketplace/metadata-adapter';
+import { readContentStatus, readInstalledVersion } from './marketplace/installed-version';
+import { hubContentStatus, isHubContentDisabled } from '../../shared/hub-content-status';
+import { observeHubSkillStatus, observeHubSkillStatusLocked } from './marketplace/content-status';
+import { getSkillMetadata, invalidateMetadataIndex, normalizeCatalogListRow, type CatalogListRow, type SkillMetadata } from './marketplace/metadata-adapter';
 import { decideMarketplaceContentUpdate } from './marketplace-update-policy';
 import { fetchImmutableSource } from './marketplace/source-fetch';
 import { writeVersionCopy } from './marketplace/version-store';
@@ -446,6 +448,7 @@ export async function listMarketplaceAgents(
 export async function listMarketplaceSkills(
   opts: { category?: string; status?: string; q?: string; page?: number; size?: number } = {},
 ): Promise<{ list: MarketplaceSkill[]; total: number }> {
+  const uid = getActiveUserId();
   const res = await postJson<{ list?: unknown; total?: number }>('/marketplace/skills/list', {
     category: opts.category || null,
     status: opts.status || null,
@@ -457,6 +460,8 @@ export async function listMarketplaceSkills(
   const list = (Array.isArray(res.list) ? res.list : [])
     .map(normalizeCatalogListRow)
     .filter((row): row is CatalogListRow => row !== null) as unknown as MarketplaceSkill[];
+  invalidateMetadataIndex();
+  await Promise.all(list.map((row) => observeHubSkillStatus(uid, row.id, row)));
   return { ...res, list, total: typeof res.total === 'number' ? res.total : list.length };
 }
 
@@ -852,7 +857,7 @@ function _agentSkillDependencyDisplayNames(
 }
 
 function _marketplaceStatus(row: { status?: string; state?: string }): string {
-  return String(row.status || row.state || '').trim().toLowerCase();
+  return hubContentStatus(row);
 }
 
 function _assertApprovedDependencySkill(
@@ -912,20 +917,36 @@ export async function getSkillDetail(
   skillId: string, expect: MarketplaceFreshness,
 ): Promise<SkillDetail> {
   if (!skillId) throw new Error('skillId required');
-  if (await isCacheFresh('skill', skillId, expect)) {
+  const uid = getActiveUserId();
+  let meta: SkillMetadata;
+  try {
+    invalidateMetadataIndex(); // A fresh detail view must not restore stale governance.
+    const found = await getSkillMetadata(skillId);
+    if (!found) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
+    meta = found;
+  } catch (err) {
+    // An offline preview can still show cached bytes and the latest known governance
+    // state. Installation uses a separate fresh-metadata path and cannot use this fallback.
+    if (!(await isCacheFresh('skill', skillId, expect))) throw err;
     await touchCacheEntry('skill', skillId);
+    const knownStatus = readContentStatus(uid, skillId).raw;
     return {
       id: skillId, version: expect.version, category: '',
       published_at: expect.published_at, updated_at: expect.updated_at,
       cache_dir: getSkillCacheDir(skillId), bundle_url: '', create_uid: '',
+      ...(knownStatus ? { status: knownStatus } : {}),
       ...(_normalizeMarketplaceMinAppVersion(expect) ? { min_app_version: _normalizeMarketplaceMinAppVersion(expect) } : {}),
     };
   }
-  // Miss → metadata from the adapter; bytes from the Hub origin by {content_id, version}.
-  // The byte endpoint is no longer asked for JSON, and no object-storage URL is involved.
-  const meta = await getSkillMetadata(skillId);
-  if (!meta) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
-  await _fetchAndCacheSkill(skillId, meta);
+  await observeHubSkillStatus(uid, skillId, meta);
+  return materializeSkillDetail(skillId, { ...meta, status: meta.status || readContentStatus(uid, skillId).raw });
+}
+
+/** Governance metadata is independent of byte-cache freshness. */
+async function materializeSkillDetail(skillId: string, meta: SkillMetadata): Promise<SkillDetail> {
+  const fresh = await isCacheFresh('skill', skillId, meta);
+  if (fresh) await touchCacheEntry('skill', skillId);
+  else if (!isHubContentDisabled(meta)) await _fetchAndCacheSkill(skillId, meta);
   return {
     id: skillId, name: meta.name, version: meta.version, category: meta.category,
     published_at: meta.published_at, updated_at: meta.updated_at,
@@ -1226,29 +1247,16 @@ async function _installMarketplaceSkillLocked(
   if (!skillId) throw new Error('skillId required');
   let skillName = opts.name || '';
   try {
-    let detail = await getSkillDetail(skillId, expect);
-    skillName = skillName || detail.name || '';
-    if (!detail.artifact) {
-      // The cache-fresh branch of `getSkillDetail` carries no artifact identity, and the
-      // install path needs one to verify the bytes. This used to top up `bundle_url` from
-      // the byte endpoint; it now tops up `{sha256, size_bytes}` from the metadata adapter.
-      const fresh = await getSkillMetadata(skillId);
-      if (!fresh) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
-      skillName = skillName || fresh.name;
-      detail = {
-        ...detail,
-        name: fresh.name || detail.name,
-        published_at: fresh.published_at,
-        updated_at: fresh.updated_at,
-        bundle_url: '',
-        artifact: fresh.artifact,
-        create_uid: fresh.create_uid,
-        default_install: fresh.default_install,
-        is_open_source: fresh.is_open_source,
-        status: fresh.status,
-        ...(fresh.min_app_version ? { min_app_version: fresh.min_app_version } : {}),
-      };
+    // An install must not trust a stale renderer row or the six-hour metadata index.
+    invalidateMetadataIndex();
+    const meta = await getSkillMetadata(skillId);
+    if (!meta) throw new MarketplaceError('CONTENT_NOT_FOUND', `CONTENT_NOT_FOUND: ${skillId}`);
+    await observeHubSkillStatusLocked(getActiveUserId(), skillId, meta);
+    if (isHubContentDisabled(meta) || (!hubContentStatus(meta) && readContentStatus(getActiveUserId(), skillId).availability === 'disabled')) {
+      throw new MarketplaceInstallError('skill', skillId, meta.name || skillName, 'content_disabled');
     }
+    const detail = await materializeSkillDetail(skillId, meta);
+    skillName = skillName || detail.name || '';
     _assertMarketplaceAppCompatible('skill', skillId, skillName, detail.min_app_version || '');
 
     // ── FR-060：重新安装官方版时，若与本机某个自定义 Skill（典型是派生副本）同名，
@@ -1818,7 +1826,7 @@ export async function ensureDefaultInstalls(
     for (const s of data.skills || []) {
       if (!canContinue()) return { seeded_agents: seededAgents, seeded_skills: seededSkills };
       if (!s || !s.id) continue;
-      if (installedSkills.has(s.id) || deletedSkills.has(s.id)) continue;
+      if (installedSkills.has(s.id) || deletedSkills.has(s.id) || isHubContentDisabled(s)) continue;
       try {
         const minAppVersion = _normalizeMarketplaceMinAppVersion(s);
         if (!_isMarketplaceAppCompatible(minAppVersion)) {

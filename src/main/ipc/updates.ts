@@ -17,11 +17,17 @@
  *                         → stop the transfer keeping the bytes on disk, continue
  *                           it with a Range request, or discard it.
  *   - `updates.open`      → open the verified installer in the OS.
+ *   - `updates.install`   → hand the verified installer to the detached Windows
+ *                           helper and quit (unsupported elsewhere).
  *
  * Push events (preload allow-list `updates:`): `updates:available`,
  * `updates:progress`, `updates:download` (phase changes), `updates:auto`.
  * Renderer-side status for manual checks comes back synchronously through the
  * invoke result.
+ *
+ * `updates.getState` also reports the post-upgrade boot-guard verdict for this
+ * uid. `null` means the guard has not judged this uid — it is "unknown", never
+ * "healthy", and is passed through as null rather than coerced to false.
  *
  * Phase changes are PUSHED rather than inferred by the renderer: a pane that
  * tracks "am I downloading?" locally desynchronises from main the moment a
@@ -31,6 +37,7 @@
 
 import * as updater from '../features/updater/client';
 import * as updaterAuto from '../features/updater/auto';
+import { getBootGuardVerdict } from '../features/updater/boot_guard';
 import { readUpdaterState } from '../features/updater/state';
 
 /** Throttle progress pushes to the renderer (download chunks are frequent). */
@@ -78,11 +85,28 @@ export const invokeHandlers = {
     const state = readUpdaterState(ctx.userId);
     const current = updater.currentAppVersion();
     return {
-      state,
+      // The persisted install record holds an absolute installer path and the
+      // artifact digest; the renderer only renders retry bookkeeping, so the
+      // install field is PROJECTED here and never passed through raw. The
+      // `downloaded` record is projected for the same reason: the renderer reads
+      // only its version (`updates.open` resolves the absolute path in main), so
+      // the `<uid>/local/...` path and the digest never cross the bridge.
+      // Everything else keeps the persisted shape.
+      state: {
+        ...state,
+        install: state.install
+          ? { version: state.install.version, attempts: state.install.attempts }
+          : undefined,
+        downloaded: state.downloaded
+          ? { version: state.downloaded.version }
+          : undefined,
+      },
       current_version: current,
       has_update: updater.isUpdateOffered(state, current),
       install_ready: updater.isInstallReady(state, current),
       download: await updater.getDownloadState(ctx.userId),
+      // null = the guard has not judged this uid (unknown, NOT healthy).
+      boot_guard: getBootGuardVerdict(ctx.userId),
     };
   },
 
@@ -156,6 +180,10 @@ export const invokeHandlers = {
 
   'updates.open': async (_payload: unknown, ctx: { userId: string }) => {
     return updater.openDownloaded(ctx.userId);
+  },
+
+  'updates.install': async (_payload: unknown, ctx: { userId: string }) => {
+    return updater.installDownloaded(ctx.userId);
   },
 
   // ── 自动更新（Squirrel.Mac）：状态查询 / 手动检查 / 重启并安装 ──

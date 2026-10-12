@@ -29,6 +29,10 @@ export interface MemoryToolHandler {
 export interface MemoryToolOperationResult {
     ok: boolean; error?: string; entries: string[];
     usage: { current: number; limit: number };
+    /** Legacy Project source used for an effective Space-memory fallback. */
+    legacySource?: 'project';
+    /** Count of legacy file entries appended after formal personal assets. */
+    legacyEntryCount?: number;
 }
 
 /** Base description (non-project sessions): three memory scopes. */
@@ -39,9 +43,15 @@ Three scopes (default "agent"):
 - "shared": durable facts that EVERY agent should know. Use sparingly.
 - "user": the user's global profile/preferences.
 
-Use when the user asks to remember something, gives a durable correction/preference, or states a future-relevant fact, decision, outcome, milestone, or convention. Do not save trivia, dumps/logs, rediscoverable facts, the current task's working decisions, one-off state, plans, progress, or temporary debug notes.
+Use add only when the user explicitly asks to remember/save something for future conversations, or confirms a specific memory the assistant proposed. A correction, preference, or future-relevant fact alone is not permission to persist it: apply it in the current conversation and ask before saving it across conversations. Do not save trivia, dumps/logs, rediscoverable facts, the current task's working decisions, one-off state, plans, progress, or temporary debug notes.
+When the user explicitly asks to remember something, preserve their wording; if you need to infer, summarize, or change the meaning, show the exact proposed wording and wait for confirmation before calling add.
+Use replace/remove only when the user explicitly asks to edit or forget a stored memory; a correction for the current task alone does not authorize changing cross-session data.
 
-Current non-empty memory entries are already present in your system context. Do not call list merely to load or refresh context. Use list only when the user explicitly asks to inspect stored memory or when an exact current entry is needed for replace/remove.
+Some relevant memory may already be present in context. Do not call list merely to reload it. Use list when the user asks for an inventory or you need the exact stored text before replace/remove.
+
+After the cognition merge, "user" and "shared" are intent labels backed by one personal cognition-asset collection: user identity/style/preferences and globally useful facts/conventions are both managed there. For these targets, list shows formal personal assets plus any unmigrated legacy entries; replace/remove act on one matching formal asset first, and retain legacy-file handling only when no formal asset matches. If the text matches multiple assets, use list_ability_assets and the asset id-based management tools instead of guessing.
+
+After add or replace, tell the user the exact wording saved and whether it is active or still awaiting review. Never describe a suggestion awaiting review as active memory.
 
 Routing: agent-specific lessons -> agent; user identity/style/preferences -> user; repo/project conventions -> shared.
 
@@ -59,9 +69,15 @@ Targets:
 - shared: stable facts that hold across spaces and matter to every agent. Use sparingly.
 - user: stable user-wide profile/preferences every agent should know.
 
-Use when the user asks to remember something, gives a durable correction/preference, or states a future-relevant fact. Do not save trivia, raw dumps/logs, rediscoverable facts, the current task's working decisions, one-off task state, plans, progress, or temporary debug notes.
+Use add only when the user explicitly asks to remember/save something for future conversations, or confirms a specific memory the assistant proposed. A correction, preference, or future-relevant fact alone is not permission to persist it: apply it in the current conversation and ask before saving it across conversations. Do not save trivia, raw dumps/logs, rediscoverable facts, the current task's working decisions, one-off task state, plans, progress, or temporary debug notes.
+When the user explicitly asks to remember something, preserve their wording; if you need to infer, summarize, or change the meaning, show the exact proposed wording and wait for confirmation before calling add.
+Use replace/remove only when the user explicitly asks to edit or forget a stored memory; a correction for the current task alone does not authorize changing cross-session data.
 
-Current non-empty entries for these targets are already present in your system context. Do not call list merely to load or refresh context. Use list only when the user explicitly asks to inspect stored memory or when an exact current entry is needed for replace/remove.
+Some relevant memory may already be present in context. Do not call list merely to reload it. Use list when the user asks for an inventory or you need the exact stored text before replace/remove.
+
+After the cognition merge, "user" and "shared" are intent labels backed by one personal cognition-asset collection: user identity/style/preferences and globally useful facts/conventions are both managed there. For these targets, list shows formal personal assets plus any unmigrated legacy entries; replace/remove act on one matching formal asset first, and retain legacy-file handling only when no formal asset matches. If the text matches multiple assets, use list_ability_assets and the asset id-based management tools instead of guessing.
+
+After add or replace, tell the user the exact wording saved and whether it is active or still awaiting review. Never describe a suggestion awaiting review as active memory.
 
 Routing — ask "would this still hold in another space?":
 - No / space-specific -> space.

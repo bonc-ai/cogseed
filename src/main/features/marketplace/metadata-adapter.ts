@@ -12,6 +12,7 @@
  * 收口后只回不可变字节，这四处必然迁到本模块——与 Q1 的答案无关。
  */
 
+import { hubContentStatus } from '../../../shared/hub-content-status';
 import { createLogger } from '../../logger';
 import { normalizeMarketplaceError } from './errors';
 
@@ -110,7 +111,7 @@ export function normalizeCatalogEntry(raw: Record<string, unknown>): SkillMetada
     content_id: str(raw.content_id) || str(raw.id),
     version: str(raw.version),
     create_uid: str(raw.create_uid),
-    status: str(raw.status) || str(raw.state),
+    status: hubContentStatus(raw),
     min_app_version: str(raw.min_app_version) || str(raw.minAppVersion),
     category: str(raw.category),
     published_at: toEpochMillis(raw.published_at) ?? 0,

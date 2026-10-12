@@ -171,6 +171,24 @@ describe('交付台账（另存到知识库的反查依据）', () => {
     expect(annotateRun(uid, 'run_000000_abcd', { path: 'x.txt' })).toBeNull();
   });
 
+  it('两个落点分开记：库内 cleaned_copy 与本机 local_copy（本地那份不在库里，只能靠台账反查）', () => {
+    const text = '用 coxy 上课';
+    const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });
+    annotateRun(uid, run.runId, { kind: 'cleaned_copy', path: '1/站会-清理版.txt' });
+    annotateRun(uid, run.runId, { kind: 'local_copy', path: '/Users/example/会议/站会-清理版.txt' });
+    const after = getRun(uid, run.runId)!;
+    expect(after.deliveries?.map((d) => d.kind)).toEqual(['cleaned_copy', 'local_copy']);
+  });
+
+  it('未知 kind 收敛为 cleaned_copy（历史调用方不传 kind，行为不变）', () => {
+    const text = '用 coxy 上课';
+    const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });
+    annotateRun(uid, run.runId, { kind: 'whatever', path: '1/站会-清理版.txt' });
+    annotateRun(uid, run.runId, { path: '1/站会-清理版-2.txt' });
+    const after = getRun(uid, run.runId)!;
+    expect(after.deliveries?.map((d) => d.kind)).toEqual(['cleaned_copy', 'cleaned_copy']);
+  });
+
   it('跨 uid 不可写（交付记录也按会话属主隔离）', () => {
     const text = '用 coxy 上课';
     const run = createRun(uid, { docId: 'doc-1', sourceText: text, result: pipeline(text) });

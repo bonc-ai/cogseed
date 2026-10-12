@@ -64,7 +64,7 @@ async function seedCache(skillId: string, files: Record<string, string>): Promis
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, body);
     }
-  }, { version: '2.0.0', published_at: 100 });
+  }, { version: '2.0.0', published_at: 100, updated_at: 200 });
 }
 
 beforeEach(async () => {
