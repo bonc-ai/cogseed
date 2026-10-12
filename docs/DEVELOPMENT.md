@@ -272,8 +272,10 @@ these instructions do not assert that a particular remote check is enabled.
 
 Submit external PRs against public `main`. Reviewed patches are imported into
 private development, preserving author attribution and DCO sign-offs. The
-public PR is closed with the import result; accepted changes appear in a later
-release snapshot. See [Contributing](../CONTRIBUTING.md#contribution-integration).
+public PR stays open after import. Once the source candidate passes its release
+gates, required CI and CODEOWNERS approval precede a merge commit that retains
+the contributor commits. The next snapshot uses that updated public history.
+See [Contributing](../CONTRIBUTING.md#contribution-integration).
 
 The public test suite covers application and build-tool contracts. The private
 repository additionally runs its internal governance checks under `test/private/`;
