@@ -1,21 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
+
+// Exercise real indexing cleanup without loading an unrelated embedding model.
+vi.mock('../../../../src/main/features/kb_embed', () => ({
+  embedTexts: async (texts: string[]) => texts.map(() => Array(512).fill(0.1)),
+  closeEmbedder: vi.fn(),
+}));
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
+  vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ontology-rules-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
 });
 
-afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    await drainMainRuntimeForTest('rule-user');
+  } finally {
+    if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('Ontology R-Box (relation rules)', () => {
