@@ -21,6 +21,8 @@ async function seedAsset(userId: string, judgment: string) {
   const { candidates } = await modules();
   const candidate = await candidates.saveRecallCandidate(userId, {
     judgment,
+    // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+    summary: '语义夹具样本',
     suggestedType: 'rule',
     suggestedScope: 'delivery',
     sourceRefs: [{ kind: 'execution', id: `exec-${judgment.length}` }],
@@ -95,6 +97,7 @@ describe('ability asset semantics persistence', () => {
     const { candidates } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-s', {
       judgment: 'Prefer append-only audit records for asset changes.',
+      summary: 'Append-only record habit',
       suggestedType: 'rule',
       suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-seed' }],
@@ -118,27 +121,25 @@ describe('ability asset semantics persistence', () => {
 
     const updated = await assets.updateAbilityAsset('user-v', base.asset.id, {
       applicableWhen: ['Onboarding a new teammate'],
-      sensitivity: 'L1',
       actor: 'user',
       reason: '补齐适用条件',
     });
 
     expect(updated.version).toBe('2');
     expect(updated.applicableWhen).toEqual(['Onboarding a new teammate']);
-    expect(updated.sensitivity).toBe('L1');
 
     const versions = await assets.listAbilityAssetVersions('user-v', base.asset.id);
     expect(versions.map((entry) => entry.version)).toEqual(['1', '2']);
     // v1 predates the semantics, so the snapshot must not invent them.
     expect(versions[0].snapshot.applicableWhen).toBeUndefined();
     expect(versions[1].snapshot.applicableWhen).toEqual(['Onboarding a new teammate']);
-    expect(versions[1].snapshot.sensitivity).toBe('L1');
   });
 
   it('runs conditions through the L3 gate on both write paths', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-l3', {
       judgment: 'A perfectly ordinary judgment.',
+      summary: 'Ordinary judgment fixture',
       suggestedType: 'rule',
       suggestedScope: 'ops',
       sourceRefs: [{ kind: 'execution', id: 'exec-l3' }],
@@ -164,7 +165,6 @@ describe('ability asset semantics persistence', () => {
     await assets.updateAbilityAsset('user-p', base.asset.id, {
       applicableWhen: ['Only while onboarding'],
       forbiddenWhen: ['Never in production reviews'],
-      sensitivity: 'L2',
       actor: 'user',
       reason: '补语义',
     });
@@ -172,6 +172,5 @@ describe('ability asset semantics persistence', () => {
     const purged = await assets.purgeAbilityAsset('user-p', base.asset.id, { actor: 'user', reason: '用户要求彻底清除' });
     expect(purged.applicableWhen).toBeUndefined();
     expect(purged.forbiddenWhen).toBeUndefined();
-    expect(purged.sensitivity).toBeUndefined();
   });
 });

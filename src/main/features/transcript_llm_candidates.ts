@@ -90,6 +90,18 @@ export interface LlmCandidateResult {
   failedChunks: number;
   /** 没产出候选的原因（未配置模型 / 正文为空 / 所有段都失败）。 */
   skipped?: 'no_model' | 'empty_text' | 'model_failed';
+  /**
+   * 【加法，specs/013 T004】本次复核消耗的 token 用量（各成功段累加）。
+   * 形态对齐 `RecallCaptureModelUsage`（`recall/capture-service.ts`）。
+   * 键名与量纲（2026-09-25 已核实）：`runner.run()` 的 `result.meta.usage`
+   * 为 `{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?,
+   * totalTokens }`，单位 = token 个数、整轮累加口径
+   * （`src/core-agent/src/shared/types.ts:66-72`；主进程转发见
+   * `model/core-agent/event-mapper.ts:600-620`）。
+   * **测不到就缺失**：模型不可用 / 全段失败 / 注入方不回报时该字段
+   * 整个不存在——不写 0 假装测到（cache 字段不在此口径内）。
+   */
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
 }
 
 export const REVIEW_SYSTEM_PROMPT = [
@@ -271,13 +283,38 @@ export function parseReviewResponse(
   return { candidates: sorted, rejected };
 }
 
+/** 单次调用的 token 用量（`runner.run()` 的 `result.meta.usage` 子集，T004）。 */
+export interface ReviewModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+/** 累加一段的用量（只认有限非负数；一段没报任何字段就不计——不写 0 假装测到）。 */
+function addUsage(total: ReviewModelUsage | undefined, incoming: ReviewModelUsage | undefined): ReviewModelUsage | undefined {
+  if (!incoming) return total;
+  const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+  const next: ReviewModelUsage = { ...(total ?? {}) };
+  let touched = false;
+  if (ok(incoming.inputTokens)) { next.inputTokens = (next.inputTokens ?? 0) + incoming.inputTokens; touched = true; }
+  if (ok(incoming.outputTokens)) { next.outputTokens = (next.outputTokens ?? 0) + incoming.outputTokens; touched = true; }
+  if (ok(incoming.totalTokens)) { next.totalTokens = (next.totalTokens ?? 0) + incoming.totalTokens; touched = true; }
+  return touched ? next : total;
+}
+
 export interface GenerateReviewOptions {
-  /** 优先参考名单（词表正确写法 + 记忆分组字段值）。 */
+  /** 优先参考名单（词表正确写法 + 本体分组字段值）。 */
   knownTargets?: string[];
   /** 词形判据找出的可疑位置：只作为提示。 */
   hints?: SuspectHint[];
-  /** 测试注入：给定提示词返回模型文本。 */
-  runModel?: (input: { systemPrompt: string; message: string }) => Promise<string>;
+  /**
+   * 测试注入：给定提示词返回模型文本。返回纯字符串 = 不带用量；
+   * 返回 `{ text, usage? }` = 连同该段 token 用量一起回报（T004，加法——
+   * 旧注入方返回字符串的写法完全兼容）。
+   */
+  runModel?: (
+    input: { systemPrompt: string; message: string },
+  ) => Promise<string | { text: string; usage?: ReviewModelUsage }>;
   sessionKey?: string;
   chunkChars?: number;
   maxChunks?: number;
@@ -323,6 +360,8 @@ export async function generateReviewCandidates(
   const merged = new Map<string, LlmCandidate>();
   const rejectedAll: Array<{ wrong: string; correct: string; why: string }> = [];
   let failedChunks = 0;
+  // token 用量只累计**成功段**（T004）：失败段没有可信读数，缺失比编 0 诚实。
+  let usageTotal: ReviewModelUsage | undefined;
 
   for (const chunk of chunks) {
     // 该段的重点线索：只带落在这一段里的
@@ -333,7 +372,13 @@ export async function generateReviewCandidates(
     let raw = '';
     try {
       if (options.runModel) {
-        raw = await options.runModel({ systemPrompt: request.systemPrompt, message: request.message });
+        const outcome = await options.runModel({ systemPrompt: request.systemPrompt, message: request.message });
+        if (typeof outcome === 'string') {
+          raw = outcome;
+        } else {
+          raw = String(outcome?.text ?? '');
+          usageTotal = addUsage(usageTotal, outcome?.usage);
+        }
       } else {
         const { runner } = await buildRunner({
           sessionId: `transcript-llm-${options.sessionKey ?? userId}`,
@@ -352,6 +397,9 @@ export async function generateReviewCandidates(
           failedChunks += 1;
           continue;
         }
+        // meta.usage 为整轮累加口径（inputTokens/outputTokens/totalTokens，
+        // token 个数）；cacheRead/cacheWrite 不进本口径。键名已按 runner 类型核实。
+        usageTotal = addUsage(usageTotal, result.meta.usage);
         raw = result.text;
       }
     } catch (error) {
@@ -397,6 +445,9 @@ export async function generateReviewCandidates(
     outsideAllowlist: candidates.filter((c) => !c.inAllowlist).length,
     failedChunks,
   };
+  // 测不到就整个缺失：一次用量都没读到（模型不可用/全段失败/注入方不回报）
+  // 时不出 usage 字段，更不写 0 假装测到（specs/013 T004 验收点）。
+  if (usageTotal) result.usage = usageTotal;
   if (base.chunksScanned === 0 && failedChunks > 0) result.skipped = 'model_failed';
   return result;
 }

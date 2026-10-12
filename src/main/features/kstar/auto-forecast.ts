@@ -1,5 +1,10 @@
 import { createLogger } from '../../logger';
 import { loadCommittedProjectionKnowledge } from '../recall/projection-knowledge';
+import { listAbilityAssets } from '../recall/asset-service';
+import {
+  filterRecallAssetsForAgentRead,
+  filterRecallAssetsForCommittedProjection,
+} from '../recall/prompt-injection';
 import {
   commitCommanderForecast,
   matchedRulesForKnowledge,
@@ -46,6 +51,7 @@ export const AUTO_FORECAST_PROMPT = [
   '- Candidates must differ meaningfully (e.g. direct approach vs delegation vs tool-heavy verification).',
   '- Use the projected ability assets when they fit; do not invent asset names.',
   '- Treat ontologyFacts as user-scoped context, ontologyRules as constraints, and ontologyTaxonomy as vocabulary. Do not expose or reproduce storage paths.',
+  '- A fact whose conflictedWith is non-empty is disputed: that field has two clashing entries. Do not treat it as a single settled fact; weigh both sides or ask.',
 ].join('\n');
 
 /** Tolerant parser: accepts the tagged array, a bare JSON array, prose
@@ -133,6 +139,7 @@ async function runAutoForecastForRequirement(
     let knowledge: Awaited<ReturnType<typeof loadCommittedProjectionKnowledge>>;
     try {
       knowledge = await loadCommittedProjectionKnowledge(userId, requirement.projectionId, {
+        ...(requirement.workspaceId ? { workspaceId: requirement.workspaceId } : {}),
         taskText: requirement.goalText,
       });
     } catch {
@@ -140,13 +147,55 @@ async function runAutoForecastForRequirement(
       return { ok: false, reason: 'projection knowledge unavailable' };
     }
 
-    const assetLines = knowledge.abilityAssets
+    // Forecast generation is a model read of both committed assets and profile
+    // context, so apply the same gates as the normal prompt path before building
+    // any text payload. Profile assets are automatic background context;
+    // projection assets retain the confirmed projection's explicit-use rules.
+    const allAssets = await listAbilityAssets(userId);
+    const workspaceId = requirement.workspaceId || knowledge.workspaceId;
+    const readContext = {
+      ...(knowledge.projectId ? { projectId: knowledge.projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+      taskText: requirement.goalText,
+    };
+    const readablePersonalAssets = await filterRecallAssetsForAgentRead(
+      userId,
+      allAssets.filter((asset) => asset.type === 'personal'),
+      readContext,
+    );
+    const projectionAssetIds = new Set(knowledge.abilityAssetRefs);
+    const projectionContext = {
+      purpose: [knowledge.projectionPurpose, requirement.goalText].filter(Boolean).join('\n'),
+      ...readContext,
+    };
+    const readableProjectionAssets = await filterRecallAssetsForCommittedProjection(
+      userId,
+      allAssets.filter((asset) => projectionAssetIds.has(asset.id)),
+      projectionContext,
+    );
+    const readableProjectionIds = new Set(readableProjectionAssets.map((asset) => asset.id));
+
+    // Reload the ontology profile with the allowlist so blocked formal personal
+    // assets cannot reappear as virtual onto-* entries in facts or rules.
+    knowledge = await loadCommittedProjectionKnowledge(userId, requirement.projectionId, {
+      ...(knowledge.projectId ? { projectId: knowledge.projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+      taskText: requirement.goalText,
+      allowedPersonalAssetIds: new Set(readablePersonalAssets.map((asset) => asset.id)),
+    });
+    const readableKnowledge = {
+      ...knowledge,
+      abilityAssets: knowledge.abilityAssets.filter((asset) => readableProjectionIds.has(asset.id)),
+      rules: knowledge.rules.filter((rule) => readableProjectionIds.has(rule.assetId)),
+    };
+
+    const assetLines = readableKnowledge.abilityAssets
       .slice(0, 12)
       .map((asset) => `- [${asset.type}] ${asset.title}: ${asset.statement}`)
       .join('\n');
     const allowedToolNames = options.allowedToolNames || new Set<string>();
     const situation = await measureForecastSituation(userId, knowledge.workspaceId, allowedToolNames);
-    const matchedRules = matchedRulesForKnowledge(requirement.goalText, knowledge);
+    const matchedRules = matchedRulesForKnowledge(requirement.goalText, readableKnowledge);
 
     const generate = options.generate || _autoForecastGeneratorForTest || (async (prompt, payload) => {
       const { buildRunner } = await import('../../model/core-agent/runner');
@@ -181,10 +230,10 @@ async function runAutoForecastForRequirement(
     const payload = {
       taskGoal: requirement.goalText,
       projectedAbilityAssets: assetLines || '(none projected)',
-      ontologyFacts: knowledge.ontologyFacts.slice(0, 24),
-      ontologyRules: knowledge.ontologyRules.slice(0, 64),
+      ontologyFacts: readableKnowledge.ontologyFacts.slice(0, 24),
+      ontologyRules: readableKnowledge.ontologyRules.slice(0, 64),
       ontologyTaxonomy: {
-        groups: knowledge.ontologyTaxonomy.groups.slice(0, 48).map((group) => ({
+        groups: readableKnowledge.ontologyTaxonomy.groups.slice(0, 48).map((group) => ({
           ...group,
           fields: group.fields.slice(0, 64),
         })),

@@ -20,6 +20,7 @@ export interface RecallTaskContract {
 export interface RecallTaskContractInput {
   taskText?: string;
   purpose?: string;
+  projectId?: string;
   workspaceId?: string;
 }
 
@@ -250,7 +251,10 @@ export async function loadRecallTaskContractContext(
 ): Promise<RecallTaskContractContext> {
   const [taxonomyResult, rulesResult] = await Promise.allSettled([
     loadOntologyTaxonomy(userId),
-    loadOntologyRules(userId, input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+    loadOntologyRules(userId, {
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+    }),
   ]);
   const taxonomy = taxonomyResult.status === 'fulfilled' ? taxonomyResult.value : { groups: [] };
   const rules = rulesResult.status === 'fulfilled' ? rulesResult.value.rules : [];

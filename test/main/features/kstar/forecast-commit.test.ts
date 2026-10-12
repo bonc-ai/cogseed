@@ -47,7 +47,7 @@ function candidate(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-async function seedForecastBoundary(options: { confirmed: boolean }) {
+async function seedForecastBoundary(options: { confirmed: boolean; projectId?: string }) {
   const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const refs = await import('../../../../src/main/features/recall/workspace-refs');
@@ -98,6 +98,7 @@ async function seedForecastBoundary(options: { confirmed: boolean }) {
   const preview = await projections.previewContextProjection('user-a', {
     taskRunId: task.id,
     workspaceId: 'workspace-a',
+    ...(options.projectId ? { projectId: options.projectId } : {}),
     purpose: 'review',
     taskText: 'Fix OAuth callback',
   });
@@ -425,15 +426,15 @@ describe('Commander Forecast host commit', () => {
   });
 
   it('filters Personal Ontology facts by project and ranks task-relevant facts before the cap', async () => {
-    const seeded = await seedForecastBoundary({ confirmed: true });
+    const seeded = await seedForecastBoundary({ confirmed: true, projectId: 'project-alpha' });
     const groups = await import('../../../../src/main/features/personal_ontology_groups');
     const group = await groups.createGroup('user-a', '项目知识');
     await groups.appendFieldValue('user-a', group.group!.group_id, '偏好', '全局输出规范', '手动');
-    await groups.appendFieldValue('user-a', group.group!.group_id, '偏好', '另一个项目的私有事实', '智能', 'workspace-b');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '偏好', '另一个项目的私有事实', '智能', 'project-beta');
     for (let index = 0; index < 24; index += 1) {
       await groups.appendFieldValue('user-a', group.group!.group_id, '背景', `无关历史事实 ${index}`, '手动');
     }
-    await groups.appendFieldValue('user-a', group.group!.group_id, '认证', 'OAuth 回调必须校验 state', '智能', 'workspace-a');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '认证', 'OAuth 回调必须校验 state', '智能', 'project-alpha');
 
     const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
     const record = await forecast.commitCommanderForecast('user-a', seeded.input);
@@ -441,7 +442,7 @@ describe('Commander Forecast host commit', () => {
 
     expect(facts).toEqual(expect.arrayContaining([
       expect.objectContaining({ value: '全局输出规范' }),
-      expect.objectContaining({ value: 'OAuth 回调必须校验 state', projectId: 'workspace-a' }),
+      expect.objectContaining({ value: 'OAuth 回调必须校验 state', projectId: 'project-alpha' }),
     ]));
     expect(facts.some((fact) => fact.value === '另一个项目的私有事实')).toBe(false);
     expect(facts.length).toBeLessThanOrEqual(24);

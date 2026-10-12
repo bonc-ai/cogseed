@@ -3,6 +3,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// 标题闸门（设计 3.2）后晋升链对不合规 summary 走 LLM 起标题；本文件走的是
+// 内生写入路径（summary＝正文首句/模板拼接），单测无模型，mock 出确定性
+// 合规标题（与 asset-title-suggestion.test.ts 同一边界口径）。
+vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({
+  suggestAbilityAssetTitle: async () => ({ title: '模型重起的样本标题' }),
+}))
+
 let tmpDir: string;
 let previousRoot: string | undefined;
 
@@ -26,6 +33,21 @@ describe('User teaching signals', () => {
     expect(teaching.classifyTeachingIntent('不要再自动修改 KSTAR')).toBe('avoid');
     expect(teaching.classifyTeachingIntent('纠正一下，不是 A 而是 B')).toBe('correct');
     expect(teaching.classifyTeachingIntent('请继续处理这个任务')).toBeUndefined();
+  });
+
+  it('标题与会话整理线统一（2026-09-29）：正文首句短标题，不再前 239 字截断', async () => {
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    const longMemory = '部署任何服务前先跑一遍冒烟清单，任何一步失败都停下来排查而不是带病上线。'.repeat(6);
+    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
+      conversationId: 'conv-title',
+      messageId: 'message-title',
+      userMessage: '请记住：部署前先跑冒烟清单，任何一步失败都停下来排查而不是带病上线。',
+      memoryContent: longMemory,
+      memoryScope: 'personal' as const,
+    });
+    // 标题=正文首句截到 60 字（makeDisplayTitle），不再是 239 字的半行正文。
+    expect(signal!.summary.length).toBeLessThanOrEqual(60);
+    expect(signal!.summary).not.toContain('……');
   });
 
   it('creates one idempotent pending candidate and revokes both review inputs', async () => {

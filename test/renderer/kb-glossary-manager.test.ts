@@ -26,8 +26,9 @@ const manager = require('../../src/renderer/modules/kb-glossary-manager.js') as 
     mode: string; total: number; added: number; updated: number; invalid: number; replacedExisting: number;
   };
   kindKey: (kind: string) => string;
-  riskKeyOf: (risk: string) => string;
+  riskKeyOf: (level: string) => string;
   guardReason: (action: string, snapshot: Record<string, unknown>) => { key: string; fallback: string } | null;
+  meetingMetricsLines: (summary: unknown) => string[];
 };
 
 const entry = (over: Record<string, unknown> = {}) => ({
@@ -169,6 +170,9 @@ describe('源码契约', () => {
       'transcript.glossary.seedInitial', 'transcript.queryRewrite.set',
       'transcript.glossary.exportPack', 'transcript.glossary.reviewPack', 'transcript.glossary.importPack',
       'transcript.metrics.summary',
+      // specs/013 T057 / D16：指标区第二分区「会议引用」读会议指标——**只读**通道，
+      // 与既有 transcript.metrics.summary 两数据源两读口（互不混流），不是写入。
+      'meeting.metrics.summary',
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);
@@ -357,5 +361,161 @@ describe('语言切换（i18n-change）', () => {
     env.strings['kb.glossary.io'] = '不该出现';
     env.fire();
     expect(summary.textContent).toBe('Import / Export');
+  });
+});
+
+// ── T057 / US-506：指标区新增「会议引用」分区（口径与数字一起呈现）──────────
+
+/** meeting.metrics.summary 的 MeetingMetricsSummary 形态（五口径 + notMeasurable）。 */
+const MEETING_SUMMARY = {
+  scope: {},
+  glossaryRuns: 3,
+  adoption: { numerator: 2, denominator: 4, rate: 0.5, samples: 4 },
+  misReference: { numerator: 0, denominator: 2, rate: 0, samples: 2 },
+  token: { inputTokens: 120, outputTokens: 30, totalTokens: 150, samples: 2 },
+  entity: {
+    termFixedRate: { numerator: 1, denominator: 5, rate: 0.2, samples: 5 },
+    overCorrectionRate: { numerator: 0, denominator: 2, rate: 0, samples: 2 },
+    samples: 7,
+  },
+  notMeasurable: ['无对照环境，不宣称因果', '仅有本机数据，不做跨账号推断', '手动改回发生在产品之外', '第四条如实列出'],
+};
+
+describe('会议引用指标行（T057 纯函数）', () => {
+  it('三口径 + 实体级两项都带分子/分母与样本数（不只裸数），口径说明随行给出', () => {
+    const text = manager.meetingMetricsLines(MEETING_SUMMARY).join('\n');
+    // 数值 + 分母 + 样本数同现
+    expect(text).toContain('2/4');
+    expect(text).toContain('样本 4');
+    expect(text).toContain('1/5');
+    expect(text).toContain('0/2');
+    // 三口径 + 实体级两项齐全
+    expect(text).toContain('采纳率');
+    expect(text).toContain('误引用率');
+    expect(text).toContain('过纠正率');
+    expect(text).toContain('术语改对率');
+    // 口径说明与数字一起呈现（"口径：…"随行，不是裸数）
+    expect((text.match(/口径/g) || []).length).toBeGreaterThanOrEqual(4);
+    // token 是绝对累计，明示不宣称因果
+    expect(text).toContain('不宣称因果');
+  });
+
+  it('notMeasurable 至少三条可见（如实列出，不编数字）', () => {
+    const text = manager.meetingMetricsLines(MEETING_SUMMARY).join('\n');
+    expect(text).toContain('无对照环境，不宣称因果');
+    expect(text).toContain('仅有本机数据，不做跨账号推断');
+    expect(text).toContain('手动改回发生在产品之外');
+  });
+
+  it('无样本（rate:null / 分母 0）如实显示「暂无样本」，不编 0/0', () => {
+    const empty = {
+      scope: {},
+      glossaryRuns: 0,
+      adoption: { numerator: 0, denominator: 0, rate: null, samples: 0 },
+      misReference: { numerator: 0, denominator: 0, rate: null, samples: 0 },
+      token: { inputTokens: 0, outputTokens: 0, totalTokens: 0, samples: 0 },
+      entity: {
+        termFixedRate: { numerator: 0, denominator: 0, rate: null, samples: 0 },
+        overCorrectionRate: { numerator: 0, denominator: 0, rate: null, samples: 0 },
+        samples: 0,
+      },
+      notMeasurable: ['无对照环境，不宣称因果', '仅有本机数据，不做跨账号推断', '手动改回发生在产品之外'],
+    };
+    const text = manager.meetingMetricsLines(empty).join('\n');
+    expect(text).toContain('暂无样本');
+    expect(text).not.toContain('0/0');
+  });
+
+  it('summary 为 null/undefined（通道失败）⇒ 空行：分区不渲染、不编数字', () => {
+    expect(manager.meetingMetricsLines(null)).toEqual([]);
+    expect(manager.meetingMetricsLines(undefined)).toEqual([]);
+    // 空对象（文件缺失/全坏行的兜底形态）按 §5 渲染「暂无样本」，也不编数字
+    expect(manager.meetingMetricsLines({}).join('\n')).toContain('暂无样本');
+    expect(manager.meetingMetricsLines({}).join('\n')).not.toContain('0/0');
+  });
+});
+
+describe('会议引用指标分区渲染（T057，vm 级）', () => {
+  /**
+   * 仿 loadGlossaryManagerForI18n，mock invoke 按 channel 分发：
+   * transcript 指标缺 summary（既有区因此不渲染——它一行没改），
+   * meeting.metrics.summary 返回固定五口径。
+   */
+  function loadGlossaryManagerWithMeetingMetrics() {
+    const source = readSrc('renderer/modules/kb-glossary-manager.js');
+    const nodes = new Map<string, any>();
+    const dialog = fakeElement();
+    dialog.querySelector = (selector: string) => {
+      if (!nodes.has(selector)) nodes.set(selector, fakeElement());
+      return nodes.get(selector);
+    };
+    let settleModal: (v: unknown) => void = () => {};
+    const modal: any = new Promise((resolve) => { settleModal = resolve; });
+    modal.dialog = dialog;
+    modal.overlay = fakeElement();
+    modal.close = () => settleModal({ value: null, reason: 'close' });
+
+    // 追踪 [data-glo-metrics] 容器 appendChild 的节点（fakeElement 不收集 children）
+    const appended: any[] = [];
+    const windowMock: any = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      t: () => '',
+      uiModal: () => modal,
+      uiField: () => '<div class="ui-field"></div>',
+      uiButton: () => '<button type="button" class="ui-button">x</button>',
+      cogseed: {
+        invoke: async (channel: string) => {
+          if (channel === 'meeting.metrics.summary') {
+            return { ok: true, summary: MEETING_SUMMARY };
+          }
+          // transcript 指标：无 summary ⇒ 既有指标区保持原行为（不渲染）
+          if (channel === 'transcript.metrics.summary') return {};
+          if (channel === 'transcript.glossary.list') return { entries: [], meta: {} };
+          return {};
+        },
+      },
+    };
+    const context: any = {
+      console, setTimeout, clearTimeout, document: {
+        createElement: () => fakeElement(), body: fakeElement(),
+        addEventListener: () => {}, removeEventListener: () => {},
+      },
+      window: windowMock,
+    };
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: 'kb-glossary-manager.js' });
+    // open 后 modal.dialog.querySelector 才被调；先开再装 spy 不行（render 同步跑），
+    // 所以在 open 前把 querySelector 的返回节点接管 appendChild。
+    const metricsHost = (() => {
+      const el = dialog.querySelector('[data-glo-metrics]');
+      el.appendChild = (child: any) => { appended.push(child); return child; };
+      return el;
+    })();
+    windowMock.KbGlossaryManager.open({});
+    return { metricsHost, appended };
+  }
+
+  it('meeting.metrics.summary 的数据渲染为 data-glo-metrics 内的追加分区（数值+分母+样本数）', async () => {
+    const { metricsHost, appended } = loadGlossaryManagerWithMeetingMetrics();
+    // reload() 是异步链：等 microtask + 一个 macrotask
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+    const block = appended.find((node) => node?.dataset?.gloMeeting === 'metrics');
+    expect(block).toBeTruthy();
+    expect(block.className).toContain('kb-glo__meeting-metrics');
+    expect(block.textContent).toContain('会议引用指标');
+    expect(block.textContent).toContain('2/4');
+    expect(block.textContent).toContain('样本 4');
+    expect(block.textContent).toContain('口径');
+    // notMeasurable 至少三条进入渲染文本
+    expect(block.textContent).toContain('无对照环境，不宣称因果');
+    expect(block.textContent).toContain('仅有本机数据，不做跨账号推断');
+    expect(block.textContent).toContain('手动改回发生在产品之外');
+    // 既有指标区（transcript.metrics.summary 无数据）不受影响：容器未被写入其它内容
+    expect(appended.filter((node) => node?.dataset?.gloMeeting !== 'metrics')).toEqual([]);
+    expect(metricsHost).toBeTruthy();
   });
 });

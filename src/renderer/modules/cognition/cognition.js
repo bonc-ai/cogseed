@@ -402,6 +402,7 @@
     rendered.dataset.cognitionCaptureOverlay = 'true';
     let modalController = null;
     let closed = false;
+    let activeDraft = null;
     const removeOverlay = () => {
       rendered.remove();
     };
@@ -418,17 +419,23 @@
       if (modalController?.isOpen()) modalController.close('rerender', { restoreFocus: false });
       rendered.innerHTML = window.CognitionPages.renderCognitionCapture({
         state,
-        title: values.title || '',
-        summary: values.summary || '',
-        evidence: values.evidence || '',
+        title: values.summary || '',
+        summary: values.judgment || '',
+        value: values.value || '',
         sourceLabel: values.sourceLabel || '',
         suggestedType: values.suggestedType || '',
+        suggestedScope: values.suggestedScope || '',
+        applicableWhen: values.applicableWhen || [],
+        forbiddenWhen: values.forbiddenWhen || [],
+        risk: values.risk || 'low',
+        uncertainty: values.uncertainty || '',
         conversationId,
         messageId,
         error: values.error || '',
       });
       const dialog = rendered.querySelector('[data-cognition-capture-form]');
       if (!dialog) throw new Error('cognition capture dialog is unavailable');
+      if (typeof window.hydrateUiFormSelects === 'function') window.hydrateUiFormSelects(dialog);
       modalController = window.uiModalController({
         overlay: rendered,
         dialog,
@@ -461,14 +468,28 @@
         event.preventDefault();
         const title = String(form.querySelector('[data-cognition-capture-title]')?.value || '').trim();
         const captureSummary = String(form.querySelector('[data-cognition-capture-summary]')?.value || '').trim();
-        const evidenceSummary = String(form.querySelector('[data-cognition-capture-evidence]')?.value || '').trim();
+        const value = String(form.querySelector('[data-cognition-capture-value]')?.value || '').trim();
         const sourceLabel = String(form.querySelector('[data-cognition-capture-source]')?.value || '').trim();
         const suggestedType = String(form.querySelector('[data-cognition-capture-type]')?.value || '').trim();
-        if (!title || !captureSummary || !evidenceSummary || !sourceLabel || !suggestedType) return;
+        const scopeHost = form.querySelector('#cognition-capture-scope');
+        const suggestedScope = String(scopeHost?._uiSelectApi?.getValue?.() || '').trim();
+        const applicableWhen = String(form.querySelector('[data-cognition-capture-applicable]')?.value || '')
+          .split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+        const forbiddenWhen = String(form.querySelector('[data-cognition-capture-forbidden]')?.value || '')
+          .split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+        const uncertainty = String(form.querySelector('[data-cognition-capture-uncertainty]')?.value || '').trim();
+        const risk = String(activeDraft?.risk || '').trim();
+        if (!title || !captureSummary || !value || !sourceLabel || !suggestedType || !activeDraft) return;
         const submit = form.querySelector('[data-cognition-capture-submit]');
         if (submit?.disabled) return;
         if (submit) submit.disabled = true;
         try {
+          if (!suggestedScope) {
+            throw new Error(translate('cognition.candidate_scope_required', '先填写作用范围：没有范围的资产不会被带入任何任务。'));
+          }
+          if (suggestedType === 'rule' && (!applicableWhen.length || !forbiddenWhen.length)) {
+            throw new Error(translate('cognition.candidate_block_rule_boundary_required', '规则要先确认适用与禁止范围。'));
+          }
           // 气泡沉淀走**主链**：产出一条 recall 候选，与其它五个候选生产者
           // （capture-service / kstar / session_import / teaching / IPC 直入）
           // 同一个入口、同一套晋升闸门。
@@ -479,24 +500,27 @@
           // 而且它唯一的确认界面在当前包里没有宿主 DOM。用户看到「已保存」，
           // 数据确实落了盘，但永远不会再出现。那条路由已一并删除。
           //
-          // evidenceRefs 必须是**系统真握有 id 的东西**：锚点消息 + 来源会话。
-          // 不拿用户手填的 sourceLabel 字符串冒充证据引用——那正是晋升时
+          // evidenceRefs 是**主进程按模型引用的 mN 标签解析出的真实来源 ID**：
+          // 来源会话 + 上下文消息。sourceLabel 仅用于显示，不冒充来源引用——
+          // 无效引用正是晋升时
           // `unavailableCandidateSources` 要挡下来的形态。
-          const evidenceRefs = [
-            ...(messageId ? [{ kind: 'conversation', subtype: 'message', id: messageId, title: title }] : []),
-            ...(conversationId ? [{ kind: 'conversation', subtype: 'session', id: conversationId, title: sourceLabel }] : []),
-          ];
-          if (!evidenceRefs.length) {
+          const sourceRefs = Array.isArray(activeDraft.sourceRefs) ? activeDraft.sourceRefs : [];
+          const evidenceRefs = Array.isArray(activeDraft.evidenceRefs) ? activeDraft.evidenceRefs : [];
+          if (!sourceRefs.length || !evidenceRefs.length) {
             throw new Error(translate('cognition.capture.no_evidence', '这条沉淀缺少可追溯的来源，无法保存。'));
           }
           const result = await window.cogseed.invoke('recall.candidates.save', {
             judgment: captureSummary,
+            value,
             summary: title,
-            value: evidenceSummary,
             suggestedType,
-            suggestedScope: '',
+            suggestedScope,
             suggestedAction: 'create',
-            sourceRefs: evidenceRefs,
+            risk,
+            uncertainty,
+            applicableWhen,
+            forbiddenWhen,
+            sourceRefs,
             evidenceRefs,
           });
           if (!result?.ok) throw new Error(result?.error || translate('cognition.error.action_failed', '认知操作失败'));
@@ -531,18 +555,24 @@
           return;
         }
         const draft = result.draft;
-        if (result.status !== 'ready' || !draft || typeof draft.title !== 'string'
-            || typeof draft.summary !== 'string' || typeof draft.evidenceSummary !== 'string'
-            || typeof draft.sourceLabel !== 'string') {
+        if (result.status !== 'ready' || !draft || typeof draft.summary !== 'string'
+            || typeof draft.judgment !== 'string' || typeof draft.value !== 'string'
+            || typeof draft.suggestedScope !== 'string' || typeof draft.sourceLabel !== 'string'
+            || !Array.isArray(draft.sourceRefs) || !Array.isArray(draft.evidenceRefs)) {
           throw new Error(translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'));
         }
+        activeDraft = draft;
         renderMarkup('ready', {
-          title: draft.title,
           summary: draft.summary,
-          evidence: draft.evidenceSummary,
+          judgment: draft.judgment,
+          value: draft.value,
           sourceLabel: draft.sourceLabel,
-          // 模型给不出合法四类时留空，面板强制用户自己选（见 pages.js）。
-          suggestedType: draft.suggestedType || '',
+          suggestedType: draft.suggestedType,
+          suggestedScope: draft.suggestedScope,
+          applicableWhen: draft.applicableWhen,
+          forbiddenWhen: draft.forbiddenWhen,
+          risk: draft.risk,
+          uncertainty: draft.uncertainty,
         });
         bindControls();
         rendered.querySelector('[data-cognition-capture-title]')?.focus();

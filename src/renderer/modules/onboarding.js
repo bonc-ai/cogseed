@@ -1812,7 +1812,7 @@ async function _csImportClaudeSessions(agentType) {
           allIds: _csImportedConversationIds
         });
         if (res.cognitions) {
-          cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
+          cognitions += (res.cognitions.personal || 0) + (res.cognitions.fact || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0) + (res.cognitions.skill_method || 0);
         }
         const cb = row.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
@@ -1955,7 +1955,7 @@ async function _csImportWorkbuddySessions(agentType) {
         ok++;
         _csImportedConversationIds.push(res.conversationId);
         if (res.cognitions) {
-          cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
+          cognitions += (res.cognitions.personal || 0) + (res.cognitions.fact || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0) + (res.cognitions.skill_method || 0);
         }
         const cb = row.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
@@ -2853,7 +2853,7 @@ async function _csImportSelectedSessions(container) {
         titleHint: item.title,
       });
       if (res && res.conversationId) {
-        const c = res.cognitions || { personal: 0, rule: 0, template: 0 };
+        const c = res.cognitions || { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
         const cog = (c.personal || 0) + (c.rule || 0) + (c.template || 0);
         cogTotal += cog;
         if (res.degraded) {

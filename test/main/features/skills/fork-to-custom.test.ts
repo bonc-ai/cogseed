@@ -266,7 +266,7 @@ describe('Phase 9 派生为自定义 Skill（FR-054–FR-060）', () => {
       expect(store.isHubManagedContent(UID, result.customId)).toBe(false);
     });
 
-    it('`forked_from` 迭代一只写不读：src 下只有写入点', () => {
+    it('`forked_from` 只由贡献来源预填边界读取，不进入运行或更新分派', () => {
       const walk = (dir: string, out: string[] = []): string[] => {
         for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
           const full = path.join(dir, e.name);
@@ -282,7 +282,10 @@ describe('Phase 9 派生为自定义 Skill（FR-054–FR-060）', () => {
           return /\.forked_from\b/.test(code) || /forked_from\s*[,}]\s*=/.test(code);
         })
         .map((f) => path.relative(SRC, f).split(path.sep).join('/'));
-      expect(readers).toEqual([]);
+      expect(readers.sort()).toEqual([
+        'main/features/contribution/declarations.ts',
+        'main/ipc/contribution.ts',
+      ]);
     });
   });
 

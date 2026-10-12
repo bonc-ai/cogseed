@@ -9,15 +9,15 @@
     "fontSize": 4
   },
   "recall-local.css": {
-    "color": 462,
+    "color": 458,
     "fontSize": 13,
     "radius": 4
   },
   "style.css": {
-    "color": 1393,
+    "color": 1376,
     "zIndex": 7,
-    "fontSize": 318,
-    "radius": 251
+    "fontSize": 308,
+    "radius": 245
   },
   "workspace.css": {
     "color": 307,

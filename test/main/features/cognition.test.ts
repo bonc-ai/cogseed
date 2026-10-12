@@ -38,7 +38,7 @@ describe('cognition feature aggregate layer', () => {
     const created = await groups.createGroup(UID, 'Research ontology');
     expect(created.ok).toBe(true);
     const recallCandidate = await recallCandidates.saveRecallCandidate(UID, {
-      judgment: 'Keep review evidence traceable.',
+      judgment: 'Keep review evidence traceable.', summary: 'Traceable evidence habit',
       suggestedType: 'rule',
       suggestedScope: 'project',
       sourceRefs: [

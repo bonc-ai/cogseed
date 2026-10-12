@@ -68,14 +68,14 @@ describe('Recall source controls', () => {
   it('previews affected assets and revokes only matching assets after explicit confirmation', async () => {
     const { candidates, assets, controls } = await modules();
     const matchingCandidate = await candidates.saveRecallCandidate('user-a', {
-      judgment: 'Record architecture decisions.',
+      judgment: 'Record architecture decisions.', summary: 'Architecture decision log',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [conversationSource],
     });
     const otherCandidate = await candidates.saveRecallCandidate('user-a', {
-      judgment: 'Prefer concise status reports.',
+      judgment: 'Prefer concise status reports.', summary: 'Concise status habit',
       suggestedType: 'personal',
       suggestedScope: 'global',
       sourceRefs: [{ kind: 'conversation', subtype: 'session', id: 'conv-b' }],
@@ -100,7 +100,7 @@ describe('Recall source controls', () => {
   it('downgrades and pauses verified assets when their Evidence is removed without revoking the asset', async () => {
     const { candidates, assets, controls } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
-      judgment: 'Record architecture decisions.',
+      judgment: 'Record architecture decisions.', summary: 'Architecture decision log',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'architecture',

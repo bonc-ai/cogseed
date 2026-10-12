@@ -138,7 +138,7 @@ describe('Recall message usage feedback', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     // 真实资产（治理建议写在资产记录上，不能用裸 id）。
     const candidate = await candidates.saveRecallCandidate('user-a', {
-      judgment: 'Prefer concise answers.', suggestedType: 'personal',
+      judgment: 'Prefer concise answers.', summary: 'Concise answer habit', suggestedType: 'personal',
       suggestedScope: 'general', sourceRefs: [{ kind: 'execution', id: 'exec-neg' }],
     });
     const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });

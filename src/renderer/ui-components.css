@@ -468,6 +468,14 @@
 .ui-accordion__item[open] .ui-accordion__chevron { transform: rotate(45deg); }
 .ui-accordion__title { min-width: 0; flex: 1; }
 .ui-accordion__meta { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-size-1); }
+/* statusHtml 槽：正文行内可放 uiStatusPill / uiTag，故用 UI 字体而非 meta 的等宽体。 */
+.ui-accordion__status { flex: 0 0 auto; display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-muted); font-size: var(--font-size-2); }
+.ui-accordion__icon { flex: 0 0 auto; display: inline-flex; color: var(--text-muted); }
+.ui-accordion__icon .ui-icon { width: 16px; height: 16px; }
+/* tone 只染图标：标题保持中性，避免整行变色把列表读成一片告警。 */
+.ui-accordion__item[data-tone="success"] .ui-accordion__icon { color: var(--color-success); }
+.ui-accordion__item[data-tone="attention"] .ui-accordion__icon { color: var(--color-warning); }
+.ui-accordion__item[data-tone="critical"] .ui-accordion__icon { color: var(--color-danger); }
 .ui-accordion__body { padding: 0 0 var(--space-4) calc(13px + var(--space-2)); color: var(--text-secondary); }
 .ui-tree,
 .ui-tree [role="group"] { margin: 0; padding: 0; list-style: none; }
@@ -529,6 +537,11 @@
   outline-offset: var(--focus-offset);
   box-shadow: 0 0 0 3px var(--color-focus-halo), var(--shadow-card-hover);
 }
+.ui-resource-card--standard {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+}
 .ui-resource-card--row { max-width: 800px; }
 .ui-resource-card__header { display: flex; align-items: flex-start; gap: var(--space-3); }
 .ui-resource-card__icon {
@@ -567,11 +580,20 @@
   padding-top: var(--space-3);
   border-top: 1px solid var(--line-hairline);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
 .ui-resource-card__status { min-width: 0; color: var(--text-muted); font-size: var(--font-size-meta); }
+.ui-resource-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-left: auto;
+}
 
 /* SettingsSection. It is intentionally flat: hierarchy comes from spacing
  * and a hairline, never an extra page-level shadow. */

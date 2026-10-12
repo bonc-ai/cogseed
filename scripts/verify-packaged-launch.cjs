@@ -12,6 +12,7 @@ const { spawn } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_TIMEOUT_MS = 90_000;
+const WINDOWS_CLEANUP_ERRORS = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
 
 function verifySmokeMarker(marker) {
   const errors = [];
@@ -119,6 +120,25 @@ function terminateChild(child, graceMs = 5_000) {
   });
 }
 
+/**
+ * Windows may keep an Electron profile file locked briefly after the child
+ * process has closed. The profile is disposable test state, so a cleanup
+ * failure must not turn a successful packaged-launch proof into a failed job.
+ */
+function cleanupTemporaryRoot(tempRoot) {
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    return true;
+  } catch (error) {
+    const code = error?.code;
+    if (process.platform === 'win32' && WINDOWS_CLEANUP_ERRORS.has(String(code))) {
+      process.stderr.write(`[verify-packaged-launch] warning: leaving disposable Windows temp tree after cleanup retries (${code}): ${tempRoot}\n`);
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function launchPackagedSmoke(executable, options = {}) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-packaged-launch-'));
   const markerPath = path.join(tempRoot, 'ready.json');
@@ -156,7 +176,7 @@ async function launchPackagedSmoke(executable, options = {}) {
     throw new Error(details);
   } finally {
     await terminateChild(child);
-    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    cleanupTemporaryRoot(tempRoot);
   }
 }
 
@@ -174,6 +194,7 @@ module.exports = {
   verifySmokeMarker,
   waitForMarker,
   terminateChild,
+  cleanupTemporaryRoot,
   launchPackagedSmoke,
 };
 

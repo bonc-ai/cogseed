@@ -12,6 +12,11 @@ describe('shared resource grid integration', () => {
     for (const action of ['继续工作', '使用模板', '使用智能体', '使用技能', '连接账户', '查看记录']) {
       expect(gallery).toContain(`action: '${action}'`);
     }
+    expect(gallery).toContain("title: '社区贡献'");
+    expect(gallery).toContain("status: { label: '待审核', tone: 'attention' }");
+    for (const action of ['提交新版本', '撤回投稿', '撤回申请历史']) {
+      expect(gallery).toContain(`label: '${action}'`);
+    }
 
     const index = read('index.html');
     expect(index).toContain('class="agents-grid ui-resource-grid"');
@@ -28,6 +33,7 @@ describe('shared resource grid integration', () => {
 
   it('keeps the responsive layout contract in shared production CSS', () => {
     const css = read('ui-components.css');
+    const galleryCss = read('component-gallery.css');
     const rule = css.slice(css.indexOf('.ui-resource-grid {'), css.indexOf('.ui-resource-card {'));
     expect(rule).toContain('repeat(auto-fill');
     expect(rule).toContain('var(--card-width-min)');
@@ -36,5 +42,8 @@ describe('shared resource grid integration', () => {
     expect(rule).toContain('align-items: stretch');
     expect(rule).toContain('.ui-resource-grid[class] > *');
     expect(rule).toContain('max-width: none');
+    expect(css).toMatch(/\.ui-resource-card--standard\s*{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*padding:\s*var\(--space-4\);/s);
+    expect(css).toContain('.ui-resource-card__actions');
+    expect(galleryCss).not.toMatch(/\.gallery-resource-grid \.ui-resource-card\s*{[^}]*padding:/s);
   });
 });

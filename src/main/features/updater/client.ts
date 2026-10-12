@@ -23,6 +23,9 @@
  *    hashing as they go; the artifact is renamed into place only after the
  *    sha256 digest matches the server-provided value. A mismatch deletes the
  *    partial file.
+ *  - `installDownloaded` (Windows) records the approved install, then hands the
+ *    file to the detached helper. The record survives a failed hand-off on
+ *    purpose: it is the retry counter the attempts cap and the boot guard read.
  */
 
 import * as crypto from 'node:crypto';
@@ -40,11 +43,14 @@ import { requireCogSeedApiBase } from '../api_base';
 import { CLIENT_HEADER_NAMES, withCommonHeaders } from '../api_common';
 import { userUpdaterDownloadsDir } from '../../paths';
 import {
+  beginInstall,
+  clearInstall,
   markReminded,
   readUpdaterState,
   shouldRemind,
   writeUpdaterState,
 } from './state';
+import { getBootGuardVerdict } from './boot_guard';
 import type {
   CheckResult,
   DownloadProgress,
@@ -59,6 +65,13 @@ const log = createLogger('updater');
 
 const LATEST_CHECK_TIMEOUT_MS = 15_000;
 const DOWNLOAD_EXTENSIONS_ALLOWED = new Set(['.dmg', '.exe', '.zip']);
+/**
+ * Hand-off attempts allowed for one approved install. The counter lives in the
+ * persisted install record, so the cap spans sessions: a helper that dies every
+ * launch (UAC declined, app relaunched) must stop being retried instead of
+ * looping forever behind the boot guard.
+ */
+const MAX_INSTALL_HANDOFF_ATTEMPTS = 3;
 
 /**
  * Headers for the updates endpoints. The updates contract
@@ -106,10 +119,6 @@ function currentAppVersion(): string {
 }
 
 export { currentAppVersion };
-
-function isPackagedReminderPlatformUnsupported(): boolean {
-  return electronApp?.isPackaged === true && process.platform !== 'darwin';
-}
 
 function _asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -178,12 +187,6 @@ export async function checkForUpdates(
 ): Promise<CheckResult> {
   const now = opts.now ?? Date.now();
   const current = currentAppVersion();
-  if (isPackagedReminderPlatformUnsupported()) {
-    const state = readUpdaterState(userId);
-    state.last_check_at = now;
-    writeUpdaterState(userId, { ...state, latest_info: undefined });
-    return { checked: true, has_update: false, reminded: false, current_version: current };
-  }
   try {
     const info = await _fetchLatest();
     const state = readUpdaterState(userId);
@@ -873,5 +876,128 @@ export async function openDownloaded(userId: string): Promise<{ opened: boolean;
     const message = (err as Error).message || String(err);
     log.warn(`open installer failed: ${message}`);
     return { opened: false, error: message };
+  }
+}
+
+/**
+ * Set while a Windows install hand-off is in flight.
+ *
+ * Two UI clicks must never start two detached helpers: the second one would
+ * race the first over the same installer and the same app directory. Deliberately
+ * module-local and never persisted — it describes THIS process. It normally stays
+ * set on the success path because `installDownloadedUpdate` quits the app: nothing
+ * else may start another helper in this process.
+ *
+ * It is BOUNDED, though, because `app.quit()` can be blocked and then the session
+ * would be stranded with no way to retry. The bound is comfortably longer than
+ * the helper's 60 s wait for the old pid, so it can only fire once the hand-off
+ * really is over. Every failure path clears it immediately so the user can retry
+ * at once.
+ */
+const INSTALL_IN_FLIGHT_TIMEOUT_MS = 90_000;
+let installInFlight = false;
+let installInFlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+function _releaseInstallInFlight(): void {
+  installInFlight = false;
+  if (installInFlightTimer) {
+    clearTimeout(installInFlightTimer);
+    installInFlightTimer = null;
+  }
+}
+
+function _holdInstallInFlight(): void {
+  installInFlight = true;
+  if (installInFlightTimer) clearTimeout(installInFlightTimer);
+  installInFlightTimer = setTimeout(() => {
+    installInFlight = false;
+    installInFlightTimer = null;
+  }, INSTALL_IN_FLIGHT_TIMEOUT_MS);
+  // Never keep the process alive just for this recovery timer.
+  installInFlightTimer.unref();
+}
+
+/** Test-only: clear the module-local in-flight guard between cases. */
+export function resetInstallInFlightForTest(): void {
+  _releaseInstallInFlight();
+}
+
+/**
+ * Hand the verified download to the platform installer.
+ *
+ * v1: Windows only — verify the record, persist the approved install (the boot
+ * guard and the retry cap read it), then let `installDownloadedUpdate` spawn the
+ * detached helper and quit. The record is written BEFORE the hand-off and
+ * deliberately NOT rolled back when the hand-off throws: it is the durable
+ * evidence of the attempt, and it is what makes `MAX_INSTALL_HANDOFF_ATTEMPTS`
+ * count retries across sessions. A mismatching record is "in flight" to the boot
+ * guard, not an unstable upgrade.
+ *
+ * Other platforms report `unsupported platform` instead of leaking the
+ * installer's raw throw: the macOS flow opens the dmg through `openDownloaded`,
+ * it never hands off to a helper. Windows failures are returned verbatim.
+ *
+ * An `unstable` boot-guard verdict for this uid refuses the hand-off outright —
+ * main enforces the invariant the renderer only visualises.
+ */
+export async function installDownloaded(
+  userId: string,
+): Promise<{ started: boolean; error?: string }> {
+  if (installInFlight) {
+    return { started: false, error: 'install already in progress' };
+  }
+  const state = readUpdaterState(userId);
+  const downloaded = state.downloaded;
+  if (!downloaded?.path || !downloaded.sha256) {
+    return { started: false, error: 'no verified download to install' };
+  }
+  // The unstable verdict is a MAIN-side invariant, not just a hidden renderer
+  // button: the in-memory verdict dies with the previous process, and a stale
+  // renderer could still invoke `updates.install`. Refuse before any write and
+  // before any spawn. A missing verdict is "unknown", not "healthy".
+  if (getBootGuardVerdict(userId)?.unstable === true) {
+    log.warn(`update install refused: the boot guard judged the upgrade unstable (${downloaded.version})`);
+    return { started: false, error: 'upgrade judged unstable by the boot guard' };
+  }
+  if (process.platform !== 'win32') {
+    return { started: false, error: 'unsupported platform' };
+  }
+  _holdInstallInFlight();
+  try {
+    const { installDownloadedUpdate, defaultWindowsInstallRuntime } = await import('./installer');
+    // Re-read AFTER the dynamic import and immediately before the write. The
+    // import awaits, and a concurrent writer in that window (a completing
+    // download, a stale-state reconcile) would otherwise be silently clobbered
+    // by the pre-import snapshot. `attempts` comes from THIS record, and the cap
+    // is judged here, still before any spawn.
+    const fresh = readUpdaterState(userId);
+    const attempts = (fresh.install?.attempts ?? 0) + 1;
+    if (attempts > MAX_INSTALL_HANDOFF_ATTEMPTS) {
+      // Exhausted before any spawn: dropping the record stops the boot guard from
+      // judging this dead install forever, and re-arms a future explicit install.
+      writeUpdaterState(userId, clearInstall(fresh));
+      _releaseInstallInFlight();
+      log.warn(`update install attempts exhausted for ${downloaded.version}`);
+      return { started: false, error: 'install attempts exhausted' };
+    }
+    writeUpdaterState(userId, beginInstall(fresh, {
+      version: downloaded.version,
+      fromVersion: currentAppVersion(),
+      installerPath: downloaded.path,
+      sha256: downloaded.sha256,
+      attempts,
+      now: Date.now(),
+    }));
+    await installDownloadedUpdate({
+      installerPath: downloaded.path,
+      sha256: downloaded.sha256,
+      runtime: defaultWindowsInstallRuntime,
+    });
+    return { started: true };
+  } catch (err) {
+    _releaseInstallInFlight();
+    const message = (err as Error)?.message || 'install failed';
+    log.warn(`update install hand-off failed: ${message}`);
+    return { started: false, error: message };
   }
 }

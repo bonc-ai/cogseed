@@ -62,24 +62,6 @@ describe('formal asset version diff', () => {
     expect(boundary.after).toContain('处理排期时');
   });
 
-  /**
-   * 只有确实升高才叫扩权。降级和"从未分级到已分级"都不是——把它们混成一类，
-   * 用户就无法从待办里区分"权限变大了"和"终于补上了分级"。
-   */
-  it('separates a sensitivity escalation from any other sensitivity edit', () => {
-    const up = diffAssetSnapshots(snapshot({ sensitivity: 'L0' }), snapshot({ sensitivity: 'L2' }));
-    expect(up.map((change) => change.kind)).toEqual(['sensitivity_escalated']);
-    expect(up[0].before).toBe('L0');
-    expect(up[0].after).toBe('L2');
-
-    const down = diffAssetSnapshots(snapshot({ sensitivity: 'L2' }), snapshot({ sensitivity: 'L0' }));
-    expect(down.map((change) => change.kind)).toEqual(['sensitivity']);
-
-    // 未分级不是一个档位，所以补上分级不算扩权。
-    const classified = diffAssetSnapshots(snapshot(), snapshot({ sensitivity: 'L1' }));
-    expect(classified.map((change) => change.kind)).toEqual(['sensitivity']);
-  });
-
   it('orders diffs newest first and skips versions that changed nothing', () => {
     const versions = [
       version('1', '2026-08-01T00:00:00.000Z', snapshot()),

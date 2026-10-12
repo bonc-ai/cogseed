@@ -1,21 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
+
+// Exercise real indexing cleanup without loading an unrelated embedding model.
+vi.mock('../../../../src/main/features/kb_embed', () => ({
+  embedTexts: async (texts: string[]) => texts.map(() => Array(512).fill(0.1)),
+  closeEmbedder: vi.fn(),
+}));
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
+  vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ontology-rules-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
 });
 
-afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    await drainMainRuntimeForTest('rule-user');
+  } finally {
+    if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('Ontology R-Box (relation rules)', () => {
@@ -65,15 +77,18 @@ describe('Ontology R-Box (relation rules)', () => {
     expect((await rules.loadOntologyRules('rule-user')).rules).toEqual([]);
   });
 
-  it('filters project-scoped relation rules to the projection workspace', async () => {
+  it('filters project-scoped relation rules by project id, independent from workspace', async () => {
     const groups = await import('../../../../src/main/features/personal_ontology_groups');
     const rules = await import('../../../../src/main/features/recall/ontology-rules');
     const group = await groups.createGroup('rule-user', '项目规则');
-    await groups.appendFieldValue('rule-user', group.group!.group_id, '映射', '当前项目 → 当前流程', '手动', 'workspace-a');
-    await groups.appendFieldValue('rule-user', group.group!.group_id, '映射', '其他项目 → 其他流程', '手动', 'workspace-b');
+    await groups.appendFieldValue('rule-user', group.group!.group_id, '映射', '当前项目 → 当前流程', '手动', 'project-alpha');
+    await groups.appendFieldValue('rule-user', group.group!.group_id, '映射', '其他项目 → 其他流程', '手动', 'project-beta');
     await groups.appendFieldValue('rule-user', group.group!.group_id, '映射', '全局规则 → 通用流程', '手动');
 
-    const loaded = await rules.loadOntologyRules('rule-user', { workspaceId: 'workspace-a' });
+    const loaded = await rules.loadOntologyRules('rule-user', { projectId: 'project-alpha', workspaceId: 'workspace-a' });
     expect(loaded.rules.map((rule) => rule.subject)).toEqual(['当前项目', '全局规则']);
+
+    const workspaceOnly = await rules.loadOntologyRules('rule-user', { workspaceId: 'workspace-a' });
+    expect(workspaceOnly.rules.map((rule) => rule.subject)).toEqual(['全局规则']);
   });
 });

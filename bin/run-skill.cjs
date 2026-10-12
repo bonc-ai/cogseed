@@ -538,6 +538,20 @@ function collectSkillDirs(skillRef) {
   return aliasDirs;
 }
 
+function assertHubSkillAvailable(dir) {
+  // Immutable task snapshots are outside this current-install root. Never inspect
+  // current state for a version already pinned by an admitted task (FR-042).
+  const parent = path.dirname(dir);
+  if (path.basename(parent) !== 'skills'
+      || path.basename(path.dirname(parent)) !== 'marketplace'
+      || path.basename(path.dirname(path.dirname(parent))) !== 'local') return;
+  let meta;
+  try { meta = JSON.parse(fs.readFileSync(path.join(dir, '_install.json'), 'utf8')); }
+  catch { return; }
+  const { isHubContentDisabled } = require('../src/shared/hub-content-status.js');
+  if (isHubContentDisabled(meta)) die(77, '[E_SKILL_HUB_DISABLED] Hub skill is disabled for new use');
+}
+
 function locateSkillScript(skillId, scriptBase) {
   const skillDirs = collectSkillDirs(skillId);
   const scriptExts = scriptExtsForPlatform();
@@ -549,7 +563,10 @@ function locateSkillScript(skillId, scriptBase) {
   }
   for (const p of candidates) {
     try {
-      if (fs.statSync(p).isFile()) return p;
+      if (fs.statSync(p).isFile()) {
+        assertHubSkillAvailable(path.dirname(path.dirname(p)));
+        return p;
+      }
     } catch {
       /* next */
     }

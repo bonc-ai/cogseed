@@ -58,7 +58,7 @@ vi.mock('../../../src/main/features/skill_reverify', async (importOriginal) => (
 }));
 
 beforeEach(async () => {
-  process.env.COGSEED_WORKSPACE_ROOT = os.tmpdir();
+  // Keep the isolated workspace assigned by test/setup-env.ts.
   invokeHandler = null;
   vi.resetModules(); vi.clearAllMocks();
   vi.doMock('../../../src/main/ipc/local_agents', () => ({ invokeHandlers: {} }));

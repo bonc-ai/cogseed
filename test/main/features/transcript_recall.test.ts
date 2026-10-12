@@ -24,6 +24,10 @@ import {
   similarity,
 } from '../../../src/main/features/transcript_recall';
 import {
+  mergeRecallCandidates,
+  type CorrectionCandidate,
+} from '../../../src/main/features/transcript_auto_correct';
+import {
   defaultBoundary,
   type GlossaryEntry,
   type GlossaryKind,
@@ -333,5 +337,78 @@ describe('重叠消解与统计', () => {
     const a = recallCandidates('K-STAR 与 cogsed', SEED, { domainTerms: DOMAIN });
     const b = recallCandidates('K-STAR 与 cogsed', SEED, { domainTerms: DOMAIN });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+// ── 合并去重（specs/013 T016 / D5）：召回并入扫描同一清单前的消解 ───────────
+describe('mergeRecallCandidates：同 span 双命中 → 一行，召回只作并列依据', () => {
+  const row = (over: Partial<CorrectionCandidate> & { entryRef: string; span: CorrectionCandidate['span'] }): CorrectionCandidate => ({
+    wrong: 'Cogseed X', correct: 'Cogseed', action: 'replace', confidence: 1,
+    riskLevel: 'low', context: '', ignoredCount: 0, contextAllow: [],
+    channel: 'exact', disposition: 'suggest',
+    refs: [{ source: 'glossary', entryId: over.entryRef, kind: 'product', freq: 0 }],
+    ...over,
+  });
+
+  it('同 span 双命中：清单只有一行、channel==="exact"、refs 含两条来源（T016 验收）', () => {
+    const exact = row({
+      entryRef: 'g_exact',
+      span: { start: 10, end: 19 },
+      confidence: 1,
+      refs: [{ source: 'glossary', entryId: 'g_exact', kind: 'product', freq: 3 }],
+    });
+    const recall = row({
+      entryRef: 'g_recall_hit',
+      channel: 'recall',
+      disposition: 'review',
+      confidence: 0.99,
+      span: { start: 10, end: 19 },
+      refs: [{ source: 'glossary', entryId: 'g_recall_hit', kind: 'term', freq: 0 }],
+    });
+    const merged = mergeRecallCandidates([exact], [recall]);
+    expect(merged.candidates).toHaveLength(1);
+    expect(merged.candidates[0].channel).toBe('exact');
+    expect(merged.candidates[0].entryRef).toBe('g_exact');
+    expect(merged.candidates[0].refs).toHaveLength(2);
+    expect(merged.candidates[0].refs!.map((r) => (r as { entryId: string }).entryId)).toEqual(['g_exact', 'g_recall_hit']);
+    expect(merged.merged).toBe(1);
+    expect(merged.overlapsSuppressed).toBe(0);
+  });
+
+  it('同词条双通道命中（entryId 相同）：不重复追加依据（幂等），仍只一行', () => {
+    const exact = row({ entryRef: 'g_same', span: { start: 0, end: 9 }, refs: [{ source: 'glossary', entryId: 'g_same', kind: 'product', freq: 1 }] });
+    const recall = row({ entryRef: 'g_same', channel: 'recall', confidence: 0.9, span: { start: 0, end: 9 }, refs: [{ source: 'glossary', entryId: 'g_same', kind: 'product', freq: 1 }] });
+    const merged = mergeRecallCandidates([exact], [recall]);
+    expect(merged.candidates).toHaveLength(1);
+    expect(merged.candidates[0].refs).toHaveLength(1);
+    expect(merged.merged).toBe(1);
+  });
+
+  it('不同 span 不重叠 → 召回条目照常出行（channel:"recall"、原样 confidence < 1）', () => {
+    const exact = row({ entryRef: 'g_e', span: { start: 0, end: 9 } });
+    const recall = row({ entryRef: 'g_r', channel: 'recall', confidence: 0.9, span: { start: 20, end: 29 } });
+    const merged = mergeRecallCandidates([exact], [recall]);
+    expect(merged.candidates).toHaveLength(2);
+    expect(merged.candidates.filter((c) => c.channel === 'recall')).toHaveLength(1);
+    expect(merged.candidates.find((c) => c.channel === 'recall')!.confidence).toBeLessThan(1);
+    expect(merged.merged).toBe(0);
+  });
+
+  it('仅重叠（非同 span）→ 复用既有消解精神：字面（精确）压过召回，被消解如实计数', () => {
+    const exact = row({ entryRef: 'g_e', span: { start: 5, end: 14 } });
+    // 部分重叠的召回 span（更长，覆盖 exact）
+    const recall = row({ entryRef: 'g_r', channel: 'recall', confidence: 0.9, span: { start: 3, end: 18 } });
+    const merged = mergeRecallCandidates([exact], [recall]);
+    expect(merged.candidates).toHaveLength(1);
+    expect(merged.candidates[0].channel).toBe('exact');
+    expect(merged.overlapsSuppressed).toBe(1);
+  });
+
+  it('入参不被修改（纯函数）；召回为空时原样返回', () => {
+    const exact = row({ entryRef: 'g_e', span: { start: 0, end: 9 } });
+    const snapshot = JSON.stringify(exact);
+    mergeRecallCandidates([exact], [row({ entryRef: 'g_r', channel: 'recall', span: { start: 0, end: 9 } })]);
+    expect(JSON.stringify(exact)).toBe(snapshot);
+    expect(mergeRecallCandidates([exact], []).candidates).toEqual([exact]);
   });
 });

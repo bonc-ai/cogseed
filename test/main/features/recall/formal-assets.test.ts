@@ -34,6 +34,7 @@ async function modules() {
 async function promoteRule(candidates: Awaited<ReturnType<typeof modules>>['candidates']) {
   const candidate = await candidates.saveRecallCandidate(UID, {
     judgment: '正式评审必须先讲产品模型，再谈实现细节。',
+    summary: '评审次序纪律',
     value: '避免评审跑偏到实现细节上。',
     suggestedType: 'rule',
     suggestedScope: 'review',

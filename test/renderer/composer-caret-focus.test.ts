@@ -20,12 +20,12 @@ describe('composer caret across picker focus round-trip in Chromium', () => {
       encoding: 'utf8',
       timeout: 60000,
     });
+    expect(result.status, `Chromium exited without a result: ${result.error || result.signal || ''}\n${result.stderr || ''}`).toBe(0);
     const output = String(result.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}';
     const parsed = JSON.parse(output);
     expect(parsed.error, `${parsed.error || ''}\n${parsed.stack || ''}\n${result.stderr || ''}`).toBeUndefined();
     expect(parsed.failed).toEqual([]);
     expect(parsed.passed).toBe(parsed.total);
     expect(parsed.total).toBeGreaterThanOrEqual(5);
-    expect(result.status).toBe(0);
   }, 70000);
 });

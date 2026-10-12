@@ -137,8 +137,12 @@ export const invokeHandlers = {
   },
 
   'connectors.cancel_oauth': async () => {
-    const cancelled = connectors.cancelInFlightOAuth();
-    return { cancelled };
+    // Both authorization shapes are cancellable through the one renderer affordance: the
+    // Server-driven/deep-link OAuth flows, and the `local_cli` login that waits on a browser tab.
+    // Whichever is in flight aborts; the other is a no-op.
+    const oauthCancelled = connectors.cancelInFlightOAuth();
+    const localCliCancelled = connectors.cancelLocalCliAuth();
+    return { cancelled: oauthCancelled || localCliCancelled };
   },
 
   /** Renderer answer to a `connectors:install-confirm` push (commander

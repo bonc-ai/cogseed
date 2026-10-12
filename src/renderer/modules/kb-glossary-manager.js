@@ -129,6 +129,42 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  /**
+   * 会议引用指标的呈现行（纯函数，specs/013 T057 / US-506）。
+   *
+   * 纪律（不变量「指标不编数字」）：每项比率**必须**带分子/分母与样本数，
+   * 口径说明与数字一起呈现（不只裸数）；`rate === null`（无样本）如实显示
+   * 「暂无样本」，不编 0%。数据形态 = `meeting.metrics.summary` 的
+   * `MeetingMetricsSummary`（五口径 + notMeasurable）。
+   */
+  function meetingMetricsLines(summary) {
+    if (!summary || typeof summary !== 'object') return [];
+    const noSample = t('kb.glossary.meeting_metrics_no_sample', '暂无样本（不编数字）');
+    const rateValue = (r) => (r && Number.isFinite(Number(r.numerator)) && Number(r.denominator) > 0 && r.rate !== null
+      ? `${Number(r.numerator)}/${Number(r.denominator)} · ${t('kb.glossary.meeting_metrics_sample', '样本 {samples}', { samples: Number(r.samples) })}`
+      : noSample);
+    const lines = [
+      t('kb.glossary.meeting_metrics_title', '会议引用指标（口径与数字一起给出）'),
+      t('kb.glossary.meeting_metrics_runs', '会议场景扫描 {count} 次', { count: Number(summary.glossaryRuns) || 0 }),
+      t('kb.glossary.meeting_metrics_adoption', '采纳率 {value}（口径：采纳 /（采纳+修改+拒绝+忽略）；稍后处理与引例项不计入）', { value: rateValue(summary.adoption) }),
+      t('kb.glossary.meeting_metrics_mis_reference', '误引用率 {value}（口径：判为引用不当的条数 / 被引用资产数；未评判不算错）', { value: rateValue(summary.misReference) }),
+      t('kb.glossary.meeting_metrics_token', '模型 token：输入 {input} · 输出 {output} · 样本 {samples}（绝对累计，不宣称因果）', {
+        input: Number(summary.token?.inputTokens) || 0,
+        output: Number(summary.token?.outputTokens) || 0,
+        samples: Number(summary.token?.samples) || 0,
+      }),
+      t('kb.glossary.meeting_metrics_term_fixed', '术语改对率 {value}（口径：术语类采纳 / 术语类候选出现次数）', { value: rateValue(summary.entity?.termFixedRate) }),
+      t('kb.glossary.meeting_metrics_over_correction', '过纠正率 {value}（口径：采纳后被回滚条数 / 采纳总数）', { value: rateValue(summary.entity?.overCorrectionRate) }),
+    ];
+    const notMeasurable = Array.isArray(summary.notMeasurable)
+      ? summary.notMeasurable.filter((item) => typeof item === 'string' && item)
+      : [];
+    if (notMeasurable.length) {
+      lines.push(t('kb.glossary.meeting_metrics_not_measurable', '会议侧测不了的指标（不编数字）：{list}', { list: notMeasurable.join('；') }));
+    }
+    return lines;
+  }
+
   // ── 面板 ─────────────────────────────────────────────────────────────
   /**
    * 前置条件预检（纯函数，可单测）。
@@ -172,6 +208,7 @@
       statusTone: '',
       queryRewrite: false,
       metrics: null,
+      meetingMetrics: null,
       packReview: null,
       packScope: 'personal',
       exportText: '',
@@ -262,6 +299,43 @@
         list: (m.notMeasurable || []).join('；'),
       });
       host.appendChild(notMeasurable);
+    }
+
+    /**
+     * 会议引用指标（specs/013 T057 / US-506）：**独立通道独立数据源**
+     * （meeting-metrics.jsonl），与既有 transcript 指标分两区呈现（D16）。
+     * 通道失败 ⇒ 置 null（分区不渲染，不编数字、不弹错误框）。
+     */
+    async function loadMeetingMetrics() {
+      try {
+        const result = await root.cogseed.invoke('meeting.metrics.summary', {});
+        state.meetingMetrics = result?.summary ?? null;
+      } catch (error) {
+        log?.warn('meeting metrics summary failed', { error: error?.message || String(error) });
+        state.meetingMetrics = null;
+      }
+    }
+
+    /**
+     * 「会议引用」指标分区：挂在既有指标区（data-glo-metrics）末尾的追加节点。
+     * 只重建自己的节点（data-glo-meeting 锚点）——既有指标行的渲染一行不改。
+     */
+    function renderMeetingMetrics() {
+      const host = q('[data-glo-metrics]');
+      if (!host) return;
+      // 先摘自己上一次的节点（真 DOM 下 children 是 HTMLCollection，须按锚点查）。
+      if (typeof host.querySelectorAll === 'function') {
+        for (const node of Array.from(host.querySelectorAll('[data-glo-meeting="metrics"]'))) {
+          try { node.remove(); } catch (_) { /* 非节点形态忽略 */ }
+        }
+      }
+      const lines = meetingMetricsLines(state.meetingMetrics);
+      if (!lines.length) return;
+      const block = document.createElement('div');
+      block.className = 'kb-glo__meeting-metrics';
+      block.dataset.gloMeeting = 'metrics';
+      block.textContent = lines.join(' · ');
+      host.appendChild(block);
     }
 
     function renderMeta() {
@@ -625,7 +699,7 @@
 
     function render() {
       for (const step of [
-        renderMeta, renderMetrics, renderFilters, renderStatus, renderBulk, renderList, renderIo,
+        renderMeta, renderMetrics, renderMeetingMetrics, renderFilters, renderStatus, renderBulk, renderList, renderIo,
       ]) {
         try { step(); } catch (error) {
           log?.warn('glossary manager render step failed', { step: step.name, error: error?.message || String(error) });
@@ -645,6 +719,7 @@
           : { ownerNote: '', lastReconcileAt: 0 };
         state.queryRewrite = state.meta.queryRewrite === true;
         await loadMetrics();
+        await loadMeetingMetrics();
         const ids = new Set(state.entries.map((e) => e.id));
         state.selected = new Set([...state.selected].filter((id) => ids.has(id)));
       } catch (error) {
@@ -1129,6 +1204,7 @@
     render();
     void reload();
     void loadMetrics().then(() => renderMetrics());
+    void loadMeetingMetrics().then(() => renderMeetingMetrics());
 
     return modal;
   }
@@ -1136,12 +1212,12 @@
   const api = {
     open,
     // 测试桥（仅纯函数）
-    __test: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason },
-    _internals: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason },
+    __test: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason, meetingMetricsLines },
+    _internals: { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason, meetingMetricsLines },
   };
 
   root.KbGlossaryManager = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason };
+    module.exports = { filterEntries, sortEntries, summarizeImport, kindKey, riskKeyOf, guardReason, meetingMetricsLines };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

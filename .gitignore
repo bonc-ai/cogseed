@@ -19,6 +19,7 @@
 # Local multi-agent shared-file collaboration POC state
 task.md
 plan.md
+!specs/001-hub-skill-contribution/plan.md
 .collab-poc/
 
 # Local document/render outputs and workflow state

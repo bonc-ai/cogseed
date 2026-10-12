@@ -69,7 +69,7 @@ async function weakCandidateToAsset() {
   const saved = await candidates.saveRecallCandidate(USER, {
     judgment: '架构决策要在改运行时边界之前写进决策日志',
     value: '让后续评审不必重建上下文',
-    summary: '架构变更前先写决策日志',
+    summary: '改边界前先记决策',
     suggestedType: 'rule',
     suggestedScope: 'review,project',
     suggestedAction: 'create',

@@ -1096,42 +1096,9 @@
   .ew-service-callout .btn { width: 100%; }
 }
 
-.chat-teaching-receipts {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.chat-teaching-receipt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.28));
-  border-radius: 6px;
-  background: var(--surface-secondary, rgba(127, 127, 127, 0.08));
-}
-
-.chat-teaching-receipt > div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.chat-teaching-receipt strong,
-.chat-teaching-receipt span {
-  overflow-wrap: anywhere;
-}
-
-.chat-teaching-receipt span {
-  color: var(--text-secondary, #6b7280);
-  font-size: 12px;
-}
-
-.chat-teaching-receipt.is-revoked {
-  opacity: 0.68;
-}
+/* 教学卡样式已删（2026-09-28 四病整改 7.0 修7）：教学回执并入保存回执卡
+   （conversation 渲染层），独立教学卡不再渲染——chat-teaching-receipts 系
+   规则随之退役。 */
 
 /* 这里曾经遗留一个未闭合的 `@media (max-width: 560px) {`：a785e631 删除引用
    页脚 UI 时删掉了它的内容和右花括号，却留下开括号。后果不是少几条小屏样式，
@@ -1164,8 +1131,6 @@
 .recall-asset-version-change b { color: var(--muted-fg, #6b7280); font-weight: 500; }
 .recall-asset-version-change span { overflow-wrap: anywhere; color: var(--fg, #374151); }
 .recall-asset-version-change i { color: var(--muted-fg, #6b7280); font-style: normal; }
-.recall-asset-version-change.is-sensitivity_escalated b,
-.recall-asset-version-change.is-sensitivity_escalated i { color: var(--danger, #b42318); }
 .recall-asset-version-change.is-boundary b { color: var(--warning, #92400e); }
 
 /* ── 使用与证明：每条使用记录原地展开 ──────────────────────────────── */

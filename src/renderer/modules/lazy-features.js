@@ -43,6 +43,10 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/recall-information-architecture.js' },
     { src: './modules/import-check-modal.js' },
     { src: './modules/skills.js' },
+    // Hub 贡献整页（registry HUBC-PV-001~003）：样式、纯函数模型与页面模块同随技能库懒加载。
+    { src: './hub-contributions.css', type: 'style' },
+    { src: './modules/hub-contributions-model.js' },
+    { src: './modules/hub-contributions.js' },
     { src: './modules/skills-bindings.js' },
   ],
   recall: [
@@ -50,6 +54,8 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/cognition-assets/core.js' },
     { src: './modules/cognition-assets/vocabulary.js' },
     { src: './modules/cognition-assets/views.js' },
+    { src: './modules/cognition-assets/review-candidate.js' },
+    { src: './modules/cognition-assets/review-views.js' },
     { src: './modules/cognition-assets/app.js' },
     { src: './modules/personal-ontology.js' },
   ],

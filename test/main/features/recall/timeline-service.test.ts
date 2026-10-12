@@ -38,6 +38,8 @@ async function promoteAsset(userId: string, statement: string, scope = 'review')
   const { candidates } = await modules();
   const candidate = await candidates.saveRecallCandidate(userId, {
     judgment: statement,
+    // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+    summary: '时间线基线样本',
     suggestedType: 'rule',
     ...RULE_BOUNDARY,
     suggestedScope: scope,
@@ -107,6 +109,40 @@ describe('Recall asset proof timeline', () => {
     // transfer_validated（效果层无人到达）。
     expect(usageRow!.refs).toMatchObject({ transferProofId: prepared.id });
     expect(items.map((item) => item.occurredAt)).toEqual([...items.map((item) => item.occurredAt)].sort().reverse());
+  });
+
+  it('keeps the full confirmed projection history and its pinned version in an asset timeline', async () => {
+    const { assets, projection, timeline } = await modules();
+    const asset = await promoteAsset('user-a', 'Keep the decision rationale with the outcome.', 'review');
+
+    for (let index = 0; index < 25; index += 1) {
+      await projection.previewContextProjection('user-a', {
+        taskRunId: `pin-task-${index}`,
+        conversationId: `pin-conversation-${index}`,
+        purpose: 'user_pinned',
+        authorization: 'user_confirmed',
+        explicitAssetIds: [asset.id],
+        confirm: true,
+      });
+    }
+    await assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Keep the decision rationale and the evidence with the outcome.',
+      reason: 'Clarify the evidence boundary.',
+      actor: 'user',
+    });
+
+    const items = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    const confirmed = items.filter((item) => item.kind === 'projection_confirmed');
+    expect(confirmed).toHaveLength(25);
+    expect(confirmed[0]).toMatchObject({
+      refs: {
+        assetId: asset.id,
+        version: '1',
+        authorization: 'user_confirmed',
+        purpose: 'user_pinned',
+        conversationId: expect.any(String),
+      },
+    });
   });
 
   it('excludes transfer and effectiveness proofs for unrelated assets', async () => {

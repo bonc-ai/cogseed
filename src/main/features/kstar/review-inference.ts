@@ -18,6 +18,8 @@ import type {
 import type { AssetUsageReceipt } from '../recall/asset-usage-receipt';
 import type { InjectionReceipt } from '../recall/injection-receipt';
 import { readAbilityAsset } from '../recall/asset-service';
+import { filterRecallAssetsForCommittedProjection } from '../recall/prompt-injection';
+import { readContextProjection } from '../recall/context-projection';
 
 const log = createLogger('kstar.review-inference');
 const MAX_REVIEW_TEXT = 4_000;
@@ -222,6 +224,9 @@ function inferenceSystemPrompt(): string {
     'Do not invent tests, files, feedback, or external outcomes. Mark needsConfirmation=true for subjective or ambiguous success.',
     'lesson is OPTIONAL but valuable: it captures a REUSABLE experience discovered DURING execution — a pattern, pitfall, or method the executor would apply differently next time. This is separate from deltaR: even a fully successful task (met_expected, deltaR 0) can yield a lesson, e.g. "merge-conflict type assertions (as X) hide runtime errors — prefer explicit discriminant checks".',
     'Only write a lesson when it is genuinely reusable and non-trivial (a specific pattern/pitfall/method, not "the task was completed"). Omit lesson when the execution was routine with nothing to carry forward.',
+    // 正文一等规范（2026-09-29 根治冗长）：lesson 直接成为资产正文，按正文
+    // 规范生成——知识本体两三句、不带会话细节；入池闸门仍机器把关兜底。
+    'Lesson body discipline: state the reusable knowledge itself in one to three sentences, at most 200 characters — no conversation ids, no local file paths, no step-by-step incident narrative of this one run (those belong in "reason").',
     'HARD RULE — language: write the lesson (and reason) in the SAME language as the task goal and conversation. A Chinese task MUST yield a Chinese lesson; an English task MUST yield an English lesson. A lesson in a different language is discarded entirely by a deterministic gate — never produce it. This keeps precipitated assets readable and retrievable for the user.',
     // 版本组（2026-09-16）：引用资产出问题（过时/冲突）时，lesson 必须是
     // 基于该资产当前内容的融合修订（保留仍有效信息），不是凭空重写。
@@ -257,24 +262,38 @@ async function defaultRunModel(
  *  重写导致新版丢失旧版仍然有效的信息。读取失败静默跳过（复盘不阻断）。 */
 async function referencedAssetsForReview(userId: string, episode: KstarEpisodeRecord) {
   const refs = [...new Set((episode.k.abilityAssetRefs || []))].slice(0, 5);
-  const assets: Array<{ id: string; title: string; statement: string; type: string; scope: string; version: string }> = [];
+  const assets: Awaited<ReturnType<typeof readAbilityAsset>>[] = [];
   for (const assetId of refs) {
     try {
       const asset = await readAbilityAsset(userId, assetId);
-      if (!asset || asset.status === 'purged') continue;
-      assets.push({
-        id: asset.id,
-        title: asset.title,
-        statement: asset.statement,
-        type: asset.type,
-        scope: asset.scope,
-        version: String(asset.activeVersion || asset.version || '1'),
-      });
+      if (asset) assets.push(asset);
     } catch {
       // 单条资产读取失败不影响其余引用的复盘上下文。
     }
   }
-  return assets;
+  let projection: Awaited<ReturnType<typeof readContextProjection>> | null = null;
+  if (episode.projectionId) {
+    try {
+      projection = await readContextProjection(userId, episode.projectionId);
+    } catch { /* old episodes may not retain a readable projection */ }
+  }
+  const taskText = String(episode.t.userGoal || '');
+  const readableAssets = await filterRecallAssetsForCommittedProjection(userId, assets, {
+    purpose: [projection?.purpose, taskText].filter(Boolean).join('\n'),
+    ...(projection?.projectId ? { projectId: projection.projectId } : {}),
+    ...((episode.s.workspaceId || projection?.workspaceId)
+      ? { workspaceId: episode.s.workspaceId || projection?.workspaceId }
+      : {}),
+    taskText,
+  });
+  return readableAssets.map((asset) => ({
+    id: asset.id,
+    title: asset.title,
+    statement: asset.statement,
+    type: asset.type,
+    scope: asset.scope,
+    version: String(asset.activeVersion || asset.version || '1'),
+  }));
 }
 
 export async function inferKstarReview(

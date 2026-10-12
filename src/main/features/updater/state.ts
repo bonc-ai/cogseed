@@ -10,7 +10,14 @@
 import { userUpdaterStateFile } from '../../paths';
 import { readJsonSync, writeJsonSync } from '../../storage';
 import { createLogger } from '../../logger';
-import type { DownloadedUpdate, PartialDownload, UpdateInfo, UpdaterState } from './types';
+import type {
+  DownloadedUpdate,
+  PartialDownload,
+  PendingBoot,
+  PendingInstall,
+  UpdateInfo,
+  UpdaterState,
+} from './types';
 
 const log = createLogger('updater');
 
@@ -83,6 +90,47 @@ function _sanitizePartial(value: unknown): PartialDownload | undefined {
   return partial;
 }
 
+/** Attempt counters are bookkeeping only: a bad value restarts at 0, never NaN. */
+function _sanitizeAttempts(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  const attempts = Math.trunc(value);
+  return attempts > 0 ? attempts : 0;
+}
+
+function _sanitizeInstall(value: unknown): PendingInstall | undefined {
+  const obj = _asRecord(value);
+  if (!obj) return undefined;
+  if (typeof obj.version !== 'string' || !obj.version) return undefined;
+  if (typeof obj.from_version !== 'string') return undefined;
+  if (typeof obj.installer_path !== 'string' || !obj.installer_path) return undefined;
+  if (typeof obj.sha256 !== 'string' || !obj.sha256) return undefined;
+  if (typeof obj.requested_at !== 'number' || !Number.isFinite(obj.requested_at)) return undefined;
+  return {
+    version: obj.version,
+    from_version: obj.from_version,
+    installer_path: obj.installer_path,
+    sha256: obj.sha256,
+    requested_at: obj.requested_at,
+    attempts: _sanitizeAttempts(obj.attempts),
+  };
+}
+
+function _sanitizePendingBoot(value: unknown): PendingBoot | undefined {
+  const obj = _asRecord(value);
+  if (!obj) return undefined;
+  if (typeof obj.to_version !== 'string' || !obj.to_version) return undefined;
+  // An empty `from_version` is legitimate: the first boot after an upgrade may
+  // not know the version it came from (installed-from-unknown or user data reset).
+  if (typeof obj.from_version !== 'string') return undefined;
+  if (typeof obj.first_seen_at !== 'number' || !Number.isFinite(obj.first_seen_at)) return undefined;
+  return {
+    from_version: obj.from_version,
+    to_version: obj.to_version,
+    attempts: _sanitizeAttempts(obj.attempts),
+    first_seen_at: obj.first_seen_at,
+  };
+}
+
 export function readUpdaterState(userId: string): UpdaterState {
   const raw = readJsonSync<unknown>(userUpdaterStateFile(userId));
   const obj = _asRecord(raw);
@@ -111,6 +159,10 @@ export function readUpdaterState(userId: string): UpdaterState {
   if (downloaded) state.downloaded = downloaded;
   const partial = _sanitizePartial(obj.partial);
   if (partial) state.partial = partial;
+  const install = _sanitizeInstall(obj.install);
+  if (install) state.install = install;
+  const pendingBoot = _sanitizePendingBoot(obj.pending_boot);
+  if (pendingBoot) state.pending_boot = pendingBoot;
   return state;
 }
 
@@ -146,4 +198,59 @@ export function shouldRemind(
 /** Record that a reminder was surfaced for `version` (throttle bookkeeping). */
 export function markReminded(state: UpdaterState, version: string, now: number): void {
   state.reminded = { ...(state.reminded || {}), [version]: now };
+}
+
+export function beginInstall(
+  state: UpdaterState,
+  input: {
+    version: string;
+    fromVersion: string;
+    installerPath: string;
+    sha256: string;
+    now: number;
+    /** Hand-off attempts already made for this install; defaults to 0. */
+    attempts?: number;
+  },
+): UpdaterState {
+  return {
+    ...state,
+    install: {
+      version: input.version,
+      from_version: input.fromVersion,
+      installer_path: input.installerPath,
+      sha256: input.sha256,
+      requested_at: input.now,
+      attempts: _sanitizeAttempts(input.attempts ?? 0),
+    },
+  };
+}
+
+export function recordBootAttempt(
+  state: UpdaterState,
+  input: { from_version: string; to_version: string; now: number },
+): UpdaterState {
+  const previous = state.pending_boot;
+  const sameUpgrade = previous
+    && previous.from_version === input.from_version
+    && previous.to_version === input.to_version;
+  return {
+    ...state,
+    pending_boot: {
+      from_version: input.from_version,
+      to_version: input.to_version,
+      attempts: (sameUpgrade ? previous.attempts : 0) + 1,
+      first_seen_at: sameUpgrade ? previous.first_seen_at : input.now,
+    },
+  };
+}
+
+export function clearPendingBoot(state: UpdaterState): UpdaterState {
+  const { pending_boot: _dropped, ...rest } = state;
+  return rest;
+}
+
+/** Drop an approved install (applied, canceled, or superseded); boot guard untouched. */
+export function clearInstall(state: UpdaterState): UpdaterState {
+  const { install: _dropped, ...rest } = state;
+  return rest;
 }

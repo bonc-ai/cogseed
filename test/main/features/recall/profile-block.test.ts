@@ -23,6 +23,13 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+/** 标题闸门（设计 3.2）：正文前缀当标题过不了闸门——取尾部片段，片段与正文
+ *  首字相同时（短正文）退回固定样本标题。 */
+function compliantTail(text: string): string {
+  const tail = text.slice(-8).replace(/[。，、；：！？…）)\]\]】》"'\s]+$/, '').trim();
+  return tail && tail[0] !== text[0] ? tail : '画像样本';
+}
+
 describe('loadAssetProfileEntries', () => {
   it('returns active personal assets ranked by usage, capped by budget', async () => {
     const users = await import('../../../../src/main/features/users');
@@ -36,7 +43,8 @@ describe('loadAssetProfileEntries', () => {
       return assets.createAbilityAsset(UID, {
         schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
         sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_profileblock${id.replace(/-/g, '')}`.padEnd(16, 'x'),
-        type: 'personal', title: text.slice(0, 10), statement: text,
+        // 标题闸门（设计 3.2）：正文前缀当标题过不了闸门，取尾部片段。
+        type: 'personal', title: compliantTail(text), statement: text,
         evidenceRefs: [{ kind: 'conversation', id: `conv-${id}` }], scope: 'general', status: 'active',
         lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
         createdAt: now, updatedAt: now,
@@ -55,7 +63,7 @@ describe('loadAssetProfileEntries', () => {
     expect(entries.length).toBeLessThanOrEqual(profile.PROFILE_BLOCK_MAX_ENTRIES);
   });
 
-  it('memory block prefers asset entries and falls back to files when the pool is empty', async () => {
+  it('memory block keeps independent file entries during migration and falls back when assets are empty', async () => {
     const memory = await import('../../../../src/main/features/memory');
     const { userProfileFile } = await import('../../../../src/main/paths');
     fs.mkdirSync(path.dirname(userProfileFile(UID)), { recursive: true });
@@ -63,7 +71,7 @@ describe('loadAssetProfileEntries', () => {
 
     const fromAssets = memory.formatForSystemPrompt(UID, 'commander', undefined, undefined, new Set(), ['资产时代的画像条目。']);
     expect(fromAssets).toContain('资产时代的画像条目。');
-    expect(fromAssets).not.toContain('文件时代的画像条目。');
+    expect(fromAssets).toContain('文件时代的画像条目。');
 
     const fallback = memory.formatForSystemPrompt(UID, 'commander', undefined, undefined, new Set(), []);
     expect(fallback).toContain('文件时代的画像条目。');
@@ -78,7 +86,8 @@ describe('profile ordering + origin prefix (2026-09-19 三小修)', () => {
     const mk = async (id: string, statement: string, updatedAt: string, lifecycle: string) => assets.createAbilityAsset('user-pb-rank', {
       schemaVersion: 2, ownerId: 'user-pb-rank', id, candidateId: `cand-${id}`,
       sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_${id.slice(3)}padpadpad`,
-      type: 'personal', title: statement.slice(0, 8), statement,
+      // 标题闸门（设计 3.2）：正文前缀当标题过不了闸门，取尾部片段。
+      type: 'personal', title: compliantTail(statement), statement,
       evidenceRefs: [{ kind: 'conversation', id: `conv-${id}` }], scope: 'general', status: 'active',
       lifecycleStatus: lifecycle as never, maturity: 'bud', version: '1',
       createdAt: updatedAt, updatedAt,

@@ -683,6 +683,8 @@
 
   function destroyCorrection() {
     try { activeCorrection?.destroy?.(); } catch (_) { /* 关闭失败不阻塞 */ }
+    // 会议引用伴生面板（specs/013）：与纠错面板同生命周期，一并销毁。
+    try { root.KbMeetingRefs?.destroy?.(); } catch (_) { /* 同上 */ }
     activeCorrection = null;
     correctionOpen = false;
     const panel = element('[data-anchor-view-correct]');
@@ -697,23 +699,31 @@
 
   /**
    * 打开纠错面板。文档被截断时（viewer 为省内存只给引用附近片段）先取全文：
-   * 个人库走 contexts.read；空间库文件暂不支持（给出明确提示，不静默失败）。
+   * 个人库走 contexts.read 全量读回；空间库文件 v1 范围外——**不再静默降级**，
+   * 返回带降级原因的结果（`degradedReason: 'space_doc'`），由调用方出四语提示
+   * 「暂不支持空间库文档纠错，已按可读片段扫描」（specs/013 T023）。
    */
   async function resolveCorrectionText() {
     const inline = String(activeResult?.text || '');
-    if (!activeResult?.truncated) return inline;
+    if (!activeResult?.truncated) return { text: inline, degradedReason: '' };
     const path = String(activeAnchor?.path || '').trim();
     const spaceId = activeAnchor?.spaceId;
     if (path && !spaceId) {
       try {
         const res = await root.cogseed.invoke('contexts.read', { path });
         const content = String(res?.content || res?.text || '');
-        if (content) return content;
+        if (content) return { text: content, degradedReason: '' };
       } catch (error) {
         log?.warn('correction full-text read failed', { error: error?.message || String(error) });
       }
+      // 个人库读全文失败：维持既有行为（按可读片段继续），不算空间库降级。
+      return { text: inline, degradedReason: '' };
     }
-    return inline;
+    if (spaceId) {
+      // 空间库文档（v1 只支持个人库）：如实带上降级原因，不再静默 return inline。
+      return { text: inline, degradedReason: 'space_doc' };
+    }
+    return { text: inline, degradedReason: '' };
   }
 
   async function toggleCorrection() {
@@ -727,21 +737,37 @@
     panel.hidden = false;
     panel.textContent = '';
     setStatus(t('kb.viewer.loading_document', '正在读取原文…'), 'loading');
-    let text = '';
+    let resolved = null;
     try {
-      text = await resolveCorrectionText();
+      resolved = await resolveCorrectionText();
     } catch (_) {
-      text = String(activeResult?.text || '');
+      resolved = { text: String(activeResult?.text || ''), degradedReason: '' };
     }
+    const text = String(resolved?.text || '');
     if (!modalIsOpen()) return;
     setStatus('', '');
+    // 空间库截断的如实提示（specs/013 T023）：四语文案 + 把降级原因带给面板，
+    // 面板顶部会在自己的降级说明区再呈现一次（恰一处，见 kb-transcript-correct）。
+    const degradedNotes = resolved?.degradedReason === 'space_doc' ? ['space_doc'] : [];
+    if (degradedNotes.length) {
+      setStatus(t('kb.meetingRef.space_doc_notice', '暂不支持空间库文档纠错，已按可读片段扫描'), 'warning');
+    }
     try {
       activeCorrection = root.KbTranscriptCorrect.mount(panel, {
         text,
         docId: String(activeAnchor?.path || activeResult?.displayPath || 'transcript'),
         displayPath: String(activeResult?.displayPath || activeAnchor?.path || ''),
+        ...(degradedNotes.length ? { degradedNotes } : {}),
       });
       correctionOpen = true;
+      // 会议引用伴生面板（specs/013）：同一文档上下文，挂在纠错面板同容器内；
+      // 模块缺失（旧构建）时静默跳过，不阻塞纠错主功能。
+      try {
+        root.KbMeetingRefs?.mount?.(panel, {
+          docId: String(activeAnchor?.path || activeResult?.displayPath || 'transcript'),
+          displayPath: String(activeResult?.displayPath || activeAnchor?.path || ''),
+        });
+      } catch (_) { /* 伴生面板失败不影响纠错 */ }
       element('.anchored-source-viewer')?.classList.add('is-correct-open');
     const splitter = element('[data-anchor-view-split]');
     if (splitter) splitter.hidden = false;

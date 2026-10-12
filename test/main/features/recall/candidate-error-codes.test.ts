@@ -122,6 +122,25 @@ describe('recall candidate error codes', () => {
     expect(listed.map((item) => item.id)).toEqual([healthy.id]);
   });
 
+  it('still rejects the whole list on a real IO fault (errno code) — disk trouble is not "fewer candidates"', async () => {
+    const candidates = await service();
+    const healthy = await candidates.saveRecallCandidate('user-a', BASE);
+
+    // 同目录造一条「同名目录顶掉 .json」的 IO 故障：readRecallJsonRecord 读它
+    // 会抛 EISDIR（带 errno code）——这是**磁盘问题**，不是记录形状问题。
+    // 逐条降级的设计取舍：errno 故障照旧上抛，绝不静默少几条把磁盘问题
+    // 伪装成「候选变少了」。该分支此前零测试锁定（删掉上抛行全测试仍绿）。
+    const dir = path.dirname(
+      [...walk(tmpDir)].find((file) => file.endsWith(`${healthy.id}.json`))!,
+    );
+    const eisdirPath = path.join(dir, 'rcand-eisdir-00000000001.json');
+    fs.writeFileSync(eisdirPath, '{}');
+    fs.rmSync(eisdirPath);
+    fs.mkdirSync(eisdirPath);
+
+    await expect(candidates.listRecallCandidates('user-a')).rejects.toThrow();
+  });
+
   it('codes an edit that collides with an existing candidate', async () => {
     const candidates = await service();
     const first = await candidates.saveRecallCandidate('user-a', BASE);

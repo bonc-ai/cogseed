@@ -2,8 +2,9 @@
 /**
  * Ensure the bge-small-zh-v1.5 ONNX embedding model is present at
  * `PC/resources/embedding-model/fast-bge-small-zh-v1.5/`. Downloads from
- * Qdrant's fastembed GCS mirror (same source fastembed uses internally) and
- * extracts in place. Idempotent: if the expected files already exist, exit 0.
+ * Qdrant's fastembed GCS mirror, falling back to the pinned Qdrant Hugging Face
+ * revision when the archive cannot be downloaded. Both sources must satisfy
+ * the same file hashes. Idempotent: verified existing files require no download.
  *
  * Runs as a postinstall hook so clone → `npm install` → dev-ready. Binary
  * is gitignored (95MB, too big for git), but the installer picks it up via
@@ -16,6 +17,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as https from 'node:https';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -44,19 +46,14 @@ function allFilesPresent() {
 
 function download(url, outPath) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(outPath);
     const req = https.get(url, { headers: { 'User-Agent': 'cogseed-postinstall' } }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        file.close();
-        fs.rmSync(outPath, { force: true });
-        download(res.headers.location, outPath).then(resolve, reject);
+        download(new URL(res.headers.location, url).href, outPath).then(resolve, reject);
         return;
       }
       if (res.statusCode !== 200) {
         res.resume();
-        file.close();
-        fs.rmSync(outPath, { force: true });
         reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
         return;
       }
@@ -73,15 +70,15 @@ function download(url, outPath) {
           }
         }
       });
-      res.pipe(file);
-      file.on('finish', () => { file.close(); process.stdout.write('\n'); resolve(); });
-      file.on('error', (err) => { file.close(); fs.rmSync(outPath, { force: true }); reject(err); });
+      pipeline(res, fs.createWriteStream(outPath)).then(() => {
+        process.stdout.write('\n');
+        resolve();
+      }, (err) => {
+        fs.rmSync(outPath, { force: true });
+        reject(err);
+      });
     });
-    req.on('error', (err) => {
-      file.close();
-      fs.rmSync(outPath, { force: true });
-      reject(err);
-    });
+    req.on('error', reject);
     req.setTimeout(60_000, () => { req.destroy(new Error('timeout')); });
   });
 }
@@ -102,6 +99,24 @@ async function extract(tgzPath, dstDir) {
   if (r.status !== 0) throw new Error(`tar extraction failed (exit ${r.status})`);
 }
 
+async function downloadModelFiles() {
+  // Stage outside the closed-world resource root. An incomplete or corrupt
+  // fallback must never replace an existing payload or leave partial files.
+  const stagingRoot = fs.mkdtempSync(path.join(path.dirname(destDir), '.embedding-model-'));
+  const stagingModel = path.join(stagingRoot, MODEL);
+  try {
+    fs.mkdirSync(stagingModel);
+    for (const { name } of EMBEDDING_MODEL_CONTRACT.files) {
+      await download(`${EMBEDDING_MODEL_CONTRACT.fileSource}/${name}`, path.join(stagingModel, name));
+    }
+    verifyEmbeddingModelRoot(stagingRoot);
+    fs.rmSync(modelDir, { recursive: true, force: true });
+    fs.renameSync(stagingModel, modelDir);
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   fs.mkdirSync(destDir, { recursive: true });
 
@@ -112,11 +127,22 @@ async function main() {
 
   console.log(`[embedding-model] fetching ${tarballUrl}`);
   try {
-    await download(tarballUrl, tarballPath);
-    verifyEmbeddingModelArchive(tarballPath);
-    fs.rmSync(modelDir, { recursive: true, force: true });
-    await extract(tarballPath, destDir);
-    fs.rmSync(tarballPath, { force: true });
+    let archiveDownloaded = false;
+    try {
+      await download(tarballUrl, tarballPath);
+      archiveDownloaded = true;
+    } catch (err) {
+      console.warn(`[embedding-model] archive download failed: ${err.message}; fetching pinned files from ${EMBEDDING_MODEL_CONTRACT.fileSource}`);
+      await downloadModelFiles();
+    }
+    if (archiveDownloaded) {
+      // Content-integrity errors fail closed; only transport failures select
+      // the alternate source, never a bad archive hash.
+      verifyEmbeddingModelArchive(tarballPath);
+      fs.rmSync(modelDir, { recursive: true, force: true });
+      await extract(tarballPath, destDir);
+      fs.rmSync(tarballPath, { force: true });
+    }
   } catch (err) {
     fs.rmSync(tarballPath, { force: true });
     if (allFilesPresent()) {

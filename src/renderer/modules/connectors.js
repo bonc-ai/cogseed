@@ -310,10 +310,31 @@ function _isConnectorVisibleDisabled(entry) {
   return !!(entry && entry.availability === 'visible_disabled');
 }
 
+/** Machine-dependent unavailability: the provider's own local CLI is not installed on this
+ *  machine. Deliberately distinct from the remote-config `unsupported` case — that one means the
+ *  provider will never work here, while this one is fixable by the user, so it must not be
+ *  reported with the generic 暂不支持 copy. */
+function _isConnectorCliMissing(entry) {
+  return _isConnectorVisibleDisabled(entry) && entry.disabled_reason === 'cli_missing';
+}
+
 function _showConnectorUnsupportedToast() {
   const message = t('connectors.toast.unsupported');
   if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
   else uiAlert(message);
+}
+
+function _showConnectorCliMissingToast() {
+  const message = t('connectors.toast.cli_missing');
+  if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
+  else uiAlert(message);
+}
+
+/** Single entry point for a card / detail action that cannot run because the provider is
+ *  unavailable — keeps the CLI-missing branch ahead of the generic unsupported path. */
+function _showConnectorUnavailableToast(entry) {
+  if (_isConnectorCliMissing(entry)) _showConnectorCliMissingToast();
+  else _showConnectorUnsupportedToast();
 }
 
 function _connectorErrorFallback(kind) {
@@ -479,7 +500,13 @@ function _renderConnectorsEmptyState(empty, kind) {
 function _renderConnectorsGrid() {
   const gridView = document.getElementById('connectors-grid-view');
   if (!gridView) return;
-  gridView.style.display = '';
+  // The detail view owns the pane while it is open. Everything below still runs: one repaint
+  // path keeps the card grid and the open detail body consistent after a connect, disconnect or
+  // verify settles.
+  const detailOpen = _connectorsDetailOpen();
+  gridView.style.display = detailOpen ? 'none' : '';
+  const detailView = document.getElementById('connectors-detail-view');
+  if (detailView) detailView.style.display = detailOpen ? '' : 'none';
   _ensureConnectorsToolbar();
 
   const groupConn = document.getElementById('connectors-group-connected');
@@ -562,6 +589,8 @@ function _renderConnectorsGrid() {
   if (connCountEl) connCountEl.textContent = visibleConnectedItems.length > 0 ? String(visibleConnectedItems.length) : '';
   const availCountEl = document.getElementById('connectors-group-available-count');
   if (availCountEl) availCountEl.textContent = visibleAvailableItems.length > 0 ? String(visibleAvailableItems.length) : '';
+
+  if (detailOpen) _renderConnectorDetail();
 }
 
 function _renderCatalogCard(entry, instance) {
@@ -669,9 +698,25 @@ function _renderCatalogCard(entry, instance) {
     secondaryHtml = '<div class="connector-card-error"></div>';
   } else if (degradedMsg) {
     secondaryHtml = '<div class="connector-card-unverified"></div>';
+  } else if (_isConnectorCliMissing(e)) {
+    // The reason is machine-dependent and actionable, so it replaces the account line rather
+    // than hiding behind the generic "unsupported" toast.
+    secondaryHtml = '<div class="connector-card-cli-missing muted"></div>';
   } else if (accountLabel) {
     secondaryHtml = '<div class="connector-card-account muted"></div>';
   }
+
+  // Detail entry point. Only connectors with a registered detail profile get one, so the rest of
+  // the grid keeps its current shape and its "no whole-card click" behaviour (see the module
+  // header): the transition is an explicit, keyboard-reachable control.
+  const detailAction = _connectorDetailProfile(e.id)
+    ? _connectorUiButton({
+        label: t('connectors.action.details'),
+        role: 'ghost',
+        size: 'sm',
+        attrs: { 'data-act': 'open-detail' },
+      })
+    : '';
 
   card.innerHTML = `
     <div class="connector-card-top">
@@ -683,7 +728,7 @@ function _renderCatalogCard(entry, instance) {
       ${menuHtml}
     </div>
     <div class="connector-card-desc muted"></div>
-    <div class="connector-card-foot">${action}</div>
+    <div class="connector-card-foot">${detailAction}${action}</div>
   `;
   card.querySelector('.connector-card-name').textContent = e.display_name;
   card.querySelector('.connector-card-desc').textContent = desc;
@@ -700,6 +745,11 @@ function _renderCatalogCard(entry, instance) {
       : `${t('connectors.status.unverified')}: ${_formatConnectorStatusError(degradedMsg)}`;
     el.textContent = text;
     el.title = text;
+  } else if (_isConnectorCliMissing(e)) {
+    const el = card.querySelector('.connector-card-cli-missing');
+    const text = t('connectors.toast.cli_missing');
+    el.textContent = text;
+    el.title = text;
   } else if (accountLabel) {
     const el = card.querySelector('.connector-card-account');
     el.textContent = accountLabel;
@@ -711,9 +761,10 @@ function _renderCatalogCard(entry, instance) {
       ev.stopPropagation();
       const act = btn.dataset.act;
       if (act === 'connect') _runConnect(e);
-      else if (act === 'unsupported-connect') _showConnectorUnsupportedToast();
+      else if (act === 'unsupported-connect') _showConnectorUnavailableToast(e);
       else if (act === 'disconnect') _quickDisconnect(e, instance);
       else if (act === 'menu') _openCardMenu(btn, e, instance);
+      else if (act === 'open-detail') _openConnectorDetail(e, instance, btn);
       else if (act === 'use-connector' && enabledFlag) _useConnector(e, instance);
       else if (act === 'retry-custom') _retryConnect(e, 'connector_custom_retry');
       else if (act === 'retry-degraded') _retryConnect(e, 'connector_degraded_retry');
@@ -921,9 +972,448 @@ async function _quickDisconnect(entry, instance) {
   }
 }
 
+// ─── Connector detail view (grid ⇄ detail) ─────────────────────────────
+//
+// Registered page-local structural composition: docs/renderer-structural-registry.md ›
+// CONN-PV-001. It exists for one business surface (the Tencent Meeting connector, whose
+// connection is only half the job — the other half is creating an automation task), so it is
+// keyed by catalog id rather than extracted into a shared primitive. Only ids present in
+// `_CONNECTOR_DETAIL_PROFILES` get a detail entry point, which is what keeps the rest of the
+// grid untouched.
+//
+// No new persisted field: the three-step indicator derives steps 2 and 3 from the same live
+// `connected` flag the card uses, and step 1 (`接入前`) is always complete because the user can
+// only reach this view from inside the product.
+const _CONNECTOR_DETAIL_PROFILES = {
+  'tencent-meeting': {
+    /** Auto-task template the primary CTA pre-fills (`_AUTO_TEMPLATES` in auto.js). */
+    template_id: 'meeting_digest',
+    /** Fallback letter-square tint, used only when the catalog ships no `icon_svg`. */
+    brand_tint: '#006EFF',
+  },
+};
+
+function _connectorDetailProfile(id) {
+  return _CONNECTOR_DETAIL_PROFILES[String(id || '')] || null;
+}
+
+let _connectorDetailState = { id: '', originEl: null };
+/** Last `connectors:authorization-url` notice. A `local_cli` connect produces the URL on this
+ *  machine instead of going through a deep link, so when the automatic browser launch fails this
+ *  is the only recovery path and the user must be able to copy it. */
+let _connectorAuthorizationUrl = null;
+
+function _connectorsDetailOpen() {
+  return !!(_connectorDetailState.id && _connectorDetailProfile(_connectorDetailState.id));
+}
+
+function _connectorDetailInstanceConnected(instance) {
+  return !!(instance && instance.status && instance.status.kind === 'connected');
+}
+
+function _connectorDetailTopbarHtml(entry) {
+  return [
+    _connectorUiButton({
+      label: t('common.back'),
+      role: 'ghost',
+      size: 'sm',
+      icon: 'arrow-left',
+      attrs: { 'data-connectors-detail-back': '1' },
+    }),
+    _connectorUiIconButton({
+      label: t('connectors.tencent.help_label'),
+      title: t('connectors.tencent.help'),
+      icon: 'info',
+      className: 'connectors-detail-info-btn',
+      attrs: { 'data-connectors-detail-help': '1' },
+    }),
+  ].join('');
+}
+
+function _connectorDetailIdentityHtml(entry) {
+  const e = entry || {};
+  const name = String(e.display_name || e.id || '');
+  const desc = e._custom ? '' : pickDesc(e, (typeof getLang === 'function') ? getLang() : 'en');
+  const profile = _connectorDetailProfile(e.id) || {};
+  const safeIconSvg = typeof sanitizeSvgIconHtml === 'function' ? sanitizeSvgIconHtml(e.icon_svg) : '';
+  const iconHtml = safeIconSvg
+    ? `<div class="connectors-detail-identity-icon">${safeIconSvg}</div>`
+    : `<div class="connectors-detail-identity-icon is-fallback" style="background:${escapeHtml(profile.brand_tint || _CONNECTOR_BRAND_TINT[e.id] || '#16181d')}">${escapeHtml(name.slice(0, 1).toUpperCase())}</div>`;
+  return `
+    <div class="connectors-detail-identity">
+      ${iconHtml}
+      <div class="connectors-detail-identity-heading">
+        <h2 class="connectors-detail-identity-name">${escapeHtml(name)}</h2>
+        <p class="connectors-detail-identity-subtitle">${escapeHtml(desc)}</p>
+      </div>
+    </div>`;
+}
+
+/** Three-step progress indicator. Native `<ol>`/`<li>` semantics with `aria-current="step"` on
+ *  the live step, plus a visually hidden state word so the marker's meaning does not depend on
+ *  colour or on the icon alone. Not interactive — nothing here needs a keyboard contract. */
+function _connectorDetailStepsHtml(connected) {
+  const stateOf = ['done', connected ? 'done' : 'current', connected ? 'current' : 'todo'];
+  const labels = [
+    t('connectors.tencent.step.before'),
+    t('connectors.tencent.step.authorize'),
+    t('connectors.tencent.step.connected'),
+  ];
+  const stateWords = {
+    done: t('connectors.tencent.step.done'),
+    current: t('connectors.tencent.step.current'),
+    todo: t('connectors.tencent.step.todo'),
+  };
+  const items = stateOf.map((state, index) => {
+    const mark = state === 'done'
+      ? uiIconHtml('check-circle', 'ui-icon connectors-detail-step-glyph')
+      : '<span class="connectors-detail-step-dot" aria-hidden="true"></span>';
+    return `<li class="connectors-detail-step is-${state}"${state === 'current' ? ' aria-current="step"' : ''}>`
+      + `<span class="connectors-detail-step-mark">${mark}</span>`
+      + `<span class="connectors-detail-step-label">${escapeHtml(labels[index])}</span>`
+      + `<span class="ui-visually-hidden">${escapeHtml(stateWords[state])}</span>`
+      + '</li>';
+  }).join('');
+  return `<ol class="connectors-detail-steps" aria-label="${escapeHtml(t('connectors.tencent.steps.aria'))}">${items}</ol>`;
+}
+
+function _connectorDetailAuthUrlHtml(entry) {
+  const notice = _connectorAuthorizationUrl;
+  if (!notice || !entry || notice.catalog_id !== entry.id) return '';
+  return `
+    <div class="connectors-detail-auth-url">
+      <p class="connectors-detail-auth-url-label">${escapeHtml(t('connectors.tencent.auth_url.label'))}</p>
+      <code class="connectors-detail-auth-url-value">${escapeHtml(notice.url)}</code>
+      ${_connectorUiButton({
+        label: t('connectors.tencent.auth_url.copy'),
+        role: 'secondary',
+        size: 'sm',
+        attrs: { 'data-act': 'copy-auth-url' },
+      })}
+    </div>`;
+}
+
+function _connectorDetailMainPanelHtml(entry, instance) {
+  const status = (instance && instance.status) || null;
+  const kind = (status && status.kind) || '';
+  const connected = kind === 'connected';
+  const degraded = kind === 'degraded';
+  const errored = kind === 'error';
+  const cliMissing = _isConnectorCliMissing(entry);
+  const unavailable = _isConnectorVisibleDisabled(entry);
+  let tone = 'is-idle';
+  let iconName = 'plug';
+  let title = t('connectors.tencent.pending.title');
+  let desc = t('connectors.tencent.pending.desc');
+  let cta = _connectorUiButton({
+    label: t('connectors.tencent.pending.cta'),
+    role: 'primary',
+    size: 'md',
+    icon: 'plug',
+    disabled: unavailable,
+    attrs: { 'data-act': 'connect' },
+  });
+  let note = '';
+
+  if (connected) {
+    tone = 'is-ok';
+    iconName = 'check-circle';
+    title = t('connectors.tencent.connected.title');
+    desc = t('connectors.tencent.connected.desc');
+    note = t('connectors.tencent.connected.note');
+    cta = _connectorUiButton({
+      label: t('connectors.tencent.connected.cta'),
+      role: 'primary',
+      size: 'md',
+      attrs: { 'data-act': 'create-automation' },
+    });
+  } else if (degraded || errored) {
+    // An installed-but-broken connector must not be described as "not connected yet": the user
+    // would be told to do the one thing they already did. Same truthfulness rule the card
+    // follows, and the same recovery actions (`connectors.refresh` for degraded, disconnect for
+    // an errored row).
+    iconName = 'info';
+    title = degraded ? t('connectors.status.unverified') : t('connectors.status.error');
+    desc = _formatConnectorStatusError(status && status.message);
+    note = degraded ? _formatLastVerified(status && status.last_verified_at) : '';
+    cta = degraded
+      ? _connectorUiButton({
+          label: t('connectors.action.retry'),
+          role: 'primary',
+          size: 'md',
+          icon: 'refresh',
+          attrs: { 'data-act': 'retry-degraded' },
+        })
+      : _connectorUiButton({
+          label: t('connectors.action.disconnect'),
+          role: 'danger',
+          size: 'md',
+          attrs: { 'data-act': 'disconnect' },
+        });
+  } else if (cliMissing) {
+    iconName = 'info';
+    title = t('connectors.tencent.cli_missing.title');
+    desc = t('connectors.tencent.cli_missing.desc');
+  } else if (unavailable) {
+    iconName = 'info';
+    title = t('connectors.tencent.unavailable.title');
+    desc = t('connectors.tencent.unavailable.desc');
+  }
+
+  return uiCard({
+    className: 'connectors-detail-panel',
+    attrs: { 'data-connectors-detail-main': '1' },
+    bodyHtml: `
+      <div class="connectors-detail-hero">
+        <span class="connectors-detail-hero-icon ${tone}">${uiIconHtml(iconName, 'ui-icon connectors-detail-hero-glyph')}</span>
+        <h3 class="connectors-detail-hero-title">${escapeHtml(title)}</h3>
+        <p class="connectors-detail-hero-desc">${escapeHtml(desc)}</p>
+        <div class="connectors-detail-hero-actions">
+          ${cta}
+          ${note ? `<p class="connectors-detail-hero-note">${escapeHtml(note)}</p>` : ''}
+        </div>
+        ${_connectorDetailAuthUrlHtml(entry)}
+      </div>`,
+  });
+}
+
+function _connectorDetailStatusPanelHtml(entry, instance) {
+  const status = (instance && instance.status) || null;
+  const kind = (status && status.kind) || '';
+  const connected = kind === 'connected';
+  const degraded = kind === 'degraded';
+  const errored = kind === 'error';
+  const pill = connected
+    ? uiStatusPill({ label: t('connectors.tencent.status.connected'), tone: 'success', check: true })
+    : (degraded
+      ? uiStatusPill({ label: t('connectors.status.unverified'), tone: 'attention' })
+      : (errored
+        ? uiStatusPill({ label: t('connectors.status.error'), tone: 'critical' })
+        : uiStatusPill({ label: t('connectors.tencent.status.disconnected'), tone: 'neutral' })));
+  const actions = [
+    // `查看会议资料` has no target page yet. Rendering it disabled with a visible reason keeps it
+    // discoverable and honest instead of shipping a dead link or hiding the row.
+    _connectorUiButton({
+      label: t('connectors.tencent.status.view_materials'),
+      role: 'ghost',
+      size: 'sm',
+      disabled: true,
+      attrs: { 'data-act': 'view-materials', 'aria-disabled': 'true' },
+    }),
+    `<span class="connectors-detail-soon-hint">${escapeHtml(t('connectors.tencent.status.view_materials_soon'))}</span>`,
+  ];
+  // Disconnect removes the connector instance. It is offered whenever an instance exists, and it
+  // must never sign the user out of the provider CLI — `_quickDisconnect` calls
+  // `connectors.remove`, which drops our instance and nothing else.
+  if (connected || degraded || errored) {
+    actions.push(_connectorUiButton({
+      label: t('connectors.tencent.status.disconnect'),
+      role: 'danger',
+      size: 'sm',
+      attrs: { 'data-act': 'disconnect' },
+    }));
+  }
+  return uiCard({
+    className: 'connectors-detail-panel',
+    attrs: { 'data-connectors-detail-status': '1' },
+    bodyHtml: `
+      <div class="connectors-detail-panel-head">
+        <h3 class="connectors-detail-panel-title">${escapeHtml(t('connectors.tencent.status.title'))}</h3>
+        ${pill}
+      </div>
+      <p class="connectors-detail-panel-scope">${escapeHtml(t('connectors.tencent.status.scope'))}</p>
+      <div class="connectors-detail-panel-actions">${actions.join('')}</div>`,
+  });
+}
+
+function _connectorDetailHtml(entry, instance) {
+  const connected = _connectorDetailInstanceConnected(instance);
+  return `
+    <div class="connectors-detail-column">
+      ${_connectorDetailIdentityHtml(entry)}
+      ${_connectorDetailStepsHtml(connected)}
+      ${_connectorDetailMainPanelHtml(entry, instance)}
+      ${_connectorDetailStatusPanelHtml(entry, instance)}
+    </div>`;
+}
+
+function _renderConnectorDetail() {
+  const topbar = document.getElementById('connectors-detail-topbar');
+  const body = document.getElementById('connectors-detail-body');
+  if (!topbar || !body) return;
+  const id = _connectorDetailState.id;
+  const instance = _instanceById(id);
+  const entry = _connectorsState.catalog.find((item) => item && item.id === id)
+    || (instance ? _entryFromInstance(instance) : { id, display_name: id });
+  topbar.innerHTML = _connectorDetailTopbarHtml(entry);
+  body.innerHTML = _connectorDetailHtml(entry, instance);
+  _bindConnectorDetailActions(topbar, entry, instance);
+  _bindConnectorDetailActions(body, entry, instance);
+  if (typeof hydrateUiIcons === 'function') {
+    hydrateUiIcons(topbar);
+    hydrateUiIcons(body);
+  }
+}
+
+function _bindConnectorDetailActions(host, entry, instance) {
+  if (!host) return;
+  const back = host.querySelector('[data-connectors-detail-back]');
+  if (back) back.addEventListener('click', () => _closeConnectorDetail());
+  // The "(i)" disclosure: a shared icon button plus the shared alert surface. Deliberately no
+  // page-local overlay — the accessible name and the native tooltip both carry the help text, so
+  // the explanation is reachable from the keyboard without opening anything.
+  const help = host.querySelector('[data-connectors-detail-help]');
+  if (help) help.addEventListener('click', () => uiAlert(t('connectors.tencent.help')));
+  host.querySelectorAll('[data-act]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'connect') _runConnect(entry);
+      else if (act === 'create-automation') _openConnectorAutomation(entry);
+      else if (act === 'disconnect') _quickDisconnect(entry, instance);
+      else if (act === 'retry-degraded') _retryConnect(entry, 'connector_degraded_retry');
+      else if (act === 'copy-auth-url') _copyConnectorAuthorizationUrl(entry);
+    });
+  });
+}
+
+function _focusConnectorDetailBack() {
+  const body = document.getElementById('connectors-detail-body');
+  const topbar = document.getElementById('connectors-detail-topbar');
+  const btn = (topbar && topbar.querySelector('[data-connectors-detail-back]'))
+    || (body && body.querySelector('[data-connectors-detail-back]'));
+  if (btn && typeof btn.focus === 'function') btn.focus({ preventScroll: true });
+}
+
+function _openConnectorDetail(entry, instance, originEl) {
+  const id = String((entry && entry.id) || (instance && instance.id) || '');
+  if (!id || !_connectorDetailProfile(id)) return;
+  const view = document.getElementById('connectors-detail-view');
+  // No detail host (partial DOM, e.g. a test double): leave the grid working rather than hiding it.
+  if (!view) return;
+  if (_connectorDetailState.id !== id) {
+    _connectorsTrackClick('connector_detail_open', _connectorTrackPayload(entry, instance));
+  }
+  _connectorDetailState.id = id;
+  _connectorDetailState.originEl = originEl || _connectorDetailState.originEl || null;
+  const gridView = document.getElementById('connectors-grid-view');
+  if (gridView) gridView.style.display = 'none';
+  view.style.display = '';
+  _renderConnectorDetail();
+  _focusConnectorDetailBack();
+}
+
+/** Grid ⇄ detail return. Focus goes back to the card control that opened the view; because the
+ *  grid repaint below rebuilds the card, the original node is normally detached and the lookup
+ *  falls back to the same control on the re-rendered card. */
+function _closeConnectorDetail() {
+  const id = _connectorDetailState.id;
+  if (!id) return;
+  const origin = _connectorDetailState.originEl;
+  _connectorDetailState.id = '';
+  _connectorDetailState.originEl = null;
+  const view = document.getElementById('connectors-detail-view');
+  const topbar = document.getElementById('connectors-detail-topbar');
+  const body = document.getElementById('connectors-detail-body');
+  if (topbar) topbar.innerHTML = '';
+  if (body) body.innerHTML = '';
+  if (view) view.style.display = 'none';
+  _renderConnectorsGrid();
+  const target = (origin && origin.isConnected) ? origin : _connectorDetailReturnTarget(id);
+  if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
+}
+
+function _connectorDetailReturnTarget(id) {
+  const cards = document.querySelectorAll('.connector-card[data-id]');
+  for (const card of cards) {
+    if (card.dataset && card.dataset.id === id) return card.querySelector('[data-act="open-detail"]');
+  }
+  return null;
+}
+
+/** Escape leaves the detail view for the grid — the same document-level pattern the marketplace
+ *  detail view uses. IME composition is ignored, and an open shared modal keeps its own Escape
+ *  handling so one Escape never both dismisses a dialog and changes the page. */
+function _connectorDetailKeydown(event) {
+  if (!_connectorDetailState.id || !_connectorsViewActive()) return;
+  if (!event || event.isComposing || event.keyCode === 229) return;
+  if (event.key !== 'Escape') return;
+  // Only when the detail view is the surface the user is actually looking at: the selection
+  // survives a tab or sub-view switch, and Escape there belongs to whatever replaced it.
+  const view = document.getElementById('connectors-detail-view');
+  if (!view || view.style.display === 'none') return;
+  const pane = document.getElementById('connections-pane-mcp');
+  if (pane && pane.hidden) return;
+  const target = event.target;
+  if (target && typeof target.closest === 'function' && target.closest('.ui-modal-overlay')) return;
+  event.stopPropagation();
+  _closeConnectorDetail();
+}
+
+/** Primary CTA: land on the automation page with the meeting-digest template pre-filled.
+ *  The template grid only exists in the empty state, so the dialog pre-fill path is the only
+ *  reliable route. auto.js is a lazily loaded feature, hence the loader hop before reaching into
+ *  it; `_autoApplyTemplate` opens the dialog itself, so calling `openAutoTaskDialog` too would
+ *  open it twice. */
+function _openConnectorAutomation(entry) {
+  const profile = _connectorDetailProfile(entry && entry.id);
+  const templateId = (profile && profile.template_id) || '';
+  _connectorsTrackClick('connector_detail_automation', _connectorTrackPayload(entry, _instanceById(entry && entry.id)));
+  if (typeof setView === 'function') setView('auto');
+  const run = () => {
+    if (templateId && typeof window.applyAutoTemplate === 'function') {
+      window.applyAutoTemplate(templateId);
+      return;
+    }
+    if (typeof window.openAutoTaskDialog === 'function') window.openAutoTaskDialog({});
+  };
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader !== 'function') {
+    run();
+    return;
+  }
+  Promise.resolve(loader('auto')).then(run).catch((err) => {
+    _connectorsLog.warn('auto feature load failed', { error: (err && err.message) || String(err) });
+  });
+}
+
+/** A `local_cli` connect produces its authorization URL here rather than through a deep link. The
+ *  browser is opened by main; if that fails, this URL is the only way forward, so surface it where
+ *  the user can copy it instead of leaving it in module state they cannot see. */
+function _handleAuthorizationUrl(notice) {
+  if (!notice || typeof notice.catalog_id !== 'string' || typeof notice.url !== 'string') return;
+  const url = notice.url.trim();
+  if (!notice.catalog_id || !url) return;
+  _connectorAuthorizationUrl = { catalog_id: notice.catalog_id, url };
+  if (_connectorDetailState.id === notice.catalog_id) {
+    _renderConnectorDetail();
+    return;
+  }
+  if (_connectorsViewActive() && _connectorDetailProfile(notice.catalog_id)) {
+    _openConnectorDetail({ id: notice.catalog_id }, _instanceById(notice.catalog_id), null);
+    return;
+  }
+  if (typeof uiToast === 'function') uiToast(t('connectors.tencent.auth_url.toast'), { variant: 'warning' });
+}
+
+async function _copyConnectorAuthorizationUrl(entry) {
+  const notice = _connectorAuthorizationUrl;
+  if (!notice || !entry || notice.catalog_id !== entry.id) return;
+  try {
+    if (typeof navigator === 'undefined' || !navigator.clipboard
+      || typeof navigator.clipboard.writeText !== 'function') {
+      throw new Error('clipboard unavailable');
+    }
+    await navigator.clipboard.writeText(notice.url);
+    if (typeof uiToast === 'function') uiToast(t('connectors.tencent.auth_url.copied'), { variant: 'success' });
+  } catch (err) {
+    _connectorsLog.warn('authorization url copy failed', { error: (err && err.message) || String(err) });
+    uiAlert(t('connectors.tencent.auth_url.copy_failed'));
+  }
+}
+
 async function _runConnect(entry) {
   if (_isConnectorVisibleDisabled(entry)) {
-    _showConnectorUnsupportedToast();
+    _showConnectorUnavailableToast(entry);
     return;
   }
   const payload = _connectorTrackPayload(entry, null);
@@ -1307,6 +1797,9 @@ window.addEventListener('i18n-change', () => {
   if (_connectorsViewActive()) _renderConnectorsGrid();
 });
 
+// Escape returns from the detail view to the grid (see `_connectorDetailKeydown`).
+document.addEventListener('keydown', _connectorDetailKeydown);
+
 // Refresh the grid when a connector or client-config push arrives. Right now the
 // only consumer is the connectors panel itself, but registering at module load lets future
 // background events (token expiry notifications etc.) refresh the panel automatically.
@@ -1316,6 +1809,9 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
       if (_connectorsViewActive()) loadConnectors();
     });
     window.cogseed.onPushEvent('connectors:oauth-result', _handleOAuthConnectResult);
+    // `local_cli` connects produce their authorization URL on this machine instead of through a
+    // deep link, so the renderer has to be able to show it as a copyable fallback.
+    window.cogseed.onPushEvent('connectors:authorization-url', _handleAuthorizationUrl);
     window.cogseed.onPushEvent('client-config:changed', () => {
       if (_connectorsViewActive()) loadConnectors();
     });

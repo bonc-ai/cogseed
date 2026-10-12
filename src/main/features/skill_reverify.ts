@@ -23,6 +23,7 @@ import { safeId } from '../storage';
 import { isScannerSkill, scannerTrustedForLoad } from './scanner_trust';
 import { validateSkillDir } from '../quality';
 import { createLogger } from '../logger';
+import { isConventionRule } from './skill_verdict';
 import {
   isReceiptStale,
   readReceipt,
@@ -78,22 +79,10 @@ function _decisionOf(report: { ok: boolean; violations: Array<{ rule: string }> 
 
 const _LEVEL_RANK: Record<string, number> = { EXTREME: 3, MEDIUM: 2, LOW: 1 };
 
-/**
- * Authoring-convention rules, which describe completeness rather than safety.
- *
- * The shape rules require standard artifacts of every skill ("declare `use_when`", "add an
- * output contract"). Those fire at MEDIUM across nearly the whole existing
- * library — measured, six of them on a fixture this suite calls CLEAN. A missing
- * contract is a real authoring gap and the quality report lists it in full, but it
- * is not a reason to tell the user a skill is a security risk.
- *
- * Kept as one predicate because two callers need the same answer: the decision
- * (`pass` vs `risk`) and the ranking that picks which finding to name. Deriving it
- * twice is how they would drift apart.
- */
-export function isConventionRule(rule: string): boolean {
-  return String(rule || '').startsWith('shape_');
-}
+// `isConventionRule` now lives in the zero-dependency `skill_verdict` leaf module.
+// The decision below, the ranking here and the two presentation surfaces all need
+// the same answer, and the receipt path (`skill_trust`) cannot import this module
+// without closing a cycle — so the judgement moved to where both can reach it.
 
 /**
  * Highest-severity violation in a report.

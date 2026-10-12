@@ -44,7 +44,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { createLogger } from '../../logger';
-import { userMarketplaceSkillDir } from '../../paths';
+import { userMarketplaceSkillDir, userMarketplaceSkillsDir } from '../../paths';
 
 const log = createLogger('marketplace/installed-version');
 
@@ -182,7 +182,8 @@ export type ContentAvailability = 'available' | 'disabled' | 'unknown';
  * 只认 `disabled` 这一个取值为停用；其余（`approved` / `published` / 空）一律视为可用——
  * 判错方向应当是「不阻断」，把用户已装的内容误判成停用比漏拦更糟。
  */
-const DISABLED_STATUS = 'disabled';
+// Canonical normalization also backs catalog, UI and the final script runner.
+import { hubContentStatus, isHubContentDisabled } from '../../../shared/hub-content-status';
 
 /**
  * 读取本机记录的内容状态。
@@ -199,7 +200,7 @@ export function readContentStatus(
   const raw = readRawStatus(userId, contentId);
   return {
     raw,
-    availability: raw.trim().toLowerCase() === DISABLED_STATUS ? 'disabled' : 'available',
+    availability: isHubContentDisabled({ status: raw }) ? 'disabled' : 'available',
   };
 }
 
@@ -208,9 +209,7 @@ function readRawStatus(userId: string, contentId: string): string {
     const marker = path.join(userMarketplaceSkillDir(userId, contentId), INSTALL_MARKER);
     const parsed = JSON.parse(fs.readFileSync(marker, 'utf8')) as Record<string, unknown>;
     // 只看字符串字段；布尔 `disabled` 即便存在也**刻意不读**。
-    const status = typeof parsed.status === 'string' ? parsed.status : '';
-    const state = typeof parsed.state === 'string' ? parsed.state : '';
-    return status || state;
+    return hubContentStatus(parsed);
   } catch {
     return '';
   }
@@ -219,4 +218,16 @@ function readRawStatus(userId: string, contentId: string): string {
 /** 该内容是否被内容级停用，因而**不得开始新的使用**（FR-043）。 */
 export function isContentDisabled(userId: string, contentId: string): boolean {
   return readContentStatus(userId, contentId).availability === 'disabled';
+}
+
+/** Local governance deny set for new model turns and direct shell execution. */
+export function disabledHubSkillIds(userId: string): Set<string> {
+  const root = userMarketplaceSkillsDir(userId);
+  const out = new Set<string>();
+  try {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.') && isContentDisabled(userId, entry.name)) out.add(entry.name);
+    }
+  } catch { /* No installed marketplace skills yet. */ }
+  return out;
 }

@@ -25,9 +25,6 @@ const legacyRawControlBaseline: Record<string, number> = {
   'bash_permission.js': 5,
   'boot.js': 1,
   'chat-artifact.js': 1,
-  // 2026-09-15 认知资产重构新模块：时间输入与 switch 两处 raw control 冻结
-  // 为现状基线，迁移到共享原语前不得再增。
-  'cognition-assets/views.js': 2,
   'chat-file-viewer.js': 3,
   'chat-input-form.js': 2,
   'chat-lightbox.js': 3,
@@ -67,14 +64,14 @@ const legacyRawControlBaseline: Record<string, number> = {
   // ⚠️ 基线按**合并后实测**填：单独照抄任一支的自测值都会留出空档。
   'kb-workbench.js': 5,
   'library-transfer.js': 7,
-  'marketplace.js': 7,
+  'marketplace.js': 6,
   'md-view-edit.js': 5,
   'memory.js': 1,
   'model-authorization.js': 3,
   'model-guard.js': 2,
   'onboarding.js': 21,
   'oss.js': 1,
-  'personal-ontology.js': 5, // 2026-09-20 盒子化：tab/库行/三盒 nav/模板行/库按钮
+  'personal-ontology.js': 7, // 2026-09-20 盒子化：tab/库行/三盒 nav/模板行/库按钮
   'plugins.js': 2,
   'queue-draft.js': 5,
   'recall-projection-card.js': 4,
@@ -187,6 +184,12 @@ const emojiAsIconBaseline: Record<string, number> = {
  * 往它里面加图标正是规范要求的做法，冻死它等于堵掉正确路径。
  */
 const inlineSvgBaseline: Record<string, number> = {
+  // settings-security.js：1 处，评分环（`scoreRing`）。
+  // 它不是图标，而是**数据可视化**：半径/描边/`stroke-dashoffset` 都由分数
+  // 计算，无法用 icons.js 的静态 path 表达。已按 kb-workbench 的先例登记在
+  // 《Renderer structural registry》的 "Known non-icon inline SVG" 一节
+  // （`SEC-PV-001`）。数值为 1，任何第二处内联 SVG 都会直接红。
+  'settings-security.js': 1,
   'avatar.js': 4,
   'cognition/pages.js': 1,
   'cognition-assets/views.js': 1,

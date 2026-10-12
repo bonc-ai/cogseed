@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
 
+import { safeId } from '../../storage';
 import { loadEntries } from '../memory';
 import { userMemoryFile, userProfileFile } from '../../paths';
 import { loadOntologyRules } from './ontology-rules';
 import { loadOntologyTaxonomy } from './ontology-taxonomy';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { readAbilityAsset } from './asset-service';
+import type { RecallAbilityAssetRecord } from './candidate-service';
 import { readGroups, listGroupFields, isStaleAsOf } from '../personal_ontology_groups';
-import { splitScopeTerms } from './scope-policy';
+import { readLiveConflicts } from './ontology-conflicts';
+import { splitScopeTerms, type AssetScopeContext } from './scope-policy';
 import {
   readContextProjection,
   validateCommittedProjectionAssetVersions,
@@ -28,13 +31,15 @@ const MAX_ONTOLOGY_FACT_VALUE = 500;
 
 export interface CommittedProjectionKnowledge {
   projectionId: string;
+  projectionPurpose: string;
   projectionConfirmedAt: string;
   workspaceId?: string;
+  projectId?: string;
   abilityAssetRefs: string[];
   abilityAssets: WorldModelAbilityAsset[];
   assetVersions: Record<string, string>;
   rules: WorldModelCausalRuleRef[];
-  /** Durable personal ontology (USER.md + MEMORY.md) as `personal` ability assets. */
+  /** Runtime-eligible personal assets as background profile context. */
   ontologyAssets: WorldModelAbilityAsset[];
   ontologyFacts: import('./world-model-types').WorldModelOntologyFact[];
   /** T-Box concept definitions (ontology group ledger + field vocabulary). */
@@ -43,9 +48,11 @@ export interface CommittedProjectionKnowledge {
   ontologyRules: Awaited<ReturnType<typeof loadOntologyRules>>['rules'];
 }
 
-async function loadOntologyFacts(
+/** 导出作测试缝（specs/014 T019）：世界模型侧矛盾标记的直接用例入口；
+ *  生产调用方仍是 loadCommittedProjectionKnowledge 一处。 */
+export async function loadOntologyFacts(
   userId: string,
-  context: { workspaceId?: string; taskText?: string } = {},
+  context: { projectId?: string; workspaceId?: string; taskText?: string } = {},
 ): Promise<import('./world-model-types').WorldModelOntologyFact[]> {
   const facts: import('./world-model-types').WorldModelOntologyFact[] = [];
   let groups: ReturnType<typeof readGroups>;
@@ -64,7 +71,9 @@ async function loadOntologyFacts(
     if (!fields.ok || !fields.fields) continue;
     for (const field of fields.fields) {
       for (const entry of field.values) {
-        if (entry.project && entry.project !== context.workspaceId) continue;
+        // @proj values are bound to app projects, not spaces/workspaces. If
+        // the current project is unknown, omit project-bound values (fail closed).
+        if (entry.project && entry.project !== context.projectId) continue;
         // 敏感性（spec 007 T302）：restricted 值不进任务自动上下文与世界模型
         // （用户在对话里显式 @ 该组仍会带全文——显式选择即授权）。
         if (entry.sensitivity === 'restricted') continue;
@@ -88,6 +97,31 @@ async function loadOntologyFacts(
       if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
     }
     if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
+  }
+  // 矛盾标记（specs/014 US-903 / T018）：一次读只读索引（readLiveConflicts
+  // 不写盘、不触发自愈），命中 (组标题, 字段) 的事实挂 disputed + 非受限对端
+  // （≤2 条、每条截 MAX_ONTOLOGY_FACT_VALUE）；对端受限只置位不带文本。
+  // 无矛盾时不挂任何键（下游产物深度相等，零差异承诺 I-9）。
+  let liveConflicts: Array<{ groupId: string; field: string; valueA: string; valueB: string; aRestricted: boolean; bRestricted: boolean }> = [];
+  try {
+    liveConflicts = await readLiveConflicts(userId);
+  } catch {
+    liveConflicts = [];
+  }
+  if (liveConflicts.length) {
+    const titleByGroupId = new Map(groups.map((group) => [group.group_id, String(group.title || group.group_id)]));
+    const byKey = new Map(liveConflicts.map((pair) => [`${titleByGroupId.get(pair.groupId) || pair.groupId}\0${pair.field}`, pair]));
+    for (const fact of facts) {
+      const pair = byKey.get(`${fact.groupTitle}\0${fact.field}`);
+      if (!pair) continue;
+      const others = [pair.aRestricted ? null : pair.valueA, pair.bRestricted ? null : pair.valueB]
+        .filter((value): value is string => Boolean(value) && value !== fact.value)
+        .map((value) => value.replace(/\s+/g, ' ').trim().slice(0, MAX_ONTOLOGY_FACT_VALUE))
+        .filter(Boolean)
+        .slice(0, 2);
+      fact.disputed = true;
+      if (others.length) fact.conflictedWith = others;
+    }
   }
   const taskTokens = splitScopeTerms(context.taskText || '').map((token) => token.toLocaleLowerCase());
   return facts
@@ -115,6 +149,9 @@ function ontologyTitle(statement: string): string {
   return `${base}…`;
 }
 
+/** Legacy USER/MEMORY 文件条目 → 虚拟画像条目（onto-<sha256 prefix>，bud/v1
+ *  伪造值）。仅在资产库没有任何 personal 记录（迁移未跑）的过渡回退里使用：
+ *  那里「不是资产」，伪造的治理字段是如实的。正式个人资产走真实字段镜像。 */
 function ontologyAssetFromEntry(
   text: string,
   source: 'user_profile' | 'shared_memory',
@@ -139,26 +176,58 @@ function ontologyAssetFromEntry(
   };
 }
 
-/** USER.md / MEMORY.md → 虚拟画像资产（onto-<sha256 前 24 位>）。
- *  导出供检索侧复用（search_ability_assets 把画像纳入检索池并标来源）；
- *  条目不落盘、不进投影授权链——只作为背景通道存在（见 prompt-injection
- *  的 <durable-profile-memory> 独立块）。 */
-/** 画像资产来源（2026-09-22 记忆退役）：personal 类正式资产取代 USER/MEMORY
- *  文件条目——onto-* 虚拟资产形态保留（committed 画像通道不进授权链的契约
- *  不变），条目文本换为资产正文。读不到资产库时回退文件（迁移前过渡）。 */
-export async function loadOntologyAssets(userId: string): Promise<WorldModelAbilityAsset[]> {
+/** Personal formal assets → profile entries carrying the asset's real
+ *  governance fields (id/version/maturity/title/scope/evidenceRefs). Callers
+ *  must pass the IDs admitted for the current task; this is a profile
+ *  presentation channel and does not create projection citations. Legacy
+ *  USER/MEMORY files remain a migration fallback only after a successful store
+ *  read confirms that no personal asset records exist.
+ *
+ *  2026-09-30 修1：此前镜像把 id 换成 onto-<sha> 并硬编码 bud/v1——同一条
+ *  记录两种投影互相矛盾（真身 v10 已实证 vs 镜像 v1 bud），注入块按伪造值
+ *  展示治理（自检曾据此误判「画像通道绕过闸门」），回执按 onto-id 记账也
+ *  永远连不回资产本体。镜像只保留展示职责，治理与审计回真身。 */
+export async function loadOntologyAssets(
+  userId: string,
+  options: { allowedPersonalAssetIds?: ReadonlySet<string> } = {},
+): Promise<WorldModelAbilityAsset[]> {
   const assets: WorldModelAbilityAsset[] = [];
-  let statements: Array<{ text: string; name: 'user_profile' | 'shared_memory' }> = [];
+  let personal: RecallAbilityAssetRecord[] = [];
+  let personalAssetStoreRead = false;
+  let hasPersonalAssetRecords = false;
   try {
     const { listAbilityAssets } = await import('./asset-service');
-    const personal = (await listAbilityAssets(userId))
-      .filter((asset) => asset.type === 'personal' && asset.status === 'active');
-    statements = personal.map((asset) => ({ text: String(asset.statement || ''), name: 'user_profile' as const }));
+    const personalRecords: RecallAbilityAssetRecord[] = (await listAbilityAssets(userId))
+      .filter((asset) => asset.type === 'personal');
+    personalAssetStoreRead = true;
+    hasPersonalAssetRecords = personalRecords.length > 0;
+    personal = personalRecords.filter((asset) => (
+      asset.status === 'active'
+      && (options.allowedPersonalAssetIds === undefined || options.allowedPersonalAssetIds.has(asset.id))
+    ));
   } catch {
-    statements = [];
+    personal = [];
   }
-  if (!statements.length) {
-    // 过渡回退：资产库还没有画像（迁移未跑）时读文件。
+  if (personalAssetStoreRead && hasPersonalAssetRecords) {
+    for (const record of personal) {
+      assets.push({
+        id: record.id,
+        version: record.version,
+        title: record.title,
+        type: record.type,
+        statement: String(record.statement || '').replace(/\s+/g, ' ').trim().slice(0, MAX_ONTOLOGY_STATEMENT),
+        scope: record.scope,
+        maturity: record.maturity,
+        ontologyRefs: (record.ontologyRefs || []).map((ref) => ({ ...ref })),
+        evidenceRefs: record.evidenceRefs.slice(0, MAX_EVIDENCE_REFS).map((ref) => ({ ...ref })),
+      });
+      if (assets.length >= MAX_ONTOLOGY_ASSETS) break;
+    }
+    return assets;
+  }
+  // 过渡回退：资产库还没有画像（迁移未跑）时读文件。
+  let statements: Array<{ text: string; name: 'user_profile' | 'shared_memory' }> = [];
+  if (personalAssetStoreRead && !hasPersonalAssetRecords) {
     for (const { file, name } of [
       { file: userProfileFile(userId), name: 'user_profile' as const },
       { file: userMemoryFile(userId), name: 'shared_memory' as const },
@@ -181,12 +250,45 @@ export async function loadOntologyAssets(userId: string): Promise<WorldModelAbil
 export async function loadCommittedProjectionKnowledge(
   userId: string,
   projectionId: string,
-  context: { taskText?: string } = {},
+  context: AssetScopeContext & { taskText?: string; allowedPersonalAssetIds?: ReadonlySet<string> } = {},
 ): Promise<CommittedProjectionKnowledge> {
   const projection = await readContextProjection(userId, projectionId);
-  const assetVersions = await validateCommittedProjectionAssetVersions(userId, projection);
+  let conversationScope: { projectId?: string; workspaceId?: string } = {};
+  if (projection.conversationId && (!projection.projectId || !projection.workspaceId)) {
+    try {
+      const { getConversation } = await import('../chats');
+      const conversation = await getConversation(userId, projection.conversationId);
+      if (conversation) {
+        conversationScope = {
+          ...(conversation.project_id && safeId(conversation.project_id) ? { projectId: conversation.project_id } : {}),
+          ...(conversation.space_id && safeId(conversation.space_id) ? { workspaceId: conversation.space_id } : {}),
+        };
+      }
+    } catch {
+      // Old projections may outlive conversation metadata; preserve the
+      // projection's captured context and let scope policies fail closed.
+    }
+  }
+  const projectId = context.projectId ?? projection.projectId ?? conversationScope.projectId;
+  const workspaceId = context.workspaceId ?? projection.workspaceId ?? conversationScope.workspaceId;
+  const hasTaskPurpose = context.purpose !== undefined || Boolean(context.taskText);
+  const runtimeScope: AssetScopeContext = {
+    ...(hasTaskPurpose ? {
+      purpose: [projection.purpose, context.purpose, context.taskText].filter(Boolean).join('\n'),
+    } : {}),
+    ...(context.agentId !== undefined ? { agentId: context.agentId } : {}),
+    ...(context.roleId !== undefined ? { roleId: context.roleId } : {}),
+    ...(projectId !== undefined ? { projectId } : {}),
+    ...(workspaceId !== undefined ? { workspaceId } : {}),
+    ...(context.conversationKind !== undefined ? { conversationKind: context.conversationKind } : {}),
+    ...(context.fileKinds !== undefined ? { fileKinds: context.fileKinds } : {}),
+  };
+  const assetVersions = await validateCommittedProjectionAssetVersions(userId, projection, runtimeScope);
   const assets = [];
   for (const assetId of projection.assetIds.slice(0, MAX_ASSETS)) {
+    // validateCommittedProjectionAssetVersions 会省略当前已停用的资产；只读
+    // 仍有效且版本一致的子集，避免同一投影中的单条暂停使其他资产也不可用。
+    if (!Object.prototype.hasOwnProperty.call(assetVersions, assetId)) continue;
     const asset = await readAbilityAsset(userId, assetId);
     assets.push(asset);
   }
@@ -213,11 +315,17 @@ export async function loadCommittedProjectionKnowledge(
         }]
       : []
   ));
-  const ontologyAssets = await loadOntologyAssets(userId);
+  const ontologyAssets = await loadOntologyAssets(userId, {
+    ...(context.allowedPersonalAssetIds !== undefined
+      ? { allowedPersonalAssetIds: context.allowedPersonalAssetIds }
+      : {}),
+  });
   return {
     projectionId: projection.id,
+    projectionPurpose: projection.purpose,
     projectionConfirmedAt: projection.confirmedAt || projection.decidedAt || projection.createdAt,
-    ...(projection.workspaceId ? { workspaceId: projection.workspaceId } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(projectId ? { projectId } : {}),
     abilityAssetRefs: abilityAssets.map((asset) => asset.id),
     abilityAssets,
     assetVersions: Object.fromEntries(abilityAssets.map((asset) => [asset.id, assetVersions[asset.id]])),
@@ -225,7 +333,8 @@ export async function loadCommittedProjectionKnowledge(
     ontologyAssets,
     ontologyFacts: [
       ...(await loadOntologyFacts(userId, {
-        workspaceId: projection.workspaceId,
+        projectId,
+        workspaceId,
         taskText: context.taskText,
       })),
       ...ontologyAssets.map((asset) => ({
@@ -233,12 +342,17 @@ export async function loadCommittedProjectionKnowledge(
         groupTitle: 'Durable personal context',
         field: 'memory',
         value: asset.statement,
-        source: asset.evidenceRefs.some((ref) => ref.id === 'user_profile')
-          ? 'user_profile' as const
-          : 'shared_memory' as const,
+        // onto-* 虚拟条目按文件来源标注；正式资产镜像（aa-*）的真身证据引用
+        // 里没有 user_profile 键，不能落进 shared_memory 误标——画像是用户档案。
+        source: asset.id.startsWith('onto-')
+          ? (asset.evidenceRefs.some((ref) => ref.id === 'user_profile') ? 'user_profile' as const : 'shared_memory' as const)
+          : 'user_profile' as const,
       })),
     ].slice(0, MAX_ONTOLOGY_FACTS),
     ontologyTaxonomy: await loadOntologyTaxonomy(userId),
-    ontologyRules: (await loadOntologyRules(userId, { workspaceId: projection.workspaceId })).rules,
+    ontologyRules: (await loadOntologyRules(userId, {
+      projectId,
+      workspaceId,
+    })).rules,
   };
 }

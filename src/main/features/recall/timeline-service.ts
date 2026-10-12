@@ -1,6 +1,6 @@
 import { listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, readAbilityAsset } from './asset-service';
-import { listContextProjections, readContextProjection } from './context-projection';
-import { listEffectivenessProofs, listTransferProofs, type TransferProofRecord } from './proof-service';
+import { listAllContextProjections, readContextProjection, type ProjectionAuthorization } from './context-projection';
+import { listEffectivenessProofs, listTransferProofs, transferReceiptIsProven, type TransferProofRecord } from './proof-service';
 import { listRecallUsage } from './usage-service';
 
 export type RecallAssetTimelineKind =
@@ -23,6 +23,15 @@ export type RecallAssetTimelineKind =
   | 'transfer_prepared'
   | 'transfer_completed'
   | 'effectiveness_recorded' | 'catalog_hint_unused';
+
+/** 「真实使用」白名单（2026-09-25 验收修复 US-602 / FR-004、FR-011）：
+ *  列表与详情共用**同一份**定义，且下游（specs/012 排序因子等）MUST 直接引用本
+ *  常量，不得另写一份。只含"被带入任务 / 被实际使用"两类事件——创建、版本、治理
+ *  与撤销都不是使用，一律不抬高「最近使用」（此前列表侧对全部事件取 occurredAt
+ *  最大值、未按 kind 过滤，正是缺陷本体）。
+ *  注：「实际采用」另有权威口径 = usage 回执 `applied`（见 asset-usage-receipt）；
+ *  本白名单只回答"哪些事件算真实使用"，不回答"是否被采用"。 */
+export const REAL_USAGE_KINDS: readonly RecallAssetTimelineKind[] = ['usage_recorded', 'projection_confirmed'];
 
 export interface RecallAssetTimelineItem {
   id: string;
@@ -52,6 +61,16 @@ export interface RecallAssetTimelineItem {
     usageReceiptId?: string;
     /** 使用记录自身 id（N-5: 不是回执 id，仅展示用，不参与回执索引）。 */
     usage_id?: string;
+    /** 已确认投影的原始授权/用途：详情页据此识别仍可撤销的长期挂载。 */
+    authorization?: ProjectionAuthorization;
+    purpose?: string;
+    expiresAt?: string;
+    /** usage 记录的 outcome（2026-09-25 US-602）：injected / dispatched /
+     *  agent_read / succeeded|degraded|rejected / feedback_positive|negative。
+     *  渲染层据此把「宿主注入过」与「实际采用」分开措辞——不带这个字段就只能
+     *  把 injected 也写成"被实际使用"，正是 AC4/AC5 要禁的过度宣称。
+     *  **不复用顶层 `outcome`**：那是效果评价的结论（valid/invalid 语境）。 */
+    usageOutcome?: string;
   };
 }
 
@@ -118,13 +137,13 @@ function pushSorted(items: RecallAssetTimelineItem[], item: RecallAssetTimelineI
   items.push(item);
 }
 
-/** M10（2026-09-16）：投影 → 最新已完成迁移证明 的索引。一次性构建供全部
- *  usage 行查询（检修修：此前每条 usage 全量扫 proofs 目录，I/O 随
- *  usage×资产数放大）。 */
-function buildTransferProofIndex(proofs: TransferProofRecord[]): Map<string, string> {
+/** 投影 → 最近可评价的迁移证明。效果评价只接受成功且有已验证回执的迁移；
+ *  降级/拒绝记录仍保留在时间线，但不给它们生成会被后端拒绝的评价入口。 */
+async function buildTransferProofIndex(userId: string, proofs: TransferProofRecord[]): Promise<Map<string, string>> {
   const index = new Map<string, { id: string; completedAt: string }>();
   for (const proof of proofs) {
-    if (!proof.projectionId || !proof.completedAt) continue;
+    if (!proof.projectionId || !proof.completedAt || proof.status !== 'succeeded') continue;
+    if (!await transferReceiptIsProven(userId, proof.receiptExecutionId, proof.receiptId, proof.assetVersions)) continue;
     const prev = index.get(proof.projectionId);
     if (!prev || String(proof.completedAt) > prev.completedAt) {
       index.set(proof.projectionId, { id: proof.id, completedAt: String(proof.completedAt) });
@@ -183,10 +202,14 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     });
   }
 
-  for (const projection of await listContextProjections(userId)) {
-    // 撤销的模型自选投影同样入时间线（2026-09-18）：用户撤销后原本"这件事消失
-    // 得无影无踪"，只剩注入回执——现在给一条"已撤销"事件，撤销动作可追溯。
-    const isRevokedAttachment = projection.status === 'revoked' && projection.authorization === 'model_selected';
+  // 资产事实链不能只看最近 20 条投影：较早但仍有效的固定版本仍可能被后续任务读取。
+  for (const projection of await listAllContextProjections(userId)) {
+    // 撤销的投影同样入时间线（2026-09-18 模型自选线；2026-09-25 补用户 @ 钉住线）：
+    // 用户撤销后原本"这件事消失得无影无踪"，只剩注入回执——现在给一条"已撤销"
+    // 事件，撤销动作可追溯（US-602 AC3）。
+    const isRevokedAttachment = projection.status === 'revoked'
+      && (projection.authorization === 'model_selected'
+        || (projection.authorization === 'user_confirmed' && projection.purpose === 'user_pinned'));
     if (projection.status !== 'confirmed' && !isRevokedAttachment) continue;
     if (!projection.assetIds.includes(asset.id)) continue;
     if (isRevokedAttachment) {
@@ -219,8 +242,12 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       summary: projection.purpose,
       refs: {
         assetId: asset.id,
+        version: projection.assetVersions?.[asset.id],
         projectionId: projection.id,
         taskRunId: projection.taskRunId,
+        authorization: projection.authorization,
+        purpose: projection.purpose,
+        ...(projection.expiresAt ? { expiresAt: projection.expiresAt } : {}),
         ...(projectionConversationId ? { conversationId: projectionConversationId } : {}),
       },
     });
@@ -270,15 +297,20 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   // 检修剪（2026-09-16）：proofs 只读一次，建投影索引供全部 usage 行查询
   // （下方 transfer 段复用同一份，避免重复全量扫描）。
   const transferProofs = await listTransferProofs(userId);
-  const transferProofByProjection = buildTransferProofIndex(transferProofs);
+  const transferProofByProjection = await buildTransferProofIndex(userId, transferProofs);
   for (const usage of await listRecallUsage(userId, assetId)) {
     // 会话 id：新投影的 conversationId 优先；旧数据用 episode 的
     // taskRunId→sessionId 回溯——用户要求老记录也能看出"在哪个对话里被用"。
     const usageConversationId = (await conversationOfProjection(usage.projectionId))
       || episodeConversationByRun.get(String(usage.taskRunId || ''));
-    // M10（2026-09-16 审计收口）：带上该投影已完成的迁移证明 id——评价控件
-    // 的渲染条件依赖它，此前恒缺导致"效果评价 UI 不可达"。
-    const usageProofId = usage.projectionId ? transferProofByProjection.get(usage.projectionId) : undefined;
+    // 评价绑定在这次已成功的使用上。宿主刚注入、模型自读、失败迁移或用户
+    // 已经提交的反馈都不能再挂同一个效果评价入口；旧流水没有 outcome 时，
+    // 仅在投影确有成功且可验证的迁移证明时保留兼容入口。
+    const usageOutcome = String(usage.outcome || '');
+    const ratingEligibleUsage = !usageOutcome || usageOutcome === 'succeeded';
+    const usageProofId = usage.projectionId && ratingEligibleUsage
+      ? transferProofByProjection.get(usage.projectionId)
+      : undefined;
     pushSorted(items, {
       id: usage.id,
       kind: 'usage_recorded',
@@ -294,6 +326,9 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         taskRunId: usage.taskRunId,
         ...(usageProofId ? { transferProofId: usageProofId } : {}),
         ...(usageConversationId ? { conversationId: usageConversationId } : {}),
+        // outcome 随行下发（2026-09-25 US-602）：让渲染层能按"怎么用到的"分开
+        // 措辞，而不是把宿主注入也写成"被实际使用"。旧记录没有该字段就省略。
+        ...(usage.outcome ? { usageOutcome: String(usage.outcome) } : {}),
         // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
         // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
         // 不到（口径漂移：transfer_completed 行的 usageReceiptId 才是真回执

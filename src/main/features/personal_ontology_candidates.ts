@@ -22,6 +22,7 @@ import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
+import { notifyCognitionWrite } from './recall/store-events';
 import { addEntry as addMemoryEntry, addRoleTemplateMemoryEntry } from './memory';
 import { listGroups } from './personal_ontology_groups';
 import { routeCandidateToField } from './personal_ontology_router';
@@ -62,6 +63,9 @@ export interface ConfirmCandidateResult {
    *  pool, exactly like the pre-existing single-target behavior. */
   ok: boolean;
   error?: string;
+  /** 冲突门命中时的矛盾集（specs/014 US-902）：error='conflict_detected' 时
+   *  非空——每条一个「可能与现有值矛盾」的对端（字段 + 现有值）。 */
+  conflicts?: Array<{ groupId: string; field: string; existingValue: string }>;
   globalMemory?: { ok: boolean; error?: string };
   groups?: Array<{ groupId: string; ok: boolean; error?: string }>;
   /** 阶段 B：每条填坑尝试（appendFieldValue）的结果；`ok:false` = 该组无此
@@ -375,6 +379,7 @@ function readCandidates(uid: string): CandidateUpdate[] {
 
 function writeCandidates(uid: string, candidates: CandidateUpdate[]): void {
   writeTextAtomicSync(candidatesMdPath(uid), serializeCandidatesMarkdown(candidates));
+  notifyCognitionWrite(uid, 'ontology-candidates', 'update');
 }
 
 function readBlockedItems(uid: string): BlockedItem[] {
@@ -633,6 +638,7 @@ async function writeCandidateToDestinations(
   dest: ConfirmDestinations,
   source = '候选',
   userPickedRole = false,
+  opts: ConfirmCandidateOptions = {},
 ): Promise<ConfirmCandidateResult> {
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { ok: false, error: 'candidate has no memory text' };
@@ -666,7 +672,12 @@ async function writeCandidateToDestinations(
         const suggestedType = candidate.kind === 'rule' ? 'rule' : 'personal';
         const saved = await saveRecallCandidate(uid, {
           judgment: text,
+          // 本体回流=用户已确认的历史候选原文：豁免入池正文闸门。
+          rawStatement: true,
           value: text,
+          // 标题一等化（设计 3.2）：本体候选自带 summary 时作为晋升标题优先
+          // 传入；缺省则由晋升链的起标题兜底处理（不再吃正文首句兜底）。
+          ...(candidate.summary ? { summary: candidate.summary } : {}),
           suggestedType,
           suggestedScope: 'general',
           suggestedAction: 'create',
@@ -718,6 +729,31 @@ async function writeCandidateToDestinations(
       if (res.ok) anySucceeded = true;
       else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
     }
+  }
+
+  // 写入前冲突门（specs/014 US-902 / T013）：只拦**字段值写入**——流水区 /
+  // 全局记忆路径不拦（B6①：AC 只覆盖「确认候选、写入字段值时」）。命中且
+  // 未 acknowledgeConflict → 零写入、候选留在池里（不静默，SC-002）。
+  if (groupIds.length && dest.targetField) {
+    const { precheckFieldValueConflict } = await import('./recall/ontology-conflicts');
+    const gated: Array<{ groupId: string; field: string; existingValue: string }> = [];
+    for (const groupId of groupIds) {
+      const target = await resolveCandidateFieldTarget(uid, groupId, dest.targetField);
+      if (!target.resolved) continue;
+      const pre = await precheckFieldValueConflict(uid, target.ref, target.fieldName, text);
+      if (pre.degraded) {
+        log.info('conflict gate degraded: embedding unavailable, letting through', {
+          uid, groupId, field: target.fieldName,
+        });
+      }
+      for (const conflict of pre.conflicts) {
+        gated.push({ groupId, field: conflict.field, existingValue: conflict.existingValue });
+      }
+    }
+    if (gated.length && !opts.acknowledgeConflict) {
+      return { ok: false, error: 'conflict_detected', conflicts: gated };
+    }
+    // acknowledgeConflict=true 走到这里 = 已重新预检（写入时刻为准，I-8），放行。
   }
 
   if (groupIds.length) {
@@ -816,6 +852,9 @@ export interface ConfirmCandidateOptions {
   /** 确认时经一轮 LLM 识别路由：没显式指定字段的候选，由 LLM 判断填哪个模板组
    *  字段（来源标「智能」）；拿不准/失败回退流水区。默认关闭（老行为）。 */
   routeWithLlm?: boolean;
+  /** 写入前冲突门的越过标记（specs/014 US-902）：渲染层在冲突对话里点了
+   *  「仍然写入」才带 true——**重新预检后**放行（以写入时刻为准，I-8）。 */
+  acknowledgeConflict?: boolean;
 }
 
 /**
@@ -918,7 +957,7 @@ export async function confirmCandidate(
 
   const candidate = candidates[idx];
   const { effectiveDest, source, userPickedRole } = await resolveLlmRoute(uid, candidate, dest, opts);
-  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source, userPickedRole);
+  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source, userPickedRole, opts);
   if (!result.ok) return result;
 
   candidates.splice(idx, 1);

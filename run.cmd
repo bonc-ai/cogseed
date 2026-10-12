@@ -24,6 +24,12 @@ if defined COGSEED_WORKSPACE_ROOT (
 )
 set "COGSEED_RUNTIME_VARIANT=cogseed"
 
+REM ELECTRON_RUN_AS_NODE makes the Electron binary run as plain Node, and it is
+REM inherited from whichever shell or IDE launched this script. Never let it
+REM leak into the app: `require('electron').app` is undefined in that mode and
+REM startup fails on the first isPackaged read. run.sh carries the same guard.
+set "ELECTRON_RUN_AS_NODE="
+
 if not exist "%APP_DIR%\package.json" (
   echo [CogSeed] %APP_DIR%\package.json not found; check the project directory layout. 1>&2
   exit /b 1

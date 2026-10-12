@@ -80,7 +80,7 @@ function escapeHtml(s: unknown) {
 function createTranslator(language: 'zh' | 'en' = 'zh') {
   const tables = {
     zh: {
-      'chat.welcome_carry_kind_personal': '关于我',
+      'chat.welcome_carry_kind_personal': '个人信息',
       'chat.welcome_carry_kind_ability': '我的能力',
       'chat.welcome_carry_kind_snapshot': '接续快照',
       'chat.welcome_carry_item': '{label} {count} 项',
@@ -90,7 +90,7 @@ function createTranslator(language: 'zh' | 'en' = 'zh') {
       'chat.welcome_continue': '带着这些继续',
     },
     en: {
-      'chat.welcome_carry_kind_personal': 'About me',
+      'chat.welcome_carry_kind_personal': 'Personal info',
       'chat.welcome_carry_kind_ability': 'My capabilities',
       'chat.welcome_carry_kind_snapshot': 'Continuation snapshot',
       'chat.welcome_carry_item': '{label} · {count} items',

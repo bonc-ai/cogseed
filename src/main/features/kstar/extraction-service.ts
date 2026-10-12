@@ -271,3 +271,17 @@ export function buildKstarDetectionHints(
     hasReviewGap: review.confidence >= 0.7 && !!review.reason,
   };
 }
+
+/** 沉淀分支标签 → 经验目录类型轴（specs/016 T005）。
+ *  与 `userFacingSummary`（task-level-precipitation.ts）的既有三分支同源：
+ *  lesson=可复用经验 / workflow=已验证的工作流程 / gap=待修正经验；
+ *  判不出（含 null/undefined/未来新增的 kind）→ uncategorized，不抛错、
+ *  不新造第四种分类词（用户可后续在目录里手动调整类型）。 */
+export type KstarExperienceKind = 'lesson' | 'workflow' | 'gap';
+
+const EXPERIENCE_KINDS: ReadonlySet<string> = new Set(['lesson', 'workflow', 'gap']);
+
+export function experienceTypeOf(kind: unknown): KstarExperienceKind | 'uncategorized' {
+  const value = String(kind ?? '');
+  return EXPERIENCE_KINDS.has(value) ? value as KstarExperienceKind : 'uncategorized';
+}

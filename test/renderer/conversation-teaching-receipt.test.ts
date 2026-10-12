@@ -1,10 +1,17 @@
+// 教学回执并入保存回执（2026-09-28 四病整改 7.0 修7 / 深探 F39）。
+// 旧世界里用户教一条记忆，回复气泡挂独立「教学回执卡」（scope+状态+撤销），
+// 历史重载还要补拉 recall.teaching.list 对账撤销态。并入后：
+//   - runner 把教学信号以 candidate+taught-pending-review 走 onCognitionSaveReceipt；
+//   - 渲染层只留保存回执卡（chat-cognition-save-receipts），教学卡整卡删除；
+//   - 撤销入口不迁入（首跑验收证实教学卡上本就没有撤销按钮、teachingRevoke
+//     是渲染层零调用死函数——撤销入口无保留价值，一并删除）；
+//   - 旧消息上的 teaching_receipts 只作数据留存，不再渲染、不再补拉。
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as vm from 'node:vm';
+import vm from 'node:vm';
 
 const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
-const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
 
 function extractFunction(name: string): string {
   const marker = `function ${name}`;
@@ -22,95 +29,59 @@ function extractFunction(name: string): string {
   throw new Error(`unterminated ${name}`);
 }
 
-function loadReceiptHelpers(invoke = async () => ({ ok: true })) {
-  const messages: Record<string, string> = {
-    'chat.teaching.scope_personal': '个人',
-    'chat.teaching.scope_project': '项目',
-    'chat.teaching.scope_agent': '智能体',
-    'chat.teaching.pending_review': '已记住 · 待审核',
-    'chat.teaching.revoked': '已撤销',
-    'chat.teaching.revoke': '撤销',
+function renderSaveReceipts(receipts: unknown[]): string {
+  const escape = (value: unknown) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  const translations: Record<string, string> = {
+    'chat.cognition_save.state_taught': '已记住 · 待审核',
+    'chat.cognition_save.open_candidate': '去审核',
   };
   const context: any = {
-    t: (key: string) => messages[key] || key,
-    escapeHtml: (value: unknown) => String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;'),
-    window: { cogseed: { invoke } },
+    t: (key: string) => translations[key] || key,
+    escapeHtml: escape,
+    uiButton: ({ label, attrs }: { label: string; attrs?: Record<string, string> }) => {
+      const renderedAttrs = Object.entries(attrs || {}).map(([key, value]) => ` ${key}="${escape(value)}"`).join('');
+      return `<button type="button" class="ui-button"${renderedAttrs}>${escape(label)}</button>`;
+    },
   };
   vm.createContext(context);
-  vm.runInContext([
-    uiButtonSource,
-    'this.uiButton = window.uiButton;',
-    extractFunction('_teachingReceiptScopeLabel'),
-    extractFunction('_renderTeachingReceiptsHtml'),
-    extractFunction('_hydrateTeachingReceipts'),
-    extractFunction('_mergeTeachingReceiptStatuses'),
-  ].join('\n'), context);
-  return context;
+  vm.runInContext(`${extractFunction('_renderCognitionSaveReceiptsHtml')}\nthis.render = _renderCognitionSaveReceiptsHtml;`, context);
+  return context.render(receipts);
 }
 
-describe('conversation teaching receipts', () => {
-  it('renders persistent scope, pending state, revoke control, and revoked state safely', () => {
-    const context = loadReceiptHelpers();
-    const active = context._renderTeachingReceiptsHtml([{
-      id: 'teach-a', summary: '<记住>以后保留证据', scope: 'project', status: 'active', candidate_ids: ['cand-a'],
-    }]);
-    const revoked = context._renderTeachingReceiptsHtml([{
-      id: 'teach-b', summary: '不要自动发布', scope: 'personal', status: 'revoked', candidate_ids: ['cand-b'],
-    }]);
-
-    expect(active).toContain('&lt;记住&gt;以后保留证据');
-    expect(active).toContain('项目 · 已记住 · 待审核');
-    expect(active).toContain('data-chat-teaching-revoke="teach-a"');
-    expect(revoked).toContain('个人 · 已撤销');
-    expect(revoked).toContain('is-revoked');
-    expect(revoked).not.toContain('data-chat-teaching-revoke');
+describe('conversation teaching receipts（已并入保存回执）', () => {
+  it('教学卡整卡删除：渲染函数/样式钩子/历史补拉/撤销通道引用全数清零', () => {
+    for (const gone of [
+      '_renderTeachingReceiptsHtml',
+      '_hydrateTeachingReceipts',
+      '_mergeTeachingReceiptStatuses',
+      '_teachingReceiptScopeLabel',
+      'chat-teaching-receipts',
+      'data-chat-teaching-revoke',
+      'recall.teaching.list',
+      'recall.teaching.revoke',
+      'teaching_receipts: gm.teaching_receipts',
+    ]) {
+      expect(source).not.toContain(gone);
+    }
   });
 
-  it('revokes from the chat receipt and updates the visible status in place', async () => {
-    const calls: Array<[string, unknown]> = [];
-    const context = loadReceiptHelpers(async (channel: string, input: unknown) => {
-      calls.push([channel, input]);
-      return { ok: true, signal: { id: 'teach-a', scope: 'project', status: 'revoked' } };
-    });
-    let handler: (() => Promise<void>) | undefined;
-    let removed = false;
-    const status = { textContent: '' };
-    const receipt = {
-      classList: { add: (name: string) => expect(name).toBe('is-revoked') },
-      querySelector: (selector: string) => selector === 'span' ? status : null,
-    };
-    const button: any = {
-      dataset: { chatTeachingRevoke: 'teach-a' },
-      disabled: false,
-      addEventListener: (_type: string, next: () => Promise<void>) => { handler = next; },
-      closest: (selector: string) => selector === '[data-teaching-receipt-id]' ? receipt : null,
-      remove: () => { removed = true; },
-    };
-    const message = { querySelectorAll: () => [button] };
+  it('taught 回执在保存回执卡里渲染：已记住·待审核 + 打开候选', () => {
+    const html = renderSaveReceipts([
+      { target: 'candidate', id: 'cand-a', summary: '以后所有结论都附来源。', outcome: 'taught-pending-review' },
+    ]);
 
-    context._hydrateTeachingReceipts(message);
-    await handler!();
-
-    expect(calls).toEqual([['recall.teaching.revoke', { signalId: 'teach-a' }]]);
-    expect(status.textContent).toBe('项目 · 已撤销');
-    expect(removed).toBe(true);
+    expect(html).toContain('以后所有结论都附来源。');
+    expect(html).toContain('已记住 · 待审核');
+    expect(html).toContain('data-candidate-citation="cand-a"');
   });
 
-  it('reconciles persisted receipt status from durable teaching signals on reload', () => {
-    const context = loadReceiptHelpers();
-    const messages = [{
-      id: 'reply-a',
-      teaching_receipts: [{ id: 'teach-a', summary: '保留证据', scope: 'project', status: 'active' }],
-    }];
-
-    const merged = context._mergeTeachingReceiptStatuses(messages, [{ id: 'teach-a', status: 'revoked' }]);
-
-    expect(merged[0].teaching_receipts[0].status).toBe('revoked');
-    expect(messages[0].teaching_receipts[0].status).toBe('active');
+  it('保存回执卡与证据块照常渲染（并入不破既有链路）', () => {
+    expect(source).toContain('_renderCognitionSaveReceiptsHtml(message.cognition_save_receipts)');
+    expect(source).toContain('chat.cognition_save.state_taught');
   });
 });

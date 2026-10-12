@@ -18,13 +18,13 @@
  */
 
 import { getRoleTemplate, type RoleTemplate, type PresetGroup, type TemplateField } from './role_templates';
-import { safeId, writeTextAtomicSync, nowIso } from '../storage';
+import { genId12, safeId, writeTextAtomicSync, nowIso } from '../storage';
 import { createLogger } from '../logger';
 import { fileEditLock } from '../util/locks';
+import { editPoDoc } from './po/store';
+import type { PoEntry, PoField, PoGroup, PoValue } from './po/model';
 import {
   isValidTemplateVersion,
-  writeGroups,
-  notifyGroupUpserted,
   type FieldValue,
 } from './personal_ontology_groups';
 import {
@@ -1218,34 +1218,45 @@ export async function applyRoleTemplateMigration(
       });
     }
 
-    /** 台账缓存对齐到文件的真实版本。 */
-    const syncLedger = (version: string) => {
-      const groups = readGroups(uid);
-      const idx = groups.findIndex((g) => g.group_id === row.group_id);
-      if (idx === -1) return;
-      groups[idx] = { ...groups[idx], template_version: version, updated_at: nowIso() };
-      writeGroups(uid, groups);
+    /** 实例版本对齐（v2：台账概念已并入组上的 templateVersion 列）。 */
+    const syncLedger = async (version: string) => {
+      await editPoDoc(uid, (ctx) => {
+        const group = ctx.doc.groups.find((g) => g.id === row.group_id);
+        if (!group) return;
+        group.templateVersion = version;
+        group.updatedAt = nowIso();
+        ctx.touch(group.id);
+      });
     };
 
-    // 文件本来就已经是目标版本 + 目标结构 → 只有台账这份缓存落后了。
+    // 结构已完全对齐 catalog（含分节顺序）且实例已处于目标版本 → 只抬版本
+    // 列。版本列落后时仍走完整重建：分节顺序等「非变更项」的 reconcile
+    // 依赖重建路径（v1 同语义）。
     if (plan.versionOnly && before.version === plan.toVersion) {
-      syncLedger(plan.toVersion);
+      await syncLedger(plan.toVersion);
       log.info('role template ledger version repaired from file', {
         uid, templateId, ledgerWas: row.template_version, version: plan.toVersion,
       });
+      const countsLr = {
+        addedSections: plan.additions.sections.length,
+        addedFields: plan.additions.fields.length,
+        renamedSections: plan.renamedSections.length,
+        renamedFields: plan.renamedFields.length,
+        movedFields: plan.movedFields.length,
+        retiredFields: plan.retiredFields.length,
+      };
       return {
         ok: true,
         templateId,
         outcome: 'ledger_repaired',
         fromVersion: plan.fromVersion,
         toVersion: plan.toVersion,
+        ...countsLr,
       };
     }
 
     let backupDir: string | undefined;
     try {
-      backupDir = backupTemplateFileForMigration(uid, templateId) || undefined;
-
       const built = buildMigratedContent(before, plan);
       if (built.error || !built.content) {
         log.warn('role template migration could not be built; nothing written', { uid, templateId, problem: built.error });
@@ -1278,11 +1289,42 @@ export async function applyRoleTemplateMigration(
         };
       }
 
-      // ── 唯一一次写文件 ──
-      writeTextAtomicSync(abs, next);
-      // ── 文件落盘之后才轮到台账（缓存跟着权威走）──
-      syncLedger(plan.toVersion);
-      notifyGroupUpserted(uid, `.personal_ontology_groups/${templateId}.md`);
+      // 只差元信息行（版本/安装时间）＝内容零改动：不重写、不留备份，
+      // 只抬版本列（v2 的等价「只修台账」）。v1 靠文件版本行区分两种情形，
+      // v2 的版本列就是台账，二者合并为这一条。
+      const stripMeta = (t: string) => t.replace(/^>\s*模板:.*$/m, '').replace(/^# .*$/m, '');
+      if (stripMeta(next) === stripMeta(text)) {
+        await syncLedger(plan.toVersion);
+        pruneMigrationBackups(uid, templateId);
+        const countsLr = {
+          addedSections: plan.additions.sections.length,
+          addedFields: plan.additions.fields.length,
+          renamedSections: plan.renamedSections.length,
+          renamedFields: plan.renamedFields.length,
+          movedFields: plan.movedFields.length,
+          retiredFields: plan.retiredFields.length,
+        };
+        log.info('role template version column only updated', { uid, templateId, toVersion: plan.toVersion });
+        return { ok: true, templateId, outcome: 'ledger_repaired', fromVersion: plan.fromVersion, toVersion: plan.toVersion, ...countsLr };
+      }
+
+      backupDir = backupTemplateFileForMigration(uid, templateId) || undefined;
+
+      // ── 唯一一次写入：JSON 文档（渲染副本由 store 写路径同步刷新）──
+      const writeResult = await editPoDoc(uid, (ctx) => {
+        const group = ctx.doc.groups.find((g) => g.id === row.group_id);
+        if (!group) {
+          ctx.fail('template is not installed');
+          return;
+        }
+        applyMigratedContentToGroup(group, after);
+        group.templateVersion = plan.toVersion;
+        group.updatedAt = nowIso();
+        ctx.touch(group.id);
+      });
+      if (!writeResult.ok) {
+        return { ok: false, templateId, outcome: 'failed', error: writeResult.error || 'migration write failed', backupDir };
+      }
       pruneMigrationBackups(uid, templateId);
 
       const counts = {
@@ -1304,6 +1346,65 @@ export async function applyRoleTemplateMigration(
       return { ok: false, templateId, outcome: 'failed', error: (err as Error).message, backupDir };
     }
   });
+}
+
+/** 迁移产物（TemplateFileContent）落进 JSON 组：id 按 分节+字段名/文本 保全，
+ *  origin/isRelation/description 以 catalog 声明为准（T-box 身份不被迁移抹掉）。 */
+function applyMigratedContentToGroup(group: PoGroup, content: TemplateFileContent): void {
+  const now = nowIso();
+  const oldFieldByKey = new Map<string, PoField>(group.fields.map((f) => [`${f.section || ''}\u0000${f.name}`, f] as const));
+  const template = getRoleTemplate(group.templateId || '');
+  const declared = new Map<string, { isRelation?: boolean; description?: string }>();
+  for (const preset of template?.preset_groups || []) {
+    for (const f of preset.fields) declared.set(`${preset.title}\u0000${f.name}`, { isRelation: f.isRelation, description: f.description });
+  }
+  const fields: PoField[] = [];
+  const values: PoValue[] = [];
+  const entries: PoEntry[] = [];
+  for (const section of content.sections) {
+    for (const name of Object.keys(section.fields)) {
+      const key = `${section.title}\u0000${name}`;
+      const old = oldFieldByKey.get(key);
+      const hint = declared.get(key);
+      const field: PoField = old
+        ? { ...old, name, section: section.title }
+        : { id: genId12(), name, origin: 'user', section: section.title, createdAt: now };
+      if (hint) {
+        field.origin = 'schema';
+        if (hint.isRelation) field.isRelation = true;
+        if (hint.description) field.description = hint.description;
+      }
+      fields.push(field);
+      const oldValues = old ? group.values.filter((v) => v.fieldId === old.id) : [];
+      const used = new Set<string>();
+      for (const fv of section.fields[name] || []) {
+        const prior = oldValues.find((v) => v.text === fv.value && !used.has(v.id));
+        const id = prior ? (used.add(prior.id), prior.id) : genId12();
+        used.add(id);
+        values.push({
+          id,
+          fieldId: field.id,
+          text: fv.value,
+          source: fv.source || '手动',
+          ...(fv.project ? { project: fv.project } : {}),
+          ...(fv.asOf ? { asOf: fv.asOf } : {}),
+          ...(fv.verified !== undefined ? { verified: fv.verified } : {}),
+          ...(fv.ruleKind ? { ruleKind: fv.ruleKind } : {}),
+          ...(fv.sensitivity === 'restricted' ? { restricted: true } : {}),
+          ...(fv.recallAssetId ? { assetId: fv.recallAssetId } : {}),
+          createdAt: prior?.createdAt || now,
+          updatedAt: now,
+        });
+      }
+    }
+    for (const t of section.flowEntries) {
+      const oldEntry = group.entries.find((e) => (e.section || '') === section.title && e.text === t);
+      entries.push({ id: oldEntry?.id || genId12(), text: t, section: section.title, createdAt: oldEntry?.createdAt || now });
+    }
+  }
+  group.fields = fields;
+  group.values = values;
+  group.entries = entries;
 }
 
 /**

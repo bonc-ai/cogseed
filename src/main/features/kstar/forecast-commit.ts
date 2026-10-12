@@ -5,6 +5,11 @@ import { fileEditLock } from '../../util/locks';
 import { hasConfiguredModelForUser } from '../auth';
 import { getWorkspacePath } from '../user_workspace';
 import { loadCommittedProjectionKnowledge } from '../recall/projection-knowledge';
+import { listAbilityAssets } from '../recall/asset-service';
+import {
+  filterRecallAssetsForAgentRead,
+  filterRecallAssetsForCommittedProjection,
+} from '../recall/prompt-injection';
 import { evaluateRules } from '../recall/rule-engine';
 import {
   applyCausalRules,
@@ -259,11 +264,15 @@ async function commitCommanderForecastUnlocked(
     ) return existing;
   }
 
-  const taskText = normalizedText(input.taskText, 4_000);
+  const taskText = normalizedText(input.taskText || requirement.goalText, 4_000);
+  const initialWorkspaceId = input.workspaceId || task.workspaceId;
 
   let knowledge: Awaited<ReturnType<typeof loadCommittedProjectionKnowledge>>;
   try {
-    knowledge = await loadCommittedProjectionKnowledge(userId, input.projectionId, { taskText });
+    knowledge = await loadCommittedProjectionKnowledge(userId, input.projectionId, {
+      ...(initialWorkspaceId ? { workspaceId: initialWorkspaceId } : {}),
+      taskText,
+    });
   } catch (error) {
     const code = (error as { code?: unknown })?.code;
     if (code === 'projection_not_committed' || code === 'projection_expired') {
@@ -296,6 +305,45 @@ async function commitCommanderForecastUnlocked(
       'Forecast Task workspace mismatch',
     );
   }
+
+  // The host-side scorer also consumes asset bodies and causal rules. Apply
+  // the same task and projection gates used by prompt/forecast generation so
+  // a blocked asset cannot influence matched rules, risks, or the simulation.
+  const allAssets = await listAbilityAssets(userId);
+  const runtimeContext = {
+    ...(knowledge.projectId ? { projectId: knowledge.projectId } : {}),
+    ...(effectiveWorkspaceId ? { workspaceId: effectiveWorkspaceId } : {}),
+    taskText,
+  };
+  const readablePersonalAssets = await filterRecallAssetsForAgentRead(
+    userId,
+    allAssets.filter((asset) => asset.type === 'personal'),
+    runtimeContext,
+  );
+  const projectionAssetIds = new Set(knowledge.abilityAssetRefs);
+  const readableProjectionAssets = await filterRecallAssetsForCommittedProjection(
+    userId,
+    allAssets.filter((asset) => projectionAssetIds.has(asset.id)),
+    {
+      purpose: [knowledge.projectionPurpose, taskText].filter(Boolean).join('\n'),
+      ...runtimeContext,
+    },
+  );
+  const readableProjectionIds = new Set(readableProjectionAssets.map((asset) => asset.id));
+  knowledge = await loadCommittedProjectionKnowledge(userId, input.projectionId, {
+    ...(knowledge.projectId ? { projectId: knowledge.projectId } : {}),
+    ...(effectiveWorkspaceId ? { workspaceId: effectiveWorkspaceId } : {}),
+    taskText,
+    allowedPersonalAssetIds: new Set(readablePersonalAssets.map((asset) => asset.id)),
+  });
+  knowledge = {
+    ...knowledge,
+    abilityAssetRefs: knowledge.abilityAssetRefs.filter((assetId) => readableProjectionIds.has(assetId)),
+    abilityAssets: knowledge.abilityAssets.filter((asset) => readableProjectionIds.has(asset.id)),
+    assetVersions: Object.fromEntries(Object.entries(knowledge.assetVersions)
+      .filter(([assetId]) => readableProjectionIds.has(assetId))),
+    rules: knowledge.rules.filter((rule) => readableProjectionIds.has(rule.assetId)),
+  };
 
   const situation = await measureForecastSituation(userId, effectiveWorkspaceId, input.allowedToolNames);
   const workspaceIsAvailable = situation.workspaceAvailable;

@@ -14,6 +14,8 @@ import * as path from 'node:path';
 import * as https from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
+import { createRequire } from 'node:module';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pcRoot = path.resolve(here, '..');
@@ -37,19 +39,14 @@ function allFilesPresent() {
 
 function download(url, outPath) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(outPath);
     const req = https.get(url, { headers: { 'User-Agent': 'cogseed-postinstall' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        file.close();
-        fs.rmSync(outPath, { force: true });
-        download(res.headers.location, outPath).then(resolve, reject);
+        download(new URL(res.headers.location, url).href, outPath).then(resolve, reject);
         return;
       }
       if (res.statusCode !== 200) {
         res.resume();
-        file.close();
-        fs.rmSync(outPath, { force: true });
         reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
         return;
       }
@@ -66,23 +63,53 @@ function download(url, outPath) {
           }
         }
       });
-      res.pipe(file);
-      file.on('finish', () => { file.close(); process.stdout.write('\n'); resolve(); });
-      file.on('error', (err) => { file.close(); fs.rmSync(outPath, { force: true }); reject(err); });
+      // Wait for close, not just finish: synchronous tar must not run while
+      // Windows still holds the archive writer. pipeline also propagates a
+      // response abort and closes both streams before partial-file cleanup.
+      pipeline(res, fs.createWriteStream(outPath)).then(() => {
+        process.stdout.write('\n');
+        resolve();
+      }, (err) => {
+        fs.rmSync(outPath, { force: true });
+        reject(err);
+      });
     });
-    req.on('error', (err) => {
-      file.close();
-      fs.rmSync(outPath, { force: true });
-      reject(err);
-    });
+    req.on('error', reject);
     req.setTimeout(120_000, () => { req.destroy(new Error('timeout')); });
   });
 }
 
+function runExtraction(command, args, cwd, label) {
+  const r = spawnSync(command, args, {
+    cwd,
+    stdio: ['ignore', 'inherit', 'inherit'],
+    timeout: 120_000,
+  });
+  if (r.error) throw new Error(`${label} extraction failed (${r.error.code || r.error.message})`);
+  if (r.status !== 0) throw new Error(`${label} extraction failed (exit ${r.status}, signal ${r.signal || 'none'})`);
+}
+
 function extract(tarball, dstDir) {
-  // .tar.bz2 — 系统 tar（macOS / Linux / WSL / 现代 Windows 都有）。
-  const r = spawnSync('tar', ['-xjf', tarball, '-C', dstDir], { stdio: 'inherit' });
-  if (r.status !== 0) throw new Error(`tar extraction failed (exit ${r.status})`);
+  console.log(`[sherpa-onnx] extracting ${path.basename(tarball)}`);
+  if (process.platform !== 'win32') {
+    runExtraction('tar', ['-xf', path.basename(tarball), '-C', dstDir], path.dirname(tarball), 'tar');
+    return;
+  }
+
+  // Windows bsdtar's external bzip2 pipe can stall even after the archive is
+  // closed. Reuse the existing 7zip-bin build dependency to decompress first;
+  // native tar then reads an ordinary local tar file without a filter process.
+  const staging = fs.mkdtempSync(path.join(dstDir, '.sherpa-extract-'));
+  try {
+    const { path7za } = createRequire(import.meta.url)('7zip-bin');
+    runExtraction(path7za, ['e', path.basename(tarball), `-o${staging}`, '-y', '-bd'], path.dirname(tarball), '7zip');
+    const plainTar = path.basename(tarball, '.bz2');
+    if (!fs.existsSync(path.join(staging, plainTar))) throw new Error('7zip extraction did not produce the tar archive');
+    const tar = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    runExtraction(tar, ['-xf', plainTar, '-C', dstDir], staging, 'tar');
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 async function main() {

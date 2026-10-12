@@ -9,6 +9,8 @@
  *   transcript.glossary.list / upsert / setStatus / delete / import / export
  *   transcript.correct.scan        —— 只读扫描，产出候选 + 拒绝原因
  *   transcript.correct.apply       —— 按确认结果替换，落 run 快照，原文不可变
+ *                                      （+rejectedIds 拒绝回执 / +receipts，specs/013 T028）
+ *   transcript.correct.unreject    —— 撤销拒绝（被拒抑制可逆，specs/013 T032）
  *   transcript.run.list / get / report / notes / revert
  *
  * 本体接线（P1，2026-09-15）：
@@ -30,7 +32,19 @@ import * as transcriptHeadings from '../features/transcript_headings';
 import * as transcriptQuery from '../features/transcript_query_rewrite';
 import * as transcriptPack from '../features/transcript_contribution_pack';
 import * as transcriptMetrics from '../features/transcript_metrics';
+import * as meetingMetrics from '../features/meeting_metrics';
 import * as transcriptDocTags from '../features/transcript_doc_tags';
+import * as transcriptRecall from '../features/transcript_recall';
+import * as meetingDoc from '../features/meeting_doc';
+import * as meetingRefs from '../features/meeting_refs';
+import { cognitionContextFileSourceId } from '../features/recall/source-catalog';
+import { listRecallCandidates, saveRecallCandidate } from '../features/recall/candidate-service';
+import { safeId } from '../storage';
+import {
+  isCandidateSuppressed,
+  listReviewDecisions,
+  writeReviewDecision,
+} from '../features/cognition/review-decision';
 import { cogseedKbManager } from '../features/cogseed_backend/cogseed-kb-store';
 
 interface IpcContext {
@@ -60,6 +74,21 @@ function optionalId(value: unknown, field: string): string | undefined {
   return optionalText(value, field, 128);
 }
 
+/**
+ * 模型候选的 ref：优先用渲染层带回的扫描期 ref（`model_<n>`），拿不到/形状不对才按数组下标兜底。
+ *
+ * 为什么必须认它：`acceptedIds` 由面板按扫描期的 ref 传上来，若主进程按 payload 下标重编
+ * `model_<i>`，只勾了第 2 条时就会"勾的是 model_1、建的是 model_0"，勾选的建议既没进正文、
+ * 也没被记进词表，且不报错（真机："模型建议接受了进不了词汇表"）。
+ *
+ * 为什么限制形状：这个 ref 会进 `recordReplacement` 的 `replacedIn` 台账，
+ * 不能允许渲染层用一个像词表条目 id（`g_*`）的值来冒充，所以只认 `model_<数字>`。
+ */
+function modelEntryRefFor(value: unknown, index: number): string {
+  if (typeof value === 'string' && /^model_\d{1,4}$/.test(value)) return value;
+  return `model_${index}`;
+}
+
 function stringList(value: unknown, max = 200): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) throw new Error('invalid transcript list');
@@ -70,6 +99,25 @@ function riskLevels(value: unknown): Array<'low' | 'medium' | 'high'> | undefine
   const list = stringList(value, 3);
   if (!list) return undefined;
   return list.filter((v): v is 'low' | 'medium' | 'high' => v === 'low' || v === 'medium' || v === 'high');
+}
+
+/**
+ * 【specs/013 T021】scan 返回体的降级如实标注（与 `MeetingDocRef.degraded` 同口径）：
+ * 只记"缺什么"（无说话人 / 无场景标签 / 没跑过纠错 run），不编造定位——
+ * 界面文案（渲染层后续任务）按码出"缺失说明"，不得猜说话人或位置。
+ */
+function scanDegraded(
+  userId: string,
+  info: { speakers?: string[]; scenarioTags?: string[]; docId?: string },
+): string[] {
+  const degraded: string[] = [];
+  if (!info.speakers?.length) degraded.push('no_speakers');
+  if (!info.scenarioTags?.length) degraded.push('no_scenario_tags');
+  // 没有 docId 时无从关联任何 run，与"没跑过 run"同按缺失如实记。
+  if (!info.docId || transcriptRuns.listRuns(userId, { docId: info.docId }).length === 0) {
+    degraded.push('no_transcript_run');
+  }
+  return degraded;
 }
 
 export const invokeHandlers = {
@@ -397,13 +445,156 @@ export const invokeHandlers = {
     const text = requireText(payload?.text, 'text', MAX_TRANSCRIPT_CHARS);
     const docId = optionalId(payload?.docId, 'docId');
     const scenarioTags = stringList(payload?.scenarioTags, 20);
+    // 【specs/013 T020】情景信号进扫描：说话人由主进程用 parseTranscriptBlocks 现算
+    // （meeting_doc.computeSpeakers：去重保序 ≤50；不由渲染层传，防已发生的时钟格式
+    // 漂移事故）；topic 由调用方透传。两者只进 ScanOptions 的展示位，
+    // **不参与 scopeAllows**（作用域语义不动）。
+    const speakers = meetingDoc.computeSpeakers(text);
+    const topic = optionalText(payload?.topic, 'topic', 200);
     const entries = transcriptGlossary.listEntries(ctx.userId, { status: 'active' });
     const scan = transcriptAutoCorrect.scanText(text, entries, {
       ...(docId ? { docId } : {}),
       ...(scenarioTags ? { scenarioTags } : {}),
+      ...(speakers ? { speakers } : {}),
+      ...(topic ? { topic } : {}),
       includeDelete: payload?.includeDelete === true,
     });
-    if (payload?.includeReview !== true) return { ...scan, review: null };
+    // 【specs/013 T008】本体规范名进纠错依据（FR-001）：只读调既有
+    // transcriptOntology.collectCanonicalNames，把规范名喂进依据（追加
+    // { source:'ontology', name, groupId?, fieldId? } 并列依据）；未命中的候选
+    // 原样保留。下方 includeReview 分支的 allow 名单构造零改动（各用各的读）。
+    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
+    // 【specs/013 T016】字面行显式标 channel:'exact'（类型缺省同值；面板要能直接
+    // 读通道来源，合并去重与 byChannel 统计也以此口径为准）。
+    let candidates: transcriptAutoCorrect.CorrectionCandidate[] = transcriptAutoCorrect
+      .attachOntologyRefs(scan.candidates, canonical)
+      .map((c) => ({ ...c, channel: 'exact' as const }));
+
+    // 【specs/013 T015】召回通道并入扫描（FR-012 前半）：`includeRecall` 缺省 false，
+    // 不传时一次 recallCandidates 都不调（照 includeReview 的"不点不花钱"先例）。
+    // 召回候选转成同构 CorrectionCandidate（channel:'recall'、原样 confidence 与
+    // disposition；confidence 恒 < 1 由 MAX_RECALL_CONFIDENCE = 0.99 结构性保证），
+    // 经 mergeRecallCandidates（T016）与字面命中合并去重后**追加在同一清单**——
+    // 不新开面板、不新增第二条状态线。
+    let recallRows = 0;
+    let recallSummary: {
+      candidates: number;
+      byChannel: Record<transcriptRecall.RecallChannel, number>;
+      abandoned: Array<{ surface: string; count: number }>;
+      merged: number;
+    } | undefined;
+    if (payload?.includeRecall === true) {
+      const recall = transcriptRecall.recallCandidates(text, entries, {
+        ...(docId ? { docId } : {}),
+        ...(scenarioTags ? { scenarioTags } : {}),
+        // 域内概念 = 本体规范名（suggest 升级的既有判据；脱域一律 review）
+        domainTerms: canonical.map((item) => item.name),
+      });
+      const entryById = new Map(entries.map((e) => [e.id, e] as const));
+      const recallCandidatesList: transcriptAutoCorrect.CorrectionCandidate[] = recall.candidates.map((r) => ({
+        entryRef: r.entryRef,
+        wrong: r.wrong,
+        correct: r.correct,
+        action: 'replace' as const,
+        confidence: r.confidence,
+        riskLevel: r.riskLevel,
+        context: r.context,
+        span: r.span,
+        ignoredCount: entryById.get(r.entryRef)?.ignoredCount ?? 0,
+        contextAllow: entryById.get(r.entryRef)?.contextAllow ?? [],
+        channel: 'recall' as const,
+        disposition: r.disposition,
+        refs: [{
+          source: 'glossary' as const,
+          entryId: r.entryRef,
+          kind: r.kind,
+          freq: entryById.get(r.entryRef)?.freq ?? 0,
+        }],
+      }));
+      // 【specs/013 T016】合并去重（D5）：同 span 已在字面命中 → 召回条目不出行、
+      // 只把词条依据并入该行 refs（并列依据）；其余重叠复用既有消解规则
+      // （通道优先 → 长 span → freq → 靠前），IPC 层不重算。
+      const merged = transcriptAutoCorrect.mergeRecallCandidates(candidates, recallCandidatesList);
+      candidates = merged.candidates;
+      recallRows = merged.candidates.filter((c) => c.channel === 'recall').length;
+      // 【specs/013 T017】召回统计如实透出：byChannel 四键（recall 内部消解后计数）、
+      // abandoned = 兜不住的孤立形态（residual，只报形态不给映射）；merged = 并入
+      // 既有行 refs 未出行的条数。truncated 沿用既有语义（字面候选打满上限即 true）。
+      recallSummary = {
+        candidates: recallRows,
+        byChannel: recall.stats.byChannel,
+        abandoned: recall.stats.residual,
+        merged: merged.merged,
+      };
+    }
+
+    // 【specs/013 T027】资产规范名进纠错依据（FR-001）：本会议已挂载的资产，
+    // 其规范名（statement ‖ title）参与依据来源——只读调 meeting_refs 的清单
+    // （version/title 取挂载时的**冻结版**，非当前版），命中候选追加
+    // { source:'asset', assetId, version, title } 并列依据（形态对齐
+    // attachOntologyRefs；未挂载/未命中 ⇒ 原样返回，行为零变化）。
+    // 放在 recall 合并之后：同 span 并入的召回行与字面行走同一套依据追加。
+    if (docId) {
+      const assetNames = await meetingRefs.listMeetingAssetCanonicalNames(ctx.userId, docId);
+      candidates = meetingRefs.attachAssetRefs(candidates, assetNames);
+    }
+
+    // 【specs/013 T029】拒绝后不再重复建议（FR-001 后半）：读**既有**回执账本的
+    // 末条判定（isCandidateSuppressed 同款口径，review-decision.ts:246-253——
+    // 不新写第二套抑制判据、不新增标记位），被拒形态的候选不出行。target_ref
+    // 与 T028 写入侧同构：meeting:<docId>:<entryRef>。账本落盘 ⇒ 跨进程重启后
+    // 仍生效；撤销（T032 的 unreject 通道）/新决定覆盖（既有 accept 语义）后
+    // 末条不再是抑制态，行为与既有口径一致。模型候选（model_<i>，次序不稳定）
+    // 不做抑制查询；引例只读行不是建议，也不滤。
+    let suppressedRows = 0;
+    if (docId) {
+      const entryRefs = [...new Set(candidates.map((c) => c.entryRef))];
+      const suppressedByRef = new Map<string, boolean>();
+      await Promise.all(entryRefs.map(async (entryRef) => {
+        suppressedByRef.set(
+          entryRef,
+          await isCandidateSuppressed(ctx.userId, `meeting:${docId}:${entryRef}`),
+        );
+      }));
+      const before = candidates.length;
+      candidates = candidates.filter((c) => !suppressedByRef.get(c.entryRef));
+      suppressedRows = before - candidates.length;
+      if (recallSummary && suppressedRows) {
+        recallSummary = {
+          ...recallSummary,
+          candidates: candidates.filter((c) => c.channel === 'recall').length,
+        };
+      }
+    }
+    // 过滤后的通道计数如实重算（byChannel 不再引用过滤前的 scan.candidates.length）。
+    const exactKept = candidates.filter((c) => c.channel !== 'recall').length;
+    const recallKept = candidates.length - exactKept;
+
+    // 【specs/013 T019】引例降级的可解释只读提示行（FR-011）：把 scanText 记下的
+    // denied:quoted_example 转成 candidates 里 disposition:'quoted_example' 的只读
+    // 条目（带命中标记词 quotedBy），追加在清单尾部——不是候选，不进 stats.candidates。
+    const quotedRows = transcriptAutoCorrect.quotedExampleRows(text, scan.denied, entries);
+    // 【specs/013 T021】降级如实标注（无说话人/无场景标签/没跑过 run）。
+    const degraded = scanDegraded(ctx.userId, { speakers, scenarioTags, docId });
+
+    if (payload?.includeReview !== true) {
+      return {
+        ...scan,
+        candidates: [...candidates, ...quotedRows],
+        stats: {
+          ...scan.stats,
+          // 口径：可替换候选数（字面 + 召回；不含引例只读行——它是提示不是候选）
+          candidates: candidates.length,
+          byChannel: { exact: exactKept, recall: recallKept, model: 0 },
+          quotedExample: quotedRows.length,
+          // 【specs/013 T029】被拒抑制滤掉的行数（如实透出：候选变少要有解释）
+          suppressed: suppressedRows,
+        },
+        ...(recallSummary ? { recall: recallSummary } : {}),
+        degraded,
+        review: null,
+      };
+    }
 
     // 优先参考名单 = 词表正确写法 + 记忆分组字段值（不含投影里的结构标签）
     const known = new Set<string>();
@@ -411,7 +602,6 @@ export const invokeHandlers = {
       known.add(entry.wrong);
       known.add(entry.correct);
     }
-    const canonical = transcriptOntology.collectCanonicalNames(ctx.userId);
     for (const name of canonical) known.add(name.name);
     const allowed = [
       ...entries.filter((e) => e.action !== 'delete').map((e) => e.correct),
@@ -426,6 +616,20 @@ export const invokeHandlers = {
       hints,
       sessionKey: docId,
     });
+    // 【specs/013 T056】token 采集落点（FR-009）：模型复核返回 usage 时落
+    // meeting_model_usage 事件（新文件 meeting-metrics.jsonl，不混既有 metrics.jsonl）。
+    // no_model / model_failed 时 generateReviewCandidates 不带 usage 字段 ⇒ 这里
+    // 一条都不写（不写 0 假装测到）；写入失败在 meeting_metrics 内部吞掉，不炸扫描。
+    if (review.usage) {
+      meetingMetrics.recordMeetingMetric(ctx.userId, {
+        kind: 'meeting_model_usage',
+        docId: docId ?? '',
+        operation: 'review',
+        ...(review.usage.inputTokens !== undefined ? { inputTokens: review.usage.inputTokens } : {}),
+        ...(review.usage.outputTokens !== undefined ? { outputTokens: review.usage.outputTokens } : {}),
+        ...(review.usage.totalTokens !== undefined ? { totalTokens: review.usage.totalTokens } : {}),
+      });
+    }
     const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = review.candidates.map((candidate, index) => ({
       entryRef: `model_${index}`,
       wrong: candidate.wrong,
@@ -439,13 +643,20 @@ export const invokeHandlers = {
       contextAllow: [],
       fromModel: true,
     }));
+    const finalCandidates = [...candidates, ...modelCandidates];
     return {
       ...scan,
-      candidates: [...scan.candidates, ...modelCandidates],
+      candidates: [...finalCandidates, ...quotedRows],
       stats: {
         ...scan.stats,
-        candidates: scan.candidates.length + modelCandidates.length,
+        candidates: finalCandidates.length,
+        byChannel: { exact: exactKept, recall: recallKept, model: modelCandidates.length },
+        quotedExample: quotedRows.length,
+        // 【specs/013 T029】被拒抑制滤掉的行数（如实透出：候选变少要有解释）
+        suppressed: suppressedRows,
       },
+      ...(recallSummary ? { recall: recallSummary } : {}),
+      degraded,
       review: {
         modelCandidates: modelCandidates.length,
         chunksScanned: review.chunksScanned,
@@ -488,6 +699,16 @@ export const invokeHandlers = {
       includeDelete: payload?.includeDelete === true,
     });
     const acceptedIds = stringList(payload?.acceptedIds, 1000);
+    // 【specs/013 T028】拒绝回执（FR-001 前半）：`rejectedIds` = 用户在面板上明确
+    // 拒绝的候选 entryRef。两个动作语义：
+    //   1. 被拒的候选**不参与本次替换**（从候选集中剔除——即使用户没传
+    //      acceptedIds 走"缺省=全部非 high"，被拒形态也不能被替换）；
+    //   2. 每个（存在的）entryRef 写一条既有回执账本（writeReviewDecision，
+    //      target_ref = meeting:<docId>:<entryRef>，与 T029 的抑制读口同构）。
+    // 回执幂等域：缺省用本次 run 的 runId；调用方重试**同一动作**时传原 run 的
+    // runId（receiptRunId），同 key 命中既有决定直接返回、不产生第二条。
+    const rejectedIds = stringList(payload?.rejectedIds, 1000);
+    const receiptRunId = optionalId(payload?.receiptRunId, 'receiptRunId');
     // 同人段落合并（方案 §五 P1-2）：合并 = 编辑集（删冗余块头 + 插时间区间），
     // 因此走同一条替换/偏移/回滚流水线，而不是第二套改写逻辑。
     const merge = payload?.mergeSpeaker === true
@@ -558,7 +779,7 @@ export const invokeHandlers = {
     const modelInputs = Array.isArray(payload?.models) ? payload.models.slice(0, 200) : [];
     const modelCandidates: transcriptAutoCorrect.CorrectionCandidate[] = modelInputs
       .map((raw, index): transcriptAutoCorrect.CorrectionCandidate | null => {
-        const item = raw as Partial<{ start: unknown; wrong: unknown; correct: unknown; confidence: unknown; reason: unknown }>;
+        const item = raw as Partial<{ entryRef: unknown; start: unknown; wrong: unknown; correct: unknown; confidence: unknown; reason: unknown }>;
         const start = typeof item?.start === 'number' && Number.isFinite(item.start)
           ? Math.max(0, Math.min(Math.floor(item.start), text.length))
           : -1;
@@ -570,7 +791,11 @@ export const invokeHandlers = {
         if (transcriptGlossary.foldText(text.slice(start, end)) !== transcriptGlossary.foldText(wrong)) return null;
         const confidenceRaw = Number(item?.confidence);
         return {
-          entryRef: `model_${index}`,
+          // ref 用渲染层带回来的**扫描期** ref（acceptedIds 里放的就是它）。
+          // 早先按数组下标重编 `model_<i>`，而 payload 只含被勾选的条目 → 只勾第 2 条时
+          // `model_1` 与 `model_0` 对不上：勾了的建议既没进正文、也没进词表，还不报错
+          // （真机："模型建议接受了进不了词汇表"）。
+          entryRef: modelEntryRefFor(item?.entryRef, index),
           wrong,
           correct,
           action: 'replace' as const,
@@ -584,13 +809,41 @@ export const invokeHandlers = {
         };
       })
       .filter((item): item is transcriptAutoCorrect.CorrectionCandidate => item !== null);
-    const droppedModels = modelInputs.length - modelCandidates.length;
+    // 【specs/013 T022】apply 侧引例闸（缺省 true，默认最安全的一侧）：模型建议落在
+    // 引例位（span 窗口内命中 QUOTE_MARKERS）→ 一律不接受，只有**显式**
+    // excludeQuoted:false 才放行。判据与 scanText 的 T018 同一处（isQuotedExampleSpan），
+    // 两侧不会"这里提示是引例、那里又照样替换"。词条路径无需再滤：scanText 的
+    // 引例闸是硬闸（引例位根本不进 scan.candidates，与 excludeQuoted 取值无关）；
+    // merge/heading 是结构编辑（删块头/插标题），不改引例错形本身。
+    const excludeQuoted = payload?.excludeQuoted !== false;
+    const quotedBlockedModels = excludeQuoted
+      ? modelCandidates.filter((candidate) => transcriptAutoCorrect.isQuotedExampleSpan(text, candidate.span))
+      : [];
+    const applyableModels = modelCandidates.filter((candidate) => !quotedBlockedModels.includes(candidate));
+    const droppedModels = modelInputs.length - modelCandidates.length + quotedBlockedModels.length;
 
-    const allCandidates = [...scan.candidates, ...mergeCandidates, ...headingCandidates, ...modelCandidates];
+    // 【specs/013 T028】被拒的候选不参与本次替换：只对真实存在的条目生效
+    // （词表词条 id 或本次合成 ref——对齐词表侧 setIgnored "只动存在条目"
+    // 的口径，不存在的 id 静默跳过、不写垃圾账）。剔除后用户即使走
+    // "缺省=全部非 high"也不会替换自己刚拒绝的形态。
+    const knownRefs = new Set<string>([
+      ...entries.map((entry) => entry.id),
+      ...mergeCandidates.map((c) => c.entryRef),
+      ...headingCandidates.map((c) => c.entryRef),
+      ...applyableModels.map((c) => c.entryRef),
+    ]);
+    const rejectedSet = new Set((rejectedIds ?? []).filter((id) => knownRefs.has(id)));
+
+    const allCandidates = [
+      ...scan.candidates.filter((c) => !rejectedSet.has(c.entryRef)),
+      ...mergeCandidates,
+      ...headingCandidates,
+      ...applyableModels,
+    ];
     const syntheticRefs = [...mergeCandidates, ...headingCandidates].map((c) => c.entryRef);
     const acceptedAll = syntheticRefs.length
       ? [...(acceptedIds ?? []), ...syntheticRefs]
-      : (acceptedIds ?? (modelCandidates.length ? [] : undefined));
+      : (acceptedIds ?? (applyableModels.length ? [] : undefined));
     const applied0 = transcriptAutoCorrect.applyCorrections(text, allCandidates, {
       ...(acceptedAll ? { acceptedIds: acceptedAll } : {}),
       ...(riskLevels(payload?.acceptRiskLevels) ? { acceptRiskLevels: riskLevels(payload?.acceptRiskLevels)! } : {}),
@@ -614,6 +867,22 @@ export const invokeHandlers = {
       mergedBlocks: merge ? merge.blocksAfter : 0,
       ...(merge ? { anchors: merge.anchors } : {}),
     });
+    // 【specs/013 T028】拒绝回执落账（FR-001 前半）：写**既有** writeReviewDecision
+    // （review-decision.ts 一行不改）。target_ref = meeting:<docId>:<entryRef>（与
+    // T029 抑制读口、data-model §1.5 同构）；idempotencyKey 含 runId（缺省本次 run；
+    // 重试同一动作传 receiptRunId 复用原 key）——同动作重试命中幂等分支返回既有
+    // 决定，不产生第二条。decision_type === 'reject' ⇒ 末条判定为抑制 ⇒ T029 生效。
+    const receipts: Array<{ entryRef: string; decisionId: string }> = [];
+    for (const entryRef of rejectedSet) {
+      const decision = await writeReviewDecision(ctx.userId, {
+        targetRef: `meeting:${docId}:${entryRef}`,
+        decisionType: 'reject',
+        decision: 'reject',
+        actor: 'user',
+        idempotencyKey: `meeting:${docId}:${entryRef}:reject:${receiptRunId ?? run.runId}`,
+      });
+      receipts.push({ entryRef, decisionId: decision.decision_id });
+    }
     transcriptGlossary.recordReplacement(
       ctx.userId,
       result.applied.map((a) => a.entryRef),
@@ -622,12 +891,157 @@ export const invokeHandlers = {
     // 「勾选并应用 = 确认」：把**真的被应用**的模型建议记进词表（source: meeting_accept，
     // 作用域收窄到本文档）。只认 result.applied——勾了但被护栏挡掉的不算确认。
     // 词表命中的候选（g_*）本来就在表里，这里的 ref 只筛 model_*。
+    // （T022：被引例闸挡掉的模型建议同样不算确认——用 applyableModels 为准。）
     const appliedModelRefs = new Set(result.applied.map((a) => a.entryRef));
-    const confirmedPairs = modelCandidates
+    const confirmedPairs = applyableModels
       .filter((candidate) => appliedModelRefs.has(candidate.entryRef))
       .map((candidate) => ({ wrong: candidate.wrong, correct: candidate.correct }));
     const glossaryWrites = transcriptGlossary.rememberConfirmedPairs(ctx.userId, confirmedPairs, { docId });
-    return { run, result, denied: scan.denied, glossaryWrites, droppedModels };
+    return { run, result, denied: scan.denied, glossaryWrites, droppedModels, receipts };
+  },
+
+  /**
+   * 【specs/013 T032】撤销拒绝（FR-001：被拒抑制必须可逆——否则"拒错一条"
+   * 等于该形态永久不再建议）。
+   *
+   * 口径**对齐词表侧既有 `setIgnored(ids, ignored)`**（transcript_glossary.ts:589，
+   * 布尔式批量、可逆、幂等）：
+   *   - 撤销 = 向**既有**回执账本**追加**一条 `accept` 决定（账本 append-only，
+   *     历史条目只增不减；不新增决定类型——`accept` 是既有 7 值之一，且
+   *     `ReviewDecision.supersedes_ref` 的既有注释明写"reject 后 accept 覆盖"），
+   *     `supersedes_ref` 指向被撤销的那条末条抑制决定；
+   *   - 末条判定复用 `isCandidateSuppressed`（唯一判据，不新写第二套）：末条
+   *     不是抑制态（从未拒绝 / 已撤销）⇒ 幂等跳过、不追加（对齐 setIgnored
+   *     重复调用的无操作语义），不报错；
+   *   - 撤销后末条为 accept ⇒ T029 的抑制过滤放行，该形态重新出现；再次拒绝
+   *     （apply 的 rejectedIds）⇒ 又追加 reject ⇒ 再次抑制，往返可逆。
+   *   - `decision: 'unreject'` 与常规 accept 区分（指标侧可按它/supersedes_ref
+   *     剔除"撤销"对采纳率口径的污染，T055 用；本通道只如实记账）。
+   */
+  'transcript.correct.unreject': async (payload: Payload, ctx: IpcContext) => {
+    const docId = requireText(payload?.docId, 'docId', 200);
+    const ids = stringList(payload?.ids, 500) ?? [];
+    const undone: Array<{ entryRef: string; decisionId: string }> = [];
+    for (const entryRef of ids) {
+      const targetRef = `meeting:${docId}:${entryRef}`;
+      if (!(await isCandidateSuppressed(ctx.userId, targetRef))) continue;
+      const decisions = await listReviewDecisions(ctx.userId, targetRef);
+      const last = decisions[decisions.length - 1];
+      const decision = await writeReviewDecision(ctx.userId, {
+        targetRef,
+        decisionType: 'accept',
+        decision: 'unreject',
+        actor: 'user',
+        ...(last ? { supersedesRef: last.decision_id } : {}),
+      });
+      undone.push({ entryRef, decisionId: decision.decision_id });
+    }
+    return { undone };
+  },
+
+  /**
+   * 【specs/013 T047】从纠错面板把词条「提出为候选」（FR-013 / US-504 AC3）。
+   *
+   * - 落点是 **recall/candidate-service 的候选池**（`recall/records/candidates`），
+   *   不是既有回流 `contributeCandidates` 打到的个人本体候选池
+   *   （`transcript_ontology_bridge.ts` 的 addCandidate——那是另一个池子）；
+   * - 词条身份 + 哪次 run：`captureKey = glossary-<entryId>`（幂等键）、
+   *   `evidenceRefs[].title = '<wrong>→<correct>'`、`excerpt = '<runId>'`（台账
+   *   replacedIn 最近一条；没有就不写，不编造）；`sourceRefs` 记哪份文档
+   *   （面板可选传 docId，缺省回落台账里的 docId；都没有 ⇒ 如实留空，候选落
+   *   weak_observation——既有 reviewReady 闸不放宽）；
+   * - **不新增 source kind**（C-002，已裁定选项①：复用 captureKey+refs 组合）；
+   * - 幂等：先查既有 captureKey，命中 ⇒ `{ created:false }` 返回既有 id，不新增；
+   * - tags/category（012 边界）：收到 ⇒ `field_not_available` 拒绝（同
+   *   meeting.conclusions.precipitate 的 T048 口径；标签在晋升为正式资产后经
+   *   资产管家打标，不映射、不静默丢弃）。
+   */
+  'transcript.correct.proposeCandidate': async (payload: Payload, ctx: IpcContext) => {
+    const entryId = typeof payload?.entryId === 'string' ? payload.entryId.trim() : '';
+    if (!entryId || entryId.length > 128 || !safeId(entryId)) {
+      const error = new Error('transcript propose: invalid entry id');
+      (error as { code?: string }).code = 'invalid_item_id';
+      throw error;
+    }
+    const entryKind = payload?.entryKind;
+    const GLOSSARY_KINDS: transcriptGlossary.GlossaryKind[] = ['product', 'people', 'org', 'term', 'venue', 'course', 'filler'];
+    if (typeof entryKind !== 'string' || !GLOSSARY_KINDS.includes(entryKind as transcriptGlossary.GlossaryKind)) {
+      const error = new Error('transcript propose: invalid entry kind');
+      (error as { code?: string }).code = 'invalid_input';
+      throw error;
+    }
+    for (const field of ['tags', 'category'] as const) {
+      if (payload && typeof payload === 'object'
+        && Object.prototype.hasOwnProperty.call(payload, field)
+        && payload[field] !== undefined) {
+        const error = new Error(
+          `${field} is not available on glossary propose; tag the promoted asset via the asset steward (update_ability_asset fields.tags) instead`,
+        );
+        (error as { code?: string }).code = 'field_not_available';
+        throw error;
+      }
+    }
+    const entry = transcriptGlossary.listEntries(ctx.userId, {})
+      .find((item) => item && item.id === entryId);
+    if (!entry) {
+      const error = new Error('transcript propose: glossary entry not found');
+      (error as { code?: string }).code = 'item_missing';
+      throw error;
+    }
+
+    const captureKey = `glossary-${entryId}`;
+    const existing = (await listRecallCandidates(ctx.userId)).find((c) => c.captureKey === captureKey);
+    if (existing) return { candidateId: existing.id, created: false };
+
+    // 「哪份文档 / 哪次 run」：面板上下文优先（用户此刻在这份文档里提出），
+    // 缺省回落台账 replacedIn 最近一条（真实替换记录）；都没有 ⇒ 留空（如实）。
+    const panelDocId = optionalId(payload?.docId, 'docId');
+    const ledger = Array.isArray(entry.replacedIn) && entry.replacedIn.length
+      ? entry.replacedIn[entry.replacedIn.length - 1]
+      : undefined;
+    const docId = panelDocId || (ledger ? String(ledger.docId || '') : '');
+    const runId = ledger ? String(ledger.runId || '') : '';
+    const docTitle = docId.split(/[\\/]/).filter(Boolean).pop() || docId;
+    const contextRef = docId
+      ? [{
+          kind: 'artifact_file' as const,
+          subtype: 'context_file' as const,
+          scope: 'personal' as const,
+          id: cognitionContextFileSourceId(docId),
+          title: docTitle,
+        }]
+      : [];
+    const pair = entry.action === 'delete'
+      ? `${entry.wrong}→（删除）`
+      : `${entry.wrong}→${entry.correct}`;
+    const candidate = await saveRecallCandidate(ctx.userId, {
+      judgment: (typeof payload?.judgment === 'string' && payload.judgment.trim())
+        ? payload.judgment.trim()
+        : `纠错词条「${pair}」（${entryKind}）`,
+      ...(typeof payload?.value === 'string' && payload.value.trim() ? { value: payload.value.trim() } : {}),
+      suggestedType: 'personal',
+      suggestedScope: 'personal',
+      suggestedAction: 'create',
+      sourceRefs: contextRef,
+      evidenceRefs: docId
+        ? [
+            // 词条身份 + 哪次 run。title 前缀是契约钉死的 '<wrong>→<correct>'；
+            // runId 同时并入 title 后缀——既有写口 normalizeCognitionSourceRefsForWrite
+            // 会剥 excerpt（写侧只存来源元数据的既有纪律，一行不改），不并进 title
+            // 的话「哪次 run」在落盘候选里永远读不回来。excerpt 仍按契约带上
+            // （SaveRecallCandidateInput 输入侧），落盘侧以 title 为可读载体。
+            {
+              ...contextRef[0],
+              title: runId ? `${pair} · ${runId}` : pair,
+              ...(runId ? { excerpt: runId } : {}),
+            },
+            // 文档行（data-model §1.6「再加文档一条」）。
+            { ...contextRef[0], title: `词条来源文档 ${docTitle}` },
+          ]
+        : [],
+      captureKey,
+    });
+    return { candidateId: candidate.id, created: true };
   },
 
   // ── 产物 ──────────────────────────────────────────────────────────────

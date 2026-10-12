@@ -15,9 +15,10 @@ describe('CogSeed API base', () => {
     } as NodeJS.ProcessEnv)).toBe('https://api.example.test/root');
   });
 
-  it('defaults to the production origin for packaged builds', () => {
+  it('uses the local Hub for packaged-dev and a placeholder for release', () => {
     expect(resolveCogSeedApiBase(undefined, 'release')).toBe(RELEASE_API_BASE);
     expect(resolveCogSeedApiBase(undefined, 'packaged-dev')).toBe(PACKAGED_DEV_API_BASE);
+    expect(PACKAGED_DEV_API_BASE).toBe('http://127.0.0.1:3101');
     expect(RELEASE_API_BASE).toBe('https://hub.example.com');
     expect(requireCogSeedApiBase({ COGSEED_BUILD_CHANNEL: 'release' } as NodeJS.ProcessEnv))
       .toBe('https://hub.example.com');

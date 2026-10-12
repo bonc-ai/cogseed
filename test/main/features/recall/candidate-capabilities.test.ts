@@ -119,6 +119,7 @@ describe('Recall candidate capability — cross-entry consistency', () => {
     for (const n of [1, 2, 3]) {
       weak.push(await candidates.saveRecallCandidate(userId, {
         judgment: `弱证据判断 ${n}`,
+        summary: `证据弱样本${n}`,
         suggestedType: 'rule',
         suggestedScope: 'product',
         sourceRefs: [{ kind: 'memory', id: `mem-${n}` }],
@@ -136,6 +137,7 @@ describe('Recall candidate capability — cross-entry consistency', () => {
     for (const n of [4, 5]) {
       const saved = await candidates.saveRecallCandidate(userId, {
         judgment: `已处理判断 ${n}`,
+        summary: `处理过样本${n}`,
         suggestedType: 'rule',
         suggestedScope: 'product',
         sourceRefs: [{ kind: 'memory', id: `mem-${n}` }],
@@ -159,7 +161,7 @@ describe('Recall candidate capability — cross-entry consistency', () => {
     expect(pool.filter((c) => getRecallCandidateCapabilities(c).canBatchSelect)).toHaveLength(3);
   });
 
-  it('feeds the inbox from needsUserAction, not from pending_review', async () => {
+  it('no longer mirrors the candidate pool into the inbox（candidate_pending_review 停产）', async () => {
     const { buildCognitionInbox } = await import('../../../../src/main/features/recall/formal-assets/inbox');
     const items = buildCognitionInbox({
       assets: [],
@@ -170,8 +172,11 @@ describe('Recall candidate capability — cross-entry consistency', () => {
       ],
       unavailableSourceIds: new Set(),
     });
-    const candidateItems = items.filter((i) => i.kind === 'candidate_pending_review');
-    expect(candidateItems.map((i) => i.id)).toEqual(['candidate:c-weak']);
+    // 2026-09-29 第 2 批·一物一链：治理清单不再镜像候选池——可操作候选（原
+    // candidate_pending_review）与终态候选一律不出现（终态本就不进，原测试
+    // 的口径意图保留）；待确认候选唯一确认入口=候选卡/详情的完整三选一。
+    expect(items.filter((i) => String(i.id).startsWith('candidate:'))).toEqual([]);
+    expect(items).toEqual([]);
   });
 
   it('lets batch promote consume canPromote and rejects terminal candidates with a stable code', async () => {
@@ -300,6 +305,47 @@ describe('Recall candidate capability — normalize and persistence', () => {
     expect(dto.capabilities.canPromote).toBe(false);
     expect(dto.capabilities.canEdit).toBe(false);
     expect(dto.capabilities.countsAsPending).toBe(false);
+  });
+});
+
+/* ───────────── review-queue 视图投影（2026-09-29 第 3 批·读写面收敛） ───────────── */
+describe('projectReviewQueueCandidates — review-queue 视图', () => {
+  const mk = (id: string, status: string, updatedAt: string, extra: Record<string, unknown> = {}) => ({
+    id, status, updatedAt, createdAt: updatedAt,
+    judgment: `j-${id}`, summary: `s-${id}`, value: 'v', suggestedType: 'personal',
+    suggestedScope: 'global', suggestedAction: 'create', risk: 'low',
+    sourceRefs: [], evidenceRefs: [],
+    contentFormatVersion: 1, taxonomyVersion: 2, spaceId: 'sp-1', userModifiedAt: updatedAt,
+    validationCount: 3, cooldownUntil: '2099-01-01T00:00:00.000Z',
+    capabilities: { canPromote: true, displayState: 'needs_review' },
+    ...extra,
+  });
+
+  it('可操作与静音全量、终态限量、零消费字段被裁', async () => {
+    const { projectReviewQueueCandidates } = await caps();
+    const pool = [
+      mk('p-1', 'pending_review', '2026-09-01T00:00:00.000Z'),
+      mk('p-2', 'weak_observation', '2026-09-02T00:00:00.000Z'),
+      mk('s-1', 'deferred', '2026-09-03T00:00:00.000Z', { capabilities: { isSnoozed: true, canPromote: false, displayState: 'deferred' } }),
+      ...Array.from({ length: 7 }, (_, i) => mk(`c-${i}`, 'confirmed', `2026-09-1${i}T00:00:00.000Z`)),
+      ...Array.from({ length: 9 }, (_, i) => mk(`e-${i}`, 'expired', `2026-09-2${i}T00:00:00.000Z`)),
+    ];
+    const view = projectReviewQueueCandidates(pool as never);
+    const ids = view.map((c) => c.id);
+    // 可操作（pending/weak）与静音全量保留。
+    for (const id of ['p-1', 'p-2', 's-1']) expect(ids).toContain(id);
+    // 终态限量：confirmed 只回最近 5 条（c-2..c-6）、expired 只回最近 8 条（e-1..e-8）。
+    expect(ids.filter((id) => id.startsWith('c-'))).toHaveLength(5);
+    expect(ids.filter((id) => id.startsWith('c-'))).not.toContain('c-0');
+    expect(ids.filter((id) => id.startsWith('e-'))).toHaveLength(8);
+    expect(ids.filter((id) => id.startsWith('e-'))).not.toContain('e-0');
+    // 零消费记录级字段不出视图；渲染层消费的字段保留；capabilities 整体保留。
+    for (const omitted of ['contentFormatVersion', 'taxonomyVersion', 'spaceId', 'userModifiedAt', 'validationCount', 'cooldownUntil']) {
+      expect(view.some((c) => omitted in c), omitted).toBe(false);
+    }
+    expect(view.every((c) => 'judgment' in c && 'summary' in c && c.capabilities !== undefined)).toBe(true);
+    // 全形状读口不受影响（投影是纯函数，原池未被改写）。
+    expect('contentFormatVersion' in pool[0]).toBe(true);
   });
 });
 

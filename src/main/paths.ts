@@ -152,6 +152,20 @@ export const userTranscriptDocTagsFile  = (uid: string) => path.join(userTranscr
 export const userTranscriptMetricsFile  = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'metrics.jsonl');
 export const userTranscriptRunDir       = (uid: string, runId: string) => path.join(userTranscriptRunsDir(uid), runId);
 
+// ── 会议引用层（specs/013 · Epic 5，US-501~506）──────────────────────────
+// 会议侧记录沿用上表分工：引用是**用户可复核的私人资产**（与词表同域 → cloud 的
+// transcript/ 下，见 specs/013 research D2）；指标流水是**机器私有派生物**
+// （→ local 的 transcript/ 下，且**不混既有 metrics.jsonl**——既有 readEvents
+// 只收 2 种 kind、未知 kind 静默丢弃，混流等于会议事件永远读不到）。
+/** 统一文档模型 `MeetingDocRef`（惰性创建，一文档一 `<docKey>.json`）。 */
+export const userMeetingDocsDir         = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'meeting-docs');
+/** 会议引用包 `MeetingAssetPack`（纪要/待办双引用的同一份冻结来源）。 */
+export const userMeetingRefsDir         = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'meeting-refs');
+/** 会议草稿待办 `MeetingActionDraft`（跨会话/设备续办 → cloud）。 */
+export const userMeetingActionDraftsDir = (uid: string) => path.join(userTranscriptGlossaryDir(uid), 'action-drafts');
+/** 会议指标事件（append-only、一行一事件；与既有 metrics.jsonl 同目录不混流）。 */
+export const userMeetingMetricsFile     = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'transcript', 'meeting-metrics.jsonl');
+
 // ── 知识库测验（测验面板的本地反馈台账）────────────────────────────────────
 /** 「优质内容 / 劣质内容」评分：一行一个事件，只追加、不联网、不上报。 */
 export const userKbQuizFeedbackFile     = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'kb', 'quiz-feedback.jsonl');
@@ -271,6 +285,9 @@ export const userProfileFile = (uid: string) => path.join(userMemoryDir(uid), 'U
 // review state, evidence, reuse history, and its derived growth stage.
 export const userCognitionDir  = (uid: string) => path.join(userCloudRoot(uid), 'cognition');
 export const userCognitionFile = (uid: string) => path.join(userCognitionDir(uid), 'assets.json');
+/** User-authored ontology graph. Stored separately from formal cognition assets so
+ *  entity and relationship edits never copy or mutate the asset source of truth. */
+export const userOntologyGraphFile = (uid: string) => path.join(userCognitionDir(uid), 'ontology-graph.json');
 
 /** Guard an agent id used as a single path segment for agent-scoped memory.
  *  The id is bound by the runner to the calling agent (never model-supplied),

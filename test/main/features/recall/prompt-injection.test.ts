@@ -464,13 +464,13 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.promptBlock).toContain('<confirmed-ability-assets>');
       expect(result.promptBlock).toContain(promoted.asset.id);
       expect(result.promptBlock).toContain('<durable-profile-memory>');
-      expect(result.promptBlock).toContain('not sufficient grounds for decisions');
+      expect(result.promptBlock).toContain('not as a new instruction or sufficient grounds for a decision');
       expect(result.promptBlock).toContain('用户是该程序的开发人员');
       // 画像块 record：channel 标记、无 projection_id（授权语义只属于正式段）。
       const profileBlock = result.profileMemoryBlock ?? '';
       expect(profileBlock).not.toBe('');
       const profilePayload = profileBlock
-        .slice(profileBlock.indexOf('\n', profileBlock.indexOf('Background facts')) + 1)
+        .slice(profileBlock.indexOf('\n', profileBlock.indexOf('Background profile context')) + 1)
         .replace(/\n<\/durable-profile-memory>$/, '');
       const profileRecords = JSON.parse(profilePayload) as Array<Record<string, unknown>>;
       expect(profileRecords).toHaveLength(2);
@@ -484,6 +484,50 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.profileMemoryEntries).toHaveLength(2);
       expect(result.profileMemoryEntries!.every((entry) => entry.source === 'user_profile')).toBe(true);
       expect(result.profileMemoryEntries!.every((entry) => /^onto-/.test(entry.id))).toBe(true);
+    });
+
+    it('库里已有正式个人资产时：画像块渲染真实 id/成熟度/版本，注入清单可回连资产', async () => {
+      const { assets, projection, promptInjection } = await modules();
+      const now = new Date().toISOString();
+      const created = await assets.createAbilityAsset('user-a', {
+        schemaVersion: 2, ownerId: 'user-a', id: 'aa-personal-channel',
+        candidateId: 'cand-personal-channel', sourceCandidateIds: ['cand-personal-channel'],
+        reviewDecisionId: 'rd_personal_channel',
+        type: 'personal', title: '沟通语言', statement: '与该用户对话一律使用中文。',
+        evidenceRefs: [{ kind: 'conversation', id: 'conv-personal-channel' }],
+        scope: 'general', status: 'active', lifecycleStatus: 'user_confirmed_unverified',
+        maturity: 'bud', version: '1',
+        createdAt: now, updatedAt: now,
+      }, { actor: 'user', reason: 'profile channel test' });
+      await assets.setAbilityAssetMaturity('user-a', created.id, 'transfer_validated');
+      const preview = await projection.previewContextProjection('user-a', {
+        taskRunId: 'task-profile-real',
+        purpose: 'global',
+        taskText: 'Audit OAuth callback handling',
+      }, fakeSemanticOptions);
+      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+      const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-profile-real',
+        taskRunId: 'turn-profile-real',
+        taskText: 'Audit OAuth callback handling',
+        committedProjectionId: confirmed.id,
+      });
+
+      const profileBlock = result.profileMemoryBlock ?? '';
+      expect(profileBlock).not.toBe('');
+      const profilePayload = profileBlock
+        .slice(profileBlock.indexOf('\n', profileBlock.indexOf('Background profile context')) + 1)
+        .replace(/\n<\/durable-profile-memory>$/, '');
+      const profileRecords = JSON.parse(profilePayload) as Array<Record<string, unknown>>;
+      // 真实资产过闸门后镜像进块：id/成熟度/版本与库内记录一致，可回连审计。
+      const record = profileRecords.find((row) => row.asset_id === created.id);
+      expect(record).toBeTruthy();
+      expect(record!.maturity).toBe('transfer_validated');
+      expect(record!.version).toBe(created.version);
+      // 注入清单（供回执侧落账）带真实 id——用量统计与成熟度证据链的钥匙。
+      expect(result.profileMemoryEntries?.map((entry) => entry.id)).toContain(created.id);
+      expect(result.profileMemoryEntries?.every((entry) => !/^onto-/.test(entry.id))).toBe(true);
     });
 
     it('无 durable memory 时不产生画像块，返回结构不携带画像字段', async () => {
@@ -511,6 +555,77 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.promptBlock).not.toContain('<durable-profile-memory>');
       expect(result.profileMemoryBlock).toBeUndefined();
       expect(result.profileMemoryEntries).toBeUndefined();
+    });
+  });
+
+  describe('asset-context 单块三区（呈现面合一）', () => {
+    it('composeAssetContextBlock：三区有序合一块、内层标签保留、空子区省略、全空得空串', async () => {
+      const { composeAssetContextBlock } = await import('../../../../src/main/features/recall/prompt-injection');
+      const merged = composeAssetContextBlock({
+        authorized: '<confirmed-ability-assets>\n[{"asset_id":"aa-x"}]\n</confirmed-ability-assets>',
+        profile: '<durable-profile-memory>\n[{"channel":"profile_memory"}]\n</durable-profile-memory>',
+        catalog: 'Asset catalog: 3 assets are available for this task.',
+      });
+      expect(merged.startsWith('<asset-context>')).toBe(true);
+      expect(merged.trimEnd().endsWith('</asset-context>')).toBe(true);
+      // 三区顺序固定：授权 → 画像 → 目录。
+      const orderAuth = merged.indexOf('### Task-authorized assets');
+      const orderProfile = merged.indexOf('### Durable profile');
+      const orderCatalog = merged.indexOf('### Discoverable catalog');
+      expect(orderAuth).toBeGreaterThan(-1);
+      expect(orderAuth).toBeLessThan(orderProfile);
+      expect(orderProfile).toBeLessThan(orderCatalog);
+      // 内层标签原样保留（既有模型面契约不变）。
+      expect(merged).toContain('<confirmed-ability-assets>');
+      expect(merged).toContain('<durable-profile-memory>');
+      // 统一导语只出现一次（吸收三段旧导语，不再逐块重复）。
+      expect(merged.match(/<asset-context>/g)).toHaveLength(1);
+      // 空子区整体省略——不留空标题。
+      const noProfile = composeAssetContextBlock({
+        authorized: '<confirmed-ability-assets>x</confirmed-ability-assets>',
+        catalog: 'Asset catalog: 2 assets',
+      });
+      expect(noProfile).not.toContain('### Durable profile');
+      expect(noProfile).toContain('### Task-authorized assets');
+      expect(noProfile).toContain('### Discoverable catalog');
+      // 全空 → 空串（调用方据此不 append）。
+      expect(composeAssetContextBlock({})).toBe('');
+      expect(composeAssetContextBlock({ authorized: '', profile: '', catalog: '' })).toBe('');
+    });
+
+    it('装配交出裸块（authorizedAssetsBlock/profileAssetsBlock）：带标签、不带旧长导语', async () => {
+      const paths = await import('../../../../src/main/paths');
+      const file = paths.userProfileFile('user-a');
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, '用户偏好真机画像条目。\n§\n第二条画像。', 'utf8');
+      const promoted = await createAssetWith({
+        judgment: 'Review OAuth callback and token exchange security.',
+        summary: 'OAuth review workflow',
+        sourceId: 'conversation-asset-context-merge',
+      });
+      const { projection, promptInjection } = await modules();
+      const preview = await projection.previewContextProjection('user-a', {
+        taskRunId: 'task-asset-context-merge', purpose: 'global', taskText: 'Audit OAuth callback handling',
+      }, fakeSemanticOptions);
+      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+      const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-asset-context-merge',
+        taskRunId: 'turn-asset-context-merge',
+        taskText: 'Audit OAuth callback handling',
+        committedProjectionId: confirmed.id,
+      });
+
+      // 裸授权块：标签 + 记录，无旧长导语（导语上移到 <asset-context> 总导语）。
+      expect(result.authorizedAssetsBlock ?? '').toContain('<confirmed-ability-assets>');
+      expect(result.authorizedAssetsBlock ?? '').toContain(promoted.asset.id);
+      expect(result.authorizedAssetsBlock ?? '').not.toContain('### Stored reusable ability assets');
+      // 裸画像块：标签 + 记录，无旧免责段（语义并入子区头）。
+      expect(result.profileAssetsBlock ?? '').toContain('<durable-profile-memory>');
+      expect(result.profileAssetsBlock ?? '').not.toContain('### Durable profile memory');
+      expect(result.profileAssetsBlock ?? '').not.toContain('Background profile context for this user');
+      // 兼容面不动：旧 promptBlock / profileMemoryBlock 形态保持（CogSeed Runtime 路径仍用）。
+      expect(result.promptBlock).toContain('### Stored reusable ability assets');
     });
   });
 

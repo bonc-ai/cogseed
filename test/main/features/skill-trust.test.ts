@@ -36,7 +36,7 @@ vi.mock('../../../src/main/paths', async (importOriginal) => {
 
 const {
   readReceipt, writeReceipt, isReceiptStale, listReceipts, deleteReceipt,
-  skillPayloadHash, currentRuleProfile,
+  listReceiptsForDisplay, skillPayloadHash, currentRuleProfile,
 } = await import('../../../src/main/features/skill_trust');
 const {
   reverifySkill, reverifySkills, isSkillTrustedForLoad, partitionSkillsByTrust,
@@ -117,6 +117,26 @@ describe('skill_trust › receipt round-trip', () => {
     deleteReceipt(UID, 's3');
     expect(listReceipts(UID).map((r) => r.skillId)).toEqual(['s4']);
   });
+
+  it('marks which verdicts are worth showing as a security risk', () => {
+    // The projection a user-facing surface reads. Both receipts say `risk`; only one
+    // of them is a security verdict, and a surface that cannot tell them apart ends
+    // up flagging the whole library (measured on a real profile: 59 of 60).
+    writeReceipt(UID, 'declared', {
+      payloadHash: 'c', decision: 'risk', violationCount: 4,
+      topRule: 'shape_staged_ceiling_missing', topLevel: 'MEDIUM',
+    });
+    writeReceipt(UID, 'substantive', {
+      payloadHash: 'd', decision: 'risk', violationCount: 1,
+      topRule: 'no_raw_ip_or_suspicious_tld_endpoint', topLevel: 'MEDIUM',
+    });
+    const byId = new Map(listReceiptsForDisplay(UID).map((r) => [r.skillId, r]));
+    expect(byId.get('declared')?.securityNotable).toBe(false);
+    expect(byId.get('substantive')?.securityNotable).toBe(true);
+    // Raw decision and every other field survive: this is emphasis, not filtering.
+    expect(byId.get('declared')?.decision).toBe('risk');
+    expect(byId.get('declared')?.topRule).toBe('shape_staged_ceiling_missing');
+  });
 });
 
 describe('skill_trust › staleness detection', () => {
@@ -171,6 +191,32 @@ describe('skill_trust › staleness detection', () => {
     raw.ruleProfile = 'builtin@0.0.1-old';
     fs.writeFileSync(file, JSON.stringify(raw));
     expect(isReceiptStale(UID, 's1', dir).reason).toBe('ruleset_changed');
+  });
+
+  it('treats a deep-scanner ruleset upgrade as invalidating', () => {
+    // The declaration profile above and the scanner's `rulesetVersion` are two
+    // different identities. Only the first was ever compared, so a scanner ruleset
+    // upgrade left every receipt looking fresh: 重新检查 returned the old verdict in
+    // ~1 ms without rescanning, and the panel kept showing v1.0.0 conclusions under
+    // a v1.1.0 engine. Measured on a real profile — all 60 receipts.
+    const dir = mkSkill('s1', CLEAN);
+    writeReceipt(UID, 's1', {
+      payloadHash: skillPayloadHash(dir), decision: 'pass', violationCount: 0,
+      scanner: 'deep', rulesetVersion: 'v0.0.1-old',
+    });
+    expect(isReceiptStale(UID, 's1', dir))
+      .toEqual({ stale: true, reason: 'scanner_ruleset_changed' });
+  });
+
+  it('does not rescan forever when a receipt records no scanner ruleset', () => {
+    // A build without the deep scanner writes no `rulesetVersion`. Treating
+    // "absent" as stale would rescan the whole library on every call and never
+    // converge — the failure `_isScannerAbsentByBuild` exists to prevent.
+    const dir = mkSkill('s1', CLEAN);
+    writeReceipt(UID, 's1', {
+      payloadHash: skillPayloadHash(dir), decision: 'pass', violationCount: 0, scanner: 'local',
+    });
+    expect(isReceiptStale(UID, 's1', dir)).toEqual({ stale: false, reason: null });
   });
 
   it('treats a validator upgrade as invalidating', () => {
@@ -281,14 +327,34 @@ describe('skill_reverify › load-path enforcement', () => {
   it('does not withhold on risk — only on blocked', () => {
     // `risk` runs on the prompt path for every skill; withholding on it would
     // let one soft finding silently strip working functionality.
+    //
+    // The soft finding here is a bare-IP endpoint: MEDIUM, and *substantive*.
+    // This fixture used to be "no `_meta.json`", which is declaration hygiene
+    // rather than a security finding and no longer produces `risk` at all (see
+    // `skill_verdict.ts`) — the invariant is about substantive soft findings, so
+    // the fixture has to be one.
     mkSkill('risky', {
       'SKILL.md': CLEAN['SKILL.md'],
-      'scripts/run.py': 'print("ok")\n',
-      // No _meta.json → MEDIUM findings → `risk`, not `blocked`.
+      '_meta.json': CLEAN['_meta.json'],
+      'scripts/run.py': 'import urllib.request\nurllib.request.urlopen("https://45.13.2.9/collect")\n',
     });
     const r = reverifySkill(UID, 'risky');
     expect(r.decision).toBe('risk');
     expect(isSkillTrustedForLoad(UID, 'risky').trusted).toBe(true);
+  });
+
+  it('does not read a declaration gap as a security risk', () => {
+    // The other direction of the same judgement: missing `_meta.json` is a real
+    // authoring gap (the quality report lists it) but not a security verdict.
+    // Measured on a real profile before this: 59 of 60 receipts recorded `risk`
+    // and every one of them was this class of finding, which is how the security
+    // page ended up flagging the whole library.
+    mkSkill('undocumented', {
+      'SKILL.md': CLEAN['SKILL.md'],
+      'scripts/run.py': 'print("ok")\n',
+    });
+    expect(reverifySkill(UID, 'undocumented').decision).toBe('pass');
+    expect(isSkillTrustedForLoad(UID, 'undocumented').trusted).toBe(true);
   });
 
   it('does not withhold when the skill dir is missing', () => {

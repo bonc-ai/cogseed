@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { cleanupTemporaryRoot } = require('./verify-packaged-launch.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_SPEECH_FIXTURE = path.join(ROOT, 'test', 'fixtures', 'stt', 'sherpa-onnx-zh-0.wav');
@@ -225,7 +226,7 @@ async function launchSmoke(executable) {
     throw new Error(details);
   } finally {
     await terminateChild(child);
-    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    cleanupTemporaryRoot(tempRoot);
   }
 }
 

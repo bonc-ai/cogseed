@@ -8,7 +8,7 @@
  *      Session; goal, confirmed boundary, latest Artifact and next step are
  *      restored (from the TaskContinuationSnapshot) — no re-explaining needed.
  *   2. 准备携带 (carry) — what will be carried into the target:
- *      「准备携带：关于我 X项 · 我的能力 Y项 · 接续快照 1份」+
+ *      「准备携带：个人信息 X项 · 我的能力 Y项 · 接续快照 1份」+
  *      「只对目标任务生效」+ 「查看依据」 (expands real sources).
  *   3. 建议 Action Plan + boundary statement — dynamic plan from the session
  *      summary (LLM); when the model is unavailable we show no fabricated plan
@@ -31,7 +31,7 @@ const log = createLogger('session-import:welcome');
 
 export interface WelcomeCarryItem {
   kind: 'personal' | 'ability' | 'snapshot';
-  /** Display label (关于我 / 我的能力 / 接续快照). */
+  /** Display label (个人信息 / 我的能力 / 接续快照). */
   label: string;
   /** How many items of this kind. */
   count: number;
@@ -50,7 +50,7 @@ export interface WelcomeCarryItem {
 export interface WelcomeMessageData {
   /** 第一部分：复述（当前目标、已确认边界、最新Artifact和下一步已恢复）。 */
   restatement: string;
-  /** 第二部分：准备携带摘要（「准备携带：关于我 X项 · 我的能力 Y项 · 接续快照 1份」）。 */
+/** 第二部分：准备携带摘要（「准备携带：个人信息 X项 · 我的能力 Y项 · 接续快照 1份」）。 */
   carrySummary: string;
   /** 第三部分：建议 Action Plan（由大模型基于导入上下文动态生成）。 */
   plan: string[];
@@ -178,8 +178,8 @@ async function buildCarry(
   const carry: WelcomeCarryItem[] = [];
   if (counts.personal.length > 0) {
     carry.push({
-      kind: 'personal', label: '关于我', count: counts.personal.length,
-      sources: [`已确认「关于我」资产 ${counts.personal.length} 项`],
+      kind: 'personal', label: '个人信息', count: counts.personal.length,
+      sources: [`已确认个人信息资产 ${counts.personal.length} 项`],
       sourceDetails: [{ kind: 'confirmed_personal', count: counts.personal.length }],
       items: counts.personal,
     });

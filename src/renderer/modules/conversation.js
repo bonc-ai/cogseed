@@ -336,16 +336,26 @@ function _renderMessageMarkdown(text) {
     assetRefIds.push(id);
     return `\x00ASSETREF${idx}\x00`;
   });
-  const html = renderMarkdownFull(protectedText);
+  // A saved candidate is already reviewable, but the old `[candidate:<id>]`
+  // marker was plain text. Protect it through markdown and turn it into an
+  // actionable button below, beside the existing asset citation handling.
+  const candidateRefIds = [];
+  const markdownInput = protectedText.replace(/\[candidate:([A-Za-z0-9_-]{1,64})\]/g, (m, id) => {
+    const idx = candidateRefIds.length;
+    candidateRefIds.push(id);
+    return `\x00CANDIDATEREF${idx}\x00`;
+  });
+  const html = renderMarkdownFull(markdownInput);
   const needsSkillRewrite = _htmlMayContainKnownSkillIdForDisplay(html, skills);
   // Mention highlighting requires DOM walking — do it on a detached
   // container, then return its innerHTML for the bubble to embed.
-  if (!html || (html.indexOf('@') < 0 && !needsSkillRewrite && !assetRefIds.length)) return html;
+  if (!html || (html.indexOf('@') < 0 && !needsSkillRewrite && !assetRefIds.length && !candidateRefIds.length)) return html;
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
   if (needsSkillRewrite) _replaceKnownSkillIdsIn(tmp, skills);
   _highlightMentionsIn(tmp);
   if (assetRefIds.length) _replaceAssetCitationsIn(tmp, assetRefIds);
+  if (candidateRefIds.length) _replaceCandidateCitationsIn(tmp, candidateRefIds);
   return tmp.innerHTML;
 }
 
@@ -366,6 +376,20 @@ async function _ensureAbilityAssetTitles() {
     _abilityAssetTitleCache = new Map();
   } finally {
     _abilityAssetTitleLoading = false;
+    // 首次调用发生在渲染中（同步拿不到结果），那批引用卡当时只能显示原始 id；
+    // 缓存就绪后就地补上真实标题（2026-09-28 修，841 次真实使用的旧链首屏观感）。
+    // 前缀复用节点里已有的图钉 emoji（slice 到首个空格），不引入新的 emoji 字面量
+    //（shared-ui-adoption-guard 的 emoji-as-icon 基线不许抬高）。
+    if (_abilityAssetTitleCache) {
+      document.querySelectorAll('.chat-asset-citation').forEach((el) => {
+        const id = el.dataset.assetCitation;
+        const title = id ? _abilityAssetTitleCache.get(id) : '';
+        if (!title) return;
+        const spaceAt = el.textContent.indexOf(' ');
+        const icon = spaceAt >= 0 ? el.textContent.slice(0, spaceAt + 1) : '';
+        if (el.textContent !== `${icon}${title}`) el.textContent = `${icon}${title}`;
+      });
+    }
   }
 }
 
@@ -406,6 +430,49 @@ function _replaceAssetCitationsIn(container, ids) {
         frag.appendChild(document.createTextNode(`[asset:?]`));
       }
       last = m.index + m[0].length;
+    }
+    if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+/** Replace `[candidate:<id>]` markers with a shared, accessible review button. */
+function _replaceCandidateCitationsIn(container, ids) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const p = node.parentElement;
+      return p && p.closest('pre, code') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  for (const node of textNodes) {
+    const pattern = /\x00CANDIDATEREF(\d+)\x00/g;
+    if (!pattern.test(node.nodeValue)) continue;
+    pattern.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let match;
+    while ((match = pattern.exec(node.nodeValue))) {
+      if (match.index > last) frag.appendChild(document.createTextNode(node.nodeValue.slice(last, match.index)));
+      const id = ids[Number(match[1])];
+      if (id) {
+        const key = 'chat.candidate_citation_open';
+        const translated = typeof t === 'function' ? t(key) : key;
+        const label = translated && translated !== key ? translated : 'Review suggestion';
+        const template = document.createElement('template');
+        template.innerHTML = uiButton({
+          label,
+          role: 'ghost',
+          size: 'sm',
+          className: 'chat-candidate-citation',
+          attrs: { 'data-candidate-citation': id },
+        });
+        frag.appendChild(template.content.cloneNode(true));
+      } else {
+        frag.appendChild(document.createTextNode('[candidate:?]'));
+      }
+      last = match.index + match[0].length;
     }
     if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
     node.parentNode.replaceChild(frag, node);
@@ -1408,7 +1475,7 @@ function _handleExtractionDone(event) {
   }
   if (typeof uiToast === 'function') {
     const total = cognitions
-      ? (cognitions.personal || 0) + (cognitions.rule || 0) + (cognitions.template || 0) + (cognitions.skill_method || 0)
+      ? (cognitions.personal || 0) + (cognitions.fact || 0) + (cognitions.rule || 0) + (cognitions.template || 0) + (cognitions.skill_method || 0)
       : 0;
     const msg = total > 0
       ? t('chat.welcome_extraction_done_with_count', '导入会话已完成提炼：{count} 条认知候选可到认知沉淀确认', { count: total })
@@ -2722,11 +2789,30 @@ document.addEventListener('click', (e) => {
     open();
     return;
   }
-  // skills feature（含 skills-bindings.js）未加载：先懒加载再跳转
+  // recall feature（cognition-assets/core.js 定义 opener）未加载：先懒加载再跳转
   const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
   if (typeof loader === 'function') {
-    loader('skills').then(open).catch(() => {});
+    loader('recall').then(open).catch(() => {});
   }
+});
+
+// [candidate:<id>] review action → open the exact pending item in cognition assets.
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-candidate-citation]') : null;
+  if (!el) return;
+  const candidateId = el.dataset.candidateCitation;
+  if (!candidateId) return;
+  const open = () => {
+    if (typeof window.openCognitionCandidateById !== 'function') return;
+    window.openCognitionCandidateById(candidateId);
+  };
+  if (typeof window.openCognitionCandidateById === 'function') {
+    open();
+    return;
+  }
+  // recall feature 未加载：先懒加载（同上 asset 引用卡的 fallback），再打开评审详情。
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader === 'function') loader('recall').then(open).catch(() => {});
 });
 
 async function _startSpaceBuilderConversation() {
@@ -3977,25 +4063,6 @@ function _normalizeCreatedSkills(gm) {
   return null;
 }
 
-function _mergeTeachingReceiptStatuses(messages, signals) {
-  if (!Array.isArray(messages) || !messages.length || !Array.isArray(signals) || !signals.length) return messages || [];
-  const statusById = new Map(signals
-    .filter((signal) => signal && signal.id && (signal.status === 'active' || signal.status === 'revoked'))
-    .map((signal) => [signal.id, signal.status]));
-  if (!statusById.size) return messages;
-  return messages.map((message) => {
-    if (!Array.isArray(message?.teaching_receipts) || !message.teaching_receipts.length) return message;
-    let changed = false;
-    const teachingReceipts = message.teaching_receipts.map((receipt) => {
-      const status = statusById.get(receipt?.id);
-      if (!status || status === receipt.status) return receipt;
-      changed = true;
-      return { ...receipt, status };
-    });
-    return changed ? { ...message, teaching_receipts: teachingReceipts } : message;
-  });
-}
-
 function _groupMessageSystemKind(gm) {
   const explicit = String(gm?.system_kind || gm?._system_kind || '');
   if (explicit) return explicit;
@@ -4125,11 +4192,12 @@ function _groupMsgToLegacy(gm) {
     ...(_normalizeCreatedAgents(gm) ? { created_agents: _normalizeCreatedAgents(gm) } : {}),
     ...(_normalizeCreatedSkills(gm) ? { created_skills: _normalizeCreatedSkills(gm) } : {}),
     ...(Array.isArray(gm.artifacts) && gm.artifacts.length ? { artifacts: gm.artifacts } : {}),
-    ...(Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length ? { teaching_receipts: gm.teaching_receipts } : {}),
+    ...(Array.isArray(gm.cognition_save_receipts) && gm.cognition_save_receipts.length ? { cognition_save_receipts: gm.cognition_save_receipts } : {}),
     ...(Array.isArray(gm.recall_citations) && gm.recall_citations.length ? { recall_citations: gm.recall_citations } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
+    ...(gm.asset_change_approval_card ? { asset_change_approval_card: gm.asset_change_approval_card } : {}),
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
     ...(gm.projection_receipt ? { projection_receipt: gm.projection_receipt } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
@@ -5228,25 +5296,52 @@ function _renderMessageCreatedSkillHtml(list) {
   return chips ? `<div class="chat-msg-created-agent">${chips}</div>` : '';
 }
 
-function _teachingReceiptScopeLabel(scope) {
-  const key = scope === 'project' ? 'chat.teaching.scope_project' : scope === 'agent' ? 'chat.teaching.scope_agent' : 'chat.teaching.scope_personal';
-  const fallback = scope === 'project' ? '项目' : scope === 'agent' ? '智能体' : '个人';
-  const value = typeof t === 'function' ? t(key) : key;
-  return value && value !== key ? value : fallback;
-}
-
-function _renderTeachingReceiptsHtml(receipts) {
+function _renderCognitionSaveReceiptsHtml(receipts) {
   if (!Array.isArray(receipts) || !receipts.length) return '';
-  return `<div class="chat-teaching-receipts">${receipts.map((receipt) => {
-    const revoked = receipt.status === 'revoked';
-    const statusKey = revoked ? 'chat.teaching.revoked' : 'chat.teaching.pending_review';
-    const statusFallback = revoked ? '已撤销' : '已记住 · 待审核';
-    const statusValue = typeof t === 'function' ? t(statusKey) : statusKey;
-    const status = statusValue && statusValue !== statusKey ? statusValue : statusFallback;
-    const revokeKey = 'chat.teaching.revoke';
-    const revokeValue = typeof t === 'function' ? t(revokeKey) : revokeKey;
-    const revoke = revokeValue && revokeValue !== revokeKey ? revokeValue : '撤销';
-    return `<section class="chat-teaching-receipt${revoked ? ' is-revoked' : ''}" data-teaching-receipt-id="${escapeHtml(receipt.id || '')}"><div><strong>${escapeHtml(receipt.summary || '')}</strong><span>${escapeHtml(_teachingReceiptScopeLabel(receipt.scope))} · ${escapeHtml(status)}</span></div>${revoked ? '' : uiButton({ label: revoke, size: 'sm', attrs: { 'data-chat-teaching-revoke': receipt.id || '' } })}</section>`;
+  const copy = (key, fallback) => {
+    const value = typeof t === 'function' ? t(key) : key;
+    return value && value !== key ? value : fallback;
+  };
+  return `<div class="chat-cognition-save-receipts">${receipts.map((receipt) => {
+    // taught-pending-review（2026-09-28 四病整改 7.0 修7）：教学回执并入保存
+    // 回执后的新态——用户教了一条记忆，信号落库时建了候选、等审核。
+    const outcomeKey = receipt.outcome === 'created'
+      ? 'chat.cognition_save.state_active'
+      : receipt.outcome === 'already-confirmed'
+        ? 'chat.cognition_save.state_existing'
+      : receipt.outcome === 'fused-update-pending'
+        ? 'chat.cognition_save.state_update_pending'
+        : receipt.outcome === 'merged'
+          ? 'chat.cognition_save.state_merged'
+          : receipt.outcome === 'taught-pending-review'
+            ? 'chat.cognition_save.state_taught'
+            : 'chat.cognition_save.state_pending';
+    const outcomeFallback = receipt.outcome === 'created'
+      ? 'Saved and active'
+      : receipt.outcome === 'already-confirmed'
+        ? 'Already confirmed · inspect current status'
+      : receipt.outcome === 'fused-update-pending'
+        ? 'Update awaiting review · current asset unchanged'
+        : receipt.outcome === 'merged'
+          ? 'Added to a suggestion awaiting review'
+          : receipt.outcome === 'taught-pending-review'
+            ? '已记住 · 待审核'
+            : 'Awaiting your review · not active yet';
+    const label = receipt.outcome === 'already-confirmed'
+      ? copy('chat.cognition_save.open_existing', 'View record')
+      : receipt.target === 'asset'
+        ? copy('chat.cognition_save.open_asset', 'View and edit')
+        : copy('chat.cognition_save.open_candidate', 'Review or edit');
+    const action = uiButton({
+      label,
+      role: 'ghost',
+      size: 'sm',
+      className: 'chat-cognition-save-open',
+      attrs: receipt.target === 'asset'
+        ? { 'data-asset-citation': receipt.id }
+        : { 'data-candidate-citation': receipt.id },
+    });
+    return `<section class="chat-cognition-save-receipt"><div><strong>${escapeHtml(receipt.summary || '')}</strong><span>${escapeHtml(copy(outcomeKey, outcomeFallback))}</span></div>${action}</section>`;
   }).join('')}</div>`;
 }
 
@@ -5258,128 +5353,71 @@ function _renderTeachingReceiptsHtml(receipts) {
 
 
 
-// ── Recall 引用反馈（「提供给本次回答的记忆」+ 有帮助/需改进）───────────────
-// 合并时曾被远端 conversation.js 覆盖丢失，已按原实现恢复。
-
-function _recallCitationTypeLabel(type) {
-  const normalized = String(type || '').trim().toLowerCase();
-  const key = normalized === 'personal' ? 'chat.recall.type_personal'
-    : normalized === 'rule' ? 'chat.recall.type_rule'
-    : normalized === 'template' ? 'chat.recall.type_template'
-    : normalized === 'skill_method' ? 'chat.recall.type_skill_method'
-    : '';
-  if (!key) return String(type || '').trim();
-  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
-  const value = typeof t === 'function' ? t(key) : key;
-  return value && value !== key ? value : fallback;
-}
-
-function _recallCitationScopeLabel(scope) {
-  const normalized = String(scope || '').trim().toLowerCase();
-  const key = normalized === 'global'
-    ? 'chat.recall.scope_global'
-    : normalized === 'project'
-      ? 'chat.recall.scope_project'
-      : normalized === 'agent'
-        ? 'chat.recall.scope_agent'
-        : normalized === 'personal'
-          ? 'chat.recall.scope_personal'
-          : '';
-  if (!key) return String(scope || '').trim();
-  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
-  const value = typeof t === 'function' ? t(key) : key;
-  return value && value !== key ? value : fallback;
-}
+// ── Recall 引用反馈 →「本次使用的记忆」合并卡（拍板项 #8）──────────────────
+// 2026-09-28 四病整改：引用卡（事后回执）与投影卡（事前面板）合并为一张
+// 「本次使用的记忆」卡。卡片的完整实现收在 recall-projection-card.js（同步
+// 骨架 recallMemoryCardHtml + 投影数据异步补全 mountRecallProjectionCard）；
+// 这里只保留同步入口与反馈绑定。旧互斥抑制（有投影卡就不出引用卡）已删。
 
 function _renderRecallCitationsHtml(citations) {
-  if (!Array.isArray(citations) || !citations.length) return '';
-  const items = citations
-    .filter((citation) => citation && citation.asset_id && citation.title)
-    .slice(0, 12);
-  if (!items.length) return '';
-  const titleKey = 'chat.recall.citations_title';
-  const titleValue = typeof t === 'function' ? t(titleKey) : titleKey;
-  const title = titleValue && titleValue !== titleKey ? titleValue : 'Memories provided to this answer';
-  const helpfulKey = 'chat.recall.feedback_helpful';
-  const helpfulValue = typeof t === 'function' ? t(helpfulKey) : helpfulKey;
-  const helpful = helpfulValue && helpfulValue !== helpfulKey ? helpfulValue : 'Helpful';
-  const improveKey = 'chat.recall.feedback_improve';
-  const improveValue = typeof t === 'function' ? t(improveKey) : improveKey;
-  const improve = improveValue && improveValue !== improveKey ? improveValue : 'Needs improvement';
-  return `<section class="chat-recall-citations"><div class="chat-recall-citations-head"><span>${_uiIconHtml('brain-circuit', 'ui-icon')}<strong>${escapeHtml(title)}</strong></span><span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span></div><div class="chat-recall-citation-list">${items.map((citation) => {
-    const type = _recallCitationTypeLabel(citation.type);
-    const scope = _recallCitationScopeLabel(citation.scope);
-    const meta = [type, scope].filter(Boolean).join(' · ');
-    return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
-  }).join('')}</div><div class="chat-recall-feedback-actions">${uiButton({ label: helpful, role: 'ghost', size: 'sm', icon: 'thumbs-up', className: 'chat-recall-feedback-btn', attrs: { 'data-recall-feedback': 'positive', title: helpful } })}${uiButton({ label: improve, role: 'ghost', size: 'sm', icon: 'thumbs-down', className: 'chat-recall-feedback-btn', attrs: { 'data-recall-feedback': 'negative', title: improve } })}</div></section>`;
+  if (typeof window.recallMemoryCardHtml !== 'function') return '';
+  return window.recallMemoryCardHtml(citations);
 }
 
 function _hydrateRecallCitations(messageEl, cid, messageId) {
-  const host = messageEl?.querySelector('.chat-recall-citations');
-  if (!host) return;
+  const host = messageEl?.querySelector?.('.chat-recall-citations');
+  if (!host || host.dataset.feedbackBound === '1') return;
   const resolvedMessageId = String(messageId || messageEl?.dataset?.msgId || '');
-  const buttons = Array.from(host.querySelectorAll('[data-recall-feedback]'));
-  for (const button of buttons) {
-    if (button.dataset.bound === '1') continue;
-    button.dataset.bound = '1';
-    button.addEventListener('click', async () => {
-      const feedback = button.dataset.recallFeedback;
-      if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
-      if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
-      host.dataset.feedbackBusy = '1';
-      buttons.forEach((item) => { item.disabled = true; });
-      try {
-        const result = await window.cogseed.invoke('recall.usage.feedback', {
-          cid,
-          messageId: resolvedMessageId,
-          feedback,
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
-        host.dataset.feedbackSent = '1';
-        host.dataset.feedback = feedback;
-        host.classList.add('is-feedback-sent');
-        const status = host.querySelector('[data-recall-feedback-status]');
-        const key = 'chat.recall.feedback_thanks';
-        const value = typeof t === 'function' ? t(key) : key;
-        if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
-      } catch (error) {
-        buttons.forEach((item) => { item.disabled = false; });
-        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
-      } finally {
-        host.dataset.feedbackBusy = '0';
-      }
-    });
-  }
-}
-
-function _hydrateTeachingReceipts(messageEl) {
-  messageEl?.querySelectorAll('[data-chat-teaching-revoke]').forEach((button) => {
-    if (button.dataset.bound === '1') return;
-    button.dataset.bound = '1';
-    button.addEventListener('click', async () => {
-      const signalId = button.dataset.chatTeachingRevoke;
-      if (!signalId || button.dataset.busy === '1') return;
-      button.dataset.busy = '1';
-      button.disabled = true;
-      try {
-        const result = await window.cogseed.invoke('recall.teaching.revoke', { signalId });
-        if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
-        const receipt = button.closest('[data-teaching-receipt-id]');
-        if (receipt) {
-          receipt.classList.add('is-revoked');
-          const status = receipt.querySelector('span');
-          const key = 'chat.teaching.revoked';
-          const value = typeof t === 'function' ? t(key) : key;
-          if (status) status.textContent = `${_teachingReceiptScopeLabel(result.signal?.scope)} · ${value && value !== key ? value : '已撤销'}`;
-        }
-        button.remove();
-      } catch (error) {
-        button.disabled = false;
-        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
-      } finally {
-        button.dataset.busy = '0';
-      }
-    });
+  // 委托绑定（一次）：合并卡的投影部分是异步整卡重画的（mountRecallProjectionCard
+  // 替换 host.innerHTML），按按钮绑定会在重画后失效——事件挂在 host 上才稳。
+  host.dataset.feedbackBound = '1';
+  host.addEventListener('click', async (event) => {
+    // 折叠热区 = 整个头部（2026-09-29 二轮）：箭头只是指示图标，点头部任意处
+    // 翻转。同一颗 host 上 hydrate 与 mount 两个委托都在听，翻转只在 hydrate
+    // 认领（实现收在卡模块 recallCardToggleCollapsed），mount 不认头部点击——
+    // 否则翻两次等于没翻。
+    if (event.target?.closest?.('.chat-recall-citations-head')) {
+      if (typeof window.recallCardToggleCollapsed === 'function') window.recallCardToggleCollapsed(host);
+      return;
+    }
+    const button = event.target?.closest?.('[data-recall-feedback]');
+    if (!button || button.disabled) return;
+    const feedback = button.dataset.recallFeedback;
+    if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
+    if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
+    host.dataset.feedbackBusy = '1';
+    host.querySelectorAll('[data-recall-feedback]').forEach((item) => { item.disabled = true; });
+    try {
+      const result = await window.cogseed.invoke('recall.usage.feedback', {
+        cid,
+        messageId: resolvedMessageId,
+        feedback,
+      });
+      if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
+      // 负反馈后认知资产面板的刷新不再走 window CustomEvent（2026-09-27
+      // 刷新机制重写）：主进程写回执时经 recall store 广播 cognition:changed
+      // （asset-usage-receipts → timeline 区块），面板订阅中枢自己重拉。
+      host.dataset.feedbackSent = '1';
+      host.dataset.feedback = feedback;
+      host.classList.add('is-feedback-sent');
+      const status = host.querySelector('[data-recall-feedback-status]');
+      const key = 'chat.recall.feedback_thanks';
+      const value = typeof t === 'function' ? t(key) : key;
+      if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
+    } catch (error) {
+      host.querySelectorAll('[data-recall-feedback]').forEach((item) => { item.disabled = false; });
+      if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+    } finally {
+      host.dataset.feedbackBusy = '0';
+    }
+  });
+  // 头部带 role="button"：键盘等效入口（Enter/Space 翻转折叠），忽略 IME 组合期。
+  host.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.isComposing) return;
+    if (!event.target?.closest?.('.chat-recall-citations-head')) return;
+    event.preventDefault();
+    if (typeof window.recallCardToggleCollapsed === 'function') window.recallCardToggleCollapsed(host);
   });
 }
 
@@ -8597,9 +8635,6 @@ async function loadConversationHistory(cid, opts = {}) {
       HISTORY_PAGE_SIZE,
       Number(opts.searchTarget?.msgIndex),
     ));
-    const teachingSignalsPromise = window.cogseed?.invoke
-      ? window.cogseed.invoke('recall.teaching.list', { conversationId: cid, limit: 100 }).catch(() => null)
-      : Promise.resolve(null);
     const membersStartedAt = performance.now();
     const membersPromise = _refreshGroupMembers(cid).then((actors) => {
       _convLog.info('conversation detail members ready', {
@@ -8666,11 +8701,11 @@ async function loadConversationHistory(cid, opts = {}) {
     // agent's visibility slice still carries dispatches so the agent has the
     // dispatch text in its own context.
     const renderStartedAt = performance.now();
-    const teachingSignals = await teachingSignalsPromise;
-    const rawHistory = _mergeTeachingReceiptStatuses(
-      Array.isArray(data.history) ? data.history : [],
-      teachingSignals?.ok ? teachingSignals.signals : [],
-    );
+    // 教学回执已并入保存回执（2026-09-28 四病整改 7.0 修7）：历史消息不再
+    // 补拉教学信号对账撤销态——教学卡已删，新教学走 cognition_save_receipts
+    // （taught-pending-review），旧消息上的 teaching_receipts 只作数据留存、
+    // 不再渲染。
+    const rawHistory = Array.isArray(data.history) ? data.history : [];
     const responseIndexes = Array.isArray(data.history_indexes) ? data.history_indexes : [];
     const responsePageStart = Number(data.page_start);
     const indexedHistory = rawHistory.map((gm, offset) => {
@@ -8931,10 +8966,12 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if (Array.isArray(gm.produced) && gm.produced.length && !el.querySelector('.chat-msg-produced')) return false;
   if ((_normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)) && !el.querySelector('.chat-msg-created-agent-chip')) return false;
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
-  if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
+  if (Array.isArray(gm.cognition_save_receipts) && gm.cognition_save_receipts.length && !el.querySelector('.chat-cognition-save-receipts')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
-  if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
+  if (gm.asset_change_approval_card && !el.querySelector('.chat-asset-approval')) return false;
+  // 合并卡（拍板项 #8）挂载标记：投影补全后 host 带 data-projection-id。
+  if (gm.recall_projection_card && !el.querySelector('.chat-recall-citations[data-projection-id]')) return false;
   // conv-core：过程显示已由 chat-stream 面板（.cs-flow）接管，老 details
   // 折叠卡（.stream-process）退役。两者任一在挂即算已挂载——只认老卡会让
   // 带过程的消息永远判"缺挂件"，触发 loadConversationHistory 全量重载循环，
@@ -9904,12 +9941,11 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const coalescedProjectionCard = coalescedProjectionMatch
     ? { projectionId: coalescedProjectionMatch.projectionId, authorization: 'model_selected' }
     : null;
-  const hasProjectionCard = Boolean(
-    explicitProjectionReceipt
-    || (message.recall_projection_card?.projectionId
-        && message.recall_projection_card.authorization === 'model_selected')
-    || coalescedProjectionCard,
-  );
+  // 两卡互斥抑制已删（拍板项 #8）：投影与引用合并进同一张「本次使用的记忆」
+  // 卡，引用行不再因投影卡在场而被抑制。
+  const projectionCardForBubble = _projectionReceiptForMessage(message)
+    || message.recall_projection_card
+    || coalescedProjectionCard;
   const suppressProjectionTransportProse = _shouldSuppressProjectionTransportProse(message, coalescedProjectionCard);
   const contentHtml = suppressProjectionTransportProse
     ? ''
@@ -9955,25 +9991,24 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const createdSkillHtml = createdSkillsList
     ? _renderMessageCreatedSkillHtml(createdSkillsList)
     : '';
-  const teachingReceiptsHtml = role === 'assistant'
-    ? _renderTeachingReceiptsHtml(message.teaching_receipts)
+  const cognitionSaveReceiptsHtml = role === 'assistant'
+    ? _renderCognitionSaveReceiptsHtml(message.cognition_save_receipts)
     : '';
   // 9.1 统一框架 · 中间区「Evidence 结果块」（恢复自 e88275e1）：来源引用 +
-  // 教学回执统一收进一个默认展开的「证据」块（数量角标 = 引用数 + 回执数），
-  // 放在正文之前，与 Artifact / Receipt 同一视觉语言。
+  // 保存回执（含并入的教学回执，2026-09-28 四病整改 7.0 修7）统一收进一个
+  // 默认展开的「证据」块（数量角标 = 引用数 + 回执数），放在正文之前，与
+  // Artifact / Receipt 同一视觉语言。
   const evidenceRefCount = Array.isArray(message.references) ? message.references.length : 0;
-  const evidenceReceiptCount = role === 'assistant' && Array.isArray(message.teaching_receipts)
-    ? message.teaching_receipts.length : 0;
-  const evidenceHtml = (referencesHtml || teachingReceiptsHtml)
+  const evidenceHtml = (referencesHtml || cognitionSaveReceiptsHtml)
     ? _compactResultBlockHtml({
         label: t('chat.result_block.evidence'),
         icon: 'link',
-        count: evidenceRefCount + evidenceReceiptCount,
+        count: evidenceRefCount + (Array.isArray(message.cognition_save_receipts) ? message.cognition_save_receipts.length : 0),
         open: true,
-        bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
+        bodyHtml: `${referencesHtml}${cognitionSaveReceiptsHtml}`,
       })
     : '';
-  const recallCitationsHtml = role === 'assistant' && !hasProjectionCard
+  const recallCitationsHtml = role === 'assistant'
     ? _renderRecallCitationsHtml(message.recall_citations)
     : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
@@ -10097,7 +10132,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   _hydrateActorHeaderLinks(msgDiv);
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
-  if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
   if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, attachmentCid, message._msg_id);
   if (runSummaryHtml) _hydrateRunSummary(msgDiv, opts.cid || currentCid, message.run_id, message.run_summary);
   // Interactive input-form widget (assistant messages only). Appended inside
@@ -10138,26 +10172,33 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) _mountKstarResultReviewCard(bubble, message.kstar_review_card);
   }
+  if (role === 'assistant' && message.asset_change_approval_card) {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble) _mountAssetApprovalCard(bubble, message.asset_change_approval_card);
+  }
 
-  // 预载卡片已按产品决策移除（2026-08-17）：引用资产走自动注入 + LLM 主动
-  // 检索工具（search_ability_assets），不再展示可交互的预载确认卡片。
-  // 2026-09-18 例外：**模型自选**的投影重新挂卡——模型用 attach_assets_to_task
-  // 给这个任务挑了资产，用户必须能看见并一键撤销（onlyModelSelected 让其它授权
-  // 的投影维持"不挂卡"的现状，旧决策不动）。
-  const projectionCardForBubble = _projectionReceiptForMessage(message)
-    || message.recall_projection_card
-    || coalescedProjectionCard;
+  // 「本次使用的记忆」合并卡补全（拍板项 #8，2026-09-28）：引用卡与投影卡
+  // 合并为一张——有引用数据时同步骨架已随气泡渲染（recallCitationsHtml），
+  // 这里把投影数据（带入/省略/状态/撤销口）补进同一张卡；没有骨架时（仅投影
+  // 无引用）创建空 host 交给合并卡填充。其它授权维持"不挂卡"现状（2026-08-17
+  // 决策不动，onlyModelSelected 门在卡模块内判定）。
   if (role === 'assistant' && projectionCardForBubble?.projectionId
       && message.recall_projection_card?.presentation !== 'sidecar'
       && typeof window.mountRecallProjectionCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
-      const host = document.createElement('div');
-      if (message.recall_projection_card) host.dataset.recallProjectionTransport = 'sidecar';
-      bubble.appendChild(host);
-      window.mountRecallProjectionCard(host, projectionCardForBubble, {
+    const host = bubble ? bubble.querySelector('.chat-recall-citations') : null;
+    if (bubble && (!host || !host.dataset.recallProjectionBound)) {
+      const cardHost = host || document.createElement('div');
+      if (!host) {
+        cardHost.className = 'chat-recall-citations';
+        bubble.appendChild(cardHost);
+      }
+      if (message.recall_projection_card) cardHost.dataset.recallProjectionTransport = 'sidecar';
+      _hydrateRecallCitations(msgDiv, attachmentCid, message._msg_id);
+      window.mountRecallProjectionCard(cardHost, projectionCardForBubble, {
         cid: opts.cid || currentCid,
         onlyModelSelected: true,
+        citations: Array.isArray(message.recall_citations) ? message.recall_citations : [],
       });
     }
   }
@@ -10468,24 +10509,64 @@ function _renderMarketplaceInstallCard(card, req, cid, msgId) {
   _hydrateMarketplaceRequestMeta(card, { ...req, kind }, cid, msgId);
 }
 
+/* ── 复盘卡（specs/015 US-704 / contracts/renderer-seams.md §一）─────────────
+ * 三档措辞按主进程**始终下发**的 `expectedSource`（`user` / `inferred` / `none`）
+ * 分档，不按"有没有 expectedResult"猜档：`none` 档省掉的是字段，而字段还在的档位
+ * 不能被读成"用户做过预测"。把系统推断的预期说成用户自述，是这张卡最要命的失真。
+ *
+ * 这两个函数保持**自包含**（不借本文件里的其它函数/常量）：`kstar-review-card.test.ts`
+ * 把它们从源码里切出来、单独喂进一个只有 t/escapeHtml/uiButton 的沙箱里真跑，
+ * 引用外部名字会当场 ReferenceError——而那两条断言是锁定的，不许改。 */
 function _renderKstarResultReviewCard(card, review) {
   if (!card || !review) return;
+  const declaredSource = String(review.expectedSource || '');
+  const expectedText = String(review.expectedResult || '').trim();
+  // 判据：只认下发值。三档之外的取值说明这是本次扩展前落库的历史消息（当年没有这个
+  // 字段），按旧版行为呈现：有正文就当预期行照常显示，没有就不摆。
+  const source = (declaredSource === 'user' || declaredSource === 'inferred' || declaredSource === 'none')
+    ? declaredSource
+    : (expectedText ? 'user' : 'none');
+  // 有来源声明却没有正文（主进程不会这么发）时只省掉预期行、**不改档位**：
+  // 没有内容可核对，就别摆一行空的"预期"。
+  const hasExpected = source !== 'none' && Boolean(expectedText);
+  const status = String(review.status || 'pending');
+  const disposed = status !== 'pending';
   card.dataset.busy = '';
-  card.dataset.status = String(review.status || 'pending');
-  card.className = `chat-kstar-review chat-kstar-result-review is-${card.dataset.status}`;
+  card.dataset.status = status;
+  card.dataset.expectedSource = source;
+  card.className = `chat-kstar-review chat-kstar-result-review is-${status}`;
   card.dataset.kstarReviewId = String(review.reviewId || '');
-  const expected = review.expectedResult
-    ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.expected'))}</strong> ${escapeHtml(review.expectedResult)}</div>` : '';
+  // user：预期行照常；inferred：标签就写明"系统推断的预期"，不与用户自述同形；none：不摆预期行。
+  const expected = hasExpected
+    ? `<div class="chat-kstar-status"><strong>${escapeHtml(source === 'inferred' ? t('kstar.review.expected_inferred_label') : t('kstar.review.expected'))}</strong> ${escapeHtml(expectedText)}</div>`
+    : '';
+  const expectedNote = source === 'inferred'
+    ? `<div class="chat-kstar-status">${escapeHtml(t('kstar.review.expected_inferred_note'))}</div>`
+    : source === 'none'
+      ? `<div class="chat-kstar-status">${escapeHtml(t('kstar.review.expected_none_note'))}</div>`
+      : '';
   const actual = review.actualResult
     ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.actual'))}</strong> ${escapeHtml(review.actualResult)}</div>` : '';
-  const evaluation = `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.agent_eval', 'Agent 评估'))}</strong> ${escapeHtml(t('kstar.review.agent_eval_hint', '系统已根据预期与实际自动判定差异；你只需确认事实是否准确。'))}</div>`;
-  const actions = card.dataset.status === 'pending'
+  // 没有预期可比时不摆"Agent 评估"（`none` 档，或声明了来源却没有正文）：
+  // 这时"系统已根据预期与实际判定差异"这句本身就是空话（契约 §一：只显示实际结果 + 处置）。
+  const evaluation = hasExpected
+    ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.agent_eval', 'Agent 评估'))}</strong> ${escapeHtml(t('kstar.review.agent_eval_hint', '系统已根据预期与实际自动判定差异；你只需确认事实是否准确。'))}</div>`
+    : '';
+  // 已处置态：控件留在原位但**禁用**（不是消失，用户回看时看得见自己处置过什么），
+  // 并写明已记录。刷新/历史重放走同一条渲染路径（见 _mountKstarResultReviewCard）。
+  const actions = disposed
     ? `<div class="chat-kstar-actions">
+        ${uiButton({ label: t('kstar.review.confirm'), role: 'primary', size: 'sm', disabled: true, attrs: { 'data-kstar-result-action': 'confirm' } })}
+        ${uiButton({ label: t('kstar.review.correct'), size: 'sm', disabled: true, attrs: { 'data-kstar-result-action': 'correct' } })}
+      </div>
+      <div class="chat-kstar-status">${escapeHtml(t('kstar.review.confirmed'))}</div>`
+    : `<div class="chat-kstar-actions">
         ${uiButton({ label: t('kstar.review.confirm'), role: 'primary', size: 'sm', attrs: { 'data-kstar-result-action': 'confirm' } })}
         ${uiButton({ label: t('kstar.review.correct'), size: 'sm', attrs: { 'data-kstar-result-action': 'correct' } })}
-      </div>`
-    : `<div class="chat-kstar-status">${escapeHtml(t('kstar.review.confirmed'))}</div>`;
-  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('kstar.review.card_title'))}</div>${evaluation}${expected}${actual}${actions}`;
+      </div>`;
+  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('kstar.review.card_title'))}</div>${evaluation}${expected}${expectedNote}${actual}${actions}`;
+  // 已处置的卡不再绑处置回调：按钮已 disabled，绑上也只是死按钮。
+  if (disposed) return;
   for (const button of card.querySelectorAll('[data-kstar-result-action]')) {
     button.addEventListener('click', () => _resolveKstarResultReview(card, review, button.dataset.kstarResultAction));
   }
@@ -10499,6 +10580,7 @@ async function _resolveKstarResultReview(card, review, action) {
     const verdict = action === 'correct' ? 'skip' : 'met';
     const result = await window.cogseed.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
     if (!result?.ok) throw new Error(result?.error || 'kstar review confirmation failed');
+    // 落终态后按「已处置」重绘：控件进禁用态 + 显示已记录（失败则回到可点，见 catch）。
     _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
   } catch (error) {
     card.dataset.busy = '';
@@ -10507,15 +10589,34 @@ async function _resolveKstarResultReview(card, review, action) {
   }
 }
 
+/* ── 资产审批卡片（specs/008 US-406）──────────────────────────────────────
+ * 卡片本体（渲染 / 编辑 / 三态处置）在 `modules/chat-asset-approval.js`——它得能被
+ * 真实调用测试，而不是只靠"源码里有这一行"的断言（真机吃过一次亏：卡片渲染抛错被
+ * 吞掉，界面上只剩一块空白）。这里只留挂载点，模块缺席要吵，不要静默不挂。 */
+function _mountAssetApprovalCard(host, payload) {
+  if (typeof ChatAssetApproval === 'undefined' || !ChatAssetApproval) {
+    _convLog.warn('chat-asset-approval module missing; approval card not mounted');
+    return;
+  }
+  ChatAssetApproval.mount(host, payload);
+}
+
 function _mountKstarResultReviewCard(host, review) {
   if (!host || !review?.reviewId || !review?.episodeId) return;
   const selector = `.chat-kstar-result-review[data-kstar-review-id="${CSS.escape(String(review.reviewId))}"]`;
+  // 一 reviewId 一卡：重复消息/重复渲染不挂第二张（与 :8937 的已挂守卫同一口径）。
   if (host.querySelector(selector)) return;
   const card = document.createElement('div');
   host.appendChild(card);
   _renderKstarResultReviewCard(card, review);
+  // 消息载荷里没有处置状态，只有 review 记录里有：刷新/历史重放时补读一次，
+  // 已处置的卡要**保持**已处置态（否则刷新一次就又能重复处置）。`confirmed`= 点了
+  // 确认事实；`unknown`= 点了纠正说明（skip 落 unknown，见 task-closure.ts 的
+  // confirmationReviewInput）——两者都已处置。正忙时不插手，免得把处置中的卡
+  // 还原成可点。
   window.cogseed.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
     const state = result?.review?.reviewState;
+    if (card.dataset.busy === '1' || card.dataset.status !== 'pending') return;
     if (state === 'confirmed' || state === 'unknown') {
       _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
     }
@@ -15072,7 +15173,7 @@ function _isRedundantRoutingOnlyCommanderRecord(gm) {
       || (Array.isArray(gm.produced) && gm.produced.length)
       || _normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)
       || (Array.isArray(gm.artifacts) && gm.artifacts.length)
-      || (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length)
+      || (Array.isArray(gm.cognition_save_receipts) && gm.cognition_save_receipts.length)
       || (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length)) {
     return false;
   }
@@ -16529,6 +16630,34 @@ function _shouldDeferInterruptedHistoryRecord(cid, gm) {
   return false;
 }
 
+// Streaming placeholders do not pass through appendChatMessage's complete
+// HTML renderer. Build the same evidence block once the authoritative message
+// arrives so host-owned save receipts are visible immediately and on reload.
+function _mountFinalEvidenceBlock(ph, gm) {
+  const bubble = ph?.querySelector('.chat-bubble');
+  if (!bubble || bubble.querySelector('.chat-cognition-save-receipts')) return;
+  const referencesHtml = Array.isArray(gm.references) && gm.references.length
+    ? _renderMessageReferencesHtml(gm.references)
+    : '';
+  const cognitionHtml = _renderCognitionSaveReceiptsHtml(gm.cognition_save_receipts);
+  if (!referencesHtml && !cognitionHtml) return;
+  const referenceCount = Array.isArray(gm.references) ? gm.references.length : 0;
+  const cognitionCount = Array.isArray(gm.cognition_save_receipts) ? gm.cognition_save_receipts.length : 0;
+  const template = document.createElement('template');
+  template.innerHTML = _compactResultBlockHtml({
+    label: t('chat.result_block.evidence'),
+    icon: 'link',
+    count: referenceCount + cognitionCount,
+    open: true,
+    bodyHtml: `${referencesHtml}${cognitionHtml}`,
+  });
+  const block = template.content.firstElementChild;
+  if (!block) return;
+  const finalEl = bubble.querySelector('[data-role="final"]');
+  bubble.insertBefore(block, finalEl && finalEl.parentElement === bubble ? finalEl : bubble.firstChild);
+  if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(block);
+}
+
 // Transform a streaming placeholder bubble into its finalized form:
 // freeze the process rail (keep visible + collapsed by default),
 // render markdown into [data-role="final"], append produced-files chip /
@@ -16593,6 +16722,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   const text = String(gm.text || '');
   const failedAssistant = _isFailedAssistantContent(text, gm);
   _streamingSetFinal(ph, text, { archive: archive && !failedAssistant });
+  _mountFinalEvidenceBlock(ph, gm);
   if (failedAssistant) {
     _attachFailedAssistantActions(ph, () => _messageTextForActions(ph, text));
     _handleModelOutputErrorForUi(cid, ph, _failedAssistantErrorText(ph) || text, {
@@ -16679,18 +16809,15 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     }
   }
 
-  if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length) {
-    const bubble = ph.querySelector('.chat-bubble');
-    if (bubble && !bubble.querySelector('.chat-teaching-receipts')) {
-      bubble.insertAdjacentHTML('beforeend', _renderTeachingReceiptsHtml(gm.teaching_receipts));
-      _hydrateTeachingReceipts(ph);
-    }
-  }
-
 
   if (gm.kstar_review_card) {
     const bubble = ph.querySelector('.chat-bubble');
     if (bubble) _mountKstarResultReviewCard(bubble, gm.kstar_review_card);
+  }
+
+  if (gm.asset_change_approval_card) {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble) _mountAssetApprovalCard(bubble, gm.asset_change_approval_card);
   }
 
   // Interactive web-app artifacts (chat-app:// iframe). Idempotent — skips

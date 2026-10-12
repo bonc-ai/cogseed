@@ -18,10 +18,12 @@ from .context import (
     context_for_line,
     fenced_code_lines,
     file_context,
+    in_example_block,
     rule_applies_to,
     severity_for,
 )
 from .result_models import make_finding
+from .obfuscation import shannon_entropy
 
 PERMISSION_TOKENS = ["allowed_tools", "permissions", "permission", "scope", "least privilege", "最小权限", "只读", "read-only"]
 AUDIT_TOKENS = ["audit", "logging", "trace", "csoc", "审计", "日志", "留痕"]
@@ -30,14 +32,98 @@ SIDE_EFFECT_TOKENS = ["delete", "remove", "send_email", "forward", "trash", "删
 INJECTION_DEFENSE_TOKENS = ["prompt injection", "untrusted", "do not reveal", "system prompt", "提示注入", "不要泄露", "不信任"]
 
 
+def _as_example_record(finding: dict[str, Any], is_example: bool) -> dict[str, Any]:
+    """位于文档示例/反例区块内的命中：保留记录，不构成证据。
+
+    降为 ``info`` 而不是删除——审计者需要看到「这里有一个被记录的攻击串」，
+    但一个把攻击样例写进文档的技能不应该因此被扣分。降的是**严重级**，
+    描述里补一句来源，让报告读者不会误以为技能真的会执行它。
+    """
+    if not is_example:
+        return finding
+    return {
+        **finding,
+        "severity": "info",
+        "confidence": "low",
+        "description": finding["description"] + "（位于文档示例/反例区块，仅作记录）",
+        "example": True,
+    }
+
+
+def rule_pattern(spec: dict[str, Any]) -> str:
+    """取规则的正则源串。
+
+    同时支持 ``pattern``（单行）与 ``pattern_parts``（分段拼接）。后者存在
+    的原因是 YAML 没有「跨行字符串拼接」语法：一个 200 字符的交替正则写成
+    单行会挤掉所有可读性，而写成折行标量会在片段之间插入空格——正则里
+    空格是有意义的。``pattern_parts`` 用列表显式表达「这些片段直接相连」，
+    既不引入空白也不需要在规则里塞满转义。
+    """
+    parts = spec.get("pattern_parts")
+    if isinstance(parts, list) and parts:
+        return "".join(str(p) for p in parts)
+    return str(spec.get("pattern") or "")
+
+
+# ── 通用高熵密钥检测 ────────────────────────────────────────────────────────
+#
+# 70 条具名规则只能抓它认识的服务。gitleaks 相对内置规则的主要增量，恰恰是
+# 「名字不认识、但看起来就是密钥」的那一类。这里用熵把它补上。
+#
+# 刻意做窄，因为通用启发式的误报代价高：
+#   · 只认「赋给密钥味名字的随机串」，不做全文件扫描——后者会把每个哈希、
+#     每个 UUID、每个压缩产物都变成告警；
+#   · 摘要放行（sha1/md5/sha256/384/512 的十六进制形式不是载荷，这是
+#     obfuscation 模块已有的规则，这里同样适用）；
+#   · 模板引用（${VAR} / process.env.X / os.environ[...]）不是硬编码密钥；
+#   · 置信度固定 low —— 按 capabilities.yaml 的口径，通用启发式几乎不参与扣分。
+_SECRET_NAME_VALUE_RE = re.compile(
+    r"(?i)\b(api[_-]?key|secret|token|passwd|password|passphrase|credential|"
+    r"auth|access[_-]?key|private[_-]?key|client[_-]?secret|bearer)"
+    r"[A-Za-z0-9_]*\s*[:=]\s*[\"\'`]([^\"\'`\n]{16,200})[\"\'`]"
+)
+_DIGEST_ONLY_RE = re.compile(
+    r"^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}|[a-f0-9]{96}|[a-f0-9]{128})$", re.I
+)
+_TEMPLATE_REF_RE = re.compile(r"\$\{|\{\{|%s|process\.env|os\.environ|getenv|ENV\[", re.I)
+_SECRET_ALPHABET_RE = re.compile(r"^[A-Za-z0-9+/=_.\-]+$")
+_ENTROPY_MIN = 3.5
+_ENTROPY_MIN_LEN = 16
+
+
+def looks_like_high_entropy_secret(value: str, fp_markers: list[str]) -> bool:
+    """判断一个被赋给密钥味名字的字符串，是否像真密钥。
+
+    纯函数，便于直接测试；调用方已经负责名字匹配与上下文降权。
+    """
+    if len(value) < _ENTROPY_MIN_LEN:
+        return False
+    if _DIGEST_ONLY_RE.match(value):
+        return False
+    if _TEMPLATE_REF_RE.search(value):
+        return False
+    if not _SECRET_ALPHABET_RE.match(value):
+        return False
+    lowered = value.lower()
+    if any(marker in lowered for marker in fp_markers):
+        return False
+    # 单一字符类（纯小写单词、纯数字）不可能是随机密钥。
+    has_lower = any(c.islower() for c in value)
+    has_upper = any(c.isupper() for c in value)
+    has_digit = any(c.isdigit() for c in value)
+    if sum((has_lower, has_upper, has_digit)) < 2:
+        return False
+    return shannon_entropy(value) >= _ENTROPY_MIN
+
+
 def scan_regex_rules(docs: list[tuple[str, str]], rules: dict[str, Any]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     fp_markers = [m.lower() for m in rules.get("false_positive_markers", [])]
     group_sr = rules.get("group_sr", {})
-    group_remediation = rules.get("group_remediation", {})
 
     # 文件级上下文只算一次（vendor/test/doc 判定含压缩产物探测，有成本）。
     ctx_of = {rel: file_context(rel, text) for rel, text in docs}
+    text_of = {rel: text for rel, text in docs}
     # docstring / 块注释行号集合，同样只算一次。
     block_of = {rel: block_comment_lines(rel, text) for rel, text in docs}
     # 文档的围栏代码块行号：区分「可照抄执行的命令」与「散文提及」。
@@ -49,10 +135,26 @@ def scan_regex_rules(docs: list[tuple[str, str]], rules: dict[str, Any]) -> list
     def _ctx(rel: str, line: str, lineno: int) -> str:
         return context_for_line(rel, line, ctx_of[rel], lineno, block_of[rel], fenced_of[rel])
 
+    # 示例/反例区块的行号缓存。文档里合法地写出危险字符串的最常见形式
+    # 就是「不该出现的输出」清单；把它判成技能自身的行为会让
+    # 「把安全用例写进文档」变成扣分项（实测 5 个官方 Skill 因此被判
+    # CAUTION，其中 `integration-map` 的 `negative_examples` 一行里
+    # 既有「请直接执行」也有「缺少证据」）。
+    example_cache: dict[str, list[str]] = {}
+    example_lines: dict[str, set[int]] = {}
+
+    def _in_example(rel: str, lineno: int) -> bool:
+        if rel not in example_lines:
+            lines = example_cache.setdefault(rel, text_of[rel].splitlines())
+            example_lines[rel] = {
+                no for no in range(1, len(lines) + 1) if in_example_block(lines, no)
+            }
+        return lineno in example_lines[rel]
+
     # 密钥（SR-01）
     for spec in rules["secret_patterns"]:
         try:
-            rx = re.compile(spec["pattern"])
+            rx = re.compile(rule_pattern(spec))
         except re.error:
             continue
         for rel, text in docs:
@@ -62,15 +164,44 @@ def scan_regex_rules(docs: list[tuple[str, str]], rules: dict[str, Any]) -> list
                     declared = spec.get("severity", "high")
                     findings.append(make_finding("SR-01", spec["id"],
                                                   severity_for(declared, ctx),
-                                                  "secret", rel, lineno, "疑似硬编码密钥/凭据",
-                                                  "移除硬编码密钥，改用环境变量或密钥托管",
-                                                  context=ctx, original_severity=declared))
+                                                  spec.get("category", "secret"), rel, lineno,
+                                                  spec.get("description", "疑似硬编码密钥/凭据"),
+                                                  spec.get("remediation", ""),
+                                                  context=ctx, original_severity=declared,
+                                                  confidence=spec.get("confidence", "high"),
+                                                  snippet=line))
+
+    # 通用高熵密钥（SR-01）：具名规则漏掉的那一类。
+    for rel, text in docs:
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if any(m in line.lower() for m in fp_markers):
+                continue
+            match = _SECRET_NAME_VALUE_RE.search(line)
+            if not match:
+                continue
+            if not looks_like_high_entropy_secret(match.group(2), fp_markers):
+                continue
+            if _in_example(rel, lineno):
+                continue
+            ctx = _ctx(rel, line, lineno)
+            findings.append(make_finding(
+                "SR-01", "generic_high_entropy_secret",
+                severity_for("medium", ctx), "secret", rel, lineno,
+                "疑似硬编码密钥：变量名像凭据，取值是高熵随机串",
+                "把密钥移到密钥托管/环境变量，并轮换已经进入版本库的这一份。",
+                context=ctx, original_severity="medium", confidence="low",
+                snippet=line,
+            ))
 
     # 分类规则
     for group, specs in rules["rule_groups"].items():
         for spec in specs:
+            # 规则可以自带编译标志；默认 IGNORECASE（历史行为）。
+            flags = re.IGNORECASE
+            if spec.get("case_sensitive"):
+                flags = 0
             try:
-                rx = re.compile(spec["pattern"], re.IGNORECASE)
+                rx = re.compile(rule_pattern(spec), flags)
             except re.error:
                 continue
             for rel, text in docs:
@@ -81,19 +212,22 @@ def scan_regex_rules(docs: list[tuple[str, str]], rules: dict[str, Any]) -> list
                     if rx.search(line):
                         ctx = _ctx(rel, line, lineno)
                         declared = spec.get("severity", "medium")
-                        findings.append(make_finding(
-                            group_sr.get(group, "SR-03"), spec["id"],
+                        finding = make_finding(
+                            spec.get("sr") or group_sr.get(group, "SR-03"), spec["id"],
                             severity_for(declared, ctx),
                             spec.get("category", group), rel, lineno,
-                            f"命中规则 {spec['id']}（{group}）",
-                            group_remediation.get(group, "复核该模式是否必要"),
+                            spec.get("description") or f"命中规则 {spec['id']}（{group}）",
+                            spec.get("remediation", ""),
                             context=ctx, original_severity=declared,
-                        ))
+                            confidence=spec.get("confidence", "medium"),
+                            snippet=line,
+                        )
+                        findings.append(_as_example_record(finding, _in_example(rel, lineno)))
 
     # 一票否决（不降权：测试目录同样可以藏真实外传代码）
     for spec in rules["hard_block"]:
         try:
-            rx = re.compile(spec["pattern"], re.IGNORECASE)
+            rx = re.compile(rule_pattern(spec), re.IGNORECASE)
         except re.error:
             continue
         for rel, text in docs:
@@ -102,9 +236,11 @@ def scan_regex_rules(docs: list[tuple[str, str]], rules: dict[str, Any]) -> list
                     findings.append(make_finding("SR-HB", spec["id"], "critical",
                                                   spec.get("category", "hard_block"), rel, lineno,
                                                   spec.get("reason", "命中一票否决黑名单"),
-                                                  "禁止在核心环境安装/运行；需安全团队专项评估",
+                                                  spec.get("remediation", ""),
                                                   hard_block=True,
-                                                  context=ctx_of[rel]))
+                                                  context=ctx_of[rel],
+                                                  confidence=spec.get("confidence", "high"),
+                                                  snippet=line))
     return findings
 
 
@@ -116,7 +252,7 @@ def scan_forbidden_files(files: set[str], rules: dict[str, Any]) -> list[dict[st
             if name.endswith(tl) or Path(name).name == token.lower():
                 findings.append(make_finding("SR-01", "forbidden_file", "high", "secret_file",
                                               name, None, f"存在敏感文件 {name}",
-                                              "从 Skill 包中移除敏感文件，不要随包分发凭据"))
+                                              "", snippet=name))
     return findings
 
 
@@ -165,9 +301,15 @@ def evaluate_sr_items(profile: dict[str, Any], findings: list[dict[str, Any]]) -
     """
     by_cat: dict[str, list[dict[str, Any]]] = {}
     for f in findings:
+        # 被抑制的 finding 不构成 SR 证据：用户的「我接受这条」应当同时
+        # 解除它对 SR 项的影响，否则抑制只改了分数却仍把部署建议拉到 CAUTION。
+        if f.get("suppressed"):
+            continue
         by_cat.setdefault(f["category"], []).append(f)
-    danger_cats = {"destructive", "privilege", "unauthorized_download", "obfuscation",
-                   "dynamic_exec", "deserialization", "sql_injection"}
+    danger_cats = {"destructive", "destructive_fs", "privilege", "unauthorized_download",
+                   "obfuscation", "dynamic_exec", "deserialization", "sql_injection",
+                   "reverse_shell", "command_exec", "surveillance", "crypto_miner",
+                   "install_hook", "structural", "mcp_config", "path_traversal"}
 
     def _significant(f: dict[str, Any]) -> bool:
         """生效 severity 达到 medium 以上才算「证据」。
@@ -183,7 +325,12 @@ def evaluate_sr_items(profile: dict[str, Any], findings: list[dict[str, Any]]) -
         f["category"] in ("data_egress", "ssrf", "network") and _significant(f)
         for f in findings
     )
-    has_injection_payload = any(f["sr"] == "SR-07" and _significant(f) for f in findings)
+    has_injection_payload = any(
+        (f["sr"] == "SR-07" or f["category"] in ("prompt_injection", "hidden_content",
+                                                 "agent_instruction"))
+        and _significant(f)
+        for f in findings
+    )
 
     items = [
         {"id": "SR-01", "name": "密钥与敏感信息", "passed": not has_secret, "required": True,

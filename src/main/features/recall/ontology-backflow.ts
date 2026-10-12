@@ -6,12 +6,14 @@
  * 提议半段），未确认候选不可被用是硬红线。
  *
  * 映射照 personal_ontology_candidates 的 mapOnboardingType 先例（onboarding
- * 抽取 → 候选池的同一条路），保证两条来源线的候选形状一致：
- *   personal → preference / user   （个人偏好与画像，A-Box 断言形状）
+ * 抽取 → 候选池的同一条路），保证仍需本体判断的类型形状一致：
+ *   personal → 不回流（个人资产已经是“我的认知”的权威记录；再建本体候选会
+ *              让用户重复确认，并留下无法跟随编辑/暂停的第二份值）
  *   rule     → rule       / shared （操作规则，R-Box 规则形状）
  *   template → instance   / user   （实例化信息，A-Box 断言形状）
  *   skill_method → 不回流。蓝图 T-Box 里 Skill/MetaSkill 是独立概念族，
  *   技能的家是认知资产库本身，不进个人本体断言（拍板 2026-09-19）。
+ * 既有 asset-backflow 候选保留原样；本模块不批量删除或改写用户旧数据。
  *
  * 幂等：candidate_id 恒为 `asset-backflow-<assetId>`，addCandidate 同 id
  * 覆盖 → 池内永远只保留该资产的最新版，融合/更新不堆积新条目。
@@ -34,7 +36,7 @@ interface BackflowTypeMapping {
 
 /** 白名单单点：null = 该类型不回流。键覆盖 AbilityAssetType 全枚举。 */
 const BACKFLOW_TYPES: Record<string, BackflowTypeMapping | null> = {
-  personal: { kind: 'preference', scope: 'user' },
+  personal: null,
   rule: { kind: 'rule', scope: 'shared' },
   template: { kind: 'instance', scope: 'user' },
   skill_method: null,
@@ -53,8 +55,9 @@ export function backflowCandidateIdFor(assetId: string): string {
 }
 
 /**
- * 把一条新诞生的正式资产投进本体候选池。返回 offered=false 时带原因：
- * type_not_whitelisted（技能等）/ empty_statement / pool_full（防洪）。
+ * 把仍需要本体判断的正式资产投进候选池。个人资产已是统一权威对象，直接跳过；
+ * 既有 personal 回流候选不会在这里被清理。返回 offered=false 时带原因：
+ * personal_asset_already_canonical / type_not_whitelisted / empty_statement / pool_full。
  * 调用方必须吞异常——回流是增强，不是晋升链路的一环。
  */
 export async function backflowAssetToOntologyPool(
@@ -64,7 +67,12 @@ export async function backflowAssetToOntologyPool(
   const mapping = asset && BACKFLOW_TYPES[asset.type] !== undefined
     ? BACKFLOW_TYPES[asset.type]
     : null;
-  if (!mapping) return { offered: false, reason: 'type_not_whitelisted' };
+  if (!mapping) {
+    return {
+      offered: false,
+      reason: asset?.type === 'personal' ? 'personal_asset_already_canonical' : 'type_not_whitelisted',
+    };
+  }
   const statement = String(asset?.statement || '').trim();
   if (!statement) return { offered: false, reason: 'empty_statement' };
 

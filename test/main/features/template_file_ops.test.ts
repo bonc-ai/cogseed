@@ -442,3 +442,148 @@ describe('template_file_ops › uninstall / archive / reinstall-restore', () => 
     expect(m.templateHasMemoryArchive(UID, 'student')).toBe(false);
   });
 });
+
+// ── D5（specs/009 T012）：模板分节写路径的变更前留档 ────────────────────────
+// 模板分节的写操作走 mutateTemplateFile，此前在 writeTextAtomicSync 之前没有
+// snapshotGroupHistory——改值/删值/删字段/流水升格四条路径全都没有变更前快照
+// （普通组走 mutateGroupContent 有写前留档）。以下断言修复前会失败（D5 举证）。
+
+describe('template_file_ops › D5 变更前留档（模板分节写路径快照）', () => {
+  /** 读该组历史目录下全部快照全文（不依赖文件名格式，只挑 .md）。 */
+  // v2：历史快照是 po-history 下的 JSON（整组状态），渲染回模板方言文本后
+  // 与旧行为逐字对照——断言本体不变，只换了快照存储的读取方式。
+  let viewMod: Awaited<ReturnType<typeof loadView>> | undefined;
+  function loadView() {
+    return import('../../../src/main/features/po/view');
+  }
+  async function readHistorySnapshots(groupId: string): Promise<string[]> {
+    if (!viewMod) viewMod = await loadView();
+    const dir = path.join(tmpDir, UID, 'cloud', 'cognition', 'po-history', groupId);
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.json'))
+      .sort()
+      .map((f) => {
+        const parsed = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        return viewMod!.renderTemplateGroupMarkdown(parsed.group);
+      });
+  }
+
+  async function setup(): Promise<{ m: Awaited<ReturnType<typeof loadMod>>; groupId: string; ref: string }> {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    return { m, groupId: row.group_id, ref: m.buildContentRef(row.group_id, '学习背景') };
+  }
+
+  it('分节字段改值：历史里能找到改前那版（含旧值，逐字）', async () => {
+    const { m, groupId, ref } = await setup();
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    const before = readFile('student.md');
+
+    const res = await m.setFieldValueToRef(UID, ref, '教育阶段', '本科', '硕士');
+    expect(res.ok).toBe(true);
+
+    const snaps = await readHistorySnapshots(groupId);
+    expect(snaps.length).toBeGreaterThan(0);
+    expect(snaps).toContain(before); // 改前那版逐字在历史里
+    expect(before).toContain('- 本科 [手动]');
+    expect(readFile('student.md')).toContain('- 硕士 [手动]');
+  });
+
+  it('分节字段删值：历史里有删前那版且内容逐字一致', async () => {
+    const { m, groupId, ref } = await setup();
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '辅修心理学', '手动');
+    const before = readFile('student.md');
+
+    const res = await m.removeFieldValueToRef(UID, ref, '教育阶段', '本科');
+    expect(res.ok).toBe(true);
+
+    const snaps = await readHistorySnapshots(groupId);
+    expect(snaps).toContain(before); // 删前那版逐字一致
+    expect(before).toContain('- 本科 [手动]');
+    const after = readFile('student.md');
+    expect(after).not.toContain('- 本科 [手动]');
+    expect(after).toContain('- 辅修心理学 [手动]');
+    expect(after).toContain('### 教育阶段'); // 空坑保留（小节不删）
+  });
+
+  it('恢复快照后分节结构（## 分节 / ### 流水）与值顺序不变', async () => {
+    const { m, groupId, ref } = await setup();
+    const groups = await import('../../../src/main/features/personal_ontology_groups');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '值一', '手动');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '值二', '手动');
+    const before = readFile('student.md');
+    // 再写一笔，让「最后一次写之前」的状态（= before）成为最新快照
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '值三', '手动');
+
+    const hist = groups.listGroupHistory(UID, groupId);
+    expect(hist.length).toBeGreaterThan(0);
+    const res = await groups.restoreGroupSnapshot(UID, groupId, hist[0].id);
+    expect(res.ok).toBe(true);
+
+    const restored = readFile('student.md');
+    expect(restored).toBe(before); // 逐字一致（最强断言）
+    // 显式断言任务验收点：分节结构 + 值顺序
+    expect(restored).toContain('## 学习背景');
+    expect(restored).toMatch(/### 教育阶段\n- 值一 \[手动\]\n- 值二 \[手动\]/);
+    expect(restored).toContain('### 流水');
+    expect(restored).not.toContain('值三');
+  });
+
+  it('「没走到要写」与「内容未变」的分支不产生快照（T011 顺序验收）', async () => {
+    const { m, groupId, ref } = await setup();
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    // 首次内容写入：留一版改前状态（v2 口径：安装时为空组不留档）
+    expect(await readHistorySnapshots(groupId)).toHaveLength(1);
+
+    // ① 同值同源去重（changed:false，序列化后内容未变）→ 不新增快照
+    const dup = await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    expect(dup.ok).toBe(true);
+    expect(await readHistorySnapshots(groupId)).toHaveLength(1);
+
+    // ② mutator 拒绝（旧值不存在，没走到要写）→ 不留档
+    const miss = await m.setFieldValueToRef(UID, ref, '教育阶段', '不存在的旧值', '新值');
+    expect(miss.ok).toBe(false);
+    expect(await readHistorySnapshots(groupId)).toHaveLength(1);
+  });
+});
+
+/* ═══════════ 时间锚三态 · 模板分节同款（specs/014 T006）═══════════ */
+
+describe('template_file_ops › asOf 三态透传（specs/014 T006）', () => {
+  it('分节字段：set 清除/设置/缺省三态与普通组一致；非法报错不写', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const groups = await m.readGroups(UID);
+    const row = groups.find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科在读', '手动', undefined, '2026-01');
+
+    // 缺省：只改值，保留 asOf（M12）。
+    expect((await m.setFieldValueToRef(UID, ref, '教育阶段', '本科在读', '本科四年级')).ok).toBe(true);
+    let fields = await m.listFieldsByRef(UID, ref);
+    expect(fields.fields?.find((f) => f.name === '教育阶段')?.values[0])
+      .toMatchObject({ value: '本科四年级', asOf: '2026-01' });
+
+    // set：换锚。
+    expect((await m.setFieldValueToRef(UID, ref, '教育阶段', '本科四年级', '本科四年级', { asOf: '2026-05' })).ok).toBe(true);
+    fields = await m.listFieldsByRef(UID, ref);
+    expect(fields.fields?.find((f) => f.name === '教育阶段')?.values[0].asOf).toBe('2026-05');
+
+    // clear：只删锚。
+    expect((await m.setFieldValueToRef(UID, ref, '教育阶段', '本科四年级', '本科四年级', { clearAsOf: true })).ok).toBe(true);
+    fields = await m.listFieldsByRef(UID, ref);
+    expect(fields.fields?.find((f) => f.name === '教育阶段')?.values[0].asOf).toBeUndefined();
+
+    // 非法：报错且文件未变。
+    const before = readFile('student.md');
+    expect(await m.setFieldValueToRef(UID, ref, '教育阶段', '本科四年级', '本科四年级', { asOf: '2026-13' }))
+      .toEqual({ ok: false, error: 'invalid asof' });
+    expect(readFile('student.md')).toBe(before);
+    // 用户线 append 的非法同样报错。
+    expect(await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士在读', '手动', undefined, undefined, { asOf: '2026-9' }))
+      .toEqual({ ok: false, error: 'invalid asof' });
+  });
+});

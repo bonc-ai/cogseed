@@ -4,6 +4,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 
+// 标题闸门（设计 3.2）后晋升链对不合规 summary 走 LLM 起标题；本文件的候选
+// 由 KStar 抽取/即时直投内生生成（summary＝模板拼接或正文首句），单测无模型，
+// mock 出确定性合规标题（与 asset-title-suggestion.test.ts 同一边界口径）。
+vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({
+  suggestAbilityAssetTitle: async () => ({ title: '模型重起的样本标题' }),
+}));
+
+
 // 语义查重不依赖真实 embedding 模型（测试环境无关性）：按文本哈希生成
 // 确定性 512 维向量——不同文本向量不同 → 查重走 no_match 正常晋升。
 vi.mock('../../../../src/main/features/kb_embed', () => ({
@@ -1045,7 +1053,7 @@ describe('KSTAR task closure', () => {
 });
 
 describe('KSTAR direct experience asset line', () => {
-  it('precipitates verified workflow experience as an ability asset via the unified candidate pool (direct line)', async () => {
+  it('precipitates verified workflow experience as an experience entry (direct line, specs/016 分流)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
@@ -1059,23 +1067,24 @@ describe('KSTAR direct experience asset line', () => {
       sourceRefs: [{ kind: 'execution', id: 'kse-run-direct' }],
     }]);
 
-    // 设计 §3.2.1：落点改为统一候选池，随后晋升为资产。
-    expect(result.createdAssetIds).toHaveLength(1);
-    expect(result.candidateIds).toHaveLength(1);
-    const all = await assets.listAbilityAssets('closure-user');
-    expect(all).toHaveLength(1);
-    expect(all[0]).toMatchObject({
+    // specs/016 T013（FR-001）：直通线 create 提案改道写经验条目
+    // （skill_method → workflow），不进候选池、不晋升资产。
+    expect(result.experienceIds).toHaveLength(1);
+    expect(result.candidateIds).toEqual([]);
+    expect(result.createdAssetIds).toEqual([]);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const stored = await experiences.listExperiences('closure-user');
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      experienceType: 'workflow',
       status: 'active',
-      maturity: 'seed',
-      type: 'skill_method',
-      version: '1',
+      scope: 'report',
     });
-    expect(all[0].statement).toContain('verified workflow');
-    expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
-    // 候选池有记录（晋升后 confirmed）。
-    const pending = await candidates.listRecallCandidates('closure-user');
-    expect(pending).toHaveLength(1);
-    expect(pending[0].status).toBe('confirmed');
+    expect(stored[0].body).toContain('verified workflow');
+    expect(stored[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
+    // 候选池与资产库零记录（隔离）。
+    expect(await candidates.listRecallCandidates('closure-user')).toHaveLength(0);
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(0);
   });
 
   it('updates the explicitly targeted existing asset through the direct KSTAR line', async () => {
@@ -1110,11 +1119,22 @@ describe('KSTAR direct experience asset line', () => {
     }]);
 
     const updated = await assets.readAbilityAsset('closure-user', original.asset.id);
-    // 2026-09-19 刀二：update 是融合不是覆盖——旧正文保留、新判断融入，v2。
+    // update 是融合不是覆盖：v2 推进，旧证据保留，新判断落成正文。
+    //
+    // 期望值在 2026-09-29「正文一等规范」后从"新判断＋旧正文第二句"变成单句：
+    // 那次改动把**新建路**的资产正文收敛为 judgment 单一来源（value 不再拼进
+    // statement），所以这个种子晋升出来的旧正文只有一句，融合时它被同主题的
+    // 新判断改写掉，没有第二句可保留。
+    //
+    // 融合的"旧句保留 / 新句追加 / 同主题改写"三档语义由
+    // test/main/features/recall/statement-fusion.test.ts 用 keptCount / added /
+    // replaced 专门覆盖；这条集成用例只负责验证更新链路走通、版本推进与证据
+    // 累积，不重复承担融合算法本身的断言（把种子改成两句会把它推到语义查重的
+    // 另一条分支上，反而测不到更新路径）。
     expect(updated).toMatchObject({
       id: original.asset.id,
       version: '2',
-      statement: 'Update the report verification rule to require an acceptance check.Keep report verification consistent across runs.',
+      statement: 'Update the report verification rule to require an acceptance check.',
     });
     expect(updated.evidenceRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-original' }),
@@ -1189,22 +1209,22 @@ describe('KSTAR direct experience asset line', () => {
     expect(episode).toBeDefined();
     expect(episode!.s?.workspaceId).toBe('sp_abc123');
 
-    // 任务级沉淀（真实 KSTAR 资产出口）→ 资产带 spaceId（空间资产 tab 过滤键）。
+    // 任务级沉淀（真实 KSTAR 产出出口，specs/016 分流后为经验条目）→ 经验
+    // 带 spaceId（空间过滤键，与资产同语义）。
     // 注意：闭环已把 episode attach 到磁盘上的 requirement，必须重读最新对象
     // （precipitateRequirementLevel 按传入对象的 episodeIds 聚合）。
     const freshRequirement = await store.readKstarRequirement('closure-user', requirement.id);
     expect(freshRequirement?.episodeIds).toContain('kse-run-direct-space-real');
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
     const result = await precipitation.precipitateRequirementLevel('closure-user', freshRequirement!);
-    expect(result.createdAssetIds.length).toBeGreaterThan(0);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const all = await assets.listAbilityAssets('closure-user');
-    const created = all.find((a) => a.id === result.createdAssetIds[0]);
+    expect(result.experienceIds.length).toBeGreaterThan(0);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const created = (await experiences.listExperiences('closure-user')).find((e) => e.id === result.experienceIds[0]);
     expect(created).toBeDefined();
     expect(created!.spaceId).toBe('sp_abc123');
   });
 
-  it('does not duplicate the direct asset across repeated precipitation (content-addressed)', async () => {
+  it('does not duplicate the direct experience across repeated precipitation (id-stable)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
@@ -1219,7 +1239,11 @@ describe('KSTAR direct experience asset line', () => {
     await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
     await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
 
-    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
+    // specs/016 T013：重复沉淀幂等——经验 id 稳定派生（同 episode 同提案
+    // 同序），createExperience 同 id 返回既有记录，不产生第二条；资产面零。
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    expect(await experiences.listExperiences('closure-user')).toHaveLength(1);
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(0);
   });
 
   it('precipitates nothing when no learning signal exists', async () => {
@@ -1340,7 +1364,7 @@ describe('KSTAR group terminal subscriber', () => {
 
 
 
-  it('never posts a review confirmation card — self-evolution is agent-implemented', async () => {
+  it('posts exactly one review confirmation card per closure (idempotent by reviewId)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     let listener: ((event: any) => void) | undefined;
     const published: any[] = [];
@@ -1355,12 +1379,19 @@ describe('KSTAR group terminal subscriber', () => {
       } as any),
       publishReviewCard: async (userId, conversationId, review) => { published.push({ userId, conversationId, review }); },
     });
-    listener?.({ run_id: 'run-review-card', user_id: 'group-user', conversation_id: 'cid-review', status: 'completed', started_at_ms: 0, finished_at_ms: 1 });
+    const event = { run_id: 'run-review-card', user_id: 'group-user', conversation_id: 'cid-review', status: 'completed', started_at_ms: 0, finished_at_ms: 1 };
+    listener?.(event);
+    listener?.(event);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The user cannot verify the expected-vs-actual comparison (they made no
-    // prediction and do not observe execution internals) — no card is posted.
-    expect(published).toEqual([]);
+    // US-704 定案「恢复发送」（D11）：收口后卡片必须到达用户（预期 / 实际 +
+    // 处置入口），且同一 review 只发一次——重复终态不产生第二张卡。
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      userId: 'group-user',
+      conversationId: 'cid-review',
+      review: { id: 'ksr-kse-run-review-card', episodeId: 'kse-run-review-card' },
+    });
     stop();
   });
 
@@ -1382,6 +1413,9 @@ describe('KSTAR group terminal subscriber', () => {
     listener?.({ run_id: 'run-waiting', user_id: 'group-user', conversation_id: 'cid-wait', status: 'waiting_input', started_at_ms: 0, finished_at_ms: 1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // US-704 T031 触发条件收口：`waiting_input` 是非终态收口（任务还在等用户
+    // 输入，不是复盘对象），不满足「终态 + 需确认」就不发卡——这与"从不发卡"
+    // 无关：终态收口的卡由上面的用例钉住。
     expect(published).toEqual([]);
     stop();
   });

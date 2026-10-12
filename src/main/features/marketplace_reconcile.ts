@@ -42,9 +42,11 @@ import {
   extractBundleSafely, postJson, quarantineStagingName, quarantineTrashName,
 } from './marketplace';
 import { decideCurrentSwitch } from './marketplace/current-switch-policy';
+import { hubContentStatus } from '../../shared/hub-content-status';
+import { observeHubSkillStatus } from './marketplace/content-status';
 import { readInstalledVersion } from './marketplace/installed-version';
 import { MarketplaceError } from './marketplace/errors';
-import { getSkillMetadata } from './marketplace/metadata-adapter';
+import { normalizeCatalogListRow, getSkillMetadata } from './marketplace/metadata-adapter';
 import { fetchImmutableSource } from './marketplace/source-fetch';
 import { writeVersionCopy } from './marketplace/version-store';
 import { validateSkillDir } from '../quality';
@@ -354,6 +356,7 @@ export async function checkServerUpdatesForInstalls(
       }
       continue;
     }
+    await observeHubSkillStatus(uid, s.id, server);
     if (!_isInstallRowAppCompatible({ id: s.id, min_app_version: server.min_app_version }, 'skill')) {
       continue;
     }
@@ -463,7 +466,9 @@ async function _fetchServerCatalogMap(kind: 'agents' | 'skills', ids: string[]):
       `/marketplace/${kind}/list`, { page, size: PAGE_SIZE, ids: [...wanted] },
     );
     const list = r.list || [];
-    for (const row of list) {
+    for (const raw of list) {
+      const row = kind === 'skills' ? normalizeCatalogListRow(raw) : raw;
+      if (!row) continue;
       if (typeof row.id !== 'string' || !wanted.has(row.id)) continue;
       if (typeof row.version === 'string' && typeof row.published_at === 'number') {
         out.set(row.id, {
@@ -915,7 +920,7 @@ function _skillListFromAgentJson(agentJson: Record<string, unknown>): string[] {
 }
 
 function _marketplaceStatus(row: { status?: string; state?: string }): string {
-  return String(row.status || row.state || '').trim().toLowerCase();
+  return hubContentStatus(row);
 }
 
 function _assertApprovedDependencySkill(

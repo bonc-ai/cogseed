@@ -110,14 +110,21 @@ function asAssetUsageReceipt(userId: string, value: RecallJsonRecord): AssetUsag
   if (
     value.schemaVersion !== 1
     || value.ownerId !== userId
-    || value.id !== receiptId(input)
+    // Historical schema-v1 receipts used a different deterministic key
+    // derivation. The id is an opaque event key, not an authorization input;
+    // keep old records readable while still requiring the current safe format.
+    || typeof value.id !== 'string'
+    || !/^aur-[a-f0-9]{24}$/.test(value.id)
     || !Array.isArray(value.evidenceRefs)
     || typeof value.createdAt !== 'string'
     || (value.reason !== undefined && typeof value.reason !== 'string')
   ) throw new Error('malformed asset usage receipt');
   const evidenceRefs = normalizeEvidence(input);
   if (evidenceRefs.length !== value.evidenceRefs.length) throw new Error('malformed asset usage receipt');
-  return { ...value, evidenceRefs } as AssetUsageReceipt;
+  // Normalize historical key derivations in memory. This lets a later
+  // contradicted receipt replace the same logical usage event and prevents
+  // old and current ids from being counted as two separate events.
+  return { ...value, id: receiptId(input), evidenceRefs } as AssetUsageReceipt;
 }
 
 export async function recordAssetUsageReceipt(
@@ -188,4 +195,92 @@ export async function listAssetUsageReceipts(userId: string, taskRunId?: string)
   const latest = new Map<string, AssetUsageReceipt>();
   for (const record of records) latest.set(record.id, record);
   return [...latest.values()].filter((record) => taskRunId === undefined || record.taskRunId === taskRunId);
+}
+
+/** 「实际采用」证据查询（specs/015 T003）。**只读、零写入。**
+ *
+ *  采用口径（唯一权威，来自 specs/011，不得重议）：只有 usage 回执同时满足
+ *  `status === 'applied'` **且** `boundary === 'real'` 才算「实际采用」；
+ *  `injected`/`dispatched`（注入回执）只是「被带入」，**不构成采用**；
+ *  `considered_not_applicable`/`available_no_opportunity`/`contradicted`/
+ *  `usage_unknown` 同样不构成采用依据——以上一律不出现在结果里。
+ *
+ *  读法复用 `listAssetUsageReceipts`（同 id 取末条：负反馈覆盖 append 的产物
+ *  只留最终状态，不双计），不另写第二套判定；`taskRunIds` 为空数组返回空列表
+ *  （**不是**全量）。结果顺序遵循流内首次出现顺序，不做额外排序。 */
+export interface AppliedUsageReceipt {
+  id: string;
+  assetId: string;
+  assetVersion: string;
+  taskRunId: string;
+  evidenceRefs: CognitionSourceRef[];
+}
+
+export async function listAppliedUsageReceipts(
+  userId: string,
+  query: { taskRunIds: string[]; assetId?: string },
+): Promise<AppliedUsageReceipt[]> {
+  if (
+    !safeId(userId)
+    || !query || typeof query !== 'object'
+    || !Array.isArray(query.taskRunIds)
+    || query.taskRunIds.some((taskRunId) => !safeId(taskRunId))
+    || (query.assetId !== undefined && !safeId(query.assetId))
+  ) throw new Error('invalid asset usage receipt query');
+  const taskRunIds = new Set(query.taskRunIds);
+  if (!taskRunIds.size) return [];
+  return (await listAssetUsageReceipts(userId))
+    .filter((receipt) => receipt.status === 'applied' && receipt.boundary === 'real')
+    .filter((receipt) => taskRunIds.has(receipt.taskRunId))
+    .filter((receipt) => query.assetId === undefined || receipt.assetId === query.assetId)
+    .map((receipt) => ({
+      id: receipt.id,
+      assetId: receipt.assetId,
+      assetVersion: receipt.assetVersion,
+      taskRunId: receipt.taskRunId,
+      evidenceRefs: [...receipt.evidenceRefs],
+    }));
+}
+
+/** 采用回执的**视图投影**（2026-09-25 验收修复 US-602 AC5/AC6）：资产详情要显示
+ *  「实际采用」的逐条记录——同次任务、具体版本、执行事件类型、产物位置。回执本身
+ *  只按 taskRunId 过滤，这里按 assetId 取（与 `listAbilityAssetVersionsWithUsage`
+ *  同一读法：全量读后过滤，量级相同）。**只透传 ref 的 kind/id/title**，不含
+ *  excerpt、不含绝对路径、不含资产正文——可读名由渲染层唯一解析器负责。 */
+export interface AssetUsageReceiptView {
+  id: string;
+  assetVersion: string;
+  taskRunId: string;
+  status: AssetUsageStatus;
+  evidenceKind: AssetUsageEvidenceKind;
+  evidence: Array<{ kind: string; id: string; title?: string }>;
+  boundary: AssetUsageBoundary;
+  createdAt: string;
+}
+
+export async function listAssetUsageReceiptViews(
+  userId: string,
+  assetId: string,
+  limit = 50,
+): Promise<AssetUsageReceiptView[]> {
+  if (!safeId(userId) || !safeId(assetId)) throw new Error('invalid asset usage receipt query');
+  const bounded = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 50;
+  return (await listAssetUsageReceipts(userId))
+    .filter((receipt) => String(receipt.assetId || '') === assetId)
+    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+    .slice(0, bounded)
+    .map((receipt) => ({
+      id: receipt.id,
+      assetVersion: String(receipt.assetVersion || ''),
+      taskRunId: String(receipt.taskRunId || ''),
+      status: receipt.status,
+      evidenceKind: receipt.evidenceKind,
+      evidence: (receipt.evidenceRefs || []).slice(0, 5).map((ref) => ({
+        kind: String(ref.kind || ''),
+        id: String(ref.id || ''),
+        ...(ref.title ? { title: String(ref.title) } : {}),
+      })),
+      boundary: receipt.boundary,
+      createdAt: String(receipt.createdAt || ''),
+    }));
 }

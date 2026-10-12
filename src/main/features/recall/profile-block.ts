@@ -2,35 +2,38 @@
  * profile-block.ts — 背景块的资产库内容源（2026-09-19 合并实施·清单 #7）。
  *
  * 「我的画像＋核心偏好」从资产库渲染（type=personal、active），按使用次数
- * 取头部若干条——取代原"读 USER.md/MEMORY.md 全量"。过渡衔接：记忆文件尚
- * 有条目（迁移未跑）时由调用方回退文件渲染；迁移完成后文件为空、资产库
- * 自然接管，同一轮对话内无感切换。
+ * 取头部若干条。迁移期间，USER.md/MEMORY.md 中未迁移的独立记录由调用方
+ * 继续渲染；关联镜像则服从资产的状态和范围，不从旧文件绕过门控。
  *
  * 预算对齐原 USER 档（1500 字量级）：条数封顶 + 单条截断 + 总长封顶。
  */
 
 import type { RecallAbilityAssetRecord } from './candidate-service';
+import { filterRecallAssetsForAgentRead, type RecallAgentReadContext } from './prompt-injection';
 
 export const PROFILE_BLOCK_MAX_ENTRIES = 6;
 export const PROFILE_ENTRY_MAX_CHARS = 500;
 export const PROFILE_BLOCK_TOTAL_CHARS = 1_600;
 
-export async function loadAssetProfileEntries(
+export async function loadAssetProfileEntriesWithAvailability(
   userId: string,
   deps: {
     listAssets?: (userId: string) => Promise<RecallAbilityAssetRecord[]>;
     usageCounts?: (userId: string) => Promise<ReadonlyMap<string, number>>;
+    readContext?: RecallAgentReadContext;
   } = {},
-): Promise<string[]> {
+): Promise<{ entries: string[]; hasPersonalAssets: boolean }> {
   const { listAbilityAssets } = await import('./asset-service');
   const { loadAssetUsageStats } = await import('./asset-catalog');
   const listAssets = deps.listAssets || ((uid: string) => listAbilityAssets(uid));
+  const records = await listAssets(userId);
+  const personalRecords = records.filter((asset) => asset.type === 'personal');
+  const activePersonal = personalRecords.filter((asset) => asset.status === 'active');
+  const assets = await filterRecallAssetsForAgentRead(userId, activePersonal, deps.readContext || {});
+  if (!assets.length) return { entries: [], hasPersonalAssets: personalRecords.length > 0 };
   const usageCounts = deps.usageCounts
     ? await deps.usageCounts(userId)
     : new Map(Object.entries(await loadAssetUsageStats(userId)).map(([id, stat]) => [id, stat.count]));
-
-  const assets = (await listAssets(userId))
-    .filter((asset) => asset.type === 'personal' && asset.status === 'active');
   // 两档排序（2026-09-20 出身收敛）：刚沉淀的（72h 内）最优先——刚教的偏好
   // 立即生效，不被"用得少"压出块；其余一档。同档内使用次数为主、新近为辅。
   // 出身（确认/模型记的）不再是排序或显示维度：模型记下来的=已确定。
@@ -45,7 +48,7 @@ export async function loadAssetProfileEntries(
     const recency = Date.parse(asset.updatedAt || '') || 0;
     return uses * 1_000_000_000_000 + recency;
   };
-  return assets
+  const entries = assets
     .slice()
     .sort((left, right) => (tierOf(right) - tierOf(left)) || (scoreOf(right) - scoreOf(left)))
     .slice(0, PROFILE_BLOCK_MAX_ENTRIES)
@@ -57,4 +60,12 @@ export async function loadAssetProfileEntries(
       return { entries: [...acc.entries, text], total: acc.total + text.length };
     }, { entries: [], total: 0 })
     .entries;
+  return { entries, hasPersonalAssets: personalRecords.length > 0 };
+}
+
+export async function loadAssetProfileEntries(
+  userId: string,
+  deps: Parameters<typeof loadAssetProfileEntriesWithAvailability>[1] = {},
+): Promise<string[]> {
+  return (await loadAssetProfileEntriesWithAvailability(userId, deps)).entries;
 }

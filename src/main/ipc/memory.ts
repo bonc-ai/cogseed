@@ -10,11 +10,13 @@
  *   memory.reveal      → { ok }                                       (showItemInFolder, path resolved server-side from scope)
  *   memory.importParse → { items:[{ text, target, kind, threat }] }   (advisory classifier; user confirms before merge)
  *
- * Scope payload: `{ target: 'user' | 'shared' | 'agent', agentId? }`. Legacy
- * `target:'memory'` still maps to the shared store. The renderer never supplies
- * a filesystem path (reveal resolves from scope; user scoping comes from
- * `ctx.userId`). This is a VIEW over `features/memory.ts` — it never
- * re-implements limits/separator/scanner/dedup. See PC/CLAUDE.md §3.
+ * Scope payload: `{ target: 'user' | 'shared' | 'agent' | 'space', agentId?, spaceId?, projectId? }`.
+ * `projectId` is only a legacy fallback hint and is accepted for a Space after
+ * checking `project.json.space_id`. Legacy `target:'memory'` still maps to the
+ * shared store. The renderer never supplies a filesystem path (reveal resolves
+ * from scope; user scoping comes from `ctx.userId`). This is a VIEW over
+ * `features/memory.ts` — it never re-implements limits/separator/scanner/dedup.
+ * See PC/CLAUDE.md §3.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -22,7 +24,8 @@ import { shell } from 'electron';
 import * as memory from '../features/memory';
 import * as spaces from '../features/spaces';
 import type { MemoryScope } from '../features/memory';
-import { userMemoryFile, userProfileFile, userMemoryDir, agentMemoryFile, projectMemoryFile, spaceMemoryFile } from '../paths';
+import { userMemoryFile, userProfileFile, userMemoryDir, agentMemoryFile, projectMemoryFile, projectMetaFile, spaceMemoryFile } from '../paths';
+import { readJson, safeId } from '../storage';
 import { createLogger } from '../logger';
 
 const log = createLogger('ipc:memory');
@@ -67,6 +70,34 @@ async function resolveScope(userId: string, payload: any): Promise<MemoryScope> 
   return scope;
 }
 
+/** Resolve the legacy Project fallback only when that Project belongs to the
+ * requested Space. The id is renderer supplied, so path safety and ownership
+ * are checked before reading or copying any legacy bytes. */
+async function legacyProjectForSpace(
+  userId: string,
+  scope: MemoryScope,
+  payload: any,
+): Promise<string | undefined> {
+  if (typeof scope !== 'object' || !('space' in scope) || payload?.projectId === undefined) return undefined;
+  const projectId = String(payload.projectId || '').trim();
+  if (!safeId(projectId)) throw new Error('invalid project id');
+  const meta = await readJson<Record<string, unknown>>(projectMetaFile(userId, projectId));
+  if (meta.space_id !== scope.space) throw new Error('project_space_mismatch');
+  return projectId;
+}
+
+function effectiveSpaceEntries(userId: string, scope: MemoryScope, projectId?: string) {
+  return typeof scope === 'object' && 'space' in scope
+    ? memory.listSpaceEntriesWithProjectFallback(userId, scope.space, projectId)
+    : memory.listEntries(userId, scope);
+}
+
+function effectiveMemoryPath(userId: string, scope: MemoryScope, legacySource?: 'project', projectId?: string): string {
+  return legacySource === 'project' && projectId
+    ? projectMemoryFile(userId, projectId)
+    : fileForScope(userId, scope);
+}
+
 function exportFileInfo(userId: string, scope: MemoryScope) {
   const filePath = fileForScope(userId, scope);
   const { entries } = memory.listEntries(userId, scope);
@@ -95,20 +126,30 @@ function listAgentScopes(userId: string): string[] {
 export const invokeHandlers = {
   'memory.list': async (payload: any, ctx: any) => {
     const scope = await resolveScope(ctx.userId, payload);
-    const res = memory.listEntries(ctx.userId, scope);
-    return { ...res, path: fileForScope(ctx.userId, scope) };
+    const projectId = await legacyProjectForSpace(ctx.userId, scope, payload);
+    const res = effectiveSpaceEntries(ctx.userId, scope, projectId);
+    return { ...res, path: effectiveMemoryPath(ctx.userId, scope, res.legacySource, projectId) };
   },
 
   'memory.add': async (payload: any, ctx: any) => {
+    const scope = await resolveScope(ctx.userId, payload);
+    const projectId = await legacyProjectForSpace(ctx.userId, scope, payload);
+    if (typeof scope === 'object' && 'space' in scope) {
+      memory.backfillProjectMemoryToSpaceForWrite(ctx.userId, scope.space, projectId);
+    }
     return memory.addEntryTransactional(
       ctx.userId,
-      await resolveScope(ctx.userId, payload),
+      scope,
       String(payload?.content || ''),
     );
   },
 
   'memory.replace': async (payload: any, ctx: any) => {
     const scope = await resolveScope(ctx.userId, payload);
+    const projectId = await legacyProjectForSpace(ctx.userId, scope, payload);
+    if (typeof scope === 'object' && 'space' in scope) {
+      memory.backfillProjectMemoryToSpaceForWrite(ctx.userId, scope.space, projectId);
+    }
     return memory.replaceEntryTransactional(
       ctx.userId,
       scope,
@@ -119,6 +160,10 @@ export const invokeHandlers = {
 
   'memory.remove': async (payload: any, ctx: any) => {
     const scope = await resolveScope(ctx.userId, payload);
+    const projectId = await legacyProjectForSpace(ctx.userId, scope, payload);
+    if (typeof scope === 'object' && 'space' in scope) {
+      memory.backfillProjectMemoryToSpaceForWrite(ctx.userId, scope.space, projectId);
+    }
     return memory.removeEntryTransactional(
       ctx.userId,
       scope,
@@ -150,7 +195,10 @@ export const invokeHandlers = {
   'memory.reveal': async (payload: any, ctx: any) => {
     // Path is resolved here from the scope — the renderer never supplies a
     // path, so there's no arbitrary-reveal surface.
-    const filePath = fileForScope(ctx.userId, await resolveScope(ctx.userId, payload));
+    const scope = await resolveScope(ctx.userId, payload);
+    const projectId = await legacyProjectForSpace(ctx.userId, scope, payload);
+    const effective = effectiveSpaceEntries(ctx.userId, scope, projectId);
+    const filePath = effectiveMemoryPath(ctx.userId, scope, effective.legacySource, projectId);
     try {
       fs.statSync(filePath);
     } catch {

@@ -16,6 +16,11 @@ function _initSkillsStaticBindings() {
     if (typeof load !== 'function') return;
     load('marketplace').then(() => openMarketplace('skill')).catch(() => {});
   });
+  const useButton = document.getElementById('skill-use-btn');
+  if (useButton) useButton.outerHTML = _skillUiButton({
+    label: t('skills.use'), role: 'primary', size: 'sm', className: 'skill-card-use skill-dialog-btn',
+    attrs: { id: 'skill-use-btn', title: t('skills.use_tooltip'), 'aria-label': t('skills.use_tooltip') },
+  });
   document.getElementById('skill-use-btn')?.addEventListener('click', () => {
     if (_selectedSkill && !_skillsCache?.some((s) => s.id === _selectedSkill.id && s.enabled === false)) {
       useSkill(_selectedSkill.id, _selectedSkill.name);

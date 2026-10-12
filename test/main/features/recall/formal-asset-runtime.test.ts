@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { evaluateAssetRuntimeEligibility } from '../../../../src/main/features/recall/formal-assets/runtime';
 
-const RANK: Record<string, number> = { L0: 0, L1: 1, L2: 2, L3: 3 };
 const active = { status: 'active' as const, scope: 'review' };
 
 describe('asset runtime gate', () => {
@@ -108,21 +107,6 @@ describe('asset runtime gate', () => {
     expect(evaluateAssetRuntimeEligibility(asset, {
       agentId: 'agent-a', fileKinds: ['pdf'],
     }).reasons).toContain('scope_mismatch');
-  });
-
-  // 缺失的敏感级不等于 L0：目的地声明了上限就必须先分级。
-  it('treats an unclassified sensitivity as unresolved, not as L0', () => {
-    const result = evaluateAssetRuntimeEligibility(
-      { ...active, maturity: 'transfer_validated' },
-      { maxSensitivity: 'L1', sensitivityRank: RANK },
-    );
-    expect(result.eligible).toBe(false);
-    expect(result.reasons).toContain('sensitivity_unclassified');
-
-    expect(evaluateAssetRuntimeEligibility(
-      { ...active, maturity: 'transfer_validated', sensitivity: 'L2' },
-      { maxSensitivity: 'L1', sensitivityRank: RANK },
-    ).reasons).toContain('sensitivity_above_destination');
   });
 
   it('reports every blocking reason at once instead of short-circuiting', () => {

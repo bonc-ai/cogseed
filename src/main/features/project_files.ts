@@ -26,6 +26,7 @@ import {
   withLocalImportLock,
 } from '../util/file-import';
 import { logErrorSummary, logPathRef, maskId } from '../util/log-redact';
+import { directoryEntryStamp } from '../util/directory-stamp';
 
 const log = createLogger('space_files');
 
@@ -312,7 +313,7 @@ async function filesUnderEntry(absPath: string, root: string): Promise<SpaceFile
 
 interface SpaceTreeCacheEntry {
   generation: number;
-  /** 空间文件根目录指纹（mtime:size）——外部直接改动根目录内容时立即失效。 */
+  /** 根目录元数据及浅层目录项指纹——外部增删改名时失效。 */
   stamp: string;
   expiresAt: number;
   tree: SpaceLibraryNode[];
@@ -351,12 +352,7 @@ export function invalidateSpaceFileTree(userId: string, spaceId?: string): void 
 }
 
 async function _spaceFilesRootStamp(dir: string): Promise<string> {
-  try {
-    const st = await _treeStat(dir);
-    return st ? `${st.mtimeMs}:${st.size}` : 'missing';
-  } catch {
-    return 'missing';
-  }
+  return _spaceTreeIo.runExclusive(() => directoryEntryStamp(dir));
 }
 
 export async function listSpaceFileTree(userId: string, spaceId: string): Promise<SpaceLibraryNode[]> {

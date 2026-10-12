@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -7,6 +7,7 @@ let root: string;
 let previousRoot: string | undefined;
 
 beforeEach(() => {
+  vi.resetModules();
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-asset-usage-receipt-'));
   previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = root;
@@ -59,6 +60,42 @@ describe('asset usage receipts', () => {
 
     const jsonl = path.join(root, 'user-a', 'cloud', 'recall', 'jsonl', 'asset-usage-receipts', 'events.jsonl');
     expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('normalizes historical receipt ids so later user feedback replaces the same event', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const injection = await injections.recordInjectionReceipt('user-legacy-id', {
+      taskRunId: 'run-legacy-id', projectionId: 'proj-legacy-id', assetId: 'asset-legacy-id', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-legacy-id',
+    });
+    const input = {
+      taskRunId: 'run-legacy-id', projectionId: 'proj-legacy-id', assetId: 'asset-legacy-id', assetVersion: '1',
+      injectionReceiptId: injection.id,
+      status: 'applied',
+      evidenceKind: 'tool_call',
+      evidenceRefs: [{ kind: 'execution_evaluation', id: 'eval-legacy-id' }],
+      boundary: 'real',
+    } as const;
+    const original = await usage.recordAssetUsageReceipt('user-legacy-id', input);
+
+    const jsonl = path.join(root, 'user-legacy-id', 'cloud', 'recall', 'jsonl', 'asset-usage-receipts', 'events.jsonl');
+    const stored = JSON.parse(fs.readFileSync(jsonl, 'utf8').trim());
+    stored.id = `aur-${'0'.repeat(24)}`;
+    fs.writeFileSync(jsonl, `${JSON.stringify(stored)}\n`);
+
+    await expect(usage.listAssetUsageReceipts('user-legacy-id')).resolves.toEqual([
+      expect.objectContaining({ id: original.id, status: 'applied', assetId: 'asset-legacy-id' }),
+    ]);
+    await expect(usage.recordAssetUsageReceipt('user-legacy-id', input)).resolves.toMatchObject({ id: original.id, status: 'applied' });
+    expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(1);
+
+    const contradicted = await usage.recordAssetUsageReceipt('user-legacy-id', { ...input, status: 'contradicted' });
+    expect(contradicted).toMatchObject({ id: original.id, status: 'contradicted' });
+    await expect(usage.listAssetUsageReceipts('user-legacy-id')).resolves.toEqual([
+      expect.objectContaining({ id: original.id, status: 'contradicted', assetId: 'asset-legacy-id' }),
+    ]);
+    expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(2);
   });
 
   it('negative feedback overrides an earlier applied receipt; reads return the latest per id (2026-09-14)', async () => {
@@ -195,5 +232,30 @@ describe('asset usage receipts', () => {
       boundary: 'real', status: 'injected',
       channel: 'side_channel' as 'profile_memory',
     })).rejects.toThrow('invalid injection receipt reference');
+  });
+
+  it('画像通道正式资产镜像计入使用统计，onto-* 文件遗留仅留回执（修2）', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const { listRecallUsage } = await import('../../../../src/main/features/recall/usage-service');
+    await injections.recordProfileMemoryInjection('user-a', [
+      { id: 'aa-profile-usage-real', source: 'conv-x', version: '3' },
+      { id: 'onto-abc123def456abc123def456', source: 'user_profile', version: '1' },
+    ], { taskRunId: 'turn-profile-usage', messageId: 'message-profile-usage' });
+
+    // 回执：两条都落（审计「这轮带了什么」以收据流为准）。
+    const receipts = await injections.listInjectionReceipts('user-a', 'turn-profile-usage');
+    expect(receipts.map((row) => row.assetId).sort())
+      .toEqual(['aa-profile-usage-real', 'onto-abc123def456abc123def456']);
+    // 使用统计：只有正式资产镜像（aa-*）——「带入即计一次使用」与投影注入/
+    // 派发/模型自取同口径；onto-* 是迁移回退的文件条目，没有资产本体，不进 usage。
+    const profileUsage = (await listRecallUsage('user-a')).filter((row) => row.taskRunId === 'turn-profile-usage');
+    expect(profileUsage).toHaveLength(1);
+    expect(profileUsage[0]).toMatchObject({
+      assetId: 'aa-profile-usage-real',
+      assetVersion: '3',
+      messageId: 'message-profile-usage',
+      boundary: 'real',
+      outcome: 'injected',
+    });
   });
 });

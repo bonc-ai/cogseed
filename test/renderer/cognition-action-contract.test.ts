@@ -22,7 +22,11 @@ import * as path from 'node:path';
 const root = path.join(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 const core = read('src/renderer/modules/cognition-assets/core.js');
-const views = read('src/renderer/modules/cognition-assets/views.js');
+// 2026-09-29 views.js 机械拆分:候选族/待我处理动作随函数迁入 review-candidate.js /
+// review-views.js,动作扫描按加载顺序合并三源(断言语义不变)。
+const views = ['views.js', 'review-candidate.js', 'review-views.js']
+  .map((file) => read(`src/renderer/modules/cognition-assets/${file}`))
+  .join('\n');
 const app = read('src/renderer/modules/cognition-assets/app.js');
 const ontology = read('src/renderer/modules/personal-ontology.js');
 const fixture = JSON.parse(read('test/renderer/fixtures/cognition-actions.json')) as {
@@ -97,5 +101,17 @@ describe('认知资产动作契约', () => {
     expect(unregistered).toEqual([]);
     // 推荐卡确认的核心层动作存在(app.js case 调用它)。
     expect(core).toContain('acknowledgeAssetRecommendation');
+  });
+});
+
+/* ═══════════ 真机修复守卫（2026-09-26 T035 取证抓出）═══════════
+ * app.js 曾在 purge 按钮的委托分支裸调 confirmUser（helper 实际经
+ * NS.confirmUser 暴露）→ 真机点击直接 ReferenceError，「立即彻底删除」
+ * 按钮一直是死的。源码级钉住：app.js 内不得再出现裸引用。 */
+describe('app.js 委托层的 helper 引用（真机修复守卫）', () => {
+  it('confirmUser 一律经 NS.confirmUser——裸引用即红', () => {
+    const bare = [...app.matchAll(/(?<!NS\.)\bconfirmUser\s*\(/g)];
+    expect(bare.map((m) => m[0]), `app.js 存在裸 confirmUser 调用（真机会 ReferenceError）：${bare.length} 处`).toHaveLength(0);
+    expect(app).toContain('NS.confirmUser');
   });
 });

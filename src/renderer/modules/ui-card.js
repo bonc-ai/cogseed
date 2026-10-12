@@ -43,32 +43,48 @@
     const value = options || {};
     const title = String(value.title || '').trim();
     if (!title) throw new TypeError('uiResourceCard requires a title');
+    if (value.action && value.actions) throw new TypeError('uiResourceCard accepts either action or actions, not both');
+    const usesLegacyAction = value.actions == null && Boolean(value.action);
+    const actions = value.actions == null
+      ? (value.action ? [value.action] : [])
+      : value.actions;
+    if (!Array.isArray(actions)) throw new TypeError('uiResourceCard actions must be an array');
     const icon = value.icon && typeof root.uiIconHtml === 'function'
       ? `<span class="ui-resource-card__icon">${root.uiIconHtml(value.icon)}</span>`
       : '';
     const description = value.description
       ? `<p class="ui-resource-card__description">${escapeText(value.description)}</p>`
       : '';
-    const status = value.status
-      ? `<span class="ui-resource-card__status">${escapeText(value.status)}</span>`
-      : '<span class="ui-resource-card__status"></span>';
-    const action = value.action && typeof root.uiButton === 'function'
-      ? root.uiButton({
-        label: value.action.label,
-        role: value.action.role || 'primary',
-        size: value.action.size || 'sm',
-        loading: value.action.loading,
-        disabled: value.action.disabled,
-        attrs: value.action.attrs,
-      })
+    let status = '';
+    if (value.status && typeof value.status === 'object') {
+      if (typeof root.uiStatusPill !== 'function') throw new TypeError('uiResourceCard semantic status requires uiStatusPill');
+      status = `<div class="ui-resource-card__status">${root.uiStatusPill(value.status)}</div>`;
+    } else if (value.status) {
+      status = `<span class="ui-resource-card__status">${escapeText(value.status)}</span>`;
+    }
+    if (actions.length && typeof root.uiButton !== 'function') throw new TypeError('uiResourceCard actions require uiButton');
+    const actionHtml = actions.map((action) => root.uiButton({
+      label: action.label,
+      role: action.role || (usesLegacyAction ? 'primary' : 'secondary'),
+      size: action.size || 'sm',
+      loading: action.loading,
+      disabled: action.disabled,
+      icon: action.icon,
+      iconEnd: action.iconEnd,
+      attrs: action.attrs,
+    })).join('');
+    const actionGroup = actionHtml ? `<div class="ui-resource-card__actions">${actionHtml}</div>` : '';
+    const footer = status || actionGroup
+      ? `<div class="ui-resource-card__footer">${status}${actionGroup}</div>`
       : '';
     const body = [
       `<div class="ui-resource-card__header">${icon}<div class="ui-resource-card__heading"><h3 class="ui-resource-card__title">${escapeText(title)}</h3></div></div>`,
       description,
       String(value.bodyHtml || ''),
-      `<div class="ui-resource-card__footer">${status}${action}</div>`,
+      footer,
     ].join('');
-    return uiCard({ ...value, bodyHtml: body });
+    const className = ['ui-resource-card--standard', value.className || ''].filter(Boolean).join(' ');
+    return uiCard({ ...value, className, bodyHtml: body });
   }
 
   root.uiCard = uiCard;

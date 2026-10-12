@@ -93,6 +93,20 @@ async function waitForQuiescent(bus: typeof import('../../../../src/main/feature
   throw new Error(`conversation did not quiesce: ${cid}`);
 }
 
+async function waitForForecast(store: typeof import('../../../../src/main/features/kstar/requirement-store'), requirementId: string) {
+  const deadline = Date.now() + 4_000;
+  let requirement = await store.readKstarRequirement('user-a', requirementId);
+  while (
+    !requirement?.forecastId
+    && !['failed', 'skipped'].includes(String(requirement?.forecastStatus || ''))
+    && Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    requirement = await store.readKstarRequirement('user-a', requirementId);
+  }
+  return requirement;
+}
+
 function recordsIn(collection: string): string[] {
   const dir = path.join(tmpDir, 'user-a', 'cloud', 'kstar', collection);
   try { return fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return []; }
@@ -166,7 +180,7 @@ describe('post-merge full-chain scenario (Commander-centric KStar on merged tree
     // 2. Host routing opened task + projection.
     const taskState = await store.readConversationTaskState('user-a', cid);
     expect(taskState?.currentTaskId).toMatch(/^kst-/);
-    const requirement = await store.readKstarRequirement('user-a', taskState!.currentRequirementId!);
+    const requirement = await waitForForecast(store, taskState!.currentRequirementId!);
     expect(requirement?.projectionId).toBeTruthy();
     // 3. World-model auto-forecast committed.
     expect(requirement?.forecastId).toMatch(/^wf-/);
@@ -191,7 +205,7 @@ describe('post-merge full-chain scenario (Commander-centric KStar on merged tree
     expect(review?.system_kind).toBe('kstar_review');
   });
 
-  it('precipitates a lesson-bearing closed requirement as an honest rule asset (P3394 §3.1 line)', async () => {
+  it('precipitates a lesson-bearing closed requirement as an honest experience entry (P3394 §3.1 line, specs/016 分流)', async () => {
     const seeded = await seedClosedRequirementWithLesson();
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
     const requirement = await (await import('../../../../src/main/features/kstar/requirement-store'))
@@ -199,13 +213,13 @@ describe('post-merge full-chain scenario (Commander-centric KStar on merged tree
 
     const result = await precipitation.precipitateRequirementLevel('user-a', requirement!);
 
-    expect(result.createdAssetIds.length).toBeGreaterThan(0);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const asset = await assets.readAbilityAsset('user-a', result.createdAssetIds[0]);
-    // Lesson became the asset body; honest lifecycle (P0-2) survives the
-    // merged normalization (develop renamed the enum, both values preserved).
-    expect(asset.statement).toContain('N 字资料');
-    expect(['user_confirmed_unverified', 'user_confirmed_unverified']).toContain(asset.lifecycleStatus);
-    expect(asset.maturity).toBe('seed');
+    expect(result.experienceIds!.length).toBeGreaterThan(0);
+    expect(result.createdAssetIds).toEqual([]);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    const entry = await experiences.readExperience('user-a', result.experienceIds![0]);
+    // Lesson became the experience body; 经验无成熟度/生命周期口径（specs/016 D12）。
+    expect(entry.body).toContain('N 字资料');
+    expect(entry.experienceType).toBe('lesson');
+    expect(entry.status).toBe('active');
   });
 });

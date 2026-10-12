@@ -61,19 +61,15 @@
 /* 绘制边界隔离：面板内容整体是 innerHTML 全量重建，重绘瞬间曾出现旧帧
    残留（警告条与字段行视觉重叠——实测 DOM 几何无重叠，属合成残影）。
    contain 让容器内的重绘独立提交、内容不得画出边界，降低残影概率。 */
-.ca-scroll { contain: paint; }.ca-kv .ca-v { font-size: var(--font-size-3); margin-top: 2px; }.ca-btn.is-danger { color: var(--ca-red); border-color: var(--color-ca-red-line); }
-.ca-btn.is-danger:hover { background: var(--color-ca-red-bg); }/* 候选详情：决策按钮与「证据引用」同行（整组右端、垂直居中），不再独占
+.ca-scroll { contain: paint; }/* 候选详情：决策按钮与「证据引用」同行（整组右端、垂直居中），不再独占
    卡片底部一行。 */
 /* 候选确认表单收尾：证据整行、动作靠右独占一行（虚线分隔）——此前横排
    flex 让三个动作按钮浮在证据引用旁边（2026-09-21 子安真机抓出）。 */
 .ca-detail-foot { display: flex; flex-direction: column; gap: 12px; }
-.ca-detail-foot .ca-field { margin-bottom: 0; }
-.ca-detail-foot .ca-actions { margin: 2px 0 0; padding-top: 12px; border-top: 1px dashed var(--ca-line); }
 /* 复盘展开块在 ca-detail-foot 内整行独占（2026-09-17 修：横排 flex 的
    第三个项会横向撑破卡片、与证据字段叠字——截图实测块宽 1658 > 容器
    1242）；元信息行内允许换行，长"实际发生"文本不再把行撑出界。 */
 .ca-detail-foot .ca-episode-detail { flex: 1 1 100%; min-width: 0; }
-.ca-episode-detail .ca-meta-item { white-space: normal; }
 
 /* ── 标签片 ───────────────────────────────────────────────── */
 .ca-chip {
@@ -87,12 +83,15 @@
 /* 类型单选 chip：与筛选 .chip 同语言（白底描边 → 选中绿底）。类名
    .ca-chip-opt 是 app.js cand-type 委托选择器，不能改名。 */
 .ca-app .ca-chip.ca-chip-opt { border: 1px solid var(--ca-line); background: var(--color-white); color: var(--ca-ink2); cursor: pointer; padding: 3.5px 13px; }
-.ca-app .ca-chip.ca-chip-opt:hover { border-color: var(--ca-ink3); color: var(--ca-ink); }
+.ca-app .ca-chip.ca-chip-opt:hover { border-color: var(--ca-ink2); color: var(--ca-ink); }
 .ca-app .ca-chip.ca-chip-opt.is-green { background: var(--ca-green-bg); border-color: var(--ca-green-line); color: var(--color-ca-green-text-deep); font-weight: 600; }
 /* 候选确认卡（2026-09-21 重构）：章行 + 完整标题（可换行，至多 3 行）+
-   小节标签置顶的分区版式——不再用左标签栅格把标题截成一行 */
+   小节标签置顶的分区版式——不再用左标签栅格把标题截成一行。
+   整理任务详情卡（2026-09-29 版式统一）共用同一标题位：会话标题从页头
+   降为卡内 h2，与建议详情同构。 */
 #ca-root .ca-candidate-detail .cand-head { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
-#ca-root .ca-candidate-detail .cand-title {
+#ca-root .ca-candidate-detail .cand-title,
+#ca-root .ca-capture-panel .cand-title {
   font-size: var(--font-size-title); font-weight: 700; line-height: 1.5;
   margin: 0 0 16px; white-space: normal; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
@@ -100,7 +99,7 @@
 #ca-root .ca-candidate-detail .field { display: block; margin-bottom: 16px; }
 #ca-root .ca-candidate-detail .field > span {
   display: block; text-align: left; padding: 0 0 6px;
-  font-size: var(--font-size-1); color: var(--ink3); font-weight: 600;
+  font-size: var(--font-size-1); color: var(--ink2); font-weight: 600;
 }
 #ca-root .ca-candidate-detail .field .note { margin-top: 6px; }
 #ca-root .ca-candidate-detail .cand-block-note { margin: 0; }.ca-banner {
@@ -109,9 +108,7 @@
   padding: 10px 14px; color: var(--color-ca-amber-ink-3); font-size: var(--font-size-3);
 }
 /* 持久壳的横幅槽:无横幅时不占位(空 div 的 margin 折叠会留缝)。 */
-.ca-banner-slot:empty { display: none; }.ca-row.is-flat { border: 0; border-top: 1px solid var(--ca-line); border-radius: 0; padding: 10px 2px; cursor: default; }
-.ca-row.is-flat:first-child { border-top: 0; }
-.ca-row:hover:not(.is-flat) { border-color: var(--ca-green-line); }/* 个人本体挂载点:本体 section 借此撑满内容区(它自带双栏布局)。 */
+.ca-banner-slot:empty { display: none; }/* 个人本体挂载点:本体 section 借此撑满内容区(它自带双栏布局)。 */
 .ca-ontology-mount { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 
 /* ── 认知树（原型 v7 移植）────────────────────────────────────
@@ -141,53 +138,38 @@
 #ca-root .leaf-pill-text { font-size: var(--font-size-1); font-weight: 650; fill: var(--ink); }
 #ca-root .branch-plate { fill: var(--color-white-82); stroke: var(--green-l2); }
 #ca-root .branch-plate-name { font-size: var(--font-size-caption); font-weight: 800; fill: var(--green-t); }
-#ca-root .branch-plate-sub { font-size: var(--font-size-1); fill: var(--ink3); }
+#ca-root .branch-plate-sub { font-size: var(--font-size-1); fill: var(--ink2); }
 #ca-root .root-hairs { stroke: var(--trunk); fill: none; stroke-linecap: round; opacity: .45; }
 #ca-root .root-collar { fill: var(--trunk); opacity: .35; }
 #ca-root .soil-band { fill: var(--soil); }
 #ca-root .soil-title { font-size: var(--font-size-2); font-weight: 600; fill: var(--ink2); }
-#ca-root .soil-sub { font-size: var(--font-size-1); fill: var(--ink3); }
-#ca-root .crown-title { font-size: var(--font-size-4); font-weight: 800; fill: var(--green-t); }
+#ca-root .soil-sub { font-size: var(--font-size-1); fill: var(--ink2); }
 #ca-root .crown-sub { font-size: var(--font-size-1); fill: var(--green-t); opacity: .72; }
 #ca-root .crown-dot { fill: var(--green); }
 #ca-root .crown-sheen { fill: var(--color-white); opacity: .35; }
 #ca-root .spot-kstar { fill: var(--blue); stroke: var(--color-white); stroke-width: 1.4; }
 #ca-root .spot-label { font-size: var(--font-size-1); font-weight: 600; fill: var(--ink); paint-order: stroke; stroke: var(--color-white); stroke-width: 3; pointer-events: none; }
 #ca-root .spot.sel .core { stroke: var(--green-d); stroke-width: 3; }
-#ca-root .legend-hint { color: var(--ink3); }.ca-more-wrap { margin-top: 12px; border-top: 1px dashed var(--ca-line); padding-top: 10px; }
+#ca-root .legend-hint { color: var(--ink2); }.ca-more-wrap { margin-top: 12px; border-top: 1px dashed var(--ca-line); padding-top: 10px; }
 .ca-more-toggle {
   border: 0; background: none; padding: 3px 0; cursor: pointer;
-  color: var(--ca-ink3); font: inherit; font-size: var(--font-size-3);
+  color: var(--ca-ink2); font: inherit; font-size: var(--font-size-3);
 }
 .ca-more-toggle::after { content: ' ▾'; font-size: var(--font-size-1); }
 .ca-more-toggle.is-open::after { content: ' ▴'; }
 .ca-more-toggle:hover { color: var(--ca-ink); }
 .ca-more { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+/* display:flex 会盖过 UA 的 [hidden]{display:none}（ID 级特异性）——不补这条，
+   「更多操作」的危险操作面板默认就全展开（2026-09-28 真机走查抓出）。 */
+.ca-more[hidden] { display: none; }
 .ca-more-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--ca-line); border-radius: 8px; background: var(--color-ca-paper); }
 .ca-more-copy { flex: 1 1 auto; min-width: 0; }
 .ca-more-copy strong { display: block; font-size: var(--font-size-3); font-weight: 600; }
-.ca-more-copy span { display: block; font-size: var(--font-size-2); color: var(--ca-ink3); margin-top: 1px; }
-/* 写操作进行中：按钮禁用+变淡+尾部旋转圈（重画后自然消失）。旋转圈用
-   ::after 注入，不改 uiButton 的 DOM 契约。 */
-.ca-btn.is-pending, .ca-more-toggle.is-pending { opacity: .55; pointer-events: none; }
-.ca-btn.is-pending::after {
-  content: ''; display: inline-block; width: 11px; height: 11px; margin-left: 7px;
-  border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
-  vertical-align: -1px; animation: ca-spin .7s linear infinite;
-}
+.ca-more-copy span { display: block; font-size: var(--font-size-2); color: var(--ca-ink2); margin-top: 1px; }
+/
+.ca-more-toggle.is-pending { opacity: .55; pointer-events: none; }
 @keyframes ca-spin { to { transform: rotate(360deg); } }
-
-/* ── 候选 ─────────────────────────────────────────────────── */
-.ca-candidate .ca-content-text { color: var(--ca-ink2); }
 .ca-candidate.is-broken { border-color: var(--color-ca-amber-line); }
-.ca-src { color: var(--ca-ink3); font-size: var(--font-size-2); margin-top: 8px; }
-.ca-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 11px; }
-/* 接缝补足：ca-warn / ca-line 只有上边距、ca-field 只有下边距，相邻时
-   两侧边距都为 0，警告条与「类型」行（无警告条时是标题行与「类型」行）
-   会贴在一起（实测反馈）。 */
-.ca-warn + .ca-field,
-.ca-line + .ca-field { margin-top: 10px; }
-.ca-field > span { color: var(--ca-ink2); font-size: var(--font-size-3); text-align: right; padding-top: 8px; }
 
 /* ── 证明 ─────────────────────────────────────────────────── */
 .ca-proof-list { margin-top: 6px; }
@@ -202,28 +184,13 @@
 .ca-proof-body strong { font-size: 13px; }
 .ca-rating { padding: 0 2px 14px 18px; }
 .ca-rating strong { font-size: var(--font-size-3); }
-.ca-note-zone { margin-top: 10px; }
 
 /* ── 设置与管理 ───────────────────────────────────────────── */
 .ca-subnav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.ca-pill {
-  border: 1px solid var(--ca-line); background: var(--ca-card); border-radius: 999px;
-  padding: 6px 15px; font-size: var(--font-size-3); color: var(--ca-ink2); cursor: pointer; font-family: inherit;
-}
-.ca-pill:hover { border-color: var(--color-ca-green-line-2); }
-.ca-pill.is-on { background: var(--ca-green-bg); border-color: var(--ca-green-line); color: var(--color-ca-green-text-deep); font-weight: 600; }
-.ca-flow {
-  display: flex; align-items: center; justify-content: center; gap: 10px;
-  background: var(--color-ca-paper); border: 1px solid var(--ca-line); border-radius: 12px;
-  padding: 12px; color: var(--ca-ink2); font-size: var(--font-size-3); margin-bottom: 16px;
-}
-.ca-flow b { color: var(--ca-ink); font-weight: 600; }
-.ca-flow i { color: var(--color-ca-ink-faint); font-style: normal; }
-.ca-source-card .ca-line { align-items: center; }
 
 /* ── 空态与加载 ───────────────────────────────────────────── */
-.ca-steps { color: var(--ca-ink3); font-size: 12px; margin: 4px 0; }
-.ca-loading { text-align: center; color: var(--ca-ink3); padding: 40px; }
+.ca-steps { color: var(--ca-ink2); font-size: 12px; margin: 4px 0; }
+.ca-loading { text-align: center; color: var(--ca-ink2); padding: 40px; }
 
 /* ── 窄窗 ─────────────────────────────────────────────────── */
 
@@ -252,16 +219,10 @@
   background: linear-gradient(180deg, var(--color-ca-stage-top), var(--paper) 58%, var(--color-ca-stage-bottom));
 }
 #ca-root .personal-onto-sidebar {
-  width: 284px; flex-shrink: 0; border-right: 1px solid var(--line); background: var(--color-white);
+  width: clamp(220px, 16vw, 268px); flex: 0 0 clamp(220px, 16vw, 268px); border-right: 1px solid var(--line); background: var(--color-white);
   padding: 16px 14px 24px; overflow: auto;
 }
 #ca-root .personal-onto-sidebar-header { display: flex; flex-direction: column; gap: 8px; align-items: stretch; text-align: left; }
-#ca-root .personal-onto-back-btn {
-  width: 100%; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
-  background: var(--color-white); color: var(--ink2); border-radius: var(--radius-field);
-  padding: 8px 10px; font-size: var(--font-size-caption); font-weight: 400; height: auto;
-}
-#ca-root .personal-onto-back-btn:hover { color: var(--green-t); border-color: var(--green-line); }
 #ca-root .personal-onto-sidebar-title { font-size: var(--font-size-5); font-weight: 700; letter-spacing: -0.2px; margin-top: 4px; text-align: left; }
 #ca-root .personal-onto-sidebar-actions { display: flex; flex-direction: column; gap: 7px; }
 #ca-root .personal-onto-nav { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
@@ -272,8 +233,16 @@
   padding: 10px 12px; text-align: left; height: auto; font-weight: 400; font-size: var(--font-size-caption);
 }
 #ca-root .personal-onto-nav-row .personal-onto-nav-row-text { flex: 1; min-width: 0; }
-#ca-root .personal-onto-nav-row .muted { font-size: var(--font-size-1); color: var(--ink3); }
+#ca-root .personal-onto-nav-row .muted { font-size: var(--font-size-1); color: var(--ink2); }
 #ca-root .personal-onto-nav-row.is-active { border-color: var(--green-line); background: var(--green-bg); color: var(--ink); font-weight: 650; }
+#ca-root .personal-onto-nav-row:hover,
+#ca-root .personal-onto-nav-row:active,
+#ca-root .personal-onto-nav-row:focus-visible {
+  border-color: var(--green-line); background: var(--color-brand-soft); color: var(--color-ink);
+}
+#ca-root .personal-onto-nav-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+#ca-root .personal-onto-nav-row.is-active:hover,
+#ca-root .personal-onto-nav-row.is-active:active { background: var(--color-brand-soft); color: var(--color-ink); }
 #ca-root .personal-onto-group-io { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 #ca-root .personal-onto-group-io-btn { width: 100%; }
 #ca-root .personal-onto-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -282,7 +251,7 @@
 }
 #ca-root .personal-onto-main-title { font-size: var(--font-size-6); font-weight: 700; letter-spacing: -0.2px; }
 #ca-root .personal-onto-main-header .note,
-#ca-root .personal-onto-main-header .sub { font-size: var(--font-size-caption); color: var(--ink3); margin-top: 3px; }
+#ca-root .personal-onto-main-header .sub { font-size: var(--font-size-caption); color: var(--ink2); margin-top: 3px; }
 #ca-root .personal-onto-main-body { flex: 1; min-width: 0; overflow: auto; padding: 18px 24px 36px; }
 
 /* 三个盒子的分组卡（词汇/事实/规则）：与原型 .oto-group 同一视觉 */
@@ -300,9 +269,9 @@
 #ca-root .personal-onto-abox-subsec-head > span:first-child { flex: 1; font-size: var(--font-size-caption); font-weight: 650; color: var(--ink); }
 #ca-root .personal-onto-value-detail { border: 1px solid var(--hair); border-radius: var(--radius-item); background: var(--color-white); padding: 2px 10px; margin-top: 8px; }
 #ca-root .personal-onto-value-line > b { font-size: var(--font-size-caption); font-weight: 650; color: var(--ink); }
-#ca-root .personal-onto-value-line > span { display: block; margin-top: 3px; font-size: var(--font-size-1); color: var(--ink3); }
+#ca-root .personal-onto-value-line > span { display: block; margin-top: 3px; font-size: var(--font-size-1); color: var(--ink2); }
 #ca-root .personal-onto-value-text { font-size: var(--font-size-3); color: var(--ink2); line-height: 1.6; }
-#ca-root .personal-onto-value-src { font-size: var(--font-size-1); color: var(--ink3); }
+#ca-root .personal-onto-value-src { font-size: var(--font-size-1); color: var(--ink2); }
 #ca-root .personal-onto-zone-head { display: flex; align-items: center; gap: 9px; margin: 18px 0 8px; }
 #ca-root .personal-onto-zone-head > b { font-size: var(--font-size-4); font-weight: 700; }
 #ca-root .personal-onto-flow-row,
@@ -312,8 +281,8 @@
 }
 #ca-root .personal-onto-flow-row:last-child,
 #ca-root .personal-onto-backflow-row:last-child { border-bottom: 0; }
-#ca-root .personal-onto-backflow-text { font-size: var(--font-size-1); color: var(--ink3); }
-#ca-root .personal-onto-empty { text-align: center; padding: 28px 0; color: var(--ink3); font-size: var(--font-size-caption); }
+#ca-root .personal-onto-backflow-text { font-size: var(--font-size-1); color: var(--ink2); }
+#ca-root .personal-onto-empty { text-align: center; padding: 28px 0; color: var(--ink2); font-size: var(--font-size-caption); }
 /* 会话沉淀条目：默认两行摘要 + 展开（details/clamp，无 JS） */
 #ca-root .poc-entry { flex: 1 1 auto; min-width: 0; }
 #ca-root .poc-entry summary { list-style: none; cursor: pointer; }
@@ -326,58 +295,28 @@
 #ca-root .poc-entry[open] summary::after { content: '收起'; }
 #ca-root .poc-entry .poc-entry-full { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
 /* 导出/导入说明行 */
-#ca-root .personal-onto-io-hint { font-size: var(--font-size-1); color: var(--ink3); line-height: 1.5; padding: 2px 2px 0; }
+#ca-root .personal-onto-io-hint { font-size: var(--font-size-1); color: var(--ink2); line-height: 1.5; padding: 2px 2px 0; }
 #ca-root .personal-onto-filter-chip {
   border: 1px solid var(--line); background: var(--color-white); color: var(--ink2); border-radius: var(--radius-pill);
   font-size: var(--font-size-2); padding: 3.5px 13px; font-weight: 500;
 }
 #ca-root .personal-onto-filter-row { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
-
-/* 设置项卡片（整理方式页，2026-09-14 分区重构）：卡片头=设置名（可带右对齐
-   状态与操作），卡片内=选项行与选中说明。与「从历史会话整理」等卡片同族。 */
-.ca-setcard .ca-line { margin-bottom: 12px; }
 .ca-setcard .ca-subnav { margin-bottom: 8px; }
-.ca-setcard .ca-note { margin: 0; }
-.ca-line-center { justify-content: center; margin-top: 12px; }
 
 /* tab 行紧凑模式（窄窗口自适应）：标题折行时收紧 padding，由 app.js 测量后
    切换（2026-09-15 起副标题已删，只剩标题折行一种触发）。 */
 .ca-tabs.is-compact .ca-tab { padding: 8px 11px 9px; }
 
-/* ── 沉淀设置（2026-09-15 齿轮入口 + 独立设置页） ─────────────────── */
-/* 齿轮按钮（整理页 hero 右侧）：走共享 uiIconButton + icons.js('settings')，
-   此处仅做 ca 作用域的视觉对齐（边框圆角，不抢主操作）。 */
-.ca-app .ca-settings-btn {
-  width: 34px; height: 34px; border-radius: var(--radius-field);
-  border: 1px solid var(--ca-line); background: var(--ca-card); color: var(--ca-ink2);
-}
-.ca-app .ca-settings-btn:hover { color: var(--ca-ink); border-color: var(--ca-green-line); }
-
 /* 夜间自动沉淀条状卡：左说明 / 中时间 / 右开关。 */
 .ca-setting-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; }
 .ca-setting-copy { flex: 1 1 240px; min-width: 0; }
-.ca-setting-time { display: inline-flex; align-items: center; gap: 8px; color: var(--ca-ink3); font-size: var(--font-size-2); }
+.ca-setting-time { display: inline-flex; align-items: center; gap: 8px; color: var(--ca-ink2); font-size: var(--font-size-2); }
 .ca-setting-time input[type="time"] {
   border: 1px solid var(--ca-line); border-radius: 8px; padding: 5px 8px;
   background: var(--ca-card); color: var(--ca-ink); font-family: inherit; font-size: var(--font-size-3);
 }
-
-/* ── 交互反馈与过渡（2026-09-15 全面交互优化） ────────────────── */
-
-/* 列表行/按钮/chip 的状态变化都给过渡：硬切换在轮询重画下会闪。 */
-.ca-row.is-flat { transition: background-color .15s ease; }
-.ca-row.is-flat:hover { background: var(--color-ca-hover); }
-/* 可点行（2026-09-17 版本行点开详情）：手型 + 键盘焦点可见。 */
-.ca-row.is-clickable { cursor: pointer; }
-.ca-row.is-clickable:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: -2px; }
 /* 版本展开详情块：嵌在版本链里，比列表行缩进一层。 */
 .ca-version-detail { margin: 2px 0 8px; }
-/* 可点 chip（2026-09-17 补样式）：类名此前在、样式缺失——可点 chip 和普通
-   chip 长得一样，用户不知道能点。下划虚线 + hover 反馈 + 键盘焦点。 */
-.ca-chip-link { cursor: pointer; border-bottom: 1px dashed currentColor; }
-.ca-chip-link:hover { background: var(--color-ca-hover); }
-.ca-chip-link:focus-visible { outline: 2px solid var(--ca-green-line); outline-offset: 2px; }
-.ca-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }
 .ca-chip { transition: background-color .15s ease, color .15s ease; }
 
 /* 静默刷新指示条：同页 reload（操作后/4s 轮询）期间顶部 2px 进度流动，
@@ -403,20 +342,6 @@
 }
 @keyframes ca-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* 策略抽屉：常驻 DOM、用 grid 行高做展开/收起过渡（0fr↔1fr 可对内容动画，
-   不需要拍一个魔法 max-height）。收起时 inner 隐藏，键盘不会聚焦进去。 */
-.ca-drawer { display: grid; grid-template-rows: 0fr; opacity: .35; transition: grid-template-rows .3s ease, opacity .22s ease; }
-.ca-drawer.is-open { grid-template-rows: 1fr; opacity: 1; }
-.ca-drawer > .ca-drawer-inner { overflow: hidden; min-height: 0; visibility: hidden; transition: visibility 0s .3s; }
-.ca-drawer.is-open > .ca-drawer-inner { visibility: visible; transition: visibility 0s 0s; }
-
-/* 整理页「调整/收起」就地切换文案不重画整页：按钮 label 直接改由 app.js 处理，
-   这里只保证切换瞬间的过渡。 */
-
-/* 整理页策略状态行（hero 右侧，2026-09-15 布局调整）：开关态 + 当前时机 +
-   调整入口；窄窗口随 hero 换行。 */
-.ca-organize-policy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-
 /* ── 整理详情：对话上下文时间线（2026-09-15 详情页改造） ─────────────
    展示口径=本次整理实际读到的消息；user=绿点、assistant=灰点。 */
 .ca-tl { margin-top: 4px; }
@@ -430,30 +355,25 @@
 .ca-tl-text { margin-top: 4px; color: var(--ca-ink2); font-size: var(--font-size-3); white-space: pre-wrap; word-break: break-word; }
 .ca-tl-body { margin-top: 4px; }
 .ca-tl-body summary { cursor: pointer; color: var(--ca-ink2); font-size: var(--font-size-3); list-style: none; }
-.ca-tl-body summary::after { content: ' ▾'; color: var(--ca-ink3); font-size: var(--font-size-1); }
-.ca-tl-body[open] summary { color: var(--ca-ink3); margin-bottom: 4px; }
+.ca-tl-body summary::after { content: ' ▾'; color: var(--ca-ink2); font-size: var(--font-size-1); }
+.ca-tl-body[open] summary { color: var(--ca-ink2); margin-bottom: 4px; }
 .ca-tl-body[open] summary::after { content: ' ▴'; }
-.ca-tl .ca-chips { margin-top: 6px; }
 /* 无候选时模型自述理由的引用块。 */
 .ca-quote { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--ca-line); color: var(--ca-ink2); font-size: var(--font-size-3); white-space: pre-wrap; word-break: break-word; }
 .ca-participants { margin: 2px 0 6px; }
 
 /* 整理过程五步进度条（详情页，extracting 期间轮询自推进）。 */
 .ca-steps-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 12px 0 4px; }
-.ca-step { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ca-line); color: var(--ca-ink3); font-size: var(--font-size-2); transition: color .15s ease, border-color .15s ease, background-color .15s ease; }
+.ca-step { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ca-line); color: var(--ca-ink2); font-size: var(--font-size-2); transition: color .15s ease, border-color .15s ease, background-color .15s ease; }
 .ca-step.is-done { color: var(--ca-ink2); border-color: var(--ca-green-line); }
 .ca-step.is-done::after { content: ' ✓'; font-size: var(--font-size-1); }
 .ca-step.is-current { color: var(--color-ca-green-text); border-color: var(--ca-green-line); background: var(--ca-green-bg); font-weight: 600; }
-.ca-step-arrow { color: var(--ca-ink3); font-size: var(--font-size-1); font-style: normal; }
+.ca-step-arrow { color: var(--ca-ink2); font-size: var(--font-size-1); font-style: normal; }
 
 /* 整理详情：整合卡（2026-09-15 重排，非拼接）——状态 chip + 元信息流 +
    动作按钮收进一行卡头，腾出的空间让待确认表单成为主体。 */
 .ca-capture-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .ca-capture-head > .ca-chip { flex: 0 0 auto; }
-.ca-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; min-width: 0; flex: 1 1 auto; }
-.ca-meta-item { color: var(--ca-ink2); font-size: var(--font-size-2); white-space: nowrap; }
-.ca-meta-item i { font-style: normal; color: var(--ca-ink3); margin-right: 5px; }
-.ca-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ca-pending-embed { margin-top: 12px; }
 .ca-pending-block + .ca-pending-block { border-top: 1px dashed var(--ca-line); margin-top: 14px; padding-top: 14px; }
 
@@ -464,17 +384,17 @@
 .ca-deposit-item + .ca-deposit-item { margin-top: 8px; }
 .ca-deposit-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ca-deposit-head b { font-size: var(--font-size-3); }
-.ca-deposit-item .ca-content-text { margin-top: 6px; }
 .ca-deposit-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 
 /* 整理结果：未保存候选的完整内容块（2026-09-15——不保存后仍能看到
    当时整理出的具体内容）；与已沉淀资产块同一视觉语言。 */
 .ca-result-item { border: 1px solid var(--ca-line); border-radius: var(--radius-item); background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
 .ca-result-item + .ca-result-item { margin-top: 8px; }
+/* 待确认内容块可点（2026-09-29）：整块直达该条的确认页。 */
+.ca-result-item.is-clickable { cursor: pointer; }
+.ca-result-item.is-clickable:hover { border-color: var(--ca-green-line); }
+.ca-result-title { display: block; margin: 0 0 4px; font-size: var(--font-size-3); line-height: 1.5; }
 .ca-result-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ca-result-head .ca-right { margin-left: auto; }
-.ca-result-item .ca-content-text { margin-top: 6px; }
-.ca-result-item .ca-chips { margin-top: 6px; }
 
 /* ── 响应式适配（2026-09-15）───────────────────────────────────
    模块此前无断点：窄窗口下 kv 三列互挤、工具栏与行内按钮溢出。
@@ -482,81 +402,25 @@
    980px —— 中等窗口：统计栅格 3→2 列、hero 统计换行；
    720px —— 窄窗口：kv 单列、工具栏纵向堆叠、行内按钮组换行、抽屉卡收紧。 */
 @media (max-width: 980px) {
-  .ca-kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ca-stats { flex-wrap: wrap; }
-  .ca-hero { flex-wrap: wrap; }
-  .ca-capture-toolbar { gap: 6px; }
 }
 @media (max-width: 720px) {
-  .ca-kv { grid-template-columns: minmax(0, 1fr); }
-  .ca-capture-toolbar { flex-direction: column; align-items: stretch; }
-  .ca-capture-toolbar .ca-right { margin-left: 0; }
   .ca-capture-head { align-items: flex-start; }
-  .ca-head-actions { margin-left: 0; }
-  .ca-row.is-flat { flex-wrap: wrap; row-gap: 6px; }
-  .ca-row-side { margin-left: 0; flex-wrap: wrap; }
   .ca-setcard { padding: 12px 13px; }
   .ca-card { padding: 13px 14px; }
-  .ca-field { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 }
 
 /* 尊重系统「减少动态效果」：动画是增强，不是功能。 */
 @media (prefers-reduced-motion: reduce) {
-  .ca-btn.is-pending::after, .ca-skel-row, .ca-app.is-refreshing::before { animation: none; }
-  .ca-drawer, .ca-drawer > .ca-drawer-inner, .ca-btn, .ca-chip, .ca-row.is-flat { transition: none; }
-}
 
-/* 大类分组（2026-09-22 清单 #2）：组头轻量、不抢资产行的层级。 */
-.ca-family-group { margin-bottom: 14px; }
-.ca-family-head {
-  font-size: 12px; font-weight: 600; color: var(--ca-ink-soft);
-  padding: 4px 10px; border-left: 3px solid var(--ca-accent);
-  margin-bottom: 4px; background: color-mix(in srgb, var(--ca-accent) 6%, transparent); border-radius: 0 6px 6px 0;
+.ca-skel-row,
+.ca-app.is-refreshing::before { animation: none; }
+
+.ca-chip { transition: none; }
 }
-.ca-family-count { font-weight: 400; opacity: 0.75; margin-left: 6px; }
 
 /* ── 认知资产面板 · 新增功能样式 ── */
 .ca-app {
   --ca-hair: var(--border);
-}
-
-/* 推荐卡 */
-.ca-app .ca-warn {
-  background: var(--ca-amber-bg);
-  border: 1px solid var(--ca-amber-line);
-  border-radius: 8px;
-  padding: 9px 13px;
-  margin: 10px 0;
-  font-size: var(--font-size-caption);
-  color: var(--ca-amber-ink);
-}
-
-/* 证据引用行 */
-.ca-app .ca-evrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--ca-ink2);
-  padding: 5px 0;
-  border-bottom: 1px solid var(--ca-hair);
-}
-.ca-app .ca-evrow:last-child { border-bottom: none; }
-
-/* 审计履历行 */
-.ca-app .ca-proc-row {
-  display: flex;
-  gap: 10px;
-  font-size: var(--font-size-caption);
-  padding: 6px 2px;
-  border-bottom: 1px solid var(--ca-hair);
-  align-items: baseline;
-}
-.ca-app .ca-proc-row:last-child { border-bottom: none; }
-.ca-app .ca-proc-when {
-  font-size: 11px;
-  color: var(--ca-ink3);
-  white-space: nowrap;
 }
 
 /* 资产详情标题（h1 语义层级） */
@@ -644,11 +508,12 @@
       折行测量挂在 .ca-tabs/.ca-tab 上）───────────────────────────── */
 #ca-root .ca-tabs {
   height: 46px; gap: 2px; padding: 0 18px; margin-bottom: 0; border-bottom: 1px solid var(--line);
-  background: var(--color-white); align-items: stretch; flex-shrink: 0;
+  background: var(--color-white); align-items: stretch; flex-shrink: 0; min-width: 0;
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
 }
 #ca-root .ca-tab {
   border: none; background: none; color: var(--ink2); padding: 0 14px; position: relative;
-  transition: color var(--duration-control); font-size: var(--font-size-ui-sm);
+  transition: color var(--duration-control); font-size: var(--font-size-ui-sm); flex: 0 0 auto; white-space: nowrap;
   display: inline-flex; align-items: center; gap: 0;
 }
 #ca-root .ca-tab:hover { color: var(--ink); }
@@ -659,7 +524,7 @@
 }
 #ca-root .ca-tab strong { font-size: var(--font-size-ui-sm); font-weight: inherit; }
 #ca-root .ca-tab .bdg {
-  display: inline-block; min-width: 15px; background: var(--amber-dot); color: var(--color-white);
+  display: inline-block; min-width: 15px; background: var(--amber-dot); color: var(--ink);
   font-size: var(--font-size-1); border-radius: var(--radius-pill); padding: 0 5px; line-height: 15px;
   margin-left: 5px; font-weight: 600; text-align: center;
 }
@@ -677,28 +542,29 @@
 #ca-root .card { background: var(--color-white); border: 1px solid var(--line); border-radius: var(--rm); box-shadow: var(--s1); padding: 14px 16px; }
 #ca-root .hero { margin-bottom: 20px; }
 #ca-root .hero h1 { font-size: var(--font-size-6); font-weight: 700; letter-spacing: -0.2px; }
-#ca-root .hero .sub { font-size: var(--font-size-caption); color: var(--ink3); margin-top: 3px; }
+#ca-root .hero .sub { font-size: var(--font-size-caption); color: var(--ink2); margin-top: 3px; }
 #ca-root .stats { display: flex; gap: 10px; margin-top: 14px; }
 #ca-root .stat { flex: 1; background: var(--color-white); border: 1px solid var(--line); border-radius: var(--rm); padding: 11px 14px; box-shadow: var(--s1); }
 #ca-root .stat .v { font-size: var(--font-size-6); font-weight: 800; }
 #ca-root .stat .v.g { color: var(--green-t); }
 #ca-root .stat .v.a { color: var(--amber-t); }
 #ca-root .stat .v.b { color: var(--blue); }
-#ca-root .stat .l { font-size: var(--font-size-2); color: var(--ink3); }
+#ca-root .stat .l { font-size: var(--font-size-2); color: var(--ink2); }
 
 /* 按钮：uiButton 工厂已带 .btn + .ui-button；这里给出原型的皮肤。
    height/line-height 必须覆盖 .ui-button 的定高，否则按钮比原型矮一档。 */
 #ca-root .btn {
   border: none; border-radius: var(--rs); font-size: var(--font-size-3); font-weight: 600;
   padding: 7px 16px; height: auto; line-height: 1.6;
-  background: var(--green); color: var(--color-white); transition: all var(--duration-control);
+  /* WCAG：白字于 #189a5c 仅 3.61，常态即用 deep 绿（5.39）——hover 再深一档 */
+  background: var(--green-d); color: var(--color-white); transition: all var(--duration-control);
 }
-#ca-root .btn:hover { background: var(--green-d); }
+#ca-root .btn:hover { background: var(--green-text-deep, var(--green-d)); filter: brightness(.92); }
 #ca-root .btn.g { background: var(--green-bg); color: var(--green-t); }
 #ca-root .btn.g:hover { background: var(--green-fill); }
 #ca-root .btn.d { background: var(--red); color: var(--color-white); }
 #ca-root .btn.o { background: var(--color-white); color: var(--ink2); border: 1px solid var(--line); }
-#ca-root .btn.o:hover { border-color: var(--ink3); color: var(--ink); }
+#ca-root .btn.o:hover { border-color: var(--ink2); color: var(--ink); }
 #ca-root .btn.sm { padding: 4px 12px; font-size: var(--font-size-2); height: auto; }
 
 #ca-root .chip {
@@ -706,13 +572,13 @@
   border-radius: var(--radius-pill); font-size: var(--font-size-2); padding: 3.5px 13px;
   transition: all var(--duration-control); font-weight: 500;
 }
-#ca-root .chip:hover { border-color: var(--ink3); color: var(--ink); }
+#ca-root .chip:hover { border-color: var(--ink2); color: var(--ink); }
 #ca-root .chip.on { background: var(--green-bg); border-color: var(--green-line); color: var(--green-t); font-weight: 600; }
 
 /* 族名「命名/改名」：原型 .rnm 无框文字钮——行内轻操作，不是描边按钮 */
 #ca-root .rnm { border: 0; background: none; padding: 0; height: auto; color: var(--green-t); font-size: var(--font-size-2); font-weight: 400; }
 #ca-root .rnm:hover { background: none; text-decoration: underline; }
-#ca-root .rnm.is-muted { color: var(--ink3); }
+#ca-root .rnm.is-muted { color: var(--ink2); }
 
 #ca-root .tag {
   font-size: var(--font-size-1); font-weight: 600; border-radius: var(--radius-xs);
@@ -722,7 +588,7 @@
 #ca-root .tag.amber { background: var(--amber-bg); color: var(--amber-t); }
 #ca-root .tag.red { background: var(--red-bg); color: var(--red); }
 #ca-root .tag.gray { background: var(--color-ca-fill-empty); color: var(--ink2); }
-#ca-root .tag.blue { background: var(--blue-bg); color: var(--blue); }
+#ca-root .tag.blue { background: var(--blue-bg); color: var(--ink); }
 
 /* ── 详情页/子页的通用排布件（原型没有对应件，按同一套变量自建）──────
    类名与原型件区分开：这些是「块」不是「标题行」，命名上带 -block/
@@ -735,11 +601,13 @@
 #ca-root .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 #ca-root .actions-right { margin-left: auto; display: flex; gap: 8px; }
 #ca-root .content-text { font-size: var(--font-size-3); color: var(--ink2); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+/* 迁移条目全文折叠三行（2026-09-29 子安「看不懂」整改）：悬浮 title 看全文。 */
+#ca-root .ca-mig-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; cursor: default; }
 #ca-root .field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 11px; }
 #ca-root .field > span { color: var(--ink2); font-size: var(--font-size-3); text-align: right; padding-top: 8px; }
 #ca-root .meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
 #ca-root .meta-item { color: var(--ink2); font-size: var(--font-size-2); white-space: nowrap; }
-#ca-root .meta-k { color: var(--ink3); margin-right: 5px; }
+#ca-root .meta-k { color: var(--ink2); margin-right: 5px; }
 #ca-root .evgroup { margin-top: 10px; }
 #ca-root .evgroup-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; font-size: var(--font-size-5); font-weight: 600; color: var(--ink); }
 #ca-root .evgroup-title .note { font-weight: 400; }
@@ -754,15 +622,28 @@
   vertical-align: -1px; animation: ca-spin .7s linear infinite;
 }
 
-/* 待处理提醒行（来源异常 / 整理失败）：一条卡 + 右侧处理入口 */
+/* 待处理提醒行（来源异常 / 整理失败 / 治理待办）：一条卡 + 右侧处理入口。
+   specs/017 整改二：正文回正文字色（此前整句刷 amber，被真机截图定性为
+   "满页黄字读不懂"）；颜色只留给短状态章。标题=问题是什么，detail=补充，
+   组级 hint/effect=为什么需要你、做了会怎样。 */
 #ca-root .notice-stack { margin-bottom: 16px; }
 #ca-root .notice-row {
   display: flex; align-items: center; gap: 10px; background: var(--color-white);
   border: 1px solid var(--line); border-radius: var(--rm); box-shadow: var(--s1);
   padding: 11px 15px; margin-bottom: 8px;
 }
-#ca-root .notice-text { font-size: var(--font-size-caption); color: var(--amber-t); font-weight: 600; }
+#ca-root .notice-copy { flex: 1; min-width: 0; }
+#ca-root .notice-title { font-size: var(--font-size-3); color: var(--ink); font-weight: 600; }
+#ca-root .notice-detail { font-size: var(--font-size-2); color: var(--ink2); margin-top: 2px; }
 #ca-root .notice-row .sp { flex: 1; }
+/* 内联表单行（补边界 / 定级）：字段换行排在问题下方，标签走既有 .field 网格。 */
+#ca-root .inbox-governance-form { flex-wrap: wrap; align-items: flex-start; }
+#ca-root .inbox-inline-fields { flex: 1 1 100%; display: grid; gap: 8px; margin-top: 10px; }
+#ca-root .inbox-inline-fields .field { margin-bottom: 0; }
+#ca-root .inbox-field-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#ca-root .inbox-effect-note { margin: 0; }
+#ca-root .inbox-batch-names { margin: 0; }
+#ca-root .inbox-batch-names .dbody ul { margin: 6px 0; padding-left: 18px; max-height: 160px; overflow-y: auto; }
 #ca-root .sect-note { margin: -4px 0 10px; }
 #ca-root .hero-row { display: flex; align-items: flex-start; gap: 12px; }
 #ca-root .hero-row .hero-main { flex: 1; min-width: 0; }
@@ -775,27 +656,27 @@
 #ca-root .cap-row .tt.is-link { cursor: pointer; }
 #ca-root .warn + .toolbar { margin-top: 12px; }
 #ca-root .fold { margin-top: 14px; }
-#ca-root .fold summary .n { margin-left: 6px; font-size: var(--font-size-1); color: var(--ink3); font-weight: 500; }
+#ca-root .fold summary .n { margin-left: 6px; font-size: var(--font-size-1); color: var(--ink2); font-weight: 500; }
 #ca-root .fold .dbody .cand { margin-top: 8px; }
 
 #ca-root .backlink {
   display: inline-flex; align-items: center; gap: 5px; border: none; background: none;
-  color: var(--ink3); font-size: var(--font-size-caption); padding: 2px 0; margin-bottom: 10px;
+  color: var(--ink2); font-size: var(--font-size-caption); padding: 2px 0; margin-bottom: 10px;
   height: auto; font-weight: 400;
 }
 #ca-root .backlink:hover { color: var(--ink); }
 #ca-root .sect { font-size: var(--font-size-3); font-weight: 700; margin: 20px 0 9px; display: flex; align-items: center; gap: 9px; }
 #ca-root .sect-t { font-size: var(--font-size-4); font-weight: 700; }
-#ca-root .sect .n { font-size: var(--font-size-1); color: var(--ink3); font-weight: 500; }
+#ca-root .sect .n { font-size: var(--font-size-1); color: var(--ink2); font-weight: 500; }
 #ca-root .list-caption { margin: -6px 0 12px; }
 
 #ca-root .sect .sp { flex: 1; height: 1px; background: var(--line); }
-#ca-root .note { font-size: var(--font-size-2); color: var(--ink3); line-height: 1.55; }
+#ca-root .note { font-size: var(--font-size-2); color: var(--ink2); line-height: 1.55; }
 #ca-root .warn {
   background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: var(--rs);
   padding: 9px 13px; font-size: var(--font-size-caption); color: var(--amber-t);
 }
-#ca-root .empt { text-align: center; padding: 44px 0; color: var(--ink3); }
+#ca-root .empt { text-align: center; padding: 44px 0; color: var(--ink2); }
 #ca-root .empt .e { font-size: var(--font-size-display); margin-bottom: 7px; }
 #ca-root .empt .t { font-size: var(--font-size-ui-sm); color: var(--ink2); }
 #ca-root .empt .s { font-size: var(--font-size-2); margin-top: 2px; }
@@ -845,10 +726,6 @@
 #ca-root .tree-stage.is-loading svg,
 #ca-root .tree-stage.is-loading .fl-top,
 #ca-root .tree-stage.is-loading .fl-bottom { visibility: hidden; }
-#ca-root .tree-loading-card {
-  position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%);
-  width: min(420px, calc(100% - 48px));
-}
 
 /* 抽屉（树页右侧详情）：原型用 transform 移入移出，常驻 DOM */
 #ca-root .drawer {
@@ -857,14 +734,6 @@
   transition: transform 260ms var(--E); display: flex; flex-direction: column;
 }
 #ca-root .drawer.open { transform: none; }
-#ca-root .dw-hd { padding: 14px 18px 10px; display: flex; align-items: flex-start; gap: 11px; border-bottom: 1px solid var(--line); }
-#ca-root .dw-hd .nm { font-size: var(--font-size-title); font-weight: 700; flex: 1; }
-#ca-root .dw-hd .ds { font-size: var(--font-size-2); color: var(--ink3); margin-top: 2px; }
-#ca-root .dw-x { border: none; background: none; color: var(--ink3); width: 29px; height: 29px; border-radius: var(--rs); font-size: var(--font-size-title); }
-#ca-root .dw-x:hover { background: var(--paper); }
-#ca-root .dw-bd { flex: 1; overflow-y: auto; padding: 12px 18px 26px; }
-#ca-root .dw-foot { padding: 11px 18px; border-top: 1px solid var(--line); display: flex; gap: 8px; align-items: center; background: var(--color-white); }
-#ca-root .dw-foot .hint { font-size: var(--font-size-2); color: var(--ink3); flex: 1; }
 #ca-root .tip {
   /* absolute：相对 .tree-stage 定位（app.js 按画布坐标计算）。不能用 fixed——
      .ca-scroll 的 contain:paint 会把 fixed 包含块变成滚动容器，坐标整体漂移
@@ -878,7 +747,7 @@
 /* ── 我的认知 ─────────────────────────────────────────────── */
 #ca-root .fam-hd { display: flex; align-items: center; gap: 9px; margin: 17px 2px 8px; }
 #ca-root .fam-hd .nm { font-size: var(--font-size-caption); font-weight: 700; color: var(--ink2); }
-#ca-root .fam-hd .n { font-size: var(--font-size-1); color: var(--ink3); }
+#ca-root .fam-hd .n { font-size: var(--font-size-1); color: var(--ink2); }
 #ca-root .fam-hd .rnm { border: none; background: none; color: var(--green-t); font-size: var(--font-size-2); padding: 0; height: auto; font-weight: 400; }
 #ca-root .fam-hd .rnm:hover { text-decoration: underline; }
 #ca-root .fam-hd .sp { flex: 1; height: 1px; background: var(--line); }
@@ -890,9 +759,9 @@
 #ca-root .row:hover { border-color: var(--color-ca-line-strong); box-shadow: var(--s2); }
 #ca-root .row .tw { flex: 1; min-width: 0; }
 #ca-root .row .tt { font-size: var(--font-size-ui-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ca-root .row .mm { font-size: var(--font-size-2); color: var(--ink3); margin-top: 2px; }
+#ca-root .row .mm { font-size: var(--font-size-2); color: var(--ink2); margin-top: 2px; }
 #ca-root .row .sd { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-#ca-root .row .chev { color: var(--ink3); font-size: var(--font-size-3); }
+#ca-root .row .chev { color: var(--ink2); font-size: var(--font-size-3); }
 #ca-root .catline { font-size: var(--font-size-caption); color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 #ca-root .switch {
   width: 34px; height: 20px; border-radius: var(--radius-pill); background: var(--color-ca-switch-track);
@@ -908,7 +777,7 @@
 #ca-root .details { border: 1px solid var(--line); border-radius: var(--rm); background: var(--color-white); margin-bottom: 9px; }
 #ca-root .details summary { list-style: none; padding: 11px 15px; font-size: var(--font-size-3); font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; }
 #ca-root .details summary::-webkit-details-marker { display: none; }
-#ca-root .details summary::before { content: '▸'; color: var(--ink3); transition: transform 150ms; }
+#ca-root .details summary::before { content: '▸'; color: var(--ink2); transition: transform 150ms; }
 #ca-root .details[open] summary::before { transform: rotate(90deg); }
 #ca-root .details .dbody { padding: 2px 15px 13px; border-top: 1px solid var(--line); }
 #ca-root .vrow { display: flex; align-items: center; gap: 11px; padding: 9px 2px; border-bottom: 1px solid var(--hair); cursor: pointer; }
@@ -916,43 +785,16 @@
 #ca-root .vrow:hover { background: var(--paper); }
 #ca-root .vrow .vt { flex: 1; min-width: 0; }
 #ca-root .vrow .v1 { font-size: var(--font-size-3); font-weight: 600; display: flex; gap: 8px; align-items: center; }
-#ca-root .vrow .v2 { font-size: var(--font-size-2); color: var(--ink3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ca-root .vrow .inuse { font-size: var(--font-size-1); font-weight: 700; color: var(--green-t); background: var(--green-bg); border-radius: var(--radius-xs); padding: 1px 7px; }
-#ca-root .vr-detail { background: var(--paper); border: 1px solid var(--line); border-radius: var(--rs); padding: 11px 13px; margin: 8px 0; font-size: var(--font-size-caption); line-height: 1.6; }
-#ca-root .vr-detail .kv { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-#ca-root .vr-detail .kv span { font-size: var(--font-size-1); background: var(--color-white); border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 1.5px 8px; color: var(--ink2); }
-#ca-root .vr-acts { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
-#ca-root .ed-form .fld { margin-bottom: 10px; }
-#ca-root .ed-form label { display: block; font-size: var(--font-size-2); font-weight: 600; color: var(--ink2); margin-bottom: 4px; }
-#ca-root .ed-form input, #ca-root .ed-form textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--rs); padding: 8px 11px; font-size: var(--font-size-3); outline: none; transition: border var(--duration-control); }
-#ca-root .ed-form textarea { min-height: 74px; resize: vertical; line-height: 1.55; }
-#ca-root .ed-form input:focus, #ca-root .ed-form textarea:focus { border-color: var(--green-line); }
-#ca-root .use-row { display: flex; gap: 11px; align-items: flex-start; padding: 8px 2px; border-bottom: 1px solid var(--hair); font-size: var(--font-size-caption); }
-#ca-root .use-row:last-child { border: none; }
-#ca-root .use-row .when { color: var(--ink3); font-size: var(--font-size-2); width: 64px; flex-shrink: 0; }
-#ca-root .rate-box { background: var(--paper); border: 1px solid var(--line); border-radius: var(--rs); padding: 10px 12px; margin: 8px 0 4px; }
-#ca-root .rate-box .qq { font-size: var(--font-size-2); font-weight: 600; margin-bottom: 7px; }
+#ca-root .vrow .v2 { font-size: var(--font-size-2); color: var(--ink2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #ca-root .fb { display: flex; gap: 6px; flex-wrap: wrap; }
 #ca-root .fb button { border: 1px solid var(--line); background: var(--color-white); border-radius: var(--rs); font-size: var(--font-size-2); padding: 4px 12px; color: var(--ink2); }
 #ca-root .fb button:hover { border-color: var(--green); color: var(--green-t); }
-
-/* ── 待我处理 ─────────────────────────────────────────────── */
-#ca-root .state-banner {
-  display: flex; align-items: center; gap: 10px; margin: 12px 18px; padding: 10px 14px;
-  border-radius: var(--radius-popover); border: 1px solid var(--amber-line); background: var(--amber-bg);
-  color: var(--amber-t); font-size: var(--font-size-caption);
-}
-#ca-root .state-banner.is-error { border-color: var(--red); background: var(--red-bg); color: var(--red); }
-#ca-root .state-banner .sp { flex: 1; }
-#ca-root .state-skeleton { border: 1px solid var(--line); border-radius: var(--radius-window); background: var(--color-white); padding: 18px; margin: 18px; }
 #ca-root .skel-row {
   height: 13px; border-radius: var(--radius-sm); margin: 10px 0; background-size: 200% 100%;
   background-image: linear-gradient(90deg, var(--color-ca-fill-empty), var(--color-ca-hover), var(--color-ca-fill-empty));
   animation: ca-skel 1.2s linear infinite;
 }
-#ca-root .skel-row.w30 { width: 30%; }
 #ca-root .skel-row.w60 { width: 60%; }
-#ca-root .skel-row.w90 { width: 90%; }
 @keyframes ca-skel { 0% { background-position: 0 0; } 100% { background-position: -200% 0; } }
 #ca-root .cand {
   background: var(--color-white); border: 1px solid var(--line); border-radius: var(--rl); box-shadow: var(--s1);
@@ -962,13 +804,10 @@
 /* 来源已删/证据不足的候选：琥珀边提醒，不靠颜色单信号（卡内还有章与警示条）。 */
 #ca-root .cand.is-broken { border-color: var(--amber-line); }
 #ca-root .cand .c1 { font-size: var(--font-size-ui-sm); font-weight: 600; display: flex; align-items: center; gap: 8px; }
-#ca-root .cand .c1 .chev { margin-left: auto; color: var(--ink3); }
+#ca-root .cand .c1 .chev { margin-left: auto; color: var(--ink2); }
 #ca-root .cand .c2 { display: flex; gap: 7px; margin-top: 7px; flex-wrap: wrap; }
 #ca-root .cand .c3 { font-size: var(--font-size-caption); color: var(--ink2); margin-top: 8px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-#ca-root .cand .c4 { font-size: var(--font-size-2); color: var(--ink3); margin-top: 7px; }
-#ca-root .typchips { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 11px; }
-#ca-root .typchips button { border: 1px solid var(--line); background: var(--color-white); border-radius: var(--radius-pill); font-size: var(--font-size-2); padding: 3.5px 14px; color: var(--ink2); }
-#ca-root .typchips button.on { background: var(--green-bg); border-color: var(--green-line); color: var(--green-t); font-weight: 600; }
+#ca-root .cand .c4 { font-size: var(--font-size-2); color: var(--ink2); margin-top: 7px; }
 
 /* ── 个人本体独立界面 ────────────────────────────────────────
    .onto-page 原型高度 calc(100vh - 46px)：嵌进面板后改为撑满内容区。 */
@@ -976,146 +815,76 @@
   flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; align-items: stretch;
   background: linear-gradient(180deg, var(--color-ca-stage-top), var(--paper) 58%, var(--color-ca-stage-bottom));
 }
-#ca-root .onto-shell { flex: 1; min-width: 0; height: 100%; overflow: hidden; display: flex; align-items: stretch; background: linear-gradient(180deg, var(--color-ca-stage-top), var(--paper) 58%, var(--color-ca-stage-bottom)); }
 #ca-root .onto-sidebar { width: 284px; flex-shrink: 0; border-right: 1px solid var(--line); background: var(--color-white); padding: 16px 14px 24px; overflow: auto; }
 #ca-root .onto-back { width: 100%; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--color-white); color: var(--ink2); border-radius: var(--radius-field); padding: 8px 10px; font-size: var(--font-size-caption); height: auto; font-weight: 400; }
 #ca-root .onto-back:hover { color: var(--green-t); border-color: var(--green-line); }
 #ca-root .onto-sidebar h2 { font-size: var(--font-size-5); margin: 16px 0 3px; letter-spacing: -0.2px; }
-#ca-root .onto-sidebar .sub { font-size: var(--font-size-2); color: var(--ink3); line-height: 1.5; }
-#ca-root .onto-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 16px 0; }
-#ca-root .onto-stat { background: var(--green-bg); border: 1px solid var(--green-l2); border-radius: var(--radius-item); padding: 9px 7px; text-align: center; }
-#ca-root .onto-stat b { display: block; font-size: var(--font-size-5); color: var(--green-t); }
-#ca-root .onto-stat span { font-size: var(--font-size-1); color: var(--ink3); }
+#ca-root .onto-sidebar .sub { font-size: var(--font-size-2); color: var(--ink2); line-height: 1.5; }
 #ca-root .onto-nav { display: flex; flex-direction: column; gap: 7px; margin-top: 16px; }
 #ca-root .onto-nav button { display: flex; align-items: center; gap: 9px; width: 100%; border: 1px solid var(--line); background: var(--color-white); color: var(--ink2); border-radius: var(--radius-popover); padding: 10px 12px; text-align: left; height: auto; font-weight: 400; }
 #ca-root .onto-nav button.on { border-color: var(--green-line); background: var(--green-bg); color: var(--ink); font-weight: 650; }
 #ca-root .onto-nav .nm { flex: 1; }
-#ca-root .onto-nav .n { font-size: var(--font-size-1); color: var(--ink3); }
-#ca-root .onto-side-actions { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+#ca-root .onto-nav .n { font-size: var(--font-size-1); color: var(--ink2); }
 #ca-root .onto-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 #ca-root .onto-main-head { flex-shrink: 0; padding: 18px 24px 14px; border-bottom: 1px solid var(--line); background: var(--color-white-92); }
 #ca-root .onto-main-head h1 { font-size: var(--font-size-6); letter-spacing: -0.2px; }
-#ca-root .onto-main-head .sub { font-size: var(--font-size-caption); color: var(--ink3); margin-top: 3px; }
+#ca-root .onto-main-head .sub { font-size: var(--font-size-caption); color: var(--ink2); margin-top: 3px; }
 #ca-root .onto-main-body { flex: 1; min-width: 0; overflow: auto; padding: 18px 24px 36px; scroll-behavior: smooth; }
-
-/* 本体三盒 */
-#ca-root .oto-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
-#ca-root .oto-tab { border: 1px solid var(--line); background: var(--color-white); border-radius: var(--radius-field); padding: 8px 6px; font-size: var(--font-size-2); color: var(--ink2); display: flex; flex-direction: column; gap: 2px; align-items: center; height: auto; font-weight: 400; }
-#ca-root .oto-tab.on { border-color: var(--green-line); background: var(--green-bg); color: var(--ink); font-weight: 650; }
-#ca-root .oto-tab span { font-size: var(--font-size-1); color: var(--ink3); }
-#ca-root .oto-group, #ca-root .oto-backflow, #ca-root .oto-assets { border: 1px solid var(--line); border-radius: var(--rm); background: var(--color-white); padding: 11px 13px; margin-top: 10px; }
-#ca-root .oto-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-#ca-root .oto-group-head b { font-size: var(--font-size-3); }
-#ca-root .oto-subsec { border-top: 1px dashed var(--line); margin-top: 9px; padding-top: 8px; }
-#ca-root .oto-subsec-head, #ca-root .oto-term { display: flex; align-items: center; gap: 7px; justify-content: space-between; flex-wrap: wrap; }
-#ca-root .oto-subsec-head span, #ca-root .oto-term span { font-size: var(--font-size-2); color: var(--ink3); }
-#ca-root .oto-term { border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 8px; text-align: left; }
-#ca-root .oto-value { margin-top: 6px; }
-#ca-root .oto-value > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; cursor: pointer; list-style: none; }
-#ca-root .oto-value > summary::-webkit-details-marker { display: none; }
-#ca-root .oto-line { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-#ca-root .oto-line span { font-size: var(--font-size-1); color: var(--ink3); }
-#ca-root .oto-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); flex-shrink: 0; }
-#ca-root .oto-dot.green { background: var(--green); }
-#ca-root .oto-dot.amber { background: var(--amber-dot); }
-#ca-root .oto-dot.red { background: var(--red); }
-#ca-root .oto-chips { display: flex; gap: 5px; flex-wrap: wrap; margin: 2px 0 8px; }
-#ca-root .oto-actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-#ca-root .oto-form { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--line); border-radius: var(--radius-field); padding: 9px; margin-top: 8px; background: var(--color-white); }
-#ca-root .oto-form label { font-size: var(--font-size-2); color: var(--ink3); }
-#ca-root .oto-form input { border: 1px solid var(--line); border-radius: var(--radius-2); padding: 7px 9px; }
-#ca-root .oto-asset { display: flex; gap: 8px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--hair); font-size: var(--font-size-caption); }
-#ca-root .oto-asset:last-child { border: none; }
-#ca-root .oto-asset b { min-width: 110px; }
-#ca-root .oto-asset span { flex: 1; color: var(--ink2); }
-#ca-root .oto-asset i { font-size: var(--font-size-1); color: var(--ink3); }
-#ca-root .oto-flow { display: flex; flex-direction: column; gap: 5px; border-top: 1px dashed var(--line); margin-top: 9px; padding-top: 8px; font-size: var(--font-size-2); color: var(--ink2); }
-#ca-root .oto-history { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
-#ca-root .oto-history-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--font-size-2); color: var(--ink2); }
-#ca-root .oto-history-row span:first-child { color: var(--ink3); flex-shrink: 0; }
-#ca-root .oto-history-row span:nth-child(2) { flex: 1; min-width: 0; }
 
 /* 本体独立页内容排版（原型 #onto-main-body 系列） */
 #ca-root .onto-main-body .sect { margin: 22px 0 10px; font-size: var(--font-size-ui-sm); }
-#ca-root .onto-main-body .oto-group,
-#ca-root .onto-main-body .oto-backflow,
-#ca-root .onto-main-body .oto-assets { padding: 14px 16px; border-radius: var(--radius-window); box-shadow: var(--s1); }
-#ca-root .onto-main-body .oto-group-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-#ca-root .onto-main-body .oto-group-head > b { font-size: var(--font-size-4); font-weight: 750; color: var(--ink); }
-#ca-root .onto-main-body .oto-group-head > .oto-actions,
-#ca-root .onto-main-body .oto-group-head > button { margin-left: auto; }
-#ca-root .onto-main-body .oto-subsec { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
-#ca-root .onto-main-body .oto-subsec-head { display: flex; align-items: center; gap: 10px; justify-content: flex-start; }
-#ca-root .onto-main-body .oto-subsec-head > span:first-child { flex: 1; font-size: var(--font-size-caption); font-weight: 650; color: var(--ink); }
-#ca-root .onto-main-body .oto-subsec-head > button { flex-shrink: 0; }
-#ca-root .onto-main-body .oto-value { margin-top: 8px; border: 1px solid var(--hair); border-radius: var(--radius-item); background: var(--color-white); padding: 2px 10px; }
-#ca-root .onto-main-body .oto-value + .oto-value { margin-top: 7px; }
-#ca-root .onto-main-body .oto-value > summary { display: flex; align-items: flex-start; justify-content: flex-start; gap: 12px; padding: 9px 0; text-align: left; }
-#ca-root .onto-main-body .oto-value > summary::-webkit-details-marker { display: none; }
-#ca-root .onto-main-body .oto-line { display: block; flex: 1 1 auto; min-width: 0; text-align: left; }
-#ca-root .onto-main-body .oto-line > b { display: block; font-size: var(--font-size-caption); font-weight: 650; line-height: 1.5; color: var(--ink); white-space: normal; overflow-wrap: anywhere; text-align: left; }
-#ca-root .onto-main-body .oto-line > span { display: block; margin-top: 3px; font-size: var(--font-size-1); line-height: 1.4; color: var(--ink3); text-align: left; }
-#ca-root .onto-main-body .oto-dot { margin-left: auto; margin-top: 3px; }
-#ca-root .onto-main-body .oto-chips { justify-content: flex-start; margin-top: 2px; }
-#ca-root .onto-main-body .oto-actions { justify-content: flex-start; }
-#ca-root .onto-main-body .oto-value .oto-actions { margin-top: 8px; }
-#ca-root .onto-main-body .oto-term { display: block; padding-top: 9px; margin-top: 9px; border-top: 1px dashed var(--line); text-align: left; }
-#ca-root .onto-main-body .oto-term:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
-#ca-root .onto-main-body .oto-term > b { margin-right: 8px; font-size: var(--font-size-caption); font-weight: 700; color: var(--ink); }
-#ca-root .onto-main-body .oto-term > .tag { margin-right: 8px; vertical-align: middle; }
-#ca-root .onto-main-body .oto-term > span:not(.tag):not(.oto-actions) { display: block; margin-top: 4px; font-size: var(--font-size-2); line-height: 1.45; color: var(--ink3); text-align: left; }
-#ca-root .onto-main-body .oto-term > .oto-actions { margin-top: 8px; }
-#ca-root .onto-main-body .oto-flow > span { display: block; padding: 6px 0; border-bottom: 1px dashed var(--hair); }
-#ca-root .onto-main-body .oto-flow > span:last-child { border-bottom: 0; }
-#ca-root .onto-main-body .oto-assets .oto-asset { display: grid; grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) auto; align-items: start; gap: 12px; }
-#ca-root .onto-main-body .oto-assets .oto-asset b { min-width: 0; font-size: var(--font-size-caption); }
-#ca-root .onto-main-body .oto-assets .oto-asset span { white-space: normal; overflow-wrap: anywhere; }
-#ca-root .onto-main-body .oto-assets .oto-asset i { white-space: nowrap; }
-
-/* 模板与范例 */
-#ca-root .tple-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
-#ca-root .tple-tab { border: 1px solid var(--line); background: var(--color-white); border-radius: var(--radius-2); padding: 6px 12px; font-size: var(--font-size-2); color: var(--ink2); height: auto; font-weight: 400; }
-#ca-root .tple-tab.on { border-color: var(--green-line); background: var(--green-bg); color: var(--ink); font-weight: 650; }
 #ca-root .litxt { border: 1px solid var(--line); border-radius: var(--radius-2); padding: 7px 9px; font-size: var(--font-size-caption); width: 100%; outline: none; }
 #ca-root .litxt:focus { border-color: var(--green-line); }
-#ca-root .tple-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: var(--font-size-caption); }
-#ca-root .tple-row:last-child { border: none; }
-#ca-root .tple-row .txt { flex: 1; min-width: 0; }
-#ca-root .tple-editor textarea { width: 100%; min-height: 360px; border: 1px solid var(--line); border-radius: var(--radius-item); padding: 10px 12px; font-family: var(--font-mono); font-size: var(--font-size-2); line-height: 1.6; }
-
-/* ── 证据 / 来源 / 履历行 ─────────────────────────────────── */
-#ca-root .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 #ca-root .evrow { display: flex; align-items: center; gap: 8px; font-size: var(--font-size-2); color: var(--ink2); padding: 5px 0; border-bottom: 1px solid var(--hair); }
 #ca-root .evrow:last-child { border: none; }
-#ca-root .sourcerow { display: flex; align-items: center; gap: 9px; padding: 8px 2px; border-bottom: 1px solid var(--hair); font-size: var(--font-size-caption); }
-#ca-root .sourcerow:last-child { border: none; }
 #ca-root .proc-row { display: flex; gap: 10px; font-size: var(--font-size-caption); padding: 6px 2px; border-bottom: 1px solid var(--hair); align-items: baseline; }
 #ca-root .proc-row:last-child { border: none; }
-#ca-root .proc-row .when { color: var(--ink3); font-size: var(--font-size-1); width: 56px; flex-shrink: 0; }
+#ca-root .proc-row .when { color: var(--ink2); font-size: var(--font-size-1); width: 56px; flex-shrink: 0; }
 
 /* ── 整理 ─────────────────────────────────────────────────── */
 #ca-root .cap-row { display: flex; align-items: center; gap: 12px; background: var(--color-white); border: 1px solid var(--line); border-radius: var(--rm); padding: 12px 15px; margin-bottom: 7px; box-shadow: var(--s1); }
+/* 整行可点（2026-09-29 子安指令）：系统活动条目整行即详情入口。 */
+#ca-root .cap-row.is-clickable { cursor: pointer; transition: border-color 130ms, box-shadow 130ms; }
+#ca-root .cap-row.is-clickable:hover { border-color: var(--color-ca-line-strong); box-shadow: var(--s2); }
 #ca-root .cap-row .tw { flex: 1; min-width: 0; }
 #ca-root .cap-row .tt { font-size: var(--font-size-ui-sm); font-weight: 600; cursor: pointer; }
 #ca-root .cap-row .tt:hover { color: var(--green-t); }
-#ca-root .cap-row .mm { font-size: var(--font-size-2); color: var(--ink3); margin-top: 2px; display: flex; gap: 9px; flex-wrap: wrap; }
+#ca-root .cap-row .mm { font-size: var(--font-size-2); color: var(--ink2); margin-top: 2px; display: flex; gap: 9px; flex-wrap: wrap; }
 #ca-root .cap-row .sd { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 #ca-root .steps { display: flex; gap: 4px; margin-top: 9px; }
 #ca-root .step { flex: 1; height: 5px; border-radius: var(--radius-pill); background: var(--line); }
 #ca-root .step.done { background: var(--green); }
 #ca-root .step.cur { background: var(--amber-dot); }
-#ca-root .stepn { display: flex; gap: 4px; margin-top: 5px; }
-#ca-root .stepn span { flex: 1; font-size: var(--font-size-1); color: var(--ink3); text-align: center; }
-#ca-root .setrow { display: flex; align-items: center; gap: 11px; padding: 11px 2px; border-bottom: 1px solid var(--hair); }
-#ca-root .setrow:last-child { border: none; }
-#ca-root .setrow .sl { flex: 1; }
-#ca-root .setrow .st { font-size: var(--font-size-3); font-weight: 600; }
-#ca-root .setrow .ss { font-size: var(--font-size-2); color: var(--ink3); }
+
+/* ── 标签系统（specs/012 T010~T013）与排序依据/权重（T020）的最小排版 ──────
+ * 弹层外壳/进度条/分段控件/输入框全部走共享层（ui-modal / uiProgressBar /
+ * uiSegmentedControl / uiInput 的既有皮肤），这里只补业务排布；不使用
+ * var(--panel)（全库未定义）、零 z-index 字面量（层序只归 --z-*）。 */
+#ca-root .ca-tags-row { align-items: center; }
+#ca-root .ca-tag-item { display: inline-flex; align-items: center; gap: 5px; }
+#ca-root .ca-tag-candidates { display: inline-block; margin: 0; }
+#ca-root .ca-tag-candidates summary { padding: 7px 11px; }
+#ca-root .ca-tag-filter { align-items: center; }
+#ca-root .ca-batch-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--rm); background: var(--color-white); padding: 9px 12px; margin-bottom: 12px; }
+#ca-root .ca-batch-bar .sp { flex: 1; height: 1px; background: var(--line); }
+#ca-root .ca-tag-progress { display: flex; align-items: center; gap: 9px; flex: 1 1 100%; }
+#ca-root .ca-tag-failures { flex: 1 1 100%; border-top: 1px dashed var(--line); padding-top: 7px; }
+/* 排序依据小节（资产详情·使用记录区）与权重卡（沉淀设置页）。 */
+#ca-root .ca-rank-rows { display: grid; gap: 4px; margin-bottom: 7px; }
+#ca-root .ca-rank-row { display: flex; align-items: baseline; gap: 10px; font-size: var(--font-size-2); }
+#ca-root .ca-rank-name { flex: 1; color: var(--ink2); }
+#ca-root .ca-rank-raw, #ca-root .ca-rank-contrib { font-variant-numeric: tabular-nums; }
+#ca-root .ca-rank-weight { color: var(--ink2); }
+#ca-root .ca-rank-warn { color: var(--ca-amber-ink); font-weight: 600; }
+/* 权重表单（specs/017 整改三）：固定两列——auto-fit 在宽卡下会把四个字段
+   拉成一排且末格留白，窄卡下又参差换行，真机截图里就是"空白/错位"。 */
+#ca-root .ca-rank-w-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+#ca-root .ca-rank-w-input { width: 100%; }
+#ca-root .ca-w-error { color: var(--ca-red); }
 
 /* ── 窄窗（原型断点：900 本体侧栏、800 触控行高、620 统计两列）────── */
 @media (max-width: 900px) {
   #ca-root .onto-page { overflow: visible; display: block; }
-  #ca-root .onto-shell { height: auto; overflow: visible; display: block; }
   #ca-root .onto-sidebar { width: auto; max-height: none; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
   #ca-root .onto-main { overflow: visible; }
   #ca-root .onto-main-body { overflow: visible; }
@@ -1127,9 +896,21 @@
 @media (max-width: 800px) {
   #ca-root button { min-height: 36px; }
 }
+@media (max-width: 720px) {
+  /* Small panes must let section titles keep their natural width and move
+     tools to the next row. Without this, flex-shrink squeezes Chinese titles
+     into one character per line beside the button cluster. */
+  #ca-root .sect { flex-wrap: wrap; align-items: flex-start; row-gap: 8px; }
+  #ca-root .sect-t { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+  #ca-root .sect .sp { display: none; }
+  #ca-root .sect > .btn { flex: 0 0 auto; }
+}
 @media (max-width: 620px) {
   #ca-root .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #ca-root .ca-tabs { padding: 0 10px; overflow-x: auto; }
+  /* Keep each label intact; the existing horizontal scroller handles all six
+     destinations instead of flex-shrinking them into vertical word stacks. */
+  #ca-root .ca-tabs { padding: 0 10px; overflow-x: auto; flex-wrap: nowrap; }
+  #ca-root .ca-tab { flex: 0 0 auto; white-space: nowrap; }
 }
 
 /* 尊重系统「减少动态效果」：动画是增强，不是功能。 */
@@ -1137,4 +918,1083 @@
   #ca-root *, #ca-root *::before, #ca-root *::after {
     animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important;
   }
+}
+
+/* ───────────── 用户旅程雕刻（specs/018）新增呈现层 ───────────── */
+
+/* 「其他处理」折叠（T002/T011）：行内轻量入口，把次级动作从主按钮旁收走。
+   覆写 .details 的卡壳样式（同为 #ca-root + 单类，靠文件顺序取胜）。 */
+#ca-root .ca-other-actions { display: inline-block; border: 0; background: none; margin: 0; vertical-align: middle; }
+#ca-root .ca-other-actions > summary { list-style: none; cursor: pointer; padding: 3px 8px; font-size: var(--font-size-caption); font-weight: 500; color: var(--ink2); display: inline-flex; align-items: center; gap: 4px; border-radius: var(--rm); }
+#ca-root .ca-other-actions > summary::before { content: '⋯'; }
+#ca-root .ca-other-actions > summary::-webkit-details-marker { display: none; }
+#ca-root .ca-other-actions[open] > summary { background: var(--color-ca-hover); }
+#ca-root .ca-other-actions .dbody { border: 0; padding: 8px 0 0; }
+#ca-root .ca-other-actions .actions { justify-content: flex-start; }
+
+/* 候选卡动作行（T011 沿革）：2026-09-29 子安标注整改——「…其他处理」折叠
+ * 撤下后四按钮平铺右侧同一行；无 flat 类的旧调用（若有）保持原布局。 */
+#ca-root .ca-card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+#ca-root .ca-card-actions .ca-other-actions { margin-left: auto; }
+#ca-root .ca-card-actions.ca-card-actions-flat { justify-content: flex-end; }
+
+/* ── 整理报告详情（2026-09-29 子安抓的样式整改）────────────────
+ * 条目卡片化 + 资产链接走主题绿（原裸 <a> 浏览器蓝下划线）+ 改前/改后
+ * 分段小标签（原 before → after 拼一行读不出分段）。 */
+#ca-root .ca-cleanup-item {
+  background: var(--color-white); border: 1px solid var(--line);
+  border-radius: var(--rm); padding: 12px 15px; margin-bottom: 8px;
+}
+/* 维护大卡（2026-09-29 三块合一）：三行之间细分隔线。 */
+#ca-root .ca-maint-row { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+#ca-root .ca-maint-note { margin-top: 8px; }
+#ca-root .ca-asset-link { color: var(--green-t); text-decoration: none; }
+#ca-root .ca-asset-link:hover { text-decoration: underline; }
+#ca-root .ca-diff { display: flex; align-items: baseline; gap: 8px; margin-top: 5px; }
+#ca-root .ca-diff:first-of-type { margin-top: 7px; }
+#ca-root .ca-diff-tag {
+  flex-shrink: 0; font-size: var(--font-size-2); line-height: 1;
+  padding: 3px 8px; border-radius: var(--radius-1); font-weight: 600;
+}
+#ca-root .ca-diff-tag.is-before { background: var(--color-ca-chip-bg); color: var(--color-ca-ink-2); }
+#ca-root .ca-diff-tag.is-after { background: var(--color-ca-green-bg); color: var(--green-t); }
+#ca-root .ca-diff-text { min-width: 0; }
+/* 候选卡底部行（2026-09-29 子安标注）：来源（左）与动作按钮（右）同一行，
+ * 整体上提贴近正文。来源过长省略号截断、悬浮看全文；无来源/无动作的卡
+ * 退化为单侧行。 */
+#ca-root .cand .ca-card-footer { display: flex; align-items: center; gap: 14px; margin-top: 7px; }
+#ca-root .cand .ca-card-footer .c4 { margin-top: 0; flex-shrink: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ca-root .cand .ca-card-footer .ca-card-actions { margin-top: 0; margin-left: auto; flex-wrap: nowrap; flex-shrink: 0; }
+/* 候选卡「来源已删」警示与标题同一行（2026-09-29 第三轮定稿）：标题左、
+ * 警示条靠右（chevron 之前）；放不下省略号截断，悬浮 title 看全文。
+ * 视觉降级（同日子安拍板整改①）：去边框、字号降一档、常规字重——退成
+ * 行内备注，不与标题抢焦点。 */
+#ca-root .cand .c1 .ca-card-warn-inline {
+  margin-left: auto; flex-shrink: 1; min-width: 0; max-width: 62%;
+  padding: 3px 10px; font-size: var(--font-size-2); font-weight: 400;
+  border: none; background: var(--amber-bg); color: var(--amber-t);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#ca-root .cand .c1 .ca-card-warn-inline ~ .chev { margin-left: 0; }
+
+/* 导语可点数字（T010）：句中数字即锚点，chip-link 提供虚线下划线。 */
+#ca-root .ca-jump-num { font-weight: 700; }
+
+/* 去向提示（T014）：确认后回到本页的一条成功色横条。 */
+#ca-root .ca-promoted-note .notice-row { border: 1px solid var(--green-line); }
+#ca-root .ca-promoted-note .notice-title { color: var(--green-t); font-weight: 600; }
+
+/* 资产详情三段式（specs/018 T040）：状态章行与「用过吗」汇总行。 */
+#ca-root .ca-detail-facts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+#ca-root .ca-fact { display: inline-flex; align-items: center; gap: 6px; }
+#ca-root .ca-used-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+
+/* 设置页尾回链（specs/018 T070）：一句白话 + 去系统活动。 */
+#ca-root .ca-settings-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+
+/* 时间流行标题截断（迭代轮 1）：与 .row .tt 同款省略号——超长会话名
+   不再把 cap-row 撑成多行（.row .tt 早有，.cap-row .tt 漏了）。 */
+#ca-root .cap-row .tt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 认知资产主视图：页面级空间分配 ───────────────────────────────
+   资产、待办、活动与设置是工作台视图，不受详情阅读栏 780px 上限约束。
+   通过 ca-scroll 的路由态区分各自排版；详情内容与既有操作保持原样。 */
+#ca-root .ca-scroll.ca-layout-overview > .wrap,
+#ca-root .ca-scroll.ca-layout-review > .wrap,
+#ca-root .ca-scroll.ca-layout-activity > .wrap,
+#ca-root .ca-scroll.ca-layout-settings > .wrap,
+#ca-root .ca-scroll.ca-layout-detail > .wrap {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 24px clamp(20px, 2.5vw, 44px) 48px;
+}
+
+/* 我的认知：目录行改成贯穿内容区的资料清单，保留类型筛选与行内信息。 */
+#ca-root .ca-layout-overview #ca-asset-list { width: 100%; }
+#ca-root .ca-layout-overview #ca-asset-list > .row {
+  min-height: 62px;
+  margin: 0;
+  padding: 14px 16px;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+#ca-root .ca-layout-overview #ca-asset-list > .row + .row {
+  border-top: 0;
+}
+#ca-root .ca-layout-overview > .wrap > .row.is-flat.is-clickable {
+  min-height: 62px;
+  margin: 0;
+  padding: 14px 16px;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+#ca-root .ca-layout-overview #ca-asset-list .pillbox {
+  margin: 10px 0 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--ca-line);
+  border-bottom: 1px solid var(--ca-line);
+}
+
+/* 页面铺宽后，导语保持适合阅读的行长；数据区仍使用完整工作区。 */
+#ca-root .ca-layout-overview .hero .sub,
+#ca-root .ca-layout-review .hero .sub,
+#ca-root .ca-layout-activity .hero-row .hero-main .sub,
+#ca-root .ca-layout-settings .hero .sub,
+#ca-root .ca-layout-detail .hero .sub {
+  max-width: var(--layout-resource-detail-width, 880px);
+}
+
+/* 关于我：保留画像侧栏与内容双栏，在大窗下增加主内容宽度和分组密度。 */
+#ca-root .ca-scroll.ca-layout-ontology #ca-ontology-mount,
+#ca-root .ca-layout-ontology .personal-onto-layout {
+  width: 100%;
+  min-width: 0;
+}
+#ca-root .ca-layout-ontology .personal-onto-sidebar {
+  width: clamp(220px, 16vw, 268px);
+  flex: 0 0 clamp(220px, 16vw, 268px);
+}
+#ca-root .ca-layout-ontology .personal-onto-main-body {
+  padding: 20px clamp(20px, 2.2vw, 36px) 32px;
+}
+#ca-root .ca-layout-ontology .personal-onto-profile-view {
+  width: 100%;
+}
+@media (min-width: 1440px) {
+  #ca-root .ca-layout-ontology .personal-onto-ontology-sections {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* 待我处理：决策顺序仍然纵向排列，候选表单和折叠历史使用完整工作区宽度。 */
+#ca-root .ca-layout-review #ca-review-decide,
+#ca-root .ca-layout-review #ca-review-evidence,
+#ca-root .ca-layout-review > .wrap > .fold,
+#ca-root .ca-layout-review .cand,
+#ca-root .ca-layout-review .ca-candidate-detail {
+  width: 100%;
+  max-width: none;
+}
+#ca-root .ca-layout-review #ca-review-decide > .sect,
+#ca-root .ca-layout-review #ca-review-evidence > .sect {
+  margin-top: 24px;
+}
+#ca-root .ca-layout-review #ca-review-decide .notice-row,
+#ca-root .ca-layout-review .fold-attention .notice-row {
+  margin: 0;
+  padding: 14px 16px;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+#ca-root .ca-layout-review #ca-review-decide .notice-row + .notice-row,
+#ca-root .ca-layout-review .fold-attention .notice-row + .notice-row { border-top: 0; }
+
+/* 系统活动：把重复的小卡片收敛成横向事件行，长会话标题可自然换行。 */
+#ca-root .ca-layout-activity .cap-row {
+  min-width: 0;
+  margin: 0;
+  padding: 14px 16px;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+#ca-root .ca-layout-activity .cap-row .tt {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+#ca-root .ca-layout-activity .cap-row .sd { flex-wrap: wrap; justify-content: flex-end; }
+#ca-root .ca-layout-activity .cap-row + .cap-row { border-top: 0; }
+
+/* 整理设置：配置项按全宽设置行呈现，避免窄卡中长说明和开关争空间。 */
+#ca-root .ca-layout-settings > .wrap > .card.ca-setcard,
+#ca-root .ca-layout-settings > .wrap > .card.ca-setting-row {
+  min-width: 0;
+  margin: 0;
+  padding: 18px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--ca-line);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+#ca-root .ca-layout-settings > .wrap > .card.ca-setting-row { border-top: 1px solid var(--ca-line); }
+#ca-root .ca-layout-settings .ca-settings-foot {
+  padding: 16px 4px 4px;
+  border-top: 1px solid var(--ca-line);
+}
+
+@media (max-width: 900px) {
+  #ca-root .ca-layout-overview > .wrap,
+  #ca-root .ca-layout-review > .wrap,
+  #ca-root .ca-layout-activity > .wrap,
+  #ca-root .ca-layout-settings > .wrap,
+  #ca-root .ca-layout-detail > .wrap {
+    padding: 18px 18px 40px;
+  }
+  #ca-root .ca-layout-ontology .personal-onto-main-body { padding: 20px 22px 32px; }
+}
+@media (max-width: 720px) {
+  #ca-root .ca-layout-overview > .wrap,
+  #ca-root .ca-layout-review > .wrap,
+  #ca-root .ca-layout-activity > .wrap,
+  #ca-root .ca-layout-settings > .wrap,
+  #ca-root .ca-layout-detail > .wrap {
+    padding: 16px 14px 32px;
+  }
+  #ca-root .ca-layout-overview #ca-asset-list > .row { padding: 12px 8px; }
+  #ca-root .ca-layout-activity .cap-row { align-items: flex-start; padding: 12px 8px; }
+  #ca-root .ca-layout-activity .cap-row .sd { justify-content: flex-start; }
+  #ca-root .ca-layout-settings > .wrap > .card.ca-setcard,
+  #ca-root .ca-layout-settings > .wrap > .card.ca-setting-row { padding: 14px 2px; }
+  #ca-root .ca-layout-ontology .personal-onto-layout {
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+  }
+  #ca-root .ca-layout-ontology .personal-onto-sidebar {
+    width: auto;
+    max-height: 210px;
+    flex: 0 0 210px;
+    border-right: 0;
+    border-bottom: 1px solid var(--ca-line);
+  }
+  #ca-root .ca-layout-ontology .personal-onto-main { min-height: 0; }
+  #ca-root .ca-layout-ontology .personal-onto-main-body { padding: 16px 14px 28px; }
+}
+
+/* 本体总览：领域入口与显式关系浏览（PO-PV-003 Proposed）。外层卡片复用
+   uiResourceGrid/uiResourceCard；以下只负责本体业务内容的排列与密度。 */
+#ca-root .personal-onto-hub-nav-list { padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+#ca-root .personal-onto-hub-nav-item {
+  width: 100%; min-height: 40px; height: auto; justify-content: flex-start; text-align: left;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-popover);
+  background: var(--color-white); color: var(--color-ink-2); font-weight: 500;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+#ca-root .personal-onto-hub-nav-item:hover,
+#ca-root .personal-onto-hub-nav-item:active,
+#ca-root .personal-onto-hub-nav-item:focus-visible {
+  border-color: var(--green-line); background: var(--color-brand-soft); color: var(--color-ink);
+}
+#ca-root .personal-onto-hub-nav-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+#ca-root .personal-onto-hub-nav-item.is-active {
+  border-color: var(--green-line); background: var(--color-brand-soft); color: var(--color-ink); font-weight: 650;
+}
+#ca-root .personal-onto-hub-nav-item.is-active:hover,
+#ca-root .personal-onto-hub-nav-item.is-active:active { background: var(--color-brand-soft); color: var(--color-ink); }
+#ca-root .personal-onto-personal-subnav { padding-top: 7px; }
+#ca-root .personal-onto-nav-section-title {
+  padding: 2px 4px; color: var(--ink2); font-size: var(--font-size-caption); font-weight: 650;
+}
+#ca-root .personal-onto-overview { width: 100%; max-width: 1760px; margin: 0 auto; }
+#ca-root .personal-onto-overview-intro,
+#ca-root .personal-onto-domain-intro {
+  max-width: 900px; margin: 0 0 18px; color: var(--ink2); font-size: var(--font-size-ui-sm); line-height: 1.65;
+}
+#ca-root .personal-onto-domain-grid {
+  display: grid; width: 100%; max-width: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;
+}
+#ca-root .personal-onto-domain-card {
+  min-width: 0; max-width: none; height: 100%; padding: var(--space-4);
+  display: flex; flex-direction: column;
+}
+#ca-root .personal-onto-domain-card .ui-resource-card__footer { gap: 12px; }
+#ca-root .personal-onto-domain-card .ui-resource-card__icon { display: none; }
+#ca-root .personal-onto-domain-card .ui-resource-card__header { min-height: 0; }
+#ca-root .personal-onto-domain-card .ui-resource-card__description { min-height: 0; }
+#ca-root .personal-onto-domain-card-meta { color: var(--ink2); font-size: var(--font-size-caption); }
+#ca-root .personal-onto-overview-note {
+  margin: 18px 0 0; padding: 10px 12px; border-left: 3px solid var(--green-line);
+  color: var(--ink2); background: var(--color-white-92); font-size: var(--font-size-caption); line-height: 1.6;
+}
+#ca-root .personal-onto-domain-view { width: 100%; max-width: 1680px; margin: 0 auto; }
+#ca-root .personal-onto-affair-row,
+#ca-root .personal-onto-relation-row {
+  min-width: 0; padding: 16px 0; border-bottom: 1px solid var(--line);
+}
+#ca-root .personal-onto-affair-heading,
+#ca-root .personal-onto-affair-footer,
+#ca-root .personal-onto-relation-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+}
+#ca-root .personal-onto-affair-heading h3 {
+  min-width: 0; margin: 0; color: var(--ink); font-size: var(--font-size-ui); font-weight: 650; overflow-wrap: anywhere;
+}
+#ca-root .personal-onto-affair-statement {
+  max-width: 1000px; margin: 8px 0 12px; color: var(--ink2); font-size: var(--font-size-ui-sm);
+  line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap;
+}
+#ca-root .personal-onto-affair-footer,
+#ca-root .personal-onto-relation-footer { justify-content: flex-start; }
+#ca-root .personal-onto-relation-edge {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, auto) minmax(0, 1fr);
+  align-items: center; gap: 12px;
+}
+#ca-root .personal-onto-relation-node {
+  min-width: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--radius-popover);
+  background: var(--color-white); color: var(--ink); font-size: var(--font-size-ui-sm); overflow-wrap: anywhere;
+}
+#ca-root .personal-onto-relation-predicate {
+  color: var(--green-t); font-size: var(--font-size-caption); font-weight: 650; text-align: center; overflow-wrap: anywhere;
+}
+#ca-root .personal-onto-relation-footer { margin-top: 9px; }
+#ca-root .personal-onto-domain-empty { padding: 14px 0; }
+#ca-root .personal-onto-domain-empty .ui-empty-state {
+  width: 100%; max-width: 760px; min-height: 0; align-items: flex-start; padding: 18px 20px;
+  border: 1px dashed var(--line-field); border-radius: var(--radius-card); background: var(--color-white-92);
+  text-align: left;
+}
+#ca-root .personal-onto-domain-empty .ui-empty-state__hint { max-width: 640px; }
+#ca-root .personal-onto-relation-section .personal-onto-domain-empty .ui-empty-state {
+  width: min(100%, 520px); max-width: 520px; padding: 10px 13px;
+  border: 0; border-left: 2px solid var(--green-line); border-radius: 0; background: transparent;
+}
+#ca-root .personal-onto-relation-section .personal-onto-domain-empty .ui-empty-state__hint { max-width: 460px; }
+#ca-root .personal-onto-graph-toolbar > .ui-button:disabled,
+#ca-root .personal-onto-graph-toolbar > .ui-button.is-disabled {
+  border-color: var(--line-field); background: var(--color-white-92); color: var(--color-ink-3, var(--ink2));
+  opacity: 1; filter: none; cursor: not-allowed;
+}
+#ca-root .personal-onto-graph-management {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+  margin: 0 0 18px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+#ca-root .personal-onto-graph-management-copy { min-width: 220px; flex: 1 1 320px; }
+#ca-root .personal-onto-graph-management-copy h2,
+#ca-root .personal-onto-graph-filter-heading h2 { margin: 0; color: var(--color-ink); font-size: var(--font-size-ui); font-weight: 650; }
+#ca-root .personal-onto-graph-management-copy p,
+#ca-root .personal-onto-graph-filter-heading p,
+#ca-root .personal-onto-relation-help { margin: 4px 0 0; color: var(--color-ink-2); font-size: var(--font-size-caption); line-height: 1.55; }
+#ca-root .personal-onto-graph-toolbar,
+#ca-root .personal-onto-graph-management .personal-onto-graph-toolbar { margin: 0; }
+#ca-root .personal-onto-graph-filter-panel { margin: 0 0 18px; }
+#ca-root .personal-onto-graph-filter-heading { margin-bottom: 9px; }
+#ca-root .personal-onto-filter-chip {
+  min-height: 34px; border: 1px solid var(--line-field); border-radius: var(--radius-pill, 999px);
+  background: var(--color-white); color: var(--color-ink-2); font-weight: 500;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+#ca-root .personal-onto-filter-chip:hover,
+#ca-root .personal-onto-filter-chip:active,
+#ca-root .personal-onto-filter-chip:focus-visible {
+  border-color: var(--green-line); background: var(--color-brand-soft); color: var(--color-ink);
+}
+#ca-root .personal-onto-filter-chip.is-on { border-color: var(--green-line); background: var(--color-brand-soft); color: var(--color-ink); font-weight: 650; }
+#ca-root .personal-onto-filter-chip:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+#ca-root .personal-onto-relation-section { margin-top: 12px; }
+#ca-root .personal-onto-relation-section .personal-onto-zone-head { margin-bottom: 4px; }
+#ca-root .personal-onto-related-groups {
+  width: min(100%, 920px); box-sizing: border-box; margin: 26px auto 0; padding: 10px 0 0;
+  border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent;
+}
+#ca-root .personal-onto-related-groups > summary {
+  min-height: 34px; padding: 5px 2px; color: var(--color-ink); font-size: var(--font-size-ui-sm); font-weight: 650; cursor: pointer;
+}
+#ca-root .personal-onto-related-groups[open] > summary { margin-bottom: 0; }
+#ca-root .personal-onto-related-groups > .personal-onto-relation-help { max-width: 780px; margin: 2px 2px 14px; }
+#ca-root .personal-onto-related-groups .personal-onto-relation-row { padding: 15px 0; }
+#ca-root .personal-onto-related-groups .personal-onto-relation-edge,
+#ca-root .personal-onto-related-groups .personal-onto-relation-footer {
+  width: min(100%, 800px); margin-right: auto; margin-left: auto;
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-edge {
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 112px) minmax(0, 1fr);
+  gap: 14px;
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-node {
+  min-height: 58px; display: flex; align-items: center; padding: 12px 15px;
+  border-color: var(--line); border-radius: var(--radius-card); background: var(--color-white-92);
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-predicate {
+  position: relative; padding: 4px 0; border: 0; border-radius: 0;
+  background: transparent; color: var(--green-t); font-size: var(--font-size-caption); font-weight: 500; white-space: nowrap;
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-predicate::before,
+#ca-root .personal-onto-related-groups .personal-onto-relation-predicate::after {
+  position: absolute; top: 50%; width: 14px; height: 1px; background: var(--green-line); content: '';
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-predicate::before { left: -14px; }
+#ca-root .personal-onto-related-groups .personal-onto-relation-predicate::after { right: -14px; }
+#ca-root .personal-onto-related-groups .personal-onto-relation-footer {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, 112px) minmax(0, 1fr);
+  align-items: center; gap: 6px 14px; margin-top: 8px;
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-footer > .muted {
+  color: var(--color-ink-3, var(--ink2)); font-size: var(--font-size-caption);
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-footer > .ui-button {
+  min-width: 0; min-height: 28px; padding: 3px 8px; border-color: transparent; border-radius: var(--radius-pill, 999px);
+  background: transparent; color: var(--color-ink-2); font-size: var(--font-size-caption); font-weight: 500;
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-footer > .ui-button:hover {
+  border-color: transparent; background: var(--color-brand-soft); color: var(--color-ink);
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-footer > .ui-button:focus-visible {
+  outline: 2px solid var(--color-accent); outline-offset: 2px;
+}
+#ca-root .personal-onto-related-groups .personal-onto-relation-source-action { grid-column: 1; justify-self: start; }
+#ca-root .personal-onto-related-groups .personal-onto-relation-target-action { grid-column: 3; justify-self: end; }
+@media (max-width: 720px) {
+  #ca-root .personal-onto-domain-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  #ca-root .personal-onto-relation-edge { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  #ca-root .personal-onto-relation-predicate { text-align: left; }
+  #ca-root .personal-onto-affair-row,
+  #ca-root .personal-onto-relation-row { padding: 13px 0; }
+  #ca-root .personal-onto-related-groups { padding: 10px 0 0; }
+  #ca-root .personal-onto-related-groups .personal-onto-relation-edge,
+  #ca-root .personal-onto-related-groups .personal-onto-relation-footer { width: 100%; }
+  #ca-root .personal-onto-related-groups .personal-onto-relation-footer { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  #ca-root .personal-onto-related-groups .personal-onto-relation-source-action,
+  #ca-root .personal-onto-related-groups .personal-onto-relation-target-action { grid-column: 1; justify-self: start; }
+  #ca-root .personal-onto-related-groups .personal-onto-relation-predicate { justify-self: start; }
+  #ca-root .personal-onto-related-groups .personal-onto-relation-predicate::before,
+  #ca-root .personal-onto-related-groups .personal-onto-relation-predicate::after { display: none; }
+}
+@media (min-width: 721px) and (max-width: 1160px) {
+  #ca-root .personal-onto-domain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+#ca-root .personal-onto-graph-toolbar,
+#ca-root .personal-onto-graph-filters,
+#ca-root .personal-onto-graph-entity-actions,
+#ca-root .personal-onto-graph-sources,
+#ca-root .personal-onto-graph-source-ref,
+#ca-root .personal-onto-category-field-edit-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+#ca-root .personal-onto-graph-toolbar { margin: 0 0 14px; }
+#ca-root .personal-onto-graph-filters { margin: 0 0 16px; }
+#ca-root .personal-onto-graph-entity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; }
+#ca-root .personal-onto-graph-entity-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: var(--radius-window); background: var(--color-white); }
+#ca-root .personal-onto-graph-entity-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+#ca-root .personal-onto-graph-entity-titles { min-width: 0; }
+#ca-root .personal-onto-graph-entity-titles h3 { margin: 0 0 7px; color: var(--ink); font-size: var(--font-size-ui); overflow-wrap: anywhere; }
+#ca-root .personal-onto-graph-properties { display: grid; gap: 6px; margin: 12px 0; }
+#ca-root .personal-onto-graph-property { display: grid; grid-template-columns: minmax(92px, 0.35fr) minmax(0, 1fr); gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: var(--font-size-caption); }
+#ca-root .personal-onto-graph-property > span { color: var(--ink2); }
+#ca-root .personal-onto-graph-property > strong { min-width: 0; color: var(--ink); font-weight: 500; overflow-wrap: anywhere; white-space: pre-wrap; }
+#ca-root .personal-onto-graph-entity-actions { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+#ca-root .personal-onto-graph-sources { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+#ca-root .personal-onto-graph-source-ref { padding: 4px 0; }
+#ca-root .personal-onto-graph-source-ref > span:nth-child(2) { min-width: 0; color: var(--ink2); font-size: var(--font-size-caption); overflow-wrap: anywhere; }
+#ca-root .personal-onto-graph-source-picker { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-popover); }
+#ca-root .personal-onto-graph-section-label { margin-bottom: 4px; color: var(--ink); font-size: var(--font-size-ui-sm); font-weight: 650; }
+#ca-root .personal-onto-graph-source-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 8px 14px; max-height: 220px; overflow: auto; }
+#ca-root .personal-onto-graph-source-options .ui-checkbox { min-width: 0; }
+#ca-root .personal-onto-taxonomy-row { margin: 8px 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-popover); background: var(--color-white); }
+#ca-root .personal-onto-taxonomy-depth-1 { margin-left: 18px; }
+#ca-root .personal-onto-taxonomy-depth-2 { margin-left: 36px; }
+#ca-root .personal-onto-taxonomy-depth-3 { margin-left: 54px; }
+#ca-root .personal-onto-taxonomy-depth-4 { margin-left: 72px; }
+#ca-root .personal-onto-taxonomy-depth-5 { margin-left: 90px; }
+#ca-root .personal-onto-taxonomy-depth-6 { margin-left: 108px; }
+#ca-root .personal-onto-taxonomy-fields { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+#ca-root .personal-onto-taxonomy-personal { max-width: 1040px; }
+#ca-root .personal-onto-taxonomy-personal .ui-button { margin-top: 12px; }
+#ca-root .personal-onto-domain-error { padding: 10px 12px; border-left: 3px solid var(--status-attention); color: var(--ink2); background: var(--color-white); }
+@media (max-width: 720px) {
+  #ca-root .personal-onto-graph-entity-grid { grid-template-columns: minmax(0, 1fr); }
+  #ca-root .personal-onto-taxonomy-depth-1 { margin-left: 8px; }
+  #ca-root .personal-onto-taxonomy-depth-2 { margin-left: 16px; }
+  #ca-root .personal-onto-taxonomy-depth-3 { margin-left: 24px; }
+  #ca-root .personal-onto-taxonomy-depth-4 { margin-left: 32px; }
+  #ca-root .personal-onto-taxonomy-depth-5 { margin-left: 40px; }
+  #ca-root .personal-onto-taxonomy-depth-6 { margin-left: 48px; }
+}
+
+/* ── 详情子界面整页版式（2026-09-28）──────────────────────────────
+   资产/经验/整理详情与整理报告此前落在默认 .wrap（780px 居中阅读栏），
+   宽窗下左右大片留白。统一改为：页头带全宽 +「主栏阅读内容 / 侧栏元信息
+   与操作」内容网格 + 大数据区（折叠/台账）占满主栏；候选详情复用 review
+   工作台的全宽态。窄窗（≤1100px）网格退化为单列，侧栏内容随后。 */
+#ca-root .ca-detail-head { margin: 2px 0 14px; }
+#ca-root .ca-detail-head h1 {
+  font-size: var(--font-size-title); font-weight: 700; letter-spacing: -0.2px; margin: 0;
+  overflow-wrap: anywhere;
+}
+#ca-root .ca-detail-head .rowline { align-items: flex-start; }
+#ca-root .ca-detail-head .rowline > div:first-child { flex: 1 1 auto; min-width: 0; }
+#ca-root .ca-detail-head .rowline .right { flex: 0 0 auto; }
+#ca-root .ca-detail-head .ca-detail-facts { margin-top: 10px; }
+#ca-root .ca-detail-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 16px; align-items: start;
+}
+#ca-root .ca-detail-main,
+#ca-root .ca-detail-side { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+/* 主栏长文与编辑表单限宽保可读；卡片本身仍占满主栏。 */
+#ca-root .ca-detail-main .content-text,
+#ca-root .ca-detail-main .ca-asset-edit { max-width: var(--layout-resource-detail-width, 880px); }
+/* 侧栏卡内分区不再叠加卡片外距（卡片 padding 已提供呼吸感）。 */
+#ca-root .ca-detail-side .card > .sect-block:first-child,
+#ca-root .ca-detail-side .card > .ca-deposit:first-child { margin-top: 0; }
+#ca-root .ca-detail-side .card > .sect-block:first-child .sect,
+#ca-root .ca-detail-side .card > .ca-deposit:first-child .sect { margin-top: 0; }
+/* 危险操作区入侧栏卡：说明独占一行，按钮掉到次行右端。 */
+#ca-root .ca-detail-side .ca-more-wrap { margin-top: 0; border-top: 0; padding-top: 0; }
+#ca-root .ca-detail-side .ca-more-row { flex-wrap: wrap; }
+#ca-root .ca-detail-side .ca-more-copy { flex: 1 1 100%; }
+#ca-root .ca-detail-side .ca-more-row .btn { margin-left: auto; }
+/* 整理详情：时间线正文限宽。结果/时间线并入主体卡内分节（2026-09-29 与
+   建议详情统一为单卡文档式，不再散板双栏）：节与节之间用分隔线区隔。 */
+#ca-root .ca-detail-main .ca-tl-main { max-width: var(--layout-resource-detail-width, 880px); }
+#ca-root .ca-capture-sections { margin-top: 4px; }
+#ca-root .ca-capture-sections > .ca-capture-sec {
+  min-width: 0; margin-top: 16px; padding-top: 16px;
+  border-top: 1px solid var(--ca-line);
+}
+/* 卡底一行（2026-09-29 子安拍板）：五步进度条靠左、操作按钮靠右；窄窗
+   放不下时按钮换行到进度条下方、仍右对齐（actions-right 的 auto 边距）。 */
+#ca-root .ca-capture-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 16px; }
+#ca-root .ca-capture-foot .ca-steps-bar { flex: 1 1 auto; min-width: 0; margin: 0; }
+/* 整理报告：列表行扁平化成通栏资料行（同列表工作台的语言）。 */
+#ca-root .ca-layout-detail .ca-page > .sect-block .row.is-flat {
+  min-height: 54px; margin: 0; padding: 13px 4px;
+  border-right: 0; border-left: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
+#ca-root .ca-layout-detail .ca-page > .sect-block .row.is-flat + .row.is-flat { border-top: 0; }
+@media (max-width: 1100px) {
+  #ca-root .ca-detail-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 详情重构（2026-09-29）：来历独立卡与组内去重的 ×N 计数标记。 */
+#ca-root .ca-detail-origin { margin-top: 0; }
+#ca-root .evdup { font-weight: 600; opacity: 0.75; margin-left: 3px; }
+
+/* 正式认知资产详情：所有信息区按同一阅读宽度自上而下排列。 */
+#ca-root .ca-asset-page { width: 100%; max-width: 1040px; margin: 0 auto; }
+#ca-root .ca-asset-head { margin: 0 0 18px; }
+#ca-root .ca-asset-head .ca-detail-facts { margin: 0 0 10px; }
+#ca-root .ca-asset-version-label { color: var(--ink2); font-size: var(--font-size-caption); }
+#ca-root .ca-asset-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+#ca-root .ca-asset-head .ca-asset-title-row h1 {
+  flex: 1 1 auto; min-width: 0; font-size: var(--font-size-heading); line-height: var(--line-height-title);
+}
+#ca-root .ca-asset-head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#ca-root .ca-asset-availability {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  margin-top: 18px; padding: 12px 16px; border: 1px solid var(--green-line);
+  border-radius: var(--rm); background: var(--green-bg);
+}
+#ca-root .ca-asset-availability > div { min-width: 0; }
+#ca-root .ca-asset-availability strong { display: block; color: var(--ink); font-size: var(--font-size-4); }
+#ca-root .ca-asset-availability p { margin: 4px 0 0; color: var(--ink2); font-size: var(--font-size-caption); line-height: 1.55; }
+#ca-root .ca-asset-availability .ui-switch { flex: 0 0 auto; }
+#ca-root .ca-asset-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+#ca-root .ca-asset-stack > .card { padding: 20px 22px; }
+#ca-root .ca-asset-stack > .fold { margin: 0; }
+#ca-root .ca-asset-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+#ca-root .ca-asset-section-head h2 { margin: 0; color: var(--ink); font-size: var(--font-size-4); font-weight: 700; line-height: 1.4; }
+#ca-root .ca-asset-section-head .note { margin-left: auto; text-align: right; }
+#ca-root .ca-asset-detail .ca-asset-body {
+  max-width: 880px; margin: 0; color: var(--ink); font-size: var(--font-size-body-lg);
+  line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#ca-root .ca-asset-detail .ca-stale-pin-warning { margin-bottom: 18px; }
+#ca-root .ca-stale-pin-detail { margin-top: 5px; }
+#ca-root .ca-stale-pin-detail > summary { width: fit-content; color: var(--green-t); font-weight: 600; cursor: pointer; }
+#ca-root .ca-stale-pin-detail > summary:focus-visible { outline: 2px solid var(--green-line); outline-offset: 3px; }
+#ca-root .ca-stale-pin-detail .note,
+#ca-root .ca-stale-pin-list { margin-top: 8px; }
+#ca-root .ca-asset-boundaries { max-width: 880px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+#ca-root .ca-asset-boundaries h3 { margin: 0 0 10px; color: var(--ink); font-size: var(--font-size-4); }
+#ca-root .ca-asset-boundary { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 5px 0; }
+#ca-root .ca-asset-boundary > span { color: var(--ink2); font-size: var(--font-size-caption); }
+#ca-root .ca-asset-boundary p { margin: 0; color: var(--ink); font-size: var(--font-size-3); line-height: 1.6; overflow-wrap: anywhere; }
+#ca-root .ca-detail-origin .evgroup { margin-top: 14px; }
+#ca-root .ca-asset-usage-facts { display: grid; gap: 0; }
+#ca-root .ca-asset-usage-fact { padding: 8px 0; border-top: 1px solid var(--line); }
+#ca-root .ca-asset-usage-fact strong { color: var(--ink); font-size: var(--font-size-4); line-height: 1.5; }
+#ca-root .ca-asset-usage > .note { margin: 10px 0 0; line-height: 1.55; }
+#ca-root .ca-asset-usage .ca-asset-usage-note { padding-top: 10px; border-top: 1px solid var(--line); }
+#ca-root .ca-asset-last-use { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+#ca-root .ca-asset-usage .footnote { margin-top: 12px; }
+#ca-root .ca-asset-usage-feedback { margin-top: 6px; }
+#ca-root .ca-asset-manage-card .ca-detail-governance { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+#ca-root .ca-asset-manage-card .ca-detail-governance > summary { padding: 12px 0; }
+#ca-root .ca-asset-manage-card .ca-detail-governance > .dbody { padding: 4px 0 12px; }
+#ca-root .ca-asset-manage-card .ca-more-wrap { margin-top: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+#ca-root .ca-asset-stack .proc-row { min-width: 0; align-items: flex-start; }
+#ca-root .ca-asset-stack .proc-row > span:last-child { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+#ca-root .ca-asset-stack .meta-item { white-space: normal; overflow-wrap: anywhere; }
+/* 独立经验记录沿用单列阅读节奏，保留自己的业务字段和操作。 */
+#ca-root .ca-experience-detail-grid { grid-template-columns: minmax(0, 1fr); }
+#ca-root .ca-experience-detail-grid .ca-detail-main,
+#ca-root .ca-experience-detail-grid .ca-detail-side { gap: 16px; }
+#ca-root .ca-experience-detail-grid .card { padding: 20px 22px; }
+#ca-root .ca-experience-page .ca-detail-head h1 { font-size: var(--font-size-heading); line-height: var(--line-height-title); }
+#ca-root .ca-experience-detail-grid .content-text { color: var(--ink); font-size: var(--font-size-body-lg); line-height: 1.8; }
+#ca-root .ca-experience-detail-grid .meta-item,
+#ca-root .ca-experience-detail-grid .proc-row > span:last-child { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  #ca-root .ca-asset-title-row { flex-direction: column; gap: 12px; }
+  #ca-root .ca-asset-head-actions { width: 100%; }
+  #ca-root .ca-asset-availability { align-items: flex-start; }
+  #ca-root .ca-asset-stack > .card { padding: 17px 18px; }
+  #ca-root .ca-experience-detail-grid .card { padding: 17px 18px; }
+  #ca-root .ca-asset-boundary { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+
+/* ── 个人本体 v2（2026-09-29 重构）：事实 / 规则 / 分组与模板 三页 ───────── */
+
+#ca-root .po2-view,
+.recall-personal-ontology-section .po2-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#ca-root .po2-toolbar,
+.recall-personal-ontology-section .po2-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#ca-root .po2-toolbar-hint,
+.recall-personal-ontology-section .po2-toolbar-hint {
+  font-size: 12px;
+}
+#ca-root .po2-select,
+#ca-root .po2-input,
+.recall-personal-ontology-section .po2-select,
+.recall-personal-ontology-section .po2-input {
+  border: 1px solid var(--cognition-line);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  padding: 5px 10px;
+  font-size: 13px;
+}
+#ca-root .po2-search,
+.recall-personal-ontology-section .po2-search {
+  flex: 1;
+  min-width: 160px;
+  max-width: 320px;
+}
+#ca-root .po2-chips,
+.recall-personal-ontology-section .po2-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+#ca-root .po2-candidates,
+#ca-root .po2-group,
+#ca-root .po2-group-card,
+.recall-personal-ontology-section .po2-candidates,
+.recall-personal-ontology-section .po2-group,
+.recall-personal-ontology-section .po2-group-card {
+  border: 1px solid var(--cognition-line-soft);
+  border-radius: 12px;
+  background: var(--color-surface);
+  padding: 12px 14px;
+}
+#ca-root .po2-candidates,
+.recall-personal-ontology-section .po2-candidates {
+  border-style: dashed;
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+#ca-root .po2-candidates-title,
+.recall-personal-ontology-section .po2-candidates-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+#ca-root .po2-candidate,
+.recall-personal-ontology-section .po2-candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+#ca-root .po2-candidate-text,
+.recall-personal-ontology-section .po2-candidate-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ca-root .po2-candidate-preview,
+.recall-personal-ontology-section .po2-candidate-preview {
+  border: 1px solid var(--cognition-line-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+  max-height: 140px;
+  overflow: auto;
+}
+#ca-root .po2-group-head,
+#ca-root .po2-group-card-head,
+.recall-personal-ontology-section .po2-group-head,
+.recall-personal-ontology-section .po2-group-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+#ca-root .po2-group-title,
+.recall-personal-ontology-section .po2-group-title {
+  font-weight: 600;
+}
+#ca-root .po2-group-actions,
+.recall-personal-ontology-section .po2-group-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#ca-root .po2-section-title,
+.recall-personal-ontology-section .po2-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cognition-ink-soft);
+  margin: 10px 0 4px;
+}
+#ca-root .po2-field,
+.recall-personal-ontology-section .po2-field {
+  padding: 6px 0;
+  border-top: 1px dashed var(--cognition-tint);
+}
+#ca-root .po2-field:first-child,
+.recall-personal-ontology-section .po2-field:first-child {
+  border-top: none;
+}
+#ca-root .po2-field-head,
+.recall-personal-ontology-section .po2-field-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#ca-root .po2-field-name,
+.recall-personal-ontology-section .po2-field-name {
+  font-weight: 500;
+}
+#ca-root .po2-field-desc,
+.recall-personal-ontology-section .po2-field-desc {
+  color: var(--cognition-ink-faint);
+  display: inline-flex;
+}
+#ca-root .po2-field-actions,
+.recall-personal-ontology-section .po2-field-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+#ca-root .po2-value-row,
+.recall-personal-ontology-section .po2-value-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 4px 10px;
+}
+#ca-root .po2-value-row.is-conflict,
+.recall-personal-ontology-section .po2-value-row.is-conflict {
+  background: var(--color-danger-soft);
+  border-radius: 8px;
+  padding-left: 8px;
+}
+#ca-root .po2-value-text,
+.recall-personal-ontology-section .po2-value-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ca-root .po2-value-row .po2-value-text,
+.recall-personal-ontology-section .po2-value-row .po2-value-text {
+  display: block;
+}
+#ca-root .po2-value-meta,
+.recall-personal-ontology-section .po2-value-meta {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+#ca-root .po2-value-empty,
+.recall-personal-ontology-section .po2-value-empty {
+  padding: 2px 0 2px 10px;
+  font-size: 12px;
+}
+#ca-root .po2-entry-row,
+.recall-personal-ontology-section .po2-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 4px 10px;
+}
+#ca-root .po2-entry-text,
+.recall-personal-ontology-section .po2-entry-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ca-root .po2-entry-actions,
+#ca-root .po2-entry-src,
+.recall-personal-ontology-section .po2-entry-actions,
+.recall-personal-ontology-section .po2-entry-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#ca-root .po2-link-btn,
+.recall-personal-ontology-section .po2-link-btn {
+  border: none;
+  background: none;
+  color: var(--color-brand);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+#ca-root .po2-link-btn:hover,
+.recall-personal-ontology-section .po2-link-btn:hover {
+  text-decoration: underline;
+}
+#ca-root .po2-link-btn.is-danger,
+.recall-personal-ontology-section .po2-link-btn.is-danger {
+  color: var(--color-danger);
+}
+/* 下拉菜单（details/summary 自包含） */
+#ca-root .po2-menu,
+.recall-personal-ontology-section .po2-menu {
+  position: relative;
+  display: inline-flex;
+}
+#ca-root .po2-menu-trigger,
+.recall-personal-ontology-section .po2-menu-trigger {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--cognition-ink-soft);
+}
+#ca-root .po2-menu-trigger::-webkit-details-marker,
+.recall-personal-ontology-section .po2-menu-trigger::-webkit-details-marker {
+  display: none;
+}
+#ca-root .po2-menu-trigger:hover,
+.recall-personal-ontology-section .po2-menu-trigger:hover {
+  background: var(--color-brand-soft);
+  color: var(--color-ink);
+}
+#ca-root .po2-menu-list,
+.recall-personal-ontology-section .po2-menu-list {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  min-width: 150px;
+  background: var(--color-surface);
+  border: 1px solid var(--cognition-line);
+  border-radius: var(--radius-item);
+  box-shadow: 0 8px 24px var(--color-shadow-lift);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-popover);
+}
+#ca-root .po2-menu-item,
+.recall-personal-ontology-section .po2-menu-item {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-ink);
+}
+#ca-root .po2-menu-item:hover,
+.recall-personal-ontology-section .po2-menu-item:hover {
+  background: var(--color-brand-soft);
+}
+#ca-root .po2-menu-item.is-danger,
+.recall-personal-ontology-section .po2-menu-item.is-danger {
+  color: var(--color-danger);
+}
+#ca-root .po2-menu-item.is-active,
+.recall-personal-ontology-section .po2-menu-item.is-active {
+  background: var(--color-brand-soft);
+  font-weight: 600;
+}
+#ca-root .po2-menu-item[disabled],
+.recall-personal-ontology-section .po2-menu-item[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+#ca-root .po2-menu-sep,
+.recall-personal-ontology-section .po2-menu-sep {
+  height: 1px;
+  background: var(--cognition-tint);
+  margin: 4px 2px;
+}
+#ca-root .po2-menu-title,
+.recall-personal-ontology-section .po2-menu-title {
+  font-size: 11px;
+  color: var(--cognition-ink-faint);
+  padding: 2px 10px;
+}
+/* 规则行 */
+#ca-root .po2-rule-row,
+.recall-personal-ontology-section .po2-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px;
+  border-top: 1px dashed var(--cognition-tint);
+}
+#ca-root .po2-rule-row:first-child,
+.recall-personal-ontology-section .po2-rule-row:first-child {
+  border-top: none;
+}
+#ca-root .po2-rule-where,
+.recall-personal-ontology-section .po2-rule-where {
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cognition-ink-soft);
+  font-size: 12px;
+}
+#ca-root .po2-rule-text,
+.recall-personal-ontology-section .po2-rule-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 分组管理卡 */
+#ca-root .po2-group-card-body,
+.recall-personal-ontology-section .po2-group-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#ca-root .po2-field-line,
+.recall-personal-ontology-section .po2-field-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+#ca-root .po2-template-row,
+.recall-personal-ontology-section .po2-template-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#ca-root .po2-template-row .personal-onto-nav-row,
+.recall-personal-ontology-section .po2-template-row .personal-onto-nav-row {
+  flex: 1;
+  text-align: left;
+}
+#ca-root .po2-deleted,
+.recall-personal-ontology-section .po2-deleted {
+  border: 1px dashed var(--cognition-line);
+  border-radius: var(--radius-item);
+  padding: 8px 12px;
+}
+#ca-root .po2-deleted-summary,
+.recall-personal-ontology-section .po2-deleted-summary {
+  cursor: pointer;
+  color: var(--cognition-ink-soft);
+}
+#ca-root .po2-deleted-row,
+.recall-personal-ontology-section .po2-deleted-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+#ca-root .po2-deleted-title,
+.recall-personal-ontology-section .po2-deleted-title {
+  flex: 1;
+}
+#ca-root .po2-empty,
+.recall-personal-ontology-section .po2-empty {
+  padding: 18px 0;
+}
+/* 历史 / 导入列表 */
+#ca-root .po2-history-row,
+.recall-personal-ontology-section .po2-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px dashed var(--cognition-tint);
+}
+#ca-root .po2-history-row:first-child,
+.recall-personal-ontology-section .po2-history-row:first-child {
+  border-top: none;
+}
+#ca-root .po2-history-main,
+.recall-personal-ontology-section .po2-history-main {
+  flex: 1;
+  min-width: 0;
+}
+#ca-root .po2-history-preview,
+.recall-personal-ontology-section .po2-history-preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+#ca-root .po2-import-item,
+.recall-personal-ontology-section .po2-import-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+#ca-root .po2-profile-section,
+.recall-personal-ontology-section .po2-profile-section {
+  margin-bottom: 10px;
+}
+#ca-root .po2-profile-title,
+.recall-personal-ontology-section .po2-profile-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cognition-ink-soft);
+  margin: 6px 0;
+}
+#ca-root .po2-checkbox,
+.recall-personal-ontology-section .po2-checkbox {
+  margin-right: 6px;
+}
+#ca-root .po2-field-wrap,
+.recall-personal-ontology-section .po2-field-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+#ca-root .po2-field-hint,
+.recall-personal-ontology-section .po2-field-hint {
+  font-size: 12px;
 }

@@ -59,13 +59,19 @@ function loadSecurityPage(status: unknown) {
   };
   context.window.window = context.window;
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules/ui-button.js'), 'utf8'), context, { filename: 'ui-button.js' });
-  vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules/ui-form.js'), 'utf8'), context, { filename: 'ui-form.js' });
-  context.uiButton = context.window.uiButton;
-  context.uiInput = context.window.uiInput;
+  // Load every shared factory the page composes with, so the rendered HTML is
+  // the real markup rather than the degraded fallback.
+  for (const file of ['ui-button.js', 'ui-form.js', 'ui-status.js', 'ui-empty.js',
+    'ui-segmented-control.js', 'ui-card.js']) {
+    vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8'),
+      context, { filename: file });
+  }
+  for (const key of Object.keys(context.window)) {
+    if (/^ui[A-Z]/.test(key)) context[key] = context.window[key];
+  }
   const code = fs.readFileSync(path.join(root, 'src/renderer/modules/settings-security.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'settings-security.js' });
-  return { window: context.window, body };
+  return { window: context.window, body, context };
 }
 
 const absentStatus = {
@@ -105,7 +111,8 @@ describe('settings security status mapping', () => {
     expect(body.innerHTML).toContain('settings.security.scanner_absent_build');
     expect(body.innerHTML).toContain('settings.security.scanner_not_present_sub');
     expect(body.innerHTML).not.toContain('settings.security.scanner_broken');
-    expect(body.innerHTML).toContain('sec-pill warn');
+    // The hero tag is a shared status pill now, not a page-local span.
+    expect(body.innerHTML).toContain('ui-status-pill--attention');
     // Hero must be attention-level, not the tamper/alert wording.
     expect(body.innerHTML).toContain('settings.security.hero_attention');
     expect(body.innerHTML).toContain('settings.security.tag_attention');
@@ -116,7 +123,7 @@ describe('settings security status mapping', () => {
     const { window, body } = loadSecurityPage(brokenStatus);
     await window.loadSecuritySettings();
     expect(body.innerHTML).toContain('settings.security.scanner_broken');
-    expect(body.innerHTML).toContain('settings.security.card_scanner_note_broken');
+    expect(body.innerHTML).toContain('settings.security.issue_scanner_broken');
     expect(body.innerHTML).toContain('settings.security.hero_alert');
     expect(body.innerHTML).toContain('settings.security.tag_alert');
     expect(body.innerHTML).not.toContain('settings.security.scanner_absent_build');

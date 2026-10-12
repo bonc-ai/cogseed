@@ -39,6 +39,8 @@ async function seedAsset(
   const { candidates } = await modules();
   const candidate = await candidates.saveRecallCandidate(userId, {
     judgment,
+    // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+    summary: 'Tree fixture lesson',
     suggestedType: 'rule',
     suggestedScope: 'review',
     sourceRefs: [sourceRef],
@@ -217,6 +219,7 @@ describe('cognition tree candidate buds', () => {
     const { candidates } = await modules();
     return candidates.saveRecallCandidate(userId, {
       judgment: input.judgment,
+      summary: 'Tree bud fixture',
       suggestedType: input.suggestedType,
       suggestedScope: input.suggestedScope ?? 'review',
       sourceRefs: input.sourceRefs ?? [{ kind: 'memory', id: `mem-${input.suggestedType}` }],

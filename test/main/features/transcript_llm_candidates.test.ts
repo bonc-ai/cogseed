@@ -207,6 +207,70 @@ describe('部分失败不拖垮其余段（诚实回报）', () => {
   });
 });
 
+// ── token 用量（specs/013 T004：键名/量纲已按 runner 类型核实）──────────
+//
+// 生产路径取 `runner.run()` 的 `result.meta.usage`
+// （`{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, totalTokens }`，
+// token 个数、整轮累加口径）。测试经注入点回报同形态。
+describe('token 用量透出（测不到就缺失，不写 0 假装测到）', () => {
+  it('注入方回报 usage → 各段累加（inputTokens/outputTokens/totalTokens）', async () => {
+    const result = await generateReviewCandidates('u', TRANSCRIPT, {
+      runModel: async () => ({
+        text: JSON.stringify([{ wrong: 'coxyx', correct: 'Cogseed', confidence: 0.9, reason: 'r' }]),
+        usage: { inputTokens: 1200, outputTokens: 80, totalTokens: 1280 },
+      }),
+    });
+    expect(result.candidates).toHaveLength(1);
+    expect(result.usage).toEqual({ inputTokens: 1200, outputTokens: 80, totalTokens: 1280 });
+  });
+
+  it('多段用量逐段累加（一次复核读了 N 段就是 N 份用量之和）', async () => {
+    const long = `${'x'.repeat(3000)}。\ncoxyx 在跟`;
+    const result = await generateReviewCandidates('u', long, {
+      runModel: async () => ({ text: '[]', usage: { inputTokens: 100, outputTokens: 10 } }),
+    });
+    expect(result.chunksScanned).toBeGreaterThan(1);
+    expect(result.usage).toEqual({
+      inputTokens: 100 * result.chunksScanned,
+      outputTokens: 10 * result.chunksScanned,
+    });
+    // totalTokens 没人报就整体缺失，不补 0、不代算
+    expect(result.usage?.totalTokens).toBeUndefined();
+  });
+
+  it('模型不可用/注入方只回文本 → usage 整个缺失（不写 0 假装测到）', async () => {
+    const result = await generateReviewCandidates('u', TRANSCRIPT, {
+      runModel: async () => '[]',
+    });
+    expect(result.skipped).toBeUndefined();
+    expect('usage' in result).toBe(false);
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('一段失败一段成功 → 只累计成功段的用量', async () => {
+    const text = `${'x'.repeat(REVIEW_CHUNK_CHARS)}\ncoxyx 在跟`;
+    let call = 0;
+    const result = await generateReviewCandidates('u', text, {
+      runModel: async () => {
+        call += 1;
+        if (call === 1) throw new Error('boom');
+        return { text: '[]', usage: { inputTokens: 50, outputTokens: 5, totalTokens: 55 } };
+      },
+    });
+    expect(result.failedChunks).toBe(1);
+    expect(result.chunksScanned).toBe(1);
+    expect(result.usage).toEqual({ inputTokens: 50, outputTokens: 5, totalTokens: 55 });
+  });
+
+  it('所有段都失败（model_failed）→ usage 缺失', async () => {
+    const result = await generateReviewCandidates('u', TRANSCRIPT, {
+      runModel: async () => { throw new Error('boom'); },
+    });
+    expect(result.skipped).toBe('model_failed');
+    expect('usage' in result).toBe(false);
+  });
+});
+
 describe('请求构造', () => {
   it('提示词带上正文、已知写法与重点线索，并写明 wrong 必须逐字出现', () => {
     const request = buildReviewRequest('coxyx 在跟', known, [{ text: 'coxyx', start: 0 }]);

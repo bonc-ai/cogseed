@@ -26,6 +26,7 @@ import {
   buildRoleTemplateFieldRef,
   describeRoleTemplateFieldRef,
   isTboxField,
+  removeRoleTemplateValuesForRecallAsset,
 } from '../personal_ontology_contract';
 import { routeCandidateToField, type RouteDecision } from '../personal_ontology_router';
 import { listAbilityAssets } from './asset-service';
@@ -37,9 +38,10 @@ const log = createLogger('recall-personal-profile-sync');
 const PROJECTION_COLLECTION = 'personal-profile-projections';
 const PROFILE_MEMORY_PROJECTION_COLLECTION = 'personal-profile-memory-projections';
 
-type ProjectionStatus = 'applied' | 'no_match' | 'failed';
+type ProjectionStatus = 'applied' | 'no_match' | 'failed' | 'removed';
 
 interface PersonalProfileProjectionRecord extends RecallJsonRecord {
+  projectionVersion: number;
   id: string;
   assetId: string;
   assetVersion: string;
@@ -120,8 +122,6 @@ function profileMemoryProjectionIdFor(assetId: string): string {
 function inputFingerprint(asset: RecallAbilityAssetRecord): string {
   return sha256(JSON.stringify({
     assetId: asset.id,
-    assetVersion: asset.version,
-    assetUpdatedAt: asset.updatedAt,
     statement: asset.statement,
   }));
 }
@@ -147,10 +147,10 @@ function isSettledForInput(
   hasExplicitTarget = false,
 ): boolean {
   if (!record) return false;
-  // An applied projection is append-only. Asset updates require an explicit
-  // review flow rather than silently adding a second, potentially conflicting
-  // profile value.
-  if (record.status === 'applied') return true;
+  // Pre-provenance projections are user data with ambiguous ownership. Keep
+  // them untouched until a dedicated migration/review can classify them.
+  if (record.status === 'applied' && Number(record.projectionVersion || 1) < 2) return !hasExplicitTarget;
+  if (record.status === 'applied') return !hasExplicitTarget && record.inputFingerprint === fingerprint;
   if (record.inputFingerprint !== fingerprint) return false;
   return !hasExplicitTarget && record.status === 'no_match' && record.catalogFingerprint === currentCatalogFingerprint;
 }
@@ -274,6 +274,7 @@ async function persistProjection(
     const previous = current as PersonalProfileProjectionRecord | undefined;
     return {
       schemaVersion: 2,
+      projectionVersion: 2,
       ownerId: userId,
       id,
       assetId: asset.id,
@@ -319,34 +320,51 @@ async function syncAsset(
     if (target) {
       fieldRef = target.fieldRef;
     } else {
-      const decision = await deps.routeAsset(userId, asset.statement, catalog);
-      if (decision.failure) throw new Error(`profile routing ${decision.failure}`);
-      if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
-        await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
-        return 'unmatched';
+      const previous = existing as PersonalProfileProjectionRecord | undefined;
+      if (previous?.status === 'applied' && previous.templateId && previous.section && previous.fieldName) {
+        fieldRef = await buildRoleTemplateFieldRef(userId, previous.templateId, previous.section, previous.fieldName);
       }
-      const matches = catalog.filter((entry) => entry.sections.some((section) =>
-        section.title === decision.group_title && section.fields.includes(decision.field_name!),
-      ));
-      if (matches.length !== 1) {
-        await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
-        return 'unmatched';
-      }
-      fieldRef = await buildRoleTemplateFieldRef(
-        userId, matches[0].template_id, decision.group_title, decision.field_name,
-      );
       if (!fieldRef) {
-        // 路由命中的字段不在 T-box 内（自定义字段），或实例文件里还没有这个坑
-        // （schema 迁移未跑到）——两种情况自动通道都不许建/填它
-        await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
-        return 'unmatched';
+        const decision = await deps.routeAsset(userId, asset.statement, catalog);
+        if (decision.failure) throw new Error(`profile routing ${decision.failure}`);
+        if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
+          await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
+          return 'unmatched';
+        }
+        const matches = catalog.filter((entry) => entry.sections.some((section) =>
+          section.title === decision.group_title && section.fields.includes(decision.field_name!),
+        ));
+        if (matches.length !== 1) {
+          await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
+          return 'unmatched';
+        }
+        fieldRef = await buildRoleTemplateFieldRef(
+          userId, matches[0].template_id, decision.group_title, decision.field_name,
+        );
+        if (!fieldRef) {
+          // 路由命中的字段不在 T-box 内（自定义字段），或实例文件里还没有这个坑
+          // （schema 迁移未跑到）——两种情况自动通道都不许建/填它
+          await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
+          return 'unmatched';
+        }
       }
     }
 
     const placement = describeRoleTemplateFieldRef(fieldRef);
     if (!placement) throw new Error('profile target field not found');
 
-    const write = await deps.appendFieldValue(userId, fieldRef, asset.statement, '智能');
+    // Remove this asset's prior marked value first so edits and target changes
+    // cannot leave multiple current-looking copies. Legacy unmarked PO values
+    // are deliberately preserved by the PO contract.
+    const removed = await removeRoleTemplateValuesForRecallAsset(userId, asset.id);
+    if (!removed.ok) throw new Error(removed.error || 'profile projection cleanup failed');
+    // Role-template facts are serialized as one Markdown list line. Keep the
+    // asset's canonical multi-line statement in Recall, but flatten the optional
+    // projection so continuation lines cannot be reparsed as unowned manual data
+    // and detach the @asset marker from its value.
+    const projectionValue = String(asset.statement || '').replace(/[\r\n]+/g, ' ').replace(/[\t ]+/g, ' ').trim();
+    if (!projectionValue) throw new Error('personal asset statement is empty');
+    const write = await deps.appendFieldValue(userId, fieldRef, projectionValue, '智能', undefined, asset.id);
     if (!write.ok) throw new Error(write.error || 'profile field write failed');
 
     // 回执记「值实际落在哪」。fieldRef 是持久化的，schema 改名/移动之后 placement
@@ -369,6 +387,28 @@ async function syncAsset(
     });
     return { failed: message };
   }
+}
+
+/** Retire only source-tagged role-template copies when the canonical asset is
+ * paused, removed, purged, or changed to another type. Legacy untagged values
+ * remain intact for later user-guided migration. */
+export async function removePersonalProfileProjectionForAsset(
+  userId: string,
+  assetId: string,
+): Promise<{ ok: boolean; removed: number; error?: string }> {
+  if (!safeId(userId) || !safeId(assetId)) return { ok: false, removed: 0, error: 'invalid profile projection identity' };
+  const existing = await readRecallJsonRecord(userId, PROJECTION_COLLECTION, projectionIdFor(assetId));
+  if (!existing || existing.status !== 'applied') return { ok: true, removed: 0 };
+  if (Number(existing.projectionVersion || 1) < 2) {
+    return { ok: false, removed: 0, error: 'legacy profile projection needs review before cleanup' };
+  }
+  const result = await removeRoleTemplateValuesForRecallAsset(userId, assetId);
+  if (!result.ok) return result;
+  await updateRecallJsonRecord(userId, PROJECTION_COLLECTION, projectionIdFor(assetId), (current) => {
+    if (!current) throw new Error('profile projection record not found');
+    return { ...current, status: 'removed', updatedAt: new Date().toISOString() } as PersonalProfileProjectionRecord;
+  });
+  return result;
 }
 
 /**

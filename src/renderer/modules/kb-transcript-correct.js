@@ -47,10 +47,17 @@
   /** 把扫描候选（逐 span）聚合成词条行。 */
   function groupCandidates(candidates) {
     const byEntry = new Map();
+    // 每个词条（非引例行）出现过的通道集合：聚合成一行后判断"这行是不是纯召回"。
+    const channelsByEntry = new Map();
     for (const candidate of Array.isArray(candidates) ? candidates : []) {
       const ref = String(candidate?.entryRef || '');
       if (!ref) continue;
-      const row = byEntry.get(ref) || {
+      // 【specs/013 T025】引例只读提示行（disposition:'quoted_example'）与同词条的
+      // 真实候选**分开聚合**：同一个词条可能一处是引例、另一处是真错形，
+      // 混在一起会让只读提示沾上「接受」按钮。
+      const quoted = candidate.disposition === 'quoted_example';
+      const key = quoted ? `${ref}::quoted` : ref;
+      const row = byEntry.get(key) || {
         entryRef: ref,
         wrong: String(candidate.wrong || ''),
         correct: String(candidate.correct || ''),
@@ -61,23 +68,108 @@
         context: String(candidate.context || ''),
         // 来源：模型读正文给的建议（不是词表命中）。面板据此标来源、且永不预勾。
         fromModel: candidate.fromModel === true,
+        // 【specs/013 T024】通道与处置随行保留（缺省 exact/suggest，与主进程缺省语义一致）：
+        // exact=字面命中 / recall=多路召回 / model=模型复核；处置分级见 disposition。
+        channel: candidate.channel === 'recall' || candidate.channel === 'model' ? candidate.channel : 'exact',
+        disposition: quoted ? 'quoted_example' : (candidate.disposition === 'review' ? 'review' : 'suggest'),
+        // 【specs/013 T019/T025】引例行命中的标记词（QUOTE_MARKERS 之一），
+        // 供文案解释"为什么降级"（FR-011 可解释）。
+        quotedBy: quoted ? String(candidate.quotedBy || '') : '',
+        // 【specs/013 T026】并列依据（词条/本体规范名/资产），跨 span 去重合并。
+        refs: [],
         count: 0,
         spans: [],
       };
       row.count += 1;
       if (candidate.span) row.spans.push(candidate.span);
-      byEntry.set(ref, row);
+      if (!quoted) {
+        const channels = channelsByEntry.get(ref) || new Set();
+        channels.add(row.channel);
+        channelsByEntry.set(ref, channels);
+      }
+      // 依据合并：同词条多 span、召回并入的并列依据都在；按内容去重保序。
+      const basisList = Array.isArray(candidate.refs) ? candidate.refs : [];
+      for (const basis of basisList) {
+        if (!basis || typeof basis !== 'object') continue;
+        const signature = JSON.stringify(basis);
+        if (!row.refs.some((item) => JSON.stringify(item) === signature)) row.refs.push(basis);
+      }
+      byEntry.set(key, row);
+    }
+    // 通道聚合：同词条混有字面命中时按 exact 报（同 span 的召回条目已在主进程
+    // 并入该行 refs 作并列依据，不重复标召回）；全组都是召回才标 recall。
+    for (const row of byEntry.values()) {
+      if (row.disposition === 'quoted_example' || row.channel !== 'recall') continue;
+      const channels = channelsByEntry.get(row.entryRef);
+      if (channels && channels.size > 1) row.channel = 'exact';
     }
     return [...byEntry.values()].sort((a, b) => (b.count - a.count) || a.wrong.localeCompare(b.wrong));
   }
 
-  /** 汇总选择状态：已选词条数 / 待确认高危 / 影响 span 数。 */
+  /**
+   * 【specs/013 T026】无依据的候选不出行（前端也不兜底造依据）：
+   * 词表/召回/引例通道的候选必须带 refs（SC-001 依据完整率；主进程在构造点
+   * 已保证，这里挡旧载荷/脏数据）。模型建议（fromModel）的判断依据是它给的
+   * 理由（行徽标 title），不在 SC-001 口径内，保持既有行为。
+   */
+  function withBasisOnly(candidates) {
+    return (Array.isArray(candidates) ? candidates : []).filter(
+      (candidate) => candidate?.fromModel === true
+        || (Array.isArray(candidate?.refs) && candidate.refs.length > 0),
+    );
+  }
+
+  /**
+   * 【specs/013 T026】依据文案（纯函数）：词条（wrong→correct + freq）/
+   * 本体规范名 / 资产（标题 + 冻结 vN）三类各一条展示路径。
+   * 只读 refs 的已知字段——多余字段（哪怕带正文）也上不了屏。
+   */
+  function basisRefText(ref, row) {
+    const source = ref && typeof ref === 'object' ? String(ref.source || '') : '';
+    if (source === 'glossary') {
+      return t('kb.meetingRef.basis_glossary', '词条「{wrong} → {correct}」· 累计纠正 {freq} 次', {
+        wrong: String(row?.wrong || ''),
+        correct: row?.action === 'delete' ? '' : String(row?.correct || ''),
+        freq: Number(ref.freq || 0),
+      });
+    }
+    if (source === 'ontology') {
+      return t('kb.meetingRef.basis_ontology', '本体规范名「{name}」', { name: String(ref.name || '') });
+    }
+    if (source === 'asset') {
+      return t('kb.meetingRef.basis_asset', '资产「{title}」· 冻结版 v{version} · {assetId}', {
+        title: String(ref.title || ''),
+        version: String(ref.version || ''),
+        assetId: String(ref.assetId || ''),
+      });
+    }
+    return t('kb.meetingRef.basis_unavailable', '依据不可用（旧记录）');
+  }
+
+  /**
+   * 【specs/013 T021/T023/T025】降级说明文案（纯函数）：只记"缺什么"，
+   * 不编造定位（无说话人/无场景标签/没跑过 run/空间库文档四码）。
+   */
+  function degradedNoteText(reason) {
+    if (reason === 'no_speakers') return t('kb.meetingRef.degraded_no_speakers', '未识别到说话人名单，已按无说话人的稿子扫描');
+    if (reason === 'no_scenario_tags') return t('kb.meetingRef.degraded_no_scenario_tags', '未提供场景标签，词条作用域按无场景判断');
+    if (reason === 'no_transcript_run') return t('kb.meetingRef.degraded_no_transcript_run', '这份文档还没有纠错 run 记录');
+    if (reason === 'space_doc') return t('kb.meetingRef.space_doc_notice', '暂不支持空间库文档纠错，已按可读片段扫描');
+    return '';
+  }
+
+  /** 汇总选择状态：已选词条数 / 待确认高危 / 影响 span 数（引例只读行不计入）。 */
   function summarizeRows(rows, acceptedIds) {
     const accepted = acceptedIds instanceof Set ? acceptedIds : new Set(acceptedIds || []);
     let selected = 0;
     let spans = 0;
     let pendingHigh = 0;
+    let total = 0;
     for (const row of rows || []) {
+      // 【specs/013 T019/T025】引例只读行不是候选（主进程 stats.candidates 也不计它），
+      // 这里同口径剔除，避免"扫描完成 N 条"两边对不上。
+      if (row.disposition === 'quoted_example') continue;
+      total += 1;
       if (accepted.has(row.entryRef)) {
         selected += 1;
         spans += row.count;
@@ -85,7 +177,24 @@
         pendingHigh += 1;
       }
     }
-    return { total: (rows || []).length, selected, spans, pendingHigh };
+    return { total, selected, spans, pendingHigh };
+  }
+
+  /**
+   * 这一行背后**是否有真的词表条目**。
+   *
+   * 候选有两个来源（见主进程 scan）：词表命中（`entryRef: g_*`）与**模型读正文的建议**
+   * （`entryRef: model_<i>`、`fromModel: true`）。后者**不在词表里**——它只有在用户
+   * 「勾选 + 生成清理版」时才被记进词表（`source: meeting_accept`）。
+   *
+   * 为什么必须区分：忽略（降权）/ 加白 / 改写法都是**词表操作**，对 `model_*` 这种
+   * 合成 id 主进程找不到条目、返回 0/null。面板此前不看回执，照样弹"已改为：X""已忽略"，
+   * 用户看到的就是"改写法点了没用"（2026-09-23 反馈）。所以这些动作**只给词表行**，
+   * 同时所有词表写操作的返回值都要校验（双保险：万一以后又多了别的合成 id 来源）。
+   */
+  function isGlossaryRow(row) {
+    if (!row || row.fromModel === true) return false;
+    return String(row.entryRef || '').startsWith('g_');
   }
 
   /**
@@ -105,25 +214,41 @@
     return { high, other, ignored };
   }
 
-  /** 默认勾选的行：低风险且未被忽略（被忽略的词条降权，不默认重来一遍）。 */
+  /**
+   * 默认勾选的行：低风险且未被忽略（被忽略的词条降权，不默认重来一遍）。
+   * 【specs/013 T024】预勾规则**只收不放**：
+   *   - 模型建议（fromModel）永不预勾——模型判断要逐条人工确认（既有规则）；
+   *   - 召回通道（channel:'recall'）永不预勾——confidence 恒 < 1 的低置信来源；
+   *   - disposition:'review'（必须逐条人工判断）与引例只读行（quoted_example）一律不预勾。
+   */
   function defaultAcceptedIds(rows) {
     return (rows || [])
       .filter((row) => row.riskLevel === 'low' && Number(row.ignoredCount || 0) === 0)
       // 模型建议**永不预勾**：它的风险等级虽然给的是 medium，但不能只靠这点兜底——
       // 一旦以后有人调整分级，模型判断就会被一键写进正文。
       .filter((row) => row.fromModel !== true)
+      // 召回候选 confidence 恒 < 1（MAX_RECALL_CONFIDENCE = 0.99）：低置信来源
+      // 不进默认集，与「绝不自动替换」同一立场（specs/013 T024）。
+      .filter((row) => row.channel !== 'recall')
+      // review 须逐条人工判断；引例行是提示不是候选：都不预勾。
+      .filter((row) => row.disposition !== 'review' && row.disposition !== 'quoted_example')
       .map((row) => row.entryRef);
   }
 
   /**
    * 取出**被勾选**的模型建议，转成主进程 `apply` 需要的形状（纯函数）。
    * 只取勾选的：没勾的一条都不该进正文，也不该被记进词表。
+   *
+   * `entryRef` 必须一起带上：面板 acceptedIds 里放的就是**扫描期**这个 ref，
+   * 主进程若按数组下标重编 `model_<i>`，只勾第 2 条时两边编号就错位——候选没被应用、
+   * 也就不会被记进词表，而且一声不响（真机：模型建议"接受了却进不了词汇表"）。
    */
   function checkedModelCandidates(rows, acceptedIds) {
     const accepted = acceptedIds instanceof Set ? acceptedIds : new Set(acceptedIds || []);
     return (rows || [])
       .filter((row) => row.fromModel === true && accepted.has(row.entryRef))
       .map((row) => ({
+        entryRef: String(row.entryRef || ''),
         start: Number(row.spans?.[0]?.start ?? 0),
         wrong: String(row.wrong || ''),
         correct: String(row.correct || ''),
@@ -361,7 +486,22 @@
   }
 
   /**
-   * 清理版目标路径：**放在原文同一个目录**，名字尽量短且一眼可认。
+   * 清理版文件名（**不含目录**）：`9.15站会.txt` → `9.15站会-清理版.txt`。
+   * 「另存到本地文件夹…」要的是纯文件名（目标目录由主进程定：原文所在的本地文件夹，
+   * 或者用户在系统保存框里选的位置），所以这里只出 basename，不再拼库内相对目录。
+   */
+  function cleanedFileBaseName(displayPath, suffix, extension) {
+    const raw = String(displayPath || 'transcript');
+    const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
+    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
+    const tail = String(suffix || '').trim() || 'cleaned';
+    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
+    return `${stem}-${tail}.${ext}`;
+  }
+
+  /**
+   * 清理版目标路径（库内）：**放在原文同一个目录**，名字尽量短且一眼可认。
    *   例：`1/9.15站会.txt` → `1/9.15站会-清理版.txt`
    * 同日再次另存由 nextCandidateName 追加 -2/-3（不覆盖上一次产物）。
    * 后缀走 i18n（zh=清理版 / en=cleaned …），因为它是用户直接看到的文件名。
@@ -370,11 +510,7 @@
     const raw = String(displayPath || 'transcript');
     const cut = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
     const dir = cut >= 0 ? raw.slice(0, cut + 1) : '';
-    const base = cut >= 0 ? raw.slice(cut + 1) : raw;
-    const stem = (base || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
-    const tail = String(suffix || '').trim() || 'cleaned';
-    const ext = String(extension || 'txt').replace(/^\./, '') || 'txt';
-    return `${dir}${stem}-${tail}.${ext}`;
+    return `${dir}${cleanedFileBaseName(displayPath, suffix, extension)}`;
   }
 
   /** 同分钟重复另存时给出 -2/-3 候选名，避免覆盖上一次的产物。 */
@@ -396,6 +532,7 @@
       '    <div class="kb-atc__head-actions" data-atc-head-actions></div>',
       '  </div>',
       '  <div class="kb-atc__status" data-atc-status hidden></div>',
+      '  <div class="kb-atc__degraded" data-atc-degraded hidden></div>',
       '  <div class="kb-atc__summary" data-atc-summary hidden></div>',
       '  <div class="kb-atc__body" data-atc-body></div>',
       '  <div class="kb-atc__scope" data-atc-scope></div>',
@@ -408,6 +545,10 @@
       '  <details class="kb-atc__add" data-atc-add>',
       '    <summary data-atc-add-summary></summary>',
       '    <div class="kb-atc__add-form" data-atc-add-form></div>',
+      '  </details>',
+      '  <details class="kb-atc__receipts" data-atc-receipts>',
+      '    <summary data-atc-receipts-summary></summary>',
+      '    <div class="kb-atc__receipts-body" data-atc-receipts-body></div>',
       '  </details>',
       '</div>',
     ].join('');
@@ -427,6 +568,9 @@
       error: '',
       collapsedOther: false,
       savedPath: '',
+      /** 另存到**本地文件夹**的落点（绝对路径，主进程返回）。与 savedPath 是两个落点：
+       *  库内那份喂检索/问答，本机那份给用户自己用（2026-09-23 反馈：本地原文件夹里没有）。 */
+      localSavedPath: '',
       // 本体/记忆接线（P1）：sync = 主进程 SyncResult 原样，呈现交给 syncSummary
       sync: null,
       syncBusy: false,
@@ -452,6 +596,17 @@
       denied: [],
       showDenied: false,
       actionError: '',
+      // 【specs/013 T025】降级说明（无说话人/无场景标签/没跑过 run/空间库文档）：
+      // 初始来自挂载方（查看器传空间库降级），扫描后并入 scan 返回的 degraded；
+      // 去重后恰一处呈现，不重复叠加。
+      degradedNotes: Array.isArray(ctx.degradedNotes) ? ctx.degradedNotes.map(String).filter(Boolean) : [],
+      // 【specs/013 T030】回执区：apply 返回的 receipts（结果+条目），空态恰一处。
+      receipts: [],
+      // 【specs/013 T028/T030】被明确拒绝的词条（apply 时随 rejectedIds 写回执账本，
+      // 此后该形态不再重复建议——主进程末条判定，可经 unreject 撤销）。
+      rejected: new Set(),
+      // 「依据」展开区当前打开的行（specs/013 T026）。
+      basisOpen: '',
     };
 
     container.classList.add('kb-atc-host');
@@ -463,6 +618,19 @@
         try { root.uiToast(message, { variant: variant || 'success' }); return; } catch (_) { /* 忽略 */ }
       }
       setStatus(message, variant === 'warning' ? 'warning' : '');
+    }
+
+    /**
+     * 写操作之后重扫：**必须先解除 busy**。
+     *
+     * `runScan()` 第一行是 `if (state.busy) return`（防止并发扫描），而加白/装规则包这类
+     * 写操作都在 `state.busy = true` 区间里干活——直接 `await runScan()` 会被守卫拦掉，
+     * 表现为"提示说成功、列表却没变"（真机：装了口癖包看不见、加白后行还在）。
+     * 这里显式先解除再扫；`finally` 里照旧再置一次 false（幂等）。
+     */
+    async function rescanAfterMutation() {
+      state.busy = false;
+      await runScan();
     }
 
     function setStatus(message, tone) {
@@ -582,6 +750,23 @@
         main.appendChild(src);
       }
 
+      // 【specs/013 T024】召回通道来源徽标：这条建议来自多路召回（confidence < 1），
+      // 不是词表字面命中，且**不会被预勾**。文案走四语，不上屏裸通道名（recall）。
+      if (!row.fromModel && row.channel === 'recall') {
+        const src = document.createElement('span');
+        src.className = 'kb-atc__badge kb-atc__badge--recall';
+        src.textContent = t('kb.meetingRef.channel_recall', '召回建议');
+        main.appendChild(src);
+      }
+
+      // 【specs/013 T028/T030】被明确拒绝的行：徽标提示"会写回执且不再重复建议"。
+      if (state.rejected.has(row.entryRef)) {
+        const badge = document.createElement('span');
+        badge.className = 'kb-atc__badge kb-atc__badge--rejected';
+        badge.textContent = t('kb.meetingRef.receipt_decision_reject', '已拒绝');
+        main.appendChild(badge);
+      }
+
       const count = document.createElement('span');
       count.className = 'kb-atc__count';
       count.textContent = `×${row.count}`;
@@ -592,6 +777,9 @@
       // 高危行用纯文字按钮（hover 才出底色），把横向空间让给内容。
       const acceptRole = isAccepted ? 'primary' : (row.riskLevel === 'high' ? 'ghost' : 'secondary');
       const isIgnoredRow = Number(row.ignoredCount || 0) > 0;
+      // 三颗按钮**所有行都有**：忽略在模型建议行上是"本次不采纳（可恢复）"，
+      // 在词表行上是词表降权——两者都是"这条先放一边"，只是落点不同（见 runIgnore）。
+      // 「更多」在模型建议行上只给"改写法"（加白要挂在词表条目上，见 rowMenuElement）。
       actions.innerHTML = [
         button({
           label: isAccepted
@@ -630,29 +818,110 @@
       return el;
     }
 
-    /** 行内次级动作：加白 / 改写法 / 恢复（默认收起，避免每行堆 5 个按钮）。 */
+    /**
+     * 【specs/013 T019/T025】引例只读提示行：这不是候选，是"为什么没给候选"的
+     * 可解释说明（FR-011）。**无勾选框、无接受/忽略按钮**——只有提示文案与
+     * 命中的标记词（quotedBy，QUOTE_MARKERS 之一），点击行为一律不给。
+     */
+    function quotedRowElement(row) {
+      const el = document.createElement('div');
+      el.className = 'kb-atc__row kb-atc__row--quoted';
+      el.dataset.atcRow = row.entryRef;
+      el.dataset.quoted = '1';
+      const main = document.createElement('div');
+      main.className = 'kb-atc__row-main';
+      const label = document.createElement('span');
+      label.className = 'kb-atc__quoted-note';
+      label.textContent = t(
+        'kb.meetingRef.quoted_row',
+        '引例：上下文出现「{marker}」，这里在讲写法本身，不建议替换',
+        { marker: row.quotedBy || '' },
+      );
+      main.appendChild(label);
+      const count = document.createElement('span');
+      count.className = 'kb-atc__count';
+      count.textContent = `×${row.count}`;
+      el.append(main, count);
+      return el;
+    }
+
+    /**
+     * 行内次级动作（默认收起，避免每行堆 5 个按钮）。
+     *
+     * 菜单内容按行类型分流：
+     *   - 「加白」**只给词表行**：白名单是挂在词表条目上的字段（`contextAllow`），
+     *     模型建议还没有条目可挂——先「接受 + 生成清理版」把它记进词表，下次扫描它就成了
+     *     词表行，那时再加白。给个点了必然失败（`updated: 0`）的按钮才是坑。
+     *   - 「改写法」两种行都给：词表行走主进程改条目；模型建议行改的是"这条建议要替换成
+     *     什么"，本地生效、勾选并生成清理版时按改后的写法替换（那也是它进词表的时刻）。
+     *   - 「依据 / 拒绝 / 提出为候选」（specs/013）：依据与拒绝两种行都给；「提出为候选」
+     *     只给词表行（模型建议还不是词条，没有 captureKey 可沉淀）。
+     *   - 「重新审视」= 恢复：词表行走词表降权还原，模型建议行走"本次不采纳"的还原。
+     */
     function rowMenuElement(row, isIgnoredRow) {
       const wrap = document.createElement('div');
       wrap.className = 'kb-atc__row-menu';
-      wrap.innerHTML = button({
-        label: t('kb.transcriptCorrect.add_allow', '加白'),
-        role: 'ghost',
-        size: 'sm',
-        className: 'kb-atc__btn',
-        attrs: { 'data-atc-allow-open': row.entryRef },
-      }) + button({
+      const parts = [];
+      if (isGlossaryRow(row)) {
+        parts.push(button({
+          label: t('kb.transcriptCorrect.add_allow', '加白'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-allow-open': row.entryRef },
+        }));
+      }
+      parts.push(button({
         label: t('kb.transcriptCorrect.rename_correct', '改写法'),
         role: 'ghost',
         size: 'sm',
         className: 'kb-atc__btn',
         attrs: { 'data-atc-rename-open': row.entryRef },
-      }) + (isIgnoredRow ? button({
-        label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
+      }));
+      parts.push(button({
+        // 【specs/013 T026】「依据」展开区：只读展示 refs（词条/本体规范名/资产），
+        // 纯前端，不发 IPC。
+        label: t('kb.meetingRef.basis', '依据'),
         role: 'ghost',
         size: 'sm',
         className: 'kb-atc__btn',
-        attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
-      }) : '');
+        attrs: { 'data-atc-basis-open': row.entryRef },
+      }));
+      parts.push(button({
+        // 【specs/013 T028/T030】拒绝并记回执：按钮名复用既有三键之一
+        // （recall.asset_approval.reject = 拒绝），不新造同义词。
+        label: t('recall.asset_approval.reject', '拒绝'),
+        role: 'ghost',
+        size: 'sm',
+        className: 'kb-atc__btn',
+        attrs: {
+          'data-atc-reject': row.entryRef,
+          'data-atc-rejected': state.rejected.has(row.entryRef) ? '1' : '0',
+        },
+      }));
+      if (isGlossaryRow(row)) {
+        parts.push(button({
+          // 【specs/013 T047】「提出为候选」：把这条词条确定性沉淀进 recall 候选池
+          // （captureKey=glossary-<entryId> 幂等；不是个人本体回流那条池子）。
+          // 模型建议行（model_*）不是词表词条，不提供此入口。
+          label: t('kb.meetingRef.propose_candidate', '提出为候选'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          disabled: state.busy,
+          attrs: { 'data-atc-propose': row.entryRef },
+        }));
+      }
+      if (isIgnoredRow) {
+        parts.push(button({
+          label: t('kb.transcriptCorrect.reopen_row', '重新审视'),
+          role: 'ghost',
+          size: 'sm',
+          className: 'kb-atc__btn',
+          attrs: { 'data-atc-ignore': row.entryRef, 'data-atc-ignored': '1' },
+        }));
+      }
+      wrap.innerHTML = parts.join('');
 
       if (state.allowOpen === row.entryRef) {
         const form = document.createElement('div');
@@ -725,6 +994,14 @@
                 id: 'atc-rename-' + row.entryRef,
                 label: t('kb.transcriptCorrect.rename_correct', '改写法'),
                 control: { kind: 'input', placeholder: row.correct, value: row.correct },
+                // 两种行要讲清"改完什么时候生效"，否则用户以为点了没用（真机反馈）：
+                //   - 模型建议：改的是建议本身，勾选 + 生成清理版时才落地（并进词表）；
+                //   - 删除型条目：填上写法后行为从"删除"变成"替换为这个词"。
+                ...(row.fromModel === true
+                  ? { hint: t('kb.transcriptCorrect.rename_model_hint', '这是模型建议：改的是"要替换成什么"，勾选并生成清理版时生效（那时才会写进词表）。') }
+                  : (row.action === 'delete'
+                    ? { hint: t('kb.transcriptCorrect.rename_delete_hint', '这是删除型规则；填上写法后，它变成"替换为这个词"。') }
+                    : {})),
               }),
               button({
                 label: t('kb.transcriptCorrect.confirm', '确定'),
@@ -745,6 +1022,31 @@
           }
         }
         wrap.appendChild(form);
+      }
+
+      // 【specs/013 T026】「依据」展开区（只读）：词条（wrong→correct + freq）/
+      // 本体规范名 / 资产（标题 + 冻结 vN + id）三类各一条展示路径；上屏只含
+      // id/版本/标题，不含资产正文；无依据时如实说"不可用"，**不兜底造依据**。
+      if (state.basisOpen === row.entryRef) {
+        const box = document.createElement('div');
+        box.className = 'kb-atc__basis';
+        box.dataset.basis = row.entryRef;
+        const refs = Array.isArray(row.refs) ? row.refs : [];
+        if (!refs.length) {
+          const empty = document.createElement('div');
+          empty.className = 'kb-atc__basis-row';
+          empty.textContent = t('kb.meetingRef.basis_unavailable', '依据不可用（旧记录）');
+          box.appendChild(empty);
+        } else {
+          for (const ref of refs) {
+            const line = document.createElement('div');
+            line.className = 'kb-atc__basis-row';
+            line.dataset.basisSource = String(ref?.source || '');
+            line.textContent = basisRefText(ref, row);
+            box.appendChild(line);
+          }
+        }
+        wrap.appendChild(box);
       }
       return wrap;
     }
@@ -809,7 +1111,10 @@
         return;
       }
 
-      const { high, other, ignored } = splitByRisk(state.rows);
+      const { high, other, ignored } = splitByRisk(state.rows.filter((row) => row.disposition !== 'quoted_example'));
+      // 【specs/013 T025】引例只读提示行单独成区（无勾选框、无接受/忽略按钮），
+      // 不与真实候选混排；排序沿用既有（高危 → 其余 → 已忽略 → 引例 → 被拦）。
+      const quotedRows = state.rows.filter((row) => row.disposition === 'quoted_example');
       if (high.length) {
         body.appendChild(groupHeaderElement(
           t('kb.transcriptCorrect.group_high', '高危 {count} 条 · 逐条确认', { count: high.length }),
@@ -834,6 +1139,14 @@
           'ignored',
         ));
         for (const row of ignored) body.appendChild(rowElement(row));
+      }
+      if (quotedRows.length) {
+        // 【specs/013 T025】引例区：只读提示（为什么降级 + 命中的标记词），不是候选。
+        body.appendChild(groupHeaderElement(
+          t('kb.meetingRef.quoted_group', '引例 {count} 处（不建议替换）', { count: quotedRows.length }),
+          'quoted',
+        ));
+        for (const row of quotedRows) body.appendChild(quotedRowElement(row));
       }
       if (state.denied.length) {
         body.appendChild(groupToggleElement(
@@ -890,6 +1203,7 @@
         parts.push(t('kb.transcriptCorrect.merged_blocks', '合并为 {count} 块', { count: state.mergedBlocks }));
       }
       if (state.savedPath) parts.push(t('kb.transcriptCorrect.saved_to', '已另存：{path}', { path: state.savedPath }));
+      if (state.localSavedPath) parts.push(t('kb.transcriptCorrect.saved_local_to', '已存本地：{path}', { path: state.localSavedPath }));
       host.hidden = false;
       host.textContent = parts.join(' · ');
     }
@@ -949,7 +1263,8 @@
         icon: 'check-circle',
         role: 'primary',
         size: 'sm',
-        disabled: state.busy || state.accepted.size === 0,
+        // 【specs/013 T030】有拒绝动作（要写回执）也可生成，不要求同时有接受项。
+        disabled: state.busy || (state.accepted.size === 0 && state.rejected.size === 0),
         loading: state.busy,
         attrs: { 'data-atc-action': 'apply' },
       }));
@@ -970,6 +1285,19 @@
           attrs: { 'data-atc-action': 'save' },
         }));
         buttons.push(button({
+          label: t('kb.transcriptCorrect.save_local', '另存到本地文件夹…'),
+          icon: 'download',
+          role: 'secondary',
+          size: 'sm',
+          disabled: state.busy,
+          // 落点由主进程定（原文所在文件夹 / 系统保存框），把这件事写进 title，
+          // 免得用户以为它和上一颗按钮存的是同一个地方。
+          attrs: {
+            'data-atc-action': 'save-local',
+            title: t('kb.transcriptCorrect.save_local_hint', '存到原文所在的本地文件夹；没有导入来源时用系统保存框自选位置'),
+          },
+        }));
+        buttons.push(button({
           label: t('kb.transcriptCorrect.notes', '清理附记'),
           icon: 'clipboard-list',
           // 低频操作 → 文字按钮（规范 §三-1）
@@ -985,13 +1313,11 @@
 
 
     /**
-     * 记忆分组/长期记忆同步块（P1）：概念归组 + 与规范名对齐。
+     * 本体分组/长期记忆同步块（P1）：概念归组 + 与规范名对齐。
      * 文案口径：用户实际看到的措辞以 `zh.json` 为准（本批实测是「本体分组」），
      * 代码回退跟着改成同一措辞 —— 否则缺键时会冒出第二套说法；并写明
      * 长期记忆是散文、只在词表已有该术语时用于对齐——不能让人以为
      * 记忆这半边会源源不断产出建议。
-     * 注意：术语尚未统一——个人本体面板导航仍叫「记忆分组」（`personalOntology.nav_groups`）。
-     * 两处用词不一致是既有状态（非本批引入），等 owner 定一个说法后一起改。
      * 视觉口径：这里全是"建议"，一律弱化色（ghost/次级文字），只有真正被采纳
      * 或需要用户注意的状态才用色调——颜色只表达状态。
      */
@@ -1236,11 +1562,78 @@
       }
     }
 
+    /**
+     * 【specs/013 T021/T023/T025】面板顶部降级说明：无说话人 / 无场景标签 /
+     * 没跑过 run / 空间库文档四码，**恰一处**呈现（单一容器、按原因去重），
+     * 不随行重复叠加。文案只说"缺什么"，不编造定位（FR-012/FR-015 如实降级）。
+     */
+    function renderDegraded() {
+      const host = q('[data-atc-degraded]');
+      if (!host) return;
+      const seen = new Set();
+      const notes = [];
+      for (const reason of state.degradedNotes || []) {
+        const text = degradedNoteText(reason);
+        if (!text || seen.has(reason)) continue;
+        seen.add(reason);
+        notes.push(text);
+      }
+      host.hidden = notes.length === 0;
+      host.textContent = notes.join('；');
+    }
+
+    /**
+     * 【specs/013 T030】回执区：apply 返回的 receipts（拒绝动作的账本凭据）。
+     * 只上屏 结果（决定类型）/ 对应会议 / 条目 / 依据标识 / 回执 id——不含正文；
+     * 空态恰一处（uiEmptyState）。
+     */
+    function renderReceipts() {
+      const body = q('[data-atc-receipts-body]');
+      if (!body) return;
+      const summary = q('[data-atc-receipts-summary]');
+      if (summary) summary.textContent = t('kb.meetingRef.receipt_section', '回执');
+      body.textContent = '';
+      const receipts = Array.isArray(state.receipts) ? state.receipts : [];
+      if (!receipts.length) {
+        body.innerHTML = typeof root.uiEmptyState === 'function'
+          ? root.uiEmptyState({
+            kind: 'quiet',
+            title: t('kb.meetingRef.receipt_empty', '暂无回执（拒绝词条或应用清理后在这里留痕）'),
+          })
+          : '';
+        if (!body.innerHTML) {
+          body.textContent = t('kb.meetingRef.receipt_empty', '暂无回执（拒绝词条或应用清理后在这里留痕）');
+        }
+        return;
+      }
+      const docName = (ctx.displayPath || ctx.docId || '').split(/[\\/]/).filter(Boolean).pop() || ctx.docId || '';
+      for (const receipt of receipts) {
+        const row = state.rows.find((item) => item.entryRef === receipt.entryRef);
+        const basis = row && Array.isArray(row.refs) && row.refs.length
+          ? basisRefText(row.refs[0], row)
+          : String(receipt.entryRef || '');
+        const el = document.createElement('div');
+        el.className = 'kb-atc__receipt-row';
+        el.dataset.receipt = String(receipt.decisionId || '');
+        el.textContent = t('kb.meetingRef.receipt_decision_reject', '已拒绝')
+          + ' · '
+          + t('kb.meetingRef.receipt_row', '会议「{doc}」· 条目「{item}」· 依据 {basis} · 回执 {id}', {
+            doc: docName,
+            item: row
+              ? (row.action === 'delete' ? row.wrong : `${row.wrong} → ${row.correct}`)
+              : String(receipt.entryRef || ''),
+            basis,
+            id: String(receipt.decisionId || ''),
+          });
+        body.appendChild(el);
+      }
+    }
+
     function render() {
       // 逐段尝试渲染：某个共享原语抛错时，不得连带把扫描/替换流程卡死
       // （真实事故：uiField 缺 id 抛错 → render() 在 runScan 的 try 之外抛出，
       //  扫描永远停在"正在扫描…"）。
-      for (const step of [renderHead, renderBody, renderSummary, renderApplyInfo, renderScope, renderActions, renderSync, renderAddForm]) {
+      for (const step of [renderHead, renderBody, renderDegraded, renderSummary, renderApplyInfo, renderScope, renderActions, renderSync, renderAddForm, renderReceipts]) {
         try {
           step();
         } catch (error) {
@@ -1265,11 +1658,21 @@
           includeDelete: true,
           // 「同时让模型读一遍」：模型建议会**并进同一个候选列表**（不是另开一套面板）
           includeReview: state.scanWithReview === true,
+          // 【specs/013 T015/T024】召回通道并入同一候选清单（channel:'recall'，
+          // confidence 恒 < 1，面板永不预勾）。召回是本地字符串匹配、无模型成本，
+          // 与 includeReview 的"不点不花钱"不同，恒开。
+          includeRecall: true,
           // 「仅本场景」的场景标签能力已随主线 #307 的界面收敛整体删除：
           // 渲染层不再产生标签，故这里也不再向 scan 传标签字段。
         });
-        state.rows = groupCandidates(result?.candidates);
-        state.denied = Array.isArray(result?.denied) ? result.denied : [];
+        // 【specs/013 T026】无依据的候选不出行（前端不兜底造依据）：词表/召回/
+        // 引例通道缺 refs 的载荷（旧数据/脏数据）在这里挡下；模型建议例外（其
+        // 判断依据是模型给的理由，行徽标 title 可见）。
+        state.rows = groupCandidates(withBasisOnly(result?.candidates));
+        // 引例已作为 disposition:'quoted_example' 的只读行进入候选清单（T019），
+        // 被拦列表里不再重复展示它们（重复叠加 + 会露出未翻译的 reason 码）。
+        state.denied = (Array.isArray(result?.denied) ? result.denied : [])
+          .filter((item) => item?.reason !== 'quoted_example');
         state.showDenied = false;
         state.scanned = true;
         state.accepted = new Set(defaultAcceptedIds(state.rows));
@@ -1282,12 +1685,22 @@
         const stats = summarizeRows(state.rows, state.accepted);
         state.truncated = Boolean(result?.stats?.truncated);
         state.review = result?.review ?? null;
+        // 【specs/013 T021/T025】降级说明：挂载方带来的（如空间库文档）与 scan
+        // 返回的 degraded 合并去重，面板顶部恰一处呈现。
+        const ctxNotes = Array.isArray(ctx.degradedNotes) ? ctx.degradedNotes.map(String) : [];
+        const scanNotes = Array.isArray(result?.degraded) ? result.degraded.map(String) : [];
+        state.degradedNotes = [...new Set([...ctxNotes, ...scanNotes])];
         const reviewNote = reviewSummary(state.review);
+        // 【specs/013 T029】被拒抑制滤掉的行数如实说：候选变少要有解释。
+        const suppressed = Number(result?.stats?.suppressed || 0);
+        const suppressedNote = suppressed > 0
+          ? t('kb.meetingRef.suppressed_note', '{count} 条此前已拒绝的形态未再出现（可经回执撤销）', { count: suppressed })
+          : '';
         setStatus(stats.total === 0
-          ? reviewNote
+          ? (reviewNote + suppressedNote)
           : (state.truncated
-            ? t('kb.transcriptCorrect.scan_truncated', '扫描完成：{total} 条候选（已达上限，可能还有更多；建议先暂停部分词条）{review}', { total: stats.total, review: reviewNote })
-            : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选{review}', { total: stats.total, review: reviewNote })), '');
+            ? t('kb.transcriptCorrect.scan_truncated', '扫描完成：{total} 条候选（已达上限，可能还有更多；建议先暂停部分词条）{review}', { total: stats.total, review: reviewNote }) + suppressedNote
+            : t('kb.transcriptCorrect.scan_done', '扫描完成：{total} 条候选{review}', { total: stats.total, review: reviewNote }) + suppressedNote), '');
       } catch (error) {
         log?.warn('transcript scan failed', { error: error?.message || String(error) });
         state.scanned = true;
@@ -1301,7 +1714,8 @@
     }
 
     async function runApply() {
-      if (state.busy || state.accepted.size === 0) return;
+      // 【specs/013 T030】被拒词条也要能走 apply（写回执账本），不要求同时有接受项。
+      if (state.busy || (state.accepted.size === 0 && state.rejected.size === 0)) return;
       state.busy = true;
       setStatus(t('kb.transcriptCorrect.applying', '正在生成…'), 'loading');
       render();
@@ -1315,6 +1729,9 @@
           // 附记要能说清"这份清理版是从哪份转写来的"
           ...(ctx.displayPath ? { sourcePath: ctx.displayPath } : {}),
           acceptedIds: [...state.accepted],
+          // 【specs/013 T028/T030】明确拒绝的词条：apply 时随 rejectedIds 写既有
+          // 回执账本（此后该形态不再重复建议，T029；撤销走 unreject，T032）。
+          ...(state.rejected.size ? { rejectedIds: [...state.rejected] } : {}),
           // 模型建议是**本轮的临时候选**（没有词表条目），apply 时得跟着请求走；
           // 只传被勾选的那些——主进程还会按 span 逐字校验。
           ...(checkedModelCandidates(state.rows, state.accepted).length
@@ -1326,6 +1743,8 @@
         reportMetrics(result?.result);
         state.runId = String(result?.run?.runId || '');
         state.cleanedText = String(result?.result?.text || '');
+        // 【specs/013 T030】回执上屏：apply 返回的 receipts（entryRef + decisionId）。
+        state.receipts = Array.isArray(result?.receipts) ? result.receipts : [];
         // 勾选并应用 = 确认：主进程会把被应用的模型建议记进词表（source: meeting_accept，
         // 只对本文档生效）。这件事必须说出来——否则用户不知道词表被改了。
         const written = Number(result?.glossaryWrites?.created || 0) + Number(result?.glossaryWrites?.updated || 0);
@@ -1523,6 +1942,58 @@
       } catch (error) {
         log?.warn('cleaned transcript save failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.save_failed', '保存失败，请稍后重试。'), 'warning');
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    /**
+     * 另存清理版到**用户本机文件夹**（「另存到本地文件夹…」）。
+     *
+     * 与「另存到知识库」的区别就在落点：库内那份是喂检索/问答的副本，本机这份是用户
+     * 拿去用的文件。真机反馈（2026-09-23）：原文是导进库的副本，产物只写回库内目录，
+     * 用户去自己放原稿的文件夹里翻不到——"在文件夹中显示"能看到，原文件夹里却没有。
+     *
+     * 目标目录由主进程决定（`library.writeTextToLocal`）：有落点线索（导入来源 / 用户上次
+     * 亲手选过）就写回那个文件夹，否则弹系统保存框让用户自己挑；渲染层只负责传文本 + 文件名，
+     * 并如实报回落点。取消（用户关掉保存框）不算失败，按"已取消"收场，不报红。
+     */
+    async function runSaveLocal() {
+      if (state.busy || !state.cleanedText) return;
+      state.busy = true;
+      render();
+      try {
+        const result = await root.cogseed.invoke('library.writeTextToLocal', {
+          content: state.cleanedText,
+          // 库内相对路径只是**用来反查导入来源**，不是本地路径（本地路径在主进程台账里）。
+          sourcePath: ctx.displayPath || '',
+          fileName: cleanedFileBaseName(ctx.displayPath, t('kb.transcriptCorrect.cleaned_suffix', '清理版')),
+        });
+        if (result?.canceled) {
+          setStatus(t('kb.transcriptCorrect.save_local_canceled', '已取消保存。'), '');
+          return;
+        }
+        if (!result || result.ok === false || !result.path) {
+          throw new Error(String(result?.error || 'local export failed'));
+        }
+        state.localSavedPath = String(result.path);
+        toast(t('kb.transcriptCorrect.saved_local', '已保存到本地：{path}', { path: state.localSavedPath }));
+        // 交付台账同样追加一条（kind=local_copy）：本地那份不在库里，只能靠台账反查。
+        if (state.runId) {
+          try {
+            await root.cogseed.invoke('transcript.run.annotate', {
+              runId: state.runId,
+              kind: 'local_copy',
+              path: state.localSavedPath,
+            });
+          } catch (annotateError) {
+            log?.warn('run annotate (local copy) failed', { error: annotateError?.message || String(annotateError) });
+          }
+        }
+      } catch (error) {
+        log?.warn('cleaned transcript local save failed', { error: error?.message || String(error) });
+        setStatus(t('kb.transcriptCorrect.save_local_failed', '保存到本地失败，请稍后重试。'), 'warning');
       } finally {
         state.busy = false;
         render();
@@ -1783,11 +2254,13 @@
       render();
       try {
         const result = await root.cogseed.invoke('transcript.glossary.seedFillers', {});
-        setStatus(t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
+        const seeded = t('kb.transcriptCorrect.seed_fillers_done', '口癖规则包已装入：新增 {created} 条、更新 {updated} 条（保守删除，可随时暂停）。', {
           created: Number(result?.created || 0),
           updated: Number(result?.updated || 0),
-        }), '');
-        await runScan();
+        });
+        setStatus(seeded, '');
+        toast(seeded);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('seed fillers failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.seed_fillers_failed', '装入口癖规则包失败，请稍后重试。'), 'warning');
@@ -1797,12 +2270,33 @@
       }
     }
 
-    /** 忽略 / 恢复（持久化，可逆）：不是删词条，只是降权。 */
+    /**
+     * 忽略 / 恢复（可逆）。两种行两种落点：
+     *   - 词表行：主进程 `setIgnored` 给条目降权（持久化，重扫仍在"已忽略"组）；
+     *   - 模型建议行：它**不在词表里**，没有条目可降权 → 本次扫描内不采纳
+     *     （降权到"已忽略"组、可恢复），并如实说明"不写词表、下次扫描会重新给出"。
+     *     绝不能对合成 id 调 `setIgnored`：主进程返回 `updated: 0`，此前面板照样弹"已忽略"。
+     */
     async function runIgnore(entryRef, restore) {
       if (state.busy) return;
       const row = state.rows.find((item) => item.entryRef === entryRef);
       try {
-        await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        if (!isGlossaryRow(row)) {
+          if (row) row.ignoredCount = restore ? 0 : 1;
+          if (restore) state.accepted.add(entryRef);
+          else state.accepted.delete(entryRef);
+          setStatus(restore
+            ? t('kb.transcriptCorrect.restore_model_done', '已恢复这条建议：{wrong}', { wrong: row?.wrong || '' })
+            : t('kb.transcriptCorrect.ignore_model_done', '已忽略这条建议（只作用于本次扫描，不写词表；重新扫描会再次给出）。', { wrong: row?.wrong || '' }), '');
+          return;
+        }
+        const result = await root.cogseed.invoke('transcript.glossary.setIgnored', { ids: [entryRef], ignored: !restore });
+        // 主进程只对"词表里真的存在的条目"计数：`updated: 0` 说明这条不在词表里，
+        // 不能报"已忽略"（否则本地翻个组、磁盘上什么都没有，重扫又回来）。
+        if (!Number(result?.updated)) {
+          setStatus(t('kb.transcriptCorrect.ignore_skipped', '这条不在词表里，无法忽略（模型建议直接取消勾选即可）。'), 'warning');
+          return;
+        }
         if (row) row.ignoredCount = restore ? 0 : Number(row.ignoredCount || 0) + 1;
         if (restore) {
           state.accepted.add(entryRef);
@@ -1820,6 +2314,43 @@
       }
     }
 
+    /**
+     * 【specs/013 T047】提出为候选：把词表词条沉淀进 recall 候选池
+     * （`transcript.correct.proposeCandidate`；captureKey=glossary-<entryId>
+     * 幂等——created:false = 已在候选池，不重复建账，界面如实提示）。
+     * 词条 kind 从依据里的 glossary ref 读（扫描时主进程已带上）；读不到
+     * （旧载荷）就不发起，不猜。
+     */
+    async function runPropose(entryRef) {
+      if (state.busy) return;
+      const row = state.rows.find((item) => item.entryRef === entryRef);
+      const glossaryRef = (Array.isArray(row?.refs) ? row.refs : [])
+        .find((ref) => ref && typeof ref === 'object' && ref.source === 'glossary');
+      const entryKind = glossaryRef ? String(glossaryRef.kind || '') : '';
+      if (!entryKind) {
+        setStatus(t('kb.meetingRef.propose_no_kind', '这条记录缺少词条类别，无法提出为候选。'), 'warning');
+        return;
+      }
+      try {
+        const result = await root.cogseed.invoke('transcript.correct.proposeCandidate', {
+          entryId: entryRef,
+          entryKind,
+          // 面板上下文：用户此刻在这份文档里提出（主进程据此填 sourceRefs）。
+          ...(ctx.docId ? { docId: ctx.docId } : {}),
+        });
+        if (result && result.created === false) {
+          setStatus(t('kb.meetingRef.propose_exists', '「{wrong}」已在候选池，不重复建账。', { wrong: row?.wrong || '' }), '');
+        } else {
+          setStatus(t('kb.meetingRef.propose_done', '已提出为候选：「{wrong}」（确认后才会进入资产库）', { wrong: row?.wrong || '' }), '');
+        }
+      } catch (error) {
+        log?.warn('propose candidate failed', { error: error?.message || String(error) });
+        setStatus(t('kb.meetingRef.propose_failed', '提出为候选失败，请稍后重试。'), 'warning');
+      } finally {
+        render();
+      }
+    }
+
     /** 加白：把用户填的上下文词加入白名单，之后该语境静默（需重扫生效）。 */
     async function runAddAllow(entryRef) {
       if (state.busy) return;
@@ -1832,13 +2363,21 @@
       state.busy = true;
       render();
       try {
-        await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        const result = await root.cogseed.invoke('transcript.glossary.addAllow', { ids: [entryRef], term });
+        // 同「忽略」：`updated: 0` = 词表里没有这条，别报"已加白"再让重扫把它打回原形。
+        if (!Number(result?.updated)) {
+          setStatus(t('kb.transcriptCorrect.add_allow_skipped', '这条不在词表里，无法加白（模型建议要先写进词表）。'), 'warning');
+          return;
+        }
         state.allowOpen = '';
-        setStatus(t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
+        const done = t('kb.transcriptCorrect.add_allow_done', '已加白：出现「{term}」时不再替换 {wrong}。', {
           term,
           wrong: state.rows.find((r) => r.entryRef === entryRef)?.wrong || '',
-        }), '');
-        await runScan();
+        });
+        setStatus(done, '');
+        // 紧接着的重扫会把状态行刷成"扫描完成…"，成功提示再用 toast 留一份（否则像没生效）
+        toast(done);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('add allow failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.add_allow_failed', '加白失败，请稍后重试。'), 'warning');
@@ -1853,8 +2392,10 @@
       if (state.busy) return;
       try {
         await root.cogseed.invoke('transcript.glossary.removeAllow', { ids: [entryRef], term });
-        setStatus(t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term }), '');
-        await runScan();
+        const removed = t('kb.transcriptCorrect.remove_allow_done', '已移除加白：{term}', { term });
+        setStatus(removed, '');
+        toast(removed);
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('remove allow failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.remove_allow_failed', '移除失败，请稍后重试。'), 'warning');
@@ -1863,7 +2404,14 @@
       }
     }
 
-    /** 改写法（方案 §七「改别名」的词表侧）：只改 correct，不伪造一次确认。 */
+    /**
+     * 改写法：改"这个词要替换成什么"。两种行两种落点：
+     *   - 词表行：主进程 `applyAlignment` 改条目（`entry: null` = 没改成功，必须如实报）；
+     *   - 模型建议行：它不在词表里，改的是**这条建议的目标写法**——就地改本行，
+     *     勾选并生成清理版时按改后的写法替换（`checkedModelCandidates` 读的就是 row.correct），
+     *     那一刻主进程才会把这条确认过的写法记进词表。所以本地改就够了，不必写盘，
+     *     也不该报"已写入词表"。
+     */
     async function runRename(entryRef) {
       if (state.busy) return;
       const input = container.querySelector('#atc-rename-' + entryRef);
@@ -1872,13 +2420,38 @@
         setStatus(t('kb.transcriptCorrect.rename_need_value', '请填写新的写法。'), 'warning');
         return;
       }
+      const targetRow = state.rows.find((item) => item.entryRef === entryRef);
+      if (!isGlossaryRow(targetRow)) {
+        if (targetRow) targetRow.correct = correct;
+        state.renameOpen = '';
+        setStatus(t('kb.transcriptCorrect.rename_model_done', '已改为：{correct}（勾选并生成清理版时按这个写法替换）。', { correct }), '');
+        render();
+        return;
+      }
       state.busy = true;
       render();
       try {
-        await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        const result = await root.cogseed.invoke('transcript.glossary.applyAlignment', { entryId: entryRef, correct });
+        // 主进程找不到条目时返回 `entry: null`——**这不是成功**。此前不看回执就报
+        // "已改为：X"，用户对着没变的词表反复点（真机：更多 → 改写法"点了没用"）。
+        if (!result?.entry) {
+          state.renameOpen = '';
+          setStatus(t('kb.transcriptCorrect.rename_skipped', '这条不在词表里，改写法没有生效（模型建议要先勾选并生成清理版才会写进词表）。'), 'warning');
+          return;
+        }
         state.renameOpen = '';
+        // 就地更新这一行，**不整表重扫**：重扫会丢掉已勾选集合与刚生成的清理版
+        // （`runScan` 第一行就是 `if (state.busy) return`，此前带着 busy 调它等于没扫，
+        //  真机上就表现为"填了新写法、点了确定，列表还是旧的"）。
+        // 替换目标变了、错形没变 → span 仍然有效，只需要把显示数据对上。
+        const entry = result.entry;
+        const row = state.rows.find((item) => item.entryRef === entryRef);
+        if (row) {
+          row.correct = String(entry.correct || '');
+          if (entry.action === 'replace' || entry.action === 'delete') row.action = entry.action;
+          if (entry.riskLevel) row.riskLevel = entry.riskLevel;
+        }
         setStatus(t('kb.transcriptCorrect.rename_done', '已改为：{correct}', { correct }), '');
-        await runScan();
       } catch (error) {
         log?.warn('rename failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.rename_failed', '改写失败，请稍后重试。'), 'warning');
@@ -1918,10 +2491,12 @@
           setStatus(t('kb.transcriptCorrect.reject_digits', '纯数字变体不入册（无法与真实数字区分）。'), 'warning');
           return;
         }
-        setStatus(t('kb.transcriptCorrect.added', '已加入词表：{wrong} → {correct}', { wrong, correct }), '');
+        const added = t('kb.transcriptCorrect.added', '已加入词表：{wrong} → {correct}', { wrong, correct });
+        setStatus(added, '');
+        toast(added);
         if (wrongInput) wrongInput.value = '';
         if (correctInput) correctInput.value = '';
-        await runScan();
+        await rescanAfterMutation();
       } catch (error) {
         log?.warn('glossary upsert failed', { error: error?.message || String(error) });
         setStatus(t('kb.transcriptCorrect.add_failed', '加入词表失败，请稍后重试。'), 'warning');
@@ -1958,7 +2533,41 @@
         state.rowMenu = state.rowMenu === ref ? '' : ref;
         state.allowOpen = '';
         state.renameOpen = '';
+        state.basisOpen = '';
         render();
+        return;
+      }
+      // 【specs/013 T026】「依据」展开/收起（纯前端，只读）。
+      const basisOpen = event.target.closest('[data-atc-basis-open]');
+      if (basisOpen) {
+        const ref = basisOpen.getAttribute('data-atc-basis-open');
+        state.basisOpen = state.basisOpen === ref ? '' : ref;
+        state.allowOpen = '';
+        state.renameOpen = '';
+        render();
+        return;
+      }
+      // 【specs/013 T028/T030】拒绝/取消拒绝（本地标记；apply 时随 rejectedIds
+      // 写回执账本，此后不再重复建议）。再点一次即取消（拒错可撤）。
+      const reject = event.target.closest('[data-atc-reject]');
+      if (reject) {
+        const ref = reject.getAttribute('data-atc-reject');
+        const row = state.rows.find((item) => item.entryRef === ref);
+        if (state.rejected.has(ref)) {
+          state.rejected.delete(ref);
+          setStatus(t('kb.meetingRef.reject_unmarked', '已取消拒绝：{wrong}', { wrong: row?.wrong || '' }), '');
+        } else {
+          state.rejected.add(ref);
+          state.accepted.delete(ref);
+          setStatus(t('kb.meetingRef.reject_marked', '已标记拒绝：{wrong}（生成清理版时记入回执，此后不再重复建议）', { wrong: row?.wrong || '' }), '');
+        }
+        render();
+        return;
+      }
+      // 【specs/013 T047】提出为候选（幂等：created:false 时提示已在候选池）。
+      const propose = event.target.closest('[data-atc-propose]');
+      if (propose) {
+        void runPropose(propose.getAttribute('data-atc-propose'));
         return;
       }
       const allowRemove = event.target.closest('[data-atc-allow-remove]');
@@ -1971,6 +2580,7 @@
         const ref = allowOpen.getAttribute('data-atc-allow-open');
         state.allowOpen = state.allowOpen === ref ? '' : ref;
         state.renameOpen = '';
+        state.basisOpen = '';
         render();
         return;
       }
@@ -1983,6 +2593,7 @@
         const ref = renameOpen.getAttribute('data-atc-rename-open');
         state.renameOpen = state.renameOpen === ref ? '' : ref;
         state.allowOpen = '';
+        state.basisOpen = '';
         render();
         return;
       }
@@ -2047,6 +2658,7 @@
       else if (kind === 'diff') void openDiffModal();
       else if (kind === 'notes') void openNotesModal();
       else if (kind === 'save') void runSave();
+      else if (kind === 'save-local') void runSaveLocal();
       else if (kind === 'add') void runAddEntry();
       else if (kind === 'seed-fillers') void runSeedFillers();
     }
@@ -2084,21 +2696,31 @@
         text,
         docId: String(ctx?.docId || ctx?.displayPath || 'transcript'),
         displayPath: String(ctx?.displayPath || ''),
+        // 【specs/013 T023/T025】挂载方已知的降级（如空间库文档只读到片段）：
+        // 并进面板顶部降级说明（恰一处呈现）。
+        ...(Array.isArray(ctx?.degradedNotes) && ctx.degradedNotes.length
+          ? { degradedNotes: ctx.degradedNotes.map(String).filter(Boolean) }
+          : {}),
       });
     },
     // 测试桥（仅纯函数；DOM/IPC 逻辑不进测试桥）
     __test: {
       groupCandidates,
+      withBasisOnly,
+      basisRefText,
+      degradedNoteText,
       groupRowsByConcept,
       buildDiffPanes,
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
+      isGlossaryRow,
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
       checkedModelCandidates,
       applySummary,
+      cleanedFileBaseName,
       cleanedFileName,
       nextCandidateName,
       classifySaveResult,
@@ -2110,16 +2732,21 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       groupCandidates,
+      withBasisOnly,
+      basisRefText,
+      degradedNoteText,
       groupRowsByConcept,
       buildDiffPanes,
       conceptKeyOfCorrect,
       syncSummary,
       summarizeRows,
+      isGlossaryRow,
       splitByRisk,
       defaultAcceptedIds,
       reviewSummary,
       checkedModelCandidates,
       applySummary,
+      cleanedFileBaseName,
       cleanedFileName,
       nextCandidateName,
       classifySaveResult,

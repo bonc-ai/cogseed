@@ -9,7 +9,7 @@
  *     "releases": [
  *       {
  *         "version": "0.0.6",
- *         "platform": "darwin",          // "darwin" | "win32" | "linux" | omitted = any
+ *         "platform": "darwin",          // "darwin" | "win32" | "linux" | omitted = legacy (extension-checked)
  *         "arch": "arm64",               // "arm64" | "x64" | omitted = any
  *         "file": "CogSeed-0.0.6-mac-arm64.dmg",   // filename under downloads/
  *         "sha256": "<64 hex>",
@@ -46,6 +46,32 @@ function writeCatalog(catalogPath, catalog) {
 }
 
 /**
+ * Installer file extensions that can plausibly run on each contract platform.
+ * Only consulted for legacy records that predate the `platform` field: the
+ * client has always sent the platform header
+ * (src/main/features/updater/client.ts `updaterRequestHeaders`), so such a
+ * record must not be served to a caller whose platform cannot run it (a
+ * legacy `.dmg` reaching a win32 caller). Records with an explicit `platform`
+ * — and callers that declare none — keep the previous match-anything
+ * behaviour. `.tar.gz` needs a suffix check, not path.extname.
+ */
+const PLATFORM_FILE_EXTENSIONS = {
+  win32: ['.exe', '.msi'],
+  darwin: ['.dmg', '.zip', '.pkg'],
+  linux: ['.appimage', '.deb', '.rpm', '.tar.gz'],
+};
+
+function platformCanRunFile(platform, file) {
+  const allowed = PLATFORM_FILE_EXTENSIONS[platform];
+  // Unknown platform token (or no file name at all): stay permissive rather
+  // than inventing a second, stricter platform taxonomy here.
+  if (!allowed) return true;
+  if (typeof file !== 'string') return false;
+  const name = file.toLowerCase();
+  return allowed.some((ext) => name.endsWith(ext));
+}
+
+/**
  * Pick the newest release matching the caller's platform/arch whose version
  * is strictly greater than the caller's current version. Returns null when
  * there is no update.
@@ -58,6 +84,7 @@ function selectLatest({ releases, platform, arch, currentVersion, ext, excludeEx
   const matches = releases.filter((r) => {
     if (!r || typeof r.version !== 'string') return false;
     if (platform && r.platform && r.platform !== platform) return false;
+    if (platform && !r.platform && !platformCanRunFile(platform, r.file)) return false;
     if (arch && r.arch && r.arch !== arch) return false;
     const fileExt = typeof r.file === 'string' ? path.extname(r.file).toLowerCase() : '';
     if (ext && fileExt !== ext.toLowerCase()) return false;

@@ -340,6 +340,44 @@ export function withRecallCandidateCapabilities<T extends { status: string }>(
   };
 }
 
+/* ───────────── review-queue 视图投影（2026-09-29 第 3 批·读写面收敛） ─────────────
+ * 认知面板的「待我处理」不再全量拉候选池：历史 confirmed/rejected/ignored 逐年
+ * 累积、页面只显示处理记录 5 条 + 已失效 8 条。视图在服务端裁剪 + 字段白名单
+ * 投影；不传 view 的调用方（会话抽屉按 sourceRefs 自过滤、需要含已确认项）
+ * 仍是全量全形状。粗滤口径只需保证「渲染层要显示的都给了」——等待确认/
+ * 来源已删/证据不足都出自可操作域，细分仍由渲染层按 capabilities 做。 */
+const REVIEW_QUEUE_TERMINAL_LIMIT = 8;
+const REVIEW_QUEUE_PROCESSED_LIMIT = 5;
+/** 渲染层零消费的记录级字段，review-queue 视图不出 IPC（全形状读口保留）。 */
+const REVIEW_QUEUE_OMIT_FIELDS = new Set([
+  'contentFormatVersion', 'taxonomyVersion', 'reviewDecisionId', 'decisionNote', 'spaceId',
+  'cooldownUntil', 'failureCode', 'failureMessage', 'failedAt', 'validationCount',
+  'lastValidatedAt', 'consecutiveFailures', 'appliedValidationIds', 'userModifiedAt',
+]);
+
+export function projectReviewQueueCandidates<
+  T extends { id: string; status: string; updatedAt?: string; createdAt?: string; capabilities?: RecallCandidateCapabilities },
+>(candidates: readonly T[]): Array<Partial<T> & { id: string; status: string; capabilities?: RecallCandidateCapabilities }> {
+  const byRecency = (a: T, b: T) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+  const actionable = candidates.filter((c) => ['observed', 'weak_observation', 'pending_review', 'failed'].includes(String(c.status)));
+  const actionableIds = new Set(actionable.map((c) => c.id));
+  const snoozed = candidates.filter((c) => c.capabilities?.isSnoozed === true && !actionableIds.has(c.id));
+  const terminal = candidates
+    .filter((c) => ['expired', 'superseded'].includes(String(c.status)))
+    .sort(byRecency).slice(0, REVIEW_QUEUE_TERMINAL_LIMIT);
+  const processed = candidates
+    .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status)))
+    .sort(byRecency).slice(0, REVIEW_QUEUE_PROCESSED_LIMIT);
+  const queue = [...actionable, ...snoozed, ...terminal, ...processed];
+  return queue.map((candidate) => {
+    const projected: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(candidate)) {
+      if (!REVIEW_QUEUE_OMIT_FIELDS.has(key)) projected[key] = value;
+    }
+    return projected as Partial<T> & { id: string; status: string; capabilities?: RecallCandidateCapabilities };
+  });
+}
+
 /** 终态候选被写操作命中时的稳定错误码。UI 靠 code 翻译，不靠 message 文本。 */
 export const RECALL_CANDIDATE_TERMINAL_ERROR_CODE = 'recall_candidate_terminal';
 /** 批量晋升里"这条不允许晋升"的稳定错误码。 */
@@ -360,6 +398,7 @@ export type RecallCandidateErrorCode =
   | 'recall_candidate_risk_gate'
   | 'recall_candidate_non_asset_decision'
   | 'recall_candidate_security_blocked'
+  | 'recall_candidate_scope_policy_mismatch'
   /** 编辑时新加的证据引用在来源目录里查不到——不接受用户自造的 id。 */
   | 'recall_candidate_unknown_source'
   /** 版本组防分裂（2026-09-16）：create 候选与现有资产语义高度相似，等用户

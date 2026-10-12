@@ -52,9 +52,21 @@ describe('dev 半更新检测：渲染层横幅', () => {
     expect(bootSrc).toMatch(/if \(env && env\.isDev\) document\.body\.classList\.add\('is-dev'\)/);
   });
 
-  it('提供一键重启（走应用自己的 dev 重启通道）与"本次运行内忽略"', () => {
-    expect(bootSrc).toContain("invoke('cogseed.relaunch')");
+  it('提供一键重启（走 preload 直通的 relaunch 通道）与"本次运行内忽略"', () => {
+    // cogseed.relaunch 由 main/index.ts 直接 ipcMain.handle 注册、preload 直通
+    // 暴露，从未进通用 invokeHandlers 表；经 window.cogseed.invoke 调用只会
+    // 拿到 {ok:false} 的 resolve（非 reject），.catch 兜底不触发 → 点击静默无效。
+    expect(bootSrc).toContain("typeof window.cogseed.relaunch === 'function'");
+    expect(bootSrc).toContain('window.cogseed.relaunch().catch(');
+    // 回归护栏：按钮不得经通用 invoke 分发调该通道
+    expect(bootSrc).not.toContain("invoke('cogseed.relaunch')");
     expect(bootSrc).toContain('stale-main-banner-dismissed');
+  });
+
+  it('cogseed.relaunch 通道形态：main 直接 ipcMain.handle + preload 直通', () => {
+    expect(envHandler).toContain("ipcMain.handle('cogseed.relaunch'");
+    const preloadSrc = fs.readFileSync(path.join(__dirname, '../../src/main/preload.js'), 'utf-8');
+    expect(preloadSrc).toContain("relaunch: () => ipcRenderer.invoke('cogseed.relaunch')");
   });
 
   it('横幅渲染失败绝不影响启动（函数体第一件事就是 try）', () => {

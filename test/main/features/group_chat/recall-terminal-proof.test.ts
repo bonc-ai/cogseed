@@ -34,7 +34,7 @@ async function confirmedTurnProjection(userId: string, turnId: string) {
   const projection = await import('../../../../src/main/features/recall/context-projection');
   const candidate = await candidates.saveRecallCandidate(userId, {
     judgment: 'Use confirmed evidence in task reviews.',
-    summary: 'Use confirmed evidence',
+    summary: 'Confirmed evidence habit',
     suggestedType: 'rule',
     ...RULE_BOUNDARY,
     suggestedScope: 'review',

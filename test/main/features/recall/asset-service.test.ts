@@ -5,6 +5,15 @@ import * as path from 'node:path';
 import type { KstarEpisodeRecord } from '../../../../src/main/features/kstar/types';
 import { KSTAR_EPISODE_MISSING } from '../../../../src/main/features/recall/evidence-resolution';
 
+vi.mock('../../../../src/main/features/kb_indexer', () => ({
+  enqueue: () => {},
+  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+}));
+vi.mock('../../../../src/main/features/search', () => ({
+  upsertContext: () => {},
+  dropContext: () => {},
+}));
+
 let tmpDir: string;
 let previousRoot: string | undefined;
 const RULE_BOUNDARY = { applicableWhen: ['performing governed work'], forbiddenWhen: ['outside the governed scope'] };
@@ -20,9 +29,67 @@ async function modules() {
 }
 
 describe('Recall ability assets', () => {
+  it('updates and withdraws only the asset-owned role-template value', async () => {
+    const userId = 'user-profile-lifecycle';
+    const { candidates, assets } = await modules();
+    const templates = await import('../../../../src/main/features/personal_ontology_template_files');
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    await templates.installTemplateFile(userId, 'student');
+    const row = templates.readGroups(userId).find((group) => group.template_id === 'student')!;
+    const contentRef = templates.buildContentRef(row.group_id, '学习背景');
+    const fieldRef = (await contract.buildRoleTemplateFieldRef(userId, 'student', '学习背景', '教育阶段'))!;
+    await templates.appendFieldValueToRef(userId, contentRef, '教育阶段', '本科', '手动');
+
+    const candidate = await candidates.saveRecallCandidate(userId, {
+      judgment: '后续回答先给结论。',
+      // 标题闸门（设计 3.2）后晋升链的 title 必须合规：显式给一份合规 summary，
+      // 不再吃「正文首句」兜底（那正是四病整改要堵的写入形态）。
+      summary: '先给结论的习惯',
+      value: '先给出明确结论，再补充解释。',
+      suggestedType: 'personal',
+      suggestedScope: 'personal',
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-profile-lifecycle' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-profile-lifecycle' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id, {
+      actor: 'user',
+      profileTarget: { fieldRef },
+    });
+    const fieldValue = (statement: string) => statement.replace(/[\r\n]+/g, ' ').replace(/[\t ]+/g, ' ').trim();
+
+    let fields = await templates.listFieldsByRef(userId, contentRef);
+    expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
+      { value: '本科', source: '手动' },
+      { value: fieldValue(asset.statement), source: '智能', recallAssetId: asset.id },
+    ]);
+    expect(await contract.getRoleProfileForRuntime(userId, ['student'])).toContain(asset.statement);
+
+    await assets.updateAbilityAsset(userId, asset.id, {
+      statement: '先给结论，再逐项解释依据。',
+      reason: '用户修订偏好表述。',
+      actor: 'user',
+    });
+    fields = await templates.listFieldsByRef(userId, contentRef);
+    expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
+      { value: '本科', source: '手动' },
+      { value: fieldValue('先给结论，再逐项解释依据。'), source: '智能', recallAssetId: asset.id },
+    ]);
+    const updatedProfile = await contract.getRoleProfileForRuntime(userId, ['student']);
+    expect(updatedProfile).toContain('先给结论，再逐项解释依据。');
+    expect(updatedProfile).not.toContain(asset.statement);
+
+    await assets.pauseAbilityAsset(userId, asset.id, { actor: 'user', reason: '暂不使用。' });
+    fields = await templates.listFieldsByRef(userId, contentRef);
+    expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
+      { value: '本科', source: '手动' },
+    ]);
+    expect(await contract.getRoleProfileForRuntime(userId, ['student'])).not.toContain('先给结论，再逐项解释依据。');
+  });
+
   it('updates immutable-id assets with append-only snapshots and lifecycle audit events', async () => {
     const { candidates, assets } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Keep decision records with evidence.', suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] });
+    const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Keep decision records with evidence.', summary: 'Decision record habit', suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] });
     const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 
     const updated = await assets.updateAbilityAsset('user-a', asset.id, { statement: 'Keep architecture decision records with source evidence.', scope: 'architecture-review', reason: 'Keep the newest architecture review version.', actor: 'user' });
@@ -48,6 +115,7 @@ describe('Recall ability assets', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Load the exact committed knowledge before execution.',
+      summary: 'Committed knowledge first',
       suggestedType: 'rule', ...RULE_BOUNDARY,
       suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-clear' }],
     });
@@ -73,6 +141,7 @@ describe('Recall ability assets', () => {
     };
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Load the exact committed knowledge before execution.',
+      summary: 'Committed knowledge first',
       suggestedType: 'personal', suggestedScope: 'project',
       sourceRefs: [{ kind: 'execution', id: 'kse-a' }], learningProvenance,
     });
@@ -89,7 +158,7 @@ describe('Recall ability assets', () => {
 
   it('never changes asset ownership or accepts mutable identity fields', async () => {
     const { candidates, assets } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Prefer local evidence.', suggestedType: 'personal', suggestedScope: 'personal', sourceRefs: [{ kind: 'memory', id: 'mem-a' }] });
+    const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Prefer local evidence.', summary: 'Local evidence habit', suggestedType: 'personal', suggestedScope: 'personal', sourceRefs: [{ kind: 'memory', id: 'mem-a' }] });
     const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 
     await expect(assets.updateAbilityAsset('user-a', asset.id, { id: 'aa-other' } as never)).rejects.toThrow(/identity/i);
@@ -102,6 +171,7 @@ describe('Recall ability assets', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Keep decision records with evidence.',
+      summary: 'Decision record habit',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
@@ -127,6 +197,7 @@ describe('Recall ability assets', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Use the approved service client for requests.',
+      summary: 'Approved client usage',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'project',
@@ -183,6 +254,7 @@ describe('Recall ability assets', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Use PRM notes for architecture reviews.',
+      summary: 'PRM review notes',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
@@ -213,6 +285,14 @@ describe('Recall ability assets', () => {
     expect(updated.version).toBe('2');
     expect(updated.scopePolicy).toEqual({ purposeTags: ['architecture-review'], fileKinds: ['md'] });
 
+    const cleared = await assets.updateAbilityAsset('user-a', asset.id, {
+      scopePolicy: {},
+      reason: 'Remove every explicit scope restriction.',
+      actor: 'user',
+    } as never);
+    expect(cleared.version).toBe('3');
+    expect(cleared.scopePolicy).toBeUndefined();
+
     const versions = await assets.listAbilityAssetVersions('user-a', asset.id);
     expect(versions[0].snapshot.scopePolicy).toEqual({
       purposeTags: ['architecture', 'review'],
@@ -221,12 +301,14 @@ describe('Recall ability assets', () => {
     });
     expect(versions[1]).toMatchObject({ reason: 'Narrow reuse to architecture review markdown workflows.', actor: 'user' });
     expect(versions[1].snapshot.scopePolicy).toEqual({ purposeTags: ['architecture-review'], fileKinds: ['md'] });
+    expect(versions[2].snapshot.scopePolicy).toBeUndefined();
   });
 
   it('records advisory rework without mutating behavior and requires an explicit user revision to clear it', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Use a decision log before changing architecture.',
+      summary: 'Decision log habit',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
@@ -272,6 +354,7 @@ describe('Recall ability assets', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Prefer reversible experiments.',
+      summary: 'Reversible experiment habit',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'experiments',
@@ -302,6 +385,7 @@ describe('Recall ability assets', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Keep source compatibility explicit.',
+      summary: 'Source compatibility rule',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'project',
@@ -373,6 +457,7 @@ describe('治理状态模型', () => {
     const { candidates } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Record governance decisions with their evidence.',
+      summary: 'Evidence-backed decisions',
       suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-gov' }],
     });
@@ -512,6 +597,7 @@ describe('治理动作', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Prefer append-only audit trails.',
+      summary: 'Append-only audit habit',
       suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-act' }],
     });
@@ -609,7 +695,7 @@ describe('治理动作', () => {
     // 规范 10.4：回滚只影响后续默认引用；已引用旧版本的 TaskRun 仍指向当时的版本。
     const { assets, asset } = await seed('user-rollback');
     await assets.updateAbilityAsset('user-rollback', asset.id, {
-      title: 'Renamed in v2', reason: 'Rename for v2.', actor: 'user',
+      title: 'Version two name', reason: 'Rename for v2.', actor: 'user',
     });
     await assets.setAbilityAssetMaturity('user-rollback', asset.id, 'transfer_validated');
     await assets.pauseAbilityAsset('user-rollback', asset.id, userAction('pause'));
@@ -622,7 +708,7 @@ describe('治理动作', () => {
 
     const versions = await assets.listAbilityAssetVersions('user-rollback', asset.id);
     expect(versions.map((v) => v.version)).toEqual(['1', '2', '3']);
-    expect(versions.find((v) => v.version === '2')?.snapshot.title).toBe('Renamed in v2');
+    expect(versions.find((v) => v.version === '2')?.snapshot.title).toBe('Version two name');
     expect((await assets.listAbilityAssetAudit('user-rollback', asset.id)).map((r) => r.action)).toContain('rolled_back');
   });
 
@@ -640,7 +726,7 @@ describe('治理动作', () => {
     // 历史任务引用的版本不受影响（注入回放按投影冻结版本号）。
     const { assets, asset } = await seed('user-select');
     await assets.updateAbilityAsset('user-select', asset.id, {
-      title: 'Renamed in v2', reason: 'Rename for v2.', actor: 'user',
+      title: 'Version two name', reason: 'Rename for v2.', actor: 'user',
     });
     await assets.pauseAbilityAsset('user-select', asset.id, userAction('pause'));
 
@@ -681,6 +767,7 @@ describe('治理动作', () => {
     // v1 快照带词表化之前的自由文本 scope（实机 aa-34b688 场景：scope='personal'）。
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Prefer concise direct answers.',
+      summary: 'Concise answer habit',
       suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'personal',
       sourceRefs: [{ kind: 'execution', id: 'exec-scope' }],
     });
@@ -708,13 +795,13 @@ describe('治理动作', () => {
     const { candidates, assets } = await modules();
     // 两条"同一认知"的资产：target 旧、source 新（各自有一版历史）。
     const tCand = await candidates.saveRecallCandidate('user-merge', {
-      judgment: '用户身份：本程序开发人员。', summary: '用户身份A', suggestedType: 'personal',
+      judgment: '用户身份：本程序开发人员。', summary: '身份定位A', suggestedType: 'personal',
       suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-m1' }],
     });
     const tAsset = await candidates.promoteRecallCandidate('user-merge', tCand.id, { actor: 'user', forceCreateSimilar: true });
     await assets.updateAbilityAsset('user-merge', tAsset.asset.id, { statement: '用户身份：本程序开发人员（开发者）。', reason: 'refine', actor: 'user' });
     const sCand = await candidates.saveRecallCandidate('user-merge', {
-      judgment: '用户身份：CogSeed 开发者，参与认知资产开发。', summary: '用户身份B', suggestedType: 'personal',
+      judgment: '用户身份：CogSeed 开发者，参与认知资产开发。', summary: '身份定位B', suggestedType: 'personal',
       suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-m2' }],
     });
     const sAsset = await candidates.promoteRecallCandidate('user-merge', sCand.id, { actor: 'user', forceCreateSimilar: true });
@@ -739,7 +826,7 @@ describe('治理动作', () => {
     const { candidates, assets } = await modules();
     const receipts = await import('../../../../src/main/features/recall/asset-usage-receipt');
     const cCand = await candidates.saveRecallCandidate('user-usage-agg', {
-      judgment: 'Usage aggregation rule.', summary: 'Usage rule', suggestedType: 'rule',
+      judgment: 'Usage aggregation rule.', summary: 'Aggregation rule', suggestedType: 'rule',
       suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-ua' }],
     });
     const promoted = await candidates.promoteRecallCandidate('user-usage-agg', cCand.id, { actor: 'user', forceCreateSimilar: true });
@@ -765,6 +852,41 @@ describe('治理动作', () => {
     const byVersion = Object.fromEntries((summary.usage || []).map((u) => [u.version, u]));
     expect(byVersion['1']).toMatchObject({ applied: 2, contradicted: 1 });
     expect(byVersion['2']).toMatchObject({ applied: 1 });
+  });
+
+  it('版本链带按版本的冻结引用计数（2026-09-25 合并态走查修复）：判据是已确认投影的 assetVersions', async () => {
+    // 背景：界面「已有更新的版本」标记原本认 KSTAR 采用回执（usage），与"这一版被
+    // 某个任务引用过"是两件事——真机上 v1 被 8 条投影冻结却没有任何标记，因为回执
+    // 库里没有该资产的记录。冻结引用的权威判据是已确认投影的 assetVersions 映射。
+    const { candidates, assets } = await modules();
+    const store = await import('../../../../src/main/features/recall/store');
+    const uid = 'user-frozen-ref';
+    const cCand = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Frozen reference rule.', summary: 'Reference freeze rule', suggestedType: 'rule',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-fr' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate(uid, cCand.id, { actor: 'user', forceCreateSimilar: true });
+    const assetId = promoted.asset.id;
+    // 改一版：v1 退成历史版本（v2 在用）。
+    await assets.updateAbilityAsset(uid, assetId, { statement: 'Frozen reference rule v2.', reason: 'bump', actor: 'user' });
+    const projection = (id: string, version: string, status: string) => ({
+      schemaVersion: 2, ownerId: uid, id, status, purpose: 'task_execution',
+      authorization: 'user_confirmed', assetIds: [assetId], assetVersions: { [assetId]: version },
+      sourceRefs: [], taskRunId: `run-${id}`, omittedRefs: [],
+      createdAt: new Date().toISOString(), confirmedAt: new Date().toISOString(),
+      decidedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    await store.writeRecallJsonRecord(uid, 'projections', 'proj-frozen-a', projection('proj-frozen-a', '1', 'confirmed'));
+    await store.writeRecallJsonRecord(uid, 'projections', 'proj-frozen-b', projection('proj-frozen-b', '1', 'confirmed'));
+    // 未确认的投影不算冻结引用（"引用它的任务"= 真按副本注入的那一批）。
+    await store.writeRecallJsonRecord(uid, 'projections', 'proj-frozen-preview', projection('proj-frozen-preview', '1', 'preview'));
+
+    const summary = await assets.listAbilityAssetVersionsWithUsage(uid, assetId);
+    const frozenByVersion = Object.fromEntries((summary.frozen || []).map((f) => [f.version, f.count]));
+    expect(frozenByVersion['1']).toBe(2);
+    expect(frozenByVersion['2']).toBeUndefined();
+    // 零采用回执时 frozen 仍成立——旧判据（拿 usage 顶替）在这种数据下恒假。
+    expect(summary.usage).toEqual([]);
   });
 
   it('归并的检修回归（2026-09-16 审查）：版本号一致性/旧版在用/幂等/revoked 守卫', async () => {
@@ -901,12 +1023,12 @@ describe('治理动作', () => {
   it('归并的守卫：跨类型/同条目/不存在被拒', async () => {
     const { candidates, assets } = await modules();
     const aCand = await candidates.saveRecallCandidate('user-merge-bad', {
-      judgment: 'Rule one for merging.', summary: 'Rule', suggestedType: 'rule',
+      judgment: 'Rule one for merging.', summary: 'Merging rule one', suggestedType: 'rule',
       suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-mb1' }],
     });
     const a = await candidates.promoteRecallCandidate('user-merge-bad', aCand.id, { actor: 'user', forceCreateSimilar: true });
     const pCand = await candidates.saveRecallCandidate('user-merge-bad', {
-      judgment: 'Personal one for merging.', summary: 'Personal', suggestedType: 'personal',
+      judgment: 'Personal one for merging.', summary: 'Merging personal one', suggestedType: 'personal',
       suggestedScope: 'general', sourceRefs: [{ kind: 'conversation', id: 'conv-mb2' }],
     });
     const p = await candidates.promoteRecallCandidate('user-merge-bad', pCand.id, { actor: 'user', forceCreateSimilar: true });
@@ -934,6 +1056,7 @@ describe('版本真删（2026-09-17）：物理删除 + 引用快照冻结', () 
     ]);
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Prefer append-only audit trails.',
+      summary: 'Append-only audit habit',
       suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-vdel' }],
     });
@@ -1045,6 +1168,7 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Keep architecture decisions in a decision log.',
+      summary: 'Architecture decision log',
       suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: 'exec-scope-mig' }],
     });
@@ -1073,6 +1197,68 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     const { assets: assets2, asset: asset2 } = await seedWithScope('user-scope-keep', '仅产品工作空间');
     expect(await assets2.migrateLegacyFreeTextScopes('user-scope-keep')).toBe(0);
     expect((await assets2.readAbilityAsset('user-scope-keep', asset2.id)).scope).toBe('仅产品工作空间');
+  });
+
+  it('status 过滤（2026-09-28 红队补齐口径）：revoked 终态不改写不 bump，archived 被归一+bump', async () => {
+    // 真实存量终态脏数据须绕过写入直改盘模拟（promote 出来的资产是 active）。
+    // 两个方向各用独立 uid：promote 对同内容候选有去重合并语义，同 uid 种
+    // 两条会并成一条（本轮实跑踩到的坑）。
+    const seedTerminal = async (uid: string, status: string) => {
+      const seeded = await seedWithScope(uid, 'general');
+      const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+      await updateRecallJsonRecord(uid, 'ability-assets', seeded.asset.id, (raw) => ({ ...raw, scope: '用户全局画像', status }));
+      return seeded.asset.id;
+    };
+    const revokedId = await seedTerminal('user-scope-status-revoked', 'revoked');
+    const archivedId = await seedTerminal('user-scope-status-archived', 'archived');
+
+    const { assets } = await modules();
+    // 终态方向：revoked 的自由文本 scope 原样保留，不进改写分支、不 bump。
+    expect(await assets.migrateLegacyFreeTextScopes('user-scope-status-revoked')).toBe(0);
+    const revoked = await assets.readAbilityAsset('user-scope-status-revoked', revokedId);
+    expect(revoked.scope).toBe('用户全局画像');
+    expect(revoked.version).toBe('1');
+
+    // 放行方向：archived 被归一为词表值并递增版本（与 active 同口径）。
+    expect(await assets.migrateLegacyFreeTextScopes('user-scope-status-archived')).toBe(1);
+    const archived = await assets.readAbilityAsset('user-scope-status-archived', archivedId);
+    expect(archived.scope).toBe('general');
+    expect(archived.version).toBe('2');
+  });
+
+  it('锁内终态复核（r2）：快照后资产被删除则 scope 迁移闭包拒绝改写', async () => {
+    const uid = 'user-scope-race';
+    const seeded = await seedWithScope(uid, 'general');
+    const assetId = seeded.asset.id;
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await updateRecallJsonRecord(uid, 'ability-assets', assetId, (raw) => ({ ...raw, scope: '用户全局画像' }));
+    const { fileEditLock } = await import('../../../../src/main/util/locks');
+    const { recallJsonRecordPath } = await import('../../../../src/main/features/recall/paths');
+    const recPath = recallJsonRecordPath(uid, 'ability-assets', assetId);
+
+    // 确定性时序：先持同款文件锁再启动迁移——快照读到 active+自由文本，
+    // 改写闭包在锁上排队。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const holder = fileEditLock(recPath).runExclusive(() => gate);
+    await new Promise((r) => setTimeout(r, 5));
+
+    const migP = seeded.assets.migrateLegacyFreeTextScopes(uid);
+    await new Promise((r) => setTimeout(r, 15));
+
+    // 持锁期间直改盘为 deleted（快照后另一路径删除落盘）。
+    const raw = JSON.parse(fs.readFileSync(recPath, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(recPath, JSON.stringify({ ...raw, status: 'deleted' }));
+
+    release();
+    await holder;
+    expect(await migP).toBe(0);
+
+    // 锁内 assert 拒绝：资产保持 deleted + 自由文本 scope + 版本 '1'。
+    const after = JSON.parse(fs.readFileSync(recPath, 'utf8')) as Record<string, unknown>;
+    expect(after.status).toBe('deleted');
+    expect(after.scope).toBe('用户全局画像');
+    expect(after.version).toBe('1');
   });
 
   it('迁移 bump 版本后同步刷新仍存活 committed 投影的版本快照（2026-09-14 修复）', async () => {
@@ -1146,6 +1332,7 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
 
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Keep the verified evidence path.',
+      summary: 'Verified evidence path',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'general',
@@ -1198,7 +1385,7 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
     const custom = await assets.createAbilityAsset('user-scope-hard', {
       schemaVersion: 2, ownerId: 'user-scope-hard', id: 'aa-scope-custom', candidateId: 'cand-scope-custom',
       sourceCandidateIds: ['cand-scope-custom'], reviewDecisionId: 'rd_scopecustom_123456',
-      type: 'rule', title: '自定义词条资产', statement: '自定义词条范围的一条规则。',
+      type: 'rule', title: '词条资产示例', statement: '自定义词条范围的一条规则。',
       evidenceRefs: [{ kind: 'conversation', id: 'conv-scope-custom' }],
       scope: 'architecture-review', status: 'active',
       lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
@@ -1206,5 +1393,58 @@ describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
       createdAt: now, updatedAt: now,
     }, { actor: 'user', reason: 'custom term seed' });
     expect(custom.scope).toBe('architecture-review');
+  });
+});
+
+describe('listAbilityAssets 逐条坏档降级（r4，对齐 candidates/experiences 口径）', () => {
+  it('好+坏并存：列表不 reject、好条目照常返回；坏条目单读仍明确报错', async () => {
+    const uid = 'user-list-badasset';
+    let goodSeq = 0;
+    const seedGood = async (scope: string) => {
+      // promote 对同内容候选有去重合并语义：两条好资产必须内容互异（r2 同坑）。
+      goodSeq += 1;
+      const { candidates } = await modules();
+      const payloads = [
+        { judgment: 'Keep architecture decisions in a decision log.', summary: 'Architecture decision log' },
+        { judgment: 'Compress the weekly report into three key findings and one risk item.', summary: 'Weekly report compression rule' },
+      ];
+      const payload = payloads[goodSeq - 1] || payloads[0];
+      const candidate = await candidates.saveRecallCandidate(uid, {
+        ...payload,
+        suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: scope,
+        sourceRefs: [{ kind: 'execution', id: `exec-list-badasset-${goodSeq}` }],
+      });
+      return (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
+    };
+    const good1 = await seedGood('general');
+    const good2 = await seedGood('review');
+
+    // 直改盘制造三种坏档（合法 id 形状，readdir 会枚举到）：
+    const dir = path.join(tmpDir, uid, 'cloud', 'recall', 'records', 'ability-assets');
+    const base = (id: string, extra: Record<string, unknown> = {}) => ({
+      schemaVersion: 2, ownerId: uid, id, candidateId: `cand-${id}`,
+      title: '坏档', statement: '坏档正文。', evidenceRefs: [{ kind: 'conversation', id: 'c-bad' }],
+      scope: 'general', version: '1', status: 'active',
+      createdAt: '2026-09-28T00:00:00.000Z', updatedAt: '2026-09-28T00:00:00.000Z',
+      ...extra,
+    });
+    // 坏档一：截断 JSON（readRecallJsonRecord 读层 parse 抛）。
+    fs.writeFileSync(path.join(dir, 'aa-bad-trunc-0000000001.json'), '{"id": "aa-bad-trunc');
+    // 坏档二：status 越枚举（asAsset 抛）。
+    fs.writeFileSync(path.join(dir, 'aa-bad-status-0000000001.json'), JSON.stringify(base('aa-bad-status-0000000001', { status: 'bogus' })));
+    // 坏档三：缺 updatedAt（r4 新校验——旧代码在 sort 处 undefined.localeCompare 炸）。
+    const noUpdatedAt = base('aa-bad-noupdate-000000001');
+    delete noUpdatedAt.updatedAt;
+    fs.writeFileSync(path.join(dir, 'aa-bad-noupdate-000000001.json'), JSON.stringify(noUpdatedAt));
+
+    const { assets } = await modules();
+    // 修复前：任一坏档使整个列表 rejects（好资产也列不出）；
+    // 修复后：坏条目跳过、好条目照常（updatedAt 排序不变）。
+    const list = await assets.listAbilityAssets(uid);
+    expect(list.map((a) => a.id).sort()).toEqual([good1.id, good2.id].sort());
+
+    // 单读坏条目仍明确报错（asAsset 校验不被降级旁路；缺 updatedAt 档同款）。
+    await expect(assets.readAbilityAsset(uid, 'aa-bad-status-0000000001')).rejects.toThrow(/malformed recall ability asset/);
+    await expect(assets.readAbilityAsset(uid, 'aa-bad-noupdate-000000001')).rejects.toThrow(/malformed recall ability asset/);
   });
 });

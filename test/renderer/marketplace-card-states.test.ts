@@ -21,6 +21,9 @@ const LABELS: Record<string, string> = {
   'marketplace.action_failed_retry_later': '市场暂时不可用，请稍后重试。',
   'marketplace.load_failed': '加载失败',
   'marketplace.empty': '暂无内容',
+  'marketplace.state_disabled': '已停用',
+  'marketplace.disabled_hint': 'Hub 已停用此技能，不能新安装或使用。',
+  'marketplace.uninstall': '卸载',
   'marketplace.install': '安装',
   'marketplace.installed': '已安装',
   'marketplace.update': '更新',
@@ -70,6 +73,11 @@ function loadMarketplaceRenderer(): any {
     normalizeCatalogSource: (s: string) => (s === 'builtin' || s === 'platform' ? 'marketplace' : s),
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/shared/hub-content-status.js'), 'utf8'), context);
+  vm.runInContext(read('modules/ui-button.js'), context);
+  vm.runInContext(read('modules/ui-status.js'), context);
+  context.uiButton = context.window.uiButton;
+  context.uiStatusPill = context.window.uiStatusPill;
   vm.runInContext(read('modules/user-error.js'), context, { filename: 'user-error.js' });
   vm.runInContext(read('modules/marketplace.js'), context, { filename: 'marketplace.js' });
   return context;
@@ -392,5 +400,51 @@ describe('Phase 12 目录页卡片状态与本地过滤', () => {
       ctx.window.cogseed.invoke = () => { throw new Error('channel missing'); };
       expect(() => ctx._mpRequestServerCheck()).not.toThrow();
     });
+  });
+});
+
+
+describe('Hub disabled content in real catalog and detail renderers', () => {
+  it.each(['disabled', ' DISABLED '])('keeps disabled content discoverable and disables its install action (%s)', (status) => {
+    const ctx = loadMarketplaceRenderer();
+    setState(ctx, { skills: [{ ...SKILL, status, disabled: true }] });
+    expect(ctx._mpVisibleItems()).toHaveLength(1);
+    const html = ctx._mpCardHtml({ ...SKILL, status }, 'zh');
+    expect(html).toContain('已停用');
+    expect(html).toContain('data-mp-state="disabled"');
+    expect(html).toMatch(/<button[^>]* disabled/);
+    expect(html).not.toContain('update-available');
+  });
+
+  it('disabled installed card suppresses updates, and restored card shows updates again', () => {
+    const ctx = loadMarketplaceRenderer();
+    setState(ctx, { installedSkillIds: new Set([SKILL.id]), installedSkillMeta: new Map([[SKILL.id, { version: '1.0.0' }]]) });
+    expect(ctx._mpCardHtml({ ...SKILL, status: 'disabled' }, 'zh')).not.toContain('update-available');
+    expect(ctx._mpCardHtml({ ...SKILL, status: 'approved' }, 'zh')).toContain('update-available');
+  });
+
+  it.each([false, true])('detail identifies disabled content; install is blocked and an existing copy can be removed (installed=%s)', (installed) => {
+    const ctx = loadMarketplaceRenderer();
+    const fields = new Map<string, any>();
+    const field = (sel: string) => {
+      if (!fields.has(sel)) fields.set(sel, { innerHTML: '', textContent: '', style: {}, dataset: {}, classList: { add() {}, remove() {} }, querySelectorAll: () => [], querySelector: () => null });
+      return fields.get(sel);
+    };
+    ctx.document.getElementById = () => ({ querySelector: field });
+    setState(ctx, { view: 'detail', detailKind: 'skill', detailItem: { ...SKILL, status: 'disabled' }, detailSkillFiles: [], detailSkillSelected: 'SKILL.md', installedSkillIds: new Set(installed ? [SKILL.id] : []) });
+    ctx.renderMarkdownFull = (text: string) => text;
+    ctx._mpRenderDetail();
+    expect(field('[data-mp-detail-meta]').innerHTML).toContain('已停用');
+    expect(field('[data-mp-detail-install]').disabled).toBe(!installed);
+    expect(field('[data-mp-detail-install]').dataset.action).toBe(installed ? 'uninstall' : '');
+    expect(field('[data-mp-detail-body]').innerHTML).toContain('不能新安装或使用');
+  });
+
+  it('a programmatic install of a disabled row sends no IPC mutation', async () => {
+    const ctx = loadMarketplaceRenderer();
+    setState(ctx, { skills: [{ ...SKILL, status: 'disabled' }] });
+    ctx.uiAlert = () => {};
+    await ctx._mpInstall('skill', SKILL.id);
+    expect(ctx._invoked.filter((call: any) => call.channel.includes("installSkill"))).toEqual([]);
   });
 });
