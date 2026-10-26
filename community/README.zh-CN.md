@@ -3,6 +3,7 @@
 本目录保存通过公开仓库评审的社区候选内容，但不会随 CogSeed 安装包发布。
 
 - [社区 Skill 最小试点](./skills/README.zh-CN.md)
+- [社区 Agent 试点](./agents/README.zh-CN.md)
 - [English](./README.md)
 
 接受的贡献由维护者导入私仓，公仓 PR 保持打开；对应源码候选通过发布门禁后，

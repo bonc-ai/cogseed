@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "id": "replace-with-positive-case-id",
+      "kind": "positive",
+      "input": "请填写应该由本 Agent 处理的真实用户请求及其提供的材料",
+      "expected": "请填写可判定的预期结果：调用了哪些 Skill、交付了什么"
+    },
+    {
+      "id": "replace-with-negative-case-id",
+      "kind": "negative",
+      "input": "请填写本 Agent 必须拒绝、停止或先澄清的真实用户请求",
+      "expected": "请填写预期的拒绝、转交或澄清行为"
+    }
+  ]
+}

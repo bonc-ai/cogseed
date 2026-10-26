@@ -4,6 +4,7 @@ This directory contains community contribution candidates that are reviewed in
 the public repository but are not bundled with CogSeed.
 
 - [Community Skill pilot](./skills/README.md)
+- [Community Agent pilot](./agents/README.md)
 - [简体中文](./README.zh-CN.md)
 
 An accepted contribution is imported into private development. Its public PR

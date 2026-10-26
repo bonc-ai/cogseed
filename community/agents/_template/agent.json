@@ -1,0 +1,17 @@
+{
+  "agent_id": "replace-with-agent-id",
+  "name": "replace-with-agent-name",
+  "description_zh": "请填写一段中文说明：这个 Agent 面向谁、处理什么材料、交付什么结果，以及典型的用户说法。",
+  "workflow": "### 1. 确认输入\n请填写需要用户提供的材料；关键信息缺失时先提问澄清，不补造。\n\n### 2. 处理\n调用技能 replace-with-skill-name，请填写这一步做什么。\n\n### 3. 交付\n请填写输出结构，以及哪些情况必须拒绝或停止。",
+  "icon": "graduation-cap",
+  "color": "sky",
+  "category": "education",
+  "skill_list": ["replace-with-skill-name"],
+  "knowhow": [
+    "请填写这个 Agent 的核心能力，建议 2–5 条"
+  ],
+  "standards": [
+    "请填写可观察的交付标准，建议 2–5 条"
+  ],
+  "output_format": "auto"
+}
